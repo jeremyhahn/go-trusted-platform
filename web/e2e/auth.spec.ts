@@ -122,41 +122,38 @@ async function setupSuccessfulLoginMocks(
   const signature = Buffer.from('mock-signature').toString('base64url');
   const mockJwt = `${header}.${payload}.${signature}`;
 
-  // Mock login begin endpoint
+  // Mock login begin endpoint. The ceremony is usernameless: there is no
+  // allowCredentials list and no user id, because the authenticator picks
+  // the credential and the server resolves the user from it.
   await page.route('**/api/v1/webauthn/login/begin', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      headers: {
-        'x-user-id': userId,
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify({
         publicKey: {
           challenge: 'bW9jay1jaGFsbGVuZ2U', // base64url encoded "mock-challenge"
           timeout: 60000,
           rpId: 'localhost',
-          allowCredentials: [
-            {
-              type: 'public-key',
-              id: 'bW9jay1jcmVkZW50aWFsLWlk', // base64url encoded "mock-credential-id"
-              transports: ['internal'],
-            },
-          ],
           userVerification: 'preferred',
         },
+        session_id: 'mock-login-session',
       }),
     });
   });
 
-  // Mock login finish endpoint - returns JWT on success
+  // Mock login finish endpoint — returns the session the login issued: the
+  // credential the PLATFORM minted from the identity the backbone resolved.
+  // The backbone's own bearer and renewal credential are not forwarded (see
+  // login.SessionIssuer), so neither appears here.
   await page.route('**/api/v1/webauthn/login/finish', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        payload: { token: mockJwt },
+        payload: {
+          bearer: mockJwt,
+        },
       }),
     });
   });
@@ -215,14 +212,17 @@ test.describe('Authentication Flow', () => {
     await expect(page.getByText(/please enter a username/i)).toBeVisible();
   });
 
-  test('should validate username for login', async ({ page }) => {
+  // Login does NOT require a username. The ceremony uses discoverable
+  // credentials, so the authenticator identifies the user and the server
+  // resolves them from the credential id — which is what makes a public
+  // email domain a non-problem. Clicking Log In with the field empty must
+  // start the ceremony rather than refuse it.
+  test('should not require a username to log in', async ({ page }) => {
     await page.goto('/auth/webauthn?status=registered');
 
-    // Click login without entering username
     await page.click('button:has-text("Log In")');
 
-    // Should show validation error
-    await expect(page.getByText(/please enter your username/i)).toBeVisible();
+    await expect(page.getByText(/please enter your username/i)).not.toBeVisible();
   });
 });
 

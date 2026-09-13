@@ -69,6 +69,12 @@ var (
 	// handler could never complete a ceremony.
 	ErrTenantIDRequired = errors.New("webauthn: ceremony tenant ID is required")
 
+	// ErrLoginDriverRequired is returned when the WebAuthn handler is
+	// constructed without the unified login driver. The login verbs
+	// delegate to it entirely, so a handler without one could only serve
+	// a login that never reaches the backbone.
+	ErrLoginDriverRequired = errors.New("webauthn: unified login driver is required")
+
 	// ErrInvalidConfig is returned when the relying-party Config is
 	// missing the RPID or RPOrigins fields.
 	ErrInvalidConfig = errors.New("webauthn: invalid relying-party configuration")

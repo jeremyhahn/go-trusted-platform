@@ -15,6 +15,7 @@ package v1
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"testing"
@@ -153,17 +154,29 @@ func newWiringServiceRegistry(t *testing.T) *service.Registry {
 
 func newWiringRegistry(t *testing.T, tenantManager *tenant.Manager, jwtService *jwt.Service) (*HandlerRegistry, *service.Registry) {
 	t.Helper()
+	return newWiringRegistryWithConfig(t, tenantManager, jwtService, nil)
+}
+
+func newWiringRegistryWithConfig(
+	t *testing.T,
+	tenantManager *tenant.Manager,
+	jwtService *jwt.Service,
+	cfg *Config) (*HandlerRegistry, *service.Registry) {
+
+	t.Helper()
 	logger := logging.NewLogger(slog.LevelError, os.Stderr)
 	svcReg := newWiringServiceRegistry(t)
 	return &HandlerRegistry{
 		params: RegistryParams{
-			Logger:          logger,
-			HTTPWriter:      response.NewResponseWriter(logger, nil),
-			WebAuthnConfig:  &webauthn.Config{RPID: "cp.example.internal", RPOrigins: []string{"https://cp.example.internal:8443"}},
-			FIDO2SDKClient:  stubWiringFIDO2Client{},
-			TenantID:        "system",
-			ServiceRegistry: svcReg,
-			TenantManager:   tenantManager,
+			WebServiceConfig: cfg,
+			Logger:           logger,
+			HTTPWriter:       response.NewResponseWriter(logger, nil),
+			WebAuthnConfig:   &webauthn.Config{RPID: "cp.example.internal", RPOrigins: []string{"https://cp.example.internal:8443"}},
+			FIDO2SDKClient:   stubWiringFIDO2Client{},
+			AuthSDKClient:    stubWiringLoginClient{},
+			TenantID:         "system",
+			ServiceRegistry:  svcReg,
+			TenantManager:    tenantManager,
 		},
 		jwtService: jwtService,
 	}, svcReg
@@ -195,15 +208,68 @@ func TestWebAuthnRestService_NoTenantManager_LeavesServiceUnwired(t *testing.T) 
 	assert.Nil(t, svcReg.TenantUserService())
 }
 
-// TestWebAuthnRestService_NoJWTService_LeavesServiceUnwired proves the
-// wiring is gated on the token issuer's dependency: without a JWT
-// service the tenant service is NOT constructed (a wired service whose
-// issuer cannot sign would fail closed on every login under the #145
-// empty-token rule).
-func TestWebAuthnRestService_NoJWTService_LeavesServiceUnwired(t *testing.T) {
+// TestWebAuthnRestService_NoJWTService_DeclinesTheSurface proves the
+// whole WebAuthn surface is gated on the signer, not just the tenant
+// wiring. The signer is what issues the session credential a completed
+// login hands back, and the seam every protected route runs validates
+// exactly that signer's tokens — so without it the routes could only
+// authenticate someone and then answer with a credential this same server
+// rejects. Declining the surface is the same treatment every other
+// unavailable seam gets here; serving a login that cannot produce a usable
+// session is the failure mode #646 was opened on.
+func TestWebAuthnRestService_NoJWTService_DeclinesTheSurface(t *testing.T) {
 	registry, svcReg := newWiringRegistry(t, newWiringTenantManager(t), nil)
 
-	handler := registry.WebAuthnRestService()
-	require.NotNil(t, handler)
+	assert.Nil(t, registry.WebAuthnRestService(),
+		"no signer means no session credential, so no WebAuthn routes")
+	assert.Nil(t, registry.LoginDriver(),
+		"and no login driver either, for the same reason")
 	assert.Nil(t, svcReg.TenantUserService())
+}
+
+// stubWiringLoginClient stands in for the unified login backbone. The
+// wiring tests never run a ceremony; they only need the WebAuthn handler
+// to be constructible, which now requires a login backbone because its
+// login verbs run entirely on one.
+type stubWiringLoginClient struct{}
+
+func (stubWiringLoginClient) BeginLogin(
+	context.Context, quicbaassdk.BeginLoginRequest) (*quicbaassdk.BeginLoginResponse, error) {
+	return nil, errors.New("stub: BeginLogin is not exercised by the wiring tests")
+}
+
+func (stubWiringLoginClient) FinishLogin(
+	context.Context, quicbaassdk.FinishLoginRequest) (*quicbaassdk.FinishLoginResponse, error) {
+	return nil, errors.New("stub: FinishLogin is not exercised by the wiring tests")
+}
+
+// TestLoginDriver_RefusedWhenTheSeamIsTheBrokerValidator pins the same
+// fail-closed gate the admin-claim ceremony has, for the same reason: a
+// login completes by minting a platform-local session, and when
+// JWT.PlatformToken.Enabled makes the broker validator the inbound seam
+// that session is rejected by every protected route. Offering a login that
+// hands the operator a credential the same server refuses is the defect
+// #646 was opened on; declining the surface is the answer, and converging
+// the two token types is #202.
+func TestLoginDriver_RefusedWhenTheSeamIsTheBrokerValidator(t *testing.T) {
+	cfg := &Config{}
+	cfg.JWT.PlatformToken.Enabled = true
+	cfg.JWT.PlatformToken.Issuer = "https://broker.example.com"
+	cfg.JWT.PlatformToken.JWKSURL = "https://broker.example.com/.well-known/jwks.json"
+
+	registry, _ := newWiringRegistryWithConfig(t, newWiringTenantManager(t), &jwt.Service{}, cfg)
+
+	assert.Nil(t, registry.LoginDriver(),
+		"the broker seam does not accept a platform-minted session")
+	assert.Nil(t, registry.WebAuthnRestService(),
+		"and the WebAuthn routes go with it, since their login verbs run on that driver")
+}
+
+// TestLoginDriver_BuiltOnTheDefaultSeam is the positive control: the gate
+// above must be the seam, not something else missing from the fixture.
+func TestLoginDriver_BuiltOnTheDefaultSeam(t *testing.T) {
+	registry, _ := newWiringRegistry(t, newWiringTenantManager(t), &jwt.Service{})
+
+	assert.NotNil(t, registry.LoginDriver(),
+		"the default seam validates exactly what a login issues")
 }

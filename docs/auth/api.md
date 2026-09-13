@@ -169,7 +169,7 @@ store independently of one another.
 
 | Capability | Embedded (Go) | Unix | gRPC | REST | QUIC | MCP |
 |---|---|---|---|---|---|---|
-| Issue session token (JWT) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/login` (`GenerateToken`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Issue session (mTLS factor) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/login` (`GenerateToken`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Refresh session token | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/login/refresh` (`RefreshToken`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | WebAuthn: begin registration | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/webauthn/registration/begin` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | WebAuthn: finish registration | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/webauthn/registration/finish` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
@@ -203,21 +203,50 @@ ceremony state (challenge / session) lives in the quicbaas SDK and the
 platform persists none of it:
 
 - **Begin** (`registration/begin`, `login/begin`) returns the parsed
-  WebAuthn options object: `publicKey` at the top level (the SDK user
-  handle in `publicKey.user.id` passes through untouched), plus
-  `session_id` — the SDK ceremony session ID the client must echo back —
-  and, on `login/begin`, `user_id`. `login/begin` also exposes the
-  `X-User-ID` response header.
+  WebAuthn options object: `publicKey` at the top level, plus
+  `session_id` — the ceremony session the client must echo back.
+  Registration passes the SDK user handle through in `publicKey.user.id`
+  untouched.
+- **`login/begin` takes no request body and returns no user identifier.**
+  The login ceremony is usernameless: it sends no hint to the backbone,
+  which drives the discoverable-credential flow, so the authenticator
+  selects the credential and the backbone resolves the principal from the
+  credential id in the assertion. There is consequently no `user_id` field
+  and no `X-User-ID` response header on `login/begin`, and no username to
+  supply. That is what makes an account on a public email domain an
+  ordinary case rather than a lookup problem.
 - **Finish** (`registration/finish`, `login/finish`) accepts the raw
-  `PublicKeyCredential` JSON produced by the browser as the request
-  body, with two request headers: `X-User-Id` (registration: the
-  base64url SDK user handle from `publicKey.user.id`; login: the decimal
-  user ID) and `X-Session-Id` (the `session_id` from begin). A finish
-  without `X-Session-Id` fails closed with HTTP 400 ("restart the
-  ceremony"); the SDK validates the credential against that session's
-  challenge, so a forged or stale session ID fails verification.
-- `login/finish` always returns a **platform JWT** in the envelope
-  payload; the SDK's own session token is never surfaced.
+  `PublicKeyCredential` JSON produced by the browser as the request body.
+  `login/finish` needs one header, `X-Session-Id` (the `session_id` from
+  begin); registration additionally needs `X-User-Id`, the base64url SDK
+  user handle from `publicKey.user.id`. A finish without `X-Session-Id`
+  fails closed with HTTP 400 ("restart the ceremony"); the credential is
+  validated against that session's challenge, so a forged or stale
+  session id fails verification.
+- `login/finish` returns the **session the login issued** in the envelope
+  payload — `bearer` and `expiresAt`. The ceremony runs entirely on the
+  backbone, which verifies the assertion and resolves the principal; the
+  `bearer` is then minted by the platform's JWT signer from that identity,
+  because the seam every protected route runs (`Router.authMiddleware`)
+  validates platform-signed tokens and the SDK has no working inbound
+  validator for the backbone's own OIDC bearer — `sdk/go/client/auth`'s
+  `ValidateToken` asserts `*service.TokenClaims` while the embedded
+  transport answers with `*service.ValidateTokenResponse`
+  (jeremyhahn/go-quicbaas#955). Forwarding the backbone bearer instead
+  would hand every client a token this same server rejects.
+
+  The mint is a projection of the backbone's verdict, not an
+  authentication: it happens only after the ceremony succeeded, only from
+  the identity the ceremony resolved, and a bearer with no identity is
+  refused 401 rather than turned into an anonymous credential. It is
+  confined to one seam, `login.SessionIssuer`, and disappears when the
+  inbound validator lands (#202, phases 3 and 4 of #644).
+
+  **No renewal credential is returned.** The backbone mints one with its
+  own bearer, but that credential renews the BACKBONE's session and the
+  client is not holding the backbone's bearer. Forwarding it would hand
+  over a credential no route on this server can redeem. The pair returns
+  together in the same change that makes the backbone bearer the session.
 
 **"not this repo"** means the capability is served by
 `go-quicbaas/sdk/go`'s `Security().Auth().Factors()` (M10, over go-qrdb's M14
@@ -249,7 +278,7 @@ This is what each transport does to every request, not a capability you call.
 | Unix | `SO_PEERCRED` — kernel-verified PID/UID/GID. No token, no certificate. | `pkg/util/peercred/peercred.go` | `ErrUnixCredentialsUnavailable`, `ErrNotUnixConnection`, `ErrPeerNotAvailable` |
 | gRPC (TCP) | mTLS client certificate → `auth.Authenticator` → `*auth.Identity` on the context | `pkg/api/daemon/mtls_interceptor.go` | `codes.Unauthenticated` |
 | gRPC (TCP) | Bearer platform token in the `authorization` metadata header; claims path projects `scp` → RBAC and `tenant_id` → RLS | `pkg/api/grpc/oidc_interceptor.go` | `codes.Unauthenticated`; scope denial → `codes.PermissionDenied` |
-| REST | JWT middleware; `/login` and `/login/refresh` are its own endpoints | `pkg/webservice/v1/middleware`, `router/authentication.go` | 401 |
+| REST | JWT middleware; `/login` and `/login/refresh` are its own endpoints. `/login` authenticates nothing itself — it drives the unified login ceremony (`pkg/webservice/v1/login`) with the mTLS factor and issues the session credential from the identity that ceremony resolved | `pkg/webservice/v1/middleware`, `router/authentication.go` | 401 |
 | QUIC | Bearer token in the request frame's token field (`MaxTokenSize` 8 KiB), then per-opcode scope | `pkg/api/quic/auth.go` | `StatusUnauthorized` (`0x03`), `StatusPermissionDenied` (`0x07`), `StatusUnavailable` (`0x0A`) |
 | MCP | OAuth 2.1 bearer token, RFC 9728 metadata, per-tool permission map | `pkg/api/mcp/authz.go`, `oauth_metadata.go` | JSON-RPC error codes, §6 |
 

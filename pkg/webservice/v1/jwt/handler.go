@@ -14,7 +14,6 @@
 package jwt
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -26,6 +25,7 @@ import (
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -37,10 +37,6 @@ var (
 	// platform-local JWT from an unauthenticated credential, so /login
 	// fails closed instead of issuing an unverified token.
 	ErrLoginUnavailable = errors.New("rest/jwt: unified login backend is not configured")
-
-	// ErrLoginFailed is returned when the unified login ceremony resolves
-	// no bearer (no identity authenticated).
-	ErrLoginFailed = errors.New("rest/jwt: authentication failed")
 )
 
 type TokenHandler interface {
@@ -52,11 +48,12 @@ type RestHandler struct {
 	responseWriter response.HttpWriter
 	jwtService     *Service
 	userService    service.UserServicer
-	// loginClient routes /login through the quicbaas SDK unified login
-	// ceremony (Security().Auth().BeginLogin/FinishLogin). When nil,
-	// /login fails closed with ErrLoginUnavailable rather than minting an
-	// unverified local JWT.
-	loginClient UnifiedLoginClient
+	// loginDriver routes /login through the unified login ceremony. There
+	// is one ceremony in the platform and it lives in
+	// pkg/webservice/v1/login; this handler contributes only the route.
+	// When nil, /login fails closed with ErrLoginUnavailable rather than
+	// minting an unverified local JWT.
+	loginDriver *login.Driver
 	TokenHandler
 }
 
@@ -74,12 +71,11 @@ func NewRestHandler(
 		userService:    userService}, nil
 }
 
-// SetUnifiedLoginClient wires the quicbaas SDK unified login client so
-// /login authenticates via BeginLogin/FinishLogin and returns the
-// SDK-issued OIDC bearer. Wired by the handler registry at boot when the
-// SDK AuthService is available.
-func (handler *RestHandler) SetUnifiedLoginClient(client UnifiedLoginClient) {
-	handler.loginClient = client
+// SetLoginDriver wires the unified login driver so /login authenticates
+// through the canonical ceremony and returns the session it issued. Wired
+// by the handler registry at boot when the SDK AuthService is available.
+func (handler *RestHandler) SetLoginDriver(driver *login.Driver) {
+	handler.loginDriver = driver
 }
 
 // Creates a new web service session from the parsed JWT
@@ -122,68 +118,32 @@ func (handler *RestHandler) CreateSession(
 		user), nil
 }
 
-// GenerateToken authenticates the caller through the quicbaas SDK unified
-// login ceremony and returns the SDK-issued OIDC bearer.
+// GenerateToken authenticates the caller through the unified login
+// ceremony and returns the session it issued.
 //
 // The locked architecture makes qrdb's LoginClient the single canonical
 // login backbone and quicbaas's OIDC TokenService the SessionIssuer; the
 // platform is a consumer, not an issuer. /login is a single-shot POST over
-// the webserver's mTLS-capable connection, so it drives the mTLS factor:
-// BeginLogin(mtls) opens the attempt and FinishLogin(mtls) lets the
-// quicbaas server derive the lookup key from the verified peer certificate
-// and mint the bearer. WebAuthn/FIDO2 and PIV use challenge round-trips and
-// are handled by the dedicated /webauthn router.
+// the webserver's mTLS-capable connection, so it drives the mtls factor,
+// whose possession proof is the handshake itself — there is no challenge
+// to issue and the driver completes the ceremony in this one request.
+// WebAuthn and PIV use challenge round trips and are served by their own
+// routes against the same driver.
 //
-// When no unified login client is wired the handler fails closed with
+// When no driver is wired the handler fails closed with
 // ErrLoginUnavailable — it never fabricates an unverified local JWT.
 func (handler *RestHandler) GenerateToken(w http.ResponseWriter, req *http.Request) {
 
 	handler.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
 		req.URL.Path, req.Method, req.RemoteAddr, req.RequestURI)
 
-	var userCred service.UserCredential
-	if err := json.NewDecoder(req.Body).Decode(&userCred); err != nil {
-		handler.responseWriter.Error400(w, req, err)
-		return
-	}
-
-	if handler.loginClient == nil {
-		handler.logger.Error(ErrLoginUnavailable, "unified login client not configured")
+	if handler.loginDriver == nil {
+		handler.logger.Error(ErrLoginUnavailable, "unified login driver not configured")
 		handler.responseWriter.Error403(w, req, ErrLoginUnavailable, nil)
 		return
 	}
 
-	ctx := req.Context()
-
-	begin, err := handler.loginClient.BeginLogin(ctx, quicbaas.BeginLoginRequest{
-		Type: quicbaas.FactorTypeMTLS,
-		Hint: userCred.Email,
-	})
-	if err != nil {
-		handler.logger.Error(err, "unified BeginLogin(mtls) failed")
-		handler.responseWriter.Error401(w, req, err)
-		return
-	}
-
-	finish, err := handler.loginClient.FinishLogin(ctx, quicbaas.FinishLoginRequest{
-		SessionID: begin.SessionID,
-		Type:      quicbaas.FactorTypeMTLS,
-	})
-	if err != nil {
-		handler.logger.Error(err, "unified FinishLogin(mtls) failed")
-		handler.responseWriter.Error401(w, req, err)
-		return
-	}
-
-	if finish == nil || finish.Bearer == "" {
-		handler.logger.Error(ErrLoginFailed, "unified FinishLogin returned no bearer")
-		handler.responseWriter.Error401(w, req, ErrLoginFailed)
-		return
-	}
-
-	handler.logger.Debug("rest/jwt: unified login issued OIDC bearer")
-
-	handler.responseWriter.Success200(w, req, finish.Bearer)
+	handler.loginDriver.Begin(w, req, quicbaas.FactorTypeMTLS)
 }
 
 // Exchange a JWT for a new token with a new expiration date

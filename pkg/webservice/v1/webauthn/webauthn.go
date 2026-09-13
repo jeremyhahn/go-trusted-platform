@@ -24,7 +24,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"strconv"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
@@ -44,6 +43,9 @@ func NewHandler(params ServiceParams) (RestHandler, error) {
 	if params.Config == nil || params.Config.RPID == "" || len(params.Config.RPOrigins) == 0 {
 		return nil, ErrInvalidConfig
 	}
+	if params.LoginDriver == nil {
+		return nil, ErrLoginDriverRequired
+	}
 	return &WebAuthnRestHandler{
 		logger:              params.Logger,
 		jwtService:          params.JWTService,
@@ -53,6 +55,7 @@ func NewHandler(params ServiceParams) (RestHandler, error) {
 		invitationService:   params.InvitationService,
 		responseWriter:      params.ResponseWriter,
 		fido2Client:         params.FIDO2Client,
+		loginDriver:         params.LoginDriver,
 		tenantID:            params.TenantID,
 		config:              params.Config,
 		publicRegistration:  params.PublicRegistrationEnabled,
@@ -200,95 +203,28 @@ func (h *WebAuthnRestHandler) FinishRegistration(w http.ResponseWriter, r *http.
 	h.responseWriter.Success200(w, r, FinishRegistrationResponse{Token: token, TenantID: tenantID})
 }
 
-// BeginLogin starts a WebAuthn authentication ceremony via the SDK.
+// BeginLogin opens a WebAuthn assertion ceremony on the unified login
+// backbone.
+//
+// It is USERNAMELESS: the driver's FIDO2 binder sends no hint, which
+// drives the backbone's discoverable-credential flow, and the credential
+// the authenticator returns identifies the user. The platform therefore
+// performs no lookup of its own before the ceremony — the lookup that
+// used to fail here whenever the platform record was missing or keyed
+// differently from the credential (#640), and the lookup that could never
+// work for a public email domain.
 func (h *WebAuthnRestHandler) BeginLogin(w http.ResponseWriter, r *http.Request) {
-	userID, username, err := getUserIDAndEmail(r)
-	if err != nil {
-		h.responseWriter.Error400(w, r, err)
-		return
-	}
-	user, err := h.userService.Get(r.Context(), userID)
-	if err != nil {
-		if isNotFoundError(err) {
-			h.responseWriter.Error400(w, r, ErrInvalidUserID)
-			return
-		}
-		h.responseWriter.Error400(w, r, err)
-		return
-	}
-	if username == "" {
-		username = user.Email
-	}
-	options, err := h.fido2Client.BeginAuthentication(h.fido2Context(r),
-		&quicbaassdk.FIDO2BeginAuthenticationRequest{Username: username})
-	if err != nil {
-		h.logger.Error(err, "sdk BeginAuthentication failed")
-		h.responseWriter.Error500(w, r, err)
-		return
-	}
-	// The browser consumes the parsed CredentialRequest object; the SDK
-	// session ID rides the payload and the browser echoes it back on
-	// finish via the X-Session-Id header — the platform persists no
-	// ceremony state.
-	request, err := parseRequestOptions(options.OptionsJSON)
-	if err != nil {
-		h.logger.Error(err, "sdk BeginAuthentication returned unparseable options")
-		h.responseWriter.Error500(w, r, err)
-		return
-	}
-	// The /auth/login page reads the user id from the body; the
-	// /auth/webauthn page reads the X-User-ID response header. Serve both.
-	request["user_id"] = strconv.FormatUint(userID, 10)
-	request["session_id"] = options.SessionID
-	w.Header().Set("Access-Control-Expose-Headers", "X-User-ID")
-	w.Header().Set("X-User-ID", strconv.FormatUint(userID, 10))
-	h.responseWriter.Write(w, r, http.StatusOK, request)
+	h.loginDriver.Begin(w, r, quicbaassdk.FactorTypeFIDO2)
 }
 
-// FinishLogin completes a WebAuthn login ceremony and returns a JWT.
+// FinishLogin submits the browser's assertion to the unified backbone,
+// which resolves the principal from the credential id and verifies the
+// assertion's signature, relying-party id/origin and sign counter. The
+// verdict is the backbone's; the session credential the client receives is
+// then minted from the identity it resolved, because that is what this
+// server's own inbound seam validates (login.SessionIssuer).
 func (h *WebAuthnRestHandler) FinishLogin(w http.ResponseWriter, r *http.Request) {
-	userID, _, err := getUserIDAndEmail(r)
-	if err != nil {
-		h.responseWriter.Error400(w, r, err)
-		return
-	}
-	user, err := h.userService.Get(r.Context(), userID)
-	if err != nil {
-		h.responseWriter.Error404(w, r, err)
-		return
-	}
-	// The SDK owns all ceremony state: the session ID issued at begin
-	// time rides back on the X-Session-Id header, and the SDK validates
-	// the assertion against the session's challenge — a forged or stale
-	// session ID fails verification there.
-	finishReq, err := decodeFinishAuthenticationBody(r.Body, user.Email, r.Header.Get(sessionIDHeader))
-	if err != nil {
-		h.responseWriter.Error400(w, r, err)
-		return
-	}
-	session, err := h.fido2Client.FinishAuthentication(h.fido2Context(r), finishReq)
-	if err != nil {
-		h.logger.Error(err, "sdk FinishAuthentication failed")
-		h.responseWriter.Error400(w, r, err)
-		return
-	}
-	// Fail closed: an error-free response is not authentication — the SDK
-	// reports the verification verdict on Success, and a nil response
-	// proves nothing.
-	if session == nil || !session.Success {
-		h.logger.Error(ErrAuthenticationFailed, "sdk FinishAuthentication rejected the assertion")
-		h.responseWriter.Error400(w, r, ErrAuthenticationFailed)
-		return
-	}
-	// The SDK's session token is an xkms-scoped artifact, not a platform
-	// JWT — the console's authenticated surface validates platform JWTs,
-	// so one is ALWAYS issued here (mirroring FinishRegistration).
-	token, err := h.issueToken(r, user)
-	if err != nil {
-		h.responseWriter.Error500(w, r, err)
-		return
-	}
-	h.responseWriter.Success200(w, r, token)
+	h.loginDriver.Finish(w, r, quicbaassdk.FactorTypeFIDO2)
 }
 
 // RegistrationStatus reports whether the X-User-Id (or POSTed

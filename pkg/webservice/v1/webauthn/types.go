@@ -20,6 +20,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
@@ -90,6 +91,11 @@ type ServiceParams struct {
 	// delegates to for every ceremony operation. It is the single
 	// canonical WebAuthn/FIDO2 ceremony surface. Required.
 	FIDO2Client quicbaassdk.FIDO2Client
+	// LoginDriver runs the unified login ceremony. The login verbs
+	// delegate to it wholesale: there is one ceremony in the platform and
+	// it lives in pkg/webservice/v1/login, never a second copy here.
+	// Required.
+	LoginDriver *login.Driver
 	// TenantID is the tenant every ceremony operation is scoped to —
 	// the platform's operating tenant (the firstboot system tenant
 	// adopted by pkg/app). The SDK FIDO2 service is tenant-scoped and
@@ -109,6 +115,7 @@ type WebAuthnRestHandler struct {
 	invitationService   service.InvitationServicer
 	responseWriter      response.HttpWriter
 	fido2Client         quicbaassdk.FIDO2Client
+	loginDriver         *login.Driver
 	tenantID            string
 	config              *Config
 	publicRegistration  bool

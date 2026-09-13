@@ -37,6 +37,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login/logintest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -191,7 +193,42 @@ type harness struct {
 	regs    *mockRegistrationService
 	writer  *mockResponseWriter
 	sdk     *mockFIDO2Client
+	login   *fakeUnifiedLoginClient
 	logger  *logging.Logger
+}
+
+// fakeUnifiedLoginClient stands in for the backbone so the handler's
+// login verbs can be shown to delegate. The ceremony itself is tested in
+// pkg/webservice/v1/login; here we only prove the routing.
+type fakeUnifiedLoginClient struct {
+	beginReq  quicbaassdk.BeginLoginRequest
+	finishReq quicbaassdk.FinishLoginRequest
+
+	begin    *quicbaassdk.BeginLoginResponse
+	beginErr error
+
+	finish    *quicbaassdk.FinishLoginResponse
+	finishErr error
+}
+
+func (c *fakeUnifiedLoginClient) BeginLogin(_ context.Context, req quicbaassdk.BeginLoginRequest) (*quicbaassdk.BeginLoginResponse, error) {
+	c.beginReq = req
+	return c.begin, c.beginErr
+}
+
+func (c *fakeUnifiedLoginClient) FinishLogin(_ context.Context, req quicbaassdk.FinishLoginRequest) (*quicbaassdk.FinishLoginResponse, error) {
+	c.finishReq = req
+	return c.finish, c.finishErr
+}
+
+// fakeSessionIssuer stands in for the platform's JWT signer. The mint
+// itself is tested in pkg/webservice/v1/jwt; here it only has to produce
+// something recognisable so a test can tell the session the client
+// receives apart from the backbone's bearer.
+type fakeSessionIssuer struct{}
+
+func (i *fakeSessionIssuer) IssueSession(identity *quicbaassdk.Identity) (string, time.Time, error) {
+	return "platform-session-for-" + identity.Subject, time.Unix(1700003600, 0).UTC(), nil
 }
 
 func newHarness(t *testing.T) *harness {
@@ -201,6 +238,18 @@ func newHarness(t *testing.T) *harness {
 	regs := new(mockRegistrationService)
 	writer := new(mockResponseWriter)
 	sdk := new(mockFIDO2Client)
+	unified := new(fakeUnifiedLoginClient)
+	issuer := new(fakeSessionIssuer)
+	fido2Binder, err := login.NewFIDO2Binder(testTenantID)
+	require.NoError(t, err)
+	driver, err := login.NewDriver(login.DriverParams{
+		Client:         unified,
+		Binders:        []login.Binder{fido2Binder},
+		SessionIssuer:  issuer,
+		Logger:         logger,
+		ResponseWriter: response.NewResponseWriter(logger, nil),
+	})
+	require.NoError(t, err)
 
 	params := ServiceParams{
 		Config: &Config{
@@ -214,6 +263,7 @@ func newHarness(t *testing.T) *harness {
 		ResponseWriter:      writer,
 		UserService:         users,
 		FIDO2Client:         sdk,
+		LoginDriver:         driver,
 		TenantID:            testTenantID,
 		// The harness exercises the open-registration mode; the
 		// invite-only default is covered by the dedicated gate tests.
@@ -228,6 +278,7 @@ func newHarness(t *testing.T) *harness {
 		regs:    regs,
 		writer:  writer,
 		sdk:     sdk,
+		login:   unified,
 		logger:  logger,
 	}
 }
@@ -586,168 +637,9 @@ func TestFinishRegistration_NilResponse_FailsClosed(t *testing.T) {
 // BeginLogin
 // =============================================================================
 
-func TestBeginLogin_Success(t *testing.T) {
-	h := newHarness(t)
-	username := "bob@example.com"
-	user := entities.NewUser(username)
-	body, _ := json.Marshal(map[string]string{"username": username})
-	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader(body))
-	w := httptest.NewRecorder()
-	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("BeginAuthentication", withTestTenant, mock.AnythingOfType("*transport.BeginAuthenticationRequest")).
-		Return(&quicbaassdk.FIDO2BeginAuthenticationResponse{SessionID: "sess", OptionsJSON: `{"publicKey":{"challenge":"auth"}}`}, nil)
-	// The parsed object carries publicKey, the user_id the /auth/login
-	// page reads from the body, and the SDK session_id the browser
-	// echoes back on finish via the X-Session-Id header.
-	h.writer.On("Write", w, req, http.StatusOK, mock.MatchedBy(func(v interface{}) bool {
-		options, ok := v.(map[string]interface{})
-		return ok && options["publicKey"] != nil &&
-			options["user_id"] == strconv.FormatUint(user.ID, 10) &&
-			options["session_id"] == "sess"
-	})).Return()
-	h.handler.BeginLogin(w, req)
-	h.users.AssertExpectations(t)
-	h.sdk.AssertExpectations(t)
-	h.writer.AssertExpectations(t)
-	assert.Equal(t, strconv.FormatUint(user.ID, 10), w.Header().Get("X-User-ID"))
-}
-
-func TestBeginLogin_UserNotFound(t *testing.T) {
-	h := newHarness(t)
-	username := "ghost@example.com"
-	userID := util.NewID([]byte(username))
-	body, _ := json.Marshal(map[string]string{"username": username})
-	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader(body))
-	w := httptest.NewRecorder()
-	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
-	h.writer.On("Error400", w, req, ErrInvalidUserID).Return()
-	h.handler.BeginLogin(w, req)
-	h.users.AssertExpectations(t)
-	h.writer.AssertExpectations(t)
-}
-
-func TestBeginLogin_InvalidBody(t *testing.T) {
-	h := newHarness(t)
-	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader([]byte("{")))
-	w := httptest.NewRecorder()
-	h.writer.On("Error400", w, req, ErrInvalidUserIDHeader).Return()
-	h.handler.BeginLogin(w, req)
-	h.writer.AssertExpectations(t)
-}
-
-func TestBeginLogin_SDKError(t *testing.T) {
-	h := newHarness(t)
-	username := "fail@example.com"
-	user := entities.NewUser(username)
-	body, _ := json.Marshal(map[string]string{"username": username})
-	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader(body))
-	w := httptest.NewRecorder()
-	sdkErr := errors.New("upstream down")
-	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("BeginAuthentication", mock.Anything, mock.Anything).Return(nil, sdkErr)
-	h.writer.On("Error500", w, req, sdkErr).Return()
-	h.handler.BeginLogin(w, req)
-	h.sdk.AssertExpectations(t)
-	h.writer.AssertExpectations(t)
-}
-
 // =============================================================================
 // FinishLogin
 // =============================================================================
-
-func TestFinishLogin_Success_IssuesPlatformToken(t *testing.T) {
-	h := newHarness(t)
-	tus := new(mockTenantUserService)
-	h.handler.tenantUserService = tus
-	username := "ok@example.com"
-	user := entities.NewUser(username)
-	body := []byte(`{"id":"cred-9","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`)
-	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
-	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
-	req.Header.Set("X-Session-Id", "sess")
-	w := httptest.NewRecorder()
-	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("FinishAuthentication", withTestTenant, mock.MatchedBy(func(req *quicbaassdk.FIDO2FinishAuthenticationRequest) bool {
-		return req.SessionID == "sess" && req.Username == username && req.AssertionJSON == string(body)
-	})).Return(&quicbaassdk.FIDO2FinishAuthenticationResponse{Success: true, Token: "sdk-opaque-token"}, nil)
-	// The SDK token is never surfaced; the platform issues its own JWT.
-	tus.On("IssueToken", mock.Anything, user).Return("platform-jwt", nil)
-	h.writer.On("Success200", w, req, "platform-jwt").Return()
-	h.handler.FinishLogin(w, req)
-	h.sdk.AssertExpectations(t)
-	h.writer.AssertExpectations(t)
-}
-
-func TestFinishLogin_UserNotFound(t *testing.T) {
-	h := newHarness(t)
-	username := "lost@example.com"
-	userID := util.NewID([]byte(username))
-	body, _ := json.Marshal(map[string]string{"username": username})
-	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
-	w := httptest.NewRecorder()
-	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
-	h.writer.On("Error404", w, req, datastore.ErrRecordNotFound).Return()
-	h.handler.FinishLogin(w, req)
-	h.users.AssertExpectations(t)
-	h.writer.AssertExpectations(t)
-}
-
-func TestFinishLogin_SDKError(t *testing.T) {
-	h := newHarness(t)
-	username := "deny@example.com"
-	user := entities.NewUser(username)
-	body := []byte(`{"id":"cred-bad","type":"public-key"}`)
-	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
-	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
-	req.Header.Set("X-Session-Id", "sess")
-	w := httptest.NewRecorder()
-	sdkErr := errors.New("assertion bad")
-	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("FinishAuthentication", mock.Anything, mock.Anything).Return(nil, sdkErr)
-	h.writer.On("Error400", w, req, sdkErr).Return()
-	h.handler.FinishLogin(w, req)
-	h.sdk.AssertExpectations(t)
-	h.writer.AssertExpectations(t)
-}
-
-// finishLoginRejection exercises the fail-closed guard: an error-free
-// SDK response that does not affirm Success must never issue a JWT.
-func finishLoginRejection(t *testing.T, resp *quicbaassdk.FIDO2FinishAuthenticationResponse) {
-	h := newHarness(t)
-	tus := new(mockTenantUserService)
-	h.handler.tenantUserService = tus
-	username := "reject@example.com"
-	user := entities.NewUser(username)
-	body := []byte(`{"id":"cred-r","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`)
-	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
-	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
-	req.Header.Set("X-Session-Id", "sess")
-	w := httptest.NewRecorder()
-	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("FinishAuthentication", withTestTenant, mock.Anything).Return(resp, nil)
-	h.writer.On("Error400", w, req, ErrAuthenticationFailed).Return()
-	h.handler.FinishLogin(w, req)
-	h.sdk.AssertExpectations(t)
-	h.writer.AssertExpectations(t)
-	tus.AssertNotCalled(t, "IssueToken", mock.Anything, mock.Anything)
-}
-
-// TestFinishLogin_MissingSessionHeader proves a finish without the
-// X-Session-Id ceremony header fails closed before the SDK is called.
-func TestFinishLogin_MissingSessionHeader(t *testing.T) {
-	h := newHarness(t)
-	username := "nosess@example.com"
-	user := entities.NewUser(username)
-	body := []byte(`{"id":"cred-n","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`)
-	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
-	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
-	w := httptest.NewRecorder()
-	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.writer.On("Error400", w, req, ErrCeremonySessionMissing).Return()
-	h.handler.FinishLogin(w, req)
-	h.sdk.AssertNotCalled(t, "FinishAuthentication", mock.Anything, mock.Anything)
-	h.writer.AssertExpectations(t)
-}
 
 // TestFinishRegistration_MissingSessionHeader proves the same guard on
 // the registration finish path.
@@ -765,14 +657,6 @@ func TestFinishRegistration_MissingSessionHeader(t *testing.T) {
 	h.handler.FinishRegistration(w, req)
 	h.sdk.AssertNotCalled(t, "FinishRegistration", mock.Anything, mock.Anything)
 	h.writer.AssertExpectations(t)
-}
-
-func TestFinishLogin_SuccessFalse_FailsClosed(t *testing.T) {
-	finishLoginRejection(t, &quicbaassdk.FIDO2FinishAuthenticationResponse{Success: false})
-}
-
-func TestFinishLogin_NilResponse_FailsClosed(t *testing.T) {
-	finishLoginRejection(t, nil)
 }
 
 // =============================================================================
@@ -928,30 +812,6 @@ func TestDecodeFinishRegistrationBody_BrowserShape(t *testing.T) {
 func TestDecodeFinishRegistrationBody_BrowserShapeNoSession(t *testing.T) {
 	raw := `{"id":"cred-1","type":"public-key"}`
 	_, err := decodeFinishRegistrationBody(bytes.NewReader([]byte(raw)), "")
-	assert.ErrorIs(t, err, ErrCeremonySessionMissing)
-}
-
-func TestDecodeFinishAuthenticationBody_Invalid(t *testing.T) {
-	_, err := decodeFinishAuthenticationBody(bytes.NewReader([]byte("nope")), "x", "sess")
-	assert.ErrorIs(t, err, ErrInvalidRequestBody)
-}
-
-// TestDecodeFinishAuthenticationBody_BrowserShape proves the raw WebAuthn
-// assertion JSON a browser posts is accepted, stamped with the username,
-// and correlated with the persisted ceremony session.
-func TestDecodeFinishAuthenticationBody_BrowserShape(t *testing.T) {
-	raw := `{"id":"cred-9","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`
-	out, err := decodeFinishAuthenticationBody(bytes.NewReader([]byte(raw)), "user@y", "sess-login")
-	require.NoError(t, err)
-	assert.Equal(t, "sess-login", out.SessionID)
-	assert.Equal(t, "user@y", out.Username)
-	assert.JSONEq(t, raw, out.AssertionJSON)
-}
-
-// TestDecodeFinishAuthenticationBody_BrowserShapeNoSession fails closed
-// when no login ceremony session was persisted for the user.
-func TestDecodeFinishAuthenticationBody_BrowserShapeNoSession(t *testing.T) {
-	_, err := decodeFinishAuthenticationBody(bytes.NewReader([]byte(`{"id":"x"}`)), "u", "")
 	assert.ErrorIs(t, err, ErrCeremonySessionMissing)
 }
 
@@ -1297,53 +1157,6 @@ func TestIsNotFoundError_AllShapes(t *testing.T) {
 	assert.False(t, isNotFoundError(nil))
 }
 
-// TestFinishLogin_TenantIssuerError proves a tenant-token failure after
-// a successful ceremony fails closed with a 500 — never an unscoped JWT.
-func TestFinishLogin_TenantIssuerError(t *testing.T) {
-	h := newHarness(t)
-	tus := new(mockTenantUserService)
-	h.handler.tenantUserService = tus
-	username := "tenantfail@example.com"
-	user := entities.NewUser(username)
-	body := []byte(`{"id":"cred-t","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`)
-	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
-	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
-	req.Header.Set("X-Session-Id", "sess")
-	w := httptest.NewRecorder()
-	issueErr := errors.New("tenant claims unavailable")
-	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("FinishAuthentication", withTestTenant, mock.Anything).
-		Return(&quicbaassdk.FIDO2FinishAuthenticationResponse{Success: true}, nil)
-	tus.On("IssueToken", mock.Anything, user).Return("", issueErr)
-	h.writer.On("Error500", w, req, issueErr).Return()
-	h.handler.FinishLogin(w, req)
-	h.writer.AssertExpectations(t)
-	h.writer.AssertNotCalled(t, "Success200", mock.Anything, mock.Anything, mock.Anything)
-}
-
-// TestFinishLogin_TenantIssuerEmptyToken proves an empty tenant token is
-// a typed 500, never a silent downgrade to the unscoped JWT service.
-func TestFinishLogin_TenantIssuerEmptyToken(t *testing.T) {
-	h := newHarness(t)
-	tus := new(mockTenantUserService)
-	h.handler.tenantUserService = tus
-	username := "emptytoken@example.com"
-	user := entities.NewUser(username)
-	body := []byte(`{"id":"cred-e","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`)
-	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
-	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
-	req.Header.Set("X-Session-Id", "sess")
-	w := httptest.NewRecorder()
-	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("FinishAuthentication", withTestTenant, mock.Anything).
-		Return(&quicbaassdk.FIDO2FinishAuthenticationResponse{Success: true}, nil)
-	tus.On("IssueToken", mock.Anything, user).Return("", nil)
-	h.writer.On("Error500", w, req, ErrEmptyTenantToken).Return()
-	h.handler.FinishLogin(w, req)
-	h.writer.AssertExpectations(t)
-	h.writer.AssertNotCalled(t, "Success200", mock.Anything, mock.Anything, mock.Anything)
-}
-
 func TestResolveTenantID_NilResult(t *testing.T) {
 	user := &entities.User{}
 	assert.Empty(t, resolveTenantID(user, nil))
@@ -1371,3 +1184,99 @@ func pastTime() time.Time { return time.Now().UTC().Add(-1 * time.Hour) }
 // tenantEntity is a local alias so the mock signatures remain readable
 // without importing the heavyweight tenant package transitively.
 type tenantEntity = tenant.TenantEntity
+
+// =============================================================================
+// Login delegation
+//
+// The ceremony lives in pkg/webservice/v1/login and is tested there. These
+// tests pin the two properties that are this handler's responsibility: the
+// login verbs reach the backbone at all, and they reach it WITHOUT first
+// consulting the platform's own user store — the lookup whose failure was
+// #640 and which cannot work for a public email domain.
+// =============================================================================
+
+func TestNewHandler_RequiresLoginDriver(t *testing.T) {
+	_, err := NewHandler(ServiceParams{
+		Config:      &Config{RPID: "x", RPOrigins: []string{"https://x"}},
+		Logger:      logging.NewLogger(slog.LevelDebug, os.Stderr),
+		FIDO2Client: new(mockFIDO2Client),
+		TenantID:    testTenantID,
+	})
+	assert.ErrorIs(t, err, ErrLoginDriverRequired)
+}
+
+func TestBeginLogin_DelegatesUsernamelessToTheBackbone(t *testing.T) {
+	h := newHarness(t)
+	options, err := json.Marshal(map[string]any{"publicKey": map[string]any{"challenge": "Y2g"}})
+	require.NoError(t, err)
+	h.login.begin = &quicbaassdk.BeginLoginResponse{
+		SessionID:         "sess-1",
+		ChallengeMetadata: map[string]string{"options": string(options)},
+	}
+
+	recorder := httptest.NewRecorder()
+	h.handler.BeginLogin(recorder, httptest.NewRequest(http.MethodPost, "/webauthn/login/begin", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, quicbaassdk.FactorTypeFIDO2, h.login.beginReq.Type)
+	assert.Equal(t, testTenantID, h.login.beginReq.TenantID)
+	// No hint: the ceremony is discoverable-credential, so no username is
+	// collected and no directory is searched.
+	assert.Empty(t, h.login.beginReq.Hint)
+	// And the platform's own user store is never consulted.
+	h.users.AssertNotCalled(t, "Get", mock.Anything, mock.Anything)
+}
+
+func TestBeginLogin_SurfacesABackboneRefusal(t *testing.T) {
+	h := newHarness(t)
+	h.login.beginErr = errors.New("login ceremony unavailable")
+
+	recorder := httptest.NewRecorder()
+	h.handler.BeginLogin(recorder, httptest.NewRequest(http.MethodPost, "/webauthn/login/begin", nil))
+
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+}
+
+func TestFinishLogin_DelegatesTheAssertionAndReturnsTheIssuedSession(t *testing.T) {
+	h := newHarness(t)
+	finish, err := logintest.FinishResponse(
+		"bearer-from-backbone", "refresh-from-backbone",
+		time.Unix(1700000000, 0).UTC(), time.Unix(1700086400, 0).UTC(),
+		&logintest.Identity{Subject: "operator@platform", TenantID: testTenantID})
+	require.NoError(t, err)
+	h.login.finish = finish
+
+	const credentialID = "Q1JFRC1JRA"
+	request := httptest.NewRequest(http.MethodPost, "/webauthn/login/finish",
+		bytes.NewReader([]byte(`{"id":"`+credentialID+`","type":"public-key"}`)))
+	request.Header.Set(login.SessionIDHeader, "sess-1")
+
+	recorder := httptest.NewRecorder()
+	h.handler.FinishLogin(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, quicbaassdk.FactorTypeFIDO2, h.login.finishReq.Type)
+	// The credential id is the lookup key the registration write-through
+	// enrolled the factor under; nothing is derived from an email.
+	assert.Equal(t, credentialID, string(h.login.finishReq.LookupKey))
+	assert.Equal(t, "sess-1", h.login.finishReq.SessionID)
+	// The client receives the session the PLATFORM minted for the identity
+	// the backbone resolved. The backbone's own bearer is not forwarded:
+	// no seam on this server can validate it (login.SessionIssuer).
+	assert.Contains(t, recorder.Body.String(), "platform-session-for-operator@platform")
+	assert.NotContains(t, recorder.Body.String(), "bearer-from-backbone")
+	assert.NotContains(t, recorder.Body.String(), "refresh-from-backbone")
+	h.users.AssertNotCalled(t, "Get", mock.Anything, mock.Anything)
+}
+
+func TestFinishLogin_RefusesAnAssertionWithNoSession(t *testing.T) {
+	h := newHarness(t)
+
+	request := httptest.NewRequest(http.MethodPost, "/webauthn/login/finish",
+		bytes.NewReader([]byte(`{"id":"Q1JFRA","type":"public-key"}`)))
+
+	recorder := httptest.NewRecorder()
+	h.handler.FinishLogin(recorder, request)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+}

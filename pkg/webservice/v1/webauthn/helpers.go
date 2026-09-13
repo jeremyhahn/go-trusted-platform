@@ -298,17 +298,6 @@ func parseCreationOptions(optionsJSON string) (map[string]interface{}, []byte, e
 	return options, handle, nil
 }
 
-// parseRequestOptions parses the SDK's marshaled CredentialRequest options
-// so the frontend receives the object shape (publicKey at the top level)
-// rather than a stringified envelope.
-func parseRequestOptions(optionsJSON string) (map[string]interface{}, error) {
-	var options map[string]interface{}
-	if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {
-		return nil, ErrInvalidRequestBody
-	}
-	return options, nil
-}
-
 // registrationKeyFromHeader resolves the pending-registration record key
 // from the X-User-Id header: the browser echoes back publicKey.user.id —
 // the SDK's opaque WebAuthn user handle, base64url-encoded — and the
@@ -367,23 +356,5 @@ func decodeFinishRegistrationBody(body io.Reader, sessionID string) (*quicbaassd
 	return &quicbaassdk.FIDO2FinishRegistrationRequest{
 		SessionID:       sessionID,
 		AttestationJSON: string(raw),
-	}, nil
-}
-
-// decodeFinishAuthenticationBody wraps the RAW WebAuthn assertion JSON the
-// browser posts (see decodeFinishRegistrationBody) and stamps the username
-// so the SDK can route the ceremony correctly.
-func decodeFinishAuthenticationBody(body io.Reader, username, sessionID string) (*quicbaassdk.FIDO2FinishAuthenticationRequest, error) {
-	raw, err := readCredentialBody(body)
-	if err != nil {
-		return nil, err
-	}
-	if sessionID == "" {
-		return nil, ErrCeremonySessionMissing
-	}
-	return &quicbaassdk.FIDO2FinishAuthenticationRequest{
-		SessionID:     sessionID,
-		Username:      username,
-		AssertionJSON: string(raw),
 	}, nil
 }

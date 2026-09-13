@@ -12,6 +12,8 @@ import type {
 } from "@simplewebauthn/browser";
 import { getBaseUrl } from "@/utils/getBaseUrl";
 import { getCookie, setCookie } from "@/utils/cookie";
+import { storeSession } from "@/utils/session";
+import type { Session } from "@/types/session";
 import styles from "./WebAuthnUI.module.css";
 
 type AuthStatus =
@@ -380,11 +382,9 @@ export default function WebAuthnUI() {
   };
 
   const handleLogin = async () => {
-    if (!username) {
-      setErrorMessage("Please enter your username.");
-      return;
-    }
-
+    // No username: the ceremony uses discoverable credentials, so the
+    // authenticator identifies the user and the server resolves them from
+    // the credential id it returns. Nothing is looked up beforehand.
     setLoading(true);
     setStatus("authenticating");
     setErrorMessage("");
@@ -393,10 +393,7 @@ export default function WebAuthnUI() {
     try {
       const result = await apiRequest<ApiResponse>(
         "/api/v1/webauthn/login/begin",
-        {
-          method: "POST",
-          body: JSON.stringify({ username }),
-        }
+        { method: "POST" }
       );
 
       if (!result.ok) {
@@ -412,19 +409,6 @@ export default function WebAuthnUI() {
         return;
       }
 
-      const userId = result.headers.get("x-user-id");
-      if (!userId) {
-        setErrorMessage("User ID not found in the response headers.");
-        setStatus("registered");
-        return;
-      }
-
-      setCookie("uid", userId, {
-        expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        secure: true,
-        sameSite: "Strict",
-      });
-
       const sessionId = result.data.session_id;
       if (!sessionId) {
         setErrorMessage("Ceremony session not found in the authentication options.");
@@ -434,12 +418,12 @@ export default function WebAuthnUI() {
 
       const assertionResponse = await startAuthentication({ optionsJSON: publicKey });
 
-      const verifyResult = await apiRequest<ApiResponse<TokenPayload>>(
+      const verifyResult = await apiRequest<ApiResponse<Session>>(
         "/api/v1/webauthn/login/finish",
         {
           method: "POST",
           body: JSON.stringify(assertionResponse),
-          headers: { "X-User-Id": userId, "X-Session-Id": sessionId },
+          headers: { "X-Session-Id": sessionId },
         }
       );
 
@@ -449,17 +433,9 @@ export default function WebAuthnUI() {
         return;
       }
 
-      // Handle both formats: payload as string (JWT) or payload as {token: string}
-      const jwt = typeof verifyResult.data.payload === "string"
-        ? verifyResult.data.payload
-        : verifyResult.data.payload?.token;
-
-      if (verifyResult.data.success && jwt) {
-        setCookie("jwt", jwt, {
-          expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-          secure: true,
-          sameSite: "Strict",
-        });
+      const session = verifyResult.data.payload;
+      if (verifyResult.data.success && session?.bearer) {
+        storeSession(session);
         setSuccessMessage("Login successful!");
         router.push("/dashboard");
       } else {

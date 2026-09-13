@@ -153,10 +153,87 @@ itself and, when revocation checking is on, the call to the CA.
 
 ### A browser authenticating with WebAuthn
 
-`/api/v1/webauthn/registration/begin` → `finish` →
-`/api/v1/webauthn/login/begin` → `finish`, terminating at the REST layer, which
-mints a JWT. `/api/v1/login` and `/api/v1/login/refresh` are the JWT
-middleware's own endpoints.
+`/api/v1/webauthn/login/begin` → `finish`. Both verbs delegate to the platform's
+single unified login driver (`pkg/webservice/v1/login`), which drives qrdb's
+login ceremony through the quicbaas SDK. **The backbone authenticates; the
+platform issues.** Every factor proof is verified upstream and every principal
+is resolved upstream — the REST layer runs no ceremony and holds no credential
+store — and the driver then mints the session credential from the identity the
+ceremony resolved.
+
+The ceremony is **usernameless**. `BeginLogin` sends no hint, which drives the
+backbone's discoverable-credential flow; the authenticator picks the credential
+and the backbone resolves the principal from the credential id the assertion
+carries — the same base64url encoding the registration write-through enrolled
+the factor under. No username is collected and no directory is searched, which
+is why an account on a public email domain is not a special case.
+
+`begin` answers with the `PublicKeyCredentialRequestOptions` the browser passes
+to `navigator.credentials.get()`, plus the `session_id` the client echoes back on
+`finish` in the `X-Session-Id` header — the platform persists no ceremony state.
+
+`/api/v1/login` is the same driver's **mTLS** route. mTLS is a single-shot
+factor: possession was proven by the handshake before the request body was read,
+so there is no challenge to issue and nothing for the client to sign, and the
+driver completes the ceremony in the one request. It reads no request body: an
+mTLS login has no credential *in* the request.
+
+Every route answers with the same session object — `bearer` and `expiresAt`.
+
+#### Why the platform still mints the bearer
+
+The inbound seam every protected route shares is `Router.authMiddleware`
+(`pkg/webservice/v1/router.go`), and with `JWT.PlatformToken` disabled — the
+only shipped configuration — it validates tokens **this platform's signer**
+produced. The backbone's bearer is signed by quicbaas's OIDC token service with
+a different key, and the SDK exposes no working way to validate it inbound:
+`sdk/go/client/auth`'s `ValidateToken` type-asserts `*service.TokenClaims`
+while the embedded transport's `quicbaas.Auth/ValidateToken` answers with
+`*service.ValidateTokenResponse`, so the call cannot succeed on the default
+in-process deployment. That is filed upstream as jeremyhahn/go-quicbaas#955.
+
+So the driver mints, through `login.SessionIssuer` — one seam, implemented by
+`jwt.Service`, the same signer the inbound middleware verifies with. The
+alternative is the defect this ordering exists to prevent: a login that
+authenticates the operator correctly and then answers with a credential the
+next request to the same server rejects with a 401.
+
+Issuance cannot widen what the ceremony decided. It runs only after the
+backbone returned a bearer (the evidence the ceremony succeeded) *and* an
+identity (who it succeeded for); a bearer with no identity is refused 401
+rather than minted into an anonymous session, and a mint that fails is a 500 —
+a platform fault — never a rejected login. The claims are a projection of the
+backbone's identity: `sub`/`user_id`/`email` from its subject, `tenant_id` and
+`roles` from its tenant and roles. `uid` is deliberately left unset: it keys the
+platform user store and the backbone's subject keys a different one, so copying
+one into the other could resolve an unrelated platform user on a numeric
+collision. The routes that re-read the platform user from it (`/login/refresh`)
+therefore refuse a backbone-issued session, which is the correct fail-closed
+answer until the two stores converge.
+
+No renewal credential reaches the client while this holds. The backbone mints
+one alongside its own bearer, but it renews the backbone's session, and the
+client is holding the platform's. Handing over a credential no route can redeem
+is the same defect as returning a bearer no route can validate, one layer down.
+When the inbound validator lands (#202, phases 3 and 4 of #644) the mint is
+deleted, the backbone's bearer becomes the session, and its renewal credential
+travels with it.
+
+Removing the mint before the validating seam exists is the ordering error the
+driver refuses to allow: it will not construct without a `SessionIssuer`.
+
+And the gate runs the other way too. When `JWT.PlatformToken.Enabled` makes the
+BROKER validator the inbound seam, a platform-minted session is the credential
+that seam rejects — so `HandlerRegistry.LoginDriver()` returns `nil` and the
+login routes (and with them the WebAuthn routes, whose login verbs run on that
+driver) are not registered at all. That is the same refusal
+`AdminClaimRestHandler` already makes, for the same reason: a flow that ends by
+handing the operator a session the same server refuses should not be offered.
+Neither seam is taught to accept both token types; converging them is #202.
+
+One driver serves every factor because there is one ceremony. A factor
+contributes a *binder* — the translation between its HTTP shape and the two
+ceremony requests — never a second copy of the Begin/Finish sequence.
 
 ### A local CLI over the Unix socket
 

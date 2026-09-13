@@ -16,12 +16,11 @@ import { startAuthentication } from "@simplewebauthn/browser";
 import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
 import { Key, Fingerprint, CreditCard, Loader2, Link2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { getBaseUrl } from "@/utils/getBaseUrl";
-import { setCookie } from "@/utils/cookie";
+import { storeSession } from "@/utils/session";
+import type { Session } from "@/types/session";
 import {
   isFIDO2Available,
   probeMTLS,
@@ -42,7 +41,6 @@ function LoginContent() {
   const params = useSearchParams();
   const redirectTo = params.get("redirect") ?? "/dashboard";
 
-  const [username, setUsername] = useState("");
   const [availability, setAvailability] = useState<MethodAvailability>({
     mtls: false,
     fido2: false,
@@ -74,22 +72,27 @@ function LoginContent() {
   }, []);
 
   async function loginWithMTLS() {
-    // mTLS: browser auto-selects cert on TLS handshake.
-    // We hit a dedicated mTLS login endpoint that reads the client cert
-    // from the TLS connection and returns a JWT.
+    // mTLS is a single-shot factor: the browser selected its certificate
+    // during the TLS handshake, the server derives the credential from the
+    // verified peer certificate, and /api/v1/login answers with the
+    // session the login ceremony issued. There is nothing to send.
     setBusy(true);
     setError("");
     try {
-      const resp = await fetch(`${getBaseUrl()}/api/v1/auth/mtls/login`, {
+      const resp = await fetch(`${getBaseUrl()}/api/v1/login`, {
         method: "POST",
         credentials: "same-origin",
+        headers: { Accept: "application/json" },
       });
       if (!resp.ok) {
         const body = (await resp.json()) as { error?: string };
         throw new Error(body.error ?? `HTTP ${resp.status}`);
       }
-      const { token } = (await resp.json()) as { token: string };
-      storeJWT(token);
+      const data = (await resp.json()) as { success?: boolean; payload?: Session };
+      if (!data.success || !data.payload?.bearer) {
+        throw new Error("mTLS login failed");
+      }
+      signIn(data.payload);
     } catch (err) {
       setError(err instanceof Error ? err.message : "mTLS login failed");
     } finally {
@@ -98,10 +101,9 @@ function LoginContent() {
   }
 
   async function loginWithFIDO2() {
-    if (!username.trim()) {
-      setError("Enter your username to use FIDO2 login.");
-      return;
-    }
+    // No username: the ceremony uses discoverable credentials, so the
+    // authenticator identifies the user and the server resolves them from
+    // the credential it returns.
     setBusy(true);
     setError("");
     try {
@@ -109,16 +111,14 @@ function LoginContent() {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username }),
       });
       if (!beginResp.ok) {
         const body = (await beginResp.json()) as { error?: string };
         throw new Error(body.error ?? `HTTP ${beginResp.status}`);
       }
-      const { publicKey, user_id: userId, session_id: sessionId } = (await beginResp.json()) as {
+      const { publicKey, session_id: sessionId } = (await beginResp.json()) as {
         publicKey: PublicKeyCredentialRequestOptionsJSON;
         session_id?: string;
-        user_id: string;
       };
 
       const assertion = await startAuthentication({ optionsJSON: publicKey });
@@ -128,7 +128,6 @@ function LoginContent() {
         credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
-          "X-User-Id": userId ?? "",
           "X-Session-Id": sessionId ?? "",
         },
         body: JSON.stringify(assertion),
@@ -140,14 +139,12 @@ function LoginContent() {
 
       const data = (await finishResp.json()) as {
         success?: boolean;
-        payload?: string | { token: string };
+        payload?: Session;
       };
-      const jwt =
-        typeof data.payload === "string" ? data.payload : data.payload?.token;
-      if (!data.success || !jwt) {
+      if (!data.success || !data.payload?.bearer) {
         throw new Error("FIDO2 authentication failed");
       }
-      storeJWT(jwt);
+      signIn(data.payload);
     } catch (err) {
       setError(err instanceof Error ? err.message : "FIDO2 login failed");
     } finally {
@@ -155,12 +152,10 @@ function LoginContent() {
     }
   }
 
-  function storeJWT(token: string) {
-    setCookie("jwt", token, {
-      expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      secure: true,
-      sameSite: "Strict",
-    });
+  // signIn persists the credentials the ceremony issued and lands the
+  // operator where they were headed.
+  function signIn(session: Session) {
+    storeSession(session);
     router.push(redirectTo);
   }
 
@@ -191,24 +186,6 @@ function LoginContent() {
           <p className="text-sm text-muted-foreground">
             Trusted Platform — secure access
           </p>
-        </div>
-
-        {/* Username field (needed for FIDO2 discovery) */}
-        <div className="space-y-2">
-          <Label htmlFor="username">Username</Label>
-          <Input
-            id="username"
-            type="text"
-            placeholder="your@email.com"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && availability.fido2)
-                handleMethod("fido2");
-            }}
-            autoComplete="username"
-            aria-label="Username"
-          />
         </div>
 
         {error && (

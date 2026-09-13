@@ -596,16 +596,16 @@ export async function mockWebAuthnLogin(
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      headers: {
-        'x-user-id': userId,
-      },
       body: JSON.stringify({
+        // No allowCredentials: the ceremony is discoverable-credential, so
+        // the authenticator chooses and the server resolves the user from
+        // the credential it returns.
         publicKey: {
           challenge: 'mock-challenge-base64',
           timeout: 60000,
           rpId: 'localhost',
-          allowCredentials: [{ type: 'public-key', id: 'mock-credential-id' }],
         },
+        session_id: 'mock-login-session',
       }),
     });
   });
@@ -643,7 +643,14 @@ export async function mockWebAuthnLogin(
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        payload: { token: mockJwt },
+        // The session the platform minted from the identity the backbone
+        // resolved. The backbone's own bearer is not forwarded and neither
+        // is its renewal credential, so a mock that included one would test
+        // a payload the server does not send.
+        payload: {
+          bearer: mockJwt,
+          expiresAt: new Date((now + 3600) * 1000).toISOString(),
+        },
       }),
     });
   });

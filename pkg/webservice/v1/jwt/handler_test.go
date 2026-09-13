@@ -18,8 +18,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -30,6 +32,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	loginpkg "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login/logintest"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/stretchr/testify/assert"
@@ -142,7 +146,16 @@ func TestHandlerGenerateToken_NoLoginClientFailsClosed(t *testing.T) {
 	assert.False(t, resp.Success)
 }
 
-func TestHandlerGenerateToken_InvalidJSON(t *testing.T) {
+// TestHandlerGenerateToken_IgnoresTheRequestBody replaces the former
+// invalid-JSON test, whose premise the unified ceremony removed.
+//
+// An mtls login has no credential IN the request: the certificate the peer
+// presented during the handshake is the credential, and the backbone
+// derives the lookup key from it. There is therefore nothing in the body
+// to validate, and a body the caller made up must not influence the
+// outcome. With no driver wired the route fails closed with 403, which is
+// the same refusal it gives a well-formed body.
+func TestHandlerGenerateToken_IgnoresTheRequestBody(t *testing.T) {
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -159,16 +172,14 @@ func TestHandlerGenerateToken_InvalidJSON(t *testing.T) {
 	handler, err := NewRestHandler(logger, responseWriter, jwtService, mockUserService)
 	assert.Nil(t, err)
 
-	// Create request with invalid JSON
 	req := httptest.NewRequest("POST", "/token", bytes.NewBufferString("invalid json"))
 	req.Header.Set("Accept", "application/json")
 	w := httptest.NewRecorder()
 
-	// Call handler
 	handler.(*RestHandler).GenerateToken(w, req)
 
-	// Check response
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	// Fail closed on the missing driver, not on the body.
+	assert.Equal(t, http.StatusForbidden, w.Code)
 
 	var resp response.WebServiceResponse
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
@@ -989,10 +1000,15 @@ func TestHandlerRefreshToken_RejectsAWrongAudienceToken(t *testing.T) {
 		"refresh must not launder a token the protected routes reject")
 }
 
-// stubLoginClient is a UnifiedLoginClient that returns a fixed bearer, so a
-// test can exercise what /login hands back without a live broker.
+// stubLoginClient is a UnifiedLoginClient that returns a fixed bearer and
+// a resolved identity, so a test can exercise what /login hands back
+// without a live broker.
 type stubLoginClient struct {
 	bearer string
+
+	// identity is the principal the ceremony resolved. Nil drives the
+	// path where the backbone issued a bearer naming nobody.
+	identity *logintest.Identity
 }
 
 func (c *stubLoginClient) BeginLogin(
@@ -1000,28 +1016,20 @@ func (c *stubLoginClient) BeginLogin(
 	return &quicbaas.BeginLoginResponse{SessionID: "session-1"}, nil
 }
 
-// FinishLogin builds the response through JSON rather than a composite
-// literal. Bearer is promoted from an embedded *go-qrdb transport type that
-// the quicbaas SDK does not re-export, and naming go-qrdb here would fail
-// the layer guard — pkg/arch/layerguard_test.go scans _test.go files too.
-// Unmarshalling allocates the embedded struct and sets the field without
-// the platform naming the upstream package.
+// FinishLogin builds the response through the shared logintest fixture,
+// which exists because Bearer and Identity are promoted from an embedded
+// *go-qrdb transport type the quicbaas SDK does not re-export — and naming
+// go-qrdb here would fail the layer guard, which scans _test.go files too.
 func (c *stubLoginClient) FinishLogin(
 	_ context.Context, _ quicbaas.FinishLoginRequest) (*quicbaas.FinishLoginResponse, error) {
 
-	resp := &quicbaas.FinishLoginResponse{}
-	encoded, err := json.Marshal(map[string]string{"bearer": c.bearer})
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(encoded, resp); err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return logintest.FinishResponse(
+		c.bearer, "", time.Now().Add(time.Hour), time.Now().Add(24*time.Hour), c.identity)
 }
 
-// login drives POST /login and returns the bearer in the response envelope.
-func login(t *testing.T, handler *RestHandler) string {
+// postLogin drives POST /login and returns the bearer from the session the
+// ceremony issued.
+func postLogin(t *testing.T, handler *RestHandler) string {
 	t.Helper()
 
 	body, err := json.Marshal(service.UserCredential{Email: "admin@system", Password: "x"})
@@ -1037,33 +1045,45 @@ func login(t *testing.T, handler *RestHandler) string {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
 
-	bearer, ok := resp.Payload.(string)
-	require.True(t, ok, "payload = %T, want the bearer string", resp.Payload)
+	session, ok := resp.Payload.(map[string]any)
+	require.True(t, ok, "payload = %T, want the issued session", resp.Payload)
+	bearer, ok := session["bearer"].(string)
+	require.True(t, ok, "session carries no bearer: %v", session)
 	require.NotEmpty(t, bearer)
 	return bearer
 }
 
-// TestLoginBearerIsRejectedByTheDefaultProtectedRouteSeam is the end-to-end
-// check issue #168 says did not exist: log in, then present the returned
-// token to the seam every JWT-protected route runs.
+// TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam is the
+// end-to-end check issue #168 says did not exist, and the regression test
+// for the blocking defect on #646: log in, then present the credential the
+// login returned to the seam every JWT-protected route runs.
 //
-// It asserts the CURRENT, defective behaviour deliberately. /login returns
-// the quicbaas broker bearer while the default seam (JWT.PlatformToken
-// disabled) validates only platform-local JWTs, so a successful login
-// yields a token the same server rejects. That is a fail-CLOSED mismatch —
-// nothing is admitted that should not be — and it is pre-existing on main:
-// this branch changes neither GenerateToken nor the seam selection.
+// It is the one property that makes a login a login. The ceremony now runs
+// entirely on the unified backbone, but the backbone's OIDC bearer is
+// signed by quicbaas's token service and the default seam
+// (JWT.PlatformToken disabled) validates only tokens the PLATFORM's signer
+// produced — so forwarding that bearer would leave every post-login call
+// answering 401. The driver therefore mints the session from the identity
+// the backbone resolved, through the same signer this seam verifies with.
 //
-// Owner ruling 2026-09-02 (#202) converges the two token types by retiring
-// the local issuer, which closes #168 and #166. When that lands this test
-// flips to asserting 200, and it will fail loudly until someone does so —
-// which is the point of pinning it here rather than leaving the gap
-// untested.
-func TestLoginBearerIsRejectedByTheDefaultProtectedRouteSeam(t *testing.T) {
+// When the SDK grows a working inbound validator for the backbone bearer
+// (#202, phases 3 and 4 of #644) the mint goes away and the backbone's
+// bearer is forwarded — and this test is what proves the replacement is
+// actually accepted before the mint is removed.
+func TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
 	handler := newHandlerForLoginTest(t)
-	handler.SetUnifiedLoginClient(&stubLoginClient{bearer: "broker.issued.bearer"})
+	handler.SetLoginDriver(newLoginDriverForTest(t, &stubLoginClient{
+		bearer: "broker.issued.bearer",
+		identity: &logintest.Identity{
+			Subject:  "operator@platform",
+			TenantID: "tenant-a",
+			Roles:    []string{"admin"},
+		},
+	}, handler.jwtService))
 
-	bearer := login(t, handler)
+	bearer := postLogin(t, handler)
+	require.NotEqual(t, "broker.issued.bearer", bearer,
+		"the backbone bearer must not be what the client is handed")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/iam/users", nil)
 	req.Header.Set("Authorization", "Bearer "+bearer)
@@ -1071,11 +1091,39 @@ func TestLoginBearerIsRejectedByTheDefaultProtectedRouteSeam(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	reached := false
-	handler.Verify(w, req, func(http.ResponseWriter, *http.Request) { reached = true })
+	handler.Verify(w, req, func(_ http.ResponseWriter, r *http.Request) {
+		reached = true
+		session, ok := iammw.GetSessionFromContext(r.Context())
+		require.True(t, ok, "the seam must publish the verified session")
+		assert.Equal(t, "operator@platform", session.UserID(),
+			"the session principal is the identity the backbone resolved")
+		assert.Equal(t, "operator@platform", session.Email())
+		assert.Equal(t, "tenant-a", session.TenantID())
+		assert.Equal(t, []string{"admin"}, session.Roles())
+	})
 
-	assert.False(t, reached, "the broker bearer must not reach a protected handler")
+	assert.True(t, reached,
+		"a completed login must produce a credential the protected routes accept")
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestLoginRefusesWhenTheCeremonyNamesNobody is the negative half: the
+// seam accepting the login credential must not mean it accepts one minted
+// for an unresolved principal.
+func TestLoginRefusesWhenTheCeremonyNamesNobody(t *testing.T) {
+	handler := newHandlerForLoginTest(t)
+	handler.SetLoginDriver(newLoginDriverForTest(t,
+		&stubLoginClient{bearer: "broker.issued.bearer"}, handler.jwtService))
+
+	body, err := json.Marshal(service.UserCredential{Email: "admin@system", Password: "x"})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewBuffer(body))
+	req.Header.Set("Accept", "application/json")
+	w := httptest.NewRecorder()
+	handler.GenerateToken(w, req)
+
 	assert.Equal(t, http.StatusUnauthorized, w.Code,
-		"the default seam validates platform-local JWTs only (#168, closed by #202)")
+		"a bearer with no identity authenticates nobody")
 }
 
 // TestPlatformMintedTokenIsAcceptedByTheDefaultProtectedRouteSeam is the
@@ -1165,4 +1213,24 @@ func TestHandlerVerify_UnauthenticatedRequestIsToldSo(t *testing.T) {
 			assert.NotEmpty(t, resp.Error, "the client must be told why")
 		})
 	}
+}
+
+// newLoginDriverForTest builds the mtls-only driver /login runs on, over
+// the REAL jwt.Service as its session issuer, so the seam test exercises
+// the whole path — ceremony, mint, verification — rather than a stand-in
+// on either end of it.
+func newLoginDriverForTest(
+	t *testing.T, client loginpkg.UnifiedLoginClient, issuer loginpkg.SessionIssuer) *loginpkg.Driver {
+
+	t.Helper()
+	logger := logging.NewLogger(slog.LevelError, os.Stderr)
+	driver, err := loginpkg.NewDriver(loginpkg.DriverParams{
+		Client:         client,
+		Binders:        []loginpkg.Binder{loginpkg.NewMTLSBinder()},
+		SessionIssuer:  issuer,
+		Logger:         logger,
+		ResponseWriter: response.NewResponseWriter(logger, nil),
+	})
+	require.NoError(t, err)
+	return driver
 }

@@ -258,7 +258,28 @@ POST /api/v1/webauthn/login/finish
 GET  /api/v1/webauthn/registration/status
 ```
 
-Successful login yields a JWT. `/api/v1/login/refresh` extends it.
+**Login asks for no username.** The ceremony uses discoverable credentials, so
+your authenticator identifies you and the platform resolves your account from
+the credential it presents. Registration still asks for one, because that is
+when the account is named.
+
+Successful login yields a session:
+
+```json
+{
+  "bearer": "...",
+  "expiresAt": "2026-09-12T02:15:00Z"
+}
+```
+
+Present the bearer on subsequent requests, in `Authorization: Bearer <token>`
+or the `jwt` cookie. When it expires, authenticate with your key again — a
+WebAuthn login is one touch, and this release issues no renewal credential
+(see `docs/auth/architecture.md` §Why the platform still mints the bearer).
+
+`POST /api/v1/login` is the certificate (mTLS) equivalent. It takes no body —
+the certificate your browser presented during the TLS handshake *is* the
+credential — and answers with the same session object.
 
 ---
 

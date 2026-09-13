@@ -47,6 +47,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -1042,11 +1043,16 @@ type RegistryParams struct {
 	// ceremony call to it.
 	TenantID string
 	// AuthSDKClient is the quicbaas SDK unified login surface
-	// (Security().Auth()). When wired, the /login REST endpoint
-	// authenticates via the SDK BeginLogin/FinishLogin ceremony and
-	// returns the SDK-issued OIDC bearer instead of a local JWT. When nil
-	// the /login endpoint fails closed.
-	AuthSDKClient quicbaassdk.AuthService
+	// (Security().Auth()), narrowed to the two ceremony verbs the
+	// platform actually consumes. The SDK AuthService satisfies it
+	// directly; every other capability that surface exposes reaches the
+	// platform through its own param above, so widening this one would
+	// only obscure what the login path depends on.
+	//
+	// When wired, every login route authenticates through the unified
+	// ceremony and returns the session it issued. When nil the login
+	// routes fail closed and the WebAuthn routes are not registered.
+	AuthSDKClient login.UnifiedLoginClient
 	// FactorsSDKClient is the SDK auth-factor surface
 	// (Security().Auth().Factors()). The admin-claim ceremony reads it to
 	// decide whether the system admin identity has already been claimed.
@@ -1069,9 +1075,73 @@ type RegistryParams struct {
 
 type HandlerRegistry struct {
 	jwtService              *jwt.Service
+	loginDriver             *login.Driver
 	platformTokenMiddleware *iammw.PlatformTokenMiddleware
 	params                  RegistryParams
 	RestHandlerRegistry
+}
+
+// LoginDriver returns the platform's single unified login driver, built
+// once and shared by every login route.
+//
+// One driver exists because there is one ceremony: a factor contributes a
+// binder, never a second copy of the Begin/Finish sequence. The mtls
+// binder serves /login; the fido2 binder serves the WebAuthn routes.
+//
+// Returns nil when the SDK AuthService is unavailable — which makes every
+// login route fail closed rather than authenticate anyone locally — or
+// when no JWT signer exists to issue the session credential with.
+func (registry *HandlerRegistry) LoginDriver() *login.Driver {
+	if registry.loginDriver != nil {
+		return registry.loginDriver
+	}
+	if registry.params.AuthSDKClient == nil {
+		return nil
+	}
+	// The driver mints the session credential through the same signer the
+	// inbound seam validates with, so without it a login could only return
+	// a credential this server rejects. No signer, no login surface.
+	if registry.jwtService == nil {
+		return nil
+	}
+	// And the credential it mints is a platform-local JWT, which the BROKER
+	// seam does not accept. Under that seam a completed login would hand
+	// the operator a session every protected route rejects, so the login
+	// surface is declined instead — exactly as AdminClaimRestHandler
+	// declines the claim ceremony for the same reason. Converging the two
+	// token types is #202; teaching the seam to accept both is explicitly
+	// not the answer.
+	if registry.brokerTokenSeamEnabled() {
+		registry.params.Logger.Warn(
+			"login routes not registered: JWT.PlatformToken.Enabled makes the " +
+				"broker validator the inbound seam, which does not accept the " +
+				"platform-minted session a login issues (#202)")
+		return nil
+	}
+	binders := []login.Binder{login.NewMTLSBinder()}
+	// The WebAuthn binder is tenant-scoped: an assertion is only valid
+	// against the relying party of the tenant owning the credential, so
+	// without an operating tenant the fido2 factor is simply not offered
+	// rather than offered and broken.
+	if registry.params.TenantID != "" {
+		fido2, err := login.NewFIDO2Binder(registry.params.TenantID)
+		if err != nil {
+			registry.params.Logger.FatalError(err)
+		}
+		binders = append(binders, fido2)
+	}
+	driver, err := login.NewDriver(login.DriverParams{
+		Client:         registry.params.AuthSDKClient,
+		Binders:        binders,
+		SessionIssuer:  registry.jwtService,
+		Logger:         registry.params.Logger,
+		ResponseWriter: registry.params.HTTPWriter,
+	})
+	if err != nil {
+		registry.params.Logger.FatalError(err)
+	}
+	registry.loginDriver = driver
+	return driver
 }
 
 // JWTService returns the underlying JWT service so callers (notably the
@@ -1111,13 +1181,13 @@ func (registry *HandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {
 	if err != nil {
 		registry.params.Logger.FatalError(err)
 	}
-	// Wire the unified quicbaas login client so /login authenticates via
-	// the SDK BeginLogin/FinishLogin ceremony and returns the SDK-issued
-	// OIDC bearer. When the SDK AuthService is unavailable the handler
-	// fails closed rather than minting an unverified local JWT.
-	if registry.params.AuthSDKClient != nil {
+	// Wire the unified login driver so /login authenticates through the
+	// canonical ceremony and returns the session it issued. When the SDK
+	// AuthService is unavailable the handler fails closed rather than
+	// minting an unverified local JWT.
+	if driver := registry.LoginDriver(); driver != nil {
 		if rh, ok := handler.(*jwt.RestHandler); ok {
-			rh.SetUnifiedLoginClient(registry.params.AuthSDKClient)
+			rh.SetLoginDriver(driver)
 		}
 	}
 	return handler
@@ -1231,6 +1301,15 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		registry.params.Logger.Warn("WebAuthn SDK client not wired, WebAuthn routes will not be registered")
 		return nil
 	}
+	// The login verbs run entirely on the unified driver, so without one
+	// the routes are not registered rather than registered and unable to
+	// authenticate. This mirrors how every other unavailable seam is
+	// handled here: decline the surface, never serve a broken one.
+	loginDriver := registry.LoginDriver()
+	if loginDriver == nil {
+		registry.params.Logger.Warn("unified login driver not wired, WebAuthn routes will not be registered")
+		return nil
+	}
 	tus := registry.params.ServiceRegistry.TenantUserService()
 	// The platform service registry is built before the tenant manager
 	// exists (NewRegistry passes TenantManager: nil), so on the daemon
@@ -1279,6 +1358,7 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		TenantUserService:         tus,
 		InvitationService:         registry.params.ServiceRegistry.InvitationService(),
 		FIDO2Client:               registry.params.FIDO2SDKClient,
+		LoginDriver:               loginDriver,
 		TenantID:                  registry.params.TenantID,
 		PublicRegistrationEnabled: registry.params.PublicRegistrationEnabled,
 	}
