@@ -70,6 +70,15 @@ COPY dracut-platformd.tar.gz /data/dracut-platformd.tar.gz
 # Alpine mirror for the base rootfs.
 COPY alpine-minirootfs.tar.gz /data/alpine-minirootfs.tar.gz
 
+# Role-optional installer binaries. gatewayd only exists on an ISO whose
+# bundled config enables the gateway role (pkg/iso/gatewayd.go), but ONE
+# container serves /data to every role in a deployment, so it cannot be a
+# required COPY. The directory is always created by `make pxeboot-extract`
+# and is empty when gatewayd was unavailable -- copying the directory keeps
+# the image build working either way, and an absent gatewayd stays a real
+# 404 rather than a zero-byte file the installer would try to exec (#648).
+COPY optional/ /data/
+
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/pxeboot
 
 # Ports:

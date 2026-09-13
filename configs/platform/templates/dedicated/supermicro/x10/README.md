@@ -1,0 +1,142 @@
+# Supermicro X10 — deployment profile
+
+Templates in this directory target Supermicro X10-generation boards
+(X10SDV / X10SRi / X10DRi class). This file records what the **hardware**
+needs before any of them will install — settings that live in BIOS setup
+and cannot be expressed in a template. Read it before the first PXE install
+of a node, and again before a re-provision.
+
+Every item below was measured on the mini fleet on 2026-09-13, not taken
+from a manual. Each one cost at least one install cycle to discover.
+
+## BIOS settings required for UEFI PXE install
+
+The Trusted Platform installer is **UEFI-only** (`docs/installer/user.md`).
+It lays down a signed UKI at `EFI/BOOT/BOOTX64.EFI` on a GPT disk and
+registers a UEFI NVRAM entry for it. Under legacy BIOS the install
+*reports success* and produces a machine that cannot boot (#648 item 4), so
+the ROM mode is not optional.
+
+Three settings, all three required. X10 defaults ship with all three wrong.
+
+| Setting | Where | Required value | Default |
+|---|---|---|---|
+| **Onboard LAN1 Option ROM** | Advanced → PCIe/PCI/PnP Configuration | `EFI` | `Legacy` |
+| **Network Stack** | Advanced → Network Stack Configuration | `Enabled` | `Disabled` |
+| **IPv4 PXE Support** | Advanced → Network Stack Configuration | `Enabled` | `Disabled` |
+
+LAN1 is `eth0`, the management NIC the templates configure. If a different
+port is cabled for management, set that port's Option ROM instead.
+
+### Why all three, and what each failure looks like
+
+- **Option ROM = `Legacy`.** The NIC PXE-boots with the legacy ROM. The boot
+  server sees `arch 0x0000` and serves `undionly.kpxe`. The installer runs
+  under legacy BIOS and produces an unbootable install. This is the state
+  to catch *before* the installer runs — see "Verifying" below.
+- **Option ROM = `EFI`, Network Stack = `Disabled`.** Switching the ROM
+  removes the legacy "Network Card" boot entry from NVRAM, but the firmware
+  does **not** create a UEFI network entry until the Network Stack is
+  enabled. With no network entry at all, boot order falls straight through
+  to the disk and the node silently boots its old OS. Zero DHCP traffic.
+- **All three set.** The firmware enumerates a `UEFI: IP4 …` boot entry,
+  the NIC announces `arch 0x0007`, and the boot server serves `ipxe.efi`.
+
+The UEFI network entry may not appear until the **second** reboot after
+enabling the stack; Supermicro enumerates it late.
+
+## UEFI PXE does not complete on this firmware
+
+**Set the LAN Option ROM to `Legacy` for a PXE install on these boards.** The
+UEFI path gets an address and then stops:
+
+```
+arch 0x0007  →  Discover → Offer → Request → ACK   (Your-IP, siaddr, file ipxe.efi)
+             →  zero TFTP packets, ever
+```
+
+Measured repeatedly on 2026-09-13 against a server whose DHCP and TFTP are both
+known good (the same server, same boot, serves the legacy ROM a complete
+install; `ipxe.efi` fetches correctly with a TFTP client). Ruled out by
+experiment: DHCP options 66/67 present or absent, options 60/43 present or
+absent, one network boot entry or eight, Secure Boot (disabled — `SetupMode=1`,
+no PK). The console reports `no media presence`, which suggests the UEFI PXE
+attempt aborts on link state before TFTP and the DHCP exchange observed is the
+UEFI network stack configuring itself afterwards.
+
+The legacy ROM completes TFTP and installs reliably on the same NIC, port and
+cable. Until the UEFI path is understood, legacy is the supported PXE mode here.
+Note the trade-off: a legacy install cannot register a UEFI NVRAM entry (see
+"NVRAM BootOrder" below), so the node needs `UefiHdd` / `Continuous` set on the
+BMC afterwards to boot its installed UKI.
+
+Changing the Option ROM mode **adds and removes boot entries**: setting it to
+`EFI` deletes the legacy `Network Card` entry and (once the Network Stack is
+enabled) creates one `UEFI: IP4 …` entry per port; setting it back to `Legacy`
+reverses that. Re-check the boot order after either change.
+
+## What the BMC can and cannot do on this firmware
+
+Measured against the X10 BMC (Redfish `ComputerSystem.v1_3_0`, IPMI 2.0):
+
+- **`BootSourceOverrideTarget` offers `Pxe` but not `UefiPxe`**, and there
+  is no `BootSourceOverrideMode`. A `Pxe` override fires the **legacy** ROM
+  regardless of the OPROM setting and regardless of NVRAM boot order. Do not
+  use the override to trigger a UEFI PXE install; it cannot.
+- **IPMI `chassis bootdev pxe options=efiboot` does not switch the ROM
+  mode** either. The `efiboot` option is accepted and ignored for network.
+- **`chassis bootparam get 5` reports `BIOS PC Compatible (legacy) boot`
+  on a node that is verifiably UEFI-booted** (`/sys/firmware/efi` present).
+  That line is not a boot-mode signal; do not read it as one.
+- `UefiHdd` **is** offered and works. It is the recovery path for a node
+  that installed correctly but whose firmware falls through to PXE: set
+  `UefiHdd` / `Continuous` and the installed UKI boots on every reset.
+
+The only way to get a UEFI PXE boot on this firmware is the NVRAM
+**BootOrder** with the UEFI network entry first — no override involved.
+
+## NVRAM BootOrder and the installer
+
+The installer deliberately writes its `Trusted Platform` UKI entry **first**
+in BootOrder (`pkg/installer/installer.go`, `[UEFI] Creating NVRAM boot
+entry`). That is a workaround for the X10 *legacy* PXE bug `PXE-E79: NBP is
+too big to fit in free base memory`, which otherwise halts the firmware at
+"Reboot and Select proper Boot device" instead of falling through to the
+disk. It assumes re-installs arrive through a BMC `Cd` override.
+
+Consequence: after one successful install, a UEFI network entry that the
+BIOS boot-order screen shows *above* "Hard Disk" is still **below**
+`Trusted Platform` in NVRAM, because `Trusted Platform` is a file-path entry
+outside the device-class grouping the screen displays. A plain reset boots
+the UKI; the node never netboots. To re-provision over PXE, move the UEFI
+network entry ahead of it (from the running OS via `efivars`, or in BIOS
+setup), then reset. With the OPROM set to `EFI` the `PXE-E79` bug does not
+apply and network-first is safe.
+
+## Verifying before the installer touches the disk
+
+The boot server logs the client architecture on the first DHCP Discover.
+Check it **before** autoinstall starts — the installer does not refuse a
+legacy boot (#648):
+
+```
+"arch":"0x0000"  boot_file undionly.kpxe   → legacy ROM: power the node off NOW
+"arch":"0x0007"  boot_file ipxe.efi        → UEFI: let the install run
+```
+
+The Discover arrives ~60–90 s after power-on; autoinstall does not start
+partitioning until ~2 min after that, so there is time to abort.
+
+## Other notes
+
+- **Serial-over-LAN** works (`ipmitool -I lanplus … sol activate`) and the
+  templates put the console on `ttyS1,115200n8`, but the SOL session shows
+  only *new* output — a static screen (BIOS setup, an idle prompt) reads as
+  empty. Send a key to refresh.
+- The **SEL fills and stops logging**. The lab-node-2 BMC held 512 entries of
+  `Correctable ECC @DIMMB1(CPU1)` from 2024 and had disabled logging on
+  "Log full". Clear it (`ipmitool sel clear`) after commissioning or the
+  event log is useless when you need it.
+- A successful install **powers the node off** rather than rebooting
+  ("Remove the installation media and reboot"). A powered-off node after
+  an install is the success case, not a failure.

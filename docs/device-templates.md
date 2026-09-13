@@ -57,6 +57,15 @@ for the current production reference.
 | Supermicro | X10 (X10SDV-TP8F, etc.) | dedicated | control-plane, gateway, compute | Production |
 | Dell | PowerEdge R640 | dedicated | control-plane, gateway, compute | Phase 2 (UNTESTED) |
 
+**Each profile directory carries a `README.md` recording what the hardware needs
+before its templates will install** — BIOS settings, BMC behaviour, firmware quirks —
+none of which a template can express. Read it before the first PXE install of a
+node and before any re-provision. The X10 one
+([`supermicro/x10/README.md`](../configs/platform/templates/dedicated/supermicro/x10/README.md))
+documents three BIOS settings that all ship wrong by default and, absent, produce an
+install that reports success and cannot boot. A profile without a README has not been
+deployed on real hardware yet.
+
 The R640 `gateway.yaml` still configures the gateway with the `modes:` key, which is
 the deprecated `GatewayMode` compatibility surface, not the eleven service sections
 the gateway is modelled on (`docs/gateway/architecture.md`). The template is not

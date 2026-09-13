@@ -342,38 +342,48 @@ func GenerateImageLoadCommand(runtime, remoteTarPath string) string {
 // Files that don't exist in the image are silently skipped (no warning):
 // older bootstrap images may not ship every file in this list, and the
 // Phase 5 hand-off path doesn't need them.
+// pxeImageAssets are the /data paths the bootstrap container image is
+// expected to ship, staged onto the deployer host before the PXE server
+// starts. A path the image does not carry is skipped rather than fatal —
+// older images, and images built from an ISO with no gateway role, do not
+// ship every asset.
+var pxeImageAssets = []string{
+	"vmlinuz",
+	"initramfs",
+	// Alpine kernel-modules squashfs. The PXE boot.ipxe cmdline fetches
+	// modloop=http://<host>/data/modloop-lts; the bind-mount overlays
+	// /data, so it must be staged out of the image like the kernel and
+	// initramfs or Alpine init hangs after the autoinstall/inittab setup.
+	"modloop-lts",
+	"autoinstall.sh",
+	// Installer binaries served over HTTP at /data/platformctl and
+	// /data/platformd. PXE-booted nodes have no CD, so the autoinstall
+	// fetches these via the platform_bin_url= kernel cmdline param
+	// instead of reading them off /media/cdrom/platformd-bin/. Staged
+	// from the same ISO baked into the container image.
+	"platformctl",
+	"platformd",
+	// platform-initrd (boot-time LUKS/TPM unlock binary) + the
+	// dracut-platformd module tarball. The installer needs both to build
+	// the target UKI; PXE nodes fetch them into /media/cdrom.
+	"platform-initrd",
+	"dracut-platformd.tar.gz",
+	// Alpine minirootfs (prefetch output). PXE nodes fetch this over
+	// HTTP into /media/cdrom so the OS installer's base-system step does
+	// not need to reach the public Alpine mirror.
+	"alpine-minirootfs.tar.gz",
+	// gatewayd, served at /data/gatewayd for gateway-role nodes. Absent
+	// from images built off an ISO with no gateway role, which is why it
+	// sits at the end of this best-effort list: a missing subpath is
+	// skipped here, and the install then fails loudly on the node that
+	// actually needed it rather than on every node (#648).
+	"gatewayd",
+}
+
 func (d *LinuxDeployer) stagePXEAssets(ctx context.Context, client *SSHClient, config *DeployConfig) error {
 	const stagerName = "trusted-bootstrap-asset-stager"
 
-	// Required image paths the bootstrap container expects to find under
-	// /data at startup.  Empty subpaths are silently skipped — older
-	// images may not ship every asset.
-	assets := []string{
-		"vmlinuz",
-		"initramfs",
-		// Alpine kernel-modules squashfs. The PXE boot.ipxe cmdline fetches
-		// modloop=http://<host>/data/modloop-lts; the bind-mount overlays
-		// /data, so it must be staged out of the image like the kernel and
-		// initramfs or Alpine init hangs after the autoinstall/inittab setup.
-		"modloop-lts",
-		"autoinstall.sh",
-		// Installer binaries served over HTTP at /data/platformctl and
-		// /data/platformd. PXE-booted nodes have no CD, so the autoinstall
-		// fetches these via the platform_bin_url= kernel cmdline param
-		// instead of reading them off /media/cdrom/platformd-bin/. Staged
-		// from the same ISO baked into the container image.
-		"platformctl",
-		"platformd",
-		// platform-initrd (boot-time LUKS/TPM unlock binary) + the
-		// dracut-platformd module tarball. The installer needs both to build
-		// the target UKI; PXE nodes fetch them into /media/cdrom.
-		"platform-initrd",
-		"dracut-platformd.tar.gz",
-		// Alpine minirootfs (prefetch output). PXE nodes fetch this over
-		// HTTP into /media/cdrom so the OS installer's base-system step does
-		// not need to reach the public Alpine mirror.
-		"alpine-minirootfs.tar.gz",
-	}
+	assets := pxeImageAssets
 
 	// Best-effort cleanup of any prior stager container left behind by an
 	// interrupted run. `|| true` keeps the failure path quiet; if rm is

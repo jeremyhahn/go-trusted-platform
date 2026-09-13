@@ -3648,8 +3648,8 @@ pxeboot-extract:
 		exit 1; \
 	fi
 	@mkdir -p /tmp/pxeboot-iso-extract
-	@cd /tmp/pxeboot-iso-extract && 7z x -y "$(abspath $(ISO_FILE))" boot/vmlinuz-lts boot/initramfs-lts boot/modloop-lts platformd-bin/platformctl platformd-bin/platformd platformd-bin/platform-initrd dracut-platformd 'alpine-minirootfs-*.tar.gz' 2>/dev/null || \
-		(cd /tmp/pxeboot-iso-extract && xorriso -osirrox on -indev "$(abspath $(ISO_FILE))" -extract /boot/vmlinuz-lts vmlinuz-lts -extract /boot/initramfs-lts initramfs-lts -extract /boot/modloop-lts modloop-lts -extract /platformd-bin/platformctl platformctl -extract /platformd-bin/platformd platformd -extract /platformd-bin/platform-initrd platform-initrd -extract /dracut-platformd dracut-platformd 2>/dev/null && \
+	@cd /tmp/pxeboot-iso-extract && 7z x -y "$(abspath $(ISO_FILE))" boot/vmlinuz-lts boot/initramfs-lts boot/modloop-lts platformd-bin/platformctl platformd-bin/platformd platformd-bin/platform-initrd platformd-bin/gatewayd dracut-platformd 'alpine-minirootfs-*.tar.gz' 2>/dev/null || \
+		(cd /tmp/pxeboot-iso-extract && xorriso -osirrox on -indev "$(abspath $(ISO_FILE))" -extract /boot/vmlinuz-lts vmlinuz-lts -extract /boot/initramfs-lts initramfs-lts -extract /boot/modloop-lts modloop-lts -extract /platformd-bin/platformctl platformctl -extract /platformd-bin/platformd platformd -extract /platformd-bin/platform-initrd platform-initrd -extract /platformd-bin/gatewayd gatewayd -extract /dracut-platformd dracut-platformd 2>/dev/null && \
 		 cd /tmp/pxeboot-iso-extract && xorriso -osirrox on -indev "$(abspath $(ISO_FILE))" -find / -name 'alpine-minirootfs-*.tar.gz' -exec extract_to /tmp/pxeboot-iso-extract/alpine-minirootfs.tar.gz -- 2>/dev/null) || \
 		(echo "$(RED)Error: Could not extract kernel from ISO. Install p7zip or xorriso.$(RESET)"; exit 1)
 	@if [ -f /tmp/pxeboot-iso-extract/boot/vmlinuz-lts ]; then \
@@ -3674,6 +3674,17 @@ pxeboot-extract:
 		cp "$$bindir/platform-initrd" $(PXEBOOT_CONTEXT)/platform-initrd; \
 	else \
 		echo "$(RED)Error: platform-initrd not found in ISO platformd-bin/ (build it with 'make platform-initrd' before 'iso create')$(RESET)"; exit 1; \
+	fi; \
+	rm -rf $(PXEBOOT_CONTEXT)/optional; mkdir -p $(PXEBOOT_CONTEXT)/optional; \
+	if [ -f "$$bindir/gatewayd" ]; then \
+		cp "$$bindir/gatewayd" $(PXEBOOT_CONTEXT)/optional/gatewayd; \
+	elif [ -f "$(GATEWAYD)" ]; then \
+		cp "$(GATEWAYD)" $(PXEBOOT_CONTEXT)/optional/gatewayd; \
+	else \
+		echo "$(YELLOW)Warning: gatewayd not in ISO platformd-bin/ and not at $(GATEWAYD).$(RESET)"; \
+		echo "$(YELLOW)         PXE installs of GATEWAY-role nodes will abort: the autoinstall fetch of$(RESET)"; \
+		echo "$(YELLOW)         /data/gatewayd 404s and installGatewaydBinary then fails (#648).$(RESET)"; \
+		echo "$(YELLOW)         Build it with 'make build', or build the ISO from a gateway-role config.$(RESET)"; \
 	fi
 	@if [ -d /tmp/pxeboot-iso-extract/dracut-platformd ]; then \
 		tar -czf $(PXEBOOT_CONTEXT)/dracut-platformd.tar.gz -C /tmp/pxeboot-iso-extract/dracut-platformd . ; \

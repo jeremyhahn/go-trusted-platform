@@ -3720,9 +3720,17 @@ if [ -n "$PLATFORM_BIN_URL" ] && [ ! -f /media/cdrom/platformd-bin/platformctl ]
     mkdir -p /media/cdrom/platformd-bin
     # Installer binaries: platformctl (install CLI), platformd (daemon,
     # embedded into the target UKI), platform-initrd (boot-time LUKS/TPM
-    # unlock binary). The installer and the binary searches below look for
-    # these under /media/cdrom/platformd-bin.
-    for _bin in platformctl platformd platform-initrd; do
+    # unlock binary), gatewayd (edge daemon, REQUIRED on a gateway-role
+    # node -- pkg/installer/gatewayd.go aborts the whole install with
+    # "gatewayd is required by this node's gateway role and was not found
+    # under platformd-bin/" when it is absent, so a gateway could never be
+    # installed over PXE while this list omitted it). The installer and the
+    # binary searches below look for these under /media/cdrom/platformd-bin.
+    #
+    # gatewayd is fetched on every role: the role comes from the config the
+    # installer resolves later, and a missing-but-unused binary costs one
+    # HTTP 404 while a missing-and-needed one costs the install.
+    for _bin in platformctl platformd platform-initrd gatewayd; do
         if wget -q -O "/media/cdrom/platformd-bin/$_bin" "$PLATFORM_BIN_BASE/$_bin" 2>/dev/null; then
             chmod +x "/media/cdrom/platformd-bin/$_bin"
             log "Fetched $_bin ($(wc -c < /media/cdrom/platformd-bin/$_bin 2>/dev/null) bytes)"

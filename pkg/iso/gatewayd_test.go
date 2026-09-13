@@ -116,3 +116,27 @@ func TestCopyGatewaydBinary_RejectsANonELF(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "validation failed")
 }
+
+// TestAutoinstallScript_PXEPayloadFetchesGatewayd is the regression guard for
+// the PXE gateway install. A PXE node has no CD, so autoinstall rebuilds
+// /media/cdrom/platformd-bin by fetching binaries from platform_bin_url. The
+// list omitted gatewayd, and pkg/installer/gatewayd.go aborts the entire
+// install when a gateway-role node has no gatewayd under platformd-bin:
+//
+//	CRITICAL: failed to install gatewayd: gatewayd is required by this
+//	node's gateway role and was not found under platformd-bin/
+//
+// so a gateway could never be installed over PXE. Measured on the mini fleet
+// 2026-09-13: the install ran 185s, partitioned the disk, then aborted.
+func TestAutoinstallScript_PXEPayloadFetchesGatewayd(t *testing.T) {
+	script := newGatewaydCustomizer(t).buildAutoinstallScript()
+
+	// The reconstruction loop must name every binary the installer looks
+	// for under platformd-bin, gatewayd included.
+	for _, bin := range []string{"platformctl", "platformd", "platform-initrd", "gatewayd"} {
+		assert.Contains(t, script, bin,
+			"the PXE payload reconstruction must fetch %q", bin)
+	}
+	assert.Contains(t, script, "for _bin in platformctl platformd platform-initrd gatewayd;",
+		"gatewayd must be in the reconstruction loop, not merely mentioned")
+}
