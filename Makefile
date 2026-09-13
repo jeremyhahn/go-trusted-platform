@@ -1597,6 +1597,11 @@ integration-test-compute-azure-real:
 integration-test-compute-cloud-real: integration-test-compute-aws-real integration-test-compute-gcp-real integration-test-compute-azure-real
 	@echo "$(GREEN)✓ All real-cloud compute tests complete (AWS + GCP + Azure)$(RESET)"
 
+## integration-test-attestation: Run attestation multi-protocol integration tests in devcontainer
+.PHONY: integration-test-attestation
+integration-test-attestation: build-devcontainer
+	$(call run-integration-suite,attestation)
+
 ## integration-test-device: Run Device multi-protocol integration tests in devcontainer
 .PHONY: integration-test-device
 integration-test-device: build-devcontainer

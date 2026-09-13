@@ -330,6 +330,7 @@ make integration-test-secrets
 make integration-test-iam
 make integration-test-sdn
 make integration-test-tenant
+make integration-test-attestation
 ```
 
 These targets automatically include the required build tags and environment variables.

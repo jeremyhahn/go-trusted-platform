@@ -12,7 +12,7 @@
 #                Known targets: the keys of TARGET_PACKAGES below — all, bmc,
 #                bootstrap, ca, ceremony, piv, luks, fido2, provision,
 #                secureboot, device, tpm, cold-start, barrier-gate,
-#                restroutes, sdn, proxy, ntp, tenant, iam.
+#                restroutes, sdn, proxy, ntp, tenant, iam, attestation.
 #                If the first argument is not a known target, it is treated
 #                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
 #                Default: all
@@ -52,6 +52,7 @@ declare -A TARGET_PACKAGES=(
     [ntp]="./test/integration/ntp/..."
     [tenant]="./test/integration/tenant/..."
     [iam]="./test/integration/iam/..."
+    [attestation]="./test/integration/attestation/..."
 )
 
 RUN_TARGET="all"
@@ -566,6 +567,10 @@ setup_env_vars() {
     # defaults (test/integration/iam/helpers.go).
     export IAM_SOCKET_PATH="${PLATFORMD_SOCK_PATH}"
 
+    # The attestation suite has the same private namespace, with the same
+    # production defaults (test/integration/attestation/helpers.go).
+    export ATTESTATION_SOCKET_PATH="${PLATFORMD_SOCK_PATH}"
+
     # mTLS client certificate paths for test adapters
     # Client bundle contains both cert and key PEM blocks;
     # tls.LoadX509KeyPair extracts each block type from the same file.
@@ -580,6 +585,7 @@ setup_env_vars() {
     export VTPM_REST_ENDPOINT="https://localhost:8443"
     export TENANT_REST_ENDPOINT="https://localhost:8443"
     export IAM_REST_ENDPOINT="https://localhost:8443"
+    export ATTESTATION_REST_ENDPOINT="https://localhost:8443"
 
     # gRPC endpoint (mTLS over TCP)
     export PLATFORM_GRPC_ENDPOINT="localhost:10443"
@@ -588,6 +594,7 @@ setup_env_vars() {
     export VTPM_GRPC_ENDPOINT="localhost:10443"
     export TENANT_GRPC_ENDPOINT="localhost:10443"
     export IAM_GRPC_ENDPOINT="localhost:10443"
+    export ATTESTATION_GRPC_ENDPOINT="localhost:10443"
 
     # QUIC endpoint
     export PLATFORM_QUIC_ENDPOINT="localhost:9444"
@@ -595,6 +602,7 @@ setup_env_vars() {
     export VTPM_QUIC_ENDPOINT="localhost:9444"
     export TENANT_QUIC_ENDPOINT="localhost:9444"
     export IAM_QUIC_ENDPOINT="localhost:9444"
+    export ATTESTATION_QUIC_ENDPOINT="localhost:9444"
 
     # MCP endpoint. The daemon adapter uses plain HTTP (see MCP adapter docs in
     # CLAUDE.md); vtpm/sdn-style adapters may use stdio. Ceremony/PIV/LUKS/FIDO2
@@ -603,6 +611,7 @@ setup_env_vars() {
     export VTPM_MCP_ENDPOINT="http://localhost:9445"
     export TENANT_MCP_ENDPOINT="http://localhost:9445"
     export IAM_MCP_ENDPOINT="http://localhost:9445"
+    export ATTESTATION_MCP_ENDPOINT="http://localhost:9445"
     export PLATFORM_MCP_PATH="/tmp/platformd"
 
     # CLI binary path
@@ -629,6 +638,7 @@ setup_env_vars() {
     echo "  PLATFORMCTL_PATH=$PLATFORMCTL_PATH"
     echo "  TENANT_SOCKET_PATH=$TENANT_SOCKET_PATH"
     echo "  IAM_SOCKET_PATH=$IAM_SOCKET_PATH"
+    echo "  ATTESTATION_SOCKET_PATH=$ATTESTATION_SOCKET_PATH"
     echo "  RAFT_CLUSTER_TEST=$RAFT_CLUSTER_TEST"
     echo "=== Environment variables set ==="
 }
