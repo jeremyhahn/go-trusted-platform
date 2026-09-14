@@ -32,6 +32,14 @@ var (
 	// identity at all.
 	ErrIdentityRequired = errors.New("jwt/service: an authenticated identity is required")
 
+	// ErrSignerUnavailable is returned when issuance is attempted on a
+	// service that was never constructed, so there is no signing key to
+	// mint with. It is distinct from the identity errors on purpose: the
+	// driver reports an issuance failure as a platform fault, and an
+	// operator reading that log needs to know the platform has no signer
+	// rather than go looking for a login that resolved nobody.
+	ErrSignerUnavailable = errors.New("jwt/service: no signer is configured")
+
 	// ErrIdentitySubjectRequired is returned when the backbone resolved an
 	// identity with no subject. A session credential naming nobody would
 	// authenticate as nobody downstream, so issuance fails instead.
@@ -78,7 +86,7 @@ var (
 //     writes would be worse than saying that plainly.
 func (service *Service) IssueSession(identity *quicbaas.Identity) (string, time.Time, error) {
 	if service == nil {
-		return "", time.Time{}, ErrIdentityRequired
+		return "", time.Time{}, ErrSignerUnavailable
 	}
 	if identity == nil {
 		return "", time.Time{}, ErrIdentityRequired

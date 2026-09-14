@@ -92,6 +92,33 @@ func newTestIssuer() *fakeIssuer {
 	}
 }
 
+// singleShotBinder is a working single-shot factor for tests.
+//
+// The driver's single-shot path — Begin runs the whole ceremony because
+// Challenge returns nil — needs a binder that completes, and the real mtls
+// binder deliberately declines (see mtls.go). Testing the path through a
+// factor that refuses would test the refusal twice and the path never, so
+// the shape gets its own fixture and mtls gets its own test.
+type singleShotBinder struct{}
+
+func (b *singleShotBinder) Type() quicbaas.FactorType { return quicbaas.FactorTypePIV }
+
+func (b *singleShotBinder) Begin(*http.Request) (quicbaas.BeginLoginRequest, error) {
+	return quicbaas.BeginLoginRequest{Type: quicbaas.FactorTypePIV}, nil
+}
+
+// Challenge returns nil, which is what makes this factor single-shot.
+func (b *singleShotBinder) Challenge(*quicbaas.BeginLoginResponse) (any, error) {
+	return nil, nil
+}
+
+func (b *singleShotBinder) Finish(_ *http.Request, sessionID string) (quicbaas.FinishLoginRequest, error) {
+	if sessionID == "" {
+		return quicbaas.FinishLoginRequest{}, &MissingSessionError{}
+	}
+	return quicbaas.FinishLoginRequest{SessionID: sessionID, Type: quicbaas.FactorTypePIV}, nil
+}
+
 func testDeps() (*logging.Logger, response.HttpWriter) {
 	logger := logging.NewLogger(slog.LevelError, os.Stderr)
 	return logger, response.NewResponseWriter(logger, nil)
@@ -193,21 +220,6 @@ func TestNewDriverRejectsDuplicateAndNilBinders(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected a nil-binder error")
-	}
-}
-
-func TestDriverSupportsOnlyRegisteredFactors(t *testing.T) {
-	fido2, err := NewFIDO2Binder("tenant-a")
-	if err != nil {
-		t.Fatalf("NewFIDO2Binder: %v", err)
-	}
-	driver := newTestDriver(t, &fakeClient{}, fido2)
-
-	if !driver.Supports(quicbaas.FactorTypeFIDO2) {
-		t.Fatal("expected the registered fido2 factor to be supported")
-	}
-	if driver.Supports(quicbaas.FactorTypeMTLS) {
-		t.Fatal("expected an unregistered factor to be unsupported")
 	}
 }
 
@@ -366,10 +378,10 @@ func TestDriverBeginMTLSCompletesInOneRequest(t *testing.T) {
 		begin:  &quicbaas.BeginLoginResponse{SessionID: "sess-mtls"},
 		finish: finishResponse(t, "bearer-mtls", ""),
 	}
-	driver := newTestDriver(t, client, NewMTLSBinder())
+	driver := newTestDriver(t, client, &singleShotBinder{})
 
 	recorder := httptest.NewRecorder()
-	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypePIV)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
@@ -396,10 +408,10 @@ func TestDriverRefusesAnErrorFreeCeremonyWithNoBearer(t *testing.T) {
 		begin:  &quicbaas.BeginLoginResponse{SessionID: "sess-mtls"},
 		finish: finishResponse(t, "", ""),
 	}
-	driver := newTestDriver(t, client, NewMTLSBinder())
+	driver := newTestDriver(t, client, &singleShotBinder{})
 
 	recorder := httptest.NewRecorder()
-	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypePIV)
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d: %s", recorder.Code, recorder.Body.String())
@@ -408,16 +420,16 @@ func TestDriverRefusesAnErrorFreeCeremonyWithNoBearer(t *testing.T) {
 
 func TestDriverRefusesWhenNoBackboneIsWired(t *testing.T) {
 	// A deployment with no login client must deny, never mint anything.
-	driver := newTestDriver(t, nil, NewMTLSBinder())
+	driver := newTestDriver(t, nil, &singleShotBinder{})
 
 	recorder := httptest.NewRecorder()
-	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypePIV)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 from Begin, got %d", recorder.Code)
 	}
 
 	recorder = httptest.NewRecorder()
-	driver.Finish(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+	driver.Finish(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypePIV)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 from Finish, got %d", recorder.Code)
 	}
@@ -437,9 +449,9 @@ func TestDriverReportsAnUnregisteredFactorAsAPlatformFault(t *testing.T) {
 
 func TestDriverSurfacesBackboneRefusalsAsUnauthorized(t *testing.T) {
 	beginFailure := &fakeClient{beginErr: errors.New("factor not found")}
-	driver := newTestDriver(t, beginFailure, NewMTLSBinder())
+	driver := newTestDriver(t, beginFailure, &singleShotBinder{})
 	recorder := httptest.NewRecorder()
-	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypePIV)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 when begin is refused, got %d", recorder.Code)
 	}
@@ -448,9 +460,9 @@ func TestDriverSurfacesBackboneRefusalsAsUnauthorized(t *testing.T) {
 		begin:     &quicbaas.BeginLoginResponse{SessionID: "sess"},
 		finishErr: errors.New("empty lookup key"),
 	}
-	driver = newTestDriver(t, finishFailure, NewMTLSBinder())
+	driver = newTestDriver(t, finishFailure, &singleShotBinder{})
 	recorder = httptest.NewRecorder()
-	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypePIV)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 when finish is refused, got %d", recorder.Code)
 	}
@@ -459,10 +471,10 @@ func TestDriverSurfacesBackboneRefusalsAsUnauthorized(t *testing.T) {
 func TestDriverRejectsABeginResponseThatIsNil(t *testing.T) {
 	// A nil response with a nil error is the backbone violating its own
 	// contract; the driver must not dereference it.
-	driver := newTestDriver(t, &fakeClient{}, NewMTLSBinder())
+	driver := newTestDriver(t, &fakeClient{}, &singleShotBinder{})
 
 	recorder := httptest.NewRecorder()
-	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypePIV)
 
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d: %s", recorder.Code, recorder.Body.String())
@@ -480,17 +492,67 @@ func TestNewFIDO2BinderRequiresACeremonyTenant(t *testing.T) {
 	}
 }
 
-func TestMTLSBinderFinishRequiresTheDriversSession(t *testing.T) {
+// TestMTLSBinderDeclinesTheCeremonyItCannotBind pins the refusal in
+// mtls.go, and pins it on BOTH verbs.
+//
+// The platform cannot bind the caller's peer certificate to the ceremony
+// through sdk/go (jeremyhahn/go-quicbaas#857). Opening one anyway is not
+// merely useless: the SDK client can run in remote transport mode, where
+// the backbone reads the verified peer certificate off the connection it
+// actually sees — platformd's — and would resolve whatever identity THAT
+// certificate is enrolled as, for an unauthenticated caller of /login. On
+// the embedded transport the same request is only refused for an empty
+// lookup key, so nothing reveals the hole until the daemon is pointed at a
+// remote control plane.
+//
+// So the binder refuses before anything reaches the backbone, and it
+// refuses on Finish too: a binder whose safety depends on the driver
+// calling Begin first is a binder whose safety lives somewhere else.
+func TestMTLSBinderDeclinesTheCeremonyItCannotBind(t *testing.T) {
 	binder := NewMTLSBinder()
-	if _, err := binder.Finish(httptest.NewRequest(http.MethodPost, "/login", nil), ""); err == nil {
-		t.Fatal("expected a missing-session error")
+	request := httptest.NewRequest(http.MethodPost, "/login", nil)
+
+	var unavailable *FactorUnavailableError
+
+	_, err := binder.Begin(request)
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("Begin: expected FactorUnavailableError, got %v", err)
 	}
-	req, err := binder.Finish(httptest.NewRequest(http.MethodPost, "/login", nil), "sess")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if unavailable.Type != quicbaas.FactorTypeMTLS {
+		t.Fatalf("expected the mtls factor named, got %q", unavailable.Type)
 	}
-	if req.Type != quicbaas.FactorTypeMTLS {
-		t.Fatalf("expected the mtls factor type, got %q", req.Type)
+	if !strings.Contains(unavailable.Reason, "857") {
+		t.Fatalf("the refusal must name what would lift it, got %q", unavailable.Reason)
+	}
+
+	// Both sessionID states, so the refusal cannot be mistaken for the
+	// missing-session check this verb used to perform.
+	for _, sessionID := range []string{"", "sess"} {
+		if _, err := binder.Finish(request, sessionID); !errors.As(err, &unavailable) {
+			t.Fatalf("Finish(%q): expected FactorUnavailableError, got %v", sessionID, err)
+		}
+	}
+}
+
+// TestDriverAnswersADeclinedFactorWithForbidden pins the status the route
+// returns: the surface exists and is closed, which is 403 — not a 4xx that
+// blames a caller whose certificate was fine, and not a 500 that reads as
+// a platform defect someone should go hunting for.
+func TestDriverAnswersADeclinedFactorWithForbidden(t *testing.T) {
+	client := &fakeClient{}
+	driver := newTestDriver(t, client, NewMTLSBinder())
+
+	recorder := httptest.NewRecorder()
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if client.beginCalls != 0 {
+		t.Fatal("a declined factor must not open a ceremony on the backbone")
+	}
+	if client.finishCalls != 0 {
+		t.Fatal("a declined factor must not reach FinishLogin")
 	}
 }
 
@@ -527,10 +589,10 @@ func TestDriverIssuesTheSessionMintedFromTheResolvedIdentity(t *testing.T) {
 		finish: finishResponse(t, "bearer-mtls", "refresh-mtls"),
 	}
 	issuer := newTestIssuer()
-	driver := newTestDriverWithIssuer(t, client, issuer, NewMTLSBinder())
+	driver := newTestDriverWithIssuer(t, client, issuer, &singleShotBinder{})
 
 	recorder := httptest.NewRecorder()
-	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypePIV)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
@@ -577,10 +639,10 @@ func TestDriverRefusesABearerWithNoIdentity(t *testing.T) {
 		finish: finishResponseFor(t, "bearer-mtls", "", nil),
 	}
 	issuer := newTestIssuer()
-	driver := newTestDriverWithIssuer(t, client, issuer, NewMTLSBinder())
+	driver := newTestDriverWithIssuer(t, client, issuer, &singleShotBinder{})
 
 	recorder := httptest.NewRecorder()
-	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypePIV)
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d: %s", recorder.Code, recorder.Body.String())
@@ -601,10 +663,10 @@ func TestDriverReportsAFailedMintAsAPlatformFault(t *testing.T) {
 	}
 	issuer := newTestIssuer()
 	issuer.err = errors.New("signer unavailable")
-	driver := newTestDriverWithIssuer(t, client, issuer, NewMTLSBinder())
+	driver := newTestDriverWithIssuer(t, client, issuer, &singleShotBinder{})
 
 	recorder := httptest.NewRecorder()
-	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypePIV)
 
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d: %s", recorder.Code, recorder.Body.String())
@@ -636,10 +698,10 @@ func TestDriverRefusesAFinishResponseMissingItsCeremonyHalf(t *testing.T) {
 		begin:  &quicbaas.BeginLoginResponse{SessionID: "sess"},
 		finish: &quicbaas.FinishLoginResponse{RefreshToken: "refresh"},
 	}
-	driver := newTestDriver(t, client, NewMTLSBinder())
+	driver := newTestDriver(t, client, &singleShotBinder{})
 
 	recorder := httptest.NewRecorder()
-	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypeMTLS)
+	driver.Begin(recorder, httptest.NewRequest(http.MethodPost, "/login", nil), quicbaas.FactorTypePIV)
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d: %s", recorder.Code, recorder.Body.String())

@@ -154,7 +154,7 @@ async function apiRequest<T>(
 // Context-aware error messages
 const CONTEXT_ERROR_MESSAGES: Record<ErrorCode, { login: string; register: string }> = {
   USER_NOT_FOUND: {
-    login: "Account not found. Please check your username or create a new account.",
+    login: "No account matched that passkey. Create an account, or try another passkey.",
     register: "Unable to start registration. Please try again.",
   },
   USER_EXISTS: {
@@ -178,7 +178,7 @@ const CONTEXT_ERROR_MESSAGES: Record<ErrorCode, { login: string; register: strin
     register: "Too many attempts. Please wait a moment and try again.",
   },
   VALIDATION_ERROR: {
-    login: "Invalid input. Please check your username and try again.",
+    login: "The login request was rejected. Please try your passkey again.",
     register: "Invalid input. Please check your username and try again.",
   },
   INTERNAL_ERROR: {
@@ -205,7 +205,7 @@ function getErrorMessage(result: ApiErrorResult, context: "login" | "register"):
   // Fallback based on HTTP status
   if (result.status === 404) {
     return context === "login"
-      ? "Account not found. Please check your username or create a new account."
+      ? "No account matched that passkey. Create an account, or try another passkey."
       : "Unable to start registration. Please try again.";
   }
 
@@ -229,7 +229,7 @@ function getErrorMessage(result: ApiErrorResult, context: "login" | "register"):
 
   // Generic fallback - never expose raw error to user
   return context === "login"
-    ? "Unable to log in. Please check your username and try again."
+    ? "Unable to log in. Please try your passkey again."
     : "Unable to complete registration. Please try again.";
 }
 
@@ -522,13 +522,16 @@ export default function WebAuthnUI() {
               {successMessage && (
                 <p className={styles.successMessage}>{successMessage}</p>
               )}
-              <input
-                type="text"
-                placeholder="Enter your username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className={styles.inputField}
-              />
+              {/*
+                No username field. Login is usernameless: the authenticator
+                picks the credential and the server resolves the account from
+                it, so handleLogin sends nothing typed here. Leaving the input
+                in place was worse than redundant — someone could type one
+                account name, be signed in as another by the authenticator's
+                own picker, and have the UI imply the name they typed had
+                constrained it. Registration keeps the field, because that is
+                where the account is named.
+              */}
               <button
                 onClick={handleLogin}
                 disabled={loading}

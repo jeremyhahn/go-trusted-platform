@@ -90,14 +90,6 @@ func NewDriver(params DriverParams) (*Driver, error) {
 	}, nil
 }
 
-// Supports reports whether a binder is registered for the factor type.
-// The router consults it to decide whether to register a factor's routes
-// at all, rather than mounting a route that can only fail.
-func (d *Driver) Supports(factorType quicbaas.FactorType) bool {
-	_, ok := d.binders[factorType]
-	return ok
-}
-
 // Begin opens a login ceremony for the factor type.
 //
 // For a challenge factor it answers with the binder's projection of the
@@ -236,6 +228,12 @@ func (d *Driver) fail(w http.ResponseWriter, r *http.Request, err error) {
 		d.writer.Error500(w, r, err)
 	case *UnavailableError:
 		d.logger.Error(err, "unified login client not configured")
+		d.writer.Error403(w, r, err, nil)
+	case *FactorUnavailableError:
+		// The surface exists and is deliberately closed, which is the same
+		// shape of answer as a deployment with no backbone: 403, not a 4xx
+		// that blames the caller for a proof they offered correctly.
+		d.logger.Error(err, "the factor's ceremony cannot be bound on this deployment")
 		d.writer.Error403(w, r, err, nil)
 	case *UnsupportedFactorError:
 		d.logger.Error(err, "unified login has no binder for the factor type")

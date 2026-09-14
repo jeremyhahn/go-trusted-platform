@@ -178,6 +178,13 @@ test.describe('Authentication Flow', () => {
 
     await expect(page.locator('h2')).toContainText('Login');
     await expect(page.getByRole('button', { name: /log in/i })).toBeVisible();
+
+    // And NO username field. Login is usernameless, so the handler ignores
+    // anything typed here; an input that looks like it constrains which
+    // account you sign in to, while the authenticator's picker actually
+    // decides, misrepresents what happened. Registration keeps its field —
+    // the test above asserts that — so this is not a styling preference.
+    await expect(page.getByPlaceholder('Enter your username')).toHaveCount(0);
   });
 
   test('should toggle between registration and login forms', async ({ page }) => {

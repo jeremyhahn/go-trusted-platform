@@ -144,3 +144,23 @@ func (e *SessionIssueError) Error() string {
 func (e *SessionIssueError) Unwrap() error {
 	return e.Cause
 }
+
+// FactorUnavailableError reports that a factor's ceremony cannot be run
+// safely on this deployment, so the platform declines to open it at all.
+//
+// It is distinct from UnsupportedFactorError (no binder is registered — a
+// wiring defect) and from UnavailableError (no backbone at all). This one
+// says the binder exists and knows it cannot bind the caller's credential
+// to the ceremony, which is a refusal to guess rather than a fault.
+type FactorUnavailableError struct {
+	// Type is the factor whose ceremony is declined.
+	Type quicbaas.FactorType
+
+	// Reason states why it cannot be run.
+	Reason string
+}
+
+// Error implements error.
+func (e *FactorUnavailableError) Error() string {
+	return "login: the " + string(e.Type) + " factor is unavailable: " + e.Reason
+}

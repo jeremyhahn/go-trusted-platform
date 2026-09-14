@@ -169,7 +169,7 @@ store independently of one another.
 
 | Capability | Embedded (Go) | Unix | gRPC | REST | QUIC | MCP |
 |---|---|---|---|---|---|---|
-| Issue session (mTLS factor) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/login` (`GenerateToken`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Issue session (mTLS factor) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/login` (`GenerateToken`) — **declined 403**, see below | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Refresh session token | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/login/refresh` (`RefreshToken`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | WebAuthn: begin registration | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/webauthn/registration/begin` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | WebAuthn: finish registration | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/webauthn/registration/finish` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
@@ -247,6 +247,15 @@ platform persists none of it:
   client is not holding the backbone's bearer. Forwarding it would hand
   over a credential no route on this server can redeem. The pair returns
   together in the same change that makes the backbone bearer the session.
+
+**`/api/v1/login` answers 403.** The route exists and its mTLS factor is
+deliberately closed: the platform cannot bind the caller's peer certificate to
+the ceremony through `sdk/go` (jeremyhahn/go-quicbaas#857), and opening one
+anyway would let a **remote** transport resolve the identity of *platformd's*
+own client certificate for an unauthenticated caller. The refusal is in the
+binder, before the backbone is reached, on both ceremony verbs. Rationale and
+failure mode: `docs/auth/architecture.md` §The mTLS factor is declined. WebAuthn
+login is unaffected — it is a different factor on the same driver.
 
 **"not this repo"** means the capability is served by
 `go-quicbaas/sdk/go`'s `Security().Auth().Factors()` (M10, over go-qrdb's M14

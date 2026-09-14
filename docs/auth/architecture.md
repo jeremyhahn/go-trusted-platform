@@ -172,11 +172,54 @@ is why an account on a public email domain is not a special case.
 to `navigator.credentials.get()`, plus the `session_id` the client echoes back on
 `finish` in the `X-Session-Id` header — the platform persists no ceremony state.
 
+> **The discoverable ceremony does not complete against `go-xkms v0.9.4-alpha`,
+> the tag this tree pins.** Traced in the tagged sources: an empty hint makes
+> xkms begin the ceremony with `BeginDiscoverableLogin()`, which leaves
+> `SessionData.UserID` empty; its `WebAuthnFactorVerifier.Verify` then re-derives
+> a handle from the resolved factor and passes it to `FinishLogin`, whose
+> `finishLoginUser` only consults the session when the caller supplied nothing —
+> so the non-empty handle selects the user-identified branch, and go-webauthn's
+> `ValidateLogin` rejects the pair with `ID mismatch for User and Session`.
+>
+> The platform is on the correct side of this: sending no hint is what a
+> usernameless login is, and the two xkms halves contradict each other. Filed as
+> **jeremyhahn/go-xkms#558** with the fix that honours the comment already in
+> `finishLoginUser`. Until that tag lands, a real authenticator reaches `finish`
+> and is refused there.
+>
+> The platform's own login tests fake the SDK `AuthService`, so they never reach
+> the xkms verifier and cannot catch this — which is exactly why it needs saying
+> here rather than being left to a green suite.
+
 `/api/v1/login` is the same driver's **mTLS** route. mTLS is a single-shot
 factor: possession was proven by the handshake before the request body was read,
 so there is no challenge to issue and nothing for the client to sign, and the
-driver completes the ceremony in the one request. It reads no request body: an
-mTLS login has no credential *in* the request.
+driver would complete the ceremony in the one request. It reads no request body
+either way: an mTLS login has no credential *in* the request.
+
+#### The mTLS factor is declined, and not only because it cannot work
+
+The binder refuses both verbs, so `/api/v1/login` answers **403** and no
+ceremony is opened. The platform cannot bind the caller's peer certificate to
+the ceremony through `sdk/go` — neither the peer-certificate context helper nor
+the key derivation is re-exported (jeremyhahn/go-quicbaas#857) — so the login
+could not succeed regardless.
+
+What makes the refusal *necessary* rather than tidy is the failure mode if a
+ceremony were opened anyway. The SDK client can run in **remote transport
+mode** (`pkg/app/app.go`, `QuicBaaSSDKClient`). On a network transport the
+backbone populates the verified peer certificate from the connection it
+actually sees — which is **platformd's** client certificate, not the browser's
+— and would resolve whatever identity that certificate is enrolled as. An
+unauthenticated caller of `/api/v1/login` would receive a session for the
+daemon's own identity. On the embedded transport the same request is merely
+refused for an empty lookup key, so nothing reveals the hole until someone
+points the daemon at a remote control plane.
+
+Refusing in the binder means no `FinishLogin` carrying an identity the platform
+did not intend ever leaves the process. The refusal is on Begin **and** Finish:
+a binder whose safety depends on the driver calling Begin first is a binder
+whose safety lives somewhere else. Both go away together when #857 lands.
 
 Every route answers with the same session object — `bearer` and `expiresAt`.
 

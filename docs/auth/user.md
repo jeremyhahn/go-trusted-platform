@@ -258,10 +258,14 @@ POST /api/v1/webauthn/login/finish
 GET  /api/v1/webauthn/registration/status
 ```
 
-**Login asks for no username.** The ceremony uses discoverable credentials, so
-your authenticator identifies you and the platform resolves your account from
-the credential it presents. Registration still asks for one, because that is
-when the account is named.
+**Login asks for no username, and the sign-in form no longer has a field for
+one.** The ceremony uses discoverable credentials, so your authenticator
+identifies you and the platform resolves your account from the credential it
+presents. If you hold passkeys for more than one account, your authenticator
+asks which — the platform cannot narrow that down for you, and a username box
+that looked as though it did would be telling you something untrue.
+Registration still asks for a username, because that is when the account is
+named.
 
 Successful login yields a session:
 
@@ -277,9 +281,12 @@ or the `jwt` cookie. When it expires, authenticate with your key again — a
 WebAuthn login is one touch, and this release issues no renewal credential
 (see `docs/auth/architecture.md` §Why the platform still mints the bearer).
 
-`POST /api/v1/login` is the certificate (mTLS) equivalent. It takes no body —
-the certificate your browser presented during the TLS handshake *is* the
-credential — and answers with the same session object.
+`POST /api/v1/login` is the certificate (mTLS) equivalent, and it is currently
+**closed** — it answers 403. The platform has no supported way to tie the
+certificate you presented to the login ceremony, and opening one regardless
+could authenticate you as the daemon rather than as you. Use your security key.
+The technical detail is in `docs/auth/architecture.md` §The mTLS factor is
+declined.
 
 ---
 

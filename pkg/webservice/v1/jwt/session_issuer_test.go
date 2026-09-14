@@ -97,13 +97,20 @@ func TestIssueSessionRefusesAnIncompleteIdentity(t *testing.T) {
 // TestIssueSessionOnANilServiceRefuses covers the zero value: a service
 // that was never constructed has no signer, and must say so rather than
 // panic inside the driver's finish path.
+//
+// It must say so ACCURATELY. The error names the missing signer, not a
+// missing identity — the identity here is complete, and an operator
+// reading the 500 this produces would otherwise go looking for a login
+// that resolved nobody.
 func TestIssueSessionOnANilServiceRefuses(t *testing.T) {
 	var service *Service
 
 	_, _, err := service.IssueSession(&quicbaas.Identity{
 		Subject: "operator@platform", TenantID: "tenant-a",
 	})
-	assert.ErrorIs(t, err, ErrIdentityRequired)
+	assert.ErrorIs(t, err, ErrSignerUnavailable)
+	assert.NotErrorIs(t, err, ErrIdentityRequired,
+		"a missing signer must not be reported as a missing identity")
 }
 
 // TestIssuedSessionIsRejectedByAForeignSigner is the control that makes

@@ -377,11 +377,20 @@ seam alone.)
 | Guards | `pkg/webservice/v1/middleware/iam/guard_test.go` | Fail-closed without a session, exact role matching, the tenant boundary, promotion through `AuthMiddleware` |
 | Route gating | `pkg/webservice/v1/rest/iam/router_test.go` | Every route authenticates and requires `admin`; tenant records demand the system tenant; tenant-scoped collections demand the caller's own tenant. `TestRegisterRoutes_RealGuardsDenyEndToEnd` uses the real guard and asserts the wire response; `TestRegisterRoutes_EveryTenantScopedRouteIsGuarded` walks the route table so a new route cannot skip the guard (mutation-verified: dropping one guard fails it) |
 | Session publish | `pkg/webservice/v1/jwt/handler_test.go` | `Verify` publishes roles/tenant, publishes none for an unprivileged token, and a refresh preserves the tenant/roles a guard acts on (mutation-verified) |
-| Login ceremony | `pkg/webservice/v1/login/driver_test.go` | The one driver every login route runs on: the fido2 challenge is usernameless and tenant-scoped; the credential id is submitted as the lookup key and the assertion as the proof; mtls completes in one request with no signature; an error-free ceremony with no bearer is refused 401; a bearer naming nobody is refused 401 and mints nothing; a failed mint is a 500, not a rejected login; the backbone's bearer and refresh never reach the client; a missing backbone refuses 403; an unregistered factor is a 500. Fixtures come from `login/logintest` |
+| Login ceremony | `pkg/webservice/v1/login/driver_test.go` | The one driver every login route runs on: the fido2 challenge is usernameless and tenant-scoped; the credential id is submitted as the lookup key and the assertion as the proof; a single-shot factor completes in one request with no signature; the mtls binder declines both verbs and reaches no backbone (403); an error-free ceremony with no bearer is refused 401; a bearer naming nobody is refused 401 and mints nothing; a failed mint is a 500, not a rejected login; the backbone's bearer and refresh never reach the client; a missing backbone refuses 403; an unregistered factor is a 500. Fixtures come from `login/logintest` |
 | Session issuance | `pkg/webservice/v1/jwt/session_issuer_test.go` | Which claims a backbone-issued session carries and which it deliberately omits (`uid`); an incomplete identity is refused rather than minted weaker; a signing failure returns no credential; a credential from a foreign signer is rejected by the seam (the control that makes the acceptance test mean something) |
 | Login seam gate | `pkg/webservice/v1/registry_tenant_wiring_test.go` | The login driver (and the WebAuthn routes with it) is declined under the broker seam, which does not accept a platform-minted session, and declined with no signer; built on the default seam. Same refusal `AdminClaimRestHandler` makes |
 | Login → seam, end to end | `pkg/webservice/v1/jwt/handler_test.go` | `TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam`: log in over the real driver and the real signer, then present what the login returned to the seam every protected route runs. It must reach the handler with the backbone's identity published as the session. This is the property whose absence made a login return a token the same server rejected (#646) |
 | Login delegation | `pkg/webservice/v1/webauthn/webauthn_test.go` | The WebAuthn login verbs reach the backbone **without** consulting the platform user store — the lookup whose failure was #640 |
+
+**What the login tests cannot tell you.** Every test above fakes the SDK
+`AuthService`, so none of them reaches go-xkms's WebAuthn verifier. A green suite
+therefore says the platform's half is right and says nothing about whether the
+ceremony completes upstream — and against the pinned `go-xkms v0.9.4-alpha` it
+does not (jeremyhahn/go-xkms#558; see `architecture.md` §A browser
+authenticating with WebAuthn). Treat a real-authenticator run as a separate
+gate, not a formality, and do not add a fake-client test that appears to cover
+it.
 | CLI | `pkg/cli/commands/admin/claim_test.go` | Full flow against a fake daemon, signature verified against the bundle, every failure mode, Ed25519 signing |
 
 Fault-injection seams: `FIDO2Ceremony`, `FactorLister`, `TokenIssuer` and

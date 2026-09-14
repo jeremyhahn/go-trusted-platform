@@ -1009,10 +1009,15 @@ type stubLoginClient struct {
 	// identity is the principal the ceremony resolved. Nil drives the
 	// path where the backbone issued a bearer naming nobody.
 	identity *logintest.Identity
+
+	// beginCalls counts ceremonies opened, so a test can assert that a
+	// declined factor never reached the backbone at all.
+	beginCalls int
 }
 
 func (c *stubLoginClient) BeginLogin(
 	_ context.Context, _ quicbaas.BeginLoginRequest) (*quicbaas.BeginLoginResponse, error) {
+	c.beginCalls++
 	return &quicbaas.BeginLoginResponse{SessionID: "session-1"}, nil
 }
 
@@ -1027,19 +1032,25 @@ func (c *stubLoginClient) FinishLogin(
 		c.bearer, "", time.Now().Add(time.Hour), time.Now().Add(24*time.Hour), c.identity)
 }
 
-// postLogin drives POST /login and returns the bearer from the session the
-// ceremony issued.
-func postLogin(t *testing.T, handler *RestHandler) string {
+// completeLogin runs a WebAuthn login to completion on the supplied driver
+// and returns the bearer from the session it issued.
+//
+// It drives the fido2 factor rather than /login's mtls one because mtls
+// deliberately declines until its certificate can be bound to the ceremony
+// (login/mtls.go, jeremyhahn/go-quicbaas#857). What this helper exists to
+// obtain is a credential from a COMPLETED ceremony, and fido2 is the factor
+// that completes.
+func completeLogin(t *testing.T, driver *loginpkg.Driver) string {
 	t.Helper()
 
-	body, err := json.Marshal(service.UserCredential{Email: "admin@system", Password: "x"})
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewBuffer(body))
+	req := httptest.NewRequest(http.MethodPost, "/webauthn/login/finish",
+		bytes.NewBufferString(`{"id":"Q1JFRC1JRA","type":"public-key","response":{}}`))
+	req.Header.Set(loginpkg.SessionIDHeader, "sess-1")
 	req.Header.Set("Accept", "application/json")
+
 	w := httptest.NewRecorder()
-	handler.GenerateToken(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "login must succeed")
+	driver.Finish(w, req, quicbaas.FactorTypeFIDO2)
+	require.Equal(t, http.StatusOK, w.Code, "login must succeed: %s", w.Body.String())
 
 	var resp response.WebServiceResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -1051,6 +1062,31 @@ func postLogin(t *testing.T, handler *RestHandler) string {
 	require.True(t, ok, "session carries no bearer: %v", session)
 	require.NotEmpty(t, bearer)
 	return bearer
+}
+
+// TestGenerateTokenDeclinesTheUnbindableMTLSFactor pins what /login now
+// answers. mtls is the factor that route drives, and its binder declines
+// until the caller's certificate can be bound to the ceremony — so the
+// route reports the surface as closed (403) rather than opening a ceremony
+// that a remote transport would resolve against PLATFORMD's certificate.
+//
+// 403 and not 401: the caller's certificate was never the problem.
+func TestGenerateTokenDeclinesTheUnbindableMTLSFactor(t *testing.T) {
+	handler := newHandlerForLoginTest(t)
+	client := &stubLoginClient{bearer: "broker.issued.bearer"}
+	handler.SetLoginDriver(newLoginDriverForTest(t, client, handler.jwtService))
+
+	body, err := json.Marshal(service.UserCredential{Email: "admin@system", Password: "x"})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewBuffer(body))
+	req.Header.Set("Accept", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.GenerateToken(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	assert.Zero(t, client.beginCalls,
+		"a declined factor must not open a ceremony on the backbone")
 }
 
 // TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam is the
@@ -1072,16 +1108,17 @@ func postLogin(t *testing.T, handler *RestHandler) string {
 // actually accepted before the mint is removed.
 func TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
 	handler := newHandlerForLoginTest(t)
-	handler.SetLoginDriver(newLoginDriverForTest(t, &stubLoginClient{
+	driver := newLoginDriverForTest(t, &stubLoginClient{
 		bearer: "broker.issued.bearer",
 		identity: &logintest.Identity{
 			Subject:  "operator@platform",
 			TenantID: "tenant-a",
 			Roles:    []string{"admin"},
 		},
-	}, handler.jwtService))
+	}, handler.jwtService)
+	handler.SetLoginDriver(driver)
 
-	bearer := postLogin(t, handler)
+	bearer := completeLogin(t, driver)
 	require.NotEqual(t, "broker.issued.bearer", bearer,
 		"the backbone bearer must not be what the client is handed")
 
@@ -1109,21 +1146,26 @@ func TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
 
 // TestLoginRefusesWhenTheCeremonyNamesNobody is the negative half: the
 // seam accepting the login credential must not mean it accepts one minted
-// for an unresolved principal.
+// for an unresolved principal. A ceremony that returns a bearer without
+// saying who it belongs to has authenticated nobody, and no credential may
+// come out of it.
 func TestLoginRefusesWhenTheCeremonyNamesNobody(t *testing.T) {
 	handler := newHandlerForLoginTest(t)
-	handler.SetLoginDriver(newLoginDriverForTest(t,
-		&stubLoginClient{bearer: "broker.issued.bearer"}, handler.jwtService))
+	driver := newLoginDriverForTest(t,
+		&stubLoginClient{bearer: "broker.issued.bearer"}, handler.jwtService)
 
-	body, err := json.Marshal(service.UserCredential{Email: "admin@system", Password: "x"})
-	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewBuffer(body))
+	req := httptest.NewRequest(http.MethodPost, "/webauthn/login/finish",
+		bytes.NewBufferString(`{"id":"Q1JFRC1JRA","type":"public-key","response":{}}`))
+	req.Header.Set(loginpkg.SessionIDHeader, "sess-1")
 	req.Header.Set("Accept", "application/json")
 	w := httptest.NewRecorder()
-	handler.GenerateToken(w, req)
+
+	driver.Finish(w, req, quicbaas.FactorTypeFIDO2)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code,
 		"a bearer with no identity authenticates nobody")
+	assert.NotContains(t, w.Body.String(), "broker.issued.bearer",
+		"and nothing resembling a credential may reach the client")
 }
 
 // TestPlatformMintedTokenIsAcceptedByTheDefaultProtectedRouteSeam is the
@@ -1224,9 +1266,14 @@ func newLoginDriverForTest(
 
 	t.Helper()
 	logger := logging.NewLogger(slog.LevelError, os.Stderr)
+	// Both factors: mtls is the one /login drives (and declines), fido2 the
+	// one that completes, so a single driver serves the route test and the
+	// end-to-end seam test without either needing its own fixture.
+	fido2, err := loginpkg.NewFIDO2Binder("tenant-a")
+	require.NoError(t, err)
 	driver, err := loginpkg.NewDriver(loginpkg.DriverParams{
 		Client:         client,
-		Binders:        []loginpkg.Binder{loginpkg.NewMTLSBinder()},
+		Binders:        []loginpkg.Binder{loginpkg.NewMTLSBinder(), fido2},
 		SessionIssuer:  issuer,
 		Logger:         logger,
 		ResponseWriter: response.NewResponseWriter(logger, nil),
