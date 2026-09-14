@@ -89,6 +89,17 @@ HTTP status codes:
 
 Base path: `/api/v1/sdn/zones`
 
+Two stacks serve these paths with the same object shapes: the webservice
+(`pkg/webservice/v1/rest/sdn/zones.go`, always mounted when the SDN
+service exists — the surface the WebUI uses) wraps each response in the
+standard platform envelope (`{code, error, success, payload}`); the
+daemon's standalone REST server (`pkg/api/rest/sdn_handlers.go`, only
+when `EnableREST` is set) returns the body bare.
+
+On the webservice these routes are admin-gated — a zone defines what may
+reach what, so every endpoint below requires an authenticated caller
+holding `admin` and answers 401 or 403 otherwise.
+
 ### POST /api/v1/sdn/zones
 
 Create a new network trust zone.

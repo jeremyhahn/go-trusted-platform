@@ -97,13 +97,21 @@ validates a device certificate; there is no RADIUS exchange behind it.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create zone | `MISSING — docs/13 G7` | `CreateNetworkZone` | via gateway category (`0x2F`), sub-opcodes `0x10`–`0x14` | `MISSING — docs/13 G7` | ✅ |
-| Update zone | `MISSING — docs/13 G7` | `UpdateNetworkZone` | as above | `MISSING — docs/13 G7` | ✅ |
-| Delete zone | `MISSING — docs/13 G7` | `DeleteNetworkZone` | as above | `MISSING — docs/13 G7` | ✅ |
-| List zones | `MISSING — docs/13 G7` | `ListNetworkZones` | as above | `MISSING — docs/13 G7` | ✅ |
-| Assign zone | `MISSING — docs/13 G7` | `AssignNetworkZone` | as above | `MISSING — docs/13 G7` | ✅ |
+| Create zone | `POST /api/v1/sdn/zones` | `CreateNetworkZone` | via gateway category (`0x2F`), sub-opcodes `0x10`–`0x14` | `gateway_zone_create` | ✅ |
+| Update zone | `PUT /api/v1/sdn/zones/{name}` | `UpdateNetworkZone` | as above | `gateway_zone_update` | ✅ |
+| Delete zone | `DELETE /api/v1/sdn/zones/{name}` | `DeleteNetworkZone` | as above | `gateway_zone_delete` | ✅ |
+| List zones | `GET /api/v1/sdn/zones` (`?lifecycle_role=`) | `ListNetworkZones` | as above | `gateway_zone_list` | ✅ |
+| Assign zone | `PUT /api/v1/sdn/networks/{network}/zone` | `AssignNetworkZone` | as above | `gateway_zone_assign` | ✅ |
 
-Zones are gRPC-and-CLI only on the REST/MCP side. The QUIC zone operations are
+The zone REST routes are served by the webservice
+(`pkg/webservice/v1/rest/sdn/zones.go`, delegating to the in-process
+`SDNServiceServer`) and wrap the documented snake_case zone objects in the
+standard platform response envelope (`{code, error, success, payload}`).
+The daemon's standalone REST stack (`pkg/api/rest/sdn_handlers.go`) serves
+the same paths bare, without the envelope, when `EnableREST` is set. The
+MCP zone tools (`pkg/api/mcp/gateway_tools.go`) close what this table
+previously recorded as a G7 gap, so zones now reach every transport. The
+QUIC zone operations are
 sub-opcodes multiplexed under the **gateway category opcode `0x2F`**, not
 first-class opcodes — see §8.
 

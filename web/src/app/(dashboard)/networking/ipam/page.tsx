@@ -124,7 +124,9 @@ export default function IPAMPage() {
         throw new Error(body.error || `HTTP ${res.status}`);
       }
       const body = await res.json();
-      const list: IPAMPoolResponse[] = body.pools ?? [];
+      // The webservice wraps payloads in {payload}; the daemon REST
+      // stack returns the body bare — accept both.
+      const list: IPAMPoolResponse[] = body.payload?.pools ?? body.pools ?? [];
       setPools(list);
       // Collect unique zone values for the filter dropdown
       const seenZones = Array.from(new Set(list.map((p) => p.zone).filter(Boolean)));
@@ -154,7 +156,7 @@ export default function IPAMPage() {
         throw new Error(body.error || `HTTP ${res.status}`);
       }
       const body = await res.json();
-      setAllocations(body.allocations ?? []);
+      setAllocations(body.payload?.allocations ?? body.allocations ?? []);
     } catch (err) {
       toast({
         title: 'Failed to load allocations',

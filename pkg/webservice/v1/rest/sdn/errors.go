@@ -138,3 +138,21 @@ type ErrInvalidPortState struct {
 func (e ErrInvalidPortState) Error() string {
 	return fmt.Sprintf("invalid port state: %s", e.State)
 }
+
+// ErrMissingZoneName is returned when a zone request omits the zone name.
+type ErrMissingZoneName struct{}
+
+func (e ErrMissingZoneName) Error() string {
+	return "zone name is required"
+}
+
+// ErrZoneNameMismatch is returned when an update body names a different
+// zone than the URL path.
+type ErrZoneNameMismatch struct {
+	Path string
+	Body string
+}
+
+func (e ErrZoneNameMismatch) Error() string {
+	return fmt.Sprintf("zone name mismatch: path=%s, body=%s", e.Path, e.Body)
+}

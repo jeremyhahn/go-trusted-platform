@@ -653,6 +653,22 @@ func (v1Router *Router) gatewayRoutes() {
 		// mode. These are operator controls over routing and addressing;
 		// an anonymous announce is a route hijack.
 		r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+
+		// Full IPAM pool CRUD under /sdn/gateway/ipam — the WebUI's
+		// Networking → IPAM contract (docs/sdn/ipam). Registered here,
+		// before sdnRoutes, so an unconfigured-SDN 503 stub on /sdn can
+		// never shadow it (gated() is a path-matcher-less subrouter of
+		// v1Router.router, so registration order on the parent is
+		// preserved and mux still matches in that order).
+		//
+		// Pool create, update and delete are operator controls over the
+		// address plan, so the surface carries the same admin gate as the
+		// rest of the gateway routes.
+		ipamRouter := restgateway.NewIPAMRouter(
+			v1Router.logger,
+			server,
+			v1Router.responseWriter)
+		ipamRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 	} else {
 		v1Router.logger.Debug("Gateway service server is nil - gateway service routes not registered")
 	}

@@ -76,24 +76,27 @@ parameter.
 
 ## 4. IPAM
 
-REST exposes a reduced set under `/api/v1/gateway/ipam`; gRPC and MCP carry full
-pool CRUD. QUIC has both the gateway-category sub-opcodes and a dedicated **IPAM
+REST carries the full pool CRUD under `/api/v1/sdn/gateway/ipam`
+(`pkg/webservice/v1/rest/gateway/ipam.go`, the WebUI's Networking → IPAM
+contract — see [`docs/sdn/ipam/`](../sdn/ipam/)), plus a reduced
+read-oriented set under `/api/v1/gateway/ipam`; gRPC and MCP carry full pool
+CRUD. QUIC has both the gateway-category sub-opcodes and a dedicated **IPAM
 category opcode `0x3F`**.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| List pools | `GET /api/v1/gateway/ipam/pools` | `ListIPAMPools` | `OpGatewayListIPAMPools` (`0x08`) | `gateway_ipam_pools` | ✅ |
-| Create pool | `MISSING — docs/13 G7` | `CreateIPAMPool` | `OpGatewayCreateIPAMPool` (`0x0C`) | `gateway_ipam_pool_create` | ✅ |
-| Get pool | `MISSING — docs/13 G7` | `GetIPAMPool` | `OpGatewayGetIPAMPool` (`0x0E`) | `gateway_ipam_pool_get` | ✅ |
-| Update pool | `MISSING — docs/13 G7` | `UpdateIPAMPool` | `OpGatewayUpdateIPAMPool` (`0x0F`) | `gateway_ipam_pool_update` | ✅ |
-| Delete pool | `MISSING — docs/13 G7` | `DeleteIPAMPool` | `OpGatewayDeleteIPAMPool` (`0x0D`) | `gateway_ipam_pool_delete` | ✅ |
-| List allocations | `GET /api/v1/gateway/ipam/allocations` | `ListAllocations` | `OpGatewayListAllocations` (`0x0B`) | `gateway_ipam_allocations` | ✅ |
-| Allocate IP | `POST /api/v1/gateway/ipam/allocations` | `AllocateIP` | `OpGatewayAllocateIP` (`0x09`) | `gateway_ipam_allocate` | ✅ |
-| Release IP | `DELETE /api/v1/gateway/ipam/allocations` | `ReleaseIP` | `OpGatewayReleaseIP` (`0x0A`) | `gateway_ipam_release` | ✅ |
+| List pools | `GET /api/v1/sdn/gateway/ipam/pools` (`?zone=`); also `GET /api/v1/gateway/ipam/pools` | `ListIPAMPools` | `OpGatewayListIPAMPools` (`0x08`) | `gateway_ipam_pools` | ✅ |
+| Create pool | `POST /api/v1/sdn/gateway/ipam/pools` | `CreateIPAMPool` | `OpGatewayCreateIPAMPool` (`0x0C`) | `gateway_ipam_pool_create` | ✅ |
+| Get pool | `GET /api/v1/sdn/gateway/ipam/pools/{id}` | `GetIPAMPool` | `OpGatewayGetIPAMPool` (`0x0E`) | `gateway_ipam_pool_get` | ✅ |
+| Update pool | `PUT /api/v1/sdn/gateway/ipam/pools/{id}` | `UpdateIPAMPool` | `OpGatewayUpdateIPAMPool` (`0x0F`) | `gateway_ipam_pool_update` | ✅ |
+| Delete pool | `DELETE /api/v1/sdn/gateway/ipam/pools/{id}` | `DeleteIPAMPool` | `OpGatewayDeleteIPAMPool` (`0x0D`) | `gateway_ipam_pool_delete` | ✅ |
+| List allocations | `GET /api/v1/sdn/gateway/ipam/allocations` (`?pool_id=`); also `GET /api/v1/gateway/ipam/allocations` | `ListAllocations` | `OpGatewayListAllocations` (`0x0B`) | `gateway_ipam_allocations` | ✅ |
+| Allocate IP | `POST /api/v1/sdn/gateway/ipam/allocations`; also `POST /api/v1/gateway/ipam/allocations` | `AllocateIP` | `OpGatewayAllocateIP` (`0x09`) | `gateway_ipam_allocate` | ✅ |
+| Release IP | `DELETE /api/v1/sdn/gateway/ipam/allocations/{ip}`; also `DELETE /api/v1/gateway/ipam/allocations` | `ReleaseIP` | `OpGatewayReleaseIP` (`0x0A`) | `gateway_ipam_release` | ✅ |
 
-**Pool CRUD is missing from REST entirely** — four of the eight IPAM
-capabilities. REST can list pools and manage allocations but cannot create,
-read, update or delete a pool. That is the largest single hole in this feature.
+The `/sdn/gateway/ipam` surface wraps the documented snake_case objects in
+the standard platform response envelope (`{code, error, success, payload}`);
+the reduced `/gateway/ipam` surface keeps its protojson payloads.
 
 ---
 

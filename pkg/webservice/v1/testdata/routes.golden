@@ -49,6 +49,9 @@ DELETE /api/v1/quicbaas/storage/buckets/{name}/objects/{object:.*}
 DELETE /api/v1/sdn/bridges/{name}
 DELETE /api/v1/sdn/bridges/{name}/ports/{port}
 DELETE /api/v1/sdn/flows
+DELETE /api/v1/sdn/gateway/ipam/allocations/{ip}
+DELETE /api/v1/sdn/gateway/ipam/pools/{id}
+DELETE /api/v1/sdn/zones/{name}
 DELETE /api/v1/tenants/{id}
 DELETE /api/v1/tpm/ak
 DELETE /api/v1/tpm/ek
@@ -256,9 +259,14 @@ GET /api/v1/sdn/bridges/{name}/ports
 GET /api/v1/sdn/bridges/{name}/ports/{port}/state
 GET /api/v1/sdn/bridges/{name}/ports/{port}/stats
 GET /api/v1/sdn/flows
+GET /api/v1/sdn/gateway/ipam
+GET /api/v1/sdn/gateway/ipam/allocations
+GET /api/v1/sdn/gateway/ipam/pools
+GET /api/v1/sdn/gateway/ipam/pools/{id}
 GET /api/v1/sdn/policies
 GET /api/v1/sdn/policies/{id}
 GET /api/v1/sdn/vlans
+GET /api/v1/sdn/zones
 GET /api/v1/status
 GET /api/v1/switches
 GET /api/v1/switches/{switch}/ports
@@ -447,8 +455,11 @@ POST /api/v1/sdn/bridges/{bridge_id}/vlans
 POST /api/v1/sdn/bridges/{name}/flows
 POST /api/v1/sdn/bridges/{name}/ports
 POST /api/v1/sdn/flows
+POST /api/v1/sdn/gateway/ipam/allocations
+POST /api/v1/sdn/gateway/ipam/pools
 POST /api/v1/sdn/policies
 POST /api/v1/sdn/vlans
+POST /api/v1/sdn/zones
 POST /api/v1/switches/{switch}/ports/{port}/disable
 POST /api/v1/switches/{switch}/ports/{port}/enable
 POST /api/v1/switches/{switch}/ports/{port}/vlan
@@ -504,6 +515,9 @@ PUT /api/v1/kms/secrets/{name}/policy
 PUT /api/v1/kms/secrets/{name}/status
 PUT /api/v1/pxe/devices/{id}/state
 PUT /api/v1/sdn/bridges/{name}/ports/{port}/state
+PUT /api/v1/sdn/gateway/ipam/pools/{id}
+PUT /api/v1/sdn/networks/{network}/zone
+PUT /api/v1/sdn/zones/{name}
 PUT /api/v1/tenants/{id}
 PUT /api/v1/tenants/{id}/quotas
 PUT /api/v1/tpm/nvram/{index}

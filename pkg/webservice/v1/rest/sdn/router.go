@@ -54,6 +54,7 @@ func (r *SDNRouter) RegisterRoutes(router *mux.Router) {
 	r.registerFlowRoutes(sdnRouter)
 	r.registerPolicyRoutes(sdnRouter)
 	r.registerVLANRoutes(sdnRouter)
+	r.registerZoneRoutes(sdnRouter)
 }
 
 // registerBridgeRoutes registers bridge management endpoints

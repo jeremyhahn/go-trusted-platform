@@ -1,8 +1,18 @@
 # IPAM REST API Reference
 
-IPAM endpoints live under the gateway REST surface
-(`pkg/api/rest/gateway_handlers.go`), served on HTTPS port 8443 with
-mTLS / platform JWT authentication.
+IPAM endpoints are served by two stacks with the same paths and object
+shapes: the webservice (`pkg/webservice/v1/rest/gateway/ipam.go`, always
+mounted when the gateway service exists — this is the surface the WebUI
+uses) and the daemon's standalone REST server
+(`pkg/api/rest/gateway_handlers.go`, only when `EnableREST` is set). The
+webservice wraps each response body shown below in the standard platform
+envelope (`{code, error, success, payload}`); the daemon stack returns it
+bare.
+
+On the webservice the whole surface is admin-gated: pool create, update
+and delete are operator controls over the address plan, so every endpoint
+below requires an authenticated caller holding `admin` and answers 401 or
+403 otherwise.
 
 ## Pool Endpoints
 
@@ -59,9 +69,19 @@ Content-Type: application/json
 
 ## Error Codes
 
-HTTP status codes: 400 (invalid CIDR/parameters), 404 (pool or
-allocation not found), 409 (pool already exists / has allocations),
-503 (gateway service not available).
+HTTP status codes: 400 (invalid CIDR/parameters, **and deleting a pool
+that still has allocations**), 404 (pool or allocation not found), 409
+(pool already exists, pool name taken, CIDR overlaps, IP already
+allocated), 429 (pool exhausted), 503 (gateway service not available).
+
+A pool that still has allocations is reported as **400, not 409**. The
+service returns `ErrPoolHasAllocations` as gRPC `FailedPrecondition`
+(`pkg/api/daemon/gateway_grpc_service.go`), and the shared REST mapping
+groups `FailedPrecondition` with `InvalidArgument` onto 400
+(`pkg/webservice/v1/rest/internal/protorest/protorest.go`). The 409 codes
+above all come from `AlreadyExists`. Changing this to 409 would mean
+changing that shared mapping for every REST surface in the platform, not
+just IPAM — see issue #665.
 
 ## See Also
 

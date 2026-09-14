@@ -63,7 +63,10 @@ export default function SDNPage() {
       const res = await fetch('/api/v1/sdn/zones', { credentials: 'include' });
       if (!res.ok) return;
       const body = await res.json();
-      const names: string[] = (body.zones ?? []).map((z: { name: string }) => z.name);
+      // The webservice wraps payloads in {payload}; the daemon REST
+      // stack returns the body bare — accept both.
+      const zones = body.payload?.zones ?? body.zones ?? [];
+      const names: string[] = zones.map((z: { name: string }) => z.name);
       setAvailableZones(names);
     } catch {
       // Non-fatal — zone dropdown just stays empty

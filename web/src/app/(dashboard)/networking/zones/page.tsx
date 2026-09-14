@@ -207,8 +207,13 @@ export default function ZonesPage() {
         const body = await res.json().catch(() => ({}));
         throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
       }
-      const body = (await res.json()) as { zones?: ZoneResponse[] };
-      setZones(body.zones ?? []);
+      // The webservice wraps payloads in {payload}; the daemon REST
+      // stack returns the body bare — accept both.
+      const body = (await res.json()) as {
+        zones?: ZoneResponse[];
+        payload?: { zones?: ZoneResponse[] };
+      };
+      setZones(body.payload?.zones ?? body.zones ?? []);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : String(err));
     } finally {
