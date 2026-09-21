@@ -1,0 +1,46 @@
+package diskimage
+
+// ErrBuildFailed reports a failed image build.
+type ErrBuildFailed struct {
+	Reason string
+}
+
+func (e ErrBuildFailed) Error() string { return "diskimage build failed: " + e.Reason }
+
+// ErrConfigRequired reports that assemble was given neither configuration.
+type ErrConfigRequired struct{}
+
+func (ErrConfigRequired) Error() string {
+	return "diskimage assemble: exactly one of --config or --platform-config is required"
+}
+
+// ErrConfigLoadFailed reports an unreadable configuration.
+type ErrConfigLoadFailed struct {
+	Path string
+	Err  error
+}
+
+func (e ErrConfigLoadFailed) Error() string {
+	return "diskimage: failed to load " + e.Path + ": " + e.Err.Error()
+}
+
+func (e ErrConfigLoadFailed) Unwrap() error { return e.Err }
+
+// ErrBinariesNotFound reports a missing target-architecture platformd.
+type ErrBinariesNotFound struct {
+	Dir string
+}
+
+func (e ErrBinariesNotFound) Error() string {
+	return "diskimage: no platformd in " + e.Dir + " (build the target binaries with `make rpi-binaries` or pass --binaries-dir)"
+}
+
+// ErrInvalidPortForward reports a --forward value that is not
+// host:guest[/tcp|udp].
+type ErrInvalidPortForward struct {
+	Spec string
+}
+
+func (e ErrInvalidPortForward) Error() string {
+	return "diskimage test: invalid --forward " + e.Spec + " (want host:guest[/tcp|udp])"
+}

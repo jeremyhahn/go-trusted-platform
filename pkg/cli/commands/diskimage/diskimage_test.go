@@ -1,0 +1,307 @@
+package diskimage
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	pkgdiskimage "github.com/jeremyhahn/go-trusted-platform/pkg/diskimage"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
+)
+
+func TestCommandTree(t *testing.T) {
+	cmd := NewCommand(nil)
+	names := map[string]bool{}
+	for _, sub := range cmd.Commands() {
+		names[sub.Name()] = sub.Hidden
+	}
+	if hidden, ok := names["assemble"]; !ok || !hidden {
+		t.Errorf("assemble missing or not hidden: %v", names)
+	}
+	for _, name := range []string{"create", "inspect", "test"} {
+		if hidden, ok := names[name]; !ok || hidden {
+			t.Errorf("%s missing or hidden: %v", name, names)
+		}
+	}
+	boot, _, _ := cmd.Find([]string{"test", "boot"})
+	if boot == nil || boot.Name() != "boot" {
+		t.Fatalf("test boot missing: %v", boot)
+	}
+	for _, flag := range []string{"image", "in-place", "uboot", "work-dir", "memory", "cpus", "serial-log", "console-socket", "expect", "timeout", "forward", "debug"} {
+		if boot.Flags().Lookup(flag) == nil {
+			t.Errorf("test boot lacks --%s", flag)
+		}
+	}
+	if got := boot.Flags().Lookup("uboot").DefValue; !strings.HasSuffix(got, "qemu_arm64/u-boot.bin") {
+		t.Errorf("--uboot default = %s", got)
+	}
+	create, _, _ := cmd.Find([]string{"create"})
+	for _, flag := range []string{"target", "model", "size", "output", "binaries-dir", "uboot-dir", "virt-kernel-dir", "virt-kernel-builder-dir", "virt-kernel-output-dir", "virt-kernel-cache-dir", "platform-config", "overrides", "keys-dir", "pre-fetch", "skip-preflight"} {
+		if create.Flags().Lookup(flag) == nil {
+			t.Errorf("create lacks --%s", flag)
+		}
+	}
+	if !strings.Contains(create.Flags().Lookup("model").Usage, "rpi4") {
+		t.Error("--model usage does not list the models")
+	}
+}
+
+func TestDefaultPlatformConfigPaths(t *testing.T) {
+	got := defaultPlatformConfigPaths("rpi", "")
+	if len(got) != 2 || !strings.HasSuffix(got[0], filepath.Join("raspberrypi", "rpi4", "default.yaml")) || !strings.HasSuffix(got[1], filepath.Join("single-node", "default.yaml")) {
+		t.Errorf("rpi paths = %v", got)
+	}
+	if got := defaultPlatformConfigPaths("rpi", "cm4"); !strings.Contains(got[0], "cm4") {
+		t.Errorf("cm4 path = %v", got)
+	}
+	if got := defaultPlatformConfigPaths("qemu-virt", ""); len(got) != 1 {
+		t.Errorf("qemu paths = %v", got)
+	}
+}
+
+func TestLoadInstallerConfig(t *testing.T) {
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "install.yaml")
+	if err := os.WriteFile(plain, []byte("disk:\n  device: /dev/loop0\nos:\n  architecture: aarch64\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	platform := filepath.Join(dir, "platform.yaml")
+	if err := os.WriteFile(platform, []byte("install-target: image\nboot:\n  firmware: uboot\nos:\n  architecture: aarch64\n  kernel-package: linux-rpi\ndisk:\n  device: /dev/mmcblk0\nseal-pcrs: [0, 4, 7, 9]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadInstallerConfig(&assembleFlags{config: plain})
+	if err != nil || cfg.Disk.Device != "/dev/loop0" || cfg.OS.Architecture != "aarch64" {
+		t.Errorf("plain config = %+v, %v", cfg, err)
+	}
+	cfg, err = loadInstallerConfig(&assembleFlags{platformConfig: platform})
+	if err != nil || cfg.Target != installer.InstallTargetImage || cfg.Boot == nil || cfg.Boot.Firmware != installer.BootFirmwareUBoot || cfg.OS.KernelPackage != "linux-rpi" || len(cfg.PCRs) != 4 {
+		t.Errorf("platform config = %+v, %v", cfg, err)
+	}
+
+	var required ErrConfigRequired
+	if _, err := loadInstallerConfig(&assembleFlags{}); !errors.As(err, &required) {
+		t.Errorf("neither config error = %v", err)
+	}
+	if _, err := loadInstallerConfig(&assembleFlags{config: plain, platformConfig: platform}); !errors.As(err, &required) {
+		t.Errorf("both configs error = %v", err)
+	}
+	var loadErr ErrConfigLoadFailed
+	if _, err := loadInstallerConfig(&assembleFlags{config: filepath.Join(dir, "missing.yaml")}); !errors.As(err, &loadErr) {
+		t.Errorf("missing plain config error = %v", err)
+	}
+	if _, err := loadInstallerConfig(&assembleFlags{platformConfig: filepath.Join(dir, "missing.yaml")}); !errors.As(err, &loadErr) {
+		t.Errorf("missing platform config error = %v", err)
+	}
+	bad := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(bad, []byte("[not yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadInstallerConfig(&assembleFlags{platformConfig: bad}); !errors.As(err, &loadErr) {
+		t.Errorf("malformed platform config error = %v", err)
+	}
+}
+
+func TestBuildConfigResolvesBinariesAndOverrides(t *testing.T) {
+	dir := t.TempDir()
+	bins := filepath.Join(dir, "aarch64")
+	if err := os.MkdirAll(bins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bins, "platformd"), []byte("elf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	template := filepath.Join(dir, "template.yaml")
+	if err := os.WriteFile(template, []byte("os:\n  hostname: base\nseal-pcrs: [0, 7, 9]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overrides := filepath.Join(dir, "overrides.yaml")
+	if err := os.WriteFile(overrides, []byte("os:\n  hostname: pi-01\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	flags := &createFlags{target: "rpi", binariesDir: bins, platformConfig: template, overrides: overrides, alpineVersion: "3.22.2", mirror: "http://m", platformType: "server", workDir: dir, keyBackend: "file", preFetch: true}
+	cfg, err := buildConfig(flags)
+	if err != nil {
+		t.Fatalf("buildConfig: %v", err)
+	}
+	if cfg.PlatformdBinary != filepath.Join(bins, "platformd") || !cfg.PreFetch || cfg.WorkDir != dir {
+		t.Errorf("config = %+v", cfg)
+	}
+	merged, err := os.ReadFile(cfg.PlatformConfigFile)
+	if err != nil || !strings.Contains(string(merged), "hostname: pi-01") || !strings.Contains(string(merged), "seal-pcrs") {
+		t.Errorf("merged platform config = %q, %v", merged, err)
+	}
+	os.Remove(cfg.PlatformConfigFile)
+
+	var notFound ErrBinariesNotFound
+	if _, err := buildConfig(&createFlags{target: "rpi", binariesDir: filepath.Join(dir, "empty")}); !errors.As(err, &notFound) {
+		t.Errorf("missing binaries error = %v", err)
+	}
+	if _, err := mergeOverrides("", overrides); err == nil {
+		t.Error("overrides without a template accepted")
+	}
+	if _, err := mergeOverrides(template, filepath.Join(dir, "missing.yaml")); err == nil {
+		t.Error("missing overrides file accepted")
+	}
+}
+
+func TestErrorStrings(t *testing.T) {
+	inner := errors.New("inner")
+	if got := (ErrConfigLoadFailed{Path: "/p", Err: inner}).Error(); got != "diskimage: failed to load /p: inner" {
+		t.Errorf("ErrConfigLoadFailed = %q", got)
+	}
+	if !errors.Is(ErrConfigLoadFailed{Path: "/p", Err: inner}, inner) {
+		t.Error("ErrConfigLoadFailed does not unwrap")
+	}
+	if got := (ErrBinariesNotFound{Dir: "/b"}).Error(); !strings.Contains(got, "/b") || !strings.Contains(got, "rpi-binaries") {
+		t.Errorf("ErrBinariesNotFound = %q", got)
+	}
+	if got := (ErrBuildFailed{Reason: "r"}).Error(); got != "diskimage build failed: r" {
+		t.Errorf("ErrBuildFailed = %q", got)
+	}
+	if got := (ErrConfigRequired{}).Error(); !strings.Contains(got, "--config") || !strings.Contains(got, "--platform-config") {
+		t.Errorf("ErrConfigRequired = %q", got)
+	}
+}
+
+// TestMergeOverrides deep-merges an overrides file onto the template into a
+// temporary file, and rejects a missing template or an unreadable overrides
+// file with ErrBuildFailed.
+func TestMergeOverrides(t *testing.T) {
+	dir := t.TempDir()
+	template := filepath.Join(dir, "template.yaml")
+	overrides := filepath.Join(dir, "overrides.yaml")
+	if err := os.WriteFile(template, []byte("tpm:\n  seal-pcrs: [0, 4, 7]\ndebug: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overrides, []byte("tpm:\n  seal-pcrs: [0, 4, 7, 9]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := mergeOverrides(template, overrides)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(merged)
+	data, err := os.ReadFile(merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "- 9") || !strings.Contains(string(data), "debug: false") {
+		t.Errorf("merged config = %q", data)
+	}
+
+	var build ErrBuildFailed
+	if _, err := mergeOverrides("", overrides); !errors.As(err, &build) {
+		t.Errorf("empty template error = %v", err)
+	}
+	if _, err := mergeOverrides(template, filepath.Join(dir, "missing.yaml")); !errors.As(err, &build) {
+		t.Errorf("missing overrides error = %v", err)
+	}
+}
+
+func TestCommandErrorPaths(t *testing.T) {
+	run := func(args ...string) error {
+		cmd := NewCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
+		cmd.SetArgs(args)
+		cmd.SilenceUsage, cmd.SilenceErrors = true, true
+		return cmd.Execute()
+	}
+	var required ErrConfigRequired
+	if err := run("assemble", "--output", filepath.Join(t.TempDir(), "x.img")); !errors.As(err, &required) {
+		t.Errorf("assemble without config error = %v", err)
+	}
+	var notFound ErrBinariesNotFound
+	if err := run("create", "--binaries-dir", filepath.Join(t.TempDir(), "none"), "--skip-preflight"); !errors.As(err, &notFound) {
+		t.Errorf("create without binaries error = %v", err)
+	}
+	var inspectErr *pkgdiskimage.InspectError
+	if err := run("inspect", filepath.Join(t.TempDir(), "missing.img")); !errors.As(err, &inspectErr) {
+		t.Errorf("inspect of a missing image error = %v", err)
+	}
+	if err := run("inspect"); err == nil {
+		t.Error("inspect without an argument accepted")
+	}
+
+	// A plain installer config that cannot be assembled (no losetup here,
+	// unwritable output) still exercises the assemble path to its error.
+	plain := filepath.Join(t.TempDir(), "install.yaml")
+	if err := os.WriteFile(plain, []byte("disk:\n  device: /dev/loop0\nos:\n  architecture: aarch64\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var aerr *pkgdiskimage.AssembleError
+	if err := run("assemble", "--config", plain, "--output", filepath.Join(blocker, "x.img"), "--size", "2048"); !errors.As(err, &aerr) {
+		t.Errorf("assemble into an unwritable path error = %v", err)
+	}
+
+	// create with binaries present but an unusable target fails in the builder.
+	bins := filepath.Join(t.TempDir(), "aarch64")
+	if err := os.MkdirAll(bins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bins, "platformd"), []byte("elf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var build ErrBuildFailed
+	if err := run("create", "--binaries-dir", bins, "--target", "nope", "--skip-preflight", "--work-dir", t.TempDir()); !errors.As(err, &build) || !strings.Contains(err.Error(), "unknown target") {
+		t.Errorf("create with an unknown target error = %v", err)
+	}
+	if err := run("create", "--binaries-dir", bins, "--overrides", filepath.Join(t.TempDir(), "o.yaml"), "--skip-preflight"); !errors.As(err, &build) {
+		t.Errorf("create with overrides but no template error = %v", err)
+	}
+}
+
+func TestParsePortForwards(t *testing.T) {
+	got, err := parsePortForwards([]string{"18443:8443", "5353:53/udp", "2222:22/tcp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []qemu.PortForward{
+		{HostPort: 18443, GuestPort: 8443, Protocol: "tcp"},
+		{HostPort: 5353, GuestPort: 53, Protocol: "udp"},
+		{HostPort: 2222, GuestPort: 22, Protocol: "tcp"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("forward %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if got, err := parsePortForwards(nil); err != nil || len(got) != 0 {
+		t.Errorf("nil specs = %v, %v", got, err)
+	}
+	for _, bad := range []string{"8443", "a:8443", "8443:b", "8443:22/sctp", ""} {
+		_, err := parsePortForwards([]string{bad})
+		var invalid ErrInvalidPortForward
+		if !errors.As(err, &invalid) || invalid.Spec != bad {
+			t.Errorf("%q: err = %v", bad, err)
+		}
+	}
+}
+
+func TestRunTestBoot_RejectsABadForwardBeforeBooting(t *testing.T) {
+	err := runTestBoot(nil, &testFlags{image: "nope.img", firmware: "nope.bin", forwards: []string{"bad"}})
+	var invalid ErrInvalidPortForward
+	if !errors.As(err, &invalid) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestRunTestBoot_ReportsAMissingImage(t *testing.T) {
+	dir := t.TempDir()
+	err := runTestBoot(nil, &testFlags{image: filepath.Join(dir, "missing.img"), firmware: filepath.Join(dir, "missing.bin"), workDir: dir, timeout: time.Second})
+	var bootErr *pkgdiskimage.BootError
+	if !errors.As(err, &bootErr) || bootErr.Step != "opening the image" {
+		t.Errorf("err = %v", err)
+	}
+}

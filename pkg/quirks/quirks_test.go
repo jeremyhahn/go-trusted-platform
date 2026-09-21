@@ -820,3 +820,19 @@ func TestMoreSpecificDelegatesToTheLiveRegistry(t *testing.T) {
 	assert.False(t, moreSpecificIn(syntheticTable, miniFleetIdentity, Identity{Manufacturer: "Supermicro"}),
 		"the synthetic table knows no Supermicro entry, so neither identity matches")
 }
+
+// TestResolveRaspberryPiQEMUVirtStandIn pins the opposite order for the
+// emulated boot: the stand-in has no display, so ttyAMA0 must be
+// /dev/console or the serial transcript the integration suite reads ends
+// at switch_root.
+func TestResolveRaspberryPiQEMUVirtStandIn(t *testing.T) {
+	q := Resolve("Raspberry Pi", "QEMU virt stand-in")
+
+	assert.Equal(t, "QEMU virt stand-in", q.Model)
+	assert.Equal(t, "ttyAMA0", q.SOLPort)
+	assert.Contains(t, q.KernelCmdline, "console=tty1")
+	assertLastConsoleParam(t, q.KernelCmdline, "console=ttyAMA0,115200")
+
+	// A real Pi model must not pick up the stand-in's order.
+	assertLastConsoleParam(t, Resolve("Raspberry Pi", "Raspberry Pi 5").KernelCmdline, "console=tty1")
+}

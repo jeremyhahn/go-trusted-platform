@@ -21,57 +21,33 @@ import (
 // applyTPMIdentityCNs settles the common names the TPM identity keys are
 // stored under, before the TPM module is constructed from this config.
 //
-// IDevID derives its CN from the hostname when the operator did not set one,
-// which is what makes certificates and attestation directories
-// self-describing on a fleet.
+// Both identities derive their CN from the hostname when the operator did
+// not set one (`<hostname>-iak`, `<hostname>-idevid`), which is what makes
+// certificates and attestation directories self-describing on a fleet. An
+// operator-configured CN is preserved.
 //
-// # The IAK is deliberately left alone — this is an interim, see #74
+// The IAK derivation is the contract #78 restored. go-xkms#137 (adopted
+// with go-xkms v0.9.4-alpha) made `IAKAttributes()` honour a configured CN;
+// before it, the platform left the IAK CN empty so upstream's
+// `default-device-id` fallback applied (#74). That interim is now itself
+// the fatal it once avoided: on a fresh provision `CreateIAK` caches
+// attributes built straight from the config, and an empty CN reaches the
+// certificate store, which rejects it. Nodes provisioned under the interim
+// are carried over by migrateInterimIAKCertificate.
 //
-// go-xkms `IAKAttributes()` assigns `KeyAttributes.CN` ONLY inside its
-// empty-CN fallback (`"default-device-id"`); a configured CN is never
-// assigned, so the attributes reach the certificate store with an empty CN
-// and the store rejects them. That is fatal on every boot, before the daemon
-// can serve, and it is not recoverable at this layer: on the
-// certificate-store path — `IAK.CertHandle == 0`, which is what every shipped
-// config uses, since none sets an `iak.cert-handle` — the write
-// (`ProvisionIAKCert`) and the read (`IAKCertificate`) derive the storage key
-// from those same attributes, so a CN that cannot be written also cannot be
-// read back. `IDevIDAttributes()` assigns unconditionally, so IDevID never
-// had this problem — it has its own, unrelated one (#80: the NV index is
-// defined as a counter, so its cert-handle is cleared and it uses the
-// certificate store too).
-//
-// Until go-xkms#137 lands, the IAK certificate is therefore stored under the
-// upstream default. An explicitly configured IAK CN is CLEARED rather than
-// passed through, because passing it through is precisely the fatal — there
-// is no value this layer can supply that upstream will honour. The warning
-// makes the override visible rather than silent.
-//
-// When the upstream fix is adopted, delete the IAK branch below and restore
-// the hostname derivation. Tracked as #78, which also covers migrating
-// nodes already provisioned under the interim.
+// A bare "-iak" / "-idevid" would be a meaningless name shared by every
+// affected node, so an unknown hostname leaves the CN empty and fails
+// loudly at the point of use rather than provisioning a stub identity. In
+// practice this is unreachable: App.Hostname is filled from os.Hostname()
+// during bring-up.
 func applyTPMIdentityCNs(cfg *xkmssdk.TPMConfig, hostname string, logger *logging.Logger) {
 	if cfg == nil {
 		return
 	}
-
-	if cfg.IAK != nil && cfg.IAK.CN != "" {
-		logger.Warn(
-			"ignoring the configured IAK common name: go-xkms discards it and the "+
-				"certificate store then rejects the empty result, which is fatal at "+
-				"startup (go-xkms#137). The IAK certificate is stored under the "+
-				"upstream default until that fix is adopted.",
-			"ignored_cn", cfg.IAK.CN)
-		cfg.IAK.CN = ""
+	if cfg.IAK != nil && cfg.IAK.CN == "" && hostname != "" {
+		cfg.IAK.CN = hostname + "-iak"
+		logger.Info("Set IAK CN from hostname", "cn", cfg.IAK.CN)
 	}
-
-	// Unlike the IAK, IDevID has no upstream default: `IDevIDAttributes()`
-	// assigns `config.IDevID.CN` unconditionally, so whatever is left here
-	// is what the identity is stored under. A bare "-idevid" would be a
-	// meaningless name shared by every affected node, so an unknown
-	// hostname leaves the CN empty and fails loudly at the point of use
-	// rather than provisioning a stub identity. In practice this is
-	// unreachable: App.Hostname is filled from os.Hostname() during bring-up.
 	if cfg.IDevID != nil && cfg.IDevID.CN == "" && hostname != "" {
 		cfg.IDevID.CN = hostname + "-idevid"
 		logger.Info("Set IDevID CN from hostname", "cn", cfg.IDevID.CN)

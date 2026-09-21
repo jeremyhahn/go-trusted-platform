@@ -34,6 +34,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
 	storageluks "github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 )
 
 // Customizer handles ISO customization operations
@@ -91,6 +92,21 @@ func (c *Customizer) CustomizeAll(ctx context.Context) error {
 		return &WrappedError{Msg: "prerequisites check failed", Err: err}
 	}
 
+	if err := c.StageMedia(ctx); err != nil {
+		return err
+	}
+
+	return c.customizeLiveISO(ctx)
+}
+
+// StageMedia lays down everything the installer reads from the install
+// media root (/media/cdrom on the live system): the generated installer and
+// initrd configuration, the pre-fetched apk repository, the platform
+// binaries, the platform configuration and CA bundle, the dracut module,
+// the Secure Boot keys, the FIPS artifacts and the web UI. It is the half
+// of CustomizeAll that does not depend on the Alpine live ISO, so a disk
+// image builder can call it directly and supply its own boot chain.
+func (c *Customizer) StageMedia(ctx context.Context) error {
 	// Generate configuration files
 	c.logger.Info("Generating installation configuration")
 	if err := c.GenerateInstallConfig(); err != nil {
@@ -219,6 +235,14 @@ func (c *Customizer) CustomizeAll(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+// customizeLiveISO is the Alpine-live-ISO-specific half of CustomizeAll:
+// the network setup service, the initramfs surgery that boots straight into
+// the autoinstaller, the standalone autoinstall script and the GRUB/EFI
+// bootloader rewrite.
+func (c *Customizer) customizeLiveISO(ctx context.Context) error {
 	// Copy network setup script and service file to overlay
 	c.logger.Info("Copying network setup script to overlay")
 	if err := c.CopyNetworkSetupFiles(ctx); err != nil {
@@ -373,7 +397,7 @@ func (c *Customizer) CopyPlatformBinary(ctx context.Context, binaryPath string) 
 	c.logger.Info("Copying platformd binary", "source", binaryPath)
 
 	// Validate binary
-	if err := validateBinary(binaryPath); err != nil {
+	if err := c.validateTargetBinary(binaryPath); err != nil {
 		return &WrappedError{Msg: "binary validation failed", Err: err}
 	}
 
@@ -428,7 +452,7 @@ func (c *Customizer) CopyPlatformdBinary(ctx context.Context, binaryPath string)
 	c.logger.Info("Copying platformd binary", "source", binaryPath)
 
 	// Validate binary
-	if err := validateBinary(binaryPath); err != nil {
+	if err := c.validateTargetBinary(binaryPath); err != nil {
 		return &WrappedError{Msg: "binary validation failed", Err: err}
 	}
 
@@ -479,7 +503,7 @@ func (c *Customizer) CopyPlatformctlBinary(ctx context.Context, binaryPath strin
 	}
 
 	// Validate binary
-	if err := validateBinary(binaryPath); err != nil {
+	if err := c.validateTargetBinary(binaryPath); err != nil {
 		return &WrappedError{Msg: "platformctl binary validation failed", Err: err}
 	}
 
@@ -530,7 +554,7 @@ func (c *Customizer) CopyPlatformctlStaticBinary(ctx context.Context, binaryPath
 	}
 
 	// Validate binary
-	if err := validateBinary(binaryPath); err != nil {
+	if err := c.validateTargetBinary(binaryPath); err != nil {
 		return &WrappedError{Msg: "platformctl-static binary validation failed", Err: err}
 	}
 
@@ -592,7 +616,7 @@ func (c *Customizer) CopyPlatformInitrdBinary(ctx context.Context, binaryPath st
 	}
 
 	// Validate binary
-	if err := validateBinary(binaryPath); err != nil {
+	if err := c.validateTargetBinary(binaryPath); err != nil {
 		return &WrappedError{Msg: "platform-initrd binary validation failed", Err: err}
 	}
 
@@ -695,6 +719,10 @@ func (c *Customizer) CopyPlatformConfig(ctx context.Context, configPath string) 
 	modifiedData, err := c.applySecurityOverrides(srcData)
 	if err != nil {
 		return &WrappedError{Msg: "failed to apply security overrides to platform config", Err: err}
+	}
+	modifiedData, err = c.applyInstallerOverrides(modifiedData)
+	if err != nil {
+		return &WrappedError{Msg: "failed to apply installer overrides to platform config", Err: err}
 	}
 
 	// Use installer.yaml as the single source of truth for autoinstall.sh
@@ -1082,23 +1110,21 @@ func (c *Customizer) BuildPreFetchRepository(ctx context.Context) error {
 		majorMinor = fmt.Sprintf("%s.%s", versionParts[0], versionParts[1])
 	}
 
-	// Determine architecture - default to x86_64
-	arch := "x86_64"
-	// Try to detect from Alpine config or use default
-
 	// Create PreFetchConfig from our PlatformISOConfig
 	prefetchConfig := &PreFetchConfig{
 		Mirror:        c.config.Alpine.Mirror,
 		Version:       majorMinor, // Use major.minor for APK repos
 		FullVersion:   version,    // Full version (e.g., 3.22.2) for release tarballs
-		Architecture:  arch,
+		Architecture:  string(c.config.architecture()),
+		KernelPackage: c.config.Installer.KernelPackage,
+		SkipKernel:    c.config.Installer.KernelArtifactsDir != "",
 		WorkDir:       c.config.Directories.Work,
 		ISODir:        c.config.Directories.ISO,
 		FIPS:          c.config.Security.FIPS,
 		EnableFIDO2:   c.config.Security.EnableFIDO2,
 		FilesystemLVM: c.config.RootFS.Type == "lvm",
 		IMAEnabled:    false,
-		ExtraPackages: []string{},
+		ExtraPackages: append([]string(nil), c.config.Installer.ExtraPackages...),
 	}
 
 	// Check if mirror is empty and set default
@@ -4603,7 +4629,7 @@ install() {
 
 installkernel() {
     # Install TPM kernel modules
-    instmods tpm tpm_tis tpm_crb tpm_vtpm_proxy 2>/dev/null || true
+    instmods tpm tpm_tis tpm_crb tpm_tis_spi spi-gpio spi-bitbang spi-bcm2835 tpm_vtpm_proxy 2>/dev/null || true
 
     # Install device mapper module
     instmods dm_mod dm_crypt 2>/dev/null || true
@@ -5380,7 +5406,27 @@ func repackInitramfs(initramfsDir, outputPath string) error {
 }
 
 // validateBinary validates that the file is a valid ELF 64-bit binary
-func validateBinary(path string) error {
+// elfMachineForArch maps a target architecture to the ELF machine every
+// bundled binary must have been compiled for.
+var elfMachineForArch = map[uki.Architecture]elf.Machine{
+	uki.ArchX86_64:  elf.EM_X86_64,
+	uki.ArchAArch64: elf.EM_AARCH64,
+	uki.ArchRISCV64: elf.EM_RISCV,
+}
+
+// validateTargetBinary checks that a binary is a 64-bit ELF compiled for
+// the architecture the media targets.
+func (c *Customizer) validateTargetBinary(path string) error {
+	want, ok := elfMachineForArch[c.config.architecture()]
+	if !ok {
+		return &UnsupportedArchitectureError{Arch: string(c.config.architecture())}
+	}
+	return validateBinary(path, want)
+}
+
+// validateBinary checks that path is a regular 64-bit ELF file compiled for
+// the want machine.
+func validateBinary(path string, want elf.Machine) error {
 	// Check file exists
 	info, err := os.Stat(path)
 	if err != nil {
@@ -5411,8 +5457,8 @@ func validateBinary(path string) error {
 	}
 
 	// Check architecture
-	if elfFile.Machine != elf.EM_X86_64 {
-		return &MessageError{Msg: fmt.Sprintf("binary is not x86_64 (machine type: %v)", elfFile.Machine)}
+	if elfFile.Machine != want {
+		return &BinaryArchMismatchError{Path: path, Want: want, Got: elfFile.Machine}
 	}
 
 	return nil
@@ -5477,6 +5523,18 @@ func (c *Customizer) buildInstallerConfig() (*installer.Config, error) {
 		PartitionTable:   installer.PartitionTableGPT,
 		EFIPartitionSize: 538, // Standard EFI partition size
 	}
+	if c.config.Installer.Device != "" {
+		config.Disk.Device = c.config.Installer.Device
+	}
+	if c.config.Installer.PartitionTable != "" {
+		config.Disk.PartitionTable = installer.PartitionTable(c.config.Installer.PartitionTable)
+	}
+	config.HardwareManufacturer = c.config.Installer.HardwareManufacturer
+	config.HardwareModel = c.config.Installer.HardwareModel
+	config.Target = installer.InstallTarget(c.config.Installer.Target)
+	if c.config.Installer.BootFirmware != "" {
+		config.Boot = &installer.BootConfig{Firmware: installer.BootFirmwareType(c.config.Installer.BootFirmware)}
+	}
 
 	// Set root filesystem type
 	switch c.config.RootFS.Type {
@@ -5530,7 +5588,9 @@ func (c *Customizer) buildInstallerConfig() (*installer.Config, error) {
 	config.OS = &installer.OSConfig{
 		OS:                 installer.OSAlpine,
 		Version:            c.config.Alpine.Version,
-		Architecture:       "x86_64",
+		Architecture:       string(c.config.architecture()),
+		KernelPackage:      c.config.Installer.KernelPackage,
+		Packages:           append([]string(nil), c.config.Installer.ExtraPackages...),
 		Hostname:           hostname,
 		Mirror:             c.config.Alpine.Mirror,
 		FilesystemType:     config.Disk.RootFilesystem,
@@ -5663,7 +5723,7 @@ func (c *Customizer) buildKernelCmdline() string {
 	// default quirk.  The installed system resolves vendor-specific params
 	// at install time via pkg/quirks.Resolve using Redfish hardware identifiers.
 	parts = append(parts, "rootfstype=ext4", "ro")
-	parts = append(parts, quirks.Default().KernelCmdline...)
+	parts = append(parts, c.targetQuirk().KernelCmdline...)
 
 	// Security parameters
 	if c.config.Security.Lockdown {
@@ -5679,6 +5739,76 @@ func (c *Customizer) buildKernelCmdline() string {
 	}
 
 	return strings.Join(parts, " ")
+}
+
+// applyInstallerOverrides writes the media target's installer settings into
+// the baked platform config, the file the live installer and the installed
+// node's uki-rebuild both convert into an installer.Config
+// (app.App.GetInstallerConfig). The architecture is always written, because
+// the media decides it; every other key is written only when the
+// corresponding InstallerOverrides field is set, so an x86_64 ISO built
+// without overrides bakes its template unchanged.
+func (c *Customizer) applyInstallerOverrides(data []byte) ([]byte, error) {
+	var config map[string]interface{}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, &WrappedError{Msg: "failed to parse platform config YAML", Err: err}
+	}
+	section := func(name string) map[interface{}]interface{} {
+		if existing, ok := config[name].(map[interface{}]interface{}); ok {
+			return existing
+		}
+		created := map[interface{}]interface{}{}
+		config[name] = created
+		return created
+	}
+
+	osSection := section("os")
+	osSection["architecture"] = string(c.config.architecture())
+	ov := c.config.Installer
+	if ov.KernelPackage != "" {
+		osSection["kernel-package"] = ov.KernelPackage
+	}
+	if ov.KernelArtifactsDir != "" {
+		osSection["kernel-artifacts-dir"] = ov.KernelArtifactsDir
+	}
+	if ov.Device != "" || ov.PartitionTable != "" {
+		disk := section("disk")
+		if ov.Device != "" {
+			disk["device"] = ov.Device
+		}
+		if ov.PartitionTable != "" {
+			disk["partition-table"] = ov.PartitionTable
+		}
+	}
+	if ov.HardwareManufacturer != "" {
+		config["hardware-manufacturer"] = ov.HardwareManufacturer
+	}
+	if ov.HardwareModel != "" {
+		config["hardware-model"] = ov.HardwareModel
+	}
+	if ov.Target != "" {
+		config["install-target"] = ov.Target
+	}
+	if ov.BootFirmware != "" {
+		section("boot")["firmware"] = ov.BootFirmware
+	}
+
+	modified, err := yaml.Marshal(config)
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to marshal modified config", Err: err}
+	}
+	return modified, nil
+}
+
+// targetQuirk resolves the hardware quirk whose kernel command line the
+// media's target needs: the entry for the configured manufacturer/model,
+// or the generic cross-vendor default when none is configured. The
+// installed system re-resolves at install time from Redfish identifiers.
+func (c *Customizer) targetQuirk() quirks.Quirk {
+	if c.config.Installer.HardwareManufacturer == "" && c.config.Installer.HardwareModel == "" {
+		return quirks.Default()
+	}
+	return quirks.Resolve(c.config.Installer.HardwareManufacturer, c.config.Installer.HardwareModel)
 }
 
 // writeInstallerConfig writes installer configuration to YAML file

@@ -30,7 +30,6 @@ import (
 const (
 	espMountPoint = "/mnt/boot/efi"
 	espBootDir    = "EFI/BOOT"
-	espUKIName    = "BOOTX64.EFI"
 )
 
 // syncUKIOnESP makes the unified kernel image durable on the EFI partition and
@@ -54,7 +53,7 @@ func (i *installer) syncUKIOnESP() error {
 // reported success for, so there is no later opportunity to notice it.
 func (i *installer) syncUKIOnESPAt(espRoot string) error {
 	bootDir := filepath.Join(espRoot, espBootDir)
-	ukiPath := filepath.Join(bootDir, espUKIName)
+	ukiPath := filepath.Join(bootDir, i.ukiFileName())
 
 	f, err := os.Open(ukiPath)
 	if err != nil {

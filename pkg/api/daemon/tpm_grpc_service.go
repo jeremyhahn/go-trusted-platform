@@ -700,7 +700,11 @@ func (s *TPMGRPCService) Seal(
 	// (or simply hand the SealedData identifier — keyed by CN — to
 	// the unseal call).
 	payload := encodeSealedData(sealed)
+	// Status is what the SDK's SealResponse carries and what
+	// `platformctl tpm seal` judges the call by: a response without one
+	// reads as "unknown error" after a seal that succeeded.
 	return &platformv1.SealResponse{
+		Status:     &platformv1.Status{Success: true, Message: "sealed " + sealed.KeyID},
 		SealedData: payload,
 	}, nil
 }

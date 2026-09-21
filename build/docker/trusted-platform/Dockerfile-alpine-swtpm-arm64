@@ -1,0 +1,27 @@
+# arm64 Alpine + swtpm for the factory-image userspace suite
+# (make integration-test-diskimage-userspace).
+#
+# The aarch64 platformd, platformctl and the compiled test binary are
+# bind-mounted from bin/aarch64 at run time, so this image carries only what
+# the platform needs at run time on the Raspberry Pi (the same musl userland
+# the SD-card image installs) plus the software TPM the suite talks to. It
+# is built with --platform linux/arm64 under the host's binfmt handler.
+#
+# No entrypoint: the Makefile target starts swtpm with `docker exec --user
+# tss` (swtpm's own privilege drop misbehaves under qemu-user emulation) and
+# then runs the suite as root in the same container.
+FROM alpine:3.22
+
+RUN apk add --no-cache \
+        bash \
+        ca-certificates \
+        cryptsetup \
+        dosfstools \
+        lvm2 \
+        swtpm \
+        tpm2-tools \
+        util-linux
+
+RUN mkdir -p /trusted-platform/volume/swtpm
+
+WORKDIR /trusted-platform

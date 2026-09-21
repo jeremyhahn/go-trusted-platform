@@ -194,6 +194,94 @@ jobs:
       - name: Unit tests (FIPS mode)
         run: make test WITH_FIPS=1
 
+  # rpi-image — the Raspberry Pi factory image (docs/factory-image/). It is
+  # nightly because it needs what a push job cannot afford: binfmt for the
+  # arm64 assemble and U-Boot containers, a privileged container for the
+  # loop device and device-mapper, and an aarch64 guest under TCG emulation
+  # for the boot test. Three stages, cheapest first, each a real artifact:
+  #   1. `make virt-kernel-build` the stand-in's kernel (cached by the
+  #                               inputs' digests, so usually seconds)
+  #   2. `make image-rpi-qemu`    the emulated stand-in image, then the
+  #      + `make image-rpi`       SD-card image (layout checked by the suite).
+  #                               `platformctl diskimage create` generates the
+  #                               Secure Boot key set on a fresh runner and
+  #                               builds U-Boot for it (rpi_arm64 and
+  #                               qemu_arm64, cached like the kernel); the
+  #                               standalone `make uboot-build` needs the keys
+  #                               to exist already, so it is not run here.
+  #   3. `make integration-test-diskimage-userspace`
+  #                               the aarch64 platformd on musl against a
+  #                               swtpm in an arm64 container (minutes)
+  # The full emulated first boot through firstboot sealing and platformd
+  # (`make integration-test-diskimage`) is workflow_dispatch only until the
+  # runner's TCG timing is measured: on the development host it is 30-60
+  # minutes, and a job that times out reports nothing.
+  rpi-image:
+    name: Raspberry Pi image
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # binfmt for the arm64 containers, registered with the F flag so a
+      # chroot inside the assemble container can exec (the same registration
+      # docs/factory-image/user.md asks for on a build host).
+      - name: Register binfmt handlers
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/arm64
+
+      - name: Load kernel modules the assemble container relies on
+        run: sudo modprobe loop dm_crypt
+
+      # The userspace suite's software TPM runs on the runner, natively:
+      # swtpm cannot create its sockets inside a qemu-user emulated container.
+      - name: Install swtpm for the userspace suite
+        run: sudo apt-get update && sudo apt-get install -y swtpm
+
+      # Alpine's aarch64 kernels have no memory-mapped TIS TPM driver, so the
+      # QEMU stand-in boots a platform-built kernel; cached by its inputs'
+      # digests like U-Boot, a cold build is a 20-40 minute cross-compile.
+      - name: Build the virt kernel
+        run: make virt-kernel-build
+
+      - name: Build the QEMU virt image
+        run: make image-rpi-qemu
+
+      - name: Build the Raspberry Pi image
+        run: make image-rpi
+
+      - name: Inspect the images
+        run: |
+          bin/platformctl diskimage inspect bin/trusted-platform-qemu-virt.img
+          bin/platformctl diskimage inspect bin/trusted-platform-rpi.img
+
+      - name: aarch64 userspace suite (platformd + swtpm in an arm64 container)
+        run: make integration-test-diskimage-userspace
+
+      - name: Emulated first boot (manual)
+        if: github.event_name == 'workflow_dispatch'
+        run: make integration-test-diskimage
+
+      - name: Keep the images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpi-images
+          retention-days: 7
+          path: |
+            bin/trusted-platform-rpi.img
+            build/docker/uboot-builder/output/manifest.json
+            build/docker/uboot-builder/output/*/u-boot.config
+            build/docker/uboot-builder/output/*/SHA256SUMS
+            build/docker/virt-kernel-builder/output/manifest.json
+            build/docker/virt-kernel-builder/output/*/config-*
+            build/docker/virt-kernel-builder/output/*/SHA256SUMS
+
   # A `schedule` run publishes no commit status of its own, so before this job
   # a red nightly turned nothing red anywhere and nobody found out. This puts
   # the result on the commit that produced it.
@@ -288,7 +376,7 @@ jobs:
 
   publish-status:
     name: Publish nightly status
-    needs: [fips, trivy]
+    needs: [fips, trivy, rpi-image]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -309,6 +397,7 @@ jobs:
           CI_TOKEN: ${{ github.token }}
           STATE: ${{ needs.fips.result == 'success' && 'success' || 'failure' }}
           TRIVY_STATE: ${{ needs.trivy.result == 'success' && 'success' || 'failure' }}
+          RPI_STATE: ${{ needs.rpi-image.result == 'success' && 'success' || 'failure' }}
         run: |
           set -uo pipefail
           target="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
@@ -339,5 +428,11 @@ jobs:
           # — the whole point of #187 — would be invisible inside it.
           echo "trivy=${{ needs.trivy.result }} state=${TRIVY_STATE}"
           publish "${TRIVY_STATE}" "Nightly / Trivy" "CVEs published since the last push (not a merge gate)" || rc=1
+
+          # Its own context for the same reason: the image build, the U-Boot
+          # build and the arm64 userspace suite are one signal that must stay
+          # readable beside the two above.
+          echo "rpi-image=${{ needs.rpi-image.result }} state=${RPI_STATE}"
+          publish "${RPI_STATE}" "Nightly / Raspberry Pi image" "factory image build, U-Boot and the aarch64 userspace suite (not a merge gate)" || rc=1
 
           exit "$rc"

@@ -30,7 +30,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
 )
 
 // createFlags holds flags for the create command
@@ -262,26 +261,27 @@ func runCreate(commonFlags *cli.CommonFlags, flags *createFlags) error {
 	// config decides: a remote/KMS db signing reference must never run
 	// local key generation — its contract is that no local private
 	// signing key is needed, or produced (round-16 review).
-	generateKeys, err := shouldGenerateSecureBootKeys(buildConfig)
+	decision, err := pkgiso.EnsureSecureBootKeys(ctx, logger, buildConfig)
 	if err != nil {
-		return ErrBuildFailed{Reason: fmt.Sprintf("failed to classify Secure Boot signing mode: %v", err)}
+		return ErrBuildFailed{Reason: fmt.Sprintf("failed to generate Secure Boot keys: %v", err)}
 	}
-	if generateKeys {
+	switch decision {
+	case pkgiso.SecureBootKeysGenerated:
 		printHeader("Step 3/5: Generating Secure Boot Keys")
-		if err := generateSecureBootKeys(ctx, logger, buildConfig); err != nil {
-			return ErrBuildFailed{Reason: fmt.Sprintf("failed to generate Secure Boot keys: %v", err)}
-		}
-		printSuccess("Secure Boot keys ready")
-	} else {
+		printInfo(fmt.Sprintf("Generated Secure Boot keys in: %s (backend: %s)", buildConfig.KeysDir, buildConfig.KeyBackend))
+		printSuccess("Secure Boot keys generated")
+	case pkgiso.SecureBootKeysExisting:
 		printHeader("Step 3/5: Secure Boot Keys")
-		switch {
-		case buildConfig.SecureBoot && buildConfig.GenerateKeys:
-			printInfo("Remote/KMS signing configured - skipping local key generation")
-		case buildConfig.SecureBoot:
-			printInfo("Using existing Secure Boot keys")
-		default:
-			printInfo("Secure Boot disabled - skipping key generation")
-		}
+		printInfo(fmt.Sprintf("Secure Boot keys already exist - skipping generation (backend: %s)", buildConfig.KeyBackend))
+	case pkgiso.SecureBootKeysRemote:
+		printHeader("Step 3/5: Secure Boot Keys")
+		printInfo("Remote/KMS signing configured - skipping local key generation")
+	case pkgiso.SecureBootKeysNotRequested:
+		printHeader("Step 3/5: Secure Boot Keys")
+		printInfo("Using existing Secure Boot keys")
+	default:
+		printHeader("Step 3/5: Secure Boot Keys")
+		printInfo("Secure Boot disabled - skipping key generation")
 	}
 
 	// Step 4: Customize ISO
@@ -387,6 +387,10 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	}
 	if flags.arch != "" {
 		config.Architecture = flags.arch
+	}
+	config.PlatformVersion = flags.platformVersion
+	if config.PlatformVersion == "" {
+		config.PlatformVersion = pkgiso.ReadVersionFile()
 	}
 
 	// Set platform type
@@ -536,11 +540,7 @@ func downloadAlpineISO(ctx context.Context, logger *logging.Logger, config *pkgi
 	isoConfig.VerifyChecksum = true
 	isoConfig.ResumeDownload = true
 	isoConfig.Debug = config.Debug
-
-	// Customize ISO filename for architecture
-	if config.Architecture != "x86_64" {
-		isoConfig.ISO = fmt.Sprintf("alpine-standard-%s-%s.iso", config.AlpineVersion, config.Architecture)
-	}
+	isoConfig.Architecture = config.Architecture
 
 	if err := isoConfig.Validate(); err != nil {
 		return "", &WrappedError{Msg: "invalid ISO configuration", Err: err}
@@ -565,11 +565,12 @@ func downloadAlpineISO(ctx context.Context, logger *logging.Logger, config *pkgi
 func extractAlpineISO(ctx context.Context, logger *logging.Logger, config *pkgiso.ISOBuildConfig, isoPath, workDir string) error {
 	// Build ISOConfig for extraction
 	isoConfig := &pkgiso.ISOConfig{
-		Version:   config.AlpineVersion,
-		MirrorURL: config.AlpineMirror,
-		WorkDir:   workDir,
-		ISODir:    filepath.Join(workDir, "iso"),
-		Debug:     config.Debug,
+		Version:      config.AlpineVersion,
+		MirrorURL:    config.AlpineMirror,
+		Architecture: config.Architecture,
+		WorkDir:      workDir,
+		ISODir:       filepath.Join(workDir, "iso"),
+		Debug:        config.Debug,
 	}
 
 	// Set the ISO path manually since we already have it
@@ -593,129 +594,11 @@ func extractAlpineISO(ctx context.Context, logger *logging.Logger, config *pkgis
 // platform config does NOT carry a remote/KMS db signing reference. With
 // no platform config file, the security override injects the media-staged
 // default during customization, so generation is required.
-func shouldGenerateSecureBootKeys(config *pkgiso.ISOBuildConfig) (bool, error) {
-	if !config.SecureBoot || !config.GenerateKeys {
-		return false, nil
-	}
-	if config.PlatformConfigFile == "" {
-		return true, nil
-	}
-	remote, err := pkgiso.SecureBootRemoteSigning(config.PlatformConfigFile)
-	if err != nil {
-		return false, err
-	}
-	return !remote, nil
-}
-
-// generateSecureBootKeys generates Secure Boot keys if needed
-func generateSecureBootKeys(ctx context.Context, logger *logging.Logger, config *pkgiso.ISOBuildConfig) error {
-	keysDir := config.KeysDir
-	if keysDir == "" {
-		keysDir = filepath.Join(config.WorkDir, "secure-boot-keys")
-	}
-
-	// Determine backend type
-	backend := secureboot.BackendType(config.KeyBackend)
-	if config.KeyBackend == "" {
-		backend = secureboot.BackendFile
-	}
-
-	// Use XKMSManager for all backends (including file)
-	xkmsConfig := &secureboot.XKMSConfig{
-		KeysDir:      keysDir,
-		Backend:      backend,
-		CommonName:   "Trusted Platform",
-		Country:      "US",
-		Organization: "Trusted Platform",
-		KeySize:      2048,
-		ValidYears:   10,
-		ExportKeys:   true, // Always export for Secure Boot enrollment
-	}
-
-	km, err := secureboot.NewXKMSManager(xkmsConfig, logger)
-	if err != nil {
-		return &WrappedError{Msg: "failed to create key manager", Err: err}
-	}
-	defer km.Close()
-
-	// Check if keys exist
-	if km.KeysExist() {
-		printInfo(fmt.Sprintf("Secure Boot keys already exist - skipping generation (backend: %s)", backend))
-		return nil
-	}
-
-	printInfo(fmt.Sprintf("Generating Secure Boot keys in: %s (backend: %s)", keysDir, backend))
-	if err := km.GenerateAll(ctx); err != nil {
-		return &WrappedError{Msg: "failed to generate keys", Err: err}
-	}
-
-	// Update config with keys directory
-	config.KeysDir = keysDir
-
-	return nil
-}
-
-// customizeISO customizes the extracted ISO with platform components
 func customizeISO(ctx context.Context, logger *logging.Logger, config *pkgiso.ISOBuildConfig, workDir string) error {
 
 	printInfo("Integrating platform components...")
 
-	// Create PlatformISOConfig from the build config
-	platformConfig := &pkgiso.PlatformISOConfig{
-		Alpine: pkgiso.AlpineConfig{
-			Version:   config.AlpineVersion,
-			Mirror:    config.AlpineMirror,
-			APKMirror: config.APKMirror,
-		},
-		Directories: pkgiso.DirectoryConfig{
-			Work:    workDir,
-			ISO:     filepath.Join(workDir, "iso"),
-			Overlay: filepath.Join(workDir, "overlay"),
-			Keys:    config.KeysDir,
-		},
-		Platform: pkgiso.PlatformConfig{
-			PlatformdBinary:   config.PlatformdBinary,
-			ConfigFile:        config.PlatformConfigFile,
-			CABundlePath:      config.CABundlePath,
-			CAKeyAlgorithm:    config.CAKeyAlgorithm,
-			WebUIPath:         config.WebUIPath,
-			PlatformType:      config.PlatformType,
-			ConfigServerURL:   config.ConfigServerURL,
-			BootstrapStrategy: config.BootstrapStrategy,
-			BootstrapDNS:      config.BootstrapDNS,
-			BootstrapNoiseKey: config.BootstrapNoiseKey,
-			BootstrapSPKIPin:  config.BootstrapSPKIPin,
-		},
-		Security: pkgiso.SecurityConfig{
-			SecureBoot: config.SecureBoot,
-			TPM: pkgiso.TPMConfig{
-				AutoUnseal:      config.TPMAutoUnseal,
-				AutoUpgradeSeal: config.TPMAutoUpgradeSeal,
-			},
-			FIPS:        config.FIPS,
-			Lockdown:    config.Lockdown,
-			EnableFIDO2: config.EnableFIDO2,
-		},
-		LUKS: pkgiso.LUKSConfig{
-			Enabled: config.LUKSTPMOnly,
-			TPMOnly: config.LUKSTPMOnly,
-		},
-		RootFS: pkgiso.RootFSConfig{
-			Type: config.RootFS,
-		},
-		Build: pkgiso.BuildOptions{
-			Debug:    config.Debug,
-			PreFetch: config.PreFetch,
-		},
-		Output: pkgiso.OutputConfig{
-			Label: config.OutputLabel,
-		},
-	}
-
-	// Set defaults
-	platformConfig.SetDefaults()
-
-	customizer := pkgiso.NewCustomizer(platformConfig, logger)
+	customizer := pkgiso.NewCustomizer(pkgiso.NewPlatformISOConfig(config, workDir), logger)
 	if err := customizer.CustomizeAll(ctx); err != nil {
 		return err
 	}

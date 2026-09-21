@@ -211,6 +211,20 @@ AND its per-node hostname, both keyed by MAC.
 | **Dynamic** | Multi-node where one shared ISO installs all roles (CP + GW + compute) via MAC keying |
 | **Hybrid** | Dynamic preferred + baked as safety net if the config server is unreachable |
 
+### The factory image is the baked mode without a live installer
+
+`platformctl diskimage create` (`pkg/diskimage`, [docs/factory-image/](../factory-image/))
+stages the same media `iso create` does (`pkg/iso.StageMedia`: prefetched
+apks for the target architecture, the platform binaries, the merged
+platform config, Secure Boot keys, CA bundle) and then runs Phase A itself,
+on the build host, inside an arm64 container against a loop-mounted image
+(`installer.Config.Target = image`). The config delivery is therefore
+**default baked** or **custom baked** only — there is no live installer on
+the device to fetch a dynamic config — and the device's first boot is the
+unchanged Phase B (platform-initrd unlock, firstboot provisioning and
+sealing, platformd). The Raspberry Pi is the first target; the QEMU virt
+stand-in exists so the chain is tested without the hardware.
+
 ---
 
 ## 5. End-to-End Bootstrap Sequence (multi-node, dynamic)

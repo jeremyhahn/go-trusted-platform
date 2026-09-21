@@ -36,6 +36,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/partition"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
@@ -69,6 +70,18 @@ type installer struct {
 	// signing. It is supplied via WithRemoteSignContext and is nil for airgapped
 	// or local installs, in which case the remote seam stays nil.
 	remoteSignCtx *RemoteSignContext
+
+	// release holds the operations a failed image-target install uses to
+	// release what setupDisk created (release.go); tests substitute recorders.
+	release diskRelease
+
+	// boot carries the per-architecture boot artefact names resolved from
+	// OSConfig.Architecture by NewInstaller; see bootTarget().
+	boot bootTarget
+
+	// espRoot overrides the mounted EFI system partition path for tests;
+	// empty means the installer's own mount point (see espRootDir).
+	espRoot string
 }
 
 // InstallerOption customises a newly constructed installer. The primary use is
@@ -98,6 +111,15 @@ func NewInstaller(
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+
+	// Resolve the boot artefact names for the target architecture and
+	// canonicalise the configured spelling ("arm64" -> "aarch64") so the OS
+	// installer's apk architecture directory is always the Alpine name.
+	boot, err := resolveBootTarget(config.OS.Architecture)
+	if err != nil {
+		return nil, err
+	}
+	config.OS.Architecture = string(boot.arch)
 
 	// Propagate FIPS flag from OS config to encryption config
 	// This ensures LUKS uses PBKDF2 instead of Argon2id in FIPS mode
@@ -152,7 +174,9 @@ func NewInstaller(
 	// conflict with firstboot provisioning (--init flag).
 	// The installer only needs to verify TPM device exists.
 	// Full TPM provisioning (EK, SRK, etc.) happens during firstboot.
-	if config.EnableTPMSealing {
+	if config.EnableTPMSealing && config.Target == InstallTargetImage {
+		logger.Info("Image target: TPM sealing material will be written for the node to seal on its first boot")
+	} else if config.EnableTPMSealing {
 		if _, err := os.Stat("/dev/tpmrm0"); err == nil {
 			logger.Info("TPM device found (/dev/tpmrm0) - provisioning will happen during firstboot")
 		} else if _, err := os.Stat("/dev/tpm0"); err == nil {
@@ -169,6 +193,8 @@ func NewInstaller(
 		diskManager: diskManager,
 		osInstaller: osInstaller,
 		ukiBuilder:  ukiBuilder,
+		boot:        boot,
+		release:     defaultDiskRelease(),
 	}
 	for _, opt := range opts {
 		opt(inst)
@@ -190,9 +216,16 @@ func NewInstaller(
 	return inst, nil
 }
 
-// Install performs the complete system installation
-func (i *installer) Install(ctx context.Context) error {
+// Install performs the complete system installation.
+//
+// The error is named so the deferred release can see it: when the install
+// fails on a target that releases on failure (releaseOnFailure), the disk
+// resources setupDisk opened are released before the error is returned.
+func (i *installer) Install(ctx context.Context) (err error) {
 	i.logger.Info("[INSTALLER] Starting system installation")
+
+	var diskInfo *DiskInfo
+	defer func() { i.afterFailedInstall(diskInfo, err) }()
 
 	// Step 1: Clear TPM state before provisioning.
 	//
@@ -206,14 +239,16 @@ func (i *installer) Install(ctx context.Context) error {
 	// without a TPM chip) the install must still proceed. clearTPM itself
 	// attempts modprobe(tpm_tis/tpm_crb) so the live ISO doesn't need the
 	// modules preloaded.
-	if err := i.clearTPM(); err != nil {
+	if i.skip(stepClearTPM) {
+		i.logger.Info("[INSTALLER] Image target: leaving the build host's TPM alone; the node clears and provisions its own on first boot")
+	} else if err := i.clearTPM(); err != nil {
 		i.logger.Warn("[INSTALLER] TPM clear skipped or failed (continuing)", "error", err)
 	} else {
 		i.logger.Info("[INSTALLER] TPM cleared successfully - ready for fresh provisioning")
 	}
 
 	// Step 2: Disk partitioning and LUKS setup
-	diskInfo, err := i.setupDisk(ctx)
+	diskInfo, err = i.setupDisk(ctx)
 	if err != nil {
 		return &WrappedError{Msg: "disk setup failed", Err: err}
 	}
@@ -277,7 +312,16 @@ func (i *installer) Install(ctx context.Context) error {
 
 	// Step 6b: Configure UEFI boot entry
 	// Create a proper boot entry pointing to the UKI at the standard UEFI path
-	if err := i.configureUEFIBoot(ctx, diskInfo); err != nil {
+	firmware, err := i.bootFirmware()
+	if err != nil {
+		return err
+	}
+	if err := firmware.ConfigureBoot(ctx, i, diskInfo); err != nil {
+		if i.bootFirmwareType() == BootFirmwareUBoot {
+			// Without the firmware files on the ESP a U-Boot target does
+			// not boot at all; there is no standard path to fall back to.
+			return &WrappedError{Msg: "boot firmware configuration failed", Err: err}
+		}
 		i.logger.Warnf("[INSTALLER] UEFI boot configuration failed: %v (system will boot via standard UEFI path)", err)
 	}
 
@@ -288,7 +332,7 @@ func (i *installer) Install(ctx context.Context) error {
 	// written last so a failed/misconfigured enable can never strand the node.
 	// Best-effort — a failure is logged but never aborts an otherwise-bootable
 	// install.
-	if err := i.enforceSecureBoot(ctx, diskInfo); err != nil {
+	if err := firmware.EnforceSecureBoot(ctx, i, diskInfo); err != nil {
 		i.logger.Warnf("[INSTALLER] Secure Boot enforcement failed: %v (system will boot unsigned)", err)
 	}
 
@@ -333,7 +377,7 @@ func (i *installer) Install(ctx context.Context) error {
 	unix.Sync()
 
 	// Verify UKI still exists before creating installer container
-	ukiVerify := "/mnt/boot/efi/EFI/BOOT/BOOTX64.EFI"
+	ukiVerify := filepath.Join(espMountPoint, espBootDir, i.ukiFileName())
 	if info, verifyErr := os.Stat(ukiVerify); verifyErr != nil {
 		i.logger.Warnf("[INSTALLER] WARNING: UKI file missing before installer creation: %v", verifyErr)
 	} else {
@@ -383,7 +427,8 @@ func (i *installer) Install(ctx context.Context) error {
 
 	// Step 11: FIDO2 enrollment (automatic detection or explicit configuration)
 	// Note: FIDO2 enrollment must be done AFTER LUKS setup and with physical device access
-	if i.config.EnableFIDO2Enrollment {
+	switch {
+	case i.config.EnableFIDO2Enrollment:
 		// Explicitly enabled
 		if err := i.enrollFIDO2(ctx, diskInfo); err != nil {
 			i.logger.Warn("[INSTALLER] FIDO2 enrollment failed", "error", err)
@@ -392,7 +437,9 @@ func (i *installer) Install(ctx context.Context) error {
 		} else {
 			i.logger.Info("[INSTALLER] FIDO2 enrollment complete")
 		}
-	} else if i.config.Disk.Encryption != nil {
+	case i.config.Disk.Encryption != nil && i.skip(stepFIDO2AutoEnroll):
+		i.logger.Info("[INSTALLER] Image target: not probing the build host for FIDO2 security keys")
+	case i.config.Disk.Encryption != nil:
 		// Auto-detect FIDO2 device if LUKS encryption is enabled
 		i.logger.Info("[INSTALLER] Checking for FIDO2 security key...")
 		if IsFIDO2Available() {
@@ -417,7 +464,6 @@ func (i *installer) Install(ctx context.Context) error {
 	unix.Sync()
 
 	// First unmount any chroot pseudo-filesystems that might still be mounted
-	chrootMounts := []string{"/mnt/dev", "/mnt/sys", "/mnt/proc"}
 	for _, mount := range chrootMounts {
 		if err := unix.Unmount(mount, unix.MNT_DETACH); err == nil {
 			i.logger.Info("[INSTALLER] Unmounted chroot mount", "path", mount)
@@ -473,7 +519,7 @@ func (i *installer) Install(ctx context.Context) error {
 	}
 
 	// Flush backend device buffers
-	backendDev := fmt.Sprintf("%s2", i.config.Disk.Device)
+	backendDev := partition.Path(i.config.Disk.Device, 2)
 	if err := i.flushBuffers(ctx, backendDev, runCommand); err != nil {
 		return err
 	}
@@ -549,21 +595,11 @@ func (i *installer) Install(ctx context.Context) error {
 			}
 		}
 
-		// Wait for the mappings to actually disappear rather than sleeping and
-		// assuming. devmapper.Remove can return before the node is gone, and the
-		// LUKS close below fails confusingly if a mapping is still held.
+		// Wait for device-mapper to drop the mappings rather than sleeping
+		// and assuming (waitForMappingRemoval, release.go).
 		for _, dev := range lvmDevices {
-			// Concatenated, not filepath.Join: /dev/mapper is a kernel-fixed
-			// location rather than a composed path, and gocritic's filepathJoin
-			// rightly objects to handing Join an argument that already contains
-			// a separator. It also matches how the rest of the repo names these
-			// nodes (pkg/firstboot/strategy.go).
-			node := "/dev/mapper/" + dev
-			if err := pollUntil(ctx, 10*time.Second, 100*time.Millisecond, func() bool {
-				_, statErr := os.Stat(node)
-				return os.IsNotExist(statErr)
-			}); err != nil {
-				i.logger.Warn("[INSTALLER] device-mapper node still present after removal", "node", node, "error", err)
+			if err := waitForMappingRemoval(ctx, dev, i.release.mappingExists); err != nil {
+				i.logger.Warn("[INSTALLER] device-mapper mapping still present after removal", "name", dev, "error", err)
 			}
 		}
 		unix.Sync()
@@ -571,10 +607,7 @@ func (i *installer) Install(ctx context.Context) error {
 
 	// Close the main LUKS device - CRITICAL for flushing encrypted data
 	if diskInfo.MappedDevice != "" {
-		mappedName := "cryptroot"
-		if i.config.Disk.Encryption != nil && i.config.Disk.Encryption.MappedName != "" {
-			mappedName = i.config.Disk.Encryption.MappedName
-		}
+		mappedName := i.luksMappedName()
 
 		// Try up to 3 times with increasing delays
 		luksClosed := false
@@ -620,7 +653,7 @@ func (i *installer) Install(ctx context.Context) error {
 
 	// Sync the backend device directly to ensure encrypted blocks are written
 	if i.config.Disk.Device != "" {
-		backendDev := fmt.Sprintf("%s2", i.config.Disk.Device) // Root partition
+		backendDev := partition.Path(i.config.Disk.Device, 2) // Root partition
 		if f, err := os.OpenFile(backendDev, os.O_RDWR|os.O_SYNC, 0); err == nil {
 			if syncErr := f.Sync(); syncErr != nil {
 				i.logger.Warn("[INSTALLER] Failed to sync backend device", "error", syncErr)
@@ -638,7 +671,7 @@ func (i *installer) Install(ctx context.Context) error {
 
 	// DEBUG: Verify LUKS header magic is still intact after cleanup
 	if i.config.Disk.Device != "" {
-		backendDev := fmt.Sprintf("%s2", i.config.Disk.Device) // Root partition
+		backendDev := partition.Path(i.config.Disk.Device, 2) // Root partition
 		if f, err := os.Open(backendDev); err == nil {
 			magic := make([]byte, 6)
 			if _, err := f.Read(magic); err == nil {
@@ -766,7 +799,7 @@ var tpmDeviceWaitTimeout = 2 * time.Second
 // the device. After modprobe we poll (not sleep) for up to
 // tpmDeviceWaitTimeout so udev/mdev has time to create the node.
 func (i *installer) loadTPMModules() {
-	modules := []string{"tpm", "tpm_tis_core", "tpm_tis", "tpm_crb"}
+	modules := []string{"tpm", "tpm_tis_core", "tpm_tis", "tpm_crb", "tpm_tis_spi"}
 	for _, m := range modules {
 		out, err := tpmModprobe(m)
 		if err != nil {
@@ -817,7 +850,7 @@ func (i *installer) setupDisk(ctx context.Context) (*DiskInfo, error) {
 		mappedDevice = device
 		baseDevice = device
 	} else {
-		baseDevice = fmt.Sprintf("%s2", i.config.Disk.Device)
+		baseDevice = partition.Path(i.config.Disk.Device, 2)
 	}
 
 	// Determine filesystem type (default to LVM if not specified)
@@ -892,7 +925,7 @@ func (i *installer) setupDisk(ctx context.Context) (*DiskInfo, error) {
 	}
 
 	// Mount EFI partition to /mnt/boot/efi (matching reference Alpine architecture)
-	efiPartition := fmt.Sprintf("%s1", i.config.Disk.Device)
+	efiPartition := partition.Path(i.config.Disk.Device, 1)
 	efiMountPoint := fmt.Sprintf("%s/boot/efi", mountPoint)
 
 	// Ensure EFI partition device node exists before mounting
@@ -910,7 +943,7 @@ func (i *installer) setupDisk(ctx context.Context) (*DiskInfo, error) {
 	var luksUUID string
 	if mappedDevice != "" {
 		// Get LUKS UUID using pure Go luks2 library
-		rootPartition := fmt.Sprintf("%s2", i.config.Disk.Device)
+		rootPartition := partition.Path(i.config.Disk.Device, 2)
 		volumeInfo, err := luks2.GetVolumeInfo(rootPartition)
 		if err == nil {
 			luksUUID = volumeInfo.UUID
@@ -923,7 +956,7 @@ func (i *installer) setupDisk(ctx context.Context) (*DiskInfo, error) {
 	diskInfo := &DiskInfo{
 		Device:           i.config.Disk.Device,
 		EFIPartition:     efiPartition,
-		RootPartition:    fmt.Sprintf("%s2", i.config.Disk.Device),
+		RootPartition:    partition.Path(i.config.Disk.Device, 2),
 		MappedDevice:     mappedDevice,
 		LUKSUUID:         luksUUID,
 		PartitionTable:   i.config.Disk.PartitionTable,
@@ -934,6 +967,20 @@ func (i *installer) setupDisk(ctx context.Context) (*DiskInfo, error) {
 	}
 
 	return diskInfo, nil
+}
+
+// kernelFlavor is the Alpine kernel flavour of the configured kernel
+// package: the part after "linux-" (linux-lts -> lts, linux-rpi -> rpi),
+// which names /boot/vmlinuz-<flavor>. The default package is linux-lts.
+func (i *installer) kernelFlavor() string {
+	pkg := ""
+	if i.config != nil && i.config.OS != nil {
+		pkg = i.config.OS.KernelPackage
+	}
+	if pkg == "" {
+		pkg = defaultKernelPackage
+	}
+	return strings.TrimPrefix(pkg, "linux-")
 }
 
 // installOS handles OS installation
@@ -1099,11 +1146,14 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		}
 		i.logger.Info("[UKI] Using FIPS-capable kernel", "path", kernelPath)
 	} else {
-		// Non-FIPS mode: use standard LTS kernel
+		// Non-FIPS mode: the kernel the configured package installed. Alpine
+		// names it after the package flavour (linux-lts -> vmlinuz-lts,
+		// linux-rpi -> vmlinuz-rpi), not after the modules directory, which
+		// carries the full version (6.12.85-0-rpi); the version-named path is
+		// tried first for kernels that install one.
 		kernelPath = filepath.Join(mountPoint, "boot", fmt.Sprintf("vmlinuz-%s", kernelVersion))
 		if _, err := os.Stat(kernelPath); err != nil {
-			// Try alternate path
-			kernelPath = filepath.Join(mountPoint, "boot", "vmlinuz-lts")
+			kernelPath = filepath.Join(mountPoint, "boot", "vmlinuz-"+i.kernelFlavor())
 			if _, err := os.Stat(kernelPath); err != nil {
 				return ErrUKIBuild(fmt.Sprintf("kernel not found: %s", kernelPath), err)
 			}
@@ -1230,7 +1280,7 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 	if i.config.Debug {
 		cmdlineParts = append(cmdlineParts, "platform_debug=1")
 		// Read the bootstrap server address from the installer's live env cmdline
-		if liveCmdline, readErr := os.ReadFile("/proc/cmdline"); readErr == nil {
+		if liveCmdline, readErr := os.ReadFile("/proc/cmdline"); readErr == nil && !i.skip(stepHostCmdlinePropagation) {
 			for _, param := range strings.Fields(string(liveCmdline)) {
 				if strings.HasPrefix(param, "platform_debug_sink=") {
 					cmdlineParts = append(cmdlineParts, param)
@@ -1281,7 +1331,7 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		return ErrUKIBuild("failed to create UKI directory", err)
 	}
 
-	ukiPath := filepath.Join(ukiDir, "BOOTX64.EFI")
+	ukiPath := filepath.Join(ukiDir, i.ukiFileName())
 	i.logger.Info("[UKI] Building UKI", "output", ukiPath)
 
 	// Build UKI using two-step approach: dracut (initramfs) + objcopy (UKI assembly)
@@ -1380,7 +1430,7 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		"--kver", kernelVersion,
 		"--add", "platformd lvm dm",
 		"--install", "modprobe insmod",
-		"--add-drivers", "igb ixgbe e1000e i40e ice mlx5_core bnxt_en dm_mod dm_crypt vfat fat nls_cp437 nls_iso8859_1",
+		"--add-drivers", i.bootTarget().dracutDrivers,
 		"--omit", "crypt network network-legacy nbd nfs",
 		// CRITICAL: dracut by default prepends an early-microcode cpio
 		// archive (uncompressed AuthenticAMD.bin / GenuineIntel.bin) to
@@ -1438,9 +1488,20 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 	}
 	defer ukiConfig.Close()
 
+	// The firmware that boots this UKI may authenticate the kernel inside
+	// it as a second image (U-Boot does); that kernel is signed here, before
+	// the PE builder wraps it, with the key the UKI is signed with below.
+	firmware, err := i.bootFirmware()
+	if err != nil {
+		return err
+	}
+	if err := i.signEmbeddedKernel(ctx, firmware, ukiConfig); err != nil {
+		return err
+	}
+
 	// Load the systemd-stub from the chroot — systemd-efistub is installed
 	// in the target system, so the stub lives under mountPoint.
-	stubPath := filepath.Join(mountPoint, uki.DefaultStubPath)
+	stubPath := filepath.Join(mountPoint, i.bootTarget().stubPath)
 	stubFile, err := os.Open(stubPath)
 	if err != nil {
 		return ErrUKIBuild(fmt.Sprintf("failed to open EFI stub at %s (is systemd-efistub installed?)", stubPath), err)
@@ -1517,6 +1578,65 @@ func generateOSRelease(config *OSConfig) string {
 	return strings.Join(parts, "\n") + "\n"
 }
 
+// newAuthenticodeSigner wraps the resolved Secure Boot DB key and certificate
+// in the authenticode signer every signing and verifying step shares: the
+// UKI, the kernel embedded in it, and the enforcement brick guard.
+func (i *installer) newAuthenticodeSigner(ctx context.Context, key crypto.PrivateKey, cert *x509.Certificate) (authenticode.Authenticode, error) {
+	signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
+		KeyStore:      &secureBootKeyBackend{privateKey: key, logger: i.logger},
+		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
+		Certificate:   cert,
+		Logger:        i.logger,
+	})
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to create authenticode signer", Err: err}
+	}
+	return signer, nil
+}
+
+// signEmbeddedKernel replaces the UKI's kernel with an Authenticode-signed
+// copy when the boot firmware authenticates the image the stub loads from
+// memory (bootFirmware.VerifiesEmbeddedKernel). The kernel is the EFI-stub
+// PE the kernel package installs (decompressed by uki.FromFiles); it is
+// signed with the same DB key as the UKI, in memory, before the PE builder
+// wraps it. Without a Secure Boot key set there is nothing to sign with,
+// and, as for the UKI itself, the build carries on unsigned.
+func (i *installer) signEmbeddedKernel(ctx context.Context, fw bootFirmware, u *uki.UKI) error {
+	if !fw.VerifiesEmbeddedKernel() {
+		return nil
+	}
+	if i.config.SecureBoot == nil || !i.config.SecureBoot.Enabled {
+		i.logger.Info("[UKI] Secure Boot disabled in config — the embedded kernel stays unsigned")
+		return nil
+	}
+	signingKey, cert, err := i.resolveSecureBootSigner(ctx)
+	if err != nil || signingKey == nil {
+		i.logger.Warn("[UKI] No usable Secure Boot signing key — the embedded kernel stays unsigned and the firmware will refuse it", "error", err)
+		return nil
+	}
+	signer, err := i.newAuthenticodeSigner(ctx, signingKey, cert)
+	if err != nil {
+		return err
+	}
+	kernel, err := io.ReadAll(u.Kernel)
+	if err != nil {
+		return ErrUKIBuild("failed to read the kernel for signing", err)
+	}
+	if closer, ok := u.Kernel.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			i.logger.Warn("[UKI] failed to close the kernel file", "error", err)
+		}
+	}
+	var signed bytes.Buffer
+	if err := signer.Sign(bytes.NewReader(kernel), &signed); err != nil {
+		return ErrUKIBuild("failed to sign the embedded kernel", err)
+	}
+	u.Kernel = bytes.NewReader(signed.Bytes())
+	i.logger.Info("[UKI] Embedded kernel signed with the Secure Boot DB key (the boot firmware verifies it separately)",
+		"unsigned_bytes", len(kernel), "signed_bytes", signed.Len())
+	return nil
+}
+
 // signUKI signs the UKI with the Secure Boot DB key using native authenticode.
 // It is a no-op unless Secure Boot is enabled in the config, so the Enabled flag
 // governs both signing and (via enforceSecureBoot) enrollment. The DB key is
@@ -1548,25 +1668,13 @@ func (i *installer) signUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		return nil
 	}
 
-	// Create a simple keystore backend for signing
-	signingBackend := &secureBootKeyBackend{
-		privateKey: signingKey,
-		logger:     i.logger,
-	}
-
-	// Create authenticode signer
-	signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
-		KeyStore:      signingBackend,
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
-		Certificate:   cert,
-		Logger:        i.logger,
-	})
+	signer, err := i.newAuthenticodeSigner(ctx, signingKey, cert)
 	if err != nil {
-		return &WrappedError{Msg: "failed to create authenticode signer", Err: err}
+		return err
 	}
 
 	// Path to UKI at the UEFI spec removable media boot path
-	ukiPath := filepath.Join(mountPoint, "boot", "efi", "EFI", "BOOT", "BOOTX64.EFI")
+	ukiPath := filepath.Join(mountPoint, "boot", "efi", "EFI", "BOOT", i.ukiFileName())
 
 	// Check if UKI exists
 	if _, err := os.Stat(ukiPath); err != nil {
@@ -1625,17 +1733,12 @@ func (i *installer) enforceSecureBoot(ctx context.Context, diskInfo *DiskInfo) e
 	// key (the same keystore backend signUKI uses) and confirm the signed UKI
 	// verifies against dbCert. If it does not, enrolling PK would produce a node
 	// the firmware refuses to boot, so skip enforcement.
-	verifier, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
-		KeyStore:      &secureBootKeyBackend{privateKey: signingKey, logger: i.logger},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
-		Certificate:   dbCert,
-		Logger:        i.logger,
-	})
+	verifier, err := i.newAuthenticodeSigner(ctx, signingKey, dbCert)
 	if err != nil {
 		i.logger.Warn("[SECUREBOOT] could not build UKI verifier — skipping Secure Boot enforcement", "error", err)
 		return nil
 	}
-	ukiPath := filepath.Join(targetMountPoint, "boot", "efi", "EFI", "BOOT", "BOOTX64.EFI")
+	ukiPath := filepath.Join(targetMountPoint, "boot", "efi", "EFI", "BOOT", i.ukiFileName())
 	if vErr := uefi.VerifySignedUKI(verifier, ukiPath, dbCert, i.logger); vErr != nil {
 		i.logger.Warn("[SECUREBOOT] signed UKI did not verify; skipping Secure Boot enforcement to avoid an unbootable node",
 			"uki", ukiPath, "error", vErr)
@@ -2156,9 +2259,9 @@ func (i *installer) configureUEFIBoot(ctx context.Context, diskInfo *DiskInfo) e
 	startupPath := filepath.Join(espDir, "startup.nsh")
 	var startupContent string
 	if cmdline != "" {
-		startupContent = fmt.Sprintf("\\EFI\\BOOT\\BOOTX64.EFI %s\n", cmdline)
+		startupContent = fmt.Sprintf("%s %s\n", i.espLoaderPath(), cmdline)
 	} else {
-		startupContent = "\\EFI\\BOOT\\BOOTX64.EFI\n"
+		startupContent = i.espLoaderPath() + "\n"
 	}
 
 	if err := os.WriteFile(startupPath, []byte(startupContent), 0644); err != nil {
@@ -2176,16 +2279,10 @@ func (i *installer) configureUEFIBoot(ctx context.Context, diskInfo *DiskInfo) e
 	// any runtime state. Reading back the Trusted Platform EFI
 	// variable gives the same answer cryptographically via firmware;
 	// this sentinel is the file-system equivalent.
-	sentinelDir := filepath.Join(espDir, "EFI", "TRUSTED_PLATFORM")
-	if err := os.MkdirAll(sentinelDir, 0755); err != nil {
-		return &WrappedError{Msg: "create TRUSTED_PLATFORM sentinel dir", Err: err}
+	if err := writeProvisionedSentinel(espDir); err != nil {
+		return err
 	}
-	sentinelPath := filepath.Join(sentinelDir, "PROVISIONED")
-	sentinel := "TRUSTED_PLATFORM=1\n"
-	if err := os.WriteFile(sentinelPath, []byte(sentinel), 0644); err != nil {
-		return &WrappedError{Msg: "write TRUSTED_PLATFORM sentinel", Err: err}
-	}
-	i.logger.Info("[UEFI] Wrote TRUSTED_PLATFORM sentinel to ESP", "path", sentinelPath)
+	i.logger.Info("[UEFI] Wrote TRUSTED_PLATFORM sentinel to ESP", "path", filepath.Join(espDir, provisionedSentinelDir, provisionedSentinelFile))
 
 	// UEFI-only policy: the EFI runtime services directory MUST exist,
 	// which proves the kernel was loaded by UEFI firmware (not Legacy/CSM).
@@ -2284,17 +2381,17 @@ func (i *installer) configureUEFIBoot(ctx context.Context, diskInfo *DiskInfo) e
 	// is consumed by firmware BEFORE the NVRAM BootOrder, so the virtual
 	// CD wins on bootstrap-orchestrator runs.
 	if diskInfo != nil && diskInfo.Device != "" {
-		espDevice := diskInfo.Device + "1"
+		espDevice := partition.Path(diskInfo.Device, 1)
 		espPart := "1"
 		i.logger.Info("[UEFI] Creating NVRAM boot entry",
 			"label", "Trusted Platform", "disk", diskInfo.Device,
-			"part", espPart, "loader", "\\EFI\\BOOT\\BOOTX64.EFI")
+			"part", espPart, "loader", i.espLoaderPath())
 		createCmd := exec.CommandContext(ctx, efibootmgrPath,
 			"--create",
 			"--disk", diskInfo.Device,
 			"--part", espPart,
 			"--label", "Trusted Platform",
-			"--loader", `\EFI\BOOT\BOOTX64.EFI`)
+			"--loader", i.espLoaderPath())
 		// Discard the verbose efibootmgr output (full BootOrder with
 		// PCI device paths can contain bytes that confuse log encoders
 		// and have caused silent process exits in earlier runs). The

@@ -34,10 +34,16 @@ type builder struct {
 
 // NewBuilder creates a new UKI builder
 func NewBuilder(logger *logging.Logger) UKIBuilder {
+	arch := HostArchitecture()
+	stubPath, err := StubPath(arch)
+	if err != nil {
+		// HostArchitecture only yields architectures StubPath knows.
+		stubPath = DefaultStubPath
+	}
 	return &builder{
-		arch:           ArchX86_64,
+		arch:           arch,
 		logger:         logger,
-		stubPath:       DefaultStubPath,
+		stubPath:       stubPath,
 		alignmentBytes: 4096, // Standard PE section alignment
 		sections:       make([]Section, 0),
 	}

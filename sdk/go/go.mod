@@ -45,7 +45,7 @@ require (
 	github.com/RaduBerinde/btreemap v0.0.0-20260105202824-d3184786f603 // indirect
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/anatol/devmapper.go v0.0.0-20250316020617-2671eefd35d7 // indirect
-	github.com/apparentlymart/go-cidr v1.1.0 // indirect
+	github.com/apparentlymart/go-cidr v1.1.1 // indirect
 	github.com/awnumar/memcall v0.5.0 // indirect
 	github.com/awnumar/memguard v0.23.0 // indirect
 	github.com/aws/aws-sdk-go v1.55.8 // indirect
@@ -89,7 +89,7 @@ require (
 	github.com/cockroachdb/swiss v0.0.0-20260820225851-333444432258 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20250429170803-42689b6311bb // indirect
 	github.com/coredns/caddy v1.1.4-0.20250930002214-15135a999495 // indirect
-	github.com/coredns/coredns v1.14.3 // indirect
+	github.com/coredns/coredns v1.14.7 // indirect
 	github.com/coreos/go-systemd/v22 v22.7.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
@@ -177,7 +177,7 @@ require (
 	github.com/jpillora/backoff v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kevinburke/ssh_config v1.6.0 // indirect
-	github.com/klauspost/compress v1.18.7 // indirect
+	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
@@ -198,8 +198,8 @@ require (
 	github.com/mattn/go-ieproxy v0.0.12 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mdlayher/packet v1.1.2 // indirect
-	github.com/mdlayher/socket v0.5.1 // indirect
-	github.com/mdlayher/vsock v1.2.1 // indirect
+	github.com/mdlayher/socket v0.6.0 // indirect
+	github.com/mdlayher/vsock v1.3.0 // indirect
 	github.com/mdobak/go-xerrors v1.0.0 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/miekg/pkcs11 v1.1.2 // indirect
@@ -216,18 +216,18 @@ require (
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.23 // indirect
 	github.com/pin/tftp/v3 v3.1.0 // indirect
-	github.com/pires/go-proxyproto v0.11.0 // indirect
+	github.com/pires/go-proxyproto v0.15.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/sftp v1.13.9 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20250313105119-ba97887b0a25 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/pquerna/otp v1.5.0 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
+	github.com/prometheus/client_golang v1.24.1 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.68.0 // indirect
-	github.com/prometheus/exporter-toolkit v0.16.0 // indirect
-	github.com/prometheus/procfs v0.20.1 // indirect
+	github.com/prometheus/common v0.70.1 // indirect
+	github.com/prometheus/exporter-toolkit v0.17.1 // indirect
+	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.61.0 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
@@ -267,7 +267,7 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	gitlab.com/yawning/secp256k1-voi v0.0.0-20230925100816-f2616030848b // indirect
-	go.etcd.io/etcd/api/v3 v3.6.10 // indirect
+	go.etcd.io/etcd/api/v3 v3.6.13 // indirect
 	go.mongodb.org/mongo-driver v1.17.9 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.8.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

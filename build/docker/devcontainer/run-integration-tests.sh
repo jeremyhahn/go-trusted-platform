@@ -53,6 +53,14 @@ declare -A TARGET_PACKAGES=(
     [tenant]="./test/integration/tenant/..."
     [iam]="./test/integration/iam/..."
     [attestation]="./test/integration/attestation/..."
+    [diskimage]="./test/integration/diskimage"
+)
+
+# Per-target go test timeout. The default fits a daemon-backed suite; the
+# diskimage suite boots an aarch64 guest under TCG emulation, where a first
+# boot through firstboot provisioning takes tens of minutes.
+declare -A TARGET_TIMEOUTS=(
+    [diskimage]="90m"
 )
 
 RUN_TARGET="all"
@@ -688,6 +696,21 @@ elif [ "$RUN_TARGET" = "bmc" ]; then
     # modified config that trusts it), then start platformd with that config.
     start_vbmc || echo "WARNING: vBMC setup failed, BMC tests may fail"
     start_platformd "${VBMC_PLATFORMD_CONFIG}" || abort_no_daemon
+elif [ "$RUN_TARGET" = "diskimage" ]; then
+    # The factory-image suite boots the image itself: the guest is a
+    # single-node platform and is its own control plane, so no shared
+    # platformd is started. The image, its Raspberry Pi sibling and the
+    # U-Boot binary come from the host build (make integration-test-diskimage)
+    # through DISKIMAGE_IMAGE, DISKIMAGE_RPI_IMAGE and DISKIMAGE_UBOOT; the
+    # suite fails, not skips, when they are unset.
+    echo "=== diskimage target: skipping shared platformd ==="
+    export DISKIMAGE_WORK_DIR="${DISKIMAGE_WORK_DIR:-/tmp/diskimage-integration}"
+    rm -rf "${DISKIMAGE_WORK_DIR}"
+    mkdir -p "${DISKIMAGE_WORK_DIR}"
+    echo "image:     ${DISKIMAGE_IMAGE:-<unset>}"
+    echo "rpi image: ${DISKIMAGE_RPI_IMAGE:-<unset>}"
+    echo "u-boot:    ${DISKIMAGE_UBOOT:-<unset>}"
+    echo "work dir:  ${DISKIMAGE_WORK_DIR}"
 else
     # platformd is required for every daemon-dependent suite. A failed bring-up
     # ends the run; see abort_no_daemon.
@@ -712,7 +735,8 @@ run_test() {
     local pkg="$1"
     echo ""
     echo "--- Testing $pkg ---"
-    if go test -v -tags "${BUILD_TAGS}" -count=1 -parallel 1 -timeout 10m "$pkg"; then
+    local timeout="${TARGET_TIMEOUTS[$RUN_TARGET]:-10m}"
+    if go test -v -tags "${BUILD_TAGS}" -count=1 -parallel 1 -timeout "$timeout" "$pkg"; then
         echo "--- PASS: $pkg ---"
     else
         echo "--- FAIL: $pkg ---"

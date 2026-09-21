@@ -157,8 +157,10 @@ func TestAlpineInstaller_ConfigureSystem(t *testing.T) {
 
 	fstabContent, err := os.ReadFile(fstabPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(fstabContent), "/dev/sda1")
-	assert.Contains(t, string(fstabContent), "/boot")
+	// The ESP is mounted by its label so the entry is valid whatever device
+	// name the partition gets on the booted node (sda1, nvme0n1p1, mmcblk0p1).
+	assert.Contains(t, string(fstabContent), "LABEL=EFI /boot/efi vfat")
+	assert.NotContains(t, string(fstabContent), "/dev/sda1")
 	assert.Contains(t, string(fstabContent), "/dev/mapper/cryptroot")
 	assert.Contains(t, string(fstabContent), "/ ext4")
 
@@ -514,9 +516,8 @@ func TestAlpineInstaller_FstabGeneration(t *testing.T) {
 				MappedDevice:  "/dev/mapper/cryptroot",
 			},
 			verify: func(t *testing.T, content string) {
-				assert.Contains(t, content, "/dev/sda1")
-				assert.Contains(t, content, "/boot")
-				assert.Contains(t, content, "vfat")
+				assert.Contains(t, content, "LABEL=EFI /boot/efi vfat")
+				assert.NotContains(t, content, "/dev/sda1")
 				assert.Contains(t, content, "/dev/mapper/cryptroot")
 				assert.Contains(t, content, "/ ext4")
 			},
@@ -528,7 +529,8 @@ func TestAlpineInstaller_FstabGeneration(t *testing.T) {
 				RootPartition: "/dev/vda2",
 			},
 			verify: func(t *testing.T, content string) {
-				assert.Contains(t, content, "/dev/vda1")
+				assert.Contains(t, content, "LABEL=EFI /boot/efi vfat")
+				assert.NotContains(t, content, "/dev/vda1")
 				assert.Contains(t, content, "/dev/vda2")
 				assert.NotContains(t, content, "/dev/mapper")
 			},

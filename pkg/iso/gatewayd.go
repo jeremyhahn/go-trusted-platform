@@ -81,7 +81,7 @@ func (c *Customizer) CopyGatewaydBinary(ctx context.Context, binaryPath string, 
 
 	c.logger.Info("Copying gatewayd binary", "source", binaryPath, "gateway_role", required)
 
-	if err := validateBinary(binaryPath); err != nil {
+	if err := c.validateTargetBinary(binaryPath); err != nil {
 		return &WrappedError{Msg: "gatewayd binary validation failed", Err: err}
 	}
 

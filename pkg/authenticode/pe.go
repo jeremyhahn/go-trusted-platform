@@ -399,6 +399,9 @@ func (s *Signer) computeAttributesDigest(spcContent []byte, signingTime time.Tim
 	return hash[:], nil
 }
 
+// winCertificateHeaderSize is sizeof(WIN_CERTIFICATE) without bCertificate.
+const winCertificateHeaderSize = 8
+
 // embedSignature embeds the PKCS#7 signature into the PE file
 func (s *Signer) embedSignature(pe *peFile, signature []byte) ([]byte, error) {
 	// WIN_CERTIFICATE structure
@@ -406,12 +409,20 @@ func (s *Signer) embedSignature(pe *peFile, signature []byte) ([]byte, error) {
 	// WORD wRevision;
 	// WORD wCertificateType;
 	// BYTE bCertificate[ANYSIZE_ARRAY];
-
-	certLen := uint32(8 + len(signature)) // 8 bytes for header + signature
-	certLen = (certLen + 7) & ^uint32(7)  // Align to 8-byte boundary
+	//
+	// dwLength covers the header and the PKCS#7 DER, nothing more; the
+	// entry is then padded to an 8-byte boundary and the padding belongs
+	// to the certificate table, not to the certificate. That is what
+	// sbsign writes. It matters because not every verifier tolerates
+	// trailing bytes after the DER: OpenSSL (OVMF) ignores them, but
+	// mbedTLS (U-Boot 2025+) rejects the message with
+	// MBEDTLS_ERR_ASN1_LENGTH_MISMATCH when dwLength includes them, and
+	// the Raspberry Pi image never boots.
+	dwLength := uint32(winCertificateHeaderSize + len(signature))
+	certLen := (dwLength + 7) & ^uint32(7) // the table entry, padded
 
 	winCert := make([]byte, certLen)
-	binary.LittleEndian.PutUint32(winCert[0:4], certLen)
+	binary.LittleEndian.PutUint32(winCert[0:4], dwLength)
 	binary.LittleEndian.PutUint16(winCert[4:6], 0x0200) // WIN_CERT_REVISION_2_0
 	binary.LittleEndian.PutUint16(winCert[6:8], 0x0002) // WIN_CERT_TYPE_PKCS_SIGNED_DATA
 	copy(winCert[8:], signature)
@@ -505,17 +516,17 @@ func (s *Signer) extractSignature(pe *peFile) ([]byte, error) {
 	winCert := pe.data[pe.certTableOffset : pe.certTableOffset+pe.certTableSize]
 
 	// WIN_CERTIFICATE structure:
-	// DWORD dwLength;      // 4 bytes - includes header and padding
+	// DWORD dwLength;      // 4 bytes - header + certificate (see embedSignature)
 	// WORD wRevision;      // 2 bytes
 	// WORD wCertificateType; // 2 bytes
-	// BYTE bCertificate[];  // variable (padded to 8-byte alignment)
+	// BYTE bCertificate[];  // variable; the table entry is padded to 8 bytes
 	if len(winCert) < 8 {
 		return nil, &MessageError{Msg: "invalid WIN_CERTIFICATE structure"}
 	}
 
-	// Get the data after the 8-byte header
-	// Note: dwLength includes padding to 8-byte alignment, but the actual
-	// PKCS#7 size is determined by the ASN.1 structure itself
+	// Get the data after the 8-byte header. The PKCS#7 size is taken from
+	// the ASN.1 structure itself, so images signed before dwLength stopped
+	// covering the padding (and images from other signers) still extract.
 	pkcs7Data := winCert[8:]
 
 	// Parse the ASN.1 length to get the actual PKCS#7 size

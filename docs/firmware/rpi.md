@@ -1,6 +1,18 @@
 # Raspberry Pi Secure Boot Implementation
 
 > Part of the go-trusted-platform trusted firmware architecture
+>
+> **Status: PLANNED (this document); the SD-card image SHIPPED.** What is
+> implemented today is the factory image in [docs/factory-image/](../factory-image/):
+> Alpine aarch64 on an MBR SD card, U-Boot loaded by the Pi firmware as
+> `kernel8.img` with the platform's PK/KEK/db preseeded and EFI TCG2 measured
+> boot, a signed UKI at `EFI/BOOT/BOOTAA64.EFI`, and the unchanged
+> platform-initrd / firstboot / platformd first boot with the LUKS key sealed
+> to the Infineon SLB9670 on SPI. The root of trust of that image is the
+> U-Boot binary on the unauthenticated FAT partition. Everything below —
+> OTP-based root of trust, `boot.sig` signed firmware, A/B slots, OTA — is
+> the design that has not been built, and nothing here should be read as a
+> description of the shipped image.
 
 ## Overview
 

@@ -23,6 +23,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/partition"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
 
@@ -496,27 +497,16 @@ func (s *TPMPCRStrategy) mountEFI(flags uintptr) (bool, error) {
 	return false, nil
 }
 
-// detectEFIDevice attempts to auto-detect the EFI partition device
+// detectEFIDevice locates the EFI partition that belongs to the configured
+// root device (sibling partition, then the EFI label, then the well-known
+// first-partition names, see pkg/partition).
 func (s *TPMPCRStrategy) detectEFIDevice() (string, error) {
-	candidates := []string{
-		"/dev/vda1",      // VirtIO disk (QEMU/KVM)
-		"/dev/sda1",      // SCSI/SATA disk
-		"/dev/nvme0n1p1", // NVMe disk
+	device, err := partition.FindESP(s.platform.rootDevice())
+	if err != nil {
+		return "", &WrappedError{Msg: "no EFI partition found", Err: err}
 	}
-
-	for _, device := range candidates {
-		if _, err := os.Stat(device); err != nil {
-			continue
-		}
-		stat, err := os.Stat(device)
-		if err != nil || stat.Mode()&os.ModeDevice == 0 {
-			continue
-		}
-		s.logger.Debugf("Trying EFI partition candidate: %s", device)
-		return device, nil
-	}
-
-	return "", &MessageError{Msg: fmt.Sprintf("no EFI partition found in candidates: %v", candidates)}
+	s.logger.Debugf("Detected EFI partition: %s", device)
+	return device, nil
 }
 
 // unmountEFI unmounts the EFI partition

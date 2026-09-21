@@ -91,7 +91,7 @@ Examples:
 	cmd.Flags().StringVar(&cmdFlags.cmdlineStr, "cmdline", "", "Kernel command line")
 	cmd.Flags().StringVar(&cmdFlags.outputPath, "output", "", "Output path for UKI")
 	cmd.Flags().StringVar(&cmdFlags.osReleasePath, "osrelease", "", "Path to os-release file (optional)")
-	cmd.Flags().StringVar(&cmdFlags.stubPath, "stub", "", "Path to EFI stub (optional, uses /usr/lib/systemd/boot/efi/linuxx64.efi.stub if not specified)")
+	cmd.Flags().StringVar(&cmdFlags.stubPath, "stub", "", "Path to EFI stub (optional; defaults to the host architecture's systemd stub, e.g. /usr/lib/systemd/boot/efi/linuxx64.efi.stub)")
 	cmd.Flags().BoolVar(&cmdFlags.useObjcopy, "use-objcopy", false, "Use objcopy-based UKI builder (proven approach from Alpine/dracut)")
 	cmd.Flags().BoolVarP(&cmdFlags.verbose, "verbose", "v", false, "Enable verbose logging")
 	cmd.Flags().BoolVar(&cmdFlags.debug, "debug", false, "Enable debug logging (implies verbose)")

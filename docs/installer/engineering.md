@@ -1,6 +1,6 @@
 # Installer — Engineering Contract
 
-> **Status: NORMATIVE** · Scope: `pkg/installer/`, `pkg/initrd/`, `pkg/iso/`, `pkg/qemu/`, `cmd/platform-initrd` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/installer/`, `pkg/initrd/`, `pkg/iso/`, `pkg/qemu/`, `cmd/platform-initrd` · Last verified: 2026-09-16
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -16,6 +16,8 @@
 |---|---|
 | `types.go` | `Config` and every sub-config; the `Installer`, `DiskManager`, `OSInstaller`, `UKIBuilder` interfaces; `DiskInfo` |
 | `installer.go` | `NewInstaller`, `Install`, TPM clear, disk setup, UKI build/sign, `prepareLUKSKeyForTPM`, cleanup |
+| `boot_firmware.go` | `InstallTarget` (disk\|image), `BootFirmwareType` (uefi\|uboot), `BootConfig`, the `bootFirmwares` dispatch map, `imageTargetSkips` |
+| `arch.go` | `resolveBootTarget` — the per-architecture UKI file name, systemd stub path and dracut driver set (`x86_64`, `aarch64`) |
 | `config.go` | `LoadConfig`, `SaveConfig`, `DefaultConfig` |
 | `config_loader.go` | `LoadInstallConfig`, `MergeWithDefaults` |
 | `config_generator.go` | `GenerateInstallConfig`, `WriteInstallConfig`, and the `*YAMLConfig` shapes |
@@ -41,10 +43,29 @@
 `pkg/iso/` — media production: `config.go`, `types.go`, `download.go`,
 `extract.go`, `customize.go`, `customize_profile.go`, `build.go`,
 `inject_modules.go`, `prefetch.go`, `profile_network.go`, `errors.go`, plus the
-embedded `autoinstall.sh`.
+embedded `autoinstall.sh`. `PlatformISOConfig` carries the target
+architecture (`alpine.architecture`, canonicalised by `SetDefaults`, rejected
+by `Validate` with `UnsupportedArchitectureError` / `FIPSUnsupportedArchitectureError`)
+and an `installer:` override block (`device`, `partition_table` gpt|mbr,
+`kernel_package`, `extra_packages`, `hardware_manufacturer`,
+`hardware_model`) that the generated `installer.Config` and the apk prefetch
+honour; the ISO leaves every override empty. `Customizer.CustomizeAll` is
+`checkPrerequisites` → exported `StageMedia` (the media-root half a disk
+image builder reuses) → `customizeLiveISO` (initramfs and GRUB surgery).
+Every bundled binary passes `validateTargetBinary`, which requires the ELF
+machine of the configured architecture (`BinaryArchMismatchError`).
 
 `pkg/qemu/` — the test harness: `config.go`, `types.go`, `qemu.go`,
 `secureboot.go`, `monitor.go`, `snapshot.go`, `migration.go`, `ovs_network.go`.
+
+`pkg/partition/` — the one place that knows how the kernel names partitions
+(`Path(disk, n)`: `sda`→`sda2`, `nvme0n1`→`nvme0n1p2`, `mmcblk0`→`mmcblk0p2`,
+`loop3`→`loop3p2`; `Parent`) and how the EFI system partition is found for a
+root device (`FindESP`: the disk's first partition, then
+`/dev/disk/by-label/EFI`, then `DefaultESPCandidates` — `vda1`, `sda1`,
+`nvme0n1p1`, `mmcblk0p1`, `mmcblk1p1`). The installer's partition paths,
+`FirstbootSealStrategy`, `TPMPCRStrategy` and `TPMUpgradeStrategy` all go
+through it; there is no other probe list.
 
 `cmd/platform-initrd` is a four-line `main` over `pkg/boot/commands`.
 
@@ -58,6 +79,21 @@ func WithRemoteSignContext(rsc *RemoteSignContext) InstallerOption
 
 `Installer` has exactly two methods: `Install(ctx) error` and `Close() error`.
 The concrete type is unexported — construct through `NewInstaller`.
+
+```go
+const DefaultESPUKIPath = "/boot/efi/EFI/BOOT/BOOTX64.EFI"
+const DefaultESPBootDir = "/boot/efi/EFI/BOOT"
+func ESPUKIPathFor(arch uki.Architecture) (string, error)
+```
+
+`OSConfig.Architecture` selects the boot artefacts. `""`, `x86_64` and the
+GOARCH alias `amd64` resolve to `BOOTX64.EFI` and `linuxx64.efi.stub`;
+`aarch64` / `arm64` resolve to `BOOTAA64.EFI` and `linuxaa64.efi.stub`
+(`uki.BootFileName`, `uki.StubPath`). `NewInstaller` canonicalises the
+configured spelling to the Alpine name (`aarch64`), which is also the apk
+architecture directory, and `Config.Validate` rejects anything `pkg/uki`
+does not model. `UKIRebuilder` defaults its live UKI path to the
+architecture of the binary it runs in.
 
 Interfaces the orchestrator composes (`types.go`):
 
@@ -133,47 +169,119 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
 2. **The TPM clear runs regardless of `EnableTPMSealing`, and its failure is
    non-fatal.** A VM without a TPM must still install. On `TPM_RC_LOCKOUT` the
    installer escalates to `ForceClear` (UEFI PPI) and calls `HardReset()`.
-3. **Ordering inside `Install` is load-bearing.** The FIPS kernel must be
+3. **The boot firmware is a seam, and the install target gates host-only steps.**
+   After the UKI is signed, `Install` dispatches through `bootFirmwares`
+   (`pkg/installer/boot_firmware.go`): `uefi` keeps `configureUEFIBoot` and
+   `enforceSecureBoot` exactly as before, `uboot` writes the provisioned
+   sentinel, copies the staged firmware tree onto the ESP root and enrols
+   nothing (the PK/KEK/db are preseeded into U-Boot). A U-Boot staging
+   failure is fatal, because there is no firmware fallback path that finds
+   the UKI. `Config.Target = image` consults `imageTargetSkips`: the TPM clear,
+   the `/dev/tpmrm0` presence check, FIDO2 auto-enrolment and `/proc/cmdline`
+   propagation act on the build host and are skipped; everything the node
+   needs on its first boot is still written.
+4. **Every partition path and every UKI file name is derived, never spelled.**
+   `pkg/partition.Path` produces `<disk>2` or `<disk>p2` as the kernel would
+   (loop and MMC devices need the `p`), and the boot file under `EFI/BOOT` is
+   `uki.BootFileName(arch)`; the completion gate (architecture.md §5, step 15) checks that name,
+   so an aarch64 install is failed for a missing `BOOTAA64.EFI`, not passed
+   for a stale `BOOTX64.EFI`. The ESP line in `/etc/fstab` is `LABEL=EFI
+   /boot/efi vfat defaults 0 2` — the label `disk.go` writes with `mkfs.vfat
+   -n EFI` — so the entry stays valid whatever device name the partition gets
+   on the booted node (2026-09-16; it used to bake the installer's `/dev/sdX1`).
+5. **Ordering inside `Install` is load-bearing.** The FIPS kernel must be
    installed *before* the UKI is built; `platform-initrd` must be in the dracut
    module *before* the UKI is built; the UKI must be signed *before* FIPS
    OpenSSL configuration, because FIPS mode breaks the signing path; Secure
    Boot enforcement must also precede it. Reordering these silently produces an
    unbootable or unsigned node.
-4. **Post-install script failure is fatal; almost nothing else is.** Package
+6. **Post-install script failure is fatal; almost nothing else is.** Package
    install, network config, UEFI boot entry, Secure Boot enforcement, the
    kernel-update hook, the firstboot service, `prepareLUKSKeyForTPM` and FIDO2
    enrolment all log a warning and continue. `ExecutePostInstall` returns an
    error that aborts the install, because that script provisions operator
    access and a node that installs "successfully" without it is unreachable.
-5. **Strategy priority is ascending — lower runs first.**
+7. **Strategy priority is ascending — lower runs first.**
    `StrategyChain.sort()` orders by `Priority()` ascending and `Execute` takes
    the first strategy whose `CanUnlock` is true and whose `Unlock` succeeds.
    **The doc comment on `KeyfileStrategy.Priority()` says "higher = tried
    first" and is wrong**; 80 is tried *after* TPM-PCR (1), TPM-Upgrade (2) and
    FIDO2 (3), and before Password (100). The effective order is in §5.
-6. **`Add` and `RegisterStrategy` ignore nil** so a minimal build can omit a
+8. **`Add` and `RegisterStrategy` ignore nil** so a minimal build can omit a
    strategy without a branch at the call site.
-7. **`ExecuteInstall` is fail-fast**, unlike `Execute`: the first strategy whose
+9. **`ExecuteInstall` is fail-fast**, unlike `Execute`: the first strategy whose
    `Install` fails aborts the whole chain.
-8. **A bundle of PCR selection has three sources with a fixed precedence** in
+10. **A bundle of PCR selection has three sources with a fixed precedence** in
    `pkg/boot/commands/boot.go`: the `--pcrs` flag, then
    `/boot/efi/tpm2/pcr-banks`, then `config.yaml` inside the mounted installer
    container. If all three fail the selection is left empty and
    `Config.Validate` rejects it with `ErrInvalidConfig`.
-9. **`Config.Validate` (initrd) requires `RootDevice`, `XKMSPath` and a
+11. **`Config.Validate` (initrd) requires `RootDevice`, `XKMSPath` and a
    non-empty `PCRSelection`.** `DefaultConfig()` deliberately leaves
    `PCRSelection` nil so that an installer config that forgot to set it fails
    loudly rather than sealing against a wrong-but-plausible default.
-10. **LUKS keyslots are fixed.** Slot 0 = installer passphrase, slot 1 = TPM
+12. **LUKS keyslots are fixed.** Slot 0 = installer passphrase, slot 1 = TPM
     key, slot 2 = recovery passphrase. `pkg/firstboot/strategy.go` defines
     `luksSlotTPMKey = 1` and `luksSlotRecovery = 2`; code that adds or removes
     slots must use them.
-11. **`installer.luks` is wiped only if sealing succeeded.** On a failed seal
+13. **`installer.luks` is wiped only if sealing succeeded.** On a failed seal
     the container is preserved so the boot can be retried — which means a
     half-provisioned node is still holding its LUKS key on the ESP.
-12. **PK is written last** during Secure Boot enforcement, and enforcement only
+14. **PK is written last** during Secure Boot enforcement, and enforcement only
     proceeds if the signed UKI verifies against the db certificate and the
     firmware is in Setup Mode.
+15. **A partition node is trusted only while it names the kernel's device.**
+    `waitForDevice` and `EnsureDeviceNode` compare an existing node's
+    major:minor with `/proc/partitions` (`refreshDeviceNode`) and recreate
+    it when they differ. Every `blockdev --rereadpt` drops and re-adds the
+    partitions, and a re-added partition gets a fresh extended minor while a
+    reference to the old one lingers; devtmpfs follows, a static `/dev` (the
+    factory-image assemble container's) does not, and a mount through the
+    stale node fails with ENXIO. Names the kernel does not list
+    (device-mapper names) are left alone.
+16. **A failed image-target install releases what `setupDisk` opened; a
+    failed live install does not.** `Install` names its error and a
+    deferred `afterFailedInstall` consults `releaseOnFailure`
+    (`pkg/installer/release.go`): for `Config.Target = image` it unmounts
+    the chroot pseudo-filesystems, the ESP and `/mnt` (lazily when a regular
+    unmount fails), removes the `vg0-root` mapping and closes the LUKS
+    mapping, on its own 30-second context so a cancelled install still
+    cleans up, and logs every step that did not complete as
+    `ErrDiskRelease`. The install error is what `Install` returns; the
+    release never replaces it. A live install keeps its mounts because the
+    operator is on the node and the reboot clears them; an image build has
+    no reboot, and a mapping or loop device left open on the build host
+    blocks the next build until someone finds it by hand (2026-09-20).
+17. **The kernel inside the UKI is signed when the boot firmware verifies
+    it.** `bootFirmware.VerifiesEmbeddedKernel` is false for `uefi` and true
+    for `uboot`; `buildUKI` calls `signEmbeddedKernel` before the PE builder
+    wraps the kernel, and it Authenticode-signs the decompressed EFI-stub
+    kernel in memory with the same DB key `signUKI` uses. systemd-stub hands
+    that kernel to `LoadImage`; EDK2 firmware lets the stub install a
+    Security-Arch override that trusts an image the stub already verified,
+    U-Boot has no such protocol and authenticates the inner image against
+    `db` (measured 2026-09-20: the UKI verified, the inner kernel did not,
+    and the stub failed in `linux_exec` with a Security violation). The x86
+    UKI keeps its unsigned inner kernel, so its bytes do not change.
+18. **`WIN_CERTIFICATE.dwLength` is header + DER; the 8-byte padding is
+    outside it.** `pkg/authenticode.embedSignature` writes what `sbsign`
+    writes. A `dwLength` that covered the padding verified under OVMF and
+    was rejected by U-Boot's mbedTLS PKCS#7 parser (length mismatch), whose
+    untranslated error then crashed the firmware; the U-Boot builder
+    carries a patch for the crash, the signer carries the convention.
+19. **A platform-built kernel comes from the media and is verified first.**
+    `OSConfig.KernelArtifactsDir` (YAML `os.kernel-artifacts-dir`) names a
+    directory on the install media in the `virt-kernel-builder` layout
+    (`vmlinuz-<flavor>`, `modules-<flavor>.tar.gz`, `kernel-version.txt`,
+    `SHA256SUMS`); `InstallBase` then installs no kernel apk and
+    `InstallKernel` runs `installMediaKernel` (`pkg/installer/mediakernel.go`):
+    `SHA256SUMS` verified, kernel copied to `/boot/vmlinuz-<flavor>`, modules
+    unpacked at the root, `depmod` for the release. The flavour is the
+    configured `kernel-package`'s (`linux-virt` → `virt`), so the UKI
+    builder's `vmlinuz-<flavor>` lookup (invariant 3's kernel flavour rule)
+    and dracut's `/lib/modules/<release>` see a packaged kernel. Failures are
+    `ErrMediaKernel` (`ErrorTypeOSInstall`). The QEMU virt stand-in of the
+    Raspberry Pi image is the consumer ([factory-image architecture.md](../factory-image/architecture.md) §2).
 
 ## 5. Unlock strategy table — as the code registers it
 
@@ -294,7 +402,11 @@ re-applies only the flags cobra reports as `Changed`.
 | `disk.encryption.tpm.recovery-key-strategy` | `destroy` \| `escrow` | `escrow` (`ResolvedRecoveryKeyStrategy()`) |
 | `disk.encryption.tpm.recovery-key.enabled` / `.method` | bool / string | `method` supports `autogen` only |
 | `os.os` | `alpine` \| `debian` \| `fedora` \| `ubuntu` | `alpine` |
+| `target` | `disk` \| `image` | `disk` — `image` is a loop-mounted disk image on a build host: the build host's TPM is not cleared, no FIDO2 key is probed, `/proc/cmdline` is not consulted, and sealing material is written for the node to seal on its own first boot |
+| `boot.firmware` | `uefi` \| `uboot` | `uefi` — `uboot` copies `boot.firmware-stage-dir` (default `/media/cdrom/boot-firmware`) onto the ESP root and treats Secure Boot keys as preseeded in the U-Boot binary; no `efibootmgr`, no efivars |
+| `boot.firmware-stage-dir` | string | `/media/cdrom/boot-firmware` |
 | `os.architecture` | string | `x86_64` |
+| `os.kernel-package` | string | `linux-lts` (the apk kernel; `linux-rpi` on a Raspberry Pi; ignored under FIPS) |
 | `os.hostname` | string | `trusted-platform` |
 | `os.fips` | bool | `false` |
 | `os.lockdown` / `os.lockdown-mode` | bool / `integrity`\|`confidentiality` | `true` / `confidentiality` |
@@ -404,7 +516,7 @@ ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 
 | Path | Constant | Lifetime |
 |---|---|---|
-| `/boot/efi/EFI/BOOT/BOOTX64.EFI` | — | permanent (the UKI) |
+| `/boot/efi/EFI/BOOT/BOOTX64.EFI` (`BOOTAA64.EFI` on aarch64) | `uki.BootFileName(arch)` | permanent (the UKI) |
 | `/boot/efi/tpm2/` | `EFITPMDir` | permanent |
 | `/boot/efi/tpm2/installer.luks` | `EFIInstallerFile`, `strategyInstallerContainerFile` | **first boot only**, then securely wiped |
 | `/boot/efi/tpm2/seal-platform.pub` | `EFISealPlatformPub`, `strategySealPub` | permanent |

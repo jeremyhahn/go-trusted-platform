@@ -60,3 +60,14 @@ func (e *CommandOutputError) Error() string {
 func (e *CommandOutputError) Unwrap() error {
 	return e.Err
 }
+
+// UnsupportedArchitectureError reports an architecture the UKI package has no
+// stub path or boot file name for.
+type UnsupportedArchitectureError struct {
+	Arch string
+}
+
+// Error implements error.
+func (e *UnsupportedArchitectureError) Error() string {
+	return "uki: unsupported architecture " + e.Arch
+}

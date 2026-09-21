@@ -21,6 +21,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 	"gopkg.in/yaml.v2"
 )
 
@@ -50,6 +51,10 @@ type ISOBuildConfig struct {
 	AlpineVersion string `yaml:"alpine-version" json:"alpine_version"`
 	AlpineMirror  string `yaml:"alpine-mirror" json:"alpine_mirror"`
 	Architecture  string `yaml:"architecture" json:"architecture"`
+
+	// PlatformVersion is the platform release baked into the media
+	// (PlatformConfig.Version); the CLI reads it from the VERSION file.
+	PlatformVersion string `yaml:"platform-version,omitempty" json:"platform_version,omitempty"`
 
 	// Platform type (client or server)
 	PlatformType PlatformType `yaml:"platform-type" json:"platform_type"`
@@ -516,6 +521,11 @@ type ISOConfig struct {
 	// MirrorURL is the base mirror URL (e.g., "http://mirror.cs.odu.edu/alpine")
 	MirrorURL string
 
+	// Architecture is the Alpine architecture of the ISO to download
+	// (x86_64, the default, or aarch64); it selects the release directory and
+	// the ISO file name.
+	Architecture string
+
 	// WorkDir is the directory where the ISO will be downloaded
 	WorkDir string
 
@@ -557,6 +567,7 @@ func DefaultISOConfig() *ISOConfig {
 	return &ISOConfig{
 		Version:        "3.22.2",
 		MirrorURL:      "http://mirror.cs.odu.edu/alpine",
+		Architecture:   "x86_64",
 		WorkDir:        "work",
 		VerifyChecksum: true,
 		ResumeDownload: true,
@@ -578,16 +589,22 @@ func (c *ISOConfig) Validate() error {
 		return &MessageError{Msg: "mirror URL is required"}
 	}
 
+	arch, err := uki.ParseArchitecture(c.Architecture)
+	if err != nil {
+		return &UnsupportedArchitectureError{Arch: c.Architecture}
+	}
+	c.Architecture = string(arch)
+
 	// Auto-generate ISO filename if not provided
 	if c.ISO == "" {
-		c.ISO = fmt.Sprintf("alpine-standard-%s-x86_64.iso", c.Version)
+		c.ISO = fmt.Sprintf("alpine-standard-%s-%s.iso", c.Version, c.Architecture)
 	}
 
 	// Auto-generate download URL if not provided
 	if c.URL == "" {
 		majorVersion := getMajorVersion(c.Version)
-		c.URL = fmt.Sprintf("%s/v%s/releases/x86_64/%s",
-			c.MirrorURL, majorVersion, c.ISO)
+		c.URL = fmt.Sprintf("%s/v%s/releases/%s/%s",
+			c.MirrorURL, majorVersion, c.Architecture, c.ISO)
 	}
 
 	// Auto-generate ISODir if not provided

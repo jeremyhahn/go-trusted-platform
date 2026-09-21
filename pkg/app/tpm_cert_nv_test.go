@@ -131,12 +131,12 @@ func TestTPMIdentityPersistenceIsRoutedToTheCertStore(t *testing.T) {
 	applyCertHandleNVInterim(cfg, logging.DefaultLogger())
 
 	// IAK: no NV handle, so ProvisionIAKCert takes the certificate-store
-	// branch; the empty CN means go-xkms supplies its own default rather
-	// than discarding a configured one (#74).
+	// branch, and its CN is populated so the store has a key (#78: an
+	// empty CN is what the store rejects on a fresh provision).
 	assert.Zero(t, cfg.IAK.CertHandle,
 		"IAK must not take the NV path — writeCertToNVRAM is broken for certificates (go-xkms#138)")
-	assert.Empty(t, cfg.IAK.CN,
-		"a non-empty IAK CN is discarded upstream and reaches the store empty (go-xkms#137)")
+	assert.Equal(t, "node-07-iak", cfg.IAK.CN,
+		"the certificate store keys on the CN, so the IAK needs a non-empty one")
 
 	// IDevID: handle cleared, so both the write and the read use the
 	// certificate store, and its CN is populated so the store has a key.

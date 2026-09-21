@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 )
 
 // dracutUKIBuilder implements UKIBuilder using dracut's native UKI support
@@ -114,13 +115,10 @@ func (db *dracutUKIBuilder) BuildUKI(ctx context.Context, config *UKIConfig, out
 		args = append(args, "--early-microcode", config.MicrocodePath)
 	}
 
-	// Look for systemd-boot EFI stub
-	// Common locations: /usr/lib/systemd/boot/efi/linuxx64.efi.stub
-	stubPaths := []string{
-		"/usr/lib/systemd/boot/efi/linuxx64.efi.stub",
-		"/lib/systemd/boot/efi/linuxx64.efi.stub",
-		"/usr/lib/systemd/boot/efi/linux.efi.stub",
-	}
+	// Look for the systemd-boot EFI stub of the architecture this binary
+	// runs on (the rebuild happens on the installed node), then the legacy
+	// locations.
+	stubPaths := hostStubCandidates()
 
 	var stubPath string
 	for _, path := range stubPaths {
@@ -160,4 +158,19 @@ func (db *dracutUKIBuilder) BuildUKI(ctx context.Context, config *UKIConfig, out
 
 	db.logger.Info("[DRACUT] UKI built successfully", "size", len(ukiData))
 	return nil
+}
+
+// hostStubCandidates lists the systemd-boot EFI stub locations to probe on the
+// running node: the host architecture's stub as pkg/uki names it, then the
+// legacy x86_64 spellings older systemd packages used.
+func hostStubCandidates() []string {
+	candidates := []string{}
+	if stub, err := uki.StubPath(uki.HostArchitecture()); err == nil {
+		candidates = append(candidates, stub)
+	}
+	return append(candidates,
+		"/usr/lib/systemd/boot/efi/linuxx64.efi.stub",
+		"/lib/systemd/boot/efi/linuxx64.efi.stub",
+		"/usr/lib/systemd/boot/efi/linux.efi.stub",
+	)
 }

@@ -328,6 +328,64 @@ func buildRegistry() []entry {
 				SambaEncryption:    "required",
 			},
 		},
+		// ---------------------------------------------------------------
+		// Raspberry Pi — manufacturer-wide default
+		//
+		// No BMC, no Redfish: the identity comes from the media generator
+		// (installer hardware-manufacturer/-model overrides). The primary
+		// UART is the PL011 on GPIO14/15 (ttyAMA0 once Bluetooth is moved
+		// off it with dtoverlay=disable-bt); the same device is what the
+		// QEMU virt machine used for emulated boots presents. No earlycon:
+		// the PL011 base address differs per board and per emulator, and a
+		// wrong one faults before the console exists. rootwait covers the
+		// SD card appearing after the initramfs starts.
+		// ---------------------------------------------------------------
+		{
+			match: match{manufacturer: "raspberry pi"},
+			quirk: Quirk{
+				Manufacturer: "Raspberry Pi",
+				KernelCmdline: []string{
+					"console=ttyAMA0,115200",
+					"console=tty1",
+					"rootwait",
+					"loglevel=7",
+				},
+				SOLPort:            "ttyAMA0",
+				SOLPayloadInstance: 0x01,
+				EarlyconSpec:       "",
+				SambaMinProtocol:   "SMB2",
+				SambaEncryption:    "required",
+			},
+		},
+		// ---------------------------------------------------------------
+		// Raspberry Pi / QEMU virt stand-in — the emulated boot of the
+		// factory image (pkg/diskimage/qemuvirt).
+		//
+		// Same UART as the Pi, opposite console order. The Pi's last
+		// console= is tty1 so an operator at the HDMI port sees OpenRC
+		// and the firstboot seal; the stand-in has no display, only the
+		// serial the integration suite reads, so ttyAMA0 must be
+		// /dev/console or everything after switch_root is invisible.
+		// ---------------------------------------------------------------
+		{
+			match: match{manufacturer: "raspberry pi", model: "qemu virt"},
+			quirk: Quirk{
+				Manufacturer: "Raspberry Pi",
+				Model:        "QEMU virt stand-in",
+				KernelCmdline: []string{
+					"console=tty1",
+					// ttyAMA0 last → wins as primary (/dev/console).
+					"console=ttyAMA0,115200",
+					"rootwait",
+					"loglevel=7",
+				},
+				SOLPort:            "ttyAMA0",
+				SOLPayloadInstance: 0x01,
+				EarlyconSpec:       "",
+				SambaMinProtocol:   "SMB2",
+				SambaEncryption:    "required",
+			},
+		},
 	}
 
 	for i := range entries {

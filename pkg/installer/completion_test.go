@@ -39,7 +39,7 @@ func espWithUKI(t *testing.T, contents []byte) string {
 	bootDir := filepath.Join(root, espBootDir)
 	require.NoError(t, os.MkdirAll(bootDir, 0o755))
 	if contents != nil {
-		require.NoError(t, os.WriteFile(filepath.Join(bootDir, espUKIName), contents, 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(bootDir, x86BootTarget.ukiFileName), contents, 0o644))
 	}
 	return root
 }

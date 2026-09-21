@@ -357,9 +357,6 @@ GOBIN                   := $(shell dirname `which go`)
 PYTHONBIN               ?= /usr/bin/python3.8
 PIPBIN                  ?= pip
 
-ARM_CC				    ?= aarch64-linux-gnu-gcc-14
-ARM_CXX                 ?= aarch64-linux-gnu-g++-14
-
 GIT_REPO                ?= github.com
 GIT_OWNER               ?= jeremyhahn
 PACKAGE                 ?= go-trusted-platform
@@ -369,6 +366,15 @@ PLATFORMCTL             ?= bin/platformctl
 PLATFORM_INITRD         ?= bin/platform-initrd
 GATEWAYD                ?= bin/gatewayd
 DEPLOYER_PIN            ?= bin/deployer-pin
+
+# Cross-compiled arm64 binaries land under their own directory so a native
+# x86-64 build never overwrites them (and vice versa).
+ARM64_BIN_DIR           ?= bin/aarch64
+PLATFORMD_ARM64         ?= $(ARM64_BIN_DIR)/platformd
+PLATFORMCTL_ARM64       ?= $(ARM64_BIN_DIR)/platformctl
+PLATFORMCTL_STATIC_ARM64 ?= $(ARM64_BIN_DIR)/platformctl-static
+PLATFORM_INITRD_ARM64   ?= $(ARM64_BIN_DIR)/platform-initrd
+GATEWAYD_ARM64          ?= $(ARM64_BIN_DIR)/gatewayd
 
 APP_VERSION       		?= $(shell git describe --tags --abbrev=0)
 GIT_TAG                 = $(shell git describe --tags)
@@ -432,9 +438,6 @@ WEB_SRC                     ?= web
 
 SWAGGER_HOST                ?= $(DOMAIN)
 
-SYNC_USER                   ?= pi
-SYNC_HOST                   ?= rpi
-
 DOCKER_HOME                 ?= build/docker
 DOCKER_REPO                 ?= docker.io
 DOCKER_USER                 ?= jeremyhahn
@@ -444,27 +447,12 @@ DOCKER_PLATFORM_BUILDER     ?= trusted-platform-builder
 DOCKER_PLATFORM_BUILDER_TAG ?= latest
 DOCKER_BUILDER_IMAGE        ?= $(DOCKER_REPO)/$(DOCKER_USER)/$(DOCKER_PLATFORM_BUILDER):$(DOCKER_PLATFORM_BUILDER_TAG)
 DOCKER_ANSIBLE_BUILDER      ?= ansible-ee
-DOCKER_AARCH64_CONTEXT      ?= arm64
-DOCKER_AARCH64_HOST         ?= $(SYNC_HOST)
-DOCKER_AARCH64_SSHKEY       ?= ~/.ssh/id_rsa
 
 # ISO_NAME is the artifact name produced by `platformctl iso create`. The
 # legacy Docker-based iso-hwtpm / iso-swtpm targets and their
 # trusted-platform-iso-builder image were removed in favor of the
 # in-CLI builder; see `bin/platformctl iso create --help`.
 ISO_NAME                    ?= trusted-platform.iso
-
-RPI_OS                      ?= raspios
-RPI_IMAGE_NAME		        ?= $(APPNAME)-$(APP_VERSION)-$(ENV)
-RPI_IMAGE_FILENAME          ?= $(RPI_IMAGE_NAME).img
-RPI_IMAGE_ARTIFACT          ?= $(PACKER_HOME)/$(RPI_IMAGE_FILENAME)
-RPI_SDCARD                  ?= /dev/sda
-
-PACKER_HOME                 ?= build/packer
-PACKER_FILE                 ?= $(PACKER_HOME)/rpi/$(RPI_OS).json
-PACKER_BUILDER_RASPIOS64    ?= raspbian
-PACKER_BUILDER_UBUNTU64     ?= ubuntu-20.04.01-arm64
-PACKER_BUILDER              ?= $(PACKER_BUILDER_RASPIOS64)
 
 UID                         := $(shell id -u)
 GID                         := $(shell id -g)
@@ -573,6 +561,11 @@ default: build
 # builds the same configuration the make targets do. Deliberately placed
 # AFTER `default:` — the first non-special target is what bare `make` runs.
 .PHONY: print-build-tags
+## help: List the documented make targets (every `## target: description` line)
+.PHONY: help
+help:
+	@grep -h '^## [A-Za-z0-9_.-]*:' $(MAKEFILE_LIST) | sed 's/^## //' | sort
+
 ## print-build-tags: Print the derived build-tag set (use this, never a copied list)
 #
 # The authoritative tag set for any run not fully delegated to make. Prefer
@@ -590,9 +583,6 @@ print-golangci-lint-version:
 
 .PHONY: init
 init:
-	-docker buildx rm $(DOCKER_BUILDER_AMD64)
-	-docker buildx rm $(DOCKER_BUILDER_AAARCH64)
-	-docker context rm $(DOCKER_AARCH64_HOST)
 	sudo apt-get install -y \
 		docker.io \
 		virt-manager \
@@ -609,8 +599,6 @@ init:
 	sudo /bin/bash -c 'echo "allow virbr0" > /etc/qemu/bridge.conf'
 	sudo chmod u+s /usr/lib/qemu/qemu-bridge-helper
 	docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
-	docker context create $(DOCKER_AARCH64_CONTEXT) --docker "host=ssh://$(DOCKER_AARCH64_HOST)"
-	ssh-copy-id -i $(DOCKER_AARCH64_SSHKEY) $(DOCKER_AARCH64_HOST) || true
 
 
 .PHONY: tools
@@ -760,30 +748,34 @@ build-static: build
 build-debug-static: build-debug
 	@echo "build-debug-static target is deprecated. Use 'make build-debug' instead (now produces static binaries by default)."
 
-# Cross-compile ARM 64-bit (produces static binaries)
+# Cross-compile ARM 64-bit: a pure-Go build (CGO_ENABLED=0, same tag set as the
+# native `build` target), so no cross toolchain is required and the result is a
+# statically linked ELF. Output goes to $(ARM64_BIN_DIR), never bin/, so it
+# cannot clobber a native build. platformctl-static is the sibling name that
+# `platformctl iso create` (pkg/iso/customize.go) looks for next to platformd;
+# with CGO disabled it is byte-identical to platformctl, so it is a copy.
 .PHONY: build-arm64
+## build-arm64: Cross-compile platformd, platformctl and platformctl-static for linux/arm64 into bin/aarch64
 build-arm64: _web-embed-prepare
-	@mkdir -p bin
-	CC=$(ARM_CC) CXX=$(ARM_CXX) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -o $(PLATFORMD) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformd
-	CC=$(ARM_CC) CXX=$(ARM_CXX) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -o $(PLATFORMCTL) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformctl
+	@mkdir -p $(ARM64_BIN_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMD_ARM64) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformd
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMCTL_ARM64) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformctl
+	cp -f $(PLATFORMCTL_ARM64) $(PLATFORMCTL_STATIC_ARM64)
 
 .PHONY: build-arm64-static
 build-arm64-static: build-arm64
-	@echo "build-arm64-static target is deprecated. Use 'make build-arm64' instead (now produces static binaries by default)."
+	@echo "build-arm64-static target is deprecated. Use 'make build-arm64' instead (a CGO_ENABLED=0 cross build is already static)."
 
 .PHONY: build-arm64-debug
 build-arm64-debug: _web-embed-prepare
-	@mkdir -p bin
-	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -gcflags "all=-N -l" -o $(PLATFORMD) --ldflags='-linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformd
-	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -gcflags "all=-N -l" -o $(PLATFORMCTL) --ldflags='-linkmode external -extldflags -static -v ${LDFLAGS}' ./cmd/platformctl
+	@mkdir -p $(ARM64_BIN_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMD_ARM64) -gcflags='all=-N -l' --ldflags '${LDFLAGS}' ./cmd/platformd
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMCTL_ARM64) -gcflags='all=-N -l' --ldflags '${LDFLAGS}' ./cmd/platformctl
+	cp -f $(PLATFORMCTL_ARM64) $(PLATFORMCTL_STATIC_ARM64)
 
 .PHONY: build-arm64-debug-static
 build-arm64-debug-static: build-arm64-debug
-	@echo "build-arm64-debug-static target is deprecated. Use 'make build-arm64-debug' instead (now produces static binaries by default)."
+	@echo "build-arm64-debug-static target is deprecated. Use 'make build-arm64-debug' instead (a CGO_ENABLED=0 cross build is already static)."
 
 
 # ==============================================================================
@@ -823,19 +815,21 @@ platform-initrd-debug:
 platform-initrd-static: platform-initrd
 	@echo "platform-initrd-static target is deprecated. Use 'make platform-initrd' instead (already produces static binaries)."
 
-# Cross-compile ARM 64-bit for initrd (produces static binaries)
+# Cross-compile ARM 64-bit for initrd: same pure-Go build as `platform-initrd`,
+# written to $(ARM64_BIN_DIR) so it never overwrites the native binary.
 .PHONY: platform-initrd-arm64
+## platform-initrd-arm64: Cross-compile platform-initrd for linux/arm64 into bin/aarch64
 platform-initrd-arm64:
-	@mkdir -p bin
+	@mkdir -p $(ARM64_BIN_DIR)
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
 	$(GOBIN)/go build -tags "$(INITRD_BUILD_TAGS)" \
 		-ldflags="-s -w ${LDFLAGS}" \
-		-o $(PLATFORM_INITRD) ./cmd/platform-initrd
-	@echo "Binary size: $$(du -h $(PLATFORM_INITRD) | cut -f1)"
+		-o $(PLATFORM_INITRD_ARM64) ./cmd/platform-initrd
+	@echo "Binary size: $$(du -h $(PLATFORM_INITRD_ARM64) | cut -f1)"
 
 .PHONY: platform-initrd-arm64-static
 platform-initrd-arm64-static: platform-initrd-arm64
-	@echo "platform-initrd-arm64-static target is deprecated. Use 'make platform-initrd-arm64' instead (already produces static binaries)."
+	@echo "platform-initrd-arm64-static target is deprecated. Use 'make platform-initrd-arm64' instead (a CGO_ENABLED=0 cross build is already static)."
 
 
 # ==============================================================================
@@ -875,20 +869,23 @@ build-gatewayd-debug:
 build-gatewayd-static: build-gatewayd
 	@echo "build-gatewayd-static target is deprecated. Use 'make build-gatewayd' instead (now produces static binaries by default)."
 
-# Cross-compile ARM 64-bit for gatewayd (produces static binaries)
+# Cross-compile ARM 64-bit for gatewayd: a pure-Go build (CGO_ENABLED=0 with
+# osusergo/netgo, exactly as the native `build` target links gatewayd), written
+# to $(ARM64_BIN_DIR) so it never overwrites the native binary.
 .PHONY: build-gatewayd-arm64
+## build-gatewayd-arm64: Cross-compile gatewayd for linux/arm64 into bin/aarch64
 build-gatewayd-arm64:
-	@mkdir -p bin
-	@echo "Building gatewayd for ARM64 (static)..."
-	CC=$(ARM_CC) CXX=$(ARM_CXX) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -tags "$(GATEWAYD_BUILD_TAGS)" \
-		--ldflags="-w -s -linkmode external -extldflags '-static' -v ${LDFLAGS}" \
-		-o $(GATEWAYD) ./cmd/gatewayd
-	@echo "Binary size: $$(du -h $(GATEWAYD) | cut -f1)"
+	@mkdir -p $(ARM64_BIN_DIR)
+	@echo "Building gatewayd for ARM64 (static, pure Go)..."
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -tags "osusergo netgo $(GATEWAYD_BUILD_TAGS)" \
+		--ldflags="-w -s ${LDFLAGS}" \
+		-o $(GATEWAYD_ARM64) ./cmd/gatewayd
+	@echo "Binary size: $$(du -h $(GATEWAYD_ARM64) | cut -f1)"
 
 .PHONY: build-gatewayd-arm64-static
 build-gatewayd-arm64-static: build-gatewayd-arm64
-	@echo "build-gatewayd-arm64-static target is deprecated. Use 'make build-gatewayd-arm64' instead (now produces static binaries by default)."
+	@echo "build-gatewayd-arm64-static target is deprecated. Use 'make build-gatewayd-arm64' instead (a CGO_ENABLED=0 cross build is already static)."
 # ==============================================================================
 
 # ==============================================================================
@@ -1197,7 +1194,6 @@ clean:
 		pkg/store/object/testdata \
 		pkg/store/certstore/testdata \
 		config.yaml
-	cd build/packer/rpi && sudo make clean
 
 # Platform Web Services
 .PHONY: webservice
@@ -1764,7 +1760,9 @@ GO_MODULE_CACHE := $(shell go env GOMODCACHE)
 # next target added cannot quietly omit the container.
 #
 # $(1) is the runner's target keyword, and also names the container so
-# concurrent suites do not collide on --name.
+# concurrent suites do not collide on --name. $(2) is optional extra docker
+# arguments (environment for a suite's inputs, more mounts); most suites
+# pass nothing.
 #
 # The source tree is mounted at BOTH paths on purpose: -w is the
 # $(SOURCES_BASE) path, while the runner script is invoked by its
@@ -1785,6 +1783,7 @@ define run-integration-suite
 		-e CGO_ENABLED=1 \
 		-e GOTOOLCHAIN=auto \
 		-e GOWORK=off \
+		$(2) \
 		$(DEVCONTAINER_IMAGE) \
 		bash /workspace/build/docker/devcontainer/run-integration-tests.sh $(1) "$(strip $(TEST_BUILD_TAGS))"
 endef
@@ -3474,7 +3473,6 @@ release: clean \
 	release-public-html \
 	release-binaries \
 	isos \
-	packer-rpi \
 	release-github
 
 .PHONY: release-local
@@ -3485,8 +3483,7 @@ release-local: clean \
 	docker-nfs-server-load \
 	release-public-html \
 	release-binaries \
-	isos \
-	packer-rpi
+	isos
 
 .PHONY: release-commit
 release-commit:
@@ -3573,7 +3570,6 @@ release-github:
 		$(PLATFORMD)-static-musl-aarch64 \
 		$(PLATFORMD)-static-musl-x86_64 \
 		trusted-platform.iso \
-		trusted-platform-raspbian.img \
 		$(WEB_PUBLIC_HTML).tar.gz
 
 .PHONY: release-github-delete
@@ -3585,19 +3581,16 @@ release-github-delete:
 
 
 # Docker
+# Both bake groups (docker-bake.hcl) run on the default buildx builder; the
+# arm64 group is built through binfmt/qemu-user-static (registered by `init`),
+# not on a remote arm64 docker context.
 .PHONY: docker-bake-load
 docker-bake-load:
-	docker context use default
-	docker buildx bake amd64 --load
-	docker context use $(DOCKER_AARCH64_CONTEXT)
-	docker buildx bake arm64 --load
+	docker buildx bake amd64 arm64 --load
 
 .PHONY: docker-bake-push
 docker-bake-push:
-	docker context use default
-	docker buildx bake amd64 --push
-	docker context use $(DOCKER_AARCH64_CONTEXT)
-	docker buildx bake arm64 --push
+	docker buildx bake amd64 arm64 --push
 
 # Docker :: PXE server
 .PHONY: docker-pxe-server-load
@@ -3777,6 +3770,49 @@ docker-builder-load-amd64:
 		-t $(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
 		-f build/docker/$(APPNAME)-builder/$(DOCKER_BUILDER_DOCKERFILE) .
 
+# U-Boot for the Raspberry Pi factory image (build/docker/uboot-builder):
+# rpi_arm64 (SPI TPM, loaded by the Pi firmware as kernel8.img) and qemu_arm64
+# (the emulated stand-in), both with EFI TCG2 measured boot and EFI Secure
+# Boot whose PK/KEK/db are preseeded from UBOOT_KEYS_DIR. One build per key
+# set; the output carries the cache key of its inputs.
+UBOOT_KEYS_DIR   ?= $(HOME)/.trusted-platform/secure-boot
+UBOOT_OUTPUT_DIR ?= build/docker/uboot-builder/output
+
+.PHONY: uboot-build
+## uboot-build: Build the rpi_arm64 and qemu_arm64 U-Boot binaries with the Secure Boot keys from UBOOT_KEYS_DIR preseeded
+uboot-build:
+	$(MAKE) -C build/docker/uboot-builder build KEYS_DIR=$(abspath $(UBOOT_KEYS_DIR)) OUTPUT_DIR=$(abspath $(UBOOT_OUTPUT_DIR))
+
+# The virt kernel: the QEMU virt stand-in's kernel, cross-built from Alpine's
+# linux-lts version with the memory-mapped TIS TPM driver Alpine's aarch64
+# kernels lack (build/docker/virt-kernel-builder/Dockerfile says why).
+VIRT_KERNEL_OUTPUT_DIR ?= build/docker/virt-kernel-builder/output
+
+.PHONY: virt-kernel-build
+## virt-kernel-build: Cross-build the aarch64 virt kernel for the QEMU stand-in (cached by its inputs' digests)
+virt-kernel-build:
+	$(MAKE) -C build/docker/virt-kernel-builder build OUTPUT_DIR=$(abspath $(VIRT_KERNEL_OUTPUT_DIR))
+
+.PHONY: virt-kernel-verify
+## virt-kernel-verify: Recompute the SHA256SUMS of the built virt kernel
+virt-kernel-verify:
+	$(MAKE) -C build/docker/virt-kernel-builder verify OUTPUT_DIR=$(abspath $(VIRT_KERNEL_OUTPUT_DIR))
+
+.PHONY: virt-kernel-clean
+## virt-kernel-clean: Remove the built virt kernel
+virt-kernel-clean:
+	$(MAKE) -C build/docker/virt-kernel-builder clean OUTPUT_DIR=$(abspath $(VIRT_KERNEL_OUTPUT_DIR))
+
+.PHONY: uboot-verify
+## uboot-verify: Recompute the SHA256SUMS of the built U-Boot artifacts
+uboot-verify:
+	$(MAKE) -C build/docker/uboot-builder verify OUTPUT_DIR=$(abspath $(UBOOT_OUTPUT_DIR))
+
+.PHONY: uboot-clean
+## uboot-clean: Remove the built U-Boot artifacts
+uboot-clean:
+	$(MAKE) -C build/docker/uboot-builder clean OUTPUT_DIR=$(abspath $(UBOOT_OUTPUT_DIR))
+
 .PHONY: docker-builder-load-aarch64
 docker-builder-load-aarch64:
 	BUILDKIT_DEBUG=1 docker buildx build --load \
@@ -3888,6 +3924,183 @@ docker-run-yubico-piv-tool:
 # image were removed; `bin/platformctl iso create` is the supported
 # and intended workflow now (downloads Alpine, customizes, generates
 # Secure Boot keys, and emits the bootable ISO).
+# Factory disk images (pkg/diskimage, `platformctl diskimage`): the installer
+# runs inside the arm64 assemble container against a loop-mounted image.
+# Requires the arm64 binaries (rpi-binaries); `platformctl diskimage create`
+# itself generates the Secure Boot keys in UBOOT_KEYS_DIR when they do not
+# exist, builds (or reuses) U-Boot in UBOOT_OUTPUT_DIR for that key set, and
+# builds the assemble container image. uboot-build and
+# docker-diskimage-builder-load remain for doing those steps on their own.
+DISKIMAGE_TARGET      ?= rpi
+DISKIMAGE_MODEL       ?= rpi4
+DISKIMAGE_SIZE_MB     ?= 4096
+DISKIMAGE_OUTPUT      ?= bin/trusted-platform-$(DISKIMAGE_TARGET).img
+DISKIMAGE_BUILDER_IMG ?= trusted-platform-diskimage-builder:arm64
+DISKIMAGE_FLAGS       ?=
+RPI_SDCARD            ?=
+RPI_SDCARD_CONFIRM    ?=
+
+.PHONY: docker-diskimage-builder-load
+## docker-diskimage-builder-load: Build the arm64 assemble container image for platformctl diskimage
+docker-diskimage-builder-load:
+	docker buildx build --load --platform=linux/arm64 -t $(DISKIMAGE_BUILDER_IMG) build/docker/diskimage-builder
+
+.PHONY: image-rpi
+## image-rpi: Build the Raspberry Pi SD-card image (DISKIMAGE_MODEL=rpi4, DISKIMAGE_OUTPUT=bin/trusted-platform-rpi.img)
+image-rpi: build rpi-binaries
+	$(PLATFORMCTL) diskimage create --target rpi --model $(DISKIMAGE_MODEL) --size $(DISKIMAGE_SIZE_MB) \
+		--binaries-dir $(ARM64_BIN_DIR) --uboot-output-dir $(UBOOT_OUTPUT_DIR) --keys-dir $(UBOOT_KEYS_DIR) \
+		--builder-image $(DISKIMAGE_BUILDER_IMG) --output $(DISKIMAGE_OUTPUT) $(DISKIMAGE_FLAGS)
+
+.PHONY: image-rpi-qemu
+## image-rpi-qemu: Build the QEMU virt stand-in image the diskimage integration suite boots
+image-rpi-qemu: build rpi-binaries
+	$(PLATFORMCTL) diskimage create --target qemu-virt --size $(DISKIMAGE_SIZE_MB) \
+		--binaries-dir $(ARM64_BIN_DIR) --uboot-output-dir $(UBOOT_OUTPUT_DIR) --keys-dir $(UBOOT_KEYS_DIR) \
+		--virt-kernel-output-dir $(VIRT_KERNEL_OUTPUT_DIR) \
+		--builder-image $(DISKIMAGE_BUILDER_IMG) --output bin/trusted-platform-qemu-virt.img $(DISKIMAGE_FLAGS)
+
+.PHONY: image-rpi-xz
+## image-rpi-xz: Compress the Raspberry Pi image for release
+image-rpi-xz: image-rpi
+	xz -T0 -k -f $(DISKIMAGE_OUTPUT)
+
+.PHONY: rpi-sdcard
+## rpi-sdcard: Write the Raspberry Pi image to a removable device (RPI_SDCARD=/dev/sdX RPI_SDCARD_CONFIRM=yes); the only sudo target
+rpi-sdcard:
+	@test -n "$(RPI_SDCARD)" || { echo "RPI_SDCARD=/dev/sdX is required"; exit 1; }
+	@test "$(RPI_SDCARD_CONFIRM)" = "yes" || { echo "refusing to write $(RPI_SDCARD) without RPI_SDCARD_CONFIRM=yes"; exit 1; }
+	@test -b "$(RPI_SDCARD)" || { echo "$(RPI_SDCARD) is not a block device"; exit 1; }
+	@root=$$(lsblk -no pkname $$(findmnt -no SOURCE /) 2>/dev/null); test "/dev/$$root" != "$(RPI_SDCARD)" || { echo "$(RPI_SDCARD) holds the running root filesystem"; exit 1; }
+	@test "$$(lsblk -dno RM $(RPI_SDCARD))" = "1" || { echo "$(RPI_SDCARD) is not a removable device (lsblk RM=1)"; exit 1; }
+	@test -f "$(DISKIMAGE_OUTPUT)" || { echo "$(DISKIMAGE_OUTPUT) not found (run make image-rpi)"; exit 1; }
+	sudo dd if=$(DISKIMAGE_OUTPUT) of=$(RPI_SDCARD) bs=4M conv=fsync status=progress
+	@echo "Image written to $(RPI_SDCARD)"
+
+.PHONY: test-diskimage
+## test-diskimage: Unit tests for pkg/diskimage and pkg/cli/commands/diskimage
+test-diskimage:
+	$(MAKE) test-pkg PKG="./pkg/diskimage/... ./pkg/cli/commands/diskimage/"
+
+.PHONY: coverage-diskimage
+## coverage-diskimage: Coverage for pkg/diskimage (mocks and tests excluded)
+coverage-diskimage:
+	@mkdir -p $(COVERAGE_DIR)
+	$(GOTEST) $(BUILD_TAGS_ARG) -coverprofile=$(COVERAGE_DIR)/diskimage.out ./pkg/diskimage/... ./pkg/cli/commands/diskimage/
+	@grep -v -E '_test\.go|/mocks?/' $(COVERAGE_DIR)/diskimage.out > $(COVERAGE_DIR)/diskimage.filtered.out || true
+	$(GOBIN)/go tool cover -func=$(COVERAGE_DIR)/diskimage.filtered.out | tail -1
+
+.PHONY: bench-diskimage
+## bench-diskimage: Benchmarks for pkg/diskimage
+bench-diskimage:
+	$(GOTEST) $(BUILD_TAGS_ARG) -run '^$$' -bench . -benchmem ./pkg/diskimage/...
+
+.PHONY: test-qemu
+## test-qemu: Unit tests for pkg/qemu (x86_64 golden and aarch64 profiles) and pkg/qemu/harness
+test-qemu:
+	$(MAKE) test-pkg PKG="./pkg/qemu/ ./pkg/qemu/harness/"
+
+# The qemu-virt image and the U-Boot it boots with, as the integration suite
+# sees them. Both are produced on the host (binfmt + privileged assemble
+# container) and handed to the devcontainer read-only.
+DISKIMAGE_QEMU_IMG   := bin/trusted-platform-qemu-virt.img
+DISKIMAGE_UBOOT_QEMU := $(UBOOT_OUTPUT_DIR)/qemu_arm64/u-boot.bin
+DISKIMAGE_UBOOT_RPI  := $(UBOOT_OUTPUT_DIR)/rpi_arm64/u-boot.bin
+
+# The suite's inputs as the devcontainer sees them. The work directory is
+# under the mounted source tree (work/ is ignored by git), not the
+# container's tmpfs /tmp: the boot copies the image there and the guest
+# writes to it.
+DISKIMAGE_SUITE_ENV := -e DISKIMAGE_IMAGE=/workspace/$(DISKIMAGE_QEMU_IMG) \
+	-e DISKIMAGE_RPI_IMAGE=/workspace/$(DISKIMAGE_OUTPUT) \
+	-e DISKIMAGE_UBOOT=/workspace/$(DISKIMAGE_UBOOT_QEMU) \
+	-e DISKIMAGE_WORK_DIR=/workspace/work/diskimage-integration
+
+.PHONY: integration-test-diskimage
+## integration-test-diskimage: Boot the factory image under QEMU aarch64 + swtpm in the devcontainer (builds the images first; 30-60 min under TCG)
+integration-test-diskimage: build-devcontainer image-rpi image-rpi-qemu
+	$(call run-integration-suite,diskimage,$(DISKIMAGE_SUITE_ENV))
+
+.PHONY: integration-test-diskimage-only
+## integration-test-diskimage-only: The diskimage suite against images already in bin/ (no rebuild)
+integration-test-diskimage-only: build-devcontainer
+	$(call run-integration-suite,diskimage,$(DISKIMAGE_SUITE_ENV))
+
+.PHONY: integration-test-diskimage-shell
+## integration-test-diskimage-shell: Interactive devcontainer shell with the factory-image inputs in the environment
+integration-test-diskimage-shell: build-devcontainer
+	@docker run --rm -it --privileged \
+		--name go-trusted-platform-diskimage-shell \
+		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
+		-v $(PWD):/workspace \
+		-v $(GO_MODULE_CACHE):/go/pkg/mod \
+		-w /workspace \
+		-e GOWORK=off \
+		$(DISKIMAGE_SUITE_ENV) \
+		$(DEVCONTAINER_IMAGE) \
+		bash
+
+# The arm64 userspace suite runs the aarch64 platformd on musl against a
+# swtpm inside an arm64 Alpine container (binfmt on the host, like the
+# assemble container), without booting anything: minutes, not an hour.
+DISKIMAGE_USERSPACE_IMG := trusted-platform-alpine-swtpm:arm64
+DISKIMAGE_USERSPACE_BIN := bin/aarch64/diskimage-userspace.test
+
+# The software TPM the userspace suite talks to runs on the HOST, natively,
+# with its state directory bind-mounted into the arm64 container: under
+# qemu-user emulation swtpm never creates its Unix sockets (bind() fails or
+# the socket silently does not appear, measured 2026-09-20 with swtpm's own
+# privilege drop, with docker exec --user tss and with a shell wrapper),
+# while a connect() from the emulated platformd to a host-made socket works.
+DISKIMAGE_USERSPACE_SWTPM_DIR := $(PWD)/work/userspace-swtpm
+
+.PHONY: integration-test-diskimage-userspace
+## integration-test-diskimage-userspace: aarch64 platformd + swtpm userspace suite in an arm64 Alpine container (no boot; needs swtpm on the host)
+integration-test-diskimage-userspace: rpi-binaries
+	@command -v swtpm >/dev/null || { echo "ERROR: swtpm is required on the host (apt-get install swtpm / apk add swtpm)"; exit 1; }
+	@echo "Building the arm64 userspace suite..."
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBIN)/go test -c -tags "integration $(BUILD_TAGS)" \
+		-o $(DISKIMAGE_USERSPACE_BIN) ./test/integration/diskimage/userspace/
+	@echo "Building $(DISKIMAGE_USERSPACE_IMG)..."
+	@docker build --platform linux/arm64 -t $(DISKIMAGE_USERSPACE_IMG) \
+		-f build/docker/trusted-platform/Dockerfile-alpine-swtpm-arm64 build/docker/trusted-platform/
+	@echo "Starting the host swtpm..."
+	@if [ -f $(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm.pid ]; then kill $$(cat $(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm.pid) 2>/dev/null || true; fi
+	@rm -rf $(DISKIMAGE_USERSPACE_SWTPM_DIR) && mkdir -p $(DISKIMAGE_USERSPACE_SWTPM_DIR)
+	@# An EK certificate, as a manufactured TPM (and the Pi's SLB9670)
+	@# carries one. swtpm_setup issues it through swtpm_localca, whose
+	@# default state directory is root-owned, so a private local CA under
+	@# the suite's own directory is configured for this run.
+	@mkdir -p $(DISKIMAGE_USERSPACE_SWTPM_DIR)/localca
+	@printf 'create_certs_tool = swtpm_localca\ncreate_certs_tool_config = %s/localca.conf\ncreate_certs_tool_options = %s/localca.options\n' \
+		$(DISKIMAGE_USERSPACE_SWTPM_DIR) $(DISKIMAGE_USERSPACE_SWTPM_DIR) > $(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm_setup.conf
+	@printf 'statedir = %s/localca\nsigningkey = %s/localca/signkey.pem\nissuercert = %s/localca/issuercert.pem\ncertserial = %s/localca/certserial\n' \
+		$(DISKIMAGE_USERSPACE_SWTPM_DIR) $(DISKIMAGE_USERSPACE_SWTPM_DIR) $(DISKIMAGE_USERSPACE_SWTPM_DIR) $(DISKIMAGE_USERSPACE_SWTPM_DIR) > $(DISKIMAGE_USERSPACE_SWTPM_DIR)/localca.conf
+	@printf -- '--platform-manufacturer TrustedPlatform\n--platform-version 1\n--platform-model userspace-suite\n' > $(DISKIMAGE_USERSPACE_SWTPM_DIR)/localca.options
+	@swtpm_setup --tpm2 --tpmstate $(DISKIMAGE_USERSPACE_SWTPM_DIR) --config $(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm_setup.conf \
+		--create-ek-cert --create-platform-cert --pcr-banks sha256 --overwrite >/dev/null
+	@swtpm socket --tpm2 --tpmstate dir=$(DISKIMAGE_USERSPACE_SWTPM_DIR) \
+		--server type=unixio,path=$(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm.sock \
+		--ctrl type=unixio,path=$(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm.sock.ctrl \
+		--flags not-need-init,startup-clear --log level=1 \
+		--pid file=$(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm.pid --daemon
+	@for i in $$(seq 1 30); do test -S $(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm.sock && break; sleep 1; done
+	@test -S $(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm.sock || { echo "FATAL: the host swtpm did not open its socket"; exit 1; }
+	@chmod 777 $(DISKIMAGE_USERSPACE_SWTPM_DIR) $(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm.sock $(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm.sock.ctrl
+	@echo "Running the arm64 userspace suite..."
+	@rc=0; docker run --rm --privileged --platform linux/arm64 \
+		--name go-trusted-platform-diskimage-userspace \
+		-v $(PWD)/bin/aarch64:/platform/bin:ro \
+		-v $(PWD)/test/integration/diskimage/userspace/config.yaml:/platform/config.yaml:ro \
+		-v $(DISKIMAGE_USERSPACE_SWTPM_DIR):/trusted-platform/volume/swtpm \
+		-e PLATFORMD_BIN=/platform/bin/platformd \
+		-e PLATFORMCTL_BIN=/platform/bin/platformctl \
+		-e PLATFORM_CONFIG=/platform/config.yaml \
+		-e SWTPM_SOCKET=/trusted-platform/volume/swtpm/swtpm.sock \
+		$(DISKIMAGE_USERSPACE_IMG) \
+		/platform/bin/diskimage-userspace.test -test.v -test.count=1 -test.timeout 20m || rc=$$?; \
+		kill $$(cat $(DISKIMAGE_USERSPACE_SWTPM_DIR)/swtpm.pid) 2>/dev/null || true; exit $$rc
+
 .PHONY: isos
 isos:
 	@start_time=$$(date +%s); \
@@ -3898,38 +4111,6 @@ isos:
 	minutes=$$(( (elapsed_time % 3600)/60 )); \
 	seconds=$$((elapsed_time % 60)); \
 	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
-
-
-# Packer
-.PHONY: packer-rpi
-packer-rpi:
-	@start_time=$$(date +%s); \
-		cd build/packer/rpi && make && mv -f trusted-platform.img ../../../trusted-platform-raspbian.img; \
-	end_time=$$(date +%s); \
-	elapsed_time=$$((end_time - start_time)); \
-	hours=$$((elapsed_time/3600)); \
-	minutes=$$(( (elapsed_time % 3600)/60 )); \
-	seconds=$$((elapsed_time % 60)); \
-	printf "Build execution time: %02d:%02d:%02d\n" $$hours $$minutes $$seconds
-
-
-# rsync
-.PHONY: rsync
-rsync:
-	rsync \
-		-av \
-		--progress \
-		--exclude .git/ \
-		--exclude *.img \
-		--exclude *.iso \
-		--exclude *.xz \
-		../$(PACKAGE) $(SYNC_USER)@$(SYNC_HOST):
-
-.PHONY: rsync-ansible
-rsync-ansible:
-	rsync -av --progress \
-		../$(PACKAGE)-ansible $(SYNC_HOST): \
-		--exclude ../$(PACKAGE)-ansible/.git/
 
 
 # Browser targets — launch with trusted CA from QEMU server
@@ -4075,12 +4256,12 @@ build-api-static: build-api
 build-api-debug-static: build-api-debug
 	@echo "build-api-debug-static target is deprecated. Use 'make build-api-debug' instead (now produces static binaries by default)."
 
-# Cross-compile ARM 64-bit (produces static binaries)
+# Cross-compile ARM 64-bit (pure-Go static build)
 .PHONY: build-api-arm64
 build-api-arm64:
 	cd cmd/platform-api; \
-	CC=$(ARM_CC) CXX=$(ARM_CXX) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -o ../../$(PLATFORM_API) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}'
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -o ../../$(PLATFORM_API) --ldflags '-w -s ${LDFLAGS}'
 
 .PHONY: build-api-arm64-static
 build-api-arm64-static: build-api-arm64
@@ -4089,8 +4270,8 @@ build-api-arm64-static: build-api-arm64
 .PHONY: build-api-arm64-debug
 build-api-arm64-debug:
 	cd cmd/platform-api; \
-	CC=$(ARM_CC) CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -tags "$(BUILD_TAGS)" -gcflags "all=-N -l" -o ../../$(PLATFORM_API) --ldflags='-linkmode external -extldflags -static -v ${LDFLAGS}'
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+	$(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -gcflags "all=-N -l" -o ../../$(PLATFORM_API) --ldflags='${LDFLAGS}'
 
 .PHONY: build-api-arm64-debug-static
 build-api-arm64-debug-static: build-api-arm64-debug
@@ -4123,13 +4304,24 @@ binaries: build platform-initrd
 binaries-static: binaries
 	@echo "binaries-static target is deprecated. Use 'make binaries' instead (now produces static binaries by default)."
 
+# Every binary a linux/arm64 node (an RPi, for one) needs, cross-
+# compiled as pure Go into $(ARM64_BIN_DIR).
+.PHONY: rpi-binaries
+## rpi-binaries: Cross-compile every linux/arm64 binary (platformd, platformctl, platformctl-static, platform-initrd, gatewayd) into bin/aarch64
+rpi-binaries: build-arm64 platform-initrd-arm64 build-gatewayd-arm64
+	@echo "Built all ARM64 static binaries in $(ARM64_BIN_DIR):"
+	@echo "  platformd:         $$(du -h $(PLATFORMD_ARM64) | cut -f1) (daemon)"
+	@echo "  platformctl:       $$(du -h $(PLATFORMCTL_ARM64) | cut -f1) (CLI)"
+	@echo "  platformctl-static: $$(du -h $(PLATFORMCTL_STATIC_ARM64) | cut -f1) (CLI, ISO sibling)"
+	@echo "  platform-initrd:   $$(du -h $(PLATFORM_INITRD_ARM64) | cut -f1) (initramfs)"
+	@echo "  gatewayd:          $$(du -h $(GATEWAYD_ARM64) | cut -f1) (edge gateway)"
+
 .PHONY: binaries-arm64
-binaries-arm64: build-arm64 platform-initrd-arm64
-	@echo "Built all ARM64 static binaries"
+binaries-arm64: rpi-binaries
 
 .PHONY: binaries-arm64-static
 binaries-arm64-static: binaries-arm64
-	@echo "binaries-arm64-static target is deprecated. Use 'make binaries-arm64' instead (now produces static binaries by default)."
+	@echo "binaries-arm64-static target is deprecated. Use 'make rpi-binaries' instead (a CGO_ENABLED=0 cross build is already static)."
 
 # Run platform-api for development/testing
 .PHONY: run-api

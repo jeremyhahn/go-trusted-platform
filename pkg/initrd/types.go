@@ -207,6 +207,17 @@ type Platform struct {
 	Config *Config
 }
 
+// rootDevice returns the configured root (LUKS) device, or "" when the
+// platform carries no configuration. The EFI partition is located relative
+// to it (see pkg/partition), so a missing configuration degrades to the
+// label and probe lookups instead of a nil dereference in the initramfs.
+func (p *Platform) rootDevice() string {
+	if p == nil || p.Config == nil {
+		return ""
+	}
+	return p.Config.RootDevice
+}
+
 // UnlockAttempt records an unlock attempt for audit logging
 type UnlockAttempt struct {
 	// Strategy that was attempted

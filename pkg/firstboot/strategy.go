@@ -30,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/partition"
 	platform "github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi/firmware"
@@ -1771,15 +1772,17 @@ func (s *FirstbootSealStrategy) mountEFI(flags uintptr) (bool, error) {
 	return false, nil
 }
 
-// detectEFIDevice finds the EFI partition
+// detectEFIDevice finds the EFI partition for the root device the executor
+// was created for (sibling partition, then the EFI label, then the
+// well-known first-partition names, see pkg/partition). It returns "" when
+// none exists, which the caller reports.
 func (s *FirstbootSealStrategy) detectEFIDevice() string {
-	candidates := []string{"/dev/vda1", "/dev/sda1", "/dev/nvme0n1p1"}
-	for _, device := range candidates {
-		if _, err := os.Stat(device); err == nil {
-			return device
-		}
+	device, err := partition.FindESP(s.executor.rootDevice())
+	if err != nil {
+		s.logger.Debugf("EFI partition detection failed: %v", err)
+		return ""
 	}
-	return ""
+	return device
 }
 
 // unmountEFI unmounts the EFI partition

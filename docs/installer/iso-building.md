@@ -3,6 +3,10 @@
 The Trusted Platform ISO is built using the `platformctl iso` command, which provides a complete CLI for downloading, customizing, and building bootable Alpine Linux ISO images with platform-specific components.
 
 
+> The Raspberry Pi is not installed from an ISO. Its factory SD-card image
+> reuses this pipeline's media staging and the installer, run on the build
+> host: see [docs/factory-image/](../factory-image/) and `make image-rpi`.
+
 ## Building the ISO
 
 The `platformctl iso create` command performs all build steps in sequence:
@@ -10,7 +14,14 @@ The `platformctl iso create` command performs all build steps in sequence:
 1. Download Alpine Linux ISO with SHA256 verification
 2. Extract ISO contents for customization
 3. Generate Secure Boot keys (if enabled)
-4. Customize with platform components (platformd copies itself into the ISO)
+4. Customize with platform components (platformd copies itself into the ISO).
+   This step has two halves: `Customizer.StageMedia` lays down everything the
+   installer reads from the media root (installer/initrd configuration, the
+   pre-fetched apk repository for the target architecture, the platform
+   binaries, platform configuration and CA bundle, dracut module, Secure Boot
+   keys, FIPS artifacts, web UI), and the live-ISO half rewrites Alpine's
+   initramfs and GRUB so the ISO boots straight into the autoinstaller. A disk
+   image builder reuses `StageMedia` alone and supplies its own boot chain.
 5. Build final bootable ISO
 
 The resulting install is an Alpine Linux operating system configured for Secure and Measured Boot using custom keys. The kernel is built with [EFI Stub](https://docs.kernel.org/admin-guide/efi-stub.html) which supports being booted directly from your system's UEFI.
@@ -72,7 +83,7 @@ explicit deployment step rather than something the ISO can do for you.
 |------|---------|-------------|
 | `--alpine-version` | 3.22.2 | Alpine Linux version to download |
 | `--mirror` | http://mirror.cs.odu.edu/alpine | Alpine Linux mirror URL |
-| `--arch` | x86_64 | Architecture (x86_64 or aarch64) |
+| `--arch` | x86_64 | Target architecture, `x86_64` or `aarch64` (GOARCH aliases accepted). Selects the Alpine ISO and apk repository, the minirootfs, and the ELF machine every bundled binary must have — an `x86_64` `platformd` next to an `aarch64` build fails with `BinaryArchMismatchError`. FIPS builds are x86_64 only (the FIPS kernel and OpenSSL provider are container-built for that architecture). |
 | `--platform-type` | server | Platform type: 'server' or 'client' |
 | `--platform-config` | single-node/default | Path to platformd.yaml template (baked into ISO). Default: `configs/platform/templates/single-node/default.yaml` |
 | `--overrides` | (none) | Path to override YAML (deep-merged onto `--platform-config` template before baking) |

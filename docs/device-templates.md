@@ -47,7 +47,7 @@ for the current production reference.
 | Profile | Layout | Status |
 |---------|--------|--------|
 | `dedicated` | 3 dedicated nodes: 1 CP, 1 GW, 1 compute | **Active** |
-| `single-node` | CP + GW + compute colocated on one node | Planned |
+| `single-node` | CP + GW + compute colocated on one node | Active (default ISO; Raspberry Pi factory image) |
 | `high-availability` | 3 CP, 2 GW, 2 compute with Raft consensus | Planned |
 
 ### Available Templates
@@ -56,6 +56,7 @@ for the current production reference.
 |--------|--------------|---------|-------|--------|
 | Supermicro | X10 (X10SDV-TP8F, etc.) | dedicated | control-plane, gateway, compute | Production |
 | Dell | PowerEdge R640 | dedicated | control-plane, gateway, compute | Phase 2 (UNTESTED) |
+| Raspberry Pi | 4 Model B (`single-node/raspberrypi/rpi4`) | single-node | control-plane, gateway, compute | Factory SD-card image (`make image-rpi`, [factory-image/](factory-image/)); boots on the QEMU virt stand-in, hardware validation per its `user.md` |
 
 **Each profile directory carries a `README.md` recording what the hardware needs
 before its templates will install** — BIOS settings, BMC behaviour, firmware quirks —

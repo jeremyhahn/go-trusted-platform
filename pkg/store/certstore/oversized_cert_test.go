@@ -124,8 +124,8 @@ func TestCertStoreHasNoNVSizeCeiling(t *testing.T) {
 // The four calls — IAK and IDevID, each on the local-issuance and ACME
 // paths — cannot be driven at unit level: they need a live TPM, and the
 // ACME pair needs an ACME server. What they share is this store. Under the
-// #74 and #80 interims every one of them resolves here, differing only in
-// which certificate class they hand over and under which key. So exercising
+// #80 interim every one of them resolves here, differing only in which
+// certificate class they hand over and under which key. So exercising
 // this boundary with both classes is the closest honest unit-level cover
 // for all four, and it is deliberately paired with the routing assertion in
 // pkg/app (TestTPMIdentityPersistenceIsRoutedToTheCertStore), which pins
@@ -143,9 +143,9 @@ func TestCertStorePersistsBothIdentityCertClasses(t *testing.T) {
 	require.NoError(t, err)
 	adapter := NewTPM2CertStoreAdapterWithStorage(logger, cs, storage)
 
-	// The keys the interims settle on: IAK under the upstream default
-	// (its CN is left empty, #74), IDevID under the hostname (#80).
-	iakAttrs := &xkmssdk.KeyAttributes{CN: "default-device-id"}
+	// The keys the identities are stored under: both derive from the
+	// hostname (docs/tpm/engineering.md item 8; the IAK's since #78).
+	iakAttrs := &xkmssdk.KeyAttributes{CN: "node-07-iak"}
 	idevidAttrs := &xkmssdk.KeyAttributes{CN: "node-07-idevid"}
 
 	iakCert := certOfAtLeast(t, "node-07-iak", tpmNVBufferMax+128)

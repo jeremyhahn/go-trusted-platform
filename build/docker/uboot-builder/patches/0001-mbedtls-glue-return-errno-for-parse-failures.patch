@@ -1,0 +1,48 @@
+From: agent-go-trusted-platform <agent-go-trusted-platform@example.internal>
+Subject: [PATCH] lib/mbedtls: return errno, not mbedTLS codes, from the parsers
+
+pkcs7_parse_message() and x509_cert_parse() hand ERR_PTR() the raw
+mbedTLS return value (for example -0x5366, MBEDTLS_ERR_PKCS7_INVALID_FORMAT
++ MBEDTLS_ERR_ASN1_LENGTH_MISMATCH). Those are below -MAX_ERRNO, so
+IS_ERR() does not recognise the result and efi_image_authenticate()
+dereferences it: an EFI image whose signature mbedTLS rejects takes the
+firmware down with a synchronous abort instead of failing verification.
+
+Map every mbedTLS failure to -EBADMSG before it becomes an error pointer.
+Callers only test IS_ERR(); none of them distinguish the cause.
+
+Measured on qemu_arm64 with an Authenticode signature whose
+WIN_CERTIFICATE.dwLength covered two bytes of alignment padding:
+"Synchronous Abort" in efi_signature_check_signers+0x28, x0 =
+0xffffffffffffac9a.
+
+--- a/lib/mbedtls/pkcs7_parser.c
++++ b/lib/mbedtls/pkcs7_parser.c
+@@ -496,6 +496,13 @@ parse_fail:
+ 	mbedtls_pkcs7_free(&pkcs7_ctx);
+ 	pkcs7_free_message(msg);
+ out_no_msg:
++	/*
++	 * mbedTLS codes are not errnos; below -MAX_ERRNO they pass IS_ERR()
++	 * as valid pointers and the caller dereferences them. Report every
++	 * parse failure the way the ASN.1 parser did.
++	 */
++	if (ret != -ENOMEM)
++		ret = -EBADMSG;
+ 	msg = ERR_PTR(ret);
+ 	return msg;
+ }
+--- a/lib/mbedtls/x509_cert_parser.c
++++ b/lib/mbedtls/x509_cert_parser.c
+@@ -443,5 +443,11 @@ clean_up_ctx:
+ 	if (!ret)
+ 		return cert;
+ 
++	/*
++	 * See pkcs7_parse_message(): an mbedTLS code is not an errno and
++	 * would not be recognised by IS_ERR().
++	 */
++	if (ret != -ENOMEM)
++		ret = -EBADMSG;
+ 	return ERR_PTR(ret);
+ }

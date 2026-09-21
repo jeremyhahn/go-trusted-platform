@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 )
 
 // OperatingSystem represents the target OS to install
@@ -363,6 +364,21 @@ type OSConfig struct {
 	// Architecture (e.g., "x86_64", "aarch64")
 	Architecture string `yaml:"architecture" json:"architecture"`
 
+	// KernelPackage is the apk kernel package to install (default linux-lts;
+	// linux-rpi for a Raspberry Pi). Ignored in FIPS mode, which installs the
+	// container-built FIPS kernel instead. It also names the kernel flavour
+	// (the part after "linux-") a platform-built kernel is installed under.
+	KernelPackage string `yaml:"kernel-package,omitempty" json:"kernel_package,omitempty"`
+
+	// KernelArtifactsDir names a directory on the install media holding a
+	// platform-built kernel for the configured flavour — vmlinuz-<flavor>,
+	// modules-<flavor>.tar.gz, kernel-version.txt and SHA256SUMS, the layout
+	// build/docker/virt-kernel-builder writes. When set, the kernel package
+	// is not installed from apk; the kernel and modules come from here and
+	// are verified against SHA256SUMS first. The QEMU virt stand-in of the
+	// Raspberry Pi image uses it (docs/factory-image/architecture.md).
+	KernelArtifactsDir string `yaml:"kernel-artifacts-dir,omitempty" json:"kernel_artifacts_dir,omitempty"`
+
 	// Hostname for the installed system
 	Hostname string `yaml:"hostname" json:"hostname"`
 
@@ -580,6 +596,14 @@ type Config struct {
 
 	// Debug mode
 	Debug bool `yaml:"debug" json:"debug"`
+
+	// Target is disk (default: the installer runs on the node being
+	// installed) or image (a loop-mounted disk image on a build host).
+	Target InstallTarget `yaml:"target,omitempty" json:"target,omitempty"`
+
+	// Boot selects the firmware the installed system boots under; nil means
+	// UEFI.
+	Boot *BootConfig `yaml:"boot,omitempty" json:"boot,omitempty"`
 
 	// Environment specifies the platform environment (dev, preprod, prod, test)
 	// When set to "test", platformd skips external service checks like public IP detection
@@ -1112,6 +1136,15 @@ func (c *Config) Validate() error {
 	}
 	if c.OS == nil {
 		return ErrInvalidConfig("OS configuration is required")
+	}
+	if _, err := uki.ParseArchitecture(c.OS.Architecture); err != nil {
+		return ErrInvalidConfig("unsupported OS architecture " + c.OS.Architecture)
+	}
+	if !validInstallTargets[c.Target] {
+		return ErrUnknownInstallTarget(string(c.Target))
+	}
+	if c.Boot != nil && !validBootFirmwares[c.Boot.Firmware] {
+		return ErrUnknownBootFirmware(string(c.Boot.Firmware))
 	}
 	// Validate network configuration if present
 	if c.Network != nil {

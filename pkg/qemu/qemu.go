@@ -88,8 +88,12 @@ func (vm *VM) CreateDisk() error {
 		return &WrappedError{Msg: "failed to create disk directory", Err: err}
 	}
 
-	// Create qcow2 disk
-	cmd := exec.Command("qemu-img", "create", "-f", "qcow2", vm.config.DiskPath, vm.config.DiskSize)
+	p, err := vm.config.profile()
+	if err != nil {
+		return err
+	}
+	format := vm.config.diskFormat(p)
+	cmd := exec.Command("qemu-img", "create", "-f", format, vm.config.DiskPath, vm.config.DiskSize)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return &CommandOutputError{Msg: "failed to create disk", Err: err, Detail: ": " + string(output)}
 	}
@@ -98,8 +102,17 @@ func (vm *VM) CreateDisk() error {
 	return nil
 }
 
-// initializeNVRAM initializes the NVRAM file from the template
+// initializeNVRAM initializes the NVRAM file from the template. Firmware
+// supplied as -bios (aarch64 U-Boot) keeps its variables on the ESP and
+// has no NVRAM file, so there is nothing to initialise.
 func (vm *VM) initializeNVRAM() error {
+	p, err := vm.config.profile()
+	if err != nil {
+		return err
+	}
+	if !p.nvram {
+		return nil
+	}
 	nvramPath := vm.config.GetNVRAMPath()
 	nvramDir := filepath.Dir(nvramPath)
 
@@ -130,257 +143,70 @@ func (vm *VM) initializeNVRAM() error {
 	return nil
 }
 
-// buildQEMUCommand builds the QEMU command line
+// buildQEMUCommand builds the QEMU command line. The architecture profile
+// (arch.go) supplies the machine, CPU, disk controller, boot/display,
+// firmware and TPM front-end; everything else is common to every guest.
 func (vm *VM) buildQEMUCommand(ctx context.Context, mode BootMode) (*exec.Cmd, error) {
 	// Use background context if nil
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
-	args := []string{}
-
-	// When using custom QEMU binary, specify data directory for ROM files
-	// This allows custom builds (like CanoKey QEMU) to find vgabios, etc.
-	if vm.config.QEMUBinary != "qemu-system-x86_64" {
-		// Check common locations for BIOS/ROM files
-		biosLocations := []string{
-			"/usr/share/seabios",  // Debian/Ubuntu
-			"/usr/share/qemu",     // Some distributions
-			"/usr/share/qemu-kvm", // RHEL/CentOS
-		}
-		for _, loc := range biosLocations {
-			if _, err := os.Stat(filepath.Join(loc, "vgabios-stdvga.bin")); err == nil {
-				args = append(args, "-L", loc)
-				break
-			}
-		}
+	c := vm.config
+	p, err := c.profile()
+	if err != nil {
+		return nil, err
 	}
 
-	// Enable KVM acceleration
-	if vm.config.EnableKVM {
+	// When using a custom QEMU binary, point it at the ROM files (vgabios
+	// and friends) so a custom build (like the CanoKey QEMU) finds them.
+	args := append([]string{}, romDirArgs(c, p)...)
+
+	kvm := c.kvm(p)
+	if kvm {
 		args = append(args, "-enable-kvm")
 	}
 
-	// Machine type - SMM (System Management Mode) is required for Secure Boot
-	// but can cause KVM emulation issues (cpu_asidx_from_attrs assertion failures).
-	// Only enable SMM when Secure Boot is explicitly needed.
-	if vm.config.SecureBoot {
-		args = append(args, "-machine", "q35,smm=on")
-	} else {
-		args = append(args, "-machine", "q35")
-	}
+	args = append(args, "-machine", p.machine(c))
+	args = append(args, "-cpu", p.cpu(c, kvm))
+	args = append(args, "-smp", fmt.Sprintf("cores=%d,threads=1", c.CPUs))
+	args = append(args, "-m", strconv.Itoa(c.Memory))
 
-	// CPU configuration
-	args = append(args, "-cpu", "host")
-	args = append(args, "-smp", fmt.Sprintf("cores=%d,threads=1", vm.config.CPUs))
-
-	// Memory
-	args = append(args, "-m", strconv.Itoa(vm.config.Memory))
-
-	// Disk configuration — MUST be before boot mode switch so AHCI controller
-	// exists before any bus references (e.g., ide-cd on ahci0.1 for ISO install).
-	// CRITICAL: Use AHCI controller (not VirtIO) because Ubuntu 24.04's OVMF firmware
-	// does not include VirtioBlkDxe driver — it cannot read VirtIO-attached disks during
-	// UEFI boot discovery. AHCI/SATA works with OVMF's built-in AhciDxe driver.
-	// The install.yaml uses device=/dev/sda which corresponds to SATA/AHCI.
-	// The cache mode defaults to writethrough (all writes immediately
-	// persisted — bare-metal faithful); nested-virt hosts override via
-	// Config.DiskCache because synchronous writes there can exceed the
-	// guest's SCSI timeout and corrupt the install (#49).
-	diskCache := vm.config.DiskCache
+	// Disk configuration — MUST be before the boot arguments so the disk
+	// controller exists before any bus references (the install CD-ROM on
+	// ahci0.1). The cache mode defaults to writethrough (all writes
+	// immediately persisted — bare-metal faithful); nested-virt hosts
+	// override via Config.DiskCache because synchronous writes there can
+	// exceed the guest's SCSI timeout and corrupt the install (#49).
+	diskCache := c.DiskCache
 	if diskCache == "" {
 		diskCache = "writethrough"
 	}
-	args = append(args,
-		"-drive", fmt.Sprintf("file=%s,if=none,format=qcow2,cache=%s,id=hd0", vm.config.DiskPath, diskCache),
-		"-device", "ahci,id=ahci0",
-		"-device", "ide-hd,drive=hd0,bus=ahci0.0",
-	)
+	args = append(args, p.disk(c, c.diskFormat(p), diskCache)...)
 
-	// Boot configuration based on mode
-	switch mode {
-	case BootModeInstall:
-		// Boot from CD-ROM for installation
-		args = append(args, "-boot", "order="+vm.config.BootOrder)
-		if vm.config.ISO != "" {
-			// Attach ISO to the AHCI controller so OVMF enumerates it alongside
-			// the hard disk. Using -cdrom creates a separate IDE device that may
-			// not appear in OVMF's boot order. AHCI CDROM is discoverable.
-			args = append(args,
-				"-drive", fmt.Sprintf("file=%s,if=none,media=cdrom,readonly=on,id=cd0", vm.config.ISO),
-				"-device", "ide-cd,drive=cd0,bus=ahci0.1",
-			)
-		}
-		// Always add VGA device for UEFI compatibility (needed even in nographic mode)
-		args = append(args, "-device", "VGA")
-
-	case BootModeBoot:
-		// Boot from disk with menu
-		args = append(args, "-boot", "menu=on,strict=off")
-		// Always add VGA device for UEFI compatibility (needed even in nographic mode)
-		// OVMF expects a display device; without it, boot may fail silently
-		if vm.config.NoGraphic {
-			args = append(args, "-device", "VGA")
-		} else {
-			// Use virtio-vga for better performance with graphics
-			args = append(args, "-device", "virtio-vga")
-		}
-
-	case BootModePXE:
-		// Boot from network via PXE
-		// -boot n: Network boot (PXE)
-		// menu=on: Enable boot menu to allow user to select boot device
-		// strict=off: Allow fallback to other boot devices if PXE fails
-		args = append(args, "-boot", "order=n,menu=on,strict=off")
-		// Always add VGA device for UEFI compatibility (needed even in nographic mode)
-		if vm.config.NoGraphic {
-			args = append(args, "-device", "VGA")
-		} else {
-			// Use virtio-vga for better performance with graphics
-			args = append(args, "-device", "virtio-vga")
-		}
+	bootArgs, err := p.boot(c, mode)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, bootArgs...)
+	if mode == BootModePXE {
 		vm.logger.Info("PXE boot mode enabled - VM will boot from network")
 	}
 
-	// Network configuration
-	if vm.config.NetworkMode != "none" {
-		// OVS networking takes precedence when enabled
-		// OVS provides programmable SDN features like 802.1X policy enforcement
-		// Standard Linux bridges are used by default for simpler deployments
-		if vm.config.OVSEnabled() && vm.config.TapDevice == "" {
-			// OVS mode - TAP device must be pre-created and attached to OVS bridge
-			// Use OVSNetwork.Setup() before calling Start() to create the TAP
-			vm.logger.Warnf("OVS enabled but no TAP device configured - use OVSNetwork.Setup() first or set TapDevice")
-			// Fall through to standard bridge/user mode
-		}
+	args = append(args, vm.networkArgs()...)
 
-		// TapDevice takes precedence - direct TAP attachment for isolated test networks
-		if vm.config.TapDevice != "" {
-			// Direct TAP device attachment (for isolated test networks)
-			// The TAP device must already exist and be attached to a bridge
-			vm.logger.Infof("Using TAP device: %s", vm.config.TapDevice)
-
-			// vnet_hdr=on enables virtio-net header support which is required when the TAP
-			// device is created with VNET_HDR flag. This enables proper checksum offloading
-			// between the guest virtio-net driver and the host TAP device.
-			netdevArg := fmt.Sprintf("tap,id=net0,ifname=%s,script=no,downscript=no,vnet_hdr=on", vm.config.TapDevice)
-
-			// Add MAC address if specified
-			// csum=off,guest_csum=off disables checksum offloading in virtio-net which helps
-			// avoid "connection reset by peer" issues when going through NAT. The guest will
-			// compute checksums in software ensuring packets are valid after NAT translation.
-			deviceArg := "virtio-net-pci,netdev=net0,csum=off,guest_csum=off"
-			if vm.config.MACAddress != "" {
-				deviceArg = fmt.Sprintf("virtio-net-pci,netdev=net0,mac=%s,csum=off,guest_csum=off", vm.config.MACAddress)
-			}
-
-			args = append(args,
-				"-netdev", netdevArg,
-				"-device", deviceArg,
-			)
-		} else {
-			switch vm.config.NetworkMode {
-			case "bridge":
-				// Bridge networking - connect to host bridge using QEMU bridge helper
-				// This provides DHCP access to the same network as the host
-				bridgeName := vm.config.BridgeName
-				if bridgeName == "" {
-					bridgeName = DefaultBridgeName
-				}
-
-				// Verify bridge exists before attempting to use it
-				if !BridgeExists(bridgeName) {
-					vm.logger.Warnf("Bridge %s not found, falling back to user mode networking", bridgeName)
-					args = append(args,
-						"-netdev", "user,id=net0",
-						"-device", "virtio-net-pci,netdev=net0",
-					)
-				} else {
-					vm.logger.Infof("Using bridge networking: %s", bridgeName)
-					// Use QEMU's bridge helper for tap device creation
-					// This requires /etc/qemu/bridge.conf to allow the bridge
-					netdevArg := fmt.Sprintf("bridge,id=net0,br=%s", bridgeName)
-
-					// Find and specify bridge helper path explicitly
-					// This is required when using custom QEMU binaries that may look
-					// in different locations for the bridge helper
-					bridgeHelperPath := findBridgeHelper()
-					if bridgeHelperPath != "" {
-						netdevArg = fmt.Sprintf("%s,helper=%s", netdevArg, bridgeHelperPath)
-						vm.logger.Debugf("Using bridge helper: %s", bridgeHelperPath)
-					}
-
-					// Add MAC address if specified
-					deviceArg := "virtio-net-pci,netdev=net0"
-					if vm.config.MACAddress != "" {
-						deviceArg = fmt.Sprintf("virtio-net-pci,netdev=net0,mac=%s", vm.config.MACAddress)
-					}
-
-					args = append(args,
-						"-netdev", netdevArg,
-						"-device", deviceArg,
-					)
-				}
-			case "user":
-				// User mode networking (NAT) - QEMU's built-in networking
-				// Build netdev string with optional port forwarding
-				netdevArg := "user,id=net0"
-
-				// Add port forwarding rules if configured
-				for _, pf := range vm.config.PortForwards {
-					netdevArg += "," + pf.String()
-					vm.logger.Debugf("Port forward: host:%d -> guest:%d (%s)",
-						pf.HostPort, pf.GuestPort, pf.Protocol)
-				}
-
-				args = append(args,
-					"-netdev", netdevArg,
-					"-device", "virtio-net-pci,netdev=net0",
-				)
-			default:
-				// Use the specified network mode directly (for custom configurations)
-				args = append(args,
-					"-netdev", fmt.Sprintf("%s,id=net0", vm.config.NetworkMode),
-					"-device", "virtio-net-pci,netdev=net0",
-				)
-			}
-		}
+	firmwareArgs, err := p.firmware(c)
+	if err != nil {
+		return nil, err
 	}
-
-	// OVMF firmware configuration
-	// NOTE: We must use the same OVMF firmware for both install and boot to
-	// ensure NVRAM compatibility. Using different firmware versions (e.g.,
-	// non-secboot for install and secboot for boot) can cause NVRAM state
-	// issues that lead to QEMU crashes (assertion failures in cpu_asidx_from_attrs).
-	//
-	// For Secure Boot support, the firmware type is determined by config.SecureBoot:
-	// - When SecureBoot=true: uses OVMF_CODE_4M.secboot.fd (can enforce Secure Boot)
-	// - When SecureBoot=false: uses OVMF_CODE_4M.fd (no Secure Boot enforcement)
-	//
-	// The secboot firmware CAN boot unsigned code when Secure Boot is not enforced
-	// (i.e., when PK is not enrolled or Secure Boot is disabled in UEFI settings).
-	ovmfCode := vm.config.GetOVMFCodePath()
-
-	nvramPath := vm.config.GetNVRAMPath()
-
-	args = append(args,
-		"-drive", fmt.Sprintf("if=pflash,unit=0,format=raw,readonly=on,file=%s", ovmfCode),
-		"-drive", fmt.Sprintf("if=pflash,unit=1,format=raw,file=%s", nvramPath),
-	)
-
-	// OVMF pflash configuration - only set secure=on when Secure Boot is enabled
-	// The secure property enables SMM protection for the flash device
-	if vm.config.SecureBoot {
-		args = append(args, "-global", "driver=cfi.pflash01,property=secure,value=on")
-	}
+	args = append(args, firmwareArgs...)
 
 	// TPM configuration
-	tpmSocket := vm.config.GetTPMSocketPath()
+	tpmSocket := c.GetTPMSocketPath()
 	if _, err := os.Stat(tpmSocket); err == nil {
 		args = append(args,
 			"-chardev", fmt.Sprintf("socket,id=chrtpm,path=%s", tpmSocket),
 			"-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
-			"-device", "tpm-tis,tpmdev=tpm0",
+			"-device", c.tpmDevice(p)+",tpmdev=tpm0",
 		)
 		vm.logger.Debugf("TPM enabled: %s", tpmSocket)
 	} else {
@@ -402,7 +228,7 @@ func (vm *VM) buildQEMUCommand(ctx context.Context, mode BootMode) (*exec.Cmd, e
 
 	// QMP socket configuration for runtime control
 	// This enables graceful shutdown, pause/resume, and status queries
-	qmpSocketPath := vm.config.GetQMPSocketPath()
+	qmpSocketPath := c.GetQMPSocketPath()
 	args = append(args, "-qmp", fmt.Sprintf("unix:%s,server,wait=off", qmpSocketPath))
 	vm.logger.Debugf("QMP socket enabled: %s", qmpSocketPath)
 
@@ -413,30 +239,26 @@ func (vm *VM) buildQEMUCommand(ctx context.Context, mode BootMode) (*exec.Cmd, e
 	// when SerialLogFile is also set the transcript is mirrored to that file via
 	// the chardev logfile option, satisfying both interactive console and durable
 	// log capture from a single serial port.
-	if consoleSock := vm.config.GetConsoleSocketPath(); consoleSock != "" {
+	if consoleSock := c.GetConsoleSocketPath(); consoleSock != "" {
 		chardev := fmt.Sprintf("socket,id=console0,path=%s,server=on,wait=off", consoleSock)
-		if vm.config.SerialLogFile != "" {
-			chardev += fmt.Sprintf(",logfile=%s", vm.config.SerialLogFile)
+		if c.SerialLogFile != "" {
+			chardev += fmt.Sprintf(",logfile=%s", c.SerialLogFile)
 		}
 		args = append(args, "-chardev", chardev, "-serial", "chardev:console0")
-	} else if vm.config.SerialLogFile != "" {
-		args = append(args, "-serial", fmt.Sprintf("file:%s", vm.config.SerialLogFile))
-	} else if vm.config.SerialConsole {
+	} else if c.SerialLogFile != "" {
+		args = append(args, "-serial", fmt.Sprintf("file:%s", c.SerialLogFile))
+	} else if c.SerialConsole {
 		args = append(args, "-serial", "stdio")
 	}
 
 	// Graphics
-	if vm.config.NoGraphic {
+	if c.NoGraphic {
 		args = append(args, "-nographic")
-	} else if vm.config.VNCDisplay > 0 {
-		args = append(args, "-vnc", fmt.Sprintf(":%d", vm.config.VNCDisplay))
+	} else if c.VNCDisplay > 0 {
+		args = append(args, "-vnc", fmt.Sprintf(":%d", c.VNCDisplay))
 	}
 
-	// Create command with context
-	qemuBinary := vm.config.QEMUBinary
-	if qemuBinary == "" {
-		qemuBinary = "qemu-system-x86_64"
-	}
+	qemuBinary := c.qemuBinary(p)
 	cmd := exec.CommandContext(ctx, qemuBinary, args...)
 
 	// Clear LIBVIRT environment variables that can interfere with QEMU device allocation
@@ -453,11 +275,95 @@ func (vm *VM) buildQEMUCommand(ctx context.Context, mode BootMode) (*exec.Cmd, e
 	// Note: We intentionally do NOT set Setpgid here as it can interfere with
 	// TTY control and stdin/stdout/stderr handling when using -serial stdio
 
-	if vm.config.Debug {
+	if c.Debug {
 		vm.logger.Debugf("QEMU command: %s %v", qemuBinary, args)
 	}
 
 	return cmd, nil
+}
+
+// networkArgs returns the -netdev/-device pair for the configured network
+// mode. OVS networking takes precedence when enabled (programmable SDN
+// features like 802.1X policy enforcement); a pre-created TAP device
+// comes next (isolated test networks); then the plain modes.
+func (vm *VM) networkArgs() []string {
+	c := vm.config
+	if c.NetworkMode == "none" {
+		return nil
+	}
+	if c.OVSEnabled() && c.TapDevice == "" {
+		// OVS mode - TAP device must be pre-created and attached to OVS bridge
+		// Use OVSNetwork.Setup() before calling Start() to create the TAP
+		vm.logger.Warnf("OVS enabled but no TAP device configured - use OVSNetwork.Setup() first or set TapDevice")
+		// Fall through to standard bridge/user mode
+	}
+
+	if c.TapDevice != "" {
+		// Direct TAP device attachment (for isolated test networks)
+		// The TAP device must already exist and be attached to a bridge
+		vm.logger.Infof("Using TAP device: %s", c.TapDevice)
+
+		// vnet_hdr=on enables virtio-net header support which is required when the TAP
+		// device is created with VNET_HDR flag. This enables proper checksum offloading
+		// between the guest virtio-net driver and the host TAP device.
+		netdevArg := fmt.Sprintf("tap,id=net0,ifname=%s,script=no,downscript=no,vnet_hdr=on", c.TapDevice)
+
+		// csum=off,guest_csum=off disables checksum offloading in virtio-net which helps
+		// avoid "connection reset by peer" issues when going through NAT. The guest will
+		// compute checksums in software ensuring packets are valid after NAT translation.
+		deviceArg := "virtio-net-pci,netdev=net0,csum=off,guest_csum=off"
+		if c.MACAddress != "" {
+			deviceArg = fmt.Sprintf("virtio-net-pci,netdev=net0,mac=%s,csum=off,guest_csum=off", c.MACAddress)
+		}
+		return []string{"-netdev", netdevArg, "-device", deviceArg}
+	}
+
+	switch c.NetworkMode {
+	case "bridge":
+		// Bridge networking - connect to host bridge using QEMU bridge helper
+		// This provides DHCP access to the same network as the host
+		bridgeName := c.BridgeName
+		if bridgeName == "" {
+			bridgeName = DefaultBridgeName
+		}
+
+		// Verify bridge exists before attempting to use it
+		if !BridgeExists(bridgeName) {
+			vm.logger.Warnf("Bridge %s not found, falling back to user mode networking", bridgeName)
+			return []string{"-netdev", "user,id=net0", "-device", "virtio-net-pci,netdev=net0"}
+		}
+		vm.logger.Infof("Using bridge networking: %s", bridgeName)
+		// Use QEMU's bridge helper for tap device creation
+		// This requires /etc/qemu/bridge.conf to allow the bridge
+		netdevArg := fmt.Sprintf("bridge,id=net0,br=%s", bridgeName)
+
+		// Find and specify bridge helper path explicitly
+		// This is required when using custom QEMU binaries that may look
+		// in different locations for the bridge helper
+		if bridgeHelperPath := findBridgeHelper(); bridgeHelperPath != "" {
+			netdevArg = fmt.Sprintf("%s,helper=%s", netdevArg, bridgeHelperPath)
+			vm.logger.Debugf("Using bridge helper: %s", bridgeHelperPath)
+		}
+
+		deviceArg := "virtio-net-pci,netdev=net0"
+		if c.MACAddress != "" {
+			deviceArg = fmt.Sprintf("virtio-net-pci,netdev=net0,mac=%s", c.MACAddress)
+		}
+		return []string{"-netdev", netdevArg, "-device", deviceArg}
+	case "user":
+		// User mode networking (NAT) - QEMU's built-in networking
+		// Build netdev string with optional port forwarding
+		netdevArg := "user,id=net0"
+		for _, pf := range c.PortForwards {
+			netdevArg += "," + pf.String()
+			vm.logger.Debugf("Port forward: host:%d -> guest:%d (%s)",
+				pf.HostPort, pf.GuestPort, pf.Protocol)
+		}
+		return []string{"-netdev", netdevArg, "-device", "virtio-net-pci,netdev=net0"}
+	default:
+		// Use the specified network mode directly (for custom configurations)
+		return []string{"-netdev", fmt.Sprintf("%s,id=net0", c.NetworkMode), "-device", "virtio-net-pci,netdev=net0"}
+	}
 }
 
 // Start starts the VM

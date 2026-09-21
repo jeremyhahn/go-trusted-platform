@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 )
 
 // DefaultESPUKIPath is the UEFI removable-media boot path where the platform
@@ -36,6 +37,32 @@ import (
 // automatically, and the install-time efibootmgr NVRAM entry points at it, so
 // an atomic replacement here keeps every existing boot path valid.
 const DefaultESPUKIPath = "/boot/efi/EFI/BOOT/BOOTX64.EFI"
+
+// DefaultESPBootDir is the EFI/BOOT directory on the mounted EFI system
+// partition of an installed node.
+const DefaultESPBootDir = "/boot/efi/EFI/BOOT"
+
+// ESPUKIPathFor returns the live UKI path on the ESP for arch: DefaultESPUKIPath
+// for x86_64, /boot/efi/EFI/BOOT/BOOTAA64.EFI for aarch64, and so on.
+func ESPUKIPathFor(arch uki.Architecture) (string, error) {
+	name, err := uki.BootFileName(arch)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(DefaultESPBootDir, name), nil
+}
+
+// hostESPUKIPath is the live UKI path for the architecture this binary runs
+// on. uki.HostArchitecture only yields architectures BootFileName knows (a
+// pkg/uki test pins that), so the x86_64 constant is reached only if that
+// invariant is broken.
+func hostESPUKIPath() string {
+	path, err := ESPUKIPathFor(uki.HostArchitecture())
+	if err != nil {
+		return DefaultESPUKIPath
+	}
+	return path
+}
 
 // DefaultModulesDir is the on-node kernel modules root used to discover the
 // newest installed kernel version when one is not supplied explicitly.
@@ -175,7 +202,7 @@ func NewUKIRebuilder(logger *logging.Logger, config *Config, opts ...UKIRebuildO
 		config:        config,
 		builder:       NewDracutUKIBuilder(logger),
 		signerFactory: defaultAuthenticodeSigner,
-		espUKIPath:    DefaultESPUKIPath,
+		espUKIPath:    hostESPUKIPath(),
 		modulesDir:    DefaultModulesDir,
 		bootDir:       DefaultBootDir,
 		kernelCmdline: DefaultKernelCmdlinePath,

@@ -211,6 +211,14 @@ jobs:
       - name: Build platformd, platformctl and gatewayd
         run: make build-no-web
 
+      # The Raspberry Pi factory image ships aarch64 binaries cross-built
+      # with CGO_ENABLED=0 (docs/factory-image/engineering.md). This is the
+      # cheap half of that feature's gate: the full image build and the
+      # emulated boot are nightly (nightly.yml `rpi-image`), because they
+      # need binfmt, a privileged container and TCG emulation time.
+      - name: Cross-build the aarch64 binaries (Raspberry Pi image)
+        run: make rpi-binaries
+
       - name: Build sdk/go module
         working-directory: sdk/go
         run: go build ./...

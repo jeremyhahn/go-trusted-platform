@@ -34,6 +34,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/db"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/device"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/diskimage"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/fido2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/firstboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/iam"
@@ -184,6 +185,7 @@ func init() {
 	rootCmd.AddCommand(iam.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(install.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(iso.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(diskimage.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(kms.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(luks.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(ntpcmd.NewCommand(getCommonFlags))

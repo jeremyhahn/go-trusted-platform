@@ -127,3 +127,7 @@ build/gosec-report.txt
 # Version-stamped, so switching the pin leaves the old build behind rather than
 # running it; both are disposable.
 /build/tools/
+
+# Python bytecode caches (the U-Boot builder runs mkesl.py on the host)
+__pycache__/
+*.pyc

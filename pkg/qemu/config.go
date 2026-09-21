@@ -44,7 +44,24 @@ var validDiskCacheModes = map[string]struct{}{
 }
 
 type Config struct {
-	// QEMUBinary is the path to the QEMU binary (default: qemu-system-x86_64)
+	// Arch is the guest architecture: x86_64 (default, q35 + OVMF) or
+	// aarch64 (virt + U-Boot as -bios). It selects the archProfile.
+	Arch Arch `yaml:"arch" json:"arch" mapstructure:"arch"`
+
+	// Firmware is the firmware image for architectures that take one as
+	// -bios (aarch64: u-boot.bin). x86_64 uses the OVMF fields instead.
+	Firmware string `yaml:"firmware" json:"firmware" mapstructure:"firmware"`
+
+	// DiskFormat is the disk image format: qcow2 (x86_64 default) or raw
+	// (aarch64 default; a factory image is a raw disk).
+	DiskFormat string `yaml:"disk_format" json:"disk_format" mapstructure:"disk_format"`
+
+	// TPMDevice overrides the TPM front-end device: tpm-tis on x86_64,
+	// tpm-tis-device on the aarch64 virt machine.
+	TPMDevice string `yaml:"tpm_device" json:"tpm_device" mapstructure:"tpm_device"`
+
+	// QEMUBinary is the path to the QEMU binary (default: the profile's,
+	// qemu-system-x86_64 or qemu-system-aarch64)
 	// Use this to specify a custom QEMU build with CanoKey support
 	QEMUBinary string `yaml:"qemu_binary" json:"qemu_binary" mapstructure:"qemu_binary"`
 
@@ -459,6 +476,19 @@ func (c *Config) Validate() error {
 		return &MessageError{Msg: "work directory is required"}
 	}
 
+	p, err := c.profile()
+	if err != nil {
+		return err
+	}
+	if _, ok := validDiskFormats[c.diskFormat(p)]; !ok {
+		return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "disk format must be qcow2 or raw, got " + c.DiskFormat}}
+	}
+	if !p.nvram {
+		// A -bios firmware: present or not, nothing else to check.
+		_, err := p.firmware(c)
+		return err
+	}
+
 	// Check OVMF firmware files exist
 	ovmfCode := c.OVMFCode
 	if c.SecureBoot && c.OVMFCodeSecure != "" {
@@ -475,6 +505,10 @@ func (c *Config) Validate() error {
 
 	return nil
 }
+
+// validDiskFormats is the disk image vocabulary CreateDisk and the -drive
+// argument accept.
+var validDiskFormats = map[string]struct{}{DiskFormatQCOW2: {}, DiskFormatRaw: {}}
 
 // GetNVRAMPath returns the path to the NVRAM file
 func (c *Config) GetNVRAMPath() string {

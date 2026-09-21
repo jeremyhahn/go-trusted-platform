@@ -46,46 +46,38 @@ func TestApplyTPMIdentityCNs_IDevID(t *testing.T) {
 	})
 }
 
-// TestApplyTPMIdentityCNs_IAKInterim pins the #74 interim. go-xkms
-// IAKAttributes() assigns KeyAttributes.CN ONLY on its empty-CN fallback
-// path, so any non-empty config.IAK.CN is discarded and the attributes
-// reach the certificate store with an empty CN — which the store rejects,
-// fatally, on every boot. Both the write (ProvisionIAKCert) and the read
-// (IAKCertificate) derive the storage key from those same attributes, so a
-// non-empty IAK CN here is unusable in both directions.
-//
-// The platform therefore leaves the IAK CN empty so the upstream fallback
-// applies consistently. Remove this behavior — and these expectations —
-// when go-xkms#137 is adopted; tracked as #78.
-func TestApplyTPMIdentityCNs_IAKInterim(t *testing.T) {
-	t.Run("does not derive an IAK CN from the hostname", func(t *testing.T) {
+// TestApplyTPMIdentityCNs_IAK pins the IAK half of the hostname naming
+// contract (docs/tpm/engineering.md item 8), restored by #78 now that
+// go-xkms honours a configured IAK CN: the IAK derives its CN from the
+// hostname when unset and an operator-configured CN is preserved. The #74
+// interim that cleared it is gone — on a fresh provision an empty CN is
+// exactly what the certificate store rejects.
+func TestApplyTPMIdentityCNs_IAK(t *testing.T) {
+	t.Run("derives the CN from the hostname when unset", func(t *testing.T) {
 		cfg := &xkmssdk.TPMConfig{IAK: &xkmssdk.IAKConfig{}}
-
-		applyTPMIdentityCNs(cfg, "node-07", logging.DefaultLogger())
-
-		assert.Empty(t, cfg.IAK.CN,
-			"a hostname-derived IAK CN is discarded upstream and fatals the daemon (go-xkms#137)")
-	})
-
-	t.Run("clears an explicitly configured IAK CN and warns", func(t *testing.T) {
-		cfg := &xkmssdk.TPMConfig{IAK: &xkmssdk.IAKConfig{CN: "operator-choice"}}
 		var logged bytes.Buffer
 
 		applyTPMIdentityCNs(cfg, "node-07", logging.NewLogger(slog.LevelDebug, &logged))
 
-		// Honouring the operator's value is not an option: it is the exact
-		// input that produces the empty-CN fatal. Clearing it keeps the
-		// node bootable.
-		assert.Empty(t, cfg.IAK.CN,
-			"an explicitly configured IAK CN is equally fatal upstream and must be cleared, not passed through")
+		assert.Equal(t, "node-07-iak", cfg.IAK.CN)
+		assert.Contains(t, logged.String(), "node-07-iak", "the derived name is logged so the store key is traceable")
+	})
 
-		// The warning is the whole mitigation for overriding operator
-		// intent — silently discarding it would be the defect.
-		out := logged.String()
-		assert.Contains(t, out, "go-xkms#137",
-			"the warning must name the upstream issue so the override is traceable")
-		assert.Contains(t, out, "operator-choice",
-			"the warning must report the value that was ignored")
+	t.Run("preserves an explicitly configured CN", func(t *testing.T) {
+		cfg := &xkmssdk.TPMConfig{IAK: &xkmssdk.IAKConfig{CN: "operator-choice"}}
+
+		applyTPMIdentityCNs(cfg, "node-07", logging.DefaultLogger())
+
+		assert.Equal(t, "operator-choice", cfg.IAK.CN,
+			"an operator-supplied IAK CN must not be overridden")
+	})
+
+	t.Run("an empty hostname leaves the IAK CN unset rather than bare-suffixed", func(t *testing.T) {
+		cfg := &xkmssdk.TPMConfig{IAK: &xkmssdk.IAKConfig{}}
+
+		applyTPMIdentityCNs(cfg, "", logging.DefaultLogger())
+
+		assert.Empty(t, cfg.IAK.CN)
 	})
 }
 

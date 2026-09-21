@@ -1,0 +1,4 @@
+# Built U-Boot binaries are produced per Secure Boot key set by `make
+# uboot-build`; never commit them.
+*
+!.gitignore

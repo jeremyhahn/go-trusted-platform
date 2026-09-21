@@ -28,16 +28,109 @@ import (
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/partition"
+	"golang.org/x/sys/unix"
 )
 
 // sysBlockDir is the sysfs directory holding one entry per block device.
 const sysBlockDir = "/sys/block"
+
+// procPartitionsPath lists every block device the kernel knows with its
+// major and minor numbers.
+const procPartitionsPath = "/proc/partitions"
 
 // diskManager implements the DiskManager interface
 type diskManager struct {
 	config   *DiskConfig
 	logger   *logging.Logger
 	diskInfo *DiskInfo
+	// procPartitions is the file read for device numbers; empty means
+	// procPartitionsPath.
+	procPartitions string
+	// statDevice reports a node's mode and device number; nil means
+	// statDeviceNode. Tests inject it so no unit test needs a block device.
+	statDevice func(path string) (mode uint32, rdev uint64, err error)
+}
+
+// statDeviceNode is the production statDevice.
+func statDeviceNode(path string) (uint32, uint64, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(path, &st); err != nil {
+		return 0, 0, err
+	}
+	return st.Mode, uint64(st.Rdev), nil
+}
+
+// partitionMajorMinor returns the major and minor numbers procPartitions
+// (the contents of /proc/partitions) lists for the named block device.
+func partitionMajorMinor(procPartitions []byte, name string) (major, minor uint32, found bool) {
+	for _, line := range strings.Split(string(procPartitions), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 || fields[3] != name {
+			continue
+		}
+		maj, err := strconv.ParseUint(fields[0], 10, 32)
+		if err != nil {
+			continue
+		}
+		min, err := strconv.ParseUint(fields[1], 10, 32)
+		if err != nil {
+			continue
+		}
+		return uint32(maj), uint32(min), true
+	}
+	return 0, 0, false
+}
+
+// readPartitions returns the contents of the kernel's partition list.
+func (dm *diskManager) readPartitions() ([]byte, error) {
+	path := dm.procPartitions
+	if path == "" {
+		path = procPartitionsPath
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to read " + path, Err: err}
+	}
+	return data, nil
+}
+
+// refreshDeviceNode recreates the node at device when its device number no
+// longer matches the kernel's. A partition-table re-read drops and re-adds
+// every partition, and a re-added partition gets a fresh extended minor
+// while a reference to the old one lingers. devtmpfs follows the change; a
+// static /dev, such as the assemble container's, keeps the old node, and
+// every open through it fails with ENXIO. A node the kernel does not list
+// (a device-mapper name, a symlink target elsewhere) is left alone.
+func (dm *diskManager) refreshDeviceNode(ctx context.Context, device string) error {
+	procData, err := dm.readPartitions()
+	if err != nil {
+		return err
+	}
+	major, minor, found := partitionMajorMinor(procData, filepath.Base(device))
+	if !found {
+		return nil
+	}
+	stat := dm.statDevice
+	if stat == nil {
+		stat = statDeviceNode
+	}
+	mode, rdev, err := stat(device)
+	if err != nil {
+		return &WrappedError{Msg: "failed to stat device node " + device, Err: err}
+	}
+	if mode&unix.S_IFMT != unix.S_IFBLK {
+		return nil
+	}
+	if unix.Major(rdev) == major && unix.Minor(rdev) == minor {
+		return nil
+	}
+	dm.logger.Warn("[DISK] Device node is stale, recreating", "device", device,
+		"node", fmt.Sprintf("%d:%d", unix.Major(rdev), unix.Minor(rdev)), "kernel", fmt.Sprintf("%d:%d", major, minor))
+	if err := os.Remove(device); err != nil {
+		return &WrappedError{Msg: "failed to remove stale device node " + device, Err: err}
+	}
+	return dm.createDeviceNode(ctx, device)
 }
 
 // NewDiskManager creates a new disk manager
@@ -53,6 +146,8 @@ func NewDiskManager(logger *logging.Logger, config *DiskConfig) (DiskManager, er
 			Device:         config.Device,
 			PartitionTable: config.PartitionTable,
 		},
+		procPartitions: procPartitionsPath,
+		statDevice:     statDeviceNode,
 	}, nil
 }
 
@@ -162,7 +257,7 @@ func (dm *diskManager) CreateEFIPartition(ctx context.Context, sizeMB int) error
 		}
 	}
 
-	dm.diskInfo.EFIPartition = fmt.Sprintf("%s1", dm.config.Device)
+	dm.diskInfo.EFIPartition = partition.Path(dm.config.Device, 1)
 
 	// List partitions for debugging
 	dm.logger.Debug("[DISK] Listing partitions after creation")
@@ -288,7 +383,7 @@ func (dm *diskManager) CreateRootPartition(ctx context.Context) error {
 	}
 	dm.logger.Debug("[DISK] parted mkpart completed", "output", strings.TrimSpace(string(output)))
 
-	dm.diskInfo.RootPartition = fmt.Sprintf("%s2", dm.config.Device)
+	dm.diskInfo.RootPartition = partition.Path(dm.config.Device, 2)
 
 	// List partitions for debugging
 	dm.logger.Debug("[DISK] Listing partitions after root creation")
@@ -576,7 +671,7 @@ func (dm *diskManager) CreateLVMPhysicalVolume(ctx context.Context, device strin
 	// DEBUG: Also check the ENCRYPTED backend device to verify encryption is working
 	// The backend device should have encrypted data at LUKS data offset (290816 bytes)
 	if dm.config.Device != "" {
-		backendDev := fmt.Sprintf("%s2", dm.config.Device) // Root partition (e.g., /dev/vda2)
+		backendDev := partition.Path(dm.config.Device, 2) // Root partition (e.g., /dev/vda2)
 		if f, err := os.Open(backendDev); err == nil {
 			buf := make([]byte, 1024)
 			luksDataOffset := int64(290816) // Standard LUKS2 data offset
@@ -873,7 +968,7 @@ func (dm *diskManager) waitForDevice(ctx context.Context, device string, maxWait
 		// Check if device exists
 		if _, err := os.Stat(device); err == nil {
 			dm.logger.Debug("[DISK] Device node ready", "device", device, "attempts", attempts)
-			return nil
+			return dm.refreshDeviceNode(ctx, device)
 		}
 
 		// Wait before the next check. A select rather than a sleep so a
@@ -902,32 +997,12 @@ func (dm *diskManager) waitForDevice(ctx context.Context, device string, maxWait
 
 // createDeviceNode manually creates a device node using mknod
 func (dm *diskManager) createDeviceNode(ctx context.Context, device string) error {
-	// Read /proc/partitions to get major/minor numbers
-	procData, err := os.ReadFile("/proc/partitions")
+	procData, err := dm.readPartitions()
 	if err != nil {
-		return &WrappedError{Msg: "failed to read /proc/partitions", Err: err}
+		return err
 	}
-
-	// Parse partition table to find major/minor for this device
 	deviceName := filepath.Base(device)
-	var major, minor int
-	found := false
-
-	lines := strings.Split(string(procData), "\n")
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) >= 4 && fields[3] == deviceName {
-			if maj, err := strconv.Atoi(fields[0]); err == nil {
-				if min, err := strconv.Atoi(fields[1]); err == nil {
-					major = maj
-					minor = min
-					found = true
-					break
-				}
-			}
-		}
-	}
-
+	major, minor, found := partitionMajorMinor(procData, deviceName)
 	if !found {
 		return &MessageError{Msg: fmt.Sprintf("device %s not found in /proc/partitions", deviceName)}
 	}
@@ -950,10 +1025,11 @@ func (dm *diskManager) createDeviceNode(ctx context.Context, device string) erro
 func (dm *diskManager) EnsureDeviceNode(ctx context.Context, device string, maxWait time.Duration) error {
 	dm.logger.Debug("[DISK] Ensuring device node exists", "device", device)
 
-	// Check if device already exists
+	// Check if device already exists, and that it still names the device
+	// the kernel has under that name.
 	if _, err := os.Stat(device); err == nil {
 		dm.logger.Debug("[DISK] Device node already exists", "device", device)
-		return nil
+		return dm.refreshDeviceNode(ctx, device)
 	}
 
 	// Device doesn't exist - try to create it

@@ -15,6 +15,7 @@ package iso
 
 import (
 	"context"
+	"debug/elf"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,14 +28,14 @@ import (
 )
 
 func TestValidateBinary_NotFound(t *testing.T) {
-	err := validateBinary("/nonexistent/binary")
+	err := validateBinary("/nonexistent/binary", elf.EM_X86_64)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "binary not found")
 }
 
 func TestValidateBinary_NotRegularFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	err := validateBinary(tmpDir)
+	err := validateBinary(tmpDir, elf.EM_X86_64)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a regular file")
 }
@@ -44,7 +45,7 @@ func TestValidateBinary_NotELF(t *testing.T) {
 	fakeBinary := filepath.Join(tmpDir, "not-elf")
 	require.NoError(t, os.WriteFile(fakeBinary, []byte("this is not an ELF binary"), 0755))
 
-	err := validateBinary(fakeBinary)
+	err := validateBinary(fakeBinary, elf.EM_X86_64)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a valid ELF binary")
 }

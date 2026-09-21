@@ -120,6 +120,53 @@ if err := config.Validate(); err != nil {
 }
 ```
 
+### Guest architectures
+
+`Config.Arch` selects an architecture profile (`arch.go`); everything the
+command line shares (memory, network, QMP, serial, RNG) is built once and
+the profile supplies the rest:
+
+| | `x86_64` (default) | `aarch64` |
+|---|---|---|
+| binary | `qemu-system-x86_64` | `qemu-system-aarch64` |
+| machine / CPU | `q35` (`smm=on` with Secure Boot) / `host` | `virt,gic-version=3` / `cortex-a72` (`host` under KVM) |
+| firmware | OVMF in two pflash drives, NVRAM copied from `OVMFVars` | `Firmware` (U-Boot `u-boot.bin`) as `-bios`; no NVRAM file |
+| disk | AHCI (`ide-hd`), `qcow2` | `virtio-blk-pci`, `raw` |
+| TPM front-end | `tpm-tis` | `tpm-tis-device` |
+| boot modes | install (ISO on AHCI), boot, pxe | boot, pxe (install is refused: there is no aarch64 ISO) |
+| KVM | `EnableKVM` on an amd64 host | `EnableKVM` on an arm64 host; elsewhere TCG |
+
+The x86_64 command line is pinned by `TestBuildQEMUCommand_X86Golden` to
+what it was before the profiles existed. `DiskFormat` and `TPMDevice`
+override the profile defaults. The aarch64 profile is how the Raspberry Pi
+factory image is booted without the hardware
+(`platformctl diskimage test boot`, `pkg/diskimage.Boot`):
+
+```go
+config := &qemu.Config{
+    Arch:       qemu.ArchAArch64,
+    Firmware:   "build/docker/uboot-builder/output/qemu_arm64/u-boot.bin",
+    DiskPath:   "work/diskimage-test/disk.img",
+    DiskFormat: qemu.DiskFormatRaw,
+    DiskSize:   "4096M",
+    Memory:     2048,
+    CPUs:       4,
+    WorkDir:    "work/diskimage-test",
+    TPMSocket:  "work/diskimage-test/tpm/swtpm.sock",
+    NoGraphic:  true,
+    SerialLogFile: "work/diskimage-test/serial.log",
+}
+```
+
+### The harness package
+
+`pkg/qemu/harness` is what every emulated boot shares: `StartTPM` starts
+(or resumes) the swtpm for a `Config` and points `TPMSocket` at the socket
+it opened, `WaitForSerial` waits for a milestone in the serial transcript,
+and `Console` drives an interactive session on `ConsoleSocketPath` (stop
+U-Boot's autoboot, run `tpm2 info`). `platformctl iso test`,
+`platformctl diskimage test boot` and the integration suites use it.
+
 ### Boot Modes
 
 The VM supports two boot modes:

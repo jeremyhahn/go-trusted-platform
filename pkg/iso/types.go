@@ -16,6 +16,8 @@ package iso
 import (
 	"context"
 	"fmt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 	"io"
 	"path/filepath"
 )
@@ -102,12 +104,53 @@ type PlatformISOConfig struct {
 
 	// Output configuration
 	Output OutputConfig `yaml:"output" json:"output"`
+
+	// Installer overrides applied to the generated installer configuration
+	// (every field is optional; the zero value keeps the x86_64 ISO defaults)
+	Installer InstallerOverrides `yaml:"installer" json:"installer"`
+}
+
+// InstallerOverrides carries the per-target adjustments to the installer
+// configuration the media generator embeds. The ISO leaves every field
+// empty; an image target (an SD card for a Raspberry Pi) sets the ones its
+// hardware needs.
+type InstallerOverrides struct {
+	// Device is the install target block device (default /dev/sda).
+	Device string `yaml:"device,omitempty" json:"device,omitempty"`
+	// PartitionTable is "gpt" (default) or "mbr".
+	PartitionTable string `yaml:"partition_table,omitempty" json:"partition_table,omitempty"`
+	// KernelPackage is the apk kernel package to install and prefetch
+	// (default linux-lts; linux-rpi for a Raspberry Pi).
+	KernelPackage string `yaml:"kernel_package,omitempty" json:"kernel_package,omitempty"`
+	// ExtraPackages are additional apk packages to prefetch and install.
+	ExtraPackages []string `yaml:"extra_packages,omitempty" json:"extra_packages,omitempty"`
+	// HardwareManufacturer and HardwareModel select the pkg/quirks entry
+	// whose kernel command line and console wiring the target needs. Empty
+	// means the generic default quirk.
+	HardwareManufacturer string `yaml:"hardware_manufacturer,omitempty" json:"hardware_manufacturer,omitempty"`
+	HardwareModel        string `yaml:"hardware_model,omitempty" json:"hardware_model,omitempty"`
+	// Target is the installer target: disk (default) or image (a
+	// loop-mounted disk image on a build host).
+	Target string `yaml:"target,omitempty" json:"target,omitempty"`
+	// BootFirmware is the firmware the installed system boots under: uefi
+	// (default) or uboot.
+	BootFirmware string `yaml:"boot_firmware,omitempty" json:"boot_firmware,omitempty"`
+	// KernelArtifactsDir, when set, is where on the mounted media the
+	// installer finds a platform-built kernel for KernelPackage's flavour
+	// (installer.OSConfig.KernelArtifactsDir); the kernel package is then
+	// neither prefetched nor installed from apk.
+	KernelArtifactsDir string `yaml:"kernel_artifacts_dir,omitempty" json:"kernel_artifacts_dir,omitempty"`
 }
 
 // AlpineConfig holds Alpine Linux ISO configuration
 type AlpineConfig struct {
 	Version string `yaml:"version" json:"version"`
 	Mirror  string `yaml:"mirror" json:"mirror"`
+	// Architecture is the target CPU architecture in Alpine spelling
+	// (x86_64, the default, or aarch64; GOARCH aliases are accepted). It
+	// selects the apk repository, the minirootfs and the ELF machine the
+	// bundled binaries must have.
+	Architecture string `yaml:"architecture" json:"architecture"`
 	// APKMirror is the INSTALL-time APK repository base URL (e.g.
 	// "http://198.51.100.11:8080"). It is distinct from Mirror, which is
 	// the BUILD-time pre-fetch source: APKMirror is baked into the kernel
@@ -262,7 +305,44 @@ func (c *PlatformISOConfig) Validate() error {
 		return &MessageError{Msg: "tpm seal_pcr is required when auto_unseal is enabled"}
 	}
 
+	arch, err := uki.ParseArchitecture(c.Alpine.Architecture)
+	if err != nil {
+		return &UnsupportedArchitectureError{Arch: c.Alpine.Architecture}
+	}
+	// The FIPS kernel and OpenSSL provider are container-built for x86_64
+	// only (build/docker/fips-kernel-builder).
+	if c.Security.FIPS && arch != uki.ArchX86_64 {
+		return &FIPSUnsupportedArchitectureError{Arch: string(arch)}
+	}
+	switch c.Installer.PartitionTable {
+	case "", string(installer.PartitionTableGPT), string(installer.PartitionTableMBR):
+	default:
+		return &MessageError{Msg: "installer partition_table must be either 'gpt' or 'mbr'"}
+	}
+	switch c.Installer.Target {
+	case "", string(installer.InstallTargetDisk), string(installer.InstallTargetImage):
+	default:
+		return &MessageError{Msg: "installer target must be either 'disk' or 'image'"}
+	}
+	switch c.Installer.BootFirmware {
+	case "", string(installer.BootFirmwareUEFI), string(installer.BootFirmwareUBoot):
+	default:
+		return &MessageError{Msg: "installer boot_firmware must be either 'uefi' or 'uboot'"}
+	}
+
 	return nil
+}
+
+// architecture returns the canonical target architecture, x86_64 when the
+// configuration does not name one. Validate has already rejected anything
+// pkg/uki does not model, so an unparsable value here is treated as the
+// historical default rather than a second error path.
+func (c *PlatformISOConfig) architecture() uki.Architecture {
+	arch, err := uki.ParseArchitecture(c.Alpine.Architecture)
+	if err != nil {
+		return uki.ArchX86_64
+	}
+	return arch
 }
 
 // SetDefaults sets default values for empty configuration fields
@@ -288,6 +368,12 @@ func (c *PlatformISOConfig) SetDefaults() {
 	// Alpine defaults
 	if c.Alpine.Mirror == "" {
 		c.Alpine.Mirror = "http://mirror.cs.odu.edu/alpine"
+	}
+	// Canonicalise the architecture spelling ("arm64" -> "aarch64") so the
+	// apk repository directory and the ELF check agree; an unknown value is
+	// left for Validate to reject.
+	if arch, err := uki.ParseArchitecture(c.Alpine.Architecture); err == nil {
+		c.Alpine.Architecture = string(arch)
 	}
 
 	// Platform defaults

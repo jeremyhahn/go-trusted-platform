@@ -20,7 +20,7 @@ require (
 	github.com/codegangsta/negroni v1.0.0
 	github.com/coredhcp/coredhcp v0.0.0-20260117135807-60ec8025cdfc
 	github.com/coredns/caddy v1.1.4-0.20250930002214-15135a999495
-	github.com/coredns/coredns v1.14.3
+	github.com/coredns/coredns v1.14.7
 	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
 	github.com/fatih/color v1.18.0
 	github.com/flynn/noise v1.1.0 // indirect
@@ -47,7 +47,7 @@ require (
 	github.com/open-policy-agent/opa v1.12.2
 	github.com/ovn-org/libovsdb v0.0.0-20250702120510-8a0705fef3ad
 	github.com/pin/tftp/v3 v3.1.0
-	github.com/prometheus/client_golang v1.23.2
+	github.com/prometheus/client_golang v1.24.1
 	github.com/quic-go/quic-go v0.61.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
@@ -100,7 +100,7 @@ require (
 	github.com/RaduBerinde/axisds v0.1.0 // indirect
 	github.com/RaduBerinde/btreemap v0.0.0-20260105202824-d3184786f603 // indirect
 	github.com/agnivade/levenshtein v1.2.1 // indirect
-	github.com/apparentlymart/go-cidr v1.1.0 // indirect
+	github.com/apparentlymart/go-cidr v1.1.1 // indirect
 	github.com/awnumar/memcall v0.5.0 // indirect
 	github.com/aws/aws-sdk-go v1.55.8 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.43.5
@@ -217,7 +217,7 @@ require (
 	github.com/josharian/native v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/k-sone/critbitgo v1.4.0 // indirect
-	github.com/klauspost/compress v1.18.7
+	github.com/klauspost/compress v1.19.1
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/koron/go-ssdp v0.0.6 // indirect
 	github.com/kr/fs v0.1.0 // indirect
@@ -256,7 +256,7 @@ require (
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-ieproxy v0.0.12 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/mdlayher/socket v0.5.1 // indirect
+	github.com/mdlayher/socket v0.6.0 // indirect
 	github.com/miekg/pkcs11 v1.1.2 // indirect
 	github.com/mikioh/tcpinfo v0.0.0-20190314235526-30a79bb1804b // indirect
 	github.com/mikioh/tcpopt v0.0.0-20190314235656-172688c1accc // indirect
@@ -300,7 +300,7 @@ require (
 	github.com/pion/transport/v3 v3.0.7 // indirect
 	github.com/pion/turn/v4 v4.0.2 // indirect
 	github.com/pion/webrtc/v4 v4.1.2 // indirect
-	github.com/pires/go-proxyproto v0.11.0 // indirect
+	github.com/pires/go-proxyproto v0.15.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/sftp v1.13.9 // indirect
@@ -309,8 +309,8 @@ require (
 	github.com/polydawn/refmt v0.89.0 // indirect
 	github.com/pquerna/otp v1.5.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.68.0 // indirect
-	github.com/prometheus/procfs v0.20.1 // indirect
+	github.com/prometheus/common v0.70.1 // indirect
+	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/webtransport-go v0.10.0 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
@@ -433,14 +433,14 @@ require (
 	github.com/lestrrat-go/strftime v1.2.0 // indirect
 	github.com/mdlayher/genetlink v1.3.2 // indirect
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
-	github.com/mdlayher/vsock v1.2.1 // indirect
+	github.com/mdlayher/vsock v1.3.0 // indirect
 	github.com/mwitkow/go-conntrack v0.0.0-20190716064945-2f068394615f // indirect
 	github.com/orcaman/concurrent-map/v2 v2.0.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
-	github.com/prometheus/exporter-toolkit v0.16.0 // indirect
+	github.com/prometheus/exporter-toolkit v0.17.1 // indirect
 	github.com/segmentio/fasthash v1.0.3 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
-	go.etcd.io/etcd/api/v3 v3.6.10 // indirect
+	go.etcd.io/etcd/api/v3 v3.6.13 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0 // indirect

@@ -38,7 +38,7 @@ import (
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu/harness"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
@@ -95,7 +95,7 @@ type clientServerFlags struct {
 // ServerVMState holds the state of a running server VM for cleanup
 type ServerVMState struct {
 	VM  *qemu.VM
-	TPM *swtpm.SWTPM
+	TPM harness.TPM
 }
 
 // serverState holds the running server VM state for cleanup
@@ -1288,7 +1288,7 @@ func createCSQEMUConfig(diskPath, workDir, tapDevice, macAddress string, flags *
 }
 
 // stopCSTPM is a helper to stop TPM in client-server context
-func stopCSTPM(logger *logging.Logger, tpm *swtpm.SWTPM) {
+func stopCSTPM(logger *logging.Logger, tpm harness.TPM) {
 	if tpm == nil {
 		return
 	}

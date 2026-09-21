@@ -276,6 +276,23 @@ tpm:
 
 **Note:** No sensitive data is ever written unencrypted to the EFI partition.
 
+### Factory image (Raspberry Pi, `boot.firmware: uboot`)
+
+The boot partition is the same ESP with the firmware beside it: the
+Raspberry Pi firmware files (`start4.elf`, `fixup4.dat`, the board `.dtb`,
+`overlays/`), `config.txt`, U-Boot as `kernel8.img`, and the signed UKI at
+`EFI/BOOT/BOOTAA64.EFI`. `tpm2/installer.luks` is written by the build host
+and wiped by the device's first boot exactly as above. The partition is
+FAT32 type `0x0c` in an MBR because the Pi firmware reads nothing else; a
+consequence is that U-Boot, which only treats an MBR partition of type
+`0xEF` as the EFI system partition, cannot persist EFI variables to
+`ubootefi.var` and says so at every boot ("Cannot persist EFI variables
+without system partition"). Nothing in the boot chain depends on persisted
+variables: PK/KEK/db are compiled into U-Boot and BootOrder is not used
+(U-Boot's standard boot finds the UKI by path). See
+[docs/factory-image/architecture.md](../factory-image/architecture.md) §6
+for the trust boundaries of that chain.
+
 ## Security Considerations
 
 ### Forensic Protection via Encrypted Installer Container

@@ -1,0 +1,250 @@
+# Factory-image userspace suite configuration (make integration-test-diskimage-userspace).
+#
+# The aarch64 platformd runs on musl inside an arm64 Alpine container against
+# the swtpm the container entrypoint starts; this is test/integration/config.yaml
+# with the platform directories under the container volume and the TPM pointed
+# at the swtpm socket (tpm.device names a Unix socket, which
+# pkg/vtpm.ResolveTPMTarget resolves to the swtpm target).
+debug: true
+debug-secrets: true
+platform-dir: /trusted-platform/volume/platform
+config-dir: /etc/trusted-platform
+log-dir: /trusted-platform/volume/platform/log
+ca-dir: /trusted-platform/volume/platform/ca
+
+# Domain for test certificates
+domain: localhost
+
+# =============================================================================
+# QUICBAAS CONFIGURATION (Embedded, PebbleDB backend)
+# =============================================================================
+
+quicbaas:
+  data-dir: /trusted-platform/volume/platform/quicbaas
+  node-id: 1
+  # Required by the embedded server: qrdb first-boot cannot seed IAM (system
+  # tenant, roles, admin certificate) without a trust domain, so platformd
+  # refuses to start when it is absent. Every shipped template carries the
+  # same placeholder, which the seeder overwrites with the deployment's
+  # internal domain.
+  spiffe-trust-domain: example.internal
+  cache-size: 67108864
+  log-level: warn
+  consistency-level: linearizable
+
+# =============================================================================
+# CERTIFICATE AUTHORITY CONFIGURATION (Software-only, no TPM)
+# =============================================================================
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: false
+  default-validity: 365
+  default-idevid-cn: test-device-id
+  sans-include-localhost: true
+  require-password: true
+  identity:
+    - # Root Certificate Authority
+      is-root: true
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+      keys:
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "123456"
+          platform-policy: true
+          debug: true
+
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "123456"
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.localhost
+        organization: Trusted Platform Integration Tests
+        country: US
+        province: Test
+        locality: Test
+        address: 123 Test Street
+        postal-code: 12345
+      sans:
+        dns:
+          - root-ca.localhost
+        email:
+          - test@localhost
+
+    - # Intermediate Certificate Authority
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+      keys:
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "123456"
+          platform-policy: true
+          debug: true
+
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "123456"
+          platform-policy: true
+          debug: true
+
+      valid: 10
+      subject:
+        cn: ca01.localhost
+        organization: Trusted Platform Integration Tests
+        country: US
+        province: Test
+        locality: Test
+        address: 123 Test Street
+        postal-code: 12345
+      sans:
+        dns:
+          - ca01.localhost
+          - ca.localhost
+        email:
+          - test@localhost
+
+# =============================================================================
+# TPM 2.0 CONFIGURATION
+# =============================================================================
+# Required for CA identities that set platform-policy: true. The platform
+# PCR + bank are needed when the CA is configured to use TPM-bound platform
+# policy. Integration tests run against swtpm started by the test harness.
+
+tpm:
+  device: /trusted-platform/volume/swtpm/swtpm.sock
+  simulator: false
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    platform-policy: false
+    rsa:
+      size: 2048
+  # The attestation identities firstboot provisions on the Pi; go-xkms
+  # requires both sections to provision (an absent iak: is a nil
+  # dereference in IAKAttributesFromConfig, go-xkms v0.9.4-alpha).
+  iak:
+    debug: true
+    hash: SHA-256
+    handle: 0x81010002
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  idevid:
+    model: userspace-suite
+    serial: aarch64-userspace-01
+    cert-handle: 0x01C90000
+    debug: true
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  platform-pcr: 23
+  platform-pcr-bank: sha256
+  # Empty golden-pcrs list keeps the policy permissive — fine for tests
+  # where every reboot of swtpm yields different boot-time PCR values.
+  golden-pcrs: []
+  platform-srk:
+    srk-handle: 0x81000002
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=base64"
+    platform-policy: true
+
+# =============================================================================
+# vTPM CONFIGURATION
+# =============================================================================
+
+vtpm:
+  base-dir: /trusted-platform/volume/platform/vtpm
+  pcr-banks:
+    - sha256
+  ek-algorithm: RSA
+  secure-boot-key-size: 2048
+  secure-boot-valid-years: 10
+  secure-boot-common-name: Trusted Platform Integration Tests
+  secure-boot-organization: Trusted Platform Integration Tests
+  debug: true
+
+# =============================================================================
+# PASSWORD HASHING (Argon2) - Fast settings for tests
+# =============================================================================
+
+argon2:
+  memory: 1
+  iterations: 1
+  parallelism: 1
+  saltLen: 16
+  keyLen: 32
+
+# =============================================================================
+# SDN CONFIGURATION
+# =============================================================================
+# Enables the overlay controller so TestOverlayMultiProtocol and
+# TestOverlayCLIOperations pass against real in-process services.
+#
+# OVS socket: the devcontainer starts ovsdb-server at /var/run/openvswitch/db.sock
+# before platformd; run-integration-tests.sh creates the br-platform-int bridge.
+#
+# Overlay: controller is wired into the gRPC/REST/QUIC/MCP/Unix overlay service
+# by daemon.go when sdn.overlay.enabled=true. VTEP IP is derived at runtime from
+# App.PublicIPv4 (or loopback when not available). Underlay interface defaults to
+# "lo" so no kernel VXLAN device is required in the container.
+#
+# IPAM: memory backend is explicit here so the zone/IPAM test suites that were
+# passing WITHOUT an sdn section continue to use the same in-memory allocator
+# (the daemon always initialised a defaultIPAM memory backend regardless).
+#
+# Networks: intentionally absent — no VLAN seeding is triggered, preserving the
+# existing behaviour of the zone/network integration test suites.
+
+sdn:
+  enabled: true
+  controller: true
+  ovs:
+    socket: /var/run/openvswitch/db.sock
+    bridge: br-platform-int
+  ipam:
+    backend: memory
+  overlay:
+    enabled: true
+    vxlan-port: 4789
+    underlay-interface: lo

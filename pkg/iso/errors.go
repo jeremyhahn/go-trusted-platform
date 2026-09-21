@@ -13,7 +13,10 @@
 
 package iso
 
-import "fmt"
+import (
+	"debug/elf"
+	"fmt"
+)
 
 // ErrorType categorizes ISO builder errors
 type ErrorType string
@@ -275,4 +278,39 @@ func (e *CommandOutputError) Error() string {
 // Unwrap returns the wrapped cause.
 func (e *CommandOutputError) Unwrap() error {
 	return e.Err
+}
+
+// UnsupportedArchitectureError reports a target architecture pkg/uki does not
+// model (accepted: x86_64/amd64, aarch64/arm64, arm, riscv64).
+type UnsupportedArchitectureError struct {
+	Arch string
+}
+
+// Error implements error.
+func (e *UnsupportedArchitectureError) Error() string {
+	return "iso: unsupported architecture " + e.Arch
+}
+
+// FIPSUnsupportedArchitectureError reports a FIPS build requested for an
+// architecture the FIPS kernel and OpenSSL provider are not built for.
+type FIPSUnsupportedArchitectureError struct {
+	Arch string
+}
+
+// Error implements error.
+func (e *FIPSUnsupportedArchitectureError) Error() string {
+	return "iso: FIPS artifacts are built for x86_64 only, not " + e.Arch
+}
+
+// BinaryArchMismatchError reports a bundled binary compiled for a different
+// CPU architecture than the media targets.
+type BinaryArchMismatchError struct {
+	Path string
+	Want elf.Machine
+	Got  elf.Machine
+}
+
+// Error implements error.
+func (e *BinaryArchMismatchError) Error() string {
+	return "iso: binary " + e.Path + " is built for " + e.Got.String() + ", the media targets " + e.Want.String()
 }

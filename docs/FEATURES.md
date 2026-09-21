@@ -254,7 +254,7 @@ For details, see [docs/ima](ima/).
 | Docker | Yes | Containerized deployment |
 | QEMU / KVM | Yes | Virtual machine testing |
 | PXE Boot | Yes | Network boot provisioning |
-| Raspberry Pi | - | Trusted SD card image |
+| Raspberry Pi | Yes | Factory SD-card image: Alpine aarch64, U-Boot with preseeded Secure Boot keys and TCG2 measured boot, signed UKI, same TPM-sealed first boot as the ISO (`make image-rpi`, [docs/factory-image/](factory-image/)) |
 | AVR | - | Trusted Bootloader & Firmware |
 
 ### Hardware Support

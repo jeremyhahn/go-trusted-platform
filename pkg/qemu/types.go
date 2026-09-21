@@ -62,6 +62,17 @@ var (
 	// ErrFIDO2NotSupported is returned when QEMU doesn't support the requested FIDO2 mode
 	ErrFIDO2NotSupported = errors.New("FIDO2 mode not supported by this QEMU build")
 
+	// ErrUnsupportedArch is returned when Config.Arch names no profile
+	ErrUnsupportedArch = errors.New("unsupported guest architecture")
+
+	// ErrFirmwareMissing is returned when the architecture needs a firmware
+	// image (Config.Firmware) and it is unset or absent
+	ErrFirmwareMissing = errors.New("firmware image not found")
+
+	// ErrUnsupportedBootMode is returned when the architecture cannot boot
+	// in the requested mode
+	ErrUnsupportedBootMode = errors.New("boot mode not supported for this architecture")
+
 	// ErrCanoKeyNotAvailable is returned when CanoKey support is not available
 	ErrCanoKeyNotAvailable = errors.New("CanoKey not available (requires libcanokey-qemu)")
 

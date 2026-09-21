@@ -27,6 +27,7 @@ const (
 	ErrorTypeSecureBoot    ErrorType = "secure_boot"
 	ErrorTypeTPM           ErrorType = "tpm"
 	ErrorTypeCompletion    ErrorType = "completion"
+	ErrorTypeDiskRelease   ErrorType = "disk_release"
 )
 
 // InstallerError wraps errors with additional context
@@ -179,4 +180,36 @@ func ErrCompletion(message string, cause error) error {
 		Message: message,
 		Cause:   cause,
 	}
+}
+
+// ErrUnknownInstallTarget reports an install target that is neither disk nor
+// image.
+func ErrUnknownInstallTarget(name string) error {
+	return &InstallerError{Type: ErrorTypeInvalidConfig, Message: "unknown install target " + name + " (disk, image)"}
+}
+
+// ErrUnknownBootFirmware reports a boot firmware that is neither uefi nor
+// uboot.
+func ErrUnknownBootFirmware(name string) error {
+	return &InstallerError{Type: ErrorTypeInvalidConfig, Message: "unknown boot firmware " + name + " (uefi, uboot)"}
+}
+
+// ErrBootFirmwareStage reports a failure to lay the staged boot firmware
+// onto the EFI partition.
+func ErrBootFirmwareStage(message string, cause error) error {
+	return &InstallerError{Type: ErrorTypeUKIBuild, Message: message, Cause: cause}
+}
+
+// ErrMediaKernel reports a failure installing a platform-built kernel from
+// the install media (OSConfig.KernelArtifactsDir).
+func ErrMediaKernel(message string, cause error) error {
+	return &InstallerError{Type: ErrorTypeOSInstall, Message: "media kernel: " + message, Cause: cause}
+}
+
+// ErrDiskRelease reports a step of the post-failure disk release that did
+// not complete (release.go). It is never the error Install returns — the
+// install failure is — so it is logged, and it names the resource that is
+// still open on the build host.
+func ErrDiskRelease(message string, cause error) error {
+	return &InstallerError{Type: ErrorTypeDiskRelease, Message: message, Cause: cause}
 }

@@ -96,6 +96,25 @@ type PreFetchConfig struct {
 
 	// User-specified additional packages
 	ExtraPackages []string
+
+	// KernelPackage is the apk kernel package to prefetch when not in FIPS
+	// mode (default linux-lts; linux-rpi for a Raspberry Pi target).
+	KernelPackage string
+	// SkipKernel leaves the kernel package out of the prefetch: the media
+	// carries a platform-built kernel instead (InstallerOverrides.KernelArtifactsDir).
+	SkipKernel bool
+}
+
+// defaultKernelPackage is the Alpine kernel package the platform installs
+// unless a target names another.
+const defaultKernelPackage = "linux-lts"
+
+// kernelPackage returns the configured kernel package or the default.
+func (c *PreFetchConfig) kernelPackage() string {
+	if c.KernelPackage == "" {
+		return defaultKernelPackage
+	}
+	return c.KernelPackage
 }
 
 // apkPackageEntry represents a parsed package entry from APKINDEX.
@@ -264,7 +283,9 @@ func CollectRequiredPackages(config *PreFetchConfig) []string {
 	// Add kernel only if NOT in FIPS mode
 	// When FIPS is enabled, we use a custom-built FIPS kernel instead
 	if !config.FIPS {
-		packages = append(packages, "linux-lts")
+		if !config.SkipKernel {
+			packages = append(packages, config.kernelPackage())
+		}
 		// linux-lts depends on the virtual `linux-firmware-any`, which can
 		// be satisfied by linux-firmware (full set), linux-firmware-none
 		// (headless stub), or any individual linux-firmware-<driver>.

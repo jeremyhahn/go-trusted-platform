@@ -128,6 +128,7 @@ RUN apt-get update && apt-get install -y \
     qemu-system-x86 \
     qemu-utils \
     qemu-efi-aarch64 \
+    qemu-system-arm \
     ovmf \
     busybox-static \
     && rm -rf /var/lib/apt/lists/*

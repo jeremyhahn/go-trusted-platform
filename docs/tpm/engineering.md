@@ -138,35 +138,28 @@ downgrade is invisible in every downstream artefact.
    on lockout/bad-auth, UEFI PPI `ForceClear` plus a warm reset written to
    `/proc/sysrq-trigger` → on a second pass, proceed to provisioning without
    rebooting again.
-8. **The IDevID common name defaults to the hostname** (`<hostname>-idevid`)
-   when not configured. **The IAK common name is currently NOT set by the
-   platform** — see the interim below.
+8. **Both identity common names default to the hostname** — `<hostname>-iak`
+   and `<hostname>-idevid` — when not configured; an operator-configured
+   `tpm.iak.cn` / `tpm.idevid.cn` is preserved (`applyTPMIdentityCNs`,
+   `pkg/app/tpm_identity_cn.go`). The IAK half is the contract #78 restored:
+   go-xkms#137 (adopted with go-xkms v0.9.4-alpha) made `IAKAttributes()`
+   honour a configured CN, and the #74 interim that left the IAK CN empty
+   became the fatal it once avoided — on a fresh provision `CreateIAK`
+   caches attributes built straight from the config, so an empty CN reaches
+   the certificate store and is rejected (`certstore: invalid key
+   attributes`), which is how the Raspberry Pi stand-in found it.
 
-   > **INTERIM (#74) — the IAK certificate is stored under the upstream
-   > default `default-device-id`, not `<hostname>-iak`.**
-   >
-   > go-xkms `IAKAttributes()` assigns `KeyAttributes.CN` **only** inside its
-   > empty-CN fallback; a *configured* CN is discarded, so the attributes
-   > reach the TPM certificate store with an empty CN and the store rejects
-   > them — fatally, on every boot, before the daemon can serve
-   > (`certstore: invalid key attributes`). It is not recoverable at this
-   > layer: on the certificate-store path — `iak.cert-handle` unset, i.e.
-   > `CertHandle == 0`, which is every shipped config — `ProvisionIAKCert`
-   > and `IAKCertificate` derive the storage key from the same attributes,
-   > so a CN that cannot be written also cannot be read back.
-   > `IDevIDAttributes()` assigns unconditionally, so IDevID never had this
-   > problem (it has its own, unrelated one — item 9).
-   >
-   > `applyTPMIdentityCNs` (`pkg/app/tpm_identity_cn.go`) therefore leaves the
-   > IAK CN empty so the upstream fallback applies consistently on both
-   > paths, and **clears an explicitly configured `tpm.iak.cn` with a
-   > warning** — passing one through is precisely the fatal, so there is no
-   > value this layer can supply that upstream will honour.
-   >
-   > Fixed upstream by **go-xkms#137**. Hostname-derived IAK naming
-   > (`<hostname>-iak`) returns when that fix is adopted here. Tracked as
-   > **#78**, which also covers migrating nodes already provisioned under
-   > the interim.
+   **Migration (#78).** A node provisioned under the interim holds its IAK
+   certificate under go-xkms's `default-device-id`. On every boot that did
+   not just provision, `migrateInterimIAKCertificate`
+   (`pkg/app/tpm_iak_migration.go`) runs before the identity-completeness
+   check: if nothing is stored under the IAK's CN and something is stored
+   under the interim name, and that certificate's public key is the
+   resident IAK's, the entry is copied to the new name. The interim entry
+   stays (inert once the new name resolves). A public-key mismatch is
+   logged and left alone; only a store read or write error is fatal. A
+   node that was never provisioned, or already migrated, does nothing.
+
 9. **TPM identity certificates are persisted to the certificate store, not
    NVRAM** — `tpm.idevid.cert-handle` and `tpm.iak.cert-handle` are both
    currently ignored, so all four of the persistence calls #62 added resolve

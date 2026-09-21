@@ -220,16 +220,14 @@ func BuildCustomISO(ctx context.Context, logger *logging.Logger, cfg *ISOBuilder
 
 	// Step 3: Generate Secure Boot keys if needed — never for a platform
 	// config carrying a remote/KMS db signing reference (round-16 review).
-	generateKeys, err := shouldGenerateSecureBootKeys(buildConfig)
+	decision, err := pkgiso.EnsureSecureBootKeys(ctx, logger, buildConfig)
 	if err != nil {
-		return &WrappedError{Msg: "failed to classify Secure Boot signing mode", Err: err}
+		return &WrappedError{Msg: "failed to generate Secure Boot keys", Err: err}
 	}
-	if generateKeys {
-		logger.Info("Generating Secure Boot keys...")
-		if err := generateSecureBootKeys(ctx, logger, buildConfig); err != nil {
-			return &WrappedError{Msg: "failed to generate Secure Boot keys", Err: err}
-		}
-	} else if buildConfig.SecureBoot && buildConfig.GenerateKeys {
+	switch decision {
+	case pkgiso.SecureBootKeysGenerated:
+		logger.Info("Generated Secure Boot keys", "dir", buildConfig.KeysDir)
+	case pkgiso.SecureBootKeysRemote:
 		logger.Info("Remote/KMS signing configured - skipping local key generation")
 	}
 

@@ -71,7 +71,7 @@ func TestWriteKernelUpdateHook(t *testing.T) {
 func TestWriteKernelUpdateAPKTrigger(t *testing.T) {
 	root := t.TempDir()
 
-	path, err := writeKernelUpdateAPKTrigger(root)
+	path, err := writeKernelUpdateAPKTrigger(root, DefaultESPUKIPath)
 	if err != nil {
 		t.Fatalf("writeKernelUpdateAPKTrigger: %v", err)
 	}

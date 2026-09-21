@@ -93,7 +93,7 @@ Examples:
 
 	cmd.Flags().StringVar(&cmdFlags.kver, "kver", "", "Kernel version to (re)build the UKI for (default: newest under /lib/modules)")
 	cmd.Flags().StringVar(&cmdFlags.config, "config", "", "Path to platform config (default: /etc/platformd/config.yaml, then /etc/platformd/install.yaml)")
-	cmd.Flags().StringVar(&cmdFlags.espUKIPath, "uki", "", "Live UKI path to replace (default: /boot/efi/EFI/BOOT/BOOTX64.EFI)")
+	cmd.Flags().StringVar(&cmdFlags.espUKIPath, "uki", "", "Live UKI path to replace (default: the host architecture's loader under /boot/efi/EFI/BOOT, e.g. BOOTX64.EFI or BOOTAA64.EFI)")
 	cmd.Flags().BoolVarP(&cmdFlags.verbose, "verbose", "v", false, "Enable verbose logging")
 	cmd.Flags().BoolVar(&cmdFlags.debug, "debug", false, "Enable debug logging (implies verbose)")
 

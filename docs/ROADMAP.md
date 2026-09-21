@@ -58,7 +58,7 @@ go-trusted-platform is a **Zero-Trust Trusted Computing Platform** for running s
 2. AVR Bootloader and Crypto (Production C bootloader, Crypto auto-detection)
 3. AVR ISP Flashing and Device Management
 4. Firmware Encryption and Supply Chain
-5. Raspberry Pi Support (Secure boot, OTP, Alpine integration)
+5. Raspberry Pi Support (Secure boot, OTP, Alpine integration) — the factory SD-card image with Alpine aarch64, U-Boot Secure Boot and TPM-sealed first boot shipped 2026-09 ([docs/factory-image/](factory-image/)); OTP signed boot, A/B and OTA remain planned ([docs/firmware/rpi.md](firmware/rpi.md))
 6. Android Support (Fastboot, GrapheneOS, Hardware attestation)
 7. Wireless Protocols and CLI
 8. Examples, Documentation, and Fleet UI

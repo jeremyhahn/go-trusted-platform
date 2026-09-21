@@ -1,6 +1,6 @@
 # Installer — Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/installer/`, `pkg/initrd/`, `pkg/iso/`, `pkg/qemu/`, `cmd/platform-initrd` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/installer/`, `pkg/initrd/`, `pkg/iso/`, `pkg/qemu/`, `cmd/platform-initrd` · Last verified: 2026-09-16
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -71,6 +71,7 @@ any of it touches hardware.
 | Piece | Package / path | Owner |
 |---|---|---|
 | Install orchestration — partition, LUKS, OS, UKI, Secure Boot, firstboot service | `pkg/installer/installer.go` | this repo |
+| Boot firmware seam (`uefi`: NVRAM entry + efivars enrolment; `uboot`: staged firmware tree on the ESP, keys preseeded) and the image-target skip list | `pkg/installer/boot_firmware.go` | this repo |
 | Configuration model and validation | `pkg/installer/types.go`, `config.go`, `config_loader.go`, `config_generator.go` | this repo |
 | Built-in profiles (`dev`, `production`, `production-hs`, `fips`) | `pkg/installer/profiles.go` + embedded `pkg/installer/profiles/*.yaml` | this repo |
 | Disk / LVM / LUKS operations | `pkg/installer/disk.go` | this repo |
@@ -144,7 +145,7 @@ operating system. Three conditions end the install there:
 
 | condition | why it is fatal |
 |---|---|
-| `BOOTX64.EFI` absent from, or empty on, the ESP | the file firmware loads is not there; the machine cannot boot |
+| the UKI (`BOOTX64.EFI`; `BOOTAA64.EFI` on aarch64) absent from, or empty on, the ESP | the file firmware loads is not there; the machine cannot boot |
 | `blockdev --flushbufs` **refused** by a device | the device rejected the flush, so writes may not be durable |
 | a mount point survives both a regular and a lazy unmount | it is still attached and unflushed at reboot; on FAT32 that is how a written UKI fails to be a readable one |
 
@@ -160,7 +161,7 @@ Two deliberate non-failures, because too strict is its own outage:
 
 The UKI is fsynced as a **file and then its parent directory**, matching
 `pkg/installer/uki_rebuild.go`. Fsyncing the mount point alone flushes
-directory metadata, not `BOOTX64.EFI`'s contents.
+directory metadata, not the UKI's contents.
 
 ### Phase B — first production boot
 

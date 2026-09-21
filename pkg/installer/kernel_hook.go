@@ -14,6 +14,7 @@
 package installer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -69,7 +70,7 @@ esac
 // apkCommitHookScript bridges Alpine's apk to the UKI rebuild because apk does
 // not invoke kernel-install(8) drop-ins. It is minimal trigger glue and gates on
 // "did a newer kernel land?" so unrelated apk transactions do not rebuild.
-const apkCommitHookScript = `#!/bin/sh
+const apkCommitHookScriptTemplate = `#!/bin/sh
 # 90-trusted-platform-uki - installed by go-trusted-platform.
 #
 # Alpine's apk does not invoke kernel-install(8) drop-ins, so this commit hook
@@ -85,7 +86,7 @@ post-commit|post) ;;
 *) exit 0 ;;
 esac
 
-UKI=/boot/efi/EFI/BOOT/BOOTX64.EFI
+UKI=%s
 KVER=$(ls -1 /lib/modules 2>/dev/null | sort -V | tail -n1)
 [ -n "$KVER" ] || exit 0
 
@@ -109,9 +110,10 @@ func writeKernelUpdateHook(targetRoot string) (string, error) {
 }
 
 // writeKernelUpdateAPKTrigger writes the Alpine apk commit-hook bridge onto the
-// filesystem rooted at targetRoot and returns the absolute path written.
-func writeKernelUpdateAPKTrigger(targetRoot string) (string, error) {
-	return writeTargetHook(targetRoot, apkCommitHookRelPath, apkCommitHookScript)
+// filesystem rooted at targetRoot, gating the rebuild on the live UKI at
+// ukiPath, and returns the absolute path written.
+func writeKernelUpdateAPKTrigger(targetRoot, ukiPath string) (string, error) {
+	return writeTargetHook(targetRoot, apkCommitHookRelPath, fmt.Sprintf(apkCommitHookScriptTemplate, ukiPath))
 }
 
 // writeTargetHook writes content to targetRoot/relPath with the executable mode,
@@ -152,7 +154,7 @@ func (i *installer) installKernelUpdateHook() error {
 	}
 	i.logger.Info("[UKI-REBUILD] Installed kernel-install UKI rebuild hook", "path", hookPath)
 
-	triggerPath, err := writeKernelUpdateAPKTrigger(mountPoint)
+	triggerPath, err := writeKernelUpdateAPKTrigger(mountPoint, i.ukiESPPath())
 	if err != nil {
 		return err
 	}

@@ -14,6 +14,8 @@
 package uki
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"os"
@@ -122,11 +124,14 @@ func (u *UKI) Validate() error {
 	return nil
 }
 
-// ReadFile is a helper to create a UKI from file paths
+// FromFiles creates a UKI from file paths. A gzip-compressed kernel image
+// (the aarch64 vmlinuz Alpine ships is a gzipped Image) is decompressed
+// transparently, because the EFI stub needs the raw image in its .linux
+// section; an uncompressed kernel is passed through untouched.
 func FromFiles(kernelPath, initramfsPath, cmdline string) (*UKI, error) {
-	kernel, err := os.Open(kernelPath)
+	kernel, err := openKernel(kernelPath)
 	if err != nil {
-		return nil, &WrappedError{Msg: "failed to open kernel", Err: err}
+		return nil, err
 	}
 
 	initramfs, err := os.Open(initramfsPath)
@@ -140,6 +145,54 @@ func FromFiles(kernelPath, initramfsPath, cmdline string) (*UKI, error) {
 		Initramfs: initramfs,
 		Cmdline:   cmdline,
 	}, nil
+}
+
+// gzipMagic is the two-byte gzip stream header.
+var gzipMagic = []byte{0x1f, 0x8b}
+
+// gzipKernel is a gzip-decompressing reader over an open kernel file that
+// closes both the decompressor and the file.
+type gzipKernel struct {
+	*gzip.Reader
+	file *os.File
+}
+
+// Close closes the decompressor and the underlying file.
+func (g *gzipKernel) Close() error {
+	gzErr := g.Reader.Close()
+	fileErr := g.file.Close()
+	if gzErr != nil {
+		return gzErr
+	}
+	return fileErr
+}
+
+// openKernel opens a kernel image, wrapping it in a gzip reader when the
+// file starts with the gzip magic.
+func openKernel(path string) (io.ReadCloser, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to open kernel", Err: err}
+	}
+	magic := make([]byte, len(gzipMagic))
+	n, err := io.ReadFull(f, magic)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		_ = f.Close()
+		return nil, &WrappedError{Msg: "failed to read kernel header", Err: err}
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, &WrappedError{Msg: "failed to rewind kernel", Err: err}
+	}
+	if n < len(gzipMagic) || !bytes.Equal(magic, gzipMagic) {
+		return f, nil
+	}
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		_ = f.Close()
+		return nil, &WrappedError{Msg: "failed to decompress gzip kernel", Err: err}
+	}
+	return &gzipKernel{Reader: gz, file: f}, nil
 }
 
 // Close closes all open file handles in the UKI

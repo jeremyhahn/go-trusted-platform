@@ -411,6 +411,14 @@ type App struct {
 	// Secure Boot signing configuration (key, cert paths)
 	SecureBootConfig *installer.SecureBootConfig `yaml:"secure-boot,omitempty" json:"secure_boot,omitempty" mapstructure:"secure-boot"`
 
+	// InstallTarget is what the installer writes to: disk (default, the
+	// node's own disk) or image (a loop-mounted disk image on a build host).
+	InstallTarget installer.InstallTarget `yaml:"install-target,omitempty" json:"install_target,omitempty" mapstructure:"install-target"`
+
+	// BootConfig selects the firmware the installed system boots under
+	// (uefi, the default, or uboot for the Raspberry Pi image).
+	BootConfig *installer.BootConfig `yaml:"boot,omitempty" json:"boot,omitempty" mapstructure:"boot"`
+
 	// Hardware identity of the target host, written by the bootstrap
 	// orchestrator from the identity the node's BMC client resolves its own
 	// pkg/quirks entry from. The installer feeds all three to
@@ -1311,6 +1319,8 @@ func (app *App) GetInstallerConfig() *installer.Config {
 		HardwareManufacturer:  app.HardwareManufacturer,
 		HardwareModel:         app.HardwareModel,
 		HardwarePartNumber:    app.HardwarePartNumber,
+		Target:                app.InstallTarget,
+		Boot:                  app.BootConfig,
 	}
 }
 
@@ -2047,6 +2057,15 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 	// not a provisioned platform. Complete the non-destructive identity
 	// work here: no TPM2_Clear, no hierarchy-auth change, no evictions —
 	// safe beside an adopted seal.
+	//
+	// A node provisioned under the #74 interim holds its IAK certificate
+	// under the interim name; carry it across the #78 rename first, or the
+	// completeness check re-issues an identity the node already has.
+	if !ranFullProvision && app.TPM != nil && app.TPMConfig.IAK != nil {
+		if _, err := migrateInterimIAKCertificate(app.TPM, app.TPMCertStore, app.Logger); err != nil {
+			return err
+		}
+	}
 	if !ranFullProvision && app.TPM != nil && app.CAConfig != nil &&
 		app.TPMConfig.IAK != nil && app.TPMConfig.IDevID != nil &&
 		!platformIdentityComplete(app.TPM) {
@@ -2694,14 +2713,7 @@ func (app *App) CompletePlatformIdentity(
 				KeyAttributes:   idevidAttrs,
 				Valid:           0, // Valid until 99991231235959Z
 				ExtraExtensions: zoneExts,
-				Subject: quicbaasca.CASubject{
-					CommonName:   idevidAttrs.CN,
-					Organization: app.PrimaryWebService().Certificate.Subject.Organization,
-					Country:      app.PrimaryWebService().Certificate.Subject.Country,
-					Locality:     app.PrimaryWebService().Certificate.Subject.Locality,
-					Address:      app.PrimaryWebService().Certificate.Subject.Address,
-					PostalCode:   app.PrimaryWebService().Certificate.Subject.PostalCode,
-				},
+				Subject:         platformCertificateSubject(idevidAttrs.CN, app.PrimaryWebService()),
 				SANS: &quicbaasca.CASubjectAlternativeNames{
 					DNS: []string{
 						app.Domain,
@@ -2854,6 +2866,27 @@ func (app *App) FetchProfileAndActivate(
 	return profile, activateResp, nil
 }
 
+// platformCertificateSubject is the subject of a certificate the local CA
+// issues for a platform identity (the EK certificate of a TPM that carries
+// none, the IDevID). The organisation fields come from the primary
+// webservice's certificate subject when the deployment has one; a
+// daemon-only deployment (no webservices section — the integration
+// runner, the factory-image userspace suite) has none, and the subject is
+// the common name alone rather than a nil dereference at first
+// provisioning (measured 2026-09-21 on the aarch64 userspace suite).
+func platformCertificateSubject(commonName string, ws *v1.Config) quicbaasca.CASubject {
+	subject := quicbaasca.CASubject{CommonName: commonName}
+	if ws == nil {
+		return subject
+	}
+	subject.Organization = ws.Certificate.Subject.Organization
+	subject.Country = ws.Certificate.Subject.Country
+	subject.Locality = ws.Certificate.Subject.Locality
+	subject.Address = ws.Certificate.Subject.Address
+	subject.PostalCode = ws.Certificate.Subject.PostalCode
+	return subject
+}
+
 // Import TPM Endorsement Certificate - EK Credential Profile. Attempts
 // to import the EK certificate from the TPM into the CA. If an EK
 // certificate is not found, and the ek-gen options are set in the
@@ -2901,14 +2934,7 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 
 			certReq := quicbaasca.CACertificateRequest{
 				KeyAttributes: ekAttrs,
-				Subject: quicbaasca.CASubject{
-					CommonName:   ekAttrs.CN,
-					Organization: app.PrimaryWebService().Certificate.Subject.Organization,
-					Country:      app.PrimaryWebService().Certificate.Subject.Country,
-					Locality:     app.PrimaryWebService().Certificate.Subject.Locality,
-					Address:      app.PrimaryWebService().Certificate.Subject.Address,
-					PostalCode:   app.PrimaryWebService().Certificate.Subject.PostalCode,
-				},
+				Subject:       platformCertificateSubject(ekAttrs.CN, app.PrimaryWebService()),
 				SANS: &quicbaasca.CASubjectAlternativeNames{
 					DNS: []string{
 						app.Domain,

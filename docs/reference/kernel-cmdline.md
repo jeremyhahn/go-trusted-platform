@@ -309,6 +309,33 @@ into the initrd config. See `docs/installer/UNLOCK_STRATEGIES.md`.
 
 ## 5. Hardware-Specific Parameters
 
+### Raspberry Pi (all 64-bit models, `pkg/quirks` entry `raspberry pi`)
+
+The factory SD-card image ([docs/factory-image/](../factory-image/)) selects
+this entry through the template's `hardware-manufacturer: Raspberry Pi`; the
+command line lives in the UKI's `.cmdline` section, not in a `cmdline.txt` on
+the boot partition.
+
+```
+console=ttyAMA0,115200 console=tty1 rootwait loglevel=7
+```
+
+`tty1` last makes the HDMI console `/dev/console`, so an operator at the
+display sees OpenRC and the firstboot seal; the serial port carries the
+kernel log. The QEMU virt stand-in (`hardware-model: QEMU virt stand-in`,
+entry `raspberry pi/qemu virt`) has no display and inverts the order —
+`console=tty1 console=ttyAMA0,115200` — so that the serial transcript the
+integration suite reads continues past `switch_root`.
+
+The primary UART is the PL011 on GPIO14/15, which is `ttyAMA0` once the
+firmware moves Bluetooth off it (`dtoverlay=disable-bt` in `config.txt`); the
+QEMU `virt` machine used for emulated boots presents the same device. There is
+deliberately no `earlycon=`: the PL011 base address differs between Pi 3, Pi 4
+and QEMU, and a wrong one faults before any console exists. `rootwait` covers
+the SD card appearing after the initramfs has started. The entry is selected
+by the media generator's `hardware_manufacturer: Raspberry Pi` override, not
+by Redfish (a Pi has no BMC).
+
 ### Supermicro X10 (X10SDV-TP8F / -7TP8F)
 
 ```

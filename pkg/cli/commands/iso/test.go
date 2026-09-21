@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
-	"time"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -31,7 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu/harness"
 )
 
 // testFlags holds flags for the test commands
@@ -529,78 +528,27 @@ func createTestDiskImage(ctx context.Context, logger *logging.Logger, diskPath, 
 	return nil
 }
 
-// setupTestTPM initializes and starts the software TPM.
-// If TPM state already exists, initialization is skipped to preserve PCR values
-// and sealed data from previous boots.
-func setupTestTPM(ctx context.Context, logger *logging.Logger, config *qemu.Config) (*swtpm.SWTPM, error) {
-	tpmDir := filepath.Join(config.WorkDir, "tpm")
-
-	// Stop any existing TPM instances
-	if err := swtpm.StopExisting(tpmDir); err != nil {
-		logger.Warnf("Failed to stop existing TPM instances: %v", err)
-	}
-
-	// Create TPM configuration
-	// Use QEMUMode=true since QEMU's tpmdev emulator expects the --ctrl socket
-	tpmConfig := &swtpm.Config{
-		StateDir:   tpmDir,
-		SocketPath: config.GetTPMSocketPath(),
-		PCRBanks:   []string{"sha256"},
-		Debug:      config.Debug,
-		QEMUMode:   true,
-	}
-
-	// Create TPM instance
-	tpm, err := swtpm.NewSWTPM(tpmConfig, logger)
+// setupTestTPM starts the software TPM through the shared harness and
+// reports what it did; the harness owns the state-directory reuse that
+// keeps PCR values and sealed data across the boots of one test sequence.
+func setupTestTPM(ctx context.Context, logger *logging.Logger, config *qemu.Config) (harness.TPM, error) {
+	tpm, state, err := harness.StartTPM(ctx, logger, config)
 	if err != nil {
-		return nil, &WrappedError{Msg: "failed to create TPM", Err: err}
+		return nil, &WrappedError{Msg: "failed to setup TPM", Err: err}
 	}
-
-	// Only initialize TPM if state doesn't exist.
-	// Skipping initialization on subsequent boots preserves PCR values
-	// and sealed data, allowing TPM-sealed secrets to be unsealed.
-	if !tpm.IsInitialized() {
-		if err := tpm.Initialize(ctx); err != nil {
-			return nil, &WrappedError{Msg: "failed to initialize TPM", Err: err}
-		}
+	switch state {
+	case harness.TPMStateInitialized:
 		printSuccess("Software TPM initialized")
-	} else {
-		logger.Info("Using existing TPM state (preserving PCR values and sealed data)")
+	case harness.TPMStatePreserved:
 		printSuccess("Software TPM state preserved")
 	}
-
-	// Start TPM daemon
-	if err := tpm.Start(ctx); err != nil {
-		return nil, &WrappedError{Msg: "failed to start TPM", Err: err}
-	}
-
-	// Update QEMU config with actual socket path.
-	// swtpm.Start() may change the socket path to a temp location for Docker compatibility.
-	// The QEMU config must use this actual path for TPM passthrough to work.
-	config.TPMSocket = tpm.SocketPath()
-	logger.Debugf("TPM socket path updated to: %s", config.TPMSocket)
-
-	// Wait for socket to be ready
-	if err := tpm.WaitForSocket(5 * time.Second); err != nil {
-		tpm.Stop()
-		return nil, &WrappedError{Msg: "TPM socket not ready", Err: err}
-	}
-
 	printSuccess(fmt.Sprintf("Software TPM started (PID: %d)", tpm.PID()))
-
 	return tpm, nil
 }
 
 // stopTestTPM gracefully stops the TPM daemon
-func stopTestTPM(logger *logging.Logger, tpm *swtpm.SWTPM) {
-	if tpm == nil {
-		return
-	}
-
-	logger.Info("Stopping software TPM...")
-	if err := tpm.Stop(); err != nil {
-		logger.Warnf("Failed to stop TPM: %v", err)
-	}
+func stopTestTPM(logger *logging.Logger, tpm harness.TPM) {
+	harness.StopTPM(logger, tpm)
 }
 
 // enrollTestSecureBootKeys enrolls Secure Boot keys into NVRAM for boot tests

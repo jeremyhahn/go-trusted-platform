@@ -10,7 +10,7 @@ For full documentation, see [docs/device-templates.md](../../../docs/device-temp
 | Profile | Layout | Status |
 |---------|--------|--------|
 | [dedicated/](./dedicated/) | 3 dedicated nodes: 1 control-plane, 1 gateway, 1 compute | **Active** |
-| [single-node/](./single-node/) | Control-plane + gateway + compute colocated on a single node | Planned |
+| [single-node/](./single-node/) | Control-plane + gateway + compute colocated on a single node | Default ISO template; Raspberry Pi factory image under [single-node/raspberrypi/](./single-node/raspberrypi/) |
 | [high-availability/](./high-availability/) | 3 control-plane, 2 gateway, 2 compute (HA Raft cluster) | Planned |
 
 The `dedicated/` profile is the current reference architecture being
@@ -32,7 +32,11 @@ configs/platform/templates/
         control-plane.yaml
         gateway.yaml
         compute.yaml
-  single-node/          # Colocated all-in-one (planned)
+  single-node/          # Colocated all-in-one: the default ISO template
+    default.yaml
+    raspberrypi/        # Factory SD-card image (platformctl diskimage create --target rpi)
+      rpi4/
+        default.yaml
   high-availability/    # HA cluster (planned)
 ```
 
@@ -61,6 +65,7 @@ Override files use the same YAML structure but only include fields to change.
 |--------|--------------|---------|--------|
 | Supermicro | X10 (X10SDV-TP8F, etc.) | dedicated | Production |
 | Dell | PowerEdge R640 | dedicated | Phase 2 (UNTESTED) |
+| Raspberry Pi | 4 Model B (`rpi4`; SLB9670 TPM HAT on SPI0 CE1) | single-node, factory SD-card image | Boots on the QEMU virt stand-in; hardware validation per [docs/factory-image/user.md](../../../docs/factory-image/user.md) |
 
 ## Architecture Notes
 

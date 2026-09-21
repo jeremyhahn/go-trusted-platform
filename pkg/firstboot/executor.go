@@ -99,6 +99,16 @@ type Executor struct {
 	config  *Config
 }
 
+// rootDevice returns the LUKS-encrypted root partition the executor was
+// configured for, or "" when no configuration was supplied. The EFI
+// partition is located relative to it (see pkg/partition).
+func (e *Executor) rootDevice() string {
+	if e.config == nil {
+		return ""
+	}
+	return e.config.LuksDevice
+}
+
 // NewExecutor creates a new Executor with TPM module initialized.
 // It loads TPM configuration from the platform config file and initializes the TPM.
 func NewExecutor(ctx context.Context, config *Config, logger *logging.Logger) (*Executor, error) {

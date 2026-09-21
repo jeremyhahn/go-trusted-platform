@@ -15,6 +15,7 @@ package iso
 
 import (
 	"context"
+	"debug/elf"
 	"os"
 	"path/filepath"
 	"testing"
@@ -74,7 +75,7 @@ func TestValidateBinary(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := tt.setup()
-			err := validateBinary(path)
+			err := validateBinary(path, elf.EM_X86_64)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateBinary() error = %v, wantErr %v", err, tt.wantErr)

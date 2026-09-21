@@ -40,6 +40,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode/authenticodetest"
 )
 
 // mockBackend implements xkmssdk.KeyProvider for testing
@@ -281,84 +283,25 @@ func generateTestECDSAKey(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate) {
 	return key, cert
 }
 
-// createMinimalPE creates a minimal valid PE file for testing
+// COFF machine identifiers used by the PE fixtures.
+const (
+	machineAMD64 uint16 = 0x8664 // IMAGE_FILE_MACHINE_AMD64 (EFI/BOOT/BOOTX64.EFI)
+	machineARM64 uint16 = 0xAA64 // IMAGE_FILE_MACHINE_ARM64 (EFI/BOOT/BOOTAA64.EFI)
+	machineRISCV uint16 = 0x5064 // IMAGE_FILE_MACHINE_RISCV64 (EFI/BOOT/BOOTRISCV64.EFI)
+)
+
+// createMinimalPE creates a minimal valid AMD64 PE32+ file for testing
 func createMinimalPE(t *testing.T) []byte {
 	t.Helper()
+	return createMinimalPEWithMachine(t, machineAMD64)
+}
 
-	// Create a minimal PE32+ file
-	// This is a simplified PE structure sufficient for testing
-
-	pe := make([]byte, 4096) // 4KB minimal PE
-
-	// DOS Header (64 bytes)
-	binary.LittleEndian.PutUint16(pe[0:2], 0x5A4D) // MZ magic
-	binary.LittleEndian.PutUint32(pe[60:64], 0x80) // PE header offset
-
-	// PE Signature at offset 0x80
-	copy(pe[0x80:0x84], []byte("PE\x00\x00"))
-
-	// COFF File Header (20 bytes) at offset 0x84
-	binary.LittleEndian.PutUint16(pe[0x84:0x86], 0x8664) // Machine: AMD64
-	binary.LittleEndian.PutUint16(pe[0x86:0x88], 1)      // NumberOfSections
-	binary.LittleEndian.PutUint32(pe[0x88:0x8C], 0)      // TimeDateStamp
-	binary.LittleEndian.PutUint32(pe[0x8C:0x90], 0)      // PointerToSymbolTable
-	binary.LittleEndian.PutUint32(pe[0x90:0x94], 0)      // NumberOfSymbols
-	binary.LittleEndian.PutUint16(pe[0x94:0x96], 240)    // SizeOfOptionalHeader (PE32+)
-	binary.LittleEndian.PutUint16(pe[0x96:0x98], 0x22)   // Characteristics: EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE
-
-	// Optional Header (PE32+) at offset 0x98
-	binary.LittleEndian.PutUint16(pe[0x98:0x9A], 0x20b)       // Magic: PE32+
-	pe[0x9A] = 14                                             // MajorLinkerVersion
-	pe[0x9B] = 0                                              // MinorLinkerVersion
-	binary.LittleEndian.PutUint32(pe[0x9C:0xA0], 0x200)       // SizeOfCode
-	binary.LittleEndian.PutUint32(pe[0xA0:0xA4], 0)           // SizeOfInitializedData
-	binary.LittleEndian.PutUint32(pe[0xA4:0xA8], 0)           // SizeOfUninitializedData
-	binary.LittleEndian.PutUint32(pe[0xA8:0xAC], 0x1000)      // AddressOfEntryPoint
-	binary.LittleEndian.PutUint32(pe[0xAC:0xB0], 0x1000)      // BaseOfCode
-	binary.LittleEndian.PutUint64(pe[0xB0:0xB8], 0x140000000) // ImageBase
-	binary.LittleEndian.PutUint32(pe[0xB8:0xBC], 0x1000)      // SectionAlignment
-	binary.LittleEndian.PutUint32(pe[0xBC:0xC0], 0x200)       // FileAlignment
-	binary.LittleEndian.PutUint16(pe[0xC0:0xC2], 6)           // MajorOperatingSystemVersion
-	binary.LittleEndian.PutUint16(pe[0xC2:0xC4], 0)           // MinorOperatingSystemVersion
-	binary.LittleEndian.PutUint16(pe[0xC4:0xC6], 0)           // MajorImageVersion
-	binary.LittleEndian.PutUint16(pe[0xC6:0xC8], 0)           // MinorImageVersion
-	binary.LittleEndian.PutUint16(pe[0xC8:0xCA], 6)           // MajorSubsystemVersion
-	binary.LittleEndian.PutUint16(pe[0xCA:0xCC], 0)           // MinorSubsystemVersion
-	binary.LittleEndian.PutUint32(pe[0xCC:0xD0], 0)           // Win32VersionValue
-	binary.LittleEndian.PutUint32(pe[0xD0:0xD4], 0x3000)      // SizeOfImage
-	binary.LittleEndian.PutUint32(pe[0xD4:0xD8], 0x200)       // SizeOfHeaders
-	binary.LittleEndian.PutUint32(pe[0xD8:0xDC], 0)           // CheckSum (will be computed)
-	binary.LittleEndian.PutUint16(pe[0xDC:0xDE], 10)          // Subsystem: EFI_APPLICATION
-	binary.LittleEndian.PutUint16(pe[0xDE:0xE0], 0x160)       // DllCharacteristics: DYNAMIC_BASE | NX_COMPAT | TERMINAL_SERVER_AWARE
-	binary.LittleEndian.PutUint64(pe[0xE0:0xE8], 0x100000)    // SizeOfStackReserve
-	binary.LittleEndian.PutUint64(pe[0xE8:0xF0], 0x1000)      // SizeOfStackCommit
-	binary.LittleEndian.PutUint64(pe[0xF0:0xF8], 0x100000)    // SizeOfHeapReserve
-	binary.LittleEndian.PutUint64(pe[0xF8:0x100], 0x1000)     // SizeOfHeapCommit
-	binary.LittleEndian.PutUint32(pe[0x100:0x104], 0)         // LoaderFlags
-	binary.LittleEndian.PutUint32(pe[0x104:0x108], 16)        // NumberOfRvaAndSizes
-
-	// Data Directories (16 entries * 8 bytes = 128 bytes) starting at 0x108
-	// Entry 4 (Security/Certificate Table) at offset 0x108 + 4*8 = 0x128
-	// Initially zero (unsigned)
-	binary.LittleEndian.PutUint32(pe[0x128:0x12C], 0) // Certificate Table RVA
-	binary.LittleEndian.PutUint32(pe[0x12C:0x130], 0) // Certificate Table Size
-
-	// Section Header (.text) at offset 0x188 (0x98 + 240)
-	copy(pe[0x188:0x190], []byte(".text\x00\x00\x00"))         // Name
-	binary.LittleEndian.PutUint32(pe[0x190:0x194], 0x100)      // VirtualSize
-	binary.LittleEndian.PutUint32(pe[0x194:0x198], 0x1000)     // VirtualAddress
-	binary.LittleEndian.PutUint32(pe[0x198:0x19C], 0x200)      // SizeOfRawData
-	binary.LittleEndian.PutUint32(pe[0x19C:0x1A0], 0x200)      // PointerToRawData
-	binary.LittleEndian.PutUint32(pe[0x1A0:0x1A4], 0)          // PointerToRelocations
-	binary.LittleEndian.PutUint32(pe[0x1A4:0x1A8], 0)          // PointerToLinenumbers
-	binary.LittleEndian.PutUint16(pe[0x1A8:0x1AA], 0)          // NumberOfRelocations
-	binary.LittleEndian.PutUint16(pe[0x1AA:0x1AC], 0)          // NumberOfLinenumbers
-	binary.LittleEndian.PutUint32(pe[0x1AC:0x1B0], 0x60000020) // Characteristics: CODE | EXECUTE | READ
-
-	// Add some code in .text section at offset 0x200
-	copy(pe[0x200:0x208], []byte{0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC})
-
-	return pe
+// createMinimalPEWithMachine creates a minimal valid PE32+ file whose COFF
+// machine field is set to the given value. Everything else is identical to
+// createMinimalPE so tests can prove the signer is machine-agnostic.
+func createMinimalPEWithMachine(t *testing.T, machine uint16) []byte {
+	t.Helper()
+	return authenticodetest.MinimalPE(machine)
 }
 
 // createMinimalPE32 creates a minimal valid PE32 (32-bit) file for testing
@@ -920,6 +863,65 @@ func TestEmbedSignature(t *testing.T) {
 	extractedSig, err := s.extractSignature(signedPEParsed)
 	require.NoError(t, err)
 	require.Equal(t, signature, extractedSig)
+}
+
+// TestEmbedSignature_DwLengthExcludesPadding pins the WIN_CERTIFICATE
+// convention sbsign uses: dwLength is header + DER, the entry is padded to
+// 8 bytes inside the table, and the table size is the padded entry. A
+// dwLength that covered the padding was accepted by OVMF and rejected by
+// U-Boot's mbedTLS PKCS#7 parser (length mismatch), which then crashed.
+func TestEmbedSignature_DwLengthExcludesPadding(t *testing.T) {
+	_, cert := generateTestKey(t)
+	s := &Signer{cert: cert}
+
+	// A 253-byte DER (3-byte header + 250): 8 + 253 = 261, which pads to 264.
+	signature := createTestASN1Sequence(make([]byte, 250))
+	require.Len(t, signature, 253)
+
+	pe, err := parsePE(createMinimalPE(t))
+	require.NoError(t, err)
+	signedPE, err := s.embedSignature(pe, signature)
+	require.NoError(t, err)
+	signed, err := parsePE(signedPE)
+	require.NoError(t, err)
+
+	entry := signedPE[signed.certTableOffset : signed.certTableOffset+signed.certTableSize]
+	dwLength := binary.LittleEndian.Uint32(entry[0:4])
+	require.Equal(t, uint32(8+253), dwLength, "dwLength covers the header and the DER only")
+	require.Equal(t, uint32(264), signed.certTableSize, "the table entry is padded to 8 bytes")
+	require.Equal(t, uint16(0x0200), binary.LittleEndian.Uint16(entry[4:6]))
+	require.Equal(t, uint16(0x0002), binary.LittleEndian.Uint16(entry[6:8]))
+	require.Equal(t, signature, entry[8:dwLength], "the DER ends exactly where dwLength says")
+	require.Equal(t, []byte{0, 0, 0}, entry[dwLength:], "padding is zero and outside dwLength")
+	require.Equal(t, uint32(0), signed.certTableOffset%8, "the table starts 8-byte aligned")
+
+	extracted, err := s.extractSignature(signed)
+	require.NoError(t, err)
+	require.Equal(t, signature, extracted)
+}
+
+// TestExtractSignature_ToleratesPaddingInsideDwLength keeps images signed
+// by the previous convention (and by signers that pad inside dwLength)
+// readable: the DER length comes from the ASN.1 header, not from dwLength.
+func TestExtractSignature_ToleratesPaddingInsideDwLength(t *testing.T) {
+	_, cert := generateTestKey(t)
+	s := &Signer{cert: cert}
+	signature := createTestASN1Sequence(make([]byte, 250)) // 253 bytes
+	pe, err := parsePE(createMinimalPE(t))
+	require.NoError(t, err)
+	signedPE, err := s.embedSignature(pe, signature)
+	require.NoError(t, err)
+	signed, err := parsePE(signedPE)
+	require.NoError(t, err)
+
+	// Rewrite dwLength to the padded length, as the old signer did.
+	binary.LittleEndian.PutUint32(signedPE[signed.certTableOffset:signed.certTableOffset+4], signed.certTableSize)
+	reparsed, err := parsePE(signedPE)
+	require.NoError(t, err)
+
+	extracted, err := s.extractSignature(reparsed)
+	require.NoError(t, err)
+	require.Equal(t, signature, extracted)
 }
 
 func TestExtractSignature(t *testing.T) {
@@ -5032,4 +5034,121 @@ func TestComputeAuthenticodeDigestSignedPE(t *testing.T) {
 	digest, err := s.computeAuthenticodeDigest(signedPE)
 	require.NoError(t, err)
 	require.Len(t, digest, 32)
+}
+
+// TestSignAndVerifyARM64PE proves the signer is COFF-machine agnostic: an
+// aarch64 UKI (EFI/BOOT/BOOTAA64.EFI, machine 0xAA64) must sign and verify
+// exactly like the x86-64 image, and so must any other machine value.
+func TestSignAndVerifyARM64PE(t *testing.T) {
+	key, cert := generateTestKey(t)
+	logger := logging.DefaultLogger()
+
+	signer, err := NewSigner(context.Background(), &SignerOptions{
+		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
+		Certificate:   cert,
+		Logger:        logger,
+	})
+	require.NoError(t, err)
+	s := signer.(*Signer)
+
+	tests := []struct {
+		name    string
+		machine uint16
+	}{
+		{name: "AMD64 BOOTX64.EFI", machine: machineAMD64},
+		{name: "ARM64 BOOTAA64.EFI", machine: machineARM64},
+		{name: "RISC-V BOOTRISCV64.EFI", machine: machineRISCV},
+		{name: "unknown machine", machine: 0x0000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			peData := createMinimalPEWithMachine(t, tt.machine)
+
+			// The parser must report the machine it was given.
+			unsignedPE, err := parsePE(peData)
+			require.NoError(t, err)
+			require.Equal(t, tt.machine, unsignedPE.ntHeaders.Machine)
+			require.Equal(t, uint16(0x20b), unsignedPE.ntHeaders.Magic)
+			require.Zero(t, unsignedPE.certTableOffset)
+
+			// Sign.
+			output := &bytes.Buffer{}
+			require.NoError(t, signer.Sign(bytes.NewReader(peData), output))
+			signedImage := output.Bytes()
+			require.Greater(t, len(signedImage), len(peData))
+
+			// The COFF header, including the machine field, round-trips unchanged.
+			require.Equal(t, peData[0x80:0x98], signedImage[0x80:0x98])
+
+			signedPE, err := parsePE(signedImage)
+			require.NoError(t, err)
+			require.Equal(t, tt.machine, signedPE.ntHeaders.Machine)
+
+			// An embedded WIN_CERTIFICATE (revision 2.0, PKCS#7 SignedData) is present.
+			require.Greater(t, signedPE.certTableOffset, uint32(0))
+			require.Greater(t, signedPE.certTableSize, uint32(0))
+			winCert := signedImage[signedPE.certTableOffset : signedPE.certTableOffset+signedPE.certTableSize]
+			dwLength := binary.LittleEndian.Uint32(winCert[0:4])
+			require.Equal(t, (dwLength+7)&^uint32(7), signedPE.certTableSize, "the table holds the entry padded to 8 bytes")
+			require.Equal(t, uint16(0x0200), binary.LittleEndian.Uint16(winCert[4:6]))
+			require.Equal(t, uint16(0x0002), binary.LittleEndian.Uint16(winCert[6:8]))
+
+			// The signed Authenticode digest matches the digest recomputed
+			// from the signed image.
+			pkcs7, err := s.extractSignature(signedPE)
+			require.NoError(t, err)
+			require.Equal(t, uint32(8+len(pkcs7)), dwLength, "dwLength is the header plus the DER, as sbsign writes it")
+			var ci contentInfo
+			_, err = asn1.Unmarshal(pkcs7, &ci)
+			require.NoError(t, err)
+			var sd signedData
+			_, err = asn1.Unmarshal(ci.Content.Bytes, &sd)
+			require.NoError(t, err)
+			signedDigest, err := s.extractDigestFromContent(sd.ContentInfo.Content.Bytes)
+			require.NoError(t, err)
+			recomputedDigest, err := s.computeAuthenticodeDigest(signedPE)
+			require.NoError(t, err)
+			require.Equal(t, recomputedDigest, signedDigest)
+
+			// Full verification and certificate extraction succeed.
+			require.NoError(t, signer.Verify(bytes.NewReader(signedImage)))
+			extractedCert, err := signer.ExtractCertificate(bytes.NewReader(signedImage))
+			require.NoError(t, err)
+			require.Equal(t, cert.Subject.CommonName, extractedCert.Subject.CommonName)
+		})
+	}
+}
+
+// TestVerifyARM64PEMachineTampered proves the ARM64 verification path is real:
+// the machine field is covered by the Authenticode digest, so rewriting it
+// after signing must fail verification with a digest mismatch rather than
+// being ignored or rejected for the machine value itself.
+func TestVerifyARM64PEMachineTampered(t *testing.T) {
+	key, cert := generateTestKey(t)
+	logger := logging.DefaultLogger()
+
+	signer, err := NewSigner(context.Background(), &SignerOptions{
+		KeyStore:      &mockBackend{privateKey: key, cert: cert},
+		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
+		Certificate:   cert,
+		Logger:        logger,
+	})
+	require.NoError(t, err)
+
+	output := &bytes.Buffer{}
+	require.NoError(t, signer.Sign(bytes.NewReader(createMinimalPEWithMachine(t, machineARM64)), output))
+	signedImage := output.Bytes()
+
+	// Retarget the signed aarch64 image to x86-64.
+	binary.LittleEndian.PutUint16(signedImage[0x84:0x86], machineAMD64)
+
+	tampered, err := parsePE(signedImage)
+	require.NoError(t, err)
+	require.Equal(t, machineAMD64, tampered.ntHeaders.Machine)
+
+	err = signer.Verify(bytes.NewReader(signedImage))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Authenticode digest mismatch")
 }

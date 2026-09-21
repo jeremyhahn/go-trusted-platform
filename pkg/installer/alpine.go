@@ -26,6 +26,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 )
 
 const (
@@ -334,11 +335,20 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 		// NOTE: sbsigntool is no longer required - UKI signing uses native authenticode (pkg/authenticode)
 	}
 
-	// Add kernel ONLY if NOT in FIPS mode
-	// When FIPS is enabled, we use our custom-built FIPS kernel instead of Alpine's stock kernel
-	if !ai.config.FIPS {
-		ai.logger.Info("[ALPINE] Adding linux-lts kernel")
-		packages = append(packages, "linux-lts") // Includes all kernel modules
+	// Add kernel ONLY if NOT in FIPS mode and no platform-built kernel is
+	// configured: FIPS installs the container-built FIPS kernel later, and
+	// KernelArtifactsDir installs a platform-built kernel from the media in
+	// InstallKernel (installMediaKernel).
+	switch {
+	case ai.config.KernelArtifactsDir != "":
+		ai.logger.Info("[ALPINE] Skipping the apk kernel (platform-built kernel from the media)", "artifacts", ai.config.KernelArtifactsDir)
+		modulesDir := filepath.Join(rootPath, "lib", "modules")
+		if err := os.MkdirAll(modulesDir, 0755); err != nil {
+			return ErrOSInstall("failed to create kernel modules directory", err)
+		}
+	case !ai.config.FIPS:
+		ai.logger.Info("[ALPINE] Adding kernel package", "package", ai.kernelPackage())
+		packages = append(packages, ai.kernelPackage()) // Includes all kernel modules
 		// linux-lts pulls the virtual `linux-firmware-any`. With only
 		// `linux-firmware-none` in the prefetch (a 0-byte stub) the
 		// dependency is satisfied by the stub. Without this explicit
@@ -367,7 +377,7 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 			"linux-firmware-bnx2",
 			"linux-firmware-bnx2x",
 		)
-	} else {
+	default:
 		ai.logger.Info("[ALPINE] Skipping linux-lts kernel (using custom FIPS kernel)")
 
 		// Create /lib/modules directory since linux-lts package won't create it
@@ -501,7 +511,7 @@ func (ai *alpineInstaller) ConfigureSystem(ctx context.Context, rootPath string,
 	// Add EFI partition (mount at /boot/efi to match reference Alpine architecture)
 	if diskInfo.EFIPartition != "" {
 		fstabLines = append(fstabLines,
-			fmt.Sprintf("%s /boot/efi vfat defaults 0 2", diskInfo.EFIPartition))
+			"LABEL=EFI /boot/efi vfat defaults 0 2")
 	}
 
 	// Add root partition
@@ -758,8 +768,14 @@ func (ai *alpineInstaller) InstallKernel(ctx context.Context, rootPath string) e
 		return nil
 	}
 
-	// Kernel is already installed by InstallBase (linux-lts package)
-	ai.logger.Info("[ALPINE] Kernel installed by base packages")
+	if ai.config.KernelArtifactsDir != "" {
+		if err := ai.installMediaKernel(ctx, rootPath); err != nil {
+			return err
+		}
+	} else {
+		// Kernel is already installed by InstallBase (linux-lts package)
+		ai.logger.Info("[ALPINE] Kernel installed by base packages")
+	}
 
 	// Detect installed kernel version by looking at /lib/modules/
 	modulesPath := filepath.Join(rootPath, "lib", "modules")
@@ -840,7 +856,7 @@ force_drivers+=" 8250 8250_pci serial_base "
 # IMA is enabled via kernel cmdline params, not as a dracut module
 
 # Include TPM-related kernel modules for IMA measurements
-add_drivers+=" tpm tpm_tis tpm_crb "
+add_drivers+=" ` + ai.imaTPMDrivers() + ` "
 
 # Install IMA-related binaries
 install_items+=" /usr/bin/evmctl /usr/bin/keyctl "
@@ -2912,4 +2928,26 @@ func (ai *alpineInstaller) cleanupChrootMounts(rootPath string) {
 			ai.logger.Debug("[ALPINE] Unmounted", "target", target)
 		}
 	}
+}
+
+// imaTPMDrivers lists the TPM transport modules the IMA initramfs needs on
+// the target architecture: the memory-mapped and CRB interfaces on x86_64,
+// plus the SPI transport (and the Raspberry Pi SPI controller) on aarch64.
+func (ai *alpineInstaller) imaTPMDrivers() string {
+	if ai.config.Architecture == string(uki.ArchAArch64) {
+		return "tpm tpm_tis tpm_crb tpm_tis_spi spi-gpio spi-bitbang spi-bcm2835"
+	}
+	return "tpm tpm_tis tpm_crb"
+}
+
+// defaultKernelPackage is the Alpine kernel installed unless the
+// configuration names another (linux-rpi on a Raspberry Pi).
+const defaultKernelPackage = "linux-lts"
+
+// kernelPackage returns the configured apk kernel package or the default.
+func (ai *alpineInstaller) kernelPackage() string {
+	if ai.config.KernelPackage == "" {
+		return defaultKernelPackage
+	}
+	return ai.config.KernelPackage
 }

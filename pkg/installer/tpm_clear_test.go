@@ -135,7 +135,9 @@ func TestClearTPM_NoDevice_ReturnsTypedError(t *testing.T) {
 	// The modprobe fallback must have been attempted for the standard
 	// set of TPM modules — otherwise the ISO environment can't recover
 	// when kernel modules weren't autoloaded.
-	want := []string{"tpm", "tpm_tis_core", "tpm_tis", "tpm_crb"}
+	// tpm_tis_spi is the transport a Raspberry Pi's discrete TPM sits on;
+	// modprobe of an absent module is logged and ignored elsewhere.
+	want := []string{"tpm", "tpm_tis_core", "tpm_tis", "tpm_crb", "tpm_tis_spi"}
 	if !stringSliceEqual(*requested, want) {
 		t.Fatalf("expected modprobe of %v, got %v", want, *requested)
 	}
