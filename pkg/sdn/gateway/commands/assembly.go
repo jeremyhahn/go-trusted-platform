@@ -19,10 +19,14 @@ import (
 	"crypto/x509"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
+
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsbootstrap "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -85,6 +89,12 @@ type ServeConfig struct {
 	// Metrics is the `metrics:` section (the Prometheus endpoint exporting
 	// the same telemetry snapshot the control plane receives).
 	Metrics *MetricsConfig
+
+	// DataDir is gatewayd's state directory (--data-dir). It is a flag
+	// rather than a configuration section, so it is carried here to reach
+	// the collaborators that need somewhere durable to write. The TOFU pin
+	// store is the first of those.
+	DataDir string
 }
 
 // serveDecodeHook enables TextUnmarshaler-aware decoding (netip.Addr,
@@ -101,7 +111,7 @@ var serveDecodeHook = viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
 // LoadServeConfig extracts the gatewayd configuration sections from a viper
 // instance.
 func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
-	cfg := &ServeConfig{}
+	cfg := &ServeConfig{DataDir: v.GetString("data-dir")}
 	if v.IsSet("gateway") {
 		gc := &gateway.GatewayConfig{}
 		if err := v.UnmarshalKey("gateway", gc, serveDecodeHook); err != nil {
@@ -222,7 +232,7 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	// pool and platformd dials, and the secret store's session. Building it
 	// once here (rather than per consumer) is what keeps the classes, and
 	// the collaborators injected into them, identical everywhere.
-	trustResolver, err := buildTrustResolver(cfg.Trust, logger)
+	trustResolver, err := buildTrustResolver(cfg.Trust, cfg.DataDir, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -415,11 +425,25 @@ func configNeedsAuth(cfg *proxy.Config) bool {
 // Without that path the internal class can never resolve, so assembly fails
 // here naming the missing source instead of at the first dial with "no
 // strategy succeeded".
-func buildTrustResolver(trustCfg *trust.Config, logger *slog.Logger) (trust.Resolver, error) {
+func buildTrustResolver(trustCfg *trust.Config, dataDir string, logger *slog.Logger) (trust.Resolver, error) {
 	if trustCfg == nil {
 		return nil, nil
 	}
 	var opts []trust.Option
+	// The tofu strategy pins a BMC's leaf SPKI on first contact and enforces
+	// it afterwards, which is only a guarantee if the pin OUTLIVES the
+	// process -- an in-memory store would re-trust blindly after every
+	// restart, and the shipped templates promise tofu "captures and PERSISTS
+	// the pin itself". gatewayd runs no platform storage and must not depend
+	// on the control plane to decide whether it trusts a BMC, so the pins are
+	// a file under its own state directory.
+	if tofuScopes(trustCfg) {
+		pinStore, err := newGatewayTOFUPinStore(dataDir)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, trust.WithTOFUPinStore(pinStore))
+	}
 	if internal := trustCfg.Scope(trust.ClassInternal); internal != nil && usesPlatformCA(internal) {
 		if internal.CAFile == "" {
 			return nil, &ErrPlatformCABundleSourceMissing{}
@@ -720,4 +744,45 @@ func buildSecretResolver(cfg *ServeConfig, trustResolver trust.Resolver, logger 
 		return nil, &ErrConfigSection{Section: "secret-store", Cause: err}
 	}
 	return store.Resolve, nil
+}
+
+// gatewayTOFUPinDir is where gatewayd keeps its TOFU pin records, relative to
+// --data-dir.
+const gatewayTOFUPinDir = "trust/tofu-pins"
+
+// tofuScopes reports whether any configured class lists the tofu strategy.
+// The resolver refuses to construct when one does and no pin store was
+// injected, so this decides whether the store has to exist at all.
+func tofuScopes(trustCfg *trust.Config) bool {
+	for _, class := range []trust.Class{trust.ClassDefault, trust.ClassBMC, trust.ClassInternal} {
+		scope := trustCfg.Scope(class)
+		if scope == nil {
+			continue
+		}
+		for _, strategy := range scope.Strategies {
+			if strategy == trust.StrategyTOFU {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// newGatewayTOFUPinStore builds the file-backed TOFU pin store under dataDir.
+// A pin is a public SPKI hash, not a secret, so the directory is 0700 for
+// tamper resistance rather than confidentiality: an attacker who can rewrite
+// it can redirect first-contact trust.
+func newGatewayTOFUPinStore(dataDir string) (trust.TOFUPinStore, error) {
+	if dataDir == "" {
+		return nil, &ErrTOFUPinDirUnset{}
+	}
+	dir := filepath.Join(dataDir, gatewayTOFUPinDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, &ErrTOFUPinDirUnusable{Dir: dir, Cause: err}
+	}
+	backend, err := xkmssdk.NewFileStorageBackend(dir)
+	if err != nil {
+		return nil, &ErrTOFUPinDirUnusable{Dir: dir, Cause: err}
+	}
+	return xkmsbootstrap.NewStoragePinStore(backend)
 }

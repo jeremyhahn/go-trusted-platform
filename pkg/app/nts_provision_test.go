@@ -448,8 +448,8 @@ func TestEnclaveNTSKey(t *testing.T) {
 		// typed provisioning failure rather than an enclave holding
 		// nothing.
 		bad := &ecdsa.PrivateKey{
-			PublicKey: ecdsa.PublicKey{Curve: nil, X: big.NewInt(1), Y: big.NewInt(2)},
-			D:         big.NewInt(3), //nolint:staticcheck // SA1019: hand-building a deliberately invalid key
+			PublicKey: ecdsa.PublicKey{Curve: nil, X: big.NewInt(1), Y: big.NewInt(2)}, //nolint:staticcheck // SA1019: hand-building a deliberately invalid key is the point of this fixture.
+			D:         big.NewInt(3),                                                   //nolint:staticcheck // SA1019: hand-building a deliberately invalid key
 		}
 		enclave, err := enclaveNTSKey(bad)
 		require.Error(t, err)

@@ -626,14 +626,52 @@ acme:
 # BMC serves none. First contact is spki with a per-node bmc_spki_pin, until
 # DANE TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
 # enroll does this).
+# =============================================================================
+# REMOTE ATTESTATION
+# =============================================================================
+#
+# The control plane runs the reporting collector: it periodically asks every
+# enrolled device for a TPM quote over mTLS and records a verdict. `enabled`
+# does two things here — it starts the collector, AND it is the gate on the
+# control plane registering ITSELF as a device in its own registry (#472), so
+# leaving it unset produces a control plane absent from its own fleet view.
+#
+# No `collector.ca-file`. The collector verifies node certificates through the
+# trust resolver's `internal` class, which resolves via platform-ca — the
+# control-plane CA that issued those nodes their identities in the first
+# place. That is self-configuring and needs no per-fleet PEM to keep in sync.
+#
+# The node side needs nothing configured: a node admits the control plane it
+# enrolled against (derived from acme.client.directory) and anchors on the
+# root of the chain that issued its IDevID.
+attestation:
+  reporting:
+    enabled: true
+    interval: 15m
+    ttl: 30m              # must be >= interval, else every report is stale on arrival
+    collector:
+      identity: internal  # must name a webservices[] entry; its TLS port and
+                          # certificate are also the control plane's own quote endpoint
+      port: 9443
+      timeout: 30s
+
 trust:
   bmc:
     # BMC endpoint trust chain. First strategy to succeed wins.
-    # tofu is NOT available here (#83): it fetches a CA bundle and a BMC
-    # serves none. Use a per-node bmc_spki_pin for first contact until DANE
-    # TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
-    # enroll does this).
-    strategies: [dane, spki, ca-file]
+    #
+    # tofu is available here again. It was barred under #83 while it was a
+    # CA-bundle fetch — a BMC serves Redfish, never a bundle — but
+    # go-xkms#139 (v0.12.0-alpha) made the TLS path an endpoint verifier
+    # that pins the leaf SPKI on first contact and enforces it afterwards,
+    # with session tickets disabled so resumption cannot bypass the check.
+    # Its changelog names this exact case.
+    #
+    # Prefer dane once TLSA records for <hostname>-bmc.<internal-zone> are
+    # published (bmc enroll does this). Before that, tofu is the better
+    # first-contact option than a hand-carried bmc_spki_pin: it captures and
+    # PERSISTS the pin itself rather than requiring an operator to obtain
+    # the fingerprint out of band.
+    strategies: [dane, spki, tofu, ca-file]
     dane:
       dns-server: "127.0.0.1:8053"   # CP serves its own public DNS
 

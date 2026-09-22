@@ -158,9 +158,22 @@ func (s *mockSecurityService) SecretResolver() *quicbaassecret.ResolverRegistry 
 // Verify mockSecurityService implements quicbaas.SecurityService.
 var _ quicbaas.SecurityService = (*mockSecurityService)(nil)
 
-// Identity returns nil (stub for testing).
+// mockIdentityService exposes the MockClient's own IAM client through the
+// Identity() hop the SDK routes IAM through, so Adapter.IAM() and
+// MockClient.IAM() resolve to the same value.
+type mockIdentityService struct {
+	client *MockClient
+}
+
+// IAM returns the MockClient's configured IAM client.
+func (s *mockIdentityService) IAM() quicbaas.IAMClient { return s.client.IAM() }
+
+// Verify mockIdentityService implements quicbaas.IdentityService.
+var _ quicbaas.IdentityService = (*mockIdentityService)(nil)
+
+// Identity returns a service that routes IAM back to this mock.
 func (m *MockClient) Identity() quicbaas.IdentityService {
-	return nil
+	return &mockIdentityService{client: m}
 }
 
 // Search returns nil (stub for testing).
@@ -695,3 +708,11 @@ func (m *MockClient) Orchestrator() quicbaas.OrchestratorClient { return nil }
 // Verify MockClient implements quicbaas.Client. This assertion is the
 // source of truth for keeping the mock in lock-step with upstream.
 var _ quicbaas.Client = (*MockClient)(nil)
+
+// SDLC returns nil (stub for testing). The Client interface gained it in
+// go-quicbaas v0.8.0; no test in this package exercises SDLC, and the
+// surrounding mocks follow the same return-nil convention (see Identity,
+// Search).
+func (m *MockClient) SDLC() quicbaas.SDLCClient {
+	return nil
+}

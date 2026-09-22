@@ -127,13 +127,23 @@ func TestBootstrapCAStoreFactory_MultipleCAs(t *testing.T) {
 }
 
 // TestNewCAStoreFactory verifies CAStoreFactory construction.
+// mustPassword builds a password for a test, failing the test if the enclave
+// backing it cannot be allocated. A nil secret is the documented "no
+// authentication" case and never fails.
+func mustPassword(t *testing.T, secret []byte) xkmssdk.Password {
+	t.Helper()
+	password, err := xkmssdk.NewPassword(secret)
+	require.NoError(t, err)
+	return password
+}
+
 func TestNewCAStoreFactory(t *testing.T) {
 	app := &App{
 		Logger: logging.DefaultLogger(),
 	}
 
 	// NewCAStoreFactory accepts soPIN and userPIN for API consistency but ignores them
-	factory := NewCAStoreFactory(app, "/tmp/platform", nil, xkmssdk.NewPassword(nil), xkmssdk.NewPassword(nil))
+	factory := NewCAStoreFactory(app, "/tmp/platform", nil, mustPassword(t, nil), mustPassword(t, nil))
 
 	require.NotNil(t, factory)
 	assert.Equal(t, "/tmp/platform", factory.platformDir)
@@ -146,8 +156,8 @@ func TestNewCAStoreFactory_WithPINs(t *testing.T) {
 		Logger: logging.DefaultLogger(),
 	}
 
-	soPIN := xkmssdk.NewPassword([]byte("so-pin-secret"))
-	userPIN := xkmssdk.NewPassword([]byte("user-pin-secret"))
+	soPIN := mustPassword(t, []byte("so-pin-secret"))
+	userPIN := mustPassword(t, []byte("user-pin-secret"))
 
 	factory := NewCAStoreFactory(app, "/tmp/platform", nil, soPIN, userPIN)
 
@@ -161,7 +171,7 @@ func TestCAStoreFactory_CreateKeyStore_NilQuicBaaS(t *testing.T) {
 		Logger: logging.DefaultLogger(),
 	}
 
-	factory := NewCAStoreFactory(app, "/tmp/platform", nil, xkmssdk.NewPassword(nil), xkmssdk.NewPassword(nil))
+	factory := NewCAStoreFactory(app, "/tmp/platform", nil, mustPassword(t, nil), mustPassword(t, nil))
 
 	_, err := factory.CreateKeyStore("test-ca")
 
@@ -175,7 +185,7 @@ func TestCAStoreFactory_CreateCertStore_NilStorage(t *testing.T) {
 		Logger: logging.DefaultLogger(),
 	}
 
-	factory := NewCAStoreFactory(app, "/tmp/platform", nil, xkmssdk.NewPassword(nil), xkmssdk.NewPassword(nil))
+	factory := NewCAStoreFactory(app, "/tmp/platform", nil, mustPassword(t, nil), mustPassword(t, nil))
 
 	// Storage is nil, so NewObjectStore will fail
 	_, err := factory.CreateCertStore("test-ca")
@@ -189,7 +199,7 @@ func TestCAStoreFactory_CreateObjectStore_NilStorage(t *testing.T) {
 		Logger: logging.DefaultLogger(),
 	}
 
-	factory := NewCAStoreFactory(app, "/tmp/platform", nil, xkmssdk.NewPassword(nil), xkmssdk.NewPassword(nil))
+	factory := NewCAStoreFactory(app, "/tmp/platform", nil, mustPassword(t, nil), mustPassword(t, nil))
 
 	// ObjStoreAdapter wraps nil storage; Configure may succeed or fail depending on implementation.
 	// This exercises the code path regardless of outcome.
@@ -332,7 +342,7 @@ func TestBootstrapCAStoreFactory_CreateCertStore_NonEnvTest_Error(t *testing.T) 
 func TestCAStoreFactory_CreateCertStore_WithMemoryStorage(t *testing.T) {
 	app := &App{Logger: logging.DefaultLogger()}
 	factory := NewCAStoreFactory(app, t.TempDir(), object.NewMemoryClient(),
-		xkmssdk.NewPassword(nil), xkmssdk.NewPassword(nil))
+		mustPassword(t, nil), mustPassword(t, nil))
 
 	cs, err := factory.CreateCertStore("test-ca")
 	require.NoError(t, err)

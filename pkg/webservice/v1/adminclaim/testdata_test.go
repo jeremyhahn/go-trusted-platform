@@ -40,6 +40,13 @@ import (
 
 const testTenantID = "system"
 
+// testAdminEmail is the admin account's email — the identifier the FIDO2
+// ceremony enrols against. It is deliberately distinct from the admin
+// USERNAME: the backbone resolves the account with GetByEmail and does not
+// accept a username, so a fixture that reused the username would not
+// exercise the real contract.
+const testAdminEmail = "admin@test.invalid"
+
 // pki is a throwaway CA plus the leaves a test needs.
 type pki struct {
 	rootCert *x509.Certificate

@@ -73,6 +73,7 @@ func newHarness(t *testing.T) *harness {
 		TokenIssuer:  h.issuer,
 		TrustAnchors: p.pool,
 		TenantID:     testTenantID,
+		AdminEmail:   testAdminEmail,
 	})
 	require.NoError(t, err)
 	h.svc = svc
@@ -760,6 +761,7 @@ func TestMultiInstanceRefusesCeremony(t *testing.T) {
 		TokenIssuer:   &fakeIssuer{token: "console-jwt"},
 		TrustAnchors:  p.pool,
 		TenantID:      testTenantID,
+		AdminEmail:    testAdminEmail,
 		MultiInstance: true,
 	})
 	require.NoError(t, err)

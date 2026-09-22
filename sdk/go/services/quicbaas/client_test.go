@@ -40,7 +40,7 @@ func newMockSDKClient() *mockSDKClient {
 func (m *mockSDKClient) CoreData() quicbaas.CoreDataService             { return nil }
 func (m *mockSDKClient) ClusterMgmt() quicbaas.ClusterManagementService { return nil }
 func (m *mockSDKClient) Security() quicbaas.SecurityService             { return &mockSecurityService{} }
-func (m *mockSDKClient) Identity() quicbaas.IdentityService             { return nil }
+func (m *mockSDKClient) Identity() quicbaas.IdentityService             { return &mockIdentityService{} }
 func (m *mockSDKClient) Search() quicbaas.SearchService                 { return nil }
 func (m *mockSDKClient) Storage() quicbaas.StorageService               { return nil }
 func (m *mockSDKClient) Async() quicbaas.AsyncService                   { return nil }
@@ -76,6 +76,7 @@ func (m *mockSDKClient) RAG() quicbaas.RAGClient                               {
 func (m *mockSDKClient) Project() quicbaas.ProjectClient                       { return nil }
 func (m *mockSDKClient) Account() quicbaas.AccountClient                       { return nil }
 func (m *mockSDKClient) Orchestrator() quicbaas.OrchestratorClient             { return nil }
+func (m *mockSDKClient) SDLC() quicbaas.SDLCClient                             { return nil }
 
 // QRDB-backed accessors (returning two values, error path always nil).
 func (m *mockSDKClient) SealStore() (quicbaas.QRDBSealStoreClient, error) {
@@ -96,6 +97,16 @@ func (m *mockSDKClient) Close() error {
 	m.closed = true
 	return m.closeErr
 }
+
+// mockIdentityService is a minimal IdentityService that returns nil for every
+// capability, mirroring mockSecurityService: it lets the wrapper's
+// Identity().IAM() delegation execute without panicking while preserving the
+// test's "expected nil" expectations.
+type mockIdentityService struct {
+	quicbaas.IdentityService
+}
+
+func (mockIdentityService) IAM() quicbaas.IAMClient { return nil }
 
 // mockSecurityService is a minimal SecurityService that returns nil for every
 // capability. It lets the wrapper's Security().X() delegation execute without

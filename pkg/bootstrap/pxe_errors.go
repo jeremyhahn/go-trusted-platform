@@ -15,6 +15,7 @@ package bootstrap
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
@@ -124,14 +125,18 @@ type ErrInvalidBMCTrust struct {
 }
 
 func (e ErrInvalidBMCTrust) Error() string {
-	if trust.Strategy(e.Strategy) == trust.StrategyTOFU {
-		return fmt.Sprintf("bootstrap: node %s: bmc_trust strategy \"tofu\" cannot verify a BMC: "+
-			"tofu fetches a CA bundle from a server, and a BMC serves Redfish rather than a CA bundle. "+
-			"Use bmc_spki_pin to pin the BMC's own certificate (allowed bmc_trust: dane, spki, ca-file)",
-			e.Hostname)
+	// The allowed set is derived, never spelled out here. The previous
+	// version hard-coded "dane, spki, ca-file" AND a tofu-specific
+	// explanation; when go-xkms#139 made tofu an endpoint verifier and it
+	// became allowed for this class, both would have gone quietly stale and
+	// told an operator the opposite of the truth.
+	allowed := trust.AllowedStrategiesForClass(trust.ClassBMC)
+	names := make([]string, 0, len(allowed))
+	for _, s := range allowed {
+		names = append(names, string(s))
 	}
-	return fmt.Sprintf("bootstrap: node %s: invalid bmc_trust strategy %q (allowed: dane, spki, ca-file)",
-		e.Hostname, e.Strategy)
+	return fmt.Sprintf("bootstrap: node %s: invalid bmc_trust strategy %q (allowed: %s)",
+		e.Hostname, e.Strategy, strings.Join(names, ", "))
 }
 
 // ErrForbiddenOverrideKey reports an override key that duplicates an

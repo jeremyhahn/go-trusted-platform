@@ -146,11 +146,19 @@ func setup() {
 		CN:             "test-xkms",
 		DefaultBackend: "software",
 	}
+	soPIN, err := xkmssdk.NewPassword([]byte("123456"))
+	if err != nil {
+		App.Logger.FatalError(err)
+	}
+	userPIN, err := xkmssdk.NewPassword([]byte("123456"))
+	if err != nil {
+		App.Logger.FatalError(err)
+	}
 	ks, err := App.XKMSFromConfig(
 		xkmsConfig,
 		App.PlatformDir,
-		xkmssdk.NewPassword([]byte("123456")),
-		xkmssdk.NewPassword([]byte("123456")),
+		soPIN,
+		userPIN,
 		nil)
 	if err != nil {
 		App.Logger.FatalError(err)

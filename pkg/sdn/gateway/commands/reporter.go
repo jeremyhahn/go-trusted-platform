@@ -93,7 +93,7 @@ func BuildReporter(ctx context.Context, cfg *ServeConfig, gw *gateway.Gateway, l
 		return nil, &ErrGatewayIDNotReportable{GatewayID: gatewayID}
 	}
 
-	httpClient, certCN, err := buildReporterHTTPClient(ctx, cpCfg, cfg.Trust, logger)
+	httpClient, certCN, err := buildReporterHTTPClient(ctx, cpCfg, cfg.Trust, cfg.DataDir, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func BuildReporter(ctx context.Context, cfg *ServeConfig, gw *gateway.Gateway, l
 // binds reported telemetry to — so the caller can reject a gateway-id /
 // certificate mismatch before the reporter starts. The CN is empty when
 // no client certificate is configured.
-func buildReporterHTTPClient(ctx context.Context, cpCfg *controlplane.Config, trustCfg *trust.Config, logger *slog.Logger) (*http.Client, string, error) {
+func buildReporterHTTPClient(ctx context.Context, cpCfg *controlplane.Config, trustCfg *trust.Config, dataDir string, logger *slog.Logger) (*http.Client, string, error) {
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS13}
 
 	var certCN string
@@ -149,7 +149,7 @@ func buildReporterHTTPClient(ctx context.Context, cpCfg *controlplane.Config, tr
 		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
 
-	roots, err := reporterRootCAs(ctx, cpCfg, trustCfg, logger)
+	roots, err := reporterRootCAs(ctx, cpCfg, trustCfg, dataDir, logger)
 	if err != nil {
 		return nil, "", err
 	}
@@ -191,7 +191,7 @@ func clientCertCommonName(cert *tls.Certificate) (string, error) {
 // verification. An explicit ca-file wins; otherwise the trust resolver's
 // internal-class pool is used when a trust: section is configured. With
 // neither, nil selects the operating-system trust store.
-func reporterRootCAs(ctx context.Context, cpCfg *controlplane.Config, trustCfg *trust.Config, logger *slog.Logger) (*x509.CertPool, error) {
+func reporterRootCAs(ctx context.Context, cpCfg *controlplane.Config, trustCfg *trust.Config, dataDir string, logger *slog.Logger) (*x509.CertPool, error) {
 	if cpCfg.CAFile != "" {
 		pem, err := os.ReadFile(cpCfg.CAFile)
 		if err != nil {
@@ -203,7 +203,7 @@ func reporterRootCAs(ctx context.Context, cpCfg *controlplane.Config, trustCfg *
 		}
 		return pool, nil
 	}
-	resolver, err := buildTrustResolver(trustCfg, logger)
+	resolver, err := buildTrustResolver(trustCfg, dataDir, logger)
 	if err != nil {
 		return nil, err
 	}

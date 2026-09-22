@@ -464,11 +464,22 @@ func (a *Adapter) DEK() quicbaas.DEKClient {
 // =============================================================================
 
 // IAM returns the IAM client for identity and access management.
+//
+// The SDK reaches IAM through Identity(), so this accessor traverses TWO hops
+// where the others traverse one, and both have to be guarded. A client whose
+// Identity() is nil -- any client observed before its service wiring
+// completes -- would otherwise panic the caller rather than return the nil
+// every other accessor here returns.
 func (a *Adapter) IAM() quicbaas.IAMClient {
-	if client := a.Client(); client != nil {
-		return client.IAM()
+	client := a.Client()
+	if client == nil {
+		return nil
 	}
-	return nil
+	identity := client.Identity()
+	if identity == nil {
+		return nil
+	}
+	return identity.IAM()
 }
 
 // =============================================================================

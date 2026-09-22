@@ -462,8 +462,15 @@ func (r *stubContainerRuntime) Logs(context.Context, string) (io.ReadCloser, err
 }
 
 func (r *stubContainerRuntime) IsRunning(context.Context, string) (bool, error) { return true, nil }
-func (r *stubContainerRuntime) IsAvailable() bool                               { return true }
-func (r *stubContainerRuntime) Pull(context.Context, string) error              { return nil }
+
+// Exec joined ContainerRuntime in go-quicbaas v0.8.0. This Tier 0 stub runs
+// nothing, so it reports a zero-status result rather than pretending a
+// command executed.
+func (r *stubContainerRuntime) Exec(context.Context, string, *orchestration.ExecSpec) (*orchestration.ExecResult, error) {
+	return &orchestration.ExecResult{}, nil
+}
+func (r *stubContainerRuntime) IsAvailable() bool                  { return true }
+func (r *stubContainerRuntime) Pull(context.Context, string) error { return nil }
 
 // ResolveImageDigest fills the ImageDigestResolver seam for orchestrator
 // tests that must measure a launch without a container runtime installed.

@@ -98,11 +98,11 @@ type qrdbBarrierClient = interface {
 }
 
 func (f *fakeBarrierClient) BarrierInitialize(_ context.Context, req *quicbaassdk.QRDBBarrierInitializeRequest) error {
-	f.initReq = req
+	f.initReq = cloneInitReq(req)
 	return f.initErr
 }
 func (f *fakeBarrierClient) BarrierUnseal(_ context.Context, req *quicbaassdk.QRDBBarrierUnsealRequest) error {
-	f.unsealReq = req
+	f.unsealReq = cloneUnsealReq(req)
 	return f.unsealErr
 }
 func (f *fakeBarrierClient) BarrierSeal(_ context.Context) error {
@@ -114,7 +114,7 @@ func (f *fakeBarrierClient) BarrierStatus(_ context.Context) (*quicbaassdk.QRDBB
 	return f.statusResp, f.statusErr
 }
 func (f *fakeBarrierClient) BarrierInitializeShamir(_ context.Context, req *quicbaassdk.QRDBBarrierInitializeShamirRequest) (*quicbaassdk.QRDBBarrierInitializeShamirResponse, error) {
-	f.initShamirReq = req
+	f.initShamirReq = cloneInitShamirReq(req)
 	return f.initShamirResp, f.initShamirErr
 }
 func (f *fakeBarrierClient) BarrierUnsealWithShare(_ context.Context, _ *quicbaassdk.QRDBBarrierUnsealShareRequest) (*quicbaassdk.QRDBBarrierUnsealShareResponse, error) {
@@ -203,7 +203,7 @@ func TestDispatchInit_Table_Success(t *testing.T) {
 	if fake.initReq == nil {
 		t.Fatal("expected BarrierInitialize to be called")
 	}
-	if fake.initReq.Secret != "p" || fake.initReq.SOPin != "so" || fake.initReq.UserPin != "u" {
+	if string(fake.initReq.Secret) != "p" || fake.initReq.SOPin != "so" || fake.initReq.UserPin != "u" {
 		t.Errorf("unexpected request payload: %+v", fake.initReq)
 	}
 	if fake.initReq.BarrierStrategy != "passphrase" {
@@ -262,7 +262,7 @@ func TestDispatchInitShamir_Table_RendersShareCount(t *testing.T) {
 			t.Errorf("expected output to contain %q, got %q", want, out.String())
 		}
 	}
-	if fake.initShamirReq.Secret != "p" {
+	if string(fake.initShamirReq.Secret) != "p" {
 		t.Errorf("unexpected secret %q", fake.initShamirReq.Secret)
 	}
 	if fake.initShamirReq.Threshold != 2 || fake.initShamirReq.TotalShares != 3 {
@@ -351,7 +351,7 @@ func TestDispatchUnseal_PropagatesSecret(t *testing.T) {
 	if err := dispatchUnseal(d, "the-passphrase"); err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	if fake.unsealReq == nil || fake.unsealReq.Secret != "the-passphrase" {
+	if fake.unsealReq == nil || string(fake.unsealReq.Secret) != "the-passphrase" {
 		t.Errorf("expected secret to be propagated, got %+v", fake.unsealReq)
 	}
 }
@@ -537,4 +537,34 @@ func TestDispatch_RejectsInvalidOutputFormat(t *testing.T) {
 	if !errors.As(err, &typed) {
 		t.Errorf("expected ErrInvalidOutputFormat, got %T: %v", err, err)
 	}
+}
+
+// The credential on these requests is a BORROW: the dispatcher wipes it once
+// the call returns, so a double that kept the slice header would assert
+// against zeros. go-qrdb#184 typed the fields []byte for exactly that reason.
+func cloneInitReq(req *quicbaassdk.QRDBBarrierInitializeRequest) *quicbaassdk.QRDBBarrierInitializeRequest {
+	if req == nil {
+		return nil
+	}
+	out := *req
+	out.Secret = bytes.Clone(req.Secret)
+	return &out
+}
+
+func cloneUnsealReq(req *quicbaassdk.QRDBBarrierUnsealRequest) *quicbaassdk.QRDBBarrierUnsealRequest {
+	if req == nil {
+		return nil
+	}
+	out := *req
+	out.Secret = bytes.Clone(req.Secret)
+	return &out
+}
+
+func cloneInitShamirReq(req *quicbaassdk.QRDBBarrierInitializeShamirRequest) *quicbaassdk.QRDBBarrierInitializeShamirRequest {
+	if req == nil {
+		return nil
+	}
+	out := *req
+	out.Secret = bytes.Clone(req.Secret)
+	return &out
 }

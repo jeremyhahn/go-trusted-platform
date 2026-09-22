@@ -92,6 +92,8 @@ two consumers.
 | The SDK session is authenticated by the trust resolver's internal class; a `secret-store:` without a `trust:` is `secrets.ErrTrustRequired` | `buildSecretResolver` |
 | One trust resolver serves the whole daemon — the proxy's pools and dials and the store's session — so the internal class is settled once | `BuildGateway` → `buildTrustResolver` |
 | The internal class's only strategy, `platform-ca`, resolves through an injected provider; gatewayd has no CA, so it injects `trust.FileCABundleProvider` over `trust: internal: ca-file:`. No path is `ErrPlatformCABundleSourceMissing` at assembly, not a dial failure later | `buildTrustResolver` |
+| A class listing `tofu` gets a **file-backed** pin store at `<--data-dir>/trust/tofu-pins`, created 0700. tofu only means anything if the pin outlives the process, and the shipped templates say it "captures and PERSISTS the pin itself"; an in-memory store would re-trust every BMC after a restart. gatewayd deliberately does NOT reach the platform's pin store for this — BMC trust must not depend on the control plane being up | `buildTrustResolver` → `newGatewayTOFUPinStore` |
+| No `--data-dir` while a class lists `tofu` is `ErrTOFUPinDirUnset` at assembly, not a silent downgrade | `newGatewayTOFUPinStore` |
 | The session is dialed per resolution and closed after it; a close failure logs and does not refuse the key | `Store.Resolve` |
 | Resolved TCP-AO master keys are wiped after `speaker.Start` (GoBGP clones them into its keychain store); tunnel keys are wiped by `pkg/sdn/tunnel` once the kernel holds them | `zeroizeBGPSecrets`, `fetchKey` |
 

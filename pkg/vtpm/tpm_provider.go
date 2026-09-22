@@ -380,7 +380,10 @@ func (ops *TPMOperations) TPM() xkmssdk.TrustedPlatformModule {
 func (ops *TPMOperations) Provision(soPIN string) error {
 	ops.logger.Debug("Provisioning vTPM", "algorithm", string(ops.algorithm))
 
-	password := xkmssdk.NewPassword([]byte(soPIN))
+	password, err := xkmssdk.NewPassword([]byte(soPIN))
+	if err != nil {
+		return ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to hold the SO PIN", Err: err}}
+	}
 	if err := ops.tpm.Provision(password); err != nil {
 		return ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to provision TPM", Err: err}}
 	}
@@ -508,7 +511,11 @@ func (ops *TPMOperations) Seal(ctx context.Context, data []byte, pcrs []int, aut
 
 	// Set auth value if provided
 	if authValue != "" {
-		keyAttrs.Password = xkmssdk.NewPassword([]byte(authValue))
+		password, err := xkmssdk.NewPassword([]byte(authValue))
+		if err != nil {
+			return nil, &WrappedError{Msg: "failed to hold the key authorization value", Err: err}
+		}
+		keyAttrs.Password = password
 	}
 
 	// Build TPM policy for PCR binding
@@ -557,7 +564,11 @@ func (ops *TPMOperations) Unseal(ctx context.Context, sealed *xkmssdk.SealedData
 	// Set auth value if provided
 	var password xkmssdk.Password
 	if authValue != "" {
-		password = xkmssdk.NewPassword([]byte(authValue))
+		held, err := xkmssdk.NewPassword([]byte(authValue))
+		if err != nil {
+			return nil, &WrappedError{Msg: "failed to hold the key authorization value", Err: err}
+		}
+		password = held
 	}
 
 	unsealOpts := &xkmssdk.UnsealOptions{

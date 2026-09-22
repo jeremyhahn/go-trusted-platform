@@ -1989,3 +1989,50 @@ func (a *Adapter) setClientForTest(c quicbaas.Client) {
 	defer a.mu.Unlock()
 	a.client = c
 }
+
+// nilIdentityClient is a MockClient whose Identity() hop is absent, which is
+// what a real client looks like before its service wiring completes.
+type nilIdentityClient struct {
+	*MockClient
+}
+
+// Identity reports no identity service at all.
+func (c *nilIdentityClient) Identity() quicbaas.IdentityService { return nil }
+
+// TestAdapter_IAM_NilIdentityService pins the guard on the second hop.
+// Adapter.IAM() reaches the client through Identity(), unlike every other
+// accessor here, so it has two things that can be nil. Before the guard, a
+// client with no identity service panicked the caller with a nil pointer
+// dereference instead of returning the nil the rest of this API returns.
+func TestAdapter_IAM_NilIdentityService(t *testing.T) {
+	cfg := &Config{Transport: TransportEmbedded, RequestTimeout: 30 * time.Second}
+	logger := logging.NewLogger(slog.LevelDebug, nil)
+
+	adapter, err := NewAdapter(cfg, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	adapter.setClientForTest(&nilIdentityClient{MockClient: NewMockClient()})
+	adapter.started.Store(true)
+
+	got := adapter.IAM()
+	if got != nil {
+		t.Errorf("IAM() = %v, want nil when the client has no identity service", got)
+	}
+}
+
+// TestAdapter_IAM_NilClient is the companion: no client at all must also
+// answer nil rather than panic.
+func TestAdapter_IAM_NilClient(t *testing.T) {
+	cfg := &Config{Transport: TransportEmbedded, RequestTimeout: 30 * time.Second}
+	logger := logging.NewLogger(slog.LevelDebug, nil)
+
+	adapter, err := NewAdapter(cfg, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := adapter.IAM(); got != nil {
+		t.Errorf("IAM() = %v, want nil when there is no client", got)
+	}
+}

@@ -34,7 +34,11 @@ func TestMCPHelperUserToMap(t *testing.T) {
 			Roles:       []string{"admin", "developer"},
 			Groups:      []string{"group-a", "group-b"},
 			Metadata:    map[string]string{"department": "engineering", "location": "remote"},
-			MFAEnabled:  true,
+			// AuthMethods is what now drives the mfa_verified wire field:
+			// quicbaas v0.8.0 replaced User.MFAEnabled with the account's
+			// permitted-method policy, and a non-empty list is an account
+			// pinned to strong authentication.
+			AuthMethods: []string{"webauthn"},
 			CreatedAt:   twoHoursAgo,
 			UpdatedAt:   oneHourAgo,
 			LastLoginAt: &now,
@@ -196,10 +200,9 @@ func TestMCPHelperUserToMap(t *testing.T) {
 
 	t.Run("user with mfa_verified false", func(t *testing.T) {
 		user := &sdkiam.User{
-			ID:         "user-no-mfa",
-			TenantID:   "tenant-no-mfa",
-			Email:      "nomfa@example.com",
-			MFAEnabled: false,
+			ID:       "user-no-mfa",
+			TenantID: "tenant-no-mfa",
+			Email:    "nomfa@example.com",
 		}
 
 		result := sdkUserToMap(user)

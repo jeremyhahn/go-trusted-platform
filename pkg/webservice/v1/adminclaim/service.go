@@ -163,6 +163,18 @@ type ServiceParams struct {
 	// AdminUsername is the firstboot admin's username. Defaults to
 	// common.AdminUsername when empty.
 	AdminUsername string
+	// AdminEmail is the admin account's email, which is the identifier the
+	// FIDO2 ceremony enrols the passkey against. It is a DIFFERENT
+	// identifier from AdminUsername and the two are not interchangeable:
+	// the backbone resolves the account with GetByEmail and documents that
+	// "a username is a different identifier and is not accepted"
+	// (go-xkms BeginRegistrationRequest.Email).
+	//
+	// There is deliberately no default. Deriving one — from the username,
+	// the hostmaster, or the domain — would let the ceremony enrol the
+	// platform's one-time ownership credential against an account nobody
+	// named, and this is a trust boundary. Absent, NewService fails closed.
+	AdminEmail string
 	// MultiInstance reports that this deployment runs more than one
 	// platformd instance against one store. The claim ceremony is
 	// REFUSED when true: its challenge/claim state and completion lock
@@ -185,6 +197,7 @@ type Service struct {
 	trustAnchors  *x509.CertPool
 	tenantID      string
 	adminUsername string
+	adminEmail    string
 	challenges    *secretStore
 	claims        *secretStore
 	multiInstance bool
@@ -218,6 +231,9 @@ func NewService(params ServiceParams) (*Service, error) {
 	if params.TenantID == "" {
 		return nil, ErrDependencyRequired{Name: "tenant id"}
 	}
+	if params.AdminEmail == "" {
+		return nil, ErrDependencyRequired{Name: "admin email"}
+	}
 	adminUsername := params.AdminUsername
 	if adminUsername == "" {
 		adminUsername = common.AdminUsername
@@ -231,6 +247,7 @@ func NewService(params ServiceParams) (*Service, error) {
 		trustAnchors:  params.TrustAnchors,
 		tenantID:      params.TenantID,
 		adminUsername: adminUsername,
+		adminEmail:    params.AdminEmail,
 		challenges:    newSecretStore(challengeTTL),
 		claims:        newSecretStore(claimTokenTTL),
 		multiInstance: params.MultiInstance,
@@ -376,7 +393,7 @@ func (s *Service) BeginPasskey(
 	}
 	return s.ceremony.BeginRegistration(s.tenantContext(ctx),
 		&quicbaassdk.FIDO2BeginRegistrationRequest{
-			Username:    s.adminUsername,
+			Email:       s.adminEmail,
 			DisplayName: s.adminUsername,
 		})
 }

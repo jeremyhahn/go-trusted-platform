@@ -214,7 +214,12 @@ func (s *TPMGRPCService) Provision(
 	// Provision with owner password
 	var ownerPwd quicbaassdk.Password
 	if req.GetOwnerPassword() != "" {
-		ownerPwd = quicbaassdk.NewPasswordFromString(req.GetOwnerPassword())
+		held, err := quicbaassdk.NewPasswordFromString(req.GetOwnerPassword())
+		if err != nil {
+			s.logger.Slog().Error("TPM Provision failed", slog.String("error", err.Error()))
+			return nil, s.mapError(err)
+		}
+		ownerPwd = held
 	}
 
 	_, err := tpm.ProvisionOwner(ownerPwd)
@@ -740,7 +745,11 @@ func buildSealOptions(tpm quicbaassdk.TrustedPlatformModule, cn, password string
 		Parent: ssrkAttrs,
 	}
 	if password != "" {
-		keyAttrs.Password = quicbaassdk.NewPassword([]byte(password))
+		held, err := quicbaassdk.NewPassword([]byte(password))
+		if err != nil {
+			return nil, &WrappedError{Msg: "hold the sealing password", Err: err}
+		}
+		keyAttrs.Password = held
 	}
 	opts := &quicbaassdk.SealOptions{
 		KeyAttributes: keyAttrs,
@@ -764,7 +773,11 @@ func buildSealOptions(tpm quicbaassdk.TrustedPlatformModule, cn, password string
 			HashAlg: hashAlg,
 		}
 		if password != "" {
-			opts.Password = quicbaassdk.NewPassword([]byte(password))
+			held, err := quicbaassdk.NewPassword([]byte(password))
+			if err != nil {
+				return nil, &WrappedError{Msg: "hold the sealing policy password", Err: err}
+			}
+			opts.Password = held
 		}
 	}
 
@@ -832,13 +845,21 @@ func buildUnsealOptions(tpm quicbaassdk.TrustedPlatformModule, cn, password stri
 		Parent: ssrkAttrs,
 	}
 	if password != "" {
-		keyAttrs.Password = quicbaassdk.NewPassword([]byte(password))
+		held, err := quicbaassdk.NewPassword([]byte(password))
+		if err != nil {
+			return nil, &WrappedError{Msg: "hold the unsealing password", Err: err}
+		}
+		keyAttrs.Password = held
 	}
 	opts := &quicbaassdk.UnsealOptions{
 		KeyAttributes: keyAttrs,
 	}
 	if password != "" {
-		opts.Password = quicbaassdk.NewPassword([]byte(password))
+		held, err := quicbaassdk.NewPassword([]byte(password))
+		if err != nil {
+			return nil, &WrappedError{Msg: "hold the unsealing password", Err: err}
+		}
+		opts.Password = held
 	}
 	return opts, nil
 }

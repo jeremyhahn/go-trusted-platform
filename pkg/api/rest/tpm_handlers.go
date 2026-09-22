@@ -525,7 +525,13 @@ func (h *TPMHandlers) handleProvision(w http.ResponseWriter, r *http.Request) {
 
 	var ownerPwd xkmssdk.Password
 	if req.OwnerPassword != "" {
-		ownerPwd = xkmssdk.NewPasswordFromString(req.OwnerPassword)
+		held, err := xkmssdk.NewPasswordFromString(req.OwnerPassword)
+		if err != nil {
+			h.logger.Error("TPM Provision failed", "error", err)
+			h.writeTPMError(w, "provision", err)
+			return
+		}
+		ownerPwd = held
 	}
 
 	if _, err := tpm.ProvisionOwner(ownerPwd); err != nil {

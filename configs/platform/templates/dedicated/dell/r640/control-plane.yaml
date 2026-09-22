@@ -493,11 +493,20 @@ bootstrap:
 trust:
   bmc:
     # BMC endpoint trust chain. First strategy to succeed wins.
-    # tofu is NOT available here (#83): it fetches a CA bundle and a BMC
-    # serves none. Use a per-node bmc_spki_pin for first contact until DANE
-    # TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
-    # enroll does this).
-    strategies: [dane, spki, ca-file]
+    #
+    # tofu is available here again. It was barred under #83 while it was a
+    # CA-bundle fetch — a BMC serves Redfish, never a bundle — but
+    # go-xkms#139 (v0.12.0-alpha) made the TLS path an endpoint verifier
+    # that pins the leaf SPKI on first contact and enforces it afterwards,
+    # with session tickets disabled so resumption cannot bypass the check.
+    # Its changelog names this exact case.
+    #
+    # Prefer dane once TLSA records for <hostname>-bmc.<internal-zone> are
+    # published (bmc enroll does this). Before that, tofu is the better
+    # first-contact option than a hand-carried bmc_spki_pin: it captures and
+    # PERSISTS the pin itself rather than requiring an operator to obtain
+    # the fingerprint out of band.
+    strategies: [dane, spki, tofu, ca-file]
     dane:
       dns-server: "127.0.0.1:8053"   # CP serves its own public DNS
 

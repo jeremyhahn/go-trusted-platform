@@ -3004,8 +3004,10 @@ func sdkUserToMap(u *sdkiam.User) map[string]interface{} {
 	if len(u.Metadata) > 0 {
 		result["attributes"] = u.Metadata
 	}
-	if u.MFAEnabled {
-		result["mfa_verified"] = u.MFAEnabled
+	if len(u.AuthMethods) > 0 {
+		// See pkg/webservice/v1/rest/iam/handlers.go: MFAEnabled is gone in
+		// quicbaas v0.8.0; AuthMethods is the account's permitted-method policy.
+		result["mfa_verified"] = len(u.AuthMethods) > 0
 	}
 	if !u.CreatedAt.IsZero() {
 		result["created_at"] = u.CreatedAt.Format(time.RFC3339)
@@ -3919,7 +3921,11 @@ func (p *MCPServiceProvider) TPMProvision(ctx context.Context, ownerPassword str
 
 	var ownerPwd xkmssdk.Password
 	if ownerPassword != "" {
-		ownerPwd = xkmssdk.NewPasswordFromString(ownerPassword)
+		held, err := xkmssdk.NewPasswordFromString(ownerPassword)
+		if err != nil {
+			return nil, err
+		}
+		ownerPwd = held
 	}
 
 	_, err := p.tpm2Service.ProvisionOwner(ownerPwd)

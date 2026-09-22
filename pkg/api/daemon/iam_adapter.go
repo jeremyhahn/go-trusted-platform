@@ -585,3 +585,25 @@ func convertSDKCheckBatchResponseToProto(in *sdkiam.CheckBatchResponse) *iampb.C
 		EvaluationTimeNs: in.TotalEvaluationTimeNs,
 	}
 }
+
+// WebAuthn credential administration. These delegate to the in-process
+// server exactly as every other verb on this adapter does; the adapter's
+// whole purpose is to let a REST handler hold an IAMServiceClient without a
+// network hop. DeleteWebAuthnCredential arrived with go-quicbaas v0.8.0 —
+// the interface gained it, so the adapter implements it rather than leaving
+// a hole that would fail at the type assertion.
+func (a *IAMServiceClientAdapter) ListWebAuthnCredentials(ctx context.Context, in *iampb.ListWebAuthnCredentialsRequest, opts ...grpc.CallOption) (*iampb.ListWebAuthnCredentialsResponse, error) {
+	return a.server.ListWebAuthnCredentials(ctx, in)
+}
+
+func (a *IAMServiceClientAdapter) DeleteWebAuthnCredential(ctx context.Context, in *iampb.DeleteWebAuthnCredentialRequest, opts ...grpc.CallOption) (*iampb.DeleteWebAuthnCredentialResponse, error) {
+	return a.server.DeleteWebAuthnCredential(ctx, in)
+}
+
+func (a *IAMServiceClientAdapter) DeleteWebAuthnCredentials(ctx context.Context, in *iampb.DeleteWebAuthnCredentialsRequest, opts ...grpc.CallOption) (*iampb.DeleteWebAuthnCredentialsResponse, error) {
+	return a.server.DeleteWebAuthnCredentials(ctx, in)
+}
+
+func (a *IAMServiceClientAdapter) ReconcileRoles(ctx context.Context, in *iampb.ReconcileRolesRequest, opts ...grpc.CallOption) (*iampb.ReconcileRolesResponse, error) {
+	return a.server.ReconcileRoles(ctx, in)
+}

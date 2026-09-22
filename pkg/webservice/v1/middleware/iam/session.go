@@ -51,8 +51,11 @@ func NewIAMSession(user *iamsdk.User) IAMSession {
 		session.groupSet[group] = struct{}{}
 	}
 
-	// Extract MFA status from user
-	session.mfaVerified = user.MFAEnabled
+	// MFA is not asserted by this constructor. iam.User no longer carries an
+	// MFAEnabled flag (quicbaas v0.8.0 models permitted methods as
+	// AuthMethods instead), and a session built without explicit MFA
+	// evidence must not claim to have it. NewIAMSessionWithMFA is the
+	// constructor that carries a real verification result.
 
 	return session
 }

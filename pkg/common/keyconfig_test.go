@@ -22,6 +22,17 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
+// mustPassword builds a password for a test, failing the test if the enclave
+// backing it cannot be allocated.
+func mustPassword(t *testing.T, secret string) xkmssdk.Password {
+	t.Helper()
+	password, err := xkmssdk.NewPasswordFromString(secret)
+	if err != nil {
+		t.Fatalf("NewPasswordFromString(%q): %v", secret, err)
+	}
+	return password
+}
+
 func TestKeyConfigToKeyAttributes_RSA(t *testing.T) {
 	kc := &KeyConfig{
 		CN:                 "test-key",
@@ -130,7 +141,7 @@ func TestNewKeyConfigFromAttributes(t *testing.T) {
 		RSAAttributes: &xkmssdk.RSAAttributes{
 			KeySize: 2048,
 		},
-		Password:   xkmssdk.NewPasswordFromString("test-password"),
+		Password:   mustPassword(t, "test-password"),
 		Exportable: false,
 	}
 

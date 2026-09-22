@@ -23,6 +23,7 @@ import (
 	"fmt"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
@@ -42,11 +43,12 @@ type dispatcher struct {
 // summary.
 func dispatchInit(d *dispatcher, f *initFlags) error {
 	req := &quicbaassdk.QRDBBarrierInitializeRequest{
-		Secret:          f.secret,
+		Secret:          secretBytes(f.secret),
 		BarrierStrategy: f.strategy,
 		SOPin:           f.soPin,
 		UserPin:         f.userPin,
 	}
+	defer secure.Wipe(req.Secret)
 	if err := d.Client.BarrierInitialize(d.Ctx, req); err != nil {
 		return ErrBarrierInitFailed{Err: err}
 	}
@@ -76,12 +78,13 @@ func renderInitOKDispatch(d *dispatcher, strategy string) error {
 // renders the shares.
 func dispatchInitShamir(d *dispatcher, f *initShamirFlags) error {
 	req := &quicbaassdk.QRDBBarrierInitializeShamirRequest{
-		Secret:      f.secret,
+		Secret:      secretBytes(f.secret),
 		Threshold:   f.threshold,
 		TotalShares: f.total,
 		SOPin:       f.soPin,
 		UserPin:     f.userPin,
 	}
+	defer secure.Wipe(req.Secret)
 	resp, err := d.Client.BarrierInitializeShamir(d.Ctx, req)
 	if err != nil {
 		return ErrBarrierInitShamirFailed{Err: err}
@@ -144,7 +147,9 @@ func dispatchStatus(d *dispatcher) error {
 
 // dispatchUnseal performs the BarrierUnseal RPC.
 func dispatchUnseal(d *dispatcher, secret string) error {
-	if err := d.Client.BarrierUnseal(d.Ctx, &quicbaassdk.QRDBBarrierUnsealRequest{Secret: secret}); err != nil {
+	unsealSecret := secretBytes(secret)
+	defer secure.Wipe(unsealSecret)
+	if err := d.Client.BarrierUnseal(d.Ctx, &quicbaassdk.QRDBBarrierUnsealRequest{Secret: unsealSecret}); err != nil {
 		return ErrBarrierUnsealFailed{Err: err}
 	}
 	switch d.Output {
@@ -280,4 +285,14 @@ func newDispatcherFromBase(base *cli.BaseCommand, bc quicbaassdk.QRDBBarrierClie
 		Output:  base.Flags().OutputFormat,
 		Printer: base.Printer(),
 	}
+}
+
+// secretBytes copies a credential into a slice the request can carry and the
+// caller can wipe. The flag value it comes from is an argv-supplied Go string
+// and therefore already unwipeable; converting bounds what this package adds.
+func secretBytes(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return []byte(s)
 }

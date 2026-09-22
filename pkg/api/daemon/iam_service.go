@@ -75,7 +75,7 @@ func NewIAMService(application *app.App, logger *slog.Logger) (*IAMService, erro
 	}
 
 	// Get IAM client from SDK
-	iamClient := sdkClient.IAM()
+	iamClient := sdkClient.Identity().IAM()
 	if iamClient == nil {
 		return nil, ErrInvalidConfig{Reason: "IAM client not available from QuicBaaS SDK"}
 	}

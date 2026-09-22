@@ -1864,7 +1864,7 @@ func sdkUserToPlatformUser(u *sdkiam.User) *platformv1.IAMUser {
 		Roles:       u.Roles,
 		Groups:      u.Groups,
 		Attributes:  u.Metadata,
-		MfaVerified: u.MFAEnabled,
+		MfaVerified: len(u.AuthMethods) > 0,
 		CreatedAt:   timestamppb.New(u.CreatedAt),
 		UpdatedAt:   timestamppb.New(u.UpdatedAt),
 	}

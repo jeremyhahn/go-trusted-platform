@@ -231,12 +231,12 @@ func (s *DNSSECService) loadKeysXKMS(tenantID, zoneName string) (*DNSSECKeyPair,
 	}
 
 	return &DNSSECKeyPair{
-			DNSKEY:     kskDNSKEY,
-			PrivateKey: kskSigner,
-		}, &DNSSECKeyPair{
-			DNSKEY:     zskDNSKEY,
-			PrivateKey: zskSigner,
-		}, nil
+		DNSKEY:     kskDNSKEY,
+		PrivateKey: kskSigner,
+	}, &DNSSECKeyPair{
+		DNSKEY:     zskDNSKEY,
+		PrivateKey: zskSigner,
+	}, nil
 }
 
 // validateKeyPair verifies that a DNSSEC key pair's DNSKEY and private key

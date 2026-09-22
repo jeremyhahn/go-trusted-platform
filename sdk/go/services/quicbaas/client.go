@@ -175,7 +175,7 @@ func (c *Client) DEK() quicbaas.DEKClient {
 // The IAM client provides access to sub-clients for Tenant, User, Group,
 // Role, Policy, PEP, App, GDPR, Audit, and Admin operations.
 func (c *Client) IAM() quicbaas.IAMClient {
-	return c.sdk.IAM()
+	return c.sdk.Identity().IAM()
 }
 
 // =============================================================================

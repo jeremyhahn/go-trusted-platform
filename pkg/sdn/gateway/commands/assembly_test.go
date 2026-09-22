@@ -513,13 +513,13 @@ func TestBuildServerTLSWithClientCAs(t *testing.T) {
 }
 
 func TestBuildTrustResolverInvalidConfig(t *testing.T) {
-	if r, err := buildTrustResolver(nil, testLogger()); err != nil || r != nil {
+	if r, err := buildTrustResolver(nil, t.TempDir(), testLogger()); err != nil || r != nil {
 		t.Fatalf("nil config must yield nil resolver: %v, %v", r, err)
 	}
 	bad := &trust.Config{
 		Default: &trust.ScopeConfig{Strategies: []trust.Strategy{"not-a-strategy"}},
 	}
-	if _, err := buildTrustResolver(bad, testLogger()); err == nil {
+	if _, err := buildTrustResolver(bad, t.TempDir(), testLogger()); err == nil {
 		t.Fatal("invalid trust config must fail")
 	}
 }
@@ -894,7 +894,7 @@ func TestBuildHostRuntimeBuildsTheSecretResolver(t *testing.T) {
 			CAFile:     caFile,
 		}},
 	}
-	resolver, err := buildTrustResolver(cfg.Trust, testLogger())
+	resolver, err := buildTrustResolver(cfg.Trust, t.TempDir(), testLogger())
 	if err != nil {
 		t.Fatalf("buildTrustResolver: %v", err)
 	}

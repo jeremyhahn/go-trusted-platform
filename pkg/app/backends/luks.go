@@ -431,9 +431,18 @@ func (b *LUKSBackend) EnrollRecovery(ctx context.Context, req *daemon.LUKSEnroll
 	}
 	defer recoveryKey.Clear()
 
+	// Presenting the key to the operator is the whole purpose of enrolling
+	// one, and the result crosses the API as a string, so this is the point
+	// of display that FormattedString documents. The protected copy is still
+	// wiped by the deferred Clear.
+	formatted, err := recoveryKey.FormattedString()
+	if err != nil {
+		return nil, err
+	}
+
 	return &daemon.LUKSEnrollRecoveryResult{
 		Slot:        int32(recoveryKey.Keyslot),
-		RecoveryKey: recoveryKey.Formatted,
+		RecoveryKey: formatted,
 	}, nil
 }
 

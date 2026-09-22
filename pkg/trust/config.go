@@ -124,14 +124,27 @@ var allowedStrategies = map[Class]map[Strategy]bool{
 		StrategyDANE:   true,
 		StrategySPKI:   true,
 		StrategyCAFile: true,
-		// StrategyTOFU is deliberately ABSENT — see #83. TOFU in this
-		// stack is a CA-bundle FETCH pinned on first contact, not
-		// endpoint pinning: the resolver's tofu path discards the
-		// caller's endpoint and fetches a bundle from ServerURL. A BMC
-		// serves Redfish, never a CA bundle, so tofu can never verify
-		// one — with or without a ServerURL. Endpoint pinning for a BMC
-		// is the spki strategy (bmc_spki_pin). Restore this entry when
-		// upstream grows an endpoint-pinning tofu (go-xkms#139).
+		// StrategyTOFU was barred here under #83, because tofu was
+		// implemented purely as a CA-bundle FETCH: the resolver's tofu
+		// path discarded the caller's endpoint and fetched a bundle from
+		// ServerURL, and a BMC serves Redfish, never a bundle. That
+		// exclusion carried the note "restore when upstream grows an
+		// endpoint-pinning tofu (go-xkms#139)".
+		//
+		// go-xkms#139 landed in v0.12.0-alpha and did exactly that, for
+		// exactly this case — its changelog names "first contact with a
+		// device that presents a self-signed certificate and serves no
+		// bundle, such as a BMC". The TLS path now pins the endpoint's
+		// SPKI on first contact and enforces it afterwards, with session
+		// tickets disabled so resumption cannot bypass the check; only
+		// the PEM path still fetches a bundle. That is the same
+		// TLS/PEM split dane and spki already have.
+		//
+		// So tofu is restored: for a BMC it is now first-contact
+		// endpoint pinning that PERSISTS the pin, which is strictly
+		// better than a hand-carried per-node bmc_spki_pin that an
+		// operator must obtain out of band.
+		StrategyTOFU: true,
 	},
 	ClassInternal: {
 		StrategyPlatformCA: true,
@@ -389,6 +402,25 @@ func (s *ScopeConfig) validateClass(class Class) error {
 // ClassBMC and short-circuited before validation could say otherwise.
 func StrategyAllowedForClass(class Class, strategy Strategy) bool {
 	return allowedStrategies[class][strategy]
+}
+
+// AllowedStrategiesForClass returns the strategies class permits, in a
+// stable order. It exists so callers that must NAME the allowed set — an
+// operator-facing validation error, for instance — derive it from the same
+// map the predicate uses instead of hard-coding a list that silently goes
+// stale when the allowlist changes. That staleness is the #83 class of bug.
+func AllowedStrategiesForClass(class Class) []Strategy {
+	allowed := allowedStrategies[class]
+	out := make([]Strategy, 0, len(allowed))
+	for _, s := range []Strategy{
+		StrategyDANE, StrategyNoise, StrategySPKI, StrategyEmbedded,
+		StrategyCAFile, StrategyPlatformCA, StrategyTOFU,
+	} {
+		if allowed[s] {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // HasStrategy reports whether the scope's chain contains the given strategy.

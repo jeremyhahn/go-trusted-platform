@@ -654,7 +654,10 @@ func TestGetUser_Success(t *testing.T) {
 				TenantID:    tenantID,
 				Email:       "test@example.com",
 				DisplayName: "Test User",
-				MFAEnabled:  true,
+				// Drives the mfa_verified field since quicbaas v0.8.0
+				// replaced User.MFAEnabled with the account's
+				// permitted-method policy.
+				AuthMethods: []string{"webauthn"},
 				CreatedAt:   time.Now(),
 			}, nil
 		},

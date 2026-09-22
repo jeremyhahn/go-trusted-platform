@@ -234,3 +234,26 @@ func (e *ErrGatewayIDNotReportable) Error() string {
 		" has leading or trailing whitespace; the control plane binds telemetry to the" +
 		" certificate Common Name verbatim and refuses a padded identity"
 }
+
+// ErrTOFUPinDirUnset reports that a trust class lists the tofu strategy but
+// gatewayd has no --data-dir to persist pins under. Failing here is
+// deliberate: the alternative is an in-memory store that silently re-trusts
+// every BMC after a restart, which is not what the strategy promises.
+type ErrTOFUPinDirUnset struct{}
+
+func (e *ErrTOFUPinDirUnset) Error() string {
+	return "trust: the tofu strategy is configured but --data-dir is empty, so TOFU pins have nowhere durable to live"
+}
+
+// ErrTOFUPinDirUnusable reports that gatewayd's TOFU pin directory could not
+// be created or opened.
+type ErrTOFUPinDirUnusable struct {
+	Dir   string
+	Cause error
+}
+
+func (e *ErrTOFUPinDirUnusable) Error() string {
+	return "trust: TOFU pin store unusable at " + e.Dir + ": " + e.Cause.Error()
+}
+
+func (e *ErrTOFUPinDirUnusable) Unwrap() error { return e.Cause }

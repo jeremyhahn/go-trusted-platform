@@ -263,6 +263,7 @@ func adminClaimFixture(t *testing.T, logger *logging.Logger, respWriter response
 		TrustAnchors:  x509.NewCertPool(),
 		TenantID:      "system",
 		AdminUsername: common.AdminUsername,
+		AdminEmail:    "admin@test.invalid",
 	})
 	require.NoError(t, err, "the admin-claim service must build in the fixture, or its routes vanish from the audit")
 	handler, err := adminclaim.NewRestHandler(logger, respWriter, svc)

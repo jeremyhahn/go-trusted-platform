@@ -139,7 +139,7 @@ func QuicBaaSAuditDial(addr, transport string) AuditDialFunc {
 		if err != nil {
 			return nil, err
 		}
-		iamClient := client.IAM()
+		iamClient := client.Identity().IAM()
 		if iamClient == nil {
 			return nil, &ErrNilAuditClient{}
 		}

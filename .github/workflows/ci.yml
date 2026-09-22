@@ -59,13 +59,19 @@ permissions:
   security-events: write
 
 env:
-  GO_VERSION: "1.26.7"
+  GO_VERSION: "1.27.1"
   # The toolchain the repository must keep COMPILING under, one release ahead of
   # GO_VERSION — see the `gonext` job. Pinned exactly, like GO_VERSION, so the
-  # lane cannot change what it tests without a commit. When GO_VERSION moves to
-  # 1.27 this moves to 1.28; it is never allowed to equal GO_VERSION, or the job
-  # tests nothing.
-  GO_NEXT_VERSION: "1.27.0"
+  # lane cannot change what it tests without a commit. It is never allowed to
+  # equal GO_VERSION, or the job tests nothing.
+  #
+  # PARKED 2026-09-22. GO_VERSION moved to 1.27.1 with go-quicbaas
+  # v0.11.0-alpha, and 1.27 is the newest Go release that exists — there is no
+  # "one ahead" to build against until 1.28 ships. The value below is what it
+  # becomes then; it does not resolve today. The `gonext` job is disabled and
+  # withdrawn from ci-gate for the same reason; see its header for the two
+  # coordinated edits that restore it.
+  GO_NEXT_VERSION: "1.28.0"
   # Builds never resolve through a workspace: first-party modules come from
   # Gitea tags (conventions/dependency-resolution.md §2). The runner injects
   # GOPRIVATE and the tokenised git rewrite for github.com/jeremyhahn/* itself —
@@ -231,6 +237,16 @@ jobs:
   gonext:
     name: Go Next
     runs-on: ubuntu-latest
+    # PARKED 2026-09-22 — GO_VERSION reached the newest Go release (1.27.1), so
+    # there is no next toolchain to build against until 1.28 ships. The job did
+    # its work for this cycle: it is what proved the tree compiled on 1.27
+    # while CI still pinned 1.26 (#195). RESTORE, when 1.28 is released, with
+    # BOTH of these — they are coordinated:
+    #   1. delete the `if: false` below;
+    #   2. re-add `gonext` to ci-gate's `needs`, env block and checks.
+    # ci-gate FAILS on a skipped job by design, so doing (1) without (2), or
+    # leaving this disabled while ci-gate still lists it, turns the gate red.
+    if: false
     # v1.9 staged fail-fast ordering: no point asking whether the tree builds on
     # the NEXT toolchain until it builds on the current one.
     #
@@ -621,14 +637,15 @@ jobs:
     # trivy, advisory and not gating: this job judges a diff, that one judges
     # the tree against a database that has moved since the last push. This job
     # is unchanged and remains the gate.
-    needs: [lint, build, sdkjs, gonext, web, test, race, security, trivy]
+    # `gonext` is withdrawn while it is parked (see its header): this gate
+    # fails on a skipped job, so listing a disabled job here would keep it red.
+    needs: [lint, build, sdkjs, web, test, race, security, trivy]
     steps:
       - name: Verify every job succeeded
         env:
           RESULT_LINT: ${{ needs.lint.result }}
           RESULT_BUILD: ${{ needs.build.result }}
           RESULT_SDK_JS: ${{ needs.sdkjs.result }}
-          RESULT_GO_NEXT: ${{ needs.gonext.result }}
           RESULT_WEB: ${{ needs.web.result }}
           RESULT_TEST: ${{ needs.test.result }}
           RESULT_RACE: ${{ needs.race.result }}
@@ -653,7 +670,6 @@ jobs:
           check lint "$RESULT_LINT"
           check build "$RESULT_BUILD"
           check sdkjs "$RESULT_SDK_JS"
-          check gonext "$RESULT_GO_NEXT"
           check web "$RESULT_WEB"
           check test "$RESULT_TEST"
           check race "$RESULT_RACE"

@@ -101,7 +101,9 @@ func loadProjectedServeConfig(t *testing.T, projected []byte) *ServeConfig {
 // produces. The only substitution is the bundle path: the template names
 // /etc/gatewayd/cp-ca.pem, which belongs to a provisioned node, so the
 // path is repointed at a test CA whose certificate actually signs the
-// server dialled here.
+// server dialled here, and gatewayd's --data-dir is a temp directory so
+// the bmc class's tofu strategy has somewhere to keep its pins without
+// writing to /var/lib/gatewayd.
 func TestShippedGatewayTemplates_InternalClassResolvesInAGatewaydAssembly(t *testing.T) {
 	for _, path := range shippedGatewayTemplates {
 		t.Run(filepath.Base(filepath.Dir(path)), func(t *testing.T) {
@@ -126,7 +128,7 @@ func TestShippedGatewayTemplates_InternalClassResolvesInAGatewaydAssembly(t *tes
 			internal.CAFile = caFile
 			endpoint := startInternalTLSServer(t, bundle)
 
-			resolver, err := buildTrustResolver(cfg.Trust, testLogger())
+			resolver, err := buildTrustResolver(cfg.Trust, t.TempDir(), testLogger())
 			require.NoError(t, err, "the shipped trust section must assemble")
 			require.NotNil(t, resolver)
 
@@ -194,7 +196,7 @@ func TestBuildTrustResolver_PlatformCAWithoutBundleSourceIsRefused(t *testing.T)
 	cfg := &trust.Config{
 		Internal: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyPlatformCA}},
 	}
-	_, err := buildTrustResolver(cfg, testLogger())
+	_, err := buildTrustResolver(cfg, t.TempDir(), testLogger())
 
 	var missing *ErrPlatformCABundleSourceMissing
 	require.ErrorAs(t, err, &missing, "got %v", err)
@@ -214,7 +216,7 @@ func TestBuildTrustResolver_PlatformCAReadsTheBundleAtResolution(t *testing.T) {
 			CAFile:     caFile,
 		},
 	}
-	resolver, err := buildTrustResolver(cfg, testLogger())
+	resolver, err := buildTrustResolver(cfg, t.TempDir(), testLogger())
 	require.NoError(t, err, "an undelivered bundle is a runtime condition, not a config error")
 
 	ctx := context.Background()
@@ -237,7 +239,78 @@ func TestBuildTrustResolver_NonInternalClassesNeedNoBundleSource(t *testing.T) {
 	cfg := &trust.Config{
 		BMC: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyCAFile}},
 	}
-	resolver, err := buildTrustResolver(cfg, testLogger())
+	resolver, err := buildTrustResolver(cfg, t.TempDir(), testLogger())
 	require.NoError(t, err)
 	require.NotNil(t, resolver)
+}
+
+// =============================================================================
+// TOFU pin store
+// =============================================================================
+
+// TestNewGatewayTOFUPinStore_PersistsUnderDataDir is the point of the whole
+// wiring: tofu pins a BMC's leaf on first contact and enforces it afterwards,
+// which is only a guarantee if the pin outlives the process. An in-memory
+// store would re-trust blindly after every restart. This asserts the store
+// lands on disk under gatewayd's own state directory.
+func TestNewGatewayTOFUPinStore_PersistsUnderDataDir(t *testing.T) {
+	dataDir := t.TempDir()
+
+	store, err := newGatewayTOFUPinStore(dataDir)
+	require.NoError(t, err)
+	require.NotNil(t, store)
+
+	dir := filepath.Join(dataDir, gatewayTOFUPinDir)
+	info, statErr := os.Stat(dir)
+	require.NoError(t, statErr, "the pin directory must exist on disk")
+	require.True(t, info.IsDir())
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(),
+		"a pin is not secret, but an attacker who can rewrite it redirects first-contact trust")
+}
+
+// TestNewGatewayTOFUPinStore_NoDataDir refuses rather than silently falling
+// back to a store whose pins evaporate on restart.
+func TestNewGatewayTOFUPinStore_NoDataDir(t *testing.T) {
+	store, err := newGatewayTOFUPinStore("")
+	require.Error(t, err)
+	assert.Nil(t, store)
+
+	var typed *ErrTOFUPinDirUnset
+	assert.ErrorAs(t, err, &typed, "the caller must be able to tell this case apart")
+}
+
+// TestNewGatewayTOFUPinStore_UnusableDir covers the bad-input path: a plain
+// file standing where the pin directory belongs.
+func TestNewGatewayTOFUPinStore_UnusableDir(t *testing.T) {
+	dataDir := t.TempDir()
+	// Occupy the parent of the pin directory with a file so MkdirAll fails.
+	blocker := filepath.Join(dataDir, "trust")
+	require.NoError(t, os.WriteFile(blocker, []byte("not a directory"), 0o600))
+
+	store, err := newGatewayTOFUPinStore(dataDir)
+	require.Error(t, err)
+	assert.Nil(t, store)
+
+	var typed *ErrTOFUPinDirUnusable
+	require.ErrorAs(t, err, &typed)
+	assert.Contains(t, typed.Error(), "TOFU pin store unusable")
+}
+
+// TestTofuScopes reports whether any class lists tofu, which is what decides
+// if the store has to be built at all.
+func TestTofuScopes(t *testing.T) {
+	t.Run("bmc lists tofu", func(t *testing.T) {
+		cfg := &trust.Config{BMC: &trust.ScopeConfig{
+			Strategies: []trust.Strategy{trust.StrategyDANE, trust.StrategyTOFU},
+		}}
+		assert.True(t, tofuScopes(cfg))
+	})
+
+	t.Run("no class lists tofu", func(t *testing.T) {
+		cfg := &trust.Config{
+			BMC:      &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyDANE}},
+			Internal: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyPlatformCA}},
+		}
+		assert.False(t, tofuScopes(cfg))
+	})
 }

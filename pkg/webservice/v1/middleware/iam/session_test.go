@@ -30,7 +30,6 @@ func createTestUser(opts ...func(*sdkiam.User)) *sdkiam.User {
 		Roles:       []string{"admin", "user"},
 		Groups:      []string{"developers", "ops"},
 		Metadata:    map[string]string{"department": "engineering", "level": "senior"},
-		MFAEnabled:  true,
 	}
 	for _, opt := range opts {
 		opt(user)
@@ -101,25 +100,19 @@ func TestNewIAMSession(t *testing.T) {
 		}
 	})
 
-	t.Run("extracts_mfa_status_from_user", func(t *testing.T) {
-		user := createTestUser(func(u *sdkiam.User) {
-			u.MFAEnabled = true
-		})
-
-		session := NewIAMSession(user)
-		if !session.IsMFAVerified() {
-			t.Error("expected MFA to be verified")
-		}
-	})
-
-	t.Run("handles_user_without_mfa", func(t *testing.T) {
-		user := createTestUser(func(u *sdkiam.User) {
-			u.MFAEnabled = false
-		})
-
-		session := NewIAMSession(user)
+	// NewIAMSession never asserts MFA. iam.User carried an MFAEnabled flag
+	// until go-quicbaas v0.8.0, which models the account's permitted methods
+	// as AuthMethods instead; verification is a property of a SESSION, not of
+	// a user record. A session built without explicit verification evidence
+	// must therefore report not-verified — fail closed — and
+	// NewIAMSessionWithMFA is the constructor that carries a real result.
+	t.Run("never_claims_mfa_without_explicit_evidence", func(t *testing.T) {
+		session := NewIAMSession(createTestUser())
 		if session.IsMFAVerified() {
-			t.Error("expected MFA not to be verified")
+			t.Error("expected MFA not to be verified: this constructor is given no verification evidence")
+		}
+		if !session.MFATimestamp().IsZero() {
+			t.Error("expected a zero MFA timestamp when MFA was never verified")
 		}
 		if !session.MFATimestamp().IsZero() {
 			t.Error("expected MFA timestamp to be zero")
@@ -130,9 +123,7 @@ func TestNewIAMSession(t *testing.T) {
 // TestNewIAMSessionWithMFA tests the NewIAMSessionWithMFA constructor.
 func TestNewIAMSessionWithMFA(t *testing.T) {
 	t.Run("sets_explicit_mfa_status", func(t *testing.T) {
-		user := createTestUser(func(u *sdkiam.User) {
-			u.MFAEnabled = false
-		})
+		user := createTestUser()
 		mfaTime := time.Now()
 
 		session := NewIAMSessionWithMFA(user, true, mfaTime)
@@ -155,16 +146,14 @@ func TestNewIAMSessionWithMFA(t *testing.T) {
 		}
 	})
 
-	t.Run("overrides_user_mfa_status", func(t *testing.T) {
-		user := createTestUser(func(u *sdkiam.User) {
-			u.MFAEnabled = true
-		})
+	t.Run("explicit_false_is_honoured", func(t *testing.T) {
+		user := createTestUser()
 		mfaTime := time.Now().Add(-2 * time.Hour)
 
 		session := NewIAMSessionWithMFA(user, false, mfaTime)
 
 		if session.IsMFAVerified() {
-			t.Error("expected MFA to not be verified (overridden)")
+			t.Error("expected MFA not to be verified when passed false")
 		}
 	})
 }

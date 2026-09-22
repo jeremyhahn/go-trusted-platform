@@ -363,7 +363,7 @@ func TestNewHandler_Success(t *testing.T) {
 func TestBeginRegistration_PublicDisabled(t *testing.T) {
 	h := newHarness(t)
 	h.handler.publicRegistration = false
-	body, _ := json.Marshal(map[string]string{"username": "walkup@example.com"})
+	body, _ := json.Marshal(map[string]string{"email": "walkup@example.com"})
 	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.writer.On("Error403", w, req, ErrPublicRegistrationDisabled, nil).Return()
@@ -377,7 +377,7 @@ func TestBeginRegistration_PublicDisabled(t *testing.T) {
 func TestBeginRegistration_PublicDisabled_InvitedProceeds(t *testing.T) {
 	h := newHarness(t)
 	h.handler.publicRegistration = false
-	body, _ := json.Marshal(map[string]string{"username": "invited@example.com", "invitation_token": "tok-1"})
+	body, _ := json.Marshal(map[string]string{"email": "invited@example.com", "invitation_token": "tok-1"})
 	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	// No invitation service configured: validation fails with its own
@@ -416,7 +416,7 @@ func TestBeginRegistration_Success(t *testing.T) {
 
 	username := "alice@example.com"
 	userID := util.NewID([]byte(username))
-	body, _ := json.Marshal(map[string]string{"username": username})
+	body, _ := json.Marshal(map[string]string{"email": username})
 	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
@@ -467,12 +467,12 @@ func TestBeginRegistration_InvalidJSON(t *testing.T) {
 	h.writer.AssertExpectations(t)
 }
 
-func TestBeginRegistration_MissingUsername(t *testing.T) {
+func TestBeginRegistration_MissingEmail(t *testing.T) {
 	h := newHarness(t)
-	body, _ := json.Marshal(map[string]string{"username": ""})
+	body, _ := json.Marshal(map[string]string{"email": ""})
 	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
-	h.writer.On("Error400", w, req, ErrUsernameRequired).Return()
+	h.writer.On("Error400", w, req, ErrEmailRequired).Return()
 	h.handler.BeginRegistration(w, req)
 	h.writer.AssertExpectations(t)
 }
@@ -481,7 +481,7 @@ func TestBeginRegistration_UserAlreadyRegistered(t *testing.T) {
 	h := newHarness(t)
 	username := "dup@example.com"
 	userID := util.NewID([]byte(username))
-	body, _ := json.Marshal(map[string]string{"username": username})
+	body, _ := json.Marshal(map[string]string{"email": username})
 	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.users.On("Get", mock.Anything, userID).Return(&entities.User{ID: userID, Email: username}, nil)
@@ -497,7 +497,7 @@ func TestBeginRegistration_SDKError(t *testing.T) {
 	h := newHarness(t)
 	username := "sdkerr@example.com"
 	userID := util.NewID([]byte(username))
-	body, _ := json.Marshal(map[string]string{"username": username})
+	body, _ := json.Marshal(map[string]string{"email": username})
 	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	sdkErr := errors.New("upstream failed")
@@ -513,7 +513,7 @@ func TestBeginRegistration_RegistrationServiceError(t *testing.T) {
 	h := newHarness(t)
 	username := "regsave@example.com"
 	userID := util.NewID([]byte(username))
-	body, _ := json.Marshal(map[string]string{"username": username})
+	body, _ := json.Marshal(map[string]string{"email": username})
 	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	saveErr := errors.New("create failed")

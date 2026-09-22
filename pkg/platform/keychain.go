@@ -222,11 +222,19 @@ func (p *PlatformKeyStore) Initialize(soPIN, userPIN string) error {
 		return srkErr
 	}
 	srkAttrs.Parent = ekAttrs
-	srkAttrs.Password = xkmssdk.NewPasswordFromString(userPIN)
+	userAuth, err := xkmssdk.NewPasswordFromString(userPIN)
+	if err != nil {
+		return &WrappedError{Msg: "failed to hold the user PIN", Err: err}
+	}
+	srkAttrs.Password = userAuth
 	if srkAttrs.TPMAttributes == nil {
 		return errors.New("xkms: failed to build SRK attributes")
 	}
-	srkAttrs.TPMAttributes.HierarchyAuth = xkmssdk.NewPasswordFromString(soPIN)
+	hierarchyAuth, err := xkmssdk.NewPasswordFromString(soPIN)
+	if err != nil {
+		return &WrappedError{Msg: "failed to hold the SO PIN", Err: err}
+	}
+	srkAttrs.TPMAttributes.HierarchyAuth = hierarchyAuth
 
 	// Create the Platform KeyStore SRK
 	if err := p.tpm.CreateSRK(srkAttrs); err != nil {
@@ -257,11 +265,21 @@ func (p *PlatformKeyStore) InitializeWithDefaults() error {
 		return srkErr
 	}
 	srkAttrs.Parent = ekAttrs
-	srkAttrs.Password = xkmssdk.NewPassword(nil)
+	// A nil password is the "no authentication" case, which xkms documents as
+	// never failing; the error is still checked rather than discarded.
+	emptyAuth, err := xkmssdk.NewPassword(nil)
+	if err != nil {
+		return &WrappedError{Msg: "failed to build empty SRK authorization", Err: err}
+	}
+	srkAttrs.Password = emptyAuth
 	if srkAttrs.TPMAttributes == nil {
 		return errors.New("xkms: failed to build SRK attributes")
 	}
-	srkAttrs.TPMAttributes.HierarchyAuth = xkmssdk.NewPassword(nil)
+	emptyHierarchyAuth, err := xkmssdk.NewPassword(nil)
+	if err != nil {
+		return &WrappedError{Msg: "failed to build empty hierarchy authorization", Err: err}
+	}
+	srkAttrs.TPMAttributes.HierarchyAuth = emptyHierarchyAuth
 
 	// Create the Platform KeyStore SRK
 	if err := p.tpm.CreateSRK(srkAttrs); err != nil {

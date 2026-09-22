@@ -525,14 +525,24 @@ func (h *IAMHandlers) RevokeUserRole(w http.ResponseWriter, r *http.Request) {
 
 func userToResponse(u *iamsdk.User) UserResponse {
 	resp := UserResponse{
-		ID:          u.ID,
-		TenantID:    u.TenantID,
-		Email:       u.Email,
-		Name:        u.DisplayName,
-		Roles:       u.Roles,
-		Groups:      u.Groups,
-		Attributes:  u.Metadata,
-		MFAVerified: u.MFAEnabled,
+		ID:         u.ID,
+		TenantID:   u.TenantID,
+		Email:      u.Email,
+		Name:       u.DisplayName,
+		Roles:      u.Roles,
+		Groups:     u.Groups,
+		Attributes: u.Metadata,
+		// quicbaas v0.8.0 removed iam.User.MFAEnabled and models the account's
+		// authentication policy as AuthMethods instead — the methods the account
+		// is permitted to present ("webauthn", "piv"), empty meaning no
+		// restriction. A non-empty list is therefore an account pinned to strong,
+		// phishing-resistant authentication, which is the closest available
+		// meaning for this long-standing wire field. The `mfa_verified` spelling
+		// is legacy and inaccurate in both models: verification is a property of
+		// a SESSION, not of a user record. It is kept because the field is
+		// published on REST, QUIC, MCP and the web console types, and it is
+		// informational — nothing gates on it.
+		MFAVerified: len(u.AuthMethods) > 0,
 	}
 	if !u.CreatedAt.IsZero() {
 		t := u.CreatedAt

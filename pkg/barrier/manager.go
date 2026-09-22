@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
 )
 
 // Manager provides barrier lifecycle operations for the platform.
@@ -113,8 +114,9 @@ func (m *Manager) Initialize(ctx context.Context, secret string) error {
 	}
 
 	req := &quicbaassdk.QRDBBarrierInitializeRequest{
-		Secret: secret,
+		Secret: secretBytes(secret),
 	}
+	defer secure.Wipe(req.Secret)
 	if err := barrierClient.BarrierInitialize(ctx, req); err != nil {
 		return &ManagerError{Op: "Initialize", Err: err}
 	}
@@ -151,10 +153,11 @@ func (m *Manager) InitializeShamir(ctx context.Context, secret string, threshold
 	}
 
 	req := &quicbaassdk.QRDBBarrierInitializeShamirRequest{
-		Secret:      secret,
+		Secret:      secretBytes(secret),
 		Threshold:   threshold,
 		TotalShares: shares,
 	}
+	defer secure.Wipe(req.Secret)
 	resp, err := barrierClient.BarrierInitializeShamir(ctx, req)
 	if err != nil {
 		return nil, &ManagerError{Op: "InitializeShamir", Err: err}
@@ -189,8 +192,9 @@ func (m *Manager) Unseal(ctx context.Context, secret string) error {
 	}
 
 	req := &quicbaassdk.QRDBBarrierUnsealRequest{
-		Secret: secret,
+		Secret: secretBytes(secret),
 	}
+	defer secure.Wipe(req.Secret)
 	if err := barrierClient.BarrierUnseal(ctx, req); err != nil {
 		return &ManagerError{Op: "Unseal", Err: err}
 	}
@@ -591,4 +595,17 @@ func (m *Manager) signalReady() {
 	default:
 		close(m.ready)
 	}
+}
+
+// secretBytes copies a credential into a slice the request can carry and the
+// caller can wipe. go-qrdb#184 typed these request fields []byte precisely so
+// the copy is destroyable; the Manager's own parameter is still a string,
+// because the secret reaches it from a decoded request DTO and is therefore
+// already an unwipeable Go string by then. Converting here bounds what this
+// package adds rather than claiming the residue is gone.
+func secretBytes(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return []byte(s)
 }

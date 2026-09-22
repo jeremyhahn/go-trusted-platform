@@ -558,15 +558,23 @@ func TestNewResolver_TOFU_RequiresPinStore(t *testing.T) {
 	}
 }
 
-func TestNewResolver_TOFU_BMC_Rejected(t *testing.T) {
-	// The bmc class no longer allows tofu (#83): tofu is a CA-bundle fetch
-	// and a BMC serves no bundle, so it could never verify one. The
-	// allowlist rejects it before the pin-store question is ever reached.
+func TestNewResolver_TOFU_BMC_RequiresPinStore(t *testing.T) {
+	// tofu is allowed for bmc again: go-xkms#139 (v0.12.0-alpha) made the
+	// TLS path an endpoint verifier that pins the leaf SPKI on first
+	// contact, which is precisely what a BMC needs — it presents a
+	// self-signed certificate and serves no CA bundle. What it still
+	// requires is somewhere to PERSIST the pin, so the failure here must be
+	// the pin-store error, not the allowlist: a tofu with nowhere to record
+	// what it saw would re-trust a new key on every connection, which is
+	// not trust-on-first-use at all.
 	cfg := &Config{BMC: &ScopeConfig{Strategies: []Strategy{StrategyTOFU}}}
 	_, err := NewResolver(cfg, testLogger())
+	if !errors.Is(err, ErrTOFUPinStoreRequired{}) {
+		t.Fatalf("expected ErrTOFUPinStoreRequired for tofu on bmc class, got %v", err)
+	}
 	var notAllowed *ErrStrategyNotAllowed
-	if !errors.As(err, &notAllowed) {
-		t.Fatalf("expected ErrStrategyNotAllowed for tofu on bmc class, got %v", err)
+	if errors.As(err, &notAllowed) {
+		t.Fatalf("tofu must no longer be rejected by the bmc allowlist: %+v", notAllowed)
 	}
 }
 
@@ -584,20 +592,20 @@ func TestAllowlist_TOFU_AllowedForDefault(t *testing.T) {
 	}
 }
 
-func TestAllowlist_TOFU_NotAllowedForBMC(t *testing.T) {
-	// #83: tofu fetches a CA bundle from a server. A BMC serves Redfish,
-	// never a CA bundle, so tofu can never verify one — with or without a
-	// server-url. Endpoint pinning for a BMC is the spki strategy.
-	// Restore this to an "allowed" assertion when upstream grows an
-	// endpoint-pinning tofu (go-xkms#139).
+func TestAllowlist_TOFU_AllowedForBMC(t *testing.T) {
+	// This assertion is the inverse of what it was under #83, and
+	// deliberately so. tofu was barred from the bmc class while it was
+	// implemented purely as a CA-bundle fetch — a BMC serves Redfish and
+	// never a bundle, so it could not verify one. go-xkms#139
+	// (v0.12.0-alpha) added the endpoint-pinning TLS path whose changelog
+	// names this exact case, so the reason for the exclusion is gone and
+	// the allowlist must now accept it.
 	cfg := &Config{BMC: &ScopeConfig{Strategies: []Strategy{StrategyTOFU}}}
-	err := cfg.Validate()
-	var notAllowed *ErrStrategyNotAllowed
-	if !errors.As(err, &notAllowed) {
-		t.Fatalf("expected ErrStrategyNotAllowed for tofu on bmc class, got %v", err)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("tofu must be allowed for the bmc class since go-xkms#139, got %v", err)
 	}
-	if notAllowed.Class != ClassBMC || notAllowed.Strategy != StrategyTOFU {
-		t.Errorf("unexpected ErrStrategyNotAllowed: %+v", notAllowed)
+	if !StrategyAllowedForClass(ClassBMC, StrategyTOFU) {
+		t.Error("StrategyAllowedForClass must agree with Validate: tofu is allowed for bmc")
 	}
 }
 

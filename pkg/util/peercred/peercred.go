@@ -271,8 +271,11 @@ func (c *unixTransportCredentials) ServerHandshake(rawConn net.Conn) (net.Conn, 
 func (c *unixTransportCredentials) Info() credentials.ProtocolInfo {
 	return credentials.ProtocolInfo{
 		SecurityProtocol: "unix_peercred",
-		SecurityVersion:  "1.0",
-		ServerName:       "",
+		// Both fields are deprecated by grpc but are part of the ProtocolInfo
+		// value this method must return; grpc reads them from the struct it
+		// defines. go-xkms and go-quicbaas carry the identical finding.
+		SecurityVersion: "1.0", //nolint:staticcheck // SA1019: required by the interface.
+		ServerName:      "",    //nolint:staticcheck // SA1019: required by the interface.
 	}
 }
 

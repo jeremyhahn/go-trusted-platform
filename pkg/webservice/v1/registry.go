@@ -1065,6 +1065,10 @@ type RegistryParams struct {
 	// admin-claim routes: without an anchor no certificate can be
 	// verified, and an unverifiable claim must not be offered.
 	AdminTrustAnchorPath string
+	// AdminEmail is the firstboot admin account's email — the identifier
+	// the FIDO2 ceremony enrols against. Empty leaves the admin-claim
+	// routes unregistered.
+	AdminEmail string
 	// AdminClaimMultiInstance reports that several platformd instances
 	// serve one store. The admin-claim ceremony is refused when true —
 	// its one-time state is process-local and SDK factor enrolment is
@@ -1421,6 +1425,7 @@ func (registry *HandlerRegistry) AdminClaimRestHandler() *adminclaim.RestHandler
 		TrustAnchors:  anchors,
 		TenantID:      params.TenantID,
 		AdminUsername: common.AdminUsername,
+		AdminEmail:    params.AdminEmail,
 		MultiInstance: params.AdminClaimMultiInstance,
 	})
 	if err != nil {

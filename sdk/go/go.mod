@@ -1,14 +1,14 @@
 module github.com/jeremyhahn/go-trusted-platform/sdk/go
 
-go 1.26.7
+go 1.27.0
 
 // Pin armon/go-metrics to v0.4.1 - newer versions declare as hashicorp/go-metrics
 replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1
 
 require (
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.7.0-alpha
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.11.0-alpha
 	github.com/jeremyhahn/go-trusted-platform v0.1.0-alpha
-	github.com/stretchr/testify v1.12.0
+	github.com/stretchr/testify v1.12.1
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 )
@@ -159,18 +159,19 @@ require (
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
-	github.com/jeremyhahn/go-auth v0.1.2-alpha // indirect
+	github.com/jeremyhahn/go-auth v0.2.0-alpha // indirect
 	github.com/jeremyhahn/go-codec v1.4.0 // indirect
+	github.com/jeremyhahn/go-enclave v0.5.0-alpha // indirect
 	github.com/jeremyhahn/go-frost v0.1.8-alpha // indirect
-	github.com/jeremyhahn/go-luks2 v0.1.7-alpha // indirect
+	github.com/jeremyhahn/go-luks2 v0.2.0-alpha // indirect
 	github.com/jeremyhahn/go-objstore v0.3.0-alpha // indirect
-	github.com/jeremyhahn/go-qrdb v0.16.0-alpha // indirect
-	github.com/jeremyhahn/go-qrdb/sdk/go v0.16.0-alpha // indirect
-	github.com/jeremyhahn/go-quicbaas v0.7.0-alpha // indirect
-	github.com/jeremyhahn/go-quicraft v0.9.0-alpha // indirect
+	github.com/jeremyhahn/go-qrdb v0.19.0-alpha // indirect
+	github.com/jeremyhahn/go-qrdb/sdk/go v0.19.0-alpha // indirect
+	github.com/jeremyhahn/go-quicbaas v0.11.0-alpha // indirect
+	github.com/jeremyhahn/go-quicraft v0.11.0-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.4.0-alpha // indirect
-	github.com/jeremyhahn/go-xkms v0.9.4-alpha // indirect
-	github.com/jeremyhahn/go-xkms/sdk/go v0.9.4-alpha // indirect
+	github.com/jeremyhahn/go-xkms v0.14.0-alpha // indirect
+	github.com/jeremyhahn/go-xkms/sdk/go v0.14.0-alpha // indirect
 	github.com/jeroenrinzema/psql-wire v0.18.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
@@ -224,12 +225,12 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/pquerna/otp v1.5.0 // indirect
 	github.com/prometheus/client_golang v1.24.1 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
+	github.com/prometheus/client_model v0.6.3 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/exporter-toolkit v0.17.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/quic-go/quic-go v0.61.0 // indirect
+	github.com/quic-go/quic-go v0.62.0 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	github.com/redis/go-redis/v9 v9.18.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect

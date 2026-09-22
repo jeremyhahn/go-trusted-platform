@@ -127,6 +127,46 @@ legacy boot (#648):
 The Discover arrives ~60–90 s after power-on; autoinstall does not start
 partitioning until ~2 min after that, so there is time to abort.
 
+## Certificate identity: which CA issues what
+
+The control plane is the enterprise/privacy CA for this profile. It enrols
+every other node and issues that node its IAK and IDevID over ACME
+`enroll-01`, so the node's device identity chains to the control-plane CA —
+not to anything the node minted itself.
+
+That has a consequence for the node's own TLS listener, and it is the reason
+`gateway.yaml` and `compute.yaml` set:
+
+```yaml
+certificate:
+  acme:
+    challenge: device-attest-01
+```
+
+Without it, `issueWebServiceCertificate` falls to its local-CA branch and the
+node serves a certificate issued by its OWN CA (`ca01.gw…`, `ca01.compute…`).
+Two things then fail, both silently:
+
+- The reporting collector verifies a node through the trust resolver's
+  `internal` class, which permits ONLY `platform-ca` — the control-plane CA.
+  A locally-issued certificate cannot chain there, so the collector's mTLS
+  fails against every node and remote attestation produces no verdict.
+- The bootstrap orchestrator's post-install health probe verifies against the
+  control-plane bundle it captured during the CP phase, and fails identically.
+
+`device-attest-01` makes the node prove the enrolment it already holds and
+take its operational certificate from the control-plane CA, per
+`docs/architecture/deployment-reference.md` — *"auto-enroll with
+control-plane CA via custom ACME extensions (enroll-01, device-attest-01)"*.
+
+**The control plane itself is the exception** and deliberately has no
+`acme.challenge` on its listener: it is the CA, so it issues its own.
+
+`control-plane.yaml` also carries the `attestation.reporting` block that
+starts the collector. That key is also the gate on the control plane
+registering itself as a device in its own registry (#472), so a control plane
+without it is absent from its own fleet view.
+
 ## Other notes
 
 - **Serial-over-LAN** works (`ipmitool -I lanplus … sol activate`) and the

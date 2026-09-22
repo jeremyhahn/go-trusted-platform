@@ -465,11 +465,25 @@ COVERAGE_DIR                := $(BUILD_DIR)/coverage
 # developer machine — a class of defect this repo has hit repeatedly with two
 # lists that must agree.
 #
-# PINNED (devops.md §9, documented): v2.13.0 (2026-08-19) ships
-# honnef.co/go/tools v0.8.0-rc.1 whose nilness pass panics ("unhandled builtin
-# recover", crashes on sentry-go) — a red gate with zero findings. Unpin when
-# golangci-lint ships a non-rc staticcheck that passes on main.
-GOLANGCI_LINT_VERSION       := v2.12.2
+# PINNED (devops.md §9, documented). History, because the reason changed:
+#
+#   v2.12.2 was the pin while v2.13.0 (2026-08-19) shipped honnef.co/go/tools
+#   v0.8.0-rc.1, whose nilness pass panicked ("unhandled builtin recover",
+#   crashed on sentry-go) — a red gate with zero findings. The stated unpin
+#   condition was "a non-rc staticcheck that passes on main".
+#
+#   MOVED to v2.13.2 on 2026-09-22, when this module adopted Go 1.27.0 with
+#   go-quicbaas v0.11.0-alpha. v2.12.2 bundles honnef.co/go/tools v0.7.0, which
+#   cannot parse the Go 1.27 standard library: it PANICS in its IR builder
+#   ("buildir: unexpected expr: *ast.KeyValueExpr", package internal/poll)
+#   rather than reporting findings, so `make lint` died with a stack trace and
+#   no result. Staying on v2.12.2 stopped being an option the moment the
+#   language version moved.
+#
+#   v2.13.2 ships a non-rc staticcheck, which satisfies the original unpin
+#   condition, and is the version go-quicbaas pins for the same Go 1.27
+#   adoption — one version across the two repos that share this toolchain.
+GOLANGCI_LINT_VERSION       := v2.13.2
 
 # golangci-lint v2 has NO default timeout ("Disabled by default"); this is the
 # only wall-clock bound on the run, and 15m was calibrated on an idle box. It is

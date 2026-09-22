@@ -27,7 +27,15 @@ import (
 
 // BeginRegistrationRequest is the request body for /webauthn/registration/begin.
 type BeginRegistrationRequest struct {
-	Username        string `json:"username"`
+	// Email is the account's canonical tenant-unique login key. It was
+	// previously spelled "username" on the wire, but the value was always
+	// an email: BeginRegistration stored it as the pending registration's
+	// Email and FinishRegistration writes it to entities.User.Email. The
+	// backbone now resolves the account with GetByEmail and documents that
+	// a username is a different identifier and is not accepted
+	// (go-xkms BeginRegistrationRequest.Email), so the wire name is
+	// corrected to match the value it always carried.
+	Email           string `json:"email"`
 	InvitationToken string `json:"invitation_token,omitempty" secret:"true"`
 }
 

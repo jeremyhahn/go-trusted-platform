@@ -53,9 +53,11 @@ func newMockGateway() *mockGateway {
 		running:     true,
 		operational: true,
 		status: &gateway.GatewayStatus{
-			ID:          "gw-1",
-			State:       gateway.GatewayStateRunning,
-			ActiveModes: gateway.GatewayModeOverlay,
+			ID:    "gw-1",
+			State: gateway.GatewayStateRunning,
+			// node.go:317 still populates this bitmask for API compatibility, so
+			// the fixture must carry it or this service's mapping goes untested.
+			ActiveModes: gateway.GatewayModeOverlay, //nolint:staticcheck // SA1019: covering the compat field production still serves.
 			StartedAt:   time.Now().Add(-30 * time.Second),
 		},
 		node: gateway.GatewayNode{

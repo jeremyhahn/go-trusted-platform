@@ -515,7 +515,11 @@ func (h *TPM2Handler) handleProvision(ctx context.Context, payload []byte) *Resp
 
 	var ownerPwd xkmssdk.Password
 	if req.OwnerPassword != "" {
-		ownerPwd = xkmssdk.NewPasswordFromString(req.OwnerPassword)
+		held, err := xkmssdk.NewPasswordFromString(req.OwnerPassword)
+		if err != nil {
+			return h.errorResponse(StatusInternalError, err)
+		}
+		ownerPwd = held
 	}
 
 	if _, err := h.tpm.ProvisionOwner(ownerPwd); err != nil {

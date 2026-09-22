@@ -31,8 +31,8 @@ var (
 	// ErrInvalidRequestBody is returned when the request body cannot be parsed.
 	ErrInvalidRequestBody = errors.New("webauthn: invalid request body")
 
-	// ErrUsernameRequired is returned when the username field is empty.
-	ErrUsernameRequired = errors.New("webauthn: username is required")
+	// ErrEmailRequired is returned when the email field is empty.
+	ErrEmailRequired = errors.New("webauthn: email is required")
 
 	// ErrInvitationServiceNotConfigured is returned when invitation token is provided
 	// but the invitation service is not configured.

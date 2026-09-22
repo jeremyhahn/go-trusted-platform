@@ -400,7 +400,7 @@ func (s *SDKClient) IAM() quicbaas.IAMClient {
 	if client == nil {
 		return nil
 	}
-	return client.IAM()
+	return client.Identity().IAM()
 }
 
 // Cache returns the Cache client for cache management.

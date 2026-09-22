@@ -861,7 +861,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// minimal manager — list/get/create against IAM still work.
 	if App != nil {
 		if sdk := App.QuicBaaSSDKClient(); sdk != nil {
-			if iamClient := sdk.IAM(); iamClient != nil {
+			if iamClient := sdk.Identity().IAM(); iamClient != nil {
 				if tc := iamClient.Tenant(); tc != nil {
 					tenantCfg := tenant.DefaultConfig()
 					// Optional subsystems are not yet wired in this serve
@@ -1258,6 +1258,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			AuthSDKClient:             authSDK,
 			FactorsSDKClient:          factorsSDK,
 			AdminTrustAnchorPath:      adminTrustAnchorPath,
+			AdminEmail:                App.AdminEmail,
 			AdminClaimMultiInstance:   isMultiInstanceDeployment(App.QuicBaaSConfig),
 			SDNEnrollmentHook:         sdnEnrollmentHook,
 			TenantManager:             daemonConfig.PlatformTenantManager,

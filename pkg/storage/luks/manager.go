@@ -384,10 +384,15 @@ func (m *Manager) UnlockWithRecoveryKey(ctx context.Context, part *drive.Partiti
 	if err != nil {
 		return &WrappedError{Msg: "failed to parse recovery key", Err: err}
 	}
-	defer clearBytes(key)
+	defer key.Destroy()
 
-	// Unlock using go-luks2
-	if err := goluks.Unlock(devicePath, key, mappingName); err != nil {
+	// Unlock using go-luks2. ParseRecoveryKey returns the key in an enclave's
+	// locked memory; WithBytes lends it for the duration of the call and holds
+	// a read lock across it, so the key is never copied onto the Go heap and a
+	// concurrent Destroy cannot unmap the pages Unlock is reading.
+	if err := key.WithBytes(func(recovery []byte) error {
+		return goluks.Unlock(devicePath, recovery, mappingName)
+	}); err != nil {
 		return &WrappedError{Msg: "failed to unlock LUKS volume", Err: err}
 	}
 

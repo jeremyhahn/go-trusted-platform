@@ -357,7 +357,6 @@ func (m *AuthMiddleware) createSessionFromClaims(claims *JWTClaims, tenantID str
 		DisplayName: claims.Name,
 		Roles:       claims.Roles,
 		Groups:      claims.Groups,
-		MFAEnabled:  claims.MFAVerified,
 	}
 
 	return NewIAMSessionWithMFA(user, claims.MFAVerified, claims.MFATimestamp)

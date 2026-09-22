@@ -61,7 +61,10 @@ func TestTrustConfigNeedsTOFU_TOFUInDefaultClass(t *testing.T) {
 func TestTrustConfigNeedsTOFU_DisallowedClassNeedsNoPinStore(t *testing.T) {
 	t.Parallel()
 
-	t.Run("bmc", func(t *testing.T) {
+	// bmc moved OUT of this set: go-xkms#139 made tofu an endpoint verifier,
+	// so a bmc chain listing tofu is now valid and genuinely needs a store
+	// to persist the captured pin.
+	t.Run("bmc_now_needs_a_pin_store", func(t *testing.T) {
 		cfg := &trust.Config{
 			Default: &trust.ScopeConfig{
 				Strategies: []trust.Strategy{trust.StrategyEmbedded},
@@ -70,8 +73,8 @@ func TestTrustConfigNeedsTOFU_DisallowedClassNeedsNoPinStore(t *testing.T) {
 				Strategies: []trust.Strategy{trust.StrategyTOFU},
 			},
 		}
-		assert.False(t, trustConfigNeedsTOFU(cfg),
-			"tofu is not allowed for bmc, so it creates no pin-store need")
+		assert.True(t, trustConfigNeedsTOFU(cfg),
+			"tofu is allowed for bmc since go-xkms#139, so it creates a pin-store need")
 	})
 
 	t.Run("internal", func(t *testing.T) {
@@ -194,19 +197,21 @@ func TestBootstrapTrust_TOFUListedButNoSDKReturnsTypedError(t *testing.T) {
 	assert.True(t, errors.As(err, &tofuErr), "expected ErrBootstrapTOFUNoSDK, got %T: %v", err, err)
 }
 
-// TestBootstrapTrust_TOFUInBMCReportsStrategyNotAllowed pins the #83
-// behaviour: tofu is no longer a permitted ClassBMC strategy, so a BMC
-// chain listing it must surface that — NOT ErrBootstrapTOFUNoSDK.
+// TestBootstrapTrust_TOFUInBMCRequiresAPinStore is the inverse of what this
+// asserted under #83, and deliberately so.
 //
-// Before #83 the pin-store precheck ran ahead of validation and reported a
-// missing SDK client, which is a misleading diagnosis for a chain that
-// could never have worked regardless of the SDK.
-func TestBootstrapTrust_TOFUInBMCReportsStrategyNotAllowed(t *testing.T) {
+// It used to prove that tofu on the bmc class produced ErrStrategyNotAllowed
+// rather than an SDK complaint, because tofu was a CA-bundle fetch a BMC
+// could never satisfy. go-xkms#139 made the TLS path an endpoint verifier,
+// so the strategy is legitimate here now and the missing piece really IS the
+// pin store: with no SDK client there is nowhere to persist the captured
+// pin, and reporting that is correct rather than misleading.
+func TestBootstrapTrust_TOFUInBMCRequiresAPinStore(t *testing.T) {
 	t.Parallel()
 
-	// Default class is SPKI (non-embedded) so BootstrapTrust will proceed to
-	// construct the resolver. The BMC class lists TOFU, which triggers the
-	// SDK-required check.
+	// Default class is SPKI (non-embedded) so BootstrapTrust proceeds to
+	// construct the resolver. The BMC class lists TOFU, which now legitimately
+	// triggers the pin-store requirement.
 	app := &App{
 		TrustConfig: &trust.Config{
 			Default: &trust.ScopeConfig{
@@ -227,13 +232,13 @@ func TestBootstrapTrust_TOFUInBMCReportsStrategyNotAllowed(t *testing.T) {
 	err := app.BootstrapTrust(context.Background())
 	require.Error(t, err)
 
-	var tofuErr ErrBootstrapTOFUNoSDK
-	assert.False(t, errors.As(err, &tofuErr),
-		"a tofu chain on a class that does not allow it is not an SDK problem, got %v", err)
-
 	var notAllowed *trust.ErrStrategyNotAllowed
-	assert.True(t, errors.As(err, &notAllowed),
-		"expected ErrStrategyNotAllowed for tofu on the bmc class, got %T: %v", err, err)
+	assert.False(t, errors.As(err, &notAllowed),
+		"tofu is allowed for bmc since go-xkms#139; it must not be refused by the allowlist, got %v", err)
+
+	var tofuErr ErrBootstrapTOFUNoSDK
+	assert.True(t, errors.As(err, &tofuErr),
+		"with no SDK client there is nowhere to persist the pin, which is the accurate failure; got %T: %v", err, err)
 }
 
 // TestBootstrapTrust_NonTOFUConfigCallsResolverWithoutPinStore verifies that

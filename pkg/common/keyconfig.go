@@ -143,7 +143,11 @@ func (kc *KeyConfig) ToKeyAttributes() (*xkmssdk.KeyAttributes, error) {
 
 	// Set password
 	if kc.Password != "" {
-		attrs.Password = xkmssdk.NewPasswordFromString(kc.Password)
+		password, err := xkmssdk.NewPasswordFromString(kc.Password)
+		if err != nil {
+			return nil, &WrappedError{Msg: "invalid password", Err: err}
+		}
+		attrs.Password = password
 	}
 
 	// Set password cache configuration

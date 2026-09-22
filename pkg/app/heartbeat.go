@@ -234,11 +234,13 @@ func (app *App) newHeartbeatClient(serverURL string) (*provisioning.Client, erro
 	if app.TPMConfig.IDevID == nil {
 		return nil, provisioning.ErrMissingCertificate
 	}
-	policyDigest, err := app.TPM.PlatformPolicyDigest()
-	if err != nil {
-		return nil, &WrappedError{Msg: "heartbeat: platform policy digest unavailable", Err: err}
+	// Retained as a precondition though the digest is no longer passed to
+	// the attribute builder (go-xkms #355): a TPM that cannot produce it
+	// cannot satisfy the IDevID key's policy either.
+	if _, policyErr := app.TPM.PlatformPolicyDigest(); policyErr != nil {
+		return nil, &WrappedError{Msg: "heartbeat: platform policy digest unavailable", Err: policyErr}
 	}
-	idevidAttrs, err := xkmssdk.IDevIDAttributesFromConfig(*app.TPMConfig.IDevID, &policyDigest)
+	idevidAttrs, err := xkmssdk.IDevIDAttributesFromConfig(*app.TPMConfig.IDevID)
 	if err != nil {
 		return nil, &WrappedError{Msg: "heartbeat: IDevID key attributes unavailable", Err: err}
 	}

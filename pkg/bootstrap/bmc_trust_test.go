@@ -169,36 +169,77 @@ func TestBMCTrustSPKIPinRejectsWrongCertificate(t *testing.T) {
 	}
 }
 
-// TestBMCTrustTOFURejected is the #83 regression.
+// TestBMCTrustTOFUIsAcceptedAsEndpointPinning is the inverse of the old #83
+// regression, and the inversion is the point.
 //
-// `bmc_trust: [tofu]` used to validate cleanly and then fail deep inside a
-// run with "trust bootstrap: server URL required". The obvious reading is
-// that the per-node scope simply forgot to carry a ServerURL — but TOFU in
-// this stack is a CA-bundle FETCH pinned on first contact (`pemTOFU`
-// discards the caller's endpoint entirely and fetches from
-// `scope.ServerURL`), not endpoint pinning. A BMC serves Redfish and no CA
-// bundle, so no ServerURL can make it work; see
-// TestTOFUIsABundleFetchNotEndpointPinning for that proof.
+// Under #83, `bmc_trust: [tofu]` was rejected because tofu was implemented
+// purely as a CA-bundle FETCH: it discarded the caller's endpoint and
+// fetched from scope.ServerURL, and a BMC serves Redfish rather than a
+// bundle, so no ServerURL could make it work. go-xkms#139 (v0.12.0-alpha)
+// added the endpoint-pinning TLS path whose changelog names this exact
+// case, so the reason for the rejection is gone.
 //
-// tofu is therefore no longer allowed for the BMC class, and the rejection
-// happens at configuration time where it is actionable.
-func TestBMCTrustTOFURejected(t *testing.T) {
+// tofu for a BMC is now first-contact SPKI pinning that PERSISTS the pin —
+// strictly better than a bmc_spki_pin an operator must obtain out of band.
+func TestBMCTrustTOFUIsAcceptedAsEndpointPinning(t *testing.T) {
 	node := &NodeConfig{Hostname: "node-07", BMCTrust: []trust.Strategy{trust.StrategyTOFU}}
 
 	_, err := bmcTLSConfigForErr(t, node, "127.0.0.1:443")
 
-	require.Error(t, err, "tofu can never verify a BMC endpoint and must not be accepted")
-	assert.NotContains(t, err.Error(), "server URL required",
-		"the failure must no longer be the opaque late one from #83")
+	// It must no longer be refused by the allowlist. It may still fail for
+	// a real reason — there is no pin store wired in this fixture — but the
+	// failure must not be "tofu is not allowed here".
+	if err != nil {
+		assert.NotContains(t, err.Error(), "invalid bmc_trust strategy",
+			"tofu must no longer be rejected by the bmc allowlist")
+		assert.NotContains(t, err.Error(), "cannot verify a BMC",
+			"the #83 rationale is obsolete and must not be quoted at operators")
+	}
 }
 
-// TestBMCTrustValidationRejectsTOFUWithGuidance pins the operator-facing
-// half: the config error must explain why and name the working alternative,
-// because "invalid strategy" alone would send someone hunting for a typo in
-// a value the documentation told them to use.
-func TestBMCTrustValidationRejectsTOFUWithGuidance(t *testing.T) {
-	// Drive the real validator, so this fails if bmc_trust validation ever
-	// stops rejecting tofu — not just if the message text changes.
+// TestBMCTrustValidationNamesTheAllowedSet pins the operator-facing half.
+// The message must enumerate what IS allowed, and it must derive that set
+// rather than restate it: the previous version hard-coded
+// "dane, spki, ca-file" plus a tofu-specific explanation, and go-xkms#139
+// made both wrong at once.
+func TestBMCTrustValidationNamesTheAllowedSet(t *testing.T) {
+	cfg := &BootstrapConfig{
+		Deployer: DeployerConfig{Host: "deploy.example.com"},
+		Subnets: []installer.SubnetConfig{
+			{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning},
+		},
+		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Nodes: []NodeConfig{{
+			Hostname:    "node-07",
+			Role:        RoleControlPlane,
+			BMCAddress:  "10.200.0.10",
+			BMCUser:     "admin",
+			BMCPassword: "secret",
+			BMCTrust:    []trust.Strategy{"nonsense"},
+		}},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err, "an unknown bmc_trust strategy must be rejected at configuration time")
+
+	var invalid ErrInvalidBMCTrust
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, "nonsense", invalid.Strategy)
+
+	msg := err.Error()
+	assert.Contains(t, msg, "node-07")
+	// Derived from pkg/trust, so this assertion follows the allowlist
+	// instead of freezing a snapshot of it.
+	for _, allowed := range trust.AllowedStrategiesForClass(trust.ClassBMC) {
+		assert.Contains(t, msg, string(allowed),
+			"the error must name every strategy the bmc class allows")
+	}
+}
+
+// TestBMCTrustValidationAcceptsTOFU proves the config layer agrees with the
+// trust layer, so bmc_trust: [tofu] does not validate in one and fail in the
+// other — the split that produced #83.
+func TestBMCTrustValidationAcceptsTOFU(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy.example.com"},
 		Subnets: []installer.SubnetConfig{
@@ -215,36 +256,23 @@ func TestBMCTrustValidationRejectsTOFUWithGuidance(t *testing.T) {
 		}},
 	}
 
-	err := cfg.Validate()
-	require.Error(t, err, "bmc_trust: [tofu] must be rejected at configuration time")
-
-	var invalid ErrInvalidBMCTrust
-	require.ErrorAs(t, err, &invalid)
-	assert.Equal(t, string(trust.StrategyTOFU), invalid.Strategy)
-
-	msg := err.Error()
-	assert.Contains(t, msg, "node-07")
-	assert.Contains(t, msg, "bmc_spki_pin",
-		"the error must name the strategy that does work")
-	assert.Contains(t, msg, "CA bundle",
-		"the error must say why tofu cannot verify a BMC")
-
-	// An genuinely unknown value keeps the plain allowlist message.
-	other := ErrInvalidBMCTrust{Hostname: "node-07", Strategy: "nonsense"}
-	assert.Contains(t, other.Error(), "allowed: dane, spki, ca-file")
-	assert.NotContains(t, other.Error(), "tofu",
-		"tofu must not be advertised as allowed for bmc")
+	require.NoError(t, cfg.Validate(),
+		"bmc_trust: [tofu] must validate since go-xkms#139 made tofu an endpoint verifier")
 }
 
-// TestTOFUIsABundleFetchNotEndpointPinning proves the finding that decided
-// the fix, using the default class (where tofu remains legitimate, because
-// a control plane really does serve a CA bundle).
+// TestTOFUOnTheTLSPathPinsTheEndpoint replaces
+// TestTOFUIsABundleFetchNotEndpointPinning, whose premise go-xkms#139
+// deliberately removed.
 //
-// Pointed at a BMC-shaped endpoint — TLS, self-signed, no bundle path —
-// tofu fails even though ServerURL is supplied. That is what rules out the
-// "just fill in ServerURL from the endpoint" fix: the endpoint is not the
-// problem, the absence of a CA bundle is.
-func TestTOFUIsABundleFetchNotEndpointPinning(t *testing.T) {
+// The old test asserted that tofu pointed at a BMC-shaped endpoint — TLS,
+// self-signed, serving no bundle — must FAIL, because tofu was a CA-bundle
+// fetch. v0.12.0-alpha split the strategy the way dane and spki already
+// were: the TLS path pins the endpoint's SPKI, the PEM path still fetches a
+// bundle. That endpoint is now exactly what tofu is for.
+//
+// What still needs pinning is that the TLS path really verifies: it must
+// complete a handshake against the endpoint it captured.
+func TestTOFUOnTheTLSPathPinsTheEndpoint(t *testing.T) {
 	bmc := newFakeBMC(t)
 
 	cfg := &trust.Config{
@@ -257,11 +285,23 @@ func TestTOFUIsABundleFetchNotEndpointPinning(t *testing.T) {
 		trust.WithTOFUPinStore(xkmsbootstrap.NewMemoryPinStore()))
 	require.NoError(t, err)
 
-	_, err = resolver.TLSConfig(context.Background(), trust.ClassDefault, bmc.endpoint)
+	tlsCfg, err := resolver.TLSConfig(context.Background(), trust.ClassDefault, bmc.endpoint)
+	require.NoError(t, err,
+		"tofu on the TLS path verifies the endpoint itself and needs no CA bundle (go-xkms#139)")
+	require.NotNil(t, tlsCfg)
 
-	require.Error(t, err,
-		"tofu fetches a CA bundle; an endpoint that serves none cannot satisfy it")
-	assert.NotContains(t, err.Error(), "server URL required",
-		"the server URL was accepted — the bundle fetch itself is what fails, "+
-			"which is why supplying one cannot fix bmc_trust: [tofu]")
+	conn, err := tls.Dial("tcp", bmc.endpoint, tlsCfg)
+	require.NoError(t, err, "the pinned TLS config must complete a handshake with the pinned endpoint")
+	require.NoError(t, conn.Close())
+}
+
+// TestTOFURequiresAPinStore is the other half: with nowhere to persist the
+// captured pin, tofu is not trust-on-first-use at all — it would accept
+// whatever key it was shown, every time. Construction must refuse.
+func TestTOFURequiresAPinStore(t *testing.T) {
+	cfg := &trust.Config{
+		Default: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyTOFU}},
+	}
+	_, err := trust.NewResolver(cfg, logging.NewFromSlog(quietTestLogger()))
+	require.Error(t, err, "tofu without a pin store must not construct")
 }

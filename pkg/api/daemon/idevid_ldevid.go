@@ -153,7 +153,7 @@ func (s *IDevIDGRPCService) CreateLDevID(ctx context.Context, req *platformv1.Cr
 		RSAConfig:          rsaCfg,
 	}
 
-	attrs, err := xkmssdk.LDevIDAttributesFromConfig(ldevidCfg, nil)
+	attrs, err := xkmssdk.LDevIDAttributesFromConfig(ldevidCfg)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "build LDevID attributes: "+err.Error())
 	}

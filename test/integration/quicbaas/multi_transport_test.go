@@ -181,7 +181,7 @@ func verifyAllServiceClients(t *testing.T, sdk quicbaassdk.Client) {
 	assert.NotNil(t, sdk.Security().DEK(), "DEK client should not be nil")
 
 	// IAM Operations
-	assert.NotNil(t, sdk.IAM(), "IAM client should not be nil")
+	assert.NotNil(t, sdk.Identity().IAM(), "IAM client should not be nil")
 
 	// Specialized Data Operations
 	assert.NotNil(t, sdk.Vector(), "Vector client should not be nil")
@@ -371,8 +371,8 @@ func TestSDKClientServiceAccessors(t *testing.T) {
 	kms2 := sdk.Security().KMS()
 	assert.Same(t, kms1, kms2, "KMS client should be cached")
 
-	iam1 := sdk.IAM()
-	iam2 := sdk.IAM()
+	iam1 := sdk.Identity().IAM()
+	iam2 := sdk.Identity().IAM()
 	assert.Same(t, iam1, iam2, "IAM client should be cached")
 }
 
@@ -462,7 +462,7 @@ func TestSDKClientConcurrentAccess(t *testing.T) {
 			_ = sdk.KV()
 			_ = sdk.Health()
 			_ = sdk.Security().KMS()
-			_ = sdk.IAM()
+			_ = sdk.Identity().IAM()
 			_ = sdk.Vector()
 			_ = sdk.Batch()
 		}(i)

@@ -79,8 +79,8 @@ func (h *WebAuthnRestHandler) BeginRegistration(w http.ResponseWriter, r *http.R
 		h.responseWriter.Error400(w, r, ErrInvalidRequestBody)
 		return
 	}
-	if req.Username == "" {
-		h.responseWriter.Error400(w, r, ErrUsernameRequired)
+	if req.Email == "" {
+		h.responseWriter.Error400(w, r, ErrEmailRequired)
 		return
 	}
 	// The canonical registration flag (docs/08 §Registration model):
@@ -91,10 +91,10 @@ func (h *WebAuthnRestHandler) BeginRegistration(w http.ResponseWriter, r *http.R
 		h.responseWriter.Error403(w, r, ErrPublicRegistrationDisabled, nil)
 		return
 	}
-	if req.InvitationToken != "" && !h.validateInvitation(w, r, req.InvitationToken, req.Username) {
+	if req.InvitationToken != "" && !h.validateInvitation(w, r, req.InvitationToken, req.Email) {
 		return
 	}
-	userID := util.NewID([]byte(req.Username))
+	userID := util.NewID([]byte(req.Email))
 	if _, err := h.userService.Get(r.Context(), userID); err == nil {
 		h.writeConflictError(w, r, ErrUserAlreadyExists)
 		return
@@ -103,7 +103,7 @@ func (h *WebAuthnRestHandler) BeginRegistration(w http.ResponseWriter, r *http.R
 		return
 	}
 	options, err := h.fido2Client.BeginRegistration(h.fido2Context(r),
-		&quicbaassdk.FIDO2BeginRegistrationRequest{Username: req.Username, DisplayName: req.Username})
+		&quicbaassdk.FIDO2BeginRegistrationRequest{Email: req.Email, DisplayName: req.Email})
 	if err != nil {
 		h.logger.Error(err, "sdk BeginRegistration failed")
 		h.responseWriter.Error500(w, r, err)
@@ -123,7 +123,7 @@ func (h *WebAuthnRestHandler) BeginRegistration(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err := h.registrationService.Create(r.Context(), &entities.Registration{
-		ID: util.NewID(handle), Email: req.Username, InvitationToken: req.InvitationToken,
+		ID: util.NewID(handle), Email: req.Email, InvitationToken: req.InvitationToken,
 	}); err != nil {
 		h.responseWriter.Error500(w, r, err)
 		return

@@ -855,7 +855,9 @@ func (s *TenantGRPCServer) entityToTenantPb(entity *tenant.TenantEntity) *platfo
 		VlanStart:   uint32(entity.VLANRange.Start),
 		VlanEnd:     uint32(entity.VLANRange.End),
 		DekPath:     entity.DEKPath,
-		DekHandle:   entity.DEKHandle(),
+		// Still emitted for clients that read the pre-DekPath field; dropping it
+		// would silently break them ahead of the coordinated proto removal.
+		DekHandle: entity.DEKHandle(), //nolint:staticcheck // SA1019: deliberate wire compatibility.
 		ComputeQuota: &platformv1.ComputeQuota{
 			MaxVms:        entity.ComputeQuota.MaxVMs,
 			MaxContainers: entity.ComputeQuota.MaxContainers,

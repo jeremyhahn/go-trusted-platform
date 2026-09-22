@@ -412,11 +412,20 @@ acme:
 trust:
   bmc:
     # BMC endpoint trust chain. First strategy to succeed wins.
-    # tofu is NOT available here (#83): it fetches a CA bundle and a BMC
-    # serves none. Use a per-node bmc_spki_pin for first contact until DANE
-    # TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
-    # enroll does this).
-    strategies: [dane, spki, ca-file]
+    #
+    # tofu is available here again. It was barred under #83 while it was a
+    # CA-bundle fetch — a BMC serves Redfish, never a bundle — but
+    # go-xkms#139 (v0.12.0-alpha) made the TLS path an endpoint verifier
+    # that pins the leaf SPKI on first contact and enforces it afterwards,
+    # with session tickets disabled so resumption cannot bypass the check.
+    # Its changelog names this exact case.
+    #
+    # Prefer dane once TLSA records for <hostname>-bmc.<internal-zone> are
+    # published (bmc enroll does this). Before that, tofu is the better
+    # first-contact option than a hand-carried bmc_spki_pin: it captures and
+    # PERSISTS the pin itself rather than requiring an operator to obtain
+    # the fingerprint out of band.
+    strategies: [dane, spki, tofu, ca-file]
     dane:
       dns-server: "198.18.0.10:8053"   # CP public DNS
 
@@ -700,6 +709,24 @@ webservice:
     platform-policy: true
     debug: true
   certificate:
+    # The listener serves the node's CP-ISSUED identity, not a certificate
+    # this node's own CA minted. A compute node is enrolled by the
+    # control-plane CA (the enterprise/privacy CA) and already proves that
+    # enrolment with its IDevID, so device-attest-01 is what issues this
+    # listener's operational certificate — deployment-reference.md:173,
+    # "auto-enroll with control-plane CA via custom ACME extensions
+    # (enroll-01, device-attest-01)".
+    #
+    # This matters beyond tidiness. The reporting collector verifies a node's
+    # certificate through the trust resolver's `internal` class, which permits
+    # ONLY platform-ca (pkg/trust/config.go ClassInternal), i.e. the
+    # control-plane CA. A locally-issued certificate cannot chain there, so
+    # without this the collector's mTLS fails against every node and remote
+    # attestation produces no verdict at all. The bootstrap orchestrator's
+    # post-install health probe verifies against the same captured CP bundle
+    # and fails for the identical reason.
+    acme:
+      challenge: device-attest-01
     subject:
       cn: compute.example.internal
       organization: Trusted Platform

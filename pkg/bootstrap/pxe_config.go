@@ -81,19 +81,6 @@ var forbiddenGlobalOverrideKeys = []forbiddenGlobalOverrideKey{
 	{key: "environment", useField: "platform.environment", value: func(p *PlatformGlobalConfig) string { return p.Environment }},
 }
 
-// validBMCTrustStrategies is the ClassBMC allowlist: the set of trust
-// strategies a node's bmc_trust chain may contain. This mirrors the
-// allowedStrategies[ClassBMC] map in pkg/trust/config.go and is kept
-// here so validation does not require constructing a full Resolver.
-var validBMCTrustStrategies = map[trust.Strategy]struct{}{
-	trust.StrategyDANE:   {},
-	trust.StrategySPKI:   {},
-	trust.StrategyCAFile: {},
-	// tofu is deliberately absent — it is a CA-bundle fetch, and a BMC
-	// serves no bundle, so it can never verify one (#83). Use
-	// bmc_spki_pin for endpoint pinning.
-}
-
 // BootstrapConfig is the top-level configuration for PXE network bootstrap.
 type BootstrapConfig struct {
 	Deployer  DeployerConfig           `yaml:"deployer"`
@@ -1107,7 +1094,10 @@ func (c *BootstrapConfig) Validate() error {
 
 		// Validate bmc_trust strategy chain.
 		for _, strategy := range node.BMCTrust {
-			if _, ok := validBMCTrustStrategies[strategy]; !ok {
+			// Queried from pkg/trust rather than mirrored here. A local
+			// copy is what let #83 happen: two allowlists that agreed
+			// until one of them changed.
+			if !trust.StrategyAllowedForClass(trust.ClassBMC, strategy) {
 				return ErrInvalidBMCTrust{Hostname: node.Hostname, Strategy: string(strategy)}
 			}
 		}

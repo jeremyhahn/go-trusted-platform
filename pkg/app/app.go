@@ -346,12 +346,20 @@ type App struct {
 	// allow-list reconciliation check. Nil uses the host resolver, which
 	// on a platform node is the local forwarder the `dns:` section
 	// configures; tests substitute their own.
-	ntsNameResolver  ntp.NameResolver
-	Domain           string                        `yaml:"domain" json:"domain" mapstructure:"domain"`
-	Environment      Environment                   `yaml:"environment" json:"environment" mapstructure:"environment"`
-	Storage          objectstorage.Client          `yaml:"-" json:"-" mapstructure:"-"`
-	Hostname         string                        `yaml:"hostname" json:"hostname" mapstructure:"hostname"`
-	Hostmaster       string                        `yaml:"hostmaster" json:"hostmaster" mapstructure:"hostmaster"`
+	ntsNameResolver ntp.NameResolver
+	Domain          string               `yaml:"domain" json:"domain" mapstructure:"domain"`
+	Environment     Environment          `yaml:"environment" json:"environment" mapstructure:"environment"`
+	Storage         objectstorage.Client `yaml:"-" json:"-" mapstructure:"-"`
+	Hostname        string               `yaml:"hostname" json:"hostname" mapstructure:"hostname"`
+	Hostmaster      string               `yaml:"hostmaster" json:"hostmaster" mapstructure:"hostmaster"`
+	// AdminEmail is the email of the firstboot administrator account. It
+	// is the identifier the admin-claim FIDO2 ceremony enrols a passkey
+	// against, because the backbone resolves that account with GetByEmail
+	// and does not accept a username. Deliberately separate from
+	// Hostmaster (a zone contact, not an account) and not derivable from
+	// AdminUsername; unset leaves the admin-claim routes unregistered
+	// rather than binding the credential to a guessed identity.
+	AdminEmail       string                        `yaml:"admin-email" json:"admin_email" mapstructure:"admin-email"`
 	LogDir           string                        `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
 	LogFormat        string                        `yaml:"log-format" json:"log_format" mapstructure:"log-format"`
 	Logger           *logging.Logger               `yaml:"-" json:"-" mapstructure:"-"`
@@ -373,10 +381,16 @@ type App struct {
 	TenantID         string                        `yaml:"tenant-id" json:"tenant_id" mapstructure:"tenant-id"`
 	ShutdownChan     chan bool                     `yaml:"-" json:"-" mapstructure:"-"`
 	TPM              xkmssdk.TrustedPlatformModule `yaml:"-" json:"-" mapstructure:"-"`
-	TPMCertStore     xkmssdk.TPMCertificateStorer  `yaml:"-" json:"-" mapstructure:"-"`
-	TPMConfig        xkmssdk.TPMConfig             `yaml:"tpm" json:"tpm" mapstructure:"tpm" swaggerignore:"true"`
-	WebServiceConfig *v1.Config                    `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
-	WebServices      []*v1.Config                  `yaml:"webservices" json:"webservices" mapstructure:"webservices"`
+	// tpmManufacturerCode caches the TCG TPM manufacturer code, e.g.
+	// "id:49465800". It is read once from TPM_PT_MANUFACTURER and kept:
+	// the value is a property of the silicon and cannot change for the
+	// life of the part, so re-reading it per certificate request would be
+	// a TPM round-trip for a constant.
+	tpmManufacturerCode string
+	TPMCertStore        xkmssdk.TPMCertificateStorer `yaml:"-" json:"-" mapstructure:"-"`
+	TPMConfig           xkmssdk.TPMConfig            `yaml:"tpm" json:"tpm" mapstructure:"tpm" swaggerignore:"true"`
+	WebServiceConfig    *v1.Config                   `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
+	WebServices         []*v1.Config                 `yaml:"webservices" json:"webservices" mapstructure:"webservices"`
 	// Proxy is the control plane's `proxy:` section: the routes, pools and
 	// auth defaults the trusted reverse proxy serves, seeded into the
 	// platform proxy store at startup (file = base layer, the API wins per
@@ -826,7 +840,7 @@ func (app *App) adoptSystemTenant(ctx context.Context) error {
 	if sdk == nil {
 		return nil
 	}
-	iamClient := sdk.IAM()
+	iamClient := sdk.Identity().IAM()
 	if iamClient == nil {
 		return nil
 	}
@@ -1741,8 +1755,14 @@ func (app *App) ParsePINs(soPIN, userPIN []byte) (xkmssdk.Password, xkmssdk.Pass
 				"generated new User PIN", slog.String("pin", string(userPIN)))
 		}
 	}
-	sopin := xkmssdk.NewPassword(soPIN)
-	userpin := xkmssdk.NewPassword(userPIN)
+	sopin, err := xkmssdk.NewPassword(soPIN)
+	if err != nil {
+		return nil, nil, &WrappedError{Msg: "failed to hold the SO PIN", Err: err}
+	}
+	userpin, err := xkmssdk.NewPassword(userPIN)
+	if err != nil {
+		return nil, nil, &WrappedError{Msg: "failed to hold the user PIN", Err: err}
+	}
 	return sopin, userpin, nil
 }
 
@@ -2559,12 +2579,16 @@ func (app *App) CompletePlatformIdentity(
 		return nil, err
 	}
 
-	policyDigest, policyErr := app.TPM.PlatformPolicyDigest()
-	if policyErr != nil {
+	// The digest itself is no longer passed to the attribute builder (#355),
+	// but the call is retained as a precondition: a TPM that cannot produce
+	// the platform policy digest cannot satisfy the policy the IDevID key is
+	// created under, and failing here is clearer than failing at key use.
+	if _, policyErr := app.TPM.PlatformPolicyDigest(); policyErr != nil {
 		return nil, policyErr
 	}
-	idevidAttrs, err := xkmssdk.IDevIDAttributesFromConfig(
-		*app.TPMConfig.IDevID, &policyDigest)
+	// The builder takes no digest since go-xkms #355: platform policy is
+	// conveyed by IDevIDConfig.PlatformPolicy, not a passed-in value.
+	idevidAttrs, err := xkmssdk.IDevIDAttributesFromConfig(*app.TPMConfig.IDevID)
 	if err != nil {
 		return nil, err
 	}
@@ -2607,6 +2631,41 @@ func (app *App) CompletePlatformIdentity(
 			enrollResult, err := app.ACMEClient.EnrollDevice(enrollCtx, enrollConfig)
 			if err != nil {
 				return nil, err
+			}
+
+			// Persist the CA that issued this device's identity, BEFORE the
+			// leaves below, so their issuer is resolvable the moment they
+			// land.
+			//
+			// The IAK and IDevID are issued by the ENROLLMENT SERVER's CA --
+			// the control plane, acting as the enterprise/privacy CA -- not
+			// by anything this node holds. CA.RootCertificate walks only the
+			// local certificate store plus this CA's own cached root and
+			// intermediate, so without the issuing chain in that store it
+			// returns ErrRootNotFound for the node's own certificate. Three
+			// callers depend on resolving it and all failed identically:
+			// caller admission for attestation (every enrolled node compiled
+			// a policy admitting nobody), the post-enrollment provisioning
+			// TLS pool, and heartbeat.
+			//
+			// The chain arrives because enroll-01 now returns it after the
+			// end-entity certificates, per RFC 8555 section 7.4.2
+			// (go-xkms#556, released in v0.12.0-alpha). An older enrollment
+			// server sends none, leaving Chain empty -- which is why this is
+			// tolerant rather than fatal: the node still enrolls, and the
+			// anchor gap surfaces where it is diagnosable.
+			for _, issuer := range enrollResult.Chain {
+				app.Logger.Info("Importing issuing chain certificate from ACME enrollment",
+					slog.String("subject", issuer.Subject.CommonName),
+					slog.String("issuer", issuer.Issuer.CommonName))
+				if err := app.CA.ImportCertificate(ctx, issuer); err != nil {
+					app.Logger.Error(err, slog.String("context", "Failed to import issuing chain certificate"),
+						slog.String("subject", issuer.Subject.CommonName))
+				}
+			}
+			if len(enrollResult.Chain) == 0 {
+				app.Logger.Warn("ACME enrollment returned no issuing chain; this node cannot resolve the CA that issued its own IDevID",
+					slog.String("remedy", "the enrollment server predates go-xkms v0.12.0-alpha (go-xkms#556)"))
 			}
 
 			// Import the IAK certificate from ACME enrollment
@@ -2710,7 +2769,12 @@ func (app *App) CompletePlatformIdentity(
 			// Sign TCG_CSR_IDEVID, create IDevID x509 device certificate
 			iakDER, idevidDER, err := app.CA.SignTCGCSRIDevID(ctx, tcgCSRIDevID, &quicbaasca.CACertificateRequest{
 				// KeyAttributes: ekAttrs,
-				KeyAttributes:   idevidAttrs,
+				KeyAttributes: idevidAttrs,
+				// Used only when the EK certificate records no
+				// tcg-at-tpmManufacturer of its own; the certificate always
+				// wins. Without it the CA refuses to issue for a TPM whose
+				// EK certificate omits the attribute, which is common.
+				TPMManufacturer: app.TPMManufacturerCode(),
 				Valid:           0, // Valid until 99991231235959Z
 				ExtraExtensions: zoneExts,
 				Subject:         platformCertificateSubject(idevidAttrs.CN, app.PrimaryWebService()),
@@ -3289,6 +3353,38 @@ func objectStoreFactoryAdapter(f *CAStoreFactory) quicbaasca.ObjectStoreFactoryF
 		}
 		return os, nil
 	}
+}
+
+// TPMManufacturerCode returns the TCG TPM manufacturer code of this node's
+// TPM, reading it once and caching it.
+//
+// It exists because TCG DevID v1 r12 §8.1 makes the code the first component
+// of the hardwareModuleName that identifies the TPM, and the CA refuses to
+// issue an IDevID when neither the EK certificate nor the request carries one
+// (ErrTCGEKManufacturerUnknown). Many EK certificates record no
+// tcg-at-tpmManufacturer -- Infineon SLB9665 among them -- while the TPM
+// itself reports the code perfectly well, so this is where the gap is closed.
+//
+// Returns "" when the TPM cannot be queried. The caller passes it through
+// unchanged: an empty value leaves the CA's own error to describe the
+// failure, which is more accurate than a guess made here.
+func (app *App) TPMManufacturerCode() string {
+	if app.tpmManufacturerCode != "" {
+		return app.tpmManufacturerCode
+	}
+	if app.TPM == nil {
+		return ""
+	}
+	props, err := app.TPM.FixedProperties()
+	if err != nil || props == nil {
+		if err != nil && app.Logger != nil {
+			app.Logger.Warn("TPM fixed properties unavailable; the manufacturer code cannot be supplied to the CA",
+				"error", err.Error())
+		}
+		return ""
+	}
+	app.tpmManufacturerCode = props.ManufacturerCode
+	return app.tpmManufacturerCode
 }
 
 // selectIssuingCA returns the TrustedCA that corresponds to config.SelectedCA.
@@ -4544,9 +4640,13 @@ func trustConfigNeedsTOFU(cfg *trust.Config) bool {
 	for _, class := range []trust.Class{trust.ClassDefault, trust.ClassBMC, trust.ClassInternal} {
 		// Only a class that may actually USE tofu creates a pin-store
 		// need. Without this check a chain listing tofu where it is not
-		// allowed (bmc since #83, internal always) short-circuits with
-		// ErrBootstrapTOFUNoSDK, masking the accurate "strategy not
-		// allowed" error NewResolver is about to return.
+		// allowed (internal, which permits only platform-ca)
+		// short-circuits with ErrBootstrapTOFUNoSDK, masking the accurate
+		// "strategy not allowed" error NewResolver is about to return.
+		//
+		// bmc was in that set under #83 and is not any more: go-xkms#139
+		// made tofu an endpoint verifier, so a bmc chain listing tofu now
+		// genuinely needs a pin store and this loop must say so.
 		if !trust.StrategyAllowedForClass(class, trust.StrategyTOFU) {
 			continue
 		}

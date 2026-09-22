@@ -371,8 +371,11 @@ func TestPIVBackend_Import_ReadsEnclaveKeyMaterial(t *testing.T) {
 
 	const pem = "-----BEGIN CERTIFICATE-----\nenclave\n-----END CERTIFICATE-----\n"
 	req := &daemon.PIVImportRequest{
-		Slot:          "9a",
-		PrivateKeyPEM: "plain-should-lose",
+		Slot: "9a",
+		// The deprecated field is set ON PURPOSE: this asserts the protected
+		// PrivateKey wins over it, which is the contract the deprecation note
+		// states and which must keep holding while the field exists.
+		PrivateKeyPEM: "plain-should-lose", //nolint:staticcheck // SA1019: testing the documented precedence.
 		PrivateKey:    memguard.NewMemoryEnclaveFromString(pem),
 	}
 	defer req.Destroy()
@@ -392,8 +395,9 @@ func TestPIVBackend_Import_FallsBackToDeprecatedField(t *testing.T) {
 	const pem = "-----BEGIN CERTIFICATE-----\nlegacy\n-----END CERTIFICATE-----\n"
 	b := NewPIVBackend(logging.DefaultLogger())
 	if err := b.Import(context.Background(), &daemon.PIVImportRequest{
-		Slot:          "9a",
-		PrivateKeyPEM: pem,
+		Slot: "9a",
+		// PEM-only: the compatibility path WithPrivateKeyPEM still reads.
+		PrivateKeyPEM: pem, //nolint:staticcheck // SA1019: testing the compat path.
 	}); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
