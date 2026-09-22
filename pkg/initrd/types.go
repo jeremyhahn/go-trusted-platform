@@ -169,6 +169,10 @@ type Manager interface {
 	// Boot performs normal boot sequence
 	Boot(ctx context.Context) error
 
+	// UnlockedWith reports the Name() of the strategy that unlocked the
+	// root in the last Boot, or "" when none has.
+	UnlockedWith() string
+
 	// Recovery performs recovery boot with user interaction
 	Recovery(ctx context.Context) error
 

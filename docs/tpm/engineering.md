@@ -502,31 +502,26 @@ a temp directory with a regular file at the configured path.
 
 Recorded here so they are debts with a location, not discoveries:
 
-1. **`platformctl tpm seal --policy` is silently dropped.** The flag is parsed
-   into `sealOptions.UsePolicy` and never read. Neither `tpm.SealRequest` (SDK)
-   nor `SealRequest` (proto) has a field for it. The default is `true`, so a
-   user who leaves it alone gets whatever the server does anyway; a user who
-   passes `--policy=false` gets no change in behaviour.
-2. **`platformctl tpm enroll` advertises flags it does not register.** Its help
+1. **`platformctl tpm enroll` advertises flags it does not register.** Its help
    text shows `--acme-server`, `--cn`, `--ip` and `--force`; none are bound.
    The verb returns `ErrDaemonConnectionRequired` regardless.
-3. **`platformctl tpm destroy`, `install`, `policy`, `extend`, `xkms`** all
+2. **`platformctl tpm destroy`, `install`, `policy`, `extend`, `xkms`** all
    document flags in their long help (`--so-pin`, `--lockout-password`,
    `--confirm`, `--parent`, `--password`, `--ca`, `--tls`, `--hmac`, …) that are
    not registered, and all return `ErrDaemonConnectionRequired`.
-4. **The physical-TPM QUIC surface is not scope-checked.**
+3. **The physical-TPM QUIC surface is not scope-checked.**
    `QUICServiceHandler.handleTPM2Category` calls `AuthorizeRequest` nowhere;
    `pkg/api/daemon/quic_pxe.go` is the only QUIC handler that does. A validated
    token reaches `SubOpTPM2Clear` and `SubOpTPM2Unseal`.
-5. **`TPMService` and `IDevIDService` are absent from the gRPC scope catalog**
+4. **`TPMService` and `IDevIDService` are absent from the gRPC scope catalog**
    (`pkg/api/grpc/method_permissions.go`), which is default-allow. Likewise all
    31 `platform_tpm_*` and all 17 `idevid_*` / `iak_*` MCP tools are absent from
    `pkg/api/mcp/authz.go`, which is also default-allow.
-6. **AK and IAK are the same key under two names.** gRPC and REST call it `ak`
+5. **AK and IAK are the same key under two names.** gRPC and REST call it `ak`
    (`CreateAK`, `/api/v1/tpm/ak`); QUIC and MCP call it IAK (`SubOpTPM2CreateIAK`,
    `platform_tpm_iak_create`). A client author reading one transport will not
    find the other.
-7. **`pkg/api/rest/tpm_handlers.go` is unreachable production code** (§1).
+6. **`pkg/api/rest/tpm_handlers.go` is unreachable production code** (§1).
 
 ## 14. Related
 

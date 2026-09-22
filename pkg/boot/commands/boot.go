@@ -142,9 +142,18 @@ func runBoot(ctx context.Context) error {
 	// 3. If we don't mount here, CreateManager will fail with "no TPM configuration found"
 	installerLoopDev, installerMounted := tryMountInstaller(bootEFIPath)
 	bc("step03: tryMountInstaller returned mounted=%v loopDev=%q", installerMounted, installerLoopDev)
-	if installerMounted {
-		defer cleanupInstaller(installerLoopDev)
-	}
+	// The container is closed on every exit; after a confirmed seal it is
+	// closed early so it can be wiped, and installerOpen keeps the
+	// deferred cleanup from running twice.
+	installerOpen := installerMounted
+	defer func() {
+		if installerOpen {
+			if err := closeInstaller(installerLoopDev, defaultInstallerCloser()); err != nil {
+				fmt.Fprintf(os.Stderr, "[BOOT] WARNING: installer container left open: %v\n", err)
+			}
+		}
+	}()
+	wipePasses := loadSecureWipePassesFromConfig()
 
 	bc("step04: resolving PCR selection (cli pcrs=%v)", bootPCRs)
 	// Load seal-pcrs from (in priority order):
@@ -241,6 +250,40 @@ func runBoot(ctx context.Context) error {
 	if err := manager.Boot(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "[BOOT] ERROR: Boot unlock failed: %v\n", err)
 		return handleBootFailure(ctx, err, bootEmergency)
+	}
+
+	// Seal confirmation (#63): a TPM-PCR unlock while installer.luks is
+	// still on the ESP is the proof first boot deferred to this boot. The
+	// container is closed first so the wipe acts on a quiescent file.
+	if installerMounted {
+		bc("step08: seal confirmation (unlockedWith=%q)", manager.UnlockedWith())
+		if err := closeInstaller(installerLoopDev, defaultInstallerCloser()); err != nil {
+			// Still mounted or mapped: not a file to overwrite. The root is
+			// unlocked, the boot goes on, the container stays for the next
+			// TPM-PCR boot to confirm.
+			installerOpen = false
+			logger.Warn("Installer container could not be closed; installer.luks preserved", "error", err)
+			bc("step08: WARNING installer still open, seal confirmation skipped: %v", err)
+			return nil
+		}
+		installerOpen = false
+		confirmation := sealConfirmation{
+			efiPath:          bootEFIPath,
+			installerMounted: installerMounted,
+			unlockedWith:     manager.UnlockedWith(),
+			passes:           wipePasses,
+			report:           func(line string) { bc("%s", line) },
+		}
+		wiped, err := confirmation.run()
+		if err != nil {
+			// The root is unlocked and the boot continues; a container
+			// that outlived its confirmation is logged, not fatal, and
+			// the next TPM-PCR boot tries again.
+			logger.Warn("Seal confirmation did not complete; installer.luks preserved", "error", err)
+			bc("step08: WARNING seal confirmation: %v", err)
+		} else if wiped {
+			logger.Info("Seal confirmed by TPM-PCR unlock; installer.luks securely wiped")
+		}
 	}
 
 	duration := time.Since(startTime)
@@ -366,35 +409,79 @@ func tryMountInstaller(efiPath string) (string, bool) {
 	return loopDev, true
 }
 
-// cleanupInstaller unmounts and closes the installer that we mounted
-func cleanupInstaller(loopDev string) {
+// installerCloser holds the operations closeInstaller performs, so the
+// close can be tested without a mount. Production uses the syscalls and
+// go-luks2; nil fields mean those.
+type installerCloser struct {
+	unmount func(target string, flags int) error
+	lock    func(name string) error
+	detach  func(loopDev string) error
+	// wait blocks between LUKS lock attempts; the mapping can stay busy for
+	// a moment after the unmount.
+	wait func()
+	// sync flushes the filesystems before the unmount.
+	sync func()
+}
+
+// Retry policy for closing the LUKS mapping: the same shape as firstboot's
+// closeInstaller.
+const (
+	installerLockAttempts = 10
+	installerLockInterval = 500 * time.Millisecond
+)
+
+func defaultInstallerCloser() installerCloser {
+	return installerCloser{
+		unmount: syscall.Unmount,
+		lock:    luks2.Lock,
+		detach:  luks2.DetachLoopDevice,
+		wait: func() {
+			timer := time.NewTimer(installerLockInterval)
+			defer timer.Stop()
+			<-timer.C
+		},
+		sync: syscall.Sync,
+	}
+}
+
+// closeInstaller unmounts installer.luks, closes its LUKS mapping and
+// detaches its loop device, and reports whether all three happened. The
+// seal confirmation destroys the backing file only on nil: a container
+// that is still mounted or mapped is not wiped, whatever the unlock said.
+func closeInstaller(loopDev string, ops installerCloser) error {
 	fmt.Fprintf(os.Stderr, "[BOOT] Cleaning up installer mount\n")
+	ops.sync()
 
-	// Sync first
-	syscall.Sync()
-
-	// Unmount
-	if err := syscall.Unmount(installerMountPoint, 0); err != nil {
+	if err := ops.unmount(installerMountPoint, 0); err != nil {
 		fmt.Fprintf(os.Stderr, "[BOOT] WARNING: Normal unmount failed: %v, trying lazy\n", err)
-		if err := syscall.Unmount(installerMountPoint, syscall.MNT_DETACH); err != nil {
-			fmt.Fprintf(os.Stderr, "[BOOT] WARNING: Lazy unmount failed: %v\n", err)
+		if err := ops.unmount(installerMountPoint, syscall.MNT_DETACH); err != nil {
+			return &WrappedError{Msg: "unmounting " + installerMountPoint, Err: err}
 		}
 	}
 	os.Remove(installerMountPoint)
 
-	// Close LUKS
-	if err := luks2.Lock("installer"); err != nil {
-		fmt.Fprintf(os.Stderr, "[BOOT] WARNING: Failed to close LUKS: %v\n", err)
+	var lockErr error
+	for attempt := 1; attempt <= installerLockAttempts; attempt++ {
+		if lockErr = ops.lock("installer"); lockErr == nil {
+			break
+		}
+		fmt.Fprintf(os.Stderr, "[BOOT] LUKS close attempt %d/%d failed: %v\n", attempt, installerLockAttempts, lockErr)
+		if attempt < installerLockAttempts {
+			ops.wait()
+		}
+	}
+	if lockErr != nil {
+		return &WrappedError{Msg: "closing the installer LUKS mapping", Err: lockErr}
 	}
 
-	// Detach loop device
 	if loopDev != "" {
-		if err := luks2.DetachLoopDevice(loopDev); err != nil {
-			fmt.Fprintf(os.Stderr, "[BOOT] WARNING: Failed to detach loop device: %v\n", err)
+		if err := ops.detach(loopDev); err != nil {
+			return &WrappedError{Msg: "detaching " + loopDev, Err: err}
 		}
 	}
 
 	fmt.Fprintf(os.Stderr, "[BOOT] Installer cleanup complete\n")
+	return nil
 }
 
 // loadSealPCRsFromFile loads the seal-pcrs from the pcr-banks file

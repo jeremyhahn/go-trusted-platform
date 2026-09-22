@@ -107,9 +107,9 @@ func runWipe(commonFlags *cli.CommonFlags, flags *wipeFlags) error {
 		fmt.Fprintf(os.Stderr, "[WIPE] TRIM: %v\n", flags.trim)
 	}
 
-	// For regular files (like installer.luks), we need to handle differently
-	// go-luks2 Wipe expects a block device, so for files we need to use
-	// direct file operations
+	// Regular files (like installer.luks) are wiped with direct file
+	// operations so the pass pattern and the delete are this command's; the
+	// boot path's equivalent is pkg/securewipe.
 	if !isBlockDevice(info) {
 		if flags.verbose || commonFlags.Verbose {
 			fmt.Fprintf(os.Stderr, "[WIPE] Target is a regular file, using file wipe\n")

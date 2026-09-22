@@ -183,6 +183,11 @@ func (m *initrdManager) unlockWithAudit(ctx context.Context, volume *luks.Volume
 			auditLog.Attempts = append(auditLog.Attempts, attempt)
 			m.logger.Infof("Successfully unlocked with strategy: %s in %dms",
 				strategy.Name(), attempt.Duration)
+			// The winner is what the seal confirmation and the booted
+			// system act on; recorded only here, on success, for the
+			// reason recordWinner gives.
+			m.unlockedWith = strategy.Name()
+			m.chain.recordWinner(strategy.Name())
 			return nil
 		}
 

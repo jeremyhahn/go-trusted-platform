@@ -31,9 +31,10 @@
 
     The parent key seal authorization value
 
-* **\--policy**:
+* **\--pcrs**:
 
-    When true, the a PCR policy session is used to access the sealed seal
+    PCR indices to bind the sealed object to (comma-separated); omit for
+    password-only auth
 
 
 ## References

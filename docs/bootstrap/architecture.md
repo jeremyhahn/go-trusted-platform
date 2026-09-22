@@ -241,11 +241,14 @@ the logged fallback.
 6. Preserve `installer.luks` if anything in 3–4 failed, and return
    `ErrSealingFallbackUsed` so first boot re-runs next time.
 
-**On every later boot** the initrd's strategy chain records the strategy that
-actually unlocked the root at `/run/platform/unlock-strategy`
-(`initrd.UnlockStrategyMarkerPath`) — `TPM-PCR`, `Keyfile`, `TPM-NoPCR`,
-`TPM-Upgrade`, `FIDO2` or `Password`, one line, matching the strategy's
-`Name()`.
+**On every later boot** the initrd records the strategy that actually
+unlocked the root — `TPM-PCR`, `Keyfile`, `TPM-NoPCR`, `TPM-Upgrade`, `FIDO2`
+or `Password`, matching the strategy's `Name()` — in two places: in the
+manager (`Manager.UnlockedWith()`, what `platform-initrd boot` acts on
+below) and at `/run/platform/unlock-strategy` (`initrd.UnlockStrategyMarkerPath`,
+one line, for the booted system). Until #681 the marker was written only by
+`StrategyChain.Execute`, which the boot path does not use; `unlockWithAudit`
+writes it now too.
 
 The value is written **only after `Unlock` returns success**, never when a
 strategy is merely attempted, and a boot that unlocks by no strategy leaves no
@@ -255,11 +258,25 @@ uses to decide the TPM-PCR path has been *proven* before wiping
 that worked would authorise destroying the keyfile on a boot that had just
 needed it. Absence is the safe state — no marker, no wipe.
 
-`installer.luks` still remains on the ESP after this phase. Wiping it is the
-second half of the lifecycle and is **not yet implemented** (#63); until it
-lands, the container's documented constant password means anyone with the disk
-can recover the plain LUKS key, so the TPM seal provides no confidentiality at
-rest.
+**Seal confirmation (the second half, #63 / #681).** `installer.luks` remains
+on the ESP after this phase. The next boot that opens the root **with
+`TPM-PCR`** while the container is still there is the proof first boot
+deferred, and `platform-initrd boot` acts on it in the same process, before
+`switch_root`: it closes the container it mounted — unmount (lazily if
+busy), LUKS lock with retries, loop detach — and only when all three
+completed destroys the file with `securewipe.File` (`secure-wipe-passes`
+from the platform config, NIST single pass by default; each pass fsynced,
+the unlink fsynced through the directory, then FITRIM), logging `Seal
+confirmed by TPM-PCR unlock` and `installer.luks securely wiped`. A boot that
+unlocked by any other strategy preserves the container and says so
+(`preserved until a TPM-PCR unlock proves the seal`); a container this
+process did not mount is not its to destroy; a container that will not close
+is not a file to overwrite (`installer still open, seal confirmation
+skipped`); a wipe failure is logged and the boot continues. In every
+preserved case the next TPM-PCR boot tries again. Step 4 above also
+kills root keyslot 0 (the install-time passphrase) as soon as the sealed key
+is written, so from then on only the sealed key (slot 1) and the recovery
+passphrase (slot 2, per its strategy) open the root.
 
 ### Phase 4 · Seed
 

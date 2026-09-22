@@ -78,9 +78,14 @@ func NewTPMPCRStrategy(platform *Platform, logger *logging.Logger) *TPMPCRStrate
 	}
 }
 
+// StrategyNameTPMPCR is the TPM-PCR strategy's Name(): the only strategy
+// whose success proves the firstboot seal, which is what platform-initrd
+// tests for before it destroys the installer container.
+const StrategyNameTPMPCR = "TPM-PCR"
+
 // Name returns the strategy name
 func (s *TPMPCRStrategy) Name() string {
-	return "TPM-PCR"
+	return StrategyNameTPMPCR
 }
 
 // Priority returns the execution priority

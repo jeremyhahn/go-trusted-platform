@@ -400,6 +400,12 @@ configuration the command refuses to run rather than sealing against a guess.
 Resolution order is `--pcrs`, then `seal-pcrs` / `tpm.seal-pcrs` /
 `installer.seal-pcrs` in the first configuration file found.
 
+`secure-wipe-passes` (top level, same files) sets how many overwrite passes
+destroy `installer.luks` when a `TPM-PCR` unlock has proven the seal: 1 (the
+default, NIST SP 800-88: one random pass plus TRIM), 3 (DoD 5220.22-M) or 7
+(DoD ECE). It is read by `platform-initrd boot` before the container is
+closed, and by firstboot for the failed-seal path.
+
 **`--tpm-only` removes the password keyslot.** After that the disk unlocks only
 via the TPM. If the PCR policy stops matching — firmware update, bootloader
 change — the recovery key is the only way in.

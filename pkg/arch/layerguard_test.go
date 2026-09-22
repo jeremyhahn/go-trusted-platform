@@ -35,6 +35,7 @@
 package arch_test
 
 import (
+	"errors"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -156,6 +157,16 @@ func collectImports(t *testing.T, root string) []ForbiddenImportError {
 
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			// A directory this user cannot open holds nothing this module
+			// compiles, so it cannot hide an import. The devcontainer TPM
+			// suite's platformd leaves a root-owned tpm2-keys/ under the
+			// checkout (gitignored; go-xkms's node barrier derives it from
+			// an empty storage path); without this the guard failed on
+			// every checkout that had run that suite.
+			if d != nil && d.IsDir() && errors.Is(err, fs.ErrPermission) {
+				t.Logf("skipping unreadable directory %s: %v", path, err)
+				return filepath.SkipDir
+			}
 			return err
 		}
 		if d.IsDir() {

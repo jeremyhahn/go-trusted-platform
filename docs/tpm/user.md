@@ -218,7 +218,8 @@ terminal scrollback or a CI log.
 **`--password` and `--parent-password` are secrets on your command line.** A
 shell with history will record them. Pass them from the environment.
 
-`--policy` on `seal` is accepted and does nothing (see [cli.md](cli.md) §6).
+PCR binding is `--pcrs` (with `--pcr-bank`); there is no separate policy
+switch. `--policy` was accepted and ignored until #681 removed it.
 
 ---
 

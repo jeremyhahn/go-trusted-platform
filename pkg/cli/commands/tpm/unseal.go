@@ -125,9 +125,11 @@ func runUnsealWithClient(base TPMBaseCommandInterface, opts *unsealOptions) erro
 	printer := base.Printer()
 	flags := base.Flags()
 
+	// The same shape as seal's JSON: callers key on "success".
 	output := map[string]interface{}{
-		"cn":   opts.CN,
-		"data": string(resp.Data),
+		"success": resp.Status.Success,
+		"cn":      opts.CN,
+		"data":    string(resp.Data),
 	}
 
 	switch flags.OutputFormat {

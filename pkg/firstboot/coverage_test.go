@@ -465,66 +465,6 @@ func TestClearBytes_EmptySlice(t *testing.T) {
 	}
 }
 
-// TestWipeWithPattern verifies file wiping with a pattern.
-func TestWipeWithPattern(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "testfile")
-
-	original := []byte("secret data that must be wiped")
-	if err := os.WriteFile(path, original, 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	if err := wipeWithPattern(path, 0xFF); err != nil {
-		t.Fatalf("wipeWithPattern failed: %v", err)
-	}
-
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("failed to read wiped file: %v", err)
-	}
-	if len(content) != len(original) {
-		t.Errorf("expected file size %d, got %d", len(original), len(content))
-	}
-	for i, b := range content {
-		if b != 0xFF {
-			t.Errorf("expected byte %d to be 0xFF, got 0x%02x", i, b)
-		}
-	}
-}
-
-// TestWipeWithPattern_NonexistentFile verifies error on missing file.
-func TestWipeWithPattern_NonexistentFile(t *testing.T) {
-	err := wipeWithPattern("/nonexistent/path/file", 0x00)
-	if err == nil {
-		t.Error("expected error for nonexistent file")
-	}
-}
-
-// TestWipeWithPattern_ZeroPattern verifies wiping with zero pattern.
-func TestWipeWithPattern_ZeroPattern(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "testfile")
-
-	if err := os.WriteFile(path, []byte("hello world"), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	if err := wipeWithPattern(path, 0x00); err != nil {
-		t.Fatalf("wipeWithPattern failed: %v", err)
-	}
-
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("failed to read wiped file: %v", err)
-	}
-	for i, b := range content {
-		if b != 0x00 {
-			t.Errorf("expected byte %d to be 0x00, got 0x%02x", i, b)
-		}
-	}
-}
-
 // TestSecureWipeFile_NonexistentFile verifies error for missing file.
 func TestSecureWipeFile_NonexistentFile(t *testing.T) {
 	err := secureWipeFile("/nonexistent/path/file", 1)

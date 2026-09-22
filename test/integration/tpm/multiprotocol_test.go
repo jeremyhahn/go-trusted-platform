@@ -293,10 +293,8 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd TPMCommands, prefix s
 
 		// Seal the secret
 		sealOpts := SealOptions{
-			CN:           cn,
-			Data:         secret,
-			Policy:       true,
-			ParentPolicy: true,
+			CN:   cn,
+			Data: secret,
 		}
 
 		sealResult, err := cmd.Seal(testCtx, sealOpts)
@@ -306,9 +304,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd TPMCommands, prefix s
 
 		// Unseal the secret
 		unsealOpts := UnsealOptions{
-			CN:           cn,
-			Policy:       true,
-			ParentPolicy: true,
+			CN: cn,
 		}
 
 		unsealResult, err := cmd.Unseal(testCtx, unsealOpts)
@@ -325,11 +321,9 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd TPMCommands, prefix s
 
 		// Seal with password
 		sealOpts := SealOptions{
-			CN:           cn,
-			Data:         secret,
-			Password:     password,
-			Policy:       false,
-			ParentPolicy: true,
+			CN:       cn,
+			Data:     secret,
+			Password: password,
 		}
 
 		sealResult, err := cmd.Seal(testCtx, sealOpts)
@@ -338,10 +332,8 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd TPMCommands, prefix s
 
 		// Unseal with password
 		unsealOpts := UnsealOptions{
-			CN:           cn,
-			Password:     password,
-			Policy:       false,
-			ParentPolicy: true,
+			CN:       cn,
+			Password: password,
 		}
 
 		unsealResult, err := cmd.Unseal(testCtx, unsealOpts)

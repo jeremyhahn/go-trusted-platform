@@ -167,8 +167,8 @@ echo -n "password123" | platformctl tpm seal db-password
 # Seal with password protection
 platformctl tpm seal my-secret "data" --password "keypass"
 
-# Seal without PCR policy (password only)
-platformctl tpm seal my-secret "data" --policy=false --password "required"
+# Seal with password auth only (no PCR binding: omit --pcrs)
+platformctl tpm seal my-secret "data" --password "required"
 
 # Seal to specific parent
 platformctl tpm seal my-secret "data" --parent 0x81000002

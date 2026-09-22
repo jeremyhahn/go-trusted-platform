@@ -28,7 +28,15 @@ type initrdManager struct {
 	platform *Platform
 	chain    *StrategyChain
 	logger   *logging.Logger
+
+	// unlockedWith is the Name() of the strategy whose Unlock succeeded
+	// in the last Boot; empty until then.
+	unlockedWith string
 }
+
+// UnlockedWith reports which strategy unlocked the root in the last Boot,
+// or "" when none has.
+func (m *initrdManager) UnlockedWith() string { return m.unlockedWith }
 
 // NewManager creates a new initrd manager
 func NewManager(platform *Platform, logger *logging.Logger) (Manager, error) {

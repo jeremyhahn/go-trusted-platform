@@ -38,18 +38,32 @@ var firstBootMilestones = []string{
 }
 
 // secondBootMilestones prove the second boot unseals against the PCRs
-// the first boot sealed to, without any fallback: TPM-PCR is attempt 1
-// and it succeeds. installer.luks is still on the ESP at this point by
-// design — the key is preserved pending the seal-confirmation handshake,
-// and this unseal is the confirmation — so FIRSTBOOT mode is detected
-// again; what must not happen is the keyfile being the strategy that
-// unlocked.
+// the first boot sealed to, without any fallback — TPM-PCR is attempt 1
+// and it succeeds — and that this proof consumes the seal-confirmation
+// handshake: installer.luks was still on the ESP (FIRSTBOOT mode is
+// detected once more), and platform-initrd wipes it before switch_root.
+// What must not happen is the keyfile being the strategy that unlocked.
 var secondBootMilestones = []string{
 	"U-Boot 20",
 	"Booting bootflow",
 	"Linux version",
+	"Detected FIRSTBOOT mode",
 	"Successfully unlocked with strategy: TPM-PCR",
 	"Attempt 1: TPM-PCR - SUCCESS",
+	"Boot sequence completed",
+	"Seal confirmed by TPM-PCR unlock",
+	"installer.luks securely wiped",
+	"login:", // the system is up and the ESP quiescent before the disk is reused
+}
+
+// thirdBootMilestones prove the lifecycle is complete: no installer
+// container, so no FIRSTBOOT mode, and the root still unlocks with
+// TPM-PCR from the seal alone.
+var thirdBootMilestones = []string{
+	"U-Boot 20",
+	"Linux version",
+	"installer.luks not present",
+	"Successfully unlocked with strategy: TPM-PCR",
 	"Boot sequence completed",
 }
 
@@ -129,6 +143,36 @@ func TestFirstBoot(t *testing.T) {
 		found, err := harness.SerialContains(secondLog, "Successfully unlocked with strategy: Keyfile")
 		require.NoError(t, err)
 		assert.False(t, found, "the second boot must not fall back to the installer keyfile")
+	})
+
+	t.Run("third boot has no installer container and still unseals", func(t *testing.T) {
+		if t.Failed() {
+			t.Fatal("the second boot did not complete; the third proves nothing")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), secondBootTimeout)
+		defer cancel()
+		thirdLog := filepath.Join(workDir, "boot3.log")
+		result, err := pkgdiskimage.Boot(ctx, pkgdiskimage.BootOptions{
+			Image:     filepath.Join(workDir, "disk.img"),
+			InPlace:   true,
+			Firmware:  in.uboot,
+			WorkDir:   workDir,
+			SerialLog: thirdLog,
+			Expect:    thirdBootMilestones[len(thirdBootMilestones)-1],
+			Logger:    logger,
+		})
+		if err != nil {
+			t.Fatalf("third boot: %v\n%s", err, missingMilestone(thirdLog, thirdBootMilestones))
+		}
+		require.True(t, result.Expected)
+		for _, m := range thirdBootMilestones {
+			found, err := harness.SerialContains(thirdLog, m)
+			require.NoError(t, err)
+			assert.True(t, found, "milestone %q missing from the third boot", m)
+		}
+		found, err := harness.SerialContains(thirdLog, "Detected FIRSTBOOT mode")
+		require.NoError(t, err)
+		assert.False(t, found, "installer.luks must be gone after the confirmed seal")
 	})
 }
 

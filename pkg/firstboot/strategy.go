@@ -18,6 +18,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/securewipe"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -273,25 +275,24 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Securityfs already mounted (tpm0 exists)\n")
 	}
 
-	// Check TPM event log availability for attestation
-	// Wait for the file to have content (kernel may need time to process ACPI event log)
+	// Check TPM event log availability for attestation. Polling: the loop
+	// re-reads every pass, so it stops as soon as the kernel has populated
+	// the log rather than after a fixed number of whole seconds regardless.
 	eventLogPath := filepath.Join(securityfsPath, "tpm0", "binary_bios_measurements")
-	var eventLogSize int64
+	var eventLogSize int
 
-	// Polling: the loop re-reads the file's size every pass, so it stops as soon
-	// as the kernel has populated it rather than after a fixed number of whole
-	// seconds regardless.
 	eventLogTicker := time.NewTicker(time.Second)
 	defer eventLogTicker.Stop()
 
 	for i := 0; i < 10; i++ {
-		if fileInfo, err := os.Stat(eventLogPath); err == nil {
-			eventLogSize = fileInfo.Size()
-			if eventLogSize > 0 {
-				fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] TPM event log available: %s (%d bytes)\n", eventLogPath, eventLogSize)
-				break
-			}
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] TPM event log file exists but empty (%d/10)...\n", i+1)
+		n, err := tpmEventLogAvailable(eventLogPath)
+		if err == nil && n > 0 {
+			eventLogSize = n
+			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] TPM event log available: %s (first read: %d bytes)\n", eventLogPath, n)
+			break
+		}
+		if err == nil {
+			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] TPM event log file exists but reads empty (%d/10)...\n", i+1)
 		} else {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Waiting for TPM event log (%d/10): %v\n", i+1, err)
 		}
@@ -375,10 +376,15 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 			sealRetryReason = fmt.Sprintf("sealKeyToTPM: %v", err)
 		} else {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] LUKS key sealed to TPM with PCR policy\n")
-			// IMPORTANT: do NOT set sealingSucceeded=true yet. Seal must
-			// be validated by a subsequent unseal before we wipe. See
-			// next-boot validation TODO.
+			// IMPORTANT: do NOT set sealingSucceeded=true yet. The seal is
+			// proven by the next boot's TPM-PCR unlock, and platform-initrd
+			// wipes the container then (pkg/boot/commands: confirmSeal).
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] NOTE: installer container preserved pending next-boot unseal validation\n")
+			// The install-time passphrase (keyslot 0) has done its job:
+			// slot 1 holds the sealed key and slot 2 the recovery key.
+			// Leaving it would keep the root openable with the value the
+			// installer config carried. Idempotent across seal retries.
+			killInstallerKeyslot(volume.DevicePath, luksKey)
 		}
 	}
 
@@ -1543,8 +1549,9 @@ func (s *FirstbootSealStrategy) getSecureWipePasses() int {
 //	slot 2 — recovery passphrase (disposition controlled by the
 //	         recovery-key-strategy field of TPMSealConfig)
 const (
-	luksSlotTPMKey   = 1
-	luksSlotRecovery = 2
+	luksSlotInstaller = 0
+	luksSlotTPMKey    = 1
+	luksSlotRecovery  = 2
 )
 
 // firstbootHandoffDir is a tmpfs directory in which platform-initrd stages
@@ -1892,86 +1899,54 @@ func copyDirRecursive(src, dest string) error {
 	})
 }
 
-// secureWipeFile overwrites a file before deleting
-// passes: 1 = NIST SP 800-88 (SSD), 3 = DoD 5220.22-M, 7 = DoD ECE
-func secureWipeFile(path string, passes int) error {
-	if passes <= 0 {
-		passes = 1 // Default to NIST single-pass
+// killInstallerKeyslot removes the install-time passphrase from the root
+// volume once the sealed key is written. go-luks2 reports an already
+// removed slot as "keyslot 0 does not exist", which is the state this
+// wants, so a retry boot after a partial first boot is not an error.
+func killInstallerKeyslot(devicePath string, luksKey []byte) {
+	err := luks2.KillSlot(devicePath, luksKey, luksSlotInstaller)
+	switch {
+	case err == nil:
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Installer keyslot %d killed — the install-time passphrase no longer opens the root\n", luksSlotInstaller)
+	case strings.Contains(err.Error(), "does not exist"):
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Installer keyslot %d already removed\n", luksSlotInstaller)
+	default:
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: could not kill installer keyslot %d: %v\n", luksSlotInstaller, err)
 	}
-
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Secure wipe: %d passes\n", passes)
-
-	// For DoD 5220.22-M (3+ passes), do pattern-based wipes first
-	if passes >= 3 {
-		// Pass 1: All zeros
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Pass 1/%d: zeros (0x00)\n", passes)
-		if err := luks2.Wipe(luks2.WipeOptions{
-			Device: path, Passes: 1, Random: false, HeaderOnly: false, Trim: false,
-		}); err != nil {
-			return &WrappedError{Msg: "zeros pass failed", Err: err}
-		}
-
-		// Pass 2: All ones
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Pass 2/%d: ones (0xFF)\n", passes)
-		if err := wipeWithPattern(path, 0xFF); err != nil {
-			return &WrappedError{Msg: "ones pass failed", Err: err}
-		}
-
-		// Additional passes for DoD ECE (7-pass)
-		for i := 3; i < passes; i++ {
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Pass %d/%d: random\n", i, passes)
-			if err := luks2.Wipe(luks2.WipeOptions{
-				Device: path, Passes: 1, Random: true, HeaderOnly: false, Trim: false,
-			}); err != nil {
-				return &WrappedError{Msg: fmt.Sprintf("random pass %d failed", i), Err: err}
-			}
-		}
-	}
-
-	// Final pass: random + TRIM
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Final pass %d/%d: random + TRIM\n", passes, passes)
-	if err := luks2.Wipe(luks2.WipeOptions{
-		Device: path, Passes: 1, Random: true, HeaderOnly: false, Trim: true,
-	}); err != nil {
-		return &WrappedError{Msg: "final wipe failed", Err: err}
-	}
-
-	return os.Remove(path)
 }
 
-// wipeWithPattern overwrites a file with a specific byte pattern
-func wipeWithPattern(path string, pattern byte) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
+// tpmEventLogProbeSize bounds the read tpmEventLogAvailable makes: enough
+// to prove the log has content, not the whole log.
+const tpmEventLogProbeSize = 4096
 
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+// tpmEventLogAvailable reports how many bytes a bounded read of the TPM
+// event log returns. binary_bios_measurements under securityfs is a
+// seq_file, so its stat size is always zero whatever it holds — the
+// earlier size check reported "exists but empty" for every populated log,
+// on x86 and on the Raspberry Pi stand-in alike — and a read is the only
+// test. The kernel creates the file only when it found a log (the EFI TCG2
+// table or the ACPI TPM2 table), so a missing file is the "no log" case
+// and is returned as the open error.
+func tpmEventLogAvailable(path string) (int, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer f.Close()
-
-	// Write in 1MB chunks
-	chunkSize := 1024 * 1024
-	chunk := make([]byte, chunkSize)
-	for i := range chunk {
-		chunk[i] = pattern
+	buf := make([]byte, tpmEventLogProbeSize)
+	n, err := io.ReadFull(f, buf)
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		err = nil
 	}
+	return n, err
+}
 
-	remaining := info.Size()
-	for remaining > 0 {
-		writeSize := int64(chunkSize)
-		if remaining < writeSize {
-			writeSize = remaining
-		}
-		if _, err := f.Write(chunk[:writeSize]); err != nil {
-			return err
-		}
-		remaining -= writeSize
-	}
-
-	return f.Sync()
+// secureWipeFile overwrites a file before deleting it (securewipe.File
+// with the firstboot console as the reporter).
+func secureWipeFile(path string, passes int) error {
+	return securewipe.File(path, passes, func(line string) {
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] %s\n", line)
+	})
 }
 
 // clearBytes securely zeros a byte slice

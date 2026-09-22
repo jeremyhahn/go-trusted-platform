@@ -163,7 +163,10 @@ A human-readable recovery key in dashed hex format is generated and written to `
 │     ├── Copy installer contents to root filesystem              │
 │     └── Write recovery key to /root/luks-recovery.txt           │
 │                                                                 │
-│  8. SECURE WIPE installer.luks (overwrite + TRIM)               │
+│  8. Kill root keyslot 0; PRESERVE installer.luks pending proof │
+│                                                                 │
+│  Next boot, TPM-PCR unlock (platform-initrd boot):              │
+│  9. SECURE WIPE installer.luks (overwrite + TRIM)               │
 │     └── Defeats forensic recovery from SSD spare blocks         │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘

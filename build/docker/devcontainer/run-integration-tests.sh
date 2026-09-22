@@ -303,9 +303,18 @@ build_binaries() {
 
     # Pre-compile all test packages to cache build artifacts.
     # This prevents 'go test' from spending its timeout on compilation.
+    #
+    # `go vet`, not `go test -count=0`: -count=0 still runs every TestMain,
+    # and test/integration/bmc's TestMain fails hard when INTEGRATION_TEST=1
+    # is set before the mTLS trio is (which is exactly this point of the
+    # run), so the old step printed a bare FAIL through `tail -5` and
+    # "continued anyway". vet type-checks and compiles the test packages
+    # under the same tags without executing anything, so a failure here is a
+    # real compile error and stops the run with the file:line on screen.
     echo "Pre-compiling test packages..."
-    if ! go test -tags "${BUILD_TAGS}" -count=0 ./test/integration/... 2>&1 | tail -5; then
-        echo "WARNING: some test packages failed to pre-compile (continuing anyway)"
+    if ! go vet -tags "${BUILD_TAGS}" ./test/integration/...; then
+        echo "ERROR: integration test packages do not compile (see above)"
+        exit 1
     fi
     echo "Test packages pre-compiled"
 

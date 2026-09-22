@@ -494,9 +494,9 @@ func TestNewSealCommand(t *testing.T) {
 	require.NotNil(t, overwriteFlag)
 	assert.Equal(t, "false", overwriteFlag.DefValue)
 
-	policyFlag := cmd.Flag("policy")
-	require.NotNil(t, policyFlag)
-	assert.Equal(t, "true", policyFlag.DefValue)
+	// --policy was accepted and ignored (no request carried it); it is gone
+	// rather than wired, PCR binding being --pcrs (#681).
+	assert.Nil(t, cmd.Flag("policy"), "the dead --policy flag must not come back")
 }
 
 func TestNewUnsealCommand(t *testing.T) {

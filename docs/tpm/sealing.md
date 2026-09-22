@@ -86,8 +86,8 @@ platformctl tpm seal my-secret "data" --password "keypass"
 # Seal from stdin
 echo "sensitive-data" | platformctl tpm seal my-secret
 
-# Seal with PCR policy disabled (password only)
-platformctl tpm seal my-secret "data" --policy=false
+# Seal with password auth only (no PCR binding: omit --pcrs)
+platformctl tpm seal --cn my-secret --data "data" --password "$PW"
 ```
 
 ### Seal Options
@@ -96,9 +96,9 @@ platformctl tpm seal my-secret "data" --policy=false
 |-------------------|------------------------------------------------|--------------|
 | `--parent`        | Parent key handle (SRK)                        | 0x81000002   |
 | `--parent-password`| Parent key authorization                      | (empty)      |
-| `--parent-policy` | Use PCR policy for parent                      | true         |
 | `--password`      | Sealed object password                         | (empty)      |
-| `--policy`        | Attach platform PCR policy                     | true         |
+| `--pcrs`          | PCR indices to bind the sealed object to       | (none)       |
+| `--pcr-bank`      | PCR bank for `--pcrs`                          | sha256       |
 | `--overwrite`     | Overwrite existing sealed object               | false        |
 
 ### gRPC Seal Request

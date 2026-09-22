@@ -195,13 +195,14 @@ type SRKDeleteResult struct {
 // =============================================================================
 
 // SealOptions contains options for sealing data.
+// PCR binding is not an option here because no transport request carries a
+// policy field: `platformctl tpm seal --pcrs` is the only way to bind, and
+// the suite exercises password auth on the SSRK-parented object instead.
 type SealOptions struct {
 	CN             string
 	Data           []byte
 	Password       string
 	ParentPassword string
-	Policy         bool
-	ParentPolicy   bool
 }
 
 // SealResult contains the result of a seal operation.
@@ -215,8 +216,6 @@ type UnsealOptions struct {
 	CN             string
 	Password       string
 	ParentPassword string
-	Policy         bool
-	ParentPolicy   bool
 }
 
 // UnsealResult contains the result of an unseal operation.

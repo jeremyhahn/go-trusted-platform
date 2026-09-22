@@ -292,7 +292,7 @@ layout after a successful first production boot:
 
 | Slot | Contents | Lifetime |
 |---|---|---|
-| 0 | installer passphrase | removed during installer cleanup |
+| 0 | installer passphrase | killed by firstboot as soon as the sealed key is written (`killInstallerKeyslot`) |
 | 1 | TPM-sealed LUKS key | steady-state unseal path |
 | 2 | recovery passphrase | kept if `escrow`, removed if `destroy` |
 

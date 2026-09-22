@@ -224,9 +224,15 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
     key, slot 2 = recovery passphrase. `pkg/firstboot/strategy.go` defines
     `luksSlotTPMKey = 1` and `luksSlotRecovery = 2`; code that adds or removes
     slots must use them.
-13. **`installer.luks` is wiped only if sealing succeeded.** On a failed seal
-    the container is preserved so the boot can be retried — which means a
-    half-provisioned node is still holding its LUKS key on the ESP.
+13. **`installer.luks` is wiped only once the seal is proven.** First boot
+    never wipes it: the seal it just wrote has not unsealed anything yet.
+    The next boot that unlocks the root with `TPM-PCR` while the container
+    is still on the ESP wipes it from `platform-initrd boot`
+    (`pkg/boot/commands/sealconfirm.go`, `securewipe.File`); a keyfile
+    unlock or a failed seal preserves it so the retry has its key — which
+    means a half-provisioned node is still holding its LUKS key on the ESP
+    until then. Root keyslot 0 (the install-time passphrase) is killed the
+    moment the sealed key is written (`killInstallerKeyslot`).
 14. **PK is written last** during Secure Boot enforcement, and enforcement only
     proceeds if the signed UKI verifies against the db certificate and the
     firmware is in Setup Mode.
@@ -363,7 +369,7 @@ either way.
 | `ExecutePostInstall` fails | **Install aborts.** Operator access is not optional. |
 | `SecureBootConfig.Validate` | Rejects a missing `db.key-uri`, a missing `pk`/`kek` URI when `enforce` is set, and any URI scheme that is not `kms://` or `file://`. Defaults `resign-mode` to `remote`. |
 | `enforceSecureBoot` | Refuses to enrol unless the signed UKI verifies against the db cert **and** firmware is in Setup Mode. Fails open into "boots unsigned", never into "bricked". |
-| `installer.luks` wipe | Skipped when sealing failed, so the retry path survives. Fails **open** on purpose — and that is the residual risk in §6 of [architecture.md](architecture.md). |
+| `installer.luks` wipe | Deferred to the first `TPM-PCR` unlock (`platform-initrd boot`); skipped after a keyfile unlock or a failed seal, so the retry path survives. Fails **open** on purpose — and that is the residual risk in §6 of [architecture.md](architecture.md). |
 | `initrd.Config.Validate` | Empty `PCRSelection` is `ErrInvalidConfig`. No default PCR set is ever assumed. |
 | `StrategyChain.Execute` | Returns `ErrUnlockFailed` rather than falling through to an unencrypted boot. |
 | `ExecuteInstall` | Aborts on the first strategy install failure. |
@@ -518,7 +524,7 @@ ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 |---|---|---|
 | `/boot/efi/EFI/BOOT/BOOTX64.EFI` (`BOOTAA64.EFI` on aarch64) | `uki.BootFileName(arch)` | permanent (the UKI) |
 | `/boot/efi/tpm2/` | `EFITPMDir` | permanent |
-| `/boot/efi/tpm2/installer.luks` | `EFIInstallerFile`, `strategyInstallerContainerFile` | **first boot only**, then securely wiped |
+| `/boot/efi/tpm2/installer.luks` | `EFIInstallerFile`, `strategyInstallerContainerFile` | first boot, then until the **first `TPM-PCR` unlock**, which securely wipes it |
 | `/boot/efi/tpm2/seal-platform.pub` | `EFISealPlatformPub`, `strategySealPub` | permanent |
 | `/boot/efi/tpm2/seal-platform.priv` | `EFISealPlatformPriv`, `strategySealPriv` | permanent |
 | `/boot/efi/tpm2/seal-upgrade.pub` / `.priv` | `EFISealUpgradePub` / `Priv` | one boot — deleted immediately on use |

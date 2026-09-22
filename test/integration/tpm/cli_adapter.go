@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
+	"path/filepath"
 	"time"
 )
 
@@ -30,13 +30,72 @@ import (
 // =============================================================================
 
 // CLIAdapter implements TPMCommands using platformctl CLI commands.
+//
+// platformctl finds the daemon through its own config, not the suite's
+// environment, so Setup writes a temporary context naming the test
+// daemon's socket and gRPC address (the same arrangement as the CA suite's
+// adapter). Without it every CLI subtest dialled /run/platformd.sock,
+// which does not exist in the devcontainer, and the CLI transport was
+// reported unreachable on every run (#681).
 type CLIAdapter struct {
-	binaryPath string
+	binaryPath   string
+	socketPath   string
+	grpcEndpoint string
+	configDir    string
+	configPath   string
 }
 
 // NewCLIAdapter creates a new CLI protocol adapter instance.
 func NewCLIAdapter() *CLIAdapter {
 	return &CLIAdapter{}
+}
+
+// resolveCLISocketPath resolves the Unix socket path the daemon listens on:
+// PLATFORMD_SOCKET, then PLATFORM_UNIX_SOCKET (what the devcontainer runner
+// exports), then PLATFORM_SOCKET_PATH, then the default.
+func resolveCLISocketPath() string {
+	for _, name := range []string{"PLATFORMD_SOCKET", EnvPlatformUnixSocket, "PLATFORM_SOCKET_PATH"} {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return GetServiceEndpoints().PlatformUnix
+}
+
+// ErrCLIConfigCreationFailed indicates the temporary platformctl config
+// could not be written.
+type ErrCLIConfigCreationFailed struct {
+	Cause error
+}
+
+func (e ErrCLIConfigCreationFailed) Error() string {
+	return fmt.Sprintf("failed to create CLI test config: %v", e.Cause)
+}
+
+func (e ErrCLIConfigCreationFailed) Unwrap() error { return e.Cause }
+
+// createTestConfig writes the platformctl context that points at the test
+// daemon.
+func (c *CLIAdapter) createTestConfig() error {
+	tmpDir, err := os.MkdirTemp("", "platformctl-tpm-test-*")
+	if err != nil {
+		return ErrCLIConfigCreationFailed{Cause: err}
+	}
+	c.configDir = tmpDir
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := fmt.Sprintf(`current_context: integration-test
+contexts:
+  - name: integration-test
+    type: local
+    local:
+      socket_path: %s
+      grpc_addr: %s
+`, c.socketPath, c.grpcEndpoint)
+	if err := os.WriteFile(configPath, []byte(configContent), 0o600); err != nil {
+		return ErrCLIConfigCreationFailed{Cause: err}
+	}
+	c.configPath = configPath
+	return nil
 }
 
 // Name returns the protocol adapter identifier.
@@ -59,6 +118,17 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 
 	c.binaryPath = binaryPath
 
+	// The env is read here, not in NewCLIAdapter, because TestMain sets it
+	// after the adapters are constructed.
+	c.socketPath = resolveCLISocketPath()
+	c.grpcEndpoint = os.Getenv(EnvPlatformGRPCEndpoint)
+	if c.grpcEndpoint == "" {
+		c.grpcEndpoint = GetServiceEndpoints().PlatformGRPC
+	}
+	if err := c.createTestConfig(); err != nil {
+		return ErrConnectionFailed{Protocol: "CLI", Endpoint: binaryPath, Err: err}
+	}
+
 	// Verify connectivity by running a simple command
 	_, err = c.runCommand(ctx, "tpm", "info", "-o", "json")
 	if err != nil {
@@ -68,14 +138,24 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 	return nil
 }
 
-// Teardown performs any cleanup needed by the CLI adapter.
+// Teardown removes the temporary platformctl config.
 func (c *CLIAdapter) Teardown() error {
+	if c.configDir != "" {
+		os.RemoveAll(c.configDir)
+		c.configDir, c.configPath = "", ""
+	}
 	return nil
 }
 
-// runCommand executes a platformctl command and returns the output.
+// runCommand executes a platformctl command against the test daemon's
+// context and returns the output.
 func (c *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, c.binaryPath, args...)
+	var fullArgs []string
+	if c.configPath != "" {
+		fullArgs = append(fullArgs, "--config", c.configPath, "--context", "integration-test")
+	}
+	fullArgs = append(fullArgs, args...)
+	cmd := exec.CommandContext(ctx, c.binaryPath, fullArgs...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return output, fmt.Errorf("command failed: %s: %w", string(output), err)
@@ -465,31 +545,21 @@ func (c *CLIAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, e
 	if opts.ParentPassword != "" {
 		args = append(args, "--parent-password", opts.ParentPassword)
 	}
-	args = append(args, fmt.Sprintf("--policy=%t", opts.Policy))
-	args = append(args, fmt.Sprintf("--parent-policy=%t", opts.ParentPolicy))
 
+	// A failing command is a failed seal and non-JSON output is a broken
+	// CLI; neither is success. Treating both as success is what hid the
+	// gRPC Seal response's missing Status for months (#681).
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
-		// Seal may return empty output on success
-		if len(output) == 0 || strings.TrimSpace(string(output)) == "" {
-			return &SealResult{Success: true}, nil
-		}
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "tpm seal", Err: err}
-	}
-
-	// If output is empty or whitespace, consider it a success
-	if len(output) == 0 || strings.TrimSpace(string(output)) == "" {
-		return &SealResult{Success: true}, nil
 	}
 
 	var resp struct {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 	}
-
 	if err := json.Unmarshal(output, &resp); err != nil {
-		// If we can't parse JSON but command succeeded, assume success
-		return &SealResult{Success: true}, nil
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "tpm seal", Err: err}
 	}
 
 	return &SealResult{
@@ -509,25 +579,19 @@ func (c *CLIAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRes
 	if opts.ParentPassword != "" {
 		args = append(args, "--parent-password", opts.ParentPassword)
 	}
-	args = append(args, fmt.Sprintf("--policy=%t", opts.Policy))
-	args = append(args, fmt.Sprintf("--parent-policy=%t", opts.ParentPolicy))
 
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "tpm unseal", Err: err}
 	}
 
+	// `-o json` was requested; anything else is a broken CLI, not data.
 	var resp struct {
 		Success bool   `json:"success"`
 		Data    string `json:"data"`
 	}
-
 	if err := json.Unmarshal(output, &resp); err != nil {
-		// If not JSON, the output might be the raw unsealed data
-		return &UnsealResult{
-			Success: true,
-			Data:    output,
-		}, nil
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "tpm unseal", Err: err}
 	}
 
 	return &UnsealResult{

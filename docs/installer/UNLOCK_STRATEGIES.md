@@ -62,7 +62,10 @@ Handles first boot after installation. Opens encrypted installer container, prov
 7. Set markers for post-switch_root:
    - Copy installer contents to root filesystem
    - Write recovery key to `/root/luks-recovery.txt`
-8. **SECURE WIPE installer.luks** (overwrite + TRIM)
+8. Kill root keyslot 0 (the install-time passphrase); **preserve installer.luks**
+   pending proof of the seal
+9. **Next boot, on a `TPM-PCR` unlock: SECURE WIPE installer.luks** (overwrite
+   + TRIM, from `platform-initrd boot` before `switch_root`)
 
 ### Security Notes
 - All provisioning happens inside encrypted container - maximum security
@@ -243,8 +246,13 @@ m.RegisterStrategy(NewMyCustomStrategy(m.platform, m.logger))
 ### TPM-PCR Fails After BIOS Update
 PCR values changed. Use Password strategy with LUKS passphrase, then re-seal after boot.
 
-### Installer Still Exists After First Boot
-If `installer.luks` still exists after first boot, secure wipe failed. Manually wipe:
+### Installer Still Exists After the Second Boot
+`installer.luks` is expected after the first boot: it is wiped by the next
+boot that unlocks with `TPM-PCR` (the serial log says `Seal confirmed by
+TPM-PCR unlock`). If it still exists after that, the second boot unlocked some
+other way (`Successfully unlocked with strategy: Keyfile` — the seal is not
+working; fix that first) or the wipe failed (`WARNING seal confirmation`).
+Manually wipe:
 ```bash
 # Mount EFI
 mount /boot/efi

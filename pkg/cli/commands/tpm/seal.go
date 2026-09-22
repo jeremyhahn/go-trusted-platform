@@ -27,7 +27,7 @@ func newSealCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	var parentHandle uint32
 	var pcrIndices []int
 	var pcrBank string
-	var overwrite, usePolicy bool
+	var overwrite bool
 
 	cmd := &cobra.Command{
 		Use:   "seal",
@@ -60,7 +60,6 @@ Examples:
 				PCRIndices:     intSliceToUint32(pcrIndices),
 				PCRBank:        pcrBank,
 				Overwrite:      overwrite,
-				UsePolicy:      usePolicy,
 			}
 			return runSeal(flags, opts)
 		},
@@ -74,7 +73,6 @@ Examples:
 	cmd.Flags().IntSliceVar(&pcrIndices, "pcrs", nil, "PCR indices to bind to (comma-separated)")
 	cmd.Flags().StringVar(&pcrBank, "pcr-bank", "sha256", "PCR bank algorithm (sha1, sha256, sha384, sha512)")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing sealed data")
-	cmd.Flags().BoolVar(&usePolicy, "policy", true, "attach platform policy to the sealed object")
 
 	_ = cmd.MarkFlagRequired("cn")
 
@@ -91,7 +89,6 @@ type sealOptions struct {
 	PCRIndices     []uint32
 	PCRBank        string
 	Overwrite      bool
-	UsePolicy      bool
 }
 
 // intSliceToUint32 converts []int to []uint32

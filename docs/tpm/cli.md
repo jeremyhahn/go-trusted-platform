@@ -320,10 +320,9 @@ Two consequences worth stating plainly:
   CSR with `tpm idevid csr` / `tpm iak csr` and complete enrollment through the
   CA surface.
 
-**`tpm seal --policy` is a seventh case of the same class.** The flag is
-registered and parsed, but `sealOptions.UsePolicy` is never read and neither the
-SDK `SealRequest` nor the proto `SealRequest` has a field to carry it. Passing
-`--policy=false` changes nothing.
+`tpm seal --policy` used to be a seventh case of the same class — registered,
+parsed, never carried by any request — and was removed in #681 rather than
+wired: PCR binding is `--pcrs`, and the sealed object's auth is `--password`.
 
 ---
 

@@ -297,10 +297,11 @@ Four layers, cheapest first; each one is a `make` target and the nightly
   sealing the LUKS key to the TPM with the PCR policy, and the login
   prompt (OpenRC's default runlevel, platformd included, finished) — then
   boots the same disk and TPM state a second time and expects `TPM-PCR`
-  as attempt 1, with no fallback. `installer.luks` is still present on
-  that second boot by design: the key is preserved pending the
-  seal-confirmation handshake ([bootstrap architecture.md](../bootstrap/architecture.md)),
-  and the second boot's unseal is that confirmation. The devcontainer
+  as attempt 1, with no fallback, and — the seal now proven — wipes
+  `installer.luks` before `switch_root` (`Seal confirmed by TPM-PCR
+  unlock`, [bootstrap architecture.md](../bootstrap/architecture.md)); a
+  third boot then finds no installer container and unlocks with `TPM-PCR`
+  again. The devcontainer
   runs it (`run-integration-tests.sh diskimage`, the parent package only —
   `userspace/` has its own target — with a 90-minute go test timeout).
 - **arm64 userspace** (`test/integration/diskimage/userspace/`,

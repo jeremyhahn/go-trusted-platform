@@ -131,3 +131,7 @@ build/gosec-report.txt
 # Python bytecode caches (the U-Boot builder runs mkesl.py on the host)
 __pycache__/
 *.pyc
+
+# Written under the workspace, as root, by the devcontainer TPM suite's platformd
+# (a keystore default relative to its cwd); never source.
+/tpm2-keys/

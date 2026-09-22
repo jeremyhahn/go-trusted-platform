@@ -242,16 +242,20 @@ unlocks the root, copies platform state onto it, applies your
 `recovery-key-strategy`, and securely wipes the container.
 
 Afterwards the EFI partition should contain `tpm2/seal-platform.pub`,
-`tpm2/seal-platform.priv` and `tpm2/pcr-banks`, and **must not** contain
-`tpm2/installer.luks`.
+`tpm2/seal-platform.priv` and `tpm2/pcr-banks`. `tpm2/installer.luks` is
+still there after the **first** boot by design — the seal is proven by the
+next boot unsealing with it — and is securely wiped by the next boot that
+unlocks with `TPM-PCR` (`platform-initrd boot` logs `Seal confirmed by
+TPM-PCR unlock`). Reboot once and check:
 
 ```bash
 ls -la /boot/efi/tpm2/
 ```
 
-If `installer.luks` is still there, sealing did not succeed and the container
-was preserved deliberately so you can retry. **Do not put that machine into
-service.** See troubleshooting.
+If `installer.luks` is still there after that reboot, the seal did not unlock
+the root (the initrd fell back to the keyfile) and the container was preserved
+deliberately so you can retry. **Do not put that machine into service.** See
+troubleshooting.
 
 ---
 
@@ -336,8 +340,9 @@ could not be resolved (no `--pcrs`, no `pcr-banks` file, no reachable
 `config.yaml`); no TPM device; the installer container is gone but sealing never
 completed. Enter the LUKS passphrase, boot, and reseal.
 
-**`installer.luks` still on the ESP after first boot.**
-Sealing failed and the container was kept for a retry — which means the disk
+**`installer.luks` still on the ESP after the second boot.**
+The second boot did not unlock with `TPM-PCR` (sealing failed, or the PCRs
+moved) and the container was kept for a retry — which means the disk
 encryption key is still sitting on an unauthenticated partition. Diagnose the
 seal failure, complete firstboot, and confirm the container is gone. If you
 must clear it manually, use `platformctl wipe --path … --trim` and be aware you

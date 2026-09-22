@@ -216,6 +216,8 @@ func TestRunUnsealWithClient_Success(t *testing.T) {
 	err := runUnsealWithClient(base, opts)
 	require.NoError(t, err)
 	assert.Contains(t, base.output.String(), "my-secret-data")
+	// The same shape as seal's JSON: the integration suites key on it.
+	assert.Contains(t, base.output.String(), `"success"`)
 }
 
 func TestRunUnsealWithClient_WithPassword(t *testing.T) {

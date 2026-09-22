@@ -4963,23 +4963,27 @@ if ! mountpoint -q /sys/kernel/security 2>/dev/null; then
     mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
 fi
 
+# binary_bios_measurements is a securityfs seq_file: it always stats as
+# 0 bytes, so stat -c%s and test -s say "empty" for a populated log. The
+# only test is a read. The kernel creates the file only when it found a log
+# (EFI TCG2 table or ACPI TPM2), so absence means no log at all.
 TPM_EVENTLOG="/sys/kernel/security/tpm0/binary_bios_measurements"
 EVENTLOG_SIZE=0
 for i in 1 2 3 4 5 6 7 8 9 10; do
     if [ -f "$TPM_EVENTLOG" ]; then
-        EVENTLOG_SIZE=$(stat -c%s "$TPM_EVENTLOG" 2>/dev/null || echo "0")
-        if [ "$EVENTLOG_SIZE" -gt 0 ]; then
-            info "PLATFORMD: TPM event log available: $TPM_EVENTLOG ($EVENTLOG_SIZE bytes)"
+        EVENTLOG_SIZE=$(head -c 4096 "$TPM_EVENTLOG" 2>/dev/null | wc -c | tr -d ' ')
+        if [ "${EVENTLOG_SIZE:-0}" -gt 0 ]; then
+            info "PLATFORMD: TPM event log available: $TPM_EVENTLOG (first read: $EVENTLOG_SIZE bytes)"
             break
         fi
-        info "PLATFORMD: TPM event log file exists but empty, waiting... ($i/10)"
+        info "PLATFORMD: TPM event log file exists but reads empty, waiting... ($i/10)"
     else
         info "PLATFORMD: Waiting for TPM event log file... ($i/10)"
     fi
     cat /dev/tpm0 >/dev/null 2>&1 || true
     sleep 1
 done
-if [ ! -f "$TPM_EVENTLOG" ] || [ "$EVENTLOG_SIZE" -eq 0 ]; then
+if [ ! -f "$TPM_EVENTLOG" ] || [ "${EVENTLOG_SIZE:-0}" -eq 0 ]; then
     warn "PLATFORMD: TPM event log not available or empty - attestation data will be incomplete"
 fi
 
