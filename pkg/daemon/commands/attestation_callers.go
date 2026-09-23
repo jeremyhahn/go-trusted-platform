@@ -14,6 +14,7 @@
 package commands
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 )
 
@@ -34,7 +36,7 @@ const (
 	callerIdentitiesDerived    = "derived:acme.client.directory"
 	callerAnchorsCAFile        = "attestation.reporting.callers.ca-file"
 	callerAnchorsHeartbeatCA   = "heartbeat.ca-file"
-	callerAnchorsIDevIDIssuer  = "idevid-issuer-root"
+	callerAnchorsPlatform      = "platform-anchor"
 )
 
 // callerPolicyInputs is everything the policy needs from the running node,
@@ -50,9 +52,9 @@ type callerPolicyInputs struct {
 	// HeartbeatCAFile is heartbeat.ca-file: the CA the node already trusts
 	// for the control plane it reports liveness to.
 	HeartbeatCAFile string
-	// IDevIDIssuerRoot resolves the root of the chain that issued this
-	// node's IDevID — the control plane CA — or nil when the node has none.
-	IDevIDIssuerRoot func() (*x509.Certificate, error)
+	// PlatformAnchor is the platform CA — the root of the chain that issued
+	// this node's IDevID — or nil when the node has no TPM identity.
+	PlatformAnchor *trust.Anchor
 	// Auditor receives every decision.
 	Auditor calleradmission.Auditor
 	// AttestedPeers backs the any-attested strategy; nil on a node that
@@ -67,7 +69,7 @@ type callerPolicyInputs struct {
 // derived default entirely (owner ruling 2026-09-05) — it never unions with
 // it, so an operator who names one server has named exactly one server.
 // Anchors, in order: `callers.ca-file`, then `heartbeat.ca-file`, then the
-// root of the IDevID issuer chain. Whatever is used is logged and reported.
+// platform anchor. Whatever is used is logged and reported.
 func buildCallerPolicy(in callerPolicyInputs) (*calleradmission.Policy, error) {
 	logger := in.Logger
 	if logger == nil {
@@ -77,7 +79,7 @@ func buildCallerPolicy(in callerPolicyInputs) (*calleradmission.Policy, error) {
 	strategy := calleradmission.Strategy(cfg.EffectiveStrategy())
 
 	identities, identitiesSource := callerIdentities(cfg, in.ACMEDirectory)
-	anchors, anchorSource, err := callerAnchors(cfg, in.HeartbeatCAFile, in.IDevIDIssuerRoot)
+	anchors, anchorSource, err := callerAnchors(cfg, in.HeartbeatCAFile, in.PlatformAnchor)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +147,7 @@ func acmeDirectoryHost(directory string) string {
 // the source used. A configured file that cannot be read or parsed is an
 // error rather than a silent fall-through: an operator who named a file
 // meant that file.
-func callerAnchors(cfg *config.CallerAdmissionConfig, heartbeatCAFile string, idevidRoot func() (*x509.Certificate, error)) ([]*x509.Certificate, string, error) {
+func callerAnchors(cfg *config.CallerAdmissionConfig, heartbeatCAFile string, anchor *trust.Anchor) ([]*x509.Certificate, string, error) {
 	if cfg != nil && strings.TrimSpace(cfg.CAFile) != "" {
 		certs, err := readCABundle(cfg.CAFile)
 		if err != nil {
@@ -160,10 +162,11 @@ func callerAnchors(cfg *config.CallerAdmissionConfig, heartbeatCAFile string, id
 		}
 		return certs, callerAnchorsHeartbeatCA, nil
 	}
-	if idevidRoot != nil {
-		root, err := idevidRoot()
-		if err == nil && root != nil {
-			return []*x509.Certificate{root}, callerAnchorsIDevIDIssuer, nil
+	if anchor != nil {
+		// A node that has not enrolled has no platform anchor yet; its
+		// policy then admits nobody, which is reported rather than hidden.
+		if certs, err := anchor.Certificates(context.Background()); err == nil {
+			return certs, callerAnchorsPlatform, nil
 		}
 	}
 	return nil, "", nil
@@ -240,14 +243,11 @@ func initCallerPolicyWithPeers(logger *slog.Logger, a *app.App, svcs *attestatio
 		in.HeartbeatCAFile = a.HeartbeatConfig.CAFile
 	}
 	if a.TPM != nil && a.CA != nil {
-		tpm, ca := a.TPM, a.CA
-		in.IDevIDIssuerRoot = func() (*x509.Certificate, error) {
-			idevid, err := tpm.IDevIDCertificate()
-			if err != nil {
-				return nil, err
-			}
-			return ca.RootCertificate(idevid)
+		anchor, err := a.PlatformAnchor()
+		if err != nil {
+			logger.Error("attestation caller admission: platform anchor unavailable", "error", err)
 		}
+		in.PlatformAnchor = anchor
 	}
 	if svcs != nil && svcs.Service != nil {
 		in.Auditor = svcs.Service

@@ -7,10 +7,11 @@ resolver that lives in `go-xkms/pkg/trust/resolver`, reached through the
 QuicBaaS SDK re-export (`go-quicbaas/sdk/go/xkms/trust/resolver`).
 
 The platform layer owns:
-- Three class constants (`default`, `bmc`, `internal`) used as scope names.
+- Two class constants (`bootstrap`, `bmc`) used as scope names.
 - Per-class strategy allowlists (see Validation Rules below).
-- `platform-ca` → `provider-ca` normalisation: the platform YAML spells the
-  strategy `platform-ca`; the generic resolver receives `provider-ca`.
+- The platform anchor (`trust.Anchor`): the platform CA that every
+  platform-issued certificate chains to. It is **not** a trust class and is
+  not configured — see [Platform anchor](#platform-anchor) below.
 - TOFU pin-store threading: `WithTOFUPinStore` must be supplied at resolver
   construction for any class that lists `tofu` in its strategies chain.
 
@@ -25,7 +26,7 @@ Server bootstrap publishes CA bundles via DANE TLSA records and optional Noise_N
 
 Located under `dns.resolver.*` in platform config. All DNS consumers (bootstrap,
 ACME, installer) use this as the platform-wide default. Service-level overrides
-(such as `trust.default.dane.dns-server`) take precedence when explicitly configured.
+(such as `trust.bootstrap.dane.dns-server`) take precedence when explicitly configured.
 
 ```yaml
 dns:
@@ -110,14 +111,18 @@ bootstrap:
 
 Client trust bootstrap fetches the CA bundle from the server before TLS can be
 established. Located under `trust.*` in platform config. The `trust:` section
-carries one scope per trust class -- `default` (provisioning/CP trust), `bmc`
-(BMC endpoints), and `internal` (platform-internal mTLS sites). Each scope
+carries one scope per trust class -- `bootstrap` (fetching the platform CA
+bundle before this node holds it) and `bmc` (BMC endpoints). Each scope
 declares an ordered `strategies` chain; the resolver attempts each strategy in
 order until one succeeds.
 
+Both classes verify peers the platform CA did **not** issue, or verify before
+this node has the platform CA. A platform-issued peer is verified against the
+[platform anchor](#platform-anchor) instead, which has no `trust:` entry.
+
 ```yaml
 trust:
-  default:
+  bootstrap:
     strategies: [dane, noise, spki]            # Ordered fetch chain
     server-url: "https://10.99.99.2:8443"      # REST endpoint for DANE/SPKI
     hostname: "server.example.com"             # DANE TLSA lookup name (required when server-url is an IP)
@@ -139,7 +144,7 @@ trust:
 The trust resolver determines the DANE DNS server address using the following
 priority order:
 
-1. **`trust.default.dane.dns-server`** -- explicit service-level override. Use
+1. **`trust.bootstrap.dane.dns-server`** -- explicit service-level override. Use
    this only when the bootstrap DNS server differs from the platform default.
 2. **`dns.resolver.servers[0]`** -- platform-wide default from the `dns.resolver`
    section. This is the recommended configuration point; the platform populates
@@ -163,7 +168,7 @@ dns:
       cache-size: 1000
 
 trust:
-  default:
+  bootstrap:
     strategies: [dane]
     server-url: "https://10.99.99.2:8443"
     hostname: "server.example.com"
@@ -179,11 +184,11 @@ trust:
 - Requires: DNSSEC-validating resolver
 - Benefits: No secrets to manage, automatic rollover
 - Reliability: Depends on DNS availability
-- Allowed in: `default`, `bmc`
+- Allowed in: `bootstrap`, `bmc`
 - Config:
   ```yaml
   trust:
-    default:
+    bootstrap:
       strategies: [dane]
       server-url: "https://server.example.com:8443"
       bundle-path: "/api/v1/ca/bootstrap"
@@ -195,11 +200,11 @@ trust:
 - Requires: Server's static Curve25519 public key (distributed out-of-band)
 - Benefits: No DNS/DNSSEC dependency, high assurance
 - Reliability: Direct TCP connection to server
-- Allowed in: `default`
+- Allowed in: `bootstrap`
 - Config:
   ```yaml
   trust:
-    default:
+    bootstrap:
       strategies: [noise]
       noise:
         server-addr: "server.example.com:9446"
@@ -210,11 +215,11 @@ trust:
 - Requires: Server's certificate SPKI SHA-256 hash (64 hex chars)
 - Benefits: No out-of-band secrets, resilient to DNSSEC misconfigs
 - Reliability: Depends on initial cert pinning accuracy
-- Allowed in: `default`, `bmc`
+- Allowed in: `bootstrap`, `bmc`
 - Config:
   ```yaml
   trust:
-    default:
+    bootstrap:
       strategies: [spki]
       server-url: "https://server.example.com:8443"
       bundle-path: "/api/v1/ca/bootstrap"
@@ -226,11 +231,11 @@ trust:
 - Requires: CA certificate baked into ISO at build time
 - Benefits: No network required, maximum simplicity
 - Reliability: Hardcoded, no runtime fetch
-- Allowed in: `default`
+- Allowed in: `bootstrap`
 - Config:
   ```yaml
   trust:
-    default:
+    bootstrap:
       strategies: [embedded]
   ```
 
@@ -261,7 +266,7 @@ trust:
 - Risks: First connection is unauthenticated (trust-on-first-use). Only
   suitable when the initial connection occurs over a trusted provisioning
   network or is confirmed by an operator via the confirm hook.
-- Allowed in: `default`
+- Allowed in: `bootstrap`
 - **TOFU is never an implicit fallback — it MUST be listed explicitly** in the
   `strategies` chain. Environments without DANE publishing should use
   `[dane, noise, spki, tofu]` with a comment explaining the semantics.
@@ -272,7 +277,7 @@ trust:
     # TOFU captures and pins the server certificate on first contact.
     # Subsequent connections verify the stored pin; any certificate change
     # requires manual pin rotation in the TOFU store.
-    default:
+    bootstrap:
       strategies: [dane, noise, spki, tofu]
       server-url: "https://server.example.com:8443"
       bundle-path: "/api/v1/ca/bootstrap"
@@ -326,37 +331,13 @@ trust:
     strategies: [dane, spki, ca-file]
 ```
 
-**platform-ca**
-- Requires: Platform CA bundle provider injected via `WithPlatformCA`
-- Benefits: Uses the platform's own CA; no discovery or pinning step
-- Allowed in: `internal` only
-- Config (platformd, which injects an adapter over its own CA):
-  ```yaml
-  trust:
-    internal:
-      strategies: [platform-ca]
-  ```
-- Config (gatewayd, which runs no CA): the bundle is a PEM file the
-  provisioning flow projects onto the node, named with `ca-file:` and served
-  by `trust.NewFileCABundleProvider`. gatewayd's assembly injects it; without
-  the path the daemon refuses to start (`ErrPlatformCABundleSourceMissing`)
-  rather than failing every internal-class resolution at the first dial:
-  ```yaml
-  trust:
-    internal:
-      strategies: [platform-ca]
-      ca-file: /etc/gatewayd/cp-ca.pem
-  ```
-  The file is read at each resolution, so a rotated bundle takes effect
-  without a restart.
-
 **Ordered chain** (replaces the old `auto` strategy)
 - List multiple strategies; the resolver attempts each in order and succeeds
   on the first one that works
 - Config:
   ```yaml
   trust:
-    default:
+    bootstrap:
       strategies: [dane, noise, spki]
       server-url: "https://server.example.com:8443"
       bundle-path: "/api/v1/ca/bootstrap"
@@ -440,7 +421,7 @@ dns:
       cache-size: 1000
 
 trust:
-  default:
+  bootstrap:
     strategies: [dane]
     server-url: "https://10.99.99.2:8443"
     hostname: "server.example.com"
@@ -462,7 +443,7 @@ dns:
       - example.internal
 
 trust:
-  default:
+  bootstrap:
     strategies: [dane, noise, spki]
     server-url: "https://server.example.com:8443"
     # dane.dns-server derived from dns.resolver.servers[0]
@@ -488,7 +469,7 @@ trust:
   # Subsequent connections verify against the stored hash exactly like spki.
   # TOFU requires a TOFUPinStore; the platform wires one automatically when
   # a storage backend is available (after the QuicBaaS SDK is initialized).
-  default:
+  bootstrap:
     strategies: [dane, noise, spki, tofu]
     server-url: "https://server.example.com:8443"
     bundle-path: "/api/v1/ca/bootstrap"
@@ -496,17 +477,47 @@ trust:
     install-to-system-trust: true
 ```
 
+## Platform anchor
+
+Every certificate the platform issues chains to the platform CA, so verifying a
+platform service is not a policy choice: there is one correct answer. The
+platform anchor (`trust.Anchor`) is that answer, and it has no `trust:` entry.
+
+| Node | Anchor source |
+|---|---|
+| Control plane | its own CA — the root of the chain that issued its IDevID (`App.PlatformAnchor`) |
+| Enrolled node (platformd) | the control plane's CA — the root of its IDevID issuing chain, which enrollment imports (go-xkms#556, #653) |
+| Gateway (gatewayd) | the platform CA bundle provisioning projects onto the node, named by the top-level `platform-ca-file:` key |
+
+```yaml
+# gatewayd only: platformd derives its anchor from its IDevID
+platform-ca-file: /etc/gatewayd/cp-ca.pem
+```
+
+The source is read on every verification, so a node that enrolls after
+start-up, or a rotated bundle, takes effect without a restart. A node that has
+not enrolled yet has no anchor, and verification fails
+(`trust.ErrAnchorUnavailable`) rather than trusting anything else.
+
+Consumers: attestation caller admission and collection, post-enrollment
+provisioning, gatewayd's secret-store session, platformd grpc dial, proxy
+client CAs and `trust-class: platform` backends, and the gateway's
+control-plane reporter.
+
 ## Validation Rules
 
 The platform enforces:
 
 - `strategies` is required per scope and each entry must be allowed for the
   scope's class:
-  - `default` allows `dane`, `noise`, `spki`, `embedded`, `tofu`
-  - `bmc` allows `dane`, `spki`, `ca-file` (not `tofu` — see #83)
-  - `internal` allows only `platform-ca`. The strategy resolves through an
-    injected CA bundle provider: platformd injects its own CA, gatewayd
-    injects the `ca-file:` PEM projected onto the node
+  - `bootstrap` allows `dane`, `noise`, `spki`, `embedded`, `tofu`
+  - `bmc` allows `dane`, `spki`, `ca-file`, `tofu` (`tofu` was barred under
+    #83 while it only fetched a bundle; go-xkms#139 made it endpoint pinning)
+- `default` and `internal` are retired. `trust.default` is now
+  `trust.bootstrap`; `trust.internal` is replaced by the platform anchor, which
+  needs no configuration. The config decoder ignores unknown keys, so a config
+  still carrying either loses those settings silently — the shipped templates
+  are checked for both (`pkg/trust/shipped_templates_test.go`)
 - When a `noise` sub-config is present, `noise.server-addr` and
   `noise.server-static-key` are required
 - When an `spki` sub-config sets `pin-file`, the file must be readable; its

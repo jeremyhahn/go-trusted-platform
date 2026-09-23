@@ -24,13 +24,13 @@ import (
 )
 
 // TLSFunc produces the TLS configuration the store session is dialled
-// with. gatewayd supplies its trust resolver's internal class, which
-// anchors verification of the STORE: the returned config carries the
-// platform CA as its root pool, so the gateway talks to a peer the
-// platform vouches for and to no one else.
+// with. gatewayd supplies its platform anchor, which anchors verification
+// of the STORE: the returned config carries the platform CA as its root
+// pool, so the gateway talks to a peer the platform vouches for and to no
+// one else.
 //
-// It does NOT carry a client certificate — the trust resolver is a
-// server-verification resolver and returns no Certificates — so the
+// It does NOT carry a client certificate — the anchor verifies servers and
+// returns no Certificates — so the
 // session is one-way authenticated. Which credential should identify the
 // gateway TO the store (its provisioned mTLS identity, or an IAM token)
 // is an open question tracked as #658; quicbaasd's gRPC client-certificate

@@ -405,38 +405,27 @@ acme:
 
 
 # =============================================================================
+# PLATFORM CA (gatewayd's platform anchor)
+# =============================================================================
+
+# The platform CA bundle, delivered by provisioning. Every platform service
+# gatewayd talks to -- the platform secret store behind every kms:// and
+# secret:// reference in this file, platformd over grpc, the proxy's mTLS
+# callers, the control-plane reporter -- presents a certificate the platform
+# CA issued and is verified against this bundle. gatewayd runs no CA of its
+# own, so this file is its whole platform trust: not a strategy choice, and
+# nothing else to configure. Without it the secret store refuses to
+# assemble (secrets.ErrTrustRequired) and gatewayd does not start.
+platform-ca-file: /etc/gatewayd/cp-ca.pem
+
+# =============================================================================
 # TRUST CONFIGURATION (BMC Trust Bootstrap)
 # =============================================================================
 
-# BMC endpoint trust chain (Phase 3 — BMC TLS lifecycle). Each strategy is
-# attempted in order; the first to succeed is used.
-# tofu is NOT available for the bmc class (#83): it fetches a CA bundle and a
-# BMC serves none. First contact is spki with a per-node bmc_spki_pin, until
-# DANE TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
-# enroll does this).
+# Verification policy for what the platform CA did NOT issue: BMC endpoints
+# (Phase 3 -- BMC TLS lifecycle). Each strategy is attempted in order; the
+# first to succeed is used.
 trust:
-  internal:
-    # Platform-internal service-to-service trust. This is the class that
-    # authenticates gatewayd's session to the platform secret store below
-    # (secret-store:), so it is a PRECONDITION of every kms:// and
-    # secret:// reference in this file — buildSecretResolver refuses to
-    # assemble without it (secrets.ErrTrustRequired), and the gateway then
-    # does not start.
-    #
-    # platform-ca is the ONLY strategy the internal class permits
-    # (pkg/trust/config.go ClassInternal): the peer is the platform's own
-    # control plane, so its certificate chains to the platform CA and no
-    # discovery or pinning step is wanted.
-    #
-    # The strategy resolves through a CA bundle provider rather than from
-    # this file. platformd injects an adapter over its own CA; gatewayd
-    # runs no CA, so on a gateway node the bundle is the PEM below —
-    # the same control-plane bundle the reporter verifies with, delivered
-    # by provisioning. Without it the internal class can never resolve and
-    # gatewayd refuses to assemble (ErrPlatformCABundleSourceMissing)
-    # rather than failing every kms:// reference at service start.
-    strategies: [platform-ca]
-    ca-file: /etc/gatewayd/cp-ca.pem
   bmc:
     # BMC endpoint trust chain. First strategy to succeed wins.
     #
@@ -853,11 +842,10 @@ control-plane:
 # service start, handed to the kernel or the speaker, and wiped.
 #
 # It is NOT the `secrets:` section above: that one is platformd's resolver
-# switchboard. The session is authenticated by the trust: section's
-# internal class, so a secret-store: without one is refused
-# (secrets.ErrTrustRequired) and the gateway does not start. That class is
-# configured above as `trust: internal: strategies: [platform-ca]`; if you
-# remove it, comment this section out too.
+# switchboard. The session is verified against the platform anchor, so a
+# secret-store: without platform-ca-file: (set above) is refused
+# (secrets.ErrTrustRequired) and the gateway does not start; if you remove
+# platform-ca-file:, comment this section out too.
 # Without this section a service that references a secret fails closed at
 # start rather than running with a reference where a key belongs.
 
@@ -1016,11 +1004,11 @@ webservices:
       # (enroll-01, device-attest-01)".
       #
       # This matters beyond tidiness. The reporting collector verifies a
-      # node's certificate through the trust resolver's `internal` class,
-      # which permits ONLY platform-ca (pkg/trust/config.go ClassInternal),
-      # i.e. the control-plane CA. A locally-issued certificate cannot chain
-      # there, so without this the collector's mTLS fails against every node
-      # and remote attestation produces no verdict at all. The bootstrap
+      # node's certificate against the platform anchor (pkg/trust Anchor),
+      # i.e. the control-plane CA and nothing else. A locally-issued
+      # certificate cannot chain there, so without this the collector's mTLS
+      # fails against every node and remote attestation produces no verdict
+      # at all. The bootstrap
       # orchestrator's post-install health probe verifies against the same
       # captured CP bundle and fails for the identical reason.
       acme:

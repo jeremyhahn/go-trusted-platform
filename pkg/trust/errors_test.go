@@ -29,15 +29,16 @@ func TestErrorMessages(t *testing.T) {
 		{"nil config", ErrNilConfig{}, []string{"config is required"}},
 		{"nil logger", ErrNilLogger{}, []string{"logger is required"}},
 		{"class not configured", &ErrClassNotConfigured{Class: ClassBMC}, []string{"bmc", "not configured"}},
-		{"invalid config", &ErrInvalidConfig{Class: ClassDefault, Field: "strategies", Reason: "empty"}, []string{"default", "strategies", "empty"}},
-		{"strategy not allowed", &ErrStrategyNotAllowed{Class: ClassInternal, Strategy: StrategyDANE}, []string{"dane", "internal"}},
+		{"invalid config", &ErrInvalidConfig{Class: ClassBootstrap, Field: "strategies", Reason: "empty"}, []string{"bootstrap", "strategies", "empty"}},
+		{"strategy not allowed", &ErrStrategyNotAllowed{Class: ClassBMC, Strategy: StrategyNoise}, []string{"noise", "bmc"}},
 		{"fetch failed", &ErrFetchFailed{Strategy: StrategySPKI, Cause: cause}, []string{"spki", "boom"}},
 		{"bundle empty", ErrCABundleEmpty{}, []string{"empty"}},
 		{"bundle parse", ErrCABundleParse{}, []string{"PEM"}},
 		{"write failed", &ErrWriteFailed{Path: "/x/y", Err: cause}, []string{"/x/y", "boom"}},
-		// ErrPlatformCAUnavailable is an alias for ErrProviderCAUnavailable;
-		// the upstream message contains "provider-ca".
-		{"platform ca unavailable", ErrPlatformCAUnavailable{}, []string{"provider-ca"}},
+		{"nil anchor source", ErrNilAnchorSource{}, []string{"anchor", "source"}},
+		{"anchor unavailable", &ErrAnchorUnavailable{Cause: cause}, []string{"anchor unavailable", "boom"}},
+		{"anchor empty", ErrAnchorEmpty{}, []string{"no CA certificate"}},
+		{"anchor file unset", ErrAnchorFileUnset{}, []string{"no configured path"}},
 		{"pin not found with endpoint", &ErrPinNotFound{Endpoint: "bmc:443"}, []string{"bmc:443"}},
 		{"pin not found without endpoint", &ErrPinNotFound{}, []string{"no SPKI pin"}},
 		{"ca file read", &ErrCAFileRead{Path: "/ca.pem", Err: cause}, []string{"/ca.pem", "boom"}},
@@ -98,9 +99,9 @@ func TestErrNoStrategySucceeded(t *testing.T) {
 }
 
 func TestErrNoStrategySucceeded_NoEndpoint(t *testing.T) {
-	err := &ErrNoStrategySucceeded{Class: ClassDefault}
+	err := &ErrNoStrategySucceeded{Class: ClassBootstrap}
 	msg := err.Error()
-	if !strings.Contains(msg, "default") {
+	if !strings.Contains(msg, "bootstrap") {
 		t.Errorf("expected class in message %q", msg)
 	}
 	if strings.Contains(msg, "endpoint") {
@@ -120,15 +121,5 @@ func TestErrNilConfig_Is(t *testing.T) {
 func TestErrNilLogger_Is(t *testing.T) {
 	if !errors.Is(ErrNilLogger{}, ErrNilLogger{}) {
 		t.Error("ErrNilLogger must satisfy errors.Is against itself")
-	}
-}
-
-func TestErrPlatformCAUnavailable_IsErrProviderCAUnavailable(t *testing.T) {
-	// ErrPlatformCAUnavailable and ErrProviderCAUnavailable are the same
-	// type (alias). errors.Is must work with either name.
-	var platform ErrPlatformCAUnavailable
-	var provider ErrProviderCAUnavailable
-	if !errors.Is(platform, provider) {
-		t.Error("ErrPlatformCAUnavailable must equal ErrProviderCAUnavailable")
 	}
 }

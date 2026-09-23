@@ -38,8 +38,14 @@ func TestShippedTemplatesUseAllowedStrategies(t *testing.T) {
 	// The subset of the platform config this test cares about.
 	type templateConfig struct {
 		Trust struct {
+			Bootstrap *ScopeConfig `yaml:"bootstrap"`
+			BMC       *ScopeConfig `yaml:"bmc"`
+
+			// Retired classes. The platform config decoder ignores keys it
+			// does not know, so a template still carrying one would lose
+			// its trust settings silently; they are decoded here only so
+			// the test can refuse them.
 			Default  *ScopeConfig `yaml:"default"`
-			BMC      *ScopeConfig `yaml:"bmc"`
 			Internal *ScopeConfig `yaml:"internal"`
 		} `yaml:"trust"`
 	}
@@ -74,14 +80,19 @@ func TestShippedTemplatesUseAllowedStrategies(t *testing.T) {
 			// malformed trust block should ever fail here.
 			t.Fatalf("parsing %s: %v", path, err)
 		}
+		if cfg.Trust.Default != nil {
+			t.Errorf("%s: trust.default was renamed trust.bootstrap", path)
+		}
+		if cfg.Trust.Internal != nil {
+			t.Errorf("%s: trust.internal is retired; the platform CA is the trust anchor, which needs no configuration", path)
+		}
 
 		for _, scope := range []struct {
 			class Class
 			cfg   *ScopeConfig
 		}{
-			{ClassDefault, cfg.Trust.Default},
+			{ClassBootstrap, cfg.Trust.Bootstrap},
 			{ClassBMC, cfg.Trust.BMC},
-			{ClassInternal, cfg.Trust.Internal},
 		} {
 			if scope.cfg == nil {
 				continue

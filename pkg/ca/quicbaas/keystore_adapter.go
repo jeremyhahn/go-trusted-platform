@@ -657,6 +657,16 @@ func (ks *QuicBaaSKeyStore) KeyProvider() xkmssdk.KeyProvider {
 	return nil
 }
 
+// Type reports what kind of backend holds this keystore's keys. The keys live
+// in the control plane's quicbaas KMS, reached over the SDK, whose backend
+// (software, TPM, PKCS#11, cloud KMS) is the server's configuration and is
+// not visible to this adapter, so the answer is StoreUnknown rather than a
+// guess. The CA does not read it: an issuing identity's keystore type comes
+// from that identity's configured KeystoreType.
+func (ks *QuicBaaSKeyStore) Type() xkmssdk.StoreType {
+	return xkmssdk.StoreUnknown
+}
+
 // CertStorage returns the certificate storage adapter.
 // Returns nil as we use xkmssdk.CertStore directly.
 func (ks *QuicBaaSKeyStore) CertStorage() xkmssdk.CertificateStorageAdapter {

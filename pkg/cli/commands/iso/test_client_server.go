@@ -1048,12 +1048,12 @@ func fetchCSCABundle(ctx context.Context, logger *logging.Logger, serverIP strin
 		}
 	}
 
-	resolver, err := trust.NewResolver(&trust.Config{Default: scope}, logger)
+	resolver, err := trust.NewResolver(&trust.Config{Bootstrap: scope}, logger)
 	if err != nil {
 		return ErrBootstrapClientCreate{Reason: err.Error()}
 	}
 
-	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassDefault)
+	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassBootstrap)
 	if err != nil {
 		return ErrCABundleFetch{Reason: err.Error()}
 	}

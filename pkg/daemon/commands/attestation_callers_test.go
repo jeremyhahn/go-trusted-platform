@@ -35,6 +35,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 func selfSignedCA(t *testing.T, cn string, isCA bool) *x509.Certificate {
@@ -77,17 +78,17 @@ func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard
 func TestBuildCallerPolicy_DerivesReportingServerFromACMEDirectory(t *testing.T) {
 	root := selfSignedCA(t, "root-ca.cp.example.io", true)
 	p, err := buildCallerPolicy(callerPolicyInputs{
-		ACMEDirectory:    "https://CP.Example.Internal:9443/api/v1/acme/directory",
-		IDevIDIssuerRoot: func() (*x509.Certificate, error) { return root, nil },
-		Auditor:          &noopAuditor{},
-		Logger:           quietLogger(),
+		ACMEDirectory:  "https://CP.Example.Internal:9443/api/v1/acme/directory",
+		PlatformAnchor: fixedAnchor(t, root),
+		Auditor:        &noopAuditor{},
+		Logger:         quietLogger(),
 	})
 	require.NoError(t, err)
 	desc := p.Describe()
 	assert.Equal(t, calleradmission.StrategyReportingServers, desc.Strategy)
 	assert.Equal(t, []string{"cp.example.internal"}, desc.Identities)
 	assert.Equal(t, callerIdentitiesDerived, desc.IdentitiesSource)
-	assert.Equal(t, callerAnchorsIDevIDIssuer, desc.AnchorSource)
+	assert.Equal(t, callerAnchorsPlatform, desc.AnchorSource)
 	assert.True(t, desc.AnchorsConfigured)
 	assert.False(t, desc.AdmitsNobody)
 	assert.Len(t, p.Anchors(), 1)
@@ -112,11 +113,11 @@ func TestBuildCallerPolicy_AnchorPrecedence(t *testing.T) {
 	idevid := selfSignedCA(t, "idevid-root", true)
 	configuredPath := writeCallerBundle(t, configured)
 	heartbeatPath := writeCallerBundle(t, heartbeat)
-	rootFn := func() (*x509.Certificate, error) { return idevid, nil }
+	anchor := fixedAnchor(t, idevid)
 
 	p, err := buildCallerPolicy(callerPolicyInputs{
 		Callers:         &config.CallerAdmissionConfig{CAFile: configuredPath, ReportingServers: []string{"x"}},
-		HeartbeatCAFile: heartbeatPath, IDevIDIssuerRoot: rootFn, Logger: quietLogger(),
+		HeartbeatCAFile: heartbeatPath, PlatformAnchor: anchor, Logger: quietLogger(),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, callerAnchorsCAFile, p.Describe().AnchorSource)
@@ -124,21 +125,21 @@ func TestBuildCallerPolicy_AnchorPrecedence(t *testing.T) {
 
 	p, err = buildCallerPolicy(callerPolicyInputs{
 		Callers:         &config.CallerAdmissionConfig{ReportingServers: []string{"x"}},
-		HeartbeatCAFile: heartbeatPath, IDevIDIssuerRoot: rootFn, Logger: quietLogger(),
+		HeartbeatCAFile: heartbeatPath, PlatformAnchor: anchor, Logger: quietLogger(),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, callerAnchorsHeartbeatCA, p.Describe().AnchorSource)
 	assert.Equal(t, "heartbeat-ca", p.Anchors()[0].Subject.CommonName)
 
 	p, err = buildCallerPolicy(callerPolicyInputs{
-		Callers: &config.CallerAdmissionConfig{ReportingServers: []string{"x"}}, IDevIDIssuerRoot: rootFn, Logger: quietLogger(),
+		Callers: &config.CallerAdmissionConfig{ReportingServers: []string{"x"}}, PlatformAnchor: anchor, Logger: quietLogger(),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, callerAnchorsIDevIDIssuer, p.Describe().AnchorSource)
+	assert.Equal(t, callerAnchorsPlatform, p.Describe().AnchorSource)
 
 	p, err = buildCallerPolicy(callerPolicyInputs{
-		Callers:          &config.CallerAdmissionConfig{ReportingServers: []string{"x"}},
-		IDevIDIssuerRoot: func() (*x509.Certificate, error) { return nil, errors.New("no idevid") }, Logger: quietLogger(),
+		Callers:        &config.CallerAdmissionConfig{ReportingServers: []string{"x"}},
+		PlatformAnchor: failingAnchor(t, errors.New("no idevid")), Logger: quietLogger(),
 	})
 	require.NoError(t, err)
 	assert.Empty(t, p.Describe().AnchorSource)
@@ -175,9 +176,9 @@ func TestBuildCallerPolicy_ConfiguredBundleMustBeUsable(t *testing.T) {
 func TestBuildCallerPolicy_AnyAttestedWithoutEvidenceAdmitsNobody(t *testing.T) {
 	root := selfSignedCA(t, "root", true)
 	p, err := buildCallerPolicy(callerPolicyInputs{
-		Callers:          &config.CallerAdmissionConfig{Strategy: config.CallerStrategyAnyAttested},
-		IDevIDIssuerRoot: func() (*x509.Certificate, error) { return root, nil },
-		Logger:           quietLogger(),
+		Callers:        &config.CallerAdmissionConfig{Strategy: config.CallerStrategyAnyAttested},
+		PlatformAnchor: fixedAnchor(t, root),
+		Logger:         quietLogger(),
 	})
 	require.NoError(t, err)
 	assert.True(t, p.Describe().AdmitsNobody)
@@ -192,4 +193,24 @@ func TestACMEDirectoryHost(t *testing.T) {
 
 func TestInitCallerPolicy_NilAppIsNil(t *testing.T) {
 	assert.Nil(t, initCallerPolicy(quietLogger(), nil, nil))
+}
+
+// fixedAnchor is a platform anchor holding root.
+func fixedAnchor(t *testing.T, root *x509.Certificate) *trust.Anchor {
+	t.Helper()
+	anchor, err := trust.NewAnchor(trust.AnchorSourceFunc(func(context.Context) ([]*x509.Certificate, error) {
+		return []*x509.Certificate{root}, nil
+	}))
+	require.NoError(t, err)
+	return anchor
+}
+
+// failingAnchor is the platform anchor of a node that has not enrolled.
+func failingAnchor(t *testing.T, cause error) *trust.Anchor {
+	t.Helper()
+	anchor, err := trust.NewAnchor(trust.AnchorSourceFunc(func(context.Context) ([]*x509.Certificate, error) {
+		return nil, cause
+	}))
+	require.NoError(t, err)
+	return anchor
 }

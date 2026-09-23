@@ -70,9 +70,9 @@ type Attempt = xkmsresolver.Attempt
 // generic scope string (ErrClassNotConfigured, ErrInvalidConfig,
 // ErrStrategyNotAllowed, ErrNoStrategySucceeded).
 //
-// ErrClassNotConfigured and ErrPlatformCAUnavailable are additionally aliased
-// to their generic counterparts below so that errors.As traversals on errors
-// returned by the generic resolver also match the platform names.
+// ErrClassNotConfigured is additionally aliased to its generic counterpart
+// below so that errors.As traversals on errors returned by the generic
+// resolver also match the platform name.
 // =============================================================================
 
 // ErrNilConfig indicates a nil *Config was passed to NewResolver.
@@ -139,18 +139,6 @@ func (e *ErrStrategyNotAllowed) Error() string {
 	return fmt.Sprintf("trust: strategy %q is not allowed for class %q", e.Strategy, e.Class)
 }
 
-// ErrPlatformCAUnavailable indicates the platform-ca strategy was
-// requested but no CABundleProvider was injected.
-//
-// This is the platform-named alias of the generic ErrProviderCAUnavailable.
-// Both names trigger errors.Is correctly because the underlying value is
-// the same xkmsresolver type.
-type ErrPlatformCAUnavailable = xkmsresolver.ErrProviderCAUnavailable
-
-// ErrProviderCAUnavailable is re-exported so call sites that use the
-// generic name also compile without change.
-type ErrProviderCAUnavailable = xkmsresolver.ErrProviderCAUnavailable
-
 // ErrNoStrategySucceeded indicates every strategy in a class's chain
 // failed. Attempts records each failure in chain order.
 type ErrNoStrategySucceeded struct {
@@ -183,12 +171,64 @@ func (e *ErrNoStrategySucceeded) Unwrap() []error {
 	return errs
 }
 
-// ErrCABundleFileUnset indicates a FileCABundleProvider was constructed
-// with no path. The provider exists to answer the platform-ca strategy on
-// a node whose bundle lives on disk; with no path it can never answer.
-type ErrCABundleFileUnset struct{}
+// ErrNilAnchorSource indicates NewAnchor was given no AnchorSource. An
+// anchor with nothing behind it could only ever refuse, so it is not built.
+type ErrNilAnchorSource struct{}
 
 // Error implements the error interface.
-func (e *ErrCABundleFileUnset) Error() string {
-	return "trust: platform CA bundle file provider has no configured path"
+func (e ErrNilAnchorSource) Error() string {
+	return "trust: platform anchor requires a source"
+}
+
+// Is implements errors.Is equality for value-type errors.
+func (e ErrNilAnchorSource) Is(target error) bool {
+	_, ok := target.(ErrNilAnchorSource)
+	return ok
+}
+
+// ErrAnchorUnavailable indicates the platform anchor could not be read from
+// its source: the control plane's CA is not initialised, a node has not
+// enrolled yet (so it holds no IDevID issuing chain), or a provisioned bundle
+// file is missing or unreadable. Cause says which.
+type ErrAnchorUnavailable struct {
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrAnchorUnavailable) Error() string {
+	return fmt.Sprintf("trust: platform anchor unavailable: %v", e.Cause)
+}
+
+// Unwrap returns the source's error.
+func (e *ErrAnchorUnavailable) Unwrap() error { return e.Cause }
+
+// ErrAnchorEmpty indicates the platform anchor's source yielded no CA
+// certificate. A pool with no roots verifies nothing, so it is refused
+// rather than returned.
+type ErrAnchorEmpty struct{}
+
+// Error implements the error interface.
+func (e ErrAnchorEmpty) Error() string {
+	return "trust: platform anchor source yielded no CA certificate"
+}
+
+// Is implements errors.Is equality for value-type errors.
+func (e ErrAnchorEmpty) Is(target error) bool {
+	_, ok := target.(ErrAnchorEmpty)
+	return ok
+}
+
+// ErrAnchorFileUnset indicates a FileAnchorSource was constructed with no
+// path, so it can never answer.
+type ErrAnchorFileUnset struct{}
+
+// Error implements the error interface.
+func (e ErrAnchorFileUnset) Error() string {
+	return "trust: platform anchor bundle file has no configured path"
+}
+
+// Is implements errors.Is equality for value-type errors.
+func (e ErrAnchorFileUnset) Is(target error) bool {
+	_, ok := target.(ErrAnchorFileUnset)
+	return ok
 }

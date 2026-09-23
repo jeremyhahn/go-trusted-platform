@@ -47,12 +47,26 @@ func (e *ErrNilReloader) Error() string {
 }
 
 // ErrNilResolver is returned when a TrustResolverAdapter is constructed
-// without a platform trust resolver.
+// with neither a trust resolver nor a platform anchor.
 type ErrNilResolver struct{}
 
 // Error implements the error interface.
 func (e *ErrNilResolver) Error() string {
-	return "proxysvc: nil trust resolver"
+	return "proxysvc: neither a trust resolver nor a platform anchor"
+}
+
+// ErrTrustSourceMissing is returned when a backend pool names a trust class
+// whose source this gateway was not configured with.
+type ErrTrustSourceMissing struct {
+	// Class is the backend trust class.
+	Class string
+	// Source is the configuration that supplies it.
+	Source string
+}
+
+// Error implements the error interface.
+func (e *ErrTrustSourceMissing) Error() string {
+	return fmt.Sprintf("proxysvc: trust class %q needs %s, which this gateway is not configured with", e.Class, e.Source)
 }
 
 // ErrUnknownTrustClass is returned when a backend pool references a trust
@@ -64,7 +78,7 @@ type ErrUnknownTrustClass struct {
 
 // Error implements the error interface.
 func (e *ErrUnknownTrustClass) Error() string {
-	return fmt.Sprintf("proxysvc: unknown trust class %q (known: default, bmc, internal)", e.Class)
+	return fmt.Sprintf("proxysvc: unknown trust class %q (known: %s, %s)", e.Class, BackendTrustPlatform, BackendTrustBMC)
 }
 
 // ErrProxyDisabled is returned when a Handler is requested for a disabled

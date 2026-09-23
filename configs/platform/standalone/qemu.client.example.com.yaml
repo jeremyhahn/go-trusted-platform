@@ -158,13 +158,14 @@ dns:
 # =============================================================================
 
 # Client-side trust bootstrap fetches the CA certificate bundle from the server
-# before TLS can be established. Each class (default, bmc, internal) carries an
+# before TLS can be established. Each class (bootstrap, bmc) carries an
 # ordered strategy chain; strategies are attempted in order until one succeeds.
-# Strategies: dane, noise, spki, embedded (default class).
+# Strategies: dane, noise, spki, embedded (bootstrap class: how this node
+# fetches the platform CA bundle before it has one).
 # NOTE: dane.dns-server is optional when dns.resolver is configured. When
 # omitted, the resolver derives the DNS server from dns.resolver.servers[0].
 trust:
-  default:
+  bootstrap:
     strategies: [dane]
     server-url: "https://10.99.99.2:8443"
     # hostname is required for DANE when server-url uses an IP address,

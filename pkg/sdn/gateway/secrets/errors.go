@@ -151,10 +151,11 @@ func (e *ErrNilSecretsClient) Error() string {
 	return "secrets: the quicbaas SDK client has no secrets service"
 }
 
-// ErrTrustRequired is returned when the store is configured but no trust
-// resolver is available to authenticate the SDK session.
+// ErrTrustRequired is returned when the store is configured but nothing is
+// available to authenticate the SDK session: gatewayd has no platform anchor
+// (`platform-ca-file:`) to verify the store against.
 type ErrTrustRequired struct{}
 
 func (e *ErrTrustRequired) Error() string {
-	return "secrets: a trust: section is required to authenticate the secret store session"
+	return "secrets: the platform CA (platform-ca-file:) is required to authenticate the secret store session"
 }

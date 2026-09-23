@@ -93,9 +93,9 @@ func TestBuildTrustConfig(t *testing.T) {
 
 	config, err := buildTrustConfig(flags)
 	require.NoError(t, err)
-	require.NotNil(t, config.Default)
+	require.NotNil(t, config.Bootstrap)
 
-	scope := config.Default
+	scope := config.Bootstrap
 	assert.Equal(t, "https://platform:8443", scope.ServerURL)
 	assert.Equal(t,
 		[]trust.Strategy{trust.StrategyDANE, trust.StrategyNoise, trust.StrategySPKI},
@@ -181,7 +181,7 @@ func TestBuildTrustConfig_WithNoise(t *testing.T) {
 	config, err := buildTrustConfig(flags)
 	require.NoError(t, err)
 
-	scope := config.Default
+	scope := config.Bootstrap
 	require.NotNil(t, scope.Noise)
 	assert.Equal(t, "aabbccdd", scope.Noise.ServerStaticKey)
 	assert.Equal(t, "platform:9999", scope.Noise.ServerAddr)
@@ -199,7 +199,7 @@ func TestBuildTrustConfig_WithSPKI(t *testing.T) {
 	config, err := buildTrustConfig(flags)
 	require.NoError(t, err)
 
-	scope := config.Default
+	scope := config.Bootstrap
 	require.NotNil(t, scope.SPKI)
 	assert.Equal(t, "deadbeefcafe", scope.SPKI.Pin)
 	assert.Nil(t, scope.Noise)
@@ -218,7 +218,7 @@ func TestBuildTrustConfig_WithBothNoiseAndSPKI(t *testing.T) {
 	config, err := buildTrustConfig(flags)
 	require.NoError(t, err)
 
-	scope := config.Default
+	scope := config.Bootstrap
 	require.NotNil(t, scope.Noise)
 	require.NotNil(t, scope.SPKI)
 }
@@ -233,7 +233,7 @@ func TestBuildTrustConfig_EmptyNoiseKeyDoesNotSetNoise(t *testing.T) {
 
 	config, err := buildTrustConfig(flags)
 	require.NoError(t, err)
-	assert.Nil(t, config.Default.Noise)
+	assert.Nil(t, config.Bootstrap.Noise)
 }
 
 func TestBuildTrustConfig_EmptySPKIPinDoesNotSetSPKI(t *testing.T) {
@@ -245,7 +245,7 @@ func TestBuildTrustConfig_EmptySPKIPinDoesNotSetSPKI(t *testing.T) {
 
 	config, err := buildTrustConfig(flags)
 	require.NoError(t, err)
-	assert.Nil(t, config.Default.SPKI)
+	assert.Nil(t, config.Bootstrap.SPKI)
 }
 
 func TestBuildTrustConfig_EmptyDNSServerDoesNotSetDANE(t *testing.T) {
@@ -257,7 +257,7 @@ func TestBuildTrustConfig_EmptyDNSServerDoesNotSetDANE(t *testing.T) {
 
 	config, err := buildTrustConfig(flags)
 	require.NoError(t, err)
-	assert.Nil(t, config.Default.DANE)
+	assert.Nil(t, config.Bootstrap.DANE)
 }
 
 // =============================================================================

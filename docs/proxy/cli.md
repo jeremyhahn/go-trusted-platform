@@ -179,7 +179,7 @@ platformctl proxy pool add --id web-pool \
 
 platformctl proxy pool add --id api-pool \
     --backend https://api-1.internal.example.com:8443 \
-    --trust-class internal --mtls-client-cert \
+    --trust-class platform --mtls-client-cert \
     --max-idle-conns-per-host 64 --idle-conn-timeout 90s
 
 platformctl proxy pool get web-pool

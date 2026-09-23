@@ -15,8 +15,6 @@ package app
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"testing"
 
@@ -30,43 +28,6 @@ import (
 // ---------------------------------------------------------------------------
 // w1b-prefixed fakes (unique to this file to avoid collisions)
 // ---------------------------------------------------------------------------
-
-// w1bResolverCAErr returns a configurable error from CAPool and a normal
-// TLSConfig so tests can drive the InternalCAPool error branches.
-type w1bResolverCAErr struct {
-	caPoolErr error
-}
-
-func (r *w1bResolverCAErr) TLSConfig(_ context.Context, _ trust.Class, _ string) (*tls.Config, error) {
-	return &tls.Config{MinVersion: tls.VersionTLS12}, nil
-}
-
-func (r *w1bResolverCAErr) CAPool(_ context.Context, _ trust.Class, _ string) (*x509.CertPool, error) {
-	return nil, r.caPoolErr
-}
-
-func (r *w1bResolverCAErr) CABundlePEM(_ context.Context, _ trust.Class) ([]byte, error) {
-	return nil, nil
-}
-
-var _ trust.Resolver = (*w1bResolverCAErr)(nil)
-
-// w1bResolverCAPool returns a fresh pool from CAPool.
-type w1bResolverCAPool struct{}
-
-func (r *w1bResolverCAPool) TLSConfig(_ context.Context, _ trust.Class, _ string) (*tls.Config, error) {
-	return &tls.Config{MinVersion: tls.VersionTLS12}, nil
-}
-
-func (r *w1bResolverCAPool) CAPool(_ context.Context, _ trust.Class, _ string) (*x509.CertPool, error) {
-	return x509.NewCertPool(), nil
-}
-
-func (r *w1bResolverCAPool) CABundlePEM(_ context.Context, _ trust.Class) ([]byte, error) {
-	return nil, nil
-}
-
-var _ trust.Resolver = (*w1bResolverCAPool)(nil)
 
 // ---------------------------------------------------------------------------
 // resolverTLSProvider.TLSConfig (0% → 100%)
@@ -155,70 +116,6 @@ func TestW1bBMCTLSProvider_NonNilResolver(t *testing.T) {
 	}
 	if cfg == nil {
 		t.Error("expected non-nil TLS config from provider")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// InternalCAPool (80% → 100%)
-// ---------------------------------------------------------------------------
-
-// TestW1bInternalCAPool_NilResolver verifies (nil, nil) when no resolver is
-// available.
-func TestW1bInternalCAPool_NilResolver(t *testing.T) {
-	app := &App{Logger: logging.DefaultLogger()}
-	pool, err := app.InternalCAPool(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if pool != nil {
-		t.Error("expected nil pool when resolver unavailable")
-	}
-}
-
-// TestW1bInternalCAPool_ErrClassNotConfigured verifies (nil, nil) when the
-// resolver returns ErrClassNotConfigured (internal scope not configured).
-func TestW1bInternalCAPool_ErrClassNotConfigured(t *testing.T) {
-	notCfg := &trust.ErrClassNotConfigured{Class: trust.ClassInternal}
-	app := &App{
-		Logger:        logging.DefaultLogger(),
-		trustResolver: &w1bResolverCAErr{caPoolErr: notCfg},
-	}
-	pool, err := app.InternalCAPool(context.Background())
-	if err != nil {
-		t.Fatalf("ErrClassNotConfigured should yield (nil, nil), got err=%v", err)
-	}
-	if pool != nil {
-		t.Error("expected nil pool for ErrClassNotConfigured")
-	}
-}
-
-// TestW1bInternalCAPool_OtherError verifies a non-ErrClassNotConfigured
-// error from CAPool is surfaced to the caller.
-func TestW1bInternalCAPool_OtherError(t *testing.T) {
-	wantErr := errors.New("ca pool unavailable")
-	app := &App{
-		Logger:        logging.DefaultLogger(),
-		trustResolver: &w1bResolverCAErr{caPoolErr: wantErr},
-	}
-	_, err := app.InternalCAPool(context.Background())
-	if !errors.Is(err, wantErr) {
-		t.Errorf("err = %v, want %v", err, wantErr)
-	}
-}
-
-// TestW1bInternalCAPool_Success verifies a valid pool is returned when the
-// resolver can build it.
-func TestW1bInternalCAPool_Success(t *testing.T) {
-	app := &App{
-		Logger:        logging.DefaultLogger(),
-		trustResolver: &w1bResolverCAPool{},
-	}
-	pool, err := app.InternalCAPool(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if pool == nil {
-		t.Error("expected non-nil pool on success path")
 	}
 }
 

@@ -274,8 +274,11 @@ The default `reporting-servers` set is **derived** from the control plane the
 node enrolled against (the host of `acme.client.directory`) and logged at
 startup as the effective identity set. An operator-set list **replaces** the
 derived one; it never unions with it. Anchors come, in order, from
-`attestation.reporting.callers.ca-file`, else `heartbeat.ca-file`, else the root
-of the chain that issued this node's IDevID. `GET /api/v1/attestation/callers`
+`attestation.reporting.callers.ca-file`, else `heartbeat.ca-file`, else the
+platform anchor — the root of the chain that issued this node's IDevID, which
+on an enrolled node is the control plane's CA because enrollment imports that
+chain (#653). The anchor source reported for the last is `platform-anchor`.
+`GET /api/v1/attestation/callers`
 reports the compiled policy — strategy, effective identities and their source,
 anchor source, and whether it can admit anyone at all.
 
@@ -377,7 +380,8 @@ to be built around:
   to itself; 200 to the CP). The listener now also requests certificates from
   the caller-admission anchors, and the policy re-verifies the chain itself.
 - The control plane cannot verify a node's server certificate with its own CA.
-  `trust.internal` allows only `platform-ca` by design, so the collector (PR b)
+  The collector verifies against the platform CA only (then the `trust.internal`
+  class, now the unconfigured platform anchor), so the collector (PR b)
   requires node webservice certificates to chain to the platform CA and carry
   the device's name; that is a deploy step, recorded in the collector PR.
 

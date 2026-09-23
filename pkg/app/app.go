@@ -496,8 +496,10 @@ type App struct {
 	BootstrapConfig *bootstrap.Config `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty" mapstructure:"bootstrap"`
 
 	// TrustConfig configures the platform trust resolver: per-class
-	// (default, bmc, internal) ordered strategy chains for establishing
-	// TLS trust, including the client-side CA bundle fetch at first boot.
+	// (bootstrap, bmc) ordered strategy chains for verifying peers the
+	// platform CA did not issue, including the client-side CA bundle fetch
+	// at first boot. Platform-issued peers are verified against
+	// PlatformAnchor, which needs no configuration.
 	TrustConfig *trust.Config `yaml:"trust,omitempty" json:"trust,omitempty" mapstructure:"trust"`
 
 	// danePublisher is the runtime DANE TLSA publisher (not serialized).
@@ -2888,16 +2890,16 @@ func (app *App) FetchProfileAndActivate(
 		app.PlatformKS.Backend(),
 	)
 
-	// Get CA certificate pool for server verification.
-	// TLS verification is mandatory — the platform cannot provision securely
-	// without a trusted root certificate pool.
-	rootCert, err := app.CA.RootCertificate(idevidCert)
+	// The provisioning server is a platform service, so it is verified
+	// against the platform anchor. TLS verification is mandatory — the
+	// platform cannot provision securely without it.
+	anchor, err := app.PlatformAnchor()
 	if err != nil {
-		return nil, nil, &WrappedError{Msg: "failed to get root certificate for IDevID", Err: err}
+		return nil, nil, &WrappedError{Msg: "failed to build the platform anchor", Err: err}
 	}
-	caPool, err := app.CA.TrustedRootCertPool(rootCert)
+	caPool, err := anchor.CAPool(ctx)
 	if err != nil {
-		return nil, nil, &WrappedError{Msg: "failed to get trusted root cert pool", Err: err}
+		return nil, nil, &WrappedError{Msg: "failed to resolve the platform anchor for provisioning", Err: err}
 	}
 
 	// Create provisioning client config
@@ -4559,9 +4561,9 @@ const (
 // BootstrapTrust performs runtime trust bootstrap by fetching the server's CA
 // certificate bundle through the platform trust resolver's default-class
 // strategy chain. The bundle is installed to the system trust store if
-// configured. This method is a no-op when the default class is unset or lists
-// only the embedded strategy (trust comes from the ISO-embedded CA bundle).
-// When the default class's DANE DNS server is empty, it is populated from the
+// configured. This method is a no-op when the bootstrap class is unset or
+// lists only the embedded strategy (trust comes from the ISO-embedded CA
+// bundle). When the bootstrap class's DANE DNS server is empty, it is populated from the
 // platform-wide dns.resolver config so that DANE lookups use the correct
 // server. When any class lists the tofu strategy, a qrdb-backed TOFU pin
 // store is required — ErrBootstrapTOFUNoSDK is returned when the QuicBaaS SDK
@@ -4572,9 +4574,9 @@ func (app *App) BootstrapTrust(ctx context.Context) error {
 		return nil
 	}
 
-	scope := app.TrustConfig.Default
+	scope := app.TrustConfig.Bootstrap
 	if scope == nil {
-		app.Logger.Debug("No default trust scope, skipping trust bootstrap")
+		app.Logger.Debug("No bootstrap trust scope, skipping trust bootstrap")
 		return nil
 	}
 
@@ -4610,7 +4612,7 @@ func (app *App) BootstrapTrust(ctx context.Context) error {
 	}
 	app.trustResolver = resolver
 
-	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassDefault)
+	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassBootstrap)
 	if err != nil {
 		return ErrBootstrapFetchBundle{Cause: err}
 	}
@@ -4637,12 +4639,12 @@ func trustConfigNeedsTOFU(cfg *trust.Config) bool {
 	if cfg == nil {
 		return false
 	}
-	for _, class := range []trust.Class{trust.ClassDefault, trust.ClassBMC, trust.ClassInternal} {
+	for _, class := range trust.Classes() {
 		// Only a class that may actually USE tofu creates a pin-store
 		// need. Without this check a chain listing tofu where it is not
-		// allowed (internal, which permits only platform-ca)
-		// short-circuits with ErrBootstrapTOFUNoSDK, masking the accurate
-		// "strategy not allowed" error NewResolver is about to return.
+		// allowed short-circuits with ErrBootstrapTOFUNoSDK, masking the
+		// accurate "strategy not allowed" error NewResolver is about to
+		// return.
 		//
 		// bmc was in that set under #83 and is not any more: go-xkms#139
 		// made tofu an endpoint verifier, so a bmc chain listing tofu now

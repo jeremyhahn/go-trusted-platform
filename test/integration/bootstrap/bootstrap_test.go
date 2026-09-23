@@ -280,7 +280,7 @@ func TestDANEBootstrap_EndToEnd(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelInfo, os.Stderr)
 
 	trustConfig := &trust.Config{
-		Default: &trust.ScopeConfig{
+		Bootstrap: &trust.ScopeConfig{
 			Strategies:       []trust.Strategy{trust.StrategyDANE},
 			ServerURL:        serverAddr() + BootstrapPath,
 			DANE:             &trust.DANEConfig{DNSServer: dnsAddr()},
@@ -292,7 +292,7 @@ func TestDANEBootstrap_EndToEnd(t *testing.T) {
 	resolver, err := trust.NewResolver(trustConfig, logger)
 	require.NoError(t, err, "failed to create trust resolver")
 
-	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassDefault)
+	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassBootstrap)
 	require.NoError(t, err, "DANE bootstrap fetch failed")
 	require.NotEmpty(t, bundlePEM, "DANE bootstrap returned empty bundle")
 
@@ -329,7 +329,7 @@ func TestTrustResolver_DANE(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelInfo, os.Stderr)
 
 	trustConfig := &trust.Config{
-		Default: &trust.ScopeConfig{
+		Bootstrap: &trust.ScopeConfig{
 			Strategies:       []trust.Strategy{trust.StrategyDANE},
 			ServerURL:        serverAddr() + BootstrapPath,
 			DANE:             &trust.DANEConfig{DNSServer: dnsAddr()},
@@ -341,7 +341,7 @@ func TestTrustResolver_DANE(t *testing.T) {
 	resolver, err := trust.NewResolver(trustConfig, logger)
 	require.NoError(t, err, "failed to create trust resolver")
 
-	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassDefault)
+	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassBootstrap)
 	require.NoError(t, err, "trust resolver DANE fetch failed")
 	require.NotEmpty(t, bundlePEM, "trust resolver returned empty bundle")
 

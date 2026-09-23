@@ -734,7 +734,8 @@ bootstrap:
 `bootstrap.noise.enabled` is true; a construction or start failure is logged as
 a warning and the daemon continues without it.
 
-Trust configuration (`trust.default` / `trust.bmc` / `trust.internal`) and DANE
+Trust configuration (`trust.bootstrap` / `trust.bmc`, and the unconfigured
+platform anchor) and DANE
 publication (`dns.dane.*`) are owned elsewhere — see
 [configuration.md](configuration.md) for the full key list and
 [`docs/dns/dane.md`](../dns/dane.md) for the record semantics. The keys this
@@ -1009,6 +1010,6 @@ which statement to distrust.
 | [pxe-bootstrap.md](pxe-bootstrap.md): phases numbered 0–7 with "Watch" as phase 6 | The phase constants are `discovery`, `switch`, `deploy`, `control-plane`, `seed`, `remaining-nodes`, `bmc-enroll`, `health-gate`, `teardown`. Install-log watching is part of per-node provisioning, not a separate phase. |
 | [pxe-bootstrap.md](pxe-bootstrap.md): per-MAC staging publishes `hostname` and `installer.yaml` | Client (non-control-plane) nodes additionally receive `ca-bundle.pem` and `bootstrap-spki-pin`. |
 | [api-reference-rest.md](api-reference-rest.md): the bootstrap endpoint's errors are 404 and 500 | The handler also returns **503** when the CA is not initialised, and **400** for an unparseable `algorithm` value. |
-| [README.md](README.md), [overview.md](overview.md): four strategies (DANE, Noise, SPKI, Embedded) | The `default` class allows five — `dane`, `noise`, `spki`, `embedded`, `tofu` — and the `bmc` class allows `dane`, `spki`, `ca-file` (`tofu` was removed from `bmc` in #83). |
+| [README.md](README.md), [overview.md](overview.md): four strategies (DANE, Noise, SPKI, Embedded) | The `bootstrap` class allows five — `dane`, `noise`, `spki`, `embedded`, `tofu` — and the `bmc` class allows `dane`, `spki`, `ca-file`, `tofu` (`tofu` was removed from `bmc` in #83 and restored after go-xkms#139 made it endpoint pinning). |
 | [overview.md](overview.md): "Rollover Manager: orchestrates RFC 7671 pre-publication rollover" | Implemented, but with no production caller (§7.2). The live path calls the publisher directly. |
 | [config-reference.md](config-reference.md) and others: examples use RFC 1918 addresses and site-specific hosts | Replace with `example.com` / `<install-dir>` placeholders when editing. The five files in this folder use placeholders only. |

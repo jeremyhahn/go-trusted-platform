@@ -68,9 +68,9 @@ type Config struct {
 	KeyFile string `yaml:"key-file" json:"key_file" mapstructure:"key-file"`
 
 	// CAFile optionally anchors server verification to an explicit CA
-	// bundle. When empty the trust resolver's internal-class CA pool is
-	// used if a trust: section is configured, falling back to the
-	// operating-system trust store otherwise.
+	// bundle. When empty the platform anchor is used if `platform-ca-file:`
+	// is configured, falling back to the operating-system trust store
+	// otherwise.
 	CAFile string `yaml:"ca-file,omitempty" json:"ca_file,omitempty" mapstructure:"ca-file"`
 }
 

@@ -167,7 +167,7 @@ func buildTrustConfig(flags *trustFlags) (*trust.Config, error) {
 		}
 	}
 
-	return &trust.Config{Default: scope}, nil
+	return &trust.Config{Bootstrap: scope}, nil
 }
 
 // strategiesFromFlag maps the --strategy flag value onto an ordered
@@ -230,7 +230,7 @@ func runTrust(ctx context.Context, flags *trustFlags, commonFlags *cli.CommonFla
 		return ErrTrustBootstrapFailed{Cause: err}
 	}
 
-	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassDefault)
+	bundlePEM, err := resolver.CABundlePEM(ctx, trust.ClassBootstrap)
 	if err != nil {
 		return ErrTrustBootstrapFailed{Cause: err}
 	}

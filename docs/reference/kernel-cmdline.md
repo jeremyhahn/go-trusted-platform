@@ -244,10 +244,10 @@ and propagate through the install flow to the running platform daemon's
 ```
 Kernel cmdline param          Install-time action               trust: YAML key
 ─────────────────────────────────────────────────────────────────────────────────
-bootstrap_strategy=<s>        passed to provisioning client     trust.default.strategies: [<s>]
-bootstrap_dns=<server>        passed to provisioning client     trust.default.dane.dns-server: <server>
-bootstrap_noise_key=<hex>     passed to provisioning client     trust.default.noise.server-static-key: <hex>
-bootstrap_spki_pin=<pin>      autoinstall.sh writes pin to      trust.default.spki.pin-file:
+bootstrap_strategy=<s>        passed to provisioning client     trust.bootstrap.strategies: [<s>]
+bootstrap_dns=<server>        passed to provisioning client     trust.bootstrap.dane.dns-server: <server>
+bootstrap_noise_key=<hex>     passed to provisioning client     trust.bootstrap.noise.server-static-key: <hex>
+bootstrap_spki_pin=<pin>      autoinstall.sh writes pin to      trust.bootstrap.spki.pin-file:
                               /etc/trusted-platform/                /etc/trusted-platform/bootstrap-spki-pin
                               bootstrap-spki-pin
 ```
@@ -275,9 +275,13 @@ trust:
 
 | Class | Allowed strategies | Typical use |
 |-------|--------------------|-------------|
-| `default` | dane, noise, spki, embedded, tofu | First-boot CA bundle fetch; provisioning client TLS |
+| `bootstrap` | dane, noise, spki, embedded, tofu | First-boot CA bundle fetch, before the node holds the platform CA |
 | `bmc` | dane, spki, ca-file, tofu | BMC Redfish / IPMI-over-TLS client |
-| `internal` | platform-ca | Intra-platform mTLS (attestation push, SDN reporter) |
+
+Platform-issued peers (attestation, SDN reporter, provisioning, heartbeat) are
+not a class: they are verified against the platform anchor, which needs no
+configuration — see
+[docs/bootstrap/configuration.md](../bootstrap/configuration.md#platform-anchor).
 
 The `trust:` key is read into `pkg/app.AppConfig.TrustConfig` and wired to
 `pkg/trust.NewResolver()`. It is NOT the same as the `pkg/bootstrap.ClientConfig`

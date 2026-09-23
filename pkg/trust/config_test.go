@@ -23,23 +23,23 @@ import (
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Default == nil {
+	if cfg.Bootstrap == nil {
 		t.Fatal("expected default scope to be configured")
 	}
 	want := []Strategy{StrategyDANE, StrategyNoise, StrategySPKI}
-	if len(cfg.Default.Strategies) != len(want) {
-		t.Fatalf("expected %d strategies, got %d", len(want), len(cfg.Default.Strategies))
+	if len(cfg.Bootstrap.Strategies) != len(want) {
+		t.Fatalf("expected %d strategies, got %d", len(want), len(cfg.Bootstrap.Strategies))
 	}
 	for i, strategy := range want {
-		if cfg.Default.Strategies[i] != strategy {
-			t.Errorf("strategy %d: expected %s, got %s", i, strategy, cfg.Default.Strategies[i])
+		if cfg.Bootstrap.Strategies[i] != strategy {
+			t.Errorf("strategy %d: expected %s, got %s", i, strategy, cfg.Bootstrap.Strategies[i])
 		}
 	}
-	if cfg.Default.PerMethodTimeout != 5*time.Second {
-		t.Errorf("expected 5s timeout, got %s", cfg.Default.PerMethodTimeout)
+	if cfg.Bootstrap.PerMethodTimeout != 5*time.Second {
+		t.Errorf("expected 5s timeout, got %s", cfg.Bootstrap.PerMethodTimeout)
 	}
-	if cfg.BMC != nil || cfg.Internal != nil {
-		t.Error("expected bmc and internal scopes to be unconfigured")
+	if cfg.BMC != nil {
+		t.Error("expected the bmc scope to be unconfigured")
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected default config to validate, got %v", err)
@@ -47,24 +47,20 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestConfigScope(t *testing.T) {
-	defaultScope := &ScopeConfig{Strategies: []Strategy{StrategyEmbedded}}
+	bootstrapScope := &ScopeConfig{Strategies: []Strategy{StrategyEmbedded}}
 	bmcScope := &ScopeConfig{Strategies: []Strategy{StrategySPKI}}
-	internalScope := &ScopeConfig{Strategies: []Strategy{StrategyPlatformCA}}
-	cfg := &Config{Default: defaultScope, BMC: bmcScope, Internal: internalScope}
+	cfg := &Config{Bootstrap: bootstrapScope, BMC: bmcScope}
 
-	if cfg.Scope(ClassDefault) != defaultScope {
-		t.Error("expected default scope")
+	if cfg.Scope(ClassBootstrap) != bootstrapScope {
+		t.Error("expected bootstrap scope")
 	}
 	if cfg.Scope(ClassBMC) != bmcScope {
 		t.Error("expected bmc scope")
 	}
-	if cfg.Scope(ClassInternal) != internalScope {
-		t.Error("expected internal scope")
-	}
 }
 
 func TestConfigScope_Unknown(t *testing.T) {
-	cfg := &Config{Default: &ScopeConfig{Strategies: []Strategy{StrategyEmbedded}}}
+	cfg := &Config{Bootstrap: &ScopeConfig{Strategies: []Strategy{StrategyEmbedded}}}
 	if cfg.Scope(Class("bogus")) != nil {
 		t.Error("expected nil scope for unknown class")
 	}
@@ -75,7 +71,7 @@ func TestConfigScope_Unknown(t *testing.T) {
 
 func TestConfigValidate_Valid(t *testing.T) {
 	cfg := &Config{
-		Default: &ScopeConfig{
+		Bootstrap: &ScopeConfig{
 			Strategies: []Strategy{StrategyDANE, StrategyNoise, StrategySPKI, StrategyEmbedded},
 			ServerURL:  "https://cp.example.com:8443",
 			Hostname:   "cp.example.com",
@@ -89,9 +85,6 @@ func TestConfigValidate_Valid(t *testing.T) {
 		BMC: &ScopeConfig{
 			Strategies: []Strategy{StrategyDANE, StrategySPKI},
 		},
-		Internal: &ScopeConfig{
-			Strategies: []Strategy{StrategyPlatformCA},
-		},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected valid config, got %v", err)
@@ -99,7 +92,7 @@ func TestConfigValidate_Valid(t *testing.T) {
 }
 
 func TestConfigValidate_EmptyStrategies(t *testing.T) {
-	cfg := &Config{Default: &ScopeConfig{}}
+	cfg := &Config{Bootstrap: &ScopeConfig{}}
 	err := cfg.Validate()
 	var invalid *ErrInvalidConfig
 	if !errors.As(err, &invalid) {
@@ -108,7 +101,7 @@ func TestConfigValidate_EmptyStrategies(t *testing.T) {
 	if invalid.Field != "strategies" {
 		t.Errorf("expected strategies field, got %s", invalid.Field)
 	}
-	if invalid.Class != ClassDefault {
+	if invalid.Class != ClassBootstrap {
 		t.Errorf("expected default class, got %s", invalid.Class)
 	}
 }
@@ -127,21 +120,22 @@ func TestConfigValidate_StrategyNotAllowed(t *testing.T) {
 			strategy: StrategyNoise,
 		},
 		{
-			name:     "dane not allowed for internal",
-			cfg:      &Config{Internal: &ScopeConfig{Strategies: []Strategy{StrategyDANE}}},
-			class:    ClassInternal,
-			strategy: StrategyDANE,
+			name:     "ca-file not allowed for bootstrap",
+			cfg:      &Config{Bootstrap: &ScopeConfig{Strategies: []Strategy{StrategyCAFile}}},
+			class:    ClassBootstrap,
+			strategy: StrategyCAFile,
 		},
 		{
-			name:     "platform-ca not allowed for default",
-			cfg:      &Config{Default: &ScopeConfig{Strategies: []Strategy{StrategyPlatformCA}}},
-			class:    ClassDefault,
-			strategy: StrategyPlatformCA,
+			// The platform CA is the Anchor, not a strategy any class may list.
+			name:     "platform-ca is no longer a strategy",
+			cfg:      &Config{BMC: &ScopeConfig{Strategies: []Strategy{Strategy("platform-ca")}}},
+			class:    ClassBMC,
+			strategy: Strategy("platform-ca"),
 		},
 		{
 			name:     "unknown strategy rejected",
-			cfg:      &Config{Default: &ScopeConfig{Strategies: []Strategy{Strategy("bogus")}}},
-			class:    ClassDefault,
+			cfg:      &Config{Bootstrap: &ScopeConfig{Strategies: []Strategy{Strategy("bogus")}}},
+			class:    ClassBootstrap,
 			strategy: Strategy("bogus"),
 		},
 	}
@@ -164,7 +158,7 @@ func TestConfigValidate_NoiseNilConfigAllowed(t *testing.T) {
 	// A chain may list noise without supplying its inputs; the
 	// resolver records a runtime attempt failure instead (legacy
 	// auto-mode semantics).
-	cfg := &Config{Default: &ScopeConfig{Strategies: []Strategy{StrategyNoise}}}
+	cfg := &Config{Bootstrap: &ScopeConfig{Strategies: []Strategy{StrategyNoise}}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected valid config, got %v", err)
 	}
@@ -189,7 +183,7 @@ func TestConfigValidate_NoiseRequirements(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{Default: &ScopeConfig{
+			cfg := &Config{Bootstrap: &ScopeConfig{
 				Strategies: []Strategy{StrategyNoise},
 				Noise:      tt.noise,
 			}}
@@ -210,20 +204,20 @@ func TestConfigValidate_SPKIPinFileResolution(t *testing.T) {
 	if err := os.WriteFile(pinFile, []byte("  deadbeefcafe\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &Config{Default: &ScopeConfig{
+	cfg := &Config{Bootstrap: &ScopeConfig{
 		Strategies: []Strategy{StrategySPKI},
 		SPKI:       &SPKIConfig{PinFile: pinFile},
 	}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected valid config, got %v", err)
 	}
-	if cfg.Default.SPKI.Pin != "deadbeefcafe" {
-		t.Errorf("expected pin resolved from file, got %q", cfg.Default.SPKI.Pin)
+	if cfg.Bootstrap.SPKI.Pin != "deadbeefcafe" {
+		t.Errorf("expected pin resolved from file, got %q", cfg.Bootstrap.SPKI.Pin)
 	}
 }
 
 func TestConfigValidate_SPKIPinFileUnreadable(t *testing.T) {
-	cfg := &Config{Default: &ScopeConfig{
+	cfg := &Config{Bootstrap: &ScopeConfig{
 		Strategies: []Strategy{StrategySPKI},
 		SPKI:       &SPKIConfig{PinFile: filepath.Join(t.TempDir(), "missing")},
 	}}
@@ -256,7 +250,7 @@ func TestConfigValidate_CAFileWithoutPathAllowed(t *testing.T) {
 }
 
 func TestConfigValidate_NegativeTimeout(t *testing.T) {
-	cfg := &Config{Default: &ScopeConfig{
+	cfg := &Config{Bootstrap: &ScopeConfig{
 		Strategies:       []Strategy{StrategyEmbedded},
 		PerMethodTimeout: -1 * time.Second,
 	}}

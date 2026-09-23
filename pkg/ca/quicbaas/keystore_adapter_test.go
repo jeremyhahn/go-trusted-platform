@@ -1564,6 +1564,18 @@ func TestQuicBaaSKeyStore_KeyProvider(t *testing.T) {
 	})
 }
 
+// TestQuicBaaSKeyStore_Type pins the honest answer: the KMS backend behind
+// the SDK is server configuration this adapter cannot see, so it reports
+// StoreUnknown rather than claiming a backend kind it does not know.
+func TestQuicBaaSKeyStore_Type(t *testing.T) {
+	ks, err := NewQuicBaaSKeyStore(&QuicBaaSKeyStoreConfig{
+		KMS:    &mockSDKKMSClient{},
+		Crypto: &mockSDKCryptoClient{},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, xkmssdk.StoreUnknown, ks.Type())
+}
+
 func TestQuicBaaSKeyStore_CertStorage(t *testing.T) {
 	t.Run("returns nil", func(t *testing.T) {
 		ks, _ := NewQuicBaaSKeyStore(&QuicBaaSKeyStoreConfig{

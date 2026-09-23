@@ -182,36 +182,55 @@ func (p *ZoneMatrixProvider) Update(resp *platformv1.GetProxyZoneMatrixResponse)
 // Trust resolver adapter
 // =============================================================================
 
-// trustClasses maps proxy backend trust-class strings onto platform trust
-// resolver classes.
-var trustClasses = map[string]trust.Class{
-	string(trust.ClassDefault):  trust.ClassDefault,
-	string(trust.ClassBMC):      trust.ClassBMC,
-	string(trust.ClassInternal): trust.ClassInternal,
-}
+// Backend trust classes: what a pool's backend server certificate is
+// verified against. These are the only values `tls: trust-class:` accepts.
+const (
+	// BackendTrustPlatform verifies a backend the platform CA issued — a
+	// platform service — against the platform anchor.
+	BackendTrustPlatform = "platform"
 
-// TrustResolverAdapter adapts the platform trust resolver (pkg/trust) to
-// the proxy.TrustResolver seam consumed by backend pool transports.
+	// BackendTrustBMC verifies a baseboard management controller through
+	// the trust resolver's bmc class.
+	BackendTrustBMC = string(trust.ClassBMC)
+)
+
+// TrustResolverAdapter adapts the platform anchor and trust resolver
+// (pkg/trust) to the proxy.TrustResolver seam consumed by backend pool
+// transports.
 type TrustResolverAdapter struct {
 	resolver trust.Resolver
+	anchor   *trust.Anchor
 }
 
-// NewTrustResolverAdapter wraps a platform trust resolver.
-func NewTrustResolverAdapter(resolver trust.Resolver) (*TrustResolverAdapter, error) {
-	if resolver == nil {
+// NewTrustResolverAdapter wraps the daemon's trust resolver and platform
+// anchor. Either may be nil — a gateway with no `trust:` section verifies
+// no BMC backends, and one with no `platform-ca-file:` verifies no platform
+// backends — but not both, since the adapter could then verify nothing.
+func NewTrustResolverAdapter(resolver trust.Resolver, anchor *trust.Anchor) (*TrustResolverAdapter, error) {
+	if resolver == nil && anchor == nil {
 		return nil, &ErrNilResolver{}
 	}
-	return &TrustResolverAdapter{resolver: resolver}, nil
+	return &TrustResolverAdapter{resolver: resolver, anchor: anchor}, nil
 }
 
-// ClientTLSConfig implements proxy.TrustResolver. Unknown trust classes are
-// a typed error — never a fallback to default trust.
+// ClientTLSConfig implements proxy.TrustResolver. An unknown trust class, or
+// one whose trust source this gateway was not given, is a typed error —
+// never a fallback to other trust.
 func (a *TrustResolverAdapter) ClientTLSConfig(ctx context.Context, trustClass, endpoint string) (*tls.Config, error) {
-	class, ok := trustClasses[trustClass]
-	if !ok {
+	switch trustClass {
+	case BackendTrustPlatform:
+		if a.anchor == nil {
+			return nil, &ErrTrustSourceMissing{Class: trustClass, Source: "platform-ca-file:"}
+		}
+		return a.anchor.TLSConfig(ctx)
+	case BackendTrustBMC:
+		if a.resolver == nil {
+			return nil, &ErrTrustSourceMissing{Class: trustClass, Source: "trust: bmc:"}
+		}
+		return a.resolver.TLSConfig(ctx, trust.ClassBMC, endpoint)
+	default:
 		return nil, &ErrUnknownTrustClass{Class: trustClass}
 	}
-	return a.resolver.TLSConfig(ctx, class, endpoint)
 }
 
 var _ proxy.TrustResolver = (*TrustResolverAdapter)(nil)

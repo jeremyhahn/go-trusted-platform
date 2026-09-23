@@ -133,7 +133,7 @@ installer / iPXE flow) goes through the canonical fetch library at
 The platform repo does NOT import `go-truststrap` directly from
 application code. The platform-side resolver (`pkg/trust/resolver.go`)
 maps each `trust.Strategy` (`dane`, `noise`, `spki`, `embedded`,
-`ca-file`, `platform-ca`) onto a fetch function; the network-fetching
+`ca-file`, `tofu`) onto a fetch function; the network-fetching
 strategies call `bootstrap.Fetch()` with the matching
 `bootstrap.Mode`. Ordered chains in scope config subsume the old
 `ModeAuto` fallback.

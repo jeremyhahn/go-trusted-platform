@@ -160,8 +160,10 @@ type BackendConfig struct {
 
 // BackendTLSConfig describes how the pool transport authenticates backends.
 type BackendTLSConfig struct {
-	// TrustClass selects the trust class resolved through the injected
-	// TrustResolver. Empty leaves the transport with default TLS trust.
+	// TrustClass selects what the backend's certificate is verified
+	// against, through the injected TrustResolver: "platform" for a backend
+	// the platform CA issued, "bmc" for a baseboard management controller.
+	// Empty leaves the transport with default TLS trust.
 	TrustClass string `yaml:"trust-class,omitempty" json:"trust_class,omitempty" mapstructure:"trust-class"`
 	// MTLSClientCert requests a client certificate in the resolved TLS
 	// configuration. Interpreted by the TrustResolver implementation.

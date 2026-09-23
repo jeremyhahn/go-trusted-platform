@@ -201,7 +201,7 @@ func buildDHCPNetwork() map[string]interface{} {
 // operations. It checks the following sources in priority order:
 //
 //  1. The client platform config's dns.resolver.servers[0] (platform-wide default)
-//  2. The client platform config's trust.default.dane.dns-server (scope-level override)
+//  2. The client platform config's trust.bootstrap.dane.dns-server (scope-level override)
 //  3. A fallback constructed from serverIP and the default public DNS port (8053)
 //
 // This allows the DNS server address to be centrally configured in the
@@ -224,22 +224,22 @@ func resolveBootstrapDNSServer(clientConfigPath string, serverIP string) string 
 }
 
 // dnsConfigFragment is a partial struct used to unmarshal the dns.resolver and
-// trust.default.dane sections from a platform config YAML file.
+// trust.bootstrap.dane sections from a platform config YAML file.
 type dnsConfigFragment struct {
 	DNS *struct {
 		Resolver *dns.ResolverConfig `yaml:"resolver"`
 	} `yaml:"dns"`
 	Trust *struct {
-		Default *struct {
+		Bootstrap *struct {
 			DANE *struct {
 				DNSServer string `yaml:"dns-server"`
 			} `yaml:"dane"`
-		} `yaml:"default"`
+		} `yaml:"bootstrap"`
 	} `yaml:"trust"`
 }
 
 // extractDNSServerFromConfig parses platform config YAML and extracts the DNS
-// server address from the dns.resolver section or trust.default.dane.dns-server.
+// server address from the dns.resolver section or trust.bootstrap.dane.dns-server.
 // extractDNSServerFromConfig returns an empty string if neither is configured.
 // resolveServerHostname extracts the server's domain (hostname) from its platform
 // config. This is needed for DANE TLSA lookups when the ServerURL uses an IP address,
@@ -272,12 +272,12 @@ func extractDNSServerFromConfig(configData []byte) string {
 		}
 	}
 
-	// Priority 2: trust.default.dane.dns-server
+	// Priority 2: trust.bootstrap.dane.dns-server
 	if fragment.Trust != nil &&
-		fragment.Trust.Default != nil &&
-		fragment.Trust.Default.DANE != nil &&
-		fragment.Trust.Default.DANE.DNSServer != "" {
-		return fragment.Trust.Default.DANE.DNSServer
+		fragment.Trust.Bootstrap != nil &&
+		fragment.Trust.Bootstrap.DANE != nil &&
+		fragment.Trust.Bootstrap.DANE.DNSServer != "" {
+		return fragment.Trust.Bootstrap.DANE.DNSServer
 	}
 
 	return ""

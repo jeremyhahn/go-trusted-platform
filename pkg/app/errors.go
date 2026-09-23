@@ -508,3 +508,19 @@ type ErrHeartbeatCABundleInvalid struct {
 func (e ErrHeartbeatCABundleInvalid) Error() string {
 	return "heartbeat: no certificates parsed from ca-file " + e.Path
 }
+
+// ErrPlatformAnchorNoIdentity signals that the platform anchor cannot be
+// derived because this node has no TPM or CA, so it holds no IDevID whose
+// issuing chain names the platform CA.
+type ErrPlatformAnchorNoIdentity struct{}
+
+// Error implements the error interface.
+func (e ErrPlatformAnchorNoIdentity) Error() string {
+	return "platform anchor: this node has no TPM-backed IDevID and CA to derive the platform CA from"
+}
+
+// Is implements errors.Is equality for value-type errors.
+func (e ErrPlatformAnchorNoIdentity) Is(target error) bool {
+	_, ok := target.(ErrPlatformAnchorNoIdentity)
+	return ok
+}

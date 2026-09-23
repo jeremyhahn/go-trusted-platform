@@ -30,6 +30,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/reporting"
@@ -225,7 +228,7 @@ func TestCollectorTLSDialer_FailsClosedWithoutIdentity(t *testing.T) {
 	assert.Contains(t, ident.Error(), "certificate authority")
 }
 
-func TestCollectorAnchors_OperatorBundleThenResolver(t *testing.T) {
+func TestCollectorAnchors_OperatorBundleThenPlatformAnchor(t *testing.T) {
 	root := selfSignedCA(t, "root-ca.compute.example.io", true)
 	bundle := writeCallerBundle(t, root)
 	src, err := collectorAnchors(&app.App{}, &config.CollectorConfig{CAFile: bundle}, quietLogger())
@@ -241,8 +244,48 @@ func TestCollectorAnchors_OperatorBundleThenResolver(t *testing.T) {
 	assert.Contains(t, ident.Error(), "missing.pem")
 
 	_, err = collectorAnchors(&app.App{}, nil, quietLogger())
-	require.ErrorAs(t, err, &ident, "no bundle and no trust resolver: fail closed")
-	assert.Contains(t, ident.Error(), "trust.internal")
+	require.ErrorAs(t, err, &ident, "no bundle and no TPM identity: fail closed")
+	assert.Contains(t, ident.Error(), "collector.ca-file")
+}
+
+// TestCollectorAnchors_PlatformAnchorWithoutConfiguration is the control
+// plane's case, which failed every 15 minutes with `trust: class "internal"
+// is not configured`: with no collector.ca-file, a node's certificate is
+// verified against the platform anchor — here the CA that issued the control
+// plane's own IDevID — with no trust configuration at all.
+func TestCollectorAnchors_PlatformAnchorWithoutConfiguration(t *testing.T) {
+	platformRoot, platformKey := controlPlaneTestRoot(t)
+	nodeCert := issueCollectorIdentity(t, platformRoot, platformKey, "lab-node-5.example.internal")
+	idevid := issueCollectorIdentity(t, platformRoot, platformKey, "cp.example.internal")
+	a := &app.App{
+		TPM: &collectorAnchorTPM{idevid: idevid},
+		CA:  &collectorAnchorCA{root: platformRoot},
+	}
+
+	src, err := collectorAnchors(a, nil, quietLogger())
+	require.NoError(t, err)
+	pool, err := src(context.Background(), reporting.Endpoint{Address: "192.0.2.5:9443"})
+	require.NoError(t, err)
+	_, err = nodeCert.Verify(x509.VerifyOptions{Roots: pool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
+	assert.NoError(t, err, "a platform-issued node certificate must verify against the collector's anchor")
+}
+
+// collectorAnchorTPM serves the node's IDevID certificate.
+type collectorAnchorTPM struct {
+	xkmssdk.TrustedPlatformModule
+	idevid *x509.Certificate
+}
+
+func (f *collectorAnchorTPM) IDevIDCertificate() (*x509.Certificate, error) { return f.idevid, nil }
+
+// collectorAnchorCA resolves every certificate to the platform root.
+type collectorAnchorCA struct {
+	quicbaasca.CACertificateAuthority
+	root *x509.Certificate
+}
+
+func (f *collectorAnchorCA) RootCertificate(*x509.Certificate) (*x509.Certificate, error) {
+	return f.root, nil
 }
 
 func TestInitReportingCollector_OffOrUnbuildable(t *testing.T) {

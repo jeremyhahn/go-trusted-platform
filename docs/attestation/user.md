@@ -397,7 +397,8 @@ attestation:
 
 With nothing set, the node admits the control plane it enrolled against (the
 host of `acme.client.directory`) and trusts the CA in `heartbeat.ca-file`, or
-failing that the root that issued its IDevID. Check what is actually enforced
+failing that the platform anchor — the root that issued its IDevID, reported as
+anchor source `platform-anchor`. Check what is actually enforced
 on the node:
 
 ```bash

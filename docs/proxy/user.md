@@ -89,7 +89,7 @@ that — no authentication — so type it deliberately.
 ```bash
 platformctl proxy pool add --id api-pool \
     --backend https://api-1.internal.example.com:8443 \
-    --trust-class internal --mtls-client-cert
+    --trust-class platform --mtls-client-cert
 
 platformctl proxy route add --id api \
     --host api.example.com --path-prefix /api --pool api-pool \
@@ -107,8 +107,10 @@ What each piece buys you:
 - **`--backend-zone services`** — the zone matrix must permit
   `trusted → services`. This is the same table that programs the network's flow
   rules, so route reachability and network reachability cannot drift apart.
-- **`--trust-class internal`** on the pool — the proxy verifies the *backend's*
-  certificate against the internal class, and presents its own.
+- **`--trust-class platform`** on the pool — the proxy verifies the
+  *backend's* certificate against the platform CA (the gateway's platform
+  anchor, `platform-ca-file:`), and presents its own. A BMC backend uses
+  `--trust-class bmc` instead, verified through the `trust: bmc:` class.
 - **`--strip-prefix`** — the backend sees `/` where the caller sent `/api`.
 
 ---

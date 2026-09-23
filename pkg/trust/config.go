@@ -11,21 +11,29 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-// Package trust provides the platform-wide trust resolver. It maps a trust
-// class (default, bmc, internal) and a peer endpoint onto a verified
-// *tls.Config, *x509.CertPool, or raw CA bundle PEM by delegating to the
-// canonical xkms generic resolver via the QuicBaaS SDK re-export.
+// Package trust answers the two trust questions the platform has.
 //
-// This package owns only:
-//   - The three platform class constants (default, bmc, internal).
-//   - Per-class strategy allowlists, including TOFU for default and bmc.
-//   - platform-ca → provider-ca normalization before handing config to
-//     the generic resolver.
-//   - Type aliases so existing call sites keep compiling unchanged.
+// The first is "what is the platform's own certificate authority". Every
+// certificate the platform issues chains to it, so it is a fact every node
+// holds rather than a setting: Anchor exposes it, fed by an AnchorSource —
+// the control plane's own CA, an enrolled node's IDevID issuing chain, or the
+// bundle provisioning places on a node that runs no CA. It is not
+// configurable, because it has exactly one correct answer.
 //
-// Strategy dispatch, caching, install, and all per-strategy fetch logic
-// live in go-xkms pkg/trust/resolver, reached through the QuicBaaS SDK
-// re-export per the SDK-consumption invariant in CLAUDE.md.
+// The second is "how do I verify something that is NOT platform-issued".
+// That is a policy, and it is what Resolver resolves: a trust class and a
+// peer endpoint map onto a verified *tls.Config, *x509.CertPool, or raw CA
+// bundle PEM through an ordered strategy chain. There are two classes:
+//
+//   - bootstrap: acquiring the platform CA bundle before a node has it
+//     (DANE, Noise, SPKI, the ISO-embedded bundle, TOFU).
+//   - bmc: baseboard management controllers, which present self-signed or
+//     vendor certificates (DANE, SPKI, CA file, TOFU).
+//
+// Strategy dispatch, caching, install, and all per-strategy fetch logic live
+// in go-xkms pkg/trust/resolver, reached through the QuicBaaS SDK re-export
+// per the SDK-consumption invariant in CLAUDE.md. This package owns the class
+// constants, their strategy allowlists, and Anchor.
 package trust
 
 import (
@@ -41,27 +49,32 @@ import (
 type Class string
 
 const (
-	// ClassDefault is the trust class for the platform's own control
-	// plane endpoints (CA bundle fetch at first boot, ACME directory,
-	// webservice provisioning).
-	ClassDefault Class = "default"
+	// ClassBootstrap is the trust class for acquiring the platform CA
+	// bundle before a node holds it: the first-boot bundle fetch from the
+	// control plane. Once acquired, the bundle is the node's Anchor, and
+	// platform-issued peers are verified against the Anchor, never against
+	// this class.
+	ClassBootstrap Class = "bootstrap"
 
 	// ClassBMC is the trust class for baseboard management controllers
 	// (Redfish, IPMI-over-TLS, vendor CGI endpoints).
 	ClassBMC Class = "bmc"
-
-	// ClassInternal is the trust class for intra-platform services that
-	// present platform-CA-issued certificates (attestation push, SDN
-	// reporter, mTLS webservice clients).
-	ClassInternal Class = "internal"
 )
+
+// classes lists every trust class in a stable order.
+var classes = []Class{ClassBootstrap, ClassBMC}
+
+// Classes returns every trust class in a stable order, so callers that walk
+// the classes do not keep a list of their own that drifts when one changes.
+func Classes() []Class {
+	return append([]Class(nil), classes...)
+}
 
 // Strategy identifies a single trust-establishment method within a
 // class's ordered chain.
 //
 // The generic resolver (go-xkms/pkg/trust/resolver) recognises the string
-// values directly; the platform-ca constant is normalised to provider-ca
-// before being passed to the generic resolver.
+// values directly.
 type Strategy = xkmsresolver.Strategy
 
 const (
@@ -85,13 +98,6 @@ const (
 	// StrategyCAFile trusts a CA bundle PEM file on local disk.
 	StrategyCAFile = xkmsresolver.StrategyCAFile
 
-	// StrategyPlatformCA trusts the platform's own certificate authority
-	// bundle, supplied by an injected CABundleProvider. In the platform
-	// YAML this strategy is spelled "platform-ca"; the resolver
-	// normalises it to "provider-ca" before delegating to the generic
-	// resolver.
-	StrategyPlatformCA Strategy = "platform-ca"
-
 	// StrategyTOFU fetches a CA bundle from the scope's ServerURL over a
 	// channel pinned on first use: the BUNDLE SERVER's leaf SPKI pin is
 	// captured and persisted via the injected TOFUPinStore, and later
@@ -110,10 +116,10 @@ const (
 )
 
 // allowedStrategies defines which strategies each class may use. The
-// chains are intentionally narrow: internal services are always
-// platform-CA verified; BMC endpoints never speak Noise.
+// chains are intentionally narrow: BMC endpoints never speak Noise and
+// serve no bundle to fetch.
 var allowedStrategies = map[Class]map[Strategy]bool{
-	ClassDefault: {
+	ClassBootstrap: {
 		StrategyDANE:     true,
 		StrategyNoise:    true,
 		StrategySPKI:     true,
@@ -146,23 +152,18 @@ var allowedStrategies = map[Class]map[Strategy]bool{
 		// operator must obtain out of band.
 		StrategyTOFU: true,
 	},
-	ClassInternal: {
-		StrategyPlatformCA: true,
-	},
 }
 
 // Config is the top-level `trust:` configuration. Each class is optional;
 // an unconfigured class fails resolution with ErrClassNotConfigured.
 //
-// The YAML schema is deliberately flat (default:, bmc:, internal: at the
-// top level) to remain backward compatible with existing operator configs
-// and templates. Internally, Config.ToGeneric() projects these fields into
-// the generic resolver's Scopes map with platform-ca → provider-ca
-// normalisation.
+// There is deliberately no class for platform-issued peers: the platform CA
+// is not a policy choice, and Anchor answers it without configuration.
+// Config.ToGeneric() projects the classes into the generic resolver's Scopes
+// map.
 type Config struct {
-	Default  *ScopeConfig `yaml:"default,omitempty" json:"default,omitempty" mapstructure:"default"`
-	BMC      *ScopeConfig `yaml:"bmc,omitempty" json:"bmc,omitempty" mapstructure:"bmc"`
-	Internal *ScopeConfig `yaml:"internal,omitempty" json:"internal,omitempty" mapstructure:"internal"`
+	Bootstrap *ScopeConfig `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty" mapstructure:"bootstrap"`
+	BMC       *ScopeConfig `yaml:"bmc,omitempty" json:"bmc,omitempty" mapstructure:"bmc"`
 }
 
 // ScopeConfig configures a single trust class: the ordered strategy chain
@@ -232,7 +233,7 @@ type NoiseConfig = xkmsresolver.NoiseConfig
 // operator hand-curates the deploy YAML.
 type SPKIConfig = xkmsresolver.SPKIConfig
 
-// DefaultConfig returns a Config with the default class configured for the
+// DefaultConfig returns a Config with the bootstrap class configured for the
 // standard fetch chain (dane, noise, spki) and a conservative per-method
 // timeout.
 //
@@ -241,7 +242,7 @@ type SPKIConfig = xkmsresolver.SPKIConfig
 // explaining trust-on-first-use semantics.
 func DefaultConfig() *Config {
 	return &Config{
-		Default: &ScopeConfig{
+		Bootstrap: &ScopeConfig{
 			Strategies:       []Strategy{StrategyDANE, StrategyNoise, StrategySPKI},
 			PerMethodTimeout: 5 * time.Second,
 		},
@@ -252,21 +253,19 @@ func DefaultConfig() *Config {
 // class is not configured.
 func (c *Config) Scope(class Class) *ScopeConfig {
 	scopes := map[Class]*ScopeConfig{
-		ClassDefault:  c.Default,
-		ClassBMC:      c.BMC,
-		ClassInternal: c.Internal,
+		ClassBootstrap: c.Bootstrap,
+		ClassBMC:       c.BMC,
 	}
 	return scopes[class]
 }
 
 // Validate checks every configured class for invalid strategy chains and
 // missing per-strategy inputs. SPKI pin files are resolved into the Pin
-// field as a side effect. Platform-level validation covers class
-// allowlists and platform-ca normalisation checks; structural validation
-// of the generic fields is delegated to the generic resolver via
-// ToGeneric().Validate().
+// field as a side effect. Platform-level validation covers the class
+// allowlists; structural validation of the generic fields is delegated to
+// the generic resolver via ToGeneric().Validate().
 func (c *Config) Validate() error {
-	for _, class := range []Class{ClassDefault, ClassBMC, ClassInternal} {
+	for _, class := range classes {
 		scope := c.Scope(class)
 		if scope == nil {
 			continue
@@ -279,11 +278,10 @@ func (c *Config) Validate() error {
 }
 
 // ToGeneric projects this platform Config into the generic xkms resolver
-// Config. It normalises platform-ca → provider-ca in every strategy list
-// and maps the three class-named fields into the Scopes map.
+// Config, mapping the class-named fields into the Scopes map.
 func (c *Config) ToGeneric() *xkmsresolver.Config {
-	scopes := make(map[string]*xkmsresolver.ScopeConfig, 3)
-	for _, class := range []Class{ClassDefault, ClassBMC, ClassInternal} {
+	scopes := make(map[string]*xkmsresolver.ScopeConfig, len(classes))
+	for _, class := range classes {
 		scope := c.Scope(class)
 		if scope == nil {
 			continue
@@ -293,20 +291,10 @@ func (c *Config) ToGeneric() *xkmsresolver.Config {
 	return &xkmsresolver.Config{Scopes: scopes}
 }
 
-// toGeneric converts a ScopeConfig to the generic xkms ScopeConfig,
-// normalising platform-ca → provider-ca in the strategy list.
+// toGeneric converts a ScopeConfig to the generic xkms ScopeConfig.
 func (s *ScopeConfig) toGeneric() *xkmsresolver.ScopeConfig {
-	strategies := make([]xkmsresolver.Strategy, len(s.Strategies))
-	for i, start := range s.Strategies {
-		if start == StrategyPlatformCA {
-			strategies[i] = xkmsresolver.StrategyProviderCA
-		} else {
-			strategies[i] = start
-		}
-	}
-
 	generic := &xkmsresolver.ScopeConfig{
-		Strategies:           strategies,
+		Strategies:           append([]Strategy(nil), s.Strategies...),
 		ServerURL:            s.ServerURL,
 		Hostname:             s.Hostname,
 		BundlePath:           s.BundlePath,
@@ -414,7 +402,7 @@ func AllowedStrategiesForClass(class Class) []Strategy {
 	out := make([]Strategy, 0, len(allowed))
 	for _, s := range []Strategy{
 		StrategyDANE, StrategyNoise, StrategySPKI, StrategyEmbedded,
-		StrategyCAFile, StrategyPlatformCA, StrategyTOFU,
+		StrategyCAFile, StrategyTOFU,
 	} {
 		if allowed[s] {
 			out = append(out, s)

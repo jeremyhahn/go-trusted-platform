@@ -90,7 +90,7 @@ func startGatewayd(t *testing.T, echoURL string) *gatewaydFixture {
 		},
 	}
 
-	handler, err := gwcommands.BuildProxyHandler(cfg, nil, nil)
+	handler, err := gwcommands.BuildProxyHandler(cfg, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildProxyHandler: %v", err)
 	}

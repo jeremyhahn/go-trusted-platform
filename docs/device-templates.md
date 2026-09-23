@@ -131,8 +131,10 @@ the baked config acts as a safety net.
 
 `gateway.enabled: true` in a template is what makes a node a gateway to the
 installer, the ISO builder and firstboot (#66): that node gets `gatewayd`
-packaged and started, and its `gateway:`, `sdn:`, `trust:`, `proxy:` and
-`control-plane:` sections are projected into `/etc/gatewayd/config.yaml`. The
+packaged and started, and its `gateway:`, `sdn:`, `trust:`, `proxy:`,
+`secret-store:` and `control-plane:` sections, plus the `platform-ca-file:` key
+(gatewayd's platform anchor), are projected into `/etc/gatewayd/config.yaml`
+(`pkg/config.GatewaydConfigSections`). The
 gateway templates carry a `control-plane:` reporter section whose `gateway-id`
 must equal `gateway.id` — it is the Common Name of the client certificate the
 control plane issued for the gateway. platformd itself does not decode

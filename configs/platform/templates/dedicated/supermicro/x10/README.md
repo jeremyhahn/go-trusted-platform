@@ -147,8 +147,8 @@ Without it, `issueWebServiceCertificate` falls to its local-CA branch and the
 node serves a certificate issued by its OWN CA (`ca01.gw…`, `ca01.compute…`).
 Two things then fail, both silently:
 
-- The reporting collector verifies a node through the trust resolver's
-  `internal` class, which permits ONLY `platform-ca` — the control-plane CA.
+- The reporting collector verifies a node against the platform anchor — the
+  control-plane CA, and nothing else.
   A locally-issued certificate cannot chain there, so the collector's mTLS
   fails against every node and remote attestation produces no verdict.
 - The bootstrap orchestrator's post-install health probe verifies against the

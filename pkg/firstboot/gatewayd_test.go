@@ -36,10 +36,10 @@ platform:
 sdn:
   enabled: true
   bridge: trusted0
+platform-ca-file: /etc/gatewayd/cp-ca.pem
 trust:
-  internal:
-    strategies: [platform-ca]
-    ca-file: /etc/gatewayd/cp-ca.pem
+  bmc:
+    strategies: [spki, tofu]
 secret-store:
   quicbaas-addr: cp.example.internal:9443
   quicbaas-transport: grpc
@@ -82,7 +82,7 @@ func TestRenderGatewaydConfig_ProjectsOnlyGatewaydSections(t *testing.T) {
 	require.NoError(t, err)
 
 	doc := decodeYAML(t, rendered)
-	for _, section := range []string{"gateway", "sdn", "trust", "secret-store", "control-plane"} {
+	for _, section := range []string{"gateway", "sdn", "trust", "platform-ca-file", "secret-store", "control-plane"} {
 		assert.Contains(t, doc, section)
 	}
 	assert.NotContains(t, doc, "proxy", "a section the platform config lacks is not invented")
@@ -107,8 +107,9 @@ func TestRenderGatewaydConfig_ProjectsOnlyGatewaydSections(t *testing.T) {
 	// which resolves no kms:// reference at all: the same failure as
 	// dropping the section.
 	var projected struct {
-		Secrets *secrets.Config `yaml:"secret-store"`
-		Trust   *trust.Config   `yaml:"trust"`
+		Secrets        *secrets.Config `yaml:"secret-store"`
+		Trust          *trust.Config   `yaml:"trust"`
+		PlatformCAFile string          `yaml:"platform-ca-file"`
 	}
 	require.NoError(t, yaml.Unmarshal(rendered, &projected))
 
@@ -120,15 +121,14 @@ func TestRenderGatewaydConfig_ProjectsOnlyGatewaydSections(t *testing.T) {
 	require.NoError(t, projected.Secrets.Validate(),
 		"gatewayd validates this section at load; a projection it rejects resolves nothing")
 
-	// The internal trust class is the secret store's precondition: it
-	// authenticates the session, and on a gateway node its platform CA
-	// bundle is the projected file.
+	// The platform anchor is the secret store's precondition: it
+	// authenticates the session, and gatewayd runs no CA, so on a gateway
+	// node the anchor is this projected bundle. Dropping the key would leave
+	// every kms:// reference unresolvable.
+	assert.Equal(t, "/etc/gatewayd/cp-ca.pem", projected.PlatformCAFile,
+		"gatewayd runs no CA; its platform anchor is this bundle")
 	require.NotNil(t, projected.Trust, "the trust section must survive projection")
-	internal := projected.Trust.Scope(trust.ClassInternal)
-	require.NotNil(t, internal, "the store's session is authenticated by the internal class")
-	assert.Equal(t, []trust.Strategy{trust.StrategyPlatformCA}, internal.Strategies)
-	assert.Equal(t, "/etc/gatewayd/cp-ca.pem", internal.CAFile,
-		"gatewayd runs no CA; the internal class resolves through this bundle")
+	require.NotNil(t, projected.Trust.Scope(trust.ClassBMC))
 	require.NoError(t, projected.Trust.Validate())
 }
 

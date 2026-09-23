@@ -207,11 +207,11 @@ func TestTLSConfig_DANE_Success(t *testing.T) {
 	bundle := testCAPEM(t)
 	server := startBundleServer(t, cert, bundle)
 
-	cfg := &Config{Default: daneScope(t, server.URL, dnsAddr)}
+	cfg := &Config{Bootstrap: daneScope(t, server.URL, dnsAddr)}
 	resolver := newTestResolver(t, cfg)
 
 	endpoint := server.Listener.Addr().String()
-	tlsCfg, err := resolver.TLSConfig(t.Context(), ClassDefault, endpoint)
+	tlsCfg, err := resolver.TLSConfig(t.Context(), ClassBootstrap, endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,10 +244,10 @@ func TestTLSConfig_DANE_WrongCertRejected(t *testing.T) {
 	dnsAddr := startMockTLSADNS(t, tlsaRecord(3, spkiHashHex(t, otherCert)))
 	server := startBundleServer(t, serverCert, testCAPEM(t))
 
-	cfg := &Config{Default: daneScope(t, server.URL, dnsAddr)}
+	cfg := &Config{Bootstrap: daneScope(t, server.URL, dnsAddr)}
 	resolver := newTestResolver(t, cfg)
 
-	tlsCfg, err := resolver.TLSConfig(t.Context(), ClassDefault, server.Listener.Addr().String())
+	tlsCfg, err := resolver.TLSConfig(t.Context(), ClassBootstrap, server.Listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,10 +269,10 @@ func TestCABundlePEM_DANE_Success(t *testing.T) {
 		tlsaRecord(2, pemSPKIHashHex(t, bundle)))
 	server := startBundleServer(t, cert, bundle)
 
-	cfg := &Config{Default: daneScope(t, server.URL, dnsAddr)}
+	cfg := &Config{Bootstrap: daneScope(t, server.URL, dnsAddr)}
 	resolver := newTestResolver(t, cfg)
 
-	pem, err := resolver.CABundlePEM(t.Context(), ClassDefault)
+	pem, err := resolver.CABundlePEM(t.Context(), ClassBootstrap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,10 +283,10 @@ func TestCABundlePEM_DANE_Success(t *testing.T) {
 
 func TestCABundlePEM_DANE_NoServerURL(t *testing.T) {
 	scope := daneScope(t, "", "127.0.0.1:53")
-	cfg := &Config{Default: scope}
+	cfg := &Config{Bootstrap: scope}
 	resolver := newTestResolver(t, cfg)
 
-	_, err := resolver.CABundlePEM(t.Context(), ClassDefault)
+	_, err := resolver.CABundlePEM(t.Context(), ClassBootstrap)
 	var fetchErr *ErrFetchFailed
 	if !errors.As(err, &fetchErr) {
 		t.Fatalf("expected ErrFetchFailed, got %v", err)
@@ -304,11 +304,11 @@ func TestCAPool_DANE_Success(t *testing.T) {
 		tlsaRecord(2, pemSPKIHashHex(t, bundle)))
 	server := startBundleServer(t, cert, bundle)
 
-	cfg := &Config{Default: daneScope(t, server.URL, dnsAddr)}
+	cfg := &Config{Bootstrap: daneScope(t, server.URL, dnsAddr)}
 	resolver := newTestResolver(t, cfg)
 
 	endpoint := server.Listener.Addr().String()
-	pool, err := resolver.CAPool(t.Context(), ClassDefault, endpoint)
+	pool, err := resolver.CAPool(t.Context(), ClassBootstrap, endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestCAPool_DANE_Success(t *testing.T) {
 	// Second call must hit the cache: shut the DNS server down via a
 	// fresh resolver pointing at a dead address to prove the cached
 	// pool is reused without a new fetch.
-	cached, err := resolver.CAPool(t.Context(), ClassDefault, endpoint)
+	cached, err := resolver.CAPool(t.Context(), ClassBootstrap, endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,10 +337,10 @@ func TestCAPool_DANE_EmptyBundle(t *testing.T) {
 		tlsaRecord(2, spkiHashHex(t, cert)))
 	server := startBundleServer(t, cert, nil)
 
-	cfg := &Config{Default: daneScope(t, server.URL, dnsAddr)}
+	cfg := &Config{Bootstrap: daneScope(t, server.URL, dnsAddr)}
 	resolver := newTestResolver(t, cfg)
 
-	_, err := resolver.CAPool(t.Context(), ClassDefault, server.Listener.Addr().String())
+	_, err := resolver.CAPool(t.Context(), ClassBootstrap, server.Listener.Addr().String())
 	var fetchErr *ErrFetchFailed
 	if !errors.As(err, &fetchErr) {
 		t.Fatalf("expected ErrFetchFailed in chain, got %v", err)

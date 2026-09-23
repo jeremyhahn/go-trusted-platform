@@ -51,8 +51,8 @@ func (c *snapshotCollector) Collect(ctx context.Context) (*gwstate.Snapshot, err
 // The HTTP client presents the gateway's configured client certificate
 // (its IDevID-derived platform identity) at TLS handshake time and
 // anchors server verification on, in order of precedence: the explicit
-// ca-file, the trust resolver's internal-class CA pool when a trust:
-// section is configured, or the operating-system trust store.
+// ca-file, the platform anchor when `platform-ca-file:` is configured, or
+// the operating-system trust store.
 func BuildReporter(ctx context.Context, cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (*controlplane.Reporter, error) {
 	if cfg == nil {
 		return nil, ErrConfigLoadFailed
@@ -93,7 +93,11 @@ func BuildReporter(ctx context.Context, cfg *ServeConfig, gw *gateway.Gateway, l
 		return nil, &ErrGatewayIDNotReportable{GatewayID: gatewayID}
 	}
 
-	httpClient, certCN, err := buildReporterHTTPClient(ctx, cpCfg, cfg.Trust, cfg.DataDir, logger)
+	anchor, err := buildPlatformAnchor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	httpClient, certCN, err := buildReporterHTTPClient(ctx, cpCfg, anchor)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +137,7 @@ func BuildReporter(ctx context.Context, cfg *ServeConfig, gw *gateway.Gateway, l
 // binds reported telemetry to — so the caller can reject a gateway-id /
 // certificate mismatch before the reporter starts. The CN is empty when
 // no client certificate is configured.
-func buildReporterHTTPClient(ctx context.Context, cpCfg *controlplane.Config, trustCfg *trust.Config, dataDir string, logger *slog.Logger) (*http.Client, string, error) {
+func buildReporterHTTPClient(ctx context.Context, cpCfg *controlplane.Config, anchor *trust.Anchor) (*http.Client, string, error) {
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS13}
 
 	var certCN string
@@ -149,7 +153,7 @@ func buildReporterHTTPClient(ctx context.Context, cpCfg *controlplane.Config, tr
 		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
 
-	roots, err := reporterRootCAs(ctx, cpCfg, trustCfg, dataDir, logger)
+	roots, err := reporterRootCAs(ctx, cpCfg, anchor)
 	if err != nil {
 		return nil, "", err
 	}
@@ -188,10 +192,10 @@ func clientCertCommonName(cert *tls.Certificate) (string, error) {
 }
 
 // reporterRootCAs resolves the CA pool anchoring control-plane server
-// verification. An explicit ca-file wins; otherwise the trust resolver's
-// internal-class pool is used when a trust: section is configured. With
-// neither, nil selects the operating-system trust store.
-func reporterRootCAs(ctx context.Context, cpCfg *controlplane.Config, trustCfg *trust.Config, dataDir string, logger *slog.Logger) (*x509.CertPool, error) {
+// verification. An explicit ca-file wins; otherwise the platform anchor
+// (`platform-ca-file:`) is used. With neither, nil selects the
+// operating-system trust store.
+func reporterRootCAs(ctx context.Context, cpCfg *controlplane.Config, anchor *trust.Anchor) (*x509.CertPool, error) {
 	if cpCfg.CAFile != "" {
 		pem, err := os.ReadFile(cpCfg.CAFile)
 		if err != nil {
@@ -203,16 +207,12 @@ func reporterRootCAs(ctx context.Context, cpCfg *controlplane.Config, trustCfg *
 		}
 		return pool, nil
 	}
-	resolver, err := buildTrustResolver(trustCfg, dataDir, logger)
-	if err != nil {
-		return nil, err
-	}
-	if resolver == nil {
+	if anchor == nil {
 		return nil, nil
 	}
 	resolveCtx, cancel := context.WithTimeout(ctx, trustResolveTimeout)
 	defer cancel()
-	return resolver.CAPool(resolveCtx, trust.ClassInternal, "")
+	return anchor.CAPool(resolveCtx)
 }
 
 // BuildReconciler constructs the desired-config reconcile loop from the

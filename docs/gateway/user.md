@@ -415,29 +415,24 @@ Everything about this fails closed, on purpose:
 
 - No `secret-store:` section, and any service that references a secret refuses
   to start. Nothing runs with a reference where a key belongs.
-- A `secret-store:` without a `trust: internal:` class is refused
+- A `secret-store:` without `platform-ca-file:` is refused
   (`secrets.ErrTrustRequired`): the session to the store is verified against
-  the platform CA, and `internal` is the class that carries it. Verification
-  is one-way today — the gateway checks the store, the store does not yet get
-  a client certificate from the gateway (#658). `platform-ca` is the only
-  strategy that class permits. Both shipped gateway templates configure it;
-  removing it means commenting `secret-store:` out too.
-- That class needs the platform CA bundle to verify the store against, and a
-  gateway runs no CA of its own — so `trust: internal:` also names the bundle
-  file provisioning puts on the node:
+  the platform CA, and a gateway runs no CA of its own, so it needs the
+  platform CA bundle provisioning puts on the node:
 
   ```yaml
-  trust:
-    internal:
-      strategies: [platform-ca]
-      ca-file: /etc/gatewayd/cp-ca.pem   # the control-plane bundle
+  platform-ca-file: /etc/gatewayd/cp-ca.pem   # the platform CA bundle
   ```
 
-  Configured without it, gatewayd refuses to start and says so
-  (`trust: internal: lists the platform-ca strategy with no ca-file`) instead
-  of starting and then failing every `kms://` reference. The file is read at
-  each resolution, so a rotated bundle needs no restart; a bundle not yet
-  delivered fails the resolution naming the path.
+  This is gatewayd's platform anchor: it verifies every platform service the
+  gateway talks to — the store, platformd over grpc, the proxy's mTLS callers
+  and `trust-class: platform` backends, the control-plane reporter. It is not a
+  `trust:` class; there is no strategy to choose. Verification is one-way today
+  — the gateway checks the store, the store does not yet get a client
+  certificate from the gateway (#658). Both shipped gateway templates set it;
+  removing it means commenting `secret-store:` out too. The file is read at
+  each verification, so a rotated bundle needs no restart; a bundle not yet
+  delivered fails the verification naming the path.
 - A reference that does not resolve, or that resolves to nothing, refuses the
   service. An empty password is not a password.
 - A bare value where a reference belongs is refused rather than used as the

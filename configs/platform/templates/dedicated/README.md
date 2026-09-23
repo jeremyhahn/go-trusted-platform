@@ -378,34 +378,32 @@ replacements (`bmc.skip-tls-verify` and `bmc.ca-cert-path`).
 
 ---
 
-### `trust.internal` — Platform-Internal Trust (gateway role)
+### `platform-ca-file` — The Platform Anchor (gateway role)
 
-The two gateway templates also ship a `trust.internal` scope. It is the
-class that authenticates gatewayd's session to the platform secret store
-(`secret-store:`), so it stands behind every `kms://` and `secret://`
-reference the gateway configuration carries — the BGP neighbour passwords,
-the TCP-AO master keys, the ipsec and wireguard keys.
+The two gateway templates set a top-level `platform-ca-file:`. It is the
+platform CA bundle provisioning delivers to the node, and it is gatewayd's
+platform anchor: every platform service the gateway talks to is verified
+against it. That includes the platform secret store (`secret-store:`), so it
+stands behind every `kms://` and `secret://` reference the gateway
+configuration carries — the BGP neighbour passwords, the TCP-AO master keys,
+the ipsec and wireguard keys — as well as platformd over grpc, the proxy's
+mTLS callers and `trust-class: platform` backends, and the telemetry reporter.
 
 ```yaml
-trust:
-  internal:
-    strategies: [platform-ca]
-    ca-file: /etc/gatewayd/cp-ca.pem
+platform-ca-file: /etc/gatewayd/cp-ca.pem
 ```
 
-`platform-ca` is the only strategy the internal class permits, and it
-resolves through an injected CA bundle provider rather than from the file's
-own strategy inputs. **On the control plane platformd injects an adapter
-over its own CA. A gateway runs no CA**, so `ca-file:` is where gatewayd
-reads the platform bundle from — the same control-plane bundle the
-telemetry reporter verifies with (`control-plane.ca-file`), delivered to the
-node by provisioning.
+It is not a `trust:` class and there is no strategy to choose: a
+platform-issued certificate chains to the platform CA and to nothing else.
+platformd derives the same anchor from the chain that issued its IDevID; a
+gateway runs no CA and holds no IDevID, so the bundle file is its source. It
+replaced the retired `trust: internal:` class.
 
-Configure the class without `ca-file:` and gatewayd refuses to start
-(`trust: internal: lists the platform-ca strategy with no ca-file`) rather
-than starting into a daemon whose every secret reference fails at service
-start. The file is read at each resolution, so a rotated bundle needs no
-restart; a bundle not yet on disk fails the resolution naming the path.
+Without it, a gateway with a `secret-store:` refuses to start
+(`secrets.ErrTrustRequired`) rather than starting into a daemon whose every
+secret reference fails at service start. The file is read at each
+verification, so a rotated bundle needs no restart; a bundle not yet on disk
+fails the verification naming the path.
 
 ---
 

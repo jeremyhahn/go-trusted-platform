@@ -28,7 +28,7 @@ proxy:
   tls:
     cert-file: /etc/gatewayd/tls/server.pem       # front-door server cert (PEM, leaf + chain)
     key-file: /etc/gatewayd/tls/server-key.pem    # server key (PEM)
-    client-ca-file: /etc/gatewayd/tls/ca.pem      # optional; default = trust resolver internal-class CA pool
+    client-ca-file: /etc/gatewayd/tls/ca.pem      # optional; default = the platform anchor (platform-ca-file:)
 
   listeners:                # gatewayd-local; NEVER synced from platformd
     - id: https
@@ -60,7 +60,7 @@ proxy:
       max-idle-conns-per-host: 32
       idle-conn-timeout: 90s
       tls:
-        trust-class: internal       # default | bmc | internal (pkg/trust classes)
+        trust-class: platform       # platform (platform anchor) | bmc (trust: bmc: class)
         mtls-client-cert: false
       backends:
         - url: http://10.0.10.20:8080
@@ -102,13 +102,14 @@ proxy:
   platformd:
     protocol: unix          # unix (default) | grpc
     socket: /run/platformd.sock
-    grpc-addr: cp.example.com:10443   # grpc protocol; TLS anchored by trust: (class internal)
+    grpc-addr: cp.example.com:10443   # grpc protocol; TLS anchored by platform-ca-file: (the platform anchor)
 ```
 
-The `trust:` section (platform trust resolver, `pkg/trust`) is shared
-with the rest of gatewayd; when present it supplies the client CA pool
-(unless `client-ca-file` overrides it), backend-pool TLS trust classes,
-and the TLS anchor for the `grpc` platformd protocol.
+Two gatewayd-wide trust sources back the proxy. The top-level
+`platform-ca-file:` is the platform anchor: it supplies the client CA pool
+(unless `client-ca-file` overrides it), `trust-class: platform` backend
+TLS, and the TLS anchor for the `grpc` platformd protocol. The `trust:`
+section (`pkg/trust` resolver) supplies `trust-class: bmc` backend TLS.
 
 The broker `issuer` / `jwks-url` are deployment-specific and therefore
 required config (typed validation error when missing) — there is no
@@ -155,5 +156,6 @@ sync loop retries on the next tick.
   typed startup error (`ErrServerTLSRequired` / `ErrClientCARequired`).
 - platformd unreachable → gatewayd starts on the static configuration
   and logs a warn per failed sync attempt; no crash loop.
-- `platformd.protocol: grpc` without a `trust:` section → typed startup
-  error (`ErrTrustRequiredForGRPC`); TLS verification is never skipped.
+- `platformd.protocol: grpc` without `platform-ca-file:` → typed startup
+  error (`ErrPlatformAnchorRequiredForGRPC`); TLS verification is never
+  skipped.

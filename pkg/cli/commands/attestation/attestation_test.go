@@ -443,7 +443,7 @@ func policy() *platformv1.CallerPolicyDescription {
 	return &platformv1.CallerPolicyDescription{
 		Strategy: "identity-list", Identities: []string{"cp.trusted-platform.internal"},
 		IdentitiesSource: "attestation.callers.identities", ListValid: true,
-		AnchorsConfigured: true, AnchorSource: "trust.internal",
+		AnchorsConfigured: true, AnchorSource: "platform-anchor",
 	}
 }
 
@@ -477,7 +477,7 @@ func TestDescribeCallers_JSONCarriesTheWireShape(t *testing.T) {
 	assert.Equal(t, []any{"cp.trusted-platform.internal"}, raw["identities"])
 	assert.Equal(t, true, raw["list_valid"])
 	assert.Equal(t, false, raw["admits_nobody"])
-	assert.Equal(t, "trust.internal", raw["anchor_source"])
+	assert.Equal(t, "platform-anchor", raw["anchor_source"])
 }
 
 func TestDescribeCallers_Error(t *testing.T) {

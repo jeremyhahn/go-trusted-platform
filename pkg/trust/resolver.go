@@ -48,10 +48,6 @@ type Resolver interface {
 // *ErrPinNotFound so the resolver can fall back to the scope's static pin.
 type PinStore = xkmsresolver.PinStore
 
-// CABundleProvider supplies the platform CA bundle PEM for the platform-ca
-// strategy.
-type CABundleProvider = xkmsresolver.CABundleProvider
-
 // TOFUPinStore is the TOFU pin persistence store required by the tofu
 // strategy. Use bootstrap.NewStoragePinStore to construct a storage-backed
 // instance.
@@ -68,7 +64,6 @@ type Option func(*resolverOptions)
 // is constructed.
 type resolverOptions struct {
 	pinStore      PinStore
-	platformCA    CABundleProvider
 	tofuPinStore  TOFUPinStore
 	tofuConfirmFn func(ctx context.Context, pin *xkmsresolver.TOFUPin) error
 }
@@ -78,14 +73,6 @@ type resolverOptions struct {
 func WithPinStore(store PinStore) Option {
 	return func(o *resolverOptions) {
 		o.pinStore = store
-	}
-}
-
-// WithPlatformCA injects the platform CA bundle source required by the
-// platform-ca strategy.
-func WithPlatformCA(provider CABundleProvider) Option {
-	return func(o *resolverOptions) {
-		o.platformCA = provider
 	}
 }
 
@@ -148,9 +135,6 @@ func NewResolver(config *Config, logger *logging.Logger, opts ...Option) (Resolv
 	if o.pinStore != nil {
 		genericOpts = append(genericOpts, xkmsresolver.WithPinStore(o.pinStore))
 	}
-	if o.platformCA != nil {
-		genericOpts = append(genericOpts, xkmsresolver.WithCABundleProvider(o.platformCA))
-	}
 	if o.tofuPinStore != nil {
 		genericOpts = append(genericOpts, xkmsresolver.WithTOFUPinStore(o.tofuPinStore))
 	}
@@ -158,8 +142,6 @@ func NewResolver(config *Config, logger *logging.Logger, opts ...Option) (Resolv
 		genericOpts = append(genericOpts, xkmsresolver.WithTOFUConfirmFunc(o.tofuConfirmFn))
 	}
 
-	// Project platform Config into the generic resolver config (includes
-	// platform-ca → provider-ca normalisation).
 	genericCfg := config.ToGeneric()
 
 	gen, err := xkmsresolver.New(genericCfg, genericOpts...)

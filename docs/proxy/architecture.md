@@ -227,13 +227,16 @@ HTTP listener is permitted only when every route is `public`.
 
 Two further TLS legs, both outbound and both anchored by `pkg/trust`:
 
-- **Proxy → backend.** Per pool, when `tls.trust-class` is set. Unknown class
-  is a typed error (`ErrUnknownTrustClass`), never default trust. Resolution
+- **Proxy → backend.** Per pool, when `tls.trust-class` is set: `platform`
+  verifies against the platform anchor (`platform-ca-file:`), `bmc` through the
+  `trust: bmc:` class. Unknown class is a typed error (`ErrUnknownTrustClass`),
+  and a class whose source is not configured is `ErrTrustSourceMissing` —
+  never default trust. Resolution
   uses the pool's **first** backend host as the representative endpoint, so a
   pool must be homogeneous in trust terms.
 - **gatewayd → platformd.** Unix socket by default; `platformd.protocol: grpc`
-  requires a `trust:` section (`ErrTrustRequiredForGRPC`). Verification is
-  never skipped.
+  requires `platform-ca-file:`, the platform anchor
+  (`ErrPlatformAnchorRequiredForGRPC`). Verification is never skipped.
 
 ### 6.2 Where token validation happens — and what it is not
 

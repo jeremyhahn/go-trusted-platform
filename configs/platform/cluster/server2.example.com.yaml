@@ -706,14 +706,14 @@ proxy:
       backends:
         - url: "https://server2.example.internal:8443"
       tls:
-        trust-class: internal
+        trust-class: platform
     - id: client-workloads
       backends:
       - url: "https://client1.example.internal:9443"
       - url: "https://client2.example.internal:9443"
       - url: "https://client3.example.internal:9443"
       tls:
-        trust-class: internal
+        trust-class: platform
   routes:
     # The console authenticates its own users (WebAuthn / platform tokens),
     # so the proxy admits the request and the backend decides.

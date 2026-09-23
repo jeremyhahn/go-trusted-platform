@@ -392,7 +392,7 @@ keys, parsed by viper (`LoadServeConfig`).
 | `proxy.sync.interval` | duration | `15s` (`DefaultSyncInterval`) | Zero normalises to the default |
 | `proxy.platformd.protocol` | `unix` \| `grpc` | `unix` | Anything else → `ErrConfigInvalid` |
 | `proxy.platformd.socket` | path | `/run/platformd.sock` (`DefaultPlatformdSocket`) | `unix` protocol |
-| `proxy.platformd.grpc-addr` | host:port | — | **Required** for `grpc`; also requires a `trust:` section (`ErrTrustRequiredForGRPC`) |
+| `proxy.platformd.grpc-addr` | host:port | — | **Required** for `grpc`; also requires `platform-ca-file:`, the platform anchor (`ErrPlatformAnchorRequiredForGRPC`) |
 | `proxy.attestation.enabled` | bool | `false` | Enables the gate |
 | `proxy.attestation.cache-ttl` | duration | `60s` | Per-device verdict reuse |
 | `proxy.attestation.negative-cache-ttl` | duration | `5s` | Failed-query reuse — the deny window |
@@ -441,8 +441,9 @@ and is validated by `Config.Validate`.
 1. Reject a disabled section (`ErrProxyDisabled`); `Config.Validate()`, which
    delegates route/pool/listener rules to `proxy.Config.Validate` — the single
    source of truth.
-2. Build the `pkg/trust` resolver from `trust:` when present.
-3. Resolve the client CA pool (`client-ca-file`, else `trust.ClassInternal`,
+2. Build the `pkg/trust` resolver from `trust:` when present, and the platform
+   anchor from `platform-ca-file:` when present.
+3. Resolve the client CA pool (`client-ca-file`, else the platform anchor,
    bounded by a 30s `trustResolveTimeout`).
 4. Build server TLS: `tls.VersionTLS13` minimum, `ClientAuth:
    VerifyClientCertIfGiven` when a pool exists.

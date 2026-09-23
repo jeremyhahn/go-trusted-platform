@@ -315,12 +315,14 @@ platform is first drawn here.
 
 1. **Operator workstation → BMC.** The first contact with a BMC is the weakest
    link in the whole flow: BMC certificates are typically self-signed and often
-   expired. The `bmc` trust class allows only `dane`, `spki` and `ca-file` —
-   **not `tofu`**, which fetches a CA bundle a BMC does not serve (#83,
-   upstream go-xkms#139). First contact is therefore `bmc_spki_pin`: the
-   operator supplies the fingerprint out of band. Nothing is persisted, so a
-   later run starts from the same
-   place — that is a deliberate limitation, not an oversight.
+   expired. The `bmc` trust class allows `dane`, `spki`, `ca-file` and
+   `tofu`. `tofu` was barred under #83 while it only fetched a CA bundle, which
+   a BMC does not serve; go-xkms#139 made it pin the BMC's own certificate on
+   first contact, so it is allowed again. First contact is `tofu` where the
+   chain lists it, else `bmc_spki_pin`, a fingerprint the operator supplies out
+   of band. In a `platformctl bootstrap` run a tofu pin lives in memory for the
+   run only. Nothing is persisted, so a later run starts from the same place —
+   that is a deliberate limitation, not an oversight.
 
 2. **Operator workstation → deployer host and switch.** Fail-closed SSH host-key
    pinning, no TOFU. An unpinned host is a hard error at client construction.

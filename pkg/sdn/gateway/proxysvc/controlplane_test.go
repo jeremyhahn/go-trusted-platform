@@ -15,9 +15,14 @@ package proxysvc
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"math/big"
 	"sync"
 	"testing"
 	"time"
@@ -263,63 +268,152 @@ func TestZoneMatrixProviderUpdatePairZoneMissingFromNames(t *testing.T) {
 // TrustResolverAdapter
 // =============================================================================
 
-func TestNewTrustResolverAdapterNilResolver(t *testing.T) {
-	_, err := NewTrustResolverAdapter(nil)
+func TestNewTrustResolverAdapterNeedsATrustSource(t *testing.T) {
+	_, err := NewTrustResolverAdapter(nil, nil)
 	var nilErr *ErrNilResolver
 	if !errors.As(err, &nilErr) {
 		t.Fatalf("err = %v, want *ErrNilResolver", err)
 	}
 }
 
-func TestTrustResolverAdapterClassMapping(t *testing.T) {
-	for _, class := range []string{"default", "bmc", "internal"} {
-		t.Run(class, func(t *testing.T) {
-			fake := &fakeTrustResolver{}
-			adapter, err := NewTrustResolverAdapter(fake)
-			if err != nil {
-				t.Fatalf("NewTrustResolverAdapter: %v", err)
-			}
-			cfg, err := adapter.ClientTLSConfig(context.Background(), class, "backend:8443")
-			if err != nil {
-				t.Fatalf("ClientTLSConfig: %v", err)
-			}
-			if cfg == nil {
-				t.Fatal("nil tls config")
-			}
-			if string(fake.lastClass) != class {
-				t.Fatalf("resolver class = %q, want %q", fake.lastClass, class)
-			}
-			if fake.lastEndpoint != "backend:8443" {
-				t.Fatalf("endpoint = %q", fake.lastEndpoint)
-			}
-		})
+// TestTrustResolverAdapterBMCUsesTheResolver pins the bmc class to the trust
+// resolver, with the backend endpoint passed through for endpoint pinning.
+func TestTrustResolverAdapterBMCUsesTheResolver(t *testing.T) {
+	fake := &fakeTrustResolver{}
+	adapter, err := NewTrustResolverAdapter(fake, nil)
+	if err != nil {
+		t.Fatalf("NewTrustResolverAdapter: %v", err)
+	}
+	cfg, err := adapter.ClientTLSConfig(context.Background(), BackendTrustBMC, "bmc:443")
+	if err != nil {
+		t.Fatalf("ClientTLSConfig: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("nil tls config")
+	}
+	if fake.lastClass != trust.ClassBMC || fake.lastEndpoint != "bmc:443" {
+		t.Fatalf("resolver saw (%q, %q), want (bmc, bmc:443)", fake.lastClass, fake.lastEndpoint)
+	}
+}
+
+// TestTrustResolverAdapterPlatformUsesTheAnchor pins the platform class to
+// the platform anchor: a backend the platform CA issued verifies, and the
+// resolver is never consulted.
+func TestTrustResolverAdapterPlatformUsesTheAnchor(t *testing.T) {
+	root := platformTestRoot(t)
+	anchor, err := trust.NewAnchor(trust.AnchorSourceFunc(func(context.Context) ([]*x509.Certificate, error) {
+		return []*x509.Certificate{root}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeTrustResolver{}
+	adapter, err := NewTrustResolverAdapter(fake, anchor)
+	if err != nil {
+		t.Fatalf("NewTrustResolverAdapter: %v", err)
+	}
+	cfg, err := adapter.ClientTLSConfig(context.Background(), BackendTrustPlatform, "cp.example.internal:8443")
+	if err != nil {
+		t.Fatalf("ClientTLSConfig: %v", err)
+	}
+	if cfg.RootCAs == nil || !cfg.RootCAs.Equal(mustPool(root)) {
+		t.Fatal("the platform class must verify against the platform anchor")
+	}
+	if fake.lastClass != "" {
+		t.Fatalf("the resolver must not be consulted for the platform class, saw %q", fake.lastClass)
+	}
+}
+
+// TestTrustResolverAdapterMissingSource covers a class whose source this
+// gateway was not configured with: a typed error naming the missing
+// configuration, never another class's trust.
+func TestTrustResolverAdapterMissingSource(t *testing.T) {
+	root := platformTestRoot(t)
+	anchor, err := trust.NewAnchor(trust.AnchorSourceFunc(func(context.Context) ([]*x509.Certificate, error) {
+		return []*x509.Certificate{root}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchorOnly, err := NewTrustResolverAdapter(nil, anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var missing *ErrTrustSourceMissing
+	if _, err := anchorOnly.ClientTLSConfig(context.Background(), BackendTrustBMC, "bmc:443"); !errors.As(err, &missing) {
+		t.Fatalf("bmc without a resolver: err = %v, want *ErrTrustSourceMissing", err)
+	}
+
+	resolverOnly, err := NewTrustResolverAdapter(&fakeTrustResolver{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolverOnly.ClientTLSConfig(context.Background(), BackendTrustPlatform, ""); !errors.As(err, &missing) {
+		t.Fatalf("platform without an anchor: err = %v, want *ErrTrustSourceMissing", err)
 	}
 }
 
 func TestTrustResolverAdapterUnknownClass(t *testing.T) {
-	adapter, err := NewTrustResolverAdapter(&fakeTrustResolver{})
+	adapter, err := NewTrustResolverAdapter(&fakeTrustResolver{}, nil)
 	if err != nil {
 		t.Fatalf("NewTrustResolverAdapter: %v", err)
 	}
-	_, err = adapter.ClientTLSConfig(context.Background(), "public-web", "")
-	var unknown *ErrUnknownTrustClass
-	if !errors.As(err, &unknown) {
-		t.Fatalf("err = %v, want *ErrUnknownTrustClass", err)
-	}
-	if unknown.Class != "public-web" {
-		t.Fatalf("Class = %q", unknown.Class)
+	for _, class := range []string{"public-web", "internal", "default"} {
+		_, err = adapter.ClientTLSConfig(context.Background(), class, "")
+		var unknown *ErrUnknownTrustClass
+		if !errors.As(err, &unknown) {
+			t.Fatalf("%q: err = %v, want *ErrUnknownTrustClass", class, err)
+		}
+		if unknown.Class != class {
+			t.Fatalf("Class = %q", unknown.Class)
+		}
 	}
 }
 
 func TestTrustResolverAdapterPropagatesResolverError(t *testing.T) {
 	resolveErr := errors.New("no strategy succeeded")
-	adapter, err := NewTrustResolverAdapter(&fakeTrustResolver{tlsErr: resolveErr})
+	adapter, err := NewTrustResolverAdapter(&fakeTrustResolver{tlsErr: resolveErr}, nil)
 	if err != nil {
 		t.Fatalf("NewTrustResolverAdapter: %v", err)
 	}
-	if _, err := adapter.ClientTLSConfig(context.Background(), "internal", ""); !errors.Is(err, resolveErr) {
+	if _, err := adapter.ClientTLSConfig(context.Background(), BackendTrustBMC, ""); !errors.Is(err, resolveErr) {
 		t.Fatalf("err = %v, want resolver error", err)
 	}
+}
+
+// platformTestRoot is a self-signed CA standing in for the platform CA.
+func platformTestRoot(t *testing.T) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "root-ca.platform.test"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert
+}
+
+func mustPool(certs ...*x509.Certificate) *x509.CertPool {
+	pool := x509.NewCertPool()
+	for _, cert := range certs {
+		pool.AddCert(cert)
+	}
+	return pool
 }
 
 // =============================================================================

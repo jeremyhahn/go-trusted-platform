@@ -160,8 +160,8 @@ func TestControlPlaneAdmitsItsOwnCollector(t *testing.T) {
 		// Self-referential ACME: the control plane's client directory points
 		// at its own internal webservice, so the derived reporting-server
 		// identity is its own name.
-		ACMEDirectory:    "https://cp.example.internal:9443/acme/directory",
-		IDevIDIssuerRoot: func() (*x509.Certificate, error) { return root, nil },
+		ACMEDirectory:  "https://cp.example.internal:9443/acme/directory",
+		PlatformAnchor: fixedAnchor(t, root),
 	})
 	require.NoError(t, err)
 
@@ -187,9 +187,9 @@ func TestControlPlaneRefusesAnImpostorOnItsOwnListener(t *testing.T) {
 	other, otherKey := controlPlaneTestRoot(t)
 
 	policy, err := buildCallerPolicy(callerPolicyInputs{
-		Logger:           quietLogger(),
-		ACMEDirectory:    "https://cp.example.internal:9443/acme/directory",
-		IDevIDIssuerRoot: func() (*x509.Certificate, error) { return root, nil },
+		Logger:         quietLogger(),
+		ACMEDirectory:  "https://cp.example.internal:9443/acme/directory",
+		PlatformAnchor: fixedAnchor(t, root),
 	})
 	require.NoError(t, err)
 

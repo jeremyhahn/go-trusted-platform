@@ -351,13 +351,13 @@ func TestNodeBMCTrustConfig_WithSPKIPin(t *testing.T) {
 // scopes from the base config are preserved in the merged result.
 func TestNodeBMCTrustConfig_PreservesBase(t *testing.T) {
 	defaultScope := &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyTOFU}}
-	base := &trust.Config{Default: defaultScope}
+	base := &trust.Config{Bootstrap: defaultScope}
 	node := &NodeConfig{
 		Hostname: "cp-0",
 		BMCTrust: []trust.Strategy{trust.StrategyCAFile},
 	}
 	result := nodeBMCTrustConfig(node, base)
-	if result.Default != defaultScope {
+	if result.Bootstrap != defaultScope {
 		t.Error("expected Default scope from base to be preserved")
 	}
 }
@@ -381,7 +381,7 @@ func TestNewBootstrapBMCTLSProvider_NilConfig(t *testing.T) {
 // BMC scope returns nil, nil, nil without error.
 func TestNewBootstrapBMCTLSProvider_NoBMCScope(t *testing.T) {
 	cfg := &trust.Config{
-		Default: &trust.ScopeConfig{
+		Bootstrap: &trust.ScopeConfig{
 			Strategies: []trust.Strategy{trust.StrategyTOFU},
 		},
 	}

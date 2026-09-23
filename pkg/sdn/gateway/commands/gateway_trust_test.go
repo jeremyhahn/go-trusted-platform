@@ -76,76 +76,68 @@ func loadProjectedServeConfig(t *testing.T, projected []byte) *ServeConfig {
 	return cfg
 }
 
-// TestShippedGatewayTemplates_InternalClassResolvesInAGatewaydAssembly is
-// the end-to-end guard for the internal trust class on a gateway node.
+// TestShippedGatewayTemplates_PlatformAnchorResolvesInAGatewaydAssembly is
+// the end-to-end guard for the platform anchor on a gateway node.
 //
-// The internal class authenticates gatewayd's session to the platform
-// secret store, so it stands behind every kms:// and secret:// reference a
-// gateway configuration carries — the BGP neighbour passwords, the TCP-AO
-// master keys, the ipsec and wireguard keys. It permits exactly one
-// strategy, platform-ca, and that strategy resolves through an injected
-// CABundleProvider rather than from configuration.
+// The anchor authenticates gatewayd's session to the platform secret store,
+// so it stands behind every kms:// and secret:// reference a gateway
+// configuration carries — the BGP neighbour passwords, the TCP-AO master
+// keys, the ipsec and wireguard keys — as well as the proxy's client CAs and
+// the platformd grpc dial. gatewayd runs no CA, so its anchor is the platform
+// CA bundle provisioning projects onto the node, named by `platform-ca-file:`.
 //
-// That is where this shipped combination went wrong: the templates set
-// `internal: strategies: [platform-ca]`, gatewayd's assembly injected no
-// provider (only platformd did, over its own CA), and so every resolution
-// would have failed with ErrProviderCAUnavailable at the first dial. The
-// assembly still succeeded and the secret resolver was still non-nil, so
-// nothing short of a real resolution could catch it — a test that injects
-// a provider by hand proves only that the resolver works when someone
-// remembers to inject one.
-//
-// So this test injects nothing. It takes the shipped template through the
-// firstboot projection and gatewayd's own decoder and assembly, and then
-// completes a TLS handshake with the tls.Config the internal class
-// produces. The only substitution is the bundle path: the template names
-// /etc/gatewayd/cp-ca.pem, which belongs to a provisioned node, so the
-// path is repointed at a test CA whose certificate actually signs the
-// server dialled here, and gatewayd's --data-dir is a temp directory so
-// the bmc class's tofu strategy has somewhere to keep its pins without
-// writing to /var/lib/gatewayd.
-func TestShippedGatewayTemplates_InternalClassResolvesInAGatewaydAssembly(t *testing.T) {
+// It replaced the `trust: internal:` class, whose platform-ca strategy
+// needed an injected provider gatewayd first lacked entirely — assembly
+// succeeded and the secret resolver was non-nil, yet every resolution would
+// have failed at the first dial. So this test injects nothing. It takes the
+// shipped template through the firstboot projection and gatewayd's own
+// decoder and assembly, and completes a TLS handshake with the tls.Config
+// the anchor produces. The only substitution is the bundle path: the
+// template names /etc/gatewayd/cp-ca.pem, which belongs to a provisioned
+// node, so the path is repointed at a test CA whose certificate actually
+// signs the server dialled here.
+func TestShippedGatewayTemplates_PlatformAnchorResolvesInAGatewaydAssembly(t *testing.T) {
 	for _, path := range shippedGatewayTemplates {
 		t.Run(filepath.Base(filepath.Dir(path)), func(t *testing.T) {
 			cfg := loadProjectedServeConfig(t, projectGatewaydSections(t, path))
 
-			require.NotNil(t, cfg.Trust, "a gateway template carries the trust: section")
-			internal := cfg.Trust.Scope(trust.ClassInternal)
-			require.NotNil(t, internal, "the secret store's session needs the internal class")
-			assert.Contains(t, internal.Strategies, trust.StrategyPlatformCA)
-
-			// The template must NAME a bundle source. gatewayd runs no CA,
-			// so without this the class has nothing to verify against and
-			// the whole secret store is a guard that cannot fire.
-			require.NotEmpty(t, internal.CAFile,
-				"the internal class names no platform CA bundle; every kms:// reference would fail at service start")
+			// The template must NAME the bundle, and firstboot must project
+			// it. gatewayd runs no CA, so without this the secret store is a
+			// guard that cannot fire.
+			require.NotEmpty(t, cfg.PlatformCAFile,
+				"the gateway template names no platform-ca-file; every kms:// reference would fail at service start")
 
 			// Stand up a TLS server whose leaf chains to a test CA, and put
 			// that CA where the template says the platform bundle lives.
 			bundle := testutil.GenerateTestTLSBundle(t)
-			caFile := filepath.Join(t.TempDir(), filepath.Base(internal.CAFile))
-			require.NoError(t, os.WriteFile(caFile, bundle.CACertPEM, 0o600))
-			internal.CAFile = caFile
+			cfg.PlatformCAFile = filepath.Join(t.TempDir(), filepath.Base(cfg.PlatformCAFile))
+			require.NoError(t, os.WriteFile(cfg.PlatformCAFile, bundle.CACertPEM, 0o600))
 			endpoint := startInternalTLSServer(t, bundle)
 
-			resolver, err := buildTrustResolver(cfg.Trust, t.TempDir(), testLogger())
-			require.NoError(t, err, "the shipped trust section must assemble")
-			require.NotNil(t, resolver)
+			anchor, err := buildPlatformAnchor(cfg)
+			require.NoError(t, err)
+			require.NotNil(t, anchor)
 
-			tlsCfg, err := resolver.TLSConfig(context.Background(), trust.ClassInternal, endpoint)
-			require.NoError(t, err, "the internal class must resolve without a hand-injected provider")
-			require.NotNil(t, tlsCfg.RootCAs, "platform-ca must produce a verification pool")
-			assert.False(t, tlsCfg.InsecureSkipVerify, "the internal class always verifies")
+			tlsCfg, err := anchor.TLSConfig(context.Background())
+			require.NoError(t, err, "the platform anchor must resolve from the projected bundle")
+			require.NotNil(t, tlsCfg.RootCAs)
+			assert.False(t, tlsCfg.InsecureSkipVerify, "the anchor always verifies")
 
-			// The proof: a real handshake verified by the resolved config.
+			// The proof: a real handshake verified by the anchor.
 			conn, err := tls.Dial("tcp", endpoint, tlsCfg)
-			require.NoError(t, err, "the resolved config must verify the platform-CA-signed peer")
+			require.NoError(t, err, "the anchor must verify the platform-CA-signed peer")
 			require.NoError(t, conn.Close())
 
-			// And the consumer that motivated the class: the secret store
-			// assembles against the same resolver instance.
+			// The bmc class the template also carries must still assemble.
+			if cfg.Trust != nil {
+				_, err := buildTrustResolver(cfg.Trust, t.TempDir(), testLogger())
+				require.NoError(t, err, "the shipped trust section must assemble")
+			}
+
+			// And the consumer that motivated it: the secret store assembles
+			// against the same anchor.
 			if cfg.Secrets != nil {
-				host, err := buildHostRuntime(cfg, resolver, testLogger())
+				host, err := buildHostRuntime(cfg, anchor, testLogger())
 				require.NoError(t, err)
 				require.NotNil(t, host.SecretResolver,
 					"the secret-store section must produce a resolver")
@@ -187,55 +179,42 @@ func startInternalTLSServer(t *testing.T, bundle *testutil.TestTLSBundle) string
 	return listener.Addr().String()
 }
 
-// TestBuildTrustResolver_PlatformCAWithoutBundleSourceIsRefused pins the
-// other half of the contract: a configuration that asks for platform-ca on
-// a node with no bundle source is refused AT ASSEMBLY, naming what is
-// missing, instead of assembling into a daemon whose every internal-class
-// resolution fails later with "no strategy succeeded".
-func TestBuildTrustResolver_PlatformCAWithoutBundleSourceIsRefused(t *testing.T) {
-	cfg := &trust.Config{
-		Internal: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyPlatformCA}},
-	}
-	_, err := buildTrustResolver(cfg, t.TempDir(), testLogger())
-
-	var missing *ErrPlatformCABundleSourceMissing
-	require.ErrorAs(t, err, &missing, "got %v", err)
-	assert.Contains(t, err.Error(), "ca-file")
-}
-
-// TestBuildTrustResolver_PlatformCAReadsTheBundleAtResolution proves the
-// injected provider reads the file on each resolution rather than caching
-// it at construction: a bundle delivered (or rotated) after gatewayd
-// started takes effect without a restart, and a bundle not yet delivered
-// reports the missing path.
-func TestBuildTrustResolver_PlatformCAReadsTheBundleAtResolution(t *testing.T) {
-	caFile := filepath.Join(t.TempDir(), "cp-ca.pem")
-	cfg := &trust.Config{
-		Internal: &trust.ScopeConfig{
-			Strategies: []trust.Strategy{trust.StrategyPlatformCA},
-			CAFile:     caFile,
-		},
-	}
-	resolver, err := buildTrustResolver(cfg, t.TempDir(), testLogger())
+// TestBuildPlatformAnchor_ReadsTheBundleAtResolution proves gatewayd's anchor
+// reads the file on each resolution rather than caching it at assembly: a
+// bundle delivered (or rotated) after gatewayd started takes effect without
+// a restart, and a bundle not yet delivered reports the missing path.
+func TestBuildPlatformAnchor_ReadsTheBundleAtResolution(t *testing.T) {
+	cfg := &ServeConfig{PlatformCAFile: filepath.Join(t.TempDir(), "cp-ca.pem")}
+	anchor, err := buildPlatformAnchor(cfg)
 	require.NoError(t, err, "an undelivered bundle is a runtime condition, not a config error")
 
 	ctx := context.Background()
-	_, err = resolver.TLSConfig(ctx, trust.ClassInternal, "cp.example.internal:9443")
+	_, err = anchor.TLSConfig(ctx)
 	require.Error(t, err, "no bundle on disk must fail closed")
-	assert.Contains(t, err.Error(), caFile, "the failure must name the missing bundle")
+	assert.Contains(t, err.Error(), cfg.PlatformCAFile, "the failure must name the missing bundle")
 
 	bundle := testutil.GenerateTestTLSBundle(t)
-	require.NoError(t, os.WriteFile(caFile, bundle.CACertPEM, 0o600))
+	require.NoError(t, os.WriteFile(cfg.PlatformCAFile, bundle.CACertPEM, 0o600))
 
-	tlsCfg, err := resolver.TLSConfig(ctx, trust.ClassInternal, "cp.example.internal:9443")
+	tlsCfg, err := anchor.TLSConfig(ctx)
 	require.NoError(t, err, "the delivered bundle must be picked up without a restart")
 	require.NotNil(t, tlsCfg.RootCAs)
 }
 
-// TestBuildTrustResolver_NonInternalClassesNeedNoBundleSource keeps the
-// refusal narrow: only the internal class resolves through the provider, so
-// a bmc or default class must still assemble without one.
-func TestBuildTrustResolver_NonInternalClassesNeedNoBundleSource(t *testing.T) {
+// TestBuildPlatformAnchor_Unset covers a gateway with no platform-ca-file:
+// no anchor, so every consumer that needs one refuses with its own error.
+func TestBuildPlatformAnchor_Unset(t *testing.T) {
+	for _, cfg := range []*ServeConfig{nil, {}} {
+		anchor, err := buildPlatformAnchor(cfg)
+		require.NoError(t, err)
+		assert.Nil(t, anchor)
+	}
+}
+
+// TestBuildTrustResolver_BMCNeedsNoPlatformBundle keeps the two apart: the
+// bmc class verifies devices the platform did not issue and assembles with
+// no platform CA bundle at all.
+func TestBuildTrustResolver_BMCNeedsNoPlatformBundle(t *testing.T) {
 	cfg := &trust.Config{
 		BMC: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyCAFile}},
 	}
@@ -308,8 +287,8 @@ func TestTofuScopes(t *testing.T) {
 
 	t.Run("no class lists tofu", func(t *testing.T) {
 		cfg := &trust.Config{
-			BMC:      &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyDANE}},
-			Internal: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyPlatformCA}},
+			Bootstrap: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyDANE}},
+			BMC:       &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategySPKI}},
 		}
 		assert.False(t, tofuScopes(cfg))
 	})

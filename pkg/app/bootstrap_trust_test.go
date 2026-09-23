@@ -36,7 +36,7 @@ func TestTrustConfigNeedsTOFU_NilConfig(t *testing.T) {
 func TestTrustConfigNeedsTOFU_NoTOFUInAnyClass(t *testing.T) {
 	t.Parallel()
 	cfg := &trust.Config{
-		Default: &trust.ScopeConfig{
+		Bootstrap: &trust.ScopeConfig{
 			Strategies: []trust.Strategy{trust.StrategyDANE, trust.StrategySPKI},
 		},
 	}
@@ -46,7 +46,7 @@ func TestTrustConfigNeedsTOFU_NoTOFUInAnyClass(t *testing.T) {
 func TestTrustConfigNeedsTOFU_TOFUInDefaultClass(t *testing.T) {
 	t.Parallel()
 	cfg := &trust.Config{
-		Default: &trust.ScopeConfig{
+		Bootstrap: &trust.ScopeConfig{
 			Strategies: []trust.Strategy{trust.StrategyTOFU},
 		},
 	}
@@ -66,7 +66,7 @@ func TestTrustConfigNeedsTOFU_DisallowedClassNeedsNoPinStore(t *testing.T) {
 	// to persist the captured pin.
 	t.Run("bmc_now_needs_a_pin_store", func(t *testing.T) {
 		cfg := &trust.Config{
-			Default: &trust.ScopeConfig{
+			Bootstrap: &trust.ScopeConfig{
 				Strategies: []trust.Strategy{trust.StrategyEmbedded},
 			},
 			BMC: &trust.ScopeConfig{
@@ -77,15 +77,6 @@ func TestTrustConfigNeedsTOFU_DisallowedClassNeedsNoPinStore(t *testing.T) {
 			"tofu is allowed for bmc since go-xkms#139, so it creates a pin-store need")
 	})
 
-	t.Run("internal", func(t *testing.T) {
-		cfg := &trust.Config{
-			Internal: &trust.ScopeConfig{
-				Strategies: []trust.Strategy{trust.StrategySPKI, trust.StrategyTOFU},
-			},
-		}
-		assert.False(t, trustConfigNeedsTOFU(cfg),
-			"tofu has never been allowed for internal, so it creates no pin-store need")
-	})
 }
 
 // =============================================================================
@@ -97,7 +88,7 @@ func TestBuildTOFUResolverOpts_TOFUNotNeeded(t *testing.T) {
 
 	app := &App{
 		TrustConfig: &trust.Config{
-			Default: &trust.ScopeConfig{
+			Bootstrap: &trust.ScopeConfig{
 				Strategies: []trust.Strategy{trust.StrategyEmbedded},
 			},
 		},
@@ -114,7 +105,7 @@ func TestBuildTOFUResolverOpts_TOFUNeededButNoFactory(t *testing.T) {
 	// daoFactory is nil (never initialized).
 	app := &App{
 		TrustConfig: &trust.Config{
-			Default: &trust.ScopeConfig{
+			Bootstrap: &trust.ScopeConfig{
 				Strategies: []trust.Strategy{trust.StrategyTOFU},
 				ServerURL:  "https://cp.example.com:8443",
 			},
@@ -162,7 +153,7 @@ func TestBootstrapTrust_EmbeddedOnlySkips(t *testing.T) {
 
 	app := &App{
 		TrustConfig: &trust.Config{
-			Default: &trust.ScopeConfig{
+			Bootstrap: &trust.ScopeConfig{
 				Strategies: []trust.Strategy{trust.StrategyEmbedded},
 			},
 		},
@@ -182,7 +173,7 @@ func TestBootstrapTrust_TOFUListedButNoSDKReturnsTypedError(t *testing.T) {
 	// daoFactory is nil — the SDK client is not available.
 	app := &App{
 		TrustConfig: &trust.Config{
-			Default: &trust.ScopeConfig{
+			Bootstrap: &trust.ScopeConfig{
 				Strategies: []trust.Strategy{trust.StrategyTOFU},
 				ServerURL:  "https://cp.example.com:8443",
 			},
@@ -214,7 +205,7 @@ func TestBootstrapTrust_TOFUInBMCRequiresAPinStore(t *testing.T) {
 	// triggers the pin-store requirement.
 	app := &App{
 		TrustConfig: &trust.Config{
-			Default: &trust.ScopeConfig{
+			Bootstrap: &trust.ScopeConfig{
 				Strategies: []trust.Strategy{trust.StrategySPKI},
 				ServerURL:  "https://cp.example.com:8443",
 				SPKI: &trust.SPKIConfig{
@@ -256,7 +247,7 @@ func TestBootstrapTrust_NonTOFUConfigDoesNotReturnTOFUError(t *testing.T) {
 	// not require an SDK client.
 	app := &App{
 		TrustConfig: &trust.Config{
-			Default: &trust.ScopeConfig{
+			Bootstrap: &trust.ScopeConfig{
 				Strategies: []trust.Strategy{trust.StrategyEmbedded},
 			},
 		},
@@ -293,36 +284,4 @@ func TestErrBootstrapTOFUPinStore_Unwrap(t *testing.T) {
 	cause := errors.New("root cause")
 	e := ErrBootstrapTOFUPinStore{Cause: cause}
 	assert.Equal(t, cause, e.Unwrap())
-}
-
-// =============================================================================
-// InternalCAPool
-// =============================================================================
-
-func TestInternalCAPool_NilTrustConfig(t *testing.T) {
-	t.Parallel()
-	// When TrustConfig is nil, TrustResolver returns nil, and InternalCAPool
-	// must return (nil, nil) without error.
-	app := &App{}
-	pool, err := app.InternalCAPool(context.Background())
-	require.NoError(t, err)
-	assert.Nil(t, pool)
-}
-
-func TestInternalCAPool_InternalClassNotConfigured(t *testing.T) {
-	t.Parallel()
-	// A TrustConfig with no internal scope must return (nil, nil) without error
-	// so existing deployments without the trust: internal YAML block keep working.
-	app := &App{
-		TrustConfig: &trust.Config{
-			Default: &trust.ScopeConfig{
-				Strategies: []trust.Strategy{trust.StrategyEmbedded},
-			},
-		},
-		Logger: logging.DefaultLogger(),
-	}
-	// Must not error even though ClassInternal is unconfigured.
-	pool, err := app.InternalCAPool(context.Background())
-	require.NoError(t, err)
-	assert.Nil(t, pool, "nil pool expected when internal class not configured")
 }

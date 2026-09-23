@@ -94,6 +94,7 @@ func (m *baseMockCA) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca
 }
 func (m *baseMockCA) IsRevoked(_ *big.Int) (bool, error)               { return false, nil }
 func (m *baseMockCA) GenerateCRL(_ context.Context) ([]byte, error)    { return nil, nil }
+func (m *baseMockCA) CRL(_ context.Context) ([]byte, error)            { return nil, nil }
 func (m *baseMockCA) ImportDistributionCRLs(_ *x509.Certificate) error { return nil }
 
 // TLS

@@ -67,8 +67,17 @@ type ServeConfig struct {
 	// Proxy is the `proxy:` section (the authenticating reverse proxy).
 	Proxy *proxysvc.Config
 
-	// Trust is the `trust:` section (platform trust resolver classes).
+	// Trust is the `trust:` section: the verification policy for peers the
+	// platform CA did not issue (BMCs). Platform-issued peers are verified
+	// against the platform anchor instead, which PlatformCAFile supplies.
 	Trust *trust.Config
+
+	// PlatformCAFile is the `platform-ca-file:` key: the platform CA bundle
+	// the provisioning flow projects onto the node. gatewayd runs no CA of
+	// its own, so this file is its platform anchor — what the proxy's client
+	// CAs, the platformd grpc dial, the secret store session and the
+	// control-plane reporter verify platform services against.
+	PlatformCAFile string
 
 	// SDN is the `sdn:` section (OVSDB socket, bridge, zones, networks).
 	// It supplies the OVS runtime the datapath services (firewall, NAT,
@@ -111,7 +120,10 @@ var serveDecodeHook = viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
 // LoadServeConfig extracts the gatewayd configuration sections from a viper
 // instance.
 func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
-	cfg := &ServeConfig{DataDir: v.GetString("data-dir")}
+	cfg := &ServeConfig{
+		DataDir:        v.GetString("data-dir"),
+		PlatformCAFile: v.GetString("platform-ca-file"),
+	}
 	if v.IsSet("gateway") {
 		gc := &gateway.GatewayConfig{}
 		if err := v.UnmarshalKey("gateway", gc, serveDecodeHook); err != nil {
@@ -228,11 +240,16 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 		}
 	}()
 
-	// One trust resolver serves the whole daemon: the proxy's client-CA
-	// pool and platformd dials, and the secret store's session. Building it
-	// once here (rather than per consumer) is what keeps the classes, and
-	// the collaborators injected into them, identical everywhere.
+	// One trust resolver and one platform anchor serve the whole daemon.
+	// The anchor verifies platform services — the proxy's client-CA pool,
+	// platformd dials, the secret store's session; the resolver verifies
+	// what the platform did not issue (BMC backends). Building each once
+	// here keeps every consumer on the same trust.
 	trustResolver, err := buildTrustResolver(cfg.Trust, cfg.DataDir, logger)
+	if err != nil {
+		return nil, err
+	}
+	anchor, err := buildPlatformAnchor(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +260,7 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	// section, the netlink applier and tunnel manager are the real ones,
 	// the secret resolver is the platform secret store from the
 	// `secret-store:` section, and the logger is shared.
-	host, err := buildHostRuntime(cfg, trustResolver, logger)
+	host, err := buildHostRuntime(cfg, anchor, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +283,7 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	)
 
 	if cfg.Proxy != nil && cfg.Proxy.Enabled {
-		handler, err := BuildProxyHandler(cfg.Proxy, trustResolver, logger)
+		handler, err := BuildProxyHandler(cfg.Proxy, trustResolver, anchor, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -282,8 +299,7 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 // collaborators from the proxy and trust configuration sections:
 //
 //   - Server TLS from the configured certificate/key pair, with client
-//     verification anchored on client-ca-file or the trust resolver's
-//     internal-class CA pool.
+//     verification anchored on client-ca-file or the platform anchor.
 //
 //   - The production auth chain (pkg/auth mTLS adapter + canonical zone
 //     extractor + hot-swappable zone matrix from the platformd sync loop).
@@ -304,10 +320,11 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 // authenticate the proxy through its mTLS platform identity and read the
 // caller's identity from the trusted X-TP-* headers.
 //
-// The trust resolver is the daemon-wide instance BuildGateway assembles
-// (buildTrustResolver); a nil resolver means the configuration carries no
-// `trust:` section, which the grpc platformd protocol refuses.
-func BuildProxyHandler(pcfg *proxysvc.Config, resolver trust.Resolver, logger *slog.Logger) (*proxysvc.Handler, error) {
+// The trust resolver and platform anchor are the daemon-wide instances
+// BuildGateway assembles. A nil resolver means the configuration carries no
+// `trust:` section, so no backend may use the bmc trust class; a nil anchor
+// means no `platform-ca-file:`, which the grpc platformd protocol refuses.
+func BuildProxyHandler(pcfg *proxysvc.Config, resolver trust.Resolver, anchor *trust.Anchor, logger *slog.Logger) (*proxysvc.Handler, error) {
 	if pcfg == nil || !pcfg.Enabled {
 		return nil, &proxysvc.ErrProxyDisabled{}
 	}
@@ -317,11 +334,11 @@ func BuildProxyHandler(pcfg *proxysvc.Config, resolver trust.Resolver, logger *s
 	staticCfg := pcfg.EngineConfig()
 	needsAuth := configNeedsAuth(&staticCfg)
 
-	if pcfg.Sync.Enabled && pcfg.Platformd.Protocol == proxysvc.PlatformdProtocolGRPC && resolver == nil {
-		return nil, ErrTrustRequiredForGRPC
+	if pcfg.Sync.Enabled && pcfg.Platformd.Protocol == proxysvc.PlatformdProtocolGRPC && anchor == nil {
+		return nil, ErrPlatformAnchorRequiredForGRPC
 	}
 
-	clientCAs, err := loadClientCAs(pcfg, resolver, needsAuth)
+	clientCAs, err := loadClientCAs(pcfg, anchor, needsAuth)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +365,7 @@ func BuildProxyHandler(pcfg *proxysvc.Config, resolver trust.Resolver, logger *s
 	}
 
 	if clientCAs != nil {
-		collabs, err := buildChainCollaborators(pcfg, resolver, logger)
+		collabs, err := buildChainCollaborators(pcfg, anchor, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -359,8 +376,8 @@ func BuildProxyHandler(pcfg *proxysvc.Config, resolver trust.Resolver, logger *s
 		deps.Auth = chain
 	}
 
-	if resolver != nil {
-		trustAdapter, err := proxysvc.NewTrustResolverAdapter(resolver)
+	if resolver != nil || anchor != nil {
+		trustAdapter, err := proxysvc.NewTrustResolverAdapter(resolver, anchor)
 		if err != nil {
 			return nil, err
 		}
@@ -374,7 +391,7 @@ func BuildProxyHandler(pcfg *proxysvc.Config, resolver trust.Resolver, logger *s
 
 	var syncer *proxysvc.ConfigSyncer
 	if pcfg.Sync.Enabled {
-		lazy, err := proxysvc.NewLazyControlPlaneClient(platformdDial(pcfg.Platformd, resolver))
+		lazy, err := proxysvc.NewLazyControlPlaneClient(platformdDial(pcfg.Platformd, anchor))
 		if err != nil {
 			return nil, err
 		}
@@ -413,18 +430,7 @@ func configNeedsAuth(cfg *proxy.Config) bool {
 // buildTrustResolver constructs the platform trust resolver when the trust
 // section is configured. It is the ONE place gatewayd assembles a resolver:
 // BuildGateway builds it once and hands the same instance to every consumer
-// (the proxy's client-CA pool and platformd dials, and the secret store's
-// session), so a collaborator injected here reaches all of them.
-//
-// The internal class permits only the platform-ca strategy, which takes its
-// bundle from an injected CABundleProvider rather than from configuration.
-// platformd injects an adapter over its own CA; gatewayd has none — it runs
-// no CA and reaches the control plane over the network — so its bundle is
-// the PEM the provisioning flow projects onto the node, named by
-// `trust: internal: ca-file:` and served by trust.FileCABundleProvider.
-// Without that path the internal class can never resolve, so assembly fails
-// here naming the missing source instead of at the first dial with "no
-// strategy succeeded".
+// that verifies a peer the platform CA did not issue.
 func buildTrustResolver(trustCfg *trust.Config, dataDir string, logger *slog.Logger) (trust.Resolver, error) {
 	if trustCfg == nil {
 		return nil, nil
@@ -444,29 +450,25 @@ func buildTrustResolver(trustCfg *trust.Config, dataDir string, logger *slog.Log
 		}
 		opts = append(opts, trust.WithTOFUPinStore(pinStore))
 	}
-	if internal := trustCfg.Scope(trust.ClassInternal); internal != nil && usesPlatformCA(internal) {
-		if internal.CAFile == "" {
-			return nil, &ErrPlatformCABundleSourceMissing{}
-		}
-		opts = append(opts, trust.WithPlatformCA(trust.NewFileCABundleProvider(internal.CAFile)))
-	}
 	return trust.NewResolver(trustCfg, logging.NewFromSlog(logger), opts...)
 }
 
-// usesPlatformCA reports whether a scope's strategy chain lists platform-ca.
-func usesPlatformCA(scope *trust.ScopeConfig) bool {
-	for _, strategy := range scope.Strategies {
-		if strategy == trust.StrategyPlatformCA {
-			return true
-		}
+// buildPlatformAnchor constructs gatewayd's platform anchor from
+// `platform-ca-file:`. gatewayd runs no CA and holds no IDevID, so the
+// anchor is the platform CA bundle the provisioning flow projects onto the
+// node. Without the key there is no anchor, and every consumer that needs
+// one refuses at assembly with its own typed error.
+func buildPlatformAnchor(cfg *ServeConfig) (*trust.Anchor, error) {
+	if cfg == nil || cfg.PlatformCAFile == "" {
+		return nil, nil
 	}
-	return false
+	return trust.NewAnchor(trust.NewFileAnchorSource(cfg.PlatformCAFile))
 }
 
 // loadClientCAs resolves the client-certificate verification pool: an
-// explicit client-ca-file wins; otherwise the trust resolver's
-// internal-class CA pool is used when authentication is needed.
-func loadClientCAs(pcfg *proxysvc.Config, resolver trust.Resolver, needsAuth bool) (*x509.CertPool, error) {
+// explicit client-ca-file wins; otherwise the platform anchor is used when
+// authentication is needed, since the proxy's callers are platform-issued.
+func loadClientCAs(pcfg *proxysvc.Config, anchor *trust.Anchor, needsAuth bool) (*x509.CertPool, error) {
 	if pcfg.TLS.ClientCAFile != "" {
 		pem, err := os.ReadFile(pcfg.TLS.ClientCAFile)
 		if err != nil {
@@ -478,12 +480,12 @@ func loadClientCAs(pcfg *proxysvc.Config, resolver trust.Resolver, needsAuth boo
 		}
 		return pool, nil
 	}
-	if resolver == nil {
+	if anchor == nil {
 		return nil, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), trustResolveTimeout)
 	defer cancel()
-	pool, err := resolver.CAPool(ctx, trust.ClassInternal, "")
+	pool, err := anchor.CAPool(ctx)
 	if err != nil {
 		if needsAuth {
 			return nil, err
@@ -565,10 +567,10 @@ type chainCollaborators struct {
 // attestation gate (lazy-dialed like the sync loop so gatewayd starts, and
 // fails closed, while platformd is down), the platform-token authenticator,
 // and the OPA policy evaluator.
-func buildChainCollaborators(pcfg *proxysvc.Config, resolver trust.Resolver, logger *slog.Logger) (chainCollaborators, error) {
+func buildChainCollaborators(pcfg *proxysvc.Config, anchor *trust.Anchor, logger *slog.Logger) (chainCollaborators, error) {
 	var collabs chainCollaborators
 	if pcfg.Attestation.Enabled {
-		lazy, err := proxysvc.NewLazyAttestationClient(platformdAttestationDial(pcfg.Platformd, resolver))
+		lazy, err := proxysvc.NewLazyAttestationClient(platformdAttestationDial(pcfg.Platformd, anchor))
 		if err != nil {
 			return collabs, err
 		}
@@ -633,7 +635,7 @@ func buildAuthChain(clientCAs *x509.CertPool, matrixProvider *proxysvc.ZoneMatri
 // configured transport. Control-plane interactions go through sdk/go
 // exclusively (see cmd/gatewayd/CLAUDE.md); connections live for the
 // process lifetime.
-func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, resolver trust.Resolver) (platform.Client, error) {
+func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) (platform.Client, error) {
 	var opts []platform.Option
 	switch pcfg.Protocol {
 	case proxysvc.PlatformdProtocolUnix:
@@ -642,10 +644,10 @@ func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, resolver 
 			platform.WithUnixSocket(pcfg.Socket),
 		)
 	case proxysvc.PlatformdProtocolGRPC:
-		if resolver == nil {
-			return nil, ErrTrustRequiredForGRPC
+		if anchor == nil {
+			return nil, ErrPlatformAnchorRequiredForGRPC
 		}
-		tlsCfg, err := resolver.TLSConfig(ctx, trust.ClassInternal, pcfg.GRPCAddr)
+		tlsCfg, err := anchor.TLSConfig(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -662,9 +664,9 @@ func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, resolver 
 
 // platformdDial returns the lazy dial function the sync loop uses to reach
 // the platformd proxy control-plane service.
-func platformdDial(pcfg proxysvc.PlatformdConfig, resolver trust.Resolver) proxysvc.DialFunc {
+func platformdDial(pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) proxysvc.DialFunc {
 	return func(ctx context.Context) (proxysvc.ControlPlaneClient, error) {
-		client, err := dialPlatformd(ctx, pcfg, resolver)
+		client, err := dialPlatformd(ctx, pcfg, anchor)
 		if err != nil {
 			return nil, err
 		}
@@ -674,9 +676,9 @@ func platformdDial(pcfg proxysvc.PlatformdConfig, resolver trust.Resolver) proxy
 
 // platformdAttestationDial returns the lazy dial function the attestation
 // gate uses to reach the platformd attestation service.
-func platformdAttestationDial(pcfg proxysvc.PlatformdConfig, resolver trust.Resolver) proxysvc.AttestationDialFunc {
+func platformdAttestationDial(pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) proxysvc.AttestationDialFunc {
 	return func(ctx context.Context) (proxysvc.AttestationClient, error) {
-		client, err := dialPlatformd(ctx, pcfg, resolver)
+		client, err := dialPlatformd(ctx, pcfg, anchor)
 		if err != nil {
 			return nil, err
 		}
@@ -689,7 +691,7 @@ func platformdAttestationDial(pcfg proxysvc.PlatformdConfig, resolver trust.Reso
 // gatewayd's own listeners: every proxy listener the proxy section binds.
 // A proxy listener address that cannot be turned into a rule is a
 // configuration error, not a silently open port.
-func buildHostRuntime(cfg *ServeConfig, trustResolver trust.Resolver, logger *slog.Logger) (*gateway.HostRuntime, error) {
+func buildHostRuntime(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Logger) (*gateway.HostRuntime, error) {
 	host := &gateway.HostRuntime{Logger: logger}
 	if cfg.Proxy != nil && cfg.Proxy.Enabled && len(cfg.Proxy.Listeners) > 0 {
 		addresses := make(map[string]string, len(cfg.Proxy.Listeners))
@@ -702,7 +704,7 @@ func buildHostRuntime(cfg *ServeConfig, trustResolver trust.Resolver, logger *sl
 		}
 		host.Listeners = inventory
 	}
-	resolver, err := buildSecretResolver(cfg, trustResolver, logger)
+	resolver, err := buildSecretResolver(cfg, anchor, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -718,22 +720,21 @@ func buildHostRuntime(cfg *ServeConfig, trustResolver trust.Resolver, logger *sl
 // service that references a secret fails closed at start rather than
 // running with a reference where a key belongs.
 //
-// The store session is verified against the daemon-wide trust resolver's
-// internal class, so the gateway reads a peer the platform CA vouches for;
-// a `secret-store:` section without a `trust:` section is a configuration
-// error. The resolver is the one BuildGateway assembled — the internal
-// class's CA bundle source is settled there, once, for every consumer.
-// The session presents no client certificate of its own (see
-// secrets.TLSFunc and #658).
-func buildSecretResolver(cfg *ServeConfig, trustResolver trust.Resolver, logger *slog.Logger) (bgp.SecretResolver, error) {
+// The store session is verified against the platform anchor, so the
+// gateway reads a peer the platform CA vouches for; a `secret-store:`
+// section without `platform-ca-file:` is a configuration error. The anchor
+// is the one BuildGateway assembled, shared with every other consumer. The
+// session presents no client certificate of its own (see secrets.TLSFunc
+// and #658).
+func buildSecretResolver(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Logger) (bgp.SecretResolver, error) {
 	if cfg.Secrets == nil {
 		return nil, nil
 	}
-	if trustResolver == nil {
+	if anchor == nil {
 		return nil, &ErrConfigSection{Section: "secret-store", Cause: &secrets.ErrTrustRequired{}}
 	}
-	tlsFn := func(ctx context.Context, endpoint string) (*tls.Config, error) {
-		return trustResolver.TLSConfig(ctx, trust.ClassInternal, endpoint)
+	tlsFn := func(ctx context.Context, _ string) (*tls.Config, error) {
+		return anchor.TLSConfig(ctx)
 	}
 	store, err := secrets.NewStore(
 		secrets.QuicBaaSDial(*cfg.Secrets, tlsFn),
@@ -754,7 +755,7 @@ const gatewayTOFUPinDir = "trust/tofu-pins"
 // The resolver refuses to construct when one does and no pin store was
 // injected, so this decides whether the store has to exist at all.
 func tofuScopes(trustCfg *trust.Config) bool {
-	for _, class := range []trust.Class{trust.ClassDefault, trust.ClassBMC, trust.ClassInternal} {
+	for _, class := range trust.Classes() {
 		scope := trustCfg.Scope(class)
 		if scope == nil {
 			continue

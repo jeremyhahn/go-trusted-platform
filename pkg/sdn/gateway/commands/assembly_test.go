@@ -226,11 +226,11 @@ func TestBuildGatewayWithoutProxy(t *testing.T) {
 
 func TestBuildProxyHandlerDisabled(t *testing.T) {
 	var disabledErr *proxysvc.ErrProxyDisabled
-	_, err := BuildProxyHandler(nil, nil, testLogger())
+	_, err := BuildProxyHandler(nil, nil, nil, testLogger())
 	if !errors.As(err, &disabledErr) {
 		t.Fatalf("nil config err = %v, want *ErrProxyDisabled", err)
 	}
-	_, err = BuildProxyHandler(&proxysvc.Config{Enabled: false}, nil, testLogger())
+	_, err = BuildProxyHandler(&proxysvc.Config{Enabled: false}, nil, nil, testLogger())
 	if !errors.As(err, &disabledErr) {
 		t.Fatalf("disabled config err = %v, want *ErrProxyDisabled", err)
 	}
@@ -239,7 +239,7 @@ func TestBuildProxyHandlerDisabled(t *testing.T) {
 func TestBuildProxyHandlerMTLSRequiresServerTLS(t *testing.T) {
 	cfg := publicProxyConfig()
 	cfg.Routes[0].Auth.Mode = proxy.AuthModeMTLS
-	_, err := BuildProxyHandler(cfg, nil, testLogger())
+	_, err := BuildProxyHandler(cfg, nil, nil, testLogger())
 	var tlsErr *proxysvc.ErrServerTLSRequired
 	if !errors.As(err, &tlsErr) {
 		t.Fatalf("err = %v, want *ErrServerTLSRequired", err)
@@ -252,7 +252,7 @@ func TestBuildProxyHandlerMTLSRequiresClientCA(t *testing.T) {
 	cfg.Routes[0].Auth.Mode = proxy.AuthModeMTLS
 	cfg.TLS.CertFile = certFile
 	cfg.TLS.KeyFile = keyFile
-	_, err := BuildProxyHandler(cfg, nil, testLogger())
+	_, err := BuildProxyHandler(cfg, nil, nil, testLogger())
 	var caErr *proxysvc.ErrClientCARequired
 	if !errors.As(err, &caErr) {
 		t.Fatalf("err = %v, want *ErrClientCARequired", err)
@@ -267,7 +267,7 @@ func TestBuildProxyHandlerMTLSComplete(t *testing.T) {
 	cfg.TLS.KeyFile = keyFile
 	cfg.TLS.ClientCAFile = caFile
 
-	handler, err := BuildProxyHandler(cfg, nil, testLogger())
+	handler, err := BuildProxyHandler(cfg, nil, nil, testLogger())
 	if err != nil {
 		t.Fatalf("BuildProxyHandler: %v", err)
 	}
@@ -295,12 +295,12 @@ func TestBuildProxyHandlerZoneRoutesRequireSync(t *testing.T) {
 	cfg.TLS.KeyFile = keyFile
 	cfg.TLS.ClientCAFile = caFile
 
-	if _, err := BuildProxyHandler(cfg, nil, testLogger()); err == nil {
+	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); err == nil {
 		t.Fatal("zone route without sync must fail fail-closed")
 	}
 
 	cfg.Sync.Enabled = true
-	handler, err := BuildProxyHandler(cfg, nil, testLogger())
+	handler, err := BuildProxyHandler(cfg, nil, nil, testLogger())
 	if err != nil {
 		t.Fatalf("BuildProxyHandler with sync: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestBuildProxyHandlerBadCertFile(t *testing.T) {
 	cfg := publicProxyConfig()
 	cfg.TLS.CertFile = filepath.Join(t.TempDir(), "missing.pem")
 	cfg.TLS.KeyFile = filepath.Join(t.TempDir(), "missing-key.pem")
-	_, err := BuildProxyHandler(cfg, nil, testLogger())
+	_, err := BuildProxyHandler(cfg, nil, nil, testLogger())
 	var loadErr *proxysvc.ErrCertificateLoadFailed
 	if !errors.As(err, &loadErr) {
 		t.Fatalf("err = %v, want *ErrCertificateLoadFailed", err)
@@ -327,14 +327,14 @@ func TestBuildProxyHandlerBadClientCAFile(t *testing.T) {
 	}
 	cfg := publicProxyConfig()
 	cfg.TLS.ClientCAFile = garbage
-	_, err := BuildProxyHandler(cfg, nil, testLogger())
+	_, err := BuildProxyHandler(cfg, nil, nil, testLogger())
 	var caErr *proxysvc.ErrClientCALoadFailed
 	if !errors.As(err, &caErr) {
 		t.Fatalf("garbage bundle err = %v, want *ErrClientCALoadFailed", err)
 	}
 
 	cfg.TLS.ClientCAFile = filepath.Join(t.TempDir(), "missing.pem")
-	_, err = BuildProxyHandler(cfg, nil, testLogger())
+	_, err = BuildProxyHandler(cfg, nil, nil, testLogger())
 	if !errors.As(err, &caErr) {
 		t.Fatalf("missing bundle err = %v, want *ErrClientCALoadFailed", err)
 	}
@@ -345,8 +345,8 @@ func TestBuildProxyHandlerGRPCRequiresTrust(t *testing.T) {
 	cfg.Sync.Enabled = true
 	cfg.Platformd.Protocol = proxysvc.PlatformdProtocolGRPC
 	cfg.Platformd.GRPCAddr = "127.0.0.1:10443"
-	if _, err := BuildProxyHandler(cfg, nil, testLogger()); !errors.Is(err, ErrTrustRequiredForGRPC) {
-		t.Fatalf("err = %v, want ErrTrustRequiredForGRPC", err)
+	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); !errors.Is(err, ErrPlatformAnchorRequiredForGRPC) {
+		t.Fatalf("err = %v, want ErrPlatformAnchorRequiredForGRPC", err)
 	}
 }
 
@@ -374,34 +374,9 @@ func TestPlatformdDialGRPCRequiresResolver(t *testing.T) {
 		Protocol: proxysvc.PlatformdProtocolGRPC,
 		GRPCAddr: "127.0.0.1:10443",
 	}, nil)
-	if _, err := dial(context.Background()); !errors.Is(err, ErrTrustRequiredForGRPC) {
-		t.Fatalf("err = %v, want ErrTrustRequiredForGRPC", err)
+	if _, err := dial(context.Background()); !errors.Is(err, ErrPlatformAnchorRequiredForGRPC) {
+		t.Fatalf("err = %v, want ErrPlatformAnchorRequiredForGRPC", err)
 	}
-}
-
-// fakeResolver implements trust.Resolver for assembly branch tests.
-type fakeResolver struct {
-	pool    *x509.CertPool
-	poolErr error
-	tlsErr  error
-}
-
-func (f *fakeResolver) TLSConfig(ctx context.Context, class trust.Class, endpoint string) (*tls.Config, error) {
-	if f.tlsErr != nil {
-		return nil, f.tlsErr
-	}
-	return &tls.Config{MinVersion: tls.VersionTLS13}, nil
-}
-
-func (f *fakeResolver) CAPool(ctx context.Context, class trust.Class, endpoint string) (*x509.CertPool, error) {
-	if f.poolErr != nil {
-		return nil, f.poolErr
-	}
-	return f.pool, nil
-}
-
-func (f *fakeResolver) CABundlePEM(ctx context.Context, class trust.Class) ([]byte, error) {
-	return nil, nil
 }
 
 func TestLoadServeConfigDecodeError(t *testing.T) {
@@ -450,40 +425,67 @@ func TestBuildServeLogger(t *testing.T) {
 	logFormat = "json"
 }
 
-func TestLoadClientCAsFromResolver(t *testing.T) {
-	pool := x509.NewCertPool()
+func TestLoadClientCAsFromPlatformAnchor(t *testing.T) {
 	cfg := publicProxyConfig()
 
-	t.Run("resolver pool used", func(t *testing.T) {
-		got, err := loadClientCAs(cfg, &fakeResolver{pool: pool}, true)
+	t.Run("anchor pool used", func(t *testing.T) {
+		bundle := testutil.GenerateTestTLSBundle(t)
+		got, err := loadClientCAs(cfg, fileAnchor(t, bundle.CACertPEM), true)
 		if err != nil {
 			t.Fatalf("loadClientCAs: %v", err)
 		}
-		if got != pool {
-			t.Fatal("resolver pool not returned")
+		if got == nil || !got.Equal(poolOf(t, bundle.CACertPEM)) {
+			t.Fatal("the platform anchor's pool must verify the proxy's callers")
 		}
 	})
 
-	t.Run("resolver failure fatal when auth needed", func(t *testing.T) {
-		resolveErr := errors.New("no strategy succeeded")
-		if _, err := loadClientCAs(cfg, &fakeResolver{poolErr: resolveErr}, true); !errors.Is(err, resolveErr) {
-			t.Fatalf("err = %v, want resolver error", err)
+	t.Run("anchor failure fatal when auth needed", func(t *testing.T) {
+		missing := trust.NewFileAnchorSource(filepath.Join(t.TempDir(), "absent.pem"))
+		anchor, _ := trust.NewAnchor(missing)
+		var unavailable *trust.ErrAnchorUnavailable
+		if _, err := loadClientCAs(cfg, anchor, true); !errors.As(err, &unavailable) {
+			t.Fatalf("err = %v, want *trust.ErrAnchorUnavailable", err)
 		}
 	})
 
-	t.Run("resolver failure tolerated without auth", func(t *testing.T) {
-		got, err := loadClientCAs(cfg, &fakeResolver{poolErr: errors.New("offline")}, false)
+	t.Run("anchor failure tolerated without auth", func(t *testing.T) {
+		anchor, _ := trust.NewAnchor(trust.NewFileAnchorSource(filepath.Join(t.TempDir(), "absent.pem")))
+		got, err := loadClientCAs(cfg, anchor, false)
 		if err != nil || got != nil {
 			t.Fatalf("got %v, %v; want nil, nil", got, err)
 		}
 	})
 
-	t.Run("no resolver no file", func(t *testing.T) {
+	t.Run("no anchor no file", func(t *testing.T) {
 		got, err := loadClientCAs(cfg, nil, false)
 		if err != nil || got != nil {
 			t.Fatalf("got %v, %v; want nil, nil", got, err)
 		}
 	})
+}
+
+// fileAnchor writes caPEM to a file and returns the platform anchor reading
+// it, the way gatewayd's `platform-ca-file:` is served.
+func fileAnchor(t *testing.T, caPEM []byte) *trust.Anchor {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "cp-ca.pem")
+	if err := os.WriteFile(path, caPEM, 0o600); err != nil {
+		t.Fatalf("write ca: %v", err)
+	}
+	anchor, err := trust.NewAnchor(trust.NewFileAnchorSource(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return anchor
+}
+
+func poolOf(t *testing.T, caPEM []byte) *x509.CertPool {
+	t.Helper()
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("no certificates in the test CA PEM")
+	}
+	return pool
 }
 
 func TestBuildServerTLSWithClientCAs(t *testing.T) {
@@ -517,22 +519,23 @@ func TestBuildTrustResolverInvalidConfig(t *testing.T) {
 		t.Fatalf("nil config must yield nil resolver: %v, %v", r, err)
 	}
 	bad := &trust.Config{
-		Default: &trust.ScopeConfig{Strategies: []trust.Strategy{"not-a-strategy"}},
+		Bootstrap: &trust.ScopeConfig{Strategies: []trust.Strategy{"not-a-strategy"}},
 	}
 	if _, err := buildTrustResolver(bad, t.TempDir(), testLogger()); err == nil {
 		t.Fatal("invalid trust config must fail")
 	}
 }
 
-func TestPlatformdDialGRPCWithResolver(t *testing.T) {
-	t.Run("resolver tls error propagates", func(t *testing.T) {
-		tlsErr := errors.New("resolve failed")
+func TestPlatformdDialGRPCWithPlatformAnchor(t *testing.T) {
+	t.Run("anchor failure propagates", func(t *testing.T) {
+		anchor, _ := trust.NewAnchor(trust.NewFileAnchorSource(filepath.Join(t.TempDir(), "absent.pem")))
 		dial := platformdDial(proxysvc.PlatformdConfig{
 			Protocol: proxysvc.PlatformdProtocolGRPC,
 			GRPCAddr: "127.0.0.1:1",
-		}, &fakeResolver{tlsErr: tlsErr})
-		if _, err := dial(context.Background()); !errors.Is(err, tlsErr) {
-			t.Fatalf("err = %v, want resolver error", err)
+		}, anchor)
+		var unavailable *trust.ErrAnchorUnavailable
+		if _, err := dial(context.Background()); !errors.As(err, &unavailable) {
+			t.Fatalf("err = %v, want *trust.ErrAnchorUnavailable", err)
 		}
 	})
 
@@ -543,7 +546,7 @@ func TestPlatformdDialGRPCWithResolver(t *testing.T) {
 		dial := platformdDial(proxysvc.PlatformdConfig{
 			Protocol: proxysvc.PlatformdProtocolGRPC,
 			GRPCAddr: "127.0.0.1:1",
-		}, &fakeResolver{})
+		}, fileAnchor(t, testutil.GenerateTestTLSBundle(t).CACertPEM))
 		dialCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		client, err := dial(dialCtx)
@@ -576,12 +579,12 @@ func TestBuildProxyHandlerAttestationRoutesRequireGate(t *testing.T) {
 	cfg := mtlsProxyConfig(t)
 	cfg.Routes[0].Auth.RequireAttestation = true
 
-	if _, err := BuildProxyHandler(cfg, nil, testLogger()); !errors.Is(err, proxy.ErrAttestationGateNotConfigured) {
+	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); !errors.Is(err, proxy.ErrAttestationGateNotConfigured) {
 		t.Fatalf("attestation route without gate = %v, want ErrAttestationGateNotConfigured", err)
 	}
 
 	cfg.Attestation.Enabled = true
-	if _, err := BuildProxyHandler(cfg, nil, testLogger()); err != nil {
+	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); err != nil {
 		t.Fatalf("BuildProxyHandler with attestation gate: %v", err)
 	}
 }
@@ -590,7 +593,7 @@ func TestBuildProxyHandlerTokenRoutesRequireAuthenticator(t *testing.T) {
 	cfg := mtlsProxyConfig(t)
 	cfg.Routes[0].Auth.Mode = proxy.AuthModeMTLSOrToken
 
-	if _, err := BuildProxyHandler(cfg, nil, testLogger()); !errors.Is(err, proxy.ErrTokenAuthNotConfigured) {
+	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); !errors.Is(err, proxy.ErrTokenAuthNotConfigured) {
 		t.Fatalf("token route without authenticator = %v, want ErrTokenAuthNotConfigured", err)
 	}
 
@@ -600,7 +603,7 @@ func TestBuildProxyHandlerTokenRoutesRequireAuthenticator(t *testing.T) {
 		JWKSURL:   "https://broker.example/jwks.json",
 		AuthzMode: proxysvc.AuthzModeOffline,
 	}
-	if _, err := BuildProxyHandler(cfg, nil, testLogger()); err != nil {
+	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); err != nil {
 		t.Fatalf("BuildProxyHandler with token auth: %v", err)
 	}
 }
@@ -609,7 +612,7 @@ func TestBuildProxyHandlerTokenAuthInvalidSection(t *testing.T) {
 	cfg := mtlsProxyConfig(t)
 	cfg.TokenAuth = proxysvc.TokenAuthConfig{Enabled: true}
 	var cfgErr *proxysvc.ErrTokenAuthConfig
-	if _, err := BuildProxyHandler(cfg, nil, testLogger()); !errors.As(err, &cfgErr) {
+	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); !errors.As(err, &cfgErr) {
 		t.Fatalf("invalid token-auth section = %v, want *ErrTokenAuthConfig", err)
 	}
 }
@@ -618,12 +621,12 @@ func TestBuildProxyHandlerOPARoutesRequireEvaluator(t *testing.T) {
 	cfg := mtlsProxyConfig(t)
 	cfg.Routes[0].Auth.OPAPolicy = "proxy_authz"
 
-	if _, err := BuildProxyHandler(cfg, nil, testLogger()); !errors.Is(err, proxy.ErrOPANotConfigured) {
+	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); !errors.Is(err, proxy.ErrOPANotConfigured) {
 		t.Fatalf("opa route without evaluator = %v, want ErrOPANotConfigured", err)
 	}
 
 	cfg.OPA.Enabled = true
-	if _, err := BuildProxyHandler(cfg, nil, testLogger()); err != nil {
+	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); err != nil {
 		t.Fatalf("BuildProxyHandler with opa evaluator: %v", err)
 	}
 }
@@ -645,8 +648,8 @@ func TestPlatformdAttestationDialGRPCRequiresResolver(t *testing.T) {
 		Protocol: proxysvc.PlatformdProtocolGRPC,
 		GRPCAddr: "127.0.0.1:1",
 	}, nil)
-	if _, err := dial(context.Background()); !errors.Is(err, ErrTrustRequiredForGRPC) {
-		t.Fatalf("grpc dial without resolver = %v, want ErrTrustRequiredForGRPC", err)
+	if _, err := dial(context.Background()); !errors.Is(err, ErrPlatformAnchorRequiredForGRPC) {
+		t.Fatalf("grpc dial without resolver = %v, want ErrPlatformAnchorRequiredForGRPC", err)
 	}
 }
 
@@ -880,25 +883,21 @@ func TestBuildHostRuntimeSecretStoreNeedsTrust(t *testing.T) {
 }
 
 func TestBuildHostRuntimeBuildsTheSecretResolver(t *testing.T) {
-	// The trust configuration is the shipped shape — the internal class on
-	// platform-ca with the projected bundle path — not an empty one, so the
-	// resolver handed in here is the one a real gateway would carry.
-	caFile := filepath.Join(t.TempDir(), "cp-ca.pem")
-	if err := os.WriteFile(caFile, testutil.GenerateTestTLSBundle(t).CACertPEM, 0o600); err != nil {
+	// The anchor is the shipped shape — the platform CA bundle provisioning
+	// projects onto the node, read through `platform-ca-file:` — so the
+	// anchor handed in here is the one a real gateway would carry.
+	cfg := &ServeConfig{
+		Secrets:        &secrets.Config{QuicBaaSAddr: "127.0.0.1:9443"},
+		PlatformCAFile: filepath.Join(t.TempDir(), "cp-ca.pem"),
+	}
+	if err := os.WriteFile(cfg.PlatformCAFile, testutil.GenerateTestTLSBundle(t).CACertPEM, 0o600); err != nil {
 		t.Fatalf("write ca: %v", err)
 	}
-	cfg := &ServeConfig{
-		Secrets: &secrets.Config{QuicBaaSAddr: "127.0.0.1:9443"},
-		Trust: &trust.Config{Internal: &trust.ScopeConfig{
-			Strategies: []trust.Strategy{trust.StrategyPlatformCA},
-			CAFile:     caFile,
-		}},
-	}
-	resolver, err := buildTrustResolver(cfg.Trust, t.TempDir(), testLogger())
+	anchor, err := buildPlatformAnchor(cfg)
 	if err != nil {
-		t.Fatalf("buildTrustResolver: %v", err)
+		t.Fatalf("buildPlatformAnchor: %v", err)
 	}
-	host, err := buildHostRuntime(cfg, resolver, testLogger())
+	host, err := buildHostRuntime(cfg, anchor, testLogger())
 	if err != nil {
 		t.Fatalf("buildHostRuntime: %v", err)
 	}

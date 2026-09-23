@@ -30,7 +30,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 )
 
@@ -204,10 +203,10 @@ func collectorIdentityName(a *app.App, c *config.CollectorConfig) string {
 // collectorTLSDialer returns the per-endpoint TLS builder: this node's
 // webservice identity as the client certificate (with the platform
 // intermediate in the chain, so a node anchored only on the root can
-// verify it) and the trust resolver's internal class for the node's
+// verify it) and the node anchors (collectorAnchors) for the node's
 // certificate. It fails at wiring time when the identity does not exist,
-// and at dial time when the trust class cannot be resolved — never by
-// dialling unverified.
+// and at dial time when the anchor cannot be resolved — never by dialling
+// unverified.
 func collectorTLSDialer(a *app.App, c *config.CollectorConfig, logger *slog.Logger) (reporting.TLSDialer, error) {
 	if a.CA == nil {
 		return nil, ErrCollectorIdentity{Reason: "no certificate authority is initialised"}
@@ -256,12 +255,11 @@ type profileResolver interface {
 // collectorAnchorSource is a per-endpoint pool provider.
 type collectorAnchorSource func(ctx context.Context, ep reporting.Endpoint) (*x509.CertPool, error)
 
-// collectorAnchors selects where the node's certificate is verified
-// against, in the same order the gateway reporter uses for the control
-// plane (pkg/sdn/gateway/commands/reporter.go): an explicit
-// `collector.ca-file` first, else the trust resolver's `internal` class.
-// A configured file that cannot be used is an error, not a fall-through;
-// with neither, the collector is not started.
+// collectorAnchors selects where a node's certificate is verified against:
+// an explicit `collector.ca-file` first, else the platform anchor — every
+// node certificate is issued by the platform CA, so that is the only anchor
+// that needs no configuration. A configured file that cannot be used is an
+// error, not a fall-through; with neither, the collector is not started.
 func collectorAnchors(a *app.App, c *config.CollectorConfig, logger *slog.Logger) (collectorAnchorSource, error) {
 	if c != nil && strings.TrimSpace(c.CAFile) != "" {
 		certs, err := readCABundle(c.CAFile)
@@ -276,13 +274,16 @@ func collectorAnchors(a *app.App, c *config.CollectorConfig, logger *slog.Logger
 			"ca_file", c.CAFile, "anchors", len(certs))
 		return func(context.Context, reporting.Endpoint) (*x509.CertPool, error) { return pool, nil }, nil
 	}
-	resolver := a.TrustResolver()
-	if resolver == nil {
-		return nil, ErrCollectorIdentity{Reason: "no trust resolver is configured; set trust.internal or attestation.reporting.collector.ca-file to say what node certificates must chain to"}
+	if a.TPM == nil || a.CA == nil {
+		return nil, ErrCollectorIdentity{Reason: "this node has no TPM identity to derive the platform anchor from; set attestation.reporting.collector.ca-file to say what node certificates must chain to"}
 	}
-	logger.Info("attestation reporting: node certificates are verified against the trust resolver", "class", string(trust.ClassInternal))
-	return func(ctx context.Context, ep reporting.Endpoint) (*x509.CertPool, error) {
-		return resolver.CAPool(ctx, trust.ClassInternal, ep.Address)
+	anchor, err := a.PlatformAnchor()
+	if err != nil {
+		return nil, ErrCollectorIdentity{Reason: "platform anchor unavailable: " + err.Error()}
+	}
+	logger.Info("attestation reporting: node certificates are verified against the platform anchor")
+	return func(ctx context.Context, _ reporting.Endpoint) (*x509.CertPool, error) {
+		return anchor.CAPool(ctx)
 	}, nil
 }
 

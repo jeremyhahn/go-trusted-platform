@@ -718,9 +718,9 @@ webservice:
     # (enroll-01, device-attest-01)".
     #
     # This matters beyond tidiness. The reporting collector verifies a node's
-    # certificate through the trust resolver's `internal` class, which permits
-    # ONLY platform-ca (pkg/trust/config.go ClassInternal), i.e. the
-    # control-plane CA. A locally-issued certificate cannot chain there, so
+    # certificate against the platform anchor (pkg/trust Anchor), i.e. the
+    # control-plane CA and nothing else. A locally-issued certificate cannot
+    # chain there, so
     # without this the collector's mTLS fails against every node and remote
     # attestation produces no verdict at all. The bootstrap orchestrator's
     # post-install health probe verifies against the same captured CP bundle

@@ -276,7 +276,7 @@ func TestTOFUOnTheTLSPathPinsTheEndpoint(t *testing.T) {
 	bmc := newFakeBMC(t)
 
 	cfg := &trust.Config{
-		Default: &trust.ScopeConfig{
+		Bootstrap: &trust.ScopeConfig{
 			Strategies: []trust.Strategy{trust.StrategyTOFU},
 			ServerURL:  "https://" + bmc.endpoint,
 		},
@@ -285,7 +285,7 @@ func TestTOFUOnTheTLSPathPinsTheEndpoint(t *testing.T) {
 		trust.WithTOFUPinStore(xkmsbootstrap.NewMemoryPinStore()))
 	require.NoError(t, err)
 
-	tlsCfg, err := resolver.TLSConfig(context.Background(), trust.ClassDefault, bmc.endpoint)
+	tlsCfg, err := resolver.TLSConfig(context.Background(), trust.ClassBootstrap, bmc.endpoint)
 	require.NoError(t, err,
 		"tofu on the TLS path verifies the endpoint itself and needs no CA bundle (go-xkms#139)")
 	require.NotNil(t, tlsCfg)
@@ -300,7 +300,7 @@ func TestTOFUOnTheTLSPathPinsTheEndpoint(t *testing.T) {
 // whatever key it was shown, every time. Construction must refuse.
 func TestTOFURequiresAPinStore(t *testing.T) {
 	cfg := &trust.Config{
-		Default: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyTOFU}},
+		Bootstrap: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyTOFU}},
 	}
 	_, err := trust.NewResolver(cfg, logging.NewFromSlog(quietTestLogger()))
 	require.Error(t, err, "tofu without a pin store must not construct")

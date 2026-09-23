@@ -40,7 +40,7 @@ func (f *poolFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.id, "id", "", "Pool identifier (required)")
 	cmd.Flags().StringSliceVar(&f.backends, "backend", nil, "Backend URL, optionally with weight as URL=WEIGHT (repeatable, required)")
 	cmd.Flags().StringVar(&f.balancer, "balancer", "", "Balancer name (empty defaults to round-robin)")
-	cmd.Flags().StringVar(&f.trustClass, "trust-class", "", "Trust class resolved for backend TLS")
+	cmd.Flags().StringVar(&f.trustClass, "trust-class", "", "What backend TLS is verified against: platform (a platform-issued service) or bmc")
 	cmd.Flags().BoolVar(&f.mtlsClientCert, "mtls-client-cert", false, "Present a client certificate to backends")
 	cmd.Flags().IntVar(&f.maxIdlePerHost, "max-idle-conns-per-host", 0, "Maximum idle connections per backend host")
 	cmd.Flags().DurationVar(&f.idleConnTimeout, "idle-conn-timeout", 0, "Idle connection timeout (e.g. 90s)")
@@ -122,7 +122,7 @@ Examples:
 
   # Add a pool with platform trust-class TLS
   platformctl proxy pool add --id api-pool --backend https://api-1:8443 \
-    --trust-class internal --mtls-client-cert
+    --trust-class platform --mtls-client-cert
 
   # Inspect, update, delete
   platformctl proxy pool get web-pool

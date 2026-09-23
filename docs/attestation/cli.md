@@ -161,7 +161,7 @@ Identities: cp.trusted-platform.internal
 Identities source: attestation.callers.identities
 Identity list valid: yes
 Trust anchors configured: yes
-Anchor source: trust.internal
+Anchor source: platform-anchor
 Attested peers available: no
 ```
 

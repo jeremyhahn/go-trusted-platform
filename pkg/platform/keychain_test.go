@@ -1829,6 +1829,7 @@ func (m *mockKeyStore) GetSignerByID(ctx context.Context, keyID string) (crypto.
 func (m *mockKeyStore) GetDecrypterByID(ctx context.Context, keyID string) (crypto.Decrypter, error) {
 	return nil, nil
 }
+func (m *mockKeyStore) Type() xkmssdk.StoreType                        { return xkmssdk.StoreSoftware }
 func (m *mockKeyStore) KeyProvider() xkmssdk.KeyProvider               { return nil }
 func (m *mockKeyStore) CertStorage() xkmssdk.CertificateStorageAdapter { return nil }
 func (m *mockKeyStore) Seal(ctx context.Context, data []byte, opts *xkmssdk.SealOptions) (*xkmssdk.SealedData, error) {

@@ -20,8 +20,10 @@ import (
 // GatewaydConfigSections are the top-level sections of a platform
 // configuration that gatewayd decodes (pkg/sdn/gateway/commands
 // LoadServeConfig): the SDN node services, the authenticating reverse
-// proxy, the trust resolver classes, the secret store backing `kms://` and
-// `secret://` references, the OVS runtime, and the control-plane reporter. A
+// proxy, the trust resolver classes, the platform CA bundle that is
+// gatewayd's platform anchor (`platform-ca-file`, a key rather than a
+// section), the secret store backing `kms://` and `secret://` references,
+// the OVS runtime, and the control-plane reporter. A
 // gateway-role node's /etc/gatewayd/config.yaml is exactly these sections of
 // its platform config and nothing else.
 //
@@ -33,7 +35,7 @@ import (
 // that could say otherwise. A new gatewayd-decoded section MUST be added
 // here in the same change that teaches gatewayd to read it.
 var GatewaydConfigSections = []string{
-	"gateway", "proxy", "trust", "secret-store", "sdn", "control-plane",
+	"gateway", "proxy", "trust", "platform-ca-file", "secret-store", "sdn", "control-plane",
 }
 
 // gatewayRoleProbe is the minimal shape of the `gateway:` section a role

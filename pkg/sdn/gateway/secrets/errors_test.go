@@ -38,7 +38,7 @@ func TestErrorMessagesNameTheReference(t *testing.T) {
 		{&ErrConfigInvalid{Field: "quicbaas-addr", Reason: "required"}, []string{"quicbaas-addr", "required"}},
 		{&ErrNilDialFunc{}, []string{"nil dial"}},
 		{&ErrNilSecretsClient{}, []string{"no secrets service"}},
-		{&ErrTrustRequired{}, []string{"trust:"}},
+		{&ErrTrustRequired{}, []string{"platform-ca-file:"}},
 	}
 	for _, tc := range cases {
 		msg := tc.err.Error()

@@ -61,7 +61,7 @@ func TestGatewaydConfigSections_MatchesWhatGatewaydDecodes(t *testing.T) {
 	// projection that was not happening, so every kms:// reference in a
 	// gateway configuration was unresolvable.
 	assert.ElementsMatch(t,
-		[]string{"gateway", "proxy", "trust", "secret-store", "sdn", "control-plane"},
+		[]string{"gateway", "proxy", "trust", "platform-ca-file", "secret-store", "sdn", "control-plane"},
 		GatewaydConfigSections)
 }
 

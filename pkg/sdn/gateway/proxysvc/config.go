@@ -111,8 +111,8 @@ type TLSConfig struct {
 	KeyFile string `yaml:"key-file" json:"key_file" mapstructure:"key-file"`
 
 	// ClientCAFile is an optional PEM bundle anchoring client-certificate
-	// verification. When empty and a trust: section is configured, the
-	// platform trust resolver's internal-class CA pool is used instead.
+	// verification. When empty and `platform-ca-file:` is configured, the
+	// platform anchor is used instead: the proxy's callers are platform-issued.
 	ClientCAFile string `yaml:"client-ca-file,omitempty" json:"client_ca_file,omitempty" mapstructure:"client-ca-file"`
 }
 
