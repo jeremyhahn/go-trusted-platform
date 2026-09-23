@@ -58,13 +58,47 @@ EEPROM Layout (1KB):
 
 ### Arduino Nano (ATmega328P - 32KB Flash)
 
+> **CORRECTED 2026-09-23 against a measured implementation.** Every figure in
+> the original breakdown was an estimate; `jeremyhahn/arduino-generic` has since
+> built this bootloader and measured it with avr-gcc 14.2 at `-Os -flto
+> --gc-sections`. Two of the estimates were not close, and one of them decided
+> an architectural choice this document then recommended. Reproduce with
+> `make bootloader-budget` and `make boot-core-size` in that repository.
+
 **Breakdown**:
-- **Bootloader**: 4-6KB
-  - Ed25519 verification: ~2KB
-  - SHA256 hashing: ~1KB
-  - Boot logic: ~0.5KB
-  - OTA coordinator: ~0.5KB
-  - Decryption (optional): ~1KB
+- **Bootloader**: it does not fit in 4-6KB in the form this document describes.
+  The ATmega328P's boot section is **4096 bytes and that is `BOOTSZ`'s largest
+  setting** — there is no 6KB option to select.
+  - ~~Ed25519 verification: ~2KB~~ → **72,930 bytes measured** for
+    ed25519-donna's verify path with nothing reachable but `ed25519_sign_open`.
+    That is 17.8x the whole boot section and 2.2x the part's entire flash, and
+    its single largest stack frame (2,950 bytes) exceeds the part's total SRAM.
+    A single rodata table, `ge25519_niels_sliding_multiples`, is 3,840 bytes —
+    94% of the boot section before one instruction of code. donna also assumes
+    a 32-bit `int`, so it is *wrong* on this target before it is too big for it.
+  - SHA256 hashing: ~1KB → **4,052 bytes measured**, rolled loops, `-Os`.
+  - Boot logic: ~0.5KB → **1,238 bytes** for measure, compare, pin and rollback.
+  - OTA coordinator: ~0.5KB → **2,220 bytes** with its framing.
+  - CDI handoff: **802 bytes** (absent from the original breakdown).
+
+  **Totals, measured:** the core with *no signature backend at all* is 7,908
+  bytes — 3,812 over the section before a primitive is chosen. So the finding is
+  not that Ed25519 is too big; it is that a 4KB AVR boot section cannot hold a
+  hash, a boot decision and an update path together.
+
+  **What fits:** put both the hash and the signature check in the ATECC608A and
+  the boot section holds no cryptography at all — **2,368 bytes of 4,096** on an
+  ATmega328P, 2,436 on a 32U4, 2,542 on a 2560. `Verify` runs in **stored mode**
+  against a locked element slot rather than external mode, so an attacker who
+  rewrites every byte of flash cannot substitute the signing key. The costs are
+  real and stated: the element hashes 64 bytes per command, so a 28KB image is
+  ~450 round trips and seconds of boot; and OTA leaves the boot section, so
+  recovery on a 4KB part needs a programmer.
+
+  **Secure boot on AVR therefore requires an element.** A board without one gets
+  measured boot — the platform refuses to trust a device whose `FWHash` does not
+  match the golden build — but a tampered image still runs locally until the
+  next attestation. See `docs/security/bootloader.md` in arduino-generic.
 - **Optional libtrusted-avr.a**: 1-3KB (if user links it)
   - Attestation helpers: ~1KB
   - ATECC608A helpers: ~2KB
@@ -78,17 +112,25 @@ EEPROM Layout (1KB):
 
 For devices with OTA support, flash can be partitioned:
 
-```
-┌─────────────────────────────┐ 0x0000
-│   Bootloader (4-6KB)        │ Signature verification, OTA coordinator
-├─────────────────────────────┤ 0x1800
-│   Golden Image (12KB)       │ Known-good firmware (fallback)
-├─────────────────────────────┤ 0x4800
-│   Staging Area (12KB)       │ Download new firmware here
-├─────────────────────────────┤ 0x7800
-│   Active App (2KB)          │ Currently running (or metadata)
-└─────────────────────────────┘ 0x8000
-```
+> **CORRECTED 2026-09-23.** This layout is not buildable on an ATmega328P and
+> two of its errors would not surface until someone flashed a part.
+>
+> **The boot section is not at 0x0000.** On every classic AVR it is at the TOP
+> of flash — `BOOTRST` vectors reset to `BOOTSZ` bytes below the end, which is
+> 0x7000 on a 328P with a 4KB section. The correct map is the one in "Flash
+> Memory Layout" above, which this diagram contradicts.
+>
+> **And the partitions do not fit.** 4-6KB + 12KB + 12KB + 2KB is 30-32KB of a
+> 32KB part with the interrupt vectors, the application and the bootloader all
+> still to place.
+>
+> A/B slots are not available on this part at all: 28KB of application plus 28KB
+> of staging does not fit 32KB of flash. arduino-generic updates **in place**
+> and keeps a `STAGED` marker in reserved EEPROM, so an interrupted update
+> leaves the device in the bootloader rather than bricked — the recovery is the
+> bootloader. A part with external flash or a larger device can have A/B; a bare
+> 328P cannot, and pretending otherwise produces a layout that is only
+> discovered to be impossible during bring-up.
 
 ## Language-Agnostic Compilation
 
@@ -528,7 +570,11 @@ func (lm *LockManager) ReadLockBits() (byte, error) {
 
 **Features**:
 - Private keys never leave chip
-- Hardware ECDSA (P256), Ed25519
+- Hardware ECDSA (P-256)
+- ~~Ed25519~~ — **CORRECTED 2026-09-23: the ATECC608A has no hardware Ed25519.**
+  Its asymmetric primitives are P-256 only (`Sign`, `Verify`, `GenKey`, `ECDH`).
+  This claim is why the original document reached for Ed25519 in the bootloader;
+  element signing and element image verification are both ECDSA P-256.
 - Hardware SHA256, AES-128
 - 16 key slots
 - OTP zones for permanent data
@@ -649,6 +695,37 @@ func (a *ATECC608A) Lock() error {
 
 ### Provisioning Workflow
 
+> **AMENDED 2026-09-23. This flow produces signed-measurement attestation, not
+> DICE, and the difference is the whole point of the feature.**
+>
+> `GenKey` → `export-pubkey` → `lock-data` gives the device a **static random
+> key**. It proves the device holds a key the factory recorded. It does not bind
+> the device's identity to what the device is *running*, which is what DICE is
+> for and what makes a measurement worth attesting to — with a static key, a
+> device whose firmware was replaced signs with exactly the same key as before.
+>
+> DICE derives the identity from `CDI = HMAC(UDS, H(firmware))`, so changing the
+> firmware changes the identity. The ATECC608A cannot derive a P-256 key from a
+> CDI — there is no such command — so the implementation follows DICE's own
+> layering instead: the DeviceID key is element-resident and acts as the ECA
+> (Layering Architecture §8.1.1.5), and the measurement binding lives in the CDI,
+> computed by the element's own HMAC so the UDS never crosses the bus.
+>
+> Three profiles, in `docs/attestation/dice-profiles.md` in arduino-generic:
+> **DICE-TPM** (discrete TPM), **DICE-HW** (ATECC608A), **DICE-SW** (neither,
+> and it reports `notSecure` and means it).
+>
+> Two further corrections to the steps below. **The UDS must not come from the
+> host** — step 1 as written has the platform generate and see key material; the
+> implementation seeds it from the element's own TRNG so a compromised
+> provisioning station learns nothing. And **`Lock` must carry its summary CRC**:
+> the element accepts a no-CRC form that locks without checking the zone holds
+> what you believe it holds, and on a part with no erase and no reset that turns
+> one transcription error into scrap.
+>
+> See `docs/security/provisioning.md` in arduino-generic for the corrected
+> sequence and its failure modes.
+
 ```bash
 # 1. Generate device key pair in slot 0
 platformctl firmware atecc608a provision --slot 0 --generate-key
@@ -675,8 +752,20 @@ platformctl firmware atecc608a lock-data
 
 **Size**: 164 bytes (optimized for low bandwidth)
 
+> **AMENDED 2026-09-23.** Two changes, both from implementing it.
+>
+> **`Timestamp` → `UptimeMs`.** No AVR in scope has a real-time clock. A device
+> cannot report a wall-clock time it does not have, and a verifier must never
+> take freshness from one it could: freshness is *always* the verifier's nonce.
+> The gateway stamps `CreatedAt` when it relays.
+>
+> **An `AlgID` byte**, taken from `Reserved`. The evidence now says which
+> primitive signed it rather than the verifier knowing out of band. Both ECDSA
+> P-256 `r‖s` and Ed25519 `R‖S` are exactly 64 raw bytes, so the frame size is
+> unchanged and only the interpretation differs.
+
 ```
-[Version:1][Nonce:16][DeviceID:16][FWHash:32][BootCount:4][Timestamp:4][Signature:64][Reserved:27]
+[Version:1][Nonce:16][DeviceID:16][FWHash:32][BootCount:4][UptimeMs:4][AlgID:1][Signature:64][Reserved:26]
 ```
 
 ### Serial Attestation
