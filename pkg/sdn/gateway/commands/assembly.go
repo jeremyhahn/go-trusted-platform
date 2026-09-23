@@ -22,13 +22,13 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsbootstrap "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/proxy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
@@ -106,16 +106,11 @@ type ServeConfig struct {
 	DataDir string
 }
 
-// serveDecodeHook enables TextUnmarshaler-aware decoding (netip.Addr,
-// netip.Prefix, time.Duration) for the gatewayd configuration sections,
-// matching platformd's config decoding — without it, viper's default
-// hooks cannot decode YAML strings into the sdn: section's subnet and
-// address fields.
-var serveDecodeHook = viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
-	mapstructure.TextUnmarshallerHookFunc(),
-	mapstructure.StringToTimeDurationHookFunc(),
-	mapstructure.StringToSliceHookFunc(","),
-))
+// serveDecodeHook is platformd's own configuration decode (config.DecodeHook):
+// gatewayd reads sections of the same platform config, so it must decode them
+// identically — netip addresses and prefixes, durations, lists and secret
+// fields alike.
+var serveDecodeHook = config.DecodeHook()
 
 // LoadServeConfig extracts the gatewayd configuration sections from a viper
 // instance.

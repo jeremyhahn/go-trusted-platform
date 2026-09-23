@@ -37,7 +37,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v2"
 
@@ -1487,13 +1486,7 @@ func (app *App) initConfig(env string) error {
 
 	// Unmarshal with TextUnmarshaler support for custom types
 	// (e.g., quicbaas.ConsistencyLevel, Environment)
-	if err := viper.Unmarshal(app, viper.DecodeHook(
-		mapstructure.ComposeDecodeHookFunc(
-			mapstructure.TextUnmarshallerHookFunc(),
-			mapstructure.StringToTimeDurationHookFunc(),
-			mapstructure.StringToSliceHookFunc(","),
-		),
-	)); err != nil {
+	if err := viper.Unmarshal(app, config.DecodeHook()); err != nil {
 		return err
 	}
 
@@ -4451,13 +4444,7 @@ func TestConfigWithStorage(storage objectstorage.Client) *App {
 	}
 
 	// Unmarshal with TextUnmarshaler support for custom types
-	if err := viper.Unmarshal(app, viper.DecodeHook(
-		mapstructure.ComposeDecodeHookFunc(
-			mapstructure.TextUnmarshallerHookFunc(),
-			mapstructure.StringToTimeDurationHookFunc(),
-			mapstructure.StringToSliceHookFunc(","),
-		),
-	)); err != nil {
+	if err := viper.Unmarshal(app, config.DecodeHook()); err != nil {
 		panic(err)
 	}
 

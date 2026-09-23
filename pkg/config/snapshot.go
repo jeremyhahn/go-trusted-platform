@@ -21,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -147,20 +146,11 @@ func ReloadFromDisk(target interface{}) ([]string, error) {
 	return sortedTopLevelSections(), nil
 }
 
-// unmarshalWithHooks runs viper.Unmarshal against target using the same
-// decode hooks as app.initConfig — TextUnmarshallerHook for custom
-// types, the duration hook for time.Duration fields, and the slice hook
-// for comma-separated lists. Without these the *app.App rejects the
-// decode with cryptic "cannot parse value as ..." errors.
+// unmarshalWithHooks runs viper.Unmarshal against target with DecodeHook, the
+// same decode app.initConfig uses, so a reloaded configuration decodes exactly
+// as the one platformd started with.
 func unmarshalWithHooks(target interface{}) error {
-	hook := viper.DecodeHook(
-		mapstructure.ComposeDecodeHookFunc(
-			mapstructure.TextUnmarshallerHookFunc(),
-			mapstructure.StringToTimeDurationHookFunc(),
-			mapstructure.StringToSliceHookFunc(","),
-		),
-	)
-	return viper.Unmarshal(target, hook)
+	return viper.Unmarshal(target, DecodeHook())
 }
 
 // sortedTopLevelSections returns the sorted list of top-level keys
