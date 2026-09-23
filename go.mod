@@ -47,6 +47,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167
+	github.com/jeremyhahn/arduino-generic/sdk/go v0.3.0-alpha
 	github.com/jeremyhahn/go-codec v1.4.0
 	github.com/jeremyhahn/go-luks2 v0.2.0-alpha
 	github.com/jeremyhahn/go-quicbaas v0.12.0-alpha

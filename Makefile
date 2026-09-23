@@ -1466,6 +1466,31 @@ coverage-bmc:
 		./pkg/cli/commands/bmc/...
 	go tool cover -func=coverage-bmc.out | tail -5
 
+# AVR firmware attestation tests
+#
+# No hardware and no device. The tests drive a fake link through the real
+# arduino-generic codec, so they run as fast as any other unit test and
+# modify nothing on the host.
+## test-avr-attestation: Run AVR firmware attestation provider unit tests
+.PHONY: test-avr-attestation
+test-avr-attestation:
+	# tag-independent
+	go test -count=1 -timeout 120s ./pkg/firmware/avr/...
+
+## coverage-avr-attestation: AVR firmware attestation coverage report
+.PHONY: coverage-avr-attestation
+coverage-avr-attestation:
+	# tag-independent
+	go test -count=1 -timeout 120s -coverprofile=coverage-avr-attestation.out \
+		./pkg/firmware/avr/...
+	go tool cover -func=coverage-avr-attestation.out | tail -5
+
+## bench-avr-attestation: Benchmark the AVR firmware attestation provider
+.PHONY: bench-avr-attestation
+bench-avr-attestation:
+	# tag-independent
+	go test -bench=. -benchmem -run=^$$ ./pkg/firmware/avr/...
+
 ## integration-test-bmc: Run BMC multi-protocol integration tests in devcontainer
 .PHONY: integration-test-bmc
 integration-test-bmc: build-devcontainer

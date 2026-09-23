@@ -496,6 +496,8 @@ github.com/jbenet/go-temp-err-catcher v0.1.0 h1:zpb3ZH6wIE8Shj2sKS+khgRvf7T7RABo
 github.com/jbenet/go-temp-err-catcher v0.1.0/go.mod h1:0kJRvmDZXNMIiJirNPEYfhpPwbGVtZVWC34vc5WLsDk=
 github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 h1:njuLRcjAuMKr7kI3D85AXWkw6/+v9PwtV6M6o11sWHQ=
 github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1/go.mod h1:alcuEEnZsY1WQsagKhZDsoPCRoOijYqhZvPwLG0kzVs=
+github.com/jeremyhahn/arduino-generic/sdk/go v0.3.0-alpha h1:wy2XzFGdrSR5bhKUwpjtytLjYAsGKxzxorwci/Zp6yk=
+github.com/jeremyhahn/arduino-generic/sdk/go v0.3.0-alpha/go.mod h1:VLTlzXNHnxl+ra+yahvWOkKElRTRWsM1vrNOX7cHPcw=
 github.com/jeremyhahn/go-auth v0.2.0-alpha h1:BW+KU+uYPSpoRB8IW6l9aJrvMEMHSGYLQyAezlaBoLo=
 github.com/jeremyhahn/go-auth v0.2.0-alpha/go.mod h1:EpLRQmiMJiKYS4dYiLI61es7o0wbsXXNVg4tc8Rums0=
 github.com/jeremyhahn/go-codec v1.4.0 h1:ORbXlqpzg5RDlYGKyqKmbVNdF7TFjabO/7lVgpJ96W8=

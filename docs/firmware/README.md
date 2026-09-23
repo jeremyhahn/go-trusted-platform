@@ -308,6 +308,7 @@ spec:
 
 ### Device Support
 - [AVR Support](avr.md) - AVR microcontroller implementation details
+- [AVR Attestation](avr-attestation.md) - `pkg/firmware/avr/attestation`, the AVR attestation provider
 - [Raspberry Pi](rpi.md) - Raspberry Pi secure boot and swtpm
 - [Android](android.md) - Android/GrapheneOS support
 
