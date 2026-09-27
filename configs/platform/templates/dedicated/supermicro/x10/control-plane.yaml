@@ -17,7 +17,8 @@
 #   absent.
 #
 # DEPLOYER: Before using this template, update the following for your environment:
-#   - IP addresses (172.16.200.x, PUBLIC_IPv4, PRIVATE_IPv4)
+#   - IP addresses (10.4.x.x: the block-4 example of the reference network
+#     design, 10.4.0.0/16 with VLANs 400-408; also PUBLIC_IPv4, PRIVATE_IPv4)
 #   - Domain names (cp.example.com, example.internal)
 #   - TPM serial number (idevid.serial)
 #   - DNS zone records and nameservers
@@ -165,59 +166,62 @@ os:
 network:
   dns:
     nameservers:
-      - 198.18.0.10
+      - 10.4.6.10
     search-domains:
       - example.internal
+  # Reference network design, block 4 (owner design decision 2026-09-26):
+  # 404 quarantine, 405 provisioning, 406 control-plane, 407 storage.
+  # Their zones are set by the explicit sdn.networks entries below.
   subnets:
-    - name: trusted
+    - name: control-plane
       scope: internal
-      vlan-id: 200
-      cidr: 198.18.0.0/24
-      gateway: 198.18.0.1
+      vlan-id: 406
+      cidr: 10.4.6.0/24
+      gateway: 10.4.6.1
       dns:
-        - 198.18.0.10
+        - 10.4.6.10
       dhcp:
         enabled: true
-        range-start: 198.18.0.20
-        range-end: 198.18.0.254
+        range-start: 10.4.6.50
+        range-end: 10.4.6.254
         lease-duration: 24h
     - name: provisioning
       scope: internal
-      vlan-id: 201
-      cidr: 172.16.201.0/24
-      gateway: 172.16.201.1
+      vlan-id: 405
+      cidr: 192.0.2.0/24
+      gateway: 192.0.2.1
       dns:
-        - 172.16.201.10
+        - 192.0.2.10
       role: provisioning
       dhcp:
         enabled: true
-        range-start: 172.16.201.50
-        range-end: 172.16.201.254
+        range-start: 192.0.2.50
+        range-end: 192.0.2.254
         lease-duration: 1h
     - name: quarantine
       scope: internal
-      vlan-id: 202
-      cidr: 172.16.202.0/24
-      gateway: 172.16.202.1
+      vlan-id: 404
+      cidr: 10.4.4.0/24
+      gateway: 10.4.4.1
       dns:
-        - 172.16.202.10
+        - 10.4.4.10
       role: quarantine
     - name: storage
       scope: internal
-      vlan-id: 203
-      cidr: 172.16.203.0/24
-      gateway: 172.16.203.1
+      vlan-id: 407
+      cidr: 10.4.7.0/24
+      gateway: 10.4.7.1
       dns:
-        - 172.16.203.10
+        - 10.4.7.10
       dhcp:
         enabled: true
-        range-start: 172.16.203.10
-        range-end: 172.16.203.254
+        range-start: 10.4.7.50
+        range-end: 10.4.7.254
         lease-duration: 24h
   interfaces:
     - name: eth0
       type: static
-      ipv4-address: 198.18.0.10/24
+      ipv4-address: 10.4.6.10/24
       auto-start: true
   bridges:
     - name: trusted0
@@ -241,18 +245,21 @@ network:
       interfaces:
         - eth6
         - eth7
+      # Port class (reference design): a hypervisor/compute trunk carries
+      # 401 and 403-408 with native VLAN 405. The bond schema cannot express
+      # a native VLAN yet (#708).
       vlans:
-        - subnet: trusted
-          ipv4-address: 198.18.0.10/24
+        - subnet: control-plane
+          ipv4-address: 10.4.6.10/24
           auto-start: true
         - subnet: provisioning
-          ipv4-address: 172.16.201.10/24
+          ipv4-address: 192.0.2.10/24
           auto-start: true
         - subnet: quarantine
-          ipv4-address: 172.16.202.10/24
+          ipv4-address: 10.4.4.10/24
           auto-start: true
         - subnet: storage
-          ipv4-address: 172.16.203.10/24
+          ipv4-address: 10.4.7.10/24
           auto-start: true
       auto-start: true
   vlans: []
@@ -424,7 +431,7 @@ dns:
             ttl: 3600
   internal:
     # Non-privileged port. platformd does NOT run as root; clients on
-    # the trusted network reach the internal zone via their local
+    # the control-plane network reach the internal zone via their local
     # dnsmasq (port 53) which forwards the internal-domain zone to
     # this address with an explicit port override — see
     # `os.dnsmasq.upstreams` in each non-CP template / override.
@@ -477,7 +484,7 @@ dns:
           # below, or nodes complete the NTS-KE handshake and are then
           # refused time. On the reference fleet ${PRIVATE_IPv4} expanded
           # to the MANAGEMENT address while listen-networks covered only
-          # the trusted and provisioning /24s (#509). platformd reports
+          # the control-plane and provisioning /24s (#509). platformd reports
           # the mismatch on the `ntp` health component; reconcile it by
           # widening listen-networks or by pointing this record at an
           # already-allowed segment.
@@ -504,15 +511,15 @@ dns:
 
 ntp:
   enabled: true
-  # Control plane consumes upstream time and serves it to the trusted and
-  # provisioning networks.
+  # Control plane consumes upstream time and serves it to the control-plane
+  # and provisioning networks.
   mode: both
   consume:
     upstream:
       # The edge router / default gateway is the preferred upstream: it is on
       # the local segment, so its round-trip is an order of magnitude tighter
       # than any public source. Most routers cannot do NTS, hence nts: false.
-      - address: 198.18.0.1
+      - address: 10.4.6.1
         prefer: true
         iburst: true
         nts: false
@@ -538,8 +545,8 @@ ntp:
     # Explicit CIDR allow-list. NEVER 0.0.0.0/0 - an open NTP server is a
     # reflection-amplification source.
     listen-networks:
-      - 198.18.0.0/24
-      - 172.16.201.0/24
+      - 10.4.6.0/24
+      - 192.0.2.0/24
     local-stratum: 10
     nts:
       # RFC 8915 Network Time Security for internal control-plane time,
@@ -680,7 +687,7 @@ trust:
 # =============================================================================
 
 bmc:
-  address: 198.18.0.1
+  address: 10.4.2.10  # management (VLAN 402); .1 is the gateway VIP
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -756,107 +763,125 @@ sdn:
   ipam:
     backend: quicbaas
     pools:
-      - name: trusted
-        cidr: 198.18.0.0/24
-        gateway: 198.18.0.1
+      - name: control-plane
+        cidr: 10.4.6.0/24
+        gateway: 10.4.6.1
         dns:
-          - 198.18.0.10
-        range-start: 198.18.0.20
-        range-end: 198.18.0.254
+          - 10.4.6.10
+        range-start: 10.4.6.50
+        range-end: 10.4.6.254
         lease-duration: 24h
         dhcp: true
       - name: provisioning
-        cidr: 172.16.201.0/24
-        gateway: 172.16.201.1
+        cidr: 192.0.2.0/24
+        gateway: 192.0.2.1
         dns:
-          - 172.16.201.10
-        range-start: 172.16.201.50
-        range-end: 172.16.201.254
+          - 192.0.2.10
+        range-start: 192.0.2.50
+        range-end: 192.0.2.254
         lease-duration: 1h
         dhcp: true
       - name: quarantine
-        cidr: 172.16.202.0/24
-        gateway: 172.16.202.1
+        cidr: 10.4.4.0/24
+        gateway: 10.4.4.1
         dns:
-          - 172.16.202.10
-        range-start: 172.16.202.50
-        range-end: 172.16.202.254
+          - 10.4.4.10
+        range-start: 10.4.4.50
+        range-end: 10.4.4.254
         lease-duration: 1h
         dhcp: false
       - name: storage
-        cidr: 172.16.203.0/24
-        gateway: 172.16.203.1
+        cidr: 10.4.7.0/24
+        gateway: 10.4.7.1
         dns:
-          - 172.16.203.10
-        range-start: 172.16.203.20
-        range-end: 172.16.203.254
+          - 10.4.7.10
+        range-start: 10.4.7.50
+        range-end: 10.4.7.254
         lease-duration: 24h
         dhcp: true
+      # dmz-* pools: overlay addressing from the IPAM pool 10.4.128.0/17
+      # (see the dmz-* networks below).
       - name: dmz-public
-        cidr: 172.16.210.0/24
-        gateway: 172.16.210.1
-        range-start: 172.16.210.10
-        range-end: 172.16.210.254
+        cidr: 10.4.160.0/24
+        gateway: 10.4.160.1
+        range-start: 10.4.160.50
+        range-end: 10.4.160.254
         lease-duration: 24h
         dhcp: false
       - name: dmz-private
-        cidr: 172.16.211.0/24
-        gateway: 172.16.211.1
-        range-start: 172.16.211.10
-        range-end: 172.16.211.254
+        cidr: 10.4.161.0/24
+        gateway: 10.4.161.1
+        range-start: 10.4.161.50
+        range-end: 10.4.161.254
         lease-duration: 24h
         dhcp: false
       - name: dmz-data
-        cidr: 172.16.212.0/24
-        gateway: 172.16.212.1
-        range-start: 172.16.212.10
-        range-end: 172.16.212.254
+        cidr: 10.4.162.0/24
+        gateway: 10.4.162.1
+        range-start: 10.4.162.50
+        range-end: 10.4.162.254
         lease-duration: 24h
         dhcp: false
   dhcp:
     enabled: true
     interface: trusted0
   networks:
-    - name: trusted
-      vlan: 200
+    # Reference network design, block 4 (owner design decision 2026-09-26):
+    # 404 quarantine, 405 provisioning, 406 control-plane, 407 storage.
+    # `zone: trusted` is the zone name today's code accepts for these
+    # networks; the zone vocabulary moves with #708.
+    - name: control-plane
+      vlan: 406
       zone: trusted
-      pool: trusted
+      pool: control-plane
     - name: provisioning
-      vlan: 201
+      vlan: 405
       zone: provisioning
       pool: provisioning
     - name: quarantine
-      vlan: 202
+      vlan: 404
       zone: quarantine
       pool: quarantine
     - name: storage
-      vlan: 203
+      vlan: 407
       zone: storage
       pool: storage
+    # The dmz-* networks are overlays in the reference design (public and
+    # tenant networks are EVPN/VXLAN overlays in the IPAM pool
+    # 10.4.128.0/17, not switch VLANs). sdn.networks cannot express an
+    # overlay yet, so each keeps a VLAN from the reserved range 409-411
+    # (interim: until the overlay service lands, not a design VLAN).
+    # Proposal: each becomes an EVPN overlay (VNI 400001, 400002, 400003)
+    # once the overlay service lands.
     - name: dmz-public
-      vlan: 210
+      vlan: 409
       zone: public
       pool: dmz-public
     - name: dmz-private
-      vlan: 211
+      vlan: 410
       zone: trusted
       pool: dmz-private
     - name: dmz-data
-      vlan: 212
+      vlan: 411
       zone: trusted
       pool: dmz-data
   fabric:
     mode: vlan
+    # Port classes in the reference design: transit (400) on gateway ports
+    # only; management (402) on BMC access ports only; hypervisor/compute
+    # trunks carry 401 and 403-408 with native VLAN 405; gateway trunks carry
+    # what the gateway serves. The fabric schema has no per-port VLAN list or
+    # native VLAN yet, so the port classes are not expressed here (#708).
     switches:
       - id: nexus-01
         vendor: cisco-nexus
         model: N9K-C93180YC-EX
-        mgmt-ip: 198.18.0.250
+        mgmt-ip: 10.4.2.250
         credentials-ref: "kms://switches/nexus-01"
       - id: nexus-02
         vendor: cisco-nexus
         model: N9K-C93180YC-EX
-        mgmt-ip: 198.18.0.251
+        mgmt-ip: 10.4.2.251
         credentials-ref: "kms://switches/nexus-02"
     peers:
       - switch-a: nexus-01
@@ -874,21 +899,21 @@ sdn:
     segments:
       # Fabric segment roles: only `provisioning` and `quarantine` are
       # first-class roles recognised by the fabric manager (they trigger
-      # PXE onboarding and isolation flows respectively). Trusted
+      # PXE onboarding and isolation flows respectively). Control-plane
       # and storage segments have NO role — an empty/absent role is
       # semantically "general data plane", which is what they are.
       # Do NOT set role: server or role: storage; the validator
       # rejects them and SDN init gets deferred.
-      - name: trusted
-        vlan: 200
+      - name: control-plane
+        vlan: 406
       - name: provisioning
-        vlan: 201
+        vlan: 405
         role: provisioning
       - name: quarantine
-        vlan: 202
+        vlan: 404
         role: quarantine
       - name: storage
-        vlan: 203
+        vlan: 407
   overlay:
     enabled: false
     vxlan-port: 4789

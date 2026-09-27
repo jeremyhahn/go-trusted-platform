@@ -33,7 +33,7 @@ import (
 // actually arrives in the ServeConfig.
 //
 // A template is a promise: the runbook says "copy this and the gateway comes
-// up beside the ASRs announcing nothing". The promise is only worth making if
+// up beside the upstream routers announcing nothing". The promise is only worth making if
 // the daemon decodes it, so a key renamed in the schema — or a key invented
 // in the template — fails here rather than on the hardware at 02:00.
 func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
@@ -51,20 +51,20 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 	require.NotNil(t, cfg.Gateway, "gateway section")
 	g := cfg.Gateway
 	assert.True(t, g.Enabled)
-	assert.Equal(t, "lab-node-1-gateway", g.ID)
-	assert.Equal(t, "198.18.0.2", g.AnycastIP,
+	assert.Equal(t, "gw-01-gateway", g.ID)
+	assert.Equal(t, "10.4.6.2", g.AnycastIP,
 		"ruling R2: the gateway takes .1 only at the Phase 5 cutover")
 
 	// Both WAN uplinks, as the NAT egress selection reads them.
 	require.Len(t, g.Uplinks, 2)
 	assert.Equal(t, "eth6", g.Uplinks[0].Name)
-	assert.Equal(t, []string{"99.12.246.38/29"}, g.Uplinks[0].IPAddresses)
+	assert.Equal(t, []string{"198.51.100.6/29"}, g.Uplinks[0].IPAddresses)
 
-	// One tunnel per POP per ISP, the full mesh the ASRs run today.
+	// One tunnel per POP per ISP, the full mesh the upstream routers run today.
 	require.Len(t, g.Tunnels, 4, "two relays over two uplinks")
-	assert.Equal(t, "gre-mia-att", g.Tunnels[0].Name)
+	assert.Equal(t, "gre-popa-ispa", g.Tunnels[0].Name)
 	assert.Equal(t, "gre", g.Tunnels[0].Type)
-	assert.Equal(t, "45.63.110.165", g.Tunnels[0].Remote, "the Miami relay")
+	assert.Equal(t, "198.51.100.100", g.Tunnels[0].Remote, "the POP A relay")
 	assert.Equal(t, "10.255.0.33/30", g.Tunnels[0].TunnelIP)
 
 	// Transit and BGP shipped commented out until #619: enabledServices turns
@@ -83,8 +83,8 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 	// tie-breaks decide which relay carries traffic, which is the whole
 	// reason this template is a cutover prerequisite.
 	wantLocalPref := map[string]uint32{
-		"miami-att": 200, "miami-comcast": 150,
-		"atlanta-comcast": 100, "atlanta-att": 50,
+		"popa-ispa": 200, "popa-ispb": 150,
+		"popb-ispb": 100, "popb-ispa": 50,
 	}
 	for _, n := range g.BGP.Neighbors {
 		want, known := wantLocalPref[n.Name]
@@ -98,8 +98,8 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 		require.NotNil(t, n.Policy.Export.MED, "%s: the routers send a MED on every session", n.Name)
 		assert.Equal(t, uint32(50), *n.Policy.Export.MED, "%s", n.Name)
 
-		// The x3 prepend belongs to the Atlanta relay's eBGP session to
-		// Vultr, not to the gateway. One here would lengthen the path BOTH
+		// The x3 prepend belongs to the POP B relay's eBGP session to
+		// its upstream provider, not to the gateway. One here would lengthen the path BOTH
 		// relays re-announce and move inbound traffic at cutover.
 		assert.Nil(t, n.Policy.Export.Prepend,
 			"%s: the gateway must not prepend toward the relays", n.Name)
@@ -136,8 +136,8 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 	require.Len(t, g.HostFW.Peers, 2, "one allowance per WAN link")
 	assert.Equal(t, hostfw.PeerProtocolGRE, g.HostFW.Peers[0].Protocol)
 	assert.Equal(t, []netip.Addr{
-		netip.MustParseAddr("45.63.110.165"),
-		netip.MustParseAddr("66.42.90.190"),
+		netip.MustParseAddr("198.51.100.100"),
+		netip.MustParseAddr("192.0.2.100"),
 	}, g.HostFW.Peers[0].Addresses)
 	assert.Len(t, g.HostFW.Tunnels, 4, "179 and 3784 are allowed on the tunnels only")
 
@@ -147,7 +147,7 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 
 	require.NotNil(t, cfg.ControlPlane, "control-plane section")
 	assert.True(t, cfg.ControlPlane.Enabled)
-	assert.Equal(t, "lab-node-1-gateway", cfg.ControlPlane.GatewayID)
+	assert.Equal(t, "gw-01-gateway", cfg.ControlPlane.GatewayID)
 	assert.NotEmpty(t, cfg.ControlPlane.CertFile)
 }
 

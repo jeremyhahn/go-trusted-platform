@@ -51,6 +51,12 @@ The Trusted Platform provides comprehensive multi-tenancy support through per-te
 └───────────────┘      └───────────────────┘      └───────────────┘
 ```
 
+> **Code today vs. the reference design.** Tenants are isolated today by
+> per-tenant VLAN ranges (`pkg/tenant/vlan`). The
+> [reference network](../architecture/reference-network.md) (owner design
+> decision, 2026-09-26) has no tenant VLAN range: tenant networks are
+> EVPN/VXLAN overlays addressed from the environment's IPAM pool. The code change is tracked in #708.
+
 ## Quick Start
 
 ### 1. Create a Tenant

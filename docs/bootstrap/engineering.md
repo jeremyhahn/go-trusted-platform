@@ -443,7 +443,7 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
     bootstrap container's `/media/status` — the pxeboot media watcher's
     cumulative record, sampled every 250 ms, of descriptors on the staged ISO —
     for `defaultMediaReadWindow` (a package constant, 7 min, set from the
-    2026-08-29 measurement on lab-node-2: power-on → first per-MAC
+    2026-08-29 measurement on node-02: power-on → first per-MAC
     `installer.yaml` GET ≈ 6 min 15 s, install-log upload ≈ 10 min 30 s).
     Evidence, when it appears, is the
     ISO's `smbd` record for the node's own BMC address (`MediaReadProbe.Client`;

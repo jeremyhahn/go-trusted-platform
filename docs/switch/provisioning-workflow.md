@@ -91,7 +91,7 @@ Device boots via PXE (from jumpbox or network):
 # provides DHCP + TFTP bootstrap
 # Device receives:
 # - DHCP IP in provisioning VLAN
-# - TFTP server (jumpbox 198.51.100.91)
+# - TFTP server (jumpbox 192.0.2.91)
 # - Boot file (platform-initrd or platform-iso)
 ```
 

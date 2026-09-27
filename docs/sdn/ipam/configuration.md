@@ -277,7 +277,7 @@ sdn:
   networks:
     - name: "production-net"
       vlan: 10
-      zone: trusted
+      zone: trusted          # today's built-in zone; the reference design replaces it (#708)
       pool: "production"
 
     - name: "provisioning-net"

@@ -1,7 +1,7 @@
 # Tunnel Management
 
 The `pkg/sdn/tunnel` package manages the gateway's point-to-point tunnels to
-remote relays (the Miami/Atlanta VPS nodes that hold the site's eBGP) through
+remote relays (the POP A / POP B VPS nodes that hold the site's eBGP) through
 Linux netlink, under a **pluggable transport**, and pins each tunnel's outer
 packets to the WAN uplink it was sourced from (#582).
 
@@ -51,7 +51,7 @@ default route in that table and a source rule per address. `BindTunnel` adds a
 higher-priority rule for the tunnel's outer endpoint pair
 (`from <local>/32 to <remote>/32 lookup <table>`), so a tunnel sourced on uplink A
 never egresses through uplink B when the main table's default moves — the
-platform's equivalent of the ASR's `tunnel route-via … mandatory` plus its
+platform's equivalent of an upstream router's `tunnel route-via … mandatory` plus its
 return-path PBR. Rules already present in the kernel are adopted, not
 duplicated; removal takes the tunnel's pin, then the source rules, then the
 table routes.
@@ -61,23 +61,23 @@ table routes.
 ```go
 uplinks := tunnel.NewUplinkManager(logger)
 _ = uplinks.EnsureUplink(ctx, tunnel.UplinkConfig{
-    Name: "att", Interface: "eth6", Table: 101,
-    GatewayV4: "99.12.246.38", Addresses: []string{"99.12.246.36/29"},
+    Name: "ispa", Interface: "eth6", Table: 101,
+    GatewayV4: "198.51.100.6", Addresses: []string{"198.51.100.4/29"},
 })
 
 mgr := tunnel.NewManager(logger, tunnel.WithKeyProvider(kms), tunnel.WithUplinks(uplinks))
 defer mgr.Close()
 
 err := mgr.EnsureTunnel(ctx, tunnel.TunnelConfig{
-    Name: "gre-mia", Type: "gre", Transport: "ipsec", Uplink: "att",
-    Local: "99.12.246.36", Remote: "45.63.110.165", TunnelIP: "10.255.0.1/30",
-    IPsec: &tunnel.IPsecConfig{KeyRef: "kms://platform/tunnel/mia/out", SPIOut: 0x1001, SPIIn: 0x1002},
+    Name: "gre-popa-ispa", Type: "gre", Transport: "ipsec", Uplink: "ispa",
+    Local: "198.51.100.4", Remote: "198.51.100.100", TunnelIP: "10.4.255.1/30",
+    IPsec: &tunnel.IPsecConfig{KeyRef: "kms://platform/tunnel/popa-ispa/out", SPIOut: 0x1001, SPIIn: 0x1002},
 })
 ```
 
 ## Integration with BGP
 
-The tunnel addresses (`10.255.0.x/30`) are the iBGP peer addresses in
+The tunnel addresses (`10.4.255.x/30`, from the environment's IPAM pool) are the iBGP peer addresses in
 `BGPConfig.Neighbors`. The gateway service handler that builds both managers
 from the `tunnels:` and `uplinks:` sections is #568's `backedServiceHandler`.
 

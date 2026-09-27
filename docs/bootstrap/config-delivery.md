@@ -103,7 +103,7 @@ At install time, `autoinstall.sh` appends `/<mac-dashed>/installer.yaml`
 and does an HTTP GET.
 
 **Why per-MAC, not per-hostname**: the installer only knows its own
-MAC. It doesn't know it's "lab-node-2" until the config tells it.
+MAC. It doesn't know it's "node-02" until the config tells it.
 Publishing under every MAC the orchestrator has discovered (YAML +
 BMC) guarantees the installer finds its config on the first NIC the
 live environment enumerates.
@@ -137,7 +137,7 @@ Per `pkg/bootstrap/virtual_media.go::stagePerMACHostname`:
 | Key | Content-Type | Content |
 |-----|--------------|---------|
 | `installer.yaml` | `application/yaml` | Full merged device config (template + overrides_file + inline overrides + node identity injection) |
-| `hostname` | `text/plain; charset=utf-8` | Target hostname (e.g., `lab-node-2`) |
+| `hostname` | `text/plain; charset=utf-8` | Target hostname (e.g., `node-02`) |
 
 Published under **every MAC** in `union(node.MACs YAML-declared, BMC-discovered MACs)`.
 

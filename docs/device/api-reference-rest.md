@@ -281,7 +281,7 @@ used by EK-bound config delivery and remote UKI signing:
   "ek_serial": "1234567890",
   "ek_cert": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
   "mac_address": "00:25:90:FF:AA:02",
-  "config": {"hostname": "lab-node-2"},
+  "config": {"hostname": "node-02"},
   "assigned": false,
   "assigned_at": "2026-08-01T09:00:00Z"
 }

@@ -19,7 +19,7 @@ Payloads are msgpack-encoded (`pkg/api/quic/gateway_handlers.go`).
 ```bash
 platformctl --transport quic sdn gateway bgp status
 platformctl --transport quic sdn gateway bgp peers
-platformctl --transport quic sdn gateway bgp announce --prefix 2602:F5BB::/36
+platformctl --transport quic sdn gateway bgp announce --prefix 2001:db8::/36
 ```
 
 ## See Also

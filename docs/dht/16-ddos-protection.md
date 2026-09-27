@@ -11,7 +11,7 @@ The system implements a **5-layer defense model** that combines traffic dilution
 > - Reputation thresholds and collaborative defense: See [09-defense-reputation.md](09-defense-reputation.md)
 > - Network architecture and gateway mesh: See [02-network-architecture.md](02-network-architecture.md)
 
-**Source**: `/mnt/vm-host-1/go-trusted-platform/pkg/defense/`
+**Source**: `pkg/defense/`
 
 ---
 
@@ -215,7 +215,7 @@ The gateway mesh consists of 10,000+ geographically distributed gateway nodes th
         +------+------+     +------+------+     +------+------+
         |  Gateway    |     |  Gateway    |     |  Gateway    |
         |  Region US  |     |  Region EU  |     |  Region AS  |
-        | 2602:F5BB:: |     | 2602:F5BB:: |     | 2602:F5BB:: |
+        | 2001:db8::  |     | 2001:db8::  |     | 2001:db8::  |
         +------+------+     +------+------+     +------+------+
                |                   |                   |
        +-------+-------+   +-------+-------+   +-------+-------+
@@ -234,8 +234,8 @@ All gateway nodes announce the same IP prefixes via BGP, creating an anycast mes
 
 ```go
 type AnycastConfig struct {
-    IPv6Prefix     string   // "2602:F5BB::/36"
-    IPv4Prefix     string   // "23.143.36.0/24"
+    IPv6Prefix     string   // "2001:db8::/36"
+    IPv4Prefix     string   // "203.0.113.0/24"
     ASN            uint32   // Network ASN
     Communities    []string // BGP communities for traffic engineering
 }

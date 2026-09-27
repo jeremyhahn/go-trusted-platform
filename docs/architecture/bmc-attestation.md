@@ -11,7 +11,7 @@ Owner: pkg/bmc/attestation
   onboarding, continuous attestation) can store, compare, and policy-check
   without knowing vendor specifics.
 - Ship a functional v0 Supermicro backend that wraps the vendor `sum` binary
-  so that real lab-node-1..lab-node-5 hardware can be exercised immediately.
+  so that real node-01..node-05 hardware can be exercised immediately.
 - Leave clean extension points for Dell iDRAC9 and HPE iLO5/6 backends.
 
 ## Non-goals
@@ -159,7 +159,7 @@ a `DICEVerifier` is added. No interface changes expected.
   construction, stdout parsing, ANSI stripping, error propagation. No real
   BMC involvement.
 - **Integration tests** (future, `//go:build integration`): under
-  `test/integration/bmc_attestation/` against real lab-node-1 hardware in the
+  `test/integration/bmc_attestation/` against real node-01 hardware in the
   lab, exercising Dump -> Download -> Compare round-trip.
 - **Multi-protocol adapter tests** (future): once a `platformctl bmc
   attestation` CLI exists, reuse the standard 6-adapter pattern from
@@ -200,7 +200,7 @@ the only meaningful validation for this code — impossible.
 
 | Vendor | Platform | Result | Evidence |
 |---|---|---|---|
-| Supermicro | X10SDV-TP8F (lab-node-1..05) | ❌ | `sum ... -c Attestation --action List` returned "Remote Attestation is not supported on this platform" (error 609.100) even with SFT-DCMS-SINGLE + SFT-SDDC-SINGLE activated. Strings in sum 2.14.0 confirm: "Support only on RoT system of X12 and later platforms." |
+| Supermicro | X10SDV-TP8F (node-01..05) | ❌ | `sum ... -c Attestation --action List` returned "Remote Attestation is not supported on this platform" (error 609.100) even with SFT-DCMS-SINGLE + SFT-SDDC-SINGLE activated. Strings in sum 2.14.0 confirm: "Support only on RoT system of X12 and later platforms." |
 | Dell | PowerEdge R640 14G, iDRAC9 FW 7.00.00.183 | ❌ | `/redfish/v1/ComponentsIntegrity` returns 404. `DellAttestationService` returns 404. `TrustedComponents` on `Chassis/System.Embedded.1` returns 404. `DellLCService` exposes 30+ actions, none attestation-related. 14G hardware has Silicon Root of Trust at boot verification time but no exposed attestation API; Dell shipped real attestation surface starting 15G and completed the schema in 16G. |
 | HPE | none owned | N/A | No hardware to test against. Specs suggest iLO6 (Gen11) is the best-supported target for DMTF Redfish ComponentIntegrity + SPDM when hardware arrives. |
 

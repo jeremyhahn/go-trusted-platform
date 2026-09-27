@@ -2723,7 +2723,7 @@ func (e *SignerSelectionViolation) Error() string {
 
 The go-trusted-platform DKG protocol generates threshold FROST signing keys across N participants, where any t participants can sign but fewer than t cannot forge signatures or learn the secret.
 
-**Implementation:** [go-frostdkg](file:///mnt/vm-host-1/go-frostdkg) with TPM enhancements
+**Implementation:** go-frostdkg with TPM enhancements
 
 The go-frostdkg project implements the **EncPedPop (Encrypted Pedersen Parity-of-Opinions)** DKG protocol, which is built on the SimplPedPop base layer with Verifiable Secret Sharing (VSS) and polynomial operations. Key features include:
 

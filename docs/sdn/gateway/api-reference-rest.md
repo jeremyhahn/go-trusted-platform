@@ -26,7 +26,7 @@ POST   /api/v1/sdn/gateway/bgp/prefixes             # Announce a prefix
 DELETE /api/v1/sdn/gateway/bgp/prefixes/{prefix}    # Withdraw a prefix
 ```
 
-Announce body: `{"prefix": "2602:F5BB::/36", "next_hop": "10.0.0.1"}`
+Announce body: `{"prefix": "2001:db8::/36", "next_hop": "10.0.0.1"}`
 (`next_hop` optional). The prefix path parameter is URL-encoded.
 
 ## IPAM Endpoints

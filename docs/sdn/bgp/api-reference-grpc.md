@@ -38,7 +38,7 @@ client := platformv1.NewGatewayServiceClient(conn)
 status, err := client.GetBGPStatus(ctx, &platformv1.GetBGPStatusRequest{})
 
 _, err = client.AnnouncePrefix(ctx, &platformv1.AnnouncePrefixRequest{
-    Prefix:  "2602:F5BB::/36",
+    Prefix:  "2001:db8::/36",
     NextHop: "10.0.0.1",
 })
 ```

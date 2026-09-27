@@ -64,7 +64,7 @@ The officer ceremony verb tree (`barrier officer *`,
 the canonical surface — under the share-free INV-1 contract the claim
 ceremony is the only way an officer ever holds a share. qrdb is the
 reference implementation; the platformctl mirror is pending. See
-[`08-bootstrap-auth-architecture.md §6`](https://github.com/automatethethings/software/blob/main/docs/08-bootstrap-auth-architecture.md#6-cli-surface-convergence)
+`08-bootstrap-auth-architecture.md` §6 (software architecture docs)
 and [go-qrdb `docs/cli/barrier.md` §3.10](../../../go-qrdb/docs/cli/barrier.md).
 
 ---
@@ -250,7 +250,7 @@ flag (or `PLATFORMCTL_TRANSPORT`) to select:
 
 * Canonical narrative + PIN flow + strategy taxonomy:
   [`go-qrdb/docs/cli/barrier.md`](../../../go-qrdb/docs/cli/barrier.md)
-* Spec: [`08-bootstrap-auth-architecture.md §6`](https://github.com/automatethethings/software/blob/main/docs/08-bootstrap-auth-architecture.md#6-cli-surface-convergence)
+* Spec: `08-bootstrap-auth-architecture.md` §6 (software architecture docs)
 * Global flags: [`docs/cli/global-flags.md`](global-flags.md)
 * Sibling CLI docs:
   [`qrdb barrier`](../../../go-qrdb/docs/cli/barrier.md) ·

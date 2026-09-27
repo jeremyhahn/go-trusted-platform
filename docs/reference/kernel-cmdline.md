@@ -117,7 +117,7 @@ hostname/config fetch fallback.
 
 Example:
 ```
-platform_debug_sink=198.51.100.91:8080
+platform_debug_sink=192.0.2.91:8080
 ```
 
 ### `platform_apk_mirror=<URL>` and `alpine_repo=<URL>`
@@ -160,7 +160,7 @@ at runtime it falls back to `v$(cut -d. -f1-2 /etc/alpine-release)`.
 
 Example (PXE cmdline fragment):
 ```
-alpine_repo=http://198.51.100.11:8080/v3.22/main platform_apk_mirror=http://198.51.100.11:8080
+alpine_repo=http://192.0.2.11:8080/v3.22/main platform_apk_mirror=http://192.0.2.11:8080
 ```
 
 ### `modloop=<URL>`
@@ -347,7 +347,7 @@ console=ttyS1,115200 console=ttyS0,115200 earlycon=uart8250,io,0x3f8,115200
 ```
 
 X10SDV SOL is wired to COM1 (ttyS0, I/O 0x3f8) on IPMI payload instance 1 —
-measured on lab-node-2 (`SYS-5018D-FN8T-AS001`, ATEN FW 4.00) 2026-08-29: kernel,
+measured on node-02 (`SYS-5018D-FN8T-AS001`, ATEN FW 4.00) 2026-08-29: kernel,
 autoinstall, initrd and OpenRC output all on instance 1, instance 2 silent.
 Earlier revisions of this page and of the quirk entry said COM2 / 0x2f8; that
 was wrong for this board. Both UARTs stay on the cmdline with `ttyS0` last so

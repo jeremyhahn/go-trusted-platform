@@ -188,7 +188,7 @@ host that resolves it. The bring-up log carries the refusal with both hardware
 addresses:
 
 ```
-sdn: refusing to assign 198.18.0.1/24 to bridge trusted0: 00:00:0c:9f:f0:14
+sdn: refusing to assign 10.4.6.1/24 to bridge trusted0: 00:00:0c:9f:f0:14
 already answers for that address on this segment (local 0c:c4:7a:xx:xx:xx)
 ```
 
@@ -220,7 +220,7 @@ node says so rather than reporting healthy:
 
 ```
 SDN: duplicate-address probe unavailable, assigning address unguarded
-  bridge=trusted0 address=198.18.0.2/24
+  bridge=trusted0 address=10.4.6.2/24
   error="arp: probe interface unavailable: operation not permitted"
 ```
 

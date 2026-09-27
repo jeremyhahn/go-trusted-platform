@@ -267,9 +267,16 @@ flow.AddGotoTableAction(1)
 VLAN numbers are plain L2 segment identifiers. All network policy is derived
 from the **zone** assigned to each network segment, not the VLAN number. See
 [Reference Network Architecture](../architecture/reference-network.md) for
-the authoritative zone taxonomy, VLAN defaults, and compliance control mapping.
+the reference design (zones, VLAN blocks, addressing) and compliance control mapping.
 
-### Default zone segments (reference-network.md defaults)
+### Default zone segments (code defaults today)
+
+> **Code today vs. the reference design.** The table below is what
+> `pkg/sdn/vlan` and `pkg/sdn/zone` ship as defaults today. The
+> [reference network](../architecture/reference-network.md) (owner design
+> decision, 2026-09-26) replaces them: per-environment VLAN blocks, no
+> `trusted` zone, and tenant networks as EVPN/VXLAN overlays rather than a
+> tenant VLAN range. The code change is tracked in #708.
 
 | Zone | Default VLAN | Default Subnet | Purpose |
 |------|:------------:|----------------|---------|
@@ -281,7 +288,8 @@ the authoritative zone taxonomy, VLAN defaults, and compliance control mapping.
 | `management` | 50 | (deployment OOB net) | IPMI/BMC; never routes to data zones |
 
 All values are configurable. Declare subnets in `sdn.networks` with a `zone:`
-field; the platform derives enforcement from the zone, not the VLAN number.
+field; the platform derives enforcement from the zone, not the VLAN number. The
+YAML samples below use the reference design's block-4 example values.
 
 ### Per-zone OpenFlow templates
 
@@ -323,7 +331,7 @@ rules apply:
 # Device profile snippet
 post_enrollment_network:
   zone: trusted       # zone name from sdn.zones / built-in zone taxonomy
-  vlan: 200           # must match the network declared with zone: trusted
+  vlan: 406           # must match the network declared with zone: trusted
   acls:
     - priority: 1000
       match: {protocol: tcp, destination_port: 443}
@@ -342,11 +350,11 @@ Environment variables can override configuration for quick testing or container 
 | OVS_RUNDIR | /var/run/openvswitch | OVS runtime directory |
 | SDN_LOG_LEVEL | info | Logging level (debug, info, warn, error) |
 | SDN_VLAN_DEFAULT | 1 | Default VLAN ID |
-| SDN_VLAN_MANAGEMENT | 50 | Management VLAN ID (default; matches reference-network.md) |
-| SDN_VLAN_QUARANTINE | 202 | Quarantine VLAN ID (default; matches reference-network.md) |
-| SDN_VLAN_PROVISIONING | 201 | Provisioning VLAN ID (default; matches reference-network.md) |
-| SDN_VLAN_STORAGE | 203 | Storage VLAN ID (default; matches reference-network.md) |
-| SDN_VLAN_CLOUD_TENANT_BASE | 1000 | Base VLAN for cloud tenants |
+| SDN_VLAN_MANAGEMENT | 50 | Management VLAN ID (code default; see #708) |
+| SDN_VLAN_QUARANTINE | 202 | Quarantine VLAN ID (code default; see #708) |
+| SDN_VLAN_PROVISIONING | 201 | Provisioning VLAN ID (code default; see #708) |
+| SDN_VLAN_STORAGE | 203 | Storage VLAN ID (code default; see #708) |
+| SDN_VLAN_CLOUD_TENANT_BASE | 1000 | Base VLAN for cloud tenants (code default; the reference design has no tenant VLANs, see #708) |
 
 ## Platform Configuration (YAML)
 
@@ -386,40 +394,40 @@ sdn:
     backend: quicbaas
     pools:
       - name: production
-        cidr: 198.18.0.0/24
-        gateway: 198.18.0.1
+        cidr: 10.4.6.0/24
+        gateway: 10.4.6.1
         dhcp: true
       - name: provisioning
-        cidr: 172.16.201.0/24
-        gateway: 172.16.201.1
+        cidr: 192.0.2.0/24
+        gateway: 192.0.2.1
         dhcp: true
       - name: quarantine
-        cidr: 172.16.202.0/24
-        gateway: 172.16.202.1
+        cidr: 10.4.4.0/24
+        gateway: 10.4.4.1
         dhcp: false
       - name: storage
-        cidr: 172.16.203.0/24
-        gateway: 172.16.203.1
+        cidr: 10.4.7.0/24
+        gateway: 10.4.7.1
         dhcp: true
 
   # networks is a list; every entry requires a zone: field.
   networks:
     - name: production
-      vlan: 200
-      zone: trusted        # must match a name in the resolved zone set
+      vlan: 406
+      zone: trusted        # must match a name in the resolved zone set; `trusted` is today's built-in (#708)
       pool: production     # optional: IPAM pool reference
-      subnet: 198.18.0.0/24  # optional: must match pool CIDR if both set
-      subnet6: 2602:f5bb:200::/64  # optional IPv6 prefix for a dual-stack segment (#554)
+      subnet: 10.4.6.0/24  # optional: must match pool CIDR if both set
+      subnet6: fd12:3456:789a:406::/64  # optional IPv6 prefix for a dual-stack segment (#554)
     - name: provisioning
-      vlan: 201
+      vlan: 405
       zone: provisioning
       pool: provisioning
     - name: quarantine
-      vlan: 202
+      vlan: 404
       zone: quarantine
       pool: quarantine
     - name: storage
-      vlan: 203
+      vlan: 407
       zone: storage
       pool: storage
 ```
@@ -621,16 +629,16 @@ sdn:
     platform_zone: "management"
   zones:
     - name: management
-      vlan: 10
+      vlan: 402
       role: management
-    - name: trusted
-      vlan: 200
+    - name: trusted        # today's built-in zone; the reference design drops it (#708)
+      vlan: 406
       role: trusted
     - name: provisioning
-      vlan: 201
+      vlan: 405
       role: provisioning
     - name: quarantine
-      vlan: 202
+      vlan: 404
       role: quarantine
 ```
 
@@ -661,12 +669,13 @@ subsystem at startup.
   startup so that `ResolvedZones()` returns the full zone list.
 - `dns.zone-subdomains: true` in the DNS configuration.
 
-**Example — resulting DNS names for host `lab-node-1` in zone `trusted`:**
+**Example — resulting DNS names for host `node-01` in zone `trusted`** (today's
+built-in zone; the reference design replaces it, #708):
 
 ```
-lab-node-1.example.internal.          # standard record
-lab-node-1.trusted.example.internal.  # zone-qualified record
-lab-node-1-bmc.example.internal.      # BMC — not zone-qualified (unchanged)
+node-01.example.internal.          # standard record
+node-01.trusted.example.internal.  # zone-qualified record
+node-01-bmc.example.internal.      # BMC — not zone-qualified (unchanged)
 ```
 
 ## Transit Configuration (`transit:`)
@@ -678,12 +687,14 @@ from the gateway's BGP transit service (see
 VLAN and L3 P2P prefix; the gateway's `transit:` service block controls whether
 the transit routing service is active.
 
-When absent, the transit link uses the platform defaults (`vlan: 10`,
-`p2p: "172.16.0.0/24"`).
+When absent, the transit link uses the code defaults (`vlan: 10`,
+`p2p: "172.16.0.0/24"`). The [reference network](../architecture/reference-network.md)
+replaces them with the environment's transit VLAN (x00, e.g. VLAN 400,
+`10.4.0.0/24`); the code change is tracked in #708.
 
 ```yaml
 sdn:
-  transit: {vlan: 10, p2p: "172.16.0.0/24"}
+  transit: {vlan: 400, p2p: "10.4.0.0/24"}
 ```
 
 ### Fields
@@ -753,11 +764,11 @@ managed entirely by the quicbaas SDK at runtime:
 
 ```yaml
 sdn:
-  transit: {vlan: 10, p2p: "172.16.0.0/24"}
+  transit: {vlan: 400, p2p: "10.4.0.0/24"}
   management_vpn: {enabled: true, type: wireguard, allow_to: [management]}
   services:
-    provisioning: {acme_server: "172.16.201.10", dns_server: "172.16.201.1", dhcp_range: "172.16.201.100-172.16.201.200"}
-    quarantine:   {remediation_server: "172.16.202.10", dns_server: "172.16.202.1"}
+    provisioning: {acme_server: "192.0.2.10", dns_server: "192.0.2.1", dhcp_range: "192.0.2.50-192.0.2.254"}
+    quarantine:   {remediation_server: "10.4.4.10", dns_server: "10.4.4.1"}
 ```
 
 ## Zone Services Configuration (`services:`)
@@ -770,8 +781,8 @@ which DNS server to inject, which DHCP range to advertise).
 ```yaml
 sdn:
   services:
-    provisioning: {acme_server: "172.16.201.10", dns_server: "172.16.201.1", dhcp_range: "172.16.201.100-172.16.201.200"}
-    quarantine:   {remediation_server: "172.16.202.10", dns_server: "172.16.202.1"}
+    provisioning: {acme_server: "192.0.2.10", dns_server: "192.0.2.1", dhcp_range: "192.0.2.50-192.0.2.254"}
+    quarantine:   {remediation_server: "10.4.4.10", dns_server: "10.4.4.1"}
 ```
 
 ### ZoneServiceConfig fields
@@ -780,7 +791,7 @@ sdn:
 |-------|------|-------------|
 | `acme_server` | string | Address of the ACME server devices in this zone should contact for certificate enrolment. |
 | `dns_server` | string | DNS resolver address injected via DHCP option 6 for devices in this zone. |
-| `dhcp_range` | string | DHCP address range in `start-end` notation (e.g., `"172.16.201.100-172.16.201.200"`). |
+| `dhcp_range` | string | DHCP address range in `start-end` notation (e.g., `"192.0.2.50-192.0.2.254"`). |
 | `remediation_server` | string | Address of the remediation portal served to quarantined devices. |
 
 All fields are optional — supply only the ones relevant to each zone.

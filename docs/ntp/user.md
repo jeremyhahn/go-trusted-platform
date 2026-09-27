@@ -189,8 +189,8 @@ list:
 
 ```
 ntp  degraded  nts-name-unreachable: cp.example.internal resolves to
-                198.18.1.140, which no serve.listen-networks entry covers
-                (198.18.0.0/24, 172.16.201.0/24); clients will complete the
+                10.4.2.140, which no serve.listen-networks entry covers
+                (10.4.6.0/24, 192.0.2.0/24); clients will complete the
                 NTS-KE handshake and then be refused time
 ```
 
@@ -226,9 +226,9 @@ choose.**
    ntp:
      serve:
        listen-networks:
-         - 198.18.0.0/24
-         - 172.16.201.0/24
-         - 198.18.1.0/24     # the segment `cp` resolves on
+         - 10.4.6.0/24
+         - 192.0.2.0/24
+         - 10.4.2.0/24     # the segment `cp` resolves on
    ```
 
    It widens who can ask this node for time, so keep it to segments you
@@ -236,7 +236,8 @@ choose.**
 
 2. **Publish the name on a segment the allow list already covers.** Point the
    `cp` A record in the internal zone at the control plane's address on that
-   segment (its `trusted0` address, for the reference layout) and leave
+   segment (its control-plane network address in the
+   [reference network](../architecture/reference-network.md)) and leave
    `listen-networks` alone. Choose this when time should stay on the overlay.
 
    Other services resolve the same name: the ACME directory URL and the

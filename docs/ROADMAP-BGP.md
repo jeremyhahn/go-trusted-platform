@@ -85,10 +85,10 @@ The implementation enables the platform to operate as a complete SDN fabric with
 
 | Property | Value |
 |----------|-------|
-| **Block** | `2602:F5BB::/36` |
+| **Block** | `2001:db8::/36` |
 | **Size** | 4.7 quintillion addresses |
 | **Purpose** | Platform node addressing |
-| **Hierarchy** | `2602:F5BB:RRRR:SSSS:HHHH:HHHH:HHHH:HHHH/64` |
+| **Hierarchy** | `2001:db8:RRRR:SSSS:HHHH:HHHH:HHHH:HHHH/64` |
 
 **IPv6 Address Hierarchy:**
 - `RRRR` = Region ID (65,536 regions)
@@ -99,7 +99,7 @@ The implementation enables the platform to operate as a complete SDN fabric with
 
 | Property | Value |
 |----------|-------|
-| **Block** | `23.143.36.0/24` |
+| **Block** | `203.0.113.0/24` |
 | **Size** | 254 usable addresses |
 | **Purpose** | Public gateway pool |
 
@@ -110,8 +110,8 @@ The implementation enables the platform to operate as a complete SDN fabric with
 ```
                          +---------------------------------------------+
                          |            Internet / ISPs                  |
-                         |   (eBGP peers for 2602:F5BB::/36 and       |
-                         |         23.143.36.0/24)                     |
+                         |   (eBGP peers for 2001:db8::/36 and        |
+                         |         203.0.113.0/24)                     |
                          +----------------------+----------------------+
                                                 | eBGP
         +---------------------------------------+---------------------------------------+
@@ -150,7 +150,7 @@ The implementation enables the platform to operate as a complete SDN fabric with
 
 | Tier | Role | BGP Function | Prefixes Announced |
 |------|------|--------------|-------------------|
-| **Backbone** | Core network speakers | eBGP to ISPs | Full `/36` aggregate (2602:F5BB::/36) |
+| **Backbone** | Core network speakers | eBGP to ISPs | Full `/36` aggregate (2001:db8::/36) |
 | **Datacenter** | Regional gateways | eBGP to local ISP | Regional `/48` prefixes |
 | **Coordinator** | Route coordination | iBGP RR client | Signs route announcements |
 
@@ -347,9 +347,9 @@ pkg/sdn/bgp/
   - [x] Route import/export
 
 - [x] **Transit Routes** (`transit.go`)
-  - [x] IPv6 aggregate announcement (2602:F5BB::/36)
+  - [x] IPv6 aggregate announcement (2001:db8::/36)
   - [x] IPv6 regional announcement (/48)
-  - [x] IPv4 gateway pool announcement (23.143.36.0/24)
+  - [x] IPv4 gateway pool announcement (203.0.113.0/24)
   - [x] Prefix origination
   - [x] AS path prepending
 
@@ -479,8 +479,8 @@ pkg/sdn/gateway/
 ### Phase 3c: BGP Transit Mode
 
 - [x] **Transit Gateway** (`modes/transit.go`)
-  - [x] IPv6 announcement (2602:F5BB::/36 or /48)
-  - [x] IPv4 announcement (23.143.36.0/24)
+  - [x] IPv6 announcement (2001:db8::/36 or /48)
+  - [x] IPv4 announcement (203.0.113.0/24)
   - [x] RPKI validation integration
   - [x] BGP dampening (3+ withdrawals/hour -> 15-60 min suppression)
   - [x] Route signing (coordinator tier) — DESIGN ONLY: one in-process Ed25519 key, signature discarded (#559)
@@ -852,7 +852,7 @@ func TestOverlayMultiProtocol(t *testing.T) {
 | MAC Learning | `platformctl overlay mac list` | Shows remote MACs |
 | BGP EVPN Routes | `platformctl bgp routes evpn` | Shows Type-2/3/5 routes |
 | BGP Transit Routes | `platformctl bgp routes transit` | Shows announced prefixes |
-| ISP Peering | External router check | Receives 2602:F5BB::/36 |
+| ISP Peering | External router check | Receives 2001:db8::/36 |
 | Gateway Modes | Gateway status | All three modes active |
 | IoT Onboarding | Device enrollment | Receives IPv6, joins DHT |
 | Failover | Kill gateway | Traffic continues — NOT VERIFIED; no gateway failover exists (#559) |
@@ -884,7 +884,7 @@ func TestOverlayMultiProtocol(t *testing.T) {
 sdn:
   overlay:
     enabled: true
-    vtep_ip: "172.16.100.10"
+    vtep_ip: "10.4.1.10"
     underlay_interface: "eth0"
     underlay_mtu: 9000
     vxlan_port: 4789
@@ -893,7 +893,7 @@ sdn:
   bgp:
     enabled: true
     asn: 65000
-    router_id: "172.16.100.10"
+    router_id: "10.4.1.10"
 
     # EVPN for overlay
     evpn:
@@ -909,7 +909,7 @@ sdn:
       ipv6_prefixes:
         - "2602:F5BB:1234::/48"
       ipv4_prefixes:
-        - "23.143.36.0/24"
+        - "203.0.113.0/24"
       rpki:
         enabled: true
         validators: ["rpki.example.com:323"]
@@ -962,7 +962,7 @@ sdn:
     # NAT config
     nat:
       enabled: true
-      snat_pool: "23.143.36.0/24"
+      snat_pool: "203.0.113.0/24"
       cgnat_pool: "100.64.0.0/10"  # RFC 6598 for IoT
 
     # Load balancer

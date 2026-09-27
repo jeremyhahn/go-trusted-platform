@@ -128,7 +128,7 @@ the decode buffer ahead of it is not covered.
 Closing this needs the wire and SDK layers to hand over mutable, wipeable
 storage rather than a `string` — coordinated wire and SDK changes, not
 something a platform-side wrapper can reach. Filed upstream:
-[go-quicbaas#29](http://198.51.100.91:3001/jeremyhahn/go-quicbaas/issues/29).
+go-quicbaas#29.
 
 ### JSON decoding materialises a string
 
@@ -165,9 +165,9 @@ string.
 Two ends of the NTS key's life are outside the enclave, and both are the
 same upstream shape — the SDK exposes plaintext where it should expose a
 handle. Filed as
-[go-quicbaas#136](http://198.51.100.91:3001/jeremyhahn/go-quicbaas/issues/136),
+go-quicbaas#136,
 tracked here as
-[#60](http://198.51.100.91:3001/jeremyhahn/go-trusted-platform/issues/60).
+#60.
 
 - **Generation.** The key is generated at Layer 5 as an ordinary
   `*ecdsa.PrivateKey` because the SDK offers no non-exportable KMS key
@@ -201,7 +201,7 @@ because the store may still hold it.
 `xkmssdk.SignPIV` takes `PIN string`, so the platform must materialize a
 string at that call (see rule 3). The enclave bounds the copy's lifetime to
 the call; it does not remove it. Same upstream issue
-([go-quicbaas#29](http://198.51.100.91:3001/jeremyhahn/go-quicbaas/issues/29)).
+(go-quicbaas#29).
 
 ### The sanctioned SDK enclave re-export is two identifiers
 
@@ -215,7 +215,7 @@ plain type alias for `secure.Buffer` until those exist: aliasing today would
 change BMC credential-validation semantics, because `NewBufferFromBytes(nil)`
 fails construction where callers require a live, zero-length value. Filed
 upstream
-([go-quicbaas#29](http://198.51.100.91:3001/jeremyhahn/go-quicbaas/issues/29)).
+(go-quicbaas#29).
 
 `NewBufferFromBytes` is not merely the only constructor re-exported — it is
 structurally incapable of allocate-then-fill. It calls memguard's

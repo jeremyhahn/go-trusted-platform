@@ -15,8 +15,8 @@ socket file permissions gate access.
 platformctl --transport unix sdn gateway bgp status
 platformctl --transport unix sdn gateway bgp peers
 platformctl --transport unix sdn gateway bgp routes
-platformctl --transport unix sdn gateway bgp announce --prefix 2602:F5BB::/36
-platformctl --transport unix sdn gateway bgp withdraw --prefix 2602:F5BB::/36
+platformctl --transport unix sdn gateway bgp announce --prefix 2001:db8::/36
+platformctl --transport unix sdn gateway bgp withdraw --prefix 2001:db8::/36
 ```
 
 ## See Also

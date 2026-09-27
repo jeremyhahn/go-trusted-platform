@@ -21,7 +21,7 @@ POST /api/v1/sdn/gateway/bgp/prefixes
 Content-Type: application/json
 
 {
-  "prefix": "2602:F5BB::/36",
+  "prefix": "2001:db8::/36",
   "next_hop": "10.0.0.1"
 }
 ```

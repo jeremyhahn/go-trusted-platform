@@ -99,13 +99,13 @@ network:
   dnsmasq:
     enabled: true
     upstream-servers:
-      - 198.18.0.1:9053
+      - 10.4.6.10:9053
     local-domain: example.internal
   interfaces:
     - name: eno1
       type: static
-      ipv4-address: 198.18.0.2/24
-      ipv4-gateway: 198.18.0.1
+      ipv4-address: 10.4.6.2/24
+      ipv4-gateway: 10.4.6.1
       auto-start: true
   bridges:
     - name: trusted0
@@ -275,14 +275,14 @@ trust:
     # the fingerprint out of band.
     strategies: [dane, spki, tofu, ca-file]
     dane:
-      dns-server: "198.18.0.1:8053"   # CP public DNS
+      dns-server: "10.4.6.10:8053"   # CP public DNS
 
 # =============================================================================
 # DATASTORE CONFIGURATION
 # =============================================================================
 
 bmc:
-  address: 198.18.0.2
+  address: 10.4.2.2
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -322,12 +322,20 @@ sdn:
     enabled: false
     interface: trusted0
   networks:
-    - name: trusted
-      vlan: 200
+    # `zone: trusted` is the zone name today's code accepts for the
+    # control-plane network (VLAN 406); the zone vocabulary moves with #708.
+    - name: control-plane
+      vlan: 406
       zone: trusted
-      pool: trusted
+      pool: control-plane
+    # dmz-public is an overlay in the reference design (EVPN/VXLAN in the
+    # IPAM pool 10.4.128.0/17, not a switch VLAN). sdn.networks cannot express
+    # an overlay yet, so it keeps VLAN 409
+    # (interim: until the overlay service lands, not a design VLAN).
+    # Proposal: it becomes an EVPN overlay (VNI 400001) once the overlay
+    # service lands.
     - name: dmz-public
-      vlan: 210
+      vlan: 409
       zone: public
       pool: dmz-public
   overlay:

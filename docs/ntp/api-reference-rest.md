@@ -38,7 +38,7 @@ None of the operations take request parameters.
     "lastSyncUnix": "1755000000",
     "mode": "both",
     "referenceId": "CB00710F",
-    "referenceName": "198.18.0.1",
+    "referenceName": "10.4.6.1",
     "sourcesReachable": 1,
     "sourcesTotal": 2,
     "anomaly": false,
@@ -58,8 +58,8 @@ this node advertises an NTS-KE name clients cannot usefully dial (#509), and
 {
   "kind": "nts-name-unreachable",
   "name": "cp.example.internal",
-  "address": "198.18.1.140",
-  "listenNetworks": ["198.18.0.0/24", "172.16.201.0/24"]
+  "address": "10.4.2.140",
+  "listenNetworks": ["10.4.6.0/24", "192.0.2.0/24"]
 }
 ```
 
@@ -81,7 +81,7 @@ anything about this node's own clock — `synced` can be `true` beside either.
 {
   "sources": [
     {
-      "address": "198.18.0.1",
+      "address": "10.4.6.1",
       "mode": "server",
       "state": "selected",
       "stratum": 2,

@@ -376,7 +376,7 @@ Examples:
   platformctl sdn gateway bgp status
   platformctl sdn gateway bgp peers
   platformctl sdn gateway bgp routes
-  platformctl sdn gateway bgp announce --prefix 2602:F5BB:1234::/48 --next-hop 2602:F5BB::1
+  platformctl sdn gateway bgp announce --prefix 2602:F5BB:1234::/48 --next-hop 2001:db8::1
   platformctl sdn gateway bgp withdraw --prefix 2602:F5BB:1234::/48
 ```
 
@@ -534,5 +534,5 @@ Options:
   --zone     Target trust zone name (required)
 
 Examples:
-  platformctl sdn zone assign --network corp-lan --zone trusted
+  platformctl sdn zone assign --network corp-lan --zone trusted   # today's built-in zone; the reference design replaces it (#708)
 ```

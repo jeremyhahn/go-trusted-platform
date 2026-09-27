@@ -21,7 +21,7 @@ The BGP service implements a three-tier speaker architecture using the GoBGP lib
 Backbone speakers are the primary BGP routers that peer with upstream ISPs and announce aggregate prefixes.
 
 **Responsibilities:**
-- Announce aggregate /36 prefix (2602:F5BB::/36) to ISPs
+- Announce aggregate /36 prefix (2001:db8::/36) to ISPs
 - Maintain eBGP sessions with transit providers
 - Participate in iBGP full mesh with other backbone speakers
 - Aggregate more-specific routes from datacenter speakers
@@ -50,9 +50,9 @@ Backbone speakers are the primary BGP routers that peer with upstream ISPs and a
 │                    │   RIB Manager   │                       │
 │                    └─────────────────┘                       │
 │                                                              │
-│  Announces: 2602:F5BB::/36 (aggregate)                       │
+│  Announces: 2001:db8::/36 (aggregate)                        │
 │  ASN: 65001 (platform AS)                                    │
-│  Router-ID: 23.143.36.1                                      │
+│  Router-ID: 203.0.113.1                                      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -267,12 +267,12 @@ Backbone speakers establish eBGP sessions with upstream transit providers.
 │    └────────────────────────────────────┘                    │
 │                                                              │
 │  Announces to ISP A:                                         │
-│    - 2602:F5BB::/36 (AS-PATH: 65001)                        │
-│    - 23.143.36.0/24 (AS-PATH: 65001)                        │
+│    - 2001:db8::/36 (AS-PATH: 65001)                         │
+│    - 203.0.113.0/24 (AS-PATH: 65001)                        │
 │                                                              │
 │  Announces to ISP B:                                         │
-│    - 2602:F5BB::/36 (AS-PATH: 65001 65001 65001) [prepend]  │
-│    - 23.143.36.0/24 (AS-PATH: 65001 65001 65001) [prepend]  │
+│    - 2001:db8::/36 (AS-PATH: 65001 65001 65001) [prepend]   │
+│    - 203.0.113.0/24 (AS-PATH: 65001 65001 65001) [prepend]  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -398,7 +398,7 @@ Capabilities Negotiated:
 │     └─► LOCAL_PREF: 100                                     │
 │                                                              │
 │  4. Backbone aggregates regional routes                     │
-│     └─► Aggregate: 2602:F5BB::/36                           │
+│     └─► Aggregate: 2001:db8::/36                            │
 │     └─► Suppresses more-specifics to ISPs                   │
 │                                                              │
 │  5. Backbone announces aggregate to ISPs via eBGP           │
@@ -444,7 +444,7 @@ go bgpServer.Serve()
 // Configure global settings
 global := &api.Global{
     Asn:        65001,
-    RouterId:   "23.143.36.1",
+    RouterId:   "203.0.113.1",
     ListenPort: 179,
     ListenAddresses: []string{"0.0.0.0", "::"},
 }
@@ -589,8 +589,8 @@ logger.Info("BGP peer state change",
 )
 
 logger.Info("Route announced",
-    slog.String("prefix", "2602:F5BB::/36"),
-    slog.String("next_hop", "23.143.36.1"),
+    slog.String("prefix", "2001:db8::/36"),
+    slog.String("next_hop", "203.0.113.1"),
     slog.String("peer", "198.51.100.1"),
 )
 ```

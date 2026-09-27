@@ -410,7 +410,7 @@ Registered entries (`pkg/quirks/registry.go`), with what each actually changes:
 | Key | Matched by | What the entry exists for |
 |---|---|---|
 | `supermicro` (manufacturer-wide) | `Manufacturer` | SMB1 (`NT1`) and unencrypted SMB for virtual media; `CD/DVD` BIOS alias and `UefiUsbCd` UEFI alias; `["redfish","smc-cgi"]` cert fallback chain; `VmediaRedfishOEMFallback`; `BootOverrideContinuous`; `BootOverrideStrategy: "smc-oem-ipmi"` |
-| `supermicro/x10sdv` | `Model` contains `x10sdv`, or `PartNumber` starts with `SYS-5018D-FN` (SYS-5018D-FN8T = X10SDV-TP8F, SYS-5018D-FN4T = X10SDV-TLN4F; the rest of the 5018D family is X10SLM-F and stays manufacturer-wide) | Everything above; SOL is on COM1 like the manufacturer-wide entry (`SOLPort: "ttyS0"`, `SOLPayloadInstance: 0x01`, `earlycon` at `0x3f8`, `console=ttyS0` last). Measured 2026-08-29 on lab-node-2 (`SYS-5018D-FN8T-AS001`, ATEN FW 4.00): kernel printk, autoinstall, platform-initrd and OpenRC output all appeared on payload instance 1, instance 2 activated and stayed silent; the entry previously claimed COM2 / instance 2 / `0x2f8`, which was wrong for this board. BIOS POST is not redirected to SOL. The entry exists for the part-number identity match (above), the VeloCloud alias, and the X10 boot-override trap. `BootOverrideStrategy: "smc-oem-ipmi"` is the only registered strategy |
+| `supermicro/x10sdv` | `Model` contains `x10sdv`, or `PartNumber` starts with `SYS-5018D-FN` (SYS-5018D-FN8T = X10SDV-TP8F, SYS-5018D-FN4T = X10SDV-TLN4F; the rest of the 5018D family is X10SLM-F and stays manufacturer-wide) | Everything above; SOL is on COM1 like the manufacturer-wide entry (`SOLPort: "ttyS0"`, `SOLPayloadInstance: 0x01`, `earlycon` at `0x3f8`, `console=ttyS0` last). Measured 2026-08-29 on node-02 (`SYS-5018D-FN8T-AS001`, ATEN FW 4.00): kernel printk, autoinstall, platform-initrd and OpenRC output all appeared on payload instance 1, instance 2 activated and stayed silent; the entry previously claimed COM2 / instance 2 / `0x2f8`, which was wrong for this board. BIOS POST is not redirected to SOL. The entry exists for the part-number identity match (above), the VeloCloud alias, and the X10 boot-override trap. `BootOverrideStrategy: "smc-oem-ipmi"` is the only registered strategy |
 | `velocloud networks, inc.` | `Manufacturer` | A Supermicro X10SDV board under an OEM SMBIOS skin. Without this entry `Resolve` returns `Default()` and the X10 boot-override trap applies |
 | `aspeed` | `Manufacturer` | `8250_aspeed_vuart` kernel module and SOL on `ttyS4` |
 | `dell inc.` | `Manufacturer` | COM1 SOL, SMB2, encryption required, no cert fallback chain |
@@ -445,7 +445,7 @@ note because they encode failure modes that are invisible without them:
   quirk's Continuous forcing does not apply to it. When the vendor strategy is
   `smc-oem-ipmi`, the OEM disable (`0x30/0x70/0x0c/0x01/0x00`) is sent first
   and the clear then *continues* to the PATCH instead of returning, on both the
-  Redfish and the IPMI dispatch path. Measured on lab-node-2 (ATEN FW 4.00, BIOS
+  Redfish and the IPMI dispatch path. Measured on node-02 (ATEN FW 4.00, BIOS
   2.6): the OEM disable alone leaves `Continuous UefiUsbCd` armed in the Redfish
   view and "Force Boot from remotely connected CD/DVD" in the IPMI view; the
   PATCH clears both. Because the PATCH is the step that disarms the override,

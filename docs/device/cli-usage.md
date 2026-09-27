@@ -353,7 +353,7 @@ their current values.
 ```bash
 # Create a profile with a prestaged hardware EK certificate
 platformctl device profile create \
-  --name lab-node-2 \
+  --name node-02 \
   --role server \
   --ek-serial 1234567890 \
   --mac 00:25:90:FF:AA:02 \

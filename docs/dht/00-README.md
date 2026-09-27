@@ -287,7 +287,7 @@ A Distributed Hash Table for the Trusted Computing Platform, providing decentral
 |                           NETWORK LAYER                               |
 |  +--------------+ +--------------+ +--------------+ +--------------+  |
 |  |   Kademlia   | |  P2P Swarm   | |    IPv6      | |     BGP      |  |
-|  |     DHT      | |   (Blocks)   | | 2602:F5BB::  | |   Routing    |  |
+|  |     DHT      | |   (Blocks)   | | 2001:db8::   | |   Routing    |  |
 |  +--------------+ +--------------+ +--------------+ +--------------+  |
 +-----------------------------------------------------------------------+
 ```

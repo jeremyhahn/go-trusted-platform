@@ -94,12 +94,12 @@ os:
 network:
   dns:
     nameservers:
-      - 198.18.0.1
+      - 10.4.6.10
     search-domains: []
   interfaces:
     - name: eno1
       type: static
-      ipv4-address: 198.18.0.1/24
+      ipv4-address: 10.4.6.10/24
       auto-start: true
   bridges:
     - name: trusted0
@@ -171,15 +171,15 @@ fido2:
 
 ntp:
   enabled: true
-  # Control plane consumes upstream time and serves it to the trusted and
-  # provisioning networks.
+  # Control plane consumes upstream time and serves it to the control-plane
+  # and provisioning networks.
   mode: both
   consume:
     upstream:
       # The edge router / default gateway is the preferred upstream: it is on
       # the local segment, so its round-trip is an order of magnitude tighter
       # than any public source. Most routers cannot do NTS, hence nts: false.
-      - address: 198.18.0.1
+      - address: 10.4.6.1
         prefer: true
         iburst: true
         nts: false
@@ -205,8 +205,8 @@ ntp:
     # Explicit CIDR allow-list. NEVER 0.0.0.0/0 - an open NTP server is a
     # reflection-amplification source.
     listen-networks:
-      - 198.18.0.0/24
-      - 172.16.201.0/24
+      - 10.4.6.0/24
+      - 192.0.2.0/24
     local-stratum: 10
     nts:
       # RFC 8915 Network Time Security for internal control-plane time,
@@ -447,7 +447,7 @@ dns:
           # below, or nodes complete the NTS-KE handshake and are then
           # refused time. On the reference fleet ${PRIVATE_IPv4} expanded
           # to the MANAGEMENT address while listen-networks covered only
-          # the trusted and provisioning /24s (#509). platformd reports
+          # the control-plane and provisioning /24s (#509). platformd reports
           # the mismatch on the `ntp` health component; reconcile it by
           # widening listen-networks or by pointing this record at an
           # already-allowed segment.
@@ -511,7 +511,7 @@ trust:
       dns-server: "127.0.0.1:8053"   # CP serves its own public DNS
 
 bmc:
-  address: 198.18.0.1
+  address: 10.4.2.10  # management (VLAN 402); .1 is the gateway VIP
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -577,93 +577,106 @@ sdn:
   ipam:
     backend: quicbaas
     pools:
-      - name: trusted
-        cidr: 198.18.0.0/24
-        gateway: 198.18.0.1
+      - name: control-plane
+        cidr: 10.4.6.0/24
+        gateway: 10.4.6.1
         dns:
-          - 198.18.0.1
-        range-start: 198.18.0.10
-        range-end: 198.18.0.254
+          - 10.4.6.10
+        range-start: 10.4.6.50
+        range-end: 10.4.6.254
         lease-duration: 24h
         dhcp: true
       - name: provisioning
-        cidr: 172.16.201.0/24
-        gateway: 172.16.201.1
+        cidr: 192.0.2.0/24
+        gateway: 192.0.2.1
         dns:
-          - 172.16.201.1
-        range-start: 172.16.201.50
-        range-end: 172.16.201.254
+          - 192.0.2.1
+        range-start: 192.0.2.50
+        range-end: 192.0.2.254
         lease-duration: 1h
         dhcp: true
       - name: quarantine
-        cidr: 172.16.202.0/24
-        gateway: 172.16.202.1
+        cidr: 10.4.4.0/24
+        gateway: 10.4.4.1
         dns:
-          - 172.16.202.1
-        range-start: 172.16.202.50
-        range-end: 172.16.202.254
+          - 10.4.4.1
+        range-start: 10.4.4.50
+        range-end: 10.4.4.254
         lease-duration: 1h
         dhcp: false
       - name: storage
-        cidr: 172.16.203.0/24
-        gateway: 172.16.203.1
+        cidr: 10.4.7.0/24
+        gateway: 10.4.7.1
         dns:
-          - 172.16.203.1
-        range-start: 172.16.203.10
-        range-end: 172.16.203.254
+          - 10.4.7.1
+        range-start: 10.4.7.50
+        range-end: 10.4.7.254
         lease-duration: 24h
         dhcp: true
+      # dmz-* pools: overlay addressing from the IPAM pool 10.4.128.0/17
+      # (see the dmz-* networks below).
       - name: dmz-public
-        cidr: 172.16.210.0/24
-        gateway: 172.16.210.1
-        range-start: 172.16.210.10
-        range-end: 172.16.210.254
+        cidr: 10.4.160.0/24
+        gateway: 10.4.160.1
+        range-start: 10.4.160.50
+        range-end: 10.4.160.254
         lease-duration: 24h
         dhcp: false
       - name: dmz-private
-        cidr: 172.16.211.0/24
-        gateway: 172.16.211.1
-        range-start: 172.16.211.10
-        range-end: 172.16.211.254
+        cidr: 10.4.161.0/24
+        gateway: 10.4.161.1
+        range-start: 10.4.161.50
+        range-end: 10.4.161.254
         lease-duration: 24h
         dhcp: false
       - name: dmz-data
-        cidr: 172.16.212.0/24
-        gateway: 172.16.212.1
-        range-start: 172.16.212.10
-        range-end: 172.16.212.254
+        cidr: 10.4.162.0/24
+        gateway: 10.4.162.1
+        range-start: 10.4.162.50
+        range-end: 10.4.162.254
         lease-duration: 24h
         dhcp: false
   dhcp:
     enabled: true
     interface: trusted0
   networks:
-    - name: trusted
-      vlan: 200
+    # Reference network design, block 4 (owner design decision 2026-09-26):
+    # 404 quarantine, 405 provisioning, 406 control-plane, 407 storage.
+    # `zone: trusted` is the zone name today's code accepts for these
+    # networks; the zone vocabulary moves with #708.
+    - name: control-plane
+      vlan: 406
       zone: trusted
-      pool: trusted
+      pool: control-plane
     - name: provisioning
-      vlan: 201
+      vlan: 405
       zone: provisioning
       pool: provisioning
     - name: quarantine
-      vlan: 202
+      vlan: 404
       zone: quarantine
       pool: quarantine
     - name: storage
-      vlan: 203
+      vlan: 407
       zone: storage
       pool: storage
+    # The dmz-* networks are overlays in the reference design (public and
+    # tenant networks are EVPN/VXLAN overlays in the IPAM pool
+    # 10.4.128.0/17, not switch VLANs). sdn.networks cannot express an
+    # overlay yet, so each keeps a VLAN from the reserved range 409-411
+    # (interim: until the overlay service lands, not a design VLAN).
+    # Proposal: each becomes an EVPN overlay (VNI 400001, 400002, 400003)
+    # once the overlay service lands.
     - name: dmz-public
-      vlan: 210
+      vlan: 409
       zone: public
       pool: dmz-public
     - name: dmz-private
-      vlan: 211
+      vlan: 410
       zone: trusted
       pool: dmz-private
     - name: dmz-data
-      vlan: 212
+      vlan: 411
       zone: trusted
       pool: dmz-data
   overlay:

@@ -347,9 +347,9 @@ platformctl --transport unix --server /run/platformd.sock device list
 # bind each enrolled device to its profile: the control plane derives the EK
 # serial from the device's stored EK certificate and prestages it
 platformctl --transport unix --server /run/platformd.sock \
-    device profile assign <compute-profile-id> --device <lab-node-5-device-id>
+    device profile assign <compute-profile-id> --device <node-05-device-id>
 platformctl --transport unix --server /run/platformd.sock \
-    device profile assign <gateway-profile-id> --device <lab-node-1-device-id>
+    device profile assign <gateway-profile-id> --device <gw-01-device-id>
 
 platformctl --transport unix --server /run/platformd.sock \
     device profile update <compute-profile-id> \

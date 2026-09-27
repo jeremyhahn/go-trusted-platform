@@ -661,7 +661,7 @@ bidirectional stream.
 
 ```bash
 platformctl bmc console \
-    --bmc-host 198.18.1.103 \
+    --bmc-host 10.4.2.103 \
     --bmc-user admin \
     --bmc-pass-file /etc/platform/bmc.pass \
     --bmc-protocol ipmi
@@ -674,7 +674,7 @@ duration of the session.
 
 ```bash
 platformctl bmc console \
-    --bmc-host 198.18.1.103 \
+    --bmc-host 10.4.2.103 \
     --bmc-user admin \
     --bmc-pass-file /etc/platform/bmc.pass \
     --bmc-protocol ipmi \

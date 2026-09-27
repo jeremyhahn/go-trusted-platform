@@ -174,7 +174,7 @@ The response payload is `{"gateway_id": …, "config": <DesiredConfig>}`, where
 
 ```json
 {
-  "gateway_id": "lab-node-1-gateway",
+  "gateway_id": "gw-01-gateway",
   "version": "rev-4",
   "load_balancer": {"vips": [{"address": "10.0.200.10", "port": 443, "protocol": "tcp",
                              "backends": [{"address": "10.0.100.11", "port": 8443, "weight": 2}]}]},

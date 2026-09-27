@@ -428,7 +428,7 @@ The Trusted DHT is a distributed hash table implementation for the go-trusted-pl
 
 #### 6.2 IPv6 Management
 
-- [ ] Address Allocation (2602:F5BB::/36 pool)
+- [ ] Address Allocation (2001:db8::/36 pool)
 - [ ] Region-based assignment
 - [ ] Address Validation
 

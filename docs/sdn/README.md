@@ -39,7 +39,7 @@ Pure Go implementation of SDN components for the Trusted Platform.
 | BGP Transit | Platform IP block announcements (IPv4/IPv6) | Complete |
 | Unified Gateway | Multi-mode gateway (overlay, edge, transit) | Complete |
 | IoT Onboarding | ACME endorse-01/enroll-01 for device enrollment | Complete |
-| IPv6 Allocation | Address assignment from 2602:F5BB::/36 pool | Complete |
+| IPv6 Allocation | Address assignment from 2001:db8::/36 pool | Complete |
 | DHT Bootstrap | Entry point for Kademlia DHT network | Complete |
 | IPAM | IP Address Management with pool-based allocation | Complete |
 | DHCP | Integrated DHCP server for overlay networks | Complete |

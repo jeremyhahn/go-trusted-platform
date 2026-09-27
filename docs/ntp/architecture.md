@@ -330,7 +330,7 @@ RFC 8915 reconciles:
 | Statement | Configuration | Enforced against |
 |---|---|---|
 | "I am `cp.example.internal`" | `serve.nts.server-names` → the certificate SANs | the name the client wrote |
-| "I answer 198.18.0.0/24 and 172.16.201.0/24" | `serve.listen-networks` → `allow` directives | the packet's source address |
+| "I answer 10.4.6.0/24 and 192.0.2.0/24" | `serve.listen-networks` → `allow` directives | the packet's source address |
 
 When the name resolves outside the allow list, the handshake succeeds and the
 time is refused. The failure is worse than a handshake failure precisely

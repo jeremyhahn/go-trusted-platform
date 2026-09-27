@@ -205,6 +205,11 @@ quotas:
 
 ### VLAN Settings
 
+> Per-tenant VLAN ranges are what the code does today. The
+> [reference network](../architecture/reference-network.md) (owner design
+> decision, 2026-09-26) has no tenant VLAN range: tenant networks are
+> EVPN/VXLAN overlays addressed from the IPAM pool. Tracked in #708.
+
 ```yaml
 network:
   # VLAN range allocation

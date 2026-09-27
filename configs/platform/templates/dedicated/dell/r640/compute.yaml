@@ -102,13 +102,13 @@ network:
   dnsmasq:
     enabled: true
     upstream-servers:
-      - 198.18.0.1:9053
+      - 10.4.6.10:9053
     local-domain: example.internal
   interfaces:
     - name: eno1
       type: static
-      ipv4-address: 198.18.0.3/24
-      ipv4-gateway: 198.18.0.1
+      ipv4-address: 10.4.6.3/24
+      ipv4-gateway: 10.4.6.1
       auto-start: true
   bridges:
     - name: trusted0
@@ -177,7 +177,7 @@ fido2:
 dns:
   resolver:
     servers:
-      - address: "198.18.0.1"
+      - address: "10.4.6.10"
         port: 8053
     search-domains:
       - example.internal
@@ -204,7 +204,7 @@ dns:
 trust:
   bootstrap:
     strategies: [dane]
-    server-url: "https://198.18.0.1:8443"
+    server-url: "https://10.4.6.10:8443"
     # hostname is required for DANE when server-url uses an IP address,
     # because TLSA records are published under the hostname, not the IP.
     hostname: "cp.example.com"
@@ -212,7 +212,7 @@ trust:
     per-method-timeout: 15s
     install-to-system-trust: true
     dane:
-      dns-server: "198.18.0.1:8053"
+      dns-server: "10.4.6.10:8053"
 
   bmc:
     # BMC endpoint trust chain (Phase 3 — BMC TLS lifecycle). First strategy
@@ -224,7 +224,7 @@ trust:
     # enroll does this).
     strategies: [dane, spki, ca-file]
     dane:
-      dns-server: "198.18.0.1:8053"
+      dns-server: "10.4.6.10:8053"
 
 # =============================================================================
 # TIME SYNCHRONIZATION (NTP)
@@ -289,7 +289,7 @@ ntp:
 
 acme:
   client:
-    directory: https://198.18.0.1:9443/api/v1/acme/directory
+    directory: https://10.4.6.10:9443/api/v1/acme/directory
     # Use OS system certificate pool for CA trust.
     # The platform CA is installed to the system trust store during ISO installation
     # via /usr/local/share/ca-certificates/ and update-ca-certificates.
@@ -320,7 +320,7 @@ acme:
 # =============================================================================
 
 bmc:
-  address: 198.18.0.3
+  address: 10.4.2.3
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -360,10 +360,12 @@ sdn:
     enabled: false
     interface: trusted0
   networks:
-    - name: trusted
-      vlan: 200
+    # `zone: trusted` is the zone name today's code accepts for the
+    # control-plane network (VLAN 406); the zone vocabulary moves with #708.
+    - name: control-plane
+      vlan: 406
       zone: trusted
-      pool: trusted
+      pool: control-plane
   overlay:
     enabled: false
     vxlan-port: 4789

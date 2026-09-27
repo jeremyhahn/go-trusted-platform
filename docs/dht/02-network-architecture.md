@@ -2,7 +2,7 @@
 
 ## Overview
 
-A massively scalable **hierarchical Kademlia DHT** supporting billions of IoT nodes with **publicly routable IPv6** (2602:F5BB::/36), **distributed gateway architecture**, **multi-path routing**, and **distributed DDoS protection**.
+A massively scalable **hierarchical Kademlia DHT** supporting billions of IoT nodes with **publicly routable IPv6** (2001:db8::/36), **distributed gateway architecture**, **multi-path routing**, and **distributed DDoS protection**.
 
 > **Cross-References:**
 > - Security parameters and cryptographic constants: See [03-security-trust.md](03-security-trust.md)
@@ -70,17 +70,17 @@ A massively scalable **hierarchical Kademlia DHT** supporting billions of IoT no
 
 **BGP ASN:** (Your existing ASN)
 
-**IPv4 Pool:** 23.143.36.0/24 (254 usable addresses)
+**IPv4 Pool:** 203.0.113.0/24 (254 usable addresses)
 - Reserved for gateway nodes
 - Announced via Go BGP gateway nodes
 - Used for public internet access points
 
-**IPv6 Pool:** 2602:F5BB::/36 (4.7 quintillion addresses!)
+**IPv6 Pool:** 2001:db8::/36 (4.7 quintillion addresses!)
 - Announced via Go BGP gateway nodes
 - Assigned to P2P nodes (publicly routable)
 - Hierarchical allocation:
   ```
-  2602:F5BB:RRRR:SSSS:HHHH:HHHH:HHHH:HHHH/64
+  2001:db8:RRRR:SSSS:HHHH:HHHH:HHHH:HHHH/64
 
   RRRR (16 bits) = Region ID (65,536 regions possible)
   SSSS (16 bits) = Subnet within region (65,536 subnets/region)
@@ -103,7 +103,7 @@ New node joins:
 1. Node connects to any existing node (bootstrap)
 2. Node requests IPv6 allocation
 3. Regional coordinator queries DHT for available addresses in region
-4. Assigns next available: 2602:F5BB:RRRR:SSSS::XXXX using CAS (compare-and-swap)
+4. Assigns next available: 2001:db8:RRRR:SSSS::XXXX using CAS (compare-and-swap)
 5. Verifies address not in use (collision detection)
 6. Publishes to DHT: "ipv6-{address}" -> node_id with 30-day lease
 7. Node configures interface
@@ -113,7 +113,7 @@ New node joins:
 11. Node stores assigned address in TPM-sealed config (persistence)
 
 IPv6 is now globally routable!
-- Internet can reach 2602:F5BB:RRRR:SSSS::XXXX
+- Internet can reach 2001:db8:RRRR:SSSS::XXXX
 - Default route: via Go BGP gateway nodes (backbone speakers)
 - Alternate routes: via P2P gateways (distributed)
 ```
@@ -243,7 +243,7 @@ The trusted DHT uses native Go gateway nodes as BGP speakers, eliminating the ne
 
 | Role | Description |
 |------|-------------|
-| `backbone` | Core BGP speaker, announces aggregate prefixes (2602:F5BB::/36) to ISPs |
+| `backbone` | Core BGP speaker, announces aggregate prefixes (2001:db8::/36) to ISPs |
 | `datacenter` | Datacenter gateway with direct eBGP to local ISP, announces /48 prefixes |
 | `coordinator` | Route coordination node (signs route announcements) |
 
@@ -287,7 +287,7 @@ The trusted DHT uses native Go gateway nodes as BGP speakers, eliminating the ne
    - Age >= 90 days
    - TPM attestation current
    ↓
-3. Allocate /48 prefix from pool (2602:F5BB:XXXX::/48)
+3. Allocate /48 prefix from pool (2001:db8:XXXX::/48)
    ↓
 4. Request coordinator signatures (3+ required)
    ↓
@@ -413,7 +413,7 @@ func (fd *FlapDampener) RecordWithdrawal(gateway NodeID, prefix netip.Prefix) {
 // Example BGP configuration
 type BGPConfig struct {
     LocalAS     uint32            // e.g., 65001
-    RouterID    string            // e.g., "23.143.36.1"
+    RouterID    string            // e.g., "203.0.113.1"
     Role        SpeakerRole       // backbone, datacenter, coordinator
 
     Peers []PeerConfig{
@@ -434,8 +434,8 @@ type BGPConfig struct {
 ```
 
 **Result:**
-- Global BGP table contains: 2602:F5BB::/36 -> {YOUR_ASN}
-- All internet traffic to 2602:F5BB::* routes to Go BGP gateway nodes
+- Global BGP table contains: 2001:db8::/36 -> {YOUR_ASN}
+- All internet traffic to 2001:db8::* routes to Go BGP gateway nodes
 - Gateway nodes forward to appropriate node via P2P mesh
 
 ### BGP Route Aggregation
@@ -451,7 +451,7 @@ Instead of announcing individual /48 prefixes per gateway, the network aggregate
 
 // RegionalAggregation handles BGP route consolidation
 type RegionalAggregation struct {
-    basePrefix        netip.Prefix  // 2602:F5BB::/36
+    basePrefix        netip.Prefix  // 2001:db8::/36
     aggregationLevel  int           // /40 for regional aggregates
     regions           map[RegionID]*RegionalPrefix
 }
@@ -484,7 +484,7 @@ type RegionalPrefix struct {
 //   - ISP filter risk: Low (reasonable prefix count)
 //
 // Allocation scheme:
-//   2602:F5BB::/36 = Full allocation
+//   2001:db8::/36 = Full allocation
 //   2602:F5BB:0000::/40 = Region 0 (North America East)
 //   2602:F5BB:0100::/40 = Region 1 (North America West)
 //   2602:F5BB:0200::/40 = Region 2 (Europe West)
@@ -492,8 +492,8 @@ type RegionalPrefix struct {
 //   2602:F5BB:0F00::/40 = Region 15 (Asia Pacific South)
 
 func (ra *RegionalAggregation) CalculateRegionalPrefix(regionID RegionID) netip.Prefix {
-    // Base: 2602:F5BB::/36
-    // Region offset in 4th nibble group: 2602:F5BB:XX00::/40
+    // Base: 2001:db8::/36
+    // Region offset in 4th nibble group: 2001:db8:XX00::/40
     baseBytes := ra.basePrefix.Addr().As16()
     baseBytes[4] = byte(regionID << 4)  // Region in upper nibble
     addr := netip.AddrFrom16(baseBytes)
@@ -858,7 +858,7 @@ type KBucket struct {
 
 type Contact struct {
     NodeID       [20]byte
-    OverlayIPv6  net.IP        // 2602:F5BB:RRRR:SSSS::HHHH
+    OverlayIPv6  net.IP        // 2001:db8:RRRR:SSSS::HHHH
     UnderlayAddr []string      // ["73.25.142.88:9999", "[2001:db8::1]:9999"]
     Reputation   float64
     LastSeen     time.Time
@@ -2229,7 +2229,7 @@ records:
 ### BGP Propagation Strategy
 
 **Tier 1: Backbone (Default Route)**
-- Backbone speakers announce: 2602:F5BB::/36 globally
+- Backbone speakers announce: 2001:db8::/36 globally
 - Catches all traffic (default route)
 - Always available (fallback)
 - Handles residential gateways via tunnels
@@ -2753,7 +2753,7 @@ This section documents optimizations specifically designed for IPv6 /36 scale ne
 ### IPv6 /36 Capacity Analysis
 
 ```
-2602:F5BB::/36 provides:
+2001:db8::/36 provides:
 - 2^92 = 4.95 x 10^27 possible addresses
 - Practically unlimited for any foreseeable network size
 
@@ -2777,7 +2777,7 @@ DHT Parameters at Scale:
 // pkg/dht/efficiency.go
 
 // NetworkEfficiencyOptimizations for IPv6 /36 scale (billions of nodes)
-// Target: Handle 2602:F5BB::/36 (4.7 quintillion possible addresses)
+// Target: Handle 2001:db8::/36 (4.7 quintillion possible addresses)
 
 // 1. Negative Caching - Cache "not found" results
 type NegativeCache struct {
@@ -3190,6 +3190,8 @@ The DHT network integrates with the platform's Software-Defined Networking (SDN)
 ### VLAN-Based Network Isolation
 
 The SDN subsystem uses IEEE 802.1Q VLANs to provide Layer 2 network isolation for DHT nodes. Nodes are dynamically assigned to VLANs based on their enrollment state, trust status, and tenant membership.
+
+> **Superseded by the reference network design.** Under the owner design decision (2026-09-26), there are no per-tenant VLANs and no tenant VLAN range: tenant and `public` networks are EVPN/VXLAN overlays, and switch VLANs are limited to the per-environment infrastructure block (quarantine and provisioning are offsets x04 and x05 in that block). See [reference-network.md](../architecture/reference-network.md). The VLAN IDs and per-tenant VLAN allocation below are an earlier design sketch.
 
 #### Reserved VLAN Assignments
 
@@ -4174,7 +4176,7 @@ func (sbd *SplitBrainDetector) HealPartition(
 
 This network architecture provides:
 
-- **Publicly routable IPv6** (2602:F5BB::/36 announced globally)
+- **Publicly routable IPv6** (2001:db8::/36 announced globally)
 - **Distributed routing** (backbone OR P2P gateways OR direct)
 - **DDoS protection** (distributed across 1000s of gateways)
 - **Scalable** (O(log n) DHT, billions of nodes)

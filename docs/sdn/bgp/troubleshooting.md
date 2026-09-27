@@ -92,7 +92,7 @@ timer on either side.
 platformctl sdn gateway bgp routes
 
 # 2. If missing, announce it
-platformctl sdn gateway bgp announce --prefix 2602:F5BB::/36
+platformctl sdn gateway bgp announce --prefix 2001:db8::/36
 
 # 3. Confirm the peer session carrying it is established
 platformctl sdn gateway bgp peers

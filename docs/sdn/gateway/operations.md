@@ -65,11 +65,11 @@ platformctl sdn gateway bgp peers
 platformctl sdn gateway bgp peers -o json
 
 # Announce a prefix
-platformctl sdn gateway bgp announce --prefix 2602:F5BB::/36
-platformctl sdn gateway bgp announce --prefix 23.143.36.0/24 --next-hop 10.0.0.1
+platformctl sdn gateway bgp announce --prefix 2001:db8::/36
+platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 10.0.0.1
 
 # Withdraw a previously announced prefix
-platformctl sdn gateway bgp withdraw --prefix 2602:F5BB::/36
+platformctl sdn gateway bgp withdraw --prefix 2001:db8::/36
 
 # List currently announced prefixes
 platformctl sdn gateway bgp routes
@@ -149,7 +149,7 @@ command, not a gateway subcommand):
 ```bash
 # Pool operations
 platformctl sdn ipam pool list
-platformctl sdn ipam pool list --zone trusted
+platformctl sdn ipam pool list --zone storage
 
 # Allocate an IP to a device
 platformctl sdn ipam allocate --pool-id pool1 --device-id vm-123 --hostname webserver

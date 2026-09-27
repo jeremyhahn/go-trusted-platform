@@ -11,7 +11,7 @@ Edge mode enables gateway nodes to serve as entry points for new devices joining
 | **ACME Endorse-01** | TPM endorsement key validation |
 | **ACME Enroll-01** | IDevID certificate issuance via FROST |
 | **DHT Bootstrap** | Entry point for joining DHT network |
-| **IPv6 Allocation** | Address assignment from 2602:F5BB::/36 pool |
+| **IPv6 Allocation** | Address assignment from 2001:db8::/36 pool |
 | **NAT Traversal** | STUN/TURN for firewall bypass |
 | **Rate Limiting** | Per-peer request throttling |
 
@@ -251,12 +251,12 @@ func (b *BootstrapService) HandleBootstrap(ctx context.Context, req *BootstrapRe
 
 ## IPv6 Allocation
 
-Edge gateways manage IPv6 address allocation from the platform's 2602:F5BB::/36 pool.
+Edge gateways manage IPv6 address allocation from the platform's 2001:db8::/36 pool.
 
 ### Allocation Hierarchy
 
 ```
-2602:F5BB::/36 (Platform Aggregate - 4.7 quintillion addresses)
+2001:db8::/36 (Platform Aggregate - 4.7 quintillion addresses)
 |
 +-- Regional Pool Assignment
 |   |

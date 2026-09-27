@@ -25,7 +25,7 @@ sdn:
       # ...
 
     bgp:
-      router-id: "10.255.0.1"
+      router-id: "10.4.255.1"
       # ...
 
     firewall:
@@ -435,13 +435,13 @@ sdn:
     transit:
       announcements:
         # IPv6 aggregate
-        - prefix: "2602:f5bb::/36"
+        - prefix: "2001:db8::/36"
           origin: igp
           communities:
             - "65001:100"  # Originated
 
         # IPv4 block
-        - prefix: "23.143.36.0/24"
+        - prefix: "203.0.113.0/24"
           origin: igp
           communities:
             - "65001:100"
@@ -633,7 +633,7 @@ sdn:
 
       # VIP configuration
       vips:
-        - address: "2602:f5bb::100"
+        - address: "2001:db8::100"
           port: 443
           protocol: tcp
           service_name: "api-gateway"
@@ -935,10 +935,10 @@ sdn:
           import_policy: "import-from-isp"
           export_policy: "export-to-isp"
       announcements:
-        - prefix: "2602:f5bb::/36"
+        - prefix: "2001:db8::/36"
           origin: igp
           communities: ["65001:100"]
-        - prefix: "23.143.36.0/24"
+        - prefix: "203.0.113.0/24"
           origin: igp
           communities: ["65001:100"]
       rpki:
@@ -974,7 +974,7 @@ sdn:
     loadbalancer:
       enabled: true
       vips:
-        - address: "2602:f5bb::100"
+        - address: "2001:db8::100"
           port: 443
           protocol: tcp
           service_name: "api-gateway"

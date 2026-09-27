@@ -318,19 +318,19 @@ plus BMC-discovered):
 bootstrap.yaml:                     HTTP server state after Phase 4:
 ──────────────                      ──────────────────────────────────
 nodes:                              /config/mac/aa-bb-cc-11-22-33/
-  - hostname: lab-node-2                 installer.yaml  (CP config)
-    role: control-plane               hostname        ("lab-node-2")
+  - hostname: node-02                 installer.yaml  (CP config)
+    role: control-plane               hostname        ("node-02")
     macs: [aa:bb:cc:11:22:33]       /config/mac/aa-bb-cc-11-22-44/
     overrides_file:                   installer.yaml  (CP config)
-      lab-node-2.control-plane.yaml      hostname        ("lab-node-2")
-                                    (all MACs of lab-node-2 map to same config)
-  - hostname: lab-node-1
+      node-02.control-plane.yaml      hostname        ("node-02")
+                                    (all MACs of node-02 map to same config)
+  - hostname: gw-01
     role: gateway                   /config/mac/dd-ee-ff-44-55-66/
     macs: [dd:ee:ff:44:55:66]         installer.yaml  (GW config)
-    overrides_file:                   hostname        ("lab-node-1")
-      lab-node-1.gateway.yaml          /config/mac/dd-ee-ff-44-55-77/
+    overrides_file:                   hostname        ("gw-01")
+      gw-01.gateway.yaml            /config/mac/dd-ee-ff-44-55-77/
                                       installer.yaml  (GW config)
-                                      hostname        ("lab-node-1")
+                                      hostname        ("gw-01")
 ```
 
 At install, `autoinstall.sh` enumerates every NIC on the target node,

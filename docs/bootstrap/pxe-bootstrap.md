@@ -142,12 +142,12 @@ backups_dir: ~/.platform/backups   # ~ is expanded to $HOME
 
 nodes:
   - hostname: cp-01
-    bmc_address: 198.18.1.105
+    bmc_address: 10.4.2.105
     bmc_protocol: ipmi
     bmc_spki_pin: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     bmc_enroll: true    # enroll this node's BMC after deploy
   - hostname: w-01
-    bmc_address: 198.18.1.106
+    bmc_address: 10.4.2.106
     bmc_protocol: ipmi
     bmc_spki_pin: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     # bmc_enroll not set — enrollment skipped for this node
@@ -183,7 +183,7 @@ Example:
 ```yaml
 nodes:
   - hostname: cp-01
-    bmc_address: 198.18.1.105
+    bmc_address: 10.4.2.105
     bmc_protocol: ipmi
     bmc_spki_pin: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"   # pin the BMC's own cert (tofu cannot verify a BMC, #83)
     bmc_enroll: true        # run BMC enrollment ceremony post-deploy

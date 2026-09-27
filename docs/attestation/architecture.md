@@ -376,7 +376,7 @@ to be built around:
 
 - A node's listener trusted only its own CA for client certificates, so a
   control-plane client certificate — issued by the CP CA that enrolled the node —
-  failed the TLS handshake on every node (HTTP 000 from lab-node-5 to lab-node-1 and
+  failed the TLS handshake on every node (HTTP 000 from node-05 to node-01 and
   to itself; 200 to the CP). The listener now also requests certificates from
   the caller-admission anchors, and the policy re-verifies the chain itself.
 - The control plane cannot verify a node's server certificate with its own CA.

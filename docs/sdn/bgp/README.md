@@ -87,8 +87,8 @@ EVPN (Ethernet VPN) provides Layer 2 connectivity across Layer 3 networks using 
 
 Transit mode announces platform-owned IP blocks to the global routing table:
 
-- **IPv6**: 2602:F5BB::/36 (backbone aggregate), regional /48 prefixes
-- **IPv4**: 23.143.36.0/24 (legacy connectivity)
+- **IPv6**: 2001:db8::/36 (backbone aggregate), regional /48 prefixes
+- **IPv4**: 203.0.113.0/24 (legacy connectivity)
 - **RPKI**: Route origin validation against RPKI repositories
 - **Signing**: Coordinator nodes cryptographically sign route announcements
 
@@ -111,7 +111,7 @@ err := bgpServer.StartBgp(context.Background(), &config.BgpConfigSet{
     Global: config.Global{
         Config: config.GlobalConfig{
             As:       65001,
-            RouterId: "23.143.36.1",
+            RouterId: "203.0.113.1",
         },
     },
 })
@@ -163,7 +163,7 @@ import "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 // Create BGP service
 config := &bgp.Config{
     ASN:       65001,
-    RouterID:  "23.143.36.1",
+    RouterID:  "203.0.113.1",
     Role:      bgp.RoleBackbone,
     ListenPort: 179,
 }
@@ -193,8 +193,8 @@ if err := speaker.AddPeer(ctx, peer); err != nil {
 
 // Announce prefix
 prefix := &bgp.Prefix{
-    Network: "2602:F5BB::/36",
-    NextHop: "2602:F5BB::1",
+    Network: "2001:db8::/36",
+    NextHop: "2001:db8::1",
 }
 
 if err := speaker.Announce(ctx, prefix); err != nil {

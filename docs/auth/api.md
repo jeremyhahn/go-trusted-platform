@@ -61,7 +61,7 @@ finish step returns a platform-local JWT, and that configuration makes the
 broker platform-token validator the inbound seam, which accepts only
 broker-issued bearers — so a completed claim would return a bearer every
 protected route rejects. Converging the two token types is
-[#202](http://198.51.100.91:3001/jeremyhahn/go-trusted-platform/issues/202)
+#202
 (owner ruling 2026-09-02); until it lands, the flow is offered only where its
 session works.
 

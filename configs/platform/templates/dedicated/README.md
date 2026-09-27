@@ -18,12 +18,12 @@ For single-box or cluster topologies, see the sibling profiles:
                            │
                     Upstream ISP / Router
                            │
-                      Trusted switch
+                      Fabric switch
                        (VLAN-aware)
          ┌─────────────────┼─────────────────┐
          │                 │                 │
     ┌────▼────┐       ┌────▼────┐       ┌────▼────┐
-    │ lab-node-1 │       │ lab-node-2 │       │ lab-node-3 │
+    │  gw-01  │       │ node-02 │       │ node-03 │
     │ gateway │       │   CP    │       │ compute │
     │         │       │         │       │         │
     │ gatewayd│       │ platformd        │ platformd│
@@ -35,7 +35,7 @@ For single-box or cluster topologies, see the sibling profiles:
       │ eth6+eth7         │ eth6+eth7         │ eth6+eth7
       │                   │                   │
       └───────────────────┴───────────────────┘
-                  trusted network
+             control-plane network (VLAN 406)
                   (LACP / balance-tcp)
 ```
 
@@ -50,9 +50,9 @@ bonding driver, no `ovs-vsctl` fork).
 
 | Role | Binaries | Owns |
 |------|----------|------|
-| **Control plane** (`lab-node-2`) | `platformd` (server mode) | CA + ACME server, authoritative DNS zones (internal + public), IAM, KMS, QuicBaaS storage, OVS master |
-| **Gateway** (`lab-node-1`) | `platformd` (client), `gatewayd` | BGP edge, DHCP for LAN clients, firewall, NAT, load balancer, L3 egress, WAN-side TLS termination |
-| **Compute** (`lab-node-3`) | `platformd` (client) | QEMU/KVM VMs, Podman containers, local workload storage |
+| **Control plane** (`node-02`) | `platformd` (server mode) | CA + ACME server, authoritative DNS zones (internal + public), IAM, KMS, QuicBaaS storage, OVS master |
+| **Gateway** (`gw-01`) | `platformd` (client), `gatewayd` | BGP edge, DHCP for LAN clients, firewall, NAT, load balancer, L3 egress, WAN-side TLS termination |
+| **Compute** (`node-03`) | `platformd` (client) | QEMU/KVM VMs, Podman containers, local workload storage |
 
 **Gateway and compute are ACME-enrolled clients of the control plane's
 CA.** First-boot platformd on those nodes registers with
@@ -72,7 +72,7 @@ first ACME connection can verify TLS before any cert has been issued.
   `eth6` + `eth7` (Supermicro X10 SFP+ ports).
 - **`trusted0`** is an Open vSwitch bridge created via native OVSDB
   `Transact` from `platformd::initOVSBridge`. The bridge is assigned
-  the trusted subnet's gateway IP (e.g. `10.200.0.1/24`) at
+  the control-plane subnet's gateway IP (e.g. `10.4.6.1/24`) at
   `initBridgeIPs` time.
 - NIC member interfaces (`eth6`, `eth7`) are brought up as raw
   manual-configured interfaces in `/etc/network/interfaces`. OVS
@@ -103,12 +103,31 @@ Search-domain list is populated by the bootstrap orchestrator from
 
 ### Subnets
 
+The templates use the block-4 example of the reference network design
+(owner design decision 2026-09-26): VLAN N maps to
+`10.(N div 100).(N mod 100).0/24`, and the upper half of the /16
+(`10.4.128.0/17`) is the IPAM pool for overlays, loopbacks and tunnel
+point-to-point links. Inside a /24: `.1` gateway VIP, `.2`/`.3` gateway
+nodes, `.10`–`.19` control-plane nodes, `.20`–`.49` infrastructure,
+`.50`–`.254` DHCP.
+
 | Name | VLAN | CIDR | Purpose |
 |------|------|------|---------|
-| trusted | 200 | 10.200.0.0/24 | Server-to-server east/west, CP/GW/compute |
-| provisioning | 201 | 10.201.0.0/24 | PXE boot, initial node setup |
-| quarantine | 202 | 10.202.0.0/24 | Isolated untrusted / failed nodes |
-| storage | 203 | 10.203.0.0/24 | Back-end storage traffic |
+| transit | 400 | 10.4.0.0/24 | Gateway uplink / transit (gateway ports only) |
+| fabric | 401 | 10.4.1.0/24 | VXLAN underlay, VTEPs, EVPN |
+| management | 402 | 10.4.2.0/24 | OOB / BMC (BMC access ports only) |
+| hypervisor | 403 | 10.4.3.0/24 | Live migration |
+| quarantine | 404 | 10.4.4.0/24 | Isolated untrusted / failed nodes |
+| provisioning | 405 | 192.0.2.0/24 | PXE boot, initial node setup |
+| control-plane | 406 | 10.4.6.0/24 | Server-to-server east/west, CP/GW/compute |
+| storage | 407 | 10.4.7.0/24 | Back-end storage traffic |
+| backup | 408 | 10.4.8.0/24 | Backup traffic |
+
+The templates declare the four networks they use today (404–407). Today's
+code has no zone named after the control-plane network, so it carries
+`zone: trusted`; the zone vocabulary moves with #708. The `dmz-*` networks
+are overlays in the design; until the overlay service lands they keep an
+interim VLAN from 409–411, which is not a design VLAN.
 
 ---
 
@@ -205,21 +224,21 @@ via OVSDB wire protocol (see `pkg/app/sdn.go::initOVSBonds`).
 
 Only `provisioning` and `quarantine` are first-class fabric roles
 (they trigger PXE onboarding and isolation flows respectively).
-Production and storage segments have **no `role:`** field — an
+Control-plane and storage segments have **no `role:`** field — an
 empty/absent role is semantically "general data plane".
 
 ```yaml
 sdn:
   fabric:
     segments:
-      - name: trusted
-        vlan: 200
-        # no role — trusted is implicit general data plane
+      - name: control-plane
+        vlan: 406
+        # no role — implicit general data plane
       - name: provisioning
-        vlan: 201
+        vlan: 405
         role: provisioning
       - name: quarantine
-        vlan: 202
+        vlan: 404
         role: quarantine
 ```
 
@@ -242,7 +261,7 @@ RTC says.
 
 | Role | Mode | Sources | Serves |
 |------|------|---------|--------|
-| control-plane | `both` | `198.18.0.1` (edge router, preferred) + `pool.ntp.org` | `198.18.0.0/24`, `172.16.201.0/24` with NTS as `cp.example.internal` |
+| control-plane | `both` | `10.4.6.1` (edge router, preferred) + `pool.ntp.org` | `10.4.6.0/24`, `192.0.2.0/24` with NTS as `cp.example.internal` |
 | gateway | `consume` | `cp.example.internal` (control plane) over NTS | — |
 | compute | `consume` | `cp.example.internal` (control plane) over NTS | — |
 
@@ -333,9 +352,9 @@ FQDNs. Example:
 webservices:
   - name: internal
     sans:
-      - lab-node-2.cp.example.internal
-      - lab-node-2.trusted-platform.io
-      - 10.200.0.1
+      - node-02.cp.example.internal
+      - node-02.trusted-platform.io
+      - 10.4.6.10
 ```
 
 ---
@@ -354,7 +373,7 @@ trust:
     # serves none. Use a per-node bmc_spki_pin for first contact.
     strategies: [dane, spki, ca-file]
     dane:
-      dns-server: "198.18.0.10:8053"   # CP public DNS (GW/compute)
+      dns-server: "10.4.6.10:8053"       # CP public DNS (GW/compute)
       # dns-server: "127.0.0.1:8053"     # for CP itself
 ```
 

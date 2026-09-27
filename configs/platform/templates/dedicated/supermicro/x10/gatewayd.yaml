@@ -7,28 +7,34 @@
 # pkg/sdn/gateway/commands/assembly.go LoadServeConfig — `gateway:`, `sdn:`,
 # `control-plane:`, `proxy:`, `trust:` — and nothing else.
 #
-# Values here are the bring-up shape for lab-node-1 described in
+# Values here are the bring-up shape for gateway gw-01 described in
 # docs/operations/gateway-bringup.md: tunnels and iBGP stood up BESIDE the
-# Cisco ASRs, announcing nothing, so the platform proves its transport with
-# zero blast radius. Addressing follows ruling R2 (epic #553): the gateway
-# holds 198.18.0.2 on the overlay and 23.143.36.4 as its public identity
-# until the Phase 5 cutover moves it to .1 and the HSRP VIPs.
+# existing upstream routers, announcing nothing, so the platform proves its
+# transport with zero blast radius. Addressing follows ruling R2 (epic #553):
+# the gateway holds 10.4.6.2 on the control-plane network (VLAN 406) and
+# 203.0.113.4 as its public identity until the Phase 5 cutover moves it to .1
+# and the HSRP VIPs.
 #
-# EVERY address below is this site's. A different deployment replaces them;
-# nothing here is a default. Secrets are references only — `kms://` and
-# `secret://` resolve through the platform key store at start
-# (handbook conventions/configuration.md §4).
+# Every address below is a reference placeholder: the block-4 example of the
+# reference network design (owner design decision 2026-09-26), RFC 5737
+# documentation ranges for public IPv4, 2001:db8::/32 for public IPv6 and a
+# private ASN. A deployment replaces them; nothing here is a default.
+# Exception, pending an owner decision: the tunnel inner addresses
+# (10.255.0.x/30 and the 2602:F5BB:CAFE:* /64s) are not yet moved to the
+# IPAM pool (10.4.255.0/24); do not copy them. Secrets
+# are references only — `kms://` and `secret://` resolve through the platform
+# key store at start (handbook conventions/configuration.md §4).
 
 gateway:
   enabled: true
-  id: lab-node-1-gateway
+  id: gw-01-gateway
   node-id: 1
   tier: datacenter
 
-  # The bridge address this gateway answers for on the platform overlay.
-  # .1 is the ASRs' HSRP group-20 VIP until the cutover; taking it now is
-  # the duplicate address issue #508 exists for.
-  anycast-ip: "198.18.0.2"
+  # The bridge address this gateway answers for on the control-plane
+  # network. .1 is the upstream routers' HSRP VIP until the cutover; taking
+  # it now is the duplicate address issue #508 exists for.
+  anycast-ip: "10.4.6.2"
 
   # WAN interfaces as the datapath sees them (NAT egress selection reads
   # these). The routing tables and `ip rule`s that keep each tunnel on the
@@ -38,38 +44,38 @@ gateway:
   uplinks:
     - name: eth6
       mtu: 1500
-      ip-addresses: ["99.12.246.38/29"]      # AT&T
+      ip-addresses: ["198.51.100.6/29"]      # ISP A
     - name: eth7
       mtu: 1500
-      ip-addresses: ["96.65.171.22/29"]      # Comcast
+      ip-addresses: ["192.0.2.6/29"]         # ISP B
 
-  # Tunnels to the two Vultr relays, one per (POP × ISP) as the ASRs run
-  # today (handbook infra/network/docs/03-wan-bgp.md, full mesh since
-  # 2026-08-25). `type: gre` is what the relay side speaks today; the
+  # Tunnels to the two relays at the VPS provider, one per (POP × ISP): a
+  # full mesh, as the upstream routers run it. `type: gre` is what the relay
+  # side speaks today; the
   # `transport: ipsec` upgrade needs #606 before it can be selected here.
   tunnels:
-    - name: gre-mia-att
+    - name: gre-popa-ispa
       type: gre
-      local: 99.12.246.38
-      remote: 45.63.110.165
+      local: 198.51.100.6
+      remote: 198.51.100.100
       tunnel-ip: 10.255.0.33/30
       tunnel-ipv6: "2602:F5BB:CAFE:11::1/64"
-    - name: gre-mia-cmc
+    - name: gre-popa-ispb
       type: gre
-      local: 96.65.171.22
-      remote: 45.63.110.165
+      local: 192.0.2.6
+      remote: 198.51.100.100
       tunnel-ip: 10.255.0.37/30
       tunnel-ipv6: "2602:F5BB:CAFE:13::1/64"
-    - name: gre-atl-cmc
+    - name: gre-popb-ispb
       type: gre
-      local: 96.65.171.22
-      remote: 66.42.90.190
+      local: 192.0.2.6
+      remote: 192.0.2.100
       tunnel-ip: 10.255.0.41/30
       tunnel-ipv6: "2602:F5BB:CAFE:15::1/64"
-    - name: gre-atl-att
+    - name: gre-popb-ispa
       type: gre
-      local: 99.12.246.38
-      remote: 66.42.90.190
+      local: 198.51.100.6
+      remote: 192.0.2.100
       tunnel-ip: 10.255.0.45/30
       tunnel-ipv6: "2602:F5BB:CAFE:17::1/64"
 
@@ -89,10 +95,10 @@ gateway:
     enabled: true
 
   bgp:
-    asn: 401870
-    # Neither the HSRP group-1 VIP (.1) nor either ASR's interface (.2/.3);
-    # .5 is reserved for the second gateway.
-    router-id: 23.143.36.4
+    asn: 64512
+    # Neither the HSRP group-1 VIP (.1) nor either upstream router's
+    # interface (.2/.3); .5 is reserved for the second gateway.
+    router-id: 203.0.113.4
     listen-port: 179
     graceful-restart-time: 120
 
@@ -103,20 +109,20 @@ gateway:
     # `!fips` MD5 compatibility path the relays speak today. A FIPS build
     # refuses `auth-type: md5` — that is the point of the ruling.
     keychains:
-      - name: vps
+      - name: relays
         keys:
           - send-id: 1
             receive-id: 1
             algorithm: hmac-sha256-128
-            master-key-ref: kms://platform/bgp/vps-key-1
+            master-key-ref: kms://platform/bgp/relays-key-1
 
     peers:
-      - name: miami-att
+      - name: popa-ispa
         address: 10.255.0.34
-        asn: 401870
-        description: "Miami VPS over AT&T (relay gre11)"
+        asn: 64512
+        description: "POP A VPS over ISP A (relay gre11)"
         auth-type: md5
-        auth-key-ref: kms://platform/bgp/miami-att
+        auth-key-ref: kms://platform/bgp/popa-ispa
         hold-time: 30
         keepalive-interval: 10
         max-prefixes: 10
@@ -136,24 +142,24 @@ gateway:
           # IMPORT is what ranks this session against the other three; the
           # routers apply the same ladder with an inbound route-map.
           import:
-            # AT&T to Miami is the preferred default path (the routers' LP-MIA-ATT)
+            # ISP A to POP A is the preferred default path (the routers' LP-POPA-ISPA)
             local-pref: 200
           export:
             # The routers send `route-map SET-MED out` on every session. It is
             # uniform across all four, so it cannot change which of them wins;
-            # confirm the number against corertr-01 before the cutover.
+            # confirm the number against router-01 before the cutover.
             med: 50
-            # NO prepend. The x3 prepend that makes inbound prefer Miami lives
-            # in the ATLANTA RELAY's eBGP session to Vultr, not on the routers
-            # (handbook infra/network/docs/03-wan-bgp.md). Prepending here
-            # would lengthen the path BOTH relays re-announce and shift
-            # inbound traffic -- the failure the cutover exists to avoid.
-      - name: miami-comcast
+            # NO prepend. The x3 prepend that makes inbound prefer POP A lives
+            # in the POP B RELAY's eBGP session to the transit provider, not
+            # on the routers. Prepending here would lengthen the path BOTH
+            # relays re-announce and shift inbound traffic -- the failure the
+            # cutover exists to avoid.
+      - name: popa-ispb
         address: 10.255.0.38
-        asn: 401870
-        description: "Miami VPS over Comcast (relay gre13)"
+        asn: 64512
+        description: "POP A VPS over ISP B (relay gre13)"
         auth-type: md5
-        auth-key-ref: kms://platform/bgp/miami-comcast
+        auth-key-ref: kms://platform/bgp/popa-ispb
         hold-time: 30
         keepalive-interval: 10
         max-prefixes: 10
@@ -171,24 +177,24 @@ gateway:
           # IMPORT is what ranks this session against the other three; the
           # routers apply the same ladder with an inbound route-map.
           import:
-            # Comcast to Miami (LP-MIA-COMCAST)
+            # ISP B to POP A (LP-POPA-ISPB)
             local-pref: 150
           export:
             # The routers send `route-map SET-MED out` on every session. It is
             # uniform across all four, so it cannot change which of them wins;
-            # confirm the number against corertr-01 before the cutover.
+            # confirm the number against router-01 before the cutover.
             med: 50
-            # NO prepend. The x3 prepend that makes inbound prefer Miami lives
-            # in the ATLANTA RELAY's eBGP session to Vultr, not on the routers
-            # (handbook infra/network/docs/03-wan-bgp.md). Prepending here
-            # would lengthen the path BOTH relays re-announce and shift
-            # inbound traffic -- the failure the cutover exists to avoid.
-      - name: atlanta-comcast
+            # NO prepend. The x3 prepend that makes inbound prefer POP A lives
+            # in the POP B RELAY's eBGP session to the transit provider, not
+            # on the routers. Prepending here would lengthen the path BOTH
+            # relays re-announce and shift inbound traffic -- the failure the
+            # cutover exists to avoid.
+      - name: popb-ispb
         address: 10.255.0.42
-        asn: 401870
-        description: "Atlanta VPS over Comcast (relay gre15)"
+        asn: 64512
+        description: "POP B VPS over ISP B (relay gre15)"
         auth-type: md5
-        auth-key-ref: kms://platform/bgp/atlanta-comcast
+        auth-key-ref: kms://platform/bgp/popb-ispb
         hold-time: 30
         keepalive-interval: 10
         max-prefixes: 10
@@ -206,25 +212,25 @@ gateway:
           # IMPORT is what ranks this session against the other three; the
           # routers apply the same ladder with an inbound route-map.
           import:
-            # Comcast to Atlanta: the routers leave this at the default, stated
+            # ISP B to POP B: the routers leave this at the default, stated
           # explicitly so the runbook's step 4 can verify it
             local-pref: 100
           export:
             # The routers send `route-map SET-MED out` on every session. It is
             # uniform across all four, so it cannot change which of them wins;
-            # confirm the number against corertr-01 before the cutover.
+            # confirm the number against router-01 before the cutover.
             med: 50
-            # NO prepend. The x3 prepend that makes inbound prefer Miami lives
-            # in the ATLANTA RELAY's eBGP session to Vultr, not on the routers
-            # (handbook infra/network/docs/03-wan-bgp.md). Prepending here
-            # would lengthen the path BOTH relays re-announce and shift
-            # inbound traffic -- the failure the cutover exists to avoid.
-      - name: atlanta-att
+            # NO prepend. The x3 prepend that makes inbound prefer POP A lives
+            # in the POP B RELAY's eBGP session to the transit provider, not
+            # on the routers. Prepending here would lengthen the path BOTH
+            # relays re-announce and shift inbound traffic -- the failure the
+            # cutover exists to avoid.
+      - name: popb-ispa
         address: 10.255.0.46
-        asn: 401870
-        description: "Atlanta VPS over AT&T (relay gre17)"
+        asn: 64512
+        description: "POP B VPS over ISP A (relay gre17)"
         auth-type: md5
-        auth-key-ref: kms://platform/bgp/atlanta-att
+        auth-key-ref: kms://platform/bgp/popb-ispa
         hold-time: 30
         keepalive-interval: 10
         max-prefixes: 10
@@ -242,24 +248,25 @@ gateway:
           # IMPORT is what ranks this session against the other three; the
           # routers apply the same ladder with an inbound route-map.
           import:
-            # AT&T to Atlanta is the least preferred path (LP-ATL-ATT)
+            # ISP A to POP B is the least preferred path (LP-POPB-ISPA)
             local-pref: 50
           export:
             # The routers send `route-map SET-MED out` on every session. It is
             # uniform across all four, so it cannot change which of them wins;
-            # confirm the number against corertr-01 before the cutover.
+            # confirm the number against router-01 before the cutover.
             med: 50
-            # NO prepend. The x3 prepend that makes inbound prefer Miami lives
-            # in the ATLANTA RELAY's eBGP session to Vultr, not on the routers
-            # (handbook infra/network/docs/03-wan-bgp.md). Prepending here
-            # would lengthen the path BOTH relays re-announce and shift
-            # inbound traffic -- the failure the cutover exists to avoid.
+            # NO prepend. The x3 prepend that makes inbound prefer POP A lives
+            # in the POP B RELAY's eBGP session to the transit provider, not
+            # on the routers. Prepending here would lengthen the path BOTH
+            # relays re-announce and shift inbound traffic -- the failure the
+            # cutover exists to avoid.
 
     # ANNOUNCE NOTHING. `announce:` is the export allow-list: empty plus the
     # RFC 8212 default-deny means these sessions establish, hold, and export
-    # no path, so the ASRs remain the only origin of the ARIN space. Step 3
-    # of the runbook adds one test prefix here and removes it again; the
-    # cutover (Phase 5.4, #597) is what puts the real prefixes in.
+    # no path, so the upstream routers remain the only origin of the public
+    # prefixes. Step 3 of the runbook adds one test prefix here and removes
+    # it again; the cutover (Phase 5.4, #597) is what puts the real prefixes
+    # in.
     announce:
       ipv4: []
       ipv6: []
@@ -281,13 +288,13 @@ gateway:
       # GRE (proto 47) only from the two relays, only on the WAN links.
       - interface: eth6
         protocol: gre
-        addresses: [45.63.110.165, 66.42.90.190]
+        addresses: [198.51.100.100, 192.0.2.100]
       - interface: eth7
         protocol: gre
-        addresses: [45.63.110.165, 66.42.90.190]
+        addresses: [198.51.100.100, 192.0.2.100]
     # BGP (179) and BFD (3784) are allowed on the tunnel interfaces only,
     # never on the WAN links themselves.
-    tunnels: [gre-mia-att, gre-mia-cmc, gre-atl-cmc, gre-atl-att]
+    tunnels: [gre-popa-ispa, gre-popa-ispb, gre-popb-ispb, gre-popb-ispa]
     icmp:
       rate: 10
       burst: 20
@@ -310,7 +317,7 @@ sdn:
 control-plane:
   enabled: true
   base-url: https://cp.example.internal:8443
-  gateway-id: lab-node-1-gateway
+  gateway-id: gw-01-gateway
   interval: 30s
   reconcile-interval: 60s
   cert-file: /etc/gatewayd/client.pem

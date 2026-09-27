@@ -77,7 +77,7 @@ This document shows how all components of the Trusted DHT system fit together.
 |  +-------------+ +------------+ +------------+ +------------+           |
 +-------------------------------------------------------------------------+
                                   |
-                                  | IPv6: 2602:F5BB::/36
+                                  | IPv6: 2001:db8::/36
                                   v
                             [ INTERNET ]
 ```

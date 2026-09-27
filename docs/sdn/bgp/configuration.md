@@ -17,8 +17,8 @@ keys) and are **superseded** where they disagree with this section.
 ```yaml
 gateway:
   bgp:
-    asn: 401870
-    router-id: 23.143.36.4
+    asn: 64512
+    router-id: 203.0.113.4
     listen-port: 179                 # default 179
     listen-addresses: []             # default: every address
     tier: datacenter                 # backbone | datacenter | coordinator | (unset)
@@ -29,8 +29,8 @@ gateway:
     route-reflector: false
     cluster-id: ""
     announce:                        # prefixes this speaker originates
-      ipv4: [23.143.36.0/24]
-      ipv6: [2602:F5BB::/36]
+      ipv4: [203.0.113.0/24]
+      ipv6: [2001:db8::/36]
     keychains:                       # TCP-AO keychains peers reference by name
       - name: vps
         keys:
@@ -39,11 +39,11 @@ gateway:
             algorithm: hmac-sha256-128   # hmac-sha256-96 | aes-128-cmac-96 | hmac-sha1-96
             master-key-ref: kms://platform/bgp/vps-key-1
     peers:
-      - name: miami-att
-        address: 10.255.0.2
-        asn: 401870
+      - name: popa-ispa
+        address: 10.4.255.2
+        asn: 64512
         auth-type: md5               # none | md5 (!fips builds only) | tcp-ao
-        auth-key-ref: kms://platform/bgp/miami-att
+        auth-key-ref: kms://platform/bgp/popa-ispa
         hold-time: 30
         keepalive-interval: 10
         connect-retry: 120
@@ -71,12 +71,12 @@ gateway:
             local-pref: 200
             large-communities:
               action: add            # add | remove | replace
-              values: ["401870:1:200"]
+              values: ["64512:1:200"]
           export:                    # traffic engineering on paths announced
             med: 50
             prepend:
               count: 3               # 1..10; asn defaults to the speaker's own
-              asn: 401870
+              asn: 64512
             communities:
               action: add
               values: ["no-export"]
@@ -132,10 +132,10 @@ outside both lists falls through to the reject default as before.
 A community block names **one** `action` and its `values`, because GoBGP carries
 one community action per direction; parallel add and remove lists would mean
 programming one and dropping the other. A `remove` value is matched as a regular
-expression, so `"^401870:1:"` clears a whole block.
+expression, so `"^64512:1:"` clears a whole block.
 
 **A 32-bit AS number cannot be written as a standard community.** RFC 1997 packs
-two 16-bit halves into one 32-bit attribute, so AS 401870 does not fit; tagging
+two 16-bit halves into one 32-bit attribute, so an AS above 65535 does not fit; tagging
 from a 32-bit ASN uses large communities.
 
 **Anything the speaker cannot program is refused at configuration load**, never
@@ -163,7 +163,7 @@ bgp:
   # Global BGP settings
   global:
     asn: 65001
-    router_id: "23.143.36.1"
+    router_id: "203.0.113.1"
     listen_port: 179
     listen_addresses:
       - "0.0.0.0"
@@ -208,9 +208,9 @@ bgp:
     enabled: true
     prefixes:
       ipv6:
-        - "2602:F5BB::/36"
+        - "2001:db8::/36"
       ipv4:
-        - "23.143.36.0/24"
+        - "203.0.113.0/24"
     rpki:
       enabled: true
       servers:
@@ -275,7 +275,7 @@ Router ID should be:
 ```yaml
 # Recommended: Use a stable, routable IPv4 address
 global:
-  router_id: "23.143.36.1"  # From platform IPv4 block
+  router_id: "203.0.113.1"  # From platform IPv4 block
 ```
 
 ## Speaker Configuration
@@ -456,13 +456,13 @@ evpn:
 | Type | Format | Example |
 |------|--------|---------|
 | type0 | 2-byte ASN : 4-byte assigned | 65001:10000 |
-| type1 | 4-byte IPv4 : 2-byte assigned | 23.143.36.1:100 |
+| type1 | 4-byte IPv4 : 2-byte assigned | 203.0.113.1:100 |
 | type2 | 4-byte ASN : 2-byte assigned | 65001:100 |
 
 ```yaml
 evpn:
   rd_type: "type1"
-  rd_value: "23.143.36.1:100"  # IPv4:assigned format
+  rd_value: "203.0.113.1:100"  # IPv4:assigned format
 ```
 
 ### VRF Configuration
@@ -523,7 +523,7 @@ transit:
   # Prefixes to announce
   prefixes:
     ipv6:
-      - prefix: "2602:F5BB::/36"
+      - prefix: "2001:db8::/36"
         description: "Platform IPv6 aggregate"
         announce_level: "backbone"  # backbone, datacenter
       - prefix: "2602:F5BB:0001::/48"
@@ -531,7 +531,7 @@ transit:
         announce_level: "datacenter"
 
     ipv4:
-      - prefix: "23.143.36.0/24"
+      - prefix: "203.0.113.0/24"
         description: "Platform IPv4 block"
         announce_level: "backbone"
 
@@ -584,7 +584,7 @@ transit:
 
     # Per-prefix overrides
     overrides:
-      - prefix: "2602:F5BB::/36"
+      - prefix: "2001:db8::/36"
         enabled: false  # Never dampen aggregate
 ```
 
@@ -735,7 +735,7 @@ Configuration values can be sourced from environment variables:
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `BGP_ASN` | AS number | 65001 |
-| `BGP_ROUTER_ID` | Router ID | 23.143.36.1 |
+| `BGP_ROUTER_ID` | Router ID | 203.0.113.1 |
 | `BGP_ISP_PRIMARY_SECRET` | Primary ISP MD5 secret | (secret) |
 | `BGP_ISP_BACKUP_SECRET` | Backup ISP MD5 secret | (secret) |
 | `BGP_IBGP_SECRET` | iBGP MD5 secret | (secret) |
@@ -760,7 +760,7 @@ bgp:
 bgp:
   global:
     asn: 65001
-    router_id: "23.143.36.1"
+    router_id: "203.0.113.1"
     listen_port: 179
     listen_addresses:
       - "0.0.0.0"
@@ -832,10 +832,10 @@ bgp:
     enabled: true
     prefixes:
       ipv6:
-        - prefix: "2602:F5BB::/36"
+        - prefix: "2001:db8::/36"
           announce_level: "backbone"
       ipv4:
-        - prefix: "23.143.36.0/24"
+        - prefix: "203.0.113.0/24"
           announce_level: "backbone"
     rpki:
       enabled: true
@@ -884,9 +884,9 @@ bgp:
   prefix_lists:
     - name: "platform-aggregates"
       entries:
-        - prefix: "2602:F5BB::/36"
+        - prefix: "2001:db8::/36"
           match: "exact"
-        - prefix: "23.143.36.0/24"
+        - prefix: "203.0.113.0/24"
           match: "exact"
 
   logging:

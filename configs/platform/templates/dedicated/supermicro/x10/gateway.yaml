@@ -16,7 +16,7 @@
 #   - Stateful firewall
 #   - BGP routing and GRE tunnels
 #   - NAT, load balancer
-#   - DHCP/PXE on provisioning VLAN
+#   - DHCP/PXE on the provisioning VLAN (405)
 #   - Virtual host routing
 #
 # TRUST MODEL: The platform CA bundle is baked into the install ISO and
@@ -26,7 +26,8 @@
 #   trust store established at install time.
 #
 # DEPLOYER: Before using this template, update the following for your environment:
-#   - IP addresses (172.16.200.x, PREFERRED_IP)
+#   - IP addresses (10.4.x.x: the block-4 example of the reference network
+#     design, 10.4.0.0/16 with VLANs 400-408; also PREFERRED_IP)
 #   - Domain names (gw.example.com, example.internal)
 #   - TPM serial number (idevid.serial)
 #   - ACME directory URL
@@ -148,50 +149,55 @@ network:
   dnsmasq:
     enabled: true
     upstream-servers:
-      - "/example.internal/198.18.0.10#9053"
-      - "198.18.0.10#8053"
+      - "/example.internal/10.4.6.10#9053"
+      - "10.4.6.10#8053"
     local-domain: example.internal
+  # Reference network design, block 4 (owner design decision 2026-09-26):
+  # 404 quarantine, 405 provisioning, 406 control-plane, 407 storage.
+  # `control-plane` has no zone mapping in today's code, so the network
+  # derived from it falls back to zone `trusted`; the zone vocabulary moves
+  # with #708.
   subnets:
-    - name: trusted
+    - name: control-plane
       scope: internal
-      vlan-id: 200
-      cidr: 198.18.0.0/24
-      gateway: 198.18.0.1
+      vlan-id: 406
+      cidr: 10.4.6.0/24
+      gateway: 10.4.6.1
       dns:
-        - 198.18.0.10
+        - 10.4.6.10
     - name: provisioning
       scope: internal
-      vlan-id: 201
-      cidr: 172.16.201.0/24
-      gateway: 172.16.201.1
+      vlan-id: 405
+      cidr: 192.0.2.0/24
+      gateway: 192.0.2.1
       dns:
-        - 172.16.201.10
+        - 192.0.2.10
       role: provisioning
       dhcp:
         enabled: true
-        range-start: 172.16.201.50
-        range-end: 172.16.201.254
+        range-start: 192.0.2.50
+        range-end: 192.0.2.254
         lease-duration: 1h
     - name: quarantine
       scope: internal
-      vlan-id: 202
-      cidr: 172.16.202.0/24
-      gateway: 172.16.202.1
+      vlan-id: 404
+      cidr: 10.4.4.0/24
+      gateway: 10.4.4.1
       dns:
-        - 172.16.202.10
+        - 10.4.4.10
       role: quarantine
     - name: storage
       scope: internal
-      vlan-id: 203
-      cidr: 172.16.203.0/24
-      gateway: 172.16.203.1
+      vlan-id: 407
+      cidr: 10.4.7.0/24
+      gateway: 10.4.7.1
       dns:
-        - 172.16.203.10
+        - 10.4.7.10
   interfaces:
     - name: eth0
       type: static
-      ipv4-address: 198.18.0.2/24
-      ipv4-gateway: 198.18.0.1
+      ipv4-address: 10.4.6.2/24
+      ipv4-gateway: 10.4.6.1
       auto-start: true
   bridges:
     - name: trusted0
@@ -214,18 +220,21 @@ network:
       interfaces:
         - eth6
         - eth7
+      # Port class (reference design): a gateway trunk carries what the
+      # gateway serves, and transit (400) reaches gateway ports only. The
+      # bond schema cannot express a native VLAN yet (#708).
       vlans:
-        - subnet: trusted
-          ipv4-address: 198.18.0.2/24
+        - subnet: control-plane
+          ipv4-address: 10.4.6.2/24
           auto-start: true
         - subnet: provisioning
-          ipv4-address: 172.16.201.2/24
+          ipv4-address: 192.0.2.2/24
           auto-start: true
         - subnet: quarantine
-          ipv4-address: 172.16.202.2/24
+          ipv4-address: 10.4.4.2/24
           auto-start: true
         - subnet: storage
-          ipv4-address: 172.16.203.2/24
+          ipv4-address: 10.4.7.2/24
           auto-start: true
       auto-start: true
   vlans: []
@@ -289,7 +298,7 @@ fido2:
 dns:
   resolver:
     servers:
-      - address: "198.18.0.10"
+      - address: "10.4.6.10"
         port: 8053
     search-domains:
       - example.internal
@@ -443,14 +452,14 @@ trust:
     # the fingerprint out of band.
     strategies: [dane, spki, tofu, ca-file]
     dane:
-      dns-server: "198.18.0.10:8053"   # CP public DNS
+      dns-server: "10.4.6.10:8053"   # CP public DNS
 
 # =============================================================================
 # DATASTORE CONFIGURATION
 # =============================================================================
 
 bmc:
-  address: 198.18.0.2
+  address: 10.4.2.2
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -694,7 +703,7 @@ gateway:
   min-reputation: 0.85
   min-age-days: 175
   min-uptime-pct: 95.0
-  anycast-ip: "198.18.0.2"
+  anycast-ip: "10.4.6.2"
   uplinks:
     - name: eth0
       vlan: 0
@@ -708,11 +717,11 @@ gateway:
   # BGP routing (placeholder ASN and peers)
   bgp:
     asn: 64512
-    router-id: 198.18.0.2
+    router-id: 10.4.6.2
     listen-port: 179
     peers:
       - name: vps-primary
-        address: 10.255.0.2
+        address: 10.4.255.2
         asn: 64512
         families:
           - ipv4-unicast
@@ -723,7 +732,7 @@ gateway:
         #   auth-type: md5
         #   auth-key-ref: kms://platform/gateway/bgp/vps-primary
       - name: vps-backup
-        address: 10.255.0.18
+        address: 10.4.255.6
         asn: 64512
         families:
           - ipv4-unicast
@@ -755,12 +764,12 @@ gateway:
       type: gre
       local: 192.0.2.1
       remote: 198.51.100.1
-      tunnel-ip: 10.255.0.1/30
+      tunnel-ip: 10.4.255.1/30
     - name: gre-backup
       type: gre
       local: 192.0.2.2
       remote: 203.0.113.1
-      tunnel-ip: 10.255.0.5/30
+      tunnel-ip: 10.4.255.5/30
     # The same carrier under ESP. The two SA keys are 36 bytes each
     # (AES-256-GCM key plus its 4-byte salt), stored base64 and decoded on
     # the way out of the store.
@@ -769,17 +778,17 @@ gateway:
     #   transport: ipsec
     #   local: 192.0.2.1
     #   remote: 198.51.100.1
-    #   tunnel-ip: 10.255.0.9/30
+    #   tunnel-ip: 10.4.255.9/30
     #   ipsec:
     #     key-ref: kms://platform/gateway/tunnel/primary/out?enc=base64
     #     peer-key-ref: kms://platform/gateway/tunnel/primary/in?enc=base64
     #     spi-out: 0x1001
     #     spi-in: 0x1002
 
-  # DHCP on provisioning VLAN
+  # DHCP on the provisioning VLAN (405)
   dhcp:
     enabled: true
-    interface: bond0.201
+    interface: bond0.405
     segment: provisioning
 
   # PXE boot server

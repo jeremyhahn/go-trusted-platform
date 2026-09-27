@@ -228,7 +228,7 @@ rotates SAs in place so the peer can rotate in lockstep without a session drop.
 Each WAN uplink owns a **routing table** and `ip rule`s (`UplinkManager`): the
 uplink's own addresses and every tunnel's outer endpoint pair are steered into
 its table, so a tunnel sourced on one ISP never egresses through the other when
-the main table's default changes. This replaces the ASR's `tunnel route-via …
+the main table's default changes. This replaces an upstream router's `tunnel route-via …
 mandatory` and return-path PBR. Liveness is BFD on the BGP session (#556), not
 vendor keepalives.
 
@@ -250,9 +250,12 @@ vendor keepalives.
    in-process Ed25519 key whose signature `AnnouncePrefix` computes and
    discards — nothing is attached to an announcement — so it is
    experimental, not a control (epic #553, ruling R11).
-5. **Management VPN.** (Design for the attested remote-access service: [`docs/vpn/`](../vpn/).) `ManagementVPNConfig` (WireGuard) exists so administrators
+5. **Management VPN.** (Design for the attested remote-access service: [`docs/vpn/`](../vpn/).) `ManagementVPNConfig` exists so administrators
    reach management endpoints through an authenticated tunnel rather than being
-   dual-homed onto a data zone. Gateways should expose it by default.
+   dual-homed onto a data zone. Gateways should expose it by default. Owner
+   design decision (2026-09-26): IPsec in FIPS builds, WireGuard only in
+   non-FIPS builds. Today the config defines only `wireguard` and the section
+   is refused at start (#558).
 6. **The host itself.** Traffic *to* the gateway's own addresses never crosses
    the OVS pipeline; the nftables host filter (`services/hostfw`) is the only
    control in front of the daemons' listeners and the tunnel endpoints, and it
@@ -282,7 +285,7 @@ the refusal table. There is no third kind.
 | `tunnels` | `pkg/sdn/tunnel` manager, every configured tunnel ensured, rolled back on the first failure; `ipsec` and `wireguard` keys resolved through `HostRuntime.SecretResolver` | — |
 | `transit` (or a `bgp` section) | `pkg/sdn/bgp` speaker with secrets resolved through `HostRuntime.SecretResolver`, every configured neighbour added | — |
 | `proxy` | registered by `gatewayd serve` assembly (`proxysvc`), not by the table | — |
-| `overlay` | — | the overlay config has no VTEP fields and the encap flow has no output action (#553) |
+| `overlay` | — | the overlay config has no VTEP fields and the encap flow has no output action (#553). Owner design decision (2026-09-26): the EVPN overlay is required, roadmap #709; lighting a public address block depends on it plus gateway HA (#596, #710) |
 | `edge` | — | the edge constructor needs an IPv6 pool, ACME toggles and a FROST pool the runtime does not inject (#553) |
 | `dhcp` | — | gatewayd has no IPAM allocator (#553) |
 | `pxe` | — | the PXE controller needs a serving interface, address and range the section does not carry; platformd's iPXE server provisions today (#553) |
@@ -379,7 +382,7 @@ It is deliberately not a `ServiceHandler`.
 |---|---|
 | Flows | table 0 → `goto_table:10`, table 10 → `goto_table:30`, table 30 → terminal; all **priority 0**, so a platformd flow in table 0 still wins its match and a service gate in table 10 still diverts |
 | Cookie | `CookiePipeline` `0xF1BE0000…` under the gateway's `0xF1BE` owner prefix |
-| Terminal | `normal` by default — identical to the bridge's behaviour before the pipeline existed for traffic no service claims. `overlay` is refused (`ErrPipelineTerminalUnavailable`) until the overlay service owns egress: the overlay config has no VTEP port and the table-60 encap flow has no output action |
+| Terminal | `normal` by default — identical to the bridge's behaviour before the pipeline existed for traffic no service claims. `overlay` is refused (`ErrPipelineTerminalUnavailable`) until the overlay service owns egress: the overlay config has no VTEP port and the table-60 encap flow has no output action. Owner design decision (2026-09-26): the overlay is required (#709) |
 | `fail_mode` | held at **`secure`** while the pipeline is installed, restored on removal — a controller loss must not fall back to `NORMAL` around the firewall |
 | Ownership | recorded in the bridge's `external_ids` (`tp-pipeline-owner=gatewayd:<id>`, `tp-pipeline-terminal`); a bridge another gateway holds is refused (`ErrPipelineOwned`); a crashed gateway's own stale record is reclaimed |
 | When | only when a datapath service (firewall, NAT, load balancer, overlay) is enabled and a runtime is injected; a proxy-only or telemetry-only gateway leaves the bridge untouched |
@@ -399,10 +402,12 @@ reconcile the supervised process model brings (#557). See
 
 A site's hosts point at one first-hop address per segment, and a gateway pair
 must be able to hold it. The mechanism depends on the segment (epic #553,
-ruling R7; the handbook's doc 00 amendment is jeremyhahn/handbook#39):
+ruling R7; the handbook's doc 00 amendment is jeremyhahn/handbook#39; wiring
+into gatewayd is #596):
 
-- **Plain L2 segments** (the transit VLAN, management, the public /24 and its
-  IPv6 /64) — **VRRPv3** (RFC 5798), `pkg/sdn/fhrp`. One protocol for IPv4 and
+- **Plain L2 segments** (the environment VLANs the gateway serves, plus
+  transit; see [`../architecture/reference-network.md`](../architecture/reference-network.md))
+  — **VRRPv3** (RFC 5798), `pkg/sdn/fhrp`. One protocol for IPv4 and
   IPv6, one group per virtual router ID and family: the address owner
   (priority 255) or the highest priority is master, advertises every
   `advert-interval-cs` centiseconds to 224.0.0.18 / ff02::12 with TTL 255, and
@@ -413,10 +418,11 @@ ruling R7; the handbook's doc 00 amendment is jeremyhahn/handbook#39):
   gratuitous ARP / unsolicited neighbour advertisement. Preemption and accept
   mode are per group. The state machine is pure and clock-injected
   (`fhrp.Group`), the sockets and address programming sit behind
-  `fhrp.Transport` and `fhrp.Programmer`, and the speaker (`fhrp.Speaker`) is
-  a gateway service (`Start/Stop/Active/Health`) the handler table builds
-  (#568).
-- **Overlay segments** — the **EVPN distributed anycast gateway** (RFC 9135)
+  `fhrp.Transport` and `fhrp.Programmer`, and the speaker (`fhrp.Speaker`)
+  has the gateway service shape (`Start/Stop/Active/Health`). **`pkg/sdn/fhrp`
+  is not wired into gatewayd yet (#596)**: no handler builds it today.
+- **Overlay segments**, which include the public address block (owner design
+  decision 2026-09-26: `public` is an overlay, not a VLAN) — the **EVPN distributed anycast gateway** (RFC 9135)
   the overlay pipeline already programs per VNI in
   `pkg/sdn/gateway/modes/overlay.go` (`installAnycastGatewayFlows`): every
   gateway answers for the segment's gateway MAC/IP locally, so there is no
@@ -427,7 +433,8 @@ shared (`arp.WithSharedAddress`) so the peer's virtual MAC answering for the
 virtual address is not a conflict; any other MAC still is.
 
 **Not implemented:** NAT/conntrack state replication between the pair
-(ruling R8: stateless failover first — sessions re-establish) and any
+(ruling R8: stateless NAT failover comes first, with #596 — sessions
+re-establish; stateful conntrack sync is #710) and any
 Raft-coordinated VIP takeover. `pkg/sdn/cluster/gateway_partitions.go` still
 declares partition keys for such a design; it is referenced by nothing and is
 kept only until R8 decides whether conntrack/NAT-session replication uses it or

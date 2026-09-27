@@ -12,7 +12,7 @@ The VXLAN overlay subsystem provides Layer 2 connectivity across multiple physic
 |---------|-------------|
 | **VXLAN Encapsulation** | RFC 7348 compliant tunneling with 24-bit VNI space |
 | **Multi-Host Connectivity** | East-west traffic across physical host boundaries |
-| **VNI-VLAN Mapping** | Automatic VNI = 1000000 + VLAN ID mapping |
+| **VNI-VLAN Mapping** | Automatic VNI = 1000000 + VLAN ID mapping (code default; the [reference network](../../architecture/reference-network.md) uses VNI = E×100000 + n, tracked in #708) |
 | **VTEP Management** | Per-host VXLAN Tunnel Endpoint configuration |
 | **QuicBaaS Replication** | Distributed state synchronization across cluster |
 | **Policy Integration** | Seamless integration with existing 802.1X policy engine |

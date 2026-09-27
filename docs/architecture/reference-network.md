@@ -1,338 +1,267 @@
 # Reference Network Architecture
 
-This document defines the **reference network architecture** for go-trusted-platform. It describes
-the platform's **zone model**, addressing, device lifecycle, and management access — the same design
-across every deployment topology, from a single box to a high-availability cluster.
+This is the reference network for go-trusted-platform: how a deployment lays out its VLANs, subnets,
+switch ports and overlays. The same model applies to every topology, from a single box to an HA
+cluster.
 
-> **Scope.** This reference covers the **platform tier only**. It is hardware-agnostic and makes no
-> assumptions about any surrounding site, office, or home network. Deployments that coexist with
-> other networks keep those entirely separate and document them in their own deployment docs — they
-> are never part of this reference. All VLAN numbers and subnets here are defaults; everything is
+> **Status.** The design was approved by the owner on 2026-09-26. The code is being brought in line
+> with it: the zone model and addressing in #708, the EVPN overlay service in #709, and gateway
+> HA in #596 and #710. When a component's documentation describes what the code does *today*,
+> it says so and links the issue.
+
+> **Scope.** This covers the platform tier only. Any site, office or home network beside it is out
+> of scope and stays separate. Every number here is a default, and the address base is
 > configurable.
 
-## The core idea: zones
+## Principles
 
-A network segment (a VLAN/subnet) and its **security policy** are two different things. Hardcoding
-"VLAN 200 = production" couples them and can't express "make *this* subnet public" or "have three
-trusted subnets." So the platform decouples them:
+1. **Underlay and overlay are separate.** The switch carries a small, fixed set of **underlay VLANs**
+   per environment: transit, fabric, management, storage and so on. Workloads, public services and
+   tenants live on **overlay networks** (EVPN/VXLAN) that the SDN creates. They never live on switch
+   VLANs.
+2. **Trust comes from identity, not from a segment.** There is no "trusted" zone. OVS and the
+   overlay admit only a node that presents a valid IDevID, so every SDN-created network is trusted
+   by construction. `public` is simply an overlay that the gateway exposes to the internet.
+3. **The switch is pure L2.** It has no SVIs, no routing and no ACLs. Gateways route and enforce
+   policy. The switch only moves frames on the VLANs each port class is allowed to carry.
+4. **One predictable numbering scheme.** A VLAN ID tells you its environment and zone, and it maps
+   directly to its IPv4 subnet, its IPv6 subnet and its VNI range.
 
-> A **zone** is a named trust/exposure classification that carries policy. **Subnets are assigned to
-> zones.** The platform derives *all* enforcement — SDN flow rules, firewall policy, compute
-> placement, DNS naming, identity, and compliance controls — from the **zone**, not the VLAN number.
+## Environments
 
-You declare a subnet and its zone; the platform automatically applies that zone's policy everywhere.
-VLAN numbers become plain L2 segment identifiers with no inherent meaning.
+VLANs are allocated in **environment blocks of 100**. The hundreds digit is the environment number
+_E_. A deployment uses as many blocks as it has environments. For example:
 
-### Zone taxonomy
+| Block | VLANs | Example use |
+|------:|-------|-------------|
+| 2 | 200–299 | dev |
+| 3 | 300–399 | staging |
+| 4 | 400–499 | prod |
 
-| Zone | Trust state | Exposure | Auto-applied policy |
-|------|-------------|----------|---------------------|
-| `provisioning` | onboarding (pre-trust) | none | DHCP / iPXE / TFTP / DNS / ACME only |
-| `quarantine` | untrusted / failed | none | auth + remediation only; fully isolated |
-| **`trusted`** | enrolled + attested + compliant | **internal** | east-west per device profile; **no internet ingress** |
-| **`public`** | enrolled + attested | **internet-facing** | internet ingress; **isolated from `trusted`** (defense-in-depth) |
-| `storage` | attested | internal | storage protocols only; isolated, high-bandwidth |
-| `tenant` | attested | isolated | per-tenant isolation (one micro-zone per tenant) |
-| `management` | n/a (shared OOB) | OOB | IPMI/BMC/console; **never routes to any data zone** |
+The dev/staging/prod assignment is only an example; the reference speaks of "an environment block".
+The platform uses VLANs 200–4094. VLANs 1–199 are left to whatever site network sits beside the
+platform. Each block is self-contained: the platform never trunks a VLAN from one environment into
+another.
 
-`trusted` (internal, protected) and `public` (internet-facing) are the two primary operational
-zones — the classic trusted/DMZ split. Both hold *enrolled, attested* hosts; the difference is
-**exposure**. `quarantine` and `provisioning` are the lifecycle zones; `storage`/`tenant`/
-`management` are special-purpose.
+## Zones: the offsets inside a block
 
-### Assigning subnets to zones
+Every environment has the same zones, at the same offsets. The examples use block 4.
 
-```yaml
-networks:
-  - {name: corp,     subnet: 198.18.0.0/24, vlan: 200,  zone: trusted}
-  - {name: web,      subnet: 203.0.113.0/24,  vlan: 1000, zone: public}    # e.g. your public IP block
-  - {name: backups,  subnet: 172.16.203.0/24, vlan: 203,  zone: storage}
-  - {name: onboard,  subnet: 172.16.201.0/24, vlan: 201,  zone: provisioning}
-```
+| Offset | Zone | Example | Purpose |
+|:------:|------|--------:|---------|
+| x00 | `transit` | 400 | Gateway edge: upstream handoff and BGP peering |
+| x01 | `fabric` | 401 | VXLAN underlay: VTEPs and EVPN between gateways and hypervisors |
+| x02 | `management` | 402 | Out-of-band: BMC/IPMI and consoles |
+| x03 | `hypervisor` | 403 | Live migration between hypervisors |
+| x04 | `quarantine` | 404 | Non-compliant or failed nodes: authentication and remediation only |
+| x05 | `provisioning` | 405 | Onboarding: DHCP, PXE/iPXE, TFTP, DNS, ACME enrollment |
+| x06 | `control-plane` | 406 | Control-plane nodes: CA, ACME, IAM, KMS, DNS, Raft |
+| x07 | `storage` | 407 | Block and object storage traffic (for example NVMe/TCP) |
+| x08 | `backup` | 408 | Backup traffic to backup targets |
+| x09–x99 | reserved | 409–499 | Future zones; unused |
 
-Mark any subnet `public` or `trusted` (or any zone) and the platform wires up the matching policy.
-Multiple subnets may share a zone; a public IP block is simply a `zone: public` subnet — there is
-no special "edge" VLAN.
+`public`, tenant networks and every workload network are **overlays**, not zones on this list (see
+[Overlay networks](#overlay-networks)). The old tenant VLAN range (1000+) no longer exists.
 
-## Inter-zone policy matrix
+### Routing and inter-zone policy
 
-Default is **deny** between zones; the platform installs these allowances:
+The default between zones is **deny**. The gateway is the only router on the platform tier.
 
-| From ↓ \ To → | trusted | public | storage | provisioning | quarantine | tenant | mgmt |
-|---------------|:-------:|:------:|:-------:|:------------:|:----------:|:------:|:----:|
-| **trusted** | allow (per profile) | declared service paths only | allow | — | — | — | — |
-| **public** | **deny** | allow | — | — | — | — | — |
-| **storage** | allow (clients) | — | allow | — | — | — | — |
-| **provisioning** | — | — | — | — | — | — | CP services only (DHCP/DNS/ACME) |
-| **quarantine** | — | — | — | — | — | — | auth + remediation only |
-| **tenant** | — | — | per-tenant | — | — | isolated per tenant | — |
-| Internet | — | **ingress → public** | — | — | — | — | — |
+> **Proposal:** the Routed and Allowed columns below are derived from the design by the Software
+> Department. The owner has not ruled on them item by item; #708 confirms them when it implements the
+> policy.
 
-Key rules: `public → trusted` is **denied** (a compromised internet-facing host cannot reach
-internal workloads); `trusted → public` is allowed only on declared service paths; `quarantine` and
-`provisioning` reach only the control-plane services they need; `management` is OOB and never
-touches a data zone.
-
-## Integration across the platform
-
-The zone is a single policy primitive enforced uniformly at every layer:
-
-- **SDN (OVS/OpenFlow):** every OVS port is tagged with its subnet's zone. Flow rules are generated
-  from **per-zone templates** (see [Flow rules](#flow-rules)) plus the inter-zone matrix above.
-- **Compute (VMs):** a device profile declares `zone:`; the platform places the VM on a subnet in
-  that zone and applies the zone policy to its vNIC (OVS port). Re-homing a workload = re-tag + re-place.
-- **Containers:** container networks map to zones (CNI / network-policy selector) — the same
-  identity model as VMs.
-- **Identity (zero-trust tie-in):** the workload's **IDevID / ACME certificate encodes its zone**
-  (X.509 extension and/or SAN naming). Policy can then follow *cryptographic identity*, not just IP
-  — a workload proves "I am in `trusted`" and the SDN enforces accordingly.
-- **DNS naming (convention, not coupling):** a host in zone _Z_ is named `<host>.Z.<domain>` and the
-  control-plane authoritative DNS auto-creates the per-zone subdomain. DNS **reflects** zone
-  membership for readability and discovery, but is **never the security boundary** — enforcement
-  lives in the SDN/identity layer, so DNS spoofing cannot grant access. Names and policy stay
-  aligned but independent.
-- **Compliance:** each zone is a control boundary — NIST **SC-7** (boundary protection between
-  zones), **SC-4** (tenant isolation), **AC-4** (the inter-zone flow matrix). Audit and report per zone.
+| Zone | Routed? | Allowed |
+|------|---------|---------|
+| `transit` | By the gateway, as its upstream edge | Upstream and peering traffic, and gateway-to-gateway traffic in a pair. Nothing else attaches |
+| `fabric` | No (single L2 segment) | VXLAN between VTEPs, IPsec-protected (see [Compliance](#compliance)) |
+| `management` | Never by the platform. Only an external management firewall routes it | Admin networks and the admin VPN to BMCs. Never reaches another zone |
+| `hypervisor` | No | Live migration between hypervisors (TLS) |
+| `quarantine` | By the gateway | The control plane's authentication and remediation endpoints only |
+| `provisioning` | By the gateway | The control plane's enrollment services (DHCP, PXE/TFTP, DNS, ACME) only |
+| `control-plane` | By the gateway | Control-plane APIs to enrolled nodes and overlays on declared service paths. Admin access through the VPN |
+| `storage` | No | Storage protocols between storage clients and targets (TLS) |
+| `backup` | By the gateway, to declared backup targets only | Backup streams, encrypted at source |
 
 ## Addressing
 
-Platform subnets default to `172.16.0.0/16` with the mnemonic **VLAN _N_ → `172.16.N.0/24`** for the
-well-known defaults. Under the zone model the VLAN number is just a segment ID; the zone carries the
-meaning, so the defaults are a convenience, not a constraint.
+### IPv4
 
-| Default subnet | VLAN | Default zone |
-|----------------|-----:|--------------|
-| 198.18.0.0/24 | 200 | trusted |
-| 172.16.201.0/24 | 201 | provisioning |
-| 172.16.202.0/24 | 202 | quarantine |
-| 172.16.203.0/24 | 203 | storage |
-| 172.17.0.0/16+ | 1000+ | tenant |
-| (deployment public IP block) | — | public |
-| (deployment OOB net) | 50 | management |
-| 172.16.0.0/24 (/31s) | 10 | transit (gateway ↔ upstream/BGP) |
+VLAN _N_ maps to the subnet **`10.(N ÷ 100).(N mod 100).0/24`**. The `10.0.0.0/8` base is
+configurable.
 
-`management` and `transit` are shared/edge concerns, not data zones. Point-to-point links use
-`172.16.0.0/24` carved into /31s.
+Each environment owns the `/16` `10.E.0.0/16`, split in half:
 
-## Deployment topologies
+| Range | Use |
+|-------|-----|
+| `10.E.0.0/17` | **VLAN-mapped underlay.** VLAN _E·100+n_ is `10.E.n.0/24` |
+| `10.E.128.0/17` | **IPAM pool.** Overlay networks, loopbacks, and tunnel point-to-point links |
 
-Same zone model for all three. Node **roles**: Control Plane (platformd *server* mode:
-CA/ACME/IAM/KMS/DNS), Gateway (platformd *client* mode: DHCP/iPXE/DNS-forward/BGP/OVS/NAT, runs the
-zone flow rules), Compute Worker (platformd *client* mode: QEMU/KVM + Podman workloads).
+Within a zone subnet, the reference hosts are:
 
-| Topology | Nodes | Roles | Zones typically present |
-|----------|-------|-------|-------------------------|
-| **Single-Node** | 1 | CP + Gateway + Worker on one box | trusted, provisioning, quarantine on one OVS bridge |
-| **Three-Node** | 3 | 1 CP (standalone, PebbleDB) · 1 Gateway · 1 Compute Worker | + transit on the gateway; storage/public optional |
-| **HA Cluster** | 7+ | 3 CP (Raft quorum) · 2 Gateway · 2+ Compute Worker | + storage (resilient), public (if internet-facing), tenant (if multi-tenant) |
+- `.1`: the gateway (a VRRP address when there is a gateway pair)
+- `.2` and `.3`: the gateway nodes
+- `.10`–`.19`: control-plane nodes
+- `.50`–`.254`: DHCP, where a zone serves it
 
-A gateway's capabilities are **eleven independently enabled service sections** on
-`GatewayConfig` (`overlay`, `edge`, `transit`, `bgp`, `firewall`, `dhcp`, `pxe`,
-`load-balancer`, `nat`, `tunnels`, `proxy`) — e.g. `transit` advertises a `public`-zone
-subnet via BGP. They don't change the zone model. The older `GatewayMode` bitmask
-(Overlay `0x01` / Edge `0x02` / Transit `0x04`) is deprecated compatibility only; see
-[`docs/gateway/architecture.md`](../gateway/architecture.md) (#559).
+### IPv6
 
-## Storage
+Each deployment takes one **ULA `/48`** (RFC 4193, random global ID). The subnet ID is the VLAN
+digits, so VLAN 406 in `fd12:3456:789a::/48` is `fd12:3456:789a:406::/64`. Public IPv6 comes from
+the operator's own allocation, for example a provider-independent `/36`. It lives on overlays and is
+announced by the gateways.
 
-Two distinct things both called "storage":
+### VNIs
 
-1. **Control-plane state** (CA/IAM/KMS/DNS): handled by the topology, not the network — local
-   PebbleDB on the CP for Single/Three-Node; **Raft-backed QuicBaaS** across 3 CPs for HA. Not a zone.
-2. **Workload/bulk storage** (VM disks, datasets, backups): served over the **`storage` zone**.
+An overlay network's VNI is **`E·100000 + n`**. Environment 4 uses VNIs 400001–499999, so the VNI
+also names the environment it belongs to.
 
-The workload-storage **provider is a configurable role**:
+### Worked example: environment 4
 
-| | Default | Options |
-|--|---------|---------|
-| Single-Node | Local disk (no storage network) | — |
-| Three-Node | Compute Worker uses **local** storage | a `storage`-zone subnet backed by a NAS/SAN **or** a storage VM — physical or virtual |
-| HA Cluster | Resilient `storage` zone | **dedicated** storage nodes **or** hyperconverged (replicated across workers) |
+| VLAN | Zone | IPv4 | IPv6 |
+|-----:|------|------|------|
+| 400 | transit | 10.4.0.0/24 | fd12:3456:789a:400::/64 |
+| 401 | fabric | 10.4.1.0/24 | fd12:3456:789a:401::/64 |
+| 402 | management | 10.4.2.0/24 | fd12:3456:789a:402::/64 |
+| 403 | hypervisor | 10.4.3.0/24 | fd12:3456:789a:403::/64 |
+| 404 | quarantine | 10.4.4.0/24 | fd12:3456:789a:404::/64 |
+| 405 | provisioning | 192.0.2.0/24 | fd12:3456:789a:405::/64 |
+| 406 | control-plane | 10.4.6.0/24 | fd12:3456:789a:406::/64 |
+| 407 | storage | 10.4.7.0/24 | fd12:3456:789a:407::/64 |
+| 408 | backup | 10.4.8.0/24 | fd12:3456:789a:408::/64 |
+| — | IPAM pool | 10.4.128.0/17 | from the same /48 |
+| — | public (overlay) | 203.0.113.0/24 | 2001:db8::/36 |
 
-Co-located or dedicated, physical or virtual — bound in deployment config. Give the `storage` zone a
-**dedicated 10GbE+ NIC** (VLANs isolate security, not bandwidth). Keep storage backends for
-different trust zones on **separate disks/pools** — a shared datastore is a cross-zone data path
-even with the network isolated.
+(`203.0.113.0/24` and `2001:db8::/36` are documentation ranges. Use your own public allocation.)
 
-## Management access
+## Overlay networks
 
-Two planes, neither implicitly bridging zones:
+Every network the SDN creates is an **EVPN/VXLAN overlay**. That includes the `public` network,
+tenant networks and workload networks.
 
-1. **Out-of-band hardware (`management` zone, shared):** IPMI/BMC/console on a separate NIC; never
-   routes to a data zone.
-2. **Platform control plane → WireGuard admin VPN on the gateway.** Admins reach control/management
-   endpoints through an authenticated WireGuard tunnel into a small admin subnet that gateway policy
-   restricts to management endpoints only. Operator workstations are **never dual-homed** onto a
-   data zone — they authenticate in through the one enforced, logged chokepoint. Gateways SHOULD
-   expose this endpoint by default.
+- **Transport.** VTEPs sit on the gateways and hypervisors, on the environment's `fabric` VLAN.
+  EVPN runs over BGP between them.
+- **Admission.** A VTEP joins only after it has attested with a valid IDevID. That identity is what
+  makes an overlay trusted, so there is no separate trusted segment.
+- **Addressing.** An overlay's IPv4 comes from the environment's IPAM pool, or from a public block
+  for `public`. Its IPv6 comes from the deployment's ULA `/48` or the public allocation.
+- **First hop.** The gateways provide the first-hop address as an EVPN distributed anycast gateway
+  (RFC 9135), so every gateway answers locally.
+- **Isolation.** Overlays are isolated from each other. Traffic between them, and between an overlay
+  and a zone, passes the gateway's policy.
+- **Public exposure.** A public block is an overlay the gateway announces over BGP. Lighting it needs
+  the overlay service (#709) and gateway HA (#596, #710).
+
+## Switch port model
+
+Each port class carries its own allowed VLAN list. **No port is trunked the whole block.** Every
+platform port uses **MTU 9216**, so VXLAN encapsulation never fragments.
+
+| Port class | Mode | Allowed VLANs | Notes |
+|------------|------|---------------|-------|
+| Gateway | 802.1Q trunk (LACP/vPC when bonded) | x00, x01, and the zones the gateway routes: x04, x05, x06, x08 | The only class that carries `transit` |
+| Hypervisor (compute and control-plane nodes) | 802.1Q trunk | x01, x03–x08; **native = x05 `provisioning`** | The native VLAN lets a factory NIC PXE-boot into `provisioning` |
+| BMC | access | x02 | The only class that carries `management` |
+| Management firewall uplink | 802.1Q trunk | x02 | The one platform VLAN an external firewall sees |
+| Inter-switch (vPC/MLAG peer-link) | 802.1Q trunk | the block's underlay VLANs | |
+
+> **Proposal:** the gateway VLAN list, the firewall uplink row and the inter-switch row are derived
+> from the design, not stated by it. Confirm them with #708.
+
+On a hypervisor, OVS takes the whole trunk. The host holds an address only on the zones it uses
+itself: its VTEP on `fabric`, migration on `hypervisor`, and a storage client on `storage`. It has
+**no IP on the VLANs it passes through** to guests. An enrolled node's port lifecycle is driven by
+the platform: `provisioning` at enrollment, the node's zones once attested, `quarantine` on
+violation, and the port administratively down when blocked. An operator changing it by hand
+bypasses the enrollment state machine.
 
 ## Device lifecycle
 
 ```
-   Device connects (untagged) ─► VLAN 1 DEFAULT (logged, unknown)
-        │ classified
+Device connects ──► provisioning (x05, native VLAN): DHCP / PXE / DNS / ACME
+        │           OS installed, IDevID issued
         ▼
-   provisioning zone ── DHCP/PXE/DNS/ACME ──► (OS installed, IDevID issued, zone stamped in cert)
+Attested ──► admitted to the fabric and its overlays; the port carries its zones
         │
-        ▼
-   assigned to its zone per device profile        ┌─ minor violation → remediated ─┐
-   - trusted / public / storage / tenant          └──────────────┬─────────────────┘
-        │ severe violation     compliance failure                ▲
-        ▼                          ▼                              │
-   Port DOWN (BLOCKED)        quarantine zone ────────────────────┘
-   zero access                auth + remediation only
+        ├── compliance failure ──► quarantine (x04): auth + remediation only ──► re-attest
+        └── severe violation ────► port DOWN: zero access, audited
 ```
 
-**Blocked devices** are not put in a "blocked zone" — the OVS port is administratively disabled
-(`SetPortState(..., PortStateDown)`): zero access (not even ARP), no lateral movement, clear audit.
+A blocked device is not placed in a "blocked zone". Its OVS port is administratively disabled
+(`SetPortState(..., PortStateDown)`), so it gets no access at all, not even ARP.
 
-## Flow rules (OVS / OpenFlow) — per-zone templates
+### Flow templates (OVS/OpenFlow)
 
-Rules are generated per zone from templates; `<zone-vlan>` is the segment carrying that zone.
+The lifecycle zones are enforced per port from templates. `<vlan>` is the environment's zone VLAN.
 
-### quarantine — auth/remediation only
 ```bash
-ovs-ofctl add-flow br0 "priority=900,in_port=<port>,dl_vlan=<quarantine>,dl_type=0x0806,actions=normal"               # ARP
-ovs-ofctl add-flow br0 "priority=850,in_port=<port>,dl_vlan=<quarantine>,udp,tp_src=68,tp_dst=67,actions=normal"      # DHCP
+# quarantine: authentication and remediation only
+ovs-ofctl add-flow br0 "priority=900,in_port=<port>,dl_vlan=<quarantine>,dl_type=0x0806,actions=normal"
+ovs-ofctl add-flow br0 "priority=850,in_port=<port>,dl_vlan=<quarantine>,udp,tp_src=68,tp_dst=67,actions=normal"
 ovs-ofctl add-flow br0 "priority=800,in_port=<port>,dl_vlan=<quarantine>,udp,nw_dst=<dns_ip>,tp_dst=53,actions=normal"
 ovs-ofctl add-flow br0 "priority=700,in_port=<port>,dl_vlan=<quarantine>,tcp,nw_dst=<remediation_ip>,tp_dst=443,actions=normal"
-ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=<quarantine>,actions=drop"                                # default deny
+ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=<quarantine>,actions=drop"
+
+# provisioning: DHCP, DNS, TFTP, ACME
+ovs-ofctl add-flow br0 "priority=900,in_port=<port>,dl_vlan=<provisioning>,dl_type=0x0806,actions=normal"
+ovs-ofctl add-flow br0 "priority=850,in_port=<port>,dl_vlan=<provisioning>,udp,tp_src=68,tp_dst=67,actions=normal"
+ovs-ofctl add-flow br0 "priority=800,in_port=<port>,dl_vlan=<provisioning>,udp,tp_dst=53,actions=normal"
+ovs-ofctl add-flow br0 "priority=750,in_port=<port>,dl_vlan=<provisioning>,udp,tp_dst=69,actions=normal"
+ovs-ofctl add-flow br0 "priority=700,in_port=<port>,dl_vlan=<provisioning>,tcp,nw_dst=<acme_ip>,tp_dst=443,actions=normal"
+ovs-ofctl add-flow br0 "priority=50,in_port=<port>,dl_vlan=<provisioning>,actions=drop"
 ```
 
-### provisioning — PXE + enrollment
-```bash
-ovs-ofctl add-flow br0 "priority=900,in_port=<port>,dl_vlan=<provisioning>,dl_type=0x0806,actions=normal"             # ARP
-ovs-ofctl add-flow br0 "priority=850,in_port=<port>,dl_vlan=<provisioning>,udp,tp_src=68,tp_dst=67,actions=normal"    # DHCP
-ovs-ofctl add-flow br0 "priority=800,in_port=<port>,dl_vlan=<provisioning>,udp,tp_dst=53,actions=normal"              # DNS
-ovs-ofctl add-flow br0 "priority=750,in_port=<port>,dl_vlan=<provisioning>,udp,tp_dst=69,actions=normal"              # TFTP
-ovs-ofctl add-flow br0 "priority=700,in_port=<port>,dl_vlan=<provisioning>,tcp,nw_dst=<acme_ip>,tp_dst=443,actions=normal"  # ACME
-ovs-ofctl add-flow br0 "priority=50,in_port=<port>,dl_vlan=<provisioning>,actions=drop"                               # default deny
-```
+## Management access
 
-### trusted / public (inter-zone matrix)
-```bash
-ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=<trusted>,actions=normal"                                 # trusted east-west per profile
-# public is isolated from trusted (defense-in-depth): only declared trusted→public service paths
-ovs-ofctl add-flow br0 "priority=200,dl_vlan=<public>,ip,nw_dst=<trusted_subnet>,actions=drop"                        # public ↛ trusted
-ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=<public>,actions=normal"                                  # public ingress/egress
-```
+- **Hardware out-of-band.** BMCs sit on the environment's `management` VLAN, on access ports. The
+  platform never routes that VLAN. Only an external management firewall routes it, and only from
+  admin networks and the admin VPN.
+- **Admin VPN.** Administrators reach the control plane through an authenticated VPN on the
+  gateway, into an admin network that policy limits to management endpoints. Workstations are never
+  dual-homed onto a platform zone. The VPN uses **IPsec in FIPS builds**; WireGuard is available
+  **only in non-FIPS builds**.
 
-## Physical interface recommendations
+## Compliance
 
-| Interface | Zones | Purpose |
-|-----------|-------|---------|
-| NIC 0 (1+GbE) | `management` only | Out-of-band (separate network) |
-| NIC 1 (10+GbE) | trusted / public / provisioning / quarantine (trunk) | Data zones |
-| NIC 2–3 (10+GbE) | `storage` only | Storage (bonded, dedicated high bandwidth) |
+This section targets deployments that must meet FedRAMP, PCI DSS or HIPAA.
 
-## Switch port model
+| Control | How the reference meets it |
+|---------|----------------------------|
+| Encryption in transit on the overlay | **IPsec on the OVS VXLAN tunnels**, keyed from the IDevID-derived certificates, using FIPS-validated cryptography |
+| Encryption in transit on the underlay | Per protocol: libvirt live migration over TLS (`hypervisor`), NVMe/TCP with TLS (`storage`), QUIC for control-plane traffic (`control-plane`), and backups encrypted at source (`backup`) |
+| Administrative access | IPsec admin VPN in FIPS builds. BMCs reachable only through the management firewall |
+| Boundary protection (NIST SC-7, AC-4) | Default-deny between zones and overlays. The gateway is the only router |
+| Separation of the platform from other networks | **Compliant deployments use dedicated platform switches.** A switch shared with another network puts that network in audit scope |
 
-The upstream switch ports mirror the node roles. This is the contract the
-platform's switch management (`fabric.switches` / `port_assignments`,
-post-enrollment VLAN moves) programs and assumes:
+## Deployment topologies
 
-| Port class | Mode | VLANs | Rationale |
-|------------|------|-------|-----------|
-| Gateway data port | 802.1Q trunk (LACP/vPC when bonded) | all platform zone VLANs (default 200–203) | The gateway serves DHCP/PXE on `provisioning`, routes/filters every zone, and runs the OVS flow templates — it must see all zone tags. |
-| Control-plane data port | 802.1Q trunk (LACP/vPC when bonded) | all platform zone VLANs | The CP participates in `trusted` and reaches `provisioning`/`quarantine` for enrollment and remediation services. |
-| Compute/worker data port | **access** | one VLAN, driven by the device lifecycle | Untagged access is what lets a factory NIC's PXE ROM (which cannot tag) boot into `provisioning`. The platform then flips the access VLAN through the lifecycle: `provisioning` (201) at enrollment → assigned zone (`trusted` 200 by default) → `quarantine` (202) on violation → port administratively down when blocked. |
-| Storage port | access on the `storage` VLAN (203); trunk only for hyperconverged workers | storage | Dedicated bandwidth; no cross-zone tags. |
-| Inter-switch peer-link / platform uplink | trunk | all platform zone VLANs | vPC/MLAG peers and the link toward the platform's L3 gateway. |
+Node roles:
 
-Rules that keep the tiers honest:
+- **Control plane:** platformd in server mode, running CA, ACME, IAM, KMS and DNS.
+- **Gateway:** gatewayd, handling routing, NAT, BGP, firewall and overlay.
+- **Compute:** platformd in client mode, running QEMU/KVM and Podman.
 
-- Platform zone VLANs are trunked **only** to platform node ports, the
-  inter-switch peer-link, and the platform's L3 gateway (the platform
-  gateway node, or an interim site router before gatewayd cutover). They
-  are never extended to site firewalls, campus access switches, or any
-  non-platform host — address-range separation plus VLAN scoping is the
-  tier boundary.
-- The `management` VLAN is the only deliberately shared plane (BMC/OOB),
-  and it never routes to a data zone.
-- A compute port's access VLAN is owned by the platform lifecycle — an
-  operator changing it by hand bypasses the enrollment state machine.
+All three topologies use the same zones.
+
+| Topology | Nodes | Zones in use | Ports |
+|----------|-------|--------------|-------|
+| **Standalone** | 1 box: control plane, gateway and compute | All zones on one OVS bridge. `fabric`/`hypervisor` are local, and the overlay needs no second VTEP | One trunk (or none, for an isolated lab) |
+| **Dedicated** | 1 control plane, 1 gateway, N compute | All zones. `transit` on the gateway only | Gateway trunk, hypervisor trunks for the control plane and compute, BMC access ports |
+| **HA** | 3 control plane (Raft), 2 gateways, N compute | All zones. Gateway pair: VRRP on the zone VLANs, anycast on overlays | As dedicated, on a vPC/MLAG switch pair |
+
+For hardware, bootstrap and checklists per topology, see
+[Deployment Reference](deployment-reference.md).
 
 ## Configuration
 
-```yaml
-# /etc/trusted-platform/config.yaml
-sdn:
-  enabled: true
-  bridge_name: "br0"
-
-  # Zones carry policy; subnets are assigned to a zone.
-  zones:                 # built-in zones (extend as needed)
-    - {name: trusted,      internet_ingress: false}
-    - {name: public,       internet_ingress: true,  isolate_from: [trusted]}
-    - {name: provisioning, services: [dhcp, tftp, dns, acme]}
-    - {name: quarantine,   services: [auth, remediation]}
-    - {name: storage,      isolate: true}
-    - {name: tenant,       isolate_per_tenant: true}
-    - {name: management,   oob: true, route_to_data: false}
-
-  networks:              # subnet -> zone (defaults shown)
-    - {name: trusted-default,      subnet: "198.18.0.0/24", vlan: 200,  zone: trusted}
-    - {name: provisioning-default, subnet: "172.16.201.0/24", vlan: 201,  zone: provisioning}
-    - {name: quarantine-default,   subnet: "172.16.202.0/24", vlan: 202,  zone: quarantine}
-    - {name: storage-default,      subnet: "172.16.203.0/24", vlan: 203,  zone: storage}
-    # public/tenant subnets are deployment-specific:
-    # - {name: web, subnet: "203.0.113.0/24", vlan: 1000, zone: public}
-
-  dns:
-    zone_subdomains: true            # <host>.<zone>.<domain>; reflects (does not enforce) zones
-  identity:
-    encode_zone_in_cert: true        # IDevID/ACME cert carries the zone (policy follows identity)
-
-  transit: {vlan: 10, p2p: "172.16.0.0/24"}
-  management_vpn: {enabled: true, type: wireguard, allow_to: [management]}
-
-  services:
-    provisioning: {acme_server: "172.16.201.10", dns_server: "172.16.201.1", dhcp_range: "172.16.201.100-172.16.201.200"}
-    quarantine:   {remediation_server: "172.16.202.10", dns_server: "172.16.202.1"}
-```
-
-### Default constants
-
-```go
-// pkg/sdn/zone/defaults.go
-type Zone string
-const (
-    ZoneTrusted      Zone = "trusted"       // internal, attested (was "production")
-    ZonePublic       Zone = "public"        // internet-facing, isolated from trusted
-    ZoneProvisioning Zone = "provisioning"
-    ZoneQuarantine   Zone = "quarantine"
-    ZoneStorage      Zone = "storage"
-    ZoneTenant       Zone = "tenant"
-    ZoneManagement   Zone = "management"    // shared OOB, separate NIC
-)
-
-// pkg/sdn/vlan/defaults.go — default segment IDs for the well-known zone subnets
-const (
-    DefaultTrustedVLAN      = uint16(200)
-    DefaultProvisioningVLAN = uint16(201)
-    DefaultQuarantineVLAN   = uint16(202)
-    DefaultStorageVLAN      = uint16(203)
-    DefaultCloudTenantBaseVLAN = uint16(1000)
-    DefaultTransitVLAN      = uint16(10)
-    DefaultManagementVLAN   = uint16(50)
-    DefaultVLAN = uint16(1)                 // IEEE 802.1Q default catch-all
-    MinVLANID, MaxVLANID = uint16(1), uint16(4094)
-)
-```
-
-Configuration precedence (highest first): **device profile → environment variables → platform
-config YAML → default constants**.
-
-## Future considerations
-
-- **IPv6:** ULA `fd00::/8` internal, GUA for `public`, dual-stack flow rules, RA/DHCPv6 in `provisioning`.
-- **Tenant scaling beyond ~3,000 VLANs:** VXLAN overlay (24-bit VNI), per-tenant routing domains.
-- **External SDN controllers:** ONOS / OpenDaylight / NSX / Kubernetes network policies — zones map
-  to their policy/identity primitives.
+The configuration schema for environments, the address base and port classes is defined in #708.
+Until it lands, [SDN configuration](../sdn/configuration.md) documents what the code accepts today.
+Today's code uses zone `trusted` and fixed VLAN defaults.
 
 ## Related documentation
 
-- [Deployment Reference](deployment-reference.md) — topologies, node roles, bootstrap
-- [Platform Modes](platform-modes.md) — Local / P2P / Hosted control-plane modes
-- [Security Model](security-model.md) — trust boundaries and threat model
-- [SDN Gateway](../sdn/gateway/README.md) — gateway modes and implementation
+- [Deployment Reference](deployment-reference.md): topologies, node roles, bootstrap
+- [Gateway](../gateway/architecture.md): gateway services, HA, overlay status
+- [Security Model](security-model.md): trust boundaries and threat model
+- [SDN](../sdn/README.md): bridges, ports, flows, port authentication
+

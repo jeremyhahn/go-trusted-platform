@@ -26,6 +26,11 @@ A tenant is four things at once: a **VLAN**, a **bridge**, a **keyspace** and a
 **DEK**, plus a quota. That is the whole model, and each of the four has its own
 sub-package or file.
 
+The VLAN part is today's code. The
+[reference network](../architecture/reference-network.md) (owner design
+decision, 2026-09-26) replaces per-tenant VLANs with EVPN/VXLAN overlay
+networks addressed from the IPAM pool; the code change is tracked in #708.
+
 ## 2. The lifecycle
 
 `State` is a `string` type (`pkg/tenant/state.go:21`) with five values:

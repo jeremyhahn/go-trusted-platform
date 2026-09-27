@@ -9,7 +9,7 @@ The system operates on two interconnected pillars:
 1. **Reputation System**: A meritocratic model where nodes start with zero reputation and earn privileges through demonstrated value and reliability
 2. **Collaborative Defense**: Byzantine fault-tolerant peer monitoring with TPM-attested evidence, PBFT-style quorum judgment, and automated penalty enforcement
 
-**Source**: `/mnt/vm-host-1/go-trusted-platform/pkg/defense/`
+**Source**: `pkg/defense/`
 
 ---
 
@@ -1932,7 +1932,7 @@ for _, alert := range alerts {
 }
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/defense/monitor.go`
+**Implementation**: `pkg/defense/monitor.go`
 
 ## TPM-Attested Evidence
 
@@ -2142,7 +2142,7 @@ corroboration := defense.Corroboration{
 evidence.Corroborations = append(evidence.Corroborations, corroboration)
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/defense/evidence.go`
+**Implementation**: `pkg/defense/evidence.go`
 
 ## Accusation Protocol
 
@@ -2170,7 +2170,7 @@ err := judge.SubmitAccusation(ctx, evidence)
 // Major+ violations require committee judgment
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/defense/judgment.go`
+**Implementation**: `pkg/defense/judgment.go`
 
 ## PBFT-Style Quorum Judgment
 
@@ -2635,7 +2635,7 @@ type Verdict struct {
 }
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/defense/judgment.go`
+**Implementation**: `pkg/defense/judgment.go`
 
 ## Judge Selection Fallback (FINAL DESIGN)
 
@@ -3389,7 +3389,7 @@ if exists {
 }
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/defense/judgment.go`
+**Implementation**: `pkg/defense/judgment.go`
 
 ## Reporter Rewards
 
@@ -3432,7 +3432,7 @@ This creates strong incentives for:
 3. **Early reporting** - First corroborators earn more
 4. **Network health** - Reduces malicious behavior
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/defense/rewards.go`
+**Implementation**: `pkg/defense/rewards.go`
 
 ---
 

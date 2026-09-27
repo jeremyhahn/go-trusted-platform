@@ -665,7 +665,7 @@ lock-bits: 0xFC  # Mode 3 (production)
 
 **Remote Development Host**:
 ```
-sftp://jhahn@198.51.100.51/home/jhahn/sources/go-trusted-platform/
+sftp://user@192.0.2.51/path/to/go-trusted-platform/
 ├── configs/
 │   └── firmware/              # PROPOSED - not yet created
 │       ├── arduino-uno-001.yaml

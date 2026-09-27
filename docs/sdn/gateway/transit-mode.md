@@ -6,18 +6,18 @@ Transit mode enables gateway nodes to announce platform-owned IP prefixes to the
 
 ## IP Block Announcements
 
-### IPv6 Allocation: 2602:F5BB::/36
+### IPv6 Allocation: 2001:db8::/36
 
 | Block | CIDR | Purpose | Announcement Level |
 |-------|------|---------|-------------------|
-| Full Aggregate | 2602:F5BB::/36 | Platform aggregate | Backbone speakers only |
-| Regional | 2602:F5BB:XXXX::/48 | Regional prefix | Datacenter speakers |
-| Subnet | 2602:F5BB:XXXX:YYYY::/64 | Host subnets | Internal only (not announced) |
+| Full Aggregate | 2001:db8::/36 | Platform aggregate | Backbone speakers only |
+| Regional | 2001:db8:XXXX::/48 | Regional prefix | Datacenter speakers |
+| Subnet | 2001:db8:XXXX:YYYY::/64 | Host subnets | Internal only (not announced) |
 
 ### IPv6 Hierarchy
 
 ```
-2602:F5BB::/36 (Platform Aggregate - 4.7 quintillion addresses)
+2001:db8::/36 (Platform Aggregate - 4.7 quintillion addresses)
 |
 +-- 2602:F5BB:0000::/40 (Region 0 - North America East)
 |   +-- 2602:F5BB:0000::/48 (Datacenter 1)
@@ -33,11 +33,11 @@ Transit mode enables gateway nodes to announce platform-owned IP prefixes to the
 +-- ... (up to 16 regions with /40 aggregates)
 ```
 
-### IPv4 Allocation: 23.143.36.0/24
+### IPv4 Allocation: 203.0.113.0/24
 
 | Block | CIDR | Purpose | Notes |
 |-------|------|---------|-------|
-| Platform | 23.143.36.0/24 | Legacy IPv4 connectivity | 254 usable addresses |
+| Platform | 203.0.113.0/24 | Legacy IPv4 connectivity | 254 usable addresses |
 
 IPv4 is used sparingly for:
 - Gateway nodes requiring IPv4 reachability
@@ -56,8 +56,8 @@ IPv4 is used sparingly for:
 |  Level 1: Backbone Speakers (Global)                              |
 |  +--------------------------------------------------------------+ |
 |  | Announce to ISPs:                                            | |
-|  |   - 2602:F5BB::/36 (aggregate)                               | |
-|  |   - 23.143.36.0/24 (IPv4)                                    | |
+|  |   - 2001:db8::/36 (aggregate)                                | |
+|  |   - 203.0.113.0/24 (IPv4)                                    | |
 |  |                                                               | |
 |  | Requirements:                                                 | |
 |  |   - Reputation >= 0.95 (Coordinator tier)                    | |
@@ -72,7 +72,7 @@ IPv4 is used sparingly for:
 |  Level 2: Datacenter Speakers (Regional)                          |
 |  +--------------------------------------------------------------+ |
 |  | Announce to Backbone (iBGP):                                 | |
-|  |   - 2602:F5BB:XXXX::/48 (Regional)                          | |
+|  |   - 2001:db8:XXXX::/48 (Regional)                           | |
 |  |                                                               | |
 |  | Requirements:                                                 | |
 |  |   - Reputation >= 0.85 (Gateway tier)                        | |
@@ -86,7 +86,7 @@ IPv4 is used sparingly for:
 |  Level 3: Internal Routing (Subnets)                              |
 |  +--------------------------------------------------------------+ |
 |  | Internal FIB only:                                           | |
-|  |   - 2602:F5BB:XXXX:YYYY::/64 (Subnets)                      | |
+|  |   - 2001:db8:XXXX:YYYY::/64 (Subnets)                       | |
 |  |                                                               | |
 |  | Not announced externally                                      | |
 |  +--------------------------------------------------------------+ |
@@ -165,7 +165,7 @@ Resource Public Key Infrastructure (RPKI) validates that route announcements ori
 |                                                                   |
 |  1. Create ROA (Route Origin Authorization)                       |
 |     +----------------------------------------------------------+ |
-|     | Prefix: 2602:F5BB::/36                                   | |
+|     | Prefix: 2001:db8::/36                                    | |
 |     | Max Length: /48                                           | |
 |     | Origin ASN: 65001 (platform ASN)                         | |
 |     | Signed by: ARIN (Regional Internet Registry)             | |
@@ -180,7 +180,7 @@ Resource Public Key Infrastructure (RPKI) validates that route announcements ori
 |                              v                                    |
 |  3. BGP Speaker Validates Received Routes                         |
 |     +----------------------------------------------------------+ |
-|     | Route: 2602:F5BB::/36 from AS 65001                      | |
+|     | Route: 2001:db8::/36 from AS 65001                       | |
 |     |                                                          | |
 |     | Lookup ROA:                                              | |
 |     |   - Prefix matches: Yes                                  | |

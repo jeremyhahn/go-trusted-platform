@@ -39,7 +39,7 @@ wire surface is the IPAM subset of `platform.v1.GatewayService`.
 ## CLI Reference
 
 ```bash
-platformctl sdn ipam pool list [--zone trusted]
+platformctl sdn ipam pool list [--zone storage]
 platformctl sdn ipam pool get --id pool1
 platformctl sdn ipam pool create --name prod-v4 --cidr 10.0.0.0/24 --gateway 10.0.0.1
 platformctl sdn ipam pool update --id pool1 --description "production"

@@ -893,7 +893,7 @@ vs. Manual implementation:
   - Run QEMU with `-sandbox on` for seccomp filtering
   - Use KVM for hardware-assisted isolation
   - Limit VM capabilities: No privileged containers without approval
-  - Separate network VLANs: Quarantine (VLAN 10) → Production (VLAN 100) after attestation
+  - Separate networks: quarantine (VLAN x04) → control-plane or overlay networks after attestation, per the [reference network](../architecture/reference-network.md)
 
 **5. TPM Security:**
 - **Threat**: TPM key extraction, replay attacks

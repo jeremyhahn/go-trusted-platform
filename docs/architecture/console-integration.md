@@ -75,16 +75,16 @@ Fans out console I/O to multiple consumers:
 
 ```bash
 # Attach to server console via IPMI SOL
-platformctl console attach --bmc 198.18.1.103
+platformctl console attach --bmc 10.4.2.103
 
 # Watch console output (read-only)
-platformctl console watch --bmc 198.18.1.103
+platformctl console watch --bmc 10.4.2.103
 
 # View captured console log
-platformctl console log --bmc 198.18.1.103
+platformctl console log --bmc 10.4.2.103
 
 # Monitor bootstrap progress
-platformctl bootstrap monitor --bmc 198.18.1.103
+platformctl bootstrap monitor --bmc 10.4.2.103
 ```
 
 ## Bootstrap Integration

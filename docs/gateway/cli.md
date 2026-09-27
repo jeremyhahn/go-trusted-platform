@@ -73,7 +73,7 @@ section means the service is not running, not that it runs with no tunnels.
 ```bash
 platformctl sdn gateway status --output json
 platformctl sdn gateway snapshot
-platformctl sdn gateway snapshot --gateway-id lab-node-1-gateway
+platformctl sdn gateway snapshot --gateway-id gw-01-gateway
 platformctl sdn gateway snapshot --all --output json
 platformctl sdn gateway bgp peers
 platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 198.51.100.1
@@ -101,7 +101,9 @@ Pools first, then allocations from them.
 a pool's range under live allocations would orphan them. A pool with the wrong
 CIDR is replaced, not edited.
 
-`--zone` names a trust/exposure zone such as `trusted` or `provisioning`. It
+`--zone` names a trust/exposure zone such as `trusted` or `provisioning` (the
+reference design has no `trusted` zone; the code's zone vocabulary moves with
+#708, see [`../architecture/reference-network.md`](../architecture/reference-network.md)). It
 must be a zone that exists — the SDN configuration rejects a pool declared in an
 undeclared zone (`ErrPoolZoneUndeclared`).
 

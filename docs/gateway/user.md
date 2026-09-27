@@ -59,8 +59,10 @@ Configure a gateway by its service sections.
    down.
 3. **Zones defined** ([`docs/sdn/`](../sdn/)). IPAM pools and proxy routes are
    both checked against them.
-4. **The management VPN, ideally.** WireGuard, and gateways should expose it by
-   default, so administrators reach management endpoints through an
+4. **The management VPN, ideally.** IPsec in FIPS builds, WireGuard only in
+   non-FIPS builds (owner design decision 2026-09-26; today the config defines
+   only `wireguard` and the section is refused, #558), and gateways should
+   expose it by default, so administrators reach management endpoints through an
    authenticated tunnel instead of putting an operator workstation on a data
    zone.
 
@@ -84,9 +86,9 @@ sdn:
     socket: /var/run/openvswitch/db.sock
     bridge: trusted0
   networks:
-    - name: trusted-net
-      vlan: 200
-      zone: trusted
+    - name: control-plane
+      vlan: 406
+      zone: trusted       # see the zone note below
 
 # Periodic telemetry to the control plane over mTLS. The client
 # certificate is the gateway's IDevID-derived platform identity.
@@ -98,32 +100,38 @@ control-plane:
   key-file: /etc/gatewayd/idevid-key.pem
 ```
 
+Addresses and VLANs in these examples follow
+[`../architecture/reference-network.md`](../architecture/reference-network.md)
+(environment block 4). `zone: trusted` is what the code accepts today; the
+reference design has no `trusted` zone, and the code's zone vocabulary moves
+with #708.
+
 NAT may translate to one address (`external-ip`) or, for a gateway with more
 than one ISP uplink, to one pool per uplink (#586):
 
 ```yaml
 nat:
   enabled: true
-  internal-cidr: 198.18.0.0/24
+  internal-cidr: 10.4.6.0/24
   port-range-start: 1024
   port-range-end: 65535
   uplinks:
-    - name: att
+    - name: ispa
       port: eth6                       # OVS port; defaults to name
-      addresses: ["99.12.246.36"]       # single addresses or a-b ranges
+      addresses: ["198.51.100.4"]       # single addresses or a-b ranges
       default: true                     # carries every unclaimed destination
-    - name: comcast
+    - name: ispb
       port: eth7
-      addresses: ["96.65.171.20-96.65.171.21"]
+      addresses: ["192.0.2.4-192.0.2.5"]
       port-range-start: 2048            # overrides the NAT-wide range
       port-range-end: 60000
-      destinations: ["203.0.113.0/24"]  # leaves through Comcast
+      destinations: ["192.0.2.128/25"] # leaves through ISP B
   static:
-    - internal: 198.18.0.10
-      external: 23.143.36.4             # on the default uplink
-    - internal: 198.18.0.11
-      external: 96.65.171.22
-      uplink: comcast
+    - internal: 10.4.6.10
+      external: 203.0.113.4             # on the default uplink
+    - internal: 10.4.6.11
+      external: 192.0.2.6
+      uplink: ispb
 ```
 
 `static` entries are 1:1 in both directions and hairpin: an internal client
@@ -150,7 +158,7 @@ An enabled section reports **active** only while its backend is running:
 `dhcp`, `pxe` or `management-vpn` stops the daemon at startup with
 `gateway service "<name>" is enabled but cannot run: <reason>` — those sections
 have no implementation behind them yet and the gateway refuses to claim
-otherwise. When `proxy` is enabled, the host packet filter (`hostfw`) admits
+otherwise. (`overlay` is required by owner design decision 2026-09-26, #709.) When `proxy` is enabled, the host packet filter (`hostfw`) admits
 exactly the proxy's fixed listener ports and nothing else the daemon opens.
 
 **`gateway-id` must be the certificate's Common Name.** The control plane
@@ -162,7 +170,7 @@ same way. gatewayd checks this at startup and refuses to start on a
 mismatch:
 
 ```
-gatewayd: control-plane gateway-id "lab-node-1" does not match the client
+gatewayd: control-plane gateway-id "gw-01" does not match the client
 certificate Common Name "gw-edge-1" in /etc/gatewayd/idevid.pem; the
 control plane binds reported telemetry to the certificate identity
 ```
@@ -186,12 +194,12 @@ hostfw:
     - interface: eth0            # management leg
       protocol: tcp
       port: 22
-      sources: [198.51.100.0/24, fd00:101::/64]
-      comment: sshd from the office
+      sources: [10.4.2.0/24, fd12:3456:789a:402::/64]
+      comment: sshd from the management network
   peers:
     - interface: wan0
       protocol: gre              # or esp
-      addresses: [45.63.110.165, 66.42.90.190]
+      addresses: [198.51.100.100, 192.0.2.100]
   tunnels: [gre1, gre3]          # BGP and BFD are accepted here
   base-ruleset-path: /etc/nftables.d/tp-host.nft
 ```
@@ -205,8 +213,11 @@ printed in the ruleset so it is not forgotten.
 
 ## First-hop redundancy
 
-When two gateways serve one segment, hosts keep a single default gateway and
-the pair holds it with VRRPv3. Configure the same group on both nodes with
+When two gateways serve one plain L2 segment (an environment VLAN or transit),
+hosts keep a single default gateway and the pair holds it with VRRPv3.
+`pkg/sdn/fhrp` is not wired into gatewayd yet (#596), so the `fhrp:` section
+below describes the package's configuration, not something a gateway runs
+today. Configure the same group on both nodes with
 different priorities; the higher priority is master and the other waits:
 
 ```yaml
@@ -217,12 +228,12 @@ fhrp:
       interface: trusted0
       priority: 200               # the peer runs 100
       advert-interval-cs: 100     # 1 s
-      addresses: [198.18.0.1/24]
-      source: 198.18.0.2        # this node's own address on trusted0
+      addresses: [10.4.6.1/24]
+      source: 10.4.6.2            # this node's own address on trusted0
     - vrid: 20
       interface: trusted0
       priority: 200
-      addresses: [2602:f5bb::1/64]
+      addresses: [fd12:3456:789a:406::1/64]
       source: fe80::3eec:efff:fe71:52ee
 ```
 
@@ -232,12 +243,14 @@ addr show trusted0` on each node shows who holds the address, and the gateway
 snapshot reports each group's state, priority and transition count. The host
 filter must admit VRRP (IP protocol 112, multicast 224.0.0.18 / ff02::12) on
 each group's interface; that allowance is not yet rendered by `hostfw` and is
-part of the handler wiring (#568) — until it lands, list the interface under
+part of the handler wiring (#596) — until it lands, list the interface under
 `hostfw.unfiltered` on a filtered gateway. Put the virtual address in `hostfw`
 as an `extra` listener only if the gateway itself serves on it.
 
-Overlay (VXLAN) segments do not use VRRP: every gateway answers for the
-anycast gateway address locally (EVPN distributed anycast gateway).
+Overlay (VXLAN) segments, including the public address block, do not use
+VRRP: every gateway answers for the anycast gateway address locally (EVPN
+distributed anycast gateway). NAT failover is stateless first (#596);
+conntrack state sync is #710.
 
 ## Checking a gateway
 
@@ -255,7 +268,7 @@ its telemetry snapshot:
 platformctl sdn gateway snapshot
 
 # A gateway that reports to this control plane
-platformctl sdn gateway snapshot --gateway-id lab-node-1-gateway
+platformctl sdn gateway snapshot --gateway-id gw-01-gateway
 ```
 
 Sections are printed only for services the gateway runs. If the Tunnels
@@ -364,7 +377,7 @@ pinning so a tunnel's outer packets always leave on the ISP they were sourced
 from, and `Rekey` for rotating an `ipsec` tunnel without dropping the session.
 **None of it is reachable from a gatewayd configuration yet**: the gateway
 section carries six fields and drops the rest
-([#606](http://git.example.internal/jeremyhahn/go-trusted-platform/issues/606)).
+(#606).
 Until that lands, run GRE and pin the relay host routes statically — the
 bring-up runbook
 ([`docs/operations/gateway-bringup.md`](../operations/gateway-bringup.md))
@@ -562,7 +575,8 @@ hyphenated; the other section names are single words.
 **Startup fails with `is enabled but cannot run`.**
 The section names a service with no implementation (`overlay`, `edge`, `dhcp`,
 `pxe`, `management-vpn`); the message carries the blocker and the tracking
-issue. Disable the section. The gateway will not start a service it cannot
+issue. Disable the section. `overlay` is required by owner design decision
+(2026-09-26) and lands with #709. The gateway will not start a service it cannot
 back.
 
 **Startup fails with `parsing configuration section proxy.listeners`.**

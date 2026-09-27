@@ -8,7 +8,7 @@ This document defines the work assignment system, scrutiny levels, misbehavior d
 
 **Key Principle**: Untrusted nodes contribute to network security through work, receiving network access privileges in exchange rather than reputation tokens.
 
-**Source**: `/mnt/vm-host-1/go-trusted-platform/pkg/dht/untrusted/`
+**Source**: `pkg/dht/untrusted/`
 
 ---
 

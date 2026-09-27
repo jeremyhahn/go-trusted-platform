@@ -75,6 +75,7 @@ gatewayd serve --config /etc/gatewayd/config.yaml
 
 # Provision runtime routes from anywhere:
 platformctl proxy pool add --id legacy --backend http://10.0.10.20:8080
+# `trusted` is today's built-in zone; the reference design replaces it (#708)
 platformctl proxy route add --id legacy-app --path-prefix / --pool legacy \
   --auth-mode mtls --allowed-zone trusted
 ```

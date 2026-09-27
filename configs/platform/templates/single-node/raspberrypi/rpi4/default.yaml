@@ -519,7 +519,7 @@ trust:
 # =============================================================================
 
 bmc:
-  address: 198.18.0.1
+  address: 10.4.2.10  # management (VLAN 402); .1 is the gateway VIP
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -621,11 +621,12 @@ sdn:
     segments:
       # Single-node trusted segment. No role (empty = general data
       # plane); only `provisioning` and `quarantine` are first-class
-      # fabric roles. VLAN 200 is the reference-architecture default
-      # for the trusted LAN (matches DefaultTrustedVLAN in pkg/sdn/vlan).
+      # fabric roles. VLAN 406 is the control-plane VLAN of the reference
+      # network design (owner design decision 2026-09-26, block 4). The code
+      # constant DefaultTrustedVLAN in pkg/sdn/vlan still says 200 until #708.
       # Override in your site override file if your LAN uses a different VLAN.
       - name: trusted
-        vlan: 200
+        vlan: 406
   overlay:
     enabled: false
     vxlan-port: 4789

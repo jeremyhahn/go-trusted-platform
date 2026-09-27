@@ -61,12 +61,9 @@ Recommended production baseline: 1 control-plane node (standalone, pebble storag
 
 ```
                     Internet
-                       │
-                  Core Router
-                  (BGP, NAT)
-                       │
+                       │  ISP handoff (transit, x00)
                   ┌────┴────┐
-                  │  Switch  │
+                  │  Switch  │  pure L2, MTU 9216
                   └────┬────┘
          ┌─────────────┼─────────────┐
          │             │             │
@@ -91,7 +88,7 @@ Recommended production baseline: 1 control-plane node (standalone, pebble storag
 - No Raft consensus — standalone control plane with local pebble storage
 - Gateway and compute are CLIENT mode — auto-enroll with CP's ACME server
 - Control plane runs CA, ACME, DNS (authoritative), IAM, KMS, QuicBaaS
-- Gateway runs DHCP, iPXE, BGP, OVS, DNS (forwarding to CP)
+- Gateway runs DHCP, iPXE, BGP, OVS, DNS (forwarding to CP) and terminates the ISP handoffs directly; no separate edge router
 - Compute runs QEMU/KVM for VMs and Podman (embedded) for containers
 
 **Bootstrap:**
@@ -110,11 +107,11 @@ platformctl bootstrap run --config deployments/three-node/bootstrap.yaml
 ```
                     Internet
               ┌────────┴────────┐
-         Core Router A     Core Router B
-              │                 │
+            ISP A             ISP B
+              │                 │  handoffs on transit (x00)
               └────────┬────────┘
-                  Core Switch
-                  (vPC pair)
+             Platform switch pair
+             (vPC/MLAG, pure L2)
          ┌─────────┬───┴───┬─────────┐
          │         │       │         │
     ┌────▼───┐┌────▼───┐   │    ┌────▼───┐
@@ -166,18 +163,19 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 - In 3-node deployment: standalone with local pebble storage
 - In HA cluster: Raft-backed QuicBaaS with replicated state (tolerate 1 node failure with 3-node cluster)
 - Never host application workloads directly
-- Typically on VLAN 201 (provisioning) or VLAN 50 (management)
+- Addressed on the `control-plane` zone (x06); BMC on `management` (x02) — see [reference-network.md](reference-network.md)
 
 ### Gateway Nodes
 
 - Run in **client mode** — auto-enroll with control-plane CA via custom ACME extensions (enroll-01, device-attest-01)
-- Bridge between the provisioning, management, and data zones (trusted/public); runs the per-zone flow rules
+- The only router on the platform tier: routes the zones that are routed and the overlays, and runs the per-zone flow rules
 - Provide DHCP scope and iPXE/TFTP for device bootstrap
-- Recursive DNS forwarder for the data zones (queries forwarded to control-plane authoritative DNS)
-- BGP peering with upstream routers for WAN traffic
-- OVS switches for VLAN management and network isolation
+- Recursive DNS forwarder for the zones and overlays (queries forwarded to control-plane authoritative DNS)
+- Terminates the ISP handoffs on `transit` (x00) and peers BGP upstream
+- VTEP on `fabric` (x01) for the EVPN/VXLAN overlays (overlay service: #709)
+- OVS for zone and overlay isolation
 - NAT/firewall rules for network segmentation
-- Require 2+ network interfaces (minimum: one to core switch, one to rack/production switch)
+- A bonded trunk to the platform switches (gateway port class)
 - In 3-node: single gateway node
 - In HA cluster: 2+ gateways in active-active or active-passive configuration
 
@@ -189,87 +187,58 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 - Optional: hardware TPM for workload attestation and vTPM provision for guests
 - Guest VMs can have vTPM 2.0 for attestation chains
 - No requirement to run management services
-- Connected to the `trusted` zone (VLAN 200); `storage` zone (VLAN 203) if used
+- Hypervisor trunk: `fabric`, `hypervisor`–`backup` (x01, x03–x08), native `provisioning` (x05); workloads live on overlays
 
 ---
 
 ## Network Layout
 
+The network model — environment blocks, zones, addressing, overlays and port classes — is defined in
+[reference-network.md](reference-network.md). This section shows how it lands on hardware. Examples
+use environment block 4.
+
 ### Physical Network Diagram
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                         INTERNET                               │
-└──────────────┬────────────────────────────────────────────────┘
-               │
-        ┌──────┴──────┐
-        │             │
-   ┌────▼────┐   ┌────▼────┐
-   │ ISP A   │   │ ISP B   │
-   │(BGP AS) │   │(BGP AS) │
-   └────┬────┘   └────┬────┘
-        │             │
-   ┌────▼─────────────▼────┐
-   │  Upstream Routers     │
-   │  (BGP transit)        │
-   │  VLAN 10 (P2P /31s)   │
-   └────┬────────────────┬─┘
-        │                │
-   ┌────▼────┐      ┌────▼────┐
-   │Gateway A│──────│Gateway B│  HA Pair
-   │         │      │         │  (active/standby
-   │VLAN 10  │      │VLAN 10  │   or active-active)
-   │200-210  │      │200-210  │
-   └────┬────┘      └────┬────┘
-        │                │
-        │ Trunk uplink   │ (all VLANs)
-        │                │
-   ┌────┴────────────────┴────┐
-   │   Core Switch            │
-   │   (VLAN trunking)        │
-   │   1x port per rack       │
-   └────┬─────────┬───────────┘
-        │         │
-   ┌────▼──┐ ┌────▼──┐
-   │Rack A │ │Rack B │ (and more)
-   │       │ │       │
-   │  CP1  │ │  CP2  │ Control plane
-   │  GW1  │ │  GW2  │ Gateways
-   │  W1-5 │ │  W6-10│ Workers
-   │       │ │       │
-   └───────┘ └───────┘
+                           INTERNET
+               ┌──────────────┴──────────────┐
+            ISP A                          ISP B
+               │  handoffs on transit (400)   │
+   ┌───────────┴──────────────────────────────┴───────────┐
+   │        Platform switch pair (vPC/MLAG)               │
+   │        pure L2 · no SVIs · MTU 9216                  │
+   └──┬──────────┬──────────────┬──────────────┬─────────┘
+      │          │              │              │
+  ┌───▼───┐  ┌───▼───┐    ┌─────▼─────┐   ┌────▼─────┐
+  │ gw-01 │  │ gw-02 │    │ cp-01..03 │   │ compute  │   hypervisor trunks:
+  │ gw    │  │ gw    │    │           │   │ nodes    │   401, 403–408,
+  │ trunk │  │ trunk │    │           │   │          │   native 405
+  └───────┘  └───────┘    └───────────┘   └──────────┘
+   400, 401, 404–406, 408                 BMCs: access ports on 402
 
-VLAN Connectivity:
-• Upstream routers: VLAN 10 transit (P2P /31s), BGP
-• Gateways: VLAN 10 (transit) + platform VLANs 200-210 (routing between them)
-• Rack switches: platform VLANs trunked from the gateways
-• CP nodes: VLAN 201 (provisioning) + VLAN 50 OOB
-• GW nodes: all platform VLANs (enforce policy between them)
-• Worker nodes: VLAN 200 (trusted) + VLAN 201 bootstrap; VLAN 203 (storage) if used
+Management (402) leaves the platform only through an external management firewall.
 ```
 
-### Zones & VLAN Assignments
+### Zones and VLANs (environment 4)
 
-Policy is driven by **zones**, not VLAN numbers — see [reference-network.md](reference-network.md)
-for the full zone model. Subnets are assigned to a zone; the platform applies that zone's policy.
-The default segment IDs use the mnemonic **VLAN _N_ → `172.16.N.0/24`**.
+| VLAN | Zone | Subnet | On which ports |
+|-----:|------|--------|----------------|
+| 400 | transit | 10.4.0.0/24 | gateways only |
+| 401 | fabric | 10.4.1.0/24 | gateways, hypervisors |
+| 402 | management | 10.4.2.0/24 | BMC access ports, management firewall |
+| 403 | hypervisor | 10.4.3.0/24 | hypervisors |
+| 404 | quarantine | 10.4.4.0/24 | gateways, hypervisors |
+| 405 | provisioning | 192.0.2.0/24 | gateways, hypervisors (native) |
+| 406 | control-plane | 10.4.6.0/24 | gateways, hypervisors |
+| 407 | storage | 10.4.7.0/24 | hypervisors, storage nodes |
+| 408 | backup | 10.4.8.0/24 | gateways, hypervisors |
+| — | IPAM pool | 10.4.128.0/17 | overlays, loopbacks, tunnel P2P |
 
-**Default zone subnets (`trusted`/`provisioning`/`quarantine` are the working baseline):**
-- VLAN 200 → `198.18.0.0/24` — zone **`trusted`** (enrolled, attested, internal workloads)
-- VLAN 201 → `172.16.201.0/24` — zone **`provisioning`** (PXE, DHCP, DNS, ACME enrollment)
-- VLAN 202 → `172.16.202.0/24` — zone **`quarantine`** (non-compliant/untrusted; isolated)
-- VLAN 203 → `172.16.203.0/24` — zone **`storage`** (optional workload/bulk storage tier)
-- VLAN 1000+ → `172.17.0.0/16+` — zone **`tenant`** (optional multi-tenant isolation)
-- *(deployment public IP block)* — zone **`public`** (internet-facing; isolated from `trusted`).
-  A public block is just a `public`-zone subnet — there is no dedicated "edge"/DMZ VLAN number.
+`public` and tenant networks are EVPN/VXLAN overlays, not VLANs. There is no `trusted` zone and no
+tenant VLAN range.
 
-**Shared / edge:**
-- VLAN 10 (transit): gateway ↔ upstream routers / BGP; P2P /31s from `172.16.0.0/24`
-- VLAN 50 (management): out-of-band IPMI/BMC/console — separate NIC, never routes to a data zone
-- VLAN 1 (default): IEEE 802.1Q catch-all (no addressed network)
-
-> The platform tier is self-contained. Any surrounding site/office/home network is kept entirely
-> separate and is **not** part of this reference — see the deployment's own network docs.
+> **Code today.** The code defaults (`pkg/sdn/zone`, `pkg/sdn/vlan`) are still the older model (zone `trusted`, VLANs 200–203,
+> `172.16.N.0/24`); the change is tracked in #708.
 
 ---
 
@@ -357,25 +326,25 @@ platformctl bootstrap run --config deployments/three-node/bootstrap.yaml
 
 deployments/three-node/bootstrap.yaml:
   network:
-    provisioning_vlan: 201
-    gateway_ip: 172.16.201.1
+    provisioning_vlan: 405
+    gateway_ip: 192.0.2.1
   dhcp:
-    range: 172.16.201.100-172.16.201.200
+    range: 192.0.2.100-192.0.2.200
   dns:
     zone: trusted-platform.local
   devices:
     - hostname: cp-01
       mac: aa:bb:cc:dd:ee:01
       role: control-plane
-      ip: 172.16.201.10
+      ip: 192.0.2.10
     - hostname: gw-01
       mac: aa:bb:cc:dd:ee:02
       role: gateway
-      ip: 172.16.201.20
+      ip: 192.0.2.20
     - hostname: compute-01
       mac: aa:bb:cc:dd:ee:03
       role: worker
-      ip: 172.16.201.30
+      ip: 192.0.2.30
 
 Process:
 1. Bootstrap server provisions all three nodes:
@@ -395,7 +364,7 @@ Process:
    • Watches DNS for enroll-01 ACME records
    • Approves enrollments based on config
    • Assigns gateway and workers as CLIENT mode
-   • Creates network policies (VLAN, firewall)
+   • Creates network policies (zones, overlays, firewall)
 
 4. Post-boot:
    • cp-01 starts in server mode
@@ -415,10 +384,10 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 
 deployments/ha-cluster/bootstrap.yaml:
   network:
-    provisioning_vlan: 201
-    gateway_ip: 172.16.201.1
+    provisioning_vlan: 405
+    gateway_ip: 192.0.2.1
   dhcp:
-    range: 172.16.201.100-172.16.201.250
+    range: 192.0.2.100-192.0.2.250
   dns:
     zone: trusted-platform.local
   devices:
@@ -426,29 +395,29 @@ deployments/ha-cluster/bootstrap.yaml:
     - hostname: cp-01
       mac: aa:bb:cc:dd:ee:01
       role: control-plane
-      ip: 172.16.201.10
+      ip: 192.0.2.10
     - hostname: cp-02
       mac: aa:bb:cc:dd:ee:02
       role: control-plane
-      ip: 172.16.201.11
+      ip: 192.0.2.11
     - hostname: cp-03
       mac: aa:bb:cc:dd:ee:03
       role: control-plane
-      ip: 172.16.201.12
+      ip: 192.0.2.12
     # Gateways (HA pair)
     - hostname: gw-01
       mac: aa:bb:cc:dd:ee:04
       role: gateway
-      ip: 172.16.201.20
+      ip: 192.0.2.20
     - hostname: gw-02
       mac: aa:bb:cc:dd:ee:05
       role: gateway
-      ip: 172.16.201.21
+      ip: 192.0.2.21
     # Compute workers
     - hostname: compute-01
       mac: aa:bb:cc:dd:ee:06
       role: worker
-      ip: 172.16.201.30
+      ip: 192.0.2.30
     # ... additional compute workers
 
 Process:
@@ -595,8 +564,8 @@ Per-node cost: $1500-2500
 For 2 workers: $3000-5000
 
 **Network Infrastructure**
-- 2x Core routers (BGP, dual ISP): $200-600 total
-- 2x Managed switches (48-port, VLAN, 10GbE uplinks): $400-1000 total
+- 2x Managed L2 switches (48-port, VLAN, vPC/MLAG, jumbo frames, 10GbE): $400-1000 total. Compliant deployments use switches dedicated to the platform (see [reference-network.md](reference-network.md#compliance))
+- ISP handoffs connect to the gateways' transit VLAN; no separate edge routers
 - Optional: Redundant power supplies and networking
 
 **Total 7-node HA cluster (3 CP + 2 GW + 2 workers): $10k-18k**
@@ -702,8 +671,8 @@ Hardware TPM availability determines the security tier of a deployment. Map tier
 
 **Pre-Deployment**
 - [ ] Procure 3 servers (1 CP at 16GB RAM, 1 GW at 8GB RAM, 1 compute at 16GB RAM)
-- [ ] Procure 1 managed switch with VLAN support
-- [ ] Plan network layout (zones: VLAN 201 provisioning, VLAN 200 trusted, public block as needed)
+- [ ] Procure 1 managed L2 switch with VLAN and jumbo-frame (MTU 9216) support
+- [ ] Choose the environment block and address base; assign port classes (gateway trunk, hypervisor trunks, BMC access ports) — [reference-network.md](reference-network.md)
 - [ ] Prepare `deployments/three-node/bootstrap.yaml` with device manifests and MAC addresses
 - [ ] Prepare custom platform-initrd.efi
 
@@ -720,9 +689,9 @@ Hardware TPM availability determines the security tier of a deployment. Map tier
 - [ ] Configure CA with root + intermediate certificates
 - [ ] Set up IAM users, roles, policies
 - [ ] Configure DNS zones (internal)
-- [ ] Configure DHCP scopes per VLAN
-- [ ] Configure firewall rules between VLANs
-- [ ] Test inter-VLAN connectivity
+- [ ] Configure DHCP on `provisioning`
+- [ ] Verify default-deny between zones and overlays
+- [ ] Test the allowed zone paths (provisioning and quarantine reach only their control-plane services)
 - [ ] Deploy applications to compute worker
 
 **Validation**
@@ -737,15 +706,14 @@ Hardware TPM availability determines the security tier of a deployment. Map tier
 
 **Pre-Deployment**
 - [ ] Procure 7+ servers (3 CP at 16GB RAM, 2 GW at 8GB RAM, 2+ compute at 16GB+ RAM)
-- [ ] Procure 2 managed switches with VLAN and 10GbE support
-- [ ] Procure 2 routers with BGP support
-- [ ] Plan network topology (multiple VLANs, core switch, rack switches, routers)
-- [ ] Plan IP addressing (each node, each VLAN, each service)
+- [ ] Procure 2 managed L2 switches with VLAN, vPC/MLAG, MTU 9216 and 10GbE support (dedicated to the platform for compliant deployments)
+- [ ] Plan the environment blocks, address base and ULA /48; the addressing follows from the VLAN numbers
+- [ ] Assign port classes per [reference-network.md](reference-network.md#switch-port-model)
 - [ ] Prepare `deployments/ha-cluster/bootstrap.yaml` with full device manifest
 - [ ] Prepare custom platform-initrd.efi with cluster bootstrap policy
 
 **Bootstrap**
-- [ ] Configure core router and switches (VLAN trunking, BGP)
+- [ ] Configure the switches: per-port-class allowed VLAN lists, MTU 9216, no SVIs
 - [ ] Configure provisioning gateway (DHCP, TFTP, DNS)
 - [ ] Run `platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml`
 - [ ] Boot all nodes via PXE: CP nodes first (parallel), then GW, then workers
@@ -759,10 +727,10 @@ Hardware TPM availability determines the security tier of a deployment. Map tier
 - [ ] Set up IAM users, roles, policies
 - [ ] Configure DNS zones and secondary replication (if multi-site)
 - [ ] Configure DHCP on both gateways with failover
-- [ ] Configure HA pair for gateways (active-active or active-passive)
-- [ ] Configure BGP routing from gateways to upstream
+- [ ] Configure the gateway pair (VRRP on the routed zones, anycast gateway on overlays — #596)
+- [ ] Configure BGP from the gateways to upstream; announce public blocks only once the overlay (#709) and HA (#596, #710) are in place
 - [ ] Configure firewall rules and network policies
-- [ ] Test inter-VLAN connectivity from all sites
+- [ ] Test the allowed zone and overlay paths from all sites
 
 **Redundancy Testing**
 - [ ] Simulate CP node failure — verify cluster remains operational with 2/3 quorum

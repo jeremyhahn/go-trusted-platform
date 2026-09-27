@@ -32,7 +32,7 @@ Set `factory-reset-on-firstboot: true` when:
 * You are **first-time provisioning** newly-purchased servers.
 * You are **recovering from a stuck TPM** where a previous failed install
   attempt left owner-hierarchy auth set to an unknown value. (This is the
-  exact failure mode that took several hours to diagnose on `lab-node-2` on
+  exact failure mode that took several hours to diagnose on `node-02` on
   2026-04-07 — the previous failed attempt set owner auth, and every
   subsequent retry hit `TPM_RC_BAD_AUTH` on the eviction pass.)
 * Your reference architecture ships fresh ISO images to fresh nodes.

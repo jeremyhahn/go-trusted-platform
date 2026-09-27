@@ -10,14 +10,14 @@ BGP transit mode enables go-trusted-platform to announce platform-owned IP prefi
 
 | Block | CIDR | Purpose | Announcement Level |
 |-------|------|---------|-------------------|
-| Full Allocation | 2602:F5BB::/36 | Platform aggregate | Backbone speakers |
-| Regional | 2602:F5BB:XXXX::/48 | Regional prefix | Datacenter speakers |
-| Subnet | 2602:F5BB:XXXX:YYYY::/64 | Host subnets | Internal only |
+| Full Allocation | 2001:db8::/36 | Platform aggregate | Backbone speakers |
+| Regional | 2001:db8:XXXX::/48 | Regional prefix | Datacenter speakers |
+| Subnet | 2001:db8:XXXX:YYYY::/64 | Host subnets | Internal only |
 
 ### IPv6 Hierarchy
 
 ```
-2602:F5BB::/36 (Platform Aggregate - 4.7 quintillion addresses)
+2001:db8::/36 (Platform Aggregate - 4.7 quintillion addresses)
 ├── 2602:F5BB:0000::/40 (Region 0 - North America East)
 │   ├── 2602:F5BB:0000::/48 (Datacenter 1)
 │   │   ├── 2602:F5BB:0000:0001::/64 (Subnet 1)
@@ -37,7 +37,7 @@ BGP transit mode enables go-trusted-platform to announce platform-owned IP prefi
 
 | Block | CIDR | Purpose | Notes |
 |-------|------|---------|-------|
-| Platform | 23.143.36.0/24 | Legacy IPv4 connectivity | 254 usable addresses |
+| Platform | 203.0.113.0/24 | Legacy IPv4 connectivity | 254 usable addresses |
 
 IPv4 is used sparingly for:
 - Gateway nodes requiring IPv4 reachability
@@ -56,8 +56,8 @@ IPv4 is used sparingly for:
 │  Level 1: Backbone Speakers (Global)                        │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │ Announce to ISPs:                                   │    │
-│  │   - 2602:F5BB::/36 (aggregate)                     │    │
-│  │   - 23.143.36.0/24 (IPv4)                          │    │
+│  │   - 2001:db8::/36 (aggregate)                      │    │
+│  │   - 203.0.113.0/24 (IPv4)                          │    │
 │  │                                                     │    │
 │  │ Suppress: All more-specific routes                  │    │
 │  └─────────────────────────────────────────────────────┘    │
@@ -141,8 +141,8 @@ exportPolicy := &RoutingPolicy{
 aggregatePrefixes := &PrefixList{
     Name: "platform-aggregates",
     Entries: []PrefixEntry{
-        {Prefix: "2602:F5BB::/36", Exact: true},
-        {Prefix: "23.143.36.0/24", Exact: true},
+        {Prefix: "2001:db8::/36", Exact: true},
+        {Prefix: "203.0.113.0/24", Exact: true},
     },
 }
 ```
@@ -160,7 +160,7 @@ Resource Public Key Infrastructure (RPKI) validates that route announcements ori
 │                                                              │
 │  1. Create ROA (Route Origin Authorization)                 │
 │     ┌─────────────────────────────────────────────┐         │
-│     │ Prefix: 2602:F5BB::/36                     │         │
+│     │ Prefix: 2001:db8::/36                      │         │
 │     │ Max Length: /48                             │         │
 │     │ Origin ASN: 65001                           │         │
 │     │ Signed by: ARIN (RIR)                       │         │
@@ -171,7 +171,7 @@ Resource Public Key Infrastructure (RPKI) validates that route announcements ori
 │                                                              │
 │  3. BGP Speaker Validates Received Routes                   │
 │     ┌─────────────────────────────────────────────┐         │
-│     │ Route: 2602:F5BB::/36 from AS 65001        │         │
+│     │ Route: 2001:db8::/36 from AS 65001         │         │
 │     │                                             │         │
 │     │ Lookup ROA:                                 │         │
 │     │   - Prefix matches: Yes                     │         │

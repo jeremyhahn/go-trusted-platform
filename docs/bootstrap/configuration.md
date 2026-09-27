@@ -312,11 +312,11 @@ BMC DANE TLSA records are published at:
 _443._tcp.<hostname>-bmc.<internal-zone>
 ```
 
-For example, if the node hostname is `lab-node-2` and the internal zone is
+For example, if the node hostname is `node-02` and the internal zone is
 `example.internal`, the TLSA record lives at:
 
 ```
-_443._tcp.lab-node-2-bmc.example.internal
+_443._tcp.node-02-bmc.example.internal
 ```
 
 The BMC enroll ceremony and the AutoCertManager rotation hook publish this

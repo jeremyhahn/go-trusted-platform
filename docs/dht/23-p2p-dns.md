@@ -305,7 +305,7 @@ Client                      Gateway DNS              DHT Network
   |                              |                        |
   | 6. DNS Response             |                        |
   |   abc123.p2p.t-p.io         |                        |
-  |   AAAA 2602:F5BB::1234      |                        |
+  |   AAAA 2001:db8::1234       |                        |
   |<----------------------------|                        |
   |                              |                        |
 ```

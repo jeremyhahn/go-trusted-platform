@@ -104,6 +104,8 @@ What each piece buys you:
   against the platform CA. No bearer token substitutes for it.
 - **`--allowed-zone trusted`** — the zone in the caller's certificate must be
   `trusted`. A certificate with no zone extension is denied, not defaulted.
+  (`trusted` is today's built-in zone; the
+  [reference network](../architecture/reference-network.md) replaces it, #708.)
 - **`--backend-zone services`** — the zone matrix must permit
   `trusted → services`. This is the same table that programs the network's flow
   rules, so route reachability and network reachability cannot drift apart.

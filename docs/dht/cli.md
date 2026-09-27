@@ -34,7 +34,7 @@ unrelated:
 
 | Real key | Type | Meaning |
 |---|---|---|
-| `sdn.transit.p2p` | string | An IPv4 prefix (default `172.16.0.0/24`) from which /31 point-to-point transit link addresses are carved |
+| `sdn.transit.p2p` | string | An IPv4 prefix (default `172.16.0.0/24`) from which /31 point-to-point transit link addresses are carved. The reference design replaces this default (transit is offset x00, e.g. `10.4.0.0/24`), tracked in #708 |
 | the gateway's `p2p` | bool | `GatewayConfig`'s libp2p toggle, behind the `platform_p2p` build tag |
 
 Neither has anything to do with the Trusted DHT.

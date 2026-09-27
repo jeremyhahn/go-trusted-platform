@@ -61,6 +61,9 @@ platformctl device profile create \
     --config-file /etc/platform/node-02.yaml
 ```
 
+`--zone trusted` names today's built-in zone; the
+[reference network](../architecture/reference-network.md) replaces it (#708).
+
 **`--ek-cert` takes a file path or an inline PEM string** — it looks for
 `-----BEGIN` to decide which. Either way it must parse as an X.509 certificate,
 and the check happens locally before anything is sent. A malformed certificate

@@ -359,7 +359,7 @@ ntp:
   mode: both                 # serve | consume | both
   consume:
     upstream:
-      - address: 198.18.0.1
+      - address: 10.4.6.1
         prefer: true
         iburst: true
         nts: false
@@ -374,8 +374,8 @@ ntp:
     orphan-fallback: true
   serve:
     listen-networks:
-      - 198.18.0.0/24
-      - 172.16.201.0/24
+      - 10.4.6.0/24
+      - 192.0.2.0/24
     local-stratum: 10
     nts:
       enabled: true
@@ -490,7 +490,7 @@ IPMI 2.0 RMCP+ and Redfish APIs.
 
 ```yaml
 bmc:
-  address: 198.18.0.1
+  address: 10.4.2.20
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
   protocol: ipmi
@@ -555,11 +555,11 @@ BMC TLSA records are published at:
 _443._tcp.<hostname>-bmc.<internal-zone>
 ```
 
-For example, if the node hostname is `lab-node-2` and the internal zone is
+For example, if the node hostname is `node-02` and the internal zone is
 `example.internal`, the TLSA record lives at:
 
 ```
-_443._tcp.lab-node-2-bmc.example.internal
+_443._tcp.node-02-bmc.example.internal
 ```
 
 The enroll ceremony and the AutoCertManager rotation hook publish this record
@@ -681,19 +681,27 @@ upgrades painful.
 
 `trusted` is the post-enrollment operational zone for attested, compliant
 devices. A device transitions to the trusted zone after successful ACME
-enrollment, IDevID attestation, and compliance check. The reference
-architecture uses VLAN 200 for this zone.
+enrollment, IDevID attestation, and compliance check. The code default is VLAN 200
+(`pkg/sdn/vlan`); the shipped templates already use the reference numbering
+(VLAN 406, `10.4.6.0/24`) while keeping the zone name `trusted` the code accepts. The
+[reference network](architecture/reference-network.md) (owner design decision,
+2026-09-26) has no `trusted` zone: trust is carried by OVS and an overlay that
+requires a valid IDevID, and the control-plane network is VLAN x06 (e.g. 406).
+The code and template change is tracked in #708.
 
 ### Template contract
 
-Each template names its operational segment `trusted` and assigns it VLAN 200:
+The dedicated templates name their operational segment `control-plane` on VLAN 406
+(zone `trusted` until #708); the single-node templates keep the segment name
+`trusted` on VLAN 406. The code defaults (`trusted`, VLAN 200) are shown below;
+the reference design replaces them (#708):
 
 ```yaml
 sdn:
   fabric:
     segments:
       - name: trusted
-        vlan: 200            # reference-architecture default
+        vlan: 200            # code default (#708)
       - name: provisioning
         vlan: 201
         role: provisioning

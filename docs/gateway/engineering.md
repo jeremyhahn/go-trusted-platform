@@ -54,6 +54,11 @@ load-balancer, hostfw, tunnels, transit, then the refused sections. Tunnels
 start before transit so BGP sessions have their interfaces; a refused section
 fails startup before any datapath service has to be rolled back for it.
 
+Owner design decision (2026-09-26): the EVPN `overlay` service is required, not
+optional; it is on the roadmap as #709, and lighting a public address block
+depends on it plus gateway HA (#596, #710). Until #709 lands it stays in
+`serviceRefusals`.
+
 `HostRuntime` (`runtime.go`, `GatewayConfig.Host`, never from YAML) carries what
 the builders need beyond OVS:
 
@@ -160,7 +165,7 @@ new code uses service sections.
 |---|---|
 | `ErrPipelineBridgeMissing` | the runtime names no bridge |
 | `ErrPipelineOwned{Bridge, Owner}` | another gateway's pipeline holds the bridge; two owners would replace each other's table-0 flow silently |
-| `ErrPipelineTerminalUnavailable{Terminal, Reason}` | `overlay` asked for before the overlay service owns egress |
+| `ErrPipelineTerminalUnavailable{Terminal, Reason}` | `overlay` asked for before the overlay service owns egress (the overlay is required by owner design decision 2026-09-26; #709) |
 | `ErrPipelineTerminalUnknown{Terminal}` | not `normal` or `overlay` |
 | `ErrPipelineInstallFailed{Bridge, Step, Cause}` | a failed install step; flows and `fail_mode` are rolled back |
 | `ErrPipelineRemoveFailed{Bridge, Step, Cause}` | a failed removal; the record is kept so a retry can finish |
@@ -267,8 +272,8 @@ Gateway-side, in `pkg/sdn/config.go`:
 | Type | Keys | Notes |
 |---|---|---|
 | `GatewayConfig` | `enabled` | Master switch |
-| `TransitConfig` | `vlan` (default `vlan.DefaultTransit`, **10**), `p2p` (default `172.16.0.0/24`) | Transit carries **no data-zone traffic**; the VLAN is a plain L2 segment id and the P2P prefix supplies `/31` link addresses. `EffectiveVLAN()` / `EffectiveP2P()` apply the defaults; `Validate()` returns `ErrInvalidTransitVLAN` for an out-of-range 802.1Q id |
-| `ManagementVPNConfig` | `enabled`, `type` (only `wireguard` is defined), `allow_to` | Administrators reach management endpoints through this tunnel so operator workstations are **never dual-homed onto a data zone**. Gateways should expose it by default |
+| `TransitConfig` | `vlan` (default `vlan.DefaultTransit`, **10**), `p2p` (default `172.16.0.0/24`) | Transit carries **no data-zone traffic**; the VLAN is a plain L2 segment id and the P2P prefix supplies `/31` link addresses. `EffectiveVLAN()` / `EffectiveP2P()` apply the defaults; `Validate()` returns `ErrInvalidTransitVLAN` for an out-of-range 802.1Q id. Owner design decision (2026-09-26): transit is the environment's x00 VLAN (e.g. 400, 10.4.0.0/24) and tunnel P2P addresses come from the IPAM pool ([`../architecture/reference-network.md`](../architecture/reference-network.md)); the defaults move with #708 |
+| `ManagementVPNConfig` | `enabled`, `type` (only `wireguard` is defined), `allow_to` | Administrators reach management endpoints through this tunnel so operator workstations are **never dual-homed onto a data zone**. Gateways should expose it by default. The section is refused today (#558, [`docs/vpn/`](../vpn/)); owner design decision (2026-09-26): IPsec in FIPS builds, WireGuard only in non-FIPS builds |
 
 `ManagementVPNConfig.Type` exists for extensibility and has exactly one defined
 value today. Treat an unrecognised value as a configuration error, not as a
@@ -389,8 +394,8 @@ hostname.
 
 **The CN is used verbatim and never normalized.** A certificate whose CN
 has leading or trailing whitespace is refused (401) rather than trimmed:
-trimming would make a certificate issued for `" lab-node-1 "` authenticate
-as `lab-node-1`, which is an aliasing path into another gateway's record —
+trimming would make a certificate issued for `" gw-01 "` authenticate
+as `gw-01`, which is an aliasing path into another gateway's record —
 precisely what an exact binding exists to close. A CN that is only
 whitespace falls under the same rule. gatewayd reads its own certificate
 CN verbatim for the startup check for the matching reason: trimming there
@@ -640,7 +645,8 @@ already started.
 
 The handler wiring in `node.go` (a `backedServiceHandler` building
 `fhrp.New(cfg, fhrp.Deps{Transport: fhrp.NewRawTransport(), Programmer:
-fhrp.NewNetlinkProgrammer()})`) lands with #568.
+fhrp.NewNetlinkProgrammer()})`) is not in gatewayd yet; it is tracked in #596,
+together with stateless NAT failover. Conntrack/NAT state sync is #710.
 
 ### Supervisor IPC — `pkg/sdn/gateway/ipc` (#557)
 

@@ -476,7 +476,7 @@ const (
     DefaultGRPCPort        = 9090
 
     // IPv6 Addressing
-    IPv6PoolPrefix         = "2602:F5BB::"          // Allocation prefix
+    IPv6PoolPrefix         = "2001:db8::"          // Allocation prefix
     IPv6PrefixLength       = 36                     // /36
     IPv6RegionSize         = 48                     // /48 per region
     IPv6SubnetSize         = 64                     // /64 per subnet
@@ -2708,7 +2708,7 @@ Automatic /48 assignment from pool:
 
 ```go
 type PrefixAllocator struct {
-    basePrefix   string        // "2602:F5BB::"
+    basePrefix   string        // "2001:db8::"
     allocatedMap sync.Map      // nodeID -> /48 prefix
     nextRegion   atomic.Uint32
 }
@@ -2723,8 +2723,8 @@ func (pa *PrefixAllocator) AllocatePrefix(nodeID NodeID) (string, error) {
         return "", errors.New("exhausted region space")
     }
 
-    // Format: 2602:F5BB:RRRR::/48
-    prefix := fmt.Sprintf("2602:F5BB:%04X::/48", regionID)
+    // Format: 2001:db8:RRRR::/48
+    prefix := fmt.Sprintf("2001:db8:%04X::/48", regionID)
     pa.allocatedMap.Store(nodeID, prefix)
     pa.db.Save(nodeID, prefix, regionID)
     return prefix, nil
@@ -2735,7 +2735,7 @@ func (pa *PrefixAllocator) AllocatePrefix(nodeID NodeID) (string, error) {
 
 1. **DHT Event** - Node promoted to Gateway tier
 2. **Validate** - Reputation >= 0.85, uptime >= 95%, age >= 90 days, TPM current
-3. **Allocate Prefix** - Assign /48 from pool (2602:F5BB:XXXX::/48)
+3. **Allocate Prefix** - Assign /48 from pool (2001:db8:XXXX::/48)
 4. **Collect Signatures** - Request 3+ coordinator signatures for route
 5. **Announce Route:**
    - Backbone/Datacenter: Inject route via Go BGP speaker

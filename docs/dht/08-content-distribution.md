@@ -15,7 +15,7 @@ All subsystems share common primitives: 1MB block chunking, SHA-256 hashing, Mer
 
 ## Content Storage System
 
-**Source**: `/mnt/vm-host-1/go-trusted-platform/pkg/content/`
+**Source**: `pkg/content/`
 
 ### Block Chunking (1MB Blocks)
 
@@ -48,7 +48,7 @@ if !block.Verify() {
 }
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/content/block.go`
+**Implementation**: `pkg/content/block.go`
 
 ### Merkle Trees for Integrity
 
@@ -82,7 +82,7 @@ proof, err := tree.GenerateProof(blockIndex)
 err = tree.VerifyProof(blockHash, proof)
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/content/merkle.go`
+**Implementation**: `pkg/content/merkle.go`
 
 ### P2P Swarm Distribution
 
@@ -125,7 +125,7 @@ for _, blockIndex := range missing {
 }
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/content/swarm.go`
+**Implementation**: `pkg/content/swarm.go`
 
 ### Replica Node Selection Algorithm
 
@@ -548,7 +548,7 @@ updateKey := content.UpdateKey("systemd", "254.3")
 // Returns: "manifest:update:systemd:254.3"
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/content/store.go`
+**Implementation**: `pkg/content/store.go`
 
 ### FROST-Signed Manifests
 
@@ -582,7 +582,7 @@ manifest.Sign(signature, poolID)
 valid := manifest.Verify(signature, publicKey)
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/content/manifest.go`
+**Implementation**: `pkg/content/manifest.go`
 
 ### Content Types
 
@@ -629,7 +629,7 @@ type UpdateMetadata struct {
 
 ## Network Boot System
 
-**Source**: `/mnt/vm-host-1/go-trusted-platform/pkg/boot/`
+**Source**: `pkg/boot/`
 
 ### iPXE Boot Chain
 
@@ -696,7 +696,7 @@ imgargs vmlinuz root=dht:${manifest} ro quiet tpm=measure
 boot
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/boot/ipxe.go`
+**Implementation**: `pkg/boot/ipxe.go`
 
 ### UEFI Secure Boot
 
@@ -782,7 +782,7 @@ quote, err := tpm.CreateAttestationQuote(nonce)
 valid := verifyQuote(quote, expectedPCRs, publicKey)
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/boot/tpm.go`
+**Implementation**: `pkg/boot/tpm.go`
 
 ### Boot Verification
 
@@ -831,13 +831,13 @@ GET  /manifest/{distro}/{version}/{arch}     # OS manifest (JSON)
 GET  /health                                 # Health check
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/boot/server.go`, `/mnt/vm-host-1/go-trusted-platform/pkg/boot/provision.go`
+**Implementation**: `pkg/boot/server.go`, `pkg/boot/provision.go`
 
 ---
 
 ## Update System
 
-**Source**: `/mnt/vm-host-1/go-trusted-platform/pkg/updates/`
+**Source**: `pkg/updates/`
 
 ### Atomic Updates with Rollback
 
@@ -923,7 +923,7 @@ if exists {
 }
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/updates/installer.go`
+**Implementation**: `pkg/updates/installer.go`
 
 ### FROST-Signed Manifests
 
@@ -965,7 +965,7 @@ err := manifest.Validate()
 compatible := manifest.IsCompatible("254.2")  // current version
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/updates/manifest.go`
+**Implementation**: `pkg/updates/manifest.go`
 
 ### Update Channels
 
@@ -1007,7 +1007,7 @@ const (
 )
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/updates/channel.go`
+**Implementation**: `pkg/updates/channel.go`
 
 ### Update Distribution Flow
 
@@ -1065,7 +1065,7 @@ err = tpm.ExtendPCR(14, measurement)
 // PCR14 = SHA256(PCR14_old || SHA256("systemd:254.3:hash:timestamp"))
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/updates/downloader.go`
+**Implementation**: `pkg/updates/downloader.go`
 
 ### Complete Update Workflow
 
@@ -1109,7 +1109,7 @@ quote, err := tpm.CreateAttestationQuote(nonce)
 
 ## Git Repository System
 
-**Source**: `/mnt/vm-host-1/go-trusted-platform/pkg/git/`
+**Source**: `pkg/git/`
 
 ### Foundation-Approved Storage
 
@@ -1209,7 +1209,7 @@ const (
 // 4. Timeout expires -> StatusRejected
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/git/approval.go`
+**Implementation**: `pkg/git/approval.go`
 
 ### Git Bundle Handling
 
@@ -1261,7 +1261,7 @@ incrementalBundle, err := creator.CreateIncrementalBundle(
 | zstd | ~60% | Lower | Better compression, faster decompression |
 | none | 0% | None | Pre-compressed data |
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/git/bundle.go`
+**Implementation**: `pkg/git/bundle.go`
 
 ### Bundle Chunking for DHT
 
@@ -1357,7 +1357,7 @@ func (h *RemoteHelper) Push(src, dst string) error {
 }
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/git/remote.go`
+**Implementation**: `pkg/git/remote.go`
 
 ### Repository Registry
 
@@ -1395,7 +1395,7 @@ err := registry.Register(&git.RepositoryEntry{
 entry, exists := registry.Get("foundation", "trusted-boot", "main")
 ```
 
-**Implementation**: `/mnt/vm-host-1/go-trusted-platform/pkg/git/approval_registry.go`
+**Implementation**: `pkg/git/approval_registry.go`
 
 ### Validation Rules
 
@@ -1541,6 +1541,6 @@ ErrBundleInvalid{Reason: reason}
 
 ## Related Components
 
-- **DHT Core**: Key-value storage (`/mnt/vm-host-1/go-trusted-platform/pkg/dht/`)
-- **FROST Signatures**: Threshold signatures (`/mnt/vm-host-1/go-trusted-platform/pkg/frost/`)
-- **OS Image Builder**: Creates bootable OS images (`/mnt/vm-host-1/go-trusted-platform/pkg/osimage/`)
+- **DHT Core**: Key-value storage (`pkg/dht/`)
+- **FROST Signatures**: Threshold signatures (`pkg/frost/`)
+- **OS Image Builder**: Creates bootable OS images (`pkg/osimage/`)

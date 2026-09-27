@@ -6,8 +6,8 @@ needs before any of them will install — settings that live in BIOS setup
 and cannot be expressed in a template. Read it before the first PXE install
 of a node, and again before a re-provision.
 
-Every item below was measured on the mini fleet on 2026-09-13, not taken
-from a manual. Each one cost at least one install cycle to discover.
+Every item below was measured on the X10 reference nodes on 2026-09-13, not
+taken from a manual. Each one cost at least one install cycle to discover.
 
 ## BIOS settings required for UEFI PXE install
 
@@ -173,7 +173,7 @@ without it is absent from its own fleet view.
   templates put the console on `ttyS1,115200n8`, but the SOL session shows
   only *new* output — a static screen (BIOS setup, an idle prompt) reads as
   empty. Send a key to refresh.
-- The **SEL fills and stops logging**. The lab-node-2 BMC held 512 entries of
+- The **SEL fills and stops logging**. The node-02 BMC held 512 entries of
   `Correctable ECC @DIMMB1(CPU1)` from 2024 and had disabled logging on
   "Log full". Clear it (`ipmitool sel clear`) after commissioning or the
   event log is useless when you need it.

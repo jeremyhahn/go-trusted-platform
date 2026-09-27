@@ -816,7 +816,7 @@ Request body is optional: `{"reissue": <bool>}`. The response mirrors
 
 `source` is `device`, `ca` or `reissued`. A refusal is `FAILED_PRECONDITION`
 on gRPC/Unix/MCP, QUIC status `0x01`, and `400` on REST, with a message that
-names **every** candidate and why it was refused (`ca[lab-node-3]: … does not
+names **every** candidate and why it was refused (`ca[node-03]: … does not
 carry tcg-cap-verifiedTPMRestricted`). `UNAVAILABLE` means no CA is
 configured. Every attempt is audited as an attestation store event —
 `device_attest_cert_recorded` or `device_attest_cert_refused` — and never
