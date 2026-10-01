@@ -338,36 +338,21 @@ func TestLoadRoleCertificate_ExplicitOverride(t *testing.T) {
 	assert.Contains(t, cert.Subject.String(), "Override PK")
 }
 
-// TestNewUKIVerifier asserts the production verifier builds from a DB
-// certificate and rejects an unsigned file, and that the verify-only backend
-// refuses signing operations.
+// TestNewUKIVerifier asserts the production verifier needs no key and rejects
+// an unsigned file.
 func TestNewUKIVerifier(t *testing.T) {
-	db := newTestCert(t, "Verifier DB")
-	verifier, err := newUKIVerifier(context.Background(), db, nil)
-	require.NoError(t, err)
+	verifier := newUKIVerifier(context.Background(), nil)
 	require.NotNil(t, verifier)
 
 	unsigned := filepath.Join(t.TempDir(), "unsigned.efi")
 	require.NoError(t, os.WriteFile(unsigned, []byte("not a signed PE"), 0644))
 	assert.Error(t, verifier.VerifyFile(unsigned))
-
-	backend := &verifyOnlyBackend{public: db.PublicKey}
-	signer, signerErr := backend.Signer(context.Background(), nil)
-	require.NoError(t, signerErr)
-	assert.Equal(t, db.PublicKey, signer.Public())
-	_, signErr := signer.Sign(rand.Reader, []byte("digest"), nil)
-	assert.ErrorIs(t, signErr, ErrVerifyOnlyBackend{Operation: "Sign"})
-	_, keyErr := backend.GenerateKey(context.Background(), nil)
-	assert.ErrorIs(t, keyErr, ErrVerifyOnlyBackend{Operation: "GenerateKey"})
-	assert.NoError(t, backend.Close())
 }
 
 // TestErrorMessages asserts the typed errors render their diagnostic detail.
 func TestErrorMessages(t *testing.T) {
 	assert.Contains(t, ErrCertificateLoad{Role: "PK", Path: "/x", Cause: errors.New("boom")}.Error(), "PK")
 	assert.Contains(t, ErrUKINotFound{Path: "/x/uki"}.Error(), "/x/uki")
-	assert.Contains(t, ErrVerifierBuild{Cause: errors.New("boom")}.Error(), "boom")
 	assert.Contains(t, ErrEnforceIncomplete{Reason: "no pk"}.Error(), "no pk")
-	assert.Contains(t, ErrVerifyOnlyBackend{Operation: "Sign"}.Error(), "Sign")
 	assert.Contains(t, ErrNotPEMCertificate{Path: "/x"}.Error(), "/x")
 }

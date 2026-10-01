@@ -27,6 +27,7 @@ import (
 
 	"gopkg.in/yaml.v2"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -317,32 +318,10 @@ func (c *Customizer) ModifyInitramfs(ctx context.Context) error {
 		return &WrappedError{Msg: "failed to create dracut module", Err: err}
 	}
 
-	// Create the /overlay directory in the initramfs. This holds the
-	// files that Alpine's patched /init script will copy into the
-	// switched-root filesystem before exec'ing /sbin/init. Contents:
-	//   overlay/etc/inittab             — custom BusyBox inittab that
-	//                                     runs run-autoinstall.sh as
-	//                                     sysinit, then /sbin/poweroff -f
-	//   overlay/root/autoinstall.sh     — the installer shell script
-	//                                     (buildAutoinstallScript output)
-	//   overlay/root/run-autoinstall.sh — wrapper that manually mounts
-	//                                     /proc /sys /dev + modloop +
-	//                                     loads kernel modules + brings
-	//                                     up networking (we bypass OpenRC)
-	//                                     before chaining to autoinstall.sh
-	c.logger.Info("Creating autoinstall overlay")
-	if err := c.createAutoinstallOverlay(tmpDir); err != nil {
-		return &WrappedError{Msg: "failed to create autoinstall overlay", Err: err}
-	}
-
-	// Patch Alpine's /init script so it copies /overlay → $sysroot before
-	// switch_root when the kernel cmdline contains alpine_start=autoinstall.
-	// The patch is injected via awk after the setup_inittab_console
-	// function in Alpine's stock init. Without the cmdline marker the
-	// normal Alpine live flow runs untouched.
-	c.logger.Info("Patching Alpine init script")
-	if err := c.patchInitScript(tmpDir); err != nil {
-		return &WrappedError{Msg: "failed to patch init script", Err: err}
+	// Make it the installer's initramfs: the autoinstall overlay and the
+	// Alpine /init patches (see makeInstallerInitramfs).
+	if err := c.makeInstallerInitramfs(tmpDir); err != nil {
+		return err
 	}
 
 	// Inject NIC kernel drivers into the initramfs. PXE-booted nodes have no
@@ -366,16 +345,6 @@ func (c *Customizer) ModifyInitramfs(ctx context.Context) error {
 		return &WrappedError{Msg: "failed to inject udhcpc script", Err: err}
 	}
 
-	// Patch Alpine's configure_ip() to wait for link carrier before DHCP.
-	// Bare-metal igb/ixgbe NICs take a few seconds to negotiate carrier;
-	// Alpine brings the link up and immediately runs udhcpc, which broadcasts
-	// before the link is ready, gets no lease, and the modloop fetch then
-	// fails -> emergency shell. See patchConfigureIPCarrierWait.
-	c.logger.Info("Patching Alpine configure_ip for carrier wait")
-	if err := c.patchConfigureIPCarrierWait(tmpDir); err != nil {
-		return &WrappedError{Msg: "failed to patch configure_ip carrier wait", Err: err}
-	}
-
 	// Repack initramfs
 	c.logger.Info("Repacking initramfs")
 	if err := repackInitramfs(tmpDir, initramfsPath); err != nil {
@@ -389,6 +358,70 @@ func (c *Customizer) ModifyInitramfs(ctx context.Context) error {
 	}
 
 	c.logger.Info("Initramfs modification completed successfully")
+	return nil
+}
+
+// makeInstallerInitramfs turns an extracted Alpine live initramfs into the
+// installer's, the part every medium's initramfs shares:
+//   - the /overlay directory the patched /init copies into the switched-root
+//     filesystem before exec'ing /sbin/init: a custom BusyBox inittab that
+//     runs run-autoinstall.sh as sysinit then powers off, the autoinstall
+//     script (buildAutoinstallScript) and its run-autoinstall.sh wrapper,
+//     which mounts /proc /sys /dev and the modloop, loads kernel modules and
+//     brings networking up (OpenRC is bypassed) before chaining to it;
+//   - Alpine's /init patched to copy /overlay into $sysroot when the kernel
+//     cmdline carries alpine_start=autoinstall (without the marker the normal
+//     live flow runs untouched);
+//   - configure_ip() patched to try DHCP on every carrier-up NIC.
+func (c *Customizer) makeInstallerInitramfs(initramfsDir string) error {
+	c.logger.Info("Creating autoinstall overlay")
+	if err := c.createAutoinstallOverlay(initramfsDir); err != nil {
+		return &WrappedError{Msg: "failed to create autoinstall overlay", Err: err}
+	}
+	c.logger.Info("Patching Alpine init script")
+	if err := c.patchInitScript(initramfsDir); err != nil {
+		return &WrappedError{Msg: "failed to patch init script", Err: err}
+	}
+	// Bare-metal igb/ixgbe NICs take a few seconds to negotiate carrier;
+	// Alpine brings the link up and immediately runs udhcpc, which broadcasts
+	// before the link is ready, gets no lease, and the modloop fetch then
+	// fails -> emergency shell. See patchConfigureIPCarrierWait.
+	c.logger.Info("Patching Alpine configure_ip for carrier wait")
+	if err := c.patchConfigureIPCarrierWait(initramfsDir); err != nil {
+		return &WrappedError{Msg: "failed to patch configure_ip carrier wait", Err: err}
+	}
+	return nil
+}
+
+// InstallerInitramfs rewrites a netboot release's initramfs at path as the
+// installer's (makeInstallerInitramfs), with this media's autoinstall. It
+// adds only that: unlike the ISO's CD-flavour initramfs, a netboot initramfs
+// (mkinitfs's network feature) already carries the NIC drivers and udhcpc's
+// default.script, and the platformd dracut module belongs to the installed
+// system's initramfs, not the live one.
+func (c *Customizer) InstallerInitramfs(ctx context.Context, path string) error {
+	tmpDir := filepath.Join(c.config.Directories.Work, "netboot-initramfs-tmp")
+	if err := os.RemoveAll(tmpDir); err != nil {
+		return &WrappedError{Msg: "failed to remove old initramfs temp dir", Err: err}
+	}
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return &WrappedError{Msg: "failed to create initramfs temp dir", Err: err}
+	}
+	if err := extractInitramfs(path, tmpDir); err != nil {
+		return &WrappedError{Msg: "failed to extract initramfs", Err: err}
+	}
+	if err := c.makeInstallerInitramfs(tmpDir); err != nil {
+		return err
+	}
+	if err := repackInitramfs(tmpDir, path); err != nil {
+		return &WrappedError{Msg: "failed to repack initramfs", Err: err}
+	}
+	if err := os.RemoveAll(tmpDir); err != nil {
+		return &WrappedError{Msg: "failed to remove initramfs temp dir", Err: err}
+	}
+	if err := c.verifyInitramfs(path); err != nil {
+		return &WrappedError{Msg: "failed to verify initramfs", Err: err}
+	}
 	return nil
 }
 
@@ -1162,7 +1195,7 @@ const (
 	SecureBootKeysMediaDir = "/media/cdrom/" + SecureBootKeysISODirName
 )
 
-// secureBootPublicArtifact positively identifies data as the public
+// IsSecureBootPublicArtifact positively identifies data as the public
 // enrollment artifact its filename claims: certificate files must parse as
 // X.509 certificates (PEM or DER) and signature lists must be strictly
 // valid EFI structures holding only public entries. Remote/KMS-signing
@@ -1175,7 +1208,7 @@ const (
 // secret bytes, and nothing in the install flow consumes staged .auth
 // files — the installer constructs its own Setup-Mode authentication
 // payloads from the staged certificates (round-12 review).
-func secureBootPublicArtifact(name string, data []byte) bool {
+func IsSecureBootPublicArtifact(name string, data []byte) bool {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".crt", ".cer", ".der":
 		return parsesAsCertificates(data)
@@ -1274,10 +1307,16 @@ func (c *Customizer) CopySecureBootKeys(ctx context.Context) error {
 	// When applySecurityOverrides has not run (standalone invocation),
 	// conservatively assume media signing.
 	mediaSigning := c.mediaSigningEnabled()
-	// Private keys are omitted from the media ONLY for the explicit
-	// remote/KMS-signing case; an SB-off build keeps the historical
-	// "Secure Boot ready" behavior of staging the full key set.
-	skipPrivateKeys := c.config.Security.SecureBoot && c.sbMediaSigningKnown && !c.sbMediaSigning
+	// Private keys are omitted from the media for the explicit
+	// remote/KMS-signing case and for a network-served medium (a netboot
+	// media set), which never carries private key material and cannot sign
+	// with media-staged keys at all. Otherwise an SB-off build keeps the
+	// historical "Secure Boot ready" behavior of staging the full key set.
+	servedPublicOnly := c.config.Security.PublicKeysOnly
+	if servedPublicOnly && mediaSigning {
+		return &MessageError{Msg: "a network-served medium cannot sign with media-staged Secure Boot keys: keep the DB key in the KMS (secure-boot.resign-mode: remote, kms:// references)"}
+	}
+	skipPrivateKeys := servedPublicOnly || (c.config.Security.SecureBoot && c.sbMediaSigningKnown && !c.sbMediaSigning)
 	// An enforcing baked config makes staging fail-closed regardless of
 	// where signing happens: the installer resolves the PK/KEK enrollment
 	// certificates from the staged media and warns past their absence, so
@@ -1381,7 +1420,7 @@ func (c *Customizer) CopySecureBootKeys(ctx context.Context) error {
 		// material.
 		if skipPrivateKeys {
 			data, readErr := os.ReadFile(srcPath)
-			if readErr != nil || !secureBootPublicArtifact(entry.Name(), data) {
+			if readErr != nil || !IsSecureBootPublicArtifact(entry.Name(), data) {
 				c.logger.Warn("Skipping artifact not identified as public enrollment material (remote/KMS signing configured)",
 					"file", entry.Name())
 				continue
@@ -1425,7 +1464,7 @@ func (c *Customizer) CopySecureBootKeys(ctx context.Context) error {
 		// key, parseable certificate, matching public keys — or the
 		// failure surfaces only as an unsignable UKI on the target
 		// (round-11 review).
-		if err := installer.ValidateSecureBootSigningPair(
+		if _, _, err := authenticode.LoadSigningPair(
 			filepath.Join(destDir, requiredKey), filepath.Join(destDir, requiredCert)); err != nil {
 			return &WrappedError{Msg: "Secure Boot media signing configured but the staged DB pair is unusable", Err: err}
 		}
@@ -1953,22 +1992,21 @@ func (c *Customizer) ConfigureBootloader(ctx context.Context) error {
 			if dynamicParams != "" && !strings.Contains(line, "platform_config=") {
 				line += " " + dynamicParams
 			}
-			// Always enable debug mode + forensic upload sink for the
-			// install. The autoinstall.sh upload_install_log function reads
-			// platform_debug_sink from /proc/cmdline and PUTs install.log
-			// there on every exit path. We bake the bootstrap host into
-			// the kernel cmdline at ISO build time because the live env's
-			// udhcpc doesn't write the dhclient lease format the script
-			// would otherwise probe.
+			// Always enable debug mode for the install. The autoinstall.sh
+			// upload_install_log function reads platform_debug_sink from
+			// /proc/cmdline and PUTs install.log there on every exit path.
+			// A configured sink is baked in at ISO build time; without one
+			// the script derives the sink from the DHCP server, so no
+			// deployment's address is ever assumed here.
 			if !strings.Contains(line, "platform_debug=") {
 				line += " platform_debug=1"
 			}
 			if !strings.Contains(line, "platform_debug_sink=") {
-				sink := c.config.Platform.DebugSink
-				if sink == "" {
-					sink = "198.18.1.91:8080"
+				if sink := c.config.Platform.DebugSink; sink != "" {
+					line += " platform_debug_sink=" + sink
+				} else {
+					c.logger.Info("No debug sink configured; the install script will derive it from the DHCP server")
 				}
-				line += " platform_debug_sink=" + sink
 			}
 			// platform_apk_mirror=<url> — the INSTALL-time APK repository
 			// base. buildAutoinstallScript reads this from /proc/cmdline and
@@ -2173,7 +2211,7 @@ search --no-floppy --set=root --label "%s"
 // material is guaranteed: CopySecureBootKeys runs earlier in Customize and
 // fails the build when the staged DB pair is absent, and validates it as a
 // usable signing pair rather than merely present files
-// (installer.ValidateSecureBootSigningPair). There is deliberately no
+// (authenticode.LoadSigningPair). There is deliberately no
 // "keys missing" branch here -- that build has already failed.
 //
 // SCOPE: this signs the BOOTLOADER only. The kernel and initrd on the ISO
@@ -2190,7 +2228,7 @@ func (c *Customizer) signISOBootloader(ctx context.Context, efiPath string) erro
 	}
 	stagedDir := filepath.Join(c.config.Directories.ISO, SecureBootKeysISODirName)
 
-	signer, err := installer.NewSecureBootFileSigner(
+	signer, err := authenticode.NewFileSigner(
 		ctx,
 		filepath.Join(stagedDir, keyFile),
 		filepath.Join(stagedDir, certFile),
@@ -2741,6 +2779,9 @@ fi
 }
 
 // patchInitScript patches Alpine's init script to copy overlay to sysroot
+// autoinstallInjectionMarker opens the block patchInitScript adds to init.
+const autoinstallInjectionMarker = "# Autoinstall injection"
+
 func (c *Customizer) patchInitScript(initramfsDir string) error {
 	initPath := filepath.Join(initramfsDir, "init")
 	if _, err := os.Stat(initPath); os.IsNotExist(err) {
@@ -2748,7 +2789,7 @@ func (c *Customizer) patchInitScript(initramfsDir string) error {
 	}
 
 	patchContent := `
-# Autoinstall injection - copy overlay to sysroot and use BusyBox init with custom inittab
+` + autoinstallInjectionMarker + ` - copy overlay to sysroot and use BusyBox init with custom inittab
 if grep -q alpine_start=autoinstall /proc/cmdline 2>/dev/null; then
   echo "Applying autoinstall configuration..." > /dev/kmsg
   mkdir -p "$sysroot"/root "$sysroot"/etc
@@ -2805,6 +2846,11 @@ fi
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return &CommandOutputError{Msg: "failed to patch init script", Err: err, Detail: fmt.Sprintf("\nOutput: %s", string(output))}
+	}
+	// awk passes an init without the anchor through unchanged: that init
+	// would boot a live system that never installs.
+	if !strings.Contains(string(output), autoinstallInjectionMarker) {
+		return &MessageError{Msg: "autoinstall patch: setup_inittab_console call not found in init (Alpine init layout changed?)"}
 	}
 
 	// Write patched init
@@ -2938,6 +2984,79 @@ func (c *Customizer) verifyInitramfs(initramfsPath string) error {
 	c.logger.Debug("Initramfs verification passed")
 	return nil
 }
+
+// PXEPayloadFunction is the autoinstall's fetch_install_payload BASE CDROM:
+// it rebuilds the CD an installer booted over the network does not have,
+// from the media set it booted. BASE/payload.list names every entry
+// (<sha256> <kind> <dest> <src>, container.PayloadEntry); each is fetched
+// from BASE/<src>, checked against its digest, and placed at CDROM/<dest>
+// (kind file) or extracted into it (kind tar). Anything missing, corrupt or
+// escaping CDROM ends the install through error(): an installer run with a
+// partial payload fails later and less legibly — the gatewayd that was once
+// left off a hard-coded list aborted every gateway install after it had
+// already partitioned the disk. The list is the build's, so nothing the
+// build ships can be forgotten here.
+const PXEPayloadFunction = `fetch_install_payload() {
+    _base="$1"
+    _cdrom="$2"
+    log "Fetching the install payload from $_base (PXE has no CD)"
+    mkdir -p "$_cdrom"
+    _work="$(mktemp -d)" || error "cannot create a work directory"
+    wget -q -O "$_work/payload.list" "$_base/payload.list" || error "cannot fetch $_base/payload.list"
+    _count=0
+    while read -r _sum _kind _dest _src; do
+        case "$_sum" in ""|"#"*) continue ;; esac
+        [ -n "$_src" ] || error "malformed payload entry for $_dest"
+        case "/$_dest/$_src/" in */../*|*//*) error "payload entry $_dest escapes the CD" ;; esac
+        _tmp="$_work/entry"
+        wget -q -O "$_tmp" "$_base/$_src" || error "cannot fetch payload $_src"
+        echo "$_sum  $_tmp" | sha256sum -c - >/dev/null 2>&1 || error "payload $_src does not match its digest"
+        case "$_kind" in
+            file)
+                mkdir -p "$_cdrom/$(dirname "$_dest")"
+                mv "$_tmp" "$_cdrom/$_dest"
+                case "$_dest" in platformd-bin/*) chmod +x "$_cdrom/$_dest" ;; esac
+                ;;
+            tar)
+                mkdir -p "$_cdrom/$_dest"
+                tar -xzf "$_tmp" -C "$_cdrom/$_dest" || error "cannot extract payload $_src"
+                rm -f "$_tmp"
+                ;;
+            *)
+                error "payload entry $_dest has unknown kind $_kind"
+                ;;
+        esac
+        _count=$((_count + 1))
+    done < "$_work/payload.list"
+    rm -rf "$_work"
+    [ -x "$_cdrom/platformd-bin/platformctl" ] || error "the payload provided no platformd-bin/platformctl"
+    : > "$_cdrom/.payload-complete"
+    log "Install payload in place ($_count entries)"
+}`
+
+// NodeConfigFunction is the autoinstall's stage_node_config CONFIG CDROM CA:
+// on a CD rebuilt from a media set's payload (.payload-complete), the config
+// the install runs with — the node's own, fetched per MAC — replaces the
+// set's baked configs/installer.yaml, and the fetched CA bundle its
+// ca-bundle.pem: the installer copies both onto the target as the installed
+// system's runtime config, and a node must never come up with the generic
+// one. A failure ends the install. A real CD (virtual media) is read-only
+// and left alone.
+const NodeConfigFunction = `stage_node_config() {
+    _config="$1"
+    _cdrom="$2"
+    _ca="$3"
+    [ -f "$_cdrom/.payload-complete" ] || return 0
+    [ -n "$_config" ] || return 0
+    [ "$_config" = "$_cdrom/configs/installer.yaml" ] && return 0
+    mkdir -p "$_cdrom/configs"
+    cp -f "$_config" "$_cdrom/configs/installer.yaml" || error "cannot stage the node's platform config for the installed system"
+    log "Staged the node's platform config to $_cdrom/configs/installer.yaml"
+    if [ -f "$_ca" ]; then
+        cp -f "$_ca" "$_cdrom/configs/ca-bundle.pem" || error "cannot stage the node's CA bundle"
+        log "Staged the node's CA bundle to $_cdrom/configs/ca-bundle.pem"
+    fi
+}`
 
 // buildAutoinstallScript generates the autoinstall script content
 func (c *Customizer) buildAutoinstallScript() string {
@@ -3719,84 +3838,26 @@ else
     error "Device-mapper control node not available - LUKS will fail"
 fi
 
-# PXE install-payload delivery. On virtual-media the installer reads its
-# assets from the CD at /media/cdrom: the platformd-bin/ binaries
-# (platformctl, platformd, platform-initrd), the dracut-platformd/ module,
-# and the Alpine minirootfs. PXE-booted nodes have no CD, so the pxeboot
-# container serves the same assets over HTTP (platform_bin_url=) and we
-# reconstruct the /media/cdrom layout here. Every CD-relative path the
-# installer and the binary searches below already use then resolves with no
-# installer code changes. No-op on virtual-media (param unset, real CD
-# present) and idempotent (skips assets already present).
+# PXE install payload. On virtual media the installer reads its assets
+# from the CD at /media/cdrom. A node booted over the network has none: the
+# media set it booted serves them, and its payload.list says what goes
+# where (fetch_install_payload). No-op on virtual media (platform_bin_url
+# unset) and done once (the completion marker).
 PLATFORM_BIN_URL=""
 for param in $(cat /proc/cmdline); do
     case "$param" in
         platform_bin_url=*) PLATFORM_BIN_URL="${param#platform_bin_url=}" ;;
     esac
 done
-if [ -n "$PLATFORM_BIN_URL" ] && [ ! -f /media/cdrom/platformd-bin/platformctl ]; then
-    PLATFORM_BIN_BASE="${PLATFORM_BIN_URL%/}"
-    log "Reconstructing /media/cdrom install payload from $PLATFORM_BIN_BASE (PXE has no CD)"
+if [ -n "$PLATFORM_BIN_URL" ] && [ ! -f /media/cdrom/.payload-complete ]; then
     # Defensive network bring-up: the wrapper already configured the boot
     # NIC, but retry once if there is no default route yet.
     if ! ip route 2>/dev/null | grep -q default; then
         ip link set eth0 up 2>/dev/null || true
         udhcpc -i eth0 -t 10 -T 3 -n 2>/dev/null || true
     fi
-    mkdir -p /media/cdrom/platformd-bin
-    # Installer binaries: platformctl (install CLI), platformd (daemon,
-    # embedded into the target UKI), platform-initrd (boot-time LUKS/TPM
-    # unlock binary), gatewayd (edge daemon, REQUIRED on a gateway-role
-    # node -- pkg/installer/gatewayd.go aborts the whole install with
-    # "gatewayd is required by this node's gateway role and was not found
-    # under platformd-bin/" when it is absent, so a gateway could never be
-    # installed over PXE while this list omitted it). The installer and the
-    # binary searches below look for these under /media/cdrom/platformd-bin.
-    #
-    # gatewayd is fetched on every role: the role comes from the config the
-    # installer resolves later, and a missing-but-unused binary costs one
-    # HTTP 404 while a missing-and-needed one costs the install.
-    for _bin in platformctl platformd platform-initrd gatewayd; do
-        if wget -q -O "/media/cdrom/platformd-bin/$_bin" "$PLATFORM_BIN_BASE/$_bin" 2>/dev/null; then
-            chmod +x "/media/cdrom/platformd-bin/$_bin"
-            log "Fetched $_bin ($(wc -c < /media/cdrom/platformd-bin/$_bin 2>/dev/null) bytes)"
-        else
-            rm -f "/media/cdrom/platformd-bin/$_bin"
-            log "WARNING: failed to fetch $_bin from $PLATFORM_BIN_BASE"
-        fi
-    done
-    # dracut-platformd module (the 90platformd dracut module the installer
-    # copies into the target so dracut can build the LUKS-unlock UKI). Served
-    # as a tarball because it is a directory tree.
-    if wget -q -O /tmp/dracut-platformd.tar.gz "$PLATFORM_BIN_BASE/dracut-platformd.tar.gz" 2>/dev/null; then
-        mkdir -p /media/cdrom/dracut-platformd
-        if tar -xzf /tmp/dracut-platformd.tar.gz -C /media/cdrom/dracut-platformd 2>/dev/null; then
-            log "Fetched + extracted dracut-platformd module"
-        else
-            log "WARNING: failed to extract dracut-platformd module"
-        fi
-        rm -f /tmp/dracut-platformd.tar.gz
-    else
-        log "WARNING: failed to fetch dracut-platformd module from $PLATFORM_BIN_BASE"
-    fi
-fi
-
-# PXE minirootfs delivery. The OS installer prefers a locally-cached Alpine
-# minirootfs (the prefetch builder drops it on the CD for virtual-media).
-# PXE nodes have no CD, so fetch the same tarball the container serves
-# (extracted from THIS ISO, so the version matches) into the cache path the
-# installer already checks — /media/cdrom/alpine-minirootfs.tar.gz. This
-# avoids the installer downloading the minirootfs from the public dl-cdn
-# mirror, which a provisioning network with no upstream egress cannot reach.
-if [ -n "$PLATFORM_BIN_URL" ] && [ ! -f /media/cdrom/alpine-minirootfs.tar.gz ]; then
-    PLATFORM_BIN_BASE="${PLATFORM_BIN_URL%/}"
-    mkdir -p /media/cdrom
-    if wget -q -O /media/cdrom/alpine-minirootfs.tar.gz "$PLATFORM_BIN_BASE/alpine-minirootfs.tar.gz" 2>/dev/null; then
-        log "Fetched Alpine minirootfs ($(wc -c < /media/cdrom/alpine-minirootfs.tar.gz 2>/dev/null) bytes)"
-    else
-        rm -f /media/cdrom/alpine-minirootfs.tar.gz
-        log "WARNING: failed to fetch Alpine minirootfs from $PLATFORM_BIN_BASE"
-    fi
+` + PXEPayloadFunction + `
+    fetch_install_payload "${PLATFORM_BIN_URL%/}" /media/cdrom
 fi
 
 # Find platformctl binary (CLI binary for installation operations)
@@ -4068,23 +4129,11 @@ log "Target disk: $INSTALL_DISK"
 
 # PXE: the installer copies the runtime platform config from
 # /media/cdrom/configs/ into /etc/trusted-platform/config.yaml on the target,
-# and platformd (--config-dir=/etc/trusted-platform) needs it to serve. On
-# PXE there is no CD, so mirror the per-MAC config (and CA bundle, if any)
-# we fetched into /media/cdrom/configs/ where the installer looks. Without
-# this the target has no config, platformd starts with defaults and exits,
-# and the firstboot TPM seal has no seal-pcrs.
-if [ -n "$INSTALLER_CONFIG" ] && [ ! -f /media/cdrom/configs/installer.yaml ]; then
-    mkdir -p /media/cdrom/configs
-    if cp "$INSTALLER_CONFIG" /media/cdrom/configs/installer.yaml 2>/dev/null; then
-        log "Staged runtime platform config to /media/cdrom/configs/installer.yaml"
-    else
-        log "WARNING: failed to stage runtime config to /media/cdrom/configs"
-    fi
-    if [ -f /tmp/ca-bundle.pem ]; then
-        cp /tmp/ca-bundle.pem /media/cdrom/configs/ca-bundle.pem 2>/dev/null && \
-            log "Staged CA bundle to /media/cdrom/configs/ca-bundle.pem"
-    fi
-fi
+# and platformd (--config-dir=/etc/trusted-platform) needs it to serve. The
+# CD rebuilt from the media set carries the set's baked config; the node's
+# own (fetched per MAC) must replace it (stage_node_config).
+` + NodeConfigFunction + `
+stage_node_config "$INSTALLER_CONFIG" /media/cdrom /tmp/ca-bundle.pem
 
 # Resolve hostname from embedded platform config (same function used for
 # install log upload path). Falls back to "trusted-platform" if unset.
@@ -5350,9 +5399,11 @@ func repackInitramfs(initramfsDir, outputPath string) error {
 	// Create temporary file for new initramfs
 	tmpFile := outputPath + ".new"
 
-	// Create cpio archive and compress with zstd
+	// Create cpio archive and compress with zstd. Every entry is owned by
+	// root (-R 0:0) whoever runs the build: the files are the early root
+	// filesystem's, not the builder's.
 	findCmd := exec.Command("find", ".")
-	cpioCmd := exec.Command("cpio", "-o", "-H", "newc")
+	cpioCmd := exec.Command("cpio", "-o", "-H", "newc", "-R", "0:0")
 	zstdCmd := exec.Command("zstd", "-19", "-T0")
 
 	// Setup pipes

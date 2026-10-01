@@ -57,7 +57,7 @@ func createOrchestrator(config *bootstrap.BootstrapConfig, configPath string, lo
 	if config.Deployer.Host != "" && config.Deployer.ContainerImage != "" {
 		d, err := bootstrap.NewLinuxDeployerAdapter(&config.Deployer, logger)
 		if err != nil {
-			return nil, ErrDeployerCreationFailed{Target: config.Deployer.Target, Cause: err}
+			return nil, ErrDeployerCreationFailed{Host: config.Deployer.Host, Cause: err}
 		}
 		dep = d
 	}

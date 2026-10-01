@@ -16,6 +16,7 @@ package ipxe
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -230,57 +231,75 @@ func (rw *responseWriter) WriteHeader(code int) {
 // setups still get an interactive selection.
 func (s *HTTPServer) handleBootScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
+	var sb strings.Builder
+	sb.WriteString("#!ipxe\n")
 
-	if len(s.config.BootEntries) == 1 {
-		entry := s.config.BootEntries[0]
-		if entry.Kernel != "" && entry.Initrd != "" {
-			kernelURL := s.proxyURL(entry.Kernel)
-			initrdURL := s.proxyURL(entry.Initrd)
-			args := s.proxyArgsURLs(entry.Args)
-			script := fmt.Sprintf(`#!ipxe
-
-# Single-entry inline boot with bounded retry. X10 ATEN iPXE
-# intermittently drops the chained initramfs HTTP fetch (sometimes the
-# kernel fetch too); retry kernel+initrd+boot instead of dead-ending at
-# the iPXE shell so a transient drop doesn't fail the whole install. See
-# handleBootScript docs in pkg/ipxe/http_server.go.
-
-echo Booting %s...
-echo
-
-set attempts:int32 0
-:boot_retry
-inc attempts
-echo Boot attempt ${attempts}...
-kernel %s %s || goto boot_failed
-initrd %s || goto boot_failed
-boot || goto boot_failed
-:boot_failed
-iseq ${attempts} 20 && goto boot_giveup ||
-echo Boot fetch failed (attempt ${attempts}); retrying in 3s...
-sleep 3
-goto boot_retry
-:boot_giveup
-echo Giving up after ${attempts} attempts; dropping to iPXE shell
-shell
-`, entry.Description, kernelURL, args, initrdURL)
-			w.Write([]byte(script))
-			return
-		}
+	// A known device boots what it was assigned; the per-device route
+	// answers 404 for any other MAC and the chain falls through to the
+	// entries below. ${mac:hexhyp} is the booting NIC's MAC, dashed.
+	if s.deviceLookup != nil {
+		sb.WriteString("chain --autofree boot/device/${mac:hexhyp}.ipxe ||\n")
 	}
 
-	script := `#!ipxe
+	switch entries := s.config.BootEntries; {
+	case len(entries) == 1 && entries[0].Kernel != "" && entries[0].Initrd != "":
+		entry := entries[0]
+		sb.WriteString(architectureGuard(entry.Architecture, "menu.ipxe"))
+		sb.WriteString(bootBlock("", entry.Description, s.proxyURL(entry.Kernel), s.proxyArgsURLs(entry.Args), s.proxyURL(entry.Initrd)))
+	case distinctArchitectures(entries):
+		// One entry per architecture (the bootstrap container's media
+		// sets): boot the client's own, unattended.
+		for _, entry := range entries {
+			for _, client := range dispatchArchitectures(entry.Architecture, entries) {
+				fmt.Fprintf(&sb, "iseq ${buildarch} %s && goto arch_%s ||\n", client, entry.Architecture)
+			}
+		}
+		sb.WriteString("chain menu.ipxe?arch=${buildarch} || shell\n")
+		for _, entry := range entries {
+			fmt.Fprintf(&sb, ":arch_%s\n", entry.Architecture)
+			sb.WriteString(bootBlock(entry.Architecture, entry.Description, s.proxyURL(entry.Kernel), s.proxyArgsURLs(entry.Args), s.proxyURL(entry.Initrd)))
+		}
+	default:
+		sb.WriteString("echo Booting from PXE server...\nchain menu.ipxe?arch=${buildarch} || shell\n")
+	}
+	if _, err := w.Write([]byte(sb.String())); err != nil {
+		s.logger.Warn("writing boot script", "error", err.Error())
+	}
+}
 
-# iPXE boot script
-# Chain to menu
+// dispatchArchitectures is ClientArchitectures less any architecture
+// another entry claims for itself (an explicit i386 entry wins i386).
+func dispatchArchitectures(architecture string, entries []BootEntry) []string {
+	var out []string
+	for _, client := range ClientArchitectures(architecture) {
+		claimed := false
+		for _, e := range entries {
+			if e.Architecture == client && client != architecture {
+				claimed = true
+			}
+		}
+		if !claimed {
+			out = append(out, client)
+		}
+	}
+	return out
+}
 
-echo Booting from PXE server...
-echo
-
-chain menu.ipxe || shell
-`
-
-	w.Write([]byte(script))
+// distinctArchitectures reports whether entries can be dispatched by
+// architecture alone: more than one, each with a kernel, an initrd and an
+// architecture no other entry has.
+func distinctArchitectures(entries []BootEntry) bool {
+	if len(entries) < 2 {
+		return false
+	}
+	seen := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if e.Architecture == "" || e.Kernel == "" || e.Initrd == "" || seen[e.Architecture] {
+			return false
+		}
+		seen[e.Architecture] = true
+	}
+	return true
 }
 
 // handleMenuScript serves the dynamic boot menu with all configured entries.
@@ -328,18 +347,20 @@ shell
 :end
 `
 
+	// ?arch=<iPXE buildarch> narrows the menu to what this client can run.
+	entries := EntriesForArchitecture(s.config.BootEntries, r.URL.Query().Get("arch"))
 	data := struct {
 		Entries []BootEntry
 		Default string
 		BaseURL string
 	}{
-		Entries: s.config.BootEntries,
+		Entries: entries,
 		Default: "",
 		BaseURL: s.config.ExternalURL,
 	}
 
-	if len(s.config.BootEntries) > 0 {
-		data.Default = s.config.BootEntries[0].Name
+	if len(entries) > 0 {
+		data.Default = entries[0].Name
 	}
 
 	t, err := template.New("menu").Parse(tmpl)
@@ -410,12 +431,14 @@ func (s *HTTPServer) handleDeviceBootScript(w http.ResponseWriter, r *http.Reque
 	mac = strings.ReplaceAll(mac, "-", ":")
 
 	info, err := s.deviceLookup(mac)
-	if err != nil {
-		s.logger.Warn("device lookup failed",
-			"mac", mac,
-			"error", err.Error(),
-		)
+	switch {
+	case errors.Is(err, ErrDeviceNotFound):
+		s.logger.Debug("no per-device assignment; client falls through to the default entries", "mac", mac)
 		http.Error(w, "device not found", http.StatusNotFound)
+		return
+	case err != nil:
+		s.logger.Warn("device lookup failed", "mac", mac, "error", err.Error())
+		http.Error(w, "device lookup failed", http.StatusInternalServerError)
 		return
 	}
 

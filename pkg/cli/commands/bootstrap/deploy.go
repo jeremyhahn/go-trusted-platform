@@ -17,13 +17,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -35,11 +31,13 @@ func newDeployCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy bootstrap container",
-		Long: `Deploy the PXE bootstrap container to the configured target host.
+		Long: `Deploy the PXE bootstrap container to the deployer host.
 
-This runs Phase 2 of the bootstrap flow: it discovers node MACs,
-builds the container manifest, and deploys the bootstrap container
-via SSH to the target host (Linux or Cisco IOS-XE guestshell).
+This runs the first phases of "bootstrap run" and stops once the container
+is serving: discovery of the nodes' MACs (Phase 0), switch configuration
+when bootstrap.yaml has a switch section (Phase 1), and the container
+deploy with the manifest built from discovery and the netboot media build
+(Phase 2).
 
 Examples:
   # Deploy the bootstrap container
@@ -56,7 +54,8 @@ Examples:
 	return cmd
 }
 
-// runDeploy loads config, discovers nodes, builds a manifest, and deploys the container.
+// runDeploy brings the bootstrap container up through the orchestrator,
+// exactly as the first phases of bootstrap run do.
 func runDeploy(configPath string, commonFlags *cli.CommonFlags) error {
 	config, err := loadAndValidateConfig(configPath)
 	if err != nil {
@@ -66,76 +65,20 @@ func runDeploy(configPath string, commonFlags *cli.CommonFlags) error {
 	verbose := commonFlags != nil && commonFlags.Verbose
 	logger := logging.NewLogger(logLevelFromVerbose(verbose), os.Stderr).Slog()
 
-	// Create deployer for the configured target.
-	target := deployer.DeployTarget(config.Deployer.Target)
-	dep, err := deployer.NewDeployer(target, logger)
+	orch, err := createOrchestrator(config, configPath, logger)
 	if err != nil {
-		return ErrDeployerCreationFailed{Target: config.Deployer.Target, Cause: err}
+		return err
 	}
 
-	ctx := context.Background()
-
-	// Build deploy config from bootstrap config.
-	deployConfig := buildDeployConfig(config, configPath)
-
-	// Deploy the container.
-	result, err := dep.Deploy(ctx, deployConfig)
+	result, err := orch.Deploy(context.Background())
 	if err != nil {
 		return ErrPXEDeployFailed{Cause: err}
 	}
 
 	fmt.Fprintf(os.Stdout, "Bootstrap container deployed\n")
-	fmt.Fprintf(os.Stdout, "  Host:        %s\n", result.Host)
-	fmt.Fprintf(os.Stdout, "  Container:   %s\n", result.ContainerID)
-	fmt.Fprintf(os.Stdout, "  Running:     %t\n", result.Running)
-
+	fmt.Fprintf(os.Stdout, "  Host:        %s\n", config.Deployer.Host)
+	fmt.Fprintf(os.Stdout, "  Nodes:       %d\n", len(result.Nodes))
+	fmt.Fprintf(os.Stdout, "  Switch:      %t\n", result.SwitchConfigured)
+	fmt.Fprintf(os.Stdout, "  Duration:    %s\n", result.Duration)
 	return nil
-}
-
-// buildDeployConfig converts a BootstrapConfig into a deployer.DeployConfig.
-// configPath is the path to the bootstrap YAML, used to resolve relative paths.
-func buildDeployConfig(config *bootstrap.BootstrapConfig, configPath string) *deployer.DeployConfig {
-	configDir := ""
-	if configPath != "" {
-		configDir = filepath.Dir(configPath)
-	}
-
-	// Expand ~ in SSH key path.
-	sshKey := config.Deployer.SSHKey
-	if strings.HasPrefix(sshKey, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			sshKey = filepath.Join(home, sshKey[2:])
-		}
-	}
-
-	dc := &deployer.DeployConfig{
-		Target:           deployer.DeployTarget(config.Deployer.Target),
-		Host:             config.Deployer.Host,
-		User:             config.Deployer.User,
-		SSHKeyPath:       sshKey,
-		ContainerRuntime: config.Deployer.ContainerRuntime,
-		ContainerImage:   config.Deployer.ContainerImage,
-		// DataDir is required by teardown so the root cleanup container
-		// targets the configured staging directory rather than the
-		// package default; EffectiveDataDir falls back to that default
-		// when unset.
-		DataDir:            config.Deployer.EffectiveDataDir(),
-		TransferProtocol:   config.Deployer.TransferProtocol,
-		TransferServer:     config.Deployer.TransferServer,
-		CiscoAppID:         config.Deployer.AppID,
-		CiscoImageFile:     config.Deployer.ImageFile,
-		ProvisioningSubnet: config.ProvisioningSubnet(),
-	}
-
-	// Resolve relative config file path against bootstrap.yaml directory.
-	if config.Deployer.ConfigFile != "" {
-		cfgPath := config.Deployer.ConfigFile
-		if !filepath.IsAbs(cfgPath) && configDir != "" {
-			cfgPath = filepath.Join(configDir, cfgPath)
-		}
-		dc.CiscoConfigFile = cfgPath
-	}
-
-	dc.ApplyDefaults()
-	return dc
 }

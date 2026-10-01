@@ -361,3 +361,16 @@ func TestErrorStrings(t *testing.T) {
 	assert.ErrorIs(t, &ConsoleError{Err: cause}, cause)
 	assert.Contains(t, (&ConsoleTimeoutError{Needle: "=> ", Transcript: "t"}).Error(), `"=> "`)
 }
+
+func TestMissingMilestone_NamesTheFirstAbsentOne(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "serial.log")
+	require.NoError(t, os.WriteFile(path, []byte("U-Boot 2026.07\nBooting Linux\nlogin:\n"), 0o644))
+
+	assert.Equal(t, "every milestone present", MissingMilestone(path, []string{"U-Boot 20", "Linux", "login:"}))
+	assert.Equal(t, "first missing milestone: Welcome", MissingMilestone(path, []string{"U-Boot 20", "Welcome", "login:"}))
+}
+
+func TestMissingMilestone_AbsentTranscriptLacksTheFirst(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "never-written.log")
+	assert.Equal(t, "first missing milestone: U-Boot 20", MissingMilestone(path, []string{"U-Boot 20", "login:"}))
+}

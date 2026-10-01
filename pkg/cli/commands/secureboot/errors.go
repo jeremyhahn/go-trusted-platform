@@ -39,18 +39,6 @@ func (e ErrUKINotFound) Error() string {
 	return fmt.Sprintf("secure-boot: signed UKI not found at %s (use --uki to point at the signed unified kernel image)", e.Path)
 }
 
-// ErrVerifierBuild indicates the Authenticode verifier could not be
-// constructed from the DB certificate.
-type ErrVerifierBuild struct {
-	Cause error
-}
-
-func (e ErrVerifierBuild) Error() string {
-	return fmt.Sprintf("secure-boot: failed to build UKI verifier: %v", e.Cause)
-}
-
-func (e ErrVerifierBuild) Unwrap() error { return e.Cause }
-
 // ErrEnforceIncomplete indicates key enrollment was committed but the
 // firmware state read back afterwards does not reflect an enrolled Platform
 // Key, so Secure Boot enforcement cannot be confirmed.
@@ -60,17 +48,6 @@ type ErrEnforceIncomplete struct {
 
 func (e ErrEnforceIncomplete) Error() string {
 	return "secure-boot: enforcement incomplete: " + e.Reason
-}
-
-// ErrVerifyOnlyBackend indicates a signing operation was requested on the
-// verify-only keystore backend used to build the Authenticode verifier. The
-// backend intentionally holds no private key material.
-type ErrVerifyOnlyBackend struct {
-	Operation string
-}
-
-func (e ErrVerifyOnlyBackend) Error() string {
-	return "secure-boot: operation " + e.Operation + " not available on the verify-only backend"
 }
 
 // ErrNotPEMCertificate indicates a certificate file did not contain a PEM

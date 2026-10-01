@@ -16,11 +16,14 @@ package iso
 import (
 	"context"
 	"fmt"
-	"net"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu/harness"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -29,7 +32,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 var (
@@ -43,7 +45,26 @@ var (
 	pxeWorkDir    string
 	pxeDebug      bool
 	pxeSecureBoot bool
+
+	// Architecture-specific flags (test_pxe_arch.go).
+	pxeArchitectureFlag string
+	pxeUBoot            string
+	pxeIPXE             string
+	pxeKeysDir          string
+	// Automation: capture the console to a file and stop at a milestone.
+	pxeSerialLog string
+	pxeExpect    string
+	// The client's disk: what a network-booted installer installs to.
+	pxeDisk     string
+	pxeDiskSize string
 )
+
+// DefaultPXEDiskName is the client disk created under the work directory
+// when --disk is not given.
+const DefaultPXEDiskName = "pxe-client.qcow2"
+
+// pxeServerReadyTimeout bounds the wait for the PXE server's listeners.
+const pxeServerReadyTimeout = 10 * time.Second
 
 // newTestPXECommand creates the pxe subcommand for PXE boot testing
 func newTestPXECommand(getFlags func() *cli.CommonFlags) *cobra.Command {
@@ -113,6 +134,22 @@ Examples:
 		"Enable debug output")
 	cmd.Flags().BoolVar(&pxeSecureBoot, "secure-boot", false,
 		"Enable UEFI Secure Boot")
+	cmd.Flags().StringVar(&pxeArchitectureFlag, "architecture", "x86_64",
+		"Guest architecture: x86_64 (OVMF) or aarch64 (U-Boot as -bios; the served iPXE and the kernel are signed with the db key)")
+	cmd.Flags().StringVar(&pxeUBoot, "uboot", "",
+		"aarch64: the qemu_arm64 u-boot.bin (default "+DefaultPXEUBoot+")")
+	cmd.Flags().StringVar(&pxeIPXE, "ipxe", "",
+		"aarch64: the platform-built arm64 iPXE served to the client (default: "+DefaultPXEIPXE+", from make ipxe-build)")
+	cmd.Flags().StringVar(&pxeKeysDir, "keys-dir", "",
+		"aarch64: directory holding DB.key and DB.crt, the Secure Boot db U-Boot was preseeded with (default "+DefaultPXEKeysDir+")")
+	cmd.Flags().StringVar(&pxeDisk, "disk", "",
+		"Client disk image (default: <work-dir>/"+DefaultPXEDiskName+", created when missing)")
+	cmd.Flags().StringVar(&pxeDiskSize, "disk-size", "10G",
+		"Size of the client disk when it is created")
+	cmd.Flags().StringVar(&pxeSerialLog, "serial-log", "",
+		"Capture the guest console to this file instead of stdio")
+	cmd.Flags().StringVar(&pxeExpect, "expect", "",
+		"Stop the VM as soon as this text appears in --serial-log (exit 0), or fail when the context ends first")
 
 	return cmd
 }
@@ -136,6 +173,21 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 	if err != nil {
 		return &WrappedError{Msg: "failed to resolve boot entry", Err: err}
 	}
+	arch, err := preparePXEArchitecture(ctx, logger)
+	if err != nil {
+		return err
+	}
+	if pxeExpect != "" && pxeSerialLog == "" {
+		return &MessageError{Msg: "--expect needs --serial-log to watch"}
+	}
+	if err := os.MkdirAll(pxeWorkDir, 0755); err != nil {
+		return &WrappedError{Msg: "failed to create work directory", Err: err}
+	}
+	bootEntry, err = arch.localizeKernel(ctx, logger, bootEntry, pxeWorkDir)
+	if err != nil {
+		return &WrappedError{Msg: "failed to prepare the kernel for the guest", Err: err}
+	}
+	printInfo(fmt.Sprintf("Architecture: %s", arch.qemu))
 
 	printInfo(fmt.Sprintf("Boot Entry: %s", bootEntry.Name))
 	printInfo(fmt.Sprintf("Kernel: %s", bootEntry.Kernel))
@@ -151,96 +203,92 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 		return &WrappedError{Msg: "failed to create work directory", Err: err}
 	}
 
-	// Setup isolated network
+	// The isolated network and the PXE server on it are the package's own
+	// test environment (ipxe.DefaultTestEnvConfig: pxe-br, 10.99.99.0/24,
+	// leases .100-.200), so the bridge's subnet is the one the leases are
+	// in. A hand-rolled copy here once put the bridge on a /28, and every
+	// unicast reply to a leased client — the TFTP data — left through the
+	// host's default route instead of the bridge.
 	printInfo("Setting up isolated network environment...")
-	netConfig := testenv.DefaultNetworkConfig()
-	netConfig.BridgeName = "pxe-br"
-	netConfig.ServerTapName = "tap-pxe-client"
-	netConfig.ClientTapName = "tap-pxe-unused"
-	netConfig.GatewayIP = net.ParseIP("10.99.99.1")
-	netConfig.Domain = "pxe.test"
+	envConfig := ipxe.DefaultTestEnvConfig()
+	envConfig.LocalFilesDir = filepath.Join(pxeWorkDir, "pxe-files")
+	envConfig.FirmwareSigner = arch.signer
+	envConfig.FirmwareOverrides = arch.firmwareOverrides
+	if err := os.MkdirAll(envConfig.LocalFilesDir, 0755); err != nil {
+		return &WrappedError{Msg: "failed to create PXE files directory", Err: err}
+	}
+	// A local kernel or initrd is served from the files directory; the
+	// boot script can only name URLs.
+	filesURL := fmt.Sprintf("http://%s:%d/files", envConfig.ServerIP, envConfig.HTTPPort)
+	bootEntry, err = publishBootFiles(bootEntry, envConfig.LocalFilesDir, filesURL)
+	if err != nil {
+		return err
+	}
+	envConfig.BootEntries = []ipxe.BootEntry{bootEntry}
 
-	network := testenv.NewIsolatedNetwork(netConfig)
-	if err := network.Setup(); err != nil {
+	env, err := ipxe.NewTestEnv(envConfig, logger)
+	if err != nil {
+		return &WrappedError{Msg: "failed to create PXE test environment", Err: err}
+	}
+	if err := env.Setup(); err != nil {
 		return &WrappedError{Msg: "failed to setup isolated network", Err: err}
 	}
 	defer func() {
 		printInfo("Cleaning up isolated network...")
-		if err := network.Cleanup(); err != nil {
+		if err := env.Cleanup(); err != nil {
 			logger.Warnf("Failed to cleanup network: %v", err)
 		}
 		printSuccess("Network cleanup complete")
 	}()
 
 	printSuccess("Isolated network ready")
-	printInfo(fmt.Sprintf("Bridge: %s", netConfig.BridgeName))
-	printInfo(fmt.Sprintf("TAP Device: %s", netConfig.ServerTapName))
-	printInfo(fmt.Sprintf("Gateway IP: %s", netConfig.GatewayIP.String()))
+	printInfo(fmt.Sprintf("Bridge: %s", envConfig.BridgeName))
+	printInfo(fmt.Sprintf("TAP Device: %s", env.TapName()))
+	printInfo(fmt.Sprintf("Server IP: %s", env.ServerIP()))
 
-	// Create PXE server configuration
-	pxeLocalDir := filepath.Join(pxeWorkDir, "pxe-files")
-	if err := os.MkdirAll(pxeLocalDir, 0755); err != nil {
-		return &WrappedError{Msg: "failed to create PXE files directory", Err: err}
-	}
-
-	pxeConfig := &ipxe.ServerConfig{
-		Interface:      netConfig.BridgeName,
-		HTTPPort:       8080,
-		TFTPPort:       69,
-		ExternalURL:    fmt.Sprintf("http://%s:8080", netConfig.GatewayIP.String()),
-		LocalFilesDir:  pxeLocalDir,
-		EnableDHCP:     true,
-		DHCPInterface:  netConfig.BridgeName,
-		DHCPRangeStart: "10.99.99.100",
-		DHCPRangeEnd:   "10.99.99.200",
-		DHCPSubnetMask: "255.255.255.0",
-		DHCPGateway:    netConfig.GatewayIP.String(),
-		DHCPDNS:        "8.8.8.8",
-		DHCPLeaseTime:  1 * time.Hour,
-		DHCPServerIP:   netConfig.GatewayIP.String(),
-		TFTPServerName: "",
-		BootFilename:   "ipxe.efi",
-		IPXEScript:     fmt.Sprintf("http://%s:8080/boot.ipxe", netConfig.GatewayIP.String()),
-		BootEntries:    []ipxe.BootEntry{bootEntry},
-	}
-
-	// Create and start PXE server
+	// Start the PXE server (HTTP, TFTP, DHCP) in the background; Start
+	// returns only when the context ends or a listener fails.
 	printInfo("Starting PXE server (HTTP, TFTP, DHCP)...")
-	pxeServer, err := ipxe.NewServer(pxeConfig, logger)
-	if err != nil {
-		return &WrappedError{Msg: "failed to create PXE server", Err: err}
-	}
-
-	// Start PXE server in background
 	pxeCtx, pxeCancel := context.WithCancel(ctx)
 	defer pxeCancel()
 
 	pxeErrChan := make(chan error, 1)
 	go func() {
-		pxeErrChan <- pxeServer.Start(pxeCtx)
+		pxeErrChan <- env.Start(pxeCtx)
 	}()
 
 	// Wait for PXE server to be ready
 	printInfo("Waiting for PXE server to be ready...")
-	if err := pxeServer.WaitForReady(10 * time.Second); err != nil {
+	select {
+	case <-env.Ready():
+	case err := <-pxeErrChan:
 		pxeCancel()
 		return &WrappedError{Msg: "PXE server not ready", Err: err}
+	case <-time.After(pxeServerReadyTimeout):
+		pxeCancel()
+		return &MessageError{Msg: "PXE server not ready after " + pxeServerReadyTimeout.String()}
 	}
 	printSuccess("PXE server ready")
 
 	// Create QEMU configuration for PXE boot
+	// The client has a disk — an empty one, so firmware falls through to
+	// the network, and the installer the network delivers has a target.
 	qemuConfig := &qemu.Config{
-		DiskPath:      "", // No disk for pure PXE boot test
+		DiskPath:      pxeDiskPath(),
+		DiskSize:      pxeDiskSize,
 		Memory:        pxeMemory,
 		CPUs:          pxeCPUs,
 		WorkDir:       pxeWorkDir,
 		SecureBoot:    pxeSecureBoot,
 		Debug:         pxeDebug,
-		TapDevice:     netConfig.ServerTapName,
+		TapDevice:     env.TapName(),
 		PXEEnabled:    true,
 		EnableKVM:     true,
-		SerialConsole: true,
+		SerialConsole: pxeSerialLog == "",
+		SerialLogFile: pxeSerialLog,
 		NoGraphic:     true,
+		Arch:          arch.qemu,
+		Firmware:      arch.firmware,
 	}
 
 	// Setup VM environment
@@ -256,7 +304,8 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 	defer stopTestTPM(logger, tpm)
 
 	// Enroll Secure Boot keys if enabled
-	if pxeSecureBoot {
+	// U-Boot carries the keys preseeded; enrolment is OVMF's need.
+	if pxeSecureBoot && arch.qemu != qemu.ArchAArch64 {
 		if err := enrollTestSecureBootKeys(ctx, logger, qemuConfig); err != nil {
 			logger.Warnf("Failed to enroll Secure Boot keys: %v", err)
 			logger.Warnf("Continuing without Secure Boot key enrollment")
@@ -286,7 +335,9 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 	// Stop PXE server gracefully
 	printInfo("Stopping PXE server...")
 	pxeCancel()
-	pxeServer.Stop()
+	if err := env.Stop(); err != nil {
+		logger.Warnf("Failed to stop the PXE server: %v", err)
+	}
 
 	printSuccess("PXE boot test completed")
 	return nil
@@ -438,10 +489,30 @@ func runQEMUPXE(ctx context.Context, logger *logging.Logger, config *qemu.Config
 		return &WrappedError{Msg: "failed to create VM", Err: err}
 	}
 
+	// An absent disk is created empty; an existing one is kept (a second
+	// run boots what the first installed).
+	if err := vm.CreateDisk(); err != nil {
+		return &WrappedError{Msg: "preparing the client disk", Err: err}
+	}
+
 	// Start VM in PXE boot mode
 	logger.Info("Starting QEMU in PXE boot mode...")
 	if err := vm.Start(ctx, string(qemu.BootModePXE)); err != nil {
 		return &WrappedError{Msg: "failed to start VM", Err: err}
+	}
+
+	if pxeExpect != "" {
+		// Automated: the milestone in the serial log ends the run.
+		logger.Info("VM started; waiting for the milestone", "expect", pxeExpect, "serial_log", pxeSerialLog)
+		waitErr := harness.WaitForSerial(ctx, pxeSerialLog, pxeExpect)
+		if err := vm.Stop(); err != nil {
+			logger.Warnf("failed to stop the VM: %v", err)
+		}
+		if waitErr != nil {
+			return &WrappedError{Msg: "waiting for " + strconv.Quote(pxeExpect), Err: waitErr}
+		}
+		logger.Info("Milestone reached", "expect", pxeExpect)
+		return nil
 	}
 
 	// Wait for VM to complete
@@ -454,4 +525,56 @@ func runQEMUPXE(ctx context.Context, logger *logging.Logger, config *qemu.Config
 
 	logger.Info("PXE boot session completed")
 	return nil
+}
+
+// pxeDiskPath is --disk, or the default disk under the work directory.
+func pxeDiskPath() string {
+	if pxeDisk != "" {
+		return pxeDisk
+	}
+	return filepath.Join(pxeWorkDir, DefaultPXEDiskName)
+}
+
+// publishBootFiles copies a boot entry's local (file://) kernel and initrd
+// into filesDir, which the PXE server serves at filesURL, and rewrites the
+// entry to fetch them from there. iPXE can only fetch URLs; a file:// entry
+// would reach the script verbatim and fail on the client.
+func publishBootFiles(entry ipxe.BootEntry, filesDir, filesURL string) (ipxe.BootEntry, error) {
+	publish := func(ref string) (string, error) {
+		if !strings.HasPrefix(ref, "file://") {
+			return ref, nil
+		}
+		src := strings.TrimPrefix(ref, "file://")
+		name := filepath.Base(src)
+		if err := copyFile(src, filepath.Join(filesDir, name)); err != nil {
+			return "", &WrappedError{Msg: "publishing " + src + " for the PXE client", Err: err}
+		}
+		return filesURL + "/" + name, nil
+	}
+	var err error
+	if entry.Kernel, err = publish(entry.Kernel); err != nil {
+		return entry, err
+	}
+	if entry.Initrd, err = publish(entry.Initrd); err != nil {
+		return entry, err
+	}
+	return entry, nil
+}
+
+// copyFile copies src to dst, replacing dst.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }

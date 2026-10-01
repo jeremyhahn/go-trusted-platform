@@ -13,6 +13,8 @@
 
 package secureboot
 
+import "strconv"
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
@@ -58,4 +60,47 @@ func (e *WrappedError) Error() string {
 // Unwrap returns the wrapped cause.
 func (e *WrappedError) Unwrap() error {
 	return e.Err
+}
+
+// KMSKeyRefError is a key URI that names no KMS key.
+type KMSKeyRefError struct {
+	KeyURI string
+}
+
+func (e *KMSKeyRefError) Error() string {
+	return "secureboot: key-uri " + strconv.Quote(e.KeyURI) + " is not a usable kms:// reference"
+}
+
+// KMSCertificateError is a KMS-held key's certificate that could not be
+// fetched from the platform CA or parsed.
+type KMSCertificateError struct {
+	Ref string
+	Err error
+}
+
+func (e *KMSCertificateError) Error() string {
+	return "secureboot: certificate " + strconv.Quote(e.Ref) + ": " + e.Err.Error()
+}
+
+func (e *KMSCertificateError) Unwrap() error { return e.Err }
+
+// KMSSignError is a KMS Sign call that failed or returned no signature.
+type KMSSignError struct {
+	KeyID string
+	Err   error
+}
+
+func (e *KMSSignError) Error() string {
+	return "secureboot: KMS sign with key " + strconv.Quote(e.KeyID) + ": " + e.Err.Error()
+}
+
+func (e *KMSSignError) Unwrap() error { return e.Err }
+
+// UnsupportedHashError is a digest hash the KMS Sign call cannot carry.
+type UnsupportedHashError struct {
+	Hash string
+}
+
+func (e *UnsupportedHashError) Error() string {
+	return "secureboot: unsupported hash " + strconv.Quote(e.Hash) + " for KMS signing (want SHA-256/384/512)"
 }

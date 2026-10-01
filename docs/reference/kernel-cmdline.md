@@ -17,7 +17,7 @@ For architectural context see:
 | Parameter | Set by | Read by | Purpose |
 |-----------|--------|---------|---------|
 | `platform_config` | `iso create --config-server` (GRUB), bootstrap server (PXE) | `autoinstall.sh` | Per-MAC `/config/mac` base URL for the merged `installer.yaml` |
-| `platform_bin_url` | Bootstrap server (PXE only) | `autoinstall.sh` | Base URL (`/data`) for the installer binaries (`platformctl`, `platformd`) on nodes with no `/media/cdrom` |
+| `platform_bin_url` | Bootstrap server (PXE only) | `autoinstall.sh` | Base URL of the node's media set (`/data/media/<set>`), whose `payload.list` rebuilds `/media/cdrom` on nodes with none |
 | `platform_hostname` | `iso create --platform-config` with `os.hostname` set | `autoinstall.sh` | Hostname override (hostname PRIO 0) |
 | `platform_debug_sink` | Auto-detected via DHCP server, or operator-set | `autoinstall.sh`, `platform-initrd` | HTTP sink for install-log + `/config/mac` fetches |
 | `platform_apk_mirror` | `iso create --apk-mirror` (GRUB), bootstrap server `BOOTSTRAP_APK_MIRROR` (PXE) | `autoinstall.sh` | Install-time APK repository base for nodes with no `/media/cdrom` |
@@ -50,7 +50,8 @@ For architectural context see:
   the PXE iPXE cmdline as `http://<server>:<port>/config/mac`. PXE nodes
   have no `/media/cdrom/configs/installer.yaml`, so this is their primary
   config source. The orchestrator publishes the merged config there via
-  `stagePerMACHostname` (now called for PXE as well as virtual-media).
+  `stagePerMACConfig`, before every install boot: BMC-managed PXE,
+  virtual media, and unmanaged (observe-only) nodes alike.
 
 **Read by:** `autoinstall.sh` in the Alpine live environment.
 **Behavior:** Autoinstall appends `/<mac-dashed>/installer.yaml` and
@@ -73,21 +74,23 @@ See `docs/bootstrap/config-delivery.md` §3 for the full dynamic flow.
 
 ### `platform_bin_url=<URL>`
 
-**Purpose:** Base URL for the installer **binaries** (`platformctl`,
-`platformd`) on nodes that have **no `/media/cdrom`** — the PXE case.
+**Purpose:** Base URL of the node's **media set** — its installer payload —
+on nodes that have **no `/media/cdrom`**, the PXE case.
 Virtual-media installs read these off the mounted ISO's
 `/media/cdrom/platformd-bin/` and ignore this param.
 **Set by:** The bootstrap server (`pkg/bootstrap/container/server.go`)
-appends `platform_bin_url=http://<server>:<port>/data` to the PXE iPXE
-cmdline. The deployer stages `platformctl` + `platformd` out of the
-container image into `/data` (`stagePXEAssets`); they are baked into the
-image from the same ISO by `make pxeboot-extract`.
-**Read by:** `autoinstall.sh` (`buildAutoinstallScript`), immediately
-before the `platformctl` binary search.
-**Behavior:** When set and no CD binary is present, autoinstall fetches
-`<base>/platformctl` → `/usr/bin/platformctl` and `<base>/platformd` →
-`/run/platformd-bin/platformd` (the paths the existing binary searches
-already check), then proceeds with the install. No-op + idempotent on
+appends `platform_bin_url=http://<server>:<port>/data/media/<set>` to the PXE
+iPXE cmdline. The set's `payload.list` is written by the netboot media build
+(`platformctl diskimage netboot`) and staged with the build by the deployer
+(`stageNetbootMedia`).
+**Read by:** `autoinstall.sh` (`buildAutoinstallScript`,
+`fetch_install_payload`), before the `platformctl` binary search.
+**Behavior:** When set and no CD is present, autoinstall fetches
+`<base>/payload.list`, then every entry into a scratch directory, checks each
+against its SHA-256 (`sha256sum -c`), copies files and unpacks tarballs to
+their `dest` under `/media/cdrom`, and writes `.payload-complete`. Any
+failure — a missing list, a digest mismatch, a path escaping `/media/cdrom`,
+no executable `platformd-bin/platformctl` — stops the install. No-op on
 virtual-media.
 
 Example:
@@ -170,7 +173,8 @@ are **not** baked into the initramfs — `dm-mod`, `dm-crypt`, `ext4`, `tpm*`,
 LVM targets — live only here. Without modloop mounted, the installer's LUKS
 step dies on a missing `/dev/mapper/control`.
 **Set by:** The bootstrap server appends
-`modloop=http://<server>:<port>/data/modloop-lts` to the PXE iPXE cmdline.
+`modloop=http://<server>:<port>/data/media/<set>/modloop-<flavour>` to the PXE
+iPXE cmdline.
 **Read by:** Alpine's initramfs `init`, and — as a fallback —
 `run-autoinstall.sh::ensure_modloop`.
 **Behavior:** On virtual-media the modloop is mounted from the CD. On PXE

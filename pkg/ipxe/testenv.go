@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -89,6 +90,24 @@ type TestEnvConfig struct {
 
 	// LocalFilesDir is the directory to serve local files from.
 	LocalFilesDir string
+
+	// FirmwareSigner, when set, Authenticode-signs the EFI binaries the
+	// TFTP server hands out, for a client whose firmware verifies what it
+	// loads (ServerConfig.FirmwareSigner).
+	FirmwareSigner EFISigner
+
+	// FirmwareOverrides serves local builds in place of the upstream
+	// binaries (ServerConfig.FirmwareOverrides).
+	FirmwareOverrides map[string]string
+
+	// TFTPDir is the directory tree served over TFTP beside the iPXE
+	// firmware (ServerConfig.TFTPDir): the Raspberry Pi boot files.
+	TFTPDir string
+
+	// ProxyDHCP runs the DHCP server as a proxy (DHCPConfig.ProxyOnly):
+	// boot options only, no leases, as on a segment that already has a
+	// DHCP server.
+	ProxyDHCP bool
 }
 
 // DefaultTestEnvConfig returns a TestEnvConfig with sensible defaults for testing.
@@ -111,6 +130,21 @@ func DefaultTestEnvConfig() *TestEnvConfig {
 	}
 }
 
+// maxInterfaceNameLen is IFNAMSIZ-1, the longest interface name Linux
+// accepts.
+const maxInterfaceNameLen = 15
+
+// unusedTapName names the second TAP the isolated network insists on
+// creating, which PXE testing never attaches: the client TAP's name with
+// an "-unused" suffix, shortened so the kernel accepts it.
+func unusedTapName(tap string) string {
+	const suffix = "-unused"
+	if len(tap)+len(suffix) > maxInterfaceNameLen {
+		tap = strings.TrimRight(tap[:maxInterfaceNameLen-len(suffix)], "-")
+	}
+	return tap + suffix
+}
+
 // Validate validates the test environment configuration.
 func (c *TestEnvConfig) Validate() error {
 	if c.BridgeName == "" {
@@ -118,6 +152,14 @@ func (c *TestEnvConfig) Validate() error {
 	}
 	if c.TapName == "" {
 		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "TAP name is required"}}
+	}
+	// The kernel refuses an interface name over IFNAMSIZ-1 bytes; the
+	// failure would surface later as "Link not found" from the TAP the
+	// kernel silently did not create.
+	for _, name := range []string{c.BridgeName, c.TapName} {
+		if len(name) > maxInterfaceNameLen {
+			return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("interface name %q exceeds %d characters", name, maxInterfaceNameLen)}}
+		}
 	}
 	if c.ServerIP == nil {
 		return &SentinelCauseError{Sentinel: ErrNoServerIP, Cause: &MessageError{Msg: "server IP is required"}}
@@ -169,7 +211,7 @@ func NewTestEnv(cfg *TestEnvConfig, logger *logging.Logger) (*TestEnv, error) {
 	netCfg := &testenv.NetworkConfig{
 		BridgeName:     cfg.BridgeName,
 		ServerTapName:  cfg.TapName,
-		ClientTapName:  cfg.TapName + "-unused", // We only need one TAP for PXE testing
+		ClientTapName:  unusedTapName(cfg.TapName), // We only need one TAP for PXE testing
 		GatewayIP:      cfg.ServerIP,
 		ServerIP:       cfg.ServerIP,
 		ServerPublicIP: net.ParseIP("192.0.2.2"), // TEST-NET-1 for public DNS zone
@@ -186,24 +228,28 @@ func NewTestEnv(cfg *TestEnvConfig, logger *logging.Logger) (*TestEnv, error) {
 
 	// Create PXE server configuration
 	serverCfg := &ServerConfig{
-		Interface:      cfg.BridgeName,
-		HTTPPort:       cfg.HTTPPort,
-		TFTPPort:       cfg.TFTPPort,
-		ExternalURL:    fmt.Sprintf("http://%s:%d", cfg.ServerIP.String(), cfg.HTTPPort),
-		LocalFilesDir:  cfg.LocalFilesDir,
-		EnableDHCP:     true,
-		DHCPInterface:  cfg.BridgeName,
-		DHCPRangeStart: cfg.DHCPStart.String(),
-		DHCPRangeEnd:   cfg.DHCPEnd.String(),
-		DHCPSubnetMask: net.IP(cfg.Subnet.Mask).String(),
-		DHCPGateway:    cfg.Gateway.String(),
-		DHCPDNS:        cfg.DNS,
-		DHCPLeaseTime:  DefaultLeaseTime,
-		DHCPServerIP:   cfg.ServerIP.String(),
-		TFTPServerName: "",
-		BootFilename:   "ipxe.efi",
-		IPXEScript:     fmt.Sprintf("http://%s:%d/boot.ipxe", cfg.ServerIP.String(), cfg.HTTPPort),
-		BootEntries:    cfg.BootEntries,
+		Interface:         cfg.BridgeName,
+		HTTPPort:          cfg.HTTPPort,
+		TFTPPort:          cfg.TFTPPort,
+		ExternalURL:       fmt.Sprintf("http://%s:%d", cfg.ServerIP.String(), cfg.HTTPPort),
+		LocalFilesDir:     cfg.LocalFilesDir,
+		EnableDHCP:        true,
+		DHCPInterface:     cfg.BridgeName,
+		DHCPRangeStart:    cfg.DHCPStart.String(),
+		DHCPRangeEnd:      cfg.DHCPEnd.String(),
+		DHCPSubnetMask:    net.IP(cfg.Subnet.Mask).String(),
+		DHCPGateway:       cfg.Gateway.String(),
+		DHCPDNS:           cfg.DNS,
+		DHCPLeaseTime:     DefaultLeaseTime,
+		DHCPServerIP:      cfg.ServerIP.String(),
+		TFTPServerName:    "",
+		BootFilename:      "ipxe.efi",
+		IPXEScript:        fmt.Sprintf("http://%s:%d/boot.ipxe", cfg.ServerIP.String(), cfg.HTTPPort),
+		BootEntries:       cfg.BootEntries,
+		FirmwareSigner:    cfg.FirmwareSigner,
+		FirmwareOverrides: cfg.FirmwareOverrides,
+		TFTPDir:           cfg.TFTPDir,
+		DHCPProxyOnly:     cfg.ProxyDHCP,
 	}
 
 	return &TestEnv{
@@ -231,9 +277,16 @@ func (t *TestEnv) Setup() error {
 	return nil
 }
 
-// Start starts the PXE server components (HTTP, TFTP, DHCP) on the isolated network.
-func (t *TestEnv) Start(ctx context.Context) error {
-	// Create DHCP configuration
+// dhcpConfig is the DHCP server's configuration for the environment: the
+// same choices Server makes from a ServerConfig, including the
+// per-architecture bootfile map (nil in the ServerConfig means the
+// default map; an explicit empty map disables the selection), which is
+// what hands an AArch64 client its own iPXE instead of the x86 one.
+func (t *TestEnv) dhcpConfig() *DHCPConfig {
+	archMap := t.serverCfg.BootFilenameByArch
+	if archMap == nil {
+		archMap = DefaultBootFilenameByArch()
+	}
 	dhcpCfg := &DHCPConfig{
 		Interface:      t.config.BridgeName,
 		ServerIP:       t.config.ServerIP,
@@ -248,13 +301,28 @@ func (t *TestEnv) Start(ctx context.Context) error {
 		TFTPServerIP:   t.config.ServerIP,
 		BootFilename:   t.serverCfg.BootFilename,
 		IPXEScript:     t.serverCfg.IPXEScript,
-		UseRawSocket:   true, // Use raw socket for bridged network
+		// The same socket Server uses: a UDP socket with SO_BROADCAST bound
+		// to the bridge (#649), which reaches a client that has no address
+		// yet through the limited broadcast. Measured on the PXE test
+		// bridge with U-Boot and iPXE clients (2026-09-22).
+		UseRawSocket:       false,
+		BootFilenameByArch: archMap,
+		ProxyOnly:          t.serverCfg.DHCPProxyOnly,
+		// The environment is an isolated bridge on which this is the only
+		// DHCP server, so it answers every client — the booted OS's own
+		// DHCP client (udhcpc in an Alpine initramfs) included — exactly
+		// as the bootstrap container does on a provisioning segment.
+		RespondToAll: true,
 	}
-
 	if t.config.DNS != "" {
 		dhcpCfg.DNSServers = []net.IP{net.ParseIP(t.config.DNS).To4()}
 	}
+	return dhcpCfg
+}
 
+// Start starts the PXE server components (HTTP, TFTP, DHCP) on the isolated network.
+func (t *TestEnv) Start(ctx context.Context) error {
+	dhcpCfg := t.dhcpConfig()
 	// Create server components
 	t.httpServer = NewHTTPServer(t.serverCfg, t.logger)
 	t.tftpServer = NewTFTPServer(t.serverCfg, t.config.ServerIP, t.logger)

@@ -260,7 +260,8 @@ func (h *handler) writeFetchConfigError(w http.ResponseWriter, r *http.Request, 
 	// certificate) -> forbidden.
 	var ekRequired ErrEKCertRequired
 	var ekMismatch ErrEKCertMismatch
-	if errors.As(err, &ekRequired) || errors.As(err, &ekMismatch) {
+	var eabMismatch ErrEABProfileMismatch
+	if errors.As(err, &ekRequired) || errors.As(err, &ekMismatch) || errors.As(err, &eabMismatch) {
 		h.responseWriter.Error403(w, r, err, nil)
 		return
 	}
@@ -286,7 +287,8 @@ func (h *handler) writeSignError(w http.ResponseWriter, r *http.Request, err err
 	var eabFailed ErrEABValidationFailed
 	var ekRequired ErrEKCertRequired
 	var ekMismatch ErrEKCertMismatch
-	if errors.As(err, &eabFailed) || errors.As(err, &ekRequired) || errors.As(err, &ekMismatch) {
+	var eabMismatch ErrEABProfileMismatch
+	if errors.As(err, &eabFailed) || errors.As(err, &ekRequired) || errors.As(err, &ekMismatch) || errors.As(err, &eabMismatch) {
 		h.responseWriter.Error403(w, r, err, nil)
 		return
 	}

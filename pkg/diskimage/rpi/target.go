@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/artifacts"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/uboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/virtkernel"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/iso"
@@ -167,7 +168,13 @@ func requiredFirmware(m Model) []string {
 // apks (so the image is built offline, from the same packages the node
 // has installed).
 func (t *Target) StageBootFirmware(ctx context.Context, mediaDir, prefetchDir string, art uboot.Artifacts) error {
-	dest := filepath.Join(mediaDir, "boot-firmware")
+	return t.StageBootFirmwareInto(ctx, filepath.Join(mediaDir, "boot-firmware"), prefetchDir, art)
+}
+
+// StageBootFirmwareInto fills dest with the boot partition's firmware
+// set — what StageBootFirmware puts under the media directory, and what
+// a network boot server serves a Pi over TFTP (pkg/rpinetboot).
+func (t *Target) StageBootFirmwareInto(ctx context.Context, dest, prefetchDir string, art uboot.Artifacts) error {
 	if err := os.RemoveAll(dest); err != nil {
 		return &StageError{Step: "clearing the boot-firmware staging directory", Err: err}
 	}
@@ -187,20 +194,20 @@ func (t *Target) StageBootFirmware(ctx context.Context, mediaDir, prefetchDir st
 		if err != nil {
 			return err
 		}
-		if _, err := extractFromAPK(apk, "boot/", dest, func(string) bool { return true }); err != nil {
-			return err
+		if _, err := artifacts.ExtractTarGz(apk, "boot/", dest, func(string) bool { return true }); err != nil {
+			return &PackageError{Package: apk, Err: err}
 		}
 	}
 	kernelAPK, err := findAPK(prefetchDir, KernelPackage)
 	if err != nil {
 		return err
 	}
-	if _, err := extractFromAPK(kernelAPK, "boot/", dest, func(rel string) bool {
+	if _, err := artifacts.ExtractTarGz(kernelAPK, "boot/", dest, func(rel string) bool {
 		// Every board DTB, so one image boots any supported model, plus the
 		// overlay config.txt references. The kernel itself lives in the UKI.
 		return (strings.HasPrefix(rel, "bcm27") && strings.HasSuffix(rel, ".dtb")) || rel == "overlays/disable-bt.dtbo"
 	}); err != nil {
-		return err
+		return &PackageError{Package: kernelAPK, Err: err}
 	}
 
 	if err := os.WriteFile(filepath.Join(dest, "config.txt"), []byte(ConfigTxt(t.Model)), 0o644); err != nil {

@@ -111,10 +111,9 @@ type sshISOStager struct {
 	logger *slog.Logger
 }
 
-// newISOStager constructs an ISOStager from a DeployerConfig. Currently only
-// the linux target is supported because virtual-media boot is the workflow
-// where the bootstrap container runs on a Linux jumpbox. Other targets
-// (cisco app-hosting, etc.) can grow their own implementations later.
+// newISOStager constructs an ISOStager from a DeployerConfig: the ISO is
+// uploaded over SSH into the Linux deployer host's data directory, where the
+// bootstrap container's smbd serves it.
 func newISOStager(cfg *DeployerConfig, logger *slog.Logger) (ISOStager, error) {
 	if cfg == nil {
 		return nil, ErrInvalidConfig{Field: "deployer", Reason: "must not be nil"}

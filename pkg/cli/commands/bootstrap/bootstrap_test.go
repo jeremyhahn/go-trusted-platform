@@ -42,8 +42,8 @@ func TestNewCommand(t *testing.T) {
 
 	// Verify subcommands are registered
 	subcommands := cmd.Commands()
-	// 7 PXE/legacy + 5 canonical TOFU modes (auto, dane, noise, spki, direct)
-	assert.Len(t, subcommands, 12)
+	// 7 PXE/legacy + 5 canonical TOFU modes (auto, dane, noise, spki, direct) + probe + resolve
+	assert.Len(t, subcommands, 14)
 
 	// Verify secrets subcommand exists
 	var hasSecrets bool
@@ -70,6 +70,7 @@ func TestNewCommand(t *testing.T) {
 		"deploy":   false,
 		"status":   false,
 		"teardown": false,
+		"resolve":  false,
 	}
 	for _, sub := range subcommands {
 		if _, ok := expectedPXE[sub.Use]; ok {

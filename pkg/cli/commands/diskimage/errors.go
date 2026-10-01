@@ -1,5 +1,7 @@
 package diskimage
 
+import "strings"
+
 // ErrBuildFailed reports a failed image build.
 type ErrBuildFailed struct {
 	Reason string
@@ -43,4 +45,14 @@ type ErrInvalidPortForward struct {
 
 func (e ErrInvalidPortForward) Error() string {
 	return "diskimage test: invalid --forward " + e.Spec + " (want host:guest[/tcp|udp])"
+}
+
+// ErrUnknownMediaSet is a --sets name the netboot build does not produce.
+type ErrUnknownMediaSet struct {
+	Name  string
+	Known []string
+}
+
+func (e ErrUnknownMediaSet) Error() string {
+	return "unknown media set " + e.Name + " (known: " + strings.Join(e.Known, ", ") + ")"
 }

@@ -608,15 +608,15 @@ silently fixed, because those files are still linked from elsewhere.
 | "Write plain key to EFI partition" during install | README.md §System Overview | Superseded. The key is only ever inside `installer.luks`; the same README says so five sections later. |
 | Platform SRK policy is "PCR + PIN"; there are "PIN seals" | README.md, initrd-architecture.md | No PIN seal path exists in `pkg/initrd`. SECURITY_MODEL.md's "PCR policy" description is the accurate one. |
 | `pkg/luks`, `pkg/fido2`, `pkg/initrd/strategies/` | initrd-architecture.md | The real paths are `pkg/storage/luks`, the `go-quicbaas/sdk/go/xkms/fido2` re-export, and `pkg/initrd/strategy_*.go`. `initrd-architecture.md` is an **aspirational design note that predates the implementation** — read it for intent, never for identifiers. |
-| `--debug-sink` is an `iso create` CLI flag | doc comment on `iso.PlatformConfig.DebugSink` | **The flag does not exist** (grepped 2026-08-18). `DebugSink` is settable only through the ISO build config. |
+| `--debug-sink` is an `iso create` CLI flag | (former) doc comment on `iso.PlatformConfig.DebugSink` | **The flag does not exist.** `DebugSink` is settable only through the ISO build config; the doc comment now says so. |
 
 **Two things worth raising with the owner rather than documenting as settled:**
 
-1. `pkg/iso/customize.go` bakes a **hard-coded default forensic-sink address**
-   into every ISO's kernel command line (`platform_debug_sink=`) when
-   `Platform.DebugSink` is unset, and unconditionally sets `platform_debug=1`.
-   A published ISO therefore ships a fixed internal endpoint and debug mode on
-   by default. The address is deliberately not reproduced in this document.
+1. `pkg/iso/customize.go` unconditionally sets `platform_debug=1` on every
+   ISO's kernel command line, so a published ISO ships with debug mode on.
+   `platform_debug_sink=` is baked only when `Platform.DebugSink` is set;
+   otherwise the install script derives the sink from the DHCP server. (The
+   hard-coded fallback address it used to bake was removed in v0.2.0-alpha.)
 2. `initrd.LoadConfig` / `SaveConfig` are stubs that neither read nor write.
    They are exported and look functional.
 

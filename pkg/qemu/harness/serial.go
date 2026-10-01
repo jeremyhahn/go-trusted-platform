@@ -88,3 +88,16 @@ func serialTail(path string) string {
 	}
 	return string(data)
 }
+
+// MissingMilestone names the first of milestones absent from the transcript
+// at path, in order, so a failed boot says where the chain stopped. An
+// unreadable transcript counts as lacking the first milestone.
+func MissingMilestone(path string, milestones []string) string {
+	for _, m := range milestones {
+		found, err := SerialContains(path, m)
+		if err != nil || !found {
+			return "first missing milestone: " + m
+		}
+	}
+	return "every milestone present"
+}

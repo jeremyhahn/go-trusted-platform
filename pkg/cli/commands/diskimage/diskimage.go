@@ -23,6 +23,7 @@ is the same first-boot provisioning the ISO install produces (TPM
 provisioning, LUKS sealing, platformd enrollment and attestation).
 
   create   - build an image (U-Boot, media staging, container assemble)
+  netboot  - build the netboot media the bootstrap container serves
   inspect  - report an image's partitions, EFI partition and UKI
   test     - boot an image under QEMU with a software TPM
   assemble - the in-container step create runs (not for direct use)
@@ -35,5 +36,7 @@ Targets:
 	cmd.AddCommand(newInspectCommand(getFlags))
 	cmd.AddCommand(newTestCommand(getFlags))
 	cmd.AddCommand(newAssembleCommand(getFlags))
+	cmd.AddCommand(newNetbootCommand(getFlags))
+	cmd.AddCommand(newNetbootInitfsCommand(getFlags))
 	return cmd
 }

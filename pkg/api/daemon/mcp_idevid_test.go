@@ -62,7 +62,6 @@ type mockTPM2MCPService struct {
 	deleteIDevIDCertErr   error
 	deleteIAKCertErr      error
 	createCSRErr          error
-	marshalCSRErr         bool // Special flag for CSR marshal error
 	activateCredentialErr error
 	fixedPropsErr         error
 }

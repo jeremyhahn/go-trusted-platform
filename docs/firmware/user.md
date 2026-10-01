@@ -208,8 +208,8 @@ rebuilding and re-signing.
 `/usr/lib/systemd/boot/efi/linuxx64.efi.stub` regardless of what
 `SetArchitecture` was told. On aarch64 you must pass `--stub` explicitly.
 
-**Do not verify with `platformctl authenticode verify` and believe it.** See the
-warning below.
+**Verify with `platformctl authenticode verify --cert <DB.crt>`.** Without
+`--cert` it only proves the signature is intact, not who made it.
 
 ---
 
@@ -296,17 +296,11 @@ Either the ESP is not mounted, or your UKI lives somewhere else. Pass `--uki`.
 The certificate is missing, is not PEM, or is not a `CERTIFICATE` block. Check
 `--keys-dir`, or pass `--pk-cert` / `--kek-cert` / `--db-cert` explicitly.
 
-**`platformctl authenticode verify` fails with "certificate is required"**
-Pass `--cert`. The help text says it is optional; it is not — the command cannot
-construct its verifier without one. Recorded as a defect in
-[cli.md](cli.md) §3.2.
-
 **`authenticode verify` says OK but the firmware still refuses the image**
-Expected, unfortunately. That verb checks the signature against the certificate
-*embedded in the file*; it does not check that the file was signed by the
-certificate you passed in `--cert`, and it builds no trust chain. The check that
-matters is the one `platformctl secure-boot enroll` runs. Use the dry run as
-your verification step.
+Pass `--cert` with the certificate the firmware's `db` holds: without it the
+verb only checks the signature against the certificate *embedded in the file*.
+With it, a file signed by any other certificate fails. It builds no trust chain,
+so the firmware's `db` contents are still what decides.
 
 **The node enrolled successfully but still shows `SecureBoot: disabled`**
 Enforcement activates on the **next boot**. If it is still disabled after a

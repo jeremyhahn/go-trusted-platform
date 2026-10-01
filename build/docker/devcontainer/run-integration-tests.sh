@@ -54,6 +54,7 @@ declare -A TARGET_PACKAGES=(
     [iam]="./test/integration/iam/..."
     [attestation]="./test/integration/attestation/..."
     [diskimage]="./test/integration/diskimage"
+    [netboot]="./test/integration/netboot"
 )
 
 # Per-target go test timeout. The default fits a daemon-backed suite; the
@@ -61,6 +62,7 @@ declare -A TARGET_PACKAGES=(
 # boot through firstboot provisioning takes tens of minutes.
 declare -A TARGET_TIMEOUTS=(
     [diskimage]="90m"
+    [netboot]="40m"
 )
 
 RUN_TARGET="all"
@@ -720,6 +722,26 @@ elif [ "$RUN_TARGET" = "diskimage" ]; then
     echo "rpi image: ${DISKIMAGE_RPI_IMAGE:-<unset>}"
     echo "u-boot:    ${DISKIMAGE_UBOOT:-<unset>}"
     echo "work dir:  ${DISKIMAGE_WORK_DIR}"
+elif [ "$RUN_TARGET" = "netboot" ]; then
+    # The netboot suite drives `platformctl iso test pxe`, which runs its
+    # own PXE server on an isolated bridge and boots the aarch64 guest from
+    # U-Boot; no shared platformd. Inputs come from the host build
+    # (make integration-test-netboot): the qemu_arm64 U-Boot, the Secure
+    # Boot key set it was preseeded with, and the Alpine netboot files.
+    echo "=== netboot target: skipping shared platformd ==="
+    export NETBOOT_WORK_DIR="${NETBOOT_WORK_DIR:-/tmp/netboot-integration}"
+    rm -rf "${NETBOOT_WORK_DIR}"
+    mkdir -p "${NETBOOT_WORK_DIR}"
+    echo "u-boot:    ${NETBOOT_UBOOT:-<unset>}"
+    echo "ipxe:      ${NETBOOT_IPXE:-<unset>}"
+    echo "keys:      ${NETBOOT_KEYS_DIR:-<unset>}"
+    echo "kernel:    ${NETBOOT_KERNEL:-<unset>}"
+    echo "initrd:    ${NETBOOT_INITRD:-<unset>}"
+    echo "modloop:   ${NETBOOT_MODLOOP:-<unset>}"
+    echo "repo:      ${NETBOOT_ALPINE_REPO:-<unset>}"
+    echo "u-boot dir:${NETBOOT_UBOOT_DIR:-<unset>}"
+    echo "rpi apks:  ${NETBOOT_RPI_APK_DIR:-<unset>}"
+    echo "work dir:  ${NETBOOT_WORK_DIR}"
 else
     # platformd is required for every daemon-dependent suite. A failed bring-up
     # ends the run; see abort_no_daemon.

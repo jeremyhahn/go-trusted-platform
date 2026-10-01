@@ -66,7 +66,13 @@ Examples:
   platformctl bootstrap status --config bootstrap.yaml
 
   # Teardown bootstrap container
-  platformctl bootstrap teardown --config bootstrap.yaml`,
+  platformctl bootstrap teardown --config bootstrap.yaml
+
+  # Write each node's resolved platform config for a diff
+  platformctl bootstrap resolve --config bootstrap.yaml --dump /tmp/resolved
+
+  # Boot from the network the way a Raspberry Pi's bootloader does
+  sudo platformctl bootstrap probe rpi --interface eth1 --serial 9ffefdef --mac dc:a6:32:01:36:c2`,
 	}
 
 	// Add subcommands
@@ -77,6 +83,8 @@ Examples:
 	cmd.AddCommand(newDeployCommand(getFlags))
 	cmd.AddCommand(newStatusCommand(getFlags))
 	cmd.AddCommand(newTeardownCommand(getFlags))
+	cmd.AddCommand(newProbeCommand(getFlags))
+	cmd.AddCommand(newResolveCommand(getFlags))
 
 	// Canonical TOFU bootstrap modes per
 	// docs/08-bootstrap-auth-architecture.md §6.

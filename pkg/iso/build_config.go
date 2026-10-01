@@ -47,9 +47,10 @@ func NewPlatformISOConfig(build *ISOBuildConfig, workDir string) *PlatformISOCon
 				AutoUnseal:      build.TPMAutoUnseal,
 				AutoUpgradeSeal: build.TPMAutoUpgradeSeal,
 			},
-			FIPS:        build.FIPS,
-			Lockdown:    build.Lockdown,
-			EnableFIDO2: build.EnableFIDO2,
+			FIPS:           build.FIPS,
+			Lockdown:       build.Lockdown,
+			EnableFIDO2:    build.EnableFIDO2,
+			PublicKeysOnly: build.NetworkServed,
 		},
 		LUKS: LUKSConfig{
 			Enabled: build.LUKSTPMOnly,

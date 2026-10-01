@@ -15,24 +15,6 @@ package deployer
 
 import "fmt"
 
-// ErrNotImplemented is returned when a deployer target is not yet implemented.
-type ErrNotImplemented struct {
-	Target DeployTarget
-}
-
-func (e ErrNotImplemented) Error() string {
-	return fmt.Sprintf("deployer: target %q is not implemented", string(e.Target))
-}
-
-// ErrUnknownTarget is returned when the deploy target is not recognized.
-type ErrUnknownTarget struct {
-	Target DeployTarget
-}
-
-func (e ErrUnknownTarget) Error() string {
-	return fmt.Sprintf("deployer: unknown target %q", string(e.Target))
-}
-
 // ErrSSHConnect is returned when an SSH connection fails.
 type ErrSSHConnect struct {
 	Host  string
@@ -181,27 +163,6 @@ func (e ErrContainerStateMismatch) Error() string {
 		e.ContainerID, e.Host, e.Field, e.Want, e.Got)
 }
 
-// ErrAssetStageFailed indicates the deployer could not extract image-
-// baked PXE assets (vmlinuz, initramfs, autoinstall.sh) from the
-// container image into the host bind-mount source. The bootstrap
-// container will not start without these because the bind-mount
-// overlays the image's /data with the (otherwise empty) host directory.
-type ErrAssetStageFailed struct {
-	Phase string // "create" | "cp:<asset>"
-	Cause error
-}
-
-func (e ErrAssetStageFailed) Error() string {
-	if e.Cause == nil {
-		return fmt.Sprintf("deployer: asset stage failed at phase %s", e.Phase)
-	}
-	return fmt.Sprintf("deployer: asset stage failed at phase %s: %v", e.Phase, e.Cause)
-}
-
-func (e ErrAssetStageFailed) Unwrap() error {
-	return e.Cause
-}
-
 // ErrImageShipFailed indicates the deployer could not ship a
 // locally-built container image to the remote host. Shipping a local
 // image is required when the bootstrap image is built on the orchestrator
@@ -234,119 +195,15 @@ func (e ErrInvalidDeployConfig) Error() string {
 	return fmt.Sprintf("deployer: invalid config: field %s: %s", e.Field, e.Reason)
 }
 
-// ErrCiscoDeployFailed indicates a Cisco app-hosting deployment step failed.
-type ErrCiscoDeployFailed struct {
-	Host  string
-	Phase string
-	Cause error
+// ErrNetbootMediaStage is a failure staging a netboot media build onto the
+// deploy target, at the named step.
+type ErrNetbootMediaStage struct {
+	Step string
+	Err  error
 }
 
-func (e ErrCiscoDeployFailed) Error() string {
-	return "deployer: cisco deploy failed on " + e.Host + " at phase " + e.Phase + ": " + e.Cause.Error()
+func (e ErrNetbootMediaStage) Error() string {
+	return "deployer: netboot media: " + e.Step + ": " + e.Err.Error()
 }
 
-func (e ErrCiscoDeployFailed) Unwrap() error {
-	return e.Cause
-}
-
-// ErrTemplateRender indicates a CLI template rendering failure.
-type ErrTemplateRender struct {
-	Name  string
-	Cause error
-}
-
-func (e ErrTemplateRender) Error() string {
-	return "deployer: template render failed for " + e.Name + ": " + e.Cause.Error()
-}
-
-func (e ErrTemplateRender) Unwrap() error {
-	return e.Cause
-}
-
-// ErrConfigFileRead is returned when reading a Cisco IOS-XE configuration
-// file fails.
-type ErrConfigFileRead struct {
-	Path  string
-	Cause error
-}
-
-func (e ErrConfigFileRead) Error() string {
-	return fmt.Sprintf("deployer: failed to read config file %s: %v", e.Path, e.Cause)
-}
-
-func (e ErrConfigFileRead) Unwrap() error {
-	return e.Cause
-}
-
-// ErrCiscoCopyFailed is returned when a file copy operation on the Cisco
-// device fails (e.g., TFTP/SCP/HTTP transfer).
-type ErrCiscoCopyFailed struct {
-	Protocol string
-	Source   string
-	Cause    error
-}
-
-func (e ErrCiscoCopyFailed) Error() string {
-	return fmt.Sprintf("deployer: cisco copy via %s from %s failed: %v", e.Protocol, e.Source, e.Cause)
-}
-
-func (e ErrCiscoCopyFailed) Unwrap() error {
-	return e.Cause
-}
-
-// ErrUnsupportedTransferProtocol is returned when the configured transfer
-// protocol is not supported.
-type ErrUnsupportedTransferProtocol struct {
-	Protocol string
-}
-
-func (e ErrUnsupportedTransferProtocol) Error() string {
-	return "deployer: unsupported transfer protocol: " + e.Protocol
-}
-
-// ErrExpectNotFound is returned when the expect binary is not available on
-// the system PATH.
-type ErrExpectNotFound struct{}
-
-func (e ErrExpectNotFound) Error() string {
-	return "deployer: expect binary not found in PATH; install expect (apt-get install expect)"
-}
-
-// ErrExpectScript is returned when an expect script reports an error via
-// the DEPLOY_ERROR marker.
-type ErrExpectScript struct {
-	Message string
-}
-
-func (e ErrExpectScript) Error() string {
-	return "deployer: expect script error: " + e.Message
-}
-
-// ErrExpectExecution is returned when executing the expect binary fails.
-type ErrExpectExecution struct {
-	Path  string
-	Cause error
-}
-
-func (e ErrExpectExecution) Error() string {
-	return fmt.Sprintf("deployer: expect execution failed for %s: %v", e.Path, e.Cause)
-}
-
-func (e ErrExpectExecution) Unwrap() error {
-	return e.Cause
-}
-
-// ErrExpectScriptWrite is returned when writing the temporary expect script
-// file to disk fails.
-type ErrExpectScriptWrite struct {
-	Path  string
-	Cause error
-}
-
-func (e ErrExpectScriptWrite) Error() string {
-	return fmt.Sprintf("deployer: failed to write expect script to %s: %v", e.Path, e.Cause)
-}
-
-func (e ErrExpectScriptWrite) Unwrap() error {
-	return e.Cause
-}
+func (e ErrNetbootMediaStage) Unwrap() error { return e.Err }

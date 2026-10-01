@@ -31,6 +31,24 @@ output/manifest.json    # version, tarball sha256, cache key, owner GUID, measur
 the same inputs (`make cache-key`), skips the build when `manifest.json`
 already carries it, and verifies `SHA256SUMS` before anything is staged.
 
+## Network boot
+
+Both boards also carry U-Boot's standard network boot
+(`configs/common-efi.config`): after the disks, `bootflow scan` tries
+`BOOTDEV_ETH` — DHCP, then TFTP of the offered bootfile, run as an EFI
+application under the same Secure Boot verification as a disk-booted UKI
+(`BOOTMETH_EFILOADER`). The DHCP request identifies the client as a standard
+EFI AArch64 PXE client (`DHCP_PXE_CLIENTARCH=0xb`, RFC 4578 option 93), so
+the platform's PXE server — or any other with a per-architecture bootfile
+map — hands it the signed arm64 iPXE rather than an x86 binary. The vendor
+class stays U-Boot's own `U-Boot.armv8` (a non-visible Kconfig symbol), which
+the platform's DHCP server recognises. This needs the legacy network stack
+(`NET_LEGACY`): lwIP's DHCP client sends neither option 60 nor option 93.
+
+`build-uboot.sh` fails the build if a fragment option was dropped by
+Kconfig, and if a `# CONFIG_X is not set` line (here `NET_LWIP`) came back
+enabled.
+
 ## Why the keys are compiled in
 
 With `EFI_SECURE_BOOT` on, U-Boot deliberately does not restore

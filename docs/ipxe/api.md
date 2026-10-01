@@ -112,13 +112,15 @@ The port is `ServerConfig.HTTPPort`. Under the bootstrap container it is set
 from `pxeboot --http-port`, which the deployer drives from
 `deployer.bootstrap_http_port` ([`docs/bootstrap/engineering.md`](../bootstrap/engineering.md) §5).
 
-**A second listener serves `/boot/device/` under the bootstrap container.**
-`pkg/bootstrap/container` does not call `SetDeviceLookup`, so the route below is
-not registered on this server; it runs its own `http.Server` bound to
+**The bootstrap container serves `/boot/device/` twice, identically.** It wires
+its manifest into this server with `SetDeviceLookup`, so the route below is
+what `/boot.ipxe` chains; and it runs its own `http.Server` on
 `ServerConfig.DeviceScriptPort` — `--device-script-port`, defaulting to
-`--http-port` + 1 — serving `/boot/device/{mac}.ipxe` only. That listener is
-where a port conflict on the deployer kills pxeboot, which is why the port is
-configurable rather than derived-only.
+`--http-port` + 1 — which the deploy gate probes as its readiness signal. A
+known MAC gets the same script from both (one lookup, one generator); an
+unknown MAC gets a 404 here and, on the second listener, a script that chains
+`/boot.ipxe`. That listener is where a port conflict on the deployer kills
+pxeboot, which is why the port is configurable rather than derived-only.
 
 | Method | Path | Purpose | Registered when |
 |---|---|---|---|

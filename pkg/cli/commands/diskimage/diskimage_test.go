@@ -20,10 +20,12 @@ func TestCommandTree(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names[sub.Name()] = sub.Hidden
 	}
-	if hidden, ok := names["assemble"]; !ok || !hidden {
-		t.Errorf("assemble missing or not hidden: %v", names)
+	for _, name := range []string{"assemble", "netboot-initfs"} {
+		if hidden, ok := names[name]; !ok || !hidden {
+			t.Errorf("%s missing or not hidden: %v", name, names)
+		}
 	}
-	for _, name := range []string{"create", "inspect", "test"} {
+	for _, name := range []string{"create", "netboot", "inspect", "test"} {
 		if hidden, ok := names[name]; !ok || hidden {
 			t.Errorf("%s missing or hidden: %v", name, names)
 		}

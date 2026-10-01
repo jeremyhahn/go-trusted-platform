@@ -197,9 +197,9 @@ type PlatformConfig struct {
 	// DebugSink is the host:port of the bootstrap container's HTTP forensic
 	// sink. Baked into the kernel cmdline as platform_debug_sink=<value>.
 	// The autoinstall.sh upload_install_log function reads this and PUTs
-	// /tmp/install.log there on every exit path. Defaults to
-	// 198.18.1.91:8080 (our reference deployment) when unset; override
-	// per-deployment via the iso create CLI flag --debug-sink.
+	// /tmp/install.log there on every exit path. Set it through the ISO
+	// build config. When it is empty the parameter is left off the cmdline
+	// and the script derives the sink from the DHCP server.
 	DebugSink string `yaml:"debug_sink,omitempty" json:"debug_sink,omitempty"`
 }
 
@@ -223,6 +223,10 @@ type SecurityConfig struct {
 
 	// FIDO2 security key support
 	EnableFIDO2 bool `yaml:"enable_fido2" json:"enable_fido2"`
+
+	// PublicKeysOnly stages only positively public Secure Boot artifacts
+	// and never generates keys: the media is served over the network.
+	PublicKeysOnly bool `yaml:"public_keys_only" json:"public_keys_only"`
 }
 
 // FIPSConfig holds FIPS artifact container configuration

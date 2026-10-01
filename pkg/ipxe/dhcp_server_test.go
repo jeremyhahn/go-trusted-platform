@@ -1961,3 +1961,36 @@ func generateMAC(id, seq int) net.HardwareAddr {
 		byte(seq & 0xFF),
 	}
 }
+
+// TestDHCPServer_AArch64Clients pins the AArch64 side of the arch map: a
+// standard EFI AArch64 PXE client (0x000b) and a stock U-Boot (0x0016, or
+// no option 93 at all but its vendor class) get the arm64 iPXE, and a
+// stock U-Boot counts as a PXE client so it is answered at all.
+func TestDHCPServer_AArch64Clients(t *testing.T) {
+	server := &DHCPServer{config: &DHCPConfig{BootFilenameByArch: DefaultBootFilenameByArch()}}
+	discover := func(opts ...dhcpv4.Modifier) *dhcpv4.DHCPv4 {
+		req, err := dhcpv4.New(opts...)
+		require.NoError(t, err)
+		return req
+	}
+
+	efi := discover(dhcpv4.WithOption(dhcpv4.OptGeneric(dhcpv4.OptionClientSystemArchitectureType, []byte{0x00, 0x0b})),
+		dhcpv4.WithOption(dhcpv4.OptClassIdentifier("PXEClient:Arch:00011:UNDI:003000")))
+	assert.True(t, server.isPXEClient(efi))
+	assert.Equal(t, archEFIAArch64, server.getClientArch(efi))
+	assert.Equal(t, FirmwareSNPOnlyAArch64, server.bootFilenameForArch(server.getClientArch(efi)))
+
+	uboot := discover(dhcpv4.WithOption(dhcpv4.OptGeneric(dhcpv4.OptionClientSystemArchitectureType, []byte{0x00, 0x16})),
+		dhcpv4.WithOption(dhcpv4.OptClassIdentifier("U-Boot.armv8")))
+	assert.True(t, server.isPXEClient(uboot), "a stock U-Boot is a PXE-class client")
+	assert.Equal(t, archUBootARM64, server.getClientArch(uboot))
+	assert.Equal(t, FirmwareSNPOnlyAArch64, server.bootFilenameForArch(server.getClientArch(uboot)))
+
+	noArch := discover(dhcpv4.WithOption(dhcpv4.OptClassIdentifier("U-Boot.armv8")))
+	assert.True(t, server.isPXEClient(noArch))
+	assert.Equal(t, archEFIAArch64, server.getClientArch(noArch), "the vendor class says AArch64 when option 93 is absent")
+
+	plain := discover(dhcpv4.WithOption(dhcpv4.OptClassIdentifier("MSFT 5.0")))
+	assert.False(t, server.isPXEClient(plain))
+	assert.Equal(t, archBIOSx86, server.getClientArch(plain), "an ordinary client keeps the BIOS default")
+}

@@ -98,7 +98,7 @@ func TestFirstBoot(t *testing.T) {
 			Logger:       logger,
 		})
 		if err != nil {
-			t.Fatalf("first boot: %v\n%s", err, missingMilestone(firstLog, firstBootMilestones))
+			t.Fatalf("first boot: %v\n%s", err, harness.MissingMilestone(firstLog, firstBootMilestones))
 		}
 		require.True(t, result.Expected)
 		assert.Equal(t, harness.TPMStateInitialized, result.TPMState, "the first boot starts from fresh TPM state")
@@ -131,7 +131,7 @@ func TestFirstBoot(t *testing.T) {
 			Logger:    logger,
 		})
 		if err != nil {
-			t.Fatalf("second boot: %v\n%s", err, missingMilestone(secondLog, secondBootMilestones))
+			t.Fatalf("second boot: %v\n%s", err, harness.MissingMilestone(secondLog, secondBootMilestones))
 		}
 		require.True(t, result.Expected)
 		assert.Equal(t, harness.TPMStatePreserved, result.TPMState, "the second boot must reuse the first boot's TPM state")
@@ -162,7 +162,7 @@ func TestFirstBoot(t *testing.T) {
 			Logger:    logger,
 		})
 		if err != nil {
-			t.Fatalf("third boot: %v\n%s", err, missingMilestone(thirdLog, thirdBootMilestones))
+			t.Fatalf("third boot: %v\n%s", err, harness.MissingMilestone(thirdLog, thirdBootMilestones))
 		}
 		require.True(t, result.Expected)
 		for _, m := range thirdBootMilestones {
@@ -174,15 +174,4 @@ func TestFirstBoot(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, found, "installer.luks must be gone after the confirmed seal")
 	})
-}
-
-// missingMilestone names the first milestone the transcript lacks.
-func missingMilestone(log string, milestones []string) string {
-	for _, m := range milestones {
-		found, err := harness.SerialContains(log, m)
-		if err != nil || !found {
-			return "first missing milestone: " + m
-		}
-	}
-	return "every milestone present"
 }

@@ -17,6 +17,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -117,26 +118,27 @@ func TestCopyGatewaydBinary_RejectsANonELF(t *testing.T) {
 	assert.Contains(t, err.Error(), "validation failed")
 }
 
-// TestAutoinstallScript_PXEPayloadFetchesGatewayd is the regression guard for
-// the PXE gateway install. A PXE node has no CD, so autoinstall rebuilds
-// /media/cdrom/platformd-bin by fetching binaries from platform_bin_url. The
-// list omitted gatewayd, and pkg/installer/gatewayd.go aborts the entire
-// install when a gateway-role node has no gatewayd under platformd-bin:
-//
-//	CRITICAL: failed to install gatewayd: gatewayd is required by this
-//	node's gateway role and was not found under platformd-bin/
-//
-// so a gateway could never be installed over PXE. Measured on the mini fleet
-// 2026-09-13: the install ran 185s, partitioned the disk, then aborted.
-func TestAutoinstallScript_PXEPayloadFetchesGatewayd(t *testing.T) {
+// TestAutoinstallScript_PXEPayloadIsListDriven: a PXE node rebuilds its CD
+// from the media set's payload list, not a list compiled into the script —
+// the hard-coded list once omitted gatewayd and every gateway install over
+// PXE aborted after partitioning the disk (mini fleet, 2026-09-13).
+func TestAutoinstallScript_PXEPayloadIsListDriven(t *testing.T) {
 	script := newGatewaydCustomizer(t).buildAutoinstallScript()
+	assert.Contains(t, script, PXEPayloadFunction)
+	assert.Contains(t, script, `fetch_install_payload "${PLATFORM_BIN_URL%/}" /media/cdrom`)
+	assert.NotContains(t, script, "for _bin in platformctl platformd platform-initrd gatewayd;", "no binary list in the script")
+}
 
-	// The reconstruction loop must name every binary the installer looks
-	// for under platformd-bin, gatewayd included.
-	for _, bin := range []string{"platformctl", "platformd", "platform-initrd", "gatewayd"} {
-		assert.Contains(t, script, bin,
-			"the PXE payload reconstruction must fetch %q", bin)
-	}
-	assert.Contains(t, script, "for _bin in platformctl platformd platform-initrd gatewayd;",
-		"gatewayd must be in the reconstruction loop, not merely mentioned")
+// TestAutoinstallScript_StagesTheNodeConfigAfterThePayload: the node's own
+// config replaces the payload's baked one, so it must run after the CD is
+// rebuilt.
+func TestAutoinstallScript_StagesTheNodeConfigAfterThePayload(t *testing.T) {
+	script := newGatewaydCustomizer(t).buildAutoinstallScript()
+	assert.Contains(t, script, NodeConfigFunction)
+	call := strings.Index(script, `stage_node_config "$INSTALLER_CONFIG" /media/cdrom /tmp/ca-bundle.pem`)
+	payload := strings.Index(script, `fetch_install_payload "${PLATFORM_BIN_URL%/}" /media/cdrom`)
+	require.GreaterOrEqual(t, call, 0)
+	require.GreaterOrEqual(t, payload, 0)
+	assert.Greater(t, call, payload)
+	assert.NotContains(t, script, `[ ! -f /media/cdrom/configs/installer.yaml ]`, "the baked config no longer blocks the node's")
 }

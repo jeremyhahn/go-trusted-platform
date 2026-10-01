@@ -116,12 +116,12 @@ func (e ErrPXETeardownFailed) Unwrap() error {
 
 // ErrDeployerCreationFailed is returned when the deployer cannot be created.
 type ErrDeployerCreationFailed struct {
-	Target string
-	Cause  error
+	Host  string
+	Cause error
 }
 
 func (e ErrDeployerCreationFailed) Error() string {
-	return fmt.Sprintf("bootstrap: failed to create deployer for target %s: %v", e.Target, e.Cause)
+	return fmt.Sprintf("bootstrap: failed to create the deployer for host %s: %v", e.Host, e.Cause)
 }
 
 func (e ErrDeployerCreationFailed) Unwrap() error {
@@ -140,3 +140,39 @@ func (e ErrPXEDryRunFailed) Error() string {
 func (e ErrPXEDryRunFailed) Unwrap() error {
 	return e.Cause
 }
+
+// ErrProbeInvalidFlag is returned when a `bootstrap probe` flag cannot be
+// used as given.
+type ErrProbeInvalidFlag struct {
+	Flag   string
+	Reason string
+}
+
+func (e *ErrProbeInvalidFlag) Error() string {
+	if e.Flag == "" {
+		return "bootstrap probe: " + e.Reason
+	}
+	return "bootstrap probe: " + e.Flag + ": " + e.Reason
+}
+
+// ErrProbeFailed is returned when the probed boot would have failed on a
+// real client; the report printed before it says where.
+type ErrProbeFailed struct {
+	Cause error
+}
+
+func (e *ErrProbeFailed) Error() string { return "bootstrap probe: " + e.Cause.Error() }
+func (e *ErrProbeFailed) Unwrap() error { return e.Cause }
+
+// ErrResolveDumpFailed is returned when `bootstrap resolve --dump` cannot
+// write a resolved config.
+type ErrResolveDumpFailed struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrResolveDumpFailed) Error() string {
+	return "bootstrap resolve: write " + e.Path + ": " + e.Cause.Error()
+}
+
+func (e ErrResolveDumpFailed) Unwrap() error { return e.Cause }

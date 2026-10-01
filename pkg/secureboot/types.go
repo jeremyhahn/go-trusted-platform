@@ -65,12 +65,4 @@ var (
 	ErrInvalidKeyType = errors.New("invalid key type")
 	// ErrWriteFailed indicates a file write operation failed
 	ErrWriteFailed = errors.New("write operation failed")
-	// ErrNilKeyAttributes indicates NewRemoteSigner was called without key attributes.
-	ErrNilKeyAttributes = errors.New("key attributes cannot be nil")
-	// ErrNilSDKClient indicates the remote signer has no reachable KMS client.
-	ErrNilSDKClient = errors.New("kms client cannot be nil for remote hash-signing")
-	// ErrRemoteSignerUnavailable indicates the KMS-resident signing key could not be resolved.
-	ErrRemoteSignerUnavailable = errors.New("remote signing key unavailable")
-	// ErrRemoteCertUnavailable indicates the public certificate could not be fetched from the KMS.
-	ErrRemoteCertUnavailable = errors.New("remote certificate unavailable")
 )

@@ -130,7 +130,7 @@ func TestService_SignDigest_HappyPath(t *testing.T) {
 	certPEM, certB64 := newSelfSignedEKCert(t)
 	profile := remoteSignProfile(certPEM)
 	signer := &fakeDBKeySigner{signature: []byte("sig-bytes"), certPEM: []byte("db-cert-pem")}
-	svc := newSignService(t, profile, signer, &mockEABService{}, true)
+	svc := newSignService(t, profile, signer, boundEAB(profile), true)
 
 	digest := sha256Digest()
 	resp, err := svc.SignDigest(context.Background(), signRequest(t, svc, certB64, digest))
@@ -190,7 +190,7 @@ func TestService_SignDigest_EKMismatchRejectsBeforeSigning(t *testing.T) {
 	_, presentedB64 := newSelfSignedEKCert(t) // different key pair
 	profile := remoteSignProfile(prestagedPEM)
 	signer := &fakeDBKeySigner{signature: []byte("sig")}
-	svc := newSignService(t, profile, signer, &mockEABService{}, true)
+	svc := newSignService(t, profile, signer, boundEAB(profile), true)
 
 	_, err := svc.SignDigest(context.Background(), signRequest(t, svc, presentedB64, sha256Digest()))
 	if err == nil {
@@ -224,7 +224,7 @@ func TestService_SignDigest_NotConfigured(t *testing.T) {
 	signer := &fakeDBKeySigner{signature: []byte("sig")}
 	// EK matching disabled and no prestaged cert: EK binding passes so the
 	// not-configured branch is what rejects the request.
-	svc := newSignService(t, profile, signer, &mockEABService{}, false)
+	svc := newSignService(t, profile, signer, boundEAB(profile), false)
 
 	_, err := svc.SignDigest(context.Background(), signRequest(t, svc, "", sha256Digest()))
 	if err == nil {
@@ -244,7 +244,7 @@ func TestService_SignDigest_NotConfigured(t *testing.T) {
 func TestService_SignDigest_NilSignerUnavailable(t *testing.T) {
 	certPEM, certB64 := newSelfSignedEKCert(t)
 	profile := remoteSignProfile(certPEM)
-	svc := newSignService(t, profile, nil, &mockEABService{}, true)
+	svc := newSignService(t, profile, nil, boundEAB(profile), true)
 
 	_, err := svc.SignDigest(context.Background(), signRequest(t, svc, certB64, sha256Digest()))
 	if err == nil {
@@ -262,7 +262,7 @@ func TestService_SignDigest_EmptyDigest(t *testing.T) {
 	certPEM, certB64 := newSelfSignedEKCert(t)
 	profile := remoteSignProfile(certPEM)
 	signer := &fakeDBKeySigner{signature: []byte("sig")}
-	svc := newSignService(t, profile, signer, &mockEABService{}, true)
+	svc := newSignService(t, profile, signer, boundEAB(profile), true)
 
 	_, err := svc.SignDigest(context.Background(), signRequest(t, svc, certB64, nil))
 	if err == nil {

@@ -100,9 +100,12 @@ type BootstrapConfig struct {
 
 	// BackupsDir is the client-side directory where factory-cert backups
 	// are stored during the BMC enrollment ceremony. The orchestrator writes
-	// one PEM file per BMC after a successful bmc_enroll run. Empty defaults
-	// to defaultBackupsDir ("~/sources/automatethethings/infra/backups");
-	// "~" is expanded to the operator's home directory at load time.
+	// one PEM file per BMC after a successful bmc_enroll run. Like the rest
+	// of what a deployment needs, it belongs with the deployment's
+	// configuration: empty defaults to defaultBackupsDir beside
+	// bootstrap.yaml, a relative path is resolved against bootstrap.yaml's
+	// directory, and "~" is expanded to the operator's home directory, all
+	// at load time.
 	// BackupsDir is used by the next-wave BMC enrollment flow; parsing and
 	// exposing it here lets operators configure the path in bootstrap.yaml
 	// today.
@@ -132,25 +135,32 @@ func (c *BootstrapConfig) TemplatePath(role, configDir string) (string, bool) {
 	return path, true
 }
 
-// defaultBackupsDir is the backups directory used when BackupsDir is empty.
-// "~" is expanded to os.UserHomeDir() at load time.
-const defaultBackupsDir = "~/sources/automatethethings/infra/backups"
+// defaultBackupsDir is the backups directory used when BackupsDir is empty,
+// relative to bootstrap.yaml's directory.
+const defaultBackupsDir = "backups"
 
 // EffectiveBackupsDir returns the BackupsDir with ~ expanded and the
-// defaultBackupsDir applied when BackupsDir is empty.
+// defaultBackupsDir applied when BackupsDir is empty. A config loaded by
+// LoadBootstrapConfig has both already applied, relative to its file; one
+// built in memory resolves them against the working directory.
 func (c *BootstrapConfig) EffectiveBackupsDir() (string, error) {
 	dir := c.BackupsDir
 	if dir == "" {
 		dir = defaultBackupsDir
 	}
-	if len(dir) >= 2 && dir[:2] == "~/" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		dir = filepath.Join(home, dir[2:])
+	return expandHome(dir)
+}
+
+// expandHome expands a leading "~/" to the operator's home directory.
+func expandHome(p string) (string, error) {
+	if !strings.HasPrefix(p, "~/") {
+		return p, nil
 	}
-	return dir, nil
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, p[2:]), nil
 }
 
 // FabricConfig describes the network fabric topology for the bootstrap
@@ -253,9 +263,9 @@ type NetworkDef struct {
 	Subnet string `yaml:"subnet"`
 }
 
-// DeployerConfig specifies the deployment host and runtime.
+// DeployerConfig specifies the Linux host that runs the bootstrap container
+// and its container runtime.
 type DeployerConfig struct {
-	Target string `yaml:"target"`
 	Host   string `yaml:"host"`
 	User   string `yaml:"user"`
 	SSHKey string `yaml:"ssh_key"`
@@ -263,15 +273,9 @@ type DeployerConfig struct {
 	// deployer uses to verify the deployer host key. Deployer SSH is
 	// fail-closed: without provisioned pins the deploy/stage phase errors
 	// rather than trusting the key on first use.
-	KnownHostsPath     string `yaml:"known_hosts_path"`
-	ContainerRuntime   string `yaml:"container_runtime"`
-	ContainerImage     string `yaml:"container_image"`
-	TransferProtocol   string `yaml:"transfer_protocol,omitempty"`
-	TransferServer     string `yaml:"transfer_server,omitempty"`
-	ContainerImagePath string `yaml:"container_image_path,omitempty"`
-	ConfigFile         string `yaml:"config_file,omitempty"`
-	AppID              string `yaml:"app_id,omitempty"`
-	ImageFile          string `yaml:"image_file,omitempty"`
+	KnownHostsPath   string `yaml:"known_hosts_path"`
+	ContainerRuntime string `yaml:"container_runtime"`
+	ContainerImage   string `yaml:"container_image"`
 
 	// SMBHost is the address the BMC should use to mount the bootstrap
 	// container's SMB share for virtual-media boot. Defaults to Host when
@@ -284,10 +288,9 @@ type DeployerConfig struct {
 
 	// DataDir is the host-side directory the deployer SSHes into and
 	// bind-mounts into the bootstrap container as /data. The orchestrator
-	// stages manifest.yaml + image-extracted PXE assets (vmlinuz,
-	// initramfs, autoinstall.sh) here, and the iso-stager uploads each
-	// node's ISO into the same path so the smbd inside the container
-	// serves it. Defaults to deployer.DefaultRemoteDataDir
+	// stages manifest.yaml and the netboot media build here, and the
+	// iso-stager uploads each node's ISO into the same path so the smbd
+	// inside the container serves it. Defaults to deployer.DefaultRemoteDataDir
 	// ("/tmp/bootstrap"). Override when /tmp is too small or when an
 	// operator wants persistent staging across reboots.
 	DataDir string `yaml:"data_dir,omitempty"`
@@ -370,6 +373,19 @@ type DeployerConfig struct {
 	// Empty falls through to the container default (public dl-cdn), which
 	// only works when the install network has outbound internet.
 	BootstrapAPKMirror string `yaml:"bootstrap_apk_mirror,omitempty"`
+
+	// NetbootMediaDir is the netboot media build on this machine
+	// (container.NetbootMedia: every media set, the Raspberry Pi TFTP tree
+	// and the db-signed arm64 iPXE), staged into the container's data
+	// directory. Required for a Linux deployer: the container image carries
+	// no installer media. A relative path is resolved against
+	// bootstrap.yaml's directory at load time.
+	NetbootMediaDir string `yaml:"netboot_media_dir,omitempty"`
+
+	// ProxyDHCP runs the container's DHCP server as a proxy: PXE clients
+	// get boot options and no lease, for a provisioning segment whose own
+	// DHCP server leases addresses.
+	ProxyDHCP bool `yaml:"proxy_dhcp,omitempty"`
 
 	// PXEServiceHost names the platform node that should host the
 	// persistent PXE/DHCP service after Phase 5 hand-off. Empty means
@@ -625,6 +641,15 @@ type NodeConfig struct {
 	// existing control-plane node in a config that provisions new workers.
 	SkipInstall bool `yaml:"skip_install,omitempty" json:"skip_install,omitempty"`
 
+	// Platform, Model, Architecture, Serial and BootModel describe hardware
+	// that boots differently from a generic x86 server. Empty means a
+	// generic server; see node_platform.go for the values and rules.
+	Platform     string `yaml:"platform,omitempty" json:"platform,omitempty"`
+	Model        string `yaml:"model,omitempty" json:"model,omitempty"`
+	Architecture string `yaml:"architecture,omitempty" json:"architecture,omitempty"`
+	Serial       string `yaml:"serial,omitempty" json:"serial,omitempty"`
+	BootModel    string `yaml:"boot_model,omitempty" json:"boot_model,omitempty"`
+
 	// SwitchPort is the physical switch port this node is connected to
 	// (e.g., "Ethernet1/36"). Used by the orchestrator for post-enrollment
 	// VLAN assignment and by the dry-run report for operator verification.
@@ -719,6 +744,11 @@ type nodeConfigYAML struct {
 	OverridesFile    string                      `yaml:"overrides_file,omitempty"`
 	BootMethod       string                      `yaml:"boot_method,omitempty"`
 	SkipInstall      bool                        `yaml:"skip_install,omitempty"`
+	Platform         string                      `yaml:"platform,omitempty"`
+	Model            string                      `yaml:"model,omitempty"`
+	Architecture     string                      `yaml:"architecture,omitempty"`
+	Serial           string                      `yaml:"serial,omitempty"`
+	BootModel        string                      `yaml:"boot_model,omitempty"`
 	SwitchPort       string                      `yaml:"switch_port,omitempty"`
 	PostEnrollment   *PostEnrollmentConfig       `yaml:"post_enrollment,omitempty"`
 }
@@ -747,6 +777,11 @@ func (n *NodeConfig) UnmarshalYAML(value *yaml.Node) error {
 	n.BootMethod = shadow.BootMethod
 	n.SkipInstall = shadow.SkipInstall
 	n.SwitchPort = shadow.SwitchPort
+	n.Platform = shadow.Platform
+	n.Model = shadow.Model
+	n.Architecture = shadow.Architecture
+	n.Serial = shadow.Serial
+	n.BootModel = shadow.BootModel
 	n.PostEnrollment = shadow.PostEnrollment
 	n.MACs = append([]string(nil), shadow.MACs...)
 	if shadow.MAC != "" {
@@ -927,16 +962,24 @@ func LoadBootstrapConfig(path string) (*BootstrapConfig, error) {
 		return nil, ErrParseYAML{Path: path, Err: err}
 	}
 
-	// Expand ~ in BackupsDir at load time so callers always see an
-	// absolute path and don't need to know the expansion logic.
-	if config.BackupsDir != "" {
-		if len(config.BackupsDir) >= 2 && config.BackupsDir[:2] == "~/" {
-			home, homeErr := os.UserHomeDir()
-			if homeErr != nil {
-				return nil, ErrParseYAML{Path: path, Err: homeErr}
-			}
-			config.BackupsDir = filepath.Join(home, config.BackupsDir[2:])
+	// What a deployment needs beside its config — the netboot media build,
+	// the BMC cert backups — is named relative to bootstrap.yaml, like an
+	// overrides file, so callers always see an absolute path.
+	if config.BackupsDir == "" {
+		config.BackupsDir = defaultBackupsDir
+	}
+	for _, p := range []*string{&config.BackupsDir, &config.Deployer.NetbootMediaDir} {
+		if *p == "" {
+			continue
 		}
+		expanded, homeErr := expandHome(*p)
+		if homeErr != nil {
+			return nil, ErrParseYAML{Path: path, Err: homeErr}
+		}
+		if !filepath.IsAbs(expanded) {
+			expanded = filepath.Join(filepath.Dir(path), expanded)
+		}
+		*p = expanded
 	}
 
 	// Resolve per-node OverridesFile references. Each NodeConfig may
@@ -1030,9 +1073,20 @@ func deepMergeOverrides(dst, src map[string]interface{}) map[string]interface{} 
 	return out
 }
 
-// Validate checks the BootstrapConfig for correctness and returns the first
-// validation error encountered.
+// Validate checks the BootstrapConfig for correctness, including the
+// deployer's netboot media build on disk, and returns the first validation
+// error encountered.
 func (c *BootstrapConfig) Validate() error {
+	if err := c.ValidateDefinition(); err != nil {
+		return err
+	}
+	return c.validateNetbootMedia()
+}
+
+// ValidateDefinition checks everything Validate does except the netboot
+// media build. It is the check for work that only reads the config, such
+// as resolving each node's platform config, and so needs no media on disk.
+func (c *BootstrapConfig) ValidateDefinition() error {
 	// Required top-level fields.
 	if c.Deployer.Host == "" {
 		return ErrMissingRequiredField{Field: "deployer.host"}
@@ -1090,6 +1144,10 @@ func (c *BootstrapConfig) Validate() error {
 				return ErrVirtualMediaRequiresBMC{Hostname: node.Hostname}
 			}
 			virtualMediaCount++
+		}
+
+		if err := node.validatePlatform(); err != nil {
+			return err
 		}
 
 		// Validate bmc_trust strategy chain.

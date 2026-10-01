@@ -15,19 +15,6 @@ package deployer
 
 import (
 	"context"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
-)
-
-// DeployTarget identifies the target platform type.
-type DeployTarget string
-
-const (
-	// TargetLinux deploys to a standard Linux host with Docker or Podman.
-	TargetLinux DeployTarget = "linux"
-
-	// TargetCisco deploys to a Cisco IOS-XE guestshell.
-	TargetCisco DeployTarget = "cisco"
 )
 
 const (
@@ -46,9 +33,6 @@ const (
 
 // DeployConfig holds deployment configuration.
 type DeployConfig struct {
-	// Target is the target platform type (linux or cisco).
-	Target DeployTarget
-
 	// Host is the SSH hostname or IP address.
 	Host string
 
@@ -81,14 +65,9 @@ type DeployConfig struct {
 
 	// DataDir is the host-side directory the deployer SSHes into and
 	// bind-mounts into the bootstrap container as /data. Empty means
-	// DefaultRemoteDataDir.
-	//
-	// The deployer extracts image-baked PXE assets (vmlinuz, initramfs,
-	// autoinstall.sh, and any /data/configs/ tree the image ships) into
-	// this directory BEFORE starting the container so the bind-mount
-	// doesn't shadow them with an empty host dir. Without this step the
-	// bind-mount's empty source overlays the baked assets and pxeboot
-	// fails to start with "manifest not found".
+	// DefaultRemoteDataDir. The deployer stages the manifest and the
+	// netboot media build here before starting the container; the image
+	// itself carries nothing under /data.
 	DataDir string
 
 	// ContainerName overrides DefaultContainerName for the bootstrap
@@ -156,29 +135,19 @@ type DeployConfig struct {
 	// mirror), keeping internet-connected installs working.
 	BootstrapAPKMirror string
 
-	// ProvisioningSubnet provides provisioning network parameters from the
-	// unified SubnetConfig model.
-	ProvisioningSubnet *installer.SubnetConfig
+	// NetbootMediaDir is the netboot media build on this machine
+	// (container.NetbootMedia), staged into DataDir as it is laid out;
+	// required: the container serves every media set from it. Its TFTP tree and arm64 iPXE configure the container
+	// (BOOTSTRAP_TFTP_DIR, BOOTSTRAP_ARM64_IPXE).
+	NetbootMediaDir string
 
-	// TransferProtocol is the protocol for image transfer (tftp, scp, http).
-	// Used by the Cisco deployer.
-	TransferProtocol string
+	// BootstrapProxyDHCP runs the container's DHCP server as a proxy
+	// (BOOTSTRAP_PROXY_DHCP).
+	BootstrapProxyDHCP bool
 
-	// TransferServer is the IP address of the server hosting the container image.
-	// Used by the Cisco deployer.
-	TransferServer string
-
-	// CiscoConfigFile is the path to a Cisco IOS-XE configuration file (.cfg).
-	// When set, the deployer applies these commands instead of template-rendered config.
-	CiscoConfigFile string
-
-	// CiscoAppID is the IOS-XE app-hosting application identifier.
-	// Defaults to DefaultCiscoAppID if empty.
-	CiscoAppID string
-
-	// CiscoImageFile is the container image filename on router flash.
-	// Defaults to DefaultCiscoImageFile if empty.
-	CiscoImageFile string
+	// netboot holds the container paths of the staged build's TFTP tree
+	// and arm64 iPXE, set by Deploy once the build is staged.
+	netboot netbootMediaPaths
 }
 
 // DeployResult holds the deployment result.
@@ -222,16 +191,14 @@ func (c *DeployConfig) Validate() error {
 		return err
 	}
 
-	// For Cisco targets, container_image and manifest_path are not required
-	// since the image is transferred via TFTP/SCP/HTTP and config comes from
-	// a .cfg file or templates.
-	if c.Target != TargetCisco {
-		if c.ContainerImage == "" {
-			return ErrInvalidDeployConfig{Field: "container_image", Reason: "must not be empty"}
-		}
-		if c.ManifestPath == "" {
-			return ErrInvalidDeployConfig{Field: "manifest_path", Reason: "must not be empty"}
-		}
+	if c.ContainerImage == "" {
+		return ErrInvalidDeployConfig{Field: "container_image", Reason: "must not be empty"}
+	}
+	if c.ManifestPath == "" {
+		return ErrInvalidDeployConfig{Field: "manifest_path", Reason: "must not be empty"}
+	}
+	if c.NetbootMediaDir == "" {
+		return ErrInvalidDeployConfig{Field: "netboot_media_dir", Reason: "must not be empty: the container serves the netboot media build's sets (make netboot-media)"}
 	}
 	return nil
 }

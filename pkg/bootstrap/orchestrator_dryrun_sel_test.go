@@ -25,7 +25,7 @@ import (
 
 func dryRunSELConfig() *BootstrapConfig {
 	return &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "198.51.100.91", Target: "linux"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "198.51.100.91"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{Domain: "test.local"},
 		Nodes: []NodeConfig{{

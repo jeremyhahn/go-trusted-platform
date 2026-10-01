@@ -24,24 +24,11 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
-
-// testPortCounter is used to allocate unique ports for tests
-var testPortCounter atomic.Int32
-
-func init() {
-	testPortCounter.Store(19500)
-}
-
-// getTestPort returns a unique port for testing
-func getTestPort() int {
-	return int(testPortCounter.Add(1))
-}
 
 // getAvailablePort finds and returns an available port
 func getAvailablePort() (int, error) {

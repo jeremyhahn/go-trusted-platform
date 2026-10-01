@@ -224,7 +224,7 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 	// bootstrap.yaml) and all of the node's MACs (YAML + BMC-discovered).
 	// Publishing under every MAC means the autoinstall hit succeeds
 	// regardless of which NIC the live ISO enumerates as eth0.
-	if err := o.stagePerMACHostname(ctx, node); err != nil {
+	if err := o.stagePerMACConfig(ctx, node); err != nil {
 		o.logger.Warn("bootstrap: virtual-media: failed to stage per-MAC hostname (install will use baked default)",
 			slog.String("hostname", node.Hostname),
 			slog.String("error", err.Error()))
@@ -800,25 +800,25 @@ func (o *Orchestrator) postInstallPowerOn(ctx context.Context, client bmc.Client
 	}
 	switch postState {
 	case bmc.PowerStateOff:
-		o.logger.Info("bootstrap: virtual-media: host at S5 after install, powering on for first-boot",
+		o.logger.Info("bootstrap: host at S5 after install, powering on for first-boot",
 			slog.String("hostname", hostname))
 		if err := client.PowerOn(ctx); err != nil {
 			return ErrPowerControlFailed{Hostname: hostname, Operation: "on", Cause: err}
 		}
 	case bmc.PowerStateOn:
-		o.logger.Info("bootstrap: virtual-media: host still on after install, resetting for first-boot",
+		o.logger.Info("bootstrap: host still on after install, resetting for first-boot",
 			slog.String("hostname", hostname))
 		if err := client.PowerReset(ctx); err != nil {
 			return ErrPowerControlFailed{Hostname: hostname, Operation: "reset", Cause: err}
 		}
 	default:
-		o.logger.Warn("bootstrap: virtual-media: unknown power state after install",
+		o.logger.Warn("bootstrap: unknown power state after install",
 			slog.String("hostname", hostname),
 			slog.String("state", string(postState)))
 	}
 
 	// Verify the host reached PowerStateOn after the post-install power command.
-	o.logger.Info("bootstrap: virtual-media: verifying post-install power state",
+	o.logger.Info("bootstrap: verifying post-install power state",
 		slog.String("hostname", hostname))
 	client.Close()
 
@@ -840,20 +840,20 @@ func (o *Orchestrator) postInstallPowerOn(ctx context.Context, client bmc.Client
 		}
 		st, stErr := postVerifyClient.PowerStatus(ctx)
 		if stErr != nil {
-			o.logger.Warn("bootstrap: virtual-media: post-install power status check failed",
+			o.logger.Warn("bootstrap: post-install power status check failed",
 				slog.String("hostname", hostname),
 				slog.Int("attempt", attempt),
 				slog.String("error", stErr.Error()))
 			continue
 		}
 		if st == bmc.PowerStateOn {
-			o.logger.Info("bootstrap: virtual-media: post-install power state verified on",
+			o.logger.Info("bootstrap: post-install power state verified on",
 				slog.String("hostname", hostname),
 				slog.Int("attempt", attempt))
 			postVerified = true
 			break
 		}
-		o.logger.Warn("bootstrap: virtual-media: post-install power state not yet on, retrying",
+		o.logger.Warn("bootstrap: post-install power state not yet on, retrying",
 			slog.String("hostname", hostname),
 			slog.Int("attempt", attempt),
 			slog.String("state", string(st)))
@@ -879,19 +879,19 @@ func (o *Orchestrator) postInstallPowerOn(ctx context.Context, client bmc.Client
 // is off. All errors are logged but not propagated -- this is a best-effort
 // safety net, not a flow-control mechanism.
 func (o *Orchestrator) deferredPowerOn(ctx context.Context, bmcConfig *bmc.Config, hostname string) {
-	o.logger.Info("bootstrap: virtual-media: deferred power-on check on exit",
+	o.logger.Info("bootstrap: deferred power-on check on exit",
 		slog.String("hostname", hostname))
 
 	powerClient, powerErr := o.bmcFactory.NewClient(bmcConfig)
 	if powerErr != nil {
-		o.logger.Warn("bootstrap: virtual-media: failed to create BMC client for deferred power-on",
+		o.logger.Warn("bootstrap: failed to create BMC client for deferred power-on",
 			slog.String("hostname", hostname),
 			slog.String("error", powerErr.Error()))
 		return
 	}
 	defer func() {
 		if closeErr := powerClient.Close(); closeErr != nil {
-			o.logger.Warn("bootstrap: virtual-media: deferred power-on BMC client close failed",
+			o.logger.Warn("bootstrap: deferred power-on BMC client close failed",
 				slog.String("hostname", hostname),
 				slog.String("error", closeErr.Error()))
 		}
@@ -899,22 +899,22 @@ func (o *Orchestrator) deferredPowerOn(ctx context.Context, bmcConfig *bmc.Confi
 
 	st, stErr := powerClient.PowerStatus(ctx)
 	if stErr != nil {
-		o.logger.Warn("bootstrap: virtual-media: deferred power-on status check failed",
+		o.logger.Warn("bootstrap: deferred power-on status check failed",
 			slog.String("hostname", hostname),
 			slog.String("error", stErr.Error()))
 		return
 	}
 	if st == bmc.PowerStateOn {
-		o.logger.Info("bootstrap: virtual-media: deferred power-on: server already on",
+		o.logger.Info("bootstrap: deferred power-on: server already on",
 			slog.String("hostname", hostname))
 		return
 	}
 
-	o.logger.Info("bootstrap: virtual-media: deferred power-on: server is off, powering on",
+	o.logger.Info("bootstrap: deferred power-on: server is off, powering on",
 		slog.String("hostname", hostname),
 		slog.String("state", string(st)))
 	if onErr := powerClient.PowerOn(ctx); onErr != nil {
-		o.logger.Warn("bootstrap: virtual-media: deferred power-on failed",
+		o.logger.Warn("bootstrap: deferred power-on failed",
 			slog.String("hostname", hostname),
 			slog.String("error", onErr.Error()))
 	}
@@ -957,7 +957,7 @@ func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string,
 		if registrationBaseURL != "" && (hostname != "" || len(macs) > 0) {
 			if regIP, fetchErr := fetchRegistrationIP(registrationBaseURL, hostname, macs); fetchErr == nil {
 				if _, already := seen[regIP]; !already {
-					o.logger.Info("bootstrap: virtual-media: discovered new IP from registration",
+					o.logger.Info("bootstrap: discovered new IP from registration",
 						slog.String("ip", regIP))
 					addresses = append([]string{regIP}, addresses...)
 					seen[regIP] = struct{}{}
@@ -968,7 +968,7 @@ func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string,
 		for _, addr := range addresses {
 			err := probe(ctx, addr)
 			if err == nil {
-				o.logger.Info("bootstrap: virtual-media: health endpoint responded",
+				o.logger.Info("bootstrap: health endpoint responded",
 					slog.String("address", addr))
 				return nil
 			}
@@ -1173,7 +1173,7 @@ func installLogBaseURL(dep *DeployerConfig) (string, error) {
 	return "http://" + net.JoinHostPort(host, strconv.Itoa(dep.EffectiveBootstrapHTTPPort())), nil
 }
 
-// stagePerMACHostname publishes the node's hostname AND merged installer
+// stagePerMACConfig publishes the node's hostname AND merged installer
 // config to the pxeboot HTTP config server under every known MAC.
 //
 // This implements the orchestrator side of the dynamic config-delivery
@@ -1196,7 +1196,7 @@ func installLogBaseURL(dep *DeployerConfig) (string, error) {
 // overrides_file path wrong, merge error) the function still publishes
 // hostname and logs a warning rather than failing the whole install —
 // the node falls back to whatever config is baked into the ISO.
-func (o *Orchestrator) stagePerMACHostname(ctx context.Context, node *DiscoveredNode) error {
+func (o *Orchestrator) stagePerMACConfig(ctx context.Context, node *DiscoveredNode) error {
 	if node == nil || strings.TrimSpace(node.Hostname) == "" {
 		return nil
 	}
@@ -1228,7 +1228,7 @@ func (o *Orchestrator) stagePerMACHostname(ctx context.Context, node *Discovered
 	// template bug doesn't block the install entirely.
 	var mergedConfig string
 	if resolved, resolveErr := o.resolveNodeConfig(node.Hostname, node.Role, node.HardwareIdentity); resolveErr != nil {
-		o.logger.Warn("bootstrap: virtual-media: could not resolve per-node config, staging hostname only",
+		o.logger.Warn("bootstrap: could not resolve per-node config, staging hostname only",
 			slog.String("hostname", node.Hostname),
 			slog.String("error", resolveErr.Error()))
 	} else {
@@ -1254,14 +1254,14 @@ func (o *Orchestrator) stagePerMACHostname(ctx context.Context, node *Discovered
 	var spkiPin string
 	if node.Role != RoleControlPlane {
 		if bundle, bundleErr := o.fetchControlPlaneCABundle(ctx); bundleErr != nil {
-			o.logger.Warn("bootstrap: virtual-media: could not fetch CP CA bundle, client will fall back to trust bootstrap",
+			o.logger.Warn("bootstrap: could not fetch CP CA bundle, client will fall back to trust bootstrap",
 				slog.String("hostname", node.Hostname),
 				slog.String("error", bundleErr.Error()))
 		} else {
 			caBundle = bundle
 		}
 		if pin, pinErr := o.fetchControlPlaneSPKIPin(ctx); pinErr != nil {
-			o.logger.Warn("bootstrap: virtual-media: could not capture CP SPKI pin",
+			o.logger.Warn("bootstrap: could not capture CP SPKI pin",
 				slog.String("hostname", node.Hostname),
 				slog.String("error", pinErr.Error()))
 		} else {
@@ -1315,7 +1315,7 @@ func (o *Orchestrator) stagePerMACHostname(ctx context.Context, node *Discovered
 			}
 		}
 	}
-	o.logger.Info("bootstrap: virtual-media: staged per-MAC config",
+	o.logger.Info("bootstrap: staged per-MAC config",
 		slog.String("hostname", node.Hostname),
 		slog.Int("macs_total", len(macs)),
 		slog.Int("hostname_staged", stagedHostname),

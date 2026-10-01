@@ -41,6 +41,17 @@ The server identifies which config to deliver using:
 | 2 | Exact MAC | `mac_address` | Non-TPM devices, virtual machines |
 | 3 | Prefix Match | `match_rules` | Fleet provisioning with common prefixes |
 
+### EAB Credential Binding
+
+An EAB credential is issued for one device profile in one tenant, and it only
+works for that device. After the profile is resolved, config delivery and
+remote signing require the validated credential's `ProfileID` to be the
+resolved profile's, and — when the profile names a tenant — its `TenantID` to
+be the profile's. A credential presented by a device that resolves to another
+profile, or to no profile at all, is refused with HTTP 403
+(`eab credential is not bound to this device's profile`); it never opens a
+pending session and never gets a digest signed.
+
 ### EK Certificate Binding
 
 After a profile is matched, the delivered config is cryptographically bound to

@@ -361,6 +361,7 @@ var fetchConfigErrorMatchers = []configDeliveryErrorMatcher{
 	matchConfigDeliveryError[configdelivery.ErrEKCertParseFailed](codes.InvalidArgument),
 	matchConfigDeliveryError[configdelivery.ErrEKCertRequired](codes.PermissionDenied),
 	matchConfigDeliveryError[configdelivery.ErrEKCertMismatch](codes.PermissionDenied),
+	matchConfigDeliveryError[configdelivery.ErrEABProfileMismatch](codes.PermissionDenied),
 }
 
 // signDigestErrorMatchers mirrors handler.go writeSignError:
@@ -374,6 +375,7 @@ var signDigestErrorMatchers = []configDeliveryErrorMatcher{
 	matchConfigDeliveryError[configdelivery.ErrEABValidationFailed](codes.PermissionDenied),
 	matchConfigDeliveryError[configdelivery.ErrEKCertRequired](codes.PermissionDenied),
 	matchConfigDeliveryError[configdelivery.ErrEKCertMismatch](codes.PermissionDenied),
+	matchConfigDeliveryError[configdelivery.ErrEABProfileMismatch](codes.PermissionDenied),
 	matchConfigDeliveryError[configdelivery.ErrRemoteSignNotConfigured](codes.FailedPrecondition),
 	matchConfigDeliveryError[configdelivery.ErrSignerUnavailable](codes.Unavailable),
 	matchConfigDeliveryError[configdelivery.ErrMissingProfileService](codes.Unavailable),

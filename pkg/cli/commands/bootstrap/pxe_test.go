@@ -33,16 +33,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container/containertest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
 // validBootstrapYAML is a minimal valid bootstrap config for testing.
 const validBootstrapYAML = `deployer:
-  target: linux
   host: 192.168.1.1
   user: admin
   ssh_key: /tmp/test-key
   container_runtime: docker
+  netboot_media_dir: netboot-media
 subnets:
   - name: provisioning
     role: provisioning
@@ -79,9 +81,12 @@ func defaultGetFlags() func() *cli.CommonFlags {
 }
 
 // writeTestConfig writes YAML content to a temp file and returns its path.
+// writeTestConfig writes content as bootstrap.yaml beside a netboot media
+// build (netboot-media/: the x86_64 set) for its deployer to stage.
 func writeTestConfig(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
+	require.NoError(t, containertest.WriteNetbootBuild(filepath.Join(dir, "netboot-media"), false, false, container.MediaSetX86_64))
 	path := filepath.Join(dir, "bootstrap.yaml")
 	err := os.WriteFile(path, []byte(content), 0600)
 	require.NoError(t, err)
@@ -340,7 +345,6 @@ func TestLoadAndValidateConfig_InvalidYAML(t *testing.T) {
 func TestLoadAndValidateConfig_ValidationFailure(t *testing.T) {
 	// Config that parses but fails validation (no deployer host).
 	path := writeTestConfig(t, `deployer:
-  target: linux
   host: ""
 subnets:
   - name: provisioning
@@ -600,32 +604,40 @@ func TestErrPXETeardownFailed(t *testing.T) {
 }
 
 func TestErrDeployerCreationFailed(t *testing.T) {
-	err := ErrDeployerCreationFailed{Target: "linux", Cause: assert.AnError}
-	assert.Contains(t, err.Error(), "linux")
-	assert.Contains(t, err.Error(), "failed to create deployer")
+	err := ErrDeployerCreationFailed{Host: "deploy-host", Cause: assert.AnError}
+	assert.Contains(t, err.Error(), "deploy-host")
+	assert.Contains(t, err.Error(), "failed to create the deployer")
 	assert.Equal(t, assert.AnError, err.Unwrap())
 }
 
 // =============================================================================
-// BuildDeployConfig Tests
+// Deploy / Teardown Tests
 // =============================================================================
 
-func TestBuildDeployConfig(t *testing.T) {
+// TestRunDeployAndTeardown_NeedADeployer: both commands go through the
+// orchestrator, which refuses with no deployer to drive (no
+// container_image) before touching the network.
+func TestRunDeployAndTeardown_NeedADeployer(t *testing.T) {
 	path := writeTestConfig(t, validBootstrapYAML)
-	config, err := loadAndValidateConfig(path)
-	require.NoError(t, err)
+	var none bootstrap.ErrDeployerNotConfigured
 
-	dc := buildDeployConfig(config, "")
-	require.NotNil(t, dc)
-	assert.Equal(t, "linux", string(dc.Target))
-	assert.Equal(t, "192.168.1.1", dc.Host)
-	assert.Equal(t, "admin", dc.User)
-	assert.Equal(t, "/tmp/test-key", dc.SSHKeyPath)
-	assert.Equal(t, "docker", dc.ContainerRuntime)
-	require.NotNil(t, dc.ProvisioningSubnet)
-	assert.Equal(t, "10.0.0.0/24", dc.ProvisioningSubnet.CIDR)
-	assert.Equal(t, "10.0.0.1", dc.ProvisioningSubnet.Gateway)
-	assert.Equal(t, 22, dc.Port) // default applied
+	err := runDeploy(path, nil)
+	var deployErr ErrPXEDeployFailed
+	require.ErrorAs(t, err, &deployErr)
+	assert.ErrorAs(t, err, &none)
+
+	err = runTeardown(path, nil)
+	var teardownErr ErrPXETeardownFailed
+	require.ErrorAs(t, err, &teardownErr)
+	assert.ErrorAs(t, err, &none)
+}
+
+// TestRunDeploy_InvalidConfig: a config that does not validate never
+// reaches the orchestrator.
+func TestRunDeploy_InvalidConfig(t *testing.T) {
+	var invalid ErrPXEConfigValidationFailed
+	assert.ErrorAs(t, runDeploy(writeTestConfig(t, "deployer:\n  host: \"\"\n"), nil), &invalid)
+	assert.ErrorAs(t, runTeardown(writeTestConfig(t, "deployer:\n  host: \"\"\n"), nil), &invalid)
 }
 
 // =============================================================================

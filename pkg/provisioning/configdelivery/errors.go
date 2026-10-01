@@ -192,6 +192,17 @@ func (e ErrEKCertMismatch) Error() string {
 	return "configdelivery: ek certificate public key mismatch"
 }
 
+// ErrEABProfileMismatch indicates a valid EAB credential presented for a device
+// whose resolved profile is not the one (or not in the tenant) the credential
+// was issued for. An EAB authorises exactly one expected device, so it can
+// neither deliver another profile's config nor sign on another profile's behalf.
+type ErrEABProfileMismatch struct{}
+
+// Error returns the error message.
+func (e ErrEABProfileMismatch) Error() string {
+	return "configdelivery: eab credential is not bound to this device's profile"
+}
+
 // ErrEKCertParseFailed indicates an EK certificate could not be decoded or
 // parsed into an x509 certificate.
 type ErrEKCertParseFailed struct {

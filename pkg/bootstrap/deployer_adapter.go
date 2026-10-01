@@ -78,7 +78,7 @@ func (a *linuxDeployerAdapter) Deploy(ctx context.Context, manifest *container.M
 	}
 	defer cleanup()
 
-	dc := a.buildDeployConfig(manifestPath)
+	dc := a.deployConfig(manifestPath)
 
 	switch a.cfg.EffectiveRedeployMode() {
 	case RedeployAlways:
@@ -126,38 +126,42 @@ func (a *linuxDeployerAdapter) Teardown(ctx context.Context) error {
 	if a.cfg == nil {
 		return ErrInvalidConfig{Field: "deployer", Reason: "must not be nil"}
 	}
-	dc := a.buildDeployConfig("" /* no manifest needed for teardown */)
+	dc := a.deployConfig("" /* no manifest needed for teardown */)
 	if err := a.backend.Teardown(ctx, dc); err != nil {
 		return ErrContainerTeardownFailed{Host: a.cfg.Host, Cause: err}
 	}
 	return nil
 }
 
-// buildDeployConfig translates the platform-level DeployerConfig into
-// the deployer-package DeployConfig.
-func (a *linuxDeployerAdapter) buildDeployConfig(manifestPath string) *deployer.DeployConfig {
+// deployConfig translates the deployer section of bootstrap.yaml into the
+// deployer package's DeployConfig. manifestPath is the local manifest to
+// stage, empty for a teardown. Paths in the section were resolved against
+// bootstrap.yaml when it was loaded.
+func (a *linuxDeployerAdapter) deployConfig(manifestPath string) *deployer.DeployConfig {
+	c := a.cfg
 	dc := &deployer.DeployConfig{
-		Target:             deployer.DeployTarget(a.cfg.Target),
-		Host:               a.cfg.Host,
-		User:               a.cfg.User,
-		SSHKeyPath:         expandUserHome(a.cfg.SSHKey),
-		KnownHostsPath:     expandUserHome(a.cfg.KnownHostsPath),
-		ContainerRuntime:   a.cfg.ContainerRuntime,
-		ContainerImage:     a.cfg.ContainerImage,
+		Host:               c.Host,
+		User:               c.User,
+		SSHKeyPath:         expandUserHome(c.SSHKey),
+		KnownHostsPath:     expandUserHome(c.KnownHostsPath),
+		ContainerRuntime:   c.ContainerRuntime,
+		ContainerImage:     c.ContainerImage,
 		ManifestPath:       manifestPath,
-		DataDir:            a.cfg.EffectiveDataDir(),
-		RedeployMode:       string(a.cfg.EffectiveRedeployMode()),
-		BootstrapInterface: a.cfg.BootstrapInterface,
-		BootstrapServerIP:  a.cfg.BootstrapServerIP,
+		DataDir:            c.EffectiveDataDir(),
+		RedeployMode:       string(c.EffectiveRedeployMode()),
+		BootstrapInterface: c.BootstrapInterface,
+		BootstrapServerIP:  c.BootstrapServerIP,
 		// Effective* rather than the raw fields so the deployer sends the
 		// same ports the orchestrator builds its URLs against.
-		BootstrapHTTPPort:         a.cfg.EffectiveBootstrapHTTPPort(),
-		BootstrapDeviceScriptPort: a.cfg.EffectiveBootstrapDeviceScriptPort(),
-		BootstrapDHCPStart:        a.cfg.BootstrapDHCPStart,
-		BootstrapDHCPEnd:          a.cfg.BootstrapDHCPEnd,
-		BootstrapGateway:          a.cfg.BootstrapGateway,
-		BootstrapDNS:              a.cfg.BootstrapDNS,
-		BootstrapAPKMirror:        a.cfg.BootstrapAPKMirror,
+		BootstrapHTTPPort:         c.EffectiveBootstrapHTTPPort(),
+		BootstrapDeviceScriptPort: c.EffectiveBootstrapDeviceScriptPort(),
+		BootstrapDHCPStart:        c.BootstrapDHCPStart,
+		BootstrapDHCPEnd:          c.BootstrapDHCPEnd,
+		BootstrapGateway:          c.BootstrapGateway,
+		BootstrapDNS:              c.BootstrapDNS,
+		BootstrapAPKMirror:        c.BootstrapAPKMirror,
+		NetbootMediaDir:           c.NetbootMediaDir,
+		BootstrapProxyDHCP:        c.ProxyDHCP,
 	}
 	dc.ApplyDefaults()
 	return dc

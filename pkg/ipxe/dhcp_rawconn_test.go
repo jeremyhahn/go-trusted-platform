@@ -968,3 +968,87 @@ func TestWriteTo_AddressValidation(t *testing.T) {
 		}
 	})
 }
+
+// udp4Frame builds an IPv4+UDP packet as the datagram socket delivers it
+// (starting at the IP header) with the given IHL, UDP length field and
+// destination port; the payload is filled with 0xAB.
+func udp4Frame(ihl, udpLenField, dstPort, payloadLen int) []byte {
+	b := make([]byte, ihl+udpHeaderLen+payloadLen)
+	b[0] = 0x40 | byte(ihl/4)
+	b[9] = 17
+	copy(b[12:16], []byte{10, 99, 99, 100})
+	copy(b[16:20], []byte{255, 255, 255, 255})
+	udp := b[ihl:]
+	udp[0], udp[1] = 0, 68
+	udp[2], udp[3] = byte(dstPort>>8), byte(dstPort)
+	udp[4], udp[5] = byte(udpLenField>>8), byte(udpLenField)
+	for i := ihl + udpHeaderLen; i < len(b); i++ {
+		b[i] = 0xAB
+	}
+	return b
+}
+
+func TestParseUDP4_AcceptsADatagramToTheServerPort(t *testing.T) {
+	frame := udp4Frame(20, udpHeaderLen+300, 67, 300)
+	payload, src, ok := parseUDP4(frame, 67)
+	if !ok {
+		t.Fatal("a well-formed DHCP datagram must parse")
+	}
+	if len(payload) != 300 || payload[0] != 0xAB {
+		t.Fatalf("payload = %d bytes, want 300 of 0xAB", len(payload))
+	}
+	if src.IP.String() != "10.99.99.100" || src.Port != 68 {
+		t.Fatalf("source = %v, want 10.99.99.100:68", src)
+	}
+}
+
+func TestParseUDP4_RejectsWhatItCannotTrust(t *testing.T) {
+	cases := map[string][]byte{
+		"shorter than an IP header":     udp4Frame(20, 8, 67, 0)[:10],
+		"not IPv4":                      append([]byte{0x60}, udp4Frame(20, 8, 67, 0)[1:]...),
+		"not UDP":                       func() []byte { b := udp4Frame(20, 8, 67, 0); b[9] = 6; return b }(),
+		"IHL below 20":                  udp4Frame(20, 8, 67, 0),
+		"another port":                  udp4Frame(20, 8, 69, 0),
+		"UDP length below its header":   udp4Frame(20, 0, 67, 300),
+		"UDP length beyond the bytes":   udp4Frame(20, 8+400, 67, 300),
+		"IP options but a short packet": udp4Frame(60, 8, 67, 0)[:40],
+		"an Ethernet frame, not IP":     append([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x52, 0x54, 0x00, 0x11, 0x22, 0x33, 0x08, 0x00}, udp4Frame(20, 8+300, 67, 300)...),
+	}
+	// "IHL below 20": set the IHL nibble to 1 after building.
+	cases["IHL below 20"][0] = 0x41
+	for name, frame := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, _, ok := parseUDP4(frame, 67); ok {
+				t.Fatalf("%s: must be rejected", name)
+			}
+		})
+	}
+}
+
+func TestParseUDP4_HonoursIPOptions(t *testing.T) {
+	frame := udp4Frame(24, udpHeaderLen+4, 67, 4)
+	payload, _, ok := parseUDP4(frame, 67)
+	if !ok || len(payload) != 4 {
+		t.Fatalf("a packet with IP options must parse from its real header length; ok=%v len=%d", ok, len(payload))
+	}
+}
+
+func TestDestinationHardwareAddr(t *testing.T) {
+	c := &ServerRawConn{}
+	hw, err := c.destinationHardwareAddr(net.IPv4bcast.To4())
+	if err != nil || hw.String() != "ff:ff:ff:ff:ff:ff" {
+		t.Fatalf("broadcast must frame to the broadcast address: %v %v", hw, err)
+	}
+
+	_, err = c.destinationHardwareAddr(net.ParseIP("10.99.99.100").To4())
+	var unknown *UnknownPeerError
+	if !errors.As(err, &unknown) || unknown.IP.String() != "10.99.99.100" {
+		t.Fatalf("a never-heard peer must be UnknownPeerError, got %v", err)
+	}
+
+	c.peers.Store("10.99.99.100", net.HardwareAddr{0x52, 0x54, 0, 0x12, 0x34, 0x56})
+	hw, err = c.destinationHardwareAddr(net.ParseIP("10.99.99.100").To4())
+	if err != nil || hw.String() != "52:54:00:12:34:56" {
+		t.Fatalf("a remembered peer must frame to its address: %v %v", hw, err)
+	}
+}

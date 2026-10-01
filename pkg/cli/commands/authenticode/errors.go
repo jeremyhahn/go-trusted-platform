@@ -63,15 +63,6 @@ func (e ErrReadCertificateFailed) Error() string {
 	return fmt.Sprintf("failed to read certificate '%s': %s", e.Path, e.Reason)
 }
 
-// ErrDecodeCertificateFailed is returned when decoding the certificate PEM fails
-type ErrDecodeCertificateFailed struct {
-	Path string
-}
-
-func (e ErrDecodeCertificateFailed) Error() string {
-	return fmt.Sprintf("failed to decode certificate PEM: %s", e.Path)
-}
-
 // ErrParseCertificateFailed is returned when parsing the certificate fails
 type ErrParseCertificateFailed struct {
 	Reason string
@@ -108,20 +99,4 @@ type ErrVerifyFileFailed struct {
 
 func (e ErrVerifyFileFailed) Error() string {
 	return fmt.Sprintf("failed to verify file '%s': %s", e.Input, e.Reason)
-}
-
-// ErrKeyNotSigner is returned when the private key does not implement crypto.Signer
-type ErrKeyNotSigner struct{}
-
-func (e ErrKeyNotSigner) Error() string {
-	return "private key does not implement crypto.Signer"
-}
-
-// ErrNotImplemented is returned for operations that are not implemented
-type ErrNotImplemented struct {
-	Operation string
-}
-
-func (e ErrNotImplemented) Error() string {
-	return fmt.Sprintf("operation not implemented: %s", e.Operation)
 }

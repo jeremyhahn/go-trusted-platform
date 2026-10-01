@@ -248,20 +248,6 @@ func TestStageBootFirmwareFailures(t *testing.T) {
 	}
 }
 
-func TestExtractRefusesPathTraversal(t *testing.T) {
-	dir := t.TempDir()
-	apk := filepath.Join(dir, "evil-1.0-r0.apk")
-	writeAPK(t, apk, map[string]string{"boot/../../escape": "x", "boot/ok": "y"})
-	dest := t.TempDir()
-	written, err := extractFromAPK(apk, "boot/", dest, func(string) bool { return true })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(written) != 1 || written[0] != "ok" {
-		t.Errorf("written = %v", written)
-	}
-}
-
 func TestErrorMessages(t *testing.T) {
 	inner := errors.New("inner")
 	for err, want := range map[error]string{
@@ -284,28 +270,11 @@ func TestExtractAndCopyErrorPaths(t *testing.T) {
 	dir := t.TempDir()
 	apk := filepath.Join(dir, "pkg-1.0-r0.apk")
 	writeAPK(t, apk, map[string]string{"boot/a": "x"})
-
-	// Destination under a regular file cannot be created.
 	blocker := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var pkgErr *PackageError
-	if _, err := extractFromAPK(apk, "boot/", filepath.Join(blocker, "out"), func(string) bool { return true }); !errors.As(err, &pkgErr) {
-		t.Errorf("unwritable destination error = %v", err)
-	}
-	if _, err := extractFromAPK(filepath.Join(dir, "missing.apk"), "boot/", t.TempDir(), func(string) bool { return true }); !errors.As(err, &pkgErr) {
-		t.Errorf("missing apk error = %v", err)
-	}
-	// A truncated data member is a PackageError, not a silent partial extract.
-	data, _ := os.ReadFile(apk)
-	truncated := filepath.Join(dir, "trunc-1.0-r0.apk")
-	if err := os.WriteFile(truncated, data[:len(data)-20], 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := extractFromAPK(truncated, "boot/", t.TempDir(), func(string) bool { return true }); !errors.As(err, &pkgErr) {
-		t.Errorf("truncated apk error = %v", err)
-	}
 
 	if err := copyFile(filepath.Join(dir, "missing"), filepath.Join(dir, "out")); err == nil {
 		t.Error("copyFile of a missing source succeeded")

@@ -31,8 +31,8 @@ absence.
 ## 2. `pxeboot`
 
 ```
-pxeboot --manifest <path> --kernel <path> --initrd <path> \
-        --dhcp-server-ip <ip> --dhcp-range-start <ip> --dhcp-range-end <ip> [flags]
+pxeboot --manifest <path> --dhcp-server-ip <ip> \
+        --dhcp-range-start <ip> --dhcp-range-end <ip> [flags]
 ```
 
 A minimal entrypoint (`cmd/pxeboot/main.go`) that builds a
@@ -44,8 +44,6 @@ short forms and no subcommands.
 | Flag | Type | Default | Required | Meaning |
 |---|---|---|---|---|
 | `--manifest` | string | `""` | **yes** | Path to `manifest.yaml` |
-| `--kernel` | string | `""` | **yes** | Path to `vmlinuz` |
-| `--initrd` | string | `""` | **yes** | Path to `initramfs` |
 | `--dhcp-server-ip` | string | `""` | **yes** | DHCP server IP address |
 | `--dhcp-range-start` | string | `""` | **yes** | First allocatable address |
 | `--dhcp-range-end` | string | `""` | **yes** | Last allocatable address |
@@ -58,11 +56,32 @@ short forms and no subcommands.
 | `--dhcp-dns` | string | `""` | no | Comma-separated DNS servers to advertise |
 | `--apk-mirror` | string | `""` | no | Install-time APK mirror base; empty uses `container.DefaultAPKMirror` (the public Alpine mirror) |
 | `--alpine-version` | string | `""` | no | Alpine version of the staged kernel/initramfs; empty uses `container.DefaultAlpineVersion` (`3.22.2`) |
+| `--data-dir` | string | `/data` | no | Directory served at `/data/`; `--media-dir` must be inside it |
+| `--media-dir` | string | `/data/media` | **yes** | The media sets served, one per subdirectory with a `media-set.yaml` (`container.MediaSet`): the netboot media build's `media/`, staged by the deployer. It must hold at least one set |
+| `--tftp-dir` | string | `""` | no | Raspberry Pi boot tree served over TFTP beside the iPXE firmware |
+| `--firmware-override` | name=path | — | no | Serve a prebuilt firmware file in place of the upstream download; repeatable (the db-signed arm64 iPXE as `snponly-aarch64.efi`) |
+| `--dhcp-proxy` | bool | `false` | no | Proxy DHCP: boot options, no lease — the segment has its own DHCP server |
+
+**Media sets.** Every installer pxeboot serves is a media set from a netboot
+media build (`platformctl diskimage netboot`, `make netboot-media`); nothing is
+baked into the image. Each directory under `--media-dir` with a
+`media-set.yaml` is one: its name, architecture (`x86_64` or `arm64`), kernel,
+initrd (the release's initramfs rewritten as the installer's, which runs the
+autoinstall), modloop and flavour kernel arguments, and whether it is its
+architecture's default. Every set carries a
+`payload.list` (`container.PayloadListName`): one line per file or tarball the
+installer lays under `/media/cdrom`, as `<sha256> <file|tar> <dest> <src>`.
+pxeboot verifies every source's digest when it starts and refuses a set whose
+list is missing, malformed, unverifiable or has no `platformd-bin/platformctl`. `/boot.ipxe` boots each architecture's default
+(`${buildarch}` dispatch); a node in the manifest boots the set its entry
+names — or its architecture's default — through `/boot/device/<mac>.ipxe`
+with its role and hostname. A manifest entry naming a set that is not staged,
+or an architecture with no default, fails pxeboot at start.
 
 ```bash
 pxeboot \
   --manifest /data/manifest.yaml \
-  --kernel /data/vmlinuz --initrd /data/initramfs \
+  --media-dir /data/media \
   --interface eth0 \
   --dhcp-server-ip 10.10.0.1 \
   --dhcp-range-start 10.10.0.100 \
@@ -74,7 +93,7 @@ pxeboot \
 ```
 
 **Missing required flags produce one message naming all of them** —
-*"required flags not set: --manifest, --kernel, …"* — then `flag.Usage()` and
+*"required flags not set: --manifest, --media-dir, …"* — then `flag.Usage()` and
 exit 1. `validateRequiredFlags` collects them rather than failing on the first.
 
 **`--alpine-version` must match the staged kernel and initramfs.** The value
@@ -110,14 +129,38 @@ the only interactive way to exercise this feature.
 | `--memory` | int | `4096` | Client RAM in MB |
 | `--cpus` | int | host CPU count | Client CPU cores |
 | `--work-dir` | string | `work-pxe` | VM artefacts and PXE server files |
-| `--secure-boot` | bool | `false` | UEFI Secure Boot on the client |
+| `--disk` | string | `<work-dir>/pxe-client.qcow2` | The client's disk, created empty when missing; the target of whatever the network delivers |
+| `--disk-size` | string | `10G` | Size of the client disk when it is created |
+| `--secure-boot` | bool | `false` | UEFI Secure Boot on the client (x86_64; U-Boot on aarch64 always verifies) |
+| `--architecture` | string | `x86_64` | Client architecture: `x86_64` (OVMF) or `aarch64` (QEMU `virt` booted from the platform's U-Boot, the Raspberry Pi stand-in) |
+| `--uboot` | string | `build/docker/uboot-builder/output/qemu_arm64/u-boot.bin` | aarch64: the `qemu_arm64` U-Boot from `make uboot-build` |
+| `--ipxe` | string | `build/docker/ipxe-builder/output/bin-arm64-efi/snponly.efi` | aarch64: the platform-built arm64 iPXE from `make ipxe-build`, served in place of upstream's (which halts under U-Boot; see `build/docker/ipxe-builder/README.md`) |
+| `--keys-dir` | string | `~/.trusted-platform/secure-boot` | aarch64: the Secure Boot key set U-Boot was preseeded with; `DB.key` + `DB.crt` sign the served iPXE and the kernel |
+| `--serial-log` | string | `""` | Capture the client console to this file instead of the terminal |
+| `--expect` | string | `""` | With `--serial-log`: stop, successfully, when this text appears on the console; fail when the context ends first |
 | `--debug` | bool | `false` | Debug output |
 
 ```bash
 sudo platformctl iso test pxe --iso trusted-alpine-1.0.0-x86_64.iso
 sudo platformctl iso test pxe \
     --kernel ./vmlinuz --initrd ./initramfs --args "console=ttyS0"
+
+# The Raspberry Pi stand-in: U-Boot → DHCP (arch 0x000b) → signed arm64 iPXE
+# → per-architecture script → signed kernel + initrd, unattended.
+sudo platformctl iso test pxe --architecture aarch64 \
+    --kernel ./vmlinuz-lts --initrd ./initramfs-lts \
+    --args "console=ttyAMA0,115200 ip=dhcp modloop=http://10.99.99.1:8080/files/modloop-lts" \
+    --serial-log work-pxe/serial.log --expect "Welcome to Alpine"
 ```
+
+On aarch64 the client is the platform's own U-Boot with PK/KEK/db compiled
+in, so it verifies every EFI image it loads: the PXE server signs the
+`snponly-aarch64.efi` it serves with `DB.key`, and the command decompresses
+and signs the kernel the same way before publishing the boot entry. A local
+(`file://`) kernel or initrd is copied into `<work-dir>/pxe-files/`, which
+is served at `/files/`, and the boot script fetches it from there; anything
+else you put in that directory (the Alpine modloop, say) is served the same
+way.
 
 **It requires root** and says so before doing anything —
 *"pxe boot test requires root privileges for network setup: please run with

@@ -664,3 +664,25 @@ func (e ErrMediaStatusUnavailable) Error() string {
 	}
 	return fmt.Sprintf("bootstrap: media status at %s unavailable", e.URL)
 }
+
+// ErrNodeConfigResolveFailed is a node whose platform config cannot be
+// resolved from its role template and overrides.
+type ErrNodeConfigResolveFailed struct {
+	Hostname string
+	Cause    error
+}
+
+func (e ErrNodeConfigResolveFailed) Error() string {
+	return "bootstrap: resolve the config of node " + e.Hostname + ": " + e.Cause.Error()
+}
+
+func (e ErrNodeConfigResolveFailed) Unwrap() error { return e.Cause }
+
+// ErrUnknownNode is a hostname the bootstrap config has no node for.
+type ErrUnknownNode struct {
+	Hostname string
+}
+
+func (e ErrUnknownNode) Error() string {
+	return "bootstrap: no node " + e.Hostname + " in the bootstrap config"
+}

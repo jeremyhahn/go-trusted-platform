@@ -14,6 +14,7 @@
 package ipxe
 
 import (
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"log/slog"
 	"strings"
 	"testing"
@@ -156,7 +157,7 @@ func TestGenerateScript_MinimalInfo(t *testing.T) {
 	script := gen.GenerateScript(info)
 
 	assert.True(t, strings.HasPrefix(script, "#!ipxe\n"))
-	assert.Contains(t, script, "kernel http://172.16.7.1:8080/files/vmlinuz\n")
+	assert.Contains(t, script, "kernel http://172.16.7.1:8080/files/vmlinuz || goto boot_failed\n", "no arguments after the URL")
 	assert.NotContains(t, script, "platform_config=")
 	assert.NotContains(t, script, "platform_role=")
 	assert.NotContains(t, script, "platform_hostname=")
@@ -209,4 +210,17 @@ func TestGenerateDefaultMenu_Empty(t *testing.T) {
 	assert.Contains(t, menu, ":reboot")
 	// No default entry since there are no entries
 	assert.NotContains(t, menu, "--default")
+}
+
+func TestGenerateScript_RetriesAndGuardsItsArchitecture(t *testing.T) {
+	gen := NewScriptGenerator("http://10.99.99.1:8080", logging.DefaultLogger().Slog())
+	script := gen.GenerateScript(&DeviceBootInfo{
+		MAC: "dc:a6:32:01:36:c2", Hostname: "pi-01", Architecture: ArchitectureARM64,
+		KernelURL: "http://10.99.99.1:8080/data/media/aarch64-rpi/vmlinuz", InitrdURL: "http://10.99.99.1:8080/data/media/aarch64-rpi/initramfs",
+	})
+	assert.Contains(t, script, "iseq ${buildarch} arm64 || chain /menu.ipxe?arch=${buildarch}\n", "an x86 client never fetches the arm64 kernel")
+	assert.Less(t, strings.Index(script, "iseq ${buildarch}"), strings.Index(script, "kernel "))
+	assert.Contains(t, script, ":boot_retry", "the device script retries like /boot.ipxe does")
+	assert.Contains(t, script, "iseq ${attempts} 20 && goto boot_giveup")
+	assert.Contains(t, script, "echo Booting pi-01...")
 }

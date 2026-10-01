@@ -151,10 +151,7 @@ func runEnroll(ctx context.Context, opts *enrollOptions, verifier uefi.UKIVerifi
 		return nil, ErrUKINotFound{Path: opts.ukiPath}
 	}
 	if verifier == nil {
-		verifier, err = newUKIVerifier(ctx, dbCert, logger)
-		if err != nil {
-			return nil, err
-		}
+		verifier = newUKIVerifier(ctx, logger)
 	}
 	if err := uefi.VerifySignedUKI(verifier, opts.ukiPath, dbCert, logger); err != nil {
 		return nil, err

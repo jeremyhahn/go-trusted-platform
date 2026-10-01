@@ -193,30 +193,6 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
-func TestIsMissingAssetError(t *testing.T) {
-	missing := []string{
-		"Error response from daemon: Could not find the file /data/vmlinuz in container",
-		"Error: No such file or directory",
-		"error: stat /data/foo: no such file",
-		"Error: path /data/x does not exist in container abc",
-	}
-	for _, s := range missing {
-		if !isMissingAssetError(s) {
-			t.Errorf("expected missing-asset signal in %q", s)
-		}
-	}
-	notMissing := []string{
-		"docker: connection refused",
-		"runtime crashed",
-		"",
-	}
-	for _, s := range notMissing {
-		if isMissingAssetError(s) {
-			t.Errorf("did not expect missing-asset signal in %q", s)
-		}
-	}
-}
-
 func TestParseVerifyInspect(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -518,5 +494,27 @@ func TestPortEnvValue(t *testing.T) {
 	}
 	if got := portEnvValue(8081); got != "8081" {
 		t.Fatalf("portEnvValue(8081) = %q, want \"8081\"", got)
+	}
+}
+
+// TestBootstrapEnvFlags_Netboot pins that the staged build's TFTP tree and
+// arm64 iPXE, and proxy DHCP, reach the container — and that nothing is
+// said when they are not configured, so the entrypoint's defaults hold.
+func TestBootstrapEnvFlags_Netboot(t *testing.T) {
+	quiet := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "10.0.0.1"})
+	for _, name := range []string{"BOOTSTRAP_TFTP_DIR", "BOOTSTRAP_ARM64_IPXE", "BOOTSTRAP_PROXY_DHCP"} {
+		if strings.Contains(quiet, name) {
+			t.Fatalf("env flags = %q, must not mention %s when unset", quiet, name)
+		}
+	}
+	got := bootstrapEnvFlags(&DeployConfig{
+		BootstrapServerIP:  "10.0.0.1",
+		BootstrapProxyDHCP: true,
+		netboot:            netbootMediaPaths{tftpDir: "/data/rpi-tftp", arm64IPXE: "/data/firmware/snponly-aarch64.efi"},
+	})
+	for _, want := range []string{"-e BOOTSTRAP_TFTP_DIR='/data/rpi-tftp'", "-e BOOTSTRAP_ARM64_IPXE='/data/firmware/snponly-aarch64.efi'", "-e BOOTSTRAP_PROXY_DHCP='true'"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("env flags = %q, want it to contain %q", got, want)
+		}
 	}
 }

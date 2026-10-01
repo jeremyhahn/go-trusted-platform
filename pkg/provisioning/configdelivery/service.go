@@ -146,7 +146,8 @@ func (s *Service) ResolveConfig(ctx context.Context, req *ConfigRequest) (*Confi
 		return nil, nil, err
 	}
 
-	if err := s.verifyNonceAndEAB(ctx, req.Nonce, req.EABKeyID, req.EABHMAC); err != nil {
+	cred, err := s.verifyNonceAndEAB(ctx, req.Nonce, req.EABKeyID, req.EABHMAC)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -165,6 +166,11 @@ func (s *Service) ResolveConfig(ctx context.Context, req *ConfigRequest) (*Confi
 	if err != nil {
 		var noMatch device.ErrNoMatchingConfig
 		if errors.As(err, &noMatch) {
+			// A credential names the profile of the device it was issued
+			// for; a device that does not resolve to it is not that device.
+			if cred != nil {
+				return nil, nil, ErrEABProfileMismatch{}
+			}
 			s.logger.Info("configdelivery: no matching profile, creating pending session",
 				slog.String("ek_serial", req.EKSerial),
 				slog.String("mac_address", req.MACAddress))
@@ -177,6 +183,14 @@ func (s *Service) ResolveConfig(ctx context.Context, req *ConfigRequest) (*Confi
 			}
 			return nil, pending, nil
 		}
+		return nil, nil, err
+	}
+
+	if err := verifyEABBinding(cred, profile); err != nil {
+		s.logger.Warn("configdelivery: eab credential bound to another profile",
+			slog.Uint64("profile_id", profile.ID),
+			slog.String("ek_serial", req.EKSerial),
+			slog.String("mac_address", req.MACAddress))
 		return nil, nil, err
 	}
 
@@ -447,19 +461,40 @@ func (s *Service) validateRequest(req *ConfigRequest) error {
 
 // verifyNonceAndEAB performs the shared pre-enrollment credential checks used by
 // both ResolveConfig and SignDigest: it consumes the single-use nonce and, when
-// an EAB service is configured, validates the External Account Binding HMAC.
-func (s *Service) verifyNonceAndEAB(ctx context.Context, nonce, eabKeyID, eabHMAC string) error {
+// an EAB service is configured, validates the External Account Binding HMAC and
+// returns the validated credential so the caller can bind it to the profile the
+// device resolves to. The credential is nil when no EAB service is configured.
+func (s *Service) verifyNonceAndEAB(ctx context.Context, nonce, eabKeyID, eabHMAC string) (*eab.Credential, error) {
 	if !s.nonceStore.Validate(nonce) {
-		return ErrNonceExpired{}
+		return nil, ErrNonceExpired{}
 	}
-	if s.eabService != nil {
-		hmacKey, err := base64.RawURLEncoding.DecodeString(eabHMAC)
-		if err != nil {
-			return ErrEABValidationFailed{Cause: err}
-		}
-		if _, err := s.eabService.Validate(ctx, eabKeyID, hmacKey); err != nil {
-			return ErrEABValidationFailed{Cause: err}
-		}
+	if s.eabService == nil {
+		return nil, nil
+	}
+	hmacKey, err := base64.RawURLEncoding.DecodeString(eabHMAC)
+	if err != nil {
+		return nil, ErrEABValidationFailed{Cause: err}
+	}
+	cred, err := s.eabService.Validate(ctx, eabKeyID, hmacKey)
+	if err != nil {
+		return nil, ErrEABValidationFailed{Cause: err}
+	}
+	return cred, nil
+}
+
+// verifyEABBinding requires a validated credential to belong to the resolved
+// profile: its ProfileID must be the profile's, and when the profile names a
+// tenant the credential's tenant must match. A nil credential (no EAB service
+// configured) binds nothing.
+func verifyEABBinding(cred *eab.Credential, profile *entities.DeviceProfile) error {
+	if cred == nil {
+		return nil
+	}
+	if profile == nil || cred.ProfileID != profile.ID {
+		return ErrEABProfileMismatch{}
+	}
+	if profile.TenantID != "" && cred.TenantID != profile.TenantID {
+		return ErrEABProfileMismatch{}
 	}
 	return nil
 }

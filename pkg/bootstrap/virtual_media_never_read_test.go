@@ -191,7 +191,7 @@ func vmediaOrchestrator(t *testing.T, sink *vmediaSink, client *bmc.MockClient, 
 		t.Fatalf("sink port: %v", err)
 	}
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: host, BootstrapHTTPPort: httpPort},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: host, BootstrapHTTPPort: httpPort},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{Domain: "test.local"},
 		ISOPath:  "/isos/platform.iso",

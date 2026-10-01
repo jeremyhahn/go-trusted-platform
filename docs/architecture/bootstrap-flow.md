@@ -390,7 +390,7 @@ name but are otherwise independent code paths. Do not confuse them.
 |---------|------|-----|
 | Orchestrator phases | `pkg/bootstrap/orchestrator.go` | `docs/bootstrap/pxe-bootstrap.md` |
 | Template merge | `pkg/config/DeepMergeYAMLFiles` | `docs/device-templates.md` |
-| Per-MAC publishing | `pkg/bootstrap/virtual_media.go::stagePerMACHostname` | `docs/bootstrap/config-delivery.md` |
+| Per-MAC publishing | `pkg/bootstrap/virtual_media.go::stagePerMACConfig` | `docs/bootstrap/config-delivery.md` |
 | HTTP config server | `pkg/ipxe/http_server.go` | `docs/ipxe/architecture.md` |
 | ISO build (baked mode) | `pkg/iso/customize.go`, `pkg/cli/commands/iso/create.go` | `docs/installer/iso-building.md` |
 | autoinstall priority chain | `pkg/iso/customize.go` (embedded shell) | `docs/installer/autoinstall.md` |

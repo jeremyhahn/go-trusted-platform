@@ -238,7 +238,7 @@ func TestOrchestrator_RunBMCEnroll_Success(t *testing.T) {
 	o := &Orchestrator{
 		logger: orchTestLogger(),
 		config: &BootstrapConfig{
-			Deployer:   DeployerConfig{Host: server.Listener.Addr().String()},
+			Deployer:   DeployerConfig{NetbootMediaDir: fleetMedia, Host: server.Listener.Addr().String()},
 			BackupsDir: tmpDir,
 			Nodes: []NodeConfig{
 				{Hostname: "cp1", Role: RoleControlPlane, BMCEnroll: true},
@@ -295,7 +295,7 @@ func TestOrchestrator_RunBMCEnroll_PerNodeFailureNonFatal(t *testing.T) {
 	o := &Orchestrator{
 		logger: orchTestLogger(),
 		config: &BootstrapConfig{
-			Deployer: DeployerConfig{Host: server.Listener.Addr().String()},
+			Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: server.Listener.Addr().String()},
 			Nodes: []NodeConfig{
 				{Hostname: "cp1", Role: RoleControlPlane, BMCEnroll: true},
 			},
@@ -365,7 +365,7 @@ func TestOrchestrator_RunBMCEnroll_MissingProfileID(t *testing.T) {
 	o := &Orchestrator{
 		logger: orchTestLogger(),
 		config: &BootstrapConfig{
-			Deployer: DeployerConfig{Host: server.Listener.Addr().String()},
+			Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: server.Listener.Addr().String()},
 			Nodes: []NodeConfig{
 				{Hostname: "cp1", Role: RoleControlPlane, BMCEnroll: true},
 			},

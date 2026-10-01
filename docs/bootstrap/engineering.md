@@ -29,7 +29,7 @@
 | `seeder.go` | `Seeder`, template upload, profile creation |
 | `config_inheritance.go` | `ApplyNetworkIdentity`, `ApplyNodeIdentity`, `DeviceIdentity` |
 | `container/` | `Manifest`, `ManifestEntry`, `BuildManifest`, `LoadManifest`, the container-side `Server` |
-| `deployer/` | `Deployer`, `DeployConfig`, `DeployResult`, Linux and Cisco backends, pinned SSH |
+| `deployer/` | `Deployer`, `DeployConfig`, `DeployResult`, the Linux backend, pinned SSH, netboot media staging |
 | `deployer_adapter.go` | `NewLinuxDeployerAdapter` — the only translation from platform config to `deployer.DeployConfig` |
 | `dane_publisher.go` | `DANEPublisher`, `DANEDNSService` |
 | `rollover.go` | `RolloverManager`, `RolloverPhase` |
@@ -667,7 +667,6 @@ Consumed only by `platformctl bootstrap`. Top level: `deployer`, `switch`
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `deployer.target` | string | — | `linux` or `cisco` |
 | `deployer.host` | string | **required** | Validation fails without it |
 | `deployer.user`, `deployer.ssh_key` | string | — | Required by the deployer adapter |
 | `deployer.known_hosts_path` | string | — | **Required in practice**: SSH fails closed without it |
@@ -683,8 +682,9 @@ Consumed only by `platformctl bootstrap`. Top level: `deployer`, `switch`
 | `deployer.bootstrap_dhcp_start` / `_end` | string | container defaults | `BOOTSTRAP_DHCP_START` / `BOOTSTRAP_DHCP_END` |
 | `deployer.bootstrap_gateway`, `deployer.bootstrap_dns` | string | container defaults | `BOOTSTRAP_GATEWAY`, `BOOTSTRAP_DNS` |
 | `deployer.bootstrap_apk_mirror` | string | public mirror | `BOOTSTRAP_APK_MIRROR`; required on networks with no outbound internet |
+| `deployer.netboot_media_dir` | string | — | A netboot media build (`container.NetbootMedia`: `netboot-media.yaml`, `SHA256SUMS`, `media/<set>/…`, the Pi TFTP tree, the db-signed arm64 iPXE), relative to `bootstrap.yaml`. **Required** for a Linux deployer: the image carries no installer media. `validateNetbootMedia` checks, before anything deploys, that the build carries what each PXE-installed node boots — its architecture's default set, or for a Pi the `aarch64-rpi` set, the TFTP tree and the arm64 iPXE. The deployer copies it into `data_dir` as laid out, skipping the upload when the staged `SHA256SUMS` is the build's and still verifies, and removing what the build owns first otherwise |
+| `deployer.proxy_dhcp` | bool | `false` | `BOOTSTRAP_PROXY_DHCP`: the container answers PXE clients with boot options and no lease, for a segment with its own DHCP server |
 | `deployer.pxe_service_host` | string | gateway role | Which node hosts PXE after hand-off |
-| `deployer.transfer_protocol`, `transfer_server`, `container_image_path`, `config_file`, `app_id`, `image_file` | string | — | Cisco-target fields |
 | `subnets[]` | list | **required** | One entry must set `role: provisioning` |
 | `platform.domain` | string | **required** | |
 | `platform.internal_domain`, `hostmaster`, `tenant_id`, `environment`, `upstream_dns`, `networks`, `bootstrap_strategy` | | | Injected into merged device configs |
@@ -701,6 +701,11 @@ Consumed only by `platformctl bootstrap`. Top level: `deployer`, `switch`
 | `nodes[].bmc_enroll` | bool | `false` | Opts the node into the enrollment phase |
 | `nodes[].boot_method` | string | `pxe` | `pxe` or `virtual-media` |
 | `nodes[].skip_install` | bool | `false` | Already-deployed node |
+| `nodes[].platform` | string | — (generic server) | `raspberrypi`; without it `model`, `serial` and `boot_model` are rejected |
+| `nodes[].model` | string | — | **Required** for `raspberrypi`: `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (`rpinetboot.Models`) |
+| `nodes[].architecture` | string | `aarch64` for a Pi, else `x86_64` | `x86_64` or `aarch64`; a Pi must be `aarch64` (`EffectiveArchitecture`) |
+| `nodes[].serial` | string | — | Pi only: up to eight hex digits, the bootloader's serial; names the node's per-device TFTP directory |
+| `nodes[].boot_model` | string | `sd` for a Pi | Pi only: `sd` (install to the card once over the network). Diskless models arrive with their implementations (#689, #690) |
 | `nodes[].interfaces` | list | — | Authoritative for `network.interfaces` |
 | `nodes[].overrides`, `nodes[].overrides_file` | map / path | — | File merged first, inline wins |
 | `nodes[].switch_port`, `nodes[].post_enrollment` | | | Recorded; consumed by the switch and post-enrollment paths |
@@ -709,7 +714,7 @@ The container's two ports are configurable, and one setting moves both the
 server's binding and the URLs the orchestrator points at it. They were not: the
 device-script listener was hardcoded to HTTP+1 at the bind and
 `installLogBaseURL` returned a literal `:8080`. A deployer that already had
-something on 8081 — an ordinary thing on the shared jumpbox that `target: linux`
+something on 8081 — an ordinary thing on the shared jumpbox the Linux deployer
 documents — therefore killed pxeboot on bind with no way to move it.
 
 Both ports are validated at config load: an explicit value must be in 1-65535, the two effective ports must differ, and `bootstrap_http_port: 65535` with the device-script port unset is refused because it would derive 65536. Catching these at load rather than at bind is the same principle as the deploy gate — a port problem should not first appear as a container that came up with nothing serving.
@@ -747,7 +752,11 @@ sub-blocks.
 entrypoint consumes `BOOTSTRAP_INTERFACE`, `BOOTSTRAP_SERVER_IP`,
 `BOOTSTRAP_HTTP_PORT`, `BOOTSTRAP_DEVICE_SCRIPT_PORT`,
 `BOOTSTRAP_DHCP_START`, `BOOTSTRAP_DHCP_END`, `BOOTSTRAP_GATEWAY`,
-`BOOTSTRAP_DNS` and `BOOTSTRAP_APK_MIRROR`, all set from the deployer block. An
+`BOOTSTRAP_DNS`, `BOOTSTRAP_APK_MIRROR`, and — for a netboot media build —
+`BOOTSTRAP_TFTP_DIR`, `BOOTSTRAP_ARM64_IPXE` and `BOOTSTRAP_PROXY_DHCP`, all
+set from the deployer block (the optional three are assembled into one
+`BOOTSTRAP_PXEBOOT_ARGS`, since an unset supervisord `%(ENV_*)s` would leave a
+bare flag). An
 unset port is omitted from the `docker run` command entirely so the entrypoint's
 own default applies, and `BOOTSTRAP_DEVICE_SCRIPT_PORT` defaults to
 `BOOTSTRAP_HTTP_PORT + 1` there, matching the offset pxeboot applies when its
@@ -769,7 +778,10 @@ refuses to run.
 ```
 <data_dir>/                     # default /tmp/bootstrap, bind-mounted as /data
 ├── manifest.yaml               # MAC → role → hostname
-├── vmlinuz, initramfs, autoinstall.sh   # extracted from the container image
+├── netboot-media.yaml, SHA256SUMS      # the staged netboot media build's index
+├── media/<set>/                # each media set: kernel, installer initramfs,
+│                               #   modloop, payload.list, cdrom/
+├── rpi-tftp/, firmware/        # the Pi TFTP tree, the db-signed arm64 iPXE
 ├── <platform>.iso              # staged for virtual-media, served over SMB
 ├── installs/<key>/install.log  # forensic sink, key is a MAC or a hostname
 ├── installs/<host>/registration.json
@@ -834,17 +846,10 @@ Recorded because a reader will otherwise assume they are covered.
    of it is advisory (§3 invariant 20, #126) — so a host that never boots the
    media spends the advisory window plus the poll window before the retry
    loop moves on.
-6. **`platformctl bootstrap deploy` cannot succeed against a Linux target.**
-   Its `buildDeployConfig` sets neither `ManifestPath` nor `KnownHostsPath`, so
-   `LinuxDeployer.Deploy` fails at `DeployConfig.Validate()` with
-   `ErrInvalidDeployConfig{Field:"manifest_path"}` — and would fail immediately
-   afterwards on the missing host-key pins. The `run` path goes through
-   `NewLinuxDeployerAdapter`, which sets both. Use `bootstrap run` (see
-   [cli.md](cli.md) §4).
-7. **The canonical trust modes are stubs.** `bootstrap auto|dane|noise|spki`
+6. **The canonical trust modes are stubs.** `bootstrap auto|dane|noise|spki`
    return `PendingBootstrapBackendError`; only `direct` does work, and that work
    is limited to validating that the supplied bundle path is a readable file.
-8. **Media-read attribution assumes the BMC's SMB source address is its
+7. **Media-read attribution assumes the BMC's SMB source address is its
    `bmc_address`, and that smbd retitles its workers.** `MediaReadProbe.Client`
    is matched against the worker title pkg/ipxe reads from `/proc` — Debian's
    `smbd: client [ip]`, or Alpine/musl's `smbd[ip]` carried in the 15-byte
@@ -855,7 +860,7 @@ Recorded because a reader will otherwise assume they are covered.
    watch is advisory; a per-node override would fix it and the config does
    not carry one). A Samba that does not retitle leaves every worker untagged
    and the watch degrades to counting all smbd activity.
-9. **The console transcript cannot see POST.** SOL on the mini fleet carries
+8. **The console transcript cannot see POST.** SOL on the mini fleet carries
    nothing until an OS starts printing (§3 invariant 20), so a host that halts
    in firmware — the failing-DIMM case the media-read watch was built for — leaves
    an empty transcript, and the diagnosis stops at "halted before the OS, or

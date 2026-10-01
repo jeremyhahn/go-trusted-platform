@@ -571,3 +571,12 @@ func nonNilErrors(errs ...error) []error {
 	}
 	return out
 }
+
+// ErrDeployerNotConfigured is a deploy or teardown of the bootstrap
+// container with no deployer: bootstrap.yaml names no deployer host and
+// container image.
+type ErrDeployerNotConfigured struct{}
+
+func (ErrDeployerNotConfigured) Error() string {
+	return "bootstrap: no deployer configured: deployer.host and deployer.container_image name the host and image of the bootstrap container"
+}

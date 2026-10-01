@@ -25,6 +25,8 @@ mixing them up is the commonest mistake here:
 | Family | Verbs | What it talks to |
 |---|---|---|
 | Day-zero fleet orchestration | `run`, `discover`, `deploy`, `status`, `teardown` | BMCs, the deployer host, the control plane |
+| Config preview | `resolve` | Nothing: the config file and its templates only |
+| Boot-server probing | `probe rpi` | The boot server on a segment, spoken to as a Raspberry Pi's bootloader would |
 | Trust bootstrap | `trust`, plus the canonical modes `auto`, `dane`, `noise`, `spki`, `direct` | A platform server's CA bundle endpoint |
 | Secret migration | `secrets migrate`, `secrets verify`, `secrets status`, `secrets resolve` | A local configuration file and the KMS |
 
@@ -81,8 +83,7 @@ platformctl bootstrap run --config ./bootstrap.yaml --verbose
 
 **Run `--dry-run` first, every time.** It validates the configuration, resolves
 and prints the merged per-node device config, probes every BMC, reads each
-reachable BMC's System Event Log, and prints the execution plan — including the
-Cisco app-hosting commands when the deployer target is `cisco`. Nothing is
+reachable BMC's System Event Log, and prints the execution plan. Nothing is
 powered, mounted or written. A full event log or memory faults on record show up
 under `Warnings:` naming the node and DIMM (`node-02: DIMMB1 has 505 memory
 faults on record …`) — fix or replace the part before provisioning, because a
@@ -121,7 +122,7 @@ set is the union of the ones declared in YAML and the ones the BMC reports.
 
 ## 4. `platformctl bootstrap deploy`
 
-Deploy the bootstrap container to the configured host.
+Bring the bootstrap container up and stop there.
 
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
@@ -131,14 +132,15 @@ Deploy the bootstrap container to the configured host.
 platformctl bootstrap deploy --config ./bootstrap.yaml
 ```
 
-**This verb cannot currently succeed against a `linux` target.** The
-`DeployConfig` it builds sets neither `manifest_path` nor `known_hosts_path`, so
-the deployer rejects it at validation with
-`ErrInvalidDeployConfig{Field:"manifest_path"}`, and would fail immediately
-afterwards on the missing SSH host-key pins. Phase 2 of `bootstrap run` goes
-through a different construction path that sets both. Use `bootstrap run` — with
-`--dry-run` first — until this is fixed
-([engineering.md](engineering.md) §7.6).
+It runs the first phases of `bootstrap run` through the same orchestrator
+(`Orchestrator.Deploy`): discovery of every node's MACs (Phase 0), switch
+configuration when `bootstrap.yaml` has a `switch:` section (Phase 1), and the
+container deploy — manifest from discovery, the netboot media build staged,
+host-key pins enforced — ending once both of the container's listeners are
+serving (Phase 2). It needs `deployer.host` and `deployer.container_image`;
+without a deployer it fails with `ErrDeployerNotConfigured` before discovery.
+Prints the host, the number of nodes in the manifest, whether the switch was
+configured, and the elapsed time.
 
 ---
 
@@ -192,7 +194,8 @@ naming the cause is printed to stderr.
 
 ## 6. `platformctl bootstrap teardown`
 
-Remove the bootstrap container.
+Remove the bootstrap container (`Orchestrator.Teardown`, the same step
+`bootstrap run` ends with). It needs a deployer, like `deploy`.
 
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
@@ -207,6 +210,87 @@ control-plane node passes the health gate. When the gate fails, teardown is
 skipped deliberately — the container may still be the only DHCP/DNS provider on
 the provisioning network. This verb is how you tear down afterwards, once you
 have confirmed the platform's own services took over.
+
+---
+
+## 6a. `platformctl bootstrap probe rpi`
+
+Boot from the network the way a Raspberry Pi's bootloader does, from any
+host on the boot segment, and report what a Pi with that identity would have
+booted with. It is the stage no emulator can run for real — the EEPROM's
+own DHCP and TFTP client — spoken by `pkg/rpinetboot` exactly as the
+bootloader speaks it: the DHCP DISCOVER with vendor class
+`PXEClient:Arch:00000:UNDI:002001`, architecture 0 and the option 97 client
+identifier (the model's FourCC, the board revision, the low MAC bytes and
+the serial); only a reply whose option 43 carries the `Raspberry Pi Boot`
+match is accepted, a proxy DHCP reply included; then every file the
+bootloader and the firmware fetch over TFTP, in their order, tried under
+the per-device prefix (`TFTP_PREFIX`) before the root, with the
+bootloader's own timeouts (45 s for DHCP, retries every 4 s; 30 s per file,
+five TFTP retries five seconds apart).
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--interface` | string | `""` | Interface on the boot segment (**required**) |
+| `--serial` | string | `""` | The Pi's serial number, up to eight hex digits (**required**) |
+| `--mac` | string | `""` | The Pi's Ethernet address (**required**) |
+| `--revision` | string | `0` | Board revision code, hex; goes into option 97 |
+| `--model` | string | `rpi4` | `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` — decides the FourCC, the first-stage files and the device tree |
+| `--prefix` | string | `serial` | The bootloader's `TFTP_PREFIX`: `serial` (`9ffefdef/`), `mac` (`dc-a6-32-01-36-c2/`) or `string` |
+| `--prefix-str` | string | `""` | `TFTP_PREFIX_STR`, with `--prefix string` |
+| `--option43` | string | `Raspberry Pi Boot` | The bootloader's `PXE_OPTION43` match string |
+| `--timeout` | duration | `0` | Overall deadline; the bootloader's own timeouts otherwise |
+
+```bash
+sudo platformctl bootstrap probe rpi --interface eth1 --serial 9ffefdef --mac dc:a6:32:01:36:c2
+sudo platformctl bootstrap probe rpi --interface eth1 --serial 1a2b3c4d --mac 2c:cf:67:00:11:22 --model rpi5 --prefix mac -o json
+```
+
+The report names the DHCP server, the TFTP server the Pi would fetch from
+(siaddr, else option 66, else the server identifier), whether the offer was
+a proxy's, the lease when there was one, the device prefix, and each file
+with the path that served it, its size and SHA-256 — so `kernel8.img`
+can be checked against the U-Boot build. A file the bootloader needs that
+neither the prefix nor the root serves fails the probe with the report
+so far, the same place a Pi would have stopped. `cmdline.txt` is optional:
+the platform's UKI carries the command line.
+
+**It requires root**: binding the DHCP client socket to an interface is
+`SO_BINDTODEVICE`, which needs `CAP_NET_RAW`. A host DHCP client already on
+port 68 is tolerated (`SO_REUSEADDR`), but a DHCP client that answers the
+probe's own DISCOVER on that host is not what is being measured; run it from
+a host that is not itself a DHCP client on that interface.
+
+## 6b. `platformctl bootstrap resolve`
+
+Print or write each node's resolved platform config: its role template merged
+with the platform identity, the node's overrides and its node identity — the
+config `bootstrap run` writes for the node (`Orchestrator.ResolveNodeConfigs`).
+
+Nothing is contacted and no netboot media build is needed: the config is
+checked with `BootstrapConfig.ValidateDefinition`, which is `Validate` without
+the media check. The hardware keys a real run reads from each node's BMC are
+therefore absent; `run --dry-run` shows them.
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--config` | string | `""` | Path to `bootstrap.yaml` (**required**) |
+| `--node` | string, repeatable | all nodes | Resolve only these hostnames; an unknown one fails with `ErrUnknownNode` |
+| `--dump` | string | `""` | Write `<dir>/<hostname>.yaml` (mode 0600) per node and print each path, instead of printing the configs |
+
+Without `--dump`, the output is one YAML stream: one document per node, in
+config order, each headed `# <hostname> (<role>)`.
+
+```bash
+# Diff a deployment's resolved configs across two template versions
+platformctl bootstrap resolve --config ./bootstrap.yaml --dump /tmp/before
+# ... change the templates or the overrides ...
+platformctl bootstrap resolve --config ./bootstrap.yaml --dump /tmp/after
+diff -ru /tmp/before /tmp/after
+```
+
+Template paths are read as the config names them, so run it on a host where
+those paths resolve.
 
 ---
 
@@ -292,7 +376,7 @@ the file is a readable regular file and does **not** parse the PEM, verify the
 chain, or install anything. Use `bootstrap trust` for real work today.
 
 This is a divergence between the locked surface and the implementation. It is
-recorded here and in [engineering.md](engineering.md) §7.7 rather than
+recorded here and in [engineering.md](engineering.md) §7.6 rather than
 documented as if the stubs worked.
 
 ---

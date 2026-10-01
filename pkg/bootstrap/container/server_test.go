@@ -20,171 +20,350 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/artifacts"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-func writeTestManifest(t *testing.T, dir string) string {
+// testDataDir lays out a container data directory: the named media sets
+// under media/, as a netboot media build stages them.
+func testDataDir(t *testing.T, sets ...MediaSet) string {
 	t.Helper()
-	path := filepath.Join(dir, "manifest.yaml")
-	content := `nodes:
+	dataDir := t.TempDir()
+	write := func(p, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// payload writes a set's payload list for one binary the installer
+	// fetches.
+	payload := func(dir, src string) {
+		t.Helper()
+		write(filepath.Join(dir, src), "binary for "+dir)
+		sum, err := artifacts.FileSHA256(filepath.Join(dir, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Create(filepath.Join(dir, PayloadListName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if err := WritePayloadList(f, []PayloadEntry{{SHA256: sum, Kind: PayloadFile, Dest: "platformd-bin/platformctl", Src: src}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, set := range sets {
+		dir := filepath.Join(dataDir, "media", set.Name)
+		for _, f := range []string{set.Kernel, set.Initrd, set.Modloop} {
+			write(filepath.Join(dir, f), f)
+		}
+		data, err := yaml.Marshal(set)
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(filepath.Join(dir, MediaSetDescriptor), string(data))
+		payload(dir, "cdrom/platformd-bin/platformctl")
+	}
+	return dataDir
+}
+
+// x86Set is the x86_64 installer set, x86_64's default.
+func x86Set() MediaSet {
+	return MediaSet{
+		Name: MediaSetX86_64, Architecture: "x86_64", Default: true,
+		Kernel: "vmlinuz-lts", Initrd: "initramfs-lts", Modloop: "modloop-lts",
+		KernelArgs: "modules=loop,squashfs,igb,af_packet console=ttyS0,115200n8",
+	}
+}
+
+// piSet is the aarch64 Raspberry Pi media set as the build writes it.
+func piSet() MediaSet {
+	return MediaSet{
+		Name: "aarch64-rpi", Architecture: "arm64",
+		Kernel: "vmlinuz-rpi", Initrd: "initramfs-rpi", Modloop: "modloop-rpi",
+		KernelArgs: "modules=loop,squashfs,sd-mod,genet,af_packet console=ttyAMA0,115200 console=tty1",
+	}
+}
+
+// virtSet is the aarch64 set for the QEMU virt stand-in, arm64's default.
+func virtSet() MediaSet {
+	return MediaSet{
+		Name: "aarch64-virt", Architecture: "arm64", Default: true,
+		Kernel: "vmlinuz-virt", Initrd: "initramfs-virt", Modloop: "modloop-virt",
+		KernelArgs: "modules=loop,squashfs,virtio_net,af_packet console=ttyAMA0,115200",
+	}
+}
+
+const testManifest = `nodes:
   - mac: "aa:bb:cc:dd:ee:01"
     role: "control-plane"
     hostname: "cp-01"
-  - mac: "aa:bb:cc:dd:ee:02"
+  - mac: "dc:a6:32:01:36:c2"
     role: "worker"
-    hostname: "worker-01"
+    hostname: "pi-01"
+    architecture: "arm64"
+    media_set: "aarch64-rpi"
+  - mac: "52:54:00:12:34:56"
+    role: "worker"
+    hostname: "arm-01"
+    architecture: "arm64"
 `
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+
+// newTestContainer builds a container server the way pxeboot does,
+// against a temporary data directory holding the x86_64 set and sets.
+func newTestContainer(t *testing.T, manifest string, sets ...MediaSet) (*Server, error) {
+	t.Helper()
+	dataDir := testDataDir(t, append([]MediaSet{x86Set()}, sets...)...)
+	manifestPath := filepath.Join(t.TempDir(), "manifest.yaml")
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	cfg := &ServerConfig{
+		Interface:    "lo",
+		ManifestPath: manifestPath,
+		DataDir:      dataDir,
+		MediaDir:     filepath.Join(dataDir, "media"),
+		HTTPPort:     8080,
+		DHCPConfig: DHCPConfig{
+			ServerIP: "192.168.1.1", RangeStart: "192.168.1.100", RangeEnd: "192.168.1.200", SubnetMask: "255.255.255.0",
+		},
+	}
+	return NewServer(cfg, testLogger())
 }
 
-func TestHandleDeviceBootScript_Found(t *testing.T) {
-	dir := t.TempDir()
-	manifestPath := writeTestManifest(t, dir)
-
-	manifest, err := LoadManifest(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	server := &Server{
-		manifest: manifest,
-		config: &ServerConfig{
-			HTTPPort: 8080,
-			DHCPConfig: DHCPConfig{
-				ServerIP: "192.168.1.1",
-			},
-		},
-		logger: testLogger(),
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/boot/device/aa:bb:cc:dd:ee:01.ipxe", nil)
+func deviceScript(t *testing.T, server *Server, path string) (int, string) {
+	t.Helper()
 	w := httptest.NewRecorder()
-
-	server.HandleDeviceBootScript(w, req)
-
-	resp := w.Result()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
-
-	body := w.Body.String()
-
-	if !strings.Contains(body, "#!ipxe") {
-		t.Error("expected iPXE shebang in response")
-	}
-	if !strings.Contains(body, "platform_role=control-plane") {
-		t.Error("expected platform_role=control-plane in response")
-	}
-	if !strings.Contains(body, "platform_hostname=cp-01") {
-		t.Error("expected platform_hostname=cp-01 in response")
-	}
-	if !strings.Contains(body, "192.168.1.1:8080") {
-		t.Error("expected server IP and port in kernel URL")
-	}
+	server.HandleDeviceBootScript(w, httptest.NewRequest(http.MethodGet, path, nil))
+	return w.Result().StatusCode, w.Body.String()
 }
 
-func TestHandleDeviceBootScript_NotFound(t *testing.T) {
-	dir := t.TempDir()
-	manifestPath := writeTestManifest(t, dir)
+func TestHandleDeviceBootScript_X86Node(t *testing.T) {
+	server, err := newTestContainer(t, testManifest, piSet(), virtSet())
+	require.NoError(t, err)
 
-	manifest, err := LoadManifest(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	code, body := deviceScript(t, server, "/boot/device/aa:bb:cc:dd:ee:01.ipxe")
+	require.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "kernel http://192.168.1.1:8080/data/media/x86_64/vmlinuz-lts ")
+	assert.Contains(t, body, "initrd http://192.168.1.1:8080/data/media/x86_64/initramfs-lts")
+	assert.Contains(t, body, "platform_role=control-plane")
+	assert.Contains(t, body, "platform_hostname=cp-01")
+	assert.Contains(t, body, "modloop=http://192.168.1.1:8080/data/media/x86_64/modloop-lts")
+	assert.Contains(t, body, "platform_bin_url=http://192.168.1.1:8080/data/media/x86_64 ")
+	assert.Contains(t, body, "console=ttyS0,115200n8", "the x86 flavour's consoles")
+	assert.Contains(t, body, "iseq ${buildarch} x86_64 || iseq ${buildarch} i386 ||", "a BIOS-booted x86 server passes the guard")
+	assert.Contains(t, body, ":boot_retry")
+}
 
-	server := &Server{
-		manifest: manifest,
-		config: &ServerConfig{
-			HTTPPort: 8080,
-			DHCPConfig: DHCPConfig{
-				ServerIP: "192.168.1.1",
-			},
-		},
-		logger: testLogger(),
-	}
+func TestHandleDeviceBootScript_RaspberryPiNodeBootsItsSet(t *testing.T) {
+	server, err := newTestContainer(t, testManifest, piSet(), virtSet())
+	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodGet, "/boot/device/ff:ff:ff:ff:ff:ff.ipxe", nil)
-	w := httptest.NewRecorder()
+	code, body := deviceScript(t, server, "/boot/device/dc-a6-32-01-36-c2.ipxe")
+	require.Equal(t, http.StatusOK, code, "iPXE's dashed ${mac:hexhyp} resolves")
+	assert.Contains(t, body, "kernel http://192.168.1.1:8080/data/media/aarch64-rpi/vmlinuz-rpi ")
+	assert.Contains(t, body, "initrd http://192.168.1.1:8080/data/media/aarch64-rpi/initramfs-rpi")
+	assert.Contains(t, body, "modloop=http://192.168.1.1:8080/data/media/aarch64-rpi/modloop-rpi")
+	assert.Contains(t, body, "platform_bin_url=http://192.168.1.1:8080/data/media/aarch64-rpi ", "the set's own arm64 binaries")
+	assert.Contains(t, body, "console=ttyAMA0,115200", "the Pi flavour's arguments")
+	assert.NotContains(t, body, "ttyS0", "not the x86 flavour's")
+	assert.Contains(t, body, "iseq ${buildarch} arm64 || chain /menu.ipxe")
+	assert.Contains(t, body, "platform_hostname=pi-01")
+}
 
-	server.HandleDeviceBootScript(w, req)
+func TestHandleDeviceBootScript_Arm64NodeWithoutASetBootsTheDefault(t *testing.T) {
+	server, err := newTestContainer(t, testManifest, piSet(), virtSet())
+	require.NoError(t, err)
+	code, body := deviceScript(t, server, "/boot/device/52:54:00:12:34:56.ipxe")
+	require.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "/data/media/aarch64-virt/vmlinuz-virt ")
+}
 
-	resp := w.Result()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 for default menu, got %d", resp.StatusCode)
-	}
-
-	body := w.Body.String()
-
-	if !strings.Contains(body, "#!ipxe") {
-		t.Error("expected iPXE shebang in response")
-	}
-	if !strings.Contains(body, "Unknown device") {
-		t.Error("expected 'Unknown device' in default menu response")
-	}
-	// Must NOT contain role-specific args
-	if strings.Contains(body, "platform_role=") {
-		t.Error("default menu should not contain platform_role")
-	}
+func TestHandleDeviceBootScript_UnknownDeviceChainsBootIPXE(t *testing.T) {
+	server, err := newTestContainer(t, testManifest, piSet(), virtSet())
+	require.NoError(t, err)
+	code, body := deviceScript(t, server, "/boot/device/00:00:00:00:00:00.ipxe")
+	require.Equal(t, http.StatusOK, code, "the deploy gate's probe gets an iPXE script")
+	assert.Equal(t, "#!ipxe\nchain http://192.168.1.1:8080/boot.ipxe\n", body, "the architecture picks the default there")
+	assert.NotContains(t, body, "kernel ")
 }
 
 func TestHandleDeviceBootScript_MissingMAC(t *testing.T) {
-	server := &Server{
-		manifest: &Manifest{},
-		config: &ServerConfig{
-			HTTPPort:   8080,
-			DHCPConfig: DHCPConfig{ServerIP: "192.168.1.1"},
-		},
-		logger: testLogger(),
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/boot/device/", nil)
-	w := httptest.NewRecorder()
-
-	server.HandleDeviceBootScript(w, req)
-
-	if w.Result().StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 for missing MAC, got %d", w.Result().StatusCode)
-	}
+	server, err := newTestContainer(t, testManifest, piSet(), virtSet())
+	require.NoError(t, err)
+	code, _ := deviceScript(t, server, "/boot/device/")
+	assert.Equal(t, http.StatusBadRequest, code)
 }
 
-func TestHandleDeviceBootScript_DashSeparatedMAC(t *testing.T) {
-	dir := t.TempDir()
-	manifestPath := writeTestManifest(t, dir)
+func TestDeviceBootInfo_MatchesTheIPXERoute(t *testing.T) {
+	// The container's listener and the iPXE server's own route render one
+	// script: the same lookup, the same generator.
+	server, err := newTestContainer(t, testManifest, piSet(), virtSet())
+	require.NoError(t, err)
+	info, err := server.deviceBootInfo("dc:a6:32:01:36:c2")
+	require.NoError(t, err)
+	_, body := deviceScript(t, server, "/boot/device/dc:a6:32:01:36:c2.ipxe")
+	assert.Equal(t, server.scriptGen.GenerateScript(info), body)
 
-	manifest, err := LoadManifest(manifestPath)
-	if err != nil {
-		t.Fatal(err)
+	_, err = server.deviceBootInfo("00:00:00:00:00:00")
+	assert.ErrorIs(t, err, ipxe.ErrDeviceNotFound)
+}
+
+func TestNewServer_MediaSetsAreCheckedAgainstTheManifest(t *testing.T) {
+	_, err := newTestContainer(t, testManifest, virtSet())
+	var unknown ErrUnknownMediaSet
+	require.ErrorAs(t, err, &unknown, "the Pi's set is not staged")
+	assert.Equal(t, "aarch64-rpi", unknown.MediaSet)
+
+	_, err = newTestContainer(t, testManifest, piSet())
+	require.ErrorAs(t, err, &unknown, "arm64 has no default for arm-01")
+	assert.Equal(t, "arm64", unknown.Architecture)
+
+	_, err = newTestContainer(t, "nodes:\n  - mac: \"aa:bb:cc:dd:ee:01\"\n    role: worker\n    hostname: x\n")
+	require.NoError(t, err, "an x86-only fleet needs only the x86_64 set")
+}
+
+func TestMediaSets_Rules(t *testing.T) {
+	manifest := "nodes: []\n"
+
+	server, err := newTestContainer(t, manifest)
+	require.NoError(t, err)
+	assert.Equal(t, MediaSetX86_64, server.defaults["x86_64"].Name)
+
+	x86 := MediaSet{Name: "x86_64-new", Architecture: "x86_64", Default: true, Kernel: "k", Initrd: "i", Modloop: "m"}
+	_, err = newTestContainer(t, manifest, x86)
+	var setErr ErrMediaSet
+	require.ErrorAs(t, err, &setErr)
+	assert.Contains(t, setErr.Error(), "both the x86_64 default")
+
+	second := virtSet()
+	second.Name = "aarch64-lts"
+	_, err = newTestContainer(t, manifest, virtSet(), second)
+	require.ErrorAs(t, err, &setErr)
+	assert.Contains(t, setErr.Error(), "both the arm64 default")
+
+	bad := piSet()
+	bad.Architecture = "riscv64"
+	_, err = newTestContainer(t, manifest, bad)
+	require.ErrorAs(t, err, &setErr)
+	assert.Contains(t, setErr.Error(), "architecture")
+}
+
+func TestNewServer_RequiresMediaSets(t *testing.T) {
+	dataDir := t.TempDir()
+	manifestPath := filepath.Join(t.TempDir(), "manifest.yaml")
+	require.NoError(t, os.WriteFile(manifestPath, []byte("nodes: []\n"), 0o644))
+	_, err := NewServer(&ServerConfig{
+		Interface: "lo", ManifestPath: manifestPath, DataDir: dataDir, MediaDir: filepath.Join(dataDir, "media"), HTTPPort: 8080,
+		DHCPConfig: DHCPConfig{ServerIP: "192.168.1.1", RangeStart: "192.168.1.100", RangeEnd: "192.168.1.200", SubnetMask: "255.255.255.0"},
+	}, testLogger())
+	var setErr ErrMediaSet
+	require.ErrorAs(t, err, &setErr)
+	assert.Contains(t, setErr.Error(), "holds no media set")
+}
+
+func TestLoadMediaSets_Validation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "media")
+	sets, err := LoadMediaSets(root, "/data/media")
+	require.NoError(t, err)
+	assert.Empty(t, sets, "no media directory is no sets")
+
+	dir := filepath.Join(root, "aarch64-rpi")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	write := func(set MediaSet) {
+		data, err := yaml.Marshal(set)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, MediaSetDescriptor), data, 0o644))
 	}
+	var setErr ErrMediaSet
 
-	server := &Server{
-		manifest: manifest,
-		config: &ServerConfig{
-			HTTPPort: 8080,
-			DHCPConfig: DHCPConfig{
-				ServerIP: "192.168.1.1",
-			},
-		},
-		logger: testLogger(),
+	write(piSet())
+	_, err = LoadMediaSets(root, "/data/media")
+	require.ErrorAs(t, err, &setErr, "the kernel is not there")
+	assert.Contains(t, setErr.Error(), "kernel vmlinuz-rpi is missing")
+
+	for _, f := range []string{"vmlinuz-rpi", "initramfs-rpi", "modloop-rpi"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte(f), 0o644))
 	}
+	_, err = LoadMediaSets(root, "/data/media")
+	require.ErrorAs(t, err, &setErr, "a set must say what its installer fetches")
+	assert.Contains(t, setErr.Error(), "no payload list")
 
-	// Use dash-separated MAC
-	req := httptest.NewRequest(http.MethodGet, "/boot/device/aa-bb-cc-dd-ee-01.ipxe", nil)
-	w := httptest.NewRecorder()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "platformctl"), []byte("arm64 platformctl"), 0o644))
+	sum, err := artifacts.FileSHA256(filepath.Join(dir, "platformctl"))
+	require.NoError(t, err)
+	list := sum + " file platformd-bin/platformctl platformctl\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, PayloadListName), []byte(list), 0o644))
+	sets, err = LoadMediaSets(root, "/data/media")
+	require.NoError(t, err)
+	require.Len(t, sets, 1)
+	assert.Equal(t, "/data/media/aarch64-rpi/vmlinuz-rpi", sets[0].url("", "vmlinuz-rpi"))
 
-	server.HandleDeviceBootScript(w, req)
+	renamed := piSet()
+	renamed.Name = "other"
+	write(renamed)
+	_, err = LoadMediaSets(root, "/data/media")
+	require.ErrorAs(t, err, &setErr)
+	assert.Contains(t, setErr.Error(), "is not its directory's")
 
-	body := w.Body.String()
-	if !strings.Contains(body, "platform_role=control-plane") {
-		t.Error("expected dash-separated MAC to resolve to control-plane device")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "platformctl"), []byte("changed after the list"), 0o644))
+	write(piSet())
+	_, err = LoadMediaSets(root, "/data/media")
+	require.ErrorAs(t, err, &setErr, "a payload that no longer matches its list")
+	assert.Contains(t, setErr.Error(), "does not match")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "platformctl"), []byte("arm64 platformctl"), 0o644))
+
+	escaping := piSet()
+	escaping.Kernel = "../vmlinuz"
+	write(escaping)
+	_, err = LoadMediaSets(root, "/data/media")
+	require.ErrorAs(t, err, &setErr)
+	assert.Contains(t, setErr.Error(), "file name in the set's directory")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, MediaSetDescriptor), []byte("name: [unterminated"), 0o644))
+	_, err = LoadMediaSets(root, "/data/media")
+	require.ErrorAs(t, err, &setErr)
+	assert.Contains(t, setErr.Error(), "cannot parse")
+}
+
+func TestServerConfig_Validate_PathsMustBeServed(t *testing.T) {
+	cfg := &ServerConfig{
+		ManifestPath: "/m.yaml", DataDir: "/data",
+		DHCPConfig: DHCPConfig{ServerIP: "1.1.1.1", RangeStart: "1.1.1.2", RangeEnd: "1.1.1.3", SubnetMask: "255.0.0.0"},
 	}
+	var invalid ErrInvalidServerConfig
+	require.ErrorAs(t, cfg.Validate(), &invalid)
+	assert.Equal(t, "media_dir", invalid.Field, "the media sets are required")
+
+	cfg.MediaDir = "/opt/media"
+	require.ErrorAs(t, cfg.Validate(), &invalid)
+	assert.Equal(t, "media_dir", invalid.Field)
+
+	cfg.MediaDir = "/data/media"
+	cfg.TFTPDir = filepath.Join(t.TempDir(), "absent")
+	require.ErrorAs(t, cfg.Validate(), &invalid)
+	assert.Equal(t, "tftp_dir", invalid.Field)
+
+	cfg.TFTPDir = t.TempDir()
+	cfg.FirmwareOverrides = map[string]string{"snponly-aarch64.efi": ""}
+	require.ErrorAs(t, cfg.Validate(), &invalid)
+	assert.Equal(t, "firmware_overrides", invalid.Field)
+
+	cfg.FirmwareOverrides = map[string]string{"snponly-aarch64.efi": "/data/firmware/snponly-aarch64.efi"}
+	assert.NoError(t, cfg.Validate())
 }
 
 func TestNewServer_NilConfig(t *testing.T) {
@@ -210,11 +389,7 @@ func TestNewServer_NilLogger(t *testing.T) {
 }
 
 func TestNewServer_InvalidConfig(t *testing.T) {
-	_, err := NewServer(&ServerConfig{
-		ManifestPath: "",
-		KernelPath:   "",
-		InitrdPath:   "",
-	}, testLogger())
+	_, err := NewServer(&ServerConfig{ManifestPath: ""}, testLogger())
 	if err == nil {
 		t.Fatal("expected error for invalid config")
 	}
@@ -227,8 +402,8 @@ func TestNewServer_InvalidConfig(t *testing.T) {
 func TestNewServer_ManifestNotFound(t *testing.T) {
 	_, err := NewServer(&ServerConfig{
 		ManifestPath: "/nonexistent/manifest.yaml",
-		KernelPath:   "/tmp/vmlinuz",
-		InitrdPath:   "/tmp/initramfs",
+		DataDir:      "/tmp",
+		MediaDir:     "/tmp/media",
 		DHCPConfig: DHCPConfig{
 			ServerIP:   "192.168.1.1",
 			RangeStart: "192.168.1.100",
@@ -267,8 +442,23 @@ func TestExtractMACFromPath(t *testing.T) {
 			expected: "aa:bb:cc:dd:ee:ff",
 		},
 		{
+			name:     "upper case is canonicalised",
+			path:     "/boot/device/AA-BB-CC-DD-EE-FF.ipxe",
+			expected: "aa:bb:cc:dd:ee:ff",
+		},
+		{
 			name:     "empty",
 			path:     "/boot/device/",
+			expected: "",
+		},
+		{
+			name:     "not a MAC",
+			path:     "/boot/device/<script>alert(1)</script>.ipxe",
+			expected: "",
+		},
+		{
+			name:     "EUI-64 is not a 48-bit MAC",
+			path:     "/boot/device/00:11:22:33:44:55:66:77.ipxe",
 			expected: "",
 		},
 	}

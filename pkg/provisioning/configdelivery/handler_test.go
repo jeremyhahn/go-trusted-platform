@@ -154,7 +154,7 @@ func TestHandler_FetchConfig_Found(t *testing.T) {
 			return &entities.DeviceProfile{ID: 1, Config: expectedConfig}, nil
 		},
 	}
-	h, svc := testHandlerWithDeps(t, profileSvc, &mockEABService{})
+	h, svc := testHandlerWithDeps(t, profileSvc, &mockEABService{profileID: 1})
 
 	nonce := issueValidNonce(t, svc)
 
@@ -195,7 +195,7 @@ func TestHandler_FetchConfig_Pending(t *testing.T) {
 			return nil, device.ErrNoMatchingConfig{EKSerial: ekSerial, MAC: mac}
 		},
 	}
-	h, svc := testHandlerWithDeps(t, profileSvc, &mockEABService{})
+	h, svc := testHandlerWithDeps(t, profileSvc, nil)
 
 	nonce := issueValidNonce(t, svc)
 

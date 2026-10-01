@@ -70,7 +70,7 @@ platform's PXE service), and `pkg/cli/commands/iso` (`platformctl iso test pxe`)
 | **Serve the kernel over TFTP** | TFTP has no windowing worth the name; a 100 MB initramfs over TFTP is minutes. The whole point of the two-stage chainload is to reach HTTP as early as possible. |
 | **Let iPXE fetch HTTPS directly** | iPXE builds without HTTPS in the common case. `/proxy/https/{host}/{path}` terminates TLS on the server — with verification mandatory and TLS 1.3 as the floor — and re-serves over plain HTTP on the boot network. |
 | **Trust that UEFI firmware will just download the offered bootfile** | It does not. Once option 60 identifies the server as a `PXEClient` server, some firmware enters Boot Server Discovery, gets no answer, and fails with PXE-E18. The DHCP reply therefore sets option 43 sub-option 6 (`PXE_DISCOVERY_CONTROL`) bit 3 — *"download the boot file named in THIS reply"* — with the `0xFF` terminator. Legacy BIOS ROMs are lenient and worked without it, which is why UEFI PXE looked broken while BIOS PXE looked fine. |
-| **Bind DHCP with an ordinary UDP socket everywhere** | On a bridged network the reply has to go to a client that does not yet have an address. `dhcp_rawconn_linux.go` provides `ServerRawConn` — an `AF_PACKET` raw socket that builds the Ethernet/IP/UDP framing itself. It is behind `UseRawSocket` and has a `dhcp_rawconn_stub.go` counterpart so the package still builds off Linux. |
+| **Bind DHCP with an ordinary UDP socket everywhere** | On a bridged network the reply has to go to a client that does not yet have an address. `dhcp_rawconn_linux.go` provides `ServerRawConn` — an `AF_PACKET` datagram socket that builds the IP/UDP framing itself and frames each reply to the broadcast address or to the hardware address the client last spoke from (`UnknownPeerError` for anyone else). It is behind `UseRawSocket` and has a `dhcp_rawconn_stub.go` counterpart so the package still builds off Linux. The path every deployment runs is the plain UDP socket with `SO_BROADCAST` bound to the interface (#649), which reaches an addressless client through the limited broadcast; `Server` and `TestEnv` both use it. |
 | **Respond to every DHCP client always** | That turns the boot server into a rogue DHCP server on any network it is plugged into. The default is to answer only PXE-tagged clients; `DHCPRespondToAll` is opt-in for bootstrap mode, where the server genuinely is the only DHCP server on an isolated segment. |
 | **Hard-code the boot menu** | Unknown devices get `GenerateDefaultMenu` built from the configured `BootEntry` list; known devices get `GenerateScript` built from a `DeviceBootInfo` looked up by MAC. Both are generated, neither is a file on disk. |
 | **Keep the IP allocator in the DHCP server** | It is the `IPAllocator` interface with two implementations: `InMemoryAllocator` for bootstrap and test, `IPAMAllocator` for a real deployment backed by the platform's IPAM. Injected with `WithIPAllocator`, so the DHCP server never knows which it has. |
@@ -131,7 +131,7 @@ over `pkg/ipxe`; the manifest layer sits in between.
       │ chain → /boot/device/<mac>.ipxe   (when a DeviceLookup is wired)   │
       │         else → /menu.ipxe → /boot/{name}.ipxe                      │
       │◄────────────────────────────────────────────────────────────────────
-      │ GET /data/vmlinuz  ·  /data/initramfs  ·  /files/*  ·  /proxy/https/…
+      │ GET /data/media/<set>/{vmlinuz,initramfs}-*  ·  /files/*  ·  /proxy/…
       ├────────────────────────────────────────────────────────────────────►
       │ kernel + initrd                                                    │
       │◄────────────────────────────────────────────────────────────────────
@@ -142,6 +142,54 @@ over `pkg/ipxe`; the manifest layer sits in between.
       │        PUT /installs/<hostname>/install.log
       v
 ```
+
+**An AArch64 client — the Raspberry Pi from U-Boot onward.** The flow is the
+same with two differences. The firmware is the platform's U-Boot (on the Pi,
+`kernel8.img` loaded by the EEPROM; in the test, `-bios u-boot.bin` on QEMU
+`virt`), whose `bootflow scan` reaches the network after the disks and
+identifies itself with option 93 = `0x000b` and vendor class `U-Boot.armv8`,
+so the OFFER names `snponly-aarch64.efi` — the platform's own iPXE build
+(`build/docker/ipxe-builder`, `ServerConfig.FirmwareOverrides`), because
+upstream's arm64 binary halts under U-Boot's polled EFI. And U-Boot carries
+the platform's Secure Boot db and verifies every EFI image it loads, so the
+server signs that iPXE binary with the db key (`ServerConfig.FirmwareSigner`) and the
+kernel iPXE later fetches must be signed the same way (the platform's
+aarch64 media are; `iso test pxe` signs a bare kernel itself). iPXE reports
+`${buildarch}` = `arm64`, and the boot script guards on it: an entry
+declared for another architecture is never handed to the client.
+**Before U-Boot: the Raspberry Pi's own bootloader.** A Pi that netboots
+has no U-Boot yet; its EEPROM (or the 3B+'s boot ROM) fetches it. The
+protocol is `pkg/rpinetboot`'s:
+
+```
+ Pi bootloader                                       DHCPServer            TFTPServer
+      │ DISCOVER  opt 60 "PXEClient:Arch:00000:UNDI:002001", opt 93 = 0,        │
+      │           opt 97 = 00 "RPi4" <revision> <mac[2:6]> <serial>             │
+      ├───────────────────────────────────────────────►│                        │
+      │                    isRaspberryPi? (vendor class + Pi option 97 or Pi MAC)│
+      │ OFFER  siaddr = TFTP server, no bootfile, opt 60 "PXEClient",            │
+      │        opt 43 = PXE menu item "Raspberry Pi Boot", opt 97 echoed         │
+      │        (+ a lease — or none, as a proxy on a segment with its own DHCP)  │
+      │◄───────────────────────────────────────────────┤                        │
+      │ RRQ <serial>/start4.elf  → not found → RRQ start4.elf                    │
+      ├─────────────────────────────────────────────────────────────────────────►
+      │ config.txt · fixup4.dat · bcm2711-rpi-4-b.dtb · overlays/*.dtbo · kernel8.img (U-Boot)
+      │◄─────────────────────────────────────────────────────────────────────────
+      v  U-Boot: bootflow scan → the AArch64 flow above
+```
+
+The same vendor class is a legacy x86 PXE ROM's, so the Pi is told apart
+by its option 97 (a FourCC `RPi4`/`RPi5` GUID, or the serial repeated four
+times from older firmware) or, failing that, a Raspberry Pi MAC prefix; an
+x86 ROM keeps `undionly.kpxe` and the PXE option 43. The files come from
+`ServerConfig.TFTPDir`, a tree staged by `pkg/diskimage/netboot` from the
+factory image's boot partition or from the same build inputs, with
+optional per-device directories (`<serial>/`, `<mac-with-dashes>/`) the
+bootloader tries first (`TFTP_PREFIX`). A segment that already has a DHCP
+server runs this server as a proxy (`DHCPProxyOnly`): the offer carries
+the boot options and no address, the network's server leases as usual.
+`platformctl bootstrap probe rpi` and the netboot integration suite speak
+this stage from the Pi's side, since no emulator has a Pi's EEPROM.
 
 **What crosses a process boundary.** The DHCP, TFTP and HTTP surfaces are all
 plain network protocols on the boot segment — none of them is one of the
@@ -186,7 +234,12 @@ Six boundaries.
    first use and then cached to disk; **a poisoned cache file is served without
    revalidation**, and there is no signature check on kernel or initrd either.
    The integrity control downstream is UEFI Secure Boot on the installed UKI
-   ([`docs/installer/`](../installer/)), not anything here.
+   ([`docs/installer/`](../installer/)), not anything here. Signing is the
+   converse and is offered: with a `FirmwareSigner`, the served EFI binaries
+   are Authenticode-signed with the platform's db key so a Secure Boot client
+   (U-Boot with the db preseeded) accepts them — that is the *client*
+   verifying the server, and it protects the client only from a server that
+   lacks the key, not from this server serving a poisoned cache it then signs.
 4. **`DHCPRespondToAll` makes the process a general-purpose DHCP server.**
    Enabling it on a shared network hands addresses to machines that were not
    asking for anything to do with the platform. Bootstrap mode only.

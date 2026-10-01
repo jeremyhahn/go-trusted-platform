@@ -178,6 +178,11 @@ existing container is reused (`if-stale`, the default), always replaced
 Control-plane nodes are provisioned concurrently. Per node, the boot method
 selects the path:
 
+Every path first publishes the node's per-MAC config (`hostname`,
+`installer.yaml`, and for non-control-plane nodes the CA bundle and SPKI pin)
+on the container's config server, which the installer reads before it falls
+back to the config baked into the media.
+
 - **`pxe` with board management** — one-shot PXE boot override, power cycle if
   already on, wait for the install log, switch to persistent disk boot, power on
   from the post-install poweroff, wait for health.

@@ -27,12 +27,15 @@ import (
 	"crypto/x509/pkix"
 	"encoding/binary"
 	"encoding/pem"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
-	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v2"
 	"math/big"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode/authenticodetest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v2"
 )
 
 func TestCopyPlatformConfig(t *testing.T) {
@@ -1297,4 +1300,48 @@ func TestValidSignatureList_RejectsSmuggledHeaderBytes(t *testing.T) {
 	require.False(t, validSignatureList(bogus), "a non-certificate payload in an X.509 list must be rejected")
 
 	require.True(t, validSignatureList(genTestESL(t)), "a real certificate list must be accepted")
+}
+
+// TestCopySecureBootKeys_NetworkServedMediaCarriesNoPrivateKeys: a medium
+// served over the network (a netboot media set) stages only public
+// enrollment material and generates nothing — with Secure Boot off, where an
+// ISO keeps its historical full key set, and with remote signing — and
+// refuses a config that would sign with media-staged keys.
+func TestCopySecureBootKeys_NetworkServedMediaCarriesNoPrivateKeys(t *testing.T) {
+	served := func(t *testing.T, secureBoot bool, keysDir string) *Customizer {
+		t.Helper()
+		return NewCustomizer(&PlatformISOConfig{
+			Security:    SecurityConfig{SecureBoot: secureBoot, PublicKeysOnly: true},
+			Directories: DirectoryConfig{Work: t.TempDir(), ISO: t.TempDir(), Keys: keysDir},
+		}, logging.DefaultLogger())
+	}
+	keysWithPrivate := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		keyPath, _ := authenticodetest.WriteKeyPair(t, dir)
+		require.FileExists(t, keyPath)
+		return dir
+	}
+
+	t.Run("Secure Boot off: public material only, nothing generated", func(t *testing.T) {
+		keysDir := keysWithPrivate(t)
+		c := served(t, false, keysDir)
+		require.NoError(t, c.CopySecureBootKeys(context.Background()))
+		staged := filepath.Join(c.config.Directories.ISO, SecureBootKeysISODirName)
+		assert.FileExists(t, filepath.Join(staged, "DB.crt"))
+		assert.NoFileExists(t, filepath.Join(staged, "DB.key"))
+
+		empty := t.TempDir()
+		require.NoError(t, served(t, false, empty).CopySecureBootKeys(context.Background()))
+		entries, err := os.ReadDir(empty)
+		require.NoError(t, err)
+		assert.Empty(t, entries, "no key generation for a served medium")
+	})
+
+	t.Run("media signing is refused", func(t *testing.T) {
+		c := served(t, true, keysWithPrivate(t))
+		err := c.CopySecureBootKeys(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "network-served medium cannot sign with media-staged Secure Boot keys")
+	})
 }

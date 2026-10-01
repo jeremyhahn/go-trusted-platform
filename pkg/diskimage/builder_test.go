@@ -2,176 +2,41 @@ package diskimage
 
 import (
 	"context"
-	"crypto/sha256"
 	"debug/elf"
-	"encoding/binary"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode/authenticodetest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/diskimagetest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/uboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
-// writeELF writes a minimal 64-bit ELF header for machine.
-func writeELF(t *testing.T, path string, machine elf.Machine) {
-	t.Helper()
-	hdr := make([]byte, 64)
-	copy(hdr, []byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 0})
-	binary.LittleEndian.PutUint16(hdr[16:], uint16(elf.ET_EXEC))
-	binary.LittleEndian.PutUint16(hdr[18:], uint16(machine))
-	binary.LittleEndian.PutUint32(hdr[20:], 1)
-	binary.LittleEndian.PutUint16(hdr[52:], 64)
-	binary.LittleEndian.PutUint16(hdr[54:], 56)
-	binary.LittleEndian.PutUint16(hdr[58:], 64)
-	if err := os.WriteFile(path, hdr, 0o755); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// binariesDir lays out the aarch64 binaries the media staging looks for.
-func binariesDir(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	for _, name := range []string{"platformd", "platformctl", "platformctl-static", "platform-initrd", "gatewayd"} {
-		writeELF(t, filepath.Join(dir, name), elf.EM_AARCH64)
-	}
-	return dir
-}
-
-// ubootOutput lays out verified U-Boot artifacts for both boards.
-func ubootOutput(t *testing.T) string {
-	t.Helper()
-	out := t.TempDir()
-	files := map[string]string{
-		"rpi_arm64/u-boot.bin": "rpi", "rpi_arm64/u-boot.config": "c", "rpi_arm64/overlays/tpm-soft-spi.dtbo": "o",
-		"qemu_arm64/u-boot.bin": "qemu", "qemu_arm64/u-boot.config": "c",
-	}
-	for rel, body := range files {
-		p := filepath.Join(out, rel)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, board := range uboot.Boards {
-		dir := filepath.Join(out, string(board))
-		var sums strings.Builder
-		_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return err
-			}
-			rel, _ := filepath.Rel(dir, p)
-			data, _ := os.ReadFile(p)
-			sum := sha256.Sum256(data)
-			sums.WriteString(hex.EncodeToString(sum[:]) + "  ./" + rel + "\n")
-			return nil
-		})
-		if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(sums.String()), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	m, _ := json.Marshal(uboot.Manifest{Version: uboot.DefaultVersion, CacheKey: "k", Boards: []string{"rpi_arm64", "qemu_arm64"}})
-	if err := os.WriteFile(filepath.Join(out, uboot.ManifestName), m, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
-// platformConfig writes a minimal platform config carrying seal-pcrs.
-func platformConfig(t *testing.T) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "platform.yaml")
-	if err := os.WriteFile(p, []byte("os:\n  architecture: x86_64\n  hostname: node\ndisk:\n  partition-table: gpt\nseal-pcrs: [0, 7, 9]\nsecure-boot:\n  enabled: false\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
-// buildRunner records container invocations and fakes a produced image.
-type buildRunner struct {
-	calls [][]string
-	fail  string
-}
-
-func (b *buildRunner) run(_ context.Context, name string, args ...string) ([]byte, error) {
-	b.calls = append(b.calls, append([]string{name}, args...))
-	if b.fail != "" && len(args) > 0 && args[0] == b.fail {
-		return []byte("boom"), errors.New("exit 1")
-	}
-	if len(args) > 0 && args[0] == "run" {
-		for i, a := range args {
-			if a == "--output" {
-				// the container writes /work/<name>; the host sees <outDir>/<name>
-				name := filepath.Base(args[i+1])
-				for j, v := range args {
-					if v == "-v" && strings.HasSuffix(args[j+1], ":"+containerWorkMount) {
-						host := strings.TrimSuffix(args[j+1], ":"+containerWorkMount)
-						return nil, os.WriteFile(filepath.Join(host, name), []byte("image"), 0o644)
-					}
-				}
-			}
-		}
-	}
-	return nil, nil
-}
-
-// virtKernelOutput is a virt-kernel-builder output directory with a
-// manifest and a verified flavour directory.
-func virtKernelOutput(t *testing.T) string {
-	t.Helper()
-	out := t.TempDir()
-	dir := filepath.Join(out, "virt")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	files := map[string]string{"vmlinuz-virt": "kernel", "modules-virt.tar.gz": "modules", "kernel-version.txt": "6.12.110-0-virt\n", "config-virt": "c"}
-	var sums strings.Builder
-	for name, body := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		sum := sha256.Sum256([]byte(body))
-		sums.WriteString(hex.EncodeToString(sum[:]) + "  ./" + name + "\n")
-	}
-	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(sums.String()), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	manifest := `{"kernel_version":"6.12.110","kernel_release":"6.12.110-0-virt","tarball_sha256":"x","cache_key":"k","flavor":"virt","built_at":"now"}`
-	if err := os.WriteFile(filepath.Join(out, "manifest.json"), []byte(manifest), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
-func buildConfigForTest(t *testing.T, target string, rec *buildRunner) *BuildConfig {
+func buildConfigForTest(t *testing.T, target string, rec *diskimagetest.Runner) *BuildConfig {
 	t.Helper()
 	work := t.TempDir()
-	bins := binariesDir(t)
+	bins := diskimagetest.Binaries(t, elf.EM_AARCH64)
 	isoCfg := iso.DefaultISOBuildConfig()
 	isoCfg.WorkDir = work
 	isoCfg.PlatformVersion = "1.0.0-test"
 	isoCfg.PlatformdBinary = filepath.Join(bins, "platformd")
-	isoCfg.PlatformConfigFile = platformConfig(t)
+	isoCfg.PlatformConfigFile = diskimagetest.PlatformConfig(t)
 	isoCfg.PreFetch = false
 	isoCfg.SecureBoot = false
 	isoCfg.KeysDir = t.TempDir()
 	return &BuildConfig{
 		ISO: isoCfg, Target: target, SizeMB: 2048, Output: filepath.Join(work, "out", "img.img"),
-		BinariesDir: bins, UBootDir: ubootOutput(t), VirtKernelDir: virtKernelOutput(t), Runner: rec.run, Logger: logging.DefaultLogger(),
+		BinariesDir: bins, UBootDir: diskimagetest.UBootOutput(t), VirtKernelDir: diskimagetest.VirtKernelOutput(t), Runner: rec.Run, Logger: logging.DefaultLogger(),
 		SkipPreflight: true, BuilderDir: t.TempDir(), UBootBuilderDir: t.TempDir(), VirtKernelBuilderDir: t.TempDir(),
 	}
 }
 
 func TestCreateStagesMediaAndRunsTheContainer(t *testing.T) {
-	rec := &buildRunner{}
+	rec := &diskimagetest.Runner{}
 	cfg := buildConfigForTest(t, "qemu-virt", rec)
 	res, err := Create(context.Background(), cfg)
 	if err != nil {
@@ -196,14 +61,14 @@ func TestCreateStagesMediaAndRunsTheContainer(t *testing.T) {
 			t.Errorf("baked platform config lacks %q:\n%s", want, baked)
 		}
 	}
-	if len(rec.calls) != 2 || rec.calls[0][1] != "build" || rec.calls[1][1] != "run" {
-		t.Fatalf("calls = %v", rec.calls)
+	if len(rec.Calls) != 2 || rec.Calls[0][1] != "build" || rec.Calls[1][1] != "run" {
+		t.Fatalf("calls = %v", rec.Calls)
 	}
-	build := strings.Join(rec.calls[0], " ")
+	build := strings.Join(rec.Calls[0], " ")
 	if !strings.Contains(build, "--platform linux/arm64 -t "+DefaultBuilderImage) {
 		t.Errorf("build argv = %q", build)
 	}
-	run := strings.Join(rec.calls[1], " ")
+	run := strings.Join(rec.Calls[1], " ")
 	for _, want := range []string{"run --rm --privileged --platform linux/arm64", media + ":/media/cdrom:ro", ":/work",
 		"/media/cdrom/platformd-bin/platformctl-static diskimage assemble", "--platform-config /media/cdrom/configs/installer.yaml", "--output /work/img.img", "--size 2048"} {
 		if !strings.Contains(run, want) {
@@ -226,7 +91,7 @@ func TestCreateFailures(t *testing.T) {
 	if _, err := Create(context.Background(), &BuildConfig{SkipPreflight: true}); !errors.As(err, &stage) {
 		t.Errorf("nil ISO config error = %v", err)
 	}
-	rec := &buildRunner{}
+	rec := &diskimagetest.Runner{}
 	cfg := buildConfigForTest(t, "qemu-virt", rec)
 	cfg.SizeMB = 100
 	if _, err := Create(context.Background(), cfg); !errors.As(err, &stage) || !strings.Contains(err.Error(), "below the minimum") {
@@ -240,8 +105,9 @@ func TestCreateFailures(t *testing.T) {
 
 	// An x86_64 platformd is rejected for an aarch64 image.
 	cfg = buildConfigForTest(t, "qemu-virt", rec)
-	writeELF(t, cfg.ISO.PlatformdBinary, elf.EM_X86_64)
-	if _, err := Create(context.Background(), cfg); !errors.As(err, &stage) || stage.Step != "staging the install media" {
+	diskimagetest.WriteELF(t, cfg.ISO.PlatformdBinary, elf.EM_X86_64)
+	var mediaErr *iso.StageMediaError
+	if _, err := Create(context.Background(), cfg); !errors.As(err, &mediaErr) || mediaErr.Step != "staging the install media" {
 		t.Errorf("wrong-arch platformd error = %v", err)
 	}
 
@@ -261,17 +127,17 @@ func TestCreateFailures(t *testing.T) {
 
 	// Container failures.
 	var aerr *AssembleError
-	rec = &buildRunner{fail: "build"}
+	rec = &diskimagetest.Runner{Fail: "build"}
 	if _, err := Create(context.Background(), buildConfigForTest(t, "qemu-virt", rec)); !errors.As(err, &aerr) || aerr.Step != "building the assemble container image" {
 		t.Errorf("image build failure error = %v", err)
 	}
-	rec = &buildRunner{fail: "run"}
+	rec = &diskimagetest.Runner{Fail: "run"}
 	if _, err := Create(context.Background(), buildConfigForTest(t, "qemu-virt", rec)); !errors.As(err, &aerr) || aerr.Step != "running the assemble container" {
 		t.Errorf("container run failure error = %v", err)
 	}
 
 	// The rpi target without prefetched firmware packages fails at staging.
-	rec = &buildRunner{}
+	rec = &diskimagetest.Runner{}
 	cfg = buildConfigForTest(t, "rpi", rec)
 	if _, err := Create(context.Background(), cfg); !errors.As(err, &stage) || stage.Step != "staging the boot firmware" {
 		t.Errorf("rpi without packages error = %v", err)
@@ -385,6 +251,77 @@ func TestErrorMessages(t *testing.T) {
 	for _, err := range []error{&StageError{Err: inner}, &AssembleError{Err: inner}, &InspectError{Err: inner}} {
 		if !errors.Is(err, inner) {
 			t.Errorf("%T does not unwrap", err)
+		}
+	}
+}
+
+// TestUBootPreseedsTheResolvedCertificates: U-Boot is built from the build's
+// resolved Secure Boot certificates (fetched from the KMS for kms://
+// references), not from the raw keys directory.
+func TestUBootPreseedsTheResolvedCertificates(t *testing.T) {
+	rec := &diskimagetest.Runner{}
+	cfg := buildConfigForTest(t, "rpi", rec).withDefaults()
+	cfg.UBootDir = ""
+	cfg.UBootOutputDir = t.TempDir()
+	// The real builder context: the cache key hashes its inputs.
+	builder, err := filepath.Abs(filepath.Join("..", "..", "build", "docker", "uboot-builder"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.UBootBuilderDir = builder
+	target, err := NewTarget("rpi", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	certDir := t.TempDir()
+	for _, role := range []string{"PK", "KEK", "DB"} {
+		if err := os.WriteFile(filepath.Join(certDir, role+".crt"), []byte(role), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The fake runner produces no artifacts, so the build itself fails
+	// afterwards; the mount it asked for is what this test is about.
+	_, _ = cfg.ubootArtifacts(context.Background(), target, &iso.SecureBootMaterial{CertDir: certDir})
+
+	var mounted bool
+	for _, call := range rec.Calls {
+		mounted = mounted || strings.Contains(strings.Join(call, " "), certDir+":/keys:ro")
+	}
+	if !mounted {
+		t.Errorf("U-Boot was not built from the resolved certificates; calls = %v", rec.Calls)
+	}
+}
+
+// TestStageMediaResolvesSecureBootMaterial: with Secure Boot on, the staged
+// media carries the build's resolved certificates and DB signer.
+func TestStageMediaResolvesSecureBootMaterial(t *testing.T) {
+	cfg := buildConfigForTest(t, "qemu-virt", &diskimagetest.Runner{})
+	cfg.ISO.SecureBoot = true
+	cfg.ISO.GenerateKeys = false
+	authenticodetest.WriteKeyPair(t, cfg.ISO.KeysDir)
+	for _, role := range []string{"PK", "KEK"} {
+		keyPath, certPath := authenticodetest.WriteKeyPair(t, t.TempDir())
+		_ = keyPath
+		data, err := os.ReadFile(certPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cfg.ISO.KeysDir, role+".crt"), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	staged, err := StageMedia(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("StageMedia: %v", err)
+	}
+	if staged.SecureBoot == nil || staged.SecureBoot.DB == nil {
+		t.Fatalf("staged Secure Boot material = %+v", staged.SecureBoot)
+	}
+	for _, role := range []string{"PK", "KEK", "DB"} {
+		if _, err := os.Stat(filepath.Join(staged.SecureBoot.CertDir, role+".crt")); err != nil {
+			t.Errorf("resolved certificates lack %s: %v", role, err)
 		}
 	}
 }

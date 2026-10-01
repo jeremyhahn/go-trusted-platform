@@ -15,15 +15,15 @@ package container
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"text/template"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
@@ -35,35 +35,6 @@ const (
 	shutdownTimeout = 5 * time.Second
 )
 
-// deviceBootScriptTmpl is the iPXE script template for a known device.
-var deviceBootScriptTmpl = template.Must(template.New("device").Parse(`#!ipxe
-kernel http://{{.ServerIP}}:{{.HTTPPort}}/files/vmlinuz alpine_start=autoinstall platform_role={{.Role}} platform_hostname={{.Hostname}}
-initrd http://{{.ServerIP}}:{{.HTTPPort}}/files/initramfs
-boot
-`))
-
-// defaultBootScriptTmpl is the fallback iPXE script for unknown devices.
-var defaultBootScriptTmpl = template.Must(template.New("default").Parse(`#!ipxe
-echo Unknown device - entering boot menu
-kernel http://{{.ServerIP}}:{{.HTTPPort}}/files/vmlinuz alpine_start=autoinstall
-initrd http://{{.ServerIP}}:{{.HTTPPort}}/files/initramfs
-boot
-`))
-
-// deviceScriptData holds template data for per-device iPXE scripts.
-type deviceScriptData struct {
-	ServerIP string
-	HTTPPort int
-	Role     string
-	Hostname string
-}
-
-// defaultScriptData holds template data for the default iPXE script.
-type defaultScriptData struct {
-	ServerIP string
-	HTTPPort int
-}
-
 // Server wraps pkg/ipxe.Server with manifest-based boot script generation.
 type Server struct {
 	ipxeServer *ipxe.Server
@@ -73,6 +44,12 @@ type Server struct {
 	httpServer *http.Server
 	running    atomic.Bool
 	mu         sync.Mutex
+
+	// sets are the media sets served, by name; defaults the set each
+	// architecture's unknown machines boot.
+	sets      map[string]MediaSet
+	defaults  map[string]MediaSet
+	scriptGen *ipxe.ScriptGenerator
 }
 
 // alpineRepoBranch derives the Alpine repository branch path component
@@ -111,6 +88,24 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 		return nil, err
 	}
 
+	sets, err := mediaSets(config)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]MediaSet, len(sets))
+	defaults := make(map[string]MediaSet)
+	var entries []ipxe.BootEntry
+	for _, set := range sets {
+		byName[set.Name] = set
+		if set.Default {
+			defaults[set.Architecture] = set
+			entries = append(entries, set.bootEntry(config))
+		}
+	}
+	if err := manifest.checkMediaSets(byName, defaults); err != nil {
+		return nil, err
+	}
+
 	// Build the underlying ipxe.ServerConfig for the iPXE server.
 	ipxeConfig := &ipxe.ServerConfig{
 		Interface:        config.Interface,
@@ -124,109 +119,25 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 		// container — same volume mount as the SMB share, so /data persists
 		// across container restarts and is browseable both via SMB and via
 		// HTTP at /installs/.
-		InstallsDir: "/data/installs",
+		InstallsDir: filepath.Join(config.DataDir, "installs"),
 		// /data is the bind-mounted host directory inside the container.
-		// Exposing it under HTTP /data/ lets the generated bootstrap.ipxe
-		// script's `kernel /data/vmlinuz` / `initrd /data/initramfs`
-		// directives resolve to real downloads rather than 404s.
-		DataDir:          "/data",
-		EnableDHCP:       true,
-		DHCPRangeStart:   config.DHCPConfig.RangeStart,
-		DHCPRangeEnd:     config.DHCPConfig.RangeEnd,
-		DHCPSubnetMask:   config.DHCPConfig.SubnetMask,
-		DHCPGateway:      config.DHCPConfig.Gateway,
-		DHCPLeaseTime:    config.DHCPConfig.LeaseTime,
-		DHCPServerIP:     config.DHCPConfig.ServerIP,
-		DHCPPort:         config.DHCPConfig.Port,
-		DHCPRespondToAll: true, // Bootstrap mode: respond to all DHCP clients, not just PXE
-		BootFilename:     "ipxe.efi",
-		BootEntries: []ipxe.BootEntry{
-			{
-				Name:        "bootstrap",
-				Description: "Bootstrap installer",
-				Kernel:      config.KernelPath,
-				Initrd:      config.InitrdPath,
-				// Kernel cmdline mirrors the grub.cfg that
-				// platformctl iso create generates for the same
-				// vmlinuz/initramfs pair. Without these args:
-				//   - alpine_start=autoinstall: autoinstall.sh
-				//     never runs (initramfs init falls through to
-				//     a shell), so the install never starts.
-				//   - console=ttyS0/ttyS1: kernel doesn't print
-				//     to serial, leaving SOL captures silent and
-				//     making boot failures invisible to the
-				//     operator.
-				//   - modules=loop,squashfs,...: required modules
-				//     for mounting the Alpine modloop / live
-				//     squashfs are not loaded. The trailing NIC
-				//     drivers (igb,igc,ixgbe,i40e,ice,e1000,
-				//     e1000e,mlx5_core,bnxt_en) are loaded early
-				//     so the initramfs can DHCP before fetching
-				//     modloop over HTTP — without them ip=dhcp
-				//     no-ops and the modloop fetch fails (the same
-				//     boot-time deadlock the initramfs NIC-driver
-				//     injection resolves).
-				//   - platform_debug=1 + platform_debug_sink:
-				//     turns on the kernel-debug log forwarder so
-				//     boot diagnostics PUT to /installs/.../
-				//     install.log on this same pxeboot host.
-				Args: "modules=loop,squashfs,sd-mod,usb-storage,igb,igc,ixgbe,i40e,ice,e1000,e1000e,mlx5_core,bnxt_en,af_packet " +
-					"earlyprintk=efi,keep earlycon=uart8250,io,0x3f8,115200n8 " +
-					"console=tty0 console=ttyS1,115200n8 console=ttyS0,115200n8 " +
-					"loglevel=7 console=tty1 " +
-					"alpine_start=autoinstall " +
-					// ip=dhcp — required so the Alpine initramfs
-					// init script (nlplug-findfs / mkinitfs) brings
-					// up the boot NIC and obtains a DHCP lease
-					// BEFORE attempting to fetch modloop= over HTTP.
-					// Without this the network isn't configured at
-					// modloop-fetch time, the fetch fails, and the
-					// kernel boots with only its built-in modules.
-					"ip=dhcp " +
-					// modloop URL — Alpine's initramfs init looks
-					// for the kernel-modules squashfs first on
-					// /media/cdrom/boot/modloop-lts (CD boot path)
-					// and, when that's absent, fetches a URL passed
-					// via the modloop= kernel arg. PXE-booted nodes
-					// have no CD; without this arg the kernel boots
-					// with the built-in modules only — no extra
-					// NIC drivers, no dm-crypt, no LUKS, no LVM —
-					// and autoinstall silently dies before it can
-					// upload a checkpoint.
-					"modloop=http://" + config.DHCPConfig.ServerIP + ":" + fmt.Sprintf("%d", config.HTTPPort) + "/data/modloop-lts " +
-					// alpine_repo — Alpine's initramfs init (find_boot_repositories)
-					// looks for /media/<x>/.boot_repository to populate the
-					// diskless live root. PXE-booted nodes have NO /media/cdrom
-					// (only vmlinuz+initramfs come over the network), so without
-					// this the repofile is empty, the live-system `apk add
-					// alpine-base` installs 0 packages, there is no /sbin/init,
-					// and the kernel drops to the "init not found in new root"
-					// emergency shell. Pointing alpine_repo at the mirror's
-					// main branch both fixes that AND flips Alpine's
-					// do_networking on (it sees a URL repo), so the boot NIC is
-					// configured before the apk fetch. APKMirror/AlpineVersion
-					// are defaulted in ApplyDefaults, so this is never empty.
-					"alpine_repo=" + strings.TrimRight(config.APKMirror, "/") + "/" + alpineRepoBranch(config.AlpineVersion) + "/main " +
-					// platform_apk_mirror — read by the post-switch-root
-					// autoinstall repo setup (buildAutoinstallScript) so it
-					// resolves install packages from the same mirror. On PXE
-					// there is no /media/cdrom, so this is the only repo the
-					// autoinstall has; on vmedia the CD branch takes priority.
-					"platform_apk_mirror=" + config.APKMirror + " " +
-					// platform_config — per-MAC installer.yaml endpoint on the
-					// pxeboot HTTP server. PXE nodes have no /media/cdrom, so the
-					// autoinstall fetches its merged config from
-					// <base>/<mac>/installer.yaml (Priority 1 in buildAutoinstallScript).
-					// The orchestrator stages it there via stagePerMACHostname.
-					"platform_config=http://" + config.DHCPConfig.ServerIP + ":" + fmt.Sprintf("%d", config.HTTPPort) + "/config/mac " +
-					// platform_bin_url — base URL for the installer binaries
-					// (platformctl + platformd) the autoinstall fetches because a
-					// diskless PXE node has no CD to read them from. Served out of
-					// the container's /data, staged from the same ISO by the deployer.
-					"platform_bin_url=http://" + config.DHCPConfig.ServerIP + ":" + fmt.Sprintf("%d", config.HTTPPort) + "/data " +
-					"platform_debug=1 platform_debug_sink=" + config.DHCPConfig.ServerIP + ":" + fmt.Sprintf("%d", config.HTTPPort),
-			},
-		},
+		// Exposing it under HTTP /data/ serves the media sets the boot
+		// scripts' kernel / initrd / modloop= URLs name (/data/media/<set>/…).
+		DataDir:           config.DataDir,
+		EnableDHCP:        true,
+		DHCPRangeStart:    config.DHCPConfig.RangeStart,
+		DHCPRangeEnd:      config.DHCPConfig.RangeEnd,
+		DHCPSubnetMask:    config.DHCPConfig.SubnetMask,
+		DHCPGateway:       config.DHCPConfig.Gateway,
+		DHCPLeaseTime:     config.DHCPConfig.LeaseTime,
+		DHCPServerIP:      config.DHCPConfig.ServerIP,
+		DHCPPort:          config.DHCPConfig.Port,
+		DHCPRespondToAll:  true, // Bootstrap mode: respond to all DHCP clients, not just PXE
+		BootFilename:      "ipxe.efi",
+		BootEntries:       entries,
+		TFTPDir:           config.TFTPDir,
+		FirmwareOverrides: config.FirmwareOverrides,
+		DHCPProxyOnly:     config.DHCPProxyOnly,
 	}
 	if len(config.DHCPConfig.DNS) > 0 {
 		ipxeConfig.DHCPDNS = config.DHCPConfig.DNS[0]
@@ -238,12 +149,19 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 		return nil, ErrServerStartFailed{Cause: err}
 	}
 
-	return &Server{
+	server := &Server{
 		ipxeServer: ipxeServer,
 		manifest:   manifest,
 		config:     config,
 		logger:     logger,
-	}, nil
+		sets:       byName,
+		defaults:   defaults,
+		scriptGen:  ipxe.NewScriptGenerator(serverBaseURL(config), logger),
+	}
+	// /boot.ipxe chains the per-device route first: a node in the
+	// manifest boots its media set, with its role and hostname.
+	ipxeServer.HTTPServer().SetDeviceLookup(server.deviceBootInfo, server.scriptGen)
+	return server, nil
 }
 
 // Start starts the bootstrap server, including DHCP, TFTP, HTTP, and
@@ -372,61 +290,100 @@ func (s *Server) Stop() error {
 	return firstErr
 }
 
-// HandleDeviceBootScript generates a per-device iPXE script from the manifest.
-// It is called by the HTTP server for /boot/device/{mac}.ipxe requests.
+// deviceBootInfo is the per-device assignment for a MAC: the manifest
+// entry's media set (or its architecture's default) with the node's role
+// and hostname. A MAC not in the manifest is ipxe.ErrDeviceNotFound, so
+// the client falls through to its architecture's default entry.
+func (s *Server) deviceBootInfo(mac string) (*ipxe.DeviceBootInfo, error) {
+	entry, found := s.manifest.LookupMAC(mac)
+	if !found {
+		return nil, ErrMACNotInManifest{MAC: mac}
+	}
+	set, err := s.setFor(entry)
+	if err != nil {
+		return nil, err
+	}
+	base := serverBaseURL(s.config)
+	return &ipxe.DeviceBootInfo{
+		MAC:             mac,
+		Role:            entry.Role,
+		Hostname:        entry.Hostname,
+		Architecture:    set.Architecture,
+		KernelURL:       set.url(base, set.Kernel),
+		InitrdURL:       set.url(base, set.Initrd),
+		ExtraKernelArgs: []string{set.bootArgs(s.config)},
+	}, nil
+}
+
+// setFor resolves the media set a manifest entry boots.
+func (s *Server) setFor(entry *ManifestEntry) (MediaSet, error) {
+	if entry.MediaSet != "" {
+		set, ok := s.sets[entry.MediaSet]
+		if !ok {
+			return MediaSet{}, ErrUnknownMediaSet{MAC: entry.MAC, MediaSet: entry.MediaSet}
+		}
+		return set, nil
+	}
+	arch := entry.Architecture
+	if arch == "" {
+		arch = ipxe.ArchitectureX86_64
+	}
+	set, ok := s.defaults[arch]
+	if !ok {
+		return MediaSet{}, ErrUnknownMediaSet{MAC: entry.MAC, Architecture: arch}
+	}
+	return set, nil
+}
+
+// HandleDeviceBootScript serves /boot/device/{mac}.ipxe on the device-script
+// listener, which the deploy gate probes as its readiness signal. A node
+// in the manifest gets exactly the script the iPXE server's own route
+// renders; any other MAC gets a script that chains /boot.ipxe, where the
+// client's architecture picks its default — never a kernel chosen without
+// knowing the architecture.
 func (s *Server) HandleDeviceBootScript(w http.ResponseWriter, r *http.Request) {
 	mac := extractMACFromPath(r.URL.Path)
 	if mac == "" {
-		http.Error(w, "missing MAC address in path", http.StatusBadRequest)
+		http.Error(w, "missing or malformed MAC address in path", http.StatusBadRequest)
 		return
 	}
-
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 
-	entry, found := s.manifest.LookupMAC(mac)
-	if found {
-		s.logger.Info("serving device boot script",
-			slog.String("mac", mac),
-			slog.String("role", entry.Role),
-			slog.String("hostname", entry.Hostname))
-
-		data := deviceScriptData{
-			ServerIP: s.config.DHCPConfig.ServerIP,
-			HTTPPort: s.config.HTTPPort,
-			Role:     entry.Role,
-			Hostname: entry.Hostname,
-		}
-		if err := deviceBootScriptTmpl.Execute(w, data); err != nil {
-			s.logger.Error("failed to execute device boot script template",
-				slog.String("error", err.Error()))
-		}
+	info, err := s.deviceBootInfo(mac)
+	var script string
+	switch {
+	case errors.Is(err, ipxe.ErrDeviceNotFound):
+		s.logger.Info("serving the default chain for an unknown device", slog.String("mac", mac))
+		script = "#!ipxe\nchain " + serverBaseURL(s.config) + "/boot.ipxe\n"
+	case err != nil:
+		s.logger.Error("device boot script", slog.String("mac", mac), slog.String("error", err.Error()))
+		http.Error(w, "device lookup failed", http.StatusInternalServerError)
 		return
+	default:
+		s.logger.Info("serving device boot script", slog.String("mac", mac), slog.String("hostname", info.Hostname))
+		script = s.scriptGen.GenerateScript(info)
 	}
-
-	s.logger.Info("serving default boot script for unknown device",
-		slog.String("mac", mac))
-
-	data := defaultScriptData{
-		ServerIP: s.config.DHCPConfig.ServerIP,
-		HTTPPort: s.config.HTTPPort,
-	}
-	if err := defaultBootScriptTmpl.Execute(w, data); err != nil {
-		s.logger.Error("failed to execute default boot script template",
-			slog.String("error", err.Error()))
+	// #nosec G705 -- not an HTML sink. The body is an iPXE script served as
+	// text/plain with nosniff, so no browser renders it as a document. The
+	// only request-derived input is the MAC, which extractMACFromPath accepts
+	// solely as a parsed 48-bit address in canonical form; the script itself
+	// is rendered from the manifest entry that MAC selects.
+	if _, err := w.Write([]byte(script)); err != nil {
+		s.logger.Warn("writing device boot script", slog.String("error", err.Error()))
 	}
 }
 
 // extractMACFromPath extracts the MAC address from a URL path like
-// /boot/device/aa:bb:cc:dd:ee:ff.ipxe or /boot/device/aa-bb-cc-dd-ee-ff.ipxe.
+// /boot/device/aa:bb:cc:dd:ee:ff.ipxe or /boot/device/aa-bb-cc-dd-ee-ff.ipxe
+// and returns it in canonical lower-case colon form. Anything that is not a
+// 48-bit MAC returns "", so no request-supplied text reaches a lookup, a log
+// line or the served script.
 func extractMACFromPath(path string) string {
-	// Strip prefix /boot/device/
-	path = strings.TrimPrefix(path, "/boot/device/")
-	// Strip suffix .ipxe
-	path = strings.TrimSuffix(path, ".ipxe")
-	// Normalize dashes to colons
-	path = strings.ReplaceAll(path, "-", ":")
-	if path == "" {
+	path = strings.TrimSuffix(strings.TrimPrefix(path, "/boot/device/"), ".ipxe")
+	hw, err := net.ParseMAC(path)
+	if err != nil || len(hw) != 6 {
 		return ""
 	}
-	return path
+	return hw.String()
 }

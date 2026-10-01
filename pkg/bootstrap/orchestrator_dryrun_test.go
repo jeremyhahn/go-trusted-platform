@@ -31,8 +31,8 @@ import (
 func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{
-			Host:   "198.51.100.91",
-			Target: "linux",
+			Host:            "198.51.100.91",
+			NetbootMediaDir: fleetMedia,
 		},
 		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
@@ -103,9 +103,6 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 	if result.DeployerHost != "198.51.100.91" {
 		t.Errorf("expected deployer host 198.51.100.91, got %s", result.DeployerHost)
 	}
-	if result.DeployerTarget != "linux" {
-		t.Errorf("expected deployer target linux, got %s", result.DeployerTarget)
-	}
 	if result.SwitchConfigured {
 		t.Error("switch should not be configured")
 	}
@@ -148,7 +145,7 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 
 func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
@@ -243,7 +240,7 @@ func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 
 func TestOrchestrator_DryRun_BMCFactoryError(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
@@ -293,7 +290,7 @@ func TestOrchestrator_DryRun_BMCFactoryError(t *testing.T) {
 
 func TestOrchestrator_DryRun_ManualNodes(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
@@ -353,7 +350,7 @@ func TestOrchestrator_DryRun_ManualNodes(t *testing.T) {
 
 func TestOrchestrator_DryRun_NoNodes(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
@@ -394,7 +391,7 @@ func TestOrchestrator_DryRun_NoNodes(t *testing.T) {
 
 func TestOrchestrator_DryRun_WithSwitch(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host", Target: "docker"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
@@ -452,7 +449,7 @@ func TestOrchestrator_DryRun_WithSwitch(t *testing.T) {
 
 func TestOrchestrator_DryRun_MixedNodes(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
@@ -655,7 +652,7 @@ network:
 	}
 
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain:     "prod.example.com",
@@ -757,7 +754,7 @@ os:
 	}
 
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{Domain: "prod.example.com"},
 		Templates: map[string]string{
@@ -803,7 +800,7 @@ func TestOrchestrator_DryRun_ResolveConfigMissingTemplate(t *testing.T) {
 	missingPath := filepath.Join(templateDir, "nonexistent.yaml")
 
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
@@ -856,7 +853,7 @@ func TestOrchestrator_DryRun_ResolveConfigMissingTemplate(t *testing.T) {
 
 func TestOrchestrator_DryRun_ResolveConfigNoTemplateForRole(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
@@ -910,7 +907,7 @@ func TestOrchestrator_DryRun_ResolveConfigNoTemplateForRole(t *testing.T) {
 
 func TestOrchestrator_DryRun_SwitchPlan(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host", Target: "docker"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",

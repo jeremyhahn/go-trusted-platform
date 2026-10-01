@@ -20,7 +20,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1582,12 +1581,11 @@ func generateOSRelease(config *OSConfig) string {
 // in the authenticode signer every signing and verifying step shares: the
 // UKI, the kernel embedded in it, and the enforcement brick guard.
 func (i *installer) newAuthenticodeSigner(ctx context.Context, key crypto.PrivateKey, cert *x509.Certificate) (authenticode.Authenticode, error) {
-	signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
-		KeyStore:      &secureBootKeyBackend{privateKey: key, logger: i.logger},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
-		Certificate:   cert,
-		Logger:        i.logger,
-	})
+	keySigner, ok := key.(crypto.Signer)
+	if !ok {
+		return nil, &MessageError{Msg: fmt.Sprintf("secure boot DB key %T cannot sign", key)}
+	}
+	signer, err := authenticode.NewCryptoSigner(ctx, keySigner, cert, i.logger)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to create authenticode signer", Err: err}
 	}
@@ -1729,15 +1727,10 @@ func (i *installer) enforceSecureBoot(ctx context.Context, diskInfo *DiskInfo) e
 		return nil
 	}
 
-	// Step 3: BRICK GUARD. Build an Authenticode verifier from the resolved DB
-	// key (the same keystore backend signUKI uses) and confirm the signed UKI
-	// verifies against dbCert. If it does not, enrolling PK would produce a node
-	// the firmware refuses to boot, so skip enforcement.
-	verifier, err := i.newAuthenticodeSigner(ctx, signingKey, dbCert)
-	if err != nil {
-		i.logger.Warn("[SECUREBOOT] could not build UKI verifier — skipping Secure Boot enforcement", "error", err)
-		return nil
-	}
+	// Step 3: BRICK GUARD. Confirm the signed UKI verifies and was signed by
+	// exactly dbCert (verification needs no key). If it was not, enrolling PK
+	// would produce a node the firmware refuses to boot, so skip enforcement.
+	verifier := authenticode.NewVerifier(ctx, i.logger)
 	ukiPath := filepath.Join(targetMountPoint, "boot", "efi", "EFI", "BOOT", i.ukiFileName())
 	if vErr := uefi.VerifySignedUKI(verifier, ukiPath, dbCert, i.logger); vErr != nil {
 		i.logger.Warn("[SECUREBOOT] signed UKI did not verify; skipping Secure Boot enforcement to avoid an unbootable node",
@@ -1809,9 +1802,9 @@ func (i *installer) resolveSecureBootEnrollCerts() (*x509.Certificate, *x509.Cer
 // is configured, otherwise from dir/filename (where GenerateAll wrote it).
 func (i *installer) resolveEnrollCert(certURI, dir, filename string) (*x509.Certificate, error) {
 	if p := fileURIPath(certURI); p != "" {
-		return parsePEMCertificate(p)
+		return authenticode.LoadCertificate(p)
 	}
-	return parsePEMCertificate(filepath.Join(dir, filename))
+	return authenticode.LoadCertificate(filepath.Join(dir, filename))
 }
 
 // secureBootKeysDir returns the directory that holds the PK/KEK/DB certificates,
@@ -1842,12 +1835,10 @@ func fileURIPath(uri string) string {
 }
 
 // remoteSignerResolver constructs the remote Secure Boot DB signer + its
-// public certificate for ResignMode=="remote" via KMS hash-signing (see
-// secureboot.NewRemoteSigner). It is the install-time seam for branch (b) of
-// resolveSecureBootSigner: at install the SDK client is normally absent so the
-// installer's resolveRemoteSigner field is nil and the branch is skipped
-// (Phase 2 EK-bootstrap delivers the key instead); the Phase 5a kernel-update
-// path and tests populate it.
+// public certificate for ResignMode=="remote". It is the install-time seam for
+// branch (b) of resolveSecureBootSigner, wired by NewInstaller to the
+// control-plane signing client (remote_sign_client.go, /provisioning/sign) when
+// a provisioning context is supplied.
 type remoteSignerResolver func(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, *x509.Certificate, error)
 
 // resolveSecureBootSigner returns the DB signing key + certificate used to sign
@@ -1858,11 +1849,10 @@ type remoteSignerResolver func(ctx context.Context, attrs *xkmssdk.KeyAttributes
 //	    (subsumes the legacy install-media loader, which now runs only as the
 //	    back-compat path when DB.KeyURI is empty).
 //	(b) ResignMode == "remote" AND a remote signer is constructible
-//	    -> remote KMS hash-signing (see secureboot.NewRemoteSigner): the private
-//	    key stays in the KMS and only the digest is round-tripped. At install the
-//	    SDK client is normally absent (i.resolveRemoteSigner == nil) so this
-//	    branch is skipped and Phase 2 EK-bootstrap delivers the key; the Phase 5a
-//	    kernel-update path and tests populate the seam.
+//	    -> remote KMS hash-signing through the control plane
+//	    (remote_sign_client.go): the private key stays in the KMS and only the
+//	    digest is round-tripped. Without a provisioning context
+//	    (i.resolveRemoteSigner == nil) this branch is skipped.
 //	(c) otherwise (standalone / "local" / no URI) -> GENERATE the DB keypair on
 //	    the node via the configured go-xkms backend. This is the legitimate
 //	    standalone generator; the private key is created locally and never
@@ -1942,43 +1932,12 @@ func (i *installer) loadISOSecureBootKeys() (crypto.PrivateKey, *x509.Certificat
 		return nil, nil
 	}
 
-	keyPEM, err := os.ReadFile(keyPath)
+	signer, cert, err := authenticode.LoadSigningPair(keyPath, certPath)
 	if err != nil {
-		i.logger.Warn("[SECUREBOOT] Failed to read install-media Secure Boot key", "path", keyPath, "error", err)
+		i.logger.Warn("[SECUREBOOT] Install-media Secure Boot DB pair is unusable", "key", keyPath, "cert", certPath, "error", err)
 		return nil, nil
 	}
-	keyBlock, _ := pem.Decode(keyPEM)
-	if keyBlock == nil {
-		i.logger.Warn("[SECUREBOOT] Failed to decode install-media Secure Boot key PEM", "path", keyPath)
-		return nil, nil
-	}
-	var privateKey crypto.PrivateKey
-	if keyBlock.Type == "RSA PRIVATE KEY" {
-		privateKey, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
-	} else {
-		privateKey, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
-	}
-	if err != nil {
-		i.logger.Warn("[SECUREBOOT] Failed to parse install-media Secure Boot key", "path", keyPath, "type", keyBlock.Type, "error", err)
-		return nil, nil
-	}
-
-	certPEM, err := os.ReadFile(certPath)
-	if err != nil {
-		i.logger.Warn("[SECUREBOOT] Failed to read install-media Secure Boot cert", "path", certPath, "error", err)
-		return nil, nil
-	}
-	certBlock, _ := pem.Decode(certPEM)
-	if certBlock == nil {
-		i.logger.Warn("[SECUREBOOT] Failed to decode install-media Secure Boot cert PEM", "path", certPath)
-		return nil, nil
-	}
-	cert, err := x509.ParseCertificate(certBlock.Bytes)
-	if err != nil {
-		i.logger.Warn("[SECUREBOOT] Failed to parse install-media Secure Boot cert", "path", certPath, "error", err)
-		return nil, nil
-	}
-	return privateKey, cert
+	return signer, cert
 }
 
 // generateSecureBootKey generates the Secure Boot DB keypair on the node via
@@ -2054,167 +2013,11 @@ func generateSecureBootSigner(ctx context.Context, logger *logging.Logger, backe
 	// that km.Close() tears down before the caller signs the UKI. The exported
 	// DB.key is a standalone private key independent of the manager.
 	paths := km.GetKeyPaths()
-	privateKey, err := parsePEMPrivateKey(paths.DBKey)
+	signer, cert, err := authenticode.LoadSigningPair(paths.DBKey, paths.DBCert)
 	if err != nil {
-		return nil, nil, ErrSecureBoot("read secure boot DB key", err)
-	}
-	cert, err := parsePEMCertificate(paths.DBCert)
-	if err != nil {
-		return nil, nil, ErrSecureBoot("read secure boot DB cert", err)
-	}
-	return privateKey, cert, nil
-}
-
-// ValidateSecureBootSigningPair verifies that keyPath and certPath hold
-// exactly the material the installer's file:// signing path
-// (loadFileURISecureBootSigner) will accept at install time: a parseable
-// PEM private key, a parseable certificate, and matching public keys. The
-// ISO build's staging gate calls this so a build can never succeed with
-// signing material the target then rejects — a malformed or mismatched
-// pair would otherwise surface only as a failed UKI sign or verify on the
-// node (#50, round-11 review).
-func ValidateSecureBootSigningPair(keyPath, certPath string) error {
-	_, _, err := LoadSecureBootSigningPair(keyPath, certPath)
-	return err
-}
-
-// LoadSecureBootSigningPair parses and validates the DB signing pair at
-// keyPath/certPath and returns it ready for use.
-//
-// ValidateSecureBootSigningPair is this function with the values discarded,
-// so a caller that needs the material and a caller that only needs the
-// verdict cannot disagree about what "usable" means.
-func LoadSecureBootSigningPair(keyPath, certPath string) (crypto.Signer, *x509.Certificate, error) {
-	key, err := parsePEMPrivateKey(keyPath)
-	if err != nil {
-		return nil, nil, ErrSecureBoot("parse secure boot DB key", err)
-	}
-	cert, err := parsePEMCertificate(certPath)
-	if err != nil {
-		return nil, nil, ErrSecureBoot("parse secure boot DB cert", err)
-	}
-	signer, ok := key.(crypto.Signer)
-	if !ok {
-		return nil, nil, ErrSecureBoot("secure boot DB key type", &MessageError{Msg: fmt.Sprintf("%T cannot sign", key)})
-	}
-	pub, ok := signer.Public().(interface{ Equal(crypto.PublicKey) bool })
-	if !ok || !pub.Equal(cert.PublicKey) {
-		return nil, nil, ErrSecureBoot("secure boot DB pair", &MessageError{
-			Msg: "certificate public key does not match the private key"})
+		return nil, nil, ErrSecureBoot("read secure boot DB pair", err)
 	}
 	return signer, cert, nil
-}
-
-// NewSecureBootFileSigner returns an authenticode signer for the DB pair at
-// keyPath/certPath, for callers that need to sign a PE binary on disk.
-//
-// The key parsing, the usability check and the KeyStore shim all live here so
-// there is one implementation of "sign a PE with the platform's DB key" rather
-// than one per package that needs it.
-func NewSecureBootFileSigner(ctx context.Context, keyPath, certPath string, logger *logging.Logger) (authenticode.Authenticode, error) {
-	signingKey, cert, err := LoadSecureBootSigningPair(keyPath, certPath)
-	if err != nil {
-		return nil, err
-	}
-	return authenticode.NewSigner(ctx, &authenticode.SignerOptions{
-		KeyStore:      &secureBootKeyBackend{privateKey: signingKey, logger: logger},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-}
-
-// parsePEMPrivateKey reads a PEM private key file (PKCS#1 or PKCS#8).
-func parsePEMPrivateKey(path string) (crypto.PrivateKey, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return nil, &MessageError{Msg: fmt.Sprintf("failed to decode private key PEM at %s", path)}
-	}
-	if block.Type == "RSA PRIVATE KEY" {
-		return x509.ParsePKCS1PrivateKey(block.Bytes)
-	}
-	return x509.ParsePKCS8PrivateKey(block.Bytes)
-}
-
-// parsePEMCertificate reads an X.509 certificate file, PEM or raw DER. The
-// ISO build's enforcement gate stages any artifact that positively parses
-// as certificate material (PEM or DER), so the installer must accept both —
-// a DER PK/KEK cert that passed the build but failed here would make
-// enforceSecureBoot warn-and-skip, shipping a node with enforce requested
-// and no enforcement (#50, round-10 review).
-func parsePEMCertificate(path string) (*x509.Certificate, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if block, _ := pem.Decode(data); block != nil {
-		return x509.ParseCertificate(block.Bytes)
-	}
-	cert, derErr := x509.ParseCertificate(data)
-	if derErr != nil {
-		return nil, &MessageError{Msg: fmt.Sprintf("failed to decode certificate (PEM or DER) at %s: %v", path, derErr)}
-	}
-	return cert, nil
-}
-
-// secureBootKeyBackend is a minimal Backend implementation for Secure Boot signing
-type secureBootKeyBackend struct {
-	privateKey crypto.PrivateKey
-	logger     *logging.Logger
-}
-
-func (b *secureBootKeyBackend) Type() xkmssdk.BackendType {
-	return "secure-boot"
-}
-
-func (b *secureBootKeyBackend) Capabilities() xkmssdk.Capabilities {
-	return xkmssdk.Capabilities{
-		Keys:           true,
-		HardwareBacked: false,
-		Signing:        true,
-		Decryption:     false,
-		KeyRotation:    false,
-	}
-}
-
-func (b *secureBootKeyBackend) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
-	signer, ok := b.privateKey.(crypto.Signer)
-	if !ok {
-		return nil, &MessageError{Msg: "private key does not implement crypto.Signer"}
-	}
-	return signer, nil
-}
-
-func (b *secureBootKeyBackend) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
-	return nil, &MessageError{Msg: "not implemented"}
-}
-
-func (b *secureBootKeyBackend) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
-	return b.privateKey, nil
-}
-
-func (b *secureBootKeyBackend) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return &MessageError{Msg: "not implemented"}
-}
-
-func (b *secureBootKeyBackend) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttributes, error) {
-	return nil, nil
-}
-
-func (b *secureBootKeyBackend) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
-	return nil, &MessageError{Msg: "not implemented"}
-}
-
-func (b *secureBootKeyBackend) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return &MessageError{Msg: "not implemented"}
-}
-
-func (b *secureBootKeyBackend) Close() error {
-	return nil
 }
 
 // InstallerPassword is a well-known password for the installer container.

@@ -70,7 +70,6 @@ Create `bootstrap.yaml`. The shape, trimmed to the parts you must get right:
 
 ```yaml
 deployer:
-  target: linux
   host: deploy.example.com
   user: operator
   ssh_key: ~/.ssh/id_ed25519

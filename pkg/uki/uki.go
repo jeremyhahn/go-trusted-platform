@@ -167,6 +167,12 @@ func (g *gzipKernel) Close() error {
 	return fileErr
 }
 
+// OpenKernel opens a kernel image for reading as the firmware would load
+// it: a gzip-compressed vmlinuz (Alpine's aarch64 kernels) is transparently
+// decompressed, an uncompressed PE image is returned as is. The caller
+// closes the reader.
+func OpenKernel(path string) (io.ReadCloser, error) { return openKernel(path) }
+
 // openKernel opens a kernel image, wrapping it in a gzip reader when the
 // file starts with the gzip magic.
 func openKernel(path string) (io.ReadCloser, error) {

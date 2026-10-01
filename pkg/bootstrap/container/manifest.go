@@ -18,19 +18,27 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 )
 
-// Manifest maps MAC addresses to node roles and config paths.
+// Manifest maps MAC addresses to node roles, hostnames and the media set
+// each node boots.
 type Manifest struct {
 	Nodes []ManifestEntry `yaml:"nodes" json:"nodes"`
 }
 
 // ManifestEntry describes a single node in the manifest.
 type ManifestEntry struct {
-	MAC        string `yaml:"mac" json:"mac"`
-	Role       string `yaml:"role" json:"role"`
-	Hostname   string `yaml:"hostname" json:"hostname"`
-	ConfigPath string `yaml:"config_path,omitempty" json:"config_path,omitempty"`
+	MAC      string `yaml:"mac" json:"mac"`
+	Role     string `yaml:"role" json:"role"`
+	Hostname string `yaml:"hostname" json:"hostname"`
+	// Architecture is the node's iPXE ${buildarch} (x86_64, arm64); empty
+	// for x86_64.
+	Architecture string `yaml:"architecture,omitempty" json:"architecture,omitempty"`
+	// MediaSet names the set the node boots; empty means its
+	// architecture's default.
+	MediaSet string `yaml:"media_set,omitempty" json:"media_set,omitempty"`
 }
 
 // DiscoveredNodeInfo holds the minimal fields needed to build manifest
@@ -38,9 +46,11 @@ type ManifestEntry struct {
 // the BIOS chooses one at PXE boot time, so all of them are passed to the
 // manifest builder. This avoids importing the parent bootstrap package.
 type DiscoveredNodeInfo struct {
-	MACs     []string
-	Role     string
-	Hostname string
+	MACs         []string
+	Role         string
+	Hostname     string
+	Architecture string
+	MediaSet     string
 }
 
 // BuildManifest creates a manifest from discovered node info. One entry is
@@ -55,9 +65,11 @@ func BuildManifest(nodes []DiscoveredNodeInfo) *Manifest {
 				continue
 			}
 			entries = append(entries, ManifestEntry{
-				MAC:      strings.ToLower(mac),
-				Role:     node.Role,
-				Hostname: node.Hostname,
+				MAC:          strings.ToLower(mac),
+				Role:         node.Role,
+				Hostname:     node.Hostname,
+				Architecture: node.Architecture,
+				MediaSet:     node.MediaSet,
 			})
 		}
 	}
@@ -101,4 +113,27 @@ func LoadManifest(path string) (*Manifest, error) {
 		return nil, ErrManifestParse{Path: path, Cause: err}
 	}
 	return &manifest, nil
+}
+
+// checkMediaSets verifies every entry can be served: a named set exists,
+// or its architecture has a default. Caught at start, not when the node
+// boots.
+func (m *Manifest) checkMediaSets(sets, defaults map[string]MediaSet) error {
+	for i := range m.Nodes {
+		e := &m.Nodes[i]
+		if e.MediaSet != "" {
+			if _, ok := sets[e.MediaSet]; !ok {
+				return ErrUnknownMediaSet{MAC: e.MAC, MediaSet: e.MediaSet}
+			}
+			continue
+		}
+		arch := e.Architecture
+		if arch == "" {
+			arch = ipxe.ArchitectureX86_64
+		}
+		if _, ok := defaults[arch]; !ok {
+			return ErrUnknownMediaSet{MAC: e.MAC, Architecture: arch}
+		}
+	}
+	return nil
 }

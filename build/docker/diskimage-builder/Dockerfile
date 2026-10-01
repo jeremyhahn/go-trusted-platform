@@ -12,6 +12,11 @@
 # It never receives private keys (the Secure Boot DB key travels on the
 # media exactly as it does on the ISO).
 #
+# It also runs `diskimage netboot-initfs` for a netboot media set on a
+# platform-built kernel: mkinitfs (Alpine's netboot features) and mksquashfs
+# (the modloop), under the target architecture, which the kernel builder's
+# cross-compiling container cannot.
+#
 # The platform binaries are not in this image: the media carries the
 # target-architecture platformctl-static, which is what runs here.
 FROM alpine:3.22
@@ -30,8 +35,10 @@ RUN apk add --no-cache \
     gzip \
     kmod \
     lvm2 \
+    mkinitfs \
     parted \
     tar \
+    squashfs-tools \
     util-linux \
     xz
 

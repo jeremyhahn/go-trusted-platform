@@ -53,9 +53,7 @@ type DryRunResult struct {
 	SwitchConfigured  bool               `json:"switch_configured" yaml:"switch_configured"`
 	SwitchVendor      string             `json:"switch_vendor,omitempty" yaml:"switch_vendor,omitempty"`
 	SwitchPlan        *SwitchPlan        `json:"switch_plan,omitempty" yaml:"switch_plan,omitempty"`
-	DeployerTarget    string             `json:"deployer_target" yaml:"deployer_target"`
 	DeployerHost      string             `json:"deployer_host" yaml:"deployer_host"`
-	CiscoCommands     string             `json:"cisco_commands,omitempty" yaml:"cisco_commands,omitempty"`
 	Nodes             []DryRunNodeResult `json:"nodes" yaml:"nodes"`
 	Errors            []string           `json:"errors,omitempty" yaml:"errors,omitempty"`
 	Warnings          []string           `json:"warnings,omitempty" yaml:"warnings,omitempty"`
@@ -117,8 +115,7 @@ func (o *Orchestrator) DryRun(ctx context.Context) (*DryRunResult, error) {
 	start := time.Now()
 
 	result := &DryRunResult{
-		DeployerTarget: o.config.Deployer.Target,
-		DeployerHost:   o.config.Deployer.Host,
+		DeployerHost: o.config.Deployer.Host,
 	}
 
 	// Validate config.
@@ -214,6 +211,42 @@ func (o *Orchestrator) buildSwitchPlan() *SwitchPlan {
 		})
 	}
 	return plan
+}
+
+// ResolvedNodeConfig is one node's platform config as bootstrap writes it:
+// its role template merged with the platform identity, the node's
+// overrides and its node identity.
+type ResolvedNodeConfig struct {
+	Hostname string
+	Role     string
+	Config   string
+}
+
+// ResolveNodeConfigs resolves the platform config of every node in the
+// bootstrap config, or of the named hosts only, in config order. Nothing is
+// contacted: the hardware keys a real run reads from each node's BMC are
+// absent, so the result is the config as the deployment defines it.
+func (o *Orchestrator) ResolveNodeConfigs(hostnames ...string) ([]ResolvedNodeConfig, error) {
+	wanted := make(map[string]bool, len(hostnames))
+	for _, h := range hostnames {
+		wanted[h] = true
+	}
+	var resolved []ResolvedNodeConfig
+	for _, n := range o.config.Nodes {
+		if len(wanted) > 0 && !wanted[n.Hostname] {
+			continue
+		}
+		delete(wanted, n.Hostname)
+		cfg, err := o.resolveNodeConfig(n.Hostname, n.Role, nil)
+		if err != nil {
+			return nil, ErrNodeConfigResolveFailed{Hostname: n.Hostname, Cause: err}
+		}
+		resolved = append(resolved, ResolvedNodeConfig{Hostname: n.Hostname, Role: n.Role, Config: cfg})
+	}
+	for h := range wanted {
+		return nil, ErrUnknownNode{Hostname: h}
+	}
+	return resolved, nil
 }
 
 // resolveNodeConfig loads the template for the given role, applies per-node
@@ -765,8 +798,7 @@ func (o *Orchestrator) logExecutionPlan(result *DryRunResult) {
 
 	o.logger.Info("bootstrap: dry-run: execution plan",
 		slog.String("phase_2", "deploy bootstrap container"),
-		slog.String("host", result.DeployerHost),
-		slog.String("target", result.DeployerTarget))
+		slog.String("host", result.DeployerHost))
 
 	o.logger.Info("bootstrap: dry-run: execution plan",
 		slog.String("phase_3", "PXE boot control-plane nodes"),

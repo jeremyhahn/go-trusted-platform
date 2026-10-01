@@ -122,6 +122,9 @@ func NewSigner(ctx context.Context, opts *SignerOptions) (Authenticode, error) {
 // This implementation properly supports hardware-backed keys (TPM, PKCS#11, etc.)
 // by signing the authenticated attributes digest rather than the PE digest directly.
 func (s *Signer) Sign(input io.Reader, output io.Writer) error {
+	if s.keystore == nil {
+		return ErrNoSigningKey
+	}
 	s.logger.Info("[AUTHENTICODE] Starting Authenticode signing")
 
 	// Read the entire PE file
@@ -600,7 +603,27 @@ func SigningTime(input io.Reader) (time.Time, error) {
 	return extractSigningTime(signature)
 }
 
-// Public returns the public key associated with this signer
+// Public returns the public key associated with this signer; nil for a
+// verifier, which has no key.
 func (s *Signer) Public() crypto.PublicKey {
+	if s.cert == nil {
+		return nil
+	}
 	return s.cert.PublicKey
+}
+
+// ErrNoSigningKey is returned by Sign on a verifier (NewVerifier), which
+// holds no key.
+var ErrNoSigningKey = &MessageError{Msg: "authenticode: a verifier has no signing key"}
+
+// NewVerifier returns an Authenticode that verifies and inspects signatures
+// and needs no key: verification checks a PE's signature against the
+// certificate embedded in it. A caller that must know WHO signed compares
+// ExtractCertificate with the certificate it expects. Sign refuses with
+// ErrNoSigningKey.
+func NewVerifier(ctx context.Context, logger *logging.Logger) Authenticode {
+	if logger == nil {
+		logger = logging.DefaultLogger()
+	}
+	return &Signer{ctx: ctx, logger: logger}
 }

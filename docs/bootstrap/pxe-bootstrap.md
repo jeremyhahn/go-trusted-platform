@@ -122,9 +122,10 @@ For each node with `bmc_enroll: true`:
 warning and recorded in the result, but does NOT abort the remaining
 phases. The orchestrator continues to Phase 6 (Watch) and teardown.
 
-**Backup writing**: When `backups_dir` is set in the top-level bootstrap
-config, successful enrollment artifacts are written to
-`<backups_dir>/<hostname>/bmc/`:
+**Backup writing**: successful enrollment artifacts are written to
+`<backups_dir>/<hostname>/bmc/` — `backups_dir` from the top-level bootstrap
+config, `backups/` beside `bootstrap.yaml` when unset
+([config-reference.md](config-reference.md#backups-directory)):
 
 | File | Mode | Contents |
 |------|------|----------|
@@ -132,13 +133,13 @@ config, successful enrollment artifacts are written to
 | `factory-cert.json` | 0600 | Certificate metadata JSON |
 | `enrollment.json` | 0600 | Full enrollment response JSON |
 
-The backup directory itself is created with mode 0700. If `backups_dir`
-is empty, backup writing is silently skipped.
+The backup directory itself is created with mode 0700. Backup writing is
+skipped, with a warning, only when the directory cannot be resolved.
 
 Example configuration enabling BMC enrollment with backups:
 
 ```yaml
-backups_dir: ~/.platform/backups   # ~ is expanded to $HOME
+backups_dir: ../../backups   # relative to this bootstrap.yaml; ~ expands to $HOME
 
 nodes:
   - hostname: cp-01

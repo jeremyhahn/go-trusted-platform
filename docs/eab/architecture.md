@@ -103,9 +103,12 @@ half owned by go-xkms and re-exported per docs/00 L5.
    `eab.Service.Validate(ctx, keyID, hmacKey)`.
 4. `Validate` looks the credential up by KeyID, constant-time compares the HMAC
    key, and rejects revoked/expired/used credentials.
-5. On success the platform resolves and returns the device's configuration; the
-   same path guards `POST /api/v1/provisioning/sign` (remote Secure Boot DB
-   digest signing).
+5. The platform resolves the device's profile and requires the credential to be
+   bound to it — `ProfileID` equal, and `TenantID` equal when the profile names
+   a tenant (`configdelivery.verifyEABBinding`, `ErrEABProfileMismatch`). Only
+   then does it return the configuration; the same path guards
+   `POST /api/v1/provisioning/sign` (remote Secure Boot DB digest signing), so
+   a credential can neither fetch nor sign on another profile's behalf.
 6. After a successful enrollment the credential is retired with
    `MarkCredentialUsed`.
 

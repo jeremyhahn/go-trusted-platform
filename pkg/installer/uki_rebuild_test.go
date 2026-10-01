@@ -433,7 +433,7 @@ func TestUKIRebuild_RemoteSeam(t *testing.T) {
 	keyPath := filepath.Join(dir, "remote.key")
 	certPath := filepath.Join(dir, "remote.crt")
 	cert := writeTestKeypairPEM(t, keyPath, certPath, "remote-db")
-	rawKey, err := parsePEMPrivateKey(keyPath)
+	rawKey, err := authenticode.LoadPrivateKeyPEM(keyPath)
 	if err != nil {
 		t.Fatalf("parse remote key: %v", err)
 	}

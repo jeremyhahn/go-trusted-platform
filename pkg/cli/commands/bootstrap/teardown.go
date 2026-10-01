@@ -20,7 +20,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -32,10 +31,10 @@ func newTeardownCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "teardown",
 		Short: "Teardown bootstrap container",
-		Long: `Teardown the PXE bootstrap container on the target host.
+		Long: `Teardown the PXE bootstrap container on the deployer host.
 
 This stops and removes the bootstrap container and its data from the
-deployer target host. Use this to clean up after bootstrap completes
+deployer host. Use this to clean up after bootstrap completes
 or to reset before a re-run.
 
 Examples:
@@ -53,7 +52,8 @@ Examples:
 	return cmd
 }
 
-// runTeardown loads config and tears down the bootstrap container.
+// runTeardown tears the bootstrap container down through the orchestrator,
+// as the last phase of bootstrap run does.
 func runTeardown(configPath string, commonFlags *cli.CommonFlags) error {
 	config, err := loadAndValidateConfig(configPath)
 	if err != nil {
@@ -63,16 +63,12 @@ func runTeardown(configPath string, commonFlags *cli.CommonFlags) error {
 	verbose := commonFlags != nil && commonFlags.Verbose
 	logger := logging.NewLogger(logLevelFromVerbose(verbose), os.Stderr).Slog()
 
-	target := deployer.DeployTarget(config.Deployer.Target)
-	dep, err := deployer.NewDeployer(target, logger)
+	orch, err := createOrchestrator(config, configPath, logger)
 	if err != nil {
-		return ErrDeployerCreationFailed{Target: config.Deployer.Target, Cause: err}
+		return err
 	}
 
-	deployConfig := buildDeployConfig(config, configPath)
-
-	ctx := context.Background()
-	if err := dep.Teardown(ctx, deployConfig); err != nil {
+	if err := orch.Teardown(context.Background()); err != nil {
 		return ErrPXETeardownFailed{Cause: err}
 	}
 

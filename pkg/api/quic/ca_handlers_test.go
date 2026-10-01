@@ -2291,11 +2291,6 @@ func TestCAHandler_HandleInfo_WithNilIntermediate(t *testing.T) {
 	assert.Empty(t, infoResp.Intermediates)
 }
 
-// mockCAWithGetFailure is a mock CA where GetCertificate fails
-type mockCAWithGetFailure struct {
-	*mockCA
-}
-
 func TestCAHandler_HandleGet_WithNilCertStore(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ca := newMockCA()

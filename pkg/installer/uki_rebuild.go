@@ -18,6 +18,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -91,8 +92,8 @@ var errStopWalk = errors.New("stop walk")
 
 // RemoteSignerResolver resolves a Secure Boot DB signer plus its public
 // certificate from a remote KMS via hash-signing (the private key never leaves
-// the server). It is the exported seam the Phase 5a kernel-update CLI wires from
-// secureboot.NewRemoteSigner over the platform SDK client; resolveRebuildSigner
+// the server). It is the exported seam the kernel-update CLI wires from
+// secureboot.NewKMSSigner over the platform SDK client; resolveRebuildSigner
 // invokes it for resign-mode == remote. It carries the same shape as the
 // installer's internal remoteSignerResolver but is exported so the CLI package
 // can supply it.
@@ -107,12 +108,11 @@ type authenticodeSignerFactory func(ctx context.Context, signingKey crypto.Priva
 // defaultAuthenticodeSigner constructs the native Authenticode signer over the
 // resolved DB key, identical to the install-time signUKI path.
 func defaultAuthenticodeSigner(ctx context.Context, signingKey crypto.PrivateKey, cert *x509.Certificate, logger *logging.Logger) (authenticode.Authenticode, error) {
-	return authenticode.NewSigner(ctx, &authenticode.SignerOptions{
-		KeyStore:      &secureBootKeyBackend{privateKey: signingKey, logger: logger},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
+	signer, ok := signingKey.(crypto.Signer)
+	if !ok {
+		return nil, &MessageError{Msg: fmt.Sprintf("secure boot DB key %T cannot sign", signingKey)}
+	}
+	return authenticode.NewCryptoSigner(ctx, signer, cert, logger)
 }
 
 // UKIRebuilder rebuilds and re-signs the Unified Kernel Image on a booted node
@@ -474,13 +474,9 @@ func loadFileURISecureBootSigner(sb *SecureBootConfig) (crypto.PrivateKey, *x509
 		certPath = filepath.Join(filepath.Dir(keyPath), "DB.crt")
 	}
 
-	key, err := parsePEMPrivateKey(keyPath)
+	key, cert, err := authenticode.LoadSigningPair(keyPath, certPath)
 	if err != nil {
-		return nil, nil, ErrSecureBoot("read file:// secure boot DB key", err)
-	}
-	cert, err := parsePEMCertificate(certPath)
-	if err != nil {
-		return nil, nil, ErrSecureBoot("read file:// secure boot DB cert", err)
+		return nil, nil, ErrSecureBoot("read file:// secure boot DB pair", err)
 	}
 	return key, cert, nil
 }

@@ -31,6 +31,7 @@ import (
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -254,7 +255,7 @@ func TestResolveSecureBootSigner_Remote(t *testing.T) {
 	keyPath := filepath.Join(dir, "remote.key")
 	certPath := filepath.Join(dir, "remote.crt")
 	wantCert := writeTestKeypairPEM(t, keyPath, certPath, "remote-db")
-	rawKey, err := parsePEMPrivateKey(keyPath)
+	rawKey, err := authenticode.LoadPrivateKeyPEM(keyPath)
 	if err != nil {
 		t.Fatalf("parsePEMPrivateKey: %v", err)
 	}

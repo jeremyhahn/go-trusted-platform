@@ -23,7 +23,9 @@
 | `pkg/diskimage/qemuvirt/` | `Name`, `KernelPackage`, `New`, `Target` |
 | `pkg/diskimage/uboot/` | `Board`, `Boards`, `Manifest`, `Artifacts`, `Options`, `CacheKey`, `Build`, `ReadManifest`, `Locate`; `errors.go` |
 | `pkg/diskimage/virtkernel/` | `Manifest`, `Artifacts`, `Options`, `CacheKey`, `Build`, `ReadManifest`, `Locate`, `DefaultVersion`/`DefaultTarballSHA256`/`DefaultLocalVersion`/`DefaultFlavor`; `ManifestError`, `InputError`, `BuildError` — the stand-in's kernel builder driver |
-| `pkg/diskimage/artifacts/` | `VerifyChecksums`, `FileSHA256`, `AbsPath`; `MissingError`, `ChecksumMismatchError` — what the U-Boot and kernel outputs share |
+| `pkg/diskimage/artifacts/` | `VerifyChecksums`, `FileSHA256`, `AbsPath`, `ExtractTarGz`; `MissingError`, `ChecksumMismatchError`, `ExtractError` — what the U-Boot and kernel outputs share, and gzip-tar extraction (apks, Alpine netboot tarballs) |
+| `pkg/diskimage/netboot/` | `Stage`, `StageFromImage` (the Pi TFTP tree); `Build`, `Config`, `Set`, `RaspberryPiSet`, `Result`, `CDROMDir`/`TFTPTreeDir`/`ARM64IPXEFile` (the netboot media build, see §6); `alpine.go` (pinned Alpine netboot tarballs); `BuildError`, `PrivateKeyMaterialError`, `UnpinnedReleaseError`, `MissingFileError` |
+| `pkg/diskimage/diskimagetest/` | `WriteELF`, `Binaries`, `UBootOutput`, `VirtKernelOutput`, `PlatformConfig` — the build inputs every image-building package's tests lay out |
 | `build/docker/virt-kernel-builder/` | `Dockerfile`, `Makefile`, `build-virt-kernel.sh`, `configs/virt.config`, `README.md` |
 | `pkg/diskimage/runner/` | `Runner`, `Exec`, `CommandError` |
 | `pkg/cli/commands/diskimage/` | `NewCommand`; `create.go`, `inspect.go`, `test.go` (`test boot`, `ErrInvalidPortForward`), `assemble.go`, `merge.go`, `errors.go` |
@@ -37,7 +39,8 @@
 | `pkg/iso/types.go` | `InstallerOverrides` |
 | `build/docker/uboot-builder/` | `Dockerfile`, `Makefile`, `build-uboot.sh`, `mkesl.py`, `configs/{common-efi.config,rpi_arm64-tpm.config,qemu_arm64-tpm.config,tpm-soft-spi.dts}`, `patches/0001-mbedtls-glue-return-errno-for-parse-failures.patch`, `README.md` — every file but the README is a cache-key input |
 | `build/docker/trusted-platform/Dockerfile-alpine-swtpm-arm64` | arm64 Alpine + swtpm for the userspace suite; the platform binaries are bind-mounted from `bin/aarch64` |
-| `build/docker/diskimage-builder/Dockerfile` | the arm64 Alpine assemble container (apk-tools, parted, dosfstools, e2fsprogs, lvm2, util-linux, kmod, cpio, xz — no platform binaries, no keys) |
+| `build/docker/diskimage-builder/Dockerfile` | the arm64 Alpine assemble container (apk-tools, parted, dosfstools, e2fsprogs, lvm2, util-linux, kmod, cpio, xz, mkinitfs, squashfs-tools — no platform binaries, no keys); it also runs `diskimage netboot-initfs` |
+| `pkg/diskimage/netboot_initfs.go` | `GenerateNetbootInitfs` (in-container), `StagedMedia.BuildNetbootInitfs` (host side), `NetbootInitfsOptions`, `NetbootInitfs`, `NetbootInitfsFeatures` |
 
 ## 2. Exported surface
 
@@ -260,6 +263,47 @@ must hold `PK.crt`, `KEK.crt`, `DB.crt`), `UBOOT_OUTPUT_DIR`, `DISKIMAGE_TARGET`
 - The image: [architecture.md §2](architecture.md#the-image); the ESP is the
   installer's 538 MB default, the root takes the rest. No compatibility
   promise covers the media or U-Boot output layouts.
+
+**Netboot media build** (`netboot.Build`, the container contract
+`container.NetbootMedia`): the same media, staged once per media set and
+served by the bootstrap container instead of written to a card.
+
+- `media/<set>/cdrom/` — the set's install media (`diskimage.StageMedia` for
+  its target, moved into place); `payload.list` over every file of it;
+  `vmlinuz-<flavour>` (db-signed with the build's DB key — the KMS-held key
+  for `kms://` references — when Secure Boot is on), `initramfs-<flavour>`,
+  `modloop-<flavour>`: from the pinned Alpine netboot tarball for a target
+  on a packaged kernel (the Pi set, Alpine's `rpi` flavour); for a target on
+  a platform-built kernel (the virt set) that kernel, with the initramfs and
+  modloop `diskimage netboot-initfs` generates for it in the arm64 builder
+  container; `media-set.yaml`. A set with no diskimage target — `X86_64Set`,
+  x86_64's default — stages the installer media alone
+  (`iso.StageInstallMedia` with the x86 binaries: no U-Boot, no boot
+  firmware, the machine's own UEFI) and boots Alpine's `lts` flavour.
+  `DefaultSets` = `X86_64Set` + `RaspberryPiSet` + `ARM64VirtSet`.
+- Every set's `initramfs-<flavour>` is rewritten as the installer's
+  (`iso.InstallMedia.InstallerInitramfs` → `Customizer.InstallerInitramfs`):
+  the autoinstall overlay generated from the set's own media configuration,
+  Alpine's `/init` patched to install it on `alpine_start=autoinstall` and to
+  DHCP on every carrier-up NIC — the same `makeInstallerInitramfs` step the
+  ISO's initramfs gets. A netboot initramfs already has the NIC drivers and
+  udhcpc's script, so nothing else is added. An `/init` the patches cannot
+  anchor to fails the build; the release's live initramfs is never served.
+  The repack is zstd, root-owned.
+- `rpi-tftp/` (the Pi set: `Stage` from the set's own packages and U-Boot)
+  and `firmware/snponly-aarch64.efi` (the ipxe-builder's arm64 iPXE, verified
+  against its `SHA256SUMS`, then db-signed).
+- `netboot-media.yaml`, `SHA256SUMS` (relative paths, `sha256sum -c`
+  format). `Build` loads the result back through `LoadNetbootMedia` and
+  `LoadMediaSets`, so a build the container would refuse fails the build.
+- A set is served over HTTP, so it is staged `NetworkServed`: only
+  positively public Secure Boot artifacts, no key generation, and a config
+  that would sign with media-staged keys is refused — the DB key belongs in
+  the KMS (`resign-mode: remote`). `refusePrivateKeys` checks the result
+  again (`PrivateKeyMaterialError`).
+- Alpine tarballs are cached under `CacheDir` (default
+  `<output>.cache/alpine`) and verified against the digests pinned in
+  `alpine.go`; an unpinned Alpine release is an `UnpinnedReleaseError`.
 
 ## 7. Test strategy
 

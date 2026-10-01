@@ -35,7 +35,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode/authenticodetest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -289,9 +289,9 @@ func TestRunSignDecodeCertFailure(t *testing.T) {
 	err = runSign(context.Background(), flags, keyPath, certPath, "/some/input", "/some/output")
 
 	require.Error(t, err)
-	var decodeCertErr ErrDecodeCertificateFailed
-	require.ErrorAs(t, err, &decodeCertErr)
-	assert.Equal(t, certPath, decodeCertErr.Path)
+	// Neither PEM nor DER: a parse failure (the loader accepts both encodings).
+	var parseCertErr ErrParseCertificateFailed
+	require.ErrorAs(t, err, &parseCertErr)
 }
 
 // TestRunSignParseCertFailure tests runSign when certificate parsing fails
@@ -363,9 +363,9 @@ func TestRunVerifyDecodeCertFailure(t *testing.T) {
 	err = runVerify(context.Background(), flags, certPath, "/some/input")
 
 	require.Error(t, err)
-	var decodeCertErr ErrDecodeCertificateFailed
-	require.ErrorAs(t, err, &decodeCertErr)
-	assert.Equal(t, certPath, decodeCertErr.Path)
+	// Neither PEM nor DER: a parse failure (the loader accepts both encodings).
+	var parseCertErr ErrParseCertificateFailed
+	require.ErrorAs(t, err, &parseCertErr)
 }
 
 // TestRunVerifyParseCertFailure tests runVerify when certificate parsing fails
@@ -405,250 +405,9 @@ func TestRunVerifyWithNoCertificate(t *testing.T) {
 	err := runVerify(context.Background(), flags, "", "/nonexistent/input.efi")
 
 	require.Error(t, err)
-	// The authenticode.NewSigner requires a certificate, so creation fails
-	var createSignerErr ErrCreateSignerFailed
-	require.ErrorAs(t, err, &createSignerErr)
-	assert.Contains(t, createSignerErr.Reason, "certificate is required")
-}
-
-// TestCliSigningBackendType tests the cliSigningBackend Type method
-func TestCliSigningBackendType(t *testing.T) {
-	backend := &cliSigningBackend{}
-	assert.Equal(t, xkmssdk.BackendType("cli-signing"), backend.Type())
-}
-
-// TestCliSigningBackendCapabilities tests the cliSigningBackend Capabilities method
-func TestCliSigningBackendCapabilities(t *testing.T) {
-	backend := &cliSigningBackend{}
-	caps := backend.Capabilities()
-
-	assert.True(t, caps.Keys)
-	assert.False(t, caps.HardwareBacked)
-	assert.True(t, caps.Signing)
-	assert.False(t, caps.Decryption)
-	assert.False(t, caps.KeyRotation)
-}
-
-// TestCliSigningBackendSignerSuccess tests cliSigningBackend Signer with valid key
-func TestCliSigningBackendSignerSuccess(t *testing.T) {
-	// Generate key that implements crypto.Signer
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-
-	backend := &cliSigningBackend{
-		privateKey: privateKey,
-	}
-
-	signer, err := backend.Signer(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-	require.NoError(t, err)
-	require.NotNil(t, signer)
-}
-
-// TestCliSigningBackendSignerFailure tests cliSigningBackend Signer with invalid key
-func TestCliSigningBackendSignerFailure(t *testing.T) {
-	// Use a key that doesn't implement crypto.Signer
-	backend := &cliSigningBackend{
-		privateKey: &nonSignerKey{},
-	}
-
-	signer, err := backend.Signer(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-
-	require.Error(t, err)
-	var keyNotSignerErr ErrKeyNotSigner
-	require.ErrorAs(t, err, &keyNotSignerErr)
-	assert.Nil(t, signer)
-}
-
-// TestCliSigningBackendGenerateKey tests cliSigningBackend GenerateKey (not implemented)
-func TestCliSigningBackendGenerateKey(t *testing.T) {
-	backend := &cliSigningBackend{}
-
-	key, err := backend.GenerateKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-
-	require.Error(t, err)
-	var notImplErr ErrNotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-	assert.Equal(t, "GenerateKey", notImplErr.Operation)
-	assert.Nil(t, key)
-}
-
-// TestCliSigningBackendGetKey tests cliSigningBackend GetKey
-func TestCliSigningBackendGetKey(t *testing.T) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-
-	backend := &cliSigningBackend{
-		privateKey: privateKey,
-	}
-
-	key, err := backend.GetKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-	require.NoError(t, err)
-	assert.Equal(t, privateKey, key)
-}
-
-// TestCliSigningBackendDeleteKey tests cliSigningBackend DeleteKey (not implemented)
-func TestCliSigningBackendDeleteKey(t *testing.T) {
-	backend := &cliSigningBackend{}
-
-	err := backend.DeleteKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-
-	require.Error(t, err)
-	var notImplErr ErrNotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-	assert.Equal(t, "DeleteKey", notImplErr.Operation)
-}
-
-// TestCliSigningBackendListKeys tests cliSigningBackend ListKeys
-func TestCliSigningBackendListKeys(t *testing.T) {
-	backend := &cliSigningBackend{}
-
-	keys, err := backend.ListKeys(context.Background())
-	require.NoError(t, err)
-	assert.Nil(t, keys)
-}
-
-// TestCliSigningBackendDecrypter tests cliSigningBackend Decrypter (not implemented)
-func TestCliSigningBackendDecrypter(t *testing.T) {
-	backend := &cliSigningBackend{}
-
-	decrypter, err := backend.Decrypter(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-
-	require.Error(t, err)
-	var notImplErr ErrNotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-	assert.Equal(t, "Decrypter", notImplErr.Operation)
-	assert.Nil(t, decrypter)
-}
-
-// TestCliSigningBackendRotateKey tests cliSigningBackend RotateKey (not implemented)
-func TestCliSigningBackendRotateKey(t *testing.T) {
-	backend := &cliSigningBackend{}
-
-	err := backend.RotateKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-
-	require.Error(t, err)
-	var notImplErr ErrNotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-	assert.Equal(t, "RotateKey", notImplErr.Operation)
-}
-
-// TestCliSigningBackendClose tests cliSigningBackend Close
-func TestCliSigningBackendClose(t *testing.T) {
-	backend := &cliSigningBackend{}
-
-	err := backend.Close()
-	require.NoError(t, err)
-}
-
-// TestCliVerifyBackendType tests the cliVerifyBackend Type method
-func TestCliVerifyBackendType(t *testing.T) {
-	backend := &cliVerifyBackend{}
-	assert.Equal(t, xkmssdk.BackendType("verify"), backend.Type())
-}
-
-// TestCliVerifyBackendCapabilities tests the cliVerifyBackend Capabilities method
-func TestCliVerifyBackendCapabilities(t *testing.T) {
-	backend := &cliVerifyBackend{}
-	caps := backend.Capabilities()
-
-	assert.False(t, caps.Keys)
-	assert.False(t, caps.HardwareBacked)
-	assert.False(t, caps.Signing)
-	assert.False(t, caps.Decryption)
-	assert.False(t, caps.KeyRotation)
-}
-
-// TestCliVerifyBackendSigner tests cliVerifyBackend Signer (not implemented)
-func TestCliVerifyBackendSigner(t *testing.T) {
-	backend := &cliVerifyBackend{}
-
-	signer, err := backend.Signer(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-
-	require.Error(t, err)
-	var notImplErr ErrNotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-	assert.Contains(t, notImplErr.Operation, "Signer")
-	assert.Nil(t, signer)
-}
-
-// TestCliVerifyBackendGenerateKey tests cliVerifyBackend GenerateKey (not implemented)
-func TestCliVerifyBackendGenerateKey(t *testing.T) {
-	backend := &cliVerifyBackend{}
-
-	key, err := backend.GenerateKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-
-	require.Error(t, err)
-	var notImplErr ErrNotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-	assert.Equal(t, "GenerateKey", notImplErr.Operation)
-	assert.Nil(t, key)
-}
-
-// TestCliVerifyBackendGetKey tests cliVerifyBackend GetKey (not implemented)
-func TestCliVerifyBackendGetKey(t *testing.T) {
-	backend := &cliVerifyBackend{}
-
-	key, err := backend.GetKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-
-	require.Error(t, err)
-	var notImplErr ErrNotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-	assert.Equal(t, "GetKey", notImplErr.Operation)
-	assert.Nil(t, key)
-}
-
-// TestCliVerifyBackendDeleteKey tests cliVerifyBackend DeleteKey (not implemented)
-func TestCliVerifyBackendDeleteKey(t *testing.T) {
-	backend := &cliVerifyBackend{}
-
-	err := backend.DeleteKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-
-	require.Error(t, err)
-	var notImplErr ErrNotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-	assert.Equal(t, "DeleteKey", notImplErr.Operation)
-}
-
-// TestCliVerifyBackendListKeys tests cliVerifyBackend ListKeys
-func TestCliVerifyBackendListKeys(t *testing.T) {
-	backend := &cliVerifyBackend{}
-
-	keys, err := backend.ListKeys(context.Background())
-	require.NoError(t, err)
-	assert.Nil(t, keys)
-}
-
-// TestCliVerifyBackendDecrypter tests cliVerifyBackend Decrypter (not implemented)
-func TestCliVerifyBackendDecrypter(t *testing.T) {
-	backend := &cliVerifyBackend{}
-
-	decrypter, err := backend.Decrypter(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-
-	require.Error(t, err)
-	var notImplErr ErrNotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-	assert.Equal(t, "Decrypter", notImplErr.Operation)
-	assert.Nil(t, decrypter)
-}
-
-// TestCliVerifyBackendRotateKey tests cliVerifyBackend RotateKey (not implemented)
-func TestCliVerifyBackendRotateKey(t *testing.T) {
-	backend := &cliVerifyBackend{}
-
-	err := backend.RotateKey(context.Background(), &xkmssdk.KeyAttributes{CN: "test"})
-
-	require.Error(t, err)
-	var notImplErr ErrNotImplemented
-	require.ErrorAs(t, err, &notImplErr)
-	assert.Equal(t, "RotateKey", notImplErr.Operation)
-}
-
-// TestCliVerifyBackendClose tests cliVerifyBackend Close
-func TestCliVerifyBackendClose(t *testing.T) {
-	backend := &cliVerifyBackend{}
-
-	err := backend.Close()
-	require.NoError(t, err)
+	// No certificate is needed to verify; the missing input is what fails.
+	var verifyErr ErrVerifyFileFailed
+	require.ErrorAs(t, err, &verifyErr)
 }
 
 // TestErrorMessages tests all error type Error() methods
@@ -684,11 +443,6 @@ func TestErrorMessages(t *testing.T) {
 			expected: "failed to read certificate '/path/to/cert': permission denied",
 		},
 		{
-			name:     "ErrDecodeCertificateFailed",
-			err:      ErrDecodeCertificateFailed{Path: "/path/to/cert"},
-			expected: "failed to decode certificate PEM: /path/to/cert",
-		},
-		{
 			name:     "ErrParseCertificateFailed",
 			err:      ErrParseCertificateFailed{Reason: "invalid certificate"},
 			expected: "failed to parse certificate: invalid certificate",
@@ -707,16 +461,6 @@ func TestErrorMessages(t *testing.T) {
 			name:     "ErrVerifyFileFailed",
 			err:      ErrVerifyFileFailed{Input: "/path/to/file", Reason: "signature invalid"},
 			expected: "failed to verify file '/path/to/file': signature invalid",
-		},
-		{
-			name:     "ErrKeyNotSigner",
-			err:      ErrKeyNotSigner{},
-			expected: "private key does not implement crypto.Signer",
-		},
-		{
-			name:     "ErrNotImplemented",
-			err:      ErrNotImplemented{Operation: "TestOp"},
-			expected: "operation not implemented: TestOp",
 		},
 	}
 
@@ -766,13 +510,6 @@ func TestCommandHierarchy(t *testing.T) {
 	// Verify commands have parents
 	assert.Equal(t, rootCmd, signCmd.Parent())
 	assert.Equal(t, rootCmd, verifyCmd.Parent())
-}
-
-// Helper: non-signer key type for testing
-type nonSignerKey struct{}
-
-func (n *nonSignerKey) Public() crypto.PublicKey {
-	return nil
 }
 
 // Helper to generate a test certificate
@@ -851,46 +588,25 @@ func TestRunSignInputFileNotFound(t *testing.T) {
 	assert.Equal(t, "/nonexistent/input.efi", signErr.Input)
 }
 
-// TestRunVerifyWithCertificateSignerCreationFails tests runVerify when the
-// cliVerifyBackend doesn't implement Signer, causing signer creation to fail
-func TestRunVerifyWithCertificateSignerCreationFails(t *testing.T) {
-	tmpDir := t.TempDir()
+// TestRunVerify_SignedPE verifies a PE signed by `sign`: it verifies with no
+// certificate and with its signer's, and fails for another certificate and
+// for an unsigned file.
+func TestRunVerify_SignedPE(t *testing.T) {
+	dir := t.TempDir()
+	keyPath, certPath, _ := writeTestKeyAndCert(t, dir)
+	_, otherCert, _ := writeTestKeyAndCert(t, t.TempDir())
+	unsigned := filepath.Join(dir, "unsigned.efi")
+	require.NoError(t, os.WriteFile(unsigned, authenticodetest.MinimalPE(authenticodetest.MachineARM64), 0o644))
+	signed := filepath.Join(dir, "signed.efi")
+	flags := &cli.CommonFlags{OutputFormat: cli.OutputFormatJSON, NoColor: true}
+	require.NoError(t, runSign(context.Background(), flags, keyPath, certPath, unsigned, signed))
 
-	_, certPath, _ := writeTestKeyAndCert(t, tmpDir)
+	require.NoError(t, runVerify(context.Background(), flags, "", signed))
+	require.NoError(t, runVerify(context.Background(), flags, certPath, signed))
 
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-		NoColor:      true,
-	}
-
-	// The cliVerifyBackend doesn't implement Signer(), so signer creation fails
-	err := runVerify(context.Background(), flags, certPath, "/nonexistent/input.efi")
-
-	require.Error(t, err)
-	var createSignerErr ErrCreateSignerFailed
-	require.ErrorAs(t, err, &createSignerErr)
-}
-
-// TestSignCommandFlagsRequired tests that required flags are marked
-func TestSignCommandFlagsRequired(t *testing.T) {
-	cmd := newSignCommand(newTestFlags())
-
-	// Check if key flag is required
-	keyFlag := cmd.Flag("key")
-	require.NotNil(t, keyFlag)
-	// The flag should be marked as required in the command
-
-	// Check if cert flag is required
-	certFlag := cmd.Flag("cert")
-	require.NotNil(t, certFlag)
-
-	// Check if input flag is required
-	inputFlag := cmd.Flag("input")
-	require.NotNil(t, inputFlag)
-
-	// Check if output flag is required
-	outputFlag := cmd.Flag("output")
-	require.NotNil(t, outputFlag)
+	var verifyErr ErrVerifyFileFailed
+	require.ErrorAs(t, runVerify(context.Background(), flags, otherCert, signed), &verifyErr, "signed by another certificate")
+	require.ErrorAs(t, runVerify(context.Background(), flags, "", unsigned), &verifyErr, "not signed")
 }
 
 // TestVerifyCommandFlagsRequired tests that required flags are marked
@@ -1060,9 +776,9 @@ func TestVerifyCommandRunEWithEmptyCert(t *testing.T) {
 	err := cmd.RunE(cmd, []string{})
 
 	require.Error(t, err)
-	// With no cert, the authenticode signer requires a certificate
-	var createSignerErr ErrCreateSignerFailed
-	require.ErrorAs(t, err, &createSignerErr)
+	// No certificate is needed to verify; the missing input is what fails.
+	var verifyErr ErrVerifyFileFailed
+	require.ErrorAs(t, err, &verifyErr)
 }
 
 // TestSignCommandRunEWithValidKeyAndCert tests sign command RunE with valid key/cert but missing input

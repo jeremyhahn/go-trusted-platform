@@ -14,6 +14,8 @@
 package iso
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -113,9 +115,13 @@ type ISOBuildConfig struct {
 	Lockdown     bool   `yaml:"lockdown" json:"lockdown"`
 	LockdownMode string `yaml:"lockdown-mode" json:"lockdown_mode"`
 	FIPS         bool   `yaml:"fips" json:"fips"`
-	SecureBoot   bool   `yaml:"secure-boot" json:"secure_boot"`
-	EnableFIDO2  bool   `yaml:"enable-fido2" json:"enable_fido2"`
-	AfterInstall string `yaml:"after-install" json:"after_install"`
+	// NetworkServed marks media served over the network (a netboot media
+	// set) rather than written to a disc or card: it must never carry
+	// private key material, whatever the Secure Boot setting.
+	NetworkServed bool   `yaml:"network-served" json:"network_served"`
+	SecureBoot    bool   `yaml:"secure-boot" json:"secure_boot"`
+	EnableFIDO2   bool   `yaml:"enable-fido2" json:"enable_fido2"`
+	AfterInstall  string `yaml:"after-install" json:"after_install"`
 
 	// Additional packages
 	Packages []string `yaml:"packages" json:"packages"`
@@ -533,8 +539,14 @@ type ISOConfig struct {
 	// Default: WorkDir/iso
 	ISODir string
 
-	// VerifyChecksum enables SHA256 checksum verification
+	// VerifyChecksum enables SHA256 checksum verification against the
+	// mirror's .sha256 file.
 	VerifyChecksum bool
+
+	// SHA256, when set, pins the file's hex SHA-256. It replaces the
+	// mirror's checksum — a pin is part of the build, the mirror's file is
+	// not — and a cached download is re-verified against it on every run.
+	SHA256 string
 
 	// ResumeDownload enables resuming partial downloads
 	ResumeDownload bool
@@ -587,6 +599,12 @@ func (c *ISOConfig) Validate() error {
 
 	if c.MirrorURL == "" {
 		return &MessageError{Msg: "mirror URL is required"}
+	}
+
+	if c.SHA256 != "" {
+		if _, err := hex.DecodeString(c.SHA256); err != nil || len(c.SHA256) != sha256.Size*2 {
+			return &MessageError{Msg: "pinned SHA256 " + c.SHA256 + " is not a hex SHA-256 digest"}
+		}
 	}
 
 	arch, err := uki.ParseArchitecture(c.Architecture)

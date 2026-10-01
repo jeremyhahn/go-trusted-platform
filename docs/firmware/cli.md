@@ -201,7 +201,7 @@ KMS-resident key instead and never write a private key to disk.
 
 | Flag | Type | Default | Required | Meaning |
 |---|---|---|---|---|
-| `--cert` | string | `""` | **effectively yes — see below** | Signing certificate (PEM) |
+| `--cert` | string | `""` | no | Certificate (PEM or DER) the file must be signed by |
 | `--input` | string | `""` | **yes** | Path to the signed PE/COFF file |
 
 ```bash
@@ -210,23 +210,13 @@ platformctl authenticode verify \
     --input ./out/BOOTX64.EFI
 ```
 
-Two defects you need to know about before you rely on this verb:
-
-**`--cert` is documented as optional and is not.** `runVerify` passes
-`Certificate: nil` when `--cert` is omitted, and `authenticode.NewSigner`
-rejects a nil certificate with `"certificate is required"`. The command fails
-with `ErrCreateSignerFailed` before reading the input file. The help text and
-the example `platformctl authenticode verify --input signed.efi` are wrong.
-
-**`--cert` does not bind the verdict.** Verification extracts the certificate
-**embedded in the signature** and checks the signature under that. No chain is
-built and no trust anchor is consulted, so passing a *different* `--cert`
-changes nothing about the result. If you need "was this signed by exactly this
-certificate", that check lives in `uefi.VerifySignedUKI` and is what
-`secure-boot enroll` runs — this verb does not do it.
-
-Both are recorded in [architecture.md](architecture.md) §9 and raised as owner
-questions rather than papered over.
+Verification needs no key (`authenticode.NewVerifier`): the signature is
+checked against the certificate **embedded in it**. Without `--cert` that is
+all it proves — the file is intact and self-consistently signed. With `--cert`
+the embedded signer must also be exactly that certificate, otherwise the
+command fails naming both subjects; this is the same binding `uefi.VerifySignedUKI`
+enforces for `secure-boot enroll`. No chain is built and no trust anchor is
+consulted.
 
 ---
 

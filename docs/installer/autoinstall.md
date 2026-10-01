@@ -72,6 +72,16 @@ In order of execution:
 Implementation: `pkg/iso/customize.go` lines 2756–2870 (search for
 `# Find installer configuration file`).
 
+**The installed system's runtime config.** The installer copies
+`/media/cdrom/configs/installer.yaml` onto the target as
+`/etc/trusted-platform/config.yaml`. On a CD rebuilt from a netboot media
+set's payload (`.payload-complete`) that file is the set's *baked* config, so
+`stage_node_config` (`iso.NodeConfigFunction`) replaces it with the config
+the install actually runs with — the node's own, fetched per MAC — and the
+set's `ca-bundle.pem` with the fetched CA bundle, before the installer runs.
+A failed copy ends the install: a node must never come up with the generic
+config. A real CD (virtual media) is read-only and left alone.
+
 ---
 
 ## 3. Hostname Resolution Priority Chain

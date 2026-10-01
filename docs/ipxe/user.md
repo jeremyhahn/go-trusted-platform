@@ -37,8 +37,9 @@ Two things to internalise before you plug anything in:
   `CAP_NET_RAW` if you use the raw-socket DHCP path).
 - Outbound HTTPS to `boot.ipxe.org` **the first time**, so the iPXE firmware can
   be downloaded. After that it is cached and the server works offline.
-- A staged `vmlinuz` and `initramfs`, and a `manifest.yaml` describing which MAC
-  boots what.
+- A netboot media build staged under the data directory (`make netboot-media`
+  builds one; `bootstrap run` stages it for you), and a `manifest.yaml`
+  describing which MAC boots what.
 
 ---
 
@@ -47,7 +48,7 @@ Two things to internalise before you plug anything in:
 ```bash
 pxeboot \
   --manifest /data/manifest.yaml \
-  --kernel /data/vmlinuz --initrd /data/initramfs \
+  --media-dir /data/media \
   --interface eth0 \
   --dhcp-server-ip 10.10.0.1 \
   --dhcp-range-start 10.10.0.100 \
@@ -56,8 +57,8 @@ pxeboot \
   --dhcp-dns 10.10.0.1
 ```
 
-Six flags are required — `--manifest`, `--kernel`, `--initrd`,
-`--dhcp-server-ip`, `--dhcp-range-start`, `--dhcp-range-end`. If any is missing
+Five flags are required — `--manifest`, `--media-dir` (it defaults to
+`/data/media`), `--dhcp-server-ip`, `--dhcp-range-start`, `--dhcp-range-end`. If any is missing
 you get one message naming all of them, then usage, then exit 1.
 
 Two more you will usually want:
@@ -67,7 +68,7 @@ Two more you will usually want:
   --alpine-version 3.22.2
 ```
 
-**`--alpine-version` must match the kernel and initramfs you staged.** It
+**`--alpine-version` must match the media build's Alpine release.** It
 derives the package repository branch the live environment uses. Mismatch it and
 the installer boots fine and then cannot resolve a single package.
 
@@ -120,9 +121,12 @@ Set the machine to PXE boot and power it on. What you should see, in order:
 2. It TFTPs `ipxe.efi` (or `ipxe32.efi`, or `undionly.kpxe` on legacy BIOS).
 3. iPXE starts, DISCOVERs again, and is handed
    `http://<server>:8080/boot.ipxe`.
-4. It chains to `/boot/device/<mac>.ipxe` if the manifest knows the MAC, or to
-   `/menu.ipxe` if it does not.
-5. It fetches the kernel and initrd from `/data/…`.
+4. It chains to `/boot/device/<mac>.ipxe`: a MAC the manifest knows boots its
+   media set with its role and hostname; any other MAC gets 404 and falls
+   through to its architecture's default media set (`/menu.ipxe` only for
+   an architecture with none).
+5. It fetches the kernel and initrd from `/data/…` (`/data/media/<set>/…` for
+   a set other than the x86_64 installer).
 6. The installer runs.
 
 The server's request log is the fastest way to watch this. Every HTTP request is
@@ -166,6 +170,30 @@ sudo platformctl iso test pxe \
     --kernel ./vmlinuz --initrd ./initramfs --args "console=ttyS0"
 ```
 
+For a Raspberry Pi, test from U-Boot onward: `--architecture aarch64` boots
+the QEMU `virt` machine from the same U-Boot the factory image puts on the
+card (`make uboot-build`), so the DHCP exchange, the signed arm64 iPXE, the
+architecture-aware script and the signed kernel are all the ones a Pi sees.
+What it cannot stand in for is the Pi's own EEPROM netboot client, which
+runs before U-Boot; that stage is covered by the Raspberry Pi netboot
+emulator and by hardware ([factory image](../factory-image/user.md)).
+
+```bash
+sudo platformctl iso test pxe --architecture aarch64 \
+    --kernel ./vmlinuz-lts --initrd ./initramfs-lts \
+    --args "console=ttyAMA0,115200 ip=dhcp" \
+    --serial-log work-pxe/serial.log --expect "Welcome to Alpine"
+```
+
+`make integration-test-netboot` runs exactly that in the devcontainer,
+after `make uboot-build` and `make ipxe-build` (the platform builds its own
+arm64 iPXE: upstream's hangs under U-Boot) and after fetching Alpine's
+aarch64 netboot kernel, initramfs and modloop into `bin/`. The guest's
+initramfs installs `alpine-base` from the Alpine mirror through the boot
+server's HTTPS relay (`/proxy/https/…`), so the host needs internet access
+for the suite; `NETBOOT_ALPINE_MIRROR` and `NETBOOT_ALPINE_BRANCH` pick the
+mirror.
+
 ---
 
 ## Troubleshooting
@@ -204,9 +232,11 @@ means a node that does serve PXE has a stopped or failing service, and the page
 raises it as an error.
 
 **"device not found" on `/boot/device/…`.**
-The manifest does not know that MAC, or the MAC in the URL does not match the
-manifest. Remember the route lowercases and rewrites dashes to colons before the
-lookup, so the callback always sees colon form.
+The manifest does not know that MAC — expected for a machine that is not in
+`bootstrap.yaml`, which then boots its architecture's default. For a node that
+should be known, the MAC in the URL does not match the manifest. The route
+lowercases and rewrites dashes to colons before the lookup, so the callback
+always sees colon form.
 
 **A `/config/mac/…` request returns 400.**
 Wrong MAC format. Lowercase, dash-separated, 12–17 characters. Or the key is

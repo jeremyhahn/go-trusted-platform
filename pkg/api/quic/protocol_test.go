@@ -19,7 +19,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"io"
 	"strings"
 	"testing"
 
@@ -1054,28 +1053,6 @@ func TestWriteResponseWriteErrors(t *testing.T) {
 	if !strings.Contains(strings.ToLower(err.Error()), "response") {
 		t.Errorf("expected error containing 'response', got '%s'", err.Error())
 	}
-}
-
-// errReader is a test helper that always returns an error after reading some bytes
-type errReader struct {
-	data      []byte
-	pos       int
-	failAfter int
-}
-
-func (r *errReader) Read(p []byte) (int, error) {
-	if r.pos >= r.failAfter && r.failAfter > 0 {
-		return 0, errors.New("read error")
-	}
-	if r.pos >= len(r.data) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.data[r.pos:])
-	r.pos += n
-	if r.pos >= r.failAfter && r.failAfter > 0 {
-		return n, errors.New("read error")
-	}
-	return n, nil
 }
 
 func TestReadRequestPartialData(t *testing.T) {

@@ -38,69 +38,67 @@ type Result struct {
 	Kernel *virtkernel.Artifacts
 }
 
-// Create builds an image end to end: preflight, target resolution, Secure
-// Boot keys, U-Boot, media staging, boot firmware, and the assemble step
-// inside the arm64 container.
-func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
+// StagedMedia is a target's install media staged on disk: the layout the
+// installer reads as /media/cdrom (packages, the platform binaries, the
+// board's boot firmware, a platform-built kernel), before any image is
+// assembled from it. The image build assembles it; the netboot media build
+// serves it to an installer booted over the network.
+type StagedMedia struct {
+	Target   Target
+	WorkDir  string
+	MediaDir string
+	// UBoot is the U-Boot build the media's boot firmware carries.
+	UBoot uboot.Artifacts
+	// Kernel is the platform-built kernel, nil for a target on a packaged
+	// kernel.
+	Kernel *virtkernel.Artifacts
+	// SecureBoot is the build's resolved Secure Boot certificates and DB
+	// signer; nil when Secure Boot is off.
+	SecureBoot *iso.SecureBootMaterial
+	// config is the resolved build configuration, for Create.
+	config *BuildConfig
+	// install is the staged installer media, for InstallerInitramfs.
+	install *iso.InstallMedia
+}
+
+// InstallerInitramfs rewrites a netboot initramfs at path as the installer's
+// for this target's media (iso.InstallMedia.InstallerInitramfs).
+func (s *StagedMedia) InstallerInitramfs(ctx context.Context, path string) error {
+	return s.install.InstallerInitramfs(ctx, path)
+}
+
+// StageMedia stages a target's install media: the Secure Boot keys, U-Boot
+// and (for a target that boots one) the platform-built kernel, then the
+// media tree the installer reads, with the target's installer overrides,
+// boot firmware and kernel.
+func StageMedia(ctx context.Context, cfg *BuildConfig) (*StagedMedia, error) {
 	c := cfg.withDefaults()
 	if c.ISO == nil {
 		return nil, &StageError{Step: "configuration", Err: errMissingISOConfig}
-	}
-	if c.SizeMB < minimumSizeMB {
-		return nil, &StageError{Step: "configuration", Err: &sizeError{c.SizeMB}}
 	}
 	target, err := NewTarget(c.Target, c.Model)
 	if err != nil {
 		return nil, err
 	}
-	if !c.SkipPreflight {
-		if err := Preflight(ctx, c.Runner, c.ContainerRuntime, string(target.Architecture())); err != nil {
-			return nil, err
-		}
-	}
-
 	// The build config is shared with the ISO; the target decides the
 	// architecture and the binaries directory decides the platformd path.
 	c.ISO.Architecture = string(target.Architecture())
 	if c.BinariesDir != "" {
 		c.ISO.PlatformdBinary = filepath.Join(c.BinariesDir, "platformd")
 	}
-	if err := c.ISO.Validate(); err != nil {
-		return nil, &StageError{Step: "validating the build configuration", Err: err}
-	}
-	if err := c.ISO.ResolveBinaries(); err != nil {
-		return nil, &StageError{Step: "resolving the target binaries", Err: err}
-	}
-	workDir, err := c.ISO.ResolveWorkDir()
+	media, err := iso.StageInstallMedia(ctx, c.ISO, MediaDirName, target.InstallerOverrides(), c.KMSClients, c.Logger)
 	if err != nil {
-		return nil, &StageError{Step: "resolving the work directory", Err: err}
+		return nil, &StageError{Step: "install media", Err: err}
 	}
+	workDir, mediaDir, material := media.WorkDir, media.Dir, media.SecureBoot
 
-	decision, err := iso.EnsureSecureBootKeys(ctx, c.Logger, c.ISO)
-	if err != nil {
-		return nil, &StageError{Step: "Secure Boot keys", Err: err}
-	}
-	c.Logger.Info("[DISKIMAGE] Secure Boot keys", "decision", string(decision), "dir", c.ISO.KeysDir)
-
-	art, err := c.ubootArtifacts(ctx, target)
+	art, err := c.ubootArtifacts(ctx, target, material)
 	if err != nil {
 		return nil, err
 	}
 	kernel, err := c.kernelArtifacts(ctx, target)
 	if err != nil {
 		return nil, err
-	}
-
-	mediaDir := filepath.Join(workDir, MediaDirName)
-	platformCfg := iso.NewPlatformISOConfig(c.ISO, workDir)
-	platformCfg.Directories.ISO = mediaDir
-	platformCfg.Installer = target.InstallerOverrides()
-	if err := platformCfg.Validate(); err != nil {
-		return nil, &StageError{Step: "validating the media configuration", Err: err}
-	}
-	customizer := iso.NewCustomizer(platformCfg, c.Logger)
-	if err := customizer.StageMedia(ctx); err != nil {
-		return nil, &StageError{Step: "staging the install media", Err: err}
 	}
 	prefetchDir := filepath.Join(mediaDir, "apks-prefetch", string(target.Architecture()))
 	if err := target.StageBootFirmware(ctx, mediaDir, prefetchDir, art); err != nil {
@@ -111,6 +109,35 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 			return nil, &StageError{Step: "staging the kernel", Err: err}
 		}
 	}
+
+	return &StagedMedia{Target: target, WorkDir: workDir, MediaDir: mediaDir, UBoot: art, Kernel: kernel, SecureBoot: material, config: c, install: media}, nil
+}
+
+// Create builds an image end to end: preflight, target resolution, Secure
+// Boot keys, U-Boot, media staging, boot firmware, and the assemble step
+// inside the arm64 container.
+func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
+	if cfg == nil || cfg.ISO == nil {
+		return nil, &StageError{Step: "configuration", Err: errMissingISOConfig}
+	}
+	resolved := cfg.withDefaults()
+	if resolved.SizeMB < minimumSizeMB {
+		return nil, &StageError{Step: "configuration", Err: &sizeError{resolved.SizeMB}}
+	}
+	if !resolved.SkipPreflight {
+		target, err := NewTarget(resolved.Target, resolved.Model)
+		if err != nil {
+			return nil, err
+		}
+		if err := Preflight(ctx, resolved.Runner, resolved.ContainerRuntime, string(target.Architecture())); err != nil {
+			return nil, err
+		}
+	}
+	staged, err := StageMedia(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	c, target, workDir, mediaDir, art, kernel := staged.config, staged.Target, staged.WorkDir, staged.MediaDir, staged.UBoot, staged.Kernel
 
 	output := c.Output
 	if output == "" {
@@ -154,7 +181,13 @@ func (c *BuildConfig) kernelArtifacts(ctx context.Context, target Target) (*virt
 }
 
 // ubootArtifacts builds or locates the target's U-Boot.
-func (c *BuildConfig) ubootArtifacts(ctx context.Context, target Target) (uboot.Artifacts, error) {
+func (c *BuildConfig) ubootArtifacts(ctx context.Context, target Target, material *iso.SecureBootMaterial) (uboot.Artifacts, error) {
+	// U-Boot preseeds the PK/KEK/db it enforces: the resolved certificates,
+	// wherever the keys live (a KMS, or the keys directory).
+	keysDir := c.ISO.KeysDir
+	if material != nil {
+		keysDir = material.CertDir
+	}
 	var all map[uboot.Board]uboot.Artifacts
 	var err error
 	if c.UBootDir != "" {
@@ -165,7 +198,7 @@ func (c *BuildConfig) ubootArtifacts(ctx context.Context, target Target) (uboot.
 			Runtime:    c.ContainerRuntime,
 			BuilderDir: c.UBootBuilderDir,
 			OutputDir:  c.UBootOutputDir,
-			KeysDir:    c.ISO.KeysDir,
+			KeysDir:    keysDir,
 			CacheDir:   c.UBootCacheDir,
 		})
 	}

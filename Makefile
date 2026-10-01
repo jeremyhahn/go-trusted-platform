@@ -1444,6 +1444,7 @@ test-compute-coverage:
 
 .PHONY: coverage-compute
 coverage-compute: test-compute-coverage
+	@mkdir -p $(COVERAGE_DIR)
 	@go tool cover -html=/tmp/compute.cover -o build/coverage/compute.html
 	@echo "Coverage report: build/coverage/compute.html"
 
@@ -3641,24 +3642,18 @@ docker-pxe-server-push:
 	cd build/docker/pxe-server && make -j$(shell nproc) push
 
 # Docker :: PXE Boot Container (bootstrap)
-# Builds the self-contained PXE boot container from the platform ISO.
-# Build the ISO first with: bin/platformctl iso create
-# (the legacy Docker-based iso-hwtpm/iso-swtpm targets and
-# trusted-platform-iso-builder image have been removed).
-# This target:
-#   1. Builds the pxeboot binary (static, CGO_ENABLED=0)
-#   2. Extracts vmlinuz + initramfs from the ISO
-#   3. Copies the autoinstall script
-#   4. Builds the Docker image with everything baked in
+# Builds the PXE boot container: the static pxeboot binary, Samba and
+# supervisord. It carries no installer media — every media set it serves
+# comes from a netboot media build (make netboot-media) the deployer stages
+# under /data/media.
 #
-# Usage: make pxeboot-container ISO_FILE=bin/trusted-platform.iso
-ISO_FILE                    ?= trusted-platform.iso
+# Usage: make pxeboot-container
 PXEBOOT_IMAGE               ?= platform-pxeboot
 PXEBOOT_CONTEXT             := build/docker/bootstrap
 PXEBOOT_BINARY              := $(PXEBOOT_CONTEXT)/pxeboot
 
 .PHONY: pxeboot-container
-pxeboot-container: pxeboot-binary pxeboot-extract
+pxeboot-container: pxeboot-binary
 	@echo "$(CYAN)→ Building PXE boot container...$(RESET)"
 	docker build \
 		-t $(PXEBOOT_IMAGE):latest \
@@ -3676,67 +3671,6 @@ pxeboot-binary:
 		./cmd/pxeboot
 	@echo "Binary size: $$(du -h $(PXEBOOT_BINARY) | cut -f1)"
 
-.PHONY: pxeboot-extract
-pxeboot-extract:
-	@echo "$(CYAN)→ Extracting kernel and initramfs from ISO...$(RESET)"
-	@if [ ! -f "$(ISO_FILE)" ]; then \
-		echo "$(RED)Error: ISO file not found: $(ISO_FILE)$(RESET)"; \
-		echo "Build it first with: bin/platformctl iso create --output $(ISO_FILE)"; \
-		exit 1; \
-	fi
-	@mkdir -p /tmp/pxeboot-iso-extract
-	@cd /tmp/pxeboot-iso-extract && 7z x -y "$(abspath $(ISO_FILE))" boot/vmlinuz-lts boot/initramfs-lts boot/modloop-lts platformd-bin/platformctl platformd-bin/platformd platformd-bin/platform-initrd platformd-bin/gatewayd dracut-platformd 'alpine-minirootfs-*.tar.gz' 2>/dev/null || \
-		(cd /tmp/pxeboot-iso-extract && xorriso -osirrox on -indev "$(abspath $(ISO_FILE))" -extract /boot/vmlinuz-lts vmlinuz-lts -extract /boot/initramfs-lts initramfs-lts -extract /boot/modloop-lts modloop-lts -extract /platformd-bin/platformctl platformctl -extract /platformd-bin/platformd platformd -extract /platformd-bin/platform-initrd platform-initrd -extract /platformd-bin/gatewayd gatewayd -extract /dracut-platformd dracut-platformd 2>/dev/null && \
-		 cd /tmp/pxeboot-iso-extract && xorriso -osirrox on -indev "$(abspath $(ISO_FILE))" -find / -name 'alpine-minirootfs-*.tar.gz' -exec extract_to /tmp/pxeboot-iso-extract/alpine-minirootfs.tar.gz -- 2>/dev/null) || \
-		(echo "$(RED)Error: Could not extract kernel from ISO. Install p7zip or xorriso.$(RESET)"; exit 1)
-	@if [ -f /tmp/pxeboot-iso-extract/boot/vmlinuz-lts ]; then \
-		cp /tmp/pxeboot-iso-extract/boot/vmlinuz-lts $(PXEBOOT_CONTEXT)/vmlinuz; \
-		cp /tmp/pxeboot-iso-extract/boot/initramfs-lts $(PXEBOOT_CONTEXT)/initramfs; \
-		cp /tmp/pxeboot-iso-extract/boot/modloop-lts $(PXEBOOT_CONTEXT)/modloop-lts; \
-	elif [ -f /tmp/pxeboot-iso-extract/vmlinuz-lts ]; then \
-		cp /tmp/pxeboot-iso-extract/vmlinuz-lts $(PXEBOOT_CONTEXT)/vmlinuz; \
-		cp /tmp/pxeboot-iso-extract/initramfs-lts $(PXEBOOT_CONTEXT)/initramfs; \
-		cp /tmp/pxeboot-iso-extract/modloop-lts $(PXEBOOT_CONTEXT)/modloop-lts; \
-	fi
-	@cp pkg/iso/autoinstall.sh $(PXEBOOT_CONTEXT)/autoinstall.sh
-	@bindir=/tmp/pxeboot-iso-extract/platformd-bin; \
-	[ -f "$$bindir/platformctl" ] || bindir=/tmp/pxeboot-iso-extract; \
-	if [ -f "$$bindir/platformctl" ] && [ -f "$$bindir/platformd" ]; then \
-		cp "$$bindir/platformctl" $(PXEBOOT_CONTEXT)/platformctl; \
-		cp "$$bindir/platformd" $(PXEBOOT_CONTEXT)/platformd; \
-	else \
-		echo "$(RED)Error: platformctl/platformd not found in ISO platformd-bin/ (needed for PXE install)$(RESET)"; exit 1; \
-	fi; \
-	if [ -f "$$bindir/platform-initrd" ]; then \
-		cp "$$bindir/platform-initrd" $(PXEBOOT_CONTEXT)/platform-initrd; \
-	else \
-		echo "$(RED)Error: platform-initrd not found in ISO platformd-bin/ (build it with 'make platform-initrd' before 'iso create')$(RESET)"; exit 1; \
-	fi; \
-	rm -rf $(PXEBOOT_CONTEXT)/optional; mkdir -p $(PXEBOOT_CONTEXT)/optional; \
-	if [ -f "$$bindir/gatewayd" ]; then \
-		cp "$$bindir/gatewayd" $(PXEBOOT_CONTEXT)/optional/gatewayd; \
-	elif [ -f "$(GATEWAYD)" ]; then \
-		cp "$(GATEWAYD)" $(PXEBOOT_CONTEXT)/optional/gatewayd; \
-	else \
-		echo "$(YELLOW)Warning: gatewayd not in ISO platformd-bin/ and not at $(GATEWAYD).$(RESET)"; \
-		echo "$(YELLOW)         PXE installs of GATEWAY-role nodes will abort: the autoinstall fetch of$(RESET)"; \
-		echo "$(YELLOW)         /data/gatewayd 404s and installGatewaydBinary then fails (#648).$(RESET)"; \
-		echo "$(YELLOW)         Build it with 'make build', or build the ISO from a gateway-role config.$(RESET)"; \
-	fi
-	@if [ -d /tmp/pxeboot-iso-extract/dracut-platformd ]; then \
-		tar -czf $(PXEBOOT_CONTEXT)/dracut-platformd.tar.gz -C /tmp/pxeboot-iso-extract/dracut-platformd . ; \
-	else \
-		echo "$(RED)Error: dracut-platformd module not found in ISO (needed for PXE UKI build)$(RESET)"; exit 1; \
-	fi
-	@mr=$$(ls /tmp/pxeboot-iso-extract/alpine-minirootfs*.tar.gz 2>/dev/null | head -1); \
-	if [ -n "$$mr" ]; then \
-		cp "$$mr" $(PXEBOOT_CONTEXT)/alpine-minirootfs.tar.gz; \
-	else \
-		echo "$(RED)Error: alpine-minirootfs tarball not found in ISO (needed for PXE OS install)$(RESET)"; exit 1; \
-	fi
-	@rm -rf /tmp/pxeboot-iso-extract
-	@echo "$(GREEN)✓ Extracted: vmlinuz ($$(du -h $(PXEBOOT_CONTEXT)/vmlinuz | cut -f1)), initramfs ($$(du -h $(PXEBOOT_CONTEXT)/initramfs | cut -f1)), modloop ($$(du -h $(PXEBOOT_CONTEXT)/modloop-lts | cut -f1)), platformctl ($$(du -h $(PXEBOOT_CONTEXT)/platformctl | cut -f1)), platformd ($$(du -h $(PXEBOOT_CONTEXT)/platformd | cut -f1)), platform-initrd ($$(du -h $(PXEBOOT_CONTEXT)/platform-initrd | cut -f1)), dracut-platformd ($$(du -h $(PXEBOOT_CONTEXT)/dracut-platformd.tar.gz | cut -f1)), minirootfs ($$(du -h $(PXEBOOT_CONTEXT)/alpine-minirootfs.tar.gz | cut -f1))$(RESET)"
-
 .PHONY: pxeboot-container-save
 pxeboot-container-save:
 	@echo "$(CYAN)→ Saving PXE boot container as tar...$(RESET)"
@@ -3745,7 +3679,7 @@ pxeboot-container-save:
 
 .PHONY: pxeboot-container-clean
 pxeboot-container-clean:
-	@rm -f $(PXEBOOT_CONTEXT)/pxeboot $(PXEBOOT_CONTEXT)/vmlinuz $(PXEBOOT_CONTEXT)/initramfs $(PXEBOOT_CONTEXT)/autoinstall.sh
+	@rm -f $(PXEBOOT_BINARY)
 	@docker rmi $(PXEBOOT_IMAGE):latest $(PXEBOOT_IMAGE):$(APP_VERSION) 2>/dev/null || true
 
 # Docker :: NFS server
@@ -3821,6 +3755,23 @@ UBOOT_OUTPUT_DIR ?= build/docker/uboot-builder/output
 ## uboot-build: Build the rpi_arm64 and qemu_arm64 U-Boot binaries with the Secure Boot keys from UBOOT_KEYS_DIR preseeded
 uboot-build:
 	$(MAKE) -C build/docker/uboot-builder build KEYS_DIR=$(abspath $(UBOOT_KEYS_DIR)) OUTPUT_DIR=$(abspath $(UBOOT_OUTPUT_DIR))
+
+# iPXE: the arm64 EFI iPXE the PXE server hands to a Raspberry Pi or the
+# QEMU virt stand-in after U-Boot. Upstream's binary halts under U-Boot's
+# polled EFI (build/docker/ipxe-builder/README.md says why); this one is
+# built with NAP_NULL and cached by its inputs' digests.
+IPXE_OUTPUT_DIR ?= build/docker/ipxe-builder/output
+IPXE_ARM64_EFI  := $(IPXE_OUTPUT_DIR)/bin-arm64-efi/snponly.efi
+
+.PHONY: ipxe-build
+## ipxe-build: Build the arm64 EFI iPXE for network-booting AArch64 nodes (cached by its inputs' digests)
+ipxe-build:
+	$(MAKE) -C build/docker/ipxe-builder build OUTPUT_DIR=$(abspath $(IPXE_OUTPUT_DIR))
+
+.PHONY: ipxe-verify
+## ipxe-verify: Recompute the SHA256SUMS of the built iPXE
+ipxe-verify:
+	$(MAKE) -C build/docker/ipxe-builder verify OUTPUT_DIR=$(abspath $(IPXE_OUTPUT_DIR))
 
 # The virt kernel: the QEMU virt stand-in's kernel, cross-built from Alpine's
 # linux-lts version with the memory-mapped TIS TPM driver Alpine's aarch64
@@ -3999,6 +3950,17 @@ image-rpi-qemu: build rpi-binaries
 		--virt-kernel-output-dir $(VIRT_KERNEL_OUTPUT_DIR) \
 		--builder-image $(DISKIMAGE_BUILDER_IMG) --output bin/trusted-platform-qemu-virt.img $(DISKIMAGE_FLAGS)
 
+.PHONY: netboot-media
+## netboot-media: Build the netboot media the bootstrap container serves (x86_64, Raspberry Pi and arm64 sets, Pi TFTP tree, signed arm64 iPXE) into NETBOOT_MEDIA_DIR; point bootstrap.yaml's deployer.netboot_media_dir at it
+NETBOOT_MEDIA_DIR   ?= bin/netboot-media
+NETBOOT_MEDIA_FLAGS ?=
+netboot-media: build platform-initrd rpi-binaries ipxe-build
+	$(PLATFORMCTL) diskimage netboot --output $(NETBOOT_MEDIA_DIR) \
+		--x86-binaries-dir $(dir $(PLATFORMCTL)) --arm64-binaries-dir $(ARM64_BIN_DIR) \
+		--uboot-output-dir $(UBOOT_OUTPUT_DIR) --virt-kernel-output-dir $(VIRT_KERNEL_OUTPUT_DIR) \
+		--keys-dir $(UBOOT_KEYS_DIR) --ipxe $(IPXE_ARM64_EFI) \
+		--builder-image $(DISKIMAGE_BUILDER_IMG) $(NETBOOT_MEDIA_FLAGS)
+
 .PHONY: image-rpi-xz
 ## image-rpi-xz: Compress the Raspberry Pi image for release
 image-rpi-xz: image-rpi
@@ -4064,6 +4026,47 @@ integration-test-diskimage: build-devcontainer image-rpi image-rpi-qemu
 ## integration-test-diskimage-only: The diskimage suite against images already in bin/ (no rebuild)
 integration-test-diskimage-only: build-devcontainer
 	$(call run-integration-suite,diskimage,$(DISKIMAGE_SUITE_ENV))
+
+# The aarch64 network-boot suite: QEMU virt booted from the qemu_arm64
+# U-Boot on the PXE test bridge — the Raspberry Pi stand-in from U-Boot
+# onward. Boots Alpine's own aarch64 netboot kernel and initramfs, pinned
+# to the release branch pkg/iso builds from, fetched once into bin/.
+NETBOOT_ALPINE_BRANCH ?= v3.22
+NETBOOT_ALPINE_MIRROR ?= https://dl-cdn.alpinelinux.org/alpine
+NETBOOT_INPUT_DIR     ?= bin/netboot/aarch64
+NETBOOT_INPUTS        := $(addprefix $(NETBOOT_INPUT_DIR)/,vmlinuz-lts initramfs-lts modloop-lts)
+
+$(NETBOOT_INPUT_DIR)/%:
+	@mkdir -p $(NETBOOT_INPUT_DIR)
+	curl -fsSL -o $@.part $(NETBOOT_ALPINE_MIRROR)/$(NETBOOT_ALPINE_BRANCH)/releases/aarch64/netboot/$* && mv $@.part $@
+
+.PHONY: netboot-inputs
+## netboot-inputs: Fetch the Alpine aarch64 netboot kernel, initramfs and modloop the netboot suite boots
+netboot-inputs: $(NETBOOT_INPUTS)
+
+NETBOOT_SUITE_ENV := -v $(abspath $(UBOOT_KEYS_DIR)):/keys:ro \
+	-e NETBOOT_UBOOT=/workspace/$(DISKIMAGE_UBOOT_QEMU) \
+	-e NETBOOT_IPXE=/workspace/$(IPXE_ARM64_EFI) \
+	-e NETBOOT_KEYS_DIR=/keys \
+	-e NETBOOT_KERNEL=/workspace/$(NETBOOT_INPUT_DIR)/vmlinuz-lts \
+	-e NETBOOT_INITRD=/workspace/$(NETBOOT_INPUT_DIR)/initramfs-lts \
+	-e NETBOOT_MODLOOP=/workspace/$(NETBOOT_INPUT_DIR)/modloop-lts \
+	-e NETBOOT_ALPINE_REPO=$(NETBOOT_ALPINE_MIRROR)/$(NETBOOT_ALPINE_BRANCH)/main \
+	-e NETBOOT_ALPINE_MIRROR=$(NETBOOT_ALPINE_MIRROR) \
+	-e NETBOOT_ALPINE_VERSION=$(patsubst v%,%,$(NETBOOT_ALPINE_BRANCH)) \
+	-e NETBOOT_UBOOT_DIR=/workspace/$(UBOOT_OUTPUT_DIR) \
+	-e NETBOOT_RPI_APK_DIR=/workspace/bin/netboot/rpi-apks \
+	-e NETBOOT_WORK_DIR=/workspace/work/netboot-integration
+
+.PHONY: integration-test-netboot
+## integration-test-netboot: The network-boot suite in the devcontainer — QEMU aarch64 from the platform's U-Boot through the PXE server, and the Raspberry Pi EEPROM stage against the emulator (builds U-Boot and iPXE and fetches the inputs first)
+integration-test-netboot: build-devcontainer uboot-build ipxe-build netboot-inputs
+	$(call run-integration-suite,netboot,$(NETBOOT_SUITE_ENV))
+
+.PHONY: integration-test-netboot-only
+## integration-test-netboot-only: The netboot suite against the U-Boot and inputs already built
+integration-test-netboot-only: build-devcontainer
+	$(call run-integration-suite,netboot,$(NETBOOT_SUITE_ENV))
 
 .PHONY: integration-test-diskimage-shell
 ## integration-test-diskimage-shell: Interactive devcontainer shell with the factory-image inputs in the environment

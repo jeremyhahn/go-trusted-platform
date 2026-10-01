@@ -13,7 +13,11 @@
 
 package container
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
+)
 
 // ErrManifestNotFound is returned when the manifest file does not exist.
 type ErrManifestNotFound struct {
@@ -31,6 +35,13 @@ type ErrMACNotInManifest struct {
 
 func (e ErrMACNotInManifest) Error() string {
 	return fmt.Sprintf("container: MAC %s not in manifest", e.MAC)
+}
+
+// Is makes a MAC the manifest does not carry the device lookup's
+// "not found" (ipxe.ErrDeviceNotFound): the client falls through to its
+// architecture's default entry.
+func (e ErrMACNotInManifest) Is(target error) bool {
+	return target == ipxe.ErrDeviceNotFound
 }
 
 // ErrServerStartFailed is returned when the bootstrap server fails to start.
@@ -109,3 +120,75 @@ type MessageError struct {
 func (e *MessageError) Error() string {
 	return e.Msg
 }
+
+// ErrMediaSet is a media set the container cannot serve: an unreadable or
+// inconsistent descriptor, a missing file, or a conflict between sets.
+type ErrMediaSet struct {
+	Path   string
+	Reason string
+	Err    error
+}
+
+func (e ErrMediaSet) Error() string {
+	if e.Err != nil {
+		return "bootstrap container: media set " + e.Path + ": " + e.Reason + ": " + e.Err.Error()
+	}
+	return "bootstrap container: media set " + e.Path + ": " + e.Reason
+}
+
+func (e ErrMediaSet) Unwrap() error { return e.Err }
+
+// ErrUnknownMediaSet is a manifest entry that names a media set the
+// container does not have, or whose architecture has no default set.
+type ErrUnknownMediaSet struct {
+	MAC          string
+	MediaSet     string
+	Architecture string
+}
+
+func (e ErrUnknownMediaSet) Error() string {
+	if e.MediaSet != "" {
+		return "bootstrap container: " + e.MAC + " boots media set " + e.MediaSet + ", which is not staged"
+	}
+	return "bootstrap container: " + e.MAC + " is " + e.Architecture + " and no media set is that architecture's default"
+}
+
+// ErrNetbootMedia is a netboot media build whose index is unreadable or
+// names something the build does not hold.
+type ErrNetbootMedia struct {
+	Path   string
+	Reason string
+	Err    error
+}
+
+func (e ErrNetbootMedia) Error() string {
+	if e.Err != nil {
+		return "bootstrap container: netboot media " + e.Path + ": " + e.Reason + ": " + e.Err.Error()
+	}
+	return "bootstrap container: netboot media " + e.Path + ": " + e.Reason
+}
+
+func (e ErrNetbootMedia) Unwrap() error { return e.Err }
+
+// ErrPayloadList is a payload list that cannot be read or used: a
+// malformed line, an unsafe path, or a source that is missing or does not
+// match its digest.
+type ErrPayloadList struct {
+	Line   int
+	Reason string
+	Err    error
+}
+
+func (e ErrPayloadList) Error() string {
+	msg := "bootstrap container: payload list"
+	if e.Line > 0 {
+		msg += fmt.Sprintf(" line %d", e.Line)
+	}
+	msg += ": " + e.Reason
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
+}
+
+func (e ErrPayloadList) Unwrap() error { return e.Err }

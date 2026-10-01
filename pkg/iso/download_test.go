@@ -401,3 +401,72 @@ func (r *slowReader) Read(p []byte) (int, error) {
 	r.pos += n
 	return n, nil
 }
+
+// TestDownloadISO_Pinned covers a download whose digest the build pins:
+// the mirror's checksum is never consulted, a cached copy is re-verified,
+// and a file that does not match is refused and removed.
+func TestDownloadISO_Pinned(t *testing.T) {
+	good := []byte("alpine netboot tarball")
+	sum := sha256.Sum256(good)
+	pin := hex.EncodeToString(sum[:])
+
+	serve := func(body []byte, requests *int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*requests++
+			if r.URL.Path != "/netboot.tar.gz" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Write(body)
+		}))
+	}
+	config := func(url, dir string) *ISOConfig {
+		return &ISOConfig{Version: "3.22.2", ISO: "netboot.tar.gz", URL: url + "/netboot.tar.gz",
+			MirrorURL: url, WorkDir: dir, VerifyChecksum: true, SHA256: pin}
+	}
+
+	t.Run("downloads, then serves the cache without a request", func(t *testing.T) {
+		requests := 0
+		server := serve(good, &requests)
+		defer server.Close()
+		dir := t.TempDir()
+
+		require.NoError(t, DownloadISO(context.Background(), config(server.URL, dir)))
+		require.NoError(t, DownloadISO(context.Background(), config(server.URL, dir)))
+		assert.Equal(t, 1, requests, "no .sha256 fetch, and the second run is the cache")
+		got, err := os.ReadFile(filepath.Join(dir, "netboot.tar.gz"))
+		require.NoError(t, err)
+		assert.Equal(t, good, got)
+	})
+
+	t.Run("a tampered cache is fetched again", func(t *testing.T) {
+		requests := 0
+		server := serve(good, &requests)
+		defer server.Close()
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "netboot.tar.gz"), []byte("stale"), 0o644))
+
+		require.NoError(t, DownloadISO(context.Background(), config(server.URL, dir)))
+		assert.Equal(t, 1, requests)
+	})
+
+	t.Run("a mismatch is refused and removed", func(t *testing.T) {
+		requests := 0
+		server := serve([]byte("not the pinned file"), &requests)
+		defer server.Close()
+		dir := t.TempDir()
+
+		err := DownloadISO(context.Background(), config(server.URL, dir))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "checksum mismatch")
+		assert.NoFileExists(t, filepath.Join(dir, "netboot.tar.gz"))
+	})
+
+	t.Run("a pin that is not a digest is a configuration error", func(t *testing.T) {
+		c := config("http://127.0.0.1:1", t.TempDir())
+		c.SHA256 = "abc"
+		err := DownloadISO(context.Background(), c)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not a hex SHA-256 digest")
+	})
+}

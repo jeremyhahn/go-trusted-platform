@@ -16,6 +16,7 @@ package ipxe
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1123,4 +1124,171 @@ func TestHTTPServer_InstallIndexBrowse(t *testing.T) {
 	resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "install transcript", string(body))
+}
+
+// TestHTTPServer_handleBootScript_ArchitectureGuard pins that a single entry
+// for one architecture is booted inline only by a client of that
+// architecture, and that every other client is sent to the menu with its
+// own architecture.
+func TestHTTPServer_handleBootScript_ArchitectureGuard(t *testing.T) {
+	cfg := DefaultServerConfig()
+	cfg.BootEntries = []BootEntry{{
+		Name: "alpine-arm64", Description: "Alpine aarch64", Architecture: ArchitectureARM64,
+		Kernel: "http://example.com/vmlinuz-lts", Initrd: "http://example.com/initramfs-lts",
+	}}
+	server := newTestHTTPServer(t, cfg)
+
+	w := httptest.NewRecorder()
+	server.handleBootScript(w, httptest.NewRequest("GET", "/boot.ipxe", nil))
+	body, err := io.ReadAll(w.Result().Body)
+	require.NoError(t, err)
+
+	script := string(body)
+	assert.Contains(t, script, "iseq ${buildarch} arm64 || chain menu.ipxe?arch=${buildarch}\n")
+	assert.Contains(t, script, "kernel http://example.com/vmlinuz-lts")
+	assert.Less(t, strings.Index(script, "iseq ${buildarch}"), strings.Index(script, "kernel http"), "the guard runs before any download")
+
+	// An entry for every architecture needs no guard, and the multi-entry
+	// fallback asks the menu for the client's architecture.
+	cfg.BootEntries[0].Architecture = ""
+	w = httptest.NewRecorder()
+	server.handleBootScript(w, httptest.NewRequest("GET", "/boot.ipxe", nil))
+	body, _ = io.ReadAll(w.Result().Body)
+	assert.NotContains(t, string(body), "iseq ${buildarch}")
+	cfg.BootEntries = append(cfg.BootEntries, BootEntry{Name: "second", Kernel: "k", Initrd: "i"})
+	w = httptest.NewRecorder()
+	server.handleBootScript(w, httptest.NewRequest("GET", "/boot.ipxe", nil))
+	body, _ = io.ReadAll(w.Result().Body)
+	assert.Contains(t, string(body), "chain menu.ipxe?arch=${buildarch}")
+}
+
+// TestHTTPServer_handleMenuScript_PerArchitecture pins that ?arch= narrows
+// the menu to the entries a client can run, that an entry with no
+// architecture is offered to everyone, and that a client that does not
+// say gets everything.
+func TestHTTPServer_handleMenuScript_PerArchitecture(t *testing.T) {
+	cfg := DefaultServerConfig()
+	cfg.ExternalURL = "http://192.168.1.10:8080"
+	cfg.BootEntries = []BootEntry{
+		{Name: "x86", Description: "x86_64 installer", Architecture: ArchitectureX86_64, Kernel: "k", Initrd: "i"},
+		{Name: "arm", Description: "aarch64 installer", Architecture: ArchitectureARM64, Kernel: "k", Initrd: "i"},
+		{Name: "any", Description: "rescue", Kernel: "k", Initrd: "i"},
+	}
+	server := newTestHTTPServer(t, cfg)
+	menu := func(query string) string {
+		w := httptest.NewRecorder()
+		server.handleMenuScript(w, httptest.NewRequest("GET", "/menu.ipxe"+query, nil))
+		body, err := io.ReadAll(w.Result().Body)
+		require.NoError(t, err)
+		return string(body)
+	}
+
+	arm := menu("?arch=arm64")
+	assert.Contains(t, arm, "item arm ")
+	assert.Contains(t, arm, "item any ")
+	assert.NotContains(t, arm, "item x86 ")
+	assert.Contains(t, arm, "--default arm ", "the first entry this client can run is the default")
+
+	x86 := menu("?arch=x86_64")
+	assert.Contains(t, x86, "item x86 ")
+	assert.NotContains(t, x86, "item arm ")
+	assert.Contains(t, x86, "--default x86 ")
+
+	all := menu("")
+	assert.Contains(t, all, "item x86 ")
+	assert.Contains(t, all, "item arm ")
+	assert.Contains(t, all, "item any ")
+}
+
+func bootScript(t *testing.T, server *HTTPServer) string {
+	t.Helper()
+	w := httptest.NewRecorder()
+	server.handleBootScript(w, httptest.NewRequest("GET", "/boot.ipxe", nil))
+	body, err := io.ReadAll(w.Result().Body)
+	require.NoError(t, err)
+	return string(body)
+}
+
+func TestHTTPServer_handleBootScript_ChainsTheDeviceScript(t *testing.T) {
+	cfg := DefaultServerConfig()
+	cfg.BootEntries = []BootEntry{{Name: "x", Description: "x", Kernel: "http://s/k", Initrd: "http://s/i"}}
+	server := newTestHTTPServer(t, cfg)
+	assert.NotContains(t, bootScript(t, server), "boot/device/", "no device lookup, no chain")
+
+	server.SetDeviceLookup(func(string) (*DeviceBootInfo, error) { return nil, ErrDeviceNotFound }, NewScriptGenerator("http://s", logging.DefaultLogger().Slog()))
+	script := bootScript(t, server)
+	assert.Contains(t, script, "chain --autofree boot/device/${mac:hexhyp}.ipxe ||\n", "a known device boots what it was assigned")
+	assert.Less(t, strings.Index(script, "boot/device/"), strings.Index(script, "kernel "), "before the default entry, which an unknown device falls through to")
+}
+
+func TestHTTPServer_handleBootScript_DispatchesByArchitecture(t *testing.T) {
+	cfg := DefaultServerConfig()
+	cfg.BootEntries = []BootEntry{
+		{Name: "x86", Description: "x86_64 installer", Architecture: ArchitectureX86_64, Kernel: "http://s/x86/k", Initrd: "http://s/x86/i"},
+		{Name: "arm", Description: "arm64 installer", Architecture: ArchitectureARM64, Kernel: "http://s/arm/k", Initrd: "http://s/arm/i"},
+	}
+	script := bootScript(t, newTestHTTPServer(t, cfg))
+	assert.Contains(t, script, "iseq ${buildarch} x86_64 && goto arch_x86_64 ||\n")
+	assert.Contains(t, script, "iseq ${buildarch} arm64 && goto arch_arm64 ||\n")
+	assert.Contains(t, script, "chain menu.ipxe?arch=${buildarch} || shell\n", "an architecture with no entry gets the menu")
+	x86, arm := strings.Index(script, ":arch_x86_64\n"), strings.Index(script, ":arch_arm64\n")
+	require.True(t, x86 > 0 && arm > x86)
+	assert.Contains(t, script[x86:arm], "kernel http://s/x86/k")
+	assert.Contains(t, script[arm:], "kernel http://s/arm/k")
+	assert.Contains(t, script[arm:], ":boot_arm64_retry", "each block has its own labels")
+	assert.NotContains(t, script, "\nshell\nchain", "no menu fallthrough between blocks")
+
+	// Two entries for one architecture cannot be told apart: the menu.
+	cfg.BootEntries[1].Architecture = ArchitectureX86_64
+	script = bootScript(t, newTestHTTPServer(t, cfg))
+	assert.NotContains(t, script, "goto arch_")
+	assert.Contains(t, script, "chain menu.ipxe?arch=${buildarch}")
+}
+
+func TestHTTPServer_handleDeviceBootScript_NotFoundVersusFailure(t *testing.T) {
+	server := newTestHTTPServer(t, DefaultServerConfig())
+	known := &DeviceBootInfo{MAC: "dc:a6:32:01:36:c2", Hostname: "pi-01", KernelURL: "http://s/k", InitrdURL: "http://s/i"}
+	server.SetDeviceLookup(func(mac string) (*DeviceBootInfo, error) {
+		switch mac {
+		case known.MAC:
+			return known, nil
+		case "00:00:00:00:00:01":
+			return nil, ErrDeviceNotFound
+		default:
+			return nil, errors.New("manifest unreadable")
+		}
+	}, NewScriptGenerator("http://s", logging.DefaultLogger().Slog()))
+
+	get := func(path string) (int, string) {
+		w := httptest.NewRecorder()
+		server.handleDeviceBootScript(w, httptest.NewRequest("GET", path, nil))
+		body, err := io.ReadAll(w.Result().Body)
+		require.NoError(t, err)
+		return w.Code, string(body)
+	}
+	code, body := get("/boot/device/dc-a6-32-01-36-c2.ipxe")
+	assert.Equal(t, http.StatusOK, code, "iPXE's ${mac:hexhyp} form resolves")
+	assert.Contains(t, body, "kernel http://s/k")
+	code, _ = get("/boot/device/00-00-00-00-00-01.ipxe")
+	assert.Equal(t, http.StatusNotFound, code, "an unknown device falls through")
+	code, _ = get("/boot/device/00-00-00-00-00-02.ipxe")
+	assert.Equal(t, http.StatusInternalServerError, code, "a broken lookup is not reported as an unknown device")
+}
+
+func TestHTTPServer_handleBootScript_BIOSClientsBootTheX86Entry(t *testing.T) {
+	cfg := DefaultServerConfig()
+	cfg.BootEntries = []BootEntry{{Name: "x86", Description: "x86", Architecture: ArchitectureX86_64, Kernel: "http://s/k", Initrd: "http://s/i"}}
+	script := bootScript(t, newTestHTTPServer(t, cfg))
+	assert.Contains(t, script, "iseq ${buildarch} x86_64 || iseq ${buildarch} i386 || chain menu.ipxe?arch=${buildarch}\n",
+		"undionly.kpxe is a 32-bit iPXE: its buildarch is i386 on a 64-bit server")
+
+	cfg.BootEntries = append(cfg.BootEntries, BootEntry{Name: "arm", Description: "arm", Architecture: ArchitectureARM64, Kernel: "http://s/ak", Initrd: "http://s/ai"})
+	script = bootScript(t, newTestHTTPServer(t, cfg))
+	assert.Contains(t, script, "iseq ${buildarch} i386 && goto arch_x86_64 ||\n")
+
+	// An explicit i386 entry claims i386 for itself.
+	cfg.BootEntries = append(cfg.BootEntries, BootEntry{Name: "i386", Description: "i386", Architecture: ArchitectureI386, Kernel: "http://s/ik", Initrd: "http://s/ii"})
+	script = bootScript(t, newTestHTTPServer(t, cfg))
+	assert.NotContains(t, script, "iseq ${buildarch} i386 && goto arch_x86_64")
+	assert.Contains(t, script, "iseq ${buildarch} i386 && goto arch_i386 ||\n")
 }

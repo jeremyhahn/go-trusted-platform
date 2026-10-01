@@ -16,6 +16,7 @@ package ipxe
 import (
 	"errors"
 	"fmt"
+	"net"
 )
 
 // Sentinel errors for the ipxe package.
@@ -28,6 +29,12 @@ var (
 
 	// ErrInvalidConfig indicates the configuration is invalid.
 	ErrInvalidConfig = errors.New("invalid configuration")
+
+	// ErrDeviceNotFound is what a DeviceLookup returns for a MAC it has no
+	// assignment for. The per-device route answers it with 404, which
+	// /boot.ipxe's chain treats as "fall through to the default entries";
+	// any other lookup error is a server failure (500).
+	ErrDeviceNotFound = errors.New("device not found")
 
 	// ErrFirmwareNotFound indicates the requested firmware file was not found.
 	ErrFirmwareNotFound = errors.New("firmware file not found")
@@ -235,3 +242,56 @@ type ErrFirmwareUnavailable struct {
 func (e *ErrFirmwareUnavailable) Error() string {
 	return "ipxe: firmware " + e.Filename + " is not in " + e.Dir + " and downloads are disabled"
 }
+
+// FirmwareSignError reports that an EFI firmware binary could not be
+// Authenticode-signed for Secure Boot clients.
+type FirmwareSignError struct {
+	Filename string
+	Err      error
+}
+
+func (e *FirmwareSignError) Error() string {
+	return "ipxe: signing firmware " + e.Filename + ": " + e.Err.Error()
+}
+
+func (e *FirmwareSignError) Unwrap() error { return e.Err }
+
+// UnknownPeerError is returned by the raw DHCP socket when asked to unicast
+// to an address it has never received a datagram from: without ARP it has
+// no hardware address to frame the reply to.
+type UnknownPeerError struct {
+	IP net.IP
+}
+
+func (e *UnknownPeerError) Error() string {
+	return "ipxe: no hardware address known for " + e.IP.String()
+}
+
+// FirmwareOverrideError is returned at startup when a
+// ServerConfig.FirmwareOverrides entry cannot be read.
+type FirmwareOverrideError struct {
+	Filename string
+	Path     string
+	Err      error
+}
+
+func (e *FirmwareOverrideError) Error() string {
+	return "ipxe: firmware override " + e.Filename + " from " + e.Path + ": " + e.Err.Error()
+}
+
+func (e *FirmwareOverrideError) Unwrap() error { return e.Err }
+
+// TFTPPathError is returned by the TFTP server for a request it could not
+// serve from ServerConfig.TFTPDir: the file is absent, unreadable or the
+// path escapes the tree. It unwraps to the file error so os.ErrNotExist
+// is reported to the client as "file not found".
+type TFTPPathError struct {
+	Filename string
+	Err      error
+}
+
+func (e *TFTPPathError) Error() string {
+	return "ipxe: tftp " + e.Filename + ": " + e.Err.Error()
+}
+
+func (e *TFTPPathError) Unwrap() error { return e.Err }

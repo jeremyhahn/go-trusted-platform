@@ -7,7 +7,7 @@ Step-by-step guide for the first deployment of a Trusted Platform cluster from b
 - Bare metal servers racked and cabled
 - BMC access configured on each server (Redfish or IPMI)
 - Network connectivity between the deployment host and all BMC interfaces
-- A Linux host (or Cisco IOS-XE device) for the bootstrap container
+- A Linux host with Docker or Podman for the bootstrap container
 - SSH key access to the bootstrap container host
 - Docker or Podman installed on the bootstrap container host
 
@@ -27,7 +27,6 @@ Create `bootstrap.yaml`:
 
 ```yaml
 deployer:
-  target: linux
   host: 192.168.1.5
   user: admin
   ssh_key: ~/.ssh/id_ed25519

@@ -66,7 +66,8 @@ func (s *Service) SignDigest(ctx context.Context, req *SignRequest) (*SignRespon
 
 	// Same pre-enrollment authentication as ResolveConfig: single-use nonce
 	// followed by External Account Binding validation.
-	if err := s.verifyNonceAndEAB(ctx, req.Nonce, req.EABKeyID, req.EABHMAC); err != nil {
+	cred, err := s.verifyNonceAndEAB(ctx, req.Nonce, req.EABKeyID, req.EABHMAC)
+	if err != nil {
 		return nil, err
 	}
 
@@ -80,6 +81,14 @@ func (s *Service) SignDigest(ctx context.Context, req *SignRequest) (*SignRespon
 		if errors.As(err, &noMatch) {
 			return nil, ErrRemoteSignNotConfigured{Reason: "no device profile matched the request identity"}
 		}
+		return nil, err
+	}
+
+	if err := verifyEABBinding(cred, profile); err != nil {
+		s.logger.Warn("configdelivery: sign eab credential bound to another profile",
+			slog.Uint64("profile_id", profile.ID),
+			slog.String("ek_serial", req.EKSerial),
+			slog.String("mac_address", req.MACAddress))
 		return nil, err
 	}
 

@@ -142,8 +142,8 @@ func NewXKMSManager(config *XKMSConfig, logger *logging.Logger) (*XKMSManager, e
 	}
 
 	// Remote resign mode keeps the private key in the KMS — never export it.
-	// The installer / kernel-update path obtains a ServiceKey-backed signer via
-	// GetSigner (or secureboot.NewRemoteSigner) that round-trips only the digest.
+	// The installer signs through the control plane's /provisioning/sign and the
+	// kernel-update path through NewKMSSigner; both round-trip only the digest.
 	if config.ResignMode == ResignModeRemote {
 		config.ExportKeys = false
 	}

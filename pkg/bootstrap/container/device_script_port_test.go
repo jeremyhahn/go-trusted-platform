@@ -61,8 +61,7 @@ func TestServerConfig_ApplyDefaults_DeviceScriptPortOverrideHonoured(t *testing.
 func validServerConfig() *ServerConfig {
 	return &ServerConfig{
 		ManifestPath: "/data/manifest.yaml",
-		KernelPath:   "/data/vmlinuz",
-		InitrdPath:   "/data/initramfs",
+		MediaDir:     "/data/media",
 		DHCPConfig: DHCPConfig{
 			ServerIP:   "198.18.1.91",
 			RangeStart: "198.18.1.100",

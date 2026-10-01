@@ -16,7 +16,9 @@ package ipxe
 import (
 	"crypto/x509"
 	"fmt"
+	"io"
 	"net"
+	"slices"
 	"strings"
 	"time"
 )
@@ -63,9 +65,34 @@ type ServerConfig struct {
 	// infrastructure decision, so it is configuration, not a literal (#93).
 	FirmwareUpstream string
 
+	// FirmwareSigner, when set, Authenticode-signs every EFI firmware
+	// binary the TFTP server serves (the iPXE images) as it is loaded.
+	// Required when clients enforce Secure Boot: the platform's U-Boot
+	// builds verify the EFI application they netboot against the
+	// preseeded db, and UEFI clients with the keys enrolled do the same.
+	FirmwareSigner EFISigner
+
 	// FirmwareOffline forbids downloads: firmware missing from FirmwareDir
 	// is an error for the required file and a warning for optional ones.
 	FirmwareOffline bool
+
+	// TFTPDir is a directory tree the TFTP server serves for any request
+	// the iPXE firmware set does not answer, root-relative and with no
+	// escape above it. It carries what a Raspberry Pi bootloader fetches by
+	// name (start4.elf, config.txt, the device trees and overlays,
+	// kernel8.img), optionally under per-device directories (the
+	// bootloader's TFTP_PREFIX: "<serial>/", "<mac-with-dashes>/"), which
+	// the bootloader tries before the root. Empty serves only the iPXE
+	// firmware.
+	TFTPDir string
+
+	// FirmwareOverrides serves the platform's own builds in place of the
+	// upstream binaries: served filename → local file. An override is
+	// loaded before the cache is consulted, is signed like any other EFI
+	// binary, and is an error when unreadable — an operator who named a
+	// file meant it. The arm64 iPXE is one: upstream's naps in WFI, which
+	// U-Boot's EFI never wakes (build/docker/ipxe-builder).
+	FirmwareOverrides map[string]string
 
 	// ExternalURL is the external URL for HTTP server (auto-detected if empty).
 	ExternalURL string
@@ -146,6 +173,14 @@ type ServerConfig struct {
 	// IPXEScript is the iPXE script URL for iPXE clients.
 	IPXEScript string
 
+	// DHCPProxyOnly runs the DHCP server as a proxy (DHCPConfig.ProxyOnly):
+	// boot options only, no leases, on a segment that already has DHCP.
+	DHCPProxyOnly bool
+
+	// RaspberryPiOption43 overrides the string a Raspberry Pi bootloader
+	// is given in option 43 (DHCPConfig.RaspberryPiOption43).
+	RaspberryPiOption43 string
+
 	// DHCPRespondToAll responds to all DHCP clients, not just PXE-tagged ones.
 	// Use in bootstrap mode when this is the only DHCP server on the network.
 	DHCPRespondToAll bool
@@ -181,6 +216,13 @@ type BootEntry struct {
 
 	// Args are the kernel arguments.
 	Args string
+
+	// Architecture restricts the entry to clients of one iPXE build
+	// architecture ("x86_64", "arm64", "i386"; iPXE's ${buildarch}).
+	// Empty means every client. The menu offers only the entries a
+	// client can run, because a kernel for the other architecture fails
+	// after the download with no useful message.
+	Architecture string
 
 	// AutoInstall is the path to the autoinstall config.
 	AutoInstall string
@@ -555,4 +597,46 @@ func calculateBroadcastIP(ip, mask net.IP) net.IP {
 	}
 
 	return broadcast
+}
+
+// EFISigner signs a PE/COFF EFI binary (Authenticode). pkg/authenticode's
+// Signer satisfies it; tests use a recorder.
+type EFISigner interface {
+	Sign(input io.Reader, output io.Writer) error
+}
+
+// Architecture names as iPXE reports them in ${buildarch}, used by
+// BootEntry.Architecture and the per-architecture menu.
+const (
+	ArchitectureX86_64 = "x86_64"
+	ArchitectureARM64  = "arm64"
+	ArchitectureI386   = "i386"
+)
+
+// EntriesForArchitecture returns the boot entries a client of the given
+// architecture may run: those with a matching Architecture and those with
+// none. An empty architecture (a client that did not say) gets them all.
+func EntriesForArchitecture(entries []BootEntry, arch string) []BootEntry {
+	if arch == "" {
+		return entries
+	}
+	out := make([]BootEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.Architecture == "" || slices.Contains(ClientArchitectures(e.Architecture), arch) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// ClientArchitectures lists the iPXE ${buildarch} values of the clients an
+// entry for architecture serves. An x86_64 entry also serves i386 clients:
+// legacy-BIOS machines chain undionly.kpxe, a 32-bit iPXE whose buildarch
+// is i386, yet boot the 64-bit kernel it fetches. Every other
+// architecture serves only itself.
+func ClientArchitectures(architecture string) []string {
+	if architecture == ArchitectureX86_64 {
+		return []string{ArchitectureX86_64, ArchitectureI386}
+	}
+	return []string{architecture}
 }

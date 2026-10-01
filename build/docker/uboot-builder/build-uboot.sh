@@ -81,13 +81,30 @@ python3 tools/efivar.py print -i ubootefi.var
 # fragment must survive olddefconfig; a silently dropped option (unmet
 # dependency) is a build failure, not a warning.
 require_config() {
-    local config="$1" fragment="$2" line
+    local config="$1" fragment="$2" line on
     while IFS= read -r line; do
         case "$line" in
             ''|'#'*) continue ;;
         esac
         grep -qxF "$line" "$config" || { echo "$fragment: $line was dropped by Kconfig (unmet dependency?)" >&2; exit 3; }
     done < "$fragment"
+    # and every "# CONFIG_X is not set" line must not have come back as =y
+    # (a fragment turning an option off that the defconfig selects).
+    # (grep exits 1 when a fragment has no such line; under set -e that
+    # must not end the build.)
+    local off
+    off=$(grep -E '^# CONFIG_[A-Z0-9_]+ is not set$' "$fragment" || true)
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        on="${line#\# }"; on="${on% is not set}=y"
+        # (`grep && {...}` as the loop's last command would make the
+        # function return 1 when the option is correctly off, and set -e
+        # would end the build there, silently.)
+        if grep -qxF "$on" "$config"; then
+            echo "$fragment: ${on%=y} is still enabled (selected by something else?)" >&2
+            exit 3
+        fi
+    done <<< "$off"
 }
 
 boards_json=""

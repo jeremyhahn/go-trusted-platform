@@ -95,15 +95,7 @@ coverage.out
 # bootstrap build ARTIFACTS never enter the module tree (module zip size
 # limit); the Dockerfile/scripts/configs in the same directory are source
 # and stay tracked.
-build/docker/bootstrap/alpine-minirootfs.tar.gz
-build/docker/bootstrap/dracut-platformd.tar.gz
-build/docker/bootstrap/initramfs
-build/docker/bootstrap/modloop-lts
-build/docker/bootstrap/platformctl
-build/docker/bootstrap/platformd
-build/docker/bootstrap/platform-initrd
 build/docker/bootstrap/pxeboot
-build/docker/bootstrap/vmlinuz
 .serena/cache/
 /provisioning-client
 examples/provisioning-client/provisioning-client
@@ -116,8 +108,8 @@ build/gosec-results.sarif
 build/gosec-report.txt
 
 # Deployment-private bootstrap configs. The canonical copies live in
-# the private infra repo (automatethethings/infra/trusted-platform/
-# configs/deployments/); site-specific IPs, hostnames, and BMC
+# the private platform-configs repository (deployments/), checked out
+# beside this one; site-specific IPs, hostnames, and BMC
 # credentials never enter project source control. Local scratch
 # copies at these paths stay untracked.
 /bootstrap.yaml
@@ -135,3 +127,11 @@ __pycache__/
 # Written under the workspace, as root, by the devcontainer TPM suite's platformd
 # (a keystore default relative to its cwd); never source.
 /tpm2-keys/
+
+# Test and run logs, and the runtime state tests write beside their package
+/build/coverage/
+/build/*.log
+/integration-test-*.log
+/pkg/cli/commands/db/trusted-data/
+/pkg/webservice/v1/test/trusted-data/log/
+/pkg/webservice/v1/test/trusted-data/quicbaas/

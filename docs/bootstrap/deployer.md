@@ -2,56 +2,38 @@
 
 The bootstrap container provides PXE, DHCP, and TFTP services needed to network-boot bare metal servers. The deployer subsystem handles deploying this container to a target host via SSH.
 
-## Supported Targets
+## Deployer Host
 
-### Linux (`target: linux`)
-
-Deploys to any Linux host with Docker or Podman.
+The bootstrap container runs on a Linux host with Docker or Podman — the
+jumpbox on the provisioning network. (The Cisco IOS-XE app-hosting target was
+removed: the platform's own bootstrap container and gatewayd replaced it.
+Switch configuration during bootstrap is a separate phase and is unaffected;
+see [switch-management.md](switch-management.md).)
 
 **Requirements:**
-- SSH access to the target host
+- SSH access to the host, with its host key pinned (below)
 - Docker or Podman installed and running
 - Network access to the provisioning subnet
+- A netboot media build (`deployer.netboot_media_dir`, `make netboot-media`)
 
 **How it works:**
 1. Connects to the host via SSH
-2. Copies the bootstrap manifest and configuration files
-3. Pulls and starts the bootstrap container
+2. Copies the bootstrap manifest and stages the netboot media build
+3. Ships or pulls and starts the bootstrap container
 4. Binds the container to the provisioning network interface
 
 ```yaml
 deployer:
-  target: linux
   host: 192.168.1.5
   user: admin
   ssh_key: ~/.ssh/id_ed25519
   known_hosts_path: /etc/platform/deployer/known_hosts
   container_runtime: docker
+  container_image: platform-pxeboot:latest
+  netboot_media_dir: bin/netboot-media
 ```
 
-### Cisco IOS-XE (`target: cisco`)
-
-Deploys to a Cisco IOS-XE guestshell environment. Useful when a network switch doubles as the bootstrap host.
-
-**Requirements:**
-- SSH access to the switch
-- Guestshell enabled and configured
-- Container runtime available in guestshell
-
-```yaml
-deployer:
-  target: cisco
-  host: 192.168.1.254
-  user: admin
-  ssh_key: ~/.ssh/switch_key
-```
-
-> The Cisco target drives the IOS-XE CLI through generated `expect` scripts
-> (the guestshell exec model drops the connection after each command), so the
-> host-key pinning below applies to the **Linux** deployer and the ISO stager,
-> not the Cisco path.
-
-## Host-Key Verification (required for `target: linux`)
+## Host-Key Verification (required)
 
 The Linux deployer — and the virtual-media ISO stager that streams per-node
 ISOs to the same host — run on the go-xkms SSH stack, reached through the
@@ -82,7 +64,7 @@ the transfer never crosses an unverified channel.
 | Field | Required | Description |
 |-------|----------|-------------|
 | `ssh_key` | Yes | Path to the SSH private key file used to authenticate to the deployer host. |
-| `known_hosts_path` | Yes (for `target: linux`) | Path whose containing directory holds the pinned host-key envelopes for the deployer host. |
+| `known_hosts_path` | Yes | Path whose containing directory holds the pinned host-key envelopes for the deployer host. |
 
 ### Provisioning the pin
 

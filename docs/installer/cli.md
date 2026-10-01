@@ -293,8 +293,9 @@ install network is known to permit outbound HTTPS to the Alpine CDN.
 **`--overrides` requires `--platform-config`** — it is a merge onto a template,
 so without a template it fails with `ErrOverridesWithoutTemplate`.
 
-There is **no `--debug-sink` flag**, despite a doc comment in `pkg/iso/types.go`
-claiming one. See [engineering.md](engineering.md) §10.
+There is **no `--debug-sink` flag**. The forensic sink is set through the ISO
+build config (`platform.debug_sink`); when it is unset, the install script
+derives the sink from the DHCP server. See [engineering.md](engineering.md) §10.
 
 ### 3.2 `platformctl iso test`
 
@@ -348,7 +349,11 @@ at, not the verb.
 | `--memory` | int | `4096` | RAM in MB |
 | `--cpus` | int | host CPU count | CPU cores |
 | `--work-dir` | string | `work-pxe` | VM and PXE server artefacts |
-| `--secure-boot` | bool | `false` | UEFI Secure Boot |
+| `--disk` / `--disk-size` | string | `<work-dir>/pxe-client.qcow2` / `10G` | The client's disk, created when missing |
+| `--secure-boot` | bool | `false` | UEFI Secure Boot (x86_64) |
+| `--architecture` | string | `x86_64` | `x86_64` or `aarch64` (QEMU `virt` from the platform's U-Boot) |
+| `--uboot` / `--ipxe` / `--keys-dir` | string | `make uboot-build` output / `make ipxe-build` output / `~/.trusted-platform/secure-boot` | aarch64: the firmware, the platform-built arm64 iPXE, and the db key that signs what U-Boot loads |
+| `--serial-log` / `--expect` | string | `""` | Unattended run: capture the console, stop at a milestone |
 | `--debug` | bool | `false` | Debug output |
 
 ```bash

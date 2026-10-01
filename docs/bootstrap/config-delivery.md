@@ -132,7 +132,10 @@ from fresh per-node config when available.
 
 ## 5. What the Orchestrator Publishes (per MAC)
 
-Per `pkg/bootstrap/virtual_media.go::stagePerMACHostname`:
+Per `pkg/bootstrap/virtual_media.go::stagePerMACConfig`, called before
+the install boot on every provisioning path — BMC-managed PXE, virtual
+media and unmanaged nodes (until #694 the BMC-managed PXE path skipped it,
+so those nodes installed from the media's baked defaults):
 
 | Key | Content-Type | Content |
 |-----|--------------|---------|

@@ -15,6 +15,9 @@
 #   BOOTSTRAP_DNS         DNS server(s) advertised by DHCP
 #   BOOTSTRAP_APK_MIRROR  install-time APK mirror base (default: public mirror)
 #   BOOTSTRAP_ALPINE_VERSION  Alpine version of the staged kernel/initramfs
+#   BOOTSTRAP_TFTP_DIR    Raspberry Pi boot tree to serve over TFTP (optional)
+#   BOOTSTRAP_ARM64_IPXE  db-signed arm64 iPXE served as snponly-aarch64.efi (optional)
+#   BOOTSTRAP_PROXY_DHCP  "true": proxy DHCP, the segment's own server leases (optional)
 
 set -eu
 
@@ -38,9 +41,27 @@ set -eu
 # when something else on the deployer already owns the derived port.
 : "${BOOTSTRAP_DEVICE_SCRIPT_PORT:=$((BOOTSTRAP_HTTP_PORT + 1))}"
 
+# The optional pxeboot flags are assembled here, not in supervisord.conf:
+# an unset %(ENV_*)s there would leave a bare flag that swallows the next
+# flag as its value. This one variable closes the command, so empty is
+# nothing.
+BOOTSTRAP_PXEBOOT_ARGS=""
+if [ -n "${BOOTSTRAP_TFTP_DIR:-}" ]; then
+    BOOTSTRAP_PXEBOOT_ARGS="$BOOTSTRAP_PXEBOOT_ARGS --tftp-dir $BOOTSTRAP_TFTP_DIR"
+fi
+if [ -n "${BOOTSTRAP_ARM64_IPXE:-}" ]; then
+    BOOTSTRAP_PXEBOOT_ARGS="$BOOTSTRAP_PXEBOOT_ARGS --firmware-override snponly-aarch64.efi=$BOOTSTRAP_ARM64_IPXE"
+fi
+case "${BOOTSTRAP_PROXY_DHCP:-false}" in
+    true) BOOTSTRAP_PXEBOOT_ARGS="$BOOTSTRAP_PXEBOOT_ARGS --dhcp-proxy" ;;
+    false) ;;
+    *) echo "BOOTSTRAP_PROXY_DHCP must be true or false, got $BOOTSTRAP_PROXY_DHCP" >&2; exit 2 ;;
+esac
+
 export BOOTSTRAP_INTERFACE BOOTSTRAP_HTTP_PORT BOOTSTRAP_SERVER_IP \
        BOOTSTRAP_DHCP_START BOOTSTRAP_DHCP_END BOOTSTRAP_GATEWAY BOOTSTRAP_DNS \
-       BOOTSTRAP_APK_MIRROR BOOTSTRAP_ALPINE_VERSION BOOTSTRAP_DEVICE_SCRIPT_PORT
+       BOOTSTRAP_APK_MIRROR BOOTSTRAP_ALPINE_VERSION BOOTSTRAP_DEVICE_SCRIPT_PORT \
+       BOOTSTRAP_PXEBOOT_ARGS
 
 # Samba state dirs the alpine package doesn't pre-create
 mkdir -p /var/lib/samba/private /var/log/samba /run/samba

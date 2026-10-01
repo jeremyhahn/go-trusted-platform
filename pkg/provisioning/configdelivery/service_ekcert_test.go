@@ -78,7 +78,7 @@ func newEKService(t *testing.T, profile *entities.DeviceProfile, requireEK bool)
 	}
 	svc, err := NewService(ServiceParams{
 		ProfileService: resolver,
-		EABService:     &mockEABService{},
+		EABService:     boundEAB(profile),
 		BaseURL:        "https://platform.example.com",
 		RequireEKMatch: boolPtr(requireEK),
 		Logger:         logger,
@@ -261,7 +261,9 @@ func TestService_PendingResponse_ProvisionURL(t *testing.T) {
 			return nil, device.ErrNoMatchingConfig{EKSerial: ekSerial, MAC: mac}
 		},
 	}
-	svc := testService(t, profileSvc, &mockEABService{})
+	// No EAB service: a credential names a profile, so an EAB-carrying device
+	// without one is refused (TestService_ResolveConfig_EABWithoutProfile).
+	svc := testService(t, profileSvc, nil)
 
 	req := &ConfigRequest{
 		EKSerial: "ek-unknown",

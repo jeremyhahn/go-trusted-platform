@@ -18,12 +18,14 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
 	"github.com/insomniacslk/dhcp/dhcpv4/server4"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/rpinetboot"
 )
 
 const (
@@ -39,10 +41,25 @@ const (
 	pxeVendorOptionEnd           = byte(0xff) // PXE option END marker
 
 	// Client architectures
-	archBIOSx86 = uint16(0x0000)
-	archEFIx64  = uint16(0x0007)
-	archEFIx86  = uint16(0x0006)
-	archEFIBC   = uint16(0x0009)
+	archBIOSx86    = uint16(0x0000)
+	archEFIx64     = uint16(0x0007)
+	archEFIx86     = uint16(0x0006)
+	archEFIBC      = uint16(0x0009)
+	archEFIAArch64 = uint16(0x000b) // RFC 4578 / IANA: EFI AArch64
+	// archUBootARM64 is IANA type 22, "ARM 64-bit U-Boot": what U-Boot's
+	// legacy network stack sends by default (DHCP_PXE_CLIENTARCH). The
+	// platform's builds send 0x000b; a stock U-Boot sends this, and it
+	// runs the same AArch64 EFI binary.
+	archUBootARM64 = uint16(0x0016)
+
+	// vendorClassUBoot is the vendor class U-Boot's legacy network stack
+	// sends when it is not built with a PXE VCI string ("U-Boot.armv8" on
+	// arm64). The platform's U-Boot builds send the standard PXEClient
+	// string, but a stock U-Boot netbooting against this server is still a
+	// PXE-class client and must be answered as one.
+	vendorClassUBoot = "U-Boot"
+	// vendorClassUBootARM64 is that stock string on arm64.
+	vendorClassUBootARM64 = "U-Boot.armv8"
 )
 
 // DHCPConfig holds the internal DHCP server configuration.
@@ -73,6 +90,22 @@ type DHCPConfig struct {
 	IPXEScript         string
 	UseRawSocket       bool
 	RespondToAll       bool // When true, respond to all DHCP clients, not just PXE-tagged ones. Use in bootstrap mode when this is the only DHCP server.
+
+	// ProxyOnly makes this a proxy DHCP server (PXE 2.1 §2.2.3): it
+	// answers a PXE client's DISCOVER with an OFFER that carries no
+	// address — only the boot options: server identifier, siaddr, option
+	// 60 and option 43 (and the bootfile) — and answers no REQUEST, so
+	// the network's own DHCP server leases the address. What the
+	// Raspberry Pi bootloader and iPXE need to boot from a segment that
+	// already has DHCP; a UEFI PXE ROM would additionally expect the
+	// boot-server discovery exchange on port 4011, which this server
+	// does not implement.
+	ProxyOnly bool
+
+	// RaspberryPiOption43 is the string a Raspberry Pi bootloader looks
+	// for in option 43 (rpinetboot.Option43Match unless a fleet of
+	// original 3B / 2B v1.2 boards needs the three-space form).
+	RaspberryPiOption43 string
 	// Port is the UDP port to listen on. Zero means DefaultDHCPPort (67).
 	// This is the LISTEN port only; the ports a reply is sent TO (67 for a
 	// relay agent, 68 for a client) are fixed by RFC 2131 and are not
@@ -309,12 +342,29 @@ func (s *DHCPServer) handleDiscover(conn net.PacketConn, peer net.Addr, req *dhc
 
 	clientArch := s.getClientArch(req)
 	isIPXE := s.isIPXEClient(req)
+	isPi := s.isRaspberryPi(req)
 
 	s.logger.Info("DHCP Discover",
 		"pxe", isPXE,
 		"mac", req.ClientHWAddr.String(),
 		"arch", fmt.Sprintf("0x%04x", clientArch),
-		"is_ipxe", isIPXE)
+		"is_ipxe", isIPXE,
+		"raspberry_pi", isPi)
+	if isPi {
+		if id, ok := rpinetboot.ParseOption97(req.Options.Get(dhcpv4.OptionClientMachineIdentifier)); ok {
+			s.logger.Info("Raspberry Pi bootloader", "mac", req.ClientHWAddr.String(),
+				"serial", fmt.Sprintf("%08x", id.Serial), "fourcc", id.FourCC, "revision", fmt.Sprintf("0x%08x", id.Revision))
+		}
+	}
+
+	if s.config.ProxyOnly {
+		if !isPXE {
+			s.logger.Debug("Proxy DHCP: not a PXE client, nothing to offer", "mac", req.ClientHWAddr.String())
+			return
+		}
+		s.sendProxyOffer(conn, peer, req, clientArch, isIPXE)
+		return
+	}
 
 	// Get or assign IP
 	ip, err := s.getOrAssignIP(req.ClientHWAddr)
@@ -366,6 +416,11 @@ func (s *DHCPServer) handleDiscover(conn net.PacketConn, peer net.Addr, req *dhc
 
 // handleRequest handles DHCP Request messages.
 func (s *DHCPServer) handleRequest(conn net.PacketConn, peer net.Addr, req *dhcpv4.DHCPv4) {
+	if s.config.ProxyOnly {
+		// The network's DHCP server owns the lease; a proxy never ACKs.
+		s.logger.Debug("Proxy DHCP: leaving the request to the network's DHCP server", "mac", req.ClientHWAddr.String())
+		return
+	}
 	isPXE := s.isPXEClient(req)
 	if !isPXE && !s.config.RespondToAll {
 		s.logger.Debug("Ignoring non-PXE request", "mac", req.ClientHWAddr.String())
@@ -453,6 +508,10 @@ func (s *DHCPServer) handleRelease(req *dhcpv4.DHCPv4) {
 // client's DISCOVER/REQUEST; the reply echoes the client identifier it
 // carried, which PXE 2.1 requires of a boot server.
 func (s *DHCPServer) addPXEOptions(reply, req *dhcpv4.DHCPv4, clientArch uint16, isIPXE bool) {
+	if req != nil && s.isRaspberryPi(req) {
+		s.addRaspberryPiOptions(reply, req)
+		return
+	}
 	if isIPXE {
 		// iPXE client - chain to HTTP script
 		if s.config.IPXEScript != "" {
@@ -515,6 +574,63 @@ func (s *DHCPServer) addPXEOptions(reply, req *dhcpv4.DHCPv4, clientArch uint16,
 	}
 }
 
+// isRaspberryPi reports whether the request is the Raspberry Pi
+// bootloader's (rpinetboot.IsBootloaderRequest).
+func (s *DHCPServer) isRaspberryPi(req *dhcpv4.DHCPv4) bool {
+	return rpinetboot.IsBootloaderRequest(
+		string(req.Options.Get(dhcpv4.OptionClassIdentifier)),
+		req.Options.Get(dhcpv4.OptionClientMachineIdentifier),
+		req.ClientHWAddr)
+}
+
+// addRaspberryPiOptions gives the Raspberry Pi bootloader what it looks
+// for: option 43 carrying its match string, option 60 "PXEClient", its
+// option 97 echoed, and the TFTP server in siaddr (and option 66 when a
+// name is configured). No bootfile: the bootloader fetches a fixed set of
+// files by name (rpinetboot.Model), never the one a reply names.
+func (s *DHCPServer) addRaspberryPiOptions(reply, req *dhcpv4.DHCPv4) {
+	match := s.config.RaspberryPiOption43
+	if match == "" {
+		match = rpinetboot.Option43Match
+	}
+	reply.BootFileName = ""
+	if s.config.TFTPServerName != "" {
+		reply.ServerHostName = s.config.TFTPServerName
+		reply.UpdateOption(dhcpv4.OptTFTPServerName(s.config.TFTPServerName))
+	}
+	if s.config.TFTPServerIP != nil {
+		reply.ServerIPAddr = s.config.TFTPServerIP
+	}
+	if guid := req.Options.Get(dhcpv4.OptionClientMachineIdentifier); len(guid) > 0 {
+		reply.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionClientMachineIdentifier, guid))
+	}
+	reply.UpdateOption(dhcpv4.OptClassIdentifier(vendorClassPXEClient))
+	reply.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionVendorSpecificInformation, rpinetboot.Option43(match)))
+	s.logger.Debug("Raspberry Pi boot options set", "mac", req.ClientHWAddr.String(), "option43", match, "tftp", reply.ServerIPAddr.String())
+}
+
+// sendProxyOffer answers a DISCOVER as a proxy DHCP server: an OFFER with
+// no address and no lease options, only the boot options the client
+// merges with the lease it gets from the network's DHCP server.
+func (s *DHCPServer) sendProxyOffer(conn net.PacketConn, peer net.Addr, req *dhcpv4.DHCPv4, clientArch uint16, isIPXE bool) {
+	offer, err := dhcpv4.NewReplyFromRequest(req)
+	if err != nil {
+		s.logger.Error(err)
+		return
+	}
+	offer.UpdateOption(dhcpv4.OptMessageType(dhcpv4.MessageTypeOffer))
+	offer.YourIPAddr = net.IPv4zero
+	offer.ServerIPAddr = s.serverIP
+	offer.UpdateOption(dhcpv4.OptServerIdentifier(s.serverIP))
+	s.addPXEOptions(offer, req, clientArch, isIPXE)
+	if err := s.sendDHCPReply(conn, peer, req, offer); err != nil {
+		s.logger.Error(err)
+		return
+	}
+	s.logger.Info("Sent proxy DHCP Offer", "mac", req.ClientHWAddr.String(),
+		"boot_file", offer.BootFileName, "tftp", offer.ServerIPAddr.String())
+}
+
 // bootFilenameForArch returns the TFTP boot filename appropriate
 // for the given DHCP option-93 client architecture value. It
 // consults s.config.BootFilenameByArch first, then falls back to
@@ -537,21 +653,25 @@ func (s *DHCPServer) bootFilenameForArch(clientArch uint16) string {
 // loadFirmware populates.
 func DefaultBootFilenameByArch() map[uint16]string {
 	return map[uint16]string{
-		archBIOSx86: "undionly.kpxe",
-		archEFIx86:  "ipxe32.efi",
-		archEFIx64:  "ipxe.efi",
-		archEFIBC:   "ipxe.efi",
+		archBIOSx86:    "undionly.kpxe",
+		archEFIx86:     "ipxe32.efi",
+		archEFIx64:     "ipxe.efi",
+		archEFIBC:      "ipxe.efi",
+		archEFIAArch64: FirmwareSNPOnlyAArch64,
+		archUBootARM64: FirmwareSNPOnlyAArch64,
 	}
 }
 
 // isPXEClient checks if the request is from a PXE client.
 func (s *DHCPServer) isPXEClient(req *dhcpv4.DHCPv4) bool {
-	// Check for PXE vendor class identifier (option 60)
+	// Check for a PXE vendor class identifier (option 60): the standard
+	// PXEClient string, or a stock U-Boot netbooting (it fetches the
+	// bootfile over TFTP and runs it as an EFI application exactly like a
+	// PXE ROM would).
 	vendorClass := req.Options.Get(dhcpv4.OptionClassIdentifier)
 	if len(vendorClass) > 0 {
 		vendorStr := string(vendorClass)
-		if len(vendorStr) >= len(vendorClassPXEClient) &&
-			vendorStr[:len(vendorClassPXEClient)] == vendorClassPXEClient {
+		if strings.HasPrefix(vendorStr, vendorClassPXEClient) || strings.HasPrefix(vendorStr, vendorClassUBoot) {
 			return true
 		}
 	}
@@ -586,6 +706,12 @@ func (s *DHCPServer) getClientArch(req *dhcpv4.DHCPv4) uint16 {
 	archOpt := req.GetOneOption(dhcpv4.OptionClientSystemArchitectureType)
 	if len(archOpt) >= 2 {
 		return uint16(archOpt[0])<<8 | uint16(archOpt[1])
+	}
+	// No option 93: a stock U-Boot on arm64 says so in its vendor class
+	// and can only run an AArch64 EFI binary; handing it the BIOS default
+	// would be the silent TFTP failure the arch map exists to prevent.
+	if string(req.Options.Get(dhcpv4.OptionClassIdentifier)) == vendorClassUBootARM64 {
+		return archEFIAArch64
 	}
 	return archBIOSx86 // Default to BIOS x86
 }

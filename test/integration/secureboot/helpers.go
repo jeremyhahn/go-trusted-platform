@@ -25,8 +25,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	pkgsecureboot "github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
@@ -104,90 +102,16 @@ func generateSecureBootKeys(t *testing.T, ctx context.Context, keysDir string) p
 	return km.GetKeyPaths()
 }
 
-// loadPEMKeypair loads a PEM private key and certificate from disk.
+// loadPEMKeypair loads the DB key pair from disk through the same loader the
+// installer and the ISO build use (authenticode.LoadSigningPair).
 func loadPEMKeypair(t *testing.T, keyPath, certPath string) (crypto.Signer, *x509.Certificate) {
 	t.Helper()
-
-	keyPEM, err := os.ReadFile(keyPath)
+	signer, cert, err := authenticode.LoadSigningPair(keyPath, certPath)
 	if err != nil {
-		t.Fatalf("read key %s: %v", keyPath, err)
-	}
-	keyBlock, _ := pem.Decode(keyPEM)
-	if keyBlock == nil {
-		t.Fatalf("no PEM block in %s", keyPath)
-	}
-	var key any
-	switch keyBlock.Type {
-	case "RSA PRIVATE KEY":
-		key, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
-	default:
-		key, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
-	}
-	if err != nil {
-		t.Fatalf("parse key %s: %v", keyPath, err)
-	}
-	signer, ok := key.(crypto.Signer)
-	if !ok {
-		t.Fatalf("key %s does not implement crypto.Signer", keyPath)
-	}
-
-	certPEM, err := os.ReadFile(certPath)
-	if err != nil {
-		t.Fatalf("read cert %s: %v", certPath, err)
-	}
-	certBlock, _ := pem.Decode(certPEM)
-	if certBlock == nil {
-		t.Fatalf("no PEM block in %s", certPath)
-	}
-	cert, err := x509.ParseCertificate(certBlock.Bytes)
-	if err != nil {
-		t.Fatalf("parse cert %s: %v", certPath, err)
+		t.Fatalf("load DB pair %s / %s: %v", keyPath, certPath, err)
 	}
 	return signer, cert
 }
-
-// signerKeyBackend adapts an in-memory crypto.Signer to the xkmssdk.KeyProvider
-// surface the authenticode signer requires. It mirrors the installer's
-// secureBootKeyBackend: signing only, everything else rejected.
-type signerKeyBackend struct {
-	signer crypto.Signer
-}
-
-func (b *signerKeyBackend) Type() xkmssdk.BackendType { return "secureboot-integration" }
-
-func (b *signerKeyBackend) Capabilities() xkmssdk.Capabilities {
-	return xkmssdk.Capabilities{Keys: true, Signing: true}
-}
-
-func (b *signerKeyBackend) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
-	return b.signer, nil
-}
-
-func (b *signerKeyBackend) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
-	return nil, ErrCommandFailed{Command: "GenerateKey", Err: os.ErrInvalid}
-}
-
-func (b *signerKeyBackend) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
-	return b.signer, nil
-}
-
-func (b *signerKeyBackend) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return ErrCommandFailed{Command: "DeleteKey", Err: os.ErrInvalid}
-}
-
-func (b *signerKeyBackend) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttributes, error) {
-	return nil, nil
-}
-
-func (b *signerKeyBackend) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
-	return nil, ErrCommandFailed{Command: "Decrypter", Err: os.ErrInvalid}
-}
-
-func (b *signerKeyBackend) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return ErrCommandFailed{Command: "RotateKey", Err: os.ErrInvalid}
-}
-
-func (b *signerKeyBackend) Close() error { return nil }
 
 // authenticodeSign signs the PE file at inPath with the DB keypair using the
 // platform's native Authenticode signer (the same signer the installer uses
@@ -195,12 +119,7 @@ func (b *signerKeyBackend) Close() error { return nil }
 func authenticodeSign(t *testing.T, ctx context.Context, inPath, outPath string, signer crypto.Signer, cert *x509.Certificate) {
 	t.Helper()
 
-	acSigner, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
-		KeyStore:      &signerKeyBackend{signer: signer},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
-		Certificate:   cert,
-		Logger:        logging.DefaultLogger(),
-	})
+	acSigner, err := authenticode.NewCryptoSigner(ctx, signer, cert, logging.DefaultLogger())
 	if err != nil {
 		t.Fatalf("create authenticode signer: %v", err)
 	}

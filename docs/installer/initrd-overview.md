@@ -220,7 +220,7 @@ through the SDK. Pipeline:
    uses, and it **never generates a new DB key** (a fresh, unenrolled key would
    brick Secure Boot):
    - `resign-mode: local` — read the `file://` DB key from the encrypted root.
-   - `resign-mode: remote` — hash-sign via `secureboot.NewRemoteSigner` over the
+   - `resign-mode: remote` — hash-sign via `secureboot.NewKMSSigner` over the
      platform SDK client (IDevID mTLS); the private key never leaves the KMS.
 4. Sign + **verify before swapping**: the rebuilt UKI must carry a valid
    Authenticode signature whose certificate is exactly the DB certificate, and a

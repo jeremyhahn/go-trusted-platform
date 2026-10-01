@@ -1,0 +1,3 @@
+# Built iPXE binaries are produced by `make ipxe-build`; never commit them.
+*
+!.gitignore

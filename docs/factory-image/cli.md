@@ -13,8 +13,10 @@
 ```
 platformctl diskimage            Factory disk images (Raspberry Pi SD card, QEMU virt)
 platformctl diskimage create     Build a factory disk image
+platformctl diskimage netboot    Build the netboot media the bootstrap container serves
 platformctl diskimage inspect    Report an image's partitions, EFI partition contents and UKI
 platformctl diskimage assemble   (hidden) Run the installer against a loop-mounted image
+platformctl diskimage netboot-initfs (hidden) Netboot initramfs + modloop for a platform-built kernel
 ```
 
 **None of these verbs needs a running daemon and none takes a transport.**
@@ -75,7 +77,7 @@ and the staged media directory.
 | `--tpm-unseal` | bool | `true` | enable TPM auto-unseal |
 | `--luks` | bool | `true` | enable LUKS encryption |
 | `--fido2` | bool | `false` | enable FIDO2 security key support |
-| `--keys-dir` | string | `<work-dir>/secure-boot-keys` | Secure Boot keys directory (`PK`, `KEK`, `DB`) |
+| `--keys-dir` | string | `<work-dir>/secure-boot-keys` | Secure Boot keys directory (`PK`, `KEK`, `DB`) for references that are not `kms://`. `kms://` references in the platform config are resolved through the platform context (`--context`); the command connects only when one is present |
 | `--generate-keys` | bool | `true` | generate Secure Boot keys if they do not exist |
 | `--key-backend` | string | `file` | `file`, `software`, `pkcs11`, `tpm2`, `awskms`, `azurekv`, `gcpkms`, `vault` |
 | `--ca-bundle` | string | | CA bundle PEM to embed for the client trust store |
@@ -107,6 +109,40 @@ platformctl diskimage create --target qemu-virt --output bin/trusted-platform-qe
 # Custom platform config with per-node overrides (for example seal-pcrs: [0, 4, 7, 9])
 platformctl diskimage create --platform-config configs/platform/templates/single-node/default.yaml \
   --overrides node.yaml --output bin/node-01.img
+```
+
+## 2a. `platformctl diskimage netboot`
+
+Builds a netboot media build (`container.NetbootMedia`, layout in
+[engineering.md §6](engineering.md)): one media set per architecture and board
+— `x86_64`, `aarch64-rpi`, `aarch64-virt` — plus the Raspberry Pi TFTP tree
+and the db-signed arm64 iPXE. `bootstrap.yaml`'s `deployer.netboot_media_dir`
+points at the output. It takes every **Build** and **Media** flag of `create`
+(one `--platform-config` bakes into every set; the node's own config fetched
+per MAC replaces it at install), and:
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--output` | string | `<work-dir>/netboot-media` | output directory; replaced |
+| `--cache-dir` | string | `<output>.cache/alpine` | pinned Alpine netboot releases |
+| `--x86-binaries-dir` | string | next to this binary | x86_64 `platformd`, `platformctl`, `platform-initrd`, `gatewayd` |
+| `--arm64-binaries-dir` | string | `aarch64/` next to this binary | the arm64 set |
+| `--ipxe` | string | `build/docker/ipxe-builder/output/bin-arm64-efi/snponly.efi` | the arm64 iPXE to sign (`make ipxe-build`; checked against its `SHA256SUMS`) |
+| `--model` | string | `rpi4` | board the TFTP tree's `config.txt` is written for |
+| `--sets` | strings | all | sets to build; an unknown name is `ErrUnknownMediaSet` |
+
+**Secure Boot keys must be in the KMS.** A set is served over HTTP, so it
+never carries a private key: with `--secure-boot` the platform config's
+`secure-boot.db` must be a `kms://` reference (`resign-mode: remote`), reached
+through the platform context (`--context`); a file DB key is refused. With
+Secure Boot off, no key is generated and only public certificates are staged.
+
+```sh
+make netboot-media                                   # builds every input, then:
+platformctl diskimage netboot --output bin/netboot-media \
+  --x86-binaries-dir bin --arm64-binaries-dir bin/aarch64 \
+  --uboot-output-dir build/docker/uboot-builder/output \
+  --virt-kernel-output-dir build/docker/virt-kernel-builder/output
 ```
 
 ## 3. `platformctl diskimage inspect IMAGE`
@@ -198,6 +234,25 @@ Exactly one of `--config` and `--platform-config` is required
 platformctl-static diskimage assemble --platform-config /media/cdrom/configs/installer.yaml \
   --output /work/trusted-platform-rpi.img --size 4096
 ```
+
+## 5a. `platformctl diskimage netboot-initfs` (hidden)
+
+The in-container step of a netboot media build for a set on a platform-built
+kernel (`netboot.ARM64VirtSet`, the QEMU virt stand-in's kernel), run in the
+arm64 builder image by `StagedMedia.BuildNetbootInitfs`. It installs the
+kernel's modules, runs `mkinitfs` with Alpine's netboot features
+(`base network squashfs usb virtio`, `diskimage.NetbootInitfsFeatures`) and
+squashes the modules into the modloop (`modules/<release>/` at its root — the
+layout Alpine's init mounts).
+
+| Flag | Type | Meaning |
+|---|---|---|
+| `--modules` | string | the kernel's modules tarball (`lib/modules/<release>`) |
+| `--release` | string | the kernel release |
+| `--flavour` | string | names `initramfs-<flavour>` and `modloop-<flavour>` |
+| `--output` | string | directory receiving both |
+
+All four are required.
 
 ## 6. Parity gap
 

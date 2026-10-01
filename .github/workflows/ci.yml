@@ -374,6 +374,12 @@ jobs:
       #      X10 UEFI virtual-CD alias that contradict pkg/quirks/registry.go.
       #      The Makefile records which commit made which claim; the conflict
       #      needs a boot on real X10 hardware to settle, not a CI edit.
+      # pkg/diskimage/netboot builds each media set's installer initramfs,
+      # which extracts and repacks it with cpio (pkg/iso). The runner image
+      # has no cpio, so install it rather than exclude the package.
+      - name: Install cpio for the netboot media tests
+        run: sudo apt-get update && sudo apt-get install -y cpio
+
       - name: Unit tests
         run: make test
 
@@ -411,6 +417,12 @@ jobs:
       # proof. The pkg/app races reproduced in 7 of 10 `-count=1` runs, so a
       # single green run is evidence, not a guarantee. It is a ratchet against
       # reintroduction, not a certificate of race-freedom.
+      # pkg/diskimage/netboot builds each media set's installer initramfs,
+      # which extracts and repacks it with cpio (pkg/iso). The runner image
+      # has no cpio, so install it rather than exclude the package.
+      - name: Install cpio for the netboot media tests
+        run: sudo apt-get update && sudo apt-get install -y cpio
+
       - name: Unit tests (race detector)
         run: make test-race
 

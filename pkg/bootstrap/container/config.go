@@ -13,7 +13,13 @@
 
 package container
 
-import "time"
+import (
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"time"
+)
 
 const (
 	// DefaultHTTPPort is the default HTTP server port.
@@ -43,6 +49,12 @@ const (
 	// live-system apk add with 0 packages and no /sbin/init.
 	DefaultAPKMirror = "https://dl-cdn.alpinelinux.org/alpine"
 )
+
+// DefaultDataDir is the container's bind-mounted data directory.
+const DefaultDataDir = "/data"
+
+// DataURLPath is where the HTTP server serves DataDir.
+const DataURLPath = "/data"
 
 // ServerConfig holds all configuration for the bootstrap container server.
 type ServerConfig struct {
@@ -85,16 +97,34 @@ type ServerConfig struct {
 	// ConfigDir is the directory containing per-device config files.
 	ConfigDir string
 
-	// KernelPath is the path to the vmlinuz kernel image.
-	KernelPath string
-
-	// InitrdPath is the path to the initramfs image.
-	InitrdPath string
-
 	// AlpineVersion is the Alpine release (e.g. "3.22.2") of the staged
 	// kernel/initramfs. It drives the repository branch (vMAJOR.MINOR)
 	// appended to the PXE kernel cmdline as alpine_repo=.
 	AlpineVersion string
+
+	// DataDir is the directory the HTTP server serves at /data/ (default
+	// /data, the container's bind mount). MediaDir must be inside it:
+	// nodes fetch their media sets from there.
+	DataDir string
+
+	// MediaDir holds the media sets the container serves, one directory
+	// each with a media-set.yaml (see MediaSet) — the netboot media build's
+	// media/ staged under DataDir. Required.
+	MediaDir string
+
+	// TFTPDir is the Raspberry Pi boot tree (start4.elf, config.txt,
+	// kernel8.img = U-Boot, device trees, overlays, per-device directories)
+	// served over TFTP beside the iPXE firmware. Empty serves no Pi.
+	TFTPDir string
+
+	// FirmwareOverrides serves prebuilt firmware in place of the upstream
+	// downloads: served filename -> file (the db-signed arm64 iPXE a Pi's
+	// U-Boot loads, as snponly-aarch64.efi). See ipxe.ServerConfig.
+	FirmwareOverrides map[string]string
+
+	// DHCPProxyOnly answers PXE clients with boot options and no lease, for
+	// a provisioning segment whose own DHCP server leases addresses.
+	DHCPProxyOnly bool
 
 	// APKMirror is the install-time APK repository base (e.g.
 	// "http://198.51.100.11:8080"). It is appended to the PXE kernel
@@ -127,11 +157,8 @@ func (c *ServerConfig) Validate() error {
 	if c.ManifestPath == "" {
 		return ErrInvalidServerConfig{Field: "manifest_path", Reason: "must not be empty"}
 	}
-	if c.KernelPath == "" {
-		return ErrInvalidServerConfig{Field: "kernel_path", Reason: "must not be empty"}
-	}
-	if c.InitrdPath == "" {
-		return ErrInvalidServerConfig{Field: "initrd_path", Reason: "must not be empty"}
+	if c.MediaDir == "" {
+		return ErrInvalidServerConfig{Field: "media_dir", Reason: "must not be empty: the container serves the netboot media build's sets"}
 	}
 	if c.DHCPConfig.ServerIP == "" {
 		return ErrInvalidServerConfig{Field: "dhcp_config.server_ip", Reason: "must not be empty"}
@@ -159,6 +186,19 @@ func (c *ServerConfig) Validate() error {
 	// loses the race reporting "address already in use" against the
 	// server's own other half — a confusing way to learn the ports are
 	// the same value.
+	if _, err := c.dataURLPath(c.MediaDir); err != nil {
+		return ErrInvalidServerConfig{Field: "media_dir", Reason: "must be under the data directory, which the HTTP server serves"}
+	}
+	if c.TFTPDir != "" {
+		if info, err := os.Stat(c.TFTPDir); err != nil || !info.IsDir() {
+			return ErrInvalidServerConfig{Field: "tftp_dir", Reason: "must be an existing directory"}
+		}
+	}
+	for name, file := range c.FirmwareOverrides {
+		if name == "" || file == "" {
+			return ErrInvalidServerConfig{Field: "firmware_overrides", Reason: "entries are name=file with neither empty"}
+		}
+	}
 	if c.DeviceScriptPort != 0 && c.DeviceScriptPort == c.HTTPPort {
 		return ErrInvalidServerConfig{
 			Field:  "device_script_port",
@@ -170,6 +210,9 @@ func (c *ServerConfig) Validate() error {
 
 // ApplyDefaults fills in zero-valued fields with sensible defaults.
 func (c *ServerConfig) ApplyDefaults() {
+	if c.DataDir == "" {
+		c.DataDir = DefaultDataDir
+	}
 	if c.HTTPPort == 0 {
 		c.HTTPPort = DefaultHTTPPort
 	}
@@ -194,4 +237,23 @@ func (c *ServerConfig) ApplyDefaults() {
 	if c.APKMirror == "" {
 		c.APKMirror = DefaultAPKMirror
 	}
+}
+
+// dataURLPath is the HTTP path of p, a file or directory inside DataDir.
+func (c *ServerConfig) dataURLPath(p string) (string, error) {
+	dataDir := c.DataDir
+	if dataDir == "" {
+		dataDir = DefaultDataDir
+	}
+	rel, err := filepath.Rel(filepath.Clean(dataDir), filepath.Clean(p))
+	if err != nil {
+		return "", err
+	}
+	if rel == "." {
+		return DataURLPath, nil
+	}
+	if strings.HasPrefix(rel, "..") {
+		return "", ErrInvalidServerConfig{Field: "data_dir", Reason: p + " is outside " + dataDir}
+	}
+	return path.Join(DataURLPath, filepath.ToSlash(rel)), nil
 }

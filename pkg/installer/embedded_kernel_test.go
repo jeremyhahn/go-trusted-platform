@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode/authenticodetest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
@@ -92,7 +93,7 @@ func TestSignEmbeddedKernel_SignsForUBoot(t *testing.T) {
 	assert.Greater(t, len(signed), 4096, "the kernel grew by its certificate table")
 
 	// What was embedded verifies against the DB certificate.
-	key, err := parsePEMPrivateKey(fileURIPath(inst.config.SecureBoot.DB.KeyURI))
+	key, err := authenticode.LoadPrivateKeyPEM(fileURIPath(inst.config.SecureBoot.DB.KeyURI))
 	require.NoError(t, err)
 	verifier, err := inst.newAuthenticodeSigner(context.Background(), key, cert)
 	require.NoError(t, err)

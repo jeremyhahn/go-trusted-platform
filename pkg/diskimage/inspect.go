@@ -213,6 +213,59 @@ func isLUKS2(hdr []byte) bool {
 }
 
 // mtoolsImage is the mtools -i spec for a partition inside an image.
+// ExtractESP copies every file on the image's EFI system partition that
+// keep accepts into dest, preserving the partition-relative path (forward
+// slashes) — what a network boot server serves a Raspberry Pi from the
+// same image the SD card carries. The returned names are the files
+// copied, sorted.
+func ExtractESP(ctx context.Context, image, dest string, keep func(name string) bool, run runner.Runner) ([]string, error) {
+	if run == nil {
+		run = runner.Exec
+	}
+	f, err := os.Open(image)
+	if err != nil {
+		return nil, &InspectError{Path: image, Reason: "cannot open", Err: err}
+	}
+	mbr := make([]byte, sectorSize)
+	_, err = f.ReadAt(mbr, 0)
+	_ = f.Close()
+	if err != nil {
+		return nil, &InspectError{Path: image, Reason: "cannot read the MBR", Err: err}
+	}
+	parts, err := ParseMBR(mbr)
+	if err != nil {
+		return nil, &InspectError{Path: image, Reason: err.Error()}
+	}
+	var esp *Partition
+	for i := range parts {
+		if parts[i].Index == 1 && (parts[i].Type == 0x0c || parts[i].Type == 0x0b) {
+			esp = &parts[i]
+		}
+	}
+	if esp == nil {
+		return nil, &InspectError{Path: image, Reason: "no FAT partition 1 (the EFI system partition)"}
+	}
+	files, err := listFAT(ctx, run, image, esp.OffsetBytes(), "")
+	if err != nil {
+		return nil, &InspectError{Path: image, Reason: "cannot list the EFI partition", Err: err}
+	}
+	var copied []string
+	for _, name := range files {
+		if keep != nil && !keep(name) {
+			continue
+		}
+		target := filepath.Join(dest, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return nil, &InspectError{Path: image, Reason: "cannot create " + filepath.Dir(target), Err: err}
+		}
+		if err := copyFromFAT(ctx, run, image, esp.OffsetBytes(), name, target); err != nil {
+			return nil, &InspectError{Path: image, Reason: "cannot copy " + name, Err: err}
+		}
+		copied = append(copied, name)
+	}
+	return copied, nil
+}
+
 func mtoolsImage(image string, offset int64) string {
 	return image + "@@" + strconv.FormatInt(offset, 10)
 }

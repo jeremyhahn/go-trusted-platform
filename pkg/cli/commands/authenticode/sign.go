@@ -16,14 +16,11 @@ package authenticode
 import (
 	"context"
 	"crypto"
-	"crypto/x509"
-	"encoding/pem"
+	"errors"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -79,57 +76,15 @@ func runSign(ctx context.Context, flags *cli.CommonFlags, keyPath, certPath, inp
 	logger := logging.DefaultLogger()
 	printer := cli.NewPrinter(flags.OutputFormat, flags.NoColor)
 
-	// Read private key
-	keyPEM, err := os.ReadFile(keyPath)
+	privateKey, err := authenticode.LoadPrivateKeyPEM(keyPath)
 	if err != nil {
-		return ErrReadKeyFailed{Path: keyPath, Reason: err.Error()}
+		return mapKeyFileError(keyPath, err)
 	}
-
-	keyBlock, _ := pem.Decode(keyPEM)
-	if keyBlock == nil {
-		return ErrDecodeKeyFailed{Path: keyPath}
-	}
-
-	// Parse the private key (support both PKCS#1 and PKCS#8)
-	var privateKey crypto.PrivateKey
-	if keyBlock.Type == "RSA PRIVATE KEY" {
-		privateKey, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
-	} else {
-		privateKey, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
-	}
+	cert, err := authenticode.LoadCertificate(certPath)
 	if err != nil {
-		return ErrParseKeyFailed{Reason: err.Error()}
+		return mapCertFileError(certPath, err)
 	}
-
-	// Read certificate
-	certPEM, err := os.ReadFile(certPath)
-	if err != nil {
-		return ErrReadCertificateFailed{Path: certPath, Reason: err.Error()}
-	}
-
-	certBlock, _ := pem.Decode(certPEM)
-	if certBlock == nil {
-		return ErrDecodeCertificateFailed{Path: certPath}
-	}
-
-	cert, err := x509.ParseCertificate(certBlock.Bytes)
-	if err != nil {
-		return ErrParseCertificateFailed{Reason: err.Error()}
-	}
-
-	// Create keystore backend for signing
-	signingBackend := &cliSigningBackend{
-		privateKey: privateKey,
-		logger:     logger,
-	}
-
-	// Create authenticode signer
-	signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
-		KeyStore:      signingBackend,
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "cli-signing"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
+	signer, err := authenticode.NewCryptoSigner(ctx, privateKey.(crypto.Signer), cert, logger)
 	if err != nil {
 		return ErrCreateSignerFailed{Reason: err.Error()}
 	}
@@ -156,57 +111,34 @@ func runSign(ctx context.Context, flags *cli.CommonFlags, keyPath, certPath, inp
 	return printer.Print(result)
 }
 
-// cliSigningBackend is a minimal Backend implementation for CLI signing
-type cliSigningBackend struct {
-	privateKey crypto.PrivateKey
-	logger     *logging.Logger
-}
-
-func (b *cliSigningBackend) Type() xkmssdk.BackendType {
-	return "cli-signing"
-}
-
-func (b *cliSigningBackend) Capabilities() xkmssdk.Capabilities {
-	return xkmssdk.Capabilities{
-		Keys:           true,
-		HardwareBacked: false,
-		Signing:        true,
-		Decryption:     false,
-		KeyRotation:    false,
+// mapKeyFileError keeps the command's own error types for the three
+// stages a key load can fail at, now that the loading itself lives in
+// pkg/authenticode.
+func mapKeyFileError(path string, err error) error {
+	var kerr *authenticode.KeyFileError
+	if !errors.As(err, &kerr) {
+		return ErrParseKeyFailed{Reason: err.Error()}
+	}
+	switch kerr.Stage {
+	case authenticode.KeyFileRead:
+		return ErrReadKeyFailed{Path: path, Reason: kerr.Err.Error()}
+	case authenticode.KeyFileDecode:
+		return ErrDecodeKeyFailed{Path: path}
+	default:
+		return ErrParseKeyFailed{Reason: kerr.Err.Error()}
 	}
 }
 
-func (b *cliSigningBackend) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
-	if signer, ok := b.privateKey.(crypto.Signer); ok {
-		return signer, nil
+// mapCertFileError is mapKeyFileError for the certificate.
+func mapCertFileError(path string, err error) error {
+	var cerr *authenticode.CertFileError
+	if !errors.As(err, &cerr) {
+		return ErrParseCertificateFailed{Reason: err.Error()}
 	}
-	return nil, ErrKeyNotSigner{}
-}
-
-func (b *cliSigningBackend) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
-	return nil, ErrNotImplemented{Operation: "GenerateKey"}
-}
-
-func (b *cliSigningBackend) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
-	return b.privateKey, nil
-}
-
-func (b *cliSigningBackend) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return ErrNotImplemented{Operation: "DeleteKey"}
-}
-
-func (b *cliSigningBackend) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttributes, error) {
-	return nil, nil
-}
-
-func (b *cliSigningBackend) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
-	return nil, ErrNotImplemented{Operation: "Decrypter"}
-}
-
-func (b *cliSigningBackend) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return ErrNotImplemented{Operation: "RotateKey"}
-}
-
-func (b *cliSigningBackend) Close() error {
-	return nil
+	switch cerr.Stage {
+	case authenticode.KeyFileRead:
+		return ErrReadCertificateFailed{Path: path, Reason: cerr.Err.Error()}
+	default:
+		return ErrParseCertificateFailed{Reason: cerr.Err.Error()}
+	}
 }

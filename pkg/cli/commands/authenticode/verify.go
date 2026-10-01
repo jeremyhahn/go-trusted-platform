@@ -15,15 +15,11 @@ package authenticode
 
 import (
 	"context"
-	"crypto"
 	"crypto/x509"
-	"encoding/pem"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -74,43 +70,29 @@ func runVerify(ctx context.Context, flags *cli.CommonFlags, certPath, input stri
 	// Read certificate if provided (optional for basic verification)
 	var cert *x509.Certificate
 	if certPath != "" {
-		certPEM, err := os.ReadFile(certPath)
-		if err != nil {
-			return ErrReadCertificateFailed{Path: certPath, Reason: err.Error()}
-		}
-
-		certBlock, _ := pem.Decode(certPEM)
-		if certBlock == nil {
-			return ErrDecodeCertificateFailed{Path: certPath}
-		}
-
-		var parseErr error
-		cert, parseErr = x509.ParseCertificate(certBlock.Bytes)
-		if parseErr != nil {
-			return ErrParseCertificateFailed{Reason: parseErr.Error()}
+		var err error
+		if cert, err = authenticode.LoadCertificate(certPath); err != nil {
+			return mapCertFileError(certPath, err)
 		}
 	}
 
-	// Create a minimal backend for verification (no private key needed)
-	verifyBackend := &cliVerifyBackend{
-		logger: logger,
-	}
-
-	// Create authenticode signer (also used for verification)
-	signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
-		KeyStore:      verifyBackend,
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "verify"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	if err != nil {
-		return ErrCreateSignerFailed{Reason: err.Error()}
-	}
+	// Verification needs no key: the signature is checked against the
+	// certificate embedded in it, and --cert pins who that must be.
+	verifier := authenticode.NewVerifier(ctx, logger)
 
 	// Verify the file
 	logger.Info("[AUTHENTICODE] Verifying file", "input", input)
-	if err := signer.VerifyFile(input); err != nil {
+	if err := verifier.VerifyFile(input); err != nil {
 		return ErrVerifyFileFailed{Input: input, Reason: err.Error()}
+	}
+	if cert != nil {
+		embedded, err := verifier.ExtractCertificateFile(input)
+		if err != nil {
+			return ErrVerifyFileFailed{Input: input, Reason: err.Error()}
+		}
+		if !embedded.Equal(cert) {
+			return ErrVerifyFileFailed{Input: input, Reason: "signed by " + embedded.Subject.String() + ", not by " + cert.Subject.String()}
+		}
 	}
 
 	// Output result
@@ -130,55 +112,4 @@ func runVerify(ctx context.Context, flags *cli.CommonFlags, certPath, input stri
 	}
 
 	return printer.Print(result)
-}
-
-// cliVerifyBackend is a minimal Backend for verification (no signing needed)
-type cliVerifyBackend struct {
-	logger *logging.Logger
-}
-
-func (b *cliVerifyBackend) Type() xkmssdk.BackendType {
-	return "verify"
-}
-
-func (b *cliVerifyBackend) Capabilities() xkmssdk.Capabilities {
-	return xkmssdk.Capabilities{
-		Keys:           false,
-		HardwareBacked: false,
-		Signing:        false,
-		Decryption:     false,
-		KeyRotation:    false,
-	}
-}
-
-func (b *cliVerifyBackend) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
-	return nil, ErrNotImplemented{Operation: "Signer (verification only)"}
-}
-
-func (b *cliVerifyBackend) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
-	return nil, ErrNotImplemented{Operation: "GenerateKey"}
-}
-
-func (b *cliVerifyBackend) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
-	return nil, ErrNotImplemented{Operation: "GetKey"}
-}
-
-func (b *cliVerifyBackend) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return ErrNotImplemented{Operation: "DeleteKey"}
-}
-
-func (b *cliVerifyBackend) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttributes, error) {
-	return nil, nil
-}
-
-func (b *cliVerifyBackend) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
-	return nil, ErrNotImplemented{Operation: "Decrypter"}
-}
-
-func (b *cliVerifyBackend) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return ErrNotImplemented{Operation: "RotateKey"}
-}
-
-func (b *cliVerifyBackend) Close() error {
-	return nil
 }

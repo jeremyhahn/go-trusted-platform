@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -33,8 +34,6 @@ import (
 func main() {
 	manifest := flag.String("manifest", "", "path to manifest.yaml (required)")
 	configDir := flag.String("config-dir", "/data/configs", "directory with per-device configs")
-	kernel := flag.String("kernel", "", "path to vmlinuz (required)")
-	initrd := flag.String("initrd", "", "path to initramfs (required)")
 	iface := flag.String("interface", "eth0", "network interface to bind")
 	httpPort := flag.Int("http-port", 8080, "HTTP server port")
 	// Zero derives http-port+1, which is where this listener lived when
@@ -54,6 +53,13 @@ func main() {
 	// (public Alpine mirror), keeping internet-connected installs working.
 	apkMirror := flag.String("apk-mirror", "", "install-time APK mirror base URL (default: public Alpine mirror)")
 	alpineVersion := flag.String("alpine-version", "", "Alpine version of the staged kernel/initramfs (default: "+container.DefaultAlpineVersion+")")
+	// Media sets and the Raspberry Pi netboot stage.
+	dataDir := flag.String("data-dir", container.DefaultDataDir, "directory served over HTTP at /data/ (the media dir must be inside it)")
+	mediaDir := flag.String("media-dir", container.DefaultDataDir+"/"+container.NetbootMediaSetsDir, "directory of the media sets served, one per subdirectory with a media-set.yaml (the netboot media build's media/, under --data-dir)")
+	tftpDir := flag.String("tftp-dir", "", "Raspberry Pi boot tree served over TFTP (start4.elf, config.txt, kernel8.img, ...)")
+	overrides := firmwareOverrides{}
+	flag.Var(overrides, "firmware-override", "serve a prebuilt firmware file in place of the upstream download, as name=path (repeatable), e.g. snponly-aarch64.efi=/data/firmware/snponly-aarch64.efi")
+	proxyDHCP := flag.Bool("dhcp-proxy", false, "answer PXE clients with boot options and no lease (the segment has its own DHCP server)")
 
 	flag.Parse()
 
@@ -68,7 +74,7 @@ func main() {
 		slog.String("git_hash", version.GitHash),
 		slog.String("build_date", version.BuildDate))
 
-	if err := validateRequiredFlags(*manifest, *kernel, *initrd, *dhcpServerIP, *dhcpRangeStart, *dhcpRangeEnd); err != nil {
+	if err := validateRequiredFlags(*manifest, *mediaDir, *dhcpServerIP, *dhcpRangeStart, *dhcpRangeEnd); err != nil {
 		logger.Error("missing required flag", slog.String("error", err.Error()))
 		flag.Usage()
 		os.Exit(1)
@@ -80,16 +86,19 @@ func main() {
 	}
 
 	config := &container.ServerConfig{
-		Interface:        *iface,
-		HTTPPort:         *httpPort,
-		DeviceScriptPort: *deviceScriptPort,
-		TFTPPort:         *tftpPort,
-		ManifestPath:     *manifest,
-		ConfigDir:        *configDir,
-		KernelPath:       *kernel,
-		InitrdPath:       *initrd,
-		AlpineVersion:    *alpineVersion,
-		APKMirror:        *apkMirror,
+		Interface:         *iface,
+		HTTPPort:          *httpPort,
+		DeviceScriptPort:  *deviceScriptPort,
+		TFTPPort:          *tftpPort,
+		ManifestPath:      *manifest,
+		ConfigDir:         *configDir,
+		AlpineVersion:     *alpineVersion,
+		APKMirror:         *apkMirror,
+		DataDir:           *dataDir,
+		MediaDir:          *mediaDir,
+		TFTPDir:           *tftpDir,
+		FirmwareOverrides: overrides,
+		DHCPProxyOnly:     *proxyDHCP,
 		DHCPConfig: container.DHCPConfig{
 			ServerIP:   *dhcpServerIP,
 			RangeStart: *dhcpRangeStart,
@@ -132,11 +141,10 @@ func main() {
 }
 
 // validateRequiredFlags checks that all required string flags are non-empty.
-func validateRequiredFlags(manifest, kernel, initrd, serverIP, rangeStart, rangeEnd string) error {
+func validateRequiredFlags(manifest, mediaDir, serverIP, rangeStart, rangeEnd string) error {
 	required := map[string]string{
 		"--manifest":         manifest,
-		"--kernel":           kernel,
-		"--initrd":           initrd,
+		"--media-dir":        mediaDir,
 		"--dhcp-server-ip":   serverIP,
 		"--dhcp-range-start": rangeStart,
 		"--dhcp-range-end":   rangeEnd,
@@ -147,8 +155,37 @@ func validateRequiredFlags(manifest, kernel, initrd, serverIP, rangeStart, range
 			missing = append(missing, name)
 		}
 	}
+	sort.Strings(missing)
 	if len(missing) > 0 {
 		return &MessageError{Msg: fmt.Sprintf("required flags not set: %s", strings.Join(missing, ", "))}
 	}
+	return nil
+}
+
+// firmwareOverrides is the repeatable --firmware-override name=path flag.
+type firmwareOverrides map[string]string
+
+func (f firmwareOverrides) String() string {
+	names := make([]string, 0, len(f))
+	for name := range f {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+"="+f[name])
+	}
+	return strings.Join(parts, ",")
+}
+
+func (f firmwareOverrides) Set(value string) error {
+	name, path, ok := strings.Cut(value, "=")
+	if !ok || name == "" || path == "" {
+		return &MessageError{Msg: "--firmware-override wants name=path, got " + value}
+	}
+	if _, dup := f[name]; dup {
+		return &MessageError{Msg: "--firmware-override " + name + " given twice"}
+	}
+	f[name] = path
 	return nil
 }

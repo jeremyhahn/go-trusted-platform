@@ -72,7 +72,7 @@ recoverable by deleting a file, a corrupt live variable store is a service call.
 | **Write `SetupMode` and `SecureBoot` into the OVMF variable store** | They are firmware-**derived**, not persisted policy: EDK2 recomputes both from PK presence at every boot. Persisting them was worse than redundant — they carry no `TIME_BASED_AUTHENTICATED_WRITE_ACCESS`, so they serialised with a 32-byte header inside an authenticated store and faulted the EDK2 variable driver with `#UD` on the next boot. `EnrollKeys` writes `db`, `KEK`, `PK` and nothing else. |
 | **Enroll PK first** (it is the root, so enroll the root first) | Writing PK is precisely what takes the firmware out of Setup Mode and arms enforcement. Enrolling it first means a later `db` failure produces a node that enforces Secure Boot against an empty signature database. The order is `db → KEK → PK`, PK last, in both enrollment paths. |
 | **Enforce first, verify the image afterwards** | That is the brick. `uefi.VerifySignedUKI` runs *before* any variable is written and requires two things: the UKI's Authenticode signature is valid, **and** its embedded certificate is byte-identical to the `db` certificate about to be enrolled. Passing that gate is what makes enrollment provably non-stranding. |
-| **Ship the DB private key to each node** | A private key that traverses the network is a private key you no longer control. `resign-mode: remote` keeps it in the control-plane KMS and round-trips only the digest (`secureboot.NewRemoteSigner`, `installer.RemoteSignerResolver`); `XKMSConfig.ResignMode == ResignModeRemote` forces `ExportKeys = false` so the export path cannot be re-enabled by accident. |
+| **Ship the DB private key to each node** | A private key that traverses the network is a private key you no longer control. `resign-mode: remote` keeps it in the control-plane KMS and round-trips only the digest (`secureboot.NewKMSSigner`, `installer.RemoteSignerResolver`); `XKMSConfig.ResignMode == ResignModeRemote` forces `ExportKeys = false` so the export path cannot be re-enabled by accident. |
 | **Generate a fresh DB key when the kernel is updated** | The new key would not be in the firmware's `db`, so the freshly signed UKI would be refused and the node would not boot. `installer.resolveRebuildSigner` returns a typed error and the rebuild aborts, leaving the working UKI in place, rather than falling back to generation. |
 | **Use the kernel's own EFI stub as the UKI base PE** | `CONFIG_EFI_STUB` reads `LoadOptions` from `EFI_LOADED_IMAGE_PROTOCOL`; it does **not** read PE sections. A UKI built on it boots with no command line and no initrd and hangs silently. The base PE is systemd-stub (`uki.DefaultStubPath`), which is what reads `.linux`, `.initrd` and `.cmdline`. |
 | **Reuse the Secure Boot DB key as the kernel module-signing key** | Different trust root, different enforcement point. Module signatures are checked against the kernel's `.builtin_trusted_keys` at `insmod` time, not by firmware at boot. They are also produced in bulk (`CONFIG_MODULE_SIG_ALL` signs thousands of in-tree modules) inside a standalone build container with no KMS reachable, so the module key is a stable operator-provisioned PEM file, not a KMS-resident key. |
@@ -89,7 +89,7 @@ recoverable by deleting a file, a corrupt live variable store is a service call.
 | OVMF NVRAM-file enrollment + enrollment status | `pkg/uefi/enrollment.go` | this repo |
 | Live-firmware (efivarfs) enrollment, status read, verify-before-enforce gate | `pkg/uefi/efivars_enroll.go`, `efivars_status.go` | this repo |
 | Raw runtime EFI variable read/write/delete/list; `TRUSTED_PLATFORM` marker | `pkg/uefi/firmware/efivars.go`, `trusted_platform.go` | this repo |
-| PK/KEK/DB generation, key paths, remote DB signer, module-signing key | `pkg/secureboot/keychain.go`, `remote_signer.go`, `modulekey.go` | this repo (**keys live in go-xkms**, see below) |
+| PK/KEK/DB generation, key paths, remote DB signer, module-signing key | `pkg/secureboot/keychain.go`, `kms_signer.go`, `modulekey.go` | this repo (**keys live in go-xkms**, see below) |
 | UKI construction (Go PE patcher and objcopy) and parsing | `pkg/uki/builder.go`, `builder_objcopy.go`, `parser.go`, `pe.go` | this repo |
 | Authenticode PE/COFF signing, verification, certificate extraction | `pkg/authenticode/authenticode.go`, `pe.go` | this repo |
 | Kernel module detached-CMS signing and compression handling | `pkg/modulesign/modulesign.go`, `cms.go`, `compress.go` | this repo |
@@ -318,20 +318,10 @@ the code, the code is right.
 | `uki.md`: `types.KeyAttributes` | `xkmssdk.KeyAttributes`, from `go-quicbaas/sdk/go/xkms`. |
 | Legacy files cite absolute workstation paths and an internal IP | Removed here. This folder is publication-bound; use `<install-dir>`, `$HOME`, `example.com`. |
 
-Two further code-level findings, recorded because they are defects rather than
-drift:
-
-1. **`platformctl authenticode verify` cannot run without `--cert`.** The help
-   text and examples present `--cert` as optional, but `runVerify` passes
-   `Certificate: nil` when it is omitted and `authenticode.NewSigner` rejects a
-   nil certificate with "certificate is required". The command fails with
-   `ErrCreateSignerFailed`. Documented as-is in [cli.md](cli.md) §3.
-2. **`--cert` does not bind verification to that certificate.** `Verify`
-   extracts and uses the certificate embedded in the signature. Supplying a
-   different `--cert` changes nothing about the verdict. The certificate-binding
-   check exists only in `uefi.VerifySignedUKI`.
-
-Both are raised as owner questions rather than papered over.
+Two code-level defects recorded here earlier are fixed (2026-09-23): verification
+no longer needs a key or a certificate (`authenticode.NewVerifier`), and
+`platformctl authenticode verify --cert` now requires the embedded signer to be
+exactly that certificate — the same binding `uefi.VerifySignedUKI` enforces.
 
 ## 10. Related
 

@@ -378,48 +378,10 @@ func (o *Orchestrator) Run(ctx context.Context) (*BootstrapResult, error) {
 	result := &BootstrapResult{}
 	start := time.Now()
 
-	// Phase 0: Discovery.
-	result.Phase = phaseDiscovery
-	discovered, err := o.discover(ctx)
-	if err != nil {
+	// Phases 0-2: discovery, switch configuration, the bootstrap container.
+	if err := o.bringUpContainer(ctx, result); err != nil {
 		result.Duration = time.Since(start)
-		return result, ErrBootstrapFailed{Phase: phaseDiscovery, Cause: err}
-	}
-	o.discovered = discovered
-	o.populateNodeResults(result)
-
-	// Phase 1: Switch configuration (optional).
-	if o.config.Switch != nil {
-		result.Phase = phaseSwitch
-		if err := o.configureSwitch(ctx); err != nil {
-			result.Duration = time.Since(start)
-			return result, ErrBootstrapFailed{Phase: phaseSwitch, Cause: err}
-		}
-		result.SwitchConfigured = true
-	}
-
-	// Phase 2: Deploy bootstrap container.
-	if o.deployer != nil {
-		result.Phase = phaseDeploy
-		if err := o.deployContainer(ctx); err != nil {
-			result.Duration = time.Since(start)
-			return result, ErrBootstrapFailed{Phase: phaseDeploy, Cause: err}
-		}
-		result.ContainerDeployed = true
-	} else if o.config.Deployer.Host != "" {
-		// No deployer means the operator runs the bootstrap container
-		// themselves (deployer.container_image empty), so Phase 2 is
-		// skipped — but the run depends on that container exactly as
-		// much, and skipping the phase used to skip the only check that
-		// it is serving. Verify it here instead of provisioning into
-		// the same silence. With no deployer host there is nothing to
-		// point a probe at, and per-MAC staging is left to its
-		// documented fall-back.
-		result.Phase = phaseDeploy
-		if err := o.verifyContainerServing(ctx); err != nil {
-			result.Duration = time.Since(start)
-			return result, ErrBootstrapFailed{Phase: phaseDeploy, Cause: err}
-		}
+		return result, err
 	}
 
 	// Phase 3: PXE boot control plane nodes.
@@ -481,6 +443,76 @@ func (o *Orchestrator) Run(ctx context.Context) (*BootstrapResult, error) {
 	result.Phase = "complete"
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+// Deploy runs the phases that bring the bootstrap container up —
+// discovery, switch configuration when configured, and the container
+// deploy with its serving check — exactly as Run does, then stops. It
+// needs a deployer (deployer.host and deployer.container_image).
+func (o *Orchestrator) Deploy(ctx context.Context) (*BootstrapResult, error) {
+	if o.deployer == nil {
+		return nil, ErrDeployerNotConfigured{}
+	}
+	result := &BootstrapResult{}
+	start := time.Now()
+	err := o.bringUpContainer(ctx, result)
+	result.Duration = time.Since(start)
+	return result, err
+}
+
+// Teardown stops and removes the bootstrap container and its staged data
+// on the deployer host, as Run's last phase does.
+func (o *Orchestrator) Teardown(ctx context.Context) error {
+	if o.deployer == nil {
+		return ErrDeployerNotConfigured{}
+	}
+	return o.teardownContainer(ctx)
+}
+
+// bringUpContainer runs Phases 0-2 into result: discovery, switch
+// configuration, and the bootstrap container — deployed when there is a
+// deployer, otherwise verified as the one the operator runs.
+func (o *Orchestrator) bringUpContainer(ctx context.Context, result *BootstrapResult) error {
+	// Phase 0: Discovery.
+	result.Phase = phaseDiscovery
+	discovered, err := o.discover(ctx)
+	if err != nil {
+		return ErrBootstrapFailed{Phase: phaseDiscovery, Cause: err}
+	}
+	o.discovered = discovered
+	o.populateNodeResults(result)
+
+	// Phase 1: Switch configuration (optional).
+	if o.config.Switch != nil {
+		result.Phase = phaseSwitch
+		if err := o.configureSwitch(ctx); err != nil {
+			return ErrBootstrapFailed{Phase: phaseSwitch, Cause: err}
+		}
+		result.SwitchConfigured = true
+	}
+
+	// Phase 2: Deploy bootstrap container.
+	if o.deployer != nil {
+		result.Phase = phaseDeploy
+		if err := o.deployContainer(ctx); err != nil {
+			return ErrBootstrapFailed{Phase: phaseDeploy, Cause: err}
+		}
+		result.ContainerDeployed = true
+	} else if o.config.Deployer.Host != "" {
+		// No deployer means the operator runs the bootstrap container
+		// themselves (deployer.container_image empty), so Phase 2 is
+		// skipped — but the run depends on that container exactly as
+		// much, and skipping the phase used to skip the only check that
+		// it is serving. Verify it here instead of provisioning into
+		// the same silence. With no deployer host there is nothing to
+		// point a probe at, and per-MAC staging is left to its
+		// documented fall-back.
+		result.Phase = phaseDeploy
+		if err := o.verifyContainerServing(ctx); err != nil {
+			return ErrBootstrapFailed{Phase: phaseDeploy, Cause: err}
+		}
+	}
+	return nil
 }
 
 // Discover runs only Phase 0 (BMC discovery).
@@ -781,7 +813,7 @@ func (o *Orchestrator) provisionUnmanaged(ctx context.Context, node *DiscoveredN
 
 	// Publish per-MAC config for the install-time fetch (best effort — the
 	// node falls back to ISO-baked config if the server is unreachable).
-	if err := o.stagePerMACHostname(ctx, node); err != nil {
+	if err := o.stagePerMACConfig(ctx, node); err != nil {
 		o.logger.Warn("bootstrap: unmanaged: per-MAC config staging failed, node will fall back to ISO-baked config",
 			slog.String("hostname", node.Hostname),
 			slog.String("error", err.Error()))
@@ -891,6 +923,16 @@ func (o *Orchestrator) managedPXEProvision(ctx context.Context, node *Discovered
 	installURL, urlErr := installLogBaseURL(&o.config.Deployer)
 	if urlErr != nil {
 		return urlErr
+	}
+
+	// Publish per-MAC config for the install-time fetch before the node is
+	// booted, exactly as the unmanaged and virtual-media paths do — a
+	// managed node's autoinstall reads the same keys (best effort, as
+	// there: docs/bootstrap/engineering.md §4, "Deliberately fail-open").
+	if err := o.stagePerMACConfig(ctx, node); err != nil {
+		o.logger.Warn("bootstrap: pxe: per-MAC config staging failed, node will fall back to ISO-baked config",
+			slog.String("hostname", node.Hostname),
+			slog.String("error", err.Error()))
 	}
 
 	// Fire the PXE install boot.
@@ -1574,9 +1616,11 @@ func toDiscoveredNodeInfos(nodes []DiscoveredNode) []container.DiscoveredNodeInf
 	infos := make([]container.DiscoveredNodeInfo, len(nodes))
 	for i := range nodes {
 		infos[i] = container.DiscoveredNodeInfo{
-			MACs:     append([]string(nil), nodes[i].DiscoveredMACs...),
-			Role:     nodes[i].Role,
-			Hostname: nodes[i].Hostname,
+			MACs:         append([]string(nil), nodes[i].DiscoveredMACs...),
+			Role:         nodes[i].Role,
+			Hostname:     nodes[i].Hostname,
+			Architecture: nodes[i].IPXEArchitecture(),
+			MediaSet:     nodes[i].MediaSet(),
 		}
 	}
 	return infos

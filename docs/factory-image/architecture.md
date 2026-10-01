@@ -94,6 +94,15 @@ with the platform's PK/KEK/db **preseeded into the binary**: with
 cannot be the root of trust for its own verification. A Secure Boot key set
 therefore implies a U-Boot build, cached by the digests of its inputs.
 
+The certificates U-Boot preseeds come from `iso.ResolveSecureBootMaterial`,
+which reads the platform config's `secure-boot` references: a `kms://`
+reference is fetched from the control plane's CA through the operator's
+platform client (the private key stays in the KMS), a media `file://`
+reference or none is read from `--keys-dir`. The resolved `PK.crt`, `KEK.crt`
+and `DB.crt` land in `<work-dir>/secure-boot-certs` and are what the U-Boot
+build mounts — so a fleet whose DB key lives in the KMS gets a U-Boot whose db
+is that key's certificate.
+
 The TPM is an Infineon SLB9670 on SPI0 CE1. Mainline U-Boot has no BCM2835
 SPI driver, so the bus is bit-banged over GPIO (`SOFT_SPI` + `TPM2_TIS_SPI`)
 as described by the platform's `tpm-soft-spi` overlay; Linux binds the same

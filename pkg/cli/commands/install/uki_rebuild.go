@@ -17,20 +17,17 @@ import (
 	"context"
 	"crypto"
 	"crypto/x509"
-	"encoding/pem"
-	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	_ "github.com/jeremyhahn/go-trusted-platform/pkg/installer/alpine" // Register Alpine FIPS installer
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
 )
 
 // ukiRebuildFlags holds flags for the uki-rebuild command.
@@ -173,25 +170,12 @@ func loadUKIRebuildConfig(logger *logging.Logger, configPath string) (*installer
 // the platform SDK client (IDevID mTLS). The Secure Boot DB private key stays in
 // the control-plane KMS: the seam round-trips only the digest through the
 // platform KeyManagementService Sign RPC (cl.KMS().Sign) and fetches the
-// companion DB certificate through the CA service. The returned closer releases
-// the SDK connection.
-//
-// This replaces the deferred secureboot.NewRemoteSigner/ServiceKey path, which
-// resolves the key through the in-process global XKMS service — unavailable in
-// the CLI on a booted node. Post-install the node holds an IDevID, so it reaches
-// the CP-KMS over its mTLS-authenticated platform client instead.
+// companion DB certificate through the CA service (secureboot.NewKMSSigner).
+// The returned closer releases the SDK connection.
 func newRemoteSignerSeam(flags *cli.CommonFlags, sb *installer.SecureBootConfig) (installer.RemoteSignerResolver, func() error, error) {
-	keyID := stripKMSScheme(sb.DB.KeyURI)
-	if keyID == "" {
+	if secureboot.KMSKeyID(sb.DB.KeyURI) == "" {
 		return nil, nil, ErrRemoteSignKeyRef{KeyURI: sb.DB.KeyURI}
 	}
-	// The DB certificate is fetched by the configured cert-uri reference, or the
-	// DB key identifier when no explicit cert-uri is set.
-	certRef := stripKMSScheme(sb.DB.CertURI)
-	if certRef == "" {
-		certRef = keyID
-	}
-
 	bc, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return nil, nil, ErrRemoteSignerSetup{Err: err}
@@ -199,119 +183,9 @@ func newRemoteSignerSeam(flags *cli.CommonFlags, sb *installer.SecureBootConfig)
 	cl := bc.Client()
 
 	seam := func(ctx context.Context, _ *xkmssdk.KeyAttributes) (crypto.Signer, *x509.Certificate, error) {
-		cert, err := fetchDBCertificate(ctx, cl.CA(), certRef)
-		if err != nil {
-			return nil, nil, err
-		}
-		return &kmsDBSigner{kms: cl.KMS(), keyID: keyID, public: cert.PublicKey}, cert, nil
+		return secureboot.NewKMSSigner(ctx, cl.KMS(), cl.CA(), sb.DB.KeyURI, sb.DB.CertURI)
 	}
 	return seam, bc.Close, nil
-}
-
-// kmsSignClient is the minimal slice of platformv1.KeyManagementServiceClient the
-// KMS-backed signer needs. platform.Client.KMS() satisfies it structurally; tests
-// inject a fake. Accepting a small interface keeps post-install re-signing
-// testable without a full platform transport.
-type kmsSignClient interface {
-	Sign(ctx context.Context, in *platformv1.SignRequest, opts ...grpc.CallOption) (*platformv1.SignResponse, error)
-}
-
-// caCertGetter is the minimal slice of platformv1.CAServiceClient used to fetch
-// the DB certificate. platform.Client.CA() satisfies it; tests inject a fake.
-type caCertGetter interface {
-	GetCertificate(ctx context.Context, in *platformv1.GetCertificateRequest, opts ...grpc.CallOption) (*platformv1.GetCertificateResponse, error)
-}
-
-// kmsDBSigner is a crypto.Signer whose Sign delegates to the platform KMS Sign
-// RPC over the node's IDevID-authenticated platform client. The Secure Boot DB
-// private key never leaves the control-plane KMS; only the already-hashed digest
-// the Authenticode signer produced is round-tripped. Public() returns the DB
-// certificate's public key fetched from the CA.
-type kmsDBSigner struct {
-	kms    kmsSignClient
-	keyID  string
-	public crypto.PublicKey
-}
-
-// Compile-time assertion that the KMS-backed signer is a usable crypto.Signer.
-var _ crypto.Signer = (*kmsDBSigner)(nil)
-
-// Public returns the DB certificate's public key.
-func (s *kmsDBSigner) Public() crypto.PublicKey { return s.public }
-
-// Sign signs the Authenticode digest with the CP-KMS DB key via the platform
-// KeyManagementService Sign RPC. The crypto.Signer contract supplies an
-// already-hashed digest, so it is sent as the request Message with the hash
-// algorithm mapped from opts and PreHashed set so the KMS signs the digest
-// directly instead of hashing it a second time.
-func (s *kmsDBSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
-	hashAlg, err := protoHashAlgorithm(opts.HashFunc())
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.kms.Sign(context.Background(), &platformv1.SignRequest{
-		KeyId:         s.keyID,
-		Message:       digest,
-		HashAlgorithm: hashAlg,
-		PreHashed:     true,
-	})
-	if err != nil {
-		return nil, ErrRemoteSignFailed{KeyID: s.keyID, Err: err}
-	}
-	if resp == nil || len(resp.GetSignature()) == 0 {
-		return nil, ErrRemoteSignEmpty{KeyID: s.keyID}
-	}
-	return resp.GetSignature(), nil
-}
-
-// fetchDBCertificate retrieves and parses the Secure Boot DB certificate from the
-// platform CA over the IDevID-mTLS transport the daemon already trusts.
-func fetchDBCertificate(ctx context.Context, ca caCertGetter, ref string) (*x509.Certificate, error) {
-	resp, err := ca.GetCertificate(ctx, &platformv1.GetCertificateRequest{
-		Serial:     ref,
-		IncludePem: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if resp.GetCertificate() == nil || len(resp.GetCertificate().GetPem()) == 0 {
-		return nil, ErrRemoteCertEmpty{KeyID: ref}
-	}
-	block, _ := pem.Decode(resp.GetCertificate().GetPem())
-	if block == nil {
-		return nil, ErrRemoteCertDecode{KeyID: ref}
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, ErrRemoteCertDecode{KeyID: ref, Err: err}
-	}
-	return cert, nil
-}
-
-// protoHashAlgorithm maps a crypto.Hash to the platform KMS HashAlgorithm. Only
-// the SHA-2 family used by Authenticode UKI signing is supported.
-func protoHashAlgorithm(h crypto.Hash) (platformv1.HashAlgorithm, error) {
-	switch h {
-	case crypto.SHA256:
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256, nil
-	case crypto.SHA384:
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384, nil
-	case crypto.SHA512:
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512, nil
-	default:
-		return platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED, ErrUnsupportedHash{Hash: h.String()}
-	}
-}
-
-// stripKMSScheme removes a leading kms:// scheme (case-insensitive) from ref,
-// yielding the bare KMS key identifier. A ref without that scheme is returned
-// unchanged; an empty ref yields "".
-func stripKMSScheme(ref string) string {
-	const scheme = "kms://"
-	if len(ref) >= len(scheme) && strings.EqualFold(ref[:len(scheme)], scheme) {
-		return ref[len(scheme):]
-	}
-	return ref
 }
 
 // isFileURI reports whether uri is a file:// reference (case-insensitive).

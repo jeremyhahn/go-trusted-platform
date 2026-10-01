@@ -32,18 +32,18 @@ Controls where the PXE bootstrap container is deployed.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `target` | string | `linux` | Deployment target: `linux` or `cisco` |
 | `host` | string | **required** | SSH hostname or IP of the deployer host |
 | `user` | string | | SSH username |
 | `ssh_key` | string | | Path to SSH private key |
-| `known_hosts_path` | string | | Directory of pinned SSH host-key envelopes; required for `target: linux` (fail-closed, no trust-on-first-use) |
+| `known_hosts_path` | string | | Directory of pinned SSH host-key envelopes; required (fail-closed, no trust-on-first-use) |
 | `container_runtime` | string | `docker` | Container runtime: `docker` or `podman` |
 | `bootstrap_http_port` | int | `8080` | Container HTTP service: per-MAC config, install-log sink, `/health` |
 | `bootstrap_device_script_port` | int | `bootstrap_http_port` + 1 | Per-device boot script listener. Move it when the deployer already has something on the derived port |
+| `netboot_media_dir` | string | — | The netboot media build to stage (media sets, the Raspberry Pi TFTP tree, the db-signed arm64 iPXE), relative to this file — built by `make netboot-media` / `platformctl diskimage netboot`. **Required**: the container image carries no installer media, and every PXE-installed node — x86_64 included — boots a set from this build |
+| `proxy_dhcp` | bool | `false` | Answer PXE clients with boot options only; the segment's own DHCP server leases addresses |
 
 ```yaml
 deployer:
-  target: linux
   host: 192.168.1.5
   user: admin
   ssh_key: ~/.ssh/id_ed25519
@@ -193,6 +193,33 @@ List of nodes to bootstrap. Each node must have either `bmc_address` (for BMC-ma
 | `interfaces` | list | Network interfaces (`[]installer.InterfaceConfig`), injected into the merged config as `network.interfaces` |
 | `overrides` | map | Per-node template overrides |
 
+### Raspberry Pi Node
+
+A Raspberry Pi has no BMC: it is a manual node, booted over PXE and
+observed, with these fields beside the manual-node ones
+(`ErrInvalidNodePlatform` names the field when one is wrong).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `platform` | string | `raspberrypi` |
+| `model` | string | **Required**. `rpi4`, `rpi400`, `cm4`, `rpi3b+` or `rpi5` |
+| `architecture` | string | `aarch64` (the default for a Pi; `x86_64` is rejected) |
+| `serial` | string | The board serial, up to eight hex digits (`/proc/cpuinfo` `Serial`, low 32 bits) — what the bootloader sends in DHCP option 97 and the name of its per-device boot directory |
+| `boot_model` | string | `sd` (default): the card is installed over the network once; the bootloader's `BOOT_ORDER` must try the card first and the network second (`0xf21`) |
+| `bmc_address` | — | Not allowed: a Pi has no BMC, so `boot_method: virtual-media` is not possible either |
+
+```yaml
+  - hostname: pi-01
+    role: worker
+    macs: ["dc:a6:32:01:36:c2"]
+    platform: raspberrypi
+    model: rpi4
+    serial: 9ffefdef
+```
+
+`architecture` is also accepted on a generic node (`aarch64` for an Arm
+server); `model`, `serial` and `boot_model` are not.
+
 ### Authoritative Node Identity
 
 First-class node fields are authoritative for node identity. The seeder
@@ -257,13 +284,15 @@ nodes:
 ## Backups Directory
 
 Optional top-level field specifying where factory-cert backups are written
-during the BMC enrollment ceremony (`bmc_enroll: true` nodes). `~` is expanded
-to the operator's home directory. Defaults to
-`~/sources/automatethethings/infra/backups` when empty.
+during the BMC enrollment ceremony (`bmc_enroll: true` nodes). The backups
+belong with the deployment's configuration, so the path is resolved like
+`netboot_media_dir` and `overrides_file`: a relative path against this file's
+directory, `~` to the operator's home directory, an absolute path as written.
+Empty means `backups/` beside this file.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backups_dir` | string | `~/sources/automatethethings/infra/backups` | Local directory for BMC cert backups |
+| `backups_dir` | string | `backups` (beside `bootstrap.yaml`) | Local directory for BMC cert backups |
 
 ## Validation Rules
 

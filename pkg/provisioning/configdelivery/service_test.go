@@ -49,8 +49,20 @@ func (m *mockProfileResolver) Get(ctx context.Context, id uint64) (*entities.Dev
 }
 
 // mockEABService implements eab.Service for testing.
+// mockEABService validates every credential; the default credential is bound to
+// profileID / tenantID, the binding configdelivery enforces.
 type mockEABService struct {
 	validateFunc func(ctx context.Context, keyID string, hmacKey []byte) (*eab.Credential, error)
+	profileID    uint64
+	tenantID     string
+}
+
+// boundEAB is an EAB service whose credentials belong to profile.
+func boundEAB(profile *entities.DeviceProfile) *mockEABService {
+	if profile == nil {
+		return &mockEABService{}
+	}
+	return &mockEABService{profileID: profile.ID, tenantID: profile.TenantID}
 }
 
 func (m *mockEABService) Generate(ctx context.Context, params eab.GenerateParams) (*eab.Credential, error) {
@@ -77,7 +89,7 @@ func (m *mockEABService) Validate(ctx context.Context, keyID string, hmacKey []b
 	if m.validateFunc != nil {
 		return m.validateFunc(ctx, keyID, hmacKey)
 	}
-	return &eab.Credential{ID: 1, KeyID: keyID, Status: eab.StatusActive}, nil
+	return &eab.Credential{ID: 1, KeyID: keyID, Status: eab.StatusActive, ProfileID: m.profileID, TenantID: m.tenantID}, nil
 }
 
 func (m *mockEABService) ListByProfile(ctx context.Context, profileID uint64) ([]*eab.Credential, error) {
@@ -448,7 +460,7 @@ func TestService_ResolveConfig_Found(t *testing.T) {
 			return &entities.DeviceProfile{ID: 1, Config: expectedConfig}, nil
 		},
 	}
-	svc := testService(t, profileSvc, &mockEABService{})
+	svc := testService(t, profileSvc, &mockEABService{profileID: 1})
 
 	nonce := issueValidNonce(t, svc)
 	ctx := context.Background()
@@ -481,7 +493,7 @@ func TestService_ResolveConfig_NotFound(t *testing.T) {
 			return nil, device.ErrNoMatchingConfig{EKSerial: ekSerial, MAC: mac}
 		},
 	}
-	svc := testService(t, profileSvc, &mockEABService{})
+	svc := testService(t, profileSvc, nil)
 
 	nonce := issueValidNonce(t, svc)
 	ctx := context.Background()

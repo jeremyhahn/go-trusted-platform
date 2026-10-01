@@ -151,7 +151,7 @@ the other.
 | Report whether Secure Boot keys already exist | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `(*secureboot.XKMSManager).KeysExist()` |
 | Resolve the on-disk key/certificate paths | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `(*secureboot.XKMSManager).GetKeyPaths()` |
 | Obtain a `crypto.Signer` for PK / KEK / DB | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `(*secureboot.XKMSManager).GetSigner(ctx, keyType)` |
-| Construct a KMS-resident DB signer (hash-signing) | see §2 | see §2 | see §2 | see §2 | ✅ `secureboot.NewRemoteSigner(ctx, attrs, client)` |
+| Construct a KMS-resident DB signer (hash-signing) | see §2 | see §2 | see §2 | see §2 | ✅ `secureboot.NewKMSSigner(ctx, kms, ca, keyURI, certURI)` |
 | Generate the stable kernel module-signing key | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `secureboot.GenerateModuleSigningKey(ctx, cfg)` |
 | Load the module-signing key back | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ `secureboot.LoadModuleSigningKey(path)` |
 

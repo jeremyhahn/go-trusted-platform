@@ -64,21 +64,11 @@ func NewLinuxDeployer(logger *slog.Logger) *LinuxDeployer {
 	return &LinuxDeployer{logger: logger, local: execLocalRunner{}}
 }
 
-// Deploy connects to the Linux host via SSH, stages all required PXE
-// assets into config.DataDir, ships/pulls the container image, and runs
-// the bootstrap container with --net=host -v <DataDir>:/data.
-//
-// Asset staging is a critical correctness step: the bootstrap container
-// image ships /data/vmlinuz, /data/initramfs, and /data/autoinstall.sh
-// baked at image-build time. The bind-mount overlays /data with the host
-// DataDir, hiding the baked files. We extract them out of the image into
-// the host DataDir BEFORE starting the container so they remain visible
-// once the bind-mount is in place. The manifest.yaml the orchestrator
-// generated is placed in the same directory.
-//
-// Asset extraction uses `docker create` + `docker cp` (works under both
-// docker and podman) and runs entirely on the deployer host so we don't
-// have to ship a multi-MB initramfs over SSH.
+// Deploy connects to the Linux host via SSH, stages the manifest and the
+// netboot media build into config.DataDir, ships/pulls the container
+// image, and runs the bootstrap container with --net=host -v <DataDir>:/data.
+// The image carries no installer media: everything it serves under /data
+// is staged here.
 //
 // Pre-existing containers with the same name are torn down before
 // re-deploy. The caller is responsible for honouring RedeployMode (the
@@ -107,7 +97,7 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 
 	// Create remote data directory. configs/ is for per-MAC YAML overrides
 	// (autoinstall.sh fetches /config/mac/<mac>/hostname etc.); the parent
-	// holds manifest.yaml, vmlinuz, initramfs, autoinstall.sh.
+	// holds manifest.yaml and the netboot media build.
 	mkdirCmd := fmt.Sprintf("mkdir -p %s/configs", shellQuote(config.DataDir))
 	if _, err := client.Run(ctx, mkdirCmd); err != nil {
 		return nil, err
@@ -141,13 +131,14 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 			slog.String("error", err.Error()))
 	}
 
-	// Extract image-baked PXE assets into the host DataDir so the
-	// upcoming bind-mount doesn't shadow them. We create a throw-away
-	// container from the image (no run), copy each file out, then remove
-	// the placeholder. This pattern works under both docker and podman.
-	if err := d.stagePXEAssets(ctx, client, config); err != nil {
+	// Stage the netboot media build — every media set, the Raspberry Pi
+	// stage and the arm64 iPXE; its index says which TFTP tree and arm64
+	// iPXE the container is to serve.
+	paths, err := stageNetbootMedia(ctx, client, config.NetbootMediaDir, config.DataDir, d.logger)
+	if err != nil {
 		return nil, err
 	}
+	config.netboot = paths
 
 	// Run the container.
 	runCmd := GenerateRunCommand(config)
@@ -330,118 +321,6 @@ func GenerateImageLoadCommand(runtime, remoteTarPath string) string {
 	return fmt.Sprintf("%s load -i %s", shellQuote(runtime), shellQuote(remoteTarPath))
 }
 
-// stagePXEAssets extracts image-baked /data files into the host DataDir
-// using `<runtime> create` + `<runtime> cp`. The fundamental problem this
-// solves: the container image's `/data/vmlinuz`, `/data/initramfs`, and
-// `/data/autoinstall.sh` are populated at build time, but the container
-// is started with `-v <DataDir>:/data`, which overlays those files with
-// the (possibly empty) host directory. pxeboot inside then fails to find
-// its kernel/initrd. By copying the files out FIRST we make them visible
-// through the overlay.
-//
-// Files that don't exist in the image are silently skipped (no warning):
-// older bootstrap images may not ship every file in this list, and the
-// Phase 5 hand-off path doesn't need them.
-// pxeImageAssets are the /data paths the bootstrap container image is
-// expected to ship, staged onto the deployer host before the PXE server
-// starts. A path the image does not carry is skipped rather than fatal —
-// older images, and images built from an ISO with no gateway role, do not
-// ship every asset.
-var pxeImageAssets = []string{
-	"vmlinuz",
-	"initramfs",
-	// Alpine kernel-modules squashfs. The PXE boot.ipxe cmdline fetches
-	// modloop=http://<host>/data/modloop-lts; the bind-mount overlays
-	// /data, so it must be staged out of the image like the kernel and
-	// initramfs or Alpine init hangs after the autoinstall/inittab setup.
-	"modloop-lts",
-	"autoinstall.sh",
-	// Installer binaries served over HTTP at /data/platformctl and
-	// /data/platformd. PXE-booted nodes have no CD, so the autoinstall
-	// fetches these via the platform_bin_url= kernel cmdline param
-	// instead of reading them off /media/cdrom/platformd-bin/. Staged
-	// from the same ISO baked into the container image.
-	"platformctl",
-	"platformd",
-	// platform-initrd (boot-time LUKS/TPM unlock binary) + the
-	// dracut-platformd module tarball. The installer needs both to build
-	// the target UKI; PXE nodes fetch them into /media/cdrom.
-	"platform-initrd",
-	"dracut-platformd.tar.gz",
-	// Alpine minirootfs (prefetch output). PXE nodes fetch this over
-	// HTTP into /media/cdrom so the OS installer's base-system step does
-	// not need to reach the public Alpine mirror.
-	"alpine-minirootfs.tar.gz",
-	// gatewayd, served at /data/gatewayd for gateway-role nodes. Absent
-	// from images built off an ISO with no gateway role, which is why it
-	// sits at the end of this best-effort list: a missing subpath is
-	// skipped here, and the install then fails loudly on the node that
-	// actually needed it rather than on every node (#648).
-	"gatewayd",
-}
-
-func (d *LinuxDeployer) stagePXEAssets(ctx context.Context, client *SSHClient, config *DeployConfig) error {
-	const stagerName = "trusted-bootstrap-asset-stager"
-
-	assets := pxeImageAssets
-
-	// Best-effort cleanup of any prior stager container left behind by an
-	// interrupted run. `|| true` keeps the failure path quiet; if rm is
-	// genuinely broken, the create below will surface a clearer error.
-	cleanupCmd := fmt.Sprintf("%s rm -f %s 2>/dev/null || true",
-		shellQuote(config.ContainerRuntime), shellQuote(stagerName))
-	if _, err := client.Run(ctx, cleanupCmd); err != nil {
-		d.logger.Warn("asset-stager pre-cleanup returned error (non-fatal)",
-			slog.String("error", err.Error()))
-	}
-
-	createCmd := fmt.Sprintf("%s create --name %s %s /bin/true",
-		shellQuote(config.ContainerRuntime),
-		shellQuote(stagerName),
-		shellQuote(config.ContainerImage))
-	if _, err := client.Run(ctx, createCmd); err != nil {
-		return ErrAssetStageFailed{Phase: "create", Cause: err}
-	}
-	defer func() {
-		rmCmd := fmt.Sprintf("%s rm -f %s",
-			shellQuote(config.ContainerRuntime), shellQuote(stagerName))
-		if _, rmErr := client.Run(ctx, rmCmd); rmErr != nil {
-			d.logger.Warn("asset-stager cleanup failed (non-fatal)",
-				slog.String("error", rmErr.Error()))
-		}
-	}()
-
-	for _, asset := range assets {
-		// `docker cp` returns 1 with "No such file or directory" when the
-		// asset isn't in the image. We tolerate that — but distinguish it
-		// from a real cp failure by checking stderr after the run.
-		cpCmd := fmt.Sprintf("%s cp %s:/data/%s %s/%s 2>&1",
-			shellQuote(config.ContainerRuntime),
-			shellQuote(stagerName),
-			asset,
-			shellQuote(config.DataDir),
-			asset)
-		out, err := client.Run(ctx, cpCmd)
-		if err == nil {
-			d.logger.Info("staged image asset",
-				slog.String("asset", asset),
-				slog.String("data_dir", config.DataDir))
-			continue
-		}
-		// docker cp prints "Error: No such file or directory" or
-		// "Error response from daemon: Could not find the file ..." when
-		// the asset is missing. Treat that as "image doesn't ship this
-		// asset" rather than a hard failure.
-		if isMissingAssetError(out) {
-			d.logger.Debug("image does not ship asset, skipping",
-				slog.String("asset", asset))
-			continue
-		}
-		return ErrAssetStageFailed{Phase: "cp:" + asset, Cause: err}
-	}
-	return nil
-}
-
 // shellQuote single-quotes a string for safe inclusion in a remote shell
 // command. Existing single quotes are escaped via the standard
 // '\”-style trick; this is sufficient for paths, runtime names, and
@@ -449,21 +328,6 @@ func (d *LinuxDeployer) stagePXEAssets(ctx context.Context, client *SSHClient, c
 // shell-meta characters).
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// isMissingAssetError checks the runtime's `cp` stderr output for the
-// well-known "asset not in image" signatures. Both docker and podman
-// emit recognisable variants when an inner path doesn't exist.
-func isMissingAssetError(stderr string) bool {
-	s := strings.ToLower(stderr)
-	switch {
-	case strings.Contains(s, "no such file or directory"),
-		strings.Contains(s, "could not find the file"),
-		strings.Contains(s, "no such file"),
-		strings.Contains(s, "does not exist in container"):
-		return true
-	}
-	return false
 }
 
 // parseVerifyInspect parses a tab-separated `inspect --format` line with
@@ -659,6 +523,15 @@ func portEnvValue(port int) string {
 	return strconv.Itoa(port)
 }
 
+// boolEnvValue is "true" for true and empty (the entrypoint default,
+// false) otherwise.
+func boolEnvValue(v bool) string {
+	if v {
+		return "true"
+	}
+	return ""
+}
+
 func bootstrapEnvFlags(config *DeployConfig) string {
 	pairs := []struct {
 		name, value string
@@ -672,6 +545,9 @@ func bootstrapEnvFlags(config *DeployConfig) string {
 		{"BOOTSTRAP_GATEWAY", config.BootstrapGateway},
 		{"BOOTSTRAP_DNS", config.BootstrapDNS},
 		{"BOOTSTRAP_APK_MIRROR", config.BootstrapAPKMirror},
+		{"BOOTSTRAP_TFTP_DIR", config.netboot.tftpDir},
+		{"BOOTSTRAP_ARM64_IPXE", config.netboot.arm64IPXE},
+		{"BOOTSTRAP_PROXY_DHCP", boolEnvValue(config.BootstrapProxyDHCP)},
 	}
 	var b strings.Builder
 	for _, p := range pairs {

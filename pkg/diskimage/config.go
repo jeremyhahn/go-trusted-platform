@@ -73,6 +73,10 @@ type BuildConfig struct {
 	VirtKernelOutputDir  string
 	VirtKernelDir        string
 	VirtKernelCacheDir   string
+	// KMSClients opens the operator's platform clients for kms:// Secure
+	// Boot references in the platform config; nil when the build only signs
+	// with file keys.
+	KMSClients iso.KMSClientsFunc
 	// Runner runs docker and other host commands; nil means runner.Exec.
 	Runner runner.Runner
 	// Logger receives progress; nil means the default logger.

@@ -866,6 +866,8 @@ func TestConfigDeliveryErrorToStatus(t *testing.T) {
 		{"fetch ek parse failed", configdelivery.ErrEKCertParseFailed{Cause: errors.New("bad")}, fetchConfigErrorMatchers, codes.InvalidArgument},
 		{"fetch ek required", configdelivery.ErrEKCertRequired{}, fetchConfigErrorMatchers, codes.PermissionDenied},
 		{"fetch ek mismatch", configdelivery.ErrEKCertMismatch{}, fetchConfigErrorMatchers, codes.PermissionDenied},
+		{"fetch eab profile mismatch", configdelivery.ErrEABProfileMismatch{}, fetchConfigErrorMatchers, codes.PermissionDenied},
+		{"sign eab profile mismatch", configdelivery.ErrEABProfileMismatch{}, signDigestErrorMatchers, codes.PermissionDenied},
 		{"fetch unknown", errors.New("boom"), fetchConfigErrorMatchers, codes.Internal},
 		{"fetch wrapped known", fmt.Errorf("wrapped: %w", configdelivery.ErrNonceExpired{}), fetchConfigErrorMatchers, codes.InvalidArgument},
 

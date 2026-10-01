@@ -204,7 +204,7 @@ func TestBMCTrustTOFUIsAcceptedAsEndpointPinning(t *testing.T) {
 // made both wrong at once.
 func TestBMCTrustValidationNamesTheAllowedSet(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy.example.com"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
 		Subnets: []installer.SubnetConfig{
 			{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning},
 		},
@@ -241,7 +241,7 @@ func TestBMCTrustValidationNamesTheAllowedSet(t *testing.T) {
 // other — the split that produced #83.
 func TestBMCTrustValidationAcceptsTOFU(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy.example.com"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
 		Subnets: []installer.SubnetConfig{
 			{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning},
 		},

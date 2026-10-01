@@ -870,6 +870,33 @@ func (b *PreFetchBuilder) findPackage(name string) *apkPackageEntry {
 }
 
 // downloadPackages downloads all packages to the specified directory.
+// FetchPackages downloads the named packages and their dependencies from
+// the configured mirror into destDir, from the same index and with the
+// same verification as the media prefetch. A named package the index does
+// not carry is ErrPackageNotFound. It is what a boot server uses to stage
+// a Raspberry Pi's firmware set without building an image.
+func (b *PreFetchBuilder) FetchPackages(ctx context.Context, packages []string, destDir string) error {
+	// The constructor makes an empty index; it is loaded on first use.
+	if len(b.packageIndex) == 0 {
+		if err := b.loadPackageIndex(ctx); err != nil {
+			return err
+		}
+	}
+	for _, name := range packages {
+		if b.findPackage(name) == nil {
+			return &ErrPackageNotFound{Package: name}
+		}
+	}
+	all, err := b.resolveAllDependencies(packages)
+	if err != nil {
+		return &ErrPreFetchFailed{Operation: "resolve_dependencies", Reason: "failed to resolve package dependencies", Err: err}
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return &ErrPreFetchFailed{Operation: "create_directory", Reason: "failed to create " + destDir, Err: err}
+	}
+	return b.downloadPackages(ctx, all, destDir)
+}
+
 func (b *PreFetchBuilder) downloadPackages(ctx context.Context, packages []string, destDir string) error {
 	b.logger.Info("[PREFETCH] Downloading packages", "count", len(packages), "dest", destDir)
 

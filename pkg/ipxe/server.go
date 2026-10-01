@@ -422,21 +422,23 @@ func (s *Server) buildDHCPConfig() (*DHCPConfig, error) {
 		archMap = DefaultBootFilenameByArch()
 	}
 	dhcpConfig := &DHCPConfig{
-		Interface:          dhcpInterface,
-		ServerIP:           s.serverIP,
-		BroadcastIP:        broadcastIP,
-		SubnetMask:         subnetMask.To4(),
-		RangeStart:         rangeStart.To4(),
-		RangeEnd:           rangeEnd.To4(),
-		LeaseTime:          s.config.DHCPLeaseTime,
-		TFTPServerName:     s.config.TFTPServerName,
-		TFTPServerIP:       s.serverIP, // Use same IP for TFTP
-		BootFilename:       s.config.BootFilename,
-		BootFilenameByArch: archMap,
-		IPXEScript:         s.config.IPXEScript,
-		UseRawSocket:       false,
-		RespondToAll:       s.config.DHCPRespondToAll,
-		Port:               s.config.DHCPPort,
+		Interface:           dhcpInterface,
+		ServerIP:            s.serverIP,
+		BroadcastIP:         broadcastIP,
+		SubnetMask:          subnetMask.To4(),
+		RangeStart:          rangeStart.To4(),
+		RangeEnd:            rangeEnd.To4(),
+		LeaseTime:           s.config.DHCPLeaseTime,
+		TFTPServerName:      s.config.TFTPServerName,
+		TFTPServerIP:        s.serverIP, // Use same IP for TFTP
+		BootFilename:        s.config.BootFilename,
+		BootFilenameByArch:  archMap,
+		IPXEScript:          s.config.IPXEScript,
+		UseRawSocket:        false,
+		RespondToAll:        s.config.DHCPRespondToAll,
+		ProxyOnly:           s.config.DHCPProxyOnly,
+		RaspberryPiOption43: s.config.RaspberryPiOption43,
+		Port:                s.config.DHCPPort,
 	}
 
 	// Optional fields

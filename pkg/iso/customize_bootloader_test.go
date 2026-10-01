@@ -38,6 +38,7 @@ func TestConfigureBootloader(t *testing.T) {
 		grubConfig       string
 		wantErr          bool
 		wantErrContains  string
+		debugSink        string
 		validateModified func(*testing.T, string)
 	}{
 		{
@@ -77,6 +78,26 @@ menuentry "Linux lts" {
 				// hook fires before switch_root.
 				if !strings.Contains(content, "alpine_start=autoinstall") {
 					t.Error("Expected alpine_start=autoinstall to be injected")
+				}
+				// No sink is configured, so none may be baked: the
+				// install script derives it from the DHCP server.
+				if strings.Contains(content, "platform_debug_sink=") {
+					t.Error("Expected no platform_debug_sink without a configured sink")
+				}
+			},
+		},
+		{
+			name: "configured debug sink is baked into the cmdline",
+			grubConfig: `set timeout=10
+menuentry "Linux lts" {
+	linux /boot/vmlinuz-lts root=/dev/sda1
+	initrd /boot/initramfs-lts
+}
+`,
+			debugSink: "198.51.100.7:8080",
+			validateModified: func(t *testing.T, content string) {
+				if strings.Count(content, "platform_debug_sink=198.51.100.7:8080") != 1 {
+					t.Errorf("Expected the configured sink exactly once, got:\n%s", content)
 				}
 			},
 		},
@@ -183,6 +204,7 @@ menuentry "Linux lts" {
 					Overlay: filepath.Join(tmpDir, tt.name, "overlay"),
 				},
 			}
+			config.Platform.DebugSink = tt.debugSink
 
 			customizer := NewCustomizer(config, logging.DefaultLogger())
 			ctx := context.Background()

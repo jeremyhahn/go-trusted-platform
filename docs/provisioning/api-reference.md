@@ -79,7 +79,7 @@ Typed service errors map consistently across transports:
 |---------------|------|-------------|-------------|
 | `ErrInvalidRequest`, `ErrNonceRequired`, `ErrNonceExpired`, `ErrEKCertParseFailed` | 400 | `InvalidArgument` | `StatusInvalidArgument` |
 | `ErrEABValidationFailed` (FetchConfig) | 401 | `Unauthenticated` | `StatusUnauthorized` |
-| `ErrEABValidationFailed` (SignDigest), `ErrEKCertRequired`, `ErrEKCertMismatch` | 403 | `PermissionDenied` | `StatusPermissionDenied` |
+| `ErrEABValidationFailed` (SignDigest), `ErrEABProfileMismatch`, `ErrEKCertRequired`, `ErrEKCertMismatch` | 403 | `PermissionDenied` | `StatusPermissionDenied` |
 | `ErrSessionNotFound`, `ErrProfileNotFound` | 404 | `NotFound` | `StatusNotFound` |
 | `ErrSessionExpired`, `ErrSessionAlreadyFulfilled` | 400 | `InvalidArgument` | `StatusInvalidArgument` |
 | `ErrRemoteSignNotConfigured` | 409 | `FailedPrecondition` | `StatusInvalidRequest` |

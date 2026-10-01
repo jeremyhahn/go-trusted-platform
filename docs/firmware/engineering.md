@@ -35,7 +35,7 @@ individual-variable level. `pkg/uefi` does the Secure Boot semantics;
 | File | Holds |
 |---|---|
 | `keychain.go` | `XKMSManager`, `XKMSConfig`, `BackendType`, key generation and export |
-| `remote_signer.go` | `NewRemoteSigner`, `CertFetcher` — KMS hash-signing |
+| `kms_signer.go` | `NewKMSSigner`, `FetchKMSCertificate`, `KMSKeyID` — KMS hash-signing over the platform client |
 | `modulekey.go` | `GenerateModuleSigningKey`, `LoadModuleSigningKey`, `ModuleSigningKey` |
 | `types.go` | `KeyType`, `KeyPaths`, `ResignMode*`, the sentinel error set |
 | `errors.go` | `MessageError`, `SentinelCauseError`, `WrappedError` |
@@ -281,12 +281,18 @@ type KeyPaths struct { PKCert, KEKCert, DBCert, PKKey, KEKKey, DBKey string }
 ```
 
 ```go
-type CertFetcher interface {
-    GetCertificate(ctx context.Context, backend, keyID string) (*xkmssdk.GetCertificateResponse, error)
-}
+type KMSSignClient interface { Sign(ctx, *platformv1.SignRequest, ...grpc.CallOption) (*platformv1.SignResponse, error) }
+type CertificateGetter interface { GetCertificate(ctx, *platformv1.GetCertificateRequest, ...grpc.CallOption) (*platformv1.GetCertificateResponse, error) }
 
-func NewRemoteSigner(ctx context.Context, attrs *xkmssdk.KeyAttributes, client CertFetcher) (crypto.Signer, *x509.Certificate, error)
+func NewKMSSigner(ctx context.Context, kms KMSSignClient, ca CertificateGetter, keyURI, certURI string) (crypto.Signer, *x509.Certificate, error)
+func FetchKMSCertificate(ctx context.Context, ca CertificateGetter, ref string) (*x509.Certificate, error)
+func KMSKeyID(ref string) string
 ```
+
+`platform.Client.KMS()` and `.CA()` satisfy the two interfaces, so the node
+(IDevID mTLS) and an operator's build (its own client) use the same signer. The
+certificate is fetched by `cert-uri`, or by the key id when `cert-uri` is empty;
+`Sign` sends the Authenticode digest with `PreHashed` set.
 
 ```go
 const (
@@ -389,6 +395,24 @@ func SigningTime(input io.Reader) (time.Time, error)
 **The constructor takes a context first.** `NewSigner` also does an eager
 `opts.KeyStore.Signer(ctx, opts.KeyAttributes)` to prove the key is reachable
 before any file is touched.
+
+Every caller that holds a key rather than a key store goes through one of two
+constructors on top of `NewSigner` — there is no other key-store shim:
+
+```go
+func NewCryptoSigner(ctx context.Context, signer crypto.Signer, cert *x509.Certificate, logger *logging.Logger) (Authenticode, error)
+func NewFileSigner(ctx context.Context, keyPath, certPath string, logger *logging.Logger) (Authenticode, error)
+func LoadSigningPair(keyPath, certPath string) (crypto.Signer, *x509.Certificate, error)
+func LoadPrivateKeyPEM(path string) (crypto.PrivateKey, error)  // PKCS#1 or PKCS#8
+func LoadCertificate(path string) (*x509.Certificate, error)    // PEM or DER
+```
+
+`NewCryptoSigner` takes any `crypto.Signer` — a file key, the installer's
+resolved DB key, or a KMS-held key that only sees digests
+(`secureboot.NewKMSSigner`) — and refuses a certificate that does not certify
+it (`KeyCertMismatchError`). `NewFileSigner` is `LoadSigningPair` +
+`NewCryptoSigner`. The installer, the ISO build's staging gate and bootloader
+signing, the PXE harness and the secureboot integration suite all use these.
 
 ### 2.8 `pkg/modulesign`
 
@@ -501,20 +525,20 @@ errors. That is how `secure-boot status` reports `dbx: absent` instead of failin
 
 Returned: `ErrConfigNil` (nil config), `ErrInvalidConfig` (empty `KeysDir`,
 `KeyBits`/`KeySize` below the floor, unknown backend, empty module-key `Path`),
-`ErrKeyGenFailed`, `ErrWriteFailed` (module-key bundle write),
-`ErrNilKeyAttributes`, `ErrNilSDKClient`, `ErrRemoteSignerUnavailable`,
-`ErrRemoteCertUnavailable`.
+`ErrKeyGenFailed`, `ErrWriteFailed` (module-key bundle write).
 
 Declared and **never returned** by non-test code: `ErrKeysNotFound`,
 `ErrInvalidKeyType`. Note that `pkg/qemu` declares its own, distinct
 `ErrKeysNotFound`, which *is* returned — do not cross-match them.
 
 Typed: `ErrModuleKeyExists{Path}`, `ErrModuleKeyNotFound{Path, Err}`,
-`ErrModuleKeyMalformed{Path, Reason}`.
+`ErrModuleKeyMalformed{Path, Reason}`, and for the KMS signer
+`KMSKeyRefError{KeyURI}`, `KMSCertificateError{Ref, Err}`,
+`KMSSignError{KeyID, Err}`, `UnsupportedHashError{Hash}`.
 
-**`NewRemoteSigner` fails closed on a nil client** (`ErrNilSDKClient`) rather
-than degrading to a local key — a nil client means no KMS is reachable, and the
-caller is expected to fall through to its own explicit next mode.
+**`NewKMSSigner` fails closed**: a key URI that names no KMS key, a certificate
+the CA cannot return or parse, an empty signature and a hash the KMS cannot carry
+are each a typed error — never a fall-back to a local key.
 
 ### `pkg/modulesign`
 
@@ -562,7 +586,8 @@ failure with captured output or a remediation hint — for example
 - `enforce --commit` that completes without leaving a PK in firmware →
   `ErrEnforceIncomplete`.
 - Kernel-update UKI rebuild with an unresolvable DB signer.
-- `NewRemoteSigner` with a nil KMS client.
+- `NewKMSSigner` with an empty key URI, an unavailable or malformed certificate,
+  a failing or empty KMS signature, or an unsupported hash.
 - `remoteDBKeyRefs` on the control plane: Secure Boot disabled, resign-mode not
   `remote`, empty DB key URI, or a key selector other than `db`.
 - `GenerateModuleSigningKey` over an existing key without `--force`.
@@ -698,7 +723,7 @@ PEM bundle → `0600`, its parent directory `0700`. Built UKI → `0755`.
 | Layer | Location | In `make test`? | Covers |
 |---|---|---|---|
 | Unit | `pkg/uefi/*_test.go` | **yes** | GUID round-trip, ESL encode/parse, NVRAM parse/serialise, enrollment ordering, efivars enroll payload bytes, status parsing |
-| Unit | `pkg/secureboot/*_test.go` | **yes** | Key generation, key paths, re-sign mode, remote signer (fake `CertFetcher`), module-key generate/load/malformed |
+| Unit | `pkg/secureboot/*_test.go` | **yes** | Key generation, key paths, re-sign mode, KMS signer (fake KMS and CA clients), module-key generate/load/malformed |
 | Unit | `pkg/authenticode/authenticode_test.go` | **yes** | Sign/verify round-trip, certificate extraction, constructor validation |
 | Unit | `pkg/modulesign/*_test.go` | **yes** | CMS envelope, trailer, compression codecs, guards, error paths |
 | Unit | `pkg/uefi/firmware/*_test.go` | **no** — excluded | Raw variable read/write/list against a fixture directory |
@@ -730,8 +755,8 @@ What the integration tier proves:
 **Seams for fault injection.** `uefi.EfivarsPath` is a package var;
 `EnrollKeysToEfivarsDir` and `ReadSecureBootStatusFromDir` take an explicit
 directory; `runEnroll`/`runEnforce` accept an injected `uefi.UKIVerifier`;
-`secureboot.CertFetcher` and `installer.RemoteSignerResolver` are small
-interfaces; `installer.WithUKIBuilder`, `WithESPUKIPath`, `WithModulesDir`,
+`secureboot.KMSSignClient` / `CertificateGetter` and
+`installer.RemoteSignerResolver` are small interfaces; `installer.WithUKIBuilder`, `WithESPUKIPath`, `WithModulesDir`,
 `WithBootDir` retarget the rebuild at a temp tree.
 
 **Gating is skip-free.** With a hardware tier variable set but the precondition

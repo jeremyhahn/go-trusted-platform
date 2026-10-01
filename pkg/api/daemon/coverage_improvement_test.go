@@ -22,7 +22,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/pem"
 	"log/slog"
 	"math/big"
 	"os"
@@ -438,30 +437,4 @@ func TestMCPIDevID_FormatHelpers(t *testing.T) {
 		assert.NotEmpty(t, result["serial_number"])
 		assert.NotEmpty(t, result["fingerprint"])
 	})
-}
-
-// =============================================================================
-// Helper test config function
-// =============================================================================
-
-func createTestCertPEM(t *testing.T) string {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "Test"},
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(time.Hour),
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &priv.PublicKey, priv)
-	require.NoError(t, err)
-
-	pemBlock := &pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: certDER,
-	}
-
-	return string(pem.EncodeToMemory(pemBlock))
 }

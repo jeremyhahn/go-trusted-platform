@@ -18,6 +18,7 @@ package ipxe
 import (
 	"encoding/binary"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/mdlayher/packet"
@@ -33,11 +34,24 @@ const (
 )
 
 // ServerRawConn implements a raw socket connection for DHCP on bridged networks.
+//
+// The socket is an AF_PACKET datagram socket: the kernel strips the
+// link-layer header on receive, so every offset here and in the BPF filter
+// is relative to the IP header, and it builds the header on send from the
+// destination hardware address WriteTo supplies. (As a SOCK_RAW socket the
+// frames carried their Ethernet header, which the filter and the parser
+// read as the IP header: a client's DISCOVER was rejected by the filter on
+// a byte of its own MAC, and the server's own broadcast reply, looped back,
+// passed it and crashed the parser.)
 type ServerRawConn struct {
 	conn     *packet.Conn
 	iface    string
 	serverIP net.IP
 	port     int
+
+	// peers remembers the hardware address each client IP last spoke
+	// from, so a unicast reply can be framed without ARP.
+	peers sync.Map // string (IPv4) -> net.HardwareAddr
 }
 
 // NewServerRawConn creates a new raw socket connection for DHCP server.
@@ -88,7 +102,7 @@ func NewServerRawConn(iface string, serverIP net.IP, port int) (*ServerRawConn, 
 	}
 
 	// Create raw packet socket
-	conn, err := packet.Listen(ifi, packet.Raw, unix.ETH_P_IP, &packet.Config{
+	conn, err := packet.Listen(ifi, packet.Datagram, unix.ETH_P_IP, &packet.Config{
 		Filter: filter,
 	})
 	if err != nil {
@@ -103,51 +117,68 @@ func NewServerRawConn(iface string, serverIP net.IP, port int) (*ServerRawConn, 
 	}, nil
 }
 
-// ReadFrom implements net.PacketConn.
+// ReadFrom implements net.PacketConn. It returns the next UDP datagram
+// addressed to the server port and skips anything else the filter let
+// through, rather than trusting the lengths a frame claims.
 func (c *ServerRawConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	buf := make([]byte, 1500)
 	for {
-		// Read raw packet
-		buf := make([]byte, 1500)
-		n, _, err := c.conn.ReadFrom(buf)
+		n, from, err := c.conn.ReadFrom(buf)
 		if err != nil {
 			return 0, nil, err
 		}
-
-		// Parse IP header
-		if n < ipHeaderLen+udpHeaderLen {
+		payload, src, ok := parseUDP4(buf[:n], c.port)
+		if !ok {
 			continue
 		}
-
-		ipHeader := buf[:ipHeaderLen]
-		ipHeaderLen := int((ipHeader[0] & 0x0F) * 4)
-		if n < ipHeaderLen+udpHeaderLen {
-			continue
+		if hw, isPacket := from.(*packet.Addr); isPacket && !src.IP.IsUnspecified() {
+			c.peers.Store(src.IP.String(), hw.HardwareAddr)
 		}
-
-		// Extract source IP
-		srcIP := net.IPv4(ipHeader[12], ipHeader[13], ipHeader[14], ipHeader[15])
-
-		// Parse UDP header
-		udpHeader := buf[ipHeaderLen : ipHeaderLen+udpHeaderLen]
-		srcPort := binary.BigEndian.Uint16(udpHeader[0:2])
-		udpLen := binary.BigEndian.Uint16(udpHeader[4:6])
-
-		// Extract DHCP payload
-		payloadLen := int(udpLen) - udpHeaderLen
-		if n < ipHeaderLen+udpHeaderLen+payloadLen {
-			continue
-		}
-
-		payload := buf[ipHeaderLen+udpHeaderLen : ipHeaderLen+udpHeaderLen+payloadLen]
-
-		// Copy to output buffer
-		copy(p, payload)
-
-		return payloadLen, &net.UDPAddr{
-			IP:   srcIP,
-			Port: int(srcPort),
-		}, nil
+		return copy(p, payload), src, nil
 	}
+}
+
+// parseUDP4 extracts the UDP payload and source of an IPv4 packet that
+// starts at the IP header, accepting only UDP to port. Every length is
+// checked against the bytes actually received.
+func parseUDP4(b []byte, port int) (payload []byte, src *net.UDPAddr, ok bool) {
+	if len(b) < ipHeaderLen {
+		return nil, nil, false
+	}
+	if b[0]>>4 != 4 || b[9] != unix.IPPROTO_UDP {
+		return nil, nil, false
+	}
+	ihl := int(b[0]&0x0F) * 4
+	if ihl < ipHeaderLen || len(b) < ihl+udpHeaderLen {
+		return nil, nil, false
+	}
+	udp := b[ihl : ihl+udpHeaderLen]
+	if int(binary.BigEndian.Uint16(udp[2:4])) != port {
+		return nil, nil, false
+	}
+	udpLen := int(binary.BigEndian.Uint16(udp[4:6]))
+	if udpLen < udpHeaderLen || ihl+udpLen > len(b) {
+		return nil, nil, false
+	}
+	src = &net.UDPAddr{
+		IP:   net.IPv4(b[12], b[13], b[14], b[15]),
+		Port: int(binary.BigEndian.Uint16(udp[0:2])),
+	}
+	return b[ihl+udpHeaderLen : ihl+udpLen], src, true
+}
+
+// destinationHardwareAddr chooses the frame's destination: the broadcast
+// address for a broadcast reply, else the address the client last spoke
+// from. A destination this socket has never heard from cannot be framed
+// (there is no ARP on a packet socket).
+func (c *ServerRawConn) destinationHardwareAddr(dstIP net.IP) (net.HardwareAddr, error) {
+	if dstIP.Equal(net.IPv4bcast) {
+		return net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, nil
+	}
+	if hw, ok := c.peers.Load(dstIP.String()); ok {
+		return hw.(net.HardwareAddr), nil
+	}
+	return nil, &UnknownPeerError{IP: dstIP}
 }
 
 // WriteTo implements net.PacketConn.
@@ -157,15 +188,13 @@ func (c *ServerRawConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		return 0, &MessageError{Msg: "address must be *net.UDPAddr"}
 	}
 
-	// Get interface to send from
-	ifi, err := net.InterfaceByName(c.iface)
-	if err != nil {
-		return 0, err
-	}
-
 	dstIP := udpAddr.IP.To4()
 	if dstIP == nil {
 		return 0, &MessageError{Msg: "destination must be IPv4"}
+	}
+	dstHW, err := c.destinationHardwareAddr(dstIP)
+	if err != nil {
+		return 0, err
 	}
 
 	// Build IP + UDP packet
@@ -177,10 +206,8 @@ func (c *ServerRawConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		p,
 	)
 
-	// Send raw packet
-	_, err = c.conn.WriteTo(pkt, &packet.Addr{
-		HardwareAddr: ifi.HardwareAddr,
-	})
+	// Send the datagram; the kernel frames it to dstHW.
+	_, err = c.conn.WriteTo(pkt, &packet.Addr{HardwareAddr: dstHW})
 	if err != nil {
 		return 0, err
 	}

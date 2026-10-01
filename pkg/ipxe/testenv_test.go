@@ -226,6 +226,27 @@ func TestTestEnv_ServerConfig(t *testing.T) {
 	assert.Equal(t, cfg.DHCPStart.String(), serverCfg.DHCPRangeStart)
 	assert.Equal(t, cfg.DHCPEnd.String(), serverCfg.DHCPRangeEnd)
 	assert.Equal(t, len(cfg.BootEntries), len(serverCfg.BootEntries))
+	assert.Nil(t, serverCfg.FirmwareSigner, "no signer unless configured")
+}
+
+func TestTestEnv_ServerConfig_CarriesFirmwareSigner(t *testing.T) {
+	cfg := DefaultTestEnvConfig()
+	signer := &recordingSigner{}
+	cfg.FirmwareSigner = signer
+
+	env, err := NewTestEnv(cfg, logging.DefaultLogger())
+	require.NoError(t, err)
+	assert.Same(t, signer, env.ServerConfig().FirmwareSigner)
+}
+
+func TestDefaultTestEnvConfig_LeasesInsideTheBridgeSubnet(t *testing.T) {
+	// The bridge's subnet must contain every lease: a unicast reply to a
+	// leased client is routed by the host, and a lease outside the bridge's
+	// prefix leaves through the default route instead of the bridge.
+	cfg := DefaultTestEnvConfig()
+	assert.True(t, cfg.Subnet.Contains(cfg.DHCPStart), "DHCPStart %s outside %s", cfg.DHCPStart, cfg.Subnet)
+	assert.True(t, cfg.Subnet.Contains(cfg.DHCPEnd), "DHCPEnd %s outside %s", cfg.DHCPEnd, cfg.Subnet)
+	assert.True(t, cfg.Subnet.Contains(cfg.ServerIP))
 }
 
 func TestTestEnv_Accessors(t *testing.T) {
@@ -377,4 +398,45 @@ func TestTestEnv_ServerConfigGeneration(t *testing.T) {
 	assert.Equal(t, "ipxe.efi", serverCfg.BootFilename)
 	assert.Contains(t, serverCfg.IPXEScript, "boot.ipxe")
 	assert.Contains(t, serverCfg.ExternalURL, cfg.ServerIP.String())
+}
+
+func TestUnusedTapName_FitsTheKernelLimit(t *testing.T) {
+	// The default client TAP is 14 characters; a plain "-unused" suffix
+	// would be 21, which the kernel rejects and the network then reports
+	// as "Link not found".
+	assert.Equal(t, "tap-pxe-unused", unusedTapName("tap-pxe-client"))
+	assert.LessOrEqual(t, len(unusedTapName("tap-pxe-client")), maxInterfaceNameLen)
+	assert.Equal(t, "tap0-unused", unusedTapName("tap0"))
+}
+
+func TestTestEnvConfig_Validate_RejectsLongInterfaceNames(t *testing.T) {
+	cfg := DefaultTestEnvConfig()
+	cfg.TapName = "tap-pxe-client-too-long"
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidConfig)
+
+	cfg = DefaultTestEnvConfig()
+	cfg.BridgeName = "a-bridge-name-too-long"
+	assert.ErrorIs(t, cfg.Validate(), ErrInvalidConfig)
+}
+
+func TestTestEnv_DHCPConfig_SelectsBootfileByArchitecture(t *testing.T) {
+	// The environment's DHCP server must hand an AArch64 client its own
+	// iPXE; without the map every client got the x86-64 ipxe.efi, which
+	// U-Boot refuses ("Machine type 0x8664 is not supported").
+	env, err := NewTestEnv(DefaultTestEnvConfig(), logging.DefaultLogger())
+	require.NoError(t, err)
+	cfg := env.dhcpConfig()
+	assert.Equal(t, DefaultBootFilenameByArch(), cfg.BootFilenameByArch)
+	assert.Equal(t, FirmwareSNPOnlyAArch64, cfg.BootFilenameByArch[archEFIAArch64])
+	assert.False(t, cfg.UseRawSocket, "the UDP socket Server uses")
+	assert.True(t, cfg.RespondToAll, "the booted OS's DHCP client is not a PXE client and still needs a lease")
+	assert.Equal(t, []net.IP{net.ParseIP("8.8.8.8").To4()}, cfg.DNSServers)
+
+	explicit := DefaultTestEnvConfig()
+	env, err = NewTestEnv(explicit, logging.DefaultLogger())
+	require.NoError(t, err)
+	env.ServerConfig().BootFilenameByArch = map[uint16]string{}
+	assert.Empty(t, env.dhcpConfig().BootFilenameByArch, "an explicit empty map disables the selection")
 }

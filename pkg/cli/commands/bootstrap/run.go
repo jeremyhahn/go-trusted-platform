@@ -28,7 +28,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -258,23 +257,6 @@ func runBootstrapDryRun(configPath string, commonFlags *cli.CommonFlags) error {
 	ctx := context.Background()
 	result, err := orch.DryRun(ctx)
 
-	// If the deployer target is Cisco, render the CLI commands for inspection.
-	if result != nil && result.DeployerTarget == string(deployer.TargetCisco) {
-		provisioningVLAN := deployer.DefaultCiscoProvisioningVLAN
-		provSubnetGateway := ""
-		if ps := config.ProvisioningSubnet(); ps != nil {
-			provSubnetGateway = ps.Gateway
-		}
-		cmds, renderErr := deployer.RenderCiscoDeployPlan(
-			provSubnetGateway, provisioningVLAN)
-		if renderErr != nil {
-			result.Warnings = append(result.Warnings,
-				"could not render cisco commands: "+renderErr.Error())
-		} else {
-			result.CiscoCommands = cmds
-		}
-	}
-
 	printDryRunResult(result)
 	if err != nil {
 		return ErrPXEDryRunFailed{Cause: err}
@@ -329,7 +311,7 @@ func printDryRunResult(result *bootstrap.DryRunResult) {
 
 	fmt.Fprintf(os.Stdout, "\nDry Run Result\n")
 	fmt.Fprintf(os.Stdout, "  Config:     %s\n", configStatus)
-	fmt.Fprintf(os.Stdout, "  Deployer:   %s @ %s\n", result.DeployerTarget, result.DeployerHost)
+	fmt.Fprintf(os.Stdout, "  Deployer:   %s\n", result.DeployerHost)
 
 	if result.SwitchConfigured {
 		fmt.Fprintf(os.Stdout, "  Switch:     %s\n", result.SwitchVendor)
@@ -357,8 +339,7 @@ func printDryRunResult(result *bootstrap.DryRunResult) {
 		fmt.Fprintf(os.Stdout, "    Phase 1: Skip switch configuration (not configured)\n")
 	}
 
-	fmt.Fprintf(os.Stdout, "    Phase 2: Deploy bootstrap container to %s (%s)\n",
-		result.DeployerHost, result.DeployerTarget)
+	fmt.Fprintf(os.Stdout, "    Phase 2: Deploy bootstrap container to %s\n", result.DeployerHost)
 	fmt.Fprintf(os.Stdout, "    Phase 3: PXE boot %d control-plane node(s), wait for health\n",
 		result.ControlPlaneCount)
 	fmt.Fprintf(os.Stdout, "    Phase 4: Seed device templates and create profiles\n")
@@ -370,9 +351,6 @@ func printDryRunResult(result *bootstrap.DryRunResult) {
 
 	// Switch plan.
 	printSwitchPlan(result.SwitchPlan)
-
-	// Cisco app-hosting commands.
-	printCiscoCommands(result)
 
 	// Node table.
 	if len(result.Nodes) > 0 {
@@ -454,23 +432,6 @@ func printSwitchPlan(plan *bootstrap.SwitchPlan) {
 			fmt.Fprintf(os.Stdout, "      %-10s %-6s VLANs [%s]  %s\n",
 				p.Port, p.Mode, strings.Join(vlanStrs, ","), p.Description)
 		}
-	}
-}
-
-// printCiscoCommands prints the Cisco IOS-XE app-hosting CLI commands when
-// the deployer target is Cisco.
-func printCiscoCommands(result *bootstrap.DryRunResult) {
-	if result.CiscoCommands == "" {
-		return
-	}
-
-	fmt.Fprintf(os.Stdout, "\n  Cisco App-Hosting Commands (%s @ %s):\n",
-		result.DeployerTarget, result.DeployerHost)
-	fmt.Fprintf(os.Stdout, "  %s\n", strings.Repeat("=", 55))
-
-	lines := strings.Split(strings.TrimRight(result.CiscoCommands, "\n"), "\n")
-	for _, line := range lines {
-		fmt.Fprintf(os.Stdout, "  %s\n", line)
 	}
 }
 

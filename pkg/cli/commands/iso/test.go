@@ -458,9 +458,12 @@ func setupTestVMEnvironment(ctx context.Context, logger *logging.Logger, config 
 		return &WrappedError{Msg: "failed to create NVRAM directory", Err: err}
 	}
 
-	// Initialize NVRAM if needed
+	// Initialize NVRAM if needed. U-Boot (aarch64) keeps its EFI variables
+	// on the ESP, so there is no NVRAM template to copy.
 	nvramPath := config.GetNVRAMPath()
-	if _, err := os.Stat(nvramPath); os.IsNotExist(err) {
+	if config.Arch == qemu.ArchAArch64 {
+		logger.Infof("U-Boot firmware: no NVRAM to initialise")
+	} else if _, err := os.Stat(nvramPath); os.IsNotExist(err) {
 		logger.Infof("Initializing OVMF NVRAM from template...")
 		if err := copyTestFile(config.OVMFVars, nvramPath); err != nil {
 			return &WrappedError{Msg: "failed to initialize NVRAM", Err: err}

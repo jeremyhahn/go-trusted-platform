@@ -106,7 +106,7 @@ func TestSaveAndLoad_RoundTrip(t *testing.T) {
 
 	original := &Manifest{
 		Nodes: []ManifestEntry{
-			{MAC: "aa:bb:cc:dd:ee:01", Role: "control-plane", Hostname: "cp-01", ConfigPath: "/etc/cp.yaml"},
+			{MAC: "aa:bb:cc:dd:ee:01", Role: "control-plane", Hostname: "cp-01", Architecture: "arm64", MediaSet: "aarch64-rpi"},
 			{MAC: "aa:bb:cc:dd:ee:02", Role: "worker", Hostname: "worker-01"},
 		},
 	}
@@ -134,8 +134,8 @@ func TestSaveAndLoad_RoundTrip(t *testing.T) {
 		if loaded.Nodes[i].Hostname != original.Nodes[i].Hostname {
 			t.Errorf("entry %d: hostname mismatch: %s vs %s", i, loaded.Nodes[i].Hostname, original.Nodes[i].Hostname)
 		}
-		if loaded.Nodes[i].ConfigPath != original.Nodes[i].ConfigPath {
-			t.Errorf("entry %d: config_path mismatch: %s vs %s", i, loaded.Nodes[i].ConfigPath, original.Nodes[i].ConfigPath)
+		if loaded.Nodes[i].Architecture != original.Nodes[i].Architecture || loaded.Nodes[i].MediaSet != original.Nodes[i].MediaSet {
+			t.Errorf("entry %d: architecture/media_set mismatch: %s/%s vs %s/%s", i, loaded.Nodes[i].Architecture, loaded.Nodes[i].MediaSet, original.Nodes[i].Architecture, original.Nodes[i].MediaSet)
 		}
 	}
 }

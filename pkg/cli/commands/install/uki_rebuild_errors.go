@@ -40,16 +40,6 @@ func (e ErrRemoteSignerSetup) Error() string {
 
 func (e ErrRemoteSignerSetup) Unwrap() error { return e.Err }
 
-// ErrRemoteCertEmpty is returned when the platform CA returns no certificate for
-// the requested DB key identifier during remote hash-signing.
-type ErrRemoteCertEmpty struct {
-	KeyID string
-}
-
-func (e ErrRemoteCertEmpty) Error() string {
-	return fmt.Sprintf("uki-rebuild: platform CA returned no certificate for DB key %q", e.KeyID)
-}
-
 // ErrCABundleRead is returned when the CA bundle used to verify the control
 // plane's TLS certificate cannot be read.
 type ErrCABundleRead struct {
@@ -106,53 +96,4 @@ type ErrRemoteSignKeyRef struct {
 
 func (e ErrRemoteSignKeyRef) Error() string {
 	return fmt.Sprintf("uki-rebuild: secure-boot db key-uri %q is not a usable kms:// reference", e.KeyURI)
-}
-
-// ErrRemoteCertDecode is returned when the DB certificate fetched from the CA
-// cannot be PEM-decoded or parsed during post-install remote re-signing.
-type ErrRemoteCertDecode struct {
-	KeyID string
-	Err   error
-}
-
-func (e ErrRemoteCertDecode) Error() string {
-	if e.Err != nil {
-		return fmt.Sprintf("uki-rebuild: DB certificate for key %q did not decode: %v", e.KeyID, e.Err)
-	}
-	return fmt.Sprintf("uki-rebuild: DB certificate for key %q did not decode", e.KeyID)
-}
-
-func (e ErrRemoteCertDecode) Unwrap() error { return e.Err }
-
-// ErrUnsupportedHash is returned when the Authenticode signer requests a hash
-// the platform KMS Sign RPC does not map to a HashAlgorithm.
-type ErrUnsupportedHash struct {
-	Hash string
-}
-
-func (e ErrUnsupportedHash) Error() string {
-	return fmt.Sprintf("uki-rebuild: unsupported hash %q for remote KMS signing (want SHA-256/384/512)", e.Hash)
-}
-
-// ErrRemoteSignFailed is returned when the platform KMS Sign RPC fails during
-// post-install remote re-signing.
-type ErrRemoteSignFailed struct {
-	KeyID string
-	Err   error
-}
-
-func (e ErrRemoteSignFailed) Error() string {
-	return fmt.Sprintf("uki-rebuild: KMS sign with DB key %q failed: %v", e.KeyID, e.Err)
-}
-
-func (e ErrRemoteSignFailed) Unwrap() error { return e.Err }
-
-// ErrRemoteSignEmpty is returned when the platform KMS Sign RPC returns an empty
-// signature during post-install remote re-signing.
-type ErrRemoteSignEmpty struct {
-	KeyID string
-}
-
-func (e ErrRemoteSignEmpty) Error() string {
-	return fmt.Sprintf("uki-rebuild: KMS returned an empty signature for DB key %q", e.KeyID)
 }

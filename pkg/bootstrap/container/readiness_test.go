@@ -42,21 +42,13 @@ func freeTCPPort(t *testing.T) int {
 }
 
 // readinessManifest writes the minimum on-disk state NewServer needs.
-func readinessManifest(t *testing.T) (manifestPath, kernel, initrd string) {
+func readinessManifest(t *testing.T) (manifestPath, dataDir string) {
 	t.Helper()
-	dir := t.TempDir()
-	manifestPath = filepath.Join(dir, "manifest.yaml")
-	if err := os.WriteFile(manifestPath, []byte("devices: []\n"), 0o600); err != nil {
+	manifestPath = filepath.Join(t.TempDir(), "manifest.yaml")
+	if err := os.WriteFile(manifestPath, []byte("nodes: []\n"), 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
-	kernel = filepath.Join(dir, "vmlinuz")
-	initrd = filepath.Join(dir, "initramfs")
-	for _, p := range []string{kernel, initrd} {
-		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
-			t.Fatalf("write %s: %v", p, err)
-		}
-	}
-	return manifestPath, kernel, initrd
+	return manifestPath, testDataDir(t, x86Set())
 }
 
 // TestStart_DeviceScriptNeverBindsWhenAListenerFails is the regression
@@ -82,7 +74,7 @@ func readinessManifest(t *testing.T) (manifestPath, kernel, initrd string) {
 // DHCP now takes a free port like every other listener here (#362), so
 // the squat is the only failure and the error can be named.
 func TestStart_DeviceScriptNeverBindsWhenAListenerFails(t *testing.T) {
-	manifestPath, kernel, initrd := readinessManifest(t)
+	manifestPath, dataDir := readinessManifest(t)
 
 	// Occupy the TFTP port so its bind cannot succeed.
 	squatter, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -101,8 +93,8 @@ func TestStart_DeviceScriptNeverBindsWhenAListenerFails(t *testing.T) {
 		FirmwareDir:      fixtureFirmwareDir(t),
 		FirmwareOffline:  true,
 		ManifestPath:     manifestPath,
-		KernelPath:       kernel,
-		InitrdPath:       initrd,
+		DataDir:          dataDir,
+		MediaDir:         filepath.Join(dataDir, "media"),
 		DHCPConfig: DHCPConfig{
 			ServerIP:   "127.0.0.1",
 			RangeStart: "127.0.0.2",

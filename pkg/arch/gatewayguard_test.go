@@ -96,6 +96,11 @@ var gatewayAllowedPrefixes = []string{
 	// Carried by pkg/sdn/gateway/modes (PXE gateway mode).
 	"pkg/ipxe",
 	"pkg/testenv",
+	// Carried by pkg/ipxe: the Raspberry Pi bootloader's netboot protocol
+	// (recognising a Pi's DHCP request, its option 43). Pure protocol —
+	// dhcpv4, tftp, logging; the TFTP tree staging, which needs the image
+	// tooling, is pkg/diskimage/netboot and stays forbidden.
+	"pkg/rpinetboot",
 
 	// Carried by pkg/sdn/gateway/services/vpn (#584): the caller-admission
 	// policy, the verdict type and the host-attestation manifest are leaf

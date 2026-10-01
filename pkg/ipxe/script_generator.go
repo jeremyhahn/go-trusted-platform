@@ -14,6 +14,7 @@
 package ipxe
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 )
@@ -43,6 +44,10 @@ type DeviceBootInfo struct {
 
 	// ExtraKernelArgs contains additional kernel arguments.
 	ExtraKernelArgs []string
+	// Architecture is the client's iPXE build architecture ("x86_64",
+	// "arm64"), when the lookup knows it; the kernel and initrd URLs must
+	// be for it.
+	Architecture string
 }
 
 // ScriptGenerator produces per-device iPXE boot scripts.
@@ -64,54 +69,91 @@ func NewScriptGenerator(serverAddr string, logger *slog.Logger) *ScriptGenerator
 
 // GenerateScript produces an iPXE boot script for a specific device.
 func (g *ScriptGenerator) GenerateScript(info *DeviceBootInfo) string {
-	var sb strings.Builder
-	sb.WriteString("#!ipxe\n")
-
-	// Build kernel command with platform arguments
-	sb.WriteString("kernel ")
-	sb.WriteString(info.KernelURL)
-
+	var args []string
 	if info.ConfigServerURL != "" {
-		sb.WriteByte(' ')
-		sb.WriteString("platform_config=")
-		sb.WriteString(info.ConfigServerURL)
+		args = append(args, "platform_config="+info.ConfigServerURL)
 	}
 	if info.Role != "" {
-		sb.WriteByte(' ')
-		sb.WriteString("platform_role=")
-		sb.WriteString(info.Role)
+		args = append(args, "platform_role="+info.Role)
 	}
 	if info.Hostname != "" {
-		sb.WriteByte(' ')
-		sb.WriteString("platform_hostname=")
-		sb.WriteString(info.Hostname)
+		args = append(args, "platform_hostname="+info.Hostname)
 	}
 	if info.BootstrapStrategy != "" {
-		sb.WriteByte(' ')
-		sb.WriteString("bootstrap_strategy=")
-		sb.WriteString(info.BootstrapStrategy)
+		args = append(args, "bootstrap_strategy="+info.BootstrapStrategy)
 	}
-	for _, arg := range info.ExtraKernelArgs {
-		sb.WriteByte(' ')
-		sb.WriteString(arg)
+	args = append(args, info.ExtraKernelArgs...)
+
+	description := info.Hostname
+	if description == "" {
+		description = info.MAC
 	}
-	sb.WriteByte('\n')
-
-	// Initrd
-	sb.WriteString("initrd ")
-	sb.WriteString(info.InitrdURL)
-	sb.WriteByte('\n')
-
-	// Boot
-	sb.WriteString("boot\n")
+	var sb strings.Builder
+	sb.WriteString("#!ipxe\n")
+	sb.WriteString(architectureGuard(info.Architecture, "/menu.ipxe"))
+	sb.WriteString(bootBlock("", description, info.KernelURL, strings.Join(args, " "), info.InitrdURL))
 
 	g.logger.Debug("generated device boot script",
 		"mac", info.MAC,
 		"role", info.Role,
 		"hostname", info.Hostname,
+		"architecture", info.Architecture,
 	)
-
 	return sb.String()
+}
+
+// architectureGuard is the line that keeps a client of another
+// architecture from fetching a kernel it cannot run: it chains the menu
+// for its own architecture instead. Empty when the entry names none. iPXE
+// knows its build architecture as ${buildarch} (x86_64, arm64, i386).
+func architectureGuard(architecture, menuURL string) string {
+	if architecture == "" {
+		return ""
+	}
+	var sb strings.Builder
+	for _, a := range ClientArchitectures(architecture) {
+		fmt.Fprintf(&sb, "iseq ${buildarch} %s || ", a)
+	}
+	fmt.Fprintf(&sb, "chain %s?arch=${buildarch}\n", menuURL)
+	return sb.String()
+}
+
+// bootMaxAttempts bounds the boot retry loop.
+const bootMaxAttempts = 20
+
+// bootBlock renders one boot of kernel + initrd with a bounded retry:
+// some iPXE builds (X10 ATEN) intermittently drop the chained initramfs
+// fetch, sometimes the kernel's, so kernel + initrd + boot are retried
+// rather than dead-ending at the shell on a transient drop. label keeps
+// the block's labels unique when a script carries several ("" gives
+// boot_retry, boot_failed, boot_giveup).
+func bootBlock(label, description, kernelURL, args, initrdURL string) string {
+	l := "boot"
+	if label != "" {
+		l = "boot_" + label
+	}
+	kernel := "kernel " + kernelURL
+	if args != "" {
+		kernel += " " + args
+	}
+	return fmt.Sprintf(`echo Booting %[1]s...
+echo
+set attempts:int32 0
+:%[2]s_retry
+inc attempts
+echo Boot attempt ${attempts}...
+%[3]s || goto %[2]s_failed
+initrd %[4]s || goto %[2]s_failed
+boot || goto %[2]s_failed
+:%[2]s_failed
+iseq ${attempts} %[5]d && goto %[2]s_giveup ||
+echo Boot fetch failed (attempt ${attempts}); retrying in 3s...
+sleep 3
+goto %[2]s_retry
+:%[2]s_giveup
+echo Giving up after ${attempts} attempts; dropping to iPXE shell
+shell
+`, description, l, kernel, initrdURL, bootMaxAttempts)
 }
 
 // GenerateDefaultMenu produces the fallback boot menu for unknown devices.

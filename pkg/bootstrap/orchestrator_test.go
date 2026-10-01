@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ import (
 // the MAC segment: lowercase, dash-separated hex.
 var fakeSinkMACPath = regexp.MustCompile(`^[0-9a-f]{2}(-[0-9a-f]{2}){5}$`)
 
-// fakeSinkConfigKeys are the per-MAC keys stagePerMACHostname publishes.
+// fakeSinkConfigKeys are the per-MAC keys stagePerMACConfig publishes.
 var fakeSinkConfigKeys = map[string]struct{}{
 	"hostname":           {},
 	"installer.yaml":     {},
@@ -58,8 +59,38 @@ var fakeSinkConfigKeys = map[string]struct{}{
 // InstallLogPoller.Wait returns on its first probe instead of retrying
 // until bootProbeTimeout. registration.json is not served (404), which
 // exercises the fallback health-address candidates.
-func newFakePxebootSink(t *testing.T, cfg *BootstrapConfig) *httptest.Server {
+// configPutRecorder records the per-MAC config keys the orchestrator PUT,
+// keyed by sanitized MAC.
+type configPutRecorder struct {
+	mu   sync.Mutex
+	puts map[string]map[string]struct{}
+}
+
+func (r *configPutRecorder) record(mac, key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.puts[mac] == nil {
+		r.puts[mac] = map[string]struct{}{}
+	}
+	r.puts[mac][key] = struct{}{}
+}
+
+// keys returns the keys PUT for mac.
+func (r *configPutRecorder) keys(mac string) map[string]struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string]struct{}{}
+	for k := range r.puts[mac] {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+// newFakePxebootSink also returns the record of the per-MAC config PUTs
+// it accepted.
+func newFakePxebootSink(t *testing.T, cfg *BootstrapConfig) (*httptest.Server, *configPutRecorder) {
 	t.Helper()
+	rec := &configPutRecorder{puts: map[string]map[string]struct{}{}}
 	knownMACs := make(map[string]struct{})
 	knownHosts := make(map[string]struct{})
 	for i := range cfg.Nodes {
@@ -84,6 +115,7 @@ func newFakePxebootSink(t *testing.T, cfg *BootstrapConfig) *httptest.Server {
 		if _, ok := knownMACs[mac]; !ok {
 			t.Errorf("fake pxeboot sink: config PUT for undeclared MAC %q", mac)
 		}
+		rec.record(mac, key)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	serveLog := func(w http.ResponseWriter, _ *http.Request) {
@@ -119,7 +151,7 @@ func newFakePxebootSink(t *testing.T, cfg *BootstrapConfig) *httptest.Server {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, rec
 }
 
 // newRunOrchestrator builds an orchestrator whose bootstrap-container
@@ -133,10 +165,18 @@ func newFakePxebootSink(t *testing.T, cfg *BootstrapConfig) *httptest.Server {
 // device-script listener is not part of what the sink fakes.
 func newRunOrchestrator(t *testing.T, params OrchestratorParams) *Orchestrator {
 	t.Helper()
+	o, _ := newRecordingRunOrchestrator(t, params)
+	return o
+}
+
+// newRecordingRunOrchestrator is newRunOrchestrator that also returns the
+// sink's record of per-MAC config PUTs.
+func newRecordingRunOrchestrator(t *testing.T, params OrchestratorParams) (*Orchestrator, *configPutRecorder) {
+	t.Helper()
 	if params.Config == nil {
 		t.Fatal("newRunOrchestrator: params.Config is required")
 	}
-	srv := newFakePxebootSink(t, params.Config)
+	srv, rec := newFakePxebootSink(t, params.Config)
 	host, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	if err != nil {
 		t.Fatalf("fake pxeboot sink URL %q: %v", srv.URL, err)
@@ -160,7 +200,7 @@ func newRunOrchestrator(t *testing.T, params OrchestratorParams) *Orchestrator {
 	// its own trust and captures nothing, so the pool the gate would have
 	// left behind is primed here for the seeder to require.
 	o.storeControlPlaneCAPool(x509.NewCertPool())
-	return o
+	return o, rec
 }
 
 // --- mock deployer ---
@@ -295,7 +335,7 @@ func cpStaticInterfaces() []installer.InterfaceConfig {
 
 func minimalConfig() *BootstrapConfig {
 	return &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{Host: "deploy-host", NetbootMediaDir: fleetMedia},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
@@ -722,7 +762,7 @@ func TestOrchestrator_Run_MultiNode(t *testing.T) {
 func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
 	// Scenario: existing control-plane with skip_install, new worker being provisioned.
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
@@ -788,7 +828,7 @@ func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
 func TestOrchestrator_Run_SkipInstallWorker(t *testing.T) {
 	// Scenario: control-plane being provisioned, existing worker with skip_install.
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
@@ -847,7 +887,7 @@ func TestOrchestrator_Run_SkipInstallWorker(t *testing.T) {
 func TestOrchestrator_Discover_SkipInstallNode(t *testing.T) {
 	// SkipInstall nodes should be discovered without BMC or MAC.
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host"},
+		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
 		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",

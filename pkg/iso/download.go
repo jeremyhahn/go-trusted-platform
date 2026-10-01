@@ -41,6 +41,10 @@ func DownloadISO(ctx context.Context, config *ISOConfig) error {
 		return &WrappedError{Msg: "failed to create work directory", Err: err}
 	}
 
+	if config.SHA256 != "" {
+		return downloadPinned(ctx, config)
+	}
+
 	// Check if ISO already exists and is verified
 	if isVerified(config) {
 		logger.Info("ISO already exists and is verified, skipping download",
@@ -86,6 +90,31 @@ func DownloadISO(ctx context.Context, config *ISOConfig) error {
 	logger.Info("Alpine ISO downloaded and verified successfully",
 		"path", config.ISOPath())
 
+	return nil
+}
+
+// downloadPinned fetches a file whose digest the build pins. A cached copy
+// is used only when it still has that digest; a download that does not is
+// removed.
+func downloadPinned(ctx context.Context, config *ISOConfig) error {
+	if sum, err := calculateSHA256(config.ISOPath()); err == nil && strings.EqualFold(sum, config.SHA256) {
+		slog.Info("Pinned download is cached", "path", config.ISOPath(), "sha256", sum)
+		return nil
+	}
+	slog.Info("Downloading pinned file", "url", config.URL, "sha256", config.SHA256)
+	if err := downloadFile(ctx, config); err != nil {
+		return &WrappedError{Msg: "failed to download " + config.ISO, Err: err}
+	}
+	sum, err := calculateSHA256(config.ISOPath())
+	if err != nil {
+		return &WrappedError{Msg: "failed to calculate checksum", Err: err}
+	}
+	if !strings.EqualFold(sum, config.SHA256) {
+		if rmErr := os.Remove(config.ISOPath()); rmErr != nil {
+			return &WrappedError{Msg: "removing " + config.ISOPath() + " after a checksum mismatch", Err: rmErr}
+		}
+		return &MessageError{Msg: fmt.Sprintf("checksum mismatch for %s: pinned %s, got %s", config.ISO, config.SHA256, sum)}
+	}
 	return nil
 }
 

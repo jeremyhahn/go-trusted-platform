@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	pkgdiskimage "github.com/jeremyhahn/go-trusted-platform/pkg/diskimage"
@@ -16,23 +17,21 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
-type createFlags struct {
-	target               string
-	model                string
-	sizeMB               int
-	output               string
-	binariesDir          string
+// mediaFlags are the inputs every image build shares — `create` and
+// `netboot` alike: the ISO pipeline's media settings, the builder
+// containers, and the U-Boot and virt-kernel builds.
+type mediaFlags struct {
 	builderImage         string
 	builderDir           string
 	containerRuntime     string
 	ubootDir             string
 	ubootBuilderDir      string
 	ubootOutputDir       string
+	ubootCacheDir        string
 	virtKernelDir        string
 	virtKernelBuilderDir string
 	virtKernelOutputDir  string
 	virtKernelCacheDir   string
-	ubootCacheDir        string
 	skipPreflight        bool
 
 	platformVersion string
@@ -56,6 +55,15 @@ type createFlags struct {
 	preFetch        bool
 	debug           bool
 	verbose         bool
+}
+
+type createFlags struct {
+	mediaFlags
+	target      string
+	model       string
+	sizeMB      int
+	output      string
+	binariesDir string
 }
 
 // defaultPlatformConfigPaths mirror `iso create`: the single-node template
@@ -105,8 +113,14 @@ Examples:
 	f.IntVar(&flags.sizeMB, "size", pkgdiskimage.DefaultSizeMB, "Image size in MB")
 	f.StringVar(&flags.output, "output", "", "Output image path (default <work-dir>/trusted-platform-<target>.img)")
 	f.StringVar(&flags.binariesDir, "binaries-dir", "", "Directory holding the target-architecture platformd, platformctl, platformctl-static, platform-initrd and gatewayd (default: aarch64/ next to this binary)")
-	f.StringVar(&flags.builderImage, "builder-image", pkgdiskimage.DefaultBuilderImage, "Assemble container image tag")
-	f.StringVar(&flags.builderDir, "builder-dir", pkgdiskimage.DefaultBuilderDir, "Assemble container build context")
+	addMediaFlags(f, &flags.mediaFlags)
+	return cmd
+}
+
+// addMediaFlags registers the flags every image build shares.
+func addMediaFlags(f *pflag.FlagSet, flags *mediaFlags) {
+	f.StringVar(&flags.builderImage, "builder-image", pkgdiskimage.DefaultBuilderImage, "Builder (assemble) container image tag")
+	f.StringVar(&flags.builderDir, "builder-dir", pkgdiskimage.DefaultBuilderDir, "Builder (assemble) container build context")
 	f.StringVar(&flags.containerRuntime, "container-runtime", pkgdiskimage.DefaultContainerRuntime, "Container runtime binary")
 	f.StringVar(&flags.ubootDir, "uboot-dir", "", "Prebuilt U-Boot artifacts (skips the U-Boot build)")
 	f.StringVar(&flags.ubootBuilderDir, "uboot-builder-dir", pkgdiskimage.DefaultUBootBuilderDir, "U-Boot builder build context")
@@ -118,18 +132,18 @@ Examples:
 	f.StringVar(&flags.virtKernelCacheDir, "virt-kernel-cache-dir", "", "Kernel tarball cache directory")
 	f.BoolVar(&flags.skipPreflight, "skip-preflight", false, "Skip the build-host checks (binfmt, container runtime, kernel modules)")
 
-	f.StringVar(&flags.platformVersion, "platform-version", "", "Platform version baked into the image (default: the VERSION file, else dev)")
+	f.StringVar(&flags.platformVersion, "platform-version", "", "Platform version baked into the media (default: the VERSION file, else dev)")
 	f.StringVar(&flags.alpineVersion, "alpine-version", "3.22.2", "Alpine Linux version")
 	f.StringVar(&flags.mirror, "mirror", "http://mirror.cs.odu.edu/alpine", "Alpine Linux mirror URL (build-time pre-fetch source)")
 	f.StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL baked into the kernel cmdline")
-	f.StringVar(&flags.platformConfig, "platform-config", "", "Path to the platform config template baked into the image (auto-detected)")
+	f.StringVar(&flags.platformConfig, "platform-config", "", "Path to the platform config template baked into the media (auto-detected)")
 	f.StringVar(&flags.overrides, "overrides", "", "Path to override YAML (deep-merged onto --platform-config)")
 	f.StringVar(&flags.platformType, "platform-type", "server", "Platform type: 'server' or 'client'")
 	f.BoolVar(&flags.secureBoot, "secure-boot", true, "Enable Secure Boot (keys are preseeded into U-Boot)")
 	f.BoolVar(&flags.tpmUnseal, "tpm-unseal", true, "Enable TPM auto-unseal")
 	f.BoolVar(&flags.luks, "luks", true, "Enable LUKS encryption")
 	f.BoolVar(&flags.fido2, "fido2", false, "Enable FIDO2 security key support")
-	f.StringVar(&flags.keysDir, "keys-dir", "", "Secure Boot keys directory (PK/KEK/DB)")
+	f.StringVar(&flags.keysDir, "keys-dir", "", "Secure Boot keys directory (PK/KEK/DB) for references that are not kms://")
 	f.BoolVar(&flags.generateKeys, "generate-keys", true, "Generate Secure Boot keys if they don't exist")
 	f.StringVar(&flags.keyBackend, "key-backend", "file", "Secure Boot key backend: file, software, pkcs11, tpm2, awskms, azurekv, gcpkms, vault")
 	f.StringVar(&flags.caBundle, "ca-bundle", "", "CA bundle PEM to embed for the client trust store")
@@ -139,7 +153,6 @@ Examples:
 	f.BoolVar(&flags.preFetch, "pre-fetch", true, "Pre-download every package into the media (required: the container installs offline)")
 	f.BoolVar(&flags.debug, "debug", false, "Enable debug output")
 	f.BoolVar(&flags.verbose, "verbose", false, "Enable verbose output")
-	return cmd
 }
 
 func joinModels() string {
@@ -163,69 +176,115 @@ func newLogger(verbose, debug bool) *logging.Logger {
 	return logging.NewLogger(level, nil)
 }
 
-// buildConfig turns the flags into the shared ISO build configuration.
-func buildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
+// isoConfig turns the shared flags into the ISO build configuration; the
+// platform config defaults to the template for target and model.
+func (m *mediaFlags) isoConfig(target, model string) (*pkgiso.ISOBuildConfig, error) {
 	cfg := pkgiso.DefaultISOBuildConfig()
-	cfg.PlatformVersion = flags.platformVersion
+	cfg.PlatformVersion = m.platformVersion
 	if cfg.PlatformVersion == "" {
 		cfg.PlatformVersion = pkgiso.ReadVersionFile()
 	}
-	cfg.AlpineVersion = flags.alpineVersion
-	cfg.AlpineMirror = flags.mirror
-	cfg.APKMirror = flags.apkMirror
-	cfg.PlatformType = pkgiso.PlatformType(flags.platformType)
-	cfg.SecureBoot = flags.secureBoot
-	cfg.GenerateKeys = flags.generateKeys
-	cfg.KeyBackend = flags.keyBackend
-	cfg.TPMAutoUnseal = flags.tpmUnseal
-	cfg.LUKSTPMOnly = flags.luks
-	cfg.EnableFIDO2 = flags.fido2
-	cfg.Debug = flags.debug
-	cfg.PreFetch = flags.preFetch
-	cfg.WorkDir = flags.workDir
-	cfg.KeysDir = flags.keysDir
-	cfg.CABundlePath = flags.caBundle
-	cfg.CAKeyAlgorithm = flags.caKeyAlgorithm
-	cfg.WebUIPath = flags.webUI
+	cfg.AlpineVersion = m.alpineVersion
+	cfg.AlpineMirror = m.mirror
+	cfg.APKMirror = m.apkMirror
+	cfg.PlatformType = pkgiso.PlatformType(m.platformType)
+	cfg.SecureBoot = m.secureBoot
+	cfg.GenerateKeys = m.generateKeys
+	cfg.KeyBackend = m.keyBackend
+	cfg.TPMAutoUnseal = m.tpmUnseal
+	cfg.LUKSTPMOnly = m.luks
+	cfg.EnableFIDO2 = m.fido2
+	cfg.Debug = m.debug
+	cfg.PreFetch = m.preFetch
+	cfg.WorkDir = m.workDir
+	cfg.KeysDir = m.keysDir
+	cfg.CABundlePath = m.caBundle
+	cfg.CAKeyAlgorithm = m.caKeyAlgorithm
+	cfg.WebUIPath = m.webUI
 
-	platformConfig := flags.platformConfig
+	platformConfig := m.platformConfig
 	if platformConfig == "" {
-		for _, p := range defaultPlatformConfigPaths(flags.target, flags.model) {
+		for _, p := range defaultPlatformConfigPaths(target, model) {
 			if _, err := os.Stat(p); err == nil {
 				platformConfig = p
 				break
 			}
 		}
 	}
-	if flags.overrides != "" {
-		merged, err := mergeOverrides(platformConfig, flags.overrides)
+	if m.overrides != "" {
+		merged, err := mergeOverrides(platformConfig, m.overrides)
 		if err != nil {
 			return nil, err
 		}
 		platformConfig = merged
 	}
 	cfg.PlatformConfigFile = platformConfig
+	return cfg, nil
+}
 
-	binDir := flags.binariesDir
-	if binDir == "" {
+// imageBuild is the image build configuration the shared flags describe.
+func (m *mediaFlags) imageBuild(iso *pkgiso.ISOBuildConfig, platformClient *cli.LazyClient, logger *logging.Logger) *pkgdiskimage.BuildConfig {
+	return &pkgdiskimage.BuildConfig{
+		ISO:                  iso,
+		VirtKernelDir:        m.virtKernelDir,
+		VirtKernelBuilderDir: m.virtKernelBuilderDir,
+		VirtKernelOutputDir:  m.virtKernelOutputDir,
+		VirtKernelCacheDir:   m.virtKernelCacheDir,
+		ContainerRuntime:     m.containerRuntime,
+		BuilderImage:         m.builderImage,
+		BuilderDir:           m.builderDir,
+		UBootBuilderDir:      m.ubootBuilderDir,
+		UBootOutputDir:       m.ubootOutputDir,
+		UBootDir:             m.ubootDir,
+		UBootCacheDir:        m.ubootCacheDir,
+		KMSClients:           kmsClients(platformClient),
+		Logger:               logger,
+		SkipPreflight:        m.skipPreflight,
+	}
+}
+
+// binariesDir resolves a binaries directory: dir when given, else sub next
+// to this binary ("" for the directory itself). It must hold platformd.
+func binariesDir(dir, sub string) (string, error) {
+	if dir == "" {
 		self, err := os.Executable()
 		if err != nil {
-			return nil, ErrBuildFailed{Reason: "cannot resolve the running binary: " + err.Error()}
+			return "", ErrBuildFailed{Reason: "cannot resolve the running binary: " + err.Error()}
 		}
 		if resolved, err := filepath.EvalSymlinks(self); err == nil {
 			self = resolved
 		}
-		binDir = filepath.Join(filepath.Dir(self), "aarch64")
+		dir = filepath.Join(filepath.Dir(self), sub)
 	}
-	if _, err := os.Stat(filepath.Join(binDir, "platformd")); err != nil {
-		return nil, ErrBinariesNotFound{Dir: binDir}
+	if _, err := os.Stat(filepath.Join(dir, "platformd")); err != nil {
+		return "", ErrBinariesNotFound{Dir: dir}
+	}
+	return dir, nil
+}
+
+// buildConfig turns create's flags into the ISO build configuration with
+// its target-architecture binaries.
+func buildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
+	cfg, err := flags.isoConfig(flags.target, flags.model)
+	if err != nil {
+		return nil, err
+	}
+	binDir, err := binariesDir(flags.binariesDir, "aarch64")
+	if err != nil {
+		return nil, err
 	}
 	cfg.PlatformdBinary = filepath.Join(binDir, "platformd")
 	return cfg, nil
 }
 
-func runCreate(_ *cli.CommonFlags, flags *createFlags) error {
+func runCreate(common *cli.CommonFlags, flags *createFlags) (err error) {
 	logger := newLogger(flags.verbose, flags.debug)
+	platformClient := cli.NewLazyClient(common)
+	defer func() {
+		if closeErr := platformClient.Close(); closeErr != nil && err == nil {
+			err = ErrBuildFailed{Reason: "closing the platform connection: " + closeErr.Error()}
+		}
+	}()
 	cfg, err := buildConfig(flags)
 	if err != nil {
 		return err
@@ -233,30 +292,28 @@ func runCreate(_ *cli.CommonFlags, flags *createFlags) error {
 	fmt.Printf("Building %s image (model %q, %d MB)\n", flags.target, flags.model, flags.sizeMB)
 	fmt.Printf("  platform config: %s\n  binaries: %s\n  work dir: %s\n", cfg.PlatformConfigFile, filepath.Dir(cfg.PlatformdBinary), cfg.WorkDir)
 
-	result, err := pkgdiskimage.Create(context.Background(), &pkgdiskimage.BuildConfig{
-		ISO:                  cfg,
-		Target:               flags.target,
-		VirtKernelDir:        flags.virtKernelDir,
-		VirtKernelBuilderDir: flags.virtKernelBuilderDir,
-		VirtKernelOutputDir:  flags.virtKernelOutputDir,
-		VirtKernelCacheDir:   flags.virtKernelCacheDir,
-		Model:                flags.model,
-		SizeMB:               flags.sizeMB,
-		Output:               flags.output,
-		BinariesDir:          filepath.Dir(cfg.PlatformdBinary),
-		ContainerRuntime:     flags.containerRuntime,
-		BuilderImage:         flags.builderImage,
-		BuilderDir:           flags.builderDir,
-		UBootBuilderDir:      flags.ubootBuilderDir,
-		UBootOutputDir:       flags.ubootOutputDir,
-		UBootDir:             flags.ubootDir,
-		UBootCacheDir:        flags.ubootCacheDir,
-		Logger:               logger,
-		SkipPreflight:        flags.skipPreflight,
-	})
+	build := flags.imageBuild(cfg, platformClient, logger)
+	build.Target = flags.target
+	build.Model = flags.model
+	build.SizeMB = flags.sizeMB
+	build.Output = flags.output
+	build.BinariesDir = filepath.Dir(cfg.PlatformdBinary)
+	result, err := pkgdiskimage.Create(context.Background(), build)
 	if err != nil {
 		return ErrBuildFailed{Reason: err.Error()}
 	}
 	fmt.Printf("\nImage: %s\n  SHA256: %s\n  Size: %d MB\n  U-Boot: %s\n  Media: %s\n", result.Image, result.SHA256, result.SizeBytes/(1024*1024), result.UBoot.Binary, result.MediaDir)
 	return nil
+}
+
+// kmsClients reaches kms:// Secure Boot references through the operator's
+// platform client, connecting only when a build needs one.
+func kmsClients(client *cli.LazyClient) pkgiso.KMSClientsFunc {
+	return func() (*pkgiso.KMSClients, error) {
+		cl, err := client.Client()
+		if err != nil {
+			return nil, err
+		}
+		return &pkgiso.KMSClients{KMS: cl.KMS(), CA: cl.CA()}, nil
+	}
 }
