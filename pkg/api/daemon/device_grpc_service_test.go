@@ -1541,7 +1541,7 @@ func TestDeviceGRPCService_profileToPb_WithAllNetworkConfigs(t *testing.T) {
 						Action:   "allow",
 					},
 				},
-				Zone: "trusted",
+				Zone: "control-plane",
 			},
 			entities.DefaultPostEnrollmentNetwork: {
 				VLAN:    40,

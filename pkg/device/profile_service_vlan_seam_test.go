@@ -24,7 +24,7 @@ import (
 )
 
 // planStaleSharedVLANProfile writes a profile with a shared provisioning and
-// trusted VLAN straight through the DAO, bypassing the service layer.
+// admitted VLAN straight through the DAO, bypassing the service layer.
 //
 // The service layer will not create such a profile, so this is the only way
 // to produce the shape the assignment paths actually have to cope with: a

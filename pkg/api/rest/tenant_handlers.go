@@ -97,13 +97,6 @@ type CreateTenantRequest struct {
 	DisplayName string            `json:"display_name,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
-	VLANRange   *VLANRangeRequest `json:"vlan_range,omitempty"`
-}
-
-// VLANRangeRequest represents a VLAN range in API requests.
-type VLANRangeRequest struct {
-	Start uint16 `json:"start"`
-	End   uint16 `json:"end"`
 }
 
 // UpdateTenantRequest represents a request to update a tenant.
@@ -148,11 +141,6 @@ type CheckQuotaRequest struct {
 	Amount   int64  `json:"amount"`
 }
 
-// ValidateVLANRequest represents a request to validate a VLAN ID.
-type ValidateVLANRequest struct {
-	VLANID uint16 `json:"vlan_id"`
-}
-
 // RotateDEKRequest represents a request to rotate a tenant's DEK.
 type RotateDEKRequest struct {
 	Background bool `json:"background"`
@@ -179,25 +167,17 @@ type UnsealTenantBarrierRequest struct {
 
 // TenantResponse represents a tenant in API responses.
 type TenantResponse struct {
-	ID           string             `json:"id"`
-	Name         string             `json:"name"`
-	DisplayName  string             `json:"display_name"`
-	State        string             `json:"state"`
-	OVSBridge    string             `json:"ovs_bridge,omitempty"`
-	VLANRange    *VLANRangeResponse `json:"vlan_range,omitempty"`
-	ComputeQuota *ComputeQuotaResp  `json:"compute_quota,omitempty"`
-	NetworkQuota *NetworkQuotaResp  `json:"network_quota,omitempty"`
-	StorageQuota *StorageQuotaResp  `json:"storage_quota,omitempty"`
-	Labels       map[string]string  `json:"labels,omitempty"`
-	Annotations  map[string]string  `json:"annotations,omitempty"`
-	CreatedAt    time.Time          `json:"created_at"`
-	UpdatedAt    time.Time          `json:"updated_at"`
-}
-
-// VLANRangeResponse represents a VLAN range in API responses.
-type VLANRangeResponse struct {
-	Start uint16 `json:"start"`
-	End   uint16 `json:"end"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	DisplayName  string            `json:"display_name"`
+	State        string            `json:"state"`
+	ComputeQuota *ComputeQuotaResp `json:"compute_quota,omitempty"`
+	NetworkQuota *NetworkQuotaResp `json:"network_quota,omitempty"`
+	StorageQuota *StorageQuotaResp `json:"storage_quota,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	Annotations  map[string]string `json:"annotations,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
 }
 
 // ComputeQuotaResp represents compute quota in API responses.
@@ -272,22 +252,6 @@ type CheckQuotaResponse struct {
 	Allowed   bool      `json:"allowed"`
 	Message   string    `json:"message,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
-}
-
-// ValidateVLANResponse represents a VLAN validation result.
-type ValidateVLANResponse struct {
-	TenantID  string    `json:"tenant_id"`
-	VLANID    uint16    `json:"vlan_id"`
-	Valid     bool      `json:"valid"`
-	Message   string    `json:"message,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
-// BridgeNameResponse represents a bridge name lookup result.
-type BridgeNameResponse struct {
-	TenantID   string    `json:"tenant_id"`
-	BridgeName string    `json:"bridge_name"`
-	Timestamp  time.Time `json:"timestamp"`
 }
 
 // TenantErrorResponse represents a tenant error response.
@@ -388,10 +352,6 @@ type TenantManagerInterface interface {
 	GetUsage(ctx context.Context, tenantID string) (*quota.TenantUsage, error)
 	// CheckQuota checks if a resource request can be fulfilled.
 	CheckQuota(ctx context.Context, tenantID string, resource quota.ResourceType, amount int64) error
-	// ValidateVLAN checks if a tenant can use a specific VLAN.
-	ValidateVLAN(ctx context.Context, tenantID string, vlanID uint16) error
-	// GetBridgeName returns the OVS bridge name for a tenant.
-	GetBridgeName(ctx context.Context, tenantID string) (string, error)
 	// Sync synchronizes manager state with external systems.
 	Sync(ctx context.Context) error
 	// RotateTenantDEKWithOptions rotates the DEK for a tenant. The
@@ -477,10 +437,6 @@ func (h *TenantHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/tenants/{id}/usage", h.handleGetUsage).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/tenants/{id}/check-quota", h.handleCheckQuota).Methods(http.MethodPost)
 
-	// VLAN and bridge operations
-	router.HandleFunc("/api/v1/tenants/{id}/validate-vlan", h.handleValidateVLAN).Methods(http.MethodPost)
-	router.HandleFunc("/api/v1/tenants/{id}/bridge", h.handleGetBridgeName).Methods(http.MethodGet)
-
 	// DEK operations
 	router.HandleFunc("/api/v1/tenants/{id}/dek/rotate", h.handleRotateTenantDEK).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/tenants/{id}/dek/status", h.handleGetTenantDEKStatus).Methods(http.MethodGet)
@@ -558,13 +514,6 @@ func (h *TenantHandlers) handleCreateTenant(w http.ResponseWriter, r *http.Reque
 		DisplayName: req.DisplayName,
 		Labels:      req.Labels,
 		Annotations: req.Annotations,
-	}
-
-	if req.VLANRange != nil {
-		createReq.VLANRange = &tenant.VLANRange{
-			Start: req.VLANRange.Start,
-			End:   req.VLANRange.End,
-		}
 	}
 
 	entity, err := h.manager.CreateTenant(ctx, createReq)
@@ -1030,87 +979,6 @@ func (h *TenantHandlers) handleCheckQuota(w http.ResponseWriter, r *http.Request
 }
 
 // =============================================================================
-// VLAN and Bridge Handlers
-// =============================================================================
-
-// handleValidateVLAN handles POST /api/v1/tenants/{id}/validate-vlan
-func (h *TenantHandlers) handleValidateVLAN(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	if h.manager == nil {
-		h.writeError(w, http.StatusServiceUnavailable, ErrTenantManagerNotAvailable{})
-		return
-	}
-
-	vars := mux.Vars(r)
-	tenantID := vars["id"]
-	if tenantID == "" {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidTenantID{})
-		return
-	}
-
-	var req ValidateVLANRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
-		return
-	}
-
-	if req.VLANID == 0 {
-		h.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "vlan_id"})
-		return
-	}
-
-	err := h.manager.ValidateVLAN(ctx, tenantID, req.VLANID)
-
-	resp := ValidateVLANResponse{
-		TenantID:  tenantID,
-		VLANID:    req.VLANID,
-		Valid:     err == nil,
-		Timestamp: time.Now().UTC(),
-	}
-
-	if err != nil {
-		resp.Message = err.Error()
-	} else {
-		resp.Message = "VLAN is valid for this tenant"
-	}
-
-	h.writeJSON(w, http.StatusOK, resp)
-}
-
-// handleGetBridgeName handles GET /api/v1/tenants/{id}/bridge
-func (h *TenantHandlers) handleGetBridgeName(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	if h.manager == nil {
-		h.writeError(w, http.StatusServiceUnavailable, ErrTenantManagerNotAvailable{})
-		return
-	}
-
-	vars := mux.Vars(r)
-	tenantID := vars["id"]
-	if tenantID == "" {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidTenantID{})
-		return
-	}
-
-	bridgeName, err := h.manager.GetBridgeName(ctx, tenantID)
-	if err != nil {
-		h.logger.Error("Failed to get bridge name", "error", err, "tenant_id", tenantID)
-		h.writeTenantError(w, "get_bridge_name", err)
-		return
-	}
-
-	resp := BridgeNameResponse{
-		TenantID:   tenantID,
-		BridgeName: bridgeName,
-		Timestamp:  time.Now().UTC(),
-	}
-
-	h.writeJSON(w, http.StatusOK, resp)
-}
-
-// =============================================================================
 // DEK Handlers
 // =============================================================================
 
@@ -1418,18 +1286,10 @@ func (h *TenantHandlers) tenantToResponse(entity *tenant.TenantEntity) TenantRes
 		Name:        entity.Name,
 		DisplayName: entity.DisplayName,
 		State:       string(entity.State),
-		OVSBridge:   entity.OVSBridge,
 		Labels:      entity.Labels,
 		Annotations: entity.Annotations,
 		CreatedAt:   entity.CreatedAt,
 		UpdatedAt:   entity.UpdatedAt,
-	}
-
-	if !entity.VLANRange.IsEmpty() {
-		resp.VLANRange = &VLANRangeResponse{
-			Start: entity.VLANRange.Start,
-			End:   entity.VLANRange.End,
-		}
 	}
 
 	resp.ComputeQuota = &ComputeQuotaResp{
@@ -1491,12 +1351,6 @@ func (h *TenantHandlers) writeTenantError(w http.ResponseWriter, operation strin
 		status = http.StatusForbidden
 	case tenant.ErrResourceLimitReached:
 		status = http.StatusForbidden
-	case tenant.ErrInvalidVLANRange:
-		status = http.StatusBadRequest
-	case tenant.ErrVLANAllocationFailed:
-		status = http.StatusInternalServerError
-	case tenant.ErrBridgeOperationFailed:
-		status = http.StatusInternalServerError
 	case tenant.ErrDEKOperationFailed:
 		status = http.StatusInternalServerError
 	case tenant.ErrStorageFailed:

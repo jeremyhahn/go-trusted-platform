@@ -363,43 +363,6 @@ func BenchmarkGetQuotaSummary(b *testing.B) {
 	}
 }
 
-// BenchmarkVLANRange_Contains benchmarks VLAN range containment checks.
-func BenchmarkVLANRange_Contains(b *testing.B) {
-	vlanRange := VLANRange{Start: 100, End: 199}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		_ = vlanRange.Contains(uint16(100 + (i % 100)))
-	}
-}
-
-// BenchmarkVLANRange_Overlaps benchmarks VLAN range overlap checks.
-func BenchmarkVLANRange_Overlaps(b *testing.B) {
-	range1 := VLANRange{Start: 100, End: 199}
-	range2 := VLANRange{Start: 150, End: 249}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		_ = range1.Overlaps(range2)
-	}
-}
-
-// BenchmarkVLANRange_Validate benchmarks VLAN range validation.
-func BenchmarkVLANRange_Validate(b *testing.B) {
-	vlanRange := VLANRange{Start: 100, End: 199}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for i := 0; i < b.N; i++ {
-		_ = vlanRange.Validate()
-	}
-}
-
 // BenchmarkTenantEntity_Labels benchmarks label operations.
 func BenchmarkTenantEntity_Labels(b *testing.B) {
 	b.Run("GetLabel", func(b *testing.B) {
@@ -434,8 +397,6 @@ func createBenchmarkTenantEntity() *TenantEntity {
 		Name:        "test-tenant",
 		DisplayName: "Test Tenant",
 		State:       StateActive,
-		OVSBridge:   "br-tenant-test",
-		VLANRange:   VLANRange{Start: 100, End: 199},
 		DEKPath:     "/tenant/tenant-001/default",
 		ComputeQuota: ComputeQuota{
 			MaxVMs:        100,

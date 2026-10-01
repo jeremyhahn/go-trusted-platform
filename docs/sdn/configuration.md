@@ -264,81 +264,159 @@ flow.AddGotoTableAction(1)
 
 ## Zone-Based Network Configuration
 
-VLAN numbers are plain L2 segment identifiers. All network policy is derived
-from the **zone** assigned to each network segment, not the VLAN number. See
-[Reference Network Architecture](../architecture/reference-network.md) for
-the reference design (zones, VLAN blocks, addressing) and compliance control mapping.
+The SDN section declares an **environment** and the **zone policy**; every
+VLAN ID, subnet, IPAM pool, DHCP range and switch port VLAN list is derived
+from them by `pkg/sdn/netplan`, the only place numbering is computed. Nothing
+is configured per VLAN. See [Reference Network
+Architecture](../architecture/reference-network.md) for the design.
 
-### Default zone segments (code defaults today)
+### `environment:` — the numbering inputs
 
-> **Code today vs. the reference design.** The table below is what
-> `pkg/sdn/vlan` and `pkg/sdn/zone` ship as defaults today. The
-> [reference network](../architecture/reference-network.md) (owner design
-> decision, 2026-09-26) replaces them: per-environment VLAN blocks, no
-> `trusted` zone, and tenant networks as EVPN/VXLAN overlays rather than a
-> tenant VLAN range. The code change is tracked in #708.
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `environment.id` | int | required | Environment number _E_ (2–40). Its VLAN block is _E_·100–_E_·100+99 |
+| `environment.base` | IPv4 prefix | `10.0.0.0/8` | The `/8` the environment's `/16` (`<base>.E.0.0/16`) is taken from |
+| `environment.ula` | IPv6 prefix | none | The deployment's RFC 4193 `/48`. Without it no IPv6 subnets are derived |
+| `environment.overrides[]` | list | none | Explicit numbering for single zones: `zone`, and any of `vlan`, `subnet` (IPv4 `/16`–`/26`), `subnet6` (`/64`) |
 
-| Zone | Default VLAN | Default Subnet | Purpose |
-|------|:------------:|----------------|---------|
-| `trusted` | 200 | 198.18.0.0/24 | Enrolled, attested, internal workloads |
-| `provisioning` | 201 | 172.16.201.0/24 | Device onboarding (DHCP/PXE/ACME) |
-| `quarantine` | 202 | 172.16.202.0/24 | Non-compliant devices; isolated |
-| `storage` | 203 | 172.16.203.0/24 | Attested storage tier |
-| `tenant` | 1000+ | 172.17.0.0/16+ | Per-tenant micro-zones |
-| `management` | 50 | (deployment OOB net) | IPMI/BMC; never routes to data zones |
+`sdn.enabled: true` without `environment:` fails validation
+(`ErrEnvironmentRequired`): nothing can be numbered.
 
-All values are configurable. Declare subnets in `sdn.networks` with a `zone:`
-field; the platform derives enforcement from the zone, not the VLAN number. The
-YAML samples below use the reference design's block-4 example values.
+Derived for the zone at offset _n_:
+
+| What | Rule | Example (E=4, control-plane, n=6) |
+|------|------|-----------------------------------|
+| VLAN | _E_·100+_n_ | 406 |
+| IPv4 subnet | `<base>.E.n.0/24` | 10.4.6.0/24 |
+| IPv6 subnet | `<ula>:<VLAN digits>::/64` | fd12:3456:789a:406::/64 |
+| Gateway | `.1` | 10.4.6.1 |
+| IPAM pool | the subnet, `.1` reserved, dynamic range `.50`–last | 10.4.6.50–10.4.6.254 |
+
+And for the environment:
+
+| What | Rule |
+|------|------|
+| IPAM pool | `<base>.E.128.0/17`, split into tunnel-p2p `/22`, loopbacks `/22`, service-vips `/21`, platform-hosts `/20`, tenant-default `/18` |
+| Reserved | `<base>.E.128.0/31` (gateway HA sync), `169.254.169.253`, `<ula>:ffff::/64`, every zone's `.1` |
+| Overlay VNI | _E_·100000+_n_ for overlay network _n_ (1–99,999) |
+
+### `zones:` — tune built-in policy, add owner-defined zones
+
+The nine built-in zones need no entry: `transit` (x00), `fabric` (x01),
+`management` (x02), `hypervisor` (x03), `quarantine` (x04), `provisioning`
+(x05), `control-plane` (x06), `storage` (x07), `backup` (x08).
+
+An entry whose `name` matches a built-in **replaces its policy**
+(`internet_ingress`, `isolate_from`, `allow_to`, `services`, `isolate`,
+`privileged_access`). Its identity — `offset`, `port_classes`,
+`lifecycle_role`, `oob` — is fixed: an entry may restate it but never change
+it (`ErrBuiltinIdentity`). `omit: true` drops an optional built-in; `fabric`,
+`provisioning`, `quarantine` and `control-plane` cannot be omitted
+(`ErrOmitRequired`).
+
+Any other entry is an **owner-defined zone**. It must take a unique `offset`
+from 9 to 99 and join the `gateway` and/or `hypervisor` port class; it
+cannot carry a lifecycle role or `oob`.
+
+```yaml
+sdn:
+  environment:
+    id: 4
+    ula: fd12:3456:789a::/48
+  zones:
+    - name: lab
+      offset: 9                 # VLAN 409, 10.4.9.0/24, fd12:3456:789a:409::/64
+      port_classes: [hypervisor]
+      isolate: true
+      allow_to:
+        - {zone: storage, services: [storage]}
+        - zone: control-plane
+          services: [api]
+      privileged_access:        # required: lab → control-plane is beyond the reference
+        reason: "lab CI runners reach the platform API"
+        approved_by: "platform owner"
+```
+
+A path into `control-plane` or `management` that the zone's built-in
+defaults do not already open needs `privileged_access` with both fields
+(`ErrPrivilegedAccessRequired`). platformd logs every such path as an audit
+record (`audit=true`) each time it loads the configuration.
+
+`platform`, `tenant`, `public` and `trusted` cannot name a zone
+(`ErrReservedZoneName`): overlays are not zones, and tenants never create
+zones.
+
+### Built-in zone policy
+
+| From | Allowed to | Services |
+|------|------------|----------|
+| fabric | fabric | vxlan, bgp, ipsec |
+| hypervisor | hypervisor | migration |
+| quarantine | control-plane | dns, auth, remediation |
+| provisioning | control-plane | tftp, http, dns, acme |
+| control-plane | control-plane | all |
+| storage | storage | storage |
+| backup | backup | backup |
+
+Every other pair is denied, including traffic inside `transit` and
+`management`. `management` is out-of-band and reaches nothing.
 
 ### Per-zone OpenFlow templates
 
-The `pkg/sdn/policy/zoneflows` package generates per-zone OpenFlow rule sets.
-Key rules (abbreviated; see package godoc for the complete rule set):
+The `pkg/sdn/policy/zoneflows` package generates the lifecycle zones' rule
+sets from the reference flow templates; every other zone gets the rules the
+inter-zone matrix compiles.
 
-**provisioning zone** — least privilege; DHCP/DNS/TFTP/ACME only, default drop:
+Each rule matches the zone's frames **the way they reach the flow tables**.
+OVS applies a port's VLAN configuration (`tag`, `trunks`, `vlan_mode`) only in
+the `NORMAL` action; the OpenFlow tables see a frame as it was received. So:
+
+- on an **access port**, and for a trunk's **native** zone, the zone's frames
+  carry no 802.1Q header and are matched as untagged:
+  `in_port=<port>,vlan_tci=0x0000/0x1fff`;
+- for a trunk's **tagged** zones, frames are matched by VLAN:
+  `in_port=<port>,dl_vlan=<VLAN>`.
+
+The inter-zone matrix rules follow the same split: one shared set keyed on
+`dl_vlan=<source VLAN>` covers tagged traffic, and each access port (or trunk
+native zone) gets the same verdicts keyed on its own untagged ingress, removed
+with the port's other rules.
+
+With environment 4, on a hypervisor trunk (provisioning is the native zone):
+
+**provisioning** (VLAN 405, native, untagged) — DHCP, DNS, TFTP, HTTP and ACME
+only, default drop:
 
 ```
-priority=1900, arp,       dl_vlan=201,                    actions=normal
-priority=1850, udp,       dl_vlan=201, tp_src=68,tp_dst=67, actions=normal  # DHCP
-priority=1800, udp,       dl_vlan=201, tp_dst=53,          actions=normal  # DNS
-priority=1700, tcp,       dl_vlan=201, tp_dst=443,          actions=normal  # ACME
-priority=900,             dl_vlan=201,                    actions=drop
+in_port=<port>,vlan_tci=0x0000/0x1fff,arp,                      actions=normal
+in_port=<port>,vlan_tci=0x0000/0x1fff,udp,tp_src=68,tp_dst=67,  actions=normal   # DHCP
+in_port=<port>,vlan_tci=0x0000/0x1fff,udp,tp_dst=53,            actions=normal   # DNS
+in_port=<port>,vlan_tci=0x0000/0x1fff,udp,tp_dst=69,            actions=normal   # TFTP
+in_port=<port>,vlan_tci=0x0000/0x1fff,tcp,tp_dst=443,           actions=normal   # ACME
+in_port=<port>,vlan_tci=0x0000/0x1fff,                          actions=drop
 ```
 
-**quarantine zone** — auth and remediation HTTPS only, default drop:
+**quarantine** (VLAN 404, tagged on the trunk) — authentication and
+remediation only, default drop:
 
 ```
-priority=1900, arp,       dl_vlan=202,                         actions=normal
-priority=1850, udp,       dl_vlan=202, tp_src=68,tp_dst=67,    actions=normal  # DHCP
-priority=1650, tcp,       dl_vlan=202, tp_dst=443,             actions=normal  # remediation
-priority=1100,            dl_vlan=202,                         actions=drop
+in_port=<port>,dl_vlan=404,arp,                      actions=normal
+in_port=<port>,dl_vlan=404,udp,tp_src=68,tp_dst=67,  actions=normal   # DHCP
+in_port=<port>,dl_vlan=404,tcp,tp_dst=443,           actions=normal   # remediation
+in_port=<port>,dl_vlan=404,                          actions=drop
 ```
 
-**trusted zone** — per-profile ACLs; base east-west allow:
+A port placed in quarantine as an access port matches the quarantine rules on
+untagged ingress instead.
 
-```
-priority=100, in_port=<port>, dl_vlan=200, actions=normal
-```
+### Device lifecycle
 
-### Profile zone configuration
-
-Each device profile declares a target zone for post-enrollment network access.
-The zone determines which VLAN the OVS port is tagged with and which OpenFlow
-rules apply:
-
-```yaml
-# Device profile snippet
-post_enrollment_network:
-  zone: trusted       # zone name from sdn.zones / built-in zone taxonomy
-  vlan: 406           # must match the network declared with zone: trusted
-  acls:
-    - priority: 1000
-      match: {protocol: tcp, destination_port: 443}
-      action: allow
-    - priority: 1
-      action: deny
-```
+A device's port moves **provisioning → the zones of its role → quarantine →
+down**. Once attested, the port carries the zones of its role's port class
+(`gateway` for a gateway, `hypervisor` for control-plane and compute nodes),
+with the native VLAN of that class. A blocked port is administratively down,
+never in a "blocked zone". The device profile's `zone` names a single zone
+when a profile needs exactly one.
 
 ## Environment Variables
 
@@ -349,33 +427,27 @@ Environment variables can override configuration for quick testing or container 
 | OVS_DB_SOCK | /var/run/openvswitch/db.sock | OVSDB socket path |
 | OVS_RUNDIR | /var/run/openvswitch | OVS runtime directory |
 | SDN_LOG_LEVEL | info | Logging level (debug, info, warn, error) |
-| SDN_VLAN_DEFAULT | 1 | Default VLAN ID |
-| SDN_VLAN_MANAGEMENT | 50 | Management VLAN ID (code default; see #708) |
-| SDN_VLAN_QUARANTINE | 202 | Quarantine VLAN ID (code default; see #708) |
-| SDN_VLAN_PROVISIONING | 201 | Provisioning VLAN ID (code default; see #708) |
-| SDN_VLAN_STORAGE | 203 | Storage VLAN ID (code default; see #708) |
-| SDN_VLAN_CLOUD_TENANT_BASE | 1000 | Base VLAN for cloud tenants (code default; the reference design has no tenant VLANs, see #708) |
+
+No environment variable sets a VLAN: numbering comes only from
+`sdn.environment`.
 
 ## Platform Configuration (YAML)
 
 All VLAN assignments are configurable. See [Reference Network Architecture](../architecture/reference-network.md) for the complete configuration schema.
 
-### `networks:` — list form (current)
-
-The `sdn.networks` field is a **list** of `NetworkConfig` entries. The former
-map form (`networks: {name: {vlan: N, pool: P}}`) has been removed.
-
-Each entry requires a `zone:` field that classifies the segment within the
-platform's trust model. Built-in zone names are `trusted`, `public`,
-`provisioning`, `quarantine`, `storage`, `tenant`, and `management`.
+### A complete `sdn:` section
 
 ```yaml
 sdn:
   enabled: true
   controller: true
+  environment:
+    id: 4
+    base: 10.0.0.0/8
+    ula: fd12:3456:789a::/48
   ovs:
     socket: /var/run/openvswitch/db.sock
-    bridge: trusted0
+    bridge: br-fabric          # carries the trunk; workloads use br-int
     datapath: system
     protocols:
       - OpenFlow13
@@ -389,48 +461,32 @@ sdn:
     #   socket-mem: "1024,1024"
     #   lcore-mask: "0x1"
     #   pmd-cpu-mask: "0x6"
-
   ipam:
     backend: quicbaas
+    # The zone pools and IPAM ranges are derived and seeded at startup.
+    # `pools:` adds explicit pools beside them.
     pools:
-      - name: production
-        cidr: 10.4.6.0/24
-        gateway: 10.4.6.1
-        dhcp: true
-      - name: provisioning
-        cidr: 192.0.2.0/24
-        gateway: 192.0.2.1
-        dhcp: true
-      - name: quarantine
-        cidr: 10.4.4.0/24
-        gateway: 10.4.4.1
-        dhcp: false
-      - name: storage
-        cidr: 10.4.7.0/24
-        gateway: 10.4.7.1
-        dhcp: true
-
-  # networks is a list; every entry requires a zone: field.
-  networks:
-    - name: production
-      vlan: 406
-      zone: trusted        # must match a name in the resolved zone set; `trusted` is today's built-in (#708)
-      pool: production     # optional: IPAM pool reference
-      subnet: 10.4.6.0/24  # optional: must match pool CIDR if both set
-      subnet6: fd12:3456:789a:406::/64  # optional IPv6 prefix for a dual-stack segment (#554)
-    - name: provisioning
-      vlan: 405
-      zone: provisioning
-      pool: provisioning
-    - name: quarantine
-      vlan: 404
-      zone: quarantine
-      pool: quarantine
-    - name: storage
-      vlan: 407
-      zone: storage
-      pool: storage
+      - name: public
+        cidr: 203.0.113.0/24
+        gateway: 203.0.113.1
+  dhcp:
+    enabled: false
+  fabric:
+    switches:
+      - {id: switch-01, vendor: cisco-nexus, mgmt-ip: 192.0.2.250, credentials-ref: "kms://switches/switch-01"}
+    ports:
+      - {switch-id: switch-01, port: Ethernet1/25, class: hypervisor, description: cp-01}
 ```
+
+### `ipam.pools:` — explicit pools
+
+The plan's pools are derived: one per zone (named after it) and one per IPAM
+range except the tenant default range (`tunnel-p2p`, `loopbacks`,
+`service-vips`, `platform-hosts`). An explicit pool may not take one of
+those names (`ErrPoolNameReserved`) or overlap a derived pool or a reserved
+range (`ErrPoolOverlap`); a pool carved from the tenant default range is
+allowed. A pool's `zone`, when set, must be a declared zone
+(`ErrPoolZoneUndeclared`); overlay pools carry none.
 
 ### `ovs:` — datapath, hardware offload, and DPDK
 
@@ -462,51 +518,6 @@ Semantics:
   without `datapath: netdev` are configuration errors that fail startup.
 - NIC/kernel requirements, the switchdev bring-up order, and what
   actually offloads: see [performance/hw-offload.md](./performance/hw-offload.md).
-
-### `zones:` — optional zone overrides
-
-The `sdn.zones` list allows operators to override built-in zone attributes or
-add custom zones. When absent, all seven built-in zones are used unchanged.
-A user entry whose `name` matches a built-in **fully replaces** that built-in.
-Setting `omit: true` removes a built-in (requires another zone to cover any
-lifecycle role the omitted zone held).
-
-```yaml
-sdn:
-  # Override the public zone to tighten intra-zone isolation.
-  zones:
-    - name: public
-      internet_ingress: true
-      isolate: true
-      allow_to:
-        - zone: public   # intra-zone only
-  networks:
-    - name: dmz
-      vlan: 210
-      zone: public
-```
-
-Zone override semantics:
-
-| User entry | Result |
-|------------|--------|
-| Name matches a built-in, `omit: false` | Built-in fully replaced by user entry |
-| Name matches a built-in, `omit: true` | Built-in dropped from resolved set |
-| Name does not match any built-in | Appended as a new custom zone |
-
-Validation errors returned by `sdn.Config.Validate()`:
-
-| Error | Cause |
-|-------|-------|
-| `ErrMissingNetworkZone` | A network entry has no `zone:` field |
-| `ErrUnknownNetworkZone` | `zone:` references a name not in the resolved set |
-| `ErrDuplicateNetworkName` | Two networks share the same `name:` |
-| `ErrDuplicateNetworkVLAN` | Two networks share the same non-zero `vlan:` |
-| `ErrInvalidNetworkVLAN` | `vlan:` is outside `[1, 4094]` |
-| `ErrDuplicateNetworkSubnet` | Two networks declare identical non-zero `subnet:` or `subnet6:` |
-| `ErrNetworkSubnet6NotIPv6` | `subnet6:` is set to something other than an IPv6 prefix |
-| `ErrInvalidNetworkPool` | `pool:` references a name not in `ipam.pools` |
-| `ErrSubnetPoolMismatch` | Both `subnet:` and `pool:` are set but their CIDRs differ |
 
 ## Systemd Configuration
 
@@ -588,7 +599,7 @@ sdn:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `encode_zone_in_cert` | bool | `false` | When `true`, IDevID issuance and ACME device-enrollment paths embed the network zone in the issued certificate using the `OIDTPNetworkZone` extension (`1.3.6.1.4.1.29377.101.21`). |
-| `platform_zone` | string | `"management"` | The zone name embedded in the platform's own self-IDevID certificate when `encode_zone_in_cert` is `true`. Defaults to `"management"` when empty. |
+| `platform_zone` | string | `"control-plane"` | The zone name embedded in the platform's own self-IDevID certificate when `encode_zone_in_cert` is `true`. Defaults to `"control-plane"` when empty: the platform lives on the control-plane zone, and management carries BMCs only. |
 
 ### Zone-in-Certificate (Z3) Overview
 
@@ -600,8 +611,8 @@ When `encode_zone_in_cert: true`:
    (`ErrEncodeZoneEmpty`).
 
 2. **Platform self-IDevID** — the zone is taken from `platform_zone` (default:
-   `"management"`). If `platform_zone` is empty and encoding is enabled, the
-   default `"management"` zone is used.
+   `"control-plane"`). If `platform_zone` is empty and encoding is enabled, the
+   default `"control-plane"` zone is used.
 
 3. **Policy enforcement** — the `X509PolicyExtractor` reads the zone from the
    `OIDTPNetworkZone` extension via the quicbaas SDK re-export
@@ -619,27 +630,16 @@ When `encode_zone_in_cert: true`:
 
 ### Example
 
-Enable zone encoding with a custom management zone name:
+Enable zone encoding; the platform's own certificate carries `control-plane`:
 
 ```yaml
 sdn:
   enabled: true
+  environment:
+    id: 4
   identity:
     encode_zone_in_cert: true
-    platform_zone: "management"
-  zones:
-    - name: management
-      vlan: 402
-      role: management
-    - name: trusted        # today's built-in zone; the reference design drops it (#708)
-      vlan: 406
-      role: trusted
-    - name: provisioning
-      vlan: 405
-      role: provisioning
-    - name: quarantine
-      vlan: 404
-      role: quarantine
+    platform_zone: control-plane
 ```
 
 
@@ -653,7 +653,7 @@ subsystem at startup.
 **How it works:**
 
 - The DNS server pre-creates one sub-zone per resolved network zone under the
-  internal domain: `<networkzone>.<domain>` (e.g., `trusted.example.internal.`).
+  internal domain: `<networkzone>.<domain>` (e.g., `control-plane.example.internal.`).
 - Device enrollment registers the host as both:
   - `<host>.<domain>` (standard, always)
   - `<host>.<networkzone>.<domain>` (zone-qualified, when enabled and the device
@@ -669,55 +669,13 @@ subsystem at startup.
   startup so that `ResolvedZones()` returns the full zone list.
 - `dns.zone-subdomains: true` in the DNS configuration.
 
-**Example — resulting DNS names for host `node-01` in zone `trusted`** (today's
-built-in zone; the reference design replaces it, #708):
+**Example — resulting DNS names for host `cp-01` in zone `control-plane`:**
 
 ```
-node-01.example.internal.          # standard record
-node-01.trusted.example.internal.  # zone-qualified record
-node-01-bmc.example.internal.      # BMC — not zone-qualified (unchanged)
+cp-01.example.internal.                # standard record
+cp-01.control-plane.example.internal.  # zone-qualified record
+cp-01-bmc.example.internal.            # BMC — not zone-qualified (unchanged)
 ```
-
-## Transit Configuration (`transit:`)
-
-The `sdn.transit` block configures the point-to-point transit link between the
-gateway and its upstream BGP peer or an adjacent gateway node. It is distinct
-from the gateway's BGP transit service (see
-[Gateway Transit Mode](gateway/transit-mode.md)) — this block defines the L2
-VLAN and L3 P2P prefix; the gateway's `transit:` service block controls whether
-the transit routing service is active.
-
-When absent, the transit link uses the code defaults (`vlan: 10`,
-`p2p: "172.16.0.0/24"`). The [reference network](../architecture/reference-network.md)
-replaces them with the environment's transit VLAN (x00, e.g. VLAN 400,
-`10.4.0.0/24`); the code change is tracked in #708.
-
-```yaml
-sdn:
-  transit: {vlan: 400, p2p: "10.4.0.0/24"}
-```
-
-### Fields
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `vlan` | uint16 | `10` | VLAN tag for the transit link. Must be in `[1, 4094]` when non-zero. Zero means use the default. |
-| `p2p` | string | `"172.16.0.0/24"` | P2P subnet for the transit link. /31 or /30 slices are allocated from this block per peer. |
-
-### Validation
-
-`sdn.Config.Validate()` calls `TransitConfig.Validate()`, which returns
-`ErrInvalidTransitVLAN{VLAN: n}` when a non-zero VLAN is outside `[1, 4094]`.
-
-| Error | Cause |
-|-------|-------|
-| `ErrInvalidTransitVLAN` | `vlan:` is non-zero and outside `[1, 4094]` |
-
-### Effective defaults
-
-`TransitConfig.EffectiveVLAN()` returns `vlan.DefaultTransit` (10) when `vlan`
-is zero. `TransitConfig.EffectiveP2P()` returns `"172.16.0.0/24"` when `p2p`
-is empty. These helpers are safe to call on a nil `*TransitConfig`.
 
 ## Management VPN Configuration (`management_vpn:`)
 
@@ -764,64 +722,34 @@ managed entirely by the quicbaas SDK at runtime:
 
 ```yaml
 sdn:
-  transit: {vlan: 400, p2p: "10.4.0.0/24"}
+  environment: {id: 4}
   management_vpn: {enabled: true, type: wireguard, allow_to: [management]}
-  services:
-    provisioning: {acme_server: "192.0.2.10", dns_server: "192.0.2.1", dhcp_range: "192.0.2.50-192.0.2.254"}
-    quarantine:   {remediation_server: "10.4.4.10", dns_server: "10.4.4.1"}
 ```
 
-## Zone Services Configuration (`services:`)
-
-The `sdn.services` block is a map keyed by zone name. Each entry provides
-per-zone service endpoints that the platform uses when servicing devices that
-land in that zone (e.g., which ACME server to direct a provisioning device to,
-which DNS server to inject, which DHCP range to advertise).
-
-```yaml
-sdn:
-  services:
-    provisioning: {acme_server: "192.0.2.10", dns_server: "192.0.2.1", dhcp_range: "192.0.2.50-192.0.2.254"}
-    quarantine:   {remediation_server: "10.4.4.10", dns_server: "10.4.4.1"}
-```
-
-### ZoneServiceConfig fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `acme_server` | string | Address of the ACME server devices in this zone should contact for certificate enrolment. |
-| `dns_server` | string | DNS resolver address injected via DHCP option 6 for devices in this zone. |
-| `dhcp_range` | string | DHCP address range in `start-end` notation (e.g., `"192.0.2.50-192.0.2.254"`). |
-| `remediation_server` | string | Address of the remediation portal served to quarantined devices. |
-
-All fields are optional — supply only the ones relevant to each zone.
-
-### Lookup
-
-Callers read `Config.Services[zoneName]` directly. The map is keyed by the
-zone name string (e.g., `"provisioning"`, `"quarantine"`). An absent key is not
-an error; it simply means no additional service endpoints are configured for
-that zone.
-
+The transit zone needs no section of its own: its VLAN and subnet are the
+environment's x00, and transit point-to-point links take `/31`s from the
+`tunnel-p2p` IPAM range.
 
 ## Runtime Zone CRUD
 
-The zone set declared in the configuration file is the *seed*. At runtime, the
-`ZoneService` starts from this seed and allows CRUD operations through every
-protocol (REST, gRPC, QUIC, MCP, Unix socket, CLI). Runtime changes overlay the
-config-seeded set:
+The zone entries in `sdn.zones` are the *seed*. At runtime the `ZoneService`
+starts from that seed (resolved onto the built-ins) and allows changes through
+every protocol (REST, gRPC, QUIC, MCP, Unix socket, CLI):
 
-- **Create** adds a new zone and re-validates the full set. Duplicate names are
-  rejected.
-- **Update** replaces a zone's policy fields. If any policy-relevant field
-  (`isolate`, `oob`, `isolate_per_tenant`, `internet_ingress`, `allow_to`,
-  `isolate_from`) changes, the response includes `restart_required: true` because
-  the flow matrix must be recompiled via daemon restart.
-- **Delete** removes a zone. Removing the sole holder of a required lifecycle role
-  (`provisioning`, `quarantine`) without a replacement fails validation.
-- **Assign** binds a named network segment to a trust zone. Always returns
-  `restart_required: true` because flow tables keyed by network→zone must be
-  rebuilt.
+- **Create** adds an owner-defined zone (offset 9–99). A built-in name returns
+  already-exists.
+- **Update** tunes a built-in zone's policy or replaces an owner-defined zone.
+- **Delete** removes an owner-defined zone, or omits an optional built-in. The
+  required built-ins (`fabric`, `provisioning`, `quarantine`, `control-plane`)
+  cannot be removed.
 
-Runtime mutations are in-memory by default. When a quicbaas KV store is
-configured, zones are persisted and survive restarts.
+Every change re-runs `zone.Resolve` and `zone.Validate` on the whole set and,
+when the daemon has an environment, derives the network plan again; a change
+that fails either is refused and leaves the set as it was. A path into
+`control-plane` or `management` beyond the reference needs `privileged_access`
+and writes an audit record. Every accepted change returns
+`restart_required: true`: the network plan and the flow matrix are derived at
+startup, so the change takes effect when the daemon restarts.
+
+Runtime changes are held in memory only. To keep a change, put it in
+`sdn.zones` in the configuration file.

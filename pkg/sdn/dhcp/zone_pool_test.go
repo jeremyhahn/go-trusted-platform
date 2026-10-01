@@ -48,13 +48,13 @@ func TestResolvePoolForZone_Explicit_TakesPrecedence(t *testing.T) {
 		ipam.Pool{
 			ID:   "prov-pool",
 			Name: "prov-pool",
-			CIDR: netip.MustParsePrefix("172.16.201.0/24"),
+			CIDR: netip.MustParsePrefix("192.0.2.0/24"),
 			Zone: "provisioning",
 		},
 	)
 
 	// Explicit pool ID set; zone also set — explicit must win.
-	poolID, res, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "prov-pool", "provisioning", "")
+	poolID, res, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "prov-pool", "provisioning")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestResolvePoolForZone_Explicit_NoAllocatorNeeded(t *testing.T) {
 	t.Parallel()
 
 	// Even with a nil allocator, explicit must return without panic.
-	poolID, res, err := dhcp.ResolvePoolForZone(context.Background(), nil, "direct-pool", "", "")
+	poolID, res, err := dhcp.ResolvePoolForZone(context.Background(), nil, "direct-pool", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,18 +93,18 @@ func TestResolvePoolForZone_ZoneDerived_SingleMatch(t *testing.T) {
 		ipam.Pool{
 			ID:   "prov-pool",
 			Name: "prov-pool",
-			CIDR: netip.MustParsePrefix("172.16.201.0/24"),
+			CIDR: netip.MustParsePrefix("192.0.2.0/24"),
 			Zone: "provisioning",
 		},
 		ipam.Pool{
 			ID:   "trusted-pool",
 			Name: "trusted-pool",
-			CIDR: netip.MustParsePrefix("198.18.0.0/24"),
-			Zone: "trusted",
+			CIDR: netip.MustParsePrefix("10.4.6.0/24"),
+			Zone: "control-plane",
 		},
 	)
 
-	poolID, res, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "", "provisioning", "")
+	poolID, res, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "", "provisioning")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestResolvePoolForZone_ZoneDerived_NoMatch_ReturnsErrNoPoolForZone(t *testi
 
 	alloc := newTestAllocator(t)
 
-	_, _, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "", "storage", "")
+	_, _, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "", "storage")
 	var target dhcp.ErrNoPoolForZone
 	if !errors.As(err, &target) {
 		t.Errorf("want ErrNoPoolForZone, got %T: %v", err, err)
@@ -138,64 +138,24 @@ func TestResolvePoolForZone_ZoneDerived_MultipleMatches_ReturnsErrAmbiguousZoneP
 		ipam.Pool{
 			ID:   "prov-a",
 			Name: "prov-a",
-			CIDR: netip.MustParsePrefix("172.16.201.0/25"),
+			CIDR: netip.MustParsePrefix("192.0.2.0/25"),
 			Zone: "provisioning",
 		},
 		ipam.Pool{
 			ID:   "prov-b",
 			Name: "prov-b",
-			CIDR: netip.MustParsePrefix("172.16.201.128/25"),
+			CIDR: netip.MustParsePrefix("192.0.2.128/25"),
 			Zone: "provisioning",
 		},
 	)
 
-	_, _, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "", "provisioning", "")
+	_, _, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "", "provisioning")
 	var target dhcp.ErrAmbiguousZonePool
 	if !errors.As(err, &target) {
 		t.Errorf("want ErrAmbiguousZonePool, got %T: %v", err, err)
 	}
 	if target.Count != 2 {
 		t.Errorf("want Count 2, got %d", target.Count)
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ResolvePoolForZone — segment legacy fallback
-// ─────────────────────────────────────────────────────────────────────────────
-
-func TestResolvePoolForZone_Segment_Fallback(t *testing.T) {
-	t.Parallel()
-
-	alloc := newTestAllocator(t,
-		ipam.Pool{
-			ID:   "provisioning",
-			Name: "provisioning",
-			CIDR: netip.MustParsePrefix("172.16.201.0/24"),
-			Zone: "provisioning",
-		},
-	)
-
-	// No explicit pool, no zone — falls back to segment name.
-	poolID, res, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "", "", "provisioning")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if poolID != "provisioning" {
-		t.Errorf("want %q, got %q", "provisioning", poolID)
-	}
-	if res != dhcp.PoolResolutionSegment {
-		t.Errorf("want PoolResolutionSegment, got %v", res)
-	}
-}
-
-func TestResolvePoolForZone_Segment_NotFound_ReturnsError(t *testing.T) {
-	t.Parallel()
-
-	alloc := newTestAllocator(t)
-
-	_, _, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "", "", "nonexistent")
-	if err == nil {
-		t.Fatal("expected error for missing segment pool, got nil")
 	}
 }
 
@@ -208,7 +168,7 @@ func TestResolvePoolForZone_NothingProvided_ReturnsErrPoolIDRequired(t *testing.
 
 	alloc := newTestAllocator(t)
 
-	_, _, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "", "", "")
+	_, _, err := dhcp.ResolvePoolForZone(context.Background(), alloc, "", "")
 	if !errors.Is(err, dhcp.ErrPoolIDRequired) {
 		t.Errorf("want ErrPoolIDRequired, got %T: %v", err, err)
 	}

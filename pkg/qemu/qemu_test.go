@@ -153,7 +153,7 @@ func TestDefaultConfig(t *testing.T) {
 	assert.False(t, config.SecureBoot)
 	assert.False(t, config.PXEEnabled)
 	assert.Equal(t, "d", config.BootOrder)
-	// NetworkMode is auto-detected: "bridge" if trusted0 bridge exists, otherwise "user"
+	// NetworkMode is auto-detected: "bridge" if br-int bridge exists, otherwise "user"
 	assert.Contains(t, []string{"user", "bridge"}, config.NetworkMode)
 }
 
@@ -1165,7 +1165,7 @@ func TestOVSConfig(t *testing.T) {
 		config := &Config{
 			OVS: &OVSConfig{
 				Enable:     true,
-				BridgeName: "trusted0",
+				BridgeName: "br-int",
 				SocketPath: "/var/run/openvswitch/db.sock",
 				PortName:   "vm-port-1",
 				VLAN:       100,
@@ -1185,7 +1185,7 @@ func TestOVSConfig(t *testing.T) {
 		}
 
 		assert.True(t, config.OVSEnabled())
-		assert.Equal(t, "trusted0", config.GetOVSBridgeName())
+		assert.Equal(t, "br-int", config.GetOVSBridgeName())
 		assert.Equal(t, "/var/run/openvswitch/db.sock", config.GetOVSSocketPath())
 		assert.Equal(t, "vm-port-1", config.OVS.PortName)
 		assert.Equal(t, uint16(100), config.OVS.VLAN)

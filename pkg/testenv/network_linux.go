@@ -515,10 +515,10 @@ func (n *LinuxIsolatedNetwork) GetPhase(portID string) NetworkPhase {
 	return NetworkPhaseUnconnected
 }
 
-// TransitionToTrusted moves a port from provisioning to the trusted zone
+// TransitionToAdmitted moves a port from provisioning to the admitted phase
 // Note: This is a stub implementation for Linux bridge. Full implementation requires OVS.
-func (n *LinuxIsolatedNetwork) TransitionToTrusted(portID string, cert *x509.Certificate) error {
-	return &MessageError{Msg: "TransitionToTrusted not implemented for LinuxIsolatedNetwork (requires OVS)"}
+func (n *LinuxIsolatedNetwork) TransitionToAdmitted(portID string, cert *x509.Certificate) error {
+	return &MessageError{Msg: "TransitionToAdmitted not implemented for LinuxIsolatedNetwork (requires OVS)"}
 }
 
 // QuarantinePort moves a port to quarantine VLAN
@@ -527,7 +527,7 @@ func (n *LinuxIsolatedNetwork) QuarantinePort(portID string, reason string) erro
 	return &MessageError{Msg: "QuarantinePort not implemented for LinuxIsolatedNetwork (requires OVS)"}
 }
 
-// UnquarantinePort moves a port back to the trusted zone
+// UnquarantinePort moves a port back to the admitted phase
 // Note: This is a stub implementation for Linux bridge. Full implementation requires OVS.
 func (n *LinuxIsolatedNetwork) UnquarantinePort(portID string) error {
 	return &MessageError{Msg: "UnquarantinePort not implemented for LinuxIsolatedNetwork (requires OVS)"}

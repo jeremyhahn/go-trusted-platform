@@ -416,7 +416,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Create zone service — always available (in-memory, no OVS dependency).
 	var zoneSvcInstance gateway.ZoneService
-	if zs, zErr := gateway.NewZoneService(nil, nil); zErr == nil {
+	zoneSeed, zoneEnv := zoneServiceSeed(config.App)
+	if zs, zErr := gateway.NewZoneService(zoneSeed, zoneEnv); zErr == nil {
 		zoneSvcInstance = zs
 		logger.Info("Zone service initialized")
 	} else {

@@ -22,16 +22,16 @@ import (
 )
 
 // ZoneNetwork holds the zone identity, logical network name, and VLAN ID for
-// a single network phase. Zone is the SDN zone name (e.g. "trusted"); Name is
-// the key used to look the network up in the profile's Networks map (e.g.
-// "trusted"); VLAN is the 802.1Q VLAN ID.
+// a single network phase. Zone is the SDN zone name (e.g. "control-plane");
+// Name is the key used to look the network up in the profile's Networks map
+// (e.g. "admitted"); VLAN is the 802.1Q VLAN ID.
 type ZoneNetwork struct {
 	// Zone is the SDN zone name for this network phase (e.g. "provisioning",
-	// "trusted", "quarantine"). Empty when neither the NetworkPhaseConfig nor
+	// "control-plane", "quarantine"). Empty when neither the NetworkPhaseConfig nor
 	// the profile-level Zone field carries a value.
 	Zone string
 	// Name is the logical network name from the device profile's Networks map
-	// (e.g. "provisioning", "trusted", "quarantine").
+	// (e.g. "provisioning", "admitted", "quarantine").
 	Name string
 	// VLAN is the 802.1Q VLAN ID. Zero means no VLAN is configured.
 	VLAN uint16
@@ -39,10 +39,10 @@ type ZoneNetwork struct {
 
 // ZoneNetworkSet carries the zone identity, network name, and VLAN ID for all
 // three network phases recognised by the platform: provisioning (enrollment),
-// trusted (post-enrollment operational), and quarantine (failure isolation).
+// admitted (post-enrollment operational), and quarantine (failure isolation).
 type ZoneNetworkSet struct {
 	Provisioning ZoneNetwork
-	Trusted      ZoneNetwork
+	Admitted     ZoneNetwork
 	Quarantine   ZoneNetwork
 }
 
@@ -70,16 +70,17 @@ func (g *NetworkConfigGenerator) GenerateProvisioningConfig() *entities.NetworkP
 	return g.copyNetworkConfig(provNet)
 }
 
-// GenerateTrustedConfig generates trusted-zone (post-enrollment) network configuration.
-func (g *NetworkConfigGenerator) GenerateTrustedConfig() *entities.NetworkPhaseConfig {
+// GenerateAdmittedConfig generates the admitted (post-enrollment) network
+// configuration.
+func (g *NetworkConfigGenerator) GenerateAdmittedConfig() *entities.NetworkPhaseConfig {
 	if g.profile == nil {
 		return nil
 	}
-	trustedNet := g.profile.GetPostEnrollmentNetworkConfig()
-	if trustedNet == nil {
+	admittedNet := g.profile.GetPostEnrollmentNetworkConfig()
+	if admittedNet == nil {
 		return nil
 	}
-	return g.copyNetworkConfig(trustedNet)
+	return g.copyNetworkConfig(admittedNet)
 }
 
 // GenerateQuarantineConfig generates quarantine network configuration.
@@ -167,17 +168,17 @@ func (g *NetworkConfigGenerator) ExtractZoneNetworks() ZoneNetworkSet {
 		set.Provisioning = ZoneNetwork{Name: provName}
 	}
 
-	// Trusted (post-enrollment) phase — GetPostEnrollmentNetworkConfig already
+	// Admitted (post-enrollment) phase — GetPostEnrollmentNetworkConfig already
 	// applies the profile-level Zone fallback when the per-network Zone is empty.
-	trustedName := networkName(g.profile.PostEnrollmentNetwork, entities.DefaultPostEnrollmentNetwork)
-	if trustedNet := g.profile.GetPostEnrollmentNetworkConfig(); trustedNet != nil {
-		set.Trusted = ZoneNetwork{
-			Zone: trustedNet.Zone,
-			Name: trustedName,
-			VLAN: trustedNet.VLAN,
+	admittedName := networkName(g.profile.PostEnrollmentNetwork, entities.DefaultPostEnrollmentNetwork)
+	if admittedNet := g.profile.GetPostEnrollmentNetworkConfig(); admittedNet != nil {
+		set.Admitted = ZoneNetwork{
+			Zone: admittedNet.Zone,
+			Name: admittedName,
+			VLAN: admittedNet.VLAN,
 		}
 	} else {
-		set.Trusted = ZoneNetwork{Name: trustedName}
+		set.Admitted = ZoneNetwork{Name: admittedName}
 	}
 
 	// Quarantine (failure) phase
@@ -378,9 +379,10 @@ func (w *NetworkConfigWriter) GetProvisioningConfigPath() string {
 	return filepath.Join(w.GetNetworkConfigDir(), "provisioning.yaml")
 }
 
-// GetTrustedConfigPath returns the path for the trusted-zone (post-enrollment) network config.
-func (w *NetworkConfigWriter) GetTrustedConfigPath() string {
-	return filepath.Join(w.GetNetworkConfigDir(), "trusted.yaml")
+// GetAdmittedConfigPath returns the path for the admitted (post-enrollment)
+// network config.
+func (w *NetworkConfigWriter) GetAdmittedConfigPath() string {
+	return filepath.Join(w.GetNetworkConfigDir(), "admitted.yaml")
 }
 
 // GetQuarantineConfigPath returns the path for quarantine network config.

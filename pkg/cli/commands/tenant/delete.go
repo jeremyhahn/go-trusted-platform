@@ -34,9 +34,8 @@ func NewDeleteCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 
 WARNING: This operation is destructive and cannot be undone.
 All resources associated with this tenant will be deleted, including:
-  - VLAN allocations
-  - OVS bridges and network configurations
   - Resource quotas and usage data
+  - The tenant's data encryption key and barrier
 
 Examples:
   # Delete a tenant

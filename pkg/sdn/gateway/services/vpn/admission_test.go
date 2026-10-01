@@ -117,7 +117,7 @@ func TestAdmit_RefusalMatrix(t *testing.T) {
 			req.DataPlane = DataPlaneKind("carrier-pigeon")
 		}, &ErrDataPlaneUnavailable{}},
 		"zone not allowed": {func(_ *harness, req *AdmissionRequest) {
-			req.RequestedZones = []string{"trusted"}
+			req.RequestedZones = []string{"control-plane"}
 		}, &ErrZoneNotAllowed{}},
 		"no zones": {func(_ *harness, req *AdmissionRequest) {
 			req.RequestedZones = nil
@@ -478,7 +478,7 @@ func TestSweep_RunsFromTheTicker(t *testing.T) {
 func TestZonesAllowed(t *testing.T) {
 	h := newHarness(t, testConfig())
 	assert.True(t, h.svc.ZonesAllowed([]string{"management"}))
-	assert.False(t, h.svc.ZonesAllowed([]string{"management", "trusted"}))
+	assert.False(t, h.svc.ZonesAllowed([]string{"management", "control-plane"}))
 	assert.False(t, h.svc.ZonesAllowed(nil))
 }
 

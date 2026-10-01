@@ -125,6 +125,30 @@ func TestGetPortStatus_Success(t *testing.T) {
 	assert.Equal(t, uint16(200), result.AccessVLAN)
 }
 
+// TestGetPortStatus_TrunkNativeVLAN decodes a hypervisor-class trunk's
+// allowed list and native VLAN over the REST transport.
+func TestGetPortStatus_TrunkNativeVLAN(t *testing.T) {
+	port := &switchmgmt.PortStatus{
+		Port:       "Eth1/25",
+		Mode:       switchmgmt.PortModeTrunk,
+		TrunkVLANs: []uint16{401, 403, 404, 405, 406, 407, 408},
+		NativeVLAN: 405,
+		Enabled:    true,
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(envelope(port))
+	}))
+	defer server.Close()
+
+	c, err := NewClient(server.URL, server.Client())
+	require.NoError(t, err)
+	result, err := c.GetPortStatus(context.Background(), "core-01", "Eth1/25")
+	require.NoError(t, err)
+	assert.Equal(t, uint16(405), result.NativeVLAN)
+	assert.Equal(t, port.TrunkVLANs, result.TrunkVLANs)
+}
+
 func TestGetPortStatus_NotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

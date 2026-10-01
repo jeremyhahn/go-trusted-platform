@@ -152,91 +152,65 @@ network:
       - "/example.internal/10.4.6.10#9053"
       - "10.4.6.10#8053"
     local-domain: example.internal
-  # Reference network design, block 4 (owner design decision 2026-09-26):
-  # 404 quarantine, 405 provisioning, 406 control-plane, 407 storage.
-  # `control-plane` has no zone mapping in today's code, so the network
-  # derived from it falls back to zone `trusted`; the zone vocabulary moves
-  # with #708.
-  subnets:
-    - name: control-plane
-      scope: internal
-      vlan-id: 406
-      cidr: 10.4.6.0/24
-      gateway: 10.4.6.1
-      dns:
-        - 10.4.6.10
-    - name: provisioning
-      scope: internal
-      vlan-id: 405
-      cidr: 192.0.2.0/24
-      gateway: 192.0.2.1
-      dns:
-        - 192.0.2.10
-      role: provisioning
-      dhcp:
-        enabled: true
-        range-start: 192.0.2.50
-        range-end: 192.0.2.254
-        lease-duration: 1h
-    - name: quarantine
-      scope: internal
-      vlan-id: 404
-      cidr: 10.4.4.0/24
-      gateway: 10.4.4.1
-      dns:
-        - 10.4.4.10
-      role: quarantine
-    - name: storage
-      scope: internal
-      vlan-id: 407
-      cidr: 10.4.7.0/24
-      gateway: 10.4.7.1
-      dns:
-        - 10.4.7.10
-  interfaces:
-    - name: eth0
-      type: static
-      ipv4-address: 10.4.6.2/24
-      ipv4-gateway: 10.4.6.1
-      auto-start: true
+  # Host addressing by role (reference network, "Host addressing"): a
+  # gateway routes and NATs by role, so it is exempt from the forwarding
+  # and addressing rules. It holds node address .2 on every zone it routes
+  # (transit, fabric, quarantine, provisioning, control-plane, backup) and
+  # answers for the zones' gateway address .1 until a second gateway makes
+  # .1 a VRRP address. Its platform-VRF address lives in a Linux VRF.
+  role: gateway
+  ip-forward: true
+  platform-vrf:
+    address: 10.4.144.2/32
   bridges:
-    - name: trusted0
+    # br-fabric carries the physical trunk. The host's zone addresses are
+    # OVS internal ports on it; the VLANs it only passes through to guests
+    # get no host address.
+    - name: br-fabric
       type: ovs
       interfaces:
         - bond0
-      auto-start: true
       stp: false
+      auto-start: true
   bonds:
     - name: bond0
-      # OVS bond — created at runtime by platformd via native OVSDB.
-      # Matches the control-plane reference architecture: no Linux
-      # kernel bonding driver, no `bonding` module, no ifenslave.
-      # eth6/eth7 are brought up as raw interfaces so ovs-vswitchd
-      # can claim them.
+      # OVS bond, created at runtime by platformd over native OVSDB (no
+      # kernel bonding driver). The members are brought up as raw
+      # interfaces so ovs-vswitchd can claim them.
       type: ovs
-      bridge: trusted0
+      bridge: br-fabric
+      # OVS port bond_mode: balance-tcp with active LACP hashes on L4.
       mode: balance-tcp
       lacp: active
       interfaces:
         - eth6
         - eth7
-      # Port class (reference design): a gateway trunk carries what the
-      # gateway serves, and transit (400) reaches gateway ports only. The
-      # bond schema cannot express a native VLAN yet (#708).
+      # Port class gateway (reference switch port model): the switch trunk
+      # carries 400, 401, 404-406 and 408, tagged only, MTU 9216. It is the
+      # only class that carries transit.
       vlans:
-        - subnet: control-plane
-          ipv4-address: 10.4.6.2/24
+        - zone: transit
+          ipv4-address: 10.4.0.2/24
           auto-start: true
-        - subnet: provisioning
-          ipv4-address: 192.0.2.2/24
+        - zone: fabric
+          ipv4-address: 10.4.1.2/24
           auto-start: true
-        - subnet: quarantine
+        - zone: quarantine
           ipv4-address: 10.4.4.2/24
           auto-start: true
-        - subnet: storage
-          ipv4-address: 10.4.7.2/24
+        - zone: provisioning
+          ipv4-address: 192.0.2.2/24
+          auto-start: true
+        - zone: control-plane
+          ipv4-address: 10.4.6.2/24
+          auto-start: true
+        - zone: backup
+          ipv4-address: 10.4.8.2/24
           auto-start: true
       auto-start: true
+  # The two 1G ports are the WAN uplinks (one per ISP); gatewayd owns their
+  # addresses (gatewayd.yaml gateway.uplinks), so the installer leaves them
+  # unconfigured here.
   vlans: []
   wait-online: true
   wait-timeout: 30
@@ -459,7 +433,7 @@ trust:
 # =============================================================================
 
 bmc:
-  address: 10.4.2.2
+  address: 10.4.2.22  # management (VLAN 402) carries BMCs only
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -490,9 +464,35 @@ quicbaas:
 sdn:
   enabled: true
   controller: false
+  # The environment numbers every zone (docs/architecture/reference-network.md):
+  # the zone at offset n is VLAN E*100+n with IPv4 10.E.n.0/24 and IPv6
+  # <ula>:<VLAN digits>::/64, and overlay network n is VNI E*100000+n.
+  # Block 4 is the reference example. A non-reference site overrides single
+  # zones under `overrides:` (vlan, subnet, subnet6) instead of renumbering.
+  environment:
+    id: 4
+    base: 10.0.0.0/8
+    # The deployment's RFC 4193 ULA /48. Generate your own random global
+    # ID; this one is the reference document's example.
+    ula: fd12:3456:789a::/48
+  # zones: the built-in zones (transit, fabric, management, hypervisor,
+  # quarantine, provisioning, control-plane, storage, backup) need no entry.
+  # An entry tunes a built-in's policy or declares an owner-defined zone at
+  # an offset from 09 to 99, for example:
+  #   zones:
+  #     - name: lab
+  #       offset: 9
+  #       port_classes: [hypervisor]
+  #       isolate: true
+  #       allow_to: [{zone: storage, services: [storage]}]
+  # A path into control-plane or management beyond the reference defaults
+  # also needs privileged_access: {reason: ..., approved_by: ...}, which is
+  # logged as an audit record whenever the configuration loads.
   ovs:
     socket: /var/run/openvswitch/db.sock
-    bridge: trusted0
+    # br-fabric carries the physical trunk and the host's zone addresses.
+    # Workload ports live on br-int, which never carries the trunk.
+    bridge: br-fabric
     datapath: system
     protocols:
       - OpenFlow13
@@ -502,11 +502,6 @@ sdn:
     pools: []
   dhcp:
     enabled: false
-    interface: trusted0
-  # Static sdn.networks/pools are derived at runtime from
-  # network.subnets by pkg/app/sdn.go::deriveSDNFromSubnets.
-  # Omitting explicit networks/pools here avoids the validator
-  # rejecting "network references unknown ipam pool" on first boot.
   overlay:
     enabled: true
     vxlan-port: 4789
@@ -703,10 +698,15 @@ gateway:
   min-reputation: 0.85
   min-age-days: 175
   min-uptime-pct: 95.0
-  anycast-ip: "10.4.6.2"
+  # The control-plane zone's gateway address (.1); a second gateway (#596)
+  # makes it a VRRP address shared by the pair.
+  anycast-ip: "10.4.6.1"
+  # The two 1G WAN ports, one per ISP. The 10G ports are the bonded data
+  # trunk on br-fabric (network.bonds).
   uplinks:
     - name: eth0
-      vlan: 0
+      mtu: 1500
+    - name: eth1
       mtu: 1500
 
   # Stateful firewall
@@ -721,7 +721,7 @@ gateway:
     listen-port: 179
     peers:
       - name: vps-primary
-        address: 10.4.255.2
+        address: 10.4.128.3
         asn: 64512
         families:
           - ipv4-unicast
@@ -732,7 +732,7 @@ gateway:
         #   auth-type: md5
         #   auth-key-ref: kms://platform/gateway/bgp/vps-primary
       - name: vps-backup
-        address: 10.4.255.6
+        address: 10.4.128.5
         asn: 64512
         families:
           - ipv4-unicast
@@ -752,7 +752,10 @@ gateway:
     #         algorithm: hmac-sha256-128
     #         master-key-ref: kms://platform/gateway/bgp/transit/1
 
-  # Tunnels to the transit relays (placeholder endpoints). transport is
+  # Tunnels to the transit relays (placeholder endpoints). Inner addresses
+  # are /31s from the environment's tunnel point-to-point range
+  # (10.4.128.0/22; 10.4.128.0/31 is the reserved gateway HA sync link).
+  # transport is
   # gre (plain), ipsec (the same carrier wrapped in ESP) or wireguard (not
   # available in FIPS builds). An ipsec or wireguard tunnel names its keys
   # by reference — kms:// or secret:// resolved through the secret-store:
@@ -764,12 +767,12 @@ gateway:
       type: gre
       local: 192.0.2.1
       remote: 198.51.100.1
-      tunnel-ip: 10.4.255.1/30
+      tunnel-ip: 10.4.128.2/31
     - name: gre-backup
       type: gre
       local: 192.0.2.2
       remote: 203.0.113.1
-      tunnel-ip: 10.4.255.5/30
+      tunnel-ip: 10.4.128.4/31
     # The same carrier under ESP. The two SA keys are 36 bytes each
     # (AES-256-GCM key plus its 4-byte salt), stored base64 and decoded on
     # the way out of the store.
@@ -778,22 +781,27 @@ gateway:
     #   transport: ipsec
     #   local: 192.0.2.1
     #   remote: 198.51.100.1
-    #   tunnel-ip: 10.4.255.9/30
+    #   tunnel-ip: 10.4.128.6/31
     #   ipsec:
     #     key-ref: kms://platform/gateway/tunnel/primary/out?enc=base64
     #     peer-key-ref: kms://platform/gateway/tunnel/primary/in?enc=base64
     #     spi-out: 0x1001
     #     spi-in: 0x1002
 
-  # DHCP on the provisioning VLAN (405)
+  # DHCP on the provisioning zone (VLAN 405): the gateway is the host
+  # addressed there. zone405 is the OVS internal port platformd creates on
+  # br-fabric for the provisioning address; the pool is the zone's derived
+  # IPAM pool (.50-.254). Off: gatewayd has no DHCP or PXE service builder yet
+  # (it refuses to start a section it cannot run), so bootstrap installs PXE
+  # from the bootstrap container.
   dhcp:
-    enabled: true
-    interface: bond0.405
-    segment: provisioning
+    enabled: false
+    interface: zone405
+    zone: provisioning
 
-  # PXE boot server
+  # PXE boot server (off for the same reason as DHCP)
   pxe:
-    enabled: true
+    enabled: false
     http-port: 8069
     tftp-port: 69
     kernel-path: /var/lib/trusted-platform/pxe/vmlinuz

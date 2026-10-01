@@ -139,7 +139,7 @@ type DeviceListResponse struct {
 }
 
 // ProfileRequest represents the request body for profile creation/update.
-// Networks maps logical phase names (e.g. "provisioning", "trusted",
+// Networks maps logical phase names (e.g. "provisioning", "admitted",
 // "quarantine") to their configurations. EnrollmentNetwork,
 // PostEnrollmentNetwork, and FailureNetwork name the active phases.
 type ProfileRequest struct {
@@ -180,7 +180,7 @@ type ProfileRequest struct {
 }
 
 // NetworkPhaseRequest represents network configuration for a phase.
-// Zone is the SDN zone name for this network phase (e.g. "trusted").
+// Zone is the SDN zone name for this network phase (e.g. "control-plane").
 type NetworkPhaseRequest struct {
 	VLAN       uint16           `json:"vlan"`
 	DHCPPool   *DHCPPoolRequest `json:"dhcp_pool,omitempty"`

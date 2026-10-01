@@ -258,7 +258,7 @@ describe('DeviceService getDeviceProfile', () => {
     service = new DeviceService(mockClient);
     vi.mocked(mockClient.get).mockResolvedValue({
       success: true,
-      data: { serialNumber: 'SRV-1', trustedNetwork: { vlan: 200, useDHCP: true } },
+      data: { serialNumber: 'SRV-1', admittedNetwork: { vlan: 200, useDHCP: true } },
     });
   });
 
@@ -268,7 +268,7 @@ describe('DeviceService getDeviceProfile', () => {
     expect(mockClient.get).toHaveBeenCalledTimes(1);
     expect(mockClient.post).not.toHaveBeenCalled();
     expect(firstGetPath(mockClient)).toBe('/v1/device/profile');
-    expect(result.data?.trustedNetwork.vlan).toBe(200);
+    expect(result.data?.admittedNetwork.vlan).toBe(200);
   });
 
   it('never routes through the plural operator prefix', async () => {

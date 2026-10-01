@@ -131,8 +131,8 @@ func TestNetworkPhase_String(t *testing.T) {
 		},
 		{
 			name:     "trusted phase",
-			phase:    NetworkPhaseTrusted,
-			expected: "trusted",
+			phase:    NetworkPhaseAdmitted,
+			expected: "admitted",
 		},
 		{
 			name:     "quarantine phase",
@@ -172,7 +172,7 @@ func TestNetworkPhase_IsValid(t *testing.T) {
 		},
 		{
 			name:     "production is valid",
-			phase:    NetworkPhaseTrusted,
+			phase:    NetworkPhaseAdmitted,
 			expected: true,
 		},
 		{
@@ -246,7 +246,7 @@ func TestNetworkEventContext_Validate(t *testing.T) {
 				PortID:  "port-002",
 				MAC:     "AA:BB:CC:DD:EE:FF",
 				Profile: validProfile,
-				Phase:   NetworkPhaseTrusted,
+				Phase:   NetworkPhaseAdmitted,
 			},
 			expectedErr: nil,
 		},
@@ -409,7 +409,7 @@ func TestNetworkEventContext_Validate_WithMetadata(t *testing.T) {
 			PortID:   "port-001",
 			MAC:      "00:11:22:33:44:55",
 			Profile:  validProfile,
-			Phase:    NetworkPhaseTrusted,
+			Phase:    NetworkPhaseAdmitted,
 			Metadata: map[string]string{},
 		}
 		err := ctx.Validate()
@@ -475,7 +475,7 @@ func TestNetworkPhase_Constants(t *testing.T) {
 	// Verify that network phase constants have expected string values
 	t.Run("network phase string values", func(t *testing.T) {
 		assert.Equal(t, "provisioning", string(NetworkPhaseProvisioning))
-		assert.Equal(t, "trusted", string(NetworkPhaseTrusted))
+		assert.Equal(t, "admitted", string(NetworkPhaseAdmitted))
 		assert.Equal(t, "quarantine", string(NetworkPhaseQuarantine))
 	})
 }

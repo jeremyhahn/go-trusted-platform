@@ -83,7 +83,7 @@ func TestCheckFailClosedCapabilities(t *testing.T) {
 		},
 		{
 			"allowed zones without zone capability",
-			base(func(c *Config) { c.Routes[0].Auth.AllowedZones = []string{"trusted"} }),
+			base(func(c *Config) { c.Routes[0].Auth.AllowedZones = []string{"control-plane"} }),
 			Deps{Auth: &capsChain{caps: mtlsOnlyCaps}, ServerTLS: serverTLS},
 			ErrZoneEnforcementNotConfigured,
 		},
@@ -95,7 +95,7 @@ func TestCheckFailClosedCapabilities(t *testing.T) {
 		},
 		{
 			"zones with zone capability",
-			base(func(c *Config) { c.Routes[0].Auth.AllowedZones = []string{"trusted"} }),
+			base(func(c *Config) { c.Routes[0].Auth.AllowedZones = []string{"control-plane"} }),
 			Deps{Auth: &capsChain{caps: zoneCaps}, ServerTLS: serverTLS},
 			nil,
 		},

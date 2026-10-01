@@ -7,23 +7,21 @@
 # pkg/sdn/gateway/commands/assembly.go LoadServeConfig — `gateway:`, `sdn:`,
 # `control-plane:`, `proxy:`, `trust:` — and nothing else.
 #
-# Values here are the bring-up shape for gateway gw-01 described in
-# docs/operations/gateway-bringup.md: tunnels and iBGP stood up BESIDE the
-# existing upstream routers, announcing nothing, so the platform proves its
-# transport with zero blast radius. Addressing follows ruling R2 (epic #553):
-# the gateway holds 10.4.6.2 on the control-plane network (VLAN 406) and
-# 203.0.113.4 as its public identity until the Phase 5 cutover moves it to .1
-# and the HSRP VIPs.
+# The shape is the bring-up described in docs/operations/gateway-bringup.md:
+# two WAN uplinks, one tunnel per uplink to an upstream relay, iBGP over the
+# tunnels, announcing nothing until the operator adds prefixes. The gateway
+# holds node address .2 on the zones it routes and answers for each zone's
+# gateway address .1 (block 4 of the reference network, docs/architecture/
+# reference-network.md).
 #
-# Every address below is a reference placeholder: the block-4 example of the
-# reference network design (owner design decision 2026-09-26), RFC 5737
-# documentation ranges for public IPv4, 2001:db8::/32 for public IPv6 and a
-# private ASN. A deployment replaces them; nothing here is a default.
-# Exception, pending an owner decision: the tunnel inner addresses
-# (10.255.0.x/30 and the 2602:F5BB:CAFE:* /64s) are not yet moved to the
-# IPAM pool (10.4.255.0/24); do not copy them. Secrets
-# are references only — `kms://` and `secret://` resolve through the platform
-# key store at start (handbook conventions/configuration.md §4).
+# Every value below is a placeholder: the block-4 example of the reference
+# network, RFC 5737 documentation ranges for public IPv4, 2001:db8::/32 for
+# IPv6 and a private ASN. Tunnel inner addresses are /31s from the
+# environment's tunnel point-to-point range (10.4.128.0/22; its first /31,
+# 10.4.128.0/31, is the reserved gateway HA sync link). A deployment
+# replaces them; nothing here is a default. Secrets are references only —
+# `kms://` and `secret://` resolve through the platform key store at start
+# (handbook conventions/configuration.md §4).
 
 gateway:
   enabled: true
@@ -31,83 +29,58 @@ gateway:
   node-id: 1
   tier: datacenter
 
-  # The bridge address this gateway answers for on the control-plane
-  # network. .1 is the upstream routers' HSRP VIP until the cutover; taking
-  # it now is the duplicate address issue #508 exists for.
-  anycast-ip: "10.4.6.2"
+  # The gateway address this node answers for on the control-plane zone
+  # (.1, the zone gateway). A second gateway (#596) turns it into a VRRP
+  # address shared by both nodes.
+  anycast-ip: "10.4.6.1"
 
   # WAN interfaces as the datapath sees them (NAT egress selection reads
-  # these). The routing tables and `ip rule`s that keep each tunnel on the
-  # ISP it was sourced from are a SEPARATE concept the config cannot express
-  # yet — see #606; until it lands, return-path symmetry is the operator's
-  # static routes, exactly as the runbook's step 2 note says.
+  # these): the two 1G ports, one per ISP. The 10G ports are the bonded data
+  # trunk on br-fabric (gateway.yaml). Keeping each tunnel on the ISP it was
+  # sourced from is per-uplink tunnel pinning (#606); until it lands,
+  # return-path symmetry is the operator's static routes.
   uplinks:
-    - name: eth6
+    - name: eth0
       mtu: 1500
       ip-addresses: ["198.51.100.6/29"]      # ISP A
-    - name: eth7
+    - name: eth1
       mtu: 1500
       ip-addresses: ["192.0.2.6/29"]         # ISP B
 
-  # Tunnels to the two relays at the VPS provider, one per (POP × ISP): a
-  # full mesh, as the upstream routers run it. `type: gre` is what the relay
-  # side speaks today; the
-  # `transport: ipsec` upgrade needs #606 before it can be selected here.
+  # One tunnel per uplink to the upstream relay. `type: gre` is what a relay
+  # typically speaks; the `transport: ipsec` upgrade needs #606 before it can
+  # be selected here.
   tunnels:
-    - name: gre-popa-ispa
+    - name: gre-relay-ispa
       type: gre
       local: 198.51.100.6
-      remote: 198.51.100.100
-      tunnel-ip: 10.255.0.33/30
-      tunnel-ipv6: "2602:F5BB:CAFE:11::1/64"
-    - name: gre-popa-ispb
+      remote: 203.0.113.100
+      tunnel-ip: 10.4.128.2/31
+      tunnel-ipv6: "2001:db8:0:1::/127"
+    - name: gre-relay-ispb
       type: gre
       local: 192.0.2.6
-      remote: 198.51.100.100
-      tunnel-ip: 10.255.0.37/30
-      tunnel-ipv6: "2602:F5BB:CAFE:13::1/64"
-    - name: gre-popb-ispb
-      type: gre
-      local: 192.0.2.6
-      remote: 192.0.2.100
-      tunnel-ip: 10.255.0.41/30
-      tunnel-ipv6: "2602:F5BB:CAFE:15::1/64"
-    - name: gre-popb-ispa
-      type: gre
-      local: 198.51.100.6
-      remote: 192.0.2.100
-      tunnel-ip: 10.255.0.45/30
-      tunnel-ipv6: "2602:F5BB:CAFE:17::1/64"
+      remote: 203.0.113.100
+      tunnel-ip: 10.4.128.4/31
+      tunnel-ipv6: "2001:db8:0:2::/127"
 
-  # The BGP speaker runs under the transit service. Note that `transit:` is
-  # not a gate: `enabledServices` starts the transit service whenever a `bgp:`
-  # section exists at all (the rule is an OR), and transit starts the speaker,
-  # which installs its policy set during Start.
-  #
-  # That is why this block shipped commented out until now. A peer whose
-  # `import-allow` names both an IPv4 and an IPv6 prefix -- which every peer
-  # here does -- made the speaker refuse its own policy set with GoBGP's
-  # "multiple families", so the daemon failed to START rather than merely
-  # failing to peer (#620). #619 splits the prefix set per family and the
-  # block is live again, unchanged in what it asks for.
-
+  # The BGP speaker runs under the transit service; `enabledServices` starts
+  # it whenever a `bgp:` section exists, and the speaker installs its policy
+  # set during Start.
   transit:
     enabled: true
 
   bgp:
     asn: 64512
-    # Neither the HSRP group-1 VIP (.1) nor either upstream router's
-    # interface (.2/.3); .5 is reserved for the second gateway.
     router-id: 203.0.113.4
     listen-port: 179
     graceful-restart-time: 120
 
-    # TCP-AO is the platform standard (ruling R1). GoBGP 4.9 stores
-    # keychains but has no field binding one to a neighbour, so a peer that
-    # asks for tcp-ao is refused at start with a typed error rather than
-    # run unauthenticated; until that lands upstream these sessions use the
-    # `!fips` MD5 compatibility path the relays speak today. A FIPS build
-    # refuses `auth-type: md5` — that is the point of the ruling.
+    # TCP-AO is the platform standard (ruling R1). GoBGP stores keychains but
+    # has no field binding one to a neighbour, so a peer that asks for tcp-ao
+    # is refused at start with a typed error rather than run unauthenticated;
+    # until that lands upstream these sessions use the `!fips` MD5
+    # compatibility path. A FIPS build refuses `auth-type: md5`.
     keychains:
       - name: relays
         keys:
@@ -117,12 +90,12 @@ gateway:
             master-key-ref: kms://platform/bgp/relays-key-1
 
     peers:
-      - name: popa-ispa
-        address: 10.255.0.34
+      - name: relay-ispa
+        address: 10.4.128.3
         asn: 64512
-        description: "POP A VPS over ISP A (relay gre11)"
+        description: "upstream relay over ISP A"
         auth-type: md5
-        auth-key-ref: kms://platform/bgp/popa-ispa
+        auth-key-ref: kms://platform/bgp/relay-ispa
         hold-time: 30
         keepalive-interval: 10
         max-prefixes: 10
@@ -134,32 +107,20 @@ gateway:
           detection-multiplier: 3
         policy:
           # RFC 8212 default-deny both directions is the speaker's default;
-          # the relays send a default route and nothing else.
+          # the relay sends a default route and nothing else.
           import-allow:
             - prefix: 0.0.0.0/0
             - prefix: "::/0"
-          # Traffic-engineering parity with the routers (#607). local-pref on
-          # IMPORT is what ranks this session against the other three; the
-          # routers apply the same ladder with an inbound route-map.
+          # local-pref on import ranks this session against the other one:
+          # ISP A is the preferred default path here.
           import:
-            # ISP A to POP A is the preferred default path (the routers' LP-POPA-ISPA)
             local-pref: 200
-          export:
-            # The routers send `route-map SET-MED out` on every session. It is
-            # uniform across all four, so it cannot change which of them wins;
-            # confirm the number against router-01 before the cutover.
-            med: 50
-            # NO prepend. The x3 prepend that makes inbound prefer POP A lives
-            # in the POP B RELAY's eBGP session to the transit provider, not
-            # on the routers. Prepending here would lengthen the path BOTH
-            # relays re-announce and shift inbound traffic -- the failure the
-            # cutover exists to avoid.
-      - name: popa-ispb
-        address: 10.255.0.38
+      - name: relay-ispb
+        address: 10.4.128.5
         asn: 64512
-        description: "POP A VPS over ISP B (relay gre13)"
+        description: "upstream relay over ISP B"
         auth-type: md5
-        auth-key-ref: kms://platform/bgp/popa-ispb
+        auth-key-ref: kms://platform/bgp/relay-ispb
         hold-time: 30
         keepalive-interval: 10
         max-prefixes: 10
@@ -173,100 +134,13 @@ gateway:
           import-allow:
             - prefix: 0.0.0.0/0
             - prefix: "::/0"
-          # Traffic-engineering parity with the routers (#607). local-pref on
-          # IMPORT is what ranks this session against the other three; the
-          # routers apply the same ladder with an inbound route-map.
           import:
-            # ISP B to POP A (LP-POPA-ISPB)
-            local-pref: 150
-          export:
-            # The routers send `route-map SET-MED out` on every session. It is
-            # uniform across all four, so it cannot change which of them wins;
-            # confirm the number against router-01 before the cutover.
-            med: 50
-            # NO prepend. The x3 prepend that makes inbound prefer POP A lives
-            # in the POP B RELAY's eBGP session to the transit provider, not
-            # on the routers. Prepending here would lengthen the path BOTH
-            # relays re-announce and shift inbound traffic -- the failure the
-            # cutover exists to avoid.
-      - name: popb-ispb
-        address: 10.255.0.42
-        asn: 64512
-        description: "POP B VPS over ISP B (relay gre15)"
-        auth-type: md5
-        auth-key-ref: kms://platform/bgp/popb-ispb
-        hold-time: 30
-        keepalive-interval: 10
-        max-prefixes: 10
-        families: [ipv4-unicast, ipv6-unicast]
-        bfd:
-          enabled: true
-          desired-min-tx-interval: 300ms
-          required-min-rx-interval: 300ms
-          detection-multiplier: 3
-        policy:
-          import-allow:
-            - prefix: 0.0.0.0/0
-            - prefix: "::/0"
-          # Traffic-engineering parity with the routers (#607). local-pref on
-          # IMPORT is what ranks this session against the other three; the
-          # routers apply the same ladder with an inbound route-map.
-          import:
-            # ISP B to POP B: the routers leave this at the default, stated
-          # explicitly so the runbook's step 4 can verify it
             local-pref: 100
-          export:
-            # The routers send `route-map SET-MED out` on every session. It is
-            # uniform across all four, so it cannot change which of them wins;
-            # confirm the number against router-01 before the cutover.
-            med: 50
-            # NO prepend. The x3 prepend that makes inbound prefer POP A lives
-            # in the POP B RELAY's eBGP session to the transit provider, not
-            # on the routers. Prepending here would lengthen the path BOTH
-            # relays re-announce and shift inbound traffic -- the failure the
-            # cutover exists to avoid.
-      - name: popb-ispa
-        address: 10.255.0.46
-        asn: 64512
-        description: "POP B VPS over ISP A (relay gre17)"
-        auth-type: md5
-        auth-key-ref: kms://platform/bgp/popb-ispa
-        hold-time: 30
-        keepalive-interval: 10
-        max-prefixes: 10
-        families: [ipv4-unicast, ipv6-unicast]
-        bfd:
-          enabled: true
-          desired-min-tx-interval: 300ms
-          required-min-rx-interval: 300ms
-          detection-multiplier: 3
-        policy:
-          import-allow:
-            - prefix: 0.0.0.0/0
-            - prefix: "::/0"
-          # Traffic-engineering parity with the routers (#607). local-pref on
-          # IMPORT is what ranks this session against the other three; the
-          # routers apply the same ladder with an inbound route-map.
-          import:
-            # ISP A to POP B is the least preferred path (LP-POPB-ISPA)
-            local-pref: 50
-          export:
-            # The routers send `route-map SET-MED out` on every session. It is
-            # uniform across all four, so it cannot change which of them wins;
-            # confirm the number against router-01 before the cutover.
-            med: 50
-            # NO prepend. The x3 prepend that makes inbound prefer POP A lives
-            # in the POP B RELAY's eBGP session to the transit provider, not
-            # on the routers. Prepending here would lengthen the path BOTH
-            # relays re-announce and shift inbound traffic -- the failure the
-            # cutover exists to avoid.
 
     # ANNOUNCE NOTHING. `announce:` is the export allow-list: empty plus the
     # RFC 8212 default-deny means these sessions establish, hold, and export
-    # no path, so the upstream routers remain the only origin of the public
-    # prefixes. Step 3 of the runbook adds one test prefix here and removes
-    # it again; the cutover (Phase 5.4, #597) is what puts the real prefixes
-    # in.
+    # no path. The operator adds the public prefixes here when the gateway
+    # takes over announcing them.
     announce:
       ipv4: []
       ipv6: []
@@ -285,28 +159,52 @@ gateway:
     enabled: true
     base-ruleset-path: /etc/nftables.d/tp-host.nft
     peers:
-      # GRE (proto 47) only from the two relays, only on the WAN links.
-      - interface: eth6
+      # GRE (proto 47) only from the relay, only on the WAN links.
+      - interface: eth0
         protocol: gre
-        addresses: [198.51.100.100, 192.0.2.100]
-      - interface: eth7
+        addresses: [203.0.113.100]
+      - interface: eth1
         protocol: gre
-        addresses: [198.51.100.100, 192.0.2.100]
+        addresses: [203.0.113.100]
     # BGP (179) and BFD (3784) are allowed on the tunnel interfaces only,
     # never on the WAN links themselves.
-    tunnels: [gre-popa-ispa, gre-popa-ispb, gre-popb-ispb, gre-popb-ispa]
+    tunnels: [gre-relay-ispa, gre-relay-ispb]
     icmp:
       rate: 10
       burst: 20
 
-# The OVS runtime the datapath services attach to. Bridge and zones match
-# the platformd config on the same node (configs/.../x10/gateway.yaml).
+# The OVS runtime the datapath services attach to. The environment and the
+# bridge match the platformd config on the same node (x10/gateway.yaml).
 sdn:
   enabled: true
   controller: false
+  # The environment numbers every zone (docs/architecture/reference-network.md):
+  # the zone at offset n is VLAN E*100+n with IPv4 10.E.n.0/24 and IPv6
+  # <ula>:<VLAN digits>::/64, and overlay network n is VNI E*100000+n.
+  # Block 4 is the reference example. A non-reference site overrides single
+  # zones under `overrides:` (vlan, subnet, subnet6) instead of renumbering.
+  environment:
+    id: 4
+    base: 10.0.0.0/8
+    # The deployment's RFC 4193 ULA /48. Generate your own random global
+    # ID; this one is the reference document's example.
+    ula: fd12:3456:789a::/48
+  # zones: the built-in zones (transit, fabric, management, hypervisor,
+  # quarantine, provisioning, control-plane, storage, backup) need no entry.
+  # An entry tunes a built-in's policy or declares an owner-defined zone at
+  # an offset from 09 to 99, for example:
+  #   zones:
+  #     - name: lab
+  #       offset: 9
+  #       port_classes: [hypervisor]
+  #       isolate: true
+  #       allow_to: [{zone: storage, services: [storage]}]
+  # A path into control-plane or management beyond the reference defaults
+  # also needs privileged_access: {reason: ..., approved_by: ...}, which is
+  # logged as an audit record whenever the configuration loads.
   ovs:
     socket: /var/run/openvswitch/db.sock
-    bridge: trusted0
+    bridge: br-fabric
     datapath: system
     protocols:
       - OpenFlow13

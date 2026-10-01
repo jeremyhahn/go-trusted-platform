@@ -138,22 +138,15 @@ func closeOVSClient(client *ovs.Client, logger *slog.Logger) {
 }
 
 // zoneProviders derives the zone and network-summary closures from the
-// validated SDN configuration. The resolved zone set falls back to the
-// built-in defaults when the configuration declares none.
+// validated SDN configuration: the resolved zone set and one network summary
+// per zone of the network plan. Validate guarantees both are present.
 func zoneProviders(sdnCfg *sdn.Config) (func() []zone.ZoneConfig, func() map[zone.Zone]zoneflows.NetworkSummary, error) {
 	resolved := sdnCfg.ResolvedZones()
-	if len(resolved) == 0 {
-		resolved = zone.Defaults()
+	plan := sdnCfg.Plan()
+	if len(resolved) == 0 || plan == nil {
+		return nil, nil, &ErrConfigSection{Section: "sdn", Cause: sdn.ErrEnvironmentRequired{}}
 	}
-
-	nets := map[zone.Zone]zoneflows.NetworkSummary{}
-	if len(sdnCfg.Networks) > 0 {
-		idx, err := sdn.BuildZoneIndex(resolved, sdnCfg.Networks)
-		if err != nil {
-			return nil, nil, &ErrConfigSection{Section: "sdn", Cause: err}
-		}
-		nets = sdn.NetworkSummariesByZone(resolved, idx)
-	}
+	nets := sdn.NetworkSummaries(plan)
 
 	zonesFn := func() []zone.ZoneConfig { return resolved }
 	networksFn := func() map[zone.Zone]zoneflows.NetworkSummary { return nets }

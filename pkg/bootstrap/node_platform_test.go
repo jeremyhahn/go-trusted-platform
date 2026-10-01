@@ -19,11 +19,12 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container/containertest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container/containertest"
 )
 
 // piWorker is a valid Raspberry Pi worker added to minimalConfig.

@@ -111,8 +111,10 @@ type Config struct {
 ```
 
 `PortStatus` carries `Port`, `Mode` (`PortModeAccess` / `PortModeTrunk`),
-`AccessVLAN uint16`, `TrunkVLANs []uint16`, `Enabled`, `LinkUp`,
-`Description`. `ConfigureResult` (`VLANsCreated`, `PortsConfigured`,
+`AccessVLAN uint16`, `TrunkVLANs []uint16`, `NativeVLAN uint16` (from
+`Trunking Native Mode VLAN:`), `Enabled`, `LinkUp`, `Description`. Every
+transport carries `native_vlan` (gRPC/QUIC/Unix `SwitchPortStatus.native_vlan`
+field 8, REST and the Go SDK through the JSON struct, MCP `switch_port_status`). `ConfigureResult` (`VLANsCreated`, `PortsConfigured`,
 `Warnings`) is declared and **never constructed or returned** by any method —
 it is vocabulary for a future batching API.
 
@@ -380,7 +382,10 @@ switches:
 | `ports[]` | list | no | — | Bootstrap only |
 
 `vlans[].id`, `.name`, `.subnet`, `.description`; `ports[].port`, `.mode`
-(`access` \| `trunk`), `.vlans`, `.access_vlan`, `.description`.
+(`access` \| `trunk`), `.vlans`, `.access_vlan`, `.native_vlan`, `.mtu`,
+`.description`. `ValidatePortConfig` (called by `GeneratePortCommands` for
+every port) requires a trunk's native VLAN to be in its allowed list, refuses a
+native VLAN on an access port, and bounds the MTU to 1500–9216.
 
 **There are no switch-specific environment variables** (grepped 2026-08-18).
 

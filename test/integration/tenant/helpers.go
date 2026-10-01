@@ -71,14 +71,6 @@ func DefaultStorageQuota() *StorageQuotaUpdate {
 	}
 }
 
-// DefaultVLANRange returns a default VLAN range for tests
-func DefaultVLANRange() *VLANRangeOption {
-	return &VLANRangeOption{
-		Start: 100,
-		End:   199,
-	}
-}
-
 // DefaultLabels returns default labels for test tenants
 func DefaultLabels() map[string]string {
 	return map[string]string{

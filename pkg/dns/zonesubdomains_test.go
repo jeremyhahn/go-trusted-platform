@@ -45,7 +45,7 @@ func TestConfig_ZoneSubdomains_YAMLTag(t *testing.T) {
 func TestInitNetworkZoneSubdomains_Disabled(t *testing.T) {
 	cfg := &Config{ZoneSubdomains: false}
 	err := InitNetworkZoneSubdomains(
-		context.Background(), cfg, []string{"trusted", "public"}, nil, "platform",
+		context.Background(), cfg, []string{"control-plane", "public"}, nil, "platform",
 	)
 	assert.NoError(t, err, "disabled zone-subdomains must be a no-op")
 }
@@ -58,7 +58,7 @@ func TestInitNetworkZoneSubdomains_NoInternalServer(t *testing.T) {
 		// InternalServer intentionally nil
 	}
 	err := InitNetworkZoneSubdomains(
-		context.Background(), cfg, []string{"trusted"}, mocks.NewMockZoneDAO(), "platform",
+		context.Background(), cfg, []string{"control-plane"}, mocks.NewMockZoneDAO(), "platform",
 	)
 	var target ErrZoneSubdomainsNoInternalServer
 	assert.ErrorAs(t, err, &target)
@@ -93,7 +93,7 @@ func TestInitNetworkZoneSubdomains_CreatesBuiltinZones(t *testing.T) {
 			},
 		},
 	}
-	networkZones := []string{"trusted", "public", "provisioning", "quarantine", "storage", "tenant", "management"}
+	networkZones := []string{"control-plane", "public", "provisioning", "quarantine", "storage", "tenant", "management"}
 
 	err := InitNetworkZoneSubdomains(
 		context.Background(), cfg, networkZones, zDAO, "platform",
@@ -128,17 +128,17 @@ func TestInitNetworkZoneSubdomains_Idempotent(t *testing.T) {
 
 	// First call creates the zones.
 	err := InitNetworkZoneSubdomains(
-		context.Background(), cfg, []string{"trusted"}, zDAO, "platform",
+		context.Background(), cfg, []string{"control-plane"}, zDAO, "platform",
 	)
 	require.NoError(t, err)
 
-	id := util.NewID([]byte("trusted.example.internal."))
+	id := util.NewID([]byte("control-plane.example.internal."))
 	first, err := zDAO.Get(context.Background(), id)
 	require.NoError(t, err)
 
 	// Second call must not fail and must not alter the existing zone.
 	err = InitNetworkZoneSubdomains(
-		context.Background(), cfg, []string{"trusted"}, zDAO, "platform",
+		context.Background(), cfg, []string{"control-plane"}, zDAO, "platform",
 	)
 	require.NoError(t, err)
 
@@ -192,7 +192,7 @@ func TestService_RegisterWithNetworkZone_CreatesRecord(t *testing.T) {
 	require.NoError(t, err)
 
 	// Pre-create the sub-zone as the plugin would at startup.
-	subZoneName := "trusted.example.internal."
+	subZoneName := "control-plane.example.internal."
 	zoneDAO, err := ds.ZoneDAO()
 	require.NoError(t, err)
 	subZone := &entities.Zone{
@@ -212,8 +212,8 @@ func TestService_RegisterWithNetworkZone_CreatesRecord(t *testing.T) {
 	err = zoneDAO.Save(context.Background(), subZone)
 	require.NoError(t, err)
 
-	// Register the host under the trusted network zone.
-	err = svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "trusted", "10.0.0.1")
+	// Register the host under the control-plane network zone.
+	err = svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "control-plane", "10.0.0.1")
 	require.NoError(t, err)
 
 	// Verify A record was added to the sub-zone.
@@ -226,7 +226,7 @@ func TestService_RegisterWithNetworkZone_CreatesRecord(t *testing.T) {
 			break
 		}
 	}
-	assert.True(t, found, "A record lab-node-1->10.0.0.1 must be present in trusted.example.internal.")
+	assert.True(t, found, "A record lab-node-1->10.0.0.1 must be present in control-plane.example.internal.")
 }
 
 // TestService_RegisterWithNetworkZone_Disabled verifies that no record is
@@ -247,13 +247,13 @@ func TestService_RegisterWithNetworkZone_Disabled(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should be a no-op; no sub-zone created.
-	err = svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "trusted", "10.0.0.1")
+	err = svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "control-plane", "10.0.0.1")
 	assert.NoError(t, err)
 
 	// Confirm the sub-zone was never written.
 	zoneDAO, err := ds.ZoneDAO()
 	require.NoError(t, err)
-	id := util.NewID([]byte("trusted.example.internal."))
+	id := util.NewID([]byte("control-plane.example.internal."))
 	_, err = zoneDAO.Get(context.Background(), id)
 	assert.Error(t, err, "sub-zone must not exist when zone_subdomains is false")
 }
@@ -351,7 +351,7 @@ func TestService_RegisterWithNetworkZone_Idempotent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	subZoneName := "trusted.example.internal."
+	subZoneName := "control-plane.example.internal."
 	zoneDAO, err := ds.ZoneDAO()
 	require.NoError(t, err)
 	subZone := &entities.Zone{
@@ -371,8 +371,8 @@ func TestService_RegisterWithNetworkZone_Idempotent(t *testing.T) {
 	err = zoneDAO.Save(context.Background(), subZone)
 	require.NoError(t, err)
 
-	require.NoError(t, svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "trusted", "10.0.0.1"))
-	require.NoError(t, svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "trusted", "10.0.0.1"))
+	require.NoError(t, svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "control-plane", "10.0.0.1"))
+	require.NoError(t, svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "control-plane", "10.0.0.1"))
 
 	saved, err := zoneDAO.Get(context.Background(), util.NewID([]byte(subZoneName)))
 	require.NoError(t, err)
@@ -407,8 +407,8 @@ func TestIsBMCName(t *testing.T) {
 
 // TestNetworkZoneSubdomainFQDN verifies the helper constructs the correct FQDN.
 func TestNetworkZoneSubdomainFQDN(t *testing.T) {
-	fqdn := NetworkZoneSubdomainFQDN("lab-node-1", "trusted", "example.internal")
-	assert.Equal(t, "lab-node-1.trusted.example.internal", fqdn)
+	fqdn := NetworkZoneSubdomainFQDN("lab-node-1", "control-plane", "example.internal")
+	assert.Equal(t, "lab-node-1.control-plane.example.internal", fqdn)
 }
 
 // TestErrZoneSubdomainsNoInternalServer_Error checks the typed error message.
@@ -437,8 +437,8 @@ func TestInitNetworkZoneSubdomains_SaveError(t *testing.T) {
 		},
 	}
 	err := InitNetworkZoneSubdomains(
-		context.Background(), cfg, []string{"trusted"}, zDAO, "platform",
+		context.Background(), cfg, []string{"control-plane"}, zDAO, "platform",
 	)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "trusted.example.internal.")
+	assert.Contains(t, err.Error(), "control-plane.example.internal.")
 }

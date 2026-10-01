@@ -353,34 +353,20 @@ func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath st
 	return compute.NewOrchestratorForConfig(context.Background(), computeConfig, deps)
 }
 
-// applyDaemonTLSIdentity provisions the daemon's mTLS material via the
-// quicbaas SDK CertificateService and binds it to the supplied
-// daemon.Config so that gRPC TCP, QUIC and REST listeners present a
-// CA-signed server certificate (and optionally require client mTLS).
-//
-// Both runDaemonOnly and runWithWebservices call this helper so the gRPC
-// TCP listener never falls back to plaintext when webservices are enabled.
-// The provisioner reuses on-disk bundles when valid, otherwise issues
-// fresh ones; on issuance failure the daemon continues without a server
-// cert (the gRPC listener will start without TLS, surfacing the error to
-// remote clients) so the platform stays observable rather than failing
-// to come up entirely.
-// seedSDNVLANsFromConfig walks app.SDNConfig.Networks (already derived
-// from installer subnets that carry a vlan-id) and calls SeedVLAN on
-// the running SDN service for each one. The bridge name + UUID come
-// from the live OVS state so the seeded entries link back to the
+// seedSDNVLANsFromConfig walks the zones of the network plan and calls
+// SeedVLAN on the running SDN service for each zone VLAN. The bridge name +
+// UUID come from the live OVS state so the seeded entries link back to the
 // actual bridge the operator's bond materialized.
 //
 // SeedVLAN registers the VLAN in the in-memory map only; port-tag
 // application still happens via CreateVLAN or a future controller.
 // This shortest-path reconciliation makes the Networking → VLANs page
-// non-empty after a deploy, which is what operators expect when they
-// declared `vlan-id: 200` in their config.
+// list the environment's zone VLANs after a deploy.
 func seedSDNVLANsFromConfig(logger *logging.Logger, a *app.App, sdnSvc *daemon.SDNService) {
 	if a == nil || sdnSvc == nil {
 		return
 	}
-	if a.SDNConfig == nil || len(a.SDNConfig.Networks) == 0 {
+	if a.SDNConfig == nil || a.SDNConfig.Plan() == nil {
 		return
 	}
 
@@ -416,17 +402,14 @@ func seedSDNVLANsFromConfig(logger *logging.Logger, a *app.App, sdnSvc *daemon.S
 		return
 	}
 
-	for _, net := range a.SDNConfig.Networks {
-		if net.VLAN == 0 {
-			continue
-		}
-		if _, err := sdnSvc.SeedVLAN(bridgeName, bridgeID, uint32(net.VLAN), net.Name); err != nil {
+	for _, z := range a.SDNConfig.Plan().Zones() {
+		if _, err := sdnSvc.SeedVLAN(bridgeName, bridgeID, uint32(z.VLAN), string(z.Zone)); err != nil {
 			logger.Warn("SDN VLAN seeding: SeedVLAN failed",
-				"subnet", net.Name, "vlan", net.VLAN, "error", err)
+				"zone", z.Zone, "vlan", z.VLAN, "error", err)
 			continue
 		}
-		logger.Info("SDN VLAN seeded from config",
-			"subnet", net.Name, "vlan", net.VLAN, "bridge", bridgeName)
+		logger.Info("SDN VLAN seeded from the network plan",
+			"zone", z.Zone, "vlan", z.VLAN, "bridge", bridgeName)
 	}
 }
 
@@ -473,6 +456,18 @@ func initVTPMServiceOnConfig(logger *logging.Logger, a *app.App, cfg *daemon.Con
 		"ek_ca_wired", vtpmCA != nil)
 }
 
+// applyDaemonTLSIdentity provisions the daemon's mTLS material via the
+// quicbaas SDK CertificateService and binds it to the supplied
+// daemon.Config so that gRPC TCP, QUIC and REST listeners present a
+// CA-signed server certificate (and optionally require client mTLS).
+//
+// Both runDaemonOnly and runWithWebservices call this helper so the gRPC
+// TCP listener never falls back to plaintext when webservices are enabled.
+// The provisioner reuses on-disk bundles when valid, otherwise issues
+// fresh ones; on issuance failure the daemon continues without a server
+// cert (the gRPC listener will start without TLS, surfacing the error to
+// remote clients) so the platform stays observable rather than failing
+// to come up entirely.
 func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.App, cfg *daemon.Config, requireClientCert bool) error {
 	// Fail closed (#32): a daemon that will terminate TLS on a network
 	// transport either gets a provisioned identity or refuses to start.

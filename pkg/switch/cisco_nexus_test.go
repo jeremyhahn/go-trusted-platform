@@ -958,3 +958,61 @@ func TestJoinInts_Empty(t *testing.T) {
 		t.Fatalf("expected empty string, got: %s", result)
 	}
 }
+
+// TestCiscoNexus_GeneratePortCommands_NativeAndMTU emits the native VLAN and
+// MTU of a hypervisor-class trunk and the MTU of a BMC access port.
+func TestCiscoNexus_GeneratePortCommands_NativeAndMTU(t *testing.T) {
+	commands, err := GeneratePortCommands([]PortConfig{
+		{Port: "Eth1/25", Mode: "trunk", VLANs: []int{401, 403, 405}, NativeVLAN: 405, MTU: 9216},
+		{Port: "Eth1/41", Mode: "access", AccessVLAN: 402, MTU: 9216},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	joined := strings.Join(commands, "\n")
+	for _, want := range []string{"switchport trunk native vlan 405", "mtu 9216", "switchport access vlan 402"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in %s", want, joined)
+		}
+	}
+	if strings.Count(joined, "mtu 9216") != 2 {
+		t.Fatalf("expected an mtu line per port: %s", joined)
+	}
+}
+
+// TestCiscoNexus_GeneratePortCommands_Invalid refuses an invalid port
+// before generating anything.
+func TestCiscoNexus_GeneratePortCommands_Invalid(t *testing.T) {
+	_, err := GeneratePortCommands([]PortConfig{{Port: "Eth1/25", Mode: "trunk", VLANs: []int{401}, NativeVLAN: 405}})
+	var failed ErrPortConfigFailed
+	if !errors.As(err, &failed) || failed.Port != "Eth1/25" {
+		t.Fatalf("want ErrPortConfigFailed for Eth1/25, got %v", err)
+	}
+	var invalid ErrInvalidConfig
+	if !errors.As(err, &invalid) {
+		t.Fatalf("want the ErrInvalidConfig cause, got %v", err)
+	}
+}
+
+// TestGeneratePortCommands_TrunkWithoutNativeClearsIt checks a trunk with
+// no native VLAN removes any native VLAN a re-used port still carries, and
+// a trunk with one sets it.
+func TestGeneratePortCommands_TrunkWithoutNativeClearsIt(t *testing.T) {
+	cmds, err := GeneratePortCommands([]PortConfig{{Port: "Eth1/3", Mode: "trunk", VLANs: []int{400, 401}, MTU: 9216}})
+	if err != nil {
+		t.Fatalf("GeneratePortCommands: %v", err)
+	}
+	joined := strings.Join(cmds, "\n")
+	if !strings.Contains(joined, "no switchport trunk native vlan") {
+		t.Fatalf("a trunk without a native VLAN must clear it:\n%s", joined)
+	}
+
+	cmds, err = GeneratePortCommands([]PortConfig{{Port: "Eth1/25", Mode: "trunk", VLANs: []int{401, 405}, NativeVLAN: 405}})
+	if err != nil {
+		t.Fatalf("GeneratePortCommands: %v", err)
+	}
+	joined = strings.Join(cmds, "\n")
+	if strings.Contains(joined, "no switchport trunk native vlan") || !strings.Contains(joined, "switchport trunk native vlan 405") {
+		t.Fatalf("a trunk with a native VLAN must set it:\n%s", joined)
+	}
+}

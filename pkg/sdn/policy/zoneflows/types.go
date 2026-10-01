@@ -29,6 +29,7 @@
 package zoneflows
 
 import (
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
@@ -74,15 +75,6 @@ type ZoneFlowConfig struct {
 	// Quarantine configures the quarantine-zone template generator.
 	Quarantine QuarantineConfig
 
-	// Trusted configures the trusted-zone template generator.
-	Trusted TrustedConfig
-
-	// Public configures the public-zone template generator.
-	Public PublicConfig
-
-	// Storage configures the storage-zone template generator.
-	Storage StorageConfig
-
 	// Management configures the management-zone template generator.
 	Management ManagementConfig
 }
@@ -126,29 +118,6 @@ type QuarantineConfig struct {
 	AllowedPorts []uint16
 }
 
-// TrustedConfig configures the trusted zone flow generator.
-type TrustedConfig struct {
-	// TrustedSubnet is the subnet for the trusted zone (used for matrix rules).
-	TrustedSubnet string
-}
-
-// PublicConfig configures the public zone flow generator.
-type PublicConfig struct {
-	// TrustedSubnet is the trusted zone IPv4 subnet used to generate the
-	// public→trusted deny rule (defense-in-depth).
-	TrustedSubnet string
-
-	// TrustedSubnet6 is the trusted zone IPv6 subnet for the same deny
-	// rule; empty when the trusted zone is IPv4-only.
-	TrustedSubnet6 string
-}
-
-// StorageConfig configures the storage zone flow generator.
-type StorageConfig struct {
-	// StorageSubnet is the storage subnet (used for isolation rules).
-	StorageSubnet string
-}
-
 // ManagementConfig configures the management zone flow generator.
 type ManagementConfig struct {
 	// ManagementSubnet is the OOB subnet (used for isolation rules).
@@ -156,7 +125,44 @@ type ManagementConfig struct {
 }
 
 // generator is the internal function type for a per-zone flow template.
-type generator func(portID string, vlanID uint16) []FlowRule
+type generator func(portID string, in Ingress) []FlowRule
+
+// untaggedMatch matches a frame that carries no 802.1Q header: the VLAN
+// CFI/present bit and the VID are all zero (OVS vlan_tci).
+const untaggedMatch = "vlan_tci=0x0000/0x1fff"
+
+// Ingress is how a zone's frames reach the OpenFlow tables on one port.
+//
+// OVS applies a port's VLAN configuration (tag, trunks, vlan_mode) only in
+// the NORMAL action; the OpenFlow tables see each frame exactly as it was
+// received (ovs-vswitchd.conf.db, Port "VLAN Configuration"; ovs-fields,
+// vlan_tci). So a frame from an access port, and an untagged frame on a
+// trunk's native VLAN, carries no 802.1Q header in the flow tables and
+// never matches dl_vlan=<zone VLAN>. Only a trunk's tagged zones do.
+type Ingress struct {
+	// VLAN is the zone's VLAN ID.
+	VLAN uint16
+	// Tagged is true when the zone's frames arrive 802.1Q-tagged (a trunk's
+	// non-native zones), false when they arrive untagged (an access port,
+	// or a trunk's native zone).
+	Tagged bool
+}
+
+// Untagged returns the ingress of a zone carried untagged: an access port's
+// zone, or a trunk's native zone.
+func Untagged(vlan uint16) Ingress { return Ingress{VLAN: vlan} }
+
+// Tagged returns the ingress of a zone carried tagged on a trunk.
+func Tagged(vlan uint16) Ingress { return Ingress{VLAN: vlan, Tagged: true} }
+
+// Match returns the OpenFlow match for frames of this ingress: dl_vlan=N
+// when tagged, an untagged-frame match otherwise.
+func (in Ingress) Match() string {
+	if in.Tagged {
+		return fmt.Sprintf("dl_vlan=%d", in.VLAN)
+	}
+	return untaggedMatch
+}
 
 // NetworkSummary holds the VLAN and subnets for a zone's primary network.
 // It is the value type for MatrixRuleConfig.NetworksByZone and is exported
@@ -166,11 +172,11 @@ type NetworkSummary struct {
 	VLAN uint16
 
 	// Subnet is the CIDR-notation IPv4 prefix for the zone's primary subnet
-	// (e.g. "198.18.0.0/24"). Used as nw_dst in OpenFlow match strings.
+	// (e.g. "10.4.6.0/24"). Used as nw_dst in OpenFlow match strings.
 	Subnet string
 
 	// Subnet6 is the CIDR-notation IPv6 prefix for the same network when it
-	// is dual-stack (e.g. "2602:f5bb:1::/64"), used as ipv6_dst. Empty for
+	// is dual-stack (e.g. "fd12:3456:789a:406::/64"), used as ipv6_dst. Empty for
 	// an IPv4-only network; the address-family-neutral rules still apply
 	// to its IPv6 traffic (#554).
 	Subnet6 string

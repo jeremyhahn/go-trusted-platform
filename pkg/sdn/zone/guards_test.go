@@ -31,10 +31,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // repoRoot resolves the repository root by walking up from this file's
@@ -112,6 +115,14 @@ func TestGuard_NoStaleNetworkIdentifiers(t *testing.T) {
 		"VLANFlowManager",
 		"FirewallZone",
 		"NetworkPhaseProduction",
+		// The trusted zone and the fixed VLAN/VNI constants were retired
+		// by the reference network (#708); numbering comes from netplan.
+		"ZoneTrusted",
+		"ZoneTenant",
+		"ZonePublic",
+		"DefaultTrustedVLAN",
+		"TenantBase",
+		"VNIBase",
 	}
 
 	violations := make(map[string][]string) // identifier → []file paths
@@ -131,7 +142,7 @@ func TestGuard_NoStaleNetworkIdentifiers(t *testing.T) {
 			return readErr
 		}
 		for _, id := range forbidden {
-			if bytes.Contains(data, []byte(id)) {
+			if regexp.MustCompile(`\b` + id + `\b`).Match(data) {
 				rel, _ := filepath.Rel(root, path)
 				violations[id] = append(violations[id], rel)
 			}
@@ -154,11 +165,8 @@ func TestGuard_NoProductionNetworkNameInTemplates(t *testing.T) {
 	root := repoRoot(t)
 	templatesDir := filepath.Join(root, "configs", "platform", "templates")
 
-	// Check whether the directory exists before walking — template files are
-	// optional in some checkout configurations.
-	if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
-		t.Skipf("templates directory %s does not exist; skipping", templatesDir)
-	}
+	_, statErr := os.Stat(templatesDir)
+	require.NoError(t, statErr, "the shipped templates must be present")
 
 	var violations []string
 
@@ -190,8 +198,7 @@ func TestGuard_NoProductionNetworkNameInTemplates(t *testing.T) {
 				value = strings.Trim(value, `"'`)
 				if value == "production" {
 					rel, _ := filepath.Rel(root, path)
-					violations = append(violations,
-						filepath.Join(rel, "line", string(rune('0'+lineNum%10))))
+					violations = append(violations, rel+":"+strconv.Itoa(lineNum))
 				}
 			}
 		}

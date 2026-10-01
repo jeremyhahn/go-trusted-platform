@@ -21,7 +21,7 @@ config := &compute.OrchestratorConfig{
     DefaultDiskSize: "20G",
     MaxInstances:    100,
     EnableKVM:       true,
-    NetworkBridge:   "trusted0",
+    NetworkBridge:   "br-int",
     OVSSocketPath:   "/var/run/openvswitch/db.sock",
     QEMUBinary:      "qemu-system-x86_64",
     OVMFCode:        "/usr/share/OVMF/OVMF_CODE_4M.fd",
@@ -43,7 +43,7 @@ config := &compute.OrchestratorConfig{
 | DefaultDiskSize | string | `"20G"` | Default disk image size |
 | MaxInstances | int | 100 | Maximum concurrent instances |
 | EnableKVM | bool | true | Enable KVM hardware acceleration |
-| NetworkBridge | string | `"trusted0"` | Default OVS bridge name |
+| NetworkBridge | string | `"br-int"` | Default OVS bridge name |
 | OVSSocketPath | string | `/var/run/openvswitch/db.sock` | OVSDB Unix socket path |
 | QEMUBinary | string | `qemu-system-x86_64` | QEMU executable path |
 | OVMFCode | string | `/usr/share/OVMF/OVMF_CODE_4M.fd` | UEFI firmware path |
@@ -140,7 +140,7 @@ compute:
   default_disk_size: "20G"
   max_instances: 100
   enable_kvm: true
-  network_bridge: trusted0
+  network_bridge: br-int
   ovs_socket_path: /var/run/openvswitch/db.sock
   qemu_binary: qemu-system-x86_64
   ovmf_code: /usr/share/OVMF/OVMF_CODE_4M.fd
@@ -184,7 +184,7 @@ policyEngine := policy.NewPolicyEngine(policyConfig)
 config := &compute.OrchestratorConfig{
     Type:            compute.ComputeTypeVM,
     WorkDir:         "/var/lib/trusted-platform/compute",
-    NetworkBridge:   "trusted0",
+    NetworkBridge:   "br-int",
     PortAuthEnabled: true,
     PolicyEngine:    policyEngine,
 }
@@ -210,7 +210,7 @@ config := &compute.OrchestratorConfig{
 ```go
 portConfig := &compute.PortAuthConfig{
     PortID:       "vm-abc12345",
-    BridgeName:   "trusted0",
+    BridgeName:   "br-int",
     MACAddress:   "52:54:00:12:34:56",
     PolicyEngine: policyEngine,
 }
@@ -351,7 +351,7 @@ config := &compute.OrchestratorConfig{
 
 ```yaml
 # OVS bridge configuration
-network_bridge: trusted0
+network_bridge: br-int
 
 # VLAN assignments
 provisioning_vlan: 998    # Enrollment network
@@ -704,7 +704,7 @@ device_profile:
           target: "/var/lib/postgresql/data"
       network:
         mode: sdn
-        vlan: 200
+        vlan: 406
       service:
         mode: standalone
         standalone:

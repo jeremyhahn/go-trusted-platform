@@ -101,10 +101,10 @@ func reportedSnapshot(id string) *gwstate.Snapshot {
 		}},
 		Uplinks:      []gwstate.UplinkState{{Name: "att", Table: 101, RuleCount: 1, Tunnels: []string{"gre-mia"}}},
 		HostFirewall: &gwstate.HostFirewallState{Active: true, Installed: true, Fingerprint: "sha256:abc", RuleCount: 10},
-		Firewall:     &gwstate.FirewallState{Active: true, FlowCount: 26, CTZones: map[string]uint16{"trusted": 26567}},
+		Firewall:     &gwstate.FirewallState{Active: true, FlowCount: 26, CTZones: map[string]uint16{"control-plane": 26567}},
 		NAT: &gwstate.NATState{Active: true, SNATEnabled: true, DNATRules: 2, CTZone: 23974,
 			Uplinks: []gwstate.NATUplinkState{{Name: "att", Default: true, PoolAddresses: 8, Ports: 64512, Static: 1}}},
-		Pipeline: &gwstate.PipelineState{Installed: true, Bridge: "trusted0", Owner: "lab-node-1-gateway", Terminal: "normal", FailMode: "secure"},
+		Pipeline: &gwstate.PipelineState{Installed: true, Bridge: "br-fabric", Owner: "lab-node-1-gateway", Terminal: "normal", FailMode: "secure"},
 	}
 }
 
@@ -132,7 +132,7 @@ func TestGetGatewaySnapshot_FromTheTelemetryStore(t *testing.T) {
 	require.Len(t, snap.GetUplinks(), 1)
 	assert.Equal(t, int32(101), snap.GetUplinks()[0].GetTable())
 	assert.Equal(t, "no allocator", snap.GetServices()[0].GetRefusedReason())
-	assert.Equal(t, uint32(26567), snap.GetFirewall().GetCtZones()["trusted"])
+	assert.Equal(t, uint32(26567), snap.GetFirewall().GetCtZones()["control-plane"])
 	assert.True(t, snap.GetNat().GetUplinks()[0].GetIsDefault())
 	assert.Equal(t, "secure", snap.GetPipeline().GetFailMode())
 }

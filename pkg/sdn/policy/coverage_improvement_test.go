@@ -230,6 +230,7 @@ func TestZoneFlowManager_WithCustomGeneratorSet(t *testing.T) {
 		FlowController: ctrl,
 		PortController: ctrl,
 		GeneratorSet:   gs,
+		Plan:           testPlan(t),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, m)
@@ -243,6 +244,7 @@ func TestZoneFlowManager_MultipleZonesOnSamePort(t *testing.T) {
 		BridgeName:     "br0",
 		FlowController: ctrl,
 		PortController: ctrl,
+		Plan:           testPlan(t),
 	})
 	require.NoError(t, err)
 	ctx := context.Background()
@@ -251,9 +253,9 @@ func TestZoneFlowManager_MultipleZonesOnSamePort(t *testing.T) {
 		z    zone.Zone
 		vlan uint16
 	}{
-		{zone.ZoneProvisioning, DefaultProvisioningVLAN},
-		{zone.ZoneTrusted, 200},
-		{zone.ZoneQuarantine, DefaultQuarantineVLAN},
+		{zone.ZoneProvisioning, testProvisioningVLAN},
+		{zone.ZoneControlPlane, testControlPlaneVLAN},
+		{zone.ZoneQuarantine, testQuarantineVLAN},
 	}
 
 	for _, p := range phases {
@@ -267,14 +269,15 @@ func TestZoneFlowManager_MultipleZonesOnSamePort(t *testing.T) {
 	}
 }
 
-// TestZoneFlowManager_NilZoneIndex_FallsBackToDefaults verifies that when no
-// ZoneIndex is configured, the built-in VLAN defaults are used.
-func TestZoneFlowManager_NilZoneIndex_FallsBackToDefaults(t *testing.T) {
+// TestZoneFlowManager_PlanResolvesVLAN verifies the VLAN of a zone comes
+// from the plan.
+func TestZoneFlowManager_PlanResolvesVLAN(t *testing.T) {
 	ctrl := newZoneTestController()
 	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
 		BridgeName:     "br0",
 		FlowController: ctrl,
 		PortController: ctrl,
+		Plan:           testPlan(t),
 	})
 	require.NoError(t, err)
 
@@ -283,17 +286,18 @@ func TestZoneFlowManager_NilZoneIndex_FallsBackToDefaults(t *testing.T) {
 
 	v, err := m.GetPortVLAN("eth0")
 	require.NoError(t, err)
-	assert.Equal(t, DefaultProvisioningVLAN, v)
+	assert.Equal(t, testProvisioningVLAN, v)
 }
 
 // TestZoneFlowManager_StorageZone_SufficientlyIsolated verifies that the
-// storage zone uses its own VLAN (203) and that a fresh port assignment tracks it.
+// storage zone uses its own VLAN (407) and that a fresh port assignment tracks it.
 func TestZoneFlowManager_StorageZone_SufficientlyIsolated(t *testing.T) {
 	ctrl := newZoneTestController()
 	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
 		BridgeName:     "br0",
 		FlowController: ctrl,
 		PortController: ctrl,
+		Plan:           testPlan(t),
 	})
 	require.NoError(t, err)
 
@@ -301,7 +305,7 @@ func TestZoneFlowManager_StorageZone_SufficientlyIsolated(t *testing.T) {
 
 	v, err := m.GetPortVLAN("storage-port")
 	require.NoError(t, err)
-	assert.Equal(t, uint16(203), v)
+	assert.Equal(t, testStorageVLAN, v)
 }
 
 // TestSDNEnrollmentHook_OnEnrollmentComplete_ProfileNotFoundBySerial tests fallback to MAC lookup
@@ -512,7 +516,7 @@ func TestEngine_AuthenticatePort_FromUnauthorized(t *testing.T) {
 	require.NoError(t, engine.SetPortState("port1", PortStateUnauthorized))
 
 	// Authenticate from unauthorized using zone-extension cert
-	cert := createZoneCert(t, "tenant-1", "trusted")
+	cert := createZoneCert(t, "tenant-1", "control-plane")
 
 	err := engine.AuthenticatePort("port1", cert)
 	assert.NoError(t, err)
@@ -531,7 +535,7 @@ func TestEngine_AuthenticatePort_FromProvisioning(t *testing.T) {
 	require.NoError(t, engine.SetPortState("port1", PortStateProvisioning))
 
 	// Authenticate from provisioning using zone-extension cert
-	cert := createZoneCert(t, "tenant-1", "trusted")
+	cert := createZoneCert(t, "tenant-1", "control-plane")
 
 	err := engine.AuthenticatePort("port1", cert)
 	assert.NoError(t, err)
@@ -585,6 +589,7 @@ func TestZoneFlowManager_TerminalAppliesToMatrixAndTemplates(t *testing.T) {
 		BridgeName:     "br0",
 		FlowController: ctrl,
 		PortController: ctrl,
+		Plan:           testPlan(t),
 		Zones:          zone.Defaults(),
 		Matrix:         zone.CompileMatrix(zone.Defaults()),
 		Terminal:       zoneflows.TerminalGatewayPipeline,
@@ -592,7 +597,7 @@ func TestZoneFlowManager_TerminalAppliesToMatrixAndTemplates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, zoneflows.TerminalGatewayPipeline, m.terminal)
 
-	rules := m.generators.Generate("port-1", zone.ZoneTrusted, 200)
+	rules := m.generators.Generate("port-1", zone.ZoneControlPlane, zoneflows.Tagged(testControlPlaneVLAN))
 	require.NotEmpty(t, rules)
 	for _, r := range rules {
 		assert.NotEqual(t, "normal", r.Actions)

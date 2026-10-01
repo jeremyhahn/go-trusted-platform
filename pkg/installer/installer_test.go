@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"io"
 	"strings"
 	"testing"
@@ -138,8 +139,8 @@ func (m *MockOSInstaller) ExecutePostInstall(ctx context.Context, rootPath strin
 	return args.Error(0)
 }
 
-func (m *MockOSInstaller) ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig) error {
-	args := m.Called(ctx, rootPath, netConfig)
+func (m *MockOSInstaller) ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig, plan *netplan.Plan) error {
+	args := m.Called(ctx, rootPath, netConfig, plan)
 	return args.Error(0)
 }
 

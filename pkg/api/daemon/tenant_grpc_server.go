@@ -178,14 +178,6 @@ func (s *TenantGRPCServer) CreateTenant(
 		Annotations: req.GetAnnotations(),
 	}
 
-	// Set VLAN range if provided
-	if req.GetVlanRangeStart() > 0 && req.GetVlanRangeEnd() > 0 {
-		createReq.VLANRange = &tenant.VLANRange{
-			Start: uint16(req.GetVlanRangeStart()),
-			End:   uint16(req.GetVlanRangeEnd()),
-		}
-	}
-
 	// Set quotas if provided
 	if req.GetComputeQuota() != nil {
 		createReq.ComputeQuota = &tenant.ComputeQuota{
@@ -540,74 +532,6 @@ func (s *TenantGRPCServer) CheckQuota(
 }
 
 // =============================================================================
-// Network Isolation
-// =============================================================================
-
-// ValidateVLAN checks if a tenant can use a specific VLAN.
-func (s *TenantGRPCServer) ValidateVLAN(
-	ctx context.Context,
-	req *platformv1.ValidateVLANRequest,
-) (*platformv1.ValidateVLANResponse, error) {
-	if s.manager == nil {
-		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
-	}
-
-	if req.GetVlanId() == 0 {
-		return nil, status.Error(codes.InvalidArgument, "vlan_id is required")
-	}
-
-	if req.GetVlanId() > 4094 {
-		return nil, status.Error(codes.InvalidArgument, "vlan_id must be between 1 and 4094")
-	}
-
-	err := s.manager.ValidateVLAN(ctx, req.GetTenantId(), uint16(req.GetVlanId()))
-
-	response := &platformv1.ValidateVLANResponse{
-		TenantId: req.GetTenantId(),
-		VlanId:   req.GetVlanId(),
-	}
-
-	if err != nil {
-		response.Valid = false
-		response.Message = err.Error()
-	} else {
-		response.Valid = true
-		response.Message = "VLAN is valid for tenant"
-	}
-
-	return response, nil
-}
-
-// GetBridgeName returns the OVS bridge name for a tenant.
-func (s *TenantGRPCServer) GetBridgeName(
-	ctx context.Context,
-	req *platformv1.GetBridgeNameRequest,
-) (*platformv1.GetBridgeNameResponse, error) {
-	if s.manager == nil {
-		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
-	}
-
-	if req.GetTenantId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
-	}
-
-	bridgeName, err := s.manager.GetBridgeName(ctx, req.GetTenantId())
-	if err != nil {
-		s.logger.Error("failed to get bridge name", "tenant_id", req.GetTenantId(), "error", err)
-		return nil, s.toGRPCError(err)
-	}
-
-	return &platformv1.GetBridgeNameResponse{
-		TenantId:   req.GetTenantId(),
-		BridgeName: bridgeName,
-	}, nil
-}
-
-// =============================================================================
 // State Synchronization
 // =============================================================================
 
@@ -851,9 +775,6 @@ func (s *TenantGRPCServer) entityToTenantPb(entity *tenant.TenantEntity) *platfo
 		Name:        entity.Name,
 		DisplayName: entity.DisplayName,
 		State:       s.tenantStateToPb(entity.State),
-		OvsBridge:   entity.OVSBridge,
-		VlanStart:   uint32(entity.VLANRange.Start),
-		VlanEnd:     uint32(entity.VLANRange.End),
 		DekPath:     entity.DEKPath,
 		// Still emitted for clients that read the pre-DekPath field; dropping it
 		// would silently break them ahead of the coordinated proto removal.
@@ -935,24 +856,9 @@ func (s *TenantGRPCServer) toGRPCError(err error) error {
 		return status.Error(codes.Internal, err.Error())
 	}
 
-	var bridgeFailed tenant.ErrBridgeOperationFailed
-	if errors.As(err, &bridgeFailed) {
-		return status.Error(codes.Internal, err.Error())
-	}
-
-	var vlanFailed tenant.ErrVLANAllocationFailed
-	if errors.As(err, &vlanFailed) {
-		return status.Error(codes.ResourceExhausted, err.Error())
-	}
-
 	var quotaExceeded tenant.ErrQuotaExceeded
 	if errors.As(err, &quotaExceeded) {
 		return status.Error(codes.ResourceExhausted, err.Error())
-	}
-
-	var invalidVLAN tenant.ErrInvalidVLANRange
-	if errors.As(err, &invalidVLAN) {
-		return status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	var dekFailed tenant.ErrDEKOperationFailed

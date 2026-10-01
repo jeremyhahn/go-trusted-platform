@@ -104,17 +104,60 @@ network:
     upstream-servers:
       - 10.4.6.10:9053
     local-domain: example.internal
-  interfaces:
-    - name: eno1
-      type: static
-      ipv4-address: 10.4.6.3/24
-      ipv4-gateway: 10.4.6.1
-      auto-start: true
+  # Host addressing by role (reference network, "Host addressing"): a
+  # compute node holds its fabric VTEP, its hypervisor (live migration)
+  # address and a storage address because it mounts storage, and nothing
+  # else. It never forwards, its host firewall drops traffic between
+  # interfaces, and its one platform-VRF address (from 10.4.144.0/20) lives
+  # in a Linux VRF. It reaches the control plane through the platform VRF
+  # over the overlay (#709); it holds no control-plane address.
+  role: compute
+  ip-forward: false
+  platform-vrf:
+    address: 10.4.144.20/32
   bridges:
-    - name: trusted0
-      members:
+    # br-fabric carries the physical trunk. The host's zone addresses are
+    # OVS internal ports on it; the VLANs it only passes through to guests
+    # get no host address.
+    - name: br-fabric
+      type: ovs
+      interfaces:
+        - bond0
+      stp: false
+      auto-start: true
+    # br-int is the integration bridge for workload ports (VMs and
+    # containers). It never carries the trunk: workloads reach the network
+    # only through the overlay.
+    - name: br-int
+      type: ovs
+      stp: false
+      auto-start: true
+  bonds:
+    - name: bond0
+      # OVS bond, created at runtime by platformd over native OVSDB (no
+      # kernel bonding driver). The members are brought up as raw
+      # interfaces so ovs-vswitchd can claim them.
+      type: ovs
+      bridge: br-fabric
+      # OVS port bond_mode: balance-tcp with active LACP hashes on L4.
+      mode: balance-tcp
+      lacp: active
+      interfaces:
         - ens2f0
-  bonds: []
+        - ens2f1
+      # Port class hypervisor (reference switch port model): the switch
+      # trunk carries 401 and 403-408 with native VLAN 405, MTU 9216.
+      vlans:
+        - zone: fabric
+          ipv4-address: 10.4.1.20/24
+          auto-start: true
+        - zone: hypervisor
+          ipv4-address: 10.4.3.20/24
+          auto-start: true
+        - zone: storage
+          ipv4-address: 10.4.7.20/24
+          auto-start: true
+      auto-start: true
   vlans: []
   wait-online: true
   wait-timeout: 30
@@ -320,7 +363,7 @@ acme:
 # =============================================================================
 
 bmc:
-  address: 10.4.2.3
+  address: 10.4.2.21  # management (VLAN 402) carries BMCs only
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -346,9 +389,35 @@ quicbaas:
 sdn:
   enabled: true
   controller: false
+  # The environment numbers every zone (docs/architecture/reference-network.md):
+  # the zone at offset n is VLAN E*100+n with IPv4 10.E.n.0/24 and IPv6
+  # <ula>:<VLAN digits>::/64, and overlay network n is VNI E*100000+n.
+  # Block 4 is the reference example. A non-reference site overrides single
+  # zones under `overrides:` (vlan, subnet, subnet6) instead of renumbering.
+  environment:
+    id: 4
+    base: 10.0.0.0/8
+    # The deployment's RFC 4193 ULA /48. Generate your own random global
+    # ID; this one is the reference document's example.
+    ula: fd12:3456:789a::/48
+  # zones: the built-in zones (transit, fabric, management, hypervisor,
+  # quarantine, provisioning, control-plane, storage, backup) need no entry.
+  # An entry tunes a built-in's policy or declares an owner-defined zone at
+  # an offset from 09 to 99, for example:
+  #   zones:
+  #     - name: lab
+  #       offset: 9
+  #       port_classes: [hypervisor]
+  #       isolate: true
+  #       allow_to: [{zone: storage, services: [storage]}]
+  # A path into control-plane or management beyond the reference defaults
+  # also needs privileged_access: {reason: ..., approved_by: ...}, which is
+  # logged as an audit record whenever the configuration loads.
   ovs:
     socket: /var/run/openvswitch/db.sock
-    bridge: trusted0
+    # br-fabric carries the physical trunk and the host's zone addresses.
+    # Workload ports live on br-int, which never carries the trunk.
+    bridge: br-fabric
     datapath: system
     protocols:
       - OpenFlow13
@@ -358,14 +427,6 @@ sdn:
     pools: []
   dhcp:
     enabled: false
-    interface: trusted0
-  networks:
-    # `zone: trusted` is the zone name today's code accepts for the
-    # control-plane network (VLAN 406); the zone vocabulary moves with #708.
-    - name: control-plane
-      vlan: 406
-      zone: trusted
-      pool: control-plane
   overlay:
     enabled: false
     vxlan-port: 4789

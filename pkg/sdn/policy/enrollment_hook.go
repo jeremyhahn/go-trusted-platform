@@ -77,7 +77,7 @@ type ActivationStatus string
 
 const (
 	// ActivationStatusActivated means the production policy was applied and
-	// the port is authorized on the trusted network.
+	// the port is authorized on its post-enrollment network.
 	ActivationStatusActivated ActivationStatus = "activated"
 	// ActivationStatusQuarantined means a zone mismatch was detected and the
 	// quarantine policy was applied and enforced; the port is isolated.
@@ -87,7 +87,7 @@ const (
 // ActivationResult reports what ActivateDevice actually did: the outcome
 // status and the VLAN and zone applied to the port, read from the policy
 // the engine applied — so a quarantined result carries the quarantine VLAN,
-// never the trusted one. ZoneMismatch is set when the outcome is quarantine,
+// never the post-enrollment one. ZoneMismatch is set when the outcome is quarantine,
 // for audit correlation.
 type ActivationResult struct {
 	Status       ActivationStatus
@@ -390,9 +390,9 @@ func (h *SDNEnrollmentHook) PeekPendingActivation(serial string) (*PendingActiva
 // profile (or of the pending record it hangs off) cannot desynchronize the
 // physical switch move from the policy the plan carries.
 type ActivationVLANs struct {
-	// Trusted is the post-enrollment (trusted) network VLAN — the target
-	// of the physical switch move on a clean activation.
-	Trusted uint16
+	// Admitted is the post-enrollment network VLAN — the target of the
+	// physical switch move on a clean activation.
+	Admitted uint16
 	// Provisioning is the enrollment-phase VLAN — the one fail-closed
 	// revert target. Meaningful only when HasProvisioning is true.
 	Provisioning uint16
@@ -695,7 +695,7 @@ func (h *SDNEnrollmentHook) PrecheckActivation(serial string) (ActivationPlan, e
 	// commits to the switch.
 	vlans := ActivationVLANs{}
 	if prodNet := pending.Profile.GetPostEnrollmentNetworkConfig(); prodNet != nil {
-		vlans.Trusted = prodNet.VLAN
+		vlans.Admitted = prodNet.VLAN
 	}
 	if provNet := pending.Profile.GetEnrollmentNetworkConfig(); provNet != nil {
 		vlans.Provisioning = provNet.VLAN
@@ -885,7 +885,7 @@ func quarantineVLANFor(profile *entities.DeviceProfile) (uint16, bool) {
 //     (backward compatible with pre-Z3 certs).
 //   - When the cert carries an unreadable zone extension, no policy is
 //     built and ErrZoneExtensionInvalid is returned: invalid policy input
-//     never falls open to the trusted policy.
+//     never falls open to the post-enrollment policy.
 func (h *SDNEnrollmentHook) buildPortPolicy(profile *entities.DeviceProfile, cert *x509.Certificate) (*PortPolicy, error) {
 	prodNet := profile.GetPostEnrollmentNetworkConfig()
 	if prodNet == nil {
@@ -908,7 +908,7 @@ func (h *SDNEnrollmentHook) buildPortPolicy(profile *entities.DeviceProfile, cer
 		// Only a genuinely ABSENT extension falls back to the profile zone
 		// (backward compatible with pre-Z3 certs). A present-but-unreadable
 		// extension is invalid policy input and fails closed by building no
-		// policy — it must never fall through to the trusted policy.
+		// policy — it must never fall through to the post-enrollment policy.
 		if extractErr != nil && !errors.Is(extractErr, ErrMissingZoneExtension) {
 			err := ErrZoneExtensionInvalid{Serial: cert.Subject.CommonName, Cause: extractErr}
 			h.logger.Error(err.Error(),
@@ -947,10 +947,10 @@ func (h *SDNEnrollmentHook) buildPortPolicy(profile *entities.DeviceProfile, cer
 		}
 	}
 
-	// A quarantine policy must carry the quarantine VLAN, never the trusted
-	// one: the profile's failure-network VLAN, or its provisioning VLAN when
+	// A quarantine policy must carry the quarantine VLAN, never the
+	// post-enrollment one: the profile's failure-network VLAN, or its provisioning VLAN when
 	// no failure network is declared. It carries none of the production
-	// ACLs. A quarantine that would share the trusted VLAN is a
+	// ACLs. A quarantine that would share the post-enrollment VLAN is a
 	// contradiction, and a profile with neither VLAN cannot be quarantined
 	// at all — both fail closed by building no policy.
 	vlan := prodNet.VLAN
@@ -965,7 +965,7 @@ func (h *SDNEnrollmentHook) buildPortPolicy(profile *entities.DeviceProfile, cer
 			return nil, ErrQuarantineVLANUnavailable{Serial: cert.Subject.CommonName, Profile: profile.Name}
 		}
 		if quarantineVLAN == prodNet.VLAN {
-			h.logger.Error("quarantine policy would carry the trusted VLAN; refusing to build a policy",
+			h.logger.Error("quarantine policy would carry the post-enrollment VLAN; refusing to build a policy",
 				slog.String("serial", cert.Subject.CommonName),
 				slog.String("profile", profile.Name),
 				slog.Uint64("vlan", uint64(quarantineVLAN)),

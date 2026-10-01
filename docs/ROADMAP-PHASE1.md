@@ -29,7 +29,7 @@ Integrate tenant management with the existing WebAuthn registration flow:
 | WebAuthn handlers | `pkg/webservice/v1/webauthn/webauthn.go` | COMPLETE - Tenant integrated |
 | User entity | `pkg/store/datastore/entities/user.go` | COMPLETE - TenantID, IsTenantOwner |
 | Invitation entity | `pkg/store/datastore/entities/invitation.go` | COMPLETE |
-| TenantManager | `pkg/tenant/manager.go` | COMPLETE (VLAN, quota, DEK) |
+| TenantManager | `pkg/tenant/manager.go` | COMPLETE (quota, DEK) |
 | QuicBaaS IAM | `pkg/api/mcp/quicbaas_auth.go` | TokenValidator exists |
 | Frontend | `web/` | Next.js 16, WebAuthn works, no tests |
 | Docs - IAM | `docs/iam/` | COMPLETE - user-registration.md |

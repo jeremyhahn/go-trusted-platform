@@ -45,6 +45,13 @@ type IPAMPoolRequest struct {
 	Description            string `json:"description,omitempty"`
 	DefaultLeaseDurationNs int64  `json:"default_lease_duration_nanos,omitempty"`
 	InactivityTimeoutNs    int64  `json:"inactivity_timeout_nanos,omitempty"`
+	// Reserved lists never-allocatable prefixes. On update, an omitted
+	// field keeps the pool's list and an empty list clears it.
+	Reserved []string `json:"reserved,omitempty"`
+	// RangeStart and RangeEnd bound dynamic allocation. On update, an
+	// omitted field keeps the pool's bound and "" clears it.
+	RangeStart *string `json:"range_start,omitempty"`
+	RangeEnd   *string `json:"range_end,omitempty"`
 }
 
 // IPAMPoolResponse mirrors the daemon REST pool contract
@@ -61,6 +68,9 @@ type IPAMPoolResponse struct {
 	Available              uint64     `json:"available"`
 	DefaultLeaseDurationNs int64      `json:"default_lease_duration_nanos,omitempty"`
 	InactivityTimeoutNs    int64      `json:"inactivity_timeout_nanos,omitempty"`
+	Reserved               []string   `json:"reserved,omitempty"`
+	RangeStart             string     `json:"range_start,omitempty"`
+	RangeEnd               string     `json:"range_end,omitempty"`
 	CreatedAt              *time.Time `json:"created_at,omitempty"`
 	UpdatedAt              *time.Time `json:"updated_at,omitempty"`
 }
@@ -174,6 +184,9 @@ func poolProtoToResponse(pool *platformv1.IPAMPool) IPAMPoolResponse {
 		Available:              pool.GetAvailable(),
 		DefaultLeaseDurationNs: pool.GetDefaultLeaseDurationNanos(),
 		InactivityTimeoutNs:    pool.GetInactivityTimeoutNanos(),
+		Reserved:               pool.GetReserved(),
+		RangeStart:             pool.GetRangeStart(),
+		RangeEnd:               pool.GetRangeEnd(),
 	}
 	if ts := pool.GetCreatedAt(); ts != nil {
 		t := ts.AsTime()
@@ -229,6 +242,9 @@ func (r *IPAMRouter) createPool(w http.ResponseWriter, req *http.Request) {
 		Description:               body.Description,
 		DefaultLeaseDurationNanos: body.DefaultLeaseDurationNs,
 		InactivityTimeoutNanos:    body.InactivityTimeoutNs,
+		Reserved:                  body.Reserved,
+		RangeStart:                derefString(body.RangeStart),
+		RangeEnd:                  derefString(body.RangeEnd),
 	})
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
@@ -322,6 +338,23 @@ func (r *IPAMRouter) updatePool(w http.ResponseWriter, req *http.Request) {
 	if body.InactivityTimeoutNs > 0 {
 		update.InactivityTimeoutNanos = body.InactivityTimeoutNs
 	}
+	if body.Reserved != nil || body.RangeStart != nil || body.RangeEnd != nil {
+		// Any window field present replaces the window; the others keep
+		// the pool's current values.
+		update.UpdateWindow = true
+		update.Reserved = pool.GetReserved()
+		update.RangeStart = pool.GetRangeStart()
+		update.RangeEnd = pool.GetRangeEnd()
+		if body.Reserved != nil {
+			update.Reserved = body.Reserved
+		}
+		if body.RangeStart != nil {
+			update.RangeStart = *body.RangeStart
+		}
+		if body.RangeEnd != nil {
+			update.RangeEnd = *body.RangeEnd
+		}
+	}
 
 	resp, err := r.server.UpdateIPAMPool(req.Context(), update)
 	if err != nil {
@@ -411,4 +444,12 @@ func (r *IPAMRouter) release(w http.ResponseWriter, req *http.Request) {
 		Success:      true,
 		Message:      "IP released successfully",
 	})
+}
+
+// derefString returns *s, or "" when s is nil.
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

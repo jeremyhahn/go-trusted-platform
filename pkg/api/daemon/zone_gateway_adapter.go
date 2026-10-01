@@ -38,7 +38,7 @@ var errGatewayFeatureNotConfigured = quic.ErrGatewayFeatureNotConfigured
 // rather than a panic or a misleading error.
 //
 // This adapter is injected into the QUIC GatewayHandler during daemon startup so
-// that zone operations (Create/Update/Delete/List/Assign) work over QUIC even
+// that zone operations (Create/Update/Delete/List) work over QUIC even
 // when no full gateway controller is configured.
 type zoneGatewayAdapter struct {
 	zoneSvc gateway.ZoneService
@@ -139,11 +139,11 @@ func (a *zoneGatewayAdapter) ListNetworkZones(ctx context.Context, lifecycleRole
 // CreateNetworkZone creates a new trust zone.
 func (a *zoneGatewayAdapter) CreateNetworkZone(ctx context.Context, opts *quic.CreateNetworkZoneOptions) (*quic.NetworkZoneInfo, error) {
 	cfg := quicCreateOptsToZoneConfig(opts)
-	rec, _, err := a.zoneSvc.Create(ctx, cfg)
+	rec, restartRequired, err := a.zoneSvc.Create(ctx, cfg)
 	if err != nil {
 		return nil, mapZoneToQUICError(err)
 	}
-	return zoneRecordToQUICInfo(rec, false), nil
+	return zoneRecordToQUICInfo(rec, restartRequired), nil
 }
 
 // UpdateNetworkZone updates an existing trust zone.
@@ -165,33 +165,21 @@ func (a *zoneGatewayAdapter) DeleteNetworkZone(ctx context.Context, name string)
 	return restartRequired, nil
 }
 
-// AssignNetworkZone assigns a network segment to a trust zone.
-func (a *zoneGatewayAdapter) AssignNetworkZone(ctx context.Context, network string, zoneName string) (bool, error) {
-	restartRequired, err := a.zoneSvc.AssignNetwork(ctx, network, zone.Zone(zoneName))
-	if err != nil {
-		return false, mapZoneToQUICError(err)
-	}
-	return restartRequired, nil
-}
-
 // =============================================================================
 // Error mapping
 // =============================================================================
 
-// mapZoneToQUICError translates gateway zone errors to the sentinel errors
-// recognised by quic.GatewayHandler.gatewayErrorResponse so the QUIC client
-// receives the correct status byte (NotFound, AlreadyExists, InvalidArgument).
+// mapZoneToQUICError translates gateway zone errors into quic.GatewayZoneError
+// so the QUIC client receives the right status byte (NotFound,
+// AlreadyExists, InvalidArgument) and the service's message.
 func mapZoneToQUICError(err error) error {
 	switch err.(type) {
 	case gateway.ErrZoneNotFound:
-		// StatusNotFound
-		return quic.ErrGatewayZoneNotFound
+		return quic.GatewayZoneError{Kind: quic.ErrGatewayZoneNotFound, Cause: err}
 	case gateway.ErrZoneAlreadyExists:
-		// StatusAlreadyExists — reuse the pool sentinel (same status byte)
-		return quic.ErrGatewayPoolAlreadyExists
+		return quic.GatewayZoneError{Kind: quic.ErrGatewayZoneAlreadyExists, Cause: err}
 	case gateway.ErrZoneValidation:
-		// StatusInvalidArgument — reuse closest sentinel
-		return quic.ErrGatewayInvalidPrefix
+		return quic.GatewayZoneError{Kind: quic.ErrGatewayZoneInvalid, Cause: err}
 	default:
 		return err
 	}
@@ -203,22 +191,31 @@ func mapZoneToQUICError(err error) error {
 
 // zoneRecordToQUICInfo converts a gateway.ZoneRecord to a quic.NetworkZoneInfo.
 func zoneRecordToQUICInfo(r *gateway.ZoneRecord, restartRequired bool) *quic.NetworkZoneInfo {
-	isolateFrom := make([]string, 0, len(r.Config.IsolateFrom))
-	for _, z := range r.Config.IsolateFrom {
-		isolateFrom = append(isolateFrom, string(z))
-	}
-	return &quic.NetworkZoneInfo{
+	info := &quic.NetworkZoneInfo{
 		Name:             string(r.Config.Name),
+		Offset:           uint8(r.Config.Offset),
+		PortClasses:      portClassStrings(r.Config.PortClasses),
 		InternetIngress:  r.Config.InternetIngress,
-		IsolateFrom:      isolateFrom,
+		IsolateFrom:      zoneStrings(r.Config.IsolateFrom),
+		AllowTo:          zonePathsToQUIC(r.Config.AllowTo),
+		Services:         r.Config.Services,
 		Isolate:          r.Config.Isolate,
-		IsolatePerTenant: r.Config.IsolatePerTenant,
 		OOB:              r.Config.OOB,
 		LifecycleRole:    string(r.Config.LifecycleRole),
+		PrivilegedAccess: privilegedAccessToQUIC(r.Config.PrivilegedAccess),
 		RestartRequired:  restartRequired,
 		CreatedAt:        r.CreatedAt.Unix(),
 		UpdatedAt:        r.UpdatedAt.Unix(),
 	}
+	if n := r.NumberingView(); n != nil {
+		info.Numbering = &quic.NetworkZoneNumberingInfo{
+			VLAN:    n.VLAN,
+			Subnet4: n.Subnet4,
+			Subnet6: n.Subnet6,
+			Gateway: n.Gateway,
+		}
+	}
+	return info
 }
 
 // quicCreateOptsToZoneConfig converts quic create options to zone.ZoneConfig.
@@ -226,18 +223,18 @@ func quicCreateOptsToZoneConfig(opts *quic.CreateNetworkZoneOptions) zone.ZoneCo
 	if opts == nil {
 		return zone.ZoneConfig{}
 	}
-	isolateFrom := make([]zone.Zone, 0, len(opts.IsolateFrom))
-	for _, z := range opts.IsolateFrom {
-		isolateFrom = append(isolateFrom, zone.Zone(z))
-	}
 	return zone.ZoneConfig{
 		Name:             zone.Zone(opts.Name),
+		Offset:           zone.Offset(opts.Offset),
+		PortClasses:      portClassesFromStrings(opts.PortClasses),
 		InternetIngress:  opts.InternetIngress,
-		IsolateFrom:      isolateFrom,
+		IsolateFrom:      zonesFromStrings(opts.IsolateFrom),
+		AllowTo:          zonePathsFromQUIC(opts.AllowTo),
+		Services:         opts.Services,
 		Isolate:          opts.Isolate,
-		IsolatePerTenant: opts.IsolatePerTenant,
 		OOB:              opts.OOB,
 		LifecycleRole:    zone.LifecycleRole(opts.LifecycleRole),
+		PrivilegedAccess: privilegedAccessFromQUIC(opts.PrivilegedAccess),
 	}
 }
 
@@ -247,17 +244,88 @@ func quicUpdateOptsToZoneConfig(name string, opts *quic.UpdateNetworkZoneOptions
 	if opts == nil {
 		return cfg
 	}
-	isolateFrom := make([]zone.Zone, 0, len(opts.IsolateFrom))
-	for _, z := range opts.IsolateFrom {
-		isolateFrom = append(isolateFrom, zone.Zone(z))
-	}
+	cfg.Offset = zone.Offset(opts.Offset)
+	cfg.PortClasses = portClassesFromStrings(opts.PortClasses)
 	cfg.InternetIngress = opts.InternetIngress
-	cfg.IsolateFrom = isolateFrom
+	cfg.IsolateFrom = zonesFromStrings(opts.IsolateFrom)
+	cfg.AllowTo = zonePathsFromQUIC(opts.AllowTo)
+	cfg.Services = opts.Services
 	cfg.Isolate = opts.Isolate
-	cfg.IsolatePerTenant = opts.IsolatePerTenant
 	cfg.OOB = opts.OOB
 	cfg.LifecycleRole = zone.LifecycleRole(opts.LifecycleRole)
+	cfg.PrivilegedAccess = privilegedAccessFromQUIC(opts.PrivilegedAccess)
 	return cfg
+}
+
+// zoneStrings converts zone names to strings.
+func zoneStrings(in []zone.Zone) []string {
+	out := make([]string, 0, len(in))
+	for _, z := range in {
+		out = append(out, string(z))
+	}
+	return out
+}
+
+// zonesFromStrings converts strings to zone names; nil for an empty input.
+func zonesFromStrings(in []string) []zone.Zone {
+	var out []zone.Zone
+	for _, z := range in {
+		out = append(out, zone.Zone(z))
+	}
+	return out
+}
+
+// portClassStrings converts port classes to strings.
+func portClassStrings(in []zone.PortClass) []string {
+	out := make([]string, 0, len(in))
+	for _, c := range in {
+		out = append(out, string(c))
+	}
+	return out
+}
+
+// portClassesFromStrings converts strings to port classes; nil for an empty
+// input.
+func portClassesFromStrings(in []string) []zone.PortClass {
+	var out []zone.PortClass
+	for _, c := range in {
+		out = append(out, zone.PortClass(c))
+	}
+	return out
+}
+
+// zonePathsToQUIC converts allow_to paths to their QUIC form.
+func zonePathsToQUIC(in []zone.ZonePath) []quic.NetworkZonePathInfo {
+	out := make([]quic.NetworkZonePathInfo, 0, len(in))
+	for _, p := range in {
+		out = append(out, quic.NetworkZonePathInfo{Zone: string(p.Zone), Services: p.Services})
+	}
+	return out
+}
+
+// zonePathsFromQUIC converts QUIC allow_to paths; nil for an empty input.
+func zonePathsFromQUIC(in []quic.NetworkZonePathInfo) []zone.ZonePath {
+	var out []zone.ZonePath
+	for _, p := range in {
+		out = append(out, zone.ZonePath{Zone: zone.Zone(p.Zone), Services: p.Services})
+	}
+	return out
+}
+
+// privilegedAccessToQUIC converts the audited override to its QUIC form.
+func privilegedAccessToQUIC(pa *zone.PrivilegedAccess) *quic.NetworkZonePrivilegedAccessInfo {
+	if pa == nil {
+		return nil
+	}
+	return &quic.NetworkZonePrivilegedAccessInfo{Reason: pa.Reason, ApprovedBy: pa.ApprovedBy}
+}
+
+// privilegedAccessFromQUIC converts the QUIC audited override.
+func privilegedAccessFromQUIC(pa *quic.NetworkZonePrivilegedAccessInfo) *zone.PrivilegedAccess {
+	if pa == nil {
+		return nil
+	}
+	return &zone.PrivilegedAccess{Reason: pa.Reason, ApprovedBy: pa.ApprovedBy}
 }
 
 // =============================================================================
@@ -453,6 +521,13 @@ func (a *fullGatewayQUICAdapter) CreateIPAMPool(ctx context.Context, opts *quic.
 	if opts.LeaseDuration > 0 {
 		pool.DefaultLeaseDuration = time.Duration(opts.LeaseDuration)
 	}
+	reserved, rangeStart, rangeEnd, err := ipam.ParseWindow(opts.Reserved, opts.RangeStart, opts.RangeEnd)
+	if err != nil {
+		return nil, mapIPAMToQUICError(err)
+	}
+	pool.Reserved = reserved
+	pool.RangeStart = rangeStart
+	pool.RangeEnd = rangeEnd
 
 	if err := a.ipamAlloc.CreatePool(ctx, pool); err != nil {
 		return nil, mapIPAMToQUICError(err)
@@ -493,6 +568,15 @@ func (a *fullGatewayQUICAdapter) UpdateIPAMPool(ctx context.Context, poolID stri
 		}
 		if opts.LeaseDuration > 0 {
 			updated.DefaultLeaseDuration = time.Duration(opts.LeaseDuration)
+		}
+		if opts.UpdateWindow {
+			reserved, rangeStart, rangeEnd, parseErr := ipam.ParseWindow(opts.Reserved, opts.RangeStart, opts.RangeEnd)
+			if parseErr != nil {
+				return nil, mapIPAMToQUICError(parseErr)
+			}
+			updated.Reserved = reserved
+			updated.RangeStart = rangeStart
+			updated.RangeEnd = rangeEnd
 		}
 	}
 	if err := a.ipamAlloc.UpdatePool(ctx, updated); err != nil {
@@ -541,11 +625,11 @@ func (a *fullGatewayQUICAdapter) CreateNetworkZone(ctx context.Context, opts *qu
 		return nil, errGatewayFeatureNotConfigured
 	}
 	cfg := quicCreateOptsToZoneConfig(opts)
-	rec, _, err := a.zoneSvc.Create(ctx, cfg)
+	rec, restartRequired, err := a.zoneSvc.Create(ctx, cfg)
 	if err != nil {
 		return nil, mapZoneToQUICError(err)
 	}
-	return zoneRecordToQUICInfo(rec, false), nil
+	return zoneRecordToQUICInfo(rec, restartRequired), nil
 }
 
 // UpdateNetworkZone updates an existing trust zone.
@@ -567,18 +651,6 @@ func (a *fullGatewayQUICAdapter) DeleteNetworkZone(ctx context.Context, name str
 		return false, errGatewayFeatureNotConfigured
 	}
 	restartRequired, err := a.zoneSvc.Delete(ctx, zone.Zone(name))
-	if err != nil {
-		return false, mapZoneToQUICError(err)
-	}
-	return restartRequired, nil
-}
-
-// AssignNetworkZone assigns a network segment to a trust zone.
-func (a *fullGatewayQUICAdapter) AssignNetworkZone(ctx context.Context, network string, zoneName string) (bool, error) {
-	if a.zoneSvc == nil {
-		return false, errGatewayFeatureNotConfigured
-	}
-	restartRequired, err := a.zoneSvc.AssignNetwork(ctx, network, zone.Zone(zoneName))
 	if err != nil {
 		return false, mapZoneToQUICError(err)
 	}
@@ -612,6 +684,8 @@ func mapIPAMToQUICError(err error) error {
 	case errors.Is(err, ipam.ErrInvalidPoolName),
 		errors.Is(err, ipam.ErrInvalidPoolID):
 		return quic.ErrGatewayMissingPoolName
+	case isIPAMWindowError(err):
+		return quic.ErrGatewayIPAMWindowDetail{Reason: err.Error()}
 	}
 	return err
 }
@@ -640,5 +714,8 @@ func ipamPoolToQUICInfo(p *ipam.Pool) *quic.IPAMPoolInfo {
 		AllocatedIPs: int(p.AllocatedIPs),
 		AvailableIPs: int(p.AvailableIPs),
 		CreatedAt:    p.CreatedAt.Unix(),
+		Reserved:     p.ReservedStrings(),
+		RangeStart:   ipam.AddrString(p.RangeStart),
+		RangeEnd:     ipam.AddrString(p.RangeEnd),
 	}
 }

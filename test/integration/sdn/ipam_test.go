@@ -76,7 +76,7 @@ func testIPAMPoolCRUD(t *testing.T, ctx context.Context, adapter SDNTestAdapter)
 		Name:          fmt.Sprintf("test-pool-crud-%s", strings.ToLower(adapter.Name())),
 		CIDR:          "192.0.2.0/24",
 		Gateway:       "192.0.2.1",
-		Zone:          "trusted",
+		Zone:          "control-plane",
 		Description:   "integration test pool",
 		LeaseDuration: 24 * time.Hour,
 	}
@@ -186,7 +186,7 @@ func testIPAMPoolCRUD(t *testing.T, ctx context.Context, adapter SDNTestAdapter)
 func testIPAMPoolZoneFilter(t *testing.T, ctx context.Context, adapter SDNTestAdapter) {
 	t.Helper()
 
-	zones := []string{"trusted", "provisioning"}
+	zones := []string{"control-plane", "provisioning"}
 	poolIDs := make([]string, 0, len(zones))
 
 	// Create one pool per zone.

@@ -77,12 +77,9 @@ deployer:
   container_runtime: docker
   container_image: registry.example.com/platform/bootstrap-pxe:1.0.0
 
-subnets:
-  - name: provisioning
-    role: provisioning        # required — validation fails without one
-    cidr: 10.100.0.0/24
-    gateway: 10.100.0.1
-    dns: ["10.100.0.1"]
+environment:                # required — the reference-network environment
+  id: 4                     # E: VLANs 400-499, 10.4.0.0/16, VNIs 4xxxxx
+  ula: fd12:3456:789a::/48  # example; generate your own random /48
 
 platform:
   domain: example.com
@@ -116,10 +113,13 @@ nodes:
 
 Four things people get wrong here:
 
-**The provisioning network goes under `subnets:` with `role: provisioning`.**
-Older documents in this folder show a `provisioning_network:` key. That key does
-not exist; a configuration using it fails validation with a missing-field error
-naming `subnets`.
+**The network is numbered from `environment:`, not written out.** Every VLAN and
+subnet, the provisioning zone included (VLAN _E_05, `10.E.5.0/24`), is derived
+from the environment by the [reference network](../architecture/reference-network.md).
+`bootstrap.yaml` carries no VLAN or subnet numbers: the old `subnets:`,
+`platform.networks`, `fabric:` and `switch.vlans` keys are refused with an error
+naming the line and the replacement. (`platform.environment` is the deployment's
+name, a different setting.)
 
 **Node identity is required.** Either a management address or at least one MAC.
 A node that has neither, and is not marked `skip_install: true`, is rejected.
@@ -300,9 +300,14 @@ fleet it does — publish TLSA records and drop `tofu` from the chain.
 
 ## Troubleshooting
 
-**"missing required field: deployer.host" or "no subnet with role: provisioning".**
-Configuration validation, before anything ran. Fix the file. The provisioning
-network is a `subnets:` entry, not a `provisioning_network:` block.
+**"missing required field: deployer.host" or "missing required field: environment".**
+Configuration validation, before anything ran. Fix the file. The network comes
+from the top-level `environment:` block.
+
+**"… is retired; use …".**
+The file still carries a key from the literal-number schema (`subnets`,
+`platform.networks`, `fabric`, `switch.vlans`, a port's `mode` or `vlans`,
+`post_enrollment`). The message names the line and what replaces it.
 
 **"invalid control-plane node count".**
 One, or an odd number three or greater. Two control-plane nodes cannot form a

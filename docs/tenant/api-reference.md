@@ -1,6 +1,8 @@
 # Tenant API Reference
 
-Complete API reference for tenant management in go-trusted-platform. The Tenant API provides 17 operations for multi-tenant lifecycle management including VLAN isolation, OVS bridge provisioning, quota enforcement, DEK management, and state synchronization.
+Complete API reference for tenant management in go-trusted-platform. The Tenant API provides 15 operations for multi-tenant lifecycle management: quota enforcement, DEK management and state synchronization, plus the per-tenant barrier operations.
+
+> Subordinate to [api.md](api.md), which is normative. The per-tenant VLAN range and OVS bridge were retired by #708, and with them the `ValidateVLAN` and `GetBridgeName` operations on every transport.
 
 ## Protocol Overview
 
@@ -16,8 +18,6 @@ Complete API reference for tenant management in go-trusted-platform. The Tenant 
 
 Each tenant receives:
 
-- **Isolated OVS Bridge**: Named `br-tenant-{name}` for network isolation
-- **VLAN Range**: Dedicated VLAN IDs (1-4094) for traffic segmentation
 - **Resource Quotas**: Compute, network, and storage limits
 - **DEK (Data Encryption Key)**: TPM-backed tenant-specific encryption
 - **State Management**: Lifecycle state machine with transitions
@@ -56,20 +56,18 @@ Each tenant receives:
 | 1 | ListTenants | List all tenants with pagination |
 | 2 | GetTenant | Get tenant by ID |
 | 3 | GetTenantByName | Get tenant by name |
-| 4 | CreateTenant | Create tenant with VLAN, bridge, quotas |
+| 4 | CreateTenant | Create tenant with quotas and DEK |
 | 5 | UpdateTenant | Update display name, labels, annotations |
 | 6 | DeleteTenant | Delete tenant and cleanup resources |
-| 7 | SuspendTenant | Suspend tenant (block traffic) |
+| 7 | SuspendTenant | Suspend tenant |
 | 8 | ResumeTenant | Resume suspended tenant |
 | 9 | GetQuotas | Get compute, network, storage quotas |
 | 10 | UpdateQuotas | Update tenant quotas |
 | 11 | GetUsage | Get current resource usage |
 | 12 | CheckQuota | Check quota availability |
-| 13 | ValidateVLAN | Validate VLAN for tenant |
-| 14 | GetBridgeName | Get OVS bridge name |
-| 15 | Sync | Synchronize tenant state |
-| 16 | RotateTenantDEK | Rotate tenant Data Encryption Key |
-| 17 | GetTenantDEKStatus | Get DEK status and usage metrics |
+| 13 | Sync | Synchronize tenant state |
+| 14 | RotateTenantDEK | Rotate tenant Data Encryption Key |
+| 15 | GetTenantDEKStatus | Get DEK status and usage metrics |
 
 ---
 
@@ -102,8 +100,6 @@ GET /api/v1/tenants?limit=100&offset=0
       "name": "engineering",
       "display_name": "Engineering Team",
       "state": "active",
-      "ovs_bridge": "br-tenant-engineering",
-      "vlan_range": { "start": 100, "end": 199 },
       "compute_quota": {
         "max_vms": 50,
         "max_containers": 200,
@@ -148,8 +144,6 @@ GET /api/v1/tenants/{id}
   "name": "engineering",
   "display_name": "Engineering Team",
   "state": "active",
-  "ovs_bridge": "br-tenant-engineering",
-  "vlan_range": { "start": 100, "end": 199 },
   "compute_quota": { ... },
   "network_quota": { ... },
   "storage_quota": { ... },
@@ -173,7 +167,7 @@ GET /api/v1/tenants/name/{name}
 
 ### 4. CreateTenant
 
-Create a new tenant with VLAN allocation and OVS bridge provisioning.
+Create a new tenant with its quotas, DEK and per-tenant barrier.
 
 **Request:**
 ```http
@@ -183,7 +177,6 @@ Content-Type: application/json
 {
   "name": "engineering",
   "display_name": "Engineering Team",
-  "vlan_range": { "start": 100, "end": 199 },
   "labels": { "env": "prod", "cost_center": "CC-1234" },
   "annotations": { "owner": "platform-team" }
 }
@@ -195,9 +188,6 @@ Content-Type: application/json
 |-------|------|----------|-------------|
 | name | string | Yes | Unique tenant identifier |
 | display_name | string | No | Human-readable name |
-| vlan_range | object | No | VLAN range (auto-allocated if omitted) |
-| vlan_range.start | uint16 | No | Start VLAN (1-4094) |
-| vlan_range.end | uint16 | No | End VLAN (1-4094) |
 | labels | object | No | Key-value labels |
 | annotations | object | No | Key-value annotations |
 
@@ -208,8 +198,6 @@ Content-Type: application/json
   "name": "engineering",
   "display_name": "Engineering Team",
   "state": "created",
-  "ovs_bridge": "br-tenant-engineering",
-  "vlan_range": { "start": 100, "end": 199 },
   "compute_quota": {
     "max_vms": 10,
     "max_containers": 50,
@@ -253,7 +241,7 @@ Content-Type: application/json
 
 ### 6. DeleteTenant
 
-Delete tenant and cleanup all resources (bridge, VLAN, quotas).
+Delete tenant and clean up its resources (DEK, barrier, quotas).
 
 **Request:**
 ```http
@@ -272,7 +260,7 @@ DELETE /api/v1/tenants/{id}
 
 ### 7. SuspendTenant
 
-Suspend tenant, blocking all network traffic on its bridge.
+Suspend tenant. Suspension blocks resource operations; it is a state change only, since a tenant has no network enforcement until tenant VRFs.
 
 **Request:**
 ```http
@@ -434,52 +422,9 @@ Content-Type: application/json
 }
 ```
 
-### 13. ValidateVLAN
+### 13. Sync
 
-Validate that a VLAN ID is within the tenant's allocated range.
-
-**Request:**
-```http
-POST /api/v1/tenants/{id}/validate-vlan
-Content-Type: application/json
-
-{
-  "vlan_id": 150
-}
-```
-
-**Response (200 OK):**
-```json
-{
-  "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
-  "vlan_id": 150,
-  "valid": true,
-  "message": "VLAN is valid for this tenant",
-  "timestamp": "2025-12-26T15:00:00Z"
-}
-```
-
-### 14. GetBridgeName
-
-Get the OVS bridge name assigned to a tenant.
-
-**Request:**
-```http
-GET /api/v1/tenants/{id}/bridge
-```
-
-**Response (200 OK):**
-```json
-{
-  "tenant_id": "550e8400-e29b-41d4-a716-446655440000",
-  "bridge_name": "br-tenant-engineering",
-  "timestamp": "2025-12-26T15:00:00Z"
-}
-```
-
-### 15. Sync
-
-Synchronize tenant manager state with external systems (VLAN allocator, bridge manager, usage tracker).
+Synchronize tenant manager state with external systems (usage tracker, quota reservations).
 
 **Request:**
 ```http
@@ -495,7 +440,7 @@ POST /api/v1/tenants/sync
 }
 ```
 
-### 16. RotateTenantDEK
+### 14. RotateTenantDEK
 
 Rotate the Data Encryption Key for a tenant. Supports background re-encryption.
 
@@ -525,7 +470,7 @@ Content-Type: application/json
 }
 ```
 
-### 17. GetTenantDEKStatus
+### 15. GetTenantDEKStatus
 
 Get DEK status including usage metrics and rotation progress.
 
@@ -596,8 +541,6 @@ service TenantService {
   rpc UpdateQuotas(UpdateQuotasRequest) returns (OperationStatusResponse);
   rpc GetUsage(GetUsageRequest) returns (UsageResponse);
   rpc CheckQuota(CheckQuotaRequest) returns (CheckQuotaResponse);
-  rpc ValidateVLAN(ValidateVLANRequest) returns (ValidateVLANResponse);
-  rpc GetBridgeName(GetBridgeNameRequest) returns (GetBridgeNameResponse);
   rpc Sync(SyncRequest) returns (SyncResponse);
   rpc RotateTenantDEK(RotateTenantDEKRequest) returns (RotateTenantDEKResponse);
   rpc GetTenantDEKStatus(GetTenantDEKStatusRequest) returns (TenantDEKStatusResponse);
@@ -626,8 +569,6 @@ service TenantService {
 {
   "name": "engineering",
   "display_name": "Engineering Team",
-  "vlan_range_start": 100,
-  "vlan_range_end": 199,
   "labels": { "env": "prod" },
   "annotations": {},
   "compute_quota": { "max_vms": 50, "max_containers": 200, "max_vcpus": 400, "max_memory_mb": 524288 },
@@ -651,11 +592,6 @@ service TenantService {
 { "tenant_id": "...", "resource": "vms", "amount": 10 }
 ```
 
-**ValidateVLANRequest:**
-```json
-{ "tenant_id": "...", "vlan_id": 150 }
-```
-
 ### gRPC Error Codes
 
 | Error Type | gRPC Code | Description |
@@ -666,10 +602,7 @@ service TenantService {
 | ErrInvalidState | FAILED_PRECONDITION | Invalid tenant state |
 | ErrInvalidTransition | FAILED_PRECONDITION | Illegal state transition |
 | ErrQuotaExceeded | RESOURCE_EXHAUSTED | Quota limit reached |
-| ErrVLANAllocationFailed | RESOURCE_EXHAUSTED | No VLANs available |
-| ErrInvalidVLANRange | INVALID_ARGUMENT | VLAN range invalid |
 | ErrStorageFailed | INTERNAL | Storage operation failed |
-| ErrBridgeOperationFailed | INTERNAL | OVS bridge operation failed |
 | ErrDEKOperationFailed | INTERNAL | TPM key operation failed |
 
 ### Go Client Example
@@ -700,8 +633,6 @@ func main() {
     resp, err := svc.CreateTenant(context.Background(), &daemon.CreateTenantRequest{
         Name:           "engineering",
         DisplayName:    "Engineering Team",
-        VLANRangeStart: 100,
-        VLANRangeEnd:   199,
     })
     if err != nil {
         log.Fatal(err)
@@ -733,8 +664,6 @@ Binary protocol on UDP port 9444.
 | OpTenantUpdateQuotas | 0x19 | Update quotas |
 | OpTenantGetUsage | 0x1A | Get usage stats |
 | OpTenantCheckQuota | 0x1B | Check quota availability |
-| OpTenantValidateVLAN | 0x1C | Validate VLAN |
-| OpTenantGetBridge | 0x1D | Get bridge name |
 | OpTenantSync | 0x1E | Synchronize state |
 | OpTenantRotateDEK | 0xEA | Rotate tenant DEK |
 | OpTenantGetDEKStatus | 0xEB | Get DEK status |
@@ -771,8 +700,6 @@ Binary protocol on UDP port 9444.
 {
   "name": "engineering",
   "display_name": "Engineering Team",
-  "vlan_start": 100,
-  "vlan_end": 199,
   "labels": { "env": "prod" },
   "annotations": {}
 }
@@ -820,16 +747,6 @@ Binary protocol on UDP port 9444.
 { "tenant_id": "...", "resource": "vms", "amount": 10 }
 ```
 
-**OpTenantValidateVLAN (0x1C):**
-```json
-{ "tenant_id": "...", "vlan_id": 150 }
-```
-
-**OpTenantGetBridge (0x1D):**
-```json
-{ "tenant_id": "..." }
-```
-
 **OpTenantSync (0x1E):**
 ```json
 {}
@@ -857,8 +774,6 @@ AI/LLM integration via stdio or HTTP on port 9445.
 | tenant_update_quotas | Update quotas |
 | tenant_get_usage | Get resource usage |
 | tenant_check_quota | Check quota availability |
-| tenant_validate_vlan | Validate VLAN for tenant |
-| tenant_get_bridge | Get OVS bridge name |
 | tenant_sync | Synchronize state |
 | tenant_rotate_dek | Rotate tenant DEK |
 | tenant_get_dek_status | Get DEK status and usage |
@@ -884,14 +799,12 @@ AI/LLM integration via stdio or HTTP on port 9445.
 ```json
 {
   "name": "tenant_create",
-  "description": "Create a new tenant with optional VLAN range and quotas",
+  "description": "Create a new tenant with optional quotas",
   "inputSchema": {
     "type": "object",
     "properties": {
       "name": { "type": "string", "description": "Unique tenant name" },
       "display_name": { "type": "string", "description": "Human-readable name" },
-      "vlan_start": { "type": "integer", "description": "Start VLAN (1-4094)" },
-      "vlan_end": { "type": "integer", "description": "End VLAN (1-4094)" },
       "labels": { "type": "object", "description": "Key-value labels" },
       "annotations": { "type": "object", "description": "Key-value annotations" },
       "max_vms": { "type": "integer", "description": "Max VMs (compute)" },
@@ -942,8 +855,6 @@ AI/LLM integration via stdio or HTTP on port 9445.
     "arguments": {
       "name": "engineering",
       "display_name": "Engineering Team",
-      "vlan_start": 100,
-      "vlan_end": 199,
       "max_vms": 50,
       "max_containers": 200
     }
@@ -961,8 +872,6 @@ AI/LLM integration via stdio or HTTP on port 9445.
     "name": "engineering",
     "display_name": "Engineering Team",
     "state": "created",
-    "ovs_bridge": "br-tenant-engineering",
-    "vlan_range": { "start": 100, "end": 199 },
     "compute_quota": { ... },
     "network_quota": { ... },
     "storage_quota": { ... },
@@ -995,8 +904,6 @@ Local IPC via `/run/platformd.sock`.
 | tenant.updateQuotas | Update quotas |
 | tenant.getUsage | Get usage |
 | tenant.checkQuota | Check quota |
-| tenant.validateVLAN | Validate VLAN |
-| tenant.getBridge | Get bridge name |
 | tenant.sync | Synchronize state |
 | tenant.rotateDEK | Rotate tenant DEK |
 | tenant.getDEKStatus | Get DEK status |
@@ -1034,8 +941,6 @@ type TenantGetByNameRequest struct {
 type TenantCreateRequest struct {
     Name        string            `codec:"name" json:"name"`
     DisplayName string            `codec:"display_name,omitempty" json:"display_name,omitempty"`
-    VLANStart   uint16            `codec:"vlan_start,omitempty" json:"vlan_start,omitempty"`
-    VLANEnd     uint16            `codec:"vlan_end,omitempty" json:"vlan_end,omitempty"`
     Labels      map[string]string `codec:"labels,omitempty" json:"labels,omitempty"`
     Annotations map[string]string `codec:"annotations,omitempty" json:"annotations,omitempty"`
 }
@@ -1060,14 +965,6 @@ type TenantCheckQuotaRequest struct {
 }
 ```
 
-**TenantValidateVLANRequest:**
-```go
-type TenantValidateVLANRequest struct {
-    TenantID string `codec:"tenant_id" json:"tenant_id"`
-    VLANID   uint16 `codec:"vlan_id" json:"vlan_id"`
-}
-```
-
 ### CLI Usage
 
 ```bash
@@ -1082,8 +979,6 @@ platformctl tenant get --name engineering
 platformctl tenant create \
   --name engineering \
   --display-name "Engineering Team" \
-  --vlan-start 100 \
-  --vlan-end 199
 
 # Update tenant
 platformctl tenant update \
@@ -1102,9 +997,6 @@ platformctl tenant quotas get --id 550e8400-e29b-41d4-a716-446655440000
 platformctl tenant quotas update --id ... --max-vms 100 --max-containers 500
 platformctl tenant usage --id 550e8400-e29b-41d4-a716-446655440000
 
-# VLAN operations
-platformctl tenant vlan validate --id ... --vlan-id 150
-platformctl tenant bridge --id 550e8400-e29b-41d4-a716-446655440000
 
 # DEK operations
 platformctl tenant dek rotate --id 550e8400-e29b-41d4-a716-446655440000
@@ -1146,16 +1038,6 @@ platformctl tenant sync
 
 ---
 
-## VLAN Range Allocation
-
-- Valid VLAN IDs: 1-4094
-- Each tenant receives an exclusive VLAN range
-- Auto-allocation assigns contiguous blocks if not specified
-- VLAN ranges cannot overlap between tenants
-- Bridge naming convention: `br-tenant-{name}`
-
----
-
 ## Error Codes
 
 | Error | HTTP | gRPC | Description |
@@ -1167,9 +1049,6 @@ platformctl tenant sync
 | ErrInvalidTransition | 409 | FAILED_PRECONDITION | Illegal state change |
 | ErrQuotaExceeded | 403 | RESOURCE_EXHAUSTED | Quota limit reached |
 | ErrResourceLimitReached | 403 | RESOURCE_EXHAUSTED | Resource limit hit |
-| ErrInvalidVLANRange | 400 | INVALID_ARGUMENT | VLAN range invalid |
-| ErrVLANAllocationFailed | 500 | RESOURCE_EXHAUSTED | VLAN allocation error |
-| ErrBridgeOperationFailed | 500 | INTERNAL | OVS bridge error |
 | ErrDEKOperationFailed | 500 | INTERNAL | TPM DEK error |
 | ErrStorageFailed | 500 | INTERNAL | Storage error |
 | ErrBarrierNotSupported | 501 | UNIMPLEMENTED | Barrier client not configured (no SDK wired) |
@@ -1253,8 +1132,8 @@ the daemon. `daemon.New()` automatically wires that instance into:
   `FailedPrecondition`)
 
 A single `*tenant.Manager` instance is shared across REST, gRPC, QUIC, MCP,
-and Unix-socket transports so per-tenant state (CRUD, quotas, VLAN, OVS
-bridge, DEK, barrier lifecycle) is identical regardless of which transport
+and Unix-socket transports so per-tenant state (CRUD, quotas, DEK, barrier
+lifecycle) is identical regardless of which transport
 the caller chose.
 
 ---

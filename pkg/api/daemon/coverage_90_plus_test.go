@@ -726,17 +726,6 @@ func (m *mockTenantManager90) CheckQuota(ctx context.Context, id string, resourc
 	return m.err
 }
 
-func (m *mockTenantManager90) ValidateVLAN(ctx context.Context, id string, vlanID uint16) error {
-	return m.err
-}
-
-func (m *mockTenantManager90) GetBridgeName(ctx context.Context, id string) (string, error) {
-	if m.err != nil {
-		return "", m.err
-	}
-	return "br-tenant", nil
-}
-
 func (m *mockTenantManager90) Sync(ctx context.Context) error {
 	return m.err
 }
@@ -1028,24 +1017,6 @@ func TestTenantGRPCServer_CheckQuota_NoManager(t *testing.T) {
 	ctx := context.Background()
 
 	resp, err := server.CheckQuota(ctx, nil)
-	assert.Nil(t, resp)
-	assert.Error(t, err)
-}
-
-func TestTenantGRPCServer_ValidateVLAN_NoManager(t *testing.T) {
-	server := NewTenantGRPCServer()
-	ctx := context.Background()
-
-	resp, err := server.ValidateVLAN(ctx, nil)
-	assert.Nil(t, resp)
-	assert.Error(t, err)
-}
-
-func TestTenantGRPCServer_GetBridge_NoManager(t *testing.T) {
-	server := NewTenantGRPCServer()
-	ctx := context.Background()
-
-	resp, err := server.GetBridgeName(ctx, nil)
 	assert.Nil(t, resp)
 	assert.Error(t, err)
 }

@@ -23,6 +23,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -117,8 +118,8 @@ func (d *DHTBackend) CreatePool(ctx context.Context, pool *ipam.Pool) error {
 	if pool.Name == "" {
 		return ipam.ErrInvalidPoolName
 	}
-	if !pool.CIDR.IsValid() {
-		return ipam.ErrInvalidCIDR
+	if err := ipam.NewPoolManager().ValidatePool(pool); err != nil {
+		return err
 	}
 
 	// Check if pool already exists
@@ -136,8 +137,8 @@ func (d *DHTBackend) CreatePool(ctx context.Context, pool *ipam.Pool) error {
 		return ipam.ErrPoolCIDROverlaps
 	}
 
-	// Initialize pool stats
-	pool.TotalIPs = calculatePoolSize(pool.CIDR)
+	// Initialize pool stats: what is actually allocatable.
+	pool.TotalIPs = pool.AllocatableIPs()
 	pool.AvailableIPs = pool.TotalIPs
 	pool.AllocatedIPs = 0
 
@@ -290,20 +291,27 @@ func (d *DHTBackend) UpdatePool(ctx context.Context, pool *ipam.Pool) error {
 		}
 	}
 
-	// Update name index if name changed
-	if pool.Name != existing.Name {
+	// Validate and check the name before changing anything, so a refused
+	// update leaves the index and the store exactly as they were.
+	if err := ipam.NewPoolManager().ValidatePool(pool); err != nil {
+		return err
+	}
+	renamed := pool.Name != existing.Name
+	if renamed {
 		if _, loaded := d.poolNameIndex.Load(pool.Name); loaded {
 			return ipam.ErrPoolNameExists
 		}
-		d.poolNameIndex.Delete(existing.Name)
-		d.poolNameIndex.Store(pool.Name, pool.ID)
 	}
 
 	pool.UpdatedAt = time.Now()
 	pool.CreatedAt = existing.CreatedAt
-	pool.TotalIPs = existing.TotalIPs
 	pool.AllocatedIPs = existing.AllocatedIPs
-	pool.AvailableIPs = existing.AvailableIPs
+	// The size follows the (possibly changed) reserved prefixes.
+	pool.TotalIPs = pool.AllocatableIPs()
+	pool.AvailableIPs = 0
+	if pool.TotalIPs > pool.AllocatedIPs {
+		pool.AvailableIPs = pool.TotalIPs - pool.AllocatedIPs
+	}
 
 	// Store in DHT
 	key := dhtPoolPrefix + pool.ID
@@ -319,6 +327,10 @@ func (d *DHTBackend) UpdatePool(ctx context.Context, pool *ipam.Pool) error {
 		return &ipam.ErrPoolOperationFailed{PoolID: pool.ID, Operation: "update", Cause: err}
 	}
 
+	if renamed {
+		d.poolNameIndex.Delete(existing.Name)
+		d.poolNameIndex.Store(pool.Name, pool.ID)
+	}
 	d.poolCache.Store(pool.ID, pool.Clone())
 
 	return nil
@@ -384,20 +396,22 @@ func (d *DHTBackend) Allocate(ctx context.Context, req *ipam.AllocationRequest) 
 		return nil, err
 	}
 
-	// Try random IPs until one succeeds
+	// Try random addresses of the dynamic window until one succeeds.
 	for attempt := 0; attempt < maxAllocationRetries; attempt++ {
-		ip, err := randomIPInCIDR(pool.CIDR)
+		ip, err := pool.RandomDynamic()
+		var reserved *ipam.ErrIPReserved
+		if errors.As(err, &reserved) {
+			continue
+		}
+		if errors.Is(err, ipam.ErrPoolExhausted) {
+			return nil, err
+		}
 		if err != nil {
 			return nil, &ipam.ErrAllocationFailed{PoolID: req.PoolID, Reason: "failed to generate random IP", Cause: err}
 		}
 
 		// Skip network and broadcast addresses
 		if isNetworkOrBroadcast(pool.CIDR, ip) {
-			continue
-		}
-
-		// Skip gateway address
-		if pool.Gateway.IsValid() && ip == pool.Gateway {
 			continue
 		}
 
@@ -438,17 +452,9 @@ func (d *DHTBackend) AllocateSpecific(ctx context.Context, req *ipam.AllocationR
 		return nil, err
 	}
 
-	// Verify IP is in pool
-	if !pool.CIDR.Contains(req.RequestedIP) {
-		return nil, ipam.ErrIPNotInPool
-	}
-
-	// Check for network/broadcast addresses
-	if isNetworkAddress(pool.CIDR, req.RequestedIP) {
-		return nil, ipam.ErrNetworkAddress
-	}
-	if isBroadcastAddress(pool.CIDR, req.RequestedIP) {
-		return nil, ipam.ErrBroadcastAddress
+	// The address must be in the pool, usable, and not reserved.
+	if err := pool.CheckSpecific(req.RequestedIP); err != nil {
+		return nil, err
 	}
 
 	return d.tryClaim(ctx, pool, req.RequestedIP, req)

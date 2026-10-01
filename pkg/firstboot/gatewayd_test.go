@@ -35,7 +35,7 @@ platform:
   name: lab-node-1
 sdn:
   enabled: true
-  bridge: trusted0
+  bridge: br-fabric
 platform-ca-file: /etc/gatewayd/cp-ca.pem
 trust:
   bmc:

@@ -1864,8 +1864,6 @@ func TestTenantOpcodeToString(t *testing.T) {
 		{OpTenantUpdateQuotas, "TenantUpdateQuotas"},
 		{OpTenantGetUsage, "TenantGetUsage"},
 		{OpTenantCheckQuota, "TenantCheckQuota"},
-		{OpTenantValidateVLAN, "TenantValidateVLAN"},
-		{OpTenantGetBridge, "TenantGetBridge"},
 		{OpTenantSync, "TenantSync"},
 		{OpTenantRotateDEK, "TenantRotateDEK"},
 		{OpTenantGetDEKStatus, "TenantGetDEKStatus"},

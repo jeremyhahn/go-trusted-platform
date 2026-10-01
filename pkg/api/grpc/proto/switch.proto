@@ -35,6 +35,7 @@ message SwitchPortStatus {
   bool enabled = 5;
   bool link_up = 6;
   string description = 7;
+  uint32 native_vlan = 8;  // trunk native (untagged) VLAN; 0 when none
 }
 
 // ListSwitchPortsRequest requests all ports on a named switch.

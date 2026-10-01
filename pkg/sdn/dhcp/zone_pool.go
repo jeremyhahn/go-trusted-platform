@@ -59,10 +59,6 @@ const (
 	// PoolResolutionZone indicates the pool was selected by matching the
 	// serving network's zone via ListPoolsByZone (derived).
 	PoolResolutionZone
-
-	// PoolResolutionSegment indicates the pool was selected via a legacy
-	// Segment name binding (lowest precedence, kept for backward compatibility).
-	PoolResolutionSegment
 )
 
 // ResolvePoolForZone selects an IPAM pool ID for a DHCP service using the
@@ -73,9 +69,6 @@ const (
 //  2. Zone-derived: when zone is non-empty, Allocator.ListPoolsByZone is called
 //     and the single matching pool is returned. Multiple matches return
 //     ErrAmbiguousZonePool; zero matches return ErrNoPoolForZone.
-//  3. Segment fallback: when segmentName is non-empty, the allocator's
-//     GetPoolByName is called with segmentName as the pool name. This preserves
-//     backward compatibility with templates that set gateway.dhcp.segment.
 //
 // If none of the inputs resolve to a pool, ErrPoolIDRequired is returned.
 //
@@ -86,7 +79,6 @@ func ResolvePoolForZone(
 	alloc ipam.Allocator,
 	explicitPoolID string,
 	zone string,
-	segmentName string,
 ) (poolID string, resolution PoolResolution, err error) {
 	// 1. Explicit binding wins unconditionally.
 	if explicitPoolID != "" {
@@ -107,15 +99,6 @@ func ResolvePoolForZone(
 		default:
 			return "", 0, ErrAmbiguousZonePool{Zone: zone, Count: len(pools)}
 		}
-	}
-
-	// 3. Segment legacy fallback.
-	if segmentName != "" {
-		pool, getErr := alloc.GetPoolByName(ctx, segmentName)
-		if getErr != nil {
-			return "", 0, getErr
-		}
-		return pool.ID, PoolResolutionSegment, nil
 	}
 
 	return "", 0, ErrPoolIDRequired

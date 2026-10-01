@@ -287,98 +287,6 @@ func TestErrStorageFailed_ImplementsError(t *testing.T) {
 	var _ error = ErrStorageFailed{}
 }
 
-func TestErrBridgeOperationFailed_Error(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      ErrBridgeOperationFailed
-		expected string
-	}{
-		{
-			name:     "with bridge create operation",
-			err:      ErrBridgeOperationFailed{Bridge: "br-tenant-1", Operation: "create", Err: errors.New("already exists")},
-			expected: "bridge operation failed: create on br-tenant-1: already exists",
-		},
-		{
-			name:     "with bridge delete operation",
-			err:      ErrBridgeOperationFailed{Bridge: "br-test", Operation: "delete", Err: errors.New("in use")},
-			expected: "bridge operation failed: delete on br-test: in use",
-		},
-		{
-			name:     "with nil error",
-			err:      ErrBridgeOperationFailed{Bridge: "br-nil", Operation: "configure", Err: nil},
-			expected: "bridge operation failed: configure on br-nil: <nil>",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.err.Error(); got != tt.expected {
-				t.Errorf("ErrBridgeOperationFailed.Error() = %q, want %q", got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestErrBridgeOperationFailed_Unwrap(t *testing.T) {
-	wrappedErr := errors.New("bridge error")
-	err := ErrBridgeOperationFailed{Bridge: "br-test", Operation: "create", Err: wrappedErr}
-
-	unwrapped := err.Unwrap()
-	if unwrapped != wrappedErr {
-		t.Errorf("ErrBridgeOperationFailed.Unwrap() = %v, want %v", unwrapped, wrappedErr)
-	}
-}
-
-func TestErrBridgeOperationFailed_ImplementsError(t *testing.T) {
-	var _ error = ErrBridgeOperationFailed{}
-}
-
-func TestErrVLANAllocationFailed_Error(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      ErrVLANAllocationFailed
-		expected string
-	}{
-		{
-			name:     "with tenant ID and error",
-			err:      ErrVLANAllocationFailed{TenantID: "tenant-123", Err: errors.New("no VLANs available")},
-			expected: "VLAN allocation failed for tenant tenant-123: no VLANs available",
-		},
-		{
-			name:     "with empty tenant ID",
-			err:      ErrVLANAllocationFailed{TenantID: "", Err: errors.New("range exhausted")},
-			expected: "VLAN allocation failed for tenant : range exhausted",
-		},
-		{
-			name:     "with nil error",
-			err:      ErrVLANAllocationFailed{TenantID: "tenant-456", Err: nil},
-			expected: "VLAN allocation failed for tenant tenant-456: <nil>",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.err.Error(); got != tt.expected {
-				t.Errorf("ErrVLANAllocationFailed.Error() = %q, want %q", got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestErrVLANAllocationFailed_Unwrap(t *testing.T) {
-	wrappedErr := errors.New("vlan error")
-	err := ErrVLANAllocationFailed{TenantID: "tenant-123", Err: wrappedErr}
-
-	unwrapped := err.Unwrap()
-	if unwrapped != wrappedErr {
-		t.Errorf("ErrVLANAllocationFailed.Unwrap() = %v, want %v", unwrapped, wrappedErr)
-	}
-}
-
-func TestErrVLANAllocationFailed_ImplementsError(t *testing.T) {
-	var _ error = ErrVLANAllocationFailed{}
-}
-
 func TestErrQuotaExceeded_Error(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -456,47 +364,6 @@ func TestErrResourceLimitReached_ImplementsError(t *testing.T) {
 	var _ error = ErrResourceLimitReached{}
 }
 
-func TestErrInvalidVLANRange_Error(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      ErrInvalidVLANRange
-		expected string
-	}{
-		{
-			name:     "end less than start",
-			err:      ErrInvalidVLANRange{Start: 200, End: 100, Reason: "end VLAN must be greater than or equal to start VLAN"},
-			expected: "invalid VLAN range 200-100: end VLAN must be greater than or equal to start VLAN",
-		},
-		{
-			name:     "start out of range",
-			err:      ErrInvalidVLANRange{Start: 0, End: 100, Reason: "start VLAN must be between 1 and 4094"},
-			expected: "invalid VLAN range 0-100: start VLAN must be between 1 and 4094",
-		},
-		{
-			name:     "end out of range",
-			err:      ErrInvalidVLANRange{Start: 100, End: 5000, Reason: "end VLAN must be between 1 and 4094"},
-			expected: "invalid VLAN range 100-5000: end VLAN must be between 1 and 4094",
-		},
-		{
-			name:     "boundary values",
-			err:      ErrInvalidVLANRange{Start: 1, End: 4094, Reason: "test reason"},
-			expected: "invalid VLAN range 1-4094: test reason",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.err.Error(); got != tt.expected {
-				t.Errorf("ErrInvalidVLANRange.Error() = %q, want %q", got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestErrInvalidVLANRange_ImplementsError(t *testing.T) {
-	var _ error = ErrInvalidVLANRange{}
-}
-
 func TestErrDEKOperationFailed_Error(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -543,6 +410,19 @@ func TestErrDEKOperationFailed_ImplementsError(t *testing.T) {
 	var _ error = ErrDEKOperationFailed{}
 }
 
+func TestErrConfigValidation_ImplementsError(t *testing.T) {
+	var _ error = ErrConfigValidation{}
+}
+
+func TestErrorUniqueness(t *testing.T) {
+	// Test that different error types with same data produce different messages
+	err1 := ErrTenantExists{Name: "test"}
+	err2 := ErrTenantNotFound{Name: "test"}
+
+	if err1.Error() == err2.Error() {
+		t.Error("ErrTenantExists and ErrTenantNotFound should have different messages")
+	}
+}
 func TestErrConfigValidation_Error(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -551,13 +431,13 @@ func TestErrConfigValidation_Error(t *testing.T) {
 	}{
 		{
 			name:     "field validation",
-			err:      ErrConfigValidation{Field: "DefaultVLANRangeStart", Reason: "must be between 1 and 4094"},
-			expected: "configuration validation failed: DefaultVLANRangeStart: must be between 1 and 4094",
+			err:      ErrConfigValidation{Field: "DEKAlgorithm", Reason: "unsupported algorithm"},
+			expected: "configuration validation failed: DEKAlgorithm: unsupported algorithm",
 		},
 		{
 			name:     "empty field",
-			err:      ErrConfigValidation{Field: "BridgePrefix", Reason: "must not be empty"},
-			expected: "configuration validation failed: BridgePrefix: must not be empty",
+			err:      ErrConfigValidation{Field: "", Reason: "must not be empty"},
+			expected: "configuration validation failed: : must not be empty",
 		},
 		{
 			name:     "nested field",
@@ -575,10 +455,6 @@ func TestErrConfigValidation_Error(t *testing.T) {
 	}
 }
 
-func TestErrConfigValidation_ImplementsError(t *testing.T) {
-	var _ error = ErrConfigValidation{}
-}
-
 func TestAllErrorsImplementError(t *testing.T) {
 	// Ensure all error types implement the error interface
 	errs := []error{
@@ -588,11 +464,8 @@ func TestAllErrorsImplementError(t *testing.T) {
 		ErrInvalidState{Current: StateActive},
 		ErrInvalidTransition{From: StateCreated, To: StateDeleted},
 		ErrStorageFailed{Operation: "test", Err: nil},
-		ErrBridgeOperationFailed{Bridge: "test", Operation: "test", Err: nil},
-		ErrVLANAllocationFailed{TenantID: "test", Err: nil},
 		ErrQuotaExceeded{TenantID: "test", Resource: "test", Requested: 1, Available: 0},
 		ErrResourceLimitReached{TenantID: "test", Resource: "test", Limit: 1},
-		ErrInvalidVLANRange{Start: 1, End: 10, Reason: "test"},
 		ErrDEKOperationFailed{TenantID: "test", Operation: "test", Err: nil},
 		ErrConfigValidation{Field: "test", Reason: "test"},
 	}
@@ -607,12 +480,28 @@ func TestAllErrorsImplementError(t *testing.T) {
 	}
 }
 
-func TestErrorUniqueness(t *testing.T) {
-	// Test that different error types with same data produce different messages
-	err1 := ErrTenantExists{Name: "test"}
-	err2 := ErrTenantNotFound{Name: "test"}
-
-	if err1.Error() == err2.Error() {
-		t.Error("ErrTenantExists and ErrTenantNotFound should have different messages")
+// TestBarrierAndWrapperErrors covers the barrier errors, the nil-status
+// sentinel and the message/wrapped error helpers.
+func TestBarrierAndWrapperErrors(t *testing.T) {
+	cause := errors.New("sealed")
+	bf := ErrBarrierOperationFailed{TenantID: "t1", Operation: "unseal", Err: cause}
+	if bf.Error() != "barrier operation failed for tenant t1: unseal: sealed" {
+		t.Errorf("ErrBarrierOperationFailed.Error() = %q", bf.Error())
+	}
+	if !errors.Is(bf, cause) {
+		t.Error("ErrBarrierOperationFailed must unwrap to its cause")
+	}
+	if got := (ErrBarrierNotSupported{Operation: "seal"}).Error(); got != "barrier operation not supported: seal" {
+		t.Errorf("ErrBarrierNotSupported.Error() = %q", got)
+	}
+	if ErrNilBarrierStatus.Error() != "tenant: nil barrier status response from SDK" {
+		t.Errorf("ErrNilBarrierStatus.Error() = %q", ErrNilBarrierStatus.Error())
+	}
+	if (&MessageError{Msg: "m"}).Error() != "m" {
+		t.Error("MessageError.Error() must return its message")
+	}
+	w := &WrappedError{Msg: "ctx", Err: cause}
+	if w.Error() != "ctx: sealed" || !errors.Is(w, cause) {
+		t.Errorf("WrappedError = %q, unwrap ok = %v", w.Error(), errors.Is(w, cause))
 	}
 }

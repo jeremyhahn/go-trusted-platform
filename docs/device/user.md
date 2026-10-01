@@ -34,8 +34,9 @@ because a machine presented keys.
    device record, or from a vTPM bundle. Without it you fall back to matching
    on EK serial or MAC — which works, and is weaker.
 3. **Decide your network names up front.** Profiles reference network phases by
-   name. The defaults are `provisioning` (enrollment), `trusted`
-   (post-enrollment) and `quarantine` (failure). You can rename them per
+   name. The defaults are `provisioning` (enrollment), `admitted`
+   (post-enrollment: the port carries the zones of the device's role) and
+   `quarantine` (failure). You can rename them per
    profile, but the defaults are what everything else assumes.
 
 ---
@@ -53,16 +54,38 @@ The version you actually want, with the identity bound:
 ```bash
 platformctl device profile create \
     --name node-02 \
-    --role server \
-    --zone trusted \
+    --role worker \
     --ek-serial 1234567890 \
     --mac 00:25:90:FF:AA:02 \
     --ek-cert /etc/platform/ek-certs/node-02.pem \
     --config-file /etc/platform/node-02.yaml
 ```
 
-`--zone trusted` names today's built-in zone; the
-[reference network](../architecture/reference-network.md) replaces it (#708).
+With no `--zone`, an admitted device gets its role's zones: a `gateway` gets
+the gateway port class, a `control-plane` or `worker` node the hypervisor port
+class (its trunk VLANs, native VLAN provisioning). A role without a port class
+(`server`, `iot`, …) is admitted only with an explicit `--zone`; without one
+admission fails closed and the port stays where it is. See the
+[reference network](../architecture/reference-network.md).
+
+### Which zones a profile may name
+
+An explicit `--zone` makes the admitted port an access port on that zone, so the
+zone set decides which zones are admission targets (one rule,
+`policy.ValidateAdmissionZone`, enforced when the device is admitted):
+
+| Zone | Admission | Why |
+|------|-----------|-----|
+| `storage`, `backup`, `hypervisor`, an owner-defined zone | allowed | ordinary underlay zones |
+| `management` | refused | out-of-band, BMCs only |
+| `transit` | refused | the gateway edge only |
+| `fabric` | refused | the VXLAN underlay; a host joins it as a VTEP, not as an access port |
+| `provisioning`, `quarantine` | refused | lifecycle zones, entered through their own phases |
+| `control-plane` | only behind an audited path | allowed only when some zone opens a `privileged_access` path into control-plane, so naming it in a profile cannot skip that audit |
+| an undeclared zone | refused | |
+
+A refused zone fails admission with `ErrAdmissionZone` naming the zone and the
+reason, and the port stays where it is.
 
 **`--ek-cert` takes a file path or an inline PEM string** — it looks for
 `-----BEGIN` to decide which. Either way it must parse as an X.509 certificate,

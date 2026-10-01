@@ -64,6 +64,7 @@ func compatTestSwitchPortStatus() *platformv1.SwitchPortStatus {
 		Enabled:     true,
 		LinkUp:      true,
 		Description: "uplink to nexus-1",
+		NativeVlan:  10,
 	}
 }
 
@@ -147,11 +148,18 @@ func TestQUICSwitchPortStatusToPb(t *testing.T) {
 		Enabled:     true,
 		LinkUp:      true,
 		Description: "uplink to nexus-1",
+		NativeVLAN:  10,
 	}
 
 	pb := portStatusToPb(native)
 	if !proto.Equal(pb, compatTestSwitchPortStatus()) {
 		t.Fatalf("portStatusToPb mismatch:\n got: %+v\n want: %+v", pb, compatTestSwitchPortStatus())
+	}
+	if grpcPB := portStatusToProto(native); !proto.Equal(grpcPB, compatTestSwitchPortStatus()) {
+		t.Fatalf("portStatusToProto mismatch:\n got: %+v\n want: %+v", grpcPB, compatTestSwitchPortStatus())
+	}
+	if portStatusToProto(nil) != nil {
+		t.Fatal("portStatusToProto(nil) = non-nil, want nil")
 	}
 
 	if portStatusToPb(nil) != nil {

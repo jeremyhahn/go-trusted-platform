@@ -749,7 +749,7 @@ func TestSessionCrossTransportParity(t *testing.T) {
 			Name:       "parity-profile",
 			Model:      "X10SDV",
 			Role:       entities.DeviceRoleServer,
-			Zone:       "trusted",
+			Zone:       "control-plane",
 			EKSerial:   "EK-PARITY",
 			EKCert:     newEKCertPEMForTest(t),
 			MACAddress: "aa:bb:cc:dd:ee:99",

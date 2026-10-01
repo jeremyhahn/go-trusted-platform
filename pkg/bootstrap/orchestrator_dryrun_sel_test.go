@@ -20,14 +20,13 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 )
 
 func dryRunSELConfig() *BootstrapConfig {
 	return &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "198.51.100.91"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "test.local"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "198.51.100.91"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "test.local"},
 		Nodes: []NodeConfig{{
 			Hostname: "lab-node-2", Role: RoleControlPlane,
 			BMCAddress: "198.18.1.102", BMCUser: "admin", BMCPassword: "pass", BMCProtocol: "ipmi",

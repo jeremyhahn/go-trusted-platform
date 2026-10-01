@@ -132,11 +132,6 @@ func (a *GRPCAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions
 		Annotations: opts.Annotations,
 	}
 
-	if opts.VLANRange != nil {
-		req.VlanRangeStart = uint32(opts.VLANRange.Start)
-		req.VlanRangeEnd = uint32(opts.VLANRange.End)
-	}
-
 	resp, err := a.client.CreateTenant(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "CreateTenant", Err: err}
@@ -404,47 +399,6 @@ func (a *GRPCAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*
 // Network Operations
 // =============================================================================
 
-// ValidateVLAN validates a VLAN ID for a tenant
-func (a *GRPCAdapter) ValidateVLAN(ctx context.Context, opts ValidateVLANOptions) (*ValidateVLANResult, error) {
-	req := &platformv1.ValidateVLANRequest{
-		TenantId: opts.TenantID,
-		VlanId:   uint32(opts.VLANID),
-	}
-
-	resp, err := a.client.ValidateVLAN(ctx, req)
-	if err != nil {
-		return nil, ErrGRPCCallFailed{Method: "ValidateVLAN", Err: err}
-	}
-
-	return &ValidateVLANResult{
-		TenantID: resp.GetTenantId(),
-		VLANID:   uint16(resp.GetVlanId()),
-		Valid:    resp.GetValid(),
-		Message:  resp.GetMessage(),
-	}, nil
-}
-
-// GetBridgeName retrieves the OVS bridge name for a tenant
-func (a *GRPCAdapter) GetBridgeName(ctx context.Context, opts GetBridgeNameOptions) (*GetBridgeNameResult, error) {
-	req := &platformv1.GetBridgeNameRequest{
-		TenantId: opts.TenantID,
-	}
-
-	resp, err := a.client.GetBridgeName(ctx, req)
-	if err != nil {
-		return nil, ErrGRPCCallFailed{Method: "GetBridgeName", Err: err}
-	}
-
-	return &GetBridgeNameResult{
-		TenantID:   resp.GetTenantId(),
-		BridgeName: resp.GetBridgeName(),
-	}, nil
-}
-
-// =============================================================================
-// Sync Operations
-// =============================================================================
-
 // SyncTenants synchronizes tenant manager state
 func (a *GRPCAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, error) {
 	req := &platformv1.SyncTenantsRequest{}
@@ -475,16 +429,8 @@ func (a *GRPCAdapter) pbToTenantData(pb *platformv1.Tenant) *TenantData {
 		Name:        pb.GetName(),
 		DisplayName: pb.GetDisplayName(),
 		State:       a.pbToTenantState(pb.GetState()),
-		OVSBridge:   pb.GetOvsBridge(),
 		Labels:      pb.GetLabels(),
 		Annotations: pb.GetAnnotations(),
-	}
-
-	if pb.GetVlanStart() > 0 || pb.GetVlanEnd() > 0 {
-		data.VLANRange = &VLANRangeData{
-			Start: uint16(pb.GetVlanStart()),
-			End:   uint16(pb.GetVlanEnd()),
-		}
 	}
 
 	if pb.GetComputeQuota() != nil {

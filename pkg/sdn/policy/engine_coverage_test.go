@@ -363,7 +363,7 @@ func TestEngine_AuthenticatePortStateRecording(t *testing.T) {
 
 	t.Run("Auth attempts incremented", func(t *testing.T) {
 		// Create valid cert with zone extension for Z3-compatible authentication
-		cert := createZoneCert(t, "tenant-1", "trusted")
+		cert := createZoneCert(t, "tenant-1", "control-plane")
 
 		// Authenticate successfully using zone-aware engine
 		engineWithZones := createTestEngineWithZones(t)

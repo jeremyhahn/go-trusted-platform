@@ -102,6 +102,10 @@ func runPortStatus(flags *switchFlags, getFlags func() *cli.CommonFlags) error {
 		printer.PrintKeyValue("Trunk VLANs", strings.Join(vlanStrs, ", "))
 	}
 
+	if status.NativeVLAN != 0 {
+		printer.PrintKeyValue("Native VLAN", strconv.Itoa(int(status.NativeVLAN)))
+	}
+
 	printer.PrintKeyValue("Enabled", fmt.Sprintf("%t", status.Enabled))
 	printer.PrintKeyValue("Link Up", fmt.Sprintf("%t", status.LinkUp))
 

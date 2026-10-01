@@ -26,13 +26,13 @@ import (
 )
 
 func TestDefaultServiceConfig(t *testing.T) {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 
 	assert.NotNil(t, cfg)
 	assert.NotNil(t, cfg.IPXEConfig)
 	assert.Equal(t, "", cfg.BridgeName)
-	assert.Equal(t, DefaultQuarantineVLAN, cfg.QuarantineVLAN)
-	assert.Equal(t, DefaultProvisioningVLAN, cfg.ProvisioningVLAN)
+	assert.Equal(t, testQuarantineVLAN, cfg.QuarantineVLAN)
+	assert.Equal(t, testProvisioningVLAN, cfg.ProvisioningVLAN)
 	assert.NotNil(t, cfg.Firmware)
 	assert.Equal(t, "", cfg.RegistryAddr)
 	assert.Equal(t, DefaultISORef, cfg.DefaultISORef)
@@ -59,7 +59,7 @@ func TestDefaultFirmwareConfig(t *testing.T) {
 }
 
 func TestServiceConfig_Validate_ValidConfig(t *testing.T) {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = "br-int"
 
 	err := cfg.Validate()
@@ -67,7 +67,7 @@ func TestServiceConfig_Validate_ValidConfig(t *testing.T) {
 }
 
 func TestServiceConfig_Validate_NilIPXEConfig(t *testing.T) {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = "br-int"
 	cfg.IPXEConfig = nil
 
@@ -78,7 +78,7 @@ func TestServiceConfig_Validate_NilIPXEConfig(t *testing.T) {
 }
 
 func TestServiceConfig_Validate_EmptyBridgeName(t *testing.T) {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = ""
 
 	err := cfg.Validate()
@@ -98,7 +98,7 @@ func TestServiceConfig_Validate_InvalidQuarantineVLAN(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := DefaultServiceConfig()
+			cfg := testServiceConfig()
 			cfg.BridgeName = "br-int"
 			cfg.QuarantineVLAN = tt.vlan
 
@@ -121,7 +121,7 @@ func TestServiceConfig_Validate_InvalidProvisioningVLAN(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := DefaultServiceConfig()
+			cfg := testServiceConfig()
 			cfg.BridgeName = "br-int"
 			cfg.ProvisioningVLAN = tt.vlan
 
@@ -134,7 +134,7 @@ func TestServiceConfig_Validate_InvalidProvisioningVLAN(t *testing.T) {
 }
 
 func TestServiceConfig_Validate_SameVLANs(t *testing.T) {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = "br-int"
 	cfg.QuarantineVLAN = 100
 	cfg.ProvisioningVLAN = 100
@@ -156,7 +156,7 @@ func TestServiceConfig_Validate_InvalidInstallTimeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := DefaultServiceConfig()
+			cfg := testServiceConfig()
 			cfg.BridgeName = "br-int"
 			cfg.InstallTimeout = tt.timeout
 
@@ -179,7 +179,7 @@ func TestServiceConfig_Validate_InvalidEnrollmentTimeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := DefaultServiceConfig()
+			cfg := testServiceConfig()
 			cfg.BridgeName = "br-int"
 			cfg.EnrollmentTimeout = tt.timeout
 
@@ -192,7 +192,7 @@ func TestServiceConfig_Validate_InvalidEnrollmentTimeout(t *testing.T) {
 }
 
 func TestServiceConfig_Validate_NegativeMaxRetries(t *testing.T) {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = "br-int"
 	cfg.MaxRetries = -1
 
@@ -203,7 +203,7 @@ func TestServiceConfig_Validate_NegativeMaxRetries(t *testing.T) {
 }
 
 func TestServiceConfig_Validate_WebhookEnabledNoSecret(t *testing.T) {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = "br-int"
 	cfg.WebhookEnabled = true
 	cfg.WebhookSecret = ""
@@ -215,7 +215,7 @@ func TestServiceConfig_Validate_WebhookEnabledNoSecret(t *testing.T) {
 }
 
 func TestServiceConfig_Validate_WebhookEnabledWithSecret(t *testing.T) {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = "br-int"
 	cfg.WebhookEnabled = true
 	cfg.WebhookSecret = "supersecret"
@@ -225,7 +225,7 @@ func TestServiceConfig_Validate_WebhookEnabledWithSecret(t *testing.T) {
 }
 
 func TestServiceConfig_Validate_NilFirmwareConfig(t *testing.T) {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = "br-int"
 	cfg.Firmware = nil
 
@@ -234,7 +234,7 @@ func TestServiceConfig_Validate_NilFirmwareConfig(t *testing.T) {
 }
 
 func TestServiceConfig_Validate_InvalidFirmwareConfig(t *testing.T) {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = "br-int"
 	cfg.Firmware = &FirmwareConfig{
 		Source: FirmwareSourceUpstream,
@@ -259,7 +259,7 @@ func TestServiceConfig_Validate_ValidVLANRange(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := DefaultServiceConfig()
+			cfg := testServiceConfig()
 			cfg.BridgeName = "br-int"
 			cfg.QuarantineVLAN = tt.quarantineVLAN
 			cfg.ProvisioningVLAN = tt.provisioningVLAN
@@ -377,9 +377,6 @@ func TestFirmwareConfig_Validate_UnknownSource(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	// VLAN defaults now sourced from pkg/sdn/vlan (reference-network.md).
-	assert.Equal(t, uint16(202), DefaultQuarantineVLAN)
-	assert.Equal(t, uint16(201), DefaultProvisioningVLAN)
 	assert.Equal(t, 3, DefaultMaxRetries)
 	assert.Equal(t, 30*time.Minute, DefaultInstallTimeout)
 	assert.Equal(t, 5*time.Minute, DefaultEnrollmentTimeout)
@@ -432,7 +429,7 @@ func TestServiceConfig_WithAllFieldsSet(t *testing.T) {
 // Delete this test only together with the requirement, or when the secret is
 // actually enforced.
 func TestServiceConfig_WebhookSecretMessageSaysItIsNotEnforced(t *testing.T) {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = "br-int"
 	cfg.WebhookEnabled = true
 	cfg.WebhookSecret = ""

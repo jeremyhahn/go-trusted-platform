@@ -15,14 +15,6 @@ package tenant
 
 // Config holds configuration for tenant management.
 type Config struct {
-	// VLAN configuration
-	DefaultVLANRangeStart uint16 // Default starting VLAN for new tenants
-	DefaultVLANRangeSize  uint16 // Default number of VLANs allocated to new tenants
-	MaxVLANRangeSize      uint16 // Maximum VLAN range size allowed per tenant
-
-	// Bridge configuration
-	BridgePrefix string // Prefix for tenant OVS bridges (default: "br-tenant-")
-
 	// Quota defaults
 	DefaultComputeQuota ComputeQuota
 	DefaultNetworkQuota NetworkQuota
@@ -48,14 +40,6 @@ const (
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		// VLAN configuration
-		DefaultVLANRangeStart: 100,
-		DefaultVLANRangeSize:  100,
-		MaxVLANRangeSize:      1000,
-
-		// Bridge configuration
-		BridgePrefix: "br-tenant-",
-
 		// Default compute quota
 		DefaultComputeQuota: ComputeQuota{
 			MaxVMs:        10,
@@ -89,43 +73,6 @@ func DefaultConfig() *Config {
 
 // Validate validates the configuration.
 func (c *Config) Validate() error {
-	if c.DefaultVLANRangeStart < 1 || c.DefaultVLANRangeStart > 4094 {
-		return ErrConfigValidation{
-			Field:  "DefaultVLANRangeStart",
-			Reason: "must be between 1 and 4094",
-		}
-	}
-
-	if c.DefaultVLANRangeSize < 1 {
-		return ErrConfigValidation{
-			Field:  "DefaultVLANRangeSize",
-			Reason: "must be at least 1",
-		}
-	}
-
-	if c.MaxVLANRangeSize < c.DefaultVLANRangeSize {
-		return ErrConfigValidation{
-			Field:  "MaxVLANRangeSize",
-			Reason: "must be greater than or equal to DefaultVLANRangeSize",
-		}
-	}
-
-	// Check if default range would exceed VLAN limits
-	endVLAN := int(c.DefaultVLANRangeStart) + int(c.DefaultVLANRangeSize) - 1
-	if endVLAN > 4094 {
-		return ErrConfigValidation{
-			Field:  "DefaultVLANRangeStart",
-			Reason: "default VLAN range exceeds maximum VLAN ID 4094",
-		}
-	}
-
-	if c.BridgePrefix == "" {
-		return ErrConfigValidation{
-			Field:  "BridgePrefix",
-			Reason: "must not be empty",
-		}
-	}
-
 	// Validate quota defaults
 	if err := c.validateComputeQuota(); err != nil {
 		return err
@@ -270,35 +217,15 @@ func (c *Config) Clone() *Config {
 	}
 
 	return &Config{
-		DefaultVLANRangeStart: c.DefaultVLANRangeStart,
-		DefaultVLANRangeSize:  c.DefaultVLANRangeSize,
-		MaxVLANRangeSize:      c.MaxVLANRangeSize,
-		BridgePrefix:          c.BridgePrefix,
-		DefaultComputeQuota:   c.DefaultComputeQuota,
-		DefaultNetworkQuota:   c.DefaultNetworkQuota,
-		DefaultStorageQuota:   c.DefaultStorageQuota,
-		EnableDEKIsolation:    c.EnableDEKIsolation,
-		DEKAlgorithm:          c.DEKAlgorithm,
-		DEKMaxOperations:      c.DEKMaxOperations,
-		DEKMaxBytes:           c.DEKMaxBytes,
-		DEKWarningPercent:     c.DEKWarningPercent,
+		DefaultComputeQuota: c.DefaultComputeQuota,
+		DefaultNetworkQuota: c.DefaultNetworkQuota,
+		DefaultStorageQuota: c.DefaultStorageQuota,
+		EnableDEKIsolation:  c.EnableDEKIsolation,
+		DEKAlgorithm:        c.DEKAlgorithm,
+		DEKMaxOperations:    c.DEKMaxOperations,
+		DEKMaxBytes:         c.DEKMaxBytes,
+		DEKWarningPercent:   c.DEKWarningPercent,
 	}
-}
-
-// WithVLANRange returns a copy of the config with updated VLAN settings.
-func (c *Config) WithVLANRange(start, size, maxSize uint16) *Config {
-	clone := c.Clone()
-	clone.DefaultVLANRangeStart = start
-	clone.DefaultVLANRangeSize = size
-	clone.MaxVLANRangeSize = maxSize
-	return clone
-}
-
-// WithBridgePrefix returns a copy of the config with updated bridge prefix.
-func (c *Config) WithBridgePrefix(prefix string) *Config {
-	clone := c.Clone()
-	clone.BridgePrefix = prefix
-	return clone
 }
 
 // WithComputeQuota returns a copy of the config with updated compute quota.

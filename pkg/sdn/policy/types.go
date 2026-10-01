@@ -250,8 +250,13 @@ type FlowController interface {
 type OVSPortController interface {
 	FlowController
 
-	// SetPortVLAN sets the VLAN tag for a port using OVSDB
+	// SetPortVLAN makes a port an access port on the given VLAN using
+	// OVSDB, clearing any trunk configuration.
 	SetPortVLAN(ctx context.Context, portName string, vlan int64) error
+
+	// SetPortTrunk makes a port an 802.1Q trunk carrying the allowed VLANs,
+	// with native as its untagged VLAN (0 for none).
+	SetPortTrunk(ctx context.Context, portName string, allowed []uint16, native uint16) error
 
 	// SetPortState sets the admin state of a port (up/down)
 	SetPortState(ctx context.Context, portName string, state ovs.PortState) error

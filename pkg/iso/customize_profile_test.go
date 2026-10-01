@@ -52,7 +52,7 @@ func TestCustomizer_EmbedDeviceProfileNetworkConfig(t *testing.T) {
 			},
 			entities.DefaultPostEnrollmentNetwork: {
 				VLAN:     200,
-				Zone:     "trusted",
+				Zone:     "control-plane",
 				StaticIP: "10.0.200.50/24",
 				Gateway:  "10.0.200.1",
 				DNS:      []string{"10.0.200.2"},
@@ -85,8 +85,8 @@ func TestCustomizer_EmbedDeviceProfileNetworkConfig(t *testing.T) {
 		provConfigPath := filepath.Join(overlayDir, "etc", "platformd", "network", "provisioning.yaml")
 		assert.FileExists(t, provConfigPath)
 
-		// Verify trusted config was created
-		prodConfigPath := filepath.Join(overlayDir, "etc", "platformd", "network", "trusted.yaml")
+		// Verify admitted config was created
+		prodConfigPath := filepath.Join(overlayDir, "etc", "platformd", "network", "admitted.yaml")
 		assert.FileExists(t, prodConfigPath)
 
 		// Verify quarantine config was created
@@ -115,9 +115,9 @@ func TestCustomizer_EmbedDeviceProfileNetworkConfig(t *testing.T) {
 		assert.Equal(t, "10.0.100.0/24", config.DHCPPool.Network)
 	})
 
-	t.Run("Verify trusted config content includes zone", func(t *testing.T) {
-		trustedConfigPath := filepath.Join(overlayDir, "etc", "platformd", "network", "trusted.yaml")
-		data, err := os.ReadFile(trustedConfigPath)
+	t.Run("Verify admitted config content includes zone", func(t *testing.T) {
+		admittedConfigPath := filepath.Join(overlayDir, "etc", "platformd", "network", "admitted.yaml")
+		data, err := os.ReadFile(admittedConfigPath)
 		require.NoError(t, err)
 
 		var config entities.NetworkPhaseConfig
@@ -125,7 +125,7 @@ func TestCustomizer_EmbedDeviceProfileNetworkConfig(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, uint16(200), config.VLAN)
-		assert.Equal(t, "trusted", config.Zone)
+		assert.Equal(t, "control-plane", config.Zone)
 		assert.Equal(t, "10.0.200.50/24", config.StaticIP)
 	})
 
@@ -136,17 +136,17 @@ func TestCustomizer_EmbedDeviceProfileNetworkConfig(t *testing.T) {
 
 		content := string(data)
 		assert.Contains(t, content, "TP_NETWORK_ZONE=")
-		assert.Contains(t, content, `"trusted"`)
+		assert.Contains(t, content, `"control-plane"`)
 	})
 
-	t.Run("Verify systemd-networkd trusted config has zone comment", func(t *testing.T) {
+	t.Run("Verify systemd-networkd admitted config has zone comment", func(t *testing.T) {
 		systemdDir := filepath.Join(overlayDir, "etc", "systemd", "network")
-		trustedNetworkdPath := filepath.Join(systemdDir, "10-eth0-trusted.network")
-		assert.FileExists(t, trustedNetworkdPath)
+		admittedNetworkdPath := filepath.Join(systemdDir, "10-eth0-admitted.network")
+		assert.FileExists(t, admittedNetworkdPath)
 
-		content, err := os.ReadFile(trustedNetworkdPath)
+		content, err := os.ReadFile(admittedNetworkdPath)
 		require.NoError(t, err)
-		assert.Contains(t, string(content), "# trusted-platform-zone: trusted")
+		assert.Contains(t, string(content), "# trusted-platform-zone: control-plane")
 	})
 
 	t.Run("Verify systemd-networkd configs created", func(t *testing.T) {
@@ -155,7 +155,7 @@ func TestCustomizer_EmbedDeviceProfileNetworkConfig(t *testing.T) {
 		provNetworkdPath := filepath.Join(systemdDir, "10-eth0-provisioning.network")
 		assert.FileExists(t, provNetworkdPath)
 
-		prodNetworkdPath := filepath.Join(systemdDir, "10-eth0-trusted.network")
+		prodNetworkdPath := filepath.Join(systemdDir, "10-eth0-admitted.network")
 		assert.FileExists(t, prodNetworkdPath)
 
 		quarNetworkdPath := filepath.Join(systemdDir, "10-eth0-quarantine.network")
@@ -182,7 +182,7 @@ func TestCustomizer_EmbedDeviceProfileNetworkConfig(t *testing.T) {
 
 // TestCustomizer_EmbedDeviceProfile_ProfileLevelZoneFallback verifies that when
 // a NetworkPhaseConfig has no Zone set but the DeviceProfile has a Zone, the
-// profile-level Zone is used for the trusted phase YAML and env file.
+// profile-level Zone is used for the admitted phase YAML and env file.
 func TestCustomizer_EmbedDeviceProfile_ProfileLevelZoneFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	overlayDir := filepath.Join(tmpDir, "overlay")
@@ -213,8 +213,8 @@ func TestCustomizer_EmbedDeviceProfile_ProfileLevelZoneFallback(t *testing.T) {
 	require.NoError(t, customizer.EmbedDeviceProfileNetworkConfig(ctx, profile))
 
 	t.Run("Trusted YAML carries profile-level zone", func(t *testing.T) {
-		trustedPath := filepath.Join(overlayDir, "etc", "platformd", "network", "trusted.yaml")
-		data, err := os.ReadFile(trustedPath)
+		admittedPath := filepath.Join(overlayDir, "etc", "platformd", "network", "admitted.yaml")
+		data, err := os.ReadFile(admittedPath)
 		require.NoError(t, err)
 
 		var cfg entities.NetworkPhaseConfig
@@ -234,7 +234,7 @@ func TestCustomizer_EmbedDeviceProfile_ProfileLevelZoneFallback(t *testing.T) {
 	})
 
 	t.Run("systemd-networkd has profile-level zone comment", func(t *testing.T) {
-		networkdPath := filepath.Join(overlayDir, "etc", "systemd", "network", "10-eth0-trusted.network")
+		networkdPath := filepath.Join(overlayDir, "etc", "systemd", "network", "10-eth0-admitted.network")
 		data, err := os.ReadFile(networkdPath)
 		require.NoError(t, err)
 
@@ -283,9 +283,9 @@ func TestCustomizer_EmbedDeviceProfile_MissingZoneEmitsEmpty(t *testing.T) {
 		assert.Contains(t, content, `TP_NETWORK_ZONE=""`)
 	})
 
-	t.Run("trusted YAML has no zone field when absent", func(t *testing.T) {
-		trustedPath := filepath.Join(overlayDir, "etc", "platformd", "network", "trusted.yaml")
-		data, err := os.ReadFile(trustedPath)
+	t.Run("admitted YAML has no zone field when absent", func(t *testing.T) {
+		admittedPath := filepath.Join(overlayDir, "etc", "platformd", "network", "admitted.yaml")
+		data, err := os.ReadFile(admittedPath)
 		require.NoError(t, err)
 
 		// yaml.v2 omits zero-value strings with omitempty
@@ -293,7 +293,7 @@ func TestCustomizer_EmbedDeviceProfile_MissingZoneEmitsEmpty(t *testing.T) {
 	})
 
 	t.Run("systemd-networkd has no zone comment when absent", func(t *testing.T) {
-		networkdPath := filepath.Join(overlayDir, "etc", "systemd", "network", "10-eth0-trusted.network")
+		networkdPath := filepath.Join(overlayDir, "etc", "systemd", "network", "10-eth0-admitted.network")
 		data, err := os.ReadFile(networkdPath)
 		require.NoError(t, err)
 
@@ -359,7 +359,7 @@ func TestCustomizer_EmbedNetworkPhaseConfig(t *testing.T) {
 	})
 
 	t.Run("Nil config does not error", func(t *testing.T) {
-		err := customizer.embedNetworkPhaseConfig(writer, gen, "trusted", nil)
+		err := customizer.embedNetworkPhaseConfig(writer, gen, "admitted", nil)
 		require.NoError(t, err)
 	})
 
@@ -383,7 +383,7 @@ func TestCustomizer_EmbedSystemdNetworkdConfig(t *testing.T) {
 		Networks: map[string]*entities.NetworkPhaseConfig{
 			entities.DefaultPostEnrollmentNetwork: {
 				VLAN:     200,
-				Zone:     "trusted",
+				Zone:     "control-plane",
 				StaticIP: "10.0.200.50/24",
 				Gateway:  "10.0.200.1",
 				DNS:      []string{"10.0.200.2"},
@@ -406,20 +406,20 @@ func TestCustomizer_EmbedSystemdNetworkdConfig(t *testing.T) {
 		err := customizer.embedSystemdNetworkdConfig(
 			writer,
 			profile.GetPostEnrollmentNetworkConfig(),
-			"trusted",
+			"admitted",
 		)
 		require.NoError(t, err)
 
 		// Verify config file was created
 		systemdDir := writer.GetSystemdNetworkdDir()
-		configPath := filepath.Join(systemdDir, "10-eth0-trusted.network")
+		configPath := filepath.Join(systemdDir, "10-eth0-admitted.network")
 		assert.FileExists(t, configPath)
 
 		// Verify content
 		content, err := os.ReadFile(configPath)
 		require.NoError(t, err)
 
-		assert.Contains(t, string(content), "# trusted-platform-zone: trusted")
+		assert.Contains(t, string(content), "# trusted-platform-zone: control-plane")
 		assert.Contains(t, string(content), "[Match]")
 		assert.Contains(t, string(content), "Name=eth0")
 		assert.Contains(t, string(content), "Address=10.0.200.50/24")
@@ -496,7 +496,7 @@ func TestCustomizer_EmbedDnsmasqConfig(t *testing.T) {
 			VLAN:    200,
 			Gateway: "10.0.200.1",
 		}
-		err := customizer.embedDnsmasqConfig(writer, configNoDHCP, "trusted")
+		err := customizer.embedDnsmasqConfig(writer, configNoDHCP, "admitted")
 		require.NoError(t, err)
 	})
 }
@@ -609,7 +609,7 @@ func TestCustomizer_MultiPhaseNetworkConfig(t *testing.T) {
 			},
 			entities.DefaultPostEnrollmentNetwork: {
 				VLAN:     200,
-				Zone:     "trusted",
+				Zone:     "control-plane",
 				StaticIP: "10.0.200.50/24",
 				Gateway:  "10.0.200.1",
 				DNS:      []string{"10.0.200.2", "10.0.200.3"},
@@ -642,21 +642,21 @@ func TestCustomizer_MultiPhaseNetworkConfig(t *testing.T) {
 		// Verify all YAML configs created
 		netConfigDir := filepath.Join(overlayDir, "etc", "platformd", "network")
 		assert.FileExists(t, filepath.Join(netConfigDir, "provisioning.yaml"))
-		assert.FileExists(t, filepath.Join(netConfigDir, "trusted.yaml"))
+		assert.FileExists(t, filepath.Join(netConfigDir, "admitted.yaml"))
 		assert.FileExists(t, filepath.Join(netConfigDir, "quarantine.yaml"))
 		assert.FileExists(t, filepath.Join(netConfigDir, "network.env"))
 
 		// Verify all systemd-networkd configs created
 		systemdDir := filepath.Join(overlayDir, "etc", "systemd", "network")
 		assert.FileExists(t, filepath.Join(systemdDir, "10-eth0-provisioning.network"))
-		assert.FileExists(t, filepath.Join(systemdDir, "10-eth0-trusted.network"))
+		assert.FileExists(t, filepath.Join(systemdDir, "10-eth0-admitted.network"))
 		assert.FileExists(t, filepath.Join(systemdDir, "10-eth0-quarantine.network"))
 
 		// Verify dnsmasq only created for provisioning (has DHCP pool)
 		dnsmasqDir := filepath.Join(overlayDir, "etc", "dnsmasq.d")
 		assert.FileExists(t, filepath.Join(dnsmasqDir, "dnsmasq-provisioning.conf"))
-		// Trusted and quarantine should not have dnsmasq configs
-		assert.NoFileExists(t, filepath.Join(dnsmasqDir, "dnsmasq-trusted.conf"))
+		// Admitted and quarantine should not have dnsmasq configs
+		assert.NoFileExists(t, filepath.Join(dnsmasqDir, "dnsmasq-admitted.conf"))
 		assert.NoFileExists(t, filepath.Join(dnsmasqDir, "dnsmasq-quarantine.conf"))
 	})
 }
@@ -677,7 +677,7 @@ func TestCustomizer_PartialProfileConfig(t *testing.T) {
 				DNS:     []string{"10.0.100.2"},
 			},
 		},
-		// No trusted or quarantine networks
+		// No admitted or quarantine networks
 	}
 
 	config := &PlatformISOConfig{
@@ -703,7 +703,7 @@ func TestCustomizer_PartialProfileConfig(t *testing.T) {
 		assert.FileExists(t, filepath.Join(netConfigDir, "network.env"))
 
 		// Trusted and quarantine should not be created
-		assert.NoFileExists(t, filepath.Join(netConfigDir, "trusted.yaml"))
+		assert.NoFileExists(t, filepath.Join(netConfigDir, "admitted.yaml"))
 		assert.NoFileExists(t, filepath.Join(netConfigDir, "quarantine.yaml"))
 	})
 }

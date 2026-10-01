@@ -31,6 +31,7 @@ type SwitchPortStatus struct {
 	Enabled       bool                   `protobuf:"varint,5,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	LinkUp        bool                   `protobuf:"varint,6,opt,name=link_up,json=linkUp,proto3" json:"link_up,omitempty"`
 	Description   string                 `protobuf:"bytes,7,opt,name=description,proto3" json:"description,omitempty"`
+	NativeVlan    uint32                 `protobuf:"varint,8,opt,name=native_vlan,json=nativeVlan,proto3" json:"native_vlan,omitempty"` // trunk native (untagged) VLAN; 0 when none
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -112,6 +113,13 @@ func (x *SwitchPortStatus) GetDescription() string {
 		return x.Description
 	}
 	return ""
+}
+
+func (x *SwitchPortStatus) GetNativeVlan() uint32 {
+	if x != nil {
+		return x.NativeVlan
+	}
+	return 0
 }
 
 // ListSwitchPortsRequest requests all ports on a named switch.
@@ -608,7 +616,7 @@ var File_switch_proto protoreflect.FileDescriptor
 
 const file_switch_proto_rawDesc = "" +
 	"\n" +
-	"\fswitch.proto\x12\vplatform.v1\x1a\fcommon.proto\"\xd1\x01\n" +
+	"\fswitch.proto\x12\vplatform.v1\x1a\fcommon.proto\"\xf2\x01\n" +
 	"\x10SwitchPortStatus\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\tR\x04port\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\tR\x04mode\x12\x1f\n" +
@@ -618,7 +626,9 @@ const file_switch_proto_rawDesc = "" +
 	"trunkVlans\x12\x18\n" +
 	"\aenabled\x18\x05 \x01(\bR\aenabled\x12\x17\n" +
 	"\alink_up\x18\x06 \x01(\bR\x06linkUp\x12 \n" +
-	"\vdescription\x18\a \x01(\tR\vdescription\"9\n" +
+	"\vdescription\x18\a \x01(\tR\vdescription\x12\x1f\n" +
+	"\vnative_vlan\x18\b \x01(\rR\n" +
+	"nativeVlan\"9\n" +
 	"\x16ListSwitchPortsRequest\x12\x1f\n" +
 	"\vswitch_name\x18\x01 \x01(\tR\n" +
 	"switchName\"N\n" +

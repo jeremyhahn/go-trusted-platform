@@ -108,15 +108,16 @@ func (m *MemoryBackend) CreatePool(ctx context.Context, pool *ipam.Pool) error {
 		}
 	}
 
-	// Calculate pool size
-	pool.TotalIPs = ipam.CalculatePoolSize(pool.CIDR)
+	// Size the pool by what is actually allocatable (usable less reserved).
+	pool.TotalIPs = pool.AllocatableIPs()
 	pool.AvailableIPs = pool.TotalIPs
 	pool.AllocatedIPs = 0
 	pool.CreatedAt = time.Now()
 	pool.UpdatedAt = pool.CreatedAt
 
-	// Create bitmap for allocation tracking
-	m.bitmaps[pool.ID] = ipam.NewBitmap(pool.TotalIPs)
+	// The bitmap covers every usable address, indexed by usable position;
+	// reserved addresses are skipped by the window rules, never set.
+	m.bitmaps[pool.ID] = ipam.NewBitmap(ipam.CalculatePoolSize(pool.CIDR))
 
 	// Store pool (clone to prevent external modification)
 	m.pools[pool.ID] = pool.Clone()
@@ -256,6 +257,12 @@ func (m *MemoryBackend) UpdatePool(ctx context.Context, pool *ipam.Pool) error {
 		}
 	}
 
+	// Validate before touching any index, so a refused update leaves the
+	// backend exactly as it was.
+	if err := m.validatePool(pool); err != nil {
+		return err
+	}
+
 	// Check for name conflicts
 	if pool.Name != existing.Name {
 		if existingID, nameExists := m.poolsByName[pool.Name]; nameExists && existingID != pool.ID {
@@ -266,10 +273,14 @@ func (m *MemoryBackend) UpdatePool(ctx context.Context, pool *ipam.Pool) error {
 		m.poolsByName[pool.Name] = pool.ID
 	}
 
-	// Preserve immutable fields
-	pool.TotalIPs = existing.TotalIPs
+	// Preserve allocation counters; the size follows the (possibly changed)
+	// reserved prefixes.
 	pool.AllocatedIPs = existing.AllocatedIPs
-	pool.AvailableIPs = existing.AvailableIPs
+	pool.TotalIPs = pool.AllocatableIPs()
+	pool.AvailableIPs = 0
+	if pool.TotalIPs > pool.AllocatedIPs {
+		pool.AvailableIPs = pool.TotalIPs - pool.AllocatedIPs
+	}
 	pool.CreatedAt = existing.CreatedAt
 	pool.UpdatedAt = time.Now()
 
@@ -390,27 +401,20 @@ func (m *MemoryBackend) Allocate(ctx context.Context, req *ipam.AllocationReques
 	// Get bitmap
 	bitmap := m.bitmaps[req.PoolID]
 
-	// Find next available IP
-	offset, found := bitmap.NextClear(0)
-	if !found {
-		return nil, ipam.ErrPoolExhausted
-	}
-
-	// Convert offset to actual offset (accounting for network address)
-	actualOffset := ipam.AdjustOffsetForUsable(pool.CIDR, offset)
-
-	// Convert offset to IP
-	ip, err := ipam.OffsetToIP(pool.CIDR, actualOffset)
+	// Find the next free, unreserved address in the dynamic window. The
+	// bitmap is indexed by usable position: offset minus the skipped
+	// network address.
+	shift := ipam.AdjustOffsetForUsable(pool.CIDR, 0)
+	ip, offset, err := pool.NextDynamic(func(from uint64) (uint64, bool) {
+		idx, found := bitmap.NextClear(from - shift)
+		return idx + shift, found
+	})
 	if err != nil {
-		return nil, &ipam.ErrAllocationFailed{
-			PoolID: req.PoolID,
-			Reason: "failed to convert offset to IP",
-			Cause:  err,
-		}
+		return nil, err
 	}
 
 	// Mark as allocated in bitmap
-	bitmap.Set(offset)
+	bitmap.Set(offset - shift)
 
 	// Create allocation
 	alloc := m.createAllocation(req, pool, ip)
@@ -454,17 +458,9 @@ func (m *MemoryBackend) AllocateSpecific(ctx context.Context, req *ipam.Allocati
 		return nil, ipam.ErrPoolNotFound
 	}
 
-	// Check if IP is in pool
-	if !pool.CIDR.Contains(req.RequestedIP) {
-		return nil, ipam.ErrIPNotInPool
-	}
-
-	// Check for network/broadcast addresses
-	if ipam.IsNetworkAddress(pool.CIDR, req.RequestedIP) {
-		return nil, ipam.ErrNetworkAddress
-	}
-	if ipam.IsBroadcastAddress(pool.CIDR, req.RequestedIP) {
-		return nil, ipam.ErrBroadcastAddress
+	// The address must be in the pool, usable, and not reserved.
+	if err := pool.CheckSpecific(req.RequestedIP); err != nil {
+		return nil, err
 	}
 
 	// Check if already allocated
@@ -889,8 +885,8 @@ func (m *MemoryBackend) Reserve(ctx context.Context, poolID string, ip netip.Add
 		return ipam.ErrPoolNotFound
 	}
 
-	if !pool.CIDR.Contains(ip) {
-		return ipam.ErrIPNotInPool
+	if err := pool.CheckSpecific(ip); err != nil {
+		return err
 	}
 
 	// Check if already allocated or reserved
@@ -1078,7 +1074,7 @@ func (m *MemoryBackend) validatePool(pool *ipam.Pool) error {
 	if pool.Gateway.IsValid() && !pool.CIDR.Contains(pool.Gateway) {
 		return ipam.ErrInvalidGateway
 	}
-	return nil
+	return ipam.NewPoolManager().ValidatePool(pool)
 }
 
 func (m *MemoryBackend) createAllocation(req *ipam.AllocationRequest, pool *ipam.Pool, ip netip.Addr) *ipam.Allocation {

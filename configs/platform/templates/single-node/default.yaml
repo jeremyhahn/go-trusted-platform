@@ -32,7 +32,7 @@
 #   - network.interfaces[].name (match your NIC, default: eth0)
 #   - tpm.idevid.serial (actual chassis serial)
 #   - webservices[].sans (DNS SANs for TLS certs)
-#   - DHCP pool (if serving DHCP to LAN devices — off by default)
+#   - sdn.environment (environment number and your own ULA /48)
 # =============================================================================
 
 debug: false
@@ -157,9 +157,11 @@ os:
 
 # Network configuration for installed system
 #
-# Single-node default: one NIC (eth0) gets its address from upstream DHCP
-# (home/office router). A single internal OVS bridge (trusted0) hosts
-# local VMs and containers with an RFC1918 subnet NAT'd out eth0.
+# Single-node default (the standalone topology of the reference network):
+# one NIC (eth0) gets its address from upstream DHCP (home/office router)
+# and is the box's uplink. Every zone lives on one host-local OVS bridge,
+# br-fabric, with no physical trunk; workloads attach to br-int, which never
+# carries the trunk and reaches the network only through the overlay.
 #
 # Operators should override `network.interfaces[].name` to match their
 # actual NIC (run `ip link` on the target host).
@@ -169,31 +171,29 @@ network:
       - 1.1.1.1
       - 1.0.0.1
     search-domains:
-      - trusted-platform.local
-  subnets:
-    - name: trusted
-      scope: internal
-      cidr: 192.168.100.0/24
-      gateway: 192.168.100.1
-      dns:
-        - 192.168.100.1
-      dhcp:
-        enabled: true
-        range-start: 192.168.100.10
-        range-end: 192.168.100.254
-        lease-duration: 24h
+      - example.internal
+  # Host addressing by role: the single box routes and NATs for itself, so
+  # it takes the gateway role (exempt from the forwarding and addressing
+  # rules). Its platform-VRF address lives in a Linux VRF.
+  role: gateway
+  ip-forward: true
+  platform-vrf:
+    address: 10.4.144.10/32
   interfaces:
     - name: eth0
       type: dhcp
       auto-start: true
   bridges:
-    - name: trusted0
+    # Host-local: no uplink member. Operators who extend the box to a
+    # switch add a trunk member here (port class hypervisor).
+    - name: br-fabric
       type: ovs
-      auto-start: true
       stp: false
-      # No uplink interface attached — bridge is host-local for VMs/containers.
-      # Operators who want L2 extension to a physical port should add:
-      #   interfaces: [ eth1 ]
+      auto-start: true
+    - name: br-int
+      type: ovs
+      stp: false
+      auto-start: true
   bonds: []
   vlans: []
   wait-online: true
@@ -436,7 +436,8 @@ ntp:
   serve:
     # Explicit CIDR allow-list. NEVER 0.0.0.0/0.
     listen-networks:
-      - 192.168.100.0/24
+      # The environment's /16 (block 4 of the reference network).
+      - 10.4.0.0/16
     local-stratum: 10
     nts:
       enabled: true
@@ -568,121 +569,63 @@ quicbaas:
 sdn:
   enabled: true
   controller: true
+  # The environment numbers every zone (docs/architecture/reference-network.md):
+  # the zone at offset n is VLAN E*100+n with IPv4 10.E.n.0/24 and IPv6
+  # <ula>:<VLAN digits>::/64, and overlay network n is VNI E*100000+n.
+  # Block 4 is the reference example. A non-reference site overrides single
+  # zones under `overrides:` (vlan, subnet, subnet6) instead of renumbering.
+  environment:
+    id: 4
+    base: 10.0.0.0/8
+    # The deployment's RFC 4193 ULA /48. Generate your own random global
+    # ID; this one is the reference document's example.
+    ula: fd12:3456:789a::/48
+  # zones: the built-in zones (transit, fabric, management, hypervisor,
+  # quarantine, provisioning, control-plane, storage, backup) need no entry.
+  # An entry tunes a built-in's policy or declares an owner-defined zone at
+  # an offset from 09 to 99, for example:
+  #   zones:
+  #     - name: lab
+  #       offset: 9
+  #       port_classes: [hypervisor]
+  #       isolate: true
+  #       allow_to: [{zone: storage, services: [storage]}]
+  # A path into control-plane or management beyond the reference defaults
+  # also needs privileged_access: {reason: ..., approved_by: ...}, which is
+  # logged as an audit record whenever the configuration loads.
   ovs:
     socket: /var/run/openvswitch/db.sock
-    bridge: trusted0
+    # br-fabric carries the physical trunk and the host's zone addresses.
+    # Workload ports live on br-int, which never carries the trunk.
+    bridge: br-fabric
     datapath: system
     protocols:
       - OpenFlow13
       - OpenFlow15
   ipam:
     backend: quicbaas
-    pools:
-      - name: trusted
-        cidr: 192.168.100.0/24
-        gateway: 192.168.100.1
-        dns:
-          - 192.168.100.1
-        range-start: 192.168.100.10
-        range-end: 192.168.100.254
-        lease-duration: 24h
-        dhcp: true
+    # Every zone pool (subnet, gateway .1, DHCP range from .50) and the IPAM
+    # ranges of 10.4.128.0/17 (tunnel point-to-point, loopbacks, service
+    # VIPs, platform-VRF hosts) are derived from the environment and seeded
+    # at startup. `pools:` adds explicit pools beside them, for example a
+    # public block or an overlay subnet from the tenant default range
+    # 10.4.192.0/18.
+    pools: []
+  # No zone on this box serves DHCP to anything attached: provisioning has
+  # no physical port, and workload DHCP arrives with the overlay (#709).
   dhcp:
-    enabled: true
-    interface: trusted0
-  networks:
-    - name: trusted
-      zone: trusted
-      pool: trusted
-  # Physical switch fabric not used in single-node (box only sees its
-  # own NICs, no managed switches). Add switches under `fabric:` only
-  # when promoting this node to a multi-box deployment.
-  fabric:
-    mode: vlan
-    switches: []
-    peers: []
-    # zones: built-in zones are pre-declared in the code defaults registry.
-    # Override only if you need to change default policy. Example:
-    #   zones:
-    #     - {name: trusted, internet_ingress: false}
-    #     - {name: public,  internet_ingress: true, isolate_from: [trusted]}
-    segments:
-      # Single-node trusted segment. No role (empty = general data
-      # plane); only `provisioning` and `quarantine` are first-class
-      # fabric roles. VLAN 406 is the control-plane VLAN of the reference
-      # network design (owner design decision 2026-09-26, block 4). The code
-      # constant DefaultTrustedVLAN in pkg/sdn/vlan still says 200 until #708.
-      # Override in your site override file if your LAN uses a different VLAN.
-      - name: trusted
-        vlan: 406
+    enabled: false
+  # No `fabric:` section: a single box drives no managed switch.
   overlay:
     enabled: false
     vxlan-port: 4789
-  # Gateway data-plane services run in the separate `gatewayd` daemon
-  # on the same host. This block tells platformd about the gatewayd
-  # endpoint for OVS delegation. gatewayd itself is configured via
-  # the `gatewayd:` top-level block below.
+  # Gateway data-plane services run in the separate gatewayd daemon on the
+  # same host, configured by its own file (see the dedicated profile's
+  # gatewayd.yaml for its shape).
   gateway:
     enabled: true
-    mode: edge
-    endpoint: unix:///run/gatewayd.sock
 
 
-# =============================================================================
-# GATEWAYD CONFIGURATION
-# =============================================================================
-#
-# gatewayd runs alongside platformd on the same host (single-node). It
-# holds CAP_NET_ADMIN + CAP_NET_BIND_SERVICE and delegates OVS/flow
-# operations to platformd's root master over the platformd unix socket.
-#
-# For a pure control-plane node (no local data plane), set
-# `gatewayd.enabled: false` and gatewayd.service will not start.
-
-gatewayd:
-  enabled: true
-  data-dir: /var/lib/trusted-platform/gatewayd
-  log-level: info
-  # REST/gRPC listen addresses — bound to localhost only by default;
-  # platformctl talks to gatewayd over the unix socket.
-  api:
-    rest-listen: 127.0.0.1:8080
-    grpc-listen: 127.0.0.1:10444
-    unix-socket: /run/gatewayd.sock
-  # Service enablement — flip to true as needed per deployment.
-  edge:
-    enabled: true
-  dhcp:
-    enabled: false
-    # DHCP server off by default. Enable when this box should serve
-    # DHCP for the `trusted` subnet to local VMs/containers.
-    pools:
-      - subnet: 192.168.100.0/24
-        gateway: 192.168.100.1
-        dns: [192.168.100.1]
-        range-start: 192.168.100.100
-        range-end: 192.168.100.200
-        lease-duration: 24h
-  firewall:
-    enabled: true
-    default-policy: drop
-    trusted-interfaces:
-      - trusted0
-  nat:
-    enabled: true
-    # NAT the internal trusted subnet out via eth0.
-    rules:
-      - source: 192.168.100.0/24
-        out-interface: eth0
-        type: masquerade
-  bgp:
-    enabled: false
-    # Single-node typically sits behind a consumer router. Enable
-    # and populate asn + router-id + neighbors for dedicated/HA.
-  load-balancer:
-    enabled: false
-  tunnels:
-    enabled: false
 
 
 # =============================================================================

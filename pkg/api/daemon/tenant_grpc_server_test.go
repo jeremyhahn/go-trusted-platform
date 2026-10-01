@@ -154,20 +154,6 @@ func TestTenantGRPCServer_FailsPrecondition(t *testing.T) {
 			},
 		},
 		{
-			name: "ValidateVLAN",
-			fn: func() error {
-				_, err := server.ValidateVLAN(ctx, &platformv1.ValidateVLANRequest{TenantId: "test", VlanId: 100})
-				return err
-			},
-		},
-		{
-			name: "GetBridgeName",
-			fn: func() error {
-				_, err := server.GetBridgeName(ctx, &platformv1.GetBridgeNameRequest{TenantId: "test"})
-				return err
-			},
-		},
-		{
 			name: "Sync",
 			fn: func() error {
 				_, err := server.Sync(ctx, &platformv1.SyncTenantsRequest{})
@@ -274,18 +260,6 @@ func TestTenantGRPCServer_InvalidArgument(t *testing.T) {
 				// Validation logic verified through code review
 			},
 		},
-		{
-			name: "ValidateVLAN requires vlan_id",
-			validate: func(t *testing.T) {
-				// Validation logic verified through code review
-			},
-		},
-		{
-			name: "ValidateVLAN rejects vlan_id > 4094",
-			validate: func(t *testing.T) {
-				// Validation logic verified through code review
-			},
-		},
 	}
 
 	for _, tc := range testCases {
@@ -366,24 +340,9 @@ func TestTenantGRPCServer_ToGRPCError(t *testing.T) {
 			expectedCode: codes.Internal,
 		},
 		{
-			name:         "bridge operation failed",
-			err:          tenant.ErrBridgeOperationFailed{Operation: "create"},
-			expectedCode: codes.Internal,
-		},
-		{
-			name:         "VLAN allocation failed",
-			err:          tenant.ErrVLANAllocationFailed{TenantID: "test"},
-			expectedCode: codes.ResourceExhausted,
-		},
-		{
 			name:         "quota exceeded",
 			err:          tenant.ErrQuotaExceeded{Resource: "vms", TenantID: "test"},
 			expectedCode: codes.ResourceExhausted,
-		},
-		{
-			name:         "invalid VLAN range",
-			err:          tenant.ErrInvalidVLANRange{Start: 100, End: 50},
-			expectedCode: codes.InvalidArgument,
 		},
 		{
 			name:         "DEK operation failed",
@@ -435,12 +394,7 @@ func TestTenantGRPCServer_EntityToTenantPb(t *testing.T) {
 			Name:        "test-tenant",
 			DisplayName: "Test Tenant",
 			State:       tenant.StateActive,
-			OVSBridge:   "br-test",
-			VLANRange: tenant.VLANRange{
-				Start: 100,
-				End:   200,
-			},
-			DEKPath: "/keys/test",
+			DEKPath:     "/keys/test",
 			ComputeQuota: tenant.ComputeQuota{
 				MaxVMs:        10,
 				MaxContainers: 50,
@@ -480,15 +434,6 @@ func TestTenantGRPCServer_EntityToTenantPb(t *testing.T) {
 		}
 		if result.State != platformv1.TenantState_TENANT_STATE_ACTIVE {
 			t.Errorf("State = %v, want TENANT_STATE_ACTIVE", result.State)
-		}
-		if result.OvsBridge != entity.OVSBridge {
-			t.Errorf("OvsBridge = %q, want %q", result.OvsBridge, entity.OVSBridge)
-		}
-		if result.VlanStart != uint32(entity.VLANRange.Start) {
-			t.Errorf("VlanStart = %d, want %d", result.VlanStart, entity.VLANRange.Start)
-		}
-		if result.VlanEnd != uint32(entity.VLANRange.End) {
-			t.Errorf("VlanEnd = %d, want %d", result.VlanEnd, entity.VLANRange.End)
 		}
 		if result.DekPath != entity.DEKPath {
 			t.Errorf("DekPath = %q, want %q", result.DekPath, entity.DEKPath)

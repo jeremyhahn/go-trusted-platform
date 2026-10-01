@@ -14,35 +14,31 @@ For single-box or cluster topologies, see the sibling profiles:
 ## Topology
 
 ```
-                        Internet
+                         Internet
+                  ISP A ─────┴───── ISP B         (1G WAN ports, gateway only)
                            │
-                    Upstream ISP / Router
-                           │
-                      Fabric switch
-                       (VLAN-aware)
-         ┌─────────────────┼─────────────────┐
-         │                 │                 │
-    ┌────▼────┐       ┌────▼────┐       ┌────▼────┐
-    │  gw-01  │       │ node-02 │       │ node-03 │
-    │ gateway │       │   CP    │       │ compute │
-    │         │       │         │       │         │
-    │ gatewayd│       │ platformd        │ platformd│
-    │ platformd (CLIENT)  (SERVER) │       │ (CLIENT)│
-    └─────────┘       └─────────┘       └─────────┘
-      ▲                   ▲                   ▲
-      │ trusted0          │ trusted0          │ trusted0
-      │ (OVS bond)        │ (OVS bond)        │ (OVS bond)
-      │ eth6+eth7         │ eth6+eth7         │ eth6+eth7
-      │                   │                   │
-      └───────────────────┴───────────────────┘
-             control-plane network (VLAN 406)
-                  (LACP / balance-tcp)
+                    ┌──────▼──────┐
+                    │    gw-01    │  gatewayd + platformd (client)
+                    │   gateway   │  role: gateway (routes, NATs)
+                    └──────┬──────┘
+                           │ bond0 → br-fabric, port class gateway
+                           │ (400, 401, 404-406, 408)
+              Platform switch pair (pure L2, MTU 9216)
+                           │ bond0 → br-fabric, port class hypervisor
+                           │ (401, 403-408, native 405)
+             ┌─────────────┴─────────────┐
+        ┌────▼────┐                 ┌────▼────┐
+        │  cp-01  │                 │compute-01│
+        │   CP    │ platformd       │ compute │ platformd
+        │         │ (server)        │         │ (client)
+        └─────────┘                 └─────────┘
+   BMCs: access ports on management (402), port class bmc
 ```
 
-All three nodes speak to each other over the **`trusted0` OVS bridge**
-backed by an **OVS bond** of two physical NICs. The bond is created
-natively by `platformd` via OVSDB wire-protocol at runtime (no kernel
-bonding driver, no `ovs-vsctl` fork).
+Every node's data trunk is an **OVS bond of two 10G NICs on `br-fabric`**,
+created natively by `platformd` over the OVSDB wire protocol at runtime (no
+kernel bonding driver, no `ovs-vsctl` fork). Workloads attach to a separate
+integration bridge, **`br-int`**, which never carries the trunk.
 
 ---
 
@@ -50,9 +46,9 @@ bonding driver, no `ovs-vsctl` fork).
 
 | Role | Binaries | Owns |
 |------|----------|------|
-| **Control plane** (`node-02`) | `platformd` (server mode) | CA + ACME server, authoritative DNS zones (internal + public), IAM, KMS, QuicBaaS storage, OVS master |
-| **Gateway** (`gw-01`) | `platformd` (client), `gatewayd` | BGP edge, DHCP for LAN clients, firewall, NAT, load balancer, L3 egress, WAN-side TLS termination |
-| **Compute** (`node-03`) | `platformd` (client) | QEMU/KVM VMs, Podman containers, local workload storage |
+| **Control plane** (`cp-01`) | `platformd` (server mode) | CA + ACME server, authoritative DNS zones (internal + public), IAM, KMS, QuicBaaS storage, OVS master |
+| **Gateway** (`gw-01`) | `platformd` (client), `gatewayd` | BGP edge, the only router on the platform tier, firewall, NAT, load balancer, L3 egress, WAN-side TLS termination |
+| **Compute** (`compute-01`) | `platformd` (client) | QEMU/KVM VMs, Podman containers, local workload storage |
 
 **Gateway and compute are ACME-enrolled clients of the control plane's
 CA.** First-boot platformd on those nodes registers with
@@ -67,16 +63,43 @@ first ACME connection can verify TLS before any cert has been issued.
 
 ### Bond / Bridge
 
-- **`bond0`** is an OVS bond port on `trusted0` — *not* a Linux kernel
-  bond netdev. Mode: `balance-tcp` with `lacp: active`. Members:
-  `eth6` + `eth7` (Supermicro X10 SFP+ ports).
-- **`trusted0`** is an Open vSwitch bridge created via native OVSDB
-  `Transact` from `platformd::initOVSBridge`. The bridge is assigned
-  the control-plane subnet's gateway IP (e.g. `10.4.6.1/24`) at
-  `initBridgeIPs` time.
-- NIC member interfaces (`eth6`, `eth7`) are brought up as raw
-  manual-configured interfaces in `/etc/network/interfaces`. OVS
-  claims them when `ovsdb-server` + `ovs-vswitchd` start at boot.
+- **`bond0`** is an OVS bond port on `br-fabric` — *not* a Linux kernel
+  bond netdev. Mode: `balance-tcp` with `lacp: active`. Members: the two
+  10G ports (`eth6` + `eth7` on the Supermicro X10, `ens2f0` + `ens2f1` on
+  the Dell R640).
+- **`br-fabric`** is the Open vSwitch bridge that carries the physical
+  trunk, created via native OVSDB `Transact` from
+  `platformd::initOVSBridge`. The host's own zone addresses are OVS internal
+  ports on it, tagged with the zone's VLAN.
+- **`br-int`** is the integration bridge for VM and container ports. It has
+  no uplink and never carries the trunk; workloads reach the network only
+  through the overlay (#709).
+- NIC member interfaces are brought up as raw manual-configured interfaces
+  in `/etc/network/interfaces`. OVS claims them when `ovsdb-server` +
+  `ovs-vswitchd` start at boot.
+
+### Host Addressing by Role
+
+A host holds an address only on the zones it uses (reference network,
+"Host addressing"); the VLANs it passes through to guests get none.
+
+| Node | Role | Zone addresses | Platform VRF |
+|------|------|----------------|--------------|
+| gw-01 | `gateway` | `.2` on transit, fabric, quarantine, provisioning, control-plane, backup; answers for `.1` | `10.4.144.2/32` |
+| cp-01 | `control-plane` | fabric `10.4.1.10`, control-plane `10.4.6.10` | `10.4.144.10/32` |
+| compute-01 | `compute` | fabric `10.4.1.20`, hypervisor `10.4.3.20`, storage `10.4.7.20` | `10.4.144.20/32` |
+
+`network.role` drives the installer's checks and what it writes:
+
+- control-plane and compute hosts never forward (`ip-forward: false`), and
+  the installer writes a host firewall that drops traffic between
+  interfaces; a static address outside the role's zones, or a DHCP
+  interface, fails validation;
+- the gateway is exempt: it routes and NATs by role;
+- the platform-VRF address lives in a Linux VRF, not on an underlay
+  interface. Until the platform overlay (#709) and the platform VRF land, a
+  compute node has no route to the control-plane zone; reachability between
+  a compute node and the control plane arrives with them.
 
 ### DNS Resolution
 
@@ -101,33 +124,40 @@ nameserver 127.0.0.1
 Search-domain list is populated by the bootstrap orchestrator from
 `platform.domain` + `platform.internal_domain` in `bootstrap.yaml`.
 
-### Subnets
+### Environment and Zones
 
-The templates use the block-4 example of the reference network design
-(owner design decision 2026-09-26): VLAN N maps to
-`10.(N div 100).(N mod 100).0/24`, and the upper half of the /16
-(`10.4.128.0/17`) is the IPAM pool for overlays, loopbacks and tunnel
-point-to-point links. Inside a /24: `.1` gateway VIP, `.2`/`.3` gateway
-nodes, `.10`–`.19` control-plane nodes, `.20`–`.49` infrastructure,
-`.50`–`.254` DHCP.
+Every number comes from `sdn.environment`; the templates use environment
+4, the reference example. The zone at offset _n_ is VLAN `4·100+n` with
+`10.4.n.0/24` and `<ULA>:40n::/64`; the upper half of the /16
+(`10.4.128.0/17`) is the IPAM pool. Inside a zone subnet: `.1` the gateway,
+`.2`/`.3` the gateway nodes, `.10`–`.19` control-plane nodes, `.20`–`.49`
+other static hosts, `.50`–`.254` DHCP where the zone serves it.
 
-| Name | VLAN | CIDR | Purpose |
+| Zone | VLAN | IPv4 | Purpose |
 |------|------|------|---------|
-| transit | 400 | 10.4.0.0/24 | Gateway uplink / transit (gateway ports only) |
-| fabric | 401 | 10.4.1.0/24 | VXLAN underlay, VTEPs, EVPN |
-| management | 402 | 10.4.2.0/24 | OOB / BMC (BMC access ports only) |
+| transit | 400 | 10.4.0.0/24 | Gateway edge: upstream handoff and peering (gateway ports only) |
+| fabric | 401 | 10.4.1.0/24 | VXLAN underlay: VTEPs and EVPN |
+| management | 402 | 10.4.2.0/24 | BMCs only (BMC access ports only) |
 | hypervisor | 403 | 10.4.3.0/24 | Live migration |
-| quarantine | 404 | 10.4.4.0/24 | Isolated untrusted / failed nodes |
-| provisioning | 405 | 192.0.2.0/24 | PXE boot, initial node setup |
-| control-plane | 406 | 10.4.6.0/24 | Server-to-server east/west, CP/GW/compute |
-| storage | 407 | 10.4.7.0/24 | Back-end storage traffic |
+| quarantine | 404 | 10.4.4.0/24 | Non-compliant nodes: authentication and remediation |
+| provisioning | 405 | 192.0.2.0/24 | Onboarding: DHCP, PXE, DNS, ACME (the hypervisor trunk's native VLAN) |
+| control-plane | 406 | 10.4.6.0/24 | Control-plane nodes |
+| storage | 407 | 10.4.7.0/24 | Storage traffic |
 | backup | 408 | 10.4.8.0/24 | Backup traffic |
 
-The templates declare the four networks they use today (404–407). Today's
-code has no zone named after the control-plane network, so it carries
-`zone: trusted`; the zone vocabulary moves with #708. The `dmz-*` networks
-are overlays in the design; until the overlay service lands they keep an
-interim VLAN from 409–411, which is not a design VLAN.
+| IPAM range | Prefix | Use |
+|------------|--------|-----|
+| tunnel point-to-point | 10.4.128.0/22 | /31 links; `10.4.128.0/31` is the reserved gateway HA sync link |
+| loopbacks | 10.4.132.0/22 | /32 loopbacks |
+| service VIPs | 10.4.136.0/21 | platform service VIPs |
+| platform-VRF hosts | 10.4.144.0/20 | one address per attested host |
+| tenant default | 10.4.192.0/18 | tenant overlay subnets |
+
+The zone pools and the IPAM ranges are seeded into IPAM at startup; the
+templates declare no networks or pools. `public` and tenant networks are
+overlays, not zones. A site that cannot follow the reference overrides
+single zones under `sdn.environment.overrides` (VLAN, subnet, subnet6)
+instead of renumbering.
 
 ---
 
@@ -195,55 +225,70 @@ When `true`, installer:
 When `false` (production), no remote access except via the platform's
 normal APIs.
 
-### `sdn.ovs` + `network.bridges` + `network.bonds`
+### `sdn.environment` + `sdn.ovs` + `network`
 
 ```yaml
 sdn:
+  environment:
+    id: 4
+    base: 10.0.0.0/8
+    ula: fd12:3456:789a::/48   # generate your own random global ID
   ovs:
     socket: /var/run/openvswitch/db.sock
-    bridge: trusted0
+    bridge: br-fabric
 
 network:
+  role: control-plane
+  ip-forward: false
+  platform-vrf:
+    address: 10.4.144.10/32
   bridges:
-    - name: trusted0
+    - name: br-fabric
       type: ovs
-      auto-start: true
+      interfaces: [bond0]
+    - name: br-int
+      type: ovs
   bonds:
     - name: bond0
       type: ovs            # Important: ovs, not linux
-      bridge: trusted0
+      bridge: br-fabric
       mode: balance-tcp
       lacp: active
       interfaces: [eth6, eth7]
+      vlans:
+        - {zone: fabric, ipv4-address: 10.4.1.10/24, auto-start: true}
+        - {zone: control-plane, ipv4-address: 10.4.6.10/24, auto-start: true}
 ```
 
-`platformd` reads `network.bonds` at startup and creates the OVS bond
-via OVSDB wire protocol (see `pkg/app/sdn.go::initOVSBonds`).
+`platformd` reads `network.bonds` at startup and creates the OVS bond via
+OVSDB wire protocol (see `pkg/app/sdn.go::initOVSBonds`); each `vlans[]`
+entry becomes an OVS internal port tagged with its zone's VLAN.
 
-### `sdn.fabric.segments`
+### `sdn.fabric` — switch ports by class
 
-Only `provisioning` and `quarantine` are first-class fabric roles
-(they trigger PXE onboarding and isolation flows respectively).
-Control-plane and storage segments have **no `role:`** field — an
-empty/absent role is semantically "general data plane".
+The control-plane template carries the switch fabric. Every platform port
+has a class, and its allowed VLANs, native VLAN and MTU 9216 are derived
+from the environment; no port is trunked the whole block.
+
+| Class | Mode | VLANs (block 4) |
+|-------|------|-----------------|
+| `gateway` | trunk | 400, 401, 404-406, 408 |
+| `hypervisor` | trunk | 401, 403-408, native 405 |
+| `bmc` | access | 402 |
+| `mgmt-uplink` | trunk | 402 |
+| `peer-link` | trunk | every zone of the block (`peers[].peer-link-ports`) |
 
 ```yaml
 sdn:
   fabric:
-    segments:
-      - name: control-plane
-        vlan: 406
-        # no role — implicit general data plane
-      - name: provisioning
-        vlan: 405
-        role: provisioning
-      - name: quarantine
-        vlan: 404
-        role: quarantine
+    switches: [...]
+    peers:
+      - {switch-a: switch-01, switch-b: switch-02, peer-link-ports: [Ethernet1/49, Ethernet1/50]}
+    ports:
+      - {switch-id: switch-01, port: Ethernet1/3, class: gateway, description: gw-01 data}
+      - {switch-id: switch-01, port: Ethernet1/25, class: hypervisor, description: cp-01 data}
+      - {switch-id: switch-01, port: Ethernet1/41, class: bmc, description: gw-01 BMC}
 ```
-
-Setting `role: server` or `role: storage` fails the fabric validator
-and defers SDN initialization.
 
 ### `dns.internal.port: 9053` + `dns.public.port: 8053`
 
@@ -261,7 +306,7 @@ RTC says.
 
 | Role | Mode | Sources | Serves |
 |------|------|---------|--------|
-| control-plane | `both` | `10.4.6.1` (edge router, preferred) + `pool.ntp.org` | `10.4.6.0/24`, `192.0.2.0/24` with NTS as `cp.example.internal` |
+| control-plane | `both` | `10.4.6.1` (the gateway, preferred) + `pool.ntp.org` | `10.4.6.0/24`, `192.0.2.0/24` with NTS as `cp.example.internal` |
 | gateway | `consume` | `cp.example.internal` (control plane) over NTS | — |
 | compute | `consume` | `cp.example.internal` (control plane) over NTS | — |
 
@@ -352,8 +397,8 @@ FQDNs. Example:
 webservices:
   - name: internal
     sans:
-      - node-02.cp.example.internal
-      - node-02.trusted-platform.io
+      - cp-01.cp.example.internal
+      - cp-01.example.com
       - 10.4.6.10
 ```
 
@@ -433,7 +478,7 @@ operational contract.** When a template shape changes, this doc changes.
 Specifically, update the doc in the SAME commit when:
 
 - A new template field changes deployment behavior
-- The bond / bridge / DNS / fabric structure is modified
+- The bond / bridge / DNS / fabric / environment structure is modified
 - A new role is added or a role's responsibilities shift
 - Override precedence or merge semantics change
 

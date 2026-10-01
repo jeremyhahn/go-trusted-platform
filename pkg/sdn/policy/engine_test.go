@@ -22,7 +22,6 @@ import (
 	"testing"
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
@@ -131,6 +130,10 @@ func (m *mockFlowController) SetPortVLAN(ctx context.Context, portName string, v
 	return nil
 }
 
+func (m *mockFlowController) SetPortTrunk(ctx context.Context, portName string, allowed []uint16, native uint16) error {
+	return nil
+}
+
 func (m *mockFlowController) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {
 	return nil
 }
@@ -175,7 +178,7 @@ func TestApplyPolicy_QuarantineZoneWithoutZoneFlowManager_FailsClosed(t *testing
 	require.Error(t, err, "no policy may be stored for a refused quarantine")
 
 	// A non-quarantine zone policy still takes the VLAN-direct path.
-	trusted := &PortPolicy{TenantID: "tenant-a", Zone: zone.ZoneTrusted, VLAN: 200}
+	trusted := &PortPolicy{TenantID: "tenant-a", Zone: zone.ZoneControlPlane, VLAN: 200}
 	require.NoError(t, engine.ApplyPolicy("eth1", trusted))
 	state, err = engine.GetPortState("eth1")
 	require.NoError(t, err)
@@ -423,7 +426,7 @@ func TestEngine_AuthenticatePort(t *testing.T) {
 	t.Run("Valid certificate with zone extension", func(t *testing.T) {
 		engine := createTestEngineWithZones(t)
 
-		cert := createZoneCert(t, "tenant-1", "trusted")
+		cert := createZoneCert(t, "tenant-1", "control-plane")
 
 		err := engine.AuthenticatePort("port1", cert)
 		assert.NoError(t, err)
@@ -437,7 +440,7 @@ func TestEngine_AuthenticatePort(t *testing.T) {
 		policy, err := engine.GetPolicy("port1")
 		assert.NoError(t, err)
 		assert.Equal(t, "tenant-1", policy.TenantID)
-		assert.Equal(t, zone.Zone("trusted"), policy.Zone)
+		assert.Equal(t, zone.Zone("control-plane"), policy.Zone)
 	})
 
 	t.Run("Invalid port ID", func(t *testing.T) {
@@ -670,20 +673,18 @@ func createTestEngine(t *testing.T) *Engine {
 }
 
 // createTestEngineWithZones creates a test engine configured with a ZoneFlowManager
-// that can apply zone-based policies. The resolved zones include "trusted" (VLAN 200)
-// and "provisioning" (VLAN 201) so that zone-extension certs can be authenticated.
+// that can apply zone-based policies on the environment-4 reference plan so that
+// zone-extension certs can be authenticated.
 func createTestEngineWithZones(t *testing.T) *Engine {
 	t.Helper()
 	ctrl := newMockFlowController()
 	zones, err := zone.Resolve(nil)
 	require.NoError(t, err)
-	zfi, err := sdn.BuildZoneIndex(zones, nil)
-	require.NoError(t, err)
 	zfm, err := NewZoneFlowManager(ZoneFlowManagerConfig{
 		BridgeName:     "br0",
 		FlowController: ctrl,
 		PortController: ctrl,
-		ZoneIndex:      zfi,
+		Plan:           testPlan(t),
 		Zones:          zones,
 	})
 	require.NoError(t, err)

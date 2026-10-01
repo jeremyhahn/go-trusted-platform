@@ -16,14 +16,17 @@ package bootstrap
 import (
 	"context"
 	"errors"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+
 	"gopkg.in/yaml.v3"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 )
 
 // --- DryRun tests ---
@@ -34,7 +37,7 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 			Host:            "198.51.100.91",
 			NetbootMediaDir: fleetMedia,
 		},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -145,8 +148,8 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 
 func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -240,8 +243,8 @@ func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 
 func TestOrchestrator_DryRun_BMCFactoryError(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -290,8 +293,8 @@ func TestOrchestrator_DryRun_BMCFactoryError(t *testing.T) {
 
 func TestOrchestrator_DryRun_ManualNodes(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -350,8 +353,8 @@ func TestOrchestrator_DryRun_ManualNodes(t *testing.T) {
 
 func TestOrchestrator_DryRun_NoNodes(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -391,20 +394,16 @@ func TestOrchestrator_DryRun_NoNodes(t *testing.T) {
 
 func TestOrchestrator_DryRun_WithSwitch(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
 		Switch: &SwitchConfig{
 			Vendor: "cisco-nexus",
 			Host:   "198.18.1.4",
-			VLANs: map[string]NetworkDef{
-				"mgmt":    {VLAN: 200, Subnet: "10.0.200.0/24"},
-				"compute": {VLAN: 201, Subnet: "10.0.201.0/24"},
-			},
 			PortAssignments: []PortAssignment{
-				{Port: "Eth1/1", Mode: "trunk", VLANs: []int{200, 201}},
+				{Port: "Eth1/1", Class: zone.PortClassGateway},
 			},
 		},
 		Nodes: []NodeConfig{
@@ -449,8 +448,8 @@ func TestOrchestrator_DryRun_WithSwitch(t *testing.T) {
 
 func TestOrchestrator_DryRun_MixedNodes(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -652,8 +651,8 @@ network:
 	}
 
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain:     "prod.example.com",
 			Hostmaster: "ops@example.com",
@@ -754,9 +753,9 @@ os:
 	}
 
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "prod.example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "prod.example.com"},
 		Templates: map[string]string{
 			RoleControlPlane: cpTemplatePath,
 		},
@@ -800,8 +799,8 @@ func TestOrchestrator_DryRun_ResolveConfigMissingTemplate(t *testing.T) {
 	missingPath := filepath.Join(templateDir, "nonexistent.yaml")
 
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -853,8 +852,8 @@ func TestOrchestrator_DryRun_ResolveConfigMissingTemplate(t *testing.T) {
 
 func TestOrchestrator_DryRun_ResolveConfigNoTemplateForRole(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -907,24 +906,18 @@ func TestOrchestrator_DryRun_ResolveConfigNoTemplateForRole(t *testing.T) {
 
 func TestOrchestrator_DryRun_SwitchPlan(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
 		Switch: &SwitchConfig{
 			Vendor: "cisco-nexus",
 			Host:   "198.18.1.4",
-			VLANs: map[string]NetworkDef{
-				"production":   {VLAN: 200, Subnet: "198.18.0.0/24"},
-				"provisioning": {VLAN: 201, Subnet: "172.16.201.0/24"},
-				"quarantine":   {VLAN: 202, Subnet: "172.16.202.0/24"},
-				"storage":      {VLAN: 203, Subnet: "172.16.203.0/24"},
-			},
 			PortAssignments: []PortAssignment{
-				{Port: "Eth1/35", Mode: "trunk", VLANs: []int{200, 201, 202, 203}, Description: "gw-01 (lab-node-1)"},
-				{Port: "Eth1/36", Mode: "trunk", VLANs: []int{200, 201, 202, 203}, Description: "cp-01 (lab-node-2)"},
-				{Port: "Eth1/37", Mode: "trunk", VLANs: []int{200, 201, 202, 203}, Description: "compute-01 (lab-node-3)"},
+				{Port: "Eth1/3", Class: zone.PortClassGateway, Description: "gw-01"},
+				{Port: "Eth1/25", Class: zone.PortClassHypervisor, Description: "cp-01"},
+				{Port: "Eth1/41", Class: zone.PortClassBMC, Description: "gw-01 bmc"},
 			},
 		},
 		Nodes: []NodeConfig{
@@ -964,46 +957,36 @@ func TestOrchestrator_DryRun_SwitchPlan(t *testing.T) {
 		t.Errorf("expected host 198.18.1.4, got %s", plan.Host)
 	}
 
-	// VLANs should be sorted by ID.
-	if len(plan.VLANs) != 4 {
-		t.Fatalf("expected 4 VLANs, got %d", len(plan.VLANs))
+	// One VLAN per zone of environment 4, sorted by ID and named after the
+	// zone, with its derived subnet.
+	if len(plan.VLANs) != 9 {
+		t.Fatalf("expected 9 VLANs, got %d", len(plan.VLANs))
 	}
-	if plan.VLANs[0].ID != 200 {
-		t.Errorf("expected first VLAN ID 200, got %d", plan.VLANs[0].ID)
+	for i, v := range plan.VLANs {
+		if v.ID != 400+i {
+			t.Errorf("VLAN %d: ID %d, want %d", i, v.ID, 400+i)
+		}
 	}
-	if plan.VLANs[1].ID != 201 {
-		t.Errorf("expected second VLAN ID 201, got %d", plan.VLANs[1].ID)
-	}
-	if plan.VLANs[2].ID != 202 {
-		t.Errorf("expected third VLAN ID 202, got %d", plan.VLANs[2].ID)
-	}
-	if plan.VLANs[3].ID != 203 {
-		t.Errorf("expected fourth VLAN ID 203, got %d", plan.VLANs[3].ID)
+	if plan.VLANs[6].Name != "control-plane" || plan.VLANs[6].Subnet != "10.4.6.0/24" {
+		t.Errorf("unexpected control-plane VLAN %+v", plan.VLANs[6])
 	}
 
-	// Verify VLAN details.
-	if plan.VLANs[0].Name != "production" {
-		t.Errorf("expected first VLAN name production, got %s", plan.VLANs[0].Name)
-	}
-	if plan.VLANs[0].Subnet != "198.18.0.0/24" {
-		t.Errorf("expected first VLAN subnet 198.18.0.0/24, got %s", plan.VLANs[0].Subnet)
-	}
-
-	// Verify ports.
+	// Each port carries what its class carries.
 	if len(plan.Ports) != 3 {
 		t.Fatalf("expected 3 ports, got %d", len(plan.Ports))
 	}
-	if plan.Ports[0].Port != "Eth1/35" {
-		t.Errorf("expected first port Eth1/35, got %s", plan.Ports[0].Port)
+	gw, hv, bmcPort := plan.Ports[0], plan.Ports[1], plan.Ports[2]
+	if gw.Class != "gateway" || gw.Mode != "trunk" || len(gw.VLANs) != 6 || gw.NativeVLAN != 0 || gw.MTU != 9216 {
+		t.Errorf("unexpected gateway port %+v", gw)
 	}
-	if plan.Ports[0].Mode != "trunk" {
-		t.Errorf("expected first port mode trunk, got %s", plan.Ports[0].Mode)
+	if hv.Class != "hypervisor" || len(hv.VLANs) != 7 || hv.NativeVLAN != 405 {
+		t.Errorf("unexpected hypervisor port %+v", hv)
 	}
-	if len(plan.Ports[0].VLANs) != 4 {
-		t.Errorf("expected 4 VLANs on first port, got %d", len(plan.Ports[0].VLANs))
+	if bmcPort.Mode != "access" || len(bmcPort.VLANs) != 1 || bmcPort.VLANs[0] != 402 {
+		t.Errorf("unexpected bmc port %+v", bmcPort)
 	}
-	if plan.Ports[0].Description != "gw-01 (lab-node-1)" {
-		t.Errorf("expected first port description 'gw-01 (lab-node-1)', got %s", plan.Ports[0].Description)
+	if gw.Description != "gw-01" {
+		t.Errorf("expected description gw-01, got %s", gw.Description)
 	}
 }
 
@@ -1011,9 +994,26 @@ func TestOrchestrator_DryRun_SwitchPlanNil(t *testing.T) {
 	cfg := minimalConfig()
 	o := &Orchestrator{config: cfg, logger: orchTestLogger()}
 
-	plan := o.buildSwitchPlan()
-	if plan != nil {
-		t.Error("switch plan should be nil when no switch configured")
+	plan, err := o.buildSwitchPlan()
+	if err != nil || plan != nil {
+		t.Errorf("switch plan should be nil when no switch configured, got %+v, %v", plan, err)
+	}
+}
+
+// TestOrchestrator_BuildSwitchPlan_Errors reports a missing environment and
+// a port class the plan cannot realise.
+func TestOrchestrator_BuildSwitchPlan_Errors(t *testing.T) {
+	o := &Orchestrator{config: &BootstrapConfig{Switch: &SwitchConfig{}}, logger: orchTestLogger()}
+	var missing ErrMissingRequiredField
+	if _, err := o.buildSwitchPlan(); !errors.As(err, &missing) {
+		t.Fatalf("want ErrMissingRequiredField, got %v", err)
+	}
+	o.config = &BootstrapConfig{Environment: testEnvironment(), Switch: &SwitchConfig{
+		PortAssignments: []PortAssignment{{Port: "Eth1/1", Class: "uplink"}},
+	}}
+	var classErr ErrSwitchPortClass
+	if _, err := o.buildSwitchPlan(); !errors.As(err, &classErr) {
+		t.Fatalf("want ErrSwitchPortClass, got %v", err)
 	}
 }
 

@@ -39,10 +39,8 @@ func writeResolveDeployment(t *testing.T) string {
 	cfg := `deployer:
   host: deploy-host
   netboot_media_dir: not-built
-subnets:
-  - name: provisioning
-    cidr: 192.0.2.0/24
-    role: provisioning
+environment:
+  id: 4
 platform:
   domain: example.com
 templates:

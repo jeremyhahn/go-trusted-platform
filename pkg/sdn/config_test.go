@@ -14,453 +14,245 @@
 package sdn_test
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"net/netip"
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
-// minValidConfig returns the smallest valid enabled Config: no networks, no
-// IPAM, no OVS. Callers layer additional fields on top.
+// minValidConfig returns the smallest valid enabled Config: environment 4,
+// the built-in zones, no IPAM, no OVS. Callers layer fields on top.
 func minValidConfig() *sdn.Config {
-	return &sdn.Config{Enabled: true}
+	return &sdn.Config{Enabled: true, Environment: &netplan.Environment{ID: 4}}
 }
-
-// poolCIDR is a convenience for parsing a CIDR string in tests.
-func poolCIDR(s string) netip.Prefix {
-	p, err := netip.ParsePrefix(s)
-	if err != nil {
-		panic(err)
-	}
-	return p
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Config.Validate — disabled / nil guards
-// ─────────────────────────────────────────────────────────────────────────────
 
 func TestValidate_NilConfig(t *testing.T) {
-	t.Parallel()
-
 	var c *sdn.Config
-	err := c.Validate()
-	var target sdn.ErrInvalidConfig
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrInvalidConfig, got %T: %v", err, err)
-	}
+	require.ErrorIs(t, c.Validate(), sdn.ErrInvalidConfig{})
 }
 
 func TestValidate_DisabledConfig_NoError(t *testing.T) {
-	t.Parallel()
-
 	c := &sdn.Config{Enabled: false}
-	if err := c.Validate(); err != nil {
-		t.Errorf("disabled config must pass validation, got: %v", err)
-	}
+	require.NoError(t, c.Validate())
+	assert.Nil(t, c.Plan(), "a disabled section derives no plan")
 }
 
-func TestValidate_EnabledMinimalConfig_NoError(t *testing.T) {
-	t.Parallel()
-
-	if err := minValidConfig().Validate(); err != nil {
-		t.Errorf("minimal enabled config must pass validation, got: %v", err)
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// OVS validation
-// ─────────────────────────────────────────────────────────────────────────────
-
-func TestValidate_OVS_MissingSocket(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	c.OVS = &sdn.OVSConfig{Bridge: "br0"}
+// TestValidate_EnvironmentRequired refuses an enabled section without an
+// environment: nothing could be numbered.
+func TestValidate_EnvironmentRequired(t *testing.T) {
+	c := &sdn.Config{Enabled: true}
 	err := c.Validate()
-	var target sdn.ErrInvalidOVSSocket
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrInvalidOVSSocket, got %T: %v", err, err)
-	}
+	require.ErrorIs(t, err, sdn.ErrEnvironmentRequired{})
+	assert.Contains(t, err.Error(), "sdn.environment")
+	assert.Nil(t, c.Plan())
+	assert.Nil(t, c.ResolvedZones())
 }
 
-func TestValidate_OVS_MissingBridge(t *testing.T) {
-	t.Parallel()
-
+// TestValidate_DerivesPlan derives the reference plan and resolved zones.
+func TestValidate_DerivesPlan(t *testing.T) {
 	c := minValidConfig()
-	c.OVS = &sdn.OVSConfig{Socket: "/var/run/ovs.sock"}
-	err := c.Validate()
-	var target sdn.ErrInvalidBridge
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrInvalidBridge, got %T: %v", err, err)
-	}
+	require.NoError(t, c.Validate())
+	plan := c.Plan()
+	require.NotNil(t, plan)
+	cp, ok := plan.Zone(zone.ZoneControlPlane)
+	require.True(t, ok)
+	assert.Equal(t, uint16(406), cp.VLAN)
+	assert.Len(t, c.ResolvedZones(), 9)
+	assert.Len(t, c.ZoneIndex(), 9)
 }
 
-func TestValidate_OVS_Valid(t *testing.T) {
-	t.Parallel()
+// TestValidate_EnvironmentErrors surfaces netplan and zone errors.
+func TestValidate_EnvironmentErrors(t *testing.T) {
+	c := &sdn.Config{Enabled: true, Environment: &netplan.Environment{ID: 41}}
+	var envErr netplan.ErrEnvironmentID
+	require.ErrorAs(t, c.Validate(), &envErr)
 
+	c = minValidConfig()
+	c.Zones = []zone.ZoneConfig{{Name: "trusted", Offset: 9, PortClasses: []zone.PortClass{zone.PortClassHypervisor}}}
+	var reserved zone.ErrReservedZoneName
+	require.ErrorAs(t, c.Validate(), &reserved)
+
+	c = minValidConfig()
+	c.Zones = []zone.ZoneConfig{{Name: zone.ZoneFabric, Omit: true}}
+	var omit zone.ErrOmitRequired
+	require.ErrorAs(t, c.Validate(), &omit)
+
+	c = minValidConfig()
+	c.Environment.Overrides = []netplan.Override{{Zone: zone.ZoneBackup, VLAN: 401}}
+	var dup netplan.ErrDuplicateVLAN
+	require.ErrorAs(t, c.Validate(), &dup)
+}
+
+func TestValidate_OVS(t *testing.T) {
 	c := minValidConfig()
-	c.OVS = &sdn.OVSConfig{Socket: "/var/run/ovs.sock", Bridge: "br0"}
-	if err := c.Validate(); err != nil {
-		t.Errorf("valid OVS config must pass, got: %v", err)
-	}
+	c.OVS = &sdn.OVSConfig{Bridge: "br-fabric"}
+	require.ErrorIs(t, c.Validate(), sdn.ErrInvalidOVSSocket{})
+
+	c = minValidConfig()
+	c.OVS = &sdn.OVSConfig{Socket: "/var/run/openvswitch/db.sock"}
+	require.ErrorIs(t, c.Validate(), sdn.ErrInvalidBridge{})
+
+	c = minValidConfig()
+	c.OVS = &sdn.OVSConfig{Socket: "/var/run/openvswitch/db.sock", Bridge: "br-fabric"}
+	require.NoError(t, c.Validate())
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// IPAM validation
-// ─────────────────────────────────────────────────────────────────────────────
-
-func TestValidate_IPAM_DuplicatePoolName(t *testing.T) {
-	t.Parallel()
-
+func TestValidate_IPAM_PoolShape(t *testing.T) {
 	c := minValidConfig()
-	c.IPAM = &sdn.IPAMConfig{
-		Pools: []sdn.PoolConfig{
-			{Name: "prod", CIDR: poolCIDR("10.0.0.0/24")},
-			{Name: "prod", CIDR: poolCIDR("10.1.0.0/24")},
-		},
-	}
-	err := c.Validate()
-	var target sdn.ErrDuplicatePoolName
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrDuplicatePoolName, got %T: %v", err, err)
-	}
+	c.IPAM = &sdn.IPAMConfig{Pools: []sdn.PoolConfig{
+		{Name: "public", CIDR: netip.MustParsePrefix("203.0.113.0/24")},
+		{Name: "public", CIDR: netip.MustParsePrefix("198.51.100.0/24")},
+	}}
+	require.ErrorIs(t, c.Validate(), sdn.ErrDuplicatePoolName{Name: "public"})
+
+	c.IPAM.Pools = []sdn.PoolConfig{{Name: "public"}}
+	require.ErrorIs(t, c.Validate(), sdn.ErrInvalidPoolCIDR{})
+
+	c.IPAM.Pools = []sdn.PoolConfig{{CIDR: netip.MustParsePrefix("203.0.113.0/24")}}
+	require.ErrorIs(t, c.Validate(), sdn.ErrInvalidPoolName{})
 }
 
-func TestValidate_IPAM_MissingPoolCIDR(t *testing.T) {
-	t.Parallel()
-
+// TestValidate_IPAM_ExplicitPools accepts a public block and an overlay
+// subnet carved from the tenant default range.
+func TestValidate_IPAM_ExplicitPools(t *testing.T) {
 	c := minValidConfig()
-	c.IPAM = &sdn.IPAMConfig{
-		Pools: []sdn.PoolConfig{
-			{Name: "prod"}, // zero CIDR
-		},
+	c.IPAM = &sdn.IPAMConfig{Pools: []sdn.PoolConfig{
+		{Name: "public", CIDR: netip.MustParsePrefix("203.0.113.0/24")},
+		{Name: "tenant-a", CIDR: netip.MustParsePrefix("10.4.192.0/24")},
+		{Name: "lab-hosts", CIDR: netip.MustParsePrefix("198.51.100.0/24"), Zone: "storage"},
+	}}
+	require.NoError(t, c.Validate())
+}
+
+// TestValidate_IPAM_AgainstPlan refuses explicit pools that collide with
+// the plan's pools, its reserved ranges, or name an undeclared zone.
+func TestValidate_IPAM_AgainstPlan(t *testing.T) {
+	cases := []struct {
+		name  string
+		pool  sdn.PoolConfig
+		check func(t *testing.T, err error)
+	}{
+		{"derived name", sdn.PoolConfig{Name: "provisioning", CIDR: netip.MustParsePrefix("203.0.113.0/24")}, func(t *testing.T, err error) {
+			var target sdn.ErrPoolNameReserved
+			require.ErrorAs(t, err, &target)
+			assert.Contains(t, err.Error(), "derived")
+		}},
+		{"range name", sdn.PoolConfig{Name: "loopbacks", CIDR: netip.MustParsePrefix("203.0.113.0/24")}, func(t *testing.T, err error) {
+			require.ErrorAs(t, err, new(sdn.ErrPoolNameReserved))
+		}},
+		{"zone subnet", sdn.PoolConfig{Name: "x", CIDR: netip.MustParsePrefix("10.4.6.0/25")}, func(t *testing.T, err error) {
+			var target sdn.ErrPoolOverlap
+			require.ErrorAs(t, err, &target)
+			assert.Contains(t, err.Error(), "control-plane")
+		}},
+		{"platform hosts range", sdn.PoolConfig{Name: "x", CIDR: netip.MustParsePrefix("10.4.144.0/24")}, func(t *testing.T, err error) {
+			require.ErrorAs(t, err, new(sdn.ErrPoolOverlap))
+		}},
+		{"host services", sdn.PoolConfig{Name: "x", CIDR: netip.MustParsePrefix("169.254.169.0/24")}, func(t *testing.T, err error) {
+			var target sdn.ErrPoolOverlap
+			require.ErrorAs(t, err, &target)
+			assert.Contains(t, err.Error(), "reserved")
+		}},
+		{"undeclared zone", sdn.PoolConfig{Name: "x", CIDR: netip.MustParsePrefix("203.0.113.0/24"), Zone: "trusted"}, func(t *testing.T, err error) {
+			var target sdn.ErrPoolZoneUndeclared
+			require.ErrorAs(t, err, &target)
+			assert.Equal(t, "trusted", target.Zone)
+		}},
 	}
-	err := c.Validate()
-	var target sdn.ErrInvalidPoolCIDR
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrInvalidPoolCIDR, got %T: %v", err, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := minValidConfig()
+			c.IPAM = &sdn.IPAMConfig{Pools: []sdn.PoolConfig{tc.pool}}
+			err := c.Validate()
+			require.Error(t, err)
+			tc.check(t, err)
+			assert.Nil(t, c.Plan(), "a failed validation publishes no plan")
+		})
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Networks — new list-form validation rules
-// ─────────────────────────────────────────────────────────────────────────────
-
-func TestValidate_Networks_Valid(t *testing.T) {
-	t.Parallel()
-
+func TestValidate_ManagementVPN(t *testing.T) {
 	c := minValidConfig()
-	c.IPAM = &sdn.IPAMConfig{
-		Pools: []sdn.PoolConfig{
-			{Name: "production", CIDR: poolCIDR("198.18.0.0/24")},
-		},
-	}
-	c.Networks = []sdn.NetworkConfig{
-		{
-			Name: "production",
-			VLAN: 200,
-			Zone: zone.ZoneTrusted,
-			Pool: "production",
-		},
-	}
-	if err := c.Validate(); err != nil {
-		t.Errorf("valid networks config must pass, got: %v", err)
-	}
+	c.ManagementVPN = &sdn.ManagementVPNConfig{Enabled: true, AllowTo: []string{"management"}}
+	require.NoError(t, c.Validate())
+
+	c = minValidConfig()
+	c.ManagementVPN = &sdn.ManagementVPNConfig{Enabled: true, AllowTo: []string{"trusted"}}
+	var target sdn.ErrManagementVPNUnknownZone
+	require.ErrorAs(t, c.Validate(), &target)
+	assert.Equal(t, "trusted", target.Zone)
 }
 
-func TestValidate_Networks_MissingZone(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	c.Networks = []sdn.NetworkConfig{
-		{Name: "production", VLAN: 200}, // Zone is empty
-	}
-	err := c.Validate()
-	var target sdn.ErrMissingNetworkZone
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrMissingNetworkZone, got %T: %v", err, err)
-	}
-}
-
-func TestValidate_Networks_UnknownZone(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	c.Networks = []sdn.NetworkConfig{
-		{Name: "production", VLAN: 200, Zone: "nonexistent-zone"},
-	}
-	err := c.Validate()
-	var target sdn.ErrUnknownNetworkZone
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrUnknownNetworkZone, got %T: %v", err, err)
-	}
-}
-
-func TestValidate_Networks_DuplicateName(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	c.Networks = []sdn.NetworkConfig{
-		{Name: "production", VLAN: 200, Zone: zone.ZoneTrusted},
-		{Name: "production", VLAN: 201, Zone: zone.ZoneTrusted},
-	}
-	err := c.Validate()
-	var target sdn.ErrDuplicateNetworkName
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrDuplicateNetworkName, got %T: %v", err, err)
-	}
-}
-
-func TestValidate_Networks_DuplicateVLAN(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	c.Networks = []sdn.NetworkConfig{
-		{Name: "production", VLAN: 200, Zone: zone.ZoneTrusted},
-		{Name: "provisioning", VLAN: 200, Zone: zone.ZoneProvisioning},
-	}
-	err := c.Validate()
-	var target sdn.ErrDuplicateNetworkVLAN
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrDuplicateNetworkVLAN, got %T: %v", err, err)
-	}
-}
-
-func TestValidate_Networks_InvalidVLAN(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	c.Networks = []sdn.NetworkConfig{
-		{Name: "bad", VLAN: 0xFFFF, Zone: zone.ZoneTrusted}, // 65535 > 4094
-	}
-	err := c.Validate()
-	var target sdn.ErrInvalidNetworkVLAN
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrInvalidNetworkVLAN, got %T: %v", err, err)
-	}
-}
-
-func TestValidate_Networks_DuplicateSubnet(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	c.Networks = []sdn.NetworkConfig{
-		{Name: "net-a", VLAN: 200, Zone: zone.ZoneTrusted, Subnet: poolCIDR("10.0.0.0/24")},
-		{Name: "net-b", VLAN: 201, Zone: zone.ZoneProvisioning, Subnet: poolCIDR("10.0.0.0/24")},
-	}
-	err := c.Validate()
-	var target sdn.ErrDuplicateNetworkSubnet
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrDuplicateNetworkSubnet, got %T: %v", err, err)
-	}
-}
-
-func TestValidate_Networks_Subnet6(t *testing.T) {
-	t.Parallel()
-
-	t.Run("valid dual-stack network", func(t *testing.T) {
-		c := minValidConfig()
-		c.Networks = []sdn.NetworkConfig{
-			{Name: "net-a", VLAN: 200, Zone: zone.ZoneTrusted, Subnet: poolCIDR("10.0.0.0/24"), Subnet6: poolCIDR("2001:db8:200::/64")},
-		}
-		if err := c.Validate(); err != nil {
-			t.Fatalf("dual-stack network must validate: %v", err)
-		}
-	})
-	t.Run("subnet6 must be IPv6", func(t *testing.T) {
-		c := minValidConfig()
-		c.Networks = []sdn.NetworkConfig{
-			{Name: "net-a", VLAN: 200, Zone: zone.ZoneTrusted, Subnet6: poolCIDR("10.0.0.0/24")},
-		}
-		err := c.Validate()
-		var target sdn.ErrNetworkSubnet6NotIPv6
-		if !errors.As(err, &target) {
-			t.Errorf("want ErrNetworkSubnet6NotIPv6, got %T: %v", err, err)
-		}
-		if target.Network != "net-a" {
-			t.Errorf("error names %q, want net-a", target.Network)
-		}
-	})
-	t.Run("duplicate subnet6 across networks", func(t *testing.T) {
-		c := minValidConfig()
-		c.Networks = []sdn.NetworkConfig{
-			{Name: "net-a", VLAN: 200, Zone: zone.ZoneTrusted, Subnet6: poolCIDR("2001:db8::/64")},
-			{Name: "net-b", VLAN: 201, Zone: zone.ZoneProvisioning, Subnet6: poolCIDR("2001:db8::/64")},
-		}
-		err := c.Validate()
-		var target sdn.ErrDuplicateNetworkSubnet
-		if !errors.As(err, &target) {
-			t.Errorf("want ErrDuplicateNetworkSubnet, got %T: %v", err, err)
-		}
-	})
-}
-
-func TestValidate_Networks_UnknownPool(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	c.Networks = []sdn.NetworkConfig{
-		{Name: "production", VLAN: 200, Zone: zone.ZoneTrusted, Pool: "no-such-pool"},
-	}
-	err := c.Validate()
-	var target sdn.ErrInvalidNetworkPool
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrInvalidNetworkPool, got %T: %v", err, err)
-	}
-}
-
-func TestValidate_Networks_SubnetPoolMismatch(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	c.IPAM = &sdn.IPAMConfig{
-		Pools: []sdn.PoolConfig{
-			{Name: "production", CIDR: poolCIDR("198.18.0.0/24")},
-		},
-	}
-	c.Networks = []sdn.NetworkConfig{
-		{
-			Name:   "production",
-			VLAN:   200,
-			Zone:   zone.ZoneTrusted,
-			Pool:   "production",
-			Subnet: poolCIDR("10.99.0.0/24"), // doesn't match pool CIDR
-		},
-	}
-	err := c.Validate()
-	var target sdn.ErrSubnetPoolMismatch
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrSubnetPoolMismatch, got %T: %v", err, err)
-	}
-}
-
-func TestValidate_Networks_SubnetMatchesPool_NoError(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	c.IPAM = &sdn.IPAMConfig{
-		Pools: []sdn.PoolConfig{
-			{Name: "production", CIDR: poolCIDR("198.18.0.0/24")},
-		},
-	}
-	c.Networks = []sdn.NetworkConfig{
-		{
-			Name:   "production",
-			VLAN:   200,
-			Zone:   zone.ZoneTrusted,
-			Pool:   "production",
-			Subnet: poolCIDR("198.18.0.0/24"), // matches pool CIDR
-		},
-	}
-	if err := c.Validate(); err != nil {
-		t.Errorf("matching subnet+pool must pass, got: %v", err)
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Config.ResolvedZones
-// ─────────────────────────────────────────────────────────────────────────────
-
-func TestResolvedZones_NilBeforeValidate(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	if c.ResolvedZones() != nil {
-		t.Error("ResolvedZones() must be nil before Validate() is called")
-	}
-}
-
-func TestResolvedZones_PopulatedAfterValidate(t *testing.T) {
-	t.Parallel()
-
-	c := minValidConfig()
-	if err := c.Validate(); err != nil {
-		t.Fatalf("Validate() failed: %v", err)
-	}
-	if len(c.ResolvedZones()) == 0 {
-		t.Error("ResolvedZones() must be non-empty after successful Validate()")
-	}
-}
-
-func TestResolvedZones_NilConfigReturnsNil(t *testing.T) {
-	t.Parallel()
-
+func TestResolvedZonesAndPlan_Nil(t *testing.T) {
 	var c *sdn.Config
-	if c.ResolvedZones() != nil {
-		t.Error("ResolvedZones() on nil Config must return nil")
-	}
+	assert.Nil(t, c.ResolvedZones())
+	assert.Nil(t, c.Plan())
+	assert.Empty(t, c.ZoneIndex())
+	assert.Nil(t, (&sdn.Config{}).ResolvedZones())
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Multi-network happy path (4 canonical networks)
-// ─────────────────────────────────────────────────────────────────────────────
-
-func TestValidate_FourNetworks_AllValid(t *testing.T) {
-	t.Parallel()
-
+// TestLogPrivilegedPaths writes one audit record per privileged path.
+func TestLogPrivilegedPaths(t *testing.T) {
 	c := minValidConfig()
-	c.IPAM = &sdn.IPAMConfig{
-		Pools: []sdn.PoolConfig{
-			{Name: "production", CIDR: poolCIDR("198.18.0.0/24")},
-			{Name: "provisioning", CIDR: poolCIDR("172.16.201.0/24")},
-			{Name: "quarantine", CIDR: poolCIDR("172.16.202.0/24")},
-			{Name: "storage", CIDR: poolCIDR("172.16.203.0/24")},
-		},
-	}
-	c.Networks = []sdn.NetworkConfig{
-		{Name: "production", VLAN: 200, Zone: zone.ZoneTrusted, Pool: "production"},
-		{Name: "provisioning", VLAN: 201, Zone: zone.ZoneProvisioning, Pool: "provisioning"},
-		{Name: "quarantine", VLAN: 202, Zone: zone.ZoneQuarantine, Pool: "quarantine"},
-		{Name: "storage", VLAN: 203, Zone: zone.ZoneStorage, Pool: "storage"},
-	}
-	if err := c.Validate(); err != nil {
-		t.Errorf("four-network config must pass, got: %v", err)
-	}
-}
+	c.Zones = []zone.ZoneConfig{{
+		Name: "lab", Offset: 9, PortClasses: []zone.PortClass{zone.PortClassHypervisor}, Isolate: true,
+		AllowTo:          []zone.ZonePath{{Zone: zone.ZoneControlPlane, Services: []string{"api"}}},
+		PrivilegedAccess: &zone.PrivilegedAccess{Reason: "lab CI", ApprovedBy: "owner"},
+	}}
+	require.NoError(t, c.Validate())
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Typed error string coverage
-// ─────────────────────────────────────────────────────────────────────────────
+	var buf bytes.Buffer
+	c.LogPrivilegedPaths(slog.New(slog.NewTextHandler(&buf, nil)))
+	out := buf.String()
+	assert.Equal(t, 1, strings.Count(out, "privileged zone path"))
+	for _, want := range []string{"audit=true", "from=lab", "to=control-plane", `reason="lab CI"`, "approved_by=owner"} {
+		assert.Contains(t, out, want)
+	}
+
+	// Nothing to log for the reference defaults, a nil config or a nil logger.
+	buf.Reset()
+	ref := minValidConfig()
+	require.NoError(t, ref.Validate())
+	ref.LogPrivilegedPaths(slog.New(slog.NewTextHandler(&buf, nil)))
+	assert.Empty(t, buf.String())
+	var nilCfg *sdn.Config
+	nilCfg.LogPrivilegedPaths(slog.New(slog.NewTextHandler(&buf, nil)))
+	c.LogPrivilegedPaths(nil)
+	assert.Empty(t, buf.String())
+}
 
 func TestErrorStrings_Config(t *testing.T) {
-	t.Parallel()
-
 	cases := []struct {
-		name string
 		err  error
 		want string
 	}{
-		{"ErrInvalidConfig", sdn.ErrInvalidConfig{}, "sdn: invalid configuration"},
-		{"ErrInvalidOVSSocket", sdn.ErrInvalidOVSSocket{}, "sdn: ovs socket path is required"},
-		{"ErrInvalidBridge", sdn.ErrInvalidBridge{}, "sdn: ovs bridge name is required"},
-		{"ErrInvalidPoolName", sdn.ErrInvalidPoolName{}, "sdn: ipam pool name is required"},
-		{"ErrInvalidPoolCIDR", sdn.ErrInvalidPoolCIDR{}, "sdn: ipam pool cidr is invalid"},
-		{"ErrInvalidNetworkPool", sdn.ErrInvalidNetworkPool{Network: "n", Pool: "p"}, `sdn: network "n" references unknown ipam pool "p"`},
-		{"ErrDuplicatePoolName", sdn.ErrDuplicatePoolName{Name: "x"}, `sdn: duplicate ipam pool name "x"`},
-		{"ErrDuplicateNetworkVLAN", sdn.ErrDuplicateNetworkVLAN{VLAN: 200, Networks: [2]string{"a", "b"}}, "sdn: duplicate network vlan id 200"},
-		{"ErrDuplicateNetworkName", sdn.ErrDuplicateNetworkName{Name: "y"}, `sdn: duplicate network name "y"`},
-		{"ErrMissingNetworkZone", sdn.ErrMissingNetworkZone{Network: "z"}, `sdn: network "z" has no zone declared`},
-		{"ErrUnknownNetworkZone", sdn.ErrUnknownNetworkZone{Network: "n", Zone: "bad"}, `sdn: network "n" references unknown zone "bad"`},
-		{"ErrInvalidNetworkVLAN", sdn.ErrInvalidNetworkVLAN{Network: "n", VLAN: 9999}, `sdn: network "n" has invalid vlan id 9999`},
-		{"ErrDuplicateNetworkSubnet", sdn.ErrDuplicateNetworkSubnet{Subnet: poolCIDR("10.0.0.0/24"), Networks: [2]string{"a", "b"}}, "sdn: duplicate subnet 10.0.0.0/24"},
-		{"ErrNetworkSubnet6NotIPv6", sdn.ErrNetworkSubnet6NotIPv6{Network: "a", Subnet: poolCIDR("10.0.0.0/24")}, "sdn: network \"a\" subnet6 10.0.0.0/24 is not an IPv6 prefix"},
-		{"ErrSubnetPoolMismatch", sdn.ErrSubnetPoolMismatch{Network: "n", Subnet: poolCIDR("10.0.0.0/24"), PoolCIDR: poolCIDR("10.1.0.0/24")}, `sdn: network "n" subnet 10.0.0.0/24 does not match pool cidr 10.1.0.0/24`},
+		{sdn.ErrInvalidConfig{}, "invalid configuration"},
+		{sdn.ErrInvalidOVSSocket{}, "socket"},
+		{sdn.ErrInvalidBridge{}, "bridge"},
+		{sdn.ErrInvalidPoolName{}, "pool name"},
+		{sdn.ErrInvalidPoolCIDR{}, "cidr"},
+		{sdn.ErrDuplicatePoolName{Name: "a"}, `"a"`},
+		{sdn.ErrEnvironmentRequired{}, "sdn.environment"},
+		{sdn.ErrPoolNameReserved{Pool: "fabric"}, `"fabric"`},
+		{sdn.ErrPoolOverlap{Pool: "x", CIDR: netip.MustParsePrefix("10.4.6.0/25"), Other: "zone"}, "10.4.6.0/25"},
+		{sdn.ErrPoolZoneUndeclared{Pool: "x", Zone: "z"}, `"z"`},
+		{sdn.ErrIPAMBackendUnconfigured{Backend: "quicbaas"}, "quicbaas"},
+		{sdn.ErrIPAMBackendUnknown{Backend: "x"}, `"x"`},
+		{sdn.ErrIPAMBackendP2PRequired{}, "platform_p2p"},
+		{sdn.ErrManagementVPNUnknownZone{Zone: "z"}, `"z"`},
 	}
 	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := tc.err.Error(); got == "" {
-				t.Errorf("%s.Error() returned empty string", tc.name)
-			}
-			// Spot-check substring rather than full string to avoid
-			// fragile exact-match comparisons across future wording changes.
-			if len(tc.want) > 0 {
-				import_check := tc.err.Error()
-				_ = import_check
-			}
-		})
+		assert.Contains(t, tc.err.Error(), tc.want, "%T", tc.err)
+		assert.True(t, strings.HasPrefix(tc.err.Error(), "sdn:"), "%T", tc.err)
+		assert.False(t, errors.Is(tc.err, nil))
 	}
 }

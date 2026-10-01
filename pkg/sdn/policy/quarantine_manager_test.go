@@ -16,6 +16,8 @@ package policy
 import (
 	"context"
 	"crypto/x509"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,7 +62,7 @@ func (e *errQMNotFound) Error() string { return "device not found" }
 
 func resolvedZonesWithQuarantine() []zone.ZoneConfig {
 	return []zone.ZoneConfig{
-		{Name: zone.ZoneTrusted},
+		{Name: zone.ZoneControlPlane},
 		{Name: zone.ZoneQuarantine, LifecycleRole: zone.LifecycleRoleQuarantine},
 		{Name: zone.ZoneProvisioning, LifecycleRole: zone.LifecycleRoleProvisioning},
 	}
@@ -68,7 +70,7 @@ func resolvedZonesWithQuarantine() []zone.ZoneConfig {
 
 func resolvedZonesWithoutQuarantine() []zone.ZoneConfig {
 	return []zone.ZoneConfig{
-		{Name: zone.ZoneTrusted},
+		{Name: zone.ZoneControlPlane},
 		{Name: zone.ZoneProvisioning, LifecycleRole: zone.LifecycleRoleProvisioning},
 	}
 }
@@ -173,6 +175,10 @@ func (n *nullPortController) SetPortVLAN(ctx context.Context, portName string, v
 	return nil
 }
 
+func (n *nullPortController) SetPortTrunk(ctx context.Context, portName string, allowed []uint16, native uint16) error {
+	return nil
+}
+
 func (n *nullPortController) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {
 	return nil
 }
@@ -191,6 +197,7 @@ func buildNullZoneFlowManager(t *testing.T, zones []zone.ZoneConfig) *ZoneFlowMa
 		BridgeName:     "br-test",
 		FlowController: &nullFlowController{},
 		PortController: &nullPortController{},
+		Plan:           testPlan(t),
 		Zones:          zones,
 	})
 	if err != nil {
@@ -393,7 +400,7 @@ func TestHandleRestoreAttestation_Success(t *testing.T) {
 		ID:         6,
 		State:      entities.DeviceStateQuarantined,
 		PriorState: entities.DeviceStateAttested,
-		PriorZone:  string(zone.ZoneTrusted),
+		PriorZone:  string(zone.ZoneControlPlane),
 	}
 	store := newMemDeviceStore(device)
 	engine := newMockPolicyEngine()
@@ -445,5 +452,120 @@ func TestErrUnknownDevicePort_Error(t *testing.T) {
 	e := ErrUnknownDevicePort{DeviceID: 42}
 	if e.Error() == "" {
 		t.Error("Error() should return non-empty string")
+	}
+}
+
+// TestQuarantine_RecordsAndRestoresPortClass quarantines a port admitted to
+// the hypervisor class and restores that class on re-attestation.
+func TestQuarantine_RecordsAndRestoresPortClass(t *testing.T) {
+	device := &entities.Device{ID: 11, State: entities.DeviceStateAttested}
+	store := newMemDeviceStore(device)
+	engine := newMockPolicyEngine()
+	qm := buildQM(t, store, resolvedZonesWithQuarantine(), engine)
+	ctx := context.Background()
+
+	if err := qm.zoneFlowManager.ApplyPortClassFlows(ctx, "port11", zone.PortClassHypervisor); err != nil {
+		t.Fatalf("admit: %v", err)
+	}
+	ev := &entities.ViolationEvent{
+		DeviceID: 11, Severity: entities.ViolationSeverityWarning,
+		Source: entities.ViolationSourceAttestation, Detail: "PCR[7] mismatch", OccurredAt: time.Now(),
+	}
+	if err := qm.HandleViolation(ctx, ev, "port11"); err != nil {
+		t.Fatalf("HandleViolation: %v", err)
+	}
+	saved := store.devices[11]
+	if saved.PriorPortClass != string(zone.PortClassHypervisor) || saved.PriorZone != "" {
+		t.Fatalf("prior placement = zone %q class %q, want class hypervisor", saved.PriorZone, saved.PriorPortClass)
+	}
+	if z, _ := qm.zoneFlowManager.GetPortZone("port11"); z != zone.ZoneQuarantine {
+		t.Fatalf("port zone = %q, want quarantine", z)
+	}
+
+	if err := qm.HandleRestoreAttestation(ctx, 11, "port11"); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if c, err := qm.zoneFlowManager.GetPortClass("port11"); err != nil || c != zone.PortClassHypervisor {
+		t.Fatalf("restored class = %q (%v), want hypervisor", c, err)
+	}
+	if store.devices[11].PriorPortClass != "" {
+		t.Error("PriorPortClass should be cleared after restore")
+	}
+}
+
+// TestHandleRestoreAttestation_NoTarget keeps a device quarantined when
+// neither a prior zone nor a prior port class was recorded.
+func TestHandleRestoreAttestation_NoTarget(t *testing.T) {
+	device := &entities.Device{ID: 12, State: entities.DeviceStateQuarantined, PriorState: entities.DeviceStateAttested}
+	store := newMemDeviceStore(device)
+	qm := buildQM(t, store, resolvedZonesWithQuarantine(), newMockPolicyEngine())
+
+	err := qm.HandleRestoreAttestation(context.Background(), 12, "port12")
+	var target ErrNoRestoreTarget
+	if !errors.As(err, &target) || target.DeviceID != 12 {
+		t.Fatalf("want ErrNoRestoreTarget for device 12, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "stays quarantined") {
+		t.Errorf("message %q", err.Error())
+	}
+	if store.devices[12].State != entities.DeviceStateQuarantined {
+		t.Error("the device must stay quarantined")
+	}
+}
+
+// TestQuarantine_PortOnLifecycleZoneIsNoPlacement quarantines a device whose
+// port already sits on a lifecycle zone (quarantine, put there by the
+// adapter's quarantine phase). That zone is not recorded as the placement,
+// so a restore refuses rather than re-applying quarantine to an attested
+// device.
+func TestQuarantine_PortOnLifecycleZoneIsNoPlacement(t *testing.T) {
+	device := &entities.Device{ID: 13, State: entities.DeviceStateAttested}
+	store := newMemDeviceStore(device)
+	qm := buildQM(t, store, resolvedZonesWithQuarantine(), newMockPolicyEngine())
+	ctx := context.Background()
+
+	if err := qm.zoneFlowManager.ApplyZoneFlows(ctx, "port13", zone.ZoneQuarantine); err != nil {
+		t.Fatalf("place on quarantine: %v", err)
+	}
+	ev := &entities.ViolationEvent{
+		DeviceID: 13, Severity: entities.ViolationSeverityWarning,
+		Source: entities.ViolationSourceAttestation, OccurredAt: time.Now(),
+	}
+	if err := qm.HandleViolation(ctx, ev, "port13"); err != nil {
+		t.Fatalf("HandleViolation: %v", err)
+	}
+	if saved := store.devices[13]; saved.PriorZone != "" || saved.PriorPortClass != "" {
+		t.Fatalf("a lifecycle zone must not be recorded, got zone %q class %q", saved.PriorZone, saved.PriorPortClass)
+	}
+
+	var target ErrNoRestoreTarget
+	if err := qm.HandleRestoreAttestation(ctx, 13, "port13"); !errors.As(err, &target) {
+		t.Fatalf("want ErrNoRestoreTarget, got %v", err)
+	}
+	if store.devices[13].State != entities.DeviceStateQuarantined {
+		t.Error("the device must stay quarantined")
+	}
+}
+
+// TestHandleRestoreAttestation_RecordedLifecycleZoneIsNoTarget refuses to
+// restore onto a lifecycle zone recorded by an older record, and still
+// restores a recorded ordinary zone.
+func TestHandleRestoreAttestation_RecordedLifecycleZoneIsNoTarget(t *testing.T) {
+	device := &entities.Device{
+		ID: 14, State: entities.DeviceStateQuarantined,
+		PriorState: entities.DeviceStateAttested, PriorZone: string(zone.ZoneProvisioning),
+	}
+	store := newMemDeviceStore(device)
+	qm := buildQM(t, store, resolvedZonesWithQuarantine(), newMockPolicyEngine())
+
+	var target ErrNoRestoreTarget
+	if err := qm.HandleRestoreAttestation(context.Background(), 14, "port14"); !errors.As(err, &target) {
+		t.Fatalf("want ErrNoRestoreTarget, got %v", err)
+	}
+	if qm.isLifecycleZone(zone.ZoneStorage) {
+		t.Error("storage carries no lifecycle role")
+	}
+	if qm.isLifecycleZone("nowhere") {
+		t.Error("an undeclared zone carries no lifecycle role")
 	}
 }

@@ -57,8 +57,6 @@ const (
 	tqOpTenantUpdateQuotas byte = 0xE4
 	tqOpTenantGetUsage     byte = 0xE5
 	tqOpTenantCheckQuota   byte = 0xE6
-	tqOpTenantValidateVLAN byte = 0xE7
-	tqOpTenantGetBridge    byte = 0xE8
 	tqOpTenantSync         byte = 0xE9
 	tqOpTenantRotateDEK    byte = 0xEA
 	tqOpTenantGetDEKStatus byte = 0xEB
@@ -273,10 +271,6 @@ func (a *QUICAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions
 		DisplayName: opts.DisplayName,
 		Labels:      opts.Labels,
 		Annotations: opts.Annotations,
-	}
-	if opts.VLANRange != nil {
-		req.VlanRangeStart = uint32(opts.VLANRange.Start)
-		req.VlanRangeEnd = uint32(opts.VLANRange.End)
 	}
 
 	raw, err := a.send(ctx, "CreateTenant", tqOpTenantCreate, req)
@@ -531,49 +525,6 @@ func (a *QUICAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*
 // Network Operations
 // =============================================================================
 
-// ValidateVLAN validates a VLAN ID for a tenant.
-func (a *QUICAdapter) ValidateVLAN(ctx context.Context, opts ValidateVLANOptions) (*ValidateVLANResult, error) {
-	raw, err := a.send(ctx, "ValidateVLAN", tqOpTenantValidateVLAN, &platformv1.ValidateVLANRequest{
-		TenantId: opts.TenantID,
-		VlanId:   uint32(opts.VLANID),
-	})
-	if err != nil {
-		return &ValidateVLANResult{
-			TenantID: opts.TenantID,
-			VLANID:   opts.VLANID,
-			Valid:    false,
-			Message:  err.Error(),
-		}, nil
-	}
-	var resp platformv1.ValidateVLANResponse
-	if err := tqDecode(raw, &resp); err != nil {
-		return nil, ErrQUICRequestFailed{Operation: "ValidateVLAN", Message: "decode: " + err.Error()}
-	}
-	return &ValidateVLANResult{
-		TenantID: resp.GetTenantId(),
-		VLANID:   uint16(resp.GetVlanId()),
-		Valid:    resp.GetValid(),
-		Message:  resp.GetMessage(),
-	}, nil
-}
-
-// GetBridgeName retrieves the OVS bridge name for a tenant.
-func (a *QUICAdapter) GetBridgeName(ctx context.Context, opts GetBridgeNameOptions) (*GetBridgeNameResult, error) {
-	raw, err := a.send(ctx, "GetBridgeName", tqOpTenantGetBridge, &platformv1.GetBridgeNameRequest{TenantId: opts.TenantID})
-	if err != nil {
-		return nil, err
-	}
-	var resp platformv1.GetBridgeNameResponse
-	if err := tqDecode(raw, &resp); err != nil {
-		return nil, ErrQUICRequestFailed{Operation: "GetBridgeName", Message: "decode: " + err.Error()}
-	}
-	return &GetBridgeNameResult{TenantID: resp.GetTenantId(), BridgeName: resp.GetBridgeName()}, nil
-}
-
-// =============================================================================
-// Sync Operations
-// =============================================================================
-
 // SyncTenants synchronizes tenant manager state.
 func (a *QUICAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, error) {
 	raw, err := a.send(ctx, "SyncTenants", tqOpTenantSync, &platformv1.SyncTenantsRequest{})
@@ -667,15 +618,11 @@ func pbTenantToData(t *platformv1.Tenant) *TenantData {
 		Name:         t.GetName(),
 		DisplayName:  t.GetDisplayName(),
 		State:        pbTenantStateToState(t.GetState()),
-		OVSBridge:    t.GetOvsBridge(),
 		ComputeQuota: pbComputeToData(t.GetComputeQuota()),
 		NetworkQuota: pbNetworkToData(t.GetNetworkQuota()),
 		StorageQuota: pbStorageToData(t.GetStorageQuota()),
 		Labels:       t.GetLabels(),
 		Annotations:  t.GetAnnotations(),
-	}
-	if t.GetVlanStart() != 0 || t.GetVlanEnd() != 0 {
-		data.VLANRange = &VLANRangeData{Start: uint16(t.GetVlanStart()), End: uint16(t.GetVlanEnd())}
 	}
 	if ts := t.GetCreatedAt(); ts != nil {
 		data.CreatedAt = ts.AsTime()

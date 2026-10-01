@@ -2,6 +2,15 @@
 
 This document describes the complete PXE provisioning workflow with physical switch management.
 
+> **Superseded (#708).** The VLAN numbers and the `provisioning_vlan` /
+> `production_vlan` profile keys below describe an earlier design that the code
+> never implemented. The current model: switch ports are configured by **port
+> class**, the hypervisor trunk's native VLAN is the provisioning zone so a factory
+> NIC PXE-boots without a port move, and every VLAN is derived from
+> `sdn.environment`. See [switch-management](../bootstrap/switch-management.md) and
+> the [reference network](../architecture/reference-network.md#switch-port-model).
+> Where this file disagrees, those documents win.
+
 ## Overview
 
 The provisioning workflow automates device onboarding from initial registration through production activation. Switch management enables VLAN isolation during provisioning and automatic transition to production.

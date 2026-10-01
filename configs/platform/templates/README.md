@@ -17,6 +17,17 @@ The `dedicated/` profile is the current reference architecture being
 developed. The other profiles will be added once `dedicated/` is proven
 end-to-end.
 
+## Network Model
+
+Every template follows the reference network
+([docs/architecture/reference-network.md](../../../docs/architecture/reference-network.md))
+on environment 4, the reference example: `sdn.environment` numbers every
+zone, `network.role` decides which zones a host holds addresses on, the
+physical trunk rides `br-fabric` and workloads attach to `br-int`. The
+templates carry no site values; a site sets its own environment and ULA,
+and overrides single zones under `sdn.environment.overrides` only where it
+cannot follow the reference.
+
 ## Directory Structure
 
 ```

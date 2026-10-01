@@ -219,6 +219,12 @@ type Device struct {
 	// quarantine, so zone flows can be restored on remediation success.
 	PriorZone string `yaml:"prior_zone,omitempty" json:"prior_zone,omitempty"`
 
+	// PriorPortClass records the port class (the role's zones) the device's
+	// port carried before quarantine, so the trunk is restored on
+	// remediation success. At most one of PriorZone and PriorPortClass is
+	// set.
+	PriorPortClass string `yaml:"prior_port_class,omitempty" json:"prior_port_class,omitempty"`
+
 	// BMCEnrollment records the outcome of the most recent BMC enrollment
 	// ceremony for this device, or nil when the BMC has never been enrolled.
 	BMCEnrollment *BMCEnrollment `yaml:"bmc_enrollment,omitempty" json:"bmc_enrollment,omitempty"`

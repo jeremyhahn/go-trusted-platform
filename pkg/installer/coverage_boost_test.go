@@ -58,7 +58,7 @@ func TestDebianInstaller_AllMethods(t *testing.T) {
 	})
 
 	t.Run("ConfigureNetwork", func(t *testing.T) {
-		err := inst.ConfigureNetwork(ctx, tmpDir, &NetworkConfig{})
+		err := inst.ConfigureNetwork(ctx, tmpDir, &NetworkConfig{}, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not yet implemented")
 	})
@@ -92,7 +92,7 @@ func TestFedoraInstaller_AllMethods(t *testing.T) {
 	})
 
 	t.Run("ConfigureNetwork", func(t *testing.T) {
-		err := inst.ConfigureNetwork(ctx, tmpDir, &NetworkConfig{})
+		err := inst.ConfigureNetwork(ctx, tmpDir, &NetworkConfig{}, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not yet implemented")
 	})
@@ -126,7 +126,7 @@ func TestUbuntuInstaller_AllMethods(t *testing.T) {
 	})
 
 	t.Run("ConfigureNetwork", func(t *testing.T) {
-		err := inst.ConfigureNetwork(ctx, tmpDir, &NetworkConfig{})
+		err := inst.ConfigureNetwork(ctx, tmpDir, &NetworkConfig{}, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not yet implemented")
 	})
@@ -1037,7 +1037,7 @@ func TestNetworkConfig_Validate_BondMissingMode(t *testing.T) {
 			{Name: "bond0", Interfaces: []string{"eth0", "eth1"}},
 		},
 	}
-	err := nc.Validate()
+	err := nc.Validate(nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "mode is required")
 }
@@ -1071,7 +1071,7 @@ func TestNetworkConfig_Validate_StaticWithIPv6Only(t *testing.T) {
 			},
 		},
 	}
-	err := nc.Validate()
+	err := nc.Validate(nil)
 	assert.NoError(t, err)
 }
 

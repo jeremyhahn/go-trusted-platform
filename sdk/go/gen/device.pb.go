@@ -479,7 +479,7 @@ type NetworkPhaseConfig struct {
 	Subnet     string                 `protobuf:"bytes,8,opt,name=subnet,proto3" json:"subnet,omitempty"`
 	DnsServers []string               `protobuf:"bytes,9,rep,name=dns_servers,json=dnsServers,proto3" json:"dns_servers,omitempty"`
 	Dhcp       bool                   `protobuf:"varint,10,opt,name=dhcp,proto3" json:"dhcp,omitempty"`
-	// zone is the SDN zone name for this network phase (e.g. "trusted",
+	// zone is the SDN zone name for this network phase (e.g. "control-plane",
 	// "provisioning", "quarantine").
 	Zone          string `protobuf:"bytes,12,opt,name=zone,proto3" json:"zone,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -881,14 +881,14 @@ type DeviceProfile struct {
 	// zone is the profile-level SDN zone. Individual network phase configs may
 	// override this value with their own zone field.
 	Zone string `protobuf:"bytes,19,opt,name=zone,proto3" json:"zone,omitempty"`
-	// networks maps logical network names (e.g. "provisioning", "trusted",
+	// networks maps logical network names (e.g. "provisioning", "admitted",
 	// "quarantine") to their phase configurations.
 	Networks map[string]*NetworkPhaseConfig `protobuf:"bytes,20,rep,name=networks,proto3" json:"networks,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// enrollment_network is the key into networks used during device enrollment.
 	// Defaults to "provisioning" when empty.
 	EnrollmentNetwork string `protobuf:"bytes,21,opt,name=enrollment_network,json=enrollmentNetwork,proto3" json:"enrollment_network,omitempty"`
 	// post_enrollment_network is the key into networks the device transitions to
-	// after successful enrollment. Defaults to "trusted" when empty.
+	// after successful enrollment. Defaults to "admitted" when empty.
 	PostEnrollmentNetwork string `protobuf:"bytes,22,opt,name=post_enrollment_network,json=postEnrollmentNetwork,proto3" json:"post_enrollment_network,omitempty"`
 	// failure_network is the key into networks the device is placed in on
 	// enrollment or attestation failure. Defaults to "quarantine" when empty.

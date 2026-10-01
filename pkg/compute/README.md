@@ -96,7 +96,7 @@ config := compute.DefaultOrchestratorConfig(compute.ComputeTypeVM)
 // DefaultDiskSize: 20G
 // MaxInstances:    100
 // EnableKVM:       true
-// NetworkBridge:   trusted0
+// NetworkBridge:   br-int
 ```
 
 ### Custom Configuration

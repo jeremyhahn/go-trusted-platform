@@ -47,8 +47,6 @@ type mockTenantManager struct {
 	updateQuotasFunc    func(ctx context.Context, id string, quotas *tenant.TenantQuotas) error
 	getUsageFunc        func(ctx context.Context, id string) (*quota.TenantUsage, error)
 	checkQuotaFunc      func(ctx context.Context, id string, rt quota.ResourceType, amount int64) error
-	validateVLANFunc    func(ctx context.Context, id string, vlanID uint16) error
-	getBridgeNameFunc   func(ctx context.Context, id string) (string, error)
 	syncFunc            func(ctx context.Context) error
 	rotateDEKFunc       func(ctx context.Context, id string) error
 	getDEKStatusFunc    func(ctx context.Context, id string) (*tenant.DEKStatus, error)
@@ -61,12 +59,7 @@ func newMockTenantManager() *mockTenantManager {
 		Name:        "test-tenant",
 		DisplayName: "Test Tenant",
 		State:       tenant.StateActive,
-		OVSBridge:   "br-tenant-123",
-		VLANRange: tenant.VLANRange{
-			Start: 100,
-			End:   199,
-		},
-		DEKPath: "/tenant/123/default",
+		DEKPath:     "/tenant/123/default",
 		ComputeQuota: tenant.ComputeQuota{
 			MaxVMs:        10,
 			MaxContainers: 50,
@@ -180,21 +173,6 @@ func newMockTenantManager() *mockTenantManager {
 			}
 			return nil
 		},
-		validateVLANFunc: func(ctx context.Context, id string, vlanID uint16) error {
-			if id != "tenant-123" {
-				return errors.New("tenant not found")
-			}
-			if vlanID < 100 || vlanID > 199 {
-				return errors.New("VLAN out of range")
-			}
-			return nil
-		},
-		getBridgeNameFunc: func(ctx context.Context, id string) (string, error) {
-			if id != "tenant-123" {
-				return "", errors.New("tenant not found")
-			}
-			return "br-tenant-123", nil
-		},
 		syncFunc: func(ctx context.Context) error {
 			return nil
 		},
@@ -275,14 +253,6 @@ func (m *mockTenantManager) GetTenantUsage(ctx context.Context, id string) (*quo
 
 func (m *mockTenantManager) CheckTenantQuota(ctx context.Context, id string, rt quota.ResourceType, amount int64) error {
 	return m.checkQuotaFunc(ctx, id, rt, amount)
-}
-
-func (m *mockTenantManager) ValidateTenantVLAN(ctx context.Context, id string, vlanID uint16) error {
-	return m.validateVLANFunc(ctx, id, vlanID)
-}
-
-func (m *mockTenantManager) GetBridgeName(ctx context.Context, id string) (string, error) {
-	return m.getBridgeNameFunc(ctx, id)
 }
 
 func (m *mockTenantManager) Sync(ctx context.Context) error {
@@ -541,44 +511,6 @@ func TestExecuteTenantCheckQuota_WithMockManager(t *testing.T) {
 	}
 
 	err = mockMgr.CheckTenantQuota(ctx, "nonexistent", quota.ResourceVMs, 1)
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantValidateVLAN_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	err := mockMgr.ValidateTenantVLAN(ctx, "tenant-123", 150)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	err = mockMgr.ValidateTenantVLAN(ctx, "tenant-123", 50)
-	if err == nil {
-		t.Error("expected error for VLAN out of range")
-	}
-
-	err = mockMgr.ValidateTenantVLAN(ctx, "nonexistent", 150)
-	if err == nil {
-		t.Error("expected error for nonexistent tenant")
-	}
-}
-
-func TestExecuteTenantGetBridge_WithMockManager(t *testing.T) {
-	mockMgr := newMockTenantManager()
-	ctx := context.Background()
-
-	bridge, err := mockMgr.GetBridgeName(ctx, "tenant-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if bridge != "br-tenant-123" {
-		t.Errorf("expected bridge 'br-tenant-123', got %s", bridge)
-	}
-
-	_, err = mockMgr.GetBridgeName(ctx, "nonexistent")
 	if err == nil {
 		t.Error("expected error for nonexistent tenant")
 	}

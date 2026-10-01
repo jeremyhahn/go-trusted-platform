@@ -150,3 +150,29 @@ func TestSwitchVendorConstants(t *testing.T) {
 		t.Fatalf("expected 'noop', got: %s", VendorNoop)
 	}
 }
+
+// TestValidatePortConfig_NativeAndMTU accepts a hypervisor-class trunk and
+// refuses a native VLAN outside the trunk, a native VLAN on an access port
+// and an MTU out of range.
+func TestValidatePortConfig_NativeAndMTU(t *testing.T) {
+	ok := PortConfig{Port: "Eth1/25", Mode: "trunk", VLANs: []int{401, 405}, NativeVLAN: 405, MTU: 9216}
+	if err := ValidatePortConfig(ok); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bad := []struct {
+		port  PortConfig
+		field string
+	}{
+		{PortConfig{Port: "Eth1/25", Mode: "trunk", VLANs: []int{401}, NativeVLAN: 405}, "port.native_vlan"},
+		{PortConfig{Port: "Eth1/41", Mode: "access", AccessVLAN: 402, NativeVLAN: 402}, "port.native_vlan"},
+		{PortConfig{Port: "Eth1/25", Mode: "trunk", VLANs: []int{401}, MTU: 1400}, "port.mtu"},
+		{PortConfig{Port: "Eth1/25", Mode: "trunk", VLANs: []int{401}, MTU: 9217}, "port.mtu"},
+	}
+	for _, tc := range bad {
+		err := ValidatePortConfig(tc.port)
+		var invalid ErrInvalidConfig
+		if !errors.As(err, &invalid) || invalid.Field != tc.field {
+			t.Fatalf("%+v: want ErrInvalidConfig on %s, got %v", tc.port, tc.field, err)
+		}
+	}
+}

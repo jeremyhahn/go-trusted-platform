@@ -112,18 +112,14 @@ platformctl tenant quotas set tenant-a --max-vms 20 --max-vcpus 80 --max-memory-
 | Verb | Positional | Shows |
 |---|---|---|
 | `usage` | `<tenant-name>` | Resource usage against limits |
-| `vlan` | `<tenant-name>` | VLAN allocation |
-| `bridge` | `<tenant-name>` | Bridge status |
 
 ```bash
 platformctl tenant usage tenant-a
-platformctl tenant vlan tenant-a
-platformctl tenant bridge tenant-a
 ```
 
-A tenant is a VLAN, a bridge, a keyspace and a DEK. These three verbs let you
-confirm the first two exist; DEK status is API-only from the CLI's point of view
-(§6).
+The former `vlan` and `bridge` verbs were removed with the per-tenant VLAN
+range and OVS bridge (#708): a tenant has neither. DEK status is API-only from
+the CLI's point of view (§6).
 
 ---
 
@@ -161,7 +157,6 @@ not a failure.
 |---|---|
 | Rotate the tenant DEK | REST `POST /api/v1/tenants/{id}/dek/rotate`, gRPC `RotateTenantDEK`, MCP `tenant_rotate_dek` |
 | Tenant DEK status | REST `GET /api/v1/tenants/{id}/dek`, MCP `tenant_get_dek_status` |
-| Validate a VLAN before allocating | REST, gRPC, MCP |
 | Check quota for a prospective allocation | REST `POST .../quota-check`, gRPC `CheckQuota` |
 | Sync tenants | REST `POST /api/v1/tenants/sync`, gRPC `Sync` |
 | Get tenant by name over the API | gRPC `GetTenantByName`, REST `/by-name/{name}` |

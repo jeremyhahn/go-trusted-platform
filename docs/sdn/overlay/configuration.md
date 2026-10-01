@@ -43,9 +43,9 @@ builds the configuration:
 | Setting | Source | Default |
 |---------|--------|---------|
 | VTEP IP | Node public IPv4 | 127.0.0.1 when unset (test / loopback nodes) |
-| Bridge name | `sdn.ovs.bridge` | `br-overlay` |
+| Bridge name | Applied default | `br-int`, the workload integration bridge. Never `sdn.ovs.bridge` (`br-fabric`, which carries the physical trunk) |
 | Underlay MTU | Applied default | 9000 |
-| VNI base | Applied default | 1000000 |
+| Environment | `sdn.environment.id` | none: without an environment every VNI must be explicit |
 | State backend | Applied default | `memory` (or `quicbaas` for cluster-shared state) |
 | Health check interval | Applied default | 30s |
 | MAC expiration | Applied default | 5m |
@@ -70,8 +70,8 @@ config := &overlay.Config{
     UnderlayInterface: "eth0",
     UnderlayMTU:       9000,
     VXLANPort:         4789,
-    VNIBase:           1000000,
-    BridgeName:        "br-overlay",
+    Environment:       4,          // VNIs 400001-499999
+    BridgeName:        "br-int",
     OVSSocketPath:     "/var/run/openvswitch/db.sock",
     StateBackend:      "memory",
     EnableEVPN:        true,
@@ -118,8 +118,8 @@ func WithStateManager(state *StateManager) Option
 | UnderlayInterface | string | Physical interface for underlay traffic (required) |
 | UnderlayMTU | int | Underlay MTU; must be >= 1550 |
 | VXLANPort | uint16 | UDP port for VXLAN (default 4789) |
-| VNIBase | uint32 | Base VNI for VLAN-to-VNI mapping |
-| BridgeName | string | OVS bridge for overlay traffic |
+| Environment | uint16 | Environment number E. A zero VNI in AddVNI is derived as E·100000+n with n the lowest free overlay network number (`netplan.VNI`); an explicit VNI must lie in E's block |
+| BridgeName | string | OVS integration bridge for overlay traffic (`br-int`) |
 | OVSSocketPath | string | Path to the OVSDB socket |
 | BGPConfig | *bgp.BGPConfig | BGP service configuration |
 | GatewayConfig | *gateway.GatewayConfig | Gateway node configuration |

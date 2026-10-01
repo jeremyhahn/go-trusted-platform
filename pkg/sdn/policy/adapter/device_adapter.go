@@ -187,7 +187,7 @@ func (a *DeviceSDNAdapter) dispatch(ctx context.Context, eventType device.Networ
 func (a *DeviceSDNAdapter) applyPhase(ctx context.Context, event *device.NetworkEventContext) error {
 	phaseHandlers := map[device.NetworkPhase]func(context.Context, *device.NetworkEventContext) error{
 		device.NetworkPhaseProvisioning: a.applyProvisioningPhase,
-		device.NetworkPhaseTrusted:      a.applyProductionPhase,
+		device.NetworkPhaseAdmitted:     a.applyAdmittedPhase,
 		device.NetworkPhaseQuarantine:   a.applyQuarantinePhase,
 	}
 
@@ -202,7 +202,7 @@ func (a *DeviceSDNAdapter) applyPhase(ctx context.Context, event *device.Network
 }
 
 // applyProvisioningPhase configures the port for provisioning network access.
-// The port is placed in zone.ZoneProvisioning; VLAN is resolved via ZoneIndex.
+// The port is placed in zone.ZoneProvisioning; the VLAN comes from the plan.
 func (a *DeviceSDNAdapter) applyProvisioningPhase(ctx context.Context, event *device.NetworkEventContext) error {
 	a.logger.Info("applying provisioning phase",
 		slog.String("port_id", event.PortID),
@@ -225,11 +225,15 @@ func (a *DeviceSDNAdapter) applyProvisioningPhase(ctx context.Context, event *de
 	return nil
 }
 
-// applyProductionPhase configures the port for production (trusted) network access.
-// Enrolled+authorized devices are moved to zone.ZoneTrusted; VLAN is resolved via
-// ZoneIndex. Profile-level ACLs are applied through the policy engine.
-func (a *DeviceSDNAdapter) applyProductionPhase(ctx context.Context, event *device.NetworkEventContext) error {
-	a.logger.Info("applying production phase",
+// applyAdmittedPhase admits an enrolled, attested device. When the profile
+// names a zone for its post-enrollment network (or at profile level) the
+// port becomes an access port on that zone, if policy.ValidateAdmissionZone
+// allows it (a refused zone leaves the port unchanged); otherwise the port carries its
+// role's zones, the port class of the device role. A role with no port
+// class fails closed: the port stays where it is and ErrNoAdmissionTarget
+// is returned.
+func (a *DeviceSDNAdapter) applyAdmittedPhase(ctx context.Context, event *device.NetworkEventContext) error {
+	a.logger.Info("applying admitted phase",
 		slog.String("port_id", event.PortID),
 		slog.String("device_id", event.DeviceID))
 
@@ -237,15 +241,44 @@ func (a *DeviceSDNAdapter) applyProductionPhase(ctx context.Context, event *devi
 		return ErrInvalidProfile
 	}
 
-	if event.Profile.GetPostEnrollmentNetworkConfig() == nil {
-		return ErrNoTrustedNetwork
+	explicit := event.Profile.Zone
+	if cfg := event.Profile.GetPostEnrollmentNetworkConfig(); cfg != nil && cfg.Zone != "" {
+		explicit = cfg.Zone
 	}
 
-	if err := a.zoneFlowManager.ApplyZoneFlows(ctx, event.PortID, zone.ZoneTrusted); err != nil {
-		a.logger.Error("failed to apply trusted zone flows",
-			slog.String("port_id", event.PortID),
-			slog.String("error", err.Error()))
-		return ErrFlowInstallFailed
+	if explicit != "" {
+		// A profile names its zone; the zone set decides whether a device may
+		// be admitted there (never OOB, transit, fabric or a lifecycle zone;
+		// control-plane only behind an audited privileged path).
+		if err := a.zoneFlowManager.ValidateAdmissionZone(zone.Zone(explicit)); err != nil {
+			a.logger.Error("profile zone refused for admission; port left unchanged",
+				slog.String("port_id", event.PortID),
+				slog.String("zone", explicit),
+				slog.String("error", err.Error()))
+			return err
+		}
+		if err := a.zoneFlowManager.ApplyZoneFlows(ctx, event.PortID, zone.Zone(explicit)); err != nil {
+			a.logger.Error("failed to apply profile zone flows",
+				slog.String("port_id", event.PortID),
+				slog.String("zone", explicit),
+				slog.String("error", err.Error()))
+			return ErrFlowInstallFailed
+		}
+	} else {
+		class, err := event.Profile.Role.PortClass()
+		if err != nil {
+			a.logger.Error("device role has no port class; port left unchanged",
+				slog.String("port_id", event.PortID),
+				slog.String("role", string(event.Profile.Role)))
+			return ErrNoAdmissionTarget{Role: string(event.Profile.Role), Cause: err}
+		}
+		if err := a.zoneFlowManager.ApplyPortClassFlows(ctx, event.PortID, class); err != nil {
+			a.logger.Error("failed to apply port class flows",
+				slog.String("port_id", event.PortID),
+				slog.String("port_class", string(class)),
+				slog.String("error", err.Error()))
+			return ErrFlowInstallFailed
+		}
 	}
 
 	if err := a.policyEngine.SetPortState(event.PortID, policy.PortStateAuthorized); err != nil {
@@ -259,7 +292,7 @@ func (a *DeviceSDNAdapter) applyProductionPhase(ctx context.Context, event *devi
 }
 
 // applyQuarantinePhase configures the port for quarantine network access.
-// The port is placed in zone.ZoneQuarantine; VLAN is resolved via ZoneIndex.
+// The port is placed in zone.ZoneQuarantine; the VLAN comes from the plan.
 func (a *DeviceSDNAdapter) applyQuarantinePhase(ctx context.Context, event *device.NetworkEventContext) error {
 	a.logger.Info("applying quarantine phase",
 		slog.String("port_id", event.PortID),

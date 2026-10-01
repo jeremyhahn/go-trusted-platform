@@ -54,7 +54,9 @@ An IP pool defines an allocatable address space:
 | `ID` | Unique identifier for the pool |
 | `Name` | Human-readable pool name |
 | `CIDR` | Network prefix (e.g., `10.0.0.0/24`) |
-| `Gateway` | Optional gateway address |
+| `Gateway` | Optional gateway address; always reserved |
+| `Reserved` | Prefixes that are never allocatable |
+| `RangeStart`, `RangeEnd` | Dynamic allocation window (`Allocate`); unset = whole CIDR |
 | `DefaultLeaseDuration` | Default allocation lease time |
 | `InactivityTimeout` | Time before inactive allocations expire |
 

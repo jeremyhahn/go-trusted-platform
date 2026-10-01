@@ -60,26 +60,6 @@ func TestCreateVLANCommands_NoName(t *testing.T) {
 	}
 }
 
-func TestCreateVNICommands(t *testing.T) {
-	cmds := createVNICommands(100200, 200)
-	foundNVE := false
-	foundMember := false
-	for _, cmd := range cmds {
-		if cmd == "interface nve1" {
-			foundNVE = true
-		}
-		if strings.Contains(cmd, "member vni 100200 associate-vlan 200") {
-			foundMember = true
-		}
-	}
-	if !foundNVE {
-		t.Fatal("expected interface nve1 command")
-	}
-	if !foundMember {
-		t.Fatal("expected member vni command")
-	}
-}
-
 func TestCreateLAGCommands_WithVPC(t *testing.T) {
 	cmds := createLAGCommands(10, []string{"Eth1/1", "Eth1/2"}, "active", true)
 
@@ -118,72 +98,6 @@ func TestCreateLAGCommands_WithoutVPC(t *testing.T) {
 	}
 }
 
-func TestSetPortAccessCommands(t *testing.T) {
-	cmds := setPortAccessCommands("Eth1/5", 200)
-
-	foundInterface := false
-	foundAccess := false
-	foundVLAN := false
-	for _, cmd := range cmds {
-		if strings.Contains(cmd, "interface Eth1/5") {
-			foundInterface = true
-		}
-		if strings.Contains(cmd, "switchport mode access") {
-			foundAccess = true
-		}
-		if strings.Contains(cmd, "switchport access vlan 200") {
-			foundVLAN = true
-		}
-	}
-	if !foundInterface {
-		t.Fatal("expected interface command")
-	}
-	if !foundAccess {
-		t.Fatal("expected switchport mode access command")
-	}
-	if !foundVLAN {
-		t.Fatal("expected switchport access vlan command")
-	}
-}
-
-func TestSetPortTrunkCommands(t *testing.T) {
-	cmds := setPortTrunkCommands("Eth1/5", []uint16{200, 201}, 200)
-
-	foundTrunk := false
-	foundAllowed := false
-	foundNative := false
-	for _, cmd := range cmds {
-		if strings.Contains(cmd, "switchport mode trunk") {
-			foundTrunk = true
-		}
-		if strings.Contains(cmd, "switchport trunk allowed vlan 200,201") {
-			foundAllowed = true
-		}
-		if strings.Contains(cmd, "switchport trunk native vlan 200") {
-			foundNative = true
-		}
-	}
-	if !foundTrunk {
-		t.Fatal("expected switchport mode trunk command")
-	}
-	if !foundAllowed {
-		t.Fatal("expected switchport trunk allowed vlan command")
-	}
-	if !foundNative {
-		t.Fatal("expected switchport trunk native vlan command")
-	}
-}
-
-func TestSetPortTrunkCommands_NoNative(t *testing.T) {
-	cmds := setPortTrunkCommands("Eth1/5", []uint16{200}, 0)
-
-	for _, cmd := range cmds {
-		if strings.Contains(cmd, "native") {
-			t.Fatal("should not include native vlan when zero")
-		}
-	}
-}
-
 func TestJoinUint16s(t *testing.T) {
 	result := joinUint16s([]uint16{200, 201, 203}, ",")
 	if result != "200,201,203" {
@@ -202,5 +116,36 @@ func TestShowRunningInterfaceCommand(t *testing.T) {
 	cmd := showRunningInterfaceCommand("Eth1/5")
 	if cmd != "show running-config interface Eth1/5" {
 		t.Fatalf("expected %q, got %q", "show running-config interface Eth1/5", cmd)
+	}
+}
+
+// TestSetPortCommands checks the access, trunk and shutdown command sets,
+// including the MTU and the native-VLAN reset.
+func TestSetPortCommands(t *testing.T) {
+	access := strings.Join(setPortAccessCommands("Eth1/41", 402, 9216), "\n")
+	for _, want := range []string{"interface Eth1/41", "switchport mode access", "switchport access vlan 402", "mtu 9216", "no shutdown"} {
+		if !strings.Contains(access, want) {
+			t.Fatalf("access: missing %q in %s", want, access)
+		}
+	}
+	if strings.Contains(strings.Join(setPortAccessCommands("Eth1/41", 402, 0), "\n"), "mtu") {
+		t.Fatal("mtu 0 must leave the MTU alone")
+	}
+
+	trunk := strings.Join(setPortTrunkCommands("Eth1/25", []uint16{401, 405}, 405, 9216), "\n")
+	for _, want := range []string{"switchport mode trunk", "switchport trunk allowed vlan 401,405", "switchport trunk native vlan 405", "mtu 9216"} {
+		if !strings.Contains(trunk, want) {
+			t.Fatalf("trunk: missing %q in %s", want, trunk)
+		}
+	}
+	bare := strings.Join(setPortTrunkCommands("Eth1/25", nil, 0, 0), "\n")
+	for _, want := range []string{"switchport trunk allowed vlan none", "no switchport trunk native vlan"} {
+		if !strings.Contains(bare, want) {
+			t.Fatalf("trunk: missing %q in %s", want, bare)
+		}
+	}
+
+	if !strings.Contains(strings.Join(disablePortCommands("Eth1/25"), "\n"), "  shutdown") {
+		t.Fatal("expected shutdown")
 	}
 }

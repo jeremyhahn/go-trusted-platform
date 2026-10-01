@@ -100,36 +100,66 @@ On the webservice these routes are admin-gated — a zone defines what may
 reach what, so every endpoint below requires an authenticated caller
 holding `admin` and answers 401 or 403 otherwise.
 
+The zone object (`pkg/sdn/gateway.ZoneSpec` in requests,
+`pkg/sdn/gateway.ZoneView` in responses):
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | string | Lowercase DNS label; not `platform`, `tenant`, `public` or `trusted` |
+| `offset` | integer | 0–8 for the built-ins (fixed); 9–99 for an owner-defined zone |
+| `port_classes` | string[] | Fixed for built-ins; owner-defined zones: `gateway` and/or `hypervisor` |
+| `internet_ingress` | bool | Accepts inbound internet traffic |
+| `isolate_from` | string[] | Zones this zone never sends to |
+| `allow_to` | `{zone, services}`[] | Directed paths; empty `services` allows all |
+| `services` | string[] | Services permitted inside the zone |
+| `isolate` | bool | Deny everything except `allow_to` paths |
+| `oob` | bool | Built-in `management` only |
+| `lifecycle_role` | string | Built-in `provisioning` and `quarantine` only |
+| `privileged_access` | `{reason, approved_by}` | Required for an `allow_to` path into `control-plane` or `management` beyond the reference defaults; audited |
+| `numbering` | `{vlan, subnet4, subnet6, gateway}` | Response only; present when the node has an `sdn.environment` |
+| `restart_required` | bool | Response only; true after every accepted mutation |
+| `created_at`, `updated_at` | RFC 3339 | Response only |
+
 ### POST /api/v1/sdn/zones
 
-Create a new network trust zone.
+Create an owner-defined zone.
 
 **Request body:**
 ```json
 {
-  "name": "dmz",
-  "internet_ingress": true,
-  "isolate": false,
-  "isolate_per_tenant": false,
-  "oob": false,
-  "lifecycle_role": ""
+  "name": "lab",
+  "offset": 9,
+  "port_classes": ["hypervisor"],
+  "isolate": true,
+  "allow_to": [{"zone": "control-plane", "services": ["dns"]}],
+  "privileged_access": {"reason": "lab resolver", "approved_by": "owner"}
 }
 ```
 
 **Response 201:**
 ```json
 {
-  "name": "dmz",
-  "internet_ingress": true,
-  "restart_required": false,
-  "created_at": "2026-06-12T00:00:00Z",
-  "updated_at": "2026-06-12T00:00:00Z"
+  "name": "lab",
+  "offset": 9,
+  "port_classes": ["hypervisor"],
+  "isolate": true,
+  "allow_to": [{"zone": "control-plane", "services": ["dns"]}],
+  "privileged_access": {"reason": "lab resolver", "approved_by": "owner"},
+  "numbering": {"vlan": 409, "subnet4": "10.4.9.0/24", "subnet6": "fd12:3456:789a:409::/64", "gateway": "10.4.9.1"},
+  "restart_required": true,
+  "created_at": "2026-10-01T00:00:00Z",
+  "updated_at": "2026-10-01T00:00:00Z"
 }
 ```
 
+**Errors:** 400 (missing name, malformed body, or the zone or numbering
+validation fails — the message names the rule), 409 (the zone exists; the
+built-ins always do).
+
 ### GET /api/v1/sdn/zones
 
-List all network trust zones. Optional `lifecycle_role` query parameter filters results.
+List the zones in offset order. Optional `lifecycle_role` query parameter
+filters results.
 
 **Query parameters:**
 - `lifecycle_role` — `provisioning` or `quarantine` (empty returns all)
@@ -139,46 +169,42 @@ List all network trust zones. Optional `lifecycle_role` query parameter filters 
 {
   "zones": [
     {
-      "name": "trusted",
-      "isolate": false,
-      "created_at": "2026-06-12T00:00:00Z",
-      "updated_at": "2026-06-12T00:00:00Z"
+      "name": "provisioning",
+      "offset": 5,
+      "port_classes": ["gateway", "hypervisor"],
+      "isolate": true,
+      "lifecycle_role": "provisioning",
+      "services": ["dhcp", "tftp", "http", "dns", "acme"],
+      "allow_to": [{"zone": "control-plane", "services": ["tftp", "http", "dns", "acme"]}],
+      "numbering": {"vlan": 405, "subnet4": "192.0.2.0/24", "gateway": "192.0.2.1"},
+      "created_at": "2026-10-01T00:00:00Z",
+      "updated_at": "2026-10-01T00:00:00Z"
     }
   ],
   "count": 1,
-  "timestamp": "2026-06-12T00:00:00Z"
+  "timestamp": "2026-10-01T00:00:00Z"
 }
 ```
 
 ### PUT /api/v1/sdn/zones/{name}
 
-Update policy settings of an existing zone.
+Tune a built-in zone's policy or replace an owner-defined zone. The body's
+fields replace the zone's policy as a whole; `name` is taken from the path
+(on the webservice a mismatched body `name` is refused). A built-in keeps
+its offset, port classes, lifecycle role and OOB flag; changing them is a
+400.
 
-**Request body:** same fields as create (except `name`).
-
-**Response 200:** zone object with `restart_required` set when flow matrix
-must be rebuilt.
+**Response 200:** the zone object, `restart_required: true`. 404 when the
+zone does not exist.
 
 ### DELETE /api/v1/sdn/zones/{name}
 
-Delete a zone by name. Fails when the zone is the sole holder of a required
-lifecycle role.
+Delete an owner-defined zone, or omit an optional built-in. `fabric`,
+`provisioning`, `quarantine` and `control-plane` cannot be removed (400).
 
 **Response 200:**
 ```json
-{"deleted": true, "restart_required": false}
+{"deleted": true, "restart_required": true}
 ```
 
-### PUT /api/v1/sdn/networks/{network}/zone
-
-Assign a network segment to a trust zone.
-
-**Request body:**
-```json
-{"zone": "trusted"}
-```
-
-**Response 200:**
-```json
-{"success": true, "restart_required": true}
-```
+There is no `PUT /api/v1/sdn/networks/{network}/zone`: networks are zones.

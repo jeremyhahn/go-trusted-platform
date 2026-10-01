@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -842,22 +843,37 @@ func (r *cliDHCPLeaseListResponse) toResponse() *DHCPLeaseListResponse {
 // Network Zone Operations
 // =============================================================================
 
+// cliNetworkZonePath mirrors the JSON output of platformv1.NetworkZonePath.
+type cliNetworkZonePath struct {
+	Zone     string   `json:"zone,omitempty"`
+	Services []string `json:"services,omitempty"`
+}
+
 // cliNetworkZoneConfig mirrors the JSON output of platformv1.NetworkZoneConfig.
 type cliNetworkZoneConfig struct {
-	Name             string `json:"name,omitempty"`
-	InternetIngress  bool   `json:"internet_ingress,omitempty"`
-	Isolate          bool   `json:"isolate,omitempty"`
-	IsolatePerTenant bool   `json:"isolate_per_tenant,omitempty"`
-	Oob              bool   `json:"oob,omitempty"`
-	LifecycleRole    string `json:"lifecycle_role,omitempty"`
+	Name             string               `json:"name,omitempty"`
+	Offset           uint8                `json:"offset,omitempty"`
+	PortClasses      []string             `json:"port_classes,omitempty"`
+	InternetIngress  bool                 `json:"internet_ingress,omitempty"`
+	Isolate          bool                 `json:"isolate,omitempty"`
+	Oob              bool                 `json:"oob,omitempty"`
+	LifecycleRole    string               `json:"lifecycle_role,omitempty"`
+	Services         []string             `json:"services,omitempty"`
+	AllowTo          []cliNetworkZonePath `json:"allow_to,omitempty"`
+	PrivilegedAccess *struct {
+		ApprovedBy string `json:"approved_by,omitempty"`
+	} `json:"privileged_access,omitempty"`
 }
 
 // cliNetworkZone mirrors the JSON output of platformv1.NetworkZone.
 type cliNetworkZone struct {
 	Config          *cliNetworkZoneConfig `json:"config,omitempty"`
 	RestartRequired bool                  `json:"restart_required,omitempty"`
-	CreatedAt       *cliTimestamp         `json:"created_at,omitempty"`
-	UpdatedAt       *cliTimestamp         `json:"updated_at,omitempty"`
+	Numbering       *struct {
+		Vlan uint16 `json:"vlan,omitempty"`
+	} `json:"numbering,omitempty"`
+	CreatedAt *cliTimestamp `json:"created_at,omitempty"`
+	UpdatedAt *cliTimestamp `json:"updated_at,omitempty"`
 }
 
 // cliTimestamp mirrors google.protobuf.Timestamp JSON shape.
@@ -875,37 +891,73 @@ func (t *cliTimestamp) AsTime() time.Time {
 
 func (z *cliNetworkZone) toEntry() *ZoneEntry {
 	entry := &ZoneEntry{RestartRequired: z.RestartRequired}
-	if z.Config != nil {
-		entry.Name = z.Config.Name
-		entry.InternetIngress = z.Config.InternetIngress
-		entry.Isolate = z.Config.Isolate
-		entry.IsolatePerTenant = z.Config.IsolatePerTenant
-		entry.OOB = z.Config.Oob
-		entry.LifecycleRole = z.Config.LifecycleRole
+	if z.Numbering != nil {
+		entry.VLAN = z.Numbering.Vlan
+	}
+	if c := z.Config; c != nil {
+		entry.Name = c.Name
+		entry.Offset = c.Offset
+		entry.PortClasses = c.PortClasses
+		entry.InternetIngress = c.InternetIngress
+		entry.Isolate = c.Isolate
+		entry.OOB = c.Oob
+		entry.LifecycleRole = c.LifecycleRole
+		entry.Services = c.Services
+		for _, p := range c.AllowTo {
+			entry.AllowTo = append(entry.AllowTo, ZonePathEntry{Zone: p.Zone, Services: p.Services})
+		}
+		if c.PrivilegedAccess != nil {
+			entry.PrivilegedApprovedBy = c.PrivilegedAccess.ApprovedBy
+		}
 	}
 	entry.CreatedAt = z.CreatedAt.AsTime()
 	entry.UpdatedAt = z.UpdatedAt.AsTime()
 	return entry
 }
 
-// CreateZone creates a new network trust zone via CLI.
-func (c *SDNCLIAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error) {
-	args := []string{"sdn", "zone", "create", "--name", req.Name}
-	if req.InternetIngress {
+// cliZoneSpecArgs renders a spec as platformctl sdn zone flags.
+func cliZoneSpecArgs(spec ZoneSpec) []string {
+	var args []string
+	if spec.Offset != 0 {
+		args = append(args, "--offset", strconv.Itoa(int(spec.Offset)))
+	}
+	for _, c := range spec.PortClasses {
+		args = append(args, "--port-class", c)
+	}
+	if spec.InternetIngress {
 		args = append(args, "--internet-ingress")
 	}
-	if req.Isolate {
+	if spec.Isolate {
 		args = append(args, "--isolate")
 	}
-	if req.IsolatePerTenant {
-		args = append(args, "--isolate-per-tenant")
-	}
-	if req.OOB {
+	if spec.OOB {
 		args = append(args, "--oob")
 	}
-	if req.LifecycleRole != "" {
-		args = append(args, "--lifecycle-role", req.LifecycleRole)
+	if spec.LifecycleRole != "" {
+		args = append(args, "--lifecycle-role", spec.LifecycleRole)
 	}
+	for _, svc := range spec.Services {
+		args = append(args, "--service", svc)
+	}
+	for _, p := range spec.AllowTo {
+		v := p.Zone
+		if len(p.Services) > 0 {
+			v += ":" + strings.Join(p.Services, ",")
+		}
+		args = append(args, "--allow-to", v)
+	}
+	if spec.PrivilegedReason != "" {
+		args = append(args, "--reason", spec.PrivilegedReason)
+	}
+	if spec.PrivilegedApprovedBy != "" {
+		args = append(args, "--approved-by", spec.PrivilegedApprovedBy)
+	}
+	return args
+}
+
+// CreateZone creates an owner-defined zone via CLI.
+func (c *SDNCLIAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error) {
+	args := append([]string{"sdn", "zone", "create", "--name", req.Name}, cliZoneSpecArgs(req.ZoneSpec)...)
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
 		return nil, err
@@ -917,24 +969,9 @@ func (c *SDNCLIAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) (
 	return z.toEntry(), nil
 }
 
-// UpdateZone updates an existing network trust zone via CLI.
+// UpdateZone tunes or replaces a zone via CLI.
 func (c *SDNCLIAdapter) UpdateZone(ctx context.Context, name string, req ZoneUpdateRequest) (*ZoneEntry, error) {
-	args := []string{"sdn", "zone", "update", "--name", name}
-	if req.InternetIngress {
-		args = append(args, "--internet-ingress")
-	}
-	if req.Isolate {
-		args = append(args, "--isolate")
-	}
-	if req.IsolatePerTenant {
-		args = append(args, "--isolate-per-tenant")
-	}
-	if req.OOB {
-		args = append(args, "--oob")
-	}
-	if req.LifecycleRole != "" {
-		args = append(args, "--lifecycle-role", req.LifecycleRole)
-	}
+	args := append([]string{"sdn", "zone", "update", "--name", name}, cliZoneSpecArgs(req.ZoneSpec)...)
 	output, err := c.runCommand(ctx, args...)
 	if err != nil {
 		return nil, err
@@ -946,18 +983,17 @@ func (c *SDNCLIAdapter) UpdateZone(ctx context.Context, name string, req ZoneUpd
 	return z.toEntry(), nil
 }
 
-// DeleteZone deletes a network trust zone via CLI.
-// The CLI outputs a human-readable message rather than JSON for delete; always returns false, nil on success.
+// DeleteZone deletes a zone via CLI. The CLI prints a sentence rather than
+// JSON for delete; "restart required" in it is the restart contract.
 func (c *SDNCLIAdapter) DeleteZone(ctx context.Context, name string) (bool, error) {
-	_, err := c.runCommand(ctx, "sdn", "zone", "delete", "--name", name)
+	output, err := c.runCommand(ctx, "sdn", "zone", "delete", "--name", name)
 	if err != nil {
 		return false, err
 	}
-	// CLI does not output structured JSON for delete — treat success as non-restart.
-	return false, nil
+	return strings.Contains(strings.ToLower(string(output)), "restart required"), nil
 }
 
-// ListZones returns all network trust zones via CLI.
+// ListZones returns the zones via CLI.
 func (c *SDNCLIAdapter) ListZones(ctx context.Context, lifecycleRole string) (*ZoneListResponse, error) {
 	args := []string{"sdn", "zone", "list"}
 	if lifecycleRole != "" {
@@ -976,18 +1012,6 @@ func (c *SDNCLIAdapter) ListZones(ctx context.Context, lifecycleRole string) (*Z
 		entries = append(entries, *z.toEntry())
 	}
 	return &ZoneListResponse{Zones: entries, TotalCount: len(entries)}, nil
-}
-
-// AssignZone assigns a network segment to a trust zone via CLI.
-func (c *SDNCLIAdapter) AssignZone(ctx context.Context, network string, zoneName string) (bool, error) {
-	output, err := c.runCommand(ctx, "sdn", "zone", "assign", "--network", network, "--zone", zoneName)
-	if err != nil {
-		return false, err
-	}
-	// The assign command prints "Daemon restart required to rebuild flow
-	// matrix." when the assignment changes active policy; that line is the
-	// CLI's restart-required contract.
-	return strings.Contains(strings.ToLower(string(output)), "restart required"), nil
 }
 
 // Ensure SDNCLIAdapter implements SDNTestAdapter interface.

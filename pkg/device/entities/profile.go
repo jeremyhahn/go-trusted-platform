@@ -16,6 +16,8 @@ package entities
 import (
 	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 // DeviceRole represents the role or function of a device in the system.
@@ -54,6 +56,28 @@ var deviceRoles = map[string]DeviceRole{
 	string(DeviceRoleIoT):          DeviceRoleIoT,
 	string(DeviceRoleLoadBalancer): DeviceRoleLoadBalancer,
 	"loadbalancer":                 DeviceRoleLoadBalancer,
+}
+
+// rolePortClasses is the single place a device role maps to the switch port
+// class whose zones an admitted device of that role carries: gateways get
+// the gateway trunk, control-plane and worker (compute) nodes the hypervisor
+// trunk. Every other role has no port class and is never admitted to role
+// zones: it needs an explicit profile zone.
+var rolePortClasses = map[DeviceRole]zone.PortClass{
+	DeviceRoleGateway:      zone.PortClassGateway,
+	DeviceRoleControlPlane: zone.PortClassHypervisor,
+	DeviceRoleWorker:       zone.PortClassHypervisor,
+}
+
+// PortClass returns the port class whose zones an admitted device of role r
+// carries. Roles without one return ErrNoPortClassForRole, so the lifecycle
+// fails closed and the port stays where it is.
+func (r DeviceRole) PortClass() (zone.PortClass, error) {
+	c, ok := rolePortClasses[r]
+	if !ok {
+		return "", ErrNoPortClassForRole{Role: r}
+	}
+	return c, nil
 }
 
 // ParseDeviceRole resolves a caller-supplied role string to its canonical
@@ -175,9 +199,10 @@ type NetworkPhaseConfig struct {
 	AuthMethod AuthMethod `json:"auth_method" yaml:"auth_method"`
 	// ACLs is the list of access control rules
 	ACLs []ACLConfig `json:"acls,omitempty" yaml:"acls,omitempty"`
-	// Zone is the SDN zone name assigned to this network phase (e.g. "trusted",
-	// "provisioning", "quarantine"). When empty the SDN engine derives the zone
-	// from the profile-level Zone field.
+	// Zone is the underlay zone assigned to this network phase (e.g.
+	// "provisioning", "quarantine", an owner-defined zone). When empty the
+	// profile-level Zone applies; when that is empty too, an admitted device
+	// gets its role's zones (DeviceRole.PortClass).
 	Zone string `json:"zone,omitempty" yaml:"zone,omitempty"`
 
 	// Legacy fields retained for YAML/JSON unmarshalling of existing configs.
@@ -294,7 +319,7 @@ func (p *ProfileMatchRules) Matches(macAddr, serial, model string) bool {
 // or failure network fields are not explicitly configured.
 const (
 	DefaultEnrollmentNetwork     = "provisioning"
-	DefaultPostEnrollmentNetwork = "trusted"
+	DefaultPostEnrollmentNetwork = "admitted"
 	DefaultFailureNetwork        = "quarantine"
 )
 
@@ -308,12 +333,14 @@ type DeviceProfile struct {
 	Role     DeviceRole `yaml:"role" json:"role"`
 	EventLog []byte     `yaml:"eventLog" json:"eventLog"`
 
-	// Zone declares the default SDN zone for this device profile. Individual
-	// network phase configs may override this with their own Zone field.
+	// Zone declares a single underlay zone an admitted device of this
+	// profile is placed in. Individual network phase configs may override it
+	// with their own Zone field. Empty means the device gets its role's
+	// zones (DeviceRole.PortClass).
 	Zone string `yaml:"zone,omitempty" json:"zone,omitempty"`
 
 	// Networks is a map of named network phase configurations keyed by
-	// logical network name (e.g., "provisioning", "trusted", "quarantine").
+	// logical network name (e.g., "provisioning", "admitted", "quarantine").
 	Networks map[string]*NetworkPhaseConfig `yaml:"networks,omitempty" json:"networks,omitempty"`
 
 	// EnrollmentNetwork is the name of the network used during device enrollment.
@@ -321,7 +348,7 @@ type DeviceProfile struct {
 	EnrollmentNetwork string `yaml:"enrollment-network,omitempty" json:"enrollment_network,omitempty"`
 
 	// PostEnrollmentNetwork is the name of the network the device transitions to
-	// after successful enrollment. Defaults to "trusted" when empty.
+	// after successful enrollment. Defaults to "admitted" when empty.
 	PostEnrollmentNetwork string `yaml:"post-enrollment-network,omitempty" json:"post_enrollment_network,omitempty"`
 
 	// FailureNetwork is the name of the network the device is moved to when
@@ -433,7 +460,7 @@ func (dp *DeviceProfile) GetEnrollmentNetworkConfig() *NetworkPhaseConfig {
 
 // GetPostEnrollmentNetworkConfig returns the network configuration the device
 // transitions to after successful enrollment. If PostEnrollmentNetwork is
-// empty, it defaults to "trusted". When the resolved config has no Zone set,
+// empty, it defaults to "admitted". When the resolved config has no Zone set,
 // the profile-level Zone is applied.
 func (dp *DeviceProfile) GetPostEnrollmentNetworkConfig() *NetworkPhaseConfig {
 	if dp == nil {

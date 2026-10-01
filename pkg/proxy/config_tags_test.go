@@ -27,7 +27,7 @@ import (
 const controlPlaneYAML = `
 defaults:
   attestation-max-age: 10m
-  backend-zone: trusted
+  backend-zone: control-plane
 pools:
   - id: console
     backends:
@@ -47,10 +47,10 @@ routes:
     auth:
       mode: mtls-or-token
       require-idevid: true
-      allowed-zones: [trusted, management]
+      allowed-zones: [control-plane, management]
       require-attestation: true
       required-roles: [admin]
-      token-zone: trusted
+      token-zone: control-plane
     preserve-host: true
 `
 
@@ -69,10 +69,10 @@ func TestControlPlaneConfig_DecodesHyphenatedKeys(t *testing.T) {
 	assert.Equal(t, "console", r.PoolID)
 	assert.Equal(t, AuthModeMTLSOrToken, r.Auth.Mode)
 	assert.True(t, r.Auth.RequireIDevID)
-	assert.Equal(t, []string{"trusted", "management"}, r.Auth.AllowedZones)
+	assert.Equal(t, []string{"control-plane", "management"}, r.Auth.AllowedZones)
 	assert.True(t, r.Auth.RequireAttestation)
 	assert.Equal(t, []string{"admin"}, r.Auth.RequiredRoles)
-	assert.Equal(t, "trusted", r.Auth.TokenZone)
+	assert.Equal(t, "control-plane", r.Auth.TokenZone)
 	assert.True(t, r.PreserveHost)
 
 	require.Len(t, cfg.Pools, 1)
@@ -84,7 +84,7 @@ func TestControlPlaneConfig_DecodesHyphenatedKeys(t *testing.T) {
 	assert.Equal(t, 8, p.MaxIdleConnsPerHost)
 	assert.Equal(t, 90*time.Second, p.IdleConnTimeout)
 	assert.Equal(t, 10*time.Minute, cfg.Defaults.AttestationMaxAge)
-	assert.Equal(t, "trusted", cfg.Defaults.BackendZone)
+	assert.Equal(t, "control-plane", cfg.Defaults.BackendZone)
 }
 
 func TestControlPlaneConfig_ValidateFailsClosed(t *testing.T) {

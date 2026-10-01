@@ -1898,11 +1898,12 @@ type IPAMPool struct {
 	Cidr string `protobuf:"bytes,3,opt,name=cidr,proto3" json:"cidr,omitempty"`
 	// Optional gateway address within the CIDR.
 	Gateway string `protobuf:"bytes,4,opt,name=gateway,proto3" json:"gateway,omitempty"`
-	// Trust/exposure zone for this pool (e.g. "trusted", "provisioning").
+	// Underlay zone of a zone pool (e.g. "control-plane", "provisioning");
+	// empty for overlay and IPAM-range pools.
 	Zone string `protobuf:"bytes,5,opt,name=zone,proto3" json:"zone,omitempty"`
 	// Optional description of the pool's purpose.
 	Description string `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`
-	// Total usable IP count.
+	// Total allocatable IP count (usable addresses less reserved ones).
 	Total uint64 `protobuf:"varint,7,opt,name=total,proto3" json:"total,omitempty"`
 	// Currently allocated IP count.
 	Allocated uint64 `protobuf:"varint,8,opt,name=allocated,proto3" json:"allocated,omitempty"`
@@ -1915,7 +1916,14 @@ type IPAMPool struct {
 	// When this pool was created.
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// When this pool was last modified.
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// Prefixes inside the CIDR that are never allocatable (CIDR notation).
+	// The gateway is always reserved as well.
+	Reserved []string `protobuf:"bytes,14,rep,name=reserved,proto3" json:"reserved,omitempty"`
+	// First and last address of the dynamic allocation window; both empty
+	// means the whole CIDR.
+	RangeStart    string `protobuf:"bytes,15,opt,name=range_start,json=rangeStart,proto3" json:"range_start,omitempty"`
+	RangeEnd      string `protobuf:"bytes,16,opt,name=range_end,json=rangeEnd,proto3" json:"range_end,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2039,6 +2047,27 @@ func (x *IPAMPool) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
+}
+
+func (x *IPAMPool) GetReserved() []string {
+	if x != nil {
+		return x.Reserved
+	}
+	return nil
+}
+
+func (x *IPAMPool) GetRangeStart() string {
+	if x != nil {
+		return x.RangeStart
+	}
+	return ""
+}
+
+func (x *IPAMPool) GetRangeEnd() string {
+	if x != nil {
+		return x.RangeEnd
+	}
+	return ""
 }
 
 // IP allocation
@@ -2737,7 +2766,7 @@ type CreateIPAMPoolRequest struct {
 	Cidr string `protobuf:"bytes,3,opt,name=cidr,proto3" json:"cidr,omitempty"`
 	// Optional gateway address within the CIDR.
 	Gateway string `protobuf:"bytes,4,opt,name=gateway,proto3" json:"gateway,omitempty"`
-	// Optional zone for the pool (e.g. "trusted", "provisioning").
+	// Optional underlay zone for the pool (e.g. "control-plane").
 	Zone string `protobuf:"bytes,5,opt,name=zone,proto3" json:"zone,omitempty"`
 	// Optional description.
 	Description string `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`
@@ -2745,8 +2774,13 @@ type CreateIPAMPoolRequest struct {
 	DefaultLeaseDurationNanos int64 `protobuf:"varint,7,opt,name=default_lease_duration_nanos,json=defaultLeaseDurationNanos,proto3" json:"default_lease_duration_nanos,omitempty"`
 	// Inactivity timeout in nanoseconds.
 	InactivityTimeoutNanos int64 `protobuf:"varint,8,opt,name=inactivity_timeout_nanos,json=inactivityTimeoutNanos,proto3" json:"inactivity_timeout_nanos,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Prefixes inside the CIDR that are never allocatable (CIDR notation).
+	Reserved []string `protobuf:"bytes,9,rep,name=reserved,proto3" json:"reserved,omitempty"`
+	// Dynamic allocation window; set both or neither.
+	RangeStart    string `protobuf:"bytes,10,opt,name=range_start,json=rangeStart,proto3" json:"range_start,omitempty"`
+	RangeEnd      string `protobuf:"bytes,11,opt,name=range_end,json=rangeEnd,proto3" json:"range_end,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateIPAMPoolRequest) Reset() {
@@ -2833,6 +2867,27 @@ func (x *CreateIPAMPoolRequest) GetInactivityTimeoutNanos() int64 {
 		return x.InactivityTimeoutNanos
 	}
 	return 0
+}
+
+func (x *CreateIPAMPoolRequest) GetReserved() []string {
+	if x != nil {
+		return x.Reserved
+	}
+	return nil
+}
+
+func (x *CreateIPAMPoolRequest) GetRangeStart() string {
+	if x != nil {
+		return x.RangeStart
+	}
+	return ""
+}
+
+func (x *CreateIPAMPoolRequest) GetRangeEnd() string {
+	if x != nil {
+		return x.RangeEnd
+	}
+	return ""
 }
 
 type CreateIPAMPoolResponse struct {
@@ -2993,8 +3048,16 @@ type UpdateIPAMPoolRequest struct {
 	DefaultLeaseDurationNanos int64 `protobuf:"varint,6,opt,name=default_lease_duration_nanos,json=defaultLeaseDurationNanos,proto3" json:"default_lease_duration_nanos,omitempty"`
 	// Updated inactivity timeout in nanoseconds.
 	InactivityTimeoutNanos int64 `protobuf:"varint,7,opt,name=inactivity_timeout_nanos,json=inactivityTimeoutNanos,proto3" json:"inactivity_timeout_nanos,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// When true, reserved, range_start and range_end replace the pool's
+	// allocation window (empty values clear it); when false they are ignored.
+	UpdateWindow bool `protobuf:"varint,8,opt,name=update_window,json=updateWindow,proto3" json:"update_window,omitempty"`
+	// Replacement reserved prefixes (CIDR notation).
+	Reserved []string `protobuf:"bytes,9,rep,name=reserved,proto3" json:"reserved,omitempty"`
+	// Replacement dynamic allocation window; set both or neither.
+	RangeStart    string `protobuf:"bytes,10,opt,name=range_start,json=rangeStart,proto3" json:"range_start,omitempty"`
+	RangeEnd      string `protobuf:"bytes,11,opt,name=range_end,json=rangeEnd,proto3" json:"range_end,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateIPAMPoolRequest) Reset() {
@@ -3074,6 +3137,34 @@ func (x *UpdateIPAMPoolRequest) GetInactivityTimeoutNanos() int64 {
 		return x.InactivityTimeoutNanos
 	}
 	return 0
+}
+
+func (x *UpdateIPAMPoolRequest) GetUpdateWindow() bool {
+	if x != nil {
+		return x.UpdateWindow
+	}
+	return false
+}
+
+func (x *UpdateIPAMPoolRequest) GetReserved() []string {
+	if x != nil {
+		return x.Reserved
+	}
+	return nil
+}
+
+func (x *UpdateIPAMPoolRequest) GetRangeStart() string {
+	if x != nil {
+		return x.RangeStart
+	}
+	return ""
+}
+
+func (x *UpdateIPAMPoolRequest) GetRangeEnd() string {
+	if x != nil {
+		return x.RangeEnd
+	}
+	return ""
 }
 
 type UpdateIPAMPoolResponse struct {
@@ -5123,7 +5214,7 @@ const file_gateway_proto_rawDesc = "" +
 	"\x0fAnnouncedPrefix\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x19\n" +
 	"\bnext_hop\x18\x02 \x01(\tR\anextHop\x12=\n" +
-	"\fannounced_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vannouncedAt\"\xd5\x03\n" +
+	"\fannounced_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vannouncedAt\"\xaf\x04\n" +
 	"\bIPAMPool\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -5140,7 +5231,11 @@ const file_gateway_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xea\x01\n" +
+	"updated_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1a\n" +
+	"\breserved\x18\x0e \x03(\tR\breserved\x12\x1f\n" +
+	"\vrange_start\x18\x0f \x01(\tR\n" +
+	"rangeStart\x12\x1b\n" +
+	"\trange_end\x18\x10 \x01(\tR\brangeEnd\"\xea\x01\n" +
 	"\fIPAllocation\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\tR\x02ip\x12\x17\n" +
 	"\apool_id\x18\x02 \x01(\tR\x06poolId\x12\x1b\n" +
@@ -5174,7 +5269,7 @@ const file_gateway_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\"\x1e\n" +
 	"\x1cListAnnouncedPrefixesRequest\"Y\n" +
 	"\x1dListAnnouncedPrefixesResponse\x128\n" +
-	"\bprefixes\x18\x01 \x03(\v2\x1c.platform.v1.AnnouncedPrefixR\bprefixes\"\x9a\x02\n" +
+	"\bprefixes\x18\x01 \x03(\v2\x1c.platform.v1.AnnouncedPrefixR\bprefixes\"\xf4\x02\n" +
 	"\x15CreateIPAMPoolRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -5183,14 +5278,19 @@ const file_gateway_proto_rawDesc = "" +
 	"\x04zone\x18\x05 \x01(\tR\x04zone\x12 \n" +
 	"\vdescription\x18\x06 \x01(\tR\vdescription\x12?\n" +
 	"\x1cdefault_lease_duration_nanos\x18\a \x01(\x03R\x19defaultLeaseDurationNanos\x128\n" +
-	"\x18inactivity_timeout_nanos\x18\b \x01(\x03R\x16inactivityTimeoutNanos\"p\n" +
+	"\x18inactivity_timeout_nanos\x18\b \x01(\x03R\x16inactivityTimeoutNanos\x12\x1a\n" +
+	"\breserved\x18\t \x03(\tR\breserved\x12\x1f\n" +
+	"\vrange_start\x18\n" +
+	" \x01(\tR\n" +
+	"rangeStart\x12\x1b\n" +
+	"\trange_end\x18\v \x01(\tR\brangeEnd\"p\n" +
 	"\x16CreateIPAMPoolResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12)\n" +
 	"\x04pool\x18\x02 \x01(\v2\x15.platform.v1.IPAMPoolR\x04pool\"$\n" +
 	"\x12GetIPAMPoolRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"@\n" +
 	"\x13GetIPAMPoolResponse\x12)\n" +
-	"\x04pool\x18\x01 \x01(\v2\x15.platform.v1.IPAMPoolR\x04pool\"\x86\x02\n" +
+	"\x04pool\x18\x01 \x01(\v2\x15.platform.v1.IPAMPoolR\x04pool\"\x85\x03\n" +
 	"\x15UpdateIPAMPoolRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -5198,7 +5298,13 @@ const file_gateway_proto_rawDesc = "" +
 	"\x04zone\x18\x04 \x01(\tR\x04zone\x12 \n" +
 	"\vdescription\x18\x05 \x01(\tR\vdescription\x12?\n" +
 	"\x1cdefault_lease_duration_nanos\x18\x06 \x01(\x03R\x19defaultLeaseDurationNanos\x128\n" +
-	"\x18inactivity_timeout_nanos\x18\a \x01(\x03R\x16inactivityTimeoutNanos\"p\n" +
+	"\x18inactivity_timeout_nanos\x18\a \x01(\x03R\x16inactivityTimeoutNanos\x12#\n" +
+	"\rupdate_window\x18\b \x01(\bR\fupdateWindow\x12\x1a\n" +
+	"\breserved\x18\t \x03(\tR\breserved\x12\x1f\n" +
+	"\vrange_start\x18\n" +
+	" \x01(\tR\n" +
+	"rangeStart\x12\x1b\n" +
+	"\trange_end\x18\v \x01(\tR\brangeEnd\"p\n" +
 	"\x16UpdateIPAMPoolResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12)\n" +
 	"\x04pool\x18\x02 \x01(\v2\x15.platform.v1.IPAMPoolR\x04pool\"'\n" +

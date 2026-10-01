@@ -134,12 +134,12 @@ type zoneProvider struct {
 func newZoneProvider() *zoneProvider {
 	return &zoneProvider{
 		zones: []zone.ZoneConfig{
-			{Name: zone.ZoneTrusted, AllowTo: []zone.ZonePath{{Zone: zone.ZonePublic}}},
-			{Name: zone.ZonePublic, IsolateFrom: []zone.Zone{zone.ZoneTrusted}},
+			{Name: zone.ZoneControlPlane, AllowTo: []zone.ZonePath{{Zone: zone.ZoneBackup}}},
+			{Name: zone.ZoneBackup, IsolateFrom: []zone.Zone{zone.ZoneControlPlane}},
 		},
 		networks: map[zone.Zone]zoneflows.NetworkSummary{
-			zone.ZoneTrusted: {VLAN: 100, Subnet: "10.0.100.0/24"},
-			zone.ZonePublic:  {VLAN: 200, Subnet: "10.0.200.0/24"},
+			zone.ZoneControlPlane: {VLAN: 100, Subnet: "10.0.100.0/24"},
+			zone.ZoneBackup:       {VLAN: 200, Subnet: "10.0.200.0/24"},
 		},
 	}
 }
@@ -350,7 +350,7 @@ func TestService_Stop(t *testing.T) {
 	}
 
 	// Conntrack zones were released.
-	if _, ok := deps.Allocator.Lookup(AllocatorOwnerFirewall, string(zone.ZoneTrusted)); ok {
+	if _, ok := deps.Allocator.Lookup(AllocatorOwnerFirewall, string(zone.ZoneControlPlane)); ok {
 		t.Error("ct zone not released on stop")
 	}
 }
@@ -419,7 +419,7 @@ func TestService_Reconcile(t *testing.T) {
 
 	// Add a zone: new gate/verdict flows appear.
 	provider.addZone(
-		zone.ZoneConfig{Name: zone.ZoneStorage, AllowTo: []zone.ZonePath{{Zone: zone.ZoneTrusted}}},
+		zone.ZoneConfig{Name: zone.ZoneStorage, AllowTo: []zone.ZonePath{{Zone: zone.ZoneControlPlane}}},
 		zoneflows.NetworkSummary{VLAN: 300, Subnet: "10.0.30.0/24"},
 	)
 	if err := svc.Reconcile(ctx); err != nil {

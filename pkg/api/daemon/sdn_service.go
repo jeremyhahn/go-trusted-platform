@@ -1745,12 +1745,14 @@ func (s *SDNService) CreateNetworkZone(
 		return nil, status.Error(codes.InvalidArgument, "zone config is required")
 	}
 	cfg := sdnProtoToZoneConfig(req.GetConfig())
-	rec, _, err := s.zoneSvc.Create(ctx, cfg)
+	rec, restartRequired, err := s.zoneSvc.Create(ctx, cfg)
 	if err != nil {
 		return nil, sdnMapZoneError(err)
 	}
+	pz := sdnZoneRecordToProto(rec)
+	pz.RestartRequired = restartRequired
 	return &platformv1.CreateNetworkZoneResponse{
-		Zone: sdnZoneRecordToProto(rec),
+		Zone: pz,
 	}, nil
 }
 
@@ -1822,29 +1824,6 @@ func (s *SDNService) ListNetworkZones(
 	}, nil
 }
 
-// AssignNetworkZone assigns a network segment to a trust zone.
-func (s *SDNService) AssignNetworkZone(
-	ctx context.Context,
-	req *platformv1.AssignNetworkZoneRequest,
-) (*platformv1.AssignNetworkZoneResponse, error) {
-	if err := s.requireZoneService(); err != nil {
-		return nil, err
-	}
-	if req.GetNetwork() == "" {
-		return nil, status.Error(codes.InvalidArgument, "network name is required")
-	}
-	if req.GetZone() == "" {
-		return nil, status.Error(codes.InvalidArgument, "zone name is required")
-	}
-	restartRequired, err := s.zoneSvc.AssignNetwork(ctx, req.GetNetwork(), zone.Zone(req.GetZone()))
-	if err != nil {
-		return nil, sdnMapZoneError(err)
-	}
-	return &platformv1.AssignNetworkZoneResponse{
-		RestartRequired: restartRequired,
-	}, nil
-}
-
 // =============================================================================
 // Zone proto helpers (daemon-local copies; mirrors grpc.SDNGRPCService helpers)
 // =============================================================================
@@ -1852,27 +1831,31 @@ func (s *SDNService) AssignNetworkZone(
 // sdnProtoToZoneConfig converts a protobuf NetworkZoneConfig to a zone.ZoneConfig.
 func sdnProtoToZoneConfig(p *platformv1.NetworkZoneConfig) zone.ZoneConfig {
 	cfg := zone.ZoneConfig{
-		Name:             zone.Zone(p.GetName()),
-		InternetIngress:  p.GetInternetIngress(),
-		Isolate:          p.GetIsolate(),
-		IsolatePerTenant: p.GetIsolatePerTenant(),
-		OOB:              p.GetOob(),
-		LifecycleRole:    zone.LifecycleRole(p.GetLifecycleRole()),
-		Omit:             p.GetOmit(),
+		Name:            zone.Zone(p.GetName()),
+		Offset:          zone.Offset(p.GetOffset()),
+		InternetIngress: p.GetInternetIngress(),
+		Services:        p.GetServices(),
+		Isolate:         p.GetIsolate(),
+		OOB:             p.GetOob(),
+		LifecycleRole:   zone.LifecycleRole(p.GetLifecycleRole()),
+		Omit:            p.GetOmit(),
 	}
-	if len(p.GetIsolateFrom()) > 0 {
-		cfg.IsolateFrom = make([]zone.Zone, 0, len(p.GetIsolateFrom()))
-		for _, z := range p.GetIsolateFrom() {
-			cfg.IsolateFrom = append(cfg.IsolateFrom, zone.Zone(z))
-		}
+	for _, c := range p.GetPortClasses() {
+		cfg.PortClasses = append(cfg.PortClasses, zone.PortClass(c))
 	}
-	if len(p.GetAllowTo()) > 0 {
-		cfg.AllowTo = make([]zone.ZonePath, 0, len(p.GetAllowTo()))
-		for _, pt := range p.GetAllowTo() {
-			cfg.AllowTo = append(cfg.AllowTo, zone.ZonePath{
-				Zone:     zone.Zone(pt.GetZone()),
-				Services: pt.GetServices(),
-			})
+	for _, z := range p.GetIsolateFrom() {
+		cfg.IsolateFrom = append(cfg.IsolateFrom, zone.Zone(z))
+	}
+	for _, pt := range p.GetAllowTo() {
+		cfg.AllowTo = append(cfg.AllowTo, zone.ZonePath{
+			Zone:     zone.Zone(pt.GetZone()),
+			Services: pt.GetServices(),
+		})
+	}
+	if pa := p.GetPrivilegedAccess(); pa != nil {
+		cfg.PrivilegedAccess = &zone.PrivilegedAccess{
+			Reason:     pa.GetReason(),
+			ApprovedBy: pa.GetApprovedBy(),
 		}
 	}
 	return cfg
@@ -1891,21 +1874,42 @@ func sdnZoneRecordToProto(r *gateway.ZoneRecord) *platformv1.NetworkZone {
 			Services: p.Services,
 		})
 	}
-	return &platformv1.NetworkZone{
+	portClasses := make([]string, 0, len(r.Config.PortClasses))
+	for _, c := range r.Config.PortClasses {
+		portClasses = append(portClasses, string(c))
+	}
+	out := &platformv1.NetworkZone{
 		Config: &platformv1.NetworkZoneConfig{
-			Name:             string(r.Config.Name),
-			InternetIngress:  r.Config.InternetIngress,
-			IsolateFrom:      isolateFrom,
-			AllowTo:          allowTo,
-			Isolate:          r.Config.Isolate,
-			IsolatePerTenant: r.Config.IsolatePerTenant,
-			Oob:              r.Config.OOB,
-			LifecycleRole:    string(r.Config.LifecycleRole),
-			Omit:             r.Config.Omit,
+			Name:            string(r.Config.Name),
+			Offset:          uint32(r.Config.Offset),
+			PortClasses:     portClasses,
+			InternetIngress: r.Config.InternetIngress,
+			IsolateFrom:     isolateFrom,
+			AllowTo:         allowTo,
+			Services:        r.Config.Services,
+			Isolate:         r.Config.Isolate,
+			Oob:             r.Config.OOB,
+			LifecycleRole:   string(r.Config.LifecycleRole),
+			Omit:            r.Config.Omit,
 		},
 		CreatedAt: timestamppb.New(r.CreatedAt),
 		UpdatedAt: timestamppb.New(r.UpdatedAt),
 	}
+	if pa := r.Config.PrivilegedAccess; pa != nil {
+		out.Config.PrivilegedAccess = &platformv1.NetworkZonePrivilegedAccess{
+			Reason:     pa.Reason,
+			ApprovedBy: pa.ApprovedBy,
+		}
+	}
+	if n := r.NumberingView(); n != nil {
+		out.Numbering = &platformv1.NetworkZoneNumbering{
+			Vlan:    uint32(n.VLAN),
+			Subnet4: n.Subnet4,
+			Subnet6: n.Subnet6,
+			Gateway: n.Gateway,
+		}
+	}
+	return out
 }
 
 // sdnMapZoneError maps gateway zone errors to gRPC status errors.

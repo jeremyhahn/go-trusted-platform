@@ -26,208 +26,188 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestNetworkZone_CRUD exercises zone create, list, update, assign, and delete
-// across every SDN adapter protocol.
+// zoneAdapters is every transport with the owner-zone offset its CRUD test
+// uses: the subtests run in parallel against one daemon, and two zones may
+// never share an offset.
+func zoneAdapters() []struct {
+	name    string
+	offset  uint8
+	adapter SDNTestAdapter
+} {
+	return []struct {
+		name    string
+		offset  uint8
+		adapter SDNTestAdapter
+	}{
+		{"CLI", 10, NewSDNCLIAdapter()},
+		{"REST", 11, NewSDNRESTAdapter()},
+		{"gRPC", 12, NewSDNGRPCAdapter()},
+		{"QUIC", 13, NewSDNQUICAdapter()},
+		{"MCP", 14, NewSDNMCPAdapter()},
+		{"Unix", 15, NewSDNUnixAdapter()},
+	}
+}
+
+// setupZoneAdapter sets an adapter up and registers its teardown.
+func setupZoneAdapter(t *testing.T, a SDNTestAdapter) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+	require.NoError(t, a.Setup(ctx), "Setup")
+	t.Cleanup(func() {
+		if err := a.Teardown(); err != nil {
+			t.Logf("Teardown warning: %v", err)
+		}
+	})
+	return ctx
+}
+
+// TestNetworkZone_CRUD creates an owner-defined zone carrying the whole
+// zone schema (offset, port class, an audited path into control-plane),
+// lists, updates and deletes it, on every transport.
 func TestNetworkZone_CRUD(t *testing.T) {
 	t.Parallel()
 
-	adapters := []struct {
-		name    string
-		adapter SDNTestAdapter
-	}{
-		{"CLI", NewSDNCLIAdapter()},
-		{"REST", NewSDNRESTAdapter()},
-		{"gRPC", NewSDNGRPCAdapter()},
-		{"QUIC", NewSDNQUICAdapter()},
-		{"MCP", NewSDNMCPAdapter()},
-		{"Unix", NewSDNUnixAdapter()},
-	}
-
-	for _, tc := range adapters {
+	for _, tc := range zoneAdapters() {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			ctx := setupZoneAdapter(t, tc.adapter)
 
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			t.Cleanup(cancel)
-
-			if err := tc.adapter.Setup(ctx); err != nil {
-				skipIfNotImplemented(t, err)
-				t.Fatalf("Setup: %v", err)
-			}
-			t.Cleanup(func() {
-				if err := tc.adapter.Teardown(); err != nil {
-					t.Logf("Teardown warning: %v", err)
-				}
-			})
-
-			zoneName := fmt.Sprintf("test-zone-%s-%d", strings.ToLower(tc.name), time.Now().UnixNano())
+			zoneName := fmt.Sprintf("it-%s-%d", strings.ToLower(tc.name), time.Now().UnixNano()%1_000_000)
 			t.Cleanup(func() { cleanupZone(ctx, tc.adapter, zoneName) })
 
-			// ─── Create ───────────────────────────────────────────────────────────
+			spec := ZoneSpec{
+				Offset:               tc.offset,
+				PortClasses:          []string{"hypervisor"},
+				Isolate:              true,
+				Services:             []string{"ssh"},
+				AllowTo:              []ZonePathEntry{{Zone: "control-plane", Services: []string{"dns"}}},
+				PrivilegedReason:     "integration test resolver",
+				PrivilegedApprovedBy: "integration-test",
+			}
 
-			t.Run("Create", func(t *testing.T) {
-				entry, err := tc.adapter.CreateZone(ctx, ZoneCreateRequest{
-					Name:    zoneName,
-					Isolate: true,
-				})
-				skipIfNotImplemented(t, err)
-				require.NoError(t, err, "CreateZone should succeed")
-				require.NotNil(t, entry, "CreateZone must return an entry")
-				assert.Equal(t, zoneName, entry.Name)
-				// A brand-new zone never requires restart.
-				assert.False(t, entry.RestartRequired, "new zone must not require restart")
-			})
+			entry, err := tc.adapter.CreateZone(ctx, ZoneCreateRequest{Name: zoneName, ZoneSpec: spec})
+			require.NoError(t, err, "CreateZone")
+			require.NotNil(t, entry)
+			assert.Equal(t, zoneName, entry.Name)
+			assert.Equal(t, tc.offset, entry.Offset)
+			assert.Equal(t, []string{"hypervisor"}, entry.PortClasses)
+			assert.Equal(t, "integration-test", entry.PrivilegedApprovedBy)
+			require.Len(t, entry.AllowTo, 1)
+			assert.Equal(t, "control-plane", entry.AllowTo[0].Zone)
+			assert.True(t, entry.RestartRequired, "the plan is derived at startup")
 
-			// ─── List ─────────────────────────────────────────────────────────────
-
-			t.Run("List", func(t *testing.T) {
-				resp, err := tc.adapter.ListZones(ctx, "")
-				skipIfNotImplemented(t, err)
-				require.NoError(t, err, "ListZones should succeed")
-				require.NotNil(t, resp)
-
-				found := false
-				for _, z := range resp.Zones {
-					if z.Name == zoneName {
-						found = true
-						assert.True(t, z.Isolate, "created zone Isolate flag must be set")
-						break
-					}
+			resp, err := tc.adapter.ListZones(ctx, "")
+			require.NoError(t, err, "ListZones")
+			var listed *ZoneEntry
+			for i := range resp.Zones {
+				if resp.Zones[i].Name == zoneName {
+					listed = &resp.Zones[i]
 				}
-				assert.True(t, found, "newly created zone %q must appear in list", zoneName)
-			})
+			}
+			require.NotNil(t, listed, "zone %q must be listed", zoneName)
+			assert.True(t, listed.Isolate)
+			assert.Equal(t, []string{"ssh"}, listed.Services)
 
-			// ─── Update ───────────────────────────────────────────────────────────
+			spec.Services = []string{"ssh", "https"}
+			entry, err = tc.adapter.UpdateZone(ctx, zoneName, ZoneUpdateRequest{ZoneSpec: spec})
+			require.NoError(t, err, "UpdateZone")
+			assert.Equal(t, []string{"ssh", "https"}, entry.Services)
+			assert.True(t, entry.RestartRequired)
 
-			t.Run("Update", func(t *testing.T) {
-				entry, err := tc.adapter.UpdateZone(ctx, zoneName, ZoneUpdateRequest{
-					Isolate:          true,
-					IsolatePerTenant: true,
-				})
-				skipIfNotImplemented(t, err)
-				require.NoError(t, err, "UpdateZone should succeed")
-				require.NotNil(t, entry)
-				// IsolatePerTenant is a policy-relevant change → restartRequired.
-				assert.True(t, entry.RestartRequired, "policy change must set restart_required")
-			})
-
-			// ─── Assign ───────────────────────────────────────────────────────────
-
-			t.Run("Assign", func(t *testing.T) {
-				restartRequired, err := tc.adapter.AssignZone(ctx, "corp-lan", zoneName)
-				skipIfNotImplemented(t, err)
-				require.NoError(t, err, "AssignZone should succeed")
-				assert.True(t, restartRequired, "zone assignment must return restart_required=true")
-			})
-
-			// ─── Delete ───────────────────────────────────────────────────────────
-
-			t.Run("Delete", func(t *testing.T) {
-				_, err := tc.adapter.DeleteZone(ctx, zoneName)
-				skipIfNotImplemented(t, err)
-				require.NoError(t, err, "DeleteZone should succeed")
-
-				// Verify zone no longer appears in list.
-				resp, err := tc.adapter.ListZones(ctx, "")
-				skipIfNotImplemented(t, err)
-				require.NoError(t, err)
-				for _, z := range resp.Zones {
-					assert.NotEqual(t, zoneName, z.Name, "deleted zone must not appear in list")
-				}
-			})
+			_, err = tc.adapter.DeleteZone(ctx, zoneName)
+			require.NoError(t, err, "DeleteZone")
+			resp, err = tc.adapter.ListZones(ctx, "")
+			require.NoError(t, err)
+			for _, z := range resp.Zones {
+				assert.NotEqual(t, zoneName, z.Name, "deleted zone must not be listed")
+			}
 		})
 	}
 }
 
-// TestNetworkZone_ListFilter verifies lifecycle role filtering works correctly
-// across all adapters that implement it.
+// TestNetworkZone_Refusals checks every transport refuses what the zone
+// model forbids: an unaudited path into control-plane, a renumbered
+// built-in, an overlay kind as a zone name, and removing a required
+// built-in.
+func TestNetworkZone_Refusals(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range zoneAdapters() {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := setupZoneAdapter(t, tc.adapter)
+
+			name := fmt.Sprintf("bad-%s-%d", strings.ToLower(tc.name), time.Now().UnixNano()%1_000_000)
+			t.Cleanup(func() { cleanupZone(ctx, tc.adapter, name) })
+
+			_, err := tc.adapter.CreateZone(ctx, ZoneCreateRequest{Name: name, ZoneSpec: ZoneSpec{
+				Offset: tc.offset + 50, PortClasses: []string{"gateway"},
+				AllowTo: []ZonePathEntry{{Zone: "control-plane"}},
+			}})
+			assert.Error(t, err, "a path into control-plane needs privileged_access")
+
+			_, err = tc.adapter.CreateZone(ctx, ZoneCreateRequest{Name: "public", ZoneSpec: ZoneSpec{
+				Offset: tc.offset + 50, PortClasses: []string{"gateway"},
+			}})
+			assert.Error(t, err, "overlay kinds are not zones")
+
+			_, err = tc.adapter.UpdateZone(ctx, "storage", ZoneUpdateRequest{ZoneSpec: ZoneSpec{Offset: 30, Isolate: true}})
+			assert.Error(t, err, "a built-in zone cannot be renumbered")
+
+			_, err = tc.adapter.DeleteZone(ctx, "fabric")
+			assert.Error(t, err, "fabric is required")
+		})
+	}
+}
+
+// TestNetworkZone_ListFilter verifies the lifecycle role filter on every
+// transport.
 func TestNetworkZone_ListFilter(t *testing.T) {
 	t.Parallel()
 
-	adapters := []struct {
-		name    string
-		adapter SDNTestAdapter
-	}{
-		{"CLI", NewSDNCLIAdapter()},
-		{"REST", NewSDNRESTAdapter()},
-		{"gRPC", NewSDNGRPCAdapter()},
-		{"QUIC", NewSDNQUICAdapter()},
-		{"MCP", NewSDNMCPAdapter()},
-		{"Unix", NewSDNUnixAdapter()},
-	}
-
-	for _, tc := range adapters {
+	for _, tc := range zoneAdapters() {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			t.Cleanup(cancel)
-
-			if err := tc.adapter.Setup(ctx); err != nil {
-				skipIfNotImplemented(t, err)
-				t.Fatalf("Setup: %v", err)
-			}
-			t.Cleanup(func() { _ = tc.adapter.Teardown() })
+			ctx := setupZoneAdapter(t, tc.adapter)
 
 			resp, err := tc.adapter.ListZones(ctx, "provisioning")
-			skipIfNotImplemented(t, err)
-			require.NoError(t, err, "ListZones(provisioning) must succeed")
-			require.NotNil(t, resp)
-
-			for _, z := range resp.Zones {
-				assert.Equal(t, "provisioning", z.LifecycleRole,
-					"all returned zones must have lifecycle_role=provisioning")
-			}
+			require.NoError(t, err, "ListZones(provisioning)")
+			require.Len(t, resp.Zones, 1)
+			assert.Equal(t, "provisioning", resp.Zones[0].Name)
+			assert.Equal(t, uint8(5), resp.Zones[0].Offset)
+			assert.Equal(t, "provisioning", resp.Zones[0].LifecycleRole)
 		})
 	}
 }
 
-// TestNetworkZone_CreateDuplicate verifies that creating a zone with a
-// duplicate name returns an error on protocols that enforce uniqueness directly.
+// TestNetworkZone_CreateDuplicate verifies a second create with the same
+// name is refused.
 func TestNetworkZone_CreateDuplicate(t *testing.T) {
 	t.Parallel()
 
-	adapters := []struct {
-		name    string
-		adapter SDNTestAdapter
-	}{
-		{"REST", NewSDNRESTAdapter()},
-		{"gRPC", NewSDNGRPCAdapter()},
-		{"Unix", NewSDNUnixAdapter()},
-	}
-
-	for _, tc := range adapters {
+	for _, tc := range zoneAdapters() {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			ctx := setupZoneAdapter(t, tc.adapter)
 
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			t.Cleanup(cancel)
+			name := fmt.Sprintf("dup-%s-%d", strings.ToLower(tc.name), time.Now().UnixNano()%1_000_000)
+			t.Cleanup(func() { cleanupZone(ctx, tc.adapter, name) })
+			spec := ZoneSpec{Offset: tc.offset + 20, PortClasses: []string{"gateway"}}
 
-			if err := tc.adapter.Setup(ctx); err != nil {
-				skipIfNotImplemented(t, err)
-				t.Fatalf("Setup: %v", err)
-			}
-			t.Cleanup(func() { _ = tc.adapter.Teardown() })
-
-			zoneName := fmt.Sprintf("dup-zone-%s-%d", strings.ToLower(tc.name), time.Now().UnixNano())
-			t.Cleanup(func() { cleanupZone(ctx, tc.adapter, zoneName) })
-
-			// First create — must succeed.
-			_, err := tc.adapter.CreateZone(ctx, ZoneCreateRequest{Name: zoneName})
-			skipIfNotImplemented(t, err)
-			require.NoError(t, err, "first create should succeed")
-
-			// Duplicate create — must fail.
-			_, err = tc.adapter.CreateZone(ctx, ZoneCreateRequest{Name: zoneName})
-			assert.Error(t, err, "duplicate create must return an error")
+			_, err := tc.adapter.CreateZone(ctx, ZoneCreateRequest{Name: name, ZoneSpec: spec})
+			require.NoError(t, err, "first create")
+			_, err = tc.adapter.CreateZone(ctx, ZoneCreateRequest{Name: name, ZoneSpec: spec})
+			assert.Error(t, err, "duplicate create")
 		})
 	}
 }
 
-// cleanupZone attempts to delete a zone, ignoring any errors (best-effort cleanup).
+// cleanupZone deletes a zone, ignoring errors (best-effort cleanup).
 func cleanupZone(ctx context.Context, adapter SDNTestAdapter, name string) {
 	_, _ = adapter.DeleteZone(ctx, name)
 }

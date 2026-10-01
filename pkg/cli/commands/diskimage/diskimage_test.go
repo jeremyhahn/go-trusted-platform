@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	pkgdiskimage "github.com/jeremyhahn/go-trusted-platform/pkg/diskimage"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
@@ -106,6 +107,24 @@ func TestLoadInstallerConfig(t *testing.T) {
 	}
 	if _, err := loadInstallerConfig(&assembleFlags{platformConfig: bad}); !errors.As(err, &loadErr) {
 		t.Errorf("malformed platform config error = %v", err)
+	}
+	// An enabled sdn section without an environment cannot yield the
+	// network plan the installer needs.
+	noEnv := filepath.Join(dir, "no-env.yaml")
+	if err := os.WriteFile(noEnv, []byte("sdn:\n  enabled: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadInstallerConfig(&assembleFlags{platformConfig: noEnv}); !errors.As(err, &loadErr) {
+		t.Errorf("sdn without environment error = %v", err)
+	}
+	// A key the sdn schema no longer has fails the load.
+	stale := filepath.Join(dir, "stale.yaml")
+	if err := os.WriteFile(stale, []byte("sdn:\n  enabled: true\n  environment: {id: 4}\n  transit: {vlan: 10}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var unknown *config.ErrUnknownConfigKeys
+	if _, err := loadInstallerConfig(&assembleFlags{platformConfig: stale}); !errors.As(err, &loadErr) || !errors.As(err, &unknown) {
+		t.Errorf("stale sdn key error = %v", err)
 	}
 }
 

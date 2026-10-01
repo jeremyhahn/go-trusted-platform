@@ -344,7 +344,7 @@ writes the following zone-aware artifacts into the ISO overlay
 | File | Content |
 |------|---------|
 | `provisioning.yaml` | `NetworkPhaseConfig` YAML; includes `zone:` when non-empty |
-| `trusted.yaml` | `NetworkPhaseConfig` YAML; includes `zone:` when non-empty |
+| `admitted.yaml` | `NetworkPhaseConfig` YAML of the post-enrollment phase; includes `zone:` when non-empty |
 | `quarantine.yaml` | `NetworkPhaseConfig` YAML; includes `zone:` when non-empty |
 | `network.env` | Shell-sourceable env file; always declares `TP_NETWORK_ZONE` |
 
@@ -355,15 +355,16 @@ correct vehicle).
 
 ### `TP_NETWORK_ZONE`
 
-`TP_NETWORK_ZONE` is set to the trusted zone name in
+`TP_NETWORK_ZONE` is set to the admitted phase's zone name in
 `/etc/platformd/network/network.env`. This file is sourced by
 `trusted-platform-network.service` at firstboot. The value is the SDN zone
-the device operates in after successful enrollment (e.g. `"trusted"`).
+the device operates in after successful enrollment (e.g. `"control-plane"`).
 
 `TP_NETWORK_ZONE` is NOT a kernel cmdline parameter — it does not appear
 in the kernel cmdline and is not listed in `docs/reference/kernel-cmdline.md`.
 It reaches the running OS exclusively through the baked artifact and through
-the live API response (`zone` field in the trusted network phase JSON) fetched
+the live API response (`zone` field in the `admittedNetwork` object of
+`GET /api/v1/device/profile`) fetched
 by `configs/os/trusted-platform-network.sh`.
 
 ### Missing zone semantics

@@ -100,7 +100,7 @@ Interfaces the orchestrator composes (`types.go`):
 | Interface | Constructor | Methods |
 |---|---|---|
 | `DiskManager` | `NewDiskManager(logger, *DiskConfig)` | `CreatePartitionTable`, `CreateEFIPartition`, `CreateRootPartition`, `SetupLUKS`, `CreateLVMPhysicalVolume`, `CreateLVMVolumeGroup`, `CreateLVMLogicalVolume`, `FormatFilesystem`, `Mount`, `Unmount`, `EnsureDeviceNode`, `Close` |
-| `OSInstaller` | `NewOSInstaller(logger, *OSConfig)` | `InstallBase`, `ConfigureSystem`, `ConfigureNetwork`, `InstallKernel`, `SetRootPassword`, `EnableServices`, `InstallPackages`, `ExecutePostInstall`, `Name` |
+| `OSInstaller` | `NewOSInstaller(logger, *OSConfig)` | `InstallBase`, `ConfigureSystem`, `ConfigureNetwork(ctx, root, *NetworkConfig, *netplan.Plan)`, `InstallKernel`, `SetRootPassword`, `EnableServices`, `InstallPackages`, `ExecutePostInstall`, `Name` |
 | `UKIBuilder` | `NewUKIBuilderAdapter(logger)` / `NewDracutUKIBuilder(logger)` | `BuildUKI(ctx, *UKIConfig, io.Writer)` |
 
 UKI rebuild after a kernel upgrade:
@@ -124,6 +124,17 @@ Profiles: `GetProfile`, `GetProfileWithDescription`, `ListProfiles`,
 
 FIDO2: `NewFIDO2Enrollment(*FIDO2EnrollmentConfig)`, `DetectFIDO2Device`,
 `IsFIDO2Available`, `NewFIDO2Unlock(luksDevice string, debug bool)`.
+
+Network (host addressing by role, §7): `NetworkConfig.Validate(*netplan.Plan)`,
+`Config.Plan`, `HostRole` (`HostRoleGateway`, `HostRoleControlPlane`,
+`HostRoleCompute`), `PlatformVRFConfig` (`EffectiveName`, `EffectiveTable`),
+`DefaultPlatformVRFName`, `DefaultPlatformVRFTable`, `PlatformVRFDummy`,
+`BondVLANConfig.Zone`; typed errors `ErrInvalidHostRole`,
+`ErrForwardingNotAllowed`, `ErrNetworkPlanRequired`, `ErrAddressNotPermitted`,
+`ErrDHCPNotPermitted`, `ErrFabricAddressRequired`, `ErrBondZoneVLAN`,
+`ErrInvalidPlatformVRF`. `SubnetConfig`, `SubnetScope`, `SubnetRole`,
+`DHCPScopeConfig` and the `NetworkConfig` subnet helpers are gone: numbering
+comes from the plan only.
 
 Other exported names: `HardReset`, `CheckHWOffloadSupport`,
 `NewPostInstallExecutor`, `DefaultIMAMonitorPaths`,
@@ -373,6 +384,7 @@ either way.
 | `initrd.Config.Validate` | Empty `PCRSelection` is `ErrInvalidConfig`. No default PCR set is ever assumed. |
 | `StrategyChain.Execute` | Returns `ErrUnlockFailed` rather than falling through to an unencrypted boot. |
 | `ExecuteInstall` | Aborts on the first strategy install failure. |
+| `ConfigureNetwork` on a platform host | **Install aborts** when `network.role` is set: a platform host must not boot with its forwarding, host firewall or zone addressing in an unknown state. A host with no role keeps the old behaviour (network failure logged, install continues). |
 
 ## 7. Configuration
 
@@ -446,6 +458,56 @@ duplication: every on-disk config reaches the installer through
 `loadUnifiedConfig`, which unmarshals the file into `App` and returns
 `App.GetInstallerConfig()`. A field `App` does not carry is a field the
 installer never sees, however faithfully the orchestrator wrote it.
+
+### Host addressing by role (`network.role`)
+
+The reference network (`docs/architecture/reference-network.md`, handbook
+`infra/network/docs/15`) gives each host an address only on the zones it uses,
+forbids forwarding on everything but a gateway, and puts the host's one
+platform-VRF address in a Linux VRF. `NetworkConfig.Validate(plan)` enforces
+it; `plan` is the `netplan.Plan` of the node's environment, derived from the
+platform config's `sdn.environment` and handed to the installer as
+`Config.Plan` by `App.GetInstallerConfig` (`yaml:"-"`, never serialized).
+
+| Key | Type | Meaning |
+|---|---|---|
+| `network.role` | `""` \| `gateway` \| `control-plane` \| `compute` | Empty: the host is not on a platform network (lab, image build) and none of the rules below apply. |
+| `network.ip-forward` | bool | Forwarding on the installed host. Only `gateway` may set it (`ErrForwardingNotAllowed`). |
+| `network.platform-vrf.address` | IPv4 `/32` | The host's platform-VRF address; must lie in the environment's platform-hosts range (`<base>.E.144.0/20`). |
+| `network.platform-vrf.name` / `.table` | string / int | VRF device and routing table; default `vrf-platform` / `1000`. |
+| `network.vlans[].zone` | zone name | A VLAN interface on a zone: the ID comes from the plan (`id` must be 0; both set is `ErrVLANZone`), the address must be inside the zone's subnet, and the role rules apply. A literal `id` without `zone` is allowed only on a host with no role (`ErrLiteralVLANWithRole`). Generation writes `vlan-raw-device` and `vlan-id`. |
+| `network.bonds[].vlans[].zone` | zone name | The zone a bond address lives on. The VLAN ID comes from the plan; the address must be inside the zone's subnet (`ErrBondZoneVLAN`). Replaces the deleted `network.subnets` / `vlans[].subnet` indirection. |
+
+The role → zones table (`roleZones`, `pkg/installer/network_role.go`):
+
+| Role | Zones a host address may lie in |
+|---|---|
+| `control-plane` | fabric, hypervisor, storage, control-plane (control-plane nodes are hypervisors too) |
+| `compute` | fabric, hypervisor, storage |
+| `gateway` | exempt: gateways route and NAT by role (owner confirmation 2026-10-01) |
+
+For `control-plane` and `compute`, every static address — interfaces (IPv4 and
+IPv6), bridges, bonds, VLAN interfaces and bond zone VLANs — must lie in one of
+the role's zones; an address in another zone or in no zone is refused
+(`ErrAddressNotPermitted`: no multi-homing). A fabric address, the VTEP, is
+required (`ErrFabricAddressRequired`). DHCP on any interface, bridge, bond or
+VLAN is refused (`ErrDHCPNotPermitted`): the address would land on
+provisioning, the native VLAN. A role, a platform VRF or a bond zone VLAN with
+no plan is `ErrNetworkPlanRequired`.
+
+platformd runs the same check when it loads its config (`App.Init` →
+`validateHostNetwork`), so a bad host network fails at load as
+`ErrHostNetworkValidation`, not only at install.
+
+Realisation (`alpine_hostnet.go`), all under the installed root:
+
+| File | Written when | Content |
+|---|---|---|
+| `/etc/sysctl.d/60-platform-forwarding.conf` | any role | `net.ipv4.ip_forward` and `net.ipv6.conf.all.forwarding` = `1` for a gateway, `0` otherwise |
+| `/etc/nftables.d/60-platform-hostfw.nft` | `control-plane`, `compute` | `table inet platform_hostfw` with a `forward` hook chain, `policy drop`: the host never forwards between its interfaces. The `nftables` package is installed and `/etc/runlevels/default/nftables` linked. A gateway gets no file: gatewayd's host filter owns it. |
+| `/etc/network/interfaces` | no `network.interfaces` | The default `auto eth0` / `inet dhcp` stanza is written **only for a host with no role**: on a control-plane or compute node it would put a DHCP address on provisioning, and a gateway's eth0 is a WAN uplink gatewayd owns. |
+| `/etc/network/interfaces` | `platform-vrf` set | `iface vrf-platform` with `vrf-table 1000`, and dummy `pvrf0` (`link-type dummy`, `vrf-member vrf-platform`) holding the `/32`. The platform overlay attaches to this VRF when the overlay service lands (#709). |
+| `/etc/network/interfaces` | Linux bond with zone VLANs | `bond<N>.<VLAN>` stanzas with the plan's VLAN, and no per-zone `gateway` line: a host has one default route, not one per zone. OVS bonds still emit no Linux VLAN stanzas. |
 
 ### dnsmasq (`network.dnsmasq`)
 

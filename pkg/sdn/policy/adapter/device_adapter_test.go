@@ -36,9 +36,11 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	devicedao "github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
@@ -49,6 +51,7 @@ import (
 // mockOVSPortController implements policy.OVSPortController for testing.
 type mockOVSPortController struct {
 	installErr    error
+	setTrunkCalls [][]uint16
 	setVLANCalls  []int64
 	setStateCalls []ovs.PortState
 }
@@ -84,6 +87,11 @@ func (m *mockOVSPortController) SetPortVLAN(ctx context.Context, portName string
 	return nil
 }
 
+func (m *mockOVSPortController) SetPortTrunk(ctx context.Context, portName string, allowed []uint16, native uint16) error {
+	m.setTrunkCalls = append(m.setTrunkCalls, allowed)
+	return nil
+}
+
 func (m *mockOVSPortController) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {
 	m.setStateCalls = append(m.setStateCalls, state)
 	return nil
@@ -98,11 +106,19 @@ func newTestZoneFlowManager(ovsCtrl *mockOVSPortController) *policy.ZoneFlowMana
 	if ovsCtrl == nil {
 		ovsCtrl = &mockOVSPortController{}
 	}
-	mgr, _ := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+	plan, err := netplan.New(netplan.Environment{ID: 4}, zone.Defaults())
+	if err != nil {
+		panic(err)
+	}
+	mgr, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
 		BridgeName:     "br-test",
 		FlowController: ovsCtrl,
 		PortController: ovsCtrl,
+		Plan:           plan,
 	})
+	if err != nil {
+		panic(err)
+	}
 	return mgr
 }
 
@@ -375,7 +391,7 @@ func createValidProfile() *entities.DeviceProfile {
 		ID:       1,
 		TenantID: "test-tenant",
 		Name:     "test-profile",
-		Role:     entities.DeviceRoleServer,
+		Role:     entities.DeviceRoleWorker,
 		Networks: map[string]*entities.NetworkPhaseConfig{
 			entities.DefaultPostEnrollmentNetwork: {
 				VLAN:       100,
@@ -563,7 +579,7 @@ func TestOnDeviceEnrolled_Success(t *testing.T) {
 
 	a := newAdapter(t, deps)
 	event := createValidEvent()
-	event.Phase = device.NetworkPhaseTrusted
+	event.Phase = device.NetworkPhaseAdmitted
 	err := a.OnDeviceEnrolled(context.Background(), event)
 	require.NoError(t, err)
 	assert.True(t, setPortStateCalled)
@@ -580,15 +596,87 @@ func TestOnDeviceEnrolled_NilProfile(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidProfile)
 }
 
-func TestOnDeviceEnrolled_NoProductionNetwork(t *testing.T) {
+// TestOnDeviceEnrolled_RoleZones admits a worker with no profile zone to
+// the hypervisor trunk (its role's zones).
+func TestOnDeviceEnrolled_RoleZones(t *testing.T) {
 	deps := newTestDeps()
 	a := newAdapter(t, deps)
 
 	event := createValidEvent()
 	event.Profile.Networks = nil
+	require.NoError(t, a.OnDeviceEnrolled(context.Background(), event))
+	require.NotEmpty(t, deps.ovsCtrl.setTrunkCalls)
+	assert.Equal(t, []uint16{401, 403, 404, 405, 406, 407, 408}, deps.ovsCtrl.setTrunkCalls[len(deps.ovsCtrl.setTrunkCalls)-1])
+}
+
+// TestOnDeviceEnrolled_ExplicitZone admits a device whose profile names a
+// zone to that zone as an access port.
+func TestOnDeviceEnrolled_ExplicitZone(t *testing.T) {
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
+
+	event := createValidEvent()
+	event.Profile.Zone = string(zone.ZoneStorage)
+	require.NoError(t, a.OnDeviceEnrolled(context.Background(), event))
+	assert.Empty(t, deps.ovsCtrl.setTrunkCalls)
+	assert.Contains(t, deps.ovsCtrl.setVLANCalls, int64(407))
+}
+
+// TestOnDeviceEnrolled_RoleWithoutPortClass fails closed for a role with no
+// port class and no profile zone: the port is not touched.
+func TestOnDeviceEnrolled_RoleWithoutPortClass(t *testing.T) {
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
+
+	event := createValidEvent()
+	event.Profile.Role = entities.DeviceRoleIoT
 	err := a.OnDeviceEnrolled(context.Background(), event)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNoTrustedNetwork)
+	var target ErrNoAdmissionTarget
+	require.ErrorAs(t, err, &target)
+	assert.Equal(t, "iot", target.Role)
+	assert.Contains(t, err.Error(), "port left unchanged")
+	var roleErr entities.ErrNoPortClassForRole
+	assert.ErrorAs(t, err, &roleErr)
+	assert.Empty(t, deps.ovsCtrl.setTrunkCalls)
+	assert.Empty(t, deps.ovsCtrl.setVLANCalls)
+}
+
+// TestOnDeviceEnrolled_UnknownProfileZone refuses a zone the zone set does
+// not declare, before any port change.
+func TestOnDeviceEnrolled_UnknownProfileZone(t *testing.T) {
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
+
+	event := createValidEvent()
+	event.Profile.Zone = "nowhere"
+	var target policy.ErrAdmissionZone
+	require.ErrorAs(t, a.OnDeviceEnrolled(context.Background(), event), &target)
+	assert.Equal(t, zone.Zone("nowhere"), target.Zone)
+	assert.Empty(t, deps.ovsCtrl.setVLANCalls, "a refused zone leaves the port unchanged")
+}
+
+// TestOnDeviceEnrolled_RefusedAdmissionZones refuses every zone a device
+// may not be admitted onto, and admits onto storage.
+func TestOnDeviceEnrolled_RefusedAdmissionZones(t *testing.T) {
+	for _, z := range []zone.Zone{zone.ZoneManagement, zone.ZoneTransit, zone.ZoneFabric,
+		zone.ZoneProvisioning, zone.ZoneQuarantine, zone.ZoneControlPlane} {
+		t.Run(string(z), func(t *testing.T) {
+			deps := newTestDeps()
+			a := newAdapter(t, deps)
+			event := createValidEvent()
+			event.Profile.Zone = string(z)
+			var target policy.ErrAdmissionZone
+			require.ErrorAs(t, a.OnDeviceEnrolled(context.Background(), event), &target)
+			assert.Empty(t, deps.ovsCtrl.setVLANCalls)
+		})
+	}
+
+	deps := newTestDeps()
+	a := newAdapter(t, deps)
+	event := createValidEvent()
+	event.Profile.Zone = string(zone.ZoneStorage)
+	require.NoError(t, a.OnDeviceEnrolled(context.Background(), event))
+	assert.NotEmpty(t, deps.ovsCtrl.setVLANCalls, "storage is an admission zone")
 }
 
 func TestOnDeviceEnrolled_EmptyPortID(t *testing.T) {
@@ -678,7 +766,7 @@ func TestApplyNetworkPhase_Production(t *testing.T) {
 
 	a := newAdapter(t, deps)
 	event := createValidEvent()
-	event.Phase = device.NetworkPhaseTrusted
+	event.Phase = device.NetworkPhaseAdmitted
 	require.NoError(t, a.ApplyNetworkPhase(context.Background(), event))
 	assert.Equal(t, policy.PortStateAuthorized, calledState)
 }
@@ -743,16 +831,16 @@ func TestApplyNetworkPhase_ValidationError_NilProfile(t *testing.T) {
 	assert.ErrorIs(t, err, device.ErrProfileNil)
 }
 
-func TestApplyNetworkPhase_Production_NilProductionNetwork(t *testing.T) {
+func TestApplyNetworkPhase_Admitted_BareProfileWithoutRole(t *testing.T) {
 	deps := newTestDeps()
 	a := newAdapter(t, deps)
 
 	event := createValidEvent()
-	event.Phase = device.NetworkPhaseTrusted
+	event.Phase = device.NetworkPhaseAdmitted
 	event.Profile = &entities.DeviceProfile{ID: 1, Name: "bare"}
 	err := a.ApplyNetworkPhase(context.Background(), event)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNoTrustedNetwork)
+	var target ErrNoAdmissionTarget
+	require.ErrorAs(t, err, &target)
 }
 
 // ---------------------------------------------------------------------------
@@ -976,7 +1064,7 @@ func TestNetworkPhase_String(t *testing.T) {
 		expected string
 	}{
 		{device.NetworkPhaseProvisioning, "provisioning"},
-		{device.NetworkPhaseTrusted, "trusted"},
+		{device.NetworkPhaseAdmitted, "admitted"},
 		{device.NetworkPhaseQuarantine, "quarantine"},
 	}
 	for _, tc := range cases {
@@ -984,4 +1072,48 @@ func TestNetworkPhase_String(t *testing.T) {
 			assert.Equal(t, tc.expected, tc.phase.String())
 		})
 	}
+}
+
+// TestOnDeviceEnrolled_AllowedZoneFlowFailure surfaces a flow install
+// failure on an admission zone that passed the admission rule.
+func TestOnDeviceEnrolled_AllowedZoneFlowFailure(t *testing.T) {
+	deps := newTestDeps()
+	deps.ovsCtrl.installErr = errors.New("OVS unreachable")
+	a := newAdapter(t, deps)
+
+	event := createValidEvent()
+	event.Profile.Zone = string(zone.ZoneStorage)
+	assert.ErrorIs(t, a.OnDeviceEnrolled(context.Background(), event), ErrFlowInstallFailed)
+}
+
+// TestOnComplianceFail_FlowInstallFailed surfaces a quarantine flow install
+// failure and leaves the port state untouched.
+func TestOnComplianceFail_FlowInstallFailed(t *testing.T) {
+	deps := newTestDeps()
+	deps.ovsCtrl.installErr = errors.New("OVS unreachable")
+	called := false
+	deps.engine.SetPortStateFunc = func(string, policy.PortState) error {
+		called = true
+		return nil
+	}
+	a := newAdapter(t, deps)
+
+	event := createValidEvent()
+	event.Reason = "compliance check failed"
+	assert.ErrorIs(t, a.OnComplianceFail(context.Background(), event), ErrFlowInstallFailed)
+	assert.False(t, called, "no state change when the quarantine flows did not install")
+}
+
+// TestOnComplianceFail_PortStateError surfaces a policy engine failure after
+// the quarantine flows installed.
+func TestOnComplianceFail_PortStateError(t *testing.T) {
+	deps := newTestDeps()
+	deps.engine.SetPortStateFunc = func(string, policy.PortState) error {
+		return errors.New("engine down")
+	}
+	a := newAdapter(t, deps)
+
+	event := createValidEvent()
+	event.Reason = "compliance check failed"
+	assert.EqualError(t, a.OnComplianceFail(context.Background(), event), "engine down")
 }

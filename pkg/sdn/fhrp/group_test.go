@@ -43,7 +43,7 @@ func (a *recordingActuator) Release(*Group) error { a.releases++; return a.failR
 func boolp(b bool) *bool { return &b }
 
 func backupConfig() GroupConfig {
-	return GroupConfig{VRID: 20, Interface: "trusted0", Priority: 100, AdvertIntervalCentiseconds: 100,
+	return GroupConfig{VRID: 20, Interface: "br-int", Priority: 100, AdvertIntervalCentiseconds: 100,
 		Addresses: []string{"198.18.0.1/24"}, Source: "198.18.0.2"}
 }
 

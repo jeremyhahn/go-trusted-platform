@@ -179,17 +179,17 @@ func wiringCertWithZone(t *testing.T, zoneName string) *x509.Certificate {
 // TestSDNEnrollmentHookWiring_ZoneMismatchQuarantines proves the production
 // wiring detects a certificate/profile zone mismatch: the hook built by
 // newSDNEnrollmentHookConfig carries the certificate zone extractor and the
-// resolved zones, so a certificate declaring zone "trusted" against a
+// resolved zones, so a certificate declaring zone "control-plane" against a
 // profile declaring zone "provisioning" prechecks as an expected quarantine
-// and activates onto the quarantine VLAN — never the trusted policy.
+// and activates onto the quarantine VLAN — never the post-enrollment policy.
 // Without the Extractor/Zones wiring the mismatch would be silently
-// accepted and this test would see a clean activation on VLAN 200.
+// accepted and this test would see a clean activation on the post-enrollment VLAN.
 func TestSDNEnrollmentHookWiring_ZoneMismatchQuarantines(t *testing.T) {
 	hook, engine := newWiringFixture(t)
 
 	event := &policy.EnrollmentEvent{
 		Context:       context.Background(),
-		Certificate:   wiringCertWithZone(t, "trusted"),
+		Certificate:   wiringCertWithZone(t, "control-plane"),
 		ClientIP:      "192.168.1.50",
 		IsTCGCSR:      true,
 		ProductSerial: "SRV-WIRE-01",
@@ -214,7 +214,7 @@ func TestSDNEnrollmentHookWiring_ZoneMismatchQuarantines(t *testing.T) {
 
 // TestSDNEnrollmentHookWiring_MatchingZoneActivatesClean is the control for
 // the mismatch test: a certificate whose zone matches the profile zone
-// prechecks clean and activates onto the trusted VLAN through the same
+// prechecks clean and activates onto the admitted VLAN through the same
 // production config.
 func TestSDNEnrollmentHookWiring_MatchingZoneActivatesClean(t *testing.T) {
 	hook, engine := newWiringFixture(t)

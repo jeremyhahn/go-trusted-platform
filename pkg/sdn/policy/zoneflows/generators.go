@@ -50,10 +50,7 @@ const (
 	prioScanning     = prioBase + 700 // 1700 — quarantine: scanning servers
 	prioRemediation  = prioBase + 650 // 1650 — quarantine: remediation servers
 	prioNotification = prioBase + 600 // 1600 — quarantine: notification portal
-	prioTrustedEW    = 100            // trusted east-west (per doc: priority=100)
-	prioPublicDeny   = 200            // public→trusted drop (per doc: priority=200)
-	prioPublicEW     = 100            // public east-west
-	prioStorageEW    = 100            // storage east-west
+	prioEastWest     = 100            // intra-zone east-west (per doc: priority=100)
 	prioMatrixDeny   = 200            // inter-zone deny flows
 	prioMatrixAllow  = 100            // inter-zone allow flows
 	prioDefaultDrop  = prioBase - 100 // 900 — provisioning default drop
@@ -67,9 +64,11 @@ type GeneratorSet struct {
 }
 
 // NewGeneratorSet constructs a GeneratorSet from the supplied ZoneFlowConfig.
-// The built-in generators (quarantine, provisioning, trusted, public, storage,
-// management) are pre-registered. User-defined zones that do not match any
-// built-in name receive generic matrix-driven rules only (nil generator entry).
+// The lifecycle templates (quarantine, provisioning) and the OOB management
+// template are pre-registered, and so is the east-west template for every
+// built-in zone whose reference policy opens traffic inside the zone
+// (fabric, hypervisor, control-plane, storage, backup). Transit and
+// owner-defined zones receive generic matrix-driven rules only.
 func NewGeneratorSet(cfg ZoneFlowConfig) *GeneratorSet {
 	gs := &GeneratorSet{
 		cfg:        cfg,
@@ -77,11 +76,23 @@ func NewGeneratorSet(cfg ZoneFlowConfig) *GeneratorSet {
 	}
 	gs.generators[zone.ZoneQuarantine] = gs.quarantine
 	gs.generators[zone.ZoneProvisioning] = gs.provisioning
-	gs.generators[zone.ZoneTrusted] = gs.trusted
-	gs.generators[zone.ZonePublic] = gs.public
-	gs.generators[zone.ZoneStorage] = gs.storage
 	gs.generators[zone.ZoneManagement] = gs.management
+	for _, z := range eastWestZones {
+		gs.generators[z] = gs.eastWest
+	}
 	return gs
+}
+
+// eastWestZones are the built-in zones whose reference policy opens traffic
+// between members of the zone: VTEPs on fabric, live migration on
+// hypervisor, Raft and the CP APIs on control-plane, storage clients and
+// targets, backup streams.
+var eastWestZones = []zone.Zone{
+	zone.ZoneFabric,
+	zone.ZoneHypervisor,
+	zone.ZoneControlPlane,
+	zone.ZoneStorage,
+	zone.ZoneBackup,
 }
 
 // Generate returns the complete set of OpenFlow rules for portID in zone z
@@ -89,12 +100,12 @@ func NewGeneratorSet(cfg ZoneFlowConfig) *GeneratorSet {
 // rules are returned; user-defined zones without a built-in template return
 // an empty slice (only matrix rules apply at that point, emitted separately by
 // CompileMatrixRules).
-func (gs *GeneratorSet) Generate(portID string, z zone.Zone, vlanID uint16) []FlowRule {
+func (gs *GeneratorSet) Generate(portID string, z zone.Zone, in Ingress) []FlowRule {
 	gen, ok := gs.generators[z]
 	if !ok || gen == nil {
 		return nil
 	}
-	return ApplyTerminal(gen(portID, vlanID), gs.cfg.Terminal)
+	return ApplyTerminal(gen(portID, in), gs.cfg.Terminal)
 }
 
 // CompileMatrixRules derives inter-zone allow/deny OpenFlow rules from the
@@ -114,14 +125,53 @@ func (gs *GeneratorSet) Generate(portID string, z zone.Zone, vlanID uint16) []Fl
 //
 // The management zone is OOB and never appears as a matrix destination here —
 // its isolation is enforced by the management template (no routes to data zones).
+//
+// These rules match tagged ingress only (dl_vlan): traffic arriving on a
+// trunk's tagged zones. Traffic that reaches the flow tables untagged, from
+// an access port or on a trunk's native VLAN, needs the per-port variant,
+// CompileMatrixRulesForPort.
 func CompileMatrixRules(cfg MatrixRuleConfig) []FlowRule {
+	return compileMatrix(cfg, "", func(n NetworkSummary) string {
+		return Tagged(n.VLAN).Match()
+	})
+}
+
+// CompileMatrixRulesForPort derives the inter-zone rules of one source zone
+// for traffic that reaches the flow tables untagged on portID: an access
+// port's zone, or a trunk's native zone.
+//
+// CompileMatrixRules keys every rule on dl_vlan=<source VLAN>, which only
+// matches frames that arrive 802.1Q-tagged (a trunk's tagged zones). OVS
+// applies a port's tag and native VLAN only in the NORMAL action, so the
+// flow tables see an access port's frames, and a trunk's native-VLAN frames,
+// without a VLAN header (see Ingress). Those frames are identified by their
+// ingress port instead: the same verdicts, keyed on
+// in_port=<port>,vlan_tci=0x0000/0x1fff. The rules carry in_port, so the
+// per-port flow cleanup removes them with the port's template rules.
+func CompileMatrixRulesForPort(cfg MatrixRuleConfig, portID string, from zone.Zone) []FlowRule {
+	if portID == "" || from == "" {
+		return nil
+	}
+	return compileMatrix(cfg, from, func(NetworkSummary) string {
+		return fmt.Sprintf("in_port=%s,%s", portID, untaggedMatch)
+	})
+}
+
+// compileMatrix emits the matrix rules of every source zone (or only of
+// onlyFrom when it is set), each keyed on the ingress match ingress returns
+// for the source zone's network.
+func compileMatrix(cfg MatrixRuleConfig, onlyFrom zone.Zone, ingress func(NetworkSummary) string) []FlowRule {
 	var flows []FlowRule
 
 	for _, from := range cfg.Zones {
+		if onlyFrom != "" && from.Name != onlyFrom {
+			continue
+		}
 		fromNet, ok := cfg.NetworksByZone[from.Name]
 		if !ok || fromNet.VLAN == 0 {
 			continue
 		}
+		in := ingress(fromNet)
 
 		for _, to := range cfg.Zones {
 			if from.Name == to.Name {
@@ -148,7 +198,7 @@ func CompileMatrixRules(cfg MatrixRuleConfig) []FlowRule {
 					flows = append(flows, FlowRule{
 						Table:    0,
 						Priority: prioMatrixDeny,
-						Match:    fmt.Sprintf("dl_vlan=%d,%s", fromNet.VLAN, f.ipMatch(f.toDst(toSubnet))),
+						Match:    fmt.Sprintf("%s,%s", in, f.ipMatch(f.toDst(toSubnet))),
 						Actions:  "drop",
 					})
 					continue
@@ -159,7 +209,7 @@ func CompileMatrixRules(cfg MatrixRuleConfig) []FlowRule {
 				// need no additional matrix rule — the template's normal
 				// action covers them.
 				for _, svc := range verdict.Services {
-					flows = append(flows, serviceFlowRules(f, fromNet.VLAN, toSubnet, svc, prioMatrixAllow)...)
+					flows = append(flows, serviceFlowRules(f, in, toSubnet, svc, prioMatrixAllow)...)
 				}
 			}
 		}
@@ -210,6 +260,12 @@ const DefaultPolicyAllow = "allow"
 // their traffic on the non-IP bypass path. Unlike CompileMatrixRules,
 // intra-zone (from == to) pairs are emitted too: once traffic is gated
 // through conntrack, intra-zone connections also need a commit verdict.
+//
+// The rules key on dl_vlan, i.e. on tagged ingress. That is correct for the
+// gateway datapath this pipeline runs on: the gateway port class is a trunk
+// with no native VLAN, so every zone's traffic from the switch arrives
+// tagged. Untagged ingress (an access port's zone, a native VLAN) is not
+// classified here and takes the non-IP bypass of table 20.
 func CompileStatefulMatrixRules(cfg MatrixRuleConfig, ctZones map[zone.Zone]uint16) []FlowRule {
 	var flows []FlowRule
 
@@ -330,7 +386,7 @@ func CompileStatefulMatrixRules(cfg MatrixRuleConfig, ctZones map[zone.Zone]uint
 // port-level representation in the current rule vocabulary (e.g. "auth",
 // "remediation") are handled by the per-zone templates and return no
 // additional matrix rules here.
-func serviceFlowRules(f family, fromVLAN uint16, toSubnet, service string, priority int) []FlowRule {
+func serviceFlowRules(f family, ingress string, toSubnet, service string, priority int) []FlowRule {
 	var flows []FlowRule
 
 	switch service {
@@ -339,7 +395,7 @@ func serviceFlowRules(f family, fromVLAN uint16, toSubnet, service string, prior
 			FlowRule{
 				Table:    0,
 				Priority: priority,
-				Match:    fmt.Sprintf("dl_vlan=%d,%s", fromVLAN, f.dhcpMatch()),
+				Match:    fmt.Sprintf("%s,%s", ingress, f.dhcpMatch()),
 				Actions:  "normal",
 			},
 		)
@@ -349,13 +405,13 @@ func serviceFlowRules(f family, fromVLAN uint16, toSubnet, service string, prior
 				FlowRule{
 					Table:    0,
 					Priority: priority,
-					Match:    fmt.Sprintf("dl_vlan=%d,%s", fromVLAN, f.ipMatch("nw_proto=17", f.toDst(toSubnet), fmt.Sprintf("tp_dst=%d", p))),
+					Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch("nw_proto=17", f.toDst(toSubnet), fmt.Sprintf("tp_dst=%d", p))),
 					Actions:  "normal",
 				},
 				FlowRule{
 					Table:    0,
 					Priority: priority,
-					Match:    fmt.Sprintf("dl_vlan=%d,%s", fromVLAN, f.ipMatch("nw_proto=6", f.toDst(toSubnet), fmt.Sprintf("tp_dst=%d", p))),
+					Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch("nw_proto=6", f.toDst(toSubnet), fmt.Sprintf("tp_dst=%d", p))),
 					Actions:  "normal",
 				},
 			)
@@ -366,7 +422,7 @@ func serviceFlowRules(f family, fromVLAN uint16, toSubnet, service string, prior
 				FlowRule{
 					Table:    0,
 					Priority: priority,
-					Match:    fmt.Sprintf("dl_vlan=%d,%s", fromVLAN, f.ipMatch("nw_proto=6", f.toDst(toSubnet), fmt.Sprintf("tp_dst=%d", p))),
+					Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch("nw_proto=6", f.toDst(toSubnet), fmt.Sprintf("tp_dst=%d", p))),
 					Actions:  "normal",
 				},
 			)
@@ -376,7 +432,7 @@ func serviceFlowRules(f family, fromVLAN uint16, toSubnet, service string, prior
 			FlowRule{
 				Table:    0,
 				Priority: priority,
-				Match:    fmt.Sprintf("dl_vlan=%d,%s", fromVLAN, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
+				Match:    fmt.Sprintf("%s,%s", ingress, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
 				Actions:  "normal",
 			},
 		)
@@ -400,24 +456,24 @@ func serviceFlowRules(f family, fromVLAN uint16, toSubnet, service string, prior
 //	DNS to dns_ip   priority=1800
 //	auth/remediation HTTPS to remediation_ip  priority=1700/1650
 //	default drop    priority=1100
-func (gs *GeneratorSet) quarantine(portID string, vlanID uint16) []FlowRule {
+func (gs *GeneratorSet) quarantine(portID string, in Ingress) []FlowRule {
 	var flows []FlowRule
 
 	// ARP, and its IPv6 counterpart: neighbor discovery.
 	flows = append(flows, FlowRule{
 		Table:    0,
 		Priority: prioARP,
-		Match:    matchInVLAN(portID, vlanID, "dl_type=0x0806"),
+		Match:    matchInVLAN(portID, in, "dl_type=0x0806"),
 		Actions:  "normal",
 	})
-	flows = append(flows, neighborDiscoveryRules(portID, vlanID, prioARP)...)
+	flows = append(flows, neighborDiscoveryRules(portID, in, prioARP)...)
 
 	// DHCP client→server, both families.
 	for _, f := range families {
 		flows = append(flows, FlowRule{
 			Table:    0,
 			Priority: prioDHCP,
-			Match:    matchInVLAN(portID, vlanID, f.dhcpMatch()),
+			Match:    matchInVLAN(portID, in, f.dhcpMatch()),
 			Actions:  "normal",
 		})
 	}
@@ -429,7 +485,7 @@ func (gs *GeneratorSet) quarantine(portID string, vlanID uint16) []FlowRule {
 		flows = append(flows, FlowRule{
 			Table:    0,
 			Priority: prioDNS,
-			Match:    matchInVLAN(portID, vlanID, f.ipMatch("nw_proto=17", f.toDst(cfg.DNSServerIP.String()), fmt.Sprintf("tp_dst=%d", portDNS))),
+			Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", f.toDst(cfg.DNSServerIP.String()), fmt.Sprintf("tp_dst=%d", portDNS))),
 			Actions:  "normal",
 		})
 	} else {
@@ -437,7 +493,7 @@ func (gs *GeneratorSet) quarantine(portID string, vlanID uint16) []FlowRule {
 			flows = append(flows, FlowRule{
 				Table:    0,
 				Priority: prioDNS,
-				Match:    matchInVLAN(portID, vlanID, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portDNS))),
+				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portDNS))),
 				Actions:  "normal",
 			})
 		}
@@ -454,7 +510,7 @@ func (gs *GeneratorSet) quarantine(portID string, vlanID uint16) []FlowRule {
 			flows = append(flows, FlowRule{
 				Table:    0,
 				Priority: prioRemediation,
-				Match:    matchInVLAN(portID, vlanID, f.ipMatch("nw_proto=6", f.toDst(ip.String()), fmt.Sprintf("tp_dst=%d", p))),
+				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=6", f.toDst(ip.String()), fmt.Sprintf("tp_dst=%d", p))),
 				Actions:  "normal",
 			})
 		}
@@ -466,7 +522,7 @@ func (gs *GeneratorSet) quarantine(portID string, vlanID uint16) []FlowRule {
 		flows = append(flows, FlowRule{
 			Table:    0,
 			Priority: prioScanning,
-			Match:    matchInVLAN(portID, vlanID, f.ipMatch(f.toDst(ip.String()))),
+			Match:    matchInVLAN(portID, in, f.ipMatch(f.toDst(ip.String()))),
 			Actions:  "normal",
 		})
 	}
@@ -478,7 +534,7 @@ func (gs *GeneratorSet) quarantine(portID string, vlanID uint16) []FlowRule {
 			flows = append(flows, FlowRule{
 				Table:    0,
 				Priority: prioNotification,
-				Match:    matchInVLAN(portID, vlanID, f.ipMatch("nw_proto=6", f.toDst(cfg.NotificationServerIP.String()), fmt.Sprintf("tp_dst=%d", p))),
+				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=6", f.toDst(cfg.NotificationServerIP.String()), fmt.Sprintf("tp_dst=%d", p))),
 				Actions:  "normal",
 			})
 		}
@@ -488,7 +544,7 @@ func (gs *GeneratorSet) quarantine(portID string, vlanID uint16) []FlowRule {
 	flows = append(flows, FlowRule{
 		Table:    0,
 		Priority: prioQDropDefault,
-		Match:    matchInVLAN(portID, vlanID, ""),
+		Match:    matchInVLAN(portID, in, ""),
 		Actions:  "drop",
 		Cookie:   fmt.Sprintf("quarantine:%s", portID),
 	})
@@ -507,24 +563,24 @@ func (gs *GeneratorSet) quarantine(portID string, vlanID uint16) []FlowRule {
 //	ACME/HTTPS    priority=1700
 //	package repos priority=1650
 //	default drop  priority=900
-func (gs *GeneratorSet) provisioning(portID string, vlanID uint16) []FlowRule {
+func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 	var flows []FlowRule
 
 	// ARP, and its IPv6 counterpart: neighbor discovery.
 	flows = append(flows, FlowRule{
 		Table:    0,
 		Priority: prioARP,
-		Match:    matchInVLAN(portID, vlanID, "dl_type=0x0806"),
+		Match:    matchInVLAN(portID, in, "dl_type=0x0806"),
 		Actions:  "normal",
 	})
-	flows = append(flows, neighborDiscoveryRules(portID, vlanID, prioARP)...)
+	flows = append(flows, neighborDiscoveryRules(portID, in, prioARP)...)
 
 	// DHCP, both families.
 	for _, f := range families {
 		flows = append(flows, FlowRule{
 			Table:    0,
 			Priority: prioDHCP,
-			Match:    matchInVLAN(portID, vlanID, f.dhcpMatch()),
+			Match:    matchInVLAN(portID, in, f.dhcpMatch()),
 			Actions:  "normal",
 		})
 	}
@@ -532,7 +588,7 @@ func (gs *GeneratorSet) provisioning(portID string, vlanID uint16) []FlowRule {
 	cfg := gs.cfg.Provisioning
 
 	// DNS
-	flows = append(flows, gs.serverRules(portID, vlanID, prioDNS, "nw_proto=17",
+	flows = append(flows, gs.serverRules(portID, in, prioDNS, "nw_proto=17",
 		cfg.DNSServerIPs, []uint16{portDNS, portDNSAlt1, portDNSAlt2})...)
 
 	// TFTP (PXE boot), both families.
@@ -540,17 +596,17 @@ func (gs *GeneratorSet) provisioning(portID string, vlanID uint16) []FlowRule {
 		flows = append(flows, FlowRule{
 			Table:    0,
 			Priority: prioTFTP,
-			Match:    matchInVLAN(portID, vlanID, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
+			Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
 			Actions:  "normal",
 		})
 	}
 
 	// ACME / HTTPS
-	flows = append(flows, gs.serverRules(portID, vlanID, prioACME, "nw_proto=6",
+	flows = append(flows, gs.serverRules(portID, in, prioACME, "nw_proto=6",
 		cfg.ACMEServerIPs, []uint16{portHTTPS, portHTTPSAlt1, portHTTPSAlt2})...)
 
 	// Package repos (HTTP + HTTPS)
-	flows = append(flows, gs.serverRules(portID, vlanID, prioPackageRepo, "nw_proto=6",
+	flows = append(flows, gs.serverRules(portID, in, prioPackageRepo, "nw_proto=6",
 		cfg.PackageRepoIPs, []uint16{portHTTP, portHTTPS})...)
 
 	// ICMP if configured: ICMP for IPv4, ICMPv6 for IPv6.
@@ -559,7 +615,7 @@ func (gs *GeneratorSet) provisioning(portID string, vlanID uint16) []FlowRule {
 			flows = append(flows, FlowRule{
 				Table:    0,
 				Priority: prioPackageRepo - 50,
-				Match:    matchInVLAN(portID, vlanID, f.ipMatch(fmt.Sprintf("nw_proto=%d", f.icmpProto))),
+				Match:    matchInVLAN(portID, in, f.ipMatch(fmt.Sprintf("nw_proto=%d", f.icmpProto))),
 				Actions:  "normal",
 			})
 		}
@@ -569,7 +625,7 @@ func (gs *GeneratorSet) provisioning(portID string, vlanID uint16) []FlowRule {
 	flows = append(flows, FlowRule{
 		Table:    0,
 		Priority: prioDefaultDrop,
-		Match:    matchInVLAN(portID, vlanID, ""),
+		Match:    matchInVLAN(portID, in, ""),
 		Actions:  "drop",
 	})
 
@@ -580,7 +636,7 @@ func (gs *GeneratorSet) provisioning(portID string, vlanID uint16) []FlowRule {
 // provisioning-style template uses. With no server addresses configured the
 // ports are open to any destination in both families; with addresses, each
 // address gets rules in its own family only.
-func (gs *GeneratorSet) serverRules(portID string, vlanID uint16, priority int, proto string, servers []net.IP, ports []uint16) []FlowRule {
+func (gs *GeneratorSet) serverRules(portID string, in Ingress, priority int, proto string, servers []net.IP, ports []uint16) []FlowRule {
 	var flows []FlowRule
 	if len(servers) == 0 {
 		for _, f := range families {
@@ -588,7 +644,7 @@ func (gs *GeneratorSet) serverRules(portID string, vlanID uint16, priority int, 
 				flows = append(flows, FlowRule{
 					Table:    0,
 					Priority: priority,
-					Match:    matchInVLAN(portID, vlanID, f.ipMatch(proto, fmt.Sprintf("tp_dst=%d", p))),
+					Match:    matchInVLAN(portID, in, f.ipMatch(proto, fmt.Sprintf("tp_dst=%d", p))),
 					Actions:  "normal",
 				})
 			}
@@ -601,7 +657,7 @@ func (gs *GeneratorSet) serverRules(portID string, vlanID uint16, priority int, 
 			flows = append(flows, FlowRule{
 				Table:    0,
 				Priority: priority,
-				Match:    matchInVLAN(portID, vlanID, f.ipMatch(proto, f.toDst(ip.String()), fmt.Sprintf("tp_dst=%d", p))),
+				Match:    matchInVLAN(portID, in, f.ipMatch(proto, f.toDst(ip.String()), fmt.Sprintf("tp_dst=%d", p))),
 				Actions:  "normal",
 			})
 		}
@@ -609,71 +665,17 @@ func (gs *GeneratorSet) serverRules(portID string, vlanID uint16, priority int, 
 	return flows
 }
 
-// trusted implements the trusted zone flow template.
+// eastWest implements the intra-zone template of the zones in
+// eastWestZones: members of the zone reach each other. The matrix rules
+// compiled by CompileMatrixRules deny the other zones' subnets above it.
 //
-// Rule set (from docs/architecture/reference-network.md):
-//
-//	priority=100  in_port=<port>,dl_vlan=<trusted>,actions=normal
-//
-// East-west per-profile ACLs are layered on top by the engine's
-// GenerateAuthorizationRules; the template installs the base allow rule.
-func (gs *GeneratorSet) trusted(portID string, vlanID uint16) []FlowRule {
+//	priority=100  in_port=<port>,dl_vlan=<zone>,actions=normal
+func (gs *GeneratorSet) eastWest(portID string, in Ingress) []FlowRule {
 	return []FlowRule{
 		{
 			Table:    0,
-			Priority: prioTrustedEW,
-			Match:    matchInVLAN(portID, vlanID, ""),
-			Actions:  "normal",
-		},
-	}
-}
-
-// public implements the public zone flow template.
-//
-// Rule set (from docs/architecture/reference-network.md):
-//
-//	priority=200  dl_vlan=<public>,ip,nw_dst=<trusted_subnet>,actions=drop
-//	priority=100  in_port=<port>,dl_vlan=<public>,actions=normal
-func (gs *GeneratorSet) public(portID string, vlanID uint16) []FlowRule {
-	var flows []FlowRule
-
-	// Drop public→trusted (defense-in-depth), per family the trusted zone
-	// has a prefix for.
-	for _, subnet := range []string{gs.cfg.Public.TrustedSubnet, gs.cfg.Public.TrustedSubnet6} {
-		if subnet == "" {
-			continue
-		}
-		f := familyOfPrefix(subnet)
-		flows = append(flows, FlowRule{
-			Table:    0,
-			Priority: prioPublicDeny,
-			Match:    fmt.Sprintf("dl_vlan=%d,%s", vlanID, f.ipMatch(f.toDst(subnet))),
-			Actions:  "drop",
-		})
-	}
-
-	// Public ingress/egress
-	flows = append(flows, FlowRule{
-		Table:    0,
-		Priority: prioPublicEW,
-		Match:    matchInVLAN(portID, vlanID, ""),
-		Actions:  "normal",
-	})
-
-	return flows
-}
-
-// storage implements the storage zone flow template.
-//
-// Storage is isolated; only storage↔trusted and storage intra-zone are allowed.
-// The matrix handles the inter-zone direction; the template provides the
-// intra-zone east-west allow rule.
-func (gs *GeneratorSet) storage(portID string, vlanID uint16) []FlowRule {
-	return []FlowRule{
-		{
-			Table:    0,
-			Priority: prioStorageEW,
-			Match:    matchInVLAN(portID, vlanID, ""),
+			Priority: prioEastWest,
+			Match:    matchInVLAN(portID, in, ""),
 			Actions:  "normal",
 		},
 	}
@@ -681,14 +683,15 @@ func (gs *GeneratorSet) storage(portID string, vlanID uint16) []FlowRule {
 
 // management implements the management zone flow template.
 //
-// Management is OOB and must never route to any data zone. The template
-// allows intra-zone traffic (BMC-to-BMC management) and drops everything else.
-func (gs *GeneratorSet) management(portID string, vlanID uint16) []FlowRule {
+// Management is OOB (BMCs only) and must never route to any data zone. The
+// template forwards on the management VLAN itself; the matrix rules drop
+// every other zone's subnet above it.
+func (gs *GeneratorSet) management(portID string, in Ingress) []FlowRule {
 	return []FlowRule{
 		{
 			Table:    0,
 			Priority: 100,
-			Match:    matchInVLAN(portID, vlanID, ""),
+			Match:    matchInVLAN(portID, in, ""),
 			Actions:  "normal",
 		},
 	}
@@ -698,12 +701,13 @@ func (gs *GeneratorSet) management(portID string, vlanID uint16) []FlowRule {
 // Match string helpers
 // --------------------------------------------------------------------------
 
-// matchInVLAN builds an OpenFlow match string scoped to portID and vlanID.
-// When extra is non-empty it is appended, comma-separated.
-func matchInVLAN(portID string, vlanID uint16, extra string) string {
+// matchInVLAN builds an OpenFlow match string scoped to portID and to the
+// way the zone's frames arrive on it (see Ingress). When extra is non-empty
+// it is appended, comma-separated.
+func matchInVLAN(portID string, in Ingress, extra string) string {
 	parts := []string{
 		fmt.Sprintf("in_port=%s", portID),
-		fmt.Sprintf("dl_vlan=%d", vlanID),
+		in.Match(),
 	}
 	if extra != "" {
 		parts = append(parts, extra)
@@ -793,13 +797,13 @@ var icmpv6NDTypes = []uint8{133, 134, 135, 136, 137}
 
 // neighborDiscoveryRules returns the ICMPv6 ND allowances that pair with an
 // ARP allowance on a port.
-func neighborDiscoveryRules(portID string, vlanID uint16, priority int) []FlowRule {
+func neighborDiscoveryRules(portID string, in Ingress, priority int) []FlowRule {
 	flows := make([]FlowRule, 0, len(icmpv6NDTypes))
 	for _, t := range icmpv6NDTypes {
 		flows = append(flows, FlowRule{
 			Table:    0,
 			Priority: priority,
-			Match:    matchInVLAN(portID, vlanID, ipv6.ipMatch(fmt.Sprintf("nw_proto=%d,icmp_type=%d", ipv6.icmpProto, t))),
+			Match:    matchInVLAN(portID, in, ipv6.ipMatch(fmt.Sprintf("nw_proto=%d,icmp_type=%d", ipv6.icmpProto, t))),
 			Actions:  "normal",
 		})
 	}

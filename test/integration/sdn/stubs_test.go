@@ -71,7 +71,7 @@ func (s *stubOverlayController) GetConfig() *overlay.Config {
 		VTEPIP:      netip.MustParseAddr("10.0.0.1"),
 		VXLANPort:   4789, // Standard VXLAN port
 		UnderlayMTU: 1500, // Standard MTU
-		VNIBase:     10000,
+		Environment: 4,
 	}
 }
 

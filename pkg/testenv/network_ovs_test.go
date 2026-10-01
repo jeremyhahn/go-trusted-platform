@@ -43,7 +43,7 @@ func TestDefaultOVSNetworkOptions(t *testing.T) {
 	assert.Equal(t, uint16(0), opts.ClientVLAN)
 	assert.False(t, opts.EnableFlowControl)
 	assert.Equal(t, uint16(100), opts.ProvisioningVLAN)
-	assert.Equal(t, uint16(200), opts.TrustedVLAN)
+	assert.Equal(t, uint16(200), opts.AdmittedVLAN)
 	assert.Equal(t, uint16(300), opts.QuarantineVLAN)
 }
 
@@ -125,7 +125,7 @@ func TestOVSNetworkOptions_CustomValues(t *testing.T) {
 		ClientVLAN:        200,
 		EnableFlowControl: true,
 		ProvisioningVLAN:  10,
-		TrustedVLAN:       20,
+		AdmittedVLAN:      20,
 		QuarantineVLAN:    30,
 	}
 
@@ -134,7 +134,7 @@ func TestOVSNetworkOptions_CustomValues(t *testing.T) {
 	assert.Equal(t, uint16(200), opts.ClientVLAN)
 	assert.True(t, opts.EnableFlowControl)
 	assert.Equal(t, uint16(10), opts.ProvisioningVLAN)
-	assert.Equal(t, uint16(20), opts.TrustedVLAN)
+	assert.Equal(t, uint16(20), opts.AdmittedVLAN)
 	assert.Equal(t, uint16(30), opts.QuarantineVLAN)
 }
 
@@ -490,7 +490,7 @@ func TestOVSIsolatedNetwork_UnblockPort_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
-func TestOVSIsolatedNetwork_TransitionToTrusted_EmptyPortID(t *testing.T) {
+func TestOVSIsolatedNetwork_TransitionToAdmitted_EmptyPortID(t *testing.T) {
 	if !IsOVSAvailable() {
 		cfg := DefaultNetworkConfig()
 		ovsNet, err := NewOVSIsolatedNetwork(cfg, nil)
@@ -506,12 +506,12 @@ func TestOVSIsolatedNetwork_TransitionToTrusted_EmptyPortID(t *testing.T) {
 	// Create a dummy certificate
 	cert := generateTestCertificate(t)
 
-	err = ovsNet.TransitionToTrusted("", cert)
+	err = ovsNet.TransitionToAdmitted("", cert)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "port ID cannot be empty")
 }
 
-func TestOVSIsolatedNetwork_TransitionToTrusted_NilCert(t *testing.T) {
+func TestOVSIsolatedNetwork_TransitionToAdmitted_NilCert(t *testing.T) {
 	if !IsOVSAvailable() {
 		cfg := DefaultNetworkConfig()
 		ovsNet, err := NewOVSIsolatedNetwork(cfg, nil)
@@ -524,12 +524,12 @@ func TestOVSIsolatedNetwork_TransitionToTrusted_NilCert(t *testing.T) {
 	ovsNet, err := NewOVSIsolatedNetwork(cfg, nil)
 	require.NoError(t, err)
 
-	err = ovsNet.TransitionToTrusted("test-port", nil)
+	err = ovsNet.TransitionToAdmitted("test-port", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "certificate cannot be nil")
 }
 
-func TestOVSIsolatedNetwork_TransitionToTrusted_NotFound(t *testing.T) {
+func TestOVSIsolatedNetwork_TransitionToAdmitted_NotFound(t *testing.T) {
 	if !IsOVSAvailable() {
 		cfg := DefaultNetworkConfig()
 		ovsNet, err := NewOVSIsolatedNetwork(cfg, nil)
@@ -544,7 +544,7 @@ func TestOVSIsolatedNetwork_TransitionToTrusted_NotFound(t *testing.T) {
 
 	cert := generateTestCertificate(t)
 
-	err = ovsNet.TransitionToTrusted("nonexistent-port", cert)
+	err = ovsNet.TransitionToAdmitted("nonexistent-port", cert)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -612,7 +612,7 @@ func TestNetworkPhase_String(t *testing.T) {
 	}{
 		{NetworkPhaseUnconnected, "unconnected"},
 		{NetworkPhaseProvisioning, "provisioning"},
-		{NetworkPhaseTrusted, "trusted"},
+		{NetworkPhaseAdmitted, "admitted"},
 		{NetworkPhaseQuarantine, "quarantine"},
 		{NetworkPhaseBlocked, "blocked"},
 		{NetworkPhase(999), "unknown(999)"}, // Unknown phase

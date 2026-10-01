@@ -33,14 +33,13 @@ import (
 // silently dropping every diverging request field:
 //
 //   - GetTenantRequest.TenantId       (flat TenantID   -> dropped)
-//   - CreateTenantRequest.VlanRangeStart / VlanRangeEnd (flat VLANStart/VLANEnd
-//     uint16 -> dropped) and the nested ComputeQuota/NetworkQuota/StorageQuota
+//   - CreateTenantRequest's nested ComputeQuota/NetworkQuota/StorageQuota
 //     (flat *QuotaDTO with MaxVMs vs pb MaxVms -> dropped)
 //
 // Each message is round-tripped through the payload codec (encode SDK-side
 // shape -> decode daemon-side shape) and compared with proto.Equal so a codec
 // or field-shape regression on either side fails here first. These are the
-// eleven SDK-mapped tenant operations (grpcMethodToOpcodeMap) plus the six
+// SDK-mapped tenant operations (grpcMethodToOpcodeMap) plus the
 // daemon-native operations that also travel as pb once the handlers delegate
 // to the shared *TenantGRPCServer.
 
@@ -72,18 +71,15 @@ func TestQUICTenantWireCompatCRUD(t *testing.T) {
 		&platformv1.DeleteTenantRequest{TenantId: "tenant-a"},
 		&platformv1.DeleteTenantRequest{})
 
-	// Create carries the fields the flat decode dropped: the uint32 VLAN range
-	// (flat used uint16 VLANStart/VLANEnd) and the nested quota messages
-	// (flat used *ComputeQuotaDTO whose Go fields MaxVMs/MaxVCPUs differ from
-	// the pb MaxVms/MaxVcpus).
+	// Create carries the fields the flat decode dropped: the nested quota
+	// messages (flat used *ComputeQuotaDTO whose Go fields MaxVMs/MaxVCPUs
+	// differ from the pb MaxVms/MaxVcpus).
 	roundTripTenantWire(t,
 		&platformv1.CreateTenantRequest{
-			Name:           "acme",
-			DisplayName:    "Acme Corp",
-			VlanRangeStart: 100,
-			VlanRangeEnd:   199,
-			Labels:         map[string]string{"tier": "gold"},
-			Annotations:    map[string]string{"owner": "ops"},
+			Name:        "acme",
+			DisplayName: "Acme Corp",
+			Labels:      map[string]string{"tier": "gold"},
+			Annotations: map[string]string{"owner": "ops"},
 			ComputeQuota: &platformv1.ComputeQuota{
 				MaxVms: 10, MaxContainers: 50, MaxVcpus: 40, MaxMemoryMb: 65536,
 			},
@@ -135,13 +131,7 @@ func TestQUICTenantWireCompatQuotas(t *testing.T) {
 		&platformv1.CheckQuotaRequest{})
 }
 
-func TestQUICTenantWireCompatNetworkAndDEK(t *testing.T) {
-	roundTripTenantWire(t,
-		&platformv1.ValidateVLANRequest{TenantId: "tenant-a", VlanId: 150},
-		&platformv1.ValidateVLANRequest{})
-	roundTripTenantWire(t,
-		&platformv1.GetBridgeNameRequest{TenantId: "tenant-a"},
-		&platformv1.GetBridgeNameRequest{})
+func TestQUICTenantWireCompatSyncAndDEK(t *testing.T) {
 	roundTripTenantWire(t,
 		&platformv1.SyncTenantsRequest{},
 		&platformv1.SyncTenantsRequest{})
@@ -161,7 +151,7 @@ func TestQUICTenantWireCompatResponses(t *testing.T) {
 			Status: &platformv1.Status{Success: true, Message: "tenant created successfully"},
 			Tenant: &platformv1.Tenant{
 				Id: "tenant-a", Name: "acme", DisplayName: "Acme Corp",
-				VlanStart: 100, VlanEnd: 199,
+				DekPath: "tenant/tenant-a",
 			},
 		},
 		&platformv1.CreateTenantResponse{})

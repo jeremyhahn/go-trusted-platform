@@ -102,8 +102,6 @@ func testTenantProtocol(t *testing.T, ctx context.Context, cmd TenantCommands) {
 	})
 
 	t.Run("TenantNetwork", func(t *testing.T) {
-		testTenantVLANValidation(t, ctx, cmd, prefix)
-		testTenantBridgeName(t, ctx, cmd, prefix)
 	})
 
 	t.Run("TenantSync", func(t *testing.T) {
@@ -135,25 +133,6 @@ func testTenantCreate(t *testing.T, ctx context.Context, cmd TenantCommands, pre
 		assert.NotEmpty(t, result.Tenant.ID, "Tenant ID should not be empty")
 		assert.Equal(t, tenantName, result.Tenant.Name, "Tenant name should match")
 		assert.Equal(t, "Test Tenant Basic", result.Tenant.DisplayName, "Display name should match")
-	})
-
-	t.Run("CreateTenantWithVLANRange", func(t *testing.T) {
-		tenantName := prefix + "-create-vlan"
-		opts := CreateTenantOptions{
-			Name:        tenantName,
-			DisplayName: "Test Tenant VLAN",
-			VLANRange: &VLANRangeOption{
-				Start: 200,
-				End:   299,
-			},
-		}
-
-		result, err := cmd.CreateTenant(testCtx, opts)
-		require.NoError(t, err, "CreateTenant should succeed with VLAN range")
-		require.NotNil(t, result, "Result should not be nil")
-		require.NotNil(t, result.Tenant, "Result.Tenant should not be nil")
-		assert.NotEmpty(t, result.Tenant.ID, "Tenant ID should not be empty")
-		// VLAN range may be auto-allocated, just verify tenant was created
 	})
 
 	t.Run("CreateTenantWithQuotas", func(t *testing.T) {
@@ -825,118 +804,6 @@ func testTenantCheckQuota(t *testing.T, ctx context.Context, cmd TenantCommands,
 
 // ============================================================================
 // Tenant Network Tests
-// ============================================================================
-
-func testTenantVLANValidation(t *testing.T, ctx context.Context, cmd TenantCommands, prefix string) {
-	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	// Create a tenant with specific VLAN range for testing
-	tenantName := prefix + "-vlan-test"
-	createOpts := CreateTenantOptions{
-		Name:        tenantName,
-		DisplayName: "VLAN Test Tenant",
-		VLANRange: &VLANRangeOption{
-			Start: 300,
-			End:   399,
-		},
-	}
-	createResult, err := cmd.CreateTenant(testCtx, createOpts)
-	require.NoError(t, err, "Setup: CreateTenant should succeed")
-	require.NotNil(t, createResult.Tenant, "Setup: Tenant should not be nil")
-
-	t.Run("ValidateVLANInRange", func(t *testing.T) {
-		opts := ValidateVLANOptions{
-			TenantID: createResult.Tenant.ID,
-			VLANID:   350, // Within 300-399
-		}
-
-		result, err := cmd.ValidateVLAN(testCtx, opts)
-		require.NoError(t, err, "ValidateVLAN should succeed for valid VLAN")
-		require.NotNil(t, result, "Result should not be nil")
-		assert.True(t, result.Valid, "VLAN 350 should be valid for range 300-399")
-	})
-
-	t.Run("ValidateVLANOutOfRange", func(t *testing.T) {
-		opts := ValidateVLANOptions{
-			TenantID: createResult.Tenant.ID,
-			VLANID:   500, // Outside 300-399
-		}
-
-		result, err := cmd.ValidateVLAN(testCtx, opts)
-		// May return error or result with Valid=false
-		if err == nil {
-			require.NotNil(t, result, "Result should not be nil")
-			assert.False(t, result.Valid, "VLAN 500 should not be valid for range 300-399")
-		} else {
-			t.Logf("ValidateVLAN returned error for out-of-range VLAN (expected behavior): %v", err)
-		}
-	})
-
-	t.Run("ValidateVLANRangeBoundary", func(t *testing.T) {
-		// Test boundary values
-		opts := ValidateVLANOptions{
-			TenantID: createResult.Tenant.ID,
-			VLANID:   300, // Start of range
-		}
-
-		result, err := cmd.ValidateVLAN(testCtx, opts)
-		require.NoError(t, err, "ValidateVLAN should succeed for boundary VLAN")
-		require.NotNil(t, result, "Result should not be nil")
-		assert.True(t, result.Valid, "VLAN 300 (start of range) should be valid")
-	})
-
-	t.Run("ValidateVLANForNonexistentTenantFails", func(t *testing.T) {
-		opts := ValidateVLANOptions{
-			TenantID: "nonexistent-tenant-" + uuid.New().String(),
-			VLANID:   350,
-		}
-
-		_, err := cmd.ValidateVLAN(testCtx, opts)
-		require.Error(t, err, "ValidateVLAN should fail for nonexistent tenant")
-	})
-}
-
-func testTenantBridgeName(t *testing.T, ctx context.Context, cmd TenantCommands, prefix string) {
-	testCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	// Create a tenant for bridge name testing
-	tenantName := prefix + "-bridge-test"
-	createOpts := CreateTenantOptions{
-		Name:        tenantName,
-		DisplayName: "Bridge Test Tenant",
-	}
-	createResult, err := cmd.CreateTenant(testCtx, createOpts)
-	require.NoError(t, err, "Setup: CreateTenant should succeed")
-	require.NotNil(t, createResult.Tenant, "Setup: Tenant should not be nil")
-
-	t.Run("GetBridgeNameForExistingTenant", func(t *testing.T) {
-		opts := GetBridgeNameOptions{
-			TenantID: createResult.Tenant.ID,
-		}
-
-		result, err := cmd.GetBridgeName(testCtx, opts)
-		require.NoError(t, err, "GetBridgeName should succeed")
-		require.NotNil(t, result, "Result should not be nil")
-		assert.NotEmpty(t, result.BridgeName, "Bridge name should not be empty")
-		assert.Equal(t, createResult.Tenant.ID, result.TenantID, "Tenant ID should match")
-		// Bridge name typically follows pattern "br-tenant-NAME"
-		assert.Contains(t, result.BridgeName, "br-", "Bridge name should contain standard prefix")
-	})
-
-	t.Run("GetBridgeNameForNonexistentTenantFails", func(t *testing.T) {
-		opts := GetBridgeNameOptions{
-			TenantID: "nonexistent-tenant-" + uuid.New().String(),
-		}
-
-		_, err := cmd.GetBridgeName(testCtx, opts)
-		require.Error(t, err, "GetBridgeName should fail for nonexistent tenant")
-	})
-}
-
-// ============================================================================
-// Tenant Sync Tests
 // ============================================================================
 
 func testTenantSyncOps(t *testing.T, ctx context.Context, cmd TenantCommands, prefix string) {

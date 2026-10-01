@@ -28,10 +28,9 @@ func NewSuspendCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "suspend <tenant-name>",
 		Short: "Suspend a tenant",
-		Long: `Suspend a tenant, blocking all network traffic and resource operations.
+		Long: `Suspend a tenant, blocking resource operations.
 
 When a tenant is suspended:
-  - All network traffic through the OVS bridge is blocked
   - No new resources can be created
   - Existing resources remain but become inaccessible
   - The tenant can be resumed to restore access

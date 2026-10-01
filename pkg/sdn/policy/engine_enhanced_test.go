@@ -121,6 +121,14 @@ func (m *MockOVSFlowController) SetPortVLAN(ctx context.Context, portName string
 	return nil
 }
 
+func (m *MockOVSFlowController) SetPortTrunk(ctx context.Context, portName string, allowed []uint16, native uint16) error {
+	if m.vlanError != nil {
+		return m.vlanError
+	}
+	m.portVLANs[portName] = int64(native)
+	return nil
+}
+
 func (m *MockOVSFlowController) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {
 	if m.stateError != nil {
 		return m.stateError

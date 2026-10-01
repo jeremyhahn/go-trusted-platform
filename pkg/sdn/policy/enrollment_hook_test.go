@@ -971,7 +971,7 @@ func TestSDNEnrollmentHook_PrecheckActivation(t *testing.T) {
 	// The VLAN snapshot is a value copy of the validated profile's
 	// networks, taken at precheck time.
 	vlans := plan.VLANs()
-	assert.Equal(t, uint16(100), vlans.Trusted)
+	assert.Equal(t, uint16(100), vlans.Admitted)
 
 	// A profile without a production network cannot build a policy.
 	noNetProfile := &entities.DeviceProfile{ID: 2, Name: "No Net"}
@@ -1852,7 +1852,7 @@ func TestSDNEnrollmentHook_ActivateDevice_PortBinderError(t *testing.T) {
 // TestActivateDevice_ZoneMismatch_RealEngineNoZoneFlowManager is the
 // regression the fail-open finding asked for: with the REAL Engine and no
 // ZoneFlowManager (the daemon's tolerated degraded state), a zone mismatch
-// must never end with the port authorized on the trusted VLAN. The engine
+// must never end with the port authorized on the admitted VLAN. The engine
 // refuses the quarantine-zone policy outright (ErrZoneEnforcementUnavailable)
 // and the hook turns that into a hard activation failure; with a real
 // ZoneFlowManager the quarantine is enforced and the port reads as
@@ -2228,14 +2228,14 @@ func TestBuildPortPolicy_ZoneCrossCheck(t *testing.T) {
 		assert.Empty(t, policy.ACLs)
 	})
 
-	t.Run("cert zone differs and quarantine VLAN equals trusted VLAN - contradiction", func(t *testing.T) {
+	t.Run("cert zone differs and quarantine VLAN equals admitted VLAN - contradiction", func(t *testing.T) {
 		hook := buildHook(t)
 		cert := certWithZone(t, "org", "trusted")
 		profile := profileWithZone("provisioning")
 		profile.Networks[entities.DefaultFailureNetwork].VLAN = 200
 
 		policy, err := hook.buildPortPolicy(profile, cert)
-		require.Nil(t, policy, "a quarantine that shares the trusted VLAN isolates nothing")
+		require.Nil(t, policy, "a quarantine that shares the admitted VLAN isolates nothing")
 		var contradiction ErrQuarantinePolicyContradiction
 		require.ErrorAs(t, err, &contradiction)
 		assert.Equal(t, uint16(200), contradiction.VLAN)

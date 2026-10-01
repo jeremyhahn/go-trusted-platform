@@ -338,6 +338,21 @@ func (e ErrSDNConfigValidation) Error() string {
 // Unwrap returns the underlying cause.
 func (e ErrSDNConfigValidation) Unwrap() error { return e.Cause }
 
+// ErrHostNetworkValidation is returned when the network section violates
+// the reference network's host rules (host addressing by role, forwarding,
+// zone VLANs, the platform VRF).
+type ErrHostNetworkValidation struct {
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrHostNetworkValidation) Error() string {
+	return fmt.Sprintf("app: host network configuration is invalid: %v", e.Cause)
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrHostNetworkValidation) Unwrap() error { return e.Cause }
+
 // ErrSDNOVSClientInit is returned when the OVS client cannot be created.
 type ErrSDNOVSClientInit struct {
 	Cause error

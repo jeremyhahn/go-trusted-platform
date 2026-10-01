@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	pkgconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 )
 
@@ -1189,6 +1190,19 @@ func TestLoadUnifiedConfig_FileNotReadable(t *testing.T) {
 	_, err := loadUnifiedConfig(logger, "/nonexistent/path/config.yaml")
 
 	require.Error(t, err)
+}
+
+// TestLoadUnifiedConfig_StaleNetworkKeyRefused refuses a key the network
+// schema no longer has rather than ignoring it.
+func TestLoadUnifiedConfig_StaleNetworkKeyRefused(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "stale.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("network:\n  bridges:\n    - name: br-fabric\n      members: [bond0]\n"), 0o644))
+
+	_, err := loadUnifiedConfig(getInstallLogger(false, false), configPath)
+	var target *pkgconfig.ErrUnknownConfigKeys
+	require.True(t, errors.As(err, &target), "got %v", err)
+	assert.Equal(t, "network.bridges[0].members", target.Keys[0].Path)
+	assert.Equal(t, 4, target.Keys[0].Line)
 }
 
 func TestLoadUnifiedConfig_ValidEmptyConfig(t *testing.T) {

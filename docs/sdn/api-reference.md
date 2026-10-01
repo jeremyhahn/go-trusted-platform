@@ -111,17 +111,23 @@ All protocols require mTLS authentication. Clients must present valid certificat
 
 ## Network Zone Management
 
-All zone endpoints are available across REST, gRPC, QUIC, MCP, Unix socket, and CLI:
+Zones are the underlay zones of the
+[reference network](../architecture/reference-network.md): nine built-ins at
+fixed offsets (policy tunable) and owner-defined zones at offsets 9–99. All
+zone operations are available across REST, gRPC, QUIC, MCP, Unix socket,
+embedded and CLI:
 
 | Operation | REST | gRPC | CLI |
 |-----------|------|------|-----|
-| Create | `POST /api/v1/sdn/zones` | `CreateNetworkZone` | `platformctl sdn zone create` |
-| List | `GET /api/v1/sdn/zones` | `ListNetworkZones` | `platformctl sdn zone list` |
-| Update | `PUT /api/v1/sdn/zones/{name}` | `UpdateNetworkZone` | `platformctl sdn zone update` |
-| Delete | `DELETE /api/v1/sdn/zones/{name}` | `DeleteNetworkZone` | `platformctl sdn zone delete` |
-| Assign | `PUT /api/v1/sdn/networks/{network}/zone` | `AssignNetworkZone` | `platformctl sdn zone assign` |
+| Create (owner-defined) | `POST /api/v1/sdn/zones` | `CreateNetworkZone` | `platformctl sdn zone create` |
+| List (with numbering) | `GET /api/v1/sdn/zones` | `ListNetworkZones` | `platformctl sdn zone list` |
+| Tune / replace | `PUT /api/v1/sdn/zones/{name}` | `UpdateNetworkZone` | `platformctl sdn zone update` |
+| Delete / omit | `DELETE /api/v1/sdn/zones/{name}` | `DeleteNetworkZone` | `platformctl sdn zone delete` |
 
 MCP tools: `gateway_zone_list`, `gateway_zone_create`, `gateway_zone_update`,
-`gateway_zone_delete`, `gateway_zone_assign`.
+`gateway_zone_delete`.
+
+There is no assign operation: networks are zones (one per zone, derived by
+netplan). The rules every mutation must satisfy are in [api.md](api.md) §5.
 
 See the protocol-specific reference docs for full request/response schemas.

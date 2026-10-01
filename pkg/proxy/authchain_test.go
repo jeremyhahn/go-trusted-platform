@@ -165,10 +165,10 @@ func chainRoute(a AuthRequirements) *CompiledRoute {
 	return &CompiledRoute{cfg: RouteConfig{ID: "api", PathPrefix: "/", PoolID: "pool", Auth: a}}
 }
 
-// testMatrix compiles a matrix allowing trusted → internal only.
+// testMatrix compiles a matrix allowing control-plane → internal only.
 func testMatrix() zone.Matrix {
 	return zone.CompileMatrix([]zone.ZoneConfig{
-		{Name: "trusted", AllowTo: []zone.ZonePath{{Zone: "internal"}}},
+		{Name: "control-plane", AllowTo: []zone.ZonePath{{Zone: "internal"}}},
 		{Name: "internal"},
 	})
 }
@@ -252,7 +252,7 @@ func TestChainAuthenticateNilArguments(t *testing.T) {
 func TestChainAuthenticateDenyReasons(t *testing.T) {
 	ca := newTestCA(t)
 	plain := newLeafCert(t, ca, leafSpec{cn: "device-1"})
-	trusted := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "trusted"})
+	trusted := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "control-plane"})
 	public := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "public"})
 	adapterErr := errors.New("certificate expired")
 
@@ -278,9 +278,9 @@ func TestChainAuthenticateDenyReasons(t *testing.T) {
 		{"idevid required but absent", &fakeMTLSAuth{}, tlsRequest(plain),
 			AuthRequirements{Mode: AuthModeMTLS, RequireIDevID: true}, ReasonIDevIDRequired},
 		{"zone required but missing", &fakeMTLSAuth{}, tlsRequest(plain),
-			AuthRequirements{Mode: AuthModeMTLS, AllowedZones: []string{"trusted"}}, ReasonZoneMissing},
+			AuthRequirements{Mode: AuthModeMTLS, AllowedZones: []string{"control-plane"}}, ReasonZoneMissing},
 		{"zone not in allowed set", &fakeMTLSAuth{}, tlsRequest(public),
-			AuthRequirements{Mode: AuthModeMTLS, AllowedZones: []string{"trusted"}}, ReasonZoneNotAllowed},
+			AuthRequirements{Mode: AuthModeMTLS, AllowedZones: []string{"control-plane"}}, ReasonZoneNotAllowed},
 		{"zone matrix denies path", &fakeMTLSAuth{}, tlsRequest(public),
 			AuthRequirements{Mode: AuthModeMTLS, BackendZone: "internal"}, ReasonZoneMatrixDenied},
 		{"role required but absent", &fakeMTLSAuth{}, tlsRequest(trusted),
@@ -313,7 +313,7 @@ func TestChainAuthenticateAllow(t *testing.T) {
 	leaf := newLeafCert(t, ca, leafSpec{
 		cn:     "device-1",
 		ou:     []string{"operators"},
-		zone:   "trusted",
+		zone:   "control-plane",
 		idevid: true,
 		uri:    "spiffe://platform/device-1",
 	})
@@ -322,7 +322,7 @@ func TestChainAuthenticateAllow(t *testing.T) {
 	d, err := c.Authenticate(context.Background(), tlsRequest(leaf), chainRoute(AuthRequirements{
 		Mode:          AuthModeMTLS,
 		RequireIDevID: true,
-		AllowedZones:  []string{"trusted"},
+		AllowedZones:  []string{"control-plane"},
 		BackendZone:   "internal",
 		RequiredRoles: []string{"operators"},
 	}))
@@ -342,8 +342,8 @@ func TestChainAuthenticateAllow(t *testing.T) {
 	if id.DeviceID != leaf.SerialNumber.Text(16) {
 		t.Errorf("DeviceID = %q, want certificate serial %q", id.DeviceID, leaf.SerialNumber.Text(16))
 	}
-	if id.Zone != "trusted" {
-		t.Errorf("Zone = %q, want trusted", id.Zone)
+	if id.Zone != "control-plane" {
+		t.Errorf("Zone = %q, want control-plane", id.Zone)
 	}
 	if id.AuthMethod != authMethodMTLS {
 		t.Errorf("AuthMethod = %q, want mtls", id.AuthMethod)
@@ -383,11 +383,11 @@ func TestChainAuthenticatePublicModeDefensiveAllow(t *testing.T) {
 // the mTLS path when a certificate is presented.
 func TestChainAuthenticateMTLSOrTokenWithCert(t *testing.T) {
 	ca := newTestCA(t)
-	leaf := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "trusted"})
+	leaf := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "control-plane"})
 	c := newTestChain(t, &fakeMTLSAuth{})
 	d, err := c.Authenticate(context.Background(), tlsRequest(leaf), chainRoute(AuthRequirements{
 		Mode:         AuthModeMTLSOrToken,
-		AllowedZones: []string{"trusted"},
+		AllowedZones: []string{"control-plane"},
 	}))
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
@@ -407,12 +407,12 @@ func TestChainAuthenticateZoneEnrichment(t *testing.T) {
 	c := newTestChain(t, &fakeMTLSAuth{})
 	route := chainRoute(AuthRequirements{Mode: AuthModeMTLS})
 
-	withZone := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "trusted"})
+	withZone := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "control-plane"})
 	d, err := c.Authenticate(context.Background(), tlsRequest(withZone), route)
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if !d.Allowed || d.Identity.Zone != "trusted" {
+	if !d.Allowed || d.Identity.Zone != "control-plane" {
 		t.Errorf("zone enrichment failed: allowed=%v zone=%q", d.Allowed, d.Identity.Zone)
 	}
 
@@ -431,14 +431,14 @@ func TestChainAuthenticateZoneEnrichment(t *testing.T) {
 // collaborators.
 func TestChainAuthenticateZoneRequiredWithoutExtractor(t *testing.T) {
 	ca := newTestCA(t)
-	leaf := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "trusted"})
+	leaf := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "control-plane"})
 	c, err := NewAuthChain(AuthChainConfig{MTLS: &fakeMTLSAuth{}, Logger: testLogger()})
 	if err != nil {
 		t.Fatalf("NewAuthChain: %v", err)
 	}
 	d, err := c.Authenticate(context.Background(), tlsRequest(leaf), chainRoute(AuthRequirements{
 		Mode:         AuthModeMTLS,
-		AllowedZones: []string{"trusted"},
+		AllowedZones: []string{"control-plane"},
 	}))
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
@@ -449,10 +449,10 @@ func TestChainAuthenticateZoneRequiredWithoutExtractor(t *testing.T) {
 }
 
 // TestChainAuthenticateMatrixAllowedPath verifies the allowed matrix path
-// trusted → internal.
+// control-plane → internal.
 func TestChainAuthenticateMatrixAllowedPath(t *testing.T) {
 	ca := newTestCA(t)
-	leaf := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "trusted"})
+	leaf := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "control-plane"})
 	c := newTestChain(t, &fakeMTLSAuth{})
 	d, err := c.Authenticate(context.Background(), tlsRequest(leaf), chainRoute(AuthRequirements{
 		Mode:        AuthModeMTLS,
@@ -471,13 +471,13 @@ func TestPolicyZoneExtractor(t *testing.T) {
 	ex := NewPolicyZoneExtractor()
 
 	t.Run("extracts zone", func(t *testing.T) {
-		leaf := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "trusted"})
+		leaf := newLeafCert(t, ca, leafSpec{cn: "device-1", zone: "control-plane"})
 		z, err := ex.ExtractZone(leaf)
 		if err != nil {
 			t.Fatalf("ExtractZone: %v", err)
 		}
-		if z != "trusted" {
-			t.Errorf("zone = %q, want trusted", z)
+		if z != "control-plane" {
+			t.Errorf("zone = %q, want control-plane", z)
 		}
 	})
 

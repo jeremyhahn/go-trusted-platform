@@ -46,19 +46,19 @@ func TestPipelineTerminalForBridge(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	owned := &externalIDsClient{ids: map[string]string{zoneflows.PipelineOwnerKey: "gatewayd:lab-node-1-gateway"}}
-	assert.Equal(t, zoneflows.TerminalNormal, pipelineTerminalForBridge(context.Background(), owned, "trusted0", logger))
+	assert.Equal(t, zoneflows.TerminalNormal, pipelineTerminalForBridge(context.Background(), owned, "br-int", logger))
 	assert.Contains(t, buf.String(), "gatewayd:lab-node-1-gateway", "the owner is observed")
 	assert.Contains(t, buf.String(), "dormant")
 
 	buf.Reset()
 	unowned := &externalIDsClient{ids: map[string]string{}}
-	assert.Equal(t, zoneflows.TerminalNormal, pipelineTerminalForBridge(context.Background(), unowned, "trusted0", logger))
+	assert.Equal(t, zoneflows.TerminalNormal, pipelineTerminalForBridge(context.Background(), unowned, "br-int", logger))
 	assert.NotContains(t, buf.String(), "dormant")
 
 	broken := &externalIDsClient{err: errors.New("ovsdb unavailable")}
-	assert.Equal(t, zoneflows.TerminalNormal, pipelineTerminalForBridge(context.Background(), broken, "trusted0", logger))
+	assert.Equal(t, zoneflows.TerminalNormal, pipelineTerminalForBridge(context.Background(), broken, "br-int", logger))
 	assert.Contains(t, buf.String(), "unreadable")
 
-	assert.Equal(t, zoneflows.TerminalNormal, pipelineTerminalForBridge(context.Background(), nil, "trusted0", logger))
+	assert.Equal(t, zoneflows.TerminalNormal, pipelineTerminalForBridge(context.Background(), nil, "br-int", logger))
 	assert.Equal(t, zoneflows.TerminalNormal, pipelineTerminalForBridge(context.Background(), owned, "", logger))
 }

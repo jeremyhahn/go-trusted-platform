@@ -446,9 +446,9 @@ func TestNewDNSRegistrationHook_ZoneQualifiedRegistration(t *testing.T) {
 	logger := slog.Default()
 	registrar := &mockDNSRegistrarWithZone{}
 
-	// Mock profile resolver that returns a profile with Zone = "trusted".
+	// Mock profile resolver that returns a profile with Zone = "control-plane".
 	profiles := &mockProfileResolver{
-		zone: "trusted",
+		zone: "control-plane",
 	}
 
 	cert := createHookTestCert("lab-node-1.internal.example.com")
@@ -467,7 +467,7 @@ func TestNewDNSRegistrationHook_ZoneQualifiedRegistration(t *testing.T) {
 	err := hook(ctx)
 	assert.NoError(t, err)
 	assert.True(t, registrar.withZoneCalled, "RegisterWithNetworkZone must be called")
-	assert.Equal(t, "trusted", registrar.lastNetworkZone)
+	assert.Equal(t, "control-plane", registrar.lastNetworkZone)
 	assert.Equal(t, "192.168.1.10", registrar.lastZoneIP)
 }
 
@@ -881,7 +881,7 @@ func TestNewZoneExtensionPreSignHook_EncodeZoneDisabled(t *testing.T) {
 func TestNewZoneExtensionPreSignHook_StandardCSRUsesplatformZone(t *testing.T) {
 	identity := &sdn.IdentityConfig{
 		EncodeZoneInCert: true,
-		PlatformZone:     "trusted",
+		PlatformZone:     "control-plane",
 	}
 	hook := NewZoneExtensionPreSignHook(nil, identity, slog.Default())
 
@@ -903,9 +903,9 @@ func TestNewZoneExtensionPreSignHook_TCGPathUsesPostEnrollZone(t *testing.T) {
 	}
 	profile := &deviceentities.DeviceProfile{
 		Zone:                  "provisioning",
-		PostEnrollmentNetwork: "trusted",
+		PostEnrollmentNetwork: "control-plane",
 		Networks: map[string]*deviceentities.NetworkPhaseConfig{
-			"trusted": {Zone: "trusted"},
+			"control-plane": {Zone: "control-plane"},
 		},
 	}
 	resolver := &mockZoneProfileResolver{profile: profile}
@@ -922,7 +922,7 @@ func TestNewZoneExtensionPreSignHook_TCGPathUsesPostEnrollZone(t *testing.T) {
 	exts, err := hook(ctx)
 	require.NoError(t, err)
 	require.Len(t, exts, 1)
-	// The post-enrollment zone "trusted" should be used over the profile-level "provisioning"
+	// The post-enrollment zone "control-plane" should be used over the profile-level "provisioning"
 	ext := exts[0]
 	assert.Equal(t, []int{1, 3, 6, 1, 4, 1, 29377, 101, 21}, []int(ext.Id))
 }
@@ -1031,7 +1031,7 @@ func TestNewZoneExtensionPreSignHook_EmptySerialFailsClosed(t *testing.T) {
 	identity := &sdn.IdentityConfig{
 		EncodeZoneInCert: true,
 	}
-	resolver := &mockZoneProfileResolver{profile: &deviceentities.DeviceProfile{Zone: "trusted"}}
+	resolver := &mockZoneProfileResolver{profile: &deviceentities.DeviceProfile{Zone: "control-plane"}}
 	hook := NewZoneExtensionPreSignHook(resolver, identity, slog.Default())
 
 	ctx := &trustedca.ACMEOrderPreSignHookContext{

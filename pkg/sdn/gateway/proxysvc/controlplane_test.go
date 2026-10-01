@@ -220,21 +220,21 @@ func TestZoneMatrixProviderDefaultsDenyAll(t *testing.T) {
 func TestZoneMatrixProviderUpdate(t *testing.T) {
 	p := NewZoneMatrixProvider()
 	p.Update(&platformv1.GetProxyZoneMatrixResponse{
-		Zones: []string{"trusted", "services"},
+		Zones: []string{"control-plane", "services"},
 		Pairs: []*platformv1.ProxyZonePair{
-			{From: "trusted", To: "services", Services: []string{"https"}},
-			{From: "trusted", To: "trusted"},
+			{From: "control-plane", To: "services", Services: []string{"https"}},
+			{From: "control-plane", To: "control-plane"},
 		},
 	})
 	m := p.Matrix()
-	if v := m.Allowed("trusted", "services"); !v.Allowed || len(v.Services) != 1 || v.Services[0] != "https" {
-		t.Fatalf("trusted->services = %+v, want allowed with https", v)
+	if v := m.Allowed("control-plane", "services"); !v.Allowed || len(v.Services) != 1 || v.Services[0] != "https" {
+		t.Fatalf("control-plane->services = %+v, want allowed with https", v)
 	}
-	if v := m.Allowed("trusted", "trusted"); !v.Allowed {
-		t.Fatal("trusted->trusted must be allowed")
+	if v := m.Allowed("control-plane", "control-plane"); !v.Allowed {
+		t.Fatal("control-plane->control-plane must be allowed")
 	}
-	if v := m.Allowed("services", "trusted"); v.Allowed {
-		t.Fatal("services->trusted must be denied (not in pairs)")
+	if v := m.Allowed("services", "control-plane"); v.Allowed {
+		t.Fatal("services->control-plane must be denied (not in pairs)")
 	}
 	if v := m.Allowed("services", "services"); v.Allowed {
 		t.Fatal("services->services must be denied: platformd pairs are authoritative")

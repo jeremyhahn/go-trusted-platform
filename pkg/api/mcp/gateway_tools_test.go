@@ -414,7 +414,7 @@ func TestGatewayIPAMPoolCRUD(t *testing.T) {
 		registry := NewToolRegistry(svc, log)
 
 		result, err := registry.ExecuteTool(ctx, "gateway_ipam_pools", map[string]interface{}{
-			"zone": "trusted",
+			"zone": "control-plane",
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

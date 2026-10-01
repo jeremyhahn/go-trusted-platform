@@ -26,13 +26,13 @@ import (
 // for the physical switch move during activation.
 type ProfileResponse struct {
 	SerialNumber        string           `json:"serialNumber"`
-	TrustedNetwork      NetworkConfig    `json:"trustedNetwork"`
+	AdmittedNetwork     NetworkConfig    `json:"admittedNetwork"`
 	ProvisioningNetwork *NetworkConfig   `json:"provisioningNetwork,omitempty"`
 	ACLs                []ACLConfig      `json:"acls,omitempty"`
 	RateLimit           *RateLimitConfig `json:"rateLimit,omitempty"`
 }
 
-// NetworkConfig defines the trusted-zone network configuration delivered to
+// NetworkConfig defines the admitted-phase network configuration delivered to
 // an enrolled device.
 type NetworkConfig struct {
 	VLAN     uint16   `json:"vlan"`

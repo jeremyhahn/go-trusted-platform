@@ -13,84 +13,108 @@
 
 package zone
 
-// Resolve merges user-supplied zone configs with the built-in defaults and
-// returns the resolved set.  Merge semantics:
+import "sort"
+
+// Resolve merges operator zone entries onto the built-in zones and returns
+// the resolved set: the built-ins in offset order, then the owner-defined
+// zones in offset order.
 //
-//   - A user entry whose name matches a built-in fully overrides that built-in.
-//   - A user entry with Omit=true and a matching built-in name drops the
-//     built-in from the resolved set.  Omitting a built-in that carries a
-//     lifecycle role is only valid when another zone in the user set already
-//     takes that role; otherwise Resolve returns ErrOmitLifecycleHolder.
-//   - Built-ins not matched by any user entry are included unchanged.
-//   - User entries with names that do not match any built-in are appended as
-//     new zones.
-//
-// Resolve does not run full validation; call Validate on the result for that.
+// An operator entry whose name matches a built-in tunes that built-in's
+// policy: InternetIngress, IsolateFrom, AllowTo, Services, Isolate and
+// PrivilegedAccess replace the built-in's values. The built-in's identity —
+// offset, port classes, OOB and lifecycle role — is kept; an entry may
+// repeat it but never change it (ErrBuiltinIdentity). An entry with Omit set
+// drops an optional built-in (ErrOmitRequired for the ones the platform
+// needs). Every other entry is an owner-defined zone and is appended as
+// written; Validate checks its offset and port classes.
 func Resolve(user []ZoneConfig) ([]ZoneConfig, error) {
-	// Index user entries by name for O(1) lookup.
 	userByName := make(map[Zone]ZoneConfig, len(user))
 	for _, u := range user {
+		if _, dup := userByName[u.Name]; dup {
+			return nil, ErrDuplicateZone{Name: u.Name}
+		}
 		userByName[u.Name] = u
 	}
 
-	// Build index of built-in lifecycle roles so we can check omit safety.
-	builtinRole := make(map[Zone]LifecycleRole, len(builtins))
-	for _, b := range builtins {
-		if b.LifecycleRole != "" {
-			builtinRole[b.Name] = b.LifecycleRole
-		}
-	}
-
-	// Collect user-declared lifecycle roles (for omit-safety check).
-	userRoles := make(map[LifecycleRole]struct{})
-	for _, u := range user {
-		if !u.Omit && u.LifecycleRole != "" {
-			userRoles[u.LifecycleRole] = struct{}{}
-		}
-	}
-
-	// Build a set of built-in names for quick lookup.
-	builtinNames := make(map[Zone]struct{}, len(builtins))
-	for _, b := range builtins {
-		builtinNames[b.Name] = struct{}{}
-	}
-
-	// Walk built-ins; apply overrides, omissions, and retain unchanged ones.
 	out := make([]ZoneConfig, 0, len(builtins)+len(user))
 	for _, b := range builtins {
-		u, overridden := userByName[b.Name]
-		if !overridden {
-			// No user entry for this built-in; keep it as-is.
+		u, tuned := userByName[b.Name]
+		if !tuned {
 			out = append(out, copyZoneConfig(b))
 			continue
 		}
 		if u.Omit {
-			// User wants to drop this built-in.  Validate that its lifecycle
-			// role (if any) is covered by another user zone.
-			if role, hasRole := builtinRole[b.Name]; hasRole {
-				if _, covered := userRoles[role]; !covered {
-					return nil, ErrOmitLifecycleHolder{Zone: b.Name, Role: role}
-				}
+			if _, required := requiredBuiltins[b.Name]; required {
+				return nil, ErrOmitRequired{Zone: b.Name}
 			}
-			// Omit: do not add to output.
 			continue
 		}
-		// Full override: use the user's declaration.
-		out = append(out, copyZoneConfig(u))
+		merged, err := tuneBuiltin(b, u)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, merged)
 	}
 
-	// Append user-added zones (names that are not built-ins).
+	owner := make([]ZoneConfig, 0, len(user))
 	for _, u := range user {
-		if _, isBuiltin := builtinNames[u.Name]; isBuiltin {
-			// Already handled above.
+		if IsBuiltin(u.Name) {
 			continue
 		}
 		if u.Omit {
-			// Omit on a non-built-in is a no-op; skip.
-			continue
+			return nil, ErrOmitUnknown{Zone: u.Name}
 		}
-		out = append(out, copyZoneConfig(u))
+		owner = append(owner, copyZoneConfig(u))
+	}
+	sort.SliceStable(owner, func(i, j int) bool { return owner[i].Offset < owner[j].Offset })
+
+	return append(out, owner...), nil
+}
+
+// tuneBuiltin applies the policy fields of the operator entry u to the
+// built-in b, refusing any change to b's identity.
+func tuneBuiltin(b, u ZoneConfig) (ZoneConfig, error) {
+	if u.Offset != 0 && u.Offset != b.Offset {
+		return ZoneConfig{}, ErrBuiltinIdentity{Zone: b.Name, Field: "offset"}
+	}
+	if u.PortClasses != nil && !samePortClasses(u.PortClasses, b.PortClasses) {
+		return ZoneConfig{}, ErrBuiltinIdentity{Zone: b.Name, Field: "port_classes"}
+	}
+	if u.LifecycleRole != "" && u.LifecycleRole != b.LifecycleRole {
+		return ZoneConfig{}, ErrBuiltinIdentity{Zone: b.Name, Field: "lifecycle_role"}
+	}
+	if u.OOB != b.OOB && u.OOB {
+		return ZoneConfig{}, ErrBuiltinIdentity{Zone: b.Name, Field: "oob"}
 	}
 
-	return out, nil
+	merged := copyZoneConfig(b)
+	tuned := copyZoneConfig(u)
+	merged.InternetIngress = tuned.InternetIngress
+	merged.IsolateFrom = tuned.IsolateFrom
+	merged.AllowTo = tuned.AllowTo
+	merged.Services = tuned.Services
+	merged.Isolate = tuned.Isolate
+	merged.PrivilegedAccess = tuned.PrivilegedAccess
+	return merged, nil
+}
+
+// samePortClasses reports whether a and b hold the same classes in any
+// order.
+func samePortClasses(a, b []PortClass) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[PortClass]int, len(a))
+	for _, c := range a {
+		set[c]++
+	}
+	for _, c := range b {
+		set[c]--
+	}
+	for _, n := range set {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }

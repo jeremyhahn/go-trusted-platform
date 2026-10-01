@@ -15,7 +15,6 @@ package bootstrap
 
 import (
 	"errors"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -71,9 +70,9 @@ func TestVirtualMediaSMBURL(t *testing.T) {
 func TestValidate_BootMethod(t *testing.T) {
 	baseConfig := func() *BootstrapConfig {
 		return &BootstrapConfig{
-			Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-			Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-			Platform: PlatformGlobalConfig{Domain: "example.com"},
+			Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+			Environment: testEnvironment(),
+			Platform:    PlatformGlobalConfig{Domain: "example.com"},
 			Nodes: []NodeConfig{
 				{
 					Hostname:    "cp-0",

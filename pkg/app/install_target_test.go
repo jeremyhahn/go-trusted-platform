@@ -3,8 +3,10 @@ package app
 import (
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v2"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 )
 
 func TestGetInstallerConfigCarriesTargetAndBoot(t *testing.T) {
@@ -25,7 +27,8 @@ hardware-model: Raspberry Pi 4 Model B
 `), &a); err != nil {
 		t.Fatal(err)
 	}
-	cfg := a.GetInstallerConfig()
+	cfg, err := a.GetInstallerConfig()
+	require.NoError(t, err)
 	if cfg.Target != installer.InstallTargetImage {
 		t.Errorf("Target = %q", cfg.Target)
 	}
@@ -43,7 +46,8 @@ hardware-model: Raspberry Pi 4 Model B
 	}
 
 	// A platform config without the keys yields the historical defaults.
-	empty := (&App{OSConfig: &installer.OSConfig{}, DiskConfig: &installer.DiskConfig{Device: "/dev/sda"}}).GetInstallerConfig()
+	empty, err := (&App{OSConfig: &installer.OSConfig{}, DiskConfig: &installer.DiskConfig{Device: "/dev/sda"}}).GetInstallerConfig()
+	require.NoError(t, err)
 	if empty.Target != "" || empty.Boot != nil {
 		t.Errorf("defaults changed: target=%q boot=%+v", empty.Target, empty.Boot)
 	}

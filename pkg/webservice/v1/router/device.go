@@ -151,7 +151,7 @@ func (r *DeviceRouter) profile(router *mux.Router) {
 	)).Methods("GET")
 }
 
-// POST /api/v1/device/activate - Activate device and transition to trusted zone
+// POST /api/v1/device/activate - Activate device and admit it (the zones of its role)
 func (r *DeviceRouter) activate(router *mux.Router) {
 	router.Handle("/device/activate", negroni.New(
 		negroni.HandlerFunc(r.mtlsMiddleware.Verify),

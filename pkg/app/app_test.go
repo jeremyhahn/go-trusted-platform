@@ -240,7 +240,8 @@ func TestApp_GetInstallerConfig(t *testing.T) {
 			DebugFlag: true, Environment: EnvProd,
 		}
 
-		cfg := app.GetInstallerConfig()
+		cfg, err := app.GetInstallerConfig()
+		require.NoError(t, err)
 		require.NotNil(t, cfg)
 		assert.Equal(t, diskCfg, cfg.Disk)
 		assert.Equal(t, osCfg, cfg.OS)
@@ -256,7 +257,8 @@ func TestApp_GetInstallerConfig(t *testing.T) {
 	})
 
 	t.Run("with_nil_fields", func(t *testing.T) {
-		cfg := (&App{}).GetInstallerConfig()
+		cfg, err := (&App{}).GetInstallerConfig()
+		require.NoError(t, err)
 		require.NotNil(t, cfg)
 		assert.Nil(t, cfg.Disk)
 		assert.Nil(t, cfg.OS)
@@ -316,7 +318,8 @@ func TestApp_GetSetInstallerConfig_RoundTrip(t *testing.T) {
 		FIDO2Config: &installer.FIDO2Config{}, DebugFlag: true, Environment: EnvProd,
 	}
 
-	cfg := original.GetInstallerConfig()
+	cfg, err := original.GetInstallerConfig()
+	require.NoError(t, err)
 	restored := &App{}
 	restored.SetInstallerConfig(cfg)
 

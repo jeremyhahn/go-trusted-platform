@@ -171,29 +171,6 @@ func (c *Client) CheckQuota(ctx context.Context, tenantID, resource string, amou
 	return resp, nil
 }
 
-// Network Isolation
-
-// ValidateVLAN validates a VLAN ID for a tenant.
-func (c *Client) ValidateVLAN(ctx context.Context, tenantID string, vlanID uint32) (*platformv1.ValidateVLANResponse, error) {
-	resp, err := c.grpc.ValidateVLAN(ctx, &platformv1.ValidateVLANRequest{
-		TenantId: tenantID,
-		VlanId:   vlanID,
-	})
-	if err != nil {
-		return nil, &ErrValidateVLANFailed{ID: tenantID, Cause: err}
-	}
-	return resp, nil
-}
-
-// GetBridgeName returns the OVS bridge name for a tenant.
-func (c *Client) GetBridgeName(ctx context.Context, tenantID string) (string, error) {
-	resp, err := c.grpc.GetBridgeName(ctx, &platformv1.GetBridgeNameRequest{TenantId: tenantID})
-	if err != nil {
-		return "", &ErrGetBridgeNameFailed{ID: tenantID, Cause: err}
-	}
-	return resp.BridgeName, nil
-}
-
 // State Synchronization
 
 // Sync synchronizes tenant state.

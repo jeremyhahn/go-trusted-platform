@@ -1042,8 +1042,14 @@ func (i *installer) installOS(ctx context.Context, diskInfo *DiskInfo) error {
 	// Configure network (DNS, interfaces, bridges, bonds, VLANs)
 	// This is done AFTER package installation so dnsmasq config doesn't break package fetching
 	if i.config.Network != nil {
-		if err := i.osInstaller.ConfigureNetwork(ctx, mountPoint, i.config.Network); err != nil {
-			// Network configuration failure is not fatal - continue with installation
+		if err := i.osInstaller.ConfigureNetwork(ctx, mountPoint, i.config.Network, i.config.Plan); err != nil {
+			// A host on a platform network (network.role set) must not boot
+			// with its forwarding, host firewall or zone addressing in an
+			// unknown state: fail the install. Off a platform network a
+			// network failure is not fatal - continue with installation.
+			if i.config.Network.Role != "" {
+				return ErrOSInstall("failed to configure the platform host network", err)
+			}
 			i.logger.Warn("[OS] Failed to configure network", "error", err)
 		} else {
 			i.logger.Info("[OS] Network configuration complete")

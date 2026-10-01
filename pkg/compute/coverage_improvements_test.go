@@ -138,7 +138,7 @@ func TestGetPortState_PolicyEngineError(t *testing.T) {
 
 	config := &PortAuthConfig{
 		PortID:       "test-port",
-		BridgeName:   "trusted0",
+		BridgeName:   "br-int",
 		PolicyEngine: mockEngine,
 	}
 
@@ -920,11 +920,11 @@ func TestQEMUOrchestrator_DetachNetwork_WithPortAuth(t *testing.T) {
 	if qemuInst, exists := orch.instances[instance.ID]; exists {
 		qemuInst.networkAttached = true
 		qemuInst.primaryPortName = "test-port"
-		qemuInst.primaryBridgeName = "trusted0"
+		qemuInst.primaryBridgeName = "br-int"
 		qemuInst.instance.NetworkAttachments = []NetworkAttachment{
 			{
 				PortName:   "test-port",
-				BridgeName: "trusted0",
+				BridgeName: "br-int",
 				AttachedAt: time.Now(),
 			},
 		}
@@ -981,7 +981,7 @@ func TestQEMUOrchestrator_Delete_WithPortAuth(t *testing.T) {
 	orch.mu.Lock()
 	if qemuInst, exists := orch.instances[instance.ID]; exists {
 		qemuInst.primaryPortName = "test-port"
-		qemuInst.primaryBridgeName = "trusted0"
+		qemuInst.primaryBridgeName = "br-int"
 	}
 	orch.instanceToPort[instance.ID] = "test-port"
 	orch.mu.Unlock()

@@ -120,6 +120,13 @@ func (o *OVSFlowController) SetPortVLAN(ctx context.Context, portName string, vl
 	return nil
 }
 
+// SetPortTrunk implements OVSPortController interface. Like SetPortVLAN it is
+// a no-op: the policy engine passes OpenFlow port numbers here, and the port
+// configuration is done by the test setup.
+func (o *OVSFlowController) SetPortTrunk(ctx context.Context, portName string, allowed []uint16, native uint16) error {
+	return nil
+}
+
 // SetPortState implements OVSPortController interface.
 // Similar to SetPortVLAN, this is a no-op since port state is managed by the test setup.
 func (o *OVSFlowController) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {

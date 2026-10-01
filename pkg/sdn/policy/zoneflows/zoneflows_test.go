@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jeremy Hahn
 // Copyright (c) 2025 Automate The Things, LLC
 //
-// This file is part of go-trusted-platform.
+// This file is part of go-control-plane-platform.
 //
-// go-trusted-platform is dual-licensed:
+// go-control-plane-platform is dual-licensed:
 //
 // 1. GNU Affero General Public License v3.0 (AGPL-3.0)
 //    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
@@ -38,26 +38,29 @@ func TestNewGeneratorSet_NonNil(t *testing.T) {
 // Per-zone template generation
 // ---------------------------------------------------------------------------
 
-// eachBuiltinZone lists all built-in zones with their expected VLAN defaults
-// and the minimum flow count expected from each template.
+// builtinZones lists the built-in zones that carry a flow template, with
+// their environment-4 VLANs and the minimum flow count each template emits.
+// Transit carries none: it is matrix-driven only.
 var builtinZones = []struct {
 	zone     zone.Zone
 	vlan     uint16
 	minFlows int
 }{
-	{zone.ZoneProvisioning, 201, 1},
-	{zone.ZoneQuarantine, 202, 1},
-	{zone.ZoneTrusted, 200, 1},
-	{zone.ZoneStorage, 203, 1},
-	{zone.ZoneManagement, 50, 1},
-	{zone.ZonePublic, 204, 1}, // public uses whatever VLAN caller passes
+	{zone.ZoneFabric, 401, 1},
+	{zone.ZoneManagement, 402, 1},
+	{zone.ZoneHypervisor, 403, 1},
+	{zone.ZoneQuarantine, 404, 1},
+	{zone.ZoneProvisioning, 405, 1},
+	{zone.ZoneControlPlane, 406, 1},
+	{zone.ZoneStorage, 407, 1},
+	{zone.ZoneBackup, 408, 1},
 }
 
 func TestGenerate_AllBuiltinZones_ReturnFlows(t *testing.T) {
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{BridgeName: "br0"})
 	for _, tc := range builtinZones {
 		t.Run(string(tc.zone), func(t *testing.T) {
-			flows := gs.Generate("eth0", tc.zone, tc.vlan)
+			flows := gs.Generate("eth0", tc.zone, zoneflows.Tagged(tc.vlan))
 			assert.GreaterOrEqual(t, len(flows), tc.minFlows,
 				"zone %s should produce at least %d flow(s)", tc.zone, tc.minFlows)
 			// Every rule must have a non-empty Match and Actions.
@@ -71,8 +74,9 @@ func TestGenerate_AllBuiltinZones_ReturnFlows(t *testing.T) {
 
 func TestGenerate_UserDefinedZone_ReturnsNil(t *testing.T) {
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{BridgeName: "br0"})
-	flows := gs.Generate("eth0", zone.Zone("custom-zone"), 300)
+	flows := gs.Generate("eth0", zone.Zone("custom-zone"), zoneflows.Tagged(409))
 	assert.Nil(t, flows, "user-defined zone with no built-in generator should return nil")
+	assert.Nil(t, gs.Generate("eth0", zone.ZoneTransit, zoneflows.Tagged(400)), "transit is matrix-driven only")
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +85,7 @@ func TestGenerate_UserDefinedZone_ReturnsNil(t *testing.T) {
 
 func TestGenerate_Provisioning_ContainsDHCPRule(t *testing.T) {
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{BridgeName: "br0"})
-	flows := gs.Generate("eth0", zone.ZoneProvisioning, 201)
+	flows := gs.Generate("eth0", zone.ZoneProvisioning, zoneflows.Tagged(201))
 	require.NotEmpty(t, flows)
 
 	// At least one flow should reference a DHCP port (67 or 68).
@@ -97,7 +101,7 @@ func TestGenerate_Provisioning_ContainsDHCPRule(t *testing.T) {
 
 func TestGenerate_Provisioning_ContainsDropDefault(t *testing.T) {
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{BridgeName: "br0"})
-	flows := gs.Generate("eth0", zone.ZoneProvisioning, 201)
+	flows := gs.Generate("eth0", zone.ZoneProvisioning, zoneflows.Tagged(201))
 	require.NotEmpty(t, flows)
 
 	found := false
@@ -116,7 +120,7 @@ func TestGenerate_Provisioning_ContainsDropDefault(t *testing.T) {
 
 func TestGenerate_Quarantine_ContainsDropDefault(t *testing.T) {
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{BridgeName: "br0"})
-	flows := gs.Generate("eth0", zone.ZoneQuarantine, 202)
+	flows := gs.Generate("eth0", zone.ZoneQuarantine, zoneflows.Tagged(202))
 	require.NotEmpty(t, flows)
 
 	found := false
@@ -131,30 +135,28 @@ func TestGenerate_Quarantine_ContainsDropDefault(t *testing.T) {
 
 func TestGenerate_Quarantine_FewerFlowsThanProvisioning(t *testing.T) {
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{BridgeName: "br0"})
-	provFlows := gs.Generate("eth0", zone.ZoneProvisioning, 201)
-	quarFlows := gs.Generate("eth0", zone.ZoneQuarantine, 202)
+	provFlows := gs.Generate("eth0", zone.ZoneProvisioning, zoneflows.Tagged(201))
+	quarFlows := gs.Generate("eth0", zone.ZoneQuarantine, zoneflows.Tagged(202))
 	// Quarantine is more restrictive — provisioning grants more service paths.
 	assert.Less(t, len(quarFlows), len(provFlows),
 		"quarantine should have fewer flow rules than provisioning")
 }
 
 // ---------------------------------------------------------------------------
-// Trusted template specifics
+// East-west template specifics
 // ---------------------------------------------------------------------------
 
-func TestGenerate_Trusted_ContainsNormalAction(t *testing.T) {
+// TestGenerate_EastWest_SingleNormalRule verifies the zones whose reference
+// policy opens traffic inside the zone get exactly the intra-zone allow.
+func TestGenerate_EastWest_SingleNormalRule(t *testing.T) {
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{BridgeName: "br0"})
-	flows := gs.Generate("eth0", zone.ZoneTrusted, 200)
-	require.NotEmpty(t, flows)
-
-	found := false
-	for _, f := range flows {
-		if strings.Contains(f.Actions, "normal") {
-			found = true
-			break
-		}
+	for _, z := range []zone.Zone{zone.ZoneFabric, zone.ZoneHypervisor, zone.ZoneControlPlane, zone.ZoneStorage, zone.ZoneBackup} {
+		flows := gs.Generate("eth0", z, zoneflows.Tagged(406))
+		require.Len(t, flows, 1, "zone %s", z)
+		assert.Equal(t, "in_port=eth0,dl_vlan=406", flows[0].Match)
+		assert.Equal(t, "normal", flows[0].Actions)
+		assert.Equal(t, 100, flows[0].Priority)
 	}
-	assert.True(t, found, "trusted template must include a normal/allow rule for east-west")
 }
 
 // ---------------------------------------------------------------------------
@@ -209,8 +211,8 @@ func TestCompileMatrixRules_DefaultZones_ProducesDenyFlows(t *testing.T) {
 		NetworksByZone: nets,
 	})
 
-	// The default matrix has at least public→trusted denied, so we expect
-	// at least one drop rule.
+	// The default matrix denies every cross-zone pair it does not open, so
+	// we expect at least one drop rule.
 	hasDrop := false
 	for _, f := range flows {
 		if f.Actions == "drop" {
@@ -233,7 +235,7 @@ func TestCompileMatrixRules_MissingNetworkSummary_SkipsZone(t *testing.T) {
 	assert.Empty(t, flows, "zones without network summaries should produce no matrix rules")
 }
 
-func TestCompileMatrixRules_PublicToTrustedIsDenied(t *testing.T) {
+func TestCompileMatrixRules_BackupToControlPlaneIsDenied(t *testing.T) {
 	defaults := zone.Defaults()
 	matrix := zone.CompileMatrix(defaults)
 	nets := buildNetworks(defaults)
@@ -244,22 +246,22 @@ func TestCompileMatrixRules_PublicToTrustedIsDenied(t *testing.T) {
 		NetworksByZone: nets,
 	})
 
-	// Find the VLAN for public and the subnet for trusted.
-	publicVLAN := nets[zone.ZonePublic].VLAN
-	trustedSubnet := nets[zone.ZoneTrusted].Subnet
+	// Find the VLAN for backup and the subnet for control-plane.
+	backupVLAN := nets[zone.ZoneBackup].VLAN
+	cpSubnet := nets[zone.ZoneControlPlane].Subnet
 
-	// There must be a drop rule matching public's dl_vlan→trusted's subnet.
+	// There must be a drop rule matching backup's dl_vlan→control-plane's subnet.
 	found := false
 	for _, f := range flows {
 		if f.Actions == "drop" &&
-			strings.Contains(f.Match, "dl_vlan="+vlanStr(publicVLAN)) &&
-			strings.Contains(f.Match, trustedSubnet) {
+			strings.Contains(f.Match, "dl_vlan="+vlanStr(backupVLAN)) &&
+			strings.Contains(f.Match, cpSubnet) {
 			found = true
 			break
 		}
 	}
-	assert.True(t, found, "should have a drop rule for public→trusted (dl_vlan=%d, nw_dst=%s)",
-		publicVLAN, trustedSubnet)
+	assert.True(t, found, "should have a drop rule for backup→control-plane (dl_vlan=%d, nw_dst=%s)",
+		backupVLAN, cpSubnet)
 }
 
 func vlanStr(v uint16) string {
@@ -299,7 +301,7 @@ func TestZoneFlowConfig_ZeroValue_NonemptyGeneratorSet(t *testing.T) {
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{})
 	require.NotNil(t, gs)
 	// Even with an empty config we should get flows for built-in zones.
-	flows := gs.Generate("eth0", zone.ZoneProvisioning, 201)
+	flows := gs.Generate("eth0", zone.ZoneProvisioning, zoneflows.Tagged(201))
 	assert.NotEmpty(t, flows)
 }
 
@@ -317,7 +319,7 @@ func TestGenerate_Quarantine_WithDNSServerIP(t *testing.T) {
 		},
 	})
 
-	flows := gs.Generate("eth0", zone.ZoneQuarantine, 202)
+	flows := gs.Generate("eth0", zone.ZoneQuarantine, zoneflows.Tagged(202))
 	require.NotEmpty(t, flows)
 
 	// At least one flow must reference the DNS server IP.
@@ -344,7 +346,7 @@ func TestGenerate_Quarantine_WithRemediationAndScanningServers(t *testing.T) {
 		},
 	})
 
-	flows := gs.Generate("eth0", zone.ZoneQuarantine, 202)
+	flows := gs.Generate("eth0", zone.ZoneQuarantine, zoneflows.Tagged(202))
 	require.NotEmpty(t, flows)
 
 	hasRemediation := false
@@ -371,7 +373,7 @@ func TestGenerate_Quarantine_WithNotificationServer(t *testing.T) {
 		},
 	})
 
-	flows := gs.Generate("eth0", zone.ZoneQuarantine, 202)
+	flows := gs.Generate("eth0", zone.ZoneQuarantine, zoneflows.Tagged(202))
 	require.NotEmpty(t, flows)
 
 	found := false
@@ -398,7 +400,7 @@ func TestGenerate_Provisioning_WithDNSServerIPs(t *testing.T) {
 		},
 	})
 
-	flows := gs.Generate("eth0", zone.ZoneProvisioning, 201)
+	flows := gs.Generate("eth0", zone.ZoneProvisioning, zoneflows.Tagged(201))
 	require.NotEmpty(t, flows)
 
 	found := false
@@ -421,7 +423,7 @@ func TestGenerate_Provisioning_WithACMEServerIPs(t *testing.T) {
 		},
 	})
 
-	flows := gs.Generate("eth0", zone.ZoneProvisioning, 201)
+	flows := gs.Generate("eth0", zone.ZoneProvisioning, zoneflows.Tagged(201))
 	require.NotEmpty(t, flows)
 
 	found := false
@@ -444,7 +446,7 @@ func TestGenerate_Provisioning_WithPackageRepoIPs(t *testing.T) {
 		},
 	})
 
-	flows := gs.Generate("eth0", zone.ZoneProvisioning, 201)
+	flows := gs.Generate("eth0", zone.ZoneProvisioning, zoneflows.Tagged(201))
 	require.NotEmpty(t, flows)
 
 	found := false
@@ -465,7 +467,7 @@ func TestGenerate_Provisioning_WithAllowICMP(t *testing.T) {
 		},
 	})
 
-	flows := gs.Generate("eth0", zone.ZoneProvisioning, 201)
+	flows := gs.Generate("eth0", zone.ZoneProvisioning, zoneflows.Tagged(201))
 	require.NotEmpty(t, flows)
 
 	found := false
@@ -482,68 +484,23 @@ func TestGenerate_Provisioning_WithAllowICMP(t *testing.T) {
 // Public template — config-populated paths
 // ---------------------------------------------------------------------------
 
-// TestGenerate_Public_WithTrustedSubnet covers the TrustedSubnet branch that
-// emits the public→trusted deny rule.
-func TestGenerate_Public_WithTrustedSubnet(t *testing.T) {
-	trustedSubnet := "198.18.0.0/24"
-	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
-		Public: zoneflows.PublicConfig{
-			TrustedSubnet: trustedSubnet,
-		},
-	})
-
-	flows := gs.Generate("eth0", zone.ZonePublic, 1000)
-	require.NotEmpty(t, flows)
-
-	found := false
-	for _, f := range flows {
-		if f.Actions == "drop" && strings.Contains(f.Match, trustedSubnet) {
-			found = true
-			break
-		}
-	}
-	assert.True(t, found, "public template with TrustedSubnet must emit a drop rule for public→trusted traffic")
-}
-
-// TestGenerate_Public_WithTrustedSubnet_MoreFlowsThanWithout asserts that the
-// public template produces more flows when TrustedSubnet is configured
-// (the deny rule is added).
-func TestGenerate_Public_WithTrustedSubnet_MoreFlowsThanWithout(t *testing.T) {
-	base := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{})
-	withSubnet := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
-		Public: zoneflows.PublicConfig{TrustedSubnet: "198.18.0.0/24"},
-	})
-
-	baseFlows := base.Generate("eth0", zone.ZonePublic, 1000)
-	subnetFlows := withSubnet.Generate("eth0", zone.ZonePublic, 1000)
-
-	assert.Greater(t, len(subnetFlows), len(baseFlows),
-		"public template with TrustedSubnet should produce more flows than without")
-}
-
-// ---------------------------------------------------------------------------
-// serviceFlowRules — remaining service paths (tftp)
-// ---------------------------------------------------------------------------
-
-// TestCompileMatrixRules_TFTPService covers the tftp service path in
-// serviceFlowRules (currently only exercised indirectly via the matrix path).
 func TestCompileMatrixRules_TFTPService(t *testing.T) {
-	// Build a minimal zone set where provisioning allowTo trusted with tftp.
+	// Build a minimal zone set where provisioning allowTo control-plane with tftp.
 	zones := []zone.ZoneConfig{
 		{
 			Name:          zone.ZoneProvisioning,
 			LifecycleRole: zone.LifecycleRoleProvisioning,
 			Isolate:       true,
 			AllowTo: []zone.ZonePath{
-				{Zone: zone.ZoneTrusted, Services: []string{"tftp"}},
+				{Zone: zone.ZoneControlPlane, Services: []string{"tftp"}},
 			},
 		},
-		{Name: zone.ZoneTrusted},
+		{Name: zone.ZoneControlPlane},
 	}
 	matrix := zone.CompileMatrix(zones)
 	nets := map[zone.Zone]zoneflows.NetworkSummary{
 		zone.ZoneProvisioning: {VLAN: 201, Subnet: "172.16.201.0/24"},
-		zone.ZoneTrusted:      {VLAN: 200, Subnet: "198.18.0.0/24"},
+		zone.ZoneControlPlane: {VLAN: 200, Subnet: "10.4.6.0/24"},
 	}
 
 	flows := zoneflows.CompileMatrixRules(zoneflows.MatrixRuleConfig{
@@ -567,14 +524,14 @@ func TestCompileMatrixRules_TFTPService(t *testing.T) {
 // branch — when a zone has a NetworkSummary with VLAN=0 it must be skipped.
 func TestCompileMatrixRules_ZeroVLAN_SkipsFromZone(t *testing.T) {
 	zones := []zone.ZoneConfig{
-		{Name: zone.ZoneTrusted},
-		{Name: zone.ZonePublic, InternetIngress: true},
+		{Name: zone.ZoneControlPlane},
+		{Name: zone.ZoneBackup, InternetIngress: true},
 	}
 	matrix := zone.CompileMatrix(zones)
-	// Provide a summary for trusted but set VLAN=0 — this must be skipped.
+	// Provide a summary for control-plane but set VLAN=0 — this must be skipped.
 	nets := map[zone.Zone]zoneflows.NetworkSummary{
-		zone.ZoneTrusted: {VLAN: 0, Subnet: "198.18.0.0/24"},
-		zone.ZonePublic:  {VLAN: 1000, Subnet: "203.0.113.0/24"},
+		zone.ZoneControlPlane: {VLAN: 0, Subnet: "10.4.6.0/24"},
+		zone.ZoneBackup:       {VLAN: 1000, Subnet: "203.0.113.0/24"},
 	}
 
 	flows := zoneflows.CompileMatrixRules(zoneflows.MatrixRuleConfig{
@@ -583,8 +540,8 @@ func TestCompileMatrixRules_ZeroVLAN_SkipsFromZone(t *testing.T) {
 		NetworksByZone: nets,
 	})
 
-	// trusted has VLAN=0 so it must be skipped as a source zone; no
-	// trusted→public rules should appear.
+	// control-plane has VLAN=0 so it must be skipped as a source zone; no
+	// control-plane→backup rules should appear.
 	for _, f := range flows {
 		assert.NotContains(t, f.Match, "dl_vlan=0",
 			"zones with VLAN=0 must not generate matrix rules")
@@ -599,15 +556,15 @@ func TestCompileMatrixRules_AllowedWithServices_DNS(t *testing.T) {
 			Name:    zone.ZoneProvisioning,
 			Isolate: true,
 			AllowTo: []zone.ZonePath{
-				{Zone: zone.ZoneTrusted, Services: []string{"dns"}},
+				{Zone: zone.ZoneControlPlane, Services: []string{"dns"}},
 			},
 		},
-		{Name: zone.ZoneTrusted},
+		{Name: zone.ZoneControlPlane},
 	}
 	matrix := zone.CompileMatrix(zones)
 	nets := map[zone.Zone]zoneflows.NetworkSummary{
 		zone.ZoneProvisioning: {VLAN: 201, Subnet: "172.16.201.0/24"},
-		zone.ZoneTrusted:      {VLAN: 200, Subnet: "198.18.0.0/24"},
+		zone.ZoneControlPlane: {VLAN: 200, Subnet: "10.4.6.0/24"},
 	}
 
 	flows := zoneflows.CompileMatrixRules(zoneflows.MatrixRuleConfig{
@@ -624,7 +581,7 @@ func TestCompileMatrixRules_AllowedWithServices_DNS(t *testing.T) {
 			break
 		}
 	}
-	assert.True(t, found, "matrix rules must include DNS allow flow for provisioning→trusted with dns service")
+	assert.True(t, found, "matrix rules must include DNS allow flow for provisioning→control-plane with dns service")
 }
 
 // TestCompileMatrixRules_AllowedWithServices_ACME covers the acme service path.
@@ -634,15 +591,15 @@ func TestCompileMatrixRules_AllowedWithServices_ACME(t *testing.T) {
 			Name:    zone.ZoneProvisioning,
 			Isolate: true,
 			AllowTo: []zone.ZonePath{
-				{Zone: zone.ZoneTrusted, Services: []string{"acme"}},
+				{Zone: zone.ZoneControlPlane, Services: []string{"acme"}},
 			},
 		},
-		{Name: zone.ZoneTrusted},
+		{Name: zone.ZoneControlPlane},
 	}
 	matrix := zone.CompileMatrix(zones)
 	nets := map[zone.Zone]zoneflows.NetworkSummary{
 		zone.ZoneProvisioning: {VLAN: 201, Subnet: "172.16.201.0/24"},
-		zone.ZoneTrusted:      {VLAN: 200, Subnet: "198.18.0.0/24"},
+		zone.ZoneControlPlane: {VLAN: 200, Subnet: "10.4.6.0/24"},
 	}
 
 	flows := zoneflows.CompileMatrixRules(zoneflows.MatrixRuleConfig{
@@ -669,15 +626,15 @@ func TestCompileMatrixRules_AllowedWithServices_DHCP(t *testing.T) {
 			Name:    zone.ZoneProvisioning,
 			Isolate: true,
 			AllowTo: []zone.ZonePath{
-				{Zone: zone.ZoneTrusted, Services: []string{"dhcp"}},
+				{Zone: zone.ZoneControlPlane, Services: []string{"dhcp"}},
 			},
 		},
-		{Name: zone.ZoneTrusted},
+		{Name: zone.ZoneControlPlane},
 	}
 	matrix := zone.CompileMatrix(zones)
 	nets := map[zone.Zone]zoneflows.NetworkSummary{
 		zone.ZoneProvisioning: {VLAN: 201, Subnet: "172.16.201.0/24"},
-		zone.ZoneTrusted:      {VLAN: 200, Subnet: "198.18.0.0/24"},
+		zone.ZoneControlPlane: {VLAN: 200, Subnet: "10.4.6.0/24"},
 	}
 
 	flows := zoneflows.CompileMatrixRules(zoneflows.MatrixRuleConfig{
@@ -702,14 +659,14 @@ func TestCompileMatrixRules_AllowedWithServices_DHCP(t *testing.T) {
 // be skipped as a destination so no matrix rules reference it.
 func TestCompileMatrixRules_EmptySubnet_SkipsToZone(t *testing.T) {
 	zones := []zone.ZoneConfig{
-		{Name: zone.ZoneTrusted},
-		{Name: zone.ZonePublic, InternetIngress: true},
+		{Name: zone.ZoneControlPlane},
+		{Name: zone.ZoneBackup, InternetIngress: true},
 	}
 	matrix := zone.CompileMatrix(zones)
 	nets := map[zone.Zone]zoneflows.NetworkSummary{
-		zone.ZoneTrusted: {VLAN: 200, Subnet: "198.18.0.0/24"},
-		// public is present but has no subnet — must be skipped as destination.
-		zone.ZonePublic: {VLAN: 1000, Subnet: ""},
+		zone.ZoneControlPlane: {VLAN: 200, Subnet: "10.4.6.0/24"},
+		// backup is present but has no subnet — must be skipped as destination.
+		zone.ZoneBackup: {VLAN: 1000, Subnet: ""},
 	}
 
 	flows := zoneflows.CompileMatrixRules(zoneflows.MatrixRuleConfig{
@@ -725,6 +682,6 @@ func TestCompileMatrixRules_EmptySubnet_SkipsToZone(t *testing.T) {
 		assert.NotContains(t, f.Match, "nw_dst= ",
 			"matrix rules must not emit flows with an empty destination subnet")
 	}
-	// Additionally, no flow targeting the public zone (with empty subnet) should exist.
+	// Additionally, no flow targeting the backup zone (with empty subnet) should exist.
 	_ = flows // absence is the assertion; the loop above guards correctness
 }

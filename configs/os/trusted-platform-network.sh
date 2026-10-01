@@ -9,7 +9,7 @@
 #
 # Zone identity:
 #   TP_NETWORK_ZONE is exported after extracting the zone field from the
-#   trusted network phase config.  The baked /etc/platformd/network/network.env
+#   admitted network phase config.  The baked /etc/platformd/network/network.env
 #   (written by platformctl iso create) is sourced first as a fallback so the
 #   zone is always available even when the API fetch fails.
 
@@ -199,9 +199,10 @@ validate_profile() {
     return 0
 }
 
-# Extract network configuration for given phase
+# Extract network configuration for given phase from the GET
+# /api/v1/device/profile response (admittedNetwork, provisioningNetwork).
 extract_network_config() {
-    local phase="$1"  # "provisioning", "trusted", or "quarantine"
+    local phase="$1"  # "provisioning", "admitted", or "quarantine"
 
     log_debug "Extracting $phase network configuration"
 
@@ -288,32 +289,32 @@ EOF
     return 0
 }
 
-# Apply network configuration for trusted phase.
+# Apply network configuration for the admitted phase.
 # Exports TP_NETWORK_ZONE to the environment after resolving the zone name
-# from the trusted network phase config.  Falls back to the baked
+# from the admitted network phase config.  Falls back to the baked
 # /etc/platformd/network/network.env when the zone field is absent from the
 # live API response.
-apply_trusted_network_config() {
-    log_info "Applying trusted network configuration"
+apply_admitted_network_config() {
+    log_info "Applying admitted network configuration"
 
     local net_config
-    net_config=$(extract_network_config "trusted")
+    net_config=$(extract_network_config "admitted")
 
     if [[ -z "$net_config" || "$net_config" == "null" ]]; then
-        log_warn "No trusted network configuration found in profile"
+        log_warn "No admitted network configuration found in profile"
         return 0
     fi
 
     # Extract network parameters
     local vlan static_ip gateway dns_servers zone
     vlan=$(echo "$net_config" | jq -r '.vlan // empty')
-    static_ip=$(echo "$net_config" | jq -r '.static_ip // empty')
+    static_ip=$(echo "$net_config" | jq -r '.staticIP // empty')
     gateway=$(echo "$net_config" | jq -r '.gateway // empty')
     dns_servers=$(echo "$net_config" | jq -r '.dns[]? // empty' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
     zone=$(echo "$net_config" | jq -r '.zone // empty')
 
     if [[ -z "$vlan" ]]; then
-        log_error "VLAN ID not specified in trusted network config"
+        log_error "VLAN ID not specified in admitted network config"
         return "$ERR_INVALID_PROFILE"
     fi
 
@@ -501,8 +502,8 @@ main() {
             return $exit_code
         fi
 
-        # Apply trusted network configuration (also resolves TP_NETWORK_ZONE)
-        if ! apply_trusted_network_config; then
+        # Apply admitted network configuration (also resolves TP_NETWORK_ZONE)
+        if ! apply_admitted_network_config; then
             exit_code=$?
             log_error "Failed to apply network configuration"
             return $exit_code

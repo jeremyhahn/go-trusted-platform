@@ -39,7 +39,7 @@ func fixtureRuleset() Ruleset {
 			{Interface: "eth0", Protocol: ProtocolTCP, Port: 22, Sources: []netip.Prefix{
 				netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("fd00:101::/64")}, Comment: "sshd office"},
 			{Interface: "", Protocol: ProtocolUDP, Port: 3784, Comment: "bfd any"},
-			{Interface: "trusted0", Protocol: ProtocolTCP, Port: 10443},
+			{Interface: "br-fabric", Protocol: ProtocolTCP, Port: 10443},
 		},
 		Peers: []PeerAllowance{
 			{Interface: "wan0", Protocol: PeerProtocolGRE, Addresses: []netip.Addr{netip.MustParseAddr("66.42.90.190"), netip.MustParseAddr("45.63.110.165")}},

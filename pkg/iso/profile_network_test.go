@@ -55,7 +55,7 @@ func TestNetworkConfigGenerator(t *testing.T) {
 			},
 			entities.DefaultPostEnrollmentNetwork: {
 				VLAN:       200,
-				Zone:       "trusted",
+				Zone:       "control-plane",
 				StaticIP:   "10.0.200.50/24",
 				Gateway:    "10.0.200.1",
 				DNS:        []string{"10.0.200.2"},
@@ -96,13 +96,13 @@ func TestNetworkConfigGenerator(t *testing.T) {
 		assert.Equal(t, uint16(443), config.ACLs[0].DstPort)
 	})
 
-	t.Run("Generate trusted config", func(t *testing.T) {
+	t.Run("Generate admitted config", func(t *testing.T) {
 		gen := NewNetworkConfigGenerator(profile)
-		config := gen.GenerateTrustedConfig()
+		config := gen.GenerateAdmittedConfig()
 
 		require.NotNil(t, config)
 		assert.Equal(t, uint16(200), config.VLAN)
-		assert.Equal(t, "trusted", config.Zone)
+		assert.Equal(t, "control-plane", config.Zone)
 		assert.Equal(t, "10.0.200.50/24", config.StaticIP)
 		assert.Equal(t, "10.0.200.1", config.Gateway)
 		assert.Len(t, config.DNS, 1)
@@ -135,7 +135,7 @@ func TestNetworkConfigGenerator(t *testing.T) {
 		gen := NewNetworkConfigGenerator(nil)
 
 		assert.Nil(t, gen.GenerateProvisioningConfig())
-		assert.Nil(t, gen.GenerateTrustedConfig())
+		assert.Nil(t, gen.GenerateAdmittedConfig())
 		assert.Nil(t, gen.GenerateQuarantineConfig())
 	})
 
@@ -147,7 +147,7 @@ func TestNetworkConfigGenerator(t *testing.T) {
 		gen := NewNetworkConfigGenerator(emptyProfile)
 
 		assert.Nil(t, gen.GenerateProvisioningConfig())
-		assert.Nil(t, gen.GenerateTrustedConfig())
+		assert.Nil(t, gen.GenerateAdmittedConfig())
 		assert.Nil(t, gen.GenerateQuarantineConfig())
 	})
 }
@@ -156,7 +156,7 @@ func TestSystemdNetworkdConfigGenerator(t *testing.T) {
 	t.Run("Generate static IP config with zone comment", func(t *testing.T) {
 		config := &entities.NetworkPhaseConfig{
 			VLAN:     200,
-			Zone:     "trusted",
+			Zone:     "control-plane",
 			StaticIP: "10.0.200.50/24",
 			Gateway:  "10.0.200.1",
 			DNS:      []string{"10.0.200.2", "10.0.200.3"},
@@ -167,7 +167,7 @@ func TestSystemdNetworkdConfigGenerator(t *testing.T) {
 
 		assert.NotEmpty(t, output)
 		// Zone comment must appear before Match section.
-		assert.Contains(t, output, "# trusted-platform-zone: trusted")
+		assert.Contains(t, output, "# trusted-platform-zone: control-plane")
 		assert.Contains(t, output, "[Match]")
 		assert.Contains(t, output, "Name=eth0")
 		assert.Contains(t, output, "[Network]")
@@ -243,8 +243,8 @@ func TestSystemdNetworkdConfigGenerator(t *testing.T) {
 		filename := gen.GenerateFilename("provisioning")
 		assert.Equal(t, "10-eth0-provisioning.network", filename)
 
-		filename = gen.GenerateFilename("trusted")
-		assert.Equal(t, "10-eth0-trusted.network", filename)
+		filename = gen.GenerateFilename("admitted")
+		assert.Equal(t, "10-eth0-admitted.network", filename)
 	})
 
 	t.Run("Nil config returns empty string", func(t *testing.T) {
@@ -388,7 +388,7 @@ func TestNetworkConfigWriter(t *testing.T) {
 			},
 			entities.DefaultPostEnrollmentNetwork: {
 				VLAN:     200,
-				Zone:     "trusted",
+				Zone:     "control-plane",
 				StaticIP: "10.0.200.50/24",
 				Gateway:  "10.0.200.1",
 				DNS:      []string{"10.0.200.2"},
@@ -420,8 +420,8 @@ func TestNetworkConfigWriter(t *testing.T) {
 		provPath := writer.GetProvisioningConfigPath()
 		assert.Equal(t, filepath.Join(tmpDir, "etc", "platformd", "network", "provisioning.yaml"), provPath)
 
-		prodPath := writer.GetTrustedConfigPath()
-		assert.Equal(t, filepath.Join(tmpDir, "etc", "platformd", "network", "trusted.yaml"), prodPath)
+		prodPath := writer.GetAdmittedConfigPath()
+		assert.Equal(t, filepath.Join(tmpDir, "etc", "platformd", "network", "admitted.yaml"), prodPath)
 
 		quarPath := writer.GetQuarantineConfigPath()
 		assert.Equal(t, filepath.Join(tmpDir, "etc", "platformd", "network", "quarantine.yaml"), quarPath)
@@ -484,7 +484,7 @@ func TestZoneNetworkSet(t *testing.T) {
 				},
 				entities.DefaultPostEnrollmentNetwork: {
 					VLAN: 200,
-					Zone: "trusted",
+					Zone: "control-plane",
 				},
 				entities.DefaultFailureNetwork: {
 					VLAN: 300,
@@ -500,16 +500,16 @@ func TestZoneNetworkSet(t *testing.T) {
 		assert.Equal(t, "provisioning", set.Provisioning.Name)
 		assert.Equal(t, uint16(100), set.Provisioning.VLAN)
 
-		assert.Equal(t, "trusted", set.Trusted.Zone)
-		assert.Equal(t, "trusted", set.Trusted.Name)
-		assert.Equal(t, uint16(200), set.Trusted.VLAN)
+		assert.Equal(t, "control-plane", set.Admitted.Zone)
+		assert.Equal(t, "admitted", set.Admitted.Name)
+		assert.Equal(t, uint16(200), set.Admitted.VLAN)
 
 		assert.Equal(t, "quarantine", set.Quarantine.Zone)
 		assert.Equal(t, "quarantine", set.Quarantine.Name)
 		assert.Equal(t, uint16(300), set.Quarantine.VLAN)
 	})
 
-	t.Run("Profile-level zone fallback for trusted phase", func(t *testing.T) {
+	t.Run("Profile-level zone fallback for admitted phase", func(t *testing.T) {
 		// The profile.Zone field is the fallback when the per-network Zone is
 		// empty. GetPostEnrollmentNetworkConfig applies this fallback.
 		profile := &entities.DeviceProfile{
@@ -527,9 +527,9 @@ func TestZoneNetworkSet(t *testing.T) {
 		gen := NewNetworkConfigGenerator(profile)
 		set := gen.ExtractZoneNetworks()
 
-		assert.Equal(t, "ops", set.Trusted.Zone)
-		assert.Equal(t, "trusted", set.Trusted.Name)
-		assert.Equal(t, uint16(200), set.Trusted.VLAN)
+		assert.Equal(t, "ops", set.Admitted.Zone)
+		assert.Equal(t, "admitted", set.Admitted.Name)
+		assert.Equal(t, uint16(200), set.Admitted.VLAN)
 	})
 
 	t.Run("Missing zone yields empty string not an error", func(t *testing.T) {
@@ -550,8 +550,8 @@ func TestZoneNetworkSet(t *testing.T) {
 
 		assert.Empty(t, set.Provisioning.Zone)
 		assert.Equal(t, uint16(100), set.Provisioning.VLAN)
-		assert.Empty(t, set.Trusted.Zone)
-		assert.Equal(t, uint16(200), set.Trusted.VLAN)
+		assert.Empty(t, set.Admitted.Zone)
+		assert.Equal(t, uint16(200), set.Admitted.VLAN)
 		assert.Empty(t, set.Quarantine.Zone)
 		assert.Equal(t, uint16(300), set.Quarantine.VLAN)
 	})
@@ -575,9 +575,9 @@ func TestZoneNetworkSet(t *testing.T) {
 		assert.Equal(t, "onboarding", set.Provisioning.Zone)
 		assert.Equal(t, uint16(101), set.Provisioning.VLAN)
 
-		assert.Equal(t, "production", set.Trusted.Name)
-		assert.Equal(t, "production", set.Trusted.Zone)
-		assert.Equal(t, uint16(201), set.Trusted.VLAN)
+		assert.Equal(t, "production", set.Admitted.Name)
+		assert.Equal(t, "production", set.Admitted.Zone)
+		assert.Equal(t, uint16(201), set.Admitted.VLAN)
 	})
 
 	t.Run("Nil profile returns empty ZoneNetworkSet", func(t *testing.T) {
@@ -587,9 +587,9 @@ func TestZoneNetworkSet(t *testing.T) {
 		assert.Empty(t, set.Provisioning.Zone)
 		assert.Empty(t, set.Provisioning.Name)
 		assert.Equal(t, uint16(0), set.Provisioning.VLAN)
-		assert.Empty(t, set.Trusted.Zone)
-		assert.Empty(t, set.Trusted.Name)
-		assert.Equal(t, uint16(0), set.Trusted.VLAN)
+		assert.Empty(t, set.Admitted.Zone)
+		assert.Empty(t, set.Admitted.Name)
+		assert.Equal(t, uint16(0), set.Admitted.VLAN)
 		assert.Empty(t, set.Quarantine.Zone)
 		assert.Empty(t, set.Quarantine.Name)
 		assert.Equal(t, uint16(0), set.Quarantine.VLAN)
@@ -607,9 +607,9 @@ func TestZoneNetworkSet(t *testing.T) {
 		assert.Empty(t, set.Provisioning.Zone)
 		assert.Equal(t, uint16(0), set.Provisioning.VLAN)
 
-		assert.Equal(t, entities.DefaultPostEnrollmentNetwork, set.Trusted.Name)
-		assert.Empty(t, set.Trusted.Zone)
-		assert.Equal(t, uint16(0), set.Trusted.VLAN)
+		assert.Equal(t, entities.DefaultPostEnrollmentNetwork, set.Admitted.Name)
+		assert.Empty(t, set.Admitted.Zone)
+		assert.Equal(t, uint16(0), set.Admitted.VLAN)
 
 		assert.Equal(t, entities.DefaultFailureNetwork, set.Quarantine.Name)
 		assert.Empty(t, set.Quarantine.Zone)

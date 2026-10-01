@@ -28,7 +28,10 @@ import (
 //   - NodeID: App.Hostname (unique per node).
 //   - VTEPIP: App.PublicIPv4; falls back to 127.0.0.1 when nil (test / loopback nodes).
 //   - UnderlayInterface: SDNConfig.Overlay.UnderlayInterface; defaults to "lo".
-//   - BridgeName: SDNConfig.OVS.Bridge; falls back to the overlay default "br-overlay".
+//   - BridgeName: the overlay integration bridge br-int (overlay.DefaultBridgeName),
+//     never the trunk bridge (sdn.ovs.bridge, br-fabric).
+//   - Environment: the environment number of the network plan, so derived
+//     VNIs are E·100000+n.
 //   - OVSSocketPath: the configured path; empty if OVS is not available.
 //   - VXLANPort: SDNConfig.Overlay.VXLANPort; defaults applied by ApplyDefaults.
 //
@@ -61,17 +64,18 @@ func buildOverlayController(ctx context.Context, a *app.App, ovsSocketPath strin
 	// VXLAN port from overlay config (ApplyDefaults fills in 4789 when zero).
 	cfg.VXLANPort = a.SDNConfig.Overlay.VXLANPort
 
-	// Bridge name from OVS config; overlay default applied by ApplyDefaults.
-	if a.SDNConfig.OVS != nil && a.SDNConfig.OVS.Bridge != "" {
-		cfg.BridgeName = a.SDNConfig.OVS.Bridge
+	// Overlay ports live on the integration bridge (br-int, applied by
+	// ApplyDefaults); the trunk bridge is never patched into it.
+	if plan := a.SDNConfig.Plan(); plan != nil {
+		cfg.Environment = plan.Environment().ID
 	}
 
 	// OVS socket: wired when available; controller health-checks log a warning
 	// when nil but the in-memory state path remains fully operational.
 	cfg.OVSSocketPath = ovsSocketPath
 
-	// ApplyDefaults fills MTU, VXLANPort (4789), VNIBase, BridgeName
-	// (br-overlay), StateBackend (memory), intervals.
+	// ApplyDefaults fills MTU, VXLANPort (4789), BridgeName (br-int),
+	// StateBackend (memory), intervals.
 	cfg.ApplyDefaults()
 
 	ctrl, err := overlay.New(cfg)
@@ -88,6 +92,7 @@ func buildOverlayController(ctx context.Context, a *app.App, ovsSocketPath strin
 		"vtep_ip", cfg.VTEPIP,
 		"underlay_iface", cfg.UnderlayInterface,
 		"bridge", cfg.BridgeName,
+		"environment", cfg.Environment,
 		"vxlan_port", cfg.VXLANPort)
 
 	return ctrl, nil

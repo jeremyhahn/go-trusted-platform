@@ -50,8 +50,6 @@ type mockTenantManager struct {
 	updateQuotasErr   error
 	usageErr          error
 	checkQuotaErr     error
-	validateVLANErr   error
-	bridgeErr         error
 	syncErr           error
 	rotateDEKErr      error
 	getDEKStatusErr   error
@@ -115,14 +113,10 @@ func (m *mockTenantManager) CreateTenant(ctx context.Context, req *tenant.Create
 		Name:        req.Name,
 		DisplayName: req.DisplayName,
 		State:       tenant.StateActive,
-		OVSBridge:   "br-" + req.Name,
 		Labels:      req.Labels,
 		Annotations: req.Annotations,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
-	}
-	if req.VLANRange != nil {
-		entity.VLANRange = *req.VLANRange
 	}
 	m.tenants[entity.ID] = entity
 	return entity, nil
@@ -274,24 +268,6 @@ func (m *mockTenantManager) CheckQuota(ctx context.Context, tenantID string, res
 	return nil
 }
 
-func (m *mockTenantManager) ValidateVLAN(ctx context.Context, tenantID string, vlanID uint16) error {
-	if m.validateVLANErr != nil {
-		return m.validateVLANErr
-	}
-	return nil
-}
-
-func (m *mockTenantManager) GetBridgeName(ctx context.Context, tenantID string) (string, error) {
-	if m.bridgeErr != nil {
-		return "", m.bridgeErr
-	}
-	entity, ok := m.tenants[tenantID]
-	if !ok {
-		return "", tenant.ErrTenantNotFound{ID: tenantID}
-	}
-	return entity.OVSBridge, nil
-}
-
 func (m *mockTenantManager) Sync(ctx context.Context) error {
 	if m.syncErr != nil {
 		return m.syncErr
@@ -431,11 +407,6 @@ func createTestTenantEntity(id, name string) *tenant.TenantEntity {
 		Name:        name,
 		DisplayName: name,
 		State:       tenant.StateActive,
-		OVSBridge:   "br-tenant-" + name,
-		VLANRange: tenant.VLANRange{
-			Start: 100,
-			End:   199,
-		},
 		ComputeQuota: tenant.ComputeQuota{
 			MaxVMs:        10,
 			MaxContainers: 50,
@@ -631,8 +602,6 @@ func TestHandlersWithNilManager(t *testing.T) {
 		{"updateQuotas", http.MethodPut, "/api/v1/tenants/test-id/quotas", UpdateQuotasRequest{}},
 		{"getUsage", http.MethodGet, "/api/v1/tenants/test-id/usage", nil},
 		{"checkQuota", http.MethodPost, "/api/v1/tenants/test-id/check-quota", CheckQuotaRequest{Resource: "vms", Amount: 1}},
-		{"validateVLAN", http.MethodPost, "/api/v1/tenants/test-id/validate-vlan", ValidateVLANRequest{VLANID: 100}},
-		{"getBridge", http.MethodGet, "/api/v1/tenants/test-id/bridge", nil},
 		{"sync", http.MethodPost, "/api/v1/tenants/sync", nil},
 		{"rotateDEK", http.MethodPost, "/api/v1/tenants/test-id/dek/rotate", RotateDEKRequest{Background: false}},
 		{"getDEKStatus", http.MethodGet, "/api/v1/tenants/test-id/dek/status", nil},
@@ -737,10 +706,6 @@ func TestHandleCreateTenant_Success(t *testing.T) {
 		Name:        "new-tenant",
 		DisplayName: "New Tenant",
 		Labels:      map[string]string{"env": "prod"},
-		VLANRange: &VLANRangeRequest{
-			Start: 100,
-			End:   199,
-		},
 	}
 
 	rr := executeTenantRequest(router, http.MethodPost, "/api/v1/tenants", req)
@@ -1417,149 +1382,6 @@ func TestHandleCheckQuota_InvalidBody(t *testing.T) {
 	}
 }
 
-// =============================================================================
-// Validate VLAN Handler Tests
-// =============================================================================
-
-func TestHandleValidateVLAN_Success(t *testing.T) {
-	mgr := newMockTenantManager()
-	mgr.addTenant(createTestTenantEntity("tenant-123", "test-tenant"))
-
-	h := newTestTenantHandlersWithMock(mgr)
-	router := mux.NewRouter()
-	h.RegisterRoutes(router)
-
-	req := ValidateVLANRequest{
-		VLANID: 150,
-	}
-
-	rr := executeTenantRequest(router, http.MethodPost, "/api/v1/tenants/tenant-123/validate-vlan", req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Expected status %d, got %d", http.StatusOK, rr.Code)
-	}
-
-	var resp ValidateVLANResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("Failed to decode response: %v", err)
-	}
-
-	if !resp.Valid {
-		t.Error("Expected Valid true")
-	}
-}
-
-func TestHandleValidateVLAN_Invalid(t *testing.T) {
-	mgr := newMockTenantManager()
-	mgr.addTenant(createTestTenantEntity("tenant-123", "test-tenant"))
-	mgr.validateVLANErr = errors.New("VLAN out of range")
-
-	h := newTestTenantHandlersWithMock(mgr)
-	router := mux.NewRouter()
-	h.RegisterRoutes(router)
-
-	req := ValidateVLANRequest{
-		VLANID: 500,
-	}
-
-	rr := executeTenantRequest(router, http.MethodPost, "/api/v1/tenants/tenant-123/validate-vlan", req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Expected status %d, got %d", http.StatusOK, rr.Code)
-	}
-
-	var resp ValidateVLANResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("Failed to decode response: %v", err)
-	}
-
-	if resp.Valid {
-		t.Error("Expected Valid false")
-	}
-}
-
-func TestHandleValidateVLAN_MissingVLANID(t *testing.T) {
-	mgr := newMockTenantManager()
-	mgr.addTenant(createTestTenantEntity("tenant-123", "test-tenant"))
-
-	h := newTestTenantHandlersWithMock(mgr)
-	router := mux.NewRouter()
-	h.RegisterRoutes(router)
-
-	req := ValidateVLANRequest{}
-
-	rr := executeTenantRequest(router, http.MethodPost, "/api/v1/tenants/tenant-123/validate-vlan", req)
-
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, rr.Code)
-	}
-}
-
-func TestHandleValidateVLAN_InvalidBody(t *testing.T) {
-	mgr := newMockTenantManager()
-	mgr.addTenant(createTestTenantEntity("tenant-123", "test-tenant"))
-
-	h := newTestTenantHandlersWithMock(mgr)
-	router := mux.NewRouter()
-	h.RegisterRoutes(router)
-
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/tenants/tenant-123/validate-vlan", bytes.NewBufferString("{invalid"))
-	req.Header.Set("Content-Type", "application/json")
-
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, rr.Code)
-	}
-}
-
-// =============================================================================
-// Get Bridge Name Handler Tests
-// =============================================================================
-
-func TestHandleGetBridgeName_Success(t *testing.T) {
-	mgr := newMockTenantManager()
-	mgr.addTenant(createTestTenantEntity("tenant-123", "test-tenant"))
-
-	h := newTestTenantHandlersWithMock(mgr)
-	router := mux.NewRouter()
-	h.RegisterRoutes(router)
-
-	rr := executeTenantRequest(router, http.MethodGet, "/api/v1/tenants/tenant-123/bridge", nil)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("Expected status %d, got %d", http.StatusOK, rr.Code)
-	}
-
-	var resp BridgeNameResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("Failed to decode response: %v", err)
-	}
-
-	if resp.BridgeName == "" {
-		t.Error("Expected non-empty bridge name")
-	}
-}
-
-func TestHandleGetBridgeName_NotFound(t *testing.T) {
-	mgr := newMockTenantManager()
-
-	h := newTestTenantHandlersWithMock(mgr)
-	router := mux.NewRouter()
-	h.RegisterRoutes(router)
-
-	rr := executeTenantRequest(router, http.MethodGet, "/api/v1/tenants/nonexistent/bridge", nil)
-
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("Expected status %d, got %d", http.StatusNotFound, rr.Code)
-	}
-}
-
-// =============================================================================
-// Sync Handler Tests
-// =============================================================================
-
 func TestHandleSync_Success(t *testing.T) {
 	mgr := newMockTenantManager()
 
@@ -1921,14 +1743,6 @@ func TestTenantToResponse(t *testing.T) {
 		t.Errorf("Expected state %q, got %q", entity.State, resp.State)
 	}
 
-	if resp.VLANRange == nil {
-		t.Fatal("Expected VLAN range")
-	}
-
-	if resp.VLANRange.Start != entity.VLANRange.Start {
-		t.Errorf("Expected VLAN start %d, got %d", entity.VLANRange.Start, resp.VLANRange.Start)
-	}
-
 	if resp.ComputeQuota == nil {
 		t.Fatal("Expected compute quota")
 	}
@@ -1937,24 +1751,6 @@ func TestTenantToResponse(t *testing.T) {
 		t.Errorf("Expected MaxVMs %d, got %d", entity.ComputeQuota.MaxVMs, resp.ComputeQuota.MaxVMs)
 	}
 }
-
-func TestTenantToResponse_EmptyVLANRange(t *testing.T) {
-	mgr := newMockTenantManager()
-	h := newTestTenantHandlersWithMock(mgr)
-
-	entity := createTestTenantEntity("tenant-123", "test-tenant")
-	entity.VLANRange = tenant.VLANRange{} // Empty
-
-	resp := h.tenantToResponse(entity)
-
-	if resp.VLANRange != nil {
-		t.Error("Expected nil VLAN range for empty range")
-	}
-}
-
-// =============================================================================
-// WriteTenantError Tests
-// =============================================================================
 
 func TestWriteTenantError_ErrorMapping(t *testing.T) {
 	tests := []struct {
@@ -1969,9 +1765,6 @@ func TestWriteTenantError_ErrorMapping(t *testing.T) {
 		{"InvalidTransition", tenant.ErrInvalidTransition{From: "a", To: "b"}, http.StatusConflict},
 		{"QuotaExceeded", tenant.ErrQuotaExceeded{Resource: "vms"}, http.StatusForbidden},
 		{"ResourceLimitReached", tenant.ErrResourceLimitReached{Resource: "vms"}, http.StatusForbidden},
-		{"InvalidVLANRange", tenant.ErrInvalidVLANRange{Start: 100, End: 50}, http.StatusBadRequest},
-		{"VLANAllocationFailed", tenant.ErrVLANAllocationFailed{TenantID: "test"}, http.StatusInternalServerError},
-		{"BridgeOperationFailed", tenant.ErrBridgeOperationFailed{Operation: "test"}, http.StatusInternalServerError},
 		{"DEKOperationFailed", tenant.ErrDEKOperationFailed{Operation: "test"}, http.StatusInternalServerError},
 		{"StorageFailed", tenant.ErrStorageFailed{Operation: "test"}, http.StatusInternalServerError},
 		{"Unknown", errors.New("unknown error"), http.StatusInternalServerError},
@@ -2038,8 +1831,6 @@ func TestTenantHandlers_RegisterRoutes(t *testing.T) {
 		{http.MethodPut, "/api/v1/tenants/{id}/quotas"},
 		{http.MethodGet, "/api/v1/tenants/{id}/usage"},
 		{http.MethodPost, "/api/v1/tenants/{id}/check-quota"},
-		{http.MethodPost, "/api/v1/tenants/{id}/validate-vlan"},
-		{http.MethodGet, "/api/v1/tenants/{id}/bridge"},
 		{http.MethodPost, "/api/v1/tenants/{id}/dek/rotate"},
 		{http.MethodGet, "/api/v1/tenants/{id}/dek/status"},
 	}
@@ -2085,10 +1876,6 @@ func TestCreateTenantRequestSerialization(t *testing.T) {
 		DisplayName: "Test Tenant",
 		Labels:      map[string]string{"env": "prod"},
 		Annotations: map[string]string{"note": "test"},
-		VLANRange: &VLANRangeRequest{
-			Start: 100,
-			End:   199,
-		},
 	}
 
 	data, err := json.Marshal(req)
@@ -2105,14 +1892,6 @@ func TestCreateTenantRequestSerialization(t *testing.T) {
 		t.Errorf("Expected name %q, got %q", req.Name, decoded.Name)
 	}
 
-	if decoded.VLANRange == nil {
-		t.Fatal("Expected VLAN range")
-	}
-
-	if decoded.VLANRange.Start != 100 || decoded.VLANRange.End != 199 {
-		t.Errorf("Expected VLAN range 100-199, got %d-%d",
-			decoded.VLANRange.Start, decoded.VLANRange.End)
-	}
 }
 
 func TestTenantResponseSerialization(t *testing.T) {
@@ -2122,11 +1901,6 @@ func TestTenantResponseSerialization(t *testing.T) {
 		Name:        "test-tenant",
 		DisplayName: "Test Tenant",
 		State:       "active",
-		OVSBridge:   "br-tenant-test",
-		VLANRange: &VLANRangeResponse{
-			Start: 100,
-			End:   199,
-		},
 		ComputeQuota: &ComputeQuotaResp{
 			MaxVMs: 10,
 		},
@@ -2157,6 +1931,34 @@ func TestTenantResponseSerialization(t *testing.T) {
 
 	if decoded.State != "active" {
 		t.Errorf("Expected state 'active', got %q", decoded.State)
+	}
+
+	// The per-tenant VLAN range and OVS bridge were retired (#708); the
+	// response must not carry them.
+	for _, retired := range []string{`"vlan_range"`, `"ovs_bridge"`} {
+		if bytes.Contains(data, []byte(retired)) {
+			t.Errorf("tenant response still carries %s: %s", retired, data)
+		}
+	}
+}
+
+// TestRetiredTenantNetworkRoutes verifies the VLAN-validation and bridge
+// routes are no longer registered.
+func TestRetiredTenantNetworkRoutes(t *testing.T) {
+	mgr := newMockTenantManager()
+	mgr.addTenant(createTestTenantEntity("tenant-123", "test-tenant"))
+	h := newTestTenantHandlersWithMock(mgr)
+	router := mux.NewRouter()
+	h.RegisterRoutes(router)
+
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/tenants/tenant-123/validate-vlan"},
+		{http.MethodGet, "/api/v1/tenants/tenant-123/bridge"},
+	} {
+		rr := executeTenantRequest(router, tc.method, tc.path, nil)
+		if rr.Code != http.StatusNotFound && rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s = %d, want 404 or 405", tc.method, tc.path, rr.Code)
+		}
 	}
 }
 

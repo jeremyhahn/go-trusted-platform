@@ -30,12 +30,7 @@ func createTestTenantEntity(id, name string) *tenant.TenantEntity {
 		Name:        name,
 		DisplayName: name + " Display",
 		State:       tenant.StateActive,
-		OVSBridge:   "br-tenant-" + name,
-		VLANRange: tenant.VLANRange{
-			Start: 100,
-			End:   199,
-		},
-		DEKPath: "/tenant/12345/default",
+		DEKPath:     "/tenant/12345/default",
 		ComputeQuota: tenant.ComputeQuota{
 			MaxVMs:        10,
 			MaxContainers: 50,
@@ -63,7 +58,7 @@ func createTestTenantEntity(id, name string) *tenant.TenantEntity {
 	}
 }
 
-// TestTenantToolsRegistration tests that all 17 tenant tools are registered.
+// TestTenantToolsRegistration tests that all 15 tenant tools are registered.
 func TestTenantToolsRegistration(t *testing.T) {
 	logger := newTestLogger()
 	mockSvc := newMockServiceProvider()
@@ -82,8 +77,6 @@ func TestTenantToolsRegistration(t *testing.T) {
 		"tenant_update_quotas",
 		"tenant_get_usage",
 		"tenant_check_quota",
-		"tenant_validate_vlan",
-		"tenant_get_bridge",
 		"tenant_sync",
 		"tenant_rotate_dek",
 		"tenant_get_dek_status",
@@ -98,6 +91,13 @@ func TestTenantToolsRegistration(t *testing.T) {
 	for _, expectedTool := range expectedTools {
 		if !registeredTools[expectedTool] {
 			t.Errorf("expected tool %q to be registered but it was not found", expectedTool)
+		}
+	}
+
+	// Retired with the per-tenant VLAN range and OVS bridge (#708).
+	for _, retired := range []string{"tenant_validate_vlan", "tenant_get_bridge"} {
+		if registeredTools[retired] {
+			t.Errorf("retired tool %q is still registered", retired)
 		}
 	}
 }
@@ -140,8 +140,6 @@ func TestTenantServiceUnavailableError(t *testing.T) {
 		{"tenant_update_quotas", map[string]interface{}{"tenant_id": "test-id"}},
 		{"tenant_get_usage", map[string]interface{}{"tenant_id": "test-id"}},
 		{"tenant_check_quota", map[string]interface{}{"tenant_id": "test-id", "resource_type": "vms", "amount": 1}},
-		{"tenant_validate_vlan", map[string]interface{}{"tenant_id": "test-id", "vlan_id": 100}},
-		{"tenant_get_bridge", map[string]interface{}{"tenant_id": "test-id"}},
 		{"tenant_sync", map[string]interface{}{}},
 		{"tenant_rotate_dek", map[string]interface{}{"tenant_id": "test-id"}},
 		{"tenant_get_dek_status", map[string]interface{}{"tenant_id": "test-id"}},
@@ -174,8 +172,6 @@ func TestTenantIDRequired(t *testing.T) {
 		{"tenant_update_quotas without ID", "tenant_update_quotas", map[string]interface{}{}},
 		{"tenant_get_usage without ID", "tenant_get_usage", map[string]interface{}{}},
 		{"tenant_check_quota without ID", "tenant_check_quota", map[string]interface{}{"resource_type": "vms", "amount": 1}},
-		{"tenant_validate_vlan without ID", "tenant_validate_vlan", map[string]interface{}{"vlan_id": 100}},
-		{"tenant_get_bridge without ID", "tenant_get_bridge", map[string]interface{}{}},
 		{"tenant_rotate_dek without ID", "tenant_rotate_dek", map[string]interface{}{}},
 		{"tenant_get_dek_status without ID", "tenant_get_dek_status", map[string]interface{}{}},
 	}
@@ -259,20 +255,11 @@ func TestFormatTenantEntity(t *testing.T) {
 			t.Errorf("expected state 'active', got %v", result["state"])
 		}
 
-		if result["ovs_bridge"] != "br-tenant-test-tenant" {
-			t.Errorf("expected ovs_bridge 'br-tenant-test-tenant', got %v", result["ovs_bridge"])
-		}
-
-		// Check VLAN range
-		vlanRange, ok := result["vlan_range"].(map[string]interface{})
-		if !ok {
-			t.Fatal("expected vlan_range to be a map")
-		}
-		if vlanRange["start"] != uint16(100) {
-			t.Errorf("expected vlan_range.start 100, got %v", vlanRange["start"])
-		}
-		if vlanRange["end"] != uint16(199) {
-			t.Errorf("expected vlan_range.end 199, got %v", vlanRange["end"])
+		// The per-tenant OVS bridge and VLAN range were retired (#708).
+		for _, retired := range []string{"ovs_bridge", "vlan_range"} {
+			if _, exists := result[retired]; exists {
+				t.Errorf("expected %s to be absent, got %v", retired, result[retired])
+			}
 		}
 
 		// Check DEK handle
@@ -296,17 +283,6 @@ func TestFormatTenantEntity(t *testing.T) {
 		}
 		if labels["env"] != "test" {
 			t.Errorf("expected label env='test', got %v", labels["env"])
-		}
-	})
-
-	t.Run("empty VLAN range is not included", func(t *testing.T) {
-		entity := createTestTenantEntity("test-id", "test-tenant")
-		entity.VLANRange = tenant.VLANRange{}
-
-		result := formatTenantEntity(entity)
-
-		if _, exists := result["vlan_range"]; exists {
-			t.Error("expected vlan_range to not be present for empty range")
 		}
 	})
 
@@ -482,9 +458,9 @@ func TestTenantToolInputSchemas(t *testing.T) {
 		}
 	}
 
-	// Verify tool count (now 17 with the two new DEK tools)
-	if len(tenantTools) != 17 {
-		t.Errorf("expected 17 tenant tools, got %d", len(tenantTools))
+	// Verify tool count: 15 since the VLAN and bridge tools were retired (#708)
+	if len(tenantTools) != 15 {
+		t.Errorf("expected 15 tenant tools, got %d", len(tenantTools))
 	}
 
 	// Test specific tool schemas
@@ -540,32 +516,6 @@ func TestTenantToolInputSchemas(t *testing.T) {
 			"tenant_id":     false,
 			"resource_type": false,
 			"amount":        false,
-		}
-
-		for _, r := range required {
-			if _, exists := expectedFields[r]; exists {
-				expectedFields[r] = true
-			}
-		}
-
-		for field, found := range expectedFields {
-			if !found {
-				t.Errorf("expected '%s' to be in required fields", field)
-			}
-		}
-	})
-
-	t.Run("tenant_validate_vlan has required fields", func(t *testing.T) {
-		tool := tenantTools["tenant_validate_vlan"]
-		schema := tool.InputSchema
-		required, ok := schema["required"].([]string)
-		if !ok {
-			t.Fatal("expected required to be a string slice")
-		}
-
-		expectedFields := map[string]bool{
-			"tenant_id": false,
-			"vlan_id":   false,
 		}
 
 		for _, r := range required {
@@ -670,7 +620,6 @@ func TestTenantErrorTypes(t *testing.T) {
 		{"service unavailable", ErrTenantServiceUnavailable, "TENANT_SERVICE_UNAVAILABLE"},
 		{"ID required", ErrTenantIDRequired, "TENANT_ID_REQUIRED"},
 		{"name required", ErrTenantNameRequired, "TENANT_NAME_REQUIRED"},
-		{"VLAN required", ErrTenantVLANRequired, "TENANT_VLAN_REQUIRED"},
 		{"resource type required", ErrTenantResourceTypeRequired, "TENANT_RESOURCE_TYPE_REQUIRED"},
 		{"amount required", ErrTenantAmountRequired, "TENANT_AMOUNT_REQUIRED"},
 		{"invalid resource type", ErrTenantInvalidResourceType, "TENANT_INVALID_RESOURCE_TYPE"},
@@ -747,32 +696,6 @@ func TestGetTenantManagerNilProvider(t *testing.T) {
 	}
 }
 
-// TestVLANValidation tests VLAN ID validation bounds.
-func TestVLANValidation(t *testing.T) {
-	testCases := []struct {
-		name    string
-		vlanID  int
-		isValid bool
-	}{
-		{"VLAN 0", 0, false},
-		{"VLAN 1", 1, true},
-		{"VLAN 100", 100, true},
-		{"VLAN 4094", 4094, true},
-		{"VLAN 4095", 4095, false},
-		{"VLAN negative", -1, false},
-		{"VLAN max edge", 4093, true},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			isValid := tc.vlanID >= 1 && tc.vlanID <= 4094
-			if isValid != tc.isValid {
-				t.Errorf("expected VLAN %d validity to be %v, got %v", tc.vlanID, tc.isValid, isValid)
-			}
-		})
-	}
-}
-
 // TestTenantSyncNoManager tests tenant_sync with unavailable manager.
 func TestTenantSyncNoManager(t *testing.T) {
 	logger := newTestLogger()
@@ -834,7 +757,7 @@ func TestTenantToolExecutionErrorHandling(t *testing.T) {
 		"tenant_list", "tenant_get", "tenant_get_by_name", "tenant_create",
 		"tenant_update", "tenant_delete", "tenant_suspend", "tenant_resume",
 		"tenant_get_quotas", "tenant_update_quotas", "tenant_get_usage",
-		"tenant_check_quota", "tenant_validate_vlan", "tenant_get_bridge", "tenant_sync",
+		"tenant_check_quota", "tenant_sync",
 		"tenant_rotate_dek", "tenant_get_dek_status",
 	}
 
@@ -845,7 +768,6 @@ func TestTenantToolExecutionErrorHandling(t *testing.T) {
 				"name":          "test-name",
 				"resource_type": "vms",
 				"amount":        int64(1),
-				"vlan_id":       100,
 			}
 			_, err := registry.ExecuteTool(ctx, toolName, args)
 			if !errors.Is(err, ErrTenantServiceUnavailable) {
@@ -881,10 +803,11 @@ func TestTenantToolsSchemaTypes(t *testing.T) {
 			t.Error("expected name to be string type")
 		}
 
-		// Verify vlan_start is integer type
-		vlanProp := props["vlan_start"].(map[string]interface{})
-		if vlanProp["type"] != "integer" {
-			t.Error("expected vlan_start to be integer type")
+		// The VLAN range arguments were retired (#708).
+		for _, retired := range []string{"vlan_start", "vlan_end"} {
+			if _, exists := props[retired]; exists {
+				t.Errorf("tenant_create still declares %s", retired)
+			}
 		}
 
 		// Verify labels is object type

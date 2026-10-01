@@ -156,6 +156,13 @@ func (s *gatewayRESTService) CreateIPAMPool(ctx context.Context, req *rest.Creat
 	if req.InactivityTimeoutNs > 0 {
 		pool.InactivityTimeout = time.Duration(req.InactivityTimeoutNs)
 	}
+	reserved, rangeStart, rangeEnd, err := ipam.ParseWindow(req.Reserved, req.RangeStart, req.RangeEnd)
+	if err != nil {
+		return nil, s.mapIPAMError(err)
+	}
+	pool.Reserved = reserved
+	pool.RangeStart = rangeStart
+	pool.RangeEnd = rangeEnd
 
 	if err := s.ipam.CreatePool(ctx, pool); err != nil {
 		return nil, s.mapIPAMError(err)
@@ -205,6 +212,9 @@ func (s *gatewayRESTService) UpdateIPAMPool(ctx context.Context, poolID string, 
 	}
 	if req.InactivityTimeoutNs > 0 {
 		pool.InactivityTimeout = time.Duration(req.InactivityTimeoutNs)
+	}
+	if err := applyRESTWindowUpdate(pool, req); err != nil {
+		return nil, s.mapIPAMError(err)
 	}
 
 	if err := s.ipam.UpdatePool(ctx, pool); err != nil {
@@ -319,9 +329,18 @@ func (s *gatewayRESTService) mapIPAMError(err error) error {
 		return rest.ErrIPAMPoolHasAllocations{}
 	case errors.Is(err, ipam.ErrPoolExhausted):
 		return rest.ErrIPAMPoolExhausted{}
+	case isIPAMWindowError(err):
+		return rest.ErrIPAMWindow{Reason: err.Error()}
 	default:
 		return err
 	}
+}
+
+// applyRESTWindowUpdate applies the window fields present in an update
+// request to pool: a present field replaces the pool's value, an omitted
+// one keeps it.
+func applyRESTWindowUpdate(pool *ipam.Pool, req *rest.UpdateIPAMPoolRequest) error {
+	return pool.ApplyWindowUpdate(req.Reserved, req.RangeStart, req.RangeEnd)
 }
 
 // =============================================================================
@@ -344,6 +363,9 @@ func ipamPoolToRESTResponse(p *ipam.Pool) *rest.IPAMPoolResponse {
 		Available:              p.AvailableIPs,
 		DefaultLeaseDurationNs: int64(p.DefaultLeaseDuration),
 		InactivityTimeoutNs:    int64(p.InactivityTimeout),
+		Reserved:               p.ReservedStrings(),
+		RangeStart:             ipam.AddrString(p.RangeStart),
+		RangeEnd:               ipam.AddrString(p.RangeEnd),
 		CreatedAt:              p.CreatedAt,
 		UpdatedAt:              p.UpdatedAt,
 	}

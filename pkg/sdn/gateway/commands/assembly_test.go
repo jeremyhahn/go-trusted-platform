@@ -290,7 +290,7 @@ func TestBuildProxyHandlerZoneRoutesRequireSync(t *testing.T) {
 	certFile, keyFile, caFile := writeTLSFixtures(t)
 	cfg := publicProxyConfig()
 	cfg.Routes[0].Auth.Mode = proxy.AuthModeMTLS
-	cfg.Routes[0].Auth.AllowedZones = []string{"trusted"}
+	cfg.Routes[0].Auth.AllowedZones = []string{"control-plane"}
 	cfg.TLS.CertFile = certFile
 	cfg.TLS.KeyFile = keyFile
 	cfg.TLS.ClientCAFile = caFile
@@ -662,12 +662,13 @@ sdn:
   enabled: true
   ovs:
     socket: /var/run/openvswitch/db.sock
-    bridge: trusted0
-  networks:
-    - name: trusted-net
-      vlan: 200
-      zone: trusted
-      subnet: 10.20.0.0/24
+    bridge: br-fabric
+  environment:
+    id: 4
+    base: 10.0.0.0/8
+    overrides:
+      - zone: fabric
+        subnet: 10.4.100.0/22
 control-plane:
   enabled: true
   base-url: https://cp.example.com:8443
@@ -687,16 +688,17 @@ control-plane:
 	if cfg.SDN == nil || !cfg.SDN.Enabled || cfg.SDN.OVS == nil {
 		t.Fatalf("sdn section: %+v", cfg.SDN)
 	}
-	if cfg.SDN.OVS.Bridge != "trusted0" || cfg.SDN.OVS.Socket != "/var/run/openvswitch/db.sock" {
+	if cfg.SDN.OVS.Bridge != "br-fabric" || cfg.SDN.OVS.Socket != "/var/run/openvswitch/db.sock" {
 		t.Fatalf("ovs subsection: %+v", cfg.SDN.OVS)
 	}
-	if len(cfg.SDN.Networks) != 1 || cfg.SDN.Networks[0].VLAN != 200 {
-		t.Fatalf("networks: %+v", cfg.SDN.Networks)
+	env := cfg.SDN.Environment
+	if env == nil || env.ID != 4 || len(env.Overrides) != 1 {
+		t.Fatalf("environment: %+v", env)
 	}
 	// netip.Prefix decodes only through the TextUnmarshaler decode hook;
-	// a regression here means subnet-bearing configs fail startup.
-	if cfg.SDN.Networks[0].Subnet.String() != "10.20.0.0/24" {
-		t.Fatalf("subnet = %v, want 10.20.0.0/24", cfg.SDN.Networks[0].Subnet)
+	// a regression here means prefix-bearing configs fail startup.
+	if env.Base.String() != "10.0.0.0/8" || env.Overrides[0].Subnet.String() != "10.4.100.0/22" {
+		t.Fatalf("environment prefixes: base %v override %v", env.Base, env.Overrides[0].Subnet)
 	}
 	if cfg.ControlPlane == nil || !cfg.ControlPlane.Enabled {
 		t.Fatalf("control-plane section: %+v", cfg.ControlPlane)

@@ -46,18 +46,6 @@ func TestErrInvalidQuotaValue(t *testing.T) {
 	}
 }
 
-func TestErrInvalidVLANRange(t *testing.T) {
-	err := ErrInvalidVLANRange{
-		Start:  100,
-		End:    50,
-		Reason: "start must be less than end",
-	}
-	expected := "invalid VLAN range 100-50: start must be less than end"
-	if err.Error() != expected {
-		t.Errorf("expected %q, got %q", expected, err.Error())
-	}
-}
-
 func TestErrOperationFailed(t *testing.T) {
 	innerErr := errors.New("connection refused")
 	err := ErrOperationFailed{
@@ -110,40 +98,6 @@ func TestErrUsageRetrievalFailed(t *testing.T) {
 	}
 }
 
-func TestErrVLANInfoFailed(t *testing.T) {
-	innerErr := errors.New("vlan allocator error")
-	err := ErrVLANInfoFailed{
-		TenantID: "test-tenant",
-		Err:      innerErr,
-	}
-	expected := "failed to retrieve VLAN info for tenant test-tenant: vlan allocator error"
-	if err.Error() != expected {
-		t.Errorf("expected %q, got %q", expected, err.Error())
-	}
-
-	// Test Unwrap
-	if err.Unwrap() != innerErr {
-		t.Error("Unwrap should return the inner error")
-	}
-}
-
-func TestErrBridgeInfoFailed(t *testing.T) {
-	innerErr := errors.New("bridge manager error")
-	err := ErrBridgeInfoFailed{
-		TenantID: "test-tenant",
-		Err:      innerErr,
-	}
-	expected := "failed to retrieve bridge info for tenant test-tenant: bridge manager error"
-	if err.Error() != expected {
-		t.Errorf("expected %q, got %q", expected, err.Error())
-	}
-
-	// Test Unwrap
-	if err.Unwrap() != innerErr {
-		t.Error("Unwrap should return the inner error")
-	}
-}
-
 func TestErrTenantSuspended(t *testing.T) {
 	err := ErrTenantSuspended{TenantID: "test-tenant"}
 	expected := "tenant test-tenant is suspended"
@@ -165,12 +119,9 @@ func TestErrorsImplementErrorInterface(t *testing.T) {
 	var _ error = ErrMissingTenantName{}
 	var _ error = ErrTenantNotFound{}
 	var _ error = ErrInvalidQuotaValue{}
-	var _ error = ErrInvalidVLANRange{}
 	var _ error = ErrOperationFailed{}
 	var _ error = ErrQuotaUpdateFailed{}
 	var _ error = ErrUsageRetrievalFailed{}
-	var _ error = ErrVLANInfoFailed{}
-	var _ error = ErrBridgeInfoFailed{}
 	var _ error = ErrTenantSuspended{}
 	var _ error = ErrTenantAlreadyActive{}
 }

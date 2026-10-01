@@ -58,6 +58,18 @@ func (ErrNoQuarantineZone) Error() string {
 	return "policy: quarantine manager: no zone carries lifecycle role quarantine"
 }
 
+// ErrNoRestoreTarget is returned when re-attestation succeeds for a
+// quarantined device whose prior zone and port class are both unknown: the
+// device stays quarantined rather than being admitted to a guessed zone.
+type ErrNoRestoreTarget struct {
+	DeviceID uint64
+}
+
+// Error implements the error interface.
+func (e ErrNoRestoreTarget) Error() string {
+	return fmt.Sprintf("policy: quarantine manager: device %d has no recorded zone or port class to restore; it stays quarantined", e.DeviceID)
+}
+
 // ErrUnknownDevicePort is returned when a ViolationEvent arrives for a device
 // that has no registered OVS port mapping.
 type ErrUnknownDevicePort struct {
@@ -208,6 +220,7 @@ func (qm *QuarantineManager) HandleRestoreAttestation(ctx context.Context, devic
 	}
 
 	restoreZone := zone.Zone(device.PriorZone)
+	restoreClass := zone.PortClass(device.PriorPortClass)
 	restoreState := device.PriorState
 	if restoreState == "" {
 		restoreState = entities.DeviceStateAttested
@@ -218,14 +231,32 @@ func (qm *QuarantineManager) HandleRestoreAttestation(ctx context.Context, devic
 		slog.Uint64("device_id", deviceID),
 		slog.String("port_id", portID),
 		slog.String("zone", string(restoreZone)),
+		slog.String("port_class", string(restoreClass)),
 		slog.String("restore_state", restoreState.String()),
 		complianceAttr(complianceSC7, complianceAC4))
 
-	// Apply the prior zone flows (or trusted zone as default).
-	if qm.zoneFlowManager != nil && restoreZone != "" {
+	// Re-admit the port to what it carried before quarantine: its role's
+	// zones (a port class) or a single zone. With neither recorded there is
+	// nothing safe to restore, so the device stays quarantined.
+	if qm.zoneFlowManager == nil {
+		return &MessageError{Msg: "policy: quarantine manager: zone flow manager is required for restore"}
+	}
+	// A recorded lifecycle zone (a record written before lifecycle zones
+	// stopped counting as a placement) is not a restore target either.
+	if restoreZone != "" && qm.isLifecycleZone(restoreZone) {
+		restoreZone = ""
+	}
+	switch {
+	case restoreClass != "":
+		if err := qm.zoneFlowManager.ApplyPortClassFlows(ctx, portID, restoreClass); err != nil {
+			return &WrappedError{Msg: "policy: quarantine manager: restore port class flows", Err: err}
+		}
+	case restoreZone != "":
 		if err := qm.zoneFlowManager.ApplyZoneFlows(ctx, portID, restoreZone); err != nil {
 			return &WrappedError{Msg: "policy: quarantine manager: restore zone flows", Err: err}
 		}
+	default:
+		return ErrNoRestoreTarget{DeviceID: deviceID}
 	}
 
 	if err := device.Transition(restoreState); err != nil {
@@ -233,6 +264,7 @@ func (qm *QuarantineManager) HandleRestoreAttestation(ctx context.Context, devic
 	}
 	device.PriorState = ""
 	device.PriorZone = ""
+	device.PriorPortClass = ""
 	device.StateReason = "re-attestation passed"
 
 	if err := qm.store.SaveDevice(ctx, device); err != nil {
@@ -263,6 +295,9 @@ func (qm *QuarantineManager) quarantineDevice(ctx context.Context, device *entit
 		return &MessageError{Msg: "policy: quarantine manager: zone flow manager is required for quarantine"}
 	}
 
+	// Record what the port carries now, before quarantine replaces it.
+	priorZone, priorClass := qm.currentPlacement(device, portID)
+
 	// Apply quarantine zone flows (VLAN + OpenFlow rules) via ZoneFlowManager.
 	if err := qm.zoneFlowManager.ApplyZoneFlows(ctx, portID, quarantineZone); err != nil {
 		return &WrappedError{Msg: "policy: quarantine manager: apply quarantine zone flows", Err: err}
@@ -278,7 +313,8 @@ func (qm *QuarantineManager) quarantineDevice(ctx context.Context, device *entit
 
 	// Record prior state + zone for later restore; transition device state.
 	device.PriorState = device.State
-	device.PriorZone = qm.currentZoneFor(device)
+	device.PriorZone = priorZone
+	device.PriorPortClass = priorClass
 
 	if err := device.Transition(entities.DeviceStateQuarantined); err != nil {
 		return &WrappedError{Msg: "policy: quarantine manager: device state transition", Err: err}
@@ -331,16 +367,35 @@ func (qm *QuarantineManager) suspendDevice(ctx context.Context, device *entities
 	return nil
 }
 
-// currentZoneFor returns the zone the device is currently in, derived from
-// its policy zone or the profile's post-enrollment zone annotation.
-// Returns an empty string when no zone information is available.
-func (qm *QuarantineManager) currentZoneFor(device *entities.Device) string {
-	// Check if the port has a known zone in the ZoneFlowManager.
-	// The ZoneFlowManager's portZoneMap is not directly accessible from here,
-	// but if PriorZone was already set (nested quarantine) preserve it.
-	if device.PriorZone != "" {
-		return device.PriorZone
+// currentPlacement returns what the device's port carries now: a single
+// zone, or a port class (its role's zones). A nested quarantine keeps the
+// placement recorded the first time. A lifecycle zone (provisioning,
+// quarantine) is not a placement: restoring a port onto it would leave the
+// device's state and its port disagreeing. Both results are empty when the
+// port carries no placement; a restore then refuses to guess.
+func (qm *QuarantineManager) currentPlacement(device *entities.Device, portID string) (string, string) {
+	if device.PriorPortClass != "" {
+		return "", device.PriorPortClass
 	}
-	// Derive from trusted zone as the default post-enrollment zone.
-	return string(zone.ZoneTrusted)
+	if device.PriorZone != "" && !qm.isLifecycleZone(zone.Zone(device.PriorZone)) {
+		return device.PriorZone, ""
+	}
+	if c, err := qm.zoneFlowManager.GetPortClass(portID); err == nil {
+		return "", string(c)
+	}
+	if z, err := qm.zoneFlowManager.GetPortZone(portID); err == nil && !qm.isLifecycleZone(z) {
+		return string(z), ""
+	}
+	return "", ""
+}
+
+// isLifecycleZone reports whether z carries a lifecycle role in the
+// resolved zone set.
+func (qm *QuarantineManager) isLifecycleZone(z zone.Zone) bool {
+	for _, cfg := range qm.resolvedZones {
+		if cfg.Name == z {
+			return cfg.LifecycleRole != ""
+		}
+	}
+	return false
 }

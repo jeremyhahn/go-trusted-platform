@@ -87,7 +87,7 @@ config := &compute.OrchestratorConfig{
     DefaultDiskSize: "20G",
     MaxInstances:    100,
     EnableKVM:       true,
-    NetworkBridge:   "trusted0",
+    NetworkBridge:   "br-int",
     OVSSocketPath:   "/var/run/openvswitch/db.sock",
     QEMUBinary:      "qemu-system-x86_64",
     OVMFCode:        "/usr/share/OVMF/OVMF_CODE_4M.fd",

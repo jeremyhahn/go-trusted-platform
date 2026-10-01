@@ -80,9 +80,11 @@ func (e *ErrSDNRequiredForService) Error() string {
 }
 
 // ErrNoZoneNetworks is returned when a zone-matrix service (firewall,
-// NAT) is enabled but the sdn: section's networks produce no per-zone
-// VLAN summaries — the compiled matrix would contain no flows and the
-// service would pass all cross-zone traffic while reporting healthy.
+// NAT) is enabled but the network plan yields no per-zone VLAN summaries —
+// the compiled matrix would contain no flows and the service would pass all
+// cross-zone traffic while reporting healthy. A validated sdn.environment
+// always numbers the required zones; the check stays as a fail-closed
+// invariant of assembly.
 type ErrNoZoneNetworks struct {
 	// Service is the zone-matrix service that would enforce nothing.
 	Service string
@@ -90,7 +92,7 @@ type ErrNoZoneNetworks struct {
 
 // Error implements the error interface.
 func (e *ErrNoZoneNetworks) Error() string {
-	return "gatewayd: service " + e.Service + " requires sdn: networks entries with VLANs bound to zones; an empty zone matrix would enforce nothing"
+	return "gatewayd: service " + e.Service + " requires sdn.environment so every zone has a VLAN; an empty zone matrix would enforce nothing"
 }
 
 // ErrOVSClientInit wraps an OVS client or flow-controller construction

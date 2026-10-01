@@ -16,317 +16,162 @@ package fabric
 import (
 	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
-func TestFabricConfig_Validate_Valid(t *testing.T) {
-	cfg := validFabricConfig()
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("expected valid config, got error: %s", err)
-	}
-}
-
-func TestFabricConfig_Validate_DefaultsToVLANMode(t *testing.T) {
-	cfg := validFabricConfig()
-	cfg.Mode = ""
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("expected valid config, got error: %s", err)
-	}
-	if cfg.Mode != ModeVLAN {
-		t.Fatalf("expected mode %q, got %q", ModeVLAN, cfg.Mode)
-	}
-}
-
-func TestFabricConfig_Validate_NilConfig(t *testing.T) {
-	var cfg *FabricConfig
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for nil config")
-	}
-	var nilErr ErrNilConfig
-	if !errors.As(err, &nilErr) {
-		t.Fatalf("expected ErrNilConfig, got %T: %s", err, err)
-	}
-}
-
-func TestFabricConfig_Validate_InvalidMode(t *testing.T) {
-	cfg := validFabricConfig()
-	cfg.Mode = "invalid"
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for invalid mode")
-	}
-	var invErr ErrInvalidFabricConfig
-	if !errors.As(err, &invErr) {
-		t.Fatalf("expected ErrInvalidFabricConfig, got %T: %s", err, err)
-	}
-}
-
-func TestFabricConfig_Validate_EVPNModeWithoutConfig(t *testing.T) {
-	cfg := validFabricConfig()
-	cfg.Mode = ModeEVPN
-	cfg.EVPN = nil
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for EVPN mode without config")
-	}
-}
-
-func TestFabricConfig_Validate_EVPNModeWithConfig(t *testing.T) {
-	cfg := validFabricConfig()
-	cfg.Mode = ModeEVPN
-	cfg.EVPN = &EVPNConfig{
-		VNIBase:           100000,
-		AnycastGatewayMAC: "00:00:5e:00:01:01",
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("expected valid EVPN config, got error: %s", err)
-	}
-}
-
-func TestFabricConfig_Validate_NoSwitches(t *testing.T) {
-	cfg := validFabricConfig()
-	cfg.Switches = nil
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for empty switches")
-	}
-}
-
-func TestFabricConfig_Validate_DuplicateSwitchID(t *testing.T) {
-	cfg := validFabricConfig()
-	cfg.Switches = append(cfg.Switches, SwitchConfig{
-		ID: "nexus-01", Vendor: "cisco-nexus", MgmtIP: "10.0.0.2",
-	})
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for duplicate switch ID")
-	}
-}
-
-func TestFabricConfig_Validate_NoSegments(t *testing.T) {
-	cfg := validFabricConfig()
-	cfg.Segments = nil
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for empty segments")
-	}
-}
-
-func TestFabricConfig_Validate_DuplicateSegmentName(t *testing.T) {
-	cfg := validFabricConfig()
-	cfg.Segments = append(cfg.Segments, SegmentConfig{
-		Name: "production", VLAN: 201,
-	})
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for duplicate segment name")
-	}
-}
-
-func TestFabricConfig_Validate_DuplicateVLAN(t *testing.T) {
-	cfg := validFabricConfig()
-	cfg.Segments = append(cfg.Segments, SegmentConfig{
-		Name: "duplicate-vlan", VLAN: 200,
-	})
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for duplicate VLAN")
-	}
-	var dupErr ErrDuplicateVLAN
-	if !errors.As(err, &dupErr) {
-		t.Fatalf("expected ErrDuplicateVLAN, got %T: %s", err, err)
-	}
-}
-
-func TestSwitchConfig_Validate_MissingID(t *testing.T) {
-	sc := SwitchConfig{Vendor: "cisco-nexus", MgmtIP: "10.0.0.1"}
-	err := sc.Validate()
-	if err == nil {
-		t.Fatal("expected error for missing switch ID")
-	}
-}
-
-func TestSwitchConfig_Validate_MissingVendor(t *testing.T) {
-	sc := SwitchConfig{ID: "sw-01", MgmtIP: "10.0.0.1"}
-	err := sc.Validate()
-	if err == nil {
-		t.Fatal("expected error for missing vendor")
-	}
-}
-
-func TestSwitchConfig_Validate_MissingMgmtIP(t *testing.T) {
-	sc := SwitchConfig{ID: "sw-01", Vendor: "cisco-nexus"}
-	err := sc.Validate()
-	if err == nil {
-		t.Fatal("expected error for missing mgmt-ip")
-	}
-}
-
-func TestSwitchConfig_Validate_Valid(t *testing.T) {
-	sc := SwitchConfig{ID: "sw-01", Vendor: "cisco-nexus", MgmtIP: "10.0.0.1"}
-	if err := sc.Validate(); err != nil {
-		t.Fatalf("expected valid, got: %s", err)
-	}
-}
-
-func TestSegmentConfig_Validate_MissingName(t *testing.T) {
-	sc := SegmentConfig{VLAN: 200}
-	err := sc.Validate()
-	if err == nil {
-		t.Fatal("expected error for missing name")
-	}
-}
-
-func TestSegmentConfig_Validate_InvalidVLAN(t *testing.T) {
-	tests := []struct {
-		name string
-		vlan uint16
-	}{
-		{"zero vlan", 0},
-		{"vlan too high", 4095},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sc := SegmentConfig{Name: "test", VLAN: tt.vlan}
-			err := sc.Validate()
-			if err == nil {
-				t.Fatal("expected error for invalid VLAN")
-			}
-		})
-	}
-}
-
-func TestSegmentConfig_Validate_InvalidRole(t *testing.T) {
-	sc := SegmentConfig{Name: "test", VLAN: 200, Role: "bogus"}
-	err := sc.Validate()
-	if err == nil {
-		t.Fatal("expected error for invalid role")
-	}
-}
-
-func TestSegmentConfig_Validate_Valid(t *testing.T) {
-	sc := SegmentConfig{Name: "test", VLAN: 200, Role: RoleProvisioning}
-	if err := sc.Validate(); err != nil {
-		t.Fatalf("expected valid, got: %s", err)
-	}
-}
-
-func TestLAGConfig_Validate_MissingID(t *testing.T) {
-	lc := LAGConfig{
-		Members:       []PortRef{{SwitchID: "sw-01", Port: "Eth1/1"}},
-		PortChannelID: 10,
-	}
-	err := lc.Validate()
-	if err == nil {
-		t.Fatal("expected error for missing LAG ID")
-	}
-}
-
-func TestLAGConfig_Validate_NoMembers(t *testing.T) {
-	lc := LAGConfig{ID: "lag-01", PortChannelID: 10}
-	err := lc.Validate()
-	if err == nil {
-		t.Fatal("expected error for empty members")
-	}
-}
-
-func TestLAGConfig_Validate_NoPortChannelID(t *testing.T) {
-	lc := LAGConfig{
-		ID:      "lag-01",
-		Members: []PortRef{{SwitchID: "sw-01", Port: "Eth1/1"}},
-	}
-	err := lc.Validate()
-	if err == nil {
-		t.Fatal("expected error for missing port-channel-id")
-	}
-}
-
-func TestLAGConfig_Validate_Valid(t *testing.T) {
-	lc := LAGConfig{
-		ID:            "lag-01",
-		Members:       []PortRef{{SwitchID: "sw-01", Port: "Eth1/1"}},
-		PortChannelID: 10,
-	}
-	if err := lc.Validate(); err != nil {
-		t.Fatalf("expected valid, got: %s", err)
-	}
-}
-
-func TestPeerConfig_Validate_MissingSwitchA(t *testing.T) {
-	ids := map[string]struct{}{"sw-01": {}, "sw-02": {}}
-	pc := PeerConfig{SwitchB: "sw-02", PeerLinkPorts: []string{"Eth1/47"}}
-	err := pc.Validate(ids)
-	if err == nil {
-		t.Fatal("expected error for missing switch-a")
-	}
-}
-
-func TestPeerConfig_Validate_UnknownSwitch(t *testing.T) {
-	ids := map[string]struct{}{"sw-01": {}}
-	pc := PeerConfig{SwitchA: "sw-01", SwitchB: "sw-99", PeerLinkPorts: []string{"Eth1/47"}}
-	err := pc.Validate(ids)
-	if err == nil {
-		t.Fatal("expected error for unknown switch")
-	}
-	var unknownErr ErrUnknownSwitch
-	if !errors.As(err, &unknownErr) {
-		t.Fatalf("expected ErrUnknownSwitch, got %T: %s", err, err)
-	}
-}
-
-func TestPeerConfig_Validate_NoPeerLinkPorts(t *testing.T) {
-	ids := map[string]struct{}{"sw-01": {}, "sw-02": {}}
-	pc := PeerConfig{SwitchA: "sw-01", SwitchB: "sw-02"}
-	err := pc.Validate(ids)
-	if err == nil {
-		t.Fatal("expected error for missing peer-link ports")
-	}
-}
-
-func TestPeerConfig_Validate_Valid(t *testing.T) {
-	ids := map[string]struct{}{"sw-01": {}, "sw-02": {}}
-	pc := PeerConfig{SwitchA: "sw-01", SwitchB: "sw-02", PeerLinkPorts: []string{"Eth1/47"}}
-	if err := pc.Validate(ids); err != nil {
-		t.Fatalf("expected valid, got: %s", err)
-	}
-}
-
-func TestPortRef_Validate_MissingSwitchID(t *testing.T) {
-	pr := PortRef{Port: "Eth1/1"}
-	err := pr.Validate()
-	if err == nil {
-		t.Fatal("expected error for missing switch-id")
-	}
-	var invErr ErrInvalidPortRef
-	if !errors.As(err, &invErr) {
-		t.Fatalf("expected ErrInvalidPortRef, got %T: %s", err, err)
-	}
-}
-
-func TestPortRef_Validate_MissingPort(t *testing.T) {
-	pr := PortRef{SwitchID: "sw-01"}
-	err := pr.Validate()
-	if err == nil {
-		t.Fatal("expected error for missing port")
-	}
-}
-
-func TestPortRef_Validate_Valid(t *testing.T) {
-	pr := PortRef{SwitchID: "sw-01", Port: "Eth1/1"}
-	if err := pr.Validate(); err != nil {
-		t.Fatalf("expected valid, got: %s", err)
-	}
-}
-
-// validFabricConfig returns a minimal valid FabricConfig for testing.
 func validFabricConfig() *FabricConfig {
 	return &FabricConfig{
-		Mode: ModeVLAN,
 		Switches: []SwitchConfig{
-			{ID: "nexus-01", Vendor: "cisco-nexus", MgmtIP: "10.0.0.1"},
+			{ID: "sw-01", Vendor: "mock", MgmtIP: "192.0.2.10"},
+			{ID: "sw-02", Vendor: "mock", MgmtIP: "192.0.2.11"},
 		},
-		Segments: []SegmentConfig{
-			{Name: "production", VLAN: 200, CIDR: "10.200.0.0/24"},
+		Peers: []PeerConfig{
+			{SwitchA: "sw-01", SwitchB: "sw-02", PeerLinkPorts: []string{"Ethernet1/49"}},
+		},
+		LAGs: []LAGConfig{
+			{ID: "gw", PortChannelID: 103, Members: []PortRef{{SwitchID: "sw-01", Port: "Ethernet1/3"}}},
+		},
+		Ports: []PortAssignment{
+			{PortRef: PortRef{SwitchID: "sw-01", Port: "Ethernet1/3"}, Class: zone.PortClassGateway},
+			{PortRef: PortRef{SwitchID: "sw-01", Port: "Ethernet1/25"}, Class: zone.PortClassHypervisor},
+			{PortRef: PortRef{SwitchID: "sw-02", Port: "Ethernet1/41"}, Class: zone.PortClassBMC},
 		},
 	}
+}
+
+// TestFabricConfig_Validate_Valid accepts a fabric with peers, a LAG and a
+// port of each common class.
+func TestFabricConfig_Validate_Valid(t *testing.T) {
+	require.NoError(t, validFabricConfig().Validate())
+}
+
+// TestFabricConfig_Validate_Errors refuses every malformed field.
+func TestFabricConfig_Validate_Errors(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(c *FabricConfig)
+		check  func(t *testing.T, err error)
+	}{
+		{"no switches", func(c *FabricConfig) { c.Switches = nil }, invalidReason("at least one switch")},
+		{"duplicate switch", func(c *FabricConfig) { c.Switches[1].ID = "sw-01"; c.Peers = nil }, invalidReason("duplicate switch id")},
+		{"bad switch", func(c *FabricConfig) { c.Switches[0].Vendor = "" }, invalidReason("vendor")},
+		{"bad peer", func(c *FabricConfig) { c.Peers[0].PeerLinkPorts = nil }, invalidReason("peer-link")},
+		{"bad lag", func(c *FabricConfig) { c.LAGs[0].PortChannelID = 0 }, invalidReason("port-channel-id")},
+		{"port without switch id", func(c *FabricConfig) { c.Ports[0].SwitchID = "" }, func(t *testing.T, err error) {
+			var target ErrInvalidPortRef
+			require.True(t, errors.As(err, &target), "got %v", err)
+		}},
+		{"port on unknown switch", func(c *FabricConfig) { c.Ports[0].SwitchID = "sw-09" }, func(t *testing.T, err error) {
+			var target ErrUnknownSwitch
+			require.True(t, errors.As(err, &target), "got %v", err)
+			assert.Equal(t, "sw-09", target.ID)
+		}},
+		{"unknown class", func(c *FabricConfig) { c.Ports[0].Class = "uplink" }, func(t *testing.T, err error) {
+			var target ErrUnknownPortClass
+			require.True(t, errors.As(err, &target), "got %v", err)
+			assert.Equal(t, zone.PortClass("uplink"), target.Class)
+		}},
+		{"port assigned twice", func(c *FabricConfig) {
+			c.Ports = append(c.Ports, PortAssignment{PortRef: c.Ports[1].PortRef, Class: zone.PortClassGateway})
+		}, func(t *testing.T, err error) {
+			var target ErrDuplicatePort
+			require.True(t, errors.As(err, &target), "got %v", err)
+			assert.Equal(t, "Ethernet1/25", target.Port)
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validFabricConfig()
+			tc.mutate(c)
+			err := c.Validate()
+			require.Error(t, err)
+			tc.check(t, err)
+		})
+	}
+
+	var nilCfg *FabricConfig
+	var target ErrNilConfig
+	require.True(t, errors.As(nilCfg.Validate(), &target))
+}
+
+func invalidReason(want string) func(t *testing.T, err error) {
+	return func(t *testing.T, err error) {
+		t.Helper()
+		var target ErrInvalidFabricConfig
+		require.True(t, errors.As(err, &target), "got %v", err)
+		assert.Contains(t, target.Reason, want)
+	}
+}
+
+// TestFabricConfig_YAML decodes the sdn.fabric form, with the port ref
+// inlined into each port assignment.
+func TestFabricConfig_YAML(t *testing.T) {
+	const doc = `
+switches:
+  - {id: sw-01, vendor: cisco-nexus, mgmt-ip: 192.0.2.10}
+ports:
+  - {switch-id: sw-01, port: Ethernet1/25, class: hypervisor, description: cp-01}
+  - {switch-id: sw-01, port: Ethernet1/41, class: bmc}
+`
+	var c FabricConfig
+	require.NoError(t, yaml.Unmarshal([]byte(doc), &c))
+	require.NoError(t, c.Validate())
+	require.Len(t, c.Ports, 2)
+	assert.Equal(t, "sw-01", c.Ports[0].SwitchID)
+	assert.Equal(t, "Ethernet1/25", c.Ports[0].Port)
+	assert.Equal(t, zone.PortClassHypervisor, c.Ports[0].Class)
+	assert.Equal(t, "cp-01", c.Ports[0].Description)
+}
+
+// TestSwitchConfig_Validate covers the required switch fields.
+func TestSwitchConfig_Validate(t *testing.T) {
+	require.NoError(t, (&SwitchConfig{ID: "a", Vendor: "v", MgmtIP: "192.0.2.1"}).Validate())
+	for _, c := range []SwitchConfig{
+		{Vendor: "v", MgmtIP: "192.0.2.1"},
+		{ID: "a", MgmtIP: "192.0.2.1"},
+		{ID: "a", Vendor: "v"},
+	} {
+		var target ErrInvalidFabricConfig
+		require.True(t, errors.As(c.Validate(), &target), "%+v", c)
+	}
+}
+
+// TestPeerConfig_Validate covers known/unknown switches and peer-link ports.
+func TestPeerConfig_Validate(t *testing.T) {
+	ids := map[string]struct{}{"a": {}, "b": {}}
+	require.NoError(t, (&PeerConfig{SwitchA: "a", SwitchB: "b", PeerLinkPorts: []string{"E1/49"}}).Validate(ids))
+
+	var invalid ErrInvalidFabricConfig
+	require.True(t, errors.As((&PeerConfig{SwitchB: "b"}).Validate(ids), &invalid))
+	var unknown ErrUnknownSwitch
+	require.True(t, errors.As((&PeerConfig{SwitchA: "x", SwitchB: "b"}).Validate(ids), &unknown))
+	require.True(t, errors.As((&PeerConfig{SwitchA: "a", SwitchB: "x"}).Validate(ids), &unknown))
+	require.True(t, errors.As((&PeerConfig{SwitchA: "a", SwitchB: "b"}).Validate(ids), &invalid))
+}
+
+// TestLAGConfig_Validate covers the required LAG fields.
+func TestLAGConfig_Validate(t *testing.T) {
+	ok := LAGConfig{ID: "l", PortChannelID: 1, Members: []PortRef{{SwitchID: "a", Port: "p"}}}
+	require.NoError(t, ok.Validate())
+	for _, c := range []LAGConfig{
+		{PortChannelID: 1, Members: ok.Members},
+		{ID: "l", PortChannelID: 1},
+		{ID: "l", Members: ok.Members},
+	} {
+		var target ErrInvalidFabricConfig
+		require.True(t, errors.As(c.Validate(), &target), "%+v", c)
+	}
+}
+
+// TestPortRef_Validate covers the required port reference fields.
+func TestPortRef_Validate(t *testing.T) {
+	require.NoError(t, PortRef{SwitchID: "a", Port: "p"}.Validate())
+	var target ErrInvalidPortRef
+	require.True(t, errors.As(PortRef{Port: "p"}.Validate(), &target))
+	require.True(t, errors.As(PortRef{SwitchID: "a"}.Validate(), &target))
 }

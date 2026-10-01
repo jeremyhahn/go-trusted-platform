@@ -30,7 +30,7 @@ func TestMemoryBackend_PoolZoneRoundTrip(t *testing.T) {
 		ID:   "zone-pool",
 		Name: "zone-pool",
 		CIDR: netip.MustParsePrefix("10.50.0.0/24"),
-		Zone: "trusted",
+		Zone: "control-plane",
 	}
 	if err := backend.CreatePool(ctx, pool); err != nil {
 		t.Fatalf("CreatePool: %v", err)
@@ -40,8 +40,8 @@ func TestMemoryBackend_PoolZoneRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPool: %v", err)
 	}
-	if got.Zone != "trusted" {
-		t.Errorf("Pool.Zone round-trip: want %q, got %q", "trusted", got.Zone)
+	if got.Zone != "control-plane" {
+		t.Errorf("Pool.Zone round-trip: want %q, got %q", "control-plane", got.Zone)
 	}
 }
 
@@ -118,9 +118,9 @@ func TestMemoryBackend_ListPoolsByZone(t *testing.T) {
 		cidr string
 		zone string
 	}{
-		{"pool-a", "10.60.0.0/24", "trusted"},
+		{"pool-a", "10.60.0.0/24", "control-plane"},
 		{"pool-b", "10.61.0.0/24", "provisioning"},
-		{"pool-c", "10.62.0.0/24", "trusted"},
+		{"pool-c", "10.62.0.0/24", "control-plane"},
 		{"pool-d", "10.63.0.0/24", ""},
 	}
 
@@ -137,7 +137,7 @@ func TestMemoryBackend_ListPoolsByZone(t *testing.T) {
 
 	t.Run("filter by trusted", func(t *testing.T) {
 		t.Parallel()
-		result, err := backend.ListPoolsByZone(ctx, "trusted")
+		result, err := backend.ListPoolsByZone(ctx, "control-plane")
 		if err != nil {
 			t.Fatalf("ListPoolsByZone: %v", err)
 		}
@@ -297,8 +297,8 @@ func TestQuicBaaSBackend_ListPoolsByZone(t *testing.T) {
 		cidr string
 		zone string
 	}{
-		{"qb-trusted-1", "172.16.100.0/24", "trusted"},
-		{"qb-trusted-2", "172.16.101.0/24", "trusted"},
+		{"qb-trusted-1", "172.16.100.0/24", "control-plane"},
+		{"qb-trusted-2", "172.16.101.0/24", "control-plane"},
 		{"qb-prov-1", "172.16.102.0/24", "provisioning"},
 	} {
 		if err := backend.CreatePool(ctx, &ipam.Pool{
@@ -313,7 +313,7 @@ func TestQuicBaaSBackend_ListPoolsByZone(t *testing.T) {
 
 	t.Run("filter trusted", func(t *testing.T) {
 		t.Parallel()
-		result, err := backend.ListPoolsByZone(ctx, "trusted")
+		result, err := backend.ListPoolsByZone(ctx, "control-plane")
 		if err != nil {
 			t.Fatalf("ListPoolsByZone: %v", err)
 		}

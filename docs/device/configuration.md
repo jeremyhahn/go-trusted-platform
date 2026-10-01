@@ -116,7 +116,7 @@ device:
 | Zone | string | zone | zone | Default SDN zone; a phase's own `zone` overrides it |
 | Networks | map[string]NetworkPhaseConfig | networks | networks | Named network phases, keyed by logical phase name (open-keyed) |
 | EnrollmentNetwork | string | enrollment-network | enrollment_network | Key in `networks` used during enrollment (default `provisioning`) |
-| PostEnrollmentNetwork | string | post-enrollment-network | post_enrollment_network | Key in `networks` after successful enrollment (default `trusted`) |
+| PostEnrollmentNetwork | string | post-enrollment-network | post_enrollment_network | Key in `networks` after successful enrollment (default `admitted`). With no zone set there or on the profile, an admitted device gets its role's zones (the port class of its role) |
 | FailureNetwork | string | failure-network | failure_network | Key in `networks` on enrollment or attestation failure (default `quarantine`) |
 | PlatformdConfig | PlatformdConfigRef | platformd | platformd | Platform daemon config |
 
@@ -168,7 +168,7 @@ A profile's networks are **one open-keyed map plus three selectors**, not a
 fixed field per phase. `networks` holds every phase the profile defines, keyed
 by a logical name; `enrollment-network`, `post-enrollment-network` and
 `failure-network` name which key the device uses at each lifecycle point. The
-keys `provisioning`, `trusted` and `quarantine` are only the defaults the
+keys `provisioning`, `admitted` and `quarantine` are only the defaults the
 selectors fall back to when unset (`pkg/device/entities/profile.go`,
 `Default*Network`); any other key is valid, and a selector may point at it.
 There are no `provisioning_network` / `production_network` /
@@ -325,7 +325,7 @@ networks:
         protocol: "any"
         action: "deny"
 enrollment-network: provisioning
-post-enrollment-network: trusted
+post-enrollment-network: admitted
 failure-network: quarantine
 platformd:
   config_type: "reference"
@@ -357,7 +357,7 @@ platformd:
       "gateway": "10.99.98.1",
       "dns": ["10.99.98.1"]
     },
-    "trusted": {
+    "admitted": {
       "vlan": 100,
       "auth_method": "802.1x",
       "gateway": "10.100.0.1",
@@ -370,7 +370,7 @@ platformd:
     }
   },
   "enrollment_network": "provisioning",
-  "post_enrollment_network": "trusted",
+  "post_enrollment_network": "admitted",
   "failure_network": "quarantine",
   "platformd": {
     "config_type": "reference",

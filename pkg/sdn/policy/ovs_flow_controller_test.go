@@ -437,3 +437,68 @@ func TestOVSFlowController_InstallFlows(t *testing.T) {
 		assert.NoError(t, controller.InstallFlows("br0", []zoneflows.FlowRule{}))
 	})
 }
+
+// portUpdateRecorder is an ovsClient that records UpdatePort calls.
+type portUpdateRecorder struct {
+	updates map[string]interface{}
+	err     error
+}
+
+func (r *portUpdateRecorder) AddFlow(context.Context, string, *ovs.FlowMod) error       { return nil }
+func (r *portUpdateRecorder) AddFlows(context.Context, string, []*ovs.FlowMod) error    { return nil }
+func (r *portUpdateRecorder) DeleteFlow(context.Context, string, string) error          { return nil }
+func (r *portUpdateRecorder) ListFlows(context.Context, string) ([]*ovs.Flow, error)    { return nil, nil }
+func (r *portUpdateRecorder) SetPortState(context.Context, string, ovs.PortState) error { return nil }
+func (r *portUpdateRecorder) GetOFPort(context.Context, string) (int32, error)          { return 1, nil }
+func (r *portUpdateRecorder) UpdatePort(_ context.Context, _ string, u map[string]interface{}) error {
+	r.updates = u
+	return r.err
+}
+
+// TestOVSFlowController_SetPortTrunk_Native writes a native-untagged trunk.
+func TestOVSFlowController_SetPortTrunk_Native(t *testing.T) {
+	rec := &portUpdateRecorder{}
+	c := &OVSFlowController{client: rec}
+	assert.NoError(t, c.SetPortTrunk(context.Background(), "eth0", []uint16{401, 405}, 405))
+	assert.Equal(t, "native-untagged", rec.updates["vlan_mode"])
+	assert.Equal(t, int64(405), rec.updates["tag"])
+	assert.Equal(t, ovs.Set{Set: []interface{}{int64(401), int64(405)}}, rec.updates["trunks"])
+}
+
+// TestOVSFlowController_SetPortTrunk_TaggedOnly clears the tag.
+func TestOVSFlowController_SetPortTrunk_TaggedOnly(t *testing.T) {
+	rec := &portUpdateRecorder{}
+	c := &OVSFlowController{client: rec}
+	assert.NoError(t, c.SetPortTrunk(context.Background(), "gw0", []uint16{400, 401}, 0))
+	assert.Equal(t, "trunk", rec.updates["vlan_mode"])
+	assert.Equal(t, ovs.Set{Set: []interface{}{}}, rec.updates["tag"])
+}
+
+// TestOVSFlowController_SetPortTrunk_Errors refuses bad input and wraps a
+// client failure.
+func TestOVSFlowController_SetPortTrunk_Errors(t *testing.T) {
+	ctx := context.Background()
+	c := &OVSFlowController{client: &portUpdateRecorder{}}
+	assert.ErrorIs(t, c.SetPortTrunk(ctx, "", []uint16{401}, 0), ErrInvalidPortID)
+	assert.ErrorIs(t, c.SetPortTrunk(ctx, "eth0", nil, 0), ErrInvalidVLAN)
+	assert.ErrorIs(t, c.SetPortTrunk(ctx, "eth0", []uint16{0}, 0), ErrInvalidVLAN)
+	assert.ErrorIs(t, c.SetPortTrunk(ctx, "eth0", []uint16{401}, 4095), ErrInvalidVLAN)
+
+	failing := &OVSFlowController{client: &portUpdateRecorder{err: assert.AnError}}
+	err := failing.SetPortTrunk(ctx, "eth0", []uint16{401}, 0)
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), "set trunk")
+}
+
+// TestOVSFlowController_SetPortVLAN_ClearsTrunk makes a clean access port.
+func TestOVSFlowController_SetPortVLAN_ClearsTrunk(t *testing.T) {
+	rec := &portUpdateRecorder{}
+	c := &OVSFlowController{client: rec}
+	assert.NoError(t, c.SetPortVLAN(context.Background(), "eth0", 404))
+	assert.Equal(t, "access", rec.updates["vlan_mode"])
+	assert.Equal(t, int64(404), rec.updates["tag"])
+	assert.Equal(t, ovs.Set{Set: []interface{}{}}, rec.updates["trunks"])
+
+	failing := &OVSFlowController{client: &portUpdateRecorder{err: assert.AnError}}
+	assert.ErrorIs(t, failing.SetPortVLAN(context.Background(), "eth0", 404), assert.AnError)
+}

@@ -62,7 +62,14 @@ switches:
 | `mode` | string | Yes | - | Port mode: `access` or `trunk`. |
 | `vlans` | array | No | - | VLAN IDs allowed on trunk ports. Required if `mode: trunk`. |
 | `access_vlan` | int | No | - | VLAN ID for access ports. Required if `mode: access`. |
+| `native_vlan` | int | No | 0 (none) | Native (untagged) VLAN of a trunk. Must be one of `vlans`; only a trunk has one. A hypervisor-class port uses the environment's `provisioning` VLAN. |
+| `mtu` | int | No | 0 (leave as is) | Port MTU, 1500–9216. Platform ports run 9216 so VXLAN never fragments. |
 | `description` | string | No | - | Port description (e.g., "Server-01" or "Uplink"). |
+
+`GeneratePortCommands` validates every port with `ValidatePortConfig` before
+emitting any command; an invalid port fails with `ErrPortConfigFailed` naming
+the port. In a bootstrap run these fields are not written by hand: the switch
+phase derives them from each port's class ([switch management](../bootstrap/switch-management.md)).
 
 ## Examples
 

@@ -33,22 +33,70 @@ func (e ErrInvalidProfileID) Error() string { return "device: invalid profile ID
 // ErrProfileVLANsNotDistinct is returned when a profile's provisioning
 // (enrollment) network and trusted (post-enrollment) network share a VLAN.
 // The provisioning VLAN is the fail-closed revert target for physical port
-// activation; if it equalled the trusted VLAN, "closed" would mean "open".
+// activation; if it equalled the admitted VLAN, "closed" would mean "open".
 type ErrProfileVLANsNotDistinct struct {
 	VLAN uint16
 }
 
 func (e ErrProfileVLANsNotDistinct) Error() string {
-	return "device: invalid profile: provisioning and trusted networks share VLAN " +
+	return "device: invalid profile: provisioning and admitted networks share VLAN " +
 		strconv.FormatUint(uint64(e.VLAN), 10) +
 		"; the provisioning VLAN is the fail-closed revert target and must differ"
 }
 
-// validateNetworkPhases rejects a profile whose provisioning and trusted
-// networks share a VLAN. It is reached only through saveValidated, which
-// every profile-persisting method funnels into, so it is the one
-// enforcement point behind every transport (REST, gRPC, QUIC, MCP, CLI).
+// ErrRetiredNetworkKey is returned for a profile that still keys a network
+// "trusted", or names "trusted" as a phase network or zone. The trusted
+// phase is now "admitted" (#708); pre-release there is no migration, so the
+// profile is refused rather than silently ignored.
+type ErrRetiredNetworkKey struct {
+	// Field names where the retired value appears.
+	Field string
+}
+
+func (e ErrRetiredNetworkKey) Error() string {
+	return "device: invalid profile: " + e.Field + ` uses the retired "trusted" network; use "admitted" (the post-enrollment phase)`
+}
+
+// retiredNetwork is the post-enrollment network name and zone the reference
+// network retired.
+const retiredNetwork = "trusted"
+
+// validateRetiredNetworks refuses a profile that still uses the retired
+// "trusted" network as a Networks key, a phase network name or a zone.
+func validateRetiredNetworks(profile *entities.DeviceProfile) error {
+	if _, ok := profile.Networks[retiredNetwork]; ok {
+		return ErrRetiredNetworkKey{Field: `networks["trusted"]`}
+	}
+	checks := []struct {
+		field, value string
+	}{
+		{"enrollment_network", profile.EnrollmentNetwork},
+		{"post_enrollment_network", profile.PostEnrollmentNetwork},
+		{"failure_network", profile.FailureNetwork},
+		{"zone", profile.Zone},
+	}
+	for _, c := range checks {
+		if c.value == retiredNetwork {
+			return ErrRetiredNetworkKey{Field: c.field}
+		}
+	}
+	for name, cfg := range profile.Networks {
+		if cfg != nil && cfg.Zone == retiredNetwork {
+			return ErrRetiredNetworkKey{Field: "networks[" + strconv.Quote(name) + "].zone"}
+		}
+	}
+	return nil
+}
+
+// validateNetworkPhases rejects a profile that uses the retired "trusted"
+// network, or whose provisioning and admitted networks share a VLAN. It is
+// reached only through saveValidated, which every profile-persisting method
+// funnels into, so it is the one enforcement point behind every transport
+// (REST, gRPC, QUIC, MCP, CLI).
 func validateNetworkPhases(profile *entities.DeviceProfile) error {
+	if err := validateRetiredNetworks(profile); err != nil {
+		return err
+	}
 	provisioning := profile.GetEnrollmentNetworkConfig()
 	trusted := profile.GetPostEnrollmentNetworkConfig()
 	if provisioning == nil || trusted == nil {
@@ -98,7 +146,7 @@ func (s *ProfileService) Save(ctx context.Context, profile *entities.DeviceProfi
 // saveValidated is the seam through which every profile mutation that can
 // INTRODUCE invalid network state reaches the DAO. It runs
 // validateNetworkPhases first, so no such path can persist a profile whose
-// provisioning and trusted networks share a VLAN — including the paths that
+// provisioning and admitted networks share a VLAN — including the paths that
 // do not themselves touch the network config and would otherwise write back
 // an invalid profile they merely loaded.
 func (s *ProfileService) saveValidated(ctx context.Context, profile *entities.DeviceProfile, msg string) error {

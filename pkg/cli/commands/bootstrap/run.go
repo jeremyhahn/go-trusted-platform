@@ -429,8 +429,12 @@ func printSwitchPlan(plan *bootstrap.SwitchPlan) {
 			for j, vid := range p.VLANs {
 				vlanStrs[j] = strconv.Itoa(vid)
 			}
-			fmt.Fprintf(os.Stdout, "      %-10s %-6s VLANs [%s]  %s\n",
-				p.Port, p.Mode, strings.Join(vlanStrs, ","), p.Description)
+			native := "-"
+			if p.NativeVLAN != 0 {
+				native = strconv.Itoa(p.NativeVLAN)
+			}
+			fmt.Fprintf(os.Stdout, "      %-10s %-11s %-6s VLANs [%s] native %s mtu %d  %s\n",
+				p.Port, p.Class, p.Mode, strings.Join(vlanStrs, ","), native, p.MTU, p.Description)
 		}
 	}
 }

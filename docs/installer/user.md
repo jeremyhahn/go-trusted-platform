@@ -183,6 +183,36 @@ kiosks and golden-image fleets, not for anything you would want to recover.
 (`igb`, `ixgbe`, …). A node that installs fine and then comes up without a
 network is almost always a missing module.
 
+**`network.role`.** A node on the platform network declares its role
+(`control-plane`, `compute` or `gateway`) and addresses its zones by name; the
+VLAN IDs come from `sdn.environment`:
+
+```yaml
+network:
+  role: compute
+  platform-vrf:
+    address: 10.4.144.20/32      # from the platform-hosts range
+  bonds:
+    - name: bond0
+      type: ovs
+      bridge: br-fabric
+      mode: balance-tcp
+      lacp: active
+      interfaces: [eth6, eth7]
+      vlans:
+        - {zone: fabric, ipv4-address: 10.4.1.20/24}       # the VTEP, required
+        - {zone: hypervisor, ipv4-address: 10.4.3.20/24}
+sdn:
+  enabled: true
+  environment: {id: 4}
+```
+
+A compute node may only hold addresses on fabric, hypervisor and storage; a
+control-plane node also on control-plane. Neither may use DHCP or turn on
+`ip-forward`, and the installer writes a firewall that drops traffic between
+the host's interfaces. Gateways are exempt. The rules and the files written are
+in [engineering.md](engineering.md#host-addressing-by-role-networkrole).
+
 ---
 
 ## 4. Install

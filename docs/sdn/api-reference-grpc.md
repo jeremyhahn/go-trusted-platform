@@ -48,12 +48,11 @@ service SDNService {
   rpc ListPolicies(ListPoliciesRequest) returns (ListPoliciesResponse);
   rpc DeletePolicy(DeletePolicyRequest) returns (DeletePolicyResponse);
 
-  // Network trust zones
+  // Underlay zones of the reference network
   rpc CreateNetworkZone(CreateNetworkZoneRequest) returns (CreateNetworkZoneResponse);
   rpc UpdateNetworkZone(UpdateNetworkZoneRequest) returns (UpdateNetworkZoneResponse);
   rpc DeleteNetworkZone(DeleteNetworkZoneRequest) returns (DeleteNetworkZoneResponse);
   rpc ListNetworkZones(ListNetworkZonesRequest) returns (ListNetworkZonesResponse);
-  rpc AssignNetworkZone(AssignNetworkZoneRequest) returns (AssignNetworkZoneResponse);
 
   // Flow log streaming
   rpc StreamFlowLogs(StreamFlowLogsRequest) returns (stream FlowLogEntry);
@@ -143,7 +142,24 @@ Service: `platform.v1.SDNService`
 | `UpdateNetworkZone` | `UpdateNetworkZoneRequest{name, config}` | `UpdateNetworkZoneResponse{zone, status}` |
 | `DeleteNetworkZone` | `DeleteNetworkZoneRequest{name}` | `DeleteNetworkZoneResponse{status, restart_required}` |
 | `ListNetworkZones`  | `ListNetworkZonesRequest{lifecycle_role}` | `ListNetworkZonesResponse{zones}` |
-| `AssignNetworkZone` | `AssignNetworkZoneRequest{network, zone}` | `AssignNetworkZoneResponse{status, restart_required}` |
 
-The zone responses carry a `restart_required` flag that is set when a
-policy-relevant field change requires the flow matrix to be recompiled.
+`NetworkZoneConfig` mirrors `pkg/sdn/zone.ZoneConfig`: `name`, `offset`,
+`port_classes`, `internet_ingress`, `isolate_from`, `allow_to`
+(`NetworkZonePath{zone, services}`), `services`, `isolate`, `oob`,
+`lifecycle_role`, `privileged_access`
+(`NetworkZonePrivilegedAccess{reason, approved_by}`) and `omit`. Field 7
+(`isolate_per_tenant`) is reserved: tenants are not zones.
+
+`NetworkZone` wraps the config with `created_at`, `updated_at`,
+`restart_required` (true after every accepted mutation: the network plan
+is derived at daemon startup) and, when the node has an `sdn.environment`,
+`numbering` (`NetworkZoneNumbering{vlan, subnet4, subnet6, gateway}`).
+
+Status codes: `INVALID_ARGUMENT` for a missing name or config and for a
+mutation that fails zone or numbering validation (built-in renumbered,
+owner offset outside 9–99, reserved name, unaudited privileged path,
+required built-in deleted); `ALREADY_EXISTS` for a zone that exists (the
+built-ins always do); `NOT_FOUND` for an unknown zone;
+`FAILED_PRECONDITION` when the daemon has no zone service.
+
+`AssignNetworkZone` was removed with #708: networks are zones.

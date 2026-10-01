@@ -193,7 +193,7 @@ func TestLoadDeviceProfileFromFile(t *testing.T) {
 		require.NotNil(t, loaded.GetEnrollmentNetworkConfig().DHCPPool)
 		assert.Equal(t, "10.0.100.0/24", loaded.GetEnrollmentNetworkConfig().DHCPPool.Network)
 
-		// Verify trusted network
+		// Verify admitted network
 		require.NotNil(t, loaded.GetPostEnrollmentNetworkConfig())
 		assert.Equal(t, uint16(200), loaded.GetPostEnrollmentNetworkConfig().VLAN)
 		assert.Equal(t, "10.0.200.50/24", loaded.GetPostEnrollmentNetworkConfig().StaticIP)

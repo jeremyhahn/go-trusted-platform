@@ -25,9 +25,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2188,58 +2186,4 @@ func TestDeleteVLAN(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
-}
-
-// =============================================================================
-// buildZoneConfig / zoneRecordToResponse round-trip
-// =============================================================================
-
-func TestBuildZoneConfig_AllFields(t *testing.T) {
-	cfg := buildZoneConfig("dmz", true, []string{"trusted"},
-		[]NetworkZonePathSpec{{Zone: "public", Services: []string{"https"}}},
-		[]string{"dns"}, true, true, false, "quarantine", true)
-
-	assert.Equal(t, zone.Zone("dmz"), cfg.Name)
-	assert.True(t, cfg.InternetIngress)
-	require.Len(t, cfg.IsolateFrom, 1)
-	assert.Equal(t, zone.Zone("trusted"), cfg.IsolateFrom[0])
-	require.Len(t, cfg.AllowTo, 1)
-	assert.Equal(t, zone.Zone("public"), cfg.AllowTo[0].Zone)
-	assert.Equal(t, []string{"https"}, cfg.AllowTo[0].Services)
-	assert.Equal(t, []string{"dns"}, cfg.Services)
-	assert.True(t, cfg.Isolate)
-	assert.True(t, cfg.IsolatePerTenant)
-	assert.False(t, cfg.OOB)
-	assert.Equal(t, zone.LifecycleRole("quarantine"), cfg.LifecycleRole)
-	assert.True(t, cfg.Omit)
-}
-
-func TestBuildZoneConfig_EmptyOptionalFields(t *testing.T) {
-	cfg := buildZoneConfig("plain", false, nil, nil, nil, false, false, false, "", false)
-
-	assert.Equal(t, zone.Zone("plain"), cfg.Name)
-	assert.Nil(t, cfg.IsolateFrom)
-	assert.Nil(t, cfg.AllowTo)
-	assert.Nil(t, cfg.Services)
-	assert.Equal(t, zone.LifecycleRole(""), cfg.LifecycleRole)
-	assert.False(t, cfg.Omit)
-}
-
-func TestZoneRecordToResponse_RoundTrip(t *testing.T) {
-	cfg := buildZoneConfig("dmz", true, []string{"trusted"},
-		[]NetworkZonePathSpec{{Zone: "public", Services: []string{"https"}}},
-		[]string{"dns"}, false, false, false, "", true)
-	rec := &gateway.ZoneRecord{Config: cfg}
-
-	resp := zoneRecordToResponse(rec, true)
-
-	assert.Equal(t, "dmz", resp.Name)
-	assert.True(t, resp.InternetIngress)
-	assert.Equal(t, []string{"trusted"}, resp.IsolateFrom)
-	require.Len(t, resp.AllowTo, 1)
-	assert.Equal(t, "public", resp.AllowTo[0].Zone)
-	assert.Equal(t, []string{"https"}, resp.AllowTo[0].Services)
-	assert.Equal(t, []string{"dns"}, resp.Services)
-	assert.True(t, resp.Omit)
-	assert.True(t, resp.RestartRequired)
 }

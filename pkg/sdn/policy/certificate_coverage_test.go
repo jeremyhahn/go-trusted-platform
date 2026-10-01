@@ -44,7 +44,7 @@ func TestX509PolicyExtractor_ExtractZoneFromExtension(t *testing.T) {
 	})
 
 	t.Run("multiple extensions, zone present", func(t *testing.T) {
-		zoneExt, err := quicbaasca.CreateNetworkZoneExtension("trusted")
+		zoneExt, err := quicbaasca.CreateNetworkZoneExtension("control-plane")
 		require.NoError(t, err)
 
 		cert := selfSignedCert(t, x509.Certificate{
@@ -55,7 +55,7 @@ func TestX509PolicyExtractor_ExtractZoneFromExtension(t *testing.T) {
 		})
 		got, err := e.ExtractZone(cert)
 		require.NoError(t, err)
-		assert.Equal(t, "trusted", got)
+		assert.Equal(t, "control-plane", got)
 	})
 
 	t.Run("extension absent", func(t *testing.T) {
@@ -129,7 +129,7 @@ func TestIsZoneDeclared_Private(t *testing.T) {
 	e := NewX509PolicyExtractor(WithPolicyExtractorZones(zones))
 
 	// A declared zone should not fail closed.
-	ext, err := quicbaasca.CreateNetworkZoneExtension(string(zone.ZoneTrusted))
+	ext, err := quicbaasca.CreateNetworkZoneExtension(string(zone.ZoneControlPlane))
 	require.NoError(t, err)
 
 	cert := selfSignedCert(t, x509.Certificate{
@@ -139,5 +139,5 @@ func TestIsZoneDeclared_Private(t *testing.T) {
 
 	pol, err := e.ExtractPolicy(cert)
 	require.NoError(t, err)
-	assert.Equal(t, zone.Zone(zone.ZoneTrusted), pol.Zone)
+	assert.Equal(t, zone.Zone(zone.ZoneControlPlane), pol.Zone)
 }

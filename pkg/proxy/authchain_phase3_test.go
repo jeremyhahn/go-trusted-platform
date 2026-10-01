@@ -243,14 +243,14 @@ func TestChainTokenPathDenyReasons(t *testing.T) {
 			"zone requires mtls",
 			phase3Chain(t, &fakeTokenAuth{principal: &TokenPrincipal{Subject: "s"}}, nil, nil),
 			tokenRequest("tok", ""),
-			AuthRequirements{Mode: AuthModeToken, AllowedZones: []string{"trusted"}},
+			AuthRequirements{Mode: AuthModeToken, AllowedZones: []string{"control-plane"}},
 			ReasonZoneRequiresMTLS,
 		},
 		{
 			"token zone not allowed",
 			phase3Chain(t, &fakeTokenAuth{principal: &TokenPrincipal{Subject: "s"}}, nil, nil),
 			tokenRequest("tok", ""),
-			AuthRequirements{Mode: AuthModeToken, AllowedZones: []string{"trusted"}, TokenZone: "public"},
+			AuthRequirements{Mode: AuthModeToken, AllowedZones: []string{"control-plane"}, TokenZone: "public"},
 			ReasonZoneNotAllowed,
 		},
 		{
@@ -279,16 +279,16 @@ func TestChainTokenZoneMatrixAllowed(t *testing.T) {
 	c := phase3Chain(t, authn, nil, nil)
 	route := chainRoute(AuthRequirements{
 		Mode:         AuthModeToken,
-		AllowedZones: []string{"trusted"},
+		AllowedZones: []string{"control-plane"},
 		BackendZone:  "internal",
-		TokenZone:    "trusted",
+		TokenZone:    "control-plane",
 	})
 	d, err := c.Authenticate(context.Background(), tokenRequest("tok", ""), route)
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if !d.Allowed || d.Identity.Zone != "trusted" {
-		t.Fatalf("decision = %+v, want allow with zone trusted", d)
+	if !d.Allowed || d.Identity.Zone != "control-plane" {
+		t.Fatalf("decision = %+v, want allow with zone control-plane", d)
 	}
 }
 
@@ -451,7 +451,7 @@ func TestChainAttestationGate(t *testing.T) {
 
 func TestChainOPAPolicy(t *testing.T) {
 	ca := newTestCA(t)
-	leaf := newLeafCert(t, ca, leafSpec{cn: "device-9", zone: "trusted"})
+	leaf := newLeafCert(t, ca, leafSpec{cn: "device-9", zone: "control-plane"})
 
 	t.Run("allow", func(t *testing.T) {
 		eval := &fakeEvaluator{allowed: true}
@@ -522,7 +522,7 @@ func TestChainOPAPolicy(t *testing.T) {
 			t.Fatalf("Authenticate: %v", err)
 		}
 		client := eval.lastInput["client"].(map[string]any)
-		if client["id"] != "device-9" || client["zone"] != "trusted" || client["attested"] != true ||
+		if client["id"] != "device-9" || client["zone"] != "control-plane" || client["attested"] != true ||
 			client["auth_method"] != authMethodMTLS {
 			t.Errorf("client input = %+v", client)
 		}

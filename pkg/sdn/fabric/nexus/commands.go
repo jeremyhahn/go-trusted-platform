@@ -38,23 +38,6 @@ func createVLANCommands(vlan uint16, name string) []string {
 	return cmds
 }
 
-// showNVEVNICommand returns the NX-OS command to display NVE VNI mappings.
-func showNVEVNICommand() string {
-	return "show nve vni"
-}
-
-// createVNICommands returns the NX-OS commands to map a VNI to a VLAN on
-// the NVE interface.
-func createVNICommands(vni uint32, vlan uint16) []string {
-	return []string{
-		"configure terminal",
-		"interface nve1",
-		fmt.Sprintf("  member vni %d associate-vlan %d", vni, vlan),
-		"end",
-	}
-}
-
-// showPortChannelSummaryCommand returns the NX-OS command to display
 // port-channel summary information.
 func showPortChannelSummaryCommand() string {
 	return "show port-channel summary"
@@ -86,44 +69,62 @@ func createLAGCommands(portChannelID uint16, memberPorts []string, lacpMode stri
 }
 
 // setPortAccessCommands returns the NX-OS commands to configure a port
-// in access mode with the specified VLAN.
-func setPortAccessCommands(port string, vlan uint16) []string {
-	return []string{
+// setPortAccessCommands puts port in access mode on vlan, with mtu when
+// non-zero, and brings it up.
+func setPortAccessCommands(port string, vlan uint16, mtu int) []string {
+	cmds := []string{
 		"configure terminal",
 		fmt.Sprintf("interface %s", port),
 		"  switchport",
 		"  switchport mode access",
 		fmt.Sprintf("  switchport access vlan %d", vlan),
-		"  no shutdown",
-		"end",
 	}
+	cmds = appendMTU(cmds, mtu)
+	return append(cmds, "  no shutdown", "end")
 }
 
-// setPortTrunkCommands returns the NX-OS commands to configure a port
-// in trunk mode with the allowed VLANs and an optional native VLAN.
-func setPortTrunkCommands(port string, allowed []uint16, native uint16) []string {
+// setPortTrunkCommands puts port in trunk mode carrying allowed, with native
+// as the native VLAN (none clears it back to the default), mtu when
+// non-zero, and brings it up.
+func setPortTrunkCommands(port string, allowed []uint16, native uint16, mtu int) []string {
 	cmds := []string{
 		"configure terminal",
 		fmt.Sprintf("interface %s", port),
 		"  switchport",
 		"  switchport mode trunk",
 	}
-
 	if len(allowed) > 0 {
-		vlanList := joinUint16s(allowed, ",")
-		cmds = append(cmds, fmt.Sprintf("  switchport trunk allowed vlan %s", vlanList))
+		cmds = append(cmds, fmt.Sprintf("  switchport trunk allowed vlan %s", joinUint16s(allowed, ",")))
+	} else {
+		cmds = append(cmds, "  switchport trunk allowed vlan none")
 	}
-
 	if native > 0 {
 		cmds = append(cmds, fmt.Sprintf("  switchport trunk native vlan %d", native))
+	} else {
+		cmds = append(cmds, "  no switchport trunk native vlan")
 	}
+	cmds = appendMTU(cmds, mtu)
+	return append(cmds, "  no shutdown", "end")
+}
 
-	cmds = append(cmds, "  no shutdown")
-	cmds = append(cmds, "end")
+// disablePortCommands administratively shuts port down.
+func disablePortCommands(port string) []string {
+	return []string{
+		"configure terminal",
+		fmt.Sprintf("interface %s", port),
+		"  shutdown",
+		"end",
+	}
+}
+
+// appendMTU adds the interface MTU command when mtu is non-zero.
+func appendMTU(cmds []string, mtu int) []string {
+	if mtu > 0 {
+		cmds = append(cmds, fmt.Sprintf("  mtu %d", mtu))
+	}
 	return cmds
 }
 
-// showRunningInterfaceCommand returns the NX-OS command to display the
 // running configuration for a specific interface.
 func showRunningInterfaceCommand(port string) string {
 	return fmt.Sprintf("show running-config interface %s", port)

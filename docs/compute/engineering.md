@@ -84,7 +84,7 @@ another feature.
 | `ovs_socket_path` | OVS control socket |
 | `port_auth_enabled` | **Whether a VM's port must authenticate** |
 
-**`port_auth_enabled` is the setting that ties compute to the trusted network.**
+**`port_auth_enabled` is the setting that ties compute to port authentication.**
 With it on, a VM's virtual port goes through the same IDevID port-authentication
 state machine as a physical device ([`docs/sdn/`](../sdn/)). With it off, VMs get
 network access without proving anything.

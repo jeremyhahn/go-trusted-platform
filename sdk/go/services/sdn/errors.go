@@ -324,16 +324,3 @@ func (e *ErrListNetworkZonesFailed) Error() string {
 }
 
 func (e *ErrListNetworkZonesFailed) Unwrap() error { return e.Cause }
-
-// ErrAssignNetworkZoneFailed indicates failure to assign a network to a zone.
-type ErrAssignNetworkZoneFailed struct {
-	Network string
-	Zone    string
-	Cause   error
-}
-
-func (e *ErrAssignNetworkZoneFailed) Error() string {
-	return fmt.Sprintf("failed to assign network %s to zone %s: %v", e.Network, e.Zone, e.Cause)
-}
-
-func (e *ErrAssignNetworkZoneFailed) Unwrap() error { return e.Cause }

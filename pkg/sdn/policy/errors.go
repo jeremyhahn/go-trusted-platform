@@ -140,7 +140,7 @@ func (e ErrZoneMismatch) Error() string {
 // quarantine but the device profile declares neither a failure-network
 // (quarantine) VLAN nor a provisioning VLAN to isolate the port on. Without
 // one, no quarantine policy can be built, so activation fails closed
-// instead of authorizing the device on its trusted VLAN.
+// instead of authorizing the device on its post-enrollment VLAN.
 type ErrQuarantineVLANUnavailable struct {
 	// Serial is the device serial number for audit correlation.
 	Serial string
@@ -154,20 +154,20 @@ func (e ErrQuarantineVLANUnavailable) Error() string {
 }
 
 // ErrQuarantinePolicyContradiction is returned when a quarantine policy
-// would carry the profile's trusted VLAN: a policy whose zone is quarantine
-// and whose VLAN is the trusted VLAN would isolate nothing.
+// would carry the profile's post-enrollment VLAN: a policy whose zone is
+// quarantine and whose VLAN is the post-enrollment VLAN would isolate nothing.
 type ErrQuarantinePolicyContradiction struct {
 	// Serial is the device serial number for audit correlation.
 	Serial string
 	// Profile is the device profile name.
 	Profile string
-	// VLAN is the VLAN shared by the quarantine and trusted networks.
+	// VLAN is the VLAN shared by the quarantine and post-enrollment networks.
 	VLAN uint16
 }
 
 // Error implements the error interface.
 func (e ErrQuarantinePolicyContradiction) Error() string {
-	return fmt.Sprintf("sdn/policy: quarantine policy for serial %q would carry trusted VLAN %d (profile %q): a quarantine that shares the trusted VLAN isolates nothing; refusing activation", e.Serial, e.VLAN, e.Profile)
+	return fmt.Sprintf("sdn/policy: quarantine policy for serial %q would carry post-enrollment VLAN %d (profile %q): a quarantine that shares the post-enrollment VLAN isolates nothing; refusing activation", e.Serial, e.VLAN, e.Profile)
 }
 
 // ErrQuarantineStateIndeterminate is returned when the quarantine policy was
@@ -312,3 +312,33 @@ func (e *SentinelCauseError) Error() string {
 func (e *SentinelCauseError) Unwrap() []error {
 	return []error{e.Sentinel, e.Cause}
 }
+
+// ErrNetworkPlanRequired is returned when a zone operation needs the network
+// plan (sdn.Config.Plan()) and none was supplied. There is no fallback
+// numbering: every VLAN comes from the plan.
+type ErrNetworkPlanRequired struct {
+	// Operation names what needed the plan.
+	Operation string
+}
+
+// Error implements the error interface.
+func (e ErrNetworkPlanRequired) Error() string {
+	return fmt.Sprintf("sdn/policy: %s needs the network plan (sdn.environment); none is configured", e.Operation)
+}
+
+// ErrPortClassUnresolved is returned when the port class a device is
+// admitted to cannot be resolved against the network plan.
+type ErrPortClassUnresolved struct {
+	// Class is the port class.
+	Class string
+	// Cause is the underlying plan error.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e ErrPortClassUnresolved) Error() string {
+	return fmt.Sprintf("sdn/policy: port class %q cannot be resolved: %v", e.Class, e.Cause)
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrPortClassUnresolved) Unwrap() error { return e.Cause }

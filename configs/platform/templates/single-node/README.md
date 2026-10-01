@@ -12,9 +12,14 @@ is invoked with no flags.
   KMS, QuicBaaS standalone (local pebble, no Raft)
 - `gatewayd` with edge onboarding, firewall, NAT — DHCP/BGP/LB off by
   default (operator opts in)
-- OVS bridge `trusted0` for local VM/container networking
-- eth0 as the only NIC (DHCP from upstream router)
-- Internal subnet `192.168.100.0/24` NAT'd out eth0
+- the standalone topology of the reference network
+  (`docs/architecture/reference-network.md`): environment 4, every zone on
+  one host-local OVS bridge `br-fabric` with no physical trunk, and
+  workloads on the integration bridge `br-int`
+- eth0 as the only NIC (DHCP from upstream router); the box takes
+  `network.role: gateway`, since it routes and NATs for itself
+- no DHCP for workloads yet: workload networks are overlays, and workload
+  DHCP arrives with the overlay service (#709)
 
 See `docs/architecture/deployment-reference.md` §1 for the topology
 this template implements.
@@ -46,6 +51,7 @@ platformctl iso create \
 ```
 
 Common overrides: `os.hostname`, `domain`, `network.interfaces[].name`,
+`sdn.environment` (environment number and your own ULA /48),
 `webservices[].sans`, `tpm.idevid.serial`.
 
 ## Process Model
@@ -64,8 +70,8 @@ rationale.
 ## Time Synchronization (ntp)
 
 The single-node template ships an `ntp:` section in `mode: both`: it
-consumes public time from `pool.ntp.org` and serves the local
-`192.168.100.0/24` network with NTS enabled, falling back to the local
+consumes public time from `pool.ntp.org` and serves the environment's
+`10.4.0.0/16` with NTS enabled, falling back to the local
 clock at stratum 10 when no upstream is reachable.
 
 Time is a trust primitive — TPM attestation freshness, ACME issuance,

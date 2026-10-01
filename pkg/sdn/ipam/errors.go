@@ -93,6 +93,36 @@ func (e *ErrAllocationFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrIPReserved indicates an address is reserved in its pool (the gateway,
+// or inside one of the pool's reserved prefixes) and is never allocatable.
+type ErrIPReserved struct {
+	// IP is the refused address.
+	IP netip.Addr
+	// PoolID is the pool the address belongs to.
+	PoolID string
+	// Reserved is the reserved prefix that holds the address.
+	Reserved netip.Prefix
+}
+
+// Error returns the error message.
+func (e *ErrIPReserved) Error() string {
+	return fmt.Sprintf("ipam: IP %s is reserved in pool %s (%s) and never allocatable", e.IP, e.PoolID, e.Reserved)
+}
+
+// ErrInvalidWindow indicates a pool's reserved prefixes or dynamic range do
+// not fit its CIDR.
+type ErrInvalidWindow struct {
+	// PoolID is the pool.
+	PoolID string
+	// Reason says what does not fit.
+	Reason string
+}
+
+// Error returns the error message.
+func (e *ErrInvalidWindow) Error() string {
+	return fmt.Sprintf("ipam: pool %s: %s", e.PoolID, e.Reason)
+}
+
 // ErrIPConflict indicates an IP address conflict occurred.
 type ErrIPConflict struct {
 	IP       netip.Addr
@@ -222,7 +252,9 @@ func IsAllocationError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return errors.Is(err, ErrAllocationNotFound) ||
+	var reserved *ErrIPReserved
+	return errors.As(err, &reserved) ||
+		errors.Is(err, ErrAllocationNotFound) ||
 		errors.Is(err, ErrIPAlreadyAllocated) ||
 		errors.Is(err, ErrIPNotInPool) ||
 		errors.Is(err, ErrAllocationExpired) ||
@@ -234,7 +266,9 @@ func IsValidationError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return errors.Is(err, ErrInvalidCIDR) ||
+	var window *ErrInvalidWindow
+	return errors.As(err, &window) ||
+		errors.Is(err, ErrInvalidCIDR) ||
 		errors.Is(err, ErrInvalidIP) ||
 		errors.Is(err, ErrInvalidGateway) ||
 		errors.Is(err, ErrInvalidPoolID) ||

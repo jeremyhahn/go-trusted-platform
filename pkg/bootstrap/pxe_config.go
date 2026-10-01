@@ -23,6 +23,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	"gopkg.in/yaml.v3"
 )
@@ -83,13 +85,19 @@ var forbiddenGlobalOverrideKeys = []forbiddenGlobalOverrideKey{
 
 // BootstrapConfig is the top-level configuration for PXE network bootstrap.
 type BootstrapConfig struct {
-	Deployer  DeployerConfig           `yaml:"deployer"`
-	Switch    *SwitchConfig            `yaml:"switch,omitempty"`
-	Fabric    *FabricConfig            `yaml:"fabric,omitempty"`
-	Subnets   []installer.SubnetConfig `yaml:"subnets,omitempty"`
-	Platform  PlatformGlobalConfig     `yaml:"platform"`
-	Templates map[string]string        `yaml:"templates"`
-	Nodes     []NodeConfig             `yaml:"nodes"`
+	Deployer DeployerConfig `yaml:"deployer"`
+	// Environment is the reference-network environment the deployment
+	// is numbered from (docs/architecture/reference-network.md). Every
+	// VLAN, subnet and switch port VLAN list is derived from it; it is
+	// required.
+	Environment *netplan.Environment `yaml:"environment,omitempty"`
+	// Zones tunes built-in zone policy and declares owner-defined zones
+	// (offsets 9-99), exactly as sdn.zones does in a platform config.
+	Zones     []zone.ZoneConfig    `yaml:"zones,omitempty"`
+	Switch    *SwitchConfig        `yaml:"switch,omitempty"`
+	Platform  PlatformGlobalConfig `yaml:"platform"`
+	Templates map[string]string    `yaml:"templates"`
+	Nodes     []NodeConfig         `yaml:"nodes"`
 
 	// ISOPath is the local filesystem path to the platform ISO that will be
 	// staged on the bootstrap container host for virtual-media boot. Required
@@ -163,51 +171,6 @@ func expandHome(p string) (string, error) {
 	return filepath.Join(home, p[2:]), nil
 }
 
-// FabricConfig describes the network fabric topology for the bootstrap
-// deployment. This is an informational record that the orchestrator uses
-// to configure switch ports post-enrollment or to validate node placement.
-type FabricConfig struct {
-	Mode     string          `yaml:"mode"`
-	Switches []FabricSwitch  `yaml:"switches,omitempty"`
-	Peers    []FabricPeer    `yaml:"peers,omitempty"`
-	Segments []FabricSegment `yaml:"segments,omitempty"`
-}
-
-// FabricSwitch identifies a physical switch in the fabric.
-type FabricSwitch struct {
-	ID             string `yaml:"id"`
-	Vendor         string `yaml:"vendor"`
-	Model          string `yaml:"model,omitempty"`
-	MgmtIP         string `yaml:"mgmt-ip"`
-	CredentialsRef string `yaml:"credentials-ref,omitempty" secret:"true"`
-}
-
-// FabricPeer describes a vPC/MLAG peer-link between two fabric switches.
-type FabricPeer struct {
-	SwitchA            string   `yaml:"switch-a"`
-	SwitchB            string   `yaml:"switch-b"`
-	PeerLinkInterfaces []string `yaml:"peer-link-interfaces,omitempty"`
-}
-
-// FabricSegment defines a named VLAN segment within the fabric.
-type FabricSegment struct {
-	Name string `yaml:"name"`
-	VLAN int    `yaml:"vlan"`
-	Role string `yaml:"role,omitempty"`
-}
-
-// PostEnrollmentConfig defines actions the orchestrator takes after a
-// node successfully installs and passes its initial health check.
-type PostEnrollmentConfig struct {
-	// SwitchVLAN is the production VLAN the node's switch port should be
-	// moved to after enrollment completes (e.g., "production").
-	SwitchVLAN string `yaml:"switch_vlan,omitempty" json:"switch_vlan,omitempty"`
-
-	// RunHealthCheck controls whether the orchestrator polls the node's
-	// health endpoint after enrollment. Defaults to true when nil.
-	RunHealthCheck *bool `yaml:"run_health_check,omitempty" json:"run_health_check,omitempty"`
-}
-
 // Boot method values for NodeConfig.BootMethod.
 const (
 	BootMethodPXE          = "pxe"
@@ -224,14 +187,13 @@ var validBootMethods = map[string]struct{}{
 // PlatformGlobalConfig holds network-level values shared across the deployment.
 // Device-specific config (CA, TPM, security) belongs in device templates.
 type PlatformGlobalConfig struct {
-	Domain            string                `yaml:"domain"`
-	InternalDomain    string                `yaml:"internal_domain"`
-	Hostmaster        string                `yaml:"hostmaster"`
-	TenantID          string                `yaml:"tenant_id"`
-	Environment       string                `yaml:"environment"`
-	UpstreamDNS       []string              `yaml:"upstream_dns"`
-	Networks          map[string]NetworkDef `yaml:"networks"`
-	BootstrapStrategy string                `yaml:"bootstrap_strategy"`
+	Domain            string   `yaml:"domain"`
+	InternalDomain    string   `yaml:"internal_domain"`
+	Hostmaster        string   `yaml:"hostmaster"`
+	TenantID          string   `yaml:"tenant_id"`
+	Environment       string   `yaml:"environment"`
+	UpstreamDNS       []string `yaml:"upstream_dns"`
+	BootstrapStrategy string   `yaml:"bootstrap_strategy"`
 
 	// HealthTimeout overrides how long the post-install health wait allows a
 	// node to complete install-reboot -> firstboot seal -> platformd
@@ -255,12 +217,6 @@ func (c *BootstrapConfig) EffectivePostInstallHealthTimeout() time.Duration {
 		return defaultPostInstallHealthTimeout
 	}
 	return c.Platform.HealthTimeout
-}
-
-// NetworkDef defines a network with VLAN and subnet.
-type NetworkDef struct {
-	VLAN   int    `yaml:"vlan"`
-	Subnet string `yaml:"subnet"`
 }
 
 // DeployerConfig specifies the Linux host that runs the bootstrap container
@@ -550,17 +506,20 @@ type SwitchConfig struct {
 	// orchestrator uses to verify the switch host key. Switch SSH is
 	// fail-closed: without provisioned pins the switch phase errors rather
 	// than trusting the key on first use.
-	KnownHostsPath  string                `yaml:"known_hosts_path"`
-	VLANs           map[string]NetworkDef `yaml:"vlans"`
-	PortAssignments []PortAssignment      `yaml:"port_assignments"`
+	KnownHostsPath string `yaml:"known_hosts_path"`
+	// PortAssignments gives each platform switch port its port class. The
+	// switch's VLANs (one per zone of the environment) and each port's
+	// mode, allowed VLANs, native VLAN and MTU are derived from the
+	// environment's network plan.
+	PortAssignments []PortAssignment `yaml:"port_assignments"`
 }
 
-// PortAssignment maps a physical switch port to VLAN configuration.
+// PortAssignment gives one physical switch port (or port range such as
+// "Eth1/25-27") its port class.
 type PortAssignment struct {
-	Port        string `yaml:"port"`
-	Mode        string `yaml:"mode"`
-	VLANs       []int  `yaml:"vlans"`
-	Description string `yaml:"description"`
+	Port        string         `yaml:"port"`
+	Class       zone.PortClass `yaml:"class"`
+	Description string         `yaml:"description,omitempty"`
 }
 
 // NodeConfig defines a node to be provisioned via PXE bootstrap.
@@ -651,13 +610,10 @@ type NodeConfig struct {
 	BootModel    string `yaml:"boot_model,omitempty" json:"boot_model,omitempty"`
 
 	// SwitchPort is the physical switch port this node is connected to
-	// (e.g., "Ethernet1/36"). Used by the orchestrator for post-enrollment
-	// VLAN assignment and by the dry-run report for operator verification.
+	// (e.g., "Ethernet1/36"), recorded for operator verification. The port
+	// carries its class from the switch phase onward: a hypervisor trunk's
+	// native VLAN is provisioning, so no post-enrollment move is needed.
 	SwitchPort string `yaml:"switch_port,omitempty" json:"switch_port,omitempty"`
-
-	// PostEnrollment defines actions the orchestrator takes after the node
-	// successfully installs and passes its initial health check.
-	PostEnrollment *PostEnrollmentConfig `yaml:"post_enrollment,omitempty" json:"post_enrollment,omitempty"`
 }
 
 // EffectiveBootMethod returns the BootMethod with empty normalised to "pxe".
@@ -750,7 +706,6 @@ type nodeConfigYAML struct {
 	Serial           string                      `yaml:"serial,omitempty"`
 	BootModel        string                      `yaml:"boot_model,omitempty"`
 	SwitchPort       string                      `yaml:"switch_port,omitempty"`
-	PostEnrollment   *PostEnrollmentConfig       `yaml:"post_enrollment,omitempty"`
 }
 
 // UnmarshalYAML accepts both the new `macs:` slice and the legacy `mac:`
@@ -782,7 +737,6 @@ func (n *NodeConfig) UnmarshalYAML(value *yaml.Node) error {
 	n.Architecture = shadow.Architecture
 	n.Serial = shadow.Serial
 	n.BootModel = shadow.BootModel
-	n.PostEnrollment = shadow.PostEnrollment
 	n.MACs = append([]string(nil), shadow.MACs...)
 	if shadow.MAC != "" {
 		found := false
@@ -794,16 +748,6 @@ func (n *NodeConfig) UnmarshalYAML(value *yaml.Node) error {
 		}
 		if !found {
 			n.MACs = append(n.MACs, shadow.MAC)
-		}
-	}
-	return nil
-}
-
-// ProvisioningSubnet returns the first subnet with role "provisioning", or nil.
-func (c *BootstrapConfig) ProvisioningSubnet() *installer.SubnetConfig {
-	for i := range c.Subnets {
-		if c.Subnets[i].Role == installer.SubnetRoleProvisioning {
-			return &c.Subnets[i]
 		}
 	}
 	return nil
@@ -996,6 +940,9 @@ func LoadBootstrapConfig(path string) (*BootstrapConfig, error) {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, ErrParseYAML{Path: path, Err: err}
 	}
+	if err := checkRetiredKeys(&doc, path); err != nil {
+		return nil, err
+	}
 
 	bootstrapDir := filepath.Dir(path)
 	for i := range config.Nodes {
@@ -1091,8 +1038,8 @@ func (c *BootstrapConfig) ValidateDefinition() error {
 	if c.Deployer.Host == "" {
 		return ErrMissingRequiredField{Field: "deployer.host"}
 	}
-	if provSubnet := c.ProvisioningSubnet(); provSubnet == nil {
-		return ErrMissingRequiredField{Field: "subnets (no subnet with role: provisioning)"}
+	if _, err := c.NetworkPlan(); err != nil {
+		return err
 	}
 	if c.Platform.Domain == "" {
 		return ErrMissingRequiredField{Field: "platform.domain"}

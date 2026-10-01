@@ -253,11 +253,11 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	if config.VXLANPort != DefaultVXLANPort {
 		t.Errorf("VXLANPort = %d, want %d", config.VXLANPort, DefaultVXLANPort)
 	}
-	if config.VNIBase != DefaultVNIBase {
-		t.Errorf("VNIBase = %d, want %d", config.VNIBase, DefaultVNIBase)
+	if config.Environment != 0 {
+		t.Errorf("Environment = %d, want 0 (no default environment)", config.Environment)
 	}
-	if config.BridgeName != DefaultBridgeName {
-		t.Errorf("BridgeName = %s, want %s", config.BridgeName, DefaultBridgeName)
+	if config.BridgeName != DefaultBridgeName || DefaultBridgeName != "br-int" {
+		t.Errorf("BridgeName = %s, want br-int", config.BridgeName)
 	}
 	if config.StateBackend != DefaultStateBackend {
 		t.Errorf("StateBackend = %s, want %s", config.StateBackend, DefaultStateBackend)

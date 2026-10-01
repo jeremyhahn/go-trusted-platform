@@ -16,6 +16,8 @@ package nexus
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -104,18 +106,6 @@ func TestClose_AfterConnect(t *testing.T) {
 	}
 }
 
-func TestEnsureVNI_NotConnected(t *testing.T) {
-	cfg := testSwitchConfig()
-	drv, err := NewDriver(cfg, testLogger())
-	if err != nil {
-		t.Fatalf("NewDriver: %s", err)
-	}
-	err = drv.EnsureVNI(context.Background(), 100200, 200)
-	if err == nil {
-		t.Fatal("expected error when not connected")
-	}
-}
-
 func TestEnsureLAG_NotConnected(t *testing.T) {
 	cfg := testSwitchConfig()
 	drv, err := NewDriver(cfg, testLogger())
@@ -136,7 +126,7 @@ func TestSetPortAccess_NotConnected(t *testing.T) {
 		t.Fatalf("NewDriver: %s", err)
 	}
 	port := fabric.PortRef{SwitchID: "nexus-01", Port: "Eth1/1"}
-	err = drv.SetPortAccess(context.Background(), port, 200)
+	err = drv.SetPortAccess(context.Background(), port, 200, 9216)
 	if err == nil {
 		t.Fatal("expected error when not connected")
 	}
@@ -146,8 +136,7 @@ func TestExecuteBatch_OutputError(t *testing.T) {
 	cfg := testSwitchConfig()
 	exec := &mockExecutor{
 		responses: map[string]mockResponse{
-			"show nve vni": {stdout: ""},
-			"interface nve1": {
+			"interface Eth1/7": {
 				stdout: "% Error: permission denied",
 			},
 		},
@@ -159,7 +148,7 @@ func TestExecuteBatch_OutputError(t *testing.T) {
 		t.Fatalf("Connect: %s", err)
 	}
 
-	err := drv.EnsureVNI(ctx, 100200, 200)
+	err := drv.DisablePort(ctx, fabric.PortRef{SwitchID: "nexus-01", Port: "Eth1/7"})
 	if err == nil {
 		t.Fatal("expected error for output containing error")
 	}
@@ -203,5 +192,54 @@ func TestConnect_Idempotent(t *testing.T) {
 	// Second connect should be a no-op.
 	if err := drv.Connect(ctx); err != nil {
 		t.Fatalf("second Connect: %s", err)
+	}
+}
+
+// TestConnect_ConfigErrors covers the fail-closed checks before any dial:
+// missing key path, missing known-hosts path, an unreadable key, and a key
+// that does not parse.
+func TestConnect_ConfigErrors(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	cfg := testSwitchConfig()
+	cfg.SSHKeyPath = ""
+	drv, err := NewDriver(cfg, testLogger())
+	if err != nil {
+		t.Fatalf("NewDriver: %s", err)
+	}
+	var invalid ErrInvalidConfig
+	if err := drv.Connect(ctx); !errors.As(err, &invalid) {
+		t.Fatalf("want ErrInvalidConfig for ssh-key-path, got %v", err)
+	}
+
+	cfg.SSHKeyPath = filepath.Join(dir, "missing")
+	cfg.KnownHostsPath = ""
+	drv, _ = NewDriver(cfg, testLogger())
+	if err := drv.Connect(ctx); !errors.As(err, &invalid) {
+		t.Fatalf("want ErrInvalidConfig for known-hosts-path, got %v", err)
+	}
+
+	cfg.KnownHostsPath = filepath.Join(dir, "known_hosts")
+	drv, _ = NewDriver(cfg, testLogger())
+	var load ErrSSHKeyLoad
+	if err := drv.Connect(ctx); !errors.As(err, &load) {
+		t.Fatalf("want ErrSSHKeyLoad for a missing key, got %v", err)
+	}
+	if !strings.Contains(load.Error(), cfg.SSHKeyPath) || errors.Unwrap(load) == nil {
+		t.Fatalf("ErrSSHKeyLoad must name the path and wrap the cause: %v", load)
+	}
+
+	garbage := filepath.Join(dir, "id_bad")
+	if err := os.WriteFile(garbage, []byte("not a key"), 0o600); err != nil {
+		t.Fatalf("write: %s", err)
+	}
+	cfg.SSHKeyPath = garbage
+	drv, _ = NewDriver(cfg, testLogger())
+	if err := drv.Connect(ctx); !errors.As(err, &load) {
+		t.Fatalf("want ErrSSHKeyLoad for an unparseable key, got %v", err)
+	}
+	if err := drv.Close(); err != nil {
+		t.Fatalf("Close on a never-connected driver: %s", err)
 	}
 }

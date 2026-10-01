@@ -120,7 +120,7 @@ payload into the target type. Success payloads:
 | `POST .../enable` \| `.../disable` | `{"switch":…,"port":…,"action":"enable"\|"disable","status":"ok"}` |
 
 `PortStatus` JSON: `port`, `mode` (`"access"` \| `"trunk"`), `access_vlan`,
-`trunk_vlans` (omitted when empty), `enabled`, `link_up`, `description`
+`trunk_vlans` (omitted when empty), `native_vlan` (omitted when none), `enabled`, `link_up`, `description`
 (omitted when empty).
 
 ### 5.2 QUIC
@@ -147,8 +147,9 @@ prefix rather than `Op` precisely because they are not top-level opcodes —
 `pkg/api/daemon/quic_switch.go` *"for legacy reasons; both must stay in sync."*
 That duplication is a maintenance hazard worth knowing about.
 
-`uint16` becomes `uint32` on the wire: `SwitchPortStatus.access_vlan` and
-`trunk_vlans` are `uint32` in proto and converted by `portStatusToPb`.
+`uint16` becomes `uint32` on the wire: `SwitchPortStatus.access_vlan`,
+`trunk_vlans` and `native_vlan` (field 8) are `uint32` in proto and converted by
+`portStatusToPb` (QUIC) and `portStatusToProto` (gRPC/Unix).
 
 ### 5.3 gRPC
 

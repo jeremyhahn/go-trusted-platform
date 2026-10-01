@@ -20,11 +20,11 @@
 //  2. Device creates mTLS client using IDevID
 //  3. Device fetches profile via GET /api/v1/device/profile
 //  4. Device signals ready via POST /api/v1/device/activate
-//  5. Server validates, then transitions the port to the trusted VLAN — or
+//  5. Server validates, then transitions the port to the admitted VLAN — or
 //     applies a quarantine policy instead (activation status "quarantined")
-//     with no trusted-VLAN move
+//     with no admitted-VLAN move
 //  6. Device checks the activation status and, when "activated", applies
-//     the trusted network configuration
+//     the admitted network configuration
 package provisioning
 
 import (
@@ -142,16 +142,16 @@ func (c *Client) FetchProfile(ctx context.Context) (*ProfileResponse, error) {
 
 	c.logger.Info("Device profile fetched successfully",
 		"serial", profile.SerialNumber,
-		"vlan", profile.TrustedNetwork.VLAN,
-		"useDHCP", profile.TrustedNetwork.UseDHCP)
+		"vlan", profile.AdmittedNetwork.VLAN,
+		"useDHCP", profile.AdmittedNetwork.UseDHCP)
 
 	return &profile, nil
 }
 
 // Activate signals the server that the device is ready for network transition.
 // A 200 response carries the outcome in Status: "activated" means the port
-// was transitioned to the trusted VLAN; "quarantined" means the server
-// applied a quarantine policy instead and no trusted-VLAN move happened.
+// was transitioned to the admitted VLAN; "quarantined" means the server
+// applied a quarantine policy instead and no admitted-VLAN move happened.
 func (c *Client) Activate(ctx context.Context) (*ActivateResponse, error) {
 	url := fmt.Sprintf("%s/api/v1/device/activate", c.config.ServerURL)
 
@@ -228,9 +228,9 @@ func (c *Client) Heartbeat(ctx context.Context) (*HeartbeatResponse, error) {
 // 3. Returns the profile for network configuration
 //
 // After this call returns, check ActivateResponse.Status before applying the
-// trusted network configuration: "activated" means the server transitioned
-// the port to the trusted VLAN; "quarantined" means a quarantine policy was
-// applied and no trusted-VLAN move happened.
+// admitted network configuration: "activated" means the server transitioned
+// the port to the admitted VLAN; "quarantined" means a quarantine policy was
+// applied and no admitted-VLAN move happened.
 func (c *Client) FetchProfileAndActivate(ctx context.Context) (*ProfileResponse, *ActivateResponse, error) {
 	// Step 1: Fetch profile
 	profile, err := c.FetchProfile(ctx)
@@ -246,7 +246,7 @@ func (c *Client) FetchProfileAndActivate(ctx context.Context) (*ProfileResponse,
 
 	c.logger.Info("Provisioning flow complete",
 		"serial", profile.SerialNumber,
-		"trustedVLAN", profile.TrustedNetwork.VLAN,
+		"admittedVLAN", profile.AdmittedNetwork.VLAN,
 		"activationStatus", activateResp.Status)
 
 	return profile, activateResp, nil

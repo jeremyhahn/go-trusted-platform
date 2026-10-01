@@ -344,7 +344,7 @@ func TestOVSConfigIntegration(t *testing.T) {
 	// Enable OVS
 	config.OVS = &OVSConfig{
 		Enable:     true,
-		BridgeName: "trusted0",
+		BridgeName: "br-int",
 		SocketPath: "/var/run/openvswitch/db.sock",
 		VLAN:       100,
 		VLANMode:   "access",
@@ -355,7 +355,7 @@ func TestOVSConfigIntegration(t *testing.T) {
 
 	// Verify OVS is enabled
 	assert.True(t, config.OVSEnabled())
-	assert.Equal(t, "trusted0", config.GetOVSBridgeName())
+	assert.Equal(t, "br-int", config.GetOVSBridgeName())
 	assert.Equal(t, "/var/run/openvswitch/db.sock", config.GetOVSSocketPath())
 
 	// Validate

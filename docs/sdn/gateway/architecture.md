@@ -263,8 +263,10 @@ func (a *PolicyEngineAdapter) OnDeviceAuthenticated(port string, cert *x509.Cert
     // Assign VLAN
     vlan := pol.VLAN
 
-    // Derive VNI for overlay
-    vni := VNIBase + uint32(vlan)
+    // The overlay network's VNI comes from the network plan:
+    // E·100000 + n for overlay network n (pkg/sdn/netplan). A VLAN never
+    // maps to a VNI: zones are underlay, overlays are not zones.
+    vni, _ := a.plan.VNI(pol.OverlayNetwork)
 
     // Update overlay state
     if a.gateway.Modes.HasOverlay() {

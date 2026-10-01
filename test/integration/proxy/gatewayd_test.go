@@ -72,7 +72,7 @@ func startGatewayd(t *testing.T, echoURL string) *gatewaydFixture {
 				PoolID:     "echo",
 				Auth: proxysvc.AuthConfig{
 					Mode:         "mtls",
-					AllowedZones: []string{"trusted"},
+					AllowedZones: []string{"control-plane"},
 				},
 			},
 		},

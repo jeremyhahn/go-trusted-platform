@@ -126,8 +126,8 @@ func (d *QuicBaaSBackend) CreatePool(ctx context.Context, pool *ipam.Pool) error
 		return ipam.ErrInvalidPoolName
 	}
 
-	if !pool.CIDR.IsValid() {
-		return ipam.ErrInvalidCIDR
+	if err := ipam.NewPoolManager().ValidatePool(pool); err != nil {
+		return err
 	}
 
 	// Check if pool already exists
@@ -150,8 +150,8 @@ func (d *QuicBaaSBackend) CreatePool(ctx context.Context, pool *ipam.Pool) error
 		return err
 	}
 
-	// Initialize pool statistics
-	pool.TotalIPs = ipam.CalculatePoolSize(pool.CIDR)
+	// Initialize pool statistics: what is actually allocatable.
+	pool.TotalIPs = pool.AllocatableIPs()
 	pool.AvailableIPs = pool.TotalIPs
 	pool.AllocatedIPs = 0
 
@@ -334,6 +334,23 @@ func (d *QuicBaaSBackend) UpdatePool(ctx context.Context, pool *ipam.Pool) error
 		return err
 	}
 
+	if pool.CIDR != existing.CIDR {
+		return &ipam.ErrPoolOperationFailed{PoolID: pool.ID, Operation: "update", Cause: ipam.ErrInvalidCIDR}
+	}
+	if err := ipam.NewPoolManager().ValidatePool(pool); err != nil {
+		return err
+	}
+	// Allocation counters and the creation time belong to the backend, not
+	// to the caller; the size follows the (possibly changed) reserved
+	// prefixes.
+	pool.AllocatedIPs = existing.AllocatedIPs
+	pool.CreatedAt = existing.CreatedAt
+	pool.TotalIPs = pool.AllocatableIPs()
+	pool.AvailableIPs = 0
+	if pool.TotalIPs > pool.AllocatedIPs {
+		pool.AvailableIPs = pool.TotalIPs - pool.AllocatedIPs
+	}
+
 	// Check for name conflict if name changed
 	if pool.Name != existing.Name {
 		if err := d.checkPoolNameConflict(ctx, pool.Name, pool.ID); err != nil {
@@ -341,11 +358,14 @@ func (d *QuicBaaSBackend) UpdatePool(ctx context.Context, pool *ipam.Pool) error
 		}
 
 		// Update name index
-		oldNameIndexID := stringToID("name:" + existing.Name)
-		d.client.Delete(ctx, entityTypeIndex, oldNameIndexID)
-
 		newNameIndexID := stringToID("name:" + pool.Name)
-		d.client.Put(ctx, entityTypeIndex, newNameIndexID, []byte(pool.ID))
+		if err := d.client.Put(ctx, entityTypeIndex, newNameIndexID, []byte(pool.ID)); err != nil {
+			return &ipam.ErrPoolOperationFailed{PoolID: pool.ID, Operation: "update", Cause: err}
+		}
+		oldNameIndexID := stringToID("name:" + existing.Name)
+		if err := d.client.Delete(ctx, entityTypeIndex, oldNameIndexID); err != nil {
+			return &ipam.ErrPoolOperationFailed{PoolID: pool.ID, Operation: "update", Cause: err}
+		}
 	}
 
 	pool.UpdatedAt = time.Now()
@@ -497,36 +517,24 @@ func (d *QuicBaaSBackend) Allocate(ctx context.Context, req *ipam.AllocationRequ
 		}
 	}
 
-	// Find next available IP
-	poolSize := ipam.CalculatePoolSize(pool.CIDR)
-
-	// Start offset at 1 to skip network address for IPv4
-	startOffset := uint64(0)
-	if pool.CIDR.Addr().Is4() && pool.CIDR.Bits() < 31 {
-		startOffset = 1
-	}
-
-	var allocatedIP netip.Addr
-	for offset := startOffset; offset < poolSize+startOffset; offset++ {
-		ip, err := ipam.OffsetToIP(pool.CIDR, offset)
-		if err != nil {
-			continue
+	// Find the next free, unreserved address in the dynamic window.
+	_, last, _ := pool.DynamicOffsets()
+	allocatedIP, _, err := pool.NextDynamic(func(from uint64) (uint64, bool) {
+		for off := from; ; off++ {
+			ip, err := ipam.OffsetToIP(pool.CIDR, off)
+			if err != nil {
+				return 0, false
+			}
+			if !allocatedIPs[ip] {
+				return off, true
+			}
+			if off >= last {
+				return 0, false
+			}
 		}
-
-		// Skip network/broadcast addresses
-		if ipam.IsNetworkOrBroadcast(pool.CIDR, ip) {
-			continue
-		}
-
-		// Check if already allocated
-		if !allocatedIPs[ip] {
-			allocatedIP = ip
-			break
-		}
-	}
-
-	if !allocatedIP.IsValid() {
-		return nil, ipam.ErrPoolExhausted
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	// Create allocation record
@@ -602,14 +610,9 @@ func (d *QuicBaaSBackend) AllocateSpecific(ctx context.Context, req *ipam.Alloca
 		return nil, err
 	}
 
-	// Verify IP is in pool
-	if !pool.CIDR.Contains(req.RequestedIP) {
-		return nil, ipam.ErrIPNotInPool
-	}
-
-	// Check if network or broadcast address
-	if ipam.IsNetworkOrBroadcast(pool.CIDR, req.RequestedIP) {
-		return nil, ipam.ErrNetworkAddress
+	// The address must be in the pool, usable, and not reserved.
+	if err := pool.CheckSpecific(req.RequestedIP); err != nil {
+		return nil, err
 	}
 
 	// Check if already allocated

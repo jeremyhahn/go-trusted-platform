@@ -540,7 +540,7 @@ graph TB
 
         subgraph "Virtual Ports"
             VNET0[vnet0 - VM VLAN 100]
-            VNET1[vnet1 - VM VLAN 200]
+            VNET1[vnet1 - VM VLAN 406]
         end
 
         subgraph "Container Ports"
@@ -622,7 +622,7 @@ device_profile:
 
   vms:
     - name: "db-server"
-      vlan: 200
+      vlan: 406
       security_groups: ["backend-services"]
 
   containers:

@@ -321,7 +321,7 @@ func TestBuildProfileOutput_TLSServerNameAndBaseline(t *testing.T) {
 func TestApplyProfileUpdateFlags_SetAndPreserve(t *testing.T) {
 	fetched := func() *platformv1.DeviceProfile {
 		return &platformv1.DeviceProfile{
-			Id: 7, Name: "compute", Model: "X10SDV", Zone: "trusted",
+			Id: 7, Name: "compute", Model: "X10SDV", Zone: "control-plane",
 			TlsServerName: "compute.trusted-platform.internal",
 			PcrBaseline:   &platformv1.PCRBaseline{Source: "tofu", Values: map[uint32][]byte{7: {0xbb}}},
 		}
@@ -340,7 +340,7 @@ func TestApplyProfileUpdateFlags_SetAndPreserve(t *testing.T) {
 	if profile.GetPcrBaseline() == nil || profile.GetPcrBaseline().GetSource() != "tofu" {
 		t.Fatal("the read-only baseline the server returned must travel back untouched")
 	}
-	if profile.GetName() != "compute" || profile.GetZone() != "trusted" {
+	if profile.GetName() != "compute" || profile.GetZone() != "control-plane" {
 		t.Fatal("unset flags must leave their fields untouched")
 	}
 

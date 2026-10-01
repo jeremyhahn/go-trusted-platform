@@ -32,12 +32,12 @@ import (
 	"testing"
 	"time"
 
-	xkmsbootstrap "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	xkmsbootstrap "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // fakeBMC stands in for a Redfish endpoint: TLS with a self-signed,
@@ -204,11 +204,9 @@ func TestBMCTrustTOFUIsAcceptedAsEndpointPinning(t *testing.T) {
 // made both wrong at once.
 func TestBMCTrustValidationNamesTheAllowedSet(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets: []installer.SubnetConfig{
-			{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning},
-		},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{{
 			Hostname:    "node-07",
 			Role:        RoleControlPlane,
@@ -241,11 +239,9 @@ func TestBMCTrustValidationNamesTheAllowedSet(t *testing.T) {
 // other — the split that produced #83.
 func TestBMCTrustValidationAcceptsTOFU(t *testing.T) {
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets: []installer.SubnetConfig{
-			{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning},
-		},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{{
 			Hostname:    "node-07",
 			Role:        RoleControlPlane,

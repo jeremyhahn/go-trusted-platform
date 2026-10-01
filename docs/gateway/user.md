@@ -84,11 +84,9 @@ sdn:
   enabled: true
   ovs:
     socket: /var/run/openvswitch/db.sock
-    bridge: trusted0
-  networks:
-    - name: control-plane
-      vlan: 406
-      zone: trusted       # see the zone note below
+    bridge: br-fabric
+  environment:
+    id: 4                 # numbers every zone; see the note below
 
 # Periodic telemetry to the control plane over mTLS. The client
 # certificate is the gateway's IDevID-derived platform identity.
@@ -102,9 +100,9 @@ control-plane:
 
 Addresses and VLANs in these examples follow
 [`../architecture/reference-network.md`](../architecture/reference-network.md)
-(environment block 4). `zone: trusted` is what the code accepts today; the
-reference design has no `trusted` zone, and the code's zone vocabulary moves
-with #708.
+(environment block 4). `sdn.environment` must match the platformd config on the
+same node: every zone's VLAN and subnet is derived from it, so gatewayd and
+platformd agree on the numbering without a per-VLAN list.
 
 NAT may translate to one address (`external-ip`) or, for a gateway with more
 than one ISP uplink, to one pool per uplink (#586):
@@ -225,13 +223,13 @@ fhrp:
   enabled: true
   groups:
     - vrid: 20
-      interface: trusted0
+      interface: zone406          # the control-plane zone port platformd creates
       priority: 200               # the peer runs 100
       advert-interval-cs: 100     # 1 s
       addresses: [10.4.6.1/24]
-      source: 10.4.6.2            # this node's own address on trusted0
+      source: 10.4.6.2            # this node's own address on zone406
     - vrid: 20
-      interface: trusted0
+      interface: zone406
       priority: 200
       addresses: [fd12:3456:789a:406::1/64]
       source: fe80::3eec:efff:fe71:52ee
@@ -239,7 +237,7 @@ fhrp:
 
 Failover from a lost master takes about three advertisement intervals plus a
 small skew; a cleanly stopped master hands over in well under a second. `ip
-addr show trusted0` on each node shows who holds the address, and the gateway
+addr show zone406` on each node shows who holds the address, and the gateway
 snapshot reports each group's state, priority and transition count. The host
 filter must admit VRRP (IP protocol 112, multicast 224.0.0.18 / ff02::12) on
 each group's interface; that allowance is not yet rendered by `hostfw` and is

@@ -488,17 +488,10 @@ func (u *SDNUnixAdapter) ListLeases(ctx context.Context) (*DHCPLeaseListResponse
 // Network Zone Operations
 // =============================================================================
 
-// CreateZone creates a new network trust zone via gRPC over Unix socket.
+// CreateZone creates an owner-defined zone via gRPC over the Unix socket.
 func (u *SDNUnixAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error) {
 	resp, err := u.sdn.CreateNetworkZone(ctx, &platformv1.CreateNetworkZoneRequest{
-		Config: &platformv1.NetworkZoneConfig{
-			Name:             req.Name,
-			InternetIngress:  req.InternetIngress,
-			Isolate:          req.Isolate,
-			IsolatePerTenant: req.IsolatePerTenant,
-			Oob:              req.OOB,
-			LifecycleRole:    req.LifecycleRole,
-		},
+		Config: grpcZoneSpecToProto(req.Name, req.ZoneSpec),
 	})
 	if err != nil {
 		return nil, err
@@ -506,18 +499,11 @@ func (u *SDNUnixAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) 
 	return grpcNetworkZoneToEntry(resp.GetZone()), nil
 }
 
-// UpdateZone updates an existing network trust zone via gRPC over Unix socket.
+// UpdateZone tunes or replaces a zone via gRPC over the Unix socket.
 func (u *SDNUnixAdapter) UpdateZone(ctx context.Context, name string, req ZoneUpdateRequest) (*ZoneEntry, error) {
 	resp, err := u.sdn.UpdateNetworkZone(ctx, &platformv1.UpdateNetworkZoneRequest{
-		Name: name,
-		Config: &platformv1.NetworkZoneConfig{
-			Name:             name,
-			InternetIngress:  req.InternetIngress,
-			Isolate:          req.Isolate,
-			IsolatePerTenant: req.IsolatePerTenant,
-			Oob:              req.OOB,
-			LifecycleRole:    req.LifecycleRole,
-		},
+		Name:   name,
+		Config: grpcZoneSpecToProto(name, req.ZoneSpec),
 	})
 	if err != nil {
 		return nil, err
@@ -525,7 +511,7 @@ func (u *SDNUnixAdapter) UpdateZone(ctx context.Context, name string, req ZoneUp
 	return grpcNetworkZoneToEntry(resp.GetZone()), nil
 }
 
-// DeleteZone deletes a network trust zone via gRPC over Unix socket.
+// DeleteZone deletes a zone via gRPC over the Unix socket.
 func (u *SDNUnixAdapter) DeleteZone(ctx context.Context, name string) (bool, error) {
 	resp, err := u.sdn.DeleteNetworkZone(ctx, &platformv1.DeleteNetworkZoneRequest{Name: name})
 	if err != nil {
@@ -534,7 +520,7 @@ func (u *SDNUnixAdapter) DeleteZone(ctx context.Context, name string) (bool, err
 	return resp.GetRestartRequired(), nil
 }
 
-// ListZones returns all network trust zones via gRPC over Unix socket.
+// ListZones returns the zones via gRPC over the Unix socket.
 func (u *SDNUnixAdapter) ListZones(ctx context.Context, lifecycleRole string) (*ZoneListResponse, error) {
 	resp, err := u.sdn.ListNetworkZones(ctx, &platformv1.ListNetworkZonesRequest{
 		LifecycleRole: lifecycleRole,
@@ -542,25 +528,7 @@ func (u *SDNUnixAdapter) ListZones(ctx context.Context, lifecycleRole string) (*
 	if err != nil {
 		return nil, err
 	}
-	zones := make([]ZoneEntry, 0, len(resp.GetZones()))
-	for _, z := range resp.GetZones() {
-		if e := grpcNetworkZoneToEntry(z); e != nil {
-			zones = append(zones, *e)
-		}
-	}
-	return &ZoneListResponse{Zones: zones, TotalCount: len(zones)}, nil
-}
-
-// AssignZone assigns a network segment to a trust zone via gRPC over Unix socket.
-func (u *SDNUnixAdapter) AssignZone(ctx context.Context, network string, zoneName string) (bool, error) {
-	resp, err := u.sdn.AssignNetworkZone(ctx, &platformv1.AssignNetworkZoneRequest{
-		Network: network,
-		Zone:    zoneName,
-	})
-	if err != nil {
-		return false, err
-	}
-	return resp.GetRestartRequired(), nil
+	return grpcZoneList(resp), nil
 }
 
 // Ensure SDNUnixAdapter implements SDNTestAdapter interface.

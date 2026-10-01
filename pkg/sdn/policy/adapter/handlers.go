@@ -57,7 +57,7 @@ func (a *DeviceSDNAdapter) handleConnect(ctx context.Context, event *device.Netw
 }
 
 // handleEnrolled handles device enrollment completion events.
-// Transitions the device to production network based on its profile.
+// Admits the device to its role's zones (or its profile zone).
 func (a *DeviceSDNAdapter) handleEnrolled(ctx context.Context, event *device.NetworkEventContext) error {
 	if event.PortID == "" {
 		return device.ErrPortIDEmpty
@@ -72,8 +72,8 @@ func (a *DeviceSDNAdapter) handleEnrolled(ctx context.Context, event *device.Net
 		return ErrInvalidProfile
 	}
 
-	// Apply production phase for enrolled device
-	event.Phase = device.NetworkPhaseTrusted
+	// Admit the enrolled device.
+	event.Phase = device.NetworkPhaseAdmitted
 	return a.applyPhase(ctx, event)
 }
 

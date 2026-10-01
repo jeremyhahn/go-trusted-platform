@@ -221,7 +221,7 @@ func testEndToEndEnrollment(t *testing.T, ctx context.Context, env *testEnvironm
 	require.NoError(t, err)
 	assert.Equal(t, env.deviceSerial, profile.SerialNumber)
 
-	logger.Info("Device profile fetched", "vlan", profile.TrustedNetwork.VLAN)
+	logger.Info("Device profile fetched", "vlan", profile.AdmittedNetwork.VLAN)
 
 	// Activate device
 	activateResp, err := provisioningClient.Activate(ctx)

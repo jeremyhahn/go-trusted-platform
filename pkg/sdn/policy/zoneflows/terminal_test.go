@@ -60,9 +60,9 @@ func TestGeneratorSet_TerminalReachesEveryTemplate(t *testing.T) {
 	plain := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{BridgeName: "br0"})
 	handoff := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{BridgeName: "br0", Terminal: zoneflows.TerminalGatewayPipeline})
 
-	for _, z := range []zone.Zone{zone.ZoneQuarantine, zone.ZoneProvisioning, zone.ZoneTrusted, zone.ZonePublic, zone.ZoneStorage, zone.ZoneManagement} {
-		before := plain.Generate("port-1", z, 200)
-		after := handoff.Generate("port-1", z, 200)
+	for _, z := range []zone.Zone{zone.ZoneQuarantine, zone.ZoneProvisioning, zone.ZoneControlPlane, zone.ZoneBackup, zone.ZoneStorage, zone.ZoneManagement} {
+		before := plain.Generate("port-1", z, zoneflows.Tagged(200))
+		after := handoff.Generate("port-1", z, zoneflows.Tagged(200))
 		require.Len(t, after, len(before), "zone %s", z)
 		normals := 0
 		for i := range before {
@@ -83,7 +83,7 @@ func TestCompileMatrixRules_Terminal(t *testing.T) {
 	matrix := zone.CompileMatrix(defaults)
 	nets := map[zone.Zone]zoneflows.NetworkSummary{}
 	for _, z := range defaults {
-		nets[z.Name] = zoneflows.NetworkSummary{VLAN: 200, Subnet: "198.18.0.0/24"}
+		nets[z.Name] = zoneflows.NetworkSummary{VLAN: 200, Subnet: "10.4.6.0/24"}
 	}
 	flows := zoneflows.CompileMatrixRules(zoneflows.MatrixRuleConfig{
 		Matrix: matrix, Zones: defaults, NetworksByZone: nets, Terminal: zoneflows.TerminalGatewayPipeline,

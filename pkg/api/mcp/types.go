@@ -26,6 +26,8 @@ package mcp
 
 import (
 	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 const (
@@ -323,6 +325,11 @@ type IPAMPoolCreateRequest struct {
 	Description          string   `json:"description,omitempty"`
 	DNS                  []string `json:"dns,omitempty"`
 	LeaseDurationSeconds int64    `json:"lease_duration_seconds,omitempty"`
+	// Reserved lists never-allocatable prefixes in CIDR notation.
+	Reserved []string `json:"reserved,omitempty"`
+	// RangeStart and RangeEnd bound dynamic allocation; set both or neither.
+	RangeStart string `json:"range_start,omitempty"`
+	RangeEnd   string `json:"range_end,omitempty"`
 }
 
 // IPAMPoolUpdateRequest represents an IPAM pool update request for MCP.
@@ -333,6 +340,13 @@ type IPAMPoolUpdateRequest struct {
 	Zone                 string `json:"zone,omitempty"`
 	Description          string `json:"description,omitempty"`
 	LeaseDurationSeconds int64  `json:"lease_duration_seconds,omitempty"`
+	// Reserved replaces the never-allocatable prefixes when non-nil (an
+	// empty list clears them); nil keeps them.
+	Reserved []string `json:"reserved,omitempty"`
+	// RangeStart and RangeEnd replace the dynamic window bounds when
+	// non-nil ("" clears a bound); nil keeps them.
+	RangeStart *string `json:"range_start,omitempty"`
+	RangeEnd   *string `json:"range_end,omitempty"`
 }
 
 // NetworkZonePathRequest represents a directed traffic path for zone creation/update.
@@ -341,32 +355,88 @@ type NetworkZonePathRequest struct {
 	Services []string `json:"services,omitempty"`
 }
 
-// NetworkZoneCreateRequest represents a network zone creation request for MCP.
-type NetworkZoneCreateRequest struct {
-	Name             string                    `json:"name"`
-	InternetIngress  bool                      `json:"internet_ingress,omitempty"`
-	IsolateFrom      []string                  `json:"isolate_from,omitempty"`
-	AllowTo          []*NetworkZonePathRequest `json:"allow_to,omitempty"`
-	Services         []string                  `json:"services,omitempty"`
-	Isolate          bool                      `json:"isolate,omitempty"`
-	IsolatePerTenant bool                      `json:"isolate_per_tenant,omitempty"`
-	OOB              bool                      `json:"oob,omitempty"`
-	LifecycleRole    string                    `json:"lifecycle_role,omitempty"`
-	Omit             bool                      `json:"omit,omitempty"`
+// NetworkZonePrivilegedAccessRequest is the audited override a zone carries
+// when it opens a path into control-plane or management beyond the
+// reference defaults.
+type NetworkZonePrivilegedAccessRequest struct {
+	Reason     string `json:"reason"`
+	ApprovedBy string `json:"approved_by"`
 }
 
-// NetworkZoneUpdateRequest represents a network zone update request for MCP.
-// Name is the identifier of the zone to update and must not change.
+// NetworkZoneCreateRequest represents an owner-defined zone creation request
+// for MCP.
+type NetworkZoneCreateRequest struct {
+	Name             string                              `json:"name"`
+	Offset           uint8                               `json:"offset,omitempty"`
+	PortClasses      []string                            `json:"port_classes,omitempty"`
+	InternetIngress  bool                                `json:"internet_ingress,omitempty"`
+	IsolateFrom      []string                            `json:"isolate_from,omitempty"`
+	AllowTo          []*NetworkZonePathRequest           `json:"allow_to,omitempty"`
+	Services         []string                            `json:"services,omitempty"`
+	Isolate          bool                                `json:"isolate,omitempty"`
+	OOB              bool                                `json:"oob,omitempty"`
+	LifecycleRole    string                              `json:"lifecycle_role,omitempty"`
+	PrivilegedAccess *NetworkZonePrivilegedAccessRequest `json:"privileged_access,omitempty"`
+}
+
+// NetworkZoneUpdateRequest represents a network zone update request for MCP:
+// a built-in zone's tuned policy or an owner-defined zone's replacement. The
+// zone name is passed separately and never changes.
 type NetworkZoneUpdateRequest struct {
-	InternetIngress  bool                      `json:"internet_ingress,omitempty"`
-	IsolateFrom      []string                  `json:"isolate_from,omitempty"`
-	AllowTo          []*NetworkZonePathRequest `json:"allow_to,omitempty"`
-	Services         []string                  `json:"services,omitempty"`
-	Isolate          bool                      `json:"isolate,omitempty"`
-	IsolatePerTenant bool                      `json:"isolate_per_tenant,omitempty"`
-	OOB              bool                      `json:"oob,omitempty"`
-	LifecycleRole    string                    `json:"lifecycle_role,omitempty"`
-	Omit             bool                      `json:"omit,omitempty"`
+	Offset           uint8                               `json:"offset,omitempty"`
+	PortClasses      []string                            `json:"port_classes,omitempty"`
+	InternetIngress  bool                                `json:"internet_ingress,omitempty"`
+	IsolateFrom      []string                            `json:"isolate_from,omitempty"`
+	AllowTo          []*NetworkZonePathRequest           `json:"allow_to,omitempty"`
+	Services         []string                            `json:"services,omitempty"`
+	Isolate          bool                                `json:"isolate,omitempty"`
+	OOB              bool                                `json:"oob,omitempty"`
+	LifecycleRole    string                              `json:"lifecycle_role,omitempty"`
+	PrivilegedAccess *NetworkZonePrivilegedAccessRequest `json:"privileged_access,omitempty"`
+}
+
+// ZoneConfig converts the create request to a zone.ZoneConfig.
+func (r *NetworkZoneCreateRequest) ZoneConfig() zone.ZoneConfig {
+	return buildMCPZoneConfig(r.Name, r.Offset, r.PortClasses, r.InternetIngress, r.IsolateFrom,
+		r.AllowTo, r.Services, r.Isolate, r.OOB, r.LifecycleRole, r.PrivilegedAccess)
+}
+
+// ZoneConfig converts the update request for zone name to a zone.ZoneConfig.
+func (r *NetworkZoneUpdateRequest) ZoneConfig(name string) zone.ZoneConfig {
+	return buildMCPZoneConfig(name, r.Offset, r.PortClasses, r.InternetIngress, r.IsolateFrom,
+		r.AllowTo, r.Services, r.Isolate, r.OOB, r.LifecycleRole, r.PrivilegedAccess)
+}
+
+// buildMCPZoneConfig assembles a zone.ZoneConfig from MCP request fields; the
+// create and update requests share it so the two paths cannot drift.
+func buildMCPZoneConfig(name string, offset uint8, portClasses []string, internetIngress bool,
+	isolateFrom []string, allowTo []*NetworkZonePathRequest, services []string, isolate, oob bool,
+	lifecycleRole string, pa *NetworkZonePrivilegedAccessRequest) zone.ZoneConfig {
+	cfg := zone.ZoneConfig{
+		Name:            zone.Zone(name),
+		Offset:          zone.Offset(offset),
+		InternetIngress: internetIngress,
+		Services:        services,
+		Isolate:         isolate,
+		OOB:             oob,
+		LifecycleRole:   zone.LifecycleRole(lifecycleRole),
+	}
+	for _, c := range portClasses {
+		cfg.PortClasses = append(cfg.PortClasses, zone.PortClass(c))
+	}
+	for _, z := range isolateFrom {
+		cfg.IsolateFrom = append(cfg.IsolateFrom, zone.Zone(z))
+	}
+	for _, p := range allowTo {
+		if p == nil {
+			continue
+		}
+		cfg.AllowTo = append(cfg.AllowTo, zone.ZonePath{Zone: zone.Zone(p.Zone), Services: p.Services})
+	}
+	if pa != nil {
+		cfg.PrivilegedAccess = &zone.PrivilegedAccess{Reason: pa.Reason, ApprovedBy: pa.ApprovedBy}
+	}
+	return cfg
 }
 
 // ServiceProvider is the interface that MCP uses to access platform services.
@@ -516,7 +586,6 @@ type ServiceProvider interface {
 	GatewayNetworkZoneUpdate(ctx context.Context, name string, req *NetworkZoneUpdateRequest) (interface{}, error)
 	GatewayNetworkZoneDelete(ctx context.Context, name string) (bool, error)
 	GatewayNetworkZoneList(ctx context.Context, lifecycleRole string) ([]interface{}, error)
-	GatewayNetworkZoneAssign(ctx context.Context, network string, zoneName string) (bool, error)
 	GatewayNetworkZoneVLAN(ctx context.Context, zoneName string) (uint16, error)
 
 	// NTP (time synchronization) operations. Results are live readings

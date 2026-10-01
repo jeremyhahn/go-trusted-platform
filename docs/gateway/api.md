@@ -137,13 +137,16 @@ Zone CRUD is `SDNService`'s (`CreateNetworkZone` and friends —
 [`docs/sdn/api.md`](../sdn/api.md) §5), but the **QUIC** path and the **MCP**
 tools are gateway-scoped:
 
-| Capability | REST | gRPC / Unix | QUIC (under `0x2F`, `0x10`–`0x14`) | MCP | Embedded |
+| Capability | REST | gRPC / Unix | QUIC (under `0x2F`, `0x10`–`0x13`) | MCP | Embedded |
 |---|---|---|---|---|---|
-| List zones | `MISSING — docs/13 G7` | `SDNService.ListNetworkZones` | `OpGatewayListNetworkZones` (`0x10`) | `gateway_zone_list` | ✅ |
-| Create zone | `MISSING — docs/13 G7` | `SDNService.CreateNetworkZone` | `OpGatewayCreateNetworkZone` (`0x11`) | `gateway_zone_create` | ✅ |
-| Update zone | `MISSING — docs/13 G7` | `SDNService.UpdateNetworkZone` | `0x12`–`0x14` range | `gateway_zone_update` | ✅ |
-| Delete zone | `MISSING — docs/13 G7` | `SDNService.DeleteNetworkZone` | as above | `gateway_zone_delete` | ✅ |
-| Assign zone | `MISSING — docs/13 G7` | `SDNService.AssignNetworkZone` | as above | `gateway_zone_assign` | ✅ |
+| List zones | `GET /api/v1/sdn/zones` | `SDNService.ListNetworkZones` | `OpGatewayListNetworkZones` (`0x10`) | `gateway_zone_list` | ✅ |
+| Create zone | `POST /api/v1/sdn/zones` | `SDNService.CreateNetworkZone` | `OpGatewayCreateNetworkZone` (`0x11`) | `gateway_zone_create` | ✅ |
+| Update zone | `PUT /api/v1/sdn/zones/{name}` | `SDNService.UpdateNetworkZone` | `OpGatewayUpdateNetworkZone` (`0x12`) | `gateway_zone_update` | ✅ |
+| Delete zone | `DELETE /api/v1/sdn/zones/{name}` | `SDNService.DeleteNetworkZone` | `OpGatewayDeleteNetworkZone` (`0x13`) | `gateway_zone_delete` | ✅ |
+
+There is no assign-network-to-zone operation (networks are zones since
+#708); `0x14` is retired. The zone object and its rules are in
+[SDN api.md](../sdn/api.md) §5.
 
 Zones are split across two gRPC services and two MCP prefixes. That is worth
 knowing before searching for `sdn_zone_*` tools, which do not exist.

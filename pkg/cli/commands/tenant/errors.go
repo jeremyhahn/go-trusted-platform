@@ -12,7 +12,7 @@
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
 // Package tenant provides CLI commands for tenant management operations
-// including quotas, VLANs, bridges, and lifecycle operations.
+// including quotas, usage, keys and lifecycle operations.
 package tenant
 
 import "fmt"
@@ -42,17 +42,6 @@ type ErrInvalidQuotaValue struct {
 
 func (e ErrInvalidQuotaValue) Error() string {
 	return fmt.Sprintf("invalid quota value for %s (%d): %s", e.Field, e.Value, e.Reason)
-}
-
-// ErrInvalidVLANRange is returned when a VLAN range is invalid
-type ErrInvalidVLANRange struct {
-	Start  uint16
-	End    uint16
-	Reason string
-}
-
-func (e ErrInvalidVLANRange) Error() string {
-	return fmt.Sprintf("invalid VLAN range %d-%d: %s", e.Start, e.End, e.Reason)
 }
 
 // ErrOperationFailed is returned when a tenant operation fails
@@ -105,34 +94,6 @@ func (e ErrUsageRetrievalFailed) Error() string {
 }
 
 func (e ErrUsageRetrievalFailed) Unwrap() error {
-	return e.Err
-}
-
-// ErrVLANInfoFailed is returned when retrieving VLAN info fails
-type ErrVLANInfoFailed struct {
-	TenantID string
-	Err      error
-}
-
-func (e ErrVLANInfoFailed) Error() string {
-	return fmt.Sprintf("failed to retrieve VLAN info for tenant %s: %v", e.TenantID, e.Err)
-}
-
-func (e ErrVLANInfoFailed) Unwrap() error {
-	return e.Err
-}
-
-// ErrBridgeInfoFailed is returned when retrieving bridge info fails
-type ErrBridgeInfoFailed struct {
-	TenantID string
-	Err      error
-}
-
-func (e ErrBridgeInfoFailed) Error() string {
-	return fmt.Sprintf("failed to retrieve bridge info for tenant %s: %v", e.TenantID, e.Err)
-}
-
-func (e ErrBridgeInfoFailed) Unwrap() error {
 	return e.Err
 }
 

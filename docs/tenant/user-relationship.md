@@ -242,7 +242,7 @@ sequenceDiagram
 | JWT Claims | Token carries tenant_id for request scoping |
 | Query Filtering | All queries include tenant_id predicate |
 | Key Prefixing | Storage keys prefixed with tenant identifier |
-| Network Isolation | Per-tenant OVS bridges and VLAN ranges |
+| Network Isolation | None yet: the per-tenant OVS bridge and VLAN range were retired by #708; tenant VRFs come later |
 | Key Isolation | Per-tenant DEKs sealed to TPM |
 
 ### Request Flow with Tenant Context
@@ -276,8 +276,8 @@ sequenceDiagram
 │ Name                │    │    │ Token               │
 │ DisplayName         │    │    │ TenantID (FK)  ─────┼───┐
 │ State               │    │    │ Email               │   │
-│ VLANRange           │    │    │ Role                │   │
-│ OVSBridge           │    │    │ Status              │   │
+│ DEKPath             │    │    │ Role                │   │
+│ Labels              │    │    │ Status              │   │
 │ DEKHandle           │    │    │ InvitedByID (FK)────┼─┐ │
 │ CreatedAt           │    │    │ ExpiresAt           │ │ │
 │ UpdatedAt           │    │    │ AcceptedAt          │ │ │

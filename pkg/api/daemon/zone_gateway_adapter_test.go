@@ -52,7 +52,7 @@ import (
 func TestQUICGatewayListNetworkZones_Reproduction(t *testing.T) {
 	ctx := context.Background()
 
-	// Build the real ZoneService seeded from defaults (7 built-in zones).
+	// Build the real ZoneService seeded from defaults (9 built-in zones).
 	zoneSvc, err := gateway.NewZoneService(nil, nil)
 	require.NoError(t, err, "NewZoneService must succeed with nil seed")
 
@@ -101,9 +101,9 @@ func TestQUICGatewayListNetworkZones_Reproduction(t *testing.T) {
 	err = quic.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err, "decoding list response must not fail")
 
-	// zone.Resolve(nil) returns the 7 built-in zones.
-	assert.Len(t, listResp.Zones, 7,
-		"expected 7 built-in zones, got %d", len(listResp.Zones))
+	// zone.Resolve(nil) returns the 9 built-in zones.
+	assert.Len(t, listResp.Zones, 9,
+		"expected 9 built-in zones, got %d", len(listResp.Zones))
 
 	for _, z := range listResp.Zones {
 		assert.NotEmpty(t, z.Name, "zone must have a name")
@@ -307,9 +307,6 @@ func (p *panicGatewayService) UpdateNetworkZone(_ context.Context, _ string, _ *
 	return nil, quic.ErrGatewayFeatureNotConfigured
 }
 func (p *panicGatewayService) DeleteNetworkZone(_ context.Context, _ string) (bool, error) {
-	return false, quic.ErrGatewayFeatureNotConfigured
-}
-func (p *panicGatewayService) AssignNetworkZone(_ context.Context, _ string, _ string) (bool, error) {
 	return false, quic.ErrGatewayFeatureNotConfigured
 }
 func (p *panicGatewayService) AddVIP(_ context.Context, _ *quic.LBVIPSpec) (*quic.LBVIPInfo, error) {

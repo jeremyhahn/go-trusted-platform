@@ -47,9 +47,6 @@ func tenantFromProto(p *platformv1.Tenant) *Tenant {
 		Name:        p.Name,
 		DisplayName: p.DisplayName,
 		State:       state,
-		OVSBridge:   p.OvsBridge,
-		VLANStart:   p.VlanStart,
-		VLANEnd:     p.VlanEnd,
 		Labels:      p.Labels,
 		Annotations: p.Annotations,
 		CreatedAt:   timestampToTime(p.CreatedAt),
@@ -110,10 +107,8 @@ func storageQuotaFromProto(p *platformv1.StorageQuota) *StorageQuota {
 // createParamsToProto converts CreateParams to a platformv1.CreateTenantRequest.
 func createParamsToProto(params *CreateParams) *platformv1.CreateTenantRequest {
 	req := &platformv1.CreateTenantRequest{
-		Name:           params.Name,
-		DisplayName:    params.DisplayName,
-		VlanRangeStart: params.VLANRangeStart,
-		VlanRangeEnd:   params.VLANRangeEnd,
+		Name:        params.Name,
+		DisplayName: params.DisplayName,
 	}
 
 	if params.ComputeQuota != nil {

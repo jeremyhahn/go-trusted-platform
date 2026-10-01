@@ -47,7 +47,7 @@ func snapshotFixture(id string) *GatewaySnapshotInfo {
 		Tunnels:  []SnapshotTunnelInfo{{Name: "gre-mia", Transport: "ipsec", State: "up", Uplink: "att", Bound: true}},
 		Uplinks:  []SnapshotUplinkInfo{{Name: "att", Table: 101, RuleCount: 1, Tunnels: []string{"gre-mia"}}},
 		Services: []SnapshotServiceInfo{{Name: "tunnels", Active: true, Healthy: true}},
-		Pipeline: &SnapshotPipelineInfo{Installed: true, Bridge: "trusted0", Terminal: "normal", FailMode: "secure"},
+		Pipeline: &SnapshotPipelineInfo{Installed: true, Bridge: "br-fabric", Terminal: "normal", FailMode: "secure"},
 	}
 }
 
@@ -143,7 +143,7 @@ func TestGatewaySnapshotOpcodesAreDistinct(t *testing.T) {
 		OpGatewaySetMode:           "set-mode",
 		OpGatewayBGPStatus:         "bgp-status",
 		OpGatewayListNetworkZones:  "zones-list",
-		OpGatewayAssignNetworkZone: "zones-assign",
+		OpGatewayDeleteNetworkZone: "zones-delete",
 	}
 	for op, name := range map[byte]string{OpGatewaySnapshot: "snapshot", OpGatewayListSnapshots: "snapshots"} {
 		existing, clash := seen[op]

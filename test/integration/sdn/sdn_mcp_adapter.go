@@ -873,107 +873,56 @@ func (r *mcpDHCPLeaseListResponse) toResponse() *DHCPLeaseListResponse {
 // Network Zone Operations
 // =============================================================================
 
-// mcpNetworkZoneConfig mirrors the JSON shape of gateway.ZoneConfig (no json tags → Go field names).
-type mcpNetworkZoneConfig struct {
-	Name             string `json:"Name"`
-	InternetIngress  bool   `json:"InternetIngress,omitempty"`
-	Isolate          bool   `json:"Isolate,omitempty"`
-	IsolatePerTenant bool   `json:"IsolatePerTenant,omitempty"`
-	OOB              bool   `json:"OOB,omitempty"`
-	LifecycleRole    string `json:"LifecycleRole,omitempty"`
-}
-
-// mcpNetworkZoneRecord mirrors the JSON shape of gateway.ZoneRecord (no json tags → Go field names).
-type mcpNetworkZoneRecord struct {
-	Config    *mcpNetworkZoneConfig `json:"Config,omitempty"`
-	CreatedAt time.Time             `json:"CreatedAt"`
-	UpdatedAt time.Time             `json:"UpdatedAt"`
-}
-
-// mcpZoneCreateResponse mirrors the JSON shape of GatewayNetworkZoneCreate result.
-type mcpZoneCreateResponse struct {
-	Zone            *mcpNetworkZoneRecord `json:"zone,omitempty"`
-	RestartRequired bool                  `json:"restart_required,omitempty"`
-}
-
-// mcpZoneListResponse mirrors the JSON shape of GatewayNetworkZoneList result.
-type mcpZoneListResponse struct {
-	Zones []interface{} `json:"zones"`
-}
-
-// mcpZoneDeleteResponse mirrors the JSON shape of GatewayNetworkZoneDelete result.
+// mcpZoneDeleteResponse mirrors the JSON shape of the gateway_zone_delete
+// result.
 type mcpZoneDeleteResponse struct {
 	Success         bool `json:"success,omitempty"`
 	RestartRequired bool `json:"restart_required,omitempty"`
 }
 
-func mcpZoneRecordToEntry(z *mcpNetworkZoneRecord, restartRequired bool) *ZoneEntry {
-	if z == nil {
-		return &ZoneEntry{}
+// mcpZoneParams renders a zone body as MCP tool arguments: the shared JSON
+// zone shape, decoded into a generic map.
+func mcpZoneParams(name string, spec ZoneSpec) (map[string]interface{}, error) {
+	raw, err := json.Marshal(newJSONZoneSpec(name, spec))
+	if err != nil {
+		return nil, err
 	}
-	entry := &ZoneEntry{
-		RestartRequired: restartRequired,
-		CreatedAt:       z.CreatedAt,
-		UpdatedAt:       z.UpdatedAt,
+	params := map[string]interface{}{}
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return nil, err
 	}
-	if z.Config != nil {
-		entry.Name = z.Config.Name
-		entry.InternetIngress = z.Config.InternetIngress
-		entry.Isolate = z.Config.Isolate
-		entry.IsolatePerTenant = z.Config.IsolatePerTenant
-		entry.OOB = z.Config.OOB
-		entry.LifecycleRole = z.Config.LifecycleRole
-	}
-	return entry
+	params["name"] = name
+	return params, nil
 }
 
-// CreateZone creates a new network trust zone via MCP gateway_zone_create tool.
+// mcpZoneCall runs a zone tool that returns one zone view.
+func (s *SDNMCPAdapter) mcpZoneCall(ctx context.Context, tool, name string, spec ZoneSpec) (*ZoneEntry, error) {
+	params, err := mcpZoneParams(name, spec)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.callTool(ctx, tool, params)
+	if err != nil {
+		return nil, err
+	}
+	var view jsonZoneView
+	if err := json.Unmarshal(result, &view); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal %s response: %w", tool, err)
+	}
+	return view.toEntry(), nil
+}
+
+// CreateZone creates an owner-defined zone via the gateway_zone_create tool.
 func (s *SDNMCPAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error) {
-	params := map[string]interface{}{
-		"name":               req.Name,
-		"internet_ingress":   req.InternetIngress,
-		"isolate":            req.Isolate,
-		"isolate_per_tenant": req.IsolatePerTenant,
-		"oob":                req.OOB,
-	}
-	if req.LifecycleRole != "" {
-		params["lifecycle_role"] = req.LifecycleRole
-	}
-	result, err := s.callTool(ctx, "gateway_zone_create", params)
-	if err != nil {
-		return nil, err
-	}
-	var resp mcpZoneCreateResponse
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal zone create response: %w", err)
-	}
-	return mcpZoneRecordToEntry(resp.Zone, resp.RestartRequired), nil
+	return s.mcpZoneCall(ctx, "gateway_zone_create", req.Name, req.ZoneSpec)
 }
 
-// UpdateZone updates an existing network trust zone via MCP gateway_zone_update tool.
+// UpdateZone tunes or replaces a zone via the gateway_zone_update tool.
 func (s *SDNMCPAdapter) UpdateZone(ctx context.Context, name string, req ZoneUpdateRequest) (*ZoneEntry, error) {
-	params := map[string]interface{}{
-		"name":               name,
-		"internet_ingress":   req.InternetIngress,
-		"isolate":            req.Isolate,
-		"isolate_per_tenant": req.IsolatePerTenant,
-		"oob":                req.OOB,
-	}
-	if req.LifecycleRole != "" {
-		params["lifecycle_role"] = req.LifecycleRole
-	}
-	result, err := s.callTool(ctx, "gateway_zone_update", params)
-	if err != nil {
-		return nil, err
-	}
-	var resp mcpZoneCreateResponse
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal zone update response: %w", err)
-	}
-	return mcpZoneRecordToEntry(resp.Zone, resp.RestartRequired), nil
+	return s.mcpZoneCall(ctx, "gateway_zone_update", name, req.ZoneSpec)
 }
 
-// DeleteZone deletes a network trust zone via MCP gateway_zone_delete tool.
+// DeleteZone deletes a zone via the gateway_zone_delete tool.
 func (s *SDNMCPAdapter) DeleteZone(ctx context.Context, name string) (bool, error) {
 	result, err := s.callTool(ctx, "gateway_zone_delete", map[string]interface{}{"name": name})
 	if err != nil {
@@ -986,7 +935,7 @@ func (s *SDNMCPAdapter) DeleteZone(ctx context.Context, name string) (bool, erro
 	return resp.RestartRequired, nil
 }
 
-// ListZones returns all network trust zones via MCP gateway_zone_list tool.
+// ListZones returns the zones via the gateway_zone_list tool.
 func (s *SDNMCPAdapter) ListZones(ctx context.Context, lifecycleRole string) (*ZoneListResponse, error) {
 	params := map[string]interface{}{}
 	if lifecycleRole != "" {
@@ -996,38 +945,17 @@ func (s *SDNMCPAdapter) ListZones(ctx context.Context, lifecycleRole string) (*Z
 	if err != nil {
 		return nil, err
 	}
-	// The zones field is []interface{} of zone records; we parse each element.
 	var raw struct {
-		Zones []json.RawMessage `json:"zones"`
+		Zones []jsonZoneView `json:"zones"`
 	}
 	if err := json.Unmarshal(result, &raw); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal zone list response: %w", err)
 	}
 	zones := make([]ZoneEntry, 0, len(raw.Zones))
-	for _, rawZone := range raw.Zones {
-		var rec mcpNetworkZoneRecord
-		if err := json.Unmarshal(rawZone, &rec); err != nil {
-			continue
-		}
-		zones = append(zones, *mcpZoneRecordToEntry(&rec, false))
+	for i := range raw.Zones {
+		zones = append(zones, *raw.Zones[i].toEntry())
 	}
 	return &ZoneListResponse{Zones: zones, TotalCount: len(zones)}, nil
-}
-
-// AssignZone assigns a network segment to a trust zone via MCP gateway_zone_assign tool.
-func (s *SDNMCPAdapter) AssignZone(ctx context.Context, network string, zoneName string) (bool, error) {
-	result, err := s.callTool(ctx, "gateway_zone_assign", map[string]interface{}{
-		"network": network,
-		"zone":    zoneName,
-	})
-	if err != nil {
-		return false, err
-	}
-	var resp mcpZoneDeleteResponse
-	if err := json.Unmarshal(result, &resp); err != nil {
-		return false, fmt.Errorf("failed to unmarshal zone assign response: %w", err)
-	}
-	return resp.RestartRequired, nil
 }
 
 // Ensure SDNMCPAdapter implements SDNTestAdapter interface.

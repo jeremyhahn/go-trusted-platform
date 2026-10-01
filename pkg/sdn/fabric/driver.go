@@ -34,18 +34,20 @@ type Driver interface {
 	// EnsureVLAN creates a VLAN on the switch if it does not already exist.
 	EnsureVLAN(ctx context.Context, vlan uint16, name string) error
 
-	// EnsureVNI maps a VNI to a VLAN on the NVE interface. No-op in VLAN mode.
-	EnsureVNI(ctx context.Context, vni uint32, vlan uint16) error
-
 	// EnsureLAG configures a link aggregation group on the switch.
 	EnsureLAG(ctx context.Context, lag LAGConfig) error
 
-	// SetPortAccess configures a port in access mode with the given VLAN.
-	SetPortAccess(ctx context.Context, port PortRef, vlan uint16) error
+	// SetPortAccess configures a port in access mode on the given VLAN with
+	// the given MTU (0 leaves the MTU as is).
+	SetPortAccess(ctx context.Context, port PortRef, vlan uint16, mtu int) error
 
-	// SetPortTrunk configures a port in trunk mode with the allowed VLANs
-	// and an optional native VLAN.
-	SetPortTrunk(ctx context.Context, port PortRef, allowed []uint16, native uint16) error
+	// SetPortTrunk configures a port in trunk mode with the allowed VLANs,
+	// an optional native VLAN (0 for none) and the given MTU (0 leaves the
+	// MTU as is).
+	SetPortTrunk(ctx context.Context, port PortRef, allowed []uint16, native uint16, mtu int) error
+
+	// DisablePort administratively shuts a port down.
+	DisablePort(ctx context.Context, port PortRef) error
 }
 
 // DriverFactory creates a Driver for a given switch configuration.

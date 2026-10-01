@@ -24,7 +24,6 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/vlan"
 )
 
 // mockIAMClient implements iam.TenantClient for testing.
@@ -392,79 +391,6 @@ func (m *mockQuotaStore) setTenantUsage(tenantID string, usage *quota.TenantUsag
 	m.usage[tenantID] = usage
 }
 
-// mockVLANStore implements vlan.AllocationStore for testing.
-type mockVLANStore struct {
-	mu          sync.RWMutex
-	allocations map[string]*vlan.Allocation
-
-	getErr    error
-	saveErr   error
-	deleteErr error
-	listErr   error
-}
-
-func newMockVLANStore() *mockVLANStore {
-	return &mockVLANStore{
-		allocations: make(map[string]*vlan.Allocation),
-	}
-}
-
-func (m *mockVLANStore) GetAllocation(ctx context.Context, tenantID string) (*vlan.Allocation, error) {
-	if m.getErr != nil {
-		return nil, m.getErr
-	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	alloc, ok := m.allocations[tenantID]
-	if !ok {
-		return nil, nil
-	}
-	return alloc, nil
-}
-
-func (m *mockVLANStore) SaveAllocation(ctx context.Context, alloc *vlan.Allocation) error {
-	if m.saveErr != nil {
-		return m.saveErr
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.allocations[alloc.TenantID] = alloc
-	return nil
-}
-
-func (m *mockVLANStore) DeleteAllocation(ctx context.Context, tenantID string) error {
-	if m.deleteErr != nil {
-		return m.deleteErr
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	delete(m.allocations, tenantID)
-	return nil
-}
-
-func (m *mockVLANStore) ListAllocations(ctx context.Context) ([]*vlan.Allocation, error) {
-	if m.listErr != nil {
-		return nil, m.listErr
-	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	result := make([]*vlan.Allocation, 0, len(m.allocations))
-	for _, alloc := range m.allocations {
-		result = append(result, alloc)
-	}
-	return result, nil
-}
-
-// Test helper functions
-
 func newTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelError, // Only show errors during tests
@@ -530,42 +456,6 @@ func newTestManagerWithQuota(t *testing.T) (*Manager, *mockIAMClient, *mockQuota
 	return manager, iamClient, quotaStore
 }
 
-// newTestManagerWithVLAN creates a manager with VLAN allocator and validator.
-func newTestManagerWithVLAN(t *testing.T) (*Manager, *mockIAMClient, *mockVLANStore) {
-	t.Helper()
-
-	iamClient := newMockIAMClient()
-	vlanStore := newMockVLANStore()
-	logger := newTestLogger()
-
-	vlanCfg := vlan.DefaultConfig()
-	allocator, err := vlan.NewAllocator(vlanStore, vlanCfg, logger)
-	if err != nil {
-		t.Fatalf("failed to create VLAN allocator: %v", err)
-	}
-
-	validator := vlan.NewValidator(allocator, logger)
-
-	cfg := &ManagerConfig{
-		IAMTenantClient: iamClient,
-		VLANAllocator:   allocator,
-		VLANValidator:   validator,
-		Config:          DefaultConfig(),
-		Logger:          logger,
-	}
-
-	cfg.Config.EnableDEKIsolation = false
-
-	manager, err := NewManager(cfg)
-	if err != nil {
-		t.Fatalf("failed to create manager: %v", err)
-	}
-
-	return manager, iamClient, vlanStore
-}
-
-// Tests for NewManager
-
 func TestNewManager_Success(t *testing.T) {
 	iamClient := newMockIAMClient()
 	logger := newTestLogger()
@@ -619,22 +509,6 @@ func TestNewManager_NilIAMClient(t *testing.T) {
 	var invalidReq ErrInvalidRequest
 	if !errors.As(err, &invalidReq) {
 		t.Errorf("expected ErrInvalidRequest, got %T", err)
-	}
-}
-
-func TestNewManager_InvalidConfig(t *testing.T) {
-	iamClient := newMockIAMClient()
-
-	cfg := &ManagerConfig{
-		IAMTenantClient: iamClient,
-		Config: &Config{
-			DefaultVLANRangeStart: 0, // Invalid
-		},
-	}
-
-	_, err := NewManager(cfg)
-	if err == nil {
-		t.Fatal("expected error for invalid config")
 	}
 }
 
@@ -875,92 +749,6 @@ func TestCreateTenant_IAMError(t *testing.T) {
 	}
 }
 
-func TestCreateTenant_WithVLANAutoAllocate(t *testing.T) {
-	manager, _, _ := newTestManagerWithVLAN(t)
-	ctx := context.Background()
-
-	req := &CreateTenantRequest{
-		Name: "test-tenant",
-	}
-
-	entity, err := manager.CreateTenant(ctx, req)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if entity.VLANRange.Start == 0 || entity.VLANRange.End == 0 {
-		t.Error("expected VLAN range to be auto-allocated")
-	}
-
-	if entity.VLANRange.End-entity.VLANRange.Start+1 != 100 {
-		t.Errorf("expected VLAN range size 100, got %d", entity.VLANRange.End-entity.VLANRange.Start+1)
-	}
-}
-
-func TestCreateTenant_WithSpecificVLANRange(t *testing.T) {
-	manager, _, _ := newTestManagerWithVLAN(t)
-	ctx := context.Background()
-
-	req := &CreateTenantRequest{
-		Name: "test-tenant",
-		VLANRange: &VLANRange{
-			Start: 500,
-			End:   599,
-		},
-	}
-
-	entity, err := manager.CreateTenant(ctx, req)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if entity.VLANRange.Start != 500 {
-		t.Errorf("expected VLAN start 500, got %d", entity.VLANRange.Start)
-	}
-
-	if entity.VLANRange.End != 599 {
-		t.Errorf("expected VLAN end 599, got %d", entity.VLANRange.End)
-	}
-}
-
-func TestCreateTenant_VLANAllocationConflict(t *testing.T) {
-	manager, _, _ := newTestManagerWithVLAN(t)
-	ctx := context.Background()
-
-	// Create first tenant with specific VLAN range
-	req1 := &CreateTenantRequest{
-		Name: "test-tenant-1",
-		VLANRange: &VLANRange{
-			Start: 500,
-			End:   599,
-		},
-	}
-
-	_, err := manager.CreateTenant(ctx, req1)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	// Try to create second tenant with overlapping VLAN range
-	req2 := &CreateTenantRequest{
-		Name: "test-tenant-2",
-		VLANRange: &VLANRange{
-			Start: 550,
-			End:   649,
-		},
-	}
-
-	_, err = manager.CreateTenant(ctx, req2)
-	if err == nil {
-		t.Fatal("expected error for overlapping VLAN range")
-	}
-
-	var vlanErr ErrVLANAllocationFailed
-	if !errors.As(err, &vlanErr) {
-		t.Errorf("expected ErrVLANAllocationFailed, got %T: %v", err, err)
-	}
-}
-
 func TestCreateTenant_DefaultDisplayName(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
@@ -1131,36 +919,6 @@ func TestGetTenant_FromIAMAfterCacheInvalidation(t *testing.T) {
 		t.Errorf("expected cache size 1, got %d", manager.GetCacheSize())
 	}
 }
-
-func TestGetTenant_WithVLANAllocation(t *testing.T) {
-	manager, _, _ := newTestManagerWithVLAN(t)
-	ctx := context.Background()
-
-	// Create tenant with VLAN
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-	}
-
-	created, err := manager.CreateTenant(ctx, createReq)
-	if err != nil {
-		t.Fatalf("failed to create tenant: %v", err)
-	}
-
-	// Invalidate cache to force IAM fetch
-	manager.InvalidateCache(created.ID)
-
-	// Get tenant - should enrich with VLAN data
-	entity, err := manager.GetTenant(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if entity.VLANRange.Start == 0 && entity.VLANRange.End == 0 {
-		t.Error("expected VLAN range to be enriched")
-	}
-}
-
-// Tests for GetTenantByName
 
 func TestGetTenantByName_Success(t *testing.T) {
 	manager, _ := newTestManager(t)
@@ -1373,37 +1131,6 @@ func TestListTenants_IAMError(t *testing.T) {
 	}
 }
 
-func TestListTenants_WithVLANEnrichment(t *testing.T) {
-	manager, _, _ := newTestManagerWithVLAN(t)
-	ctx := context.Background()
-
-	// Create tenant with VLAN
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-	}
-
-	_, err := manager.CreateTenant(ctx, createReq)
-	if err != nil {
-		t.Fatalf("failed to create tenant: %v", err)
-	}
-
-	// List tenants - should enrich with VLAN data
-	tenants, _, err := manager.ListTenants(ctx, 10, 0)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if len(tenants) != 1 {
-		t.Fatalf("expected 1 tenant, got %d", len(tenants))
-	}
-
-	if tenants[0].VLANRange.Start == 0 && tenants[0].VLANRange.End == 0 {
-		t.Error("expected VLAN range to be enriched")
-	}
-}
-
-// Tests for UpdateTenant
-
 func TestUpdateTenant_Success(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
@@ -1575,43 +1302,6 @@ func TestDeleteTenant_NotFound(t *testing.T) {
 	err := manager.DeleteTenant(ctx, "nonexistent-id")
 	if err == nil {
 		t.Fatal("expected error for nonexistent tenant")
-	}
-}
-
-func TestDeleteTenant_WithVLANRelease(t *testing.T) {
-	manager, _, vlanStore := newTestManagerWithVLAN(t)
-	ctx := context.Background()
-
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-	}
-
-	created, err := manager.CreateTenant(ctx, createReq)
-	if err != nil {
-		t.Fatalf("failed to create tenant: %v", err)
-	}
-
-	// Verify VLAN allocation exists
-	alloc, err := vlanStore.GetAllocation(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("failed to get VLAN allocation: %v", err)
-	}
-	if alloc == nil {
-		t.Fatal("expected VLAN allocation to exist")
-	}
-
-	err = manager.DeleteTenant(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	// Verify VLAN allocation released
-	alloc, err = vlanStore.GetAllocation(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("failed to get VLAN allocation: %v", err)
-	}
-	if alloc != nil {
-		t.Error("expected VLAN allocation to be released")
 	}
 }
 
@@ -2208,176 +1898,11 @@ func TestReleaseQuota_Success(t *testing.T) {
 	}
 }
 
-func TestReleaseQuota_NoQuotaEnforcer(t *testing.T) {
-	manager, _ := newTestManager(t)
-	ctx := context.Background()
-
-	err := manager.ReleaseQuota(ctx, "some-reservation-id")
-	if err == nil {
-		t.Fatal("expected error when quota enforcer not configured")
-	}
-
-	var invalidReq ErrInvalidRequest
-	if !errors.As(err, &invalidReq) {
-		t.Errorf("expected ErrInvalidRequest, got %T", err)
-	}
-}
-
-// Tests for ValidateVLAN
-
-func TestValidateVLAN_Success(t *testing.T) {
-	manager, _, _ := newTestManagerWithVLAN(t)
-	ctx := context.Background()
-
-	// Create tenant with VLAN allocation
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-		VLANRange: &VLANRange{
-			Start: 500,
-			End:   599,
-		},
-	}
-
-	created, err := manager.CreateTenant(ctx, createReq)
-	if err != nil {
-		t.Fatalf("failed to create tenant: %v", err)
-	}
-
-	// Validate VLAN in range
-	err = manager.ValidateVLAN(ctx, created.ID, 550)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-}
-
-func TestValidateVLAN_OutOfRange(t *testing.T) {
-	manager, _, _ := newTestManagerWithVLAN(t)
-	ctx := context.Background()
-
-	// Create tenant with VLAN allocation
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-		VLANRange: &VLANRange{
-			Start: 500,
-			End:   599,
-		},
-	}
-
-	created, err := manager.CreateTenant(ctx, createReq)
-	if err != nil {
-		t.Fatalf("failed to create tenant: %v", err)
-	}
-
-	// Validate VLAN outside range
-	err = manager.ValidateVLAN(ctx, created.ID, 700)
-	if err == nil {
-		t.Fatal("expected error for VLAN outside range")
-	}
-}
-
-func TestValidateVLAN_NoValidator(t *testing.T) {
-	manager, _ := newTestManager(t)
-	ctx := context.Background()
-
-	err := manager.ValidateVLAN(ctx, "test-tenant", 100)
-	if err == nil {
-		t.Fatal("expected error when VLAN validator not configured")
-	}
-
-	var invalidReq ErrInvalidRequest
-	if !errors.As(err, &invalidReq) {
-		t.Errorf("expected ErrInvalidRequest, got %T", err)
-	}
-}
-
-// Tests for GetBridgeName
-
-func TestGetBridgeName_Success(t *testing.T) {
-	manager, _ := newTestManager(t)
-	ctx := context.Background()
-
-	// Create tenant with explicit bridge name
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-	}
-
-	created, err := manager.CreateTenant(ctx, createReq)
-	if err != nil {
-		t.Fatalf("failed to create tenant: %v", err)
-	}
-
-	// Without bridge manager, OVSBridge will be empty
-	// So we need to set it manually for testing
-	entity, err := manager.GetTenant(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("failed to get tenant: %v", err)
-	}
-	entity.OVSBridge = "br-test-tenant"
-	manager.cache.Store(created.ID, entity)
-
-	bridgeName, err := manager.GetBridgeName(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if bridgeName != "br-test-tenant" {
-		t.Errorf("expected bridge name %q, got %q", "br-test-tenant", bridgeName)
-	}
-}
-
-func TestGetBridgeName_NotFound(t *testing.T) {
-	manager, _ := newTestManager(t)
-	ctx := context.Background()
-
-	_, err := manager.GetBridgeName(ctx, "nonexistent-id")
-	if err == nil {
-		t.Fatal("expected error for nonexistent tenant")
-	}
-}
-
-func TestGetBridgeName_NoBridge(t *testing.T) {
-	manager, _ := newTestManager(t)
-	ctx := context.Background()
-
-	// Create tenant without bridge
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-	}
-
-	created, err := manager.CreateTenant(ctx, createReq)
-	if err != nil {
-		t.Fatalf("failed to create tenant: %v", err)
-	}
-
-	_, err = manager.GetBridgeName(ctx, created.ID)
-	if err == nil {
-		t.Fatal("expected error when tenant has no bridge")
-	}
-
-	var invalidReq ErrInvalidRequest
-	if !errors.As(err, &invalidReq) {
-		t.Errorf("expected ErrInvalidRequest, got %T", err)
-	}
-}
-
-// Tests for Sync
-
 func TestSync_Success(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
 
 	// Sync should not fail even with no components
-	err := manager.Sync(ctx)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-}
-
-func TestSync_WithVLANAllocator(t *testing.T) {
-	manager, _, _ := newTestManagerWithVLAN(t)
-	ctx := context.Background()
-
-	// Sync should work with VLAN allocator
 	err := manager.Sync(ctx)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -2769,65 +2294,6 @@ func TestConcurrentGetTenant(t *testing.T) {
 	}
 }
 
-func TestConcurrentSuspendResume(t *testing.T) {
-	manager, _ := newTestManager(t)
-	ctx := context.Background()
-
-	// Create multiple tenants
-	tenantIDs := make([]string, 5)
-	for i := 0; i < 5; i++ {
-		createReq := &CreateTenantRequest{
-			Name: "concurrent-tenant-" + string(rune('a'+i)),
-		}
-		created, err := manager.CreateTenant(ctx, createReq)
-		if err != nil {
-			t.Fatalf("failed to create tenant: %v", err)
-		}
-		tenantIDs[i] = created.ID
-	}
-
-	// Concurrent suspend operations
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(tenantIDs))
-
-	for _, id := range tenantIDs {
-		wg.Add(1)
-		go func(tenantID string) {
-			defer wg.Done()
-
-			err := manager.SuspendTenant(ctx, tenantID)
-			if err != nil {
-				errChan <- err
-			}
-		}(id)
-	}
-
-	wg.Wait()
-	close(errChan)
-
-	for err := range errChan {
-		t.Errorf("concurrent suspend error: %v", err)
-	}
-
-	// Verify all tenants suspended
-	for _, id := range tenantIDs {
-		entity, err := manager.GetTenant(ctx, id)
-		if err != nil {
-			t.Fatalf("failed to get tenant: %v", err)
-		}
-		if entity.State != StateSuspended {
-			t.Errorf("expected tenant %s to be suspended, got %s", id, entity.State)
-		}
-	}
-}
-
-// Tests for lifecycle hooks with bridge manager
-// Note: TestCreateTenant_WithBridgeManager is removed because LifecycleHooks
-// requires a properly initialized bridge.Manager with OVS client, which cannot
-// be easily mocked in unit tests. This functionality is tested in integration tests.
-
-// Benchmark tests
-
 func BenchmarkCreateTenant(b *testing.B) {
 	iamClient := newMockIAMClient()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -3213,3 +2679,93 @@ func TestCreateTenant_DEKCreateError(t *testing.T) {
 		t.Errorf("expected ErrDEKOperationFailed, got %T", err)
 	}
 }
+func TestNewManager_InvalidConfig(t *testing.T) {
+	iamClient := newMockIAMClient()
+
+	cfg := &ManagerConfig{
+		IAMTenantClient: iamClient,
+		Config: &Config{
+			EnableDEKIsolation: true,
+			DEKAlgorithm:       "rot13",
+		},
+	}
+
+	_, err := NewManager(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid config")
+	}
+}
+
+func TestReleaseQuota_NoQuotaEnforcer(t *testing.T) {
+	manager, _ := newTestManager(t)
+	ctx := context.Background()
+
+	err := manager.ReleaseQuota(ctx, "some-reservation-id")
+	if err == nil {
+		t.Fatal("expected error when quota enforcer not configured")
+	}
+
+	var invalidReq ErrInvalidRequest
+	if !errors.As(err, &invalidReq) {
+		t.Errorf("expected ErrInvalidRequest, got %T", err)
+	}
+}
+
+func TestConcurrentSuspendResume(t *testing.T) {
+	manager, _ := newTestManager(t)
+	ctx := context.Background()
+
+	// Create multiple tenants
+	tenantIDs := make([]string, 5)
+	for i := 0; i < 5; i++ {
+		createReq := &CreateTenantRequest{
+			Name: "concurrent-tenant-" + string(rune('a'+i)),
+		}
+		created, err := manager.CreateTenant(ctx, createReq)
+		if err != nil {
+			t.Fatalf("failed to create tenant: %v", err)
+		}
+		tenantIDs[i] = created.ID
+	}
+
+	// Concurrent suspend operations
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(tenantIDs))
+
+	for _, id := range tenantIDs {
+		wg.Add(1)
+		go func(tenantID string) {
+			defer wg.Done()
+
+			err := manager.SuspendTenant(ctx, tenantID)
+			if err != nil {
+				errChan <- err
+			}
+		}(id)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	for err := range errChan {
+		t.Errorf("concurrent suspend error: %v", err)
+	}
+
+	// Verify all tenants suspended
+	for _, id := range tenantIDs {
+		entity, err := manager.GetTenant(ctx, id)
+		if err != nil {
+			t.Fatalf("failed to get tenant: %v", err)
+		}
+		if entity.State != StateSuspended {
+			t.Errorf("expected tenant %s to be suspended, got %s", id, entity.State)
+		}
+	}
+}
+
+// Tests for lifecycle hooks with bridge manager
+// Note: TestCreateTenant_WithBridgeManager is removed because LifecycleHooks
+// requires a properly initialized bridge.Manager with OVS client, which cannot
+// be easily mocked in unit tests. This functionality is tested in integration tests.
+
+// Benchmark tests

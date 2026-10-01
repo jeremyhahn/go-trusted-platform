@@ -172,7 +172,7 @@ func TestRouteAdd(t *testing.T) {
 		"--pool", "web-pool",
 		"--auth-mode", "mtls",
 		"--require-idevid",
-		"--allowed-zone", "trusted",
+		"--allowed-zone", "control-plane",
 		"--backend-zone", "internal",
 		"--require-attestation",
 		"--attestation-max-age", "5m",
@@ -198,7 +198,7 @@ func TestRouteAdd(t *testing.T) {
 	if auth.GetAttestationMaxAgeNanos() != int64(5*time.Minute) {
 		t.Errorf("attestation max age = %d, want %d", auth.GetAttestationMaxAgeNanos(), int64(5*time.Minute))
 	}
-	if len(auth.GetAllowedZones()) != 1 || auth.GetAllowedZones()[0] != "trusted" {
+	if len(auth.GetAllowedZones()) != 1 || auth.GetAllowedZones()[0] != "control-plane" {
 		t.Errorf("allowed zones = %v", auth.GetAllowedZones())
 	}
 	if !route.GetStripPrefix() || !route.GetPreserveHost() {

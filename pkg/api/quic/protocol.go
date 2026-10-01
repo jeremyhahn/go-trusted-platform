@@ -397,8 +397,8 @@ const (
 	OpTenantUpdateQuotas byte = 0xE4 // Update tenant quotas
 	OpTenantGetUsage     byte = 0xE5 // Get usage stats
 	OpTenantCheckQuota   byte = 0xE6 // Check quota availability
-	OpTenantValidateVLAN byte = 0xE7 // Validate VLAN for tenant
-	OpTenantGetBridge    byte = 0xE8 // Get OVS bridge name
+	// 0xE7 and 0xE8 (ValidateVLAN, GetBridge) were retired with the
+	// per-tenant VLAN range and OVS bridge (#708); do not reuse them.
 	OpTenantSync         byte = 0xE9 // Synchronize tenant state
 	OpTenantRotateDEK    byte = 0xEA // Rotate tenant DEK
 	OpTenantGetDEKStatus byte = 0xEB // Get tenant DEK status
@@ -1046,8 +1046,6 @@ var tenantOpcodeNames = map[byte]string{
 	OpTenantUpdateQuotas: "TenantUpdateQuotas",
 	OpTenantGetUsage:     "TenantGetUsage",
 	OpTenantCheckQuota:   "TenantCheckQuota",
-	OpTenantValidateVLAN: "TenantValidateVLAN",
-	OpTenantGetBridge:    "TenantGetBridge",
 	OpTenantSync:         "TenantSync",
 	OpTenantRotateDEK:    "TenantRotateDEK",
 	OpTenantGetDEKStatus: "TenantGetDEKStatus",

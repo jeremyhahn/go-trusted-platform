@@ -27,7 +27,7 @@ them in the only order where a failure is cheap:
 
 | Step | Proves | Blast radius if it fails |
 |---|---|---|
-| Tunnels up | The transport reaches both relays over both ISPs | none — the relays ignore an extra tunnel |
+| Tunnels up | The transport reaches the relay over both ISPs | none — the relays ignore an extra tunnel |
 | Sessions up, announcing nothing | The speaker, its authentication, timers, filters and BFD | none — an iBGP client that exports no path changes no routing table |
 | A test prefix originated and withdrawn | The origination path end to end, and that withdrawal is clean | one prefix nobody routes to |
 
@@ -70,37 +70,40 @@ sessions this procedure establishes are the thing they will later improve.
 5. **The relay operators are ready.** The relay side needs the changes in
    section 7 before any session can establish. Coordinate: the gateway retrying
    a refused session is harmless, but you will be debugging the wrong end.
-6. **You know the addressing.** In this runbook's example addressing the
-   gateway (`gw-01`) holds `10.4.6.2` on the control-plane network (VLAN 406,
-   [reference network](../architecture/reference-network.md)) and `203.0.113.4`
-   as its public identity until the cutover (ruling R2, #553); the router VIPs stay untouched.
+6. **You know the addressing.** In this runbook's example addressing
+   (environment 4 of the [reference network](../architecture/reference-network.md))
+   the gateway (`gw-01`) holds node address `10.4.6.2` on the control-plane
+   zone (VLAN 406), takes its tunnel `/31`s from the tunnel point-to-point range
+   `10.4.128.0/22`, and uses `203.0.113.4` as its public identity until the
+   cutover (ruling R2, #553); any existing routers' addresses stay untouched.
 
 ---
 
-## 3. Step 1 — tunnels to both relays over both uplinks
+## 3. Step 1 — tunnels to the relay over both uplinks
 
 Copy
 [`configs/platform/templates/dedicated/supermicro/x10/gatewayd.yaml`](../../configs/platform/templates/dedicated/supermicro/x10/gatewayd.yaml)
 to `/etc/gatewayd/config.yaml` and replace the addresses with this
-deployment's. The `tunnels:` list is one entry per (relay × uplink) — the same
-full mesh the routers run, so a single ISP or a single relay failing leaves two
-tunnels standing:
+deployment's. The `tunnels:` list is one entry per (relay × uplink), so a
+single ISP failing leaves a tunnel standing; with a second relay, add its two
+entries the same way:
 
 ```yaml
   tunnels:
-    - name: gre-popa-ispa
+    - name: gre-relay-ispa
       type: gre
       local: 198.51.100.6          # this gateway's address on the ISP A link
-      remote: 198.51.100.100       # the POP A relay
-      tunnel-ip: 10.255.0.33/30
-      tunnel-ipv6: "2602:F5BB:CAFE:11::1/64"
+      remote: 203.0.113.100        # the relay
+      tunnel-ip: 10.4.128.2/31     # from the tunnel point-to-point range
+      tunnel-ipv6: "2001:db8:0:1::/127"
     # … one per (relay × uplink)
 ```
 
-Use tunnel subnets **no existing device uses**. The routers already own
-`10.4.255.0/30` through `10.4.255.28/30` and `2001:db8:cafe:1::/64` through
-`:8::/64` for their own eight tunnels; the block above starts past them
-deliberately. Reusing one silently steals a live session.
+Take each tunnel's `/31` from the environment's tunnel point-to-point range
+(`10.4.128.0/22`), never its first `/31` (`10.4.128.0/31` is the reserved
+gateway HA sync link). If existing routers run tunnels of their own, keep
+their addresses out of that range: reusing one silently steals a live
+session.
 
 The shipped template carries `transit:` and `bgp:` live, so this step needs no
 edit — copy it and start. Both sections shipped commented out for a while,
@@ -116,14 +119,14 @@ addresses:
 ```sh
 rc-service gatewayd start
 ip -brief link show type gre
-ip -brief addr show gre-popa-ispa        # expect BOTH the /30 and the /64
+ip -brief addr show gre-relay-ispa       # expect BOTH the /31 and the /127
 ```
 
 > **Return-path note.** Until #606 lands, add a host route per relay pinned to
 > the uplink its tunnel is sourced from, or the kernel will hash the outer
 > packets across both ISPs and the relay will see them arrive from an address
 > its session does not expect:
-> `ip route add 198.51.100.100/32 via <ispa-gateway> dev <ispa-if>`. Record what
+> `ip route add 203.0.113.100/32 via <ispa-gateway> dev <ispa-if>`. Record what
 > you added; step 6 removes it on rollback.
 
 **Undo:** `rc-service gatewayd stop` removes every tunnel the daemon created.
@@ -201,7 +204,7 @@ the export allow-list and restart:
 
 ```yaml
     announce:
-      ipv4: ["23.143.36.128/25"]     # a test slice, not the /24 the routers own
+      ipv4: ["203.0.113.128/25"]     # a test slice of your space that nothing routes to
       ipv6: []
 ```
 
@@ -212,8 +215,8 @@ rc-service gatewayd restart
 Verify at **both** relays, not one:
 
 ```sh
-birdc show route where net ~ [ 23.143.36.128/25 ]
-birdc show route all 23.143.36.128/25        # the AS path must end at 64512
+birdc show route where net ~ [ 203.0.113.128/25 ]
+birdc show route all 203.0.113.128/25        # the AS path must end at 64512
 ```
 
 Then remove it and restart again, and confirm it is gone from both relays
@@ -232,31 +235,24 @@ cutover depends on clean withdrawal.
 
 ## 6. Step 4 — traffic-engineering parity
 
-The routers rank their four sessions with a local-pref ladder applied
-**inbound** and send a uniform MED outbound. The template carries both
-(#607), so this step checks that what it carries is what the routers do,
-before the cutover moves the sessions.
+When the gateway is to replace routers that rank their sessions, it must rank
+its own the same way: a local-pref ladder applied **inbound** on each session,
+and any MED the routers send outbound. The template carries a two-session
+ladder:
 
-| Session | Tunnel | local-pref (import) | MED (export) |
-|---|---|---|---|
-| ISP A to POP A | `gre-popa-ispa` | 200 | 50 |
-| ISP B to POP A | `gre-popa-ispb` | 150 | 50 |
-| ISP B to POP B | `gre-popb-ispb` | 100 | 50 |
-| ISP A to POP B | `gre-popb-ispa` | 50 | 50 |
+| Session | Tunnel | local-pref (import) |
+|---|---|---|
+| ISP A to the relay | `gre-relay-ispa` | 200 |
+| ISP B to the relay | `gre-relay-ispb` | 100 |
 
-**The x3 AS-path prepend is not the gateway's**, and the template deliberately
-has none. It is easy to read the routers' setup as applying one; they do not.
-The prepend that makes inbound traffic prefer POP A lives in the **POP B
-relay's eBGP session to the transit provider** (the relay's own configuration).
-Adding one to the gateway's export would lengthen the path *both* relays
-re-announce and shift inbound traffic — the failure this sequence exists to
-avoid. This is not the relay-side substitute warned against below: it is the
-relay's own eBGP policy toward its upstream, which the cutover does not touch.
+**An AS-path prepend that steers inbound traffic is not the gateway's.** It
+belongs to the relay's own eBGP policy toward its upstream. Adding one to the
+gateway's export would lengthen the path every relay re-announces and shift
+inbound traffic — the failure this sequence exists to avoid.
 
-**Verify at each relay** (`birdc` on the POP A and POP B hosts). With step 3's
-test prefix originated, the local-pref each relay records for the path from its
-gateway session must match the table, and the MED must be the one the routers
-send:
+**Verify at each relay.** With step 3's test prefix originated, the
+local-pref each relay records for the path from its gateway session must match
+the table, and any MED must be the one the routers send:
 
 ```sh
 birdc show protocols all <gateway-session>
@@ -265,16 +261,11 @@ birdc show route all where proto = "<gateway-session>"
 
 Withdraw the test prefix again when done.
 
-**If a value disagrees with the router, fix the template and restart gatewayd.**
-Do not adjust the relay to match: preference configured at the relay is not
-preference the gateway owns, and it would silently change behaviour when the
-routers' own policy leaves with them at cutover.
-
-**One value must come off the hardware.** The infrastructure documentation records that every router
-session carries `route-map SET-MED out` but not the number it sets; the template
-uses 50. Because it is uniform across all four sessions it cannot change which
-of them wins, so a mismatch is a parity defect rather than a routing one — but
-read it off `router-01` and correct the template before the cutover.
+**If a value disagrees with the routers, fix the template and restart
+gatewayd.** Do not adjust the relay to match: preference configured at the
+relay is not preference the gateway owns, and it would silently change
+behaviour when the routers' own policy leaves with them at cutover. Read any
+MED the routers set off the routers themselves; the template sets none.
 
 ---
 
@@ -337,8 +328,8 @@ Run all of it, in order, before calling bring-up done:
       no flap in their logs during the whole procedure. *This is the one that
       matters: bring-up is a success only if nothing else moved.*
 - [ ] The test prefix appeared at both relays and disappeared cleanly.
-- [ ] While it was up, each relay recorded the local-pref and MED step 4's
-      table names for that session, and **no** AS-path prepend from the gateway.
+- [ ] While it was up, each relay recorded the local-pref step 4's table names
+      for that session, and **no** AS-path prepend from the gateway.
 - [ ] `nft list table inet tp_host` shows the intended allowances and a `drop`
       policy; the port scan above is filtered on the WAN address.
 - [ ] The control plane shows the gateway reporting (`/api/v1/gateway/state`),

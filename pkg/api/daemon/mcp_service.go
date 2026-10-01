@@ -48,7 +48,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
@@ -93,7 +92,6 @@ type MCPServiceProviderConfig struct {
 	EABDelivery           EABDeliveryServicer
 	BMCEnroller           BMCEnroller
 	ZoneService           gateway.ZoneService
-	SDNNetworks           []sdn.NetworkConfig
 	IPAMService           ipam.Allocator
 	ConfigDeliveryService *configdelivery.Service
 	// ProxyService is the shared reverse-proxy configuration service that
@@ -144,7 +142,6 @@ type MCPServiceProvider struct {
 	bmcRestorer           BMCRestorer
 	phase35               phase35State
 	zoneService           gateway.ZoneService
-	sdnNetworks           []sdn.NetworkConfig
 	ipamService           ipam.Allocator
 	configDeliveryService *configdelivery.Service
 	proxyService          *grpcapi.ProxyGRPCService
@@ -191,7 +188,6 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		eabService:            config.EABService,
 		eabDelivery:           config.EABDelivery,
 		zoneService:           config.ZoneService,
-		sdnNetworks:           config.SDNNetworks,
 		ipamService:           config.IPAMService,
 		configDeliveryService: config.ConfigDeliveryService,
 		proxyService:          config.ProxyService,
@@ -3708,6 +3704,13 @@ func (m *MCPServiceProvider) GatewayIPAMPoolCreate(ctx context.Context, req *mcp
 		}
 		pool.Gateway = gw
 	}
+	reserved, rangeStart, rangeEnd, err := ipam.ParseWindow(req.Reserved, req.RangeStart, req.RangeEnd)
+	if err != nil {
+		return nil, err
+	}
+	pool.Reserved = reserved
+	pool.RangeStart = rangeStart
+	pool.RangeEnd = rangeEnd
 	if err := m.ipamService.CreatePool(ctx, pool); err != nil {
 		return nil, err
 	}
@@ -3742,6 +3745,9 @@ func (m *MCPServiceProvider) GatewayIPAMPoolUpdate(ctx context.Context, poolID s
 	if req.LeaseDurationSeconds > 0 {
 		pool.DefaultLeaseDuration = time.Duration(req.LeaseDurationSeconds) * time.Second
 	}
+	if err := pool.ApplyWindowUpdate(req.Reserved, req.RangeStart, req.RangeEnd); err != nil {
+		return nil, err
+	}
 	if err := m.ipamService.UpdatePool(ctx, pool); err != nil {
 		return nil, err
 	}
@@ -3760,7 +3766,8 @@ func (m *MCPServiceProvider) GatewayIPAMPoolDelete(ctx context.Context, poolID s
 // Network Zone Operations
 // =============================================================================
 
-// GatewayNetworkZoneList lists runtime network zones, optionally filtered by lifecycle role.
+// GatewayNetworkZoneList lists the underlay zones with their policy and
+// derived numbering, optionally filtered by lifecycle role.
 func (m *MCPServiceProvider) GatewayNetworkZoneList(ctx context.Context, lifecycleRole string) ([]interface{}, error) {
 	if m.zoneService == nil {
 		return nil, ErrServiceNotAvailable{Service: "zone"}
@@ -3771,84 +3778,38 @@ func (m *MCPServiceProvider) GatewayNetworkZoneList(ctx context.Context, lifecyc
 	}
 	out := make([]interface{}, 0, len(recs))
 	for _, r := range recs {
-		out = append(out, r)
+		out = append(out, r.View(false))
 	}
 	return out, nil
 }
 
-// GatewayNetworkZoneCreate creates a new network zone.
+// GatewayNetworkZoneCreate creates an owner-defined zone.
 func (m *MCPServiceProvider) GatewayNetworkZoneCreate(ctx context.Context, req *mcp.NetworkZoneCreateRequest) (interface{}, error) {
 	if m.zoneService == nil {
 		return nil, ErrServiceNotAvailable{Service: "zone"}
 	}
-	paths := make([]zone.ZonePath, 0, len(req.AllowTo))
-	for _, p := range req.AllowTo {
-		paths = append(paths, zone.ZonePath{
-			Zone:     zone.Zone(p.Zone),
-			Services: p.Services,
-		})
-	}
-	isolateFrom := make([]zone.Zone, 0, len(req.IsolateFrom))
-	for _, z := range req.IsolateFrom {
-		isolateFrom = append(isolateFrom, zone.Zone(z))
-	}
-	cfg := zone.ZoneConfig{
-		Name:             zone.Zone(req.Name),
-		InternetIngress:  req.InternetIngress,
-		Isolate:          req.Isolate,
-		IsolatePerTenant: req.IsolatePerTenant,
-		OOB:              req.OOB,
-		LifecycleRole:    zone.LifecycleRole(req.LifecycleRole),
-		AllowTo:          paths,
-		IsolateFrom:      isolateFrom,
-	}
-	rec, restartRequired, err := m.zoneService.Create(ctx, cfg)
+	rec, restartRequired, err := m.zoneService.Create(ctx, req.ZoneConfig())
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"zone":             rec,
-		"restart_required": restartRequired,
-	}, nil
+	return rec.View(restartRequired), nil
 }
 
-// GatewayNetworkZoneUpdate updates an existing network zone.
+// GatewayNetworkZoneUpdate tunes a built-in zone or replaces an
+// owner-defined zone.
 func (m *MCPServiceProvider) GatewayNetworkZoneUpdate(ctx context.Context, name string, req *mcp.NetworkZoneUpdateRequest) (interface{}, error) {
 	if m.zoneService == nil {
 		return nil, ErrServiceNotAvailable{Service: "zone"}
 	}
-	paths := make([]zone.ZonePath, 0, len(req.AllowTo))
-	for _, p := range req.AllowTo {
-		paths = append(paths, zone.ZonePath{
-			Zone:     zone.Zone(p.Zone),
-			Services: p.Services,
-		})
-	}
-	isolateFrom := make([]zone.Zone, 0, len(req.IsolateFrom))
-	for _, z := range req.IsolateFrom {
-		isolateFrom = append(isolateFrom, zone.Zone(z))
-	}
-	cfg := zone.ZoneConfig{
-		Name:             zone.Zone(name),
-		InternetIngress:  req.InternetIngress,
-		Isolate:          req.Isolate,
-		IsolatePerTenant: req.IsolatePerTenant,
-		OOB:              req.OOB,
-		LifecycleRole:    zone.LifecycleRole(req.LifecycleRole),
-		AllowTo:          paths,
-		IsolateFrom:      isolateFrom,
-	}
-	rec, restartRequired, err := m.zoneService.Update(ctx, zone.Zone(name), cfg)
+	rec, restartRequired, err := m.zoneService.Update(ctx, zone.Zone(name), req.ZoneConfig(name))
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"zone":             rec,
-		"restart_required": restartRequired,
-	}, nil
+	return rec.View(restartRequired), nil
 }
 
-// GatewayNetworkZoneDelete deletes a network zone.
+// GatewayNetworkZoneDelete deletes an owner-defined zone or omits an
+// optional built-in.
 func (m *MCPServiceProvider) GatewayNetworkZoneDelete(ctx context.Context, name string) (bool, error) {
 	if m.zoneService == nil {
 		return false, ErrServiceNotAvailable{Service: "zone"}
@@ -3856,22 +3817,33 @@ func (m *MCPServiceProvider) GatewayNetworkZoneDelete(ctx context.Context, name 
 	return m.zoneService.Delete(ctx, zone.Zone(name))
 }
 
-// GatewayNetworkZoneAssign assigns a network segment to a trust zone.
-func (m *MCPServiceProvider) GatewayNetworkZoneAssign(ctx context.Context, network string, zoneName string) (bool, error) {
-	if m.zoneService == nil {
-		return false, ErrServiceNotAvailable{Service: "zone"}
-	}
-	return m.zoneService.AssignNetwork(ctx, network, zone.Zone(zoneName))
+// GatewayNetworkZoneVLAN resolves a zone name to its VLAN ID through the
+// zone service's derived numbering.
+func (m *MCPServiceProvider) GatewayNetworkZoneVLAN(ctx context.Context, zoneName string) (uint16, error) {
+	return zoneVLAN(ctx, m.zoneService, zoneName)
 }
 
-// GatewayNetworkZoneVLAN resolves a trust zone name to its associated VLAN ID.
-func (m *MCPServiceProvider) GatewayNetworkZoneVLAN(ctx context.Context, zoneName string) (uint16, error) {
-	for _, n := range m.sdnNetworks {
-		if string(n.Zone) == zoneName && n.VLAN > 0 {
-			return n.VLAN, nil
-		}
+// zoneVLAN resolves a zone name to its VLAN through the zone service's
+// derived numbering. It fails when there is no zone service, the zone does
+// not exist, or the service has no environment to number it.
+func zoneVLAN(ctx context.Context, svc gateway.ZoneService, zoneName string) (uint16, error) {
+	if svc == nil {
+		return 0, ErrServiceNotAvailable{Service: "zone"}
 	}
-	return 0, ErrServiceNotAvailable{Service: "zone-vlan: no network found for zone " + zoneName}
+	recs, err := svc.List(ctx, "")
+	if err != nil {
+		return 0, err
+	}
+	for _, r := range recs {
+		if string(r.Config.Name) != zoneName {
+			continue
+		}
+		if r.Numbering == nil {
+			return 0, ErrServiceNotAvailable{Service: "zone-vlan: no sdn.environment numbers zone " + zoneName}
+		}
+		return r.Numbering.VLAN, nil
+	}
+	return 0, gateway.ErrZoneNotFound{Name: zone.Zone(zoneName)}
 }
 
 // =============================================================================

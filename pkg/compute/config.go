@@ -279,7 +279,7 @@ func DefaultOrchestratorConfig(computeType ComputeType) *OrchestratorConfig {
 		DefaultDiskSize: "20G",
 		MaxInstances:    100,
 		EnableKVM:       true,
-		NetworkBridge:   "trusted0",
+		NetworkBridge:   "br-int",
 		OVSSocketPath:   "/var/run/openvswitch/db.sock",
 		AutoCleanup:     false,
 		Debug:           false,

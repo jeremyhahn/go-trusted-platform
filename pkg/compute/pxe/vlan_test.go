@@ -26,13 +26,13 @@ import (
 )
 
 func TestNewNoopVLANIntegration(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 
 	assert.NotNil(t, vi)
 }
 
 func TestNoopVLANIntegration_ApplyQuarantineVLAN(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.ApplyQuarantineVLAN(ctx, "port-1", 100)
@@ -44,7 +44,7 @@ func TestNoopVLANIntegration_ApplyQuarantineVLAN(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyQuarantineVLAN_EmptyPortID(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.ApplyQuarantineVLAN(ctx, "", 100)
@@ -56,7 +56,7 @@ func TestNoopVLANIntegration_ApplyQuarantineVLAN_EmptyPortID(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyQuarantineVLAN_AfterClose(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.Close()
@@ -70,7 +70,7 @@ func TestNoopVLANIntegration_ApplyQuarantineVLAN_AfterClose(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyProvisioningVLAN(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.ApplyProvisioningVLAN(ctx, "port-1", 200)
@@ -82,7 +82,7 @@ func TestNoopVLANIntegration_ApplyProvisioningVLAN(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyProvisioningVLAN_EmptyPortID(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.ApplyProvisioningVLAN(ctx, "", 200)
@@ -93,7 +93,7 @@ func TestNoopVLANIntegration_ApplyProvisioningVLAN_EmptyPortID(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyProvisioningVLAN_AfterClose(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.Close()
@@ -107,22 +107,22 @@ func TestNoopVLANIntegration_ApplyProvisioningVLAN_AfterClose(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyZoneVLAN(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
-	err := vi.ApplyZoneVLAN(ctx, "port-1", zone.ZoneTrusted)
+	err := vi.ApplyZoneVLAN(ctx, "port-1", zone.ZoneControlPlane)
 	assert.NoError(t, err)
 
 	vlan, err := vi.GetCurrentVLAN(ctx, "port-1")
 	assert.NoError(t, err)
-	assert.Equal(t, DefaultTrustedVLAN, vlan)
+	assert.Equal(t, testControlPlaneVLAN, vlan)
 }
 
 func TestNoopVLANIntegration_ApplyZoneVLAN_EmptyPortID(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
-	err := vi.ApplyZoneVLAN(ctx, "", zone.ZoneTrusted)
+	err := vi.ApplyZoneVLAN(ctx, "", zone.ZoneControlPlane)
 	assert.Error(t, err)
 
 	var configErr ErrInvalidConfiguration
@@ -130,7 +130,7 @@ func TestNoopVLANIntegration_ApplyZoneVLAN_EmptyPortID(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyZoneVLAN_EmptyZone(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.ApplyZoneVLAN(ctx, "port-1", "")
@@ -142,13 +142,13 @@ func TestNoopVLANIntegration_ApplyZoneVLAN_EmptyZone(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyZoneVLAN_AfterClose(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.Close()
 	require.NoError(t, err)
 
-	err = vi.ApplyZoneVLAN(ctx, "port-1", zone.ZoneTrusted)
+	err = vi.ApplyZoneVLAN(ctx, "port-1", zone.ZoneControlPlane)
 	assert.Error(t, err)
 
 	var notRunningErr ErrServiceNotRunning
@@ -156,7 +156,7 @@ func TestNoopVLANIntegration_ApplyZoneVLAN_AfterClose(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_GetCurrentVLAN(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	// Store a VLAN first
@@ -169,7 +169,7 @@ func TestNoopVLANIntegration_GetCurrentVLAN(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_GetCurrentVLAN_EmptyPortID(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	_, err := vi.GetCurrentVLAN(ctx, "")
@@ -180,7 +180,7 @@ func TestNoopVLANIntegration_GetCurrentVLAN_EmptyPortID(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_GetCurrentVLAN_NotFound(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	_, err := vi.GetCurrentVLAN(ctx, "nonexistent")
@@ -191,7 +191,7 @@ func TestNoopVLANIntegration_GetCurrentVLAN_NotFound(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_GetCurrentVLAN_AfterClose(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.Close()
@@ -205,7 +205,7 @@ func TestNoopVLANIntegration_GetCurrentVLAN_AfterClose(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyQuarantineFlows(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
@@ -214,11 +214,11 @@ func TestNoopVLANIntegration_ApplyQuarantineFlows(t *testing.T) {
 
 	vlan, err := vi.GetCurrentVLAN(ctx, "port-1")
 	assert.NoError(t, err)
-	assert.Equal(t, DefaultQuarantineVLAN, vlan)
+	assert.Equal(t, testQuarantineVLAN, vlan)
 }
 
 func TestNoopVLANIntegration_ApplyQuarantineFlows_EmptyPortID(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
@@ -230,7 +230,7 @@ func TestNoopVLANIntegration_ApplyQuarantineFlows_EmptyPortID(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyQuarantineFlows_NilMAC(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.ApplyQuarantineFlows(ctx, "port-1", nil)
@@ -241,7 +241,7 @@ func TestNoopVLANIntegration_ApplyQuarantineFlows_NilMAC(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyQuarantineFlows_EmptyMAC(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.ApplyQuarantineFlows(ctx, "port-1", net.HardwareAddr{})
@@ -252,7 +252,7 @@ func TestNoopVLANIntegration_ApplyQuarantineFlows_EmptyMAC(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyQuarantineFlows_AfterClose(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
@@ -267,7 +267,7 @@ func TestNoopVLANIntegration_ApplyQuarantineFlows_AfterClose(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyProvisioningFlows(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
@@ -276,11 +276,11 @@ func TestNoopVLANIntegration_ApplyProvisioningFlows(t *testing.T) {
 
 	vlan, err := vi.GetCurrentVLAN(ctx, "port-1")
 	assert.NoError(t, err)
-	assert.Equal(t, DefaultProvisioningVLAN, vlan)
+	assert.Equal(t, testProvisioningVLAN, vlan)
 }
 
 func TestNoopVLANIntegration_ApplyProvisioningFlows_EmptyPortID(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
@@ -292,7 +292,7 @@ func TestNoopVLANIntegration_ApplyProvisioningFlows_EmptyPortID(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyProvisioningFlows_NilMAC(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.ApplyProvisioningFlows(ctx, "port-1", nil)
@@ -303,7 +303,7 @@ func TestNoopVLANIntegration_ApplyProvisioningFlows_NilMAC(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyProvisioningFlows_AfterClose(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
@@ -317,64 +317,64 @@ func TestNoopVLANIntegration_ApplyProvisioningFlows_AfterClose(t *testing.T) {
 	assert.True(t, errors.As(err, &notRunningErr))
 }
 
-func TestNoopVLANIntegration_ApplyProductionFlows(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+func TestNoopVLANIntegration_ApplyAuthorizedFlows(t *testing.T) {
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
-	err := vi.ApplyProductionFlows(ctx, "port-1", mac)
+	err := vi.ApplyAuthorizedFlows(ctx, "port-1", mac, testControlPlaneVLAN)
 	assert.NoError(t, err)
 
 	vlan, err := vi.GetCurrentVLAN(ctx, "port-1")
 	assert.NoError(t, err)
-	assert.Equal(t, DefaultTrustedVLAN, vlan)
+	assert.Equal(t, testControlPlaneVLAN, vlan)
 }
 
-func TestNoopVLANIntegration_ApplyProductionFlows_EmptyPortID(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+func TestNoopVLANIntegration_ApplyAuthorizedFlows_EmptyPortID(t *testing.T) {
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
-	err := vi.ApplyProductionFlows(ctx, "", mac)
+	err := vi.ApplyAuthorizedFlows(ctx, "", mac, testControlPlaneVLAN)
 	assert.Error(t, err)
 
 	var configErr ErrInvalidConfiguration
 	assert.True(t, errors.As(err, &configErr))
 }
 
-func TestNoopVLANIntegration_ApplyProductionFlows_NilMAC(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+func TestNoopVLANIntegration_ApplyAuthorizedFlows_NilMAC(t *testing.T) {
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
-	err := vi.ApplyProductionFlows(ctx, "port-1", nil)
+	err := vi.ApplyAuthorizedFlows(ctx, "port-1", nil, testControlPlaneVLAN)
 	assert.Error(t, err)
 
 	var macErr ErrInvalidMACAddress
 	assert.True(t, errors.As(err, &macErr))
 }
 
-func TestNoopVLANIntegration_ApplyProductionFlows_StoresTrustedVLAN(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+func TestNoopVLANIntegration_ApplyAuthorizedFlows_StoresTrustedVLAN(t *testing.T) {
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
-	err := vi.ApplyProductionFlows(ctx, "port-1", mac)
+	err := vi.ApplyAuthorizedFlows(ctx, "port-1", mac, testControlPlaneVLAN)
 	assert.NoError(t, err)
 
 	vlan, err := vi.GetCurrentVLAN(ctx, "port-1")
 	assert.NoError(t, err)
-	assert.Equal(t, DefaultTrustedVLAN, vlan)
+	assert.Equal(t, testControlPlaneVLAN, vlan)
 }
 
-func TestNoopVLANIntegration_ApplyProductionFlows_AfterClose(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+func TestNoopVLANIntegration_ApplyAuthorizedFlows_AfterClose(t *testing.T) {
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
 	err := vi.Close()
 	require.NoError(t, err)
 
-	err = vi.ApplyProductionFlows(ctx, "port-1", mac)
+	err = vi.ApplyAuthorizedFlows(ctx, "port-1", mac, testControlPlaneVLAN)
 	assert.Error(t, err)
 
 	var notRunningErr ErrServiceNotRunning
@@ -382,7 +382,7 @@ func TestNoopVLANIntegration_ApplyProductionFlows_AfterClose(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_BlockPort(t *testing.T) {
-	vi := NewNoopVLANIntegration().(*noopVLANIntegration)
+	vi := NewNoopVLANIntegration(testNetPlan).(*noopVLANIntegration)
 	ctx := context.Background()
 
 	err := vi.BlockPort(ctx, "port-1")
@@ -392,7 +392,7 @@ func TestNoopVLANIntegration_BlockPort(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_BlockPort_EmptyPortID(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.BlockPort(ctx, "")
@@ -403,7 +403,7 @@ func TestNoopVLANIntegration_BlockPort_EmptyPortID(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_BlockPort_AfterClose(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.Close()
@@ -417,7 +417,7 @@ func TestNoopVLANIntegration_BlockPort_AfterClose(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_UnblockPort(t *testing.T) {
-	vi := NewNoopVLANIntegration().(*noopVLANIntegration)
+	vi := NewNoopVLANIntegration(testNetPlan).(*noopVLANIntegration)
 	ctx := context.Background()
 
 	// Block first
@@ -432,7 +432,7 @@ func TestNoopVLANIntegration_UnblockPort(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_UnblockPort_EmptyPortID(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.UnblockPort(ctx, "")
@@ -443,7 +443,7 @@ func TestNoopVLANIntegration_UnblockPort_EmptyPortID(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_UnblockPort_AfterClose(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	err := vi.Close()
@@ -457,7 +457,7 @@ func TestNoopVLANIntegration_UnblockPort_AfterClose(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_GetPortVLAN(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	ctx := context.Background()
 
 	// Store a VLAN first
@@ -470,14 +470,14 @@ func TestNoopVLANIntegration_GetPortVLAN(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_Close(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 
 	err := vi.Close()
 	assert.NoError(t, err)
 }
 
 func TestNoopVLANIntegration_Close_Idempotent(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 
 	err := vi.Close()
 	assert.NoError(t, err)
@@ -487,7 +487,7 @@ func TestNoopVLANIntegration_Close_Idempotent(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_IsPortBlocked(t *testing.T) {
-	vi := NewNoopVLANIntegration().(*noopVLANIntegration)
+	vi := NewNoopVLANIntegration(testNetPlan).(*noopVLANIntegration)
 	ctx := context.Background()
 
 	// Not blocked initially
@@ -505,7 +505,7 @@ func TestNoopVLANIntegration_IsPortBlocked(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_VLANTransitionsRemoveBlockedStatus(t *testing.T) {
-	vi := NewNoopVLANIntegration().(*noopVLANIntegration)
+	vi := NewNoopVLANIntegration(testNetPlan).(*noopVLANIntegration)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
@@ -521,7 +521,7 @@ func TestNoopVLANIntegration_VLANTransitionsRemoveBlockedStatus(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyQuarantineVLAN_UnblocksPort(t *testing.T) {
-	vi := NewNoopVLANIntegration().(*noopVLANIntegration)
+	vi := NewNoopVLANIntegration(testNetPlan).(*noopVLANIntegration)
 	ctx := context.Background()
 
 	// Block port first
@@ -536,7 +536,7 @@ func TestNoopVLANIntegration_ApplyQuarantineVLAN_UnblocksPort(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyProvisioningVLAN_UnblocksPort(t *testing.T) {
-	vi := NewNoopVLANIntegration().(*noopVLANIntegration)
+	vi := NewNoopVLANIntegration(testNetPlan).(*noopVLANIntegration)
 	ctx := context.Background()
 
 	// Block port first
@@ -551,7 +551,7 @@ func TestNoopVLANIntegration_ApplyProvisioningVLAN_UnblocksPort(t *testing.T) {
 }
 
 func TestNoopVLANIntegration_ApplyZoneVLAN_UnblocksPort(t *testing.T) {
-	vi := NewNoopVLANIntegration().(*noopVLANIntegration)
+	vi := NewNoopVLANIntegration(testNetPlan).(*noopVLANIntegration)
 	ctx := context.Background()
 
 	// Block port first
@@ -560,13 +560,13 @@ func TestNoopVLANIntegration_ApplyZoneVLAN_UnblocksPort(t *testing.T) {
 	assert.True(t, vi.IsPortBlocked("port-1"))
 
 	// Apply zone VLAN should unblock
-	err = vi.ApplyZoneVLAN(ctx, "port-1", zone.ZoneTrusted)
+	err = vi.ApplyZoneVLAN(ctx, "port-1", zone.ZoneControlPlane)
 	require.NoError(t, err)
 	assert.False(t, vi.IsPortBlocked("port-1"))
 }
 
 func TestNoopVLANIntegration_ApplyProvisioningFlows_UnblocksPort(t *testing.T) {
-	vi := NewNoopVLANIntegration().(*noopVLANIntegration)
+	vi := NewNoopVLANIntegration(testNetPlan).(*noopVLANIntegration)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
@@ -581,8 +581,8 @@ func TestNoopVLANIntegration_ApplyProvisioningFlows_UnblocksPort(t *testing.T) {
 	assert.False(t, vi.IsPortBlocked("port-1"))
 }
 
-func TestNoopVLANIntegration_ApplyProductionFlows_UnblocksPort(t *testing.T) {
-	vi := NewNoopVLANIntegration().(*noopVLANIntegration)
+func TestNoopVLANIntegration_ApplyAuthorizedFlows_UnblocksPort(t *testing.T) {
+	vi := NewNoopVLANIntegration(testNetPlan).(*noopVLANIntegration)
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
@@ -592,7 +592,7 @@ func TestNoopVLANIntegration_ApplyProductionFlows_UnblocksPort(t *testing.T) {
 	assert.True(t, vi.IsPortBlocked("port-1"))
 
 	// Apply production flows should unblock
-	err = vi.ApplyProductionFlows(ctx, "port-1", mac)
+	err = vi.ApplyAuthorizedFlows(ctx, "port-1", mac, testControlPlaneVLAN)
 	require.NoError(t, err)
 	assert.False(t, vi.IsPortBlocked("port-1"))
 }
@@ -606,8 +606,6 @@ func TestNewVLANIntegrationWrapper(t *testing.T) {
 func TestNewVLANIntegrationWrapper_WithOptions(t *testing.T) {
 	vi := NewVLANIntegrationWrapper(
 		WithBridgeName("br-custom"),
-		WithQuarantineVLAN(10),
-		WithProvisioningVLAN(20),
 	)
 
 	assert.NotNil(t, vi)
@@ -615,8 +613,6 @@ func TestNewVLANIntegrationWrapper_WithOptions(t *testing.T) {
 	// Check the wrapper was configured
 	wrapper := vi.(*vlanIntegrationWrapper)
 	assert.Equal(t, "br-custom", wrapper.bridgeName)
-	assert.Equal(t, uint16(10), wrapper.quarantineVLAN)
-	assert.Equal(t, uint16(20), wrapper.provisioningVLAN)
 }
 
 func TestVLANIntegrationWrapper_ApplyQuarantineVLAN_NoFlowManager(t *testing.T) {
@@ -690,7 +686,7 @@ func TestVLANIntegrationWrapper_ApplyZoneVLAN_NoFlowManager(t *testing.T) {
 	vi := NewVLANIntegrationWrapper()
 	ctx := context.Background()
 
-	err := vi.ApplyZoneVLAN(ctx, "port-1", zone.ZoneTrusted)
+	err := vi.ApplyZoneVLAN(ctx, "port-1", zone.ZoneControlPlane)
 	assert.NoError(t, err)
 }
 
@@ -698,7 +694,7 @@ func TestVLANIntegrationWrapper_ApplyZoneVLAN_EmptyPortID(t *testing.T) {
 	vi := NewVLANIntegrationWrapper()
 	ctx := context.Background()
 
-	err := vi.ApplyZoneVLAN(ctx, "", zone.ZoneTrusted)
+	err := vi.ApplyZoneVLAN(ctx, "", zone.ZoneControlPlane)
 	assert.Error(t, err)
 
 	var configErr ErrInvalidConfiguration
@@ -723,7 +719,7 @@ func TestVLANIntegrationWrapper_ApplyZoneVLAN_AfterClose(t *testing.T) {
 	err := vi.Close()
 	require.NoError(t, err)
 
-	err = vi.ApplyZoneVLAN(ctx, "port-1", zone.ZoneTrusted)
+	err = vi.ApplyZoneVLAN(ctx, "port-1", zone.ZoneControlPlane)
 	assert.Error(t, err)
 
 	var notRunningErr ErrServiceNotRunning
@@ -860,50 +856,50 @@ func TestVLANIntegrationWrapper_ApplyProvisioningFlows_AfterClose(t *testing.T) 
 	assert.True(t, errors.As(err, &notRunningErr))
 }
 
-func TestVLANIntegrationWrapper_ApplyProductionFlows_NoFlowManager(t *testing.T) {
+func TestVLANIntegrationWrapper_ApplyAuthorizedFlows_NoFlowManager(t *testing.T) {
 	vi := NewVLANIntegrationWrapper()
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
-	err := vi.ApplyProductionFlows(ctx, "port-1", mac)
+	err := vi.ApplyAuthorizedFlows(ctx, "port-1", mac, testControlPlaneVLAN)
 	assert.NoError(t, err)
 }
 
-func TestVLANIntegrationWrapper_ApplyProductionFlows_EmptyPortID(t *testing.T) {
+func TestVLANIntegrationWrapper_ApplyAuthorizedFlows_EmptyPortID(t *testing.T) {
 	vi := NewVLANIntegrationWrapper()
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
-	err := vi.ApplyProductionFlows(ctx, "", mac)
+	err := vi.ApplyAuthorizedFlows(ctx, "", mac, testControlPlaneVLAN)
 	assert.Error(t, err)
 
 	var configErr ErrInvalidConfiguration
 	assert.True(t, errors.As(err, &configErr))
 }
 
-func TestVLANIntegrationWrapper_ApplyProductionFlows_NilMAC(t *testing.T) {
+func TestVLANIntegrationWrapper_ApplyAuthorizedFlows_NilMAC(t *testing.T) {
 	vi := NewVLANIntegrationWrapper()
 	ctx := context.Background()
 
-	err := vi.ApplyProductionFlows(ctx, "port-1", nil)
+	err := vi.ApplyAuthorizedFlows(ctx, "port-1", nil, testControlPlaneVLAN)
 	assert.Error(t, err)
 
 	var macErr ErrInvalidMACAddress
 	assert.True(t, errors.As(err, &macErr))
 }
 
-func TestVLANIntegrationWrapper_ApplyProductionFlows_StoresTrustedZone(t *testing.T) {
-	// ApplyProductionFlows transitions to zone.ZoneTrusted; VLAN is resolved by ZoneFlowManager.
+func TestVLANIntegrationWrapper_ApplyAuthorizedFlows_StoresTrustedZone(t *testing.T) {
+	// ApplyAuthorizedFlows transitions to zone.ZoneControlPlane; VLAN is resolved by ZoneFlowManager.
 	// Without a flow manager, this is a no-op.
 	vi := NewVLANIntegrationWrapper()
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
-	err := vi.ApplyProductionFlows(ctx, "port-1", mac)
+	err := vi.ApplyAuthorizedFlows(ctx, "port-1", mac, testControlPlaneVLAN)
 	assert.NoError(t, err)
 }
 
-func TestVLANIntegrationWrapper_ApplyProductionFlows_AfterClose(t *testing.T) {
+func TestVLANIntegrationWrapper_ApplyAuthorizedFlows_AfterClose(t *testing.T) {
 	vi := NewVLANIntegrationWrapper()
 	ctx := context.Background()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
@@ -911,7 +907,7 @@ func TestVLANIntegrationWrapper_ApplyProductionFlows_AfterClose(t *testing.T) {
 	err := vi.Close()
 	require.NoError(t, err)
 
-	err = vi.ApplyProductionFlows(ctx, "port-1", mac)
+	err = vi.ApplyAuthorizedFlows(ctx, "port-1", mac, testControlPlaneVLAN)
 	assert.Error(t, err)
 
 	var notRunningErr ErrServiceNotRunning
@@ -1055,11 +1051,11 @@ func TestVLANIntegrationWrapper_ApplyProvisioningFlows_EmptyMAC(t *testing.T) {
 	assert.True(t, errors.As(err, &macErr))
 }
 
-func TestVLANIntegrationWrapper_ApplyProductionFlows_EmptyMAC(t *testing.T) {
+func TestVLANIntegrationWrapper_ApplyAuthorizedFlows_EmptyMAC(t *testing.T) {
 	vi := NewVLANIntegrationWrapper()
 	ctx := context.Background()
 
-	err := vi.ApplyProductionFlows(ctx, "port-1", net.HardwareAddr{})
+	err := vi.ApplyAuthorizedFlows(ctx, "port-1", net.HardwareAddr{}, testControlPlaneVLAN)
 	assert.Error(t, err)
 
 	var macErr ErrInvalidMACAddress

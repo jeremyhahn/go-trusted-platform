@@ -95,23 +95,57 @@ validates a device certificate; there is no RADIUS exchange behind it.
 
 ## 5. Network zones
 
+The zone operations manage the **underlay zones** of the
+[reference network](../architecture/reference-network.md): the nine built-in
+zones at offsets x00–x08 (policy tunable, numbering fixed) and owner-defined
+zones at offsets 9–99. Overlays (`platform`, `tenant`, `public`) are not zones
+and cannot be created here.
+
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create zone | `POST /api/v1/sdn/zones` | `CreateNetworkZone` | via gateway category (`0x2F`), sub-opcodes `0x10`–`0x14` | `gateway_zone_create` | ✅ |
-| Update zone | `PUT /api/v1/sdn/zones/{name}` | `UpdateNetworkZone` | as above | `gateway_zone_update` | ✅ |
-| Delete zone | `DELETE /api/v1/sdn/zones/{name}` | `DeleteNetworkZone` | as above | `gateway_zone_delete` | ✅ |
-| List zones | `GET /api/v1/sdn/zones` (`?lifecycle_role=`) | `ListNetworkZones` | as above | `gateway_zone_list` | ✅ |
-| Assign zone | `PUT /api/v1/sdn/networks/{network}/zone` | `AssignNetworkZone` | as above | `gateway_zone_assign` | ✅ |
+| Create owner-defined zone | `POST /api/v1/sdn/zones` | `CreateNetworkZone` | gateway category (`0x2F`), sub-opcode `0x11` | `gateway_zone_create` | ✅ |
+| Tune / replace zone | `PUT /api/v1/sdn/zones/{name}` | `UpdateNetworkZone` | sub-opcode `0x12` | `gateway_zone_update` | ✅ |
+| Delete zone (omit optional built-in) | `DELETE /api/v1/sdn/zones/{name}` | `DeleteNetworkZone` | sub-opcode `0x13` | `gateway_zone_delete` | ✅ |
+| List zones with numbering | `GET /api/v1/sdn/zones` (`?lifecycle_role=`) | `ListNetworkZones` | sub-opcode `0x10` | `gateway_zone_list` | ✅ |
+
+Every zone record carries `name`, `offset`, `port_classes`,
+`internet_ingress`, `isolate_from`, `allow_to` (`{zone, services}`),
+`services`, `isolate`, `oob`, `lifecycle_role`, `privileged_access`
+(`{reason, approved_by}`), `restart_required` and the timestamps. When the
+node has an `sdn.environment`, it also carries the zone's derived
+`numbering` (`vlan`, `subnet4`, `subnet6`, `gateway`).
+
+Every mutation re-resolves the zone set onto the built-ins and re-runs zone
+and numbering validation; a refused mutation changes nothing. The rules a
+mutation must satisfy:
+
+- a built-in keeps its offset, port classes, lifecycle role and OOB flag;
+- an owner-defined zone takes a unique offset in 9–99 and joins the
+  `gateway` and/or `hypervisor` port class;
+- `platform`, `tenant`, `public` and `trusted` are reserved names;
+- an `allow_to` path into `control-plane` or `management` beyond the
+  reference defaults needs `privileged_access` with `reason` and
+  `approved_by`; the service writes an audit record (`audit=true`,
+  compliance `AU-2,AC-4`) for it;
+- `fabric`, `provisioning`, `quarantine` and `control-plane` cannot be
+  deleted; deleting another built-in omits it.
+
+Every accepted mutation returns `restart_required: true`: the network plan
+and the flow matrix are derived at daemon startup.
+
+**There is no "assign a network to a zone" operation.** Networks are zones:
+netplan derives exactly one network per zone. The former
+`AssignNetworkZone` RPC, the `PUT /api/v1/sdn/networks/{network}/zone`
+route, QUIC sub-opcode `0x14` (retired, never reused) and the
+`gateway_zone_assign` tool were removed with #708.
 
 The zone REST routes are served by the webservice
 (`pkg/webservice/v1/rest/sdn/zones.go`, delegating to the in-process
-`SDNServiceServer`) and wrap the documented snake_case zone objects in the
-standard platform response envelope (`{code, error, success, payload}`).
-The daemon's standalone REST stack (`pkg/api/rest/sdn_handlers.go`) serves
-the same paths bare, without the envelope, when `EnableREST` is set. The
-MCP zone tools (`pkg/api/mcp/gateway_tools.go`) close what this table
-previously recorded as a G7 gap, so zones now reach every transport. The
-QUIC zone operations are
+`SDNServiceServer`) and wrap the zone objects in the standard platform
+response envelope (`{code, error, success, payload}`). The daemon's
+standalone REST stack (`pkg/api/rest/sdn_handlers.go`) serves the same paths
+and the same object shape (`pkg/sdn/gateway.ZoneView`) bare, without the
+envelope, when `EnableREST` is set. The QUIC zone operations are
 sub-opcodes multiplexed under the **gateway category opcode `0x2F`**, not
 first-class opcodes — see §8.
 
@@ -238,12 +272,12 @@ positions described above are unchanged. See
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
 | `0x01` | `StatusInvalidRequest` | 400 | Malformed bridge, port, flow or VLAN spec |
-| `0x02` | `StatusNotFound` | 404 | Unknown bridge, port, VLAN, zone or policy |
+| `0x02` | `StatusNotFound` | 404 | Unknown bridge, port, VLAN, zone or policy (`ErrGatewayZoneNotFound`) |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid |
 | `0x04` | `StatusInternalError` | 500 | OVS/OVSDB or netlink failure |
-| `0x06` | `StatusAlreadyExists` | 409 | `ErrDuplicatePoolName`, `ErrDuplicateNetworkVLAN`, `ErrDuplicateNetworkName`, `ErrDuplicateNetworkSubnet` |
+| `0x06` | `StatusAlreadyExists` | 409 | `ErrDuplicatePoolName`; a zone that exists (`ErrGatewayZoneAlreadyExists`) |
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `sdn:*` scope; port not authorised |
-| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidNetworkVLAN`, `ErrInvalidPoolCIDR`, `ErrSubnetPoolMismatch`, `ErrUnknownNetworkZone` |
+| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidPoolCIDR`; a zone mutation that fails zone or numbering validation (`ErrGatewayZoneInvalid`) |
 | `0x0A` | `StatusUnavailable` | 503 | SDN subsystem not wired into the daemon |
 
 Configuration errors (`ErrInvalidTCPolicy`, `ErrDPDKRequiresNetdev`,

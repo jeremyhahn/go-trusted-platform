@@ -342,6 +342,10 @@ func formatPortStatus(ps *switchmgmt.PortStatus) map[string]interface{} {
 		result["trunk_vlans"] = vlans
 	}
 
+	if ps.NativeVLAN != 0 {
+		result["native_vlan"] = ps.NativeVLAN
+	}
+
 	if ps.Description != "" {
 		result["description"] = ps.Description
 	}

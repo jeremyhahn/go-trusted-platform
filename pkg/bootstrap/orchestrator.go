@@ -552,7 +552,14 @@ func (o *Orchestrator) configureSwitch(ctx context.Context) error {
 	o.logger.Info("bootstrap: configuring switch",
 		slog.String("vendor", o.config.Switch.Vendor))
 
-	swConfig := buildSwitchConfig(o.config.Switch)
+	plan, err := o.config.NetworkPlan()
+	if err != nil {
+		return err
+	}
+	swConfig, err := buildSwitchConfig(o.config.Switch, plan)
+	if err != nil {
+		return err
+	}
 	configurator, err := switchmgmt.NewConfigurator(swConfig, o.logger)
 	if err != nil {
 		return err
@@ -1624,39 +1631,6 @@ func toDiscoveredNodeInfos(nodes []DiscoveredNode) []container.DiscoveredNodeInf
 		}
 	}
 	return infos
-}
-
-// buildSwitchConfig converts the bootstrap SwitchConfig to a switchmgmt.Config.
-func buildSwitchConfig(sc *SwitchConfig) *switchmgmt.Config {
-	vlans := make([]switchmgmt.VLANConfig, 0, len(sc.VLANs))
-	for name, def := range sc.VLANs {
-		vlans = append(vlans, switchmgmt.VLANConfig{
-			ID:     def.VLAN,
-			Name:   name,
-			Subnet: def.Subnet,
-		})
-	}
-
-	ports := make([]switchmgmt.PortConfig, 0, len(sc.PortAssignments))
-	for i := range sc.PortAssignments {
-		pa := &sc.PortAssignments[i]
-		ports = append(ports, switchmgmt.PortConfig{
-			Port:        pa.Port,
-			Mode:        pa.Mode,
-			VLANs:       pa.VLANs,
-			Description: pa.Description,
-		})
-	}
-
-	return &switchmgmt.Config{
-		Vendor:         switchmgmt.SwitchVendor(sc.Vendor),
-		Host:           sc.Host,
-		User:           sc.User,
-		SSHKey:         sc.SSHKey,
-		KnownHostsPath: sc.KnownHostsPath,
-		VLANs:          vlans,
-		Ports:          ports,
-	}
 }
 
 // httpHealthChecker implements HealthChecker by consulting the node's

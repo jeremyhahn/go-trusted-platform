@@ -37,8 +37,6 @@ interface SDKTenant {
   name: string;
   displayName?: string;
   state?: string;
-  vlanRangeStart?: number;
-  vlanRangeEnd?: number;
   computeQuota?: { maxVms?: number; maxVcpus?: number; maxMemoryMb?: number; maxDiskGb?: number; maxContainers?: number };
   networkQuota?: { maxBridges?: number; maxPorts?: number; maxBandwidthMbps?: number };
   storageQuota?: { maxVolumesGb?: number; maxSnapshots?: number };
@@ -70,10 +68,6 @@ function toUITenant(tenant: SDKTenant): UITenant {
     name: tenant.name,
     display_name: tenant.displayName || tenant.name,
     state: (tenant.state as 'created' | 'active' | 'suspended' | 'deleted') || 'active',
-    vlan_range: tenant.vlanRangeStart && tenant.vlanRangeEnd ? {
-      start: tenant.vlanRangeStart,
-      end: tenant.vlanRangeEnd,
-    } : undefined,
     compute_quota: tenant.computeQuota ? {
       max_vms: tenant.computeQuota.maxVms || 0,
       max_containers: tenant.computeQuota.maxContainers || 0,

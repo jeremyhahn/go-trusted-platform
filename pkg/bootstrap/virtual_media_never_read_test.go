@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 )
 
@@ -191,10 +190,10 @@ func vmediaOrchestrator(t *testing.T, sink *vmediaSink, client *bmc.MockClient, 
 		t.Fatalf("sink port: %v", err)
 	}
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: host, BootstrapHTTPPort: httpPort},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "test.local"},
-		ISOPath:  "/isos/platform.iso",
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: host, BootstrapHTTPPort: httpPort},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "test.local"},
+		ISOPath:     "/isos/platform.iso",
 		Nodes: []NodeConfig{{
 			Hostname: "lab-node-2", Role: RoleControlPlane, BootMethod: BootMethodVirtualMedia,
 			BMCAddress: "198.18.1.102", BMCUser: "admin", BMCPassword: "pass", BMCProtocol: "ipmi",

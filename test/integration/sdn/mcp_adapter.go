@@ -539,7 +539,7 @@ func (m *MCPAdapter) sendRequest(ctx context.Context, method string, params inte
 		return ErrMCPSDNRequestFailed{Err: marshalErr}
 	}
 
-	httpReq, httpErr := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+m.endpoint+"/mcp", bytes.NewReader(reqBody))
+	httpReq, httpErr := http.NewRequestWithContext(ctx, http.MethodPost, helpers.MCPEndpointURL(m.endpoint), bytes.NewReader(reqBody))
 	if httpErr != nil {
 		return ErrMCPSDNRequestFailed{Err: httpErr}
 	}

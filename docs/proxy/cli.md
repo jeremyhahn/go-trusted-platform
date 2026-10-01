@@ -115,9 +115,8 @@ resolved.
 platformctl proxy route add --id web --path-prefix / --pool web-pool --auth-mode public
 
 # An mTLS route restricted to one zone, prefix stripped
-# (`trusted` is today's built-in zone; the reference design replaces it (#708))
 platformctl proxy route add --id api --host api.example.com --path-prefix /api \
-    --pool api-pool --auth-mode mtls --allowed-zone trusted --backend-zone services \
+    --pool api-pool --auth-mode mtls --allowed-zone control-plane --backend-zone services \
     --strip-prefix
 
 # An attested, policy-gated route

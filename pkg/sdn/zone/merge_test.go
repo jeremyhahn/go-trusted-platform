@@ -17,161 +17,124 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
-// TestResolve_EmptyUser verifies that resolving an empty user list returns all
-// seven built-ins unchanged.
-func TestResolve_EmptyUser(t *testing.T) {
-	t.Parallel()
-
-	resolved, err := zone.Resolve(nil)
-	if err != nil {
-		t.Fatalf("Resolve(nil): %v", err)
-	}
-	defaults := zone.Defaults()
-	if len(resolved) != len(defaults) {
-		t.Fatalf("Resolve(nil): len = %d, want %d", len(resolved), len(defaults))
-	}
-	for i, d := range defaults {
-		if resolved[i].Name != d.Name {
-			t.Errorf("[%d] name = %q, want %q", i, resolved[i].Name, d.Name)
+func indexOf(t *testing.T, zones []zone.ZoneConfig, name zone.Zone) zone.ZoneConfig {
+	t.Helper()
+	for _, z := range zones {
+		if z.Name == name {
+			return z
 		}
 	}
+	t.Fatalf("zone %q not in resolved set", name)
+	return zone.ZoneConfig{}
 }
 
-// TestResolve_OverrideBuiltin verifies that a user entry with a built-in name
-// fully replaces the built-in.
-func TestResolve_OverrideBuiltin(t *testing.T) {
-	t.Parallel()
-
-	override := zone.ZoneConfig{
-		Name:            zone.ZoneTrusted,
-		InternetIngress: true, // deliberate change to verify replacement
-	}
-	resolved, err := zone.Resolve([]zone.ZoneConfig{override})
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	var found zone.ZoneConfig
-	for _, z := range resolved {
-		if z.Name == zone.ZoneTrusted {
-			found = z
-			break
-		}
-	}
-	if !found.InternetIngress {
-		t.Errorf("overridden trusted zone should have InternetIngress=true")
-	}
+// TestResolve_NoUserEntries returns exactly the built-ins.
+func TestResolve_NoUserEntries(t *testing.T) {
+	got, err := zone.Resolve(nil)
+	require.NoError(t, err)
+	assert.Equal(t, zone.Defaults(), got)
 }
 
-// TestResolve_AddNewZone verifies that a user entry with a novel name is
-// appended after the built-ins.
-func TestResolve_AddNewZone(t *testing.T) {
-	t.Parallel()
+// TestResolve_TunesBuiltinPolicyKeepsIdentity verifies that an operator entry
+// replaces a built-in's policy but keeps its offset, port classes and role.
+func TestResolve_TunesBuiltinPolicyKeepsIdentity(t *testing.T) {
+	got, err := zone.Resolve([]zone.ZoneConfig{{
+		Name:     zone.ZoneProvisioning,
+		Isolate:  true,
+		Services: []string{"dhcp"},
+		AllowTo:  []zone.ZonePath{{Zone: zone.ZoneControlPlane, Services: []string{"dns"}}},
+	}})
+	require.NoError(t, err)
 
-	user := zone.ZoneConfig{Name: "labs"}
-	resolved, err := zone.Resolve([]zone.ZoneConfig{user})
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if len(resolved) != len(zone.Defaults())+1 {
-		t.Fatalf("len = %d, want %d", len(resolved), len(zone.Defaults())+1)
-	}
-	last := resolved[len(resolved)-1]
-	if last.Name != "labs" {
-		t.Errorf("last zone = %q, want labs", last.Name)
-	}
+	p := indexOf(t, got, zone.ZoneProvisioning)
+	assert.Equal(t, zone.OffsetProvisioning, p.Offset)
+	assert.Equal(t, zone.LifecycleRoleProvisioning, p.LifecycleRole)
+	assert.ElementsMatch(t, []zone.PortClass{zone.PortClassGateway, zone.PortClassHypervisor}, p.PortClasses)
+	assert.Equal(t, []string{"dhcp"}, p.Services)
+	assert.Equal(t, []string{"dns"}, p.AllowTo[0].Services)
+	require.NoError(t, zone.Validate(got))
 }
 
-// TestResolve_OmitNoLifecycleRole verifies that omitting a built-in with no
-// lifecycle role succeeds.
-func TestResolve_OmitNoLifecycleRole(t *testing.T) {
-	t.Parallel()
-
-	omit := zone.ZoneConfig{Name: zone.ZoneStorage, Omit: true}
-	resolved, err := zone.Resolve([]zone.ZoneConfig{omit})
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
+// TestResolve_BuiltinIdentityIsFixed verifies that an operator entry cannot
+// renumber, re-class, re-role or re-flag a built-in zone.
+func TestResolve_BuiltinIdentityIsFixed(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry zone.ZoneConfig
+		field string
+	}{
+		{"offset", zone.ZoneConfig{Name: zone.ZoneStorage, Offset: 20}, "offset"},
+		{"port classes", zone.ZoneConfig{Name: zone.ZoneTransit, PortClasses: []zone.PortClass{zone.PortClassHypervisor}}, "port_classes"},
+		{"lifecycle role", zone.ZoneConfig{Name: zone.ZoneStorage, LifecycleRole: zone.LifecycleRoleQuarantine}, "lifecycle_role"},
+		{"oob", zone.ZoneConfig{Name: zone.ZoneBackup, OOB: true}, "oob"},
 	}
-	for _, z := range resolved {
-		if z.Name == zone.ZoneStorage {
-			t.Errorf("storage should have been omitted from resolved set")
-		}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := zone.Resolve([]zone.ZoneConfig{tc.entry})
+			var target zone.ErrBuiltinIdentity
+			require.True(t, errors.As(err, &target), "got %v", err)
+			assert.Equal(t, tc.field, target.Field)
+			assert.Equal(t, tc.entry.Name, target.Zone)
+		})
 	}
 }
 
-// TestResolve_OmitLifecycleHolderWithReplacement verifies that omitting a
-// lifecycle-role holder succeeds when another user zone takes that role.
-func TestResolve_OmitLifecycleHolderWithReplacement(t *testing.T) {
-	t.Parallel()
-
-	user := []zone.ZoneConfig{
-		{Name: zone.ZoneProvisioning, Omit: true},
-		{Name: "onboarding", LifecycleRole: zone.LifecycleRoleProvisioning, Isolate: true,
-			Services: []string{"dhcp", "tftp", "dns", "acme"},
-		},
-	}
-	_, err := zone.Resolve(user)
-	if err != nil {
-		t.Errorf("Resolve: unexpected error: %v", err)
-	}
+// TestResolve_RepeatingIdentityIsAllowed verifies that an entry may restate
+// a built-in's own offset and port classes (in any order).
+func TestResolve_RepeatingIdentityIsAllowed(t *testing.T) {
+	_, err := zone.Resolve([]zone.ZoneConfig{{
+		Name:        zone.ZoneFabric,
+		Offset:      zone.OffsetFabric,
+		PortClasses: []zone.PortClass{zone.PortClassHypervisor, zone.PortClassGateway},
+	}})
+	require.NoError(t, err)
 }
 
-// TestResolve_OmitLifecycleHolderWithoutReplacement verifies that omitting a
-// lifecycle-role holder without providing a replacement returns
-// ErrOmitLifecycleHolder.
-func TestResolve_OmitLifecycleHolderWithoutReplacement(t *testing.T) {
-	t.Parallel()
+// TestResolve_Omit covers omitting an optional built-in, refusing to omit a
+// required one, and refusing omit on a name that is not built in.
+func TestResolve_Omit(t *testing.T) {
+	got, err := zone.Resolve([]zone.ZoneConfig{{Name: zone.ZoneBackup, Omit: true}})
+	require.NoError(t, err)
+	for _, z := range got {
+		assert.NotEqual(t, zone.ZoneBackup, z.Name)
+	}
 
-	user := []zone.ZoneConfig{
-		{Name: zone.ZoneProvisioning, Omit: true},
+	for _, required := range []zone.Zone{zone.ZoneFabric, zone.ZoneProvisioning, zone.ZoneQuarantine, zone.ZoneControlPlane} {
+		_, err := zone.Resolve([]zone.ZoneConfig{{Name: required, Omit: true}})
+		var target zone.ErrOmitRequired
+		require.True(t, errors.As(err, &target), "omit %s: got %v", required, err)
+		assert.Equal(t, required, target.Zone)
 	}
-	_, err := zone.Resolve(user)
-	var target zone.ErrOmitLifecycleHolder
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrOmitLifecycleHolder, got %T: %v", err, err)
-	}
-	if target.Zone != zone.ZoneProvisioning {
-		t.Errorf("ErrOmitLifecycleHolder.Zone = %q, want provisioning", target.Zone)
-	}
-	if target.Role != zone.LifecycleRoleProvisioning {
-		t.Errorf("ErrOmitLifecycleHolder.Role = %q, want provisioning", target.Role)
-	}
+
+	_, err = zone.Resolve([]zone.ZoneConfig{{Name: "lab", Omit: true}})
+	var unknown zone.ErrOmitUnknown
+	require.True(t, errors.As(err, &unknown), "got %v", err)
 }
 
-// TestResolve_OmitNonBuiltin verifies that an Omit entry for a non-built-in
-// name is silently ignored (no entry added, no error).
-func TestResolve_OmitNonBuiltin(t *testing.T) {
-	t.Parallel()
-
-	user := []zone.ZoneConfig{
-		{Name: "imaginary", Omit: true},
-	}
-	resolved, err := zone.Resolve(user)
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if len(resolved) != len(zone.Defaults()) {
-		t.Errorf("len = %d, want %d (omit of non-builtin should be no-op)",
-			len(resolved), len(zone.Defaults()))
-	}
+// TestResolve_OwnerZonesAppendedInOffsetOrder verifies owner-defined zones
+// follow the built-ins, sorted by offset.
+func TestResolve_OwnerZonesAppendedInOffsetOrder(t *testing.T) {
+	got, err := zone.Resolve([]zone.ZoneConfig{
+		{Name: "lab-b", Offset: 12, PortClasses: []zone.PortClass{zone.PortClassHypervisor}},
+		{Name: "lab-a", Offset: 9, PortClasses: []zone.PortClass{zone.PortClassGateway}},
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 11)
+	assert.Equal(t, zone.Zone("lab-a"), got[9].Name)
+	assert.Equal(t, zone.Zone("lab-b"), got[10].Name)
+	require.NoError(t, zone.Validate(got))
 }
 
-// TestResolve_MutationDoesNotAffectBuiltins verifies that mutating returned
-// configs does not alter subsequent calls to Defaults().
-func TestResolve_MutationDoesNotAffectBuiltins(t *testing.T) {
-	t.Parallel()
-
-	resolved, _ := zone.Resolve(nil)
-	for i := range resolved {
-		resolved[i].InternetIngress = true
-		resolved[i].Services = append(resolved[i].Services, "injected")
-	}
-	defaults := zone.Defaults()
-	for _, d := range defaults {
-		if d.Name == zone.ZoneTrusted && d.InternetIngress {
-			t.Errorf("mutation of resolved slice polluted Defaults()")
-		}
-	}
+// TestResolve_DuplicateEntry refuses two operator entries with one name.
+func TestResolve_DuplicateEntry(t *testing.T) {
+	_, err := zone.Resolve([]zone.ZoneConfig{{Name: zone.ZoneStorage}, {Name: zone.ZoneStorage}})
+	var target zone.ErrDuplicateZone
+	require.True(t, errors.As(err, &target), "got %v", err)
+	assert.Equal(t, zone.ZoneStorage, target.Name)
 }

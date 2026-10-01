@@ -55,9 +55,9 @@ func newHardwareIdentityOrchestrator(t *testing.T, overrides map[string]interfac
 	}
 
 	cfg := &BootstrapConfig{
-		Deployer:  DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:   []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Templates: map[string]string{RoleControlPlane: templatePath},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
+		Templates:   map[string]string{RoleControlPlane: templatePath},
 		Nodes: []NodeConfig{{
 			Hostname:  "cp-01",
 			Role:      RoleControlPlane,
@@ -375,10 +375,10 @@ func TestOrchestrator_DryRun_PreviewsHardwareIdentity(t *testing.T) {
 	}
 
 	cfg := &BootstrapConfig{
-		Deployer:  DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:   []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform:  PlatformGlobalConfig{Domain: "test.local"},
-		Templates: map[string]string{RoleControlPlane: templatePath},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "test.local"},
+		Templates:   map[string]string{RoleControlPlane: templatePath},
 		Nodes: []NodeConfig{{
 			Hostname:    "cp-01",
 			Role:        RoleControlPlane,

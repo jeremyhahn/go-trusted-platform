@@ -667,6 +667,18 @@ func registerSDNHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.SDNService_GetFlowStats_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetFlowStats(ctx, req.(*platformv1.GetFlowStatsRequest))
 	}
+	m[platformv1.SDNService_CreateNetworkZone_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateNetworkZone(ctx, req.(*platformv1.CreateNetworkZoneRequest))
+	}
+	m[platformv1.SDNService_UpdateNetworkZone_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateNetworkZone(ctx, req.(*platformv1.UpdateNetworkZoneRequest))
+	}
+	m[platformv1.SDNService_DeleteNetworkZone_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteNetworkZone(ctx, req.(*platformv1.DeleteNetworkZoneRequest))
+	}
+	m[platformv1.SDNService_ListNetworkZones_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListNetworkZones(ctx, req.(*platformv1.ListNetworkZonesRequest))
+	}
 	// Note: StreamFlowLogs is server-streaming and not supported by Invoke.
 }
 
@@ -910,12 +922,6 @@ func registerTenantHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.TenantService_CheckQuota_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.CheckQuota(ctx, req.(*platformv1.CheckQuotaRequest))
 	}
-	m[platformv1.TenantService_ValidateVLAN_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
-		return svc.ValidateVLAN(ctx, req.(*platformv1.ValidateVLANRequest))
-	}
-	m[platformv1.TenantService_GetBridgeName_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
-		return svc.GetBridgeName(ctx, req.(*platformv1.GetBridgeNameRequest))
-	}
 	m[platformv1.TenantService_Sync_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.Sync(ctx, req.(*platformv1.SyncTenantsRequest))
 	}
@@ -1059,6 +1065,18 @@ func registerGatewayHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.GatewayService_ListIPAMPools_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.ListIPAMPools(ctx, req.(*platformv1.ListIPAMPoolsRequest))
+	}
+	m[platformv1.GatewayService_CreateIPAMPool_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateIPAMPool(ctx, req.(*platformv1.CreateIPAMPoolRequest))
+	}
+	m[platformv1.GatewayService_GetIPAMPool_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetIPAMPool(ctx, req.(*platformv1.GetIPAMPoolRequest))
+	}
+	m[platformv1.GatewayService_UpdateIPAMPool_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateIPAMPool(ctx, req.(*platformv1.UpdateIPAMPoolRequest))
+	}
+	m[platformv1.GatewayService_DeleteIPAMPool_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteIPAMPool(ctx, req.(*platformv1.DeleteIPAMPoolRequest))
 	}
 	m[platformv1.GatewayService_AllocateIP_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.AllocateIP(ctx, req.(*platformv1.AllocateIPRequest))

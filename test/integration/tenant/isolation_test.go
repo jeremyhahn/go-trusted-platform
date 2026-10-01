@@ -386,9 +386,6 @@ func testTenantIsolation(t *testing.T, ctx context.Context, cmd TenantCommands, 
 		testTenantIsolationQuotaOperations(t, ctx, cmd, testCtx)
 	})
 
-	t.Run("TenantIsolation_NetworkOperations", func(t *testing.T) {
-		testTenantIsolationNetworkOperations(t, ctx, cmd, testCtx)
-	})
 }
 
 // =============================================================================
@@ -644,64 +641,6 @@ func testTenantIsolationQuotaOperations(t *testing.T, ctx context.Context, cmd T
 		assert.True(t, resultB.Allowed, "Tenant B should allow 5 VMs with quota of 100")
 	})
 }
-
-// =============================================================================
-// Tenant Isolation - Network Operations
-// =============================================================================
-
-// testTenantIsolationNetworkOperations verifies network isolation between tenants.
-func testTenantIsolationNetworkOperations(t *testing.T, ctx context.Context, cmd TenantCommands, testCtx *IsolationTestContext) {
-	testCtx2, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	t.Run("BridgeNamesAreIsolated", func(t *testing.T) {
-		bridgeA, err := cmd.GetBridgeName(testCtx2, GetBridgeNameOptions{TenantID: testCtx.TenantA.ID})
-		require.NoError(t, err, "Should get tenant A bridge name")
-
-		bridgeB, err := cmd.GetBridgeName(testCtx2, GetBridgeNameOptions{TenantID: testCtx.TenantB.ID})
-		require.NoError(t, err, "Should get tenant B bridge name")
-
-		assert.NotEqual(t, bridgeA.BridgeName, bridgeB.BridgeName,
-			"Tenants should have different bridge names")
-		assert.Equal(t, testCtx.TenantA.ID, bridgeA.TenantID, "Bridge A should be for tenant A")
-		assert.Equal(t, testCtx.TenantB.ID, bridgeB.TenantID, "Bridge B should be for tenant B")
-	})
-
-	t.Run("VLANValidationIsIsolated", func(t *testing.T) {
-		// Create tenants with different VLAN ranges for proper testing
-		// Tenant A: 100-199
-		// Tenant B: 200-299
-
-		tenantWithVLANA := setupIsolationTestContext(t, ctx, cmd, "vlan-a-"+uuid.New().String()[:8])
-		defer cleanupIsolationTestContext(t, ctx, cmd, tenantWithVLANA)
-
-		tenantWithVLANB := setupIsolationTestContext(t, ctx, cmd, "vlan-b-"+uuid.New().String()[:8])
-		defer cleanupIsolationTestContext(t, ctx, cmd, tenantWithVLANB)
-
-		// VLAN 150 should be validated against tenant A's range
-		resultA, err := cmd.ValidateVLAN(testCtx2, ValidateVLANOptions{
-			TenantID: tenantWithVLANA.TenantA.ID,
-			VLANID:   150,
-		})
-		require.NoError(t, err, "VLAN validation for tenant A should not error")
-		// The validity depends on the tenant's configured VLAN range
-
-		// VLAN 150 should be validated against tenant B's range (may be different result)
-		resultB, err := cmd.ValidateVLAN(testCtx2, ValidateVLANOptions{
-			TenantID: tenantWithVLANB.TenantA.ID,
-			VLANID:   150,
-		})
-		require.NoError(t, err, "VLAN validation for tenant B should not error")
-
-		// Log results for debugging (actual validity depends on tenant configuration)
-		t.Logf("Tenant A VLAN 150 valid: %v", resultA.Valid)
-		t.Logf("Tenant B VLAN 150 valid: %v", resultB.Valid)
-	})
-}
-
-// =============================================================================
-// Invitation Isolation Tests
-// =============================================================================
 
 // TestTenantIsolation_Invitations tests that invitations are isolated per tenant.
 // This test verifies:

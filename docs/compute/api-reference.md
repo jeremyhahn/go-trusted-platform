@@ -682,7 +682,7 @@ Content-Type: application/json
     ],
     "networks": [
       {
-        "bridge": "trusted0",
+        "bridge": "br-int",
         "model": "NETWORK_MODEL_VIRTIO"
       }
     ],

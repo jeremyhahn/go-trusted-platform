@@ -101,7 +101,7 @@ All services are exposed as **platform services**. Implementation details like u
 | `Device()` | `device` | Device registration and profile management |
 | `Attestation()` | `attestation` | Quote generation and manifest verification |
 | `IDevID()` | `idevid` | Initial Device Identity certificates |
-| `Tenant()` | `tenant` | Multi-tenant management with VLAN isolation |
+| `Tenant()` | `tenant` | Multi-tenant management: quotas, keyspace and DEK isolation |
 | `SDN()` | `sdn` | Software-defined networking (OVS, flows, ports) |
 | `DNS()` | `dns` | DNS zone and record management with DNSSEC |
 | `PXE()` | `pxe` | Network boot provisioning |

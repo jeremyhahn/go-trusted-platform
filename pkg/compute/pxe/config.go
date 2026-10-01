@@ -20,30 +20,11 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vlan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 const (
-	// DefaultQuarantineVLAN is the default VLAN for quarantined devices.
-	// Sourced from the canonical pkg/sdn/vlan defaults (reference-network.md).
-	DefaultQuarantineVLAN = vlan.DefaultQuarantine
-
-	// DefaultProvisioningVLAN is the default VLAN for devices during provisioning.
-	// Sourced from the canonical pkg/sdn/vlan defaults (reference-network.md).
-	DefaultProvisioningVLAN = vlan.DefaultProvisioning
-
-	// DefaultTrustedVLAN is the default VLAN for trusted (enrolled+authorized) devices.
-	// Sourced from the canonical pkg/sdn/vlan defaults (reference-network.md).
-	DefaultTrustedVLAN = vlan.DefaultTrusted
-
-	// DefaultStorageVLAN is the default VLAN for storage zone devices.
-	// Sourced from the canonical pkg/sdn/vlan defaults (reference-network.md).
-	DefaultStorageVLAN = vlan.DefaultStorage
-
-	// DefaultManagementVLAN is the default VLAN for the management zone.
-	// Sourced from the canonical pkg/sdn/vlan defaults (reference-network.md).
-	DefaultManagementVLAN = vlan.DefaultManagement
-
 	// DefaultMaxRetries is the default number of retry attempts.
 	DefaultMaxRetries = 3
 
@@ -72,10 +53,10 @@ const (
 	FirmwareSourceEmbedded = "embedded"
 
 	// MinVLANID is the minimum valid VLAN ID per IEEE 802.1Q.
-	MinVLANID = vlan.MinVLAN
+	MinVLANID uint16 = 1
 
 	// MaxVLANID is the maximum valid VLAN ID per IEEE 802.1Q.
-	MaxVLANID = vlan.MaxVLAN
+	MaxVLANID uint16 = netplan.MaxVLAN
 )
 
 // ServiceConfig holds all configuration for the PXE provisioning service.
@@ -86,10 +67,12 @@ type ServiceConfig struct {
 	// BridgeName is the OVS bridge name for VLAN management.
 	BridgeName string
 
-	// QuarantineVLAN is the VLAN ID for quarantined devices (default: 202).
+	// QuarantineVLAN is the VLAN ID of the quarantine zone, from the
+	// network plan (NewServiceConfig).
 	QuarantineVLAN uint16
 
-	// ProvisioningVLAN is the VLAN ID for devices during provisioning (default: 201).
+	// ProvisioningVLAN is the VLAN ID of the provisioning zone, from the
+	// network plan (NewServiceConfig).
 	ProvisioningVLAN uint16
 
 	// Firmware contains UEFI firmware verification configuration.
@@ -159,13 +142,26 @@ type FirmwareConfig struct {
 	RequireSecureBoot bool
 }
 
-// DefaultServiceConfig returns a ServiceConfig with sensible defaults.
-func DefaultServiceConfig() *ServiceConfig {
+// NewServiceConfig returns a ServiceConfig with sensible defaults and the
+// quarantine and provisioning VLANs of the network plan. There is no VLAN
+// default: a nil plan is ErrNetworkPlanRequired.
+func NewServiceConfig(plan *netplan.Plan) (*ServiceConfig, error) {
+	if plan == nil {
+		return nil, ErrNetworkPlanRequired{}
+	}
+	quarantine, err := plan.MustZone(zone.ZoneQuarantine)
+	if err != nil {
+		return nil, &WrappedError{Msg: "quarantine zone", Err: err}
+	}
+	provisioning, err := plan.MustZone(zone.ZoneProvisioning)
+	if err != nil {
+		return nil, &WrappedError{Msg: "provisioning zone", Err: err}
+	}
 	return &ServiceConfig{
 		IPXEConfig:           ipxe.DefaultServerConfig(),
 		BridgeName:           "",
-		QuarantineVLAN:       DefaultQuarantineVLAN,
-		ProvisioningVLAN:     DefaultProvisioningVLAN,
+		QuarantineVLAN:       quarantine.VLAN,
+		ProvisioningVLAN:     provisioning.VLAN,
 		Firmware:             DefaultFirmwareConfig(),
 		RegistryAddr:         "",
 		DefaultISORef:        DefaultISORef,
@@ -178,7 +174,7 @@ func DefaultServiceConfig() *ServiceConfig {
 		WebhookEnabled:       false,
 		WebhookPath:          DefaultWebhookPath,
 		WebhookSecret:        "",
-	}
+	}, nil
 }
 
 // DefaultFirmwareConfig returns a FirmwareConfig with sensible defaults.

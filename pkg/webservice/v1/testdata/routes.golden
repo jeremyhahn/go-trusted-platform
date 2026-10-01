@@ -275,7 +275,6 @@ GET /api/v1/tenants
 GET /api/v1/tenants/by-name/{name}
 GET /api/v1/tenants/{id}
 GET /api/v1/tenants/{id}/barrier
-GET /api/v1/tenants/{id}/bridge
 GET /api/v1/tenants/{id}/dek
 GET /api/v1/tenants/{id}/quotas
 GET /api/v1/tenants/{id}/usage
@@ -472,7 +471,6 @@ POST /api/v1/tenants/{id}/dek/rotate
 POST /api/v1/tenants/{id}/quota-check
 POST /api/v1/tenants/{id}/resume
 POST /api/v1/tenants/{id}/suspend
-POST /api/v1/tenants/{id}/vlan/validate
 POST /api/v1/tpm/ak
 POST /api/v1/tpm/clear
 POST /api/v1/tpm/ek
@@ -516,7 +514,6 @@ PUT /api/v1/kms/secrets/{name}/status
 PUT /api/v1/pxe/devices/{id}/state
 PUT /api/v1/sdn/bridges/{name}/ports/{port}/state
 PUT /api/v1/sdn/gateway/ipam/pools/{id}
-PUT /api/v1/sdn/networks/{network}/zone
 PUT /api/v1/sdn/zones/{name}
 PUT /api/v1/tenants/{id}
 PUT /api/v1/tenants/{id}/quotas

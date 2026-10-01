@@ -2,6 +2,24 @@
 
 This document describes the zero-trust security architecture for go-trusted-platform, explaining how cryptographic identity and layered verification provide stronger security than traditional perimeter-based models.
 
+> **Status.** This document describes the target security model. Where the
+> code differs, this note is authoritative:
+>
+> - The `security:` configuration in §4 is a design sketch, not a shipped
+>   configuration section; no loader decodes it.
+> - **Layer 3 (trust level, reputation)** and **Layer 6 (rate limiting,
+>   adaptive proof-of-work)** belong to the P2P trusted-computing network,
+>   which is planned ([`docs/dht/`](../dht/), `Status: PLANNED`) and not
+>   implemented.
+> - **Layer 4 (attestation)**: quote freshness is nonce-based; there is no
+>   ±100 ms time window. Golden PCR baselines are learned from the first
+>   matching device of a profile (trust on first use) until signed baselines
+>   land in this release's attestation work, so a modified-firmware device
+>   that enrolls first defines the baseline.
+> - The network layer this model rests on — zones, port classes, host
+>   addressing by role — is the [reference network](reference-network.md),
+>   implemented in #708; the overlay's admission and IPsec are #709.
+
 ## 1. Overview
 
 ### Zero-Trust + Trusted Computing Model
@@ -320,7 +338,7 @@ security:
       pcr1: "sha256:def456..."   # Platform configuration
       pcr7: "sha256:ghi789..."   # Secure boot state
       pcr14: "sha256:jkl012..."  # Workload chain
-    max_quote_age: 100ms         # Freshness window (+/- 100ms)
+    max_quote_age: 100ms         # design only: freshness is nonce-based today
     nonce_size: 32               # Nonce size in bytes
 
   # Layer 5: ABAC Policy Enforcement
@@ -401,12 +419,12 @@ The following table compares how traditional perimeter security and go-trusted-p
 | **Stolen credentials** | Full access once inside network | Blocked: Credentials useless without TPM hardware containing private key |
 | **Cloned VM** | Full access if on trusted network | Blocked at Layer 3: swtpm rejected; Layer 4: PCR mismatch detected |
 | **Compromised leaf node** | Lateral movement to other systems | Limited: Can only access resources allowed by ABAC policy for that identity |
-| **Malicious P2P node** | N/A (perimeter model) | Blocked at Layer 2: Not enrolled; Layer 3: Low reputation; Layer 6: Rate limited |
-| **DDoS attack** | Overwhelms firewall/services | Mitigated at Layer 6: Per-node limits, reputation quotas, adaptive PoW |
+| **Malicious P2P node** | N/A (perimeter model) | Planned: the P2P network and its Layers 3 and 6 are not implemented (`docs/dht/`) |
+| **DDoS attack** | Overwhelms firewall/services | Planned: Layer 6 per-node limits and adaptive PoW are not implemented |
 | **Insider threat (valid employee)** | Full trusted access | Limited: ABAC policies restrict to job function; attestation detects tampering |
-| **Replay attack (old quote)** | N/A (no attestation) | Blocked at Layer 4: Quote freshness check (+/-100ms) fails |
+| **Replay attack (old quote)** | N/A (no attestation) | Blocked at Layer 4: each quote is bound to a fresh verifier nonce |
 | **Sybil attack (many fake identities)** | Can create unlimited accounts | Blocked at Layer 3: Hardware TPM required, minimum age enforced |
-| **Supply chain attack (modified firmware)** | Undetected | Detected at Layer 4: PCR values mismatch golden state |
+| **Supply chain attack (modified firmware)** | Undetected | Detected at Layer 4 once a profile's golden PCRs are set: values mismatch. Baselines are trust-on-first-use until signed baselines land, so a device modified before its profile's first enrollment is not detected |
 | **Physical device theft** | Credentials extracted, device cloned | Limited: TPM keys non-exportable; new enrollment triggers alerts |
 
 ### Attack Scenario Details

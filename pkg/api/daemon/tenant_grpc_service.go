@@ -101,15 +101,13 @@ type TenantResponse struct {
 
 // CreateTenantRequest contains parameters for creating a tenant.
 type CreateTenantRequest struct {
-	Name           string            `json:"name"`
-	DisplayName    string            `json:"display_name"`
-	VLANRangeStart uint16            `json:"vlan_range_start,omitempty"`
-	VLANRangeEnd   uint16            `json:"vlan_range_end,omitempty"`
-	Labels         map[string]string `json:"labels,omitempty"`
-	Annotations    map[string]string `json:"annotations,omitempty"`
-	ComputeQuota   *ComputeQuotaInfo `json:"compute_quota,omitempty"`
-	NetworkQuota   *NetworkQuotaInfo `json:"network_quota,omitempty"`
-	StorageQuota   *StorageQuotaInfo `json:"storage_quota,omitempty"`
+	Name         string            `json:"name"`
+	DisplayName  string            `json:"display_name"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	Annotations  map[string]string `json:"annotations,omitempty"`
+	ComputeQuota *ComputeQuotaInfo `json:"compute_quota,omitempty"`
+	NetworkQuota *NetworkQuotaInfo `json:"network_quota,omitempty"`
+	StorageQuota *StorageQuotaInfo `json:"storage_quota,omitempty"`
 }
 
 // UpdateTenantRequest contains parameters for updating a tenant.
@@ -193,31 +191,6 @@ type CheckQuotaResponse struct {
 	Message   string `json:"message,omitempty"`
 }
 
-// ValidateVLANRequest contains parameters for VLAN validation.
-type ValidateVLANRequest struct {
-	TenantID string `json:"tenant_id"`
-	VLANID   uint16 `json:"vlan_id"`
-}
-
-// ValidateVLANResponse contains the VLAN validation result.
-type ValidateVLANResponse struct {
-	TenantID string `json:"tenant_id"`
-	VLANID   uint16 `json:"vlan_id"`
-	Valid    bool   `json:"valid"`
-	Message  string `json:"message,omitempty"`
-}
-
-// GetBridgeNameRequest contains the tenant ID to get bridge name for.
-type GetBridgeNameRequest struct {
-	TenantID string `json:"tenant_id"`
-}
-
-// GetBridgeNameResponse contains the OVS bridge name.
-type GetBridgeNameResponse struct {
-	TenantID   string `json:"tenant_id"`
-	BridgeName string `json:"bridge_name"`
-}
-
 // SyncRequest contains parameters for state synchronization.
 type SyncRequest struct{}
 
@@ -288,9 +261,6 @@ type TenantInfo struct {
 	Name         string            `json:"name"`
 	DisplayName  string            `json:"display_name"`
 	State        string            `json:"state"`
-	OVSBridge    string            `json:"ovs_bridge,omitempty"`
-	VLANStart    uint16            `json:"vlan_start,omitempty"`
-	VLANEnd      uint16            `json:"vlan_end,omitempty"`
 	DEKPath      string            `json:"dek_path,omitempty"`
 	DEKHandle    uint32            `json:"dek_handle,omitempty"` // Deprecated: use DEKPath
 	ComputeQuota *ComputeQuotaInfo `json:"compute_quota,omitempty"`
@@ -433,14 +403,6 @@ func (s *TenantGRPCService) CreateTenant(ctx context.Context, req *CreateTenantR
 		DisplayName: req.DisplayName,
 		Labels:      req.Labels,
 		Annotations: req.Annotations,
-	}
-
-	// Set VLAN range if provided
-	if req.VLANRangeStart > 0 && req.VLANRangeEnd > 0 {
-		createReq.VLANRange = &tenant.VLANRange{
-			Start: req.VLANRangeStart,
-			End:   req.VLANRangeEnd,
-		}
 	}
 
 	// Set quotas if provided
@@ -765,72 +727,6 @@ func (s *TenantGRPCService) CheckQuota(ctx context.Context, req *CheckQuotaReque
 	return response, nil
 }
 
-// ValidateVLAN checks if a tenant can use a specific VLAN.
-func (s *TenantGRPCService) ValidateVLAN(ctx context.Context, req *ValidateVLANRequest) (*ValidateVLANResponse, error) {
-	if s.manager == nil {
-		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
-	}
-
-	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "request is required")
-	}
-
-	if req.TenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
-	}
-
-	if req.VLANID == 0 {
-		return nil, status.Error(codes.InvalidArgument, "vlan_id is required")
-	}
-
-	if req.VLANID > 4094 {
-		return nil, status.Error(codes.InvalidArgument, "vlan_id must be between 1 and 4094")
-	}
-
-	err := s.manager.ValidateVLAN(ctx, req.TenantID, req.VLANID)
-
-	response := &ValidateVLANResponse{
-		TenantID: req.TenantID,
-		VLANID:   req.VLANID,
-	}
-
-	if err != nil {
-		response.Valid = false
-		response.Message = err.Error()
-	} else {
-		response.Valid = true
-		response.Message = "VLAN is valid for tenant"
-	}
-
-	return response, nil
-}
-
-// GetBridgeName returns the OVS bridge name for a tenant.
-func (s *TenantGRPCService) GetBridgeName(ctx context.Context, req *GetBridgeNameRequest) (*GetBridgeNameResponse, error) {
-	if s.manager == nil {
-		return nil, status.Error(codes.FailedPrecondition, "tenant manager not initialized")
-	}
-
-	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "request is required")
-	}
-
-	if req.TenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
-	}
-
-	bridgeName, err := s.manager.GetBridgeName(ctx, req.TenantID)
-	if err != nil {
-		s.logger.Error(err, "failed to get bridge name", "tenant_id", req.TenantID)
-		return nil, s.toGRPCError(err)
-	}
-
-	return &GetBridgeNameResponse{
-		TenantID:   req.TenantID,
-		BridgeName: bridgeName,
-	}, nil
-}
-
 // Sync synchronizes tenant manager state with external systems.
 func (s *TenantGRPCService) Sync(ctx context.Context, req *SyncRequest) (*SyncResponse, error) {
 	if s.manager == nil {
@@ -947,9 +843,6 @@ func (s *TenantGRPCService) entityToTenantInfo(entity *tenant.TenantEntity) *Ten
 		Name:        entity.Name,
 		DisplayName: entity.DisplayName,
 		State:       entity.State.String(),
-		OVSBridge:   entity.OVSBridge,
-		VLANStart:   entity.VLANRange.Start,
-		VLANEnd:     entity.VLANRange.End,
 		DEKPath:     entity.DEKPath,
 		DEKHandle:   entity.DEKHandle(), // Deprecated: for backward compatibility
 		Labels:      entity.Labels,
@@ -1013,24 +906,9 @@ func (s *TenantGRPCService) toGRPCError(err error) error {
 		return status.Error(codes.Internal, err.Error())
 	}
 
-	var bridgeFailed tenant.ErrBridgeOperationFailed
-	if errors.As(err, &bridgeFailed) {
-		return status.Error(codes.Internal, err.Error())
-	}
-
-	var vlanFailed tenant.ErrVLANAllocationFailed
-	if errors.As(err, &vlanFailed) {
-		return status.Error(codes.ResourceExhausted, err.Error())
-	}
-
 	var quotaExceeded tenant.ErrQuotaExceeded
 	if errors.As(err, &quotaExceeded) {
 		return status.Error(codes.ResourceExhausted, err.Error())
-	}
-
-	var invalidVLAN tenant.ErrInvalidVLANRange
-	if errors.As(err, &invalidVLAN) {
-		return status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	var dekFailed tenant.ErrDEKOperationFailed

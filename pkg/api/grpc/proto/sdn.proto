@@ -52,7 +52,6 @@ service SDNService {
   rpc UpdateNetworkZone(UpdateNetworkZoneRequest) returns (UpdateNetworkZoneResponse);
   rpc DeleteNetworkZone(DeleteNetworkZoneRequest) returns (DeleteNetworkZoneResponse);
   rpc ListNetworkZones(ListNetworkZonesRequest) returns (ListNetworkZonesResponse);
-  rpc AssignNetworkZone(AssignNetworkZoneRequest) returns (AssignNetworkZoneResponse);
 
   // Streaming logs
   rpc StreamFlowLogs(StreamFlowLogsRequest) returns (stream FlowLogEntry);
@@ -653,7 +652,9 @@ message StreamFlowLogsRequest {
 }
 
 // =============================================================================
-// Network zone messages (Z7) — SDN trust/exposure zones, distinct from DNS zones
+// Network zone messages — the underlay zones of the reference network
+// (docs/architecture/reference-network.md), distinct from DNS zones. Overlays
+// (platform, tenant, public) are not zones and never appear here.
 // =============================================================================
 
 // NetworkZonePath declares a directed traffic path to a destination zone with
@@ -665,42 +666,77 @@ message NetworkZonePath {
   repeated string services = 2;
 }
 
-// NetworkZoneConfig mirrors pkg/sdn/zone.ZoneConfig 1:1. It is the declarative
-// schema for a single network trust/exposure zone.
+// NetworkZonePrivilegedAccess is the audited override a zone must carry when
+// its allow_to opens a path into control-plane or management beyond the
+// reference defaults.
+message NetworkZonePrivilegedAccess {
+  // reason states why the path is needed.
+  string reason = 1;
+  // approved_by names who approved the path.
+  string approved_by = 2;
+}
+
+// NetworkZoneConfig mirrors pkg/sdn/zone.ZoneConfig 1:1.
 message NetworkZoneConfig {
+  reserved 7;
+  reserved "isolate_per_tenant";
+
   // name is the unique zone identifier (lowercase DNS-label string).
   string name = 1;
   // internet_ingress indicates this zone accepts inbound internet traffic.
   bool internet_ingress = 2;
-  // isolate_from lists zones from which this zone unconditionally denies traffic.
+  // isolate_from lists zones to which this zone unconditionally denies traffic.
   repeated string isolate_from = 3;
   // allow_to declares directed traffic paths from this zone to other zones.
   repeated NetworkZonePath allow_to = 4;
   // services lists services permitted within this zone.
   repeated string services = 5;
-  // isolate, when true, denies all inter-zone traffic except explicit allow_to paths.
+  // isolate, when true, denies all traffic except explicit allow_to paths.
   bool isolate = 6;
-  // isolate_per_tenant enforces per-tenant micro-zone isolation within this zone.
-  bool isolate_per_tenant = 7;
-  // oob marks this zone as out-of-band hardware management (IPMI/BMC).
+  // oob marks the out-of-band hardware management zone (BMC/IPMI).
   bool oob = 8;
   // lifecycle_role indicates the device-lifecycle function:
-  // "" (none) | "provisioning" | "quarantine".
+  // "" (none) | "provisioning" | "quarantine". Built-in zones only.
   string lifecycle_role = 9;
-  // omit, when true on a user entry whose name matches a built-in, drops the
-  // built-in from the resolved set.
+  // omit, when true on an entry whose name matches an optional built-in,
+  // drops the built-in from the resolved set.
   bool omit = 10;
+  // offset is the zone's position in the environment block: 0-8 for the
+  // built-ins (fixed), 9-99 for owner-defined zones.
+  uint32 offset = 11;
+  // port_classes lists the switch port classes that carry the zone
+  // (gateway, hypervisor, bmc, mgmt-uplink, peer-link). Fixed for built-ins;
+  // owner-defined zones choose from gateway and hypervisor.
+  repeated string port_classes = 12;
+  // privileged_access is the audited override for paths into control-plane
+  // or management beyond the reference defaults.
+  NetworkZonePrivilegedAccess privileged_access = 13;
+}
+
+// NetworkZoneNumbering is a zone's numbering derived by the network plan
+// from the node's environment.
+message NetworkZoneNumbering {
+  // vlan is the zone's VLAN ID.
+  uint32 vlan = 1;
+  // subnet4 is the zone's IPv4 subnet in CIDR notation.
+  string subnet4 = 2;
+  // subnet6 is the zone's IPv6 /64; empty when the environment has no ULA.
+  string subnet6 = 3;
+  // gateway is the zone's gateway address (.1).
+  string gateway = 4;
 }
 
 // NetworkZone is a runtime zone record returned by the service layer.
-// It wraps NetworkZoneConfig with created/updated timestamps.
 message NetworkZone {
   NetworkZoneConfig config = 1;
   google.protobuf.Timestamp created_at = 2;
   google.protobuf.Timestamp updated_at = 3;
-  // restart_required is true when a flow-policy-relevant field was mutated
-  // and the flow matrix needs recompilation via daemon restart.
+  // restart_required is true when the zone set changed: the network plan
+  // and flow matrix are derived at daemon startup.
   bool restart_required = 4;
+  // numbering is the zone's derived numbering; absent when the node has no
+  // environment.
+  NetworkZoneNumbering numbering = 5;
 }
 
 // CreateNetworkZone request/response
@@ -733,8 +769,7 @@ message DeleteNetworkZoneRequest {
 
 message DeleteNetworkZoneResponse {
   Status status = 1;
-  // restart_required is true when flow-policy-relevant state was affected
-  // and the flow matrix needs recompilation via daemon restart.
+  // restart_required is true when the zone set changed.
   bool restart_required = 2;
 }
 
@@ -746,18 +781,4 @@ message ListNetworkZonesRequest {
 
 message ListNetworkZonesResponse {
   repeated NetworkZone zones = 1;
-}
-
-// AssignNetworkZone assigns a named network segment to a zone.
-message AssignNetworkZoneRequest {
-  // network is the network name to reassign.
-  string network = 1;
-  // zone is the target zone name.
-  string zone = 2;
-}
-
-message AssignNetworkZoneResponse {
-  Status status = 1;
-  // restart_required is true when the assignment triggers a flow matrix rebuild.
-  bool restart_required = 2;
 }

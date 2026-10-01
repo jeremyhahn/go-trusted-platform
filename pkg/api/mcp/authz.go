@@ -99,6 +99,22 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	// Gateway load balancer tools
 	// The telemetry snapshot is a read of what the datapath programmed.
 	c.toolPermissions["gateway_snapshot"] = "sdn:read"
+	// Underlay zones (#708). Every change re-derives the network plan and
+	// takes effect at restart; a privileged path is audited by the service.
+	c.toolPermissions["gateway_zone_list"] = "sdn:read"
+	c.toolPermissions["gateway_zone_create"] = "sdn:write"
+	c.toolPermissions["gateway_zone_update"] = "sdn:write"
+	c.toolPermissions["gateway_zone_delete"] = "sdn:delete"
+	// IPAM pools and allocations. Pools carry the reserved ranges and the
+	// dynamic window the network plan derives.
+	c.toolPermissions["gateway_ipam_pools"] = "sdn:read"
+	c.toolPermissions["gateway_ipam_pool_get"] = "sdn:read"
+	c.toolPermissions["gateway_ipam_pool_create"] = "sdn:write"
+	c.toolPermissions["gateway_ipam_pool_update"] = "sdn:write"
+	c.toolPermissions["gateway_ipam_pool_delete"] = "sdn:delete"
+	c.toolPermissions["gateway_ipam_allocations"] = "sdn:read"
+	c.toolPermissions["gateway_ipam_allocate"] = "sdn:write"
+	c.toolPermissions["gateway_ipam_release"] = "sdn:write"
 	c.toolPermissions["gateway_snapshots"] = "sdn:read"
 	c.toolPermissions["gateway_lb_vip_add"] = "sdn:write"
 	c.toolPermissions["gateway_lb_vip_remove"] = "sdn:delete"

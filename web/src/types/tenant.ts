@@ -13,12 +13,6 @@ export type TenantRole = 'owner' | 'admin' | 'member' | 'viewer';
 // Invitation status from backend
 export type InvitationStatus = 'pending' | 'accepted' | 'expired' | 'revoked';
 
-// VLAN range configuration
-export interface VLANRange {
-  start: number;
-  end: number;
-}
-
 // Compute quota settings
 export interface ComputeQuota {
   max_vms: number;
@@ -47,8 +41,6 @@ export interface Tenant {
   name: string;
   display_name: string;
   state: TenantState;
-  ovs_bridge?: string;
-  vlan_range?: VLANRange;
   compute_quota?: ComputeQuota;
   network_quota?: NetworkQuota;
   storage_quota?: StorageQuota;
@@ -139,7 +131,6 @@ export interface CreateTenantInput {
   display_name?: string;
   labels?: Record<string, string>;
   annotations?: Record<string, string>;
-  vlan_range?: VLANRange;
 }
 
 export interface UpdateTenantInput {

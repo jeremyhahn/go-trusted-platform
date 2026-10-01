@@ -151,30 +151,6 @@ func (e *ErrCheckQuotaFailed) Error() string {
 
 func (e *ErrCheckQuotaFailed) Unwrap() error { return e.Cause }
 
-// Network Errors
-
-type ErrValidateVLANFailed struct {
-	ID    string
-	Cause error
-}
-
-func (e *ErrValidateVLANFailed) Error() string {
-	return fmt.Sprintf("failed to validate VLAN for tenant %s: %v", e.ID, e.Cause)
-}
-
-func (e *ErrValidateVLANFailed) Unwrap() error { return e.Cause }
-
-type ErrGetBridgeNameFailed struct {
-	ID    string
-	Cause error
-}
-
-func (e *ErrGetBridgeNameFailed) Error() string {
-	return fmt.Sprintf("failed to get bridge name for tenant %s: %v", e.ID, e.Cause)
-}
-
-func (e *ErrGetBridgeNameFailed) Unwrap() error { return e.Cause }
-
 // Sync Errors
 
 type ErrSyncTenantsFailed struct {

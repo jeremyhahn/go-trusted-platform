@@ -47,7 +47,6 @@ const (
 	SDNService_UpdateNetworkZone_FullMethodName = "/platform.v1.SDNService/UpdateNetworkZone"
 	SDNService_DeleteNetworkZone_FullMethodName = "/platform.v1.SDNService/DeleteNetworkZone"
 	SDNService_ListNetworkZones_FullMethodName  = "/platform.v1.SDNService/ListNetworkZones"
-	SDNService_AssignNetworkZone_FullMethodName = "/platform.v1.SDNService/AssignNetworkZone"
 	SDNService_StreamFlowLogs_FullMethodName    = "/platform.v1.SDNService/StreamFlowLogs"
 )
 
@@ -93,7 +92,6 @@ type SDNServiceClient interface {
 	UpdateNetworkZone(ctx context.Context, in *UpdateNetworkZoneRequest, opts ...grpc.CallOption) (*UpdateNetworkZoneResponse, error)
 	DeleteNetworkZone(ctx context.Context, in *DeleteNetworkZoneRequest, opts ...grpc.CallOption) (*DeleteNetworkZoneResponse, error)
 	ListNetworkZones(ctx context.Context, in *ListNetworkZonesRequest, opts ...grpc.CallOption) (*ListNetworkZonesResponse, error)
-	AssignNetworkZone(ctx context.Context, in *AssignNetworkZoneRequest, opts ...grpc.CallOption) (*AssignNetworkZoneResponse, error)
 	// Streaming logs
 	StreamFlowLogs(ctx context.Context, in *StreamFlowLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FlowLogEntry], error)
 }
@@ -386,16 +384,6 @@ func (c *sDNServiceClient) ListNetworkZones(ctx context.Context, in *ListNetwork
 	return out, nil
 }
 
-func (c *sDNServiceClient) AssignNetworkZone(ctx context.Context, in *AssignNetworkZoneRequest, opts ...grpc.CallOption) (*AssignNetworkZoneResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AssignNetworkZoneResponse)
-	err := c.cc.Invoke(ctx, SDNService_AssignNetworkZone_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *sDNServiceClient) StreamFlowLogs(ctx context.Context, in *StreamFlowLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FlowLogEntry], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &SDNService_ServiceDesc.Streams[0], SDNService_StreamFlowLogs_FullMethodName, cOpts...)
@@ -457,7 +445,6 @@ type SDNServiceServer interface {
 	UpdateNetworkZone(context.Context, *UpdateNetworkZoneRequest) (*UpdateNetworkZoneResponse, error)
 	DeleteNetworkZone(context.Context, *DeleteNetworkZoneRequest) (*DeleteNetworkZoneResponse, error)
 	ListNetworkZones(context.Context, *ListNetworkZonesRequest) (*ListNetworkZonesResponse, error)
-	AssignNetworkZone(context.Context, *AssignNetworkZoneRequest) (*AssignNetworkZoneResponse, error)
 	// Streaming logs
 	StreamFlowLogs(*StreamFlowLogsRequest, grpc.ServerStreamingServer[FlowLogEntry]) error
 	mustEmbedUnimplementedSDNServiceServer()
@@ -553,9 +540,6 @@ func (UnimplementedSDNServiceServer) DeleteNetworkZone(context.Context, *DeleteN
 }
 func (UnimplementedSDNServiceServer) ListNetworkZones(context.Context, *ListNetworkZonesRequest) (*ListNetworkZonesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListNetworkZones not implemented")
-}
-func (UnimplementedSDNServiceServer) AssignNetworkZone(context.Context, *AssignNetworkZoneRequest) (*AssignNetworkZoneResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AssignNetworkZone not implemented")
 }
 func (UnimplementedSDNServiceServer) StreamFlowLogs(*StreamFlowLogsRequest, grpc.ServerStreamingServer[FlowLogEntry]) error {
 	return status.Error(codes.Unimplemented, "method StreamFlowLogs not implemented")
@@ -1085,24 +1069,6 @@ func _SDNService_ListNetworkZones_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _SDNService_AssignNetworkZone_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AssignNetworkZoneRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SDNServiceServer).AssignNetworkZone(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SDNService_AssignNetworkZone_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SDNServiceServer).AssignNetworkZone(ctx, req.(*AssignNetworkZoneRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _SDNService_StreamFlowLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StreamFlowLogsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -1232,10 +1198,6 @@ var SDNService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListNetworkZones",
 			Handler:    _SDNService_ListNetworkZones_Handler,
-		},
-		{
-			MethodName: "AssignNetworkZone",
-			Handler:    _SDNService_AssignNetworkZone_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

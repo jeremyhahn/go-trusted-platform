@@ -64,6 +64,8 @@ switches:
         mode: access | trunk              # Required: switchport mode
         vlans: [int]                      # For trunk: allowed VLANs
         access_vlan: int                  # For access: VLAN ID
+        native_vlan: int                  # For trunk: native VLAN (must be in vlans)
+        mtu: int                          # Optional: 1500-9216 (0 = leave as is)
         description: string               # Optional: port description
 ```
 

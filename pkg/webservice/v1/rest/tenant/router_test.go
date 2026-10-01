@@ -89,8 +89,6 @@ func TestTenantRouter_RoutesRegistered(t *testing.T) {
 		{http.MethodPut, "/api/v1/tenants/t1/quotas"},
 		{http.MethodGet, "/api/v1/tenants/t1/usage"},
 		{http.MethodPost, "/api/v1/tenants/t1/quota-check"},
-		{http.MethodPost, "/api/v1/tenants/t1/vlan/validate"},
-		{http.MethodGet, "/api/v1/tenants/t1/bridge"},
 		{http.MethodPost, "/api/v1/tenants/t1/dek/rotate"},
 		{http.MethodGet, "/api/v1/tenants/t1/dek"},
 		{http.MethodPost, "/api/v1/tenants/t1/barrier/init"},
@@ -104,6 +102,21 @@ func TestTenantRouter_RoutesRegistered(t *testing.T) {
 			var match mux.RouteMatch
 			assert.True(t, parent.Match(req, &match))
 		})
+	}
+}
+
+// TestTenantRouter_RetiredRoutesGone verifies the VLAN-validation and bridge
+// routes retired with the per-tenant VLAN range and OVS bridge (#708) are no
+// longer registered.
+func TestTenantRouter_RetiredRoutesGone(t *testing.T) {
+	_, parent := newRouter()
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/tenants/t1/vlan/validate"},
+		{http.MethodGet, "/api/v1/tenants/t1/bridge"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		var match mux.RouteMatch
+		assert.False(t, parent.Match(req, &match) && match.MatchErr == nil, "%s %s", tc.method, tc.path)
 	}
 }
 

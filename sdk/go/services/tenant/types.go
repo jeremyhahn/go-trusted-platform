@@ -70,12 +70,6 @@ type Tenant struct {
 	DisplayName string `json:"display_name" yaml:"display_name"`
 	// State is the current lifecycle state.
 	State TenantState `json:"state" yaml:"state"`
-	// OVSBridge is the OVS bridge name for network isolation.
-	OVSBridge string `json:"ovs_bridge" yaml:"ovs_bridge"`
-	// VLANStart is the beginning of the allocated VLAN range.
-	VLANStart uint32 `json:"vlan_start" yaml:"vlan_start"`
-	// VLANEnd is the end of the allocated VLAN range.
-	VLANEnd uint32 `json:"vlan_end" yaml:"vlan_end"`
 	// Labels are key-value metadata labels.
 	Labels map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
 	// Annotations are key-value metadata annotations.
@@ -128,10 +122,6 @@ type CreateParams struct {
 	Name string
 	// DisplayName is the human-readable display name.
 	DisplayName string
-	// VLANRangeStart is the beginning of the requested VLAN range (0 for auto-allocate).
-	VLANRangeStart uint32
-	// VLANRangeEnd is the end of the requested VLAN range (0 for auto-allocate).
-	VLANRangeEnd uint32
 	// ComputeQuota contains optional compute resource limits.
 	ComputeQuota *ComputeQuota
 	// NetworkQuota contains optional network resource limits.

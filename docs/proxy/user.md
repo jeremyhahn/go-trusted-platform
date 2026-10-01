@@ -94,7 +94,7 @@ platformctl proxy pool add --id api-pool \
 platformctl proxy route add --id api \
     --host api.example.com --path-prefix /api --pool api-pool \
     --auth-mode mtls \
-    --allowed-zone trusted --backend-zone services \
+    --allowed-zone control-plane --backend-zone services \
     --strip-prefix
 ```
 
@@ -102,12 +102,12 @@ What each piece buys you:
 
 - **`--auth-mode mtls`** — a platform-issued client certificate, verified
   against the platform CA. No bearer token substitutes for it.
-- **`--allowed-zone trusted`** — the zone in the caller's certificate must be
-  `trusted`. A certificate with no zone extension is denied, not defaulted.
-  (`trusted` is today's built-in zone; the
-  [reference network](../architecture/reference-network.md) replaces it, #708.)
+- **`--allowed-zone control-plane`** — the zone in the caller's certificate must be
+  `control-plane`. A certificate with no zone extension is denied, not
+  defaulted. Zones are those of the
+  [reference network](../architecture/reference-network.md).
 - **`--backend-zone services`** — the zone matrix must permit
-  `trusted → services`. This is the same table that programs the network's flow
+  `control-plane → services`. This is the same table that programs the network's flow
   rules, so route reachability and network reachability cannot drift apart.
 - **`--trust-class platform`** on the pool — the proxy verifies the
   *backend's* certificate against the platform CA (the gateway's platform

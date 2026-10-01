@@ -328,7 +328,7 @@ func TestTypeConverters_RoundTrip(t *testing.T) {
 		Auth: proxy.AuthRequirements{
 			Mode:               proxy.AuthModeMTLS,
 			RequireIDevID:      true,
-			AllowedZones:       []string{"trusted"},
+			AllowedZones:       []string{"control-plane"},
 			BackendZone:        "internal",
 			RequireAttestation: true,
 			AttestationMaxAge:  5 * time.Minute,

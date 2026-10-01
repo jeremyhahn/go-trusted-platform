@@ -25,11 +25,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vlan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 // Controller orchestrates overlay networking components including VXLAN tunnels,
@@ -56,6 +55,9 @@ type Controller struct {
 	controllerState atomic.Uint32
 	startedAt       time.Time
 	mu              sync.RWMutex
+	// vniMu serialises VNI derivation with the state write, so concurrent
+	// AddVNI calls never derive the same overlay network number.
+	vniMu sync.Mutex
 
 	// Shutdown coordination
 	stopCh   chan struct{}
@@ -332,16 +334,10 @@ func (c *Controller) GetState() *State {
 
 // AddVNI creates a new VNI on the overlay.
 //
-// Zone-aware allocation: when vniConfig.VNI is zero and vniConfig.Zone is set,
-// the VNI is derived from a zone-specific base:
-//   - ZoneTenant zones: base = vlan.TenantBase (1000); the VLAN offset is
-//     added to produce a unique per-tenant VNI in the 1000+ range.
-//   - All other zones: base = c.config.VNIBase (default 1000000).
-//
-// The VLAN field in vniConfig provides the offset when VNI is derived. If
-// both VNI and VLAN are zero for a zone allocation, the next sequential VNI
-// from the appropriate base is used (VNI = base + existing VNI count + 1).
-// An explicit non-zero VNI always overrides zone-derived allocation.
+// A zero vniConfig.VNI is derived from the environment's VNI block: the
+// lowest overlay network number n not yet in use gives VNI E·100000+n
+// (netplan.VNI). An explicit VNI must belong to the environment's block
+// when the controller has an environment.
 func (c *Controller) AddVNI(ctx context.Context, vniConfig *VNIConfig) error {
 	if !c.IsRunning() {
 		return ErrControllerNotRunning
@@ -351,13 +347,19 @@ func (c *Controller) AddVNI(ctx context.Context, vniConfig *VNIConfig) error {
 		return ErrVNINotFound
 	}
 
-	// Zone-aware VNI derivation when VNI is not explicitly set.
-	if vniConfig.VNI == 0 && vniConfig.Zone != "" {
-		derived, err := c.deriveVNI(ctx, vniConfig)
+	c.vniMu.Lock()
+	defer c.vniMu.Unlock()
+
+	if vniConfig.VNI == 0 {
+		derived, err := c.deriveVNI(ctx)
 		if err != nil {
 			return err
 		}
 		vniConfig.VNI = derived
+	} else if env := c.config.Environment; env != 0 {
+		if e, _, ok := netplan.SplitVNI(vniConfig.VNI); !ok || e != env {
+			return ErrVNIOutsideEnvironment{VNI: vniConfig.VNI, Environment: env}
+		}
 	}
 
 	if err := vniConfig.Validate(); err != nil {
@@ -367,7 +369,7 @@ func (c *Controller) AddVNI(ctx context.Context, vniConfig *VNIConfig) error {
 	c.logger.Info("adding VNI",
 		"vni", vniConfig.VNI,
 		"vlan", vniConfig.VLAN,
-		"zone", vniConfig.Zone)
+		"kind", vniConfig.Kind)
 
 	vniInfo := &VNIInfo{
 		VNI:       vniConfig.VNI,
@@ -397,40 +399,30 @@ func (c *Controller) AddVNI(ctx context.Context, vniConfig *VNIConfig) error {
 	return nil
 }
 
-// deriveVNI computes a zone-scoped VNI for vniConfig when VNI is zero.
-// Tenant zones use vlan.TenantBase as the allocation base for per-tenant
-// isolation; all other zones use the overlay config VNIBase.
-// When vniConfig.VLAN is non-zero the VNI is base + VLAN; otherwise the
-// VNI is base + (current VNI count + 1).
-func (c *Controller) deriveVNI(ctx context.Context, vniConfig *VNIConfig) (uint32, error) {
-	var base uint32
-	if vniConfig.Zone == string(zone.ZoneTenant) {
-		base = uint32(vlan.TenantBase)
-	} else {
-		base = c.config.VNIBase
+// deriveVNI returns the VNI of the lowest overlay network number of the
+// controller's environment that no existing VNI uses.
+func (c *Controller) deriveVNI(ctx context.Context) (uint32, error) {
+	env := c.config.Environment
+	if env == 0 {
+		return 0, ErrEnvironmentRequired{}
 	}
-
-	var offset uint32
-	if vniConfig.VLAN != 0 {
-		offset = uint32(vniConfig.VLAN)
-	} else {
-		// Use sequential allocation: base + existing count + 1.
-		existing, err := c.state.ListVNIs(ctx)
-		if err != nil {
-			return 0, &ErrVNIOperationFailed{VNI: 0, Operation: "derive", Cause: err}
-		}
-		offset = uint32(len(existing)) + 1
+	existing, err := c.state.ListVNIs(ctx)
+	if err != nil {
+		return 0, &ErrVNIOperationFailed{VNI: 0, Operation: "derive", Cause: err}
 	}
-
-	derived := base + offset
-	if derived < MinVNI || derived > MaxVNI {
-		return 0, &ErrVNIOperationFailed{
-			VNI:       derived,
-			Operation: "derive",
-			Cause:     ErrVNIOutOfRange,
+	used := make(map[uint32]struct{}, len(existing))
+	for _, v := range existing {
+		if e, n, ok := netplan.SplitVNI(v.VNI); ok && e == env {
+			used[n] = struct{}{}
 		}
 	}
-	return derived, nil
+	for n := uint32(1); n <= netplan.MaxNetworksPerEnvironment; n++ {
+		if _, taken := used[n]; taken {
+			continue
+		}
+		return netplan.VNI(env, n)
+	}
+	return 0, ErrVNIBlockExhausted{Environment: env}
 }
 
 // RemoveVNI removes a VNI from the overlay.

@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 )
 
 // NewOSInstaller creates an OS-specific installer
@@ -78,7 +79,7 @@ func (di *debianInstaller) ExecutePostInstall(ctx context.Context, rootPath stri
 	return ErrOSInstall("Debian post-install script execution not yet implemented", nil)
 }
 
-func (di *debianInstaller) ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig) error {
+func (di *debianInstaller) ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig, plan *netplan.Plan) error {
 	return ErrOSInstall("Debian network configuration not yet implemented", nil)
 }
 
@@ -124,7 +125,7 @@ func (fi *fedoraInstaller) ExecutePostInstall(ctx context.Context, rootPath stri
 	return ErrOSInstall("Fedora post-install script execution not yet implemented", nil)
 }
 
-func (fi *fedoraInstaller) ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig) error {
+func (fi *fedoraInstaller) ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig, plan *netplan.Plan) error {
 	return ErrOSInstall("Fedora network configuration not yet implemented", nil)
 }
 
@@ -170,7 +171,7 @@ func (ui *ubuntuInstaller) ExecutePostInstall(ctx context.Context, rootPath stri
 	return ErrOSInstall("Ubuntu post-install script execution not yet implemented", nil)
 }
 
-func (ui *ubuntuInstaller) ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig) error {
+func (ui *ubuntuInstaller) ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig, plan *netplan.Plan) error {
 	return ErrOSInstall("Ubuntu network configuration not yet implemented", nil)
 }
 

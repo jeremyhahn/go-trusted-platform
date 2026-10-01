@@ -224,7 +224,7 @@ func TestInstanceFilter_MatchesNilProfile(t *testing.T) {
 func TestNetworkAttachment(t *testing.T) {
 	attachment := NetworkAttachment{
 		PortName:   "test-port",
-		BridgeName: "trusted0",
+		BridgeName: "br-int",
 		VLAN:       100,
 		MACAddress: "52:54:00:12:34:56",
 		IPAddress:  "192.168.1.100",
@@ -234,8 +234,8 @@ func TestNetworkAttachment(t *testing.T) {
 	if attachment.PortName != "test-port" {
 		t.Errorf("Expected PortName test-port, got %s", attachment.PortName)
 	}
-	if attachment.BridgeName != "trusted0" {
-		t.Errorf("Expected BridgeName trusted0, got %s", attachment.BridgeName)
+	if attachment.BridgeName != "br-int" {
+		t.Errorf("Expected BridgeName br-int, got %s", attachment.BridgeName)
 	}
 	if attachment.VLAN != 100 {
 		t.Errorf("Expected VLAN 100, got %d", attachment.VLAN)
@@ -265,7 +265,7 @@ func TestInstance(t *testing.T) {
 		NetworkAttachments: []NetworkAttachment{
 			{
 				PortName:   "test-port",
-				BridgeName: "trusted0",
+				BridgeName: "br-int",
 				VLAN:       100,
 			},
 		},

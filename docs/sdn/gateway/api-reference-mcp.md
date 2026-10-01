@@ -42,11 +42,10 @@ tools registered alongside). OAuth scopes (`sdn:read` / `sdn:write` /
 
 | Tool | Description |
 |------|-------------|
-| `gateway_zone_list` | List network trust zones |
-| `gateway_zone_create` | Create a zone |
-| `gateway_zone_update` | Update zone policy settings |
-| `gateway_zone_delete` | Delete a zone |
-| `gateway_zone_assign` | Assign a network segment to a zone |
+| `gateway_zone_list` | List the underlay zones with their derived numbering |
+| `gateway_zone_create` | Create an owner-defined zone (offset 9-99) |
+| `gateway_zone_update` | Tune a built-in zone's policy or replace an owner-defined zone |
+| `gateway_zone_delete` | Delete an owner-defined zone or omit an optional built-in |
 
 ### Load Balancer
 

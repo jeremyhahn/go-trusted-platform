@@ -16,12 +16,13 @@ package installer
 import (
 	"context"
 	"fmt"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 	"io"
 	"strings"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 )
 
@@ -576,6 +577,12 @@ type Config struct {
 	// Network configuration
 	Network *NetworkConfig `yaml:"network,omitempty" json:"network,omitempty"`
 
+	// Plan is the network plan of the host's environment (from the
+	// platform config's sdn.environment). The installer resolves zone
+	// references and checks host addressing by role against it. Never
+	// serialized; nil when the host is not on a platform network.
+	Plan *netplan.Plan `yaml:"-" json:"-"`
+
 	// UKI configuration
 	UKI *UKIConfig `yaml:"uki,omitempty" json:"uki,omitempty"`
 
@@ -703,81 +710,51 @@ const (
 	BondTypeOVS BondType = "ovs"
 )
 
-// SubnetScope classifies the purpose and ownership of a subnet.
-type SubnetScope string
+// HostRole is the role a host plays on the reference network. It decides
+// which zones the host may hold an address on and whether it may forward
+// (docs/architecture/reference-network.md, "Host addressing").
+type HostRole string
 
 const (
-	// SubnetScopeInternal represents SDN-managed internal segments.
-	SubnetScopeInternal SubnetScope = "internal"
-	// SubnetScopePublic represents ARIN-assigned, BGP-announced subnets.
-	SubnetScopePublic SubnetScope = "public"
-	// SubnetScopeTransit represents GRE tunnel point-to-point subnets.
-	SubnetScopeTransit SubnetScope = "transit"
-	// SubnetScopeISP represents ISP-assigned subnets that are not owned.
-	SubnetScopeISP SubnetScope = "isp"
+	// HostRoleGateway is a gatewayd node. Gateways route and NAT by role,
+	// so they are exempt from the host-addressing and forwarding rules.
+	HostRoleGateway HostRole = "gateway"
+	// HostRoleControlPlane is a control-plane node (platformd server).
+	HostRoleControlPlane HostRole = "control-plane"
+	// HostRoleCompute is a compute node (platformd client, hypervisor).
+	HostRoleCompute HostRole = "compute"
 )
 
-// SubnetRole identifies a special operational role for a subnet.
-type SubnetRole string
+// DefaultPlatformVRFName is the Linux VRF device that holds a host's
+// platform-VRF address.
+const DefaultPlatformVRFName = "vrf-platform"
 
-const (
-	// SubnetRoleProvisioning marks the subnet used for PXE/provisioning.
-	SubnetRoleProvisioning SubnetRole = "provisioning"
-	// SubnetRoleQuarantine marks the subnet used for quarantined nodes.
-	SubnetRoleQuarantine SubnetRole = "quarantine"
-)
+// DefaultPlatformVRFTable is the routing table of the platform VRF.
+const DefaultPlatformVRFTable = 1000
 
-// DHCPScopeConfig defines DHCP serving parameters for a subnet.
-type DHCPScopeConfig struct {
-	// Enabled controls whether DHCP is served on this subnet.
-	Enabled bool `yaml:"enabled" json:"enabled"`
+// PlatformVRFConfig places a host's one platform-VRF address in a Linux VRF
+// (the platform VRF ruling, 2026-09-30): the address is reachable over the
+// platform overlay inside the fabric VTEP, never on an underlay interface.
+type PlatformVRFConfig struct {
+	// Name is the VRF device name; empty means DefaultPlatformVRFName.
+	Name string `yaml:"name,omitempty" json:"name,omitempty" mapstructure:"name"`
 
-	// RangeStart is the first allocatable DHCP address.
-	RangeStart string `yaml:"range-start" json:"range_start"`
+	// Table is the VRF routing table; zero means DefaultPlatformVRFTable.
+	Table int `yaml:"table,omitempty" json:"table,omitempty" mapstructure:"table"`
 
-	// RangeEnd is the last allocatable DHCP address.
-	RangeEnd string `yaml:"range-end" json:"range_end"`
-
-	// LeaseDuration is the DHCP lease duration (e.g., "1h", "24h").
-	LeaseDuration string `yaml:"lease-duration,omitempty" json:"lease_duration,omitempty"`
+	// Address is the host's platform-VRF address as a /32 from the
+	// environment's platform-hosts range.
+	Address string `yaml:"address" json:"address" mapstructure:"address"`
 }
 
-// SubnetConfig defines a named subnet with scope, VLAN binding, and optional
-// DHCP serving parameters. Subnets are the single source of truth for IP
-// addressing; IPAM pools and SDN networks are derived from them.
-type SubnetConfig struct {
-	// Name is the unique identifier for this subnet.
-	Name string `yaml:"name" json:"name"`
-
-	// Scope classifies the subnet (internal, public, transit, isp).
-	Scope SubnetScope `yaml:"scope,omitempty" json:"scope,omitempty"`
-
-	// VLANID is the IEEE 802.1Q VLAN identifier (1-4094). Zero means untagged.
-	VLANID uint16 `yaml:"vlan-id,omitempty" json:"vlan_id,omitempty"`
-
-	// CIDR is the network prefix in CIDR notation (e.g., "10.200.0.0/24").
-	CIDR string `yaml:"cidr" json:"cidr"`
-
-	// Gateway is the default gateway address for this subnet.
-	Gateway string `yaml:"gateway,omitempty" json:"gateway,omitempty"`
-
-	// DNS is the list of DNS server addresses for this subnet.
-	DNS []string `yaml:"dns,omitempty" json:"dns,omitempty"`
-
-	// DHCP configures DHCP serving parameters for this subnet.
-	DHCP *DHCPScopeConfig `yaml:"dhcp,omitempty" json:"dhcp,omitempty"`
-
-	// Role identifies a special operational role (provisioning, quarantine).
-	Role SubnetRole `yaml:"role,omitempty" json:"role,omitempty"`
-}
-
-// BondVLANConfig defines a VLAN sub-interface on a bond. The VLAN ID is
-// resolved from the referenced SubnetConfig by name.
+// BondVLANConfig defines a host address on a zone VLAN carried by a bond.
+// The VLAN ID is derived from the zone by the network plan.
 type BondVLANConfig struct {
-	// Subnet is the name of the SubnetConfig to bind this sub-interface to.
-	Subnet string `yaml:"subnet" json:"subnet" mapstructure:"subnet"`
+	// Zone is the underlay zone (e.g. "fabric", "control-plane") the
+	// address lives on.
+	Zone string `yaml:"zone" json:"zone" mapstructure:"zone"`
 
-	// IPv4Address is the static IPv4 address for this sub-interface.
+	// IPv4Address is the static IPv4 address in CIDR notation.
 	IPv4Address string `yaml:"ipv4-address" json:"ipv4_address" mapstructure:"ipv4-address"`
 
 	// AutoStart controls whether this sub-interface starts on boot.
@@ -787,59 +764,69 @@ type BondVLANConfig struct {
 // NetworkConfig defines network configuration for the installed system
 type NetworkConfig struct {
 	// DNS configuration
-	DNS *DNSConfig `yaml:"dns,omitempty" json:"dns,omitempty"`
+	DNS *DNSConfig `yaml:"dns,omitempty" json:"dns,omitempty" mapstructure:"dns"`
 
 	// DNSMasq configures the local dnsmasq forwarder. When Enabled, the
 	// installer installs the dnsmasq package, writes /etc/dnsmasq.conf,
 	// enables the OpenRC service, and points /etc/resolv.conf at
 	// 127.0.0.1 so all DNS queries flow through the local cache before
 	// being forwarded to UpstreamServers.
-	DNSMasq *DNSMasqConfig `yaml:"dnsmasq,omitempty" json:"dnsmasq,omitempty"`
+	DNSMasq *DNSMasqConfig `yaml:"dnsmasq,omitempty" json:"dnsmasq,omitempty" mapstructure:"dnsmasq"`
 
 	// Network interfaces configuration
-	Interfaces []InterfaceConfig `yaml:"interfaces,omitempty" json:"interfaces,omitempty"`
+	Interfaces []InterfaceConfig `yaml:"interfaces,omitempty" json:"interfaces,omitempty" mapstructure:"interfaces"`
 
 	// Bridge configurations
-	Bridges []BridgeConfig `yaml:"bridges,omitempty" json:"bridges,omitempty"`
+	Bridges []BridgeConfig `yaml:"bridges,omitempty" json:"bridges,omitempty" mapstructure:"bridges"`
 
 	// Bond configurations
-	Bonds []BondConfig `yaml:"bonds,omitempty" json:"bonds,omitempty"`
+	Bonds []BondConfig `yaml:"bonds,omitempty" json:"bonds,omitempty" mapstructure:"bonds"`
 
 	// VLAN configurations
-	VLANs []VLANConfig `yaml:"vlans,omitempty" json:"vlans,omitempty"`
+	VLANs []VLANConfig `yaml:"vlans,omitempty" json:"vlans,omitempty" mapstructure:"vlans"`
 
-	// Subnets defines named subnet configurations with scope, VLAN, and DHCP.
-	Subnets []SubnetConfig `yaml:"subnets,omitempty" json:"subnets,omitempty"`
+	// Role is the host's role on the reference network. It decides which
+	// zones the host may address and whether it may forward. Empty means
+	// the host is not on a platform network (a lab or image build).
+	Role HostRole `yaml:"role,omitempty" json:"role,omitempty" mapstructure:"role"`
+
+	// IPForward enables IPv4/IPv6 forwarding on the installed host. Only a
+	// gateway may forward; on every other host forwarding is off and the
+	// host firewall drops traffic between interfaces.
+	IPForward bool `yaml:"ip-forward,omitempty" json:"ip_forward,omitempty" mapstructure:"ip-forward"`
+
+	// PlatformVRF places the host's platform-VRF address in a Linux VRF.
+	PlatformVRF *PlatformVRFConfig `yaml:"platform-vrf,omitempty" json:"platform_vrf,omitempty" mapstructure:"platform-vrf"`
 
 	// Wait for network before completing boot (useful for TPM sealing)
-	WaitOnline bool `yaml:"wait-online" json:"wait_online"`
+	WaitOnline bool `yaml:"wait-online" json:"wait_online" mapstructure:"wait-online"`
 
 	// Timeout in seconds to wait for network (default: 30)
-	WaitTimeout int `yaml:"wait-timeout" json:"wait_timeout"`
+	WaitTimeout int `yaml:"wait-timeout" json:"wait_timeout" mapstructure:"wait-timeout"`
 }
 
 // DNSConfig defines DNS resolver configuration
 type DNSConfig struct {
 	// DNS nameservers (e.g., ["8.8.8.8", "8.8.4.4"])
-	Nameservers []string `yaml:"nameservers" json:"nameservers"`
+	Nameservers []string `yaml:"nameservers" json:"nameservers" mapstructure:"nameservers"`
 
 	// DNS search domains (e.g., ["example.com", "internal.example.com"])
-	SearchDomains []string `yaml:"search-domains" json:"search_domains"`
+	SearchDomains []string `yaml:"search-domains" json:"search_domains" mapstructure:"search-domains"`
 
 	// DNS options (e.g., ["timeout:2", "attempts:3"])
-	Options []string `yaml:"options,omitempty" json:"options,omitempty"`
+	Options []string `yaml:"options,omitempty" json:"options,omitempty" mapstructure:"options"`
 
 	// UpstreamDNS specifies a DNS server with non-standard port for dnsmasq forwarding.
 	// Format: "ip#port" (e.g., "10.99.99.2#8053")
 	// When set, dnsmasq is installed and configured to forward to this server,
 	// and resolv.conf points to localhost.
-	UpstreamDNS string `yaml:"upstream-dns,omitempty" json:"upstream_dns,omitempty"`
+	UpstreamDNS string `yaml:"upstream-dns,omitempty" json:"upstream_dns,omitempty" mapstructure:"upstream-dns"`
 }
 
 // DNSMasqConfig configures the local dnsmasq DNS forwarder.
 type DNSMasqConfig struct {
 	// Enabled toggles dnsmasq install + configure.
-	Enabled bool `yaml:"enabled" json:"enabled"`
+	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
 
 	// UpstreamServers are forwarded to as `server=...` lines. Each
 	// entry may be a plain IP, an IP with `#port`, a domain-scoped
@@ -849,7 +836,7 @@ type DNSMasqConfig struct {
 	// does not parse is written verbatim; dnsmasq rejects it at
 	// startup. Multiple entries become multiple `server=` lines so
 	// dnsmasq does round-robin / split-horizon.
-	UpstreamServers []string `yaml:"upstream-servers,omitempty" json:"upstream_servers,omitempty"`
+	UpstreamServers []string `yaml:"upstream-servers,omitempty" json:"upstream_servers,omitempty" mapstructure:"upstream-servers"`
 
 	// LocalDomain populates the `domain=<domain>` directive and — only
 	// when no upstream route governs the domain (no unscoped entry and
@@ -858,107 +845,107 @@ type DNSMasqConfig struct {
 	// local= answers from /etc/hosts only and never forwards — not even
 	// to platformd's own zone on loopback — blackholing the internal
 	// zone (issue #128).
-	LocalDomain string `yaml:"local-domain,omitempty" json:"local_domain,omitempty"`
+	LocalDomain string `yaml:"local-domain,omitempty" json:"local_domain,omitempty" mapstructure:"local-domain"`
 }
 
 // InterfaceConfig defines configuration for a network interface
 type InterfaceConfig struct {
 	// Interface name (e.g., "eth0", "enp0s3")
-	Name string `yaml:"name" json:"name"`
+	Name string `yaml:"name" json:"name" mapstructure:"name"`
 
 	// Interface type: dhcp, static, manual, disabled
-	Type InterfaceType `yaml:"type" json:"type"`
+	Type InterfaceType `yaml:"type" json:"type" mapstructure:"type"`
 
 	// IPv4 address with CIDR notation (e.g., "192.168.1.10/24")
 	// For backwards compatibility, can also be just IP and use Netmask
-	IPv4Address string `yaml:"ipv4-address,omitempty" json:"ipv4_address,omitempty"`
+	IPv4Address string `yaml:"ipv4-address,omitempty" json:"ipv4_address,omitempty" mapstructure:"ipv4-address"`
 
 	// IPv4 netmask (e.g., "255.255.255.0") - used if IPv4Address doesn't include CIDR
-	IPv4Netmask string `yaml:"ipv4-netmask,omitempty" json:"ipv4_netmask,omitempty"`
+	IPv4Netmask string `yaml:"ipv4-netmask,omitempty" json:"ipv4_netmask,omitempty" mapstructure:"ipv4-netmask"`
 
 	// IPv4 default gateway
-	IPv4Gateway string `yaml:"ipv4-gateway,omitempty" json:"ipv4_gateway,omitempty"`
+	IPv4Gateway string `yaml:"ipv4-gateway,omitempty" json:"ipv4_gateway,omitempty" mapstructure:"ipv4-gateway"`
 
 	// IPv6 address with prefix (e.g., "2001:db8::1/64")
-	IPv6Address string `yaml:"ipv6-address,omitempty" json:"ipv6_address,omitempty"`
+	IPv6Address string `yaml:"ipv6-address,omitempty" json:"ipv6_address,omitempty" mapstructure:"ipv6-address"`
 
 	// IPv6 default gateway
-	IPv6Gateway string `yaml:"ipv6-gateway,omitempty" json:"ipv6_gateway,omitempty"`
+	IPv6Gateway string `yaml:"ipv6-gateway,omitempty" json:"ipv6_gateway,omitempty" mapstructure:"ipv6-gateway"`
 
 	// MTU (Maximum Transmission Unit)
-	MTU int `yaml:"mtu,omitempty" json:"mtu,omitempty"`
+	MTU int `yaml:"mtu,omitempty" json:"mtu,omitempty" mapstructure:"mtu"`
 
 	// MAC address override
-	MACAddress string `yaml:"mac-address,omitempty" json:"mac_address,omitempty"`
+	MACAddress string `yaml:"mac-address,omitempty" json:"mac_address,omitempty" mapstructure:"mac-address"`
 
 	// Auto-start interface on boot
-	AutoStart bool `yaml:"auto-start" json:"auto_start"`
+	AutoStart bool `yaml:"auto-start" json:"auto_start" mapstructure:"auto-start"`
 
 	// Enable IPv6 auto-configuration (SLAAC)
-	IPv6AutoConf bool `yaml:"ipv6-autoconf,omitempty" json:"ipv6_autoconf,omitempty"`
+	IPv6AutoConf bool `yaml:"ipv6-autoconf,omitempty" json:"ipv6_autoconf,omitempty" mapstructure:"ipv6-autoconf"`
 
 	// Additional routes
-	Routes []RouteConfig `yaml:"routes,omitempty" json:"routes,omitempty"`
+	Routes []RouteConfig `yaml:"routes,omitempty" json:"routes,omitempty" mapstructure:"routes"`
 
 	// Interface-specific DNS servers (overrides global DNS)
-	DNS []string `yaml:"dns,omitempty" json:"dns,omitempty"`
+	DNS []string `yaml:"dns,omitempty" json:"dns,omitempty" mapstructure:"dns"`
 }
 
 // RouteConfig defines a static route
 type RouteConfig struct {
 	// Destination network (e.g., "10.0.0.0/8")
-	Destination string `yaml:"destination" json:"destination"`
+	Destination string `yaml:"destination" json:"destination" mapstructure:"destination"`
 
 	// Gateway address
-	Gateway string `yaml:"gateway" json:"gateway"`
+	Gateway string `yaml:"gateway" json:"gateway" mapstructure:"gateway"`
 
 	// Metric (lower = higher priority)
-	Metric int `yaml:"metric,omitempty" json:"metric,omitempty"`
+	Metric int `yaml:"metric,omitempty" json:"metric,omitempty" mapstructure:"metric"`
 }
 
 // BridgeConfig defines a network bridge configuration
 type BridgeConfig struct {
-	// Bridge name (e.g., "br0", "trusted0")
-	Name string `yaml:"name" json:"name"`
+	// Bridge name (e.g., "br-fabric", "br-int")
+	Name string `yaml:"name" json:"name" mapstructure:"name"`
 
 	// Bridge type: linux or ovs
-	Type BridgeType `yaml:"type" json:"type"`
+	Type BridgeType `yaml:"type" json:"type" mapstructure:"type"`
 
 	// Member interfaces to add to the bridge
-	Interfaces []string `yaml:"interfaces" json:"interfaces"`
+	Interfaces []string `yaml:"interfaces" json:"interfaces" mapstructure:"interfaces"`
 
 	// IP configuration for the bridge (same as InterfaceConfig)
-	IPv4Address string `yaml:"ipv4-address,omitempty" json:"ipv4_address,omitempty"`
-	IPv4Netmask string `yaml:"ipv4-netmask,omitempty" json:"ipv4_netmask,omitempty"`
-	IPv4Gateway string `yaml:"ipv4-gateway,omitempty" json:"ipv4_gateway,omitempty"`
+	IPv4Address string `yaml:"ipv4-address,omitempty" json:"ipv4_address,omitempty" mapstructure:"ipv4-address"`
+	IPv4Netmask string `yaml:"ipv4-netmask,omitempty" json:"ipv4_netmask,omitempty" mapstructure:"ipv4-netmask"`
+	IPv4Gateway string `yaml:"ipv4-gateway,omitempty" json:"ipv4_gateway,omitempty" mapstructure:"ipv4-gateway"`
 
 	// Use DHCP for the bridge
-	DHCP bool `yaml:"dhcp,omitempty" json:"dhcp,omitempty"`
+	DHCP bool `yaml:"dhcp,omitempty" json:"dhcp,omitempty" mapstructure:"dhcp"`
 
 	// STP (Spanning Tree Protocol) enabled
-	STP bool `yaml:"stp,omitempty" json:"stp,omitempty"`
+	STP bool `yaml:"stp,omitempty" json:"stp,omitempty" mapstructure:"stp"`
 
 	// Forward delay in seconds (for STP)
-	ForwardDelay int `yaml:"forward-delay,omitempty" json:"forward_delay,omitempty"`
+	ForwardDelay int `yaml:"forward-delay,omitempty" json:"forward_delay,omitempty" mapstructure:"forward-delay"`
 
 	// Auto-start bridge on boot
-	AutoStart bool `yaml:"auto-start" json:"auto_start"`
+	AutoStart bool `yaml:"auto-start" json:"auto_start" mapstructure:"auto-start"`
 }
 
 // BondConfig defines a network bond (link aggregation) configuration
 type BondConfig struct {
 	// Bond name (e.g., "bond0")
-	Name string `yaml:"name" json:"name"`
+	Name string `yaml:"name" json:"name" mapstructure:"name"`
 
 	// Type chooses the bonding implementation. "ovs" creates the bond
 	// as an OVS port (default), "linux" uses the kernel bonding driver.
 	// Empty defaults to "ovs".
-	Type BondType `yaml:"type,omitempty" json:"type,omitempty"`
+	Type BondType `yaml:"type,omitempty" json:"type,omitempty" mapstructure:"type"`
 
 	// Bridge names the OVS bridge this bond attaches to when Type=ovs.
 	// Ignored for Type=linux. Must match a `network.bridges[].name`
 	// entry with type=ovs. Defaults to the first OVS bridge if unset.
-	Bridge string `yaml:"bridge,omitempty" json:"bridge,omitempty"`
+	Bridge string `yaml:"bridge,omitempty" json:"bridge,omitempty" mapstructure:"bridge"`
 
 	// Bond mode.
 	//   Linux: balance-rr, active-backup, balance-xor, broadcast,
@@ -966,63 +953,76 @@ type BondConfig struct {
 	//   OVS:   active-backup, balance-slb, balance-tcp (OVS port
 	//          bond_mode values — 802.3ad is implicit when LACP is
 	//          enabled on balance-tcp)
-	Mode string `yaml:"mode" json:"mode"`
+	Mode string `yaml:"mode" json:"mode" mapstructure:"mode"`
 
 	// LACP controls OVS LACP negotiation when Type=ovs.
 	// Values: "active", "passive", "off". Ignored for Type=linux
 	// (kernel 802.3ad is controlled via Mode instead).
-	LACP string `yaml:"lacp,omitempty" json:"lacp,omitempty"`
+	LACP string `yaml:"lacp,omitempty" json:"lacp,omitempty" mapstructure:"lacp"`
 
 	// Interfaces lists the member interfaces for this bond.
-	Interfaces []string `yaml:"interfaces" json:"interfaces"`
+	Interfaces []string `yaml:"interfaces" json:"interfaces" mapstructure:"interfaces"`
 
 	// VLANs defines VLAN sub-interfaces on this bond. Each entry references
 	// a SubnetConfig by name to resolve the VLAN ID.
-	VLANs []BondVLANConfig `yaml:"vlans,omitempty" json:"vlans,omitempty"`
+	VLANs []BondVLANConfig `yaml:"vlans,omitempty" json:"vlans,omitempty" mapstructure:"vlans"`
 
 	// IP configuration
-	IPv4Address string `yaml:"ipv4-address,omitempty" json:"ipv4_address,omitempty"`
-	IPv4Netmask string `yaml:"ipv4-netmask,omitempty" json:"ipv4_netmask,omitempty"`
-	IPv4Gateway string `yaml:"ipv4-gateway,omitempty" json:"ipv4_gateway,omitempty"`
+	IPv4Address string `yaml:"ipv4-address,omitempty" json:"ipv4_address,omitempty" mapstructure:"ipv4-address"`
+	IPv4Netmask string `yaml:"ipv4-netmask,omitempty" json:"ipv4_netmask,omitempty" mapstructure:"ipv4-netmask"`
+	IPv4Gateway string `yaml:"ipv4-gateway,omitempty" json:"ipv4_gateway,omitempty" mapstructure:"ipv4-gateway"`
 
 	// Use DHCP
-	DHCP bool `yaml:"dhcp,omitempty" json:"dhcp,omitempty"`
+	DHCP bool `yaml:"dhcp,omitempty" json:"dhcp,omitempty" mapstructure:"dhcp"`
 
 	// Primary interface (for active-backup mode)
-	Primary string `yaml:"primary,omitempty" json:"primary,omitempty"`
+	Primary string `yaml:"primary,omitempty" json:"primary,omitempty" mapstructure:"primary"`
 
 	// MII monitoring interval in ms
-	MIIMon int `yaml:"miimon,omitempty" json:"miimon,omitempty"`
+	MIIMon int `yaml:"miimon,omitempty" json:"miimon,omitempty" mapstructure:"miimon"`
 
 	// Auto-start on boot
-	AutoStart bool `yaml:"auto-start" json:"auto_start"`
+	AutoStart bool `yaml:"auto-start" json:"auto_start" mapstructure:"auto-start"`
 }
 
 // VLANConfig defines a VLAN interface configuration
 type VLANConfig struct {
 	// VLAN interface name (e.g., "eth0.100", "vlan100")
-	Name string `yaml:"name" json:"name"`
+	Name string `yaml:"name" json:"name" mapstructure:"name"`
 
 	// Parent interface
-	Parent string `yaml:"parent" json:"parent"`
+	Parent string `yaml:"parent" json:"parent" mapstructure:"parent"`
 
-	// VLAN ID (1-4094)
-	ID int `yaml:"id" json:"id"`
+	// VLAN ID (1-4094). Leave it 0 when Zone is set: the ID then comes from
+	// the network plan. A literal ID is only allowed on a host with no
+	// network.role.
+	ID int `yaml:"id,omitempty" json:"id,omitempty" mapstructure:"id"`
+
+	// Zone is the underlay zone the VLAN interface lives on (e.g.
+	// "fabric"). The VLAN ID is derived from it by the network plan and the
+	// address must lie in the zone's subnet.
+	Zone string `yaml:"zone,omitempty" json:"zone,omitempty" mapstructure:"zone"`
 
 	// IP configuration
-	IPv4Address string `yaml:"ipv4-address,omitempty" json:"ipv4_address,omitempty"`
-	IPv4Netmask string `yaml:"ipv4-netmask,omitempty" json:"ipv4_netmask,omitempty"`
-	IPv4Gateway string `yaml:"ipv4-gateway,omitempty" json:"ipv4_gateway,omitempty"`
+	IPv4Address string `yaml:"ipv4-address,omitempty" json:"ipv4_address,omitempty" mapstructure:"ipv4-address"`
+	IPv4Netmask string `yaml:"ipv4-netmask,omitempty" json:"ipv4_netmask,omitempty" mapstructure:"ipv4-netmask"`
+	IPv4Gateway string `yaml:"ipv4-gateway,omitempty" json:"ipv4_gateway,omitempty" mapstructure:"ipv4-gateway"`
 
 	// Use DHCP
-	DHCP bool `yaml:"dhcp,omitempty" json:"dhcp,omitempty"`
+	DHCP bool `yaml:"dhcp,omitempty" json:"dhcp,omitempty" mapstructure:"dhcp"`
 
 	// Auto-start on boot
-	AutoStart bool `yaml:"auto-start" json:"auto_start"`
+	AutoStart bool `yaml:"auto-start" json:"auto_start" mapstructure:"auto-start"`
 }
 
-// Validate validates the network configuration
-func (nc *NetworkConfig) Validate() error {
+// Validate validates the network configuration. plan is the network plan
+// of the host's environment; it may be nil for a host that is not on a
+// platform network, in which case network.role, network.platform-vrf and
+// bond zone VLANs are refused. With a plan, Validate also applies the
+// reference-network rules: forwarding only on gateways, zone VLANs inside
+// their zone, the platform-VRF address in the platform-hosts range, and host
+// addressing by role (see network_role.go).
+func (nc *NetworkConfig) Validate(plan *netplan.Plan) error {
 	// Validate interfaces
 	for i, iface := range nc.Interfaces {
 		if iface.Name == "" {
@@ -1042,6 +1042,12 @@ func (nc *NetworkConfig) Validate() error {
 		}
 		if vlan.Parent == "" {
 			return ErrInvalidConfig(fmt.Sprintf("vlan %s: parent interface is required", vlan.Name))
+		}
+		if vlan.Zone != "" {
+			if vlan.ID != 0 {
+				return &ErrVLANZone{VLAN: vlan.Name, Zone: vlan.Zone, Reason: "set zone or id, not both (the zone derives the id)"}
+			}
+			continue
 		}
 		if vlan.ID < 1 || vlan.ID > 4094 {
 			return ErrInvalidConfig(fmt.Sprintf("vlan %s: ID must be between 1 and 4094", vlan.Name))
@@ -1071,59 +1077,7 @@ func (nc *NetworkConfig) Validate() error {
 		}
 	}
 
-	return nil
-}
-
-// SubnetByName returns the SubnetConfig with the given name, or nil if not found.
-func (nc *NetworkConfig) SubnetByName(name string) *SubnetConfig {
-	for i := range nc.Subnets {
-		if nc.Subnets[i].Name == name {
-			return &nc.Subnets[i]
-		}
-	}
-	return nil
-}
-
-// ProvisioningSubnet returns the first subnet with role "provisioning", or nil.
-func (nc *NetworkConfig) ProvisioningSubnet() *SubnetConfig {
-	for i := range nc.Subnets {
-		if nc.Subnets[i].Role == SubnetRoleProvisioning {
-			return &nc.Subnets[i]
-		}
-	}
-	return nil
-}
-
-// QuarantineSubnet returns the first subnet with role "quarantine", or nil.
-func (nc *NetworkConfig) QuarantineSubnet() *SubnetConfig {
-	for i := range nc.Subnets {
-		if nc.Subnets[i].Role == SubnetRoleQuarantine {
-			return &nc.Subnets[i]
-		}
-	}
-	return nil
-}
-
-// InternalSubnets returns all subnets with scope "internal".
-func (nc *NetworkConfig) InternalSubnets() []SubnetConfig {
-	var result []SubnetConfig
-	for _, s := range nc.Subnets {
-		if s.Scope == SubnetScopeInternal {
-			result = append(result, s)
-		}
-	}
-	return result
-}
-
-// PublicSubnets returns all subnets with scope "public".
-func (nc *NetworkConfig) PublicSubnets() []SubnetConfig {
-	var result []SubnetConfig
-	for _, s := range nc.Subnets {
-		if s.Scope == SubnetScopePublic {
-			result = append(result, s)
-		}
-	}
-	return result
+	return nc.validateReferenceNetwork(plan)
 }
 
 // Validate validates the configuration
@@ -1148,7 +1102,7 @@ func (c *Config) Validate() error {
 	}
 	// Validate network configuration if present
 	if c.Network != nil {
-		if err := c.Network.Validate(); err != nil {
+		if err := c.Network.Validate(c.Plan); err != nil {
 			return err
 		}
 	}
@@ -1218,8 +1172,10 @@ type OSInstaller interface {
 	// ConfigureSystem configures system files (fstab, crypttab, etc.)
 	ConfigureSystem(ctx context.Context, rootPath string, diskInfo *DiskInfo) error
 
-	// ConfigureNetwork configures network interfaces, DNS, bridges, bonds, and VLANs
-	ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig) error
+	// ConfigureNetwork configures network interfaces, DNS, bridges, bonds,
+	// VLANs, the platform VRF and the host's forwarding and firewall. plan
+	// resolves zone VLANs and may be nil off a platform network.
+	ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig, plan *netplan.Plan) error
 
 	// InstallKernel installs kernel and initramfs
 	InstallKernel(ctx context.Context, rootPath string) error

@@ -896,42 +896,98 @@ func (r *restDHCPLeaseListResponse) toResponse() *DHCPLeaseListResponse {
 // Network Zone Operations
 // =============================================================================
 
-// restZoneCreateRequest maps to the handler's NetworkZoneCreateRequest.
-type restZoneCreateRequest struct {
-	Name             string `json:"name"`
-	InternetIngress  bool   `json:"internet_ingress,omitempty"`
-	Isolate          bool   `json:"isolate,omitempty"`
-	IsolatePerTenant bool   `json:"isolate_per_tenant,omitempty"`
-	OOB              bool   `json:"oob,omitempty"`
-	LifecycleRole    string `json:"lifecycle_role,omitempty"`
+// jsonZonePath mirrors gateway.ZonePathSpec.
+type jsonZonePath struct {
+	Zone     string   `json:"zone"`
+	Services []string `json:"services,omitempty"`
 }
 
-// restZoneUpdateRequest maps to the handler's NetworkZoneUpdateRequest.
-type restZoneUpdateRequest struct {
-	InternetIngress  bool   `json:"internet_ingress,omitempty"`
-	Isolate          bool   `json:"isolate,omitempty"`
-	IsolatePerTenant bool   `json:"isolate_per_tenant,omitempty"`
-	OOB              bool   `json:"oob,omitempty"`
-	LifecycleRole    string `json:"lifecycle_role,omitempty"`
+// jsonPrivilegedAccess mirrors gateway.PrivilegedAccessSpec.
+type jsonPrivilegedAccess struct {
+	Reason     string `json:"reason"`
+	ApprovedBy string `json:"approved_by"`
 }
 
-// restZoneResponse mirrors the server's NetworkZoneResponse.
-type restZoneResponse struct {
-	Name             string    `json:"name"`
-	InternetIngress  bool      `json:"internet_ingress,omitempty"`
-	Isolate          bool      `json:"isolate,omitempty"`
-	IsolatePerTenant bool      `json:"isolate_per_tenant,omitempty"`
-	OOB              bool      `json:"oob,omitempty"`
-	LifecycleRole    string    `json:"lifecycle_role,omitempty"`
-	RestartRequired  bool      `json:"restart_required,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+// jsonZoneSpec mirrors gateway.ZoneSpec, the zone body the REST and MCP
+// transports share.
+type jsonZoneSpec struct {
+	Name             string                `json:"name,omitempty"`
+	Offset           uint8                 `json:"offset,omitempty"`
+	PortClasses      []string              `json:"port_classes,omitempty"`
+	InternetIngress  bool                  `json:"internet_ingress,omitempty"`
+	IsolateFrom      []string              `json:"isolate_from,omitempty"`
+	AllowTo          []jsonZonePath        `json:"allow_to,omitempty"`
+	Services         []string              `json:"services,omitempty"`
+	Isolate          bool                  `json:"isolate,omitempty"`
+	OOB              bool                  `json:"oob,omitempty"`
+	LifecycleRole    string                `json:"lifecycle_role,omitempty"`
+	PrivilegedAccess *jsonPrivilegedAccess `json:"privileged_access,omitempty"`
+}
+
+// jsonZoneView mirrors gateway.ZoneView, the zone response the REST and MCP
+// transports share.
+type jsonZoneView struct {
+	jsonZoneSpec
+	Numbering *struct {
+		VLAN uint16 `json:"vlan"`
+	} `json:"numbering,omitempty"`
+	RestartRequired bool      `json:"restart_required,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// newJSONZoneSpec builds the shared zone body from a spec.
+func newJSONZoneSpec(name string, spec ZoneSpec) jsonZoneSpec {
+	out := jsonZoneSpec{
+		Name:            name,
+		Offset:          spec.Offset,
+		PortClasses:     spec.PortClasses,
+		InternetIngress: spec.InternetIngress,
+		Services:        spec.Services,
+		Isolate:         spec.Isolate,
+		OOB:             spec.OOB,
+		LifecycleRole:   spec.LifecycleRole,
+	}
+	for _, p := range spec.AllowTo {
+		out.AllowTo = append(out.AllowTo, jsonZonePath{Zone: p.Zone, Services: p.Services})
+	}
+	if spec.PrivilegedReason != "" || spec.PrivilegedApprovedBy != "" {
+		out.PrivilegedAccess = &jsonPrivilegedAccess{Reason: spec.PrivilegedReason, ApprovedBy: spec.PrivilegedApprovedBy}
+	}
+	return out
+}
+
+// toEntry converts the shared zone response to a ZoneEntry.
+func (v *jsonZoneView) toEntry() *ZoneEntry {
+	e := &ZoneEntry{
+		Name:            v.Name,
+		Offset:          v.Offset,
+		PortClasses:     v.PortClasses,
+		InternetIngress: v.InternetIngress,
+		Isolate:         v.Isolate,
+		OOB:             v.OOB,
+		LifecycleRole:   v.LifecycleRole,
+		Services:        v.Services,
+		RestartRequired: v.RestartRequired,
+		CreatedAt:       v.CreatedAt,
+		UpdatedAt:       v.UpdatedAt,
+	}
+	for _, p := range v.AllowTo {
+		e.AllowTo = append(e.AllowTo, ZonePathEntry{Zone: p.Zone, Services: p.Services})
+	}
+	if v.PrivilegedAccess != nil {
+		e.PrivilegedApprovedBy = v.PrivilegedAccess.ApprovedBy
+	}
+	if v.Numbering != nil {
+		e.VLAN = v.Numbering.VLAN
+	}
+	return e
 }
 
 // restZoneListResponse mirrors the server's NetworkZoneListResponse.
 type restZoneListResponse struct {
-	Zones []restZoneResponse `json:"zones"`
-	Count int                `json:"count"`
+	Zones []jsonZoneView `json:"zones"`
+	Count int            `json:"count"`
 }
 
 // restZoneDeleteResponse mirrors the server's delete response body.
@@ -940,73 +996,33 @@ type restZoneDeleteResponse struct {
 	RestartRequired bool `json:"restart_required"`
 }
 
-// restZoneAssignRequest maps to the handler's NetworkZoneAssignRequest.
-type restZoneAssignRequest struct {
-	Zone string `json:"zone"`
-}
-
-// restZoneAssignResponse mirrors the server's assign response body.
-type restZoneAssignResponse struct {
-	Success         bool `json:"success"`
-	RestartRequired bool `json:"restart_required"`
-}
-
-func (rz *restZoneResponse) toEntry() *ZoneEntry {
-	return &ZoneEntry{
-		Name:             rz.Name,
-		InternetIngress:  rz.InternetIngress,
-		Isolate:          rz.Isolate,
-		IsolatePerTenant: rz.IsolatePerTenant,
-		OOB:              rz.OOB,
-		LifecycleRole:    rz.LifecycleRole,
-		RestartRequired:  rz.RestartRequired,
-		CreatedAt:        rz.CreatedAt,
-		UpdatedAt:        rz.UpdatedAt,
-	}
-}
-
-// CreateZone creates a new network trust zone via REST POST /api/v1/sdn/zones.
+// CreateZone creates an owner-defined zone via REST POST /api/v1/sdn/zones.
 func (s *SDNRESTAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error) {
-	body := restZoneCreateRequest{
-		Name:             req.Name,
-		InternetIngress:  req.InternetIngress,
-		Isolate:          req.Isolate,
-		IsolatePerTenant: req.IsolatePerTenant,
-		OOB:              req.OOB,
-		LifecycleRole:    req.LifecycleRole,
-	}
-	respBody, statusCode, err := s.doRequest(ctx, http.MethodPost, "/api/v1/sdn/zones", body)
+	respBody, statusCode, err := s.doRequest(ctx, http.MethodPost, "/api/v1/sdn/zones", newJSONZoneSpec(req.Name, req.ZoneSpec))
 	if err != nil {
 		return nil, err
 	}
-	var resp restZoneResponse
+	var resp jsonZoneView
 	if err := s.handleResponse(respBody, statusCode, &resp); err != nil {
 		return nil, err
 	}
 	return resp.toEntry(), nil
 }
 
-// UpdateZone updates an existing network trust zone via REST PUT /api/v1/sdn/zones/{name}.
+// UpdateZone tunes or replaces a zone via REST PUT /api/v1/sdn/zones/{name}.
 func (s *SDNRESTAdapter) UpdateZone(ctx context.Context, name string, req ZoneUpdateRequest) (*ZoneEntry, error) {
-	body := restZoneUpdateRequest{
-		InternetIngress:  req.InternetIngress,
-		Isolate:          req.Isolate,
-		IsolatePerTenant: req.IsolatePerTenant,
-		OOB:              req.OOB,
-		LifecycleRole:    req.LifecycleRole,
-	}
-	respBody, statusCode, err := s.doRequest(ctx, http.MethodPut, "/api/v1/sdn/zones/"+url.PathEscape(name), body)
+	respBody, statusCode, err := s.doRequest(ctx, http.MethodPut, "/api/v1/sdn/zones/"+url.PathEscape(name), newJSONZoneSpec("", req.ZoneSpec))
 	if err != nil {
 		return nil, err
 	}
-	var resp restZoneResponse
+	var resp jsonZoneView
 	if err := s.handleResponse(respBody, statusCode, &resp); err != nil {
 		return nil, err
 	}
 	return resp.toEntry(), nil
 }
 
-// DeleteZone deletes a network trust zone via REST DELETE /api/v1/sdn/zones/{name}.
+// DeleteZone deletes a zone via REST DELETE /api/v1/sdn/zones/{name}.
 func (s *SDNRESTAdapter) DeleteZone(ctx context.Context, name string) (bool, error) {
 	respBody, statusCode, err := s.doRequest(ctx, http.MethodDelete, "/api/v1/sdn/zones/"+url.PathEscape(name), nil)
 	if err != nil {
@@ -1019,7 +1035,7 @@ func (s *SDNRESTAdapter) DeleteZone(ctx context.Context, name string) (bool, err
 	return resp.RestartRequired, nil
 }
 
-// ListZones returns all network trust zones via REST GET /api/v1/sdn/zones.
+// ListZones returns the zones via REST GET /api/v1/sdn/zones.
 func (s *SDNRESTAdapter) ListZones(ctx context.Context, lifecycleRole string) (*ZoneListResponse, error) {
 	path := "/api/v1/sdn/zones"
 	if lifecycleRole != "" {
@@ -1038,20 +1054,6 @@ func (s *SDNRESTAdapter) ListZones(ctx context.Context, lifecycleRole string) (*
 		zones = append(zones, *z.toEntry())
 	}
 	return &ZoneListResponse{Zones: zones, TotalCount: resp.Count}, nil
-}
-
-// AssignZone assigns a network segment to a trust zone via REST PUT /api/v1/sdn/networks/{network}/zone.
-func (s *SDNRESTAdapter) AssignZone(ctx context.Context, network string, zoneName string) (bool, error) {
-	body := restZoneAssignRequest{Zone: zoneName}
-	respBody, statusCode, err := s.doRequest(ctx, http.MethodPut, "/api/v1/sdn/networks/"+url.PathEscape(network)+"/zone", body)
-	if err != nil {
-		return false, err
-	}
-	var resp restZoneAssignResponse
-	if err := s.handleResponse(respBody, statusCode, &resp); err != nil {
-		return false, err
-	}
-	return resp.RestartRequired, nil
 }
 
 // Ensure SDNRESTAdapter implements SDNTestAdapter interface.

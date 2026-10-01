@@ -110,6 +110,12 @@ export interface IPAMPool {
   allocated: number;
   /** Available addresses */
   available: number;
+  /** Prefixes (CIDR) that are never allocatable; the gateway is always reserved */
+  reserved?: string[];
+  /** First address of the dynamic allocation window (whole CIDR when unset) */
+  rangeStart?: string;
+  /** Last address of the dynamic allocation window (whole CIDR when unset) */
+  rangeEnd?: string;
 }
 
 /**

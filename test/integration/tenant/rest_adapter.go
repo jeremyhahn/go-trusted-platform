@@ -22,9 +22,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"io"
 	"net/http"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -446,61 +447,6 @@ func (a *RESTAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*
 
 // =============================================================================
 // Network Operations
-// =============================================================================
-
-// ValidateVLAN validates a VLAN ID for a tenant
-func (a *RESTAdapter) ValidateVLAN(ctx context.Context, opts ValidateVLANOptions) (*ValidateVLANResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/validate-vlan", opts.TenantID)
-
-	reqBody := map[string]interface{}{
-		"vlan_id": opts.VLANID,
-	}
-
-	body, err := a.doRequest(ctx, http.MethodPost, path, reqBody)
-	if err != nil {
-		return &ValidateVLANResult{
-			TenantID: opts.TenantID,
-			VLANID:   opts.VLANID,
-			Valid:    false,
-			Message:  err.Error(),
-		}, nil
-	}
-
-	var result ValidateVLANResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "ValidateVLAN",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &result, nil
-}
-
-// GetBridgeName retrieves the OVS bridge name for a tenant
-func (a *RESTAdapter) GetBridgeName(ctx context.Context, opts GetBridgeNameOptions) (*GetBridgeNameResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/bridge", opts.TenantID)
-
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result GetBridgeNameResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "GetBridgeName",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &result, nil
-}
-
-// =============================================================================
-// Sync Operations
 // =============================================================================
 
 // SyncTenants synchronizes tenant manager state

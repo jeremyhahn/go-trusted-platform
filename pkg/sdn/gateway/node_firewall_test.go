@@ -91,15 +91,15 @@ func (f *fakeOVSClient) GetOFPort(ctx context.Context, portName string) (int32, 
 }
 
 // newTestRuntime builds a GatewayRuntime backed by in-memory fakes with a
-// two-zone topology (trusted → public allowed, public → trusted denied).
+// two-zone topology (control-plane → backup allowed, backup → control-plane denied).
 func newTestRuntime() *GatewayRuntime {
 	zones := []zone.ZoneConfig{
-		{Name: zone.ZoneTrusted, AllowTo: []zone.ZonePath{{Zone: zone.ZonePublic}}},
-		{Name: zone.ZonePublic, IsolateFrom: []zone.Zone{zone.ZoneTrusted}},
+		{Name: zone.ZoneControlPlane, AllowTo: []zone.ZonePath{{Zone: zone.ZoneBackup}}},
+		{Name: zone.ZoneBackup, IsolateFrom: []zone.Zone{zone.ZoneControlPlane}},
 	}
 	networks := map[zone.Zone]zoneflows.NetworkSummary{
-		zone.ZoneTrusted: {VLAN: 100, Subnet: "10.0.100.0/24"},
-		zone.ZonePublic:  {VLAN: 200, Subnet: "10.0.200.0/24"},
+		zone.ZoneControlPlane: {VLAN: 100, Subnet: "10.0.100.0/24"},
+		zone.ZoneBackup:       {VLAN: 200, Subnet: "10.0.200.0/24"},
 	}
 	return &GatewayRuntime{
 		Controller: &fakeFlowController{},

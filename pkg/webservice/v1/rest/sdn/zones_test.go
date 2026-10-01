@@ -42,14 +42,6 @@ type mockZoneSDNService struct {
 	updateZoneFunc func(ctx context.Context, req *platformv1.UpdateNetworkZoneRequest) (*platformv1.UpdateNetworkZoneResponse, error)
 	deleteZoneFunc func(ctx context.Context, req *platformv1.DeleteNetworkZoneRequest) (*platformv1.DeleteNetworkZoneResponse, error)
 	listZonesFunc  func(ctx context.Context, req *platformv1.ListNetworkZonesRequest) (*platformv1.ListNetworkZonesResponse, error)
-	assignZoneFunc func(ctx context.Context, req *platformv1.AssignNetworkZoneRequest) (*platformv1.AssignNetworkZoneResponse, error)
-}
-
-func (m *mockZoneSDNService) AssignNetworkZone(ctx context.Context, req *platformv1.AssignNetworkZoneRequest) (*platformv1.AssignNetworkZoneResponse, error) {
-	if m.assignZoneFunc != nil {
-		return m.assignZoneFunc(ctx, req)
-	}
-	return nil, status.Error(codes.Unimplemented, "not implemented")
 }
 
 func (m *mockZoneSDNService) CreateNetworkZone(ctx context.Context, req *platformv1.CreateNetworkZoneRequest) (*platformv1.CreateNetworkZoneResponse, error) {
@@ -110,13 +102,16 @@ func testZoneProto(name string) *platformv1.NetworkZone {
 	return &platformv1.NetworkZone{
 		Config: &platformv1.NetworkZoneConfig{
 			Name:            name,
+			Offset:          9,
+			PortClasses:     []string{"hypervisor"},
 			InternetIngress: true,
 			IsolateFrom:     []string{"quarantine"},
 			AllowTo: []*platformv1.NetworkZonePath{
-				{Zone: "trusted", Services: []string{"dns"}},
+				{Zone: "control-plane", Services: []string{"dns"}},
 			},
-			LifecycleRole: "provisioning",
+			PrivilegedAccess: &platformv1.NetworkZonePrivilegedAccess{Reason: "lab dns", ApprovedBy: "owner"},
 		},
+		Numbering: &platformv1.NetworkZoneNumbering{Vlan: 409, Subnet4: "10.4.9.0/24", Gateway: "10.4.9.1"},
 		CreatedAt: timestamppb.Now(),
 		UpdatedAt: timestamppb.Now(),
 	}
@@ -128,7 +123,7 @@ func TestZoneRoutes_ListZones(t *testing.T) {
 		listZonesFunc: func(_ context.Context, req *platformv1.ListNetworkZonesRequest) (*platformv1.ListNetworkZonesResponse, error) {
 			gotRole = req.GetLifecycleRole()
 			return &platformv1.ListNetworkZonesResponse{
-				Zones: []*platformv1.NetworkZone{testZoneProto("dmz")},
+				Zones: []*platformv1.NetworkZone{testZoneProto("lab")},
 			}, nil
 		},
 	})
@@ -151,11 +146,17 @@ func TestZoneRoutes_ListZones(t *testing.T) {
 		t.Fatalf("zones = %+v, want one zone", payload)
 	}
 	z := payload.Zones[0]
-	if z.Name != "dmz" || !z.InternetIngress || z.LifecycleRole != "provisioning" {
+	if z.Name != "lab" || !z.InternetIngress || z.Offset != 9 || len(z.PortClasses) != 1 {
 		t.Fatalf("zone fields wrong: %+v", z)
 	}
-	if len(z.AllowTo) != 1 || z.AllowTo[0].Zone != "trusted" {
+	if len(z.AllowTo) != 1 || z.AllowTo[0].Zone != "control-plane" {
 		t.Fatalf("allow_to wrong: %+v", z.AllowTo)
+	}
+	if z.PrivilegedAccess == nil || z.PrivilegedAccess.ApprovedBy != "owner" {
+		t.Fatalf("privileged_access wrong: %+v", z.PrivilegedAccess)
+	}
+	if z.Numbering == nil || z.Numbering.VLAN != 409 || z.Numbering.Subnet4 != "10.4.9.0/24" {
+		t.Fatalf("numbering wrong: %+v", z.Numbering)
 	}
 }
 
@@ -168,7 +169,7 @@ func TestZoneRoutes_CreateZone(t *testing.T) {
 		},
 	})
 
-	body := bytes.NewBufferString(`{"name":"dmz","internet_ingress":true,"allow_to":[{"zone":"trusted","services":["dns"]}],"isolate":true}`)
+	body := bytes.NewBufferString(`{"name":"lab","offset":9,"port_classes":["hypervisor"],"allow_to":[{"zone":"control-plane","services":["dns"]}],"isolate":true,"privileged_access":{"reason":"lab dns","approved_by":"owner"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/sdn/zones", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -177,11 +178,17 @@ func TestZoneRoutes_CreateZone(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
 	}
-	if gotCfg.GetName() != "dmz" || !gotCfg.GetInternetIngress() || !gotCfg.GetIsolate() {
+	if gotCfg.GetName() != "lab" || gotCfg.GetOffset() != 9 || !gotCfg.GetIsolate() {
 		t.Fatalf("config not converted: %+v", gotCfg)
 	}
-	if len(gotCfg.GetAllowTo()) != 1 || gotCfg.GetAllowTo()[0].GetZone() != "trusted" {
+	if len(gotCfg.GetPortClasses()) != 1 || gotCfg.GetPortClasses()[0] != "hypervisor" {
+		t.Fatalf("port_classes not converted: %+v", gotCfg.GetPortClasses())
+	}
+	if len(gotCfg.GetAllowTo()) != 1 || gotCfg.GetAllowTo()[0].GetZone() != "control-plane" {
 		t.Fatalf("allow_to not converted: %+v", gotCfg.GetAllowTo())
+	}
+	if gotCfg.GetPrivilegedAccess().GetApprovedBy() != "owner" {
+		t.Fatalf("privileged_access not converted: %+v", gotCfg.GetPrivilegedAccess())
 	}
 }
 
@@ -255,36 +262,16 @@ func TestZoneRoutes_DeleteZone(t *testing.T) {
 	}
 }
 
-func TestZoneRoutes_AssignZone(t *testing.T) {
-	var gotNetwork, gotZone string
-	mr := newZoneTestRouter(t, &mockZoneSDNService{
-		assignZoneFunc: func(_ context.Context, req *platformv1.AssignNetworkZoneRequest) (*platformv1.AssignNetworkZoneResponse, error) {
-			gotNetwork = req.GetNetwork()
-			gotZone = req.GetZone()
-			return &platformv1.AssignNetworkZoneResponse{RestartRequired: true}, nil
-		},
-	})
-
-	body := bytes.NewBufferString(`{"zone":"trusted"}`)
-	rec := httptest.NewRecorder()
-	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/sdn/networks/office/zone", body))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
-	}
-	if gotNetwork != "office" || gotZone != "trusted" {
-		t.Fatalf("assign args = (%q, %q), want (office, trusted)", gotNetwork, gotZone)
-	}
-}
-
-func TestZoneRoutes_AssignZone_MissingZone(t *testing.T) {
+// TestZoneRoutes_AssignRouteIsGone verifies the network-to-zone assignment
+// route no longer exists: networks are zones since #708.
+func TestZoneRoutes_AssignRouteIsGone(t *testing.T) {
 	mr := newZoneTestRouter(t, &mockZoneSDNService{})
 
 	rec := httptest.NewRecorder()
-	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/sdn/networks/office/zone", bytes.NewBufferString(`{}`)))
+	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/sdn/networks/office/zone", bytes.NewBufferString(`{"zone":"storage"}`)))
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 404 or 405 (body=%s)", rec.Code, rec.Body.String())
 	}
 }
 

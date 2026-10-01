@@ -173,7 +173,7 @@ without it is absent from its own fleet view.
   templates put the console on `ttyS1,115200n8`, but the SOL session shows
   only *new* output — a static screen (BIOS setup, an idle prompt) reads as
   empty. Send a key to refresh.
-- The **SEL fills and stops logging**. The node-02 BMC held 512 entries of
+- The **SEL fills and stops logging**. One control-plane BMC held 512 entries of
   `Correctable ECC @DIMMB1(CPU1)` from 2024 and had disabled logging on
   "Log full". Clear it (`ipmitool sel clear`) after commissioning or the
   event log is useless when you need it.

@@ -76,17 +76,15 @@ func (b *TenantBinding) GetTenant(tenantID string) (map[string]interface{}, erro
 }
 
 // CreateTenant creates a new tenant.
-func (b *TenantBinding) CreateTenant(name string, displayName string, vlanRangeStart uint32, vlanRangeEnd uint32) (map[string]interface{}, error) {
+func (b *TenantBinding) CreateTenant(name string, displayName string) (map[string]interface{}, error) {
 	cl, err := b.getClient()
 	if err != nil {
 		return nil, err
 	}
 
 	resp, err := cl.Tenant().CreateTenant(b.conn.ctx, &platformv1.CreateTenantRequest{
-		Name:           name,
-		DisplayName:    displayName,
-		VlanRangeStart: vlanRangeStart,
-		VlanRangeEnd:   vlanRangeEnd,
+		Name:        name,
+		DisplayName: displayName,
 	})
 	if err != nil {
 		return nil, err

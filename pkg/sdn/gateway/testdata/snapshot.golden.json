@@ -149,8 +149,8 @@
     "flow_count": 26,
     "last_reconcile": "2026-09-08T22:29:00Z",
     "ct_zones": {
-      "public": 33824,
-      "trusted": 26567
+      "backup": 43027,
+      "control-plane": 44413
     }
   },
   "nat": {

@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -313,9 +314,10 @@ func testVNICreateDelete(t *testing.T, ctx context.Context, adapter OverlayComma
 }
 
 func testVNICreateInvalidParams(t *testing.T, ctx context.Context, adapter OverlayCommands) {
-	// Try to create VNI with invalid VNI value (0)
+	// Try to create VNI with an invalid VNI value: past the 24-bit range.
+	// (VNI 0 asks the controller to derive the environment's next VNI.)
 	opts := VNICreateOptions{
-		VNI:  0,
+		VNI:  1 << 24,
 		VLAN: 100,
 		Name: "invalid-vni",
 	}
@@ -324,7 +326,7 @@ func testVNICreateInvalidParams(t *testing.T, ctx context.Context, adapter Overl
 	if err == nil {
 		t.Error("Expected error for invalid VNI value")
 		// Cleanup if it was somehow created
-		_, cleanupErr := adapter.VNIDelete(ctx, 0)
+		_, cleanupErr := adapter.VNIDelete(ctx, 1<<24)
 		if cleanupErr != nil {
 			t.Logf("Cleanup error (expected): %v", cleanupErr)
 		}
@@ -1256,10 +1258,19 @@ func skipIfOverlayNotImplemented(t *testing.T, err error) {
 }
 
 // generateUniqueVNI generates a unique VNI for testing.
+// integrationEnvironment is sdn.environment.id in test/integration/config.yaml:
+// the daemon only accepts VNIs of its own environment's block.
+const integrationEnvironment = 4
+
 func generateUniqueVNI() uint32 {
-	now := time.Now()
-	// Use timestamp to generate a VNI in the valid range (1-16777215)
-	return uint32((now.UnixNano() % 16000000) + 100000)
+	// A timestamp-derived overlay network number inside the environment's
+	// block: VNI = E*100000 + n, n in 1-99999.
+	n := uint32(time.Now().UnixNano()%int64(netplan.MaxNetworksPerEnvironment)) + 1
+	vni, err := netplan.VNI(integrationEnvironment, n)
+	if err != nil {
+		panic(err) // n is in range by construction
+	}
+	return vni
 }
 
 // generateUniquePoolName generates a unique pool name for testing.

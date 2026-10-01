@@ -22,7 +22,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
@@ -220,16 +219,9 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 		return nil
 	}
 
-	// Build a ZoneIndex when network configs are present; ZoneFlowManager
-	// falls back to built-in VLAN defaults when ZoneIndex is nil.
-	var zoneIdx *sdn.ZoneIndex
-	if len(a.SDNConfig.Networks) > 0 {
-		zoneIdx, err = sdn.BuildZoneIndex(resolvedZones, a.SDNConfig.Networks)
-		if err != nil {
-			slogger.Warn("sdn policy: failed to build zone index, using default VLAN mappings",
-				slog.String("error", err.Error()))
-		}
-	}
+	// Every zone VLAN comes from the network plan derived at validation;
+	// without one the zone flow paths stay disabled (no default VLANs).
+	plan := a.SDNConfig.Plan()
 
 	// On a bridge whose base pipeline gatewayd owns, platformd's allow
 	// rules should hand off to table 10 (zoneflows.TerminalGatewayPipeline)
@@ -246,7 +238,7 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 		BridgeName:     bridgeName,
 		FlowController: fc,
 		PortController: fc,
-		ZoneIndex:      zoneIdx,
+		Plan:           plan,
 		Zones:          resolvedZones,
 		Logger:         slogger,
 		Terminal:       terminal,

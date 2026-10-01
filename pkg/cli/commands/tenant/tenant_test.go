@@ -52,7 +52,6 @@ func TestNewCommand(t *testing.T) {
 	expectedSubcommands := []string{
 		"list", "show", "create", "delete",
 		"suspend", "resume", "quotas", "usage",
-		"vlan", "bridge",
 	}
 
 	for _, expected := range expectedSubcommands {
@@ -65,6 +64,14 @@ func TestNewCommand(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("expected subcommand %s not found", expected)
+		}
+	}
+
+	// The vlan and bridge subcommands were retired with the per-tenant VLAN
+	// range and OVS bridge (#708).
+	for _, sub := range cmd.Commands() {
+		if name := sub.Name(); name == "vlan" || name == "bridge" {
+			t.Errorf("retired subcommand %q is still registered", name)
 		}
 	}
 }
@@ -122,7 +129,7 @@ func TestNewCreateCommand(t *testing.T) {
 
 	// Check required flags
 	expectedFlags := []string{
-		"name", "display-name", "vlan-start", "vlan-end",
+		"name", "display-name",
 		"max-vms", "max-containers", "max-vcpus", "max-memory-gb",
 		"max-bridges", "max-ports", "max-bandwidth-mbps",
 		"max-volumes-gb", "max-snapshots",
@@ -131,6 +138,13 @@ func TestNewCreateCommand(t *testing.T) {
 	for _, flagName := range expectedFlags {
 		if cmd.Flag(flagName) == nil {
 			t.Errorf("expected flag %s not found", flagName)
+		}
+	}
+
+	// The VLAN range flags were retired (#708).
+	for _, flagName := range []string{"vlan-start", "vlan-end"} {
+		if cmd.Flag(flagName) != nil {
+			t.Errorf("retired flag %s is still defined", flagName)
 		}
 	}
 }
@@ -217,30 +231,6 @@ func TestNewUsageCommand(t *testing.T) {
 
 	if cmd.Use != "usage <tenant-name>" {
 		t.Errorf("expected Use 'usage <tenant-name>', got %s", cmd.Use)
-	}
-}
-
-func TestNewVLANCommand(t *testing.T) {
-	cmd := NewVLANCommand(testGetFlags)
-
-	if cmd == nil {
-		t.Fatal("NewVLANCommand returned nil")
-	}
-
-	if cmd.Use != "vlan <tenant-name>" {
-		t.Errorf("expected Use 'vlan <tenant-name>', got %s", cmd.Use)
-	}
-}
-
-func TestNewBridgeCommand(t *testing.T) {
-	cmd := NewBridgeCommand(testGetFlags)
-
-	if cmd == nil {
-		t.Fatal("NewBridgeCommand returned nil")
-	}
-
-	if cmd.Use != "bridge <tenant-name>" {
-		t.Errorf("expected Use 'bridge <tenant-name>', got %s", cmd.Use)
 	}
 }
 

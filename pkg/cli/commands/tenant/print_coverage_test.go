@@ -39,9 +39,6 @@ func TestPrintTenantDetails_FullTenant(t *testing.T) {
 		Name:        "test-tenant",
 		DisplayName: "Test Tenant",
 		State:       sdktenant.StateActive,
-		OVSBridge:   "br-test",
-		VLANStart:   100,
-		VLANEnd:     200,
 		Labels:      map[string]string{"env": "prod"},
 		Annotations: map[string]string{"note": "test"},
 		CreatedAt:   now,
@@ -258,9 +255,6 @@ func TestToTenantDetail_FullTenant(t *testing.T) {
 		Name:        "test",
 		DisplayName: "Test",
 		State:       sdktenant.StateActive,
-		OVSBridge:   "br-test",
-		VLANStart:   100,
-		VLANEnd:     200,
 		Labels:      map[string]string{"env": "prod"},
 		Annotations: map[string]string{"note": "test"},
 		CreatedAt:   now,
@@ -281,12 +275,6 @@ func TestToTenantDetail_FullTenant(t *testing.T) {
 	assert.Equal(t, "t1", detail.ID)
 	assert.Equal(t, "test", detail.Name)
 	assert.Equal(t, "Test", detail.DisplayName)
-	assert.Equal(t, "br-test", detail.OVSBridge)
-
-	require.NotNil(t, detail.VLANRange)
-	assert.Equal(t, uint32(100), detail.VLANRange.Start)
-	assert.Equal(t, uint32(200), detail.VLANRange.End)
-	assert.Equal(t, 101, detail.VLANRange.Count)
 
 	require.NotNil(t, detail.Quotas)
 	require.NotNil(t, detail.Quotas.Compute)
@@ -295,32 +283,6 @@ func TestToTenantDetail_FullTenant(t *testing.T) {
 	assert.Equal(t, int64(5), detail.Quotas.Network.MaxBridges)
 	require.NotNil(t, detail.Quotas.Storage)
 	assert.Equal(t, int64(500), detail.Quotas.Storage.MaxVolumesGB)
-}
-
-func TestToTenantDetail_NoVLAN(t *testing.T) {
-	tenant := &sdktenant.Tenant{
-		ID:    "t2",
-		Name:  "minimal",
-		State: sdktenant.StateActive,
-	}
-
-	detail := toTenantDetail(tenant)
-	require.NotNil(t, detail)
-	assert.Nil(t, detail.VLANRange)
-	require.NotNil(t, detail.Quotas)
-	require.NotNil(t, detail.Quotas.Compute)
-	assert.Equal(t, int64(0), detail.Quotas.Compute.MaxVMs)
-}
-
-// =============================================================================
-// Command Construction Coverage
-// =============================================================================
-
-func TestNewBridgeCommand_Structure(t *testing.T) {
-	cmd := NewBridgeCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
-	assert.Contains(t, cmd.Use, "bridge")
-	assert.NotNil(t, cmd.RunE)
-	assert.NotEmpty(t, cmd.Long)
 }
 
 func TestNewShowCommand_Structure(t *testing.T) {
@@ -351,16 +313,23 @@ func TestNewUsageCommand_Structure(t *testing.T) {
 	assert.NotEmpty(t, cmd.Long)
 }
 
-func TestNewVLANCommand_Structure(t *testing.T) {
-	cmd := NewVLANCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
-	assert.Contains(t, cmd.Use, "vlan")
-	assert.NotNil(t, cmd.RunE)
-	assert.NotEmpty(t, cmd.Long)
-}
-
 func TestNewQuotasGetCommand_Structure(t *testing.T) {
 	cmd := newQuotasGetCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
 	assert.Contains(t, cmd.Use, "get")
 	assert.NotNil(t, cmd.RunE)
 	assert.NotEmpty(t, cmd.Long)
+}
+
+func TestToTenantDetail_Minimal(t *testing.T) {
+	tenant := &sdktenant.Tenant{
+		ID:    "t2",
+		Name:  "minimal",
+		State: sdktenant.StateActive,
+	}
+
+	detail := toTenantDetail(tenant)
+	require.NotNil(t, detail)
+	require.NotNil(t, detail.Quotas)
+	require.NotNil(t, detail.Quotas.Compute)
+	assert.Equal(t, int64(0), detail.Quotas.Compute.MaxVMs)
 }

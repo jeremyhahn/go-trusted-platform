@@ -1424,8 +1424,6 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeGatewayZoneUpdate(ctx, args)
 	case "gateway_zone_delete":
 		return r.executeGatewayZoneDelete(ctx, args)
-	case "gateway_zone_assign":
-		return r.executeGatewayZoneAssign(ctx, args)
 
 	// Health Operations
 	case "platform_health":
@@ -1636,10 +1634,6 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeTenantGetUsage(ctx, args)
 	case "tenant_check_quota":
 		return r.executeTenantCheckQuota(ctx, args)
-	case "tenant_validate_vlan":
-		return r.executeTenantValidateVLAN(ctx, args)
-	case "tenant_get_bridge":
-		return r.executeTenantGetBridge(ctx, args)
 	case "tenant_sync":
 		return r.executeTenantSync(ctx, args)
 	case "tenant_rotate_dek":

@@ -32,8 +32,8 @@ func TestDHCPServiceHandler_IsRefused(t *testing.T) {
 		MinUptimePct:  MinUptimePct,
 		DHCP: &DHCPServiceConfig{
 			Enabled:   true,
-			Interface: "bond0.201",
-			Segment:   "provisioning",
+			Interface: "zone405",
+			Zone:      "provisioning",
 		},
 	}
 	gw, err := NewGateway(cfg)
@@ -99,11 +99,11 @@ func TestDHCPServiceConfig_ValidateWithSegment(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name: "valid with segment",
+			name: "valid with zone",
 			config: &DHCPServiceConfig{
 				Enabled:   true,
-				Interface: "bond0.201",
-				Segment:   "provisioning",
+				Interface: "zone405",
+				Zone:      "provisioning",
 			},
 			expectErr: false,
 		},
@@ -277,7 +277,7 @@ func TestGateway_DHCPAndPXETogether(t *testing.T) {
 		MinReputation: MinReputation,
 		MinAgeDays:    MinAgeDays,
 		MinUptimePct:  MinUptimePct,
-		DHCP:          &DHCPServiceConfig{Enabled: true, Interface: "bond0.201", Segment: "provisioning"},
+		DHCP:          &DHCPServiceConfig{Enabled: true, Interface: "zone405", Zone: "provisioning"},
 		PXE:           &PXEServiceConfig{Enabled: true, HTTPPort: 8069},
 	}
 	gw, err := NewGateway(cfg)

@@ -1,0 +1,157 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package app
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+)
+
+// templateRoot is the tree of shipped platform templates.
+const templateRoot = "../../configs/platform/templates"
+
+// shippedPlatformTemplates returns every platformd template (gatewayd's own
+// config file is checked in pkg/sdn/gateway/commands).
+func shippedPlatformTemplates(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(templateRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Ext(path) != ".yaml" || filepath.Base(path) == "gatewayd.yaml" {
+			return nil
+		}
+		out = append(out, path)
+		return nil
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, out, "the shipped templates must be present")
+	return out
+}
+
+// loadTemplate decodes a template the way platformd does: viper plus the
+// platform decode hook.
+func loadTemplate(t *testing.T, path string) *App {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	v := viper.New()
+	v.SetConfigType("yaml")
+	require.NoError(t, v.ReadConfig(bytes.NewReader(raw)))
+	require.NoError(t, CheckPlatformConfigViper(v), "%s: no stale network/sdn keys", path)
+	var a App
+	require.NoError(t, v.Unmarshal(&a, config.DecodeHook()), path)
+	return &a
+}
+
+// TestShippedTemplates_FollowTheReferenceNetwork loads every platform
+// template and checks it against the reference network: the SDN section
+// validates and derives a plan on environment 4 (fabric included), the host
+// network validates by role against that plan, the trunk rides br-fabric,
+// and no template carries the retired model (zone trusted, br-int,
+// 172.16.x).
+func TestShippedTemplates_FollowTheReferenceNetwork(t *testing.T) {
+	for _, path := range shippedPlatformTemplates(t) {
+		rel, err := filepath.Rel(templateRoot, path)
+		require.NoError(t, err)
+		t.Run(rel, func(t *testing.T) {
+			raw, err := os.ReadFile(path)
+			require.NoError(t, err)
+			for _, retired := range []string{"trusted0", "zone: trusted", "172.16.", "subnets:", "segments:"} {
+				assert.False(t, strings.Contains(string(raw), retired), "%s: retired network model %q", rel, retired)
+			}
+
+			a := loadTemplate(t, path)
+			require.NotNil(t, a.SDNConfig, "sdn section")
+			require.True(t, a.SDNConfig.Enabled)
+			require.NoError(t, a.SDNConfig.Validate(), "sdn section must validate (zones, plan, fabric)")
+			plan := a.SDNConfig.Plan()
+			require.NotNil(t, plan)
+			assert.Equal(t, uint16(4), plan.Environment().ID, "templates use the reference block 4")
+			require.NotNil(t, a.SDNConfig.OVS)
+			assert.Equal(t, "br-fabric", a.SDNConfig.OVS.Bridge, "the trunk rides br-fabric")
+
+			require.NotNil(t, a.NetworkConfig, "network section")
+			assert.NotEmpty(t, a.NetworkConfig.Role, "every template declares its host role")
+			require.NoError(t, a.NetworkConfig.Validate(plan), "host addressing by role")
+			require.NoError(t, a.validateHostNetwork())
+
+			if a.NetworkConfig.Role != installer.HostRoleGateway {
+				assert.False(t, a.NetworkConfig.IPForward, "only a gateway forwards")
+			}
+			for _, br := range a.NetworkConfig.Bridges {
+				if br.Name == "br-int" {
+					assert.Empty(t, br.Interfaces, "br-int never carries the trunk")
+				}
+			}
+			require.NotNil(t, a.NetworkConfig.PlatformVRF, "every attested host has a platform-VRF address")
+		})
+	}
+}
+
+// TestShippedTemplates_FabricPortClasses checks the template that carries
+// the switch fabric assigns every port a class the plan can realise.
+func TestShippedTemplates_FabricPortClasses(t *testing.T) {
+	var withFabric int
+	for _, path := range shippedPlatformTemplates(t) {
+		a := loadTemplate(t, path)
+		if a.SDNConfig == nil || a.SDNConfig.Fabric == nil {
+			continue
+		}
+		withFabric++
+		require.NoError(t, a.SDNConfig.Validate(), path)
+		plan := a.SDNConfig.Plan()
+		require.NotEmpty(t, a.SDNConfig.Fabric.Ports, "%s: a fabric declares its ports", path)
+		for _, p := range a.SDNConfig.Fabric.Ports {
+			pc, err := plan.PortClass(zone.PortClass(p.Class))
+			require.NoError(t, err, "%s: port %s", path, p.Port)
+			assert.Equal(t, 9216, pc.MTU)
+		}
+	}
+	assert.Positive(t, withFabric, "at least one template carries the switch fabric")
+}
+
+// TestShippedTemplates_RetiredKeysAreGone guards against the removed SDN keys
+// silently reappearing: they would be ignored by the decoder.
+func TestShippedTemplates_RetiredKeysAreGone(t *testing.T) {
+	for _, path := range shippedPlatformTemplates(t) {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		for _, line := range strings.Split(string(raw), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			for _, key := range []string{"networks:", "transit:", "mode: vlan", "members:"} {
+				if strings.HasPrefix(trimmed, key) && !strings.HasPrefix(line, key) {
+					// Only nested (sdn/network) keys are retired; a top-level
+					// key of the same name belongs to another section.
+					t.Errorf("%s: retired key %q: %s", path, key, trimmed)
+				}
+			}
+		}
+	}
+}

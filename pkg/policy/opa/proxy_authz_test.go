@@ -72,12 +72,12 @@ func TestProxyAuthzPolicyDecisions(t *testing.T) {
 	}{
 		{
 			name:      "zone and route allow",
-			input:     proxyAuthzInput("trusted", "api", "GET", nil),
+			input:     proxyAuthzInput("control-plane", "api", "GET", nil),
 			wantAllow: true,
 		},
 		{
 			name:      "allowed method allows",
-			input:     proxyAuthzInput("trusted", "api", "GET", []string{"GET", "POST"}),
+			input:     proxyAuthzInput("control-plane", "api", "GET", []string{"GET", "POST"}),
 			wantAllow: true,
 		},
 		{
@@ -88,7 +88,7 @@ func TestProxyAuthzPolicyDecisions(t *testing.T) {
 		},
 		{
 			name:          "method not in allowed set denied",
-			input:         proxyAuthzInput("trusted", "api", "DELETE", []string{"GET"}),
+			input:         proxyAuthzInput("control-plane", "api", "DELETE", []string{"GET"}),
 			wantAllow:     false,
 			wantViolation: "method DELETE not allowed for route api",
 		},
@@ -99,7 +99,7 @@ func TestProxyAuthzPolicyDecisions(t *testing.T) {
 		},
 		{
 			name:      "missing route id denied",
-			input:     proxyAuthzInput("trusted", "", "GET", nil),
+			input:     proxyAuthzInput("control-plane", "", "GET", nil),
 			wantAllow: false,
 		},
 	}

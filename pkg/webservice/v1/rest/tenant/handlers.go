@@ -233,38 +233,6 @@ func (h *Handlers) CheckQuota(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
-// ValidateVLAN handles POST /api/v1/tenants/{id}/vlan/validate.
-func (h *Handlers) ValidateVLAN(w http.ResponseWriter, r *http.Request) {
-	if !h.ensure(w, r) {
-		return
-	}
-	req := &platformv1.ValidateVLANRequest{}
-	if err := protorest.DecodeRequest(r, req); err != nil {
-		h.respWriter.Error400(w, r, err)
-		return
-	}
-	req.TenantId = mux.Vars(r)["id"]
-	resp, err := h.server.ValidateVLAN(r.Context(), req)
-	if err != nil {
-		protorest.WriteError(w, r, h.respWriter, err)
-		return
-	}
-	protorest.WriteSuccess(w, r, h.respWriter, resp)
-}
-
-// GetBridgeName handles GET /api/v1/tenants/{id}/bridge.
-func (h *Handlers) GetBridgeName(w http.ResponseWriter, r *http.Request) {
-	if !h.ensure(w, r) {
-		return
-	}
-	resp, err := h.server.GetBridgeName(r.Context(), &platformv1.GetBridgeNameRequest{TenantId: mux.Vars(r)["id"]})
-	if err != nil {
-		protorest.WriteError(w, r, h.respWriter, err)
-		return
-	}
-	protorest.WriteSuccess(w, r, h.respWriter, resp)
-}
-
 // Sync handles POST /api/v1/tenants/sync.
 func (h *Handlers) Sync(w http.ResponseWriter, r *http.Request) {
 	if !h.ensure(w, r) {

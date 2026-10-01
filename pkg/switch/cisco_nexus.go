@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -224,6 +225,9 @@ func GeneratePortCommands(ports []PortConfig) ([]string, error) {
 
 	commands := []string{"configure terminal"}
 	for _, port := range ports {
+		if err := ValidatePortConfig(port); err != nil {
+			return nil, ErrPortConfigFailed{Port: port.Port, Cause: err}
+		}
 		expanded, err := ExpandPortRange(port.Port)
 		if err != nil {
 			return nil, err
@@ -242,11 +246,21 @@ func GeneratePortCommands(ports []PortConfig) ([]string, error) {
 					vlanList := joinInts(port.VLANs, ",")
 					commands = append(commands, fmt.Sprintf("  switchport trunk allowed vlan %s", vlanList))
 				}
+				if port.NativeVLAN > 0 {
+					commands = append(commands, fmt.Sprintf("  switchport trunk native vlan %d", port.NativeVLAN))
+				} else {
+					// A re-used port must not keep an old native VLAN: on a
+					// gateway trunk it would put untagged frames on provisioning.
+					commands = append(commands, "  no switchport trunk native vlan")
+				}
 			case "access":
 				commands = append(commands, "  switchport mode access")
 				if port.AccessVLAN > 0 {
 					commands = append(commands, fmt.Sprintf("  switchport access vlan %d", port.AccessVLAN))
 				}
+			}
+			if port.MTU > 0 {
+				commands = append(commands, fmt.Sprintf("  mtu %d", port.MTU))
 			}
 
 			commands = append(commands, "  no shutdown")
@@ -362,8 +376,32 @@ func ValidatePortConfig(port PortConfig) error {
 	if port.Mode == "trunk" && len(port.VLANs) == 0 {
 		return ErrInvalidConfig{Field: "port.vlans", Reason: "must specify allowed vlans for trunk mode"}
 	}
+	if port.NativeVLAN != 0 {
+		if port.Mode != "trunk" {
+			return ErrInvalidConfig{Field: "port.native_vlan", Reason: "only a trunk has a native vlan"}
+		}
+		if !slices.Contains(port.VLANs, port.NativeVLAN) {
+			return ErrInvalidConfig{
+				Field:  "port.native_vlan",
+				Reason: fmt.Sprintf("native vlan %d is not in the trunk's allowed vlans", port.NativeVLAN),
+			}
+		}
+	}
+	if port.MTU != 0 && (port.MTU < MinMTU || port.MTU > MaxMTU) {
+		return ErrInvalidConfig{
+			Field:  "port.mtu",
+			Reason: fmt.Sprintf("mtu %d out of range [%d, %d]", port.MTU, MinMTU, MaxMTU),
+		}
+	}
 	return nil
 }
+
+// MinMTU and MaxMTU bound a port MTU. Platform ports run MaxMTU so VXLAN
+// encapsulation never fragments.
+const (
+	MinMTU = 1500
+	MaxMTU = 9216
+)
 
 // containsError checks if NX-OS output contains an error indicator.
 func containsError(output string) bool {

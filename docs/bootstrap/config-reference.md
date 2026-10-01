@@ -44,71 +44,93 @@ Controls where the PXE bootstrap container is deployed.
 
 ```yaml
 deployer:
-  host: 192.168.1.5
+  host: 192.0.2.5
   user: admin
   ssh_key: ~/.ssh/id_ed25519
   known_hosts_path: /etc/platform/deployer/known_hosts
   container_runtime: docker
 ```
 
-## Switch (Optional)
+## Environment and zones
 
-Auto-configures a physical network switch. Omit this section if switch configuration is managed manually.
+The deployment's network is the [reference network](../architecture/reference-network.md). Every VLAN,
+subnet and switch-port VLAN list is derived from the top-level `environment:` by the network plan
+(`pkg/sdn/netplan`); `bootstrap.yaml` carries no VLAN or subnet numbers.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `vendor` | string | Switch vendor: `nexus` |
+| `environment.id` | int | **Required**. Environment number _E_ (2–40): VLANs _E_·100+n, IPv4 `10.E.n.0/24`, VNIs _E_·100000+n |
+| `environment.base` | CIDR | IPv4 `/8` base. Default `10.0.0.0/8` |
+| `environment.ula` | CIDR | Deployment ULA `/48` (RFC 4193, random global ID). Omit for no IPv6 subnets |
+| `environment.overrides` | list | Explicit `{zone, vlan, subnet, subnet6}` per zone, for sites that cannot follow the reference numbering |
+| `zones` | list | Built-in zone policy tuning and owner-defined zones (offsets 9–99), the same schema as `sdn.zones` in a platform config |
+
+The provisioning zone (offset 5) is always present; it is where the bootstrap container's DHCP/PXE
+serves new nodes.
+
+```yaml
+environment:
+  id: 4
+  ula: fd12:3456:789a::/48   # example; generate your own random /48
+zones:
+  - name: lab                # owner-defined zone: VLAN 409, 10.4.9.0/24
+    offset: 9
+    port_classes: [hypervisor]
+    isolate: true
+```
+
+`environment:` here is the network plan; `platform.environment` (below) is the deployment's name
+(`production`, `staging`), a different setting.
+
+## Switch (Optional)
+
+Auto-configures a physical network switch. Omit this section if switch configuration is managed
+manually. See [Physical Switch Auto-Configuration](switch-management.md).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `vendor` | string | Switch vendor: `cisco-nexus` (or `noop`) |
 | `host` | string | Switch management IP |
 | `user` | string | SSH username |
 | `ssh_key` | string | Path to SSH private key |
-| `vlans` | map | VLAN definitions (name -> vlan/subnet) |
-| `port_assignments` | list | Port-to-VLAN mappings |
+| `known_hosts_path` | string | Pinned host-key directory (switch SSH is fail-closed) |
+| `port_assignments` | list | `{port, class, description}`: each platform port's class (`gateway`, `hypervisor`, `bmc`, `mgmt-uplink`, `peer-link`) |
+
+The switch gets one VLAN per zone; each port gets its class's mode, allowed VLANs, native VLAN and MTU
+9216, all derived from the environment.
 
 ```yaml
 switch:
-  vendor: nexus
-  host: 192.168.1.254
+  vendor: cisco-nexus
+  host: 192.0.2.10
   user: admin
   ssh_key: ~/.ssh/switch_key
-  vlans:
-    management:
-      vlan: 100
-      subnet: 10.0.100.0/24
-    production:
-      vlan: 200
-      subnet: 10.0.200.0/24
+  known_hosts_path: /etc/platform/switch/known_hosts
   port_assignments:
-    - port: Ethernet1/1
-      mode: trunk
-      vlans: [100, 200]
+    - port: Ethernet1/3
+      class: gateway
+      description: "gw-01"
+    - port: Ethernet1/25
+      class: hypervisor
       description: "cp-01"
-    - port: Ethernet1/2
-      mode: access
-      vlans: [200]
-      description: "worker-01"
+    - port: Ethernet1/41
+      class: bmc
+      description: "gw-01 BMC"
 ```
 
-## Provisioning Network
+## Retired keys
 
-Defines the PXE boot provisioning network.
+These keys held literal VLAN and subnet numbers. Loading a `bootstrap.yaml` that still carries one
+fails with `ErrRetiredKey`, naming the file, line and replacement:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `subnet` | string | **Required**. Provisioning subnet CIDR |
-| `gateway` | string | Default gateway for provisioning network |
-| `dhcp_range_start` | string | DHCP range start IP |
-| `dhcp_range_end` | string | DHCP range end IP |
-| `dns` | list | DNS servers for provisioning |
-
-```yaml
-provisioning_network:
-  subnet: 10.0.100.0/24
-  gateway: 10.0.100.1
-  dhcp_range_start: 10.0.100.100
-  dhcp_range_end: 10.0.100.200
-  dns:
-    - 10.0.100.1
-```
+| Retired key | Use instead |
+|-------------|-------------|
+| `subnets` | `environment` |
+| `fabric` | `switch.port_assignments` with port classes |
+| `platform.networks` | `environment` |
+| `switch.vlans` | `environment` |
+| `switch.port_assignments[].mode`, `[].vlans` | `switch.port_assignments[].class` |
+| `nodes[].post_enrollment` | the port class (a hypervisor trunk's native VLAN is provisioning) |
 
 ## Platform
 
@@ -122,7 +144,6 @@ Global platform settings shared across all nodes.
 | `tenant_id` | string | Tenant identifier |
 | `environment` | string | Deployment environment name |
 | `upstream_dns` | list | Upstream DNS resolvers |
-| `networks` | map | Named network definitions |
 | `bootstrap_strategy` | string | Trust bootstrap strategy |
 | `health_timeout` | duration | Post-install health wait per node. Default `25m`. A node must finish install-reboot → firstboot seal → auto-provision → ACME enrollment → service restart before it answers; size this to that cycle, not to boot time (#134). **Must carry a unit** (`25m`, `90s`, `1h`) like every other duration in this file — a bare number is a config parse error, not a default. A zero or negative *duration* (`0s`, `-5m`) is treated as unset rather than as "no wait", since a zero-length window would fail every node instantly |
 
@@ -138,10 +159,6 @@ platform:
   bootstrap_strategy: dane
   # Optional. Omit to use the 25m default; raise it on slower chassis.
   health_timeout: 25m
-  networks:
-    management:
-      vlan: 100
-      subnet: 10.0.100.0/24
 ```
 
 ## Templates
@@ -250,7 +267,7 @@ validation error (`ErrForbiddenOverrideKey`, reported with file:line):
   the `platform.*` value. A differing value remains a legal per-node
   override.
 
-All other override keys (`disk`, `dns`, `subnets`, `bonds`, `bridges`,
+All other override keys (`disk`, `dns`, `bonds`, `bridges`,
 `dnsmasq`, `gateway`, `tpm.idevid.serial`, `bmc.port`, `root-password`,
 `post-install`, ...) are unchanged and still legal.
 
@@ -261,7 +278,7 @@ nodes:
   # BMC-managed node (SPKI pin captured out of band)
   - hostname: cp-01
     role: control-plane
-    bmc_address: 192.168.1.10
+    bmc_address: 192.0.2.20
     bmc_user: admin
     bmc_password: "kms://bmc/cp-01/password"
     bmc_protocol: redfish

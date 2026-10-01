@@ -66,6 +66,11 @@ func (m *MockOVSPortController) SetPortVLAN(ctx context.Context, portName string
 	return args.Error(0)
 }
 
+func (m *MockOVSPortController) SetPortTrunk(ctx context.Context, portName string, allowed []uint16, native uint16) error {
+	args := m.Called(ctx, portName, allowed, native)
+	return args.Error(0)
+}
+
 func (m *MockOVSPortController) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {
 	args := m.Called(ctx, portName, state)
 	return args.Error(0)

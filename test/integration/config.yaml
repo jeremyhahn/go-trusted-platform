@@ -217,6 +217,9 @@ argon2:
 sdn:
   enabled: true
   controller: true
+  # Every zone is numbered from the environment (reference block 4).
+  environment:
+    id: 4
   ovs:
     socket: /var/run/openvswitch/db.sock
     bridge: br-platform-int

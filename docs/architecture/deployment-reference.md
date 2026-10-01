@@ -163,7 +163,8 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 - In 3-node deployment: standalone with local pebble storage
 - In HA cluster: Raft-backed QuicBaaS with replicated state (tolerate 1 node failure with 3-node cluster)
 - Never host application workloads directly
-- Addressed on the `control-plane` zone (x06); BMC on `management` (x02) — see [reference-network.md](reference-network.md)
+- Addressed on `fabric` (x01, its VTEP) and `control-plane` (x06) only, plus `hypervisor` and `storage` when it hosts VMs or mounts storage; BMC on `management` (x02) — see [Host addressing](reference-network.md#host-addressing)
+- `network.role: control-plane`: no forwarding, host firewall drops traffic between interfaces, one platform-VRF address in a Linux VRF
 
 ### Gateway Nodes
 
@@ -175,7 +176,8 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 - VTEP on `fabric` (x01) for the EVPN/VXLAN overlays (overlay service: #709)
 - OVS for zone and overlay isolation
 - NAT/firewall rules for network segmentation
-- A bonded trunk to the platform switches (gateway port class)
+- A bonded trunk to the platform switches (gateway port class); node address `.2`/`.3` on each zone it routes, the zone gateway `.1` (a VRRP address in a pair)
+- `network.role: gateway`: exempt from the forwarding and host-addressing rules, since it routes and NATs by role
 - In 3-node: single gateway node
 - In HA cluster: 2+ gateways in active-active or active-passive configuration
 
@@ -188,6 +190,8 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 - Guest VMs can have vTPM 2.0 for attestation chains
 - No requirement to run management services
 - Hypervisor trunk: `fabric`, `hypervisor`–`backup` (x01, x03–x08), native `provisioning` (x05); workloads live on overlays
+- Addressed on `fabric` (its VTEP), `hypervisor` and, when it mounts storage, `storage` — never on `control-plane`; it reaches the control plane through the platform VRF (overlay attachment: #709)
+- `network.role: compute`: no forwarding, host firewall drops traffic between interfaces; workload ports on `br-int`, which never carries the trunk
 
 ---
 
@@ -235,10 +239,24 @@ Management (402) leaves the platform only through an external management firewal
 | — | IPAM pool | 10.4.128.0/17 | overlays, loopbacks, tunnel P2P |
 
 `public` and tenant networks are EVPN/VXLAN overlays, not VLANs. There is no `trusted` zone and no
-tenant VLAN range.
+tenant VLAN range. Owner-defined zones take offsets x09–x99.
 
-> **Code today.** The code defaults (`pkg/sdn/zone`, `pkg/sdn/vlan`) are still the older model (zone `trusted`, VLANs 200–203,
-> `172.16.N.0/24`); the change is tracked in #708.
+Every number in the table is derived from `sdn.environment` (`id: 4`, `base: 10.0.0.0/8`, the
+deployment's ULA `/48`); nothing is configured per VLAN. The upper `/17` splits into tunnel
+point-to-point links (`10.4.128.0/22`, of which `10.4.128.0/31` is the reserved gateway HA sync
+link), loopbacks (`10.4.132.0/22`), service VIPs (`10.4.136.0/21`), platform-VRF hosts
+(`10.4.144.0/20`) and the tenant default pools (`10.4.192.0/18`).
+
+### Host addresses (dedicated, environment 4)
+
+| Node | `network.role` | Zone addresses | Platform VRF |
+|------|----------------|----------------|--------------|
+| gw-01 | `gateway` | `.2` on 400, 401, 404, 405, 406, 408; answers for `.1` | `10.4.144.2/32` |
+| cp-01 | `control-plane` | `10.4.1.10` (fabric), `10.4.6.10` (control-plane) | `10.4.144.10/32` |
+| compute-01 | `compute` | `10.4.1.20` (fabric), `10.4.3.20` (hypervisor), `10.4.7.20` (storage) | `10.4.144.20/32` |
+| BMCs | — | `10.4.2.20`–`10.4.2.22` on management, access ports | — |
+
+The trunk of every node rides the OVS bridge `br-fabric`; workloads attach to `br-int`.
 
 ---
 

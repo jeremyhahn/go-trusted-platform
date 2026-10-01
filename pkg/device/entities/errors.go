@@ -38,3 +38,15 @@ type ErrUnknownDeviceRole struct {
 func (e ErrUnknownDeviceRole) Error() string {
 	return "device: unknown role " + strconv.Quote(e.Role)
 }
+
+// ErrNoPortClassForRole reports a device role that maps to no switch port
+// class, so an enrolled device of that role cannot be admitted to role zones
+// and needs an explicit profile zone instead.
+type ErrNoPortClassForRole struct {
+	Role DeviceRole
+}
+
+// Error implements the error interface.
+func (e ErrNoPortClassForRole) Error() string {
+	return "device: role " + strconv.Quote(string(e.Role)) + " has no port class; set an explicit profile zone"
+}

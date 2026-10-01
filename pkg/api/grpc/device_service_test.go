@@ -1320,7 +1320,7 @@ func TestDeviceNetworkConfigConversion(t *testing.T) {
 		Subnet:     "192.168.1.0/24",
 		DnsServers: []string{"8.8.8.8"},
 		Dhcp:       true,
-		Zone:       "trusted",
+		Zone:       "control-plane",
 	}
 
 	entity := protoNetworkConfigToEntity(protoConfig)
@@ -1610,7 +1610,7 @@ func TestDeviceGRPCService_CreateProfile_FullConfiguration(t *testing.T) {
 					Dhcp:    true,
 					Gateway: "192.168.10.1",
 				},
-				"trusted": {
+				"control-plane": {
 					Vlan:     100,
 					StaticIp: "10.0.0.100",
 					Gateway:  "10.0.0.1",
@@ -1651,7 +1651,7 @@ func TestDeviceGRPCService_CreateProfile_FullConfiguration(t *testing.T) {
 	if profile.GetNetworks()["provisioning"] == nil {
 		t.Error("Expected provisioning network")
 	}
-	if profile.GetNetworks()["trusted"] == nil {
+	if profile.GetNetworks()["control-plane"] == nil {
 		t.Error("Expected trusted network")
 	}
 	if profile.GetNetworks()["quarantine"] == nil {

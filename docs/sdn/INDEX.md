@@ -219,16 +219,15 @@ See: [firewall/configuration.md](./firewall/configuration.md)
 
 ```yaml
 sdn:
+  environment:
+    id: 4                       # every VLAN and subnet derives from this
   fabric:
-    mode: vlan
     switches:
-      - id: core-01
+      - id: switch-01
         vendor: cisco-nexus
-        mgmt-ip: 10.0.1.50
-    segments:
-      - name: prod
-        vlan: 200
-        cidr: 10.201.0.0/24
+        mgmt-ip: 192.0.2.250
+    ports:
+      - {switch-id: switch-01, port: Ethernet1/25, class: hypervisor}
 ```
 
 See: [fabric/configuration.md](./fabric/configuration.md)

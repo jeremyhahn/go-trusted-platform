@@ -14,11 +14,12 @@
 package bootstrap
 
 import (
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 )
 
 func writeYAMLFile(t *testing.T, content string) string {
@@ -37,17 +38,8 @@ func TestLoadBootstrapConfig_Valid(t *testing.T) {
   user: deployer
   ssh_key: /home/deployer/.ssh/id_ed25519
   container_runtime: podman
-subnets:
-  - name: provisioning
-    role: provisioning
-    cidr: 10.100.0.0/24
-    gateway: 10.100.0.1
-    dns:
-      - 10.100.0.1
-    dhcp:
-      enabled: true
-      range-start: 10.100.0.100
-      range-end: 10.100.0.200
+environment:
+  id: 4
 platform:
   domain: example.com
   internal_domain: internal.example.com
@@ -57,10 +49,6 @@ platform:
   upstream_dns:
     - 1.1.1.1:53
   bootstrap_strategy: dane
-  networks:
-    management:
-      vlan: 100
-      subnet: 10.100.0.0/24
 templates:
   control-plane: /etc/platform/templates/cp.yaml
 nodes:
@@ -88,8 +76,8 @@ nodes:
 	if len(config.Nodes) != 1 {
 		t.Errorf("expected 1 node, got %d", len(config.Nodes))
 	}
-	if config.Platform.Networks["management"].VLAN != 100 {
-		t.Errorf("expected management VLAN 100, got %d", config.Platform.Networks["management"].VLAN)
+	if config.Environment == nil || config.Environment.ID != 4 {
+		t.Errorf("expected environment 4, got %+v", config.Environment)
 	}
 }
 
@@ -130,9 +118,9 @@ func TestLoadBootstrapConfig_InvalidYAML(t *testing.T) {
 
 func TestValidate_Valid_3CP_2GW_2Worker(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10", BMCUser: "admin", BMCPassword: "secret"},
 			{Hostname: "cp-1", Role: RoleControlPlane, BMCAddress: "10.200.0.11", BMCUser: "admin", BMCPassword: "secret"},
@@ -151,9 +139,9 @@ func TestValidate_Valid_3CP_2GW_2Worker(t *testing.T) {
 
 func TestValidate_EvenControlPlane(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10"},
 			{Hostname: "cp-1", Role: RoleControlPlane, BMCAddress: "10.200.0.11"},
@@ -172,9 +160,9 @@ func TestValidate_EvenControlPlane(t *testing.T) {
 
 func TestValidate_NoControlPlane(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "w-0", Role: RoleWorker, MACs: []string{"AA:BB:CC:DD:01:01"}},
 		},
@@ -194,9 +182,9 @@ func TestValidate_NoControlPlane(t *testing.T) {
 
 func TestValidate_SingleControlPlane(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10"},
 		},
@@ -209,9 +197,9 @@ func TestValidate_SingleControlPlane(t *testing.T) {
 
 func TestValidate_DuplicateMAC(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, MACs: []string{"AA:BB:CC:DD:00:01"}},
 			{Hostname: "w-0", Role: RoleWorker, MACs: []string{"AA:BB:CC:DD:00:01"}},
@@ -230,9 +218,9 @@ func TestValidate_DuplicateMAC(t *testing.T) {
 
 func TestValidate_DuplicateBMCAddress(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10"},
 			{Hostname: "cp-1", Role: RoleControlPlane, BMCAddress: "10.200.0.10"},
@@ -251,9 +239,9 @@ func TestValidate_DuplicateBMCAddress(t *testing.T) {
 
 func TestValidate_NoMACOrBMC(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "orphan", Role: RoleControlPlane},
 		},
@@ -271,9 +259,9 @@ func TestValidate_NoMACOrBMC(t *testing.T) {
 
 func TestValidate_InvalidRole(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "bad-role", Role: "database", MACs: []string{"AA:BB:CC:DD:00:01"}},
 		},
@@ -291,9 +279,9 @@ func TestValidate_InvalidRole(t *testing.T) {
 
 func TestValidate_MissingDeployerHost(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, MACs: []string{"AA:BB:CC:DD:00:01"}},
 		},
@@ -311,11 +299,11 @@ func TestValidate_MissingDeployerHost(t *testing.T) {
 	}
 }
 
-func TestValidate_MissingSubnet(t *testing.T) {
+func TestValidate_MissingEnvironment(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  nil,
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: nil,
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, MACs: []string{"AA:BB:CC:DD:00:01"}},
 		},
@@ -323,19 +311,19 @@ func TestValidate_MissingSubnet(t *testing.T) {
 
 	err := config.Validate()
 	if err == nil {
-		t.Fatal("expected error for missing subnet, got nil")
+		t.Fatal("expected error for missing environment, got nil")
 	}
 
-	if e, ok := err.(ErrMissingRequiredField); !ok || e.Field != "subnets (no subnet with role: provisioning)" {
-		t.Errorf("expected ErrMissingRequiredField for subnets, got %T: %v", err, err)
+	if e, ok := err.(ErrMissingRequiredField); !ok || e.Field != "environment" {
+		t.Errorf("expected ErrMissingRequiredField for environment, got %T: %v", err, err)
 	}
 }
 
 func TestValidate_MissingDomain(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, MACs: []string{"AA:BB:CC:DD:00:01"}},
 		},
@@ -353,9 +341,9 @@ func TestValidate_MissingDomain(t *testing.T) {
 
 func TestValidate_MissingHostname(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Role: RoleControlPlane, MACs: []string{"AA:BB:CC:DD:00:01"}},
 		},
@@ -373,10 +361,10 @@ func TestValidate_MissingHostname(t *testing.T) {
 
 func TestValidate_NoNodes(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
-		Nodes:    []NodeConfig{},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
+		Nodes:       []NodeConfig{},
 	}
 
 	err := config.Validate()
@@ -391,9 +379,9 @@ func TestValidate_NoNodes(t *testing.T) {
 
 func TestValidate_FiveControlPlane(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10"},
 			{Hostname: "cp-1", Role: RoleControlPlane, BMCAddress: "10.200.0.11"},
@@ -410,9 +398,9 @@ func TestValidate_FiveControlPlane(t *testing.T) {
 
 func TestValidate_FourControlPlane(t *testing.T) {
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, BMCAddress: "10.200.0.10"},
 			{Hostname: "cp-1", Role: RoleControlPlane, BMCAddress: "10.200.0.11"},
@@ -525,9 +513,9 @@ func TestValidRoles(t *testing.T) {
 func TestValidate_SkipInstallNodeWithoutMACOrBMC(t *testing.T) {
 	// A skip_install node should pass validation without BMC or MAC.
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, SkipInstall: true},
 		},
@@ -542,9 +530,9 @@ func TestValidate_SkipInstallDoesNotRequireISO(t *testing.T) {
 	// A skip_install node with virtual-media boot method should not
 	// trigger the iso_path requirement.
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{
 				Hostname:    "cp-0",
@@ -565,9 +553,9 @@ func TestValidate_SkipInstallCountsAsControlPlane(t *testing.T) {
 	// A skip_install control-plane node should count toward the
 	// control-plane quorum.
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, SkipInstall: true},
 			{Hostname: "w-0", Role: RoleWorker, MACs: []string{"AA:BB:CC:DD:01:01"}},
@@ -582,9 +570,9 @@ func TestValidate_SkipInstallCountsAsControlPlane(t *testing.T) {
 func TestValidate_NonSkipInstallStillRequiresIdentity(t *testing.T) {
 	// A non-skip_install node still requires BMC or MAC.
 	config := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
-		Platform: PlatformGlobalConfig{Domain: "example.com"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "example.com"},
 		Nodes: []NodeConfig{
 			{Hostname: "cp-0", Role: RoleControlPlane, SkipInstall: true},
 			{Hostname: "w-0", Role: RoleWorker}, // no MAC, no BMC, no skip_install
@@ -604,10 +592,8 @@ func TestValidate_NonSkipInstallStillRequiresIdentity(t *testing.T) {
 func TestLoadBootstrapConfig_SkipInstallYAML(t *testing.T) {
 	yamlContent := `deployer:
   host: deploy.example.com
-subnets:
-  - name: provisioning
-    role: provisioning
-    cidr: 10.100.0.0/24
+environment:
+  id: 4
 platform:
   domain: example.com
 nodes:
@@ -641,10 +627,8 @@ nodes:
 func TestLoadBootstrapConfig_ParsesInterfaces(t *testing.T) {
 	yamlContent := `deployer:
   host: deploy.example.com
-subnets:
-  - name: provisioning
-    role: provisioning
-    cidr: 10.100.0.0/24
+environment:
+  id: 4
 platform:
   domain: example.com
 nodes:
@@ -759,8 +743,8 @@ func TestNodeConfig_StaticIPv4s(t *testing.T) {
 // be mutated per test case.
 func forbiddenTestConfig(overrides map[string]interface{}) *BootstrapConfig {
 	return &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy.example.com"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain:      "example.com",
 			Hostmaster:  "admin@example.com",
@@ -938,10 +922,8 @@ network:
 
 	bootstrapContent := `deployer:
   host: deploy.example.com
-subnets:
-  - name: provisioning
-    role: provisioning
-    cidr: 10.100.0.0/24
+environment:
+  id: 4
 platform:
   domain: example.com
 nodes:
@@ -981,10 +963,8 @@ func TestLoadBootstrapConfig_ForbiddenKeyInline(t *testing.T) {
 	dir := t.TempDir()
 	bootstrapContent := `deployer:
   host: deploy.example.com
-subnets:
-  - name: provisioning
-    role: provisioning
-    cidr: 10.100.0.0/24
+environment:
+  id: 4
 platform:
   domain: example.com
 nodes:
@@ -1011,8 +991,8 @@ nodes:
 	if fk.Source != bootstrapPath {
 		t.Errorf("Source = %q, want %q", fk.Source, bootstrapPath)
 	}
-	if fk.Line != 15 {
-		t.Errorf("Line = %d, want 15 (line of the hostname key)", fk.Line)
+	if fk.Line != 13 {
+		t.Errorf("Line = %d, want 13 (line of the hostname key)", fk.Line)
 	}
 	if fk.KeyPath != "os.hostname" {
 		t.Errorf("KeyPath = %q, want os.hostname", fk.KeyPath)
@@ -1028,10 +1008,8 @@ func TestLoadBootstrapConfig_LegalOverridesPass(t *testing.T) {
 	bootstrapContent := `deployer:
   host: deploy.example.com
   netboot_media_dir: ` + fleetMedia + `
-subnets:
-  - name: provisioning
-    role: provisioning
-    cidr: 10.100.0.0/24
+environment:
+  id: 4
 platform:
   domain: example.com
 nodes:
@@ -1149,10 +1127,8 @@ func TestLoadBootstrapConfig_NetbootMediaDirIsRelativeToTheFile(t *testing.T) {
   host: deploy.example.com
   netboot_media_dir: build/netboot-media
   proxy_dhcp: true
-subnets:
-  - name: provisioning
-    role: provisioning
-    cidr: 10.100.0.0/24
+environment:
+  id: 4
 platform:
   domain: example.com
 nodes:
@@ -1200,10 +1176,8 @@ func TestLoadBootstrapConfig_BackupsDirBelongsToTheConfig(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			content := tc.line + `deployer:
   host: deploy.example.com
-subnets:
-  - name: provisioning
-    role: provisioning
-    cidr: 10.100.0.0/24
+environment:
+  id: 4
 platform:
   domain: example.com
 nodes:

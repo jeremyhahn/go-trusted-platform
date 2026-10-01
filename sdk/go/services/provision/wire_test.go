@@ -159,7 +159,7 @@ const sessionFixtureJSON = `{
 		"name": "lab-node-2",
 		"model": "X10SDV",
 		"role": "server",
-		"zone": "trusted",
+		"zone": "control-plane",
 		"config": {"full": "platform config object"},
 		"ek_serial": "EK123",
 		"mac_address": "aa:bb:cc:dd:ee:ff",
@@ -173,7 +173,7 @@ const sessionFixtureJSON = `{
 				"auth_method": "none",
 				"dhcp": true
 			},
-			"trusted": {
+			"control-plane": {
 				"vlan": 200,
 				"auth_method": "802.1x",
 				"static_ip": "10.0.0.2",
@@ -270,7 +270,7 @@ func assertSessionFixture(t *testing.T, s *platformv1.ProvisioningSession) {
 	if profile.GetRole() != platformv1.DeviceRole_DEVICE_ROLE_SERVER {
 		t.Errorf("profile.role = %v, want DEVICE_ROLE_SERVER", profile.GetRole())
 	}
-	if profile.GetZone() != "trusted" {
+	if profile.GetZone() != "control-plane" {
 		t.Errorf("profile.zone = %q", profile.GetZone())
 	}
 	var config map[string]any
@@ -306,11 +306,11 @@ func assertSessionFixture(t *testing.T, s *platformv1.ProvisioningSession) {
 	if networks["provisioning"].GetAuthMethod() != platformv1.AuthMethod_AUTH_METHOD_NONE {
 		t.Errorf("provisioning auth_method = %v", networks["provisioning"].GetAuthMethod())
 	}
-	if networks["trusted"].GetAuthMethod() != platformv1.AuthMethod_AUTH_METHOD_802_1X {
-		t.Errorf("trusted auth_method = %v", networks["trusted"].GetAuthMethod())
+	if networks["control-plane"].GetAuthMethod() != platformv1.AuthMethod_AUTH_METHOD_802_1X {
+		t.Errorf("trusted auth_method = %v", networks["control-plane"].GetAuthMethod())
 	}
-	if networks["trusted"].GetStaticIp() != "10.0.0.2" {
-		t.Errorf("trusted static_ip = %q", networks["trusted"].GetStaticIp())
+	if networks["control-plane"].GetStaticIp() != "10.0.0.2" {
+		t.Errorf("trusted static_ip = %q", networks["control-plane"].GetStaticIp())
 	}
 
 	pd := profile.GetPlatformdConfig()

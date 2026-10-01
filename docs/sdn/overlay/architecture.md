@@ -94,12 +94,17 @@ type VTEP struct {
 
 ### VNI Manager
 
-Manages VLAN-to-VNI mapping and VNI membership.
+> **Superseded numbering.** The sketch below predates the reference network.
+> VNIs are no longer VLAN-derived: overlay network n of environment E is VNI
+> E·100000+n (`pkg/sdn/netplan.VNI`), and the controller derives the lowest
+> free n when a VNI is created without one (`overlay.Config.Environment`).
+
+Manages VNI membership.
 
 ```go
 // VNIManager handles VNI-VLAN mapping
 type VNIManager struct {
-    vniBase      uint32           // Default: 1000000
+    environment  uint16           // E: VNIs are E·100000+n
     localVNIs    map[uint32]*VNI  // Active VNIs on this host
     vniPorts     map[uint32][]string // Ports per VNI
     store        datastore.Store
@@ -115,9 +120,9 @@ type VNI struct {
     Multicast   net.IP  // Optional multicast group
 }
 
-// VLANToVNI derives VNI from VLAN ID
-func (m *VNIManager) VLANToVNI(vlanID uint16) uint32 {
-    return m.vniBase + uint32(vlanID)
+// VNIFor derives the VNI of overlay network n (netplan.VNI)
+func (m *VNIManager) VNIFor(n uint32) (uint32, error) {
+    return netplan.VNI(m.environment, n)
 }
 ```
 
@@ -369,7 +374,7 @@ func (m *OverlayManager) CreateVXLANPort(ctx context.Context, vni uint32, remote
 func (m *OverlayManager) InstallEncapFlow(ctx context.Context, vni uint32, remoteVTEP net.IP, dstMAC net.HardwareAddr) error {
     flow := openflow.NewFlowMod(100)
     flow.Table = TableL2Lookup
-    flow.Match.SetMetadata(uint64(vni - m.config.VNIBase)) // VLAN as metadata
+    flow.Match.SetMetadata(uint64(vni)) // VNI as metadata
     flow.Match.SetEthDst(dstMAC.String())
     flow.AddSetFieldAction("tun_dst", remoteVTEP.String())
     flow.AddGotoTableAction(TableEncap)

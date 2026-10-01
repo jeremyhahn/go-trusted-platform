@@ -144,6 +144,7 @@ type PortStatus struct {
     Mode        PortMode // "access" or "trunk"
     AccessVLAN  uint16   // VLAN ID if in access mode
     TrunkVLANs  []uint16 // Allowed VLAN IDs if in trunk mode
+    NativeVLAN  uint16   // Trunk native (untagged) VLAN; 0 when none
     Enabled     bool     // Administratively enabled
     LinkUp      bool     // Physical link is up
     Description string   // Optional port description

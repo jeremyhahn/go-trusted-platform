@@ -30,23 +30,6 @@ func formatTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// formatVLANRange formats a VLAN range for display
-func formatVLANRange(start, end uint32) string {
-	if start == 0 && end == 0 {
-		return "N/A"
-	}
-	return fmt.Sprintf("%d-%d", start, end)
-}
-
-// formatVLANSize formats the size of a VLAN range
-func formatVLANSize(start, end uint32) string {
-	if start == 0 && end == 0 {
-		return "0"
-	}
-	size := int(end-start) + 1
-	return fmt.Sprintf("%d", size)
-}
-
 // formatQuotaValue formats a quota value for display
 func formatQuotaValue(value int64, suffix string) string {
 	if value <= 0 {
@@ -86,9 +69,6 @@ func printTenantDetails(printer *cli.Printer, t *sdktenant.Tenant) {
 	printer.PrintKeyValue("Name", t.Name)
 	printer.PrintKeyValue("Display Name", t.DisplayName)
 	printer.PrintKeyValue("State", formatState(t.State))
-	printer.PrintKeyValue("OVS Bridge", t.OVSBridge)
-	printer.PrintKeyValue("VLAN Range", formatVLANRange(t.VLANStart, t.VLANEnd))
-	printer.PrintKeyValue("VLAN Count", formatVLANSize(t.VLANStart, t.VLANEnd))
 
 	fmt.Println()
 	printer.PrintKeyValue("Labels", formatLabels(t.Labels))
@@ -144,9 +124,6 @@ type TenantSummary struct {
 	Name        string            `json:"name" yaml:"name"`
 	DisplayName string            `json:"display_name" yaml:"display_name"`
 	State       string            `json:"state" yaml:"state"`
-	OVSBridge   string            `json:"ovs_bridge" yaml:"ovs_bridge"`
-	VLANStart   uint32            `json:"vlan_start" yaml:"vlan_start"`
-	VLANEnd     uint32            `json:"vlan_end" yaml:"vlan_end"`
 	Labels      map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"`
 	CreatedAt   string            `json:"created_at" yaml:"created_at"`
@@ -288,50 +265,4 @@ func toUsageSummary(tenantID string, t *sdktenant.Tenant) *UsageSummary {
 	}
 
 	return summary
-}
-
-// VLANInfo represents VLAN information for JSON/YAML output
-type VLANInfo struct {
-	TenantID   string `json:"tenant_id" yaml:"tenant_id"`
-	TenantName string `json:"tenant_name" yaml:"tenant_name"`
-	VLANStart  uint32 `json:"vlan_start" yaml:"vlan_start"`
-	VLANEnd    uint32 `json:"vlan_end" yaml:"vlan_end"`
-	VLANCount  int    `json:"vlan_count" yaml:"vlan_count"`
-}
-
-// toVLANInfo converts a domain Tenant to VLANInfo.
-func toVLANInfo(t *sdktenant.Tenant) *VLANInfo {
-	count := 0
-	if t.VLANStart > 0 && t.VLANEnd > 0 {
-		count = int(t.VLANEnd-t.VLANStart) + 1
-	}
-	return &VLANInfo{
-		TenantID:   t.ID,
-		TenantName: t.Name,
-		VLANStart:  t.VLANStart,
-		VLANEnd:    t.VLANEnd,
-		VLANCount:  count,
-	}
-}
-
-// BridgeInfo represents bridge information for JSON/YAML output
-type BridgeInfo struct {
-	TenantID   string `json:"tenant_id" yaml:"tenant_id"`
-	TenantName string `json:"tenant_name" yaml:"tenant_name"`
-	BridgeName string `json:"bridge_name" yaml:"bridge_name"`
-	State      string `json:"state" yaml:"state"`
-	VLANStart  uint32 `json:"vlan_start" yaml:"vlan_start"`
-	VLANEnd    uint32 `json:"vlan_end" yaml:"vlan_end"`
-}
-
-// toBridgeInfo converts a domain Tenant to BridgeInfo.
-func toBridgeInfo(t *sdktenant.Tenant) *BridgeInfo {
-	return &BridgeInfo{
-		TenantID:   t.ID,
-		TenantName: t.Name,
-		BridgeName: t.OVSBridge,
-		State:      string(t.State),
-		VLANStart:  t.VLANStart,
-		VLANEnd:    t.VLANEnd,
-	}
 }

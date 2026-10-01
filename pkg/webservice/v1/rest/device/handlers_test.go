@@ -972,7 +972,7 @@ func TestHandleCreateProfile_RoleOmittedInheritsTemplateRole(t *testing.T) {
 // TestHandleCreateProfile_VLANsNotDistinctIsClientError covers the last of
 // the eight profile error-mapping sites #133 names. This route reported any
 // save failure as 500 unconditionally, so a caller that described a profile
-// with a shared provisioning and trusted VLAN was told the server had
+// with a shared provisioning and admitted VLAN was told the server had
 // broken — and, being a 5xx, it is the class a client is entitled to retry.
 //
 // The wrapped case is the one that matters in production: the service layer

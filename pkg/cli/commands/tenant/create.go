@@ -28,8 +28,6 @@ func NewCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	var (
 		name             string
 		displayName      string
-		vlanStart        uint16
-		vlanEnd          uint16
 		maxVMs           int64
 		maxContainers    int64
 		maxVCPUs         int64
@@ -47,9 +45,8 @@ func NewCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Long: `Create a new tenant with the specified configuration and quotas.
 
 The tenant will be created with a unique ID and provisioned with:
-  - A dedicated VLAN range (auto-allocated or specified)
-  - An OVS bridge for network isolation
   - Resource quotas for compute, network, and storage
+  - A per-tenant data encryption key and barriers
 
 Examples:
   # Create a basic tenant
@@ -57,9 +54,6 @@ Examples:
 
   # Create with display name
   platformctl tenant create --name my-tenant --display-name "My Tenant"
-
-  # Create with specific VLAN range
-  platformctl tenant create --name my-tenant --vlan-start 100 --vlan-end 199
 
   # Create with compute quotas
   platformctl tenant create --name my-tenant --max-vms 100 --max-vcpus 400 --max-memory-gb 512
@@ -74,23 +68,10 @@ Examples:
 				return ErrMissingTenantName{}
 			}
 
-			// Validate VLAN range if specified
-			if vlanStart > 0 || vlanEnd > 0 {
-				if vlanStart < 1 || vlanEnd > 4094 || vlanStart > vlanEnd {
-					return ErrInvalidVLANRange{
-						Start:  vlanStart,
-						End:    vlanEnd,
-						Reason: "VLAN range must be 1-4094 and start <= end",
-					}
-				}
-			}
-
 			flags := getFlags()
 			return runTenantCreate(flags, &createTenantOptions{
 				Name:             name,
 				DisplayName:      displayName,
-				VLANStart:        vlanStart,
-				VLANEnd:          vlanEnd,
 				MaxVMs:           maxVMs,
 				MaxContainers:    maxContainers,
 				MaxVCPUs:         maxVCPUs,
@@ -109,8 +90,6 @@ Examples:
 
 	// Optional flags
 	cmd.Flags().StringVar(&displayName, "display-name", "", "human-readable display name")
-	cmd.Flags().Uint16Var(&vlanStart, "vlan-start", 0, "start of VLAN range (auto-allocate if not set)")
-	cmd.Flags().Uint16Var(&vlanEnd, "vlan-end", 0, "end of VLAN range (auto-allocate if not set)")
 
 	// Compute quota flags
 	cmd.Flags().Int64Var(&maxVMs, "max-vms", 0, "maximum number of VMs (0 = use default)")
@@ -133,8 +112,6 @@ Examples:
 type createTenantOptions struct {
 	Name             string
 	DisplayName      string
-	VLANStart        uint16
-	VLANEnd          uint16
 	MaxVMs           int64
 	MaxContainers    int64
 	MaxVCPUs         int64
@@ -165,12 +142,6 @@ func runTenantCreate(flags *cli.CommonFlags, opts *createTenantOptions) error {
 	params := &sdktenant.CreateParams{
 		Name:        opts.Name,
 		DisplayName: displayName,
-	}
-
-	// Add VLAN range if specified
-	if opts.VLANStart > 0 && opts.VLANEnd > 0 {
-		params.VLANRangeStart = uint32(opts.VLANStart)
-		params.VLANRangeEnd = uint32(opts.VLANEnd)
 	}
 
 	// Add compute quota if any values specified

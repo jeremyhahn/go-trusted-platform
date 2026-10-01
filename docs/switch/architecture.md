@@ -172,7 +172,7 @@ POST /api/v1/device/activate       (docs/device/)
    └─ Handler.transitionSwitchPort
         ├─ switch name + port from the request context (not from the profile)
         ├─ SwitchServiceProvider.Manager(switchName)
-        └─ Manager.SetPortVLAN(ctx, port, trustedVLAN)
+        └─ Manager.SetPortVLAN(ctx, port, admittedVLAN)
 ```
 
 `SwitchServiceProvider` is declared in `pkg/webservice/v1/device` as a
@@ -240,8 +240,8 @@ surprises.
   wraps output breaks the parse and returns `ErrSSHParseOutputFailed` with the
   raw output attached.
 - **`GetPortStatus` never reports link state or description.**
-  `parseSwitchportOutput` sets only `Port`, `Mode`, `AccessVLAN`, `TrunkVLANs`
-  and `Enabled`. `LinkUp` and `Description` are left at their zero values, so a
+  `parseSwitchportOutput` sets only `Port`, `Mode`, `AccessVLAN`, `TrunkVLANs`,
+  `NativeVLAN` and `Enabled`. `LinkUp` and `Description` are left at their zero values, so a
   single-port status always reports `link_up: false` and an empty description.
   `ListPorts` *does* populate both from the `show interfaces status` table. The
   two paths disagree on the same port; the list is the one to believe.

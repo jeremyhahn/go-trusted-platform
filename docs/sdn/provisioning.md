@@ -278,9 +278,9 @@ Signals device is ready for production network transition.
    without changing anything anywhere
 3. Validate the physical switch move (when configured) with no side
    effects: switch mapping, a provisioning network present with a VLAN
-   distinct from the trusted VLAN (the one fail-closed revert target),
+   distinct from the admitted VLAN (the one fail-closed revert target),
    and a resolvable switch manager. A profile without a provisioning
-   network — or one whose provisioning and trusted VLANs are equal —
+   network — or one whose provisioning and admitted VLANs are equal —
    refuses the activation outright before anything is committed; equal
    VLANs are also rejected (400) when the profile is created or updated,
    on every transport. Skipped for a quarantine plan
@@ -293,7 +293,7 @@ Signals device is ready for production network transition.
    port has not been opened yet: a slow or failed policy application
    admits no traffic
 5. Commit the physical switch move strictly AFTER enforcement — the
-   trusted VLAN opens only onto an enforced datapath, with every VLAN
+   admitted VLAN opens only onto an enforced datapath, with every VLAN
    taken from the plan's value-copy snapshot. SSH command sequences are
    not atomic, so any switch failure triggers a move to the
    **provisioning VLAN** followed by a read-back verification: only a
@@ -318,13 +318,13 @@ Signals device is ready for production network transition.
 | 500 | Certificate carries an unreadable network zone extension — invalid policy input is refused outright, never mapped to the trusted policy |
 | 500 | Physical switch VLAN transition failed (port reverted; read-back confirmed it closed) |
 | 500 | Physical port state INDETERMINATE — the revert or read-back could not confirm the port closed; operator action required |
-| 500 | Zone mismatch requires quarantine but the profile declares no quarantine or provisioning VLAN, or its quarantine VLAN equals the trusted VLAN — activation refused, nothing committed |
+| 500 | Zone mismatch requires quarantine but the profile declares no quarantine or provisioning VLAN, or its quarantine VLAN equals the admitted VLAN — activation refused, nothing committed |
 | 500 | Zone mismatch requires quarantine but the engine has no zone flow manager to enforce it — hard failure, physical port reverted |
 | 500 | Quarantine policy applied but the port state could not be marked quarantined — state INDETERMINATE, pending activation retained, operator action required |
 
 `status` is the outcome actually applied (`activated` or `quarantined`) and
 `vlan` is the VLAN the port was actually placed on — the quarantine VLAN
-when `status` is `quarantined`, never the trusted VLAN.
+when `status` is `quarantined`, never the admitted VLAN.
 
 ## Port State Transitions
 

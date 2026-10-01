@@ -1,7 +1,7 @@
 /**
  * Tenant Service
  *
- * Provides operations for multi-tenant platform management including VLAN isolation and quotas.
+ * Provides operations for multi-tenant platform management: lifecycle, quotas, keys and barriers.
  */
 
 import type { ApiClient } from '../client/api-client.js';
@@ -26,9 +26,6 @@ import type {
   GetUsageResponse,
   CheckQuotaRequest,
   CheckQuotaResponse,
-  ValidateVLANRequest,
-  ValidateVLANResponse,
-  GetBridgeNameResponse,
   SyncTenantsResponse,
   RotateTenantDEKRequest,
   RotateTenantDEKResponse,
@@ -46,8 +43,6 @@ import type {
  * const tenant = await client.tenant.createTenant({
  *   name: 'acme-corp',
  *   displayName: 'ACME Corporation',
- *   vlanRangeStart: 100,
- *   vlanRangeEnd: 199,
  *   computeQuota: { maxVms: 50, maxContainers: 100 },
  * });
  *
@@ -239,35 +234,6 @@ export class TenantService extends BaseService {
     return this.client.post<CheckQuotaResponse>(
       this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/quotas/check`),
       { resource: request.resource, amount: request.amount }
-    );
-  }
-
-  // =========================================================================
-  // VLAN Operations
-  // =========================================================================
-
-  /**
-   * Validate VLAN for tenant
-   *
-   * @param request - Validation request
-   * @returns Validation result
-   */
-  async validateVLAN(request: ValidateVLANRequest): Promise<ApiResponse<ValidateVLANResponse>> {
-    return this.client.post<ValidateVLANResponse>(
-      this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/vlan/validate`),
-      { vlanId: request.vlanId }
-    );
-  }
-
-  /**
-   * Get OVS bridge name for tenant
-   *
-   * @param tenantId - Tenant ID
-   * @returns Bridge name
-   */
-  async getBridgeName(tenantId: string): Promise<ApiResponse<GetBridgeNameResponse>> {
-    return this.client.get<GetBridgeNameResponse>(
-      this.buildUrl(`/${this.encodePathSegment(tenantId)}/bridge`)
     );
   }
 

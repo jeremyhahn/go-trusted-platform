@@ -282,7 +282,7 @@ func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard
 
 func speakerConfig(prio uint8, source string) Config {
 	return Config{Enabled: true, Groups: []GroupConfig{{
-		VRID: 20, Interface: "trusted0", Priority: prio, AdvertIntervalCentiseconds: 100,
+		VRID: 20, Interface: "br-int", Priority: prio, AdvertIntervalCentiseconds: 100,
 		Addresses: []string{"198.18.0.1/24"}, Source: source,
 	}}}
 }
@@ -332,15 +332,15 @@ func TestSpeaker_TwoNodesElectAndFailOver(t *testing.T) {
 		return ev.Kind == EventTransition && ev.Status.State == StateMaster && ev.Status.Priority == 200
 	})
 	<-progA.claimed
-	assert.True(t, progA.holds("trusted0", "198.18.0.1/24"))
+	assert.True(t, progA.holds("br-int", "198.18.0.1/24"))
 	// B hears A's advertisement and stays Backup with a fresh timer.
 	ev := sink.await(t, func(ev Event) bool { return ev.Kind == EventAdvertisement && ev.Status.Priority == 100 })
 	assert.Equal(t, uint8(200), ev.Priority)
 	assert.Equal(t, netip.MustParseAddr("198.18.0.2"), ev.Sender)
-	stB, err := b.GroupState("trusted0", 20)
+	stB, err := b.GroupState("br-int", 20)
 	require.NoError(t, err)
 	assert.Equal(t, StateBackup, stB)
-	assert.False(t, progB.holds("trusted0", "198.18.0.1/24"))
+	assert.False(t, progB.holds("br-int", "198.18.0.1/24"))
 
 	// A keeps advertising every second; B keeps deferring.
 	clock.Advance(time.Second)
@@ -350,14 +350,14 @@ func TestSpeaker_TwoNodesElectAndFailOver(t *testing.T) {
 	// skew time (60 cs) rather than the full master-down interval.
 	require.NoError(t, a.Stop(ctx))
 	assert.False(t, a.Active())
-	assert.False(t, progA.holds("trusted0", "198.18.0.1/24"))
+	assert.False(t, progA.holds("br-int", "198.18.0.1/24"))
 	sink.await(t, func(ev Event) bool { return ev.Kind == EventAdvertisement && ev.Priority == PriorityRelease })
 	clock.Advance(600 * time.Millisecond)
 	sink.await(t, func(ev Event) bool {
 		return ev.Kind == EventTransition && ev.Status.State == StateMaster && ev.Status.Priority == 100
 	})
 	<-progB.claimed
-	assert.True(t, progB.holds("trusted0", "198.18.0.1/24"))
+	assert.True(t, progB.holds("br-int", "198.18.0.1/24"))
 
 	h := b.Health()
 	require.Len(t, h.Groups, 1)
@@ -367,8 +367,8 @@ func TestSpeaker_TwoNodesElectAndFailOver(t *testing.T) {
 
 	require.NoError(t, b.Stop(ctx))
 	require.ErrorIs(t, b.Stop(ctx), ErrSpeakerNotRunning{})
-	assert.False(t, progB.holds("trusted0", "198.18.0.1/24"))
-	_, err = b.GroupState("trusted0", 20)
+	assert.False(t, progB.holds("br-int", "198.18.0.1/24"))
+	_, err = b.GroupState("br-int", 20)
 	var nf *ErrGroupNotFound
 	assert.True(t, errors.As(err, &nf))
 }
@@ -395,8 +395,8 @@ func TestSpeaker_MasterYieldsToHigherPriorityPeer(t *testing.T) {
 	sink.await(t, func(ev Event) bool {
 		return ev.Kind == EventTransition && ev.Status.State == StateBackup && ev.Status.Priority == 100 && ev.Status.Transitions == 3
 	})
-	assert.False(t, progLow.holds("trusted0", "198.18.0.1/24"), "the yielding master released the addresses")
-	assert.True(t, progHigh.holds("trusted0", "198.18.0.1/24"))
+	assert.False(t, progLow.holds("br-int", "198.18.0.1/24"), "the yielding master released the addresses")
+	assert.True(t, progHigh.holds("br-int", "198.18.0.1/24"))
 	require.NoError(t, high.Stop(context.Background()))
 	require.NoError(t, low.Stop(context.Background()))
 }
@@ -413,7 +413,7 @@ func TestSpeaker_ReceiveChecksDropForeignTraffic(t *testing.T) {
 	sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition })
 
 	// A raw peer on the segment sends things the §7.1 checks must drop.
-	peer, err := (&fakeTransport{seg: seg}).Open("trusted0", FamilyIPv4, netip.MustParseAddr("198.18.0.99"))
+	peer, err := (&fakeTransport{seg: seg}).Open("br-int", FamilyIPv4, netip.MustParseAddr("198.18.0.99"))
 	require.NoError(t, err)
 	dst := FamilyIPv4.MulticastAddr()
 	good := func(vrid uint8, list ...string) []byte {
@@ -447,7 +447,7 @@ func TestSpeaker_OpenFailureStopsStartedGroups(t *testing.T) {
 	require.True(t, errors.As(err, &tf), "got %v", err)
 	assert.Equal(t, "open", tf.Operation)
 	assert.False(t, s.Active())
-	assert.False(t, prog.holds("trusted0", "198.18.0.1/24"), "the owner group that had claimed was rolled back")
+	assert.False(t, prog.holds("br-int", "198.18.0.1/24"), "the owner group that had claimed was rolled back")
 }
 
 type failOnSecondOpen struct {

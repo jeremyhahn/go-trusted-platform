@@ -14,12 +14,12 @@
 over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.Tenant` carries the service in-process.
 
-gRPC: `TenantService`, 21 RPCs (`pkg/api/grpc/proto/tenant.proto`).
+gRPC: `TenantService`, 19 RPCs (`pkg/api/grpc/proto/tenant.proto`).
 REST: base path `/api/v1/tenants` (`pkg/webservice/v1/rest/tenant/router.go`).
 QUIC: tenant management opcodes in the `0xDB`–`0xEB` range, plus a **tenant
 barrier category opcode `0x9E`** that multiplexes the per-tenant barrier
 sub-operations.
-MCP: 21 tools in two naming families — see §5.
+MCP: 19 tools in two naming families — see §5.
 
 ---
 
@@ -57,14 +57,23 @@ body: it answers "would this fit", not "what is the current usage". That is
 
 ---
 
-## 4. Network and key material
+## 4. Key material
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Validate VLAN | `POST /api/v1/tenants/{id}/vlan/validate` | `ValidateVLAN` | `0xDB`–`0xEB` | `tenant_validate_vlan` | ✅ |
-| Get bridge name | `GET /api/v1/tenants/{id}/bridge` | `GetBridgeName` | as above | `tenant_get_bridge` | ✅ |
-| Rotate tenant DEK | `POST /api/v1/tenants/{id}/dek/rotate` | `RotateTenantDEK` | as above | `tenant_rotate_dek` | ✅ |
+| Rotate tenant DEK | `POST /api/v1/tenants/{id}/dek/rotate` | `RotateTenantDEK` | `0xDB`–`0xEB` | `tenant_rotate_dek` | ✅ |
 | Tenant DEK status | `GET /api/v1/tenants/{id}/dek` | `GetTenantDEKStatus` | as above | `tenant_get_dek_status` | ✅ |
+
+**Retired by #708.** The per-tenant VLAN range and OVS bridge are gone, and
+with them `ValidateVLAN` / `GetBridgeName` on every transport: the REST routes
+`POST /api/v1/tenants/{id}/vlan/validate` and `GET /api/v1/tenants/{id}/bridge`
+(and their `validate-vlan` / `bridge` twins on the daemon REST server), the
+gRPC methods, the MCP tools `tenant_validate_vlan` and `tenant_get_bridge`, and
+QUIC opcodes `0xE7` and `0xE8`, which stay reserved and answer
+`StatusNotImplemented`. `Tenant` no longer carries `ovs_bridge`, `vlan_start`
+or `vlan_end` (proto fields 5–7 reserved), and `CreateTenantRequest` no longer
+takes `vlan_range_start` / `vlan_range_end` (fields 3–4 reserved). A tenant's
+network identity becomes a VRF ([architecture.md](architecture.md)).
 
 ---
 
@@ -81,10 +90,10 @@ multiplexes the per-tenant barrier sub-operations
 | Seal barrier | `POST /api/v1/tenants/{id}/barrier/seal` | `SealTenantBarrier` | ✅ | `platform_tenant_barrier_seal` | ✅ |
 | Barrier status | `GET /api/v1/tenants/{id}/barrier` | `GetTenantBarrierStatus` | ✅ | `platform_tenant_barrier_status` | ✅ |
 
-**The MCP naming is inconsistent within this one feature.** Seventeen tools use
+**The MCP naming is inconsistent within this one feature.** Fifteen tools use
 a bare `tenant_*` prefix; the four barrier tools use `platform_tenant_barrier_*`.
-Both conventions exist repo-wide — 119 of the 449 declared tool names carry the
-`platform_` prefix and 330 do not — but tenancy is where the split lands inside a
+Both conventions exist repo-wide — 119 of the 447 declared tool names carry the
+`platform_` prefix and 328 do not (counted before the other #708 changes) — but tenancy is where the split lands inside a
 single capability. A client enumerating `tenant_*` will not find the barrier
 tools.
 
@@ -112,7 +121,8 @@ route tree** under `/api/v1/iam`:
 Those are **IAM's tenant scoping**, not platform tenancy: they scope users,
 groups, roles, policies and applications to a tenant. Creating a tenant at
 `POST /api/v1/iam/tenants` is not the same operation as
-`POST /api/v1/tenants`, which allocates a VLAN, a bridge, a keyspace and a DEK.
+`POST /api/v1/tenants`, which creates the platform tenant with its quotas, DEK
+and per-tenant barrier.
 
 **Two routes create something called a tenant.** Which is authoritative, and
 whether the IAM tree should defer to the platform one, is raised as an owner
@@ -163,10 +173,10 @@ control plane, which #159 additionally restricts to the system tenant. See
 | `0x01` | `StatusInvalidRequest` | 400 | `ErrInvalidRequest`, `ErrInvalidID` |
 | `0x02` | `StatusNotFound` | 404 | `ErrTenantNotFound` |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid |
-| `0x04` | `StatusInternalError` | 500 | `ErrStorageFailed`, `ErrBridgeOperationFailed`, `ErrDEKOperationFailed`, `ErrBarrierOperationFailed` |
+| `0x04` | `StatusInternalError` | 500 | `ErrStorageFailed`, `ErrDEKOperationFailed`, `ErrBarrierOperationFailed` |
 | `0x06` | `StatusAlreadyExists` | 409 | `ErrTenantExists` |
-| `0x08` | `StatusResourceExhausted` | 429 | `ErrQuotaExceeded`, `ErrResourceLimitReached`, `ErrVLANAllocationFailed` |
-| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidVLANRange`, `ErrConfigValidation` |
+| `0x08` | `StatusResourceExhausted` | 429 | `ErrQuotaExceeded`, `ErrResourceLimitReached` |
+| `0x09` | `StatusInvalidArgument` | 400 | `ErrConfigValidation` |
 | `0x0A` | `StatusUnavailable` | 503 | Tenant service not wired in |
 | `0x0B` | `StatusNotImplemented` | 501 | `ErrBarrierNotSupported` |
 

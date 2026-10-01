@@ -45,7 +45,7 @@ proxy:
       auth:
         mode: mtls                  # public | mtls | token | mtls-or-token
         require-idevid: false       # rejected on mode: token (no certificate to carry an IDevID)
-        allowed-zones: [trusted]
+        allowed-zones: [control-plane]
         backend-zone: services
         require-attestation: false  # requires the attestation: section
         attestation-max-age: 5m

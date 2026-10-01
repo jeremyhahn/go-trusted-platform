@@ -189,12 +189,12 @@ func TestLinuxIsolatedNetwork_GetPhase(t *testing.T) {
 	assert.Equal(t, NetworkPhaseUnconnected, phase)
 }
 
-// TestLinuxIsolatedNetwork_TransitionToTrusted tests the stub implementation
-func TestLinuxIsolatedNetwork_TransitionToTrusted(t *testing.T) {
+// TestLinuxIsolatedNetwork_TransitionToAdmitted tests the stub implementation
+func TestLinuxIsolatedNetwork_TransitionToAdmitted(t *testing.T) {
 	cfg := DefaultNetworkConfig()
 	network := NewIsolatedNetwork(cfg)
 
-	err := network.TransitionToTrusted("test-port", nil)
+	err := network.TransitionToAdmitted("test-port", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not implemented")
 }

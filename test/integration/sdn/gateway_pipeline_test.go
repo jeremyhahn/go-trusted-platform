@@ -88,7 +88,7 @@ func startGatewayForTest(t *testing.T, ctx context.Context, cfg *gateway.Gateway
 	t.Helper()
 	gw, err := gateway.NewGateway(cfg)
 	require.NoError(t, err, "create gateway")
-	gw.SetNodeMetrics(1.0, 365, 100.0)
+	gw.SetNodeMetrics(1.0, 365*24*time.Hour, 100.0)
 	require.NoError(t, gw.Start(ctx), "start gateway")
 	t.Cleanup(func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -246,6 +246,7 @@ func TestGatewayPipeline_NATTranslatesEgress(t *testing.T) {
 		InternalCIDR:   gwPipeNATInternal,
 		PortRangeStart: 1024,
 		PortRangeEnd:   65535,
+		MaxSessions:    65536,
 	}
 	gw := startGatewayForTest(t, ctx, cfg)
 	require.True(t, gw.HasService(gateway.ServiceNAT))

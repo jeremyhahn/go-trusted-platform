@@ -92,7 +92,7 @@ func TestX509PolicyExtractor_ExtractZone(t *testing.T) {
 	})
 
 	t.Run("extension present", func(t *testing.T) {
-		ext, err := quicbaasca.CreateNetworkZoneExtension("trusted")
+		ext, err := quicbaasca.CreateNetworkZoneExtension("control-plane")
 		require.NoError(t, err)
 
 		cert := selfSignedCert(t, x509.Certificate{
@@ -101,7 +101,7 @@ func TestX509PolicyExtractor_ExtractZone(t *testing.T) {
 
 		got, err := e.ExtractZone(cert)
 		require.NoError(t, err)
-		assert.Equal(t, "trusted", got)
+		assert.Equal(t, "control-plane", got)
 	})
 
 	t.Run("extension absent", func(t *testing.T) {
@@ -118,7 +118,7 @@ func TestX509PolicyExtractor_ExtractPolicy_HappyPath(t *testing.T) {
 	zones := zone.Defaults()
 	e := NewX509PolicyExtractor(WithPolicyExtractorZones(zones))
 
-	ext, err := quicbaasca.CreateNetworkZoneExtension(string(zone.ZoneTrusted))
+	ext, err := quicbaasca.CreateNetworkZoneExtension(string(zone.ZoneControlPlane))
 	require.NoError(t, err)
 
 	cert := selfSignedCert(t, x509.Certificate{
@@ -130,7 +130,7 @@ func TestX509PolicyExtractor_ExtractPolicy_HappyPath(t *testing.T) {
 
 	pol, err := e.ExtractPolicy(cert)
 	require.NoError(t, err)
-	assert.Equal(t, zone.Zone(zone.ZoneTrusted), pol.Zone)
+	assert.Equal(t, zone.Zone(zone.ZoneControlPlane), pol.Zone)
 	assert.Equal(t, "corp", pol.TenantID)
 	assert.NotNil(t, pol.Certificate)
 }

@@ -782,7 +782,7 @@ func TestNetworkConfig_Validate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var err error
 			if tt.config != nil {
-				err = tt.config.Validate()
+				err = tt.config.Validate(nil)
 			}
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -874,127 +874,8 @@ func TestInterfaceConfig_WithRoutes(t *testing.T) {
 }
 
 // =============================================================================
-// SubnetConfig and NetworkConfig helper tests
+// NetworkConfig bond tests
 // =============================================================================
-
-func TestNetworkConfig_SubnetByName(t *testing.T) {
-	nc := &NetworkConfig{
-		Subnets: []SubnetConfig{
-			{Name: "production", CIDR: "10.200.0.0/24", Scope: SubnetScopeInternal, VLANID: 200},
-			{Name: "management", CIDR: "10.99.0.0/24", Scope: SubnetScopeInternal, VLANID: 99},
-			{Name: "public-v4", CIDR: "23.143.36.0/24", Scope: SubnetScopePublic},
-		},
-	}
-
-	t.Run("found", func(t *testing.T) {
-		s := nc.SubnetByName("management")
-		assert.NotNil(t, s)
-		assert.Equal(t, "10.99.0.0/24", s.CIDR)
-		assert.Equal(t, uint16(99), s.VLANID)
-	})
-
-	t.Run("not found", func(t *testing.T) {
-		s := nc.SubnetByName("nonexistent")
-		assert.Nil(t, s)
-	})
-
-	t.Run("empty subnets", func(t *testing.T) {
-		empty := &NetworkConfig{}
-		assert.Nil(t, empty.SubnetByName("anything"))
-	})
-}
-
-func TestNetworkConfig_ProvisioningSubnet(t *testing.T) {
-	t.Run("found", func(t *testing.T) {
-		nc := &NetworkConfig{
-			Subnets: []SubnetConfig{
-				{Name: "production", CIDR: "10.200.0.0/24"},
-				{Name: "prov", CIDR: "172.16.0.0/24", Role: SubnetRoleProvisioning},
-			},
-		}
-		s := nc.ProvisioningSubnet()
-		assert.NotNil(t, s)
-		assert.Equal(t, "prov", s.Name)
-	})
-
-	t.Run("not found", func(t *testing.T) {
-		nc := &NetworkConfig{
-			Subnets: []SubnetConfig{
-				{Name: "production", CIDR: "10.200.0.0/24"},
-			},
-		}
-		assert.Nil(t, nc.ProvisioningSubnet())
-	})
-
-	t.Run("empty", func(t *testing.T) {
-		nc := &NetworkConfig{}
-		assert.Nil(t, nc.ProvisioningSubnet())
-	})
-}
-
-func TestNetworkConfig_QuarantineSubnet(t *testing.T) {
-	t.Run("found", func(t *testing.T) {
-		nc := &NetworkConfig{
-			Subnets: []SubnetConfig{
-				{Name: "quarantine", CIDR: "10.250.0.0/24", Role: SubnetRoleQuarantine},
-			},
-		}
-		s := nc.QuarantineSubnet()
-		assert.NotNil(t, s)
-		assert.Equal(t, "quarantine", s.Name)
-	})
-
-	t.Run("not found", func(t *testing.T) {
-		nc := &NetworkConfig{}
-		assert.Nil(t, nc.QuarantineSubnet())
-	})
-}
-
-func TestNetworkConfig_InternalSubnets(t *testing.T) {
-	nc := &NetworkConfig{
-		Subnets: []SubnetConfig{
-			{Name: "production", CIDR: "10.200.0.0/24", Scope: SubnetScopeInternal},
-			{Name: "public-v4", CIDR: "23.143.36.0/24", Scope: SubnetScopePublic},
-			{Name: "management", CIDR: "10.99.0.0/24", Scope: SubnetScopeInternal},
-			{Name: "att-wan", CIDR: "99.12.246.32/29", Scope: SubnetScopeISP},
-		},
-	}
-
-	internal := nc.InternalSubnets()
-	assert.Len(t, internal, 2)
-	assert.Equal(t, "production", internal[0].Name)
-	assert.Equal(t, "management", internal[1].Name)
-
-	t.Run("empty", func(t *testing.T) {
-		empty := &NetworkConfig{}
-		assert.Empty(t, empty.InternalSubnets())
-	})
-}
-
-func TestNetworkConfig_PublicSubnets(t *testing.T) {
-	nc := &NetworkConfig{
-		Subnets: []SubnetConfig{
-			{Name: "production", CIDR: "10.200.0.0/24", Scope: SubnetScopeInternal},
-			{Name: "public-v4", CIDR: "23.143.36.0/24", Scope: SubnetScopePublic},
-			{Name: "public-v6", CIDR: "2602:F5BB::/36", Scope: SubnetScopePublic},
-			{Name: "transit", CIDR: "10.255.0.0/30", Scope: SubnetScopeTransit},
-		},
-	}
-
-	pub := nc.PublicSubnets()
-	assert.Len(t, pub, 2)
-	assert.Equal(t, "public-v4", pub[0].Name)
-	assert.Equal(t, "public-v6", pub[1].Name)
-
-	t.Run("none", func(t *testing.T) {
-		nc := &NetworkConfig{
-			Subnets: []SubnetConfig{
-				{Name: "internal", Scope: SubnetScopeInternal},
-			},
-		}
-		assert.Empty(t, nc.PublicSubnets())
-	})
-}
 
 func TestNetworkConfig_Validate_BondInterfaces(t *testing.T) {
 	t.Run("valid bond with interfaces", func(t *testing.T) {
@@ -1007,7 +888,7 @@ func TestNetworkConfig_Validate_BondInterfaces(t *testing.T) {
 				},
 			},
 		}
-		assert.NoError(t, nc.Validate())
+		assert.NoError(t, nc.Validate(nil))
 	})
 
 	t.Run("bond with too few interfaces", func(t *testing.T) {
@@ -1020,46 +901,10 @@ func TestNetworkConfig_Validate_BondInterfaces(t *testing.T) {
 				},
 			},
 		}
-		err := nc.Validate()
+		err := nc.Validate(nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "at least two member interfaces are required")
 	})
-}
-
-func TestSubnetConfig_Scopes(t *testing.T) {
-	assert.Equal(t, SubnetScope("internal"), SubnetScopeInternal)
-	assert.Equal(t, SubnetScope("public"), SubnetScopePublic)
-	assert.Equal(t, SubnetScope("transit"), SubnetScopeTransit)
-	assert.Equal(t, SubnetScope("isp"), SubnetScopeISP)
-}
-
-func TestSubnetConfig_Roles(t *testing.T) {
-	assert.Equal(t, SubnetRole("provisioning"), SubnetRoleProvisioning)
-	assert.Equal(t, SubnetRole("quarantine"), SubnetRoleQuarantine)
-}
-
-func TestBondVLANConfig_Structure(t *testing.T) {
-	bv := BondVLANConfig{
-		Subnet:      "production",
-		IPv4Address: "10.200.0.1/24",
-		AutoStart:   true,
-	}
-	assert.Equal(t, "production", bv.Subnet)
-	assert.Equal(t, "10.200.0.1/24", bv.IPv4Address)
-	assert.True(t, bv.AutoStart)
-}
-
-func TestDHCPScopeConfig_Structure(t *testing.T) {
-	dhcp := DHCPScopeConfig{
-		Enabled:       true,
-		RangeStart:    "10.200.0.100",
-		RangeEnd:      "10.200.0.200",
-		LeaseDuration: "24h",
-	}
-	assert.True(t, dhcp.Enabled)
-	assert.Equal(t, "10.200.0.100", dhcp.RangeStart)
-	assert.Equal(t, "10.200.0.200", dhcp.RangeEnd)
-	assert.Equal(t, "24h", dhcp.LeaseDuration)
 }
 
 func TestBondConfig_NoSlavesField(t *testing.T) {
@@ -1071,7 +916,7 @@ func TestBondConfig_NoSlavesField(t *testing.T) {
 		Mode:       "802.3ad",
 		Interfaces: []string{"eth0", "eth1"},
 		VLANs: []BondVLANConfig{
-			{Subnet: "production", IPv4Address: "10.200.0.1/24", AutoStart: true},
+			{Zone: "fabric", IPv4Address: "10.4.1.20/24", AutoStart: true},
 		},
 	}
 	assert.Len(t, bond.Interfaces, 2)

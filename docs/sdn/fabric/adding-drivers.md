@@ -79,30 +79,32 @@ func (d *driver) EnsureVLAN(ctx context.Context, vlan uint16, name string) error
     return nil
 }
 
-func (d *driver) EnsureVNI(ctx context.Context, vni uint32, vlan uint16) error {
-    // Map VNI to VLAN on NVE interface (EVPN mode)
-    d.logger.Debug("ensuring VNI", "vni", vni, "vlan", vlan)
-    return nil
-}
-
 func (d *driver) EnsureLAG(ctx context.Context, lag fabric.LAGConfig) error {
     // Configure link aggregation group
     d.logger.Debug("ensuring LAG", "lag_id", lag.ID, "port_channel", lag.PortChannelID)
     return nil
 }
 
-func (d *driver) SetPortAccess(ctx context.Context, port fabric.PortRef, vlan uint16) error {
-    // Configure port in access mode
+func (d *driver) SetPortAccess(ctx context.Context, port fabric.PortRef, vlan uint16, mtu int) error {
+    // Access mode on vlan; set the MTU when mtu > 0; bring the port up.
+    // Leave a port already in that state untouched.
     d.logger.Debug("setting port access",
-        "switch", port.SwitchID, "port", port.Port, "vlan", vlan)
+        "switch", port.SwitchID, "port", port.Port, "vlan", vlan, "mtu", mtu)
     return nil
 }
 
-func (d *driver) SetPortTrunk(ctx context.Context, port fabric.PortRef, 
-    allowed []uint16, native uint16) error {
-    // Configure port in trunk mode
+func (d *driver) SetPortTrunk(ctx context.Context, port fabric.PortRef,
+    allowed []uint16, native uint16, mtu int) error {
+    // Trunk carrying exactly allowed; native VLAN (0 clears it); MTU when
+    // mtu > 0; bring the port up. Leave a converged port untouched.
     d.logger.Debug("setting port trunk",
-        "switch", port.SwitchID, "port", port.Port, "allowed", allowed, "native", native)
+        "switch", port.SwitchID, "port", port.Port, "allowed", allowed, "native", native, "mtu", mtu)
+    return nil
+}
+
+func (d *driver) DisablePort(ctx context.Context, port fabric.PortRef) error {
+    // Administratively shut the port down.
+    d.logger.Debug("disabling port", "switch", port.SwitchID, "port", port.Port)
     return nil
 }
 ```
@@ -124,7 +126,7 @@ fabric:
   switches:
     - id: switch-01
       vendor: vendor-name      # Matches RegisterDriver() name
-      mgmt-ip: 10.0.1.50
+      mgmt-ip: 192.0.2.10
 ```
 
 ## Step 3: Implement SSH or API Access
@@ -281,7 +283,7 @@ func TestNewDriver(t *testing.T) {
     cfg := fabric.SwitchConfig{
         ID:     "test-switch",
         Vendor: "vendor-name",
-        MgmtIP: "10.0.1.50",
+        MgmtIP: "192.0.2.10",
     }
     
     drv, err := NewDriver(cfg, slog.Default())
@@ -297,7 +299,7 @@ func TestEnsureVLAN(t *testing.T) {
     cfg := fabric.SwitchConfig{
         ID:     "test-switch",
         Vendor: "vendor-name",
-        MgmtIP: "10.0.1.50",
+        MgmtIP: "192.0.2.10",
     }
     
     drv, _ := NewDriver(cfg, slog.Default())
@@ -320,14 +322,14 @@ func TestSetPortAccess(t *testing.T) {
     cfg := fabric.SwitchConfig{
         ID:     "test-switch",
         Vendor: "vendor-name",
-        MgmtIP: "10.0.1.50",
+        MgmtIP: "192.0.2.10",
     }
     
     drv, _ := NewDriver(cfg, slog.Default())
     ctx := context.Background()
     
     port := fabric.PortRef{SwitchID: "test-switch", Port: "Eth1/1"}
-    err := drv.SetPortAccess(ctx, port, 100)
+    err := drv.SetPortAccess(ctx, port, 402, 9216)
     if err != nil {
         t.Fatalf("SetPortAccess failed: %v", err)
     }

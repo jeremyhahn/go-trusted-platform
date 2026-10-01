@@ -60,7 +60,7 @@ func cliSnapshot() *platformv1.GatewaySnapshot {
 		Nat: &platformv1.SnapshotNAT{SnatEnabled: true, DnatRules: 2, Uplinks: []*platformv1.SnapshotNATUplink{
 			{Name: "att", IsDefault: true, PoolAddresses: 8, Ports: 64512, StaticTranslations: 1},
 		}},
-		Pipeline: &platformv1.SnapshotPipeline{Installed: true, Bridge: "trusted0", Owner: "lab-node-1-gateway", Terminal: "normal", FailMode: "secure"},
+		Pipeline: &platformv1.SnapshotPipeline{Installed: true, Bridge: "br-fabric", Owner: "lab-node-1-gateway", Terminal: "normal", FailMode: "secure"},
 	}
 }
 
@@ -83,7 +83,7 @@ func TestPrintGatewaySnapshot_RendersEverySection(t *testing.T) {
 		"last error: netlink busy",
 		"Firewall     active=true flows=26",
 		"NAT          snat=true dnat=2",
-		"Pipeline     bridge=trusted0 owner=lab-node-1-gateway terminal=normal fail-mode=secure",
+		"Pipeline     bridge=br-fabric owner=lab-node-1-gateway terminal=normal fail-mode=secure",
 	} {
 		assert.Contains(t, text, want)
 	}

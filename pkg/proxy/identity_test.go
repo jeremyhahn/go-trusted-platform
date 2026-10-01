@@ -9,7 +9,7 @@ func fullIdentity() *ClientIdentity {
 	return &ClientIdentity{
 		ID:              "client-1",
 		DeviceID:        "ab12",
-		Zone:            "trusted",
+		Zone:            "control-plane",
 		AuthMethod:      "mtls",
 		CertFingerprint: "deadbeef",
 		Attested:        false,
@@ -25,7 +25,7 @@ func TestInjectIdentityFull(t *testing.T) {
 		headerForwardedClientCert: `Hash=deadbeef;Subject="CN=device-1,O=Test Org";URI=spiffe://platform/device-1`,
 		headerTPClientID:          "client-1",
 		headerTPDeviceID:          "ab12",
-		headerTPClientZone:        "trusted",
+		headerTPClientZone:        "control-plane",
 		headerTPAuthMethod:        "mtls",
 		headerTPAttested:          "false",
 		headerTPCertFingerprint:   "deadbeef",

@@ -20,7 +20,7 @@ Subcommands:
   overlay   Manage VXLAN overlay network (VTEPs, VNIs, tunnels, MACs)
   gateway   Manage multi-mode gateway (modes, BGP, load balancer, perf)
   ipam      Manage IP address pools and allocations
-  zone      Manage network trust zones
+  zone      Manage underlay zones
 ```
 
 Global flags apply to every command:
@@ -426,7 +426,7 @@ platformctl sdn ipam pool create --name <NAME> --cidr <CIDR> [options]
 Options:
   --id             Optional pool ID (generated if omitted)
   --gateway        Gateway IP address within the CIDR
-  --zone           Trust/exposure zone, e.g. 'trusted' or 'provisioning'
+  --zone           Underlay zone, e.g. 'control-plane' or 'provisioning'
   --description    Description of the pool's purpose
   --lease-seconds  Default lease duration in seconds (0 = never expire)
 
@@ -464,8 +464,9 @@ Examples:
 
 ## Zone Commands
 
-`platformctl sdn zone` manages network trust zones — named policy boundaries
-that govern isolation, internet ingress, OOB access, and inter-zone routing.
+`platformctl sdn zone` manages the underlay zones of the reference network:
+the nine built-ins at fixed offsets (policy tunable) and owner-defined zones
+at offsets 9–99. Overlays (`platform`, `tenant`, `public`) are not zones.
 
 ### List Zones
 
@@ -482,35 +483,48 @@ Examples:
 
 ### Create Zone
 
+Creates an owner-defined zone. Its VLAN, /24 and ULA /64 are derived from
+its offset.
+
 ```bash
-platformctl sdn zone create --name <name> [options]
+platformctl sdn zone create --name <name> --offset <9-99> --port-class <class> [options]
 
 Options:
-  --name                Zone name (required)
-  --isolate             Isolate this zone from all others (default: false)
-  --isolate-per-tenant  Isolate traffic per tenant within the zone
-  --internet-ingress    Allow inbound internet traffic
-  --oob                 Mark zone as out-of-band management
-  --lifecycle-role      provisioning|quarantine
+  --name               Zone name (required; not platform, tenant, public, trusted)
+  --offset             Offset in the environment block, 9-99
+  --port-class         gateway or hypervisor (repeatable)
+  --isolate            Deny everything except the --allow-to paths
+  --isolate-from       Zone this zone never sends to (repeatable)
+  --allow-to           zone or zone:service[,service...] (repeatable)
+  --service            Service permitted inside the zone (repeatable)
+  --internet-ingress   Allow inbound internet traffic
+  --reason             privileged_access reason (with --approved-by)
+  --approved-by        privileged_access approver (with --reason)
 
 Examples:
-  platformctl sdn zone create --name dmz --internet-ingress
-  platformctl sdn zone create --name quarantine --lifecycle-role quarantine --isolate
+  platformctl sdn zone create --name lab --offset 9 --port-class hypervisor --isolate
+  platformctl sdn zone create --name lab-dns --offset 10 --port-class gateway \
+    --allow-to control-plane:dns --reason "lab resolver" --approved-by owner
 ```
+
+A path into `control-plane` or `management` beyond the reference defaults
+needs `--reason` and `--approved-by`; the daemon writes an audit record for
+it.
 
 ### Update Zone
 
 ```bash
 platformctl sdn zone update --name <name> [options]
 
-Options: same policy flags as create (all optional)
+Options: the policy flags of create; they replace the zone's policy as a whole
 
 Examples:
-  platformctl sdn zone update --name dmz --isolate-per-tenant
+  platformctl sdn zone update --name storage --isolate --allow-to storage:nvme-tcp
 ```
 
-The response includes `restart_required: true` when a policy-relevant field
-(Isolate, OOB, IsolatePerTenant, InternetIngress) changes.
+A built-in zone keeps its offset, port classes, lifecycle role and OOB flag;
+changing them is refused. Every accepted change returns
+`restart_required: true`: the network plan is derived at daemon startup.
 
 ### Delete Zone
 
@@ -518,21 +532,10 @@ The response includes `restart_required: true` when a policy-relevant field
 platformctl sdn zone delete --name <name>
 
 Examples:
-  platformctl sdn zone delete --name dmz
+  platformctl sdn zone delete --name lab
 ```
 
-Fails when the zone is the sole holder of the `provisioning` or `quarantine`
-lifecycle role — the platform requires at least one zone for each special role.
+Deleting a built-in omits it from the environment. `fabric`,
+`provisioning`, `quarantine` and `control-plane` cannot be removed.
 
-### Assign Network to Zone
-
-```bash
-platformctl sdn zone assign --network <name> --zone <zone-name>
-
-Options:
-  --network  Network segment name (required)
-  --zone     Target trust zone name (required)
-
-Examples:
-  platformctl sdn zone assign --network corp-lan --zone trusted   # today's built-in zone; the reference design replaces it (#708)
-```
+There is no "assign network to zone" command: networks are zones.

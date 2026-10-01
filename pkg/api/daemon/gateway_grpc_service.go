@@ -464,6 +464,14 @@ func (s *GatewayService) CreateIPAMPool(ctx context.Context, req *platformv1.Cre
 		pool.Gateway = gw
 	}
 
+	reserved, rangeStart, rangeEnd, err := ipam.ParseWindow(req.GetReserved(), req.GetRangeStart(), req.GetRangeEnd())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	pool.Reserved = reserved
+	pool.RangeStart = rangeStart
+	pool.RangeEnd = rangeEnd
+
 	if req.GetDefaultLeaseDurationNanos() > 0 {
 		pool.DefaultLeaseDuration = time.Duration(req.GetDefaultLeaseDurationNanos())
 	}
@@ -541,6 +549,15 @@ func (s *GatewayService) UpdateIPAMPool(ctx context.Context, req *platformv1.Upd
 	}
 	updated.Zone = req.GetZone()
 	updated.Description = req.GetDescription()
+	if req.GetUpdateWindow() {
+		reserved, rangeStart, rangeEnd, parseErr := ipam.ParseWindow(req.GetReserved(), req.GetRangeStart(), req.GetRangeEnd())
+		if parseErr != nil {
+			return nil, status.Error(codes.InvalidArgument, parseErr.Error())
+		}
+		updated.Reserved = reserved
+		updated.RangeStart = rangeStart
+		updated.RangeEnd = rangeEnd
+	}
 	if req.GetDefaultLeaseDurationNanos() >= 0 {
 		updated.DefaultLeaseDuration = time.Duration(req.GetDefaultLeaseDurationNanos())
 	}
@@ -785,6 +802,9 @@ func ipamPoolToProto(p *ipam.Pool) *platformv1.IPAMPool {
 		Available:                 p.AvailableIPs,
 		DefaultLeaseDurationNanos: int64(p.DefaultLeaseDuration),
 		InactivityTimeoutNanos:    int64(p.InactivityTimeout),
+		Reserved:                  p.ReservedStrings(),
+		RangeStart:                ipam.AddrString(p.RangeStart),
+		RangeEnd:                  ipam.AddrString(p.RangeEnd),
 	}
 
 	if !p.CreatedAt.IsZero() {
@@ -851,6 +871,8 @@ func ipamErrToGRPC(err error) error {
 	case errors.Is(err, ipam.ErrBackendUnavailable),
 		errors.Is(err, ipam.ErrBackendTimeout):
 		return status.Error(codes.Unavailable, err.Error())
+	case isIPAMWindowError(err):
+		return status.Error(codes.InvalidArgument, err.Error())
 	default:
 		var opFail *ipam.ErrPoolOperationFailed
 		if errors.As(err, &opFail) && errors.Is(opFail.Cause, ipam.ErrInvalidCIDR) {
@@ -858,4 +880,13 @@ func ipamErrToGRPC(err error) error {
 		}
 		return status.Errorf(codes.Internal, "IPAM operation failed: %v", err)
 	}
+}
+
+// isIPAMWindowError reports whether err refuses an address or a window
+// because of the pool's reservations: a reserved address, or a reserved
+// prefix or range that does not fit the pool.
+func isIPAMWindowError(err error) bool {
+	var reserved *ipam.ErrIPReserved
+	var window *ipam.ErrInvalidWindow
+	return errors.As(err, &reserved) || errors.As(err, &window)
 }

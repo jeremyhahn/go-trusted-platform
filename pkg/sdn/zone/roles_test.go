@@ -17,79 +17,29 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
-// TestZoneForRole_Defaults verifies that both required lifecycle roles resolve
-// to the expected built-in zone names.
+// TestZoneForRole_Defaults resolves both lifecycle roles to their built-in
+// holders.
 func TestZoneForRole_Defaults(t *testing.T) {
-	t.Parallel()
+	got, err := zone.ZoneForRole(zone.Defaults(), zone.LifecycleRoleProvisioning)
+	require.NoError(t, err)
+	assert.Equal(t, zone.ZoneProvisioning, got)
 
-	defaults := zone.Defaults()
-
-	tests := []struct {
-		role zone.LifecycleRole
-		want zone.Zone
-	}{
-		{zone.LifecycleRoleProvisioning, zone.ZoneProvisioning},
-		{zone.LifecycleRoleQuarantine, zone.ZoneQuarantine},
-	}
-	for _, tc := range tests {
-		tc := tc
-		t.Run(string(tc.role), func(t *testing.T) {
-			t.Parallel()
-			got, err := zone.ZoneForRole(defaults, tc.role)
-			if err != nil {
-				t.Fatalf("ZoneForRole(%q): %v", tc.role, err)
-			}
-			if got != tc.want {
-				t.Errorf("ZoneForRole(%q) = %q, want %q", tc.role, got, tc.want)
-			}
-		})
-	}
+	got, err = zone.ZoneForRole(zone.Defaults(), zone.LifecycleRoleQuarantine)
+	require.NoError(t, err)
+	assert.Equal(t, zone.ZoneQuarantine, got)
 }
 
-// TestZoneForRole_CustomName verifies that ZoneForRole returns the custom
-// zone name when the operator has renamed a lifecycle-role holder.
-func TestZoneForRole_CustomName(t *testing.T) {
-	t.Parallel()
-
-	user := []zone.ZoneConfig{
-		{Name: zone.ZoneProvisioning, Omit: true},
-		{
-			Name:          "onboarding",
-			LifecycleRole: zone.LifecycleRoleProvisioning,
-			Isolate:       true,
-			Services:      []string{"dhcp", "tftp", "dns", "acme"},
-		},
-	}
-	resolved, err := zone.Resolve(user)
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	got, err := zone.ZoneForRole(resolved, zone.LifecycleRoleProvisioning)
-	if err != nil {
-		t.Fatalf("ZoneForRole: %v", err)
-	}
-	if got != "onboarding" {
-		t.Errorf("ZoneForRole = %q, want onboarding", got)
-	}
-}
-
-// TestZoneForRole_NotFound verifies that ZoneForRole returns ErrNoZoneForRole
-// when no zone carries the requested role.
+// TestZoneForRole_NotFound returns ErrNoZoneForRole when no zone holds the
+// role.
 func TestZoneForRole_NotFound(t *testing.T) {
-	t.Parallel()
-
-	empty := []zone.ZoneConfig{
-		{Name: "generic"},
-	}
-	_, err := zone.ZoneForRole(empty, zone.LifecycleRoleQuarantine)
+	_, err := zone.ZoneForRole([]zone.ZoneConfig{{Name: "lab"}}, zone.LifecycleRoleQuarantine)
 	var target zone.ErrNoZoneForRole
-	if !errors.As(err, &target) {
-		t.Errorf("want ErrNoZoneForRole, got %T: %v", err, err)
-	}
-	if target.Role != zone.LifecycleRoleQuarantine {
-		t.Errorf("ErrNoZoneForRole.Role = %q, want quarantine", target.Role)
-	}
+	require.True(t, errors.As(err, &target), "got %v", err)
+	assert.Equal(t, zone.LifecycleRoleQuarantine, target.Role)
 }

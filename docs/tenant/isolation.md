@@ -1,6 +1,13 @@
 # Tenant Isolation Mechanisms
 
-This document describes the isolation mechanisms implemented in the Trusted Platform to ensure complete separation between tenants across network, storage, cryptographic, and policy boundaries.
+This document describes the tenant isolation mechanisms of the Trusted Platform across storage, cryptographic and policy boundaries.
+
+> **Network isolation is not provided by this feature.** The per-tenant OVS
+> bridge and VLAN range described in earlier revisions were retired by #708.
+> Under the [reference network](../architecture/reference-network.md) tenant
+> networks are EVPN/VXLAN overlays and a tenant's routing domain is a VRF,
+> delivered by the tenancy work that follows the overlay transport (#709).
+> [architecture.md](architecture.md) is normative where this file disagrees.
 
 ## Isolation Overview
 
@@ -31,7 +38,7 @@ This document describes the isolation mechanisms implemented in the Trusted Plat
 ║                                                                               ║
 ║  Layer 1: Network Isolation                                                   ║
 ║  ┌─────────────────────────────────────────────────────────────────────────┐  ║
-║  │  Per-Tenant OVS Bridge │ VLAN Segmentation │ OpenFlow Rules            │  ║
+║  │  Tenant VRF on the EVPN overlay (not yet implemented, see above)       │  ║
 ║  └─────────────────────────────────────────────────────────────────────────┘  ║
 ║                                                                               ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝
@@ -39,203 +46,9 @@ This document describes the isolation mechanisms implemented in the Trusted Plat
 
 ## Network Isolation
 
-### Per-Tenant OVS Bridges
-
-Each tenant receives a dedicated Open vSwitch bridge for network isolation:
-
-```
-                     PLATFORM HOST
-┌────────────────────────────────────────────────────────────────┐
-│                                                                │
-│  ┌──────────────────┐    ┌──────────────────┐                  │
-│  │ br-tenant-eng    │    │ br-tenant-prod   │                  │
-│  │ (Engineering)    │    │ (Production)     │                  │
-│  └────────┬─────────┘    └────────┬─────────┘                  │
-│           │                       │                            │
-│    ┌──────┴──────┐         ┌──────┴──────┐                     │
-│    │      │      │         │      │      │                     │
-│  ┌─▼─┐  ┌─▼─┐  ┌─▼─┐     ┌─▼─┐  ┌─▼─┐  ┌─▼─┐                  │
-│  │100│  │101│  │102│     │200│  │201│  │202│                  │
-│  └───┘  └───┘  └───┘     └───┘  └───┘  └───┘                  │
-│  VLAN   VLAN   VLAN      VLAN   VLAN   VLAN                   │
-│                                                                │
-│            ISOLATED - NO CROSS-BRIDGE TRAFFIC                  │
-│                                                                │
-└────────────────────────────────────────────────────────────────┘
-```
-
-### Bridge Configuration
-
-```go
-// BridgeConfig for per-tenant OVS bridge
-type BridgeConfig struct {
-    Name         string   // br-tenant-{tenant_name}
-    TenantID     string   // Owning tenant ID
-    DatapathType string   // system | netdev
-    FailMode     string   // standalone | secure
-    STPEnabled   bool     // Spanning Tree Protocol
-    MTU          int      // Maximum transmission unit
-    Controllers  []string // OpenFlow controllers
-}
-
-// CreateTenantBridge creates isolated bridge for tenant
-func (sdn *SDNService) CreateTenantBridge(ctx context.Context, tenant *Tenant) error {
-    config := &BridgeConfig{
-        Name:         fmt.Sprintf("br-tenant-%s", tenant.Name),
-        TenantID:     tenant.ID,
-        DatapathType: "system",
-        FailMode:     "secure",  // Drop traffic if controller disconnects
-        STPEnabled:   false,
-        MTU:          9000,
-    }
-
-    bridge, err := sdn.ovsClient.CreateBridge(ctx, config)
-    if err != nil {
-        return ErrBridgeCreationFailed{TenantID: tenant.ID, Cause: err}
-    }
-
-    // Install default isolation flows
-    return sdn.installIsolationFlows(ctx, bridge)
-}
-```
-
-### VLAN Namespaces
-
-VLAN ranges are allocated per-tenant to prevent VLAN hopping:
-
-```
-Tenant VLAN Allocation
-┌────────────────────────────────────────────────────────────────────┐
-│                                                                    │
-│  Tenant: engineering    Tenant: production    Tenant: staging      │
-│  ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐│
-│  │ VLANs: 100-199   │   │ VLANs: 200-299   │   │ VLANs: 300-399   ││
-│  │                  │   │                  │   │                  ││
-│  │ 100: web-tier    │   │ 200: web-tier    │   │ 300: web-tier    ││
-│  │ 101: app-tier    │   │ 201: app-tier    │   │ 301: app-tier    ││
-│  │ 102: db-tier     │   │ 202: db-tier     │   │ 302: db-tier     ││
-│  │ 103-199: unused  │   │ 203-299: unused  │   │ 303-399: unused  ││
-│  └──────────────────┘   └──────────────────┘   └──────────────────┘│
-│                                                                    │
-│                   NO VLAN ID OVERLAP ALLOWED                       │
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
-```
-
-### VLAN Allocation
-
-> **Code today vs. the reference design.** Tenants are isolated today by
-> per-tenant VLAN ranges (`pkg/tenant/vlan`). The
-> [reference network](../architecture/reference-network.md) (owner design
-> decision, 2026-09-26) has no tenant VLAN range: tenant networks are
-> EVPN/VXLAN overlays addressed from the environment's IPAM pool. The code change is tracked in #708.
-
-```go
-// VLANAllocator manages per-tenant VLAN ranges
-type VLANAllocator struct {
-    mu         sync.RWMutex
-    allocations map[string]*VLANRange  // tenantID -> range
-    vlansPerTenant int
-}
-
-// AllocateRange assigns a VLAN range to a tenant
-func (va *VLANAllocator) AllocateRange(tenantID string) (*VLANRange, error) {
-    va.mu.Lock()
-    defer va.mu.Unlock()
-
-    if existing, ok := va.allocations[tenantID]; ok {
-        return existing, nil
-    }
-
-    // Find next available range
-    nextStart := va.findNextAvailable()
-    if nextStart+va.vlansPerTenant > 4094 {
-        return nil, ErrVLANRangeExhausted{}
-    }
-
-    vlanRange := &VLANRange{
-        Start:    nextStart,
-        End:      nextStart + va.vlansPerTenant - 1,
-        TenantID: tenantID,
-    }
-
-    va.allocations[tenantID] = vlanRange
-    return vlanRange, nil
-}
-
-// ValidateVLAN ensures VLAN belongs to tenant
-func (va *VLANAllocator) ValidateVLAN(tenantID string, vlanID uint16) error {
-    va.mu.RLock()
-    defer va.mu.RUnlock()
-
-    vlanRange, ok := va.allocations[tenantID]
-    if !ok {
-        return ErrTenantNotFound{ID: tenantID}
-    }
-
-    if vlanID < vlanRange.Start || vlanID > vlanRange.End {
-        return ErrVLANOutOfRange{
-            TenantID: tenantID,
-            VLAN:     vlanID,
-            Range:    vlanRange,
-        }
-    }
-
-    return nil
-}
-```
-
-### OpenFlow Isolation Rules
-
-Default isolation flows prevent cross-tenant traffic:
-
-```go
-// InstallIsolationFlows adds OpenFlow rules for tenant isolation
-func (sdn *SDNService) InstallIsolationFlows(ctx context.Context, bridge string, vlanRange *VLANRange) error {
-    flows := []Flow{
-        // Table 0: Classification
-        // Allow traffic within tenant VLAN range
-        {
-            Table:    0,
-            Priority: 100,
-            Match: Match{
-                VLANRange: vlanRange,
-            },
-            Actions: []Action{
-                {Type: ActionGotoTable, Table: 1},
-            },
-        },
-        // Drop traffic with VLANs outside tenant range
-        {
-            Table:    0,
-            Priority: 1,
-            Match:    Match{}, // Match all
-            Actions: []Action{
-                {Type: ActionDrop},
-            },
-        },
-
-        // Table 1: Forwarding
-        // Normal L2 forwarding within tenant
-        {
-            Table:    1,
-            Priority: 100,
-            Match:    Match{}, // Match all (already filtered by Table 0)
-            Actions: []Action{
-                {Type: ActionNormal},
-            },
-        },
-    }
-
-    for _, flow := range flows {
-        if err := sdn.ofClient.AddFlow(ctx, bridge, &flow); err != nil {
-            return ErrFlowInstallFailed{Flow: flow, Cause: err}
-        }
-    }
-
-    return nil
-}
-```
+None in this feature yet; see the note at the top. The former sections on
+per-tenant OVS bridges, VLAN namespaces, VLAN allocation and per-bridge
+OpenFlow rules described code that was deleted by #708.
 
 ## Storage Isolation
 
@@ -739,117 +552,15 @@ func (qe *QuotaEnforcer) ReserveQuota(ctx context.Context, req *QuotaReserveRequ
 
 ## Isolation Verification
 
-### Runtime Checks
-
-```go
-// IsolationVerifier performs runtime isolation verification
-type IsolationVerifier struct {
-    ovsClient *ovs.Client
-    vlanAlloc *VLANAllocator
-    logger    *logging.Logger
-}
-
-// VerifyNetworkIsolation checks network isolation for a tenant
-func (iv *IsolationVerifier) VerifyNetworkIsolation(ctx context.Context, tenantID string) (*IsolationReport, error) {
-    report := &IsolationReport{
-        TenantID:  tenantID,
-        Timestamp: time.Now(),
-        Checks:    []IsolationCheck{},
-    }
-
-    // Check bridge isolation
-    bridgeName := fmt.Sprintf("br-tenant-%s", tenantID)
-    bridge, err := iv.ovsClient.GetBridge(ctx, bridgeName)
-    if err != nil {
-        report.Checks = append(report.Checks, IsolationCheck{
-            Name:   "bridge_exists",
-            Passed: false,
-            Error:  err.Error(),
-        })
-        return report, nil
-    }
-
-    report.Checks = append(report.Checks, IsolationCheck{
-        Name:   "bridge_exists",
-        Passed: true,
-    })
-
-    // Check VLAN range
-    vlanRange, err := iv.vlanAlloc.GetRange(tenantID)
-    if err != nil {
-        report.Checks = append(report.Checks, IsolationCheck{
-            Name:   "vlan_range_allocated",
-            Passed: false,
-            Error:  err.Error(),
-        })
-        return report, nil
-    }
-
-    report.Checks = append(report.Checks, IsolationCheck{
-        Name:   "vlan_range_allocated",
-        Passed: true,
-        Details: map[string]string{
-            "start": fmt.Sprint(vlanRange.Start),
-            "end":   fmt.Sprint(vlanRange.End),
-        },
-    })
-
-    // Check OpenFlow isolation rules
-    flows, err := iv.ovsClient.DumpFlows(ctx, bridgeName)
-    if err != nil {
-        report.Checks = append(report.Checks, IsolationCheck{
-            Name:   "isolation_flows",
-            Passed: false,
-            Error:  err.Error(),
-        })
-        return report, nil
-    }
-
-    hasDropRule := false
-    for _, flow := range flows {
-        if flow.Table == 0 && flow.Priority == 1 && flow.Actions == "drop" {
-            hasDropRule = true
-            break
-        }
-    }
-
-    report.Checks = append(report.Checks, IsolationCheck{
-        Name:   "isolation_flows",
-        Passed: hasDropRule,
-    })
-
-    // Verify no cross-bridge connections
-    for _, port := range bridge.Ports {
-        portInfo, err := iv.ovsClient.GetPort(ctx, port.Name)
-        if err != nil {
-            continue
-        }
-
-        // Check port doesn't connect to another tenant's bridge
-        if portInfo.PeerBridge != "" && !strings.Contains(portInfo.PeerBridge, tenantID) {
-            report.Checks = append(report.Checks, IsolationCheck{
-                Name:   "no_cross_tenant_ports",
-                Passed: false,
-                Error:  fmt.Sprintf("port %s connects to %s", port.Name, portInfo.PeerBridge),
-            })
-        }
-    }
-
-    report.Passed = true
-    for _, check := range report.Checks {
-        if !check.Passed {
-            report.Passed = false
-            break
-        }
-    }
-
-    return report, nil
-}
-```
+The isolation that exists today is verified by the tenant integration suite
+(`test/integration/tenant/isolation_test.go`), on all six transports:
+tenant records, quotas and usage are independent, and updating or suspending
+one tenant leaves another untouched. A
+network isolation check arrives with the tenant VRF.
 
 ## Related Documentation
 
 - [Architecture](architecture.md) - Multi-tenancy architecture
 - [Configuration](configuration.md) - Isolation configuration options
-- [SDN Architecture](../sdn/ARCHITECTURE.md) - Network isolation details
+- [SDN](../sdn/architecture.md) - Overlays and, with tenant VRFs, network isolation
 - [Key Management](../kms/overview.md) - Cryptographic key isolation

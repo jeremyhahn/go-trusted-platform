@@ -201,6 +201,29 @@ Trunking VLANs Allowed: 10,20,30
 	if status.TrunkVLANs[0] != 10 || status.TrunkVLANs[1] != 20 || status.TrunkVLANs[2] != 30 {
 		t.Fatalf("expected trunk vlans [10,20,30], got %v", status.TrunkVLANs)
 	}
+	if status.NativeVLAN != 1 {
+		t.Fatalf("expected native vlan 1, got %d", status.NativeVLAN)
+	}
+}
+
+// TestParseSwitchportOutput_NativeVLAN reads a hypervisor-class trunk's
+// native VLAN, and leaves it zero when the line is missing.
+func TestParseSwitchportOutput_NativeVLAN(t *testing.T) {
+	output := "Switchport: Enabled\nOperational Mode: trunk\nTrunking Native Mode VLAN: 405 (provisioning)\nTrunking VLANs Allowed: 401,403-408\n"
+	status, err := parseSwitchportOutput("Eth1/25", output)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.NativeVLAN != 405 {
+		t.Fatalf("expected native vlan 405, got %d", status.NativeVLAN)
+	}
+	status, err = parseSwitchportOutput("Eth1/41", "Switchport: Enabled\nOperational Mode: static access\nAccess Mode VLAN: 402 (management)\n")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.NativeVLAN != 0 {
+		t.Fatalf("an access port has no native vlan, got %d", status.NativeVLAN)
+	}
 }
 
 func TestParseSwitchportOutput_DisabledPort(t *testing.T) {

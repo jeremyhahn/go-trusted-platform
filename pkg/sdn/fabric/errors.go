@@ -15,16 +15,11 @@
 // and port lifecycle on Cisco Nexus and compatible switches.
 package fabric
 
-import "fmt"
+import (
+	"fmt"
 
-// ErrUnknownSegment is returned when a segment name cannot be resolved.
-type ErrUnknownSegment struct {
-	Name string
-}
-
-func (e ErrUnknownSegment) Error() string {
-	return fmt.Sprintf("fabric: unknown segment %q", e.Name)
-}
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+)
 
 // ErrUnknownSwitch is returned when a switch ID cannot be found.
 type ErrUnknownSwitch struct {
@@ -33,17 +28,6 @@ type ErrUnknownSwitch struct {
 
 func (e ErrUnknownSwitch) Error() string {
 	return fmt.Sprintf("fabric: unknown switch %q", e.ID)
-}
-
-// ErrDuplicateVLAN is returned when two segments share the same VLAN ID.
-type ErrDuplicateVLAN struct {
-	VLAN     uint16
-	Segment1 string
-	Segment2 string
-}
-
-func (e ErrDuplicateVLAN) Error() string {
-	return fmt.Sprintf("fabric: duplicate vlan %d in segments %q and %q", e.VLAN, e.Segment1, e.Segment2)
 }
 
 // ErrInvalidPortRef is returned when a port reference is malformed.
@@ -67,18 +51,6 @@ func (e ErrDriverConnect) Error() string {
 
 func (e ErrDriverConnect) Unwrap() error {
 	return e.Cause
-}
-
-// ErrSegmentRoleMismatch is returned when a port operation targets a
-// segment with an incompatible role.
-type ErrSegmentRoleMismatch struct {
-	Segment  string
-	Expected SegmentRole
-	Got      SegmentRole
-}
-
-func (e ErrSegmentRoleMismatch) Error() string {
-	return fmt.Sprintf("fabric: segment %q role mismatch: expected %s, got %s", e.Segment, e.Expected, e.Got)
 }
 
 // ErrInvalidFabricConfig is returned when the fabric configuration is invalid.
@@ -120,3 +92,54 @@ type ErrNilConfig struct{}
 func (e ErrNilConfig) Error() string {
 	return "fabric: nil config"
 }
+
+// ErrUnknownPortClass is returned for a port assignment whose class is not
+// one of the port classes (gateway, hypervisor, bmc, mgmt-uplink,
+// peer-link).
+type ErrUnknownPortClass struct {
+	// Class is the unknown class.
+	Class zone.PortClass
+}
+
+// Error implements the error interface.
+func (e ErrUnknownPortClass) Error() string {
+	return fmt.Sprintf("fabric: unknown port class %q", e.Class)
+}
+
+// ErrDuplicatePort is returned when one switch port is assigned twice.
+type ErrDuplicatePort struct {
+	// SwitchID is the switch.
+	SwitchID string
+	// Port is the port assigned twice.
+	Port string
+}
+
+// Error implements the error interface.
+func (e ErrDuplicatePort) Error() string {
+	return fmt.Sprintf("fabric: port %q on switch %q is assigned more than once", e.Port, e.SwitchID)
+}
+
+// ErrNilPlan is returned when a manager is built without a network plan.
+type ErrNilPlan struct{}
+
+// Error implements the error interface.
+func (ErrNilPlan) Error() string {
+	return "fabric: a network plan is required"
+}
+
+// ErrPortClassPlan is returned when the network plan cannot say what a port
+// class carries (an unknown class, or a class with no zone in the plan).
+type ErrPortClassPlan struct {
+	// Class is the port class.
+	Class zone.PortClass
+	// Cause is the plan's error.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e ErrPortClassPlan) Error() string {
+	return fmt.Sprintf("fabric: port class %q: %s", e.Class, e.Cause)
+}
+
+// Unwrap returns the plan's error.
+func (e ErrPortClassPlan) Unwrap() error { return e.Cause }

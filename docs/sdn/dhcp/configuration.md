@@ -28,7 +28,8 @@ sdn:
 | interface | string | Network interface to bind |
 
 Pool selection, options, and lease tracking come from the platform IPAM
-system (`sdn.ipam` pools and `sdn.networks` zone/pool bindings).
+system: each zone's pool is derived from `sdn.environment` (DHCP range `.50`
+to the last usable address), and explicit pools come from `sdn.ipam.pools`.
 
 ## Gateway node: `gateway.dhcp`
 

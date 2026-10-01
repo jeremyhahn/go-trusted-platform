@@ -347,13 +347,13 @@ func TestController_VNIOperations(t *testing.T) {
 
 	t.Run("invalid VNI config returns error", func(t *testing.T) {
 		vniConfig := &VNIConfig{
-			VNI:  0, // Invalid
+			VNI:  MaxVNI + 1, // Invalid
 			VLAN: 100,
 		}
 
 		err := ctrl.AddVNI(ctx, vniConfig)
 		if err != ErrVNIOutOfRange {
-			t.Errorf("AddVNI() with VNI=0 = %v, want %v", err, ErrVNIOutOfRange)
+			t.Errorf("AddVNI() with VNI=%d = %v, want %v", MaxVNI+1, err, ErrVNIOutOfRange)
 		}
 	})
 

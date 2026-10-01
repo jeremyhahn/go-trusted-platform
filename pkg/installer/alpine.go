@@ -26,6 +26,8 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 )
 
@@ -1664,8 +1666,11 @@ func (ai *alpineInstaller) createLandingPage(ctx context.Context, webUIPath stri
 	return nil
 }
 
-// ConfigureNetwork configures network interfaces, DNS, bridges, bonds, and VLANs
-func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig) error {
+// ConfigureNetwork configures network interfaces, DNS, bridges, bonds, VLANs,
+// the platform VRF and, for a host with a network.role, the forwarding
+// sysctl and host firewall. plan resolves zone VLANs; it may be nil for a
+// host that is not on a platform network.
+func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string, netConfig *NetworkConfig, plan *netplan.Plan) error {
 	if netConfig == nil {
 		ai.logger.Info("[ALPINE] No network configuration provided, using default DHCP")
 		return ai.configureDefaultNetwork(rootPath)
@@ -1714,16 +1719,22 @@ func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string
 			continue
 		}
 
-		// Generate VLAN sub-interfaces for this bond
+		// Generate zone VLAN sub-interfaces for this bond
 		for _, bv := range bond.VLANs {
-			vlanConfig := ai.generateBondVLANConfig(netConfig, bond.Name, &bv)
+			vlanConfig, err := generateBondVLANConfig(plan, bond.Name, &bv)
+			if err != nil {
+				return err
+			}
 			interfaces.WriteString(vlanConfig)
 		}
 	}
 
 	// Configure VLANs
 	for _, vlan := range netConfig.VLANs {
-		vlanConfig := ai.generateVLANConfig(&vlan)
+		vlanConfig, err := ai.generateVLANConfig(&vlan, plan)
+		if err != nil {
+			return err
+		}
 		interfaces.WriteString(vlanConfig)
 	}
 
@@ -1733,18 +1744,23 @@ func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string
 		interfaces.WriteString(bridgeConfig)
 	}
 
-	// Configure regular interfaces
-	if len(netConfig.Interfaces) == 0 {
+	// Platform VRF holding the host's platform-VRF address
+	interfaces.WriteString(generatePlatformVRFConfig(netConfig.PlatformVRF))
+
+	// Configure regular interfaces. The default DHCP eth0 is only for a
+	// host off the platform network: on a control-plane or compute node it
+	// would put a DHCP address on provisioning, and on a gateway eth0 is a
+	// WAN uplink gatewayd owns.
+	if len(netConfig.Interfaces) == 0 && netConfig.Role == "" {
 		// No explicit interface config, add default DHCP on eth0
 		interfaces.WriteString("# Primary network interface (DHCP)\n")
 		interfaces.WriteString("auto eth0\n")
 		interfaces.WriteString("iface eth0 inet dhcp\n")
 		interfaces.WriteString("    hostname $(hostname)\n\n")
-	} else {
-		for _, iface := range netConfig.Interfaces {
-			ifaceConfig := ai.generateInterfaceConfig(&iface)
-			interfaces.WriteString(ifaceConfig)
-		}
+	}
+	for _, iface := range netConfig.Interfaces {
+		ifaceConfig := ai.generateInterfaceConfig(&iface)
+		interfaces.WriteString(ifaceConfig)
 	}
 
 	// Write /etc/network/interfaces
@@ -1762,6 +1778,13 @@ func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string
 		return &WrappedError{Msg: "failed to write network interfaces", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Created /etc/network/interfaces")
+
+	// Forwarding sysctl and host firewall for a platform role. A failure
+	// here is returned: a platform host must not boot with forwarding in an
+	// unknown state.
+	if err := configureHostIsolation(rootPath, netConfig); err != nil {
+		return err
+	}
 
 	// Install additional packages if needed
 	if err := ai.installNetworkPackages(ctx, rootPath, netConfig); err != nil {
@@ -2404,43 +2427,25 @@ func (ai *alpineInstaller) generateBondConfig(bond *BondConfig) string {
 	return config.String()
 }
 
-// generateBondVLANConfig generates an 802.1Q VLAN sub-interface on a bond.
-// The VLAN ID is resolved from the referenced SubnetConfig by name.
-func (ai *alpineInstaller) generateBondVLANConfig(netConfig *NetworkConfig, bondName string, bv *BondVLANConfig) string {
+// generateVLANConfig generates VLAN interface configuration. A zone VLAN
+// takes its ID from the plan.
+func (ai *alpineInstaller) generateVLANConfig(vlan *VLANConfig, plan *netplan.Plan) (string, error) {
 	var config strings.Builder
 
-	subnet := netConfig.SubnetByName(bv.Subnet)
-	if subnet == nil || subnet.VLANID == 0 {
-		return ""
-	}
-
-	ifaceName := fmt.Sprintf("%s.%d", bondName, subnet.VLANID)
-
-	fmt.Fprintf(&config, "# Bond VLAN: %s (subnet %s, VLAN %d)\n", ifaceName, bv.Subnet, subnet.VLANID)
-
-	if bv.AutoStart {
-		fmt.Fprintf(&config, "auto %s\n", ifaceName)
-	}
-
-	if bv.IPv4Address != "" {
-		fmt.Fprintf(&config, "iface %s inet static\n", ifaceName)
-		fmt.Fprintf(&config, "    address %s\n", bv.IPv4Address)
-		if subnet.Gateway != "" {
-			fmt.Fprintf(&config, "    gateway %s\n", subnet.Gateway)
+	id := vlan.ID
+	if vlan.Zone != "" {
+		if plan == nil {
+			return "", &ErrNetworkPlanRequired{Field: "network.vlans[" + vlan.Name + "].zone"}
 		}
+		n, ok := plan.Zone(zone.Zone(vlan.Zone))
+		if !ok {
+			return "", &ErrVLANZone{VLAN: vlan.Name, Zone: vlan.Zone, Reason: "the zone is not in the network plan"}
+		}
+		id = int(n.VLAN)
+		fmt.Fprintf(&config, "# VLAN: %s (zone %s, ID %d on %s)\n", vlan.Name, vlan.Zone, id, vlan.Parent)
 	} else {
-		fmt.Fprintf(&config, "iface %s inet manual\n", ifaceName)
+		fmt.Fprintf(&config, "# VLAN: %s (ID %d on %s)\n", vlan.Name, id, vlan.Parent)
 	}
-
-	config.WriteString("\n")
-	return config.String()
-}
-
-// generateVLANConfig generates VLAN interface configuration
-func (ai *alpineInstaller) generateVLANConfig(vlan *VLANConfig) string {
-	var config strings.Builder
-
-	fmt.Fprintf(&config, "# VLAN: %s (ID %d on %s)\n", vlan.Name, vlan.ID, vlan.Parent)
 
 	if vlan.AutoStart {
 		fmt.Fprintf(&config, "auto %s\n", vlan.Name)
@@ -2466,11 +2471,13 @@ func (ai *alpineInstaller) generateVLANConfig(vlan *VLANConfig) string {
 		fmt.Fprintf(&config, "iface %s inet manual\n", vlan.Name)
 	}
 
-	// VLAN options - using vlan-raw-device for Alpine
+	// VLAN options - vlan-raw-device and an explicit vlan-id, so a zone
+	// VLAN's interface name need not encode its ID (ifupdown-ng)
 	fmt.Fprintf(&config, "    vlan-raw-device %s\n", vlan.Parent)
+	fmt.Fprintf(&config, "    vlan-id %d\n", id)
 
 	config.WriteString("\n")
-	return config.String()
+	return config.String(), nil
 }
 
 // installNetworkPackages installs required packages for advanced networking
@@ -2505,6 +2512,12 @@ func (ai *alpineInstaller) installNetworkPackages(ctx context.Context, rootPath 
 	// Check if we need VLAN support
 	if len(netConfig.VLANs) > 0 {
 		packages = append(packages, "vlan")
+	}
+
+	// A non-gateway platform host loads its forward-drop ruleset with
+	// nftables.
+	if netConfig.Role != "" && netConfig.Role != HostRoleGateway {
+		packages = append(packages, "nftables")
 	}
 
 	if len(packages) == 0 {

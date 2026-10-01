@@ -497,7 +497,7 @@ func TestNAT_ZoneIsDisjointFromFirewall(t *testing.T) {
 	}
 
 	// Both trusted and public firewall zones exist alongside NAT.
-	if _, ok := deps.Allocator.Lookup(AllocatorOwnerFirewall, string(zone.ZoneTrusted)); !ok {
+	if _, ok := deps.Allocator.Lookup(AllocatorOwnerFirewall, string(zone.ZoneControlPlane)); !ok {
 		t.Error("firewall trusted zone missing")
 	}
 	if _, ok := deps.Allocator.Lookup(AllocatorOwnerNAT, natZoneKey); !ok {

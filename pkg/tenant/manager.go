@@ -24,9 +24,7 @@ import (
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/bridge"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/vlan"
 )
 
 // TenantBarrierClient defines the interface for per-tenant barrier operations.
@@ -114,8 +112,11 @@ type DEKRotationResult struct {
 
 // Manager coordinates all tenant lifecycle operations.
 // It wraps QuicBaaS IAM operations and adds platform-specific orchestration
-// for VLAN allocation, OVS bridge management, quota enforcement, DEK isolation,
-// and per-tenant barrier management.
+// for quota enforcement, DEK isolation, and per-tenant barrier management.
+//
+// A tenant has no network identity of its own yet: the per-tenant VLAN range
+// and OVS bridge were retired with the reference network (#708), and a
+// tenant's routing domain becomes a VRF (plan §5.3).
 type Manager struct {
 	// QuicBaaS IAM SDK tenant client for tenant CRUD
 	iamTenantClient iam.TenantClient
@@ -130,12 +131,8 @@ type Manager struct {
 	barrierManager *barrier.Manager
 
 	// Component managers
-	bridgeManager  *bridge.Manager
-	vlanAllocator  *vlan.Allocator
-	vlanValidator  *vlan.Validator
-	quotaEnforcer  *quota.Enforcer
-	usageTracker   *quota.Tracker
-	lifecycleHooks *bridge.LifecycleHooks
+	quotaEnforcer *quota.Enforcer
+	usageTracker  *quota.Tracker
 
 	// Configuration
 	config *Config
@@ -151,12 +148,8 @@ type ManagerConfig struct {
 	DEKClient           TenantDEKClient
 	TenantBarrierClient TenantBarrierClient
 	BarrierManager      *barrier.Manager
-	BridgeManager       *bridge.Manager
-	VLANAllocator       *vlan.Allocator
-	VLANValidator       *vlan.Validator
 	QuotaEnforcer       *quota.Enforcer
 	UsageTracker        *quota.Tracker
-	LifecycleHooks      *bridge.LifecycleHooks
 	Config              *Config
 	Logger              *slog.Logger
 }
@@ -165,7 +158,6 @@ type ManagerConfig struct {
 type CreateTenantRequest struct {
 	Name        string
 	DisplayName string
-	VLANRange   *VLANRange // Optional, auto-allocate if nil
 	Labels      map[string]string
 	Annotations map[string]string
 
@@ -221,12 +213,8 @@ func NewManager(cfg *ManagerConfig) (*Manager, error) {
 		dekClient:           cfg.DEKClient,
 		tenantBarrierClient: cfg.TenantBarrierClient,
 		barrierManager:      cfg.BarrierManager,
-		bridgeManager:       cfg.BridgeManager,
-		vlanAllocator:       cfg.VLANAllocator,
-		vlanValidator:       cfg.VLANValidator,
 		quotaEnforcer:       cfg.QuotaEnforcer,
 		usageTracker:        cfg.UsageTracker,
-		lifecycleHooks:      cfg.LifecycleHooks,
 		config:              cfg.Config,
 		logger:              cfg.Logger,
 	}
@@ -237,11 +225,9 @@ func NewManager(cfg *ManagerConfig) (*Manager, error) {
 // CreateTenant creates a new tenant with full resource provisioning.
 // Steps:
 // 1. Create in QuicBaaS IAM
-// 2. Allocate VLAN range
-// 3. Create OVS bridge
-// 4. Initialize quotas
-// 5. Create DEK (if enabled)
-// 6. Initialize per-tenant barrier (if barrier client configured)
+// 2. Initialize quotas
+// 3. Create DEK (if enabled)
+// 4. Initialize per-tenant barrier (if barrier client configured)
 func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*TenantEntity, error) {
 	if req == nil {
 		return nil, ErrInvalidRequest{Reason: "create request is required"}
@@ -307,90 +293,7 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 	entity.Labels = req.Labels
 	entity.Annotations = req.Annotations
 
-	// Step 2: Allocate VLAN range
-	if m.vlanAllocator != nil {
-		var allocatedRange vlan.Range
-		if req.VLANRange != nil {
-			// Use requested range
-			requestedRange := vlan.Range{
-				Start: req.VLANRange.Start,
-				End:   req.VLANRange.End,
-			}
-			allocation, err := m.vlanAllocator.AllocateSpecific(ctx, tenantID, requestedRange)
-			if err != nil {
-				m.logger.Error("failed to allocate specific VLAN range",
-					slog.String("tenant_id", tenantID),
-					slog.Any("error", err),
-				)
-				return nil, ErrVLANAllocationFailed{TenantID: tenantID, Err: err}
-			}
-			allocatedRange = allocation.Range
-		} else {
-			// Auto-allocate
-			allocation, err := m.vlanAllocator.Allocate(ctx, tenantID, m.config.DefaultVLANRangeSize)
-			if err != nil {
-				m.logger.Error("failed to allocate VLAN range",
-					slog.String("tenant_id", tenantID),
-					slog.Any("error", err),
-				)
-				return nil, ErrVLANAllocationFailed{TenantID: tenantID, Err: err}
-			}
-			allocatedRange = allocation.Range
-		}
-
-		entity.VLANRange = VLANRange{
-			Start: allocatedRange.Start,
-			End:   allocatedRange.End,
-		}
-
-		rollbackActions = append(rollbackActions, func() {
-			m.logger.Warn("rolling back VLAN allocation",
-				slog.String("tenant_id", tenantID),
-			)
-			if relErr := m.vlanAllocator.Release(ctx, tenantID); relErr != nil {
-				m.logger.Error("failed to rollback VLAN allocation",
-					slog.String("tenant_id", tenantID),
-					slog.Any("error", relErr),
-				)
-			}
-		})
-	}
-
-	// Step 3: Create OVS bridge
-	if m.lifecycleHooks != nil {
-		bridgeVLANRange := bridge.VLANRange{
-			Start: entity.VLANRange.Start,
-			End:   entity.VLANRange.End,
-		}
-
-		if err := m.lifecycleHooks.OnTenantCreate(ctx, tenantID, req.Name, bridgeVLANRange); err != nil {
-			m.logger.Error("failed to create OVS bridge",
-				slog.String("tenant_id", tenantID),
-				slog.Any("error", err),
-			)
-			return nil, ErrBridgeOperationFailed{
-				Bridge:    m.config.BridgePrefix + req.Name,
-				Operation: "create",
-				Err:       err,
-			}
-		}
-
-		entity.OVSBridge = m.config.BridgePrefix + req.Name
-
-		rollbackActions = append(rollbackActions, func() {
-			m.logger.Warn("rolling back OVS bridge creation",
-				slog.String("tenant_id", tenantID),
-			)
-			if delErr := m.lifecycleHooks.OnTenantDelete(ctx, tenantID); delErr != nil {
-				m.logger.Error("failed to rollback OVS bridge",
-					slog.String("tenant_id", tenantID),
-					slog.Any("error", delErr),
-				)
-			}
-		})
-	}
-
-	// Step 4: Initialize quotas
+	// Step 2: Initialize quotas
 	entity.ComputeQuota = m.config.DefaultComputeQuota
 	entity.NetworkQuota = m.config.DefaultNetworkQuota
 	entity.StorageQuota = m.config.DefaultStorageQuota
@@ -405,7 +308,7 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 		entity.StorageQuota = *req.StorageQuota
 	}
 
-	// Step 5: Create DEK (if enabled)
+	// Step 3: Create DEK (if enabled)
 	if m.config.EnableDEKIsolation {
 		dekPath, err := m.ensureTenantDEK(ctx, tenantID)
 		if err != nil {
@@ -439,7 +342,7 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 		})
 	}
 
-	// Step 6: Initialize per-tenant barrier (non-fatal on failure)
+	// Step 4: Initialize per-tenant barrier (non-fatal on failure)
 	if m.tenantBarrierClient != nil {
 		if barrierErr := m.initTenantBarrierInternal(ctx, tenantID); barrierErr != nil {
 			m.logger.Warn("failed to initialize per-tenant barrier during creation; barrier can be initialized later",
@@ -458,17 +361,6 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 		return nil, err
 	}
 
-	// Activate the bridge
-	if m.lifecycleHooks != nil {
-		if err := m.lifecycleHooks.OnTenantActivate(ctx, tenantID); err != nil {
-			m.logger.Warn("failed to activate tenant bridge",
-				slog.String("tenant_id", tenantID),
-				slog.Any("error", err),
-			)
-			// Non-fatal, continue
-		}
-	}
-
 	// Store in cache
 	m.cache.Store(tenantID, entity)
 
@@ -478,8 +370,6 @@ func (m *Manager) CreateTenant(ctx context.Context, req *CreateTenantRequest) (*
 	m.logger.Info("tenant created successfully",
 		slog.String("tenant_id", tenantID),
 		slog.String("name", req.Name),
-		slog.String("bridge", entity.OVSBridge),
-		slog.String("vlan_range", fmt.Sprintf("%d-%d", entity.VLANRange.Start, entity.VLANRange.End)),
 		slog.String("dek_path", entity.DEKPath),
 	)
 
@@ -505,25 +395,6 @@ func (m *Manager) GetTenant(ctx context.Context, id string) (*TenantEntity, erro
 	}
 
 	entity := FromIAM(iamTenant)
-
-	// Enrich with VLAN allocation
-	if m.vlanAllocator != nil {
-		allocation, err := m.vlanAllocator.Get(ctx, id)
-		if err == nil && allocation != nil {
-			entity.VLANRange = VLANRange{
-				Start: allocation.Range.Start,
-				End:   allocation.Range.End,
-			}
-		}
-	}
-
-	// Enrich with bridge info
-	if m.bridgeManager != nil {
-		bridgeInfo, err := m.bridgeManager.GetBridge(ctx, id)
-		if err == nil && bridgeInfo != nil {
-			entity.OVSBridge = bridgeInfo.Name
-		}
-	}
 
 	// Enrich with DEK path
 	if m.config.EnableDEKIsolation {
@@ -565,24 +436,6 @@ func (m *Manager) GetTenantByName(ctx context.Context, name string) (*TenantEnti
 
 	entity := FromIAM(iamTenant)
 
-	// Enrich with platform-specific data
-	if m.vlanAllocator != nil {
-		allocation, err := m.vlanAllocator.Get(ctx, entity.ID)
-		if err == nil && allocation != nil {
-			entity.VLANRange = VLANRange{
-				Start: allocation.Range.Start,
-				End:   allocation.Range.End,
-			}
-		}
-	}
-
-	if m.bridgeManager != nil {
-		bridgeInfo, err := m.bridgeManager.GetBridge(ctx, entity.ID)
-		if err == nil && bridgeInfo != nil {
-			entity.OVSBridge = bridgeInfo.Name
-		}
-	}
-
 	// Enrich with DEK path
 	if m.config.EnableDEKIsolation {
 		entity.DEKPath = BuildDEKPath(entity.ID)
@@ -612,24 +465,6 @@ func (m *Manager) ListTenants(ctx context.Context, limit, offset int) ([]*Tenant
 	entities := make([]*TenantEntity, 0, len(tenants))
 	for _, t := range tenants {
 		entity := FromIAM(&t)
-
-		// Enrich with platform-specific data
-		if m.vlanAllocator != nil {
-			allocation, err := m.vlanAllocator.Get(ctx, entity.ID)
-			if err == nil && allocation != nil {
-				entity.VLANRange = VLANRange{
-					Start: allocation.Range.Start,
-					End:   allocation.Range.End,
-				}
-			}
-		}
-
-		if m.bridgeManager != nil {
-			bridgeInfo, err := m.bridgeManager.GetBridge(ctx, entity.ID)
-			if err == nil && bridgeInfo != nil {
-				entity.OVSBridge = bridgeInfo.Name
-			}
-		}
 
 		// Enrich with DEK path
 		if m.config.EnableDEKIsolation {
@@ -695,11 +530,9 @@ func (m *Manager) UpdateTenant(ctx context.Context, id string, req *UpdateTenant
 // DeleteTenant deletes a tenant and all its resources.
 // Steps:
 // 1. Set state to deleting
-// 2. Delete OVS bridge
-// 3. Release VLAN allocation
-// 4. Delete DEK
-// 5. Log barrier cleanup warning (seal/cleanup not yet supported by SDK)
-// 6. Delete from QuicBaaS IAM
+// 2. Delete DEK
+// 3. Seal the per-tenant barrier
+// 4. Delete from QuicBaaS IAM
 func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 	if id == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
@@ -721,29 +554,7 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 	}
 	m.cache.Store(id, entity)
 
-	// Step 2: Delete OVS bridge
-	if m.lifecycleHooks != nil {
-		if err := m.lifecycleHooks.OnTenantDelete(ctx, id); err != nil {
-			m.logger.Error("failed to delete OVS bridge",
-				slog.String("tenant_id", id),
-				slog.Any("error", err),
-			)
-			// Continue with deletion, log the error
-		}
-	}
-
-	// Step 3: Release VLAN allocation
-	if m.vlanAllocator != nil {
-		if err := m.vlanAllocator.Release(ctx, id); err != nil {
-			m.logger.Error("failed to release VLAN allocation",
-				slog.String("tenant_id", id),
-				slog.Any("error", err),
-			)
-			// Continue with deletion, log the error
-		}
-	}
-
-	// Step 4: Delete DEK
+	// Step 2: Delete DEK
 	if m.config.EnableDEKIsolation && entity.DEKPath != "" {
 		if err := m.deleteTenantDEK(ctx, id); err != nil {
 			m.logger.Error("failed to delete DEK",
@@ -760,7 +571,7 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 		}
 	}
 
-	// Step 5: Seal the per-tenant barrier before IAM tenant deletion so any
+	// Step 3: Seal the per-tenant barrier before IAM tenant deletion so any
 	// in-flight reads/writes are refused while the metadata cleanup runs.
 	// A failed seal is logged but does not block deletion — the IAM delete
 	// below removes the underlying QRDB tenant record which implicitly
@@ -779,7 +590,7 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 		}
 	}
 
-	// Step 6: Delete from QuicBaaS IAM
+	// Step 4: Delete from QuicBaaS IAM
 	if err := m.deleteFromIAM(ctx, id); err != nil {
 		m.logger.Error("failed to delete tenant from IAM",
 			slog.String("tenant_id", id),
@@ -804,7 +615,9 @@ func (m *Manager) DeleteTenant(ctx context.Context, id string) error {
 	return nil
 }
 
-// SuspendTenant suspends a tenant (blocks traffic).
+// SuspendTenant moves a tenant to the suspended state. Blocking the
+// tenant's traffic belongs to its VRF (plan §5.3); until tenancy has a
+// routing domain, suspension is a state change only.
 func (m *Manager) SuspendTenant(ctx context.Context, id string) error {
 	if id == "" {
 		return ErrInvalidRequest{Reason: "tenant ID is required"}
@@ -823,21 +636,6 @@ func (m *Manager) SuspendTenant(ctx context.Context, id string) error {
 	// Transition state
 	if err := entity.SetState(StateSuspended); err != nil {
 		return err
-	}
-
-	// Suspend bridge traffic
-	if m.lifecycleHooks != nil {
-		if err := m.lifecycleHooks.OnTenantSuspend(ctx, id); err != nil {
-			m.logger.Error("failed to suspend tenant bridge",
-				slog.String("tenant_id", id),
-				slog.Any("error", err),
-			)
-			return ErrBridgeOperationFailed{
-				Bridge:    entity.OVSBridge,
-				Operation: "suspend",
-				Err:       err,
-			}
-		}
 	}
 
 	// Update cache
@@ -873,21 +671,6 @@ func (m *Manager) ResumeTenant(ctx context.Context, id string) error {
 		slog.String("tenant_id", id),
 		slog.String("name", entity.Name),
 	)
-
-	// Resume bridge traffic
-	if m.lifecycleHooks != nil {
-		if err := m.lifecycleHooks.OnTenantResume(ctx, id); err != nil {
-			m.logger.Error("failed to resume tenant bridge",
-				slog.String("tenant_id", id),
-				slog.Any("error", err),
-			)
-			return ErrBridgeOperationFailed{
-				Bridge:    entity.OVSBridge,
-				Operation: "resume",
-				Err:       err,
-			}
-		}
-	}
 
 	// Transition state
 	if err := entity.SetState(StateActive); err != nil {
@@ -996,29 +779,6 @@ func (m *Manager) ReleaseQuota(ctx context.Context, reservationID string) error 
 	}
 
 	return m.quotaEnforcer.Release(ctx, reservationID)
-}
-
-// ValidateVLAN checks if a tenant can use a specific VLAN.
-func (m *Manager) ValidateVLAN(ctx context.Context, tenantID string, vlanID uint16) error {
-	if m.vlanValidator == nil {
-		return ErrInvalidRequest{Reason: "VLAN validator not configured"}
-	}
-
-	return m.vlanValidator.ValidateTenantVLAN(ctx, tenantID, vlanID)
-}
-
-// GetBridgeName returns the OVS bridge name for a tenant.
-func (m *Manager) GetBridgeName(ctx context.Context, tenantID string) (string, error) {
-	entity, err := m.GetTenant(ctx, tenantID)
-	if err != nil {
-		return "", err
-	}
-
-	if entity.OVSBridge == "" {
-		return "", ErrInvalidRequest{Reason: "tenant has no associated bridge"}
-	}
-
-	return entity.OVSBridge, nil
 }
 
 // RotateTenantDEK rotates the DEK for a tenant.
@@ -1282,24 +1042,6 @@ func (m *Manager) BarrierManager() *barrier.Manager {
 // Sync synchronizes manager state with external systems.
 func (m *Manager) Sync(ctx context.Context) error {
 	m.logger.Info("synchronizing manager state")
-
-	// Sync VLAN allocator
-	if m.vlanAllocator != nil {
-		if err := m.vlanAllocator.Reload(ctx); err != nil {
-			m.logger.Error("failed to sync VLAN allocator",
-				slog.Any("error", err),
-			)
-		}
-	}
-
-	// Sync bridge manager
-	if m.bridgeManager != nil {
-		if err := m.bridgeManager.Sync(ctx); err != nil {
-			m.logger.Error("failed to sync bridge manager",
-				slog.Any("error", err),
-			)
-		}
-	}
 
 	// Sync usage tracker
 	if m.usageTracker != nil {

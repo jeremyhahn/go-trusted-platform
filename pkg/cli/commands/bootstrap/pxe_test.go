@@ -45,17 +45,8 @@ const validBootstrapYAML = `deployer:
   ssh_key: /tmp/test-key
   container_runtime: docker
   netboot_media_dir: netboot-media
-subnets:
-  - name: provisioning
-    role: provisioning
-    cidr: 10.0.0.0/24
-    gateway: 10.0.0.1
-    dns:
-      - 10.0.0.1
-    dhcp:
-      enabled: true
-      range-start: 10.0.0.100
-      range-end: 10.0.0.200
+environment:
+  id: 4
 platform:
   domain: example.com
   internal_domain: internal.example.com
@@ -346,10 +337,8 @@ func TestLoadAndValidateConfig_ValidationFailure(t *testing.T) {
 	// Config that parses but fails validation (no deployer host).
 	path := writeTestConfig(t, `deployer:
   host: ""
-subnets:
-  - name: provisioning
-    role: provisioning
-    cidr: 10.0.0.0/24
+environment:
+  id: 4
 platform:
   domain: example.com
 nodes:

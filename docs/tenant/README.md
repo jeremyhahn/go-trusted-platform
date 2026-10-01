@@ -6,8 +6,7 @@ The Trusted Platform provides comprehensive multi-tenancy support through per-te
 
 | Feature | Description |
 |---------|-------------|
-| **Resource Isolation** | Complete separation of compute, network, storage, and cryptographic resources |
-| **Per-Tenant OVS Bridges** | Dedicated Open vSwitch bridges with VLAN isolation per tenant |
+| **Resource Isolation** | Separate keyspaces, per-tenant DEKs and barriers, and compute/network/storage quotas |
 | **QuicBaaS TenantManager** | Raft-replicated tenant configuration with strong consistency |
 | **Key Isolation** | Per-tenant Data Encryption Keys (DEKs) sealed to TPM |
 | **Quota Management** | Configurable compute, network, and storage quotas |
@@ -31,8 +30,8 @@ The Trusted Platform provides comprehensive multi-tenancy support through per-te
 │  ┌────────────────────────┐  ┌─────────────────────────────┐       │
 │  │  Per-Tenant Resources  │  │    Key Management           │       │
 │  │                        │  │                             │       │
-│  │  • OVS Bridge (br-X)   │  │  • Per-tenant DEK           │       │
-│  │  • VLAN Namespace      │  │  • TPM-sealed keys          │       │
+│  │  • Keyspace            │  │  • Per-tenant DEK           │       │
+│  │  • Per-tenant barrier  │  │  • TPM-sealed keys          │       │
 │  │  • Compute Quotas      │  │  • Key hierarchy            │       │
 │  │  • Storage Quotas      │  │                             │       │
 │  └────────────────────────┘  └─────────────────────────────┘       │
@@ -44,18 +43,18 @@ The Trusted Platform provides comprehensive multi-tenancy support through per-te
 ┌───────▼───────┐      ┌─────────▼─────────┐      ┌───────▼───────┐
 │   Tenant A    │      │     Tenant B      │      │   Tenant C    │
 │               │      │                   │      │               │
-│ • br-tenant-a │      │ • br-tenant-b     │      │ • br-tenant-c │
-│ • VLAN 100-199│      │ • VLAN 200-299    │      │ • VLAN 300-399│
+│ • keyspace A  │      │ • keyspace B      │      │ • keyspace C  │
 │ • 50 VMs      │      │ • 100 VMs         │      │ • 25 VMs      │
 │ • DEK-A       │      │ • DEK-B           │      │ • DEK-C       │
 └───────────────┘      └───────────────────┘      └───────────────┘
 ```
 
-> **Code today vs. the reference design.** Tenants are isolated today by
-> per-tenant VLAN ranges (`pkg/tenant/vlan`). The
-> [reference network](../architecture/reference-network.md) (owner design
-> decision, 2026-09-26) has no tenant VLAN range: tenant networks are
-> EVPN/VXLAN overlays addressed from the environment's IPAM pool. The code change is tracked in #708.
+> **No per-tenant VLAN range or OVS bridge.** Both were removed by #708: under
+> the [reference network](../architecture/reference-network.md) tenant
+> networks are EVPN/VXLAN overlays addressed from the environment's IPAM pool,
+> and a tenant's routing domain becomes a VRF in a later release. Until then a
+> tenant has no network identity, and this feature does not separate tenant
+> traffic.
 
 ## Quick Start
 
@@ -65,14 +64,7 @@ The Trusted Platform provides comprehensive multi-tenancy support through per-te
 # Create a new tenant with default quotas
 platformctl tenant create \
   --name "engineering" \
-  --display-name "Engineering Department" \
-  --vlan-range "100-199"
-
-# Output:
-# Tenant created successfully
-# Tenant ID: tenant-550e8400-e29b-41d4
-# OVS Bridge: br-tenant-engineering
-# VLAN Range: 100-199
+  --display-name "Engineering Department"
 ```
 
 ### 2. Configure Quotas
@@ -178,7 +170,7 @@ Tenants operate within strict resource boundaries:
 
 | Resource Type | Isolation Mechanism |
 |---------------|---------------------|
-| Network | Per-tenant OVS bridge, VLAN ranges |
+| Network | None yet — tenant VRFs on the overlay are a later release; network quotas are accounting only |
 | Compute | VM instance quotas, vCPU limits |
 | Storage | Disk quotas, per-tenant namespaces |
 | Keys | Per-tenant DEK, TPM-sealed |

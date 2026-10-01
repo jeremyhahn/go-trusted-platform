@@ -12,7 +12,7 @@
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
 // Package tenant provides tenant management with platform-specific extensions
-// for OVS bridges, VLAN isolation, quotas, and key isolation.
+// for quotas, key isolation and per-tenant barriers.
 package tenant
 
 import (
@@ -83,35 +83,6 @@ func (e ErrStorageFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrBridgeOperationFailed is returned when an OVS bridge operation fails.
-type ErrBridgeOperationFailed struct {
-	Bridge    string
-	Operation string
-	Err       error
-}
-
-func (e ErrBridgeOperationFailed) Error() string {
-	return fmt.Sprintf("bridge operation failed: %s on %s: %v", e.Operation, e.Bridge, e.Err)
-}
-
-func (e ErrBridgeOperationFailed) Unwrap() error {
-	return e.Err
-}
-
-// ErrVLANAllocationFailed is returned when VLAN allocation fails for a tenant.
-type ErrVLANAllocationFailed struct {
-	TenantID string
-	Err      error
-}
-
-func (e ErrVLANAllocationFailed) Error() string {
-	return fmt.Sprintf("VLAN allocation failed for tenant %s: %v", e.TenantID, e.Err)
-}
-
-func (e ErrVLANAllocationFailed) Unwrap() error {
-	return e.Err
-}
-
 // ErrQuotaExceeded is returned when a resource quota would be exceeded.
 type ErrQuotaExceeded struct {
 	TenantID  string
@@ -135,17 +106,6 @@ type ErrResourceLimitReached struct {
 func (e ErrResourceLimitReached) Error() string {
 	return fmt.Sprintf("resource limit reached for tenant %s: resource=%s, limit=%d",
 		e.TenantID, e.Resource, e.Limit)
-}
-
-// ErrInvalidVLANRange is returned when a VLAN range is invalid.
-type ErrInvalidVLANRange struct {
-	Start  uint16
-	End    uint16
-	Reason string
-}
-
-func (e ErrInvalidVLANRange) Error() string {
-	return fmt.Sprintf("invalid VLAN range %d-%d: %s", e.Start, e.End, e.Reason)
 }
 
 // ErrDEKOperationFailed is returned when a DEK (Data Encryption Key) operation fails.

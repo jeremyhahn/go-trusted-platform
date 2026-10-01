@@ -140,18 +140,6 @@ var ErrNetworkZoneNameRequired = &GatewayError{
 	Message: "zone name is required",
 }
 
-// ErrNetworkZoneNetworkRequired indicates a network name is required for assign.
-var ErrNetworkZoneNetworkRequired = &GatewayError{
-	Code:    "NETWORK_ZONE_NETWORK_REQUIRED",
-	Message: "network name is required",
-}
-
-// ErrNetworkZoneTargetRequired indicates a target zone name is required for assign.
-var ErrNetworkZoneTargetRequired = &GatewayError{
-	Code:    "NETWORK_ZONE_TARGET_REQUIRED",
-	Message: "target zone name is required",
-}
-
 // =============================================================================
 // Gateway Tool Registration
 // =============================================================================
@@ -282,7 +270,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 			"properties": map[string]interface{}{
 				"zone": map[string]interface{}{
 					"type":        "string",
-					"description": "Optional zone filter (e.g. 'trusted', 'provisioning'); empty returns all pools",
+					"description": "Optional zone filter (e.g. 'control-plane', 'provisioning'); empty returns all pools",
 				},
 			},
 		},
@@ -323,7 +311,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 				},
 				"zone": map[string]interface{}{
 					"type":        "string",
-					"description": "Optional network zone the pool serves (e.g., trusted)",
+					"description": "Optional underlay zone the pool serves (e.g., control-plane)",
 				},
 				"description": map[string]interface{}{
 					"type":        "string",
@@ -337,6 +325,19 @@ func (r *ToolRegistry) registerGatewayTools() {
 				"lease_duration_seconds": map[string]interface{}{
 					"type":        "integer",
 					"description": "Optional lease duration in seconds",
+				},
+				"reserved": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Optional prefixes (CIDR) that are never allocatable; the gateway is always reserved",
+				},
+				"range_start": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional first address of the dynamic allocation window (set with range_end)",
+				},
+				"range_end": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional last address of the dynamic allocation window (set with range_start)",
 				},
 			},
 			"required": []string{"name", "cidr"},
@@ -363,7 +364,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 				},
 				"zone": map[string]interface{}{
 					"type":        "string",
-					"description": "Updated zone (e.g. 'trusted', 'provisioning')",
+					"description": "Updated zone (e.g. 'control-plane', 'provisioning')",
 				},
 				"description": map[string]interface{}{
 					"type":        "string",
@@ -372,6 +373,19 @@ func (r *ToolRegistry) registerGatewayTools() {
 				"lease_duration_seconds": map[string]interface{}{
 					"type":        "integer",
 					"description": "Updated lease duration in seconds (0 = never expire)",
+				},
+				"reserved": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Replacement never-allocatable prefixes (CIDR); an empty list clears them, omitted keeps them",
+				},
+				"range_start": map[string]interface{}{
+					"type":        "string",
+					"description": "Replacement first address of the dynamic window; \"\" clears it, omitted keeps it",
+				},
+				"range_end": map[string]interface{}{
+					"type":        "string",
+					"description": "Replacement last address of the dynamic window; \"\" clears it, omitted keeps it",
 				},
 			},
 			"required": []string{"pool_id"},
@@ -447,11 +461,13 @@ func (r *ToolRegistry) registerGatewayTools() {
 	r.registerGatewayZoneTools()
 }
 
-// registerGatewayZoneTools registers MCP tools for SDN network trust zone management.
+// registerGatewayZoneTools registers MCP tools for the underlay zones of the
+// reference network: the built-in zones (policy tunable, numbering fixed)
+// and owner-defined zones at offsets 9-99.
 func (r *ToolRegistry) registerGatewayZoneTools() {
 	r.addTool(ToolDefinition{
 		Name:        "gateway_zone_list",
-		Description: "List all SDN network trust zones, optionally filtered by lifecycle role",
+		Description: "List the underlay network zones with their policy and derived numbering (VLAN, subnets), optionally filtered by lifecycle role",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -465,34 +481,70 @@ func (r *ToolRegistry) registerGatewayZoneTools() {
 
 	r.addTool(ToolDefinition{
 		Name:        "gateway_zone_create",
-		Description: "Create a new SDN network trust zone",
+		Description: "Create an owner-defined underlay zone (offset 9-99, gateway and/or hypervisor port class). Returns restart_required: the network plan is derived at daemon startup.",
 		InputSchema: map[string]interface{}{
 			"type":     "object",
-			"required": []string{"name"},
+			"required": []string{"name", "offset", "port_classes"},
 			"properties": map[string]interface{}{
 				"name": map[string]interface{}{
 					"type":        "string",
-					"description": "Unique zone name",
+					"description": "Unique zone name (not platform, tenant, public or trusted: overlays are not zones)",
+				},
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "Offset in the environment block: 9-99 for an owner-defined zone (built-in offsets 0-8 are fixed)",
+				},
+				"port_classes": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Switch port classes carrying the zone (owner-defined zones: gateway and/or hypervisor; fixed for built-ins)",
 				},
 				"internet_ingress": map[string]interface{}{
 					"type":        "boolean",
 					"description": "Zone accepts internet ingress traffic",
 				},
+				"isolate_from": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Zones this zone never sends to, even when allow_to would open the path",
+				},
+				"allow_to": map[string]interface{}{
+					"type":        "array",
+					"description": "Directed paths to other zones; an empty services list allows all services",
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"zone":     map[string]interface{}{"type": "string"},
+							"services": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+						},
+						"required": []string{"zone"},
+					},
+				},
+				"services": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Services permitted within the zone",
+				},
 				"isolate": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Fully isolate zone from all others",
-				},
-				"isolate_per_tenant": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Isolate tenants within the zone from each other",
+					"description": "Deny all traffic except explicit allow_to paths",
 				},
 				"oob": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Out-of-band management zone",
+					"description": "Out-of-band management zone (built-in management only)",
 				},
 				"lifecycle_role": map[string]interface{}{
 					"type":        "string",
-					"description": "Lifecycle role (provisioning, quarantine)",
+					"description": "Lifecycle role (built-in provisioning and quarantine only)",
+				},
+				"privileged_access": map[string]interface{}{
+					"type":        "object",
+					"description": "Audited override required for an allow_to path into control-plane or management beyond the reference defaults",
+					"properties": map[string]interface{}{
+						"reason":      map[string]interface{}{"type": "string"},
+						"approved_by": map[string]interface{}{"type": "string"},
+					},
+					"required": []string{"reason", "approved_by"},
 				},
 			},
 		},
@@ -500,7 +552,7 @@ func (r *ToolRegistry) registerGatewayZoneTools() {
 
 	r.addTool(ToolDefinition{
 		Name:        "gateway_zone_update",
-		Description: "Update policy settings of an existing SDN network trust zone. Returns restart_required when the flow matrix must be rebuilt.",
+		Description: "Tune a built-in zone's policy or replace an owner-defined zone. Built-in identity (offset, port classes, lifecycle role, oob) cannot change. Returns restart_required.",
 		InputSchema: map[string]interface{}{
 			"type":     "object",
 			"required": []string{"name"},
@@ -509,25 +561,61 @@ func (r *ToolRegistry) registerGatewayZoneTools() {
 					"type":        "string",
 					"description": "Name of the zone to update",
 				},
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "Offset in the environment block: 9-99 for an owner-defined zone (built-in offsets 0-8 are fixed)",
+				},
+				"port_classes": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Switch port classes carrying the zone (owner-defined zones: gateway and/or hypervisor; fixed for built-ins)",
+				},
 				"internet_ingress": map[string]interface{}{
 					"type":        "boolean",
 					"description": "Zone accepts internet ingress traffic",
 				},
+				"isolate_from": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Zones this zone never sends to, even when allow_to would open the path",
+				},
+				"allow_to": map[string]interface{}{
+					"type":        "array",
+					"description": "Directed paths to other zones; an empty services list allows all services",
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"zone":     map[string]interface{}{"type": "string"},
+							"services": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+						},
+						"required": []string{"zone"},
+					},
+				},
+				"services": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Services permitted within the zone",
+				},
 				"isolate": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Fully isolate zone from all others",
-				},
-				"isolate_per_tenant": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Isolate tenants within the zone from each other",
+					"description": "Deny all traffic except explicit allow_to paths",
 				},
 				"oob": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Out-of-band management zone",
+					"description": "Out-of-band management zone (built-in management only)",
 				},
 				"lifecycle_role": map[string]interface{}{
 					"type":        "string",
-					"description": "Lifecycle role (provisioning, quarantine)",
+					"description": "Lifecycle role (built-in provisioning and quarantine only)",
+				},
+				"privileged_access": map[string]interface{}{
+					"type":        "object",
+					"description": "Audited override required for an allow_to path into control-plane or management beyond the reference defaults",
+					"properties": map[string]interface{}{
+						"reason":      map[string]interface{}{"type": "string"},
+						"approved_by": map[string]interface{}{"type": "string"},
+					},
+					"required": []string{"reason", "approved_by"},
 				},
 			},
 		},
@@ -535,7 +623,7 @@ func (r *ToolRegistry) registerGatewayZoneTools() {
 
 	r.addTool(ToolDefinition{
 		Name:        "gateway_zone_delete",
-		Description: "Delete an SDN network trust zone by name. Fails if the zone is the sole holder of a required lifecycle role.",
+		Description: "Delete an owner-defined zone or omit an optional built-in. fabric, provisioning, quarantine and control-plane cannot be removed.",
 		InputSchema: map[string]interface{}{
 			"type":     "object",
 			"required": []string{"name"},
@@ -543,25 +631,6 @@ func (r *ToolRegistry) registerGatewayZoneTools() {
 				"name": map[string]interface{}{
 					"type":        "string",
 					"description": "Name of the zone to delete",
-				},
-			},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "gateway_zone_assign",
-		Description: "Assign a network segment to a trust zone. Returns restart_required when the flow matrix must be rebuilt.",
-		InputSchema: map[string]interface{}{
-			"type":     "object",
-			"required": []string{"network", "zone"},
-			"properties": map[string]interface{}{
-				"network": map[string]interface{}{
-					"type":        "string",
-					"description": "Network segment name",
-				},
-				"zone": map[string]interface{}{
-					"type":        "string",
-					"description": "Target trust zone name",
 				},
 			},
 		},
@@ -700,6 +769,9 @@ func (r *ToolRegistry) executeGatewayIPAMPoolCreate(ctx context.Context, args ma
 		Description:          getString(args, "description"),
 		DNS:                  getStringSlice(args, "dns"),
 		LeaseDurationSeconds: getInt64(args, "lease_duration_seconds"),
+		Reserved:             getStringSlice(args, "reserved"),
+		RangeStart:           getString(args, "range_start"),
+		RangeEnd:             getString(args, "range_end"),
 	}
 
 	result, err := r.service.GatewayIPAMPoolCreate(ctx, req)
@@ -721,6 +793,9 @@ func (r *ToolRegistry) executeGatewayIPAMPoolUpdate(ctx context.Context, args ma
 		Zone:                 getString(args, "zone"),
 		Description:          getString(args, "description"),
 		LeaseDurationSeconds: getInt64(args, "lease_duration_seconds"),
+		Reserved:             getStringSlice(args, "reserved"),
+		RangeStart:           getOptionalString(args, "range_start"),
+		RangeEnd:             getOptionalString(args, "range_end"),
 	}
 
 	result, err := r.service.GatewayIPAMPoolUpdate(ctx, poolID, req)
@@ -804,11 +879,16 @@ func (r *ToolRegistry) executeGatewayZoneCreate(ctx context.Context, args map[st
 	}
 	req := &NetworkZoneCreateRequest{
 		Name:             name,
+		Offset:           uint8(getInt(args, "offset")),
+		PortClasses:      getStringSlice(args, "port_classes"),
 		InternetIngress:  getBool(args, "internet_ingress"),
+		IsolateFrom:      getStringSlice(args, "isolate_from"),
+		AllowTo:          getZonePaths(args, "allow_to"),
+		Services:         getStringSlice(args, "services"),
 		Isolate:          getBool(args, "isolate"),
-		IsolatePerTenant: getBool(args, "isolate_per_tenant"),
 		OOB:              getBool(args, "oob"),
 		LifecycleRole:    getString(args, "lifecycle_role"),
+		PrivilegedAccess: getPrivilegedAccess(args, "privileged_access"),
 	}
 	result, err := r.service.GatewayNetworkZoneCreate(ctx, req)
 	if err != nil {
@@ -823,17 +903,56 @@ func (r *ToolRegistry) executeGatewayZoneUpdate(ctx context.Context, args map[st
 		return nil, ErrNetworkZoneNameRequired
 	}
 	req := &NetworkZoneUpdateRequest{
+		Offset:           uint8(getInt(args, "offset")),
+		PortClasses:      getStringSlice(args, "port_classes"),
 		InternetIngress:  getBool(args, "internet_ingress"),
+		IsolateFrom:      getStringSlice(args, "isolate_from"),
+		AllowTo:          getZonePaths(args, "allow_to"),
+		Services:         getStringSlice(args, "services"),
 		Isolate:          getBool(args, "isolate"),
-		IsolatePerTenant: getBool(args, "isolate_per_tenant"),
 		OOB:              getBool(args, "oob"),
 		LifecycleRole:    getString(args, "lifecycle_role"),
+		PrivilegedAccess: getPrivilegedAccess(args, "privileged_access"),
 	}
 	result, err := r.service.GatewayNetworkZoneUpdate(ctx, name, req)
 	if err != nil {
 		return nil, err
 	}
 	return marshalResult(result)
+}
+
+// getZonePaths reads an allow_to argument: a list of {zone, services}
+// objects. Entries that are not objects or have no zone are skipped.
+func getZonePaths(args map[string]interface{}, key string) []*NetworkZonePathRequest {
+	items, ok := args[key].([]interface{})
+	if !ok {
+		return nil
+	}
+	var out []*NetworkZonePathRequest
+	for _, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		z := getString(m, "zone")
+		if z == "" {
+			continue
+		}
+		out = append(out, &NetworkZonePathRequest{Zone: z, Services: getStringSlice(m, "services")})
+	}
+	return out
+}
+
+// getPrivilegedAccess reads a privileged_access argument object.
+func getPrivilegedAccess(args map[string]interface{}, key string) *NetworkZonePrivilegedAccessRequest {
+	m := getMap(args, key)
+	if m == nil {
+		return nil
+	}
+	return &NetworkZonePrivilegedAccessRequest{
+		Reason:     getString(m, "reason"),
+		ApprovedBy: getString(m, "approved_by"),
+	}
 }
 
 func (r *ToolRegistry) executeGatewayZoneDelete(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -851,21 +970,13 @@ func (r *ToolRegistry) executeGatewayZoneDelete(ctx context.Context, args map[st
 	}, nil
 }
 
-func (r *ToolRegistry) executeGatewayZoneAssign(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	network := getString(args, "network")
-	if network == "" {
-		return nil, ErrNetworkZoneNetworkRequired
+// getOptionalString returns a pointer to the string argument key, or nil
+// when the argument is absent, so an update can tell "clear" ("") from
+// "keep" (absent).
+func getOptionalString(args map[string]interface{}, key string) *string {
+	v, ok := args[key].(string)
+	if !ok {
+		return nil
 	}
-	zoneName := getString(args, "zone")
-	if zoneName == "" {
-		return nil, ErrNetworkZoneTargetRequired
-	}
-	restartRequired, err := r.service.GatewayNetworkZoneAssign(ctx, network, zoneName)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{
-		"success":          true,
-		"restart_required": restartRequired,
-	}, nil
+	return &v
 }

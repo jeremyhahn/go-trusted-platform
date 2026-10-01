@@ -19,6 +19,12 @@ Payloads are msgpack-encoded (`pkg/api/quic/gateway_handlers.go`).
 
 List responses are paginated (default 100, max 1000 entries).
 
+Pool payloads (`IPAMPoolInfo`) and the create request carry the allocation
+window as `reserved`, `range_start` and `range_end`. The update request
+replaces the window only when `update_window` is true, with exactly the
+values given. A reserved address or a window that does not fit the CIDR
+answers `StatusInvalidArgument` (`ErrGatewayIPAMWindow`).
+
 ## Client Usage
 
 ```bash

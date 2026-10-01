@@ -49,17 +49,31 @@ type Pool struct {
 	CIDR netip.Prefix `json:"cidr"`
 	// Gateway is the optional gateway address for this pool.
 	Gateway netip.Addr `json:"gateway,omitempty"`
-	// Zone is the trust/exposure zone for this pool (e.g. "trusted",
-	// "provisioning", "management"). Empty means no zone classification.
-	// Inherited from the network that references this pool when not set
-	// explicitly in the pool config.
+	// Zone is the underlay zone of a zone pool (e.g. "control-plane",
+	// "provisioning"). Empty for pools that belong to no zone (overlay and
+	// IPAM-range pools).
 	Zone string `json:"zone,omitempty"`
+	// Reserved lists prefixes inside CIDR that are never allocatable: the
+	// gateway (anycast or VRRP) address, the gateway HA sync link. Allocate
+	// skips them and AllocateSpecific refuses them with ErrIPReserved.
+	Reserved []netip.Prefix `json:"reserved,omitempty"`
+	// RangeStart and RangeEnd bound dynamic allocation (Allocate). Both
+	// invalid means the whole CIDR. AllocateSpecific may still take a
+	// static address outside the range (for example a control-plane node's
+	// .10), as long as it is not reserved.
+	RangeStart netip.Addr `json:"range_start,omitempty"`
+	RangeEnd   netip.Addr `json:"range_end,omitempty"`
 	// Description provides optional context about the pool's purpose.
 	Description string `json:"description,omitempty"`
 	// Tags are optional labels for categorizing and filtering pools.
 	Tags []string `json:"tags,omitempty"`
 
-	// TotalIPs is the total number of usable IPs in this pool.
+	// TotalIPs is the number of allocatable addresses in this pool: the
+	// usable addresses of CIDR less the reserved ones (the gateway and the
+	// Reserved prefixes). It counts static addresses (AllocateSpecific)
+	// and the dynamic window (Allocate) together, so Allocate can return
+	// ErrPoolExhausted while AvailableIPs is still positive: the remaining
+	// addresses lie outside RangeStart-RangeEnd and are static-only.
 	TotalIPs uint64 `json:"total_ips"`
 	// AllocatedIPs is the current number of allocated IPs.
 	AllocatedIPs uint64 `json:"allocated_ips"`
@@ -88,6 +102,10 @@ func (p *Pool) Clone() *Pool {
 	if p.Tags != nil {
 		clone.Tags = make([]string, len(p.Tags))
 		copy(clone.Tags, p.Tags)
+	}
+	if p.Reserved != nil {
+		clone.Reserved = make([]netip.Prefix, len(p.Reserved))
+		copy(clone.Reserved, p.Reserved)
 	}
 	return &clone
 }

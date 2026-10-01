@@ -223,57 +223,6 @@ func TestEnsureVLAN_NotConnected(t *testing.T) {
 	}
 }
 
-func TestEnsureVNI_AlreadyExists(t *testing.T) {
-	cfg := testSwitchConfig()
-	exec := &mockExecutor{
-		responses: map[string]mockResponse{
-			"show nve vni": {
-				stdout: "Interface VNI      Multicast-group State\nnve1      100200   225.1.1.1       Up\n",
-			},
-		},
-	}
-	drv := NewDriverWithExecutor(cfg, testLogger(), exec)
-
-	ctx := context.Background()
-	if err := drv.Connect(ctx); err != nil {
-		t.Fatalf("Connect: %s", err)
-	}
-
-	if err := drv.EnsureVNI(ctx, 100200, 200); err != nil {
-		t.Fatalf("EnsureVNI: %s", err)
-	}
-}
-
-func TestEnsureVNI_Creates(t *testing.T) {
-	cfg := testSwitchConfig()
-	exec := &mockExecutor{
-		responses: map[string]mockResponse{
-			"show nve vni": {stdout: ""},
-		},
-	}
-	drv := NewDriverWithExecutor(cfg, testLogger(), exec)
-
-	ctx := context.Background()
-	if err := drv.Connect(ctx); err != nil {
-		t.Fatalf("Connect: %s", err)
-	}
-
-	if err := drv.EnsureVNI(ctx, 100200, 200); err != nil {
-		t.Fatalf("EnsureVNI: %s", err)
-	}
-
-	found := false
-	for _, cmd := range exec.executed {
-		if cmd == "interface nve1" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatal("expected interface nve1 command for VNI creation")
-	}
-}
-
 func TestEnsureLAG_AlreadyExists(t *testing.T) {
 	cfg := testSwitchConfig()
 	exec := &mockExecutor{
@@ -339,123 +288,6 @@ func TestEnsureLAG_Creates(t *testing.T) {
 	}
 	if !foundPC {
 		t.Fatal("expected port-channel interface command for LAG creation")
-	}
-}
-
-func TestSetPortAccess_Idempotent(t *testing.T) {
-	cfg := testSwitchConfig()
-	exec := &mockExecutor{
-		responses: map[string]mockResponse{
-			"show running-config interface Eth1/5": {
-				stdout: "interface Ethernet1/5\n  switchport\n  switchport mode access\n  switchport access vlan 200\n  no shutdown\n",
-			},
-		},
-	}
-	drv := NewDriverWithExecutor(cfg, testLogger(), exec)
-
-	ctx := context.Background()
-	if err := drv.Connect(ctx); err != nil {
-		t.Fatalf("Connect: %s", err)
-	}
-
-	port := fabric.PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
-	if err := drv.SetPortAccess(ctx, port, 200); err != nil {
-		t.Fatalf("SetPortAccess: %s", err)
-	}
-
-	// Should not have executed configure terminal since already configured.
-	for _, cmd := range exec.executed {
-		if cmd == "configure terminal" {
-			t.Fatal("should not reconfigure port that is already in correct state")
-		}
-	}
-}
-
-func TestSetPortAccess_Configures(t *testing.T) {
-	cfg := testSwitchConfig()
-	exec := &mockExecutor{
-		responses: map[string]mockResponse{
-			"show running-config interface Eth1/5": {
-				stdout: "interface Ethernet1/5\n  switchport\n  switchport mode access\n  switchport access vlan 100\n",
-			},
-		},
-	}
-	drv := NewDriverWithExecutor(cfg, testLogger(), exec)
-
-	ctx := context.Background()
-	if err := drv.Connect(ctx); err != nil {
-		t.Fatalf("Connect: %s", err)
-	}
-
-	port := fabric.PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
-	if err := drv.SetPortAccess(ctx, port, 200); err != nil {
-		t.Fatalf("SetPortAccess: %s", err)
-	}
-
-	found := false
-	for _, cmd := range exec.executed {
-		if strings.Contains(cmd, "switchport access vlan 200") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatal("expected switchport access vlan command")
-	}
-}
-
-func TestSetPortTrunk_Success(t *testing.T) {
-	cfg := testSwitchConfig()
-	exec := &mockExecutor{responses: map[string]mockResponse{}}
-	drv := NewDriverWithExecutor(cfg, testLogger(), exec)
-
-	ctx := context.Background()
-	if err := drv.Connect(ctx); err != nil {
-		t.Fatalf("Connect: %s", err)
-	}
-
-	port := fabric.PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
-	if err := drv.SetPortTrunk(ctx, port, []uint16{200, 201, 203}, 200); err != nil {
-		t.Fatalf("SetPortTrunk: %s", err)
-	}
-
-	foundTrunk := false
-	foundAllowed := false
-	foundNative := false
-	for _, cmd := range exec.executed {
-		if strings.Contains(cmd, "switchport mode trunk") {
-			foundTrunk = true
-		}
-		if strings.Contains(cmd, "switchport trunk allowed vlan 200,201,203") {
-			foundAllowed = true
-		}
-		if strings.Contains(cmd, "switchport trunk native vlan 200") {
-			foundNative = true
-		}
-	}
-	if !foundTrunk {
-		t.Fatal("expected switchport mode trunk command")
-	}
-	if !foundAllowed {
-		t.Fatal("expected switchport trunk allowed vlan command")
-	}
-	if !foundNative {
-		t.Fatal("expected switchport trunk native vlan command")
-	}
-}
-
-func TestSetPortTrunk_NotConnected(t *testing.T) {
-	cfg := testSwitchConfig()
-	drv, err := NewDriver(cfg, testLogger())
-	if err != nil {
-		t.Fatalf("NewDriver: %s", err)
-	}
-
-	ctx := context.Background()
-	port := fabric.PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
-	err = drv.SetPortTrunk(ctx, port, []uint16{200}, 200)
-	if err == nil {
-		t.Fatal("expected error when not connected")
 	}
 }
 
@@ -536,5 +368,152 @@ func TestDriverRegistration_UnknownVendor(t *testing.T) {
 	var notFound fabric.ErrDriverNotFound
 	if !errors.As(err, &notFound) {
 		t.Fatalf("expected ErrDriverNotFound, got %T: %s", err, err)
+	}
+}
+
+// runningConfig is a converged hypervisor-class trunk as NX-OS prints it.
+const runningConfig = `interface Ethernet1/25
+  switchport
+  switchport mode trunk
+  switchport trunk native vlan 405
+  switchport trunk allowed vlan 401,403-408
+  mtu 9216
+  no shutdown
+`
+
+func connectedDriver(t *testing.T, responses map[string]mockResponse) (fabric.Driver, *mockExecutor) {
+	t.Helper()
+	exec := &mockExecutor{responses: responses}
+	drv := NewDriverWithExecutor(testSwitchConfig(), testLogger(), exec)
+	if err := drv.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %s", err)
+	}
+	return drv, exec
+}
+
+func executedContains(exec *mockExecutor, want string) bool {
+	for _, cmd := range exec.executed {
+		if strings.TrimSpace(cmd) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestSetPortTrunk_Converged leaves a port that already carries the class
+// untouched, whatever order the allowed list is given in.
+func TestSetPortTrunk_Converged(t *testing.T) {
+	drv, exec := connectedDriver(t, map[string]mockResponse{
+		"show running-config interface Eth1/25": {stdout: runningConfig},
+	})
+	port := fabric.PortRef{SwitchID: "nexus-01", Port: "Eth1/25"}
+	if err := drv.SetPortTrunk(context.Background(), port, []uint16{408, 401, 403, 404, 405, 406, 407}, 405, 9216); err != nil {
+		t.Fatalf("SetPortTrunk: %s", err)
+	}
+	if executedContains(exec, "configure terminal") {
+		t.Fatal("a converged port must not be reconfigured")
+	}
+}
+
+// TestSetPortTrunk_Configures programs allowed VLANs, native and MTU when
+// the port differs (here: a different native VLAN).
+func TestSetPortTrunk_Configures(t *testing.T) {
+	drv, exec := connectedDriver(t, map[string]mockResponse{
+		"show running-config interface Eth1/25": {stdout: strings.Replace(runningConfig, "native vlan 405", "native vlan 1", 1)},
+	})
+	port := fabric.PortRef{SwitchID: "nexus-01", Port: "Eth1/25"}
+	if err := drv.SetPortTrunk(context.Background(), port, []uint16{405}, 405, 9216); err != nil {
+		t.Fatalf("SetPortTrunk: %s", err)
+	}
+	for _, want := range []string{"switchport mode trunk", "switchport trunk allowed vlan 405", "switchport trunk native vlan 405", "mtu 9216", "no shutdown"} {
+		if !executedContains(exec, want) {
+			t.Fatalf("expected %q in %v", want, exec.executed)
+		}
+	}
+}
+
+// TestSetPortTrunk_Errors covers a disconnected driver and a failing batch.
+func TestSetPortTrunk_Errors(t *testing.T) {
+	drv, err := NewDriver(testSwitchConfig(), testLogger())
+	if err != nil {
+		t.Fatalf("NewDriver: %s", err)
+	}
+	port := fabric.PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
+	var notConnected ErrNotConnected
+	if err := drv.SetPortTrunk(context.Background(), port, []uint16{405}, 405, 9216); !errors.As(err, &notConnected) {
+		t.Fatalf("want ErrNotConnected, got %v", err)
+	}
+
+	drv2, exec := connectedDriver(t, map[string]mockResponse{})
+	exec.batchErr = errors.New("session lost")
+	var cmdErr ErrCommandExec
+	if err := drv2.SetPortTrunk(context.Background(), port, []uint16{405}, 405, 9216); !errors.As(err, &cmdErr) {
+		t.Fatalf("want ErrCommandExec, got %v", err)
+	}
+}
+
+// TestSetPortAccess covers a converged access port, one on the wrong VLAN,
+// one shut down, and a failing batch.
+func TestSetPortAccess(t *testing.T) {
+	access := "interface Ethernet1/41\n  switchport\n  switchport mode access\n  switchport access vlan 402\n  mtu 9216\n"
+	port := fabric.PortRef{SwitchID: "nexus-01", Port: "Eth1/41"}
+
+	drv, exec := connectedDriver(t, map[string]mockResponse{"show running-config interface Eth1/41": {stdout: access}})
+	if err := drv.SetPortAccess(context.Background(), port, 402, 9216); err != nil {
+		t.Fatalf("SetPortAccess: %s", err)
+	}
+	if executedContains(exec, "configure terminal") {
+		t.Fatal("a converged access port must not be reconfigured")
+	}
+
+	for _, cur := range []string{strings.Replace(access, "vlan 402", "vlan 50", 1), access + "  shutdown\n"} {
+		drv, exec := connectedDriver(t, map[string]mockResponse{"show running-config interface Eth1/41": {stdout: cur}})
+		if err := drv.SetPortAccess(context.Background(), port, 402, 9216); err != nil {
+			t.Fatalf("SetPortAccess: %s", err)
+		}
+		for _, want := range []string{"switchport mode access", "switchport access vlan 402", "mtu 9216", "no shutdown"} {
+			if !executedContains(exec, want) {
+				t.Fatalf("expected %q in %v", want, exec.executed)
+			}
+		}
+	}
+
+	drv, exec = connectedDriver(t, map[string]mockResponse{})
+	exec.batchErr = errors.New("session lost")
+	var cmdErr ErrCommandExec
+	if err := drv.SetPortAccess(context.Background(), port, 402, 0); !errors.As(err, &cmdErr) {
+		t.Fatalf("want ErrCommandExec, got %v", err)
+	}
+}
+
+// TestDisablePort shuts a running port down, leaves a shut port alone and
+// refuses on a disconnected driver.
+func TestDisablePort(t *testing.T) {
+	port := fabric.PortRef{SwitchID: "nexus-01", Port: "Eth1/25"}
+
+	drv, exec := connectedDriver(t, map[string]mockResponse{"show running-config interface Eth1/25": {stdout: runningConfig}})
+	if err := drv.DisablePort(context.Background(), port); err != nil {
+		t.Fatalf("DisablePort: %s", err)
+	}
+	if !executedContains(exec, "shutdown") {
+		t.Fatalf("expected shutdown in %v", exec.executed)
+	}
+
+	shut := strings.Replace(runningConfig, "no shutdown", "shutdown", 1)
+	drv, exec = connectedDriver(t, map[string]mockResponse{"show running-config interface Eth1/25": {stdout: shut}})
+	if err := drv.DisablePort(context.Background(), port); err != nil {
+		t.Fatalf("DisablePort: %s", err)
+	}
+	if executedContains(exec, "configure terminal") {
+		t.Fatal("a port already shut down must not be reconfigured")
+	}
+
+	cold, err := NewDriver(testSwitchConfig(), testLogger())
+	if err != nil {
+		t.Fatalf("NewDriver: %s", err)
+	}
+	var notConnected ErrNotConnected
+	if err := cold.DisablePort(context.Background(), port); !errors.As(err, &notConnected) {
+		t.Fatalf("want ErrNotConnected, got %v", err)
 	}
 }

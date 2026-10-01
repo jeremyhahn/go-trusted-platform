@@ -41,7 +41,7 @@ type RestHandler interface {
 // revert target for the physical switch move.
 type ProfileResponse struct {
 	SerialNumber        string           `json:"serialNumber"`
-	TrustedNetwork      NetworkConfig    `json:"trustedNetwork"`
+	AdmittedNetwork     NetworkConfig    `json:"admittedNetwork"`
 	ProvisioningNetwork *NetworkConfig   `json:"provisioningNetwork,omitempty"`
 	ACLs                []ACLConfig      `json:"acls,omitempty"`
 	RateLimit           *RateLimitConfig `json:"rateLimit,omitempty"`
@@ -70,7 +70,7 @@ type RateLimitConfig struct {
 // ActivateResponse is the response for POST /device/activate. Status is the
 // outcome actually applied ("activated" or "quarantined") and VLAN is the
 // VLAN the port was actually placed on — the quarantine VLAN when the
-// status is "quarantined", never the trusted VLAN.
+// status is "quarantined", never the admitted VLAN.
 type ActivateResponse struct {
 	Status         string    `json:"status"`
 	VLAN           uint16    `json:"vlan"`
@@ -168,7 +168,7 @@ type HandlerOption func(*Handler)
 
 // WithSwitchService injects a physical switch service into the handler.
 // When set, Activate validates the physical move up front (no side
-// effects) and moves the device's physical port to the trusted VLAN only
+// effects) and moves the device's physical port to the admitted VLAN only
 // AFTER the SDN policy is applied and enforced; on a failed move the port
 // is moved to the plan's provisioning VLAN and verified by read-back — an
 // unverifiable port is reported as ErrSwitchPortIndeterminate. See
@@ -254,13 +254,13 @@ func (h *Handler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(profile)
 }
 
-// Activate transitions the device to the trusted network zone. The SDN port
+// Activate admits the device: its port moves to the zones of its role. The SDN port
 // transition is owned by the activator (the SDN enrollment hook): it resolves
 // the device's port — deferred to the device MAC when enrollment happened
 // before any fabric attach — applies the plan's policy, and moves the port
 // to authorized. The handler holds only the HTTP binding and the physical
 // switch VLAN move, which is validated before and committed strictly after
-// the SDN enforcement so the trusted VLAN never opens onto an unenforced
+// the SDN enforcement so the admitted VLAN never opens onto an unenforced
 // datapath.
 func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 	// Extract serial from client certificate
@@ -361,7 +361,7 @@ func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Commit the physical port only AFTER the SDN policy is applied and
-	// the port is authorized: the trusted VLAN opens onto an enforced
+	// the port is authorized: the admitted VLAN opens onto an enforced
 	// datapath, never an unenforced one. A failed physical commit leaves
 	// the SDN side authorized and the physical port fail-closed on the
 	// provisioning VLAN (verified by read-back inside the commit) — an
@@ -399,13 +399,13 @@ type switchTransition struct {
 	mgr              switchmgmt.Manager
 	switchName       string
 	switchPort       string
-	trustedVLAN      uint16
+	admittedVLAN     uint16
 	provisioningVLAN uint16
 }
 
 // prepareSwitchTransition validates the physical switch move with NO side
 // effects: the device's switch mapping, a provisioning VLAN distinct from
-// the trusted VLAN (the one fail-closed revert target), and a resolvable
+// the admitted VLAN (the one fail-closed revert target), and a resolvable
 // switch manager. Both return values are nil when no switch service is
 // configured or the device has no switch/port mapping — the physical move
 // is a no-op for this device. The switch itself is never touched here.
@@ -432,12 +432,12 @@ func (h *Handler) prepareSwitchTransition(ctx context.Context, serial string, vl
 		return nil, &MessageError{Msg: "device profile has no provisioning network VLAN; refusing physical VLAN move for " + serial}
 	}
 
-	// Equal VLANs would make the fail-closed target the trusted VLAN
+	// Equal VLANs would make the fail-closed target the admitted VLAN
 	// itself, so "closed" would mean "open". Profile validation rejects
 	// this at create/update; the runtime guard refuses the move before
 	// anything is committed in case a stored profile predates the rule.
-	if vlans.Provisioning == vlans.Trusted {
-		return nil, device.ErrProfileVLANsNotDistinct{VLAN: vlans.Trusted}
+	if vlans.Provisioning == vlans.Admitted {
+		return nil, device.ErrProfileVLANsNotDistinct{VLAN: vlans.Admitted}
 	}
 
 	mgr, err := h.switchService.Manager(switchName)
@@ -449,14 +449,14 @@ func (h *Handler) prepareSwitchTransition(ctx context.Context, serial string, vl
 		mgr:              mgr,
 		switchName:       switchName,
 		switchPort:       switchPort,
-		trustedVLAN:      vlans.Trusted,
+		admittedVLAN:     vlans.Admitted,
 		provisioningVLAN: vlans.Provisioning,
 	}, nil
 }
 
 // commitSwitchTransition moves the prepared physical switch port to the
-// trusted VLAN. Callers invoke it only AFTER the SDN policy is applied and
-// enforced, so the trusted VLAN never opens onto an unenforced datapath. A
+// admitted VLAN. Callers invoke it only AFTER the SDN policy is applied and
+// enforced, so the admitted VLAN never opens onto an unenforced datapath. A
 // nil transition (no switch mapping) is a no-op. On any failure the port
 // is actively moved to the provisioning VLAN and verified by read-back —
 // only a verified fail-closed port lets the plain transition error stand;
@@ -468,7 +468,7 @@ func (h *Handler) commitSwitchTransition(ctx context.Context, serial string, t *
 
 	// Read the port's VLAN before the move. The value is informational —
 	// the fail-closed revert target is always the provisioning VLAN — but
-	// a port already sitting on the trusted VLAN means the port state
+	// a port already sitting on the admitted VLAN means the port state
 	// machine and switch reality diverged, which is worth an alarm. A
 	// failed read leaves the port's state unknown while the SDN side is
 	// already authorized, so it goes through the same fail-closed path as
@@ -482,16 +482,16 @@ func (h *Handler) commitSwitchTransition(ctx context.Context, serial string, t *
 		return ErrSwitchVLANTransitionFailed{
 			SwitchName: t.switchName,
 			Port:       t.switchPort,
-			VLAN:       t.trustedVLAN,
+			VLAN:       t.admittedVLAN,
 			Cause:      err,
 		}
 	}
-	if previousVLAN == t.trustedVLAN {
-		h.logger.Warnf("Switch port %s/%s is ALREADY on trusted VLAN %d before activation of device %s — port state machine and switch reality diverged",
-			t.switchName, t.switchPort, t.trustedVLAN, serial)
+	if previousVLAN == t.admittedVLAN {
+		h.logger.Warnf("Switch port %s/%s is ALREADY on admitted VLAN %d before activation of device %s — port state machine and switch reality diverged",
+			t.switchName, t.switchPort, t.admittedVLAN, serial)
 	}
 
-	if err := t.mgr.SetPortVLAN(ctx, t.switchPort, t.trustedVLAN); err != nil {
+	if err := t.mgr.SetPortVLAN(ctx, t.switchPort, t.admittedVLAN); err != nil {
 		// The manager's SSH command sequence is not atomic: the VLAN
 		// change may have taken effect even though the sequence failed.
 		// Actively fail closed — move the port to the provisioning VLAN
@@ -503,13 +503,13 @@ func (h *Handler) commitSwitchTransition(ctx context.Context, serial string, t *
 		return ErrSwitchVLANTransitionFailed{
 			SwitchName: t.switchName,
 			Port:       t.switchPort,
-			VLAN:       t.trustedVLAN,
+			VLAN:       t.admittedVLAN,
 			Cause:      err,
 		}
 	}
 
-	h.logger.Infof("Switch port %s/%s moved from VLAN %d to trusted VLAN %d for device %s",
-		t.switchName, t.switchPort, previousVLAN, t.trustedVLAN, serial)
+	h.logger.Infof("Switch port %s/%s moved from VLAN %d to admitted VLAN %d for device %s",
+		t.switchName, t.switchPort, previousVLAN, t.admittedVLAN, serial)
 	return nil
 }
 
@@ -519,7 +519,7 @@ func (h *Handler) commitSwitchTransition(ctx context.Context, serial string, t *
 // a failed command may still have changed the VLAN; only a read-back
 // showing the provisioning VLAN proves the port is closed. Any other
 // outcome is ErrSwitchPortIndeterminate: the port may remain on the
-// trusted VLAN and requires operator action.
+// admitted VLAN and requires operator action.
 func (h *Handler) revertAndVerify(ctx context.Context, mgr switchmgmt.Manager, switchName, switchPort string, provisioningVLAN uint16) error {
 	revertErr := mgr.SetPortVLAN(ctx, switchPort, provisioningVLAN)
 

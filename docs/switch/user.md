@@ -32,8 +32,8 @@ rest of this page's runtime tasks will return 503.
 
 The platform can drive a physical network switch over SSH: create VLANs at
 bootstrap, and at runtime move a single port between VLANs or take it up and
-down. It is how a machine gets moved from the provisioning network to the
-trusted network when the port it is plugged into belongs to a real switch
+down. It is how a machine gets moved from the provisioning zone to the zones of
+its role when the port it is plugged into belongs to a real switch
 rather than a virtual bridge.
 
 Two things it is **not**:
@@ -198,7 +198,7 @@ fabric until that is fixed.
 ## Task 6 — Move a port automatically during device activation
 
 You do not call this feature directly. `POST /api/v1/device/activate` does, as
-part of moving an enrolled machine to its trusted network
+part of admitting an enrolled machine to the zones of its role
 ([`docs/device/`](../device/)).
 
 The VLAN move is a **deliberate no-op** when no switch service is configured or

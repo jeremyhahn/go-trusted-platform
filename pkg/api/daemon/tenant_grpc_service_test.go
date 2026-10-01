@@ -1077,134 +1077,6 @@ func TestTenantGRPCService_CheckQuota(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// ValidateVLAN Tests
-// =============================================================================
-
-func TestTenantGRPCService_ValidateVLAN(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("returns error when manager not initialized", func(t *testing.T) {
-		svc := NewTenantGRPCService()
-
-		resp, err := svc.ValidateVLAN(ctx, &ValidateVLANRequest{
-			TenantID: "test",
-			VLANID:   100,
-		})
-
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.FailedPrecondition, st.Code())
-	})
-
-	t.Run("returns error for nil request", func(t *testing.T) {
-		svc := createTestTenantService(t)
-
-		resp, err := svc.ValidateVLAN(ctx, nil)
-
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
-	})
-
-	t.Run("returns error for empty tenant_id", func(t *testing.T) {
-		svc := createTestTenantService(t)
-
-		resp, err := svc.ValidateVLAN(ctx, &ValidateVLANRequest{
-			TenantID: "",
-			VLANID:   100,
-		})
-
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
-	})
-
-	t.Run("returns error for zero vlan_id", func(t *testing.T) {
-		svc := createTestTenantService(t)
-
-		resp, err := svc.ValidateVLAN(ctx, &ValidateVLANRequest{
-			TenantID: "test",
-			VLANID:   0,
-		})
-
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
-	})
-
-	t.Run("returns error for vlan_id over 4094", func(t *testing.T) {
-		svc := createTestTenantService(t)
-
-		resp, err := svc.ValidateVLAN(ctx, &ValidateVLANRequest{
-			TenantID: "test",
-			VLANID:   4095,
-		})
-
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
-	})
-}
-
-// =============================================================================
-// GetBridgeName Tests
-// =============================================================================
-
-func TestTenantGRPCService_GetBridgeName(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("returns error when manager not initialized", func(t *testing.T) {
-		svc := NewTenantGRPCService()
-
-		resp, err := svc.GetBridgeName(ctx, &GetBridgeNameRequest{TenantID: "test"})
-
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.FailedPrecondition, st.Code())
-	})
-
-	t.Run("returns error for nil request", func(t *testing.T) {
-		svc := createTestTenantService(t)
-
-		resp, err := svc.GetBridgeName(ctx, nil)
-
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
-	})
-
-	t.Run("returns error for empty tenant_id", func(t *testing.T) {
-		svc := createTestTenantService(t)
-
-		resp, err := svc.GetBridgeName(ctx, &GetBridgeNameRequest{TenantID: ""})
-
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
-	})
-}
-
-// =============================================================================
-// Sync Tests
-// =============================================================================
-
 func TestTenantGRPCService_Sync(t *testing.T) {
 	ctx := context.Background()
 
@@ -1438,8 +1310,6 @@ func TestTenantGRPCService_EntityToTenantInfo(t *testing.T) {
 			Name:        "test-name",
 			DisplayName: "Test Name",
 			State:       tenant.StateActive,
-			OVSBridge:   "br-test",
-			VLANRange:   tenant.VLANRange{Start: 100, End: 199},
 			DEKPath:     "/tenant/12345/default",
 			ComputeQuota: tenant.ComputeQuota{
 				MaxVMs:        10,
@@ -1464,9 +1334,6 @@ func TestTenantGRPCService_EntityToTenantInfo(t *testing.T) {
 		assert.Equal(t, "test-name", info.Name)
 		assert.Equal(t, "Test Name", info.DisplayName)
 		assert.Equal(t, "active", info.State)
-		assert.Equal(t, "br-test", info.OVSBridge)
-		assert.Equal(t, uint16(100), info.VLANStart)
-		assert.Equal(t, uint16(199), info.VLANEnd)
 		assert.Equal(t, uint32(12345), info.DEKHandle)
 		assert.Equal(t, int64(10), info.ComputeQuota.MaxVMs)
 		assert.Equal(t, int64(5), info.NetworkQuota.MaxBridges)
@@ -1584,80 +1451,6 @@ func TestTenantGRPCService_CheckQuota_Success(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// Additional Coverage Tests for ValidateVLAN
-// =============================================================================
-
-func TestTenantGRPCService_ValidateVLAN_Success(t *testing.T) {
-	ctx := context.Background()
-	svc := createTestTenantService(t)
-
-	// Create tenant with VLAN range
-	createResp, err := svc.CreateTenant(ctx, &CreateTenantRequest{
-		Name: "vlan-test",
-	})
-	require.NoError(t, err)
-
-	t.Run("validates VLAN successfully", func(t *testing.T) {
-		resp, err := svc.ValidateVLAN(ctx, &ValidateVLANRequest{
-			TenantID: createResp.Tenant.ID,
-			VLANID:   100,
-		})
-
-		require.NoError(t, err)
-		assert.NotNil(t, resp)
-		// Valid or invalid depends on tenant VLAN range
-		// The manager validates VLAN ownership
-	})
-
-	t.Run("returns invalid for VLAN outside range", func(t *testing.T) {
-		resp, err := svc.ValidateVLAN(ctx, &ValidateVLANRequest{
-			TenantID: createResp.Tenant.ID,
-			VLANID:   4000, // Outside typical range
-		})
-
-		require.NoError(t, err)
-		assert.NotNil(t, resp)
-		// Response indicates whether VLAN is valid for tenant
-	})
-}
-
-// =============================================================================
-// Additional Coverage Tests for GetBridgeName
-// =============================================================================
-
-func TestTenantGRPCService_GetBridgeName_Success(t *testing.T) {
-	ctx := context.Background()
-	svc := createTestTenantService(t)
-
-	// Create tenant
-	createResp, err := svc.CreateTenant(ctx, &CreateTenantRequest{
-		Name: "bridge-test",
-	})
-	require.NoError(t, err)
-
-	// GetBridgeName may return an error if bridge is not configured
-	// This tests that the path is executed and handles the result appropriately
-	resp, err := svc.GetBridgeName(ctx, &GetBridgeNameRequest{
-		TenantID: createResp.Tenant.ID,
-	})
-
-	// Either it succeeds or returns an appropriate error
-	if err != nil {
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		// Should be InvalidArgument for missing bridge configuration
-		assert.Equal(t, codes.InvalidArgument, st.Code())
-	} else {
-		assert.NotNil(t, resp)
-		assert.Equal(t, createResp.Tenant.ID, resp.TenantID)
-	}
-}
-
-// =============================================================================
-// Additional Error Mapping Coverage Tests
-// =============================================================================
-
 func TestTenantGRPCService_ToGRPCError_Additional(t *testing.T) {
 	svc := NewTenantGRPCService()
 
@@ -1677,33 +1470,6 @@ func TestTenantGRPCService_ToGRPCError_Additional(t *testing.T) {
 		st, ok := status.FromError(result)
 		require.True(t, ok)
 		assert.Equal(t, codes.Internal, st.Code())
-	})
-
-	t.Run("ErrBridgeOperationFailed maps to Internal", func(t *testing.T) {
-		err := tenant.ErrBridgeOperationFailed{Operation: "create", Bridge: "br0"}
-		result := svc.toGRPCError(err)
-
-		st, ok := status.FromError(result)
-		require.True(t, ok)
-		assert.Equal(t, codes.Internal, st.Code())
-	})
-
-	t.Run("ErrVLANAllocationFailed maps to ResourceExhausted", func(t *testing.T) {
-		err := tenant.ErrVLANAllocationFailed{TenantID: "test"}
-		result := svc.toGRPCError(err)
-
-		st, ok := status.FromError(result)
-		require.True(t, ok)
-		assert.Equal(t, codes.ResourceExhausted, st.Code())
-	})
-
-	t.Run("ErrInvalidVLANRange maps to InvalidArgument", func(t *testing.T) {
-		err := tenant.ErrInvalidVLANRange{Start: 100, End: 50, Reason: "invalid range"}
-		result := svc.toGRPCError(err)
-
-		st, ok := status.FromError(result)
-		require.True(t, ok)
-		assert.Equal(t, codes.InvalidArgument, st.Code())
 	})
 
 	t.Run("ErrDEKOperationFailed maps to Internal", func(t *testing.T) {

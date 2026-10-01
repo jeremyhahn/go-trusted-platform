@@ -119,7 +119,7 @@ func pbTestRoute(id string) *platformv1.ProxyRoute {
 		Auth: &platformv1.ProxyAuthRequirements{
 			Mode:                   proxy.AuthModeMTLS,
 			RequireIdevid:          true,
-			AllowedZones:           []string{"trusted"},
+			AllowedZones:           []string{"control-plane"},
 			BackendZone:            "internal",
 			RequireAttestation:     true,
 			AttestationMaxAgeNanos: int64(5 * time.Minute),
@@ -522,9 +522,9 @@ func TestProxyGRPCService_ReloadProxyConfig_Error(t *testing.T) {
 
 func TestProxyGRPCService_GetZoneMatrix(t *testing.T) {
 	fake := &fakeProxyService{matrix: &ProxyZoneMatrixInfo{
-		Zones: []string{"public", "trusted"},
+		Zones: []string{"provisioning", "control-plane"},
 		Pairs: []ProxyZonePairInfo{
-			{From: "trusted", To: "public", Services: []string{"dns"}},
+			{From: "provisioning", To: "control-plane", Services: []string{"dns"}},
 		},
 	}}
 	s := newProxyTestService(fake)
@@ -537,8 +537,8 @@ func TestProxyGRPCService_GetZoneMatrix(t *testing.T) {
 		t.Fatalf("matrix = (%d zones, %d pairs), want (2, 1)", len(resp.GetZones()), len(resp.GetPairs()))
 	}
 	pair := resp.GetPairs()[0]
-	if pair.GetFrom() != "trusted" || pair.GetTo() != "public" || len(pair.GetServices()) != 1 {
-		t.Errorf("pair = %+v, want trusted->public [dns]", pair)
+	if pair.GetFrom() != "provisioning" || pair.GetTo() != "control-plane" || len(pair.GetServices()) != 1 {
+		t.Errorf("pair = %+v, want provisioning->control-plane [dns]", pair)
 	}
 }
 

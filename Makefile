@@ -1864,21 +1864,7 @@ integration-test-webservice: docker-builder-load
 ## integration-test-sdn: Run SDN integration tests in development container
 ## Starts OVS, swtpm, and platformd via the shared devcontainer runner.
 integration-test-sdn: build-devcontainer
-	@echo "Running SDN integration tests in development container..."
-	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@docker run --rm --privileged \
-		--name go-trusted-platform-sdn-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w $(SOURCES_BASE)/go-trusted-platform \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=1 \
-		-e GOTOOLCHAIN=auto \
-		$(DEVCONTAINER_IMAGE) \
-		bash /workspace/build/docker/devcontainer/run-integration-tests.sh sdn "$(strip $(TEST_BUILD_TAGS))"
+	$(call run-integration-suite,sdn)
 
 .PHONY: integration-test-sdn-shell
 ## integration-test-sdn-shell: Start interactive shell for SDN testing
@@ -3013,6 +2999,28 @@ coverage-platform:
 	@$(GO) tool cover -html=$(COVERAGE_DIR)/platform.out -o $(COVERAGE_DIR)/platform.html
 	@$(GO) tool cover -func=$(COVERAGE_DIR)/platform.out | tail -1
 	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/platform.html$(RESET)"
+
+## test-netplan: Unit tests for the network plan and the zone model
+.PHONY: test-netplan
+test-netplan:
+	# tag-independent
+	go test -count=1 -timeout 120s ./pkg/sdn/netplan/... ./pkg/sdn/zone/...
+
+## coverage-netplan: Coverage report for the network plan and the zone model
+.PHONY: coverage-netplan
+coverage-netplan:
+	@mkdir -p $(COVERAGE_DIR)
+	# tag-independent
+	go test -count=1 -timeout 120s -coverprofile=$(COVERAGE_DIR)/netplan.out -covermode=atomic \
+		./pkg/sdn/netplan/... ./pkg/sdn/zone/...
+	go tool cover -func=$(COVERAGE_DIR)/netplan.out | tail -1
+	@go tool cover -html=$(COVERAGE_DIR)/netplan.out -o $(COVERAGE_DIR)/netplan.html
+
+## bench-netplan: Benchmarks for plan derivation and lookups
+.PHONY: bench-netplan
+bench-netplan:
+	# tag-independent
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/netplan/...
 
 .PHONY: coverage-sdn
 ## coverage-sdn: Generate SDN package coverage report

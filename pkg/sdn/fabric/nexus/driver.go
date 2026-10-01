@@ -18,7 +18,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
+	"slices"
 	"sync/atomic"
 
 	secure "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
@@ -207,25 +207,6 @@ func (d *nexusDriver) EnsureVLAN(ctx context.Context, vlan uint16, name string) 
 	return d.executeBatch(ctx, cmds, "EnsureVLAN")
 }
 
-// EnsureVNI maps a VNI to a VLAN on the NVE interface if not already present.
-func (d *nexusDriver) EnsureVNI(ctx context.Context, vni uint32, vlan uint16) error {
-	if !d.connected.Load() {
-		return ErrNotConnected{}
-	}
-
-	// Check if VNI mapping already exists.
-	stdout, _, err := d.executor.Execute(ctx, showNVEVNICommand())
-	if err == nil && parseShowNVEVNI(stdout, vni) {
-		d.logger.Debug("nexus: vni already mapped",
-			slog.String("switch", d.config.ID),
-			slog.Uint64("vni", uint64(vni)))
-		return nil
-	}
-
-	cmds := createVNICommands(vni, vlan)
-	return d.executeBatch(ctx, cmds, "EnsureVNI")
-}
-
 // EnsureLAG configures a link aggregation group if not already present.
 func (d *nexusDriver) EnsureLAG(ctx context.Context, lag fabric.LAGConfig) error {
 	if !d.connected.Load() {
@@ -253,38 +234,69 @@ func (d *nexusDriver) EnsureLAG(ctx context.Context, lag fabric.LAGConfig) error
 	return d.executeBatch(ctx, cmds, "EnsureLAG")
 }
 
-// SetPortAccess configures a port in access mode with the given VLAN.
-func (d *nexusDriver) SetPortAccess(ctx context.Context, port fabric.PortRef, vlan uint16) error {
+// SetPortAccess configures a port in access mode on vlan with mtu (0 leaves
+// the MTU as is). A port already in that state is left untouched.
+func (d *nexusDriver) SetPortAccess(ctx context.Context, port fabric.PortRef, vlan uint16, mtu int) error {
 	if !d.connected.Load() {
 		return ErrNotConnected{}
 	}
-
-	// Check current config for idempotency.
-	stdout, _, err := d.executor.Execute(ctx, showRunningInterfaceCommand(port.Port))
-	if err == nil {
-		currentVLAN := parseShowRunningInterface(stdout)
-		if currentVLAN == vlan && strings.Contains(stdout, "switchport mode access") {
-			d.logger.Debug("nexus: port already in access mode with correct vlan",
-				slog.String("switch", d.config.ID),
-				slog.String("port", port.Port),
-				slog.Uint64("vlan", uint64(vlan)))
-			return nil
-		}
+	if cur, ok := d.interfaceConfig(ctx, port); ok &&
+		cur.mode == "access" && cur.accessVLAN == vlan && mtuMatches(cur, mtu) && !cur.shutdown {
+		d.logger.Debug("nexus: port already in access mode with correct vlan",
+			slog.String("switch", d.config.ID),
+			slog.String("port", port.Port),
+			slog.Uint64("vlan", uint64(vlan)))
+		return nil
 	}
-
-	cmds := setPortAccessCommands(port.Port, vlan)
-	return d.executeBatch(ctx, cmds, "SetPortAccess")
+	return d.executeBatch(ctx, setPortAccessCommands(port.Port, vlan, mtu), "SetPortAccess")
 }
 
-// SetPortTrunk configures a port in trunk mode with the allowed VLANs
-// and native VLAN.
-func (d *nexusDriver) SetPortTrunk(ctx context.Context, port fabric.PortRef, allowed []uint16, native uint16) error {
+// SetPortTrunk configures a port in trunk mode carrying allowed, with native
+// as its native VLAN (0 for none) and mtu (0 leaves the MTU as is). A port
+// already in that state is left untouched.
+func (d *nexusDriver) SetPortTrunk(ctx context.Context, port fabric.PortRef, allowed []uint16, native uint16, mtu int) error {
 	if !d.connected.Load() {
 		return ErrNotConnected{}
 	}
+	want := slices.Clone(allowed)
+	slices.Sort(want)
+	if cur, ok := d.interfaceConfig(ctx, port); ok &&
+		cur.mode == "trunk" && slices.Equal(cur.allowed, want) && cur.native == native &&
+		mtuMatches(cur, mtu) && !cur.shutdown {
+		d.logger.Debug("nexus: port already a trunk with the class's vlans",
+			slog.String("switch", d.config.ID),
+			slog.String("port", port.Port))
+		return nil
+	}
+	return d.executeBatch(ctx, setPortTrunkCommands(port.Port, want, native, mtu), "SetPortTrunk")
+}
 
-	cmds := setPortTrunkCommands(port.Port, allowed, native)
-	return d.executeBatch(ctx, cmds, "SetPortTrunk")
+// DisablePort administratively shuts a port down. A port already shut down
+// is left untouched.
+func (d *nexusDriver) DisablePort(ctx context.Context, port fabric.PortRef) error {
+	if !d.connected.Load() {
+		return ErrNotConnected{}
+	}
+	if cur, ok := d.interfaceConfig(ctx, port); ok && cur.shutdown {
+		return nil
+	}
+	return d.executeBatch(ctx, disablePortCommands(port.Port), "DisablePort")
+}
+
+// interfaceConfig reads a port's running configuration. ok is false when the
+// switch did not answer, so the caller configures the port unconditionally.
+func (d *nexusDriver) interfaceConfig(ctx context.Context, port fabric.PortRef) (interfaceConfig, bool) {
+	stdout, _, err := d.executor.Execute(ctx, showRunningInterfaceCommand(port.Port))
+	if err != nil || stdout == "" {
+		return interfaceConfig{}, false
+	}
+	return parseInterfaceConfig(stdout), true
+}
+
+// mtuMatches reports whether the running MTU satisfies the requested one
+// (a request of 0 accepts any MTU).
+func mtuMatches(cur interfaceConfig, mtu int) bool {
+	return mtu == 0 || cur.mtu == mtu
 }
 
 // executeBatch runs a batch of NX-OS commands and checks for errors.

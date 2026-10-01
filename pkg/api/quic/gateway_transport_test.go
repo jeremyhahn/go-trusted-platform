@@ -21,7 +21,7 @@
 // over a real quic-go loopback connection backed by the same handler chain that
 // the integration daemon wires:
 //   QUICServiceHandler → handleGatewayCategory → GatewayHandler →
-//   testTransportGatewayService (seeded with 7 zones)
+//   testTransportGatewayService (seeded with the 9 built-in zones)
 //
 // The test was written to reproduce and lock in the fix for a stream truncation
 // bug where the client received the 5-byte response header (status + length)
@@ -61,7 +61,7 @@ import (
 // =============================================================================
 
 // testTransportGatewayService is a minimal GatewayServiceInterface that
-// returns a fixed set of 7 network zones, matching the seeded zone count the
+// returns a fixed set of 9 network zones, matching the seeded zone count the
 // integration daemon exposes.
 type testTransportGatewayService struct{}
 
@@ -117,15 +117,16 @@ func (s *testTransportGatewayService) ListAllocations(_ context.Context, _ strin
 	return nil, ErrGatewayFeatureNotConfigured
 }
 
-// ListNetworkZones returns 7 seeded zones — the same count the integration
+// ListNetworkZones returns the 9 built-in zones — the same count the integration
 // daemon exposes after gateway.NewZoneService(nil, nil).
 func (s *testTransportGatewayService) ListNetworkZones(_ context.Context, _ string) ([]*NetworkZoneInfo, error) {
 	now := time.Now().Unix()
-	names := []string{"trusted", "untrusted", "dmz", "oob", "storage", "tenant", "management"}
+	names := []string{"transit", "fabric", "management", "hypervisor", "quarantine", "provisioning", "control-plane", "storage", "backup"}
 	out := make([]*NetworkZoneInfo, len(names))
 	for i, n := range names {
 		out[i] = &NetworkZoneInfo{
 			Name:      n,
+			Offset:    uint8(i),
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
@@ -142,9 +143,6 @@ func (s *testTransportGatewayService) UpdateNetworkZone(_ context.Context, _ str
 	return nil, ErrGatewayFeatureNotConfigured
 }
 func (s *testTransportGatewayService) DeleteNetworkZone(_ context.Context, _ string) (bool, error) {
-	return false, ErrGatewayFeatureNotConfigured
-}
-func (s *testTransportGatewayService) AssignNetworkZone(_ context.Context, _ string, _ string) (bool, error) {
 	return false, ErrGatewayFeatureNotConfigured
 }
 
@@ -323,7 +321,7 @@ func startGatewayTransportServer(t *testing.T) (srv *Server, addr string, client
 // =============================================================================
 
 // TestGatewayTransport_ListNetworkZones_FullRoundTrip verifies that a
-// ListNetworkZones request returns all 7 zones over a real quic-go loopback
+// ListNetworkZones request returns all 9 zones over a real quic-go loopback
 // connection. This is the exact scenario that triggered the stream truncation
 // bug: the response payload arrived in fragments and io.ReadFull returned EOF
 // mid-payload before the fix.
@@ -379,8 +377,8 @@ func TestGatewayTransport_ListNetworkZones_FullRoundTrip(t *testing.T) {
 	if err := msgpackDecode(respPayload, &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(resp.Zones) != 7 {
-		t.Errorf("expected 7 zones, got %d", len(resp.Zones))
+	if len(resp.Zones) != 9 {
+		t.Errorf("expected 9 zones, got %d", len(resp.Zones))
 	}
 }
 
@@ -444,8 +442,8 @@ func TestGatewayTransport_ListNetworkZones_BackToBack(t *testing.T) {
 		if err := msgpackDecode(respPayload, &resp); err != nil {
 			t.Fatalf("iteration %d: decode: %v", i, err)
 		}
-		if len(resp.Zones) != 7 {
-			t.Errorf("iteration %d: expected 7 zones, got %d", i, len(resp.Zones))
+		if len(resp.Zones) != 9 {
+			t.Errorf("iteration %d: expected 9 zones, got %d", i, len(resp.Zones))
 		}
 	}
 }

@@ -15,6 +15,7 @@ package nexus
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -59,23 +60,6 @@ func parseShowVLAN(output string, vlanID uint16) (*vlanInfo, bool) {
 	return nil, false
 }
 
-// parseShowNVEVNI checks whether a VNI mapping exists in "show nve vni" output.
-// Returns true if the VNI is already configured.
-func parseShowNVEVNI(output string, vni uint32) bool {
-	lines := strings.Split(output, "\n")
-	vniStr := strconv.FormatUint(uint64(vni), 10)
-
-	for _, line := range lines {
-		fields := strings.Fields(strings.TrimSpace(line))
-		for _, f := range fields {
-			if f == vniStr {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // parseShowPortChannelSummary checks whether a port-channel exists in
 // "show port-channel summary" output. Returns true if the port-channel
 // number is found.
@@ -91,23 +75,93 @@ func parseShowPortChannelSummary(output string, portChannelID uint16) bool {
 	return false
 }
 
-// parseShowRunningInterface extracts the access VLAN from a running-config
-// interface output. Returns 0 if not found.
-func parseShowRunningInterface(output string) uint16 {
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "switchport access vlan ") {
-			parts := strings.Fields(trimmed)
-			if len(parts) >= 4 {
-				val, err := strconv.ParseUint(parts[3], 10, 16)
-				if err == nil {
-					return uint16(val)
-				}
+// interfaceConfig is the part of an interface's running configuration the
+// driver converges: mode, VLANs, MTU and admin state.
+type interfaceConfig struct {
+	mode       string
+	accessVLAN uint16
+	allowed    []uint16
+	native     uint16
+	mtu        int
+	shutdown   bool
+}
+
+// modeRouted marks a port configured "no switchport" (a layer-3 port).
+const modeRouted = "routed"
+
+// parseInterfaceConfig reads "show running-config interface <port>" output.
+// Ranges in the allowed VLAN list ("400-402") are expanded; "add" lines
+// extend the list. Unparseable values are ignored, which only makes the
+// driver reconfigure the port.
+func parseInterfaceConfig(output string) interfaceConfig {
+	var cfg interfaceConfig
+	layer2 := false
+	for _, line := range strings.Split(output, "\n") {
+		f := strings.Fields(strings.TrimSpace(line))
+		if len(f) > 0 && f[0] == "switchport" {
+			layer2 = true
+		}
+		switch {
+		case len(f) == 3 && f[0] == "switchport" && f[1] == "mode":
+			cfg.mode = f[2]
+		case len(f) == 4 && f[0] == "switchport" && f[1] == "access" && f[2] == "vlan":
+			cfg.accessVLAN = parseUint16(f[3])
+		case len(f) == 5 && f[0] == "switchport" && f[1] == "trunk" && f[2] == "native" && f[3] == "vlan":
+			cfg.native = parseUint16(f[4])
+		case len(f) >= 5 && f[0] == "switchport" && f[1] == "trunk" && f[2] == "allowed" && f[3] == "vlan":
+			list := f[4]
+			if list == "add" && len(f) == 6 {
+				list = f[5]
+			} else {
+				cfg.allowed = nil
 			}
+			cfg.allowed = append(cfg.allowed, parseVLANList(list)...)
+		case len(f) == 2 && f[0] == "mtu":
+			if v, err := strconv.Atoi(f[1]); err == nil {
+				cfg.mtu = v
+			}
+		case len(f) == 1 && f[0] == "shutdown":
+			cfg.shutdown = true
+		case len(f) == 2 && f[0] == "no" && f[1] == "switchport":
+			cfg.mode = modeRouted
 		}
 	}
-	return 0
+	// NX-OS omits the default "switchport mode access" from running-config,
+	// so a layer-2 port with no mode line is an access port. Output with no
+	// switchport line at all says nothing about the mode.
+	if cfg.mode == "" && layer2 {
+		cfg.mode = "access"
+	}
+	slices.Sort(cfg.allowed)
+	return cfg
+}
+
+// parseVLANList expands an NX-OS VLAN list such as "400-402,405".
+func parseVLANList(list string) []uint16 {
+	var out []uint16
+	for _, part := range strings.Split(list, ",") {
+		lo, hi, isRange := strings.Cut(part, "-")
+		start, end := parseUint16(lo), parseUint16(lo)
+		if isRange {
+			end = parseUint16(hi)
+		}
+		if start == 0 || end < start {
+			continue
+		}
+		for v := uint32(start); v <= uint32(end); v++ {
+			out = append(out, uint16(v))
+		}
+	}
+	return out
+}
+
+// parseUint16 parses a decimal VLAN ID, returning 0 on failure.
+func parseUint16(s string) uint16 {
+	v, err := strconv.ParseUint(s, 10, 16)
+	if err != nil {
+		return 0
+	}
+	return uint16(v)
 }
 
 // containsError checks if NX-OS output contains an error indicator.

@@ -4,7 +4,7 @@
  * `GET /api/v1/device/profile` (`pkg/webservice/v1/device/handler.go`,
  * `ProfileResponse`) is a different wire from the operator profile in
  * `./device.ts`. It is camelCase by contract (`docs/device/api.md` §3.2): the
- * primary field is `trustedNetwork`, an optional `provisioningNetwork` sibling
+ * primary field is `admittedNetwork`, an optional `provisioningNetwork` sibling
  * carries the enrollment-phase network, and there is no `production_network`,
  * `provisioning_network` or `quarantine_network` in any spelling. Two wires,
  * two types — nothing here is shared with `DeviceProfile` (#402, #378).
@@ -49,7 +49,7 @@ export interface DeviceSelfServiceProfile {
   /** The device's serial, as resolved from its client certificate */
   serialNumber: string;
   /** The network the device lives on once activated */
-  trustedNetwork: DeviceSelfServiceNetwork;
+  admittedNetwork: DeviceSelfServiceNetwork;
   /**
    * The enrollment-phase network, when the profile defines one. The server
    * uses its VLAN as the fail-closed revert target for the physical switch

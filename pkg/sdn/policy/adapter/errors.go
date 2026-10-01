@@ -27,7 +27,10 @@
 // device lifecycle management within the software-defined network infrastructure.
 package adapter
 
-import "errors"
+import (
+	"errors"
+	"strconv"
+)
 
 // Dependency injection errors indicate missing required components during
 // adapter initialization or operation.
@@ -92,10 +95,6 @@ var (
 	// Profiles must contain valid network configuration to assign access.
 	ErrInvalidProfile = errors.New("device profile is invalid or incomplete")
 
-	// ErrNoTrustedNetwork indicates the profile is missing post-enrollment (trusted) network config.
-	// Trusted network configuration is required for authorized device access.
-	ErrNoTrustedNetwork = errors.New("profile missing trusted network config")
-
 	// ErrNoQuarantineNetwork indicates the profile is missing quarantine network config.
 	// Quarantine network configuration is required for untrusted device isolation.
 	ErrNoQuarantineNetwork = errors.New("profile missing quarantine network config")
@@ -116,3 +115,21 @@ var (
 	// Valid phases are: provisioning, production, and quarantine.
 	ErrInvalidNetworkPhase = errors.New("invalid network phase")
 )
+
+// ErrNoAdmissionTarget is returned when an enrolled device can be admitted
+// neither to an explicit profile zone nor to its role's zones (the role has
+// no port class). The port is left where it is.
+type ErrNoAdmissionTarget struct {
+	// Role is the device role.
+	Role string
+	// Cause is the underlying role error.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e ErrNoAdmissionTarget) Error() string {
+	return "sdn adapter: device role " + strconv.Quote(e.Role) + " has no port class and the profile names no zone; port left unchanged"
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrNoAdmissionTarget) Unwrap() error { return e.Cause }

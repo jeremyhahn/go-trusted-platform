@@ -2,293 +2,158 @@
 
 ## Overview
 
-This document provides a comprehensive configuration reference for the IPAM service, covering pool configuration, backend selection, zone assignment, seed reconciliation, lease management, and operational parameters.
+IPAM holds the platform's address pools and their allocations. Since the
+reference network (#708) the pools of an environment are **derived**, not
+declared: the network plan (`pkg/sdn/netplan`, configured by
+`sdn.environment`) produces one pool per underlay zone and one pool per range
+of the environment's IPAM `/17`, and the control plane seeds them at startup.
+`sdn.ipam.pools` only adds explicit pools beside them, for example a public
+block or an overlay subnet carved from the tenant default range.
+
+Every pool carries an **allocation window**:
+
+- **Reserved prefixes** — never allocatable. The pool's gateway (the anycast
+  or VRRP `.1`) is always reserved, listed or not. The tunnel range reserves
+  its first `/31` for the gateway HA sync link.
+- **Dynamic range** (`range_start`–`range_end`) — where `Allocate` draws
+  addresses. A zone pool's range is its DHCP range, `.50` to the last usable
+  address. Without a range the whole usable CIDR is the window.
+
+`AllocateSpecific` may take a static address outside the dynamic range (a
+control-plane node's `.10`, say) but never a reserved one; it refuses those
+with the typed `ipam.ErrIPReserved`.
 
 ## Configuration Structure
 
-### YAML Configuration
-
 ```yaml
 sdn:
+  environment:
+    id: 4                      # the plan derives every zone and range pool
   ipam:
-    # Backend selection: "memory" (default), "quicbaas", or "dht" (requires platform_p2p build tag)
-    backend: "quicbaas"
-
-    # Pool definitions (seed-only: created when missing, never overwritten at runtime)
+    # Backend: "memory" (default), "quicbaas", or "dht" (platform_p2p builds)
+    backend: quicbaas
+    # Explicit pools beside the derived ones (seed-only).
     pools:
-      - name: "production"
-        cidr: "10.0.0.0/24"
-        gateway: "10.0.0.1"
-        zone: "trusted"               # optional; inherited from network.zone when omitted
-        default_lease_duration: "24h"
-        inactivity_timeout: "720h"
-
-      - name: "provisioning"
-        cidr: "10.1.0.0/24"
-        gateway: "10.1.0.1"
-        zone: "provisioning"
-
-    # Lease management
-    lease:
-      default_duration: "24h"
-      max_duration: "168h"
-      renewal_threshold: "20%"
-      inactivity_timeout: "720h"
-      expiration_check_interval: "1h"
+      - name: public
+        cidr: 203.0.113.0/24
+        gateway: 203.0.113.1
+        range-start: 203.0.113.10
+        range-end: 203.0.113.250
+        lease-duration: 24h
 ```
+
+## Derived Pools
+
+For environment `E` on the default base `10.0.0.0/8`:
+
+| Pool | Prefix | Reserved | Dynamic range |
+|------|--------|----------|---------------|
+| one per zone (`transit` … `backup`, owner zones) | the zone subnet, `10.E.n.0/24` | the gateway `.1` | `.50`–`.254` (none below a `/26`) |
+| `tunnel-p2p` | `10.E.128.0/22` | `10.E.128.0/31` (gateway HA sync) | `10.E.128.2`–`10.E.131.255` |
+| `loopbacks` | `10.E.132.0/22` | — | whole prefix |
+| `service-vips` | `10.E.136.0/21` | — | whole prefix |
+| `platform-hosts` | `10.E.144.0/20` | — | whole prefix |
+
+The tenant default range `10.E.192.0/18` is not one pool: tenant overlay
+subnets are carved from it, each a pool of its own. See
+[reference network](../../architecture/reference-network.md) for the full
+layout and budgets.
+
+## Explicit Pool Parameters
+
+`sdn.ipam.pools[]` (`sdn.PoolConfig`):
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `name` | string | Yes | Unique pool name; may not take a derived pool's name |
+| `cidr` | prefix | Yes | Address space; may not overlap a derived pool or a reserved range |
+| `gateway` | address | No | Gateway address; always reserved |
+| `zone` | string | No | A declared underlay zone; overlay pools carry none |
+| `dns` | []address | No | DNS servers handed out with leases |
+| `range-start`, `range-end` | address | No | Dynamic allocation window; set both or neither |
+| `lease-duration` | duration | No | Default lease duration (0 = never expires) |
+| `dhcp` | bool | No | Serve DHCP from this pool |
+
+### Validation
+
+| Rule | Error |
+|------|-------|
+| Name non-empty and unique | `sdn.ErrInvalidPoolName`, `sdn.ErrDuplicatePoolName` |
+| Name not a derived pool's | `sdn.ErrPoolNameReserved` |
+| CIDR valid | `sdn.ErrInvalidPoolCIDR` |
+| No overlap with a derived pool or reserved range | `sdn.ErrPoolOverlap` |
+| Zone, when set, declared | `sdn.ErrPoolZoneUndeclared` |
+| Reserved prefixes inside the CIDR; range inside the CIDR, both bounds set, start ≤ end | `ipam.ErrInvalidWindow` (at pool creation) |
+| Gateway inside the CIDR | `ipam.ErrInvalidGateway` |
+
+## Seeding Semantics
+
+The derived pools and `sdn.ipam.pools` are **seeds**, not runtime state. At
+control-plane startup each pool is created if no pool of that name exists in
+the backend; an existing pool and its allocations are never mutated or
+deleted. Removing a pool from configuration does not delete it from the
+backend. Pre-release, the upgrade path is wipe and re-bootstrap, so a
+changed environment means a fresh backend.
 
 ## Backend Selection
 
-The `backend` field controls which storage engine is used for IPAM state.
-Valid values are `"memory"` (default when omitted), `"quicbaas"`, and `"dht"`.
+| Backend | Persistence | Consistency | Use |
+|---------|-------------|-------------|-----|
+| `memory` (default) | none | strong, single instance | development, tests |
+| `quicbaas` | Raft log and snapshots (via the quicbaas SDK) | strong | production |
+| `dht` | DHT, replicated | eventual, claim-based | P2P (`platform_p2p` build tag) |
 
-### Memory Backend
+`quicbaas` needs the top-level `quicbaas:` client (`sdn.ErrIPAMBackendUnconfigured`
+otherwise); `dht` in a binary built without `platform_p2p` fails with
+`sdn.ErrIPAMBackendP2PRequired`. All three backends apply the same window
+rules: `memory` and `quicbaas` hand out the lowest free address of the window,
+`dht` draws random addresses inside it.
 
-In-memory storage for development and testing:
+## Pool Size
 
-```yaml
-sdn:
-  ipam:
-    backend: memory
-```
-
-**Characteristics:**
-
-| Property | Value |
-|----------|-------|
-| Persistence | None (data lost on restart) |
-| Consistency | Strong (single instance) |
-| Performance | Fastest |
-| Use Case | Development, testing, single-node |
-
-### QuicBaaS Backend
-
-Production backend with Raft-based distributed consensus:
-
-```yaml
-sdn:
-  ipam:
-    backend: quicbaas
-```
-
-Requires the platform QuicBaaS SDK client to be configured under the top-level `quicbaas:` section. If the SDK client is not configured when `platformd` starts, the service returns `ErrIPAMBackendUnconfigured`.
-
-**Characteristics:**
-
-| Property | Value |
-|----------|-------|
-| Persistence | Raft log + snapshots |
-| Consistency | Strong (Raft consensus) |
-| Performance | Moderate (network consensus) |
-| Use Case | Production, multi-node clusters |
-
-### DHT Backend
-
-Distributed backend for P2P environments. Requires the binary to be built with the `platform_p2p` build tag:
-
-```
-go build -tags platform_p2p ./cmd/platformd
-```
-
-```yaml
-sdn:
-  ipam:
-    backend: dht
-```
-
-If `backend: dht` is set but the binary was built without `platform_p2p`, `platformd` returns `ErrIPAMBackendP2PRequired` at startup.
-
-**Characteristics:**
-
-| Property | Value |
-|----------|-------|
-| Persistence | DHT network (replicated) |
-| Consistency | Eventual (claim-based) |
-| Performance | Variable (network dependent) |
-| Use Case | P2P networks, decentralized deployments |
-
-## Pool Configuration
-
-### Pool Parameters
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `name` | string | Yes | - | Unique pool name |
-| `cidr` | string | Yes | - | Network prefix (CIDR notation) |
-| `gateway` | string | No | - | Gateway IP address |
-| `zone` | string | No | inherited | Zone for zone-filtered queries |
-| `description` | string | No | "" | Pool description |
-| `tags` | []string | No | [] | Classification tags |
-| `default_lease_duration` | duration | No | 0 (no expiry) | Default lease time |
-| `inactivity_timeout` | duration | No | 720h | Inactivity expiration |
-
-### Zone Field
-
-The `zone` field on a pool enables zone-filtered queries via `ListPoolsByZone`. It is a string matching one of the resolved zone names declared in the `sdn.zones` section (or the built-in zone set).
-
-Zone resolution order at `Validate()` time:
-
-1. If a pool's `zone` is empty **and** a network entry references the pool, the network's `zone` is inherited in-place. The pool's YAML on disk is not modified — the inheritance is runtime-only.
-2. If a pool has an explicit `zone` that differs from a referencing network's `zone`, `Validate()` returns `ErrNetworkPoolZoneMismatch`.
-3. If a pool has an explicit `zone` that is not declared in the resolved zone set, `Validate()` returns `ErrPoolZoneUndeclared`. This check applies to standalone pools (not referenced by any network) as well.
-
-**Allocation stamping:** when an IP is allocated from a pool, the `Allocation.Zone` field is set to the pool's zone automatically. The `AllocationRequest.Zone` field is informational and is not currently used to select a pool; use `PoolID` for explicit targeting.
-
-### Seeding Semantics
-
-The `pools` list in IPAM config is a **seed list**, not an authoritative runtime state. On startup `initIPAMPools`:
-
-1. Creates the backend allocator.
-2. For each pool in config: if a pool with that name already exists in the backend, it is **skipped** (no mutation). If it does not exist, it is created with the zone from config.
-3. Existing pools and their allocations are never deleted or overwritten by the seed step.
-
-This means:
-- Operators can change a runtime pool's zone or CIDR by editing the backend directly; the config will not override it on next boot.
-- New pools can be added to config and they will be created on the next start.
-- Removing a pool from config does not delete it from the backend.
-
-### Zone Derivation from Subnets
-
-When `sdn.ipam` is not explicitly configured but `network.subnets` entries exist (from the installer config), `platformd` automatically derives IPAM pools from internal subnets. The zone is derived from the subnet name using these mappings:
-
-| Subnet name | Derived zone |
-|------------|-------------|
-| `production` | `trusted` |
-| `provisioning` | `provisioning` |
-| `quarantine` | `quarantine` |
-| `storage` | `storage` |
-| `management` | `management` |
-| *(any other)* | `trusted` (with a warning log) |
-
-Explicit pool config entries take precedence: if a pool with the same name exists in `sdn.ipam.pools`, the subnet-derived entry is skipped.
-
-### Pool Validation Rules
-
-| Rule | Validation |
-|------|------------|
-| Name | Non-empty, unique across all pools |
-| CIDR | Valid IPv4 or IPv6 prefix |
-| Zone | Must be a declared zone name when set (validated after zone resolution) |
-| Gateway | Must be within CIDR range if specified |
-| Lease Duration | Non-negative duration |
-| Inactivity Timeout | Non-negative duration |
+`total` (`TotalIPs`) counts what can ever be allocated: the usable addresses of
+the CIDR less the reserved ones. A `/24` zone pool therefore reports 253.
+`available` is `total` less the current allocations. Both count static
+addresses and the dynamic window together: a zone pool whose window
+(`.50`–`.254`, 205 addresses) is full makes `Allocate` return
+`ErrPoolExhausted` while `available` still counts the static addresses
+`.2`–`.49` that `AllocateSpecific` can take. Very large IPv6 pools saturate at
+the maximum `uint64`.
 
 ## Zone-Filtered Queries
 
 ```go
-// Returns all pools in the "provisioning" zone.
 pools, err := allocator.ListPoolsByZone(ctx, "provisioning")
-
-// An empty zone string returns all pools (equivalent to ListPools).
-all, err := allocator.ListPoolsByZone(ctx, "")
+all, err := allocator.ListPoolsByZone(ctx, "") // every pool
 ```
 
-`ListPoolsByZone` is available on all three backends (memory, quicbaas, dht).
+An allocation is stamped with its pool's zone (`Allocation.Zone`).
 
-## Lease Configuration
-
-### Global Lease Settings
-
-```yaml
-sdn:
-  ipam:
-    lease:
-      default_duration: "24h"
-      max_duration: "168h"
-      renewal_threshold: "20%"
-      inactivity_timeout: "720h"
-      expiration_check_interval: "1h"
-```
-
-### Per-Pool Lease Override
-
-```yaml
-pools:
-  - name: "short-lease"
-    cidr: "10.1.0.0/24"
-    zone: "provisioning"
-    default_lease_duration: "1h"
-    inactivity_timeout: "4h"
-
-  - name: "no-expiry"
-    cidr: "10.2.0.0/24"
-    zone: "management"
-    default_lease_duration: "0"
-    inactivity_timeout: "0"
-```
-
-## Allocation Request
+## Allocation
 
 ```go
-// Automatic allocation from a zone-tagged pool
-req := &ipam.AllocationRequest{
-    PoolID:   "production",
-    DeviceID: "vm-001",
-    Hostname: "webserver-01",
-}
-alloc, err := allocator.Allocate(ctx, req)
-// alloc.Zone == "trusted" (stamped from pool)
+// Dynamic: the lowest free, unreserved address of the window (.50 first).
+alloc, err := allocator.Allocate(ctx, &ipam.AllocationRequest{
+    PoolID: "provisioning", DeviceID: "node-7",
+})
 
-// Specific IP
-req := &ipam.AllocationRequest{
-    PoolID:      "production",
-    DeviceID:    "db-001",
-    RequestedIP: netip.MustParseAddr("10.0.0.100"),
-}
-```
+// Static: any unreserved usable address, inside the window or not.
+alloc, err = allocator.AllocateSpecific(ctx, &ipam.AllocationRequest{
+    PoolID: "control-plane", DeviceID: "cp-01",
+    RequestedIP: netip.MustParseAddr("10.4.6.10"),
+})
 
-## Complete Example
-
-```yaml
-sdn:
-  enabled: true
-  backend: quicbaas
-
-  ipam:
-    backend: quicbaas
-    pools:
-      - name: "production"
-        cidr: "10.0.0.0/24"
-        gateway: "10.0.0.1"
-        zone: "trusted"
-        default_lease_duration: "24h"
-        inactivity_timeout: "720h"
-
-      - name: "provisioning"
-        cidr: "10.1.0.0/24"
-        gateway: "10.1.0.1"
-        zone: "provisioning"
-        default_lease_duration: "8h"
-        inactivity_timeout: "48h"
-
-      - name: "management"
-        cidr: "192.168.1.0/24"
-        gateway: "192.168.1.1"
-        zone: "management"
-        default_lease_duration: "0"
-
-    lease:
-      default_duration: "24h"
-      max_duration: "168h"
-      renewal_threshold: "20%"
-      inactivity_timeout: "720h"
-      expiration_check_interval: "1h"
-
-  networks:
-    - name: "production-net"
-      vlan: 10
-      zone: trusted          # today's built-in zone; the reference design replaces it (#708)
-      pool: "production"
-
-    - name: "provisioning-net"
-      vlan: 20
-      zone: provisioning
-      pool: "provisioning"
+// The gateway is refused.
+_, err = allocator.AllocateSpecific(ctx, &ipam.AllocationRequest{
+    PoolID: "control-plane", DeviceID: "x",
+    RequestedIP: netip.MustParseAddr("10.4.6.1"),
+})
+var reserved *ipam.ErrIPReserved
+errors.As(err, &reserved) // true
 ```
 
 ## See Also
 
-- [Architecture](architecture.md) - IPAM architecture and design
-- [API Reference](api-reference.md) - API overview
-- [REST API](api-reference-rest.md) - REST endpoints
-- [gRPC API](api-reference-grpc.md) - gRPC service methods
+- [Architecture](architecture.md) — IPAM architecture and design
+- [API Reference](api-reference.md) — the window fields on every transport
+- [SDN configuration](../configuration.md) — `sdn.environment` and zones

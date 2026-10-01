@@ -578,20 +578,12 @@ type DHCPServiceConfig struct {
 	// Interface is the network interface to bind.
 	Interface string `yaml:"interface" json:"interface" mapstructure:"interface"`
 
-	// Segment is the name of the provisioning subnet to resolve IPAM pool from.
-	// When set, PoolStart, PoolEnd, and Interface are derived from the subnet.
-	//
-	// Deprecated: Use Zone instead for zone-scoped pool selection. Segment is
-	// kept for backward compatibility with existing templates that set it.
-	// When both Segment and Zone are set, Zone takes precedence.
-	Segment string `yaml:"segment,omitempty" json:"segment,omitempty" mapstructure:"segment"`
-
 	// Zone is the zone name used to resolve the IPAM pool for this DHCP service.
 	// The gateway selects a pool by calling Allocator.ListPoolsByZone with this
 	// value. Explicit PoolStart/PoolEnd values take precedence over zone-derived
 	// selection (explicit beats derived).
 	//
-	// Precedence (highest first): PoolStart+PoolEnd → Zone → Segment.
+	// Precedence (highest first): PoolStart+PoolEnd → Zone.
 	Zone string `yaml:"zone,omitempty" json:"zone,omitempty" mapstructure:"zone"`
 
 	// PoolStart is the start of the DHCP address pool.

@@ -542,7 +542,7 @@ func (s *service) AuthorizeDevice(ctx context.Context, deviceID string, targetVL
 	}
 
 	if s.vlanManager != nil {
-		if vlanErr := s.vlanManager.ApplyProductionFlows(ctx, device.PortID, device.MACAddress); vlanErr != nil {
+		if vlanErr := s.vlanManager.ApplyAuthorizedFlows(ctx, device.PortID, device.MACAddress, targetVLAN); vlanErr != nil {
 			return ErrVLANTransitionFailed{
 				DeviceID: deviceID,
 				FromVLAN: oldVLAN,

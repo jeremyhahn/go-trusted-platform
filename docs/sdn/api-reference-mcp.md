@@ -57,8 +57,9 @@ tools; tools without a mapping defer to the tool registry.
 
 ### Related Tool Families
 
-- Network trust zones: `gateway_zone_list`, `gateway_zone_create`,
-  `gateway_zone_update`, `gateway_zone_delete`, `gateway_zone_assign`
+- Underlay zones: `gateway_zone_list`, `gateway_zone_create`,
+  `gateway_zone_update`, `gateway_zone_delete` (the zone object and its rules
+  are in [api.md](api.md) §5; there is no assign tool — networks are zones)
 - Overlay: `overlay_*` tools — see
   [overlay/api-reference-mcp.md](overlay/api-reference-mcp.md)
 - Load balancer: `gateway_lb_status`, `gateway_lb_vip_add`,

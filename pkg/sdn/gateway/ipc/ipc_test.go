@@ -118,7 +118,7 @@ func TestStatus_ReportsStateServicesAndStartError(t *testing.T) {
 		},
 	}
 	srv, client := serve(t, node, selfPolicy())
-	srv.SetStartError(errors.New("firewall: bridge trusted0 not provisioned"))
+	srv.SetStartError(errors.New("firewall: bridge br-fabric not provisioned"))
 
 	resp, err := client.Status(testContext(t))
 	if err != nil {
@@ -127,7 +127,7 @@ func TestStatus_ReportsStateServicesAndStartError(t *testing.T) {
 	if resp.GetState() != ipcv1.ProcessState_PROCESS_STATE_ERROR {
 		t.Fatalf("state = %v, want ERROR", resp.GetState())
 	}
-	if resp.GetStartError() != "firewall: bridge trusted0 not provisioned" {
+	if resp.GetStartError() != "firewall: bridge br-fabric not provisioned" {
 		t.Fatalf("start_error = %q", resp.GetStartError())
 	}
 	if len(resp.GetServices()) != 2 {

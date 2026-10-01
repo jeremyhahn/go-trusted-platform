@@ -45,8 +45,6 @@ func TestTenantToolExecution_ServiceUnavailable(t *testing.T) {
 		{"tenant_get_quotas", map[string]interface{}{"tenant_id": "t1"}},
 		{"tenant_get_usage", map[string]interface{}{"tenant_id": "t1"}},
 		{"tenant_check_quota", map[string]interface{}{"tenant_id": "t1", "resource_type": "vms", "amount": float64(1)}},
-		{"tenant_validate_vlan", map[string]interface{}{"tenant_id": "t1", "vlan_id": float64(100)}},
-		{"tenant_get_bridge", map[string]interface{}{"tenant_id": "t1"}},
 		{"tenant_sync", map[string]interface{}{}},
 		{"tenant_rotate_dek", map[string]interface{}{"tenant_id": "t1"}},
 		{"tenant_get_dek_status", map[string]interface{}{"tenant_id": "t1"}},

@@ -18,8 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -123,6 +123,9 @@ func (app *App) initSDN(ctx context.Context) error {
 	if err := app.SDNConfig.Validate(); err != nil {
 		return ErrSDNConfigValidation{Cause: err}
 	}
+	// Every zone path into control-plane or management beyond the
+	// reference is an audited override: record it on every load.
+	app.SDNConfig.LogPrivilegedPaths(app.Logger.Slog())
 
 	app.Logger.Info("Initializing SDN controller",
 		slog.Bool("controller", app.SDNConfig.Controller))
@@ -134,11 +137,12 @@ func (app *App) initSDN(ctx context.Context) error {
 		}
 	}
 
-	// Materialise OVS bonds + bridge IPs from the installer NetworkConfig.
-	// This is the runtime counterpart to the Linux `/etc/network/interfaces`
-	// file: operators who mark a bond as Type=ovs delegate its creation
-	// to platformd so the bond lives inside OVS (not the kernel bonding
-	// driver) and the bridge gets an IP for the production subnet.
+	// Materialise OVS bonds + zone addresses from the installer
+	// NetworkConfig. This is the runtime counterpart to the Linux
+	// `/etc/network/interfaces` file: operators who mark a bond as Type=ovs
+	// delegate its creation to platformd so the bond lives inside OVS (not
+	// the kernel bonding driver), and every host address the bond declares
+	// lands on a tagged internal port of its zone.
 	// Linux-typed bonds are skipped here — the installer writes them into
 	// `/etc/network/interfaces` and Alpine's OpenRC networking brings
 	// them up before platformd starts.
@@ -150,25 +154,22 @@ func (app *App) initSDN(ctx context.Context) error {
 			app.Logger.Warn("SDN: OVS bond initialisation failed",
 				slog.String("error", err.Error()))
 		}
-		if err := app.initBridgeIPs(ctx); err != nil {
-			app.Logger.Warn("SDN: bridge IP assignment failed",
+		if err := app.initZoneAddresses(ctx); err != nil {
+			app.Logger.Warn("SDN: zone address assignment failed",
 				slog.String("error", err.Error()))
 		}
 	}
 
-	// Derive IPAM pools and SDN networks from installer subnet definitions
-	if app.NetworkConfig != nil && len(app.NetworkConfig.Subnets) > 0 {
-		app.deriveSDNFromSubnets()
-	}
-
-	// Initialize the IPAM allocator and create pools from config
-	if app.SDNConfig.IPAM != nil && len(app.SDNConfig.IPAM.Pools) > 0 {
+	// The controller owns IPAM: it seeds the plan's pools (one per zone,
+	// plus the IPAM ranges) and the explicit sdn.ipam.pools. A node with
+	// an explicit ipam section seeds the same set, create-if-missing.
+	if app.SDNConfig.Controller || app.SDNConfig.IPAM != nil {
 		if err := app.initIPAMPools(ctx); err != nil {
 			return err
 		}
 	}
 
-	// Log DHCP status for each pool
+	// Report which zones this node would serve DHCP on.
 	app.logDHCPStatus()
 
 	// Log overall SDN status
@@ -477,7 +478,10 @@ var ipamBackendFactory = map[string]func(ctx context.Context, app *App) (ipam.Al
 // seeds pools from config using create-if-missing semantics. Existing pools
 // with the same name are left untouched. Nothing is ever deleted.
 func (app *App) initIPAMPools(ctx context.Context) error {
-	backendName := app.SDNConfig.IPAM.Backend
+	backendName := ""
+	if app.SDNConfig.IPAM != nil {
+		backendName = app.SDNConfig.IPAM.Backend
+	}
 	if backendName == "" {
 		backendName = "memory"
 	}
@@ -504,211 +508,163 @@ func (app *App) initIPAMPools(ctx context.Context) error {
 	return nil
 }
 
-// seedIPAMPools creates the configured pools in allocator using
-// create-if-missing semantics: a pool that already exists in the backend is
-// left exactly as it is, and nothing is ever deleted. It is split out of
-// initIPAMPools so the seeding contract can be exercised against a
-// caller-supplied allocator without substituting a backend constructor in the
-// package-level ipamBackendFactory registry.
+// seedIPAMPools creates the network plan's pools and the explicit
+// sdn.ipam.pools in allocator using create-if-missing semantics: a pool that
+// already exists in the backend is left exactly as it is, and nothing is
+// ever deleted. It is split out of initIPAMPools so the seeding contract can
+// be exercised against a caller-supplied allocator without substituting a
+// backend constructor in the package-level ipamBackendFactory registry.
 func (app *App) seedIPAMPools(ctx context.Context, allocator ipam.Allocator) error {
-	for i := range app.SDNConfig.IPAM.Pools {
-		poolCfg := &app.SDNConfig.IPAM.Pools[i]
-
-		// Check if pool already exists in the backend.
-		if existing, err := allocator.GetPoolByName(ctx, poolCfg.Name); err == nil && existing != nil {
+	pools, err := app.ipamSeedPools()
+	if err != nil {
+		return err
+	}
+	for _, pool := range pools {
+		if existing, err := allocator.GetPoolByName(ctx, pool.Name); err == nil && existing != nil {
+			if drift := poolDrift(existing, pool); drift != nil {
+				return drift
+			}
 			app.Logger.Debug("IPAM pool already exists in backend, skipping seed",
-				slog.String("pool", poolCfg.Name))
+				slog.String("pool", pool.Name))
 			continue
-		}
-
-		pool := &ipam.Pool{
-			ID:                   poolCfg.Name,
-			Name:                 poolCfg.Name,
-			CIDR:                 poolCfg.CIDR,
-			Gateway:              poolCfg.Gateway,
-			Zone:                 poolCfg.Zone,
-			DefaultLeaseDuration: poolCfg.LeaseDuration,
 		}
 
 		if err := allocator.CreatePool(ctx, pool); err != nil {
 			return ErrSDNIPAMPoolCreate{
-				Pool:  poolCfg.Name,
+				Pool:  pool.Name,
 				Cause: err,
 			}
 		}
 
 		app.Logger.Info("Created IPAM pool",
-			slog.String("pool", poolCfg.Name),
-			slog.String("cidr", poolCfg.CIDR.String()),
-			slog.String("zone", poolCfg.Zone),
-			slog.Bool("dhcp", poolCfg.DHCP))
+			slog.String("pool", pool.Name),
+			slog.String("cidr", pool.CIDR.String()),
+			slog.String("zone", pool.Zone))
 	}
 
 	return nil
 }
 
-// deriveSDNFromSubnets walks the installer NetworkConfig.Subnets and creates
-// IPAM pools and SDN network entries for each internal subnet. This allows
-// subnets to be the single source of truth for IP addressing without
-// requiring manual IPAM pool or SDN network configuration.
-//
-// Well-known subnet names are mapped to canonical zone constants:
-//   - "production"    → zone.ZoneTrusted
-//   - "provisioning"  → zone.ZoneProvisioning
-//   - "quarantine"    → zone.ZoneQuarantine
-//   - "storage"       → zone.ZoneStorage
-//   - "management"    → zone.ZoneManagement
-//
-// All other subnet names default to zone.ZoneTrusted (general internal
-// traffic) and a warning is emitted so operators can add an explicit
-// networks[] entry if a different zone is required.
-func (app *App) deriveSDNFromSubnets() {
-	if app.SDNConfig.IPAM == nil {
-		app.SDNConfig.IPAM = &sdn.IPAMConfig{
-			Backend: "memory",
-		}
+// poolDrift compares a stored pool with the pool the seed wants under the
+// same name. A pool that matches is kept as stored (seeding never mutates);
+// one that differs in prefix, gateway, dynamic window or reserved prefixes
+// is a configuration from another network model and is refused loudly
+// rather than silently overriding the plan.
+func poolDrift(stored, want *ipam.Pool) error {
+	same := stored.CIDR == want.CIDR &&
+		stored.Gateway == want.Gateway &&
+		stored.RangeStart == want.RangeStart &&
+		stored.RangeEnd == want.RangeEnd &&
+		slices.Equal(stored.Reserved, want.Reserved)
+	if same {
+		return nil
 	}
-
-	existingPools := make(map[string]struct{}, len(app.SDNConfig.IPAM.Pools))
-	for _, p := range app.SDNConfig.IPAM.Pools {
-		existingPools[p.Name] = struct{}{}
+	describe := func(p *ipam.Pool) string {
+		return fmt.Sprintf("cidr %s gateway %s range %s-%s reserved %v",
+			p.CIDR, p.Gateway, p.RangeStart, p.RangeEnd, p.Reserved)
 	}
-
-	// Build a set of network names already present in the list so explicit
-	// config wins over derived entries for matching names.
-	existingNetworks := make(map[string]struct{}, len(app.SDNConfig.Networks))
-	for _, n := range app.SDNConfig.Networks {
-		existingNetworks[n.Name] = struct{}{}
-	}
-
-	for _, sub := range app.NetworkConfig.Subnets {
-		// Only derive pools for internal and public subnets
-		if sub.Scope != installer.SubnetScopeInternal && sub.Scope != installer.SubnetScopePublic {
-			continue
-		}
-
-		// Skip if a pool with this name already exists (explicit config wins)
-		if _, ok := existingPools[sub.Name]; ok {
-			continue
-		}
-
-		prefix, err := netip.ParsePrefix(sub.CIDR)
-		if err != nil {
-			app.Logger.Warn("Skipping subnet with invalid CIDR",
-				slog.String("subnet", sub.Name),
-				slog.String("cidr", sub.CIDR),
-				slog.String("error", err.Error()))
-			continue
-		}
-
-		// Derive zone for this subnet — used in both the pool and any network entry.
-		z := deriveZoneForSubnetName(app.Logger, sub.Name)
-
-		pool := sdn.PoolConfig{
-			Name: sub.Name,
-			CIDR: prefix,
-			Zone: string(z),
-		}
-
-		if sub.Gateway != "" {
-			if gw, err := netip.ParseAddr(sub.Gateway); err == nil {
-				pool.Gateway = gw
-			}
-		}
-
-		for _, d := range sub.DNS {
-			if addr, err := netip.ParseAddr(d); err == nil {
-				pool.DNS = append(pool.DNS, addr)
-			}
-		}
-
-		if sub.DHCP != nil && sub.DHCP.Enabled {
-			pool.DHCP = true
-			if sub.DHCP.RangeStart != "" {
-				if rs, err := netip.ParseAddr(sub.DHCP.RangeStart); err == nil {
-					pool.RangeStart = rs
-				}
-			}
-			if sub.DHCP.RangeEnd != "" {
-				if re, err := netip.ParseAddr(sub.DHCP.RangeEnd); err == nil {
-					pool.RangeEnd = re
-				}
-			}
-		}
-
-		app.SDNConfig.IPAM.Pools = append(app.SDNConfig.IPAM.Pools, pool)
-
-		// Create an SDN network list entry for subnets with a VLAN ID.
-		// Explicit entries (populated before derivation) take precedence.
-		if sub.VLANID > 0 {
-			if _, ok := existingNetworks[sub.Name]; !ok {
-				app.SDNConfig.Networks = append(app.SDNConfig.Networks, sdn.NetworkConfig{
-					Name:   sub.Name,
-					Subnet: prefix,
-					VLAN:   sub.VLANID,
-					Zone:   z,
-					Pool:   sub.Name,
-				})
-				existingNetworks[sub.Name] = struct{}{}
-			}
-		}
-
-		app.Logger.Info("Derived IPAM pool from subnet",
-			slog.String("subnet", sub.Name),
-			slog.String("scope", string(sub.Scope)),
-			slog.String("cidr", sub.CIDR),
-			slog.String("zone", string(z)),
-			slog.Bool("dhcp", pool.DHCP))
-	}
+	return ErrSDNIPAMPoolDrift{Pool: want.Name, Stored: describe(stored), Plan: describe(want)}
 }
 
-// zoneNameMapping maps well-known subnet names to their canonical zone.
-var zoneNameMapping = map[string]sdnzone.Zone{
-	"production":   sdnzone.ZoneTrusted,
-	"provisioning": sdnzone.ZoneProvisioning,
-	"quarantine":   sdnzone.ZoneQuarantine,
-	"storage":      sdnzone.ZoneStorage,
-	"management":   sdnzone.ZoneManagement,
-	"tenant":       sdnzone.ZoneTenant,
-	"public":       sdnzone.ZonePublic,
-	"trusted":      sdnzone.ZoneTrusted,
-}
-
-// deriveZoneForSubnetName maps a well-known subnet name to its canonical zone.
-// Unknown names default to ZoneTrusted with a logged warning.
-func deriveZoneForSubnetName(logger interface {
-	Warn(msg string, args ...any)
-}, name string) sdnzone.Zone {
-	if z, ok := zoneNameMapping[name]; ok {
-		return z
+// ipamSeedPools returns the pools to seed: the network plan's pools first
+// (zone pools carry the zone, the gateway and the reserved gateway address,
+// and a dynamic range from .50), then the explicit sdn.ipam.pools.
+func (app *App) ipamSeedPools() ([]*ipam.Pool, error) {
+	plan := app.SDNConfig.Plan()
+	if plan == nil {
+		return nil, sdn.ErrEnvironmentRequired{}
 	}
-	logger.Warn("SDN: subnet name has no canonical zone mapping; defaulting to trusted",
-		slog.String("subnet", name),
-		slog.String("zone", string(sdnzone.ZoneTrusted)))
-	return sdnzone.ZoneTrusted
+	var out []*ipam.Pool
+	for _, p := range plan.Pools() {
+		out = append(out, &ipam.Pool{
+			ID:          p.Name,
+			Name:        p.Name,
+			CIDR:        p.Prefix,
+			Gateway:     p.Gateway,
+			Zone:        string(p.Zone),
+			Reserved:    p.Reserved,
+			RangeStart:  p.RangeStart,
+			RangeEnd:    p.RangeEnd,
+			Description: "derived from the network plan",
+		})
+	}
+	if app.SDNConfig.IPAM != nil {
+		for i := range app.SDNConfig.IPAM.Pools {
+			cfg := &app.SDNConfig.IPAM.Pools[i]
+			pool := &ipam.Pool{
+				ID:                   cfg.Name,
+				Name:                 cfg.Name,
+				CIDR:                 cfg.CIDR,
+				Gateway:              cfg.Gateway,
+				Zone:                 cfg.Zone,
+				RangeStart:           cfg.RangeStart,
+				RangeEnd:             cfg.RangeEnd,
+				DefaultLeaseDuration: cfg.LeaseDuration,
+			}
+			if cfg.Gateway.IsValid() {
+				pool.Reserved = []netip.Prefix{netip.PrefixFrom(cfg.Gateway, cfg.Gateway.BitLen())}
+			}
+			out = append(out, pool)
+		}
+	}
+	return out, nil
 }
 
-// logDHCPStatus logs which pools have DHCP enabled or disabled.
+// dhcpZones returns the zones this node serves DHCP on: a zone whose policy
+// lists the "dhcp" service (provisioning and quarantine in the reference),
+// and on which this host holds an address (a bond VLAN of that zone). On a
+// reference control-plane node the result is empty: the gateway is the host
+// addressed on provisioning and quarantine.
+func (app *App) dhcpZones() []sdnzone.Zone {
+	held := app.heldZones()
+	var out []sdnzone.Zone
+	for _, z := range app.SDNConfig.ResolvedZones() {
+		if _, ok := held[z.Name]; !ok {
+			continue
+		}
+		for _, svc := range z.Services {
+			if svc == "dhcp" {
+				out = append(out, z.Name)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// heldZones returns the zones this host has an address on, from the bond
+// VLANs of the installer network configuration.
+func (app *App) heldZones() map[sdnzone.Zone]struct{} {
+	held := make(map[sdnzone.Zone]struct{})
+	if app.NetworkConfig == nil {
+		return held
+	}
+	for _, bond := range app.NetworkConfig.Bonds {
+		for _, v := range bond.VLANs {
+			if v.Zone != "" && v.IPv4Address != "" {
+				held[sdnzone.Zone(v.Zone)] = struct{}{}
+			}
+		}
+	}
+	return held
+}
+
+// logDHCPStatus reports the zones this node would serve DHCP on. When
+// sdn.dhcp is enabled but no zone qualifies, it says so plainly: the node
+// holds no address on a DHCP zone, so it serves nothing.
 func (app *App) logDHCPStatus() {
-	if app.SDNConfig.IPAM == nil {
+	if app.SDNConfig.DHCP == nil || !app.SDNConfig.DHCP.Enabled {
 		return
 	}
-
-	dhcpEnabled := false
-	for _, pool := range app.SDNConfig.IPAM.Pools {
-		if pool.DHCP {
-			dhcpEnabled = true
-			app.Logger.Info("DHCP enabled for pool",
-				slog.String("pool", pool.Name),
-				slog.String("cidr", pool.CIDR.String()))
-		} else {
-			app.Logger.Debug("DHCP disabled for pool",
-				slog.String("pool", pool.Name))
-		}
+	zones := app.dhcpZones()
+	if len(zones) == 0 {
+		app.Logger.Warn("SDN: sdn.dhcp is enabled but this node holds no address on a zone that serves dhcp; it serves no DHCP",
+			slog.String("interface", app.SDNConfig.DHCP.Interface))
+		return
 	}
-
-	if app.SDNConfig.DHCP != nil && app.SDNConfig.DHCP.Enabled && dhcpEnabled {
-		app.Logger.Info("DHCP server configured",
+	for _, z := range zones {
+		app.Logger.Info("SDN: DHCP zone",
+			slog.String("zone", string(z)),
 			slog.String("interface", app.SDNConfig.DHCP.Interface))
 	}
 }
@@ -725,22 +681,17 @@ func (app *App) logSDNStatus() {
 		bridgeName = app.SDNConfig.OVS.Bridge
 	}
 
-	poolCount := 0
-	dhcpPoolCount := 0
-	if app.SDNConfig.IPAM != nil {
-		poolCount = len(app.SDNConfig.IPAM.Pools)
-		for _, p := range app.SDNConfig.IPAM.Pools {
-			if p.DHCP {
-				dhcpPoolCount++
-			}
-		}
+	environment := uint16(0)
+	if plan := app.SDNConfig.Plan(); plan != nil {
+		environment = plan.Environment().ID
 	}
 
 	app.Logger.Info("SDN initialized",
 		slog.String("mode", mode),
 		slog.String("bridge", bridgeName),
-		slog.Int("pools", poolCount),
-		slog.Int("dhcp_pools", dhcpPoolCount))
+		slog.Int("environment", int(environment)),
+		slog.Int("zones", len(app.SDNConfig.ResolvedZones())),
+		slog.Int("dhcp_zones", len(app.dhcpZones())))
 }
 
 // initOVSBonds walks NetworkConfig.Bonds and creates any bond declared
@@ -848,148 +799,206 @@ func (app *App) createOVSBond(ctx context.Context, bridge string, bond *installe
 	return nil
 }
 
-// initBridgeIPs assigns the first matching subnet's gateway IP to
-// every OVS bridge that's expected to host an internal subnet.
-//
-// "Matching" means: the subnet must be internal scope and its
-// `interface` (if any) must match the bridge name, or — when the
-// subnet doesn't declare an interface — the bridge is assumed to host
-// the first internal subnet in the config. That's a pragmatic default
-// that matches the single-bridge-per-node deployments we ship;
-// multi-bridge setups can pin via `network.bridges[].address` in a
-// future iteration.
-//
-// Bringing the bridge UP is also done here so the IP is usable
-// immediately without waiting for `ifupdown` to race with platformd.
-func (app *App) initBridgeIPs(ctx context.Context) error {
-	if app.NetworkConfig == nil {
-		return nil
-	}
-
-	// Synthesise a BridgeConfig for any OVS bond that declares
-	// `bridge: <name>` but doesn't have a matching entry in
-	// network.bridges. Operators frequently omit the `bridges:` block
-	// on nodes that only need a bridge because a bond references one
-	// (typical gateway/compute override); without this the bridge IP
-	// never gets assigned because the loop has nothing to iterate.
-	bridges := append([]installer.BridgeConfig(nil), app.NetworkConfig.Bridges...)
-	for _, bond := range app.NetworkConfig.Bonds {
-		if bond.Type != installer.BondTypeOVS || bond.Bridge == "" {
-			continue
-		}
-		found := false
-		for _, existing := range bridges {
-			if existing.Name == bond.Bridge {
-				found = true
-				break
-			}
-		}
-		if found {
-			continue
-		}
-		bridges = append(bridges, installer.BridgeConfig{
-			Name:      bond.Bridge,
-			Type:      installer.BridgeTypeOVS,
-			AutoStart: true,
-		})
-	}
-
-	if len(bridges) == 0 {
-		return nil
-	}
-
-	for _, br := range bridges {
-		// Only manage OVS bridges here — Linux bridges are handled by
-		// the Alpine installer via /etc/network/interfaces.
-		if br.Type != installer.BridgeTypeOVS {
-			continue
-		}
-
-		addr := resolveBridgeAddress(&br, app.NetworkConfig.Bonds, app.NetworkConfig.Subnets)
-		if addr == "" {
-			app.Logger.Debug("SDN: no subnet match for OVS bridge, skipping IP assignment",
-				slog.String("bridge", br.Name))
-			continue
-		}
-
-		if err := setBridgeUpFn(ctx, br.Name); err != nil {
-			app.Logger.Warn("SDN: failed to bring bridge up",
-				slog.String("bridge", br.Name),
-				slog.String("error", err.Error()))
-			continue
-		}
-
-		// Duplicate-address detection (#508): the node must never take an
-		// address another station already answers for — a gateway that
-		// steals the edge router's address strands every host on the
-		// segment. A measured conflict fails the address closed and
-		// leaves the node degraded; bring-up continues so the daemon
-		// still comes up reachable on its other addresses.
-		if err := app.guardBridgeAddress(ctx, br.Name, addr); err != nil {
-			continue
-		}
-
-		if err := assignBridgeAddrFn(ctx, br.Name, addr); err != nil {
-			app.Logger.Warn("SDN: failed to assign IP to bridge",
-				slog.String("bridge", br.Name),
-				slog.String("address", addr),
-				slog.String("error", err.Error()))
-			continue
-		}
-
-		app.Logger.Info("SDN: bridge IP assigned",
-			slog.String("bridge", br.Name),
-			slog.String("address", addr))
-	}
-	return nil
+// ErrSDNUnknownZoneAddress is returned when an OVS bond VLAN entry names a
+// zone the network plan does not hold, or a bond has no bridge to put the
+// zone port on.
+type ErrSDNUnknownZoneAddress struct {
+	// Bond is the bond declaring the address.
+	Bond string
+	// Zone is the zone the entry names.
+	Zone string
+	// NoBridge is set when the zone is known but the bond has no bridge
+	// and no default sdn.ovs.bridge exists.
+	NoBridge bool
 }
 
-// resolveBridgeAddress picks the CIDR-formatted IP to assign to br.
-// Precedence:
-//  1. A bond attached to this bridge with a vlans[0].ipv4-address that
-//     maps to an internal subnet — this is the per-node IP the operator
-//     declared in their override (e.g. 10.200.0.1/24 on CP,
-//     10.200.0.2/24 on gateway, 10.200.0.3/24 on compute).
-//  2. First internal-scoped subnet's gateway IP — used when no bond is
-//     bound to this bridge (edge nodes running a lone bridge with no
-//     bond), so the CP's configured gateway address materialises.
-//  3. Empty (caller skips assignment).
-//
-// Returns a CIDR-formatted string ("10.200.0.1/24") suitable for
-// `ip addr add`.
-func resolveBridgeAddress(br *installer.BridgeConfig, bonds []installer.BondConfig, subnets []installer.SubnetConfig) string {
-	// Precedence 1: bond-attached bridge uses the bond's first VLAN
-	// ipv4-address. The operator set this intentionally in
-	// network.bonds[].vlans[].ipv4-address per-node.
-	for _, bond := range bonds {
-		if bond.Bridge != br.Name {
+// Error implements the error interface.
+func (e ErrSDNUnknownZoneAddress) Error() string {
+	if e.NoBridge {
+		return fmt.Sprintf("app: bond %q address on zone %q has no OVS bridge (set bonds[].bridge or sdn.ovs.bridge)", e.Bond, e.Zone)
+	}
+	return fmt.Sprintf("app: bond %q declares an address on zone %q, which the network plan does not hold", e.Bond, e.Zone)
+}
+
+// ErrSDNDuplicateZoneAddress is returned when two bond VLAN entries hold an
+// address on the same zone: a host has one zone<VLAN> port per zone, so the
+// second address would silently land on the first entry's port.
+type ErrSDNDuplicateZoneAddress struct {
+	// Zone is the zone named twice.
+	Zone string
+	// Bonds are the two bonds naming it (they may be the same bond).
+	Bonds [2]string
+}
+
+// Error implements the error interface.
+func (e ErrSDNDuplicateZoneAddress) Error() string {
+	return fmt.Sprintf("app: zone %q holds addresses on both bond %q and bond %q; a host addresses each zone once",
+		e.Zone, e.Bonds[0], e.Bonds[1])
+}
+
+// ErrSDNIPAMPoolDrift is returned when the backend already holds a pool under
+// a plan pool's name but with a different prefix, gateway or window — for
+// example a pool left by an earlier network model. Pre-release there is no
+// migration: wipe the IPAM store and re-bootstrap.
+type ErrSDNIPAMPoolDrift struct {
+	// Pool is the pool name.
+	Pool string
+	// Stored describes the pool the backend holds.
+	Stored string
+	// Plan describes the pool the network plan derives.
+	Plan string
+}
+
+// Error implements the error interface.
+func (e ErrSDNIPAMPoolDrift) Error() string {
+	return fmt.Sprintf("app: ipam pool %q in the store (%s) differs from the network plan (%s); "+
+		"the pre-release upgrade path is to wipe the IPAM store and re-bootstrap", e.Pool, e.Stored, e.Plan)
+}
+
+// zonePortName returns the OVS internal port that carries a host address
+// on VLAN vlan: "zone<VLAN>" (zone406), at most 8 characters, well inside
+// IFNAMSIZ.
+func zonePortName(vlan uint16) string {
+	return fmt.Sprintf("zone%d", vlan)
+}
+
+// zoneAddress is one host address to realise on a zone's internal port.
+type zoneAddress struct {
+	bridge string
+	port   string
+	vlan   uint16
+	addr   string
+}
+
+// zoneAddresses resolves every OVS bond VLAN entry {zone, ipv4-address} of
+// the installer network configuration into the internal port, bridge and
+// VLAN that carry it. The bridge's own internal interface never gets an
+// address: an untagged address there would land on the trunk's native
+// VLAN (provisioning).
+func (app *App) zoneAddresses() ([]zoneAddress, error) {
+	plan := app.SDNConfig.Plan()
+	defaultBridge := ""
+	if app.SDNConfig.OVS != nil {
+		defaultBridge = app.SDNConfig.OVS.Bridge
+	}
+	var out []zoneAddress
+	seen := make(map[string]string)
+	for _, bond := range app.NetworkConfig.Bonds {
+		if bond.Type != "" && bond.Type != installer.BondTypeOVS {
 			continue
+		}
+		bridge := bond.Bridge
+		if bridge == "" {
+			bridge = defaultBridge
 		}
 		for _, v := range bond.VLANs {
 			if v.IPv4Address == "" {
 				continue
 			}
-			return v.IPv4Address
+			if plan == nil {
+				return nil, sdn.ErrEnvironmentRequired{}
+			}
+			n, ok := plan.Zone(sdnzone.Zone(v.Zone))
+			if !ok {
+				return nil, ErrSDNUnknownZoneAddress{Bond: bond.Name, Zone: v.Zone}
+			}
+			if bridge == "" {
+				return nil, ErrSDNUnknownZoneAddress{Bond: bond.Name, Zone: v.Zone, NoBridge: true}
+			}
+			if first, dup := seen[v.Zone]; dup {
+				return nil, ErrSDNDuplicateZoneAddress{Zone: v.Zone, Bonds: [2]string{first, bond.Name}}
+			}
+			seen[v.Zone] = bond.Name
+			out = append(out, zoneAddress{
+				bridge: bridge,
+				port:   zonePortName(n.VLAN),
+				vlan:   n.VLAN,
+				addr:   v.IPv4Address,
+			})
 		}
 	}
+	return out, nil
+}
 
-	// Precedence 2: fall back to subnet gateway for bridge-only (no
-	// bond) topologies — typical on a CP that IS the gateway.
-	for _, sub := range subnets {
-		if sub.Scope != installer.SubnetScopeInternal {
-			continue
+// zonePortClient is the slice of the OVS client that creates zone ports.
+type zonePortClient interface {
+	GetPort(ctx context.Context, name string) (*ovs.Port, error)
+	AddPort(ctx context.Context, bridgeName, portName string) (*ovs.Port, error)
+	SetInterfaceType(ctx context.Context, name, ifType string) error
+	SetPortVLAN(ctx context.Context, portName string, tag int64) error
+}
+
+// ensureZonePort creates (idempotently) the internal port of a zone address
+// on its bridge, tagged with the zone's VLAN.
+func ensureZonePort(ctx context.Context, client zonePortClient, za zoneAddress) error {
+	if existing, err := client.GetPort(ctx, za.port); err != nil || existing == nil {
+		if _, err := client.AddPort(ctx, za.bridge, za.port); err != nil && !errors.Is(err, ovs.ErrPortExists) {
+			return &WrappedError{Msg: fmt.Sprintf("ovs AddPort %s on %s", za.port, za.bridge), Err: err}
 		}
-		if sub.Gateway == "" || sub.CIDR == "" {
-			continue
-		}
-		_, ipnet, err := net.ParseCIDR(sub.CIDR)
-		if err != nil {
-			continue
-		}
-		prefix, _ := ipnet.Mask.Size()
-		return fmt.Sprintf("%s/%d", sub.Gateway, prefix)
 	}
-	return ""
+	if err := client.SetInterfaceType(ctx, za.port, "internal"); err != nil {
+		return &WrappedError{Msg: fmt.Sprintf("ovs SetInterfaceType %s internal", za.port), Err: err}
+	}
+	if err := client.SetPortVLAN(ctx, za.port, int64(za.vlan)); err != nil {
+		return &WrappedError{Msg: fmt.Sprintf("ovs SetPortVLAN %s %d", za.port, za.vlan), Err: err}
+	}
+	return nil
+}
+
+// initZoneAddresses realises the host's zone addresses: for every OVS bond
+// VLAN entry it creates the zone<VLAN> internal port on the bond's bridge,
+// tagged with the zone's VLAN from the network plan, brings it up, runs the
+// duplicate-address guard (#508) and assigns the address. An unknown zone or
+// a missing plan fails the whole step with a typed error before any port is
+// touched.
+func (app *App) initZoneAddresses(ctx context.Context) error {
+	client := zonePortClientFn(app)
+	if app.NetworkConfig == nil || client == nil {
+		return nil
+	}
+	addrs, err := app.zoneAddresses()
+	if err != nil {
+		return err
+	}
+	for _, za := range addrs {
+		if err := ensureZonePort(ctx, client, za); err != nil {
+			app.Logger.Warn("SDN: failed to create zone port",
+				slog.String("port", za.port),
+				slog.String("bridge", za.bridge),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		if err := setBridgeUpFn(ctx, za.port); err != nil {
+			app.Logger.Warn("SDN: failed to bring zone port up",
+				slog.String("port", za.port),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		// Duplicate-address detection (#508): the node must never take an
+		// address another station already answers for. A measured
+		// conflict fails the address closed and leaves the node degraded;
+		// bring-up continues with its other addresses.
+		if err := app.guardBridgeAddress(ctx, za.port, za.addr); err != nil {
+			continue
+		}
+
+		if err := assignBridgeAddrFn(ctx, za.port, za.addr); err != nil {
+			app.Logger.Warn("SDN: failed to assign zone address",
+				slog.String("port", za.port),
+				slog.String("address", za.addr),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		app.Logger.Info("SDN: zone address assigned",
+			slog.String("port", za.port),
+			slog.String("bridge", za.bridge),
+			slog.Int("vlan", int(za.vlan)),
+			slog.String("address", za.addr))
+	}
+	return nil
 }
 
 // bridgeLink resolves the kernel link for an OVS bridge by name. The
@@ -1026,8 +1035,18 @@ func bridgeLink(ctx context.Context, name string) (netlink.Link, error) {
 	return link, nil
 }
 
-// setBridgeUpFn and assignBridgeAddrFn are the netlink calls initBridgeIPs
-// makes, held in package variables so tests can drive the bring-up sequence
+// zonePortClientFn returns the OVS client initZoneAddresses creates zone
+// ports with: the app's OVS client, or nil when OVS is not connected. A
+// package variable so tests drive bring-up without an OVSDB server.
+var zonePortClientFn = func(app *App) zonePortClient {
+	if app.ovsClient == nil {
+		return nil
+	}
+	return app.ovsClient
+}
+
+// setBridgeUpFn and assignBridgeAddrFn are the netlink calls
+// initZoneAddresses makes, held in package variables so tests can drive the bring-up sequence
 // — in particular, prove that a duplicate-address refusal stops the
 // assignment — without touching host networking.
 var (

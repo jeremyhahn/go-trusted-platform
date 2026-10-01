@@ -262,7 +262,7 @@ over here.
 | `ErrProfileNotAssigned{ID}` | struct | Declared; **not returned by `pkg/device` today** |
 | `ErrDeviceIdentityRequired{}` | struct | `FindConfigForDevice` / `AssignToDeviceWithEK` with neither EK serial nor MAC |
 | `ErrNoMatchingConfig{EKSerial, MAC}` | struct | `FindConfigForDevice` found nothing |
-| `ErrProfileVLANsNotDistinct{VLAN}` | struct | A profile's provisioning and trusted networks share a VLAN, on any path that can introduce it — `Save`, `Update`, `AssignToDeviceWithEK`. Never from `UnassignFromDevice` or `Delete` (see below) |
+| `ErrProfileVLANsNotDistinct{VLAN}` | struct | A profile's provisioning and admitted networks share a VLAN, on any path that can introduce it — `Save`, `Update`, `AssignToDeviceWithEK`. Never from `UnassignFromDevice` or `Delete` (see below) |
 
 **`ProfileService.save` is the one call to `profileDAO.Save`**, and
 **`saveValidated` is the seam every path that can INTRODUCE invalid network
@@ -373,7 +373,7 @@ Profile-level configuration knobs worth knowing:
 | Field | Default when unset | Notes |
 |---|---|---|
 | `DeviceProfile.EnrollmentNetwork` | `DefaultEnrollmentNetwork` = `"provisioning"` | Resolved by `GetEnrollmentNetworkConfig()` |
-| `DeviceProfile.PostEnrollmentNetwork` | `DefaultPostEnrollmentNetwork` = `"trusted"` | `GetPostEnrollmentNetworkConfig()` also back-fills `Zone` from the profile-level `Zone` and returns a **copy**, so the stored map entry is not mutated |
+| `DeviceProfile.PostEnrollmentNetwork` | `DefaultPostEnrollmentNetwork` = `"admitted"` | `GetPostEnrollmentNetworkConfig()` also back-fills `Zone` from the profile-level `Zone` and returns a **copy**, so the stored map entry is not mutated |
 | `DeviceProfile.FailureNetwork` | `DefaultFailureNetwork` = `"quarantine"` | `GetFailureNetworkConfig()` |
 | `DeviceProfile.WorkloadPCR` | `DefaultWorkloadPCR` = `14` | `GetWorkloadPCR()`; valid 0–23, and 0 means "use the default" |
 | `BMCConfig.Port` | `DefaultBMCIPMIPort` = `623` / `DefaultBMCRedfishPort` = `443` | `EffectivePort()` picks by protocol |
@@ -439,7 +439,7 @@ exercise the derivation logic without a live daemon."*
 - **Logging.** The DAO layer logs deserialisation failures at Warn with the
   entity id. `Handler.Activate` logs at Error for ARP lookup failure, switch
   VLAN transition failure and port-state transition failure, and at Info on
-  success (`"Device %s activated on trusted VLAN %d"`). `commitSwitchTransition`
+  success (`"Device %s activated on admitted VLAN %d"`). `commitSwitchTransition`
   logs the switch, port and VLAN at Info.
 - **Metrics.** `pkg/device` declares none.
 - **Audit.** `pkg/device` writes no audit records itself.

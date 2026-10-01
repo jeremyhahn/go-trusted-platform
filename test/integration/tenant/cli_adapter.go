@@ -115,10 +115,6 @@ func (a *CLIAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions)
 	if opts.DisplayName != "" {
 		args = append(args, "--display-name", opts.DisplayName)
 	}
-	if opts.VLANRange != nil {
-		args = append(args, "--vlan-start", fmt.Sprintf("%d", opts.VLANRange.Start))
-		args = append(args, "--vlan-end", fmt.Sprintf("%d", opts.VLANRange.End))
-	}
 
 	output, err := a.runCommand(ctx, args...)
 	if err != nil {
@@ -449,65 +445,6 @@ func (a *CLIAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*C
 // Network Operations
 // =============================================================================
 
-// ValidateVLAN validates a VLAN ID for a tenant
-func (a *CLIAdapter) ValidateVLAN(ctx context.Context, opts ValidateVLANOptions) (*ValidateVLANResult, error) {
-	args := []string{"tenant", "vlan", "validate",
-		"--id", opts.TenantID,
-		"--vlan-id", fmt.Sprintf("%d", opts.VLANID),
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		// VLAN validation may return error when invalid
-		return &ValidateVLANResult{
-			TenantID: opts.TenantID,
-			VLANID:   opts.VLANID,
-			Valid:    false,
-			Message:  err.Error(),
-		}, nil
-	}
-
-	var result ValidateVLANResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "ValidateVLAN",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
-}
-
-// GetBridgeName retrieves the OVS bridge name for a tenant
-func (a *CLIAdapter) GetBridgeName(ctx context.Context, opts GetBridgeNameOptions) (*GetBridgeNameResult, error) {
-	args := []string{"tenant", "bridge",
-		"--id", opts.TenantID,
-		"--output", "json",
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result GetBridgeNameResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, ErrCLICommandFailed{
-			Operation: "GetBridgeName",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
-}
-
-// =============================================================================
-// Sync Operations
-// =============================================================================
-
 // SyncTenants synchronizes tenant manager state
 func (a *CLIAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, error) {
 	args := []string{"tenant", "sync",
@@ -537,18 +474,10 @@ func tenantDataFromEntity(entity *tenantpkg.TenantEntity) *TenantData {
 		Name:        entity.Name,
 		DisplayName: entity.DisplayName,
 		State:       entity.State,
-		OVSBridge:   entity.OVSBridge,
 		Labels:      entity.Labels,
 		Annotations: entity.Annotations,
 		CreatedAt:   entity.CreatedAt,
 		UpdatedAt:   entity.UpdatedAt,
-	}
-
-	if !entity.VLANRange.IsEmpty() {
-		data.VLANRange = &VLANRangeData{
-			Start: entity.VLANRange.Start,
-			End:   entity.VLANRange.End,
-		}
 	}
 
 	data.ComputeQuota = &ComputeQuotaData{

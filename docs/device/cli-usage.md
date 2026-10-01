@@ -454,8 +454,8 @@ platformctl profile create \
   --model "IoT-Sensor-v1" \
   --role iot \
   --serial-prefix "IOT-" \
-  --prov-vlan 998 \
-  --prod-vlan 200
+  --prov-vlan 405 \
+  --prod-vlan 406
 ```
 
 ### Output

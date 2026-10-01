@@ -128,7 +128,7 @@ func TestEngineConfigConversion(t *testing.T) {
 			Auth: AuthConfig{
 				Mode:               proxy.AuthModeMTLS,
 				RequireIDevID:      true,
-				AllowedZones:       []string{"trusted"},
+				AllowedZones:       []string{"control-plane"},
 				BackendZone:        "services",
 				RequireAttestation: true,
 				AttestationMaxAge:  time.Minute,

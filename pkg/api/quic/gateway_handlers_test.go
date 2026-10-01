@@ -33,6 +33,14 @@ import (
 
 // testGatewayService implements GatewayServiceInterface for testing
 type testGatewayService struct {
+	// Zone fake state: zoneErr fails every zone call; the last* fields
+	// record what the handler passed.
+	zoneErr        error
+	lastZoneCreate *CreateNetworkZoneOptions
+	lastZoneUpdate *UpdateNetworkZoneOptions
+	lastZoneName   string
+	lastZoneRole   string
+
 	// Response data
 	statusResp      *GatewayStatusInfo
 	bgpStatusResp   *BGPStatusInfo
@@ -358,23 +366,41 @@ func (s *testGatewayService) ListAllocations(ctx context.Context, poolID string)
 }
 
 func (s *testGatewayService) ListNetworkZones(ctx context.Context, lifecycleRole string) ([]*NetworkZoneInfo, error) {
-	return []*NetworkZoneInfo{}, nil
+	s.lastZoneRole = lifecycleRole
+	if s.zoneErr != nil {
+		return nil, s.zoneErr
+	}
+	return []*NetworkZoneInfo{{
+		Name:          "provisioning",
+		Offset:        5,
+		LifecycleRole: lifecycleRole,
+		Numbering:     &NetworkZoneNumberingInfo{VLAN: 405, Subnet4: "192.0.2.0/24", Gateway: "192.0.2.1"},
+	}}, nil
 }
 
 func (s *testGatewayService) CreateNetworkZone(ctx context.Context, opts *CreateNetworkZoneOptions) (*NetworkZoneInfo, error) {
-	return &NetworkZoneInfo{Name: opts.Name}, nil
+	s.lastZoneCreate = opts
+	if s.zoneErr != nil {
+		return nil, s.zoneErr
+	}
+	return &NetworkZoneInfo{Name: opts.Name, Offset: opts.Offset, RestartRequired: true}, nil
 }
 
 func (s *testGatewayService) UpdateNetworkZone(ctx context.Context, name string, opts *UpdateNetworkZoneOptions) (*NetworkZoneInfo, error) {
-	return &NetworkZoneInfo{Name: name}, nil
+	s.lastZoneName = name
+	s.lastZoneUpdate = opts
+	if s.zoneErr != nil {
+		return nil, s.zoneErr
+	}
+	return &NetworkZoneInfo{Name: name, RestartRequired: true}, nil
 }
 
 func (s *testGatewayService) DeleteNetworkZone(ctx context.Context, name string) (bool, error) {
-	return false, nil
-}
-
-func (s *testGatewayService) AssignNetworkZone(ctx context.Context, network string, zoneName string) (bool, error) {
-	return false, nil
+	s.lastZoneName = name
+	if s.zoneErr != nil {
+		return false, s.zoneErr
+	}
+	return true, nil
 }
 
 // Load balancer fake state

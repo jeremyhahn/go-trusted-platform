@@ -413,7 +413,7 @@ ntp:
 
 | Role | Mode | Behavior |
 |------|------|----------|
-| control-plane | `both` | Consumes the operator-supplied upstream (edge router preferred, public pool as fallback), serves the trusted and provisioning CIDRs with NTS on, falls back to orphan/local-stratum when no upstream is reachable |
+| control-plane | `both` | Consumes the operator-supplied upstream (edge router preferred, public pool as fallback), serves the control-plane and provisioning CIDRs with NTS on, falls back to orphan/local-stratum when no upstream is reachable |
 | gateway | `consume` | Consumes from the control plane over NTS, by name (`cp.<internal-domain>`) |
 | compute | `consume` | Consumes from the control plane over NTS, by name (`cp.<internal-domain>`) |
 | single-node | `both` | Consumes a public pool, serves the local network with NTS on |
@@ -670,89 +670,56 @@ Profiles are stored in QuicBaaS and accessible via all platform protocols
 
 ## Zone Override Seam
 
-Templates define network segments (`sdn.networks`, `sdn.fabric.segments`,
-`network.subnets`) but do **not** materialize built-in zone policy. The
-`trusted`, `provisioning`, `quarantine`, `public`, and `storage` zone
-definitions live in the code defaults registry (`pkg/sdn/zone/defaults.go`).
-Baking them into every template would freeze policy defaults and make version
-upgrades painful.
+Templates declare an environment (`sdn.environment`) and nothing per VLAN:
+every zone's VLAN, subnet, IPAM pool and switch port list is derived from it
+by the network plan (`pkg/sdn/netplan`). The built-in zones — `transit`,
+`fabric`, `management`, `hypervisor`, `quarantine`, `provisioning`,
+`control-plane`, `storage`, `backup` — live in the code defaults registry
+(`pkg/sdn/zone/defaults.go`), and their numbering is fixed. Templates do not
+restate them: baking zone policy into every template would freeze the
+defaults and make upgrades painful. See the [reference
+network](architecture/reference-network.md).
 
-### What "trusted" means
-
-`trusted` is the post-enrollment operational zone for attested, compliant
-devices. A device transitions to the trusted zone after successful ACME
-enrollment, IDevID attestation, and compliance check. The code default is VLAN 200
-(`pkg/sdn/vlan`); the shipped templates already use the reference numbering
-(VLAN 406, `10.4.6.0/24`) while keeping the zone name `trusted` the code accepts. The
-[reference network](architecture/reference-network.md) (owner design decision,
-2026-09-26) has no `trusted` zone: trust is carried by OVS and an overlay that
-requires a valid IDevID, and the control-plane network is VLAN x06 (e.g. 406).
-The code and template change is tracked in #708.
-
-### Template contract
-
-The dedicated templates name their operational segment `control-plane` on VLAN 406
-(zone `trusted` until #708); the single-node templates keep the segment name
-`trusted` on VLAN 406. The code defaults (`trusted`, VLAN 200) are shown below;
-the reference design replaces them (#708):
-
-```yaml
-sdn:
-  fabric:
-    segments:
-      - name: trusted
-        vlan: 200            # code default (#708)
-      - name: provisioning
-        vlan: 201
-        role: provisioning
-      - name: quarantine
-        vlan: 202
-        role: quarantine
-```
-
-The `name: trusted` field is the zone identity key. The VLAN is a plain L2
-segment identifier with no inherent policy meaning.
+There is no `trusted` zone. Trust is carried by identity: OVS and the overlay
+admit only a device with a valid IDevID. After enrollment a device's port
+carries the zones of its role's port class (`gateway` or `hypervisor`).
 
 ### Overriding zone policy
 
-Override files can supply a `zones:` block to change default policy for any
-built-in zone without touching the code defaults:
+Override files can supply a `zones:` block to tune a built-in zone's policy,
+or to add an owner-defined zone at offset 09–99:
 
 ```yaml
 sdn:
   zones:
-    - name: trusted
-      internet_ingress: false   # default; shown for documentation
-    - name: public
-      internet_ingress: true
-      isolate_from: [trusted]   # defense-in-depth
+    - name: storage                 # tune a built-in: replaces its policy
+      isolate: true
+      services: [storage]
+      allow_to: [{zone: storage, services: [storage]}]
+    - name: lab                     # an owner-defined zone: VLAN 409 in environment 4
+      offset: 9
+      port_classes: [hypervisor]
+      isolate: true
 ```
 
-Only list zones whose policy you need to change. Zones omitted from the
-override block use their code defaults.
+Only list zones whose policy you need to change. A built-in zone's offset,
+port classes and lifecycle role cannot be changed.
 
-### Changing the trusted VLAN
+### Site numbering that departs from the reference
 
-If your site uses a VLAN other than 200 for the trusted zone, override the
-segment and any subnet references in your private override file:
+A site whose VLANs or subnets cannot follow the reference overrides single
+zones in its private override file. The zone keeps its identity; only where it
+lives changes:
 
 ```yaml
 sdn:
-  fabric:
-    segments:
-      - name: trusted
-        vlan: 300             # site-specific VLAN
-  networks:
-    - name: trusted
-      pool: trusted
-      vlan: 300
-network:
-  subnets:
-    - name: trusted
-      vlan-id: 300
-      cidr: 10.100.0.0/24
+  environment:
+    id: 4
+    overrides:
+      - zone: control-plane
+        vlan: 3006
+        subnet: 192.0.2.0/24
 ```
 
-Do not change the segment `name` — `trusted` is the zone identity key that
-the platform validator and SDN engine use. Only the VLAN number is
-site-specific.
+Every host address then follows the overridden subnet (`network.bonds[].vlans[]`
+names the zone, never a VLAN number).

@@ -47,7 +47,7 @@ twenty-two configuration errors are about the zone graph.
 | OVS / OVSDB client, OpenFlow | `pkg/sdn/ovs`, `pkg/sdn/openflow` | this repo |
 | Port authentication state machine, quarantine, zone flows | `pkg/sdn/policy` | this repo |
 | IPAM, DHCP | `pkg/sdn/ipam`, `pkg/sdn/dhcp` | this repo |
-| VLAN, VXLAN, tunnels, overlay | `pkg/sdn/vlan`, `vxlan`, `tunnel`, `overlay` | this repo |
+| Network plan (all numbering), VXLAN, tunnels, overlay | `pkg/sdn/netplan`, `vxlan`, `tunnel`, `overlay` | this repo |
 | BGP speaker | `pkg/sdn/bgp` | this repo |
 | Fabric, zones, cluster state | `pkg/sdn/fabric`, `zone`, `cluster` | this repo |
 | Host networking (TAP, links, routes) | `pkg/sdn/netlink` | this repo |
@@ -491,36 +491,29 @@ var (
 )
 ```
 
-## VLAN Configuration
+## The network plan (`pkg/sdn/netplan`)
 
-### Reserved VLANs
+Every number the SDN uses is derived in one place. `netplan.New` takes the
+environment (`sdn.environment`: number _E_, IPv4 base, ULA `/48`, explicit
+overrides) and the resolved zone set, and returns an immutable `Plan`:
 
-| VLAN | Purpose | Access |
-|------|---------|--------|
-| 998 | Provisioning | DHCP, DNS, HTTPS to platform |
-| 666 | Quarantine | Isolated remediation network |
-| 1-997, 999-4094 | Production | Full access per ACLs |
+| The plan answers | From |
+|------------------|------|
+| A zone's VLAN, IPv4 and IPv6 subnets, gateway | `E·100+n`, `<base>.E.n.0/24`, `<ula>:<VLAN digits>::/64`, `.1` |
+| The zone for a VLAN or an address | reverse lookups over the zones |
+| The IPAM pools to seed | one per zone (DHCP range from `.50`) and one per IPAM range |
+| The reserved, never-allocatable ranges | gateway HA sync `/31`, host services, every gateway address |
+| A port class's VLANs | the zones that are members of the class |
+| An overlay network's VNI | `E·100000+n` |
 
-### Provisioning VLAN Flows
+`sdn.Config.Validate` resolves the zones, validates them and builds the plan;
+`Config.Plan()` hands it to the policy engine, the gateway runtime, the
+overlay controller, IPAM seeding, the switch fabric and the installer. No
+package keeps a VLAN constant, and a component that needs a VLAN without a
+plan fails with a typed error rather than guessing.
 
-```
-# Allow DHCP
-priority=100,udp,tp_dst=67,actions=normal
-priority=100,udp,tp_dst=68,actions=normal
-
-# Allow DNS
-priority=100,udp,tp_dst=53,actions=normal
-priority=100,tcp,tp_dst=53,actions=normal
-priority=100,udp,tp_dst=8053,actions=normal
-priority=100,tcp,tp_dst=8053,actions=normal
-
-# Allow HTTPS to platform
-priority=100,tcp,tp_dst=443,actions=normal
-priority=100,tcp,tp_dst=8443,actions=normal
-
-# Drop all other traffic
-priority=0,actions=drop
-```
+The lifecycle flow templates per zone (provisioning, quarantine) are in
+[configuration.md](configuration.md#per-zone-openflow-templates).
 
 ## Performance Considerations
 
@@ -538,291 +531,33 @@ priority=0,actions=drop
 4. **VLAN Segmentation** - Provisioning and quarantine VLANs isolated
 5. **Defense in Depth** - Both OpenFlow DROP and OVSDB admin_state=down for blocking
 
-## Unified Network Model (Host + VMs + Containers)
+## Bridges on a host
 
-The SDN subsystem provides a unified network model where host traffic, VMs, and containers all flow through the same OVS/OpenFlow pipeline. This enables consistent policy enforcement across all workload types.
-
-### Architecture Overview
-
-```mermaid
-graph TB
-    subgraph "OpenFlow Controller"
-        OFC[Policy Enforcement]
-    end
-
-    subgraph "OVS Bridge (br-platform)"
-        subgraph "Physical Ports"
-            ETH0[eth0<br/>VLAN 1]
-            ETH1[eth1<br/>Trunk]
-        end
-
-        subgraph "Virtual Ports"
-            VNET0[vnet0<br/>VM - VLAN 100]
-            VNET1[vnet1<br/>VM - VLAN 200]
-        end
-
-        subgraph "Container Ports"
-            CTR0[ctr-xxx<br/>VLAN 100]
-            CTR1[ctr-yyy<br/>VLAN 100]
-        end
-    end
-
-    OFC --> ETH0
-    OFC --> ETH1
-    OFC --> VNET0
-    OFC --> VNET1
-    OFC --> CTR0
-    OFC --> CTR1
-```
-
-### Physical NIC Management
-
-Physical NICs can be added to OVS bridges, placing all traffic under OpenFlow control:
-
-```go
-// HostNetworkConfig for physical NIC management
-type HostNetworkConfig struct {
-    // Physical NICs to add to OVS management
-    PhysicalInterfaces []PhysicalInterface
-
-    // Host traffic policies (applied to host's own traffic)
-    HostPolicies []OpenFlowRule
-}
-
-type PhysicalInterface struct {
-    Name       string   // e.g., "eth0", "enp3s0"
-    Bridge     string   // OVS bridge to attach to
-    VLANID     uint16   // VLAN for host traffic on this NIC
-    Trunk      bool     // If true, passes all VLANs (trunk port)
-    TrunkVLANs []uint16 // Specific VLANs if trunk
-}
-```
-
-### Unified Port Diagram
+Every platform host has two OVS bridges, with separate jobs:
 
 ```
-+-------------------------------------------------------------+
-|                    OpenFlow Controller                       |
-|               (Unified Policy Enforcement)                   |
-+-------------------------------------------------------------+
-                              |
-                              v
-+-------------------------------------------------------------+
-|                       OVS Bridge                             |
-|                      (br-platform)                           |
-+----------+----------+----------+----------+-----------------+
-|   eth0   |   eth1   |  vnet0   | ctr-xxx  |      ...        |
-|  (host)  | (trunk)  |   (VM)   |(container)|                |
-|  VLAN 1  |  trunk   | VLAN 100 | VLAN 100 |                 |
-+----------+----------+----------+----------+-----------------+
-
-All traffic (host + VM + container) flows through OpenFlow pipeline
-Same security groups and policies apply uniformly
+                 switch trunk (port class gateway / hypervisor)
+                                  │
+                ┌─────────────────▼─────────────────┐
+                │ br-fabric                          │  sdn.ovs.bridge
+                │  bond0 (trunk)                     │
+                │  host zone ports: fabric VTEP,     │  one internal port per
+                │  control-plane, hypervisor, ...    │  zone the host addresses
+                └────────────────────────────────────┘
+                ┌────────────────────────────────────┐
+                │ br-int                              │  compute / qemu bridge
+                │  vnetN (VMs), ctr-* (containers)    │  never carries the trunk
+                └────────────────────────────────────┘
 ```
 
-### Host Traffic Policies via OpenFlow
-
-When physical NICs are added to OVS, host traffic can be controlled with OpenFlow rules:
-
-```yaml
-device_profile:
-  name: "trusted-compute-node"
-
-  network:
-    ovs_bridge: "br-platform"
-
-    # Physical NICs under OVS/OpenFlow control
-    physical_interfaces:
-      - name: "eth0"
-        bridge: "br-platform"
-        vlan: 1              # Management VLAN for host
-        trunk: false
-
-      - name: "eth1"
-        bridge: "br-platform"
-        trunk: true          # Trunk for VM/container traffic
-        trunk_vlans: [100, 200, 300]
-
-    # Host traffic policies (host's own traffic, not VM/container)
-    host_policies:
-      - name: "allow-ssh"
-        match:
-          in_port: "eth0"
-          dl_type: 0x0800
-          nw_proto: 6
-          tp_dst: 22
-        actions: [allow]
-
-      - name: "allow-platformd-api"
-        match:
-          in_port: "eth0"
-          dl_type: 0x0800
-          nw_proto: 6
-          tp_dst: 8443
-        actions: [allow]
-
-      - name: "deny-host-default"
-        match:
-          in_port: "eth0"
-        actions: [drop]
-        priority: 1  # Low priority catch-all
-```
-
-### Container Network Configuration
-
-Containers use the same network model as VMs:
-
-```go
-// ContainerNetworkConfig from Device Profile
-type ContainerNetworkConfig struct {
-    // Network mode
-    Mode NetworkMode  // bridge, host, none, sdn
-
-    // SDN/OVS configuration (when Mode == sdn)
-    SDN *SDNConfig
-
-    // OpenFlow policies applied to this container
-    OpenFlowRules []OpenFlowRule
-}
-
-type SDNConfig struct {
-    // OVS bridge to attach container
-    Bridge string  // e.g., "br-containers"
-
-    // VLAN assignment
-    VLANID uint16  // Unique VLAN for isolation
-
-    // Port configuration
-    OVSPort string  // OVS port name for container
-
-    // OpenFlow table/priority for this container
-    FlowTable    int
-    FlowPriority int
-
-    // Security groups (translated to OpenFlow rules)
-    SecurityGroups []string
-}
-```
-
-### Device Profile Example (VMs + Containers)
-
-```yaml
-device_profile:
-  name: "production-web-tier"
-
-  network:
-    ovs_bridge: "br-platform"
-    default_vlan: 100
-
-    # OpenFlow controller
-    openflow:
-      controller: "tcp:127.0.0.1:6653"
-      version: "1.3"
-
-    # Security groups (reusable across VMs and containers)
-    security_groups:
-      - name: "web-frontend"
-        rules:
-          - direction: ingress
-            protocol: tcp
-            port: 443
-            action: allow
-          - direction: egress
-            protocol: tcp
-            port: 5432
-            action: allow  # DB access
-
-      - name: "backend-services"
-        rules:
-          - direction: ingress
-            protocol: tcp
-            port_range: "8080-8090"
-            action: allow
-
-  # VMs use unified network model
-  vms:
-    - name: "db-server"
-      vlan: 200
-      security_groups: ["backend-services"]
-
-  # Containers use unified network model
-  containers:
-    - name: "web-api"
-      image: "registry.example.com/api:v1.2"
-      network:
-        mode: sdn
-        vlan: 100
-        security_groups: ["web-frontend"]
-
-    - name: "worker"
-      image: "registry.example.com/worker:v1.0"
-      network:
-        mode: sdn
-        vlan: 100
-        security_groups: ["backend-services"]
-```
-
-### Container Network Setup Flow
-
-```go
-// NetworkManager integrates containers with SDN
-func (n *NetworkManager) SetupContainerNetwork(ctx context.Context,
-    containerID string, cfg *ContainerNetworkConfig) error {
-
-    if cfg.Mode != NetworkModeSDN {
-        return n.setupStandardNetwork(ctx, containerID, cfg)
-    }
-
-    // 1. Create OVS port for container
-    portName := fmt.Sprintf("ctr-%s", containerID[:12])
-    if err := n.ovs.AddPort(cfg.SDN.Bridge, portName); err != nil {
-        return err
-    }
-
-    // 2. Set VLAN tag on port
-    if err := n.ovs.SetPortVLAN(portName, cfg.SDN.VLANID); err != nil {
-        return err
-    }
-
-    // 3. Install OpenFlow rules for container
-    for _, rule := range cfg.OpenFlowRules {
-        if err := n.openflow.AddFlow(rule); err != nil {
-            return err
-        }
-    }
-
-    // 4. Apply security group rules as OpenFlow
-    for _, sg := range cfg.SDN.SecurityGroups {
-        flows := n.securityGroupToFlows(sg, portName, cfg.SDN.VLANID)
-        for _, flow := range flows {
-            if err := n.openflow.AddFlow(flow); err != nil {
-                return err
-            }
-        }
-    }
-
-    return nil
-}
-```
-
-### Benefits of Unified Model
-
-| Benefit | Description |
-|---------|-------------|
-| **Single Policy Model** | Same security groups apply to host, VMs, and containers |
-| **Consistent Enforcement** | All traffic through OpenFlow pipeline |
-| **Host Hardening** | Host traffic controlled via OpenFlow (not just iptables) |
-| **Micro-segmentation** | Fine-grained isolation between all workload types |
-| **Centralized Visibility** | Single point for traffic monitoring and logging |
-| **Simplified Operations** | One tool (OpenFlow) for all network policies |
-
-### Traffic Control Capabilities
-
-The unified model supports:
-
-- **Ingress/Egress Filtering** - Per-port and per-workload filtering
-- **Rate Limiting** - Traffic shaping per container/VM
-- **QoS Classes** - Priority queues from Device Profile
-- **Micro-segmentation** - East-west traffic policies between containers
-- **VLAN Isolation** - Layer 2 separation between workloads
-- **Security Groups** - Reusable policy definitions
+- **`br-fabric`** carries the physical trunk and the host's own zone
+  addresses. For every `network.bonds[].vlans[]` entry `{zone, ipv4-address}`
+  platformd creates an OVS internal port named `zone<VLAN>` (`zone406` for
+  control-plane in environment 4) on the bond's bridge, tagged with the zone's
+  VLAN from the plan, runs the duplicate-address guard (#508) and assigns the
+  address. The bridge's own interface carries no address: an untagged address
+  would land on the trunk's native VLAN, provisioning. The lifecycle and
+  matrix flows of the policy engine are programmed here.
+- **`br-int`** is the integration bridge for workload ports. Nothing patches
+  it to `br-fabric`: workloads reach the network only through the overlay
+  (EVPN/VXLAN, #709), never on an underlay VLAN.

@@ -57,11 +57,18 @@ func loadInstallerConfig(flags *assembleFlags) (*installer.Config, error) {
 		if err != nil {
 			return nil, ErrConfigLoadFailed{Path: flags.platformConfig, Err: err}
 		}
+		if err := app.CheckPlatformConfigYAML(data); err != nil {
+			return nil, ErrConfigLoadFailed{Path: flags.platformConfig, Err: err}
+		}
 		var platform app.App
 		if err := yaml.Unmarshal(data, &platform); err != nil {
 			return nil, ErrConfigLoadFailed{Path: flags.platformConfig, Err: err}
 		}
-		return platform.GetInstallerConfig(), nil
+		cfg, err := platform.GetInstallerConfig()
+		if err != nil {
+			return nil, ErrConfigLoadFailed{Path: flags.platformConfig, Err: err}
+		}
+		return cfg, nil
 	}
 }
 

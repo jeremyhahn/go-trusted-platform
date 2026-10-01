@@ -16,8 +16,9 @@
 package tenant
 
 import (
-	"github.com/gorilla/mux"
 	"net/http"
+
+	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -108,8 +109,6 @@ func (r *TenantRouter) systemOnly(h http.HandlerFunc) http.Handler {
 //	PUT    /api/v1/tenants/{id}/quotas              - UpdateQuotas
 //	GET    /api/v1/tenants/{id}/usage               - GetUsage
 //	POST   /api/v1/tenants/{id}/quota-check         - CheckQuota
-//	POST   /api/v1/tenants/{id}/vlan/validate       - ValidateVLAN
-//	GET    /api/v1/tenants/{id}/bridge              - GetBridgeName
 //	POST   /api/v1/tenants/sync                     - Sync
 //	POST   /api/v1/tenants/{id}/dek/rotate          - RotateTenantDEK
 //	GET    /api/v1/tenants/{id}/dek                 - GetTenantDEKStatus
@@ -138,8 +137,6 @@ func (r *TenantRouter) RegisterRoutes(parent *mux.Router) {
 	sr.Handle("/{id}/quotas", r.tenantScoped(r.handlers.UpdateQuotas)).Methods("PUT")
 	sr.Handle("/{id}/usage", r.tenantScoped(r.handlers.GetUsage)).Methods("GET")
 	sr.Handle("/{id}/quota-check", r.tenantScoped(r.handlers.CheckQuota)).Methods("POST")
-	sr.Handle("/{id}/vlan/validate", r.tenantScoped(r.handlers.ValidateVLAN)).Methods("POST")
-	sr.Handle("/{id}/bridge", r.tenantScoped(r.handlers.GetBridgeName)).Methods("GET")
 	sr.Handle("/{id}/dek/rotate", r.tenantScoped(r.handlers.RotateTenantDEK)).Methods("POST")
 	sr.Handle("/{id}/dek", r.tenantScoped(r.handlers.GetTenantDEKStatus)).Methods("GET")
 	sr.Handle("/{id}/barrier/init", r.tenantScoped(r.handlers.InitBarrier)).Methods("POST")

@@ -226,38 +226,50 @@ platformctl sdn policy apply --id acl-tenant-a --name tenant-a-acl \
 
 ## 7. `platformctl sdn zone`
 
-Network zones are the unit segmentation hangs off; get these right before
-anything else.
+Zones are the underlay VLANs of an environment
+([reference network](../architecture/reference-network.md)): nine built-ins at
+fixed offsets (transit, fabric, management, hypervisor, quarantine,
+provisioning, control-plane, storage, backup) and owner-defined zones at
+offsets 9–99. Overlays (`platform`, `tenant`, `public`) are not zones.
 
 | Verb | Purpose |
 |---|---|
-| `list` | List zones; `--lifecycle-role` filters (`provisioning`, `quarantine`) |
-| `create` | Create a zone |
-| `update` | Update a zone |
-| `delete` | Delete a zone (`--name`, required) |
-| `assign` | Assign a network segment to a zone |
+| `list` | List zones in offset order with their derived VLAN and subnets; `--lifecycle-role` filters (`provisioning`, `quarantine`) |
+| `create` | Create an owner-defined zone |
+| `update` | Tune a built-in zone's policy or replace an owner-defined zone |
+| `delete` | Delete an owner-defined zone, or omit an optional built-in (`--name`, required) |
 
 **`create` / `update`** share flags:
 
 | Flag | Type | Meaning |
 |---|---|---|
-| `--name` | string | Zone name (required) |
+| `--name` | string | Zone name (required); not `platform`, `tenant`, `public` or `trusted` |
+| `--offset` | uint8 | Owner-defined zones: 9–99. A built-in's offset is fixed |
+| `--port-class` | string, repeatable | Owner-defined zones: `gateway` and/or `hypervisor`. Fixed for built-ins |
 | `--internet-ingress` | bool | Zone accepts internet ingress traffic |
-| `--isolate` | bool | Fully isolate the zone from all others |
-| `--isolate-per-tenant` | bool | Isolate tenants **within** the zone from each other |
-| `--oob` | bool | Out-of-band management zone |
-| `--lifecycle-role` | string | `provisioning` or `quarantine` |
+| `--isolate-from` | string, repeatable | Zone this zone never sends to |
+| `--allow-to` | string, repeatable | Allowed path: `zone` or `zone:service[,service...]` |
+| `--service` | string, repeatable | Service permitted inside the zone |
+| `--isolate` | bool | Deny everything except the `--allow-to` paths |
+| `--oob` | bool | Built-in `management` only |
+| `--lifecycle-role` | string | Built-in `provisioning` and `quarantine` only |
+| `--reason`, `--approved-by` | string | `privileged_access`: required together for an `--allow-to` path into `control-plane` or `management` beyond the reference defaults; the daemon audits it |
 
-`--isolate` and `--isolate-per-tenant` are different controls. The first stops
-traffic crossing the zone boundary; the second stops tenants inside one zone
-reaching each other. A multi-tenant zone usually wants both.
+The flags of `update` replace the zone's policy as a whole. Every accepted
+change prints `restart_required`: the network plan is derived when the
+daemon starts. A malformed `--allow-to` or a half-set `--reason` /
+`--approved-by` is refused before the CLI connects.
 
-**`assign`**: `--network <segment-name>` and `--zone <zone-name>`, both required.
+There is no `assign` verb: networks are zones, one per zone, derived from the
+environment.
 
 ```bash
-platformctl sdn zone create --name tenant-a --isolate --isolate-per-tenant
-platformctl sdn zone assign --network tenant-a-net --zone tenant-a
 platformctl sdn zone list --lifecycle-role quarantine
+platformctl sdn zone create --name lab --offset 9 --port-class hypervisor --isolate
+platformctl sdn zone create --name lab-dns --offset 10 --port-class gateway \
+  --allow-to control-plane:dns --reason "lab resolver" --approved-by owner
+platformctl sdn zone update --name storage --isolate --allow-to storage:nvme-tcp
+platformctl sdn zone delete --name lab
 ```
 
 ---

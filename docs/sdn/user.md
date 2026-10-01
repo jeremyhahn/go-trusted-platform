@@ -37,43 +37,46 @@ This is not 802.1X. There is no RADIUS server in the picture.
 
 ## The order to build things in
 
-Zones first, then bridges, then ports, then policy. Working the other way round
-produces validation errors that read as unrelated.
+The zones and their numbering come from the configuration, not from commands:
+`sdn.environment` numbers the nine built-in zones, and `sdn.zones` tunes their
+policy or adds owner-defined zones. Start from a template under
+`configs/platform/templates/`, set your environment number and ULA, and check
+what the plan derived:
 
 ```bash
-# 1. Zones — the segmentation boundary
-platformctl sdn zone create --name tenant-a --isolate --isolate-per-tenant
-platformctl sdn zone create --name provisioning --lifecycle-role provisioning
-platformctl sdn zone create --name quarantine   --lifecycle-role quarantine
-
-# 2. A bridge
-platformctl sdn bridge create --id br-tenant-a --name br-tenant-a \
-    --type ovs --fail-mode secure
-
-# 3. A VLAN on it
-platformctl sdn vlan create --id 120 --name tenant-a --bridge br-tenant-a
-
-# 4. Attach the network segment to its zone
-platformctl sdn zone assign --network tenant-a-net --zone tenant-a
-
-# 5. Ports
-platformctl sdn port add --bridge br-tenant-a --id p-01 --name vnet0 \
-    --type tap --tag 120 --admin-state up
+# The resolved zones, with each one's VLAN, subnets and gateway
+platformctl sdn zone list
 ```
 
-Choose `--fail-mode secure` on the bridge. `standalone` makes OVS fall back to
-ordinary L2 forwarding when it loses the controller — unmanaged forwarding at
-exactly the moment you least want it.
+An owner-defined zone can be added at runtime too. It is held in memory and
+takes effect at the next restart (`restart_required: true`):
+
+```bash
+platformctl sdn zone create --name lab --offset 9 --port-class hypervisor --isolate \
+    --allow-to storage:storage
+```
+
+A path into `control-plane` or `management` needs an audited override:
+
+```bash
+platformctl sdn zone update --name lab --offset 9 --port-class hypervisor --isolate \
+    --allow-to control-plane:api \
+    --reason "lab CI runners reach the platform API" --approved-by "platform owner"
+```
+
+Bridges are part of the host's network configuration, not commands: the trunk
+rides `br-fabric` (`sdn.ovs.bridge`) and workloads attach to `br-int`.
 
 ---
 
-## Reserve a provisioning zone and a quarantine zone
+## The lifecycle zones
 
-`--lifecycle-role provisioning` and `--lifecycle-role quarantine` are not
-decoration. A device that has not yet enrolled needs somewhere to reach the
-enrollment service and nothing else; a device that failed a check needs
-somewhere isolated to be remediated. Without those zones the state machine has
-nowhere to put a device that is neither trusted nor gone.
+`provisioning` (x05) and `quarantine` (x04) are built in and cannot be
+removed. A device that has not yet enrolled reaches only the enrollment
+services on provisioning; a device that failed a check reaches only
+authentication and remediation on quarantine. Once attested, a device's port
+carries the zones of its role's port class. A blocked port is
+administratively down.
 
 ---
 
@@ -151,15 +154,16 @@ disable port. This is deliberately not a general switch-configuration tool.
 ## Troubleshooting
 
 **The SDN subsystem will not start, and the error names a zone.**
-Five of the configuration's twenty-two typed errors are about zones — a zone
-that does not exist, a pool declared in no zone, a pool and network in different
-zones, a management VPN pointing at an unknown zone. Fix the zone graph first;
-several of the other errors are downstream of it.
+A built-in zone was renumbered or re-classed (`ErrBuiltinIdentity`), an
+owner-defined zone is malformed (offset outside 9–99, no port class), or a path
+into the control plane has no `privileged_access`. Fix the zone set first; the
+numbering errors are downstream of it.
 
-**"Duplicate VLAN / subnet / pool name / network name."**
-Two definitions collide. This is caught at load rather than at runtime because
-the runtime symptom would be silent cross-zone reachability — traffic going
-somewhere it should not, with nothing logged.
+**"sdn.environment is required" or "zones ... are both on VLAN".**
+Every number comes from `sdn.environment`. An override that lands one zone on
+another's VLAN or subnet, inside the IPAM pool or in a reserved range is refused
+at load, because the runtime symptom would be silent cross-zone reachability —
+traffic going somewhere it should not, with nothing logged.
 
 **"TC policy without hardware offload" or "DPDK requires netdev".**
 The datapath combination you asked for is one the kernel cannot honour. These
@@ -175,10 +179,10 @@ That is a policy violation and it does not clear itself. Every state can reach
 `blocked`, and `blocked` is not a source state for any transition.
 
 **Traffic reaches somewhere it should not, across zones.**
-Check `--isolate` versus `--isolate-per-tenant` on the zone. The first stops
-traffic crossing the zone boundary; the second stops tenants inside one zone
-reaching each other. A multi-tenant zone with only the first set will let
-tenants see each other.
+Check the zone's `isolate` and `allow_to`. The built-ins deny every path the
+reference does not open; a tuned entry replaces the built-in's whole policy, so
+leaving `isolate` out of a tuning entry opens traffic inside the zone. Tenants
+are not zones: tenant isolation is the tenant's VRF.
 
 **A bridge has no IP, and the node reports `sdn-addressing` degraded.**
 platformd probed the segment before assigning that address and another station
@@ -188,7 +192,7 @@ host that resolves it. The bring-up log carries the refusal with both hardware
 addresses:
 
 ```
-sdn: refusing to assign 10.4.6.1/24 to bridge trusted0: 00:00:0c:9f:f0:14
+sdn: refusing to assign 10.4.6.1/24 to bridge br-fabric: 00:00:0c:9f:f0:14
 already answers for that address on this segment (local 0c:c4:7a:xx:xx:xx)
 ```
 
@@ -220,7 +224,7 @@ node says so rather than reporting healthy:
 
 ```
 SDN: duplicate-address probe unavailable, assigning address unguarded
-  bridge=trusted0 address=10.4.6.2/24
+  bridge=br-fabric address=10.4.6.2/24
   error="arp: probe interface unavailable: operation not permitted"
 ```
 

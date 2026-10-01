@@ -102,7 +102,7 @@ func runProxyCRUDScenario(t *testing.T, ctx context.Context, cmd ProxyCommands) 
 		PoolId:     poolID,
 		Auth: &platformv1.ProxyAuthRequirements{
 			Mode:         proxy.AuthModeMTLS,
-			AllowedZones: []string{"trusted"},
+			AllowedZones: []string{"control-plane"},
 		},
 		StripPrefix: true,
 	}
@@ -125,7 +125,7 @@ func runProxyCRUDScenario(t *testing.T, ctx context.Context, cmd ProxyCommands) 
 	if got.GetPoolId() != poolID || got.GetPathPrefix() != "/api" || !got.GetStripPrefix() {
 		t.Fatalf("GetRoute = %+v", got)
 	}
-	if len(got.GetAuth().GetAllowedZones()) != 1 || got.GetAuth().GetAllowedZones()[0] != "trusted" {
+	if len(got.GetAuth().GetAllowedZones()) != 1 || got.GetAuth().GetAllowedZones()[0] != "control-plane" {
 		t.Fatalf("allowed zones = %v", got.GetAuth().GetAllowedZones())
 	}
 	gotPool, err := cmd.GetPool(callCtx, poolID)
@@ -154,7 +154,7 @@ func runProxyCRUDScenario(t *testing.T, ctx context.Context, cmd ProxyCommands) 
 
 	// Update route (full replace).
 	route.PathPrefix = "/api/v2"
-	route.Auth.AllowedZones = []string{"trusted", "services"}
+	route.Auth.AllowedZones = []string{"control-plane", "services"}
 	updatedRoute, updateVersion, err := cmd.UpdateRoute(callCtx, route)
 	if err != nil {
 		t.Fatalf("UpdateRoute: %v", err)

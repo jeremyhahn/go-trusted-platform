@@ -17,25 +17,26 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 // Compliance control IDs referenced by zone CRUD audit events.
 // SC-7  — Boundary Protection: zone create/update/delete changes inter-zone boundaries.
-// SC-4  — Information in Shared Resources: per-tenant isolation changes.
 // AC-4  — Information Flow Enforcement: flow matrix regeneration triggered by zone mutations.
-//
-// See docs/architecture/reference-network.md §Compliance for the authoritative mapping.
+// AU-2  — Event Logging: a privileged path into control-plane or management is opened.
 const (
 	zoneComplianceSC7 = "SC-7"
-	zoneComplianceSC4 = "SC-4"
 	zoneComplianceAC4 = "AC-4"
+	zoneComplianceAU2 = "AU-2"
 )
 
-// zoneComplianceAttr returns an slog.Attr with a comma-joined NIST control list.
+// zoneComplianceAttr returns a slog attribute naming the compliance controls
+// an audit event satisfies.
 func zoneComplianceAttr(controls ...string) slog.Attr {
 	v := ""
 	for i, c := range controls {
@@ -48,7 +49,7 @@ func zoneComplianceAttr(controls ...string) slog.Attr {
 }
 
 // =============================================================================
-// Zone service error types
+// Errors
 // =============================================================================
 
 // ErrZoneNotFound is returned when the requested zone does not exist.
@@ -56,46 +57,47 @@ type ErrZoneNotFound struct {
 	Name zone.Zone
 }
 
+// Error implements the error interface.
 func (e ErrZoneNotFound) Error() string {
 	return fmt.Sprintf("zone: zone %q not found", e.Name)
 }
 
-// ErrZoneAlreadyExists is returned when a zone with the given name already exists.
+// ErrZoneAlreadyExists is returned when a zone with the given name already
+// exists. Built-in zones always exist: tune one with Update instead.
 type ErrZoneAlreadyExists struct {
 	Name zone.Zone
 }
 
+// Error implements the error interface.
 func (e ErrZoneAlreadyExists) Error() string {
 	return fmt.Sprintf("zone: zone %q already exists", e.Name)
 }
 
-// ErrNetworkNotFound is returned when the requested network does not exist.
-type ErrNetworkNotFound struct {
-	Name string
-}
-
-func (e ErrNetworkNotFound) Error() string {
-	return fmt.Sprintf("zone: network %q not found", e.Name)
-}
-
-// ErrZoneValidation wraps a validation error produced by zone.Validate.
+// ErrZoneValidation wraps a validation error produced by zone.Resolve,
+// zone.Validate or netplan.New on the candidate zone set.
 type ErrZoneValidation struct {
 	Cause error
 }
 
+// Error implements the error interface.
 func (e ErrZoneValidation) Error() string {
 	return fmt.Sprintf("zone: validation failed: %v", e.Cause)
 }
 
+// Unwrap returns the underlying validation error.
 func (e ErrZoneValidation) Unwrap() error { return e.Cause }
 
 // =============================================================================
 // ZoneRecord holds runtime state for a single zone
 // =============================================================================
 
-// ZoneRecord is an in-process zone entry managed by ZoneService.
+// ZoneRecord is an in-process zone entry managed by ZoneService. Config is
+// the resolved zone (a built-in with its tuned policy, or an owner-defined
+// zone). Numbering is the zone's derived numbering; it is nil when the
+// service has no environment.
 type ZoneRecord struct {
 	Config    zone.ZoneConfig
+	Numbering *netplan.ZoneNumbering
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -104,32 +106,32 @@ type ZoneRecord struct {
 // ZoneService interface
 // =============================================================================
 
-// ZoneService manages the runtime zone set for SDN network zones.
-// Zones are seeded from the resolved config at construction and may be
-// mutated via CRUD operations. Every mutation re-runs zone.Validate.
+// ZoneService manages the runtime zone set: the nine built-in underlay
+// zones with their tuned policy, plus owner-defined zones at offsets 9-99.
+// Every mutation re-resolves the operator entries onto the built-ins and
+// re-runs zone.Validate and, when the service has an environment,
+// netplan.New, so a mutation that breaks the policy invariants or the
+// numbering is refused. The network plan is derived at daemon startup, so
+// every accepted mutation reports restartRequired.
 type ZoneService interface {
-	// Create adds a new zone to the runtime set. Returns ErrZoneAlreadyExists
-	// when the name is already present. Triggers Validate on the resulting set.
+	// Create adds an owner-defined zone. Returns ErrZoneAlreadyExists when
+	// the name is present (built-in zones always are).
 	Create(ctx context.Context, cfg zone.ZoneConfig) (*ZoneRecord, bool, error)
 
-	// Update replaces an existing zone's config. Returns ErrZoneNotFound when
-	// the zone does not exist. Triggers Validate on the resulting set.
+	// Update tunes a built-in zone's policy or replaces an owner-defined
+	// zone. Returns ErrZoneNotFound when the zone does not exist.
 	Update(ctx context.Context, name zone.Zone, cfg zone.ZoneConfig) (*ZoneRecord, bool, error)
 
-	// Delete removes a zone by name. Returns ErrZoneNotFound when not present.
-	// Triggers Validate on the resulting set.
+	// Delete removes an owner-defined zone, or omits an optional built-in
+	// (the built-ins the platform needs cannot be removed). Returns
+	// ErrZoneNotFound when the zone does not exist.
 	Delete(ctx context.Context, name zone.Zone) (bool, error)
 
-	// List returns all runtime zones, optionally filtered by lifecycle role.
-	// An empty lifecycleRole returns all zones.
+	// List returns all zones in offset order, optionally filtered by
+	// lifecycle role. An empty lifecycleRole returns all zones.
 	List(ctx context.Context, lifecycleRole zone.LifecycleRole) ([]*ZoneRecord, error)
 
-	// AssignNetwork reassigns a named network segment to a zone. Returns
-	// ErrNetworkNotFound when the network does not exist.
-	// restartRequired is true when reassignment changes the flow matrix.
-	AssignNetwork(ctx context.Context, network string, zoneName zone.Zone) (restartRequired bool, err error)
-
-	// ZoneIndex returns a snapshot of the current zone index keyed by name.
+	// ZoneIndex returns a snapshot of the current zone set keyed by name.
 	ZoneIndex() map[zone.Zone]zone.ZoneConfig
 }
 
@@ -137,216 +139,197 @@ type ZoneService interface {
 // zoneService implementation
 // =============================================================================
 
-// zoneService is the concrete implementation of ZoneService backed by an
-// in-process map. When a quicbaas client is available the implementation
-// persists zones in the quicbaas-backed KV store; otherwise it falls back
-// to the in-memory map only.
+// zoneService is the concrete in-process implementation of ZoneService.
+// entries are the operator entries (tuned built-ins, omissions and
+// owner-defined zones); resolved is entries merged onto the built-ins.
 type zoneService struct {
-	mu       sync.RWMutex
-	zones    map[zone.Zone]*ZoneRecord
-	networks map[string]zone.Zone // network name → current zone
-	logger   *slog.Logger
+	mu        sync.RWMutex
+	env       *netplan.Environment
+	entries   []zone.ZoneConfig
+	resolved  []zone.ZoneConfig
+	plan      *netplan.Plan
+	createdAt map[zone.Zone]time.Time
+	updatedAt map[zone.Zone]time.Time
+	logger    *slog.Logger
 }
 
 // Compile-time interface assertion.
 var _ ZoneService = (*zoneService)(nil)
 
-// NewZoneService creates a new ZoneService seeded from the provided resolved
-// zone set (typically obtained from sdn.Config.ResolvedZones()). The seed
-// establishes create-if-missing semantics consistent with IPAM pool decision 6:
-// the runtime state starts from the config-declared+built-in set; subsequent
-// CRUD operations overlay it.
-//
-// networkZones is an optional initial mapping of network name → zone name,
-// derived from sdn.Config.Networks.
-func NewZoneService(
-	resolved []zone.ZoneConfig,
-	networkZones map[string]zone.Zone,
-) (ZoneService, error) {
-	// The built-in zones are the implicit base of every zone set. When the
-	// caller passes a nil or partial seed — e.g. a daemon running without an
-	// sdn config section — resolve it against the defaults registry so the
-	// lifecycle-role invariants hold and user zones layer onto the built-ins
-	// exactly as config-declared zones do. Resolve is idempotent for a seed
-	// that already includes the built-ins.
-	seed, err := zone.Resolve(resolved)
+// NewZoneService creates a ZoneService seeded with the configured operator
+// zone entries (sdn.zones, or the resolved set — resolving a resolved set is
+// a no-op). env is the node's environment (sdn.environment); when non-nil
+// every candidate set is also numbered with netplan.New and the records
+// carry their numbering. A nil seed yields the built-in set.
+func NewZoneService(seed []zone.ZoneConfig, env *netplan.Environment) (ZoneService, error) {
+	s := &zoneService{
+		env:       env,
+		createdAt: make(map[zone.Zone]time.Time),
+		updatedAt: make(map[zone.Zone]time.Time),
+		logger:    slog.Default(),
+	}
+	entries := cloneZones(seed)
+	resolved, plan, err := s.derive(entries)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
-	zones := make(map[zone.Zone]*ZoneRecord, len(seed))
-	for _, cfg := range seed {
-		zones[cfg.Name] = &ZoneRecord{
-			Config:    cfg,
-			CreatedAt: now,
-			UpdatedAt: now,
+	s.commit(entries, resolved, plan, now)
+	for _, z := range resolved {
+		s.createdAt[z.Name] = now
+	}
+	return s, nil
+}
+
+// derive resolves entries onto the built-ins, validates the result and,
+// when the service has an environment, derives its plan.
+func (s *zoneService) derive(entries []zone.ZoneConfig) ([]zone.ZoneConfig, *netplan.Plan, error) {
+	resolved, err := zone.Resolve(entries)
+	if err != nil {
+		return nil, nil, ErrZoneValidation{Cause: err}
+	}
+	if err := zone.Validate(resolved); err != nil {
+		return nil, nil, ErrZoneValidation{Cause: err}
+	}
+	if s.env == nil {
+		return resolved, nil, nil
+	}
+	plan, err := netplan.New(*s.env, resolved)
+	if err != nil {
+		return nil, nil, ErrZoneValidation{Cause: err}
+	}
+	return resolved, plan, nil
+}
+
+// commit installs a validated candidate (caller holds the write lock).
+func (s *zoneService) commit(entries, resolved []zone.ZoneConfig, plan *netplan.Plan, now time.Time) {
+	s.entries = entries
+	s.resolved = resolved
+	s.plan = plan
+	for _, z := range resolved {
+		if _, ok := s.createdAt[z.Name]; !ok {
+			s.createdAt[z.Name] = now
 		}
 	}
-	nz := make(map[string]zone.Zone, len(networkZones))
-	for k, v := range networkZones {
-		nz[k] = v
-	}
-	return &zoneService{
-		zones:    zones,
-		networks: nz,
-		logger:   slog.Default(),
-	}, nil
 }
 
-// Create adds a new zone. restartRequired is always false for a new zone
-// (no existing policy uses it yet).
-func (s *zoneService) Create(ctx context.Context, cfg zone.ZoneConfig) (*ZoneRecord, bool, error) {
+// Create adds an owner-defined zone.
+func (s *zoneService) Create(_ context.Context, cfg zone.ZoneConfig) (*ZoneRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.zones[cfg.Name]; exists {
+	if _, exists := s.find(cfg.Name); exists {
 		return nil, false, ErrZoneAlreadyExists{Name: cfg.Name}
 	}
-
-	// Build the candidate set and validate.
-	candidate := s.buildSlice()
-	candidate = append(candidate, cfg)
-	if err := zone.Validate(candidate); err != nil {
-		return nil, false, ErrZoneValidation{Cause: err}
+	if cfg.Omit {
+		return nil, false, ErrZoneValidation{Cause: zone.ErrOmitUnknown{Zone: cfg.Name}}
 	}
 
+	entries := append(cloneZones(s.entries), cfg)
+	resolved, plan, err := s.derive(entries)
+	if err != nil {
+		return nil, false, err
+	}
 	now := time.Now()
-	rec := &ZoneRecord{
-		Config:    cfg,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	s.zones[cfg.Name] = rec
+	s.commit(entries, resolved, plan, now)
+	s.createdAt[cfg.Name] = now
+	s.updatedAt[cfg.Name] = now
 
-	// Zone creation audit: SC-7 (new boundary established), AC-4 (flow matrix may change).
+	rec := s.record(cfg.Name)
 	s.logger.Info("zone created",
+		slog.Bool("audit", true),
 		slog.String("zone", string(cfg.Name)),
-		slog.String("lifecycle_role", string(cfg.LifecycleRole)),
-		slog.Bool("isolate", cfg.Isolate),
+		slog.Int("offset", int(rec.Config.Offset)),
+		slog.Bool("isolate", rec.Config.Isolate),
+		slog.Bool("restart_required", true),
 		zoneComplianceAttr(zoneComplianceSC7, zoneComplianceAC4))
-
-	return rec, false, nil
+	s.logPrivileged(rec.Config)
+	return rec, true, nil
 }
 
-// Update replaces an existing zone config. restartRequired is true when the
-// updated zone carries policy-relevant fields (AllowTo, IsolateFrom, Isolate,
-// OOB, IsolatePerTenant) that differ from the previous declaration, because
-// those fields feed the flow matrix that requires a daemon restart to recompile.
-func (s *zoneService) Update(ctx context.Context, name zone.Zone, cfg zone.ZoneConfig) (*ZoneRecord, bool, error) {
+// Update tunes a built-in or replaces an owner-defined zone.
+func (s *zoneService) Update(_ context.Context, name zone.Zone, cfg zone.ZoneConfig) (*ZoneRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	old, exists := s.zones[name]
-	if !exists {
+	if _, exists := s.find(name); !exists {
 		return nil, false, ErrZoneNotFound{Name: name}
 	}
-
-	// cfg.Name must match the target name.
 	if cfg.Name == "" {
 		cfg.Name = name
 	}
-
-	// Build the candidate set replacing the old entry.
-	candidate := s.buildSliceExcluding(name)
-	candidate = append(candidate, cfg)
-	if err := zone.Validate(candidate); err != nil {
-		return nil, false, ErrZoneValidation{Cause: err}
+	if cfg.Name != name {
+		return nil, false, ErrZoneValidation{Cause: zone.ErrInvalidZoneName{Name: cfg.Name}}
+	}
+	if cfg.Omit {
+		return nil, false, ErrZoneValidation{Cause: zone.ErrOmitUnknown{Zone: cfg.Name}}
 	}
 
-	restartRequired := policyFieldsChanged(old.Config, cfg)
-
-	rec := &ZoneRecord{
-		Config:    cfg,
-		CreatedAt: old.CreatedAt,
-		UpdatedAt: time.Now(),
+	entries := replaceEntry(s.entries, cfg)
+	resolved, plan, err := s.derive(entries)
+	if err != nil {
+		return nil, false, err
 	}
-	s.zones[name] = rec
+	now := time.Now()
+	s.commit(entries, resolved, plan, now)
+	s.updatedAt[name] = now
 
-	// Zone mutation audit: SC-7 (boundary changed), AC-4 (flow matrix may change).
-	// SC-4 is added when per-tenant isolation fields changed.
-	controls := []string{zoneComplianceSC7, zoneComplianceAC4}
-	if old.Config.IsolatePerTenant != cfg.IsolatePerTenant {
-		controls = append(controls, zoneComplianceSC4)
-	}
+	rec := s.record(name)
 	s.logger.Info("zone updated",
+		slog.Bool("audit", true),
 		slog.String("zone", string(name)),
-		slog.Bool("restart_required", restartRequired),
-		zoneComplianceAttr(controls...))
-
-	return rec, restartRequired, nil
+		slog.Bool("restart_required", true),
+		zoneComplianceAttr(zoneComplianceSC7, zoneComplianceAC4))
+	s.logPrivileged(rec.Config)
+	return rec, true, nil
 }
 
-// Delete removes a zone by name. restartRequired is always true when a zone
-// that participates in the flow matrix is removed (conservative: the matrix
-// must be rebuilt).
-func (s *zoneService) Delete(ctx context.Context, name zone.Zone) (bool, error) {
+// Delete removes an owner-defined zone or omits an optional built-in.
+func (s *zoneService) Delete(_ context.Context, name zone.Zone) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	old, exists := s.zones[name]
-	if !exists {
+	if _, exists := s.find(name); !exists {
 		return false, ErrZoneNotFound{Name: name}
 	}
 
-	// Build candidate set without the zone and validate the remainder.
-	candidate := s.buildSliceExcluding(name)
-	if err := zone.Validate(candidate); err != nil {
-		return false, ErrZoneValidation{Cause: err}
+	var entries []zone.ZoneConfig
+	if zone.IsBuiltin(name) {
+		entries = replaceEntry(s.entries, zone.ZoneConfig{Name: name, Omit: true})
+	} else {
+		entries = removeEntry(s.entries, name)
 	}
+	resolved, plan, err := s.derive(entries)
+	if err != nil {
+		return false, err
+	}
+	s.commit(entries, resolved, plan, time.Now())
+	delete(s.createdAt, name)
+	delete(s.updatedAt, name)
 
-	delete(s.zones, name)
-
-	// restartRequired whenever the deleted zone had active policy fields.
-	restartRequired := old.Config.Isolate ||
-		old.Config.OOB ||
-		len(old.Config.AllowTo) > 0 ||
-		len(old.Config.IsolateFrom) > 0
-
-	// Zone deletion audit: SC-7 (boundary removed), AC-4 (flow matrix must rebuild).
 	s.logger.Info("zone deleted",
+		slog.Bool("audit", true),
 		slog.String("zone", string(name)),
-		slog.Bool("restart_required", restartRequired),
+		slog.Bool("restart_required", true),
 		zoneComplianceAttr(zoneComplianceSC7, zoneComplianceAC4))
-
-	return restartRequired, nil
+	return true, nil
 }
 
-// List returns zone records matching the optional lifecycle role filter.
+// List returns zone records in offset order matching the optional lifecycle
+// role filter.
 func (s *zoneService) List(_ context.Context, lifecycleRole zone.LifecycleRole) ([]*ZoneRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	out := make([]*ZoneRecord, 0, len(s.zones))
-	for _, rec := range s.zones {
-		if lifecycleRole != "" && rec.Config.LifecycleRole != lifecycleRole {
+	out := make([]*ZoneRecord, 0, len(s.resolved))
+	for _, z := range s.resolved {
+		if lifecycleRole != "" && z.LifecycleRole != lifecycleRole {
 			continue
 		}
-		cp := *rec
-		out = append(out, &cp)
+		out = append(out, s.record(z.Name))
 	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Config.Offset < out[j].Config.Offset })
 	return out, nil
-}
-
-// AssignNetwork updates the zone binding for a named network.
-// restartRequired is always true because flow tables keyed by network→zone
-// must be rebuilt.
-func (s *zoneService) AssignNetwork(ctx context.Context, network string, zoneName zone.Zone) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, ok := s.zones[zoneName]; !ok {
-		return false, ErrZoneNotFound{Name: zoneName}
-	}
-
-	s.networks[network] = zoneName
-
-	// Network-to-zone assignment audit: SC-7 (boundary reassignment), AC-4 (flow matrix change).
-	s.logger.Info("network assigned to zone",
-		slog.String("network", network),
-		slog.String("zone", string(zoneName)),
-		zoneComplianceAttr(zoneComplianceSC7, zoneComplianceAC4))
-
-	return true, nil
 }
 
 // ZoneIndex returns a snapshot of the current zone set keyed by zone name.
@@ -354,9 +337,9 @@ func (s *zoneService) ZoneIndex() map[zone.Zone]zone.ZoneConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	idx := make(map[zone.Zone]zone.ZoneConfig, len(s.zones))
-	for k, rec := range s.zones {
-		idx[k] = rec.Config
+	idx := make(map[zone.Zone]zone.ZoneConfig, len(s.resolved))
+	for _, z := range s.resolved {
+		idx[z.Name] = cloneZones([]zone.ZoneConfig{z})[0]
 	}
 	return idx
 }
@@ -365,87 +348,101 @@ func (s *zoneService) ZoneIndex() map[zone.Zone]zone.ZoneConfig {
 // Internal helpers
 // =============================================================================
 
-// buildSlice builds a []ZoneConfig from the current runtime map (caller must
-// hold at least a read lock).
-func (s *zoneService) buildSlice() []zone.ZoneConfig {
-	out := make([]zone.ZoneConfig, 0, len(s.zones))
-	for _, rec := range s.zones {
-		out = append(out, rec.Config)
+// find returns the resolved zone named name (caller holds a lock).
+func (s *zoneService) find(name zone.Zone) (zone.ZoneConfig, bool) {
+	for _, z := range s.resolved {
+		if z.Name == name {
+			return z, true
+		}
 	}
-	return out
+	return zone.ZoneConfig{}, false
 }
 
-// buildSliceExcluding returns a []ZoneConfig omitting the named zone.
-func (s *zoneService) buildSliceExcluding(exclude zone.Zone) []zone.ZoneConfig {
-	out := make([]zone.ZoneConfig, 0, len(s.zones))
-	for k, rec := range s.zones {
-		if k == exclude {
+// record builds a detached ZoneRecord for the resolved zone name (caller
+// holds a lock; the zone must exist).
+func (s *zoneService) record(name zone.Zone) *ZoneRecord {
+	cfg, _ := s.find(name)
+	rec := &ZoneRecord{
+		Config:    cloneZones([]zone.ZoneConfig{cfg})[0],
+		CreatedAt: s.createdAt[name],
+		UpdatedAt: s.updatedAt[name],
+	}
+	if rec.UpdatedAt.IsZero() {
+		rec.UpdatedAt = rec.CreatedAt
+	}
+	if s.plan != nil {
+		if n, ok := s.plan.Zone(name); ok {
+			rec.Numbering = &n
+		}
+	}
+	return rec
+}
+
+// logPrivileged writes an audit record for every privileged path the
+// resolved zone cfg opens.
+func (s *zoneService) logPrivileged(cfg zone.ZoneConfig) {
+	for _, p := range zone.PrivilegedPaths([]zone.ZoneConfig{cfg}) {
+		s.logger.Warn("zone: privileged path opened by an audited override",
+			slog.Bool("audit", true),
+			slog.String("from", string(p.From)),
+			slog.String("to", string(p.To)),
+			slog.Any("services", p.Services),
+			slog.String("reason", p.Access.Reason),
+			slog.String("approved_by", p.Access.ApprovedBy),
+			zoneComplianceAttr(zoneComplianceAU2, zoneComplianceAC4))
+	}
+}
+
+// replaceEntry returns entries with the entry named cfg.Name replaced by cfg
+// (or cfg appended when absent).
+func replaceEntry(entries []zone.ZoneConfig, cfg zone.ZoneConfig) []zone.ZoneConfig {
+	out := make([]zone.ZoneConfig, 0, len(entries)+1)
+	replaced := false
+	for _, e := range entries {
+		if e.Name == cfg.Name {
+			out = append(out, cfg)
+			replaced = true
 			continue
 		}
-		out = append(out, rec.Config)
+		out = append(out, e)
+	}
+	if !replaced {
+		out = append(out, cfg)
+	}
+	return cloneZones(out)
+}
+
+// removeEntry returns entries without the entry named name.
+func removeEntry(entries []zone.ZoneConfig, name zone.Zone) []zone.ZoneConfig {
+	out := make([]zone.ZoneConfig, 0, len(entries))
+	for _, e := range entries {
+		if e.Name != name {
+			out = append(out, e)
+		}
+	}
+	return cloneZones(out)
+}
+
+// cloneZones deep-copies a zone slice so callers never alias service state.
+func cloneZones(in []zone.ZoneConfig) []zone.ZoneConfig {
+	out := make([]zone.ZoneConfig, len(in))
+	for i, z := range in {
+		c := z
+		c.PortClasses = append([]zone.PortClass(nil), z.PortClasses...)
+		c.IsolateFrom = append([]zone.Zone(nil), z.IsolateFrom...)
+		c.Services = append([]string(nil), z.Services...)
+		c.AllowTo = make([]zone.ZonePath, len(z.AllowTo))
+		for j, p := range z.AllowTo {
+			c.AllowTo[j] = zone.ZonePath{Zone: p.Zone, Services: append([]string(nil), p.Services...)}
+		}
+		if len(z.AllowTo) == 0 {
+			c.AllowTo = z.AllowTo
+		}
+		if z.PrivilegedAccess != nil {
+			pa := *z.PrivilegedAccess
+			c.PrivilegedAccess = &pa
+		}
+		out[i] = c
 	}
 	return out
-}
-
-// policyFieldsChanged reports whether the two configs differ in the fields
-// that drive the flow matrix (AllowTo, IsolateFrom, Isolate, OOB,
-// IsolatePerTenant). Name/Services/LifecycleRole changes do not require a
-// restart.
-func policyFieldsChanged(a, b zone.ZoneConfig) bool {
-	if a.Isolate != b.Isolate ||
-		a.OOB != b.OOB ||
-		a.IsolatePerTenant != b.IsolatePerTenant ||
-		a.InternetIngress != b.InternetIngress {
-		return true
-	}
-	if !zoneSliceEqual(a.IsolateFrom, b.IsolateFrom) {
-		return true
-	}
-	if !zonePathSliceEqual(a.AllowTo, b.AllowTo) {
-		return true
-	}
-	return false
-}
-
-func zoneSliceEqual(a, b []zone.Zone) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	m := make(map[zone.Zone]struct{}, len(a))
-	for _, v := range a {
-		m[v] = struct{}{}
-	}
-	for _, v := range b {
-		if _, ok := m[v]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func zonePathSliceEqual(a, b []zone.ZonePath) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	type key struct {
-		zone     zone.Zone
-		services string
-	}
-	mk := func(p zone.ZonePath) key {
-		s := ""
-		for _, svc := range p.Services {
-			s += svc + ","
-		}
-		return key{zone: p.Zone, services: s}
-	}
-	m := make(map[key]struct{}, len(a))
-	for _, p := range a {
-		m[mk(p)] = struct{}{}
-	}
-	for _, p := range b {
-		if _, ok := m[mk(p)]; !ok {
-			return false
-		}
-	}
-	return true
 }

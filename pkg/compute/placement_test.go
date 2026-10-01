@@ -16,206 +16,164 @@ package compute
 import (
 	"context"
 	"errors"
-	"net/netip"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
-// buildZoneIndex builds a minimal ZoneIndex for the given zones and networks.
-func buildZoneIndex(t *testing.T, zones []zone.ZoneConfig, networks []sdn.NetworkConfig) *sdn.ZoneIndex {
+// placementPlan is the environment-4 reference plan.
+func placementPlan(t *testing.T) *netplan.Plan {
 	t.Helper()
-	idx, err := sdn.BuildZoneIndex(zones, networks)
+	p, err := netplan.New(netplan.Environment{ID: 4}, zone.Defaults())
 	if err != nil {
-		t.Fatalf("BuildZoneIndex: %v", err)
+		t.Fatalf("netplan.New: %v", err)
 	}
-	return idx
+	return p
 }
 
-func trustedZones() []zone.ZoneConfig {
-	return []zone.ZoneConfig{
-		{Name: zone.ZoneTrusted},
-		{Name: zone.ZoneQuarantine, LifecycleRole: zone.LifecycleRoleQuarantine},
-	}
+// fakeOVSPort is an OVSPortController that records what it is asked to do.
+type fakeOVSPort struct {
+	vlans []int64
+	flows int
 }
 
-func trustedNetworks() []sdn.NetworkConfig {
-	return []sdn.NetworkConfig{
-		{Name: "corp", Zone: zone.ZoneTrusted, VLAN: 100, Subnet: netip.MustParsePrefix("10.0.0.0/24")},
-		{Name: "mgmt", Zone: zone.ZoneTrusted, VLAN: 101, Subnet: netip.MustParsePrefix("10.0.1.0/24")},
-	}
+func (f *fakeOVSPort) InstallFlow(string, int, string, string) error { f.flows++; return nil }
+func (f *fakeOVSPort) InstallFlows(_ string, rules []zoneflows.FlowRule) error {
+	f.flows += len(rules)
+	return nil
 }
-
-// TestPlaceVNIC_HappyPath verifies that the alphabetically-first network in the
-// profile's zone is selected and the placement is returned correctly.
-func TestPlaceVNIC_HappyPath(t *testing.T) {
-	idx := buildZoneIndex(t, trustedZones(), trustedNetworks())
-
-	cfg := &PlaceVNICConfig{
-		Profile:   &entities.DeviceProfile{Zone: string(zone.ZoneTrusted)},
-		ZoneIndex: idx,
-		PortID:    "tap0",
-	}
-
-	placement, err := PlaceVNIC(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("PlaceVNIC: %v", err)
-	}
-
-	// "corp" < "mgmt" alphabetically → corp is selected.
-	if placement.NetworkName != "corp" {
-		t.Errorf("expected 'corp' (first alphabetically), got %q", placement.NetworkName)
-	}
-	if placement.Zone != zone.ZoneTrusted {
-		t.Errorf("expected zone trusted, got %q", placement.Zone)
-	}
-	if placement.VLAN != 100 {
-		t.Errorf("expected VLAN 100, got %d", placement.VLAN)
-	}
+func (f *fakeOVSPort) DeleteFlow(string, string) error                  { return nil }
+func (f *fakeOVSPort) DeleteFlowsByPort(string, string) error           { return nil }
+func (f *fakeOVSPort) ListFlows(string) ([]string, error)               { return nil, nil }
+func (f *fakeOVSPort) GetOFPort(context.Context, string) (int32, error) { return 1, nil }
+func (f *fakeOVSPort) SetPortState(context.Context, string, ovs.PortState) error {
+	return nil
 }
+func (f *fakeOVSPort) SetPortVLAN(_ context.Context, _ string, v int64) error {
+	f.vlans = append(f.vlans, v)
+	return nil
+}
+func (f *fakeOVSPort) SetPortTrunk(context.Context, string, []uint16, uint16) error { return nil }
 
-// TestPlaceVNIC_DefaultZone verifies that a profile with no zone set falls back
-// to ZoneTrusted.
-func TestPlaceVNIC_DefaultZone(t *testing.T) {
-	idx := buildZoneIndex(t, trustedZones(), trustedNetworks())
-
-	cfg := &PlaceVNICConfig{
-		Profile:   &entities.DeviceProfile{}, // empty zone
-		ZoneIndex: idx,
-		PortID:    "tap1",
-	}
-
-	placement, err := PlaceVNIC(context.Background(), cfg)
+// TestPlaceVNIC_ProfileZone places a vNIC on the profile's zone with the
+// plan's VLAN.
+func TestPlaceVNIC_ProfileZone(t *testing.T) {
+	placement, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{
+		Profile: &entities.DeviceProfile{Zone: string(zone.ZoneStorage)},
+		Plan:    placementPlan(t),
+		PortID:  "tap0",
+	})
 	if err != nil {
 		t.Fatalf("PlaceVNIC: %v", err)
 	}
-	if placement.Zone != zone.ZoneTrusted {
-		t.Errorf("expected fallback to ZoneTrusted, got %q", placement.Zone)
+	if placement.NetworkName != "storage" || placement.Zone != zone.ZoneStorage || placement.VLAN != 407 {
+		t.Errorf("placement = %+v, want storage/407", placement)
 	}
 }
 
-// TestPlaceVNIC_NoNetworkInZone verifies ErrNoNetworkInZone when the profile's
-// zone has no networks registered in the ZoneIndex.
-func TestPlaceVNIC_NoNetworkInZone(t *testing.T) {
-	zones := []zone.ZoneConfig{
-		{Name: zone.ZoneTrusted},
-		{Name: zone.ZoneQuarantine, LifecycleRole: zone.LifecycleRoleQuarantine},
+// TestPlaceVNIC_NoDefaultZone refuses a profile without a zone: there is no
+// fallback zone.
+func TestPlaceVNIC_NoDefaultZone(t *testing.T) {
+	_, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{
+		Profile: &entities.DeviceProfile{Name: "vm"},
+		Plan:    placementPlan(t),
+		PortID:  "tap1",
+	})
+	var target ErrProfileZoneRequired
+	if !errors.As(err, &target) || target.Profile != "vm" {
+		t.Fatalf("want ErrProfileZoneRequired, got %v", err)
 	}
-	// Only populate trusted — quarantine has no networks.
-	networks := []sdn.NetworkConfig{
-		{Name: "corp", Zone: zone.ZoneTrusted, VLAN: 100, Subnet: netip.MustParsePrefix("10.0.0.0/24")},
+	if target.Error() == "" {
+		t.Error("empty message")
 	}
-	idx := buildZoneIndex(t, zones, networks)
+}
 
-	cfg := &PlaceVNICConfig{
-		Profile:   &entities.DeviceProfile{Zone: string(zone.ZoneQuarantine)},
-		ZoneIndex: idx,
-		PortID:    "tap2",
-	}
-
-	_, err := PlaceVNIC(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("expected ErrNoNetworkInZone, got nil")
-	}
+// TestPlaceVNIC_UnknownZone refuses a zone the plan does not hold.
+func TestPlaceVNIC_UnknownZone(t *testing.T) {
+	_, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{
+		Profile: &entities.DeviceProfile{Zone: "lab"},
+		Plan:    placementPlan(t),
+		PortID:  "tap2",
+	})
 	var noNet ErrNoNetworkInZone
-	if !errors.As(err, &noNet) {
-		t.Errorf("expected ErrNoNetworkInZone, got %T: %v", err, err)
+	if !errors.As(err, &noNet) || noNet.Zone != "lab" {
+		t.Fatalf("want ErrNoNetworkInZone{lab}, got %v", err)
 	}
-	if noNet.Zone != zone.ZoneQuarantine {
-		t.Errorf("expected Zone quarantine in error, got %q", noNet.Zone)
-	}
-}
-
-// TestPlaceVNIC_NilConfig verifies that a nil config returns an error.
-func TestPlaceVNIC_NilConfig(t *testing.T) {
-	_, err := PlaceVNIC(context.Background(), nil)
-	if err == nil {
-		t.Error("expected error for nil config")
+	if noNet.Error() == "" {
+		t.Error("empty message")
 	}
 }
 
-// TestPlaceVNIC_NilProfile verifies that a nil profile returns ErrInvalidProfile.
-func TestPlaceVNIC_NilProfile(t *testing.T) {
-	idx := buildZoneIndex(t, trustedZones(), trustedNetworks())
-	_, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{
-		ZoneIndex: idx,
-		PortID:    "tap3",
-	})
-	if !errors.Is(err, ErrInvalidProfile) {
-		t.Errorf("expected ErrInvalidProfile, got %v", err)
+// TestPlaceVNIC_InvalidInput covers nil config, profile, plan and port.
+func TestPlaceVNIC_InvalidInput(t *testing.T) {
+	plan := placementPlan(t)
+	profile := &entities.DeviceProfile{Zone: string(zone.ZoneStorage)}
+	cases := map[string]*PlaceVNICConfig{
+		"nil config": nil,
+		"nil plan":   {Profile: profile, PortID: "tap"},
+		"empty port": {Profile: profile, Plan: plan},
 	}
-}
-
-// TestPlaceVNIC_NilZoneIndex verifies that a nil ZoneIndex returns an error.
-func TestPlaceVNIC_NilZoneIndex(t *testing.T) {
-	_, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{
-		Profile: &entities.DeviceProfile{Zone: string(zone.ZoneTrusted)},
-		PortID:  "tap4",
-	})
-	if err == nil {
-		t.Error("expected error for nil ZoneIndex")
-	}
-}
-
-// TestPlaceVNIC_EmptyPortID verifies that an empty PortID returns an error.
-func TestPlaceVNIC_EmptyPortID(t *testing.T) {
-	idx := buildZoneIndex(t, trustedZones(), trustedNetworks())
-	_, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{
-		Profile:   &entities.DeviceProfile{Zone: string(zone.ZoneTrusted)},
-		ZoneIndex: idx,
-		// PortID intentionally empty
-	})
-	if err == nil {
-		t.Error("expected error for empty PortID")
-	}
-}
-
-// TestPlaceVNIC_DeterministicSelection verifies that the same network is always
-// selected regardless of the order networks appear in the ZoneIndex.
-func TestPlaceVNIC_DeterministicSelection(t *testing.T) {
-	// Intentionally reversed order in the config slice.
-	networks := []sdn.NetworkConfig{
-		{Name: "zzz", Zone: zone.ZoneTrusted, VLAN: 999, Subnet: netip.MustParsePrefix("10.9.0.0/24")},
-		{Name: "aaa", Zone: zone.ZoneTrusted, VLAN: 10, Subnet: netip.MustParsePrefix("10.1.0.0/24")},
-		{Name: "mmm", Zone: zone.ZoneTrusted, VLAN: 500, Subnet: netip.MustParsePrefix("10.5.0.0/24")},
-	}
-	idx := buildZoneIndex(t, trustedZones(), networks)
-
-	for i := range 3 {
-		portID := "tap" + itoa(i)
-		placement, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{
-			Profile:   &entities.DeviceProfile{Zone: string(zone.ZoneTrusted)},
-			ZoneIndex: idx,
-			PortID:    portID,
-		})
-		if err != nil {
-			t.Fatalf("run %d: %v", i, err)
-		}
-		if placement.NetworkName != "aaa" {
-			t.Errorf("run %d: expected 'aaa', got %q", i, placement.NetworkName)
+	for name, cfg := range cases {
+		if _, err := PlaceVNIC(context.Background(), cfg); err == nil {
+			t.Errorf("%s: expected an error", name)
 		}
 	}
-}
-
-// TestErrNoNetworkInZone_Error verifies the error message is non-empty.
-func TestErrNoNetworkInZone_Error(t *testing.T) {
-	e := ErrNoNetworkInZone{Zone: zone.ZoneQuarantine}
-	if e.Error() == "" {
-		t.Error("Error() should return non-empty string")
+	if _, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{Plan: plan, PortID: "tap"}); !errors.Is(err, ErrInvalidProfile) {
+		t.Errorf("nil profile: want ErrInvalidProfile, got %v", err)
 	}
 }
 
-// itoa is a minimal helper so the test file has no additional imports.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+// TestPlaceVNIC_ZoneFlowManager tags the port through the flow manager.
+func TestPlaceVNIC_ZoneFlowManager(t *testing.T) {
+	plan := placementPlan(t)
+	ovsPort := &fakeOVSPort{}
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName: "br-int", FlowController: ovsPort, PortController: ovsPort, Plan: plan,
+	})
+	if err != nil {
+		t.Fatalf("NewZoneFlowManager: %v", err)
 	}
-	b := make([]byte, 0, 4)
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
+	placement, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{
+		Profile:         &entities.DeviceProfile{Zone: string(zone.ZoneBackup)},
+		Plan:            plan,
+		ZoneFlowManager: zfm,
+		PortID:          "tap3",
+	})
+	if err != nil {
+		t.Fatalf("PlaceVNIC: %v", err)
 	}
-	return string(b)
+	if placement.VLAN != 408 || len(ovsPort.vlans) != 1 || ovsPort.vlans[0] != 408 {
+		t.Errorf("placement %+v, port VLANs %v; want 408", placement, ovsPort.vlans)
+	}
+}
+
+// TestPlaceVNIC_PolicyEngine applies a port policy carrying the zone VLAN
+// when no flow manager is configured.
+func TestPlaceVNIC_PolicyEngine(t *testing.T) {
+	engine, err := policy.NewEngine(policy.Config{BridgeName: "br-int", FlowController: &fakeOVSPort{}})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	_, err = PlaceVNIC(context.Background(), &PlaceVNICConfig{
+		Profile:      &entities.DeviceProfile{Zone: string(zone.ZoneStorage)},
+		Plan:         placementPlan(t),
+		PolicyEngine: engine,
+		PortID:       "tap4",
+		TenantID:     "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PlaceVNIC: %v", err)
+	}
+	got, err := engine.GetPolicy("tap4")
+	if err != nil {
+		t.Fatalf("GetPolicy: %v", err)
+	}
+	if got.VLAN != 407 || got.Zone != zone.ZoneStorage || got.TenantID != "tenant-a" {
+		t.Errorf("policy = %+v", got)
+	}
 }

@@ -31,18 +31,32 @@ POST /api/v1/sdn/gateway/ipam/pools
 Content-Type: application/json
 
 {
-  "id": "prod-v4",
-  "name": "prod-v4",
-  "cidr": "10.0.0.0/24",
-  "gateway": "10.0.0.1",
-  "zone": "trusted",
-  "description": "production IPv4",
-  "lease_seconds": 86400
+  "id": "lab",
+  "name": "lab",
+  "cidr": "10.4.9.0/24",
+  "gateway": "10.4.9.1",
+  "zone": "lab",
+  "description": "lab zone pool",
+  "default_lease_duration_nanos": 86400000000000,
+  "reserved": ["10.4.9.1/32"],
+  "range_start": "10.4.9.50",
+  "range_end": "10.4.9.254"
 }
 ```
 
 `name` and `cidr` are required; `id` is generated when omitted; `cidr`
-is immutable after creation.
+is immutable after creation. `reserved` lists never-allocatable prefixes
+(the gateway is always reserved); `range_start` and `range_end` bound
+dynamic allocation and are set together. Responses carry the same three
+fields.
+
+### Update a Pool
+
+`PUT /api/v1/sdn/gateway/ipam/pools/{id}` is a partial update: omitted
+fields keep the pool's values. For the window, a present `reserved` list
+replaces the reservations (`[]` clears them) and a present `range_start` or
+`range_end` replaces that bound (`""` clears it); a range left with one
+bound is refused with 400.
 
 ## Allocation Endpoints
 
@@ -69,7 +83,8 @@ Content-Type: application/json
 
 ## Error Codes
 
-HTTP status codes: 400 (invalid CIDR/parameters, **and deleting a pool
+HTTP status codes: 400 (invalid CIDR/parameters, a reserved address, a
+reserved prefix or range that does not fit the pool, **and deleting a pool
 that still has allocations**), 404 (pool or allocation not found), 409
 (pool already exists, pool name taken, CIDR overlaps, IP already
 allocated), 429 (pool exhausted), 503 (gateway service not available).

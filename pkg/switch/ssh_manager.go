@@ -264,6 +264,9 @@ var operModeRegexp = regexp.MustCompile(`(?i)operational\s+mode:\s*(.+)`)
 // trunkAllowedVLANRegexp matches "Trunking VLANs Allowed: 10,20,30" or similar.
 var trunkAllowedVLANRegexp = regexp.MustCompile(`(?i)trunking\s+vlans?\s+(?:allowed|enabled):\s*(.+)`)
 
+// trunkNativeVLANRegexp matches "Trunking Native Mode VLAN: 405 (provisioning)".
+var trunkNativeVLANRegexp = regexp.MustCompile(`(?i)trunking\s+native\s+mode\s+vlan:\s*(\d+)`)
+
 // parseAccessVLANFromSwitchport extracts the access VLAN ID from
 // "show interfaces {port} switchport" text output.
 func parseAccessVLANFromSwitchport(output string) (uint16, error) {
@@ -318,6 +321,13 @@ func parseSwitchportOutput(port string, output string) (*PortStatus, error) {
 	// Parse trunk allowed VLANs.
 	if matches := trunkAllowedVLANRegexp.FindStringSubmatch(output); matches != nil {
 		status.TrunkVLANs = parseTrunkVLANList(matches[1])
+	}
+
+	// Parse the trunk native VLAN.
+	if matches := trunkNativeVLANRegexp.FindStringSubmatch(output); matches != nil {
+		if vlan, err := strconv.ParseUint(matches[1], 10, 16); err == nil {
+			status.NativeVLAN = uint16(vlan)
+		}
 	}
 
 	// Parse enabled state from Switchport: Enabled/Disabled line.

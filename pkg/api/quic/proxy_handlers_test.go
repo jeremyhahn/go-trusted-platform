@@ -244,8 +244,8 @@ func TestProxyHandler_ConfigStatusReloadMatrix(t *testing.T) {
 		statusResp: &platformv1.GetProxyStatusResponse{Version: 5, RouteCount: 1, PoolCount: 2},
 		reloadResp: &platformv1.ReloadProxyConfigResponse{Version: 6},
 		matrixResp: &platformv1.GetProxyZoneMatrixResponse{
-			Zones: []string{"public", "trusted"},
-			Pairs: []*platformv1.ProxyZonePair{{From: "trusted", To: "public"}},
+			Zones: []string{"provisioning", "control-plane"},
+			Pairs: []*platformv1.ProxyZonePair{{From: "provisioning", To: "control-plane"}},
 		},
 	}
 	h := NewProxyHandler(nil, fake)
@@ -360,7 +360,7 @@ func TestIsProxySubOpcode(t *testing.T) {
 		}
 	}
 	// Gateway's own sub-opcodes must not be claimed by the proxy range.
-	for _, sub := range []byte{OpGatewayStatus, OpGatewayListNetworkZones, OpGatewayAssignNetworkZone, 0x2E, 0xFF} {
+	for _, sub := range []byte{OpGatewayStatus, OpGatewayListNetworkZones, OpGatewayDeleteNetworkZone, 0x14, 0x2E, 0xFF} {
 		if IsProxySubOpcode(sub) {
 			t.Errorf("IsProxySubOpcode(0x%02x) = true, want false", sub)
 		}

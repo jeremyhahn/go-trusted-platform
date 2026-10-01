@@ -26,7 +26,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
@@ -166,15 +169,42 @@ var _ policy.PolicyEngine = (*noopPolicyEngine)(nil)
 // store and no-op policy engine so tests run without OVS.
 // ---------------------------------------------------------------------------
 
+// nullOVSPort is an OVSPortController that accepts every operation.
+type nullOVSPort struct{}
+
+func (nullOVSPort) InstallFlow(string, int, string, string) error                { return nil }
+func (nullOVSPort) InstallFlows(string, []zoneflows.FlowRule) error              { return nil }
+func (nullOVSPort) DeleteFlow(string, string) error                              { return nil }
+func (nullOVSPort) DeleteFlowsByPort(string, string) error                       { return nil }
+func (nullOVSPort) ListFlows(string) ([]string, error)                           { return nil, nil }
+func (nullOVSPort) SetPortVLAN(context.Context, string, int64) error             { return nil }
+func (nullOVSPort) SetPortTrunk(context.Context, string, []uint16, uint16) error { return nil }
+func (nullOVSPort) SetPortState(context.Context, string, ovs.PortState) error    { return nil }
+func (nullOVSPort) GetOFPort(context.Context, string) (int32, error)             { return 1, nil }
+
 func buildTestObserver(t *testing.T, initialDevices ...*entities.Device) (*quarantineObserver, *memDeviceStore) {
 	t.Helper()
 
 	store := newMemDeviceStore(initialDevices...)
 	resolvedZones := zone.Defaults()
+	plan, err := netplan.New(netplan.Environment{ID: 4}, resolvedZones)
+	if err != nil {
+		t.Fatalf("netplan.New: %v", err)
+	}
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName:     "br-fabric",
+		FlowController: nullOVSPort{},
+		PortController: nullOVSPort{},
+		Plan:           plan,
+		Zones:          resolvedZones,
+	})
+	if err != nil {
+		t.Fatalf("NewZoneFlowManager: %v", err)
+	}
 
 	mgr, err := policy.NewQuarantineManager(policy.QuarantineManagerConfig{
 		PolicyEngine:     &noopPolicyEngine{},
-		ZoneFlowManager:  nil, // nil — exercises the "no ZFM" path
+		ZoneFlowManager:  zfm,
 		ResolvedZones:    resolvedZones,
 		DeviceStateStore: store,
 	})
@@ -280,14 +310,9 @@ func TestQuarantineObserverOnAttestationFailedSkipsEmptyPort(t *testing.T) {
 }
 
 // TestQuarantineObserverOnAttestationFailedDispatchesEvent verifies that
-// OnAttestationFailed constructs a valid ViolationEvent (source, severity)
-// and calls HandleViolation. Without a ZoneFlowManager wired, the Warning
-// path returns an error which the observer logs; the test confirms no panic
-// and the correct event fields.
-//
-// The Warning-severity state transition (quarantine zone + device record
-// update) requires a real OVS ZoneFlowManager and is covered by the
-// integration test suite.
+// OnAttestationFailed constructs a valid ViolationEvent and calls
+// HandleViolation: the Warning path quarantines the device on the
+// quarantine zone of the network plan.
 func TestQuarantineObserverOnAttestationFailedDispatchesEvent(t *testing.T) {
 	seed := &entities.Device{
 		ID:            42,
@@ -296,13 +321,13 @@ func TestQuarantineObserverOnAttestationFailedDispatchesEvent(t *testing.T) {
 	}
 	obs, store := buildTestObserver(t, seed)
 	ctx := context.Background()
-	// Must not panic; error from the absent ZoneFlowManager is logged internally.
 	obs.OnAttestationFailed(ctx, 42, "lab-node-1.example.com", "PCR8 mismatch")
 
-	// Device state is unchanged because ZoneFlowManager is nil — this is the
-	// expected unit-test behavior; the Warning path requires a real ZFM.
-	if store.devices[42].State != entities.DeviceStateAttested {
-		t.Errorf("device state should be unchanged without ZFM, got %s", store.devices[42].State)
+	if store.devices[42].State != entities.DeviceStateQuarantined {
+		t.Errorf("expected DeviceStateQuarantined, got %s", store.devices[42].State)
+	}
+	if store.devices[42].PriorState != entities.DeviceStateAttested {
+		t.Errorf("expected prior state attested, got %s", store.devices[42].PriorState)
 	}
 }
 
@@ -357,10 +382,11 @@ func TestQuarantineObserverOnAttestationPassed(t *testing.T) {
 		// Seed a device in quarantined state with a real NetworkPortID;
 		// HandleRestoreAttestation restores it.
 		seed := &entities.Device{
-			ID:            99,
-			State:         entities.DeviceStateQuarantined,
-			PriorState:    entities.DeviceStateAttested,
-			NetworkPortID: "tap99def",
+			ID:             99,
+			State:          entities.DeviceStateQuarantined,
+			PriorState:     entities.DeviceStateAttested,
+			PriorPortClass: string(zone.PortClassHypervisor),
+			NetworkPortID:  "tap99def",
 		}
 		obs, store := buildTestObserver(t, seed)
 		ctx := context.Background()

@@ -90,8 +90,10 @@ const (
 	// NetworkPhaseProvisioning indicates the device is in the provisioning network.
 	NetworkPhaseProvisioning NetworkPhase = "provisioning"
 
-	// NetworkPhaseTrusted indicates the device is in the trusted (post-enrollment) network.
-	NetworkPhaseTrusted NetworkPhase = "trusted"
+	// NetworkPhaseAdmitted indicates the device has attested and its port
+	// carries its role's zones (the port class of its role), or the single
+	// zone its profile names.
+	NetworkPhaseAdmitted NetworkPhase = "admitted"
 
 	// NetworkPhaseQuarantine indicates the device is in the quarantine network.
 	NetworkPhaseQuarantine NetworkPhase = "quarantine"
@@ -105,7 +107,7 @@ func (p NetworkPhase) String() string {
 // IsValid checks if the NetworkPhase is a valid phase.
 func (p NetworkPhase) IsValid() bool {
 	switch p {
-	case NetworkPhaseProvisioning, NetworkPhaseTrusted, NetworkPhaseQuarantine:
+	case NetworkPhaseProvisioning, NetworkPhaseAdmitted, NetworkPhaseQuarantine:
 		return true
 	default:
 		return false
@@ -168,8 +170,8 @@ type SDNIntegration interface {
 	OnDeviceConnect(ctx context.Context, event *NetworkEventContext) error
 
 	// OnDeviceEnrolled is called when a device successfully completes enrollment.
-	// The implementation should transition the device to its trusted network
-	// configuration based on the device profile.
+	// The implementation should admit the device to its role's zones (or
+	// the single zone its profile names).
 	OnDeviceEnrolled(ctx context.Context, event *NetworkEventContext) error
 
 	// OnComplianceFail is called when a device fails compliance checks.

@@ -112,9 +112,9 @@ Examples:
   # Add a public route
   platformctl proxy route add --id web --path-prefix / --pool web-pool --auth-mode public
 
-  # Add an mTLS route restricted to the trusted zone
+  # Add an mTLS route restricted to the control-plane zone
   platformctl proxy route add --id api --host api.example.com --path-prefix /api \
-    --pool api-pool --auth-mode mtls --allowed-zone trusted --strip-prefix
+    --pool api-pool --auth-mode mtls --allowed-zone control-plane --strip-prefix
 
   # Inspect, update, delete
   platformctl proxy route get api

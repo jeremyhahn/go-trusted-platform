@@ -51,7 +51,7 @@ func (ErrZoneSubdomainsNoNetworkZones) Error() string {
 //
 // This is a reflect-only DNS operation. No SDN policy is touched here.
 // The sub-zones are pre-created at startup so that findZoneForQuery can
-// locate them for queries like host.trusted.example.internal. before any
+// locate them for queries like host.control-plane.example.internal. before any
 // device has registered.
 func InitNetworkZoneSubdomains(
 	ctx context.Context,
@@ -155,7 +155,7 @@ func ensureNetworkZoneSubdomain(
 // convention in docs/architecture/reference-network.md.
 //
 // internalDomain should be the internal zone name without trailing dot.
-// networkZone is the resolved network zone name (e.g. "trusted").
+// networkZone is the resolved network zone name (e.g. "control-plane").
 // host is the plain hostname label (e.g. "lab-node-1").
 func NetworkZoneSubdomainFQDN(host, networkZone, internalDomain string) string {
 	return fmt.Sprintf("%s.%s.%s", host, networkZone, internalDomain)

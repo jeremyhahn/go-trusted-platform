@@ -36,7 +36,12 @@ Related SDN category opcodes: the overlay service uses category opcode
 `0x2E` with its own sub-opcodes (see
 [overlay/api-reference-quic.md](overlay/api-reference-quic.md)); the
 gateway and IPAM surfaces have their own opcode assignments in
-`pkg/api/quic/gateway_handlers.go`.
+`pkg/api/quic/gateway_handlers.go`. The zone operations are gateway
+category (`0x2F`) sub-opcodes `0x10` list, `0x11` create, `0x12` update and
+`0x13` delete; `0x14` (the retired assign operation) is never reused. Their
+codec bodies carry the whole zone schema (`offset`, `port_classes`,
+`allow_to`, `services`, `privileged_access`, …) and list/create/update
+responses carry `numbering` when the node has an `sdn.environment`.
 
 ## Client Usage
 

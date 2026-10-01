@@ -157,7 +157,7 @@ type SDNTestAdapter interface {
 	// CreateZone creates a new network trust zone.
 	CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error)
 
-	// UpdateZone updates policy settings of an existing network zone.
+	// UpdateZone tunes a built-in zone or replaces an owner-defined zone.
 	UpdateZone(ctx context.Context, name string, req ZoneUpdateRequest) (*ZoneEntry, error)
 
 	// DeleteZone deletes a network trust zone by name.
@@ -165,9 +165,6 @@ type SDNTestAdapter interface {
 
 	// ListZones returns all network trust zones, optionally filtered by lifecycle role.
 	ListZones(ctx context.Context, lifecycleRole string) (*ZoneListResponse, error)
-
-	// AssignZone assigns a network segment to a trust zone.
-	AssignZone(ctx context.Context, network string, zoneName string) (bool, error)
 }
 
 // =============================================================================
@@ -469,7 +466,7 @@ type IPAMPoolEntry struct {
 	// DNS is the list of DNS servers for this pool.
 	DNS []string
 
-	// Zone is the trust/exposure zone for this pool (e.g. "trusted", "provisioning").
+	// Zone is the trust/exposure zone for this pool (e.g. "control-plane", "provisioning").
 	Zone string
 
 	// Description is a human-readable description of the pool.
@@ -493,7 +490,7 @@ type IPAMPoolCreateRequest struct {
 	// Gateway is an optional gateway address within the CIDR.
 	Gateway string
 
-	// Zone is the optional trust/exposure zone (e.g. "trusted", "provisioning").
+	// Zone is the optional trust/exposure zone (e.g. "control-plane", "provisioning").
 	Zone string
 
 	// Description is an optional human-readable description.
@@ -624,34 +621,59 @@ type DHCPLeaseEntry struct {
 // Network Zone Types
 // =============================================================================
 
-// ZoneListResponse contains the list of network trust zones.
+// ZoneListResponse contains the list of network zones.
 type ZoneListResponse struct {
 	Zones      []ZoneEntry
 	TotalCount int
 }
 
-// ZoneEntry represents a network trust zone.
+// ZonePathEntry is a directed allow_to path from a zone to another zone.
+type ZonePathEntry struct {
+	// Zone is the destination zone.
+	Zone string
+	// Services is the optional service allowlist (empty = all services).
+	Services []string
+}
+
+// ZoneEntry represents an underlay zone as a transport returns it.
 type ZoneEntry struct {
 	// Name is the unique zone identifier.
 	Name string
 
+	// Offset is the zone's offset in the environment block.
+	Offset uint8
+
+	// PortClasses are the switch port classes carrying the zone.
+	PortClasses []string
+
 	// InternetIngress indicates the zone accepts external ingress traffic.
 	InternetIngress bool
 
-	// Isolate indicates the zone is fully isolated from all others.
+	// Isolate denies all traffic except explicit AllowTo paths.
 	Isolate bool
 
-	// IsolatePerTenant isolates tenants within the zone from each other.
-	IsolatePerTenant bool
-
-	// OOB marks the zone as out-of-band management.
+	// OOB marks the out-of-band management zone.
 	OOB bool
 
-	// LifecycleRole is the optional lifecycle role (provisioning, quarantine).
+	// LifecycleRole is the lifecycle role (provisioning, quarantine).
 	LifecycleRole string
 
-	// RestartRequired is true when a policy-relevant field was changed and
-	// the flow matrix needs recompilation.
+	// Services are the services permitted inside the zone.
+	Services []string
+
+	// AllowTo are the zone's directed paths.
+	AllowTo []ZonePathEntry
+
+	// PrivilegedApprovedBy is the approver of the zone's privileged_access
+	// override; empty when the zone carries none.
+	PrivilegedApprovedBy string
+
+	// VLAN is the zone's derived VLAN; zero when the daemon has no
+	// sdn.environment.
+	VLAN uint16
+
+	// RestartRequired is true when the zone set changed and the daemon must
+	// restart to re-derive the network plan.
 	RestartRequired bool
 
 	// CreatedAt is the creation timestamp.
@@ -661,52 +683,48 @@ type ZoneEntry struct {
 	UpdatedAt time.Time
 }
 
-// ZoneCreateRequest carries parameters for creating a new network zone.
+// ZoneSpec carries the policy and identity fields of a zone.
+type ZoneSpec struct {
+	// Offset is the zone's offset (owner-defined zones: 9-99).
+	Offset uint8
+
+	// PortClasses are the port classes carrying the zone.
+	PortClasses []string
+
+	// InternetIngress indicates the zone accepts external ingress traffic.
+	InternetIngress bool
+
+	// Isolate denies all traffic except explicit AllowTo paths.
+	Isolate bool
+
+	// OOB marks the out-of-band management zone.
+	OOB bool
+
+	// LifecycleRole is the lifecycle role (built-ins only).
+	LifecycleRole string
+
+	// Services are the services permitted inside the zone.
+	Services []string
+
+	// AllowTo are the zone's directed paths.
+	AllowTo []ZonePathEntry
+
+	// PrivilegedReason and PrivilegedApprovedBy form the privileged_access
+	// override required for a path into control-plane or management.
+	PrivilegedReason     string
+	PrivilegedApprovedBy string
+}
+
+// ZoneCreateRequest carries parameters for creating an owner-defined zone.
 type ZoneCreateRequest struct {
 	// Name is the unique zone identifier (required).
 	Name string
-
-	// InternetIngress indicates the zone accepts external ingress traffic.
-	InternetIngress bool
-
-	// Isolate fully isolates this zone from all others.
-	Isolate bool
-
-	// IsolatePerTenant isolates tenants within the zone from each other.
-	IsolatePerTenant bool
-
-	// OOB marks the zone as out-of-band management.
-	OOB bool
-
-	// LifecycleRole is the optional lifecycle role (provisioning, quarantine).
-	LifecycleRole string
+	ZoneSpec
 }
 
-// ZoneUpdateRequest carries mutable fields for updating a network zone.
+// ZoneUpdateRequest carries the fields that replace a zone's policy.
 type ZoneUpdateRequest struct {
-	// InternetIngress indicates the zone accepts external ingress traffic.
-	InternetIngress bool
-
-	// Isolate fully isolates this zone from all others.
-	Isolate bool
-
-	// IsolatePerTenant isolates tenants within the zone from each other.
-	IsolatePerTenant bool
-
-	// OOB marks the zone as out-of-band management.
-	OOB bool
-
-	// LifecycleRole is the optional lifecycle role (provisioning, quarantine).
-	LifecycleRole string
-}
-
-// ZoneAssignRequest carries parameters for assigning a network to a zone.
-type ZoneAssignRequest struct {
-	// Network is the network segment name (required).
-	Network string
-
-	// Zone is the target trust zone name (required).
-	Zone string
+	ZoneSpec
 }
 
 // =============================================================================

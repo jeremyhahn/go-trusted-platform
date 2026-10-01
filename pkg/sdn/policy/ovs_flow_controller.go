@@ -23,9 +23,20 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 )
 
+// ovsClient is the part of *ovs.Client the flow controller drives.
+type ovsClient interface {
+	AddFlow(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error
+	AddFlows(ctx context.Context, bridgeName string, flows []*ovs.FlowMod) error
+	DeleteFlow(ctx context.Context, bridgeName string, match string) error
+	ListFlows(ctx context.Context, bridgeName string) ([]*ovs.Flow, error)
+	UpdatePort(ctx context.Context, name string, updates map[string]interface{}) error
+	SetPortState(ctx context.Context, portName string, state ovs.PortState) error
+	GetOFPort(ctx context.Context, portName string) (int32, error)
+}
+
 // OVSFlowController implements FlowController using an OVS client
 type OVSFlowController struct {
-	client  *ovs.Client
+	client  ovsClient
 	timeout time.Duration
 }
 
@@ -166,7 +177,9 @@ func (c *OVSFlowController) ListFlows(bridgeName string) ([]string, error) {
 	return result, nil
 }
 
-// SetPortVLAN sets the VLAN tag for a port using OVSDB
+// SetPortVLAN makes a port an access port on vlan using OVSDB: tag=vlan,
+// no trunks, vlan_mode=access, so a port that was a trunk becomes a clean
+// access port (a quarantined trunk keeps none of its role's VLANs).
 func (c *OVSFlowController) SetPortVLAN(ctx context.Context, portName string, vlan int64) error {
 	if portName == "" {
 		return ErrInvalidPortID
@@ -176,10 +189,52 @@ func (c *OVSFlowController) SetPortVLAN(ctx context.Context, portName string, vl
 		return ErrInvalidVLAN
 	}
 
-	if err := c.client.SetPortVLAN(ctx, portName, vlan); err != nil {
+	updates := map[string]interface{}{
+		"tag":       vlan,
+		"trunks":    ovs.Set{Set: []interface{}{}},
+		"vlan_mode": "access",
+	}
+	if err := c.client.UpdatePort(ctx, portName, updates); err != nil {
 		return &WrappedError{Msg: fmt.Sprintf("failed to set VLAN for port %s", portName), Err: err}
 	}
 
+	return nil
+}
+
+// SetPortTrunk makes a port an 802.1Q trunk using OVSDB: trunks=allowed,
+// and with a native VLAN tag=native, vlan_mode=native-untagged (untagged
+// frames, such as a factory NIC's PXE, land on the native VLAN); without one
+// the tag is cleared and vlan_mode=trunk.
+func (c *OVSFlowController) SetPortTrunk(ctx context.Context, portName string, allowed []uint16, native uint16) error {
+	if portName == "" {
+		return ErrInvalidPortID
+	}
+	if len(allowed) == 0 {
+		return ErrInvalidVLAN
+	}
+	trunks := make([]interface{}, len(allowed))
+	for i, v := range allowed {
+		if v < 1 || v > 4094 {
+			return ErrInvalidVLAN
+		}
+		trunks[i] = int64(v)
+	}
+	if native > 4094 {
+		return ErrInvalidVLAN
+	}
+
+	updates := map[string]interface{}{
+		"trunks":    ovs.Set{Set: trunks},
+		"tag":       ovs.Set{Set: []interface{}{}},
+		"vlan_mode": "trunk",
+	}
+	if native != 0 {
+		updates["tag"] = int64(native)
+		updates["vlan_mode"] = "native-untagged"
+	}
+	if err := c.client.UpdatePort(ctx, portName, updates); err != nil {
+		return &WrappedError{Msg: fmt.Sprintf("failed to set trunk for port %s", portName), Err: err}
+	}
 	return nil
 }
 

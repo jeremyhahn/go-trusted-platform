@@ -28,10 +28,9 @@ func NewResumeCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "resume <tenant-name>",
 		Short: "Resume a suspended tenant",
-		Long: `Resume a suspended tenant, restoring network traffic and resource operations.
+		Long: `Resume a suspended tenant, restoring resource operations.
 
 When a tenant is resumed:
-  - Network traffic through the OVS bridge is restored
   - Resource creation is re-enabled
   - All existing resources become accessible again
 

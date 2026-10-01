@@ -41,7 +41,7 @@ Examples:
   platformctl sdn ipam pool list
 
   # Create a pool
-  platformctl sdn ipam pool create --name trusted-net --cidr 10.0.0.0/24
+  platformctl sdn ipam pool create --name lab-net --cidr 10.4.9.0/24
 
   # Allocate an IP
   platformctl sdn ipam allocate --pool-id pool1 --device-id vm-123
@@ -90,7 +90,7 @@ Shows:
 
 Examples:
   platformctl sdn ipam pool list
-  platformctl sdn ipam pool list --zone trusted
+  platformctl sdn ipam pool list --zone control-plane
   platformctl sdn ipam pool list -o json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runIPAMPoolList(getFlags(), zone)
@@ -133,6 +133,7 @@ func newIPAMPoolCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		zone        string
 		description string
 		leaseSecs   int64
+		window      ipamWindowFlags
 	)
 
 	cmd := &cobra.Command{
@@ -143,11 +144,24 @@ func newIPAMPoolCreateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 The CIDR is immutable after creation. All other fields can be updated later.
 
 Examples:
-  platformctl sdn ipam pool create --name trusted-net --cidr 10.0.0.0/24
-  platformctl sdn ipam pool create --name prov-net --cidr 192.168.10.0/24 --gateway 192.168.10.1 --zone provisioning
-  platformctl sdn ipam pool create --name dev-net --cidr 172.16.0.0/20 --lease-seconds 86400`,
+  platformctl sdn ipam pool create --name lab-net --cidr 10.4.9.0/24
+  platformctl sdn ipam pool create --name lab-net --cidr 10.4.9.0/24 --gateway 10.4.9.1 \
+      --reserved 10.4.9.1/32 --range-start 10.4.9.50 --range-end 10.4.9.254
+  platformctl sdn ipam pool create --name public --cidr 203.0.113.0/24 --lease-seconds 86400`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runIPAMPoolCreate(getFlags(), id, name, cidr, gatewayAddr, zone, description, leaseSecs)
+			req := &platformv1.CreateIPAMPoolRequest{
+				Id:                        id,
+				Name:                      name,
+				Cidr:                      cidr,
+				Gateway:                   gatewayAddr,
+				Zone:                      zone,
+				Description:               description,
+				DefaultLeaseDurationNanos: leaseSecs * int64(1e9),
+				Reserved:                  window.reserved,
+				RangeStart:                window.rangeStart,
+				RangeEnd:                  window.rangeEnd,
+			}
+			return runIPAMPoolCreate(getFlags(), req)
 		},
 	}
 
@@ -155,9 +169,10 @@ Examples:
 	cmd.Flags().StringVar(&name, "name", "", "Display name for the pool (required)")
 	cmd.Flags().StringVar(&cidr, "cidr", "", "CIDR range for the pool, e.g. 10.0.0.0/24 (required, immutable)")
 	cmd.Flags().StringVar(&gatewayAddr, "gateway", "", "Gateway IP address within the CIDR")
-	cmd.Flags().StringVar(&zone, "zone", "", "Trust/exposure zone, e.g. 'trusted' or 'provisioning'")
+	cmd.Flags().StringVar(&zone, "zone", "", "Underlay zone the pool serves, e.g. 'control-plane'")
 	cmd.Flags().StringVar(&description, "description", "", "Description of the pool's purpose")
 	cmd.Flags().Int64Var(&leaseSecs, "lease-seconds", 0, "Default lease duration in seconds (0 = never expire)")
+	window.register(cmd)
 	cmd.MarkFlagRequired("name")
 	cmd.MarkFlagRequired("cidr")
 
@@ -172,6 +187,7 @@ func newIPAMPoolUpdateCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		zone        string
 		description string
 		leaseSecs   int64
+		window      ipamWindowFlags
 	)
 
 	cmd := &cobra.Command{
@@ -183,10 +199,26 @@ The CIDR cannot be changed after pool creation.
 
 Examples:
   platformctl sdn ipam pool update --id pool-1 --name new-name
-  platformctl sdn ipam pool update --id pool-1 --zone trusted --gateway 10.0.0.254
-  platformctl sdn ipam pool update --id pool-1 --lease-seconds 3600`,
+  platformctl sdn ipam pool update --id pool-1 --zone control-plane --gateway 10.4.6.1
+  platformctl sdn ipam pool update --id pool-1 --lease-seconds 3600
+  platformctl sdn ipam pool update --id pool-1 --reserved 10.4.6.1/32 --range-start 10.4.6.50 --range-end 10.4.6.254
+
+Passing any of --reserved, --range-start or --range-end replaces the pool's
+allocation window with exactly the values given (omitted ones are cleared).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runIPAMPoolUpdate(getFlags(), poolID, name, gatewayAddr, zone, description, leaseSecs)
+			req := &platformv1.UpdateIPAMPoolRequest{
+				Id:                        poolID,
+				Name:                      name,
+				Gateway:                   gatewayAddr,
+				Zone:                      zone,
+				Description:               description,
+				DefaultLeaseDurationNanos: leaseSecs * int64(1e9),
+				UpdateWindow:              window.changed(cmd),
+				Reserved:                  window.reserved,
+				RangeStart:                window.rangeStart,
+				RangeEnd:                  window.rangeEnd,
+			}
+			return runIPAMPoolUpdate(getFlags(), req)
 		},
 	}
 
@@ -196,6 +228,7 @@ Examples:
 	cmd.Flags().StringVar(&zone, "zone", "", "Updated zone")
 	cmd.Flags().StringVar(&description, "description", "", "Updated description")
 	cmd.Flags().Int64Var(&leaseSecs, "lease-seconds", 0, "Updated default lease duration in seconds (0 = no change)")
+	window.register(cmd)
 	cmd.MarkFlagRequired("id")
 
 	return cmd
@@ -337,7 +370,7 @@ func runIPAMPoolGet(flags *cli.CommonFlags, poolID string) error {
 	return base.Output(pool)
 }
 
-func runIPAMPoolCreate(flags *cli.CommonFlags, id, name, cidr, gatewayAddr, zone, description string, leaseSecs int64) error {
+func runIPAMPoolCreate(flags *cli.CommonFlags, req *platformv1.CreateIPAMPoolRequest) error {
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
@@ -348,15 +381,6 @@ func runIPAMPoolCreate(flags *cli.CommonFlags, id, name, cidr, gatewayAddr, zone
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	req := &platformv1.CreateIPAMPoolRequest{
-		Id:                        id,
-		Name:                      name,
-		Cidr:                      cidr,
-		Gateway:                   gatewayAddr,
-		Zone:                      zone,
-		Description:               description,
-		DefaultLeaseDurationNanos: leaseSecs * int64(1e9),
-	}
 	pool, err := gatewayClient.CreateIPAMPool(ctx, req)
 	if err != nil {
 		return &WrappedError{Msg: "failed to create IPAM pool", Err: err}
@@ -365,7 +389,7 @@ func runIPAMPoolCreate(flags *cli.CommonFlags, id, name, cidr, gatewayAddr, zone
 	return base.Output(pool)
 }
 
-func runIPAMPoolUpdate(flags *cli.CommonFlags, poolID, name, gatewayAddr, zone, description string, leaseSecs int64) error {
+func runIPAMPoolUpdate(flags *cli.CommonFlags, req *platformv1.UpdateIPAMPoolRequest) error {
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
@@ -376,20 +400,33 @@ func runIPAMPoolUpdate(flags *cli.CommonFlags, poolID, name, gatewayAddr, zone, 
 
 	ctx, cancel := newCLIContext()
 	defer cancel()
-	req := &platformv1.UpdateIPAMPoolRequest{
-		Id:                        poolID,
-		Name:                      name,
-		Gateway:                   gatewayAddr,
-		Zone:                      zone,
-		Description:               description,
-		DefaultLeaseDurationNanos: leaseSecs * int64(1e9),
-	}
 	pool, err := gatewayClient.UpdateIPAMPool(ctx, req)
 	if err != nil {
 		return &WrappedError{Msg: "failed to update IPAM pool", Err: err}
 	}
 
 	return base.Output(pool)
+}
+
+// ipamWindowFlags holds a pool's allocation-window flags: never-allocatable
+// prefixes and the dynamic range.
+type ipamWindowFlags struct {
+	reserved   []string
+	rangeStart string
+	rangeEnd   string
+}
+
+// register adds the window flags to cmd.
+func (w *ipamWindowFlags) register(cmd *cobra.Command) {
+	cmd.Flags().StringSliceVar(&w.reserved, "reserved", nil, "Prefixes (CIDR) that are never allocatable; repeat or comma-separate")
+	cmd.Flags().StringVar(&w.rangeStart, "range-start", "", "First address of the dynamic allocation window")
+	cmd.Flags().StringVar(&w.rangeEnd, "range-end", "", "Last address of the dynamic allocation window")
+}
+
+// changed reports whether any window flag was set on cmd.
+func (w *ipamWindowFlags) changed(cmd *cobra.Command) bool {
+	f := cmd.Flags()
+	return f.Changed("reserved") || f.Changed("range-start") || f.Changed("range-end")
 }
 
 func runIPAMPoolDelete(flags *cli.CommonFlags, poolID string) error {

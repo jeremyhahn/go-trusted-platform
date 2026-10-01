@@ -15,26 +15,34 @@ package fabric
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
-// Manager orchestrates fabric-wide operations across all switches.
+// Manager orchestrates the physical switch fabric on the network plan.
 type Manager interface {
-	// ApplyFabric converges the entire fabric to the desired state:
-	// VLANs, VNIs, and LAGs on every switch.
+	// ApplyFabric converges the entire fabric to the desired state: every
+	// zone VLAN of the plan on every switch, the LAGs, and the class of
+	// every assigned port and peer-link port.
 	ApplyFabric(ctx context.Context) error
 
-	// ProvisionPort places a port onto the provisioning VLAN segment.
-	ProvisionPort(ctx context.Context, port PortRef, segment string) error
+	// ProvisionPort puts a port on the provisioning zone: a trunk carrying
+	// only the provisioning VLAN, native, so a factory NIC PXE-boots.
+	ProvisionPort(ctx context.Context, port PortRef) error
 
-	// ActivatePort moves a port from provisioning to a production segment.
-	ActivatePort(ctx context.Context, port PortRef, segment string) error
+	// ActivatePort gives an attested node's port its class: the VLANs,
+	// native VLAN and MTU the plan derives for that class.
+	ActivatePort(ctx context.Context, port PortRef, class zone.PortClass) error
 
-	// QuarantinePort moves a port to the quarantine segment.
-	QuarantinePort(ctx context.Context, port PortRef, segment string) error
+	// QuarantinePort puts a port on the quarantine zone: a trunk carrying
+	// only the quarantine VLAN, native.
+	QuarantinePort(ctx context.Context, port PortRef) error
 
-	// SegmentByName returns the resolved Segment for the given name.
-	SegmentByName(name string) (*Segment, error)
+	// DisablePort administratively shuts a blocked node's port down.
+	DisablePort(ctx context.Context, port PortRef) error
 
 	// SwitchStatus returns the health status of a switch.
 	SwitchStatus(ctx context.Context, switchID string) (*SwitchStatus, error)
@@ -43,25 +51,24 @@ type Manager interface {
 	Close() error
 }
 
-// fabricManager implements Manager using a set of per-switch drivers.
+// fabricManager implements Manager over per-switch drivers.
 type fabricManager struct {
-	config   *FabricConfig
-	logger   *slog.Logger
-	drivers  map[string]Driver
-	segments map[string]*Segment
-	peers    map[string][]string // switchID -> list of peer switchIDs
+	config  *FabricConfig
+	plan    *netplan.Plan
+	logger  *slog.Logger
+	drivers map[string]Driver
+	peers   map[string][]string // switchID -> list of peer switchIDs
 }
 
-// NewManager creates a new fabric Manager from the given configuration.
-// It resolves all segments, builds the peer map, and instantiates a
-// driver for each configured switch.
-func NewManager(config *FabricConfig, logger *slog.Logger) (Manager, error) {
+// NewManager validates config, creates a driver for every switch and
+// returns a Manager that derives every VLAN from plan.
+func NewManager(config *FabricConfig, plan *netplan.Plan, logger *slog.Logger) (Manager, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-
-	segments := resolveSegments(config)
-	peers := buildPeerMap(config)
+	if plan == nil {
+		return nil, ErrNilPlan{}
+	}
 
 	drivers := make(map[string]Driver, len(config.Switches))
 	for _, sw := range config.Switches {
@@ -71,63 +78,51 @@ func NewManager(config *FabricConfig, logger *slog.Logger) (Manager, error) {
 		}
 		drivers[sw.ID] = drv
 	}
-
-	return &fabricManager{
-		config:   config,
-		logger:   logger,
-		drivers:  drivers,
-		segments: segments,
-		peers:    peers,
-	}, nil
+	return newManager(config, plan, logger, drivers), nil
 }
 
-// NewManagerWithDrivers creates a fabric Manager with pre-built drivers,
-// used primarily for testing.
-func NewManagerWithDrivers(config *FabricConfig, logger *slog.Logger, drivers map[string]Driver) (Manager, error) {
+// NewManagerWithDrivers returns a Manager over caller-supplied drivers,
+// keyed by switch ID.
+func NewManagerWithDrivers(config *FabricConfig, plan *netplan.Plan, logger *slog.Logger, drivers map[string]Driver) (Manager, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-
-	segments := resolveSegments(config)
-	peers := buildPeerMap(config)
-
-	return &fabricManager{
-		config:   config,
-		logger:   logger,
-		drivers:  drivers,
-		segments: segments,
-		peers:    peers,
-	}, nil
+	if plan == nil {
+		return nil, ErrNilPlan{}
+	}
+	return newManager(config, plan, logger, drivers), nil
 }
 
-// ApplyFabric converges the entire fabric: connects to all switches,
-// ensures VLANs and VNIs for each segment, and configures all LAGs.
+// newManager assembles a fabricManager.
+func newManager(config *FabricConfig, plan *netplan.Plan, logger *slog.Logger, drivers map[string]Driver) *fabricManager {
+	return &fabricManager{
+		config:  config,
+		plan:    plan,
+		logger:  logger,
+		drivers: drivers,
+		peers:   buildPeerMap(config),
+	}
+}
+
+// ApplyFabric converges every switch to the plan.
 func (m *fabricManager) ApplyFabric(ctx context.Context) error {
-	// Connect all drivers.
 	for id, drv := range m.drivers {
 		if err := drv.Connect(ctx); err != nil {
 			return ErrDriverConnect{SwitchID: id, Cause: err}
 		}
 	}
 
-	// Ensure VLANs and VNIs on every switch.
-	for _, seg := range m.segments {
+	zones := m.plan.Zones()
+	for _, z := range zones {
 		for id, drv := range m.drivers {
-			if err := drv.EnsureVLAN(ctx, seg.VLAN, seg.Name); err != nil {
+			if err := drv.EnsureVLAN(ctx, z.VLAN, string(z.Zone)); err != nil {
 				return ErrDriverOperation{SwitchID: id, Operation: "EnsureVLAN", Cause: err}
-			}
-			if seg.VNI > 0 {
-				if err := drv.EnsureVNI(ctx, seg.VNI, seg.VLAN); err != nil {
-					return ErrDriverOperation{SwitchID: id, Operation: "EnsureVNI", Cause: err}
-				}
 			}
 		}
 	}
 
-	// Ensure LAGs on the appropriate switches.
 	for _, lag := range m.config.LAGs {
-		switchesInLAG := lagSwitches(lag)
-		for switchID := range switchesInLAG {
+		for switchID := range lagSwitches(lag) {
 			drv, ok := m.drivers[switchID]
 			if !ok {
 				return ErrUnknownSwitch{ID: switchID}
@@ -138,63 +133,135 @@ func (m *fabricManager) ApplyFabric(ctx context.Context) error {
 		}
 	}
 
+	for _, peer := range m.config.Peers {
+		for _, sw := range []string{peer.SwitchA, peer.SwitchB} {
+			for _, p := range peer.PeerLinkPorts {
+				if err := m.applyClass(ctx, PortRef{SwitchID: sw, Port: p}, zone.PortClassPeerLink); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	for _, pa := range m.config.Ports {
+		if err := m.applyClass(ctx, pa.PortRef, pa.Class); err != nil {
+			return err
+		}
+	}
+
 	m.logger.Info("fabric: apply complete",
 		slog.Int("switches", len(m.drivers)),
-		slog.Int("segments", len(m.segments)),
-		slog.Int("lags", len(m.config.LAGs)))
+		slog.Int("vlans", len(zones)),
+		slog.Int("lags", len(m.config.LAGs)),
+		slog.Int("ports", len(m.config.Ports)))
 
 	return nil
 }
 
-// ProvisionPort places a port on the given segment's VLAN in access mode.
-// If the port belongs to an MC-LAG, the operation is applied to all peer switches.
-func (m *fabricManager) ProvisionPort(ctx context.Context, port PortRef, segment string) error {
-	seg, err := m.SegmentByName(segment)
+// ProvisionPort puts port (and its MC-LAG peers) on the provisioning zone.
+func (m *fabricManager) ProvisionPort(ctx context.Context, port PortRef) error {
+	return m.singleZoneTrunk(ctx, port, zone.ZoneProvisioning)
+}
+
+// QuarantinePort puts port (and its MC-LAG peers) on the quarantine zone.
+func (m *fabricManager) QuarantinePort(ctx context.Context, port PortRef) error {
+	return m.singleZoneTrunk(ctx, port, zone.ZoneQuarantine)
+}
+
+// ActivatePort gives port (and its MC-LAG peers) the plan of class.
+func (m *fabricManager) ActivatePort(ctx context.Context, port PortRef, class zone.PortClass) error {
+	if err := port.Validate(); err != nil {
+		return err
+	}
+	if _, err := m.plan.PortClass(class); err != nil {
+		return ErrPortClassPlan{Class: class, Cause: err}
+	}
+	return m.onPeers(port, "ActivatePort", func(drv Driver, p PortRef) error {
+		return m.setClass(ctx, drv, p, class)
+	})
+}
+
+// DisablePort shuts port (and its MC-LAG peers) down.
+func (m *fabricManager) DisablePort(ctx context.Context, port PortRef) error {
+	if err := port.Validate(); err != nil {
+		return err
+	}
+	return m.onPeers(port, "DisablePort", func(drv Driver, p PortRef) error {
+		return drv.DisablePort(ctx, p)
+	})
+}
+
+// singleZoneTrunk makes port a trunk carrying only zone z, native, at the
+// platform MTU.
+func (m *fabricManager) singleZoneTrunk(ctx context.Context, port PortRef, z zone.Zone) error {
+	if err := port.Validate(); err != nil {
+		return err
+	}
+	n, err := m.plan.MustZone(z)
 	if err != nil {
 		return err
 	}
-	if seg.Role != RoleProvisioning {
-		return ErrSegmentRoleMismatch{
-			Segment:  segment,
-			Expected: RoleProvisioning,
-			Got:      seg.Role,
-		}
-	}
-	return m.setPortAccessOnPeers(ctx, port, seg.VLAN)
+	return m.onPeers(port, "SetPortTrunk", func(drv Driver, p PortRef) error {
+		return drv.SetPortTrunk(ctx, p, []uint16{n.VLAN}, n.VLAN, netplan.MTU)
+	})
 }
 
-// ActivatePort moves a port to the given production segment's VLAN.
-func (m *fabricManager) ActivatePort(ctx context.Context, port PortRef, segment string) error {
-	seg, err := m.SegmentByName(segment)
-	if err != nil {
-		return err
-	}
-	return m.setPortAccessOnPeers(ctx, port, seg.VLAN)
-}
-
-// QuarantinePort moves a port to the given quarantine segment's VLAN.
-func (m *fabricManager) QuarantinePort(ctx context.Context, port PortRef, segment string) error {
-	seg, err := m.SegmentByName(segment)
-	if err != nil {
-		return err
-	}
-	if seg.Role != RoleQuarantine {
-		return ErrSegmentRoleMismatch{
-			Segment:  segment,
-			Expected: RoleQuarantine,
-			Got:      seg.Role,
-		}
-	}
-	return m.setPortAccessOnPeers(ctx, port, seg.VLAN)
-}
-
-// SegmentByName returns the resolved Segment for the given name.
-func (m *fabricManager) SegmentByName(name string) (*Segment, error) {
-	seg, ok := m.segments[name]
+// applyClass applies class to one port on its own switch only: the fabric
+// configuration lists each switch's ports itself.
+func (m *fabricManager) applyClass(ctx context.Context, port PortRef, class zone.PortClass) error {
+	drv, ok := m.drivers[port.SwitchID]
 	if !ok {
-		return nil, ErrUnknownSegment{Name: name}
+		return ErrUnknownSwitch{ID: port.SwitchID}
 	}
-	return seg, nil
+	return wrapOp(port.SwitchID, "ApplyPortClass", m.setClass(ctx, drv, port, class))
+}
+
+// setClass programs one port with the plan of class.
+func (m *fabricManager) setClass(ctx context.Context, drv Driver, port PortRef, class zone.PortClass) error {
+	pc, err := m.plan.PortClass(class)
+	if err != nil {
+		return ErrPortClassPlan{Class: class, Cause: err}
+	}
+	if pc.Mode == netplan.PortModeAccess {
+		return drv.SetPortAccess(ctx, port, pc.Native, pc.MTU)
+	}
+	return drv.SetPortTrunk(ctx, port, pc.Allowed, pc.Native, pc.MTU)
+}
+
+// onPeers runs op on port's switch and on the same port of every MC-LAG
+// peer switch, so a dual-homed node's links stay identical.
+func (m *fabricManager) onPeers(port PortRef, operation string, op func(Driver, PortRef) error) error {
+	drv, ok := m.drivers[port.SwitchID]
+	if !ok {
+		return ErrUnknownSwitch{ID: port.SwitchID}
+	}
+	if err := op(drv, port); err != nil {
+		return wrapOp(port.SwitchID, operation, err)
+	}
+	for _, peerID := range m.peers[port.SwitchID] {
+		peerDrv, exists := m.drivers[peerID]
+		if !exists {
+			continue
+		}
+		peerPort := PortRef{SwitchID: peerID, Port: port.Port, LAGID: port.LAGID}
+		if err := op(peerDrv, peerPort); err != nil {
+			return wrapOp(peerID, operation, err)
+		}
+	}
+	return nil
+}
+
+// wrapOp wraps a driver failure in ErrDriverOperation; nil stays nil and a
+// plan error passes through unchanged.
+func wrapOp(switchID, operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var planErr ErrPortClassPlan
+	if errors.As(err, &planErr) {
+		return err
+	}
+	return ErrDriverOperation{SwitchID: switchID, Operation: operation, Cause: err}
 }
 
 // SwitchStatus returns the status of a switch by pinging its driver.
@@ -240,61 +307,6 @@ func (m *fabricManager) Close() error {
 		}
 	}
 	return lastErr
-}
-
-// setPortAccessOnPeers applies SetPortAccess on the port's switch and all
-// MC-LAG peer switches.
-func (m *fabricManager) setPortAccessOnPeers(ctx context.Context, port PortRef, vlan uint16) error {
-	if err := port.Validate(); err != nil {
-		return err
-	}
-
-	drv, ok := m.drivers[port.SwitchID]
-	if !ok {
-		return ErrUnknownSwitch{ID: port.SwitchID}
-	}
-
-	if err := drv.SetPortAccess(ctx, port, vlan); err != nil {
-		return ErrDriverOperation{SwitchID: port.SwitchID, Operation: "SetPortAccess", Cause: err}
-	}
-
-	// Apply to MC-LAG peer switches.
-	if peerIDs, ok := m.peers[port.SwitchID]; ok {
-		for _, peerID := range peerIDs {
-			peerDrv, exists := m.drivers[peerID]
-			if !exists {
-				continue
-			}
-			peerPort := PortRef{SwitchID: peerID, Port: port.Port, LAGID: port.LAGID}
-			if err := peerDrv.SetPortAccess(ctx, peerPort, vlan); err != nil {
-				return ErrDriverOperation{SwitchID: peerID, Operation: "SetPortAccess", Cause: err}
-			}
-		}
-	}
-
-	return nil
-}
-
-// resolveSegments converts SegmentConfig entries into runtime Segment values,
-// computing VNI when EVPN mode is active.
-func resolveSegments(config *FabricConfig) map[string]*Segment {
-	segments := make(map[string]*Segment, len(config.Segments))
-	for _, sc := range config.Segments {
-		seg := &Segment{
-			Name:    sc.Name,
-			VLAN:    sc.VLAN,
-			CIDR:    sc.CIDR,
-			Gateway: sc.Gateway,
-			DNS:     sc.DNS,
-			DHCP:    sc.DHCP,
-			Role:    sc.Role,
-		}
-		if config.Mode == ModeEVPN && config.EVPN != nil {
-			seg.VNI = config.EVPN.VNIBase + uint32(sc.VLAN)
-		}
-		segments[sc.Name] = seg
-	}
-	return segments
 }
 
 // buildPeerMap creates a bidirectional map of switch peers from PeerConfig entries.

@@ -14,106 +14,44 @@
 package zone_test
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
-// TestErrorMessages verifies that each typed error produces a non-empty,
-// descriptive message string containing the relevant field values.
+// TestErrorMessages checks that every typed error names its origin and the
+// values an operator needs to fix the configuration.
 func TestErrorMessages(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
-		name    string
-		err     error
-		contain []string
+		err  error
+		want []string
 	}{
-		{
-			name:    "ErrDuplicateZone",
-			err:     zone.ErrDuplicateZone{Name: "trusted"},
-			contain: []string{"duplicate", "trusted"},
-		},
-		{
-			name:    "ErrEmptyZoneName",
-			err:     zone.ErrEmptyZoneName{},
-			contain: []string{"empty"},
-		},
-		{
-			name:    "ErrInvalidZoneName",
-			err:     zone.ErrInvalidZoneName{Name: "BAD_NAME"},
-			contain: []string{"BAD_NAME", "DNS-label"},
-		},
-		{
-			name:    "ErrLifecycleRoleCount",
-			err:     zone.ErrLifecycleRoleCount{Role: zone.LifecycleRoleProvisioning, Count: 2},
-			contain: []string{"provisioning", "2"},
-		},
-		{
-			name:    "ErrInvalidLifecycleRole",
-			err:     zone.ErrInvalidLifecycleRole{Zone: "myz", Role: "bogus"},
-			contain: []string{"myz", "bogus"},
-		},
-		{
-			name:    "ErrUnknownZoneRef_isolate_from",
-			err:     zone.ErrUnknownZoneRef{Source: "src", Field: "isolate_from", Target: "ghost"},
-			contain: []string{"src", "isolate_from", "ghost"},
-		},
-		{
-			name:    "ErrUnknownZoneRef_allow_to",
-			err:     zone.ErrUnknownZoneRef{Source: "src", Field: "allow_to", Target: "phantom"},
-			contain: []string{"src", "allow_to", "phantom"},
-		},
-		{
-			name:    "ErrOOBWithInternetIngress",
-			err:     zone.ErrOOBWithInternetIngress{Zone: "management"},
-			contain: []string{"management", "oob", "internet_ingress"},
-		},
-		{
-			name:    "ErrOmitLifecycleHolder",
-			err:     zone.ErrOmitLifecycleHolder{Zone: zone.ZoneProvisioning, Role: zone.LifecycleRoleProvisioning},
-			contain: []string{"provisioning"},
-		},
-		{
-			name:    "ErrNoZoneForRole",
-			err:     zone.ErrNoZoneForRole{Role: zone.LifecycleRoleQuarantine},
-			contain: []string{"quarantine"},
-		},
+		{zone.ErrDuplicateZone{Name: "lab"}, []string{"zone:", `"lab"`}},
+		{zone.ErrEmptyZoneName{}, []string{"zone:", "empty"}},
+		{zone.ErrInvalidZoneName{Name: "Lab"}, []string{"zone:", `"Lab"`}},
+		{zone.ErrLifecycleRoleCount{Role: zone.LifecycleRoleQuarantine, Count: 2}, []string{"quarantine", "2"}},
+		{zone.ErrInvalidLifecycleRole{Zone: "lab", Role: "x"}, []string{`"lab"`, `"x"`}},
+		{zone.ErrUnknownZoneRef{Source: "lab", Field: "allow_to", Target: "nowhere"}, []string{"allow_to", `"nowhere"`}},
+		{zone.ErrOOBWithInternetIngress{Zone: "management"}, []string{"oob", "internet_ingress"}},
+		{zone.ErrOOBAllowTo{Zone: zone.ZoneManagement, To: zone.ZoneStorage}, []string{`"management"`, `"storage"`}},
+		{zone.ErrOmitRequired{Zone: zone.ZoneFabric}, []string{`"fabric"`, "required"}},
+		{zone.ErrOmitUnknown{Zone: "lab"}, []string{`"lab"`, "built-in"}},
+		{zone.ErrBuiltinIdentity{Zone: zone.ZoneStorage, Field: "offset"}, []string{`"storage"`, "offset"}},
+		{zone.ErrReservedZoneName{Name: "public"}, []string{`"public"`, "overlays are not zones"}},
+		{zone.ErrDuplicateOffset{Offset: 9, Zones: [2]zone.Zone{"a", "b"}}, []string{`"a"`, `"b"`, "09"}},
+		{zone.ErrOwnerZoneOffset{Zone: "lab", Offset: 3}, []string{`"lab"`, "09-99", "03"}},
+		{zone.ErrOwnerZonePortClass{Zone: "lab"}, []string{`"lab"`, "must join"}},
+		{zone.ErrOwnerZonePortClass{Zone: "lab", Class: zone.PortClassBMC}, []string{`"lab"`, `"bmc"`}},
+		{zone.ErrOwnerZoneField{Zone: "lab", Field: "oob"}, []string{`"lab"`, "oob"}},
+		{zone.ErrPrivilegedAccessRequired{Zone: "lab", To: zone.ZoneControlPlane}, []string{`"lab"`, `"control-plane"`, "privileged_access"}},
+		{zone.ErrNoZoneForRole{Role: zone.LifecycleRoleProvisioning}, []string{"provisioning"}},
 	}
-
 	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			msg := tc.err.Error()
-			if msg == "" {
-				t.Errorf("%s.Error() returned empty string", tc.name)
-			}
-			for _, substr := range tc.contain {
-				if !strings.Contains(msg, substr) {
-					t.Errorf("%s.Error() = %q; want it to contain %q", tc.name, msg, substr)
-				}
-			}
-		})
-	}
-}
-
-// TestValidate_NameEndsWithHyphen verifies that a trailing hyphen is caught by
-// the DNS-label safety check (exercises the trailing-hyphen branch of
-// isDNSLabelSafe).
-func TestValidate_NameEndsWithHyphen(t *testing.T) {
-	t.Parallel()
-
-	zones := zone.Defaults()
-	zones = append(zones, zone.ZoneConfig{Name: "bad-"})
-	err := zone.Validate(zones)
-	var target zone.ErrInvalidZoneName
-	if err == nil {
-		t.Fatal("Validate: expected error for trailing-hyphen name, got nil")
-	}
-	if msg := err.Error(); !strings.Contains(msg, "bad-") {
-		_ = target
-		t.Errorf("error %q should mention the bad name", msg)
+		msg := tc.err.Error()
+		for _, w := range tc.want {
+			assert.Contains(t, msg, w, "%T", tc.err)
+		}
 	}
 }

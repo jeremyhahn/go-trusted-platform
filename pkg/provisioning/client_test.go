@@ -158,7 +158,7 @@ func TestFetchProfile_Success(t *testing.T) {
 	// Create test server
 	expectedProfile := ProfileResponse{
 		SerialNumber: "TEST-SERIAL-001",
-		TrustedNetwork: NetworkConfig{
+		AdmittedNetwork: NetworkConfig{
 			VLAN:    100,
 			UseDHCP: true,
 			Gateway: "192.168.1.1",
@@ -204,8 +204,8 @@ func TestFetchProfile_Success(t *testing.T) {
 	profile, err := client.FetchProfile(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, expectedProfile.SerialNumber, profile.SerialNumber)
-	assert.Equal(t, expectedProfile.TrustedNetwork.VLAN, profile.TrustedNetwork.VLAN)
-	assert.Equal(t, expectedProfile.TrustedNetwork.UseDHCP, profile.TrustedNetwork.UseDHCP)
+	assert.Equal(t, expectedProfile.AdmittedNetwork.VLAN, profile.AdmittedNetwork.VLAN)
+	assert.Equal(t, expectedProfile.AdmittedNetwork.UseDHCP, profile.AdmittedNetwork.UseDHCP)
 }
 
 func TestFetchProfile_ServerError(t *testing.T) {
@@ -363,7 +363,7 @@ func TestFetchProfileAndActivate_Success(t *testing.T) {
 			assert.Equal(t, http.MethodGet, r.Method)
 			if err := json.NewEncoder(w).Encode(ProfileResponse{
 				SerialNumber: "TEST-001",
-				TrustedNetwork: NetworkConfig{
+				AdmittedNetwork: NetworkConfig{
 					VLAN:     200,
 					UseDHCP:  false,
 					StaticIP: "203.0.113.10/24",
@@ -406,7 +406,7 @@ func TestFetchProfileAndActivate_Success(t *testing.T) {
 
 	assert.Equal(t, 2, callCount, "should call both profile and activate endpoints")
 	assert.Equal(t, "TEST-001", profile.SerialNumber)
-	assert.Equal(t, uint16(200), profile.TrustedNetwork.VLAN)
+	assert.Equal(t, uint16(200), profile.AdmittedNetwork.VLAN)
 	assert.Equal(t, "activated", activateResp.Status)
 }
 
@@ -443,7 +443,7 @@ func TestFetchProfileAndActivate_ActivationFails(t *testing.T) {
 		case "/api/v1/device/profile":
 			if err := json.NewEncoder(w).Encode(ProfileResponse{
 				SerialNumber: "TEST-001",
-				TrustedNetwork: NetworkConfig{
+				AdmittedNetwork: NetworkConfig{
 					VLAN: 100,
 				},
 			}); err != nil {

@@ -142,7 +142,9 @@ func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
 	}
 	if v.IsSet("sdn") {
 		sc := &sdn.Config{}
-		if err := v.UnmarshalKey("sdn", sc, serveDecodeHook); err != nil {
+		// The same strict decode platformd applies: an sdn key the schema
+		// no longer has (sdn.networks, sdn.transit) fails the load.
+		if err := config.CheckViperSection(v, "sdn", sc); err != nil {
 			return nil, &ErrConfigSection{Section: "sdn", Cause: err}
 		}
 		cfg.SDN = sc

@@ -56,7 +56,6 @@ const (
 	opGatewayCreateNetworkZone byte = 0x11
 	opGatewayUpdateNetworkZone byte = 0x12
 	opGatewayDeleteNetworkZone byte = 0x13
-	opGatewayAssignNetworkZone byte = 0x14
 
 	// IPAM pool sub-opcodes (payload byte 0 when opcode == opIPAMCategory)
 	opGatewayListIPAMPools  byte = 0x08
@@ -96,17 +95,39 @@ type quicGatewayListZonesResp struct {
 	Timestamp int64           `codec:"timestamp"`
 }
 
+type quicZonePath struct {
+	Zone     string   `codec:"zone"`
+	Services []string `codec:"services,omitempty"`
+}
+
+type quicZonePrivilegedAccess struct {
+	Reason     string `codec:"reason"`
+	ApprovedBy string `codec:"approved_by"`
+}
+
+type quicZoneNumbering struct {
+	VLAN    uint16 `codec:"vlan"`
+	Subnet4 string `codec:"subnet4"`
+	Subnet6 string `codec:"subnet6,omitempty"`
+	Gateway string `codec:"gateway"`
+}
+
 type quicZoneInfo struct {
-	Name             string   `codec:"name"`
-	InternetIngress  bool     `codec:"internet_ingress,omitempty"`
-	IsolateFrom      []string `codec:"isolate_from,omitempty"`
-	Isolate          bool     `codec:"isolate,omitempty"`
-	IsolatePerTenant bool     `codec:"isolate_per_tenant,omitempty"`
-	OOB              bool     `codec:"oob,omitempty"`
-	LifecycleRole    string   `codec:"lifecycle_role,omitempty"`
-	RestartRequired  bool     `codec:"restart_required,omitempty"`
-	CreatedAt        int64    `codec:"created_at"`
-	UpdatedAt        int64    `codec:"updated_at"`
+	Name             string                    `codec:"name"`
+	Offset           uint8                     `codec:"offset,omitempty"`
+	PortClasses      []string                  `codec:"port_classes,omitempty"`
+	InternetIngress  bool                      `codec:"internet_ingress,omitempty"`
+	IsolateFrom      []string                  `codec:"isolate_from,omitempty"`
+	AllowTo          []quicZonePath            `codec:"allow_to,omitempty"`
+	Services         []string                  `codec:"services,omitempty"`
+	Isolate          bool                      `codec:"isolate,omitempty"`
+	OOB              bool                      `codec:"oob,omitempty"`
+	LifecycleRole    string                    `codec:"lifecycle_role,omitempty"`
+	PrivilegedAccess *quicZonePrivilegedAccess `codec:"privileged_access,omitempty"`
+	Numbering        *quicZoneNumbering        `codec:"numbering,omitempty"`
+	RestartRequired  bool                      `codec:"restart_required,omitempty"`
+	CreatedAt        int64                     `codec:"created_at"`
+	UpdatedAt        int64                     `codec:"updated_at"`
 }
 
 type quicGatewayCreateZoneReq struct {
@@ -114,13 +135,17 @@ type quicGatewayCreateZoneReq struct {
 }
 
 type quicCreateZoneOpts struct {
-	Name             string   `codec:"name"`
-	InternetIngress  bool     `codec:"internet_ingress,omitempty"`
-	IsolateFrom      []string `codec:"isolate_from,omitempty"`
-	Isolate          bool     `codec:"isolate,omitempty"`
-	IsolatePerTenant bool     `codec:"isolate_per_tenant,omitempty"`
-	OOB              bool     `codec:"oob,omitempty"`
-	LifecycleRole    string   `codec:"lifecycle_role,omitempty"`
+	Name             string                    `codec:"name"`
+	Offset           uint8                     `codec:"offset,omitempty"`
+	PortClasses      []string                  `codec:"port_classes,omitempty"`
+	InternetIngress  bool                      `codec:"internet_ingress,omitempty"`
+	IsolateFrom      []string                  `codec:"isolate_from,omitempty"`
+	AllowTo          []quicZonePath            `codec:"allow_to,omitempty"`
+	Services         []string                  `codec:"services,omitempty"`
+	Isolate          bool                      `codec:"isolate,omitempty"`
+	OOB              bool                      `codec:"oob,omitempty"`
+	LifecycleRole    string                    `codec:"lifecycle_role,omitempty"`
+	PrivilegedAccess *quicZonePrivilegedAccess `codec:"privileged_access,omitempty"`
 }
 
 type quicGatewayCreateZoneResp struct {
@@ -133,12 +158,16 @@ type quicGatewayUpdateZoneReq struct {
 }
 
 type quicUpdateZoneOpts struct {
-	InternetIngress  bool     `codec:"internet_ingress,omitempty"`
-	IsolateFrom      []string `codec:"isolate_from,omitempty"`
-	Isolate          bool     `codec:"isolate,omitempty"`
-	IsolatePerTenant bool     `codec:"isolate_per_tenant,omitempty"`
-	OOB              bool     `codec:"oob,omitempty"`
-	LifecycleRole    string   `codec:"lifecycle_role,omitempty"`
+	Offset           uint8                     `codec:"offset,omitempty"`
+	PortClasses      []string                  `codec:"port_classes,omitempty"`
+	InternetIngress  bool                      `codec:"internet_ingress,omitempty"`
+	IsolateFrom      []string                  `codec:"isolate_from,omitempty"`
+	AllowTo          []quicZonePath            `codec:"allow_to,omitempty"`
+	Services         []string                  `codec:"services,omitempty"`
+	Isolate          bool                      `codec:"isolate,omitempty"`
+	OOB              bool                      `codec:"oob,omitempty"`
+	LifecycleRole    string                    `codec:"lifecycle_role,omitempty"`
+	PrivilegedAccess *quicZonePrivilegedAccess `codec:"privileged_access,omitempty"`
 }
 
 type quicGatewayUpdateZoneResp struct {
@@ -150,16 +179,6 @@ type quicGatewayDeleteZoneReq struct {
 }
 
 type quicGatewayDeleteZoneResp struct {
-	RestartRequired bool  `codec:"restart_required"`
-	Timestamp       int64 `codec:"timestamp"`
-}
-
-type quicGatewayAssignZoneReq struct {
-	Network string `codec:"network"`
-	Zone    string `codec:"zone"`
-}
-
-type quicGatewayAssignZoneResp struct {
 	RestartRequired bool  `codec:"restart_required"`
 	Timestamp       int64 `codec:"timestamp"`
 }
@@ -714,16 +733,41 @@ func (q *SDNQUICAdapter) ListZones(ctx context.Context, lifecycleRole string) (*
 	return &ZoneListResponse{Zones: out, TotalCount: len(out)}, nil
 }
 
-// CreateZone creates a new network trust zone via the binary QUIC protocol.
+// quicZoneOpts renders a spec in the QUIC update-options shape.
+func quicZoneOpts(spec ZoneSpec) *quicUpdateZoneOpts {
+	o := &quicUpdateZoneOpts{
+		Offset:          spec.Offset,
+		PortClasses:     spec.PortClasses,
+		InternetIngress: spec.InternetIngress,
+		Services:        spec.Services,
+		Isolate:         spec.Isolate,
+		OOB:             spec.OOB,
+		LifecycleRole:   spec.LifecycleRole,
+	}
+	for _, p := range spec.AllowTo {
+		o.AllowTo = append(o.AllowTo, quicZonePath{Zone: p.Zone, Services: p.Services})
+	}
+	if spec.PrivilegedReason != "" || spec.PrivilegedApprovedBy != "" {
+		o.PrivilegedAccess = &quicZonePrivilegedAccess{Reason: spec.PrivilegedReason, ApprovedBy: spec.PrivilegedApprovedBy}
+	}
+	return o
+}
+
+// CreateZone creates an owner-defined zone via the binary QUIC protocol.
 func (q *SDNQUICAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) (*ZoneEntry, error) {
+	o := quicZoneOpts(req.ZoneSpec)
 	body := &quicGatewayCreateZoneReq{
 		Opts: &quicCreateZoneOpts{
 			Name:             req.Name,
-			InternetIngress:  req.InternetIngress,
-			Isolate:          req.Isolate,
-			IsolatePerTenant: req.IsolatePerTenant,
-			OOB:              req.OOB,
-			LifecycleRole:    req.LifecycleRole,
+			Offset:           o.Offset,
+			PortClasses:      o.PortClasses,
+			InternetIngress:  o.InternetIngress,
+			AllowTo:          o.AllowTo,
+			Services:         o.Services,
+			Isolate:          o.Isolate,
+			OOB:              o.OOB,
+			LifecycleRole:    o.LifecycleRole,
+			PrivilegedAccess: o.PrivilegedAccess,
 		},
 	}
 	raw, err := q.sendCategoryRequest(ctx, opGatewayCategory, opGatewayCreateNetworkZone, body)
@@ -741,18 +785,9 @@ func (q *SDNQUICAdapter) CreateZone(ctx context.Context, req ZoneCreateRequest) 
 	return &entry, nil
 }
 
-// UpdateZone updates an existing network trust zone.
+// UpdateZone tunes or replaces a zone via the binary QUIC protocol.
 func (q *SDNQUICAdapter) UpdateZone(ctx context.Context, name string, req ZoneUpdateRequest) (*ZoneEntry, error) {
-	body := &quicGatewayUpdateZoneReq{
-		Name: name,
-		Opts: &quicUpdateZoneOpts{
-			InternetIngress:  req.InternetIngress,
-			Isolate:          req.Isolate,
-			IsolatePerTenant: req.IsolatePerTenant,
-			OOB:              req.OOB,
-			LifecycleRole:    req.LifecycleRole,
-		},
-	}
+	body := &quicGatewayUpdateZoneReq{Name: name, Opts: quicZoneOpts(req.ZoneSpec)}
 	raw, err := q.sendCategoryRequest(ctx, opGatewayCategory, opGatewayUpdateNetworkZone, body)
 	if err != nil {
 		return nil, err
@@ -768,7 +803,7 @@ func (q *SDNQUICAdapter) UpdateZone(ctx context.Context, name string, req ZoneUp
 	return &entry, nil
 }
 
-// DeleteZone deletes a network trust zone by name.
+// DeleteZone deletes a zone by name via the binary QUIC protocol.
 func (q *SDNQUICAdapter) DeleteZone(ctx context.Context, name string) (bool, error) {
 	body := &quicGatewayDeleteZoneReq{Name: name}
 	raw, err := q.sendCategoryRequest(ctx, opGatewayCategory, opGatewayDeleteNetworkZone, body)
@@ -782,36 +817,34 @@ func (q *SDNQUICAdapter) DeleteZone(ctx context.Context, name string) (bool, err
 	return resp.RestartRequired, nil
 }
 
-// AssignZone assigns a network segment to a trust zone.
-func (q *SDNQUICAdapter) AssignZone(ctx context.Context, network string, zoneName string) (bool, error) {
-	body := &quicGatewayAssignZoneReq{Network: network, Zone: zoneName}
-	raw, err := q.sendCategoryRequest(ctx, opGatewayCategory, opGatewayAssignNetworkZone, body)
-	if err != nil {
-		return false, err
-	}
-	var resp quicGatewayAssignZoneResp
-	if err := quicDecode(raw, &resp); err != nil {
-		return false, fmt.Errorf("QUIC decode AssignZone: %w", err)
-	}
-	return resp.RestartRequired, nil
-}
-
 // =============================================================================
 // Conversion helpers
 // =============================================================================
 
 func quicZoneInfoToEntry(z *quicZoneInfo) ZoneEntry {
-	return ZoneEntry{
-		Name:             z.Name,
-		InternetIngress:  z.InternetIngress,
-		Isolate:          z.Isolate,
-		IsolatePerTenant: z.IsolatePerTenant,
-		OOB:              z.OOB,
-		LifecycleRole:    z.LifecycleRole,
-		RestartRequired:  z.RestartRequired,
-		CreatedAt:        time.Unix(z.CreatedAt, 0),
-		UpdatedAt:        time.Unix(z.UpdatedAt, 0),
+	e := ZoneEntry{
+		Name:            z.Name,
+		Offset:          z.Offset,
+		PortClasses:     z.PortClasses,
+		InternetIngress: z.InternetIngress,
+		Isolate:         z.Isolate,
+		OOB:             z.OOB,
+		LifecycleRole:   z.LifecycleRole,
+		Services:        z.Services,
+		RestartRequired: z.RestartRequired,
+		CreatedAt:       time.Unix(z.CreatedAt, 0),
+		UpdatedAt:       time.Unix(z.UpdatedAt, 0),
 	}
+	for _, p := range z.AllowTo {
+		e.AllowTo = append(e.AllowTo, ZonePathEntry{Zone: p.Zone, Services: p.Services})
+	}
+	if z.PrivilegedAccess != nil {
+		e.PrivilegedApprovedBy = z.PrivilegedAccess.ApprovedBy
+	}
+	if z.Numbering != nil {
+		e.VLAN = z.Numbering.VLAN
+	}
+	return e
 }
 
 func quicIPAMPoolToEntry(p *quicIPAMPool) *IPAMPoolEntry {

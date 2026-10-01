@@ -52,57 +52,51 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 	g := cfg.Gateway
 	assert.True(t, g.Enabled)
 	assert.Equal(t, "gw-01-gateway", g.ID)
-	assert.Equal(t, "10.4.6.2", g.AnycastIP,
-		"ruling R2: the gateway takes .1 only at the Phase 5 cutover")
+	assert.Equal(t, "10.4.6.1", g.AnycastIP,
+		"the gateway answers for the control-plane zone's gateway address .1")
 
-	// Both WAN uplinks, as the NAT egress selection reads them.
+	// Both WAN uplinks (the 1G ports), as the NAT egress selection reads them;
+	// the 10G ports are the data trunk on br-fabric.
 	require.Len(t, g.Uplinks, 2)
-	assert.Equal(t, "eth6", g.Uplinks[0].Name)
+	assert.Equal(t, "eth0", g.Uplinks[0].Name)
 	assert.Equal(t, []string{"198.51.100.6/29"}, g.Uplinks[0].IPAddresses)
 
-	// One tunnel per POP per ISP, the full mesh the upstream routers run today.
-	require.Len(t, g.Tunnels, 4, "two relays over two uplinks")
-	assert.Equal(t, "gre-popa-ispa", g.Tunnels[0].Name)
+	// One tunnel per uplink to the relay, inner addresses from the tunnel
+	// point-to-point range (never its reserved first /31).
+	require.Len(t, g.Tunnels, 2, "one tunnel per uplink")
+	assert.Equal(t, "gre-relay-ispa", g.Tunnels[0].Name)
 	assert.Equal(t, "gre", g.Tunnels[0].Type)
-	assert.Equal(t, "198.51.100.100", g.Tunnels[0].Remote, "the POP A relay")
-	assert.Equal(t, "10.255.0.33/30", g.Tunnels[0].TunnelIP)
+	assert.Equal(t, "203.0.113.100", g.Tunnels[0].Remote, "the relay")
+	assert.Equal(t, "10.4.128.2/31", g.Tunnels[0].TunnelIP)
+	tunnelRange := netip.MustParsePrefix("10.4.128.0/22")
+	haSync := netip.MustParsePrefix("10.4.128.0/31")
+	for _, tun := range g.Tunnels {
+		p := netip.MustParsePrefix(tun.TunnelIP)
+		assert.True(t, tunnelRange.Contains(p.Addr()), "%s: tunnel /31 from the tunnel point-to-point range", tun.Name)
+		assert.False(t, haSync.Overlaps(p), "%s: the HA sync /31 is reserved", tun.Name)
+	}
 
-	// Transit and BGP shipped commented out until #619: enabledServices turns
-	// on transit whenever a `bgp:` section exists, transit starts the speaker,
-	// and the speaker installs its policy set during Start -- where a peer
-	// whose import-allow named both an IPv4 and an IPv6 prefix was refused
-	// with "multiple families" (#620). The per-family split landed, so the
-	// block is live and these are the assertions that keep it that way.
+	// enabledServices turns on transit whenever a `bgp:` section exists,
+	// transit starts the speaker, and the speaker installs its policy set
+	// during Start (the per-family prefix split, #619/#620, keeps that safe).
 	require.NotNil(t, g.Transit, "transit runs the speaker")
 	assert.True(t, g.Transit.Enabled)
-	require.NotNil(t, g.BGP, "the bgp: block is live since #619/#620")
-	require.Len(t, g.BGP.Neighbors, 4, "both relays over both uplinks")
+	require.NotNil(t, g.BGP, "the bgp: block is live")
+	require.Len(t, g.BGP.Neighbors, 2, "one session per tunnel")
 
-	// The traffic-engineering ladder (#607). local-pref on IMPORT is what
-	// ranks the four sessions; without it they establish and the speaker's
-	// tie-breaks decide which relay carries traffic, which is the whole
-	// reason this template is a cutover prerequisite.
-	wantLocalPref := map[string]uint32{
-		"popa-ispa": 200, "popa-ispb": 150,
-		"popb-ispb": 100, "popb-ispa": 50,
-	}
+	// local-pref on IMPORT ranks the sessions; the template prefers ISP A.
+	wantLocalPref := map[string]uint32{"relay-ispa": 200, "relay-ispb": 100}
 	for _, n := range g.BGP.Neighbors {
 		want, known := wantLocalPref[n.Name]
 		require.True(t, known, "unexpected peer %q", n.Name)
 		require.NotNil(t, n.Policy.Import, "%s: no import attributes", n.Name)
 		require.NotNil(t, n.Policy.Import.LocalPref, "%s: no local-pref", n.Name)
-		assert.Equal(t, want, *n.Policy.Import.LocalPref,
-			"%s: the ladder must match the routers' inbound route-map", n.Name)
-
-		require.NotNil(t, n.Policy.Export, "%s: no export attributes", n.Name)
-		require.NotNil(t, n.Policy.Export.MED, "%s: the routers send a MED on every session", n.Name)
-		assert.Equal(t, uint32(50), *n.Policy.Export.MED, "%s", n.Name)
-
-		// The x3 prepend belongs to the POP B relay's eBGP session to
-		// its upstream provider, not to the gateway. One here would lengthen the path BOTH
-		// relays re-announce and move inbound traffic at cutover.
-		assert.Nil(t, n.Policy.Export.Prepend,
-			"%s: the gateway must not prepend toward the relays", n.Name)
+		assert.Equal(t, want, *n.Policy.Import.LocalPref, "%s", n.Name)
+		// A prepend toward the relays would lengthen every path the relay
+		// re-announces; inbound steering is the relay's own eBGP policy.
+		if n.Policy.Export != nil {
+			assert.Nil(t, n.Policy.Export.Prepend, "%s: the gateway must not prepend", n.Name)
+		}
 	}
 
 	// The whole configuration must satisfy its own validation, which is what
@@ -135,15 +129,15 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 	assert.True(t, g.HostFW.Enabled)
 	require.Len(t, g.HostFW.Peers, 2, "one allowance per WAN link")
 	assert.Equal(t, hostfw.PeerProtocolGRE, g.HostFW.Peers[0].Protocol)
-	assert.Equal(t, []netip.Addr{
-		netip.MustParseAddr("198.51.100.100"),
-		netip.MustParseAddr("192.0.2.100"),
-	}, g.HostFW.Peers[0].Addresses)
-	assert.Len(t, g.HostFW.Tunnels, 4, "179 and 3784 are allowed on the tunnels only")
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.100")}, g.HostFW.Peers[0].Addresses)
+	assert.Len(t, g.HostFW.Tunnels, 2, "179 and 3784 are allowed on the tunnels only")
 
 	require.NotNil(t, cfg.SDN, "sdn section supplies the OVS runtime")
 	require.NotNil(t, cfg.SDN.OVS)
-	assert.Equal(t, "trusted0", cfg.SDN.OVS.Bridge)
+	assert.Equal(t, "br-fabric", cfg.SDN.OVS.Bridge, "the gateway datapath rides the trunk bridge")
+	require.NoError(t, cfg.SDN.Validate(), "the sdn section validates and derives the plan")
+	require.NotNil(t, cfg.SDN.Plan())
+	assert.Equal(t, uint16(4), cfg.SDN.Plan().Environment().ID)
 
 	require.NotNil(t, cfg.ControlPlane, "control-plane section")
 	assert.True(t, cfg.ControlPlane.Enabled)

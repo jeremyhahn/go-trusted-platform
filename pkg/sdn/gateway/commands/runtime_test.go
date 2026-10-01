@@ -16,12 +16,13 @@ package commands
 import (
 	"context"
 	"errors"
-	"net/netip"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
@@ -37,7 +38,7 @@ func TestBuildGatewayRuntimeAbsentOrDisabled(t *testing.T) {
 }
 
 func TestBuildGatewayRuntimeMissingOVS(t *testing.T) {
-	cfg := &sdn.Config{Enabled: true}
+	cfg := &sdn.Config{Enabled: true, Environment: &netplan.Environment{ID: 4}}
 	if _, err := buildGatewayRuntime(context.Background(), cfg, "", testLogger()); !errors.Is(err, ErrSDNOVSRequired) {
 		t.Fatalf("err = %v, want ErrSDNOVSRequired", err)
 	}
@@ -46,12 +47,9 @@ func TestBuildGatewayRuntimeMissingOVS(t *testing.T) {
 func TestBuildGatewayRuntimeInvalidSection(t *testing.T) {
 	cfg := &sdn.Config{
 		Enabled: true,
-		OVS:     &sdn.OVSConfig{Socket: "/nonexistent/db.sock", Bridge: "br0"},
-		Networks: []sdn.NetworkConfig{{
-			Name: "bogus",
-			VLAN: 200,
-			Zone: zone.Zone("undeclared-zone"),
-		}},
+		OVS:     &sdn.OVSConfig{Socket: "/nonexistent/db.sock", Bridge: "br-fabric"},
+		// Environment 1 is the site's VLAN block, never the platform's.
+		Environment: &netplan.Environment{ID: 1},
 	}
 	var sectionErr *ErrConfigSection
 	if _, err := buildGatewayRuntime(context.Background(), cfg, "", testLogger()); !errors.As(err, &sectionErr) {
@@ -62,8 +60,9 @@ func TestBuildGatewayRuntimeInvalidSection(t *testing.T) {
 func TestBuildGatewayRuntimeConnectFailure(t *testing.T) {
 	socket := filepath.Join(t.TempDir(), "missing.sock")
 	cfg := &sdn.Config{
-		Enabled: true,
-		OVS:     &sdn.OVSConfig{Socket: socket, Bridge: "br0"},
+		Enabled:     true,
+		OVS:         &sdn.OVSConfig{Socket: socket, Bridge: "br-fabric"},
+		Environment: &netplan.Environment{ID: 4},
 	}
 	var connectErr *ErrOVSConnectFailed
 	if _, err := buildGatewayRuntime(context.Background(), cfg, "", testLogger()); !errors.As(err, &connectErr) {
@@ -71,74 +70,49 @@ func TestBuildGatewayRuntimeConnectFailure(t *testing.T) {
 	}
 }
 
-func TestBuildGatewayRuntimeEmptyZoneMatrixFailsClosed(t *testing.T) {
-	// A zone-matrix service with no VLAN-bearing networks would compile
-	// an empty matrix and pass all traffic; assembly must refuse before
-	// even dialing OVSDB.
+func TestBuildGatewayRuntimeNoEnvironment(t *testing.T) {
+	// Without an environment nothing is numbered; assembly refuses before
+	// dialing OVSDB.
 	cfg := &sdn.Config{
 		Enabled: true,
-		OVS:     &sdn.OVSConfig{Socket: "/nonexistent/db.sock", Bridge: "br0"},
+		OVS:     &sdn.OVSConfig{Socket: "/nonexistent/db.sock", Bridge: "br-fabric"},
 	}
-	var noNetsErr *ErrNoZoneNetworks
+	var sectionErr *ErrConfigSection
 	_, err := buildGatewayRuntime(context.Background(), cfg, gateway.ServiceFirewall, testLogger())
-	if !errors.As(err, &noNetsErr) || noNetsErr.Service != gateway.ServiceFirewall {
-		t.Fatalf("err = %v, want ErrNoZoneNetworks{firewall}", err)
+	if !errors.As(err, &sectionErr) || !errors.As(err, new(sdn.ErrEnvironmentRequired)) {
+		t.Fatalf("err = %v, want ErrConfigSection wrapping ErrEnvironmentRequired", err)
 	}
 }
 
-func TestZoneProvidersDefaults(t *testing.T) {
-	cfg := &sdn.Config{Enabled: true}
+func TestZoneProvidersFromPlan(t *testing.T) {
+	cfg := &sdn.Config{Enabled: true, Environment: &netplan.Environment{ID: 4}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
 	zonesFn, networksFn, err := zoneProviders(cfg)
 	if err != nil {
 		t.Fatalf("zoneProviders: %v", err)
 	}
-	zones := zonesFn()
-	if len(zones) == 0 {
-		t.Fatal("zones must fall back to built-in defaults")
+	if got := len(zonesFn()); got != 9 {
+		t.Fatalf("zones = %d, want the 9 built-ins", got)
 	}
-	if nets := networksFn(); len(nets) != 0 {
-		t.Fatalf("networks = %v, want empty without a networks: section", nets)
-	}
-}
-
-func TestZoneProvidersWithNetworks(t *testing.T) {
-	cfg := &sdn.Config{
-		Enabled: true,
-		Networks: []sdn.NetworkConfig{{
-			Name:   "trusted-net",
-			VLAN:   200,
-			Zone:   zone.ZoneTrusted,
-			Subnet: netip.MustParsePrefix("10.20.0.0/24"),
-		}},
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	_, networksFn, err := zoneProviders(cfg)
-	if err != nil {
-		t.Fatalf("zoneProviders: %v", err)
-	}
-	nets := networksFn()
-	summary, ok := nets[zone.ZoneTrusted]
-	if !ok {
-		t.Fatalf("networks = %v, want trusted zone entry", nets)
-	}
-	if summary.VLAN != 200 || summary.Subnet != "10.20.0.0/24" {
-		t.Fatalf("summary = %+v", summary)
+	summary, ok := networksFn()[zone.ZoneControlPlane]
+	if !ok || summary.VLAN != 406 || summary.Subnet != "10.4.6.0/24" {
+		t.Fatalf("control-plane summary = %+v (%v), want VLAN 406 10.4.6.0/24", summary, ok)
 	}
 }
 
-func TestZoneProvidersBadNetworkZone(t *testing.T) {
-	cfg := &sdn.Config{
-		Enabled: true,
-		Networks: []sdn.NetworkConfig{{
-			Name: "bogus",
-			VLAN: 200,
-			Zone: zone.Zone("undeclared-zone"),
-		}},
+func TestZoneProvidersUnvalidated(t *testing.T) {
+	// An unvalidated section has no plan: no zones are guessed.
+	if _, _, err := zoneProviders(&sdn.Config{Enabled: true}); !errors.As(err, new(sdn.ErrEnvironmentRequired)) {
+		t.Fatalf("err = %v, want ErrEnvironmentRequired", err)
 	}
-	if _, _, err := zoneProviders(cfg); err == nil {
-		t.Fatal("network referencing an undeclared zone must fail")
+}
+
+func TestErrNoZoneNetworksMessage(t *testing.T) {
+	msg := (&ErrNoZoneNetworks{Service: gateway.ServiceFirewall}).Error()
+	if !strings.Contains(msg, "sdn.environment") || !strings.Contains(msg, "firewall") {
+		t.Fatalf("message %q", msg)
 	}
 }
 

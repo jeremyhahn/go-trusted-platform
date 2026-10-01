@@ -588,7 +588,7 @@ func (h *CRUDHandler) ActivateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get trusted VLAN
+	// Get admitted VLAN
 	var vlan uint16
 	if prodNet := profileEntity.GetPostEnrollmentNetworkConfig(); prodNet != nil {
 		vlan = prodNet.VLAN

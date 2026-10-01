@@ -27,8 +27,7 @@
 // gives the QUIC transport identical semantics to gRPC.
 //
 // Before this convergence the daemon decoded flat local structs whose Go field
-// names diverged from the pb Go field names (TenantID vs TenantId, uint16
-// VLANStart/VLANEnd vs uint32 VlanRangeStart/VlanRangeEnd, *ComputeQuotaDTO with
+// names diverged from the pb Go field names (TenantID vs TenantId, *ComputeQuotaDTO with
 // MaxVMs/MaxVCPUs vs pb MaxVms/MaxVcpus), silently dropping every diverging
 // field on the wire. Those flat structs are gone; every handler now delegates
 // to the pb gRPC server.
@@ -42,7 +41,7 @@
 //   - OpTenantCreate: Create a new tenant
 //   - OpTenantUpdate: Update tenant metadata
 //   - OpTenantDelete: Delete a tenant
-//   - OpTenantSuspend: Suspend tenant (blocks traffic)
+//   - OpTenantSuspend: Suspend tenant
 //   - OpTenantResume: Resume suspended tenant
 //
 // Quota Management:
@@ -50,10 +49,6 @@
 //   - OpTenantUpdateQuotas: Update tenant quotas
 //   - OpTenantGetUsage: Get tenant resource usage
 //   - OpTenantCheckQuota: Check quota availability
-//
-// Network/VLAN Operations:
-//   - OpTenantValidateVLAN: Validate VLAN for tenant
-//   - OpTenantGetBridge: Get OVS bridge name for tenant
 //
 // Synchronization:
 //   - OpTenantSync: Synchronize tenant state with external systems
@@ -90,8 +85,6 @@ const (
 	OpTenantUpdateQuotas = quic.OpTenantUpdateQuotas // 0xE4
 	OpTenantGetUsage     = quic.OpTenantGetUsage     // 0xE5
 	OpTenantCheckQuota   = quic.OpTenantCheckQuota   // 0xE6
-	OpTenantValidateVLAN = quic.OpTenantValidateVLAN // 0xE7
-	OpTenantGetBridge    = quic.OpTenantGetBridge    // 0xE8
 	OpTenantSync         = quic.OpTenantSync         // 0xE9
 	OpTenantRotateDEK    = quic.OpTenantRotateDEK    // 0xEA
 	OpTenantGetDEKStatus = quic.OpTenantGetDEKStatus // 0xEB
@@ -124,10 +117,6 @@ type TenantManagerInterface interface {
 	UpdateQuotas(ctx context.Context, tenantID string, quotas *tenant.TenantQuotas) error
 	GetUsage(ctx context.Context, tenantID string) (*quota.TenantUsage, error)
 	CheckQuota(ctx context.Context, tenantID string, resource quota.ResourceType, amount int64) error
-
-	// Network operations
-	ValidateVLAN(ctx context.Context, tenantID string, vlanID uint16) error
-	GetBridgeName(ctx context.Context, tenantID string) (string, error)
 
 	// Synchronization
 	Sync(ctx context.Context) error
@@ -198,10 +187,6 @@ func (h *QUICServiceHandler) handleTenantOperation(ctx context.Context, req *qui
 		return h.handleTenantGetUsage(ctx, req)
 	case OpTenantCheckQuota:
 		return h.handleTenantCheckQuota(ctx, req)
-	case OpTenantValidateVLAN:
-		return h.handleTenantValidateVLAN(ctx, req)
-	case OpTenantGetBridge:
-		return h.handleTenantGetBridge(ctx, req)
 	case OpTenantSync:
 		return h.handleTenantSync(ctx, req)
 	case OpTenantRotateDEK:
@@ -383,34 +368,6 @@ func (h *QUICServiceHandler) handleTenantCheckQuota(ctx context.Context, req *qu
 	resp, err := h.tenantGRPC.CheckQuota(ctx, &pbReq)
 	if err != nil {
 		return h.grpcDelegateErrorToQUIC("TenantCheckQuota", err)
-	}
-	return h.encodeGRPCDelegateResponse(resp)
-}
-
-// handleTenantValidateVLAN checks whether a tenant can use a specific VLAN.
-func (h *QUICServiceHandler) handleTenantValidateVLAN(ctx context.Context, req *quic.Request) *quic.Response {
-	var pbReq platformv1.ValidateVLANRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	resp, err := h.tenantGRPC.ValidateVLAN(ctx, &pbReq)
-	if err != nil {
-		return h.grpcDelegateErrorToQUIC("TenantValidateVLAN", err)
-	}
-	return h.encodeGRPCDelegateResponse(resp)
-}
-
-// handleTenantGetBridge returns the OVS bridge name for a tenant.
-func (h *QUICServiceHandler) handleTenantGetBridge(ctx context.Context, req *quic.Request) *quic.Response {
-	var pbReq platformv1.GetBridgeNameRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
-	}
-
-	resp, err := h.tenantGRPC.GetBridgeName(ctx, &pbReq)
-	if err != nil {
-		return h.grpcDelegateErrorToQUIC("TenantGetBridge", err)
 	}
 	return h.encodeGRPCDelegateResponse(resp)
 }

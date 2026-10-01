@@ -362,61 +362,16 @@ type SDNErrorResponse struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// NetworkZoneCreateRequest represents a network zone creation request.
-type NetworkZoneCreateRequest struct {
-	Name             string                `json:"name"`
-	InternetIngress  bool                  `json:"internet_ingress,omitempty"`
-	IsolateFrom      []string              `json:"isolate_from,omitempty"`
-	AllowTo          []NetworkZonePathSpec `json:"allow_to,omitempty"`
-	Services         []string              `json:"services,omitempty"`
-	Isolate          bool                  `json:"isolate,omitempty"`
-	IsolatePerTenant bool                  `json:"isolate_per_tenant,omitempty"`
-	OOB              bool                  `json:"oob,omitempty"`
-	LifecycleRole    string                `json:"lifecycle_role,omitempty"`
-	Omit             bool                  `json:"omit,omitempty"`
-}
+// NetworkZoneCreateRequest is the body of POST /api/v1/sdn/zones: an
+// owner-defined zone.
+type NetworkZoneCreateRequest = gateway.ZoneSpec
 
-// NetworkZonePathSpec represents a declared egress path from one zone to
-// another, optionally scoped to a service allowlist.
-type NetworkZonePathSpec struct {
-	Zone     string   `json:"zone"`
-	Services []string `json:"services,omitempty"`
-}
-
-// NetworkZoneUpdateRequest represents a network zone update request.
-type NetworkZoneUpdateRequest struct {
-	InternetIngress  bool                  `json:"internet_ingress,omitempty"`
-	IsolateFrom      []string              `json:"isolate_from,omitempty"`
-	AllowTo          []NetworkZonePathSpec `json:"allow_to,omitempty"`
-	Services         []string              `json:"services,omitempty"`
-	Isolate          bool                  `json:"isolate,omitempty"`
-	IsolatePerTenant bool                  `json:"isolate_per_tenant,omitempty"`
-	OOB              bool                  `json:"oob,omitempty"`
-	LifecycleRole    string                `json:"lifecycle_role,omitempty"`
-	Omit             bool                  `json:"omit,omitempty"`
-}
-
-// NetworkZoneAssignRequest represents a zone assignment request.
-type NetworkZoneAssignRequest struct {
-	Zone string `json:"zone"`
-}
+// NetworkZoneUpdateRequest is the body of PUT /api/v1/sdn/zones/{name}: the
+// zone's new policy (the name comes from the path).
+type NetworkZoneUpdateRequest = gateway.ZoneSpec
 
 // NetworkZoneResponse represents a network zone in API responses.
-type NetworkZoneResponse struct {
-	Name             string                `json:"name"`
-	InternetIngress  bool                  `json:"internet_ingress,omitempty"`
-	IsolateFrom      []string              `json:"isolate_from,omitempty"`
-	AllowTo          []NetworkZonePathSpec `json:"allow_to,omitempty"`
-	Services         []string              `json:"services,omitempty"`
-	Isolate          bool                  `json:"isolate,omitempty"`
-	IsolatePerTenant bool                  `json:"isolate_per_tenant,omitempty"`
-	OOB              bool                  `json:"oob,omitempty"`
-	LifecycleRole    string                `json:"lifecycle_role,omitempty"`
-	Omit             bool                  `json:"omit,omitempty"`
-	RestartRequired  bool                  `json:"restart_required,omitempty"`
-	CreatedAt        time.Time             `json:"created_at"`
-	UpdatedAt        time.Time             `json:"updated_at"`
-}
+type NetworkZoneResponse = gateway.ZoneView
 
 // NetworkZoneListResponse represents a list of network zones.
 type NetworkZoneListResponse struct {
@@ -544,7 +499,6 @@ func (h *SDNHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/sdn/zones", h.handleListNetworkZones).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/sdn/zones/{name}", h.handleUpdateNetworkZone).Methods(http.MethodPut)
 	router.HandleFunc("/api/v1/sdn/zones/{name}", h.handleDeleteNetworkZone).Methods(http.MethodDelete)
-	router.HandleFunc("/api/v1/sdn/networks/{network}/zone", h.handleAssignNetworkZone).Methods(http.MethodPut)
 
 	h.logger.Info("SDN REST routes registered")
 }
@@ -1596,10 +1550,7 @@ func (h *SDNHandlers) handleCreateNetworkZone(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	cfg := buildZoneConfig(req.Name, req.InternetIngress, req.IsolateFrom, req.AllowTo,
-		req.Services, req.Isolate, req.IsolatePerTenant, req.OOB, req.LifecycleRole, req.Omit)
-
-	rec, _, err := h.zoneService.Create(ctx, cfg)
+	rec, restartRequired, err := h.zoneService.Create(ctx, req.Config(""))
 	if err != nil {
 		switch err.(type) {
 		case gateway.ErrZoneAlreadyExists:
@@ -1612,7 +1563,7 @@ func (h *SDNHandlers) handleCreateNetworkZone(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	h.writeJSON(w, http.StatusCreated, zoneRecordToResponse(rec, false))
+	h.writeJSON(w, http.StatusCreated, rec.View(restartRequired))
 }
 
 // handleListNetworkZones handles GET /api/v1/sdn/zones
@@ -1634,7 +1585,7 @@ func (h *SDNHandlers) handleListNetworkZones(w http.ResponseWriter, r *http.Requ
 
 	zones := make([]NetworkZoneResponse, 0, len(recs))
 	for _, rec := range recs {
-		zones = append(zones, zoneRecordToResponse(rec, false))
+		zones = append(zones, rec.View(false))
 	}
 
 	h.writeJSON(w, http.StatusOK, NetworkZoneListResponse{
@@ -1665,10 +1616,7 @@ func (h *SDNHandlers) handleUpdateNetworkZone(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	cfg := buildZoneConfig(name, req.InternetIngress, req.IsolateFrom, req.AllowTo,
-		req.Services, req.Isolate, req.IsolatePerTenant, req.OOB, req.LifecycleRole, req.Omit)
-
-	rec, restartRequired, err := h.zoneService.Update(ctx, zone.Zone(name), cfg)
+	rec, restartRequired, err := h.zoneService.Update(ctx, zone.Zone(name), req.Config(name))
 	if err != nil {
 		switch err.(type) {
 		case gateway.ErrZoneNotFound:
@@ -1681,7 +1629,7 @@ func (h *SDNHandlers) handleUpdateNetworkZone(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	h.writeJSON(w, http.StatusOK, zoneRecordToResponse(rec, restartRequired))
+	h.writeJSON(w, http.StatusOK, rec.View(restartRequired))
 }
 
 // handleDeleteNetworkZone handles DELETE /api/v1/sdn/zones/{name}
@@ -1716,110 +1664,4 @@ func (h *SDNHandlers) handleDeleteNetworkZone(w http.ResponseWriter, r *http.Req
 		"deleted":          true,
 		"restart_required": restartRequired,
 	})
-}
-
-// handleAssignNetworkZone handles PUT /api/v1/sdn/networks/{network}/zone
-func (h *SDNHandlers) handleAssignNetworkZone(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	if h.zoneService == nil {
-		h.writeError(w, http.StatusServiceUnavailable, ErrSDNServiceNotAvailable{})
-		return
-	}
-
-	network := mux.Vars(r)["network"]
-	if network == "" {
-		h.writeError(w, http.StatusBadRequest, &MessageError{Msg: "network name is required"})
-		return
-	}
-
-	var req NetworkZoneAssignRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, &WrappedError{Msg: "invalid request body", Err: err})
-		return
-	}
-
-	if req.Zone == "" {
-		h.writeError(w, http.StatusBadRequest, &MessageError{Msg: "zone name is required"})
-		return
-	}
-
-	restartRequired, err := h.zoneService.AssignNetwork(ctx, network, zone.Zone(req.Zone))
-	if err != nil {
-		switch err.(type) {
-		case gateway.ErrZoneNotFound:
-			h.writeError(w, http.StatusNotFound, err)
-		default:
-			h.writeError(w, http.StatusInternalServerError, err)
-		}
-		return
-	}
-
-	h.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success":          true,
-		"restart_required": restartRequired,
-	})
-}
-
-// buildZoneConfig converts REST request fields into a zone.ZoneConfig. It is
-// shared by the create and update handlers so the two paths cannot drift.
-func buildZoneConfig(name string, internetIngress bool, isolateFrom []string,
-	allowTo []NetworkZonePathSpec, services []string, isolate, isolatePerTenant,
-	oob bool, lifecycleRole string, omit bool) zone.ZoneConfig {
-	cfg := zone.ZoneConfig{
-		Name:             zone.Zone(name),
-		InternetIngress:  internetIngress,
-		Services:         services,
-		Isolate:          isolate,
-		IsolatePerTenant: isolatePerTenant,
-		OOB:              oob,
-		LifecycleRole:    zone.LifecycleRole(lifecycleRole),
-		Omit:             omit,
-	}
-	if len(isolateFrom) > 0 {
-		cfg.IsolateFrom = make([]zone.Zone, 0, len(isolateFrom))
-		for _, z := range isolateFrom {
-			cfg.IsolateFrom = append(cfg.IsolateFrom, zone.Zone(z))
-		}
-	}
-	if len(allowTo) > 0 {
-		cfg.AllowTo = make([]zone.ZonePath, 0, len(allowTo))
-		for _, p := range allowTo {
-			cfg.AllowTo = append(cfg.AllowTo, zone.ZonePath{
-				Zone:     zone.Zone(p.Zone),
-				Services: p.Services,
-			})
-		}
-	}
-	return cfg
-}
-
-// zoneRecordToResponse converts a gateway.ZoneRecord to a NetworkZoneResponse.
-func zoneRecordToResponse(rec *gateway.ZoneRecord, restartRequired bool) NetworkZoneResponse {
-	isolateFrom := make([]string, 0, len(rec.Config.IsolateFrom))
-	for _, z := range rec.Config.IsolateFrom {
-		isolateFrom = append(isolateFrom, string(z))
-	}
-	allowTo := make([]NetworkZonePathSpec, 0, len(rec.Config.AllowTo))
-	for _, p := range rec.Config.AllowTo {
-		allowTo = append(allowTo, NetworkZonePathSpec{
-			Zone:     string(p.Zone),
-			Services: p.Services,
-		})
-	}
-	return NetworkZoneResponse{
-		Name:             string(rec.Config.Name),
-		InternetIngress:  rec.Config.InternetIngress,
-		IsolateFrom:      isolateFrom,
-		AllowTo:          allowTo,
-		Services:         rec.Config.Services,
-		Isolate:          rec.Config.Isolate,
-		IsolatePerTenant: rec.Config.IsolatePerTenant,
-		OOB:              rec.Config.OOB,
-		LifecycleRole:    string(rec.Config.LifecycleRole),
-		Omit:             rec.Config.Omit,
-		RestartRequired:  restartRequired,
-		CreatedAt:        rec.CreatedAt,
-		UpdatedAt:        rec.UpdatedAt,
-	}
 }

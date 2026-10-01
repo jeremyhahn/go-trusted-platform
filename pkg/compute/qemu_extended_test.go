@@ -229,16 +229,16 @@ func TestQEMUOrchestrator_DetachNetwork_MoreEdgeCases(t *testing.T) {
 		if qemuInst, exists := orch.instances[instance.ID]; exists {
 			qemuInst.networkAttached = true
 			qemuInst.primaryPortName = "port-1"
-			qemuInst.primaryBridgeName = "trusted0"
+			qemuInst.primaryBridgeName = "br-int"
 			qemuInst.instance.NetworkAttachments = []NetworkAttachment{
 				{
 					PortName:   "port-1",
-					BridgeName: "trusted0",
+					BridgeName: "br-int",
 					AttachedAt: time.Now(),
 				},
 				{
 					PortName:   "port-2",
-					BridgeName: "trusted0",
+					BridgeName: "br-int",
 					AttachedAt: time.Now(),
 				},
 			}

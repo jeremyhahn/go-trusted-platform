@@ -10,8 +10,8 @@ IPAM operations are exposed as gateway MCP tools
 |------|-------------|
 | `gateway_ipam_pools` | List IPAM pools |
 | `gateway_ipam_pool_get` | Get a pool by ID |
-| `gateway_ipam_pool_create` | Create a pool (name, cidr, gateway, zone, description, lease) |
-| `gateway_ipam_pool_update` | Update pool metadata |
+| `gateway_ipam_pool_create` | Create a pool (name, cidr, gateway, zone, description, lease, reserved, range_start, range_end) |
+| `gateway_ipam_pool_update` | Update pool metadata; `reserved`, `range_start`, `range_end` replace the window fields present (`[]`/`""` clear) |
 | `gateway_ipam_pool_delete` | Delete a pool |
 | `gateway_ipam_allocate` | Allocate an IP (pool_id, device_id, optional hostname) |
 | `gateway_ipam_release` | Release an allocated IP |

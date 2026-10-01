@@ -22,8 +22,9 @@ import (
 )
 
 // TenantEntity represents a tenant with platform-specific extensions.
-// It extends the QuicBaaS IAM Tenant with OVS bridges, VLAN isolation,
-// DEK management, and resource quotas.
+// It extends the QuicBaaS IAM Tenant with DEK management and resource
+// quotas. It carries no network identity: the routing domain of a tenant is a
+// VRF (plan §5.3), not a VLAN range or an OVS bridge.
 type TenantEntity struct {
 	// From QuicBaaS IAM
 	ID          string
@@ -32,9 +33,7 @@ type TenantEntity struct {
 	State       State
 
 	// Platform-specific extensions
-	OVSBridge string    // br-tenant-{name}
-	VLANRange VLANRange // e.g., 100-199
-	DEKPath   string    // KMS DEK path: /tenant/{tenant-id}/default
+	DEKPath string // KMS DEK path: /tenant/{tenant-id}/default
 
 	// Quotas
 	ComputeQuota ComputeQuota
@@ -49,65 +48,6 @@ type TenantEntity struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time
-}
-
-// VLANRange represents a range of VLAN IDs allocated to a tenant.
-type VLANRange struct {
-	Start uint16
-	End   uint16
-}
-
-// Contains checks if a VLAN ID is within the range.
-func (v VLANRange) Contains(vlan uint16) bool {
-	return vlan >= v.Start && vlan <= v.End
-}
-
-// Size returns the number of VLANs in the range (inclusive).
-func (v VLANRange) Size() int {
-	if v.End < v.Start {
-		return 0
-	}
-	return int(v.End-v.Start) + 1
-}
-
-// Validate checks if the VLAN range is valid.
-func (v VLANRange) Validate() error {
-	// VLAN IDs must be between 1 and 4094
-	if v.Start < 1 || v.Start > 4094 {
-		return ErrInvalidVLANRange{
-			Start:  v.Start,
-			End:    v.End,
-			Reason: "start VLAN must be between 1 and 4094",
-		}
-	}
-
-	if v.End < 1 || v.End > 4094 {
-		return ErrInvalidVLANRange{
-			Start:  v.Start,
-			End:    v.End,
-			Reason: "end VLAN must be between 1 and 4094",
-		}
-	}
-
-	if v.End < v.Start {
-		return ErrInvalidVLANRange{
-			Start:  v.Start,
-			End:    v.End,
-			Reason: "end VLAN must be greater than or equal to start VLAN",
-		}
-	}
-
-	return nil
-}
-
-// IsEmpty checks if the VLAN range is empty (uninitialized).
-func (v VLANRange) IsEmpty() bool {
-	return v.Start == 0 && v.End == 0
-}
-
-// Overlaps checks if this VLAN range overlaps with another range.
-func (v VLANRange) Overlaps(other VLANRange) bool {
-	return v.Start <= other.End && other.Start <= v.End
 }
 
 // FromIAM converts a QuicBaaS IAM SDK Tenant to a TenantEntity.
@@ -163,8 +103,6 @@ func (e *TenantEntity) Clone() *TenantEntity {
 		Name:         e.Name,
 		DisplayName:  e.DisplayName,
 		State:        e.State,
-		OVSBridge:    e.OVSBridge,
-		VLANRange:    e.VLANRange,
 		DEKPath:      e.DEKPath,
 		ComputeQuota: e.ComputeQuota,
 		NetworkQuota: e.NetworkQuota,
@@ -210,12 +148,6 @@ func (e *TenantEntity) Validate() error {
 
 	if !e.State.IsValid() {
 		return ErrInvalidState{Current: e.State}
-	}
-
-	if !e.VLANRange.IsEmpty() {
-		if err := e.VLANRange.Validate(); err != nil {
-			return err
-		}
 	}
 
 	return nil

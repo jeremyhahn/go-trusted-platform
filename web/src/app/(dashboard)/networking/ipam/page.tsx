@@ -53,6 +53,11 @@ interface IPAMPoolResponse {
   available: Uint64String;
   default_lease_duration_nanos: number;
   inactivity_timeout_nanos: number;
+  /** Prefixes (CIDR) that are never allocatable; the gateway is always reserved. */
+  reserved?: string[];
+  /** Dynamic allocation window; both empty means the whole CIDR. */
+  range_start?: string;
+  range_end?: string;
   created_at: string;
   updated_at: string;
 }
@@ -73,10 +78,40 @@ interface PoolFormState {
   gateway: string;
   zone: string;
   description: string;
+  /** Comma-separated reserved prefixes. */
+  reserved: string;
+  rangeStart: string;
+  rangeEnd: string;
 }
 
 function emptyPoolForm(): PoolFormState {
-  return { id: '', name: '', cidr: '', gateway: '', zone: '', description: '' };
+  return {
+    id: '',
+    name: '',
+    cidr: '',
+    gateway: '',
+    zone: '',
+    description: '',
+    reserved: '',
+    rangeStart: '',
+    rangeEnd: '',
+  };
+}
+
+/** splitReserved turns the comma-separated form field into a prefix list. */
+function splitReserved(value: string): string[] {
+  return value
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
+
+/** windowLabel renders a pool's dynamic window for the table. */
+function windowLabel(pool: IPAMPoolResponse): string {
+  if (pool.range_start && pool.range_end) {
+    return `${pool.range_start} – ${pool.range_end}`;
+  }
+  return 'whole CIDR';
 }
 
 function utilization(pool: IPAMPoolResponse): number {
@@ -184,6 +219,9 @@ export default function IPAMPage() {
       gateway: pool.gateway ?? '',
       zone: pool.zone ?? '',
       description: pool.description ?? '',
+      reserved: (pool.reserved ?? []).join(', '),
+      rangeStart: pool.range_start ?? '',
+      rangeEnd: pool.range_end ?? '',
     });
     setFormOpen(true);
   }, []);
@@ -194,11 +232,16 @@ export default function IPAMPage() {
     try {
       if (editTarget) {
         // CIDR is immutable — exclude it from update body
+        // The window fields are always sent, so the dialog replaces the
+        // pool's window with exactly what it shows.
         const body = {
           name: form.name,
           gateway: form.gateway,
           zone: form.zone,
           description: form.description,
+          reserved: splitReserved(form.reserved),
+          range_start: form.rangeStart.trim(),
+          range_end: form.rangeEnd.trim(),
         };
         const res = await fetch(
           `/api/v1/sdn/gateway/ipam/pools/${encodeURIComponent(editTarget.id)}`,
@@ -222,6 +265,9 @@ export default function IPAMPage() {
           gateway: form.gateway || undefined,
           zone: form.zone || undefined,
           description: form.description || undefined,
+          reserved: form.reserved.trim() ? splitReserved(form.reserved) : undefined,
+          range_start: form.rangeStart.trim() || undefined,
+          range_end: form.rangeEnd.trim() || undefined,
         };
         const res = await fetch('/api/v1/sdn/gateway/ipam/pools', {
           method: 'POST',
@@ -311,6 +357,23 @@ export default function IPAMPage() {
             <Badge variant="outline" className="font-mono text-xs">{zone}</Badge>
           ) : (
             <span className="text-muted-foreground">—</span>
+          );
+        },
+      },
+      {
+        id: 'window',
+        header: 'Dynamic window',
+        cell: ({ row }) => {
+          const pool = row.original;
+          return (
+            <div className="flex flex-col">
+              <span className="font-mono text-xs">{windowLabel(pool)}</span>
+              {(pool.reserved ?? []).length > 0 && (
+                <span className="font-mono text-xs text-muted-foreground">
+                  reserved {(pool.reserved ?? []).join(', ')}
+                </span>
+              )}
+            </div>
           );
         },
       },
@@ -563,7 +626,7 @@ export default function IPAMPage() {
                 id="pool-gateway"
                 value={form.gateway}
                 onChange={(e) => setForm((f) => ({ ...f, gateway: e.target.value }))}
-                placeholder="10.0.0.1"
+                placeholder="10.4.6.1"
               />
             </div>
 
@@ -573,8 +636,39 @@ export default function IPAMPage() {
                 id="pool-zone"
                 value={form.zone}
                 onChange={(e) => setForm((f) => ({ ...f, zone: e.target.value }))}
-                placeholder="trusted"
+                placeholder="control-plane"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="pool-reserved">Reserved prefixes</Label>
+              <Input
+                id="pool-reserved"
+                value={form.reserved}
+                onChange={(e) => setForm((f) => ({ ...f, reserved: e.target.value }))}
+                placeholder="10.4.6.1/32, 10.4.6.8/30"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="pool-range-start">Range start</Label>
+                <Input
+                  id="pool-range-start"
+                  value={form.rangeStart}
+                  onChange={(e) => setForm((f) => ({ ...f, rangeStart: e.target.value }))}
+                  placeholder="10.4.6.50"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="pool-range-end">Range end</Label>
+                <Input
+                  id="pool-range-end"
+                  value={form.rangeEnd}
+                  onChange={(e) => setForm((f) => ({ ...f, rangeEnd: e.target.value }))}
+                  placeholder="10.4.6.254"
+                />
+              </div>
             </div>
 
             <div className="space-y-2">

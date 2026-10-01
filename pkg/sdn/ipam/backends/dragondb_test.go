@@ -901,8 +901,8 @@ func TestQuicBaaSBackend_AllocateSpecific(t *testing.T) {
 		}
 
 		_, err := backend.AllocateSpecific(ctx, req)
-		if err != ipam.ErrNetworkAddress { // QuicBaaS uses IsNetworkOrBroadcast which returns ErrNetworkAddress for both
-			t.Errorf("expected ErrNetworkAddress (for broadcast), got %v", err)
+		if !errors.Is(err, ipam.ErrBroadcastAddress) { // same as the memory and DHT backends
+			t.Errorf("expected ErrBroadcastAddress, got %v", err)
 		}
 	})
 

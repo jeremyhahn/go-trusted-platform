@@ -39,14 +39,14 @@ func assertMD5NeighborValidateContract(t *testing.T, b *bgp.BGPConfig) {
 }
 
 // assertShippedTemplateValidateContract is the FIPS half of the shipped
-// gatewayd template's contract. The template's four sessions use the MD5
-// compatibility path the relays speak today, so a FIPS build refuses them —
+// gatewayd template's contract. The template's two sessions use the MD5
+// compatibility path a relay typically speaks today, so a FIPS build refuses them —
 // that refusal is the point of ruling R1, not a defect in the template.
 func assertShippedTemplateValidateContract(t *testing.T, b *bgp.BGPConfig) {
 	t.Helper()
 	err := b.Validate()
 	var unavailable bgp.ErrAuthTypeUnavailableInFIPS
 	require.True(t, errors.As(err, &unavailable), "got %v", err)
-	assert.Equal(t, "10.255.0.34", unavailable.Peer, "the first peer in the shipped file")
+	assert.Equal(t, "10.4.128.3", unavailable.Peer, "the first peer in the shipped file")
 	assert.Equal(t, bgp.AuthTypeMD5, unavailable.AuthType)
 }

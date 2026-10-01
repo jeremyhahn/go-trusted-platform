@@ -403,7 +403,7 @@ func TestInstaller_InstallOS_WithNetwork(t *testing.T) {
 	mockOS.On("InstallKernel", ctx, "/mnt").Return(nil)
 	mockOS.On("SetRootPassword", ctx, "/mnt", "root123").Return(nil)
 	mockOS.On("InstallPackages", ctx, "/mnt").Return(nil)
-	mockOS.On("ConfigureNetwork", ctx, "/mnt", config.Network).Return(nil)
+	mockOS.On("ConfigureNetwork", ctx, "/mnt", config.Network, config.Plan).Return(nil)
 	mockOS.On("ExecutePostInstall", ctx, "/mnt").Return(nil)
 
 	inst := &installer{
@@ -415,7 +415,7 @@ func TestInstaller_InstallOS_WithNetwork(t *testing.T) {
 	diskInfo := &DiskInfo{Device: "/dev/sda"}
 	err := inst.installOS(ctx, diskInfo)
 	assert.NoError(t, err)
-	mockOS.AssertCalled(t, "ConfigureNetwork", ctx, "/mnt", config.Network)
+	mockOS.AssertCalled(t, "ConfigureNetwork", ctx, "/mnt", config.Network, config.Plan)
 }
 
 func TestInstaller_InstallOS_NetworkConfigFails_NoFatalError(t *testing.T) {
@@ -433,7 +433,7 @@ func TestInstaller_InstallOS_NetworkConfigFails_NoFatalError(t *testing.T) {
 	mockOS.On("InstallKernel", ctx, "/mnt").Return(nil)
 	mockOS.On("SetRootPassword", ctx, "/mnt", "root123").Return(nil)
 	mockOS.On("InstallPackages", ctx, "/mnt").Return(nil)
-	mockOS.On("ConfigureNetwork", ctx, "/mnt", config.Network).Return(errors.New("network error"))
+	mockOS.On("ConfigureNetwork", ctx, "/mnt", config.Network, config.Plan).Return(errors.New("network error"))
 	mockOS.On("ExecutePostInstall", ctx, "/mnt").Return(nil)
 
 	inst := &installer{
@@ -446,6 +446,35 @@ func TestInstaller_InstallOS_NetworkConfigFails_NoFatalError(t *testing.T) {
 	err := inst.installOS(ctx, diskInfo)
 	// Network config failure is NOT fatal
 	assert.NoError(t, err)
+}
+
+// TestInstaller_InstallOS_PlatformNetworkFails_Fatal verifies a host on a
+// platform network (network.role set) fails the install when its network
+// cannot be configured: it must not boot with forwarding or its host
+// firewall in an unknown state.
+func TestInstaller_InstallOS_PlatformNetworkFails_Fatal(t *testing.T) {
+	mockOS := new(MockOSInstaller)
+	ctx := context.Background()
+	config := createTestConfig()
+	config.Network = &NetworkConfig{Role: HostRoleCompute}
+
+	mockOS.On("InstallBase", ctx, "/mnt").Return(nil)
+	mockOS.On("ConfigureSystem", ctx, "/mnt", mock.AnythingOfType("*installer.DiskInfo")).Return(nil)
+	mockOS.On("InstallKernel", ctx, "/mnt").Return(nil)
+	mockOS.On("SetRootPassword", ctx, "/mnt", "root123").Return(nil)
+	mockOS.On("InstallPackages", ctx, "/mnt").Return(nil)
+	mockOS.On("ConfigureNetwork", ctx, "/mnt", config.Network, config.Plan).Return(errors.New("sysctl write failed"))
+
+	inst := &installer{
+		config:      config,
+		logger:      createTestLogger(),
+		osInstaller: mockOS,
+	}
+
+	err := inst.installOS(ctx, &DiskInfo{Device: "/dev/sda"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "platform host network")
+	mockOS.AssertNotCalled(t, "ExecutePostInstall", ctx, "/mnt")
 }
 
 // =============================================================================

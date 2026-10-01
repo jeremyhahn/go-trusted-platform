@@ -304,7 +304,7 @@ returns `ProfileResponse` (`pkg/webservice/v1/device/handler.go`):
 ```json
 {
   "serialNumber": "SRV-2024-001",
-  "trustedNetwork": { "vlan": 200, "useDHCP": false,
+  "admittedNetwork": { "vlan": 200, "useDHCP": false,
                       "staticIP": "203.0.113.50", "gateway": "203.0.113.1",
                       "dns": ["203.0.113.1"] },
   "acls":      [{ "name": "…", "priority": 100, "match": {}, "action": "allow" }],
@@ -312,7 +312,7 @@ returns `ProfileResponse` (`pkg/webservice/v1/device/handler.go`):
 }
 ```
 
-The primary field is **`trustedNetwork`**, with an optional
+The primary field is **`admittedNetwork`**, with an optional
 **`provisioningNetwork`** sibling carrying the enrollment-phase network
 (used server-side as the fail-closed revert target for the physical switch
 move during activation). There is no snake_case `production_network`,
@@ -443,7 +443,7 @@ profile's networks as:
 {
   "networks": {
     "provisioning": { "vlan": 998, "dhcp": true },
-    "trusted":      { "vlan": 200, "static_ip": "203.0.113.50" },
+    "admitted":     { "vlan": 406, "static_ip": "203.0.113.50" },
     "lab-dmz":      { "vlan": 42 }
   },
   "enrollment_network": "provisioning",
@@ -452,7 +452,7 @@ profile's networks as:
 }
 ```
 
-- **`networks` is open-keyed.** `provisioning`, `trusted` and `quarantine` are
+- **`networks` is open-keyed.** `provisioning`, `admitted` and `quarantine` are
   the keys the selectors fall back to when unset (`entities.Default*Network`),
   not an enumeration; `lab-dmz` above is as valid as any of them.
 - **The three selectors are strings naming a key**, and each is `omitempty`.

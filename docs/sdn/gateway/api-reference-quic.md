@@ -31,7 +31,7 @@ operation. Payloads are msgpack-encoded; keys follow the `codec` tags in
 | `0x11` | GatewayCreateNetworkZone |
 | `0x12` | GatewayUpdateNetworkZone |
 | `0x13` | GatewayDeleteNetworkZone |
-| `0x14` | GatewayAssignNetworkZone |
+| `0x14` | retired (was GatewayAssignNetworkZone; networks are zones since #708, never reused) |
 | `0x30` | GatewayLBAddVIP |
 | `0x31` | GatewayLBRemoveVIP |
 | `0x32` | GatewayLBGetVIP |

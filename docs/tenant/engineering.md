@@ -15,21 +15,21 @@
 | `entity.go` | The tenant entity |
 | `state.go` | The five-state lifecycle and its transition map |
 | `quotas.go`, `quota/` | Quota limits and usage accounting |
-| `vlan/` | Per-tenant VLAN allocation |
-| `bridge/` | Per-tenant bridge naming and lifecycle |
 | `keyspace.go` | Per-tenant keyspace |
 | `dek_client.go` | Per-tenant DEK operations; `NewTenantDEKClient(dek quicbaas.DEKClient) TenantDEKClient` |
 | `config.go` | `Config`, `ManagerConfig` |
 | `errors.go` | Typed errors |
 
-A tenant is four things at once: a **VLAN**, a **bridge**, a **keyspace** and a
-**DEK**, plus a quota. That is the whole model, and each of the four has its own
-sub-package or file.
+A tenant is a **keyspace** and a **DEK**, plus a quota and, optionally, a
+per-tenant barrier. Each has its own file.
 
-The VLAN part is today's code. The
-[reference network](../architecture/reference-network.md) (owner design
-decision, 2026-09-26) replaces per-tenant VLANs with EVPN/VXLAN overlay
-networks addressed from the IPAM pool; the code change is tracked in #708.
+A tenant has **no VLAN range and no OVS bridge**. The former `vlan/` and
+`bridge/` sub-packages were deleted by #708: under the
+[reference network](../architecture/reference-network.md) switch VLANs are
+underlay zones, tenants never create zones, and tenant networks are EVPN/VXLAN
+overlays addressed from the IPAM pool. A tenant's network identity becomes a
+VRF in the tenancy work that follows the overlay transport (#709); until then
+the tenant manager allocates no network resource.
 
 ## 2. The lifecycle
 
@@ -106,8 +106,7 @@ Typed structs, plus two sentinels:
 
 **Typed:** `ErrTenantExists`, `ErrTenantNotFound`, `ErrInvalidRequest`,
 `ErrInvalidState`, `ErrInvalidTransition`, `ErrStorageFailed`,
-`ErrBridgeOperationFailed`, `ErrVLANAllocationFailed`, `ErrQuotaExceeded`,
-`ErrResourceLimitReached`, `ErrInvalidVLANRange`, `ErrDEKOperationFailed`,
+`ErrQuotaExceeded`, `ErrResourceLimitReached`, `ErrDEKOperationFailed`,
 `ErrConfigValidation`, `ErrBarrierOperationFailed`, `ErrBarrierNotSupported`.
 
 `ErrBarrierNotSupported` is the one to notice: **per-tenant barriers are not
@@ -119,14 +118,14 @@ unusual; compare it with `errors.Is` like any other sentinel.
 
 ## 5. Invariants
 
-1. **A tenant's VLAN, bridge, keyspace and DEK are allocated together.** A
-   tenant that exists with three of the four is a partially constructed tenant,
-   and the failure modes (`ErrVLANAllocationFailed`,
-   `ErrBridgeOperationFailed`, `ErrDEKOperationFailed`) exist so the creation
-   path can tell which one failed.
-2. **VLAN allocation is bounded by a configured range.** Outside it is
-   `ErrInvalidVLANRange`, checked before allocation rather than discovered as a
-   collision.
+1. **A tenant's IAM record and DEK are created together.** `CreateTenant`
+   registers a rollback for each step, so a DEK failure
+   (`ErrDEKOperationFailed`) removes the IAM record rather than leaving a
+   partially constructed tenant. A per-tenant barrier that fails to initialise
+   is logged and can be initialised later.
+2. **A tenant owns no network resource.** No VLAN, no OVS bridge; suspension
+   and resumption are state changes only. Traffic enforcement for a tenant
+   arrives with its VRF.
 3. **Quota checks precede allocation.** `CheckQuota` exists as its own RPC so a
    caller can ask before acting.
 4. **DEK rotation does not re-encrypt tenant data.** `RotateTenantDEK` returns
@@ -148,8 +147,8 @@ filter applied at read time.
 
 | Layer | Location | Covers |
 |---|---|---|
-| Unit | `pkg/tenant/**/*_test.go` | State transitions, quota arithmetic, VLAN range validation |
-| Integration | `test/integration/` tenant paths | Bridge and DEK operations against a running daemon |
+| Unit | `pkg/tenant/**/*_test.go` | State transitions, quota arithmetic, keyspace paths, the DEK adapter |
+| Integration | `test/integration/tenant/` | Lifecycle, quotas, DEK and barrier operations against a running daemon, on all six transports |
 
 The transition table and `HasCapacity` are pure functions and are the cheapest
 things in the feature to test exhaustively; do so before touching either.
@@ -171,6 +170,6 @@ or an environment mechanism over typing an unseal key as an argument.
 ## 9. Related
 
 - [architecture.md](architecture.md) · [api.md](api.md) · [cli.md](cli.md) · [user.md](user.md)
-- [`docs/sdn/`](../sdn/) — VLANs, bridges and zones a tenant is allocated from
+- [`docs/sdn/`](../sdn/) — overlays and, with tenancy VRFs, a tenant's routing domain
 - [`docs/compute/`](../compute/) — what consumes a tenant's compute quota
 - [`docs/iam/`](../iam/) — tenant-scoped users, groups, roles and policies

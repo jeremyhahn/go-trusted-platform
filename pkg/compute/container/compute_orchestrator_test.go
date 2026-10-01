@@ -115,7 +115,7 @@ func newTestComputeConfig() *compute.OrchestratorConfig {
 		DefaultCPUs:     1,
 		DefaultDiskSize: "10G",
 		MaxInstances:    10,
-		NetworkBridge:   "trusted0",
+		NetworkBridge:   "br-int",
 	}
 }
 

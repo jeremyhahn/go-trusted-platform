@@ -16,637 +16,335 @@ package fabric
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
-	"os"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
-// mockDriver records all operations for verification in tests.
+// portCall records one port operation on a mock driver.
+type portCall struct {
+	op      string
+	port    PortRef
+	allowed []uint16
+	native  uint16
+	mtu     int
+}
+
+// mockDriver records every operation for verification.
 type mockDriver struct {
-	mu            sync.Mutex
-	connected     bool
-	pingErr       error
-	connectErr    error
-	ensureVLANErr error
-	ensureVNIErr  error
-	ensureLAGErr  error
-	setPortErr    error
-	setTrunkErr   error
-	vlans         []mockVLAN
-	vnis          []mockVNI
-	lags          []LAGConfig
-	accessPorts   []mockAccess
-	trunkPorts    []mockTrunk
+	mu         sync.Mutex
+	connectErr error
+	pingErr    error
+	vlanErr    error
+	lagErr     error
+	portErr    error
+	closeErr   error
+	vlans      map[uint16]string
+	lags       []LAGConfig
+	ports      []portCall
 }
 
-type mockVLAN struct {
-	VLAN uint16
-	Name string
-}
+func newMock() *mockDriver { return &mockDriver{vlans: map[uint16]string{}} }
 
-type mockVNI struct {
-	VNI  uint32
-	VLAN uint16
-}
-
-type mockAccess struct {
-	Port PortRef
-	VLAN uint16
-}
-
-type mockTrunk struct {
-	Port    PortRef
-	Allowed []uint16
-	Native  uint16
-}
-
-func (m *mockDriver) Connect(_ context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.connectErr != nil {
-		return m.connectErr
-	}
-	m.connected = true
-	return nil
-}
-
-func (m *mockDriver) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.connected = false
-	return nil
-}
-
-func (m *mockDriver) Ping(_ context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.pingErr
-}
+func (m *mockDriver) Connect(context.Context) error { return m.connectErr }
+func (m *mockDriver) Close() error                  { return m.closeErr }
+func (m *mockDriver) Ping(context.Context) error    { return m.pingErr }
 
 func (m *mockDriver) EnsureVLAN(_ context.Context, vlan uint16, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.ensureVLANErr != nil {
-		return m.ensureVLANErr
+	if m.vlanErr != nil {
+		return m.vlanErr
 	}
-	m.vlans = append(m.vlans, mockVLAN{VLAN: vlan, Name: name})
-	return nil
-}
-
-func (m *mockDriver) EnsureVNI(_ context.Context, vni uint32, vlan uint16) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.ensureVNIErr != nil {
-		return m.ensureVNIErr
-	}
-	m.vnis = append(m.vnis, mockVNI{VNI: vni, VLAN: vlan})
+	m.vlans[vlan] = name
 	return nil
 }
 
 func (m *mockDriver) EnsureLAG(_ context.Context, lag LAGConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.ensureLAGErr != nil {
-		return m.ensureLAGErr
+	if m.lagErr != nil {
+		return m.lagErr
 	}
 	m.lags = append(m.lags, lag)
 	return nil
 }
 
-func (m *mockDriver) SetPortAccess(_ context.Context, port PortRef, vlan uint16) error {
+func (m *mockDriver) record(c portCall) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.setPortErr != nil {
-		return m.setPortErr
+	if m.portErr != nil {
+		return m.portErr
 	}
-	m.accessPorts = append(m.accessPorts, mockAccess{Port: port, VLAN: vlan})
+	m.ports = append(m.ports, c)
 	return nil
 }
 
-func (m *mockDriver) SetPortTrunk(_ context.Context, port PortRef, allowed []uint16, native uint16) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.setTrunkErr != nil {
-		return m.setTrunkErr
-	}
-	m.trunkPorts = append(m.trunkPorts, mockTrunk{Port: port, Allowed: allowed, Native: native})
-	return nil
+func (m *mockDriver) SetPortAccess(_ context.Context, port PortRef, vlan uint16, mtu int) error {
+	return m.record(portCall{op: "access", port: port, native: vlan, mtu: mtu})
 }
 
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+func (m *mockDriver) SetPortTrunk(_ context.Context, port PortRef, allowed []uint16, native uint16, mtu int) error {
+	return m.record(portCall{op: "trunk", port: port, allowed: allowed, native: native, mtu: mtu})
 }
 
-func testFabricConfig() *FabricConfig {
-	return &FabricConfig{
-		Mode: ModeVLAN,
-		Switches: []SwitchConfig{
-			{ID: "nexus-01", Vendor: "cisco-nexus", MgmtIP: "10.0.0.1"},
-			{ID: "nexus-02", Vendor: "cisco-nexus", MgmtIP: "10.0.0.2"},
-		},
-		Peers: []PeerConfig{
-			{
-				SwitchA:       "nexus-01",
-				SwitchB:       "nexus-02",
-				PeerLinkPorts: []string{"Eth1/47", "Eth1/48"},
-			},
-		},
-		LAGs: []LAGConfig{
-			{
-				ID:            "lag-server-01",
-				PortChannelID: 10,
-				MCLAG:         true,
-				LACPMode:      "active",
-				Members: []PortRef{
-					{SwitchID: "nexus-01", Port: "Eth1/1"},
-					{SwitchID: "nexus-02", Port: "Eth1/1"},
-				},
-			},
-		},
-		Segments: []SegmentConfig{
-			{Name: "production", VLAN: 200, CIDR: "10.200.0.0/24", Gateway: "10.200.0.1"},
-			{Name: "provisioning", VLAN: 201, CIDR: "10.201.0.0/24", Role: RoleProvisioning},
-			{Name: "quarantine", VLAN: 203, CIDR: "10.203.0.0/24", Role: RoleQuarantine},
-		},
-	}
+func (m *mockDriver) DisablePort(_ context.Context, port PortRef) error {
+	return m.record(portCall{op: "disable", port: port})
 }
 
-func TestApplyFabric_Success(t *testing.T) {
-	cfg := testFabricConfig()
-	drv1 := &mockDriver{}
-	drv2 := &mockDriver{}
-	drivers := map[string]Driver{
-		"nexus-01": drv1,
-		"nexus-02": drv2,
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	if err := mgr.ApplyFabric(ctx); err != nil {
-		t.Fatalf("ApplyFabric: %s", err)
-	}
-
-	// Each switch should have all 3 VLANs.
-	if len(drv1.vlans) != 3 {
-		t.Fatalf("expected 3 VLANs on nexus-01, got %d", len(drv1.vlans))
-	}
-	if len(drv2.vlans) != 3 {
-		t.Fatalf("expected 3 VLANs on nexus-02, got %d", len(drv2.vlans))
-	}
-
-	// LAG should be configured on both switches.
-	if len(drv1.lags) != 1 {
-		t.Fatalf("expected 1 LAG on nexus-01, got %d", len(drv1.lags))
-	}
-	if len(drv2.lags) != 1 {
-		t.Fatalf("expected 1 LAG on nexus-02, got %d", len(drv2.lags))
-	}
-}
-
-func TestApplyFabric_EVPNMode(t *testing.T) {
-	cfg := testFabricConfig()
-	cfg.Mode = ModeEVPN
-	cfg.EVPN = &EVPNConfig{VNIBase: 100000}
-
-	drv := &mockDriver{}
-	drivers := map[string]Driver{
-		"nexus-01": drv,
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	if err := mgr.ApplyFabric(ctx); err != nil {
-		t.Fatalf("ApplyFabric: %s", err)
-	}
-
-	// VNIs should be created in EVPN mode.
-	if len(drv.vnis) != 3 {
-		t.Fatalf("expected 3 VNIs on nexus-01, got %d", len(drv.vnis))
-	}
-
-	// Verify VNI calculation: VNIBase + VLAN.
-	for _, vni := range drv.vnis {
-		expected := uint32(100000) + uint32(vni.VLAN)
-		if vni.VNI != expected {
-			t.Fatalf("expected VNI %d for VLAN %d, got %d", expected, vni.VLAN, vni.VNI)
+func (m *mockDriver) call(port string) (portCall, bool) {
+	for _, c := range m.ports {
+		if c.port.Port == port {
+			return c, true
 		}
 	}
+	return portCall{}, false
 }
 
-func TestApplyFabric_ConnectError(t *testing.T) {
-	cfg := testFabricConfig()
-	drv := &mockDriver{connectErr: errors.New("connection refused")}
-	drivers := map[string]Driver{
-		"nexus-01": drv,
-		"nexus-02": &mockDriver{},
+func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+func testPlan(t *testing.T, user ...zone.ZoneConfig) *netplan.Plan {
+	t.Helper()
+	zones, err := zone.Resolve(user)
+	require.NoError(t, err)
+	p, err := netplan.New(netplan.Environment{ID: 4}, zones)
+	require.NoError(t, err)
+	return p
+}
+
+func newTestManager(t *testing.T) (Manager, *mockDriver, *mockDriver) {
+	t.Helper()
+	a, b := newMock(), newMock()
+	mgr, err := NewManagerWithDrivers(validFabricConfig(), testPlan(t), quietLogger(),
+		map[string]Driver{"sw-01": a, "sw-02": b})
+	require.NoError(t, err)
+	return mgr, a, b
+}
+
+// TestApplyFabric programs every zone VLAN, the LAG, the peer-link and each
+// port's class from the plan.
+func TestApplyFabric(t *testing.T) {
+	mgr, a, b := newTestManager(t)
+	require.NoError(t, mgr.ApplyFabric(context.Background()))
+
+	for _, d := range []*mockDriver{a, b} {
+		assert.Len(t, d.vlans, 9)
+		assert.Equal(t, "control-plane", d.vlans[406])
+		assert.Equal(t, "transit", d.vlans[400])
+	}
+	require.Len(t, a.lags, 1)
+
+	gw, ok := a.call("Ethernet1/3")
+	require.True(t, ok)
+	assert.Equal(t, portCall{op: "trunk", port: PortRef{SwitchID: "sw-01", Port: "Ethernet1/3"},
+		allowed: []uint16{400, 401, 404, 405, 406, 408}, mtu: 9216}, gw)
+
+	hv, _ := a.call("Ethernet1/25")
+	assert.Equal(t, []uint16{401, 403, 404, 405, 406, 407, 408}, hv.allowed)
+	assert.Equal(t, uint16(405), hv.native)
+
+	bmc, ok := b.call("Ethernet1/41")
+	require.True(t, ok)
+	assert.Equal(t, "access", bmc.op)
+	assert.Equal(t, uint16(402), bmc.native)
+
+	for _, d := range []*mockDriver{a, b} {
+		peer, ok := d.call("Ethernet1/49")
+		require.True(t, ok, "peer-link on both switches")
+		assert.Len(t, peer.allowed, 9)
+	}
+	_, onPeer := b.call("Ethernet1/25")
+	assert.False(t, onPeer, "ApplyFabric applies a port only on the switch it is listed on")
+}
+
+// TestApplyFabric_Errors covers connect, VLAN, LAG and port failures and a
+// class the plan cannot carry.
+func TestApplyFabric_Errors(t *testing.T) {
+	boom := errors.New("boom")
+	tests := []struct {
+		name  string
+		setup func(a *mockDriver)
+		check func(t *testing.T, err error)
+	}{
+		{"connect", func(a *mockDriver) { a.connectErr = boom }, func(t *testing.T, err error) {
+			var target ErrDriverConnect
+			require.True(t, errors.As(err, &target))
+		}},
+		{"vlan", func(a *mockDriver) { a.vlanErr = boom }, opErr("EnsureVLAN")},
+		{"lag", func(a *mockDriver) { a.lagErr = boom }, opErr("EnsureLAG")},
+		{"port", func(a *mockDriver) { a.portErr = boom }, opErr("ApplyPortClass")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := newMock(), newMock()
+			tc.setup(a)
+			mgr, err := NewManagerWithDrivers(validFabricConfig(), testPlan(t), quietLogger(),
+				map[string]Driver{"sw-01": a, "sw-02": b})
+			require.NoError(t, err)
+			tc.check(t, mgr.ApplyFabric(context.Background()))
+		})
 	}
 
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
+	t.Run("bmc class without management", func(t *testing.T) {
+		plan := testPlan(t, zone.ZoneConfig{Name: zone.ZoneManagement, Omit: true})
+		mgr, err := NewManagerWithDrivers(validFabricConfig(), plan, quietLogger(),
+			map[string]Driver{"sw-01": newMock(), "sw-02": newMock()})
+		require.NoError(t, err)
+		err = mgr.ApplyFabric(context.Background())
+		var target ErrPortClassPlan
+		require.True(t, errors.As(err, &target), "got %v", err)
+		assert.Equal(t, zone.PortClassBMC, target.Class)
+		var empty netplan.ErrEmptyPortClass
+		assert.True(t, errors.As(err, &empty))
+	})
 
+	t.Run("lag on a switch without a driver", func(t *testing.T) {
+		mgr, err := NewManagerWithDrivers(validFabricConfig(), testPlan(t), quietLogger(),
+			map[string]Driver{"sw-02": newMock()})
+		require.NoError(t, err)
+		var target ErrUnknownSwitch
+		require.True(t, errors.As(mgr.ApplyFabric(context.Background()), &target))
+	})
+}
+
+func opErr(op string) func(t *testing.T, err error) {
+	return func(t *testing.T, err error) {
+		t.Helper()
+		var target ErrDriverOperation
+		require.True(t, errors.As(err, &target), "got %v", err)
+		assert.Equal(t, op, target.Operation)
+	}
+}
+
+// TestLifecycle walks a hypervisor port through provisioning, its class,
+// quarantine and down, on both MC-LAG peers.
+func TestLifecycle(t *testing.T) {
+	mgr, a, b := newTestManager(t)
 	ctx := context.Background()
-	err = mgr.ApplyFabric(ctx)
-	if err == nil {
-		t.Fatal("expected error for connect failure")
+	port := PortRef{SwitchID: "sw-01", Port: "Ethernet1/26"}
+
+	require.NoError(t, mgr.ProvisionPort(ctx, port))
+	require.NoError(t, mgr.ActivatePort(ctx, port, zone.PortClassHypervisor))
+	require.NoError(t, mgr.QuarantinePort(ctx, port))
+	require.NoError(t, mgr.DisablePort(ctx, port))
+
+	for _, d := range []*mockDriver{a, b} {
+		require.Len(t, d.ports, 4)
+		assert.Equal(t, []uint16{405}, d.ports[0].allowed)
+		assert.Equal(t, uint16(405), d.ports[0].native)
+		assert.Equal(t, 9216, d.ports[0].mtu)
+		assert.Len(t, d.ports[1].allowed, 7)
+		assert.Equal(t, uint16(405), d.ports[1].native)
+		assert.Equal(t, []uint16{404}, d.ports[2].allowed)
+		assert.Equal(t, uint16(404), d.ports[2].native)
+		assert.Equal(t, "disable", d.ports[3].op)
 	}
-	var drvErr ErrDriverConnect
-	if !errors.As(err, &drvErr) {
-		t.Fatalf("expected ErrDriverConnect, got %T: %s", err, err)
-	}
+	assert.Equal(t, "sw-02", b.ports[0].port.SwitchID, "the peer gets the same port on its own switch")
 }
 
-func TestApplyFabric_VLANError(t *testing.T) {
-	cfg := testFabricConfig()
-	drv := &mockDriver{ensureVLANErr: errors.New("vlan creation failed")}
-	drivers := map[string]Driver{
-		"nexus-01": drv,
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
+// TestLifecycle_Errors covers bad port refs, unknown switches, unknown
+// classes, a zone missing from the plan and driver failures (on the switch
+// and on the peer).
+func TestLifecycle_Errors(t *testing.T) {
 	ctx := context.Background()
-	err = mgr.ApplyFabric(ctx)
-	if err == nil {
-		t.Fatal("expected error for VLAN failure")
-	}
-	var opErr ErrDriverOperation
-	if !errors.As(err, &opErr) {
-		t.Fatalf("expected ErrDriverOperation, got %T: %s", err, err)
-	}
+	mgr, a, b := newTestManager(t)
+
+	var badRef ErrInvalidPortRef
+	require.True(t, errors.As(mgr.ProvisionPort(ctx, PortRef{Port: "p"}), &badRef))
+	require.True(t, errors.As(mgr.ActivatePort(ctx, PortRef{Port: "p"}, zone.PortClassGateway), &badRef))
+	require.True(t, errors.As(mgr.DisablePort(ctx, PortRef{Port: "p"}), &badRef))
+
+	var unknown ErrUnknownSwitch
+	require.True(t, errors.As(mgr.QuarantinePort(ctx, PortRef{SwitchID: "sw-09", Port: "p"}), &unknown))
+
+	var planErr ErrPortClassPlan
+	err := mgr.ActivatePort(ctx, PortRef{SwitchID: "sw-01", Port: "p"}, "uplink")
+	require.True(t, errors.As(err, &planErr), "got %v", err)
+
+	b.portErr = errors.New("peer down")
+	var op ErrDriverOperation
+	err = mgr.DisablePort(ctx, PortRef{SwitchID: "sw-01", Port: "p"})
+	require.True(t, errors.As(err, &op))
+	assert.Equal(t, "sw-02", op.SwitchID)
+
+	a.portErr = errors.New("down")
+	err = mgr.ActivatePort(ctx, PortRef{SwitchID: "sw-01", Port: "p"}, zone.PortClassGateway)
+	require.True(t, errors.As(err, &op))
+	assert.Equal(t, "sw-01", op.SwitchID)
+	assert.Equal(t, "ActivatePort", op.Operation)
 }
 
-func TestProvisionPort_Success(t *testing.T) {
-	cfg := testFabricConfig()
-	drv1 := &mockDriver{}
-	drv2 := &mockDriver{}
-	drivers := map[string]Driver{
-		"nexus-01": drv1,
-		"nexus-02": drv2,
-	}
+// TestNewManager covers construction: a nil plan, an invalid config and a
+// vendor with no driver.
+func TestNewManager(t *testing.T) {
+	plan := testPlan(t)
+	var nilPlan ErrNilPlan
+	_, err := NewManager(validFabricConfig(), nil, quietLogger())
+	require.True(t, errors.As(err, &nilPlan))
+	_, err = NewManagerWithDrivers(validFabricConfig(), nil, quietLogger(), nil)
+	require.True(t, errors.As(err, &nilPlan))
 
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
+	_, err = NewManager(&FabricConfig{}, plan, quietLogger())
+	var invalid ErrInvalidFabricConfig
+	require.True(t, errors.As(err, &invalid))
+	_, err = NewManagerWithDrivers(&FabricConfig{}, plan, quietLogger(), nil)
+	require.True(t, errors.As(err, &invalid))
 
+	_, err = NewManager(validFabricConfig(), plan, quietLogger())
+	var noDriver ErrDriverConnect
+	require.True(t, errors.As(err, &noDriver), "vendor mock has no registered driver")
+
+	RegisterDriver("fabric-test", func(SwitchConfig, *slog.Logger) (Driver, error) { return newMock(), nil })
+	cfg := validFabricConfig()
+	for i := range cfg.Switches {
+		cfg.Switches[i].Vendor = "fabric-test"
+	}
+	mgr, err := NewManager(cfg, plan, quietLogger())
+	require.NoError(t, err)
+	require.NoError(t, mgr.Close())
+}
+
+// TestSwitchStatus reports connected, disconnected and unknown switches.
+func TestSwitchStatus(t *testing.T) {
+	mgr, _, b := newTestManager(t)
 	ctx := context.Background()
-	port := PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
-	if err := mgr.ProvisionPort(ctx, port, "provisioning"); err != nil {
-		t.Fatalf("ProvisionPort: %s", err)
-	}
 
-	if len(drv1.accessPorts) != 1 {
-		t.Fatalf("expected 1 access port on nexus-01, got %d", len(drv1.accessPorts))
-	}
-	if drv1.accessPorts[0].VLAN != 201 {
-		t.Fatalf("expected VLAN 201, got %d", drv1.accessPorts[0].VLAN)
-	}
+	st, err := mgr.SwitchStatus(ctx, "sw-01")
+	require.NoError(t, err)
+	assert.True(t, st.Connected)
+	assert.Equal(t, "192.0.2.10", st.MgmtIP)
 
-	// Peer switch should also get the port configured.
-	if len(drv2.accessPorts) != 1 {
-		t.Fatalf("expected 1 access port on peer nexus-02, got %d", len(drv2.accessPorts))
-	}
+	b.pingErr = errors.New("unreachable")
+	st, err = mgr.SwitchStatus(ctx, "sw-02")
+	require.NoError(t, err)
+	assert.False(t, st.Connected)
+
+	_, err = mgr.SwitchStatus(ctx, "sw-09")
+	var unknown ErrUnknownSwitch
+	require.True(t, errors.As(err, &unknown))
 }
 
-func TestProvisionPort_WrongRole(t *testing.T) {
-	cfg := testFabricConfig()
-	drivers := map[string]Driver{
-		"nexus-01": &mockDriver{},
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	port := PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
-
-	// Try to provision on a non-provisioning segment.
-	err = mgr.ProvisionPort(ctx, port, "production")
-	if err == nil {
-		t.Fatal("expected error for wrong role")
-	}
-	var roleErr ErrSegmentRoleMismatch
-	if !errors.As(err, &roleErr) {
-		t.Fatalf("expected ErrSegmentRoleMismatch, got %T: %s", err, err)
-	}
+// TestClose returns the last driver close error.
+func TestClose(t *testing.T) {
+	mgr, a, _ := newTestManager(t)
+	require.NoError(t, mgr.Close())
+	a.closeErr = errors.New("close failed")
+	require.Error(t, mgr.Close())
 }
 
-func TestProvisionPort_UnknownSegment(t *testing.T) {
-	cfg := testFabricConfig()
-	drivers := map[string]Driver{
-		"nexus-01": &mockDriver{},
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	port := PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
-	err = mgr.ProvisionPort(ctx, port, "nonexistent")
-	if err == nil {
-		t.Fatal("expected error for unknown segment")
-	}
-	var segErr ErrUnknownSegment
-	if !errors.As(err, &segErr) {
-		t.Fatalf("expected ErrUnknownSegment, got %T: %s", err, err)
-	}
-}
-
-func TestActivatePort_Success(t *testing.T) {
-	cfg := testFabricConfig()
-	drv := &mockDriver{}
-	drivers := map[string]Driver{
-		"nexus-01": drv,
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	port := PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
-	if err := mgr.ActivatePort(ctx, port, "production"); err != nil {
-		t.Fatalf("ActivatePort: %s", err)
-	}
-
-	if len(drv.accessPorts) != 1 {
-		t.Fatalf("expected 1 access port, got %d", len(drv.accessPorts))
-	}
-	if drv.accessPorts[0].VLAN != 200 {
-		t.Fatalf("expected VLAN 200, got %d", drv.accessPorts[0].VLAN)
-	}
-}
-
-func TestActivatePort_DriverError(t *testing.T) {
-	cfg := testFabricConfig()
-	drv := &mockDriver{setPortErr: errors.New("port config failed")}
-	drivers := map[string]Driver{
-		"nexus-01": drv,
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	port := PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
-	err = mgr.ActivatePort(ctx, port, "production")
-	if err == nil {
-		t.Fatal("expected error for driver failure")
-	}
-	var opErr ErrDriverOperation
-	if !errors.As(err, &opErr) {
-		t.Fatalf("expected ErrDriverOperation, got %T: %s", err, err)
-	}
-}
-
-func TestActivatePort_InvalidPortRef(t *testing.T) {
-	cfg := testFabricConfig()
-	drivers := map[string]Driver{
-		"nexus-01": &mockDriver{},
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	port := PortRef{Port: "Eth1/5"} // missing SwitchID
-	err = mgr.ActivatePort(ctx, port, "production")
-	if err == nil {
-		t.Fatal("expected error for invalid port ref")
-	}
-}
-
-func TestQuarantinePort_Success(t *testing.T) {
-	cfg := testFabricConfig()
-	drv := &mockDriver{}
-	drivers := map[string]Driver{
-		"nexus-01": drv,
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	port := PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
-	if err := mgr.QuarantinePort(ctx, port, "quarantine"); err != nil {
-		t.Fatalf("QuarantinePort: %s", err)
-	}
-
-	if len(drv.accessPorts) != 1 {
-		t.Fatalf("expected 1 access port, got %d", len(drv.accessPorts))
-	}
-	if drv.accessPorts[0].VLAN != 203 {
-		t.Fatalf("expected VLAN 203, got %d", drv.accessPorts[0].VLAN)
-	}
-}
-
-func TestQuarantinePort_WrongRole(t *testing.T) {
-	cfg := testFabricConfig()
-	drivers := map[string]Driver{
-		"nexus-01": &mockDriver{},
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	port := PortRef{SwitchID: "nexus-01", Port: "Eth1/5"}
-	err = mgr.QuarantinePort(ctx, port, "production")
-	if err == nil {
-		t.Fatal("expected error for wrong role")
-	}
-}
-
-func TestSegmentByName_Success(t *testing.T) {
-	cfg := testFabricConfig()
-	drivers := map[string]Driver{
-		"nexus-01": &mockDriver{},
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	seg, err := mgr.SegmentByName("production")
-	if err != nil {
-		t.Fatalf("SegmentByName: %s", err)
-	}
-	if seg.VLAN != 200 {
-		t.Fatalf("expected VLAN 200, got %d", seg.VLAN)
-	}
-	if seg.Name != "production" {
-		t.Fatalf("expected name %q, got %q", "production", seg.Name)
-	}
-}
-
-func TestSegmentByName_NotFound(t *testing.T) {
-	cfg := testFabricConfig()
-	drivers := map[string]Driver{
-		"nexus-01": &mockDriver{},
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	_, err = mgr.SegmentByName("nonexistent")
-	if err == nil {
-		t.Fatal("expected error for unknown segment")
-	}
-	var segErr ErrUnknownSegment
-	if !errors.As(err, &segErr) {
-		t.Fatalf("expected ErrUnknownSegment, got %T: %s", err, err)
-	}
-}
-
-func TestSwitchStatus_Connected(t *testing.T) {
-	cfg := testFabricConfig()
-	drivers := map[string]Driver{
-		"nexus-01": &mockDriver{},
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	status, err := mgr.SwitchStatus(ctx, "nexus-01")
-	if err != nil {
-		t.Fatalf("SwitchStatus: %s", err)
-	}
-	if !status.Connected {
-		t.Fatal("expected connected=true")
-	}
-	if status.Vendor != "cisco-nexus" {
-		t.Fatalf("expected vendor %q, got %q", "cisco-nexus", status.Vendor)
-	}
-}
-
-func TestSwitchStatus_Disconnected(t *testing.T) {
-	cfg := testFabricConfig()
-	drivers := map[string]Driver{
-		"nexus-01": &mockDriver{pingErr: errors.New("timeout")},
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	status, err := mgr.SwitchStatus(ctx, "nexus-01")
-	if err != nil {
-		t.Fatalf("SwitchStatus: %s", err)
-	}
-	if status.Connected {
-		t.Fatal("expected connected=false")
-	}
-}
-
-func TestSwitchStatus_UnknownSwitch(t *testing.T) {
-	cfg := testFabricConfig()
-	drivers := map[string]Driver{
-		"nexus-01": &mockDriver{},
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	_, err = mgr.SwitchStatus(ctx, "nexus-99")
-	if err == nil {
-		t.Fatal("expected error for unknown switch")
-	}
-	var unknownErr ErrUnknownSwitch
-	if !errors.As(err, &unknownErr) {
-		t.Fatalf("expected ErrUnknownSwitch, got %T: %s", err, err)
-	}
-}
-
-func TestActivatePort_UnknownSwitch(t *testing.T) {
-	cfg := testFabricConfig()
-	drivers := map[string]Driver{
-		"nexus-01": &mockDriver{},
-		"nexus-02": &mockDriver{},
-	}
-
-	mgr, err := NewManagerWithDrivers(cfg, testLogger(), drivers)
-	if err != nil {
-		t.Fatalf("NewManagerWithDrivers: %s", err)
-	}
-	t.Cleanup(func() { mgr.Close() })
-
-	ctx := context.Background()
-	port := PortRef{SwitchID: "nexus-99", Port: "Eth1/5"}
-	err = mgr.ActivatePort(ctx, port, "production")
-	if err == nil {
-		t.Fatal("expected error for unknown switch")
-	}
-	var unknownErr ErrUnknownSwitch
-	if !errors.As(err, &unknownErr) {
-		t.Fatalf("expected ErrUnknownSwitch, got %T: %s", err, err)
-	}
+// TestDriverFor covers a registered and an unregistered vendor.
+func TestDriverFor(t *testing.T) {
+	RegisterDriver("fabric-test-2", func(SwitchConfig, *slog.Logger) (Driver, error) { return newMock(), nil })
+	_, err := DriverFor(SwitchConfig{Vendor: "fabric-test-2"}, quietLogger())
+	require.NoError(t, err)
+	_, err = DriverFor(SwitchConfig{Vendor: "none"}, quietLogger())
+	var target ErrDriverNotFound
+	require.True(t, errors.As(err, &target))
 }

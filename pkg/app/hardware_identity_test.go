@@ -57,7 +57,11 @@ func TestApp_CarriesHardwareIdentityFromConfigFile(t *testing.T) {
 		t.Fatalf("unmarshal into App: %v", err)
 	}
 
-	got := loaded.GetInstallerConfig().HardwareIdentity()
+	cfg, err := loaded.GetInstallerConfig()
+	if err != nil {
+		t.Fatalf("GetInstallerConfig: %v", err)
+	}
+	got := cfg.HardwareIdentity()
 	if got != miniFleetIdentity {
 		t.Errorf("identity through App = %+v, want %+v\ndocument:\n%s", got, miniFleetIdentity, document)
 	}
@@ -77,7 +81,11 @@ func TestApp_SetInstallerConfigRoundTripsHardwareIdentity(t *testing.T) {
 		HardwarePartNumber:   miniFleetIdentity.PartNumber,
 	})
 
-	if got := a.GetInstallerConfig().HardwareIdentity(); got != miniFleetIdentity {
+	cfg, err := a.GetInstallerConfig()
+	if err != nil {
+		t.Fatalf("GetInstallerConfig: %v", err)
+	}
+	if got := cfg.HardwareIdentity(); got != miniFleetIdentity {
 		t.Errorf("identity after round trip = %+v, want %+v", got, miniFleetIdentity)
 	}
 }

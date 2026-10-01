@@ -150,6 +150,12 @@ func TestGatewayErrors(t *testing.T) {
 		assert.Equal(t, "IPAM pool exhausted: pool-123", err.Error())
 	})
 
+	t.Run("ErrIPAMWindow", func(t *testing.T) {
+		t.Parallel()
+		err := ErrIPAMWindow{Reason: "IP 192.0.2.1 is reserved"}
+		assert.Equal(t, "ipam: IP 192.0.2.1 is reserved", err.Error())
+	})
+
 	t.Run("ErrGatewayOperationFailed", func(t *testing.T) {
 		t.Parallel()
 		cause := errors.New("underlying error")
@@ -386,7 +392,7 @@ func (m *mockGatewayService) GetIPAMPool(ctx context.Context, poolID string) (*I
 		Name:      "test-pool",
 		CIDR:      "10.0.0.0/24",
 		Gateway:   "10.0.0.1",
-		Zone:      "trusted",
+		Zone:      "control-plane",
 		Total:     254,
 		Allocated: 10,
 		Available: 244,
@@ -1574,7 +1580,7 @@ func TestHandleListIPAMPools(t *testing.T) {
 		t.Parallel()
 		svc := newMockGatewayService()
 		svc.listPoolsResp = []IPAMPoolResponse{
-			{ID: "pool-2", Name: "trusted-pool", CIDR: "10.1.0.0/24", Zone: "trusted"},
+			{ID: "pool-2", Name: "control-plane-pool", CIDR: "10.1.0.0/24", Zone: "control-plane"},
 		}
 		_, router := setupGatewayTestHandler(svc)
 
@@ -1591,7 +1597,7 @@ func TestHandleListIPAMPools(t *testing.T) {
 		var poolsResp IPAMPoolListResponse
 		decodeGatewayResponse(t, resp, &poolsResp)
 		assert.Equal(t, 1, poolsResp.Count)
-		assert.Equal(t, "trusted", poolsResp.Pools[0].Zone)
+		assert.Equal(t, "control-plane", poolsResp.Pools[0].Zone)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
@@ -1950,6 +1956,7 @@ func TestGatewayWriteGatewayError(t *testing.T) {
 		{"ErrIPAllocationNotFound", ErrIPAllocationNotFound{IP: "test"}, http.StatusNotFound},
 		{"ErrIPAlreadyAllocated", ErrIPAlreadyAllocated{IP: "test"}, http.StatusConflict},
 		{"ErrIPAMPoolExhausted", ErrIPAMPoolExhausted{ID: "test"}, http.StatusServiceUnavailable},
+		{"ErrIPAMWindow", ErrIPAMWindow{Reason: "reserved"}, http.StatusBadRequest},
 		{"ErrInvalidGatewayMode", ErrInvalidGatewayMode{Mode: 999}, http.StatusBadRequest},
 		{"ErrInvalidPrefix", ErrInvalidPrefix{Prefix: "test"}, http.StatusBadRequest},
 		{"ErrInvalidIPAddress", ErrInvalidIPAddress{IP: "test"}, http.StatusBadRequest},

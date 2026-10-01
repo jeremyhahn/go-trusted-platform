@@ -44,6 +44,8 @@ type PortConfig struct {
 	Mode        string `yaml:"mode" json:"mode"`                                   // "trunk" | "access"
 	VLANs       []int  `yaml:"vlans,omitempty" json:"vlans,omitempty"`             // For trunk: allowed VLANs
 	AccessVLAN  int    `yaml:"access_vlan,omitempty" json:"access_vlan,omitempty"` // For access: VLAN ID
+	NativeVLAN  int    `yaml:"native_vlan,omitempty" json:"native_vlan,omitempty"` // For trunk: native (untagged) VLAN; 0 = none
+	MTU         int    `yaml:"mtu,omitempty" json:"mtu,omitempty"`                 // 1500-9216; 0 = leave as is
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
@@ -115,6 +117,7 @@ type PortStatus struct {
 	Mode        PortMode `json:"mode"`
 	AccessVLAN  uint16   `json:"access_vlan"`
 	TrunkVLANs  []uint16 `json:"trunk_vlans,omitempty"`
+	NativeVLAN  uint16   `json:"native_vlan,omitempty"`
 	Enabled     bool     `json:"enabled"`
 	LinkUp      bool     `json:"link_up"`
 	Description string   `json:"description,omitempty"`

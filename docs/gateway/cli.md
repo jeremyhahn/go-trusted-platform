@@ -101,9 +101,8 @@ Pools first, then allocations from them.
 a pool's range under live allocations would orphan them. A pool with the wrong
 CIDR is replaced, not edited.
 
-`--zone` names a trust/exposure zone such as `trusted` or `provisioning` (the
-reference design has no `trusted` zone; the code's zone vocabulary moves with
-#708, see [`../architecture/reference-network.md`](../architecture/reference-network.md)). It
+`--zone` names an underlay zone such as `control-plane` or `provisioning`
+([`../architecture/reference-network.md`](../architecture/reference-network.md)). It
 must be a zone that exists — the SDN configuration rejects a pool declared in an
 undeclared zone (`ErrPoolZoneUndeclared`).
 

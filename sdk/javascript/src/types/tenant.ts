@@ -1,7 +1,7 @@
 /**
  * Tenant Service Types
  *
- * Types for multi-tenant platform operations including VLAN isolation and quota management.
+ * Types for multi-tenant platform operations: lifecycle, quotas, keys and barriers.
  * Based on pkg/api/grpc/proto/tenant.proto
  */
 
@@ -72,12 +72,6 @@ export interface Tenant {
   displayName?: string;
   /** Tenant state */
   state: TenantState;
-  /** OVS bridge name */
-  ovsBridge?: string;
-  /** VLAN range start */
-  vlanStart?: number;
-  /** VLAN range end */
-  vlanEnd?: number;
   /** DEK path */
   dekPath?: string;
   /** Compute quota */
@@ -236,10 +230,6 @@ export interface CreateTenantRequest {
   name: string;
   /** Display name */
   displayName?: string;
-  /** VLAN range start */
-  vlanRangeStart?: number;
-  /** VLAN range end */
-  vlanRangeEnd?: number;
   /** Labels */
   labels?: Record<string, string>;
   /** Annotations */
@@ -330,24 +320,6 @@ export interface CheckQuotaRequest {
   resource: string;
   /** Requested amount */
   amount: number;
-}
-
-/**
- * Validate VLAN request
- */
-export interface ValidateVLANRequest {
-  /** Tenant ID */
-  tenantId: string;
-  /** VLAN ID */
-  vlanId: number;
-}
-
-/**
- * Get bridge name request
- */
-export interface GetBridgeNameRequest {
-  /** Tenant ID */
-  tenantId: string;
 }
 
 /**
@@ -523,30 +495,6 @@ export interface CheckQuotaResponse {
   available: boolean;
   /** Message */
   message?: string;
-}
-
-/**
- * Validate VLAN response
- */
-export interface ValidateVLANResponse {
-  /** Tenant ID */
-  tenantId: string;
-  /** VLAN ID */
-  vlanId: number;
-  /** Whether valid */
-  valid: boolean;
-  /** Message */
-  message?: string;
-}
-
-/**
- * Get bridge name response
- */
-export interface GetBridgeNameResponse {
-  /** Tenant ID */
-  tenantId: string;
-  /** Bridge name */
-  bridgeName: string;
 }
 
 /**

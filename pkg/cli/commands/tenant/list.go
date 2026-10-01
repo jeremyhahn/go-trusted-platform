@@ -33,7 +33,7 @@ func NewListCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "List all tenants",
 		Long: `Display a list of all tenants with pagination support.
 
-The list shows tenant name, state, VLAN range, and bridge information.
+The list shows each tenant's name, display name and state.
 
 Examples:
   # List all tenants

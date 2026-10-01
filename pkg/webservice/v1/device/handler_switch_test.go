@@ -40,7 +40,7 @@ func newSwitchTestPlan(serial string, vlan uint16) *fakeActivationPlan {
 	return &fakeActivationPlan{
 		serial: serial,
 		vlans: policy.ActivationVLANs{
-			Trusted:         vlan,
+			Admitted:        vlan,
 			Provisioning:    998,
 			HasProvisioning: true,
 		},
@@ -91,7 +91,7 @@ func TestActivate_WithSwitchService_VLANTransition(t *testing.T) {
 	// Record the validate-then-commit call order: the hook precheck and
 	// the switch-move validation run first with no side effects, the SDN
 	// enforcement is applied next, and only then is the physical port
-	// moved — the trusted VLAN never opens onto an unenforced datapath.
+	// moved — the admitted VLAN never opens onto an unenforced datapath.
 	var callOrder []string
 
 	plan := newSwitchTestPlan("DEVICE-12345", 200)
@@ -151,7 +151,7 @@ func TestActivate_PlanSnapshotDrivesSwitchVLANs(t *testing.T) {
 		WithSwitchService(mockSwitchService),
 	)
 
-	// The plan's snapshot says trusted VLAN 300; no profile-service
+	// The plan's snapshot says admitted VLAN 300; no profile-service
 	// expectation is registered at all — a GetBySerial call would fail
 	// the test as an unexpected mock invocation.
 	plan := newSwitchTestPlan("DEVICE-12345", 300)
@@ -253,7 +253,7 @@ func TestActivate_CommitPreReadFails_FailsClosed(t *testing.T) {
 	// Fail closed: force the provisioning VLAN and verify by read-back.
 	mockSwitchManager.On("SetPortVLAN", mock.Anything, "Eth1/3", uint16(998)).Return(nil).Once()
 	mockSwitchManager.On("GetPortVLAN", mock.Anything, "Eth1/3").Return(uint16(998), nil).Once()
-	// The port was never moved to the trusted VLAN.
+	// The port was never moved to the admitted VLAN.
 	// (No SetPortVLAN(200) expectation: such a call fails the test.)
 
 	mockResponseWriter.On("Error500", mock.Anything, mock.Anything,
@@ -336,7 +336,7 @@ func TestActivate_FailedCommitThenRetry_Succeeds(t *testing.T) {
 
 // TestActivate_SDNFailure_SwitchNeverOpened is the fail-open regression the
 // review asked for: when the SDN policy application fails, the physical
-// switch is never touched — no port ever reaches the trusted VLAN while an
+// switch is never touched — no port ever reaches the admitted VLAN while an
 // unenforced datapath is observable. The move was validated up front
 // (Manager resolved) but never committed.
 func TestActivate_SDNFailure_SwitchNeverOpened(t *testing.T) {
@@ -375,7 +375,7 @@ func TestActivate_SDNFailure_SwitchNeverOpened(t *testing.T) {
 
 // TestActivate_SwitchMoveFailed_Indeterminate verifies the honest failure
 // contract: when the post-enforcement move fails and the revert cannot be
-// verified (the read-back still shows the trusted VLAN), the response is
+// verified (the read-back still shows the admitted VLAN), the response is
 // the explicit INDETERMINATE error, not a claim that the port was never
 // opened.
 func TestActivate_SwitchMoveFailed_Indeterminate(t *testing.T) {
@@ -400,7 +400,7 @@ func TestActivate_SwitchMoveFailed_Indeterminate(t *testing.T) {
 	mockActivator.On("ActivateDevice", plan).Return(activatedResult(200), nil).Once()
 	mockActivator.On("ReinstateActivation", plan).Return().Once()
 	// Initial capture reads the provisioning VLAN; the verification
-	// read-back after the failed move/revert still shows the trusted VLAN.
+	// read-back after the failed move/revert still shows the admitted VLAN.
 	mockSwitchManager.On("GetPortVLAN", mock.Anything, "Eth1/3").Return(uint16(998), nil).Once()
 	mockSwitchManager.On("SetPortVLAN", mock.Anything, "Eth1/3", uint16(200)).
 		Return(errors.New("SSH sequence failed after vlan command")).Once()
@@ -491,7 +491,7 @@ func TestActivate_PrecheckFailure_SkipsSwitchMove(t *testing.T) {
 
 // TestActivate_ZoneMismatch_SkipsSwitchMove verifies that a plan carrying a
 // zone mismatch leaves the physical port on its current VLAN: moving it to
-// the trusted VLAN would defeat the isolation the quarantine policy applies.
+// the admitted VLAN would defeat the isolation the quarantine policy applies.
 func TestActivate_ZoneMismatch_SkipsSwitchMove(t *testing.T) {
 	logger := newTestLogger()
 	responseWriter := newTestResponseWriter()
@@ -521,7 +521,7 @@ func TestActivate_ZoneMismatch_SkipsSwitchMove(t *testing.T) {
 	err := json.NewDecoder(w.Body).Decode(&response)
 	require.NoError(t, err)
 	assert.Equal(t, "quarantined", response.Status)
-	assert.Equal(t, uint16(666), response.VLAN, "the response carries the VLAN actually applied, not the trusted VLAN")
+	assert.Equal(t, uint16(666), response.VLAN, "the response carries the VLAN actually applied, not the admitted VLAN")
 
 	mockActivator.AssertExpectations(t)
 	// The quarantined device stays on its current VLAN.
@@ -533,7 +533,7 @@ func TestActivate_ZoneMismatch_SkipsSwitchMove(t *testing.T) {
 // plan reserved was replaced before it could be consumed, ActivateDevice
 // refuses with ErrPendingActivationSuperseded, and — because the physical
 // commit runs only after a successful SDN activation — the switch was
-// never touched: no port ever reached the trusted VLAN for a profile that
+// never touched: no port ever reached the admitted VLAN for a profile that
 // was never activated.
 func TestActivate_Superseded_SwitchNeverTouched(t *testing.T) {
 	logger := newTestLogger()
@@ -568,11 +568,11 @@ func TestActivate_Superseded_SwitchNeverTouched(t *testing.T) {
 	mockSwitchManager.AssertNotCalled(t, "GetPortVLAN", mock.Anything, mock.Anything)
 }
 
-// TestActivate_PortAlreadyOnTrustedVLAN_WarnsAndProceeds verifies the
-// anomaly path: a pre-move read showing the port already on the trusted
+// TestActivate_PortAlreadyOnAdmittedVLAN_WarnsAndProceeds verifies the
+// anomaly path: a pre-move read showing the port already on the admitted
 // VLAN is a divergence between the port state machine and switch reality —
 // it is logged at WARN and the activation proceeds.
-func TestActivate_PortAlreadyOnTrustedVLAN_WarnsAndProceeds(t *testing.T) {
+func TestActivate_PortAlreadyOnAdmittedVLAN_WarnsAndProceeds(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := logging.NewLogger(slog.LevelWarn, &logBuf)
 	responseWriter := newTestResponseWriter()
@@ -592,7 +592,7 @@ func TestActivate_PortAlreadyOnTrustedVLAN_WarnsAndProceeds(t *testing.T) {
 	plan := newSwitchTestPlan("DEVICE-12345", 200)
 	mockActivator.On("PrecheckActivation", "DEVICE-12345").Return(plan, nil).Once()
 	mockSwitchService.On("Manager", "spine-01").Return(mockSwitchManager, nil)
-	// The pre-move read already shows the trusted VLAN.
+	// The pre-move read already shows the admitted VLAN.
 	mockSwitchManager.On("GetPortVLAN", mock.Anything, "Eth1/3").Return(uint16(200), nil).Once()
 	mockSwitchManager.On("SetPortVLAN", mock.Anything, "Eth1/3", uint16(200)).Return(nil).Once()
 	mockActivator.On("ActivateDevice", plan).Return(activatedResult(200), nil).Once()
@@ -610,15 +610,15 @@ func TestActivate_PortAlreadyOnTrustedVLAN_WarnsAndProceeds(t *testing.T) {
 
 	// The divergence between the port state machine and switch reality
 	// must be alarmed, not silently accepted.
-	assert.Contains(t, logBuf.String(), "ALREADY on trusted VLAN")
+	assert.Contains(t, logBuf.String(), "ALREADY on admitted VLAN")
 
 	mockSwitchManager.AssertExpectations(t)
 	mockActivator.AssertExpectations(t)
 }
 
 // TestActivate_VLANsNotDistinct_RefusesMove verifies the runtime guard for
-// a stored profile whose provisioning and trusted VLANs are equal: the
-// fail-closed target would be the trusted VLAN itself, so the physical move
+// a stored profile whose provisioning and admitted VLANs are equal: the
+// fail-closed target would be the admitted VLAN itself, so the physical move
 // is refused before the switch is touched and the SDN activation never runs.
 func TestActivate_VLANsNotDistinct_RefusesMove(t *testing.T) {
 	logger := newTestLogger()
@@ -638,7 +638,7 @@ func TestActivate_VLANsNotDistinct_RefusesMove(t *testing.T) {
 	plan := &fakeActivationPlan{
 		serial: "DEVICE-12345",
 		vlans: policy.ActivationVLANs{
-			Trusted:         200,
+			Admitted:        200,
 			Provisioning:    200,
 			HasProvisioning: true,
 		},
@@ -680,7 +680,7 @@ func TestActivate_NoProvisioningNetwork_RefusesMove(t *testing.T) {
 
 	plan := &fakeActivationPlan{
 		serial: "DEVICE-12345",
-		vlans:  policy.ActivationVLANs{Trusted: 200},
+		vlans:  policy.ActivationVLANs{Admitted: 200},
 	}
 	mockActivator.On("PrecheckActivation", "DEVICE-12345").Return(plan, nil).Once()
 
@@ -697,15 +697,15 @@ func TestActivate_NoProvisioningNetwork_RefusesMove(t *testing.T) {
 	mockActivator.AssertNotCalled(t, "ActivateDevice", mock.Anything)
 }
 
-// TestActivate_PreviousWasTrusted_RevertTargetsProvisioning is the
+// TestActivate_PreviousWasAdmitted_RevertTargetsProvisioning is the
 // discriminating fixture for the fail-closed revert target: the port was
-// ALREADY on the trusted VLAN before the move (anomaly, WARN logged), the
+// ALREADY on the admitted VLAN before the move (anomaly, WARN logged), the
 // move itself fails, and the read-back after the revert still shows the
-// trusted VLAN. Under the old "revert to whatever it was" semantics this
+// admitted VLAN. Under the old "revert to whatever it was" semantics this
 // counted as closed (read-back == previous); under the provisioning-VLAN
 // rule it MUST be INDETERMINATE, because closed means read-back ==
 // provisioning VLAN, full stop.
-func TestActivate_PreviousWasTrusted_RevertTargetsProvisioning(t *testing.T) {
+func TestActivate_PreviousWasAdmitted_RevertTargetsProvisioning(t *testing.T) {
 	logger := newTestLogger()
 	mockResponseWriter := &MockHttpWriter{}
 	mockProfileService := &MockProfileService{}
@@ -726,14 +726,14 @@ func TestActivate_PreviousWasTrusted_RevertTargetsProvisioning(t *testing.T) {
 	mockSwitchService.On("Manager", "spine-01").Return(mockSwitchManager, nil)
 	mockActivator.On("ActivateDevice", plan).Return(activatedResult(200), nil).Once()
 	mockActivator.On("ReinstateActivation", plan).Return().Once()
-	// Pre-move read: the port is ALREADY on the trusted VLAN (anomaly,
+	// Pre-move read: the port is ALREADY on the admitted VLAN (anomaly,
 	// WARN logged, proceed).
 	mockSwitchManager.On("GetPortVLAN", mock.Anything, "Eth1/3").Return(uint16(200), nil).Once()
 	mockSwitchManager.On("SetPortVLAN", mock.Anything, "Eth1/3", uint16(200)).
 		Return(errors.New("SSH sequence failed after vlan command")).Once()
 	// The revert targets the provisioning VLAN (998) unconditionally.
 	mockSwitchManager.On("SetPortVLAN", mock.Anything, "Eth1/3", uint16(998)).Return(nil).Once()
-	// The verification read-back still shows the trusted VLAN (200): not
+	// The verification read-back still shows the admitted VLAN (200): not
 	// the provisioning VLAN, so the outcome is indeterminate — even though
 	// 200 is exactly what the port showed before the move.
 	mockSwitchManager.On("GetPortVLAN", mock.Anything, "Eth1/3").Return(uint16(200), nil).Once()

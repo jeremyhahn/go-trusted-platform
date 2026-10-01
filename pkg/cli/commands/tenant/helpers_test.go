@@ -27,46 +27,6 @@ func TestFormatTime(t *testing.T) {
 	}
 }
 
-func TestFormatVLANRange(t *testing.T) {
-	tests := []struct {
-		name     string
-		start    uint32
-		end      uint32
-		expected string
-	}{
-		{name: "both zero", start: 0, end: 0, expected: "N/A"},
-		{name: "valid range", start: 100, end: 200, expected: "100-200"},
-		{name: "single vlan", start: 100, end: 100, expected: "100-100"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := formatVLANRange(tt.start, tt.end)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestFormatVLANSize(t *testing.T) {
-	tests := []struct {
-		name     string
-		start    uint32
-		end      uint32
-		expected string
-	}{
-		{name: "both zero", start: 0, end: 0, expected: "0"},
-		{name: "valid range", start: 100, end: 200, expected: "101"},
-		{name: "single vlan", start: 100, end: 100, expected: "1"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := formatVLANSize(tt.start, tt.end)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestFormatQuotaValue(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -195,58 +155,12 @@ func TestToUsageSummary_NilQuotas(t *testing.T) {
 	assert.Equal(t, int64(0), summary.Compute.VMs.Max)
 }
 
-func TestToVLANInfo(t *testing.T) {
-	tenant := &sdktenant.Tenant{
-		ID:        "t1",
-		Name:      "test",
-		VLANStart: 100,
-		VLANEnd:   200,
-	}
-
-	info := toVLANInfo(tenant)
-	require.NotNil(t, info)
-	assert.Equal(t, "t1", info.TenantID)
-	assert.Equal(t, "test", info.TenantName)
-	assert.Equal(t, uint32(100), info.VLANStart)
-	assert.Equal(t, uint32(200), info.VLANEnd)
-	assert.Equal(t, 101, info.VLANCount)
-}
-
-func TestToVLANInfo_ZeroVLANs(t *testing.T) {
-	tenant := &sdktenant.Tenant{ID: "t1", Name: "test"}
-	info := toVLANInfo(tenant)
-	assert.Equal(t, 0, info.VLANCount)
-}
-
-func TestToBridgeInfo(t *testing.T) {
-	tenant := &sdktenant.Tenant{
-		ID:        "t1",
-		Name:      "test",
-		OVSBridge: "br-tenant-t1",
-		State:     sdktenant.StateActive,
-		VLANStart: 100,
-		VLANEnd:   200,
-	}
-
-	info := toBridgeInfo(tenant)
-	require.NotNil(t, info)
-	assert.Equal(t, "t1", info.TenantID)
-	assert.Equal(t, "test", info.TenantName)
-	assert.Equal(t, "br-tenant-t1", info.BridgeName)
-	assert.NotEmpty(t, info.State)
-	assert.Equal(t, uint32(100), info.VLANStart)
-	assert.Equal(t, uint32(200), info.VLANEnd)
-}
-
 func TestTenantSummaryStruct(t *testing.T) {
 	summary := TenantSummary{
 		ID:          "t1",
 		Name:        "test",
 		DisplayName: "Test Tenant",
 		State:       "active",
-		OVSBridge:   "br-test",
-		VLANStart:   100,
-		VLANEnd:     200,
 		Labels:      map[string]string{"env": "prod"},
 		Annotations: map[string]string{"note": "test"},
 		CreatedAt:   "2025-01-15T12:00:00Z",

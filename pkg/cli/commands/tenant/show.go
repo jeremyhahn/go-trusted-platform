@@ -29,7 +29,7 @@ func NewShowCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Show tenant details",
 		Long: `Display detailed information about a specific tenant.
 
-Shows tenant configuration, quotas, VLAN allocation, and bridge status.
+Shows tenant configuration, state, quotas, labels and timestamps.
 
 Examples:
   # Show tenant details
@@ -89,20 +89,11 @@ type TenantDetail struct {
 	Name        string            `json:"name" yaml:"name"`
 	DisplayName string            `json:"display_name" yaml:"display_name"`
 	State       string            `json:"state" yaml:"state"`
-	OVSBridge   string            `json:"ovs_bridge" yaml:"ovs_bridge"`
-	VLANRange   *VLANRangeDetail  `json:"vlan_range" yaml:"vlan_range"`
 	Quotas      *QuotaDetail      `json:"quotas" yaml:"quotas"`
 	Labels      map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"`
 	CreatedAt   string            `json:"created_at" yaml:"created_at"`
 	UpdatedAt   string            `json:"updated_at" yaml:"updated_at"`
-}
-
-// VLANRangeDetail represents VLAN range details
-type VLANRangeDetail struct {
-	Start uint32 `json:"start" yaml:"start"`
-	End   uint32 `json:"end" yaml:"end"`
-	Count int    `json:"count" yaml:"count"`
 }
 
 // QuotaDetail represents quota details
@@ -140,19 +131,10 @@ func toTenantDetail(t *sdktenant.Tenant) *TenantDetail {
 		Name:        t.Name,
 		DisplayName: t.DisplayName,
 		State:       string(t.State),
-		OVSBridge:   t.OVSBridge,
 		Labels:      t.Labels,
 		Annotations: t.Annotations,
 		CreatedAt:   formatTime(t.CreatedAt),
 		UpdatedAt:   formatTime(t.UpdatedAt),
-	}
-
-	if t.VLANStart > 0 || t.VLANEnd > 0 {
-		detail.VLANRange = &VLANRangeDetail{
-			Start: t.VLANStart,
-			End:   t.VLANEnd,
-			Count: int(t.VLANEnd - t.VLANStart + 1),
-		}
 	}
 
 	detail.Quotas = &QuotaDetail{

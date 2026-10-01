@@ -65,6 +65,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 
@@ -668,6 +669,13 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 		if err := app.initBarrier(context.Background()); err != nil {
 			return nil, err
 		}
+	}
+
+	// The host network must follow the reference network's host-addressing
+	// rules for its role; a violation is a configuration error, so it is
+	// fatal here rather than deferred like SDN runtime availability.
+	if err := app.validateHostNetwork(); err != nil {
+		return nil, err
 	}
 
 	// Initialize the SDN controller (OVS bridge, IPAM pools)
@@ -1315,14 +1323,55 @@ func (app *App) FQDN() string {
 	return fmt.Sprintf("%s.%s", app.Hostname, app.Domain)
 }
 
-// GetInstallerConfig extracts an installer.Config from the App fields.
-// This allows code to use the unified App config while still working with
-// installer.Config for backwards compatibility.
-func (app *App) GetInstallerConfig() *installer.Config {
+// NetworkPlan returns the network plan of the node's environment: nil when
+// SDN is not configured or disabled, otherwise the plan sdn.Validate
+// derives from sdn.environment (validating the SDN section first if that has
+// not happened yet).
+func (app *App) NetworkPlan() (*netplan.Plan, error) {
+	if app.SDNConfig == nil || !app.SDNConfig.Enabled {
+		return nil, nil
+	}
+	if plan := app.SDNConfig.Plan(); plan != nil {
+		return plan, nil
+	}
+	if err := app.SDNConfig.Validate(); err != nil {
+		return nil, ErrSDNConfigValidation{Cause: err}
+	}
+	return app.SDNConfig.Plan(), nil
+}
+
+// validateHostNetwork checks the network section against the node's network
+// plan — host addressing by role, forwarding, zone VLANs and the platform
+// VRF — so a bad host network configuration fails when the config loads,
+// not only when the installer runs.
+func (app *App) validateHostNetwork() error {
+	if app.NetworkConfig == nil {
+		return nil
+	}
+	plan, err := app.NetworkPlan()
+	if err != nil {
+		return err
+	}
+	if err := app.NetworkConfig.Validate(plan); err != nil {
+		return ErrHostNetworkValidation{Cause: err}
+	}
+	return nil
+}
+
+// GetInstallerConfig extracts an installer.Config from the App fields,
+// including the network plan of the node's environment so the installer can
+// resolve zone VLANs and check host addressing by role. It fails when the
+// SDN section cannot be validated.
+func (app *App) GetInstallerConfig() (*installer.Config, error) {
+	plan, err := app.NetworkPlan()
+	if err != nil {
+		return nil, err
+	}
 	return &installer.Config{
 		Disk:                  app.DiskConfig,
 		OS:                    app.OSConfig,
 		Network:               app.NetworkConfig,
+		Plan:                  plan,
 		UKI:                   app.UKIConfig,
 		SecureBoot:            app.SecureBootConfig,
 		EnableTPMSealing:      app.EnableTPMSealing,
@@ -1336,7 +1385,7 @@ func (app *App) GetInstallerConfig() *installer.Config {
 		HardwarePartNumber:    app.HardwarePartNumber,
 		Target:                app.InstallTarget,
 		Boot:                  app.BootConfig,
-	}
+	}, nil
 }
 
 // SetInstallerConfig populates App fields from an installer.Config.
@@ -1487,6 +1536,12 @@ func (app *App) initConfig(env string) error {
 	// Unmarshal with TextUnmarshaler support for custom types
 	// (e.g., quicbaas.ConsistencyLevel, Environment)
 	if err := viper.Unmarshal(app, config.DecodeHook()); err != nil {
+		return err
+	}
+
+	// A key the network or sdn schema does not have is a configuration
+	// error, not something to ignore (pre-release: no migration).
+	if err := CheckPlatformConfigViper(viper.GetViper()); err != nil {
 		return err
 	}
 
@@ -2702,7 +2757,7 @@ func (app *App) CompletePlatformIdentity(
 				} else if profile != nil && activateResp != nil {
 					app.Logger.Info("Post-enrollment provisioning completed",
 						slog.String("serial", profile.SerialNumber),
-						slog.Int("production_vlan", int(profile.TrustedNetwork.VLAN)),
+						slog.Int("admitted_vlan", int(profile.AdmittedNetwork.VLAN)),
 						slog.String("activation_status", activateResp.Status))
 				}
 			}
@@ -2919,7 +2974,7 @@ func (app *App) FetchProfileAndActivate(
 
 	app.Logger.Info("Device provisioning complete",
 		slog.String("serial", profile.SerialNumber),
-		slog.Int("vlan", int(profile.TrustedNetwork.VLAN)),
+		slog.Int("vlan", int(profile.AdmittedNetwork.VLAN)),
 		slog.String("status", activateResp.Status))
 
 	return profile, activateResp, nil

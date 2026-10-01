@@ -11,7 +11,7 @@
 ## 1. Package layout
 
 `pkg/sdn/` is the largest subsystem in the repository: seventeen sub-packages
-plus four files at the root.
+plus a handful of files at the root.
 
 | Package | Holds |
 |---|---|
@@ -20,16 +20,17 @@ plus four files at the root.
 | `pkg/sdn/policy` | **Port authentication state machine**, quarantine, zone flows, enrollment hook |
 | `pkg/sdn/ipam` | IP address management |
 | `pkg/sdn/dhcp` | DHCP server |
-| `pkg/sdn/vlan`, `pkg/sdn/vxlan`, `pkg/sdn/tunnel` | Segmentation and encapsulation |
+| `pkg/sdn/netplan` | **The network plan**: the only place VLAN IDs, subnets, VNIs, IPAM pools, reserved ranges and port-class VLAN lists are derived |
+| `pkg/sdn/vxlan`, `pkg/sdn/tunnel` | Encapsulation |
 | `pkg/sdn/overlay` | VXLAN/EVPN overlay control |
 | `pkg/sdn/bgp` | BGP speaker (EVPN control plane and prefix announcement) |
-| `pkg/sdn/fabric` | Multi-host fabric composition |
-| `pkg/sdn/zone` | Network zones |
+| `pkg/sdn/fabric` | Physical switch fabric: switches, peers, LAGs, port classes |
+| `pkg/sdn/zone` | Underlay zones: built-ins at fixed offsets, owner-defined zones, policy matrix |
 | `pkg/sdn/arp`, `pkg/sdn/ct` | ARP handling (table reader + RFC 5227 duplicate-address detection), connection tracking |
 | `pkg/sdn/netlink` | Host networking via netlink (TAP, links, routes) |
 | `pkg/sdn/cluster` | Cluster-wide SDN state |
 | `pkg/sdn/gateway` | **Not this feature** — see [`docs/gateway/`](../gateway/) |
-| root: `config.go`, `errors.go`, `identity.go`, `zone_index.go` | Configuration, typed errors, port identity, zone lookup |
+| root: `config.go`, `errors.go`, `identity.go`, `networks.go` | Configuration (builds the plan), typed errors, port identity, per-zone flow summaries |
 
 `pkg/switch/` is separate and small: physical switch management — `ssh.go`,
 `ssh_manager.go`, `cisco_nexus.go`, `factory.go`, `manager_factory.go`,
@@ -97,14 +98,12 @@ nothing knows about carries no authorisation.
 
 ## 3. Configuration
 
-`sdn.Config` (`pkg/sdn/config.go:263`), with these nested types:
-`OVSConfig`, `DPDKConfig`, `IPAMConfig`, `PoolConfig`, `DHCPConfig`,
-`NetworkConfig`, `OverlayConfig`, `GatewayConfig`, `TransitConfig`,
-`ManagementVPNConfig`, `ZoneServiceConfig`, `IdentityConfig`.
-
-YAML keys observed on these structs: `backend`, `bridge`, `cidr`, `controller`,
-`datapath`, `dhcp`, `enabled`, `encode_zone_in_cert`, `gateway`, `init`,
-`interface`, `name`, `socket`, `vlan`, `zone`.
+`sdn.Config` (`pkg/sdn/config.go`) carries `Environment` (a
+`netplan.Environment`), `Zones`, and the nested `OVSConfig`, `DPDKConfig`,
+`IPAMConfig`, `PoolConfig`, `DHCPConfig`, `OverlayConfig`, `GatewayConfig`,
+`fabric.FabricConfig`, `ManagementVPNConfig` and `IdentityConfig`. There is
+no per-network or per-VLAN configuration: `Validate` resolves the zones,
+validates them and derives the plan, which `Config.Plan()` returns.
 
 **`encode_zone_in_cert` is a trust decision, not a formatting one.** When true,
 a device's network zone is carried inside its IDevID certificate, so the zone is
@@ -113,28 +112,31 @@ assignment to something the device can influence.
 
 ### Validation errors — the config fails closed and loudly
 
-`pkg/sdn/config.go` declares twenty-two typed errors, which is unusual density
-and tells you where the sharp edges are:
+| Error | Package | Fires when |
+|---|---|---|
+| `ErrInvalidConfig`, `ErrInvalidOVSSocket`, `ErrInvalidBridge` | `sdn` | Basic wiring wrong |
+| `ErrEnvironmentRequired` | `sdn` | SDN enabled without `environment:` |
+| `ErrInvalidPoolName`, `ErrInvalidPoolCIDR`, `ErrDuplicatePoolName` | `sdn` | An explicit IPAM pool malformed |
+| `ErrPoolNameReserved`, `ErrPoolOverlap`, `ErrPoolZoneUndeclared` | `sdn` | An explicit pool collides with the plan |
+| `ErrManagementVPNUnknownZone` | `sdn` | The VPN names an undeclared zone |
+| `ErrIPAMBackendUnconfigured`, `ErrIPAMBackendUnknown`, `ErrIPAMBackendP2PRequired` | `sdn` | IPAM backend selection wrong |
+| `ErrInvalidTCPolicy`, `ErrTCPolicyWithoutHWOffload`, `ErrDPDKRequiresNetdev` | `sdn` | Datapath combination impossible |
+| `ErrBuiltinIdentity`, `ErrOmitRequired`, `ErrOmitUnknown` | `zone` | A built-in zone renumbered, re-classed or omitted when required |
+| `ErrOwnerZoneOffset`, `ErrDuplicateOffset`, `ErrOwnerZonePortClass`, `ErrOwnerZoneField`, `ErrReservedZoneName` | `zone` | An owner-defined zone malformed |
+| `ErrPrivilegedAccessRequired` | `zone` | A path into control-plane or management without an audited override |
+| `ErrLifecycleRoleCount`, `ErrUnknownZoneRef`, `ErrOOBWithInternetIngress` | `zone` | Zone graph inconsistent |
+| `ErrEnvironmentID`, `ErrBase`, `ErrULA`, `ErrOverride` | `netplan` | Environment inputs malformed |
+| `ErrDuplicateVLAN`, `ErrOverlap`, `ErrVLANOutOfRange` | `netplan` | Two zones collide, or a zone lands in the IPAM pool, link-local space or host-services `/64` |
 
-| Error | Fires when |
-|---|---|
-| `ErrInvalidConfig`, `ErrInvalidOVSSocket`, `ErrInvalidBridge` | Basic wiring wrong |
-| `ErrInvalidPoolName`, `ErrInvalidPoolCIDR`, `ErrInvalidNetworkPool` | IPAM pool malformed |
-| `ErrDuplicatePoolName`, `ErrDuplicateNetworkVLAN`, `ErrDuplicateNetworkName`, `ErrDuplicateNetworkSubnet` | Two definitions collide |
-| `ErrMissingNetworkZone`, `ErrUnknownNetworkZone`, `ErrPoolZoneUndeclared`, `ErrNetworkPoolZoneMismatch`, `ErrManagementVPNUnknownZone` | Zone graph inconsistent |
-| `ErrInvalidNetworkVLAN`, `ErrInvalidTransitVLAN`, `ErrSubnetPoolMismatch` | Segmentation inconsistent |
-| `ErrIPAMBackendUnconfigured`, `ErrIPAMBackendUnknown`, `ErrIPAMBackendP2PRequired` | IPAM backend selection wrong |
-| `ErrInvalidTCPolicy`, `ErrTCPolicyWithoutHWOffload`, `ErrDPDKRequiresNetdev` | Datapath combination impossible |
+The datapath errors encode hardware constraints in the type system: a
+traffic-control policy without hardware offload, and DPDK without a `netdev`
+datapath, are configurations the kernel cannot honour. They are rejected at
+load, not discovered as packet loss.
 
-The last three encode hardware constraints in the type system: a traffic-control
-policy without hardware offload, and DPDK without a `netdev` datapath, are
-configurations the kernel cannot honour. They are rejected at load, not
-discovered as packet loss.
-
-**The zone errors are the ones that will bite.** Five of the twenty-two are
-about zones referring to things that do not exist or do not agree. Zones are the
-unit segmentation hangs off; get the zone graph right first and most of the rest
-follows.
+**The numbering errors are the ones that will bite on a non-reference site.**
+An override moves one zone; it cannot land on another zone's VLAN or subnet,
+in the IPAM pool, or in a reserved range. The plan refuses the whole
+configuration rather than guessing.
 
 ### The terminal of an allow rule (#567)
 
@@ -243,11 +245,11 @@ Quarantine never degrades silently. Three rules, all enforced:
    `buildPortPolicy` build no policy and return
    `ErrZoneExtensionInvalid` — it never falls open to the trusted policy.
 
-1. **A quarantine policy carries the quarantine VLAN, never the trusted
+1. **A quarantine policy carries the quarantine VLAN, never the admitted
    one.** On a zone mismatch `buildPortPolicy` sets `VLAN` to the profile's
    failure-network VLAN, or its provisioning VLAN when no failure network is
    declared, and drops the production ACLs. A quarantine VLAN equal to the
-   trusted VLAN is `ErrQuarantinePolicyContradiction`; a profile with
+   admitted VLAN is `ErrQuarantinePolicyContradiction`; a profile with
    neither VLAN is `ErrQuarantineVLANUnavailable`. Both build no policy, so
    activation fails closed.
 2. **The engine's VLAN-direct fallback refuses quarantine-zone policies.**

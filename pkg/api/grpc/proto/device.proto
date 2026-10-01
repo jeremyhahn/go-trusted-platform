@@ -159,7 +159,7 @@ message NetworkPhaseConfig {
   bool dhcp = 10;
   reserved 11;
   reserved "firewall_zone";
-  // zone is the SDN zone name for this network phase (e.g. "trusted",
+  // zone is the SDN zone name for this network phase (e.g. "control-plane",
   // "provisioning", "quarantine").
   string zone = 12;
 }
@@ -221,14 +221,14 @@ message DeviceProfile {
   // zone is the profile-level SDN zone. Individual network phase configs may
   // override this value with their own zone field.
   string zone = 19;
-  // networks maps logical network names (e.g. "provisioning", "trusted",
+  // networks maps logical network names (e.g. "provisioning", "admitted",
   // "quarantine") to their phase configurations.
   map<string, NetworkPhaseConfig> networks = 20;
   // enrollment_network is the key into networks used during device enrollment.
   // Defaults to "provisioning" when empty.
   string enrollment_network = 21;
   // post_enrollment_network is the key into networks the device transitions to
-  // after successful enrollment. Defaults to "trusted" when empty.
+  // after successful enrollment. Defaults to "admitted" when empty.
   string post_enrollment_network = 22;
   // failure_network is the key into networks the device is placed in on
   // enrollment or attestation failure. Defaults to "quarantine" when empty.

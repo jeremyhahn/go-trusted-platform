@@ -727,7 +727,7 @@ func TestExecutePXEAuthorizeDevice_Success(t *testing.T) {
 
 	args := map[string]interface{}{
 		"device_id":   "device-abc123",
-		"target_zone": "trusted",
+		"target_zone": "control-plane",
 	}
 
 	result, err := registry.executePXEAuthorizeDevice(ctx, args)

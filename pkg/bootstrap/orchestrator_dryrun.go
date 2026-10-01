@@ -18,7 +18,6 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"gopkg.in/yaml.v3"
 )
 
@@ -99,11 +99,15 @@ type VLANPlan struct {
 	Subnet string `json:"subnet" yaml:"subnet"`
 }
 
-// PortPlan describes a port that will be configured.
+// PortPlan describes a port that will be configured: its class and what
+// the class carries on this deployment's network plan.
 type PortPlan struct {
 	Port        string `json:"port" yaml:"port"`
+	Class       string `json:"class" yaml:"class"`
 	Mode        string `json:"mode" yaml:"mode"`
 	VLANs       []int  `json:"vlans" yaml:"vlans"`
+	NativeVLAN  int    `json:"native_vlan,omitempty" yaml:"native_vlan,omitempty"`
+	MTU         int    `json:"mtu,omitempty" yaml:"mtu,omitempty"`
 	Description string `json:"description" yaml:"description"`
 }
 
@@ -143,7 +147,13 @@ func (o *Orchestrator) DryRun(ctx context.Context) (*DryRunResult, error) {
 	if o.config.Switch != nil {
 		result.SwitchConfigured = true
 		result.SwitchVendor = o.config.Switch.Vendor
-		result.SwitchPlan = o.buildSwitchPlan()
+		switchPlan, err := o.buildSwitchPlan()
+		if err != nil {
+			result.Errors = append(result.Errors, err.Error())
+			result.Duration = time.Since(start)
+			return result, err
+		}
+		result.SwitchPlan = switchPlan
 	} else {
 		result.Warnings = append(result.Warnings,
 			"switch management is optional, not configured")
@@ -181,36 +191,44 @@ func (o *Orchestrator) DryRun(ctx context.Context) (*DryRunResult, error) {
 	return result, nil
 }
 
-// buildSwitchPlan creates a SwitchPlan from the switch configuration. VLANs
-// are sorted by ID for deterministic output.
-func (o *Orchestrator) buildSwitchPlan() *SwitchPlan {
+// buildSwitchPlan reports what the switch phase would program: the same
+// switchmgmt configuration configureSwitch applies, derived from the network
+// plan, with each port's class alongside. VLANs are sorted by ID.
+func (o *Orchestrator) buildSwitchPlan() (*SwitchPlan, error) {
 	if o.config.Switch == nil {
-		return nil
+		return nil, nil
 	}
-	plan := &SwitchPlan{
+	plan, err := o.config.NetworkPlan()
+	if err != nil {
+		return nil, err
+	}
+	swConfig, err := buildSwitchConfig(o.config.Switch, plan)
+	if err != nil {
+		return nil, err
+	}
+	out := &SwitchPlan{
 		Vendor: o.config.Switch.Vendor,
 		Host:   o.config.Switch.Host,
 	}
-	for name, def := range o.config.Switch.VLANs {
-		plan.VLANs = append(plan.VLANs, VLANPlan{
-			ID:     def.VLAN,
-			Name:   name,
-			Subnet: def.Subnet,
+	for _, v := range swConfig.VLANs {
+		out.VLANs = append(out.VLANs, VLANPlan{ID: v.ID, Name: v.Name, Subnet: v.Subnet})
+	}
+	for i, p := range swConfig.Ports {
+		vlans := p.VLANs
+		if p.Mode == string(netplan.PortModeAccess) {
+			vlans = []int{p.AccessVLAN}
+		}
+		out.Ports = append(out.Ports, PortPlan{
+			Port:        p.Port,
+			Class:       string(o.config.Switch.PortAssignments[i].Class),
+			Mode:        p.Mode,
+			VLANs:       vlans,
+			NativeVLAN:  p.NativeVLAN,
+			MTU:         p.MTU,
+			Description: p.Description,
 		})
 	}
-	sort.Slice(plan.VLANs, func(i, j int) bool {
-		return plan.VLANs[i].ID < plan.VLANs[j].ID
-	})
-	for i := range o.config.Switch.PortAssignments {
-		pa := &o.config.Switch.PortAssignments[i]
-		plan.Ports = append(plan.Ports, PortPlan{
-			Port:        pa.Port,
-			Mode:        pa.Mode,
-			VLANs:       pa.VLANs,
-			Description: pa.Description,
-		})
-	}
-	return plan
+	return out, nil
 }
 
 // ResolvedNodeConfig is one node's platform config as bootstrap writes it:
@@ -782,9 +800,9 @@ func (o *Orchestrator) logExecutionPlan(result *DryRunResult) {
 	if result.SwitchConfigured {
 		vlanCount := 0
 		portCount := 0
-		if o.config.Switch != nil {
-			vlanCount = len(o.config.Switch.VLANs)
-			portCount = len(o.config.Switch.PortAssignments)
+		if result.SwitchPlan != nil {
+			vlanCount = len(result.SwitchPlan.VLANs)
+			portCount = len(result.SwitchPlan.Ports)
 		}
 		o.logger.Info("bootstrap: dry-run: execution plan",
 			slog.String("phase_1", "configure switch"),

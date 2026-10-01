@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jeremy Hahn
 // Copyright (c) 2025 Automate The Things, LLC
 //
-// This file is part of go-trusted-platform.
+// This file is part of go-control-plane-platform.
 //
-// go-trusted-platform is dual-licensed:
+// go-control-plane-platform is dual-licensed:
 //
 // 1. GNU Affero General Public License v3.0 (AGPL-3.0)
 //    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
@@ -26,26 +26,26 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
-// dualStackConfig is the #554 fixture: trusted and public are dual-stack,
+// dualStackConfig is the #554 fixture: control-plane and backup are dual-stack,
 // storage is IPv4-only, and every allowed pair carries a service scope so
 // the per-service permits are exercised in both families.
 func dualStackConfig(defaultPolicy string) (MatrixRuleConfig, map[zone.Zone]uint16) {
 	zones := []zone.ZoneConfig{
-		{Name: zone.ZoneTrusted, AllowTo: []zone.ZonePath{{Zone: zone.ZonePublic, Services: []string{"dns", "acme"}}, {Zone: zone.ZoneStorage}}},
-		{Name: zone.ZonePublic, IsolateFrom: []zone.Zone{zone.ZoneTrusted, zone.ZoneStorage}},
-		{Name: zone.ZoneStorage, IsolateFrom: []zone.Zone{zone.ZonePublic}},
+		{Name: zone.ZoneControlPlane, AllowTo: []zone.ZonePath{{Zone: zone.ZoneBackup, Services: []string{"dns", "acme"}}, {Zone: zone.ZoneStorage}}},
+		{Name: zone.ZoneBackup, IsolateFrom: []zone.Zone{zone.ZoneControlPlane, zone.ZoneStorage}},
+		{Name: zone.ZoneStorage, IsolateFrom: []zone.Zone{zone.ZoneBackup}},
 	}
 	cfg := MatrixRuleConfig{
 		Matrix: zone.CompileMatrix(zones),
 		Zones:  zones,
 		NetworksByZone: map[zone.Zone]NetworkSummary{
-			zone.ZoneTrusted: {VLAN: 100, Subnet: "10.0.100.0/24", Subnet6: "2001:db8:100::/64"},
-			zone.ZonePublic:  {VLAN: 200, Subnet: "10.0.200.0/24", Subnet6: "2001:db8:200::/64"},
-			zone.ZoneStorage: {VLAN: 203, Subnet: "10.0.203.0/24"},
+			zone.ZoneControlPlane: {VLAN: 100, Subnet: "10.0.100.0/24", Subnet6: "2001:db8:100::/64"},
+			zone.ZoneBackup:       {VLAN: 200, Subnet: "10.0.200.0/24", Subnet6: "2001:db8:200::/64"},
+			zone.ZoneStorage:      {VLAN: 203, Subnet: "10.0.203.0/24"},
 		},
 		DefaultPolicy: defaultPolicy,
 	}
-	ctZones := map[zone.Zone]uint16{zone.ZoneTrusted: 11, zone.ZonePublic: 22, zone.ZoneStorage: 33}
+	ctZones := map[zone.Zone]uint16{zone.ZoneControlPlane: 11, zone.ZoneBackup: 22, zone.ZoneStorage: 33}
 	return cfg, ctZones
 }
 
@@ -109,7 +109,7 @@ func TestCompileMatrixRules_DualStackParity(t *testing.T) {
 		"10.0.200.0/24": "2001:db8:200::/64",
 	})
 
-	// The IPv4-only storage network gets an IPv4 deny from public and no
+	// The IPv4-only storage network gets an IPv4 deny from backup and no
 	// IPv6 rule at all: nothing to name.
 	var storageRules []FlowRule
 	for _, f := range flows {
@@ -127,7 +127,7 @@ func TestCompileMatrixRules_DualStackGolden(t *testing.T) {
 	cfg, _ := dualStackConfig("deny")
 	got := CompileMatrixRules(cfg)
 
-	// public → trusted is denied in both families; the IPv6 twin follows
+	// backup → control-plane is denied in both families; the IPv6 twin follows
 	// its IPv4 rule immediately.
 	want := []FlowRule{
 		{Table: 0, Priority: 200, Match: "dl_vlan=200,dl_type=0x0800,nw_dst=10.0.100.0/24", Actions: "drop"},
@@ -136,7 +136,7 @@ func TestCompileMatrixRules_DualStackGolden(t *testing.T) {
 	for _, w := range want {
 		assert.Contains(t, got, w)
 	}
-	// trusted → public dns permits exist per family and per port.
+	// control-plane → backup dns permits exist per family and per port.
 	assert.Contains(t, got, FlowRule{Table: 0, Priority: 100, Match: "dl_vlan=100,dl_type=0x0800,nw_proto=17,nw_dst=10.0.200.0/24,tp_dst=53", Actions: "normal"})
 	assert.Contains(t, got, FlowRule{Table: 0, Priority: 100, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=17,ipv6_dst=2001:db8:200::/64,tp_dst=53", Actions: "normal"})
 	assert.Contains(t, got, FlowRule{Table: 0, Priority: 100, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=6,ipv6_dst=2001:db8:200::/64,tp_dst=443", Actions: "normal"})
@@ -154,7 +154,7 @@ func TestCompileStatefulMatrixRules_DualStack(t *testing.T) {
 	assert.Contains(t, flows, FlowRule{Table: 20, Priority: 100, Match: "dl_vlan=100,dl_type=0x86dd", Actions: "ct(table=21,zone=11)"})
 	// Neighbor discovery bypasses conntrack ahead of the gate.
 	assert.Contains(t, flows, FlowRule{Table: 20, Priority: 200, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=58,icmp_type=135", Actions: "goto_table:30"})
-	// A new IPv6 connection public → trusted is denied; trusted → public is committed.
+	// A new IPv6 connection backup → control-plane is denied; control-plane → backup is committed.
 	assert.Contains(t, flows, FlowRule{Table: 21, Priority: 200, Match: "ct_state=+new+trk,dl_vlan=200,dl_type=0x86dd,ipv6_dst=2001:db8:100::/64", Actions: "drop"})
 	assert.Contains(t, flows, FlowRule{Table: 21, Priority: 100, Match: "ct_state=+new+trk,dl_vlan=100,dl_type=0x86dd,ipv6_dst=2001:db8:200::/64", Actions: "ct(commit,zone=11),goto_table:30"})
 	// Nothing addresses the IPv4-only storage network by an IPv6 prefix,
@@ -169,18 +169,17 @@ func TestCompileStatefulMatrixRules_DualStack(t *testing.T) {
 		}
 	}
 	assert.Zero(t, toStorage6)
-	assert.Equal(t, 2, fromStorage6, "storage → trusted and storage → public IPv6 verdicts")
+	assert.Equal(t, 2, fromStorage6, "storage → control-plane and storage → backup IPv6 verdicts")
 }
 
 func TestTemplates_DualStackParity(t *testing.T) {
 	gs := NewGeneratorSet(ZoneFlowConfig{
 		Provisioning: ProvisioningConfig{AllowICMP: true},
-		Public:       PublicConfig{TrustedSubnet: "10.0.100.0/24", TrustedSubnet6: "2001:db8:100::/64"},
 	})
 	subnets := map[string]string{"10.0.100.0/24": "2001:db8:100::/64"}
-	for _, z := range []zone.Zone{zone.ZoneQuarantine, zone.ZoneProvisioning, zone.ZonePublic} {
+	for _, z := range []zone.Zone{zone.ZoneQuarantine, zone.ZoneProvisioning} {
 		t.Run(string(z), func(t *testing.T) {
-			flows := gs.Generate("p1", z, 201)
+			flows := gs.Generate("p1", z, Tagged(201))
 			assertFamilyParity(t, flows, subnets)
 		})
 	}
@@ -189,7 +188,7 @@ func TestTemplates_DualStackParity(t *testing.T) {
 func TestTemplates_NeighborDiscoveryPairsWithARP(t *testing.T) {
 	gs := NewGeneratorSet(ZoneFlowConfig{})
 	for _, z := range []zone.Zone{zone.ZoneQuarantine, zone.ZoneProvisioning} {
-		flows := gs.Generate("p1", z, 201)
+		flows := gs.Generate("p1", z, Tagged(201))
 		var arpPrio int
 		nd := 0
 		for _, f := range flows {
@@ -221,32 +220,23 @@ func TestTemplates_ServerAddressesFollowTheirFamily(t *testing.T) {
 			ACMEServerIPs: []net.IP{net.ParseIP("2001:db8::ac")},
 		},
 	})
-	q := gs.Generate("p1", zone.ZoneQuarantine, 202)
+	q := gs.Generate("p1", zone.ZoneQuarantine, Tagged(202))
 	assert.Contains(t, q, FlowRule{Table: 0, Priority: prioDNS, Match: "in_port=p1,dl_vlan=202,dl_type=0x86dd,nw_proto=17,ipv6_dst=2001:db8::53,tp_dst=53", Actions: "normal"})
 	assert.Contains(t, q, FlowRule{Table: 0, Priority: prioRemediation, Match: "in_port=p1,dl_vlan=202,dl_type=0x0800,nw_proto=6,nw_dst=10.0.9.9,tp_dst=443", Actions: "normal"})
 	assert.Contains(t, q, FlowRule{Table: 0, Priority: prioRemediation, Match: "in_port=p1,dl_vlan=202,dl_type=0x86dd,nw_proto=6,ipv6_dst=2001:db8::9,tp_dst=443", Actions: "normal"})
 	for _, f := range q {
 		assert.False(t, strings.Contains(f.Match, "nw_dst=2001"), "an IPv6 address must never be rendered as nw_dst: %q", f.Match)
 	}
-	p := gs.Generate("p1", zone.ZoneProvisioning, 201)
+	p := gs.Generate("p1", zone.ZoneProvisioning, Tagged(201))
 	assert.Contains(t, p, FlowRule{Table: 0, Priority: prioACME, Match: "in_port=p1,dl_vlan=201,dl_type=0x86dd,nw_proto=6,ipv6_dst=2001:db8::ac,tp_dst=443", Actions: "normal"})
 }
 
-func TestPublic_TrustedSubnet6Deny(t *testing.T) {
-	gs := NewGeneratorSet(ZoneFlowConfig{Public: PublicConfig{TrustedSubnet6: "2001:db8:100::/64"}})
-	flows := gs.Generate("p1", zone.ZonePublic, 1000)
-	assert.Contains(t, flows, FlowRule{Table: 0, Priority: prioPublicDeny, Match: "dl_vlan=1000,dl_type=0x86dd,ipv6_dst=2001:db8:100::/64", Actions: "drop"})
-	for _, f := range flows {
-		assert.NotContains(t, f.Match, "dl_type=0x0800,nw_dst=", "no IPv4 deny without an IPv4 trusted subnet")
-	}
-}
-
 func TestNewNetworkSummary(t *testing.T) {
-	v4 := netip.MustParsePrefix("198.18.0.0/24")
+	v4 := netip.MustParsePrefix("10.4.6.0/24")
 	v6 := netip.MustParsePrefix("2602:f5bb:1::/64")
 
 	s := NewNetworkSummary(200, v4, v6)
-	assert.Equal(t, NetworkSummary{VLAN: 200, Subnet: "198.18.0.0/24", Subnet6: "2602:f5bb:1::/64"}, s)
+	assert.Equal(t, NetworkSummary{VLAN: 200, Subnet: "10.4.6.0/24", Subnet6: "2602:f5bb:1::/64"}, s)
 
 	// An IPv6 prefix in the legacy single field is filed as IPv6.
 	s = NewNetworkSummary(200, v6)
@@ -254,7 +244,7 @@ func TestNewNetworkSummary(t *testing.T) {
 
 	// Invalid prefixes are ignored.
 	s = NewNetworkSummary(200, netip.Prefix{}, v4)
-	assert.Equal(t, NetworkSummary{VLAN: 200, Subnet: "198.18.0.0/24"}, s)
+	assert.Equal(t, NetworkSummary{VLAN: 200, Subnet: "10.4.6.0/24"}, s)
 
 	// IPv4-mapped IPv6 is IPv4.
 	s = NewNetworkSummary(200, netip.MustParsePrefix("::ffff:10.0.0.0/120"))

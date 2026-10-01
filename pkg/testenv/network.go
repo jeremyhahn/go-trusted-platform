@@ -144,8 +144,9 @@ const (
 	// NetworkPhaseProvisioning indicates limited access for enrollment
 	NetworkPhaseProvisioning
 
-	// NetworkPhaseTrusted indicates full trusted-zone access (post-enrollment operational)
-	NetworkPhaseTrusted
+	// NetworkPhaseAdmitted indicates full access for an admitted device
+	// (post-enrollment operational)
+	NetworkPhaseAdmitted
 
 	// NetworkPhaseQuarantine indicates isolated access for remediation
 	NetworkPhaseQuarantine
@@ -161,8 +162,8 @@ func (p NetworkPhase) String() string {
 		return "unconnected"
 	case NetworkPhaseProvisioning:
 		return "provisioning"
-	case NetworkPhaseTrusted:
-		return "trusted"
+	case NetworkPhaseAdmitted:
+		return "admitted"
 	case NetworkPhaseQuarantine:
 		return "quarantine"
 	case NetworkPhaseBlocked:
@@ -208,13 +209,13 @@ type IsolatedNetwork interface {
 	// GetPhase returns the current phase for a port
 	GetPhase(portID string) NetworkPhase
 
-	// TransitionToTrusted moves a port from provisioning to the trusted zone
-	TransitionToTrusted(portID string, cert *x509.Certificate) error
+	// TransitionToAdmitted moves a port from provisioning to the admitted phase
+	TransitionToAdmitted(portID string, cert *x509.Certificate) error
 
 	// QuarantinePort moves a port to quarantine VLAN
 	QuarantinePort(portID string, reason string) error
 
-	// UnquarantinePort moves a port back to the trusted zone
+	// UnquarantinePort moves a port back to the admitted phase
 	UnquarantinePort(portID string) error
 
 	// BlockPort completely blocks a port (DROP all traffic)

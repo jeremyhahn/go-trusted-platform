@@ -101,17 +101,63 @@ network:
     upstream-servers:
       - 10.4.6.10:9053
     local-domain: example.internal
-  interfaces:
-    - name: eno1
-      type: static
-      ipv4-address: 10.4.6.2/24
-      ipv4-gateway: 10.4.6.1
-      auto-start: true
+  # Host addressing by role (reference network, "Host addressing"): a
+  # gateway routes and NATs by role, so it is exempt from the forwarding
+  # and addressing rules. It holds node address .2 on every zone it routes
+  # (transit, fabric, quarantine, provisioning, control-plane, backup) and
+  # answers for the zones' gateway address .1 until a second gateway makes
+  # .1 a VRRP address. Its platform-VRF address lives in a Linux VRF.
+  role: gateway
+  ip-forward: true
+  platform-vrf:
+    address: 10.4.144.2/32
   bridges:
-    - name: trusted0
-      members:
+    # br-fabric carries the physical trunk. The host's zone addresses are
+    # OVS internal ports on it; the VLANs it only passes through to guests
+    # get no host address.
+    - name: br-fabric
+      type: ovs
+      interfaces:
+        - bond0
+      stp: false
+      auto-start: true
+  bonds:
+    - name: bond0
+      # OVS bond, created at runtime by platformd over native OVSDB (no
+      # kernel bonding driver). The members are brought up as raw
+      # interfaces so ovs-vswitchd can claim them.
+      type: ovs
+      bridge: br-fabric
+      # OVS port bond_mode: balance-tcp with active LACP hashes on L4.
+      mode: balance-tcp
+      lacp: active
+      interfaces:
         - ens2f0
-  bonds: []
+        - ens2f1
+      # Port class gateway (reference switch port model): the switch trunk
+      # carries 400, 401, 404-406 and 408, tagged only, MTU 9216.
+      vlans:
+        - zone: transit
+          ipv4-address: 10.4.0.2/24
+          auto-start: true
+        - zone: fabric
+          ipv4-address: 10.4.1.2/24
+          auto-start: true
+        - zone: quarantine
+          ipv4-address: 10.4.4.2/24
+          auto-start: true
+        - zone: provisioning
+          ipv4-address: 192.0.2.2/24
+          auto-start: true
+        - zone: control-plane
+          ipv4-address: 10.4.6.2/24
+          auto-start: true
+        - zone: backup
+          ipv4-address: 10.4.8.2/24
+          auto-start: true
+      auto-start: true
+  # The onboard 1G ports (eno1, eno2) are the WAN uplinks; gatewayd owns
+  # their addresses, so the installer leaves them unconfigured here.
   vlans: []
   wait-online: true
   wait-timeout: 30
@@ -282,7 +328,7 @@ trust:
 # =============================================================================
 
 bmc:
-  address: 10.4.2.2
+  address: 10.4.2.22  # management (VLAN 402) carries BMCs only
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -308,9 +354,35 @@ quicbaas:
 sdn:
   enabled: true
   controller: false
+  # The environment numbers every zone (docs/architecture/reference-network.md):
+  # the zone at offset n is VLAN E*100+n with IPv4 10.E.n.0/24 and IPv6
+  # <ula>:<VLAN digits>::/64, and overlay network n is VNI E*100000+n.
+  # Block 4 is the reference example. A non-reference site overrides single
+  # zones under `overrides:` (vlan, subnet, subnet6) instead of renumbering.
+  environment:
+    id: 4
+    base: 10.0.0.0/8
+    # The deployment's RFC 4193 ULA /48. Generate your own random global
+    # ID; this one is the reference document's example.
+    ula: fd12:3456:789a::/48
+  # zones: the built-in zones (transit, fabric, management, hypervisor,
+  # quarantine, provisioning, control-plane, storage, backup) need no entry.
+  # An entry tunes a built-in's policy or declares an owner-defined zone at
+  # an offset from 09 to 99, for example:
+  #   zones:
+  #     - name: lab
+  #       offset: 9
+  #       port_classes: [hypervisor]
+  #       isolate: true
+  #       allow_to: [{zone: storage, services: [storage]}]
+  # A path into control-plane or management beyond the reference defaults
+  # also needs privileged_access: {reason: ..., approved_by: ...}, which is
+  # logged as an audit record whenever the configuration loads.
   ovs:
     socket: /var/run/openvswitch/db.sock
-    bridge: trusted0
+    # br-fabric carries the physical trunk and the host's zone addresses.
+    # Workload ports live on br-int, which never carries the trunk.
+    bridge: br-fabric
     datapath: system
     protocols:
       - OpenFlow13
@@ -320,24 +392,6 @@ sdn:
     pools: []
   dhcp:
     enabled: false
-    interface: trusted0
-  networks:
-    # `zone: trusted` is the zone name today's code accepts for the
-    # control-plane network (VLAN 406); the zone vocabulary moves with #708.
-    - name: control-plane
-      vlan: 406
-      zone: trusted
-      pool: control-plane
-    # dmz-public is an overlay in the reference design (EVPN/VXLAN in the
-    # IPAM pool 10.4.128.0/17, not a switch VLAN). sdn.networks cannot express
-    # an overlay yet, so it keeps VLAN 409
-    # (interim: until the overlay service lands, not a design VLAN).
-    # Proposal: it becomes an EVPN overlay (VNI 400001) once the overlay
-    # service lands.
-    - name: dmz-public
-      vlan: 409
-      zone: public
-      pool: dmz-public
   overlay:
     enabled: true
     vxlan-port: 4789
@@ -517,21 +571,25 @@ gateway:
   enabled: true
   id: gateway-standalone
   node-id: 1
-  modes:
-    - transit
   tier: datacenter
   min-reputation: 0.85
   min-age-days: 175
   min-uptime-pct: 95.0
-  anycast-ip: "10.0.0.1"
+  # The control-plane zone's gateway address (.1); a second gateway (#596)
+  # makes it a VRRP address shared by the pair.
+  anycast-ip: "10.4.6.1"
   ipv6-pool: ""
   ipv4-pool: ""
+  # The onboard 1G WAN ports, one per ISP. The 10G ports are the bonded data
+  # trunk on br-fabric (network.bonds).
   uplinks:
     - name: eno1
-      vlan: 0
-  edge-config:
+      mtu: 1500
+    - name: eno2
+      mtu: 1500
+  edge:
     enabled: false
-  nat-config:
+  nat:
     enabled: false
   load-balancer:
     enabled: true

@@ -216,7 +216,7 @@ POST /api/v1/device/activate  (mTLS, serial from client cert)
    │    policy application admits no traffic
    └─ commitSwitchTransition(...)  ⇒ pkg/switch Manager.SetPortVLAN → docs/switch/
         COMMIT the physical port strictly AFTER enforcement — the
-        trusted VLAN opens only onto an enforced datapath; every VLAN
+        admitted VLAN opens only onto an enforced datapath; every VLAN
         comes from the plan's snapshot, value copies taken at precheck,
         immune to later in-place mutation (the pre-move VLAN is read
         for logging and the already-on-trusted WARN only); a failed
@@ -235,7 +235,7 @@ interval exists. The hook's typed errors map to HTTP statuses — no pending
 activation and a still-unregistered port return 404 at the precheck, with
 nothing changed anywhere (the client retries after attaching to the
 fabric); a plan carrying a zone mismatch means quarantine — the physical
-port is never moved to the trusted VLAN and the response reports
+port is never moved to the admitted VLAN and the response reports
 `"status":"quarantined"`; a superseded plan is a 500 with the switch never
 touched (the device re-enrolled mid-request; a retry prechecks the current
 record); an SDN failure is a 500 with the switch never touched; a failed
@@ -246,7 +246,7 @@ activation without re-enrolling; any other failure is a 500, never
 swallowed. A quarantine policy always carries the quarantine VLAN —
 the profile's failure-network VLAN, or its provisioning VLAN when no
 failure network is declared — and none of the production ACLs; a quarantine
-that would share the trusted VLAN is a contradiction and a profile with
+that would share the admitted VLAN is a contradiction and a profile with
 neither VLAN cannot be quarantined, so both fail activation closed (500) at
 the precheck. The engine refuses a quarantine-zone policy outright when it
 has no zone flow manager (`ErrZoneEnforcementUnavailable`): the VLAN-direct
@@ -269,9 +269,9 @@ command sequences are not atomic, so a failed `SetPortVLAN` may still have
 changed the VLAN. Fail-closed has exactly one meaning here — the
 **provisioning VLAN** (`profile.provisioningNetwork.vlan`; a profile
 without one refuses the physical move outright, and a profile whose
-provisioning and trusted VLANs are equal is rejected at create/update on
+provisioning and admitted VLANs are equal is rejected at create/update on
 every transport — HTTP 400 — and refused at activation — HTTP 500 —
-because "closed" would otherwise mean "on the trusted VLAN"). On any switch
+because "closed" would otherwise mean "on the admitted VLAN"). On any switch
 failure —
 during the move or during a post-failure revert — the handler moves the
 port to the provisioning VLAN and then **verifies by reading the port's
@@ -280,8 +280,8 @@ transition error (HTTP 500, port confirmed closed) stand. If the revert or
 the read-back fails, or the read-back shows any other VLAN, the response is
 HTTP 500 with `ErrSwitchPortIndeterminate` — "physical port state
 INDETERMINATE — operator action required" — logged at ERROR, because the
-port may remain open on the trusted VLAN. A pre-move read that finds the
-port already on the trusted VLAN is logged at WARN: the port state machine
+port may remain open on the admitted VLAN. A pre-move read that finds the
+port already on the admitted VLAN is logged at WARN: the port state machine
 and switch reality diverged.
 
 Activations are serialized per device serial by the hook's own lock
@@ -295,12 +295,12 @@ activate a pending-activation version it did not validate.
 
 Two details the legacy documentation had wrong and that matter operationally:
 
-- The response field is **`trustedNetwork`**, not `production_network`. There
+- The response field is **`admittedNetwork`**, not `production_network`. There
   are no `ProvisioningNetwork` / `ProductionNetwork` / `QuarantineNetwork`
   fields on `DeviceProfile`. The entity carries a
   `Networks map[string]*NetworkPhaseConfig` plus three name pointers —
   `EnrollmentNetwork` (default `"provisioning"`), `PostEnrollmentNetwork`
-  (default `"trusted"`) and `FailureNetwork` (default `"quarantine"`).
+  (default `"admitted"`) and `FailureNetwork` (default `"quarantine"`).
 - The switch name and port used by `prepareSwitchTransition` are read from the
   **request context**, not from the profile. `Device.SwitchName` and
   `Device.SwitchPort` exist on the device entity, but the activation handler

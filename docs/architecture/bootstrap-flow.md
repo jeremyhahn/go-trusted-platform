@@ -87,7 +87,8 @@ into a single binary without revisiting this tradeoff explicitly.
 │                                                     │
 │   platformd (server) + gatewayd                     │
 │   ├── eth0  (DHCP from upstream ISP/router)         │
-│   └── trusted0 (OVS bridge for local VMs/pods)      │
+│   ├── br-fabric (OVS: every zone, host-local)       │
+│   └── br-int    (OVS: VMs and pods)                 │
 │                                                     │
 │   systemd target: trusted-platform.target           │
 │     ├── platformd.service                           │

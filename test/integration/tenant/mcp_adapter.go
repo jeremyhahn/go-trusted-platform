@@ -424,51 +424,6 @@ func (a *MCPAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*C
 // Network Operations
 // =============================================================================
 
-// ValidateVLAN validates a VLAN ID for a tenant
-func (a *MCPAdapter) ValidateVLAN(ctx context.Context, opts ValidateVLANOptions) (*ValidateVLANResult, error) {
-	result, err := a.callTool(ctx, "tenant_vlan_validate", opts)
-	if err != nil {
-		return &ValidateVLANResult{
-			TenantID: opts.TenantID,
-			VLANID:   opts.VLANID,
-			Valid:    false,
-			Message:  err.Error(),
-		}, nil
-	}
-
-	var vlanResult ValidateVLANResult
-	if err := json.Unmarshal(result, &vlanResult); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "ValidateVLAN",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &vlanResult, nil
-}
-
-// GetBridgeName retrieves the OVS bridge name for a tenant
-func (a *MCPAdapter) GetBridgeName(ctx context.Context, opts GetBridgeNameOptions) (*GetBridgeNameResult, error) {
-	result, err := a.callTool(ctx, "tenant_bridge_get", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var bridgeResult GetBridgeNameResult
-	if err := json.Unmarshal(result, &bridgeResult); err != nil {
-		return nil, ErrMCPRequestFailed{
-			Operation: "GetBridgeName",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &bridgeResult, nil
-}
-
-// =============================================================================
-// Sync Operations
-// =============================================================================
-
 // SyncTenants synchronizes tenant manager state
 func (a *MCPAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, error) {
 	_, err := a.callTool(ctx, "tenant_sync", nil)

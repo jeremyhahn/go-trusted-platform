@@ -206,7 +206,7 @@ func (e ErrSwitchVLANTransitionFailed) Unwrap() error {
 // ErrSwitchPortIndeterminate indicates the physical switch port's state
 // could not be proven closed after a failed VLAN operation: the read-back
 // verification failed, or the read-back showed a VLAN other than the
-// profile's provisioning VLAN. The port may remain on the trusted VLAN —
+// profile's provisioning VLAN. The port may remain on the admitted VLAN —
 // operator action is required.
 type ErrSwitchPortIndeterminate struct {
 	SwitchName string

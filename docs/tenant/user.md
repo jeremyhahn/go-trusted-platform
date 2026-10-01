@@ -8,22 +8,23 @@
 
 ## What a tenant is here
 
-Not an account. A tenant on this platform is **four allocations plus a quota**:
+Not an account. A tenant on this platform is **a keyspace and a key plus a
+quota**:
 
 | Piece | What it isolates |
 |---|---|
-| A **VLAN** | Layer 2 traffic |
-| A **bridge** | The tenant's ports |
 | A **keyspace** | The tenant's data in the store |
 | A **DEK** | The tenant's data at rest |
 | A **quota** | How much the tenant may consume |
 
-That is why creating a tenant can fail in four different ways, and why the
-errors name which allocation failed.
+**A tenant has no VLAN range and no OVS bridge.** Both were retired with the
+reference network (#708): tenant networks are EVPN/VXLAN overlays, and a
+tenant's routing domain becomes a VRF in a later release. Until then, creating
+a tenant allocates no network resource and does not separate its traffic.
 
 **Users, groups and roles are a different thing.** IAM has its own tenant
 scoping under `/api/v1/iam/tenants/...`. Creating something there does not
-allocate a VLAN or a DEK. If you want a platform tenant, use
+create a DEK or a quota. If you want a platform tenant, use
 `platformctl tenant create`.
 
 ---
@@ -32,10 +33,8 @@ allocate a VLAN or a DEK. If you want a platform tenant, use
 
 1. A running control plane with the tenant service enabled — otherwise every
    call returns 503.
-2. **A VLAN range configured** for tenant allocation. Outside it, allocation is
-   refused with an invalid-range error rather than colliding.
-3. SDN configured, since a tenant gets a real bridge on a real datapath
-   ([`docs/sdn/`](../sdn/)).
+2. When DEK isolation is on (the default), a DEK client to the quicbaas DEK
+   service: the tenant manager refuses to start without one.
 
 ---
 
@@ -47,11 +46,9 @@ platformctl tenant list
 platformctl tenant show tenant-a
 ```
 
-Confirm all four allocations landed:
+Confirm it landed:
 
 ```bash
-platformctl tenant vlan tenant-a       # the VLAN
-platformctl tenant bridge tenant-a     # the bridge
 platformctl tenant usage tenant-a      # quota accounting
 # DEK status is API-only: GET /api/v1/tenants/{id}/dek
 ```
@@ -70,11 +67,13 @@ created ──> active ──> suspended
               └──> deleting ──> deleted
 ```
 
-- **Suspend and resume are reversible.** Use suspension for anything you might
+- **Suspend and resume are reversible.** Suspension blocks resource
+  operations; it does not cut the tenant's traffic, which has no network
+  enforcement until tenant VRFs land. Use suspension for anything you might
   undo — non-payment, an investigation, a maintenance freeze.
 - **`deleting` cannot be cancelled**, and **`deleted` is terminal**. No
   transition leaves it. A deleted tenant is not restored; a new one is created,
-  with a new VLAN, bridge, keyspace and DEK.
+  with a new keyspace and DEK.
 - **Repeating an operation is safe.** Suspending an already-suspended tenant
   succeeds rather than erroring, so retries and reconciliation loops behave.
 
@@ -154,14 +153,9 @@ why rotation is fast and why it does not need a maintenance window.
 
 ## Troubleshooting
 
-**Tenant creation fails and names the VLAN.**
-Either the configured VLAN range is exhausted, or the range itself is invalid.
-Range validity is checked before allocation, so the two errors are distinct.
-
-**Tenant creation fails and names the bridge or the DEK.**
-One of the four allocations did not complete. The tenant is partially
-constructed; check `vlan`, `bridge` and DEK status to see how far it got before
-retrying.
+**Tenant creation fails and names the DEK.**
+The DEK could not be created. Creation rolls back the tenant's IAM record, so
+nothing is left half-built; fix the DEK service and retry.
 
 **An operation returns a conflict on a tenant that looks fine.**
 The tenant is in a state that does not permit it — `deleting` accepts nothing

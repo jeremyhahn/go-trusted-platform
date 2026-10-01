@@ -5235,39 +5235,103 @@ func (x *NetworkZonePath) GetServices() []string {
 	return nil
 }
 
-// NetworkZoneConfig mirrors pkg/sdn/zone.ZoneConfig 1:1. It is the declarative
-// schema for a single network trust/exposure zone.
+// NetworkZonePrivilegedAccess is the audited override a zone must carry when
+// its allow_to opens a path into control-plane or management beyond the
+// reference defaults.
+type NetworkZonePrivilegedAccess struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// reason states why the path is needed.
+	Reason string `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	// approved_by names who approved the path.
+	ApprovedBy    string `protobuf:"bytes,2,opt,name=approved_by,json=approvedBy,proto3" json:"approved_by,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NetworkZonePrivilegedAccess) Reset() {
+	*x = NetworkZonePrivilegedAccess{}
+	mi := &file_sdn_proto_msgTypes[72]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkZonePrivilegedAccess) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkZonePrivilegedAccess) ProtoMessage() {}
+
+func (x *NetworkZonePrivilegedAccess) ProtoReflect() protoreflect.Message {
+	mi := &file_sdn_proto_msgTypes[72]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkZonePrivilegedAccess.ProtoReflect.Descriptor instead.
+func (*NetworkZonePrivilegedAccess) Descriptor() ([]byte, []int) {
+	return file_sdn_proto_rawDescGZIP(), []int{72}
+}
+
+func (x *NetworkZonePrivilegedAccess) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *NetworkZonePrivilegedAccess) GetApprovedBy() string {
+	if x != nil {
+		return x.ApprovedBy
+	}
+	return ""
+}
+
+// NetworkZoneConfig mirrors pkg/sdn/zone.ZoneConfig 1:1.
 type NetworkZoneConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name is the unique zone identifier (lowercase DNS-label string).
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// internet_ingress indicates this zone accepts inbound internet traffic.
 	InternetIngress bool `protobuf:"varint,2,opt,name=internet_ingress,json=internetIngress,proto3" json:"internet_ingress,omitempty"`
-	// isolate_from lists zones from which this zone unconditionally denies traffic.
+	// isolate_from lists zones to which this zone unconditionally denies traffic.
 	IsolateFrom []string `protobuf:"bytes,3,rep,name=isolate_from,json=isolateFrom,proto3" json:"isolate_from,omitempty"`
 	// allow_to declares directed traffic paths from this zone to other zones.
 	AllowTo []*NetworkZonePath `protobuf:"bytes,4,rep,name=allow_to,json=allowTo,proto3" json:"allow_to,omitempty"`
 	// services lists services permitted within this zone.
 	Services []string `protobuf:"bytes,5,rep,name=services,proto3" json:"services,omitempty"`
-	// isolate, when true, denies all inter-zone traffic except explicit allow_to paths.
+	// isolate, when true, denies all traffic except explicit allow_to paths.
 	Isolate bool `protobuf:"varint,6,opt,name=isolate,proto3" json:"isolate,omitempty"`
-	// isolate_per_tenant enforces per-tenant micro-zone isolation within this zone.
-	IsolatePerTenant bool `protobuf:"varint,7,opt,name=isolate_per_tenant,json=isolatePerTenant,proto3" json:"isolate_per_tenant,omitempty"`
-	// oob marks this zone as out-of-band hardware management (IPMI/BMC).
+	// oob marks the out-of-band hardware management zone (BMC/IPMI).
 	Oob bool `protobuf:"varint,8,opt,name=oob,proto3" json:"oob,omitempty"`
 	// lifecycle_role indicates the device-lifecycle function:
-	// "" (none) | "provisioning" | "quarantine".
+	// "" (none) | "provisioning" | "quarantine". Built-in zones only.
 	LifecycleRole string `protobuf:"bytes,9,opt,name=lifecycle_role,json=lifecycleRole,proto3" json:"lifecycle_role,omitempty"`
-	// omit, when true on a user entry whose name matches a built-in, drops the
-	// built-in from the resolved set.
-	Omit          bool `protobuf:"varint,10,opt,name=omit,proto3" json:"omit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// omit, when true on an entry whose name matches an optional built-in,
+	// drops the built-in from the resolved set.
+	Omit bool `protobuf:"varint,10,opt,name=omit,proto3" json:"omit,omitempty"`
+	// offset is the zone's position in the environment block: 0-8 for the
+	// built-ins (fixed), 9-99 for owner-defined zones.
+	Offset uint32 `protobuf:"varint,11,opt,name=offset,proto3" json:"offset,omitempty"`
+	// port_classes lists the switch port classes that carry the zone
+	// (gateway, hypervisor, bmc, mgmt-uplink, peer-link). Fixed for built-ins;
+	// owner-defined zones choose from gateway and hypervisor.
+	PortClasses []string `protobuf:"bytes,12,rep,name=port_classes,json=portClasses,proto3" json:"port_classes,omitempty"`
+	// privileged_access is the audited override for paths into control-plane
+	// or management beyond the reference defaults.
+	PrivilegedAccess *NetworkZonePrivilegedAccess `protobuf:"bytes,13,opt,name=privileged_access,json=privilegedAccess,proto3" json:"privileged_access,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *NetworkZoneConfig) Reset() {
 	*x = NetworkZoneConfig{}
-	mi := &file_sdn_proto_msgTypes[72]
+	mi := &file_sdn_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5279,7 +5343,7 @@ func (x *NetworkZoneConfig) String() string {
 func (*NetworkZoneConfig) ProtoMessage() {}
 
 func (x *NetworkZoneConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[72]
+	mi := &file_sdn_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5292,7 +5356,7 @@ func (x *NetworkZoneConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkZoneConfig.ProtoReflect.Descriptor instead.
 func (*NetworkZoneConfig) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{72}
+	return file_sdn_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *NetworkZoneConfig) GetName() string {
@@ -5337,13 +5401,6 @@ func (x *NetworkZoneConfig) GetIsolate() bool {
 	return false
 }
 
-func (x *NetworkZoneConfig) GetIsolatePerTenant() bool {
-	if x != nil {
-		return x.IsolatePerTenant
-	}
-	return false
-}
-
 func (x *NetworkZoneConfig) GetOob() bool {
 	if x != nil {
 		return x.Oob
@@ -5365,23 +5422,120 @@ func (x *NetworkZoneConfig) GetOmit() bool {
 	return false
 }
 
+func (x *NetworkZoneConfig) GetOffset() uint32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *NetworkZoneConfig) GetPortClasses() []string {
+	if x != nil {
+		return x.PortClasses
+	}
+	return nil
+}
+
+func (x *NetworkZoneConfig) GetPrivilegedAccess() *NetworkZonePrivilegedAccess {
+	if x != nil {
+		return x.PrivilegedAccess
+	}
+	return nil
+}
+
+// NetworkZoneNumbering is a zone's numbering derived by the network plan
+// from the node's environment.
+type NetworkZoneNumbering struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// vlan is the zone's VLAN ID.
+	Vlan uint32 `protobuf:"varint,1,opt,name=vlan,proto3" json:"vlan,omitempty"`
+	// subnet4 is the zone's IPv4 subnet in CIDR notation.
+	Subnet4 string `protobuf:"bytes,2,opt,name=subnet4,proto3" json:"subnet4,omitempty"`
+	// subnet6 is the zone's IPv6 /64; empty when the environment has no ULA.
+	Subnet6 string `protobuf:"bytes,3,opt,name=subnet6,proto3" json:"subnet6,omitempty"`
+	// gateway is the zone's gateway address (.1).
+	Gateway       string `protobuf:"bytes,4,opt,name=gateway,proto3" json:"gateway,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NetworkZoneNumbering) Reset() {
+	*x = NetworkZoneNumbering{}
+	mi := &file_sdn_proto_msgTypes[74]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkZoneNumbering) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkZoneNumbering) ProtoMessage() {}
+
+func (x *NetworkZoneNumbering) ProtoReflect() protoreflect.Message {
+	mi := &file_sdn_proto_msgTypes[74]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkZoneNumbering.ProtoReflect.Descriptor instead.
+func (*NetworkZoneNumbering) Descriptor() ([]byte, []int) {
+	return file_sdn_proto_rawDescGZIP(), []int{74}
+}
+
+func (x *NetworkZoneNumbering) GetVlan() uint32 {
+	if x != nil {
+		return x.Vlan
+	}
+	return 0
+}
+
+func (x *NetworkZoneNumbering) GetSubnet4() string {
+	if x != nil {
+		return x.Subnet4
+	}
+	return ""
+}
+
+func (x *NetworkZoneNumbering) GetSubnet6() string {
+	if x != nil {
+		return x.Subnet6
+	}
+	return ""
+}
+
+func (x *NetworkZoneNumbering) GetGateway() string {
+	if x != nil {
+		return x.Gateway
+	}
+	return ""
+}
+
 // NetworkZone is a runtime zone record returned by the service layer.
-// It wraps NetworkZoneConfig with created/updated timestamps.
 type NetworkZone struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Config    *NetworkZoneConfig     `protobuf:"bytes,1,opt,name=config,proto3" json:"config,omitempty"`
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// restart_required is true when a flow-policy-relevant field was mutated
-	// and the flow matrix needs recompilation via daemon restart.
+	// restart_required is true when the zone set changed: the network plan
+	// and flow matrix are derived at daemon startup.
 	RestartRequired bool `protobuf:"varint,4,opt,name=restart_required,json=restartRequired,proto3" json:"restart_required,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// numbering is the zone's derived numbering; absent when the node has no
+	// environment.
+	Numbering     *NetworkZoneNumbering `protobuf:"bytes,5,opt,name=numbering,proto3" json:"numbering,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *NetworkZone) Reset() {
 	*x = NetworkZone{}
-	mi := &file_sdn_proto_msgTypes[73]
+	mi := &file_sdn_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5393,7 +5547,7 @@ func (x *NetworkZone) String() string {
 func (*NetworkZone) ProtoMessage() {}
 
 func (x *NetworkZone) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[73]
+	mi := &file_sdn_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5406,7 +5560,7 @@ func (x *NetworkZone) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkZone.ProtoReflect.Descriptor instead.
 func (*NetworkZone) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{73}
+	return file_sdn_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *NetworkZone) GetConfig() *NetworkZoneConfig {
@@ -5437,6 +5591,13 @@ func (x *NetworkZone) GetRestartRequired() bool {
 	return false
 }
 
+func (x *NetworkZone) GetNumbering() *NetworkZoneNumbering {
+	if x != nil {
+		return x.Numbering
+	}
+	return nil
+}
+
 // CreateNetworkZone request/response
 type CreateNetworkZoneRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -5447,7 +5608,7 @@ type CreateNetworkZoneRequest struct {
 
 func (x *CreateNetworkZoneRequest) Reset() {
 	*x = CreateNetworkZoneRequest{}
-	mi := &file_sdn_proto_msgTypes[74]
+	mi := &file_sdn_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5459,7 +5620,7 @@ func (x *CreateNetworkZoneRequest) String() string {
 func (*CreateNetworkZoneRequest) ProtoMessage() {}
 
 func (x *CreateNetworkZoneRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[74]
+	mi := &file_sdn_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5472,7 +5633,7 @@ func (x *CreateNetworkZoneRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateNetworkZoneRequest.ProtoReflect.Descriptor instead.
 func (*CreateNetworkZoneRequest) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{74}
+	return file_sdn_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *CreateNetworkZoneRequest) GetConfig() *NetworkZoneConfig {
@@ -5492,7 +5653,7 @@ type CreateNetworkZoneResponse struct {
 
 func (x *CreateNetworkZoneResponse) Reset() {
 	*x = CreateNetworkZoneResponse{}
-	mi := &file_sdn_proto_msgTypes[75]
+	mi := &file_sdn_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5504,7 +5665,7 @@ func (x *CreateNetworkZoneResponse) String() string {
 func (*CreateNetworkZoneResponse) ProtoMessage() {}
 
 func (x *CreateNetworkZoneResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[75]
+	mi := &file_sdn_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5517,7 +5678,7 @@ func (x *CreateNetworkZoneResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateNetworkZoneResponse.ProtoReflect.Descriptor instead.
 func (*CreateNetworkZoneResponse) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{75}
+	return file_sdn_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *CreateNetworkZoneResponse) GetStatus() *Status {
@@ -5546,7 +5707,7 @@ type UpdateNetworkZoneRequest struct {
 
 func (x *UpdateNetworkZoneRequest) Reset() {
 	*x = UpdateNetworkZoneRequest{}
-	mi := &file_sdn_proto_msgTypes[76]
+	mi := &file_sdn_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5558,7 +5719,7 @@ func (x *UpdateNetworkZoneRequest) String() string {
 func (*UpdateNetworkZoneRequest) ProtoMessage() {}
 
 func (x *UpdateNetworkZoneRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[76]
+	mi := &file_sdn_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5571,7 +5732,7 @@ func (x *UpdateNetworkZoneRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateNetworkZoneRequest.ProtoReflect.Descriptor instead.
 func (*UpdateNetworkZoneRequest) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{76}
+	return file_sdn_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *UpdateNetworkZoneRequest) GetName() string {
@@ -5598,7 +5759,7 @@ type UpdateNetworkZoneResponse struct {
 
 func (x *UpdateNetworkZoneResponse) Reset() {
 	*x = UpdateNetworkZoneResponse{}
-	mi := &file_sdn_proto_msgTypes[77]
+	mi := &file_sdn_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5610,7 +5771,7 @@ func (x *UpdateNetworkZoneResponse) String() string {
 func (*UpdateNetworkZoneResponse) ProtoMessage() {}
 
 func (x *UpdateNetworkZoneResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[77]
+	mi := &file_sdn_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5623,7 +5784,7 @@ func (x *UpdateNetworkZoneResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateNetworkZoneResponse.ProtoReflect.Descriptor instead.
 func (*UpdateNetworkZoneResponse) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{77}
+	return file_sdn_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *UpdateNetworkZoneResponse) GetStatus() *Status {
@@ -5651,7 +5812,7 @@ type DeleteNetworkZoneRequest struct {
 
 func (x *DeleteNetworkZoneRequest) Reset() {
 	*x = DeleteNetworkZoneRequest{}
-	mi := &file_sdn_proto_msgTypes[78]
+	mi := &file_sdn_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5663,7 +5824,7 @@ func (x *DeleteNetworkZoneRequest) String() string {
 func (*DeleteNetworkZoneRequest) ProtoMessage() {}
 
 func (x *DeleteNetworkZoneRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[78]
+	mi := &file_sdn_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5676,7 +5837,7 @@ func (x *DeleteNetworkZoneRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteNetworkZoneRequest.ProtoReflect.Descriptor instead.
 func (*DeleteNetworkZoneRequest) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{78}
+	return file_sdn_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *DeleteNetworkZoneRequest) GetName() string {
@@ -5689,8 +5850,7 @@ func (x *DeleteNetworkZoneRequest) GetName() string {
 type DeleteNetworkZoneResponse struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Status *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
-	// restart_required is true when flow-policy-relevant state was affected
-	// and the flow matrix needs recompilation via daemon restart.
+	// restart_required is true when the zone set changed.
 	RestartRequired bool `protobuf:"varint,2,opt,name=restart_required,json=restartRequired,proto3" json:"restart_required,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -5698,7 +5858,7 @@ type DeleteNetworkZoneResponse struct {
 
 func (x *DeleteNetworkZoneResponse) Reset() {
 	*x = DeleteNetworkZoneResponse{}
-	mi := &file_sdn_proto_msgTypes[79]
+	mi := &file_sdn_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5710,7 +5870,7 @@ func (x *DeleteNetworkZoneResponse) String() string {
 func (*DeleteNetworkZoneResponse) ProtoMessage() {}
 
 func (x *DeleteNetworkZoneResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[79]
+	mi := &file_sdn_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5723,7 +5883,7 @@ func (x *DeleteNetworkZoneResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteNetworkZoneResponse.ProtoReflect.Descriptor instead.
 func (*DeleteNetworkZoneResponse) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{79}
+	return file_sdn_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *DeleteNetworkZoneResponse) GetStatus() *Status {
@@ -5751,7 +5911,7 @@ type ListNetworkZonesRequest struct {
 
 func (x *ListNetworkZonesRequest) Reset() {
 	*x = ListNetworkZonesRequest{}
-	mi := &file_sdn_proto_msgTypes[80]
+	mi := &file_sdn_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5763,7 +5923,7 @@ func (x *ListNetworkZonesRequest) String() string {
 func (*ListNetworkZonesRequest) ProtoMessage() {}
 
 func (x *ListNetworkZonesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[80]
+	mi := &file_sdn_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5776,7 +5936,7 @@ func (x *ListNetworkZonesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNetworkZonesRequest.ProtoReflect.Descriptor instead.
 func (*ListNetworkZonesRequest) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{80}
+	return file_sdn_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *ListNetworkZonesRequest) GetLifecycleRole() string {
@@ -5795,7 +5955,7 @@ type ListNetworkZonesResponse struct {
 
 func (x *ListNetworkZonesResponse) Reset() {
 	*x = ListNetworkZonesResponse{}
-	mi := &file_sdn_proto_msgTypes[81]
+	mi := &file_sdn_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5807,7 +5967,7 @@ func (x *ListNetworkZonesResponse) String() string {
 func (*ListNetworkZonesResponse) ProtoMessage() {}
 
 func (x *ListNetworkZonesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[81]
+	mi := &file_sdn_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5820,7 +5980,7 @@ func (x *ListNetworkZonesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNetworkZonesResponse.ProtoReflect.Descriptor instead.
 func (*ListNetworkZonesResponse) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{81}
+	return file_sdn_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *ListNetworkZonesResponse) GetZones() []*NetworkZone {
@@ -5828,114 +5988,6 @@ func (x *ListNetworkZonesResponse) GetZones() []*NetworkZone {
 		return x.Zones
 	}
 	return nil
-}
-
-// AssignNetworkZone assigns a named network segment to a zone.
-type AssignNetworkZoneRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// network is the network name to reassign.
-	Network string `protobuf:"bytes,1,opt,name=network,proto3" json:"network,omitempty"`
-	// zone is the target zone name.
-	Zone          string `protobuf:"bytes,2,opt,name=zone,proto3" json:"zone,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *AssignNetworkZoneRequest) Reset() {
-	*x = AssignNetworkZoneRequest{}
-	mi := &file_sdn_proto_msgTypes[82]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AssignNetworkZoneRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AssignNetworkZoneRequest) ProtoMessage() {}
-
-func (x *AssignNetworkZoneRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[82]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AssignNetworkZoneRequest.ProtoReflect.Descriptor instead.
-func (*AssignNetworkZoneRequest) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{82}
-}
-
-func (x *AssignNetworkZoneRequest) GetNetwork() string {
-	if x != nil {
-		return x.Network
-	}
-	return ""
-}
-
-func (x *AssignNetworkZoneRequest) GetZone() string {
-	if x != nil {
-		return x.Zone
-	}
-	return ""
-}
-
-type AssignNetworkZoneResponse struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	Status *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
-	// restart_required is true when the assignment triggers a flow matrix rebuild.
-	RestartRequired bool `protobuf:"varint,2,opt,name=restart_required,json=restartRequired,proto3" json:"restart_required,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *AssignNetworkZoneResponse) Reset() {
-	*x = AssignNetworkZoneResponse{}
-	mi := &file_sdn_proto_msgTypes[83]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AssignNetworkZoneResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AssignNetworkZoneResponse) ProtoMessage() {}
-
-func (x *AssignNetworkZoneResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sdn_proto_msgTypes[83]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AssignNetworkZoneResponse.ProtoReflect.Descriptor instead.
-func (*AssignNetworkZoneResponse) Descriptor() ([]byte, []int) {
-	return file_sdn_proto_rawDescGZIP(), []int{83}
-}
-
-func (x *AssignNetworkZoneResponse) GetStatus() *Status {
-	if x != nil {
-		return x.Status
-	}
-	return nil
-}
-
-func (x *AssignNetworkZoneResponse) GetRestartRequired() bool {
-	if x != nil {
-		return x.RestartRequired
-	}
-	return false
 }
 
 var File_sdn_proto protoreflect.FileDescriptor
@@ -6330,26 +6382,38 @@ const file_sdn_proto_rawDesc = "" +
 	"\x06filter\x18\x02 \x01(\v2\x16.platform.v1.FlowMatchR\x06filter\"A\n" +
 	"\x0fNetworkZonePath\x12\x12\n" +
 	"\x04zone\x18\x01 \x01(\tR\x04zone\x12\x1a\n" +
-	"\bservices\x18\x02 \x03(\tR\bservices\"\xdf\x02\n" +
+	"\bservices\x18\x02 \x03(\tR\bservices\"V\n" +
+	"\x1bNetworkZonePrivilegedAccess\x12\x16\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x1f\n" +
+	"\vapproved_by\x18\x02 \x01(\tR\n" +
+	"approvedBy\"\xdd\x03\n" +
 	"\x11NetworkZoneConfig\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12)\n" +
 	"\x10internet_ingress\x18\x02 \x01(\bR\x0finternetIngress\x12!\n" +
 	"\fisolate_from\x18\x03 \x03(\tR\visolateFrom\x127\n" +
 	"\ballow_to\x18\x04 \x03(\v2\x1c.platform.v1.NetworkZonePathR\aallowTo\x12\x1a\n" +
 	"\bservices\x18\x05 \x03(\tR\bservices\x12\x18\n" +
-	"\aisolate\x18\x06 \x01(\bR\aisolate\x12,\n" +
-	"\x12isolate_per_tenant\x18\a \x01(\bR\x10isolatePerTenant\x12\x10\n" +
+	"\aisolate\x18\x06 \x01(\bR\aisolate\x12\x10\n" +
 	"\x03oob\x18\b \x01(\bR\x03oob\x12%\n" +
 	"\x0elifecycle_role\x18\t \x01(\tR\rlifecycleRole\x12\x12\n" +
 	"\x04omit\x18\n" +
-	" \x01(\bR\x04omit\"\xe6\x01\n" +
+	" \x01(\bR\x04omit\x12\x16\n" +
+	"\x06offset\x18\v \x01(\rR\x06offset\x12!\n" +
+	"\fport_classes\x18\f \x03(\tR\vportClasses\x12U\n" +
+	"\x11privileged_access\x18\r \x01(\v2(.platform.v1.NetworkZonePrivilegedAccessR\x10privilegedAccessJ\x04\b\a\x10\bR\x12isolate_per_tenant\"x\n" +
+	"\x14NetworkZoneNumbering\x12\x12\n" +
+	"\x04vlan\x18\x01 \x01(\rR\x04vlan\x12\x18\n" +
+	"\asubnet4\x18\x02 \x01(\tR\asubnet4\x12\x18\n" +
+	"\asubnet6\x18\x03 \x01(\tR\asubnet6\x12\x18\n" +
+	"\agateway\x18\x04 \x01(\tR\agateway\"\xa7\x02\n" +
 	"\vNetworkZone\x126\n" +
 	"\x06config\x18\x01 \x01(\v2\x1e.platform.v1.NetworkZoneConfigR\x06config\x129\n" +
 	"\n" +
 	"created_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
 	"updated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12)\n" +
-	"\x10restart_required\x18\x04 \x01(\bR\x0frestartRequired\"R\n" +
+	"\x10restart_required\x18\x04 \x01(\bR\x0frestartRequired\x12?\n" +
+	"\tnumbering\x18\x05 \x01(\v2!.platform.v1.NetworkZoneNumberingR\tnumbering\"R\n" +
 	"\x18CreateNetworkZoneRequest\x126\n" +
 	"\x06config\x18\x01 \x01(\v2\x1e.platform.v1.NetworkZoneConfigR\x06config\"v\n" +
 	"\x19CreateNetworkZoneResponse\x12+\n" +
@@ -6369,13 +6433,7 @@ const file_sdn_proto_rawDesc = "" +
 	"\x17ListNetworkZonesRequest\x12%\n" +
 	"\x0elifecycle_role\x18\x01 \x01(\tR\rlifecycleRole\"J\n" +
 	"\x18ListNetworkZonesResponse\x12.\n" +
-	"\x05zones\x18\x01 \x03(\v2\x18.platform.v1.NetworkZoneR\x05zones\"H\n" +
-	"\x18AssignNetworkZoneRequest\x12\x18\n" +
-	"\anetwork\x18\x01 \x01(\tR\anetwork\x12\x12\n" +
-	"\x04zone\x18\x02 \x01(\tR\x04zone\"s\n" +
-	"\x19AssignNetworkZoneResponse\x12+\n" +
-	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12)\n" +
-	"\x10restart_required\x18\x02 \x01(\bR\x0frestartRequired*l\n" +
+	"\x05zones\x18\x01 \x03(\v2\x18.platform.v1.NetworkZoneR\x05zones*l\n" +
 	"\n" +
 	"BridgeType\x12\x1b\n" +
 	"\x17BRIDGE_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
@@ -6452,7 +6510,7 @@ const file_sdn_proto_rawDesc = "" +
 	"\x19POLICY_TARGET_TYPE_BRIDGE\x10\x01\x12\x1b\n" +
 	"\x17POLICY_TARGET_TYPE_PORT\x10\x02\x12\x1b\n" +
 	"\x17POLICY_TARGET_TYPE_VLAN\x10\x03\x12 \n" +
-	"\x1cPOLICY_TARGET_TYPE_INTERFACE\x10\x042\xdc\x13\n" +
+	"\x1cPOLICY_TARGET_TYPE_INTERFACE\x10\x042\xf8\x12\n" +
 	"\n" +
 	"SDNService\x12S\n" +
 	"\fCreateBridge\x12 .platform.v1.CreateBridgeRequest\x1a!.platform.v1.CreateBridgeResponse\x12S\n" +
@@ -6487,8 +6545,7 @@ const file_sdn_proto_rawDesc = "" +
 	"\x11CreateNetworkZone\x12%.platform.v1.CreateNetworkZoneRequest\x1a&.platform.v1.CreateNetworkZoneResponse\x12b\n" +
 	"\x11UpdateNetworkZone\x12%.platform.v1.UpdateNetworkZoneRequest\x1a&.platform.v1.UpdateNetworkZoneResponse\x12b\n" +
 	"\x11DeleteNetworkZone\x12%.platform.v1.DeleteNetworkZoneRequest\x1a&.platform.v1.DeleteNetworkZoneResponse\x12_\n" +
-	"\x10ListNetworkZones\x12$.platform.v1.ListNetworkZonesRequest\x1a%.platform.v1.ListNetworkZonesResponse\x12b\n" +
-	"\x11AssignNetworkZone\x12%.platform.v1.AssignNetworkZoneRequest\x1a&.platform.v1.AssignNetworkZoneResponse\x12Q\n" +
+	"\x10ListNetworkZones\x12$.platform.v1.ListNetworkZonesRequest\x1a%.platform.v1.ListNetworkZonesResponse\x12Q\n" +
 	"\x0eStreamFlowLogs\x12\".platform.v1.StreamFlowLogsRequest\x1a\x19.platform.v1.FlowLogEntry0\x01BAZ?github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1b\x06proto3"
 
 var (
@@ -6506,114 +6563,114 @@ func file_sdn_proto_rawDescGZIP() []byte {
 var file_sdn_proto_enumTypes = make([]protoimpl.EnumInfo, 11)
 var file_sdn_proto_msgTypes = make([]protoimpl.MessageInfo, 92)
 var file_sdn_proto_goTypes = []any{
-	(BridgeType)(0),                   // 0: platform.v1.BridgeType
-	(PortType)(0),                     // 1: platform.v1.PortType
-	(BridgeStatus)(0),                 // 2: platform.v1.BridgeStatus
-	(PortStatus)(0),                   // 3: platform.v1.PortStatus
-	(FlowActionType)(0),               // 4: platform.v1.FlowActionType
-	(FlowTable)(0),                    // 5: platform.v1.FlowTable
-	(FlowPriority)(0),                 // 6: platform.v1.FlowPriority
-	(PolicyType)(0),                   // 7: platform.v1.PolicyType
-	(PolicyStatus)(0),                 // 8: platform.v1.PolicyStatus
-	(PolicyRuleAction)(0),             // 9: platform.v1.PolicyRuleAction
-	(PolicyTargetType)(0),             // 10: platform.v1.PolicyTargetType
-	(*BridgeConfig)(nil),              // 11: platform.v1.BridgeConfig
-	(*Bridge)(nil),                    // 12: platform.v1.Bridge
-	(*BridgeStats)(nil),               // 13: platform.v1.BridgeStats
-	(*PortConfig)(nil),                // 14: platform.v1.PortConfig
-	(*Port)(nil),                      // 15: platform.v1.Port
-	(*PortStats)(nil),                 // 16: platform.v1.PortStats
-	(*PortAuth)(nil),                  // 17: platform.v1.PortAuth
-	(*FlowMatch)(nil),                 // 18: platform.v1.FlowMatch
-	(*FlowAction)(nil),                // 19: platform.v1.FlowAction
-	(*FlowConfig)(nil),                // 20: platform.v1.FlowConfig
-	(*Flow)(nil),                      // 21: platform.v1.Flow
-	(*FlowStats)(nil),                 // 22: platform.v1.FlowStats
-	(*VLANConfig)(nil),                // 23: platform.v1.VLANConfig
-	(*VLAN)(nil),                      // 24: platform.v1.VLAN
-	(*VLANStats)(nil),                 // 25: platform.v1.VLANStats
-	(*FlowLogEntry)(nil),              // 26: platform.v1.FlowLogEntry
-	(*PolicyRuleMatch)(nil),           // 27: platform.v1.PolicyRuleMatch
-	(*PolicyRule)(nil),                // 28: platform.v1.PolicyRule
-	(*PolicyTarget)(nil),              // 29: platform.v1.PolicyTarget
-	(*PolicySchedule)(nil),            // 30: platform.v1.PolicySchedule
-	(*PolicyConfig)(nil),              // 31: platform.v1.PolicyConfig
-	(*Policy)(nil),                    // 32: platform.v1.Policy
-	(*CreateBridgeRequest)(nil),       // 33: platform.v1.CreateBridgeRequest
-	(*CreateBridgeResponse)(nil),      // 34: platform.v1.CreateBridgeResponse
-	(*DeleteBridgeRequest)(nil),       // 35: platform.v1.DeleteBridgeRequest
-	(*DeleteBridgeResponse)(nil),      // 36: platform.v1.DeleteBridgeResponse
-	(*GetBridgeRequest)(nil),          // 37: platform.v1.GetBridgeRequest
-	(*GetBridgeResponse)(nil),         // 38: platform.v1.GetBridgeResponse
-	(*ListBridgesRequest)(nil),        // 39: platform.v1.ListBridgesRequest
-	(*ListBridgesResponse)(nil),       // 40: platform.v1.ListBridgesResponse
-	(*AddPortRequest)(nil),            // 41: platform.v1.AddPortRequest
-	(*AddPortResponse)(nil),           // 42: platform.v1.AddPortResponse
-	(*DeletePortRequest)(nil),         // 43: platform.v1.DeletePortRequest
-	(*DeletePortResponse)(nil),        // 44: platform.v1.DeletePortResponse
-	(*GetPortRequest)(nil),            // 45: platform.v1.GetPortRequest
-	(*GetPortResponse)(nil),           // 46: platform.v1.GetPortResponse
-	(*ListPortsRequest)(nil),          // 47: platform.v1.ListPortsRequest
-	(*ListPortsResponse)(nil),         // 48: platform.v1.ListPortsResponse
-	(*SetPortStateRequest)(nil),       // 49: platform.v1.SetPortStateRequest
-	(*SetPortStateResponse)(nil),      // 50: platform.v1.SetPortStateResponse
-	(*AddFlowRequest)(nil),            // 51: platform.v1.AddFlowRequest
-	(*AddFlowResponse)(nil),           // 52: platform.v1.AddFlowResponse
-	(*DeleteFlowRequest)(nil),         // 53: platform.v1.DeleteFlowRequest
-	(*DeleteFlowResponse)(nil),        // 54: platform.v1.DeleteFlowResponse
-	(*ListFlowsRequest)(nil),          // 55: platform.v1.ListFlowsRequest
-	(*ListFlowsResponse)(nil),         // 56: platform.v1.ListFlowsResponse
-	(*FlushFlowsRequest)(nil),         // 57: platform.v1.FlushFlowsRequest
-	(*FlushFlowsResponse)(nil),        // 58: platform.v1.FlushFlowsResponse
-	(*CreateVLANRequest)(nil),         // 59: platform.v1.CreateVLANRequest
-	(*CreateVLANResponse)(nil),        // 60: platform.v1.CreateVLANResponse
-	(*DeleteVLANRequest)(nil),         // 61: platform.v1.DeleteVLANRequest
-	(*DeleteVLANResponse)(nil),        // 62: platform.v1.DeleteVLANResponse
-	(*ListVLANsRequest)(nil),          // 63: platform.v1.ListVLANsRequest
-	(*ListVLANsResponse)(nil),         // 64: platform.v1.ListVLANsResponse
-	(*AuthenticatePortRequest)(nil),   // 65: platform.v1.AuthenticatePortRequest
-	(*AuthenticatePortResponse)(nil),  // 66: platform.v1.AuthenticatePortResponse
-	(*RevokePortAuthRequest)(nil),     // 67: platform.v1.RevokePortAuthRequest
-	(*RevokePortAuthResponse)(nil),    // 68: platform.v1.RevokePortAuthResponse
-	(*GetPortStatsRequest)(nil),       // 69: platform.v1.GetPortStatsRequest
-	(*GetPortStatsResponse)(nil),      // 70: platform.v1.GetPortStatsResponse
-	(*GetFlowStatsRequest)(nil),       // 71: platform.v1.GetFlowStatsRequest
-	(*GetFlowStatsResponse)(nil),      // 72: platform.v1.GetFlowStatsResponse
-	(*ApplyPolicyRequest)(nil),        // 73: platform.v1.ApplyPolicyRequest
-	(*ApplyPolicyResponse)(nil),       // 74: platform.v1.ApplyPolicyResponse
-	(*GetPolicyRequest)(nil),          // 75: platform.v1.GetPolicyRequest
-	(*GetPolicyResponse)(nil),         // 76: platform.v1.GetPolicyResponse
-	(*ListPoliciesRequest)(nil),       // 77: platform.v1.ListPoliciesRequest
-	(*ListPoliciesResponse)(nil),      // 78: platform.v1.ListPoliciesResponse
-	(*DeletePolicyRequest)(nil),       // 79: platform.v1.DeletePolicyRequest
-	(*DeletePolicyResponse)(nil),      // 80: platform.v1.DeletePolicyResponse
-	(*StreamFlowLogsRequest)(nil),     // 81: platform.v1.StreamFlowLogsRequest
-	(*NetworkZonePath)(nil),           // 82: platform.v1.NetworkZonePath
-	(*NetworkZoneConfig)(nil),         // 83: platform.v1.NetworkZoneConfig
-	(*NetworkZone)(nil),               // 84: platform.v1.NetworkZone
-	(*CreateNetworkZoneRequest)(nil),  // 85: platform.v1.CreateNetworkZoneRequest
-	(*CreateNetworkZoneResponse)(nil), // 86: platform.v1.CreateNetworkZoneResponse
-	(*UpdateNetworkZoneRequest)(nil),  // 87: platform.v1.UpdateNetworkZoneRequest
-	(*UpdateNetworkZoneResponse)(nil), // 88: platform.v1.UpdateNetworkZoneResponse
-	(*DeleteNetworkZoneRequest)(nil),  // 89: platform.v1.DeleteNetworkZoneRequest
-	(*DeleteNetworkZoneResponse)(nil), // 90: platform.v1.DeleteNetworkZoneResponse
-	(*ListNetworkZonesRequest)(nil),   // 91: platform.v1.ListNetworkZonesRequest
-	(*ListNetworkZonesResponse)(nil),  // 92: platform.v1.ListNetworkZonesResponse
-	(*AssignNetworkZoneRequest)(nil),  // 93: platform.v1.AssignNetworkZoneRequest
-	(*AssignNetworkZoneResponse)(nil), // 94: platform.v1.AssignNetworkZoneResponse
-	nil,                               // 95: platform.v1.BridgeConfig.OptionsEntry
-	nil,                               // 96: platform.v1.BridgeConfig.LabelsEntry
-	nil,                               // 97: platform.v1.PortConfig.OptionsEntry
-	nil,                               // 98: platform.v1.PortConfig.LabelsEntry
-	nil,                               // 99: platform.v1.FlowMatch.MetadataEntry
-	nil,                               // 100: platform.v1.FlowConfig.MetadataEntry
-	nil,                               // 101: platform.v1.VLANConfig.LabelsEntry
-	nil,                               // 102: platform.v1.FlowLogEntry.MetadataEntry
-	(*timestamppb.Timestamp)(nil),     // 103: google.protobuf.Timestamp
-	(*Status)(nil),                    // 104: platform.v1.Status
-	(*LabelSelector)(nil),             // 105: platform.v1.LabelSelector
-	(*PaginationRequest)(nil),         // 106: platform.v1.PaginationRequest
-	(*PaginationResponse)(nil),        // 107: platform.v1.PaginationResponse
+	(BridgeType)(0),                     // 0: platform.v1.BridgeType
+	(PortType)(0),                       // 1: platform.v1.PortType
+	(BridgeStatus)(0),                   // 2: platform.v1.BridgeStatus
+	(PortStatus)(0),                     // 3: platform.v1.PortStatus
+	(FlowActionType)(0),                 // 4: platform.v1.FlowActionType
+	(FlowTable)(0),                      // 5: platform.v1.FlowTable
+	(FlowPriority)(0),                   // 6: platform.v1.FlowPriority
+	(PolicyType)(0),                     // 7: platform.v1.PolicyType
+	(PolicyStatus)(0),                   // 8: platform.v1.PolicyStatus
+	(PolicyRuleAction)(0),               // 9: platform.v1.PolicyRuleAction
+	(PolicyTargetType)(0),               // 10: platform.v1.PolicyTargetType
+	(*BridgeConfig)(nil),                // 11: platform.v1.BridgeConfig
+	(*Bridge)(nil),                      // 12: platform.v1.Bridge
+	(*BridgeStats)(nil),                 // 13: platform.v1.BridgeStats
+	(*PortConfig)(nil),                  // 14: platform.v1.PortConfig
+	(*Port)(nil),                        // 15: platform.v1.Port
+	(*PortStats)(nil),                   // 16: platform.v1.PortStats
+	(*PortAuth)(nil),                    // 17: platform.v1.PortAuth
+	(*FlowMatch)(nil),                   // 18: platform.v1.FlowMatch
+	(*FlowAction)(nil),                  // 19: platform.v1.FlowAction
+	(*FlowConfig)(nil),                  // 20: platform.v1.FlowConfig
+	(*Flow)(nil),                        // 21: platform.v1.Flow
+	(*FlowStats)(nil),                   // 22: platform.v1.FlowStats
+	(*VLANConfig)(nil),                  // 23: platform.v1.VLANConfig
+	(*VLAN)(nil),                        // 24: platform.v1.VLAN
+	(*VLANStats)(nil),                   // 25: platform.v1.VLANStats
+	(*FlowLogEntry)(nil),                // 26: platform.v1.FlowLogEntry
+	(*PolicyRuleMatch)(nil),             // 27: platform.v1.PolicyRuleMatch
+	(*PolicyRule)(nil),                  // 28: platform.v1.PolicyRule
+	(*PolicyTarget)(nil),                // 29: platform.v1.PolicyTarget
+	(*PolicySchedule)(nil),              // 30: platform.v1.PolicySchedule
+	(*PolicyConfig)(nil),                // 31: platform.v1.PolicyConfig
+	(*Policy)(nil),                      // 32: platform.v1.Policy
+	(*CreateBridgeRequest)(nil),         // 33: platform.v1.CreateBridgeRequest
+	(*CreateBridgeResponse)(nil),        // 34: platform.v1.CreateBridgeResponse
+	(*DeleteBridgeRequest)(nil),         // 35: platform.v1.DeleteBridgeRequest
+	(*DeleteBridgeResponse)(nil),        // 36: platform.v1.DeleteBridgeResponse
+	(*GetBridgeRequest)(nil),            // 37: platform.v1.GetBridgeRequest
+	(*GetBridgeResponse)(nil),           // 38: platform.v1.GetBridgeResponse
+	(*ListBridgesRequest)(nil),          // 39: platform.v1.ListBridgesRequest
+	(*ListBridgesResponse)(nil),         // 40: platform.v1.ListBridgesResponse
+	(*AddPortRequest)(nil),              // 41: platform.v1.AddPortRequest
+	(*AddPortResponse)(nil),             // 42: platform.v1.AddPortResponse
+	(*DeletePortRequest)(nil),           // 43: platform.v1.DeletePortRequest
+	(*DeletePortResponse)(nil),          // 44: platform.v1.DeletePortResponse
+	(*GetPortRequest)(nil),              // 45: platform.v1.GetPortRequest
+	(*GetPortResponse)(nil),             // 46: platform.v1.GetPortResponse
+	(*ListPortsRequest)(nil),            // 47: platform.v1.ListPortsRequest
+	(*ListPortsResponse)(nil),           // 48: platform.v1.ListPortsResponse
+	(*SetPortStateRequest)(nil),         // 49: platform.v1.SetPortStateRequest
+	(*SetPortStateResponse)(nil),        // 50: platform.v1.SetPortStateResponse
+	(*AddFlowRequest)(nil),              // 51: platform.v1.AddFlowRequest
+	(*AddFlowResponse)(nil),             // 52: platform.v1.AddFlowResponse
+	(*DeleteFlowRequest)(nil),           // 53: platform.v1.DeleteFlowRequest
+	(*DeleteFlowResponse)(nil),          // 54: platform.v1.DeleteFlowResponse
+	(*ListFlowsRequest)(nil),            // 55: platform.v1.ListFlowsRequest
+	(*ListFlowsResponse)(nil),           // 56: platform.v1.ListFlowsResponse
+	(*FlushFlowsRequest)(nil),           // 57: platform.v1.FlushFlowsRequest
+	(*FlushFlowsResponse)(nil),          // 58: platform.v1.FlushFlowsResponse
+	(*CreateVLANRequest)(nil),           // 59: platform.v1.CreateVLANRequest
+	(*CreateVLANResponse)(nil),          // 60: platform.v1.CreateVLANResponse
+	(*DeleteVLANRequest)(nil),           // 61: platform.v1.DeleteVLANRequest
+	(*DeleteVLANResponse)(nil),          // 62: platform.v1.DeleteVLANResponse
+	(*ListVLANsRequest)(nil),            // 63: platform.v1.ListVLANsRequest
+	(*ListVLANsResponse)(nil),           // 64: platform.v1.ListVLANsResponse
+	(*AuthenticatePortRequest)(nil),     // 65: platform.v1.AuthenticatePortRequest
+	(*AuthenticatePortResponse)(nil),    // 66: platform.v1.AuthenticatePortResponse
+	(*RevokePortAuthRequest)(nil),       // 67: platform.v1.RevokePortAuthRequest
+	(*RevokePortAuthResponse)(nil),      // 68: platform.v1.RevokePortAuthResponse
+	(*GetPortStatsRequest)(nil),         // 69: platform.v1.GetPortStatsRequest
+	(*GetPortStatsResponse)(nil),        // 70: platform.v1.GetPortStatsResponse
+	(*GetFlowStatsRequest)(nil),         // 71: platform.v1.GetFlowStatsRequest
+	(*GetFlowStatsResponse)(nil),        // 72: platform.v1.GetFlowStatsResponse
+	(*ApplyPolicyRequest)(nil),          // 73: platform.v1.ApplyPolicyRequest
+	(*ApplyPolicyResponse)(nil),         // 74: platform.v1.ApplyPolicyResponse
+	(*GetPolicyRequest)(nil),            // 75: platform.v1.GetPolicyRequest
+	(*GetPolicyResponse)(nil),           // 76: platform.v1.GetPolicyResponse
+	(*ListPoliciesRequest)(nil),         // 77: platform.v1.ListPoliciesRequest
+	(*ListPoliciesResponse)(nil),        // 78: platform.v1.ListPoliciesResponse
+	(*DeletePolicyRequest)(nil),         // 79: platform.v1.DeletePolicyRequest
+	(*DeletePolicyResponse)(nil),        // 80: platform.v1.DeletePolicyResponse
+	(*StreamFlowLogsRequest)(nil),       // 81: platform.v1.StreamFlowLogsRequest
+	(*NetworkZonePath)(nil),             // 82: platform.v1.NetworkZonePath
+	(*NetworkZonePrivilegedAccess)(nil), // 83: platform.v1.NetworkZonePrivilegedAccess
+	(*NetworkZoneConfig)(nil),           // 84: platform.v1.NetworkZoneConfig
+	(*NetworkZoneNumbering)(nil),        // 85: platform.v1.NetworkZoneNumbering
+	(*NetworkZone)(nil),                 // 86: platform.v1.NetworkZone
+	(*CreateNetworkZoneRequest)(nil),    // 87: platform.v1.CreateNetworkZoneRequest
+	(*CreateNetworkZoneResponse)(nil),   // 88: platform.v1.CreateNetworkZoneResponse
+	(*UpdateNetworkZoneRequest)(nil),    // 89: platform.v1.UpdateNetworkZoneRequest
+	(*UpdateNetworkZoneResponse)(nil),   // 90: platform.v1.UpdateNetworkZoneResponse
+	(*DeleteNetworkZoneRequest)(nil),    // 91: platform.v1.DeleteNetworkZoneRequest
+	(*DeleteNetworkZoneResponse)(nil),   // 92: platform.v1.DeleteNetworkZoneResponse
+	(*ListNetworkZonesRequest)(nil),     // 93: platform.v1.ListNetworkZonesRequest
+	(*ListNetworkZonesResponse)(nil),    // 94: platform.v1.ListNetworkZonesResponse
+	nil,                                 // 95: platform.v1.BridgeConfig.OptionsEntry
+	nil,                                 // 96: platform.v1.BridgeConfig.LabelsEntry
+	nil,                                 // 97: platform.v1.PortConfig.OptionsEntry
+	nil,                                 // 98: platform.v1.PortConfig.LabelsEntry
+	nil,                                 // 99: platform.v1.FlowMatch.MetadataEntry
+	nil,                                 // 100: platform.v1.FlowConfig.MetadataEntry
+	nil,                                 // 101: platform.v1.VLANConfig.LabelsEntry
+	nil,                                 // 102: platform.v1.FlowLogEntry.MetadataEntry
+	(*timestamppb.Timestamp)(nil),       // 103: google.protobuf.Timestamp
+	(*Status)(nil),                      // 104: platform.v1.Status
+	(*LabelSelector)(nil),               // 105: platform.v1.LabelSelector
+	(*PaginationRequest)(nil),           // 106: platform.v1.PaginationRequest
+	(*PaginationResponse)(nil),          // 107: platform.v1.PaginationResponse
 }
 var file_sdn_proto_depIdxs = []int32{
 	0,   // 0: platform.v1.BridgeConfig.type:type_name -> platform.v1.BridgeType
@@ -6714,47 +6771,47 @@ var file_sdn_proto_depIdxs = []int32{
 	104, // 95: platform.v1.DeletePolicyResponse.status:type_name -> platform.v1.Status
 	18,  // 96: platform.v1.StreamFlowLogsRequest.filter:type_name -> platform.v1.FlowMatch
 	82,  // 97: platform.v1.NetworkZoneConfig.allow_to:type_name -> platform.v1.NetworkZonePath
-	83,  // 98: platform.v1.NetworkZone.config:type_name -> platform.v1.NetworkZoneConfig
-	103, // 99: platform.v1.NetworkZone.created_at:type_name -> google.protobuf.Timestamp
-	103, // 100: platform.v1.NetworkZone.updated_at:type_name -> google.protobuf.Timestamp
-	83,  // 101: platform.v1.CreateNetworkZoneRequest.config:type_name -> platform.v1.NetworkZoneConfig
-	104, // 102: platform.v1.CreateNetworkZoneResponse.status:type_name -> platform.v1.Status
-	84,  // 103: platform.v1.CreateNetworkZoneResponse.zone:type_name -> platform.v1.NetworkZone
-	83,  // 104: platform.v1.UpdateNetworkZoneRequest.config:type_name -> platform.v1.NetworkZoneConfig
-	104, // 105: platform.v1.UpdateNetworkZoneResponse.status:type_name -> platform.v1.Status
-	84,  // 106: platform.v1.UpdateNetworkZoneResponse.zone:type_name -> platform.v1.NetworkZone
-	104, // 107: platform.v1.DeleteNetworkZoneResponse.status:type_name -> platform.v1.Status
-	84,  // 108: platform.v1.ListNetworkZonesResponse.zones:type_name -> platform.v1.NetworkZone
-	104, // 109: platform.v1.AssignNetworkZoneResponse.status:type_name -> platform.v1.Status
-	33,  // 110: platform.v1.SDNService.CreateBridge:input_type -> platform.v1.CreateBridgeRequest
-	35,  // 111: platform.v1.SDNService.DeleteBridge:input_type -> platform.v1.DeleteBridgeRequest
-	37,  // 112: platform.v1.SDNService.GetBridge:input_type -> platform.v1.GetBridgeRequest
-	39,  // 113: platform.v1.SDNService.ListBridges:input_type -> platform.v1.ListBridgesRequest
-	41,  // 114: platform.v1.SDNService.AddPort:input_type -> platform.v1.AddPortRequest
-	43,  // 115: platform.v1.SDNService.DeletePort:input_type -> platform.v1.DeletePortRequest
-	45,  // 116: platform.v1.SDNService.GetPort:input_type -> platform.v1.GetPortRequest
-	47,  // 117: platform.v1.SDNService.ListPorts:input_type -> platform.v1.ListPortsRequest
-	49,  // 118: platform.v1.SDNService.SetPortState:input_type -> platform.v1.SetPortStateRequest
-	51,  // 119: platform.v1.SDNService.AddFlow:input_type -> platform.v1.AddFlowRequest
-	53,  // 120: platform.v1.SDNService.DeleteFlow:input_type -> platform.v1.DeleteFlowRequest
-	55,  // 121: platform.v1.SDNService.ListFlows:input_type -> platform.v1.ListFlowsRequest
-	57,  // 122: platform.v1.SDNService.FlushFlows:input_type -> platform.v1.FlushFlowsRequest
-	59,  // 123: platform.v1.SDNService.CreateVLAN:input_type -> platform.v1.CreateVLANRequest
-	61,  // 124: platform.v1.SDNService.DeleteVLAN:input_type -> platform.v1.DeleteVLANRequest
-	63,  // 125: platform.v1.SDNService.ListVLANs:input_type -> platform.v1.ListVLANsRequest
-	65,  // 126: platform.v1.SDNService.AuthenticatePort:input_type -> platform.v1.AuthenticatePortRequest
-	67,  // 127: platform.v1.SDNService.RevokePortAuth:input_type -> platform.v1.RevokePortAuthRequest
-	69,  // 128: platform.v1.SDNService.GetPortStats:input_type -> platform.v1.GetPortStatsRequest
-	71,  // 129: platform.v1.SDNService.GetFlowStats:input_type -> platform.v1.GetFlowStatsRequest
-	73,  // 130: platform.v1.SDNService.ApplyPolicy:input_type -> platform.v1.ApplyPolicyRequest
-	75,  // 131: platform.v1.SDNService.GetPolicy:input_type -> platform.v1.GetPolicyRequest
-	77,  // 132: platform.v1.SDNService.ListPolicies:input_type -> platform.v1.ListPoliciesRequest
-	79,  // 133: platform.v1.SDNService.DeletePolicy:input_type -> platform.v1.DeletePolicyRequest
-	85,  // 134: platform.v1.SDNService.CreateNetworkZone:input_type -> platform.v1.CreateNetworkZoneRequest
-	87,  // 135: platform.v1.SDNService.UpdateNetworkZone:input_type -> platform.v1.UpdateNetworkZoneRequest
-	89,  // 136: platform.v1.SDNService.DeleteNetworkZone:input_type -> platform.v1.DeleteNetworkZoneRequest
-	91,  // 137: platform.v1.SDNService.ListNetworkZones:input_type -> platform.v1.ListNetworkZonesRequest
-	93,  // 138: platform.v1.SDNService.AssignNetworkZone:input_type -> platform.v1.AssignNetworkZoneRequest
+	83,  // 98: platform.v1.NetworkZoneConfig.privileged_access:type_name -> platform.v1.NetworkZonePrivilegedAccess
+	84,  // 99: platform.v1.NetworkZone.config:type_name -> platform.v1.NetworkZoneConfig
+	103, // 100: platform.v1.NetworkZone.created_at:type_name -> google.protobuf.Timestamp
+	103, // 101: platform.v1.NetworkZone.updated_at:type_name -> google.protobuf.Timestamp
+	85,  // 102: platform.v1.NetworkZone.numbering:type_name -> platform.v1.NetworkZoneNumbering
+	84,  // 103: platform.v1.CreateNetworkZoneRequest.config:type_name -> platform.v1.NetworkZoneConfig
+	104, // 104: platform.v1.CreateNetworkZoneResponse.status:type_name -> platform.v1.Status
+	86,  // 105: platform.v1.CreateNetworkZoneResponse.zone:type_name -> platform.v1.NetworkZone
+	84,  // 106: platform.v1.UpdateNetworkZoneRequest.config:type_name -> platform.v1.NetworkZoneConfig
+	104, // 107: platform.v1.UpdateNetworkZoneResponse.status:type_name -> platform.v1.Status
+	86,  // 108: platform.v1.UpdateNetworkZoneResponse.zone:type_name -> platform.v1.NetworkZone
+	104, // 109: platform.v1.DeleteNetworkZoneResponse.status:type_name -> platform.v1.Status
+	86,  // 110: platform.v1.ListNetworkZonesResponse.zones:type_name -> platform.v1.NetworkZone
+	33,  // 111: platform.v1.SDNService.CreateBridge:input_type -> platform.v1.CreateBridgeRequest
+	35,  // 112: platform.v1.SDNService.DeleteBridge:input_type -> platform.v1.DeleteBridgeRequest
+	37,  // 113: platform.v1.SDNService.GetBridge:input_type -> platform.v1.GetBridgeRequest
+	39,  // 114: platform.v1.SDNService.ListBridges:input_type -> platform.v1.ListBridgesRequest
+	41,  // 115: platform.v1.SDNService.AddPort:input_type -> platform.v1.AddPortRequest
+	43,  // 116: platform.v1.SDNService.DeletePort:input_type -> platform.v1.DeletePortRequest
+	45,  // 117: platform.v1.SDNService.GetPort:input_type -> platform.v1.GetPortRequest
+	47,  // 118: platform.v1.SDNService.ListPorts:input_type -> platform.v1.ListPortsRequest
+	49,  // 119: platform.v1.SDNService.SetPortState:input_type -> platform.v1.SetPortStateRequest
+	51,  // 120: platform.v1.SDNService.AddFlow:input_type -> platform.v1.AddFlowRequest
+	53,  // 121: platform.v1.SDNService.DeleteFlow:input_type -> platform.v1.DeleteFlowRequest
+	55,  // 122: platform.v1.SDNService.ListFlows:input_type -> platform.v1.ListFlowsRequest
+	57,  // 123: platform.v1.SDNService.FlushFlows:input_type -> platform.v1.FlushFlowsRequest
+	59,  // 124: platform.v1.SDNService.CreateVLAN:input_type -> platform.v1.CreateVLANRequest
+	61,  // 125: platform.v1.SDNService.DeleteVLAN:input_type -> platform.v1.DeleteVLANRequest
+	63,  // 126: platform.v1.SDNService.ListVLANs:input_type -> platform.v1.ListVLANsRequest
+	65,  // 127: platform.v1.SDNService.AuthenticatePort:input_type -> platform.v1.AuthenticatePortRequest
+	67,  // 128: platform.v1.SDNService.RevokePortAuth:input_type -> platform.v1.RevokePortAuthRequest
+	69,  // 129: platform.v1.SDNService.GetPortStats:input_type -> platform.v1.GetPortStatsRequest
+	71,  // 130: platform.v1.SDNService.GetFlowStats:input_type -> platform.v1.GetFlowStatsRequest
+	73,  // 131: platform.v1.SDNService.ApplyPolicy:input_type -> platform.v1.ApplyPolicyRequest
+	75,  // 132: platform.v1.SDNService.GetPolicy:input_type -> platform.v1.GetPolicyRequest
+	77,  // 133: platform.v1.SDNService.ListPolicies:input_type -> platform.v1.ListPoliciesRequest
+	79,  // 134: platform.v1.SDNService.DeletePolicy:input_type -> platform.v1.DeletePolicyRequest
+	87,  // 135: platform.v1.SDNService.CreateNetworkZone:input_type -> platform.v1.CreateNetworkZoneRequest
+	89,  // 136: platform.v1.SDNService.UpdateNetworkZone:input_type -> platform.v1.UpdateNetworkZoneRequest
+	91,  // 137: platform.v1.SDNService.DeleteNetworkZone:input_type -> platform.v1.DeleteNetworkZoneRequest
+	93,  // 138: platform.v1.SDNService.ListNetworkZones:input_type -> platform.v1.ListNetworkZonesRequest
 	81,  // 139: platform.v1.SDNService.StreamFlowLogs:input_type -> platform.v1.StreamFlowLogsRequest
 	34,  // 140: platform.v1.SDNService.CreateBridge:output_type -> platform.v1.CreateBridgeResponse
 	36,  // 141: platform.v1.SDNService.DeleteBridge:output_type -> platform.v1.DeleteBridgeResponse
@@ -6780,17 +6837,16 @@ var file_sdn_proto_depIdxs = []int32{
 	76,  // 161: platform.v1.SDNService.GetPolicy:output_type -> platform.v1.GetPolicyResponse
 	78,  // 162: platform.v1.SDNService.ListPolicies:output_type -> platform.v1.ListPoliciesResponse
 	80,  // 163: platform.v1.SDNService.DeletePolicy:output_type -> platform.v1.DeletePolicyResponse
-	86,  // 164: platform.v1.SDNService.CreateNetworkZone:output_type -> platform.v1.CreateNetworkZoneResponse
-	88,  // 165: platform.v1.SDNService.UpdateNetworkZone:output_type -> platform.v1.UpdateNetworkZoneResponse
-	90,  // 166: platform.v1.SDNService.DeleteNetworkZone:output_type -> platform.v1.DeleteNetworkZoneResponse
-	92,  // 167: platform.v1.SDNService.ListNetworkZones:output_type -> platform.v1.ListNetworkZonesResponse
-	94,  // 168: platform.v1.SDNService.AssignNetworkZone:output_type -> platform.v1.AssignNetworkZoneResponse
-	26,  // 169: platform.v1.SDNService.StreamFlowLogs:output_type -> platform.v1.FlowLogEntry
-	140, // [140:170] is the sub-list for method output_type
-	110, // [110:140] is the sub-list for method input_type
-	110, // [110:110] is the sub-list for extension type_name
-	110, // [110:110] is the sub-list for extension extendee
-	0,   // [0:110] is the sub-list for field type_name
+	88,  // 164: platform.v1.SDNService.CreateNetworkZone:output_type -> platform.v1.CreateNetworkZoneResponse
+	90,  // 165: platform.v1.SDNService.UpdateNetworkZone:output_type -> platform.v1.UpdateNetworkZoneResponse
+	92,  // 166: platform.v1.SDNService.DeleteNetworkZone:output_type -> platform.v1.DeleteNetworkZoneResponse
+	94,  // 167: platform.v1.SDNService.ListNetworkZones:output_type -> platform.v1.ListNetworkZonesResponse
+	26,  // 168: platform.v1.SDNService.StreamFlowLogs:output_type -> platform.v1.FlowLogEntry
+	140, // [140:169] is the sub-list for method output_type
+	111, // [111:140] is the sub-list for method input_type
+	111, // [111:111] is the sub-list for extension type_name
+	111, // [111:111] is the sub-list for extension extendee
+	0,   // [0:111] is the sub-list for field type_name
 }
 
 func init() { file_sdn_proto_init() }

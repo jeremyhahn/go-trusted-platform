@@ -1578,7 +1578,7 @@ func TestHandleCreateProfile(t *testing.T) {
 					DNS:        []string{"8.8.8.8", "8.8.4.4"},
 					AuthMethod: "cert",
 				},
-				"trusted": {
+				"control-plane": {
 					VLAN:       200,
 					StaticIP:   "10.0.0.10",
 					Gateway:    "10.0.0.1",
@@ -1618,8 +1618,8 @@ func TestHandleCreateProfile(t *testing.T) {
 		assert.NotNil(t, profileResp.Networks)
 		assert.NotNil(t, profileResp.Networks["provisioning"])
 		assert.Equal(t, uint16(100), profileResp.Networks["provisioning"].VLAN)
-		assert.NotNil(t, profileResp.Networks["trusted"])
-		assert.Equal(t, uint16(200), profileResp.Networks["trusted"].VLAN)
+		assert.NotNil(t, profileResp.Networks["control-plane"])
+		assert.Equal(t, uint16(200), profileResp.Networks["control-plane"].VLAN)
 		assert.NotNil(t, profileResp.Networks["quarantine"])
 		assert.Equal(t, uint16(999), profileResp.Networks["quarantine"].VLAN)
 		assert.NotNil(t, profileResp.MatchRules)
@@ -1927,7 +1927,7 @@ func TestHandleUpdateProfile(t *testing.T) {
 					VLAN:     100,
 					StaticIP: "192.168.1.10",
 				},
-				"trusted": {
+				"control-plane": {
 					VLAN:     200,
 					StaticIP: "10.0.0.10",
 				},
@@ -1960,7 +1960,7 @@ func TestHandleUpdateProfile(t *testing.T) {
 		assert.Equal(t, "edge", profileResp.Role)
 		assert.NotNil(t, profileResp.Networks)
 		assert.NotNil(t, profileResp.Networks["provisioning"])
-		assert.NotNil(t, profileResp.Networks["trusted"])
+		assert.NotNil(t, profileResp.Networks["control-plane"])
 		assert.NotNil(t, profileResp.Networks["quarantine"])
 		assert.NotNil(t, profileResp.MatchRules)
 	})

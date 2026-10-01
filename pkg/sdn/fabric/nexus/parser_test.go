@@ -62,31 +62,6 @@ func TestParseShowVLAN_ErrorMessage(t *testing.T) {
 	}
 }
 
-func TestParseShowNVEVNI_Found(t *testing.T) {
-	output := `Interface VNI      Multicast-group   State
-nve1      100200   225.1.1.1         Up
-nve1      100201   225.1.1.2         Up
-`
-	if !parseShowNVEVNI(output, 100200) {
-		t.Fatal("expected VNI 100200 to be found")
-	}
-}
-
-func TestParseShowNVEVNI_NotFound(t *testing.T) {
-	output := `Interface VNI      Multicast-group   State
-nve1      100100   225.1.1.1         Up
-`
-	if parseShowNVEVNI(output, 100200) {
-		t.Fatal("expected VNI 100200 to not be found")
-	}
-}
-
-func TestParseShowNVEVNI_EmptyOutput(t *testing.T) {
-	if parseShowNVEVNI("", 100200) {
-		t.Fatal("expected not found for empty output")
-	}
-}
-
 func TestParseShowPortChannelSummary_Found(t *testing.T) {
 	output := `Group Port-channel Protocol    Member Ports
 10    Po10(SU)     LACP        Eth1/1(P)    Eth1/2(P)
@@ -109,38 +84,6 @@ func TestParseShowPortChannelSummary_NotFound(t *testing.T) {
 func TestParseShowPortChannelSummary_EmptyOutput(t *testing.T) {
 	if parseShowPortChannelSummary("", 10) {
 		t.Fatal("expected not found for empty output")
-	}
-}
-
-func TestParseShowRunningInterface_Found(t *testing.T) {
-	output := `interface Ethernet1/5
-  switchport
-  switchport mode access
-  switchport access vlan 200
-  no shutdown
-`
-	vlan := parseShowRunningInterface(output)
-	if vlan != 200 {
-		t.Fatalf("expected VLAN 200, got %d", vlan)
-	}
-}
-
-func TestParseShowRunningInterface_NotFound(t *testing.T) {
-	output := `interface Ethernet1/5
-  switchport
-  switchport mode trunk
-  switchport trunk allowed vlan 200,201
-`
-	vlan := parseShowRunningInterface(output)
-	if vlan != 0 {
-		t.Fatalf("expected VLAN 0, got %d", vlan)
-	}
-}
-
-func TestParseShowRunningInterface_EmptyOutput(t *testing.T) {
-	vlan := parseShowRunningInterface("")
-	if vlan != 0 {
-		t.Fatalf("expected VLAN 0, got %d", vlan)
 	}
 }
 
@@ -177,5 +120,60 @@ func TestContainsError_False(t *testing.T) {
 				t.Fatalf("expected containsError=false for %q", tt.output)
 			}
 		})
+	}
+}
+
+// TestParseInterfaceConfig reads a trunk with a range, an "add" line, the
+// native VLAN, MTU and shutdown.
+func TestParseInterfaceConfig(t *testing.T) {
+	out := `interface Ethernet1/25
+  switchport mode trunk
+  switchport trunk native vlan 405
+  switchport trunk allowed vlan 403-405
+  switchport trunk allowed vlan add 401
+  mtu 9216
+  shutdown
+`
+	cfg := parseInterfaceConfig(out)
+	if cfg.mode != "trunk" || cfg.native != 405 || cfg.mtu != 9216 || !cfg.shutdown {
+		t.Fatalf("unexpected %+v", cfg)
+	}
+	want := []uint16{401, 403, 404, 405}
+	if len(cfg.allowed) != len(want) {
+		t.Fatalf("allowed %v, want %v", cfg.allowed, want)
+	}
+	for i := range want {
+		if cfg.allowed[i] != want[i] {
+			t.Fatalf("allowed %v, want %v", cfg.allowed, want)
+		}
+	}
+
+	access := parseInterfaceConfig("  switchport mode access\n  switchport access vlan 402\n  no shutdown\n")
+	if access.mode != "access" || access.accessVLAN != 402 || access.shutdown {
+		t.Fatalf("unexpected %+v", access)
+	}
+}
+
+// TestParseInterfaceConfig_Garbage ignores values it cannot parse.
+func TestParseInterfaceConfig_Garbage(t *testing.T) {
+	cfg := parseInterfaceConfig("  switchport access vlan x\n  mtu big\n  switchport trunk allowed vlan 9-3,abc\n")
+	if cfg.accessVLAN != 0 || cfg.mtu != 0 || len(cfg.allowed) != 0 {
+		t.Fatalf("unexpected %+v", cfg)
+	}
+	if empty := parseInterfaceConfig(""); empty.mode != "" {
+		t.Fatalf("unexpected %+v", empty)
+	}
+}
+
+// TestParseInterfaceConfig_DefaultModeAndRouted reads a port with no mode
+// line (NX-OS omits the default) as access, and "no switchport" as routed.
+func TestParseInterfaceConfig_DefaultModeAndRouted(t *testing.T) {
+	cfg := parseInterfaceConfig("interface Ethernet1/41\n  switchport access vlan 402\n  mtu 9216\n")
+	if cfg.mode != "access" || cfg.accessVLAN != 402 {
+		t.Fatalf("default mode: got mode %q vlan %d, want access 402", cfg.mode, cfg.accessVLAN)
+	}
+	routed := parseInterfaceConfig("interface Ethernet1/1\n  no switchport\n")
+	if routed.mode != modeRouted {
+		t.Fatalf("routed port: got mode %q, want %q", routed.mode, modeRouted)
 	}
 }

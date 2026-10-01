@@ -142,7 +142,7 @@ func main() {
 			profile = p
 			logger.Info("Profile fetched successfully",
 				"serial", profile.SerialNumber,
-				"vlan", profile.TrustedNetwork.VLAN)
+				"vlan", profile.AdmittedNetwork.VLAN)
 			return nil
 		}
 
@@ -211,13 +211,13 @@ func displayProfile(logger *logging.Logger, profile *provisioning.ProfileRespons
 	logger.Info("Serial Number", "value", profile.SerialNumber)
 	logger.Info("")
 	logger.Info("Production Network:")
-	logger.Info("  VLAN", "value", profile.TrustedNetwork.VLAN)
-	logger.Info("  DHCP", "value", profile.TrustedNetwork.UseDHCP)
+	logger.Info("  VLAN", "value", profile.AdmittedNetwork.VLAN)
+	logger.Info("  DHCP", "value", profile.AdmittedNetwork.UseDHCP)
 
-	if profile.TrustedNetwork.StaticIP != "" {
-		logger.Info("  Static IP", "value", profile.TrustedNetwork.StaticIP)
-		logger.Info("  Gateway", "value", profile.TrustedNetwork.Gateway)
-		logger.Info("  DNS", "value", profile.TrustedNetwork.DNS)
+	if profile.AdmittedNetwork.StaticIP != "" {
+		logger.Info("  Static IP", "value", profile.AdmittedNetwork.StaticIP)
+		logger.Info("  Gateway", "value", profile.AdmittedNetwork.Gateway)
+		logger.Info("  DNS", "value", profile.AdmittedNetwork.DNS)
 	}
 
 	if len(profile.ACLs) > 0 {

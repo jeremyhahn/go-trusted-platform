@@ -265,6 +265,9 @@ func loadUnifiedConfig(logger *logging.Logger, configPath string) (*installer.Co
 		return nil, err
 	}
 
+	if err := app.CheckPlatformConfigYAML(data); err != nil {
+		return nil, err
+	}
 	var appConfig app.App
 	if err := yaml.Unmarshal(data, &appConfig); err != nil {
 		return nil, err
@@ -272,8 +275,9 @@ func loadUnifiedConfig(logger *logging.Logger, configPath string) (*installer.Co
 
 	logger.Info("Loaded App config", "path", configPath, "seal-pcrs", appConfig.SealPCRs)
 
-	// Extract installer.Config from App
-	return appConfig.GetInstallerConfig(), nil
+	// Extract installer.Config from App, with the network plan of the
+	// node's environment (sdn.environment).
+	return appConfig.GetInstallerConfig()
 }
 
 // createConfigFromFlags builds a config from current flag values

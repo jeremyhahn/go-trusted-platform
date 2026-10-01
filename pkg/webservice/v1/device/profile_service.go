@@ -67,12 +67,12 @@ func (s *StaticProfileService) RemoveProfile(serial string) {
 	delete(s.profiles, serial)
 }
 
-// DefaultTrustedProfile returns a default trusted-zone profile for testing.
-// This profile configures the device for trusted VLAN 200 with DHCP.
-func DefaultTrustedProfile(serial string) *ProfileResponse {
+// DefaultAdmittedProfile returns a default admitted-phase profile for testing.
+// This profile configures the device for admitted VLAN 200 with DHCP.
+func DefaultAdmittedProfile(serial string) *ProfileResponse {
 	return &ProfileResponse{
 		SerialNumber: serial,
-		TrustedNetwork: NetworkConfig{
+		AdmittedNetwork: NetworkConfig{
 			VLAN:    200,
 			UseDHCP: true,
 			DNS:     []string{"10.99.99.2"},
@@ -116,9 +116,9 @@ func ProfileFromDeviceProfile(dp *entities.DeviceProfile, serial string) *Profil
 		}
 	}
 
-	// Convert trusted network config
+	// Convert the admitted network config
 	if trustedNet := dp.GetPostEnrollmentNetworkConfig(); trustedNet != nil {
-		resp.TrustedNetwork = NetworkConfig{
+		resp.AdmittedNetwork = NetworkConfig{
 			VLAN:     trustedNet.VLAN,
 			UseDHCP:  trustedNet.DHCP,
 			StaticIP: trustedNet.StaticIP,

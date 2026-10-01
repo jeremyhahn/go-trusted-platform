@@ -40,9 +40,6 @@ const (
 	// DefaultVXLANPort is the standard IANA-assigned UDP port for VXLAN.
 	DefaultVXLANPort uint16 = 4789
 
-	// DefaultVNIBase is the base VNI for VLAN-to-VNI mapping.
-	DefaultVNIBase uint32 = 1000000
-
 	// DefaultUnderlayMTU is the default MTU for underlay networks.
 	DefaultUnderlayMTU int = 9000
 
@@ -55,8 +52,11 @@ const (
 	// DefaultMACExpiration is the default expiration time for learned MACs.
 	DefaultMACExpiration = 5 * time.Minute
 
-	// DefaultBridgeName is the default OVS bridge name for overlay traffic.
-	DefaultBridgeName = "br-overlay"
+	// DefaultBridgeName is the OVS integration bridge that holds workload
+	// ports and the VXLAN tunnel ports. It never carries the physical trunk
+	// (that is br-fabric); tunnels reach other VTEPs through the host's
+	// fabric address.
+	DefaultBridgeName = "br-int"
 )
 
 // ControllerState represents the operational state of the overlay controller.
@@ -137,8 +137,10 @@ type Config struct {
 	// VXLANPort is the UDP port for VXLAN (default 4789).
 	VXLANPort uint16
 
-	// VNIBase is the base VNI number for VLAN mapping.
-	VNIBase uint32
+	// Environment is the environment number E (sdn.environment.id). VNIs
+	// derived by AddVNI are E·100000+n (netplan.VNI); explicit VNIs must
+	// belong to it. Zero means no environment: every VNI must be explicit.
+	Environment uint16
 
 	// BridgeName is the OVS bridge name for overlay traffic.
 	BridgeName string
@@ -201,9 +203,6 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.VXLANPort == 0 {
 		c.VXLANPort = DefaultVXLANPort
-	}
-	if c.VNIBase == 0 {
-		c.VNIBase = DefaultVNIBase
 	}
 	if c.BridgeName == "" {
 		c.BridgeName = DefaultBridgeName
@@ -396,25 +395,39 @@ type BGPStatus struct {
 	Uptime time.Duration
 }
 
+// OverlayKind classifies an overlay network. Overlays are not zones: they
+// are EVPN/VXLAN networks the SDN creates, numbered from the environment's
+// VNI block.
+type OverlayKind string
+
+const (
+	// OverlayKindPlatform is the platform-services overlay.
+	OverlayKindPlatform OverlayKind = "platform"
+	// OverlayKindTenant is a tenant workload overlay.
+	OverlayKindTenant OverlayKind = "tenant"
+	// OverlayKindPublic is the public overlay the gateways expose.
+	OverlayKindPublic OverlayKind = "public"
+)
+
+// overlayKinds is the set of valid OverlayKind values.
+var overlayKinds = map[OverlayKind]struct{}{
+	OverlayKindPlatform: {},
+	OverlayKindTenant:   {},
+	OverlayKindPublic:   {},
+}
+
 // VNIConfig contains configuration for a VNI.
 type VNIConfig struct {
-	// VNI is the VXLAN Network Identifier.
-	// When Zone is set and VNI is zero, the controller derives the VNI from
-	// the zone-specific allocation base:
-	//   - ZoneTenant zones use vlan.TenantBase (1000) as the VNI base.
-	//   - All other zones use the overlay Config.VNIBase.
-	// Callers may override by setting VNI explicitly to a non-zero value.
+	// VNI is the VXLAN Network Identifier. Zero asks the controller to
+	// derive it: the environment's lowest free overlay network number n
+	// gives VNI E·100000+n (netplan.VNI).
 	VNI uint32
 
 	// VLAN is the optional associated VLAN ID.
 	VLAN uint16
 
-	// Zone is the trust/exposure zone for this VNI. When set for a
-	// ZoneTenant zone, VNI allocation uses vlan.TenantBase as the base,
-	// providing per-tenant isolation in the 1000+ range. For all other
-	// zones the overlay Config.VNIBase is used. An empty Zone means no
-	// zone-specific allocation; VNI must be set explicitly.
-	Zone string
+	// Kind optionally classifies the overlay (platform, tenant, public).
+	Kind OverlayKind
 
 	// Multicast is the optional multicast group for BUM traffic.
 	Multicast netip.Addr
@@ -427,6 +440,11 @@ type VNIConfig struct {
 func (c *VNIConfig) Validate() error {
 	if c.VNI < MinVNI || c.VNI > MaxVNI {
 		return ErrVNIOutOfRange
+	}
+	if c.Kind != "" {
+		if _, ok := overlayKinds[c.Kind]; !ok {
+			return ErrInvalidOverlayKind{Kind: c.Kind}
+		}
 	}
 	if c.VLAN > 4094 {
 		return ErrVLANOutOfRange

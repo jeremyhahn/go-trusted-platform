@@ -132,7 +132,7 @@ func TestSetProvisioningState(t *testing.T) {
 			name: "successful provisioning state",
 			config: &PortAuthConfig{
 				PortID:       "test-port",
-				BridgeName:   "trusted0",
+				BridgeName:   "br-int",
 				MACAddress:   "00:11:22:33:44:55",
 				PolicyEngine: newMockPolicyEngine(),
 			},
@@ -149,7 +149,7 @@ func TestSetProvisioningState(t *testing.T) {
 			name: "empty port ID",
 			config: &PortAuthConfig{
 				PortID:       "",
-				BridgeName:   "trusted0",
+				BridgeName:   "br-int",
 				PolicyEngine: newMockPolicyEngine(),
 			},
 			wantState: policy.PortStateUnconnected,
@@ -159,7 +159,7 @@ func TestSetProvisioningState(t *testing.T) {
 			name: "nil policy engine",
 			config: &PortAuthConfig{
 				PortID:       "test-port",
-				BridgeName:   "trusted0",
+				BridgeName:   "br-int",
 				PolicyEngine: nil,
 			},
 			wantState: policy.PortStateUnconnected,
@@ -201,7 +201,7 @@ func TestActivatePort(t *testing.T) {
 			name: "successful activation",
 			config: &PortAuthConfig{
 				PortID:       "test-port",
-				BridgeName:   "trusted0",
+				BridgeName:   "br-int",
 				MACAddress:   "00:11:22:33:44:55",
 				PolicyEngine: newMockPolicyEngine(),
 			},
@@ -226,7 +226,7 @@ func TestActivatePort(t *testing.T) {
 			name: "nil port policy",
 			config: &PortAuthConfig{
 				PortID:       "test-port",
-				BridgeName:   "trusted0",
+				BridgeName:   "br-int",
 				PolicyEngine: newMockPolicyEngine(),
 			},
 			portPolicy: nil,
@@ -285,7 +285,7 @@ func TestGetPortState(t *testing.T) {
 			name: "get existing state",
 			config: &PortAuthConfig{
 				PortID:       "test-port",
-				BridgeName:   "trusted0",
+				BridgeName:   "br-int",
 				PolicyEngine: mockEngine,
 			},
 			wantState: policy.PortStateProvisioning,
@@ -330,7 +330,7 @@ func TestRemovePortAuth(t *testing.T) {
 				})
 				return &PortAuthConfig{
 					PortID:       "test-port",
-					BridgeName:   "trusted0",
+					BridgeName:   "br-int",
 					PolicyEngine: mockEngine,
 				}
 			},
@@ -374,7 +374,7 @@ func TestPortAuthWorkflow(t *testing.T) {
 	mockEngine := newMockPolicyEngine()
 	config := &PortAuthConfig{
 		PortID:       "test-port",
-		BridgeName:   "trusted0",
+		BridgeName:   "br-int",
 		MACAddress:   "00:11:22:33:44:55",
 		PolicyEngine: mockEngine,
 	}

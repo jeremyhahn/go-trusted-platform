@@ -276,11 +276,12 @@ message IPAMPool {
   string cidr = 3;
   // Optional gateway address within the CIDR.
   string gateway = 4;
-  // Trust/exposure zone for this pool (e.g. "trusted", "provisioning").
+  // Underlay zone of a zone pool (e.g. "control-plane", "provisioning");
+  // empty for overlay and IPAM-range pools.
   string zone = 5;
   // Optional description of the pool's purpose.
   string description = 6;
-  // Total usable IP count.
+  // Total allocatable IP count (usable addresses less reserved ones).
   uint64 total = 7;
   // Currently allocated IP count.
   uint64 allocated = 8;
@@ -294,6 +295,13 @@ message IPAMPool {
   google.protobuf.Timestamp created_at = 12;
   // When this pool was last modified.
   google.protobuf.Timestamp updated_at = 13;
+  // Prefixes inside the CIDR that are never allocatable (CIDR notation).
+  // The gateway is always reserved as well.
+  repeated string reserved = 14;
+  // First and last address of the dynamic allocation window; both empty
+  // means the whole CIDR.
+  string range_start = 15;
+  string range_end = 16;
 }
 
 // IP allocation
@@ -363,7 +371,7 @@ message CreateIPAMPoolRequest {
   string cidr = 3;
   // Optional gateway address within the CIDR.
   string gateway = 4;
-  // Optional zone for the pool (e.g. "trusted", "provisioning").
+  // Optional underlay zone for the pool (e.g. "control-plane").
   string zone = 5;
   // Optional description.
   string description = 6;
@@ -371,6 +379,11 @@ message CreateIPAMPoolRequest {
   int64 default_lease_duration_nanos = 7;
   // Inactivity timeout in nanoseconds.
   int64 inactivity_timeout_nanos = 8;
+  // Prefixes inside the CIDR that are never allocatable (CIDR notation).
+  repeated string reserved = 9;
+  // Dynamic allocation window; set both or neither.
+  string range_start = 10;
+  string range_end = 11;
 }
 
 message CreateIPAMPoolResponse {
@@ -403,6 +416,14 @@ message UpdateIPAMPoolRequest {
   int64 default_lease_duration_nanos = 6;
   // Updated inactivity timeout in nanoseconds.
   int64 inactivity_timeout_nanos = 7;
+  // When true, reserved, range_start and range_end replace the pool's
+  // allocation window (empty values clear it); when false they are ignored.
+  bool update_window = 8;
+  // Replacement reserved prefixes (CIDR notation).
+  repeated string reserved = 9;
+  // Replacement dynamic allocation window; set both or neither.
+  string range_start = 10;
+  string range_end = 11;
 }
 
 message UpdateIPAMPoolResponse {

@@ -27,18 +27,13 @@ Create `bootstrap.yaml`:
 
 ```yaml
 deployer:
-  host: 192.168.1.5
+  host: deploy.example.com
   user: admin
   ssh_key: ~/.ssh/id_ed25519
   container_runtime: docker
 
-provisioning_network:
-  subnet: 10.0.100.0/24
-  gateway: 10.0.100.1
-  dhcp_range_start: 10.0.100.100
-  dhcp_range_end: 10.0.100.200
-  dns:
-    - 10.0.100.1
+environment:          # the reference network: every VLAN and subnet is derived
+  id: 4               # provisioning is VLAN 405, 192.0.2.0/24
 
 platform:
   domain: example.com
@@ -57,31 +52,31 @@ templates:
 nodes:
   - hostname: cp-01
     role: control-plane
-    bmc_address: 192.168.1.10
+    bmc_address: 10.4.2.10
     bmc_user: admin
     bmc_password: "kms://bmc/cp-01/password"
 
   - hostname: cp-02
     role: control-plane
-    bmc_address: 192.168.1.11
+    bmc_address: 10.4.2.11
     bmc_user: admin
     bmc_password: "kms://bmc/cp-02/password"
 
   - hostname: cp-03
     role: control-plane
-    bmc_address: 192.168.1.12
+    bmc_address: 10.4.2.12
     bmc_user: admin
     bmc_password: "kms://bmc/cp-03/password"
 
   - hostname: gw-01
     role: gateway
-    bmc_address: 192.168.1.20
+    bmc_address: 10.4.2.20
     bmc_user: admin
     bmc_password: "kms://bmc/gw-01/password"
 
   - hostname: worker-01
     role: worker
-    bmc_address: 192.168.1.30
+    bmc_address: 10.4.2.30
     bmc_user: admin
     bmc_password: "kms://bmc/worker-01/password"
 ```

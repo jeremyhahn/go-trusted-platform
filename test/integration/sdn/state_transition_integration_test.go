@@ -101,6 +101,11 @@ func (m *MockFlowController) SetPortVLAN(ctx context.Context, portName string, v
 	return nil
 }
 
+// SetPortTrunk implements OVSPortController interface
+func (m *MockFlowController) SetPortTrunk(ctx context.Context, portName string, allowed []uint16, native uint16) error {
+	return nil
+}
+
 // SetPortState implements OVSPortController interface
 func (m *MockFlowController) SetPortState(ctx context.Context, portName string, state ovs.PortState) error {
 	return nil

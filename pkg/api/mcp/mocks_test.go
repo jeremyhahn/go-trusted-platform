@@ -31,6 +31,11 @@ type mockServiceProvider struct {
 	// lastSRKHandle records the handle the last TPMGetSRK call carried.
 	lastSRKHandle uint32
 
+	// lastZoneCreate and lastZoneUpdate record the last zone requests.
+	lastZoneCreate     *NetworkZoneCreateRequest
+	lastZoneUpdate     *NetworkZoneUpdateRequest
+	lastZoneUpdateName string
+
 	// vTPM
 	vtpmCreateFunc    func(ctx context.Context, name, algorithm string) (interface{}, error)
 	vtpmDeleteFunc    func(ctx context.Context, name string) error
@@ -2232,18 +2237,17 @@ func (m *mockServiceProvider) GatewayNetworkZoneList(ctx context.Context, lifecy
 }
 
 func (m *mockServiceProvider) GatewayNetworkZoneCreate(ctx context.Context, req *NetworkZoneCreateRequest) (interface{}, error) {
-	return map[string]interface{}{"zone": req, "restart_required": false}, nil
+	m.lastZoneCreate = req
+	return map[string]interface{}{"zone": req, "restart_required": true}, nil
 }
 
 func (m *mockServiceProvider) GatewayNetworkZoneUpdate(ctx context.Context, name string, req *NetworkZoneUpdateRequest) (interface{}, error) {
-	return map[string]interface{}{"zone": req, "restart_required": false}, nil
+	m.lastZoneUpdate = req
+	m.lastZoneUpdateName = name
+	return map[string]interface{}{"zone": req, "restart_required": true}, nil
 }
 
 func (m *mockServiceProvider) GatewayNetworkZoneDelete(ctx context.Context, name string) (bool, error) {
-	return false, nil
-}
-
-func (m *mockServiceProvider) GatewayNetworkZoneAssign(ctx context.Context, network string, zoneName string) (bool, error) {
 	return false, nil
 }
 

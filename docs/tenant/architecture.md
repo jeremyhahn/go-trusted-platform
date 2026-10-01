@@ -19,22 +19,31 @@ detect it.
 
 ## The shape chosen
 
-A tenant is **four independent allocations plus a quota**, each enforced by a
+A tenant is **two independent allocations plus a quota**, each enforced by a
 different layer:
 
 | Allocation | Enforced by |
 |---|---|
-| **VLAN** | The datapath — traffic is separated in OVS, not in application code |
-| **Bridge** | The datapath — the tenant's ports attach to its own bridge |
 | **Keyspace** | The key path in the store — separation is in the key, not in a read-time filter |
 | **DEK** | Encryption at rest — a tenant's data is unreadable without its key |
 | **Quota** | Admission — `HasCapacity` before allocation, not accounting after |
 
-An escape therefore requires defeating a network datapath, a key path and an
-encryption key, rather than missing one `WHERE` clause.
+An escape therefore requires defeating a key path and an encryption key, rather
+than missing one `WHERE` clause.
 
 Optionally, a **per-tenant barrier** seals the tenant's data cryptographically
 until unsealed.
+
+### Network identity: none yet
+
+**A tenant has no VLAN range and no per-tenant OVS bridge.** Both were retired
+with the reference network (#708): switch VLANs are underlay zones numbered
+per environment, tenants never create zones, and every tenant network is an
+EVPN/VXLAN overlay ([reference network](../architecture/reference-network.md)).
+A tenant's network identity becomes a **VRF**, its routing domain on the
+overlay, delivered by the tenancy work that follows the overlay transport
+(#709). Until then this feature allocates no network resource, and separating
+two tenants' traffic is not something it provides.
 
 ### Alternatives rejected
 
@@ -42,9 +51,9 @@ until unsealed.
 |---|---|
 | **A tenant column and query filters** | One forgotten predicate is a total isolation failure with no signal. Isolation belongs in mechanisms that fail visibly. |
 | **One shared DEK with per-tenant subkeys derived at read time** | A single compromise reaches every tenant, and rotation becomes all-or-nothing. Per-tenant DEKs make rotation a per-tenant operation. |
-| **Namespaces without VLANs** | Container/process namespaces do not separate layer 2. Two tenants on one host would share a broadcast domain. |
+| **A VLAN range and an OVS bridge per tenant** | The design this feature used to carry, retired by #708. Per-tenant VLANs collide with the environment's underlay VLAN plan, and a bridge on one host does not separate traffic across hosts. Tenant traffic belongs on overlays, separated by a per-tenant VRF. |
 | **Soft quotas measured after the fact** | Accounting after allocation means the limit is advisory. `CheckQuota` and `HasCapacity` run before. |
-| **Reversible deletion (a "deleted" state you can leave)** | A tenant's VLAN, bridge, keyspace and DEK are released on deletion. A state you can return from would have to hold those allocations indefinitely, which is what deletion was for. `deleted` is terminal. |
+| **Reversible deletion (a "deleted" state you can leave)** | A tenant's keyspace and DEK are released on deletion. A state you can return from would have to hold those allocations indefinitely, which is what deletion was for. `deleted` is terminal. |
 | **Strict transitions with no same-state allowance** | Retried API calls and reconciliation loops would fail on the second attempt. `CanTransitionTo` permits same-state transitions for idempotency. |
 
 ## Component boundaries
@@ -53,18 +62,18 @@ until unsealed.
 |---|---|---|
 | Tenant manager, entity, lifecycle | `pkg/tenant/manager.go`, `entity.go`, `state.go` | this repo |
 | Quotas and usage | `pkg/tenant/quotas.go`, `quota/` | this repo |
-| VLAN allocation | `pkg/tenant/vlan/` | this repo |
-| Bridge lifecycle | `pkg/tenant/bridge/` | this repo |
 | Keyspace | `pkg/tenant/keyspace.go` | this repo |
 | DEK operations | `pkg/tenant/dek_client.go` — wraps `quicbaas.DEKClient` | **delegates to the stack** |
 | **Key management** | consumed through the quicbaas SDK | **not this repo** |
 | **Barrier** | consumed through the quicbaas SDK | **not this repo** |
 | **Storage** | consumed through the quicbaas SDK | **not this repo** |
-| **VLANs and bridges in the datapath** | `pkg/sdn/` — [`docs/sdn/`](../sdn/) | this repo, separate feature |
+| **Tenant networks (overlays, the tenant VRF)** | `pkg/sdn/` — [`docs/sdn/`](../sdn/) | this repo, separate feature |
 | **Users, groups, roles** | IAM — [`docs/iam/`](../iam/) | **not this feature** |
 
 The §R capability row is *"Platform tenancy (VLAN/keyspace/quota)"*, Tier 1,
-reached through `services/tenant`.
+reached through `services/tenant`. Its VLAN part no longer exists in the code:
+the per-tenant VLAN range was retired by #708 and the network identity of a
+tenant becomes a VRF.
 
 **Key material is never a raw byte slice here.** `TenantDEKClient` delegates to
 the stack's DEK client. This repository sits above Layer 3 and uses the stack's
@@ -72,8 +81,9 @@ owned abstractions rather than coding protected memory directly.
 
 ## Trust boundaries
 
-1. **Tenant → tenant.** The one this feature exists to establish. Crossed only
-   by defeating the VLAN, the keyspace and the DEK.
+1. **Tenant → tenant.** The one this feature exists to establish. For stored
+   data it is crossed only by defeating the keyspace and the DEK. Network
+   separation is not provided here yet (see "Network identity: none yet").
 2. **Platform → tenant DEK.** The DEK is managed by the stack's key management,
    not held here. Rotation rewraps the key and leaves the data alone.
 3. **Barrier.** When sealed, a tenant's data is inaccessible until an unseal key
@@ -91,8 +101,8 @@ owned abstractions rather than coding protected memory directly.
   IAM has its own tenant scoping, which is a different thing from a platform
   tenant — see [api.md](api.md) §6.
 - **It does not manage keys.** DEKs and barriers come from the stack.
-- **It does not program the datapath.** It allocates a VLAN and a bridge name;
-  SDN makes them real.
+- **It does not program the datapath or allocate network resources.** A
+  tenant's VRF and overlays belong to SDN.
 - **It does not support undeleting a tenant.** See the rejected alternatives.
 
 ## System Architecture
@@ -117,20 +127,20 @@ owned abstractions rather than coding protected memory directly.
 ║  │  ┌───────────────────┐  ┌────────────────────┐  ┌────────────────────┐  │  ║
 ║  │  │  TenantManager    │  │   QuotaEnforcer    │  │  ResourceAllocator │  │  ║
 ║  │  │                   │  │                    │  │                    │  │  ║
-║  │  │  • CRUD ops       │  │  • Pre-allocation  │  │  • OVS bridges     │  │  ║
-║  │  │  • State machine  │  │  • Usage tracking  │  │  • VLAN ranges     │  │  ║
+║  │  │  • CRUD ops       │  │  • Pre-allocation  │  │  • Keyspaces       │  │  ║
+║  │  │  • State machine  │  │  • Usage tracking  │  │  • Barriers        │  │  ║
 ║  │  │  • Validation     │  │  • Quota policies  │  │  • DEK generation  │  │  ║
 ║  │  └───────────────────┘  └────────────────────┘  └────────────────────┘  │  ║
 ║  │                                                                         │  ║
 ║  └─────────┬────────────────────┬────────────────────┬─────────────────────┘  ║
 ║            │                    │                    │                        ║
 ║  ┌─────────▼─────────┐ ┌────────▼────────┐ ┌────────▼─────────┐               ║
-║  │   QuicBaaS        │ │   SDN Service   │ │   Key Service    │               ║
-║  │   (Raft)          │ │   (OVS/OF)      │ │   (TPM/KMS)      │               ║
+║  │   QuicBaaS        │ │   IAM (SDK)     │ │   Key Service    │               ║
+║  │   (Raft)          │ │   (quicbaas)    │ │   (TPM/KMS)      │               ║
 ║  │                   │ │                 │ │                  │               ║
-║  │  • TenantEntity   │ │  • Bridge mgmt  │ │  • DEK creation  │               ║
-║  │  • QuotaEntity    │ │  • VLAN config  │ │  • Key sealing   │               ║
-║  │  • AuditEntity    │ │  • Flow rules   │ │  • Key rotation  │               ║
+║  │  • TenantEntity   │ │  • Tenant CRUD  │ │  • DEK creation  │               ║
+║  │  • QuotaEntity    │ │  • Membership   │ │  • Key sealing   │               ║
+║  │  • AuditEntity    │ │  • Scoping      │ │  • Key rotation  │               ║
 ║  └───────────────────┘ └─────────────────┘ └──────────────────┘               ║
 ║                                                                               ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝
@@ -145,30 +155,18 @@ owned abstractions rather than coding protected memory directly.
 ║                                                                               ║
 ║   TENANT A (engineering)              TENANT B (production)                   ║
 ║   ╔══════════════════════╗            ╔══════════════════════╗                ║
-║   ║                      ║            ║                      ║                ║
 ║   ║  ┌────────────────┐  ║            ║  ┌────────────────┐  ║                ║
-║   ║  │ OVS Bridge     │  ║            ║  │ OVS Bridge     │  ║                ║
-║   ║  │ br-tenant-eng  │  ║            ║  │ br-tenant-prod │  ║                ║
+║   ║  │ Keyspace       │  ║            ║  │ Keyspace       │  ║                ║
+║   ║  │ tenants/eng/…  │  ║  ISOLATED  ║  │ tenants/prod/… │  ║                ║
 ║   ║  └───────┬────────┘  ║            ║  └───────┬────────┘  ║                ║
-║   ║          │           ║            ║          │           ║                ║
-║   ║  ┌───────▼────────┐  ║            ║  ┌───────▼────────┐  ║                ║
-║   ║  │ VLAN Namespace │  ║            ║  │ VLAN Namespace │  ║                ║
-║   ║  │ VLANs 100-199  │  ║            ║  │ VLANs 200-299  │  ║                ║
-║   ║  └────────────────┘  ║            ║  └────────────────┘  ║                ║
-║   ║          │           ║            ║          │           ║                ║
-║   ║  ┌───────▼────────┐  ║            ║  ┌───────▼────────┐  ║                ║
-║   ║  │ VMs/Containers │  ║  ISOLATED  ║  │ VMs/Containers │  ║                ║
-║   ║  │ vm-eng-001     │◀─╬────────────╬─▶│ vm-prod-001    │  ║                ║
-║   ║  │ vm-eng-002     │  ║            ║  │ vm-prod-002    │  ║                ║
-║   ║  └────────────────┘  ║            ║  └────────────────┘  ║                ║
-║   ║          │           ║            ║          │           ║                ║
 ║   ║  ┌───────▼────────┐  ║            ║  ┌───────▼────────┐  ║                ║
 ║   ║  │ Per-Tenant DEK │  ║            ║  │ Per-Tenant DEK │  ║                ║
-║   ║  │ DEK-eng        │  ║            ║  │ DEK-prod       │  ║                ║
-║   ║  │ (TPM-sealed)   │  ║            ║  │ (TPM-sealed)   │  ║                ║
+║   ║  │ + barrier      │  ║            ║  │ + barrier      │  ║                ║
 ║   ║  └────────────────┘  ║            ║  └────────────────┘  ║                ║
-║   ║                      ║            ║                      ║                ║
 ║   ╚══════════════════════╝            ╚══════════════════════╝                ║
+║                                                                               ║
+║   Network separation: none in this feature yet. Tenant networks are           ║
+║   EVPN/VXLAN overlays; a tenant's routing domain becomes a VRF.               ║
 ║                                                                               ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
@@ -177,32 +175,8 @@ owned abstractions rather than coding protected memory directly.
 
 ### Network Resources
 
-Each tenant receives dedicated network infrastructure:
-
-| Resource | Naming Convention | Purpose |
-|----------|-------------------|---------|
-| OVS Bridge | `br-tenant-{name}` | Primary network bridge for tenant |
-| VLAN Range | Configurable (e.g., 100-199) | L2 isolation for tenant workloads |
-| Flow Tables | `tenant:{id}:flows` | OpenFlow rules for tenant traffic |
-| ACL Rules | `tenant:{id}:acls` | Access control policies |
-
-```
-                     ┌───────────────────────────┐
-                     │   br-tenant-engineering   │
-                     └─────────────┬─────────────┘
-                                   │
-              ┌────────────────────┼────────────────────┐
-              │                    │                    │
-        ┌─────▼─────┐        ┌─────▼─────┐        ┌─────▼─────┐
-        │  VLAN 100 │        │  VLAN 101 │        │  VLAN 102 │
-        │ (web tier)│        │ (app tier)│        │ (db tier) │
-        └─────┬─────┘        └─────┬─────┘        └─────┬─────┘
-              │                    │                    │
-        ┌─────▼─────┐        ┌─────▼─────┐        ┌─────▼─────┐
-        │ vm-web-01 │        │ vm-app-01 │        │ vm-db-01  │
-        │ vm-web-02 │        │ vm-app-02 │        │ vm-db-02  │
-        └───────────┘        └───────────┘        └───────────┘
-```
+None. The per-tenant OVS bridge (`br-tenant-{name}`) and VLAN range were
+retired by #708; see "Network identity: none yet" above.
 
 ### Compute Resources
 
@@ -274,10 +248,8 @@ type TenantEntity struct {
     // Configuration
     DisplayName string
     State       TenantState
-    VLANRange   VLANRange
 
     // Resource allocation
-    OVSBridge   string
     DEKHandle   uint32    // TPM handle for DEK
 
     // Quotas (embedded)
@@ -355,59 +327,34 @@ func (tm *TenantManager) FindByName(ctx context.Context, name string) (*TenantEn
 ### Tenant Creation Flow
 
 ```
-┌──────────┐    ┌───────────────┐    ┌───────────────┐    ┌──────────┐    ┌──────────┐
-│  Client  │    │ TenantManager │    │ QuicBaaS/Raft │    │ OVS/SDN  │    │ KMS/TPM  │
-└────┬─────┘    └───────┬───────┘    └───────┬───────┘    └────┬─────┘    └────┬─────┘
-     │                  │                    │                 │               │
-     │ CreateTenant     │                    │                 │               │
-     │─────────────────▶│                    │                 │               │
-     │                  │                    │                 │               │
-     │                  │ Validate request   │                 │               │
-     │                  │────┐               │                 │               │
-     │                  │    │               │                 │               │
-     │                  │◀───┘               │                 │               │
-     │                  │                    │                 │               │
-     │                  │ Put(TenantEntity)  │                 │               │
-     │                  │───────────────────▶│                 │               │
-     │                  │                    │                 │               │
-     │                  │                    │ Raft Propose    │               │
-     │                  │                    │────┐            │               │
-     │                  │                    │    │ (replicate)│               │
-     │                  │                    │◀───┘            │               │
-     │                  │                    │                 │               │
-     │                  │ Success            │                 │               │
-     │                  │◀───────────────────│                 │               │
-     │                  │                    │                 │               │
-     │                  │ CreateBridge       │                 │               │
-     │                  │─────────────────────────────────────▶│               │
-     │                  │                    │                 │               │
-     │                  │                    │       OVSDB     │               │
-     │                  │                    │       Insert    │               │
-     │                  │                    │       ┌────┐    │               │
-     │                  │                    │       │    │    │               │
-     │                  │                    │       └◀───┘    │               │
-     │                  │                    │                 │               │
-     │                  │ Bridge created     │                 │               │
-     │                  │◀─────────────────────────────────────│               │
-     │                  │                    │                 │               │
-     │                  │ GenerateDEK        │                 │               │
-     │                  │─────────────────────────────────────────────────────▶│
-     │                  │                    │                 │               │
-     │                  │                    │                 │   TPM Create  │
-     │                  │                    │                 │   ┌────┐      │
-     │                  │                    │                 │   │    │      │
-     │                  │                    │                 │   └◀───┘      │
-     │                  │                    │                 │               │
-     │                  │ DEK handle         │                 │               │
-     │                  │◀─────────────────────────────────────────────────────│
-     │                  │                    │                 │               │
-     │                  │ Update tenant      │                 │               │
-     │                  │───────────────────▶│                 │               │
-     │                  │                    │                 │               │
-     │ Tenant created   │                    │                 │               │
-     │◀─────────────────│                    │                 │               │
-     │                  │                    │                 │               │
+┌──────────┐    ┌───────────────┐    ┌───────────────┐    ┌──────────────┐
+│  Client  │    │ TenantManager │    │ QuicBaaS IAM  │    │ quicbaas DEK │
+└────┬─────┘    └───────┬───────┘    └───────┬───────┘    └──────┬───────┘
+     │ CreateTenant     │                    │                   │
+     │─────────────────▶│                    │                   │
+     │                  │ Validate request   │                   │
+     │                  │────┐               │                   │
+     │                  │◀───┘               │                   │
+     │                  │ CreateTenant       │                   │
+     │                  │───────────────────▶│                   │
+     │                  │ Tenant record      │                   │
+     │                  │◀───────────────────│                   │
+     │                  │ Apply quotas       │                   │
+     │                  │────┐               │                   │
+     │                  │◀───┘               │                   │
+     │                  │ EnsureTenantDEK (if DEK isolation on)  │
+     │                  │───────────────────────────────────────▶│
+     │                  │ DEK path           │                   │
+     │                  │◀───────────────────────────────────────│
+     │                  │ Init per-tenant barrier (non-fatal)    │
+     │                  │────┐               │                   │
+     │                  │◀───┘               │                   │
+     │ Tenant created   │                    │                   │
+     │◀─────────────────│                    │                   │
 ```
+
+Each step registers a rollback; a failure later in the sequence undoes the
+IAM record and the DEK. No network resource is created.
 
 ### Resource Allocation Flow
 
@@ -678,8 +625,6 @@ type User struct {
 │  │  Name: engineering                                                    │  │
 │  │  DisplayName: Engineering Department                                  │  │
 │  │  State: active                                                        │  │
-│  │  VLANRange: 100-199                                                   │  │
-│  │  OVSBridge: br-tenant-engineering                                     │  │
 │  │  DEKHandle: 0x81000001                                                │  │
 │  │                                                                       │  │
 │  └─────────────────────────────────────┬─────────────────────────────────┘  │

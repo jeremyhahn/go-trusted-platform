@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -39,8 +40,8 @@ type VLANIntegration interface {
 	ApplyProvisioningVLAN(ctx context.Context, portID string, vlanID uint16) error
 
 	// ApplyZoneVLAN moves the device to the VLAN for the given zone.
-	// The VLAN is resolved by the underlying ZoneFlowManager via its ZoneIndex
-	// or built-in zone defaults.
+	// The VLAN is resolved by the underlying ZoneFlowManager from the
+	// network plan.
 	ApplyZoneVLAN(ctx context.Context, portID string, z zone.Zone) error
 
 	// GetCurrentVLAN returns the current VLAN assignment for a port.
@@ -54,9 +55,9 @@ type VLANIntegration interface {
 	// Allows DHCP, TFTP, HTTP, DNS, ACME access.
 	ApplyProvisioningFlows(ctx context.Context, portID string, mac net.HardwareAddr) error
 
-	// ApplyProductionFlows moves device to trusted production zone.
-	// The zone is zone.ZoneTrusted; the VLAN is resolved by ZoneFlowManager.
-	ApplyProductionFlows(ctx context.Context, portID string, mac net.HardwareAddr) error
+	// ApplyAuthorizedFlows admits an authorized device to the zone the
+	// network plan carries on vlanID.
+	ApplyAuthorizedFlows(ctx context.Context, portID string, mac net.HardwareAddr, vlanID uint16) error
 }
 
 // VLANIntegrationWrapper provides an extended interface with additional
@@ -80,12 +81,10 @@ type VLANIntegrationWrapper interface {
 // vlanIntegrationWrapper implements VLANIntegrationWrapper by delegating zone
 // transitions to the SDN ZoneFlowManager.
 type vlanIntegrationWrapper struct {
-	flowManager      *policy.ZoneFlowManager
-	bridgeName       string
-	quarantineVLAN   uint16
-	provisioningVLAN uint16
-	logger           *slog.Logger
-	closed           atomic.Bool
+	flowManager *policy.ZoneFlowManager
+	bridgeName  string
+	logger      *slog.Logger
+	closed      atomic.Bool
 }
 
 // VLANIntegrationOption is a functional option for configuring VLANIntegrationWrapper.
@@ -105,20 +104,6 @@ func WithBridgeName(name string) VLANIntegrationOption {
 	}
 }
 
-// WithQuarantineVLAN sets the fallback quarantine VLAN ID.
-func WithQuarantineVLAN(vlan uint16) VLANIntegrationOption {
-	return func(v *vlanIntegrationWrapper) {
-		v.quarantineVLAN = vlan
-	}
-}
-
-// WithProvisioningVLAN sets the fallback provisioning VLAN ID.
-func WithProvisioningVLAN(vlan uint16) VLANIntegrationOption {
-	return func(v *vlanIntegrationWrapper) {
-		v.provisioningVLAN = vlan
-	}
-}
-
 // WithVLANLogger sets the logger for VLAN operations.
 func WithVLANLogger(logger *slog.Logger) VLANIntegrationOption {
 	return func(v *vlanIntegrationWrapper) {
@@ -129,10 +114,8 @@ func WithVLANLogger(logger *slog.Logger) VLANIntegrationOption {
 // NewVLANIntegrationWrapper creates a new VLANIntegrationWrapper with the provided options.
 func NewVLANIntegrationWrapper(opts ...VLANIntegrationOption) VLANIntegrationWrapper {
 	v := &vlanIntegrationWrapper{
-		bridgeName:       DefaultBridgeName,
-		quarantineVLAN:   DefaultQuarantineVLAN,
-		provisioningVLAN: DefaultProvisioningVLAN,
-		logger:           slog.Default(),
+		bridgeName: DefaultBridgeName,
+		logger:     slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(v)
@@ -203,7 +186,7 @@ func (v *vlanIntegrationWrapper) ApplyQuarantineFlows(ctx context.Context, portI
 	if err := v.validateInputs(portID, mac); err != nil {
 		return err
 	}
-	return v.applyZoneWithLog(ctx, portID, zone.ZoneQuarantine, mac, v.quarantineVLAN)
+	return v.applyZoneWithLog(ctx, portID, zone.ZoneQuarantine, mac)
 }
 
 // ApplyProvisioningFlows implements VLANIntegration.ApplyProvisioningFlows.
@@ -214,19 +197,26 @@ func (v *vlanIntegrationWrapper) ApplyProvisioningFlows(ctx context.Context, por
 	if err := v.validateInputs(portID, mac); err != nil {
 		return err
 	}
-	return v.applyZoneWithLog(ctx, portID, zone.ZoneProvisioning, mac, v.provisioningVLAN)
+	return v.applyZoneWithLog(ctx, portID, zone.ZoneProvisioning, mac)
 }
 
-// ApplyProductionFlows implements VLANIntegration.ApplyProductionFlows.
-// The device is placed in zone.ZoneTrusted; the VLAN is resolved by the ZoneFlowManager.
-func (v *vlanIntegrationWrapper) ApplyProductionFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+// ApplyAuthorizedFlows implements VLANIntegration.ApplyAuthorizedFlows: the
+// device is admitted to the zone the plan carries on vlanID.
+func (v *vlanIntegrationWrapper) ApplyAuthorizedFlows(ctx context.Context, portID string, mac net.HardwareAddr, vlanID uint16) error {
 	if v.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
 	if err := v.validateInputs(portID, mac); err != nil {
 		return err
 	}
-	return v.applyZoneWithLog(ctx, portID, zone.ZoneTrusted, mac, 0)
+	if v.flowManager == nil {
+		return v.applyZoneWithLog(ctx, portID, "", mac)
+	}
+	z, ok := v.flowManager.ZoneForVLAN(vlanID)
+	if !ok {
+		return ErrVLANTransitionFailed{DeviceID: portID, ToVLAN: vlanID, Reason: "authorize", Cause: ErrVLANNotInPlan{VLAN: vlanID}}
+	}
+	return v.applyZoneWithLog(ctx, portID, z, mac)
 }
 
 // BlockPort removes all OVS flows for the port (no new traffic accepted).
@@ -287,20 +277,17 @@ func (v *vlanIntegrationWrapper) applyZone(ctx context.Context, portID string, z
 	return nil
 }
 
-// applyZoneWithLog is applyZone with structured logging. The logVLAN parameter
-// is informational only (used when the VLAN is already known to the caller).
+// applyZoneWithLog is applyZone with structured logging.
 func (v *vlanIntegrationWrapper) applyZoneWithLog(
 	ctx context.Context,
 	portID string,
 	z zone.Zone,
 	mac net.HardwareAddr,
-	logVLAN uint16,
 ) error {
 	v.logger.Info("applying zone flows",
 		slog.String("port_id", portID),
 		slog.String("zone", string(z)),
-		slog.String("mac", mac.String()),
-		slog.Uint64("vlan_hint", uint64(logVLAN)))
+		slog.String("mac", mac.String()))
 
 	if err := v.applyZone(ctx, portID, z); err != nil {
 		return err
@@ -330,19 +317,35 @@ func (v *vlanIntegrationWrapper) validateInputs(portID string, mac net.HardwareA
 // ---------------------------------------------------------------------------
 
 // noopVLANIntegration implements VLANIntegrationWrapper without requiring OVS.
-// Port→VLAN mappings are stored in memory. Intended for unit tests only.
+// Port→VLAN mappings are stored in memory, numbered by the network plan.
+// Intended for unit tests only.
 type noopVLANIntegration struct {
+	plan         *netplan.Plan
 	portVLANs    sync.Map // map[string]uint16
 	blockedPorts sync.Map // map[string]bool
 	closed       atomic.Bool
 	logger       *slog.Logger
 }
 
-// NewNoopVLANIntegration creates a no-op VLANIntegrationWrapper for testing.
-func NewNoopVLANIntegration() VLANIntegrationWrapper {
+// NewNoopVLANIntegration creates a no-op VLANIntegrationWrapper for testing
+// that numbers zones from plan.
+func NewNoopVLANIntegration(plan *netplan.Plan) VLANIntegrationWrapper {
 	return &noopVLANIntegration{
+		plan:   plan,
 		logger: slog.Default(),
 	}
+}
+
+// zoneVLAN returns the plan VLAN of z.
+func (n *noopVLANIntegration) zoneVLAN(z zone.Zone) (uint16, error) {
+	if n.plan == nil {
+		return 0, ErrNetworkPlanRequired{}
+	}
+	zn, err := n.plan.MustZone(z)
+	if err != nil {
+		return 0, err
+	}
+	return zn.VLAN, nil
 }
 
 func (n *noopVLANIntegration) ApplyQuarantineVLAN(ctx context.Context, portID string, vlanID uint16) error {
@@ -379,8 +382,10 @@ func (n *noopVLANIntegration) ApplyZoneVLAN(ctx context.Context, portID string, 
 	if z == "" {
 		return ErrInvalidConfiguration{Field: "zone", Reason: "zone is required"}
 	}
-	// Map zone to a VLAN for in-memory tracking.
-	vlanID := zoneToDefaultVLAN(z)
+	vlanID, err := n.zoneVLAN(z)
+	if err != nil {
+		return err
+	}
 	n.portVLANs.Store(portID, vlanID)
 	n.blockedPorts.Delete(portID)
 	return nil
@@ -411,7 +416,11 @@ func (n *noopVLANIntegration) ApplyQuarantineFlows(ctx context.Context, portID s
 	if err := n.validateInputs(portID, mac); err != nil {
 		return err
 	}
-	n.portVLANs.Store(portID, DefaultQuarantineVLAN)
+	vlanID, err := n.zoneVLAN(zone.ZoneQuarantine)
+	if err != nil {
+		return err
+	}
+	n.portVLANs.Store(portID, vlanID)
 	n.blockedPorts.Delete(portID)
 	return nil
 }
@@ -423,19 +432,29 @@ func (n *noopVLANIntegration) ApplyProvisioningFlows(ctx context.Context, portID
 	if err := n.validateInputs(portID, mac); err != nil {
 		return err
 	}
-	n.portVLANs.Store(portID, DefaultProvisioningVLAN)
+	vlanID, err := n.zoneVLAN(zone.ZoneProvisioning)
+	if err != nil {
+		return err
+	}
+	n.portVLANs.Store(portID, vlanID)
 	n.blockedPorts.Delete(portID)
 	return nil
 }
 
-func (n *noopVLANIntegration) ApplyProductionFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+func (n *noopVLANIntegration) ApplyAuthorizedFlows(ctx context.Context, portID string, mac net.HardwareAddr, vlanID uint16) error {
 	if n.closed.Load() {
 		return ErrServiceNotRunning{}
 	}
 	if err := n.validateInputs(portID, mac); err != nil {
 		return err
 	}
-	n.portVLANs.Store(portID, DefaultTrustedVLAN)
+	if n.plan == nil {
+		return ErrNetworkPlanRequired{}
+	}
+	if _, ok := n.plan.ZoneForVLAN(vlanID); !ok {
+		return ErrVLANNotInPlan{VLAN: vlanID}
+	}
+	n.portVLANs.Store(portID, vlanID)
 	n.blockedPorts.Delete(portID)
 	return nil
 }
@@ -489,20 +508,4 @@ func (n *noopVLANIntegration) IsPortBlocked(portID string) bool {
 	}
 	blocked, _ := value.(bool)
 	return blocked
-}
-
-// zoneToDefaultVLAN maps a zone name to its default VLAN using the built-in
-// policy package defaults.
-func zoneToDefaultVLAN(z zone.Zone) uint16 {
-	defaults := map[zone.Zone]uint16{
-		zone.ZoneTrusted:      DefaultTrustedVLAN,
-		zone.ZoneProvisioning: DefaultProvisioningVLAN,
-		zone.ZoneQuarantine:   DefaultQuarantineVLAN,
-		zone.ZoneStorage:      DefaultStorageVLAN,
-		zone.ZoneManagement:   DefaultManagementVLAN,
-	}
-	if v, ok := defaults[z]; ok {
-		return v
-	}
-	return 0
 }

@@ -47,12 +47,13 @@ const (
 	OpGatewaySnapshot      byte = 0x15
 	OpGatewayListSnapshots byte = 0x16
 
-	// Network Zone Operations (0x10-0x14)
+	// Network Zone Operations (0x10-0x13). 0x14 was the retired
+	// assign-network-to-zone operation (networks are zones since #708);
+	// it is never reused.
 	OpGatewayListNetworkZones  byte = 0x10
 	OpGatewayCreateNetworkZone byte = 0x11
 	OpGatewayUpdateNetworkZone byte = 0x12
 	OpGatewayDeleteNetworkZone byte = 0x13
-	OpGatewayAssignNetworkZone byte = 0x14
 )
 
 // Gateway pagination defaults
@@ -104,6 +105,11 @@ var (
 	// ErrGatewayInvalidPoolCIDR is returned when an invalid pool CIDR is specified.
 	ErrGatewayInvalidPoolCIDR = errors.New("invalid pool CIDR format")
 
+	// ErrGatewayIPAMWindow is returned when a request names a reserved
+	// address, or a pool's reserved prefixes or allocation range do not fit
+	// its CIDR. Implementations wrap it in ErrGatewayIPAMWindowDetail.
+	ErrGatewayIPAMWindow = errors.New("ipam: reserved address or invalid allocation window")
+
 	// ErrGatewayPoolAlreadyExists is returned when attempting to create a pool
 	// that already exists.
 	ErrGatewayPoolAlreadyExists = errors.New("IPAM pool already exists")
@@ -144,11 +150,12 @@ var (
 	// ErrGatewayZoneNotFound is returned when a zone is not found.
 	ErrGatewayZoneNotFound = errors.New("zone not found")
 
-	// ErrGatewayNetworkRequired is returned when a network name is required.
-	ErrGatewayNetworkRequired = errors.New("network name is required")
+	// ErrGatewayZoneAlreadyExists is returned when a zone already exists.
+	ErrGatewayZoneAlreadyExists = errors.New("zone already exists")
 
-	// ErrGatewayZoneTargetRequired is returned when a target zone is required.
-	ErrGatewayZoneTargetRequired = errors.New("target zone name is required")
+	// ErrGatewayZoneInvalid is returned when a zone mutation fails zone or
+	// numbering validation.
+	ErrGatewayZoneInvalid = errors.New("invalid zone")
 
 	// ErrGatewayFeatureNotConfigured is returned when a gateway feature is
 	// requested but the backing service or hardware is not configured. Adapters
@@ -195,7 +202,6 @@ type GatewayServiceInterface interface {
 	CreateNetworkZone(ctx context.Context, opts *CreateNetworkZoneOptions) (*NetworkZoneInfo, error)
 	UpdateNetworkZone(ctx context.Context, name string, opts *UpdateNetworkZoneOptions) (*NetworkZoneInfo, error)
 	DeleteNetworkZone(ctx context.Context, name string) (bool, error)
-	AssignNetworkZone(ctx context.Context, network string, zoneName string) (bool, error)
 
 	// Load balancer VIP operations (sub-opcodes 0x30-0x35)
 	AddVIP(ctx context.Context, spec *LBVIPSpec) (*LBVIPInfo, error)
@@ -447,6 +453,13 @@ type IPAMPoolInfo struct {
 	Labels        map[string]string `codec:"labels,omitempty"`
 	CreatedAt     int64             `codec:"created_at"`
 	LastAllocated int64             `codec:"last_allocated,omitempty"`
+	// Reserved lists never-allocatable prefixes (CIDR notation); the
+	// gateway is always reserved as well.
+	Reserved []string `codec:"reserved,omitempty"`
+	// RangeStart and RangeEnd bound dynamic allocation; empty means the
+	// whole CIDR.
+	RangeStart string `codec:"range_start,omitempty"`
+	RangeEnd   string `codec:"range_end,omitempty"`
 }
 
 // IPAllocationInfo contains IP allocation information
@@ -486,6 +499,11 @@ type CreateIPAMPoolOptions struct {
 	Description   string   `codec:"description,omitempty"`
 	DNS           []string `codec:"dns,omitempty"`
 	LeaseDuration int64    `codec:"lease_duration_nanos,omitempty"`
+	// Reserved lists never-allocatable prefixes (CIDR notation).
+	Reserved []string `codec:"reserved,omitempty"`
+	// RangeStart and RangeEnd bound dynamic allocation; set both or neither.
+	RangeStart string `codec:"range_start,omitempty"`
+	RangeEnd   string `codec:"range_end,omitempty"`
 }
 
 // UpdateIPAMPoolOptions contains options for updating an IPAM pool.
@@ -496,41 +514,88 @@ type UpdateIPAMPoolOptions struct {
 	Zone          string `codec:"zone,omitempty"`
 	Description   string `codec:"description,omitempty"`
 	LeaseDuration int64  `codec:"lease_duration_nanos,omitempty"`
+	// UpdateWindow, when true, makes Reserved, RangeStart and RangeEnd
+	// replace the pool's allocation window (empty values clear it).
+	UpdateWindow bool     `codec:"update_window,omitempty"`
+	Reserved     []string `codec:"reserved,omitempty"`
+	RangeStart   string   `codec:"range_start,omitempty"`
+	RangeEnd     string   `codec:"range_end,omitempty"`
 }
 
-// NetworkZoneInfo contains network zone information.
+// NetworkZonePathInfo is a directed path from a zone to another zone with
+// an optional service allowlist (empty means all services).
+type NetworkZonePathInfo struct {
+	Zone     string   `codec:"zone"`
+	Services []string `codec:"services,omitempty"`
+}
+
+// NetworkZonePrivilegedAccessInfo is the audited override a zone carries
+// when it opens a path into control-plane or management beyond the
+// reference defaults.
+type NetworkZonePrivilegedAccessInfo struct {
+	Reason     string `codec:"reason"`
+	ApprovedBy string `codec:"approved_by"`
+}
+
+// NetworkZoneNumberingInfo is a zone's numbering derived by the network
+// plan from the node's environment.
+type NetworkZoneNumberingInfo struct {
+	VLAN    uint16 `codec:"vlan"`
+	Subnet4 string `codec:"subnet4"`
+	Subnet6 string `codec:"subnet6,omitempty"`
+	Gateway string `codec:"gateway"`
+}
+
+// NetworkZoneInfo contains network zone information: the resolved zone
+// (pkg/sdn/zone.ZoneConfig) and, when the node has an environment, its
+// derived numbering.
 type NetworkZoneInfo struct {
-	Name             string   `codec:"name"`
-	InternetIngress  bool     `codec:"internet_ingress,omitempty"`
-	IsolateFrom      []string `codec:"isolate_from,omitempty"`
-	Isolate          bool     `codec:"isolate,omitempty"`
-	IsolatePerTenant bool     `codec:"isolate_per_tenant,omitempty"`
-	OOB              bool     `codec:"oob,omitempty"`
-	LifecycleRole    string   `codec:"lifecycle_role,omitempty"`
-	RestartRequired  bool     `codec:"restart_required,omitempty"`
-	CreatedAt        int64    `codec:"created_at"`
-	UpdatedAt        int64    `codec:"updated_at"`
+	Name             string                           `codec:"name"`
+	Offset           uint8                            `codec:"offset,omitempty"`
+	PortClasses      []string                         `codec:"port_classes,omitempty"`
+	InternetIngress  bool                             `codec:"internet_ingress,omitempty"`
+	IsolateFrom      []string                         `codec:"isolate_from,omitempty"`
+	AllowTo          []NetworkZonePathInfo            `codec:"allow_to,omitempty"`
+	Services         []string                         `codec:"services,omitempty"`
+	Isolate          bool                             `codec:"isolate,omitempty"`
+	OOB              bool                             `codec:"oob,omitempty"`
+	LifecycleRole    string                           `codec:"lifecycle_role,omitempty"`
+	PrivilegedAccess *NetworkZonePrivilegedAccessInfo `codec:"privileged_access,omitempty"`
+	Numbering        *NetworkZoneNumberingInfo        `codec:"numbering,omitempty"`
+	RestartRequired  bool                             `codec:"restart_required,omitempty"`
+	CreatedAt        int64                            `codec:"created_at"`
+	UpdatedAt        int64                            `codec:"updated_at"`
 }
 
-// CreateNetworkZoneOptions contains options for creating a network zone.
+// CreateNetworkZoneOptions contains options for creating an owner-defined
+// network zone.
 type CreateNetworkZoneOptions struct {
-	Name             string   `codec:"name"`
-	InternetIngress  bool     `codec:"internet_ingress,omitempty"`
-	IsolateFrom      []string `codec:"isolate_from,omitempty"`
-	Isolate          bool     `codec:"isolate,omitempty"`
-	IsolatePerTenant bool     `codec:"isolate_per_tenant,omitempty"`
-	OOB              bool     `codec:"oob,omitempty"`
-	LifecycleRole    string   `codec:"lifecycle_role,omitempty"`
+	Name             string                           `codec:"name"`
+	Offset           uint8                            `codec:"offset,omitempty"`
+	PortClasses      []string                         `codec:"port_classes,omitempty"`
+	InternetIngress  bool                             `codec:"internet_ingress,omitempty"`
+	IsolateFrom      []string                         `codec:"isolate_from,omitempty"`
+	AllowTo          []NetworkZonePathInfo            `codec:"allow_to,omitempty"`
+	Services         []string                         `codec:"services,omitempty"`
+	Isolate          bool                             `codec:"isolate,omitempty"`
+	OOB              bool                             `codec:"oob,omitempty"`
+	LifecycleRole    string                           `codec:"lifecycle_role,omitempty"`
+	PrivilegedAccess *NetworkZonePrivilegedAccessInfo `codec:"privileged_access,omitempty"`
 }
 
-// UpdateNetworkZoneOptions contains options for updating a network zone.
+// UpdateNetworkZoneOptions contains options for updating a network zone:
+// tuning a built-in zone's policy or replacing an owner-defined zone.
 type UpdateNetworkZoneOptions struct {
-	InternetIngress  bool     `codec:"internet_ingress,omitempty"`
-	IsolateFrom      []string `codec:"isolate_from,omitempty"`
-	Isolate          bool     `codec:"isolate,omitempty"`
-	IsolatePerTenant bool     `codec:"isolate_per_tenant,omitempty"`
-	OOB              bool     `codec:"oob,omitempty"`
-	LifecycleRole    string   `codec:"lifecycle_role,omitempty"`
+	Offset           uint8                            `codec:"offset,omitempty"`
+	PortClasses      []string                         `codec:"port_classes,omitempty"`
+	InternetIngress  bool                             `codec:"internet_ingress,omitempty"`
+	IsolateFrom      []string                         `codec:"isolate_from,omitempty"`
+	AllowTo          []NetworkZonePathInfo            `codec:"allow_to,omitempty"`
+	Services         []string                         `codec:"services,omitempty"`
+	Isolate          bool                             `codec:"isolate,omitempty"`
+	OOB              bool                             `codec:"oob,omitempty"`
+	LifecycleRole    string                           `codec:"lifecycle_role,omitempty"`
+	PrivilegedAccess *NetworkZonePrivilegedAccessInfo `codec:"privileged_access,omitempty"`
 }
 
 // GatewayListNetworkZonesRequest represents a zone list request.
@@ -572,18 +637,6 @@ type GatewayDeleteNetworkZoneRequest struct {
 
 // GatewayDeleteNetworkZoneResponse represents a zone delete response.
 type GatewayDeleteNetworkZoneResponse struct {
-	RestartRequired bool  `codec:"restart_required"`
-	Timestamp       int64 `codec:"timestamp"`
-}
-
-// GatewayAssignNetworkZoneRequest represents a zone assign request.
-type GatewayAssignNetworkZoneRequest struct {
-	Network string `codec:"network"`
-	Zone    string `codec:"zone"`
-}
-
-// GatewayAssignNetworkZoneResponse represents a zone assign response.
-type GatewayAssignNetworkZoneResponse struct {
 	RestartRequired bool  `codec:"restart_required"`
 	Timestamp       int64 `codec:"timestamp"`
 }
@@ -658,8 +711,6 @@ func (h *GatewayHandler) HandleRequest(ctx context.Context, req *Request) *Respo
 		return h.handleUpdateNetworkZone(ctx, req)
 	case OpGatewayDeleteNetworkZone:
 		return h.handleDeleteNetworkZone(ctx, req)
-	case OpGatewayAssignNetworkZone:
-		return h.handleAssignNetworkZone(ctx, req)
 
 	default:
 		// Load balancer sub-opcodes (0x30-0x35) dispatch via map lookup.
@@ -809,6 +860,12 @@ type GatewayUpdateIPAMPoolRequest struct {
 	Zone          string `codec:"zone,omitempty"`
 	Description   string `codec:"description,omitempty"`
 	LeaseDuration int64  `codec:"lease_duration_nanos,omitempty"`
+	// UpdateWindow, when true, makes Reserved, RangeStart and RangeEnd
+	// replace the pool's allocation window (empty values clear it).
+	UpdateWindow bool     `codec:"update_window,omitempty"`
+	Reserved     []string `codec:"reserved,omitempty"`
+	RangeStart   string   `codec:"range_start,omitempty"`
+	RangeEnd     string   `codec:"range_end,omitempty"`
 }
 
 // GatewayUpdateIPAMPoolResponse represents an IPAM pool update response
@@ -834,6 +891,11 @@ type GatewayCreateIPAMPoolRequest struct {
 	Description   string   `codec:"description,omitempty"`
 	DNS           []string `codec:"dns,omitempty"`
 	LeaseDuration int64    `codec:"lease_duration_nanos,omitempty"`
+	// Reserved lists never-allocatable prefixes (CIDR notation).
+	Reserved []string `codec:"reserved,omitempty"`
+	// RangeStart and RangeEnd bound dynamic allocation; set both or neither.
+	RangeStart string `codec:"range_start,omitempty"`
+	RangeEnd   string `codec:"range_end,omitempty"`
 }
 
 // GatewayCreateIPAMPoolResponse represents an IPAM pool create response
@@ -1317,6 +1379,9 @@ func (h *GatewayHandler) handleCreateIPAMPool(ctx context.Context, req *Request)
 		Description:   createReq.Description,
 		DNS:           createReq.DNS,
 		LeaseDuration: createReq.LeaseDuration,
+		Reserved:      createReq.Reserved,
+		RangeStart:    createReq.RangeStart,
+		RangeEnd:      createReq.RangeEnd,
 	}
 
 	pool, err := h.gatewayService.CreateIPAMPool(ctx, opts)
@@ -1585,6 +1650,10 @@ func (h *GatewayHandler) handleUpdateIPAMPool(ctx context.Context, req *Request)
 		Zone:          updateReq.Zone,
 		Description:   updateReq.Description,
 		LeaseDuration: updateReq.LeaseDuration,
+		UpdateWindow:  updateReq.UpdateWindow,
+		Reserved:      updateReq.Reserved,
+		RangeStart:    updateReq.RangeStart,
+		RangeEnd:      updateReq.RangeEnd,
 	}
 
 	pool, err := h.gatewayService.UpdateIPAMPool(ctx, updateReq.PoolID, opts)
@@ -1648,6 +1717,8 @@ func (h *GatewayHandler) gatewayErrorResponse(err error) *Response {
 		status = StatusInvalidArgument
 	case errors.Is(err, ErrGatewayInvalidPoolCIDR):
 		status = StatusInvalidArgument
+	case errors.Is(err, ErrGatewayIPAMWindow):
+		status = StatusInvalidArgument
 	case errors.Is(err, ErrGatewayMissingMode):
 		status = StatusInvalidArgument
 	case errors.Is(err, ErrGatewayMissingPrefix):
@@ -1674,6 +1745,12 @@ func (h *GatewayHandler) gatewayErrorResponse(err error) *Response {
 		status = StatusInvalidArgument
 	case errors.Is(err, ErrGatewayMissingVIPTarget):
 		status = StatusInvalidArgument
+	case errors.Is(err, ErrGatewayZoneNotFound):
+		status = StatusNotFound
+	case errors.Is(err, ErrGatewayZoneAlreadyExists):
+		status = StatusAlreadyExists
+	case errors.Is(err, ErrGatewayZoneInvalid):
+		status = StatusInvalidArgument
 	default:
 		status = StatusInternalError
 	}
@@ -1697,6 +1774,29 @@ func (e ErrGatewayEncodingFailed) Error() string {
 func (e ErrGatewayEncodingFailed) Unwrap() error {
 	return e.Cause
 }
+
+// GatewayZoneError carries a zone service failure to the QUIC client: Kind
+// is the sentinel that selects the status byte (ErrGatewayZoneNotFound,
+// ErrGatewayZoneAlreadyExists or ErrGatewayZoneInvalid) and Cause the
+// service error whose message the client sees.
+type GatewayZoneError struct {
+	Kind  error
+	Cause error
+}
+
+// Error implements the error interface.
+func (e GatewayZoneError) Error() string {
+	if e.Cause == nil {
+		return e.Kind.Error()
+	}
+	return e.Kind.Error() + ": " + e.Cause.Error()
+}
+
+// Is matches the sentinel kind.
+func (e GatewayZoneError) Is(target error) bool { return target == e.Kind }
+
+// Unwrap returns the service error.
+func (e GatewayZoneError) Unwrap() error { return e.Cause }
 
 // ErrGatewayDecodingFailed represents a decoding failure error
 type ErrGatewayDecodingFailed struct {
@@ -1857,38 +1957,17 @@ func (h *GatewayHandler) handleDeleteNetworkZone(ctx context.Context, req *Reque
 	return &Response{Status: StatusOK, Payload: payload}
 }
 
-// handleAssignNetworkZone assigns a network segment to a trust zone.
-func (h *GatewayHandler) handleAssignNetworkZone(ctx context.Context, req *Request) *Response {
-	if h.gatewayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
-	}
-
-	var assignReq GatewayAssignNetworkZoneRequest
-	if err := DecodePayload(req.Payload, &assignReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
-	}
-
-	if assignReq.Network == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrGatewayNetworkRequired)
-	}
-	if assignReq.Zone == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrGatewayZoneTargetRequired)
-	}
-
-	restartRequired, err := h.gatewayService.AssignNetworkZone(ctx, assignReq.Network, assignReq.Zone)
-	if err != nil {
-		h.logger.Error(err, "failed to assign network zone")
-		return h.gatewayErrorResponse(err)
-	}
-
-	resp := &GatewayAssignNetworkZoneResponse{
-		RestartRequired: restartRequired,
-		Timestamp:       time.Now().Unix(),
-	}
-	payload, err := EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
-	}
-
-	return &Response{Status: StatusOK, Payload: payload}
+// ErrGatewayIPAMWindowDetail carries why an IPAM window check refused a
+// request; errors.Is(err, ErrGatewayIPAMWindow) holds for it.
+type ErrGatewayIPAMWindowDetail struct {
+	// Reason is the underlying refusal.
+	Reason string
 }
+
+// Error implements the error interface.
+func (e ErrGatewayIPAMWindowDetail) Error() string {
+	return ErrGatewayIPAMWindow.Error() + ": " + e.Reason
+}
+
+// Unwrap lets errors.Is match ErrGatewayIPAMWindow.
+func (e ErrGatewayIPAMWindowDetail) Unwrap() error { return ErrGatewayIPAMWindow }

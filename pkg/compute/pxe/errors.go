@@ -446,3 +446,25 @@ func (e *SentinelCauseError) Error() string {
 func (e *SentinelCauseError) Unwrap() []error {
 	return []error{e.Sentinel, e.Cause}
 }
+
+// ErrNetworkPlanRequired is returned when the PXE service is configured
+// without the network plan: its quarantine and provisioning VLANs come only
+// from the plan (sdn.environment), never from a default.
+type ErrNetworkPlanRequired struct{}
+
+// Error implements the error interface.
+func (ErrNetworkPlanRequired) Error() string {
+	return "pxe: the network plan (sdn.environment) is required to number the quarantine and provisioning zones"
+}
+
+// ErrVLANNotInPlan is returned when a device is authorized onto a VLAN that
+// no zone of the network plan carries.
+type ErrVLANNotInPlan struct {
+	// VLAN is the requested VLAN.
+	VLAN uint16
+}
+
+// Error implements the error interface.
+func (e ErrVLANNotInPlan) Error() string {
+	return fmt.Sprintf("pxe: VLAN %d is not a zone of the network plan", e.VLAN)
+}

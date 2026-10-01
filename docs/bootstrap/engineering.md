@@ -107,7 +107,7 @@ run.
 ```go
 func LoadBootstrapConfig(path string) (*BootstrapConfig, error)
 func (c *BootstrapConfig) Validate() error
-func (c *BootstrapConfig) ProvisioningSubnet() *installer.SubnetConfig
+func (c *BootstrapConfig) NetworkPlan() (*netplan.Plan, error)
 func (c *BootstrapConfig) EffectiveBackupsDir() (string, error)
 func (d *DeployerConfig) EffectiveDataDir() string
 func (d *DeployerConfig) EffectiveSMBHost() string
@@ -661,9 +661,20 @@ Two distinct configuration files, easily confused:
 
 ### `bootstrap.yaml` — the day-zero fleet description
 
-Consumed only by `platformctl bootstrap`. Top level: `deployer`, `switch`
-(optional), `fabric` (optional), `subnets`, `platform`, `templates`, `nodes`,
+Consumed only by `platformctl bootstrap`. Top level: `deployer`, `environment`,
+`zones` (optional), `switch` (optional), `platform`, `templates`, `nodes`,
 `iso_path`, `backups_dir`.
+
+The network is the reference network's: `NetworkPlan` resolves `zones` onto the
+built-in zones and derives the plan from `environment` with `pkg/sdn/netplan`,
+the only place numbering is derived. The switch phase builds its
+`switchmgmt.Config` from that plan (`buildSwitchConfig`): one VLAN per zone,
+named after it, and each assigned port programmed with its class's mode,
+allowed VLANs, native VLAN and MTU 9216. The dry-run `SwitchPlan` is built from
+the same function, so what `--dry-run` prints is what Phase 1 applies.
+`LoadBootstrapConfig` is otherwise lax YAML, so the retired literal-number keys
+are refused explicitly (`checkRetiredKeys`, `ErrRetiredKey` with file and line)
+rather than silently ignored.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
@@ -685,9 +696,12 @@ Consumed only by `platformctl bootstrap`. Top level: `deployer`, `switch`
 | `deployer.netboot_media_dir` | string | — | A netboot media build (`container.NetbootMedia`: `netboot-media.yaml`, `SHA256SUMS`, `media/<set>/…`, the Pi TFTP tree, the db-signed arm64 iPXE), relative to `bootstrap.yaml`. **Required** for a Linux deployer: the image carries no installer media. `validateNetbootMedia` checks, before anything deploys, that the build carries what each PXE-installed node boots — its architecture's default set, or for a Pi the `aarch64-rpi` set, the TFTP tree and the arm64 iPXE. The deployer copies it into `data_dir` as laid out, skipping the upload when the staged `SHA256SUMS` is the build's and still verifies, and removing what the build owns first otherwise |
 | `deployer.proxy_dhcp` | bool | `false` | `BOOTSTRAP_PROXY_DHCP`: the container answers PXE clients with boot options and no lease, for a segment with its own DHCP server |
 | `deployer.pxe_service_host` | string | gateway role | Which node hosts PXE after hand-off |
-| `subnets[]` | list | **required** | One entry must set `role: provisioning` |
+| `environment.id` | int | **required** | Environment number _E_ (2–40) |
+| `environment.base`, `environment.ula`, `environment.overrides` | | `10.0.0.0/8`, none, none | `netplan.Environment` |
+| `zones[]` | list | built-ins | `zone.ZoneConfig`: policy tuning and owner-defined zones |
+| `switch.port_assignments[]` | list | — | `{port, class, description}`; `class` is a `zone.PortClass` the plan can realise (`ErrSwitchPortClass` otherwise) |
 | `platform.domain` | string | **required** | |
-| `platform.internal_domain`, `hostmaster`, `tenant_id`, `environment`, `upstream_dns`, `networks`, `bootstrap_strategy` | | | Injected into merged device configs |
+| `platform.internal_domain`, `hostmaster`, `tenant_id`, `environment`, `upstream_dns`, `bootstrap_strategy` | | | Injected into merged device configs |
 | `platform.health_timeout` | duration | `25m` | How long the post-install health probe waits for a freshly installed node to answer. Omit the key to take the default; a Go duration string (`30m`, `1h`) overrides it. The key cannot be set to `0` — yaml.v3 rejects a bare `0` for a duration field, so "unset" is expressed by leaving the key out |
 | `templates` | map role→path | — | Missing role means the node is skipped at profile creation with a warning |
 | `iso_path` | string | — | Required when any installing node uses `virtual-media` |
@@ -708,7 +722,7 @@ Consumed only by `platformctl bootstrap`. Top level: `deployer`, `switch`
 | `nodes[].boot_model` | string | `sd` for a Pi | Pi only: `sd` (install to the card once over the network). Diskless models arrive with their implementations (#689, #690) |
 | `nodes[].interfaces` | list | — | Authoritative for `network.interfaces` |
 | `nodes[].overrides`, `nodes[].overrides_file` | map / path | — | File merged first, inline wins |
-| `nodes[].switch_port`, `nodes[].post_enrollment` | | | Recorded; consumed by the switch and post-enrollment paths |
+| `nodes[].switch_port` | string | — | Recorded for operator verification. There is no post-enrollment port move: a hypervisor trunk's native VLAN is provisioning |
 
 The container's two ports are configurable, and one setting moves both the
 server's binding and the URLs the orchestrator points at it. They were not: the
@@ -1010,7 +1024,7 @@ which statement to distrust.
 | Legacy statement | Code says |
 |---|---|
 | [configuration.md](configuration.md), [overview.md](overview.md): the Noise server listens on `:9446` | `bootstrap.DefaultConfig()` sets `listen-addr: ":9999"`. There is no `9446` anywhere in the Go code. |
-| [day-zero.md](day-zero.md): the provisioning network is configured under a `provisioning_network:` key | `BootstrapConfig` has no such field. Provisioning network comes from `subnets:` with `role: provisioning`, and `Validate` fails without one. |
+| [day-zero.md](day-zero.md) (before #708): the provisioning network is configured under a `provisioning_network:` key | `BootstrapConfig` has no such field (day-zero.md now shows `environment:`). The provisioning zone is derived from the top-level `environment:` (offset 5), and `Validate` fails without an environment. |
 | [day-zero.md](day-zero.md): "Add new entries and re-run. Existing nodes are skipped." | Nothing skips an already-installed node automatically. `skip_install: true` is the explicit opt-out; without it the node is reprovisioned. |
 | [pxe-bootstrap.md](pxe-bootstrap.md): phases numbered 0–7 with "Watch" as phase 6 | The phase constants are `discovery`, `switch`, `deploy`, `control-plane`, `seed`, `remaining-nodes`, `bmc-enroll`, `health-gate`, `teardown`. Install-log watching is part of per-node provisioning, not a separate phase. |
 | [pxe-bootstrap.md](pxe-bootstrap.md): per-MAC staging publishes `hostname` and `installer.yaml` | Client (non-control-plane) nodes additionally receive `ca-bundle.pem` and `bootstrap-spki-pin`. |

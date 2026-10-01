@@ -79,15 +79,29 @@ type Allocator interface {
 Pools carry a `Zone string` field that links them to the platform's SDN zone topology. Allocations inherit the zone from their pool at allocation time so callers can determine the security segment without a second lookup.
 
 ```
-Pool.Zone ──────────────────────────────────────────────────────► Allocation.Zone
-(set at CreatePool or inherited from network.zone at Validate())    (stamped on Allocate)
+Pool.Zone ───────────────────────────────────────────────► Allocation.Zone
+(the zone of a plan-derived zone pool, or an explicit pool's)   (stamped on Allocate)
 ```
 
-Zone values are validated against the resolved zone set (`sdn.Config.ZoneIndex()`) during `sdn.Config.Validate()`:
+Zone pools are derived from the network plan (`pkg/sdn/netplan`), one per
+underlay zone, so their zone is always declared. An explicit pool in
+`sdn.ipam.pools` with a zone not in the resolved set fails
+`sdn.Config.Validate()` with `ErrPoolZoneUndeclared`.
 
-- A pool with no explicit zone and referenced by a network entry inherits `network.Zone`.
-- A pool with an explicit zone that disagrees with its referencing network returns `ErrNetworkPoolZoneMismatch`.
-- A pool with an explicit zone not in the resolved set returns `ErrPoolZoneUndeclared`.
+### Allocation Window
+
+Every pool has an allocation window, shared by all backends through
+`pkg/sdn/ipam/window.go`:
+
+- `Reserved` prefixes and the pool `Gateway` are never allocatable.
+  `Allocate` skips them a whole reserved prefix at a time;
+  `AllocateSpecific` refuses them with the typed `*ErrIPReserved`.
+- `RangeStart`/`RangeEnd` bound `Allocate` (`Pool.DynamicOffsets`). Unset
+  means the whole usable CIDR. `AllocateSpecific` may take a static address
+  outside the range (`Pool.CheckSpecific`).
+- `PoolManager.ValidatePool` refuses reserved prefixes outside the CIDR and
+  a range outside it, half set, or reversed (`*ErrInvalidWindow`).
+- `TotalIPs` is `Pool.AllocatableIPs`: usable addresses less reserved ones.
 
 `ListPoolsByZone(ctx, zone)` filters pools by zone on all three backends. An empty zone string returns all pools.
 
@@ -119,23 +133,24 @@ type ReservationAllocator interface {
 |                         IP POOL                                    |
 +------------------------------------------------------------------+
 |                                                                    |
-|  Pool ID: prod-v4                                                  |
-|  Name: Production IPv4                                             |
-|  CIDR: 10.0.0.0/24                                                 |
-|  Zone: trusted                                                     |
+|  Pool ID: provisioning                                             |
+|  Name: provisioning                                                |
+|  CIDR: 192.0.2.0/24                                                 |
+|  Zone: provisioning                                                |
+|  Reserved: 192.0.2.1/32 (gateway)   Range: 192.0.2.50-192.0.2.254     |
 |                                                                    |
 |  +--------------------------------------------------------------+  |
 |  |                    Address Space                              |  |
 |  +--------------------------------------------------------------+  |
-|  | .0     | .1     | .2     | .3     | ... | .254   | .255     |  |
-|  | NET    | GW     | ALLOC  | AVAIL  | ... | AVAIL  | BCAST    |  |
+|  | .0   | .1   | .2-.49          | .50  | .51  | ... | .254 | .255|  |
+|  | NET  | GW   | STATIC (by role)| ALLOC| AVAIL| ... |AVAIL |BCAST|  |
+|  |      |(rsvd)| AllocateSpecific| <-- dynamic window ---> |     |  |
 |  +--------------------------------------------------------------+  |
 |                                                                    |
 |  Statistics:                                                       |
-|    Total IPs:     254                                              |
+|    Total IPs:     253   (254 usable less the reserved gateway)     |
 |    Allocated:     1                                                |
-|    Available:     253                                              |
-|    Reserved:      0                                                |
+|    Available:     252                                              |
 |    Utilization:   0.4%                                             |
 |                                                                    |
 +------------------------------------------------------------------+
@@ -461,10 +476,11 @@ An unknown backend returns `ErrIPAMBackendUnknown`. Requesting `dht` without the
 |     - Check pool exists                                            |
 |     - Validate device ID                                           |
 |                                                                    |
-|  2. Find Available IP                                              |
-|     - Get pool bitmap                                              |
-|     - NextClear(0) -> offset                                       |
-|     - OffsetToIP(cidr, adjustedOffset) -> IP                       |
+|  2. Find Available IP (Pool.NextDynamic)                           |
+|     - window = DynamicOffsets() (RangeStart..RangeEnd)             |
+|     - NextClear(first) -> offset; past last -> exhausted           |
+|     - reserved address -> skip past its reserved prefix            |
+|     - OffsetToIP(cidr, offset) -> IP                               |
 |                                                                    |
 |  3. Atomic Allocation                                              |
 |     - bitmap.Set(offset) with CAS                                  |
@@ -493,7 +509,7 @@ An unknown backend returns `ErrIPAMBackendUnknown`. Requesting `dht` without the
 |                                                                    |
 |     Node A                       DHT                  Node B       |
 |        |                          |                      |         |
-|        |  1. Generate random IP   |                      |         |
+|        |  1. Random IP in window  |                      |         |
 |        |----------------------->  |                      |         |
 |        |                          |                      |         |
 |        |  2. Check if allocated   |                      |         |

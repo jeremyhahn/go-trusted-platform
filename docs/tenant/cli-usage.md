@@ -1,5 +1,10 @@
 # Tenant CLI Reference
 
+> Subordinate to [cli.md](cli.md), which is normative. A tenant has no VLAN
+> range and no OVS bridge (retired by #708): the `vlan` and `bridge` verbs and
+> the `--vlan-start` / `--vlan-end` flags no longer exist, and network
+> isolation of tenants arrives with tenant VRFs.
+
 This document provides a complete reference for managing tenants using the `platformctl` command-line interface.
 
 ## Command Overview
@@ -36,8 +41,6 @@ platformctl tenant create --name engineering
 #   Name:         engineering
 #   Display Name: engineering
 #   State:        created
-#   OVS Bridge:   br-tenant-engineering
-#   VLAN Range:   100-199
 #   Created:      2025-12-26T10:30:00Z
 ```
 
@@ -51,8 +54,6 @@ platformctl tenant create \
   --description "Production workloads and services" \
   --contact-email "ops@example.com" \
   --contact-slack "#prod-alerts" \
-  --vlan-range "200-299" \
-  --default-vlan 200 \
   --max-vms 100 \
   --max-containers 500 \
   --max-vcpus 500 \
@@ -73,8 +74,6 @@ platformctl tenant create \
 #   Name:         production
 #   Display Name: Production Environment
 #   State:        created
-#   OVS Bridge:   br-tenant-production
-#   VLAN Range:   200-299
 #
 # Compute Quotas:
 #   Max VMs:         100
@@ -98,10 +97,6 @@ platformctl tenant create --file tenant-config.yaml
 # tenant-config.yaml
 # name: staging
 # display_name: "Staging Environment"
-# network:
-#   vlan_range:
-#     start: 300
-#     end: 399
 # quotas:
 #   compute:
 #     max_vms: 25
@@ -117,8 +112,6 @@ platformctl tenant create --file tenant-config.yaml
 | `--description` | | Tenant description |
 | `--contact-email` | | Contact email address |
 | `--contact-slack` | | Slack channel for notifications |
-| `--vlan-range` | | VLAN range (format: start-end) |
-| `--default-vlan` | | Default VLAN for untagged traffic |
 | `--max-vms` | | Maximum VM instances |
 | `--max-containers` | | Maximum containers |
 | `--max-vcpus` | | Maximum vCPU cores |
@@ -196,10 +189,6 @@ platformctl tenant show engineering
 #   Slack:        #eng-platform
 #
 # Network:
-#   Bridge:       br-tenant-engineering
-#   Bridge Status: up
-#   VLAN Range:   100-199
-#   Default VLAN: 100
 #   Active Ports: 47
 #
 # Compute Quotas:
@@ -507,9 +496,6 @@ platformctl tenant verify engineering
 # ==============================================
 #
 # Network Isolation:
-#   [PASS] Bridge exists: br-tenant-engineering
-#   [PASS] Bridge status: up
-#   [PASS] VLAN range allocated: 100-199
 #   [PASS] Isolation flows installed
 #   [PASS] No cross-tenant ports detected
 #

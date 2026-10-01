@@ -15,11 +15,15 @@ package entities
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 func TestDeviceProfile_EntityID(t *testing.T) {
@@ -1657,4 +1661,34 @@ func TestDeviceRole_IsValid_AliasIsNotCanonical(t *testing.T) {
 	assert.False(t, DeviceRole("Worker").IsValid())
 	assert.True(t, DeviceRoleControlPlane.IsValid())
 	assert.True(t, DeviceRoleWorker.IsValid())
+}
+
+// TestDeviceRole_PortClass pins the role → port-class mapping: gateways get
+// the gateway trunk, control-plane and worker nodes the hypervisor trunk.
+func TestDeviceRole_PortClass(t *testing.T) {
+	cases := map[DeviceRole]zone.PortClass{
+		DeviceRoleGateway:      zone.PortClassGateway,
+		DeviceRoleControlPlane: zone.PortClassHypervisor,
+		DeviceRoleWorker:       zone.PortClassHypervisor,
+	}
+	for role, want := range cases {
+		got, err := role.PortClass()
+		if err != nil || got != want {
+			t.Errorf("%s.PortClass() = %q, %v; want %q", role, got, err, want)
+		}
+	}
+}
+
+// TestDeviceRole_PortClass_FailsClosed refuses every role without a class.
+func TestDeviceRole_PortClass_FailsClosed(t *testing.T) {
+	for _, role := range []DeviceRole{DeviceRoleUnknown, DeviceRoleServer, DeviceRoleClient, DeviceRoleWorkstation, DeviceRoleEdge, DeviceRoleIoT, DeviceRoleLoadBalancer, ""} {
+		_, err := role.PortClass()
+		var target ErrNoPortClassForRole
+		if !errors.As(err, &target) || target.Role != role {
+			t.Errorf("%q: want ErrNoPortClassForRole, got %v", role, err)
+		}
+	}
+	if msg := (ErrNoPortClassForRole{Role: DeviceRoleIoT}).Error(); !strings.Contains(msg, `"iot"`) {
+		t.Errorf("message %q", msg)
+	}
 }

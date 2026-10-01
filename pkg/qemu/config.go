@@ -149,7 +149,7 @@ type Config struct {
 	NetworkMode string `yaml:"network_mode" json:"network_mode" mapstructure:"network_mode"`
 
 	// BridgeName specifies the bridge interface to attach to when NetworkMode is "bridge"
-	// Default: "trusted0"
+	// Default: "br-int" (the workload integration bridge; never the trunk)
 	BridgeName string `yaml:"bridge_name" json:"bridge_name" mapstructure:"bridge_name"`
 
 	// MACAddress specifies the MAC address for the VM's network interface
@@ -274,7 +274,7 @@ type OVSConfig struct {
 	Enable bool `yaml:"enable" json:"enable" mapstructure:"enable"`
 
 	// BridgeName is the OVS bridge to attach VMs to.
-	// Default: "trusted0"
+	// Default: "br-int" (the workload integration bridge; never the trunk)
 	BridgeName string `yaml:"bridge_name" json:"bridge_name" mapstructure:"bridge_name"`
 
 	// SocketPath is the path to the OVSDB Unix socket.
@@ -344,8 +344,9 @@ func (c *Config) GetOVSSocketPath() string {
 	return DefaultOVSSocketPath
 }
 
-// DefaultBridgeName is the default bridge name to look for
-const DefaultBridgeName = "trusted0"
+// DefaultBridgeName is the bridge VMs attach to: the workload integration
+// bridge br-int, which never carries the physical trunk (br-fabric).
+const DefaultBridgeName = "br-int"
 
 // DefaultConfig returns a Config with sensible defaults
 func DefaultConfig() *Config {
@@ -370,7 +371,7 @@ func DefaultConfig() *Config {
 		PXEEnabled:     false,
 	}
 
-	// Auto-detect network mode: use bridge if trusted0 exists, otherwise use NAT
+	// Auto-detect network mode: use bridge if br-int exists, otherwise use NAT
 	if BridgeExists(DefaultBridgeName) {
 		cfg.NetworkMode = "bridge"
 	}

@@ -55,7 +55,7 @@ func TestZoneAllocator_Allocate(t *testing.T) {
 	a := NewZoneAllocator(nil)
 	ctx := context.Background()
 
-	zone, err := a.Allocate(ctx, "firewall", "trusted")
+	zone, err := a.Allocate(ctx, "firewall", "control-plane")
 	if err != nil {
 		t.Fatalf("allocate: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestZoneAllocator_Allocate(t *testing.T) {
 	}
 
 	// Idempotent for the same owner/key.
-	again, err := a.Allocate(ctx, "firewall", "trusted")
+	again, err := a.Allocate(ctx, "firewall", "control-plane")
 	if err != nil {
 		t.Fatalf("re-allocate: %v", err)
 	}
@@ -157,20 +157,20 @@ func TestZoneAllocator_Release(t *testing.T) {
 	a := NewZoneAllocator(nil)
 	ctx := context.Background()
 
-	zone, err := a.Allocate(ctx, "firewall", "trusted")
+	zone, err := a.Allocate(ctx, "firewall", "control-plane")
 	if err != nil {
 		t.Fatalf("allocate: %v", err)
 	}
 
-	if err := a.Release(ctx, "firewall", "trusted"); err != nil {
+	if err := a.Release(ctx, "firewall", "control-plane"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if _, ok := a.Lookup("firewall", "trusted"); ok {
+	if _, ok := a.Lookup("firewall", "control-plane"); ok {
 		t.Error("released allocation still present")
 	}
 
 	// Re-allocating lands on the same deterministic slot.
-	again, err := a.Allocate(ctx, "firewall", "trusted")
+	again, err := a.Allocate(ctx, "firewall", "control-plane")
 	if err != nil {
 		t.Fatalf("re-allocate: %v", err)
 	}
@@ -226,15 +226,15 @@ func TestZoneAllocator_PersistOnMutate(t *testing.T) {
 	a := NewZoneAllocator(p)
 	ctx := context.Background()
 
-	zone, err := a.Allocate(ctx, "firewall", "trusted")
+	zone, err := a.Allocate(ctx, "firewall", "control-plane")
 	if err != nil {
 		t.Fatalf("allocate: %v", err)
 	}
-	if p.saved["firewall/trusted"] != zone {
+	if p.saved["firewall/control-plane"] != zone {
 		t.Errorf("allocation not persisted: %v", p.saved)
 	}
 
-	if err := a.Release(ctx, "firewall", "trusted"); err != nil {
+	if err := a.Release(ctx, "firewall", "control-plane"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	if len(p.saved) != 0 {
@@ -247,7 +247,7 @@ func TestZoneAllocator_PersistError(t *testing.T) {
 	a := NewZoneAllocator(p)
 	ctx := context.Background()
 
-	_, err := a.Allocate(ctx, "firewall", "trusted")
+	_, err := a.Allocate(ctx, "firewall", "control-plane")
 	if err == nil {
 		t.Fatal("expected persist error")
 	}
@@ -258,14 +258,14 @@ func TestZoneAllocator_PersistError(t *testing.T) {
 }
 
 func TestZoneAllocator_Restore(t *testing.T) {
-	p := &memPersister{saved: map[string]uint16{"firewall/trusted": 42, "nat/default": 7}}
+	p := &memPersister{saved: map[string]uint16{"firewall/control-plane": 42, "nat/default": 7}}
 	a := NewZoneAllocator(p)
 	ctx := context.Background()
 
 	if err := a.Restore(ctx); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	if zone, ok := a.Lookup("firewall", "trusted"); !ok || zone != 42 {
+	if zone, ok := a.Lookup("firewall", "control-plane"); !ok || zone != 42 {
 		t.Errorf("restored zone = (%d, %v), want (42, true)", zone, ok)
 	}
 
@@ -400,7 +400,7 @@ func TestOVSExternalIDsPersister_SaveLoad(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	want := map[string]uint16{"firewall/trusted": 42, "nat/default": 7}
+	want := map[string]uint16{"firewall/control-plane": 42, "nat/default": 7}
 	if err := p.Save(ctx, want); err != nil {
 		t.Fatalf("save: %v", err)
 	}

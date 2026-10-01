@@ -2,7 +2,7 @@
  * The device-facing profile is its own wire, and these say why the SDK models
  * it separately from DeviceProfile.
  *
- * `GET /api/v1/device/profile` answers in camelCase — `trustedNetwork`,
+ * `GET /api/v1/device/profile` answers in camelCase — `admittedNetwork`,
  * `provisioningNetwork`, `staticIP`, `useDHCP` — while the operator profile
  * answers in snake_case with a `networks` map. Until #402 the SDK had no type
  * for this surface at all; the console had borrowed `provisioningNetwork` from
@@ -17,7 +17,7 @@ import type { DeviceSelfServiceProfile } from '../device-self-service.js';
 /** docs/device/api.md §3.2, with the optional provisioning sibling filled in. */
 const WIRE = `{
   "serialNumber": "SRV-2024-001",
-  "trustedNetwork": { "vlan": 200, "useDHCP": false,
+  "admittedNetwork": { "vlan": 200, "useDHCP": false,
                       "staticIP": "203.0.113.50", "gateway": "203.0.113.1",
                       "dns": ["203.0.113.1"] },
   "provisioningNetwork": { "vlan": 998, "useDHCP": true },
@@ -30,11 +30,11 @@ describe('device self-service profile', () => {
     const profile = JSON.parse(WIRE) as DeviceSelfServiceProfile;
 
     expect(profile.serialNumber).toBe('SRV-2024-001');
-    expect(profile.trustedNetwork.vlan).toBe(200);
-    expect(profile.trustedNetwork.useDHCP).toBe(false);
-    expect(profile.trustedNetwork.staticIP).toBe('203.0.113.50');
-    expect(profile.trustedNetwork.gateway).toBe('203.0.113.1');
-    expect(profile.trustedNetwork.dns).toEqual(['203.0.113.1']);
+    expect(profile.admittedNetwork.vlan).toBe(200);
+    expect(profile.admittedNetwork.useDHCP).toBe(false);
+    expect(profile.admittedNetwork.staticIP).toBe('203.0.113.50');
+    expect(profile.admittedNetwork.gateway).toBe('203.0.113.1');
+    expect(profile.admittedNetwork.dns).toEqual(['203.0.113.1']);
     expect(profile.provisioningNetwork?.vlan).toBe(998);
     expect(profile.provisioningNetwork?.useDHCP).toBe(true);
     expect(profile.acls?.[0]?.match).toEqual({ dstPort: '443' });
@@ -53,7 +53,7 @@ describe('device self-service profile', () => {
     expect(noOperatorFields).toBe(true);
 
     type Snake = Extract<
-      keyof DeviceSelfServiceProfile['trustedNetwork'],
+      keyof DeviceSelfServiceProfile['admittedNetwork'],
       'static_ip' | 'use_dhcp' | 'production_network'
     >;
     const noSnakeCase: [Snake] extends [never] ? true : false = true;
@@ -63,19 +63,19 @@ describe('device self-service profile', () => {
     // the operator spelling gets undefined — the defect class this type exists
     // to make visible.
     const profile = JSON.parse(WIRE) as DeviceSelfServiceProfile;
-    const asOperatorSpelling = profile.trustedNetwork as unknown as { static_ip?: string };
+    const asOperatorSpelling = profile.admittedNetwork as unknown as { static_ip?: string };
     expect(asOperatorSpelling.static_ip).toBeUndefined();
-    expect(profile.trustedNetwork.staticIP).toBe('203.0.113.50');
+    expect(profile.admittedNetwork.staticIP).toBe('203.0.113.50');
   });
 
   it('treats the provisioning sibling as optional — a DHCP-only trusted body is complete', () => {
     const minimal = JSON.parse(
-      `{"serialNumber":"SRV-2","trustedNetwork":{"vlan":200,"useDHCP":true}}`
+      `{"serialNumber":"SRV-2","admittedNetwork":{"vlan":200,"useDHCP":true}}`
     ) as DeviceSelfServiceProfile;
 
     expect(minimal.provisioningNetwork).toBeUndefined();
     expect(minimal.acls).toBeUndefined();
     expect(minimal.rateLimit).toBeUndefined();
-    expect(minimal.trustedNetwork.staticIP).toBeUndefined();
+    expect(minimal.admittedNetwork.staticIP).toBeUndefined();
   });
 });

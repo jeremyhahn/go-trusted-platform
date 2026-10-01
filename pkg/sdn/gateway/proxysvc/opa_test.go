@@ -66,7 +66,7 @@ func TestOPAEvaluatorProxyAuthz(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("authenticated zone allows", func(t *testing.T) {
-		allowed, violations, err := eval.Evaluate(ctx, "proxy_authz", proxyAuthzInput("trusted", "GET", nil))
+		allowed, violations, err := eval.Evaluate(ctx, "proxy_authz", proxyAuthzInput("control-plane", "GET", nil))
 		if err != nil {
 			t.Fatalf("Evaluate: %v", err)
 		}
@@ -106,7 +106,7 @@ func TestOPAEvaluatorProxyAuthz(t *testing.T) {
 
 	t.Run("method not in allowed methods denies", func(t *testing.T) {
 		allowed, violations, err := eval.Evaluate(ctx, "proxy_authz",
-			proxyAuthzInput("trusted", "DELETE", []string{"GET", "POST"}))
+			proxyAuthzInput("control-plane", "DELETE", []string{"GET", "POST"}))
 		if err != nil {
 			t.Fatalf("Evaluate: %v", err)
 		}
@@ -126,7 +126,7 @@ func TestOPAEvaluatorProxyAuthz(t *testing.T) {
 
 	t.Run("method in allowed methods allows", func(t *testing.T) {
 		allowed, _, err := eval.Evaluate(ctx, "proxy_authz",
-			proxyAuthzInput("trusted", "GET", []string{"GET", "POST"}))
+			proxyAuthzInput("control-plane", "GET", []string{"GET", "POST"}))
 		if err != nil {
 			t.Fatalf("Evaluate: %v", err)
 		}
@@ -136,7 +136,7 @@ func TestOPAEvaluatorProxyAuthz(t *testing.T) {
 	})
 
 	t.Run("unknown policy errors", func(t *testing.T) {
-		if _, _, err := eval.Evaluate(ctx, "no_such_policy", proxyAuthzInput("trusted", "GET", nil)); err == nil {
+		if _, _, err := eval.Evaluate(ctx, "no_such_policy", proxyAuthzInput("control-plane", "GET", nil)); err == nil {
 			t.Fatal("unknown policy must error")
 		}
 	})
@@ -169,14 +169,14 @@ violations contains msg if {
 	}
 	ctx := context.Background()
 
-	allowed, _, err := eval.Evaluate(ctx, "proxy_custom", proxyAuthzInput("trusted", "GET", nil))
+	allowed, _, err := eval.Evaluate(ctx, "proxy_custom", proxyAuthzInput("control-plane", "GET", nil))
 	if err != nil {
 		t.Fatalf("Evaluate custom: %v", err)
 	}
 	if !allowed {
 		t.Error("custom policy must allow device-1 GET")
 	}
-	allowed, violations, err := eval.Evaluate(ctx, "proxy_custom", proxyAuthzInput("trusted", "DELETE", nil))
+	allowed, violations, err := eval.Evaluate(ctx, "proxy_custom", proxyAuthzInput("control-plane", "DELETE", nil))
 	if err != nil {
 		t.Fatalf("Evaluate custom deny: %v", err)
 	}
@@ -185,7 +185,7 @@ violations contains msg if {
 	}
 
 	// The embedded proxy_authz policy stays available alongside the overlay.
-	if _, _, err := eval.Evaluate(ctx, "proxy_authz", proxyAuthzInput("trusted", "GET", nil)); err != nil {
+	if _, _, err := eval.Evaluate(ctx, "proxy_authz", proxyAuthzInput("control-plane", "GET", nil)); err != nil {
 		t.Errorf("embedded policy unavailable with overlay dir: %v", err)
 	}
 }

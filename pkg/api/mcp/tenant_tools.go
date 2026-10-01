@@ -50,11 +50,6 @@ var (
 		Message: "tenant name is required",
 	}
 
-	ErrTenantVLANRequired = &TenantError{
-		Code:    "TENANT_VLAN_REQUIRED",
-		Message: "VLAN ID is required",
-	}
-
 	ErrTenantResourceTypeRequired = &TenantError{
 		Code:    "TENANT_RESOURCE_TYPE_REQUIRED",
 		Message: "resource type is required",
@@ -147,7 +142,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	// tenant_create - Create new tenant
 	r.addTool(ToolDefinition{
 		Name:        "tenant_create",
-		Description: "Create a new tenant with optional VLAN range and quotas. Automatically provisions OVS bridge and allocates VLAN range.",
+		Description: "Create a new tenant with optional quotas. Provisions the tenant's DEK and per-tenant barrier.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -158,14 +153,6 @@ func (r *ToolRegistry) registerTenantTools() {
 				"display_name": map[string]interface{}{
 					"type":        "string",
 					"description": "Human-readable display name",
-				},
-				"vlan_start": map[string]interface{}{
-					"type":        "integer",
-					"description": "Starting VLAN ID for tenant range (1-4094, optional - auto-allocated if not specified)",
-				},
-				"vlan_end": map[string]interface{}{
-					"type":        "integer",
-					"description": "Ending VLAN ID for tenant range (1-4094, optional - auto-allocated if not specified)",
 				},
 				"labels": map[string]interface{}{
 					"type":        "object",
@@ -251,7 +238,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	// tenant_delete - Delete tenant
 	r.addTool(ToolDefinition{
 		Name:        "tenant_delete",
-		Description: "Delete a tenant and all its associated resources including OVS bridge and VLAN allocation",
+		Description: "Delete a tenant and all its associated resources including its DEK and per-tenant barrier",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -408,46 +395,10 @@ func (r *ToolRegistry) registerTenantTools() {
 		},
 	})
 
-	// tenant_validate_vlan - Validate VLAN for tenant
-	r.addTool(ToolDefinition{
-		Name:        "tenant_validate_vlan",
-		Description: "Validate that a VLAN ID is within the tenant's allocated range",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"tenant_id": map[string]interface{}{
-					"type":        "string",
-					"description": "Tenant ID (required)",
-				},
-				"vlan_id": map[string]interface{}{
-					"type":        "integer",
-					"description": "VLAN ID to validate (1-4094)",
-				},
-			},
-			"required": []string{"tenant_id", "vlan_id"},
-		},
-	})
-
-	// tenant_get_bridge - Get OVS bridge name
-	r.addTool(ToolDefinition{
-		Name:        "tenant_get_bridge",
-		Description: "Get the OVS bridge name assigned to a tenant",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"tenant_id": map[string]interface{}{
-					"type":        "string",
-					"description": "Tenant ID (required)",
-				},
-			},
-			"required": []string{"tenant_id"},
-		},
-	})
-
 	// tenant_sync - Synchronize tenant state
 	r.addTool(ToolDefinition{
 		Name:        "tenant_sync",
-		Description: "Synchronize tenant manager state with external systems (VLAN allocator, bridge manager, usage tracker)",
+		Description: "Synchronize tenant manager state with external systems (usage tracker, quota reservations)",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -652,16 +603,6 @@ func (r *ToolRegistry) executeTenantCreate(ctx context.Context, args map[string]
 		DisplayName: getString(args, "display_name"),
 		Labels:      getStringMap(args, "labels"),
 		Annotations: getStringMap(args, "annotations"),
-	}
-
-	// Handle VLAN range if specified
-	vlanStart := getInt(args, "vlan_start")
-	vlanEnd := getInt(args, "vlan_end")
-	if vlanStart > 0 && vlanEnd > 0 {
-		req.VLANRange = &tenant.VLANRange{
-			Start: uint16(vlanStart),
-			End:   uint16(vlanEnd),
-		}
 	}
 
 	// Handle compute quota overrides
@@ -1033,62 +974,6 @@ func (r *ToolRegistry) executeTenantCheckQuota(ctx context.Context, args map[str
 	return result, nil
 }
 
-// executeTenantValidateVLAN handles the tenant_validate_vlan tool execution.
-func (r *ToolRegistry) executeTenantValidateVLAN(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	vlanID := getInt(args, "vlan_id")
-	if vlanID <= 0 || vlanID > 4094 {
-		return nil, ErrTenantVLANRequired
-	}
-
-	err := mgr.ValidateVLAN(ctx, tenantID, uint16(vlanID))
-	valid := err == nil
-
-	result := map[string]interface{}{
-		"tenant_id": tenantID,
-		"vlan_id":   vlanID,
-		"valid":     valid,
-	}
-
-	if err != nil {
-		result["error"] = err.Error()
-	}
-
-	return result, nil
-}
-
-// executeTenantGetBridge handles the tenant_get_bridge tool execution.
-func (r *ToolRegistry) executeTenantGetBridge(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	mgr := r.getTenantManager()
-	if mgr == nil {
-		return nil, ErrTenantServiceUnavailable
-	}
-
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrTenantIDRequired
-	}
-
-	bridgeName, err := mgr.GetBridgeName(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-
-	return map[string]interface{}{
-		"tenant_id":   tenantID,
-		"bridge_name": bridgeName,
-	}, nil
-}
-
 // executeTenantSync handles the tenant_sync tool execution.
 func (r *ToolRegistry) executeTenantSync(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	mgr := r.getTenantManager()
@@ -1312,17 +1197,8 @@ func formatTenantEntity(entity *tenant.TenantEntity) map[string]interface{} {
 		"name":         entity.Name,
 		"display_name": entity.DisplayName,
 		"state":        string(entity.State),
-		"ovs_bridge":   entity.OVSBridge,
 		"created_at":   entity.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		"updated_at":   entity.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
-	}
-
-	// Include VLAN range if allocated
-	if !entity.VLANRange.IsEmpty() {
-		result["vlan_range"] = map[string]interface{}{
-			"start": entity.VLANRange.Start,
-			"end":   entity.VLANRange.End,
-		}
 	}
 
 	// Include DEK handle if set

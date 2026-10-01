@@ -272,7 +272,7 @@ Gateway-side, in `pkg/sdn/config.go`:
 | Type | Keys | Notes |
 |---|---|---|
 | `GatewayConfig` | `enabled` | Master switch |
-| `TransitConfig` | `vlan` (default `vlan.DefaultTransit`, **10**), `p2p` (default `172.16.0.0/24`) | Transit carries **no data-zone traffic**; the VLAN is a plain L2 segment id and the P2P prefix supplies `/31` link addresses. `EffectiveVLAN()` / `EffectiveP2P()` apply the defaults; `Validate()` returns `ErrInvalidTransitVLAN` for an out-of-range 802.1Q id. Owner design decision (2026-09-26): transit is the environment's x00 VLAN (e.g. 400, 10.4.0.0/24) and tunnel P2P addresses come from the IPAM pool ([`../architecture/reference-network.md`](../architecture/reference-network.md)); the defaults move with #708 |
+| (transit) | none | Transit is the environment's x00 zone: its VLAN and subnet come from `sdn.environment` like every zone's, and transit point-to-point links take `/31`s from the `tunnel-p2p` IPAM range ([`../architecture/reference-network.md`](../architecture/reference-network.md)). There is no transit section |
 | `ManagementVPNConfig` | `enabled`, `type` (only `wireguard` is defined), `allow_to` | Administrators reach management endpoints through this tunnel so operator workstations are **never dual-homed onto a data zone**. Gateways should expose it by default. The section is refused today (#558, [`docs/vpn/`](../vpn/)); owner design decision (2026-09-26): IPsec in FIPS builds, WireGuard only in non-FIPS builds |
 
 `ManagementVPNConfig.Type` exists for extensibility and has exactly one defined
@@ -681,6 +681,21 @@ Documents cross as JSON (`gwstate.Snapshot`, `gwstate.DesiredConfig`,
 `gwstate.DesiredConfigState`) rather than being redeclared in proto.
 `ApplyDesired` always returns the child's state; a child-side apply failure
 comes back as `*ErrRemoteApply` with that state beside it.
+
+### The conntrack stage classifies tagged ingress only (open question)
+
+The firewall's stateful pipeline (`zoneflows.CompileStatefulMatrixRules`)
+gates a zone's IP traffic through conntrack by matching `dl_vlan=<zone VLAN>`
+at table 20. That is the shape of the gateway's port class: a trunk with no
+native VLAN, so every frame from the switch arrives tagged. Frames that enter
+the OpenFlow tables **untagged** — the gateway's own `zone<VLAN>` internal ports,
+which is where its kernel-routed traffic re-enters the bridge — match no gate
+rule and take the priority-1 bypass to table 30. The verdict for routed
+traffic is therefore given once, on the tagged ingress side, and the routed
+egress is not tracked on the bridge. Whether routed traffic is enforced in the
+OVS pipeline or in the gateway's own nftables forward chain is an
+architecture decision that is still open; it is recorded here rather than
+changed silently.
 
 ## 6. Persistence
 

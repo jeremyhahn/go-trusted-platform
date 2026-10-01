@@ -343,7 +343,7 @@ func (c *Client) ListPolicies(ctx context.Context, policyType, targetID string, 
 
 // Network Zone Operations
 
-// CreateNetworkZone creates a new SDN network trust zone.
+// CreateNetworkZone creates an owner-defined underlay zone (offset 9-99).
 func (c *Client) CreateNetworkZone(ctx context.Context, req *platformv1.CreateNetworkZoneRequest) (*platformv1.NetworkZone, error) {
 	resp, err := c.grpc.CreateNetworkZone(ctx, req)
 	if err != nil {
@@ -352,7 +352,8 @@ func (c *Client) CreateNetworkZone(ctx context.Context, req *platformv1.CreateNe
 	return resp.Zone, nil
 }
 
-// UpdateNetworkZone updates an existing SDN network trust zone.
+// UpdateNetworkZone tunes a built-in zone's policy or replaces an
+// owner-defined zone.
 func (c *Client) UpdateNetworkZone(ctx context.Context, req *platformv1.UpdateNetworkZoneRequest) (*platformv1.NetworkZone, error) {
 	resp, err := c.grpc.UpdateNetworkZone(ctx, req)
 	if err != nil {
@@ -361,7 +362,8 @@ func (c *Client) UpdateNetworkZone(ctx context.Context, req *platformv1.UpdateNe
 	return resp.Zone, nil
 }
 
-// DeleteNetworkZone deletes an SDN network trust zone.
+// DeleteNetworkZone deletes an owner-defined zone or omits an optional
+// built-in.
 func (c *Client) DeleteNetworkZone(ctx context.Context, name string) (bool, error) {
 	resp, err := c.grpc.DeleteNetworkZone(ctx, &platformv1.DeleteNetworkZoneRequest{Name: name})
 	if err != nil {
@@ -370,7 +372,8 @@ func (c *Client) DeleteNetworkZone(ctx context.Context, name string) (bool, erro
 	return resp.RestartRequired, nil
 }
 
-// ListNetworkZones lists SDN network trust zones with an optional lifecycle role filter.
+// ListNetworkZones lists the underlay zones, with their derived numbering,
+// with an optional lifecycle role filter.
 func (c *Client) ListNetworkZones(ctx context.Context, lifecycleRole string) ([]*platformv1.NetworkZone, error) {
 	resp, err := c.grpc.ListNetworkZones(ctx, &platformv1.ListNetworkZonesRequest{
 		LifecycleRole: lifecycleRole,
@@ -379,16 +382,4 @@ func (c *Client) ListNetworkZones(ctx context.Context, lifecycleRole string) ([]
 		return nil, &ErrListNetworkZonesFailed{Cause: err}
 	}
 	return resp.Zones, nil
-}
-
-// AssignNetworkZone assigns a named network segment to a trust zone.
-func (c *Client) AssignNetworkZone(ctx context.Context, network, zoneName string) (bool, error) {
-	resp, err := c.grpc.AssignNetworkZone(ctx, &platformv1.AssignNetworkZoneRequest{
-		Network: network,
-		Zone:    zoneName,
-	})
-	if err != nil {
-		return false, &ErrAssignNetworkZoneFailed{Network: network, Zone: zoneName, Cause: err}
-	}
-	return resp.RestartRequired, nil
 }

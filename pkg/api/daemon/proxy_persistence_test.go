@@ -272,7 +272,7 @@ func TestQuicBaaSProxyPersistence_RoundTrip(t *testing.T) {
 
 	require.NoError(t, p.SavePool(ctx, testPool("api")))
 	r := testRoute("console", "api")
-	r.Auth = proxy.AuthRequirements{Mode: proxy.AuthModeMTLS, AllowedZones: []string{"trusted"}}
+	r.Auth = proxy.AuthRequirements{Mode: proxy.AuthModeMTLS, AllowedZones: []string{"control-plane"}}
 	require.NoError(t, p.SaveRoute(ctx, r))
 	assert.Equal(t, 1, storage.Count(entityTypeProxyRoute))
 	assert.Equal(t, 1, storage.Count(entityTypeProxyPool))
@@ -287,7 +287,7 @@ func TestQuicBaaSProxyPersistence_RoundTrip(t *testing.T) {
 	require.Len(t, routes, 1)
 	require.Len(t, pools, 1)
 	assert.Equal(t, "/v2", routes[0].PathPrefix)
-	assert.Equal(t, []string{"trusted"}, routes[0].Auth.AllowedZones)
+	assert.Equal(t, []string{"control-plane"}, routes[0].Auth.AllowedZones)
 	assert.Equal(t, "api", pools[0].ID)
 
 	require.NoError(t, p.DeleteRoute(ctx, "console"))

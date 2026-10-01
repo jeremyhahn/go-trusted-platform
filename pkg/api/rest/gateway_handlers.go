@@ -171,6 +171,16 @@ func (e ErrIPAlreadyAllocated) Error() string {
 	return fmt.Sprintf("IP already allocated: %s", e.IP)
 }
 
+// ErrIPAMWindow is returned when an IPAM request names a reserved address,
+// or a pool's reserved prefixes or allocation range do not fit its CIDR.
+type ErrIPAMWindow struct {
+	Reason string
+}
+
+func (e ErrIPAMWindow) Error() string {
+	return "ipam: " + e.Reason
+}
+
 // ErrIPAMPoolExhausted is returned when an IPAM pool has no available IPs.
 type ErrIPAMPoolExhausted struct {
 	ID string
@@ -303,6 +313,9 @@ type IPAMPoolResponse struct {
 	Available              uint64    `json:"available"`
 	DefaultLeaseDurationNs int64     `json:"default_lease_duration_nanos,omitempty"`
 	InactivityTimeoutNs    int64     `json:"inactivity_timeout_nanos,omitempty"`
+	Reserved               []string  `json:"reserved,omitempty"`
+	RangeStart             string    `json:"range_start,omitempty"`
+	RangeEnd               string    `json:"range_end,omitempty"`
 	CreatedAt              time.Time `json:"created_at,omitempty"`
 	UpdatedAt              time.Time `json:"updated_at,omitempty"`
 }
@@ -324,6 +337,11 @@ type CreateIPAMPoolRequest struct {
 	Description            string `json:"description,omitempty"`
 	DefaultLeaseDurationNs int64  `json:"default_lease_duration_nanos,omitempty"`
 	InactivityTimeoutNs    int64  `json:"inactivity_timeout_nanos,omitempty"`
+	// Reserved lists never-allocatable prefixes in CIDR notation.
+	Reserved []string `json:"reserved,omitempty"`
+	// RangeStart and RangeEnd bound dynamic allocation; set both or neither.
+	RangeStart string `json:"range_start,omitempty"`
+	RangeEnd   string `json:"range_end,omitempty"`
 }
 
 // UpdateIPAMPoolRequest is the REST body for updating an IPAM pool.
@@ -335,6 +353,13 @@ type UpdateIPAMPoolRequest struct {
 	Description            string `json:"description,omitempty"`
 	DefaultLeaseDurationNs int64  `json:"default_lease_duration_nanos,omitempty"`
 	InactivityTimeoutNs    int64  `json:"inactivity_timeout_nanos,omitempty"`
+	// Reserved replaces the never-allocatable prefixes when present; an
+	// empty list clears them and an omitted field keeps them.
+	Reserved []string `json:"reserved,omitempty"`
+	// RangeStart and RangeEnd replace the dynamic window bounds when
+	// present; "" clears a bound and an omitted field keeps it.
+	RangeStart *string `json:"range_start,omitempty"`
+	RangeEnd   *string `json:"range_end,omitempty"`
 }
 
 // AllocateIPRequest represents a request to allocate an IP.
@@ -1003,6 +1028,8 @@ func (h *GatewayHandlers) writeGatewayError(w http.ResponseWriter, operation str
 		statusCode = http.StatusConflict
 	case ErrIPAMPoolExhausted:
 		statusCode = http.StatusServiceUnavailable
+	case ErrIPAMWindow:
+		statusCode = http.StatusBadRequest
 	case ErrInvalidGatewayMode:
 		statusCode = http.StatusBadRequest
 	case ErrInvalidPrefix:

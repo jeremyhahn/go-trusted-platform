@@ -209,6 +209,9 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 	if device.PriorZone == "" {
 		device.PriorZone = existing.PriorZone
 	}
+	if device.PriorPortClass == "" {
+		device.PriorPortClass = existing.PriorPortClass
+	}
 	if device.BMCEnrollment == nil {
 		device.BMCEnrollment = existing.BMCEnrollment
 	}

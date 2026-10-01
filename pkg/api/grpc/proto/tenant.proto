@@ -7,8 +7,9 @@ option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platfo
 import "google/protobuf/timestamp.proto";
 import "common.proto";
 
-// TenantService provides multi-tenant platform operations including
-// VLAN isolation, OVS bridge management, quota enforcement, and state synchronization.
+// TenantService provides multi-tenant platform operations: tenant lifecycle,
+// quota enforcement, per-tenant DEKs and barriers, and state synchronization.
+// A tenant carries no network identity yet; its routing domain becomes a VRF.
 service TenantService {
   // Tenant CRUD operations
   rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse);
@@ -27,10 +28,6 @@ service TenantService {
   rpc UpdateQuotas(UpdateQuotasRequest) returns (UpdateQuotasResponse);
   rpc GetUsage(GetUsageRequest) returns (GetUsageResponse);
   rpc CheckQuota(CheckQuotaRequest) returns (CheckQuotaResponse);
-
-  // Network isolation
-  rpc ValidateVLAN(ValidateVLANRequest) returns (ValidateVLANResponse);
-  rpc GetBridgeName(GetBridgeNameRequest) returns (GetBridgeNameResponse);
 
   // State synchronization
   rpc Sync(SyncTenantsRequest) returns (SyncTenantsResponse);
@@ -86,9 +83,9 @@ message Tenant {
   string name = 2;
   string display_name = 3;
   TenantState state = 4;
-  string ovs_bridge = 5;
-  uint32 vlan_start = 6;
-  uint32 vlan_end = 7;
+  // The per-tenant OVS bridge and VLAN range were retired (#708).
+  reserved 5, 6, 7;
+  reserved "ovs_bridge", "vlan_start", "vlan_end";
   string dek_path = 8;
   uint32 dek_handle = 9 [deprecated = true];
   ComputeQuota compute_quota = 10;
@@ -185,8 +182,9 @@ message GetTenantByNameResponse {
 message CreateTenantRequest {
   string name = 1;
   string display_name = 2;
-  uint32 vlan_range_start = 3;
-  uint32 vlan_range_end = 4;
+  // The per-tenant VLAN range was retired (#708).
+  reserved 3, 4;
+  reserved "vlan_range_start", "vlan_range_end";
   map<string, string> labels = 5;
   map<string, string> annotations = 6;
   ComputeQuota compute_quota = 7;
@@ -285,29 +283,6 @@ message CheckQuotaResponse {
   int64 amount = 3;
   bool available = 4;
   string message = 5;
-}
-
-// ValidateVLAN request/response
-message ValidateVLANRequest {
-  string tenant_id = 1;
-  uint32 vlan_id = 2;
-}
-
-message ValidateVLANResponse {
-  string tenant_id = 1;
-  uint32 vlan_id = 2;
-  bool valid = 3;
-  string message = 4;
-}
-
-// GetBridgeName request/response
-message GetBridgeNameRequest {
-  string tenant_id = 1;
-}
-
-message GetBridgeNameResponse {
-  string tenant_id = 1;
-  string bridge_name = 2;
 }
 
 // Sync request/response

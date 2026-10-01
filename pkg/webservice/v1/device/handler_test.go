@@ -51,12 +51,12 @@ func activatedResult(vlan uint16) *policy.ActivationResult {
 		Status: policy.ActivationStatusActivated,
 		PortID: "port1",
 		VLAN:   vlan,
-		Zone:   "trusted",
+		Zone:   "control-plane",
 	}
 }
 
 // quarantinedResult is the activator result for an enforced quarantine on
-// vlan — the quarantine VLAN, never the trusted one.
+// vlan — the quarantine VLAN, never the admitted one.
 func quarantinedResult(vlan uint16) *policy.ActivationResult {
 	return &policy.ActivationResult{
 		Status: policy.ActivationStatusQuarantined,
@@ -108,7 +108,7 @@ func TestGetProfile_Success(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-12345",
-		TrustedNetwork: NetworkConfig{
+		AdmittedNetwork: NetworkConfig{
 			VLAN:    100,
 			UseDHCP: true,
 			DNS:     []string{"10.99.99.2"},
@@ -142,8 +142,8 @@ func TestGetProfile_Success(t *testing.T) {
 	err := json.NewDecoder(w.Body).Decode(&response)
 	require.NoError(t, err)
 	assert.Equal(t, "DEVICE-12345", response.SerialNumber)
-	assert.Equal(t, uint16(100), response.TrustedNetwork.VLAN)
-	assert.True(t, response.TrustedNetwork.UseDHCP)
+	assert.Equal(t, uint16(100), response.AdmittedNetwork.VLAN)
+	assert.True(t, response.AdmittedNetwork.UseDHCP)
 	assert.Len(t, response.ACLs, 1)
 
 	mockProfileService.AssertExpectations(t)
@@ -483,7 +483,7 @@ func TestActivate_ZoneMismatch_ReturnsQuarantined(t *testing.T) {
 	err := json.NewDecoder(w.Body).Decode(&response)
 	require.NoError(t, err)
 	assert.Equal(t, "quarantined", response.Status)
-	assert.Equal(t, uint16(666), response.VLAN, "the response carries the VLAN actually applied, not the trusted VLAN")
+	assert.Equal(t, uint16(666), response.VLAN, "the response carries the VLAN actually applied, not the admitted VLAN")
 
 	mockActivator.AssertExpectations(t)
 }
@@ -627,7 +627,7 @@ func TestGetProfile_WithRateLimit(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-WITH-RATELIMIT",
-		TrustedNetwork: NetworkConfig{
+		AdmittedNetwork: NetworkConfig{
 			VLAN:    150,
 			UseDHCP: true,
 		},
@@ -673,7 +673,7 @@ func TestGetProfile_WithStaticIP(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-STATIC",
-		TrustedNetwork: NetworkConfig{
+		AdmittedNetwork: NetworkConfig{
 			VLAN:     200,
 			UseDHCP:  false,
 			StaticIP: "10.100.1.50",
@@ -696,10 +696,10 @@ func TestGetProfile_WithStaticIP(t *testing.T) {
 	var response ProfileResponse
 	err := json.NewDecoder(w.Body).Decode(&response)
 	require.NoError(t, err)
-	assert.False(t, response.TrustedNetwork.UseDHCP)
-	assert.Equal(t, "10.100.1.50", response.TrustedNetwork.StaticIP)
-	assert.Equal(t, "10.100.1.1", response.TrustedNetwork.Gateway)
-	assert.Len(t, response.TrustedNetwork.DNS, 2)
+	assert.False(t, response.AdmittedNetwork.UseDHCP)
+	assert.Equal(t, "10.100.1.50", response.AdmittedNetwork.StaticIP)
+	assert.Equal(t, "10.100.1.1", response.AdmittedNetwork.Gateway)
+	assert.Len(t, response.AdmittedNetwork.DNS, 2)
 
 	mockProfileService.AssertExpectations(t)
 }
@@ -719,7 +719,7 @@ func TestGetProfile_MultipleACLs(t *testing.T) {
 
 	expectedProfile := &ProfileResponse{
 		SerialNumber: "DEVICE-ACLS",
-		TrustedNetwork: NetworkConfig{
+		AdmittedNetwork: NetworkConfig{
 			VLAN:    100,
 			UseDHCP: true,
 		},

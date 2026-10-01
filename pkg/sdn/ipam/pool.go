@@ -56,7 +56,7 @@ func (pm *PoolManager) ValidatePool(pool *Pool) error {
 		}
 	}
 
-	return nil
+	return pool.validateWindow()
 }
 
 // InitializePool sets default values and calculates pool size.
@@ -74,7 +74,7 @@ func (pm *PoolManager) InitializePool(pool *Pool) {
 		pool.InactivityTimeout = DefaultInactivityTimeout
 	}
 
-	pool.TotalIPs = CalculatePoolSize(pool.CIDR)
+	pool.TotalIPs = pool.AllocatableIPs()
 	pool.AvailableIPs = pool.TotalIPs
 	pool.AllocatedIPs = 0
 }

@@ -77,14 +77,6 @@ type TenantCommands interface {
 	// CheckQuota checks if a resource request can be fulfilled
 	CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*CheckQuotaResult, error)
 
-	// Network Operations
-
-	// ValidateVLAN validates a VLAN ID for a tenant
-	ValidateVLAN(ctx context.Context, opts ValidateVLANOptions) (*ValidateVLANResult, error)
-
-	// GetBridgeName retrieves the OVS bridge name for a tenant
-	GetBridgeName(ctx context.Context, opts GetBridgeNameOptions) (*GetBridgeNameResult, error)
-
 	// Sync Operations
 
 	// SyncTenants synchronizes tenant manager state
@@ -125,13 +117,6 @@ type CreateTenantOptions struct {
 	DisplayName string            `json:"display_name,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
-	VLANRange   *VLANRangeOption  `json:"vlan_range,omitempty"`
-}
-
-// VLANRangeOption represents a VLAN range in options
-type VLANRangeOption struct {
-	Start uint16 `json:"start"`
-	End   uint16 `json:"end"`
 }
 
 // CreateTenantResult contains the result of tenant creation
@@ -145,8 +130,6 @@ type TenantData struct {
 	Name         string            `json:"name"`
 	DisplayName  string            `json:"display_name"`
 	State        tenant.State      `json:"state"`
-	OVSBridge    string            `json:"ovs_bridge,omitempty"`
-	VLANRange    *VLANRangeData    `json:"vlan_range,omitempty"`
 	ComputeQuota *ComputeQuotaData `json:"compute_quota,omitempty"`
 	NetworkQuota *NetworkQuotaData `json:"network_quota,omitempty"`
 	StorageQuota *StorageQuotaData `json:"storage_quota,omitempty"`
@@ -154,12 +137,6 @@ type TenantData struct {
 	Annotations  map[string]string `json:"annotations,omitempty"`
 	CreatedAt    time.Time         `json:"created_at"`
 	UpdatedAt    time.Time         `json:"updated_at"`
-}
-
-// VLANRangeData represents VLAN range in results
-type VLANRangeData struct {
-	Start uint16 `json:"start"`
-	End   uint16 `json:"end"`
 }
 
 // ComputeQuotaData represents compute quota in results
@@ -359,35 +336,6 @@ type CheckQuotaResult struct {
 
 // ============================================================================
 // Network Options and Results
-// ============================================================================
-
-// ValidateVLANOptions contains options for validating a VLAN
-type ValidateVLANOptions struct {
-	TenantID string `json:"tenant_id"`
-	VLANID   uint16 `json:"vlan_id"`
-}
-
-// ValidateVLANResult contains the result of validating a VLAN
-type ValidateVLANResult struct {
-	TenantID string `json:"tenant_id"`
-	VLANID   uint16 `json:"vlan_id"`
-	Valid    bool   `json:"valid"`
-	Message  string `json:"message,omitempty"`
-}
-
-// GetBridgeNameOptions contains options for getting bridge name
-type GetBridgeNameOptions struct {
-	TenantID string `json:"tenant_id"`
-}
-
-// GetBridgeNameResult contains the result of getting bridge name
-type GetBridgeNameResult struct {
-	TenantID   string `json:"tenant_id"`
-	BridgeName string `json:"bridge_name"`
-}
-
-// ============================================================================
-// Sync Options and Results
 // ============================================================================
 
 // SyncTenantsResult contains the result of syncing tenants

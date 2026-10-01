@@ -13,43 +13,52 @@
 
 package fabric
 
-// FabricConfig is the top-level configuration for the physical switch fabric.
+import (
+	"slices"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+)
+
+// FabricConfig is the configuration of the physical switch fabric. The
+// reference switch is pure L2 (docs/architecture/reference-network.md): it
+// carries the environment's underlay VLANs, derived by the network plan, on
+// the ports of each port class, and does no routing, SVIs or EVPN.
 type FabricConfig struct {
-	// Mode selects VLAN-only or EVPN-VXLAN fabric operation.
-	Mode FabricMode `yaml:"mode" json:"mode" mapstructure:"mode"`
-
-	// EVPN holds EVPN-specific parameters. Required when Mode is "evpn".
-	EVPN *EVPNConfig `yaml:"evpn,omitempty" json:"evpn,omitempty" mapstructure:"evpn"`
-
 	// Switches lists the physical switches in the fabric.
 	Switches []SwitchConfig `yaml:"switches" json:"switches" mapstructure:"switches"`
 
-	// Peers defines MC-LAG or vPC peer relationships between switches.
+	// Peers defines MC-LAG or vPC peer relationships between switches. The
+	// peer-link ports carry the peer-link port class.
 	Peers []PeerConfig `yaml:"peers,omitempty" json:"peers,omitempty" mapstructure:"peers"`
 
 	// LAGs defines link aggregation groups across the fabric.
 	LAGs []LAGConfig `yaml:"lags,omitempty" json:"lags,omitempty" mapstructure:"lags"`
 
-	// Segments defines the network segments provisioned on the fabric.
-	Segments []SegmentConfig `yaml:"segments" json:"segments" mapstructure:"segments"`
+	// Ports assigns a port class to each platform switch port. A port's
+	// mode, allowed VLANs, native VLAN and MTU all follow from its class.
+	Ports []PortAssignment `yaml:"ports,omitempty" json:"ports,omitempty" mapstructure:"ports"`
 }
 
-// Validate checks the fabric configuration for internal consistency.
+// PortAssignment gives one switch port (or port-channel) its port class.
+type PortAssignment struct {
+	// PortRef names the switch and port.
+	PortRef `yaml:",inline" json:",inline" mapstructure:",squash"`
+
+	// Class is the port class: gateway, hypervisor, bmc, mgmt-uplink or
+	// peer-link.
+	Class zone.PortClass `yaml:"class" json:"class" mapstructure:"class"`
+
+	// Description is an optional interface description.
+	Description string `yaml:"description,omitempty" json:"description,omitempty" mapstructure:"description"`
+}
+
+// Validate checks the fabric configuration: at least one switch with a
+// unique ID, valid peers and LAGs, and every port assignment on a known
+// switch, with a known class, assigned once.
 func (c *FabricConfig) Validate() error {
 	if c == nil {
 		return ErrNilConfig{}
-	}
-
-	if c.Mode == "" {
-		c.Mode = ModeVLAN
-	}
-
-	if c.Mode != ModeVLAN && c.Mode != ModeEVPN {
-		return ErrInvalidFabricConfig{Reason: "mode must be 'vlan' or 'evpn'"}
-	}
-
-	if c.Mode == ModeEVPN && c.EVPN == nil {
-		return ErrInvalidFabricConfig{Reason: "evpn config required when mode is 'evpn'"}
 	}
 
 	if len(c.Switches) == 0 {
@@ -67,31 +76,6 @@ func (c *FabricConfig) Validate() error {
 		switchIDs[c.Switches[i].ID] = struct{}{}
 	}
 
-	if len(c.Segments) == 0 {
-		return ErrInvalidFabricConfig{Reason: "at least one segment is required"}
-	}
-
-	segNames := make(map[string]struct{}, len(c.Segments))
-	vlanIDs := make(map[uint16]string, len(c.Segments))
-	for i := range c.Segments {
-		if err := c.Segments[i].Validate(); err != nil {
-			return err
-		}
-		if _, exists := segNames[c.Segments[i].Name]; exists {
-			return ErrInvalidFabricConfig{Reason: "duplicate segment name: " + c.Segments[i].Name}
-		}
-		segNames[c.Segments[i].Name] = struct{}{}
-
-		if other, exists := vlanIDs[c.Segments[i].VLAN]; exists {
-			return ErrDuplicateVLAN{
-				VLAN:     c.Segments[i].VLAN,
-				Segment1: other,
-				Segment2: c.Segments[i].Name,
-			}
-		}
-		vlanIDs[c.Segments[i].VLAN] = c.Segments[i].Name
-	}
-
 	for i := range c.Peers {
 		if err := c.Peers[i].Validate(switchIDs); err != nil {
 			return err
@@ -104,22 +88,25 @@ func (c *FabricConfig) Validate() error {
 		}
 	}
 
+	seen := make(map[PortRef]struct{}, len(c.Ports))
+	for _, pa := range c.Ports {
+		if err := pa.Validate(); err != nil {
+			return err
+		}
+		if _, ok := switchIDs[pa.SwitchID]; !ok {
+			return ErrUnknownSwitch{ID: pa.SwitchID}
+		}
+		if !slices.Contains(netplan.PortClasses(), pa.Class) {
+			return ErrUnknownPortClass{Class: pa.Class}
+		}
+		key := PortRef{SwitchID: pa.SwitchID, Port: pa.Port}
+		if _, dup := seen[key]; dup {
+			return ErrDuplicatePort{SwitchID: pa.SwitchID, Port: pa.Port}
+		}
+		seen[key] = struct{}{}
+	}
+
 	return nil
-}
-
-// EVPNConfig holds EVPN-VXLAN overlay parameters.
-type EVPNConfig struct {
-	// VNIBase is the starting VNI value. VNI = VNIBase + VLAN ID.
-	VNIBase uint32 `yaml:"vni-base" json:"vni_base" mapstructure:"vni-base"`
-
-	// AnycastGatewayMAC is the shared MAC for distributed anycast gateway.
-	AnycastGatewayMAC string `yaml:"anycast-gateway-mac" json:"anycast_gateway_mac" mapstructure:"anycast-gateway-mac"`
-
-	// ARPSuppression enables ARP suppression on VTEP interfaces.
-	ARPSuppression bool `yaml:"arp-suppression" json:"arp_suppression" mapstructure:"arp-suppression"`
-
-	// RTBase is the base route-target value for auto-derivation.
-	RTBase string `yaml:"rt-base,omitempty" json:"rt_base,omitempty" mapstructure:"rt-base"`
 }
 
 // SwitchConfig describes a single physical switch in the fabric.
@@ -138,12 +125,6 @@ type SwitchConfig struct {
 
 	// CredentialsRef is a reference to stored credentials (e.g., a secret name).
 	CredentialsRef string `yaml:"credentials-ref" json:"credentials_ref" mapstructure:"credentials-ref"`
-
-	// VTEPLoopback is the loopback address used for VXLAN VTEP (EVPN mode).
-	VTEPLoopback string `yaml:"vtep-loopback,omitempty" json:"vtep_loopback,omitempty" mapstructure:"vtep-loopback"`
-
-	// BGPASN is the BGP autonomous system number for the switch.
-	BGPASN uint32 `yaml:"bgp-asn,omitempty" json:"bgp_asn,omitempty" mapstructure:"bgp-asn"`
 
 	// SSHPort overrides the default SSH port (22).
 	SSHPort int `yaml:"ssh-port,omitempty" json:"ssh_port,omitempty" mapstructure:"ssh-port"`
@@ -242,44 +223,6 @@ func (c *LAGConfig) Validate() error {
 	}
 	if c.PortChannelID == 0 {
 		return ErrInvalidFabricConfig{Reason: "lag port-channel-id is required for lag " + c.ID}
-	}
-	return nil
-}
-
-// SegmentConfig defines a network segment to be provisioned on the fabric.
-type SegmentConfig struct {
-	// Name is the unique segment name.
-	Name string `yaml:"name" json:"name" mapstructure:"name"`
-
-	// VLAN is the IEEE 802.1Q VLAN identifier.
-	VLAN uint16 `yaml:"vlan" json:"vlan" mapstructure:"vlan"`
-
-	// CIDR is the IP network prefix (e.g., "10.200.0.0/24").
-	CIDR string `yaml:"cidr" json:"cidr" mapstructure:"cidr"`
-
-	// Gateway is the default gateway IP address.
-	Gateway string `yaml:"gateway,omitempty" json:"gateway,omitempty" mapstructure:"gateway"`
-
-	// DNS lists the DNS server addresses.
-	DNS []string `yaml:"dns,omitempty" json:"dns,omitempty" mapstructure:"dns"`
-
-	// DHCP enables DHCP serving on this segment.
-	DHCP bool `yaml:"dhcp,omitempty" json:"dhcp,omitempty" mapstructure:"dhcp"`
-
-	// Role classifies the segment for port lifecycle operations.
-	Role SegmentRole `yaml:"role,omitempty" json:"role,omitempty" mapstructure:"role"`
-}
-
-// Validate checks the segment configuration.
-func (c *SegmentConfig) Validate() error {
-	if c.Name == "" {
-		return ErrInvalidFabricConfig{Reason: "segment name is required"}
-	}
-	if c.VLAN < 1 || c.VLAN > 4094 {
-		return ErrInvalidFabricConfig{Reason: "segment vlan must be between 1 and 4094 for segment " + c.Name}
-	}
-	if c.Role != RoleNone && c.Role != RoleProvisioning && c.Role != RoleQuarantine {
-		return ErrInvalidFabricConfig{Reason: "segment role must be 'provisioning', 'quarantine', or empty for segment " + c.Name}
 	}
 	return nil
 }

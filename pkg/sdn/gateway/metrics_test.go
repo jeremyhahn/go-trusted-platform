@@ -68,7 +68,7 @@ func metricsSnapshot() *gwstate.Snapshot {
 		NAT: &gwstate.NATState{Active: true, DNATRules: 3, Uplinks: []gwstate.NATUplinkState{
 			{Name: "att", PoolAddresses: 8, Ports: 64512},
 		}},
-		Pipeline: &gwstate.PipelineState{Installed: true, Bridge: "trusted0", Terminal: "normal"},
+		Pipeline: &gwstate.PipelineState{Installed: true, Bridge: "br-fabric", Terminal: "normal"},
 	}
 }
 

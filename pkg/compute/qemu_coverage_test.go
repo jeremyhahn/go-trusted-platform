@@ -301,7 +301,7 @@ func TestQEMUOrchestrator_ActivateInstance(t *testing.T) {
 		if qemuInst, exists := orch.instances[instance.ID]; exists {
 			qemuInst.networkAttached = true
 			qemuInst.primaryPortName = "test-port"
-			qemuInst.primaryBridgeName = "trusted0"
+			qemuInst.primaryBridgeName = "br-int"
 		}
 		orch.instanceToPort[instance.ID] = "test-port"
 		orch.mu.Unlock()
@@ -415,7 +415,7 @@ func TestQEMUOrchestrator_Delete_EdgeCases(t *testing.T) {
 		orch.mu.Lock()
 		if qemuInst, exists := orch.instances[instance.ID]; exists {
 			qemuInst.primaryPortName = "test-port"
-			qemuInst.primaryBridgeName = "trusted0"
+			qemuInst.primaryBridgeName = "br-int"
 		}
 		orch.instanceToPort[instance.ID] = "test-port"
 		orch.mu.Unlock()
@@ -511,11 +511,11 @@ func TestQEMUOrchestrator_DetachNetwork_EdgeCases(t *testing.T) {
 		if qemuInst, exists := orch.instances[instance.ID]; exists {
 			qemuInst.networkAttached = true
 			qemuInst.primaryPortName = "test-port"
-			qemuInst.primaryBridgeName = "trusted0"
+			qemuInst.primaryBridgeName = "br-int"
 			qemuInst.instance.NetworkAttachments = []NetworkAttachment{
 				{
 					PortName:   "test-port",
-					BridgeName: "trusted0",
+					BridgeName: "br-int",
 					AttachedAt: time.Now(),
 				},
 			}
@@ -620,7 +620,7 @@ func TestSetProvisioningState_ErrorCases(t *testing.T) {
 	t.Run("empty port ID", func(t *testing.T) {
 		config := &PortAuthConfig{
 			PortID:       "",
-			BridgeName:   "trusted0",
+			BridgeName:   "br-int",
 			PolicyEngine: newMockPolicyEngine(),
 		}
 
@@ -633,7 +633,7 @@ func TestSetProvisioningState_ErrorCases(t *testing.T) {
 	t.Run("nil policy engine", func(t *testing.T) {
 		config := &PortAuthConfig{
 			PortID:       "test-port",
-			BridgeName:   "trusted0",
+			BridgeName:   "br-int",
 			PolicyEngine: nil,
 		}
 
@@ -649,7 +649,7 @@ func TestActivatePort_ErrorCases(t *testing.T) {
 	t.Run("empty port ID", func(t *testing.T) {
 		config := &PortAuthConfig{
 			PortID:       "",
-			BridgeName:   "trusted0",
+			BridgeName:   "br-int",
 			PolicyEngine: newMockPolicyEngine(),
 		}
 		portPolicy := &policy.PortPolicy{
@@ -666,7 +666,7 @@ func TestActivatePort_ErrorCases(t *testing.T) {
 	t.Run("nil policy engine", func(t *testing.T) {
 		config := &PortAuthConfig{
 			PortID:       "test-port",
-			BridgeName:   "trusted0",
+			BridgeName:   "br-int",
 			PolicyEngine: nil,
 		}
 		portPolicy := &policy.PortPolicy{
@@ -686,7 +686,7 @@ func TestGetPortState_ErrorCases(t *testing.T) {
 	t.Run("empty port ID", func(t *testing.T) {
 		config := &PortAuthConfig{
 			PortID:       "",
-			BridgeName:   "trusted0",
+			BridgeName:   "br-int",
 			PolicyEngine: newMockPolicyEngine(),
 		}
 
@@ -699,7 +699,7 @@ func TestGetPortState_ErrorCases(t *testing.T) {
 	t.Run("nil policy engine", func(t *testing.T) {
 		config := &PortAuthConfig{
 			PortID:       "test-port",
-			BridgeName:   "trusted0",
+			BridgeName:   "br-int",
 			PolicyEngine: nil,
 		}
 
@@ -715,7 +715,7 @@ func TestRemovePortAuth_ErrorCases(t *testing.T) {
 	t.Run("empty port ID", func(t *testing.T) {
 		config := &PortAuthConfig{
 			PortID:       "",
-			BridgeName:   "trusted0",
+			BridgeName:   "br-int",
 			PolicyEngine: newMockPolicyEngine(),
 		}
 
@@ -728,7 +728,7 @@ func TestRemovePortAuth_ErrorCases(t *testing.T) {
 	t.Run("nil policy engine", func(t *testing.T) {
 		config := &PortAuthConfig{
 			PortID:       "test-port",
-			BridgeName:   "trusted0",
+			BridgeName:   "br-int",
 			PolicyEngine: nil,
 		}
 

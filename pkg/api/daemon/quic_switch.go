@@ -352,6 +352,7 @@ func portStatusToPb(ps *switchmgmt.PortStatus) *platformv1.SwitchPortStatus {
 		Enabled:     ps.Enabled,
 		LinkUp:      ps.LinkUp,
 		Description: ps.Description,
+		NativeVlan:  uint32(ps.NativeVLAN),
 	}
 }
 

@@ -136,7 +136,7 @@ func testPoolProto(id string) *platformv1.IPAMPool {
 		Name:      id,
 		Cidr:      "10.0.0.0/24",
 		Gateway:   "10.0.0.1",
-		Zone:      "trusted",
+		Zone:      "control-plane",
 		Total:     254,
 		Allocated: 3,
 		Available: 251,
@@ -157,12 +157,12 @@ func TestIPAMRoutes_ListPools(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sdn/gateway/ipam/pools?zone=trusted", nil))
+	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sdn/gateway/ipam/pools?zone=control-plane", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
-	if gotZone != "trusted" {
-		t.Fatalf("zone filter = %q, want trusted", gotZone)
+	if gotZone != "control-plane" {
+		t.Fatalf("zone filter = %q, want control-plane", gotZone)
 	}
 
 	env := decodeIPAMEnvelope(t, rec)
@@ -188,7 +188,7 @@ func TestIPAMRoutes_CreatePool(t *testing.T) {
 		},
 	})
 
-	body := bytes.NewBufferString(`{"name":"prod-v4","cidr":"10.0.0.0/24","gateway":"10.0.0.1","zone":"trusted"}`)
+	body := bytes.NewBufferString(`{"name":"prod-v4","cidr":"10.0.0.0/24","gateway":"10.0.0.1","zone":"control-plane"}`)
 	req := httptest.NewRequest(http.MethodPost, "/sdn/gateway/ipam/pools", body)
 	rec := httptest.NewRecorder()
 	mr.ServeHTTP(rec, req)
@@ -196,7 +196,7 @@ func TestIPAMRoutes_CreatePool(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
 	}
-	if gotReq.GetName() != "prod-v4" || gotReq.GetCidr() != "10.0.0.0/24" || gotReq.GetZone() != "trusted" {
+	if gotReq.GetName() != "prod-v4" || gotReq.GetCidr() != "10.0.0.0/24" || gotReq.GetZone() != "control-plane" {
 		t.Fatalf("request not converted: %+v", gotReq)
 	}
 }
@@ -264,7 +264,7 @@ func TestIPAMRoutes_UpdatePoolPreservesOmittedFields(t *testing.T) {
 	if gotUpdate.GetName() != "renamed" {
 		t.Fatalf("name = %q, want renamed", gotUpdate.GetName())
 	}
-	if gotUpdate.GetZone() != "trusted" ||
+	if gotUpdate.GetZone() != "control-plane" ||
 		gotUpdate.GetDescription() != "production IPv4" ||
 		gotUpdate.GetGateway() != "10.0.0.1" ||
 		gotUpdate.GetDefaultLeaseDurationNanos() != 86400e9 ||
@@ -433,5 +433,90 @@ func TestIPAMRoutes_ActionResponsesMatchDaemonShape(t *testing.T) {
 				t.Error("message is empty; the daemon stack always sets one")
 			}
 		})
+	}
+}
+
+func TestIPAMRoutes_CreatePoolCarriesWindow(t *testing.T) {
+	var gotReq *platformv1.CreateIPAMPoolRequest
+	mr := newIPAMTestRouter(t, &mockIPAMGatewayService{
+		createPoolFunc: func(_ context.Context, req *platformv1.CreateIPAMPoolRequest) (*platformv1.CreateIPAMPoolResponse, error) {
+			gotReq = req
+			p := testPoolProto(req.GetName())
+			p.Reserved = req.GetReserved()
+			p.RangeStart = req.GetRangeStart()
+			p.RangeEnd = req.GetRangeEnd()
+			return &platformv1.CreateIPAMPoolResponse{Pool: p}, nil
+		},
+	})
+
+	body := bytes.NewBufferString(`{"name":"provisioning","cidr":"192.0.2.0/24","gateway":"192.0.2.1",` +
+		`"reserved":["192.0.2.1/32"],"range_start":"192.0.2.50","range_end":"192.0.2.254"}`)
+	rec := httptest.NewRecorder()
+	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sdn/gateway/ipam/pools", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if len(gotReq.GetReserved()) != 1 || gotReq.GetRangeStart() != "192.0.2.50" || gotReq.GetRangeEnd() != "192.0.2.254" {
+		t.Fatalf("window not converted: %+v", gotReq)
+	}
+	var pool IPAMPoolResponse
+	if err := json.Unmarshal(decodeIPAMEnvelope(t, rec).Payload, &pool); err != nil {
+		t.Fatalf("decode pool: %v", err)
+	}
+	if pool.RangeStart != "192.0.2.50" || pool.Reserved[0] != "192.0.2.1/32" {
+		t.Fatalf("window not in response: %+v", pool)
+	}
+}
+
+func TestIPAMRoutes_UpdatePoolWindow(t *testing.T) {
+	existing := testPoolProto("provisioning")
+	existing.Reserved = []string{"10.0.0.1/32"}
+	existing.RangeStart = "10.0.0.50"
+	existing.RangeEnd = "10.0.0.254"
+
+	var gotUpdate *platformv1.UpdateIPAMPoolRequest
+	mr := newIPAMTestRouter(t, &mockIPAMGatewayService{
+		getPoolFunc: func(_ context.Context, _ *platformv1.GetIPAMPoolRequest) (*platformv1.GetIPAMPoolResponse, error) {
+			return &platformv1.GetIPAMPoolResponse{Pool: existing}, nil
+		},
+		updatePoolFunc: func(_ context.Context, req *platformv1.UpdateIPAMPoolRequest) (*platformv1.UpdateIPAMPoolResponse, error) {
+			gotUpdate = req
+			return &platformv1.UpdateIPAMPoolResponse{Pool: existing}, nil
+		},
+	})
+	put := func(body string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		mr.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/sdn/gateway/ipam/pools/provisioning", bytes.NewBufferString(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+	}
+
+	// No window field: the window is left alone.
+	put(`{"name":"renamed"}`)
+	if gotUpdate.GetUpdateWindow() {
+		t.Fatalf("a body without window fields must not replace the window: %+v", gotUpdate)
+	}
+
+	// One window field: the others keep the pool's values.
+	put(`{"range_start":"10.0.0.100"}`)
+	if !gotUpdate.GetUpdateWindow() || gotUpdate.GetRangeStart() != "10.0.0.100" ||
+		gotUpdate.GetRangeEnd() != "10.0.0.254" || len(gotUpdate.GetReserved()) != 1 {
+		t.Fatalf("window not merged: %+v", gotUpdate)
+	}
+
+	// Empty values clear the window.
+	put(`{"reserved":[],"range_start":"","range_end":""}`)
+	if !gotUpdate.GetUpdateWindow() || len(gotUpdate.GetReserved()) != 0 ||
+		gotUpdate.GetRangeStart() != "" || gotUpdate.GetRangeEnd() != "" {
+		t.Fatalf("window not cleared: %+v", gotUpdate)
+	}
+}
+
+func TestDerefString(t *testing.T) {
+	s := "x"
+	if derefString(&s) != "x" || derefString(nil) != "" {
+		t.Fatal("derefString")
 	}
 }

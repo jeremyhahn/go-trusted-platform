@@ -69,7 +69,7 @@ function snapshot(overrides: Partial<GatewaySnapshot> = {}): GatewaySnapshot {
       dnat_rules: 2,
       uplinks: [{ name: 'att', default: true, pool_addresses: 8, ports: 64512, static: 1 }],
     },
-    pipeline: { installed: true, bridge: 'trusted0', owner: 'lab-node-1-gateway', terminal: 'normal', fail_mode: 'secure' },
+    pipeline: { installed: true, bridge: 'br-fabric', owner: 'lab-node-1-gateway', terminal: 'normal', fail_mode: 'secure' },
     ...overrides,
   };
 }
@@ -106,7 +106,7 @@ describe('GatewaySnapshotDetail', () => {
     expect(screen.getByText('Firewall (OVS conntrack)')).toBeDefined();
     expect(screen.getByText('att (default)')).toBeDefined();
     expect(screen.getByText('Base pipeline')).toBeDefined();
-    expect(screen.getByText('trusted0')).toBeDefined();
+    expect(screen.getByText('br-fabric')).toBeDefined();
   });
 
   it('omits the sections a gateway does not run', () => {

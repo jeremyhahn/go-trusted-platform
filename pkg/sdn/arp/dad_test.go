@@ -98,7 +98,7 @@ func TestDetectorCheckFreeAddress(t *testing.T) {
 	detector := NewDuplicateAddressDetector(transport,
 		WithProbeCount(3), WithProbeInterval(time.Millisecond))
 
-	if err := detector.Check(context.Background(), "trusted0", probedIP); err != nil {
+	if err := detector.Check(context.Background(), "br-int", probedIP); err != nil {
 		t.Fatalf("expected a silent segment to report no conflict, got %v", err)
 	}
 	if len(session.sent) != 3 {
@@ -107,8 +107,8 @@ func TestDetectorCheckFreeAddress(t *testing.T) {
 	if !session.closed {
 		t.Error("expected the probe session to be closed")
 	}
-	if len(transport.opened) != 1 || transport.opened[0] != "trusted0" {
-		t.Errorf("expected the probe to bind trusted0, bound %v", transport.opened)
+	if len(transport.opened) != 1 || transport.opened[0] != "br-int" {
+		t.Errorf("expected the probe to bind br-int, bound %v", transport.opened)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestDetectorCheckConflict(t *testing.T) {
 	detector := NewDuplicateAddressDetector(&fakeTransport{session: session},
 		WithProbeInterval(time.Millisecond))
 
-	err := detector.Check(context.Background(), "trusted0", probedIP)
+	err := detector.Check(context.Background(), "br-int", probedIP)
 
 	var conflict *ConflictError
 	if !errors.As(err, &conflict) {
@@ -135,8 +135,8 @@ func TestDetectorCheckConflict(t *testing.T) {
 	if !conflict.Address.Equal(probedIP) {
 		t.Errorf("expected address %s, got %s", probedIP, conflict.Address)
 	}
-	if conflict.Interface != "trusted0" {
-		t.Errorf("expected interface trusted0, got %q", conflict.Interface)
+	if conflict.Interface != "br-int" {
+		t.Errorf("expected interface br-int, got %q", conflict.Interface)
 	}
 	if len(session.sent) != 1 {
 		t.Errorf("expected the detector to stop on the first defence, sent %d probes", len(session.sent))
@@ -161,7 +161,7 @@ func TestDetectorCheckConflictFromRequest(t *testing.T) {
 		WithProbeInterval(time.Millisecond))
 
 	var conflict *ConflictError
-	if err := detector.Check(context.Background(), "trusted0", probedIP); !errors.As(err, &conflict) {
+	if err := detector.Check(context.Background(), "br-int", probedIP); !errors.As(err, &conflict) {
 		t.Fatalf("expected an ARP announcement to be a conflict, got %v", err)
 	}
 }
@@ -174,7 +174,7 @@ func TestDetectorCheckIgnoresOwnProbeEcho(t *testing.T) {
 	detector := NewDuplicateAddressDetector(&fakeTransport{session: session},
 		WithProbeCount(1), WithProbeInterval(time.Millisecond))
 
-	if err := detector.Check(context.Background(), "trusted0", probedIP); err != nil {
+	if err := detector.Check(context.Background(), "br-int", probedIP); err != nil {
 		t.Fatalf("expected our own frame to be ignored, got %v", err)
 	}
 }
@@ -187,7 +187,7 @@ func TestDetectorCheckIgnoresOtherAddresses(t *testing.T) {
 	detector := NewDuplicateAddressDetector(&fakeTransport{session: session},
 		WithProbeCount(1), WithProbeInterval(time.Millisecond))
 
-	if err := detector.Check(context.Background(), "trusted0", probedIP); err != nil {
+	if err := detector.Check(context.Background(), "br-int", probedIP); err != nil {
 		t.Fatalf("expected traffic for another address to be ignored, got %v", err)
 	}
 }
@@ -217,11 +217,11 @@ func TestDetectorCheckInvalidInput(t *testing.T) {
 		ip       net.IP
 		want     error
 	}{
-		"no transport":     {NewDuplicateAddressDetector(nil), "trusted0", probedIP, ErrNoProbeTransport},
+		"no transport":     {NewDuplicateAddressDetector(nil), "br-int", probedIP, ErrNoProbeTransport},
 		"empty interface":  {detector, "", probedIP, ErrInvalidInterface},
-		"nil address":      {detector, "trusted0", nil, ErrNotIPv4},
-		"ipv6 address":     {detector, "trusted0", net.ParseIP("fd00::1"), ErrNotIPv4},
-		"unspecified ipv4": {detector, "trusted0", net.IPv4zero, ErrNotIPv4},
+		"nil address":      {detector, "br-int", nil, ErrNotIPv4},
+		"ipv6 address":     {detector, "br-int", net.ParseIP("fd00::1"), ErrNotIPv4},
+		"unspecified ipv4": {detector, "br-int", net.IPv4zero, ErrNotIPv4},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -237,7 +237,7 @@ func TestDetectorCheckSendFailure(t *testing.T) {
 	session := &fakeSession{local: localMAC, sendErr: sendErr}
 	detector := NewDuplicateAddressDetector(&fakeTransport{session: session})
 
-	if err := detector.Check(context.Background(), "trusted0", probedIP); !errors.Is(err, sendErr) {
+	if err := detector.Check(context.Background(), "br-int", probedIP); !errors.Is(err, sendErr) {
 		t.Fatalf("expected the send failure to surface, got %v", err)
 	}
 }
@@ -247,7 +247,7 @@ func TestDetectorCheckReceiveFailure(t *testing.T) {
 	session := &fakeSession{local: localMAC, recvErr: recvErr}
 	detector := NewDuplicateAddressDetector(&fakeTransport{session: session})
 
-	if err := detector.Check(context.Background(), "trusted0", probedIP); !errors.Is(err, recvErr) {
+	if err := detector.Check(context.Background(), "br-int", probedIP); !errors.Is(err, recvErr) {
 		t.Fatalf("expected the receive failure to surface, got %v", err)
 	}
 }
@@ -259,7 +259,7 @@ func TestDetectorCheckContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := detector.Check(ctx, "trusted0", probedIP); !errors.Is(err, context.Canceled) {
+	if err := detector.Check(ctx, "br-int", probedIP); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 	if len(session.sent) != 0 {
@@ -278,7 +278,7 @@ func TestDetectorCheckHonoursContextDeadline(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	if err := detector.Check(ctx, "trusted0", probedIP); err != nil {
+	if err := detector.Check(ctx, "br-int", probedIP); err != nil {
 		t.Fatalf("expected the deadline-bounded probe to report no conflict, got %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > time.Minute {
@@ -314,7 +314,7 @@ func TestDetectorCheckSharedAddressFromGroupMAC(t *testing.T) {
 	session := &fakeSession{local: localMAC, replies: []*Packet{reply(vmac, probedIP)}}
 	detector := NewDuplicateAddressDetector(&fakeTransport{session: session},
 		WithProbeInterval(time.Millisecond), WithSharedAddress(probedIP, vmac))
-	if err := detector.Check(context.Background(), "trusted0", probedIP); err != nil {
+	if err := detector.Check(context.Background(), "br-int", probedIP); err != nil {
 		t.Fatalf("a defence from the group's virtual MAC must not be a conflict, got %v", err)
 	}
 
@@ -322,7 +322,7 @@ func TestDetectorCheckSharedAddressFromGroupMAC(t *testing.T) {
 	detector = NewDuplicateAddressDetector(&fakeTransport{session: session},
 		WithProbeInterval(time.Millisecond), WithSharedAddress(probedIP, vmac))
 	var conflict *ConflictError
-	if err := detector.Check(context.Background(), "trusted0", probedIP); !errors.As(err, &conflict) {
+	if err := detector.Check(context.Background(), "br-int", probedIP); !errors.As(err, &conflict) {
 		t.Fatalf("a defence from another MAC is still a conflict, got %v", err)
 	}
 
@@ -330,7 +330,7 @@ func TestDetectorCheckSharedAddressFromGroupMAC(t *testing.T) {
 	session = &fakeSession{local: localMAC, replies: []*Packet{reply(vmac, other)}}
 	detector = NewDuplicateAddressDetector(&fakeTransport{session: session},
 		WithProbeInterval(time.Millisecond), WithSharedAddress(probedIP, vmac))
-	if err := detector.Check(context.Background(), "trusted0", other); !errors.As(err, &conflict) {
+	if err := detector.Check(context.Background(), "br-int", other); !errors.As(err, &conflict) {
 		t.Fatalf("the declaration covers only its own address, got %v", err)
 	}
 

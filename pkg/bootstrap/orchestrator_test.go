@@ -32,6 +32,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 )
 
 // --- fake pxeboot sink ---
@@ -335,8 +337,8 @@ func cpStaticInterfaces() []installer.InterfaceConfig {
 
 func minimalConfig() *BootstrapConfig {
 	return &BootstrapConfig{
-		Deployer: DeployerConfig{Host: "deploy-host", NetbootMediaDir: fleetMedia},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{Host: "deploy-host", NetbootMediaDir: fleetMedia},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -762,8 +764,8 @@ func TestOrchestrator_Run_MultiNode(t *testing.T) {
 func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
 	// Scenario: existing control-plane with skip_install, new worker being provisioned.
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -828,8 +830,8 @@ func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
 func TestOrchestrator_Run_SkipInstallWorker(t *testing.T) {
 	// Scenario: control-plane being provisioned, existing worker with skip_install.
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -887,8 +889,8 @@ func TestOrchestrator_Run_SkipInstallWorker(t *testing.T) {
 func TestOrchestrator_Discover_SkipInstallNode(t *testing.T) {
 	// SkipInstall nodes should be discovered without BMC or MAC.
 	cfg := &BootstrapConfig{
-		Deployer: DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
-		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -941,46 +943,55 @@ func TestBuildSwitchConfig(t *testing.T) {
 		User:           "admin",
 		SSHKey:         "/path/to/key",
 		KnownHostsPath: "/etc/switch/known_hosts",
-		VLANs: map[string]NetworkDef{
-			"mgmt": {VLAN: 10, Subnet: "10.0.0.0/24"},
-		},
 		PortAssignments: []PortAssignment{
-			{Port: "Eth1/1", Mode: "trunk", VLANs: []int{10, 20}, Description: "uplink"},
+			{Port: "Eth1/25-27", Class: zone.PortClassHypervisor, Description: "hypervisors"},
+			{Port: "Eth1/41", Class: zone.PortClassBMC},
 		},
 	}
+	plan, err := (&BootstrapConfig{Environment: testEnvironment(), Switch: sc}).NetworkPlan()
+	if err != nil {
+		t.Fatalf("NetworkPlan: %v", err)
+	}
 
-	swCfg := buildSwitchConfig(sc)
+	swCfg, err := buildSwitchConfig(sc, plan)
+	if err != nil {
+		t.Fatalf("buildSwitchConfig: %v", err)
+	}
 	if swCfg.Host != "switch.local" {
 		t.Errorf("expected host switch.local, got %s", swCfg.Host)
 	}
 	if swCfg.KnownHostsPath != "/etc/switch/known_hosts" {
 		t.Errorf("expected known_hosts path to be threaded, got %q", swCfg.KnownHostsPath)
 	}
-	if len(swCfg.VLANs) != 1 {
-		t.Fatalf("expected 1 VLAN, got %d", len(swCfg.VLANs))
+	if len(swCfg.VLANs) != 9 || swCfg.VLANs[0].ID != 400 || swCfg.VLANs[0].Name != "transit" {
+		t.Fatalf("expected the 9 zone VLANs from 400, got %+v", swCfg.VLANs)
 	}
-	if swCfg.VLANs[0].ID != 10 {
-		t.Errorf("expected VLAN ID 10, got %d", swCfg.VLANs[0].ID)
+	if len(swCfg.Ports) != 2 {
+		t.Fatalf("expected 2 ports, got %d", len(swCfg.Ports))
 	}
-	if len(swCfg.Ports) != 1 {
-		t.Fatalf("expected 1 port, got %d", len(swCfg.Ports))
+	hv := swCfg.Ports[0]
+	if hv.Mode != "trunk" || hv.NativeVLAN != 405 || hv.MTU != 9216 || len(hv.VLANs) != 7 {
+		t.Errorf("unexpected hypervisor port %+v", hv)
 	}
-	if swCfg.Ports[0].Mode != "trunk" {
-		t.Errorf("expected mode trunk, got %s", swCfg.Ports[0].Mode)
+	if err := switchmgmt.ValidatePortConfig(hv); err != nil {
+		t.Errorf("derived hypervisor port must validate: %v", err)
+	}
+	bmcPort := swCfg.Ports[1]
+	if bmcPort.Mode != "access" || bmcPort.AccessVLAN != 402 || bmcPort.MTU != 9216 {
+		t.Errorf("unexpected bmc port %+v", bmcPort)
 	}
 }
 
-func TestBuildSwitchConfig_Empty(t *testing.T) {
-	sc := &SwitchConfig{
-		Vendor: "noop",
-		Host:   "sw1",
+func TestBuildSwitchConfig_UnknownClass(t *testing.T) {
+	plan, err := (&BootstrapConfig{Environment: testEnvironment()}).NetworkPlan()
+	if err != nil {
+		t.Fatalf("NetworkPlan: %v", err)
 	}
-	swCfg := buildSwitchConfig(sc)
-	if len(swCfg.VLANs) != 0 {
-		t.Errorf("expected 0 VLANs, got %d", len(swCfg.VLANs))
-	}
-	if len(swCfg.Ports) != 0 {
-		t.Errorf("expected 0 ports, got %d", len(swCfg.Ports))
+	sc := &SwitchConfig{PortAssignments: []PortAssignment{{Port: "Eth1/1", Class: "uplink"}}}
+	_, err = buildSwitchConfig(sc, plan)
+	var target ErrSwitchPortClass
+	if !errors.As(err, &target) || target.Port != "Eth1/1" {
+		t.Fatalf("want ErrSwitchPortClass for Eth1/1, got %v", err)
 	}
 }
 

@@ -25,14 +25,14 @@ func TestBuildNetworkZoneExtensions_Disabled(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil config returns nil", func(t *testing.T) {
-		exts, err := BuildNetworkZoneExtensions(nil, "trusted", "SN-001")
+		exts, err := BuildNetworkZoneExtensions(nil, "control-plane", "SN-001")
 		require.NoError(t, err)
 		assert.Nil(t, exts)
 	})
 
 	t.Run("encode_zone_in_cert false returns nil", func(t *testing.T) {
 		cfg := &IdentityConfig{EncodeZoneInCert: false}
-		exts, err := BuildNetworkZoneExtensions(cfg, "trusted", "SN-001")
+		exts, err := BuildNetworkZoneExtensions(cfg, "control-plane", "SN-001")
 		require.NoError(t, err)
 		assert.Nil(t, exts)
 	})
@@ -43,7 +43,7 @@ func TestBuildNetworkZoneExtensions_Enabled(t *testing.T) {
 
 	t.Run("valid zone returns one extension", func(t *testing.T) {
 		cfg := &IdentityConfig{EncodeZoneInCert: true}
-		exts, err := BuildNetworkZoneExtensions(cfg, "trusted", "SN-001")
+		exts, err := BuildNetworkZoneExtensions(cfg, "control-plane", "SN-001")
 		require.NoError(t, err)
 		require.Len(t, exts, 1)
 		assert.True(t, exts[0].Id.Equal(quicbaasca.OIDTPNetworkZone))
@@ -85,13 +85,13 @@ func TestIdentityConfig_ResolvedPlatformZone(t *testing.T) {
 		assert.Equal(t, "", cfg.ResolvedPlatformZone())
 	})
 
-	t.Run("empty PlatformZone defaults to management", func(t *testing.T) {
+	t.Run("empty PlatformZone defaults to control-plane", func(t *testing.T) {
 		cfg := &IdentityConfig{}
-		assert.Equal(t, "management", cfg.ResolvedPlatformZone())
+		assert.Equal(t, "control-plane", cfg.ResolvedPlatformZone())
 	})
 
 	t.Run("explicit PlatformZone is returned as-is", func(t *testing.T) {
-		cfg := &IdentityConfig{PlatformZone: "trusted"}
-		assert.Equal(t, "trusted", cfg.ResolvedPlatformZone())
+		cfg := &IdentityConfig{PlatformZone: "control-plane"}
+		assert.Equal(t, "control-plane", cfg.ResolvedPlatformZone())
 	})
 }

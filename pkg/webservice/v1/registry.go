@@ -1442,7 +1442,7 @@ func (registry *HandlerRegistry) AdminClaimRestHandler() *adminclaim.RestHandler
 
 // DeviceRestHandler returns the PXE device activation REST handler.
 // When a SwitchService is configured, it is injected into the handler so
-// that Activate can move the device's physical port to the trusted VLAN.
+// that Activate can move the device's physical port to the admitted VLAN.
 func (registry *HandlerRegistry) DeviceRestHandler() device.RestHandler {
 	// The heartbeat route records liveness through the platform device
 	// service; without it the route responds with the typed

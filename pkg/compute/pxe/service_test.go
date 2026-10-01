@@ -55,7 +55,7 @@ func (h *testEventHandler) getEvents() []*ProvisioningEvent {
 
 // createTestConfig creates a valid test configuration
 func createTestConfig() *ServiceConfig {
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = "br-test"
 	// IPXEConfig is set but we won't use the real iPXE server in tests
 	return cfg
@@ -74,7 +74,7 @@ func initializeTestService(t *testing.T) (Service, *ServiceConfig) {
 	svc := &service{
 		logger:       logger,
 		stateManager: stateManager,
-		vlanManager:  NewNoopVLANIntegration(),
+		vlanManager:  NewNoopVLANIntegration(testNetPlan),
 		config:       cfg,
 	}
 	svc.initialized.Store(true)
@@ -104,7 +104,7 @@ func TestNewService_WithStateManager(t *testing.T) {
 }
 
 func TestNewService_WithVLANIntegration(t *testing.T) {
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 	svc := NewService(WithVLANIntegration(vi))
 
 	assert.NotNil(t, svc)
@@ -113,7 +113,7 @@ func TestNewService_WithVLANIntegration(t *testing.T) {
 func TestNewService_WithAllOptions(t *testing.T) {
 	logger := logging.DefaultLogger()
 	sm := NewStateManager()
-	vi := NewNoopVLANIntegration()
+	vi := NewNoopVLANIntegration(testNetPlan)
 
 	svc := NewService(
 		WithLogger(logger),
@@ -147,7 +147,7 @@ func TestService_Initialize_InvalidConfig(t *testing.T) {
 	svc := NewService()
 	ctx := context.Background()
 
-	cfg := DefaultServiceConfig()
+	cfg := testServiceConfig()
 	cfg.BridgeName = "" // Invalid - required
 
 	err := svc.Initialize(ctx, cfg)
@@ -187,7 +187,7 @@ func TestService_Start_AlreadyRunning(t *testing.T) {
 	svc := &service{
 		logger:       logger,
 		stateManager: stateManager,
-		vlanManager:  NewNoopVLANIntegration(),
+		vlanManager:  NewNoopVLANIntegration(testNetPlan),
 		config:       cfg,
 	}
 	svc.initialized.Store(true)
@@ -587,7 +587,7 @@ func TestService_AuthorizeDevice_InvalidTransition(t *testing.T) {
 	require.NoError(t, err)
 
 	// Device is in discovered state, cannot go to authorized
-	err = svc.AuthorizeDevice(ctx, device.ID, 100)
+	err = svc.AuthorizeDevice(ctx, device.ID, testControlPlaneVLAN)
 	assert.Error(t, err)
 
 	var transitionErr ErrInvalidStateTransition
@@ -615,7 +615,7 @@ func TestService_AuthorizeDevice_Valid(t *testing.T) {
 	err = svc.UpdateDeviceState(ctx, device.ID, StateAuthorizing, "authorizing")
 	require.NoError(t, err)
 
-	err = svc.AuthorizeDevice(ctx, device.ID, 100)
+	err = svc.AuthorizeDevice(ctx, device.ID, testControlPlaneVLAN)
 	assert.NoError(t, err)
 
 	retrieved, err := svc.GetDevice(ctx, device.ID)
@@ -704,7 +704,7 @@ func TestService_RetryDevice_MaxRetriesExceeded(t *testing.T) {
 	svc := &service{
 		logger:       logger,
 		stateManager: stateManager,
-		vlanManager:  NewNoopVLANIntegration(),
+		vlanManager:  NewNoopVLANIntegration(testNetPlan),
 		config:       cfg,
 	}
 	svc.initialized.Store(true)
@@ -810,8 +810,8 @@ func TestService_Status(t *testing.T) {
 	// Check status of initialized but not running service
 	status := svc.Status()
 	assert.False(t, status.Running)
-	assert.Equal(t, DefaultQuarantineVLAN, status.QuarantineVLAN)
-	assert.Equal(t, DefaultProvisioningVLAN, status.ProvisioningVLAN)
+	assert.Equal(t, testQuarantineVLAN, status.QuarantineVLAN)
+	assert.Equal(t, testProvisioningVLAN, status.ProvisioningVLAN)
 
 	// Register some devices
 	_, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
@@ -841,7 +841,7 @@ func TestService_Status_WithRunningService(t *testing.T) {
 	svc := &service{
 		logger:       logger,
 		stateManager: stateManager,
-		vlanManager:  NewNoopVLANIntegration(),
+		vlanManager:  NewNoopVLANIntegration(testNetPlan),
 		config:       cfg,
 		startTime:    time.Now(),
 	}
@@ -862,7 +862,7 @@ func TestService_Status_WithNilIPXEConfig(t *testing.T) {
 	svc := &service{
 		logger:       logger,
 		stateManager: stateManager,
-		vlanManager:  NewNoopVLANIntegration(),
+		vlanManager:  NewNoopVLANIntegration(testNetPlan),
 		config:       cfg,
 	}
 	svc.initialized.Store(true)
@@ -1078,13 +1078,13 @@ func TestService_FullProvisioningWorkflow(t *testing.T) {
 	err = svc.UpdateDeviceState(ctx, device.ID, StateAuthorizing, "authorization started")
 	require.NoError(t, err)
 
-	err = svc.AuthorizeDevice(ctx, device.ID, 100)
+	err = svc.AuthorizeDevice(ctx, device.ID, testControlPlaneVLAN)
 	require.NoError(t, err)
 
 	device, err = svc.GetDevice(ctx, device.ID)
 	require.NoError(t, err)
 	assert.Equal(t, StateAuthorized, device.State)
-	assert.Equal(t, uint16(100), device.TargetVLAN)
+	assert.Equal(t, testControlPlaneVLAN, device.TargetVLAN)
 
 	// Verify events were recorded
 	events, err := svc.GetEvents(ctx, device.ID)
@@ -1111,13 +1111,13 @@ func TestService_ListDevices_FilterByVLAN(t *testing.T) {
 	svc, _ := initializeTestService(t)
 	ctx := context.Background()
 
-	// Register devices - they start in quarantine VLAN (DefaultQuarantineVLAN=202)
+	// Register devices - they start in quarantine VLAN (testQuarantineVLAN=202)
 	_, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
 	require.NoError(t, err)
 	_, err = svc.RegisterDevice(ctx, "00:11:22:33:44:66", "port-2")
 	require.NoError(t, err)
 
-	devices, err := svc.ListDevices(ctx, &DeviceFilter{VLAN: DefaultQuarantineVLAN})
+	devices, err := svc.ListDevices(ctx, &DeviceFilter{VLAN: testQuarantineVLAN})
 	assert.NoError(t, err)
 	assert.Len(t, devices, 2)
 
@@ -1182,7 +1182,7 @@ func TestService_AuthorizeDevice_NoVLANManager(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should succeed even without VLAN manager
-	err = svc.AuthorizeDevice(ctx, device.ID, 100)
+	err = svc.AuthorizeDevice(ctx, device.ID, testControlPlaneVLAN)
 	assert.NoError(t, err)
 }
 
@@ -1267,7 +1267,7 @@ func TestService_QuarantineDevice_FromAuthorized(t *testing.T) {
 	require.NoError(t, err)
 	err = svc.UpdateDeviceState(ctx, device.ID, StateAuthorizing, "authorizing")
 	require.NoError(t, err)
-	err = svc.AuthorizeDevice(ctx, device.ID, 100)
+	err = svc.AuthorizeDevice(ctx, device.ID, testControlPlaneVLAN)
 	require.NoError(t, err)
 
 	// Quarantine the authorized device (this should work)
@@ -1307,7 +1307,7 @@ func TestService_Status_NilStateManager(t *testing.T) {
 
 	svc := &service{
 		logger:      logger,
-		vlanManager: NewNoopVLANIntegration(),
+		vlanManager: NewNoopVLANIntegration(testNetPlan),
 		config:      cfg,
 		// stateManager is nil
 	}

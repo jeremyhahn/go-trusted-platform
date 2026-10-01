@@ -185,7 +185,7 @@ platformctl device activate --port tap0
 | Component | Description |
 |-----------|-------------|
 | [Cluster](cluster/) | High availability with Raft consensus |
-| [Tenant](tenant/) | Multi-tenancy with VLAN isolation |
+| [Tenant](tenant/) | Multi-tenancy: quotas, keyspace and DEK isolation |
 | [Health](health/) | Health checks and Prometheus metrics |
 | [Provisioning](provisioning/) | Device enrollment and configuration |
 | [Device](device/) | Device profiles and network phases |

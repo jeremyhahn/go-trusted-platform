@@ -21,145 +21,6 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
-func TestVLANRange_Contains(t *testing.T) {
-	tests := []struct {
-		name     string
-		vlanR    VLANRange
-		vlan     uint16
-		expected bool
-	}{
-		{"vlan at start of range", VLANRange{Start: 100, End: 200}, 100, true},
-		{"vlan at end of range", VLANRange{Start: 100, End: 200}, 200, true},
-		{"vlan in middle of range", VLANRange{Start: 100, End: 200}, 150, true},
-		{"vlan below range", VLANRange{Start: 100, End: 200}, 99, false},
-		{"vlan above range", VLANRange{Start: 100, End: 200}, 201, false},
-		{"single vlan range contains itself", VLANRange{Start: 100, End: 100}, 100, true},
-		{"single vlan range excludes others", VLANRange{Start: 100, End: 100}, 101, false},
-		{"zero range", VLANRange{Start: 0, End: 0}, 0, true},
-		{"max vlan in range", VLANRange{Start: 4090, End: 4094}, 4094, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.vlanR.Contains(tt.vlan); got != tt.expected {
-				t.Errorf("VLANRange.Contains(%d) = %v, want %v", tt.vlan, got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestVLANRange_Size(t *testing.T) {
-	tests := []struct {
-		name     string
-		vlanR    VLANRange
-		expected int
-	}{
-		{"normal range", VLANRange{Start: 100, End: 199}, 100},
-		{"single vlan", VLANRange{Start: 100, End: 100}, 1},
-		{"zero range", VLANRange{Start: 0, End: 0}, 1},
-		{"inverted range returns 0", VLANRange{Start: 200, End: 100}, 0},
-		{"max range", VLANRange{Start: 1, End: 4094}, 4094},
-		{"two vlans", VLANRange{Start: 100, End: 101}, 2},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.vlanR.Size(); got != tt.expected {
-				t.Errorf("VLANRange.Size() = %d, want %d", got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestVLANRange_Validate(t *testing.T) {
-	tests := []struct {
-		name      string
-		vlanR     VLANRange
-		expectErr bool
-		errReason string
-	}{
-		{"valid range", VLANRange{Start: 100, End: 200}, false, ""},
-		{"valid single vlan", VLANRange{Start: 100, End: 100}, false, ""},
-		{"valid min boundary", VLANRange{Start: 1, End: 100}, false, ""},
-		{"valid max boundary", VLANRange{Start: 4000, End: 4094}, false, ""},
-		{"valid full range", VLANRange{Start: 1, End: 4094}, false, ""},
-		{"start too low", VLANRange{Start: 0, End: 100}, true, "start VLAN must be between 1 and 4094"},
-		{"start too high", VLANRange{Start: 4095, End: 4095}, true, "start VLAN must be between 1 and 4094"},
-		{"end too low", VLANRange{Start: 1, End: 0}, true, "end VLAN must be greater than or equal to start VLAN"},
-		{"end too high", VLANRange{Start: 100, End: 5000}, true, "end VLAN must be between 1 and 4094"},
-		{"inverted range", VLANRange{Start: 200, End: 100}, true, "end VLAN must be greater than or equal to start VLAN"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.vlanR.Validate()
-
-			if tt.expectErr {
-				if err == nil {
-					t.Errorf("VLANRange.Validate() expected error, got nil")
-					return
-				}
-				var vlanErr ErrInvalidVLANRange
-				if !errors.As(err, &vlanErr) {
-					t.Errorf("VLANRange.Validate() error type = %T, want ErrInvalidVLANRange", err)
-				}
-			} else if err != nil {
-				t.Errorf("VLANRange.Validate() unexpected error: %v", err)
-			}
-		})
-	}
-}
-
-func TestVLANRange_IsEmpty(t *testing.T) {
-	tests := []struct {
-		name     string
-		vlanR    VLANRange
-		expected bool
-	}{
-		{"zero range is empty", VLANRange{Start: 0, End: 0}, true},
-		{"non-zero start is not empty", VLANRange{Start: 1, End: 0}, false},
-		{"non-zero end is not empty", VLANRange{Start: 0, End: 1}, false},
-		{"normal range is not empty", VLANRange{Start: 100, End: 200}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.vlanR.IsEmpty(); got != tt.expected {
-				t.Errorf("VLANRange.IsEmpty() = %v, want %v", got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestVLANRange_Overlaps(t *testing.T) {
-	tests := []struct {
-		name     string
-		range1   VLANRange
-		range2   VLANRange
-		expected bool
-	}{
-		{"identical ranges", VLANRange{Start: 100, End: 200}, VLANRange{Start: 100, End: 200}, true},
-		{"range2 inside range1", VLANRange{Start: 100, End: 200}, VLANRange{Start: 120, End: 180}, true},
-		{"range1 inside range2", VLANRange{Start: 120, End: 180}, VLANRange{Start: 100, End: 200}, true},
-		{"overlapping at end", VLANRange{Start: 100, End: 150}, VLANRange{Start: 150, End: 200}, true},
-		{"overlapping at start", VLANRange{Start: 150, End: 200}, VLANRange{Start: 100, End: 150}, true},
-		{"partial overlap", VLANRange{Start: 100, End: 150}, VLANRange{Start: 125, End: 200}, true},
-		{"no overlap range2 after", VLANRange{Start: 100, End: 150}, VLANRange{Start: 151, End: 200}, false},
-		{"no overlap range2 before", VLANRange{Start: 151, End: 200}, VLANRange{Start: 100, End: 150}, false},
-		{"adjacent ranges no overlap", VLANRange{Start: 100, End: 149}, VLANRange{Start: 150, End: 200}, false},
-		{"single vlan overlap", VLANRange{Start: 100, End: 100}, VLANRange{Start: 100, End: 100}, true},
-		{"single vlan no overlap", VLANRange{Start: 100, End: 100}, VLANRange{Start: 101, End: 101}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.range1.Overlaps(tt.range2); got != tt.expected {
-				t.Errorf("VLANRange.Overlaps() = %v, want %v", got, tt.expected)
-			}
-		})
-	}
-}
-
 func TestFromIAM_NilInput(t *testing.T) {
 	result := FromIAM(nil)
 	if result != nil {
@@ -266,49 +127,6 @@ func TestTenantEntity_Clone_NilReceiver(t *testing.T) {
 	}
 }
 
-func TestTenantEntity_Clone_ValidEntity(t *testing.T) {
-	now := time.Now()
-	deletedAt := now.Add(-time.Hour)
-	entity := &TenantEntity{
-		ID:           "tenant-123",
-		Name:         "test-tenant",
-		DisplayName:  "Test Tenant",
-		State:        StateActive,
-		OVSBridge:    "br-tenant-test",
-		VLANRange:    VLANRange{Start: 100, End: 199},
-		DEKPath:      "/tenant/tenant-123/default",
-		ComputeQuota: ComputeQuota{MaxVMs: 10, UsedVMs: 5},
-		NetworkQuota: NetworkQuota{MaxBridges: 5, UsedBridges: 2},
-		StorageQuota: StorageQuota{MaxVolumesGB: 100, UsedVolumesGB: 50},
-		Labels:       map[string]string{"env": "prod"},
-		Annotations:  map[string]string{"note": "test"},
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		DeletedAt:    &deletedAt,
-	}
-
-	clone := entity.Clone()
-
-	if clone == nil {
-		t.Fatal("Clone() returned nil for valid entity")
-	}
-	if clone == entity {
-		t.Error("Clone() should return a different pointer")
-	}
-	if clone.ID != entity.ID {
-		t.Errorf("Clone().ID = %q, want %q", clone.ID, entity.ID)
-	}
-	if clone.Name != entity.Name {
-		t.Errorf("Clone().Name = %q, want %q", clone.Name, entity.Name)
-	}
-	if clone.State != entity.State {
-		t.Errorf("Clone().State = %q, want %q", clone.State, entity.State)
-	}
-	if clone.VLANRange != entity.VLANRange {
-		t.Errorf("Clone().VLANRange = %v, want %v", clone.VLANRange, entity.VLANRange)
-	}
-}
-
 func TestTenantEntity_Clone_DeepCopyMaps(t *testing.T) {
 	entity := &TenantEntity{
 		ID:          "tenant-123",
@@ -368,89 +186,6 @@ func TestTenantEntity_Clone_NilMaps(t *testing.T) {
 	}
 	if clone.Annotations != nil {
 		t.Error("Clone() should preserve nil Annotations")
-	}
-}
-
-func TestTenantEntity_Validate_Success(t *testing.T) {
-	entity := &TenantEntity{
-		ID:        "tenant-123",
-		Name:      "test-tenant",
-		State:     StateActive,
-		VLANRange: VLANRange{Start: 100, End: 199},
-	}
-
-	if err := entity.Validate(); err != nil {
-		t.Errorf("Validate() unexpected error: %v", err)
-	}
-}
-
-func TestTenantEntity_Validate_EmptyVLANRange(t *testing.T) {
-	entity := &TenantEntity{
-		ID:        "tenant-123",
-		Name:      "test-tenant",
-		State:     StateActive,
-		VLANRange: VLANRange{}, // Empty range is valid
-	}
-
-	if err := entity.Validate(); err != nil {
-		t.Errorf("Validate() with empty VLAN range unexpected error: %v", err)
-	}
-}
-
-func TestTenantEntity_Validate_Errors(t *testing.T) {
-	tests := []struct {
-		name      string
-		entity    *TenantEntity
-		expectErr error
-	}{
-		{
-			name:      "empty ID",
-			entity:    &TenantEntity{ID: "", Name: "test", State: StateActive},
-			expectErr: ErrInvalidRequest{},
-		},
-		{
-			name:      "empty name",
-			entity:    &TenantEntity{ID: "123", Name: "", State: StateActive},
-			expectErr: ErrInvalidRequest{},
-		},
-		{
-			name:      "invalid state",
-			entity:    &TenantEntity{ID: "123", Name: "test", State: State("invalid")},
-			expectErr: ErrInvalidState{},
-		},
-		{
-			name:      "invalid VLAN range",
-			entity:    &TenantEntity{ID: "123", Name: "test", State: StateActive, VLANRange: VLANRange{Start: 200, End: 100}},
-			expectErr: ErrInvalidVLANRange{},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.entity.Validate()
-			if err == nil {
-				t.Error("Validate() expected error, got nil")
-				return
-			}
-
-			switch tt.expectErr.(type) {
-			case ErrInvalidRequest:
-				var e ErrInvalidRequest
-				if !errors.As(err, &e) {
-					t.Errorf("Validate() error type = %T, want ErrInvalidRequest", err)
-				}
-			case ErrInvalidState:
-				var e ErrInvalidState
-				if !errors.As(err, &e) {
-					t.Errorf("Validate() error type = %T, want ErrInvalidState", err)
-				}
-			case ErrInvalidVLANRange:
-				var e ErrInvalidVLANRange
-				if !errors.As(err, &e) {
-					t.Errorf("Validate() error type = %T, want ErrInvalidVLANRange", err)
-				}
-			}
-		})
 	}
 }
 
@@ -937,5 +672,101 @@ func TestHashStringToUint32(t *testing.T) {
 	hashEmpty := hashStringToUint32("")
 	if hashEmpty == 0 {
 		t.Error("Empty string should produce non-zero hash")
+	}
+}
+func TestTenantEntity_Clone_ValidEntity(t *testing.T) {
+	now := time.Now()
+	deletedAt := now.Add(-time.Hour)
+	entity := &TenantEntity{
+		ID:           "tenant-123",
+		Name:         "test-tenant",
+		DisplayName:  "Test Tenant",
+		State:        StateActive,
+		DEKPath:      "/tenant/tenant-123/default",
+		ComputeQuota: ComputeQuota{MaxVMs: 10, UsedVMs: 5},
+		NetworkQuota: NetworkQuota{MaxBridges: 5, UsedBridges: 2},
+		StorageQuota: StorageQuota{MaxVolumesGB: 100, UsedVolumesGB: 50},
+		Labels:       map[string]string{"env": "prod"},
+		Annotations:  map[string]string{"note": "test"},
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		DeletedAt:    &deletedAt,
+	}
+
+	clone := entity.Clone()
+
+	if clone == nil {
+		t.Fatal("Clone() returned nil for valid entity")
+	}
+	if clone == entity {
+		t.Error("Clone() should return a different pointer")
+	}
+	if clone.ID != entity.ID {
+		t.Errorf("Clone().ID = %q, want %q", clone.ID, entity.ID)
+	}
+	if clone.Name != entity.Name {
+		t.Errorf("Clone().Name = %q, want %q", clone.Name, entity.Name)
+	}
+	if clone.State != entity.State {
+		t.Errorf("Clone().State = %q, want %q", clone.State, entity.State)
+	}
+}
+
+func TestTenantEntity_Validate_Success(t *testing.T) {
+	entity := &TenantEntity{
+		ID:    "tenant-123",
+		Name:  "test-tenant",
+		State: StateActive,
+	}
+
+	if err := entity.Validate(); err != nil {
+		t.Errorf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestTenantEntity_Validate_Errors(t *testing.T) {
+	tests := []struct {
+		name      string
+		entity    *TenantEntity
+		expectErr error
+	}{
+		{
+			name:      "empty ID",
+			entity:    &TenantEntity{ID: "", Name: "test", State: StateActive},
+			expectErr: ErrInvalidRequest{},
+		},
+		{
+			name:      "empty name",
+			entity:    &TenantEntity{ID: "123", Name: "", State: StateActive},
+			expectErr: ErrInvalidRequest{},
+		},
+		{
+			name:      "invalid state",
+			entity:    &TenantEntity{ID: "123", Name: "test", State: State("invalid")},
+			expectErr: ErrInvalidState{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.entity.Validate()
+			if err == nil {
+				t.Error("Validate() expected error, got nil")
+				return
+			}
+
+			switch tt.expectErr.(type) {
+			case ErrInvalidRequest:
+				var e ErrInvalidRequest
+				if !errors.As(err, &e) {
+					t.Errorf("Validate() error type = %T, want ErrInvalidRequest", err)
+				}
+			case ErrInvalidState:
+				var e ErrInvalidState
+				if !errors.As(err, &e) {
+					t.Errorf("Validate() error type = %T, want ErrInvalidState", err)
+				}
+			}
+		})
 	}
 }

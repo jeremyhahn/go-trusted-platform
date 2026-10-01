@@ -22,11 +22,28 @@ wire surface is the IPAM subset of `platform.v1.GatewayService`.
 
 | Operation | Description |
 |-----------|-------------|
-| CreateIPAMPool | Create a pool (name, CIDR, gateway, zone, description, lease) |
+| CreateIPAMPool | Create a pool (name, CIDR, gateway, zone, description, lease, allocation window) |
 | GetIPAMPool | Get a pool by ID |
-| UpdateIPAMPool | Update pool metadata (CIDR is immutable) |
+| UpdateIPAMPool | Update pool metadata and, optionally, its allocation window (CIDR is immutable) |
 | DeleteIPAMPool | Delete a pool |
 | ListIPAMPools | List pools (optional zone filter) |
+
+### Allocation Window
+
+Every pool returns, and create and update accept, its allocation window on
+all six transports:
+
+| Field | Meaning |
+|-------|---------|
+| `reserved` | Prefixes (CIDR) that are never allocatable. The gateway is always reserved as well. |
+| `range_start`, `range_end` | The dynamic window `AllocateIP` draws from; set both or neither (neither = the whole CIDR). |
+
+`total` counts what can ever be allocated (usable addresses less reserved
+ones). A specific-address allocation of a reserved address is refused
+(gRPC `InvalidArgument`, REST 400, QUIC `StatusInvalidArgument`, MCP error);
+so is a reserved prefix or range that does not fit the CIDR. Updates replace
+the window only when asked: gRPC and QUIC set `update_window`; REST, MCP and
+the WebUI replace the fields present in the request and keep the rest.
 
 ### Allocations
 
@@ -41,8 +58,10 @@ wire surface is the IPAM subset of `platform.v1.GatewayService`.
 ```bash
 platformctl sdn ipam pool list [--zone storage]
 platformctl sdn ipam pool get --id pool1
-platformctl sdn ipam pool create --name prod-v4 --cidr 10.0.0.0/24 --gateway 10.0.0.1
-platformctl sdn ipam pool update --id pool1 --description "production"
+platformctl sdn ipam pool create --name lab --cidr 10.4.9.0/24 --gateway 10.4.9.1 \
+    --reserved 10.4.9.1/32 --range-start 10.4.9.50 --range-end 10.4.9.254
+platformctl sdn ipam pool update --id pool1 --description "lab"
+platformctl sdn ipam pool update --id pool1 --range-start 10.4.9.100 --range-end 10.4.9.254
 platformctl sdn ipam pool delete --id pool1
 
 platformctl sdn ipam allocate --pool-id pool1 --device-id vm-123 --hostname webserver

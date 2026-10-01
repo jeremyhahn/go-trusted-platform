@@ -447,3 +447,50 @@ func (e *ErrVTEPOperationFailed) Error() string {
 func (e *ErrVTEPOperationFailed) Unwrap() error {
 	return e.Cause
 }
+
+// ErrInvalidOverlayKind is returned for an overlay kind other than platform,
+// tenant or public.
+type ErrInvalidOverlayKind struct {
+	// Kind is the offending kind.
+	Kind OverlayKind
+}
+
+// Error implements the error interface.
+func (e ErrInvalidOverlayKind) Error() string {
+	return fmt.Sprintf("overlay: kind %q is not platform, tenant or public", e.Kind)
+}
+
+// ErrEnvironmentRequired is returned when a VNI must be derived but the
+// controller has no environment number to derive it from.
+type ErrEnvironmentRequired struct{}
+
+// Error implements the error interface.
+func (ErrEnvironmentRequired) Error() string {
+	return "overlay: deriving a VNI needs the environment number (sdn.environment.id)"
+}
+
+// ErrVNIOutsideEnvironment is returned when an explicit VNI does not belong
+// to the controller's environment block (E·100000+1 to E·100000+99999).
+type ErrVNIOutsideEnvironment struct {
+	// VNI is the offending VNI.
+	VNI uint32
+	// Environment is the controller's environment number.
+	Environment uint16
+}
+
+// Error implements the error interface.
+func (e ErrVNIOutsideEnvironment) Error() string {
+	return fmt.Sprintf("overlay: VNI %d is outside environment %d's VNI block", e.VNI, e.Environment)
+}
+
+// ErrVNIBlockExhausted is returned when every overlay network number of the
+// environment is taken.
+type ErrVNIBlockExhausted struct {
+	// Environment is the exhausted environment.
+	Environment uint16
+}
+
+// Error implements the error interface.
+func (e ErrVNIBlockExhausted) Error() string {
+	return fmt.Sprintf("overlay: environment %d has no free overlay network number", e.Environment)
+}

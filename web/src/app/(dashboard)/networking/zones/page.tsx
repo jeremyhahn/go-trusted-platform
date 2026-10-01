@@ -30,16 +30,24 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 
-// The 7 built-in zones defined by the platform.
+// The nine built-in underlay zones of the reference network, at fixed
+// offsets x00-x08 of every environment block. Their policy can be tuned;
+// their numbering, port classes and lifecycle roles cannot. Owner-defined
+// zones take offsets 9-99. Overlays (platform, tenant, public) are not zones.
 const BUILTIN_ZONES = new Set([
-  'trusted',
-  'public',
-  'provisioning',
-  'quarantine',
-  'storage',
-  'tenant',
+  'transit',
+  'fabric',
   'management',
+  'hypervisor',
+  'quarantine',
+  'provisioning',
+  'control-plane',
+  'storage',
+  'backup',
 ]);
+
+// Port classes an owner-defined zone may join.
+const OWNER_PORT_CLASSES = ['gateway', 'hypervisor'];
 
 // AllowToEntry declares a single egress path: traffic from this zone is
 // permitted to flow to the named target zone, optionally restricted to the
@@ -49,17 +57,34 @@ interface AllowToEntry {
   services?: string[];
 }
 
+// PrivilegedAccess is the audited override required for an allow_to path
+// into control-plane or management beyond the reference defaults.
+interface PrivilegedAccess {
+  reason: string;
+  approved_by: string;
+}
+
+// ZoneNumbering is the zone's numbering derived from the node's environment.
+interface ZoneNumbering {
+  vlan: number;
+  subnet4: string;
+  subnet6?: string;
+  gateway: string;
+}
+
 interface ZoneResponse {
   name: string;
+  offset: number;
+  port_classes: string[];
   internet_ingress: boolean;
   isolate_from: string[];
   allow_to: AllowToEntry[];
   services: string[];
   isolate: boolean;
-  isolate_per_tenant: boolean;
   oob: boolean;
-  omit: boolean;
   lifecycle_role: string;
+  privileged_access?: PrivilegedAccess;
+  numbering?: ZoneNumbering;
   restart_required: boolean;
   created_at: string;
   updated_at: string;
@@ -67,30 +92,57 @@ interface ZoneResponse {
 
 interface ZoneFormState {
   name: string;
+  offset: number;
+  port_classes: string[];
   internet_ingress: boolean;
   isolate_from: string[];
   allow_to: AllowToEntry[];
   services: string[];
   isolate: boolean;
-  isolate_per_tenant: boolean;
   oob: boolean;
-  omit: boolean;
   lifecycle_role: string;
+  privileged_reason: string;
+  privileged_approved_by: string;
 }
 
 function emptyForm(): ZoneFormState {
   return {
     name: '',
+    offset: 9,
+    port_classes: ['hypervisor'],
     internet_ingress: false,
     isolate_from: [],
     allow_to: [],
     services: [],
-    isolate: false,
-    isolate_per_tenant: false,
+    isolate: true,
     oob: false,
-    omit: false,
     lifecycle_role: '',
+    privileged_reason: '',
+    privileged_approved_by: '',
   };
+}
+
+// zoneBody renders the form as the REST zone body (pkg/sdn/gateway.ZoneSpec).
+function zoneBody(form: ZoneFormState, includeName: boolean): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    offset: form.offset,
+    port_classes: form.port_classes,
+    internet_ingress: form.internet_ingress,
+    isolate_from: form.isolate_from,
+    allow_to: form.allow_to,
+    services: form.services,
+    isolate: form.isolate,
+    oob: form.oob,
+    lifecycle_role: form.lifecycle_role,
+  };
+  if (includeName) body.name = form.name;
+  if (form.privileged_reason || form.privileged_approved_by) {
+    body.privileged_access = {
+      reason: form.privileged_reason,
+      approved_by: form.privileged_approved_by,
+    };
+  }
+  return body;
 }
 
 // parseCSV splits a comma-separated string into a trimmed, non-empty string
@@ -247,15 +299,17 @@ export default function ZonesPage() {
     setEditTarget(zone);
     setForm({
       name: zone.name,
+      offset: zone.offset ?? 0,
+      port_classes: zone.port_classes ?? [],
       internet_ingress: zone.internet_ingress ?? false,
       isolate_from: zone.isolate_from ?? [],
       allow_to: zone.allow_to ?? [],
       services: zone.services ?? [],
       isolate: zone.isolate ?? false,
-      isolate_per_tenant: zone.isolate_per_tenant ?? false,
       oob: zone.oob ?? false,
-      omit: zone.omit ?? false,
       lifecycle_role: zone.lifecycle_role ?? '',
+      privileged_reason: zone.privileged_access?.reason ?? '',
+      privileged_approved_by: zone.privileged_access?.approved_by ?? '',
     });
     setIsolateFromInput('');
     setServicesInput('');
@@ -267,34 +321,13 @@ export default function ZonesPage() {
     setSubmitting(true);
     try {
       if (editTarget) {
-        const {
-          internet_ingress,
-          isolate_from,
-          allow_to,
-          services,
-          isolate,
-          isolate_per_tenant,
-          oob,
-          omit,
-          lifecycle_role,
-        } = form;
         const res = await fetch(
           `/api/v1/sdn/zones/${encodeURIComponent(editTarget.name)}`,
           {
             method: 'PUT',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              internet_ingress,
-              isolate_from,
-              allow_to,
-              services,
-              isolate,
-              isolate_per_tenant,
-              oob,
-              omit,
-              lifecycle_role,
-            }),
+            body: JSON.stringify(zoneBody(form, false)),
           }
         );
         if (!res.ok) {
@@ -307,7 +340,7 @@ export default function ZonesPage() {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(form),
+          body: JSON.stringify(zoneBody(form, true)),
         });
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -437,6 +470,27 @@ export default function ZonesPage() {
         },
       },
       {
+        accessorKey: 'offset',
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Offset" />,
+        cell: ({ row }) => (
+          <span className="font-mono text-xs">x{String(row.original.offset ?? 0).padStart(2, '0')}</span>
+        ),
+      },
+      {
+        id: 'numbering',
+        header: 'VLAN / Subnet',
+        cell: ({ row }) => {
+          const n = row.original.numbering;
+          return n ? (
+            <span className="font-mono text-xs">
+              {n.vlan} · {n.subnet4}
+            </span>
+          ) : (
+            <span className="text-muted-foreground text-xs">—</span>
+          );
+        },
+      },
+      {
         accessorKey: 'lifecycle_role',
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title="Lifecycle Role" />
@@ -464,9 +518,8 @@ export default function ZonesPage() {
           const flags: string[] = [];
           if (z.internet_ingress) flags.push('internet-ingress');
           if (z.isolate) flags.push('isolate');
-          if (z.isolate_per_tenant) flags.push('per-tenant');
           if (z.oob) flags.push('oob');
-          if (z.omit) flags.push('omit');
+          if (z.privileged_access) flags.push('privileged-access');
           if ((z.isolate_from ?? []).length > 0)
             flags.push(`isolate-from(${z.isolate_from.length})`);
           if ((z.allow_to ?? []).length > 0)
@@ -670,8 +723,8 @@ export default function ZonesPage() {
             </DialogTitle>
             <DialogDescription>
               {editTarget && BUILTIN_ZONES.has(editTarget.name)
-                ? 'Editing a built-in zone creates an override entry. The built-in defaults are replaced by your configuration.'
-                : 'Configure zone isolation policy and lifecycle role.'}
+                ? 'Your policy replaces the built-in defaults. The zone keeps its offset, port classes and lifecycle role.'
+                : 'An owner-defined zone takes an offset 9-99 and joins the gateway and/or hypervisor port class. The change applies at the next daemon restart.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -688,30 +741,39 @@ export default function ZonesPage() {
               </div>
             )}
 
-            <div className="space-y-2">
-              <Label htmlFor="lifecycle-role">Lifecycle Role</Label>
-              <Select
-                value={form.lifecycle_role || '__none__'}
-                onValueChange={(v) =>
-                  setForm((f) => ({ ...f, lifecycle_role: v === '__none__' ? '' : v }))
-                }
-              >
-                <SelectTrigger id="lifecycle-role">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">None</SelectItem>
-                  <SelectItem value="provisioning">Provisioning</SelectItem>
-                  <SelectItem value="quarantine">Quarantine</SelectItem>
-                </SelectContent>
-              </Select>
-              {form.lifecycle_role && (
-                <p className="text-xs text-muted-foreground">
-                  Deleting a zone that holds a lifecycle role will be rejected by the server
-                  unless another zone takes over that role first.
-                </p>
-              )}
-            </div>
+            {!(editTarget && BUILTIN_ZONES.has(editTarget.name)) && (
+              <div className="space-y-2">
+                <Label htmlFor="zone-offset">Offset (9-99)</Label>
+                <Input
+                  id="zone-offset"
+                  type="number"
+                  min={9}
+                  max={99}
+                  value={form.offset}
+                  onChange={(e) => setForm((f) => ({ ...f, offset: Number(e.target.value) }))}
+                />
+                <Label className="text-sm font-medium">Port Classes</Label>
+                {OWNER_PORT_CLASSES.map((pc) => (
+                  <div key={pc} className="flex items-center gap-3">
+                    <Switch
+                      id={`port-class-${pc}`}
+                      checked={form.port_classes.includes(pc)}
+                      onCheckedChange={(v) =>
+                        setForm((f) => ({
+                          ...f,
+                          port_classes: v
+                            ? [...f.port_classes.filter((c) => c !== pc), pc]
+                            : f.port_classes.filter((c) => c !== pc),
+                        }))
+                      }
+                    />
+                    <Label htmlFor={`port-class-${pc}`} className="font-normal cursor-pointer">
+                      {pc}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Flags section */}
             <div className="space-y-3 pt-2 border-t">
@@ -739,46 +801,6 @@ export default function ZonesPage() {
                   Isolate
                   <span className="ml-1 text-xs text-muted-foreground">
                     (deny all inter-zone traffic except explicit allow_to paths)
-                  </span>
-                </Label>
-              </div>
-              <div className="flex items-center gap-3">
-                <Switch
-                  id="isolate-per-tenant"
-                  checked={form.isolate_per_tenant}
-                  onCheckedChange={(v) => setForm((f) => ({ ...f, isolate_per_tenant: v }))}
-                />
-                <Label htmlFor="isolate-per-tenant" className="font-normal cursor-pointer">
-                  Isolate Per Tenant
-                  <span className="ml-1 text-xs text-muted-foreground">
-                    (micro-zone isolation between tenants)
-                  </span>
-                </Label>
-              </div>
-              <div className="flex items-center gap-3">
-                <Switch
-                  id="oob"
-                  checked={form.oob}
-                  onCheckedChange={(v) => setForm((f) => ({ ...f, oob: v }))}
-                />
-                <Label htmlFor="oob" className="font-normal cursor-pointer">
-                  Out-of-Band (OOB)
-                  <span className="ml-1 text-xs text-muted-foreground">
-                    (hardware management — IPMI/BMC)
-                  </span>
-                </Label>
-              </div>
-              <div className="flex items-center gap-3">
-                <Switch
-                  id="omit"
-                  checked={form.omit}
-                  onCheckedChange={(v) => setForm((f) => ({ ...f, omit: v }))}
-                />
-                <Label htmlFor="omit" className="font-normal cursor-pointer">
-                  Omit
-                  <span className="ml-1 text-xs text-muted-foreground">
-                    (drop this built-in zone from the active set — rejected if zone holds a
-                    lifecycle role)
                   </span>
                 </Label>
               </div>
@@ -908,6 +930,27 @@ export default function ZonesPage() {
                 </div>
               )}
             </div>
+
+            {/* Privileged access */}
+            <div className="space-y-2 pt-2 border-t">
+              <Label>Privileged Access</Label>
+              <p className="text-xs text-muted-foreground">
+                Required, and audited, when allow-to opens a path into control-plane or
+                management beyond the reference defaults.
+              </p>
+              <Input
+                id="privileged-reason"
+                value={form.privileged_reason}
+                onChange={(e) => setForm((f) => ({ ...f, privileged_reason: e.target.value }))}
+                placeholder="Reason"
+              />
+              <Input
+                id="privileged-approved-by"
+                value={form.privileged_approved_by}
+                onChange={(e) => setForm((f) => ({ ...f, privileged_approved_by: e.target.value }))}
+                placeholder="Approved by"
+              />
+            </div>
           </div>
 
           <DialogFooter>
@@ -941,9 +984,9 @@ export default function ZonesPage() {
           <DialogHeader>
             <DialogTitle>Delete Zone: {deleteTarget?.name}</DialogTitle>
             <DialogDescription>
-              {deleteTarget?.lifecycle_role
-                ? `This zone holds lifecycle role "${deleteTarget.lifecycle_role}". The server will reject this deletion unless another zone takes over that role first.`
-                : 'This action cannot be undone.'}
+              {deleteTarget && BUILTIN_ZONES.has(deleteTarget.name)
+                ? 'Deleting a built-in zone omits it from this environment. fabric, provisioning, quarantine and control-plane cannot be removed.'
+                : 'The zone is removed at the next daemon restart. This action cannot be undone.'}
             </DialogDescription>
           </DialogHeader>
           {deleteError && (

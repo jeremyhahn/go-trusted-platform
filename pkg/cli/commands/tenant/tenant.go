@@ -12,7 +12,7 @@
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
 // Package tenant provides CLI commands for tenant management operations
-// including quotas, VLANs, bridges, and lifecycle operations.
+// including quotas, usage, keys and lifecycle operations.
 package tenant
 
 import (
@@ -26,20 +26,16 @@ func NewCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tenant",
 		Short: "Tenant management operations",
-		Long: `Manage tenants, quotas, VLANs, and network bridges.
+		Long: `Manage tenants and their quotas, usage, keys and barriers.
 
-The tenant subsystem provides comprehensive tenant management including:
+The tenant subsystem provides tenant management including:
   - Tenant lifecycle (create, suspend, resume, delete)
   - Quota management (compute, network, storage)
   - Usage monitoring
-  - VLAN allocation information
-  - OVS bridge status
+  - Per-tenant data encryption keys (DEK) and barriers
 
-Tenants provide isolated environments with:
-  - Dedicated VLAN ranges for network isolation
-  - Per-tenant OVS bridges for SDN
-  - Resource quotas for compute, network, and storage
-  - TPM-backed data encryption keys (DEK)
+A tenant has no VLAN range or OVS bridge of its own: tenant networks are
+EVPN/VXLAN overlays, and a tenant's routing domain is a VRF.
 
 Examples:
   # List all tenants
@@ -60,12 +56,6 @@ Examples:
   # Get tenant usage
   platformctl tenant usage my-tenant
 
-  # Get tenant VLAN info
-  platformctl tenant vlan my-tenant
-
-  # Get tenant bridge status
-  platformctl tenant bridge my-tenant
-
   # Suspend a tenant
   platformctl tenant suspend my-tenant
 
@@ -82,8 +72,6 @@ Examples:
 	cmd.AddCommand(NewResumeCommand(getFlags))
 	cmd.AddCommand(NewQuotasCommand(getFlags))
 	cmd.AddCommand(NewUsageCommand(getFlags))
-	cmd.AddCommand(NewVLANCommand(getFlags))
-	cmd.AddCommand(NewBridgeCommand(getFlags))
 	cmd.AddCommand(NewBarrierCommand(getFlags))
 
 	return cmd
