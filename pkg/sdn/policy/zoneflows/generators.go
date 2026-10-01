@@ -230,12 +230,11 @@ const (
 
 // Conntrack pipeline priorities for table 20 (gate) and table 21 (verdict).
 const (
-	prioCTGateIP   = 100 // per-zone ip → ct() gate flows
-	prioCTGateND   = 200 // ICMPv6 neighbor discovery bypasses conntrack
-	prioCTGateMiss = 1   // non-IP / unclassified traffic bypasses conntrack
-	prioCTInvalid  = 400 // drop invalid tracked connections
-	prioCTEstRel   = 300 // fast-path established/related connections
-	prioCTMiss     = 0   // verdict-table miss (DefaultPolicy)
+	prioCTGateIP  = 100 // per-zone ip → ct() gate flows
+	prioCTGateND  = 200 // ICMPv6 neighbor discovery bypasses conntrack
+	prioCTInvalid = 400 // drop invalid tracked connections
+	prioCTEstRel  = 300 // fast-path established/related connections
+	prioCTMiss    = 0   // verdict-table miss (DefaultPolicy)
 )
 
 // DefaultPolicyAllow is the MatrixRuleConfig.DefaultPolicy value that makes
@@ -248,7 +247,8 @@ const DefaultPolicyAllow = "allow"
 //
 //	table 20 (gate):    per-zone "ip in VLAN" flows send traffic through
 //	                    ct(table=21, zone=<ct zone of the source zone>);
-//	                    non-IP traffic skips conntrack (goto table 30).
+//	                    non-IP traffic skips conntrack through the gateway
+//	                    pipeline's table-20 miss (goto table 30).
 //	table 21 (verdict): established/related tracked connections fast-path to
 //	                    table 30; invalid connections drop; new connections
 //	                    consult the inter-zone matrix — allowed pairs commit
@@ -267,14 +267,11 @@ const DefaultPolicyAllow = "allow"
 // tagged. Untagged ingress (an access port's zone, a native VLAN) is not
 // classified here and takes the non-IP bypass of table 20.
 func CompileStatefulMatrixRules(cfg MatrixRuleConfig, ctZones map[zone.Zone]uint16) []FlowRule {
+	// Non-IP and unclassified traffic bypasses conntrack through the
+	// gateway pipeline's table-20 miss (goto table 30). It is not emitted
+	// here: every gateway service gates into table 20, so the miss belongs
+	// to the pipeline that all of them share (#614).
 	var flows []FlowRule
-
-	// Table 20 base: non-IP and unclassified traffic bypasses conntrack.
-	flows = append(flows, FlowRule{
-		Table:    tableCTGate,
-		Priority: prioCTGateMiss,
-		Actions:  fmt.Sprintf("goto_table:%d", tableAfterCT),
-	})
 
 	// Per source zone: ct gate + tracked-state scaffolding.
 	for _, from := range cfg.Zones {

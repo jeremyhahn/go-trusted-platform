@@ -345,8 +345,11 @@ In reverse order, and each step is independent:
 
 1. Remove the test prefix from `announce:` and restart.
 2. `rc-service gatewayd stop` — every tunnel, session and flow the daemon
-   created goes with it. The base pipeline is removed and the bridge's previous
-   fail-mode restored, so platformd's own flows keep working.
+   created goes with it. The base pipeline is removed. On a bridge provisioned
+   `secure` (the prescribed mode) the fail-mode is left as it is and platformd's
+   own flows keep working; on a bridge provisioned `standalone` the fail-mode is
+   restored, and Open vSwitch flushes every flow on the bridge when it changes,
+   platformd's included.
 3. Remove the static relay host routes added in step 1's note.
 4. `rc-update del gatewayd default` if the node should not start it again.
 

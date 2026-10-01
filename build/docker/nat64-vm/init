@@ -1,0 +1,52 @@
+#!/bin/sh
+# PID 1 of the NAT64 integration VM (#601).
+#
+# It brings up exactly what the suite needs -- the Jool translator module,
+# Open vSwitch and the netns tooling -- runs the suite binary the harness
+# appended to the initramfs (/nat64-suite.test, with the arguments in
+# /nat64-suite.args), prints a sentinel line carrying its exit status, and
+# powers the VM off. The harness reads the sentinel from the serial
+# console; a VM that never prints it fails the suite.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /dev/shm /run /tmp
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /run
+mount -t tmpfs tmpfs /tmp
+mkdir -p /run/openvswitch /run/netns /var/log/openvswitch /etc/openvswitch
+ip link set lo up
+
+console() { echo "$*" > /dev/console; }
+
+finish() {
+	console "NAT64-VM-RESULT rc=$1"
+	sync
+	echo o > /proc/sysrq-trigger
+	# The sysrq poweroff is asynchronous; PID 1 must not exit before it
+	# lands, or the kernel panics first.
+	while :; do sleep 1; done
+}
+
+for m in jool openvswitch veth 8021q; do
+	if ! modprobe "$m"; then
+		console "nat64-vm: modprobe $m failed"
+		finish 97
+	fi
+done
+
+ovsdb-tool create /etc/openvswitch/conf.db /usr/share/openvswitch/vswitch.ovsschema || finish 98
+ovsdb-server --remote=punix:/run/openvswitch/db.sock --pidfile --detach --log-file || finish 98
+ovs-vsctl --no-wait init || finish 98
+ovs-vswitchd --pidfile --detach --log-file || finish 98
+
+if [ ! -x /nat64-suite.test ]; then
+	console "nat64-vm: no suite binary at /nat64-suite.test"
+	finish 96
+fi
+
+# shellcheck disable=SC2046 # the args file is a whitespace-separated list
+INTEGRATION_TEST=1 NAT64_VM=1 /nat64-suite.test -test.v -test.count=1 $(cat /nat64-suite.args 2>/dev/null) > /dev/console 2>&1
+finish $?

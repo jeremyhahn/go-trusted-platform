@@ -405,6 +405,7 @@ type SDNServiceInterface interface {
 	// Flow operations
 	AddFlow(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error
 	DeleteFlow(ctx context.Context, bridgeName string, match string) error
+	DeleteFlowsByCookie(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error
 	ListFlows(ctx context.Context, bridgeName string) ([]*ovs.Flow, error)
 	DeleteAllFlows(ctx context.Context, bridgeName string) error
 }
@@ -803,12 +804,17 @@ func (h *SDNHandlers) handleAddFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cookie, err := flowCookie(req.Cookie)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	flowMod := &ovs.FlowMod{
 		Table:       req.Table,
 		Priority:    req.Priority,
 		Match:       req.Match,
 		Actions:     req.Actions,
-		Cookie:      req.Cookie,
+		Cookie:      fmt.Sprintf("0x%x", cookie),
 		IdleTimeout: req.IdleTimeout,
 		HardTimeout: req.HardTimeout,
 	}
@@ -819,8 +825,8 @@ func (h *SDNHandlers) handleAddFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate flow ID for response
-	flowID := fmt.Sprintf("flow-%d", time.Now().UnixNano())
+	// The flow's ID is its cookie, so a delete names exactly this flow.
+	flowID := ovs.FlowID(cookie)
 
 	resp := FlowResponse{
 		ID:        flowID,
@@ -829,7 +835,7 @@ func (h *SDNHandlers) handleAddFlow(w http.ResponseWriter, r *http.Request) {
 		Priority:  req.Priority,
 		Match:     req.Match,
 		Actions:   req.Actions,
-		Cookie:    req.Cookie,
+		Cookie:    flowMod.Cookie,
 		CreatedAt: time.Now().UTC(),
 	}
 
@@ -895,8 +901,15 @@ func (h *SDNHandlers) handleDeleteFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For flow deletion, we use the flow ID as the match string
-	if err := h.sdnService.DeleteFlow(ctx, bridgeID, flowID); err != nil {
+	// The ID is the flow's cookie. It used to be handed to OVS as a match
+	// string, which the encoder emptied, and an empty-match delete removed
+	// every flow on the bridge (#614).
+	cookie, err := ovs.ParseFlowID(flowID)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.sdnService.DeleteFlowsByCookie(ctx, bridgeID, cookie, ^uint64(0)); err != nil {
 		h.logger.Error("Failed to delete flow", "error", err, "id", flowID, "bridge", bridgeID)
 		h.writeSDNError(w, "delete_flow", err)
 		return
@@ -1138,9 +1151,19 @@ func (h *SDNHandlers) ovsPortToResponse(port *ovs.Port, bridgeID string) PortRes
 }
 
 // ovsFlowToResponse converts an OVS Flow to FlowResponse.
+// flowCookie is the cookie a flow added through the API carries: the one
+// the caller asked for, or a fresh one under the API owner prefix. Either
+// way it is the flow's identity, and its ID is ovs.FlowID of it.
+func flowCookie(requested string) (uint64, error) {
+	if requested == "" {
+		return ovs.NewAPIFlowCookie()
+	}
+	return ovs.ParseFlowID(ovs.FlowIDPrefix + requested)
+}
+
 func (h *SDNHandlers) ovsFlowToResponse(flow *ovs.Flow, bridgeID string) FlowResponse {
 	return FlowResponse{
-		ID:          flow.Cookie,
+		ID:          ovs.FlowIDPrefix + flow.Cookie,
 		BridgeID:    bridgeID,
 		Table:       flow.Table,
 		Priority:    flow.Priority,
@@ -1345,12 +1368,17 @@ func (h *SDNHandlers) handleAddFlowForBridge(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	cookie, err := flowCookie(req.Cookie)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	flowMod := &ovs.FlowMod{
 		Table:       req.Table,
 		Priority:    req.Priority,
 		Match:       req.Match,
 		Actions:     req.Actions,
-		Cookie:      req.Cookie,
+		Cookie:      fmt.Sprintf("0x%x", cookie),
 		IdleTimeout: req.IdleTimeout,
 		HardTimeout: req.HardTimeout,
 	}
@@ -1361,7 +1389,7 @@ func (h *SDNHandlers) handleAddFlowForBridge(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	flowID := fmt.Sprintf("flow-%d", time.Now().UnixNano())
+	flowID := ovs.FlowID(cookie)
 
 	resp := FlowResponse{
 		ID:        flowID,
@@ -1370,7 +1398,7 @@ func (h *SDNHandlers) handleAddFlowForBridge(w http.ResponseWriter, r *http.Requ
 		Priority:  req.Priority,
 		Match:     req.Match,
 		Actions:   req.Actions,
-		Cookie:    req.Cookie,
+		Cookie:    flowMod.Cookie,
 		CreatedAt: time.Now().UTC(),
 	}
 
@@ -1433,7 +1461,12 @@ func (h *SDNHandlers) handleDeleteFlowForBridge(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if err := h.sdnService.DeleteFlow(ctx, bridgeID, flowID); err != nil {
+	cookie, err := ovs.ParseFlowID(flowID)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.sdnService.DeleteFlowsByCookie(ctx, bridgeID, cookie, ^uint64(0)); err != nil {
 		h.logger.Error("Failed to delete flow", "error", err, "bridge", bridgeID, "flow", flowID)
 		h.writeSDNError(w, "delete_flow", err)
 		return

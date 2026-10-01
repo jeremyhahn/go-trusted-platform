@@ -78,6 +78,7 @@ type ConfigurableMockOVSClient struct {
 	addFlowFunc              func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error
 	addFlowsFunc             func(ctx context.Context, bridgeName string, flows []*ovs.FlowMod) error
 	deleteFlowFunc           func(ctx context.Context, bridgeName string, match string) error
+	deleteFlowsByCookieFunc  func(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error
 	listFlowsFunc            func(ctx context.Context, bridgeName string) ([]*ovs.Flow, error)
 	deleteAllFlowsFunc       func(ctx context.Context, bridgeName string) error
 	modifyFlowFunc           func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error
@@ -578,6 +579,9 @@ func (m *ConfigurableMockOVSClient) ListFlows(ctx context.Context, bridgeName st
 
 func (m *ConfigurableMockOVSClient) DeleteFlowsByCookie(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
 	m.recordCall("DeleteFlowsByCookie", bridgeName, cookie, cookieMask)
+	if m.deleteFlowsByCookieFunc != nil {
+		return m.deleteFlowsByCookieFunc(ctx, bridgeName, cookie, cookieMask)
+	}
 	return nil
 }
 
@@ -873,6 +877,11 @@ func (m *ConfigurableMockOVSClient) OnAddFlow(fn func(ctx context.Context, bridg
 
 func (m *ConfigurableMockOVSClient) OnDeleteFlow(fn func(ctx context.Context, bridgeName string, match string) error) *ConfigurableMockOVSClient {
 	m.deleteFlowFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnDeleteFlowsByCookie(fn func(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error) *ConfigurableMockOVSClient {
+	m.deleteFlowsByCookieFunc = fn
 	return m
 }
 

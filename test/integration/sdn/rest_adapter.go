@@ -790,11 +790,13 @@ func (r *RESTAdapter) FlowList(ctx context.Context, bridgeID string, opts FlowLi
 
 	var result struct {
 		BridgeID string `json:"bridge_id"`
-		Flows    []struct {
-			FlowID      string `json:"flow_id"`
+		// The REST flow list is rest.FlowResponse: the ID is "id" and the
+		// cookie a hex string ("0x..."), which the ID carries too.
+		Flows []struct {
+			FlowID      string `json:"id"`
 			Table       int32  `json:"table"`
 			Priority    int32  `json:"priority"`
-			Cookie      uint64 `json:"cookie"`
+			Cookie      string `json:"cookie"`
 			PacketCount uint64 `json:"packet_count"`
 			ByteCount   uint64 `json:"byte_count"`
 			Duration    int64  `json:"duration"`
@@ -816,7 +818,7 @@ func (r *RESTAdapter) FlowList(ctx context.Context, bridgeID string, opts FlowLi
 			FlowID:      f.FlowID,
 			Table:       f.Table,
 			Priority:    f.Priority,
-			Cookie:      f.Cookie,
+			Cookie:      restFlowCookie(f.Cookie),
 			PacketCount: f.PacketCount,
 			ByteCount:   f.ByteCount,
 			Duration:    f.Duration,
@@ -1217,3 +1219,13 @@ func flowActionsToString(actions []FlowAction) string {
 
 // Ensure RESTAdapter implements SDNCommands interface.
 var _ SDNCommands = (*RESTAdapter)(nil)
+
+// restFlowCookie reads the REST flow list's hex cookie string; a cookie
+// that does not parse is reported as 0, which no API-added flow carries.
+func restFlowCookie(s string) uint64 {
+	v, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(s), "0x"), 16, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}

@@ -25,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 )
 
@@ -763,6 +764,162 @@ func (c *NATConfig) Validate() error {
 	return nil
 }
 
+// NAT64Config holds the stateful NAT64 translator configuration (#601,
+// ruling R6). The gateway owns a Jool kernel instance the way it owns the
+// nftables table: it renders the instance, applies it, verifies it and
+// refuses to start when the kernel cannot carry it. The packet path is in
+// docs/gateway/engineering.md §"IPv6-only clients"; the decision and its
+// alternatives are in docs/gateway/architecture.md.
+type NAT64Config struct {
+	// Enabled indicates whether the translator runs on this gateway.
+	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+
+	// Prefix is the RFC 6052 translation prefix (pool6). Empty takes the
+	// well-known 64:ff9b::/96.
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty" mapstructure:"prefix"`
+
+	// Instance is the kernel instance name. Empty takes a platform default.
+	Instance string `yaml:"instance,omitempty" json:"instance,omitempty" mapstructure:"instance"`
+
+	// TranslatorPort is the OVS port the table-27 gate outputs to: the
+	// internal port whose host side the translator's netfilter hooks see.
+	// There is no default; a wrong guess is a black hole.
+	TranslatorPort string `yaml:"translator-port" json:"translator_port" mapstructure:"translator-port"`
+
+	// Bridge overrides the runtime bridge carrying the gate flows.
+	Bridge string `yaml:"bridge,omitempty" json:"bridge,omitempty" mapstructure:"bridge"`
+
+	// Pool4 is the IPv4 pool the translator allocates from.
+	Pool4 NAT64Pool4Config `yaml:"pool4" json:"pool4" mapstructure:"pool4"`
+
+	// SessionTimeouts are the RFC 6146 §3.5 session lifetimes; a zero
+	// field takes its RFC default.
+	SessionTimeouts NAT64TimeoutsConfig `yaml:"session-timeouts,omitempty" json:"session_timeouts,omitempty" mapstructure:"session-timeouts"`
+
+	// ClientZones names the zones whose traffic to the prefix is diverted.
+	// Empty diverts every frame addressed to the prefix. Naming zones is
+	// how the operator keeps the divert a policy decision: it outranks the
+	// firewall's zone gate, so an unnamed zone gets no translation.
+	ClientZones []NAT64ClientZoneConfig `yaml:"client-zones,omitempty" json:"client_zones,omitempty" mapstructure:"client-zones"`
+}
+
+// NAT64Pool4Config is the translator's IPv4 pool. It reuses the NAT
+// service's pool model rather than inventing a second one, and its ranges
+// must not overlap any NAT44 pool or static external address: two
+// allocators handing out one address:port pair produce a collision no
+// capture explains.
+type NAT64Pool4Config struct {
+	// Uplink names the nat.uplinks entry the pool's addresses belong to.
+	// Optional. When set it must name a configured NAT uplink, which is
+	// checked at validation; it is reported in status. It does not steer
+	// egress: Jool emits the translated packet into the host stack, which
+	// routes it by destination like any host-originated packet.
+	Uplink string `yaml:"uplink,omitempty" json:"uplink,omitempty" mapstructure:"uplink"`
+
+	// Addresses are single addresses ("203.0.113.64") or inclusive ranges
+	// ("203.0.113.64-203.0.113.71").
+	Addresses []string `yaml:"addresses" json:"addresses" mapstructure:"addresses"`
+
+	// PortRangeStart and PortRangeEnd bound the ports the translator
+	// allocates on every address.
+	PortRangeStart uint16 `yaml:"port-range-start" json:"port_range_start" mapstructure:"port-range-start"`
+	PortRangeEnd   uint16 `yaml:"port-range-end" json:"port_range_end" mapstructure:"port-range-end"`
+}
+
+// NAT64TimeoutsConfig carries the RFC 6146 session lifetimes.
+type NAT64TimeoutsConfig struct {
+	// UDP is the UDP session lifetime (RFC 6146 default 5m, minimum 2m).
+	UDP time.Duration `yaml:"udp,omitempty" json:"udp,omitempty" mapstructure:"udp"`
+
+	// TCPEstablished is the established TCP lifetime (default and minimum
+	// 2h4m).
+	TCPEstablished time.Duration `yaml:"tcp-established,omitempty" json:"tcp_established,omitempty" mapstructure:"tcp-established"`
+
+	// TCPTransitory is the transitory TCP lifetime (default and minimum 4m).
+	TCPTransitory time.Duration `yaml:"tcp-transitory,omitempty" json:"tcp_transitory,omitempty" mapstructure:"tcp-transitory"`
+
+	// ICMP is the ICMP query lifetime (default and minimum 60s).
+	ICMP time.Duration `yaml:"icmp,omitempty" json:"icmp,omitempty" mapstructure:"icmp"`
+}
+
+// NAT64ClientZoneConfig names one zone whose frames are diverted.
+type NAT64ClientZoneConfig struct {
+	// Name is the zone name, for status and flow provenance.
+	Name string `yaml:"name" json:"name" mapstructure:"name"`
+
+	// VLAN is the zone's VLAN ID; the divert matches it.
+	VLAN uint16 `yaml:"vlan" json:"vlan" mapstructure:"vlan"`
+}
+
+// ServiceConfig maps the serialized section onto the nat64 package's own
+// configuration type. The nat64 package owns its validation; this is the
+// only place the two vocabularies meet.
+func (c *NAT64Config) ServiceConfig(bridge string) nat64.Config {
+	pool := make([]nat64.Pool4Range, 0, len(c.Pool4.Addresses))
+	for _, addr := range c.Pool4.Addresses {
+		pool = append(pool, nat64.Pool4Range{
+			Addresses: addr,
+			PortStart: c.Pool4.PortRangeStart,
+			PortEnd:   c.Pool4.PortRangeEnd,
+		})
+	}
+	zones := make([]nat64.ClientZone, 0, len(c.ClientZones))
+	for _, z := range c.ClientZones {
+		zones = append(zones, nat64.ClientZone{Name: z.Name, VLAN: z.VLAN})
+	}
+	if c.Bridge != "" {
+		bridge = c.Bridge
+	}
+	return nat64.Config{
+		Prefix:         c.Prefix,
+		Instance:       c.Instance,
+		TranslatorPort: c.TranslatorPort,
+		Bridge:         bridge,
+		Pool4:          pool,
+		Timeouts: nat64.SessionTimeouts{
+			UDP:            c.SessionTimeouts.UDP,
+			TCPEstablished: c.SessionTimeouts.TCPEstablished,
+			TCPTransitory:  c.SessionTimeouts.TCPTransitory,
+			ICMP:           c.SessionTimeouts.ICMP,
+		},
+		ClientZones: zones,
+	}
+}
+
+// Validate checks the NAT64 section. The prefix, pool and timeout rules are
+// the nat64 service's own, so a disabled section validates trivially and an
+// enabled one is held to the whole contract before any datapath exists.
+func (c *NAT64Config) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	// A placeholder bridge keeps this a section check: the real bridge
+	// arrives from the runtime at build time, and its absence is not a
+	// configuration error the operator can fix here.
+	cfg := c.ServiceConfig("validate")
+	if err := cfg.Validate(); err != nil {
+		return &ErrNAT64ConfigInvalid{Cause: err}
+	}
+	return nil
+}
+
+// validateUplink refuses a pool4.uplink that names no configured NAT
+// uplink. A name that resolves to nothing would otherwise be reported in
+// status as if it meant something.
+func (c *NAT64Config) validateUplink(nat *NATConfig) error {
+	if !c.Enabled || c.Pool4.Uplink == "" {
+		return nil
+	}
+	if nat != nil && nat.Enabled {
+		for _, u := range nat.Uplinks {
+			if u.Name == c.Pool4.Uplink {
+				return nil
+			}
+		}
+	}
+	return &ErrNAT64ConfigInvalid{Cause: &ErrNAT64UplinkUnknown{Uplink: c.Pool4.Uplink}}
+}
+
 // LoadBalancerConfig holds load balancer configuration.
 type LoadBalancerConfig struct {
 	// Enabled indicates if load balancing is enabled.
@@ -977,6 +1134,10 @@ type GatewayConfig struct {
 	// NAT is the NAT gateway configuration.
 	NAT *NATConfig `yaml:"nat,omitempty" json:"nat,omitempty" mapstructure:"nat"`
 
+	// NAT64 is the stateful NAT64 translator configuration (#601): the
+	// IPv6-only client path onto the IPv4 internet.
+	NAT64 *NAT64Config `yaml:"nat64,omitempty" json:"nat64,omitempty" mapstructure:"nat64"`
+
 	// Transit is the transit (gateway ↔ upstream/BGP) service configuration.
 	// When present and enabled, the gateway activates its transit BGP/p2p
 	// service for point-to-point link management on the transit VLAN.
@@ -1065,6 +1226,14 @@ func (c *GatewayConfig) Validate() error {
 			return err
 		}
 	}
+	if c.NAT64 != nil {
+		if err := c.NAT64.Validate(); err != nil {
+			return err
+		}
+		if err := c.NAT64.validateUplink(c.NAT); err != nil {
+			return err
+		}
+	}
 	if c.LoadBalancer != nil {
 		if err := c.LoadBalancer.Validate(); err != nil {
 			return err
@@ -1108,6 +1277,7 @@ func (c *GatewayConfig) needsPipeline() bool {
 	}
 	return (c.Firewall != nil && c.Firewall.Enabled) ||
 		(c.NAT != nil && c.NAT.Enabled) ||
+		(c.NAT64 != nil && c.NAT64.Enabled) ||
 		(c.LoadBalancer != nil && c.LoadBalancer.Enabled)
 }
 
@@ -1139,6 +1309,7 @@ func (c *GatewayConfig) enabledServices() []string {
 	add(c.Firewall != nil && c.Firewall.Enabled, ServiceFirewall)
 	add(c.NAT != nil && c.NAT.Enabled, ServiceNAT)
 	add(c.LoadBalancer != nil && c.LoadBalancer.Enabled, ServiceLoadBalancer)
+	add(c.NAT64 != nil && c.NAT64.Enabled, ServiceNAT64)
 	add(c.HostFW != nil && c.HostFW.Enabled, ServiceHostFW)
 	add(len(c.Tunnels) > 0, ServiceTunnels)
 	add(c.BGP != nil || (c.Transit != nil && c.Transit.Enabled), ServiceTransit)

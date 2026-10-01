@@ -528,17 +528,23 @@ func (s *SDNService) AddFlow(ctx context.Context, req *platformv1.AddFlowRequest
 
 	client := s.getOVSClient()
 
-	// Convert proto flow config to OVS flow mod
+	// Convert proto flow config to OVS flow mod. The flow's cookie is its
+	// identity: the ID returned below is the cookie, so DeleteFlow removes
+	// exactly this flow and ListFlows reports the same ID.
 	flowMod := s.pbToOvsFlowMod(config)
+	cookie, err := ovs.NewAPIFlowCookie()
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to allocate a flow cookie: %v", err))
+	}
+	flowMod.Cookie = fmt.Sprintf("0x%x", cookie)
 
 	// Add flow via OVS without holding the lock
 	if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to add flow: %v", err))
 	}
 
-	// Create response flow (simplified - in real impl would retrieve from OVS)
 	flow := &platformv1.Flow{
-		Id:        fmt.Sprintf("flow-%d", time.Now().UnixNano()),
+		Id:        ovs.FlowID(cookie),
 		Config:    config,
 		CreatedAt: timestamppb.New(time.Now()),
 	}
@@ -566,10 +572,19 @@ func (s *SDNService) DeleteFlow(ctx context.Context, req *platformv1.DeleteFlowR
 		return nil, status.Error(codes.NotFound, "bridge not found")
 	}
 
+	// The ID is the flow's cookie (AddFlow, ListFlows). It used to be
+	// handed to OVS as a match string, which the encoder skipped term by
+	// term until the match was empty, and an empty-match delete across
+	// every table removed every flow on the bridge (#614).
+	cookie, err := ovs.ParseFlowID(req.GetFlowId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
 	client := s.getOVSClient()
 
 	// Delete flow via OVS without holding the lock
-	if err := client.DeleteFlow(ctx, bridgeName, req.GetFlowId()); err != nil {
+	if err := client.DeleteFlowsByCookie(ctx, bridgeName, cookie, ^uint64(0)); err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to delete flow: %v", err))
 	}
 
@@ -1059,10 +1074,18 @@ func (s *SDNService) GetFlowStats(ctx context.Context, req *platformv1.GetFlowSt
 		return nil, status.Error(codes.NotFound, "bridge not found")
 	}
 
+	// The ID is the flow's cookie; the stats request is scoped to exactly
+	// that cookie. Handed to OVS as a match, the ID used to be emptied by
+	// the encoder and the "stats" were the bridge's first flow's (#614).
+	cookie, err := ovs.ParseFlowID(req.GetFlowId())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
 	client := s.getOVSClient()
 
 	// Get flow statistics from OVS without holding the lock
-	flows, err := client.GetFlowStats(ctx, bridgeName, req.GetFlowId())
+	flows, err := client.GetFlowStats(ctx, bridgeName, fmt.Sprintf("cookie=0x%x/0x%x", cookie, ^uint64(0)))
 	if err != nil {
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to get flow stats: %v", err))
 	}

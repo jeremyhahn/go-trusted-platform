@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -480,8 +481,11 @@ func testFlowAdd(t *testing.T, ctx context.Context, adapter SDNCommands) {
 		t.Fatalf("FlowAdd failed: %v", err)
 	}
 
-	if result.FlowID != flowOpts.FlowID {
-		t.Errorf("Expected FlowID %s, got %s", flowOpts.FlowID, result.FlowID)
+	// The server assigns the ID: it is the cookie the flow was installed
+	// with ("flow-<cookie>"), so a delete or a stats query names exactly
+	// this flow. The requested name is only a label (#614).
+	if _, err := ovs.ParseFlowID(result.FlowID); err != nil {
+		t.Errorf("FlowAdd returned ID %q, which names no single flow: %v", result.FlowID, err)
 	}
 }
 

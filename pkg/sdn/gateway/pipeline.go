@@ -41,7 +41,8 @@ import (
 
 // CookiePipeline tags every flow of the base pipeline. It shares the
 // gateway's 0xF1BE owner prefix with the firewall (…0001), NAT (…0002),
-// load balancer (…0003) and perf (…00FF) services under CookieMask.
+// load balancer (…0003), NAT64 (…0004) and perf (…00FF) services under
+// CookieMask.
 const CookiePipeline uint64 = 0xF1BE000000000000
 
 // CookiePipelineMask selects the owner prefix of CookiePipeline.
@@ -91,9 +92,21 @@ type PipelineOwner struct {
 
 // BasePipelineRules returns the flows the runtime installs: table 0 at
 // priority 0 hands every packet to table 10, table 10 at priority 0 hands
-// it to table 30, and table 30 at priority 0 applies the terminal. Priority
-// 0 everywhere, so a platformd flow in table 0 still wins its match and a
-// service gate in table 10 still diverts.
+// it to table 30, table 20 at priority 0 hands it to table 30, and table 30
+// at priority 0 applies the terminal. Priority 0 everywhere, so a platformd
+// flow in table 0 still wins its match and a service gate or divert still
+// outranks the miss.
+//
+// The table-20 miss is the pipeline's, not a service's. Every datapath
+// service gates table 10 into the conntrack gate (table 20) with an
+// empty-match flow and then claims only the frames it handles there, so
+// whatever none of them claims needs a disposition that no single service
+// owns. When each service carried its own, a service that forgot it (NAT,
+// NAT64) black-holed every unclaimed frame on a gateway running it alone,
+// and two that carried it at one priority were one OpenFlow flow, which
+// either service's cookie-scoped Stop removed from under the other.
+// OVS's own table miss is a drop, so this flow is load-bearing (owner
+// ruling on #614, 2026-09-25).
 func BasePipelineRules(terminal PipelineTerminal) ([]zoneflows.FlowRule, error) {
 	cookie := fmt.Sprintf("0x%x", CookiePipeline)
 	rules := []zoneflows.FlowRule{
@@ -105,6 +118,12 @@ func BasePipelineRules(terminal PipelineTerminal) ([]zoneflows.FlowRule, error) 
 		},
 		{
 			Table:    int(modes.TableVXLANDecap),
+			Priority: 0,
+			Actions:  fmt.Sprintf("goto_table:%d", modes.TableMACLearning),
+			Cookie:   cookie,
+		},
+		{
+			Table:    int(modes.TableCTGate),
 			Priority: 0,
 			Actions:  fmt.Sprintf("goto_table:%d", modes.TableMACLearning),
 			Cookie:   cookie,
@@ -215,19 +234,32 @@ func (r *GatewayRuntime) EnsurePipeline(ctx context.Context, ownerID string, ter
 		return &ErrPipelineInstallFailed{Bridge: r.Bridge, Step: "read bridge", Cause: err}
 	}
 
-	if err := r.Controller.InstallFlows(r.Bridge, rules); err != nil {
-		return &ErrPipelineInstallFailed{Bridge: r.Bridge, Step: "install flows", Cause: err}
+	// fail_mode goes first, and only when it changes. On a bridge with no
+	// configured controller OVS flushes EVERY flow when fail_mode changes
+	// (connmgr_set_fail_mode -> ofproto_flush_flows), so setting it after
+	// the install wiped the pipeline it had just written and left a secure
+	// bridge with no flows: every frame dropped, by every gateway, while
+	// the services reported healthy (#614, measured on Open vSwitch 3.5).
+	changedFailMode := bridge.FailMode != PipelineFailMode
+	if changedFailMode {
+		if err := r.OVS.SetBridgeFailMode(ctx, r.Bridge, PipelineFailMode); err != nil {
+			return &ErrPipelineInstallFailed{Bridge: r.Bridge, Step: "set fail_mode", Cause: err}
+		}
 	}
-	if err := r.OVS.SetBridgeFailMode(ctx, r.Bridge, PipelineFailMode); err != nil {
-		r.rollbackPipelineFlows(ctx)
-		return &ErrPipelineInstallFailed{Bridge: r.Bridge, Step: "set fail_mode", Cause: err}
+	if err := r.Controller.InstallFlows(r.Bridge, rules); err != nil {
+		if changedFailMode {
+			r.restoreFailMode(ctx, bridge.FailMode)
+		}
+		return &ErrPipelineInstallFailed{Bridge: r.Bridge, Step: "install flows", Cause: err}
 	}
 	if err := r.OVS.SetBridgeExternalIDs(ctx, r.Bridge, map[string]string{
 		PipelineOwnerKey:    pipelineOwnerPrefix + ownerID,
 		PipelineTerminalKey: string(terminal),
 	}); err != nil {
 		r.rollbackPipelineFlows(ctx)
-		r.restoreFailMode(ctx, bridge.FailMode)
+		if changedFailMode {
+			r.restoreFailMode(ctx, bridge.FailMode)
+		}
 		return &ErrPipelineInstallFailed{Bridge: r.Bridge, Step: "record owner", Cause: err}
 	}
 
@@ -263,7 +295,12 @@ func (r *GatewayRuntime) RemovePipeline(ctx context.Context) error {
 	}); err != nil {
 		return &ErrPipelineRemoveFailed{Bridge: state.bridge, Step: "clear owner", Cause: err}
 	}
-	r.restoreFailMode(ctx, state.prevFailMode)
+	// Restoring a different fail_mode flushes the bridge (see
+	// EnsurePipeline); every gateway service has stopped by now, so the
+	// flush takes nothing that is still in use by this gateway.
+	if state.prevFailMode != PipelineFailMode {
+		r.restoreFailMode(ctx, state.prevFailMode)
+	}
 	r.pipeline = nil
 	r.logf(slog.LevelInfo, "base pipeline removed",
 		slog.String("bridge", state.bridge),

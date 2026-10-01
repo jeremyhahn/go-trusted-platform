@@ -503,9 +503,9 @@ func TestConvertToOpenFlow(t *testing.T) {
 			Cookie: "0xGGGG", // Invalid hex
 		}
 
-		ofFlow, err := convertToOpenFlow(flow)
-		assert.NoError(t, err) // parseCookie error is ignored
-		assert.Equal(t, uint64(0), ofFlow.Cookie)
+		_, err := convertToOpenFlow(flow)
+		var invalid *ErrInvalidCookie
+		assert.ErrorAs(t, err, &invalid, "a flow its owner cannot delete by cookie must not be installed")
 	})
 }
 
@@ -1335,4 +1335,29 @@ func TestFormatMatchString(t *testing.T) {
 			t.Errorf("round trip = %q, want %q", formatMatchString(reparsed), rendered)
 		}
 	})
+}
+
+// TestParseMatchString_AnyTaggedFrame: vlan_vid=0x1000/0x1000 is how a flow
+// says "any tagged frame", which dl_vlan has no spelling for; the NAT64
+// hand-off strips the tag of exactly those frames (#614).
+func TestParseMatchString_AnyTaggedFrame(t *testing.T) {
+	m := openflow.NewMatch()
+	require.NoError(t, parseMatchString(m, "dl_type=0x86dd,vlan_vid=0x1000/0x1000"))
+	var found bool
+	for _, f := range m.Fields {
+		if f.Class == openflow.OFPXMCOpenflowBasic && f.Field == openflow.OFPXMTOFBVlanVid {
+			found = true
+			assert.Equal(t, []byte{0x10, 0x00}, f.Value)
+			assert.Equal(t, []byte{0x10, 0x00}, f.Mask)
+		}
+	}
+	require.True(t, found, "no VLAN_VID field: %+v", m.Fields)
+	assert.Equal(t, "dl_type=0x86dd,vlan_vid=0x1000/0x1000", formatMatchString(m))
+
+	exact := openflow.NewMatch()
+	require.NoError(t, parseMatchString(exact, "vlan_vid=0x1064"))
+	assert.Equal(t, "dl_vlan=100", formatMatchString(exact), "an unmasked VID reads back as the VLAN")
+
+	assert.Error(t, parseMatchString(openflow.NewMatch(), "vlan_vid=0x2000"))
+	assert.Error(t, parseMatchString(openflow.NewMatch(), "vlan_vid=0x1000/zz"))
 }

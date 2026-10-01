@@ -474,20 +474,21 @@ and validates it before serving, so a control plane authoring intent the
 gateway would refuse learns it from its own log. The same document goes to
 every gateway until per-gateway overrides exist.
 
-### IPv6-only clients — NAT64 packet path (`nat64:`, planned: #601–#604)
+### IPv6-only clients — NAT64 packet path (`nat64:`)
 
 Decision and trade-off table: [architecture.md](architecture.md) "IPv6-only
-clients". Nothing below is implemented yet; the identifiers that exist today
-are named as such, the rest is the contract the follow-up issues build to.
+clients".
 
-**Today.** The NAT service is NAT44 only. Its table-20 gate passes every
-IPv6 frame untranslated (`prioIPv6Pass`, `dl_type=0x86dd`, in
-`services/firewall/nat.go`), and `dnsserver.Directives` in
-`pkg/dns/service.go` is `trustedPlatform, log, chaos, forward` — no `dns64`.
+**State.** The translator, its gate and its health are implemented (#601);
+`pkg/sdn/gateway/services/nat64` owns the instance. DNS64 (#602) and the
+OpenRC packaging (#603) are not yet in, so today the prefix must be resolved
+by an upstream DNS64 or a client CLAT, and the module has to be present
+before gatewayd starts. The Go userspace fallback (#604) is unbuilt.
+
 OVS `ct(nat)` cannot rewrite between address families, so the translator is
-never an OpenFlow action.
+never an OpenFlow action; the pipeline only hands frames to it.
 
-**Planned path, client → IPv4 server.**
+**Packet path, client → IPv4 server.**
 
 1. The IPv6-only client resolves a name. `pkg/dns` with the `dns64` plugin
    (#602) returns the upstream AAAA when one exists; when only an A record
@@ -495,48 +496,139 @@ never an OpenFlow action.
    `64:ff9b::/96` or the site prefix). A CLAT on the client learns the prefix
    from `ipv4only.arpa` (RFC 7050) through the same answer.
 2. The frame arrives on the client zone port and walks the base pipeline to
-   the conntrack gate (table 20). A new **table-27 gate** (`TableNAT64`,
-   between `TableLoadBalancer` 26 and `TableMACLearning` 30; #601) matches
-   `dl_type=0x86dd, ipv6_dst=<prefix>/96` and outputs to the translator's
-   port. Every other IPv6 frame keeps the `prioIPv6Pass` behaviour.
-3. The translator is a **Jool instance** the `nat64:` section owns (#601):
-   `pool6` is the prefix, `pool4` is drawn from the NAT service's uplink pool
-   model (`firewall.NATConfig` pools — one model, not a second). Jool rewrites
-   the IPv6 header to IPv4 (RFC 7915 rules, ICMPv6 ↔ ICMP included),
-   allocates a `pool4` address:port for the session and emits the IPv4
-   packet on the host side.
-4. The IPv4 packet enters the uplink's existing NAT44 path only if `pool4`
-   is private; when `pool4` is a public range on the uplink (the intended
-   shape) it leaves the uplink directly. Return traffic matches the Jool
-   session and is translated back to the client's IPv6 address.
+   the conntrack gate (table 20). The service's own table-10 gate (priority
+   4) admits it there even when neither the firewall nor NAT is running. A
+   table-20 divert at priority 210 matches
+   `dl_type=0x86dd[,dl_vlan=V],ipv6_dst=<prefix>` and sends it to the
+   **table-27 gate** (`TableNAT64`, between `TableLoadBalancer` 26 and
+   `TableMACLearning` 30), which rewrites the destination MAC to the
+   translator port's own, strips an 802.1Q tag, and outputs to that port
+   (unrewritten, the kernel drops the frame as addressed to another host
+   before Jool's hook sees it); the table-27 miss continues to table 30 so the
+   table is never a black hole. Every frame the divert does not claim meets
+   the pipeline's table-20 miss and continues to table 30, so a gateway
+   running `nat64:` alone forwards everything else as before. The divert
+   outranks the firewall's zone gate on the DNAT precedent — nothing routes
+   the translation prefix, so the alternative to translating is dropping —
+   and `client-zones:` is where the operator expresses which zones get it.
+   Full table in [docs/sdn/firewall/architecture.md](../sdn/firewall/architecture.md)
+   §"Table 27".
+3. The translator is a **Jool instance** the `nat64:` section owns, in
+   netfilter mode: it hooks `PREROUTING` on every host interface. `pool6` is
+   the prefix; `pool4` uses the NAT service's pool spelling (`firewall.NATConfig`
+   pools — one model, not a second). Jool rewrites the IPv6 header to IPv4
+   (RFC 7915 rules, ICMPv6 ↔ ICMP included), allocates a `pool4`
+   address:port for the session and sends the IPv4 packet straight to
+   `POSTROUTING`, routed by the host like any host-originated packet.
+4. A `pool4` address must be one the host answers ARP for on the egress
+   side (typically an address of the uplink interface, on a port range the
+   host's own sockets do not use), so the IPv4 server's reply reaches the
+   host; Jool matches it to the session in `PREROUTING`, translates it back,
+   and the host routes the IPv6 reply to the client through the zone's
+   router interface.
 
-**Section shape (#601).**
+**Section shape.**
 
 ```yaml
 nat64:
   enabled: true
-  prefix: 64:ff9b::/96        # RFC 6052; /32,/40,/48,/56,/64 or /96
+  prefix: "64:ff9b::/96"      # RFC 6052; /32,/40,/48,/56,/64 or /96
+  instance: tp-nat64          # the kernel instance name
+  translator-port: nat640     # the OVS port the table-27 gate outputs to
   pool4:
-    uplink: primary            # a named uplink from uplinks:; its pool ranges
-  session-timeouts:            # RFC 6146 §4 defaults when omitted
+    uplink: primary                          # optional: the nat.uplinks entry these addresses belong to
+    addresses: ["203.0.113.64-203.0.113.71"] # must NOT overlap any NAT44 pool or static external
+    port-range-start: 61001
+    port-range-end: 65535
+  session-timeouts:           # RFC 6146 §3.5 defaults when omitted
     udp: 5m
-    tcp-established: 2h
+    tcp-established: 2h4m
     tcp-transitory: 4m
     icmp: 1m
+  client-zones:               # empty diverts every frame addressed to the prefix
+    - name: iot
+      vlan: 300
 ```
+
+`pool4` reuses the NAT service's pool spelling rather than inventing a second
+one, but its ranges must be **disjoint** from every address:port the NAT
+service translates to — each uplink's pool, the single-address
+`external-ip`, and every static 1:1 external address, which owns all of its
+ports: Jool and the OVS conntrack NAT each keep their own allocation table,
+and handing both the same address and port produces a collision that looks
+like packet loss and explains itself nowhere. The gateway runs that check at
+build time because only the gateway sees both sections. `pool4.uplink`, when
+set, must name an uplink of an enabled `nat:` section
+(`ErrNAT64UplinkUnknown`); it is carried into status and does not steer
+egress, which is the host's routing.
+
+jool takes a pool4 entry as a CIDR prefix and refuses the `a-b` range
+spelling, so the driver tiles each configured range with the fewest prefixes
+that cover it exactly. jool lists pool4 one address per row and one protocol
+table per call (`pool4 display` with no protocol shows TCP alone), and the
+driver compares at that grain.
+
+Session lifetimes take the RFC 6146 §3.5 defaults when omitted, and the §3.5
+minimums are enforced rather than quietly raised — an operator who wrote a
+number meant it. `tcp-established` is 2h4m in both cases (REQ-7), not 2h.
 
 The section is a **running backend or a refused start**, like every other:
 module not loadable → `ErrNAT64ModuleUnavailable`; prefix not one of the
 RFC 6052 lengths → `ErrInvalidNAT64Prefix`; `pool4` overlapping a NAT44 pool
-→ `ErrNAT64PoolOverlap`. The `fips` build carries the section unchanged — the
-translator is not cryptographic. Health rides `Snapshot` (instance present,
-`pool4` usage, session count, module version).
+→ `ErrNAT64PoolOverlap`; `pool4` naming more than 65536 addresses (a /16)
+→ `ErrPool4TooLarge`; no `translator-port` → `ErrEmptyTranslatorPort`,
+because a gate with nowhere to send frames is a black hole. The `fips` build
+carries the section unchanged — the translator is not cryptographic.
 
-**Host filter.** The Jool instance is host-side, so `hostfw:` (`services/hostfw`)
-needs an explicit rule admitting the translator's traffic; the undeclared-listener
-gate does not cover it (#601).
+**Health** is what the kernel said, never the configuration echoed back:
+instance presence, session count, `pool4` usage and module version as the
+driver read them. `Healthy()` is `Active && InstancePresent && LastError ==
+nil`, so a started service whose instance has disappeared underneath it
+reports unhealthy, and the section appears in the snapshot's health
+components either way.
 
-**Packaging (#603).** The gatewayd OpenRC package depends on Alpine's
+**Health is kept current by the service itself.** Start reads the kernel's
+answer before it reports the service started, and a reconcile loop
+(`ReconcileInterval`, 30s) re-converges the instance and the flows and
+re-reads the counters; a vanished instance is `ErrInstanceVanished` in
+`LastError` and the section turns unhealthy within one interval.
+
+**Reconcile does not flush.** `Driver.Apply` converges an instance that is
+already present: only the `pool4` entries that differ are removed and added
+(removals first — jool merges an added port range into an overlapping one,
+and the removal would then take both) and the timeouts are re-set, because
+recreating it would drop every live translation. The one exception is a
+changed prefix: jool refuses to change a NAT64 instance's `pool6`, and every
+session maps a client through it, so the instance is recreated.
+
+**Stop and restart.** `Stop` is the same clean shutdown every gateway
+datapath service performs on a gateway `Stop` — the firewall and NAT delete
+their flows, the runtime its pipeline: the flows go first, so no frame is
+diverted to a translator that is going away, then the instance. A control
+process that exits *without* stopping leaves both in place, and the next
+`Start` adopts them. The instance is converged in place, keeping its
+sessions. The flows that reach it are left alone until the current set is
+installed. The cookie's low 32 bits carry a flow generation, fresh on every
+start, so the new set replaces every flow of the same identity. Only then is
+each flow still carrying an older generation deleted, by its exact cookie. So
+flows rendered from an older configuration (another prefix, a zone no longer
+listed) do not survive the start, and the old ones carry traffic until the
+new ones are in. A sweep that fails leaves the service running, with the
+failure in health, and the reconcile loop retries it.
+
+A start that fails after creating the instance removes it, along with every
+flow under the NAT64 owner. A start that fails over an adopted instance
+touches neither the instance nor its flows: both carry the previous process's
+sessions (#614 review).
+
+**Host filter: nothing to open.** The `hostfw:` input chain never sees
+translator traffic. Jool hooks `PREROUTING`, and what it translates goes
+straight to `POSTROUTING`, skipping `INPUT` and `FORWARD`; what it does not
+translate is not addressed to the host. The translator port is therefore not
+an unfiltered interface: leaving it open, as the first cut of #601 did,
+exposed every local listener to anything arriving on it.
+
+**Packaging (#603, not yet in).** The gatewayd OpenRC package depends on Alpine's
 `jool-modules-lts`, `jool-tools`, `jool-tools-openrc`; the init script's
 `start_pre` runs `modprobe jool` when a `nat64:` section is configured. A
 kernel upgrade that lags the module package shows up as a refused section,
@@ -721,6 +813,9 @@ model.
 | Integration (tunnel) | `test/integration/sdn/tunnel_netns_test.go` | Two namespaces over a veth pair: a managed GRE tunnel pinned to an uplink table carries TCP and its pin rule leaves with it; an `ipsec` tunnel carries nothing with mismatched ESP keys, carries traffic with matching keys, survives a lockstep `Rekey`, and leaves no SA behind. Requires root; fails rather than skips without it |
 | Integration (hostfw) | `test/integration/sdn/hostfw_netns_test.go` | Two network namespaces over a veth pair and a GRE tunnel: only declared ports answer, an undeclared port times out, GRE from an undeclared source is dropped and admitted once allowed. Requires root; fails rather than skips without it |
 | Unit (supervisor IPC) | `pkg/sdn/gateway/ipc/ipc_test.go` | A real Unix socket and a real gRPC server per test: status/snapshot/apply round trips, the apply error travelling beside the state, uid admission per service on the live socket, stale-socket takeover |
+| Unit (nat64) | `pkg/sdn/gateway/services/nat64/*_test.go`, `pkg/sdn/gateway/nat64_test.go` | Config validation, the Jool command lines and pool4 convergence against a runner scripted with jool 4.1.14's real output, the flow set, start/stop/rollback/adoption and the reconcile loop over fakes |
+| Unit (pipeline) | `pkg/sdn/gateway/pipeline_test.go` | Every table a gate or `goto` routes into has an empty-match miss, each datapath service started alone; exactly one table-20 miss and it is the pipeline's; `fail_mode` is set before the pipeline is installed |
+| Integration (nat64) | `test/integration/nat64/` (harness) running `test/integration/sdn/nat64_*_test.go` (`nat64vm` tag) | `make integration-test-nat64`: an Alpine VM under QEMU/KVM in the devcontainer, with linux-lts and jool-modules-lts from one repository snapshot (`build/docker/nat64-vm`). The Jool driver against the real module (range tiling, idempotent converge, pool change, prefix change, refusal) and the datapath end to end: an IPv6-only client pings an IPv4-only server through a real gateway running `nat64:` alone, untagged and in a tagged client zone, with ARP/IPv4 and neighbour discovery crossing the same bridge. Fails, never skips, when KVM, the module or a guest test is missing |
 | Integration | `test/integration/proxy/`, `test/integration/network/` | Real listeners, real backends |
 | Spike (not a test) | `test/spike/nat64/main.go` (`//go:build spike`) | The #595 NAT64 throughput measurement: two TUNs in an unprivileged user namespace, one goroutine per direction over a lock-guarded binding table, UDP blast. Run by hand with `unshare -rn go run -tags spike ./test/spike/nat64`; excluded from every `make` target by its tag |
 | **Architecture** | `pkg/arch/gatewayguard_test.go` | `gatewayd`'s import closure |

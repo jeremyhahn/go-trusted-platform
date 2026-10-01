@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
 	"log/slog"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ct"
@@ -101,6 +102,9 @@ type HostRuntime struct {
 	HostFWApplier hostfw.Applier
 	// TunnelManager drives tunnel interfaces; nil uses the netlink manager.
 	TunnelManager TunnelManager
+	// NAT64Driver programs the kernel translator; nil drives the real jool
+	// tool, which needs the module the packaging installs (#601).
+	NAT64Driver nat64.Driver
 	// BGPServer, when set, is the GoBGP server the transit speaker wraps
 	// instead of running its own (tests, or a daemon-managed instance).
 	BGPServer bgp.BGPServerInterface

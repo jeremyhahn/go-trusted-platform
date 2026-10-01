@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const (
@@ -125,8 +126,12 @@ func (c *Client) CreateBridgeWithOptions(ctx context.Context, name string, opts 
 		[]Mutation{NewMutation("bridges", "insert", NamedUUID{NamedUUID: "new_bridge"})},
 	)
 
-	// Execute transaction: interface -> port -> bridge -> OVS mutation
-	results, err := c.Transact(ctx, interfaceInsert, portInsert, bridgeInsert, ovsMutate)
+	// Execute transaction: interface -> port -> bridge -> OVS mutation,
+	// and wait for ovs-vswitchd to apply it. Until it has, the bridge has
+	// no OpenFlow management socket, and a flow written straight after
+	// creation fails to connect (the SDN suite's gRPC and QUIC flow tests
+	// did, every run).
+	results, err := c.transactApplied(ctx, interfaceInsert, portInsert, bridgeInsert, ovsMutate)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to create bridge", Err: err}
 	}
@@ -244,10 +249,21 @@ func (c *Client) UpdateBridge(ctx context.Context, name string, updates map[stri
 	return nil
 }
 
-// SetBridgeFailMode sets the fail mode for a bridge
+// SetBridgeFailMode sets the fail mode for a bridge and returns once
+// ovs-vswitchd has applied it.
+//
+// The wait is load-bearing. On a bridge with no configured controller,
+// vswitchd flushes every flow when the fail mode changes, and it does so
+// when it applies the new configuration, after the OVSDB commit has
+// returned. A caller that installs flows straight after an unwaited commit
+// can have them flushed under it: the gateway pipeline was, in the SDN
+// suite on Open vSwitch 3.5 (#614).
 func (c *Client) SetBridgeFailMode(ctx context.Context, name string, failMode string) error {
 	if !isValidFailMode(failMode) {
 		return &MessageError{Msg: fmt.Sprintf("invalid fail mode: %s (must be 'standalone', 'secure', or empty)", failMode)}
+	}
+	if name == "" {
+		return ErrInvalidBridgeName
 	}
 
 	var value interface{}
@@ -257,9 +273,98 @@ func (c *Client) SetBridgeFailMode(ctx context.Context, name string, failMode st
 		value = failMode
 	}
 
-	return c.UpdateBridge(ctx, name, map[string]interface{}{
-		"fail_mode": value,
-	})
+	bridge, err := c.GetBridge(ctx, name)
+	if err != nil {
+		return err
+	}
+	update := NewUpdateOperation(
+		bridgeTable,
+		[]Condition{NewCondition("_uuid", "==", []interface{}{"uuid", bridge.UUID})},
+		map[string]interface{}{"fail_mode": value},
+	)
+	if _, err := c.transactApplied(ctx, update); err != nil {
+		return &WrappedError{Msg: "failed to update bridge", Err: err}
+	}
+	return nil
+}
+
+// vswitchdApplyTimeout bounds the wait for ovs-vswitchd to apply a
+// configuration when the caller's context carries no deadline of its own.
+const vswitchdApplyTimeout = 30 * time.Second
+
+// vswitchdApplyPoll is how often cur_cfg is re-read while waiting.
+const vswitchdApplyPoll = 10 * time.Millisecond
+
+// transactApplied commits ops together with an increment of the
+// Open_vSwitch next_cfg sequence, then waits until ovs-vswitchd reports
+// cur_cfg at or beyond the new value: the configuration has been applied,
+// not merely stored. It is the contract ovs-vsctl keeps unless --no-wait.
+func (c *Client) transactApplied(ctx context.Context, ops ...Operation) (TransactResponse, error) {
+	bump := Operation{
+		Op:        "mutate",
+		Table:     ovsTable,
+		Where:     &[][]interface{}{},
+		Mutations: [][]interface{}{{"next_cfg", "+=", 1}},
+	}
+	read := NewSelectOperation(ovsTable, nil, []string{"next_cfg"})
+	result, err := c.Transact(ctx, append(ops, bump, read)...)
+	if err != nil {
+		return nil, err
+	}
+	target, ok := cfgSequence(result[len(result)-1].Rows, "next_cfg")
+	if !ok {
+		return nil, ErrConfigSequenceUnreadable
+	}
+	if err := c.waitApplied(ctx, target); err != nil {
+		return nil, err
+	}
+	return result[:len(ops)], nil
+}
+
+// waitApplied polls cur_cfg until it reaches target or the context ends.
+func (c *Client) waitApplied(ctx context.Context, target int64) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, vswitchdApplyTimeout)
+		defer cancel()
+	}
+	ticker := time.NewTicker(vswitchdApplyPoll)
+	defer ticker.Stop()
+	// Each read runs under its own call timeout, detached from the wait's
+	// deadline: the deadline is observed between reads, so it ends the
+	// wait as ErrConfigNotApplied instead of cutting a read in half and
+	// leaving the connection mid-response.
+	readCtx := context.WithoutCancel(ctx)
+	for {
+		if err := ctx.Err(); err != nil {
+			return &ErrConfigNotApplied{Target: target, Err: err}
+		}
+		rows, err := c.Select(readCtx, ovsTable, nil, []string{"cur_cfg"})
+		if err != nil {
+			return err
+		}
+		if cur, ok := cfgSequence(rows, "cur_cfg"); ok && cur >= target {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return &ErrConfigNotApplied{Target: target, Err: ctx.Err()}
+		case <-ticker.C:
+		}
+	}
+}
+
+// cfgSequence reads an integer sequence column from the single
+// Open_vSwitch row. JSON numbers decode as float64.
+func cfgSequence(rows []map[string]interface{}, column string) (int64, bool) {
+	if len(rows) != 1 {
+		return 0, false
+	}
+	v, ok := rows[0][column].(float64)
+	if !ok {
+		return 0, false
+	}
+	return int64(v), true
 }
 
 // SetBridgeProtocols sets the OpenFlow protocols for a bridge

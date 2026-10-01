@@ -103,8 +103,10 @@ func newOVSDBClient(t *testing.T) *ovs.Client {
 //
 // installPipelinePlumbing installs the minimal base-pipeline context the
 // gateway normally provides around the ct services on a standalone test
-// bridge: table 0 diverts everything into the table 10 gate, and table 30
-// (the overlay pipeline continuation) forwards via NORMAL.
+// bridge: table 0 diverts everything into the table 10 gate, table 20's
+// miss continues what no service claims (the pipeline owns it since #614;
+// the firewall no longer installs one), and table 30 (the overlay pipeline
+// continuation) forwards via NORMAL.
 func installPipelinePlumbing(t *testing.T, client *ovs.Client, bridge string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -112,6 +114,7 @@ func installPipelinePlumbing(t *testing.T, client *ovs.Client, bridge string) {
 
 	plumbing := []*ovs.FlowMod{
 		{Table: 0, Priority: 1, Actions: "goto_table:10"},
+		{Table: 20, Priority: 0, Actions: "goto_table:30"},
 		{Table: 30, Priority: 0, Actions: "normal"},
 	}
 	require.NoError(t, client.AddFlows(ctx, bridge, plumbing), "install pipeline plumbing")

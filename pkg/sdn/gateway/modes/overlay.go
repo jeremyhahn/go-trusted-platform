@@ -48,6 +48,7 @@ const (
 	TableCTVerdict      uint8 = 21 // Conntrack verdict (firewall service)
 	TableNAT            uint8 = 25 // NAT commit (NAT service)
 	TableLoadBalancer   uint8 = 26 // Load balancer VIP dispatch (load-balancer service)
+	TableNAT64          uint8 = 27 // NAT64 translator hand-off (nat64 service)
 	TableLBHairpin      uint8 = 28 // Load balancer hairpin SNAT (load-balancer service)
 	TableLBReply        uint8 = 29 // Load balancer reply reverse NAT (load-balancer service)
 	TableMACLearning    uint8 = 30 // MAC learning / L2 forwarding

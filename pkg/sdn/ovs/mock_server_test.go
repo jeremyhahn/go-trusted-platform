@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -37,6 +38,10 @@ type mockOVSDBServer struct {
 	// transactOps records every operation received via the transact
 	// method, in arrival order, so tests can assert wire-level content.
 	transactOps []Operation
+
+	// holdCurCfg, when set, keeps cur_cfg from following next_cfg: an
+	// ovs-vswitchd that never applies the configuration.
+	holdCurCfg atomic.Bool
 }
 
 // mockDatabase represents an in-memory OVSDB database
@@ -91,6 +96,8 @@ func (s *mockOVSDBServer) initializeDatabase() {
 				"_uuid":        []interface{}{"uuid", ovsUUID},
 				"bridges":      []interface{}{"set", []interface{}{}},
 				"other_config": []interface{}{"map", []interface{}{}},
+				"next_cfg":     float64(0),
+				"cur_cfg":      float64(0),
 			},
 		},
 	}
@@ -597,6 +604,16 @@ func (s *mockOVSDBServer) applyMutation(row map[string]interface{}, column, muta
 	}
 
 	switch mutator {
+	case "+=":
+		// Integer column. Bumping next_cfg models ovs-vswitchd applying
+		// the configuration: cur_cfg follows unless the test holds it.
+		cur, _ := row[column].(float64)
+		delta, _ := resolvedValue.(float64)
+		row[column] = cur + delta
+		if column == "next_cfg" && !s.holdCurCfg.Load() {
+			row["cur_cfg"] = row[column]
+		}
+		return ""
 	case "insert":
 		// Insert into set
 		current, exists := row[column]

@@ -994,19 +994,21 @@ func (q *QUICAdapter) PortGetStats(ctx context.Context, bridgeID, portID string)
 
 // FlowAdd adds a flow to a bridge via QUIC.
 func (q *QUICAdapter) FlowAdd(ctx context.Context, opts FlowAddOptions) (*FlowAddResult, error) {
-	// Build match string from FlowMatch fields
-	match := buildMatchString(opts.Match)
-
-	// Build actions string from FlowAction list
-	actions := buildActionsString(opts.Actions)
-
+	// The wire request is the gRPC AddFlowRequest, so the match and the
+	// actions go in their structured fields, exactly as the gRPC adapter
+	// sends them. Stuffing the whole ovs-ofctl match string into InPort
+	// produced "in_port=dl_type=0x0800,..." on the server.
+	protoActions := make([]*platformv1.FlowAction, 0, len(opts.Actions))
+	for _, a := range opts.Actions {
+		protoActions = append(protoActions, flowActionToProto(a))
+	}
 	req := &platformv1.AddFlowRequest{
 		Config: &platformv1.FlowConfig{
 			BridgeId:    opts.BridgeID,
 			Table:       platformv1.FlowTable(opts.Table),
 			Priority:    uint32(opts.Priority),
-			Match:       &platformv1.FlowMatch{InPort: match},
-			Actions:     []*platformv1.FlowAction{{Port: actions}},
+			Match:       flowMatchToProto(opts.Match),
+			Actions:     protoActions,
 			IdleTimeout: uint32(opts.IdleTimeout),
 			HardTimeout: uint32(opts.HardTimeout),
 		},
@@ -1022,6 +1024,9 @@ func (q *QUICAdapter) FlowAdd(ctx context.Context, opts FlowAddOptions) (*FlowAd
 		return nil, ErrQUICSDNDecodeFailed{Operation: "FlowAdd", Err: err}
 	}
 
+	if flow := wireResp.GetFlow(); flow != nil {
+		return flowToAddResult(flow, opts.BridgeID), nil
+	}
 	return &FlowAddResult{
 		BridgeID:  opts.BridgeID,
 		Table:     opts.Table,
@@ -1351,90 +1356,6 @@ func (q *QUICAdapter) PolicyList(ctx context.Context, opts PolicyListOptions) (*
 // =============================================================================
 // Helper Functions
 // =============================================================================
-
-// buildMatchString constructs an OpenFlow match string from structured FlowMatch fields.
-func buildMatchString(m FlowMatch) string {
-	parts := make([]string, 0, 8)
-
-	if m.InPort > 0 {
-		parts = append(parts, fmt.Sprintf("in_port=%d", m.InPort))
-	}
-	if m.DlSrc != "" {
-		parts = append(parts, fmt.Sprintf("dl_src=%s", m.DlSrc))
-	}
-	if m.DlDst != "" {
-		parts = append(parts, fmt.Sprintf("dl_dst=%s", m.DlDst))
-	}
-	if m.DlType > 0 {
-		parts = append(parts, fmt.Sprintf("dl_type=0x%04x", m.DlType))
-	}
-	if m.DlVLAN > 0 {
-		parts = append(parts, fmt.Sprintf("dl_vlan=%d", m.DlVLAN))
-	}
-	if m.NwSrc != "" {
-		parts = append(parts, fmt.Sprintf("nw_src=%s", m.NwSrc))
-	}
-	if m.NwDst != "" {
-		parts = append(parts, fmt.Sprintf("nw_dst=%s", m.NwDst))
-	}
-	if m.NwProto > 0 {
-		parts = append(parts, fmt.Sprintf("nw_proto=%d", m.NwProto))
-	}
-	if m.TpSrc > 0 {
-		parts = append(parts, fmt.Sprintf("tp_src=%d", m.TpSrc))
-	}
-	if m.TpDst > 0 {
-		parts = append(parts, fmt.Sprintf("tp_dst=%d", m.TpDst))
-	}
-
-	result := ""
-	for i, part := range parts {
-		if i > 0 {
-			result += ","
-		}
-		result += part
-	}
-	return result
-}
-
-// buildActionsString constructs an OpenFlow actions string from structured FlowAction list.
-func buildActionsString(actions []FlowAction) string {
-	if len(actions) == 0 {
-		return "drop"
-	}
-
-	result := ""
-	for i, a := range actions {
-		if i > 0 {
-			result += ","
-		}
-		switch a.Type {
-		case "output":
-			result += fmt.Sprintf("output:%d", a.Port)
-		case "drop":
-			result += "drop"
-		case "normal":
-			result += "normal"
-		case "flood":
-			result += "flood"
-		case "controller":
-			result += "controller"
-		case "push_vlan":
-			result += fmt.Sprintf("push_vlan:0x8100,set_field:%d->vlan_vid", a.VLANID)
-		case "pop_vlan":
-			result += "pop_vlan"
-		case "set_field":
-			result += fmt.Sprintf("set_field:%s->%s", a.Value, a.Field)
-		case "group":
-			result += fmt.Sprintf("group:%d", a.GroupID)
-		case "goto_table":
-			result += fmt.Sprintf("goto_table:%d", a.TableID)
-		default:
-			result += a.Type
-		}
-	}
-	return result
-}
 
 // reconstructTargetsFromMetadata extracts policy targets from metadata map.
 func reconstructTargetsFromMetadata(metadata map[string]string) []PolicyTarget {

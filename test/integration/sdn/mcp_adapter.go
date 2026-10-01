@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -473,6 +474,10 @@ func NewMCPAdapter() *MCPAdapter {
 	if endpoint == "" {
 		endpoint = DefaultPlatformMCPEndpoint
 	}
+	// The harness sets PLATFORM_MCP_ENDPOINT with its scheme
+	// (http://localhost:9445); the request URL below adds one, and
+	// "http://http://..." resolved the host "http" and failed every run.
+	endpoint = strings.TrimPrefix(strings.TrimPrefix(endpoint, "http://"), "https://")
 
 	return &MCPAdapter{
 		endpoint:   endpoint,

@@ -4085,6 +4085,42 @@ integration-test-netboot: build-devcontainer uboot-build ipxe-build netboot-inpu
 integration-test-netboot-only: build-devcontainer
 	$(call run-integration-suite,netboot,$(NETBOOT_SUITE_ENV))
 
+# The NAT64 suite (#601) runs in a VM that carries its own kernel. Jool is
+# a kernel module and a container shares the host's kernel, so the suite
+# boots Alpine linux-lts with the jool-modules-lts built for exactly that
+# kernel (the fleet's pairing) under QEMU/KVM inside the devcontainer. The
+# guest suite is test/integration/sdn built with the nat64vm tag.
+NAT64_VM_DIR   ?= bin/nat64-vm
+NAT64_VM_IMAGE := go-trusted-platform-nat64-vm
+NAT64_VM_RUN   ?= TestJoolDriver|TestNAT64Datapath
+
+.PHONY: nat64-vm
+## nat64-vm: Build the NAT64 test VM (Alpine linux-lts + jool-modules-lts + Open vSwitch) into bin/nat64-vm
+nat64-vm:
+	@mkdir -p $(NAT64_VM_DIR)
+	docker build -t $(NAT64_VM_IMAGE) build/docker/nat64-vm/
+	@cid=$$(docker create $(NAT64_VM_IMAGE) /none) && \
+		docker cp $$cid:/vmlinuz $(NAT64_VM_DIR)/vmlinuz && \
+		docker cp $$cid:/rootfs.cpio.gz $(NAT64_VM_DIR)/rootfs.cpio.gz; \
+		rc=$$?; docker rm $$cid >/dev/null; exit $$rc
+
+.PHONY: nat64-vm-suite
+## nat64-vm-suite: Build the static NAT64 guest suite (test/integration/sdn with the nat64vm tag)
+nat64-vm-suite:
+	@mkdir -p $(NAT64_VM_DIR)
+	CGO_ENABLED=0 GOWORK=off go test -c -tags '$(strip $(TEST_BUILD_TAGS)) nat64vm' \
+		-o $(NAT64_VM_DIR)/sdn-nat64.test ./test/integration/sdn/
+
+NAT64_SUITE_ENV := -e NAT64_VM_KERNEL=/workspace/$(NAT64_VM_DIR)/vmlinuz \
+	-e NAT64_VM_ROOTFS=/workspace/$(NAT64_VM_DIR)/rootfs.cpio.gz \
+	-e NAT64_VM_SUITE=/workspace/$(NAT64_VM_DIR)/sdn-nat64.test \
+	-e 'NAT64_VM_RUN=$(NAT64_VM_RUN)'
+
+.PHONY: integration-test-nat64
+## integration-test-nat64: The NAT64 suite in an Alpine VM under QEMU/KVM in the devcontainer: the Jool driver against the real module and the datapath end to end (builds the VM and the suite first)
+integration-test-nat64: build-devcontainer nat64-vm nat64-vm-suite
+	$(call run-integration-suite,nat64,$(NAT64_SUITE_ENV))
+
 .PHONY: integration-test-diskimage-shell
 ## integration-test-diskimage-shell: Interactive devcontainer shell with the factory-image inputs in the environment
 integration-test-diskimage-shell: build-devcontainer

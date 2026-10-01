@@ -827,11 +827,10 @@ func (c *CLIAdapter) FlowAdd(ctx context.Context, opts FlowAddOptions) (*FlowAdd
 
 	createdAt := parseTimestamp(result.CreatedAt)
 
-	// Resolve flow ID from metadata or fall back to the protobuf ID
-	flowID := result.Config.Metadata["flow_id"]
-	if flowID == "" {
-		flowID = result.ID
-	}
+	// The flow's identity is the ID the server returns ("flow-<cookie>");
+	// --id is only a label stored in metadata, and delete or stats by it
+	// names no flow (#614).
+	flowID := result.ID
 
 	return &FlowAddResult{
 		BridgeID:  result.Config.BridgeID,

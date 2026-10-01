@@ -108,13 +108,15 @@ func pipelineRules(rules []zoneflows.FlowRule) []zoneflows.FlowRule {
 func TestBasePipelineRules_Normal(t *testing.T) {
 	rules, err := BasePipelineRules(TerminalNormal)
 	require.NoError(t, err)
-	require.Len(t, rules, 3)
+	require.Len(t, rules, 4)
 	assert.Equal(t, int(modes.TableIngress), rules[0].Table)
 	assert.Equal(t, "goto_table:10", rules[0].Actions)
 	assert.Equal(t, int(modes.TableVXLANDecap), rules[1].Table)
 	assert.Equal(t, "goto_table:30", rules[1].Actions)
-	assert.Equal(t, int(modes.TableMACLearning), rules[2].Table)
-	assert.Equal(t, "normal", rules[2].Actions)
+	assert.Equal(t, int(modes.TableCTGate), rules[2].Table, "the table-20 miss is the pipeline's (#614)")
+	assert.Equal(t, "goto_table:30", rules[2].Actions)
+	assert.Equal(t, int(modes.TableMACLearning), rules[3].Table)
+	assert.Equal(t, "normal", rules[3].Actions)
 	for _, r := range rules {
 		assert.Equal(t, 0, r.Priority, "the pipeline never outranks a platformd flow or a service gate")
 		assert.Empty(t, r.Match, "the pipeline is a table default, not a match")
@@ -149,14 +151,14 @@ func TestEnsurePipeline_InstallsRecordsAndSecures(t *testing.T) {
 	assert.True(t, rt.PipelineInstalled())
 
 	installed := pipelineRules(rt.Controller.(*fakeFlowController).allRules())
-	require.Len(t, installed, 3)
+	require.Len(t, installed, 4)
 	assert.Equal(t, "secure", ovsFake.failMode)
 	assert.Equal(t, "gatewayd:gw-1", ovsFake.externalIDs[PipelineOwnerKey])
 	assert.Equal(t, "normal", ovsFake.externalIDs[PipelineTerminalKey])
 
 	// Idempotent for the same owner: no second install.
 	require.NoError(t, rt.EnsurePipeline(context.Background(), "gw-1", TerminalNormal))
-	assert.Len(t, pipelineRules(rt.Controller.(*fakeFlowController).allRules()), 3)
+	assert.Len(t, pipelineRules(rt.Controller.(*fakeFlowController).allRules()), 4)
 
 	// Another owner on the same runtime is refused.
 	err := rt.EnsurePipeline(context.Background(), "gw-2", TerminalNormal)
@@ -241,6 +243,78 @@ func TestEnsurePipeline_RollsBackWhenALaterStepFails(t *testing.T) {
 	err = rt.EnsurePipeline(context.Background(), "gw-1", TerminalNormal)
 	require.True(t, errors.As(err, &install), "got %v", err)
 	assert.Equal(t, "read external_ids", install.Step)
+}
+
+// orderedController and orderedOVS record the order of flow installs and
+// fail_mode changes into one shared log.
+type orderedController struct {
+	*fakeFlowController
+	log *[]string
+}
+
+func (c *orderedController) InstallFlows(bridge string, rules []zoneflows.FlowRule) error {
+	*c.log = append(*c.log, "install")
+	return c.fakeFlowController.InstallFlows(bridge, rules)
+}
+
+type orderedOVS struct {
+	*fakeOVSClient
+	log *[]string
+}
+
+func (o *orderedOVS) SetBridgeFailMode(ctx context.Context, name, mode string) error {
+	*o.log = append(*o.log, "fail_mode:"+mode)
+	return o.fakeOVSClient.SetBridgeFailMode(ctx, name, mode)
+}
+
+// TestEnsurePipeline_SecuresTheBridgeBeforeInstalling: Open vSwitch flushes
+// every flow on a bridge with no controller when its fail_mode changes, so
+// the order is load-bearing. Installing first left a secure bridge with no
+// pipeline at all; the NAT64 VM suite measured it (#614).
+func TestEnsurePipeline_SecuresTheBridgeBeforeInstalling(t *testing.T) {
+	var log []string
+	rt := newTestRuntime()
+	base := rt.OVS.(*fakeOVSClient)
+	base.failMode = "standalone"
+	rt.OVS = &orderedOVS{fakeOVSClient: base, log: &log}
+	rt.Controller = &orderedController{fakeFlowController: rt.Controller.(*fakeFlowController), log: &log}
+
+	require.NoError(t, rt.EnsurePipeline(context.Background(), "gw-1", TerminalNormal))
+	assert.Equal(t, []string{"fail_mode:secure", "install"}, log)
+
+	log = nil
+	require.NoError(t, rt.RemovePipeline(context.Background()))
+	assert.Equal(t, []string{"fail_mode:standalone"}, log, "the previous fail_mode is restored")
+}
+
+// TestEnsurePipeline_LeavesASecureBridgeAlone: no change, no flush. A
+// bridge already secure (platformd provisioned it so) keeps every flow it
+// carries, and RemovePipeline does not touch the mode either.
+func TestEnsurePipeline_LeavesASecureBridgeAlone(t *testing.T) {
+	var log []string
+	rt := newTestRuntime()
+	base := rt.OVS.(*fakeOVSClient)
+	base.failMode = PipelineFailMode
+	rt.OVS = &orderedOVS{fakeOVSClient: base, log: &log}
+	rt.Controller = &orderedController{fakeFlowController: rt.Controller.(*fakeFlowController), log: &log}
+
+	require.NoError(t, rt.EnsurePipeline(context.Background(), "gw-1", TerminalNormal))
+	require.NoError(t, rt.RemovePipeline(context.Background()))
+	assert.Equal(t, []string{"install"}, log)
+}
+
+func TestEnsurePipeline_RestoresTheModeWhenTheInstallFails(t *testing.T) {
+	rt := newTestRuntime()
+	ovsFake := rt.OVS.(*fakeOVSClient)
+	ovsFake.failMode = "standalone"
+	rt.Controller.(*fakeFlowController).installErr = errors.New("ovs is unreachable")
+
+	err := rt.EnsurePipeline(context.Background(), "gw-1", TerminalNormal)
+	var install *ErrPipelineInstallFailed
+	require.True(t, errors.As(err, &install), "got %v", err)
+	assert.Equal(t, "install flows", install.Step)
+	assert.Equal(t, "standalone", ovsFake.failMode)
+	assert.False(t, rt.PipelineInstalled())
 }
 
 func TestRemovePipeline_ReportsAFailedDelete(t *testing.T) {
@@ -437,6 +511,101 @@ func TestPipelineInvariant_EveryGotoTargetIsRouted(t *testing.T) {
 
 	rules := cfg.Runtime.Controller.(*fakeFlowController).allRules()
 	assertEveryGotoTargetIsRouted(t, append(base, rules...))
+}
+
+// TestPipelineInvariant_EveryGatedTableHasAMiss is the owner ruling on
+// #614 as a test: every table a gate or a goto routes traffic into has an
+// empty-match flow, so a frame no service claims there continues instead of
+// meeting OVS's implicit drop. It runs each datapath service ALONE, because
+// that is the shape that black-holed: NAT64 or NAT on its own gated table
+// 10 into table 20 and nothing caught what they did not claim.
+func TestPipelineInvariant_EveryGatedTableHasAMiss(t *testing.T) {
+	nat64Section := func() *NAT64Config {
+		return &NAT64Config{
+			Enabled: true, TranslatorPort: "nat640",
+			Pool4: NAT64Pool4Config{
+				Addresses:      []string{"198.51.100.8-198.51.100.15"},
+				PortRangeStart: 61001, PortRangeEnd: 65535,
+			},
+		}
+	}
+	configs := map[string]func() *GatewayConfig{
+		"firewall alone":      firewallGatewayConfig,
+		"nat alone":           natGatewayConfig,
+		"load balancer alone": lbGatewayConfig,
+		"nat64 alone": func() *GatewayConfig {
+			cfg := baseGatewayConfig("nat64-alone")
+			cfg.Runtime = newTestRuntime()
+			cfg.NAT64 = nat64Section()
+			cfg.Host = &HostRuntime{NAT64Driver: &stubNAT64Driver{}}
+			return cfg
+		},
+		"every datapath service": func() *GatewayConfig {
+			cfg := lbGatewayConfig()
+			cfg.Firewall = &FirewallConfig{Enabled: true, DefaultPolicy: "deny"}
+			cfg.Uplinks = []UplinkConfig{{Name: "eth0", MTU: 1500}}
+			cfg.NAT = natGatewayConfig().NAT
+			cfg.NAT64 = nat64Section()
+			cfg.Host = &HostRuntime{NAT64Driver: &stubNAT64Driver{}}
+			return cfg
+		},
+	}
+	for name, build := range configs {
+		t.Run(name, func(t *testing.T) {
+			cfg := build()
+			gw := startGateway(t, cfg)
+			defer func() { _ = gw.Stop(context.Background()) }()
+
+			rules := cfg.Runtime.Controller.(*fakeFlowController).allRules()
+			misses := map[int]bool{}
+			for _, r := range rules {
+				if r.Match == "" {
+					misses[r.Table] = true
+				}
+			}
+			for _, r := range rules {
+				// A ct(table=N) recirculation counts too: tables 21, 25
+				// and 26 are the services' own, and each needs its miss.
+				for _, target := range gotoTargets(r.Actions) {
+					assert.True(t, misses[target],
+						"table %d is routed into by (table %d, %q -> %q) but has no empty-match miss; an unclaimed frame there is dropped",
+						target, r.Table, r.Match, r.Actions)
+				}
+			}
+		})
+	}
+}
+
+// TestPipelineInvariant_TheTableTwentyMissIsThePipelines: exactly one
+// empty-match table-20 flow, and it carries the pipeline's cookie. A second
+// one at another priority would shadow it; one at the same priority would
+// be the same OpenFlow flow, deleted by whichever service's Stop owns it.
+func TestPipelineInvariant_TheTableTwentyMissIsThePipelines(t *testing.T) {
+	cfg := lbGatewayConfig()
+	cfg.Firewall = &FirewallConfig{Enabled: true, DefaultPolicy: "deny"}
+	cfg.Uplinks = []UplinkConfig{{Name: "eth0", MTU: 1500}}
+	cfg.NAT = natGatewayConfig().NAT
+	cfg.NAT64 = &NAT64Config{
+		Enabled: true, TranslatorPort: "nat640",
+		Pool4: NAT64Pool4Config{
+			Addresses:      []string{"198.51.100.8-198.51.100.15"},
+			PortRangeStart: 61001, PortRangeEnd: 65535,
+		},
+	}
+	cfg.Host = &HostRuntime{NAT64Driver: &stubNAT64Driver{}}
+	gw := startGateway(t, cfg)
+	defer func() { _ = gw.Stop(context.Background()) }()
+
+	var misses []zoneflows.FlowRule
+	for _, r := range cfg.Runtime.Controller.(*fakeFlowController).allRules() {
+		if r.Table == int(modes.TableCTGate) && r.Match == "" {
+			misses = append(misses, r)
+		}
+	}
+	require.Len(t, misses, 1, "want one table-20 miss, the pipeline's: %+v", misses)
+	assert.Equal(t, fmt.Sprintf("0x%x", CookiePipeline), misses[0].Cookie)
+	assert.Equal(t, 0, misses[0].Priority)
+	assert.Equal(t, fmt.Sprintf("goto_table:%d", modes.TableMACLearning), misses[0].Actions)
 }
 
 // assertEveryGotoTargetIsRouted walks the table graph from table 0 along

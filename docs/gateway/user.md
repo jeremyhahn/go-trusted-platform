@@ -18,10 +18,10 @@ A gateway is configured as a set of **service sections** that are independently
 switched on:
 
 `overlay`, `edge`, `transit`, `bgp`, `firewall`, `dhcp`, `pxe`,
-`load-balancer`, `nat`, `tunnels`, `proxy`
+`load-balancer`, `nat`, `nat64`, `tunnels`, `proxy`
 
-Note the spelling: **`load-balancer` is hyphenated**, the other ten are single
-words. A misspelled section is a service that quietly does not start.
+Note the spelling: **`load-balancer` is hyphenated**, the other eleven are
+single words. A misspelled section is a service that quietly does not start.
 
 The most distinctive part is the **trusted reverse proxy**: it does not just
 terminate TLS and forward. It runs a chain of checks — client certificate,
@@ -151,13 +151,74 @@ enabled: the client certificate is how the control plane knows which
 gateway is reporting.
 
 An enabled section reports **active** only while its backend is running:
-`firewall`, `nat`, `load-balancer`, `hostfw`, `tunnels`, `transit` (or a
-`bgp:` section) and `proxy` have backends today. Enabling `overlay`, `edge`,
+`firewall`, `nat`, `nat64`, `load-balancer`, `hostfw`, `tunnels`, `transit`
+(or a `bgp:` section) and `proxy` have backends today. Enabling `overlay`, `edge`,
 `dhcp`, `pxe` or `management-vpn` stops the daemon at startup with
 `gateway service "<name>" is enabled but cannot run: <reason>` — those sections
 have no implementation behind them yet and the gateway refuses to claim
 otherwise. (`overlay` is required by owner design decision 2026-09-26, #709.) When `proxy` is enabled, the host packet filter (`hostfw`) admits
 exactly the proxy's fixed listener ports and nothing else the daemon opens.
+
+### IPv6-only clients (`nat64:`)
+
+A `nat64:` section gives an IPv6-only client zone the IPv4 internet. The
+gateway owns a Jool kernel instance and hands it the frames addressed to the
+translation prefix; the translation itself happens in the kernel, not in the
+OVS pipeline, because OpenFlow cannot rewrite between address families.
+
+```yaml
+nat64:
+  enabled: true
+  prefix: "64:ff9b::/96"
+  translator-port: nat640
+  pool4:
+    uplink: primary
+    addresses: ["203.0.113.64-203.0.113.71"]
+    port-range-start: 61001
+    port-range-end: 65535
+  client-zones:
+    - name: iot
+      vlan: 300
+```
+
+Three things refuse the start rather than half-working:
+
+- **The kernel module has to be there.** Alpine packages it as
+  `jool-modules-lts` and `jool-tools`. A kernel upgrade that outruns the
+  module package shows up as a refused section, never as traffic silently
+  passing untranslated.
+- **`translator-port` has no default.** It is an OVS internal port on the
+  bridge (`ovs-vsctl add-port <bridge> nat640 -- set interface nat640
+  type=internal`, then `ip link set nat640 up`) — the host interface the
+  gate hands frames to. A wrong guess would be a black hole that reports
+  success, so a port with no OpenFlow number or no MAC refuses the start.
+- **`pool4` must not overlap anything NAT44 translates to**: a NAT44 pool,
+  the single `external-ip`, or a static 1:1 external address. The translator
+  and the OVS conntrack NAT each keep their own allocation table; sharing an
+  address and port between them produces a collision that looks like packet
+  loss. `pool4.uplink` is optional; when set it must name an uplink of an
+  enabled `nat:` section.
+
+The `pool4` addresses must be ones the host answers for on the IPv4 side —
+typically the uplink's own address, on a port range the host's own sockets
+do not use (61001-65535 above) — and the host must forward
+(`net.ipv4.conf.all.forwarding=1`, `net.ipv6.conf.all.forwarding=1`): the
+translated packet is routed by the host, and the IPv4 server's reply has to
+reach it to be translated back. Changing `prefix` recreates the kernel
+instance and drops its sessions; changing `pool4` or the timeouts keeps the
+sessions that still fit.
+
+`client-zones:` is the policy control. The divert outranks the firewall's
+zone gate — nothing routes the translation prefix, so the alternative to
+translating is dropping — which means a zone that is not named here gets no
+translation. Leaving the list empty diverts every frame addressed to the
+prefix.
+
+Name resolution is not included yet: DNS64 (#602) is a separate change, so
+today an IPv6-only client needs an upstream DNS64 or its own CLAT to learn
+the synthesised addresses. The host packet filter needs nothing for the
+translator: Jool translates before the input chain and the translated packet
+never reaches it, so do not list `translator-port` under `hostfw.unfiltered`.
 
 **`gateway-id` must be the certificate's Common Name.** The control plane
 does not take the reported ID on trust — it compares it to the Subject CN

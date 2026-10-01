@@ -39,6 +39,9 @@ type mockSDNService struct {
 	ports   map[string]*ovs.Port
 	flows   map[string][]*ovs.Flow
 
+	// deletedCookies records every cookie DeleteFlowsByCookie removed.
+	deletedCookies []uint64
+
 	createBridgeErr error
 	deleteBridgeErr error
 	getBridgeErr    error
@@ -255,6 +258,17 @@ func (m *mockSDNService) DeleteFlow(ctx context.Context, bridgeName string, matc
 	if _, exists := m.bridges[bridgeName]; !exists {
 		return ovs.ErrBridgeNotFound
 	}
+	return nil
+}
+
+func (m *mockSDNService) DeleteFlowsByCookie(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
+	if m.deleteFlowErr != nil {
+		return m.deleteFlowErr
+	}
+	if _, exists := m.bridges[bridgeName]; !exists {
+		return ovs.ErrBridgeNotFound
+	}
+	m.deletedCookies = append(m.deletedCookies, cookie)
 	return nil
 }
 
@@ -947,6 +961,36 @@ func TestAddFlow(t *testing.T) {
 		decodeSDNResponse(t, w.Body, &resp)
 		assert.Equal(t, "br-test", resp.BridgeID)
 		assert.Equal(t, 100, resp.Priority)
+
+		// The ID is the cookie the flow was installed with, so a delete
+		// or a listing names this flow and no other.
+		require.Len(t, svc.flows["br-test"], 1)
+		installed := svc.flows["br-test"][0].Cookie
+		assert.Equal(t, "flow-"+installed, resp.ID)
+		cookie, err := ovs.ParseFlowID(resp.ID)
+		require.NoError(t, err)
+		assert.Equal(t, ovs.APIFlowCookieOwner, cookie&(0xFFFF<<48))
+	})
+
+	t.Run("a requested cookie is the identity", func(t *testing.T) {
+		svc := newMockSDNService()
+		svc.addTestBridge("br-test")
+		_, router := setupSDNTestHandler(svc)
+
+		body, _ := json.Marshal(AddFlowRequest{Priority: 1, Actions: "drop", Cookie: "0x42"})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sdn/flows?bridge_id=br-test", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusCreated, w.Code)
+		var resp FlowResponse
+		decodeSDNResponse(t, w.Body, &resp)
+		assert.Equal(t, "flow-0x42", resp.ID)
+
+		body, _ = json.Marshal(AddFlowRequest{Priority: 1, Actions: "drop", Cookie: "not-a-cookie"})
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/sdn/flows?bridge_id=br-test", bytes.NewReader(body))
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "a cookie that does not parse is refused, not installed as 0")
 	})
 
 	t.Run("missing bridge_id", func(t *testing.T) {
@@ -1682,7 +1726,7 @@ func TestOVSFlowToResponse(t *testing.T) {
 
 	resp := handlers.ovsFlowToResponse(flow, "bridge-uuid")
 
-	assert.Equal(t, "0x1", resp.ID)
+	assert.Equal(t, "flow-0x1", resp.ID, "a listed flow's ID is its cookie, as add returns it")
 	assert.Equal(t, "bridge-uuid", resp.BridgeID)
 	assert.Equal(t, 0, resp.Table)
 	assert.Equal(t, 100, resp.Priority)
@@ -2045,14 +2089,31 @@ func TestDeleteFlowForBridge(t *testing.T) {
 	t.Run("deletes flow for bridge", func(t *testing.T) {
 		svc := newMockSDNService()
 		svc.addTestBridge("br-test")
-		svc.addTestFlow("br-test", &ovs.Flow{Match: "in_port=1"})
+		svc.addTestFlow("br-test", &ovs.Flow{Match: "in_port=1", Cookie: "0xa9f1000000000007"})
 		_, router := setupSDNTestHandler(svc)
 
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/bridges/br-test/flows/in_port=1", nil)
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/bridges/br-test/flows/flow-0xa9f1000000000007", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, []uint64{0xa9f1000000000007}, svc.deletedCookies, "the delete is by the flow's own cookie")
+	})
+
+	t.Run("refuses an ID that names no flow", func(t *testing.T) {
+		// "in_port=1" used to reach OVS as a match, and the encoder's
+		// skipping turned less specific strings into "every flow" (#614).
+		svc := newMockSDNService()
+		svc.addTestBridge("br-test")
+		_, router := setupSDNTestHandler(svc)
+
+		for _, id := range []string{"in_port=1", "flow-0", "flow-to-delete"} {
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/sdn/bridges/br-test/flows/"+id, nil)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "id %q", id)
+		}
+		assert.Empty(t, svc.deletedCookies)
 	})
 
 	t.Run("returns service unavailable when service not set", func(t *testing.T) {

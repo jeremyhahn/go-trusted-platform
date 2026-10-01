@@ -1496,7 +1496,7 @@ func TestHandleSDNDeleteFlow_Success(t *testing.T) {
 	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
-	deleteReq := &platformv1.DeleteFlowRequest{BridgeId: "br0", FlowId: "in_port=1"}
+	deleteReq := &platformv1.DeleteFlowRequest{BridgeId: "br0", FlowId: "flow-0xa9f1000000000001"}
 
 	payload, err := quic.EncodePayload(deleteReq)
 	require.NoError(t, err)
@@ -1542,14 +1542,16 @@ func TestHandleSDNGetFlow_Success(t *testing.T) {
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br0")
 	mockSDN.AddFlowsToMock("br0", []*ovs.Flow{
-		{Table: 0, Priority: 100, Match: "in_port=1", Actions: "output:2"},
+		{Table: 0, Priority: 100, Match: "in_port=1", Actions: "output:2", Cookie: "0xa9f1000000000001"},
 	})
 	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
+	// The field carries the flow ID the API hands out ("flow-<cookie>"),
+	// not an OpenFlow match (#614).
 	getReq := &SDNGetFlowRequest{
 		BridgeName: "br0",
-		Match:      "in_port=1",
+		Match:      "flow-0xa9f1000000000001",
 	}
 
 	payload, err := quic.EncodePayload(getReq)

@@ -193,9 +193,12 @@ func TestConvertToOpenFlowEdgeCases(t *testing.T) {
 		flow := &FlowMod{
 			Cookie: "invalid-cookie",
 		}
-		ofFlow, err := convertToOpenFlow(flow)
-		assert.NoError(t, err)
-		assert.Equal(t, uint64(0), ofFlow.Cookie) // Error is ignored
+		// A cookie is how a flow's owner deletes it; installing the flow
+		// with cookie 0 instead would strand it.
+		_, err := convertToOpenFlow(flow)
+		var invalid *ErrInvalidCookie
+		require.ErrorAs(t, err, &invalid)
+		assert.Equal(t, "invalid-cookie", invalid.Cookie)
 	})
 
 	t.Run("flow with empty match string", func(t *testing.T) {

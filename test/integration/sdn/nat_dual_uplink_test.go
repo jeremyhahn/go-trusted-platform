@@ -112,17 +112,23 @@ func TestNATDualUplink_TranslatesPerUplinkAndStatic(t *testing.T) {
 	client := newOVSDBClient(t)
 
 	// The client routes both far networks through the bridge; each uplink
-	// namespace routes the internal prefix back and answers for its pool
-	// (and, on ISP B, the static external) so translated packets have a
-	// destination MAC on the far side.
-	createNSEndpoint(t, bridge.name, "tpndu-c", natDUClientIP+"/24", 0, natDUIspANet, natDUIspBNet)
+	// namespace routes the internal prefix back.
+	//
+	// The uplink namespaces must NOT own the pool addresses or the static
+	// external: a translated datagram carries the pool address as its
+	// SOURCE, and a namespace that owns a packet's source address drops it
+	// as a martian before any socket sees it; a probe to an address the
+	// sender owns never leaves it. That is why this test never passed. The
+	// ISP B side reaches the static external through a neighbour entry for
+	// the inside host's MAC, the way the ISP's router would reach the
+	// gateway.
+	cli := createNSEndpoint(t, bridge.name, "tpndu-c", natDUClientIP+"/24", 0, natDUIspANet, natDUIspBNet)
 	ispA := createNSEndpoint(t, bridge.name, "tpndu-a", natDUIspAServer+"/24", 0, natDUInternal)
 	ispB := createNSEndpoint(t, bridge.name, "tpndu-o", natDUIspBServer+"/24", 0, natDUInternal)
-	runCmd(t, "ip", "netns", "exec", "tpndu-a", "ip", "addr", "add", natDUIspAPool+"/24", "dev", ispA.PeerIf)
-	runCmd(t, "ip", "netns", "exec", "tpndu-o", "ip", "addr", "add", natDUIspBPool+"/24", "dev", ispB.PeerIf)
-	runCmd(t, "ip", "netns", "exec", "tpndu-o", "ip", "addr", "add", natDUStaticExt+"/24", "dev", ispB.PeerIf)
 	// The static host lives beside the client.
 	runCmd(t, "ip", "netns", "exec", "tpndu-c", "ip", "addr", "add", natDUStaticIP+"/24", "dev", "vep-tpndu-c")
+	runCmd(t, "ip", "netns", "exec", "tpndu-o", "ip", "neigh", "replace", natDUStaticExt, "lladdr", cli.MAC, "dev", ispB.DataIf, "nud", "permanent")
+	_ = ispA
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
@@ -153,6 +159,7 @@ func TestNATDualUplink_TranslatesPerUplinkAndStatic(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, nat.Start(ctx))
 	t.Cleanup(func() { _ = nat.Stop(context.Background()) })
+	dumpBridgeOnFailure(t, bridge.name)
 
 	ispASeen := udpSourceSink(t, "tpndu-a", natDUIspAServer)
 	ispBSeen := udpSourceSink(t, "tpndu-o", natDUIspBServer)

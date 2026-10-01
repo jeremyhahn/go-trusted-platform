@@ -148,7 +148,7 @@ platformctl sdn port stats p-01 --bridge br-tenant-a --output json
 | Flag | Type | Meaning |
 |---|---|---|
 | `--bridge` | string | Bridge ID (required) |
-| `--id` | string | Flow ID (required) |
+| `--id` | string | A label for the flow, recorded in its metadata (required) |
 | `--table` | int | Flow table number (required) |
 | `--priority` | int | Flow priority (required) |
 | `--in-port` | int | Match input port |
@@ -160,6 +160,13 @@ platformctl sdn port stats p-01 --bridge br-tenant-a --output json
 
 **`list`**: `--bridge` (required), `--table` (default `-1`, meaning all tables),
 `--limit`, `--cursor`.
+
+**A flow's ID is its cookie.** `add` returns it as `flow-0x<cookie>` (the
+platform stamps every flow it adds with a fresh cookie), `list` reports the
+same ID, and `delete <flow-id>` and the flow-stats verbs act on exactly the
+flow carrying that cookie. The `--id` label is not an ID: an argument that is
+not `flow-<cookie>` is refused rather than handed to Open vSwitch, where it
+once matched every flow on the bridge.
 
 `--table` defaults to `-1` on `list` and `0` on `add`. On `add`, `0` is a real
 table number, not "unset".

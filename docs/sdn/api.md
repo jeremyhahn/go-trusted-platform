@@ -53,6 +53,15 @@ Bridge-scoped and global flow routes both exist in REST
 bridges. `DELETE /api/v1/sdn/flows` takes its selector in the body, which is why
 it is not a path-parameter route.
 
+**A flow's ID is its cookie, on every transport.** Adding a flow stamps it with
+a fresh cookie under the `0xA9F1` owner prefix (or the cookie the request names)
+and returns `flow-0x<cookie>`; listing reports the same ID; delete and flow
+stats act on exactly the flow carrying that cookie (`ovs.ParseFlowID`,
+`ovs.FlowID`). Anything else is refused as an invalid flow ID (`400` /
+`InvalidArgument`). Until #614 the ID was handed to Open vSwitch as a match
+string, which the flow encoder emptied, so "delete this flow" removed every
+flow on the bridge.
+
 ---
 
 ## 3. VLANs

@@ -29,9 +29,12 @@ import (
 // is running inside the devcontainer with a real platformd instance) and then
 // delegates to the standard test runner.
 func TestMain(m *testing.M) {
+	// A suite that exits 0 without running proves nothing: an unset
+	// INTEGRATION_TEST means the harness did not prepare the environment,
+	// which is a failure, never a skip.
 	if os.Getenv("INTEGRATION_TEST") == "" {
-		fmt.Println("skipping SDN integration tests: INTEGRATION_TEST env var not set")
-		os.Exit(0)
+		fmt.Println("SDN integration tests: INTEGRATION_TEST is not set; run them through `make integration-test-sdn` or `make integration-test-nat64`")
+		os.Exit(1)
 	}
 
 	os.Exit(m.Run())

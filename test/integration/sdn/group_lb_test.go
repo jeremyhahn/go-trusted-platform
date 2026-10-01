@@ -236,6 +236,9 @@ func installLBHarnessFlows(t *testing.T, client *ovs.Client, bridge string, back
 
 	flows := []*ovs.FlowMod{
 		{Table: 0, Priority: 1, Actions: "goto_table:10"},
+		// Table 20's miss is the gateway pipeline's (#614); the load
+		// balancer no longer installs one.
+		{Table: 20, Priority: 0, Actions: "goto_table:30"},
 		{Table: 30, Priority: 0, Actions: "normal"},
 	}
 	for ip, endpoint := range backends {

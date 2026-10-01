@@ -67,12 +67,6 @@ const (
 	// precedence over an overlapping DNAT binding.
 	prioLBDivert = 250
 
-	// prioLBMissT20 continues the pipeline for table 20 misses when
-	// neither the firewall (priority 1 bypass) nor another service
-	// claimed the packet. Priority 0 keeps it distinct from the
-	// firewall's bypass flow.
-	prioLBMissT20 = 0
-
 	// prioLBInvalid drops invalid tracked connections in table 26.
 	prioLBInvalid = 400
 
@@ -271,18 +265,13 @@ func (s *Service) gateRule() zoneflows.FlowRule {
 	}
 }
 
-// baseRules returns the shared scaffolding: the table 20 miss (so non-VIP
-// traffic continues to table 30 when no firewall bypass exists), the table
-// 26 conntrack verdicts, the table 28 miss, and the table 29 reply
-// verdicts.
+// baseRules returns the table 26 conntrack verdicts, the table 28 miss and
+// the table 29 reply verdicts. Non-VIP traffic that the gate admitted to
+// table 20 continues to table 30 through the pipeline's own table-20 miss,
+// which no service installs (#614).
 func (s *Service) baseRules() []zoneflows.FlowRule {
 	resubmitToGate := fmt.Sprintf("resubmit(,%d)", modes.TableCTGate)
 	return s.stamp([]zoneflows.FlowRule{
-		{
-			Table:    int(modes.TableCTGate),
-			Priority: prioLBMissT20,
-			Actions:  fmt.Sprintf("goto_table:%d", modes.TableMACLearning),
-		},
 		{
 			Table:    int(modes.TableLoadBalancer),
 			Priority: prioLBInvalid,

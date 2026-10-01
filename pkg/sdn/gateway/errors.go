@@ -540,3 +540,27 @@ func (e *ErrServiceUnhealthy) Error() string {
 func (e *ErrServiceUnhealthy) Unwrap() error {
 	return e.Cause
 }
+
+// ErrNAT64ConfigInvalid wraps a NAT64 configuration error with the section
+// it came from (#601).
+type ErrNAT64ConfigInvalid struct {
+	Cause error
+}
+
+func (e *ErrNAT64ConfigInvalid) Error() string {
+	return fmt.Sprintf("gateway nat64 configuration invalid: %v", e.Cause)
+}
+
+func (e *ErrNAT64ConfigInvalid) Unwrap() error {
+	return e.Cause
+}
+
+// ErrNAT64UplinkUnknown reports a nat64 pool4.uplink that names no enabled
+// NAT uplink (#601).
+type ErrNAT64UplinkUnknown struct {
+	Uplink string
+}
+
+func (e *ErrNAT64UplinkUnknown) Error() string {
+	return fmt.Sprintf("nat64 pool4.uplink %q names no uplink in an enabled nat section", e.Uplink)
+}

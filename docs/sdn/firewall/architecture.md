@@ -10,8 +10,9 @@ flows. Packets are filtered exclusively by the OVS datapath.
 ## Pipeline
 
 The overlay pipeline (installed by `pkg/sdn/gateway/modes`) is
-`0 → 10 → 30 → 40 → 50 → 60`. Tables 20, 21, and 25 are reserved for the
-firewall/NAT services and are empty when they are disabled:
+`0 → 10 → 30 → 40 → 50 → 60`. Tables 20, 21, 25, 26 and 27 are reserved for
+the firewall, NAT, load-balancer and NAT64 services and are empty when they
+are disabled:
 
 ```
         table 0          table 10                 table 20               table 21
@@ -19,7 +20,7 @@ firewall/NAT services and are empty when they are disabled:
   │  ingress   │──▶│  VXLAN decap   │─fw──▶│  conntrack gate │──▶│  conntrack verdict   │
   └────────────┘   │ (default→30;   │gate  │ ip: ct(zone=Z,  │   │ +inv → drop          │
                    │  fw diverts→20)│      │       table=21) │   │ +est/+rel → 30       │
-                   └───────┬────────┘      │ non-ip → 30     │   │ +new: matrix verdict │
+                   └───────┬────────┘      │ miss → 30       │   │ +new: matrix verdict │
                            │(fw disabled)  │ nat diverts→25  │   │   allow: ct(commit)→30│
                            ▼               └─────────────────┘   │   deny:  drop        │
                     table 30 MAC learning ◀──────────────────────│ miss: default-policy │
@@ -30,15 +31,25 @@ firewall/NAT services and are empty when they are disabled:
 
 ### Table 10 — activation gate
 
-`installOpenFlowPipeline` installs the table 10 default (priority 0,
+The gateway's base pipeline (`GatewayRuntime.EnsurePipeline`,
+`pkg/sdn/gateway/pipeline.go`) installs the table 10 default (priority 0,
 `goto_table:30`). The firewall service never edits that flow. Instead it
 installs its own priority-2 catch-all `goto_table:20` in table 10 on
 `Start` and strict-deletes it on `Stop`. The NAT service does the same at
-priority 1 so the two gates are distinct OVS flows with independent
-lifecycles (identical match+priority would make the second `OFPFC_ADD`
-replace the first). With both services stopped, table 10 contains exactly
-the flows the base pipeline installed — byte-identical to the
-firewall-disabled build.
+priority 1, the load balancer at priority 3 and the NAT64 service at
+priority 4, so the gates are distinct OVS flows with independent lifecycles.
+Identical match+priority would make the second `OFPFC_ADD` replace the
+first: OpenFlow identifies a flow by (table, priority, match), and the
+cookie scopes deletion rather than distinguishing flows on install, so two
+services on one priority share a single resident gate and whichever owns its
+cookie removes the other's gate on `Stop`. One priority per service, and
+`TestGatewayGates_Table10PriorityIsUnique` holds them to it. With every service stopped,
+table 10 contains exactly the flows the base pipeline installed —
+byte-identical to the firewall-disabled build.
+
+The NAT64 gate is why the service works on a gateway running neither the
+firewall nor NAT: without it nothing enters table 20, and the divert below
+would be installed but unreachable.
 
 VXLAN-decapsulated traffic matches the per-VNI decap flows (priority 100,
 `goto_table:30`) and therefore bypasses the ct pipeline; the firewall
@@ -57,7 +68,24 @@ gates the table 10 default path (native/VLAN traffic).
 | 95 | `ip,nw_src=<internal CIDR>,nw_dst=<uplink destination prefix>` | `load:<selector>->NXM_NX_REG0[],ct(table=25,zone=Znat)` (uplink selection, multi-uplink NAT) |
 | 90 | `ip,nw_src=<internal CIDR>` | `ct(table=25,zone=Znat)` — with `load:<default selector>->NXM_NX_REG0[]` in multi-uplink mode (SNAT divert) |
 | 80 | `ipv6` | `goto_table:30` (NAT44 only: IPv6 passes untranslated, ND included) |
-| 1 | (any) | `goto_table:30` (non-IP / unclassified bypass) |
+| 0 | (miss) | `goto_table:30` — the base pipeline's flow (`CookiePipeline`), not a service's |
+
+**The table-20 miss belongs to the pipeline (#614, owner ruling 2026-09-25).**
+Every datapath service gates table 10 into table 20 with an empty-match flow
+and then claims only the frames it handles there, so what none of them
+claims needs one disposition that no single service owns. OVS's own table
+miss is a drop. When each service carried its own miss, NAT and NAT64 on
+their own carried none and dropped every unclaimed frame (ARP, neighbour
+discovery, all other IPv4 and IPv6), and the firewall's (priority 1) and the
+load balancer's (priority 0) were two flows where one would do, the second
+of them identical to any third a service added — one OpenFlow flow that
+either service's cookie-scoped `Stop` deleted from under the other. The
+pipeline installs it once; no service installs an empty-match table-20
+flow. `TestPipelineInvariant_EveryGatedTableHasAMiss` starts each datapath
+service alone and asserts every table a gate or a `goto` routes into has an
+empty-match miss; `TestPipelineInvariant_TheTableTwentyMissIsThePipelines`
+asserts there is exactly one in table 20 and it carries the pipeline's
+cookie.
 
 ### Table 21 — conntrack verdict
 
@@ -123,6 +151,50 @@ firewall gates (priority 100) and is not source-NATed; SNAT applies to
 traffic no zone gate claimed (untagged/routed), and DNAT outranks the zone
 gates so inbound public traffic is translated before zone policy applies.
 
+### Table 27 — NAT64 hand-off
+
+Table 27 belongs to the `nat64:` service (#601, ruling R6). OVS `ct(nat)`
+cannot rewrite between address families, so translation is never an OpenFlow
+action: the pipeline's whole job is to deliver frames addressed to the RFC
+6052 translation prefix to the translator's port, where the Jool kernel
+instance's netfilter hooks see them.
+
+The flows are installed as one unit, and only as one unit — a
+`goto_table:27` with nothing routing into 27 programs nothing while
+reporting success:
+
+| Table | Priority | Match | Action |
+|---|---|---|---|
+| 10 | 4 | (catch-all) | `goto_table:20` |
+| 20 | 210 | `dl_type=0x86dd[,dl_vlan=V],ipv6_dst=<prefix>` | `goto_table:27` |
+| 27 | 110 | `dl_type=0x86dd,vlan_vid=0x1000/0x1000,ipv6_dst=<prefix>` | `strip_vlan,mod_dl_dst:<translator MAC>,output:<translator port>` |
+| 27 | 100 | `dl_type=0x86dd,ipv6_dst=<prefix>` | `mod_dl_dst:<translator MAC>,output:<translator port>` |
+| 27 | 0 | (miss) | `goto_table:30` |
+
+**The hand-off re-addresses the frame.** It arrives addressed to the zone's
+router MAC. Output unchanged, the translator interface receives a frame for
+another host (`PACKET_OTHERHOST`) and the kernel drops it in `ipv6_rcv`,
+before the `PREROUTING` hook where Jool translates; a frame still carrying
+its 802.1Q tag is not an IPv6 packet to the host at all. So the hand-off
+rewrites the destination to the translator port's own MAC (read from OVSDB
+`mac_in_use` at Start and on every reconcile) and strips the tag. The NAT64
+VM suite (`make integration-test-nat64`) proves both: with the rewrite
+removed, the translated ping goes unanswered.
+
+The divert at 210 outranks the firewall's per-zone gate (100) and NAT's
+IPv6 pass (80), on the same reasoning as the DNAT divert: a frame addressed
+to the translation prefix has no other disposition, because nothing routes
+`64:ff9b::/96`. The alternative to translating it is dropping it for want of
+a route, not adjudicating it against the zone matrix.
+
+Zone policy is expressed at the gate instead. `client-zones:` names the
+zones whose frames are diverted, matching each zone's VLAN; a zone that is
+not named gets no translation. An empty list diverts every frame addressed
+to the prefix.
+
+The table-27 miss continues to table 30, so the table is never a black hole
+for traffic that reaches it and matches nothing.
+
 ## Conntrack Zone Allocation
 
 `pkg/sdn/ct.ZoneAllocator` hands out disjoint 16-bit conntrack zone IDs
@@ -142,6 +214,15 @@ Every flow carries an owner cookie:
 |-------|--------|------|
 | Firewall | `0xF1BE000100000000` | `0xFFFFFFFF00000000` |
 | NAT | `0xF1BE000200000000` | `0xFFFFFFFF00000000` |
+| Load balancer | `0xF1BE000300000000` | `0xFFFFFFFF00000000` |
+| NAT64 | `0xF1BE000400000000` | `0xFFFFFFFF00000000` |
+| Base pipeline | `0xF1BE000000000000` | `0xFFFFFFFF00000000` |
+
+Every owner sweeps with the same mask, so the owner id in the high 32 bits
+must be unique across services: two services sharing one delete each other's
+flows on `Stop`, silently, while both keep reporting themselves healthy.
+`TestServiceFlowCookies_OwnerIDsAreUnique` (`pkg/sdn/gateway`) holds the
+registry to that.
 
 - **Stop** removes the table 10 gate first (strict delete: exact
   table/priority/match/cookie), then sweeps everything else with one

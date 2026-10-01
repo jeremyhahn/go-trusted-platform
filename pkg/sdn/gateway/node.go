@@ -39,8 +39,10 @@ const (
 	ServicePXE          = "pxe"
 	ServiceLoadBalancer = "load-balancer"
 	ServiceNAT          = "nat"
-	ServiceTunnels      = "tunnels"
-	ServiceProxy        = "proxy"
+	// ServiceNAT64 is the stateful NAT64 translator (#601, ruling R6).
+	ServiceNAT64   = "nat64"
+	ServiceTunnels = "tunnels"
+	ServiceProxy   = "proxy"
 	// ServiceHostFW is the nftables host packet filter (#569).
 	ServiceHostFW = "hostfw"
 	// ServiceManagementVPN is the attested remote-access VPN; a design

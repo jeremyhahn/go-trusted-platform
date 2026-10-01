@@ -86,7 +86,9 @@ type SDNGetVLANResponse struct {
 	Timestamp int64  `codec:"timestamp"`
 }
 
-// SDNGetFlowRequest represents a request to get flow stats
+// SDNGetFlowRequest represents a request to get flow stats. Match carries
+// the flow ID the API hands out ("flow-<cookie>", as AddFlow and ListFlows
+// report it); the wire name predates that and is kept for compatibility.
 type SDNGetFlowRequest struct {
 	BridgeName string `codec:"bridge_name"`
 	Match      string `codec:"match"`

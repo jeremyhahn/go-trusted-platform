@@ -192,12 +192,9 @@ func (c *Client) DeleteFlowStrict(ctx context.Context, bridgeName string, flow *
 	// carries only the identifying header and match.
 	ofFlow.Instructions = nil
 
+	// convertToOpenFlow has parsed and set the cookie; a strict delete
+	// matches it exactly.
 	if flow.Cookie != "" {
-		cookie, err := parseCookie(flow.Cookie)
-		if err != nil {
-			return &WrappedError{Msg: "failed to parse cookie", Err: err}
-		}
-		ofFlow.Cookie = cookie
 		ofFlow.CookieMask = ^uint64(0)
 	}
 
@@ -412,12 +409,14 @@ func convertToOpenFlow(flow *FlowMod) (*openflow.FlowMod, error) {
 	ofFlow.IdleTimeout = uint16(flow.IdleTimeout)
 	ofFlow.HardTimeout = uint16(flow.HardTimeout)
 
-	// Parse cookie
+	// Parse cookie. An unparseable cookie is an error rather than a zero:
+	// the cookie is how the flow's owner deletes it (#614).
 	if flow.Cookie != "" {
 		cookie, err := parseCookie(flow.Cookie)
-		if err == nil {
-			ofFlow.Cookie = cookie
+		if err != nil {
+			return nil, &ErrInvalidCookie{Cookie: flow.Cookie, Err: err}
 		}
+		ofFlow.Cookie = cookie
 	}
 
 	// Parse match string
@@ -538,6 +537,24 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 				return &MessageError{Msg: fmt.Sprintf("invalid dl_vlan: %s", value)}
 			}
 			match.AddVLANVid(uint16(vlan))
+
+		case "vlan_vid":
+			// The raw OXM VLAN_VID, value[/mask], where 0x1000 is
+			// OFPVID_PRESENT: vlan_vid=0x1000/0x1000 matches every tagged
+			// frame whatever its VID, which dl_vlan cannot say (the NAT64
+			// hand-off strips the tag of exactly those frames, #614).
+			vid, vidMask, err := parseValueMask(value, 13)
+			if err != nil {
+				return &MessageError{Msg: fmt.Sprintf("invalid vlan_vid: %s", value)}
+			}
+			raw := make([]byte, 2)
+			openflow.ByteOrder.PutUint16(raw, uint16(vid))
+			var mask []byte
+			if vidMask != 0x1fff {
+				mask = make([]byte, 2)
+				openflow.ByteOrder.PutUint16(mask, uint16(vidMask))
+			}
+			match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBVlanVid, raw, mask)
 
 		case "nw_src":
 			// Check for CIDR notation (e.g., 192.168.1.0/24)
@@ -917,6 +934,9 @@ func formatBasicMatchField(field openflow.OXMField) string {
 			return fmt.Sprintf("dl_type=0x%04x", openflow.ByteOrder.Uint16(field.Value))
 		}
 	case openflow.OFPXMTOFBVlanVid:
+		if len(field.Value) == 2 && field.HasMask && len(field.Mask) == 2 {
+			return fmt.Sprintf("vlan_vid=0x%x/0x%x", openflow.ByteOrder.Uint16(field.Value), openflow.ByteOrder.Uint16(field.Mask))
+		}
 		if len(field.Value) == 2 {
 			// Strip OFPVID_PRESENT (bit 12) to recover the VLAN ID.
 			return fmt.Sprintf("dl_vlan=%d", openflow.ByteOrder.Uint16(field.Value)&0x0fff)

@@ -28,8 +28,9 @@ import (
 
 // fakeFlowController records installed flows in memory.
 type fakeFlowController struct {
-	mu       sync.Mutex
-	installs [][]zoneflows.FlowRule
+	mu         sync.Mutex
+	installs   [][]zoneflows.FlowRule
+	installErr error
 }
 
 func (f *fakeFlowController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
@@ -39,6 +40,9 @@ func (f *fakeFlowController) InstallFlow(bridgeName string, priority int, match 
 func (f *fakeFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.installErr != nil {
+		return f.installErr
+	}
 	f.installs = append(f.installs, rules)
 	return nil
 }
@@ -69,6 +73,12 @@ type fakeOVSClient struct {
 	cookieDeleteErr error
 }
 
+// GetFlowStats answers the NAT64 stale-flow sweep: the fake bridge holds
+// no flows a previous process left behind.
+func (f *fakeOVSClient) GetFlowStats(ctx context.Context, bridgeName string, match string) ([]*ovs.Flow, error) {
+	return nil, nil
+}
+
 func (f *fakeOVSClient) DeleteFlowStrict(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -88,6 +98,10 @@ func (f *fakeOVSClient) DeleteFlowsByCookie(ctx context.Context, bridgeName stri
 
 func (f *fakeOVSClient) GetOFPort(ctx context.Context, portName string) (int32, error) {
 	return 7, nil
+}
+
+func (f *fakeOVSClient) GetInterface(ctx context.Context, name string) (*ovs.Interface, error) {
+	return &ovs.Interface{Name: name, OFPort: 7, MAC: "02:00:00:00:00:07"}, nil
 }
 
 // newTestRuntime builds a GatewayRuntime backed by in-memory fakes with a

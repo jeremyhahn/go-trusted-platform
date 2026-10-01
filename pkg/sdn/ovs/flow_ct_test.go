@@ -475,8 +475,8 @@ func TestDeleteFlowStrict_Validation(t *testing.T) {
 	t.Run("invalid cookie fails before dialing", func(t *testing.T) {
 		client, _ := setupTestClient(t)
 		err := client.DeleteFlowStrict(ctx, "br0", &FlowMod{Cookie: "not-a-cookie"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to parse cookie")
+		var invalid *ErrInvalidCookie
+		require.ErrorAs(t, err, &invalid)
 	})
 
 	t.Run("not connected", func(t *testing.T) {

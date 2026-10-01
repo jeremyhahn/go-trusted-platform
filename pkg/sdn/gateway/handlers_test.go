@@ -249,11 +249,20 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 		DHCP:          &DHCPServiceConfig{Enabled: true},
 		PXE:           &PXEServiceConfig{Enabled: true, HTTPPort: 8069},
 		ManagementVPN: &ManagementVPNServiceConfig{Enabled: true},
+		NAT64: &NAT64Config{
+			Enabled:        true,
+			TranslatorPort: "nat640",
+			Pool4: NAT64Pool4Config{
+				Addresses:      []string{"203.0.113.64-203.0.113.71"},
+				PortRangeStart: 61001,
+				PortRangeEnd:   65535,
+			},
+		},
 	}
 	names := cfg.enabledServices()
-	require.Len(t, names, 11)
+	require.Len(t, names, 12)
 	assert.Equal(t, []string{
-		ServiceFirewall, ServiceNAT, ServiceLoadBalancer, ServiceHostFW, ServiceTunnels, ServiceTransit,
+		ServiceFirewall, ServiceNAT, ServiceLoadBalancer, ServiceNAT64, ServiceHostFW, ServiceTunnels, ServiceTransit,
 		ServiceOverlay, ServiceEdge, ServiceDHCP, ServicePXE, ServiceManagementVPN,
 	}, names, "datapath services first, then host services, then refused sections")
 
@@ -269,7 +278,7 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 			refused[name] = true
 		}
 	}
-	assert.Equal(t, map[string]bool{ServiceFirewall: true, ServiceNAT: true, ServiceLoadBalancer: true, ServiceHostFW: true, ServiceTunnels: true, ServiceTransit: true}, built)
+	assert.Equal(t, map[string]bool{ServiceFirewall: true, ServiceNAT: true, ServiceLoadBalancer: true, ServiceNAT64: true, ServiceHostFW: true, ServiceTunnels: true, ServiceTransit: true}, built)
 	assert.Equal(t, map[string]bool{ServiceOverlay: true, ServiceEdge: true, ServiceDHCP: true, ServicePXE: true, ServiceManagementVPN: true}, refused)
 	for name := range refused {
 		assert.NotEmpty(t, serviceRefusals[name], "refusal for %s names no blocker", name)
@@ -473,12 +482,21 @@ func TestRefusedServiceHandler(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBuilders_RefuseWithoutTheirRuntime(t *testing.T) {
-	for _, name := range []string{ServiceFirewall, ServiceNAT, ServiceLoadBalancer} {
+	for _, name := range []string{ServiceFirewall, ServiceNAT, ServiceLoadBalancer, ServiceNAT64} {
 		t.Run(name, func(t *testing.T) {
 			cfg := baseGatewayConfig("no-runtime")
 			cfg.Firewall = &FirewallConfig{Enabled: true}
 			cfg.NAT = &NATConfig{Enabled: true, ExternalIP: "203.0.113.10", PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10, InternalCIDR: "10.0.0.0/24"}
 			cfg.LoadBalancer = &LoadBalancerConfig{Enabled: true}
+			cfg.NAT64 = &NAT64Config{
+				Enabled:        true,
+				TranslatorPort: "nat640",
+				Pool4: NAT64Pool4Config{
+					Addresses:      []string{"198.51.100.8-198.51.100.15"},
+					PortRangeStart: 61001,
+					PortRangeEnd:   65535,
+				},
+			}
 			gw := &Gateway{config: cfg}
 			_, err := serviceBuilders[name](gw)
 			var missing *ErrRuntimeMissing

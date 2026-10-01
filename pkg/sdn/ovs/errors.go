@@ -13,7 +13,10 @@
 
 package ovs
 
-import "errors"
+import (
+	"errors"
+	"strconv"
+)
 
 var (
 	// ErrNotConnected is returned when attempting operations on a disconnected client
@@ -106,6 +109,10 @@ var (
 
 	// ErrIPFamilyMismatch is returned when local and remote IPs have different address families
 	ErrIPFamilyMismatch = errors.New("local and remote IP address family mismatch")
+
+	// ErrConfigSequenceUnreadable is returned when the Open_vSwitch row
+	// carries no next_cfg/cur_cfg sequence to wait on.
+	ErrConfigSequenceUnreadable = errors.New("ovs: the Open_vSwitch row reports no configuration sequence")
 )
 
 // MessageError is a typed error carrying a fully formatted message with no
@@ -154,3 +161,35 @@ func (e *SentinelCauseError) Error() string {
 func (e *SentinelCauseError) Unwrap() []error {
 	return []error{e.Sentinel, e.Cause}
 }
+
+// ErrInvalidCookie is returned for a flow cookie that does not parse. A
+// cookie scopes deletion, so a flow installed with cookie 0 in its place
+// is one its owner can never remove by cookie.
+type ErrInvalidCookie struct {
+	Cookie string
+	Err    error
+}
+
+// Error implements the error interface.
+func (e *ErrInvalidCookie) Error() string {
+	return "ovs: invalid flow cookie " + strconv.Quote(e.Cookie) + ": " + e.Err.Error()
+}
+
+// Unwrap returns the parse error.
+func (e *ErrInvalidCookie) Unwrap() error { return e.Err }
+
+// ErrConfigNotApplied is returned when ovs-vswitchd does not apply a
+// committed configuration before the context ends: the change is stored in
+// OVSDB but not in force.
+type ErrConfigNotApplied struct {
+	Target int64
+	Err    error
+}
+
+// Error implements the error interface.
+func (e *ErrConfigNotApplied) Error() string {
+	return "ovs: ovs-vswitchd did not apply configuration " + strconv.FormatInt(e.Target, 10) + ": " + e.Err.Error()
+}
+
+// Unwrap returns the context error.
+func (e *ErrConfigNotApplied) Unwrap() error { return e.Err }

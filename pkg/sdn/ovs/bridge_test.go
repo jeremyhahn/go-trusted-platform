@@ -17,6 +17,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -327,6 +328,85 @@ func TestClient_SetBridgeFailMode(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrBridgeNotFound)
 	})
+
+	t.Run("empty bridge name", func(t *testing.T) {
+		assert.ErrorIs(t, client.SetBridgeFailMode(ctx, "", "secure"), ErrInvalidBridgeName)
+	})
+}
+
+// TestClient_SetBridgeFailMode_WaitsForVswitchd: the change bumps next_cfg
+// in the same transaction and returns only once cur_cfg has caught up,
+// because vswitchd flushes the bridge's flows when it applies a fail-mode
+// change, after the commit (#614).
+func TestClient_SetBridgeFailMode_WaitsForVswitchd(t *testing.T) {
+	client, server := setupBridgeTest(t)
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	ctx := context.Background()
+	_, err := client.CreateBridge(ctx, "br-wait")
+	require.NoError(t, err)
+
+	require.NoError(t, client.SetBridgeFailMode(ctx, "br-wait", "secure"))
+	rows, err := client.Select(ctx, ovsTable, nil, []string{"next_cfg", "cur_cfg"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	// One bump for the bridge's creation, one for the fail-mode change.
+	assert.Equal(t, float64(2), rows[0]["next_cfg"], "the change bumps next_cfg")
+	assert.Equal(t, float64(2), rows[0]["cur_cfg"])
+
+	bridge, err := client.GetBridge(ctx, "br-wait")
+	require.NoError(t, err)
+	assert.Equal(t, "secure", bridge.FailMode)
+}
+
+func TestClient_SetBridgeFailMode_ReportsAConfigurationNeverApplied(t *testing.T) {
+	client, server := setupBridgeTest(t)
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	_, err := client.CreateBridge(context.Background(), "br-stuck")
+	require.NoError(t, err)
+	server.holdCurCfg.Store(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err = client.SetBridgeFailMode(ctx, "br-stuck", "secure")
+	var notApplied *ErrConfigNotApplied
+	require.ErrorAs(t, err, &notApplied)
+	assert.Equal(t, int64(2), notApplied.Target)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), "did not apply configuration 2")
+}
+
+// TestClient_CreateBridge_WaitsForVswitchd: until vswitchd applies the new
+// bridge it has no OpenFlow management socket, so CreateBridge returns only
+// once cur_cfg reaches the transaction's next_cfg.
+func TestClient_CreateBridge_WaitsForVswitchd(t *testing.T) {
+	client, server := setupBridgeTest(t)
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+
+	_, err := client.CreateBridge(context.Background(), "br-applied")
+	require.NoError(t, err)
+	rows, err := client.Select(context.Background(), ovsTable, nil, []string{"cur_cfg"})
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), rows[0]["cur_cfg"])
+
+	server.holdCurCfg.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = client.CreateBridge(ctx, "br-unapplied")
+	var notApplied *ErrConfigNotApplied
+	require.ErrorAs(t, err, &notApplied)
+	assert.Equal(t, int64(2), notApplied.Target)
+}
+
+func TestCfgSequence_RefusesWhatIsNotOneNumber(t *testing.T) {
+	_, ok := cfgSequence(nil, "cur_cfg")
+	assert.False(t, ok)
+	_, ok = cfgSequence([]map[string]interface{}{{"cur_cfg": "x"}}, "cur_cfg")
+	assert.False(t, ok)
+	_, ok = cfgSequence([]map[string]interface{}{{"cur_cfg": float64(1)}, {"cur_cfg": float64(2)}}, "cur_cfg")
+	assert.False(t, ok)
+	v, ok := cfgSequence([]map[string]interface{}{{"cur_cfg": float64(7)}}, "cur_cfg")
+	assert.True(t, ok)
+	assert.Equal(t, int64(7), v)
 }
 
 func TestClient_SetBridgeProtocols(t *testing.T) {

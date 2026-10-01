@@ -76,7 +76,10 @@ are the compatibility surface.
 
 An IPv6-only client zone (RFC 6146 NAT64 with RFC 6147 DNS64, and RFC 6877
 464XLAT for clients that need literal IPv4) is a Phase 5 feature. The spike
-measured the alternatives on 2026-09-08 and the decision is:
+measured the alternatives on 2026-09-08 and the decision is below. The
+translator, its pipeline gate and its health are implemented (#601,
+`pkg/sdn/gateway/services/nat64`); DNS64 (#602) and the OpenRC packaging
+(#603) are not.
 
 - **The PLAT is the Jool kernel translator, packaged by Alpine.** The gateway
   owns the Jool instance the way it owns nftables and the OVS bridge: it
@@ -103,7 +106,7 @@ measured the alternatives on 2026-09-08 and the decision is:
 |---|---|---|
 | **Jool kernel module (chosen)** | Alpine 3.22 packages `jool-modules-lts-6.12.108-r0`, `jool-tools-4.1.14-r0`, `jool-tools-openrc`; full RFC 6146/7915 including ICMP, fragments and session timeouts; line rate on the fleet's NICs | Distribution-packaged and kernel-resident. The gateway drives it exactly as it drives nftables — a rendered configuration, applied and verified. The only cost is a module dependency the section checks at start. |
 | Go userspace translator (fallback) | Spike `test/spike/nat64` (`//go:build spike`): one goroutine per direction, a lock-guarded binding table, two TUNs, UDP/TCP only. 24-core Xeon Gold 6258R, user namespace, bidirectional with echo, three 5 s runs each: **1.0–1.14 Gbit/s goodput at 1200 B (106k–119k pps)**; **85–88 Mbit/s at 64 B (165k–171k pps)** | The pps ceiling, not the bandwidth, is the limit: ~170k pps without per-core fan-out means small-packet workloads saturate one core at a fraction of a 10 GbE uplink. Every packet crosses the kernel boundary twice. RFC 7915 ICMP, fragment and timeout handling is all code to write and maintain, and it is one more parser process under R14. Kept because it needs nothing from the kernel. |
-| OVS-native | `ct(nat)` cannot rewrite between address families; OpenFlow has no header-family transform | Not implementable in the pipeline. The pipeline's role is the gate: a table-27 divert of `dl_type=0x86dd, ipv6_dst=<prefix>/96` to the translator port, instead of today's `prioIPv6Pass` pass-through. |
+| OVS-native | `ct(nat)` cannot rewrite between address families; OpenFlow has no header-family transform | Not implementable in the pipeline. The pipeline's role is the gate, which is what #601 built: a table-27 divert of `dl_type=0x86dd, ipv6_dst=<prefix>` to the translator port, above the `prioIPv6Pass` pass-through. |
 | Tayga (userspace, packaged elsewhere) | Not in Alpine 3.22; single-threaded TUN, stateless (needs a NAT44 stage behind it) | Same ceiling as the Go translator with a second dependency and no session state. |
 | eBPF XDP/TC translator | No measurement; verifier limits fragments and ICMP error translation; needs BTF and a clang toolchain in the build | Deferred: revisit if the fleet ever runs a kernel Alpine does not package Jool for. |
 
@@ -380,10 +383,10 @@ It is deliberately not a `ServiceHandler`.
 
 | Property | Value |
 |---|---|
-| Flows | table 0 → `goto_table:10`, table 10 → `goto_table:30`, table 30 → terminal; all **priority 0**, so a platformd flow in table 0 still wins its match and a service gate in table 10 still diverts |
+| Flows | table 0 → `goto_table:10`, table 10 → `goto_table:30`, table 20 → `goto_table:30`, table 30 → terminal; all **priority 0**, so a platformd flow in table 0 still wins its match and a service gate or divert still outranks the default. The table-20 flow is the miss for the conntrack gate every datapath service routes into: it belongs to the pipeline so that no service can forget it (NAT and NAT64 alone once dropped every frame they did not claim) or delete it from under another (#614) |
 | Cookie | `CookiePipeline` `0xF1BE0000…` under the gateway's `0xF1BE` owner prefix |
 | Terminal | `normal` by default — identical to the bridge's behaviour before the pipeline existed for traffic no service claims. `overlay` is refused (`ErrPipelineTerminalUnavailable`) until the overlay service owns egress: the overlay config has no VTEP port and the table-60 encap flow has no output action. Owner design decision (2026-09-26): the overlay is required (#709) |
-| `fail_mode` | held at **`secure`** while the pipeline is installed, restored on removal — a controller loss must not fall back to `NORMAL` around the firewall |
+| `fail_mode` | held at **`secure`** while the pipeline is installed, restored on removal — a controller loss must not fall back to `NORMAL` around the firewall. On a bridge with no configured controller, Open vSwitch **flushes every flow** when `fail_mode` changes (`connmgr_set_fail_mode`), so the mode is set *before* the pipeline is installed and only when it differs; installing first left a secure bridge with no pipeline (#614, measured on OVS 3.5). A bridge provisioned `secure` — the mode `docs/sdn/cli.md` prescribes — is never flushed by gatewayd; one provisioned `standalone` loses every flow on it, platformd's included, when gatewayd starts and again when it stops |
 | Ownership | recorded in the bridge's `external_ids` (`tp-pipeline-owner=gatewayd:<id>`, `tp-pipeline-terminal`); a bridge another gateway holds is refused (`ErrPipelineOwned`); a crashed gateway's own stale record is reclaimed |
 | When | only when a datapath service (firewall, NAT, load balancer, overlay) is enabled and a runtime is injected; a proxy-only or telemetry-only gateway leaves the bridge untouched |
 

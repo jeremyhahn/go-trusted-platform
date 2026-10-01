@@ -56,6 +56,7 @@ declare -A TARGET_PACKAGES=(
     [diskimage]="./test/integration/diskimage"
     [netboot]="./test/integration/netboot"
     [lb]="./test/integration/sdn/"
+    [nat64]="./test/integration/nat64"
 )
 
 # Per-target -run filter, for a target that is one test of a larger
@@ -71,6 +72,7 @@ declare -A TARGET_RUN=(
 declare -A TARGET_TIMEOUTS=(
     [diskimage]="90m"
     [netboot]="40m"
+    [nat64]="15m"
 )
 
 RUN_TARGET="all"
@@ -733,6 +735,16 @@ elif [ "$RUN_TARGET" = "diskimage" ]; then
     echo "rpi image: ${DISKIMAGE_RPI_IMAGE:-<unset>}"
     echo "u-boot:    ${DISKIMAGE_UBOOT:-<unset>}"
     echo "work dir:  ${DISKIMAGE_WORK_DIR}"
+elif [ "$RUN_TARGET" = "nat64" ]; then
+    # The NAT64 suite boots its own Alpine VM (the translator is a kernel
+    # module the devcontainer cannot load into the host) and runs the
+    # guest suite there; no shared platformd. Inputs come from the host
+    # build (make integration-test-nat64).
+    echo "=== nat64 target: skipping shared platformd ==="
+    echo "kernel: ${NAT64_VM_KERNEL:-<unset>}"
+    echo "rootfs: ${NAT64_VM_ROOTFS:-<unset>}"
+    echo "suite:  ${NAT64_VM_SUITE:-<unset>}"
+    echo "run:    ${NAT64_VM_RUN:-<unset>}"
 elif [ "$RUN_TARGET" = "netboot" ]; then
     # The netboot suite drives `platformctl iso test pxe`, which runs its
     # own PXE server on an isolated bridge and boots the aarch64 guest from

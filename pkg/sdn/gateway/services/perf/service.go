@@ -40,7 +40,8 @@ const (
 	// FlowCookie stamps every ephemeral perf flow so teardown is a
 	// single cookie-scoped delete. The 0xF1BE prefix matches the
 	// gateway service cookie family (firewall 0xF1BE0001/0002, load
-	// balancer 0xF1BE0003); 0x00FF marks the perf sub-range.
+	// balancer 0xF1BE0003, NAT64 0xF1BE0004); 0x00FF marks the perf
+	// sub-range.
 	FlowCookie uint64 = 0xF1BE00FF00000000
 
 	// MaxFlowCount bounds one measurement run to keep the ephemeral

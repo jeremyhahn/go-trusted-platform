@@ -49,10 +49,9 @@ func TestCompileStatefulMatrixRules_Golden(t *testing.T) {
 
 	got := CompileStatefulMatrixRules(cfg, ctZones)
 
+	// No table-20 base miss: non-IP traffic bypasses conntrack through the
+	// gateway pipeline's own table-20 miss (#614).
 	want := []FlowRule{
-		// Table 20 base: non-IP / unclassified bypass.
-		{Table: 20, Priority: 1, Match: "", Actions: "goto_table:30"},
-
 		// control-plane (VLAN 100, ct zone 11): gate + scaffolding.
 		{Table: 20, Priority: 100, Match: "dl_vlan=100,dl_type=0x0800", Actions: "ct(table=21,zone=11)"},
 		{Table: 20, Priority: 100, Match: "dl_vlan=100,dl_type=0x86dd", Actions: "ct(table=21,zone=11)"},
@@ -145,10 +144,9 @@ func TestCompileStatefulMatrixRules_SkipsUnbackedZones(t *testing.T) {
 func TestCompileStatefulMatrixRules_EmptyConfig(t *testing.T) {
 	got := CompileStatefulMatrixRules(MatrixRuleConfig{}, nil)
 
-	// Only the table 20 bypass and the table 21 miss remain, and the
-	// empty DefaultPolicy defaults to deny.
+	// Only the table 21 miss remains (the table-20 miss is the gateway
+	// pipeline's), and the empty DefaultPolicy defaults to deny.
 	want := []FlowRule{
-		{Table: 20, Priority: 1, Match: "", Actions: "goto_table:30"},
 		{Table: 21, Priority: 0, Match: "", Actions: "drop"},
 	}
 	if len(got) != len(want) {

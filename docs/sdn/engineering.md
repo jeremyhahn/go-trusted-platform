@@ -199,7 +199,13 @@ reconcile lands.
    - `ipv6_src`/`ipv6_dst` (address or prefix);
    - the protocol keywords (`ip`, `tcp`, `icmp6`, ...);
    - `load:V->NXM_NX_REGn[a..b]`, `resubmit(,T)` and
-     `set_field:V->{eth,ip}_{src,dst}`.
+     `set_field:V->{eth,ip}_{src,dst}`;
+   - `vlan_vid=V[/M]`, the raw OXM VLAN_VID: `vlan_vid=0x1000/0x1000`
+     matches every tagged frame, which `dl_vlan` cannot say. The NAT64
+     hand-off uses it to strip the tag of exactly those frames (#614).
+
+   An unparseable cookie is `ErrInvalidCookie`, never cookie 0 (#614). The
+   cookie is how a flow's owner deletes it.
 
    The new encodings are pinned against `ovs-ofctl parse-actions`
    (`pkg/sdn/ovs/flow_grammar_test.go`, `pkg/sdn/openflow/nicira_test.go`).

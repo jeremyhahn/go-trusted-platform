@@ -299,7 +299,7 @@ func TestStartInstallsPipeline(t *testing.T) {
 		t.Errorf("gate rule = %+v", last)
 	}
 
-	var haveDivert, haveDispatch, haveMissT20, haveMissT26 bool
+	var haveDivert, haveDispatch, haveMissT26 bool
 	for _, r := range rules {
 		if r.Table == 20 && r.Priority == prioLBDivert &&
 			strings.Contains(r.Match, "nw_dst=10.100.0.10") && strings.Contains(r.Match, "tp_dst=443") {
@@ -314,8 +314,11 @@ func TestStartInstallsPipeline(t *testing.T) {
 				t.Errorf("dispatch actions = %q", r.Actions)
 			}
 		}
-		if r.Table == 20 && r.Priority == prioLBMissT20 && r.Actions == "goto_table:30" {
-			haveMissT20 = true
+		// The table-20 miss is the gateway pipeline's; a load balancer
+		// copy is the same OpenFlow flow, which its Stop would delete
+		// from under every other service gating into table 20 (#614).
+		if r.Table == 20 && r.Match == "" {
+			t.Errorf("load balancer installs an empty-match table-20 flow %+v; the miss belongs to the pipeline", r)
 		}
 		if r.Table == 26 && r.Priority == prioLBMissT26 && r.Actions == "drop" {
 			haveMissT26 = true
@@ -324,9 +327,9 @@ func TestStartInstallsPipeline(t *testing.T) {
 			t.Errorf("rule %+v missing LB cookie", r)
 		}
 	}
-	if !haveDivert || !haveDispatch || !haveMissT20 || !haveMissT26 {
-		t.Errorf("missing pipeline flows: divert=%v dispatch=%v missT20=%v missT26=%v",
-			haveDivert, haveDispatch, haveMissT20, haveMissT26)
+	if !haveDivert || !haveDispatch || !haveMissT26 {
+		t.Errorf("missing pipeline flows: divert=%v dispatch=%v missT26=%v",
+			haveDivert, haveDispatch, haveMissT26)
 	}
 	assertReplyPath(t, svc, rules, testVIP())
 

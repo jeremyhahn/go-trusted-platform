@@ -26,6 +26,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/firewall"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 )
 
@@ -56,6 +57,7 @@ var serviceBuilders = map[string]serviceBuilder{
 	ServiceFirewall:     buildFirewall,
 	ServiceLoadBalancer: buildLoadBalancer,
 	ServiceNAT:          buildNAT,
+	ServiceNAT64:        buildNAT64,
 	ServiceHostFW:       buildHostFW,
 	ServiceTunnels:      buildTunnels,
 	ServiceTransit:      buildTransit,
@@ -351,6 +353,85 @@ func buildNAT(g *Gateway) (backedService, error) {
 		return nil, &ErrServiceStartFailed{Service: ServiceNAT, Cause: err}
 	}
 	return natBackend{svc}, nil
+}
+
+// nat64Backend adapts *nat64.Service. Health is the kernel's answer, not
+// the configuration's: a started translator whose instance has gone
+// reports unhealthy so the snapshot says so.
+type nat64Backend struct{ *nat64.Service }
+
+func (b nat64Backend) Healthy() bool {
+	h := b.Health()
+	return h.Active && h.InstancePresent && h.LastError == nil
+}
+
+// nat44Ranges is every IPv4 address:port range the NAT service translates
+// to: each uplink's SNAT pool, the single-address external IP, and every
+// static 1:1 external address, which owns all of its ports. The overlap
+// check needs it, and only the gateway sees both sections.
+func nat44Ranges(cfg *NATConfig) []nat64.NAT44Range {
+	if cfg == nil || !cfg.Enabled {
+		return nil
+	}
+	var out []nat64.NAT44Range
+	for _, st := range cfg.Static {
+		out = append(out, nat64.NAT44Range{
+			Uplink: st.Uplink, Addresses: st.External, PortStart: 1, PortEnd: 65535,
+		})
+	}
+	for _, u := range cfg.Uplinks {
+		start, end := u.PortRangeStart, u.PortRangeEnd
+		if start == 0 && end == 0 {
+			start, end = cfg.PortRangeStart, cfg.PortRangeEnd
+		}
+		for _, addr := range u.Addresses {
+			out = append(out, nat64.NAT44Range{
+				Uplink: u.Name, Addresses: addr, PortStart: start, PortEnd: end,
+			})
+		}
+	}
+	if len(cfg.Uplinks) == 0 && cfg.ExternalIP != "" {
+		out = append(out, nat64.NAT44Range{
+			Addresses: cfg.ExternalIP, PortStart: cfg.PortRangeStart, PortEnd: cfg.PortRangeEnd,
+		})
+	}
+	return out
+}
+
+// buildNAT64 builds the stateful NAT64 translator from the `nat64:`
+// section. Without an injected driver it drives the real jool tool, which
+// needs the kernel module: a gateway whose kernel cannot carry the
+// translator refuses the section rather than reporting a service that
+// translates nothing (#601, ruling R6).
+func buildNAT64(g *Gateway) (backedService, error) {
+	runtime := g.config.Runtime
+	if runtime == nil {
+		return nil, &ErrRuntimeMissing{Service: ServiceNAT64}
+	}
+	cfg := g.config.NAT64
+	serviceCfg := cfg.ServiceConfig(runtime.Bridge)
+
+	// Two independent allocators must never share an address and a port.
+	if err := serviceCfg.CheckPoolOverlap(nat44Ranges(g.config.NAT)); err != nil {
+		return nil, &ErrServiceStartFailed{Service: ServiceNAT64, Cause: err}
+	}
+
+	host := g.config.hostRuntime()
+	driver := host.NAT64Driver
+	if driver == nil {
+		driver = nat64.NewJoolDriver()
+	}
+	svc, err := nat64.New(nat64.Deps{
+		Driver:     driver,
+		Controller: runtime.Controller,
+		OVS:        runtime.OVS,
+		Config:     serviceCfg,
+		Logger:     host.Logger,
+	})
+	if err != nil {
+		return nil, &ErrServiceStartFailed{Service: ServiceNAT64, Cause: err}
+	}
+	return nat64Backend{svc}, nil
 }
 
 // hostFWBackend adapts *hostfw.Service.

@@ -24,6 +24,8 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -862,10 +864,12 @@ func TestSDNServiceUnit_AddFlow_OVSError(t *testing.T) {
 // =============================================================================
 
 func TestSDNServiceUnit_DeleteFlow_Success(t *testing.T) {
+	// The ID is the flow's cookie: the delete is an exact-cookie delete,
+	// never a match handed to OVS.
 	mockClient := NewConfigurableMockOVSClient()
-	var capturedMatch string
-	mockClient.OnDeleteFlow(func(ctx context.Context, bridgeName string, match string) error {
-		capturedMatch = match
+	var capturedCookie, capturedMask uint64
+	mockClient.OnDeleteFlowsByCookie(func(ctx context.Context, bridgeName string, cookie, mask uint64) error {
+		capturedCookie, capturedMask = cookie, mask
 		return nil
 	})
 
@@ -873,19 +877,58 @@ func TestSDNServiceUnit_DeleteFlow_Success(t *testing.T) {
 	svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
 
 	ctx := context.Background()
-	req := &platformv1.DeleteFlowRequest{BridgeId: "br0", FlowId: "flow-123"}
+	req := &platformv1.DeleteFlowRequest{BridgeId: "br0", FlowId: "flow-0xa9f1000000000123"}
 
 	resp, err := svc.DeleteFlow(ctx, req)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.True(t, resp.Status.Success)
-	assert.Equal(t, "flow-123", capturedMatch)
+	assert.Equal(t, uint64(0xa9f1000000000123), capturedCookie)
+	assert.Equal(t, ^uint64(0), capturedMask)
+	assert.Empty(t, mockClient.calls["DeleteFlow"], "a flow ID is never a match")
+}
+
+func TestSDNServiceUnit_DeleteFlow_RefusesAnIDThatNamesNoFlow(t *testing.T) {
+	// "flow-to-delete" used to reach OVS as a match the encoder emptied,
+	// and the empty-match delete removed every flow on the bridge.
+	mockClient := NewConfigurableMockOVSClient()
+	svc := newTestSDNService(mockClient)
+	svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
+
+	for _, id := range []string{"flow-to-delete", "flow-0", "12345"} {
+		resp, err := svc.DeleteFlow(context.Background(), &platformv1.DeleteFlowRequest{BridgeId: "br0", FlowId: id})
+		assert.Nil(t, resp)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err), "id %q", id)
+	}
+	assert.Empty(t, mockClient.calls["DeleteFlowsByCookie"])
+	assert.Empty(t, mockClient.calls["DeleteFlow"])
+}
+
+func TestSDNServiceUnit_AddFlow_TheIDIsTheCookie(t *testing.T) {
+	mockClient := NewConfigurableMockOVSClient()
+	var installed *ovs.FlowMod
+	mockClient.OnAddFlow(func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
+		installed = flow
+		return nil
+	})
+	svc := newTestSDNService(mockClient)
+	svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
+
+	resp, err := svc.AddFlow(context.Background(), &platformv1.AddFlowRequest{
+		Config: &platformv1.FlowConfig{BridgeId: "br0", Priority: 100},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, installed)
+	assert.Equal(t, "flow-"+installed.Cookie, resp.Flow.Id, "the listing renders the same ID from the cookie")
+	cookie, err := ovs.ParseFlowID(resp.Flow.Id)
+	require.NoError(t, err)
+	assert.Equal(t, ovs.APIFlowCookieOwner, cookie&(0xFFFF<<48))
 }
 
 func TestSDNServiceUnit_DeleteFlow_OVSError(t *testing.T) {
 	mockClient := NewConfigurableMockOVSClient()
-	mockClient.OnDeleteFlow(func(ctx context.Context, bridgeName string, match string) error {
+	mockClient.OnDeleteFlowsByCookie(func(ctx context.Context, bridgeName string, cookie, mask uint64) error {
 		return errors.New("OVS delete flow failed")
 	})
 
@@ -1171,10 +1214,12 @@ func TestSDNServiceUnit_GetPortStats_OVSError(t *testing.T) {
 
 func TestSDNServiceUnit_GetFlowStats_Success(t *testing.T) {
 	mockClient := NewConfigurableMockOVSClient()
+	var query string
 	mockClient.OnGetFlowStats(func(ctx context.Context, bridgeName string, match string) ([]*ovs.Flow, error) {
+		query = match
 		return []*ovs.Flow{
 			{
-				Cookie:      match,
+				Cookie:      "0x7b",
 				PacketCount: 5000,
 				ByteCount:   500000,
 				Duration:    7200,
@@ -1196,6 +1241,18 @@ func TestSDNServiceUnit_GetFlowStats_Success(t *testing.T) {
 	assert.Equal(t, uint64(5000), resp.Stats.PacketCount)
 	assert.Equal(t, uint64(500000), resp.Stats.ByteCount)
 	assert.Equal(t, uint32(7200), resp.Stats.DurationSeconds)
+	assert.Equal(t, "cookie=0x7b/0xffffffffffffffff", query, "the request is scoped to the flow's own cookie")
+}
+
+func TestSDNServiceUnit_GetFlowStats_RefusesAnIDThatNamesNoFlow(t *testing.T) {
+	mockClient := NewConfigurableMockOVSClient()
+	svc := newTestSDNService(mockClient)
+	svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
+
+	resp, err := svc.GetFlowStats(context.Background(), &platformv1.GetFlowStatsRequest{BridgeId: "br0", FlowId: "in_port=1"})
+	assert.Nil(t, resp)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Empty(t, mockClient.calls["GetFlowStats"])
 }
 
 func TestSDNServiceUnit_GetFlowStats_NotFound(t *testing.T) {
@@ -1208,7 +1265,7 @@ func TestSDNServiceUnit_GetFlowStats_NotFound(t *testing.T) {
 	svc.bridges["br0"] = &bridgeResource{id: "uuid-br0", name: "br0"}
 
 	ctx := context.Background()
-	req := &platformv1.GetFlowStatsRequest{BridgeId: "br0", FlowId: "nonexistent"}
+	req := &platformv1.GetFlowStatsRequest{BridgeId: "br0", FlowId: "flow-0x99"}
 
 	resp, err := svc.GetFlowStats(ctx, req)
 

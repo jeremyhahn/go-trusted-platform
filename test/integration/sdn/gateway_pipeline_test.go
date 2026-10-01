@@ -149,12 +149,12 @@ func TestGatewayPipeline_FirewallVerdictsReachable(t *testing.T) {
 	t.Run("PipelineIsOwnedAndSecure", func(t *testing.T) {
 		require.True(t, rt.PipelineInstalled())
 		flows := pipelineFlows(ctx, t, client, bridge.name)
-		require.Len(t, flows, 3, "table 0 → 10 → 30 hand-off")
+		require.Len(t, flows, 4, "table 0 → 10 → 30 hand-off and the table-20 miss")
 		tables := map[int]bool{}
 		for _, f := range flows {
 			tables[f.Table] = true
 		}
-		require.True(t, tables[0] && tables[10] && tables[30], "%+v", flows)
+		require.True(t, tables[0] && tables[10] && tables[20] && tables[30], "%+v", flows)
 
 		b, err := client.GetBridge(ctx, bridge.name)
 		require.NoError(t, err)
@@ -210,9 +210,11 @@ func TestGatewayPipeline_NATTranslatesEgress(t *testing.T) {
 	clientEP := createNSEndpoint(t, bridge.name, "tpgwn-c", gwPipeNATClientIP+"/24", 0, "10.231.2.0/24")
 	uplink := createNSEndpoint(t, bridge.name, "tpgwn-u", gwPipeNATServerIP+"/24", 0, gwPipeNATInternal)
 	_ = clientEP
-	// The server must answer ARP for the external address so the
-	// translated datagram has a destination MAC on the far side.
-	runCmd(t, "ip", "netns", "exec", "tpgwn-u", "ip", "addr", "add", gwPipeNATExternal+"/24", "dev", uplink.PeerIf)
+	// The far side must NOT own the external address. The translated
+	// datagram is addressed to the server, whose MAC the client resolved;
+	// the external address is its source, and a namespace that owns a
+	// packet's source address drops it as a martian before any socket sees
+	// it. That is why this test never passed.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -321,24 +323,18 @@ func TestGatewayPipeline_LoadBalancerDispatchInstalled(t *testing.T) {
 	require.NoError(t, err, "the VIP the gateway config declared is registered")
 	require.NotZero(t, status.CTZone)
 
-	flows, err := client.GetFlowStats(ctx, bridge.name, fmt.Sprintf("table=%d", 26))
-	require.NoError(t, err)
+	// ovs-ofctl is the oracle: the native client's flow stats carry no
+	// rendered actions, so asserting on them could never pass.
+	dispatchDump := runCmd(t, "ovs-ofctl", "-O", "OpenFlow13", "dump-flows", bridge.name, "table=26")
 	dispatch := false
-	for _, f := range flows {
-		if strings.Contains(f.Match, lbVIPAddr) && strings.Contains(f.Actions, "group:") {
+	for _, line := range strings.Split(dispatchDump, "\n") {
+		if strings.Contains(line, lbVIPAddr) && strings.Contains(line, "group:") {
 			dispatch = true
 		}
 	}
-	require.True(t, dispatch, "table 26 carries the VIP's select-group dispatch: %+v", flows)
+	require.True(t, dispatch, "table 26 carries the VIP's select-group dispatch:\n%s", dispatchDump)
 
-	gate, err := client.GetFlowStats(ctx, bridge.name, "table=10")
-	require.NoError(t, err)
-	routed := false
-	for _, f := range gate {
-		if strings.Contains(f.Actions, "goto_table:20") || strings.Contains(f.Actions, "table=26") {
-			routed = true
-		}
-	}
-	require.True(t, routed, "the table-10 gate routes toward the LB dispatch: %+v", gate)
+	gateDump := runCmd(t, "ovs-ofctl", "-O", "OpenFlow13", "dump-flows", bridge.name, "table=10")
+	require.Contains(t, gateDump, "goto_table:20", "the table-10 gate routes toward the LB dispatch")
 	_ = loadbalancer.CookieLoadBalancer
 }

@@ -780,7 +780,7 @@ func TestMCPServiceProvider_SDNDeleteFlow_Success(t *testing.T) {
 	ctx := context.Background()
 
 	mockOVS := NewConfigurableMockOVSClient()
-	mockOVS.OnDeleteFlow(func(ctx context.Context, bridgeName string, match string) error {
+	mockOVS.OnDeleteFlowsByCookie(func(ctx context.Context, bridgeName string, cookie, mask uint64) error {
 		return nil
 	})
 
@@ -802,7 +802,7 @@ func TestMCPServiceProvider_SDNDeleteFlow_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	mockOVS := NewConfigurableMockOVSClient()
-	mockOVS.OnDeleteFlow(func(ctx context.Context, bridgeName string, match string) error {
+	mockOVS.OnDeleteFlowsByCookie(func(ctx context.Context, bridgeName string, cookie, mask uint64) error {
 		return errors.New("flow not found")
 	})
 
@@ -814,7 +814,7 @@ func TestMCPServiceProvider_SDNDeleteFlow_ServiceError(t *testing.T) {
 		Logger:     slog.Default(),
 	})
 
-	err := provider.SDNDeleteFlow(ctx, "br0", "nonexistent")
+	err := provider.SDNDeleteFlow(ctx, "br0", "flow-0x99")
 	if err == nil {
 		t.Fatal("expected error but got nil")
 	}
@@ -827,8 +827,10 @@ func TestMCPServiceProvider_SDNDeleteFlow_VariousFlowIDs(t *testing.T) {
 		expectError bool
 	}{
 		{"simple_id", "flow-1", false},
-		{"numeric_id", "12345", false},
-		{"uuid_id", "550e8400-e29b-41d4-a716-446655440000", false},
+		{"hex_id", "flow-0xa9f1000000000001", false},
+		// An ID is "flow-<cookie>"; anything else names no single flow.
+		{"numeric_id", "12345", true},
+		{"uuid_id", "550e8400-e29b-41d4-a716-446655440000", true},
 		// Empty flowID will fail validation in the SDN service
 		{"empty_id", "", true},
 	}
@@ -1431,7 +1433,7 @@ func TestMCPServiceProvider_SDN_TableDrivenScenarios(t *testing.T) {
 		{
 			name: "delete_flow_success",
 			setupMock: func(m *ConfigurableMockOVSClient) {
-				m.OnDeleteFlow(func(ctx context.Context, bridgeName string, match string) error {
+				m.OnDeleteFlowsByCookie(func(ctx context.Context, bridgeName string, cookie, mask uint64) error {
 					return nil
 				})
 			},

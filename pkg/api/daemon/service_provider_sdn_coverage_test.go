@@ -294,7 +294,7 @@ func TestSPSDNCov_AddFlow_OVSError(t *testing.T) {
 func TestSPSDNCov_DeleteFlow_Success(t *testing.T) {
 	ctx := context.Background()
 	mockClient := NewConfigurableMockOVSClient()
-	mockClient.OnDeleteFlow(func(ctx context.Context, bridgeName, match string) error {
+	mockClient.OnDeleteFlowsByCookie(func(ctx context.Context, bridgeName string, cookie, mask uint64) error {
 		return nil
 	})
 
