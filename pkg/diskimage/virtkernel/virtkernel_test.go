@@ -28,9 +28,12 @@ func repoBuilderDir(t *testing.T) string {
 }
 
 // fakeBuilderDir is a builder directory with the inputs the cache key hashes.
+// It sits one level down in its own temporary directory so the shared
+// kernel configuration (KernelConfigDir, a sibling of the builder) lands
+// inside that directory too.
 func fakeBuilderDir(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "virt-kernel-builder")
 	for _, rel := range configInputs {
 		path := filepath.Join(dir, rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -255,6 +258,11 @@ func TestBuild_RunsTheBuilderAndVerifiesTheManifest(t *testing.T) {
 	}
 	if len(rec.calls) != 2 || rec.calls[0][1] != "build" || rec.calls[1][1] != "run" {
 		t.Fatalf("calls = %v", rec.calls)
+	}
+	build := strings.Join(rec.calls[0], " ")
+	wantContext := "--build-context kernelconfig=" + filepath.Join(filepath.Dir(builder), "kernel-config")
+	if !strings.Contains(build, wantContext) {
+		t.Errorf("docker build lacks %q:\n%s", wantContext, build)
 	}
 	run := strings.Join(rec.calls[1], " ")
 	for _, want := range []string{

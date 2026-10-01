@@ -614,7 +614,24 @@ init:
 	sudo mkdir -p /etc/qemu/
 	sudo /bin/bash -c 'echo "allow virbr0" > /etc/qemu/bridge.conf'
 	sudo chmod u+s /usr/lib/qemu/qemu-bridge-helper
-	docker run --rm --privileged multiarch/qemu-user-static --reset -p yes || true
+	$(MAKE) binfmt
+
+# binfmt registers qemu-user for arm64 (and arm) with the F flag, which every
+# --platform linux/arm64 container on this host runs through: the strongSwan
+# and Raspberry Pi builds, the assemble container, the arm64 userspace suite.
+# The image is pinned by digest. multiarch/qemu-user-static, used before,
+# ships qemu 7.2 (2023), under which Alpine 3.22's gcc 14 segfaults at random
+# (measured 2026-10-01: cc1 and collect2 SIGSEGV in two strongSwan arm64
+# builds); tonistiigi/binfmt at this digest is qemu 10.2.3. The old handlers
+# are removed first, because an existing registration is never replaced.
+BINFMT_IMAGE ?= tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+
+.PHONY: binfmt
+## binfmt: Register qemu-user (pinned tonistiigi/binfmt, qemu 10.2.3) for arm64/arm container builds
+binfmt:
+	docker run --rm --privileged $(BINFMT_IMAGE) --uninstall 'qemu-aarch64,qemu-arm'
+	docker run --rm --privileged $(BINFMT_IMAGE) --install arm64,arm
+	@grep -h interpreter /proc/sys/fs/binfmt_misc/qemu-aarch64
 
 
 .PHONY: tools
@@ -3810,6 +3827,25 @@ virt-kernel-verify:
 virt-kernel-clean:
 	$(MAKE) -C build/docker/virt-kernel-builder clean OUTPUT_DIR=$(abspath $(VIRT_KERNEL_OUTPUT_DIR))
 
+# The platform-required kernel options (build/docker/kernel-config) checked
+# against the Alpine kernels the platform ships but does not build: linux-lts
+# on x86_64 and aarch64, linux-rpi on aarch64. Built in or module both count;
+# the arm64 run needs binfmt (as the assemble container does). Fails, after
+# checking every package, if any of them misses an option. The amd64 run is
+# last so the local alpine:<release> tag, which a --platform run re-points,
+# is left on amd64 for the builders that use it untagged.
+KERNEL_CONFIG_ALPINE_RELEASE ?= 3.22
+
+.PHONY: kernel-config-check-alpine
+## kernel-config-check-alpine: Check Alpine's linux-lts (x86_64, aarch64) and linux-rpi kernel configs against the platform-required options
+kernel-config-check-alpine:
+	@rc=0; \
+	docker run --rm --platform linux/arm64 -v $(PWD)/build/docker/kernel-config:/kc:ro \
+		alpine:$(KERNEL_CONFIG_ALPINE_RELEASE) /bin/sh /kc/check-alpine-kernels.sh linux-lts linux-rpi || rc=$$?; \
+	docker run --rm --platform linux/amd64 -v $(PWD)/build/docker/kernel-config:/kc:ro \
+		alpine:$(KERNEL_CONFIG_ALPINE_RELEASE) /bin/sh /kc/check-alpine-kernels.sh linux-lts || rc=$$?; \
+	exit $$rc
+
 .PHONY: uboot-verify
 ## uboot-verify: Recompute the SHA256SUMS of the built U-Boot artifacts
 uboot-verify:
@@ -3819,6 +3855,144 @@ uboot-verify:
 ## uboot-clean: Remove the built U-Boot artifacts
 uboot-clean:
 	$(MAKE) -C build/docker/uboot-builder clean OUTPUT_DIR=$(abspath $(UBOOT_OUTPUT_DIR))
+
+# strongSwan for the overlay's IPsec transport (build/docker/strongswan-builder,
+# docs/sdn/engineering.md "IPsec transport"): charon + swanctl from a pinned
+# release whose tarball must carry the pinned release key's signature and the
+# pinned SHA-256, built for Alpine 3.22 (musl) on amd64 and arm64 (arm64 under
+# binfmt/qemu-user) and packaged as signed apks with an OpenRC service. Sign
+# with APK_SIGNING_KEY=<path>/<name>.rsa (<name>.rsa.pub beside it); without
+# it the build uses a per-build ephemeral key (dev only).
+STRONGSWAN_OUTPUT_DIR ?= build/docker/strongswan-builder/output
+STRONGSWAN_ARCHES     ?= amd64 arm64
+
+.PHONY: strongswan-build
+## strongswan-build: Build the signed trusted-platform-strongswan apks (amd64, arm64) from the signature-verified strongSwan release
+strongswan-build:
+	$(MAKE) -C build/docker/strongswan-builder build OUTPUT_DIR=$(abspath $(STRONGSWAN_OUTPUT_DIR)) ARCHES="$(STRONGSWAN_ARCHES)"
+
+.PHONY: strongswan-verify
+## strongswan-verify: Re-verify the strongSwan apks: SHA256SUMS, apk and APKINDEX signatures, plugin set, source signature
+strongswan-verify:
+	$(MAKE) -C build/docker/strongswan-builder verify OUTPUT_DIR=$(abspath $(STRONGSWAN_OUTPUT_DIR)) ARCHES="$(STRONGSWAN_ARCHES)"
+
+.PHONY: strongswan-clean
+## strongswan-clean: Remove the built strongSwan apks (and a dev build's ephemeral signing key)
+strongswan-clean:
+	$(MAKE) -C build/docker/strongswan-builder clean OUTPUT_DIR=$(abspath $(STRONGSWAN_OUTPUT_DIR))
+
+# The ipsec integration suite (test/integration/ipsec) runs two musl charon
+# peers, each in its own network namespace, authenticating IKEv2 through the
+# go-xkms PKCS#11 module, and asserts the ESP SAs with `ip xfrm`. It runs on
+# both architectures: natively in the devcontainer on amd64, and inside an
+# aarch64 VM (qemu-system-aarch64, TCG) on arm64, because qemu-user refuses
+# NETLINK_XFRM and charon will not start without it. Its inputs are built
+# here, on the host, per architecture:
+#   - rootfs-<arch>.tar: Alpine with the strongSwan apks installed through apk
+#     (signatures checked);
+#   - modulehost-<arch>.tar: a glibc root filesystem (Ubuntu 26.04, p11-kit
+#     0.26.2 like Alpine's client) whose p11-kit server hosts the module,
+#     built c-shared against glibc: a Go c-shared library cannot be loaded by
+#     a musl process (golang/go#13492), so charon loads p11-kit-client.so
+#     (docs/sdn/engineering.md §9.2);
+#   - for arm64, the VM's kernel and initramfs and the suite's own test
+#     binary cross-compiled for arm64.
+# IPSEC_XKMS_VERSION pins the go-xkms the module is built from: the first
+# whose module survives C_Finalize + C_Initialize (which p11-kit's server
+# performs on every connection) and signs raw CKM_ECDSA (which strongSwan
+# uses), both from go-xkms#1387, released in v0.48.0-alpha. The go-xkms the
+# platform's go.mod resolves (v0.17.0-alpha) predates both fixes.
+IPSEC_WORK_DIR     := work/ipsec
+IPSEC_ARCHES       := amd64 arm64
+IPSEC_PEER_IMAGE   := trusted-platform-ipsec-peer
+IPSEC_HOST_IMAGE   := trusted-platform-ipsec-modulehost
+IPSEC_XKMS_VERSION ?= v0.48.0-alpha
+# --init: the peers' OpenRC services run supervise-daemon, whose `--stop`
+# waits for the supervisor's PID to disappear. The supervisor is reparented
+# to the container's PID 1 when it exits, and `go test` as PID 1 never reaps
+# it, so without an init the zombie keeps `rc-service charon stop` waiting
+# forever (measured: [supervise-daemo] <defunct> under PID 1).
+IPSEC_SUITE_ENV := --init \
+	-e IPSEC_ROOTFS_AMD64=/workspace/$(IPSEC_WORK_DIR)/rootfs-amd64.tar \
+	-e IPSEC_ROOTFS_ARM64=/workspace/$(IPSEC_WORK_DIR)/rootfs-arm64.tar \
+	-e IPSEC_MODULE_HOST_AMD64=/workspace/$(IPSEC_WORK_DIR)/modulehost-amd64.tar \
+	-e IPSEC_MODULE_HOST_ARM64=/workspace/$(IPSEC_WORK_DIR)/modulehost-arm64.tar \
+	-e IPSEC_VM_KERNEL=/workspace/$(IPSEC_WORK_DIR)/vm/Image \
+	-e IPSEC_VM_INITRD=/workspace/$(IPSEC_WORK_DIR)/vm/initrd.gz \
+	-e IPSEC_TEST_ARM64=/workspace/$(IPSEC_WORK_DIR)/ipsec-arm64.test \
+	-e IPSEC_WORK_DIR=/tmp/ipsec-integration
+
+.PHONY: ipsec-peer-rootfs
+## ipsec-peer-rootfs: Export the ipsec suite's Alpine peer root filesystems (amd64, arm64) with the strongSwan apks installed
+ipsec-peer-rootfs:
+	@mkdir -p $(IPSEC_WORK_DIR)
+	@for a in $(IPSEC_ARCHES); do \
+		docker build --platform linux/$$a --build-context apks=$(abspath $(STRONGSWAN_OUTPUT_DIR)) \
+			-t $(IPSEC_PEER_IMAGE):$$a test/integration/ipsec/peer || exit 1; \
+		cid=$$(docker create --platform linux/$$a $(IPSEC_PEER_IMAGE):$$a) || exit 1; \
+		docker export -o $(IPSEC_WORK_DIR)/rootfs-$$a.tar $$cid; rc=$$?; \
+		docker rm $$cid >/dev/null; \
+		[ $$rc -eq 0 ] || exit $$rc; \
+		echo "$(IPSEC_WORK_DIR)/rootfs-$$a.tar"; \
+	done
+
+.PHONY: ipsec-pkcs11-module
+## ipsec-pkcs11-module: Build the go-xkms PKCS#11 module (IPSEC_XKMS_VERSION) c-shared against glibc, amd64 and arm64
+ipsec-pkcs11-module:
+	@mkdir -p $(IPSEC_WORK_DIR)/xkms-module
+	@# A throwaway module that requires exactly the pinned go-xkms release (its
+	@# sdk/go is a nested module, so the go-xkms tree itself cannot be built
+	@# from the module cache). Resolving it here, on the host, fills the module
+	@# cache through the host's credentials; the builds then run offline.
+	cd $(IPSEC_WORK_DIR)/xkms-module && rm -f go.mod go.sum && \
+		GOWORK=off go mod init ipsec-pkcs11-module >/dev/null 2>&1 && \
+		GOWORK=off go get github.com/jeremyhahn/go-xkms@$(IPSEC_XKMS_VERSION) github.com/jeremyhahn/go-xkms/sdk/go@$(IPSEC_XKMS_VERSION) && \
+		GOWORK=off GOFLAGS=-mod=mod go list -deps github.com/jeremyhahn/go-xkms/cmd/pkcs11-module >/dev/null
+	@for a in $(IPSEC_ARCHES); do \
+		mkdir -p $(IPSEC_WORK_DIR)/$$a && \
+		docker run --rm --platform linux/$$a --user $$(id -u):$$(id -g) \
+			-v $(abspath $(IPSEC_WORK_DIR)):/work -v $(GO_MODULE_CACHE):/go/pkg/mod:ro -w /work/xkms-module \
+			-e HOME=/tmp -e GOCACHE=/tmp/gocache -e GOWORK=off -e GOFLAGS=-mod=mod -e GOPROXY=off -e GOSUMDB=off -e CGO_ENABLED=1 \
+			golang:1.27-bookworm \
+			go build -buildmode=c-shared -trimpath -o /work/$$a/libxkms_pkcs11.so github.com/jeremyhahn/go-xkms/cmd/pkcs11-module || exit 1; \
+		echo "$(IPSEC_WORK_DIR)/$$a/libxkms_pkcs11.so"; \
+	done
+
+.PHONY: ipsec-module-host
+## ipsec-module-host: Export the ipsec suite's glibc module-host root filesystems (p11-kit 0.26 server + the module), amd64 and arm64
+ipsec-module-host: ipsec-pkcs11-module
+	@for a in $(IPSEC_ARCHES); do \
+		docker build --platform linux/$$a --build-context module=$(abspath $(IPSEC_WORK_DIR))/$$a \
+			-t $(IPSEC_HOST_IMAGE):$$a test/integration/ipsec/modulehost || exit 1; \
+		cid=$$(docker create --platform linux/$$a $(IPSEC_HOST_IMAGE):$$a /bin/true) || exit 1; \
+		docker export -o $(IPSEC_WORK_DIR)/modulehost-$$a.tar $$cid; rc=$$?; \
+		docker rm $$cid >/dev/null; \
+		[ $$rc -eq 0 ] || exit $$rc; \
+		echo "$(IPSEC_WORK_DIR)/modulehost-$$a.tar"; \
+	done
+
+.PHONY: ipsec-arm64-vm
+## ipsec-arm64-vm: Build the ipsec suite's aarch64 VM (kernel + initramfs) and the suite's test binary for arm64
+ipsec-arm64-vm:
+	@mkdir -p $(IPSEC_WORK_DIR)/vm
+	docker build --output type=local,dest=$(IPSEC_WORK_DIR)/vm test/integration/ipsec/vm
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOWORK=off go test -c -tags "$(strip $(TEST_BUILD_TAGS))" \
+		-o $(IPSEC_WORK_DIR)/ipsec-arm64.test ./test/integration/ipsec/
+
+.PHONY: ipsec-test-inputs
+## ipsec-test-inputs: Build every input of the ipsec integration suite from the strongSwan apks already built
+ipsec-test-inputs: ipsec-peer-rootfs ipsec-module-host ipsec-arm64-vm
+
+.PHONY: integration-test-ipsec
+## integration-test-ipsec: IKEv2 through the go-xkms PKCS#11 module between musl charon peers, ESP asserted with ip xfrm, on amd64 and in an aarch64 VM (builds the apks first)
+integration-test-ipsec: build-devcontainer strongswan-build ipsec-test-inputs
+	$(call run-integration-suite,ipsec,$(IPSEC_SUITE_ENV))
+
+.PHONY: integration-test-ipsec-only
+## integration-test-ipsec-only: The ipsec suite against inputs already in work/ipsec (no rebuild)
+integration-test-ipsec-only: build-devcontainer
+	$(call run-integration-suite,ipsec,$(IPSEC_SUITE_ENV))
+
 
 .PHONY: docker-builder-load-aarch64
 docker-builder-load-aarch64:

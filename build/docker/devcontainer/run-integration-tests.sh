@@ -12,7 +12,8 @@
 #                Known targets: the keys of TARGET_PACKAGES below — all, bmc,
 #                bootstrap, ca, ceremony, piv, luks, fido2, provision,
 #                secureboot, device, tpm, cold-start, barrier-gate,
-#                restroutes, sdn, proxy, ntp, tenant, iam, attestation, lb.
+#                restroutes, sdn, proxy, ntp, tenant, iam, attestation, lb,
+#                nat64, diskimage, netboot, ipsec.
 #                If the first argument is not a known target, it is treated
 #                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
 #                Default: all
@@ -57,6 +58,7 @@ declare -A TARGET_PACKAGES=(
     [netboot]="./test/integration/netboot"
     [lb]="./test/integration/sdn/"
     [nat64]="./test/integration/nat64"
+    [ipsec]="./test/integration/ipsec"
 )
 
 # Per-target -run filter, for a target that is one test of a larger
@@ -73,6 +75,7 @@ declare -A TARGET_TIMEOUTS=(
     [diskimage]="90m"
     [netboot]="40m"
     [nat64]="15m"
+    [ipsec]="40m"
 )
 
 RUN_TARGET="all"
@@ -765,6 +768,20 @@ elif [ "$RUN_TARGET" = "netboot" ]; then
     echo "u-boot dir:${NETBOOT_UBOOT_DIR:-<unset>}"
     echo "rpi apks:  ${NETBOOT_RPI_APK_DIR:-<unset>}"
     echo "work dir:  ${NETBOOT_WORK_DIR}"
+elif [ "$RUN_TARGET" = "ipsec" ]; then
+    # The IPsec suite runs strongSwan peers in their own network namespaces
+    # and needs no platform daemon. Its inputs -- per arch the peer root
+    # filesystems and glibc module hosts, plus the aarch64 VM and the arm64
+    # test binary -- come from the host build (make integration-test-ipsec)
+    # through IPSEC_*; the suite fails, not skips, when they are unset.
+    echo "=== ipsec target: skipping shared platformd ==="
+    export IPSEC_WORK_DIR="${IPSEC_WORK_DIR:-/tmp/ipsec-integration}"
+    rm -rf "${IPSEC_WORK_DIR}"
+    mkdir -p "${IPSEC_WORK_DIR}"
+    for v in IPSEC_ROOTFS_AMD64 IPSEC_ROOTFS_ARM64 IPSEC_MODULE_HOST_AMD64 IPSEC_MODULE_HOST_ARM64 \
+        IPSEC_VM_KERNEL IPSEC_VM_INITRD IPSEC_TEST_ARM64; do
+        echo "${v}: ${!v:-<unset>}"
+    done
 else
     # platformd is required for every daemon-dependent suite. A failed bring-up
     # ends the run; see abort_no_daemon.

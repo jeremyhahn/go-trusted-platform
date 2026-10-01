@@ -32,5 +32,11 @@ RUN wget -O /build/get-verified-tarball \
 COPY build-fips-kernel.sh /build/
 RUN chmod +x /build/build-fips-kernel.sh
 
+# The options every platform kernel carries and the check that enforces them,
+# shared with the virt kernel builder. "kernelconfig" is a named build context
+# (docker build --build-context kernelconfig=../kernel-config): baked in, not
+# mounted, because pkg/iso runs this image with only /output mounted.
+COPY --from=kernelconfig platform-required.config require-config.sh /build/kernel-config/
+
 # Set entrypoint
 ENTRYPOINT ["/build/build-fips-kernel.sh"]

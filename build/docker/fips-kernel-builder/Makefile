@@ -19,6 +19,9 @@
 KERNEL_VERSION ?= 6.12.8
 OUTPUT_DIR ?= $(PWD)/output
 DOCKER_IMAGE ?= fips-kernel-builder
+# The options every platform kernel carries (build/docker/kernel-config),
+# baked into the image through the kernelconfig named build context.
+KERNEL_CONFIG_DIR := ../kernel-config
 
 # Stable platform module-signing key (PEM bundle: private key + certificate).
 # Generate with `make module-key` (wraps `platformctl iso module-signing-key`).
@@ -34,11 +37,20 @@ else
 KEY_MOUNT_ARGS :=
 endif
 
-.PHONY: all build module-key clean test
+.PHONY: all build image config-check module-key clean test
 
 all: build
 
-build:
+image:
+	docker build --build-context kernelconfig=$(KERNEL_CONFIG_DIR) -t $(DOCKER_IMAGE) .
+
+# config-check runs the configuration phase only (defconfig, the settings in
+# build-fips-kernel.sh, the platform-required fragment, olddefconfig,
+# require-config.sh) and builds nothing.
+config-check: image
+	docker run --rm -e KERNEL_VERSION=$(KERNEL_VERSION) -e KERNEL_CONFIG_ONLY=1 $(DOCKER_IMAGE)
+
+build: image
 	@echo "Building FIPS-capable kernel ${KERNEL_VERSION}..."
 ifeq ($(MODULE_SIGNING_KEY),)
 	@echo "WARNING: MODULE_SIGNING_KEY not set — kernel will use a per-build ephemeral module-signing key (dev only)."
@@ -47,7 +59,6 @@ else
 	@test -f "$(MODULE_SIGNING_KEY)" || { echo "ERROR: MODULE_SIGNING_KEY '$(MODULE_SIGNING_KEY)' does not exist (run 'make module-key')"; exit 1; }
 endif
 	@mkdir -p $(OUTPUT_DIR)
-	docker build -t $(DOCKER_IMAGE) .
 	docker run --rm \
 		-v $(OUTPUT_DIR):/output \
 		$(KEY_MOUNT_ARGS) \

@@ -1,0 +1,16 @@
+# Configuration for /etc/init.d/charon.
+#
+# Extra arguments for charon (it has few; settings belong in
+# /etc/strongswan.conf and /etc/strongswan.d/).
+#CHARON_OPTS=""
+
+# supervise-daemon restart policy.
+#CHARON_RESPAWN_DELAY=2
+#CHARON_RESPAWN_MAX=10
+#CHARON_RESPAWN_PERIOD=60
+
+# Environment for the PKCS#11 provider charon loads (the pkcs11 plugin's
+# modules are configured in /etc/strongswan.d/charon/pkcs11.conf). For
+# example, when the provider is p11-kit-client.so talking to a p11-kit
+# server socket:
+#export P11_KIT_SERVER_ADDRESS="unix:path=/run/xkms/p11-kit.sock"

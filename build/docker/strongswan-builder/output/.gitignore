@@ -1,0 +1,4 @@
+# Built strongSwan apks (and a dev build's ephemeral signing key) are
+# produced by `make strongswan-build`; never commit them.
+*
+!.gitignore

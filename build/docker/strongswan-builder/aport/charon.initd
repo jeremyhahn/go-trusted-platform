@@ -1,0 +1,31 @@
+#!/sbin/openrc-run
+# strongSwan charon, the IKEv2 daemon of the Trusted Platform overlay.
+#
+# supervise-daemon restarts charon if it dies. charon starts as root, binds
+# the IKE ports and opens the kernel IPsec interface, then switches to the
+# strongswan user keeping only the capabilities its plugins ask for --
+# CAP_NET_ADMIN, for kernel-netlink (the package is built
+# --with-user=strongswan --with-group=strongswan --with-capabilities=libcap).
+# charon writes its own /run/charon.pid, so this script does not give it one.
+
+description="strongSwan charon IKEv2 daemon"
+supervisor="supervise-daemon"
+command="/usr/lib/strongswan/charon"
+command_args="${CHARON_OPTS}"
+respawn_delay="${CHARON_RESPAWN_DELAY:-2}"
+respawn_max="${CHARON_RESPAWN_MAX:-10}"
+respawn_period="${CHARON_RESPAWN_PERIOD:-60}"
+extra_started_commands="reload"
+description_reload="Reload strongswan.conf and the swanctl configuration"
+
+depend() {
+	need net
+	after firewall
+	provide ipsec
+}
+
+reload() {
+	ebegin "Reloading ${RC_SVCNAME}"
+	/usr/sbin/swanctl --reload-settings
+	eend $?
+}

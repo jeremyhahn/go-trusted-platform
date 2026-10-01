@@ -23,6 +23,15 @@ The kernel is built with:
 - `CONFIG_CRYPTO_MANAGER_DISABLE_TESTS=n` - Enable crypto self-tests (required for FIPS)
 - TPM support (built-in for early boot)
 - LUKS/dm-crypt support
+- The platform-required options shared with the virt kernel builder,
+  `build/docker/kernel-config/platform-required.config`: the overlay datapath
+  (OVS, VXLAN), IPsec (ESP, XFRM_USER, GCM), conntrack/NAT, VRF, vsock,
+  `MODULE_SIG_FORCE`, the lockdown LSM, IMA appraisal, core scheduling,
+  `CRYPTO_FIPS` and the DRBG. The fragment is baked into the image through the
+  `kernelconfig` named build context (`docker build --build-context
+  kernelconfig=../kernel-config`), merged after the settings in
+  `build-fips-kernel.sh`, and `require-config.sh` fails the build if
+  `olddefconfig` dropped or changed any of its lines.
 
 ## Module-Signing Key (Production)
 
@@ -53,11 +62,18 @@ make build
 ```
 
 This will:
-1. Build the Docker image
+1. Build the Docker image (with the `kernelconfig` build context)
 2. Download and cryptographically verify the kernel source from kernel.org
-3. Configure the kernel with FIPS enabled
+3. Configure the kernel with FIPS enabled and the platform-required options, and fail if any was dropped
 4. Compile the kernel and modules
 5. Extract artifacts to `output/`
+
+Check the configuration only (defconfig, the settings, the required fragment,
+`olddefconfig`, `require-config.sh`; nothing is compiled):
+
+```bash
+make config-check
+```
 
 Clean build artifacts:
 

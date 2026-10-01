@@ -8,6 +8,11 @@
 #   KERNEL_SHA256     sha256 of linux-$KERNEL_VERSION.tar.xz (fail-closed)
 #   KERNEL_CACHE_KEY  the key the caller derived from every build input
 #   KERNEL_LOCALVERSION  appended to the version (Alpine flavour naming)
+#   KERNEL_CONFIG_ONLY  1 stops after the configuration is checked (no
+#                     compile, no output): `make config-check`
+# Baked into the image (the kernelconfig build context):
+#   /build/kernel-config  platform-required.config + require-config.sh, shared
+#                         with the fips kernel builder
 # Mounts:
 #   /configs   the Kconfig fragment (virt.config)   read-only
 #   /output    artifacts + manifest.json
@@ -23,7 +28,11 @@ OUT=/output
 CFG=/configs
 SRC=/build/src
 
-[ -r "$CFG/virt.config" ] || { echo "missing builder input $CFG/virt.config" >&2; exit 2; }
+SHARED=/build/kernel-config
+
+for f in "$CFG/virt.config" "$SHARED/platform-required.config" "$SHARED/require-config.sh"; do
+    [ -r "$f" ] || { echo "missing builder input $f" >&2; exit 2; }
+done
 
 mkdir -p "$SRC" "$OUT"
 tarball="linux-${KERNEL_VERSION}.tar.xz"
@@ -41,25 +50,21 @@ tar -C "$work" -xJf "$SRC/$tarball"
 cd "$work/linux-${KERNEL_VERSION}"
 
 # --- Configuration --------------------------------------------------------
-# arm64 defconfig, then the fragment. merge_config.sh keeps every fragment
-# line that Kconfig accepts; require_config fails the build on any it
-# dropped, so an unmet dependency is a build failure, not a silent downgrade.
+# arm64 defconfig, then the stand-in's fragment and the options every
+# platform kernel carries. merge_config.sh keeps every fragment line that
+# Kconfig accepts; require-config.sh fails the build on any it dropped, so an
+# unmet dependency is a build failure, not a silent downgrade.
 make -s ARCH=arm64 defconfig
-./scripts/kconfig/merge_config.sh -m .config "$CFG/virt.config" >/dev/null
+./scripts/kconfig/merge_config.sh -m .config "$CFG/virt.config" "$SHARED/platform-required.config" >/dev/null
 ./scripts/config --set-str CONFIG_LOCALVERSION "$LOCALVERSION"
 ./scripts/config --disable CONFIG_LOCALVERSION_AUTO
 make -s ARCH=arm64 olddefconfig
-
-require_config() {
-    local fragment="$1" line
-    while IFS= read -r line; do
-        case "$line" in
-            ''|'#'*) continue ;;
-        esac
-        grep -qxF "$line" .config || { echo "$fragment: $line was dropped by Kconfig (unmet dependency?)" >&2; exit 3; }
-    done < "$fragment"
-}
-require_config "$CFG/virt.config"
+"$SHARED/require-config.sh" .config "$CFG/virt.config" "$SHARED/platform-required.config"
+echo "configuration carries $CFG/virt.config and $SHARED/platform-required.config"
+if [ "${KERNEL_CONFIG_ONLY:-0}" = 1 ]; then
+    echo "KERNEL_CONFIG_ONLY=1: configuration checked, nothing built"
+    exit 0
+fi
 
 # --- Build ----------------------------------------------------------------
 echo "=== building linux-${KERNEL_VERSION}${LOCALVERSION} for arm64"

@@ -40,6 +40,12 @@ WORKDIR /build
 COPY build-virt-kernel.sh /build/
 RUN chmod +x /build/build-virt-kernel.sh
 
+# The options every platform kernel carries and the check that enforces them,
+# shared with the fips kernel builder. "kernelconfig" is a named build context
+# (docker build --build-context kernelconfig=../kernel-config), so the one
+# copy in build/docker/kernel-config is what both images bake in.
+COPY --from=kernelconfig platform-required.config require-config.sh /build/kernel-config/
+
 ENV ARCH=arm64
 ENV CROSS_COMPILE=aarch64-none-elf-
 ENTRYPOINT ["/build/build-virt-kernel.sh"]

@@ -8,6 +8,7 @@ aarch64 toolchain the U-Boot builder uses.
 ```
 make build            # output/virt/{vmlinuz-virt,modules-virt.tar.gz,config-virt,System.map-virt,kernel-version.txt,SHA256SUMS}
 make verify           # recompute SHA256SUMS
+make config-check     # configuration phase only (KERNEL_CONFIG_ONLY=1): proves every fragment line survives Kconfig, builds nothing
 ```
 
 or, from the repository root, `make virt-kernel-build`. `output/manifest.json`
@@ -33,8 +34,14 @@ This kernel is the arm64 defconfig plus `configs/virt.config`: the TIS and CRB
 TPM drivers built in, the virtio devices, dm-crypt and the LUKS ciphers, ext4
 and FAT, the EFI stub, the PL011 console, and the same integrity posture as
 Alpine's kernels — signed modules (`MODULE_SIG_ALL`, a per-build key like
-Alpine's) and the lockdown LSM the platform boots with. `require_config` in
-`build-virt-kernel.sh` fails the build if Kconfig drops any fragment line, so
+Alpine's) and the lockdown LSM the platform boots with. On top of that it
+merges `build/docker/kernel-config/platform-required.config`, the options
+every platform kernel carries (the overlay datapath, IPsec, conntrack/NAT,
+VRF, vsock, `MODULE_SIG_FORCE`, IMA appraisal, core scheduling, `CRYPTO_FIPS`),
+shared with the fips kernel builder and baked into the image through the
+`kernelconfig` named build context (`docker build --build-context
+kernelconfig=../kernel-config`). `require-config.sh` from the same directory
+fails the build if Kconfig drops or changes any line of either fragment, so
 an unmet dependency is a build failure rather than a silent downgrade.
 
 ## What the stand-in does and does not share with the Pi

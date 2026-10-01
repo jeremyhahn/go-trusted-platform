@@ -42,12 +42,20 @@ const (
 	Hint = "run `make virt-kernel-build`"
 )
 
+// KernelConfigDir is the shared platform kernel configuration
+// (build/docker/kernel-config), relative to the builder directory: the
+// options every platform kernel carries and the check that enforces them.
+// The image bakes it in through the "kernelconfig" named build context.
+const KernelConfigDir = "../kernel-config"
+
 // configInputs are the builder inputs, relative to the builder directory,
 // in the order the cache key hashes them.
 var configInputs = []string{
 	"configs/virt.config",
 	"build-virt-kernel.sh",
 	"Dockerfile",
+	KernelConfigDir + "/platform-required.config",
+	KernelConfigDir + "/require-config.sh",
 }
 
 // ManifestName is the file the builder writes beside the flavour directory.
@@ -135,7 +143,7 @@ func (o *Options) withDefaults() Options {
 
 // CacheKey derives the key that identifies a build by its inputs: the
 // release version with its local version, then the Kconfig fragment, the
-// build script and the Dockerfile. It is byte-for-byte the value
+// build script, the Dockerfile and the shared platform kernel configuration. It is byte-for-byte the value
 // `make cache-key` prints in the builder directory:
 // "virt-kernel:<version><localversion>" then the hex sha256 of each input
 // in configInputs order, one per line, hashed with sha256.
@@ -178,7 +186,9 @@ func Build(ctx context.Context, opts Options) (*Artifacts, error) {
 			return art, nil
 		}
 	}
-	if _, err := o.Runner(ctx, o.Runtime, "build", "-t", o.Image, o.BuilderDir); err != nil {
+	if _, err := o.Runner(ctx, o.Runtime, "build",
+		"--build-context", "kernelconfig="+artifacts.AbsPath(filepath.Join(o.BuilderDir, KernelConfigDir)),
+		"-t", o.Image, o.BuilderDir); err != nil {
 		return nil, &BuildError{Step: "building the builder image", Err: err}
 	}
 	if err := os.MkdirAll(o.OutputDir, 0o755); err != nil {

@@ -18,9 +18,12 @@ CACHE_DIR    ?= $(HOME)/.cache/trusted-platform/virt-kernel
 DOCKER       ?= docker
 DOCKER_IMAGE ?= trusted-platform-virt-kernel-builder:$(KERNEL_VERSION)
 
-CONFIG_INPUTS := configs/virt.config build-virt-kernel.sh Dockerfile
+# The shared platform kernel options (build/docker/kernel-config) are inputs
+# too: the image bakes them in through the kernelconfig build context.
+KERNEL_CONFIG_DIR := ../kernel-config
+CONFIG_INPUTS := configs/virt.config build-virt-kernel.sh Dockerfile $(KERNEL_CONFIG_DIR)/platform-required.config $(KERNEL_CONFIG_DIR)/require-config.sh
 
-.PHONY: all build image cache-key verify clean
+.PHONY: all build config-check image cache-key verify clean
 
 all: build
 
@@ -33,7 +36,7 @@ cache-key:
 	@echo $(KERNEL_CACHE_KEY)
 
 image:
-	$(DOCKER) build -t $(DOCKER_IMAGE) .
+	$(DOCKER) build --build-context kernelconfig=$(KERNEL_CONFIG_DIR) -t $(DOCKER_IMAGE) .
 
 build: image
 	@mkdir -p $(OUTPUT_DIR) $(CACHE_DIR)
@@ -50,6 +53,22 @@ build: image
 	@echo ""
 	@echo "Build complete. Artifacts in: $(OUTPUT_DIR)"
 	@ls -lR $(OUTPUT_DIR) | grep -v '^total'
+
+# config-check runs the configuration phase only (defconfig, the fragments,
+# olddefconfig, require-config.sh) and builds nothing: the quick proof that
+# every fragment line survives Kconfig, e.g. after a kernel version bump.
+config-check: image
+	@mkdir -p $(CACHE_DIR)
+	$(DOCKER) run --rm \
+		-v $(CURDIR)/configs:/configs:ro \
+		-v $(abspath $(CACHE_DIR)):/build/src \
+		-e KERNEL_VERSION=$(KERNEL_VERSION) \
+		-e KERNEL_SHA256=$(KERNEL_SHA256) \
+		-e KERNEL_LOCALVERSION=$(KERNEL_LOCALVERSION) \
+		-e KERNEL_FLAVOR=$(KERNEL_FLAVOR) \
+		-e KERNEL_CACHE_KEY=$(KERNEL_CACHE_KEY) \
+		-e KERNEL_CONFIG_ONLY=1 \
+		$(DOCKER_IMAGE)
 
 verify:
 	@for d in $(OUTPUT_DIR)/*/; do (cd "$$d" && sha256sum -c --quiet SHA256SUMS && echo "$$d: ok"); done

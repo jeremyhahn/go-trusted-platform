@@ -24,12 +24,26 @@
 #   When MODULE_SIGNING_KEY is unset the kernel auto-generates a per-build
 #   ephemeral key — DEV BUILDS ONLY (out-of-tree signing is impossible because
 #   the ephemeral private key is discarded with the build tree).
+#
+# Required options:
+#   The options every platform kernel carries (the overlay datapath, IPsec,
+#   conntrack/NAT, VRFs, vsock, MODULE_SIG_FORCE, the lockdown LSM, IMA
+#   appraisal, core scheduling, CRYPTO_FIPS and the DRBG) are one shared
+#   fragment, /build/kernel-config/platform-required.config, baked into the
+#   image from build/docker/kernel-config (the kernelconfig build context). It
+#   is merged on top of the settings below and require-config.sh fails the
+#   build if olddefconfig dropped or changed any of its lines.
+#
+#   KERNEL_CONFIG_ONLY=1 stops after that check (no compile, no output):
+#   `make config-check`.
 set -euo pipefail
 
 # Configuration from environment or defaults
 # Use 6.12.8 to match Alpine 3.22 LTS kernel
 KERNEL_VERSION="${KERNEL_VERSION:-6.12.8}"
 OUTPUT_DIR="${OUTPUT_DIR:-/output}"
+SHARED=/build/kernel-config
+REQUIRED_CONFIG="${SHARED}/platform-required.config"
 
 # Colors
 GREEN='\033[0;32m'
@@ -143,37 +157,22 @@ scripts/config --enable CONFIG_SYSFS
 scripts/config --enable CONFIG_DEVTMPFS
 scripts/config --enable CONFIG_DEVTMPFS_MOUNT
 
-# Enable crypto and FIPS
+# Crypto and FIPS. CRYPTO_FIPS itself, the DRBG, the crypto self-tests it
+# depends on, MODULE_SIG and MODULE_SIG_FORCE come from the shared required
+# fragment merged below; what is set here is specific to this kernel.
 log "Enabling FIPS kernel configuration..."
-
-# FIPS dependencies (must be enabled BEFORE CONFIG_CRYPTO_FIPS)
-# For Linux 6.12, CONFIG_CRYPTO_FIPS depends on:
-#   (CRYPTO_ANSI_CPRNG || CRYPTO_DRBG) && !CRYPTO_MANAGER_DISABLE_TESTS && (MODULE_SIG || !MODULES)
-
-log "Enabling FIPS dependencies..."
 scripts/config --enable CONFIG_DEBUG_KERNEL
 scripts/config --enable CONFIG_CRYPTO_MANAGER2
-# DISABLE the tests disable flag (double negative = enable tests)
-scripts/config --disable CONFIG_CRYPTO_MANAGER_DISABLE_TESTS
-# Enable extra tests for good measure
+# Extra self-tests for good measure (depends on DEBUG_KERNEL).
 scripts/config --enable CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
-scripts/config --enable CONFIG_CRYPTO_DRBG
-scripts/config --enable CONFIG_CRYPTO_DRBG_MENU
-scripts/config --enable CONFIG_CRYPTO_DRBG_HMAC
-scripts/config --enable CONFIG_CRYPTO_DRBG_HASH
-scripts/config --enable CONFIG_CRYPTO_DRBG_CTR
 
-# Enable module signing for FIPS
-scripts/config --enable CONFIG_MODULE_SIG
+# Every in-tree module signed at build time. With MODULE_SIG_FORCE (required
+# fragment) the running kernel REJECTS any module that is unsigned or signed
+# by a key absent from its trusted keyring, so the production module set is
+# fully signature-enforced. See docs/firmware/secure-boot.md.
 scripts/config --enable CONFIG_MODULE_SIG_ALL
 scripts/config --enable CONFIG_MODULE_SIG_SHA256
 scripts/config --set-str CONFIG_MODULE_SIG_HASH "sha256"
-
-# Enforce module signatures at load time: the running kernel REJECTS any module
-# that is unsigned or signed by a key absent from its trusted keyring. Combined
-# with CONFIG_MODULE_SIG_ALL (every in-tree module is signed at build time) the
-# production module set is fully signature-enforced. See docs/firmware/secure-boot.md.
-scripts/config --enable CONFIG_MODULE_SIG_FORCE
 
 # Module-signing key. Production builds provide a STABLE platform module-signing
 # key (MODULE_SIGNING_KEY=/path/to/key+cert.pem) so the public key is embedded in
@@ -191,8 +190,6 @@ else
     log "WARNING: MODULE_SIGNING_KEY not set -- kernel will auto-generate a per-build ephemeral module-signing key (dev builds only; provide a stable key for production)"
 fi
 
-# Now enable FIPS (dependencies are met)
-scripts/config --enable CONFIG_CRYPTO_FIPS
 scripts/config --enable CONFIG_CRYPTO_FIPS_NAME
 scripts/config --set-str CONFIG_CRYPTO_FIPS_NAME "Trusted Platform FIPS 140-3"
 
@@ -205,7 +202,6 @@ scripts/config --enable CONFIG_CRYPTO_AES_NI_INTEL
 scripts/config --enable CONFIG_CRYPTO_CBC
 scripts/config --enable CONFIG_CRYPTO_ECB
 scripts/config --enable CONFIG_CRYPTO_XTS
-scripts/config --enable CONFIG_CRYPTO_GCM
 scripts/config --enable CONFIG_CRYPTO_HMAC
 scripts/config --enable CONFIG_CRYPTO_RSA
 scripts/config --enable CONFIG_CRYPTO_USER_API_HASH
@@ -246,65 +242,29 @@ scripts/config --enable CONFIG_BLK_DEV_DM
 scripts/config --enable CONFIG_DM_CRYPT
 scripts/config --enable CONFIG_MD
 
-# Verify configs were set before olddefconfig
-log "Verifying FIPS configs were set by scripts/config..."
-echo "=== Pre-olddefconfig Status ==="
-grep "^CONFIG_CRYPTO_FIPS=\|^# CONFIG_CRYPTO_FIPS " .config || echo "CONFIG_CRYPTO_FIPS not found in .config"
-grep "^CONFIG_DEBUG_KERNEL=\|^# CONFIG_DEBUG_KERNEL " .config || echo "CONFIG_DEBUG_KERNEL not found"
-grep "^CONFIG_CRYPTO_MANAGER_DISABLE_TESTS=\|^# CONFIG_CRYPTO_MANAGER_DISABLE_TESTS " .config || echo "CONFIG_CRYPTO_MANAGER_DISABLE_TESTS not found"
-grep "^CONFIG_MODULE_SIG=\|^# CONFIG_MODULE_SIG " .config || echo "CONFIG_MODULE_SIG not found"
-echo "================================="
+# Merge the options every platform kernel carries, resolve dependencies, and
+# fail if Kconfig dropped or changed any required line.
+log "Merging the platform-required options (${REQUIRED_CONFIG})..."
+[ -r "${REQUIRED_CONFIG}" ] || error "missing builder input ${REQUIRED_CONFIG}"
+scripts/kconfig/merge_config.sh -m .config "${REQUIRED_CONFIG}" > /dev/null || error "Failed to merge ${REQUIRED_CONFIG}"
 
-# Apply config changes
 log "Running make olddefconfig to resolve dependencies..."
 make olddefconfig > /dev/null 2>&1 || error "Failed to apply config"
 
-# Verify FIPS is enabled in final config
-log "Verifying FIPS configuration..."
-log "Checking FIPS and dependencies in .config:"
-echo "=== FIPS Configuration Status ==="
-grep "CONFIG_DEBUG_KERNEL\|CONFIG_CRYPTO_MANAGER_DISABLE_TESTS\|CONFIG_CRYPTO_DRBG\|CONFIG_MODULE_SIG\|CONFIG_CRYPTO_FIPS\|CONFIG_MODULES" .config | grep -E "=y|is not set" || echo "No matches found"
-echo "================================="
+# require-config.sh names every dropped line (CONFIG_CRYPTO_FIPS and
+# CONFIG_MODULE_SIG_FORCE among them) and exits 3; set -e makes that the
+# build's exit code.
+"${SHARED}/require-config.sh" .config "${REQUIRED_CONFIG}"
+log "✓ Every platform-required option survived olddefconfig (CONFIG_CRYPTO_FIPS=y, CONFIG_MODULE_SIG_FORCE=y among them)"
 
-# Verify module-signature ENFORCEMENT survived olddefconfig. Without FORCE the
-# running kernel would silently load unsigned modules, defeating Secure Boot.
-if ! grep -q "^CONFIG_MODULE_SIG_FORCE=y" .config; then
-    error "CONFIG_MODULE_SIG_FORCE is not enabled in the final kernel configuration -- unsigned modules would be loadable"
-fi
 if [ -n "${MODULE_SIGNING_KEY:-}" ] && ! grep -q "^CONFIG_MODULE_SIG_KEY=" .config; then
     error "MODULE_SIGNING_KEY was provided but CONFIG_MODULE_SIG_KEY is unset in the final configuration"
 fi
-log "Module signature enforcement verified (CONFIG_MODULE_SIG_FORCE=y)"
 
-if ! grep -q "^CONFIG_CRYPTO_FIPS=y" .config; then
-    log "ERROR: CONFIG_CRYPTO_FIPS is not enabled in final kernel configuration!"
-    log "This usually means dependencies are not met. Checking what might be wrong..."
-
-    # Check if modules are enabled (FIPS needs either MODULE_SIG or !MODULES)
-    if grep -q "^CONFIG_MODULES=y" .config; then
-        log "Modules are enabled, checking MODULE_SIG..."
-        if ! grep -q "^CONFIG_MODULE_SIG=y" .config; then
-            log "ERROR: CONFIG_MODULE_SIG is not enabled but needed for FIPS with modules!"
-        fi
-    fi
-
-    # Check CRYPTO_MANAGER_DISABLE_TESTS (should be NOT set for FIPS)
-    if grep -q "^CONFIG_CRYPTO_MANAGER_DISABLE_TESTS=y" .config; then
-        log "ERROR: CONFIG_CRYPTO_MANAGER_DISABLE_TESTS is enabled but must be disabled for FIPS!"
-        log "Crypto self-tests are disabled which prevents FIPS from working"
-    fi
-    if ! grep -q "^# CONFIG_CRYPTO_MANAGER_DISABLE_TESTS is not set" .config; then
-        log "WARNING: CONFIG_CRYPTO_MANAGER_DISABLE_TESTS status unclear"
-    fi
-
-    # Check DRBG
-    if ! grep -q "^CONFIG_CRYPTO_DRBG=y" .config; then
-        log "ERROR: CONFIG_CRYPTO_DRBG is not enabled!"
-    fi
-
-    error "Cannot continue without FIPS enabled. Please review above errors."
+if [ "${KERNEL_CONFIG_ONLY:-0}" = 1 ]; then
+    log "KERNEL_CONFIG_ONLY=1: configuration checked, nothing built"
+    exit 0
 fi
-log "✓ CONFIG_CRYPTO_FIPS=y verified in kernel configuration"
 
 # Build kernel
 log "Building FIPS kernel (this may take 15-30 minutes)..."

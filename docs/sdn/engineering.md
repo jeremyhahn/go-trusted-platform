@@ -321,6 +321,8 @@ general switch-configuration API.
 |---|---|---|
 | Unit | `pkg/sdn/**/*_test.go`, `pkg/switch/*_test.go` | State machine transitions, config validation, flow generation, IPAM allocation |
 | Integration | `test/integration/sdn/`, `test/integration/network/` | OVS bridges, flows, port auth against a real datapath |
+| Unit, real GoBGP | `pkg/sdn/bgp/rtc_dynamic_gobgp_test.go` | RT-Constrain filtering of EVPN routes; dynamic neighbours admitted only from the fabric prefix (§9.4) |
+| Integration | `test/integration/ipsec/` (`make integration-test-ipsec`) | musl charon peers in netns, IKEv2 through the go-xkms PKCS#11 module, ESP checked with `ip xfrm` (§9.3) |
 
 `pkg/sdn/netlink` is excluded from `make test` and needs `make integration-test`.
 `noop.go` in `pkg/switch/` is the fixture that lets switch-dependent paths run
@@ -387,7 +389,299 @@ bring-up, before any transport is listening, so the event is replayed when the
 daemon wires its event stream and a client that connects later will not see
 it — but it can read the component at any time.
 
-## 9. Related
+## 9. IPsec transport: the build and what the spike measured (#716)
+
+The overlay's IPsec transport (release plan §5.2, #709) rests on four things:
+
+- a strongSwan build the platform owns;
+- charon signing with keys held behind the go-xkms PKCS#11 module;
+- GoBGP features the route reflectors need;
+- kernels that carry the datapath.
+
+Spike S (#716) built the first, measured the other three, and pinned what it
+found in tests. Nothing in this section is wired into platformd yet; the
+control path (`pkg/sdn/ipsec`, VICI) is #709.
+
+### 9.1 The strongSwan build
+
+`build/docker/strongswan-builder` produces `trusted-platform-strongswan`: charon
+(IKEv2 only) and swanctl, strongSwan **6.0.7**, built for Alpine 3.22 (musl) on
+amd64 and arm64 and packaged as signed apks with an OpenRC service.
+`make strongswan-build | strongswan-verify | strongswan-clean`; the builder's
+README carries the detail.
+
+- **Source.** The tarball must have a good signature by the strongSwan release
+  key *and* the pinned SHA-256. gpgv accepts any key in its keyring, so the
+  `VALIDSIG` primary-key fingerprint is also compared with the pin
+  (`948F158A4E76A27BF3D07532DF42C170B34DBA77`).
+- **Plugins.** `openssl pkcs11 vici counters nonce kernel-netlink socket-default
+  pem revocation constraints updown`, built with `--disable-defaults
+  --disable-ikev1`.
+  - The package step fails if any other plugin is installed.
+  - The plan's "openssl, pkcs11, swanctl, vici only" is honoured for crypto,
+    keys and control. The rest are the infrastructure charon cannot run
+    without: `nonce` (IKE nonces), `kernel-netlink` (XFRM), `socket-default`
+    (UDP 500/4500), `pem`, `revocation` (CRL checks, for
+    `revocation=strict`), `constraints` (the tunnel CA's name constraints)
+    and `updown` (the identity check the plan puts in the updown hook).
+  - `counters` is forced on by configure whenever `vici` is enabled.
+  - There is deliberately no `x509` plugin. The openssl plugin decodes X.509
+    certificates and CRLs (`CERT_DECODE` for `CERT_X509`/`CERT_X509_CRL`).
+    The suite asserts that certificates load and that no X.509/CRL decoder
+    is missing. OCSP and attribute certificates are not decodable, and the
+    platform's push-CRL revocation needs neither.
+  - PSK authentication lives in charon's core and cannot be compiled out, so
+    connections must say `auth = pubkey`.
+- **Privilege.** charon is built `--with-user=strongswan --with-group=strongswan
+  --with-capabilities=libcap`. It starts as root, then runs as `strongswan`
+  with `CapEff=0x1000` (`CAP_NET_ADMIN` only), as the suite measures. The VICI
+  socket is `strongswan:strongswan` with mode 0660. The plan wants 0600 and
+  owned by platformd's user; that is #709's to configure.
+- **Plugin load order.** charon loads its plugins, the PKCS#11 provider
+  included, *before* it drops root. A provider that authenticates its caller
+  at `C_Initialize` therefore sees uid 0. The node-local xkms server's
+  SO_PEERCRED check (plan §5.2) must allow for this, or authenticate per
+  session.
+- **ML-KEM.** Alpine 3.22's OpenSSL provides ML-KEM-768 through the openssl
+  plugin. The suite negotiates
+  `AES_GCM_16_256/PRF_HMAC_SHA2_384/ECP_384/KE1_ML_KEM_768` (RFC 9370 hybrid)
+  for IKE and `aes256gcm16-ecp384-ke1_mlkem768-esn` for the CHILD_SA. No `ml`
+  plugin is needed.
+- **arm64.** The arm64 apk builds natively under binfmt/qemu-user. That
+  requires the qemu that `make binfmt` now registers (`tonistiigi/binfmt`,
+  qemu 10.2.3, pinned by digest). Under the qemu 7.2 that `make init` used to
+  register (`multiarch/qemu-user-static`), Alpine's gcc 14 segfaulted in `cc1`
+  and `collect2` on two consecutive builds.
+
+### 9.2 PKCS#11 on musl: the module cannot be loaded in-process
+
+**Result:** charon cannot dlopen the go-xkms module on musl, on either arch, and
+neither can a musl `p11-kit server`. The working path is charon →
+`p11-kit-client.so` → a p11-kit **0.26** server running under **glibc** that
+hosts the module.
+
+What was measured, with the module built from go-xkms v0.17.0-alpha (what
+go.mod resolves) and from main, `-buildmode=c-shared`, Go 1.27, against Alpine
+3.22 musl 1.2.5:
+
+| Attempt | amd64 | arm64 (qemu-user) |
+|---|---|---|
+| `dlopen` from a C program | refused: `initial-exec TLS resolves to dynamic definition` (musl then segfaults formatting that error for the module) | SIGSEGV inside `dlopen` |
+| Loaded at start-up (`LD_PRELOAD`), so the TLS check passes | the Go runtime crashes in `runtime.sysargs` (argc garbage, argv nil) for one library; another happened to start | loads, then crashes on the first Go call |
+| `p11-kit server` (musl) hosting the module | the per-connection `p11-kit-remote` child dies with SIGSEGV | not run; same loader |
+| `p11-kit server` (glibc) hosting the module, charon on musl loading `p11-kit-client.so` | **works**: IKEv2 established, ESP installed (§9.3) | **works**: IKEv2 established, ESP installed, in an aarch64 VM (§9.3) |
+
+The cause is two independent properties of a gc-toolchain c-shared object,
+neither of which the platform can change:
+
+- **Initial-exec TLS.** The Go runtime reaches its `g` through initial-exec
+  TLS: `R_X86_64_TPOFF64` with `DF_STATIC_TLS` on amd64,
+  `R_AARCH64_TLS_TPREL64` on arm64. musl reserves no surplus static TLS, so
+  it satisfies those relocations only for objects loaded at program start.
+- **Missing argc/argv.** musl calls `DT_INIT_ARRAY` entries with no
+  arguments, while Go's c-shared `rt0` reads argc, argv and envp from them,
+  as glibc passes.
+
+Both are golang/go#13492, still open. Preloading avoids the first only by
+relying on undefined register contents for the second, so it is not an option.
+
+The plan's fallback as written ("`p11-kit server` hosting the module") does not
+work on musl either: p11-kit's server is a musl process that dlopens the
+module. It works only when the server is a glibc process. Which glibc host a
+node runs (a glibc p11-kit bundle beside the musl userland, or a Go p11-kit RPC
+server inside go-xkms with no C module at all) is an architecture decision for
+the owner. charon's side is the same either way: `pkcs11 { modules { xkms {
+path = /usr/lib/pkcs11/p11-kit-client.so } } }`, plus `P11_KIT_SERVER_ADDRESS`
+in `/etc/conf.d/charon`.
+
+Three defects stood between that path and a working IKE_AUTH:
+
+1. **p11-kit RPC versions must match (≥ 0.26 on both ends).** Alpine 3.22's
+   client is 0.26.2. Against a 0.24.1 (Debian bookworm) or 0.25.5 (trixie)
+   server it does not fail; it silently corrupts byte-array attributes:
+   `CKA_ID 01` arrives as `01000000`, labels disappear and key usage becomes
+   `none`. 0.26.2 (Ubuntu 26.04) and 0.26.5 (sid) servers are correct. The
+   suite's module host is Ubuntu 26.04 for this reason.
+2. **go-xkms: offline mode could not be initialized again after
+   `C_Finalize`.** p11-kit's server initializes, finalizes and initializes
+   every provider, so the second `C_Initialize` returned
+   `CKR_DEVICE_ERROR`. Fixed in go-xkms#1387.
+3. **go-xkms: raw `CKM_ECDSA` failed on every Go 1.27 build.** Go 1.27's
+   `ecdsa.PrivateKey.Sign` refuses `crypto.Hash(0)`. strongSwan's pkcs11
+   plugin hashes locally and always signs with raw `CKM_ECDSA`, so charon's
+   IKE_AUTH failed with `C_Sign() failed: FUNCTION_FAILED`. Fixed in go-xkms
+   v0.48.0-alpha: #1387 fixed the module's offline path, and #1388 has the
+   service infer the hash of a raw digest from its length.
+
+The suite builds the module from `IPSEC_XKMS_VERSION`, go-xkms
+**v0.48.0-alpha**, the first release with both fixes. In that release the raw
+`NONE` ECDSA path infers the digest's hash from its length (go-xkms#1388):
+28, 32, 48 or 64 bytes, which covers strongSwan's SHA-2 digests. The go-xkms
+that go.mod resolves (v0.17.0-alpha) predates both fixes, and the platform
+catches up when go-quicbaas adopts that release.
+
+**Also observed:** `pkcs11-tool --keypairgen` leaves the token's private key
+`extractable`. A sign-only IKE key should be created non-extractable by the
+xkms KMS API that sets its label and CKA_ID (plan §5.2, PR 0).
+
+**TPM2 vs software.** The spike's token is the module's offline (embedded)
+mode: a software key store, sealed under the user PIN (`passphrase`). Offline
+mode has no TPM2 backend. A TPM2-held IKE key comes with the node-local xkms
+server (plan §5.2), which this spike does not have yet.
+
+### 9.3 The ipsec integration suite
+
+`make integration-test-ipsec` (devcontainer, `test/integration/ipsec/`) builds
+the apks, two Alpine root filesystems with the apks installed through apk (with
+their signatures checked) and a glibc module-host root filesystem (Ubuntu
+26.04, p11-kit 0.26.2, the module). Each peer runs in its own network namespace
+with charon started by the packaged OpenRC service, and has its own module host
+and token:
+
+1. The P-256 IKE key is generated **on the token** through
+   `p11-kit-client.so`, the same path charon uses.
+2. The public key is certified by a test CA, with the fabric address as the
+   only SAN and EKU `id-kp-ipsecIKE`.
+3. charon loads the private key from the token (`load-token`).
+
+| Test | Proves |
+|---|---|
+| `TestESPTransportThroughPKCS11Module` | <ul><li>both peers sign IKE_AUTH with the token key (`ECDSA_WITH_SHA*_DER`) and verify each other</li><li>the IKE SA uses the ML-KEM-768 hybrid</li><li>`ip xfrm state` holds one inbound and one outbound transport-mode `rfc4106(gcm(aes))` SA with a 16-byte ICV, ESN and `replay_window 1024`</li><li>the SPIs agree crosswise and a ping is carried by the SAs (packet counters)</li><li>the policies require ESP</li><li>charon runs as `strongswan` with `CAP_NET_ADMIN` only, and the VICI socket mode is 0660</li></ul> |
+| `TestUntrustedPeerIsRefused` | a peer certified by another CA is refused (`AUTHENTICATION_FAILED`) and no SA reaches the kernel |
+| `TestSuiteInARM64VM` | the two tests above, cross-compiled for arm64, pass inside an aarch64 VM (`qemu-system-aarch64`, TCG, Alpine `linux-virt` 6.12): arm64 charon, arm64 p11-kit-client, arm64 module host, real aarch64 XFRM |
+
+**Why a VM for arm64.** qemu-user cannot stand in for it, and a qemu upgrade
+does not change that:
+
+- qemu's linux-user mode refuses `NETLINK_XFRM` sockets with
+  `EPROTONOSUPPORT`, measured on 7.2 and on 10.2.3.
+- It also answers route-rule writes on `NETLINK_ROUTE` with `Not supported`.
+- charon's `kernel-ipsec` feature is a critical dependency of libcharon, so an
+  arm64 charon under binfmt aborts at start-up (`initialization failed -
+  aborting charon`). It does get as far as loading `p11-kit-client.so` and
+  listing the go-xkms token's mechanisms over the RPC.
+
+So the suite cross-compiles itself for arm64 and runs inside a VM:
+
+- **Kernel.** Alpine's `vmlinuz-virt` is an EFI zboot image, which qemu
+  7.2's `-kernel` cannot load. The VM's Dockerfile extracts the raw `Image`
+  from the zboot header.
+- **Inputs.** The tarballs reach the VM as read-only virtio disks and the
+  test binary over 9p.
+- **CPU model.** `cortex-a72`, because `-cpu max` emulates pointer
+  authentication slowly enough to make unpacking the module host take
+  110 s instead of 9 s.
+
+The suite container runs with `--init`. supervise-daemon's `--stop` waits for
+the supervisor's PID to disappear, and with `go test` as PID 1 the exited
+supervisor stays a zombie, so `rc-service charon stop` never returns.
+
+### 9.4 GoBGP: RT-Constrain and prefix-restricted dynamic neighbours
+
+**Result:** both are supported by `github.com/osrg/gobgp/v4` v4.9.0 for
+l2vpn-evpn, as the real-GoBGP tests in `pkg/sdn/bgp/rtc_dynamic_gobgp_test.go`
+demonstrate.
+
+- **RT-Constrain (RFC 4684) filters EVPN routes per peer.**
+  - Once a peer has negotiated RTC, every non-RTC path to it is dropped unless
+    one of its route targets matches that peer's membership
+    (`pkg/server/server.go:487-500`, `peer.go:538-550`).
+  - EVPN is in the route-target index (`isVPNFamily`,
+    `internal/pkg/table/table.go:262-272`). A new membership re-advertises
+    the matching EVPN routes (`server.go:1351-1430`).
+  - Membership is reflected to route-reflector clients (`peer.go:577`).
+  - A VTEP originates its membership in the global RIB with `AddPath` of
+    `NewRouteTargetMembershipNLRI`, with no GoBGP VRFs, which fits the plan's
+    model.
+  - `TestRealGoBGP_RTConstrainFiltersEVPN`: a reflector with clients A, B
+    and C. B, which joined only RT 100, never receives A's RT 200 route,
+    while C, which joined RT 200, does. B receives it once it joins.
+- **Dynamic neighbours.**
+  - An incoming session with no configured neighbour is matched to the
+    longest dynamic-neighbour prefix (`server.go:445-465`). It is built from
+    the peer group's configuration, including families, RR client, policy
+    and BFD (`peer.go:67-97`, `server.go:347-380`).
+  - Anything else is accepted and then closed before a byte is sent.
+  - `TestRealGoBGP_DynamicNeighborsAdmitOnlyTheFabric`: a VTEP inside
+    `127.0.0.0/29` establishes EVPN with a reflector that has no configured
+    neighbours, and an address outside the prefix gets EOF with zero bytes.
+- **Gaps** to design around:
+  - `ListPeer` reports a dynamic peer's address only in
+    `State.NeighborAddress` (`Conf` stays zero, `peer.go:68-80`).
+  - Dynamic prefixes are ordered by comparing masks as strings, so keep one
+    fabric prefix per family.
+  - A refused speaker produces no FSM event.
+  - Admission is by source address alone. The plan's per-neighbour checks
+    (certificate SAN equals session address, allowed RTs and VNIs) are the
+    platform's to add.
+  - **One speaker per process, or start them all before any peers.** GoBGP
+    keeps its route-selection options in package variables
+    (`table.SelectionOptions`, `table.UseMultiplePaths`). `StartBgp` writes
+    them (`server.go:2697-2698`) and every server's FSM reads them
+    (`table_manager.go:379`). A second `BgpServer` started in the same
+    process while the first has a session up is a data race, and CI's race
+    job caught it in this spike's test. Its options would also silently
+    replace the first's. A node that runs an RR and a VTEP speaker in one
+    platformd must therefore give both the same options and start both
+    before either peers.
+
+### 9.5 Kernel configuration
+
+**The check.** `build/docker/kernel-config/platform-required.config` holds the
+plan's list:
+
+- **datapath:** `OPENVSWITCH`, `OPENVSWITCH_VXLAN`, `VXLAN`
+- **IPsec:** `INET_ESP`, `INET6_ESP`, `XFRM_USER`, `CRYPTO_GCM`
+- **conntrack and NAT:** `NF_CONNTRACK`, `NF_CONNTRACK_ZONES`, `NF_NAT`,
+  `NF_NAT_OVS`, `NF_CT_PROTO_SCTP`
+- **VRF:** `NET_VRF`
+- **vsock:** `VSOCKETS`, `VIRTIO_VSOCKETS`, `VHOST_VSOCK`
+- **hardening:** `MODULE_SIG_FORCE`, `SECURITY_LOCKDOWN_LSM`, `IMA_APPRAISE`,
+  `SCHED_CORE`, `CRYPTO_FIPS` and the DRBGs
+
+It also lists the dependencies those options need to survive `olddefconfig`.
+
+`require-config.sh` beside it is the one check both kernel builders run. The
+fips kernel (x86_64) and the virt kernel (arm64) bake it in through a BuildKit
+named context, so `pkg/iso` and `pkg/diskimage/virtkernel` invocations get it
+too. A dropped option fails the build with exit 3, and
+`pkg/diskimage/virtkernel/requireconfig_test.go` tests the check.
+`make -C build/docker/<builder> config-check` runs the configuration step
+alone. It passes on both kernels. Its first run caught `NET_VRF` being dropped
+by both defconfigs: it needs `IP_ADVANCED_ROUTER`, `IP_MULTIPLE_TABLES`,
+`IPV6_MULTIPLE_TABLES` and `NET_L3_MASTER_DEV`.
+
+**Kconfig findings:**
+
+- SCTP NAT has no symbol of its own. `nf_nat_proto.c` rewrites SCTP under
+  `CONFIG_NF_CT_PROTO_SCTP`.
+- `NF_NAT_OVS` is selected by `OPENVSWITCH` when `NF_NAT` is on.
+- `IMA_APPRAISE` needs `IMA`, `INTEGRITY` and `SECURITY`.
+- `SCHED_CORE` needs `SCHED_SMT`.
+- `CRYPTO_FIPS` needs `CRYPTO_MANAGER_DISABLE_TESTS` unset (it defaults to
+  y in 6.12) and `MODULE_SIG`.
+- Built in is not switched on: IMA appraisal needs a policy, lockdown a
+  mode, FIPS `fips=1`.
+
+**Alpine's kernels** (`make kernel-config-check-alpine`, y or m accepted):
+
+| Kernel | Missing |
+|---|---|
+| `linux-lts` 6.12.111, x86_64 and aarch64 | `MODULE_SIG_FORCE`, `INTEGRITY`, `IMA`, `IMA_APPRAISE`, `CRYPTO_DRBG_HASH`, `CRYPTO_DRBG_CTR`, `CRYPTO_FIPS`, and `CRYPTO_MANAGER_DISABLE_TESTS` is set |
+| `linux-rpi` 6.12.85, aarch64 | the same, except `INTEGRITY` is present; also `VIRTIO_VSOCKETS`, `MODULE_SIG`, `SECURITY_LOCKDOWN_LSM`, `SCHED_SMT`, `SCHED_CORE` |
+
+Every datapath, IPsec, conntrack/NAT, VRF and vsock option is in both
+`linux-lts` builds, so the overlay itself runs on Alpine's kernels; what they
+lack is the hardening.
+
+- FIPS nodes already boot the fips kernel.
+- On `linux-lts`, `module.sig_enforce=1` stands in for `MODULE_SIG_FORCE`,
+  but there is no IMA.
+- `linux-rpi` has no module signing, lockdown or core scheduling. A Pi that
+  needs them needs a platform-built kernel, as the virt kernel already is
+  for the QEMU stand-in.
+
+## 10. Related
 
 - [architecture.md](architecture.md) · [api.md](api.md) · [cli.md](cli.md) · [user.md](user.md)
 - [`docs/gateway/`](../gateway/) — gatewayd, BGP, IPAM at the edge, reverse proxy
