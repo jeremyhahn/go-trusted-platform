@@ -170,6 +170,21 @@ and should be deleted when the SDK grows a `ParseEvidence`. The lengths and
 both nonce widths already come from the SDK, so the constants a consumer must
 not guess at are not guessed at.
 
+## Constructing the device
+
+`New` takes an already-built `*aggeneric.Device`; the caller owns the link.
+Since arduino-generic v0.5.0-alpha, `aggeneric.New` waits up to
+`aggeneric.DefaultBootWait` (2 s) for the firmware's BOOT event before it
+returns, so the first frame lands on a running application and not in the
+bootloader's window after a DTR auto-reset. An adapter that never resets the
+board simply pays that bound.
+
+- A device running `ag-boot` built with `BOOT_MEASURE=atecc608a` measures the
+  application through the secure element and can outrun the default. Pass
+  `aggeneric.WithBootWait` sized to the flashed image.
+- `aggeneric.WithBootWait(0)` disables the wait for a link known never to
+  reset the board, such as the in-memory link used by this package's tests.
+
 ## Testing without hardware
 
 There is no device and CI has none. The SDK speaks over an `io.ReadWriter`, so

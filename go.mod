@@ -47,7 +47,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167
-	github.com/jeremyhahn/arduino-generic/sdk/go v0.3.0-alpha
+	github.com/jeremyhahn/arduino-generic/sdk/go v0.6.0-alpha
 	github.com/jeremyhahn/go-codec v1.4.0
 	github.com/jeremyhahn/go-luks2 v0.2.0-alpha
 	github.com/jeremyhahn/go-quicbaas v0.12.0-alpha
@@ -59,7 +59,6 @@ require (
 	github.com/mdlayher/packet v1.1.2
 	github.com/mdobak/go-xerrors v1.0.0
 	github.com/miekg/dns v1.1.72
-	github.com/mitchellh/mapstructure v1.5.1-0.20231216201459-8508981c8b6c
 	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/open-policy-agent/opa v1.12.2
 	github.com/osrg/gobgp/v4 v4.9.0
@@ -307,6 +306,7 @@ require (
 	github.com/minio/minlz v1.1.0 // indirect
 	github.com/minio/sha256-simd v1.0.1 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
+	github.com/mitchellh/mapstructure v1.5.1-0.20231216201459-8508981c8b6c // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/mr-tron/base58 v1.2.0 // indirect

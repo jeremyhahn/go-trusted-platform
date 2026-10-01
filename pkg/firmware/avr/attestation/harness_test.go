@@ -286,7 +286,7 @@ func softwareLink() *fakeLink {
 // newTestDevice wraps a link in an SDK Device with a deadline short enough
 // for a unit test.
 func newTestDevice(link io.ReadWriter) *aggeneric.Device {
-	return aggeneric.New(link, aggeneric.WithTimeout(linkTimeout))
+	return aggeneric.New(link, aggeneric.WithTimeout(linkTimeout), aggeneric.WithBootWait(0))
 }
 
 // testConfig is a valid configuration with a frozen clock, so the age rule is
