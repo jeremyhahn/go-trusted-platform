@@ -840,33 +840,33 @@ func TestService_RecordHeartbeat_BySerial(t *testing.T) {
 	device := &entities.Device{ID: 200, Serial: "HB-SERIAL-1", Hostname: "hb1.example.internal"}
 	require.NoError(t, service.Save(ctx, device))
 
-	updated, err := service.RecordHeartbeat(ctx, "HB-SERIAL-1", "198.18.1.143:51234")
+	updated, err := service.RecordHeartbeat(ctx, "HB-SERIAL-1", "10.4.2.143:51234")
 	require.NoError(t, err)
 	assert.False(t, updated.LastHeartbeatAt.IsZero())
 	assert.False(t, updated.UpdatedAt.IsZero())
-	assert.Equal(t, "198.18.1.143:51234", updated.LastHeartbeatAddr)
+	assert.Equal(t, "10.4.2.143:51234", updated.LastHeartbeatAddr)
 
 	// The stamp is persisted, not just returned.
 	stored, err := service.Get(ctx, device.ID)
 	require.NoError(t, err)
 	assert.Equal(t, updated.LastHeartbeatAt, stored.LastHeartbeatAt)
-	assert.Equal(t, "198.18.1.143:51234", stored.LastHeartbeatAddr)
+	assert.Equal(t, "10.4.2.143:51234", stored.LastHeartbeatAddr)
 
 	// A peer address that is not a transport address is not recorded, and
 	// an empty one leaves the previous address in place.
 	updated, err = service.RecordHeartbeat(ctx, "HB-SERIAL-1", "evil.example:1")
 	require.NoError(t, err)
-	assert.Equal(t, "198.18.1.143:51234", updated.LastHeartbeatAddr)
+	assert.Equal(t, "10.4.2.143:51234", updated.LastHeartbeatAddr)
 	updated, err = service.RecordHeartbeat(ctx, "HB-SERIAL-1", "")
 	require.NoError(t, err)
-	assert.Equal(t, "198.18.1.143:51234", updated.LastHeartbeatAddr)
+	assert.Equal(t, "10.4.2.143:51234", updated.LastHeartbeatAddr)
 
 	// Update with an empty address keeps the recorded one.
 	stored.LastHeartbeatAddr = ""
 	require.NoError(t, service.Update(ctx, stored))
 	after, err := service.Get(ctx, device.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "198.18.1.143:51234", after.LastHeartbeatAddr)
+	assert.Equal(t, "10.4.2.143:51234", after.LastHeartbeatAddr)
 }
 
 func TestHeartbeatPeerAddr(t *testing.T) {
@@ -941,7 +941,7 @@ func TestService_RecordHeartbeat_NeverStampsMismatchedDevice(t *testing.T) {
 	device := &entities.Device{ID: 300, Serial: "OTHER-NODE-1"}
 	require.NoError(t, service.Save(ctx, device))
 
-	_, err = service.RecordHeartbeat(ctx, "lab-node-1-gateway", "")
+	_, err = service.RecordHeartbeat(ctx, "node-01-gateway", "")
 	var notFound *HeartbeatDeviceNotFoundError
 	require.ErrorAs(t, err, &notFound)
 

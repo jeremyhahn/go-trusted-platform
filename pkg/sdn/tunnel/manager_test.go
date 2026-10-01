@@ -447,8 +447,8 @@ func TestManager_ListTunnels(t *testing.T) {
 	config2 := TunnelConfig{
 		Name:     "gre2",
 		Type:     TunnelTypeGRE,
-		Local:    "99.12.246.37",
-		Remote:   "66.42.90.190",
+		Local:    "198.51.100.5",
+		Remote:   "192.0.2.100",
 		TunnelIP: "10.255.0.5/30",
 	}
 	err = mgr.EnsureTunnel(ctx, config1)
@@ -479,8 +479,8 @@ func TestManager_Close(t *testing.T) {
 	config2 := TunnelConfig{
 		Name:     "gre2",
 		Type:     TunnelTypeGRE,
-		Local:    "99.12.246.37",
-		Remote:   "66.42.90.190",
+		Local:    "198.51.100.5",
+		Remote:   "192.0.2.100",
 		TunnelIP: "10.255.0.5/30",
 	}
 	err := mgr.EnsureTunnel(ctx, config1)

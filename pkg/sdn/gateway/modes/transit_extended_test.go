@@ -240,7 +240,7 @@ func TestTransitModeHandler_VerifyAnnouncementScope_DatacenterTier(t *testing.T)
 
 	t.Run("IPv6 prefix too large", func(t *testing.T) {
 		// /36 is too large for datacenter tier (requires /48 or more specific)
-		largePrefix := netip.MustParsePrefix("2602:f5bb::/36")
+		largePrefix := netip.MustParsePrefix("2001:db8::/36")
 		err := handler.verifyAnnouncementScope(largePrefix)
 		if err == nil {
 			t.Error("expected error for prefix too large")
@@ -248,7 +248,7 @@ func TestTransitModeHandler_VerifyAnnouncementScope_DatacenterTier(t *testing.T)
 	})
 
 	t.Run("IPv6 prefix valid", func(t *testing.T) {
-		validPrefix := netip.MustParsePrefix("2602:f5bb:1::/48")
+		validPrefix := netip.MustParsePrefix("2001:db8:1::/48")
 		err := handler.verifyAnnouncementScope(validPrefix)
 		if err != nil {
 			t.Errorf("expected no error for valid prefix, got: %v", err)

@@ -105,7 +105,7 @@ func (m *mockIDevIDServiceClient) GetIDevIDCertificate(ctx context.Context, req 
 // =============================================================================
 
 const (
-	statusTestIssuerCN     = "ca01.cp.trusted-platform.io"
+	statusTestIssuerCN     = "ca01.cp.example.com"
 	statusTestIAKHandle    = 0x81010002
 	statusTestIDevIDHandle = 0x81020000
 	statusTestSSRKHandle   = 0x81000001
@@ -168,7 +168,7 @@ type statusFixture struct {
 func newAllPresentFixture(t *testing.T, iakPolicies ...x509.OID) *statusFixture {
 	t.Helper()
 	iakPEM := testCertificatePEM(t, "SuperMicro X10-1234", iakPolicies...)
-	idevidPEM := testCertificatePEM(t, "lab-node-2-idevid", oidTCGPolicy1)
+	idevidPEM := testCertificatePEM(t, "node-02-idevid", oidTCGPolicy1)
 	return &statusFixture{
 		tpm: &mockTPMServiceClient{
 			infoFunc: func(ctx context.Context, req *platformv1.TPMInfoRequest, opts ...grpc.CallOption) (*platformv1.TPMInfoResponse, error) {

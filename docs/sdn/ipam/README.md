@@ -267,7 +267,7 @@ ipv4Pool := &ipam.Pool{
 ipv6Pool := &ipam.Pool{
     ID:   "v6-pool",
     Name: "IPv6 Network",
-    CIDR: netip.MustParsePrefix("2602:F5BB:1234::/64"),  // 2^64 IPs
+    CIDR: netip.MustParsePrefix("2001:DB8:1234::/64"),  // 2^64 IPs
 }
 ```
 

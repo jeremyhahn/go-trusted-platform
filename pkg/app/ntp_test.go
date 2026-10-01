@@ -81,7 +81,7 @@ func gatedConfig(action ntp.TimeoutAction) *ntp.Config {
 		Enabled: true,
 		Mode:    ntp.ModeConsume,
 		Consume: &ntp.ConsumeConfig{
-			Upstream: []ntp.UpstreamSource{{Address: "198.18.0.10", IBurst: true}},
+			Upstream: []ntp.UpstreamSource{{Address: "10.4.200.10", IBurst: true}},
 			StartupGate: &ntp.StartupGate{
 				BlockUntilSynced: true,
 				Timeout:          120 * time.Second,
@@ -215,7 +215,7 @@ func servingNTSConfig() *ntp.Config {
 			Upstream: []ntp.UpstreamSource{{Address: "pool.ntp.org", Pool: true}},
 		},
 		Serve: &ntp.ServeConfig{
-			ListenNetworks: []string{"198.18.0.0/24"},
+			ListenNetworks: []string{"10.4.200.0/24"},
 			NTS: &ntp.NTSConfig{
 				Enabled:     true,
 				CertURI:     "kms://platform/ntp/nts-cert",
@@ -284,8 +284,8 @@ func TestCheckNTSServeNamesIsInertWhenNotServingNTS(t *testing.T) {
 func TestCheckNTSServeNamesReportsTheMismatch(t *testing.T) {
 	fake := &fakeNTPService{serveNameResult: []ntp.ServeNameFinding{{
 		Name:           "cp.example.internal",
-		Address:        "198.18.1.140",
-		ListenNetworks: []string{"198.18.0.0/24"},
+		Address:        "10.4.2.140",
+		ListenNetworks: []string{"10.4.200.0/24"},
 	}}}
 	withFakeNTPService(t, fake)
 	app := testApp(servingNTSConfig())

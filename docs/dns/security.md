@@ -502,9 +502,9 @@ All security-relevant events are logged:
   "source": "dns",
   "description": "Public query for internal zone rejected",
   "details": {
-    "query_name": "db.trusted-platform.internal.",
+    "query_name": "db.example.internal.",
     "query_type": "A",
-    "zone": "trusted-platform.internal.",
+    "zone": "example.internal.",
     "zone_internal": true,
     "server": "public"
   },

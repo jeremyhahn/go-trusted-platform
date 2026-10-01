@@ -145,7 +145,7 @@ func templatePaths(t *testing.T) []string {
 }
 
 // TestShippedTemplatesCarryAValidNTPSection is a regression guard against the
-// lab-node-2 incident: a node that ships without time synchronization boots on
+// node-02 incident: a node that ships without time synchronization boots on
 // whatever its RTC says. Every shipped template must configure `ntp:`, and
 // that section must satisfy the same validation platformd applies at startup.
 func TestShippedTemplatesCarryAValidNTPSection(t *testing.T) {

@@ -14,7 +14,7 @@ replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1
 // Cross-repo dependencies resolve as normal Go modules fetched from the dev
 // Gitea server during development (gitconfig insteadOf + GOPRIVATE) and from
 // GitHub for public builds — see software/conventions/dependency-resolution.md
-// in the automatethethings repo. The only local-path replace is the intra-repo
+// in the handbook. The only local-path replace is the intra-repo
 // sdk/go self-reference below (the etcd pattern for the require cycle).
 
 require (

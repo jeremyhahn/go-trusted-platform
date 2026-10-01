@@ -339,7 +339,7 @@ func TestChainMTLSOrTokenFallsBackToToken(t *testing.T) {
 
 func TestChainAttestationGate(t *testing.T) {
 	ca := newTestCA(t)
-	leaf := newLeafCert(t, ca, leafSpec{cn: "lab-node-2"})
+	leaf := newLeafCert(t, ca, leafSpec{cn: "node-02"})
 
 	t.Run("fresh marks identity attested", func(t *testing.T) {
 		gate := &fakeGate{}
@@ -356,8 +356,8 @@ func TestChainAttestationGate(t *testing.T) {
 		if !d.Allowed || !d.Identity.Attested {
 			t.Fatalf("decision = %+v, want allow with Attested", d)
 		}
-		if gate.lastDevice != "lab-node-2" {
-			t.Errorf("gate device = %q, want leaf CN lab-node-2", gate.lastDevice)
+		if gate.lastDevice != "node-02" {
+			t.Errorf("gate device = %q, want leaf CN node-02", gate.lastDevice)
 		}
 		if gate.lastMaxAge != 10*time.Minute {
 			t.Errorf("gate maxAge = %v", gate.lastMaxAge)

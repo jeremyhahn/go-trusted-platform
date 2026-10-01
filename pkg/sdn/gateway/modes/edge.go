@@ -781,7 +781,7 @@ func (a *IPv6Allocator) expireInactive() {
 }
 
 // regionFromIP extracts the region from an IPv6 address.
-// Format: 2602:F5BB:RRRR:SSSS:HHHH:HHHH:HHHH:HHHH/64
+// Format: 2001:DB8:RRRR:SSSS:HHHH:HHHH:HHHH:HHHH/64
 func regionFromIP(ip net.IP) string {
 	if len(ip) < 16 {
 		return "default"

@@ -520,10 +520,10 @@ type BGPCapabilities struct {
 	// RPKIValidation indicates RPKI validation is enabled.
 	RPKIValidation bool `yaml:"rpki-validation" json:"rpki_validation" mapstructure:"rpki-validation"`
 
-	// AnnounceIPv6Block indicates announcement of 2602:F5BB::/36.
+	// AnnounceIPv6Block indicates announcement of 2001:DB8::/36.
 	AnnounceIPv6Block bool `yaml:"announce-ipv6-block" json:"announce_ipv6_block" mapstructure:"announce-ipv6-block"`
 
-	// AnnounceIPv4Block indicates announcement of 23.143.36.0/24.
+	// AnnounceIPv4Block indicates announcement of 203.0.113.0/24.
 	AnnounceIPv4Block bool `yaml:"announce-ipv4-block" json:"announce_ipv4_block" mapstructure:"announce-ipv4-block"`
 }
 

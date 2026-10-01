@@ -18,18 +18,18 @@ BGP transit mode enables go-trusted-platform to announce platform-owned IP prefi
 
 ```
 2001:db8::/36 (Platform Aggregate - 4.7 quintillion addresses)
-├── 2602:F5BB:0000::/40 (Region 0 - North America East)
-│   ├── 2602:F5BB:0000::/48 (Datacenter 1)
-│   │   ├── 2602:F5BB:0000:0001::/64 (Subnet 1)
-│   │   ├── 2602:F5BB:0000:0002::/64 (Subnet 2)
+├── 2001:DB8:0000::/40 (Region 0 - North America East)
+│   ├── 2001:DB8:0000::/48 (Datacenter 1)
+│   │   ├── 2001:DB8:0000:0001::/64 (Subnet 1)
+│   │   ├── 2001:DB8:0000:0002::/64 (Subnet 2)
 │   │   └── ...
-│   ├── 2602:F5BB:0001::/48 (Datacenter 2)
+│   ├── 2001:DB8:0001::/48 (Datacenter 2)
 │   └── ...
-├── 2602:F5BB:0100::/40 (Region 1 - North America West)
-├── 2602:F5BB:0200::/40 (Region 2 - Europe West)
-├── 2602:F5BB:0300::/40 (Region 3 - Europe East)
-├── 2602:F5BB:0400::/40 (Region 4 - Asia Pacific North)
-├── 2602:F5BB:0500::/40 (Region 5 - Asia Pacific South)
+├── 2001:DB8:0100::/40 (Region 1 - North America West)
+├── 2001:DB8:0200::/40 (Region 2 - Europe West)
+├── 2001:DB8:0300::/40 (Region 3 - Europe East)
+├── 2001:DB8:0400::/40 (Region 4 - Asia Pacific North)
+├── 2001:DB8:0500::/40 (Region 5 - Asia Pacific South)
 └── ... (up to 16 regions with /40 aggregates)
 ```
 
@@ -67,8 +67,8 @@ IPv4 is used sparingly for:
 │  Level 2: Datacenter Speakers (Regional)                    │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │ Announce to Backbone (iBGP):                        │    │
-│  │   - 2602:F5BB:0001::/48 (Region 1)                 │    │
-│  │   - 2602:F5BB:0002::/48 (Region 2)                 │    │
+│  │   - 2001:DB8:0001::/48 (Region 1)                 │    │
+│  │   - 2001:DB8:0002::/48 (Region 2)                 │    │
 │  │                                                     │    │
 │  │ Suppress: /64 subnets (internal only)              │    │
 │  └─────────────────────────────────────────────────────┘    │
@@ -78,8 +78,8 @@ IPv4 is used sparingly for:
 │  Level 3: Internal Routing (Subnets)                        │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │ Internal FIB only:                                  │    │
-│  │   - 2602:F5BB:0001:0001::/64 (Subnet 1)           │    │
-│  │   - 2602:F5BB:0001:0002::/64 (Subnet 2)           │    │
+│  │   - 2001:DB8:0001:0001::/64 (Subnet 1)           │    │
+│  │   - 2001:DB8:0001:0002::/64 (Subnet 2)           │    │
 │  │                                                     │    │
 │  │ Not announced externally                            │    │
 │  └─────────────────────────────────────────────────────┘    │
@@ -440,7 +440,7 @@ Coordinator nodes cryptographically sign route announcements to prevent unauthor
 │                                                              │
 │  1. Datacenter Speaker Creates Route Request                │
 │     ┌─────────────────────────────────────────────┐         │
-│     │ Prefix: 2602:F5BB:0001::/48                │         │
+│     │ Prefix: 2001:DB8:0001::/48                │         │
 │     │ Origin: AS 65001                            │         │
 │     │ Next-Hop: 10.0.0.1                         │         │
 │     │ Timestamp: 2024-01-15T10:30:00Z            │         │

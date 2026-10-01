@@ -95,7 +95,7 @@ func TestNTPRouterServesEveryOperation(t *testing.T) {
 			Mode:    "both",
 		},
 		sources: []*platformv1.NTPSource{
-			{Address: "198.18.0.1", State: "selected", Reachable: true},
+			{Address: "10.4.200.1", State: "selected", Reachable: true},
 		},
 	}
 	router := mountRouter(server)

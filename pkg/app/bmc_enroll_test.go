@@ -141,7 +141,7 @@ func minimalCore(t *testing.T) *enrollCore {
 
 // runDefault calls runEnrollCore with all-disabled flags and a minimal core.
 func runDefault(ctx context.Context, core *enrollCore) (*BMCEnrollResult, error) {
-	return runEnrollCore(ctx, 1, "198.51.100.102", "198.51.100.102:443", "internal.", enrollmentFlags{}, core)
+	return runEnrollCore(ctx, 1, "10.4.6.102", "10.4.6.102:443", "internal.", enrollmentFlags{}, core)
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +393,7 @@ func TestRunEnrollCore_StepDNSRegister_NoZone_Fatal(t *testing.T) {
 	ctx := context.Background()
 	core := minimalCore(t)
 	core.dnsRegister = func(_ context.Context, _, _, _ string) (string, error) {
-		return "lab-node-1-bmc.internal.", nil
+		return "node-01-bmc.internal.", nil
 	}
 	flags := enrollmentFlags{DNSRegister: true}
 
@@ -411,7 +411,7 @@ func TestRunEnrollCore_StepDNSRegister_NoZone_Fatal(t *testing.T) {
 func TestRunEnrollCore_StepDNSRegister_Success(t *testing.T) {
 	ctx := context.Background()
 	core := minimalCore(t)
-	const wantDNS = "lab-node-1-bmc.internal."
+	const wantDNS = "node-01-bmc.internal."
 	core.dnsRegister = func(_ context.Context, _, _, _ string) (string, error) {
 		return wantDNS, nil
 	}
@@ -635,7 +635,7 @@ func TestRunEnrollCore_FullCeremony_HappyPath(t *testing.T) {
 		DANEPublish:        true,
 	}
 
-	result, err := runEnrollCore(ctx, 7, "lab-node-1", "lab-node-1:443", "internal.", flags, core)
+	result, err := runEnrollCore(ctx, 7, "node-01", "node-01:443", "internal.", flags, core)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -661,8 +661,8 @@ func TestRunEnrollCore_FullCeremony_HappyPath(t *testing.T) {
 	}
 
 	// Verify side-effects.
-	if pinHost != "lab-node-1" {
-		t.Errorf("pinUpdater host = %q, want %q", pinHost, "lab-node-1")
+	if pinHost != "node-01" {
+		t.Errorf("pinUpdater host = %q, want %q", pinHost, "node-01")
 	}
 	if dnsRegistered == "" {
 		t.Error("dnsRegister was not called")
@@ -806,7 +806,7 @@ func TestRunEnrollCore_DeviceStamp_SetsEnrollmentFields(t *testing.T) {
 	ctx := context.Background()
 	newCert := testIssuedCertificate()
 	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: newCert.Raw})
-	const dnsName = "lab-node-1-bmc.internal."
+	const dnsName = "node-01-bmc.internal."
 
 	var savedDev *entities.Device
 	dev := &entities.Device{ID: 1}

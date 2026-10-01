@@ -123,6 +123,13 @@ live now and belongs in the deployment decision, not only in the backlog.
 
 `pkg/dns/config.go`. YAML keys use hyphens.
 
+**Built-in zones (`DefaultConfig`) are placeholders.** The public zone is
+`example.com.` and the internal zone `example.internal.` (RFC 2606 names; the
+internal zone takes a `.internal` name because `Register` refuses a public TLD in
+the internal zone with `ErrInvalidPrivateTLD`). Neither is a usable deployment
+value, and the build carries no default domain either (the Makefile's `DOMAIN`
+is unset): a deployment names its own zones.
+
 **Registration gates — the three that decide exposure:**
 
 | Key | Meaning |

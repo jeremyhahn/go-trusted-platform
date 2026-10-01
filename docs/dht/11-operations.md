@@ -3782,7 +3782,7 @@ slack:
 email:
   smtp_host: smtp.example.com
   smtp_port: 587
-  from: "alerts@trusted-platform.network"
+  from: "alerts@letstrust.net"
   recipients:
     oncall_sre: oncall-sre@example.com
     senior_sre: senior-sre@example.com
@@ -6520,9 +6520,9 @@ platformctl dr test report \
        MaxRetries:         3,
        RetryDelay:         5 * time.Second,
        DNSSeedDomains: []string{
-           "seed.trusted-platform.network",
-           "seed2.trusted-platform.network",
-           "seed.trusted-platform.io",          // Backup TLD
+           "seed.letstrust.net",
+           "seed2.letstrust.net",
+           "seed.example.com",          // Backup TLD
        },
    }
 

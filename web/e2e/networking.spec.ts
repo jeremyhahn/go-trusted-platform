@@ -1834,8 +1834,8 @@ test.describe('Networking Management', () => {
       });
       await mockReportedGateways(page, [
         {
-          gateway_id: 'gw-lab-node-1',
-          hostname: 'lab-node-1-gateway',
+          gateway_id: 'gw-node-01',
+          hostname: 'node-01-gateway',
           mode: 'edge',
           reported_at: new Date().toISOString(),
           received_at: new Date().toISOString(),
@@ -1847,7 +1847,7 @@ test.describe('Networking Management', () => {
 
       await page.goto('/networking/gateway');
 
-      await expect(page.getByText('lab-node-1-gateway')).toBeVisible();
+      await expect(page.getByText('node-01-gateway')).toBeVisible();
       await expect(page.getByText(/this node does not run gatewayd/i)).toBeVisible();
       // The local-service cards (and their Unhealthy badge) must be gone.
       await expect(page.getByText('Unhealthy')).not.toBeVisible();
@@ -2217,13 +2217,13 @@ test.describe('Networking Management', () => {
       });
       await mockReportedGateways(page, [
         {
-          gateway_id: 'gw-lab-node-1',
-          hostname: 'lab-node-1-gateway',
+          gateway_id: 'gw-node-01',
+          hostname: 'node-01-gateway',
           reported_at: new Date().toISOString(),
           health: { status: 'healthy' },
           pxe: {
             status: 'running',
-            listen_address: '198.18.0.1:69',
+            listen_address: '10.4.200.1:69',
             boots_served: 12,
           },
         },
@@ -2233,8 +2233,8 @@ test.describe('Networking Management', () => {
       await page.goto('/networking/pxe');
 
       await expect(page.getByText(/pxe is not available on this node/i)).toBeVisible();
-      await expect(page.getByText('lab-node-1-gateway')).toBeVisible();
-      await expect(page.getByText('198.18.0.1:69')).toBeVisible();
+      await expect(page.getByText('node-01-gateway')).toBeVisible();
+      await expect(page.getByText('10.4.200.1:69')).toBeVisible();
       // No destructive error alert for the informational state.
       await expect(page.getByRole('heading', { name: /error loading pxe boot/i })).not.toBeVisible();
     });

@@ -10,7 +10,7 @@
 # cross-signer to verify domain ownership. If the domain is not
 # publicly accessible, set CROSS_SIGNER to an empty string.
 #
-# Example: CROSS_SIGNER= DOMAIN=dev.trusted-platform.io make
+# Example: CROSS_SIGNER= DOMAIN=dev.example.com make
 
 # This example uses Let's Encrypt, but any RFC-8555 compliant ACME
 # server can be used to cross-sign the certificate. 
@@ -26,7 +26,7 @@ LOG_DIR            ?= $(PLATFORM_DIR)/log
 CA_DIR             ?= $(PLATFORM_DIR)/ca
 PASSWORD		   ?= example
 DOMAIN             ?= example.com
-SERVER_DIRECTORY   ?= https://dev.trusted-platform.io/api/v1/acme/directory
+SERVER_DIRECTORY   ?= https://dev.example.com/api/v1/acme/directory
 CROSS_SIGNER       ?= https://acme-staging-v02.api.letsencrypt.org/directory
 
 default: clean build config-nonfips run

@@ -45,15 +45,15 @@ dns:
       - 192.168.2.1
       - 192.168.3.1
     zone:
-      description: Internal zone for trusted-platform.internal
-      name: trusted-platform.internal.
+      description: Internal zone for example.internal
+      name: example.internal.
       ttl: 3600
       internal: true
       records:
         soa:
-          name: trusted-platform.internal.
-          mname: ns1.trusted-platform.internal.
-          rname: hostmaster.trusted-platform.internal.
+          name: example.internal.
+          mname: ns1.example.internal.
+          rname: hostmaster.example.internal.
           serial: 1
           refresh: 86400
           retry: 7200
@@ -61,14 +61,14 @@ dns:
           minimum_ttl: 3600
           ttl: 3600
         ns:
-          - name: trusted-platform.internal.
-            value: ns1.trusted-platform.internal.
+          - name: example.internal.
+            value: ns1.example.internal.
             ttl: 3600
-          - name: trusted-platform.internal.
-            value: ns2.trusted-platform.internal.
+          - name: example.internal.
+            value: ns2.example.internal.
             ttl: 3600
-          - name: trusted-platform.internal.
-            value: ns3.trusted-platform.internal.
+          - name: example.internal.
+            value: ns3.example.internal.
             ttl: 3600
         a:
           - name: ns1
@@ -85,7 +85,7 @@ dns:
             ttl: 3600
         cname:
           - name: www
-            value: trusted-platform.internal.
+            value: example.internal.
             ttl: 3600
 
   
@@ -447,7 +447,7 @@ webservice:
       email:
         - hostmaster@trusted-platform.local
   virtual-hosts:
-    # Virtual host for dashboard.trusted-platform.io
+    # Virtual host for dashboard.example.com
     - home: dashboard.trusted-platform.local
       index: index.html
       hosts:

@@ -22,7 +22,7 @@ import (
 
 // syncedTrackingCSV is a real `chronyc -c tracking` line from a converged
 // node (14 fields).
-const syncedTrackingCSV = "CB00710F,198.18.0.1,3,1755000000.500000000," +
+const syncedTrackingCSV = "CB00710F,10.4.200.1,3,1755000000.500000000," +
 	"-0.000012345,-0.000009876,0.000021000,-1.234,0.001,0.100,0.023000,0.045000,64.2,Normal\n"
 
 // unsyncedTrackingCSV is what chronyd reports before it has a reference.
@@ -31,7 +31,7 @@ const unsyncedTrackingCSV = "7F7F0101,,0,0.000000000," +
 
 // sourcesCSV is a real `chronyc -c sources` capture: one selected server, one
 // unreachable pool member.
-const sourcesCSV = "^,*,198.18.0.1,2,6,377,23,-0.000021,-0.000019,0.000110\n" +
+const sourcesCSV = "^,*,10.4.200.1,2,6,377,23,-0.000021,-0.000019,0.000110\n" +
 	"^,?,203.0.113.9,0,6,0,0,0.000000,0.000000,0.000000\n"
 
 // fakeCall records one CommandRunner invocation.
@@ -101,8 +101,8 @@ func TestControllerReadsTrackingAndSources(t *testing.T) {
 	if tracking.Stratum != 3 {
 		t.Fatalf("Stratum = %d, want 3", tracking.Stratum)
 	}
-	if tracking.ReferenceName != "198.18.0.1" {
-		t.Fatalf("ReferenceName = %q, want 198.18.0.1", tracking.ReferenceName)
+	if tracking.ReferenceName != "10.4.200.1" {
+		t.Fatalf("ReferenceName = %q, want 10.4.200.1", tracking.ReferenceName)
 	}
 	if tracking.RootDispersion != 0.045 {
 		t.Fatalf("RootDispersion = %v, want 0.045", tracking.RootDispersion)
@@ -186,7 +186,7 @@ func TestControllerSurfacesUnavailableSocket(t *testing.T) {
 func TestParseTrackingRejectsMalformedOutput(t *testing.T) {
 	cases := map[string]string{
 		"empty output":  "",
-		"short record":  "CB00710F,198.18.0.1,3\n",
+		"short record":  "CB00710F,10.4.200.1,3\n",
 		"header only\n": "\n",
 	}
 
@@ -234,7 +234,7 @@ func TestParseSourcesHandlesEmptyAndMalformedOutput(t *testing.T) {
 		t.Fatalf("len(sources) = %d, want 0", len(sources))
 	}
 
-	if _, err := parseSources("^,*,198.18.0.1,2\n"); err == nil {
+	if _, err := parseSources("^,*,10.4.200.1,2\n"); err == nil {
 		t.Fatal("parseSources() = nil error, want ErrMalformedControlOutput")
 	}
 }

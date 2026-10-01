@@ -383,7 +383,7 @@ live QUIC), the dark REST/QUIC profile structs, and the MCP `profile_create`
 / `profile_update_by_id` tools — and the operator path is the CLI:
 
 ```bash
-platformctl device profile update <profile-id> --tls-server-name compute.trusted-platform.internal
+platformctl device profile update <profile-id> --tls-server-name compute.example.internal
 ```
 
 An update that omits the name keeps the stored one (§3.3), so a console edit

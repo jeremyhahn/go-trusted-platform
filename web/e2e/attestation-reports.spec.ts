@@ -302,9 +302,9 @@ test.describe('Device attestation report (#428)', () => {
 
   test('the device detail page shows where the last heartbeat came from', async ({ page }) => {
     await mockReportsApi(page, {});
-    await openDetail(page, 1, { last_heartbeat_at: new Date().toISOString(), last_heartbeat_addr: '198.51.100.103:49152' });
+    await openDetail(page, 1, { last_heartbeat_at: new Date().toISOString(), last_heartbeat_addr: '10.4.6.103:49152' });
 
-    await expect(page.getByTestId('last-heartbeat-addr')).toHaveText('198.51.100.103:49152');
+    await expect(page.getByTestId('last-heartbeat-addr')).toHaveText('10.4.6.103:49152');
   });
 });
 

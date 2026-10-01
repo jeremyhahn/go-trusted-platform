@@ -71,7 +71,7 @@ func TestCRUDHandler_CreateProfile_EKPrestageFields(t *testing.T) {
 		EKSerial:   "EK-WS-1",
 		EKCert:     certPEM,
 		MACAddress: "aa:bb:cc:dd:ee:11",
-		Config:     map[string]any{"hostname": "lab-node-2"},
+		Config:     map[string]any{"hostname": "node-02"},
 		Assigned:   true,
 		AssignedAt: assignedAt,
 	}
@@ -132,7 +132,7 @@ func TestCRUDHandler_UpdateProfile_EKPrestageFields(t *testing.T) {
 		EKSerial:   "EK-WS-2",
 		EKCert:     certPEM,
 		MACAddress: "aa:bb:cc:dd:ee:22",
-		Config:     map[string]any{"hostname": "lab-node-3"},
+		Config:     map[string]any{"hostname": "node-03"},
 	}
 	body, err := json.Marshal(reqBody)
 	require.NoError(t, err)

@@ -69,15 +69,15 @@ dns:
     forwarders:
       - "192.168.1.1"
     zone:
-      name: "trusted-platform.internal."
+      name: "example.internal."
       ttl: 3600
       description: "Internal zone"
       internal: true
       records:
         soa:
-          name: "trusted-platform.internal."
-          mname: "ns1.trusted-platform.internal."
-          rname: "hostmaster.trusted-platform.internal."
+          name: "example.internal."
+          mname: "ns1.example.internal."
+          rname: "hostmaster.example.internal."
           serial: 1
           refresh: 86400
           retry: 7200
@@ -85,8 +85,8 @@ dns:
           minimum_ttl: 3600
           ttl: 3600
         ns:
-          - name: "trusted-platform.internal."
-            value: "ns1.trusted-platform.internal."
+          - name: "example.internal."
+            value: "ns1.example.internal."
             ttl: 3600
         a:
           - name: "ns1"
@@ -102,15 +102,15 @@ dns:
       - "8.8.8.8"
       - "4.4.4.4"
     zone:
-      name: "trusted-platform.io."
+      name: "example.com."
       ttl: 3600
       description: "Public zone"
       internal: false
       records:
         soa:
-          name: "trusted-platform.io."
-          mname: "ns1.trusted-platform.io."
-          rname: "hostmaster.trusted-platform.io."
+          name: "example.com."
+          mname: "ns1.example.com."
+          rname: "hostmaster.example.com."
           serial: 1
           refresh: 86400
           retry: 7200
@@ -118,8 +118,8 @@ dns:
           minimum_ttl: 3600
           ttl: 3600
         ns:
-          - name: "trusted-platform.io."
-            value: "ns1.trusted-platform.io."
+          - name: "example.com."
+            value: "ns1.example.com."
             ttl: 3600
         a:
           - name: "ns1"
@@ -134,13 +134,13 @@ dns:
 
 ```bash
 # Query internal zone
-dig @localhost -p 9053 myhost.trusted-platform.internal A
+dig @localhost -p 9053 myhost.example.internal A
 
 # Query public zone
-dig @localhost -p 8053 www.trusted-platform.io A
+dig @localhost -p 8053 www.example.com A
 
 # Query SOA record
-dig @localhost -p 9053 trusted-platform.internal SOA
+dig @localhost -p 9053 example.internal SOA
 ```
 
 ### Register a Device
@@ -148,7 +148,7 @@ dig @localhost -p 9053 trusted-platform.internal SOA
 ```bash
 # Devices can self-register using the platform API
 platformctl dns register \
-  --fqdn "newhost.trusted-platform.internal" \
+  --fqdn "newhost.example.internal" \
   --ip "192.168.1.50"
 ```
 

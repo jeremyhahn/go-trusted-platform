@@ -138,12 +138,12 @@ func TestRunBGPPeers_NoContext(t *testing.T) {
 }
 
 func TestRunBGPAnnounce_NoContext(t *testing.T) {
-	err := runBGPAnnounce(noContextFlags(), "2602:F5BB::/36", "10.0.0.1")
+	err := runBGPAnnounce(noContextFlags(), "2001:DB8::/36", "10.0.0.1")
 	assertNoContextError(t, err)
 }
 
 func TestRunBGPWithdraw_NoContext(t *testing.T) {
-	err := runBGPWithdraw(noContextFlags(), "2602:F5BB::/36")
+	err := runBGPWithdraw(noContextFlags(), "2001:DB8::/36")
 	assertNoContextError(t, err)
 }
 

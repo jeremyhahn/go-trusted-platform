@@ -34,9 +34,9 @@ func TestVirtualMediaSMBURL(t *testing.T) {
 	}{
 		{
 			name:         "absolute local path",
-			deployerHost: "198.18.1.91",
-			localPath:    "/home/jhahn/build/trusted-platform.iso",
-			want:         "smb://198.18.1.91/boot/trusted-platform.iso",
+			deployerHost: "10.4.2.91",
+			localPath:    "/srv/build/trusted-platform.iso",
+			want:         "smb://10.4.2.91/boot/trusted-platform.iso",
 		},
 		{
 			name:         "relative local path",

@@ -556,29 +556,29 @@ RetryConfig{
 
 ```bash
 # Register device with default TTL
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100
+platformctl dns update myhost.example.internal 192.168.1.100
 
 # Register with custom TTL
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100 --ttl 7200
+platformctl dns update myhost.example.internal 192.168.1.100 --ttl 7200
 
 # Auto-detect IP and register
-platformctl dns update myhost.trusted-platform.internal --auto
+platformctl dns update myhost.example.internal --auto
 
 # Update IPv6 record
-platformctl dns update myhost.trusted-platform.internal 2001:db8::1 --type AAAA
+platformctl dns update myhost.example.internal 2001:db8::1 --type AAAA
 
 # Delete A record
-platformctl dns delete myhost.trusted-platform.internal
+platformctl dns delete myhost.example.internal
 
 # Delete all records for a name
-platformctl dns delete myhost.trusted-platform.internal --all
+platformctl dns delete myhost.example.internal --all
 
 # Dry run to see what would happen
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100 --dry-run
+platformctl dns update myhost.example.internal 192.168.1.100 --dry-run
 
 # Use specific server
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100 \
-  --server ns1.trusted-platform.internal:53
+platformctl dns update myhost.example.internal 192.168.1.100 \
+  --server ns1.example.internal:53
 ```
 
 ## Troubleshooting
@@ -603,10 +603,10 @@ platformctl dns update myhost.internal 192.168.1.100 --verbose
 platformctl dns tsig list
 
 # Test connectivity to nameserver
-platformctl dns ping ns1.trusted-platform.internal:53
+platformctl dns ping ns1.example.internal:53
 
 # Verify current record
-dig @ns1.trusted-platform.internal myhost.trusted-platform.internal A
+dig @ns1.example.internal myhost.example.internal A
 ```
 
 ## Attestation-Gated Updates

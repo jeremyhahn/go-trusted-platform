@@ -24,12 +24,12 @@ import (
 
 func dryRunSELConfig() *BootstrapConfig {
 	return &BootstrapConfig{
-		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "198.51.100.91"},
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "10.4.6.91"},
 		Environment: testEnvironment(),
 		Platform:    PlatformGlobalConfig{Domain: "test.local"},
 		Nodes: []NodeConfig{{
-			Hostname: "lab-node-2", Role: RoleControlPlane,
-			BMCAddress: "198.18.1.102", BMCUser: "admin", BMCPassword: "pass", BMCProtocol: "ipmi",
+			Hostname: "node-02", Role: RoleControlPlane,
+			BMCAddress: "10.4.2.102", BMCUser: "admin", BMCPassword: "pass", BMCProtocol: "ipmi",
 		}},
 	}
 }
@@ -81,10 +81,10 @@ func TestOrchestrator_DryRun_EventLogWarnings(t *testing.T) {
 	if len(node.Warnings) != 2 {
 		t.Fatalf("expected a log-full warning and a DIMMB1 warning, got %q", node.Warnings)
 	}
-	if !strings.Contains(node.Warnings[0], "lab-node-2: system event log is full") || !strings.Contains(node.Warnings[0], "2024-04-20T09:30:00Z") {
+	if !strings.Contains(node.Warnings[0], "node-02: system event log is full") || !strings.Contains(node.Warnings[0], "2024-04-20T09:30:00Z") {
 		t.Errorf("log-full warning: %q", node.Warnings[0])
 	}
-	want := "lab-node-2: DIMMB1 has 3 memory faults on record (1 uncorrectable), last: Correctable ECC at 2024-04-20T09:30:00Z — expect POST to halt on this DIMM"
+	want := "node-02: DIMMB1 has 3 memory faults on record (1 uncorrectable), last: Correctable ECC at 2024-04-20T09:30:00Z — expect POST to halt on this DIMM"
 	if node.Warnings[1] != want {
 		t.Errorf("DIMM warning:\n got %q\nwant %q", node.Warnings[1], want)
 	}
@@ -161,7 +161,7 @@ func TestOrchestrator_DryRun_EventLogUnsupportedAndUnreadable(t *testing.T) {
 			t.Fatalf("dry-run failed: %v", err)
 		}
 		warnings := result.Nodes[0].Warnings
-		if len(warnings) != 1 || !strings.Contains(warnings[0], "lab-node-2: system event log could not be read (bmc: event log info failed: timeout)") {
+		if len(warnings) != 1 || !strings.Contains(warnings[0], "node-02: system event log could not be read (bmc: event log info failed: timeout)") {
 			t.Errorf("read failure warning: %q", warnings)
 		}
 		if result.Nodes[0].Status != dryRunStatusReady {

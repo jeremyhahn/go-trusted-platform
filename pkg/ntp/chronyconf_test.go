@@ -48,13 +48,13 @@ func TestRenderControlPlaneEmitsServerAndClientDirectives(t *testing.T) {
 	requireLines(t, rendered,
 		ManagedHeader,
 		"# mode: both",
-		"server 198.18.0.1 iburst prefer",
+		"server 10.4.200.1 iburst prefer",
 		"pool pool.ntp.org iburst",
 		"driftfile /var/lib/chrony/chrony.drift",
 		"makestep 1.0 3",
 		"rtcsync",
-		"allow 198.18.0.0/24",
-		"allow 172.16.201.0/24",
+		"allow 10.4.200.0/24",
+		"allow 192.0.2.0/24",
 		"local stratum 10",
 		"ntsservercert /etc/chrony/nts.d/current/nts-server.crt",
 		"ntsserverkey /etc/chrony/nts.d/current/nts-server.key",
@@ -75,7 +75,7 @@ func TestRenderConsumerDisablesTheServerPort(t *testing.T) {
 
 	requireLines(t, rendered,
 		"# mode: consume",
-		"server 198.18.0.10 iburst prefer nts",
+		"server 10.4.200.10 iburst prefer nts",
 		"port 0",
 		"cmdport 0",
 	)
@@ -94,7 +94,7 @@ func TestRenderOmitsRTCSyncAndOrphanWhenDisabled(t *testing.T) {
 	}
 
 	requireNoLines(t, rendered, "rtcsync", "local stratum", "ntsservercert")
-	requireLines(t, rendered, "allow 198.18.0.0/24")
+	requireLines(t, rendered, "allow 10.4.200.0/24")
 }
 
 func TestRenderHonorsCustomPaths(t *testing.T) {

@@ -632,4 +632,4 @@ consumes.
 See `../bmc-tls.md` for the cert lifecycle that rides on top of this
 pattern, and `../../docs/bmc/testing.md` + `../operations/cert-lifecycle.md`
 for integration test + operator guides. Upstream detail lives in
-`/home/jhahn/sources/go-quicbaas/docs/scheduler-clustering.md`.
+`../go-quicbaas/docs/scheduler-clustering.md`.

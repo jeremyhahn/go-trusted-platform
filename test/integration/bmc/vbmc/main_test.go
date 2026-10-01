@@ -36,7 +36,7 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if c.vendor != "Supermicro" {
 		t.Errorf("vendor = %q, want Supermicro", c.vendor)
 	}
-	if c.cn != "vbmc.trusted-platform.internal" {
+	if c.cn != "vbmc.example.internal" {
 		t.Errorf("cn = %q", c.cn)
 	}
 	if c.logLevel != slog.LevelInfo {

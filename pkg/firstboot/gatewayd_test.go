@@ -32,7 +32,7 @@ import (
 
 const gatewayPlatformConfig = `domain: gw.example.com
 platform:
-  name: lab-node-1
+  name: node-01
 sdn:
   enabled: true
   bridge: br-fabric
@@ -46,7 +46,7 @@ secret-store:
   timeout: 10s
 gateway:
   enabled: true
-  id: lab-node-1-gateway
+  id: node-01-gateway
   node-id: 1
   tier: datacenter
   firewall:
@@ -55,7 +55,7 @@ gateway:
 control-plane:
   enabled: true
   base-url: https://cp.example.internal:8443
-  gateway-id: lab-node-1-gateway
+  gateway-id: node-01-gateway
   interval: 30s
   cert-file: /etc/gatewayd/client.pem
   key-file: /etc/gatewayd/client-key.pem
@@ -95,9 +95,9 @@ func TestRenderGatewaydConfig_ProjectsOnlyGatewaydSections(t *testing.T) {
 
 	cp := doc["control-plane"].(map[string]any)
 	assert.Equal(t, true, cp["enabled"])
-	assert.Equal(t, "lab-node-1-gateway", cp["gateway-id"])
+	assert.Equal(t, "node-01-gateway", cp["gateway-id"])
 	gw := doc["gateway"].(map[string]any)
-	assert.Equal(t, "lab-node-1-gateway", gw["id"])
+	assert.Equal(t, "node-01-gateway", gw["id"])
 	assert.True(t, strings.HasPrefix(string(rendered), "# gatewayd configuration rendered by platformd firstboot"))
 
 	// The section is projected with its CONTENT, not merely present, and

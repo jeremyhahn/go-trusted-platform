@@ -170,7 +170,7 @@ Edge gateways serve as bootstrap entry points for new nodes joining the DHT netw
 |     | {                                                         | |
 |     |   "node_id": "Qm...",                                    | |
 |     |   "public_key": "base64(Ed25519_Pub)",                   | |
-|     |   "addresses": ["[2602:f5bb:1::123]:10443"],             | |
+|     |   "addresses": ["[2001:db8:1::123]:10443"],             | |
 |     |   "capabilities": ["leaf", "relay"]                      | |
 |     | }                                                         | |
 |     +----------------------------------------------------------+ |
@@ -260,16 +260,16 @@ Edge gateways manage IPv6 address allocation from the platform's 2001:db8::/36 p
 |
 +-- Regional Pool Assignment
 |   |
-|   +-- 2602:F5BB:0000::/40 (Region 0 - North America East)
-|   |   +-- 2602:F5BB:0000:0001::/64 (Subnet 1)
-|   |   +-- 2602:F5BB:0000:0002::/64 (Subnet 2)
+|   +-- 2001:DB8:0000::/40 (Region 0 - North America East)
+|   |   +-- 2001:DB8:0000:0001::/64 (Subnet 1)
+|   |   +-- 2001:DB8:0000:0002::/64 (Subnet 2)
 |   |   +-- ...
 |   |
-|   +-- 2602:F5BB:0100::/40 (Region 1 - North America West)
-|   +-- 2602:F5BB:0200::/40 (Region 2 - Europe West)
-|   +-- 2602:F5BB:0300::/40 (Region 3 - Europe East)
-|   +-- 2602:F5BB:0400::/40 (Region 4 - Asia Pacific North)
-|   +-- 2602:F5BB:0500::/40 (Region 5 - Asia Pacific South)
+|   +-- 2001:DB8:0100::/40 (Region 1 - North America West)
+|   +-- 2001:DB8:0200::/40 (Region 2 - Europe West)
+|   +-- 2001:DB8:0300::/40 (Region 3 - Europe East)
+|   +-- 2001:DB8:0400::/40 (Region 4 - Asia Pacific North)
+|   +-- 2001:DB8:0500::/40 (Region 5 - Asia Pacific South)
 |   +-- ... (up to 16 regions with /40 aggregates)
 ```
 

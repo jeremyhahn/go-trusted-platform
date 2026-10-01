@@ -332,7 +332,7 @@ message BMCEnrollResponse {
   string endpoint = 2;
   // Hostname is the bare hostname of the BMC address (no port).
   string hostname = 3;
-  // DnsName is the FQDN registered in internal DNS, e.g. "lab-node-1-bmc.internal.".
+  // DnsName is the FQDN registered in internal DNS, e.g. "node-01-bmc.internal.".
   // Empty when dns-register was skipped.
   string dns_name = 4;
   // PinSpkiSha256 is the hex-encoded SHA-256 of the pinned SPKI of the

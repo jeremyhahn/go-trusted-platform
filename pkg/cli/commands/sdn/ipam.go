@@ -295,7 +295,7 @@ func newIPAMReleaseCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 
 Examples:
   platformctl sdn ipam release --ip 10.0.0.5
-  platformctl sdn ipam release --ip 2602:F5BB::1`,
+  platformctl sdn ipam release --ip 2001:DB8::1`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runIPAMRelease(getFlags(), ip)
 		},

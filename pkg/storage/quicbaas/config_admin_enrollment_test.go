@@ -27,7 +27,7 @@ func adminEnrollmentConfig(t *testing.T) *Config {
 	t.Helper()
 	c := &Config{
 		DataDir:                   t.TempDir(),
-		SPIFFETrustDomain:         "trusted-platform.internal",
+		SPIFFETrustDomain:         "example.internal",
 		BootstrapAdminCSRPath:     "/etc/platform/admin.csr",
 		BootstrapAdminPIVCertPath: "/etc/platform/admin-piv.crt",
 		AdminFactors:              []string{"mtls", "fido2"},
@@ -58,7 +58,7 @@ func TestToQuicBaaSConfig_AdminEnrollmentPassthrough(t *testing.T) {
 // default (path A), not a platform-invented one. An empty value has to mean
 // upstream's empty, so the platform must not substitute anything.
 func TestToQuicBaaSConfig_AdminEnrollmentDefaultsEmpty(t *testing.T) {
-	c := &Config{DataDir: t.TempDir(), SPIFFETrustDomain: "trusted-platform.internal"}
+	c := &Config{DataDir: t.TempDir(), SPIFFETrustDomain: "example.internal"}
 	c.SetDefaults()
 	cfg := c.ToQuicBaaSConfig()
 
@@ -75,7 +75,7 @@ func TestToQuicBaaSConfig_AdminEnrollmentDefaultsEmpty(t *testing.T) {
 func TestConfig_AdminEnrollmentYAMLKeys(t *testing.T) {
 	const doc = `
 data-dir: /var/lib/platform
-spiffe-trust-domain: trusted-platform.internal
+spiffe-trust-domain: example.internal
 bootstrap-admin-csr-path: /etc/platform/admin.csr
 bootstrap-admin-piv-cert-path: /etc/platform/admin-piv.crt
 admin-factors:
@@ -96,7 +96,7 @@ passkey-device: /dev/hidraw1
 // config clean: these are optional, so a deployment that does not use them
 // should not carry four empty keys in every generated file.
 func TestConfig_AdminEnrollmentOmittedFromYAMLWhenUnset(t *testing.T) {
-	c := &Config{DataDir: t.TempDir(), SPIFFETrustDomain: "trusted-platform.internal"}
+	c := &Config{DataDir: t.TempDir(), SPIFFETrustDomain: "example.internal"}
 
 	out, err := yaml.Marshal(c)
 	require.NoError(t, err)

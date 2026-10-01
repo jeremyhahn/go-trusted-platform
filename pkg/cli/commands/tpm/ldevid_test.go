@@ -29,7 +29,7 @@ func TestBuildCreateLDevIDRequest(t *testing.T) {
 			organizationalUnit: "Devices",
 			country:            "US",
 			state:              "FL",
-			locality:           "Miami",
+			locality:           "POP A",
 			algorithm:          "ECDSA-P384",
 			handle:             "0x81010102",
 			profile:            "tls-client",
@@ -51,7 +51,7 @@ func TestBuildCreateLDevIDRequest(t *testing.T) {
 		tmpl := req.GetTemplate()
 		if tmpl == nil || tmpl.GetCommonName() != "ldevid.example" || tmpl.GetOrganization() != "ATT" ||
 			tmpl.GetOrganizationalUnit() != "Devices" || tmpl.GetCountry() != "US" ||
-			tmpl.GetProvince() != "FL" || tmpl.GetLocality() != "Miami" {
+			tmpl.GetProvince() != "FL" || tmpl.GetLocality() != "POP A" {
 			t.Errorf("template mismatch: %+v", tmpl)
 		}
 	})

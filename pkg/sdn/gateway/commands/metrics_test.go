@@ -39,7 +39,7 @@ func metricsTestLogger() *slog.Logger {
 
 func TestBuildMetricsServer_ServesTheSnapshot(t *testing.T) {
 	source := fakeSnapshotSource{snap: &gwstate.Snapshot{
-		GatewayID: "lab-node-1-gateway",
+		GatewayID: "node-01-gateway",
 		Services:  []gwstate.ServiceState{{Name: "tunnels", Active: true, Healthy: true}},
 	}}
 	server, err := BuildMetricsServer(&MetricsConfig{Enabled: true, Listen: "127.0.0.1:0"}, source, metricsTestLogger())
@@ -56,7 +56,7 @@ func TestBuildMetricsServer_ServesTheSnapshot(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.Contains(t, string(body), `gatewayd_service_active{gateway="lab-node-1-gateway",service="tunnels"} 1`)
+	assert.Contains(t, string(body), `gatewayd_service_active{gateway="node-01-gateway",service="tunnels"} 1`)
 
 	require.NoError(t, server.Shutdown())
 	require.NoError(t, <-done, "a drained endpoint exits without error")

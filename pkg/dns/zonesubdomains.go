@@ -156,7 +156,7 @@ func ensureNetworkZoneSubdomain(
 //
 // internalDomain should be the internal zone name without trailing dot.
 // networkZone is the resolved network zone name (e.g. "control-plane").
-// host is the plain hostname label (e.g. "lab-node-1").
+// host is the plain hostname label (e.g. "node-01").
 func NetworkZoneSubdomainFQDN(host, networkZone, internalDomain string) string {
 	return fmt.Sprintf("%s.%s.%s", host, networkZone, internalDomain)
 }

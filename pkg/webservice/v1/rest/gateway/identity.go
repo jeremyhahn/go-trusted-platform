@@ -64,7 +64,7 @@ func gatewayPrincipal(r *http.Request) (string, error) {
 		return "", ErrGatewayIdentityRequired{Reason: "client certificate carries no Common Name"}
 	}
 	// The CN is used verbatim, never normalized. Trimming it here would
-	// make a certificate issued for " lab-node-1 " authenticate as lab-node-1,
+	// make a certificate issued for " node-01 " authenticate as node-01,
 	// which is an aliasing path into another gateway's record — exactly
 	// what an exact binding is for. A padded CN is refused instead, and
 	// a CN that is only whitespace is caught by the same rule.

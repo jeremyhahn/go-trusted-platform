@@ -312,7 +312,7 @@ func TestZoneFlowConfig_ZeroValue_NonemptyGeneratorSet(t *testing.T) {
 // TestGenerate_Quarantine_WithDNSServerIP covers the DNSServerIP branch where
 // a specific DNS server IP is configured instead of the broadcast match.
 func TestGenerate_Quarantine_WithDNSServerIP(t *testing.T) {
-	dnsIP := net.IPv4(172, 16, 202, 1)
+	dnsIP := net.IPv4(10, 4, 4, 1)
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
 		Quarantine: zoneflows.QuarantineConfig{
 			DNSServerIP: dnsIP,
@@ -336,8 +336,8 @@ func TestGenerate_Quarantine_WithDNSServerIP(t *testing.T) {
 // TestGenerate_Quarantine_WithRemediationAndScanningServers covers the
 // RemediationServerIPs, ScanningServerIPs, and AllowedPorts branches.
 func TestGenerate_Quarantine_WithRemediationAndScanningServers(t *testing.T) {
-	remIP := net.IPv4(172, 16, 202, 10)
-	scanIP := net.IPv4(172, 16, 202, 20)
+	remIP := net.IPv4(10, 4, 4, 10)
+	scanIP := net.IPv4(10, 4, 4, 20)
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
 		Quarantine: zoneflows.QuarantineConfig{
 			RemediationServerIPs: []net.IP{remIP},
@@ -366,7 +366,7 @@ func TestGenerate_Quarantine_WithRemediationAndScanningServers(t *testing.T) {
 // TestGenerate_Quarantine_WithNotificationServer covers the
 // NotificationServerIP branch.
 func TestGenerate_Quarantine_WithNotificationServer(t *testing.T) {
-	notifIP := net.IPv4(172, 16, 202, 30)
+	notifIP := net.IPv4(10, 4, 4, 30)
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
 		Quarantine: zoneflows.QuarantineConfig{
 			NotificationServerIP: notifIP,
@@ -393,7 +393,7 @@ func TestGenerate_Quarantine_WithNotificationServer(t *testing.T) {
 // TestGenerate_Provisioning_WithDNSServerIPs covers the specific DNS server IP
 // branch in the provisioning template.
 func TestGenerate_Provisioning_WithDNSServerIPs(t *testing.T) {
-	dns1 := net.IPv4(172, 16, 201, 1)
+	dns1 := net.IPv4(10, 4, 5, 1)
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
 		Provisioning: zoneflows.ProvisioningConfig{
 			DNSServerIPs: []net.IP{dns1},
@@ -416,7 +416,7 @@ func TestGenerate_Provisioning_WithDNSServerIPs(t *testing.T) {
 // TestGenerate_Provisioning_WithACMEServerIPs covers the specific ACME server
 // IP branch in the provisioning template.
 func TestGenerate_Provisioning_WithACMEServerIPs(t *testing.T) {
-	acmeIP := net.IPv4(172, 16, 201, 2)
+	acmeIP := net.IPv4(10, 4, 5, 2)
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
 		Provisioning: zoneflows.ProvisioningConfig{
 			ACMEServerIPs: []net.IP{acmeIP},
@@ -439,7 +439,7 @@ func TestGenerate_Provisioning_WithACMEServerIPs(t *testing.T) {
 // TestGenerate_Provisioning_WithPackageRepoIPs covers the PackageRepoIPs
 // branch in the provisioning template.
 func TestGenerate_Provisioning_WithPackageRepoIPs(t *testing.T) {
-	repoIP := net.IPv4(172, 16, 201, 3)
+	repoIP := net.IPv4(10, 4, 5, 3)
 	gs := zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
 		Provisioning: zoneflows.ProvisioningConfig{
 			PackageRepoIPs: []net.IP{repoIP},
@@ -499,7 +499,7 @@ func TestCompileMatrixRules_TFTPService(t *testing.T) {
 	}
 	matrix := zone.CompileMatrix(zones)
 	nets := map[zone.Zone]zoneflows.NetworkSummary{
-		zone.ZoneProvisioning: {VLAN: 201, Subnet: "172.16.201.0/24"},
+		zone.ZoneProvisioning: {VLAN: 201, Subnet: "192.0.2.0/24"},
 		zone.ZoneControlPlane: {VLAN: 200, Subnet: "10.4.6.0/24"},
 	}
 
@@ -563,7 +563,7 @@ func TestCompileMatrixRules_AllowedWithServices_DNS(t *testing.T) {
 	}
 	matrix := zone.CompileMatrix(zones)
 	nets := map[zone.Zone]zoneflows.NetworkSummary{
-		zone.ZoneProvisioning: {VLAN: 201, Subnet: "172.16.201.0/24"},
+		zone.ZoneProvisioning: {VLAN: 201, Subnet: "192.0.2.0/24"},
 		zone.ZoneControlPlane: {VLAN: 200, Subnet: "10.4.6.0/24"},
 	}
 
@@ -598,7 +598,7 @@ func TestCompileMatrixRules_AllowedWithServices_ACME(t *testing.T) {
 	}
 	matrix := zone.CompileMatrix(zones)
 	nets := map[zone.Zone]zoneflows.NetworkSummary{
-		zone.ZoneProvisioning: {VLAN: 201, Subnet: "172.16.201.0/24"},
+		zone.ZoneProvisioning: {VLAN: 201, Subnet: "192.0.2.0/24"},
 		zone.ZoneControlPlane: {VLAN: 200, Subnet: "10.4.6.0/24"},
 	}
 
@@ -633,7 +633,7 @@ func TestCompileMatrixRules_AllowedWithServices_DHCP(t *testing.T) {
 	}
 	matrix := zone.CompileMatrix(zones)
 	nets := map[zone.Zone]zoneflows.NetworkSummary{
-		zone.ZoneProvisioning: {VLAN: 201, Subnet: "172.16.201.0/24"},
+		zone.ZoneProvisioning: {VLAN: 201, Subnet: "192.0.2.0/24"},
 		zone.ZoneControlPlane: {VLAN: 200, Subnet: "10.4.6.0/24"},
 	}
 

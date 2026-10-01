@@ -40,8 +40,8 @@ Usage:
 	err := mgr.EnsureTunnel(ctx, tunnel.TunnelConfig{
 		Name:     "gre1",
 		Type:     "gre",
-		Local:    "99.12.246.36",
-		Remote:   "45.63.110.165",
+		Local:    "198.51.100.4",
+		Remote:   "198.51.100.100",
 		TunnelIP: "10.255.0.1/30",
 		MTU:      1400,
 		TTL:      64,

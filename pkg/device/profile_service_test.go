@@ -1165,7 +1165,7 @@ func TestProfileService_Update_PreservesTLSServerName(t *testing.T) {
 
 	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{
 		ID: 4480, Name: "compute", Role: entities.DeviceRoleWorker,
-		TLSServerName: "compute.trusted-platform.internal",
+		TLSServerName: "compute.example.internal",
 	}))
 
 	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{
@@ -1175,7 +1175,7 @@ func TestProfileService_Update_PreservesTLSServerName(t *testing.T) {
 	stored, err := service.Get(ctx, 4480)
 	require.NoError(t, err)
 	assert.Equal(t, "compute-renamed", stored.Name, "the edit the caller asked for")
-	assert.Equal(t, "compute.trusted-platform.internal", stored.TLSServerName, "TLSServerName erased by update")
+	assert.Equal(t, "compute.example.internal", stored.TLSServerName, "TLSServerName erased by update")
 }
 
 // TestProfileService_Update_CallerTLSServerNameStillWins pins the boundary of
@@ -1189,16 +1189,16 @@ func TestProfileService_Update_CallerTLSServerNameStillWins(t *testing.T) {
 
 	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{
 		ID: 4482, Name: "gw", Role: entities.DeviceRoleGateway,
-		TLSServerName: "compute.trusted-platform.internal",
+		TLSServerName: "compute.example.internal",
 	}))
 	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{
 		ID: 4482, Name: "gw", Role: entities.DeviceRoleGateway,
-		TLSServerName: "gw.trusted-platform.internal",
+		TLSServerName: "gw.example.internal",
 	}))
 
 	stored, err := service.Get(ctx, 4482)
 	require.NoError(t, err)
-	assert.Equal(t, "gw.trusted-platform.internal", stored.TLSServerName)
+	assert.Equal(t, "gw.example.internal", stored.TLSServerName)
 }
 
 // TestProfileService_FindProfileForDevice_BoundProfileWins pins the resolver's
@@ -1214,19 +1214,19 @@ func TestProfileService_FindProfileForDevice_BoundProfileWins(t *testing.T) {
 	certPEM := newEKCertForTest(t, 4630001)
 
 	// The installer-created shape: no match rules, then bound by assign.
-	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{ID: 4631, Name: "lab-node-5", Role: entities.DeviceRoleWorker, TLSServerName: "compute.trusted-platform.internal"}))
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{ID: 4631, Name: "node-05", Role: entities.DeviceRoleWorker, TLSServerName: "compute.example.internal"}))
 	require.NoError(t, service.AssignToDeviceWithEK(ctx, 4631, "4630001", "", certPEM))
 	// A rule-based profile that also covers the device.
 	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{ID: 4632, Name: "x10-fleet", Role: entities.DeviceRoleWorker,
 		MatchRules: &entities.ProfileMatchRules{Model: "SuperMicro X10"}}))
 
-	dev := &entities.Device{ID: 970392025956353, Serial: "lab-node-5-compute-01", Model: "SuperMicro X10", EKCert: certPEM}
+	dev := &entities.Device{ID: 970392025956353, Serial: "node-05-compute-01", Model: "SuperMicro X10", EKCert: certPEM}
 	profile, err := service.FindProfileForDevice(ctx, dev)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(4631), profile.ID, "the bound profile must win over a rule match")
-	assert.Equal(t, "compute.trusted-platform.internal", profile.TLSServerName)
+	assert.Equal(t, "compute.example.internal", profile.TLSServerName)
 
-	unbound := &entities.Device{ID: 971641861439490, Serial: "lab-node-1-gw-01", Model: "SuperMicro X10"}
+	unbound := &entities.Device{ID: 971641861439490, Serial: "node-01-gw-01", Model: "SuperMicro X10"}
 	profile, err = service.FindProfileForDevice(ctx, unbound)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(4632), profile.ID, "with no EK identity the match rules decide")
@@ -1244,8 +1244,8 @@ func TestProfileService_FindProfileForDevice_NotFound(t *testing.T) {
 	_, err = service.FindProfileForDevice(ctx, nil)
 	assert.ErrorIs(t, err, ErrDeviceRequired{})
 
-	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{ID: 4633, Name: "lab-node-5", Role: entities.DeviceRoleWorker}))
-	dev := &entities.Device{ID: 970392025956353, Serial: "lab-node-5-compute-01", Model: "SuperMicro X10", EKCert: newEKCertForTest(t, 4630002)}
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{ID: 4633, Name: "node-05", Role: entities.DeviceRoleWorker}))
+	dev := &entities.Device{ID: 970392025956353, Serial: "node-05-compute-01", Model: "SuperMicro X10", EKCert: newEKCertForTest(t, 4630002)}
 	_, err = service.FindProfileForDevice(ctx, dev)
 	var none ErrNoProfileForDevice
 	require.True(t, errors.As(err, &none), "got %v", err)
@@ -1255,8 +1255,8 @@ func TestProfileService_FindProfileForDevice_NotFound(t *testing.T) {
 	// An unparseable stored EK certificate yields no EK identity and falls
 	// through to the match rules rather than failing the resolution.
 	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{ID: 4634, Name: "rules", Role: entities.DeviceRoleWorker,
-		MatchRules: &entities.ProfileMatchRules{SerialPrefix: "MINI-01"}}))
-	profile, err := service.FindProfileForDevice(ctx, &entities.Device{ID: 9, Serial: "lab-node-1-gw-01", EKCert: "garbage"})
+		MatchRules: &entities.ProfileMatchRules{SerialPrefix: "NODE-01"}}))
+	profile, err := service.FindProfileForDevice(ctx, &entities.Device{ID: 9, Serial: "node-01-gw-01", EKCert: "garbage"})
 	require.NoError(t, err)
 	assert.Equal(t, uint64(4634), profile.ID)
 }

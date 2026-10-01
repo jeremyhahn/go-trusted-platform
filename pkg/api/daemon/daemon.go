@@ -834,7 +834,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Without this injection every method returned
 	// codes.Unavailable "TPM service not available" because the
 	// internal tpm field was nil. Observed via `platformctl tpm info`
-	// on lab-node-2 2026-04-08 — the command returned "tpm service not
+	// on node-02 2026-04-08 — the command returned "tpm service not
 	// available" even though app.TPM was alive and the PlatformSRK
 	// was present on the hardware TPM. The comment on the old line
 	// claimed injection happened "later via SetTPM2Service" but no

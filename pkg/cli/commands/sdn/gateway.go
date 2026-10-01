@@ -165,8 +165,8 @@ Examples:
 		Long: `Announce a prefix via BGP.
 
 Examples:
-  platformctl sdn gateway bgp announce --prefix 2602:F5BB::/36
-  platformctl sdn gateway bgp announce --prefix 23.143.36.0/24 --next-hop 10.0.0.1`,
+  platformctl sdn gateway bgp announce --prefix 2001:DB8::/36
+  platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 10.0.0.1`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBGPAnnounce(getFlags(), prefix, nextHop)
 		},
@@ -182,7 +182,7 @@ Examples:
 		Long: `Withdraw a previously announced prefix.
 
 Examples:
-  platformctl sdn gateway bgp withdraw --prefix 2602:F5BB::/36`,
+  platformctl sdn gateway bgp withdraw --prefix 2001:DB8::/36`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBGPWithdraw(getFlags(), prefix)
 		},

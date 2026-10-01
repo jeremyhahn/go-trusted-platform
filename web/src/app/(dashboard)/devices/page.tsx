@@ -80,7 +80,7 @@ export default function DevicesPage() {
     // First transform SDK devices to local Device type
     const transformedDevices = rawDevices.map((device: SDKDevice): Device => {
       // ACME enroll-01 registered devices carry the hostname-derived
-      // identifier in `serial` (e.g. "lab-node-1-gw-01") and the hardware
+      // identifier in `serial` (e.g. "node-01-gw-01") and the hardware
       // model in `model` (e.g. "SuperMicro X10"). Operators expect the
       // Name column to be the unique node identifier; fall back to model
       // only when no serial was supplied (manual UI registration where

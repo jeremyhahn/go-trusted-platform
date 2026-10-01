@@ -82,7 +82,7 @@ func TestMACCommand_Run(t *testing.T) {
 				"--bmc-protocol", "ipmi",
 			},
 			stub: func(_ context.Context, _ *bmc.Config, _ *slog.Logger) ([]string, error) {
-				return []string{"00:25:90:5e:02:aa"}, nil
+				return []string{"00:25:90:00:02:aa"}, nil
 			},
 			verify: func(t *testing.T, cfg *bmc.Config) {
 				assert.Equal(t, "192.0.2.10", cfg.Address)
@@ -101,7 +101,7 @@ func TestMACCommand_Run(t *testing.T) {
 				"--bmc-port", "6230",
 			},
 			stub: func(_ context.Context, _ *bmc.Config, _ *slog.Logger) ([]string, error) {
-				return []string{"00:25:90:5e:02:aa"}, nil
+				return []string{"00:25:90:00:02:aa"}, nil
 			},
 			verify: func(t *testing.T, cfg *bmc.Config) {
 				assert.Equal(t, 6230, cfg.Port)

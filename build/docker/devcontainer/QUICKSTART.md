@@ -291,6 +291,6 @@ integration-tests:
 
 ## Support
 
-- Documentation: `/home/jhahn/sources/go-trusted-platform/docs/`
-- Integration tests: `/home/jhahn/sources/go-trusted-platform/test/integration/`
+- Documentation: `docs/`
+- Integration tests: `test/integration/`
 - Issues: File in main repository

@@ -280,7 +280,7 @@ func TestIPAMRoutes_Allocations(t *testing.T) {
 			gotPoolID = req.GetPoolId()
 			return &platformv1.ListAllocationsResponse{
 				Allocations: []*platformv1.IPAllocation{
-					{Ip: "10.0.0.10", PoolId: req.GetPoolId(), Hostname: "lab-node-3", AllocatedAt: timestamppb.Now()},
+					{Ip: "10.0.0.10", PoolId: req.GetPoolId(), Hostname: "node-03", AllocatedAt: timestamppb.Now()},
 				},
 			}, nil
 		},
@@ -313,7 +313,7 @@ func TestIPAMRoutes_Allocations(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sdn/gateway/ipam/allocations", bytes.NewBufferString(`{"pool_id":"prod-v4","hostname":"lab-node-4"}`)))
+	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sdn/gateway/ipam/allocations", bytes.NewBufferString(`{"pool_id":"prod-v4","hostname":"node-04"}`)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("allocate status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
 	}

@@ -19,7 +19,7 @@
 # If the domain is not publicly accessible, set CROSS_SIGNER to an empty
 # string.
 #
-# Example: CROSS_SIGNER= DOMAIN=dev.trusted-platform.io make
+# Example: CROSS_SIGNER= DOMAIN=dev.example.com make
 
 # This example uses Let's Encrypt, but any RFC-8555 compliant ACME
 # server can be used to cross-sign the certificate. 

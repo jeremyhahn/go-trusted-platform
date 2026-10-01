@@ -289,7 +289,7 @@ func TestProve_RejectsBadProofs(t *testing.T) {
 			request: func(t *testing.T, h *harness, challenge string) ProveRequest {
 				_, certPEM, signer := h.pki.issue(t, leafOptions{
 					commonName: "admin",
-					spiffeURI:  "spiffe://trusted-platform.internal/tenant/system/user/mallory",
+					spiffeURI:  "spiffe://example.internal/tenant/system/user/mallory",
 				})
 				return ProveRequest{
 					Challenge:      challenge,

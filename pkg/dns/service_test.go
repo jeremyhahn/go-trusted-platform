@@ -984,7 +984,7 @@ func TestService_InternalDomain(t *testing.T) {
 			Config: &Config{
 				InternalServer: &InternalServer{
 					Zone: entities.Zone{
-						Name: "trusted-platform.internal.",
+						Name: "example.internal.",
 					},
 				},
 			},
@@ -992,7 +992,7 @@ func TestService_InternalDomain(t *testing.T) {
 	}
 
 	domain := svc.InternalDomain()
-	assert.Equal(t, "trusted-platform.internal.", domain)
+	assert.Equal(t, "example.internal.", domain)
 }
 
 // TestService_PublicDomain verifies public domain retrieval.
@@ -1002,7 +1002,7 @@ func TestService_PublicDomain(t *testing.T) {
 			Config: &Config{
 				PublicServer: &PublicServer{
 					Zone: entities.Zone{
-						Name: "trusted-platform.io.",
+						Name: "example.com.",
 					},
 				},
 			},
@@ -1010,7 +1010,7 @@ func TestService_PublicDomain(t *testing.T) {
 	}
 
 	domain := svc.PublicDomain()
-	assert.Equal(t, "trusted-platform.io.", domain)
+	assert.Equal(t, "example.com.", domain)
 }
 
 // TestService_InternalZone verifies internal zone retrieval.
@@ -1018,7 +1018,7 @@ func TestService_InternalZone(t *testing.T) {
 	mockDAO := mocks.NewMockZoneDAO()
 
 	tenantID := "platform"
-	zoneName := "trusted-platform.internal."
+	zoneName := "example.internal."
 	zoneID := util.NewID([]byte(zoneName))
 	zone := &entities.Zone{
 		ID:       zoneID,
@@ -1055,7 +1055,7 @@ func TestService_PublicZone(t *testing.T) {
 	mockDAO := mocks.NewMockZoneDAO()
 
 	tenantID := "platform"
-	zoneName := "trusted-platform.io."
+	zoneName := "example.com."
 	zoneID := util.NewID([]byte(zoneName))
 	zone := &entities.Zone{
 		ID:       zoneID,
@@ -1181,7 +1181,7 @@ func TestService_Register_InvalidPrivateIP(t *testing.T) {
 				AllowRegistration: true,
 				InternalServer: &InternalServer{
 					Zone: entities.Zone{
-						Name: "trusted-platform.internal.",
+						Name: "example.internal.",
 					},
 				},
 			},
@@ -1190,7 +1190,7 @@ func TestService_Register_InvalidPrivateIP(t *testing.T) {
 
 	ctx := context.Background()
 	// Try to register with a public IP in the internal zone
-	_, err = svc.Register(ctx, "test.trusted-platform.internal", "8.8.8.8")
+	_, err = svc.Register(ctx, "test.example.internal", "8.8.8.8")
 	assert.ErrorIs(t, err, ErrInvalidPrivateIP)
 }
 
@@ -1206,7 +1206,7 @@ func TestService_Register_InvalidPublicIP(t *testing.T) {
 				AllowRegistration: true,
 				PublicServer: &PublicServer{
 					Zone: entities.Zone{
-						Name: "trusted-platform.io.",
+						Name: "example.com.",
 					},
 				},
 			},
@@ -1215,7 +1215,7 @@ func TestService_Register_InvalidPublicIP(t *testing.T) {
 
 	ctx := context.Background()
 	// Try to register with a private IP in the public zone
-	_, err = svc.Register(ctx, "test.trusted-platform.io", "192.168.1.1")
+	_, err = svc.Register(ctx, "test.example.com", "192.168.1.1")
 	assert.ErrorIs(t, err, ErrInvalidPublicIP)
 }
 
@@ -1334,7 +1334,7 @@ func TestService_Register_AddToExistingZone(t *testing.T) {
 
 	mockDAO := mocks.NewMockZoneDAO()
 
-	zoneName := "trusted-platform.io."
+	zoneName := "example.com."
 	zoneID := util.NewID([]byte(zoneName))
 	existingZone := &entities.Zone{
 		ID:   zoneID,
@@ -1365,7 +1365,7 @@ func TestService_Register_AddToExistingZone(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err = svc.Register(ctx, "newhost.trusted-platform.io", "5.6.7.8")
+	_, err = svc.Register(ctx, "newhost.example.com", "5.6.7.8")
 	require.NoError(t, err)
 
 	// Verify zone still has 1 entry (updated, not duplicated)
@@ -1482,7 +1482,7 @@ func TestService_Register_InvalidPrivateTLD(t *testing.T) {
 				Logger:            logging.DefaultLogger(),
 				InternalServer: &InternalServer{
 					Zone: entities.Zone{
-						Name: "trusted-platform.com.", // Public TLD used for internal zone
+						Name: "example.com.", // Public TLD used for internal zone
 					},
 				},
 			},
@@ -1492,7 +1492,7 @@ func TestService_Register_InvalidPrivateTLD(t *testing.T) {
 
 	ctx := context.Background()
 	// Try to register with public TLD for internal zone - triggers TLD error
-	_, err = svc.Register(ctx, "test.trusted-platform.com", "192.168.1.1")
+	_, err = svc.Register(ctx, "test.example.com", "192.168.1.1")
 	// This triggers the public TLD check for internal zone
 	assert.ErrorIs(t, err, ErrInvalidPrivateTLD)
 }
@@ -1558,7 +1558,7 @@ func TestService_Register_AddRecordToInternalZone(t *testing.T) {
 
 	mockDAO := mocks.NewMockZoneDAO()
 
-	zoneName := "trusted-platform.internal."
+	zoneName := "example.internal."
 	zoneID := util.NewID([]byte(zoneName))
 	existingZone := &entities.Zone{
 		ID:       zoneID,
@@ -1590,7 +1590,7 @@ func TestService_Register_AddRecordToInternalZone(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err = svc.Register(ctx, "newhost.trusted-platform.internal", "192.168.1.100")
+	_, err = svc.Register(ctx, "newhost.example.internal", "192.168.1.100")
 	require.NoError(t, err)
 
 	// Verify zone still has 1 entry (updated, not duplicated)

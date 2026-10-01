@@ -33,37 +33,37 @@ func TestParseSmcOEMHostMAC(t *testing.T) {
 	}{
 		{
 			name: "6-byte response parses directly",
-			data: []byte{0x00, 0x25, 0x90, 0x5E, 0x02, 0xAA},
-			want: "00:25:90:5e:02:aa",
+			data: []byte{0x00, 0x25, 0x90, 0x00, 0x02, 0xAA},
+			want: "00:25:90:00:02:aa",
 		},
 		{
 			name: "7-byte response with leading reserved byte",
-			data: []byte{0x00, 0x00, 0x25, 0x90, 0x5E, 0x02, 0xAA},
-			want: "00:25:90:5e:02:aa",
+			data: []byte{0x00, 0x00, 0x25, 0x90, 0x00, 0x02, 0xAA},
+			want: "00:25:90:00:02:aa",
 		},
 		{
 			name: "7-byte response with trailing byte falls back to leading 6",
 			// The preferred candidate [1:7] starts with 0x25, whose
 			// multicast bit is set, so it is rejected as implausible and
 			// the parser falls back to the leading 6 bytes [0:6].
-			data: []byte{0x00, 0x25, 0x90, 0x5E, 0x02, 0xAA, 0x01},
-			want: "00:25:90:5e:02:aa",
+			data: []byte{0x00, 0x25, 0x90, 0x00, 0x02, 0xAA, 0x01},
+			want: "00:25:90:00:02:aa",
 		},
 		{
 			name: "10-byte X10 ATEN response: 4-byte OEM header then MAC",
 			// The exact shape returned by a real X10 ATEN BMC 4.0
 			// (verified live 2026-08-16 against a chassis whose MAC
-			// ac:1f:6b:7c:84:02 was independently known): 3-byte IANA
+			// ac:1f:6b:00:01:02 was independently known): 3-byte IANA
 			// enterprise number + reserved byte, then the host MAC.
-			data: []byte{0x7C, 0x2A, 0x00, 0x00, 0xAC, 0x1F, 0x6B, 0x7C, 0x84, 0x02},
-			want: "ac:1f:6b:7c:84:02",
+			data: []byte{0x7C, 0x2A, 0x00, 0x00, 0xAC, 0x1F, 0x6B, 0x00, 0x01, 0x02},
+			want: "ac:1f:6b:00:01:02",
 		},
 		{
 			name: "10-byte response with MAC in leading bytes falls back",
 			// Preferred trailing window [4:10] starts with 0x01
 			// (multicast) → rejected; leading 6 bytes parse.
-			data: []byte{0x00, 0x25, 0x90, 0x5E, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x00},
-			want: "00:25:90:5e:01:aa",
+			data: []byte{0x00, 0x25, 0x90, 0x00, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x00},
+			want: "00:25:90:00:01:aa",
 		},
 		{
 			name:      "10-byte response with no plausible candidate fails",
@@ -143,14 +143,14 @@ func TestParseSmcOEMHostMAC(t *testing.T) {
 func TestSendSmcOEMHostMAC(t *testing.T) {
 	t.Run("issues 0x30/0x21 with no payload and returns the MAC", func(t *testing.T) {
 		fake := newFakeIPMISession()
-		fake.responses[ipmiKey(smcOEMNetFn, smcOEMCmdHostMAC)] = []byte{0x00, 0x25, 0x90, 0x5E, 0x02, 0xAA}
+		fake.responses[ipmiKey(smcOEMNetFn, smcOEMCmdHostMAC)] = []byte{0x00, 0x25, 0x90, 0x00, 0x02, 0xAA}
 
 		mac, err := sendSmcOEMHostMAC(fake, slog.Default())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if mac != "00:25:90:5e:02:aa" {
-			t.Errorf("mac = %q, want %q", mac, "00:25:90:5e:02:aa")
+		if mac != "00:25:90:00:02:aa" {
+			t.Errorf("mac = %q, want %q", mac, "00:25:90:00:02:aa")
 		}
 		sent, ok := fake.lastSend(smcOEMNetFn, smcOEMCmdHostMAC)
 		if !ok {
@@ -197,15 +197,15 @@ func TestIPMIClient_HostMACAddress(t *testing.T) {
 	t.Run("Supermicro vendor returns host MAC via OEM command", func(t *testing.T) {
 		fake := newFakeIPMISession()
 		fake.responses[ipmiKey(netFnApp, cmdGetDeviceID)] = deviceIDResponse(ianaSupermicro)
-		fake.responses[ipmiKey(smcOEMNetFn, smcOEMCmdHostMAC)] = []byte{0x00, 0x25, 0x90, 0x5E, 0x02, 0xAA}
+		fake.responses[ipmiKey(smcOEMNetFn, smcOEMCmdHostMAC)] = []byte{0x00, 0x25, 0x90, 0x00, 0x02, 0xAA}
 		c := oemTestClient(fake)
 
 		mac, err := c.HostMACAddress(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if mac != "00:25:90:5e:02:aa" {
-			t.Errorf("mac = %q, want %q", mac, "00:25:90:5e:02:aa")
+		if mac != "00:25:90:00:02:aa" {
+			t.Errorf("mac = %q, want %q", mac, "00:25:90:00:02:aa")
 		}
 	})
 
@@ -279,7 +279,7 @@ func TestDiscoverMACs_IPMIOEM(t *testing.T) {
 		var gotConfig *Config
 		stubIPMIOEMHostMAC(t, func(_ context.Context, config *Config, _ *slog.Logger) (string, error) {
 			gotConfig = config
-			return "00:25:90:5e:02:aa", nil
+			return "00:25:90:00:02:aa", nil
 		})
 
 		config := &Config{
@@ -291,8 +291,8 @@ func TestDiscoverMACs_IPMIOEM(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(macs) != 1 || macs[0] != "00:25:90:5e:02:aa" {
-			t.Errorf("macs = %v, want [00:25:90:5e:02:aa]", macs)
+		if len(macs) != 1 || macs[0] != "00:25:90:00:02:aa" {
+			t.Errorf("macs = %v, want [00:25:90:00:02:aa]", macs)
 		}
 		if gotConfig != config {
 			t.Error("expected the OEM path to receive the caller's config")

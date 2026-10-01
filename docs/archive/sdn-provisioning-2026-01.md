@@ -109,8 +109,8 @@ Retrieves device profile using mTLS with IDevID.
     "vlan": 200,
     "useDHCP": true,
     "staticIP": "",
-    "gateway": "198.18.0.1",
-    "dns": ["198.18.0.1"]
+    "gateway": "10.4.200.1",
+    "dns": ["10.4.200.1"]
   },
   "acls": [
     {

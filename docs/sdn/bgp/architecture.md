@@ -90,7 +90,7 @@ Datacenter speakers handle regional routing and EVPN control plane for local wor
 │                    │   + EVPN AFI    │                       │
 │                    └─────────────────┘                       │
 │                                                              │
-│  Announces: 2602:F5BB:0001::/48 (regional)                   │
+│  Announces: 2001:DB8:0001::/48 (regional)                   │
 │  EVPN RD: 65001:100                                          │
 │  EVPN RT: 65001:100                                          │
 └─────────────────────────────────────────────────────────────┘
@@ -385,10 +385,10 @@ Capabilities Negotiated:
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  1. Platform allocates IPv6 subnet                          │
-│     └─► 2602:F5BB:0001:0100::/64 for Region 1 Subnet 256    │
+│     └─► 2001:DB8:0001:0100::/64 for Region 1 Subnet 256    │
 │                                                              │
 │  2. DC Speaker creates transit route                        │
-│     └─► Prefix: 2602:F5BB:0001::/48                         │
+│     └─► Prefix: 2001:DB8:0001::/48                         │
 │     └─► Next-Hop: Self                                      │
 │     └─► Origin: IGP                                         │
 │     └─► AS-PATH: (empty - originated here)                  │

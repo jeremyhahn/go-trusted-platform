@@ -127,7 +127,7 @@ type ServerConfig struct {
 	DHCPProxyOnly bool
 
 	// APKMirror is the install-time APK repository base (e.g.
-	// "http://198.51.100.11:8080"). It is appended to the PXE kernel
+	// "http://10.4.6.11:8080"). It is appended to the PXE kernel
 	// cmdline both as alpine_repo=<mirror>/<branch>/main (so the Alpine
 	// init can build the diskless live root — PXE has no /media/cdrom, so
 	// without it the live-system apk add installs 0 packages and there is

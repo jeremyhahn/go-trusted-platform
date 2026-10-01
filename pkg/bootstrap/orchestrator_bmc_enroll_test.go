@@ -119,11 +119,11 @@ func TestWriteBMCEnrollBackups_FullResponse(t *testing.T) {
 		FactoryCertMeta: json.RawMessage(`{"subject":"CN=BMC","issuer":"CN=Factory CA"}`),
 	}
 
-	if err := writeBMCEnrollBackups(dir, "lab-node-1", resp); err != nil {
+	if err := writeBMCEnrollBackups(dir, "node-01", resp); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	backupDir := filepath.Join(dir, "lab-node-1", "bmc")
+	backupDir := filepath.Join(dir, "node-01", "bmc")
 
 	// Verify factory-cert.pem.
 	pemData, err := os.ReadFile(filepath.Join(backupDir, "factory-cert.pem"))
@@ -177,7 +177,7 @@ func TestWriteBMCEnrollBackups_FullResponse(t *testing.T) {
 func TestWriteBMCEnrollBackups_NilResponse(t *testing.T) {
 	dir := t.TempDir()
 	// Should be a no-op.
-	if err := writeBMCEnrollBackups(dir, "lab-node-1", nil); err != nil {
+	if err := writeBMCEnrollBackups(dir, "node-01", nil); err != nil {
 		t.Fatalf("nil response should be a no-op, got: %v", err)
 	}
 }
@@ -188,11 +188,11 @@ func TestWriteBMCEnrollBackups_NoPEM(t *testing.T) {
 		DeviceID: 1,
 		// FactoryCertPEM is empty — no pem file should be written.
 	}
-	if err := writeBMCEnrollBackups(dir, "lab-node-2", resp); err != nil {
+	if err := writeBMCEnrollBackups(dir, "node-02", resp); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	backupDir := filepath.Join(dir, "lab-node-2", "bmc")
+	backupDir := filepath.Join(dir, "node-02", "bmc")
 	if _, err := os.Stat(filepath.Join(backupDir, "factory-cert.pem")); !os.IsNotExist(err) {
 		t.Error("factory-cert.pem should not exist when FactoryCertPEM is empty")
 	}

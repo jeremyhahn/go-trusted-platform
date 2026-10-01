@@ -233,14 +233,14 @@ func TestTemplates_ServerAddressesFollowTheirFamily(t *testing.T) {
 
 func TestNewNetworkSummary(t *testing.T) {
 	v4 := netip.MustParsePrefix("10.4.6.0/24")
-	v6 := netip.MustParsePrefix("2602:f5bb:1::/64")
+	v6 := netip.MustParsePrefix("2001:db8:1::/64")
 
 	s := NewNetworkSummary(200, v4, v6)
-	assert.Equal(t, NetworkSummary{VLAN: 200, Subnet: "10.4.6.0/24", Subnet6: "2602:f5bb:1::/64"}, s)
+	assert.Equal(t, NetworkSummary{VLAN: 200, Subnet: "10.4.6.0/24", Subnet6: "2001:db8:1::/64"}, s)
 
 	// An IPv6 prefix in the legacy single field is filed as IPv6.
 	s = NewNetworkSummary(200, v6)
-	assert.Equal(t, NetworkSummary{VLAN: 200, Subnet6: "2602:f5bb:1::/64"}, s)
+	assert.Equal(t, NetworkSummary{VLAN: 200, Subnet6: "2001:db8:1::/64"}, s)
 
 	// Invalid prefixes are ignored.
 	s = NewNetworkSummary(200, netip.Prefix{}, v4)

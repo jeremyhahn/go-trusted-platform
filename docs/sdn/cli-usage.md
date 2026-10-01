@@ -376,8 +376,8 @@ Examples:
   platformctl sdn gateway bgp status
   platformctl sdn gateway bgp peers
   platformctl sdn gateway bgp routes
-  platformctl sdn gateway bgp announce --prefix 2602:F5BB:1234::/48 --next-hop 2001:db8::1
-  platformctl sdn gateway bgp withdraw --prefix 2602:F5BB:1234::/48
+  platformctl sdn gateway bgp announce --prefix 2001:DB8:1234::/48 --next-hop 2001:db8::1
+  platformctl sdn gateway bgp withdraw --prefix 2001:DB8:1234::/48
 ```
 
 ### Load Balancer Commands
@@ -439,7 +439,7 @@ platformctl sdn ipam pool delete --id <pool-id>
 Examples:
   platformctl sdn ipam pool list
   platformctl sdn ipam pool create --name prod-v4 --cidr 10.0.0.0/24 --gateway 10.0.0.1
-  platformctl sdn ipam pool create --name prod-v6 --cidr 2602:F5BB:1234::/64 --gateway 2602:F5BB:1234::1
+  platformctl sdn ipam pool create --name prod-v6 --cidr 2001:DB8:1234::/64 --gateway 2001:DB8:1234::1
   platformctl sdn ipam pool delete --id prod-v4
 ```
 

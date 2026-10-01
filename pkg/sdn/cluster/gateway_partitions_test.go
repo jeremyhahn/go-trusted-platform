@@ -61,8 +61,8 @@ func TestGatewayPartitionConstants_Uniqueness(t *testing.T) {
 func TestVIPEntry_Serialization(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	entry := &VIPEntry{
-		Address:   "23.143.36.1/24",
-		OwnerNode: "lab-node-1",
+		Address:   "203.0.113.1/24",
+		OwnerNode: "node-01",
 		Priority:  100,
 		LastSeen:  now,
 		Active:    true,
@@ -83,8 +83,8 @@ func TestVIPEntry_Serialization(t *testing.T) {
 }
 
 func TestVIPEntry_EntityID(t *testing.T) {
-	v1 := &VIPEntry{Address: "23.143.36.1/24"}
-	v2 := &VIPEntry{Address: "23.143.36.1/24"}
+	v1 := &VIPEntry{Address: "203.0.113.1/24"}
+	v2 := &VIPEntry{Address: "203.0.113.1/24"}
 	v3 := &VIPEntry{Address: "10.0.0.1/32"}
 
 	// Same address produces same ID.
@@ -195,7 +195,7 @@ func TestNATSessionEntry_Serialization(t *testing.T) {
 		ConnTrackID: "ct-1234",
 		OrigSrcAddr: "192.168.1.100",
 		OrigSrcPort: 54321,
-		TransAddr:   "23.143.36.1",
+		TransAddr:   "203.0.113.1",
 		TransPort:   10001,
 		DstAddr:     "8.8.8.8",
 		DstPort:     53,
@@ -251,7 +251,7 @@ func TestFirewallRuleEntry_Serialization(t *testing.T) {
 		Action:       "allow",
 		Protocol:     "tcp",
 		SrcCIDR:      "0.0.0.0/0",
-		DstCIDR:      "23.143.36.0/24",
+		DstCIDR:      "203.0.113.0/24",
 		DstPortRange: "443",
 		Stateful:     true,
 		Enabled:      true,
@@ -305,13 +305,13 @@ func TestFirewallRuleEntry_SetEntityID(t *testing.T) {
 func TestBGPRouteEntry_Serialization(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	entry := &BGPRouteEntry{
-		Prefix:      "23.143.36.0/24",
+		Prefix:      "203.0.113.0/24",
 		NextHop:     "10.255.0.1",
-		ASPath:      []uint32{401870, 64515},
+		ASPath:      []uint32{64512, 64515},
 		LocalPref:   100,
 		MED:         0,
 		Origin:      "igp",
-		Communities: []string{"401870:100", "401870:200"},
+		Communities: []string{"64512:100", "64512:200"},
 		Active:      true,
 		Source:      "local",
 		LastUpdated: now,
@@ -336,8 +336,8 @@ func TestBGPRouteEntry_Serialization(t *testing.T) {
 }
 
 func TestBGPRouteEntry_EntityID(t *testing.T) {
-	b1 := &BGPRouteEntry{Prefix: "23.143.36.0/24"}
-	b2 := &BGPRouteEntry{Prefix: "23.143.36.0/24"}
+	b1 := &BGPRouteEntry{Prefix: "203.0.113.0/24"}
+	b2 := &BGPRouteEntry{Prefix: "203.0.113.0/24"}
 	b3 := &BGPRouteEntry{Prefix: "10.0.0.0/8"}
 
 	assert.Equal(t, b1.EntityID(), b2.EntityID())
@@ -345,7 +345,7 @@ func TestBGPRouteEntry_EntityID(t *testing.T) {
 }
 
 func TestBGPRouteEntry_SetEntityID(t *testing.T) {
-	b := &BGPRouteEntry{Prefix: "23.143.36.0/24"}
+	b := &BGPRouteEntry{Prefix: "203.0.113.0/24"}
 	original := b.EntityID()
 	b.SetEntityID(99999)
 	assert.Equal(t, original, b.EntityID())
@@ -378,11 +378,11 @@ func TestGatewayEntityID_CrossTypeUniqueness(t *testing.T) {
 	ids := make(map[uint64]string)
 
 	entries := map[string]uint64{
-		"vip-23.143.36.1/24": (&VIPEntry{Address: "23.143.36.1/24"}).EntityID(),
+		"vip-203.0.113.1/24": (&VIPEntry{Address: "203.0.113.1/24"}).EntityID(),
 		"ct-12345":           (&ConnTrackEntry{ID: "ct-12345"}).EntityID(),
 		"nat-12345":          (&NATSessionEntry{ID: "nat-12345"}).EntityID(),
 		"fw-rule-1":          (&FirewallRuleEntry{ID: "fw-rule-1"}).EntityID(),
-		"bgp-23.143.36.0/24": (&BGPRouteEntry{Prefix: "23.143.36.0/24"}).EntityID(),
+		"bgp-203.0.113.0/24": (&BGPRouteEntry{Prefix: "203.0.113.0/24"}).EntityID(),
 	}
 
 	for name, id := range entries {

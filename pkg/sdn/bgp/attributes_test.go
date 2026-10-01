@@ -54,7 +54,7 @@ func TestPeerAttributesConfig_Validate_Accepts(t *testing.T) {
 		{"prepend with the implicit local asn", PolicyDirectionExport,
 			&PeerAttributesConfig{Prepend: &ASPathPrependConfig{Count: 3}}},
 		{"prepend with an explicit asn", PolicyDirectionExport,
-			&PeerAttributesConfig{Prepend: &ASPathPrependConfig{Count: 1, ASN: 401870}}},
+			&PeerAttributesConfig{Prepend: &ASPathPrependConfig{Count: 1, ASN: 64512}}},
 		{"prepend at the maximum", PolicyDirectionExport,
 			&PeerAttributesConfig{Prepend: &ASPathPrependConfig{Count: MaxASPathPrepend}}},
 		{"communities as asn:value with a 16-bit asn", PolicyDirectionExport, &PeerAttributesConfig{
@@ -64,14 +64,14 @@ func TestPeerAttributesConfig_Validate_Accepts(t *testing.T) {
 		{"a well-known community name", PolicyDirectionExport, &PeerAttributesConfig{
 			Communities: &CommunitySetConfig{Action: CommunityOpAdd, Values: []string{"no-export", "blackhole"}}}},
 		{"a remove value is a regular expression", PolicyDirectionImport, &PeerAttributesConfig{
-			Communities: &CommunitySetConfig{Action: CommunityOpRemove, Values: []string{"^401870:"}}}},
+			Communities: &CommunitySetConfig{Action: CommunityOpRemove, Values: []string{"^64512:"}}}},
 		{"large communities", PolicyDirectionExport, &PeerAttributesConfig{
-			LargeCommunities: &CommunitySetConfig{Action: CommunityOpAdd, Values: []string{"401870:1:100"}}}},
+			LargeCommunities: &CommunitySetConfig{Action: CommunityOpAdd, Values: []string{"64512:1:100"}}}},
 		{"the whole ladder at once", PolicyDirectionExport, &PeerAttributesConfig{
 			MED:              u32(50),
 			Prepend:          &ASPathPrependConfig{Count: 3},
 			Communities:      &CommunitySetConfig{Action: CommunityOpAdd, Values: []string{"65001:200"}},
-			LargeCommunities: &CommunitySetConfig{Action: CommunityOpAdd, Values: []string{"401870:1:200"}},
+			LargeCommunities: &CommunitySetConfig{Action: CommunityOpAdd, Values: []string{"64512:1:200"}},
 		}},
 	}
 	for _, tt := range tests {
@@ -140,19 +140,19 @@ func TestPeerAttributesConfig_Validate_Refuses(t *testing.T) {
 		{
 			name: "a community half that does not fit in 16 bits",
 			attrs: &PeerAttributesConfig{Communities: &CommunitySetConfig{
-				Action: CommunityOpAdd, Values: []string{"401870:70000"}}},
+				Action: CommunityOpAdd, Values: []string{"64512:70000"}}},
 			target: ErrCommunityInvalid{},
 		},
 		{
 			name: "a 32-bit asn cannot be half of a standard community",
 			attrs: &PeerAttributesConfig{Communities: &CommunitySetConfig{
-				Action: CommunityOpAdd, Values: []string{"401870:100"}}},
+				Action: CommunityOpAdd, Values: []string{"4200000000:100"}}},
 			target: ErrCommunityInvalid{},
 		},
 		{
 			name: "a community with text around it is refused, not truncated",
 			attrs: &PeerAttributesConfig{Communities: &CommunitySetConfig{
-				Action: CommunityOpAdd, Values: []string{"as401870:100"}}},
+				Action: CommunityOpAdd, Values: []string{"as64512:100"}}},
 			target: ErrCommunityInvalid{},
 		},
 		{
@@ -170,13 +170,13 @@ func TestPeerAttributesConfig_Validate_Refuses(t *testing.T) {
 		{
 			name: "a large community with two parts",
 			attrs: &PeerAttributesConfig{LargeCommunities: &CommunitySetConfig{
-				Action: CommunityOpAdd, Values: []string{"401870:1"}}},
+				Action: CommunityOpAdd, Values: []string{"64512:1"}}},
 			target: ErrCommunityInvalid{},
 		},
 		{
 			name: "a large community part past 32 bits",
 			attrs: &PeerAttributesConfig{LargeCommunities: &CommunitySetConfig{
-				Action: CommunityOpAdd, Values: []string{"401870:1:4294967296"}}},
+				Action: CommunityOpAdd, Values: []string{"64512:1:4294967296"}}},
 			target: ErrCommunityInvalid{},
 		},
 	}
@@ -194,7 +194,7 @@ func TestPeerAttributesConfig_Validate_Refuses(t *testing.T) {
 // field becomes. These are the values that reach the speaker, so a change
 // here is a change to what the router does.
 func TestPeerAttributesConfig_APIActions(t *testing.T) {
-	const localASN = uint32(401870)
+	const localASN = uint32(64512)
 
 	t.Run("nothing set programs no actions at all", func(t *testing.T) {
 		assert.Nil(t, (*PeerAttributesConfig)(nil).apiActions(localASN))
@@ -229,8 +229,8 @@ func TestPeerAttributesConfig_APIActions(t *testing.T) {
 
 	t.Run("prepend honours an explicit asn", func(t *testing.T) {
 		actions := (&PeerAttributesConfig{
-			Prepend: &ASPathPrependConfig{Count: 2, ASN: 64512}}).apiActions(localASN)
-		assert.Equal(t, uint32(64512), actions.AsPrepend.Asn)
+			Prepend: &ASPathPrependConfig{Count: 2, ASN: 64513}}).apiActions(localASN)
+		assert.Equal(t, uint32(64513), actions.AsPrepend.Asn)
 	})
 
 	t.Run("communities carry the operation and the values", func(t *testing.T) {
@@ -238,7 +238,7 @@ func TestPeerAttributesConfig_APIActions(t *testing.T) {
 			Communities: &CommunitySetConfig{
 				Action: CommunityOpAdd, Values: []string{"65001:100", "no-export"}},
 			LargeCommunities: &CommunitySetConfig{
-				Action: CommunityOpRemove, Values: []string{"^401870:"}},
+				Action: CommunityOpRemove, Values: []string{"^64512:"}},
 		}
 		actions := attrs.apiActions(localASN)
 		require.NotNil(t, actions.Community)
@@ -246,7 +246,7 @@ func TestPeerAttributesConfig_APIActions(t *testing.T) {
 		assert.Equal(t, []string{"65001:100", "no-export"}, actions.Community.Communities)
 		require.NotNil(t, actions.LargeCommunity)
 		assert.Equal(t, api.CommunityAction_TYPE_REMOVE, actions.LargeCommunity.Type)
-		assert.Equal(t, []string{"^401870:"}, actions.LargeCommunity.Communities)
+		assert.Equal(t, []string{"^64512:"}, actions.LargeCommunity.Communities)
 	})
 
 	t.Run("the action does not alias the configuration's slice", func(t *testing.T) {
@@ -270,7 +270,7 @@ func TestPeerAttributesConfig_Describe(t *testing.T) {
 		MED:              u32(50),
 		Prepend:          &ASPathPrependConfig{Count: 3},
 		Communities:      &CommunitySetConfig{Action: CommunityOpAdd, Values: []string{"65001:1"}},
-		LargeCommunities: &CommunitySetConfig{Action: CommunityOpReplace, Values: []string{"401870:1:1"}},
+		LargeCommunities: &CommunitySetConfig{Action: CommunityOpReplace, Values: []string{"64512:1:1"}},
 	}
 	assert.Equal(t,
 		"local-pref=200 med=50 prepend=3 communities=add large-communities=replace",
@@ -281,7 +281,7 @@ func TestPeerAttributesConfig_Describe(t *testing.T) {
 // needs both ASNs: LOCAL_PREF is never sent to an external peer, so asking
 // for it there is a control that would do nothing.
 func TestNeighborConfig_ValidateAttributeDirections(t *testing.T) {
-	const localASN = uint32(401870)
+	const localASN = uint32(64512)
 	exportLocalPref := func(peerASN uint32) *NeighborConfig {
 		return &NeighborConfig{
 			Address: netip.MustParseAddr("10.255.0.34"),
@@ -297,7 +297,7 @@ func TestNeighborConfig_ValidateAttributeDirections(t *testing.T) {
 	})
 
 	t.Run("ebgp does not, so export is refused", func(t *testing.T) {
-		err := exportLocalPref(64512).validateAttributeDirections(localASN)
+		err := exportLocalPref(64513).validateAttributeDirections(localASN)
 		require.Error(t, err)
 		assert.IsType(t, ErrAttributeDirectionInvalid{}, err)
 		assert.Contains(t, err.Error(), "10.255.0.34")
@@ -306,14 +306,14 @@ func TestNeighborConfig_ValidateAttributeDirections(t *testing.T) {
 	t.Run("import local-pref is fine on any session", func(t *testing.T) {
 		cfg := &NeighborConfig{
 			Address: netip.MustParseAddr("10.255.0.34"),
-			ASN:     64512,
+			ASN:     64513,
 			Policy:  PeerPolicyConfig{Import: &PeerAttributesConfig{LocalPref: u32(200)}},
 		}
 		require.NoError(t, cfg.validateAttributeDirections(localASN))
 	})
 
 	t.Run("no attributes at all is fine", func(t *testing.T) {
-		cfg := &NeighborConfig{Address: netip.MustParseAddr("10.255.0.34"), ASN: 64512}
+		cfg := &NeighborConfig{Address: netip.MustParseAddr("10.255.0.34"), ASN: 64513}
 		require.NoError(t, cfg.validateAttributeDirections(localASN))
 	})
 }
@@ -376,9 +376,9 @@ func statementsFor(t *testing.T, req *api.SetPoliciesRequest, policy, peerPrefix
 func TestPolicySet_CarriesTrafficEngineering(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Neighbors = []NeighborConfig{{
-		Name:            "miami-att",
+		Name:            "pop-a-isp-a",
 		Address:         netip.MustParseAddr("10.255.0.34"),
-		ASN:             401870,
+		ASN:             64512,
 		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast},
 		Policy: PeerPolicyConfig{
 			ImportAllow: []PrefixMatch{{Prefix: netip.MustParsePrefix("0.0.0.0/0")}},
@@ -386,7 +386,7 @@ func TestPolicySet_CarriesTrafficEngineering(t *testing.T) {
 			Export: &PeerAttributesConfig{
 				MED:              u32(50),
 				Prepend:          &ASPathPrependConfig{Count: 3},
-				LargeCommunities: &CommunitySetConfig{Action: CommunityOpAdd, Values: []string{"401870:1:200"}},
+				LargeCommunities: &CommunitySetConfig{Action: CommunityOpAdd, Values: []string{"64512:1:200"}},
 			},
 		},
 	}}
@@ -430,7 +430,7 @@ func TestPolicySet_CarriesTrafficEngineering(t *testing.T) {
 	assert.Equal(t, uint32(3), exportActions.GetAsPrepend().GetRepeat())
 	assert.Equal(t, cfg.ASN, exportActions.GetAsPrepend().GetAsn(),
 		"an unnamed prepend asn is the speaker's own")
-	assert.Equal(t, []string{"401870:1:200"}, exportActions.GetLargeCommunity().GetCommunities())
+	assert.Equal(t, []string{"64512:1:200"}, exportActions.GetLargeCommunity().GetCommunities())
 }
 
 // TestPolicySet_WithoutAttributesIsUnchanged pins that a peer that asks for
@@ -440,7 +440,7 @@ func TestPolicySet_WithoutAttributesIsUnchanged(t *testing.T) {
 	cfg.Neighbors = []NeighborConfig{{
 		Name:            "plain",
 		Address:         netip.MustParseAddr("10.255.0.38"),
-		ASN:             401870,
+		ASN:             64512,
 		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast},
 		Policy: PeerPolicyConfig{
 			ImportAllow: []PrefixMatch{{Prefix: netip.MustParsePrefix("0.0.0.0/0")}},
@@ -467,7 +467,7 @@ func TestBGPConfig_Validate_RefusesExportLocalPrefToExternalPeer(t *testing.T) {
 	cfg.Neighbors = []NeighborConfig{{
 		Name:            "upstream",
 		Address:         netip.MustParseAddr("192.0.2.1"),
-		ASN:             64512,
+		ASN:             64513,
 		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast},
 		Policy:          PeerPolicyConfig{Export: &PeerAttributesConfig{LocalPref: u32(200)}},
 	}}
@@ -491,7 +491,7 @@ func TestSpeaker_AddPeerRefusesUnprogrammableAttributes(t *testing.T) {
 
 	external := &NeighborConfig{
 		Address:         netip.MustParseAddr("192.0.2.9"),
-		ASN:             64512,
+		ASN:             64513,
 		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast},
 		Policy:          PeerPolicyConfig{Export: &PeerAttributesConfig{LocalPref: u32(200)}},
 	}
@@ -502,7 +502,7 @@ func TestSpeaker_AddPeerRefusesUnprogrammableAttributes(t *testing.T) {
 
 	badCommunity := &NeighborConfig{
 		Address:         netip.MustParseAddr("10.255.0.50"),
-		ASN:             401870,
+		ASN:             64512,
 		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast},
 		Policy: PeerPolicyConfig{Export: &PeerAttributesConfig{
 			Communities: &CommunitySetConfig{Action: CommunityOpAdd, Values: []string{"nope"}}}},

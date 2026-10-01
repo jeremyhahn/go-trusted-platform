@@ -20,7 +20,7 @@ name: CI
 # GitHub-only mechanics (SARIF upload to code scanning, aquasecurity/trivy-action,
 # whose setup cannot authenticate to github.com from a Gitea runner) are guarded
 # on `github.server_url` and the Gitea leg installs the Trivy CLI instead.
-# See automatethethings software/conventions/devops.md §1 and §8.
+# See the handbook's software/conventions/devops.md §1 and §8.
 
 on:
   push:
@@ -281,7 +281,7 @@ jobs:
       # guards is version-gated build constraints in dependencies. That is a
       # COMPILE error, not a behavioural one: a build detects it completely, and
       # running the suite a second time adds no detection for it. Against that,
-      # sdlc.md §0b is measured and binding — gpu-host's act_runner is
+      # sdlc.md §0b is measured and binding — the shared act_runner is
       # `capacity: 3` for the WHOLE portfolio, a repo workflow is already about
       # seven jobs, and two PRs in CI saturate it. Duplicating test+race+security
       # would triple this lane's cost on the fleet's scarcest resource to detect

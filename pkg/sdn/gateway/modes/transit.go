@@ -45,10 +45,10 @@ type TransitModeConfig struct {
 	// Tier determines announcement scope (backbone, datacenter, coordinator).
 	Tier bgp.SpeakerTier
 
-	// IPv6Prefixes are the IPv6 prefixes to announce (e.g., 2602:F5BB::/36 or /48).
+	// IPv6Prefixes are the IPv6 prefixes to announce (e.g., 2001:DB8::/36 or /48).
 	IPv6Prefixes []net.IPNet
 
-	// IPv4Prefixes are the IPv4 prefixes to announce (e.g., 23.143.36.0/24).
+	// IPv4Prefixes are the IPv4 prefixes to announce (e.g., 203.0.113.0/24).
 	IPv4Prefixes []net.IPNet
 
 	// ExternalPeers are the BGP neighbors (ISPs, fabric switches).

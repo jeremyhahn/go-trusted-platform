@@ -329,7 +329,7 @@ const mediaReadSlack = 2 * time.Second
 // workerServesClient reports whether an smbd worker's captured client
 // names the BMC address: exactly (modulo port and IP normalisation), or
 // as a prefix when the kernel's 15-byte comm limit truncated the title
-// — "smbd[192.168.50" is all that survives of 198.18.1.103 (#126).
+// — "smbd[198.51.100" is all that survives of 198.51.100.103 (#126).
 func workerServesClient(w *ipxe.MediaOpener, bmc string) bool {
 	if w.ClientTruncated {
 		return strings.HasPrefix(clientHost(bmc), w.Client)

@@ -550,7 +550,7 @@ other standalone operations and never routes through platformd.
 **CLI:**
 ```bash
 platformctl bmc mac \
-  --bmc-host 198.51.100.103 \
+  --bmc-host 10.4.2.103 \
   --bmc-user ADMIN \
   --bmc-pass-file ~/.bmc-pass \
   --bmc-protocol ipmi
@@ -559,8 +559,8 @@ platformctl bmc mac \
 **Response (`--output json`):**
 ```json
 {
-  "host": "198.51.100.103",
-  "macs": ["00:25:90:5e:02:aa"]
+  "host": "10.4.2.103",
+  "macs": ["00:25:90:00:02:aa"]
 }
 ```
 

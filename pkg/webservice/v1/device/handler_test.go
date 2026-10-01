@@ -431,7 +431,7 @@ func TestActivate_PortNotRegistered_Returns404(t *testing.T) {
 		mockProfileService,
 	)
 
-	hookErr := policy.ErrPortNotRegisteredForDevice{MAC: "3c:ec:ef:6c:f8:ec"}
+	hookErr := policy.ErrPortNotRegisteredForDevice{MAC: "3c:ec:ef:00:00:ec"}
 
 	mockActivator.On("PrecheckActivation", "SRV-MGMT-01").Return(nil, hookErr).Once()
 	mockResponseWriter.On("Error404", mock.Anything, mock.Anything, hookErr).Return()
@@ -827,7 +827,7 @@ func TestHeartbeat_Success(t *testing.T) {
 	handler := NewHandler(newTestLogger(), newTestResponseWriter(), nil, nil,
 		WithHeartbeatRecorder(recorder))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
-	req.RemoteAddr = "198.18.1.143:51234"
+	req.RemoteAddr = "10.4.2.143:51234"
 	req = req.WithContext(context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345"))
 	w := httptest.NewRecorder()
 
@@ -841,7 +841,7 @@ func TestHeartbeat_Success(t *testing.T) {
 	assert.Equal(t, now, resp.ReceivedAt)
 	// The transport peer address — never anything from the body — is what
 	// the recorder receives (#377).
-	assert.Equal(t, "198.18.1.143:51234", recorder.peerAddr)
+	assert.Equal(t, "10.4.2.143:51234", recorder.peerAddr)
 	recorder.AssertExpectations(t)
 }
 

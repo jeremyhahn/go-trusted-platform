@@ -339,7 +339,7 @@ quicbaas:
   # system tenant, built-in roles and platform admin — without it the IAM
   # bootstrap fails on every boot and tenant-scoped surfaces (WebAuthn
   # ceremonies, operating-tenant adoption) never work.
-  spiffe-trust-domain: trusted-platform.internal
+  spiffe-trust-domain: example.internal
 
 webservice:
   tls-port: 8443

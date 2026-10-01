@@ -28,7 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
-const testTLSServerName = "compute.trusted-platform.internal"
+const testTLSServerName = "compute.example.internal"
 
 // TestDeviceHandler_TLSServerName_SurvivesUpdateWithoutIt is the dark QUIC
 // round trip: create with the name, get, update without it, get again. This

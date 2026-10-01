@@ -65,7 +65,7 @@ func (pe *PostInstallExecutor) Execute(ctx context.Context, rootPath string) err
 // config. The script is written INSIDE the chroot's /tmp/ directory so
 // that the subsequent `chroot rootPath /bin/sh ...` invocation can
 // actually see it — writing to the host's /tmp/ was a bug witnessed in
-// the 2026-04-08 lab-node-2 install where the install log recorded
+// the 2026-04-08 node-02 install where the install log recorded
 // `sh: can't open '/tmp/post-install-inline.sh': No such file or
 // directory` and the installer silently swallowed the failure.
 func (pe *PostInstallExecutor) executeInlineScript(ctx context.Context, rootPath, script string) error {

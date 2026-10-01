@@ -153,35 +153,35 @@ func TestControlPlaneOverRealTLS_BindsToPresentedCertificate(t *testing.T) {
 	store := newMemStore()
 	srv := startControlPlaneTLS(t, ca, newControlPlane(store, nil))
 
-	mini01 := ca.issue(t, "lab-node-1")
-	mini02 := ca.issue(t, "lab-node-2")
+	node01 := ca.issue(t, "node-01")
+	node02 := ca.issue(t, "node-02")
 
 	t.Run("own gateway_id is accepted", func(t *testing.T) {
-		resp := postSnapshot(t, clientFor(ca, &mini01), srv.URL, "lab-node-1")
+		resp := postSnapshot(t, clientFor(ca, &node01), srv.URL, "node-01")
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
 		}
-		if _, ok := store.snaps["lab-node-1"]; !ok {
-			t.Fatal("lab-node-1's snapshot was not persisted")
+		if _, ok := store.snaps["node-01"]; !ok {
+			t.Fatal("node-01's snapshot was not persisted")
 		}
 	})
 
 	t.Run("another gateway_id is refused", func(t *testing.T) {
 		before := store.puts
-		resp := postSnapshot(t, clientFor(ca, &mini01), srv.URL, "lab-node-2")
+		resp := postSnapshot(t, clientFor(ca, &node01), srv.URL, "node-02")
 		if resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusForbidden)
 		}
 		if store.puts != before {
 			t.Fatalf("store.puts moved from %d to %d — a refused request persisted state", before, store.puts)
 		}
-		if _, ok := store.snaps["lab-node-2"]; ok {
-			t.Fatal("lab-node-1's certificate wrote lab-node-2's snapshot over a real handshake")
+		if _, ok := store.snaps["node-02"]; ok {
+			t.Fatal("node-01's certificate wrote node-02's snapshot over a real handshake")
 		}
 	})
 
 	t.Run("each certificate reaches its own record", func(t *testing.T) {
-		resp := postSnapshot(t, clientFor(ca, &mini02), srv.URL, "lab-node-2")
+		resp := postSnapshot(t, clientFor(ca, &node02), srv.URL, "node-02")
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
 		}
@@ -189,7 +189,7 @@ func TestControlPlaneOverRealTLS_BindsToPresentedCertificate(t *testing.T) {
 
 	t.Run("no client certificate is refused", func(t *testing.T) {
 		before := store.puts
-		resp := postSnapshot(t, clientFor(ca, nil), srv.URL, "lab-node-1")
+		resp := postSnapshot(t, clientFor(ca, nil), srv.URL, "node-01")
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 		}
@@ -210,14 +210,14 @@ func TestControlPlaneOverRealTLS_ForeignCAIsRejected(t *testing.T) {
 	store := newMemStore()
 	srv := startControlPlaneTLS(t, ca, newControlPlane(store, nil))
 
-	impostor := foreign.issue(t, "lab-node-1")
+	impostor := foreign.issue(t, "node-01")
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		RootCAs:      ca.pool, // trust the server; the server must not trust us
 		Certificates: []tls.Certificate{impostor},
 		MinVersion:   tls.VersionTLS12,
 	}}}
 
-	body, err := json.Marshal(&gwstate.Snapshot{GatewayID: "lab-node-1"})
+	body, err := json.Marshal(&gwstate.Snapshot{GatewayID: "node-01"})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -241,10 +241,10 @@ func TestControlPlaneOverRealTLS_DesiredConfigBinding(t *testing.T) {
 	ca := newTestCA(t)
 	src := &recordingConfigSource{payload: sampleDesiredConfig()}
 	srv := startControlPlaneTLS(t, ca, newControlPlane(nil, src))
-	mini01 := ca.issue(t, "lab-node-1")
-	client := clientFor(ca, &mini01)
+	node01 := ca.issue(t, "node-01")
+	client := clientFor(ca, &node01)
 
-	resp, err := client.Get(srv.URL + "/api/v1/gateway/desired-config/lab-node-1")
+	resp, err := client.Get(srv.URL + "/api/v1/gateway/desired-config/node-01")
 	if err != nil {
 		t.Fatalf("GET own desired-config: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestControlPlaneOverRealTLS_DesiredConfigBinding(t *testing.T) {
 		t.Fatalf("own desired-config status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 
-	resp, err = client.Get(srv.URL + "/api/v1/gateway/desired-config/lab-node-2")
+	resp, err = client.Get(srv.URL + "/api/v1/gateway/desired-config/node-02")
 	if err != nil {
 		t.Fatalf("GET foreign desired-config: %v", err)
 	}

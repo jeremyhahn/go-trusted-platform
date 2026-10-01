@@ -27,12 +27,12 @@ import (
 // #428): the address the collector will dial when platform DNS has none.
 func TestDeviceToResponse_CarriesLastHeartbeatAddr(t *testing.T) {
 	handler, _, _ := newTestHandler()
-	resp := handler.deviceToResponse(&entities.Device{ID: 1, LastHeartbeatAddr: "198.51.100.103:49152"})
-	assert.Equal(t, "198.51.100.103:49152", resp.LastHeartbeatAddr)
+	resp := handler.deviceToResponse(&entities.Device{ID: 1, LastHeartbeatAddr: "10.4.6.103:49152"})
+	assert.Equal(t, "10.4.6.103:49152", resp.LastHeartbeatAddr)
 
 	raw, err := json.Marshal(resp)
 	require.NoError(t, err)
-	assert.Contains(t, string(raw), `"last_heartbeat_addr":"198.51.100.103:49152"`)
+	assert.Contains(t, string(raw), `"last_heartbeat_addr":"10.4.6.103:49152"`)
 }
 
 // TestDeviceToResponse_NoHeartbeatAddrOmitted proves a device that has never

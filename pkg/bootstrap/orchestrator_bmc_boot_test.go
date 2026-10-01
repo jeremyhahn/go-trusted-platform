@@ -33,7 +33,7 @@ func TestBmcBootNode_PowerStateAwareReboot(t *testing.T) {
 			bmcFactory: &mockBMCFactory{client: client},
 		}
 	}
-	node := &DiscoveredNode{NodeConfig: NodeConfig{Hostname: "lab-node-3", BMCProtocol: "ipmi"}}
+	node := &DiscoveredNode{NodeConfig: NodeConfig{Hostname: "node-03", BMCProtocol: "ipmi"}}
 
 	t.Run("powered on node is power cycled, not powered on", func(t *testing.T) {
 		mock := bmc.NewMockClient()

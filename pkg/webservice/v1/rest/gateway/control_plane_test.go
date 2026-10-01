@@ -218,7 +218,7 @@ func TestPostTelemetry_AcceptsOwnGatewayID(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(store, nil))
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "lab-node-1"), "lab-node-1"))
+	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "node-01"), "node-01"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusOK, rec.Body.String())
@@ -226,8 +226,8 @@ func TestPostTelemetry_AcceptsOwnGatewayID(t *testing.T) {
 	if store.puts != 1 {
 		t.Fatalf("store.puts = %d, want 1", store.puts)
 	}
-	if _, ok := store.snaps["lab-node-1"]; !ok {
-		t.Fatal("snapshot for lab-node-1 was not persisted")
+	if _, ok := store.snaps["node-01"]; !ok {
+		t.Fatal("snapshot for node-01 was not persisted")
 	}
 }
 
@@ -239,7 +239,7 @@ func TestPostTelemetry_RejectsOtherGatewayID(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(store, nil))
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "lab-node-2"), "lab-node-1"))
+	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "node-02"), "node-01"))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusForbidden, rec.Body.String())
@@ -247,8 +247,8 @@ func TestPostTelemetry_RejectsOtherGatewayID(t *testing.T) {
 	if store.puts != 0 {
 		t.Fatalf("store.puts = %d, want 0 — a refused request must persist nothing", store.puts)
 	}
-	if _, ok := store.snaps["lab-node-2"]; ok {
-		t.Fatal("lab-node-1's certificate wrote lab-node-2's snapshot")
+	if _, ok := store.snaps["node-02"]; ok {
+		t.Fatal("node-01's certificate wrote node-02's snapshot")
 	}
 }
 
@@ -260,7 +260,7 @@ func TestPostTelemetry_RejectsWithoutClientCert(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(store, nil))
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, telemetryRequest(t, "lab-node-1"))
+	router.ServeHTTP(rec, telemetryRequest(t, "node-01"))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusUnauthorized, rec.Body.String())
@@ -279,7 +279,7 @@ func TestPostTelemetry_RejectsUnverifiedClientCert(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(store, nil))
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withUnverifiedClientCert(telemetryRequest(t, "lab-node-1"), "lab-node-1"))
+	router.ServeHTTP(rec, withUnverifiedClientCert(telemetryRequest(t, "node-01"), "node-01"))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusUnauthorized, rec.Body.String())
@@ -305,7 +305,7 @@ func TestPostTelemetry_RejectsNamelessCommonName(t *testing.T) {
 			router := controlPlaneRouter(newControlPlane(store, nil))
 
 			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "lab-node-1"), cn))
+			router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "node-01"), cn))
 
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -325,7 +325,7 @@ func TestPostTelemetry_MissingGatewayIDStillRejected(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(store, nil))
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, ""), "lab-node-1"))
+	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, ""), "node-01"))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
@@ -336,14 +336,14 @@ func TestPostTelemetry_MissingGatewayIDStillRejected(t *testing.T) {
 }
 
 // TestPostTelemetry_BindingIsCaseSensitive pins the exact-match rule. A
-// case-insensitive comparison would make "MINI-02" and "lab-node-2" the
+// case-insensitive comparison would make "NODE-02" and "node-02" the
 // same principal and reopen the substitution this check closes.
 func TestPostTelemetry_BindingIsCaseSensitive(t *testing.T) {
 	store := newMemStore()
 	router := controlPlaneRouter(newControlPlane(store, nil))
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "MINI-01"), "lab-node-1"))
+	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "NODE-01"), "node-01"))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
@@ -373,14 +373,14 @@ func TestGetDesiredConfig_AcceptsOwnGatewayID(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(nil, src))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-1", nil)
-	router.ServeHTTP(rec, withClientCert(req, "lab-node-1"))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/node-01", nil)
+	router.ServeHTTP(rec, withClientCert(req, "node-01"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if src.calls != 1 || src.lastID != "lab-node-1" {
-		t.Fatalf("DesiredConfig calls = %d, lastID = %q; want 1, \"lab-node-1\"", src.calls, src.lastID)
+	if src.calls != 1 || src.lastID != "node-01" {
+		t.Fatalf("DesiredConfig calls = %d, lastID = %q; want 1, \"node-01\"", src.calls, src.lastID)
 	}
 	var envelope struct {
 		Payload struct {
@@ -395,7 +395,7 @@ func TestGetDesiredConfig_AcceptsOwnGatewayID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the served document must decode as the wire contract: %v", err)
 	}
-	if got.GatewayID != "lab-node-1" || got.Version != "rev-7" || got.LoadBalancer == nil || len(got.LoadBalancer.VIPs) != 1 || got.NAT == nil {
+	if got.GatewayID != "node-01" || got.Version != "rev-7" || got.LoadBalancer == nil || len(got.LoadBalancer.VIPs) != 1 || got.NAT == nil {
 		t.Fatalf("round trip lost content: %+v", got)
 	}
 }
@@ -409,8 +409,8 @@ func TestGetDesiredConfig_RefusesAnInvalidDocument(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(nil, &recordingConfigSource{payload: bad}))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-1", nil)
-	router.ServeHTTP(rec, withClientCert(req, "lab-node-1"))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/node-01", nil)
+	router.ServeHTTP(rec, withClientCert(req, "node-01"))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -421,8 +421,8 @@ func TestGetDesiredConfig_RefusesAnInvalidDocument(t *testing.T) {
 func TestGetDesiredConfig_NilDocumentIsEmpty(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(nil, &recordingConfigSource{}))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-1", nil)
-	router.ServeHTTP(rec, withClientCert(req, "lab-node-1"))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/node-01", nil)
+	router.ServeHTTP(rec, withClientCert(req, "node-01"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -437,8 +437,8 @@ func TestGetDesiredConfig_RejectsOtherGatewayID(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(nil, src))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-2", nil)
-	router.ServeHTTP(rec, withClientCert(req, "lab-node-1"))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/node-02", nil)
+	router.ServeHTTP(rec, withClientCert(req, "node-01"))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusForbidden, rec.Body.String())
@@ -455,7 +455,7 @@ func TestGetDesiredConfig_RejectsWithoutClientCert(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(nil, src))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/node-01", nil)
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -473,8 +473,8 @@ func TestGetDesiredConfig_RejectsUnverifiedClientCert(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(nil, src))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-1", nil)
-	router.ServeHTTP(rec, withUnverifiedClientCert(req, "lab-node-1"))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/node-01", nil)
+	router.ServeHTTP(rec, withUnverifiedClientCert(req, "node-01"))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -495,8 +495,8 @@ func TestControlPlane_AuthorizationPrecedesConfiguration(t *testing.T) {
 		name string
 		req  *http.Request
 	}{
-		{"telemetry", telemetryRequest(t, "lab-node-1")},
-		{"desired-config", httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-1", nil)},
+		{"telemetry", telemetryRequest(t, "node-01")},
+		{"desired-config", httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/node-01", nil)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -532,7 +532,7 @@ func TestPostTelemetry_NotConfigured(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(nil, nil))
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "lab-node-1"), "lab-node-1"))
+	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "node-01"), "node-01"))
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
@@ -547,7 +547,7 @@ func TestPostTelemetry_EmptyBody(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/gateway/telemetry", strings.NewReader(""))
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(req, "lab-node-1"))
+	router.ServeHTTP(rec, withClientCert(req, "node-01"))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
@@ -565,7 +565,7 @@ func TestPostTelemetry_MalformedJSON(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/gateway/telemetry", strings.NewReader("{not json"))
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(req, "lab-node-1"))
+	router.ServeHTTP(rec, withClientCert(req, "node-01"))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
@@ -582,7 +582,7 @@ func TestPostTelemetry_StoreFailureIsReported(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(&failingStore{}, nil))
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "lab-node-1"), "lab-node-1"))
+	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "node-01"), "node-01"))
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
@@ -594,9 +594,9 @@ func TestPostTelemetry_StoreFailureIsReported(t *testing.T) {
 func TestGetDesiredConfig_NotConfigured(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(nil, nil))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/node-01", nil)
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(req, "lab-node-1"))
+	router.ServeHTTP(rec, withClientCert(req, "node-01"))
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
@@ -609,9 +609,9 @@ func TestGetDesiredConfig_NotConfigured(t *testing.T) {
 func TestGetDesiredConfig_SourceFailureIsReported(t *testing.T) {
 	router := controlPlaneRouter(newControlPlane(nil, failingConfigSource{}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/node-01", nil)
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(req, "lab-node-1"))
+	router.ServeHTTP(rec, withClientCert(req, "node-01"))
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
@@ -620,15 +620,15 @@ func TestGetDesiredConfig_SourceFailureIsReported(t *testing.T) {
 
 // TestPostTelemetry_RejectsPaddedCommonName closes the aliasing path a
 // normalizing binding would open: if the CN were trimmed before the
-// comparison, a certificate issued for " lab-node-1 " would authenticate as
-// lab-node-1 and reach that gateway's record. The CN is the identity
+// comparison, a certificate issued for " node-01 " would authenticate as
+// node-01 and reach that gateway's record. The CN is the identity
 // verbatim, so a padded one is refused rather than cleaned up.
 func TestPostTelemetry_RejectsPaddedCommonName(t *testing.T) {
 	store := newMemStore()
 	router := controlPlaneRouter(newControlPlane(store, nil))
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "lab-node-1"), " lab-node-1 "))
+	router.ServeHTTP(rec, withClientCert(telemetryRequest(t, "node-01"), " node-01 "))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d — a padded CN must not alias onto the trimmed identity", rec.Code, http.StatusUnauthorized)
@@ -636,8 +636,8 @@ func TestPostTelemetry_RejectsPaddedCommonName(t *testing.T) {
 	if store.puts != 0 {
 		t.Fatalf("store.puts = %d, want 0", store.puts)
 	}
-	if _, ok := store.snaps["lab-node-1"]; ok {
-		t.Fatal("a certificate for \" lab-node-1 \" wrote lab-node-1's snapshot")
+	if _, ok := store.snaps["node-01"]; ok {
+		t.Fatal("a certificate for \" node-01 \" wrote node-01's snapshot")
 	}
 }
 
@@ -647,9 +647,9 @@ func TestGetDesiredConfig_RejectsPaddedCommonName(t *testing.T) {
 	src := &recordingConfigSource{}
 	router := controlPlaneRouter(newControlPlane(nil, src))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/node-01", nil)
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, withClientCert(req, "lab-node-1\t"))
+	router.ServeHTTP(rec, withClientCert(req, "node-01\t"))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)

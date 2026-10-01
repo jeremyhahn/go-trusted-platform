@@ -123,7 +123,7 @@ Examples:
 	// kernel cmdline as platform_apk_mirror= so PXE nodes — which have no
 	// /media/cdrom — can resolve packages at install time. Empty means the
 	// autoinstall repo setup falls back to the public Alpine mirror.
-	cmd.Flags().StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL (e.g. http://198.51.100.11:8080); empty falls back to the public Alpine mirror")
+	cmd.Flags().StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL (e.g. http://10.4.6.11:8080); empty falls back to the public Alpine mirror")
 	cmd.Flags().StringVar(&flags.arch, "arch", "x86_64", "Architecture (x86_64 or aarch64)")
 
 	// Platform flags

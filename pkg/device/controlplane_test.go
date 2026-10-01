@@ -105,9 +105,9 @@ func newControlPlaneFixture(t *testing.T) *controlPlaneFixture {
 	require.NoError(t, err)
 	return &controlPlaneFixture{
 		tpm: &fakeControlPlaneTPM{
-			ekCert:   selfSignedTestCert(t, "ek-lab-node-2"),
+			ekCert:   selfSignedTestCert(t, "ek-node-02"),
 			iakCert:  selfSignedTestIAKCert(t, "iak-SuperMicro X10SDV-SN-CP-1"),
-			idevid:   selfSignedTestCert(t, "lab-node-2-idevid"),
+			idevid:   selfSignedTestCert(t, "node-02-idevid"),
 			iakAttrs: tpmKeyAttributes(t, &iak.PublicKey, iakAttrs),
 			sgnAttrs: tpmKeyAttributes(t, &idevid.PublicKey, tpm2.TPMAObject{
 				FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true,
@@ -143,7 +143,7 @@ func TestControlPlaneRegistrar_WritesTheSameRecordAnEnrollmentWould(t *testing.T
 	dev := result.Device
 	assert.Equal(t, "SuperMicro X10SDV", dev.Model)
 	assert.Equal(t, "SN-CP-1", dev.Serial)
-	assert.Equal(t, "lab-node-2-idevid", dev.Hostname, "the hostname is the IDevID Common Name")
+	assert.Equal(t, "node-02-idevid", dev.Hostname, "the hostname is the IDevID Common Name")
 	assert.Equal(t, EncodeCertificatePEM(f.tpm.ekCert), dev.EKCert)
 	assert.Equal(t, EncodeCertificatePEM(f.tpm.iakCert), dev.AttestCert)
 	assert.Equal(t, []byte("binary_bios_measurements"), dev.EventLog)
@@ -286,7 +286,7 @@ func TestControlPlaneRegistrar_LegacyIAKCertificateIsNotRecorded(t *testing.T) {
 	// is exactly the "denied service, not quarantined" shape.
 	assert.NotEmpty(t, result.Device.AttestPub)
 	assert.NotEmpty(t, result.Device.EKCert)
-	assert.Equal(t, "lab-node-2-idevid", result.Device.Hostname)
+	assert.Equal(t, "node-02-idevid", result.Device.Hostname)
 }
 
 func TestControlPlaneRegistrar_CompliantIAKCertificateIsRecorded(t *testing.T) {

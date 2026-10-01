@@ -36,7 +36,7 @@ const (
 	// capped at consoleTranscriptMaxBytes (1 MiB) and the sink is one
 	// routed hop from the orchestrator on the provisioning network —
 	// 0.25 ms RTT and a clean 1500-byte path MTU end to end, measured
-	// vm-host-1 -> 198.18.1.91 — so a whole transcript is milliseconds
+	// from the orchestrator host to the sink — so a whole transcript is milliseconds
 	// on the wire. This matches the 10s every other client of this same
 	// sink already uses (InstallLogPoller, MediaReadProbe, per-MAC config
 	// staging), and it is still three orders of magnitude more than the

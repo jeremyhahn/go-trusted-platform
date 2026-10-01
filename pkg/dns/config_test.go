@@ -34,14 +34,14 @@ public:
     - 4.4.4.4
     - 8.8.8.8
   zone:
-    description: Public zone for trusted-platform.io
-    name: trusted-platform.io.
+    description: Public zone for example.com
+    name: example.com.
     ttl: 3600
     records:
       soa:
-        name: trusted-platform.io.
-        mname: ns1.trusted-platform.io.
-        rname: hostmaster.trusted-platform.io.
+        name: example.com.
+        mname: ns1.example.com.
+        rname: hostmaster.example.com.
         serial: 1
         refresh: 86400
         retry: 7200
@@ -49,14 +49,14 @@ public:
         minimum_ttl: 3600
         ttl: 3600
       ns:
-        - name: trusted-platform.io.
-          value: ns1.trusted-platform.io.
+        - name: example.com.
+          value: ns1.example.com.
           ttl: 3600
-        - name: trusted-platform.io.
-          value: ns2.trusted-platform.io.
+        - name: example.com.
+          value: ns2.example.com.
           ttl: 3600
-        - name: trusted-platform.io.
-          value: ns3.trusted-platform.io.
+        - name: example.com.
+          value: ns3.example.com.
           ttl: 3600
       a:
         - name: ns1
@@ -73,15 +73,15 @@ public:
           ttl: 3600
       cname:
         - name: www
-          value: trusted-platform.io.
+          value: example.com.
           ttl: 3600
       mx:
-        - name: trusted-platform.io.
-          value: mail.trusted-platform.io.
+        - name: example.com.
+          value: mail.example.com.
           priority: 10
           ttl: 3600
       txt:
-        - name: trusted-platform.io.
+        - name: example.com.
           value: v=spf1 include:_spf.google.com ~all
           ttl: 3600
 internal:
@@ -91,15 +91,15 @@ internal:
     - 192.168.2.1
     - 192.168.3.1
   zone:
-    description: Internal zone for trusted-platform.internal
-    name: trusted-platform.internal.
+    description: Internal zone for example.internal
+    name: example.internal.
     ttl: 3600
     internal: true
     records:
       soa:
-        name: trusted-platform.internal.
-        mname: ns1.trusted-platform.internal.
-        rname: hostmaster.trusted-platform.internal.
+        name: example.internal.
+        mname: ns1.example.internal.
+        rname: hostmaster.example.internal.
         serial: 1
         refresh: 86400
         retry: 7200
@@ -107,14 +107,14 @@ internal:
         minimum_ttl: 3600
         ttl: 3600
       ns:
-        - name: trusted-platform.internal.
-          value: ns1.trusted-platform.internal.
+        - name: example.internal.
+          value: ns1.example.internal.
           ttl: 3600
-        - name: trusted-platform.internal.
-          value: ns2.trusted-platform.internal.
+        - name: example.internal.
+          value: ns2.example.internal.
           ttl: 3600
-        - name: trusted-platform.internal.
-          value: ns3.trusted-platform.internal.
+        - name: example.internal.
+          value: ns3.example.internal.
           ttl: 3600
       a:
         - name: ns1
@@ -131,7 +131,7 @@ internal:
           ttl: 3600
       cname:
         - name: www
-          value: trusted-platform.internal.
+          value: example.internal.
           ttl: 3600`
 
 func TestParseConfig(t *testing.T) {
@@ -143,8 +143,8 @@ func TestParseConfig(t *testing.T) {
 
 	// Public Zone Assertions
 	publicZone := config.PublicServer.Zone
-	assert.Equal(t, "trusted-platform.io.", publicZone.Name)
-	assert.Equal(t, "Public zone for trusted-platform.io", publicZone.Description)
+	assert.Equal(t, "example.com.", publicZone.Name)
+	assert.Equal(t, "Public zone for example.com", publicZone.Description)
 	assert.Len(t, publicZone.RecordSet.NSRecords, 3, "NSRecords count mismatch in Public Zone")
 	assert.Len(t, publicZone.RecordSet.ARecords, 4, "ARecords count mismatch in Public Zone")
 	assert.Len(t, publicZone.RecordSet.CNAMERecords, 1, "CNAMERecords count mismatch in Public Zone")
@@ -153,8 +153,8 @@ func TestParseConfig(t *testing.T) {
 
 	// Internal Zone Assertions
 	internalZone := config.InternalServer.Zone
-	assert.Equal(t, "trusted-platform.internal.", internalZone.Name)
-	assert.Equal(t, "Internal zone for trusted-platform.internal", internalZone.Description)
+	assert.Equal(t, "example.internal.", internalZone.Name)
+	assert.Equal(t, "Internal zone for example.internal", internalZone.Description)
 	assert.True(t, internalZone.Internal, "Internal flag mismatch in Internal Zone")
 	assert.Len(t, internalZone.RecordSet.NSRecords, 3, "NSRecords count mismatch in Internal Zone")
 	assert.Len(t, internalZone.RecordSet.ARecords, 4, "ARecords count mismatch in Internal Zone")

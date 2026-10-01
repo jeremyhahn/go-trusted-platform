@@ -26,14 +26,14 @@ import (
 // RP ID matches the SDK's single relying party gets its handler config.
 func TestListenerWebAuthnConfig_MatchingRPRegisters(t *testing.T) {
 	ws := &v1.Config{WebAuthn: &v1.WebAuthn{
-		RPID:          "cp.trusted-platform.io",
+		RPID:          "cp.example.com",
 		RPDisplayName: "Trusted Platform",
-		RPOrigins:     []string{"https://cp.trusted-platform.io:8443"},
+		RPOrigins:     []string{"https://cp.example.com:8443"},
 	}}
-	cfg := listenerWebAuthnConfig(ws, "cp.trusted-platform.io", logging.DefaultLogger())
+	cfg := listenerWebAuthnConfig(ws, "cp.example.com", logging.DefaultLogger())
 	require.NotNil(t, cfg)
-	assert.Equal(t, "cp.trusted-platform.io", cfg.RPID)
-	assert.Equal(t, []string{"https://cp.trusted-platform.io:8443"}, cfg.RPOrigins)
+	assert.Equal(t, "cp.example.com", cfg.RPID)
+	assert.Equal(t, []string{"https://cp.example.com:8443"}, cfg.RPOrigins)
 }
 
 // TestListenerWebAuthnConfig_DivergentRPDisabled proves a listener whose
@@ -43,10 +43,10 @@ func TestListenerWebAuthnConfig_MatchingRPRegisters(t *testing.T) {
 // user-discovered failure.
 func TestListenerWebAuthnConfig_DivergentRPDisabled(t *testing.T) {
 	ws := &v1.Config{WebAuthn: &v1.WebAuthn{
-		RPID:      "cp.trusted-platform.internal",
-		RPOrigins: []string{"https://cp.trusted-platform.internal"},
+		RPID:      "cp.example.internal",
+		RPOrigins: []string{"https://cp.example.internal"},
 	}}
-	assert.Nil(t, listenerWebAuthnConfig(ws, "cp.trusted-platform.io", logging.DefaultLogger()))
+	assert.Nil(t, listenerWebAuthnConfig(ws, "cp.example.com", logging.DefaultLogger()))
 }
 
 // TestListenerWebAuthnConfig_NoWebAuthnOrNilConfig proves listeners
@@ -54,11 +54,11 @@ func TestListenerWebAuthnConfig_DivergentRPDisabled(t *testing.T) {
 // an empty SDK RP (no mirror ran — e.g. lean builds) leaves the listener's
 // own config in force.
 func TestListenerWebAuthnConfig_NoWebAuthnOrNilConfig(t *testing.T) {
-	assert.Nil(t, listenerWebAuthnConfig(nil, "cp.trusted-platform.io", logging.DefaultLogger()))
-	assert.Nil(t, listenerWebAuthnConfig(&v1.Config{}, "cp.trusted-platform.io", logging.DefaultLogger()))
+	assert.Nil(t, listenerWebAuthnConfig(nil, "cp.example.com", logging.DefaultLogger()))
+	assert.Nil(t, listenerWebAuthnConfig(&v1.Config{}, "cp.example.com", logging.DefaultLogger()))
 
-	ws := &v1.Config{WebAuthn: &v1.WebAuthn{RPID: "cp.trusted-platform.io"}}
+	ws := &v1.Config{WebAuthn: &v1.WebAuthn{RPID: "cp.example.com"}}
 	cfg := listenerWebAuthnConfig(ws, "", logging.DefaultLogger())
 	require.NotNil(t, cfg, "an empty SDK RP must not disable listeners")
-	assert.Equal(t, "cp.trusted-platform.io", cfg.RPID)
+	assert.Equal(t, "cp.example.com", cfg.RPID)
 }

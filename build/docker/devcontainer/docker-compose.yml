@@ -59,9 +59,6 @@ services:
       - ../../../../go-luks2:/home/jhahn/sources/go-luks2:cached
       - ../../../../go-signal:/home/jhahn/sources/go-signal:cached
 
-      # Private deployment configs (read-only)
-      - ../../../../automatethethings:/home/jhahn/sources/automatethethings:ro
-
       # Go module cache for faster builds
       - trusted-platform-go-mod-cache:/go/pkg/mod
 
@@ -257,7 +254,7 @@ services:
     environment:
       VBMC_HTTPS_ADDR: ":8443"
       VBMC_VENDOR: "Supermicro"
-      VBMC_CN: "vbmc-supermicro.trusted-platform.internal"
+      VBMC_CN: "vbmc-supermicro.example.internal"
       VBMC_LOG_LEVEL: "info"
       # IPMI 2.0 RMCP+ simulator -- real BMCs use UDP/623 but
       # containers can't always bind privileged ports, so we use
@@ -281,7 +278,7 @@ services:
     environment:
       VBMC_HTTPS_ADDR: ":8443"
       VBMC_VENDOR: "Dell"
-      VBMC_CN: "vbmc-dell.trusted-platform.internal"
+      VBMC_CN: "vbmc-dell.example.internal"
       VBMC_LOG_LEVEL: "info"
       VBMC_IPMI_ADDR: ":6230"
       VBMC_IPMI_USER: "ADMIN"

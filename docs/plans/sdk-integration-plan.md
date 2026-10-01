@@ -115,7 +115,7 @@ The new startup sequence eliminates the race condition and establishes determini
 
 ### Phase 1: go-quicbaas — WithCA Server Option
 
-**Repository:** `/home/jhahn/sources/go-quicbaas`
+**Repository:** `../go-quicbaas`
 
 **Goal:** Add an external CA injection point to go-quicbaas so the platform CA can be provided
 at construction time, bypassing the internal `initializeCA()` entirely. The server must remain
@@ -247,7 +247,7 @@ None. This phase is self-contained in go-quicbaas.
 
 ### Phase 2: go-trusted-platform — New Bootstrap Order
 
-**Repository:** `/home/jhahn/sources/go-trusted-platform`
+**Repository:** the repository root
 
 **Goal:** Replace the xkms pre-initialization hack with a deterministic, ordered initialization
 sequence. xkms gets native file storage backends. go-trusted-ca CA is initialized before
@@ -445,7 +445,7 @@ Phase 1 must be complete before Phase 2 can use `quicbaassdk.WithCA`.
 
 ### Phase 3: QuicBaaS ObjectStorage for Platform Storage
 
-**Repository:** `/home/jhahn/sources/go-trusted-platform`
+**Repository:** the repository root
 
 **Goal:** Replace all platform storage that currently uses go-objstore's `common.Storage` with
 QuicBaaS ObjectStorage SDK calls. The `pkg/store/object/store.go` ObjectStore today wraps
@@ -542,14 +542,14 @@ before platform services start).
 
 ### Phase 4: QuicBaaS-Backed ACME Storage Factory
 
-**Repository:** `/home/jhahn/sources/go-trusted-platform`
+**Repository:** the repository root
 
 **Goal:** Replace `quicbaassdk.NewObjectStorageLocal()` in `InitACMEClient` with a proper
 QuicBaaS-backed ACME storage factory. The platform's QuicBaaS ObjectStorage service provides
 multi-tenant isolation, DEK encryption, and cluster replication for all ACME state.
 
 go-trusted-ca defines the `acmestorage.Factory` interface (at
-`/home/jhahn/sources/go-trusted-ca/pkg/acme/storage/types.go`) and provides an objstore
+`../go-trusted-ca/pkg/acme/storage/types.go`) and provides an objstore
 implementation at `pkg/acme/storage/objstore/`. We need a QuicBaaS implementation in
 go-trusted-platform that satisfies the same interface.
 
@@ -649,7 +649,7 @@ QuicBaaS is started before `InitACMEClient` is called.
 
 ### Phase 5: Multi-Tenant Storage Integration
 
-**Repository:** `/home/jhahn/sources/go-trusted-platform`
+**Repository:** the repository root
 
 **Goal:** Wire the multi-tenancy layer into the storage architecture. When a tenant is created,
 provision a TenantDEK and an ObjectStorage partition. When a tenant is deleted, clean up both.
@@ -804,7 +804,7 @@ started, so this phase's runtime behavior depends on Phase 2 ordering.
 
 ### Phase 6: Cleanup and go.mod
 
-**Repository:** `/home/jhahn/sources/go-trusted-platform`
+**Repository:** the repository root
 
 **Goal:** Remove all direct go-objstore imports, delete the `pkg/storage/objstore/` package,
 and demote go-objstore to an indirect dependency in go.mod.

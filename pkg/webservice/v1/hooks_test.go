@@ -451,7 +451,7 @@ func TestNewDNSRegistrationHook_ZoneQualifiedRegistration(t *testing.T) {
 		zone: "control-plane",
 	}
 
-	cert := createHookTestCert("lab-node-1.internal.example.com")
+	cert := createHookTestCert("node-01.internal.example.com")
 	hook := NewDNSRegistrationHook(registrar, "internal.example.com", logger, profiles)
 
 	ctx := &trustedca.ACMEOrderFinalizeHookContext{
@@ -478,7 +478,7 @@ func TestNewDNSRegistrationHook_BMCNameNotZoneQualified(t *testing.T) {
 	registrar := &mockDNSRegistrarWithZone{}
 	profiles := &mockProfileResolver{zone: "management"}
 
-	cert := createHookTestCert("lab-node-1-bmc.internal.example.com")
+	cert := createHookTestCert("node-01-bmc.internal.example.com")
 	hook := NewDNSRegistrationHook(registrar, "internal.example.com", logger, profiles)
 
 	ctx := &trustedca.ACMEOrderFinalizeHookContext{
@@ -493,11 +493,11 @@ func TestNewDNSRegistrationHook_BMCNameNotZoneQualified(t *testing.T) {
 
 	err := hook(ctx)
 	assert.NoError(t, err)
-	// BMC name from cert CN is host=lab-node-1-bmc; must not be zone-qualified.
+	// BMC name from cert CN is host=node-01-bmc; must not be zone-qualified.
 	// The model-serial form (SuperMicro-BMCSERIAL) is not a BMC name so may be called.
-	// Key check: "lab-node-1-bmc" must never be the host argument.
+	// Key check: "node-01-bmc" must never be the host argument.
 	for _, h := range registrar.zoneHosts {
-		assert.NotEqual(t, "lab-node-1-bmc", h, "BMC name must not be zone-qualified")
+		assert.NotEqual(t, "node-01-bmc", h, "BMC name must not be zone-qualified")
 	}
 }
 
@@ -508,7 +508,7 @@ func TestExtractHostFromFQDN(t *testing.T) {
 		domain string
 		want   string
 	}{
-		{"lab-node-1.internal.example.com", "internal.example.com", "lab-node-1"},
+		{"node-01.internal.example.com", "internal.example.com", "node-01"},
 		{"gw.corp.local", "corp.local", "gw"},
 		{"a.b.corp.local", "corp.local", ""},     // multi-label prefix
 		{"corp.local", "corp.local", ""},         // exactly domain, no host

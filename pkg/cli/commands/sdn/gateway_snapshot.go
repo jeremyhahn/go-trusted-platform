@@ -53,7 +53,7 @@ Examples:
   platformctl sdn gateway snapshot
 
   # A reported gateway, from the control plane
-  platformctl sdn gateway snapshot --gateway-id lab-node-1-gateway
+  platformctl sdn gateway snapshot --gateway-id node-01-gateway
 
   # Every gateway that has reported
   platformctl sdn gateway snapshot --all -o json`,

@@ -1972,7 +1972,7 @@ type BMCEnrollResponse struct {
 	Endpoint string `protobuf:"bytes,2,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
 	// Hostname is the bare hostname of the BMC address (no port).
 	Hostname string `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	// DnsName is the FQDN registered in internal DNS, e.g. "lab-node-1-bmc.internal.".
+	// DnsName is the FQDN registered in internal DNS, e.g. "node-01-bmc.internal.".
 	// Empty when dns-register was skipped.
 	DnsName string `protobuf:"bytes,4,opt,name=dns_name,json=dnsName,proto3" json:"dns_name,omitempty"`
 	// PinSpkiSha256 is the hex-encoded SHA-256 of the pinned SPKI of the

@@ -74,8 +74,8 @@ func TestQUICNTPCategoryServesEverySubOperation(t *testing.T) {
 		if len(decoded.GetSources()) != 2 {
 			t.Fatalf("len(sources) = %d, want 2", len(decoded.GetSources()))
 		}
-		if decoded.GetSources()[0].GetAddress() != "198.18.0.1" {
-			t.Fatalf("source[0].Address = %q, want 198.18.0.1", decoded.GetSources()[0].GetAddress())
+		if decoded.GetSources()[0].GetAddress() != "10.4.200.1" {
+			t.Fatalf("source[0].Address = %q, want 10.4.200.1", decoded.GetSources()[0].GetAddress())
 		}
 	})
 

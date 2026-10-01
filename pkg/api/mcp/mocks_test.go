@@ -2084,7 +2084,7 @@ func (m *mockServiceProvider) GatewaySnapshot(ctx context.Context, gatewayID str
 }
 
 func (m *mockServiceProvider) GatewaySnapshots(ctx context.Context) ([]interface{}, error) {
-	return []interface{}{map[string]interface{}{"gateway_id": "lab-node-1-gateway"}}, nil
+	return []interface{}{map[string]interface{}{"gateway_id": "node-01-gateway"}}, nil
 }
 
 func (m *mockServiceProvider) GatewayModeSet(ctx context.Context, modes []string) (interface{}, error) {
@@ -2185,7 +2185,7 @@ func (m *mockServiceProvider) NTPSources(ctx context.Context) (interface{}, erro
 		return nil, m.ntpErr
 	}
 	return map[string]interface{}{"sources": []interface{}{
-		map[string]interface{}{"address": "198.18.0.1", "reachable": true},
+		map[string]interface{}{"address": "10.4.200.1", "reachable": true},
 	}}, nil
 }
 

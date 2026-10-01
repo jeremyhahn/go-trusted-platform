@@ -103,7 +103,7 @@ func TestDeviceGRPC_RecordAttestationCertificate_ArgumentErrors(t *testing.T) {
 	stub := &stubAttestCertRecorder{rec: recordedFixture()}
 	svc := newAttestCertGRPC(stub)
 
-	for name, id := range map[string]string{"empty": "", "zero": "0", "text": "lab-node-3", "negative": "-1"} {
+	for name, id := range map[string]string{"empty": "", "zero": "0", "text": "node-03", "negative": "-1"} {
 		t.Run(name, func(t *testing.T) {
 			_, err := svc.RecordAttestationCertificate(context.Background(), &platformv1.RecordAttestationCertificateRequest{DeviceId: id})
 			assert.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
@@ -125,7 +125,7 @@ func TestDeviceGRPC_RecordAttestationCertificate_ErrorMapping(t *testing.T) {
 	}{
 		"refused (unrestricted)": {
 			err: device.ErrAttestCertRefused{DeviceID: 42, Attempts: []device.AttestCertAttempt{
-				{Source: device.AttestCertSourceCA, Detail: "lab-node-3", Err: vm.ErrAKCertificateNotRestricted{Subject: "CN=x"}},
+				{Source: device.AttestCertSourceCA, Detail: "node-03", Err: vm.ErrAKCertificateNotRestricted{Subject: "CN=x"}},
 			}},
 			code: codes.FailedPrecondition,
 		},
@@ -191,7 +191,7 @@ func TestQUICDeviceRecordAttestCert_Success(t *testing.T) {
 func TestQUICDeviceRecordAttestCert_RefusalIsInvalidRequest(t *testing.T) {
 	handler := newQUICAttestCertHandler(t, &stubAttestCertRecorder{
 		err: device.ErrAttestCertRefused{DeviceID: 42, Attempts: []device.AttestCertAttempt{
-			{Source: device.AttestCertSourceCA, Detail: "lab-node-3", Err: vm.ErrAKCertificateNotRestricted{Subject: "CN=x"}},
+			{Source: device.AttestCertSourceCA, Detail: "node-03", Err: vm.ErrAKCertificateNotRestricted{Subject: "CN=x"}},
 		}},
 	})
 	req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceSubRecordAttestCert,

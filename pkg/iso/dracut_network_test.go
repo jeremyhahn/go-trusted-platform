@@ -33,15 +33,15 @@ func TestPlatformdStaticCIDRShell_AppliesPrefixOnce(t *testing.T) {
 		netmask string
 		want    string
 	}{
-		{name: "bare address with IPV4_PREFIX", address: "198.18.1.140", prefix: "24", want: "198.18.1.140/24"},
-		{name: "cidr address without IPV4_PREFIX", address: "198.18.1.140/24", want: "198.18.1.140/24"},
-		{name: "cidr address with matching IPV4_PREFIX", address: "198.18.1.140/24", prefix: "24", want: "198.18.1.140/24"},
-		{name: "IPV4_PREFIX wins over cidr suffix", address: "198.18.1.140/24", prefix: "28", want: "198.18.1.140/28"},
-		{name: "cidr suffix wins over netmask", address: "198.18.1.140/28", netmask: "255.255.255.0", want: "198.18.1.140/28"},
-		{name: "bare address with netmask", address: "198.18.1.140", netmask: "255.255.255.128", want: "198.18.1.140/25"},
+		{name: "bare address with IPV4_PREFIX", address: "10.4.2.140", prefix: "24", want: "10.4.2.140/24"},
+		{name: "cidr address without IPV4_PREFIX", address: "10.4.2.140/24", want: "10.4.2.140/24"},
+		{name: "cidr address with matching IPV4_PREFIX", address: "10.4.2.140/24", prefix: "24", want: "10.4.2.140/24"},
+		{name: "IPV4_PREFIX wins over cidr suffix", address: "10.4.2.140/24", prefix: "28", want: "10.4.2.140/28"},
+		{name: "cidr suffix wins over netmask", address: "10.4.2.140/28", netmask: "255.255.255.0", want: "10.4.2.140/28"},
+		{name: "bare address with netmask", address: "10.4.2.140", netmask: "255.255.255.128", want: "10.4.2.140/25"},
 		{name: "bare address with wide netmask", address: "10.1.2.3", netmask: "255.255.0.0", want: "10.1.2.3/16"},
 		{name: "host route netmask", address: "10.1.2.3", netmask: "255.255.255.255", want: "10.1.2.3/32"},
-		{name: "bare address defaults to /24", address: "198.18.1.140", want: "198.18.1.140/24"},
+		{name: "bare address defaults to /24", address: "10.4.2.140", want: "10.4.2.140/24"},
 		{name: "zero prefix is valid", address: "0.0.0.0", prefix: "0", want: "0.0.0.0/0"},
 	}
 	for _, tt := range tests {
@@ -61,16 +61,16 @@ func TestPlatformdStaticCIDRShell_MalformedFallsBack(t *testing.T) {
 		netmask string
 		want    string
 	}{
-		{name: "doubled suffix from the #108 boot", address: "198.18.1.140/24/24", want: "198.18.1.140/24"},
-		{name: "doubled suffix keeps a valid IPV4_PREFIX", address: "198.18.1.140/24/24", prefix: "28", want: "198.18.1.140/28"},
-		{name: "empty suffix falls back to netmask", address: "198.18.1.140/", netmask: "255.255.255.192", want: "198.18.1.140/26"},
-		{name: "non-numeric IPV4_PREFIX falls back to suffix", address: "198.18.1.140/25", prefix: "24a", want: "198.18.1.140/25"},
-		{name: "IPV4_PREFIX out of range falls back to netmask", address: "198.18.1.140", prefix: "33", netmask: "255.255.255.0", want: "198.18.1.140/24"},
-		{name: "suffix out of range falls back to default", address: "198.18.1.140/99", want: "198.18.1.140/24"},
-		{name: "negative prefix falls back to default", address: "198.18.1.140", prefix: "-1", want: "198.18.1.140/24"},
-		{name: "unknown netmask falls back to default", address: "198.18.1.140", netmask: "255.0.255.0", want: "198.18.1.140/24"},
-		{name: "netmask written as a prefix falls back to default", address: "198.18.1.140", netmask: "24", want: "198.18.1.140/24"},
-		{name: "shell metacharacters are not evaluated", address: "198.18.1.140/$(echo 1)", want: "198.18.1.140/24"},
+		{name: "doubled suffix from the #108 boot", address: "10.4.2.140/24/24", want: "10.4.2.140/24"},
+		{name: "doubled suffix keeps a valid IPV4_PREFIX", address: "10.4.2.140/24/24", prefix: "28", want: "10.4.2.140/28"},
+		{name: "empty suffix falls back to netmask", address: "10.4.2.140/", netmask: "255.255.255.192", want: "10.4.2.140/26"},
+		{name: "non-numeric IPV4_PREFIX falls back to suffix", address: "10.4.2.140/25", prefix: "24a", want: "10.4.2.140/25"},
+		{name: "IPV4_PREFIX out of range falls back to netmask", address: "10.4.2.140", prefix: "33", netmask: "255.255.255.0", want: "10.4.2.140/24"},
+		{name: "suffix out of range falls back to default", address: "10.4.2.140/99", want: "10.4.2.140/24"},
+		{name: "negative prefix falls back to default", address: "10.4.2.140", prefix: "-1", want: "10.4.2.140/24"},
+		{name: "unknown netmask falls back to default", address: "10.4.2.140", netmask: "255.0.255.0", want: "10.4.2.140/24"},
+		{name: "netmask written as a prefix falls back to default", address: "10.4.2.140", netmask: "24", want: "10.4.2.140/24"},
+		{name: "shell metacharacters are not evaluated", address: "10.4.2.140/$(echo 1)", want: "10.4.2.140/24"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

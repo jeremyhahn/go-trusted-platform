@@ -24,14 +24,14 @@ func TestExtractDNSServerFromConfig_Priority(t *testing.T) {
 dns:
   resolver:
     servers:
-      - address: "198.18.0.1"
+      - address: "10.4.200.1"
         port: 8053
 trust:
   bootstrap:
     dane:
       dns-server: "10.0.0.53:53"
 `)
-	assert.Equal(t, "198.18.0.1:8053", extractDNSServerFromConfig(both),
+	assert.Equal(t, "10.4.200.1:8053", extractDNSServerFromConfig(both),
 		"dns.resolver is the platform-wide default and wins")
 
 	bootstrapOnly := []byte(`

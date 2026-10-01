@@ -136,7 +136,7 @@ func TestNew_Overrides(t *testing.T) {
 		ID:  4,
 		ULA: ula,
 		Overrides: []netplan.Override{
-			{Zone: zone.ZoneControlPlane, VLAN: 50, Subnet: netip.MustParsePrefix("198.18.1.0/24")},
+			{Zone: zone.ZoneControlPlane, VLAN: 50, Subnet: netip.MustParsePrefix("172.30.50.0/24")},
 			{Zone: zone.ZoneFabric, Subnet: netip.MustParsePrefix("10.4.100.0/22")},
 			{Zone: zone.ZoneStorage, Subnet6: netip.MustParsePrefix("fd00:1:2:3::/64")},
 		},
@@ -146,9 +146,9 @@ func TestNew_Overrides(t *testing.T) {
 
 	cp, _ := p.Zone(zone.ZoneControlPlane)
 	assert.Equal(t, uint16(50), cp.VLAN)
-	assert.Equal(t, "198.18.1.0/24", cp.Subnet4.String())
+	assert.Equal(t, "172.30.50.0/24", cp.Subnet4.String())
 	assert.Equal(t, "fd12:3456:789a:406::/64", cp.Subnet6.String(), "IPv6 follows the reference VLAN digits")
-	assert.Equal(t, "198.18.1.1", cp.Gateway.String())
+	assert.Equal(t, "172.30.50.1", cp.Gateway.String())
 
 	fabric, _ := p.Zone(zone.ZoneFabric)
 	assert.Equal(t, uint16(401), fabric.VLAN)

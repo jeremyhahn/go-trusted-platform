@@ -34,7 +34,7 @@ func TestGroupConfig_Validate(t *testing.T) {
 	assert.Equal(t, uint8(PriorityDefault), defaults.effectivePriority())
 	assert.Equal(t, uint16(DefaultAdvertIntervalCentiseconds), defaults.effectiveInterval())
 
-	v6 := GroupConfig{VRID: 1, Interface: "public0", Addresses: []string{"2602:f5bb::1/64"}, Source: "fe80::1"}
+	v6 := GroupConfig{VRID: 1, Interface: "public0", Addresses: []string{"2001:db8::1/64"}, Source: "fe80::1"}
 	require.NoError(t, v6.Validate())
 	assert.Equal(t, FamilyIPv6, v6.family())
 
@@ -43,9 +43,9 @@ func TestGroupConfig_Validate(t *testing.T) {
 		"no interface":      func(c *GroupConfig) { c.Interface = " " },
 		"interval too long": func(c *GroupConfig) { c.AdvertIntervalCentiseconds = 4096 },
 		"no addresses":      func(c *GroupConfig) { c.Addresses = nil },
-		"bad address":       func(c *GroupConfig) { c.Addresses = []string{"198.18.0.1"} },
+		"bad address":       func(c *GroupConfig) { c.Addresses = []string{"10.4.200.1"} },
 		"multicast address": func(c *GroupConfig) { c.Addresses = []string{"224.0.0.18/32"} },
-		"mixed families":    func(c *GroupConfig) { c.Addresses = []string{"198.18.0.1/24", "fd00::1/64"} },
+		"mixed families":    func(c *GroupConfig) { c.Addresses = []string{"10.4.200.1/24", "fd00::1/64"} },
 		"no source":         func(c *GroupConfig) { c.Source = "" },
 		"bad source":        func(c *GroupConfig) { c.Source = "nope" },
 		"source family":     func(c *GroupConfig) { c.Source = "fe80::1" },
@@ -74,7 +74,7 @@ func TestConfig_Validate(t *testing.T) {
 	// The same VRID in the other family on the same interface is a
 	// different group (different virtual MAC, different multicast group).
 	v6 := backupConfig()
-	v6.Addresses, v6.Source = []string{"2602:f5bb::1/64"}, "fe80::2"
+	v6.Addresses, v6.Source = []string{"2001:db8::1/64"}, "fe80::2"
 	require.NoError(t, Config{Groups: []GroupConfig{backupConfig(), v6}}.Validate())
 
 	bad := Config{Groups: []GroupConfig{{}}}

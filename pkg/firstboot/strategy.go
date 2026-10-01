@@ -320,7 +320,7 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	// some TPM-derived value that we don't know how to reproduce on
 	// subsequent boots without a stored secret. Re-running Install with
 	// nil hierarchy auth fails with TPM_RC_BAD_AUTH and aborts the entire
-	// firstboot flow — the failure mode observed on lab-node-2 second boot
+	// firstboot flow — the failure mode observed on node-02 second boot
 	// 2026-04-08 (rc=1, manual entry fallback).
 	//
 	// The fix: skip TPM provisioning AND sealing entirely if a sealed
@@ -499,7 +499,7 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	// Preserve luks-key.bin ALWAYS (until a future seal-validation
 	// handshake proves the TPM unseal works on a clean reboot). Deleting
 	// the keyfile now leaves the system with no fallback when the next
-	// boot's TPM unseal fails — exactly the failure mode that left lab-node-2
+	// boot's TPM unseal fails — exactly the failure mode that left node-02
 	// stuck on 2026-04-08: post-pivot firstboot sealed successfully,
 	// deleted the keyfile, then the next boot's TPM-PCR strategy failed
 	// (848ms FAILED) and the Keyfile strategy had nothing to read.
@@ -566,7 +566,7 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	// service does not mark itself started, and firstboot re-runs on the
 	// next boot. Returning nil here is what silently downgraded security
 	// and reported "Installation completed successfully" while platformd
-	// crashed at startup with TPM_RC_POLICY_FAIL (lab-node-2, 2026-04-07).
+	// crashed at startup with TPM_RC_POLICY_FAIL (node-02, 2026-04-07).
 	if sealRetryNeeded {
 		return ErrSealingFallbackUsed
 	}
@@ -875,7 +875,7 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 	// has the TPM device anyway.
 	//
 	// This was the second bug uncovered after the FactoryResetWithClear
-	// pre-pass got lab-node-2 past the original BAD_AUTH on the eviction
+	// pre-pass got node-02 past the original BAD_AUTH on the eviction
 	// loop. See docs/installer/factory-reset.md for the full chain.
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Installing EK + SSRK + platform policy + IAK + IDevID...\n")
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Hierarchy auth left EMPTY so platformd can re-open OWNER hierarchy\n")

@@ -28,7 +28,7 @@ type Config struct {
 	// external surface (console, API, ACME, the OCI registry), so exposure
 	// is its purpose rather than an accident. Set an IP literal or hostname
 	// to pin it to one interface; a `/29`-scoped management-only console is
-	// `bind-host: 192.168.50.x`. The edge/surface split of what each
+	// `bind-host: 10.4.2.x`. The edge/surface split of what each
 	// listener mounts is separate work.
 	BindHost     string            `yaml:"bind-host" json:"bind_host" mapstructure:"bind-host"`
 	Certificate  Identity          `yaml:"certificate" json:"certificate" mapstructure:"certificate"`

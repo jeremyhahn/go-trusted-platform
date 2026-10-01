@@ -58,7 +58,7 @@ func (s *stubGRPC) Step(context.Context, *platformv1.StepNTPClockRequest, ...grp
 func TestClientUnwrapsTheResponseEnvelopes(t *testing.T) {
 	client := NewClientFromGRPC(&stubGRPC{
 		status:  &platformv1.NTPStatus{Synced: true, Stratum: 3},
-		sources: []*platformv1.NTPSource{{Address: "198.18.0.1", Reachable: true}},
+		sources: []*platformv1.NTPSource{{Address: "10.4.200.1", Reachable: true}},
 	})
 	ctx := context.Background()
 
@@ -74,7 +74,7 @@ func TestClientUnwrapsTheResponseEnvelopes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sources() error = %v", err)
 	}
-	if len(sources) != 1 || sources[0].GetAddress() != "198.18.0.1" {
+	if len(sources) != 1 || sources[0].GetAddress() != "10.4.200.1" {
 		t.Fatalf("sources = %+v", sources)
 	}
 

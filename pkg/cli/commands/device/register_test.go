@@ -78,7 +78,7 @@ func TestNewRegisterCommand_FlagParsing(t *testing.T) {
 		"--mac", "00:25:90:FF:AA:01",
 		"--role", "gateway",
 		"--template", "gateway-default",
-		"--server", "https://198.18.1.140:8443",
+		"--server", "https://10.4.2.140:8443",
 		"--ca-cert", "/etc/platform/ca.pem",
 		"--override-file", "/tmp/overrides.yaml",
 	}
@@ -90,7 +90,7 @@ func TestNewRegisterCommand_FlagParsing(t *testing.T) {
 	assert.Equal(t, "00:25:90:FF:AA:01", cmd.Flag("mac").Value.String())
 	assert.Equal(t, "gateway", cmd.Flag("role").Value.String())
 	assert.Equal(t, "gateway-default", cmd.Flag("template").Value.String())
-	assert.Equal(t, "https://198.18.1.140:8443", cmd.Flag("server").Value.String())
+	assert.Equal(t, "https://10.4.2.140:8443", cmd.Flag("server").Value.String())
 	assert.Equal(t, "/etc/platform/ca.pem", cmd.Flag("ca-cert").Value.String())
 	assert.Equal(t, "/tmp/overrides.yaml", cmd.Flag("override-file").Value.String())
 }
@@ -105,7 +105,7 @@ func TestValidateRegisterFlags_AllValid(t *testing.T) {
 		mac:      "00:25:90:FF:AA:01",
 		role:     "gateway",
 		template: "gateway-default",
-		server:   "https://198.18.1.140:8443",
+		server:   "https://10.4.2.140:8443",
 	}
 
 	err := validateRegisterFlags(rf)
@@ -348,7 +348,7 @@ func TestRunRegister_InvalidOverrideYAML(t *testing.T) {
 
 func TestBuildRegisterContext_WithoutCACert(t *testing.T) {
 	rf := &registerFlags{
-		server: "https://198.18.1.140:8443",
+		server: "https://10.4.2.140:8443",
 	}
 
 	getCtx := buildRegisterContext(rf)
@@ -359,7 +359,7 @@ func TestBuildRegisterContext_WithoutCACert(t *testing.T) {
 	assert.Equal(t, "register", ctx.Name)
 	assert.Equal(t, cli.ContextTypeRemote, ctx.Type)
 	assert.Equal(t, "rest", ctx.Protocol)
-	assert.Equal(t, "https://198.18.1.140:8443", ctx.Remote.Server)
+	assert.Equal(t, "https://10.4.2.140:8443", ctx.Remote.Server)
 	assert.Equal(t, "", ctx.Remote.CACert)
 }
 

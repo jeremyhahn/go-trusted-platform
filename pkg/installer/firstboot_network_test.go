@@ -19,12 +19,12 @@ func TestFirstbootStaticAddress(t *testing.T) {
 		wantIP     string
 		wantPrefix int
 	}{
-		{name: "cidr suffix wins", address: "198.18.1.140/24", netmask: "", wantIP: "198.18.1.140", wantPrefix: 24},
-		{name: "cidr suffix ignores netmask", address: "198.18.1.140/28", netmask: "255.255.255.0", wantIP: "198.18.1.140", wantPrefix: 28},
-		{name: "bare address with netmask", address: "198.18.1.140", netmask: "255.255.255.0", wantIP: "198.18.1.140", wantPrefix: 24},
+		{name: "cidr suffix wins", address: "10.4.2.140/24", netmask: "", wantIP: "10.4.2.140", wantPrefix: 24},
+		{name: "cidr suffix ignores netmask", address: "10.4.2.140/28", netmask: "255.255.255.0", wantIP: "10.4.2.140", wantPrefix: 28},
+		{name: "bare address with netmask", address: "10.4.2.140", netmask: "255.255.255.0", wantIP: "10.4.2.140", wantPrefix: 24},
 		{name: "bare address with wide netmask", address: "10.1.2.3", netmask: "255.255.0.0", wantIP: "10.1.2.3", wantPrefix: 16},
-		{name: "bare address defaults to /24", address: "198.18.1.140", netmask: "", wantIP: "198.18.1.140", wantPrefix: defaultStaticPrefixLen},
-		{name: "host route", address: "198.18.1.140/32", netmask: "", wantIP: "198.18.1.140", wantPrefix: 32},
+		{name: "bare address defaults to /24", address: "10.4.2.140", netmask: "", wantIP: "10.4.2.140", wantPrefix: defaultStaticPrefixLen},
+		{name: "host route", address: "10.4.2.140/32", netmask: "", wantIP: "10.4.2.140", wantPrefix: 32},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -43,16 +43,16 @@ func TestFirstbootStaticAddress_Malformed(t *testing.T) {
 		address string
 		netmask string
 	}{
-		{name: "double prefix", address: "198.18.1.140/24/24"},
-		{name: "empty prefix", address: "198.18.1.140/"},
-		{name: "prefix too large", address: "198.18.1.140/33"},
-		{name: "negative prefix", address: "198.18.1.140/-1"},
-		{name: "non-numeric prefix", address: "198.18.1.140/24a"},
-		{name: "not an address", address: "lab-node-2/24"},
+		{name: "double prefix", address: "10.4.2.140/24/24"},
+		{name: "empty prefix", address: "10.4.2.140/"},
+		{name: "prefix too large", address: "10.4.2.140/33"},
+		{name: "negative prefix", address: "10.4.2.140/-1"},
+		{name: "non-numeric prefix", address: "10.4.2.140/24a"},
+		{name: "not an address", address: "node-02/24"},
 		{name: "ipv6 address", address: "2001:db8::1/64"},
 		{name: "empty address"},
-		{name: "netmask not dotted-quad", address: "198.18.1.140", netmask: "24"},
-		{name: "netmask not contiguous", address: "198.18.1.140", netmask: "255.0.255.0"},
+		{name: "netmask not dotted-quad", address: "10.4.2.140", netmask: "24"},
+		{name: "netmask not contiguous", address: "10.4.2.140", netmask: "255.0.255.0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -76,9 +76,9 @@ func TestWriteFirstbootNetworkConfig_StaticCarriesPrefixOnce(t *testing.T) {
 		netmask    string
 		wantPrefix string
 	}{
-		{name: "cidr address", address: "198.18.1.140/24", wantPrefix: "24"},
-		{name: "bare address with netmask", address: "198.18.1.140", netmask: "255.255.255.128", wantPrefix: "25"},
-		{name: "bare address without netmask", address: "198.18.1.140", wantPrefix: "24"},
+		{name: "cidr address", address: "10.4.2.140/24", wantPrefix: "24"},
+		{name: "bare address with netmask", address: "10.4.2.140", netmask: "255.255.255.128", wantPrefix: "25"},
+		{name: "bare address without netmask", address: "10.4.2.140", wantPrefix: "24"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -86,16 +86,16 @@ func TestWriteFirstbootNetworkConfig_StaticCarriesPrefixOnce(t *testing.T) {
 			inst := &installer{
 				logger: createTestLogger(),
 				config: &Config{
-					OS: &OSConfig{Hostname: "lab-node-2"},
+					OS: &OSConfig{Hostname: "node-02"},
 					Network: &NetworkConfig{
 						Interfaces: []InterfaceConfig{{
 							Name:        "eth0",
 							Type:        "static",
 							IPv4Address: tt.address,
 							IPv4Netmask: tt.netmask,
-							IPv4Gateway: "198.18.1.1",
+							IPv4Gateway: "10.4.2.1",
 						}},
-						DNS: &DNSConfig{Nameservers: []string{"127.0.0.1", "198.18.1.1"}},
+						DNS: &DNSConfig{Nameservers: []string{"127.0.0.1", "10.4.2.1"}},
 					},
 				},
 			}
@@ -107,13 +107,13 @@ func TestWriteFirstbootNetworkConfig_StaticCarriesPrefixOnce(t *testing.T) {
 			content := string(raw)
 			assert.Contains(t, content, "INTERFACE=eth0\n")
 			assert.Contains(t, content, "TYPE=static\n")
-			assert.Contains(t, content, "IPV4_ADDRESS=198.18.1.140\n")
+			assert.Contains(t, content, "IPV4_ADDRESS=10.4.2.140\n")
 			assert.Contains(t, content, "IPV4_PREFIX="+tt.wantPrefix+"\n")
 			assert.Contains(t, content, "IPV4_NETMASK="+tt.netmask+"\n")
-			assert.Contains(t, content, "IPV4_GATEWAY=198.18.1.1\n")
-			assert.Contains(t, content, "DNS=\"127.0.0.1 198.18.1.1\"\n")
-			assert.Contains(t, content, "HOSTNAME=lab-node-2\n")
-			assert.NotContains(t, content, "IPV4_ADDRESS=198.18.1.140/", "the address line must be bare so the hook appends the prefix exactly once")
+			assert.Contains(t, content, "IPV4_GATEWAY=10.4.2.1\n")
+			assert.Contains(t, content, "DNS=\"127.0.0.1 10.4.2.1\"\n")
+			assert.Contains(t, content, "HOSTNAME=node-02\n")
+			assert.NotContains(t, content, "IPV4_ADDRESS=10.4.2.140/", "the address line must be bare so the hook appends the prefix exactly once")
 			assert.Equal(t, 1, strings.Count(content, "IPV4_ADDRESS="))
 		})
 	}
@@ -128,8 +128,8 @@ func TestWriteFirstbootNetworkConfig_MalformedStaticAddress(t *testing.T) {
 				Interfaces: []InterfaceConfig{{
 					Name:        "eth0",
 					Type:        "static",
-					IPv4Address: "198.18.1.140/24/24",
-					IPv4Gateway: "198.18.1.1",
+					IPv4Address: "10.4.2.140/24/24",
+					IPv4Gateway: "10.4.2.1",
 				}},
 			},
 		},

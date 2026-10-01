@@ -27,7 +27,7 @@ func controlPlaneConfig() *Config {
 		Mode:    ModeBoth,
 		Consume: &ConsumeConfig{
 			Upstream: []UpstreamSource{
-				{Address: "198.18.0.1", Prefer: true, IBurst: true},
+				{Address: "10.4.200.1", Prefer: true, IBurst: true},
 				{Address: "pool.ntp.org", Pool: true, IBurst: true},
 			},
 			StartupGate: &StartupGate{
@@ -38,7 +38,7 @@ func controlPlaneConfig() *Config {
 			OrphanFallback: true,
 		},
 		Serve: &ServeConfig{
-			ListenNetworks: []string{"198.18.0.0/24", "172.16.201.0/24"},
+			ListenNetworks: []string{"10.4.200.0/24", "192.0.2.0/24"},
 			LocalStratum:   10,
 			NTS: &NTSConfig{
 				Enabled: true,
@@ -57,7 +57,7 @@ func consumerConfig() *Config {
 		Mode:    ModeConsume,
 		Consume: &ConsumeConfig{
 			Upstream: []UpstreamSource{
-				{Address: "198.18.0.10", Prefer: true, IBurst: true, NTS: true},
+				{Address: "10.4.200.10", Prefer: true, IBurst: true, NTS: true},
 			},
 			StartupGate: &StartupGate{
 				BlockUntilSynced: true,
@@ -161,9 +161,9 @@ func TestConfigValidateRejectsInvalidInput(t *testing.T) {
 		},
 		"unparseable CIDR": {
 			config: &Config{Enabled: true, Mode: ModeServe, Serve: &ServeConfig{
-				ListenNetworks: []string{"198.18.0.1"},
+				ListenNetworks: []string{"10.4.200.1"},
 			}},
-			want: ErrInvalidListenNetwork{Network: "198.18.0.1"},
+			want: ErrInvalidListenNetwork{Network: "10.4.200.1"},
 		},
 		"local stratum out of range": {
 			config: &Config{Enabled: true, Mode: ModeServe, Serve: &ServeConfig{
@@ -347,7 +347,7 @@ func TestConfigValidateAcceptsNTSServerNames(t *testing.T) {
 func TestConfigValidateRejectsUnusableNTSServerNames(t *testing.T) {
 	for name, entry := range map[string]string{
 		"empty entry":       "   ",
-		"IPv4 address":      "198.18.0.2",
+		"IPv4 address":      "10.4.200.2",
 		"IPv6 address":      "fd00::2",
 		"URL":               "https://cp.example.internal",
 		"host and port":     "cp.example.internal:4460",
@@ -381,7 +381,7 @@ func TestConfigValidateRejectsUnusableNTSServerNames(t *testing.T) {
 func TestNTSServerNamesIgnoredWhenNTSDisabled(t *testing.T) {
 	cfg := controlPlaneConfig()
 	cfg.Serve.NTS.Enabled = false
-	cfg.Serve.NTS.ServerNames = []string{"198.18.0.2"}
+	cfg.Serve.NTS.ServerNames = []string{"10.4.200.2"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil when NTS serving is off", err)
 	}

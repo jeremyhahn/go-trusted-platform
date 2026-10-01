@@ -115,7 +115,7 @@ Rows 53-65: Reserved
 
 **⚠️ WARNING**: OTP is **one-time programmable**. Once written, values CANNOT be changed.
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/rpi/otp/`
+**Location**: `pkg/firmware/rpi/otp/`
 
 ```go
 package otp
@@ -172,7 +172,7 @@ func (o *OTPProgrammer) ReadOTP() (*OTPConfig, error) {
 
 **Phase 1: Wrapper Approach** (MVP - Fast to Market)
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/rpi/rpiboot/wrapper.go`
+**Location**: `pkg/firmware/rpi/rpiboot/wrapper.go`
 
 ```go
 package rpiboot
@@ -228,7 +228,7 @@ func (r *RPiBootWrapper) RecoveryBoot(firmware *SignedFirmware) error {
 
 **Phase 2+: Native Go Implementation** (Future Enhancement)
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/rpi/rpiboot/native.go`
+**Location**: `pkg/firmware/rpi/rpiboot/native.go`
 
 ```go
 // Future: Native Go implementation of rpiboot protocol
@@ -244,7 +244,7 @@ type NativeRPiBoot struct {
 
 **Interface Abstraction**:
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/rpi/rpiboot/interface.go`
+**Location**: `pkg/firmware/rpi/rpiboot/interface.go`
 
 ```go
 package rpiboot
@@ -272,7 +272,7 @@ func NewRPIBoot() (RPiBoot, error) {
 
 **Purpose**: Recover devices with corrupted bootloader or SD card
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/rpi/rpiboot/recovery.go`
+**Location**: `pkg/firmware/rpi/rpiboot/recovery.go`
 
 ```go
 type RecoveryMode struct {
@@ -315,7 +315,7 @@ platformctl firmware rpi recovery-flash-bootloader --bootloader bootcode.bin
 
 ### Signed Boot Chain
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/rpi/bootchain/builder.go`
+**Location**: `pkg/firmware/rpi/bootchain/builder.go`
 
 ```go
 package bootchain
@@ -449,7 +449,7 @@ active_partition=%s
 
 ### OTA Update with A/B
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/ota/rpi.go`
+**Location**: `pkg/ota/rpi.go`
 
 ```go
 package ota
@@ -551,7 +551,7 @@ func (u *RPiOTAUpdater) verifyBootChain(partition string) error {
 
 ### Dedicated RPi Installer
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/installer/alpine_rpi.go`
+**Location**: `pkg/installer/alpine_rpi.go`
 
 **Purpose**: Keep RPi-specific Alpine code separate from existing alpine.go
 
@@ -684,7 +684,7 @@ WantedBy=multi-user.target
 
 ### Optional TPM Support
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/rpi/attestation/tpm.go`
+**Location**: `pkg/firmware/rpi/attestation/tpm.go`
 
 ```go
 package attestation
@@ -756,7 +756,7 @@ func (t *TPMAttestor) readPCRs(selection tpm2.PCRSelection) [][]byte {
 
 ### Software Attestation Fallback
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/rpi/attestation/software.go`
+**Location**: `pkg/firmware/rpi/attestation/software.go`
 
 ```go
 // If no TPM available, use software attestation
@@ -790,7 +790,7 @@ func (s *SoftwareAttestor) Attest(nonce []byte) (*Attestation, error) {
 
 ### TPM NV Counter
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/rpi/rollback/tpm_counter.go`
+**Location**: `pkg/firmware/rpi/rollback/tpm_counter.go`
 
 ```go
 package rollback
@@ -856,7 +856,7 @@ func (t *TPMCounter) VerifyVersion(version uint64) error {
 
 ### Writing Boot Images
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/rpi/flasher/sdcard.go`
+**Location**: `pkg/firmware/rpi/flasher/sdcard.go`
 
 ```go
 package flasher
@@ -913,7 +913,7 @@ func (f *SDCardFlasher) Flash(device string, bootChain *BootChain) error {
 
 ### QEMU Integration
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/testing/qemu.go`
+**Location**: `pkg/firmware/testing/qemu.go`
 
 ```go
 type QEMURPi struct {

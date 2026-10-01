@@ -111,23 +111,23 @@ func TestSeederContract_CreateProfile(t *testing.T) {
 	}
 	discovered := []DiscoveredNode{
 		{
-			NodeConfig:     NodeConfig{Hostname: "lab-node-2", Role: RoleControlPlane, MACs: []string{"00:25:90:5e:02:aa"}},
-			DiscoveredMACs: []string{"00:25:90:5e:02:aa"},
+			NodeConfig:     NodeConfig{Hostname: "node-02", Role: RoleControlPlane, MACs: []string{"00:25:90:00:02:aa"}},
+			DiscoveredMACs: []string{"00:25:90:00:02:aa"},
 		},
 	}
 
 	s := cp.seeder(cfg, discovered)
 	require.NoError(t, s.Seed(context.Background()))
 
-	wantID := util.NewID([]byte("lab-node-2"))
-	assert.Equal(t, map[string]uint64{"lab-node-2": wantID}, s.ProfileIDs())
+	wantID := util.NewID([]byte("node-02"))
+	assert.Equal(t, map[string]uint64{"node-02": wantID}, s.ProfileIDs())
 
 	stored, err := cp.profiles.Get(context.Background(), wantID)
 	require.NoError(t, err)
-	assert.Equal(t, "lab-node-2", stored.Name)
+	assert.Equal(t, "node-02", stored.Name)
 	assert.Equal(t, entities.DeviceRole(RoleControlPlane), stored.Role)
 	require.NotNil(t, stored.MatchRules)
-	assert.Equal(t, "00:25:90:5e:02:aa", stored.MatchRules.MACPrefix)
+	assert.Equal(t, "00:25:90:00:02:aa", stored.MatchRules.MACPrefix)
 	assert.Empty(t, stored.EKCert)
 
 	// The stored config is the seeder's merged config, not the bare
@@ -136,7 +136,7 @@ func TestSeederContract_CreateProfile(t *testing.T) {
 	require.True(t, ok, "stored config should be a map, got %T", stored.Config)
 	osSection, ok := storedConfig["os"].(map[string]interface{})
 	require.True(t, ok, "merged config should carry the os section")
-	assert.Equal(t, "lab-node-2", osSection["hostname"])
+	assert.Equal(t, "node-02", osSection["hostname"])
 	assert.Equal(t, cfg.Platform.Domain, storedConfig["domain"], "platform global identity must overwrite the template placeholder")
 	require.NotNil(t, stored.PlatformdConfig)
 	assert.Equal(t, storedConfig, stored.PlatformdConfig.Inline)
@@ -153,8 +153,8 @@ func TestSeederContract_CreateProfile_Idempotent(t *testing.T) {
 	}
 	discovered := []DiscoveredNode{
 		{
-			NodeConfig:     NodeConfig{Hostname: "lab-node-2", Role: RoleControlPlane, MACs: []string{"00:25:90:5e:02:aa"}},
-			DiscoveredMACs: []string{"00:25:90:5e:02:aa"},
+			NodeConfig:     NodeConfig{Hostname: "node-02", Role: RoleControlPlane, MACs: []string{"00:25:90:00:02:aa"}},
+			DiscoveredMACs: []string{"00:25:90:00:02:aa"},
 		},
 	}
 
@@ -185,8 +185,8 @@ func TestSeederContract_CreateProfile_EKCertRefused(t *testing.T) {
 	ekCert := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cp.server.Certificate().Raw}))
 	s := cp.seeder(cfg, []DiscoveredNode{
 		{
-			NodeConfig:     NodeConfig{Hostname: "lab-node-2", Role: RoleControlPlane, MACs: []string{"00:25:90:5e:02:aa"}},
-			DiscoveredMACs: []string{"00:25:90:5e:02:aa"},
+			NodeConfig:     NodeConfig{Hostname: "node-02", Role: RoleControlPlane, MACs: []string{"00:25:90:00:02:aa"}},
+			DiscoveredMACs: []string{"00:25:90:00:02:aa"},
 			EKCert:         ekCert,
 		},
 	})
@@ -195,7 +195,7 @@ func TestSeederContract_CreateProfile_EKCertRefused(t *testing.T) {
 
 	var createErr ErrProfileCreateFailed
 	require.ErrorAs(t, err, &createErr)
-	assert.Equal(t, "lab-node-2", createErr.Hostname)
+	assert.Equal(t, "node-02", createErr.Hostname)
 	assert.Equal(t, http.StatusBadRequest, createErr.StatusCode)
 	assert.Empty(t, s.ProfileIDs())
 	count, countErr := cp.profiles.Count(context.Background())
@@ -223,7 +223,7 @@ func TestSeederContract_CreateProfile_NullConfig(t *testing.T) {
 	url := "https://" + cp.server.Listener.Addr().String() +
 		"/api/v1/devices/templates/" + templateID + "/create-profile"
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url,
-		strings.NewReader(`{"hostname":"lab-node-2","config":null}`))
+		strings.NewReader(`{"hostname":"node-02","config":null}`))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := cp.server.Client().Do(req)
@@ -247,8 +247,8 @@ func TestSeederContract_CreateProfile_UnknownTemplate(t *testing.T) {
 
 	s := cp.seeder(minimalConfig(), []DiscoveredNode{
 		{
-			NodeConfig:     NodeConfig{Hostname: "lab-node-2", Role: RoleControlPlane},
-			DiscoveredMACs: []string{"00:25:90:5e:02:aa"},
+			NodeConfig:     NodeConfig{Hostname: "node-02", Role: RoleControlPlane},
+			DiscoveredMACs: []string{"00:25:90:00:02:aa"},
 		},
 	})
 
@@ -256,7 +256,7 @@ func TestSeederContract_CreateProfile_UnknownTemplate(t *testing.T) {
 
 	var createErr ErrProfileCreateFailed
 	require.ErrorAs(t, err, &createErr)
-	assert.Equal(t, "lab-node-2", createErr.Hostname)
+	assert.Equal(t, "node-02", createErr.Hostname)
 	assert.Empty(t, s.ProfileIDs())
 }
 
@@ -324,19 +324,19 @@ func TestSeederContract_RelativeTemplateResolvesAgainstConfigDir(t *testing.T) {
 	cfg := minimalConfig()
 	cfg.Templates = map[string]string{RoleControlPlane: relPath}
 	cfg.Nodes = []NodeConfig{
-		{Hostname: "lab-node-2", Role: RoleControlPlane, MACs: []string{"00:25:90:5e:02:aa"}},
+		{Hostname: "node-02", Role: RoleControlPlane, MACs: []string{"00:25:90:00:02:aa"}},
 	}
 	discovered := []DiscoveredNode{
 		{
 			NodeConfig:     cfg.Nodes[0],
-			DiscoveredMACs: []string{"00:25:90:5e:02:aa"},
+			DiscoveredMACs: []string{"00:25:90:00:02:aa"},
 		},
 	}
 
 	// The orchestrator's own read — the dry-run plan and the real
 	// virtual-media staging share this seam.
 	o := &Orchestrator{config: cfg, configDir: configDir, logger: orchTestLogger()}
-	resolved, err := o.resolveNodeConfig("lab-node-2", RoleControlPlane, nil)
+	resolved, err := o.resolveNodeConfig("node-02", RoleControlPlane, nil)
 	require.NoError(t, err)
 	assert.Contains(t, resolved, "source: config-dir",
 		"orchestrator resolveNodeConfig must read the template beside the bootstrap config")
@@ -354,7 +354,7 @@ func TestSeederContract_RelativeTemplateResolvesAgainstConfigDir(t *testing.T) {
 	assert.Equal(t, "config-dir", uploaded["source"],
 		"uploadTemplates must POST the template beside the bootstrap config")
 
-	stored, err := cp.profiles.Get(context.Background(), util.NewID([]byte("lab-node-2")))
+	stored, err := cp.profiles.Get(context.Background(), util.NewID([]byte("node-02")))
 	require.NoError(t, err)
 	storedConfig, ok := stored.Config.(map[string]interface{})
 	require.True(t, ok, "stored config should be a map, got %T", stored.Config)
@@ -377,10 +377,10 @@ func TestSeederContract_RelativeTemplateMissingBesideConfigIsNotFound(t *testing
 	cfg := minimalConfig()
 	cfg.Templates = map[string]string{RoleControlPlane: relPath}
 	cfg.Nodes = []NodeConfig{
-		{Hostname: "lab-node-2", Role: RoleControlPlane, MACs: []string{"00:25:90:5e:02:aa"}},
+		{Hostname: "node-02", Role: RoleControlPlane, MACs: []string{"00:25:90:00:02:aa"}},
 	}
 	discovered := []DiscoveredNode{
-		{NodeConfig: cfg.Nodes[0], DiscoveredMACs: []string{"00:25:90:5e:02:aa"}},
+		{NodeConfig: cfg.Nodes[0], DiscoveredMACs: []string{"00:25:90:00:02:aa"}},
 	}
 
 	s := cp.seederWithConfigDir(cfg, discovered, configDir)

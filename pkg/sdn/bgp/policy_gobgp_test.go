@@ -53,11 +53,11 @@ func realGoBGP(t *testing.T) *server.BgpServer {
 // split this failed with "multiple families" and took Speaker.Start with
 // it.
 func TestRealGoBGP_AcceptsDualStackPolicySet(t *testing.T) {
-	cfg := baseConfig() // announces both 23.143.36.0/24 and 2602:f5bb::/36
+	cfg := baseConfig() // announces both 203.0.113.0/24 and 2001:db8::/36
 	cfg.Neighbors = []NeighborConfig{{
-		Name:            "miami-att",
+		Name:            "pop-a-isp-a",
 		Address:         netip.MustParseAddr("10.255.0.34"),
-		ASN:             401870,
+		ASN:             64512,
 		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast, AFamilyIPv6Unicast},
 		Policy: PeerPolicyConfig{
 			ImportAllow: []PrefixMatch{
@@ -82,9 +82,9 @@ func TestRealGoBGP_AcceptsDualStackPolicySet(t *testing.T) {
 func TestRealGoBGP_AcceptsTrafficEngineering(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Neighbors = []NeighborConfig{{
-		Name:            "miami-att",
+		Name:            "pop-a-isp-a",
 		Address:         netip.MustParseAddr("10.255.0.34"),
-		ASN:             401870,
+		ASN:             64512,
 		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast, AFamilyIPv6Unicast},
 		Policy: PeerPolicyConfig{
 			ImportAllow: []PrefixMatch{{Prefix: netip.MustParsePrefix("0.0.0.0/0")}},
@@ -96,7 +96,7 @@ func TestRealGoBGP_AcceptsTrafficEngineering(t *testing.T) {
 				MED:              u32(50),
 				Prepend:          &ASPathPrependConfig{Count: 3},
 				Communities:      &CommunitySetConfig{Action: CommunityOpAdd, Values: []string{"no-export"}},
-				LargeCommunities: &CommunitySetConfig{Action: CommunityOpReplace, Values: []string{"401870:1:200"}},
+				LargeCommunities: &CommunitySetConfig{Action: CommunityOpReplace, Values: []string{"64512:1:200"}},
 			},
 		},
 	}}
@@ -117,7 +117,7 @@ func TestRealGoBGP_AcceptsTheEmptyPolicySet(t *testing.T) {
 	cfg.Neighbors = []NeighborConfig{{
 		Name:            "bring-up",
 		Address:         netip.MustParseAddr("10.255.0.34"),
-		ASN:             401870,
+		ASN:             64512,
 		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast},
 	}}
 	require.NoError(t, cfg.Validate())
@@ -154,14 +154,14 @@ func TestPrefixDefinedSetsByFamily(t *testing.T) {
 		},
 		{
 			name:       "a v6-only allowlist leaves the v4 set empty",
-			entries:    []string{"2602:f5bb::/36"},
-			wantV6:     []string{"2602:f5bb::/36"},
+			entries:    []string{"2001:db8::/36"},
+			wantV6:     []string{"2001:db8::/36"},
 			wantReason: "v4 then falls to the reject default",
 		},
 		{
 			name:       "a 4-in-6 prefix goes where its string parses",
-			entries:    []string{"23.143.36.0/24", "::ffff:0.0.0.0/96"},
-			wantV4:     []string{"23.143.36.0/24"},
+			entries:    []string{"203.0.113.0/24", "::ffff:0.0.0.0/96"},
+			wantV4:     []string{"203.0.113.0/24"},
 			wantV6:     []string{"::ffff:0.0.0.0/96"},
 			wantReason: "netip prints it as v6, so gobgp reads it as v6",
 		},
@@ -206,7 +206,7 @@ func TestRealGoBGP_AcceptsRouteTargetsAndGlobalAssignment(t *testing.T) {
 			},
 		},
 		{
-			Name: "v6-transit", Address: netip.MustParseAddr("2001:db8::2"), ASN: 401870,
+			Name: "v6-transit", Address: netip.MustParseAddr("2001:db8::2"), ASN: 64512,
 			EnabledFamilies: []AddressFamily{AFamilyIPv6Unicast},
 			Policy:          PeerPolicyConfig{ImportDefaultAccept: true},
 		},

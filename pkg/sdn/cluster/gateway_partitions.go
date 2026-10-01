@@ -54,7 +54,7 @@ const (
 // configuration. On node failure, surviving nodes take over orphaned VIPs
 // via Raft registry update + gratuitous ARP (LAN) or BGP withdrawal (WAN).
 type VIPEntry struct {
-	// Address is the VIP address in CIDR notation (e.g., "23.143.36.1/24").
+	// Address is the VIP address in CIDR notation (e.g., "203.0.113.1/24").
 	Address string `json:"address"`
 
 	// OwnerNode is the cluster node ID that currently owns this VIP.
@@ -271,7 +271,7 @@ func (f *FirewallRuleEntry) SetEntityID(_ uint64) {
 // BGPRouteEntry represents a BGP route in the gateway cluster state.
 // Routes are stored in the durable control-plane partition.
 type BGPRouteEntry struct {
-	// Prefix is the IP prefix being advertised (e.g., "23.143.36.0/24").
+	// Prefix is the IP prefix being advertised (e.g., "203.0.113.0/24").
 	Prefix string `json:"prefix"`
 
 	// NextHop is the BGP next-hop address.

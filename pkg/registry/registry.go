@@ -368,8 +368,8 @@ func (r *Registry) Push(ctx context.Context, ref string, image *Image, opts Push
 // Annotation keys recorded on encrypted manifests. Kept namespaced so
 // they round-trip through generic OCI tooling without collision.
 const (
-	manifestAnnotationEncrypted = "io.trusted-platform.registry.encrypted"
-	manifestAnnotationKeyID     = "io.trusted-platform.registry.key-id"
+	manifestAnnotationEncrypted = "org.letstrust.registry.encrypted"
+	manifestAnnotationKeyID     = "org.letstrust.registry.key-id"
 )
 
 // Pull retrieves a container image from the registry. The manifest is

@@ -77,12 +77,12 @@ func TestNTPRESTHandlersServeStatusSourcesAndStep(t *testing.T) {
 			Stratum:          3,
 			LeapStatus:       "Normal",
 			Mode:             "both",
-			ReferenceName:    "198.18.0.1",
+			ReferenceName:    "10.4.200.1",
 			SourcesReachable: 1,
 			SourcesTotal:     2,
 		},
 		sources: []*platformv1.NTPSource{
-			{Address: "198.18.0.1", State: "selected", Reachable: true, Reach: 377},
+			{Address: "10.4.200.1", State: "selected", Reachable: true, Reach: 377},
 		},
 	}
 	router := newNTPRouter(server)
@@ -123,7 +123,7 @@ func TestNTPRESTHandlersServeStatusSourcesAndStep(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatalf("decode %s: %v", rec.Body, err)
 		}
-		if len(body.Sources) != 1 || body.Sources[0].Address != "198.18.0.1" {
+		if len(body.Sources) != 1 || body.Sources[0].Address != "10.4.200.1" {
 			t.Fatalf("sources = %+v", body.Sources)
 		}
 	})

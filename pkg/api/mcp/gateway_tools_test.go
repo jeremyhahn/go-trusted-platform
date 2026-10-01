@@ -39,7 +39,7 @@ func TestGatewayToolExecution(t *testing.T) {
 		svc := newMockServiceProvider()
 		registry := NewToolRegistry(svc, log)
 
-		result, err := registry.ExecuteTool(ctx, "gateway_snapshot", map[string]interface{}{"gateway_id": "lab-node-1-gateway"})
+		result, err := registry.ExecuteTool(ctx, "gateway_snapshot", map[string]interface{}{"gateway_id": "node-01-gateway"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -47,7 +47,7 @@ func TestGatewayToolExecution(t *testing.T) {
 		if !ok {
 			t.Fatalf("result is %T, want a decoded object", result)
 		}
-		if snapshot["gateway_id"] != "lab-node-1-gateway" {
+		if snapshot["gateway_id"] != "node-01-gateway" {
 			t.Fatalf("gateway_id = %v, want the requested gateway", snapshot["gateway_id"])
 		}
 	})

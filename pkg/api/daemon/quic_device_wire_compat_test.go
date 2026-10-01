@@ -59,7 +59,7 @@ func compatTestProfile() *platformv1.DeviceProfile {
 	return &platformv1.DeviceProfile{
 		Id:                    12345,
 		TenantId:              "tenant-a",
-		Name:                  "lab-node-2",
+		Name:                  "node-02",
 		Model:                 "X10SDV-TP8F",
 		Role:                  platformv1.DeviceRole_DEVICE_ROLE_SERVER,
 		EventLog:              []byte{0x01, 0x02, 0x03},
@@ -70,10 +70,10 @@ func compatTestProfile() *platformv1.DeviceProfile {
 		EkSerial:              "1234567890",
 		MacAddress:            "00:25:90:ff:aa:02",
 		EkCert:                "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
-		Config:                []byte(`{"hostname":"lab-node-2"}`),
+		Config:                []byte(`{"hostname":"node-02"}`),
 		Assigned:              true,
 		AssignedAt:            timestamppb.New(time.Unix(1750000000, 0).UTC()),
-		TlsServerName:         "compute.trusted-platform.internal",
+		TlsServerName:         "compute.example.internal",
 		PcrBaseline: &platformv1.PCRBaseline{
 			Values:               map[uint32][]byte{0: {0xaa, 0xbb}, 7: {0x01}},
 			Source:               "tofu",
@@ -101,7 +101,7 @@ func compatTestProfile() *platformv1.DeviceProfile {
 		},
 		PlatformdConfig: &platformv1.PlatformdConfigRef{
 			ConfigType: "inline",
-			ConfigName: "lab-node-2",
+			ConfigName: "node-02",
 			Version:    "v1",
 		},
 		MatchRules: &platformv1.ProfileMatchRules{
@@ -112,7 +112,7 @@ func compatTestProfile() *platformv1.DeviceProfile {
 			CustomAttributes: map[string]string{"rack": "r1"},
 		},
 		Bmc: &platformv1.BMCConfig{
-			Address:  "198.51.100.103",
+			Address:  "10.4.6.103",
 			Port:     623,
 			Username: "admin",
 			Protocol: "ipmi",
@@ -134,7 +134,7 @@ func compatTestDevice() *platformv1.Device {
 		SigningPub:    "signing-pub-pem",
 		SwitchName:    "nexus-1",
 		SwitchPort:    "Eth1/3",
-		NetworkPortId: "tap-mini02",
+		NetworkPortId: "tap-node02",
 	}
 }
 

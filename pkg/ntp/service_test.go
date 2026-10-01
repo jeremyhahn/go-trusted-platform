@@ -244,7 +244,7 @@ func testPaths() Paths {
 func syncedTracking() *Tracking {
 	return &Tracking{
 		ReferenceID:      "CB00710F",
-		ReferenceName:    "198.18.0.1",
+		ReferenceName:    "10.4.200.1",
 		Stratum:          3,
 		RefTime:          time.Unix(1755000000, 0).UTC(),
 		SystemTimeOffset: -0.000012,
@@ -319,7 +319,7 @@ func TestApplyRendersEnablesAndRestartsChrony(t *testing.T) {
 	if !ok {
 		t.Fatal("chrony.conf was not written")
 	}
-	if !strings.Contains(string(rendered), "allow 198.18.0.0/24") {
+	if !strings.Contains(string(rendered), "allow 10.4.200.0/24") {
 		t.Fatalf("rendered config missing the allow-list:\n%s", rendered)
 	}
 	cert, _, keyMode := currentNTSPair(t, fs, testPaths())
@@ -485,7 +485,7 @@ func TestStatusCombinesTrackingWithSourceReachability(t *testing.T) {
 	controller := &fakeController{
 		tracking: []*Tracking{syncedTracking()},
 		sources: []Source{
-			{Address: "198.18.0.1", Reach: 377, Reachable: true, State: SourceStateSelected},
+			{Address: "10.4.200.1", Reach: 377, Reachable: true, State: SourceStateSelected},
 			{Address: "203.0.113.9", Reach: 0, Reachable: false, State: SourceStateUnreachable},
 		},
 	}
@@ -573,7 +573,7 @@ func TestStepCorrectsTheClockWhenASourceIsReachable(t *testing.T) {
 	controller := &fakeController{
 		tracking: []*Tracking{syncedTracking()},
 		sources: []Source{
-			{Address: "198.18.0.1", Reach: 377, Reachable: true},
+			{Address: "10.4.200.1", Reach: 377, Reachable: true},
 		},
 	}
 	svc := newTestService(t, consumerConfig(), controller, newFakeRunner(nil), newMemFS())
@@ -687,7 +687,7 @@ func TestRTCWriteBackFailureIsNonFatal(t *testing.T) {
 
 func TestAnomalyDetectionIgnoresTheFirstBootCorrection(t *testing.T) {
 	firstBoot := syncedTracking()
-	firstBoot.LastOffset = -63072000 // two years, the lab-node-2 incident.
+	firstBoot.LastOffset = -63072000 // two years, the node-02 incident.
 
 	later := syncedTracking()
 	later.LastOffset = 42 // a 42s jump long after convergence.

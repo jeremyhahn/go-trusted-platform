@@ -1,7 +1,7 @@
 # /lib/systemd/system/platform-api.service
 [Unit]
 Description=Trusted Platform :: REST API Gateway
-Documentation=https://trusted-platform.io/docs/api
+Documentation=https://letstrust.org/docs/api
 After=network.target platformd.service
 Wants=network.target
 Requires=platformd.service

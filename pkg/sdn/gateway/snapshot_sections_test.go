@@ -46,40 +46,40 @@ func observabilityGateway(t *testing.T, peers []*api.Peer) (*Gateway, *fakeTunne
 	tunnels := &fakeTunnelManager{
 		down: map[string]bool{},
 		statuses: map[string]tunnel.TunnelStatus{
-			"gre-mia": {
-				Transport: tunnel.TransportIPsec, Uplink: "att", Bound: true,
-				LocalIP: "99.12.246.36", RemoteIP: "45.63.110.165", TunnelIP: "10.255.0.1/30",
+			"gre-pri": {
+				Transport: tunnel.TransportIPsec, Uplink: "isp-a", Bound: true,
+				LocalIP: "198.51.100.4", RemoteIP: "198.51.100.100", TunnelIP: "10.255.0.1/30",
 				RxBytes: 4096, TxBytes: 2048, RxPackets: 32, TxPackets: 16,
 				RekeyInterval: 8 * time.Hour,
 				LastRekey:     time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC),
 			},
-			"gre-atl": {
+			"gre-alt": {
 				Transport: tunnel.TransportGRE,
-				LocalIP:   "99.12.246.36", RemoteIP: "66.42.90.190", TunnelIP: "10.255.0.5/30",
+				LocalIP:   "198.51.100.4", RemoteIP: "192.0.2.100", TunnelIP: "10.255.0.5/30",
 			},
 		},
 		uplinks: []tunnel.UplinkStatus{{
-			Name: "att", Interface: "eth6", Table: 101, GatewayV4: "99.12.246.38",
-			Addresses: []string{"99.12.246.36/29"}, Priority: 1000, RuleCount: 1,
-			Tunnels: []string{"gre-mia"},
+			Name: "isp-a", Interface: "eth6", Table: 101, GatewayV4: "198.51.100.6",
+			Addresses: []string{"198.51.100.4/29"}, Priority: 1000, RuleCount: 1,
+			Tunnels: []string{"gre-pri"},
 		}},
 	}
 	server := &fakeBGPServer{listPeers: peers}
 
 	cfg := natGatewayConfig()
-	cfg.ID = "lab-node-1-gateway"
+	cfg.ID = "node-01-gateway"
 	cfg.Firewall = &FirewallConfig{Enabled: true, DefaultPolicy: "deny"}
 	cfg.HostFW = &hostfw.Config{Enabled: true}
 	cfg.Tunnels = []TunnelConfig{
-		{Name: "gre-mia", Type: "gre", Local: "99.12.246.36", Remote: "45.63.110.165", TunnelIP: "10.255.0.1/30"},
-		{Name: "gre-atl", Type: "gre", Local: "99.12.246.36", Remote: "66.42.90.190", TunnelIP: "10.255.0.5/30"},
+		{Name: "gre-pri", Type: "gre", Local: "198.51.100.4", Remote: "198.51.100.100", TunnelIP: "10.255.0.1/30"},
+		{Name: "gre-alt", Type: "gre", Local: "198.51.100.4", Remote: "192.0.2.100", TunnelIP: "10.255.0.5/30"},
 	}
 	cfg.BGP = &bgp.BGPConfig{
-		ASN:      401870,
-		RouterID: netip.MustParseAddr("23.143.36.4"),
+		ASN:      64512,
+		RouterID: netip.MustParseAddr("203.0.113.4"),
 		Neighbors: []bgp.NeighborConfig{{
 			Address:         netip.MustParseAddr("10.255.0.2"),
-			ASN:             401870,
+			ASN:             64512,
 			EnabledFamilies: []bgp.AddressFamily{bgp.AFamilyIPv4Unicast},
 		}},
 	}
@@ -97,12 +97,12 @@ func observabilityGateway(t *testing.T, peers []*api.Peer) (*Gateway, *fakeTunne
 // establishedPeer is one GoBGP peer with a BFD session up.
 func establishedPeer(address string, received, accepted, sent uint64) *api.Peer {
 	return &api.Peer{
-		Conf: &api.PeerConf{NeighborAddress: address, PeerAsn: 401870, Description: "POP"},
+		Conf: &api.PeerConf{NeighborAddress: address, PeerAsn: 64512, Description: "POP"},
 		Bfd:  &api.BfdPeerConfig{Enabled: true, DesiredMinimumTxInterval: 300000, RequiredMinimumReceive: 300000, DetectionMultiplier: 3},
 		State: &api.PeerState{
 			SessionState: api.PeerState_SESSION_STATE_ESTABLISHED,
 			AdminState:   api.PeerState_ADMIN_STATE_UP,
-			RouterId:     "23.143.36.1",
+			RouterId:     "203.0.113.1",
 			Messages:     &api.Messages{Received: &api.Message{Total: 40}, Sent: &api.Message{Total: 41}},
 			BfdState: &api.BfdPeerState{
 				SessionState:       api.BfdSessionState_BFD_SESSION_STATE_UP,
@@ -141,8 +141,8 @@ func TestSnapshot_ReportsEveryDatapathSection(t *testing.T) {
 	// the BFD session.
 	require.Len(t, snap.BGP.Peers, 2)
 	assert.Equal(t, "10.255.0.2", snap.BGP.Peers[0].Address, "peers are sorted by address")
-	assert.Equal(t, uint32(401870), snap.BGP.LocalASN)
-	assert.Equal(t, "23.143.36.4", snap.BGP.RouterID)
+	assert.Equal(t, uint32(64512), snap.BGP.LocalASN)
+	assert.Equal(t, "203.0.113.4", snap.BGP.RouterID)
 	assert.Equal(t, 2, snap.BGP.PeerCount)
 	assert.Equal(t, 2, snap.BGP.EstablishedPeers)
 	assert.Equal(t, 177, snap.BGP.ReceivedPrefixes, "accepted prefixes across the sessions")
@@ -160,19 +160,19 @@ func TestSnapshot_ReportsEveryDatapathSection(t *testing.T) {
 
 	// Tunnels and the uplink policy routes behind them.
 	require.Len(t, snap.Tunnels, 2)
-	assert.Equal(t, "gre-atl", snap.Tunnels[0].Name, "tunnels are sorted by name")
-	mia := snap.Tunnels[1]
-	assert.Equal(t, "gre-mia", mia.Name)
-	assert.Equal(t, tunnel.TransportIPsec, mia.Transport)
-	assert.Equal(t, "gre", mia.Type)
-	assert.Equal(t, "up", mia.State)
-	assert.Equal(t, "att", mia.Uplink)
-	assert.True(t, mia.Bound)
-	assert.Equal(t, uint64(4096), mia.RxBytes)
-	assert.Equal(t, int64(28800), mia.RekeySeconds)
+	assert.Equal(t, "gre-alt", snap.Tunnels[0].Name, "tunnels are sorted by name")
+	tunA := snap.Tunnels[1]
+	assert.Equal(t, "gre-pri", tunA.Name)
+	assert.Equal(t, tunnel.TransportIPsec, tunA.Transport)
+	assert.Equal(t, "gre", tunA.Type)
+	assert.Equal(t, "up", tunA.State)
+	assert.Equal(t, "isp-a", tunA.Uplink)
+	assert.True(t, tunA.Bound)
+	assert.Equal(t, uint64(4096), tunA.RxBytes)
+	assert.Equal(t, int64(28800), tunA.RekeySeconds)
 	require.Len(t, snap.Uplinks, 1)
 	assert.Equal(t, 101, snap.Uplinks[0].Table)
-	assert.Equal(t, []string{"gre-mia"}, snap.Uplinks[0].Tunnels)
+	assert.Equal(t, []string{"gre-pri"}, snap.Uplinks[0].Tunnels)
 
 	// Host filter, firewall, NAT and the base pipeline.
 	require.NotNil(t, snap.HostFirewall)
@@ -192,7 +192,7 @@ func TestSnapshot_ReportsEveryDatapathSection(t *testing.T) {
 	require.NotNil(t, snap.Pipeline)
 	assert.True(t, snap.Pipeline.Installed)
 	assert.Equal(t, "br-test", snap.Pipeline.Bridge)
-	assert.Equal(t, "lab-node-1-gateway", snap.Pipeline.Owner)
+	assert.Equal(t, "node-01-gateway", snap.Pipeline.Owner)
 	assert.Equal(t, string(TerminalNormal), snap.Pipeline.Terminal)
 	assert.Equal(t, PipelineFailMode, snap.Pipeline.FailMode)
 }
@@ -241,7 +241,7 @@ func TestSnapshot_UnreadableSectionsAreOmittedNotFabricated(t *testing.T) {
 	assert.Empty(t, snap.Tunnels, "a tunnel list that cannot be read is omitted")
 	assert.Empty(t, snap.BGP.Peers, "a session table that cannot be read is omitted")
 	assert.Zero(t, snap.BGP.PeerCount, "and no peer count is invented for it")
-	assert.Equal(t, uint32(401870), snap.BGP.LocalASN, "the configured identity still reports")
+	assert.Equal(t, uint32(64512), snap.BGP.LocalASN, "the configured identity still reports")
 	require.NotNil(t, snap.NAT, "the sections that could be read are unaffected")
 }
 
@@ -251,7 +251,7 @@ func TestSnapshot_GoldenJSON(t *testing.T) {
 	snap := gw.Snapshot()
 	// Fields that vary per host or per run are pinned so the golden file
 	// documents the shape, not this machine.
-	snap.Hostname = "lab-node-1"
+	snap.Hostname = "node-01"
 	snap.Interfaces = nil
 	snap.Annotations = map[string]string{"state": snap.Annotations["state"], "uptime": "1m0s"}
 	snap.ReportedAt = time.Date(2026, 9, 8, 22, 30, 0, 0, time.UTC)

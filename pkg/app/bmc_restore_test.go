@@ -64,7 +64,7 @@ func minimalRestoreCore(t *testing.T) (*restoreCore, *entities.Device) {
 		State: entities.DeviceStateActivated,
 		BMCEnrollment: &entities.BMCEnrollment{
 			PinSPKISHA256:     "abc123",
-			DNSName:           "lab-node-1-bmc.internal.",
+			DNSName:           "node-01-bmc.internal.",
 			TLSAPublished:     true,
 			FactoryCertSHA256: "originalfactory",
 		},
@@ -247,12 +247,12 @@ func TestRunRestoreCore_DANE_UsesEnrolledDNSName(t *testing.T) {
 		return nil
 	}
 
-	result, err := runRestoreCore(context.Background(), 42, "198.51.100.102", "198.51.100.102:443", "internal.", core)
+	result, err := runRestoreCore(context.Background(), 42, "10.4.6.102", "10.4.6.102:443", "internal.", core)
 	if err != nil {
 		t.Fatalf("runRestoreCore: %v", err)
 	}
-	if gotName != "lab-node-1-bmc.internal" {
-		t.Errorf("dane unpublish hostname = %q, want enrolled DNS name %q", gotName, "lab-node-1-bmc.internal")
+	if gotName != "node-01-bmc.internal" {
+		t.Errorf("dane unpublish hostname = %q, want enrolled DNS name %q", gotName, "node-01-bmc.internal")
 	}
 	if gotPort != 443 {
 		t.Errorf("dane unpublish port = %d, want 443", gotPort)

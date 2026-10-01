@@ -77,14 +77,14 @@ func (l localSnapshotSource) Snapshot() *gwstate.Snapshot { return l.snap }
 func reportedSnapshot(id string) *gwstate.Snapshot {
 	return &gwstate.Snapshot{
 		GatewayID:  id,
-		Hostname:   "lab-node-1",
+		Hostname:   "node-01",
 		Mode:       "nat,transit,tunnels",
 		ReportedAt: time.Date(2026, 9, 8, 22, 0, 0, 0, time.UTC),
 		Health:     gwstate.HealthState{Status: "healthy", Components: map[string]string{"transit": "healthy"}},
 		BGP: gwstate.BGPState{
-			LocalASN: 401870, RouterID: "23.143.36.4", PeerCount: 1, EstablishedPeers: 1, ReceivedPrefixes: 118,
+			LocalASN: 64512, RouterID: "203.0.113.4", PeerCount: 1, EstablishedPeers: 1, ReceivedPrefixes: 118,
 			Peers: []gwstate.BGPPeerState{{
-				Address: "10.255.0.2", ASN: 401870, State: "Established",
+				Address: "10.255.0.2", ASN: 64512, State: "Established",
 				PrefixesReceived: 120, PrefixesAccepted: 118, PrefixesSent: 2,
 				Families: []string{"ipv4-unicast"},
 				BFD: &gwstate.BFDState{
@@ -96,29 +96,29 @@ func reportedSnapshot(id string) *gwstate.Snapshot {
 		},
 		Services: []gwstate.ServiceState{{Name: "dhcp", RefusedReason: "no allocator"}},
 		Tunnels: []gwstate.TunnelState{{
-			Name: "gre-mia", Transport: "ipsec", Type: "gre", State: "up", Uplink: "att", Bound: true,
+			Name: "gre-pri", Transport: "ipsec", Type: "gre", State: "up", Uplink: "isp-a", Bound: true,
 			RekeySeconds: 28800, LastRekey: time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC),
 		}},
-		Uplinks:      []gwstate.UplinkState{{Name: "att", Table: 101, RuleCount: 1, Tunnels: []string{"gre-mia"}}},
+		Uplinks:      []gwstate.UplinkState{{Name: "isp-a", Table: 101, RuleCount: 1, Tunnels: []string{"gre-pri"}}},
 		HostFirewall: &gwstate.HostFirewallState{Active: true, Installed: true, Fingerprint: "sha256:abc", RuleCount: 10},
 		Firewall:     &gwstate.FirewallState{Active: true, FlowCount: 26, CTZones: map[string]uint16{"control-plane": 26567}},
 		NAT: &gwstate.NATState{Active: true, SNATEnabled: true, DNATRules: 2, CTZone: 23974,
-			Uplinks: []gwstate.NATUplinkState{{Name: "att", Default: true, PoolAddresses: 8, Ports: 64512, Static: 1}}},
-		Pipeline: &gwstate.PipelineState{Installed: true, Bridge: "br-fabric", Owner: "lab-node-1-gateway", Terminal: "normal", FailMode: "secure"},
+			Uplinks: []gwstate.NATUplinkState{{Name: "isp-a", Default: true, PoolAddresses: 8, Ports: 64512, Static: 1}}},
+		Pipeline: &gwstate.PipelineState{Installed: true, Bridge: "br-fabric", Owner: "node-01-gateway", Terminal: "normal", FailMode: "secure"},
 	}
 }
 
 func TestGetGatewaySnapshot_FromTheTelemetryStore(t *testing.T) {
 	store := &memorySnapshotStore{}
-	require.NoError(t, store.Put(reportedSnapshot("lab-node-1-gateway")))
+	require.NoError(t, store.Put(reportedSnapshot("node-01-gateway")))
 	svc := NewGatewayService(WithGatewaySnapshotStore(store))
 
-	resp, err := svc.GetGatewaySnapshot(context.Background(), &platformv1.GetGatewaySnapshotRequest{GatewayId: "lab-node-1-gateway"})
+	resp, err := svc.GetGatewaySnapshot(context.Background(), &platformv1.GetGatewaySnapshotRequest{GatewayId: "node-01-gateway"})
 	require.NoError(t, err)
 	snap := resp.GetSnapshot()
 	require.NotNil(t, snap)
 
-	assert.Equal(t, "lab-node-1-gateway", snap.GetGatewayId())
+	assert.Equal(t, "node-01-gateway", snap.GetGatewayId())
 	assert.Equal(t, "healthy", snap.GetHealth().GetStatus())
 	require.Len(t, snap.GetBgp().GetPeers(), 1)
 	peer := snap.GetBgp().GetPeers()[0]
@@ -148,7 +148,7 @@ func TestGetGatewaySnapshot_UnknownAndUnconfigured(t *testing.T) {
 		svc := NewGatewayService()
 		_, err := svc.GetGatewaySnapshot(context.Background(), &platformv1.GetGatewaySnapshotRequest{})
 		require.Error(t, err)
-		_, err = svc.GetGatewaySnapshot(context.Background(), &platformv1.GetGatewaySnapshotRequest{GatewayId: "lab-node-1-gateway"})
+		_, err = svc.GetGatewaySnapshot(context.Background(), &platformv1.GetGatewaySnapshotRequest{GatewayId: "node-01-gateway"})
 		require.Error(t, err)
 		_, err = svc.ListGatewaySnapshots(context.Background(), &platformv1.ListGatewaySnapshotsRequest{})
 		require.Error(t, err)
@@ -170,8 +170,8 @@ func TestGetGatewaySnapshot_UnknownAndUnconfigured(t *testing.T) {
 
 func TestListGatewaySnapshots(t *testing.T) {
 	store := &memorySnapshotStore{}
-	require.NoError(t, store.Put(reportedSnapshot("lab-node-1-gateway")))
-	require.NoError(t, store.Put(reportedSnapshot("lab-node-2-gateway")))
+	require.NoError(t, store.Put(reportedSnapshot("node-01-gateway")))
+	require.NoError(t, store.Put(reportedSnapshot("node-02-gateway")))
 	svc := NewGatewayService()
 	svc.SetGatewaySnapshotStore(store)
 
@@ -201,13 +201,13 @@ func TestGatewaySnapshotToProto_AbsentSectionsStayNil(t *testing.T) {
 
 func TestGatewaySnapshotQUICAdapter(t *testing.T) {
 	store := &memorySnapshotStore{}
-	require.NoError(t, store.Put(reportedSnapshot("lab-node-1-gateway")))
+	require.NoError(t, store.Put(reportedSnapshot("node-01-gateway")))
 	adapter := gatewaySnapshotQUICAdapter{reader: NewGatewayService(WithGatewaySnapshotStore(store))}
 
-	info, err := adapter.Snapshot(context.Background(), "lab-node-1-gateway")
+	info, err := adapter.Snapshot(context.Background(), "node-01-gateway")
 	require.NoError(t, err)
 	require.NotNil(t, info)
-	assert.Equal(t, "lab-node-1-gateway", info.GatewayID)
+	assert.Equal(t, "node-01-gateway", info.GatewayID)
 	require.NotNil(t, info.BGP)
 	require.Len(t, info.BGP.Peers, 1)
 	assert.Equal(t, int64(118), info.BGP.Peers[0].PrefixesAccepted)
@@ -242,10 +242,10 @@ func TestGatewaySnapshotQUICAdapter(t *testing.T) {
 
 func TestGatewaySnapshotTools_MCP(t *testing.T) {
 	store := &memorySnapshotStore{}
-	require.NoError(t, store.Put(reportedSnapshot("lab-node-1-gateway")))
+	require.NoError(t, store.Put(reportedSnapshot("node-01-gateway")))
 	tools := gatewaySnapshotTools{reader: NewGatewayService(WithGatewaySnapshotStore(store))}
 
-	snap, err := tools.GatewaySnapshot(context.Background(), "lab-node-1-gateway")
+	snap, err := tools.GatewaySnapshot(context.Background(), "node-01-gateway")
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 

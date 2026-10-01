@@ -109,13 +109,13 @@ var _ device.DeviceService = (*stubResolverSvc)(nil)
 func TestDeviceResolverAdapter(t *testing.T) {
 	svc := &stubResolverSvc{
 		byHostname: map[string]*entities.Device{
-			"lab-node-1.example.com": {ID: 42},
+			"node-01.example.com": {ID: 42},
 		},
 	}
 
 	t.Run("found returns correct ID", func(t *testing.T) {
 		resolver := &deviceResolverAdapter{svc: svc, logger: slog.Default()}
-		id, ok := resolver.DeviceForHost("lab-node-1.example.com")
+		id, ok := resolver.DeviceForHost("node-01.example.com")
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
@@ -236,7 +236,7 @@ func TestResolvePortIDEmptyNetworkPortID(t *testing.T) {
 	obs, _ := buildTestObserver(t, seed)
 	ctx := context.Background()
 
-	portID, ok := obs.resolvePortID(ctx, 10, "lab-node-1.example.com")
+	portID, ok := obs.resolvePortID(ctx, 10, "node-01.example.com")
 	if ok {
 		t.Errorf("expected ok=false for empty NetworkPortID, got portID=%q", portID)
 	}
@@ -253,7 +253,7 @@ func TestResolvePortIDWithNetworkPortID(t *testing.T) {
 	obs, _ := buildTestObserver(t, seed)
 	ctx := context.Background()
 
-	portID, ok := obs.resolvePortID(ctx, 11, "lab-node-2.example.com")
+	portID, ok := obs.resolvePortID(ctx, 11, "node-02.example.com")
 	if !ok {
 		t.Fatal("expected ok=true for device with NetworkPortID")
 	}
@@ -301,7 +301,7 @@ func TestQuarantineObserverOnAttestationFailedSkipsEmptyPort(t *testing.T) {
 	obs, store := buildTestObserver(t, seed)
 	ctx := context.Background()
 
-	obs.OnAttestationFailed(ctx, 42, "lab-node-1.example.com", "PCR8 mismatch")
+	obs.OnAttestationFailed(ctx, 42, "node-01.example.com", "PCR8 mismatch")
 
 	// State must remain unchanged because the event was skipped.
 	if store.devices[42].State != entities.DeviceStateAttested {
@@ -321,7 +321,7 @@ func TestQuarantineObserverOnAttestationFailedDispatchesEvent(t *testing.T) {
 	}
 	obs, store := buildTestObserver(t, seed)
 	ctx := context.Background()
-	obs.OnAttestationFailed(ctx, 42, "lab-node-1.example.com", "PCR8 mismatch")
+	obs.OnAttestationFailed(ctx, 42, "node-01.example.com", "PCR8 mismatch")
 
 	if store.devices[42].State != entities.DeviceStateQuarantined {
 		t.Errorf("expected DeviceStateQuarantined, got %s", store.devices[42].State)
@@ -390,7 +390,7 @@ func TestQuarantineObserverOnAttestationPassed(t *testing.T) {
 		}
 		obs, store := buildTestObserver(t, seed)
 		ctx := context.Background()
-		obs.OnAttestationPassed(ctx, 99, "lab-node-2.example.com")
+		obs.OnAttestationPassed(ctx, 99, "node-02.example.com")
 
 		saved := store.devices[99]
 		if saved == nil {
@@ -416,7 +416,7 @@ func TestQuarantineObserverOnAttestationPassed(t *testing.T) {
 		}
 		obs, store := buildTestObserver(t, seed)
 		ctx := context.Background()
-		obs.OnAttestationPassed(ctx, 100, "lab-node-3.example.com")
+		obs.OnAttestationPassed(ctx, 100, "node-03.example.com")
 
 		// State must be unchanged because the event was skipped.
 		if store.devices[100].State != entities.DeviceStateQuarantined {

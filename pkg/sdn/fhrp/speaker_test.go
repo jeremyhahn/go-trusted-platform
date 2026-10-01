@@ -283,7 +283,7 @@ func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard
 func speakerConfig(prio uint8, source string) Config {
 	return Config{Enabled: true, Groups: []GroupConfig{{
 		VRID: 20, Interface: "br-int", Priority: prio, AdvertIntervalCentiseconds: 100,
-		Addresses: []string{"198.18.0.1/24"}, Source: source,
+		Addresses: []string{"10.4.200.1/24"}, Source: source,
 	}}}
 }
 
@@ -294,10 +294,10 @@ func TestNew_Rejects(t *testing.T) {
 	_, err := New(Config{Groups: []GroupConfig{{}}}, Deps{Transport: &fakeTransport{seg: seg}, Programmer: newFakeProgrammer()})
 	var invalid *ErrInvalidGroupConfig
 	require.True(t, errors.As(err, &invalid))
-	_, err = New(speakerConfig(100, "198.18.0.2"), Deps{Programmer: newFakeProgrammer()})
+	_, err = New(speakerConfig(100, "10.4.200.2"), Deps{Programmer: newFakeProgrammer()})
 	var req *ErrTransportRequired
 	require.True(t, errors.As(err, &req))
-	_, err = New(speakerConfig(100, "198.18.0.2"), Deps{Transport: &fakeTransport{seg: seg}})
+	_, err = New(speakerConfig(100, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}})
 	require.True(t, errors.As(err, &req))
 }
 
@@ -307,9 +307,9 @@ func TestSpeaker_TwoNodesElectAndFailOver(t *testing.T) {
 	sink := newEventSink()
 	progA, progB := newFakeProgrammer(), newFakeProgrammer()
 
-	a, err := New(speakerConfig(200, "198.18.0.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: progA, Clock: clock, Logger: quietLogger(), Observer: sink})
+	a, err := New(speakerConfig(200, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: progA, Clock: clock, Logger: quietLogger(), Observer: sink})
 	require.NoError(t, err)
-	b, err := New(speakerConfig(100, "198.18.0.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: progB, Clock: clock, Logger: quietLogger(), Observer: sink})
+	b, err := New(speakerConfig(100, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: progB, Clock: clock, Logger: quietLogger(), Observer: sink})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -332,15 +332,15 @@ func TestSpeaker_TwoNodesElectAndFailOver(t *testing.T) {
 		return ev.Kind == EventTransition && ev.Status.State == StateMaster && ev.Status.Priority == 200
 	})
 	<-progA.claimed
-	assert.True(t, progA.holds("br-int", "198.18.0.1/24"))
+	assert.True(t, progA.holds("br-int", "10.4.200.1/24"))
 	// B hears A's advertisement and stays Backup with a fresh timer.
 	ev := sink.await(t, func(ev Event) bool { return ev.Kind == EventAdvertisement && ev.Status.Priority == 100 })
 	assert.Equal(t, uint8(200), ev.Priority)
-	assert.Equal(t, netip.MustParseAddr("198.18.0.2"), ev.Sender)
+	assert.Equal(t, netip.MustParseAddr("10.4.200.2"), ev.Sender)
 	stB, err := b.GroupState("br-int", 20)
 	require.NoError(t, err)
 	assert.Equal(t, StateBackup, stB)
-	assert.False(t, progB.holds("br-int", "198.18.0.1/24"))
+	assert.False(t, progB.holds("br-int", "10.4.200.1/24"))
 
 	// A keeps advertising every second; B keeps deferring.
 	clock.Advance(time.Second)
@@ -350,14 +350,14 @@ func TestSpeaker_TwoNodesElectAndFailOver(t *testing.T) {
 	// skew time (60 cs) rather than the full master-down interval.
 	require.NoError(t, a.Stop(ctx))
 	assert.False(t, a.Active())
-	assert.False(t, progA.holds("br-int", "198.18.0.1/24"))
+	assert.False(t, progA.holds("br-int", "10.4.200.1/24"))
 	sink.await(t, func(ev Event) bool { return ev.Kind == EventAdvertisement && ev.Priority == PriorityRelease })
 	clock.Advance(600 * time.Millisecond)
 	sink.await(t, func(ev Event) bool {
 		return ev.Kind == EventTransition && ev.Status.State == StateMaster && ev.Status.Priority == 100
 	})
 	<-progB.claimed
-	assert.True(t, progB.holds("br-int", "198.18.0.1/24"))
+	assert.True(t, progB.holds("br-int", "10.4.200.1/24"))
 
 	h := b.Health()
 	require.Len(t, h.Groups, 1)
@@ -367,7 +367,7 @@ func TestSpeaker_TwoNodesElectAndFailOver(t *testing.T) {
 
 	require.NoError(t, b.Stop(ctx))
 	require.ErrorIs(t, b.Stop(ctx), ErrSpeakerNotRunning{})
-	assert.False(t, progB.holds("br-int", "198.18.0.1/24"))
+	assert.False(t, progB.holds("br-int", "10.4.200.1/24"))
 	_, err = b.GroupState("br-int", 20)
 	var nf *ErrGroupNotFound
 	assert.True(t, errors.As(err, &nf))
@@ -378,7 +378,7 @@ func TestSpeaker_MasterYieldsToHigherPriorityPeer(t *testing.T) {
 	clock := newFakeClock(t0)
 	sink := newEventSink()
 	progLow := newFakeProgrammer()
-	low, err := New(speakerConfig(100, "198.18.0.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: progLow, Clock: clock, Logger: quietLogger(), Observer: sink})
+	low, err := New(speakerConfig(100, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: progLow, Clock: clock, Logger: quietLogger(), Observer: sink})
 	require.NoError(t, err)
 	require.NoError(t, low.Start(context.Background()))
 	clock.Advance(3600 * time.Millisecond)
@@ -387,7 +387,7 @@ func TestSpeaker_MasterYieldsToHigherPriorityPeer(t *testing.T) {
 
 	// A higher-priority owner joins the segment and advertises at startup.
 	progHigh := newFakeProgrammer()
-	ownerCfg := speakerConfig(PriorityOwner, "198.18.0.2")
+	ownerCfg := speakerConfig(PriorityOwner, "10.4.200.2")
 	high, err := New(ownerCfg, Deps{Transport: &fakeTransport{seg: seg}, Programmer: progHigh, Clock: clock, Logger: quietLogger(), Observer: sink})
 	require.NoError(t, err)
 	require.NoError(t, high.Start(context.Background()))
@@ -395,8 +395,8 @@ func TestSpeaker_MasterYieldsToHigherPriorityPeer(t *testing.T) {
 	sink.await(t, func(ev Event) bool {
 		return ev.Kind == EventTransition && ev.Status.State == StateBackup && ev.Status.Priority == 100 && ev.Status.Transitions == 3
 	})
-	assert.False(t, progLow.holds("br-int", "198.18.0.1/24"), "the yielding master released the addresses")
-	assert.True(t, progHigh.holds("br-int", "198.18.0.1/24"))
+	assert.False(t, progLow.holds("br-int", "10.4.200.1/24"), "the yielding master released the addresses")
+	assert.True(t, progHigh.holds("br-int", "10.4.200.1/24"))
 	require.NoError(t, high.Stop(context.Background()))
 	require.NoError(t, low.Stop(context.Background()))
 }
@@ -406,28 +406,28 @@ func TestSpeaker_ReceiveChecksDropForeignTraffic(t *testing.T) {
 	clock := newFakeClock(t0)
 	sink := newEventSink()
 	prog := newFakeProgrammer()
-	s, err := New(speakerConfig(100, "198.18.0.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: clock, Logger: quietLogger(), Observer: sink})
+	s, err := New(speakerConfig(100, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: clock, Logger: quietLogger(), Observer: sink})
 	require.NoError(t, err)
 	require.NoError(t, s.Start(context.Background()))
 	defer func() { _ = s.Stop(context.Background()) }()
 	sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition })
 
 	// A raw peer on the segment sends things the §7.1 checks must drop.
-	peer, err := (&fakeTransport{seg: seg}).Open("br-int", FamilyIPv4, netip.MustParseAddr("198.18.0.99"))
+	peer, err := (&fakeTransport{seg: seg}).Open("br-int", FamilyIPv4, netip.MustParseAddr("10.4.200.99"))
 	require.NoError(t, err)
 	dst := FamilyIPv4.MulticastAddr()
 	good := func(vrid uint8, list ...string) []byte {
-		p, err := (&Advertisement{VRID: vrid, Priority: 250, MaxAdvertInterval: 100, Addresses: addrs(list...)}).Marshal(netip.MustParseAddr("198.18.0.99"), dst)
+		p, err := (&Advertisement{VRID: vrid, Priority: 250, MaxAdvertInterval: 100, Addresses: addrs(list...)}).Marshal(netip.MustParseAddr("10.4.200.99"), dst)
 		require.NoError(t, err)
 		return p
 	}
-	require.NoError(t, peer.Send(good(21, "198.18.0.1"), dst))                         // wrong VRID
-	require.NoError(t, peer.Send(good(20, "198.18.0.1", "10.0.0.1"), dst))             // address list differs
+	require.NoError(t, peer.Send(good(21, "10.4.200.1"), dst))                           // wrong VRID
+	require.NoError(t, peer.Send(good(20, "10.4.200.1", "10.0.0.1"), dst))               // address list differs
 	require.NoError(t, peer.Send([]byte{0x21, 20, 1, 1, 0, 100, 0, 0, 1, 2, 3, 4}, dst)) // version 2
 	seg.ttl = 64
-	require.NoError(t, peer.Send(good(20, "198.18.0.1"), dst)) // bad TTL
+	require.NoError(t, peer.Send(good(20, "10.4.200.1"), dst)) // bad TTL
 	seg.ttl = RequiredTTL
-	require.NoError(t, peer.Send(good(20, "198.18.0.1"), dst)) // accepted
+	require.NoError(t, peer.Send(good(20, "10.4.200.1"), dst)) // accepted
 
 	ev := sink.await(t, func(ev Event) bool { return ev.Kind == EventAdvertisement })
 	assert.Equal(t, uint8(250), ev.Priority)
@@ -437,8 +437,8 @@ func TestSpeaker_ReceiveChecksDropForeignTraffic(t *testing.T) {
 func TestSpeaker_OpenFailureStopsStartedGroups(t *testing.T) {
 	seg := newSegment()
 	prog := newFakeProgrammer()
-	cfg := speakerConfig(PriorityOwner, "198.18.0.2")
-	cfg.Groups = append(cfg.Groups, GroupConfig{VRID: 21, Interface: "public0", Priority: 100, Addresses: []string{"23.143.36.1/24"}, Source: "23.143.36.4"})
+	cfg := speakerConfig(PriorityOwner, "10.4.200.2")
+	cfg.Groups = append(cfg.Groups, GroupConfig{VRID: 21, Interface: "public0", Priority: 100, Addresses: []string{"203.0.113.1/24"}, Source: "203.0.113.4"})
 	tr := &failOnSecondOpen{seg: seg}
 	s, err := New(cfg, Deps{Transport: tr, Programmer: prog, Logger: quietLogger()})
 	require.NoError(t, err)
@@ -447,7 +447,7 @@ func TestSpeaker_OpenFailureStopsStartedGroups(t *testing.T) {
 	require.True(t, errors.As(err, &tf), "got %v", err)
 	assert.Equal(t, "open", tf.Operation)
 	assert.False(t, s.Active())
-	assert.False(t, prog.holds("br-int", "198.18.0.1/24"), "the owner group that had claimed was rolled back")
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the owner group that had claimed was rolled back")
 }
 
 type failOnSecondOpen struct {
@@ -470,8 +470,8 @@ func TestSpeaker_OpenFailureReportsAFailedRollback(t *testing.T) {
 	seg := newSegment()
 	prog := newFakeProgrammer()
 	prog.delErr = errors.New("EBUSY")
-	cfg := speakerConfig(PriorityOwner, "198.18.0.2")
-	cfg.Groups = append(cfg.Groups, GroupConfig{VRID: 21, Interface: "public0", Priority: 100, Addresses: []string{"23.143.36.1/24"}, Source: "23.143.36.4"})
+	cfg := speakerConfig(PriorityOwner, "10.4.200.2")
+	cfg.Groups = append(cfg.Groups, GroupConfig{VRID: 21, Interface: "public0", Priority: 100, Addresses: []string{"203.0.113.1/24"}, Source: "203.0.113.4"})
 	s, err := New(cfg, Deps{Transport: &failOnSecondOpen{seg: seg}, Programmer: prog, Logger: quietLogger()})
 	require.NoError(t, err)
 	err = s.Start(context.Background())
@@ -489,7 +489,7 @@ func TestSpeaker_ClaimFailureIsReportedInHealth(t *testing.T) {
 	seg := newSegment()
 	prog := newFakeProgrammer()
 	prog.addErr = errors.New("netlink EPERM")
-	s, err := New(speakerConfig(PriorityOwner, "198.18.0.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Logger: quietLogger()})
 	require.NoError(t, err)
 	require.NoError(t, s.Start(context.Background()), "a failed claim is reported, not a failed start: the state must still advance")
 	h := s.Health()

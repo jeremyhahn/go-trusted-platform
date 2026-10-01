@@ -281,8 +281,8 @@ Planned (Phase O of roadmap)
 acme:
   client:
     # Local mode: https://local-control-plane.internal/api/v1/acme/directory
-    # P2P mode:   https://p2p.trusted-platform.io/api/v1/acme/directory
-    # Hosted mode: https://cp.trusted-platform.io/api/v1/acme/directory
+    # P2P mode:   https://p2p.letstrust.net/api/v1/acme/directory
+    # Hosted mode: https://cp.letstrust.com/api/v1/acme/directory
     directory: ${CONTROL_PLANE_ACME_DIRECTORY}
     enrollment:
       challenge: enroll-8081

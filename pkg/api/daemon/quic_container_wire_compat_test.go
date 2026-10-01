@@ -77,7 +77,7 @@ func compatTestContainer() *platformv1.Container {
 		Id:     "ctr-5001",
 		Config: compatTestContainerConfig(),
 		State:  platformv1.ContainerState_CONTAINER_STATE_RUNNING,
-		HostId: "lab-node-2",
+		HostId: "node-02",
 	}
 }
 

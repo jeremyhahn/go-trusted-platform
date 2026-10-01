@@ -122,7 +122,7 @@ func loadConfig() config {
 		httpsAddr:    getenv("VBMC_HTTPS_ADDR", ":8443"),
 		caAddr:       getenv("VBMC_CA_ADDR", ":8445"),
 		vendor:       getenv("VBMC_VENDOR", "Supermicro"),
-		cn:           getenv("VBMC_CN", "vbmc.trusted-platform.internal"),
+		cn:           getenv("VBMC_CN", "vbmc.example.internal"),
 		ipmiAddr:     getenv("VBMC_IPMI_ADDR", ":6230"),
 		ipmiUser:     getenv("VBMC_IPMI_USER", "ADMIN"),
 		ipmiPassword: getenv("VBMC_IPMI_PASSWORD", "ADMIN"),

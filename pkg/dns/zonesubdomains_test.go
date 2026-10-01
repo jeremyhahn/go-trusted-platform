@@ -213,7 +213,7 @@ func TestService_RegisterWithNetworkZone_CreatesRecord(t *testing.T) {
 	require.NoError(t, err)
 
 	// Register the host under the control-plane network zone.
-	err = svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "control-plane", "10.0.0.1")
+	err = svc.RegisterWithNetworkZone(context.Background(), "node-01", "control-plane", "10.0.0.1")
 	require.NoError(t, err)
 
 	// Verify A record was added to the sub-zone.
@@ -221,12 +221,12 @@ func TestService_RegisterWithNetworkZone_CreatesRecord(t *testing.T) {
 	require.NoError(t, err)
 	found := false
 	for _, r := range saved.RecordSet.ARecords {
-		if r.Name == "lab-node-1" && r.Value == "10.0.0.1" {
+		if r.Name == "node-01" && r.Value == "10.0.0.1" {
 			found = true
 			break
 		}
 	}
-	assert.True(t, found, "A record lab-node-1->10.0.0.1 must be present in control-plane.example.internal.")
+	assert.True(t, found, "A record node-01->10.0.0.1 must be present in control-plane.example.internal.")
 }
 
 // TestService_RegisterWithNetworkZone_Disabled verifies that no record is
@@ -247,7 +247,7 @@ func TestService_RegisterWithNetworkZone_Disabled(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should be a no-op; no sub-zone created.
-	err = svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "control-plane", "10.0.0.1")
+	err = svc.RegisterWithNetworkZone(context.Background(), "node-01", "control-plane", "10.0.0.1")
 	assert.NoError(t, err)
 
 	// Confirm the sub-zone was never written.
@@ -275,7 +275,7 @@ func TestService_RegisterWithNetworkZone_EmptyNetworkZone(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "", "10.0.0.1")
+	err = svc.RegisterWithNetworkZone(context.Background(), "node-01", "", "10.0.0.1")
 	assert.NoError(t, err)
 }
 
@@ -320,14 +320,14 @@ func TestService_RegisterWithNetworkZone_BMCNameSkipped(t *testing.T) {
 	err = zoneDAO.Save(context.Background(), subZone)
 	require.NoError(t, err)
 
-	err = svc.RegisterWithNetworkZone(context.Background(), "lab-node-1-bmc", "management", "10.0.0.5")
+	err = svc.RegisterWithNetworkZone(context.Background(), "node-01-bmc", "management", "10.0.0.5")
 	assert.NoError(t, err)
 
 	// Confirm no A record was written for the BMC alias.
 	saved, err := zoneDAO.Get(context.Background(), util.NewID([]byte(subZoneName)))
 	require.NoError(t, err)
 	for _, r := range saved.RecordSet.ARecords {
-		assert.NotEqual(t, "lab-node-1-bmc", r.Name, "BMC name must never be zone-qualified")
+		assert.NotEqual(t, "node-01-bmc", r.Name, "BMC name must never be zone-qualified")
 	}
 }
 
@@ -371,14 +371,14 @@ func TestService_RegisterWithNetworkZone_Idempotent(t *testing.T) {
 	err = zoneDAO.Save(context.Background(), subZone)
 	require.NoError(t, err)
 
-	require.NoError(t, svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "control-plane", "10.0.0.1"))
-	require.NoError(t, svc.RegisterWithNetworkZone(context.Background(), "lab-node-1", "control-plane", "10.0.0.1"))
+	require.NoError(t, svc.RegisterWithNetworkZone(context.Background(), "node-01", "control-plane", "10.0.0.1"))
+	require.NoError(t, svc.RegisterWithNetworkZone(context.Background(), "node-01", "control-plane", "10.0.0.1"))
 
 	saved, err := zoneDAO.Get(context.Background(), util.NewID([]byte(subZoneName)))
 	require.NoError(t, err)
 	count := 0
 	for _, r := range saved.RecordSet.ARecords {
-		if r.Name == "lab-node-1" && r.Value == "10.0.0.1" {
+		if r.Name == "node-01" && r.Value == "10.0.0.1" {
 			count++
 		}
 	}
@@ -391,9 +391,9 @@ func TestIsBMCName(t *testing.T) {
 		host string
 		want bool
 	}{
-		{"lab-node-1-bmc", true},
+		{"node-01-bmc", true},
 		{"gw-bmc", true},
-		{"lab-node-1", false},
+		{"node-01", false},
 		{"bmc-only", false},
 		{"bmc", false},
 		{"", false},
@@ -407,8 +407,8 @@ func TestIsBMCName(t *testing.T) {
 
 // TestNetworkZoneSubdomainFQDN verifies the helper constructs the correct FQDN.
 func TestNetworkZoneSubdomainFQDN(t *testing.T) {
-	fqdn := NetworkZoneSubdomainFQDN("lab-node-1", "control-plane", "example.internal")
-	assert.Equal(t, "lab-node-1.control-plane.example.internal", fqdn)
+	fqdn := NetworkZoneSubdomainFQDN("node-01", "control-plane", "example.internal")
+	assert.Equal(t, "node-01.control-plane.example.internal", fqdn)
 }
 
 // TestErrZoneSubdomainsNoInternalServer_Error checks the typed error message.

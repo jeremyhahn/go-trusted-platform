@@ -353,11 +353,11 @@ platformctl --transport unix --server /run/platformd.sock \
 
 platformctl --transport unix --server /run/platformd.sock \
     device profile update <compute-profile-id> \
-    --tls-server-name compute.trusted-platform.internal
+    --tls-server-name compute.example.internal
 
 platformctl --transport unix --server /run/platformd.sock \
     device profile update <gateway-profile-id> \
-    --tls-server-name gw.trusted-platform.internal
+    --tls-server-name gw.example.internal
 
 # confirm: EK Serial / Assigned = true and the TLS Server Name row
 # (ek_serial, assigned, tls_server_name in --output json)
@@ -389,9 +389,9 @@ attestation:
     callers:
       strategy: reporting-servers        # default; or any-attested, allowlist
       # reporting-servers:               # replaces the derived default
-      #   - cp.trusted-platform.internal
+      #   - cp.example.internal
       # allowlist:                       # for strategy: allowlist
-      #   - reporting-01.trusted-platform.internal
+      #   - reporting-01.example.internal
       # ca-file: /etc/trusted-platform/heartbeat/cp-ca.pem
 ```
 

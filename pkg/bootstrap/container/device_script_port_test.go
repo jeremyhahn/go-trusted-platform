@@ -63,9 +63,9 @@ func validServerConfig() *ServerConfig {
 		ManifestPath: "/data/manifest.yaml",
 		MediaDir:     "/data/media",
 		DHCPConfig: DHCPConfig{
-			ServerIP:   "198.18.1.91",
-			RangeStart: "198.18.1.100",
-			RangeEnd:   "198.18.1.200",
+			ServerIP:   "10.4.2.91",
+			RangeStart: "10.4.2.100",
+			RangeEnd:   "10.4.2.200",
 			SubnetMask: "255.255.255.0",
 		},
 	}
@@ -123,8 +123,8 @@ func TestServer_DeviceScriptAddr(t *testing.T) {
 		serverIP string
 		wantAddr string
 	}{
-		{"derived default", 8080, 0, "198.18.1.91", "198.18.1.91:8081"},
-		{"explicit override", 8080, 18081, "198.18.1.91", "198.18.1.91:18081"},
+		{"derived default", 8080, 0, "10.4.2.91", "10.4.2.91:8081"},
+		{"explicit override", 8080, 18081, "10.4.2.91", "10.4.2.91:18081"},
 		{"derived from a moved http port", 9000, 0, "10.0.0.1", "10.0.0.1:9001"},
 	}
 	for _, tc := range cases {

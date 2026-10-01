@@ -262,7 +262,7 @@ func newRecorderFixture(t *testing.T) *recorderFixture {
 		ID:        42,
 		Model:     "SuperMicro X10",
 		Serial:    "SN0042",
-		Hostname:  "lab-node-3",
+		Hostname:  "node-03",
 		AttestPub: attestPubHex(&iak.PublicKey, iakAttrs),
 	}
 	ctx := context.Background()
@@ -350,7 +350,7 @@ func TestAttestCertRecorder_RecordsCompliantCertificateFromCAStore(t *testing.T)
 	assert.True(t, ev.Recorded)
 	assert.Equal(t, "ca", ev.Source)
 	assert.Equal(t, uint64(42), ev.DeviceID)
-	assert.Equal(t, "lab-node-3", ev.HostID)
+	assert.Equal(t, "node-03", ev.HostID)
 	assert.Equal(t, "SN0042", ev.Serial)
 	assert.False(t, ev.Reissued)
 	assert.Empty(t, ev.Reason)
@@ -600,12 +600,12 @@ func TestAttestCertRecorder_ReissueCAFailureIsReported(t *testing.T) {
 func TestAttestCertRecorder_AuditFailureDoesNotUndoTheRecord(t *testing.T) {
 	f := newRecorderFixture(t)
 	f.audit.err = errors.New("event store full")
-	cert := f.ca.issue(t, "lab-node-3", "", &f.iak.PublicKey, restrictedPolicies)
-	f.ca.store["lab-node-3"] = certPEM(cert)
+	cert := f.ca.issue(t, "node-03", "", &f.iak.PublicKey, restrictedPolicies)
+	f.ca.store["node-03"] = certPEM(cert)
 
 	rec, err := f.recorder.Record(f.ctx, f.device.ID, false)
 	require.NoError(t, err)
-	assert.Equal(t, "lab-node-3", rec.SourceDetail, "the IDevID hostname is tried first")
+	assert.Equal(t, "node-03", rec.SourceDetail, "the IDevID hostname is tried first")
 	assert.Equal(t, string(certPEM(cert)), f.stored(t).AttestCert)
 	assert.Len(t, f.audit.events, 1)
 }
@@ -614,8 +614,8 @@ func TestAttestCertRecorder_WorksWithoutAuditor(t *testing.T) {
 	f := newRecorderFixture(t)
 	rec, err := NewAttestCertRecorder(f.devices, f.ca, WithAttestCertClock(func() time.Time { return attestCertTestNow }))
 	require.NoError(t, err)
-	cert := f.ca.issue(t, "lab-node-3", "", &f.iak.PublicKey, restrictedPolicies)
-	f.ca.store["lab-node-3"] = certPEM(cert)
+	cert := f.ca.issue(t, "node-03", "", &f.iak.PublicKey, restrictedPolicies)
+	f.ca.store["node-03"] = certPEM(cert)
 
 	got, err := rec.Record(f.ctx, f.device.ID, false)
 	require.NoError(t, err)
@@ -623,8 +623,8 @@ func TestAttestCertRecorder_WorksWithoutAuditor(t *testing.T) {
 }
 
 func TestAttestCertCandidateNames_OrderAndDedupe(t *testing.T) {
-	names := attestCertCandidateNames(&entities.Device{Hostname: "lab-node-3", Model: "SuperMicro X10", Serial: "SN1"})
-	assert.Equal(t, []string{"lab-node-3", "SuperMicro X10-SN1", "iak-SuperMicro X10-SN1"}, names)
+	names := attestCertCandidateNames(&entities.Device{Hostname: "node-03", Model: "SuperMicro X10", Serial: "SN1"})
+	assert.Equal(t, []string{"node-03", "SuperMicro X10-SN1", "iak-SuperMicro X10-SN1"}, names)
 
 	names = attestCertCandidateNames(&entities.Device{Hostname: "SuperMicro X10-SN1", Model: "SuperMicro X10", Serial: "SN1"})
 	assert.Equal(t, []string{"SuperMicro X10-SN1", "iak-SuperMicro X10-SN1"}, names, "a hostname equal to the TCG subject is tried once")
@@ -640,10 +640,10 @@ func TestErrAttestCertRefused_MessagesAndUnwrap(t *testing.T) {
 
 	inner := vm.ErrAKCertificateNotRestricted{Subject: "CN=x"}
 	full := ErrAttestCertRefused{DeviceID: 3, Attempts: []AttestCertAttempt{
-		{Source: AttestCertSourceCA, Detail: "lab-node-3", Err: inner},
+		{Source: AttestCertSourceCA, Detail: "node-03", Err: inner},
 		{Source: AttestCertSourceDevice},
 	}}
-	assert.Contains(t, full.Error(), "ca[lab-node-3]")
+	assert.Contains(t, full.Error(), "ca[node-03]")
 	assert.Contains(t, full.Error(), "nothing recorded")
 	assert.Equal(t, []error{inner}, full.Unwrap())
 }
@@ -749,14 +749,14 @@ func TestAttestCertRecorder_PrefersTheIAKReaderWhenTheCAOffersIt(t *testing.T) {
 func TestAttestCertRecorder_IAKReaderMissFallsBackToCNLookups(t *testing.T) {
 	f := newRecorderFixture(t)
 	rca := &readerCA{testCA: f.ca, readErr: errors.New("not found")}
-	cert := f.ca.issue(t, "lab-node-3", "", &f.iak.PublicKey, restrictedPolicies)
-	f.ca.store["lab-node-3"] = certPEM(cert)
+	cert := f.ca.issue(t, "node-03", "", &f.iak.PublicKey, restrictedPolicies)
+	f.ca.store["node-03"] = certPEM(cert)
 	rec, err := NewAttestCertRecorder(f.devices, rca, WithAttestCertClock(func() time.Time { return attestCertTestNow }))
 	require.NoError(t, err)
 
 	got, err := rec.Record(f.ctx, f.device.ID, false)
 	require.NoError(t, err)
-	assert.Equal(t, "lab-node-3", got.SourceDetail)
+	assert.Equal(t, "node-03", got.SourceDetail)
 	assert.Len(t, rca.reads, 1)
 
 	// And a reader that returns the wrong key is refused like any candidate.

@@ -1,6 +1,6 @@
 Strategy: identity-list
 Admits nobody: no
-Identities: cp.trusted-platform.internal
+Identities: cp.example.internal
 Identities source: attestation.callers.identities
 Identity list valid: yes
 Trust anchors configured: yes

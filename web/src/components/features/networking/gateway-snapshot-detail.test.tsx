@@ -11,7 +11,7 @@ import { GatewaySnapshotDetail } from './gateway-snapshot-detail';
 
 function snapshot(overrides: Partial<GatewaySnapshot> = {}): GatewaySnapshot {
   return {
-    gateway_id: 'lab-node-1-gateway',
+    gateway_id: 'node-01-gateway',
     reported_at: '2026-09-08T22:00:00Z',
     health: { status: 'healthy' },
     services: [
@@ -19,15 +19,15 @@ function snapshot(overrides: Partial<GatewaySnapshot> = {}): GatewaySnapshot {
       { name: 'dhcp', active: false, healthy: false, refused_reason: 'the DHCP service needs an IPAM allocator' },
     ],
     bgp: {
-      local_asn: 401870,
-      router_id: '23.143.36.4',
+      local_asn: 64512,
+      router_id: '203.0.113.4',
       peer_count: 2,
       established_peers: 1,
       received_prefixes: 118,
       peers: [
         {
           address: '10.255.0.2',
-          asn: 401870,
+          asn: 64512,
           state: 'Established',
           prefixes_received: 120,
           prefixes_accepted: 118,
@@ -36,7 +36,7 @@ function snapshot(overrides: Partial<GatewaySnapshot> = {}): GatewaySnapshot {
         },
         {
           address: '10.255.0.6',
-          asn: 401870,
+          asn: 64512,
           state: 'Active',
           prefixes_received: 0,
           prefixes_accepted: 0,
@@ -46,20 +46,20 @@ function snapshot(overrides: Partial<GatewaySnapshot> = {}): GatewaySnapshot {
     },
     tunnels: [
       {
-        name: 'gre-mia',
+        name: 'gre-pri',
         transport: 'ipsec',
         state: 'up',
-        uplink: 'att',
+        uplink: 'isp-a',
         bound: true,
-        local_ip: '99.12.246.36',
-        remote_ip: '45.63.110.165',
+        local_ip: '198.51.100.4',
+        remote_ip: '198.51.100.100',
         rx_bytes: 4096,
         tx_bytes: 2048,
         last_rekey: '2026-09-08T12:00:00Z',
       },
     ],
     uplinks: [
-      { name: 'att', interface: 'eth6', table: 101, gateway_v4: '99.12.246.38', rule_count: 1, tunnels: ['gre-mia'] },
+      { name: 'isp-a', interface: 'eth6', table: 101, gateway_v4: '198.51.100.6', rule_count: 1, tunnels: ['gre-pri'] },
     ],
     host_firewall: { active: true, installed: true, fingerprint: 'sha256:abc', rule_count: 10 },
     firewall: { active: true, flow_count: 26 },
@@ -67,9 +67,9 @@ function snapshot(overrides: Partial<GatewaySnapshot> = {}): GatewaySnapshot {
       active: true,
       snat_enabled: true,
       dnat_rules: 2,
-      uplinks: [{ name: 'att', default: true, pool_addresses: 8, ports: 64512, static: 1 }],
+      uplinks: [{ name: 'isp-a', default: true, pool_addresses: 8, ports: 64512, static: 1 }],
     },
-    pipeline: { installed: true, bridge: 'br-fabric', owner: 'lab-node-1-gateway', terminal: 'normal', fail_mode: 'secure' },
+    pipeline: { installed: true, bridge: 'br-fabric', owner: 'node-01-gateway', terminal: 'normal', fail_mode: 'secure' },
     ...overrides,
   };
 }
@@ -81,7 +81,7 @@ describe('GatewaySnapshotDetail', () => {
   it('renders every section the gateway reports', () => {
     render(<GatewaySnapshotDetail snapshot={snapshot()} />);
 
-    expect(screen.getByText('Datapath — lab-node-1-gateway')).toBeDefined();
+    expect(screen.getByText('Datapath — node-01-gateway')).toBeDefined();
 
     // Services, including the refusal reason for a section the gateway
     // cannot run.
@@ -89,7 +89,7 @@ describe('GatewaySnapshotDetail', () => {
     expect(screen.getByText('the DHCP service needs an IPAM allocator')).toBeDefined();
 
     // BGP sessions with prefix counters and the BFD state.
-    expect(screen.getByText(/AS 401870, router-id 23.143.36.4/)).toBeDefined();
+    expect(screen.getByText(/AS 64512, router-id 203.0.113.4/)).toBeDefined();
     expect(screen.getByText('10.255.0.2')).toBeDefined();
     expect(screen.getByText('Established')).toBeDefined();
     expect(screen.getByText('118')).toBeDefined();
@@ -97,14 +97,14 @@ describe('GatewaySnapshotDetail', () => {
     expect(screen.getByText('not configured')).toBeDefined();
 
     // Tunnels, uplinks and the fixed sections.
-    expect(screen.getAllByText('gre-mia').length).toBe(2);
-    expect(screen.getByText('att (pinned)')).toBeDefined();
+    expect(screen.getAllByText('gre-pri').length).toBe(2);
+    expect(screen.getByText('isp-a (pinned)')).toBeDefined();
     expect(screen.getByText('4.0 KiB / 2.0 KiB')).toBeDefined();
     expect(screen.getByText('Uplink policy routes')).toBeDefined();
     expect(screen.getByText('Host filter (nftables)')).toBeDefined();
     expect(screen.getByText('sha256:abc')).toBeDefined();
     expect(screen.getByText('Firewall (OVS conntrack)')).toBeDefined();
-    expect(screen.getByText('att (default)')).toBeDefined();
+    expect(screen.getByText('isp-a (default)')).toBeDefined();
     expect(screen.getByText('Base pipeline')).toBeDefined();
     expect(screen.getByText('br-fabric')).toBeDefined();
   });

@@ -25,7 +25,7 @@ import (
 var (
 	localMAC     = net.HardwareAddr{0x02, 0x00, 0x00, 0x00, 0x00, 0x01}
 	responderMAC = net.HardwareAddr{0x00, 0x00, 0x0c, 0x9f, 0xf0, 0x14}
-	probedIP     = net.IPv4(172, 16, 200, 1)
+	probedIP     = net.IPv4(10, 4, 200, 1)
 )
 
 // fakeSession is an in-memory ProbeSession. Nothing it does touches a
@@ -182,7 +182,7 @@ func TestDetectorCheckIgnoresOwnProbeEcho(t *testing.T) {
 // TestDetectorCheckIgnoresOtherAddresses proves unrelated ARP chatter on a
 // busy segment does not read as a conflict.
 func TestDetectorCheckIgnoresOtherAddresses(t *testing.T) {
-	other := reply(responderMAC, net.IPv4(172, 16, 200, 99))
+	other := reply(responderMAC, net.IPv4(10, 4, 200, 99))
 	session := &fakeSession{local: localMAC, replies: []*Packet{other}}
 	detector := NewDuplicateAddressDetector(&fakeTransport{session: session},
 		WithProbeCount(1), WithProbeInterval(time.Millisecond))
@@ -326,7 +326,7 @@ func TestDetectorCheckSharedAddressFromGroupMAC(t *testing.T) {
 		t.Fatalf("a defence from another MAC is still a conflict, got %v", err)
 	}
 
-	other := net.IPv4(172, 16, 200, 9)
+	other := net.IPv4(10, 4, 200, 9)
 	session = &fakeSession{local: localMAC, replies: []*Packet{reply(vmac, other)}}
 	detector = NewDuplicateAddressDetector(&fakeTransport{session: session},
 		WithProbeInterval(time.Millisecond), WithSharedAddress(probedIP, vmac))

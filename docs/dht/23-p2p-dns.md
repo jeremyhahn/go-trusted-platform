@@ -78,7 +78,7 @@ Without centralized infrastructure, leaf nodes have no way to:
 |  |                     +------------------+     v                         |  |
 |  |                                        +----------+                    |  |
 |  |  Leaf nodes configure:                 |   DHT    |                    |  |
-|  |  dns.p2p.trusted-platform.io           +----------+                    |  |
+|  |  dns.p2p.example.com           +----------+                    |  |
 |  +------------------------------------------------------------------------+  |
 |                                     |                                        |
 |                                     v                                        |
@@ -99,9 +99,9 @@ Without centralized infrastructure, leaf nodes have no way to:
 |  +------------------------------------------------------------------------+  |
 |  |  Every P2P node automatically receives:                                |  |
 |  |                                                                        |  |
-|  |     <node-id-short>.p2p.trusted-platform.io                            |  |
+|  |     <node-id-short>.p2p.example.com                            |  |
 |  |                                                                        |  |
-|  |  Example: abc123def456.p2p.trusted-platform.io --> Node's IPv6         |  |
+|  |  Example: abc123def456.p2p.example.com --> Node's IPv6         |  |
 |  |                                                                        |  |
 |  |  Created automatically during ACME enroll-01:                          |  |
 |  |  1. Node receives IDevID certificate                                   |  |
@@ -135,21 +135,21 @@ Node                                    FROST CA (Privacy CA Pool)
  |                                 SHA256(IDevID pubkey)[:12]
  |                                               |
  |                              5. Create DNS record in DHT:
- |                                 Key: dns:<node-id>.p2p.trusted-platform.io:AAAA
+ |                                 Key: dns:<node-id>.p2p.example.com:AAAA
  |                                 Value: Node's IPv6 address
  |                                 Signature: FROST threshold signature
  |                                               |
  |<----- IDevID Certificate + DNS Record --------|
  |                                               |
  | 6. Node is immediately resolvable:            |
- |    abc123def456.p2p.trusted-platform.io       |
+ |    abc123def456.p2p.example.com       |
  |                                               |
 ```
 
 ### DNS Name Format
 
 ```
-<node-id-short>.p2p.trusted-platform.io
+<node-id-short>.p2p.example.com
 
 Where:
   node-id-short = first 12 characters of SHA256(IDevID public key)
@@ -157,14 +157,14 @@ Where:
 
 Example:
   IDevID Public Key --> SHA256 --> abc123def456789...
-  DNS Name: abc123def456.p2p.trusted-platform.io
+  DNS Name: abc123def456.p2p.example.com
 ```
 
 ### DHT Key Pattern
 
 ```
-dns:abc123def456.p2p.trusted-platform.io:AAAA --> 2602:F5BB:0001::1234
-dns:abc123def456.p2p.trusted-platform.io:A    --> (via gateway NAT64 if needed)
+dns:abc123def456.p2p.example.com:AAAA --> 2001:DB8:0001::1234
+dns:abc123def456.p2p.example.com:A    --> (via gateway NAT64 if needed)
 ```
 
 ### Why 12 Characters?
@@ -208,8 +208,8 @@ type DNSRecord struct {
 
 | Record Type | DHT Key Format | Example |
 |-------------|---------------|---------|
-| IPv4 Address | `dns:{domain}:A` | `dns:mynode.p2p.trusted-platform.io:A` |
-| IPv6 Address | `dns:{domain}:AAAA` | `dns:mynode.p2p.trusted-platform.io:AAAA` |
+| IPv4 Address | `dns:{domain}:A` | `dns:mynode.p2p.example.com:A` |
+| IPv6 Address | `dns:{domain}:AAAA` | `dns:mynode.p2p.example.com:AAAA` |
 | Canonical Name | `dns:{domain}:CNAME` | `dns:www.example.com:CNAME` |
 | Text Record | `dns:{domain}:TXT` | `dns:_dmarc.example.com:TXT` |
 | Service Locator | `dns:{domain}:SRV` | `dns:_https._tcp.example.com:SRV` |
@@ -219,7 +219,7 @@ type DNSRecord struct {
 
 | Namespace | Owner | How Ownership Established |
 |-----------|-------|--------------------------|
-| `*.p2p.trusted-platform.io` | FROST CA | Created during enrollment, signed by CA pool |
+| `*.p2p.example.com` | FROST CA | Created during enrollment, signed by CA pool |
 | Custom domains | Node that proved ownership | Via ACME DNS-01 challenge |
 
 ### Record Signature Verification
@@ -379,7 +379,7 @@ Leaf nodes configure gateway DNS as their resolver:
 # /etc/platformd/config.yaml
 dns:
   resolvers:
-    - dns.p2p.trusted-platform.io  # Primary: P2P gateway DNS
+    - dns.p2p.example.com  # Primary: P2P gateway DNS
     - 1.1.1.1                       # Fallback: Cloudflare DNS
     - 8.8.8.8                       # Fallback: Google DNS
 ```
@@ -415,8 +415,8 @@ Step 3: Delegate zone to P2P DNS
 +----------------------------------+
 |  At registrar, add NS records:   |
 |  myapp.example.com NS            |
-|    ns1.p2p.trusted-platform.io   |
-|    ns2.p2p.trusted-platform.io   |
+|    ns1.p2p.example.com   |
+|    ns2.p2p.example.com   |
 +----------------------------------+
                 |
                 v
@@ -526,7 +526,7 @@ DNSSEC requires a hierarchical key management model to maintain the chain of tru
 |                        DNSSEC KEY HIERARCHY                                  |
 +==============================================================================+
 |                                                                              |
-|  TIER 1: P2P NAMESPACE (p2p.trusted-platform.io)                            |
+|  TIER 1: P2P NAMESPACE (p2p.example.com)                            |
 |  +------------------------------------------------------------------------+  |
 |  |                                                                        |  |
 |  |         +--------+   +--------+   +--------+   +--------+              |  |
@@ -586,7 +586,7 @@ DNSSEC requires a hierarchical key management model to maintain the chain of tru
 
 Leaf nodes in the P2P namespace **cannot** sign their own DNSSEC records because:
 
-1. **They do not hold the zone's ZSK**: The Zone Signing Key for `p2p.trusted-platform.io` is held by the FROST CA pool
+1. **They do not hold the zone's ZSK**: The Zone Signing Key for `p2p.example.com` is held by the FROST CA pool
 2. **DNSSEC requires chain of trust from zone apex**: Each RRSIG must chain up to the zone's DNSKEY
 3. **Each leaf holding its own key would break the chain**: DNS resolvers verify `RRSIG -> DNSKEY -> DS -> parent zone`
 
@@ -622,7 +622,7 @@ Leaf Node                    Federated Control Plane           DNS/DHT
 
 ### P2P Namespace DNSSEC (Tier 1)
 
-The `p2p.trusted-platform.io` zone uses FROST threshold signatures:
+The `p2p.example.com` zone uses FROST threshold signatures:
 
 ```go
 // P2PNamespaceDNSSEC handles DNSSEC for the P2P namespace
@@ -664,7 +664,7 @@ func (d *P2PNamespaceDNSSEC) SignDNSRecord(ctx context.Context, record *DNSRecor
         Expiration:  uint32(record.ExpiresAt.Unix()),
         Inception:   uint32(record.Timestamp.Unix()),
         KeyTag:      d.zskKeyTag,
-        SignerName:  "p2p.trusted-platform.io.",
+        SignerName:  "p2p.example.com.",
         Signature:   signature,
     }, nil
 }
@@ -686,7 +686,7 @@ Federated deployments have two options for DNS integration:
 |  |                                  |    |                                |  |
 |  |  +----------------------------+  |    |  +------------------------+    |  |
 |  |  |    Local DNS Server        |  |    |  |    Gateway DNS         |    |  |
-|  |  |    (orgA.example.com)      |  |    |  | (p2p.trusted-platform.io)   |  |
+|  |  |    (orgA.example.com)      |  |    |  | (p2p.example.com)   |  |
 |  |  +-------------+--------------+  |    |  +-----------+------------+    |  |
 |  |                |                 |    |              |                 |  |
 |  |                v                 |    |              v                 |  |
@@ -725,12 +725,12 @@ Federated deployments have two options for DNS integration:
 # Leaf node - automatic DNS naming, no configuration needed
 
 # DNS name is automatically assigned during enrollment:
-#   <node-id>.p2p.trusted-platform.io
+#   <node-id>.p2p.example.com
 
 dns:
   # Use P2P gateway DNS as primary resolver
   resolvers:
-    - dns.p2p.trusted-platform.io
+    - dns.p2p.example.com
     - 1.1.1.1   # Fallback: Cloudflare
     - 8.8.8.8   # Fallback: Google
 
@@ -747,7 +747,7 @@ dns:
 
 dns:
   resolvers:
-    - dns.p2p.trusted-platform.io
+    - dns.p2p.example.com
     - 1.1.1.1
 
   # Custom domain configuration
@@ -876,8 +876,8 @@ func ValidateDNSRecord(record *DNSRecord) error {
 
 | Purpose | Key Pattern | Example |
 |---------|-------------|---------|
-| DNS A record | `dns:{domain}:A` | `dns:mynode.p2p.trusted-platform.io:A` |
-| DNS AAAA record | `dns:{domain}:AAAA` | `dns:mynode.p2p.trusted-platform.io:AAAA` |
+| DNS A record | `dns:{domain}:A` | `dns:mynode.p2p.example.com:A` |
+| DNS AAAA record | `dns:{domain}:AAAA` | `dns:mynode.p2p.example.com:AAAA` |
 | DNS CNAME record | `dns:{domain}:CNAME` | `dns:www.example.com:CNAME` |
 | DNS TXT record | `dns:{domain}:TXT` | `dns:_dmarc.example.com:TXT` |
 | DNS SRV record | `dns:{domain}:SRV` | `dns:_https._tcp.example.com:SRV` |

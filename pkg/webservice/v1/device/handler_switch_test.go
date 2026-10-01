@@ -474,7 +474,7 @@ func TestActivate_PrecheckFailure_SkipsSwitchMove(t *testing.T) {
 		WithSwitchService(mockSwitchService),
 	)
 
-	hookErr := policy.ErrPortNotRegisteredForDevice{MAC: "3c:ec:ef:6c:f8:ec"}
+	hookErr := policy.ErrPortNotRegisteredForDevice{MAC: "3c:ec:ef:00:00:ec"}
 
 	mockActivator.On("PrecheckActivation", "SRV-MGMT-01").Return(nil, hookErr).Once()
 	mockResponseWriter.On("Error404", mock.Anything, mock.Anything, hookErr).Return()

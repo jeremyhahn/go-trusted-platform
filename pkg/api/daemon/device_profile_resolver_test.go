@@ -40,10 +40,10 @@ func TestDeviceGRPCService_AssignProfileToDevice_ByDeviceID(t *testing.T) {
 	profiles := newRealProfileService(t)
 	svc := NewDeviceGRPCService(devices, profiles, nil)
 	certPEM := newEKCertPEMForTest(t)
-	dev := &entities.Device{ID: 970392025956353, Serial: "lab-node-5-compute-01", Model: "SuperMicro X10", EKCert: certPEM}
+	dev := &entities.Device{ID: 970392025956353, Serial: "node-05-compute-01", Model: "SuperMicro X10", EKCert: certPEM}
 	devices.devices[dev.ID] = dev
 	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{
-		ID: 3351835265417288672, Name: "lab-node-5", Role: entities.DeviceRoleWorker, TLSServerName: "compute.trusted-platform.internal",
+		ID: 3351835265417288672, Name: "node-05", Role: entities.DeviceRoleWorker, TLSServerName: "compute.example.internal",
 	}))
 
 	// Before the assign nothing resolves: installer profiles have no rules.
@@ -64,7 +64,7 @@ func TestDeviceGRPCService_AssignProfileToDevice_ByDeviceID(t *testing.T) {
 	resolved, err := profiles.FindProfileForDevice(ctx, dev)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(3351835265417288672), resolved.ID)
-	assert.Equal(t, "compute.trusted-platform.internal", resolved.TLSServerName)
+	assert.Equal(t, "compute.example.internal", resolved.TLSServerName)
 
 	// Explicit values win over the derived ones.
 	resp, err = svc.AssignProfileToDevice(ctx, &platformv1.AssignProfileToDeviceRequest{
@@ -115,7 +115,7 @@ func TestDeviceQuoteVerifier_ResolvesTheBoundProfile(t *testing.T) {
 	profiles := newRealProfileService(t)
 	f.device.EKCert = newEKCertPEMForTest(t)
 	require.NoError(t, f.devices.Update(ctx, f.device))
-	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{ID: 4631, Name: "lab-node-5", Role: entities.DeviceRoleWorker}))
+	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{ID: 4631, Name: "node-05", Role: entities.DeviceRoleWorker}))
 	ekSerial, err := entities.EKSerialFromCertPEM(f.device.EKCert)
 	require.NoError(t, err)
 	require.NoError(t, profiles.AssignToDeviceWithEK(ctx, 4631, ekSerial, "", f.device.EKCert))
@@ -141,7 +141,7 @@ func TestDeviceQuoteVerifier_NoBoundOrMatchingProfileIsAnAbsence(t *testing.T) {
 	f := newQuoteFixture(t)
 	ctx := context.Background()
 	profiles := newRealProfileService(t)
-	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{ID: 4632, Name: "lab-node-5", Role: entities.DeviceRoleWorker}))
+	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{ID: 4632, Name: "node-05", Role: entities.DeviceRoleWorker}))
 
 	v := NewDeviceQuoteVerifier(f.devices, profiles, f.trust, f.sink, nil)
 	v.now = func() time.Time { return f.now }

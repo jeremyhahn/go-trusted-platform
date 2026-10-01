@@ -29,7 +29,7 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-const testTLSServerName = "compute.trusted-platform.internal"
+const testTLSServerName = "compute.example.internal"
 
 // newRealProfileService builds the production profile service over the
 // in-memory storage mock so the round trips below exercise the service's
@@ -140,10 +140,10 @@ func TestDeviceGRPCService_TLSServerName_SurvivesUpdateWithoutIt(t *testing.T) {
 
 	// A caller that names the field still wins.
 	replaced, err := svc.UpdateProfile(ctx, &platformv1.UpdateProfileRequest{Profile: &platformv1.DeviceProfile{
-		Id: 4480, Name: "compute-renamed", Role: platformv1.DeviceRole_DEVICE_ROLE_WORKER, TlsServerName: "gw.trusted-platform.internal",
+		Id: 4480, Name: "compute-renamed", Role: platformv1.DeviceRole_DEVICE_ROLE_WORKER, TlsServerName: "gw.example.internal",
 	}})
 	require.NoError(t, err)
-	assert.Equal(t, "gw.trusted-platform.internal", replaced.GetProfile().GetTlsServerName())
+	assert.Equal(t, "gw.example.internal", replaced.GetProfile().GetTlsServerName())
 }
 
 // TestDeviceGRPCService_PCRBaseline_ReadOnlyRoundTrip is the #448 round

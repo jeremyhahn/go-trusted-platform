@@ -74,7 +74,7 @@ Examples:
     --mac 00:25:90:FF:AA:01 \
     --role gateway \
     --template gateway-default \
-    --server https://198.18.1.140:8443
+    --server https://10.4.2.140:8443
 
   # Register with a private CA and config overrides
   platformctl device register \
@@ -97,7 +97,7 @@ Examples:
 	cmd.Flags().StringVar(&rf.role, "role", "", "device role: control-plane, gateway, worker (required)")
 	cmd.Flags().StringVar(&rf.template, "template", "", "template name for the device profile (required)")
 	cmd.Flags().StringVar(&rf.overrideFile, "override-file", "", "path to YAML override file (optional)")
-	cmd.Flags().StringVar(&rf.server, "server", "", "control plane URL, e.g. https://198.18.1.140:8443 (required)")
+	cmd.Flags().StringVar(&rf.server, "server", "", "control plane URL, e.g. https://10.4.2.140:8443 (required)")
 	cmd.Flags().StringVar(&rf.caCert, "ca-cert", "", "path to CA certificate PEM for TLS verification (optional)")
 
 	return cmd

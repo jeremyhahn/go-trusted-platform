@@ -29,12 +29,12 @@ func TestAddPXEOptions_EchoesPXEClientVendorClass(t *testing.T) {
 	const archUEFIx64 = 0x0007
 
 	srv, err := NewDHCPServer(&DHCPConfig{
-		ServerIP:           net.ParseIP("198.18.1.91"),
-		RangeStart:         net.ParseIP("198.18.1.220"),
-		RangeEnd:           net.ParseIP("198.18.1.230"),
-		TFTPServerIP:       net.ParseIP("198.18.1.91"),
+		ServerIP:           net.ParseIP("10.4.2.91"),
+		RangeStart:         net.ParseIP("10.4.2.220"),
+		RangeEnd:           net.ParseIP("10.4.2.230"),
+		TFTPServerIP:       net.ParseIP("10.4.2.91"),
 		BootFilenameByArch: DefaultBootFilenameByArch(),
-		IPXEScript:         "http://198.18.1.91:8080/boot.ipxe",
+		IPXEScript:         "http://10.4.2.91:8080/boot.ipxe",
 	}, logging.DefaultLogger())
 	if err != nil {
 		t.Fatalf("NewDHCPServer: %v", err)
@@ -77,7 +77,7 @@ func TestAddPXEOptions_EchoesPXEClientVendorClass(t *testing.T) {
 		t.Fatalf("dhcpv4.New: %v", err)
 	}
 	srv.addPXEOptions(ipxeReply, discover, archUEFIx64, true)
-	if ipxeReply.BootFileName != "http://198.18.1.91:8080/boot.ipxe" {
+	if ipxeReply.BootFileName != "http://10.4.2.91:8080/boot.ipxe" {
 		t.Errorf("iPXE client boot filename = %q, want the HTTP script", ipxeReply.BootFileName)
 	}
 }
@@ -93,12 +93,12 @@ func TestAddPXEOptions_UEFIClientGetsGUIDEchoAndBootOptions(t *testing.T) {
 	const archUEFIx64 = 0x0007
 
 	srv, err := NewDHCPServer(&DHCPConfig{
-		ServerIP:           net.ParseIP("198.18.1.91"),
-		RangeStart:         net.ParseIP("198.18.1.220"),
-		RangeEnd:           net.ParseIP("198.18.1.230"),
-		TFTPServerIP:       net.ParseIP("198.18.1.91"),
+		ServerIP:           net.ParseIP("10.4.2.91"),
+		RangeStart:         net.ParseIP("10.4.2.220"),
+		RangeEnd:           net.ParseIP("10.4.2.230"),
+		TFTPServerIP:       net.ParseIP("10.4.2.91"),
 		BootFilenameByArch: DefaultBootFilenameByArch(),
-		IPXEScript:         "http://198.18.1.91:8080/boot.ipxe",
+		IPXEScript:         "http://10.4.2.91:8080/boot.ipxe",
 	}, logging.DefaultLogger())
 	if err != nil {
 		t.Fatalf("NewDHCPServer: %v", err)

@@ -204,7 +204,7 @@ func TestBuildExprs_Shapes(t *testing.T) {
 		"icmpv6":      {Rule{Kind: RuleICMPv6}, []string{"meta", "cmp", "meta", "cmp", "limit", "verdict"}},
 		"listener any source": {Rule{Kind: RuleListener, Interface: "eth0", Protocol: ProtocolTCP, Port: 8443},
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "cmp", "verdict"}},
-		"listener v4 source": {Rule{Kind: RuleListener, Interface: "eth0", Family: 4, Protocol: ProtocolTCP, Port: 22, Source: netip.MustParsePrefix("198.51.100.0/24")},
+		"listener v4 source": {Rule{Kind: RuleListener, Interface: "eth0", Family: 4, Protocol: ProtocolTCP, Port: 22, Source: netip.MustParsePrefix("10.4.6.0/24")},
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "bitwise", "cmp", "meta", "cmp", "payload", "cmp", "verdict"}},
 		"peer v6": {Rule{Kind: RulePeer, Interface: "wan0", Family: 6, Peer: netip.MustParseAddr("2001:db8::1"), IPProto: ipProtoESP},
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "bitwise", "cmp", "meta", "cmp", "verdict"}},
@@ -251,7 +251,7 @@ func TestBuildExprs_Values(t *testing.T) {
 		assert.Equal(t, byte(0), mask[8])
 	})
 	t.Run("host address is a full-length prefix", func(t *testing.T) {
-		e := exprSaddrPrefix(netip.PrefixFrom(netip.MustParseAddr("45.63.110.165"), 32))
+		e := exprSaddrPrefix(netip.PrefixFrom(netip.MustParseAddr("198.51.100.100"), 32))
 		assert.Equal(t, []byte{255, 255, 255, 255}, e[1].(*expr.Bitwise).Mask)
 	})
 	t.Run("nfproto", func(t *testing.T) {
@@ -277,7 +277,7 @@ func TestBuildExprs_Values(t *testing.T) {
 		assert.Equal(t, []byte{137}, r.ToData)
 	})
 	t.Run("gre peer protocol", func(t *testing.T) {
-		exprs, err := buildExprs(Rule{Kind: RulePeer, Interface: "wan0", Family: 4, Peer: netip.MustParseAddr("66.42.90.190"), IPProto: ipProtoGRE}, DefaultICMPRateLimit)
+		exprs, err := buildExprs(Rule{Kind: RulePeer, Interface: "wan0", Family: 4, Peer: netip.MustParseAddr("192.0.2.100"), IPProto: ipProtoGRE}, DefaultICMPRateLimit)
 		require.NoError(t, err)
 		assert.Equal(t, []byte{47}, exprs[8].(*expr.Cmp).Data)
 	})

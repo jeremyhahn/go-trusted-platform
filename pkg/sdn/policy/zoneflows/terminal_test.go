@@ -105,9 +105,9 @@ func TestTerminalForBridge(t *testing.T) {
 	assert.Empty(t, owner)
 
 	term, owner = zoneflows.TerminalForBridge(map[string]string{
-		zoneflows.PipelineOwnerKey:    "gatewayd:lab-node-1-gateway",
+		zoneflows.PipelineOwnerKey:    "gatewayd:node-01-gateway",
 		zoneflows.PipelineTerminalKey: "normal",
 	})
 	assert.Equal(t, zoneflows.TerminalGatewayPipeline, term)
-	assert.Equal(t, "gatewayd:lab-node-1-gateway", owner)
+	assert.Equal(t, "gatewayd:node-01-gateway", owner)
 }

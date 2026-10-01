@@ -89,7 +89,7 @@ func TestResolveSupermicroX10SDV(t *testing.T) {
 	assert.Equal(t, "uart8250,io,0x3f8,115200n8", q.EarlyconSpec, "SOL is on COM1, IO base 0x3f8")
 	assert.Equal(t, "NT1", q.SambaMinProtocol)
 	assert.Equal(t, "disabled", q.SambaEncryption)
-	// Measured 2026-08-29 on lab-node-2 (SYS-5018D-FN8T-AS001, ATEN FW
+	// Measured 2026-08-29 on node-02 (SYS-5018D-FN8T-AS001, ATEN FW
 	// 4.00): payload instance 0x01 carried the console, 0x02 activated
 	// and stayed silent.
 	assert.Equal(t, byte(0x01), q.SOLPayloadInstance,
@@ -226,7 +226,7 @@ func TestEntryKeyPartNumberOnlyEntry(t *testing.T) {
 }
 
 // miniFleetIdentity is exactly what the ATEN FW 4.00 / BIOS 2.6 BMC on
-// lab-node-2 serves (issue #101): a placeholder Model and SKU, with the board
+// node-02 serves (issue #101): a placeholder Model and SKU, with the board
 // named only by PartNumber.
 var miniFleetIdentity = Identity{
 	Manufacturer: "Supermicro",

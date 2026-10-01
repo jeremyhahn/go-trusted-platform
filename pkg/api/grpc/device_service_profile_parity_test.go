@@ -24,7 +24,7 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-const testTLSServerName = "compute.trusted-platform.internal"
+const testTLSServerName = "compute.example.internal"
 
 // TestProfileConversions_CarryTLSServerName pins that this package's
 // proto<->entity profile conversions carry tls_server_name both ways and

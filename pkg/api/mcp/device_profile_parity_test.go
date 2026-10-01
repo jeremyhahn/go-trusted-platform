@@ -22,7 +22,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
-const testTLSServerName = "compute.trusted-platform.internal"
+const testTLSServerName = "compute.example.internal"
 
 // TestDeviceProfileSchemas_TLSServerName pins that both profile write tools
 // advertise tls_server_name and that neither advertises pcr_baseline, which
@@ -84,10 +84,10 @@ func TestDeviceProfileCreateUpdate_TLSServerName(t *testing.T) {
 		t.Fatalf("stored profile after partial update: %+v", stub.profiles[id])
 	}
 
-	if _, err := registry.ExecuteTool(ctx, "profile_update_by_id", map[string]interface{}{"id": id, "tls_server_name": "gw.trusted-platform.internal"}); err != nil {
+	if _, err := registry.ExecuteTool(ctx, "profile_update_by_id", map[string]interface{}{"id": id, "tls_server_name": "gw.example.internal"}); err != nil {
 		t.Fatalf("profile_update_by_id (replace): %v", err)
 	}
-	if stub.profiles[id].TLSServerName != "gw.trusted-platform.internal" {
+	if stub.profiles[id].TLSServerName != "gw.example.internal" {
 		t.Fatal("a caller that names tls_server_name must win")
 	}
 }
@@ -150,7 +150,7 @@ func TestDeviceProfileTools_PCRBaselineReadOnly(t *testing.T) {
 // requirement, and the schema advertises it.
 func TestDeviceProfileAssign_ByDeviceID(t *testing.T) {
 	registry, stub := newDeviceProfileRegistry()
-	stub.profiles[42] = &entities.DeviceProfile{ID: 42, Name: "lab-node-5"}
+	stub.profiles[42] = &entities.DeviceProfile{ID: 42, Name: "node-05"}
 
 	if _, err := registry.ExecuteTool(context.Background(), "profile_assign_to_device", map[string]interface{}{
 		"profile_id": 42, "device_id": 970392025956353,

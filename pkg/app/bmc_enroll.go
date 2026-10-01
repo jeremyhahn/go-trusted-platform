@@ -96,7 +96,7 @@ type BMCEnrollResult struct {
 	// Hostname is the bare hostname of the BMC address (no port).
 	Hostname string
 
-	// DNSName is the FQDN registered in internal DNS, e.g. "lab-node-1-bmc.internal.".
+	// DNSName is the FQDN registered in internal DNS, e.g. "node-01-bmc.internal.".
 	// Empty when dns-register was skipped.
 	DNSName string
 

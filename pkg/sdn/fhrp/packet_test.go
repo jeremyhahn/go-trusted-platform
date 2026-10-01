@@ -41,15 +41,15 @@ var goldenVectors = []struct {
 	},
 	{
 		name: "ipv6 single address",
-		adv:  Advertisement{VRID: 20, Priority: 254, MaxAdvertInterval: 100, Addresses: addrs("2602:f5bb::1")},
+		adv:  Advertisement{VRID: 20, Priority: 254, MaxAdvertInterval: 100, Addresses: addrs("2001:db8::1")},
 		src:  "fe80::1", dst: "ff02::12",
-		hex: "3114fe010064b6a72602f5bb000000000000000000000001",
+		hex: "3114fe010064a4ac20010db8000000000000000000000001",
 	},
 	{
 		name: "ipv4 two addresses",
-		adv:  Advertisement{VRID: 2, Priority: 200, MaxAdvertInterval: 50, Addresses: addrs("198.18.0.1", "23.143.36.1")},
-		src:  "198.18.0.2", dst: "224.0.0.18",
-		hex: "3102c80200320280ac10c801178f2401",
+		adv:  Advertisement{VRID: 2, Priority: 200, MaxAdvertInterval: 50, Addresses: addrs("10.4.200.1", "203.0.113.1")},
+		src:  "10.4.200.2", dst: "224.0.0.18",
+		hex: "3102c802003246270a04c801cb007101",
 	},
 }
 

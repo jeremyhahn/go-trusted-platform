@@ -33,27 +33,27 @@ func TestMirrorWebAuthnRelyingParty_AggregatesSameRPOrigins(t *testing.T) {
 		QuicBaaSConfig: &quicbaas.Config{},
 		WebServices: []*v1.Config{
 			{WebAuthn: &v1.WebAuthn{
-				RPID:          "cp.trusted-platform.io",
+				RPID:          "cp.example.com",
 				RPDisplayName: "Trusted Platform",
-				RPOrigins:     []string{"https://cp.trusted-platform.io", "https://cp.trusted-platform.io:8443"},
+				RPOrigins:     []string{"https://cp.example.com", "https://cp.example.com:8443"},
 			}},
 			{WebAuthn: &v1.WebAuthn{
-				RPID:      "cp.trusted-platform.io",
-				RPOrigins: []string{"https://cp.trusted-platform.io:8443", "http://cp.trusted-platform.io:8080"},
+				RPID:      "cp.example.com",
+				RPOrigins: []string{"https://cp.example.com:8443", "http://cp.example.com:8080"},
 			}},
 			{WebAuthn: &v1.WebAuthn{
-				RPID:      "cp.trusted-platform.internal",
-				RPOrigins: []string{"https://cp.trusted-platform.internal"},
+				RPID:      "cp.example.internal",
+				RPOrigins: []string{"https://cp.example.internal"},
 			}},
 		},
 	}
 	app.mirrorWebAuthnRelyingParty()
-	assert.Equal(t, "cp.trusted-platform.io", app.QuicBaaSConfig.WebAuthnRPID)
+	assert.Equal(t, "cp.example.com", app.QuicBaaSConfig.WebAuthnRPID)
 	assert.Equal(t, "Trusted Platform", app.QuicBaaSConfig.WebAuthnRPDisplayName)
 	assert.Equal(t, []string{
-		"https://cp.trusted-platform.io",
-		"https://cp.trusted-platform.io:8443",
-		"http://cp.trusted-platform.io:8080",
+		"https://cp.example.com",
+		"https://cp.example.com:8443",
+		"http://cp.example.com:8080",
 	}, app.QuicBaaSConfig.WebAuthnRPOrigins,
 		"same-RP origins aggregated and deduplicated; the divergent-RP listener contributes nothing")
 }
@@ -70,16 +70,16 @@ func TestMirrorWebAuthnRelyingParty_PluralOnlyConfigNotShadowedByDefault(t *test
 		WebServiceConfig: &v1.Config{}, // retained default: no WebAuthn
 		WebServices: []*v1.Config{
 			{WebAuthn: &v1.WebAuthn{
-				RPID:          "cp.trusted-platform.io",
+				RPID:          "cp.example.com",
 				RPDisplayName: "Trusted Platform",
-				RPOrigins:     []string{"https://cp.trusted-platform.io:8443"},
+				RPOrigins:     []string{"https://cp.example.com:8443"},
 			}},
 		},
 	}
 	app.mirrorWebAuthnRelyingParty()
-	assert.Equal(t, "cp.trusted-platform.io", app.QuicBaaSConfig.WebAuthnRPID,
+	assert.Equal(t, "cp.example.com", app.QuicBaaSConfig.WebAuthnRPID,
 		"a retained RP-less singular default must not shadow configured plural listeners")
-	assert.Equal(t, []string{"https://cp.trusted-platform.io:8443"}, app.QuicBaaSConfig.WebAuthnRPOrigins)
+	assert.Equal(t, []string{"https://cp.example.com:8443"}, app.QuicBaaSConfig.WebAuthnRPOrigins)
 }
 
 // TestMirrorWebAuthnRelyingParty_NoWebAuthnConfigured proves the mirror is

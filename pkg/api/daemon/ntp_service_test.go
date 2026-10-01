@@ -31,8 +31,8 @@ func TestNTPStatusToPbCarriesServeNameFindings(t *testing.T) {
 		ServeNameFindings: []ntp.ServeNameFinding{{
 			Kind:           ntp.ServeNameUnreachable,
 			Name:           "cp.example.internal",
-			Address:        "198.18.1.140",
-			ListenNetworks: []string{"198.18.0.0/24", "172.16.201.0/24"},
+			Address:        "10.4.2.140",
+			ListenNetworks: []string{"10.4.200.0/24", "192.0.2.0/24"},
 		}},
 	})
 
@@ -43,7 +43,7 @@ func TestNTPStatusToPbCarriesServeNameFindings(t *testing.T) {
 	if findings[0].GetName() != "cp.example.internal" {
 		t.Errorf("name = %q", findings[0].GetName())
 	}
-	if findings[0].GetAddress() != "198.18.1.140" {
+	if findings[0].GetAddress() != "10.4.2.140" {
 		t.Errorf("address = %q", findings[0].GetAddress())
 	}
 	if len(findings[0].GetListenNetworks()) != 2 {

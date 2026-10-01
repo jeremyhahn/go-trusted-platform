@@ -222,7 +222,7 @@ func CollectRequiredPackages(config *PreFetchConfig) []string {
 		// issuance, DANE/DNSSEC signature windows, and JWT exp/nbf all
 		// silently misbehave on a node whose clock has drifted. A node
 		// that installs without chrony boots on whatever the RTC says —
-		// lab-node-2 came up two years slow — so the package and its
+		// node-02 came up two years slow — so the package and its
 		// OpenRC init script MUST resolve from the offline repo.
 		"chrony",
 		"chrony-openrc",

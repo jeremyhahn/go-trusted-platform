@@ -16,12 +16,14 @@
 # prior trust state.
 #
 # Usage:
-#   scripts/launch-trusted-browser.sh                           # defaults
-#   scripts/launch-trusted-browser.sh --browser firefox
-#   scripts/launch-trusted-browser.sh --cp 198.18.1.140
-#   scripts/launch-trusted-browser.sh --url https://cp.example.com:8443/auth/webauthn
-#   scripts/launch-trusted-browser.sh --no-launch               # only set up trust
-#   scripts/launch-trusted-browser.sh --skip-os-trust           # skip sudo step
+#   scripts/launch-trusted-browser.sh --cp-host cp.example.com
+#   scripts/launch-trusted-browser.sh --cp-host 192.0.2.10 --browser firefox
+#   scripts/launch-trusted-browser.sh --cp-host cp.example.com --url https://cp.example.com:8443/auth/webauthn
+#   scripts/launch-trusted-browser.sh --cp-host cp.example.com --no-launch      # only set up trust
+#   scripts/launch-trusted-browser.sh --cp-host cp.example.com --skip-os-trust  # skip sudo step
+#
+# --cp-host (or TRUSTED_PLATFORM_CP) is required: the control plane is the
+# deployment's, so the script has no default host to fall back to.
 #
 # Trust is installed in three layers:
 #
@@ -55,7 +57,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 
 BROWSER="chrome"
-CP_HOST=""                       # auto-derived from URL or default to lab-node-2
+CP_HOST=""                       # required: --cp-host or TRUSTED_PLATFORM_CP
 CP_BUNDLE_PORT="9443"            # CP serves /api/v1/acme/ca-bundle on this port
 URL=""                           # auto-derived from CP_HOST if not provided
 BUNDLE_PATH="${HOME}/.config/trusted-platform/ca/cp-ca-bundle.pem"
@@ -66,10 +68,9 @@ NO_LAUNCH=0
 ASSUME_YES=0
 QUIET=0
 
-# Dual-domain default: cp.example.com is the public-facing CN; 8443 is
-# the REST + WebUI port on a typical trusted-platform CP install.
-DEFAULT_CP_HOST="198.18.1.140"
-DEFAULT_URL_TEMPLATE="https://cp.example.com:8443/"
+# 8443 is the REST + WebUI port on a trusted-platform CP install; the
+# browser opens https://<cp-host>:8443/ unless --url says otherwise.
+WEBUI_PORT="8443"
 
 usage() {
 	cat <<USAGE
@@ -80,11 +81,11 @@ Usage: $0 [flags]
 
 Flags:
   --browser {chrome|firefox}    Target browser (default: chrome)
-  --cp <host-or-ip>             Control-plane host that serves the CA
-                                bundle endpoint. Default: ${DEFAULT_CP_HOST}
+  --cp-host <host-or-ip>        Control-plane host that serves the CA
+                                bundle endpoint (required)
   --bundle-port <port>          CP CA-bundle endpoint port (default: 9443)
   --url <url>                   URL to open in the browser
-                                (default: ${DEFAULT_URL_TEMPLATE})
+                                (default: https://<cp-host>:${WEBUI_PORT}/)
   --bundle <path>               Where to save / read the bundle
                                 (default: ${BUNDLE_PATH})
   --nickname <name>             Trust-store nickname for the CA
@@ -97,7 +98,7 @@ Flags:
   -h, --help                    This help
 
 Environment:
-  TRUSTED_PLATFORM_CP           Same as --cp
+  TRUSTED_PLATFORM_CP           Same as --cp-host
   TRUSTED_PLATFORM_BROWSER      Same as --browser
 USAGE
 }
@@ -120,13 +121,13 @@ confirm() {
 # Argument parsing
 # -----------------------------------------------------------------------------
 
-CP_HOST="${TRUSTED_PLATFORM_CP:-${DEFAULT_CP_HOST}}"
+CP_HOST="${TRUSTED_PLATFORM_CP:-}"
 BROWSER="${TRUSTED_PLATFORM_BROWSER:-${BROWSER}}"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--browser)        BROWSER="$2"; shift 2 ;;
-		--cp)             CP_HOST="$2"; shift 2 ;;
+		--cp-host)        CP_HOST="$2"; shift 2 ;;
 		--bundle-port)    CP_BUNDLE_PORT="$2"; shift 2 ;;
 		--url)            URL="$2"; shift 2 ;;
 		--bundle)         BUNDLE_PATH="$2"; shift 2 ;;
@@ -145,7 +146,8 @@ case "${BROWSER}" in
 	*) err "--browser must be 'chrome' or 'firefox' (got '${BROWSER}')" ;;
 esac
 
-[ -n "${URL}" ] || URL="${DEFAULT_URL_TEMPLATE}"
+[ -n "${CP_HOST}" ] || err "--cp-host is required (or set TRUSTED_PLATFORM_CP); there is no default control plane"
+[ -n "${URL}" ] || URL="https://${CP_HOST}:${WEBUI_PORT}/"
 
 # -----------------------------------------------------------------------------
 # Step 1: fetch the CA bundle from CP

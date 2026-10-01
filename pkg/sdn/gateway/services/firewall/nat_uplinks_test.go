@@ -30,23 +30,23 @@ import (
 // update rewrites the golden files: go test ./... -run Golden -update
 var update = flag.Bool("update", false, "rewrite NAT golden files")
 
-// dualUplinkConfig is the two-ISP shape the plan targets: AT&T is the
-// default, Comcast carries one destination prefix, one static 1:1 host
+// dualUplinkConfig is the two-ISP shape the plan targets: ISP A is the
+// default, ISP B carries one destination prefix, one static 1:1 host
 // sits on each.
 func dualUplinkConfig() NATConfig {
 	return NATConfig{
 		PortRangeStart: 1024,
 		PortRangeEnd:   65535,
-		InternalCIDR:   "198.18.0.0/24",
+		InternalCIDR:   "10.4.200.0/24",
 		Bridge:         "br-test",
 		Uplinks: []NATUplink{
-			{Name: "att", Port: "eth6", Addresses: []string{"99.12.246.36"}, Default: true},
-			{Name: "comcast", Port: "eth7", Addresses: []string{"96.65.171.20-96.65.171.21"}, PortRangeStart: 2048, PortRangeEnd: 60000,
-				Destinations: []string{"203.0.113.0/24", "198.51.100.0/25"}},
+			{Name: "isp-a", Port: "eth6", Addresses: []string{"198.51.100.4"}, Default: true},
+			{Name: "isp-b", Port: "eth7", Addresses: []string{"192.0.2.4-192.0.2.5"}, PortRangeStart: 2048, PortRangeEnd: 60000,
+				Destinations: []string{"198.51.100.128/25", "192.0.2.128/25"}},
 		},
 		Static: []StaticNAT{
-			{Internal: "198.18.0.10", External: "23.143.36.4"},
-			{Internal: "198.18.0.11", External: "96.65.171.22", Uplink: "comcast"},
+			{Internal: "10.4.200.10", External: "203.0.113.4"},
+			{Internal: "10.4.200.11", External: "192.0.2.6", Uplink: "isp-b"},
 		},
 	}
 }
@@ -63,10 +63,10 @@ func TestNATConfig_PlanValidation(t *testing.T) {
 			c.ExternalIP = "203.0.113.10"
 		}, wantErr: ErrStaticNeedsUplink},
 		"missing uplink name":   {mutate: func(c *NATConfig) { c.Uplinks[0].Name = "" }, wantErr: &ErrInvalidNATUplink{}},
-		"duplicate uplink name": {mutate: func(c *NATConfig) { c.Uplinks[1].Name = "att" }, wantErr: &ErrInvalidNATUplink{}},
+		"duplicate uplink name": {mutate: func(c *NATConfig) { c.Uplinks[1].Name = "isp-a" }, wantErr: &ErrInvalidNATUplink{}},
 		"no pool addresses":     {mutate: func(c *NATConfig) { c.Uplinks[0].Addresses = nil }, wantErr: &ErrInvalidNATUplink{}},
 		"bad pool address":      {mutate: func(c *NATConfig) { c.Uplinks[0].Addresses = []string{"fd00::1"} }, wantErr: &ErrInvalidNATUplink{}},
-		"reversed pool range":   {mutate: func(c *NATConfig) { c.Uplinks[1].Addresses = []string{"96.65.171.21-96.65.171.20"} }, wantErr: &ErrInvalidNATUplink{}},
+		"reversed pool range":   {mutate: func(c *NATConfig) { c.Uplinks[1].Addresses = []string{"192.0.2.5-192.0.2.4"} }, wantErr: &ErrInvalidNATUplink{}},
 		"bad uplink port range": {mutate: func(c *NATConfig) { c.Uplinks[1].PortRangeStart = 70; c.Uplinks[1].PortRangeEnd = 60 }, wantErr: &ErrInvalidNATUplink{}},
 		"bad destination":       {mutate: func(c *NATConfig) { c.Uplinks[1].Destinations = []string{"not-a-prefix"} }, wantErr: &ErrInvalidNATUplink{}},
 		"v6 destination":        {mutate: func(c *NATConfig) { c.Uplinks[1].Destinations = []string{"2001:db8::/32"} }, wantErr: &ErrInvalidNATUplink{}},
@@ -121,23 +121,23 @@ func TestNATConfig_PlanDefaults(t *testing.T) {
 	if plan.defaultIdx != 0 || !plan.uplinks[0].isDefault {
 		t.Fatalf("the first uplink is the default when none is marked: %+v", plan.uplinks)
 	}
-	if plan.uplinks[0].port != "att" {
+	if plan.uplinks[0].port != "isp-a" {
 		t.Fatalf("port defaults to the uplink name, got %q", plan.uplinks[0].port)
 	}
-	if plan.statics[0].uplink != "att" {
+	if plan.statics[0].uplink != "isp-a" {
 		t.Fatalf("a static with no uplink binds to the default, got %q", plan.statics[0].uplink)
 	}
 	// uplinkFor: pool member, static external, and the default fallback.
-	if got := plan.uplinkFor(mustAddr(t, "96.65.171.21")).name; got != "comcast" {
-		t.Errorf("pool member -> %q, want comcast", got)
+	if got := plan.uplinkFor(mustAddr(t, "192.0.2.5")).name; got != "isp-b" {
+		t.Errorf("pool member -> %q, want ispB", got)
 	}
-	if got := plan.uplinkFor(mustAddr(t, "96.65.171.22")).name; got != "comcast" {
-		t.Errorf("static external -> %q, want comcast", got)
+	if got := plan.uplinkFor(mustAddr(t, "192.0.2.6")).name; got != "isp-b" {
+		t.Errorf("static external -> %q, want ispB", got)
 	}
-	if got := plan.uplinkFor(mustAddr(t, "8.8.8.8")).name; got != "att" {
+	if got := plan.uplinkFor(mustAddr(t, "8.8.8.8")).name; got != "isp-a" {
 		t.Errorf("unknown address -> %q, want the default", got)
 	}
-	if got := plan.byName("nope").name; got != "att" {
+	if got := plan.byName("nope").name; got != "isp-a" {
 		t.Errorf("unknown name -> %q, want the default", got)
 	}
 	if got := poolSize(natPool{first: mustAddr(t, "10.0.0.1"), last: mustAddr(t, "10.0.0.4")}); got != 4 {
@@ -204,7 +204,7 @@ func TestNATGolden_DualUplink(t *testing.T) {
 	rules := nat.snatFlowRules(nat.internal)
 	assertGolden(t, "dual_uplink_snat", renderRules(rules))
 
-	// The selector chain: the default loads 1, Comcast's two destination
+	// The selector chain: the default loads 1, ISP B's two destination
 	// prefixes load 2 at the higher priority, and each pool commits on its
 	// own selector.
 	var selects, commits int
@@ -229,7 +229,7 @@ func TestNATGolden_StaticAndHairpin(t *testing.T) {
 	var rules []zoneflows.FlowRule
 	for _, st := range nat.plan.statics {
 		port := int32(6)
-		if st.uplink == "comcast" {
+		if st.uplink == "isp-b" {
 			port = 7
 		}
 		rules = append(rules, nat.staticFlowRules(st, port, nat.internal)...)
@@ -243,7 +243,7 @@ func TestNATGolden_StaticAndHairpin(t *testing.T) {
 			continue
 		}
 		hairpins++
-		if !strings.Contains(r.Actions, "nat(dst=198.18.0.1") || !strings.Contains(r.Actions, ",nat(src=") {
+		if !strings.Contains(r.Actions, "nat(dst=10.4.200.1") || !strings.Contains(r.Actions, ",nat(src=") {
 			t.Errorf("hairpin commit must DNAT and SNAT: %+v", r)
 		}
 	}
@@ -275,13 +275,13 @@ func TestNAT_StartDualUplinkInstallsPoolsAndStatics(t *testing.T) {
 			t.Fatalf("rule %d not cookie-scoped: %+v", i, r)
 		}
 	}
-	// Static on Comcast resolved eth7 -> 7, static on the default resolved eth6 -> 6.
+	// Static on ISP B resolved eth7 -> 7, static on the default resolved eth6 -> 6.
 	var sawIngress6, sawIngress7 bool
 	for _, r := range rules {
-		if strings.HasPrefix(r.Match, "in_port=6,dl_type=0x0800,nw_dst=23.143.36.4") {
+		if strings.HasPrefix(r.Match, "in_port=6,dl_type=0x0800,nw_dst=203.0.113.4") {
 			sawIngress6 = true
 		}
-		if strings.HasPrefix(r.Match, "in_port=7,dl_type=0x0800,nw_dst=96.65.171.22") {
+		if strings.HasPrefix(r.Match, "in_port=7,dl_type=0x0800,nw_dst=192.0.2.6") {
 			sawIngress7 = true
 		}
 	}
@@ -294,15 +294,15 @@ func TestNAT_StartDualUplinkInstallsPoolsAndStatics(t *testing.T) {
 	if len(h.Uplinks) != 2 {
 		t.Fatalf("health uplinks = %d, want 2", len(h.Uplinks))
 	}
-	att, comcast := h.Uplinks[0], h.Uplinks[1]
-	if !att.Default || att.PoolAddresses != 1 || att.Ports != 65535-1024+1 || att.Static != 1 {
-		t.Errorf("att health: %+v", att)
+	ispA, ispB := h.Uplinks[0], h.Uplinks[1]
+	if !ispA.Default || ispA.PoolAddresses != 1 || ispA.Ports != 65535-1024+1 || ispA.Static != 1 {
+		t.Errorf("isp-a health: %+v", ispA)
 	}
-	if comcast.Default || comcast.PoolAddresses != 2 || comcast.Ports != 60000-2048+1 || comcast.Static != 1 || comcast.PoolExhaustion {
-		t.Errorf("comcast health: %+v", comcast)
+	if ispB.Default || ispB.PoolAddresses != 2 || ispB.Ports != 60000-2048+1 || ispB.Static != 1 || ispB.PoolExhaustion {
+		t.Errorf("ispB health: %+v", ispB)
 	}
 	statics := nat.StaticRules()
-	if len(statics) != 2 || statics[1].Uplink != "comcast" {
+	if len(statics) != 2 || statics[1].Uplink != "isp-b" {
 		t.Errorf("StaticRules = %+v", statics)
 	}
 
@@ -336,12 +336,12 @@ func TestNAT_DNATBindsToTheOwningUplink(t *testing.T) {
 	}
 	before := len(controller.allRules())
 
-	// External in Comcast's pool -> Comcast's port (7); external nobody
+	// External in ISP B's pool -> ISP B's port (7); external nobody
 	// owns -> the default uplink's port (6).
-	if err := nat.AddDNAT(ctx, "tcp", mustAddrPort(t, "96.65.171.21:443"), mustAddrPort(t, "198.18.0.20:8443")); err != nil {
-		t.Fatalf("add dnat comcast: %v", err)
+	if err := nat.AddDNAT(ctx, "tcp", mustAddrPort(t, "192.0.2.5:443"), mustAddrPort(t, "10.4.200.20:8443")); err != nil {
+		t.Fatalf("add dnat ispB: %v", err)
 	}
-	if err := nat.AddDNAT(ctx, "udp", mustAddrPort(t, "203.0.113.99:53"), mustAddrPort(t, "198.18.0.53:53")); err != nil {
+	if err := nat.AddDNAT(ctx, "udp", mustAddrPort(t, "203.0.113.99:53"), mustAddrPort(t, "10.4.200.53:53")); err != nil {
 		t.Fatalf("add dnat default: %v", err)
 	}
 	rules := controller.allRules()[before:]
@@ -349,7 +349,7 @@ func TestNAT_DNATBindsToTheOwningUplink(t *testing.T) {
 		t.Fatalf("expected 4 DNAT rules, got %d", len(rules))
 	}
 	if !strings.HasPrefix(rules[0].Match, "in_port=7,") {
-		t.Errorf("comcast DNAT on wrong port: %+v", rules[0])
+		t.Errorf("ispB DNAT on wrong port: %+v", rules[0])
 	}
 	if !strings.HasPrefix(rules[2].Match, "in_port=6,") {
 		t.Errorf("default DNAT on wrong port: %+v", rules[2])
@@ -374,7 +374,7 @@ func TestNAT_SingleUplinkStillRequiresAPort(t *testing.T) {
 }
 
 func TestNATErrors_Messages(t *testing.T) {
-	if got := (&ErrInvalidNATUplink{Index: 1, Name: "att", Reason: "x"}).Error(); !strings.Contains(got, `"att"`) || !strings.Contains(got, "x") {
+	if got := (&ErrInvalidNATUplink{Index: 1, Name: "isp-a", Reason: "x"}).Error(); !strings.Contains(got, `"isp-a"`) || !strings.Contains(got, "x") {
 		t.Errorf("unexpected message %q", got)
 	}
 	if got := (&ErrInvalidNATUplink{Index: 1, Reason: "x"}).Error(); !strings.Contains(got, "index 1") {

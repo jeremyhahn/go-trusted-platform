@@ -425,7 +425,7 @@ func TestTemplateHandler_AssignProfileToDevice_ByDeviceID(t *testing.T) {
 	certPEM := newEKCertPEMForWebserviceTest(t)
 	devices.devices[1] = &entities.Device{ID: 1, EKCert: certPEM}
 	devices.devices[2] = &entities.Device{ID: 2}
-	profiles.profiles[100] = &entities.DeviceProfile{ID: 100, Name: "lab-node-5"}
+	profiles.profiles[100] = &entities.DeviceProfile{ID: 100, Name: "node-05"}
 
 	rec := assignRequest(t, handler.AssignProfileToDevice, "100", map[string]interface{}{"device_id": "1"})
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())

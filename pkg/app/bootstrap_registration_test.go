@@ -34,7 +34,7 @@ func TestParseDebugSinkFromCmdline_Present(t *testing.T) {
 
 	dir := t.TempDir()
 	cmdlinePath := filepath.Join(dir, "cmdline")
-	if err := os.WriteFile(cmdlinePath, []byte("root=/dev/sda1 platform_debug_sink=198.18.1.91:8080 quiet\n"), 0644); err != nil {
+	if err := os.WriteFile(cmdlinePath, []byte("root=/dev/sda1 platform_debug_sink=10.4.2.91:8080 quiet\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -52,8 +52,8 @@ func TestParseDebugSinkFromCmdline_Present(t *testing.T) {
 		}
 	}
 
-	if found != "198.18.1.91:8080" {
-		t.Fatalf("expected 198.18.1.91:8080, got %q", found)
+	if found != "10.4.2.91:8080" {
+		t.Fatalf("expected 10.4.2.91:8080, got %q", found)
 	}
 }
 
@@ -232,9 +232,9 @@ func TestBootstrapRegistrationPayloadFields(t *testing.T) {
 	t.Parallel()
 
 	reg := BootstrapRegistration{
-		Hostname:  "lab-node-2",
-		IP:        "198.18.1.239",
-		MAC:       "00:25:90:5e:02:aa",
+		Hostname:  "host-02",
+		IP:        "10.4.2.239",
+		MAC:       "00:25:90:00:02:aa",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Services: map[string]string{
 			"platformd": "running",
@@ -264,9 +264,9 @@ func TestBootstrapRegistrationURL(t *testing.T) {
 	t.Parallel()
 
 	// Verify the URL pattern matches what the bootstrap server expects.
-	sink := "198.18.1.91:8080"
-	hostname := "lab-node-2"
-	expected := "http://198.18.1.91:8080/installs/lab-node-2/registration.json"
+	sink := "10.4.2.91:8080"
+	hostname := "host-02"
+	expected := "http://10.4.2.91:8080/installs/host-02/registration.json"
 
 	got := "http://" + sink + "/installs/" + hostname + "/registration.json"
 	if got != expected {
@@ -278,12 +278,12 @@ func TestErrBootstrapRegistration(t *testing.T) {
 	t.Parallel()
 
 	cause := &ErrBootstrapRegistrationStatus{
-		Endpoint:   "http://198.18.1.91:8080/installs/lab-node-2/registration.json",
+		Endpoint:   "http://10.4.2.91:8080/installs/host-02/registration.json",
 		StatusCode: 500,
 	}
 
 	err := ErrBootstrapRegistration{
-		Endpoint: "http://198.18.1.91:8080/installs/lab-node-2/registration.json",
+		Endpoint: "http://10.4.2.91:8080/installs/host-02/registration.json",
 		Cause:    cause,
 	}
 
@@ -299,7 +299,7 @@ func TestErrBootstrapRegistrationStatus(t *testing.T) {
 	t.Parallel()
 
 	err := ErrBootstrapRegistrationStatus{
-		Endpoint:   "http://198.18.1.91:8080/installs/lab-node-2/registration.json",
+		Endpoint:   "http://10.4.2.91:8080/installs/host-02/registration.json",
 		StatusCode: 404,
 	}
 

@@ -45,7 +45,7 @@ func (r *stubConflictReporter) BridgeAddressProbeFailures() []app.BridgeAddressP
 func testProbeFailure() app.BridgeAddressProbeUnavailable {
 	return app.BridgeAddressProbeUnavailable{
 		Bridge:     "br-int",
-		Address:    "198.18.0.2/24",
+		Address:    "10.4.200.2/24",
 		Cause:      "arp: probe interface unavailable: operation not permitted",
 		DetectedAt: time.Date(2026, 9, 6, 2, 40, 0, 0, time.UTC),
 	}
@@ -54,7 +54,7 @@ func testProbeFailure() app.BridgeAddressProbeUnavailable {
 func testConflict() app.BridgeAddressConflict {
 	return app.BridgeAddressConflict{
 		Bridge:                "br-int",
-		Address:               "198.18.0.1/24",
+		Address:               "10.4.200.1/24",
 		LocalHardwareAddr:     "02:00:00:00:00:01",
 		ResponderHardwareAddr: "00:00:0c:9f:f0:14",
 		DetectedAt:            time.Date(2026, 9, 6, 2, 40, 0, 0, time.UTC),

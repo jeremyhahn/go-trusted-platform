@@ -67,7 +67,7 @@ const (
 	CommunityOpAdd CommunityOp = "add"
 
 	// CommunityOpRemove drops the matching communities from the path. Its
-	// values are matched as regular expressions, so "^401870:" removes a
+	// values are matched as regular expressions, so "^64512:" removes a
 	// whole block.
 	CommunityOpRemove CommunityOp = "remove"
 

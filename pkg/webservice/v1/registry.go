@@ -313,7 +313,7 @@ func NewDNSRegistrationHook(
 		//      pointing at the client IP. This is what makes
 		//      `gw.example.internal` resolvable from the moment the GW
 		//      finishes enroll-01 — without it, operators have to
-		//      query opaque `Super-Server-lab-node-1-gw-01.example.internal`
+		//      query opaque `Super-Server-node-01-gw-01.example.internal`
 		//      records to find each node.
 		//
 		// Wildcards, cross-zone SANs, and CN duplicates are filtered

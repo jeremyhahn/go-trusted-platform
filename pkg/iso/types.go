@@ -152,7 +152,7 @@ type AlpineConfig struct {
 	// bundled binaries must have.
 	Architecture string `yaml:"architecture" json:"architecture"`
 	// APKMirror is the INSTALL-time APK repository base URL (e.g.
-	// "http://198.51.100.11:8080"). It is distinct from Mirror, which is
+	// "http://10.4.6.11:8080"). It is distinct from Mirror, which is
 	// the BUILD-time pre-fetch source: APKMirror is baked into the kernel
 	// cmdline (platform_apk_mirror=) so a node that has no /media/cdrom —
 	// the PXE case, where only vmlinuz+initramfs are fetched over the

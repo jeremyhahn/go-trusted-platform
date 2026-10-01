@@ -57,28 +57,28 @@ func TestApkRepositoryLines(t *testing.T) {
 		{
 			name:         "cdrom present wins over mirror",
 			cdromPresent: true,
-			mirror:       "http://198.51.100.11:8080",
+			mirror:       "http://10.4.6.11:8080",
 			branch:       "v3.22",
 			want:         []string{"/media/cdrom/apks", "/media/cdrom/apks-prefetch"},
 		},
 		{
 			name:         "configured mirror",
 			cdromPresent: false,
-			mirror:       "http://198.51.100.11:8080",
+			mirror:       "http://10.4.6.11:8080",
 			branch:       "v3.22",
 			want: []string{
-				"http://198.51.100.11:8080/v3.22/main",
-				"http://198.51.100.11:8080/v3.22/community",
+				"http://10.4.6.11:8080/v3.22/main",
+				"http://10.4.6.11:8080/v3.22/community",
 			},
 		},
 		{
 			name:         "configured mirror with trailing slash is trimmed",
 			cdromPresent: false,
-			mirror:       "http://198.51.100.11:8080/",
+			mirror:       "http://10.4.6.11:8080/",
 			branch:       "v3.22",
 			want: []string{
-				"http://198.51.100.11:8080/v3.22/main",
-				"http://198.51.100.11:8080/v3.22/community",
+				"http://10.4.6.11:8080/v3.22/main",
+				"http://10.4.6.11:8080/v3.22/community",
 			},
 		},
 		{

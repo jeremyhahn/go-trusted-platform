@@ -100,18 +100,18 @@ network:
 	discovered := []DiscoveredNode{
 		{
 			NodeConfig: NodeConfig{
-				Hostname: "lab-node-3",
+				Hostname: "node-03",
 				Role:     RoleWorker,
-				MACs:     []string{"ac:1f:6b:76:f3:4c"},
+				MACs:     []string{"ac:1f:6b:00:00:4c"},
 				Overrides: map[string]interface{}{
 					"tpm": map[string]interface{}{
 						"idevid": map[string]interface{}{
-							"serial": "lab-node-3-compute-01",
+							"serial": "node-03-compute-01",
 						},
 					},
 				},
 			},
-			DiscoveredMACs: []string{"ac:1f:6b:76:f3:4c"},
+			DiscoveredMACs: []string{"ac:1f:6b:00:00:4c"},
 		},
 	}
 
@@ -145,8 +145,8 @@ network:
 		t.Fatal("os should be a map in merged config")
 	}
 	// Node identity injection should win over the template placeholder.
-	if osMap["hostname"] != "lab-node-3" {
-		t.Errorf("os.hostname = %v, want lab-node-3 (injected from NodeConfig.Hostname)", osMap["hostname"])
+	if osMap["hostname"] != "node-03" {
+		t.Errorf("os.hostname = %v, want node-03 (injected from NodeConfig.Hostname)", osMap["hostname"])
 	}
 	// Base template value should be preserved.
 	if osMap["timezone"] != "UTC" {
@@ -166,8 +166,8 @@ network:
 	if !ok {
 		t.Fatal("tpm.idevid should be a map")
 	}
-	if idevidMap["serial"] != "lab-node-3-compute-01" {
-		t.Errorf("tpm.idevid.serial = %v, want lab-node-3-compute-01", idevidMap["serial"])
+	if idevidMap["serial"] != "node-03-compute-01" {
+		t.Errorf("tpm.idevid.serial = %v, want node-03-compute-01", idevidMap["serial"])
 	}
 
 	// Network from base template should be preserved (no override).
@@ -374,8 +374,8 @@ bmc:
 				{
 					Name:        "eth0",
 					Type:        installer.InterfaceTypeStatic,
-					IPv4Address: "198.18.1.140/24",
-					IPv4Gateway: "198.18.1.1",
+					IPv4Address: "10.4.2.140/24",
+					IPv4Gateway: "10.4.2.1",
 				},
 			},
 		},
@@ -442,11 +442,11 @@ bmc:
 	if iface["type"] != "static" {
 		t.Errorf("interface type = %v, want static", iface["type"])
 	}
-	if iface["ipv4-address"] != "198.18.1.140/24" {
-		t.Errorf("interface ipv4-address = %v, want 198.18.1.140/24 (YAML-tag key)", iface["ipv4-address"])
+	if iface["ipv4-address"] != "10.4.2.140/24" {
+		t.Errorf("interface ipv4-address = %v, want 10.4.2.140/24 (YAML-tag key)", iface["ipv4-address"])
 	}
-	if iface["ipv4-gateway"] != "198.18.1.1" {
-		t.Errorf("interface ipv4-gateway = %v, want 198.18.1.1", iface["ipv4-gateway"])
+	if iface["ipv4-gateway"] != "10.4.2.1" {
+		t.Errorf("interface ipv4-gateway = %v, want 10.4.2.1", iface["ipv4-gateway"])
 	}
 
 	// The injected tenant key must use the device-schema spelling.
@@ -487,7 +487,7 @@ func TestBuildMergedConfig_OverrideBeatsGlobalIdentity(t *testing.T) {
 			Hostname: "gw-01",
 			Role:     RoleGateway,
 			Overrides: map[string]interface{}{
-				"domain": "gw.trusted-platform.io",
+				"domain": "gw.example.com",
 			},
 		},
 	}
@@ -502,8 +502,8 @@ func TestBuildMergedConfig_OverrideBeatsGlobalIdentity(t *testing.T) {
 	if err := json.Unmarshal(merged, &got); err != nil {
 		t.Fatalf("merged config should be valid JSON: %v", err)
 	}
-	if got["domain"] != "gw.trusted-platform.io" {
-		t.Errorf("domain = %v, want gw.trusted-platform.io (per-node override wins)", got["domain"])
+	if got["domain"] != "gw.example.com" {
+		t.Errorf("domain = %v, want gw.example.com (per-node override wins)", got["domain"])
 	}
 }
 

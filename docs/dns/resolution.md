@@ -20,7 +20,7 @@ DNS resolution is handled by the custom `TrustedPlatformPlugin` which integrates
 8. **Response**: `buildResponse()` assembles the reply — matching records as an authoritative answer, or a negative answer distinguishing NXDOMAIN from NODATA (see [Negative answers](#negative-answers))
 
 ```
-Query: myhost.trusted-platform.internal A
+Query: myhost.example.internal A
            │
            ▼
 ┌──────────────────────┐
@@ -305,7 +305,7 @@ The DNS service provides a `net.Resolver` instance for programmatic DNS lookups 
 resolver := dnsService.Resolver()
 
 // Use for lookups
-addrs, err := resolver.LookupHost(ctx, "myhost.trusted-platform.internal")
+addrs, err := resolver.LookupHost(ctx, "myhost.example.internal")
 ```
 
 The resolver is configured to:

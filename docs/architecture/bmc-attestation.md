@@ -243,7 +243,7 @@ This package becomes active again when any of the following happens:
 ### What covers the trust gap in the meantime
 
 Host-side TPM 2.0 attestation via go-xkms is already implemented and
-works on every box in the fleet (all 5 mini-0x Supermicro units have
+works on every box in the fleet (all 5 node-0x Supermicro units have
 an Infineon SLB9665 TPM 2.0, the R640 reports a TPM 2.0 via
 `Systems/System.Embedded.1.TrustedModules`). The existing
 `pkg/api/daemon/tpm_grpc_service.go` wraps the comprehensive xkms

@@ -39,34 +39,34 @@ func (s *staticSnapshot) Snapshot() *gwstate.Snapshot {
 
 func metricsSnapshot() *gwstate.Snapshot {
 	return &gwstate.Snapshot{
-		GatewayID: "lab-node-1-gateway",
+		GatewayID: "node-01-gateway",
 		Services: []gwstate.ServiceState{
 			{Name: "tunnels", Active: true, Healthy: true},
 			{Name: "dhcp", Active: false, Healthy: false, RefusedReason: "no allocator"},
 		},
 		BGP: gwstate.BGPState{
 			Peers: []gwstate.BGPPeerState{{
-				Address: "10.255.0.2", ASN: 401870, State: "Established", UptimeSeconds: 3600,
+				Address: "10.255.0.2", ASN: 64512, State: "Established", UptimeSeconds: 3600,
 				PrefixesReceived: 120, PrefixesAccepted: 118, PrefixesSent: 2,
 				BFD: &gwstate.BFDState{State: "up", FailureTransitions: 4},
 			}, {
-				Address: "10.255.0.6", ASN: 401870, State: "Active",
+				Address: "10.255.0.6", ASN: 64512, State: "Active",
 			}},
 		},
 		Tunnels: []gwstate.TunnelState{{
-			Name: "gre-mia", Transport: "ipsec", State: "up", Uplink: "att",
+			Name: "gre-pri", Transport: "ipsec", State: "up", Uplink: "isp-a",
 			RxBytes: 4096, TxBytes: 2048, RxPackets: 32, TxPackets: 16,
 			LastRekey: time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC),
 		}, {
-			Name: "gre-atl", Transport: "gre", State: "down",
+			Name: "gre-alt", Transport: "gre", State: "down",
 		}},
 		Uplinks: []gwstate.UplinkState{{
-			Name: "att", Table: 101, RuleCount: 2, Tunnels: []string{"gre-mia"},
+			Name: "isp-a", Table: 101, RuleCount: 2, Tunnels: []string{"gre-pri"},
 		}},
 		HostFirewall: &gwstate.HostFirewallState{Active: true, Installed: true, Fingerprint: "sha256:abc", RuleCount: 10},
 		Firewall:     &gwstate.FirewallState{Active: true, FlowCount: 26},
 		NAT: &gwstate.NATState{Active: true, DNATRules: 3, Uplinks: []gwstate.NATUplinkState{
-			{Name: "att", PoolAddresses: 8, Ports: 64512},
+			{Name: "isp-a", PoolAddresses: 8, Ports: 64512},
 		}},
 		Pipeline: &gwstate.PipelineState{Installed: true, Bridge: "br-fabric", Terminal: "normal"},
 	}
@@ -99,12 +99,12 @@ func TestCollector_ExportsEverySection(t *testing.T) {
 	expected := `
 # HELP gatewayd_bgp_peer_established 1 when the BGP session is established, 0 otherwise.
 # TYPE gatewayd_bgp_peer_established gauge
-gatewayd_bgp_peer_established{asn="401870",gateway="lab-node-1-gateway",peer="10.255.0.2"} 1
-gatewayd_bgp_peer_established{asn="401870",gateway="lab-node-1-gateway",peer="10.255.0.6"} 0
+gatewayd_bgp_peer_established{asn="64512",gateway="node-01-gateway",peer="10.255.0.2"} 1
+gatewayd_bgp_peer_established{asn="64512",gateway="node-01-gateway",peer="10.255.0.6"} 0
 # HELP gatewayd_tunnel_up 1 when the tunnel link is up, 0 otherwise.
 # TYPE gatewayd_tunnel_up gauge
-gatewayd_tunnel_up{gateway="lab-node-1-gateway",transport="ipsec",tunnel="gre-mia",uplink="att"} 1
-gatewayd_tunnel_up{gateway="lab-node-1-gateway",transport="gre",tunnel="gre-atl",uplink=""} 0
+gatewayd_tunnel_up{gateway="node-01-gateway",transport="ipsec",tunnel="gre-pri",uplink="isp-a"} 1
+gatewayd_tunnel_up{gateway="node-01-gateway",transport="gre",tunnel="gre-alt",uplink=""} 0
 `
 	require.NoError(t, testutil.GatherAndCompare(registry, strings.NewReader(expected),
 		"gatewayd_bgp_peer_established", "gatewayd_tunnel_up"))
@@ -112,7 +112,7 @@ gatewayd_tunnel_up{gateway="lab-node-1-gateway",transport="gre",tunnel="gre-atl"
 	bfd := `
 # HELP gatewayd_bfd_failure_transitions_total BFD session failures since the session was created.
 # TYPE gatewayd_bfd_failure_transitions_total counter
-gatewayd_bfd_failure_transitions_total{gateway="lab-node-1-gateway",peer="10.255.0.2"} 4
+gatewayd_bfd_failure_transitions_total{gateway="node-01-gateway",peer="10.255.0.2"} 4
 `
 	require.NoError(t, testutil.GatherAndCompare(registry, strings.NewReader(bfd),
 		"gatewayd_bfd_failure_transitions_total"), "only the peer that runs BFD reports one")
@@ -140,7 +140,7 @@ func TestCollector_AbsentSectionsEmitNoSeries(t *testing.T) {
 	t.Run("a tunnel never re-keyed emits no rekey timestamp", func(t *testing.T) {
 		source.snap = &gwstate.Snapshot{
 			GatewayID: "bare",
-			Tunnels:   []gwstate.TunnelState{{Name: "gre-atl", State: "up"}},
+			Tunnels:   []gwstate.TunnelState{{Name: "gre-alt", State: "up"}},
 		}
 		count, err := testutil.GatherAndCount(registry, "gatewayd_tunnel_last_rekey_timestamp_seconds")
 		require.NoError(t, err)

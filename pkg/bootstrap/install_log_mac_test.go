@@ -28,7 +28,7 @@ func TestSanitizeMACForPath(t *testing.T) {
 		{"AA:BB:CC:DD:EE:FF", "aa-bb-cc-dd-ee-ff"},
 		{"aa-bb-cc-dd-ee-ff", "aa-bb-cc-dd-ee-ff"},
 		{"AABBCCDDEEFF", "aa-bb-cc-dd-ee-ff"},
-		{"00:25:90:5e:02:aa", "00-25-90-5e-02-aa"},
+		{"00:25:90:00:02:aa", "00-25-90-00-02-aa"},
 	}
 	for _, tc := range cases {
 		if got := sanitizeMACForPath(tc.in); got != tc.want {
@@ -61,14 +61,14 @@ func TestSanitizeMACForPath_Invalid(t *testing.T) {
 // the fragile hostname path.
 func TestCandidateURLs(t *testing.T) {
 	p := &InstallLogPoller{
-		Hostname: "lab-node-2",
+		Hostname: "node-02",
 		MACs:     []string{"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"},
 	}
 	got := p.candidateURLs("http://sink:8080")
 	want := []string{
 		"http://sink:8080/installs/mac/aa-bb-cc-dd-ee-ff/install.log",
 		"http://sink:8080/installs/mac/11-22-33-44-55-66/install.log",
-		"http://sink:8080/installs/lab-node-2/install.log",
+		"http://sink:8080/installs/node-02/install.log",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d URLs %v, want %d %v", len(got), got, len(want), want)
@@ -84,9 +84,9 @@ func TestCandidateURLs(t *testing.T) {
 // MACs known (older orchestrator configs, dry runs). The hostname path
 // is still produced so older deployments continue to work.
 func TestCandidateURLs_HostnameOnly(t *testing.T) {
-	p := &InstallLogPoller{Hostname: "lab-node-2"}
+	p := &InstallLogPoller{Hostname: "node-02"}
 	got := p.candidateURLs("http://sink:8080")
-	want := []string{"http://sink:8080/installs/lab-node-2/install.log"}
+	want := []string{"http://sink:8080/installs/node-02/install.log"}
 	if len(got) != 1 || got[0] != want[0] {
 		t.Fatalf("got %v, want %v", got, want)
 	}

@@ -45,9 +45,9 @@ func TestPipelineTerminalForBridge(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	owned := &externalIDsClient{ids: map[string]string{zoneflows.PipelineOwnerKey: "gatewayd:lab-node-1-gateway"}}
+	owned := &externalIDsClient{ids: map[string]string{zoneflows.PipelineOwnerKey: "gatewayd:node-01-gateway"}}
 	assert.Equal(t, zoneflows.TerminalNormal, pipelineTerminalForBridge(context.Background(), owned, "br-int", logger))
-	assert.Contains(t, buf.String(), "gatewayd:lab-node-1-gateway", "the owner is observed")
+	assert.Contains(t, buf.String(), "gatewayd:node-01-gateway", "the owner is observed")
 	assert.Contains(t, buf.String(), "dormant")
 
 	buf.Reset()

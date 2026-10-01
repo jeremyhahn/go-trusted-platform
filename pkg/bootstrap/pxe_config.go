@@ -237,8 +237,8 @@ type DeployerConfig struct {
 	// container's SMB share for virtual-media boot. Defaults to Host when
 	// unset. Override when the orchestrator and the BMC reach the deployer
 	// on different interfaces -- e.g. orchestrator SSHes via mgmt
-	// (198.51.100.91) but the BMC's L3 path lands on the bootstrap-net
-	// interface (198.18.1.91). The SMB URL becomes
+	// (10.4.6.91) but the BMC's L3 path lands on the bootstrap-net
+	// interface (10.4.2.91). The SMB URL becomes
 	// smb://<smb_host>/boot/<iso>.
 	SMBHost string `yaml:"smb_host,omitempty"`
 
@@ -280,7 +280,7 @@ type DeployerConfig struct {
 
 	// BootstrapServerIP is the IP the bootstrap container's
 	// DHCP/TFTP/HTTP services bind to. Default in the entrypoint is
-	// 172.16.201.1, suitable for a deployment that already has the
+	// 192.0.2.1, suitable for a deployment that already has the
 	// provisioning subnet configured. For first bootstrap on a
 	// fresh deploy (no provisioning subnet yet) this MUST point at
 	// an IP the deployer host already holds, typically the same
@@ -309,20 +309,20 @@ type DeployerConfig struct {
 
 	// BootstrapDHCPStart and BootstrapDHCPEnd bound the lease pool
 	// the bootstrap container offers. Empty falls through to the
-	// entrypoint defaults (172.16.201.100 / .200).
+	// entrypoint defaults (192.0.2.100 / .200).
 	BootstrapDHCPStart string `yaml:"bootstrap_dhcp_start,omitempty"`
 	BootstrapDHCPEnd   string `yaml:"bootstrap_dhcp_end,omitempty"`
 
 	// BootstrapGateway is the default gateway advertised in DHCP
-	// offers. Empty falls through to entrypoint default (172.16.201.1).
+	// offers. Empty falls through to entrypoint default (192.0.2.1).
 	BootstrapGateway string `yaml:"bootstrap_gateway,omitempty"`
 
 	// BootstrapDNS is the DNS server advertised in DHCP offers.
-	// Empty falls through to entrypoint default (172.16.201.1).
+	// Empty falls through to entrypoint default (192.0.2.1).
 	BootstrapDNS string `yaml:"bootstrap_dns,omitempty"`
 
 	// BootstrapAPKMirror is the install-time APK repository base URL
-	// advertised to PXE clients (e.g. http://198.51.100.11:8080). It is
+	// advertised to PXE clients (e.g. http://10.4.6.11:8080). It is
 	// threaded to the bootstrap container as BOOTSTRAP_APK_MIRROR, which the
 	// PXE boot cmdline turns into alpine_repo=<url>/vX.Y/main (diskless live
 	// root) and platform_apk_mirror=<url> (post-switch-root install repo).
@@ -346,7 +346,7 @@ type DeployerConfig struct {
 	// PXEServiceHost names the platform node that should host the
 	// persistent PXE/DHCP service after Phase 5 hand-off. Empty means
 	// "the gateway role" (current default behaviour). Set to a hostname
-	// (e.g. "lab-node-2") to run PXE on the control-plane, or to a custom
+	// (e.g. "node-02") to run PXE on the control-plane, or to a custom
 	// node hostname for dedicated PXE deployments. The orchestrator
 	// passes this value to platformd's pxe-service init at hand-off
 	// time. Phase 2 (transient bootstrap container) still runs on the
@@ -666,7 +666,7 @@ func (n *NodeConfig) StaticIPv4s() []string {
 		if addr == "" {
 			continue
 		}
-		// Strip CIDR suffix if present ("198.18.1.140/24" -> "198.18.1.140").
+		// Strip CIDR suffix if present ("10.4.2.140/24" -> "10.4.2.140").
 		if slash := strings.Index(addr, "/"); slash > 0 {
 			addr = addr[:slash]
 		}

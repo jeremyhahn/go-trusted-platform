@@ -70,7 +70,7 @@ sdn:
 
     # Network addresses
     underlay_ip: "10.0.0.1"
-    overlay_ip: "2602:f5bb:1::1"
+    overlay_ip: "2001:db8:1::1"
 
     # Certificate for mTLS
     certificate: "/etc/platformd/certs/gateway.crt"
@@ -289,7 +289,7 @@ sdn:
         enabled: true
 
         # Regional pool
-        pool: "2602:f5bb:0001::/48"
+        pool: "2001:db8:0001::/48"
 
         # Inactivity timeout (addresses are permanent until inactive)
         # Nodes keep their IP forever as long as they connect within this window
@@ -447,7 +447,7 @@ sdn:
             - "65001:100"
 
         # Regional prefix (datacenter speakers only)
-        - prefix: "2602:f5bb:0001::/48"
+        - prefix: "2001:db8:0001::/48"
           origin: igp
           speaker_role: datacenter
 ```
@@ -677,8 +677,8 @@ sdn:
         snat_pools:
           - name: "egress-pool"
             addresses:
-              - "23.143.36.10"
-              - "23.143.36.11"
+              - "203.0.113.10"
+              - "203.0.113.11"
             port_range:
               start: 1024
               end: 65535
@@ -689,8 +689,8 @@ sdn:
           shared_space: "100.64.0.0/10"
           port_block_size: 1024
           external_addresses:
-            - "23.143.36.20"
-            - "23.143.36.21"
+            - "203.0.113.20"
+            - "203.0.113.21"
 ```
 
 ### Health Checks
@@ -821,7 +821,7 @@ sdn:
     enabled: true
     node_id: "gw-na-east-01"
     underlay_ip: "10.0.0.1"
-    overlay_ip: "2602:f5bb:1::1"
+    overlay_ip: "2001:db8:1::1"
     log_level: "info"
 
     certificate: "/etc/platformd/certs/gateway.crt"
@@ -890,7 +890,7 @@ sdn:
           include_coordinators: true
       ipv6_allocation:
         enabled: true
-        pool: "2602:f5bb:0001::/48"
+        pool: "2001:db8:0001::/48"
         lease:
           duration: 720h
           renewal_window: 168h

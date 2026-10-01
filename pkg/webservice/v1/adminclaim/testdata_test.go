@@ -132,7 +132,7 @@ func (p *pki) adminLeaf(t *testing.T) (*x509.Certificate, []byte, crypto.Signer)
 	t.Helper()
 	return p.issue(t, leafOptions{
 		commonName: "admin",
-		spiffeURI:  "spiffe://trusted-platform.internal/tenant/system/user/admin",
+		spiffeURI:  "spiffe://example.internal/tenant/system/user/admin",
 	})
 }
 

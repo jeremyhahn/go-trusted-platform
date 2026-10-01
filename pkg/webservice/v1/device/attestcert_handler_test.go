@@ -156,7 +156,7 @@ func TestAttestCertHandler_StatusMapping(t *testing.T) {
 	}
 	for code, want := range cases {
 		t.Run(code.String(), func(t *testing.T) {
-			svc := &stubRecordAttestCertService{err: status.Error(code, "device: attestation certificate refused for device 42; nothing recorded: ca[lab-node-3]: lacks tcg-cap-verifiedTPMRestricted")}
+			svc := &stubRecordAttestCertService{err: status.Error(code, "device: attestation certificate refused for device 42; nothing recorded: ca[node-03]: lacks tcg-cap-verifiedTPMRestricted")}
 			rec := recordPost(t, newRecordHandler(svc), "42", "")
 			assert.Equal(t, want, rec.Code)
 			assert.Contains(t, rec.Body.String(), "nothing recorded", "the refusal reason reaches the caller")

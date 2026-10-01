@@ -1,4 +1,3 @@
-ORG                     := automatethethingsllc
 TARGET_OS               := linux
 TARGET_ARCH             := $(shell uname -m)
 
@@ -425,7 +424,10 @@ CONFIG_YAML                 ?= config.dev.server.yaml
 
 ROOT_CA                     ?= root-ca
 INTERMEDIATE_CA             ?= intermediate-ca
-DOMAIN                      ?= trusted-platform.io
+# DOMAIN has no default: it is a deployment value. webservice-verify-tls
+# requires it, and SWAGGER_HOST follows it (unset leaves the OpenAPI host
+# empty, so the docs resolve against whichever host serves them).
+DOMAIN                      ?=
 
 SOFTHSM_DIR                 ?= /usr/local/bin
 SOFTHSM_LIB                 ?= /usr/local/lib/softhsm/libsofthsm2.so
@@ -1011,9 +1013,8 @@ build-public-html-host:
 	# Configure SwaggerInfo
 	sed -i '/var SwaggerInfo = &swag.Spec{/,/}}/c\var SwaggerInfo = \&swag.Spec{\n\tVersion:          "$(APP_VERSION)",\n\tHost:             "$(SWAGGER_HOST)",\n\tBasePath:         "/api/v1",\n\tSchemes:          []string{},\n\tTitle:            "Trusted Platform",\n\tDescription:      "The Trusted Platform RESTful Web Services API",\n\tInfoInstanceName: "swagger",\n\tSwaggerTemplate:  docTemplate,\n\tLeftDelim:        "{{",\n\tRightDelim:       "}}",' $(WEB_PUBLIC_HTML)/swagger/docs.go
 
-	# Set the version and host annotations
+	# Set the version annotation
 	sed -i 's|@version .*|@version $(APP_VERSION)|g' pkg/webservice/webserver_v1.go
-	sed -i 's|@host .*|@host $(SWAGGER_HOST)|g' pkg/webservice/webserver_v1.go
 
 	# Copy into the pkg directory for debugging
 	-cp -R $(WEB_PUBLIC_HTML)/swagger pkg/$(WEB_PUBLIC_HTML)/
@@ -1048,7 +1049,6 @@ swagger-ui:
 		rm -rf swagger-ui
 	sed -i '/var SwaggerInfo = &swag.Spec{/,/}}/c\var SwaggerInfo = \&swag.Spec{\n\tVersion:          "$(APP_VERSION)",\n\tHost:             "$(SWAGGER_HOST)",\n\tBasePath:         "/api/v1",\n\tSchemes:          []string{},\n\tTitle:            "Trusted Platform",\n\tDescription:      "The Trusted Platform RESTful Web Services API",\n\tInfoInstanceName: "swagger",\n\tSwaggerTemplate:  docTemplate,\n\tLeftDelim:        "{{",\n\tRightDelim:       "}}",' $(WEB_PUBLIC_HTML)/swagger/docs.go
 	sed -i 's|@version .*|@version $(APP_VERSION)|g' pkg/webservice/webserver_v1.go
-	sed -i 's|@host .*|@host $(SWAGGER_HOST)|g' pkg/webservice/webserver_v1.go
 
 
 # =============================================================================
@@ -1216,6 +1216,7 @@ webservice: build-debug config
 
 .PHONY: webservice-verify-tls
 webservice-verify-tls:
+	@test -n "$(DOMAIN)" || { echo "webservice-verify-tls: set DOMAIN to the deployment domain the CA was issued for" >&2; exit 2; }
 	openssl s_client \
 		-connect localhost:8443 \
 		-showcerts \

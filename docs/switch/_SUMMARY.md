@@ -331,7 +331,7 @@ docs/switch/
 
 All documentation files are located in:
 ```
-/home/jhahn/sources/go-trusted-platform/docs/switch/
+docs/switch/
 ```
 
 ## Status

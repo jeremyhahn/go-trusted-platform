@@ -31,7 +31,7 @@ func TestParseInstallLogExitCode(t *testing.T) {
 	}{
 		{"no manifest", "just a log line\nanother\n", 0},
 		{"clean zero", "=== POSTMORTEM MANIFEST ===\nexit_code: 0\n", 0},
-		{"non-zero", "=== POSTMORTEM MANIFEST ===\nexit_code: 42\nhostname: lab-node-2\n", 42},
+		{"non-zero", "=== POSTMORTEM MANIFEST ===\nexit_code: 42\nhostname: node-02\n", 42},
 		{"negative", "exit_code: -1\n", -1},
 		{"malformed not-a-number falls back to zero", "exit_code: oops\n", 0},
 		{"whitespace around digits", "   exit_code:   7   \n", 7},
@@ -65,9 +65,9 @@ func TestInstallLogResultSuccess(t *testing.T) {
 // return Success once the log becomes available.
 func TestInstallLogPollerWait_SuccessAfterRetries(t *testing.T) {
 	var hits atomic.Int64
-	body := "=== POSTMORTEM MANIFEST ===\nexit_code: 0\nhostname: lab-node-2\n=== END POSTMORTEM ===\n"
+	body := "=== POSTMORTEM MANIFEST ===\nexit_code: 0\nhostname: node-02\n=== END POSTMORTEM ===\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/installs/lab-node-2/install.log" {
+		if r.URL.Path != "/installs/node-02/install.log" {
 			http.Error(w, "wrong path", http.StatusBadRequest)
 			return
 		}
@@ -82,7 +82,7 @@ func TestInstallLogPollerWait_SuccessAfterRetries(t *testing.T) {
 
 	p := &InstallLogPoller{
 		BaseURL:  srv.URL,
-		Hostname: "lab-node-2",
+		Hostname: "node-02",
 		Interval: 20 * time.Millisecond,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -110,13 +110,13 @@ func TestInstallLogPollerWait_SuccessAfterRetries(t *testing.T) {
 // non-zero exit code. Poller should still return Found=true so the
 // orchestrator can surface the log, but Success() must be false.
 func TestInstallLogPollerWait_FailureExitCode(t *testing.T) {
-	body := "=== POSTMORTEM MANIFEST ===\nexit_code: 42\nhostname: lab-node-2\n"
+	body := "=== POSTMORTEM MANIFEST ===\nexit_code: 42\nhostname: node-02\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
 
-	p := &InstallLogPoller{BaseURL: srv.URL, Hostname: "lab-node-2", Interval: 10 * time.Millisecond}
+	p := &InstallLogPoller{BaseURL: srv.URL, Hostname: "node-02", Interval: 10 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	res, err := p.Wait(ctx)
@@ -139,7 +139,7 @@ func TestInstallLogPollerWait_ContextTimeout(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	p := &InstallLogPoller{BaseURL: srv.URL, Hostname: "lab-node-2", Interval: 5 * time.Millisecond}
+	p := &InstallLogPoller{BaseURL: srv.URL, Hostname: "node-02", Interval: 5 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	res, err := p.Wait(ctx)
@@ -175,7 +175,7 @@ func TestInstallLogPollerWait_IgnoresStaleLog(t *testing.T) {
 
 	p := &InstallLogPoller{
 		BaseURL:  srv.URL,
-		Hostname: "lab-node-2",
+		Hostname: "node-02",
 		Since:    time.Now(), // reject anything older than now
 		Interval: 5 * time.Millisecond,
 	}
@@ -205,7 +205,7 @@ func TestInstallLogPollerWait_SinceZeroAllowsAny(t *testing.T) {
 
 	p := &InstallLogPoller{
 		BaseURL:  srv.URL,
-		Hostname: "lab-node-2",
+		Hostname: "node-02",
 		Interval: 5 * time.Millisecond,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -228,7 +228,7 @@ func TestInstallLogPollerWait_TransientTransportError(t *testing.T) {
 	// polling and eventually exit via context.
 	p := &InstallLogPoller{
 		BaseURL:  "http://127.0.0.1:1",
-		Hostname: "lab-node-2",
+		Hostname: "node-02",
 		Interval: 5 * time.Millisecond,
 		HTTPClient: &http.Client{
 			Timeout: 100 * time.Millisecond,

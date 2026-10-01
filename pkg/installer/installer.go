@@ -1061,7 +1061,7 @@ func (i *installer) installOS(ctx context.Context, diskInfo *DiskInfo) error {
 	// console getty, sshd_config overrides, and other operator
 	// access surfaces. Silently ignoring a failure ships a node
 	// that looks "installed" but has no way for an operator to
-	// reach it — exactly the state the 2026-04-08 lab-node-2 install
+	// reach it — exactly the state the 2026-04-08 node-02 install
 	// hit when an inline-script path bug caused the script to fail
 	// with exit 2 and the installer logged a warning then continued
 	// with an unreachable OS. If a deployment really wants to tolerate

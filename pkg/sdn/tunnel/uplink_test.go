@@ -25,8 +25,8 @@ import (
 )
 
 func attUplink() UplinkConfig {
-	return UplinkConfig{Name: "att", Interface: "eth6", Table: 101, GatewayV4: "99.12.246.38", GatewayV6: "2001:db8::1",
-		Addresses: []string{"99.12.246.36/29", "2001:db8::36/64"}}
+	return UplinkConfig{Name: "isp-a", Interface: "eth6", Table: 101, GatewayV4: "198.51.100.6", GatewayV6: "2001:db8::1",
+		Addresses: []string{"198.51.100.4/29", "2001:db8::36/64"}}
 }
 
 func uplinkMock() *mockNetlinkOps {
@@ -72,8 +72,8 @@ func TestUplinkManager_EnsureUplink(t *testing.T) {
 	u := newUplinkManagerWithOps(testLogger(), mock)
 	cfg := attUplink()
 	require.NoError(t, u.EnsureUplink(context.Background(), cfg))
-	assert.True(t, u.Has("att"))
-	assert.False(t, u.Has("comcast"))
+	assert.True(t, u.Has("isp-a"))
+	assert.False(t, u.Has("isp-b"))
 
 	require.Len(t, mock.routes, 2, "a v4 and a v6 default in table 101")
 	for _, r := range mock.routes {
@@ -82,7 +82,7 @@ func TestUplinkManager_EnsureUplink(t *testing.T) {
 	}
 	require.Len(t, mock.rules, 2, "one source rule per address")
 	assert.Equal(t, vnl.FAMILY_V4, mock.rules[0].Family)
-	assert.Equal(t, "99.12.246.36/32", mock.rules[0].Src.String())
+	assert.Equal(t, "198.51.100.4/32", mock.rules[0].Src.String())
 	assert.Equal(t, vnl.FAMILY_V6, mock.rules[1].Family)
 	assert.Equal(t, DefaultUplinkRulePriority, mock.rules[0].Priority)
 
@@ -103,11 +103,11 @@ func TestUplinkManager_EnsureUplink(t *testing.T) {
 		assert.Equal(t, 102, r.Table)
 	}
 
-	require.NoError(t, u.RemoveUplink(context.Background(), "att"))
-	assert.False(t, u.Has("att"))
+	require.NoError(t, u.RemoveUplink(context.Background(), "isp-a"))
+	assert.False(t, u.Has("isp-a"))
 	assert.Empty(t, mock.routes)
 	var nf *ErrUplinkNotFound
-	require.True(t, errors.As(u.RemoveUplink(context.Background(), "att"), &nf))
+	require.True(t, errors.As(u.RemoveUplink(context.Background(), "isp-a"), &nf))
 }
 
 func TestUplinkManager_Errors(t *testing.T) {
@@ -129,7 +129,7 @@ func TestUplinkManager_Errors(t *testing.T) {
 		u := newUplinkManagerWithOps(testLogger(), mock)
 		var op *ErrUplinkOperationFailed
 		require.True(t, errors.As(u.EnsureUplink(context.Background(), attUplink()), &op))
-		assert.False(t, u.Has("att"))
+		assert.False(t, u.Has("isp-a"))
 	})
 	t.Run("rule install fails rolls back", func(t *testing.T) {
 		mock := uplinkMock()
@@ -149,7 +149,7 @@ func TestUplinkManager_Errors(t *testing.T) {
 		require.True(t, errors.As(u.EnsureUplink(context.Background(), attUplink()), &op))
 		assert.Empty(t, mock.rules, "the first rule is removed again")
 		assert.Empty(t, mock.routes, "the default routes are rolled back with the rules (#583 review)")
-		assert.False(t, u.Has("att"))
+		assert.False(t, u.Has("isp-a"))
 	})
 	t.Run("rule list fails", func(t *testing.T) {
 		mock := uplinkMock()
@@ -166,50 +166,50 @@ func TestUplinkManager_BindTunnel(t *testing.T) {
 	require.NoError(t, u.EnsureUplink(context.Background(), attUplink()))
 	before := len(mock.rules)
 
-	require.NoError(t, u.BindTunnel(context.Background(), "att", "gre-mia", "99.12.246.36", "45.63.110.165"))
+	require.NoError(t, u.BindTunnel(context.Background(), "isp-a", "gre-pri", "198.51.100.4", "198.51.100.100"))
 	require.Len(t, mock.rules, before+1)
 	pin := mock.rules[before]
 	assert.Equal(t, DefaultUplinkRulePriority-tunnelRuleOffset, pin.Priority)
 	assert.Equal(t, 101, pin.Table)
-	assert.Equal(t, "45.63.110.165/32", pin.Dst.String())
+	assert.Equal(t, "198.51.100.100/32", pin.Dst.String())
 
 	// Binding twice is a no-op.
-	require.NoError(t, u.BindTunnel(context.Background(), "att", "gre-mia", "99.12.246.36", "45.63.110.165"))
+	require.NoError(t, u.BindTunnel(context.Background(), "isp-a", "gre-pri", "198.51.100.4", "198.51.100.100"))
 	assert.Len(t, mock.rules, before+1)
 
-	require.NoError(t, u.UnbindTunnel(context.Background(), "att", "gre-mia"))
+	require.NoError(t, u.UnbindTunnel(context.Background(), "isp-a", "gre-pri"))
 	assert.Len(t, mock.rules, before)
-	require.NoError(t, u.UnbindTunnel(context.Background(), "att", "gre-mia"), "unbinding an unbound tunnel is a no-op")
+	require.NoError(t, u.UnbindTunnel(context.Background(), "isp-a", "gre-pri"), "unbinding an unbound tunnel is a no-op")
 
 	t.Run("unknown uplink", func(t *testing.T) {
 		var nf *ErrUplinkNotFound
-		require.True(t, errors.As(u.BindTunnel(context.Background(), "comcast", "t", "1.1.1.1", "2.2.2.2"), &nf))
+		require.True(t, errors.As(u.BindTunnel(context.Background(), "isp-b", "t", "1.1.1.1", "2.2.2.2"), &nf))
 		// Unbinding from an uplink that no longer exists is a no-op: the
 		// binding left with the uplink (#583 review).
-		require.NoError(t, u.UnbindTunnel(context.Background(), "comcast", "t"))
+		require.NoError(t, u.UnbindTunnel(context.Background(), "isp-b", "t"))
 	})
 	t.Run("bad endpoints", func(t *testing.T) {
 		var invalid *ErrInvalidUplinkConfig
-		require.True(t, errors.As(u.BindTunnel(context.Background(), "att", "t", "nope", "2.2.2.2"), &invalid))
+		require.True(t, errors.As(u.BindTunnel(context.Background(), "isp-a", "t", "nope", "2.2.2.2"), &invalid))
 	})
 	t.Run("rule add fails", func(t *testing.T) {
 		mock.ruleAddFn = func(*vnl.Rule) error { return errors.New("EINVAL") }
 		defer func() { mock.ruleAddFn = nil }()
 		var op *ErrUplinkOperationFailed
-		require.True(t, errors.As(u.BindTunnel(context.Background(), "att", "t2", "99.12.246.36", "66.42.90.190"), &op))
+		require.True(t, errors.As(u.BindTunnel(context.Background(), "isp-a", "t2", "198.51.100.4", "192.0.2.100"), &op))
 	})
 	t.Run("rule del fails", func(t *testing.T) {
-		require.NoError(t, u.BindTunnel(context.Background(), "att", "t3", "99.12.246.36", "66.42.90.190"))
+		require.NoError(t, u.BindTunnel(context.Background(), "isp-a", "t3", "198.51.100.4", "192.0.2.100"))
 		mock.ruleDelFn = func(*vnl.Rule) error { return errors.New("EPERM") }
 		defer func() { mock.ruleDelFn = nil }()
 		var op *ErrUplinkOperationFailed
-		require.True(t, errors.As(u.UnbindTunnel(context.Background(), "att", "t3"), &op))
+		require.True(t, errors.As(u.UnbindTunnel(context.Background(), "isp-a", "t3"), &op))
 	})
 	t.Run("low priority is clamped", func(t *testing.T) {
 		low := attUplink()
 		low.Name, low.Table, low.Priority = "low", 150, 10
 		require.NoError(t, u.EnsureUplink(context.Background(), low))
-		require.NoError(t, u.BindTunnel(context.Background(), "low", "t4", "99.12.246.36", "66.42.90.190"))
+		require.NoError(t, u.BindTunnel(context.Background(), "low", "t4", "198.51.100.4", "192.0.2.100"))
 		assert.Equal(t, 1, mock.rules[len(mock.rules)-1].Priority)
 	})
 }
@@ -218,25 +218,25 @@ func TestUplinkManager_Close(t *testing.T) {
 	mock := uplinkMock()
 	u := newUplinkManagerWithOps(testLogger(), mock)
 	require.NoError(t, u.EnsureUplink(context.Background(), attUplink()))
-	comcast := UplinkConfig{Name: "comcast", Interface: "eth7", Table: 102, GatewayV4: "96.65.171.22", Addresses: []string{"96.65.171.20/29"}}
-	require.NoError(t, u.EnsureUplink(context.Background(), comcast))
-	require.NoError(t, u.BindTunnel(context.Background(), "comcast", "gre-atl", "96.65.171.20", "66.42.90.190"))
+	ispB := UplinkConfig{Name: "isp-b", Interface: "eth7", Table: 102, GatewayV4: "192.0.2.6", Addresses: []string{"192.0.2.4/29"}}
+	require.NoError(t, u.EnsureUplink(context.Background(), ispB))
+	require.NoError(t, u.BindTunnel(context.Background(), "isp-b", "gre-alt", "192.0.2.4", "192.0.2.100"))
 	require.NoError(t, u.Close())
 	assert.Empty(t, mock.routes)
 	assert.Empty(t, mock.rules)
 
 	mock.routeDelFn = func(*vnl.Route) error { return errors.New("ESRCH") }
-	require.NoError(t, u.EnsureUplink(context.Background(), comcast))
+	require.NoError(t, u.EnsureUplink(context.Background(), ispB))
 	assert.Error(t, u.Close(), "a route that would not delete is reported")
 }
 
 func TestRuleAndConfigEquality(t *testing.T) {
 	a, b := attUplink(), attUplink()
 	assert.True(t, uplinkConfigEqual(a, b))
-	b.Addresses = []string{"99.12.246.36/29"}
+	b.Addresses = []string{"198.51.100.4/29"}
 	assert.False(t, uplinkConfigEqual(a, b))
 	b = attUplink()
-	b.Addresses[0] = "99.12.246.37/29"
+	b.Addresses[0] = "198.51.100.5/29"
 	assert.False(t, uplinkConfigEqual(a, b))
 	assert.True(t, ipnetEqual(nil, nil))
 	assert.False(t, ipnetEqual(nil, hostNet([]byte{1, 2, 3, 4})))

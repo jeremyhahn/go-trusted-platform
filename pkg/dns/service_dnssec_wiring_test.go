@@ -47,7 +47,7 @@ func (s *stubDNSSECKeyStore) DeleteKey(ctx context.Context, tenantID, zoneName s
 }
 
 // TestNewService_PublishesDNSSECKeyStoreToPluginGlobal locks in the
-// fix for the lab-node-2 2026-04-08 DNS-start failure. The service was
+// fix for the node-02 2026-04-08 DNS-start failure. The service was
 // created with a keystore, but the plugin's package-level KeyStore var
 // remained nil because NewService did not call SetDNSSECKeyStore. As
 // a result every zone load hard-failed with "DNSSEC enabled but no

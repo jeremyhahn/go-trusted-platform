@@ -74,7 +74,7 @@ func syncedNTPStatus() *ntp.Status {
 		LastSync:         time.Unix(1755000000, 0).UTC(),
 		Mode:             "both",
 		ReferenceID:      "CB00710F",
-		ReferenceName:    "198.18.0.1",
+		ReferenceName:    "10.4.200.1",
 		SourcesReachable: 1,
 		SourcesTotal:     2,
 	}
@@ -84,7 +84,7 @@ func syncedNTPStatus() *ntp.Status {
 func ntpTestSources() []ntp.Source {
 	return []ntp.Source{
 		{
-			Address:       "198.18.0.1",
+			Address:       "10.4.200.1",
 			Mode:          ntp.SourceModeServer,
 			State:         ntp.SourceStateSelected,
 			Stratum:       2,
@@ -121,8 +121,8 @@ func TestNTPGRPCServiceReportsSynchronizationState(t *testing.T) {
 	if !got.GetSynced() || got.GetStratum() != 3 {
 		t.Fatalf("status = %+v, want synced stratum 3", got)
 	}
-	if got.GetReferenceId() != "CB00710F" || got.GetReferenceName() != "198.18.0.1" {
-		t.Fatalf("reference = %q/%q, want CB00710F/198.18.0.1", got.GetReferenceId(), got.GetReferenceName())
+	if got.GetReferenceId() != "CB00710F" || got.GetReferenceName() != "10.4.200.1" {
+		t.Fatalf("reference = %q/%q, want CB00710F/10.4.200.1", got.GetReferenceId(), got.GetReferenceName())
 	}
 	if got.GetLastSyncUnix() != 1755000000 {
 		t.Fatalf("LastSyncUnix = %d, want 1755000000", got.GetLastSyncUnix())

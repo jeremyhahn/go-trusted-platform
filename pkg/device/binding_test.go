@@ -53,7 +53,7 @@ func newEKCertForTest(t *testing.T, serial int64) string {
 // prestaged, with explicit values winning over derived ones.
 func TestBindingFromDevice_DerivesFromTheEKCertificate(t *testing.T) {
 	certPEM := newEKCertForTest(t, 1234567890)
-	dev := &entities.Device{ID: 970392025956353, Serial: "lab-node-5-compute-01", EKCert: certPEM}
+	dev := &entities.Device{ID: 970392025956353, Serial: "node-05-compute-01", EKCert: certPEM}
 
 	binding, err := BindingFromDevice(dev, "", "", "")
 	require.NoError(t, err)

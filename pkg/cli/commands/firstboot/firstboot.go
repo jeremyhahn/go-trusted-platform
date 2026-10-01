@@ -197,7 +197,7 @@ func runFirstboot(ctx context.Context) error {
 		// the next boot. The previous behaviour swallowed this failure
 		// and reported "completed successfully" while platformd silently
 		// crashed at boot — that's the bug that masked the real failure
-		// during the lab-node-2 deployment debug session (2026-04-07).
+		// during the node-02 deployment debug session (2026-04-07).
 		if errors.Is(err, firstboot.ErrSealingFallbackUsed) {
 			elapsed := time.Since(startTime)
 			logger.Errorf("FIRSTBOOT INCOMPLETE: sealing fallback used: duration=%s error=%v",

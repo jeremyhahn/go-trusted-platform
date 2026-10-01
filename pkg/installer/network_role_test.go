@@ -130,7 +130,7 @@ func TestNetworkConfig_Validate_RoleErrors(t *testing.T) {
 
 	t.Run("address outside every zone", func(t *testing.T) {
 		nc := referenceHost(HostRoleCompute)
-		nc.Interfaces = []InterfaceConfig{{Name: "eth0", Type: InterfaceTypeStatic, IPv4Address: "198.18.1.10/24"}}
+		nc.Interfaces = []InterfaceConfig{{Name: "eth0", Type: InterfaceTypeStatic, IPv4Address: "172.30.50.10/24"}}
 		var target *ErrAddressNotPermitted
 		require.True(t, errors.As(nc.Validate(plan), &target))
 		assert.Empty(t, target.Zone)

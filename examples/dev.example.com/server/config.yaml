@@ -1,10 +1,10 @@
 acme:
   client:
     account:
-      email: hostmaster@dev.trusted-platform.io
+      email: hostmaster@dev.example.com
       key:
         debug: true
-        cn: acme_dev.trusted-platform.io
+        cn: acme_dev.example.com
         default: false
         hash: SHA-256
         algorithm: RSA
@@ -15,10 +15,10 @@ acme:
         signature-algorithm: SHA256-RSA
         store: tpm2
       register: false
-    directory: https://dev.trusted-platform.io/api/v1/acme/directory
+    directory: https://dev.example.com/api/v1/acme/directory
     request-server-bundle: false
   server:
-    directory: https://dev.trusted-platform.io/api/v1/acme/directory
+    directory: https://dev.example.com/api/v1/acme/directory
     challenges:
     - http-01
     - dns-01
@@ -133,11 +133,11 @@ certificate-authority:
       store: pkcs11
     sans:
       dns:
-      - root-ca.dev.trusted-platform.io
+      - root-ca.dev.example.com
       email:
-      - hostmaster@dev.trusted-platform.io
+      - hostmaster@dev.example.com
     subject:
-      cn: root-ca.dev.trusted-platform.io
+      cn: root-ca.dev.example.com
       organization: Example Corporation
       country: US
       locality: Hypervisor
@@ -230,12 +230,12 @@ certificate-authority:
       store: pkcs11
     sans:
       dns:
-      - intermediate-ca.dev.trusted-platform.io
-      - ca.dev.trusted-platform.io
+      - intermediate-ca.dev.example.com
+      - ca.dev.example.com
       email:
-      - hostmaster@dev.trusted-platform.io
+      - hostmaster@dev.example.com
     subject:
-      cn: intermediate-ca.dev.trusted-platform.io
+      cn: intermediate-ca.dev.example.com
       organization: Example Corporation
       country: US
       province: Linux
@@ -286,7 +286,7 @@ dns:
     - 192.168.3.1
     zone:
       id: 18411453967522201964
-      name: dev.trusted-platform.internal.
+      name: dev.example.internal.
       ttl: 3600
       records:
         a:
@@ -308,35 +308,35 @@ dns:
         cname:
         - name: www
           ttl: 3600
-          value: dev.trusted-platform.internal.
+          value: dev.example.internal.
         ns:
-        - name: dev.trusted-platform.internal.
+        - name: dev.example.internal.
           ttl: 3600
-          value: ns1.dev.trusted-platform.internal.
-        - name: dev.trusted-platform.internal.
+          value: ns1.dev.example.internal.
+        - name: dev.example.internal.
           ttl: 3600
-          value: ns2.dev.trusted-platform.internal.
-        - name: dev.trusted-platform.internal.
+          value: ns2.dev.example.internal.
+        - name: dev.example.internal.
           ttl: 3600
-          value: ns3.dev.trusted-platform.internal.
+          value: ns3.dev.example.internal.
         soa:
           expire: 86400
-          mname: ns1.dev.trusted-platform.internal.
+          mname: ns1.dev.example.internal.
           min-ttl: 3600
-          name: dev.trusted-platform.internal.
-          rname: hostmaster@dev.trusted-platform.internal
+          name: dev.example.internal.
+          rname: hostmaster@dev.example.internal
           refresh: 86400
           retry: 7200
           serial: 1
           ttl: 3600
-      description: Internal zone for dev.trusted-platform.internal
+      description: Internal zone for dev.example.internal
       internal: true
   public:
     port: 8053
     forwarders: []
     zone:
       id: 440242806451558346
-      name: dev.trusted-platform.io.
+      name: dev.example.com.
       ttl: 3600
       records:
         a:
@@ -358,41 +358,41 @@ dns:
         cname:
         - name: www
           ttl: 3600
-          value: dev.trusted-platform.io.
+          value: dev.example.com.
         mx:
-        - name: dev.trusted-platform.io.
+        - name: dev.example.com.
           priority: 10
           ttl: 3600
-          value: mail.dev.trusted-platform.io.
+          value: mail.dev.example.com.
         ns:
-        - name: dev.trusted-platform.io.
+        - name: dev.example.com.
           ttl: 3600
-          value: ns1.dev.trusted-platform.io.
-        - name: dev.trusted-platform.io.
+          value: ns1.dev.example.com.
+        - name: dev.example.com.
           ttl: 3600
-          value: ns2.dev.trusted-platform.io.
-        - name: dev.trusted-platform.io.
+          value: ns2.dev.example.com.
+        - name: dev.example.com.
           ttl: 3600
-          value: ns3.dev.trusted-platform.io.
+          value: ns3.dev.example.com.
         soa:
           expire: 86400
-          mname: ns1.dev.trusted-platform.io.
+          mname: ns1.dev.example.com.
           min-ttl: 3600
-          name: dev.trusted-platform.io.
-          rname: hostmaster@dev.trusted-platform.io
+          name: dev.example.com.
+          rname: hostmaster@dev.example.com
           refresh: 86400
           retry: 7200
           serial: 1
           ttl: 3600
         txt:
-        - name: dev.trusted-platform.io.
+        - name: dev.example.com.
           ttl: 3600
           value: v=spf1 include:_spf.google.com ~all
-      description: Public zone for dev.trusted-platform.io
+      description: Public zone for dev.example.com
       internal: false
-domain: dev.trusted-platform.io
+domain: dev.example.com
 hostname: omega
-hostmaster: hostmaster@dev.trusted-platform.io
+hostmaster: hostmaster@dev.example.com
 log-dir: trusted-data/log
 platform-dir: trusted-data
 tpm:
@@ -459,11 +459,11 @@ webservice:
       renew: 15
     sans:
       dns:
-      - dev.trusted-platform.io
+      - dev.example.com
       email:
-      - hostmaster@dev.trusted-platform.io
+      - hostmaster@dev.example.com
     subject:
-      cn: dev.trusted-platform.io
+      cn: dev.example.com
       organization: Example Corporation
       country: US
       province: Linux
@@ -496,11 +496,11 @@ webservice:
         renew: 15
       sans:
         dns:
-        - dashboard.dev.trusted-platform.io
+        - dashboard.dev.example.com
         email:
-        - hostmaster@dev.trusted-platform.io
+        - hostmaster@dev.example.com
       subject:
-        cn: dashboard.dev.trusted-platform.io
+        cn: dashboard.dev.example.com
         organization: Example Corporation
         country: US
         province: Linux
@@ -510,9 +510,9 @@ webservice:
       valid: 365
     cors:
       allowed-origins:
-      - https://dashboard.dev.trusted-platform.io
-      - https://dashboard.dev.trusted-platform.io:8080
-      - https://dashboard.dev.trusted-platform.io:8443
+      - https://dashboard.dev.example.com
+      - https://dashboard.dev.example.com:8080
+      - https://dashboard.dev.example.com:8443
       - https://localhost
       - https://localhost:8080
       - https://localhost:8443
@@ -526,9 +526,9 @@ webservice:
       allowed-headers:
       - '*'
       allow-credentials: true
-    home: dashboard.dev.trusted-platform.io
+    home: dashboard.dev.example.com
     hosts:
-    - dashboard.dev.trusted-platform.io
+    - dashboard.dev.example.com
     index: index.html
     key:
       debug: true
@@ -544,18 +544,18 @@ webservice:
     display-name: Example Corporation
     id: example.com
     origins:
-    - https://dev.trusted-platform.io
-    - https://dev.trusted-platform.io:8080
-    - https://dev.trusted-platform.io:8443
+    - https://dev.example.com
+    - https://dev.example.com:8080
+    - https://dev.example.com:8443
     - https://localhost
     - https://localhost:8080
     - https://localhost:8443
     - https://localhost:3000
   cors:
     allowed-origins:
-    - https://dev.trusted-platform.io
-    - https://dev.trusted-platform.io:8080
-    - https://dev.trusted-platform.io:8443
+    - https://dev.example.com
+    - https://dev.example.com:8080
+    - https://dev.example.com:8443
     - https://localhost
     - https://localhost:8080
     - https://localhost:8443

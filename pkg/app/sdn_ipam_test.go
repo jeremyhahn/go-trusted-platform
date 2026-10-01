@@ -304,7 +304,7 @@ func TestSeedIPAMPools_RefusesDrift(t *testing.T) {
 	ctx := context.Background()
 	backend := backends.NewMemoryBackend()
 	if err := backend.CreatePool(ctx, &ipam.Pool{
-		ID: "provisioning", Name: "provisioning", CIDR: netip.MustParsePrefix("172.16.201.0/24"),
+		ID: "provisioning", Name: "provisioning", CIDR: netip.MustParsePrefix("172.30.201.0/24"),
 	}); err != nil {
 		t.Fatalf("CreatePool: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestSeedIPAMPools_RefusesDrift(t *testing.T) {
 	if !errors.As(err, &target) || target.Pool != "provisioning" {
 		t.Fatalf("want ErrSDNIPAMPoolDrift{provisioning}, got %v", err)
 	}
-	for _, want := range []string{"172.16.201.0/24", "192.0.2.0/24", "re-bootstrap"} {
+	for _, want := range []string{"172.30.201.0/24", "192.0.2.0/24", "re-bootstrap"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message %q lacks %q", err.Error(), want)
 		}

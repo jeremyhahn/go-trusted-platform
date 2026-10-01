@@ -95,11 +95,11 @@ func TestUploadForensic_SurvivesAConnectionThePeerDiscards(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	o := uploadTestOrchestrator(io.Discard)
-	got, err := o.uploadForensic(t.Context(), srv.URL, "lab-node-5", "console-attempt1.log", []byte("boot\n"), "text/plain")
+	got, err := o.uploadForensic(t.Context(), srv.URL, "node-05", "console-attempt1.log", []byte("boot\n"), "text/plain")
 	if err != nil {
 		t.Fatalf("upload must survive one discarded connection: %v", err)
 	}
-	if want := srv.URL + "/installs/lab-node-5/console-attempt1.log"; got != want {
+	if want := srv.URL + "/installs/node-05/console-attempt1.log"; got != want {
 		t.Errorf("URL = %q, want %q", got, want)
 	}
 	if sink.count() != 2 {
@@ -118,7 +118,7 @@ func TestUploadForensic_DoesNotRetryAStatusResponse(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	o := uploadTestOrchestrator(io.Discard)
-	if _, err := o.uploadForensic(t.Context(), srv.URL, "lab-node-5", "c.log", []byte("x"), "text/plain"); err == nil {
+	if _, err := o.uploadForensic(t.Context(), srv.URL, "node-05", "c.log", []byte("x"), "text/plain"); err == nil {
 		t.Fatal("a non-2xx status must be an error")
 	}
 	if sink.count() != 1 {
@@ -140,7 +140,7 @@ func TestUploadForensic_ExhaustsAttemptsAndNamesTheStalledPhase(t *testing.T) {
 	var logs bytes.Buffer
 	o := uploadTestOrchestrator(&logs)
 	payload := bytes.Repeat([]byte("a"), 4096)
-	if _, err := o.uploadForensic(t.Context(), srv.URL, "lab-node-5", "c.log", payload, "text/plain"); err == nil {
+	if _, err := o.uploadForensic(t.Context(), srv.URL, "node-05", "c.log", payload, "text/plain"); err == nil {
 		t.Fatal("an upload that never lands must be an error")
 	}
 	if sink.count() != forensicUploadAttempts {
@@ -171,7 +171,7 @@ func TestUploadForensic_StopsRetryingWhenTheBudgetEnds(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	o := uploadTestOrchestrator(io.Discard)
-	if _, err := o.uploadForensic(ctx, srv.URL, "lab-node-5", "c.log", []byte("x"), "text/plain"); err == nil {
+	if _, err := o.uploadForensic(ctx, srv.URL, "node-05", "c.log", []byte("x"), "text/plain"); err == nil {
 		t.Fatal("a cancelled upload must be an error")
 	}
 	if sink.count() != 1 {

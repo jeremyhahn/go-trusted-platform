@@ -23,11 +23,11 @@ set -eu
 
 : "${BOOTSTRAP_INTERFACE:=eth0}"
 : "${BOOTSTRAP_HTTP_PORT:=8080}"
-: "${BOOTSTRAP_SERVER_IP:=172.16.201.1}"
-: "${BOOTSTRAP_DHCP_START:=172.16.201.100}"
-: "${BOOTSTRAP_DHCP_END:=172.16.201.200}"
-: "${BOOTSTRAP_GATEWAY:=172.16.201.1}"
-: "${BOOTSTRAP_DNS:=172.16.201.1}"
+: "${BOOTSTRAP_SERVER_IP:=192.0.2.1}"
+: "${BOOTSTRAP_DHCP_START:=192.0.2.100}"
+: "${BOOTSTRAP_DHCP_END:=192.0.2.200}"
+: "${BOOTSTRAP_GATEWAY:=192.0.2.1}"
+: "${BOOTSTRAP_DNS:=192.0.2.1}"
 # PXE nodes have no /media/cdrom, so the kernel cmdline must carry a working
 # APK repository. Default to the public Alpine mirror so internet-connected
 # installs work out of the box; operators override via BOOTSTRAP_APK_MIRROR.

@@ -188,12 +188,12 @@ func TestSaveToFile_InvalidPath(t *testing.T) {
 func TestBuildManifest_MultipleMACsPerNode(t *testing.T) {
 	nodes := []DiscoveredNodeInfo{
 		{
-			MACs:     []string{"00:25:90:5E:02:AA", "00:25:90:5E:02:AB", "00:25:90:5E:02:AC"},
+			MACs:     []string{"00:25:90:00:02:AA", "00:25:90:00:02:AB", "00:25:90:00:02:AC"},
 			Role:     "control-plane",
 			Hostname: "cp-01",
 		},
 		{
-			MACs:     []string{"00:25:90:5E:02:BA"},
+			MACs:     []string{"00:25:90:00:02:BA"},
 			Role:     "worker",
 			Hostname: "w-01",
 		},
@@ -213,9 +213,9 @@ func TestBuildManifest_MultipleMACsPerNode(t *testing.T) {
 	}
 
 	// Lookup by any of the three MACs returns the same entry.
-	for _, mac := range []string{"00:25:90:5e:02:aa", "00:25:90:5E:02:AB", "00-25-90-5e-02-ac"} {
+	for _, mac := range []string{"00:25:90:00:02:aa", "00:25:90:00:02:AB", "00-25-90-00-02-ac"} {
 		entry, ok := manifest.LookupMAC(mac)
-		if !ok && mac != "00-25-90-5e-02-ac" {
+		if !ok && mac != "00-25-90-00-02-ac" {
 			t.Errorf("expected to find MAC %s", mac)
 			continue
 		}

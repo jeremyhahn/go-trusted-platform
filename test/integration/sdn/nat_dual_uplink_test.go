@@ -32,23 +32,23 @@ import (
 
 // Dual-uplink NAT topology (#586): one internal client, two "ISP" uplink
 // namespaces on the same bridge. Egress to the default destination is
-// translated to the AT&T pool address; egress to a prefix Comcast claims is
-// translated to the Comcast pool; a static 1:1 host is reachable from the
-// Comcast side on its external address.
+// translated to the ISP A pool address; egress to a prefix ISP B claims is
+// translated to the ISP B pool; a static 1:1 host is reachable from the
+// ISP B side on its external address.
 const (
 	natDUBridge   = "tp-nat-du"
 	natDUInternal = "10.232.1.0/24"
 	natDUClientIP = "10.232.1.5"
 	natDUStaticIP = "10.232.1.10"
 
-	natDUAttNet    = "10.232.2.0/24"
-	natDUAttServer = "10.232.2.5"
-	natDUAttPool   = "10.232.2.250"
+	natDUIspANet    = "10.232.2.0/24"
+	natDUIspAServer = "10.232.2.5"
+	natDUIspAPool   = "10.232.2.250"
 
-	natDUComcastNet    = "10.232.3.0/24"
-	natDUComcastServer = "10.232.3.5"
-	natDUComcastPool   = "10.232.3.250"
-	natDUStaticExt     = "10.232.3.240"
+	natDUIspBNet    = "10.232.3.0/24"
+	natDUIspBServer = "10.232.3.5"
+	natDUIspBPool   = "10.232.3.250"
+	natDUStaticExt  = "10.232.3.240"
 
 	natDUPort = 9292
 )
@@ -113,14 +113,14 @@ func TestNATDualUplink_TranslatesPerUplinkAndStatic(t *testing.T) {
 
 	// The client routes both far networks through the bridge; each uplink
 	// namespace routes the internal prefix back and answers for its pool
-	// (and, on Comcast, the static external) so translated packets have a
+	// (and, on ISP B, the static external) so translated packets have a
 	// destination MAC on the far side.
-	createNSEndpoint(t, bridge.name, "tpndu-c", natDUClientIP+"/24", 0, natDUAttNet, natDUComcastNet)
-	att := createNSEndpoint(t, bridge.name, "tpndu-a", natDUAttServer+"/24", 0, natDUInternal)
-	comcast := createNSEndpoint(t, bridge.name, "tpndu-o", natDUComcastServer+"/24", 0, natDUInternal)
-	runCmd(t, "ip", "netns", "exec", "tpndu-a", "ip", "addr", "add", natDUAttPool+"/24", "dev", att.PeerIf)
-	runCmd(t, "ip", "netns", "exec", "tpndu-o", "ip", "addr", "add", natDUComcastPool+"/24", "dev", comcast.PeerIf)
-	runCmd(t, "ip", "netns", "exec", "tpndu-o", "ip", "addr", "add", natDUStaticExt+"/24", "dev", comcast.PeerIf)
+	createNSEndpoint(t, bridge.name, "tpndu-c", natDUClientIP+"/24", 0, natDUIspANet, natDUIspBNet)
+	ispA := createNSEndpoint(t, bridge.name, "tpndu-a", natDUIspAServer+"/24", 0, natDUInternal)
+	ispB := createNSEndpoint(t, bridge.name, "tpndu-o", natDUIspBServer+"/24", 0, natDUInternal)
+	runCmd(t, "ip", "netns", "exec", "tpndu-a", "ip", "addr", "add", natDUIspAPool+"/24", "dev", ispA.PeerIf)
+	runCmd(t, "ip", "netns", "exec", "tpndu-o", "ip", "addr", "add", natDUIspBPool+"/24", "dev", ispB.PeerIf)
+	runCmd(t, "ip", "netns", "exec", "tpndu-o", "ip", "addr", "add", natDUStaticExt+"/24", "dev", ispB.PeerIf)
 	// The static host lives beside the client.
 	runCmd(t, "ip", "netns", "exec", "tpndu-c", "ip", "addr", "add", natDUStaticIP+"/24", "dev", "vep-tpndu-c")
 
@@ -145,23 +145,23 @@ func TestNATDualUplink_TranslatesPerUplinkAndStatic(t *testing.T) {
 		InternalCIDR:   natDUInternal,
 		Bridge:         bridge.name,
 		Uplinks: []firewall.NATUplink{
-			{Name: "att", Port: att.HostIf, Addresses: []string{natDUAttPool}, Default: true},
-			{Name: "comcast", Port: comcast.HostIf, Addresses: []string{natDUComcastPool}, Destinations: []string{natDUComcastNet}},
+			{Name: "isp-a", Port: ispA.HostIf, Addresses: []string{natDUIspAPool}, Default: true},
+			{Name: "isp-b", Port: ispB.HostIf, Addresses: []string{natDUIspBPool}, Destinations: []string{natDUIspBNet}},
 		},
-		Static: []firewall.StaticNAT{{Internal: natDUStaticIP, External: natDUStaticExt, Uplink: "comcast"}},
+		Static: []firewall.StaticNAT{{Internal: natDUStaticIP, External: natDUStaticExt, Uplink: "isp-b"}},
 	})
 	require.NoError(t, err)
 	require.NoError(t, nat.Start(ctx))
 	t.Cleanup(func() { _ = nat.Stop(context.Background()) })
 
-	attSeen := udpSourceSink(t, "tpndu-a", natDUAttServer)
-	comcastSeen := udpSourceSink(t, "tpndu-o", natDUComcastServer)
+	ispASeen := udpSourceSink(t, "tpndu-a", natDUIspAServer)
+	ispBSeen := udpSourceSink(t, "tpndu-o", natDUIspBServer)
 
-	// Default destination → AT&T pool; Comcast-claimed destination → Comcast pool.
-	probeUntilSource(ctx, t, "tpndu-c", natDUAttServer, natDUAttPool, attSeen)
-	probeUntilSource(ctx, t, "tpndu-c", natDUComcastServer, natDUComcastPool, comcastSeen)
+	// Default destination → ISP A pool; ISP B-claimed destination → ISP B pool.
+	probeUntilSource(ctx, t, "tpndu-c", natDUIspAServer, natDUIspAPool, ispASeen)
+	probeUntilSource(ctx, t, "tpndu-c", natDUIspBServer, natDUIspBPool, ispBSeen)
 
-	// Static 1:1 inbound: a probe from the Comcast side to the external
+	// Static 1:1 inbound: a probe from the ISP B side to the external
 	// address arrives at the inside host, and the inside host's own egress
 	// carries the external address rather than the pool.
 	staticSeen := udpSourceSink(t, "tpndu-c", natDUStaticIP)
@@ -177,7 +177,7 @@ func TestNATDualUplink_TranslatesPerUplinkAndStatic(t *testing.T) {
 		}))
 		select {
 		case src := <-staticSeen:
-			return src == natDUComcastServer
+			return src == natDUIspBServer
 		default:
 			return false
 		}

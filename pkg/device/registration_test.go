@@ -87,7 +87,7 @@ func fullRegistration(t *testing.T) Registration {
 	return Registration{
 		Model:         "SuperMicro X10SDV",
 		Serial:        "SN-CP-1",
-		Hostname:      "lab-node-2",
+		Hostname:      "node-02",
 		EKCertPEM:     EncodeCertificatePEM(selfSignedTestCert(t, "ek")),
 		AttestCertPEM: EncodeCertificatePEM(selfSignedTestIAKCert(t, "iak")),
 		AttestPub:     []byte{0x00, 0x23, 0x01},
@@ -193,7 +193,7 @@ func TestRegister_EmptyMaterialNeverErasesWhatIsRecorded(t *testing.T) {
 	registrar.bySerial["SN-CP-1"] = &entities.Device{
 		ID:         7,
 		Serial:     "SN-CP-1",
-		Hostname:   "lab-node-2",
+		Hostname:   "node-02",
 		EKCert:     "EK-PEM",
 		AttestCert: "IAK-PEM",
 		AttestPub:  "aabb",
@@ -206,7 +206,7 @@ func TestRegister_EmptyMaterialNeverErasesWhatIsRecorded(t *testing.T) {
 	require.NoError(t, err)
 
 	dev := registrar.bySerial["SN-CP-1"]
-	assert.Equal(t, "lab-node-2", dev.Hostname)
+	assert.Equal(t, "node-02", dev.Hostname)
 	assert.Equal(t, "EK-PEM", dev.EKCert)
 	assert.Equal(t, "IAK-PEM", dev.AttestCert)
 	assert.Equal(t, "aabb", dev.AttestPub)

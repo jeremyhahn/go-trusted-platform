@@ -231,7 +231,7 @@ func TestDeviceProfileCreate_EKPrestageFields(t *testing.T) {
 		"ek_serial":   "EK-MCP-1",
 		"ek_cert":     certPEM,
 		"mac_address": "aa:bb:cc:dd:ee:41",
-		"config":      map[string]interface{}{"hostname": "lab-node-2"},
+		"config":      map[string]interface{}{"hostname": "node-02"},
 		"assigned":    true,
 		"assigned_at": "2026-08-01T09:00:00Z",
 	})

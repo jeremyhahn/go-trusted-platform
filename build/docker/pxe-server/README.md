@@ -12,16 +12,21 @@ The included Makefile provides several targets to faciliate building, initalizin
 
 #### Variables
 
+The PXE network belongs to the deployment, so it has no defaults: `pxe-server` stops with an error naming each required variable that is unset. The image stays generic (`build` and `push` need none of them); the container writes its DHCP scope at start from `DHCP_SUBNET`, `DHCP_NETMASK`, `DHCP_RANGE_START`, `DHCP_RANGE_END`, `DHCP_ROUTER` and `DHCP_NEXT_SERVER`, which the `pxe-server` target derives from the variables below, and exits if any is missing.
+
 | **Variable**      | **Default Value**                                                                                                             | **Description**                                                        |
 |-------------------|-------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------|
 | `ISODIR`          | `volume/iso`                                                                                                                  | Directory for storing ISO images and netboot files.                    |
 | `IMAGE_NAME`      | `pxe-server`                                                                                                                  | Docker image name for the PXE server.                                  |
 | `CONTAINER_NAME`  | `pxe-server`                                                                                                                  | Docker container name for the PXE server.                              |
 | `NETWORK_NAME`    | `pxe-net`                                                                                                                     | Docker network name for the PXE server.                                |
-| `SUBNET`          | `198.18.1.0/24`                                                                                                             | Subnet for the Docker network.                                         |
-| `IP_RANGE`        | `198.18.1.0/25`                                                                                                             | IP range for the Docker network.                                       |
-| `GATEWAY`         | `198.18.1.1`                                                                                                                | Gateway IP for the Docker network.                                     |
-| `STATIC_IP`       | `198.18.1.100`                                                                                                              | Static IP assigned to the PXE server container.                        |
+| `SUBNET` | _required_ | Subnet (CIDR) of the PXE network, used for the Docker network and the DHCP scope. |
+| `NETMASK` | _required_ | Netmask of `SUBNET` for the DHCP scope (for example `255.255.255.0`). |
+| `IP_RANGE` | _required_ | IP range for the Docker network. |
+| `GATEWAY` | _required_ | Gateway of the PXE network; also the DHCP `routers` option. |
+| `STATIC_IP` | _required_ | Static IP of the PXE server container; also the DHCP `next-server`. |
+| `DHCP_RANGE_START` | _required_ | First address the DHCP server leases. |
+| `DHCP_RANGE_END` | _required_ | Last address the DHCP server leases. |
 | `QEMU_DISK`       | `debian12.qcow2`                                                                                                              | Filename for the QEMU disk image.                                      |
 | `QEMU_DISK_SIZE`  | `5G`                                                                                                                          | Size of the QEMU disk image.                                           |
 | `QEMU_BRIDGE`     | `br-3114e390c8a6`                                                                                                             | Bridge interface used for QEMU networking.                             |

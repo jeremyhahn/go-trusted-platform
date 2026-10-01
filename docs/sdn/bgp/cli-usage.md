@@ -66,7 +66,7 @@ Options:
   --next-hop   Next hop address (optional)
 
 Examples:
-  platformctl sdn gateway bgp announce --prefix 2602:F5BB:1234::/48
+  platformctl sdn gateway bgp announce --prefix 2001:DB8:1234::/48
   platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 10.0.0.1
 ```
 
@@ -76,7 +76,7 @@ Examples:
 platformctl sdn gateway bgp withdraw --prefix <PREFIX>
 
 Examples:
-  platformctl sdn gateway bgp withdraw --prefix 2602:F5BB:1234::/48
+  platformctl sdn gateway bgp withdraw --prefix 2001:DB8:1234::/48
 ```
 
 ## Common Workflows
@@ -85,7 +85,7 @@ Examples:
 
 ```bash
 platformctl sdn gateway bgp status
-platformctl sdn gateway bgp routes | grep 2602:F5BB:1234
+platformctl sdn gateway bgp routes | grep 2001:DB8:1234
 ```
 
 ### Investigate a Peer That Won't Establish

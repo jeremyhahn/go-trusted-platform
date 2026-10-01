@@ -18,6 +18,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -34,7 +35,7 @@ import (
 func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{
-			Host:            "198.51.100.91",
+			Host:            "10.4.6.91",
 			NetbootMediaDir: fleetMedia,
 		},
 		Environment: testEnvironment(),
@@ -45,7 +46,7 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 			{
 				Hostname:    "cp-01",
 				Role:        RoleControlPlane,
-				BMCAddress:  "198.18.1.103",
+				BMCAddress:  "10.4.2.103",
 				BMCUser:     "admin",
 				BMCPassword: "pass",
 				BMCProtocol: "ipmi",
@@ -53,7 +54,7 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 			{
 				Hostname:    "gw-01",
 				Role:        RoleGateway,
-				BMCAddress:  "198.18.1.102",
+				BMCAddress:  "10.4.2.102",
 				BMCUser:     "admin",
 				BMCPassword: "pass",
 				BMCProtocol: "ipmi",
@@ -61,7 +62,7 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 			{
 				Hostname:    "compute-01",
 				Role:        RoleWorker,
-				BMCAddress:  "198.18.1.104",
+				BMCAddress:  "10.4.2.104",
 				BMCUser:     "admin",
 				BMCPassword: "pass",
 				BMCProtocol: "ipmi",
@@ -103,8 +104,8 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 	if result.WorkerCount != 1 {
 		t.Errorf("expected 1 worker, got %d", result.WorkerCount)
 	}
-	if result.DeployerHost != "198.51.100.91" {
-		t.Errorf("expected deployer host 198.51.100.91, got %s", result.DeployerHost)
+	if result.DeployerHost != "10.4.6.91" {
+		t.Errorf("expected deployer host 10.4.6.91, got %s", result.DeployerHost)
 	}
 	if result.SwitchConfigured {
 		t.Error("switch should not be configured")
@@ -157,13 +158,13 @@ func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 			{
 				Hostname:    "cp-01",
 				Role:        RoleControlPlane,
-				BMCAddress:  "198.18.1.100",
+				BMCAddress:  "10.4.2.100",
 				BMCProtocol: "ipmi",
 			},
 			{
 				Hostname:    "gw-01",
 				Role:        RoleGateway,
-				BMCAddress:  "198.18.1.101",
+				BMCAddress:  "10.4.2.101",
 				BMCProtocol: "ipmi",
 			},
 		},
@@ -176,7 +177,7 @@ func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 
 	factory := &bmc.MockClientFactory{
 		ClientFn: func(config *bmc.Config) (bmc.Client, error) {
-			if config.Address == "198.18.1.101" {
+			if config.Address == "10.4.2.101" {
 				return unreachableClient, nil
 			}
 			return reachableClient, nil
@@ -252,7 +253,7 @@ func TestOrchestrator_DryRun_BMCFactoryError(t *testing.T) {
 			{
 				Hostname:    "cp-01",
 				Role:        RoleControlPlane,
-				BMCAddress:  "198.18.1.100",
+				BMCAddress:  "10.4.2.100",
 				BMCProtocol: "ipmi",
 			},
 		},
@@ -401,7 +402,7 @@ func TestOrchestrator_DryRun_WithSwitch(t *testing.T) {
 		},
 		Switch: &SwitchConfig{
 			Vendor: "cisco-nexus",
-			Host:   "198.18.1.4",
+			Host:   "10.4.2.4",
 			PortAssignments: []PortAssignment{
 				{Port: "Eth1/1", Class: zone.PortClassGateway},
 			},
@@ -457,7 +458,7 @@ func TestOrchestrator_DryRun_MixedNodes(t *testing.T) {
 			{
 				Hostname:    "cp-01",
 				Role:        RoleControlPlane,
-				BMCAddress:  "198.18.1.100",
+				BMCAddress:  "10.4.2.100",
 				BMCProtocol: "ipmi",
 			},
 			{
@@ -543,10 +544,10 @@ func TestDryRunErrors(t *testing.T) {
 			name: "ErrDryRunBMCUnreachable",
 			err: ErrDryRunBMCUnreachable{
 				Hostname:   "cp-01",
-				BMCAddress: "198.18.1.100",
+				BMCAddress: "10.4.2.100",
 				Cause:      errors.New("connection refused"),
 			},
-			want: "bootstrap: dry-run: bmc unreachable for cp-01 at 198.18.1.100: connection refused",
+			want: "bootstrap: dry-run: bmc unreachable for cp-01 at 10.4.2.100: connection refused",
 		},
 		{
 			name: "ErrDryRunNoNodes",
@@ -765,7 +766,7 @@ os:
 				Role:     RoleControlPlane,
 				MACs:     []string{"aa:bb:cc:dd:ee:01"},
 				Overrides: map[string]interface{}{
-					"domain": "gw.trusted-platform.io",
+					"domain": "gw.example.com",
 				},
 			},
 		},
@@ -789,8 +790,95 @@ os:
 	if err := yaml.Unmarshal([]byte(resolved), &parsed); err != nil {
 		t.Fatalf("resolved config should be valid YAML: %v", err)
 	}
-	if parsed["domain"] != "gw.trusted-platform.io" {
-		t.Errorf("domain = %v, want gw.trusted-platform.io (per-node override wins over platform global)", parsed["domain"])
+	if parsed["domain"] != "gw.example.com" {
+		t.Errorf("domain = %v, want gw.example.com (per-node override wins over platform global)", parsed["domain"])
+	}
+}
+
+// TestOrchestrator_ResolveNodeConfig_SearchDomainsAreDeterministic locks the
+// resolv.conf search list to configuration order. It was built from a Go map,
+// so `platformctl bootstrap resolve` printed a different order run to run and
+// an installed node's resolver tried its zones in an arbitrary order.
+func TestOrchestrator_ResolveNodeConfig_SearchDomainsAreDeterministic(t *testing.T) {
+	templateDir := t.TempDir()
+	cpTemplatePath := filepath.Join(templateDir, "control-plane.yaml")
+	if err := os.WriteFile(cpTemplatePath, []byte("domain: \"placeholder.example.com\"\n"), 0644); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+	cfg := &BootstrapConfig{
+		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},
+		Environment: testEnvironment(),
+		Platform:    PlatformGlobalConfig{Domain: "prod.example.com", InternalDomain: "example.internal"},
+		Templates:   map[string]string{RoleControlPlane: cpTemplatePath},
+		Nodes: []NodeConfig{{
+			Hostname: "cp-01",
+			Role:     RoleControlPlane,
+			MACs:     []string{"aa:bb:cc:dd:ee:01"},
+			Overrides: map[string]interface{}{
+				"domain":          "gw.example.com",
+				"internal-domain": "zone.example.internal",
+			},
+		}},
+	}
+	o, err := NewOrchestrator(OrchestratorParams{
+		Config:        cfg,
+		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:        orchTestLogger(),
+		HealthChecker: &mockHealthChecker{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	first, err := o.resolveNodeConfig("cp-01", RoleControlPlane, nil)
+	if err != nil {
+		t.Fatalf("resolveNodeConfig: %v", err)
+	}
+	for i := 0; i < 50; i++ {
+		again, err := o.resolveNodeConfig("cp-01", RoleControlPlane, nil)
+		if err != nil {
+			t.Fatalf("resolveNodeConfig run %d: %v", i, err)
+		}
+		if again != first {
+			t.Fatalf("run %d resolved differently:\n%s\nvs\n%s", i, again, first)
+		}
+	}
+
+	var parsed struct {
+		Network struct {
+			DNS struct {
+				SearchDomains []string `yaml:"search-domains"`
+			} `yaml:"dns"`
+		} `yaml:"network"`
+	}
+	if err := yaml.Unmarshal([]byte(first), &parsed); err != nil {
+		t.Fatalf("resolved config should be valid YAML: %v", err)
+	}
+	want := []string{"gw.example.com", "zone.example.internal", "prod.example.com", "example.internal"}
+	if !reflect.DeepEqual(parsed.Network.DNS.SearchDomains, want) {
+		t.Errorf("search-domains = %v, want %v (node domain, node internal domain, platform domain, platform internal domain)",
+			parsed.Network.DNS.SearchDomains, want)
+	}
+}
+
+func TestOrchestrator_SetSearchDomains_DedupesAndSkipsBlanks(t *testing.T) {
+	o := &Orchestrator{config: &BootstrapConfig{Platform: PlatformGlobalConfig{Domain: " example.com ", InternalDomain: "example.internal"}}}
+	dns := map[string]interface{}{}
+	o.setSearchDomains(dns, map[string]interface{}{
+		"domain":          "example.com",
+		"internal-domain": "  ",
+		"internal_domain": "example.internal",
+	})
+	want := []interface{}{"example.com", "example.internal"}
+	if !reflect.DeepEqual(dns["search-domains"], want) {
+		t.Errorf("search-domains = %v, want %v: a repeat keeps its first position and blanks are dropped", dns["search-domains"], want)
+	}
+
+	empty := &Orchestrator{config: &BootstrapConfig{}}
+	none := map[string]interface{}{}
+	empty.setSearchDomains(none, map[string]interface{}{"domain": 42})
+	if _, set := none["search-domains"]; set {
+		t.Errorf("with no domain configured the key must stay unset, got %v", none["search-domains"])
 	}
 }
 
@@ -913,7 +1001,7 @@ func TestOrchestrator_DryRun_SwitchPlan(t *testing.T) {
 		},
 		Switch: &SwitchConfig{
 			Vendor: "cisco-nexus",
-			Host:   "198.18.1.4",
+			Host:   "10.4.2.4",
 			PortAssignments: []PortAssignment{
 				{Port: "Eth1/3", Class: zone.PortClassGateway, Description: "gw-01"},
 				{Port: "Eth1/25", Class: zone.PortClassHypervisor, Description: "cp-01"},
@@ -953,8 +1041,8 @@ func TestOrchestrator_DryRun_SwitchPlan(t *testing.T) {
 	if plan.Vendor != "cisco-nexus" {
 		t.Errorf("expected vendor cisco-nexus, got %s", plan.Vendor)
 	}
-	if plan.Host != "198.18.1.4" {
-		t.Errorf("expected host 198.18.1.4, got %s", plan.Host)
+	if plan.Host != "10.4.2.4" {
+		t.Errorf("expected host 10.4.2.4, got %s", plan.Host)
 	}
 
 	// One VLAN per zone of environment 4, sorted by ID and named after the

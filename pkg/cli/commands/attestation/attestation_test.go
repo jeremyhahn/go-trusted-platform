@@ -441,7 +441,7 @@ func TestRefreshReport_Error(t *testing.T) {
 
 func policy() *platformv1.CallerPolicyDescription {
 	return &platformv1.CallerPolicyDescription{
-		Strategy: "identity-list", Identities: []string{"cp.trusted-platform.internal"},
+		Strategy: "identity-list", Identities: []string{"cp.example.internal"},
 		IdentitiesSource: "attestation.callers.identities", ListValid: true,
 		AnchorsConfigured: true, AnchorSource: "platform-anchor",
 	}
@@ -453,7 +453,7 @@ func TestDescribeCallers_Table(t *testing.T) {
 	checkGolden(t, "callers", out.Bytes())
 	assert.Contains(t, out.String(), "Strategy: identity-list")
 	assert.Contains(t, out.String(), "Admits nobody: no")
-	assert.Contains(t, out.String(), "Identities: cp.trusted-platform.internal")
+	assert.Contains(t, out.String(), "Identities: cp.example.internal")
 }
 
 func TestDescribeCallers_TableAdmitsNobody(t *testing.T) {
@@ -474,7 +474,7 @@ func TestDescribeCallers_JSONCarriesTheWireShape(t *testing.T) {
 	var raw map[string]any
 	require.NoError(t, json.Unmarshal(out.Bytes(), &raw))
 	assert.Equal(t, "identity-list", raw["strategy"])
-	assert.Equal(t, []any{"cp.trusted-platform.internal"}, raw["identities"])
+	assert.Equal(t, []any{"cp.example.internal"}, raw["identities"])
 	assert.Equal(t, true, raw["list_valid"])
 	assert.Equal(t, false, raw["admits_nobody"])
 	assert.Equal(t, "platform-anchor", raw["anchor_source"])
@@ -547,7 +547,7 @@ func TestViewFromProto_RoundTripsEveryField(t *testing.T) {
 func TestDescriptionFromProto(t *testing.T) {
 	d := descriptionFromProto(policy())
 	assert.EqualValues(t, "identity-list", d.Strategy)
-	assert.Equal(t, []string{"cp.trusted-platform.internal"}, d.Identities)
+	assert.Equal(t, []string{"cp.example.internal"}, d.Identities)
 	assert.True(t, d.ListValid)
 	assert.True(t, d.AnchorsConfigured)
 	assert.False(t, d.AdmitsNobody)

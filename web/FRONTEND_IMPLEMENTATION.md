@@ -5,24 +5,24 @@ This document summarizes the frontend components and testing infrastructure impl
 ## Implemented Components
 
 ### 1. Playwright Testing Setup
-- **File**: `/home/jhahn/sources/go-trusted-platform/web/package.json`
+- **File**: `web/package.json`
   - Added `@playwright/test` dependency
   - Added test scripts: `test:e2e`, `test:e2e:ui`, `test:e2e:headed`
 
-- **File**: `/home/jhahn/sources/go-trusted-platform/web/playwright.config.ts`
+- **File**: `web/playwright.config.ts`
   - Configured for multiple browsers (Chrome, Firefox, Safari)
   - Mobile device testing (Pixel 5, iPhone 12)
   - CI/CD integration with GitHub Actions reporter
   - Auto-start dev server
 
 ### 2. JWT Utilities
-- **File**: `/home/jhahn/sources/go-trusted-platform/web/src/utils/jwt.ts`
+- **File**: `web/src/utils/jwt.ts`
   - `decodeJWT()` - Client-side JWT parsing (no verification)
   - `getTokenFromCookie()` - Extract JWT from cookies
   - `getUserFromToken()` - Get user data from token
 
 ### 3. Auth Context Provider
-- **File**: `/home/jhahn/sources/go-trusted-platform/web/src/contexts/AuthContext.tsx`
+- **File**: `web/src/contexts/AuthContext.tsx`
   - Global authentication state management
   - User interface with tenant information
   - `login()` and `logout()` methods
@@ -30,7 +30,7 @@ This document summarizes the frontend components and testing infrastructure impl
   - `useAuth()` hook for consuming components
 
 ### 4. Updated WebAuthn Page
-- **File**: `/home/jhahn/sources/go-trusted-platform/web/src/app/auth/webauthn/page.tsx`
+- **File**: `web/src/app/auth/webauthn/page.tsx`
   - Accepts `?invitation=TOKEN` query parameter
   - Passes invitation token to registration endpoint
   - Different UI for invited vs new users
@@ -38,8 +38,8 @@ This document summarizes the frontend components and testing infrastructure impl
 
 ### 5. Admin Layout
 - **Files**:
-  - `/home/jhahn/sources/go-trusted-platform/web/src/app/admin/layout.tsx`
-  - `/home/jhahn/sources/go-trusted-platform/web/src/app/admin/AdminLayout.module.css`
+  - `web/src/app/admin/layout.tsx`
+  - `web/src/app/admin/AdminLayout.module.css`
   - Auth protection wrapper
   - Redirects to login if not authenticated
   - Header with tenant name display
@@ -47,8 +47,8 @@ This document summarizes the frontend components and testing infrastructure impl
 
 ### 6. Invitations Admin Page
 - **Files**:
-  - `/home/jhahn/sources/go-trusted-platform/web/src/app/admin/invitations/page.tsx`
-  - `/home/jhahn/sources/go-trusted-platform/web/src/app/admin/invitations/InvitationsPage.module.css`
+  - `web/src/app/admin/invitations/page.tsx`
+  - `web/src/app/admin/invitations/InvitationsPage.module.css`
 
 Features:
 - Tenant owner access only
@@ -69,8 +69,8 @@ API Endpoints Used:
 
 ### 7. Tenant Dashboard
 - **Files**:
-  - `/home/jhahn/sources/go-trusted-platform/web/src/app/admin/tenant/page.tsx`
-  - `/home/jhahn/sources/go-trusted-platform/web/src/app/admin/tenant/TenantPage.module.css`
+  - `web/src/app/admin/tenant/page.tsx`
+  - `web/src/app/admin/tenant/TenantPage.module.css`
 
 Features:
 - Display tenant information (ID, name, member count)
@@ -86,10 +86,10 @@ API Endpoints Used:
 
 ### 8. E2E Test Infrastructure
 - **Files**:
-  - `/home/jhahn/sources/go-trusted-platform/web/e2e/fixtures/webauthn-mock.ts` - WebAuthn mocks for CI
-  - `/home/jhahn/sources/go-trusted-platform/web/e2e/auth.spec.ts` - Auth flow tests
-  - `/home/jhahn/sources/go-trusted-platform/web/e2e/invitations.spec.ts` - Invitations tests (skipped, needs auth)
-  - `/home/jhahn/sources/go-trusted-platform/web/e2e/tenant.spec.ts` - Tenant dashboard tests (skipped, needs auth)
+  - `web/e2e/fixtures/webauthn-mock.ts` - WebAuthn mocks for CI
+  - `web/e2e/auth.spec.ts` - Auth flow tests
+  - `web/e2e/invitations.spec.ts` - Invitations tests (skipped, needs auth)
+  - `web/e2e/tenant.spec.ts` - Tenant dashboard tests (skipped, needs auth)
 
 ## File Structure
 
@@ -188,7 +188,7 @@ To complete the implementation:
 
 2. **Install Dependencies**
    ```bash
-   cd /home/jhahn/sources/go-trusted-platform/web
+   cd web
    npm install
    ```
 

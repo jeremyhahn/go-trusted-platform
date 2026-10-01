@@ -138,7 +138,7 @@ type ObjectStorageAdapter struct {
 //
 // The id frequently comes from a cert's CommonName (e.g. ACME
 // enrollment passes ctx.Certificate.Subject.CommonName here). TCG
-// CSR-IDevID certs commonly carry CNs like "SuperMicro X10-lab-node-1-gw-01"
+// CSR-IDevID certs commonly carry CNs like "SuperMicro X10-node-01-gw-01"
 // containing whitespace, which the underlying object-storage path
 // validator rejects (PATH_INVALID, no control chars / no spaces).
 // We sanitize the id to a filesystem-safe form on write and apply
@@ -263,7 +263,7 @@ func (a *ObjectStorageAdapter) CertExists(ctx context.Context, id string) (bool,
 // into a form that's safe to use as a path component in the underlying
 // object store. The store rejects paths containing whitespace, control
 // characters, or consecutive slashes, but real-world certs frequently
-// arrive with CNs like "SuperMicro X10-lab-node-1-gw-01" — TCG IDevID
+// arrive with CNs like "SuperMicro X10-node-01-gw-01" — TCG IDevID
 // certs in particular often carry vendor/model/serial separated by
 // spaces.
 //

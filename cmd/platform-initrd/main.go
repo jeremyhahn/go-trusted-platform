@@ -52,7 +52,7 @@ import (
 // "non-blocking" follow-up retained the same deadlock because the
 // goroutine still wrote synchronously to the original fd. Both versions
 // were architecturally wrong for a daemon that must never lose its own
-// stderr — diagnosed 2026-04-07 on lab-node-2 and removed entirely.
+// stderr — diagnosed 2026-04-07 on node-02 and removed entirely.
 //
 // If a future board genuinely needs a userspace mirror (no working
 // kernel console at all), implement it as a fully detached process or

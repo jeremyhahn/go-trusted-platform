@@ -1143,7 +1143,7 @@ func (ai *alpineInstaller) configureKernelModules(rootPath string) error {
 // this platform: TPM attestation freshness, ACME (RFC 8555) issuance,
 // DANE/DNSSEC signature windows, and JWT exp/nbf are all meaningless against
 // a wrong clock. A node that installs without a time daemon boots on whatever
-// its RTC says — lab-node-2 came up two years slow and nobody noticed — so the
+// its RTC says — node-02 came up two years slow and nobody noticed — so the
 // package set is not left to template authorship. chrony-openrc supplies the
 // /etc/init.d/chronyd script that EnableServices adds to the default
 // runlevel.
@@ -2485,7 +2485,7 @@ func (ai *alpineInstaller) installNetworkPackages(ctx context.Context, rootPath 
 	var packages []string
 
 	// Always install ifupdown-ng. busybox's built-in /sbin/ifup cannot
-	// parse CIDR notation (`address 198.18.1.139/24`) and fails with
+	// parse CIDR notation (`address 10.4.2.139/24`) and fails with
 	// `ifup: don't have all variables for X/inet`. ifupdown-ng handles
 	// CIDR natively. /sbin/ifup is whichever package wins last during
 	// install; explicitly installing ifupdown-ng makes it the provider.

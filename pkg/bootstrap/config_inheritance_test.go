@@ -206,7 +206,7 @@ func TestApplyNodeIdentity_FullInjection(t *testing.T) {
 			{
 				Name:        "eth0",
 				Type:        installer.InterfaceTypeStatic,
-				IPv4Address: "198.18.1.140/24",
+				IPv4Address: "10.4.2.140/24",
 			},
 		},
 	}
@@ -258,8 +258,8 @@ func TestApplyNodeIdentity_FullInjection(t *testing.T) {
 	if iface["type"] != "static" {
 		t.Errorf("interface type = %v, want static", iface["type"])
 	}
-	if iface["ipv4-address"] != "198.18.1.140/24" {
-		t.Errorf("interface ipv4-address = %v, want 198.18.1.140/24 (YAML-tag key)", iface["ipv4-address"])
+	if iface["ipv4-address"] != "10.4.2.140/24" {
+		t.Errorf("interface ipv4-address = %v, want 10.4.2.140/24 (YAML-tag key)", iface["ipv4-address"])
 	}
 }
 

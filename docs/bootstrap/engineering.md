@@ -520,6 +520,14 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
     never change readiness; a board with no log surface
     (`bmc.ErrUnsupportedOperation`) is silent, a failed read is itself a warning.
 
+22. **A resolved config is deterministic.** Resolving the same `bootstrap.yaml`
+    twice yields byte-identical YAML. `network.dns.search-domains` (the
+    resolv.conf search list the installer writes) is in configuration order: the
+    node's `domain`, its internal domain (`internal-domain` or `internal_domain`),
+    then `platform.domain` and `platform.internal_domain`; a repeat keeps its
+    first position and blanks are dropped (`Orchestrator.setSearchDomains`). It
+    was once built from a Go map, so its order changed from run to run.
+
 ## 4. Error semantics
 
 Every error in this feature is a typed struct or a package sentinel;
@@ -867,7 +875,7 @@ Recorded because a reader will otherwise assume they are covered.
    `bmc_address`, and that smbd retitles its workers.** `MediaReadProbe.Client`
    is matched against the worker title pkg/ipxe reads from `/proc` — Debian's
    `smbd: client [ip]`, or Alpine/musl's `smbd[ip]` carried in the 15-byte
-   comm, where a truncated capture (`smbd[192.168.50`, measured live) is an IP
+   comm, where a truncated capture (`smbd[198.51.100`, measured live) is an IP
    prefix and is matched as one, so on a /24 management subnet several BMCs
    can share a truncated prefix and vouch for each other. A BMC reading the
    share from another address is never attributed (harmless now that the

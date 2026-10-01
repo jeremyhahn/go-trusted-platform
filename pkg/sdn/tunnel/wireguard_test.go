@@ -54,7 +54,7 @@ func wgPeerPub() string {
 func wgConfig() TunnelConfig {
 	return TunnelConfig{
 		Name: "wg-mia", Transport: TransportWireGuard,
-		Local: "99.12.246.36", Remote: "45.63.110.165", TunnelIP: "10.255.1.1/30", TunnelIPv6: "fd00:1::1/64",
+		Local: "198.51.100.4", Remote: "198.51.100.100", TunnelIP: "10.255.1.1/30", TunnelIPv6: "fd00:1::1/64",
 		WireGuard: &WireGuardConfig{KeyRef: "kms://platform/tunnel/wg-mia", PeerPublicKey: wgPeerPub(), RemotePort: 51820, ListenPort: 51820},
 	}
 }
@@ -106,7 +106,7 @@ func TestWireGuardDeviceConfig(t *testing.T) {
 	require.Len(t, dev.Peers, 1)
 	p := dev.Peers[0]
 	assert.Equal(t, cfg.WireGuard.PeerPublicKey, p.PublicKey.String())
-	assert.Equal(t, "45.63.110.165:51820", p.Endpoint.String())
+	assert.Equal(t, "198.51.100.100:51820", p.Endpoint.String())
 	assert.Equal(t, DefaultWireGuardKeepalive, *p.PersistentKeepaliveInterval)
 	assert.True(t, p.ReplaceAllowedIPs)
 	require.Len(t, p.AllowedIPs, 2, "the tunnel's v4 and v6 nets")

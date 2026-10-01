@@ -73,7 +73,7 @@ var newNTPService = func(config *ntp.Config, logger *slog.Logger) (ntpService, *
 // It runs AFTER network bring-up (initSDN) and BEFORE TPM/CA initialization,
 // because every downstream trust decision — TPM attestation freshness, ACME
 // issuance, DANE/DNSSEC signature windows, JWT exp/nbf — is only meaningful
-// against a correct clock. Node lab-node-2 booted two years slow with no time
+// against a correct clock. node-02 booted two years slow with no time
 // daemon at all; that class of failure is what this gate prevents.
 //
 // Following the platform's explicit-configuration convention, an absent or

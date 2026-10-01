@@ -294,14 +294,14 @@ func TestAnnounceIPv6Prefix(t *testing.T) {
 	}{
 		{
 			name:    "valid IPv6 prefix",
-			prefix:  netip.MustParsePrefix("2602:F5BB::/36"),
+			prefix:  netip.MustParsePrefix("2001:DB8::/36"),
 			wantErr: false,
 		},
 		{
 			name:   "valid IPv6 prefix with options",
-			prefix: netip.MustParsePrefix("2602:F5BB::/48"),
+			prefix: netip.MustParsePrefix("2001:DB8::/48"),
 			opts: []AnnounceOption{
-				WithNextHop(netip.MustParseAddr("2602:F5BB::1")),
+				WithNextHop(netip.MustParseAddr("2001:DB8::1")),
 				WithLocalPref(200),
 				WithMED(50),
 				WithASPathPrepend(2),
@@ -317,13 +317,13 @@ func TestAnnounceIPv6Prefix(t *testing.T) {
 		},
 		{
 			name:        "IPv4 prefix instead of IPv6",
-			prefix:      netip.MustParsePrefix("23.143.36.0/24"),
+			prefix:      netip.MustParsePrefix("203.0.113.0/24"),
 			wantErr:     true,
 			errContains: "IPv6",
 		},
 		{
 			name:   "speaker announce error",
-			prefix: netip.MustParsePrefix("2602:F5BB::/36"),
+			prefix: netip.MustParsePrefix("2001:DB8::/36"),
 			setupFn: func(m *transitMockSpeaker) {
 				m.announceErr = errors.New("mock announce error")
 			},
@@ -383,14 +383,14 @@ func TestAnnounceIPv4Prefix(t *testing.T) {
 	}{
 		{
 			name:    "valid IPv4 prefix",
-			prefix:  netip.MustParsePrefix("23.143.36.0/24"),
+			prefix:  netip.MustParsePrefix("203.0.113.0/24"),
 			wantErr: false,
 		},
 		{
 			name:   "valid IPv4 prefix with options",
-			prefix: netip.MustParsePrefix("23.143.36.0/24"),
+			prefix: netip.MustParsePrefix("203.0.113.0/24"),
 			opts: []AnnounceOption{
-				WithNextHop(netip.MustParseAddr("23.143.36.1")),
+				WithNextHop(netip.MustParseAddr("203.0.113.1")),
 				WithLocalPref(150),
 				WithMED(100),
 			},
@@ -404,13 +404,13 @@ func TestAnnounceIPv4Prefix(t *testing.T) {
 		},
 		{
 			name:        "IPv6 prefix instead of IPv4",
-			prefix:      netip.MustParsePrefix("2602:F5BB::/36"),
+			prefix:      netip.MustParsePrefix("2001:DB8::/36"),
 			wantErr:     true,
 			errContains: "IPv4",
 		},
 		{
 			name:   "speaker announce error",
-			prefix: netip.MustParsePrefix("23.143.36.0/24"),
+			prefix: netip.MustParsePrefix("203.0.113.0/24"),
 			setupFn: func(m *transitMockSpeaker) {
 				m.announceErr = errors.New("mock announce error")
 			},
@@ -474,7 +474,7 @@ func TestWithdrawPrefix(t *testing.T) {
 			t.Fatalf("Start() error = %v", err)
 		}
 
-		prefix := netip.MustParsePrefix("2602:F5BB::/36")
+		prefix := netip.MustParsePrefix("2001:DB8::/36")
 		if err := tm.AnnounceIPv6Prefix(ctx, prefix); err != nil {
 			t.Fatalf("AnnounceIPv6Prefix() error = %v", err)
 		}
@@ -506,7 +506,7 @@ func TestWithdrawPrefix(t *testing.T) {
 			t.Fatalf("Start() error = %v", err)
 		}
 
-		prefix := netip.MustParsePrefix("23.143.36.0/24")
+		prefix := netip.MustParsePrefix("203.0.113.0/24")
 		if err := tm.AnnounceIPv4Prefix(ctx, prefix); err != nil {
 			t.Fatalf("AnnounceIPv4Prefix() error = %v", err)
 		}
@@ -571,7 +571,7 @@ func TestWithdrawPrefix(t *testing.T) {
 			t.Fatalf("Start() error = %v", err)
 		}
 
-		prefix := netip.MustParsePrefix("23.143.36.0/24")
+		prefix := netip.MustParsePrefix("203.0.113.0/24")
 		if err := tm.AnnounceIPv4Prefix(ctx, prefix); err != nil {
 			t.Fatalf("AnnounceIPv4Prefix() error = %v", err)
 		}
@@ -607,8 +607,8 @@ func TestListAnnouncedPrefixes(t *testing.T) {
 	}
 
 	// Add prefixes
-	ipv6Prefix := netip.MustParsePrefix("2602:F5BB::/36")
-	ipv4Prefix := netip.MustParsePrefix("23.143.36.0/24")
+	ipv6Prefix := netip.MustParsePrefix("2001:DB8::/36")
+	ipv4Prefix := netip.MustParsePrefix("203.0.113.0/24")
 
 	if err := tm.AnnounceIPv6Prefix(ctx, ipv6Prefix); err != nil {
 		t.Fatalf("AnnounceIPv6Prefix() error = %v", err)
@@ -651,7 +651,7 @@ func TestGetAnnouncedPrefix(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	if err := tm.AnnounceIPv6Prefix(ctx, prefix, WithLocalPref(200)); err != nil {
 		t.Fatalf("AnnounceIPv6Prefix() error = %v", err)
 	}
@@ -697,7 +697,7 @@ func TestDuplicateAnnouncement(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	if err := tm.AnnounceIPv6Prefix(ctx, prefix); err != nil {
 		t.Fatalf("first AnnounceIPv6Prefix() error = %v", err)
 	}
@@ -723,7 +723,7 @@ func TestPrefixAttributeUpdates(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	if err := tm.AnnounceIPv6Prefix(ctx, prefix); err != nil {
 		t.Fatalf("AnnounceIPv6Prefix() error = %v", err)
 	}
@@ -808,13 +808,13 @@ func TestPrefixCounts(t *testing.T) {
 	}
 
 	// Add some prefixes
-	if err := tm.AnnounceIPv6Prefix(ctx, netip.MustParsePrefix("2602:F5BB::/36")); err != nil {
+	if err := tm.AnnounceIPv6Prefix(ctx, netip.MustParsePrefix("2001:DB8::/36")); err != nil {
 		t.Fatalf("AnnounceIPv6Prefix() error = %v", err)
 	}
-	if err := tm.AnnounceIPv6Prefix(ctx, netip.MustParsePrefix("2602:F5BB:1000::/48")); err != nil {
+	if err := tm.AnnounceIPv6Prefix(ctx, netip.MustParsePrefix("2001:DB8:1000::/48")); err != nil {
 		t.Fatalf("AnnounceIPv6Prefix() error = %v", err)
 	}
-	if err := tm.AnnounceIPv4Prefix(ctx, netip.MustParsePrefix("23.143.36.0/24")); err != nil {
+	if err := tm.AnnounceIPv4Prefix(ctx, netip.MustParsePrefix("203.0.113.0/24")); err != nil {
 		t.Fatalf("AnnounceIPv4Prefix() error = %v", err)
 	}
 
@@ -840,7 +840,7 @@ func TestOperationsWithoutStart(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 
 	t.Run("AnnounceIPv6Prefix", func(t *testing.T) {
 		err := tm.AnnounceIPv6Prefix(ctx, prefix)
@@ -850,7 +850,7 @@ func TestOperationsWithoutStart(t *testing.T) {
 	})
 
 	t.Run("AnnounceIPv4Prefix", func(t *testing.T) {
-		err := tm.AnnounceIPv4Prefix(ctx, netip.MustParsePrefix("23.143.36.0/24"))
+		err := tm.AnnounceIPv4Prefix(ctx, netip.MustParsePrefix("203.0.113.0/24"))
 		if err == nil {
 			t.Error("expected error when not started")
 		}
@@ -908,10 +908,10 @@ func TestStopWithPrefixes(t *testing.T) {
 	}
 
 	// Add some prefixes
-	if err := tm.AnnounceIPv6Prefix(ctx, netip.MustParsePrefix("2602:F5BB::/36")); err != nil {
+	if err := tm.AnnounceIPv6Prefix(ctx, netip.MustParsePrefix("2001:DB8::/36")); err != nil {
 		t.Fatalf("AnnounceIPv6Prefix() error = %v", err)
 	}
-	if err := tm.AnnounceIPv4Prefix(ctx, netip.MustParsePrefix("23.143.36.0/24")); err != nil {
+	if err := tm.AnnounceIPv4Prefix(ctx, netip.MustParsePrefix("203.0.113.0/24")); err != nil {
 		t.Fatalf("AnnounceIPv4Prefix() error = %v", err)
 	}
 
@@ -946,10 +946,10 @@ func TestStopWithWithdrawError(t *testing.T) {
 	}
 
 	// Add IPv6 and IPv4 prefixes
-	if err := tm.AnnounceIPv6Prefix(ctx, netip.MustParsePrefix("2602:F5BB::/36")); err != nil {
+	if err := tm.AnnounceIPv6Prefix(ctx, netip.MustParsePrefix("2001:DB8::/36")); err != nil {
 		t.Fatalf("AnnounceIPv6Prefix() error = %v", err)
 	}
-	if err := tm.AnnounceIPv4Prefix(ctx, netip.MustParsePrefix("23.143.36.0/24")); err != nil {
+	if err := tm.AnnounceIPv4Prefix(ctx, netip.MustParsePrefix("203.0.113.0/24")); err != nil {
 		t.Fatalf("AnnounceIPv4Prefix() error = %v", err)
 	}
 
@@ -988,7 +988,7 @@ func TestAnnouncedPrefixTimes(t *testing.T) {
 	}
 
 	before := time.Now()
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	if err := tm.AnnounceIPv6Prefix(ctx, prefix); err != nil {
 		t.Fatalf("AnnounceIPv6Prefix() error = %v", err)
 	}

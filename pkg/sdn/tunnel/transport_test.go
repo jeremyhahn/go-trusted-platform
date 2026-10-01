@@ -25,9 +25,9 @@ import (
 
 func ipsecConfig() TunnelConfig {
 	return TunnelConfig{
-		Name: "gre-mia", Type: TunnelTypeGRE, Transport: TransportIPsec,
-		Local: "99.12.246.36", Remote: "45.63.110.165", TunnelIP: "10.255.0.1/30",
-		IPsec: &IPsecConfig{KeyRef: "kms://platform/tunnel/mia/out", PeerKeyRef: "kms://platform/tunnel/mia/in", SPIOut: 0x1001, SPIIn: 0x1002},
+		Name: "gre-pri", Type: TunnelTypeGRE, Transport: TransportIPsec,
+		Local: "198.51.100.36", Remote: "198.51.100.100", TunnelIP: "10.255.0.1/30",
+		IPsec: &IPsecConfig{KeyRef: "kms://platform/tunnel/pop-a/out", PeerKeyRef: "kms://platform/tunnel/pop-a/in", SPIOut: 0x1001, SPIIn: 0x1002},
 	}
 }
 
@@ -66,7 +66,7 @@ func TestIPsecConfig_Validate(t *testing.T) {
 	require.NoError(t, valid.Validate())
 	assert.Equal(t, DefaultReplayWindow, valid.IPsec.effectiveReplayWindow())
 	assert.Equal(t, DefaultRekeyInterval, valid.IPsec.EffectiveRekeyInterval())
-	assert.Equal(t, "kms://platform/tunnel/mia/in", valid.IPsec.effectivePeerKeyRef())
+	assert.Equal(t, "kms://platform/tunnel/pop-a/in", valid.IPsec.effectivePeerKeyRef())
 	valid.IPsec.PeerKeyRef = ""
 	assert.Equal(t, valid.IPsec.KeyRef, valid.IPsec.effectivePeerKeyRef())
 
@@ -80,8 +80,8 @@ func TestIPsecConfig_Validate(t *testing.T) {
 func TestIPsecStatesAndPolicies(t *testing.T) {
 	cfg := ipsecConfig()
 	out, in := ipsecStates(cfg, espKey(1), espKey(2))
-	assert.Equal(t, "99.12.246.36", out.Src.String())
-	assert.Equal(t, "45.63.110.165", out.Dst.String())
+	assert.Equal(t, "198.51.100.36", out.Src.String())
+	assert.Equal(t, "198.51.100.100", out.Dst.String())
 	assert.Equal(t, 0x1001, out.Spi)
 	assert.Equal(t, 0x1002, in.Spi)
 	assert.Equal(t, out.Reqid, in.Reqid)
@@ -97,8 +97,8 @@ func TestIPsecStatesAndPolicies(t *testing.T) {
 	polOut, polIn := ipsecPolicies(cfg)
 	assert.Equal(t, vnl.XFRM_DIR_OUT, polOut.Dir)
 	assert.Equal(t, vnl.XFRM_DIR_IN, polIn.Dir)
-	assert.Equal(t, "99.12.246.36/32", polOut.Src.String())
-	assert.Equal(t, "45.63.110.165/32", polOut.Dst.String())
+	assert.Equal(t, "198.51.100.36/32", polOut.Src.String())
+	assert.Equal(t, "198.51.100.100/32", polOut.Dst.String())
 	assert.Equal(t, vnl.Proto(47), polOut.Proto, "only the GRE carrier is selected")
 	assert.Equal(t, vnl.XFRM_POLICY_ALLOW, polOut.Action)
 	require.Len(t, polOut.Tmpls, 1)
@@ -275,19 +275,19 @@ func TestManager_EnsureTunnel_Uplink(t *testing.T) {
 	mock.links["eth6"] = &vnl.Dummy{LinkAttrs: vnl.LinkAttrs{Name: "eth6", Index: 6}}
 	up := newUplinkManagerWithOps(testLogger(), mock)
 	require.NoError(t, up.EnsureUplink(context.Background(), UplinkConfig{
-		Name: "att", Interface: "eth6", Table: 101, GatewayV4: "99.12.246.38", Addresses: []string{"99.12.246.36/29"},
+		Name: "isp-a", Interface: "eth6", Table: 101, GatewayV4: "198.51.100.38", Addresses: []string{"198.51.100.36/29"},
 	}))
 	m := newManagerWithOps(testLogger(), mock, WithUplinks(up))
 
-	cfg := TunnelConfig{Name: "gre-mia", Type: TunnelTypeGRE, Uplink: "att", Local: "99.12.246.36", Remote: "45.63.110.165", TunnelIP: "10.255.0.1/30"}
+	cfg := TunnelConfig{Name: "gre-pri", Type: TunnelTypeGRE, Uplink: "isp-a", Local: "198.51.100.36", Remote: "198.51.100.100", TunnelIP: "10.255.0.1/30"}
 	require.NoError(t, m.EnsureTunnel(context.Background(), cfg))
 
 	// One source rule from the uplink, one endpoint pin from the tunnel.
 	require.Len(t, mock.rules, 2)
 	pin := mock.rules[1]
 	assert.Equal(t, 101, pin.Table)
-	assert.Equal(t, "99.12.246.36/32", pin.Src.String())
-	assert.Equal(t, "45.63.110.165/32", pin.Dst.String())
+	assert.Equal(t, "198.51.100.36/32", pin.Src.String())
+	assert.Equal(t, "198.51.100.100/32", pin.Dst.String())
 	assert.Less(t, pin.Priority, mock.rules[0].Priority, "the pin outranks the source rule")
 
 	require.NoError(t, m.RemoveTunnel(context.Background(), cfg.Name))
@@ -298,7 +298,7 @@ func TestManager_EnsureTunnel_Uplink(t *testing.T) {
 	// the link (and, for IPsec, the SAs) instead of failing on the uplink.
 	t.Run("uplink removed before the tunnel", func(t *testing.T) {
 		require.NoError(t, m.EnsureTunnel(context.Background(), cfg))
-		require.NoError(t, up.RemoveUplink(context.Background(), "att"))
+		require.NoError(t, up.RemoveUplink(context.Background(), "isp-a"))
 		assert.Empty(t, mock.rules, "the uplink took the pin and its own rule with it")
 		require.NoError(t, m.RemoveTunnel(context.Background(), cfg.Name))
 		_, exists := mock.links[cfg.Name]
@@ -308,13 +308,13 @@ func TestManager_EnsureTunnel_Uplink(t *testing.T) {
 		assert.True(t, errors.As(err, &nf), "got %v", err)
 		// Re-create the uplink for the remaining subtests.
 		require.NoError(t, up.EnsureUplink(context.Background(), UplinkConfig{
-			Name: "att", Interface: "eth6", Table: 101, GatewayV4: "99.12.246.38", Addresses: []string{"99.12.246.36/29"},
+			Name: "isp-a", Interface: "eth6", Table: 101, GatewayV4: "198.51.100.38", Addresses: []string{"198.51.100.36/29"},
 		}))
 	})
 
 	t.Run("unknown uplink", func(t *testing.T) {
 		bad := cfg
-		bad.Uplink = "comcast"
+		bad.Uplink = "isp-b"
 		err := m.EnsureTunnel(context.Background(), bad)
 		var uu *ErrUplinkUnknown
 		require.True(t, errors.As(err, &uu), "got %v", err)
@@ -341,7 +341,7 @@ func TestTunnelConfigEqual_Transports(t *testing.T) {
 	b.IPsec.SPIIn = 0x9999
 	assert.False(t, tunnelConfigEqual(a, b))
 	b = ipsecConfig()
-	b.Uplink = "att"
+	b.Uplink = "isp-a"
 	assert.False(t, tunnelConfigEqual(a, b))
 	b = ipsecConfig()
 	b.Transport = TransportGRE
@@ -372,11 +372,11 @@ func TestFetchKey_Errors(t *testing.T) {
 
 func TestTransportErrors_Messages(t *testing.T) {
 	assert.Contains(t, (&ErrTransportUnavailable{Name: "t", Transport: "wireguard", Reason: "fips"}).Error(), "fips")
-	assert.Contains(t, (&ErrUplinkUnknown{Name: "t", Uplink: "att"}).Error(), "att")
+	assert.Contains(t, (&ErrUplinkUnknown{Name: "t", Uplink: "isp-a"}).Error(), "isp-a")
 	assert.Contains(t, (&ErrInvalidUplinkConfig{Reason: "x"}).Error(), "x")
-	assert.Contains(t, (&ErrInvalidUplinkConfig{Name: "att", Reason: "x"}).Error(), "att")
-	assert.Contains(t, (&ErrUplinkNotFound{Name: "att"}).Error(), "att")
-	op := &ErrUplinkOperationFailed{Name: "att", Operation: "op", Cause: errors.New("c")}
+	assert.Contains(t, (&ErrInvalidUplinkConfig{Name: "isp-a", Reason: "x"}).Error(), "isp-a")
+	assert.Contains(t, (&ErrUplinkNotFound{Name: "isp-a"}).Error(), "isp-a")
+	op := &ErrUplinkOperationFailed{Name: "isp-a", Operation: "op", Cause: errors.New("c")}
 	assert.Contains(t, op.Error(), "op")
 	assert.Equal(t, "c", op.Unwrap().Error())
 	rk := &ErrRekeyFailed{Name: "t", Cause: errors.New("c")}

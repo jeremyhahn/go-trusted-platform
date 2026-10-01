@@ -47,7 +47,7 @@ type GroupConfig struct {
 	// addresses it does not own (§6.1).
 	AcceptMode bool `yaml:"accept-mode" json:"accept_mode" mapstructure:"accept-mode"`
 	// Addresses are the virtual addresses with their prefix length, all of
-	// one family (e.g. 198.18.0.1/24, 2602:f5bb::1/64).
+	// one family (e.g. 10.4.200.1/24, 2001:db8::1/64).
 	Addresses []string `yaml:"addresses" json:"addresses" mapstructure:"addresses"`
 	// Source is the interface address advertisements are sent from and the
 	// tie-breaker of §6.4.3 ("sender's primary IP address"). It must be an

@@ -489,7 +489,7 @@ network:
   interfaces:
     - name: eth0
       type: static
-      ipv4-address: 198.18.1.140/24
+      ipv4-address: 10.4.2.140/24
 `)
 
 	merged, err := DeepMergeYAML(base, overrides)
@@ -527,8 +527,8 @@ network:
 	if eth0["type"] != "static" {
 		t.Errorf("expected type=static, got %v", eth0["type"])
 	}
-	if eth0["ipv4-address"] != "198.18.1.140/24" {
-		t.Errorf("expected ipv4-address=198.18.1.140/24, got %v", eth0["ipv4-address"])
+	if eth0["ipv4-address"] != "10.4.2.140/24" {
+		t.Errorf("expected ipv4-address=10.4.2.140/24, got %v", eth0["ipv4-address"])
 	}
 	// mtu should be preserved from base via deep merge.
 	if eth0["mtu"] != 1500 {

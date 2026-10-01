@@ -975,7 +975,7 @@ func TestReissueNTSCertificateRechecksServeNames(t *testing.T) {
 
 	app := ntsTestApp()
 	app.NTPConfig.Mode = ntp.ModeBoth
-	app.NTPConfig.Serve.ListenNetworks = []string{"198.18.0.0/24"}
+	app.NTPConfig.Serve.ListenNetworks = []string{"10.4.200.0/24"}
 	app.NTPConfig.Serve.NTS.ServerNames = []string{"cp.example.internal"}
 	app.CA = ca
 	app.ntpApplier = applier
@@ -997,7 +997,7 @@ func TestReissueNTSCertificateSkipsTheCheckWhenDeployFails(t *testing.T) {
 
 	app := ntsTestApp()
 	app.NTPConfig.Mode = ntp.ModeBoth
-	app.NTPConfig.Serve.ListenNetworks = []string{"198.18.0.0/24"}
+	app.NTPConfig.Serve.ListenNetworks = []string{"10.4.200.0/24"}
 	app.NTPConfig.Serve.NTS.ServerNames = []string{"cp.example.internal"}
 	app.CA = ca
 	app.ntpApplier = applier

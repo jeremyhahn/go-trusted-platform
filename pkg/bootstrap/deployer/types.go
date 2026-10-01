@@ -91,7 +91,7 @@ type DeployConfig struct {
 
 	// BootstrapServerIP is the IP address the bootstrap container
 	// binds DHCP/TFTP/HTTP services to (BOOTSTRAP_SERVER_IP env var).
-	// The image's entrypoint defaults this to 172.16.201.1, which
+	// The image's entrypoint defaults this to 192.0.2.1, which
 	// matches a typical post-bootstrap provisioning subnet. For the
 	// FIRST bootstrap on a fresh deploy (when no provisioning subnet
 	// exists yet) this must be set to an IP the deployer host already
@@ -112,19 +112,19 @@ type DeployConfig struct {
 	// BootstrapDHCPStart and BootstrapDHCPEnd bound the DHCP lease
 	// pool the bootstrap container offers to PXE-booting clients
 	// (BOOTSTRAP_DHCP_START / BOOTSTRAP_DHCP_END env vars). Defaults
-	// in the image entrypoint are 172.16.201.100 / 172.16.201.200.
+	// in the image entrypoint are 192.0.2.100 / 192.0.2.200.
 	// When empty the entrypoint defaults take effect.
 	BootstrapDHCPStart string
 	BootstrapDHCPEnd   string
 
 	// BootstrapGateway is the default gateway advertised in the DHCP
 	// offer (BOOTSTRAP_GATEWAY env var). Empty falls through to the
-	// entrypoint default (172.16.201.1).
+	// entrypoint default (192.0.2.1).
 	BootstrapGateway string
 
 	// BootstrapDNS is the DNS server advertised in the DHCP offer
 	// (BOOTSTRAP_DNS env var). Empty falls through to the entrypoint
-	// default (172.16.201.1).
+	// default (192.0.2.1).
 	BootstrapDNS string
 
 	// BootstrapAPKMirror is the install-time APK repository base advertised

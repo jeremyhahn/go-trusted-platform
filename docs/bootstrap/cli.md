@@ -280,6 +280,9 @@ therefore absent; `run --dry-run` shows them.
 
 Without `--dump`, the output is one YAML stream: one document per node, in
 config order, each headed `# <hostname> (<role>)`.
+The output is deterministic, so two runs over unchanged inputs diff clean; the
+`network.dns.search-domains` list keeps configuration order (engineering.md §3
+invariant 22).
 
 ```bash
 # Diff a deployment's resolved configs across two template versions

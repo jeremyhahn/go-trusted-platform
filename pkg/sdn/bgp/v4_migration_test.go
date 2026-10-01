@@ -39,10 +39,10 @@ func startedSpeaker(t *testing.T, cfg *BGPConfig) (*Speaker, *mockBGPServer) {
 
 func baseConfig() *BGPConfig {
 	return &BGPConfig{
-		RouterID:        netip.MustParseAddr("23.143.36.4"),
-		ASN:             401870,
+		RouterID:        netip.MustParseAddr("203.0.113.4"),
+		ASN:             64512,
 		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast, AFamilyIPv6Unicast},
-		Announce:        &AnnounceConfig{IPv4Prefixes: []string{"23.143.36.0/24"}, IPv6Prefixes: []string{"2602:f5bb::/36"}},
+		Announce:        &AnnounceConfig{IPv4Prefixes: []string{"203.0.113.0/24"}, IPv6Prefixes: []string{"2001:db8::/36"}},
 	}
 }
 
@@ -113,7 +113,7 @@ func TestBGPConfig_GracefulRestartDefaultsOn(t *testing.T) {
 }
 
 func TestNeighborConfig_FamiliesFoldFlagsAndList(t *testing.T) {
-	n := NeighborConfig{Address: netip.MustParseAddr("10.255.0.2"), ASN: 401870,
+	n := NeighborConfig{Address: netip.MustParseAddr("10.255.0.2"), ASN: 64512,
 		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast}, IPv6Unicast: true}
 	require.NoError(t, n.Validate())
 	assert.True(t, n.IPv4Unicast, "the list sets the flag")
@@ -122,19 +122,19 @@ func TestNeighborConfig_FamiliesFoldFlagsAndList(t *testing.T) {
 }
 
 func TestNeighborConfig_AuthRequiresASecretReference(t *testing.T) {
-	md5 := NeighborConfig{Address: netip.MustParseAddr("10.255.0.2"), ASN: 401870, AuthType: AuthTypeMD5}
+	md5 := NeighborConfig{Address: netip.MustParseAddr("10.255.0.2"), ASN: 64512, AuthType: AuthTypeMD5}
 	err := md5.Validate()
 	if md5SessionAuthPermitted() {
 		var want ErrAuthSecretRequired
 		require.True(t, errors.As(err, &want), "got %v", err)
-		md5.AuthKeyRef = "kms://platform/bgp/miami"
+		md5.AuthKeyRef = "kms://platform/bgp/pop-a"
 		require.NoError(t, md5.Validate())
 	} else {
 		var want ErrAuthTypeUnavailableInFIPS
 		require.True(t, errors.As(err, &want), "got %v", err)
 	}
 
-	ao := NeighborConfig{Address: netip.MustParseAddr("10.255.0.2"), ASN: 401870, AuthType: AuthTypeTCPAO}
+	ao := NeighborConfig{Address: netip.MustParseAddr("10.255.0.2"), ASN: 64512, AuthType: AuthTypeTCPAO}
 	var want ErrAuthSecretRequired
 	require.True(t, errors.As(ao.Validate(), &want))
 	ao.Keychain = "vps"
@@ -143,7 +143,7 @@ func TestNeighborConfig_AuthRequiresASecretReference(t *testing.T) {
 
 func TestBGPConfig_KeychainReferencesMustResolve(t *testing.T) {
 	cfg := baseConfig()
-	cfg.Neighbors = []NeighborConfig{{Address: netip.MustParseAddr("10.255.0.2"), ASN: 401870, AuthType: AuthTypeTCPAO, Keychain: "vps"}}
+	cfg.Neighbors = []NeighborConfig{{Address: netip.MustParseAddr("10.255.0.2"), ASN: 64512, AuthType: AuthTypeTCPAO, Keychain: "vps"}}
 	var notFound ErrKeychainNotFound
 	require.True(t, errors.As(cfg.Validate(), &notFound))
 
@@ -186,13 +186,13 @@ func TestPrefixMatch_Validate(t *testing.T) {
 
 func TestBGPConfig_ResolveSecrets(t *testing.T) {
 	cfg := baseConfig()
-	cfg.Neighbors = []NeighborConfig{{Address: netip.MustParseAddr("10.255.0.2"), ASN: 401870, AuthType: AuthTypeMD5, AuthKeyRef: "kms://platform/bgp/miami"}}
+	cfg.Neighbors = []NeighborConfig{{Address: netip.MustParseAddr("10.255.0.2"), ASN: 64512, AuthType: AuthTypeMD5, AuthKeyRef: "kms://platform/bgp/pop-a"}}
 	cfg.Keychains = []TCPAOKeychainConfig{{Name: "vps", Keys: []TCPAOKeyConfig{{SendID: 1, ReceiveID: 1, MasterKeyRef: "kms://platform/bgp/vps"}}}}
 
 	var resolverRequired ErrSecretResolverRequired
 	require.True(t, errors.As(cfg.ResolveSecrets(context.Background(), nil), &resolverRequired))
 
-	resolved := map[string][]byte{"kms://platform/bgp/miami": []byte("s3cret"), "kms://platform/bgp/vps": []byte("master")}
+	resolved := map[string][]byte{"kms://platform/bgp/pop-a": []byte("s3cret"), "kms://platform/bgp/vps": []byte("master")}
 	resolve := func(_ context.Context, ref string) ([]byte, error) {
 		v, ok := resolved[ref]
 		if !ok {
@@ -211,7 +211,7 @@ func TestBGPConfig_ResolveSecrets(t *testing.T) {
 	}))
 
 	bad := baseConfig()
-	bad.Neighbors = []NeighborConfig{{Address: netip.MustParseAddr("10.255.0.2"), ASN: 401870, AuthType: AuthTypeMD5, AuthKeyRef: "kms://missing"}}
+	bad.Neighbors = []NeighborConfig{{Address: netip.MustParseAddr("10.255.0.2"), ASN: 64512, AuthType: AuthTypeMD5, AuthKeyRef: "kms://missing"}}
 	var failed ErrSecretResolutionFailed
 	err := bad.ResolveSecrets(context.Background(), resolve)
 	require.True(t, errors.As(err, &failed))
@@ -228,7 +228,7 @@ func TestBGPConfig_ResolveSecrets_EmptyValueIsRefused(t *testing.T) {
 	empty := func(context.Context, string) ([]byte, error) { return []byte{}, nil }
 
 	cfg := baseConfig()
-	cfg.Neighbors = []NeighborConfig{{Address: netip.MustParseAddr("10.255.0.2"), ASN: 401870, AuthType: AuthTypeMD5, AuthKeyRef: "kms://platform/bgp/miami"}}
+	cfg.Neighbors = []NeighborConfig{{Address: netip.MustParseAddr("10.255.0.2"), ASN: 64512, AuthType: AuthTypeMD5, AuthKeyRef: "kms://platform/bgp/pop-a"}}
 	err := cfg.ResolveSecrets(context.Background(), empty)
 	var failed ErrSecretResolutionFailed
 	require.True(t, errors.As(err, &failed), "got %v", err)
@@ -251,7 +251,7 @@ func TestSpeaker_AddPeerInstallsItsPolicyFirst(t *testing.T) {
 	cfg.Neighbors = nil
 	s, mock := startedSpeaker(t, cfg)
 
-	peer := &NeighborConfig{Address: netip.MustParseAddr("10.255.0.99"), ASN: 401870, EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast}}
+	peer := &NeighborConfig{Address: netip.MustParseAddr("10.255.0.99"), ASN: 64512, EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast}}
 	require.NoError(t, s.AddPeer(context.Background(), peer))
 
 	mock.mu.Lock()
@@ -292,7 +292,7 @@ func TestSpeaker_StartInstallsKeychainsAndPolicies(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Keychains = []TCPAOKeychainConfig{{Name: "vps", Keys: []TCPAOKeyConfig{{SendID: 1, ReceiveID: 2, Algorithm: TCPAOAlgorithmAES128CMAC96, MasterKey: []byte("k")}}}}
 	cfg.Neighbors = []NeighborConfig{
-		{Address: netip.MustParseAddr("10.255.0.2"), ASN: 401870, EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast},
+		{Address: netip.MustParseAddr("10.255.0.2"), ASN: 64512, EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast},
 			Policy: PeerPolicyConfig{ImportAllow: []PrefixMatch{{Prefix: netip.MustParsePrefix("0.0.0.0/0")}}}},
 	}
 	require.NoError(t, cfg.Validate())
@@ -324,11 +324,11 @@ func TestSpeaker_StartInstallsKeychainsAndPolicies(t *testing.T) {
 	exportV4 := mock.policies.DefinedSets[3]
 	assert.Equal(t, "tp-export-10-255-0-2-prefixes-v4", exportV4.Name)
 	require.Len(t, exportV4.Prefixes, 1, "export defaults to the announced prefixes, v4 half")
-	assert.Equal(t, "23.143.36.0/24", exportV4.Prefixes[0].IpPrefix)
+	assert.Equal(t, "203.0.113.0/24", exportV4.Prefixes[0].IpPrefix)
 	exportV6 := mock.policies.DefinedSets[4]
 	assert.Equal(t, "tp-export-10-255-0-2-prefixes-v6", exportV6.Name)
 	require.Len(t, exportV6.Prefixes, 1, "and its v6 half")
-	assert.Equal(t, "2602:f5bb::/36", exportV6.Prefixes[0].IpPrefix)
+	assert.Equal(t, "2001:db8::/36", exportV6.Prefixes[0].IpPrefix)
 
 	// Two global policies. Import opens with the local-origin accept, then
 	// one accept statement per family, both naming their own set and both
@@ -376,7 +376,7 @@ func TestSpeaker_PeerCarriesPolicyBFDAndPrefixLimit(t *testing.T) {
 	require.NoError(t, err)
 
 	n := &NeighborConfig{
-		Address: netip.MustParseAddr("10.255.0.2"), ASN: 401870,
+		Address: netip.MustParseAddr("10.255.0.2"), ASN: 64512,
 		AuthType: AuthTypeMD5, AuthKey: "s3cret",
 		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast, AFamilyIPv6Unicast},
 		MaxPrefixes:     7,
@@ -418,7 +418,7 @@ func TestSpeaker_TCPAOPeerIsRefusedUntilGoBGPBindsIt(t *testing.T) {
 	cfg.Keychains = []TCPAOKeychainConfig{{Name: "vps", Keys: []TCPAOKeyConfig{{SendID: 1, ReceiveID: 1, MasterKey: []byte("k")}}}}
 	sp, mock := startedSpeaker(t, cfg)
 
-	err := sp.AddPeer(context.Background(), &NeighborConfig{Address: netip.MustParseAddr("10.255.0.18"), ASN: 401870,
+	err := sp.AddPeer(context.Background(), &NeighborConfig{Address: netip.MustParseAddr("10.255.0.18"), ASN: 64512,
 		AuthType: AuthTypeTCPAO, Keychain: "vps", EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast}})
 	var want ErrTCPAOSessionBindingUnsupported
 	require.True(t, errors.As(err, &want), "got %v", err)
@@ -432,10 +432,10 @@ func TestPathConversion_RoundTrip(t *testing.T) {
 	sp := &Speaker{}
 	in := &Path{
 		Family:      AFamilyIPv4Unicast,
-		Prefix:      netip.MustParsePrefix("23.143.36.0/24"),
+		Prefix:      netip.MustParsePrefix("203.0.113.0/24"),
 		NextHop:     netip.MustParseAddr("10.255.0.1"),
 		Origin:      OriginIGP,
-		ASPath:      []uint32{401870},
+		ASPath:      []uint32{64512},
 		LocalPref:   200,
 		MED:         50,
 		Communities: []uint32{0x6200A001},
@@ -444,7 +444,7 @@ func TestPathConversion_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	native, err := apiPathToNative(apiPath)
 	require.NoError(t, err)
-	assert.Equal(t, "23.143.36.0/24", native.Nlri.String())
+	assert.Equal(t, "203.0.113.0/24", native.Nlri.String())
 	require.Len(t, native.Attrs, 6)
 
 	back := nativePathToAPI(native)
@@ -467,13 +467,13 @@ func TestPathConversion_RoundTrip(t *testing.T) {
 
 func TestPathConversion_IPv6UsesMPReach(t *testing.T) {
 	sp := &Speaker{}
-	apiPath, err := sp.pathToAPIPath(&Path{Family: AFamilyIPv6Unicast, Prefix: netip.MustParsePrefix("2602:f5bb::/36"), NextHop: netip.MustParseAddr("2602:f5bb:cafe:1::1")})
+	apiPath, err := sp.pathToAPIPath(&Path{Family: AFamilyIPv6Unicast, Prefix: netip.MustParsePrefix("2001:db8::/36"), NextHop: netip.MustParseAddr("2001:db8:cafe:1::1")})
 	require.NoError(t, err)
 	native, err := apiPathToNative(apiPath)
 	require.NoError(t, err)
 	out := sp.apiPathToPath(nativePathToAPI(native), AFamilyIPv6Unicast)
-	assert.Equal(t, netip.MustParsePrefix("2602:f5bb::/36"), out.Prefix)
-	assert.Equal(t, netip.MustParseAddr("2602:f5bb:cafe:1::1"), out.NextHop)
+	assert.Equal(t, netip.MustParsePrefix("2001:db8::/36"), out.Prefix)
+	assert.Equal(t, netip.MustParseAddr("2001:db8:cafe:1::1"), out.NextHop)
 }
 
 func TestWrapper_WatchEventRefusesAnEmptyRequest(t *testing.T) {

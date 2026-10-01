@@ -295,7 +295,7 @@ reads echo it back for operator auditability. See
 
 Both routes also accept `tls_server_name`: the certificate name the
 attestation collector verifies a node of this profile against when it dials
-it for a quote (e.g. `compute.trusted-platform.internal`); omitted means the
+it for a quote (e.g. `compute.example.internal`); omitted means the
 device's own FQDN. On `PUT` an omitted `tls_server_name` keeps the stored
 value (`api.md` §3.3). The operator path is
 `platformctl device profile update <id> --tls-server-name <name>`.
@@ -320,7 +320,7 @@ Response `200 OK`:
   "provisioning_network": {"vlan": 998, "auth_method": "none"},
   "production_network": {"vlan": 100, "auth_method": "802.1x"},
   "quarantine_network": {"vlan": 666, "auth_method": "none"},
-  "tls_server_name": "compute.trusted-platform.internal",
+  "tls_server_name": "compute.example.internal",
   "pcr_baseline": {
     "values": {"0": "a1b2...", "7": "c3d4..."},
     "source": "tofu",

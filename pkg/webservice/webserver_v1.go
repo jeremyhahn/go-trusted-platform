@@ -14,19 +14,18 @@
 // @title Trusted Platform
 // @version 0.0.6-alpha.1
 // @description The Trusted Platform RESTful Web Services API
-// @termsOfService https://www.trusted-platform.io/terms
+// @termsOfService https://letstrust.org/terms
 
 // @contact.name API Support
-// @contact.url https://www.trusted-platform.io/support
-// @contact.email support@trusted-platform.io
+// @contact.url https://letstrust.org/support
+// @contact.email support@letstrust.org
 
 // @license.name Apache 2.0
 // @license.url https://www.apache.org/licenses/LICENSE-2.0.txt
 
 // @license.name Commercial
-// @license.url https://www.trusted-platform.io/licenses/commercial.txt
+// @license.url https://letstrust.org/licenses/commercial.txt
 
-// @host trusted-platform.io
 // @BasePath /api/v1
 // schemes: [http, https, ws, wss]
 // @securityDefinitions.apikey JWT

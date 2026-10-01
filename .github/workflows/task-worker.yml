@@ -41,7 +41,7 @@ jobs:
     runs-on: claude
     timeout-minutes: 120
     env:
-      GITEA_URL: http://198.51.100.91:3001
+      GITEA_URL: ${{ github.server_url }}
       REPO: ${{ github.event.repository.name }}
       ISSUE: ${{ github.event.issue.number }}
       AGENT_TOKEN: ${{ secrets.AGENT_TOKEN }}
@@ -77,7 +77,7 @@ jobs:
     runs-on: codex-task
     timeout-minutes: 120
     env:
-      GITEA_URL: http://198.51.100.91:3001
+      GITEA_URL: ${{ github.server_url }}
       REPO: ${{ github.event.repository.name }}
       ISSUE: ${{ github.event.issue.number }}
       AGENT_TOKEN: ${{ secrets.AGENT_TOKEN }}

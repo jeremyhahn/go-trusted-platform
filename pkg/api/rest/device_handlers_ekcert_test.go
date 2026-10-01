@@ -69,7 +69,7 @@ func TestHandleCreateProfile_EKPrestageFields(t *testing.T) {
 		EKSerial:   "EK-REST-1",
 		EKCert:     certPEM,
 		MACAddress: "aa:bb:cc:dd:ee:01",
-		Config:     map[string]any{"hostname": "lab-node-2"},
+		Config:     map[string]any{"hostname": "node-02"},
 		Assigned:   true,
 		AssignedAt: assignedAt,
 	}
@@ -92,7 +92,7 @@ func TestHandleCreateProfile_EKPrestageFields(t *testing.T) {
 	assert.Equal(t, assignedAt, resp.AssignedAt.UTC())
 	config, ok := resp.Config.(map[string]any)
 	require.True(t, ok, "config must round-trip as a JSON object, got %T", resp.Config)
-	assert.Equal(t, "lab-node-2", config["hostname"])
+	assert.Equal(t, "node-02", config["hostname"])
 }
 
 // TestHandleCreateProfile_InvalidEKCert verifies the REST create path
@@ -144,7 +144,7 @@ func TestHandleUpdateProfile_EKPrestageFields(t *testing.T) {
 		EKSerial:   "EK-REST-2",
 		EKCert:     certPEM,
 		MACAddress: "aa:bb:cc:dd:ee:02",
-		Config:     map[string]any{"hostname": "lab-node-3"},
+		Config:     map[string]any{"hostname": "node-03"},
 		Assigned:   &assigned,
 		AssignedAt: &assignedAt,
 	})

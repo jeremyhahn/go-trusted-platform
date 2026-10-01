@@ -40,13 +40,13 @@ import (
 //
 // Example full paths:
 //
-//	tenants/acme/nodes/lab-node-2/params/hostname                  → "lab-node-2.acme.local"
-//	tenants/acme/nodes/lab-node-2/params/role                      → "control-plane"
-//	tenants/acme/nodes/lab-node-2/params/bmc/host                  → "198.18.1.103"
-//	tenants/acme/nodes/lab-node-2/secrets/bmc/password             → (encrypted)
-//	tenants/acme/nodes/lab-node-2/secrets/luks/recovery            → (encrypted, escrow only)
-//	tenants/acme/nodes/lab-node-2/params/firstboot/escrowed_at     → "2026-04-07T18:14:21Z"
-//	tenants/acme/networks/mgmt/params/cidr                      → "198.18.1.0/24"
+//	tenants/acme/nodes/node-02/params/hostname                  → "node-02.acme.local"
+//	tenants/acme/nodes/node-02/params/role                      → "control-plane"
+//	tenants/acme/nodes/node-02/params/bmc/host                  → "10.4.2.103"
+//	tenants/acme/nodes/node-02/secrets/bmc/password             → (encrypted)
+//	tenants/acme/nodes/node-02/secrets/luks/recovery            → (encrypted, escrow only)
+//	tenants/acme/nodes/node-02/params/firstboot/escrowed_at     → "2026-04-07T18:14:21Z"
+//	tenants/acme/networks/mgmt/params/cidr                      → "10.4.2.0/24"
 //	tenants/acme/clusters/prod/secrets/join_token               → (encrypted)
 //	tenants/acme/ca/params/root_fingerprint                     → "sha256:..."
 //

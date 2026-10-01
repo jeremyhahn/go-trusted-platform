@@ -34,7 +34,7 @@ func TestRecordAdmission_WritesDistinguishableEvents(t *testing.T) {
 	require.NoError(t, svc.RecordAdmission(context.Background(), calleradmission.Decision{
 		Admitted: true, Identity: "cp.example.internal", Names: []string{"cp.example.internal", "cp.example.io"},
 		Strategy: calleradmission.StrategyReportingServers, Reason: calleradmission.ReasonAdmitted,
-		Detail: "listed", RemoteAddr: "198.18.1.140:41000", At: at,
+		Detail: "listed", RemoteAddr: "10.4.2.140:41000", At: at,
 	}))
 	require.NoError(t, svc.RecordAdmission(context.Background(), calleradmission.Decision{
 		Admitted: false, Identity: "rogue.example.internal", Strategy: calleradmission.StrategyAllowlist,
@@ -49,7 +49,7 @@ func TestRecordAdmission_WritesDistinguishableEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, admitted, 1)
 	assert.Equal(t, "cp.example.internal", admitted[0].CN)
-	assert.Equal(t, "198.18.1.140", admitted[0].ClientIP)
+	assert.Equal(t, "10.4.2.140", admitted[0].ClientIP)
 	assert.Equal(t, "admitted", admitted[0].Outcome)
 	assert.Equal(t, "reporting-servers", admitted[0].Metadata["strategy"])
 	assert.Equal(t, "false", admitted[0].Metadata["security_relevant"])

@@ -1,4 +1,3 @@
-ORG                     := automatethethingsllc
 
 REPO                    ?= github.com
 PACKAGE                 ?= trusted-platform-web

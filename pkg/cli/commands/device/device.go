@@ -57,7 +57,7 @@ Examples:
     --mac 00:25:90:FF:AA:01 \
     --role gateway \
     --template gateway-default \
-    --server https://198.18.1.140:8443
+    --server https://10.4.2.140:8443
 
   # Delete a device
   platformctl device delete 123

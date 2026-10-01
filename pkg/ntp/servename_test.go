@@ -55,7 +55,7 @@ func TestEvaluateServeNamesFlagsAnAddressTheAllowListRefuses(t *testing.T) {
 	cfg := servingConfig("cp.example.internal")
 
 	findings := cfg.EvaluateServeNames(map[string]ServeNameResolution{
-		"cp.example.internal": {Addrs: addrs(t, "198.18.1.140")},
+		"cp.example.internal": {Addrs: addrs(t, "10.4.2.140")},
 	})
 
 	if len(findings) != 1 {
@@ -65,7 +65,7 @@ func TestEvaluateServeNamesFlagsAnAddressTheAllowListRefuses(t *testing.T) {
 	if f.Name != "cp.example.internal" {
 		t.Errorf("Name = %q", f.Name)
 	}
-	if f.Address != "198.18.1.140" {
+	if f.Address != "10.4.2.140" {
 		t.Errorf("Address = %q, want the address that was refused", f.Address)
 	}
 	if len(f.ListenNetworks) != 2 {
@@ -75,7 +75,7 @@ func TestEvaluateServeNamesFlagsAnAddressTheAllowListRefuses(t *testing.T) {
 	// The message must carry all three facts an operator needs to
 	// reconcile: which name, which address, and what is allowed.
 	msg := f.String()
-	for _, want := range []string{"cp.example.internal", "198.18.1.140", "198.18.0.0/24", "172.16.201.0/24"} {
+	for _, want := range []string{"cp.example.internal", "10.4.2.140", "10.4.200.0/24", "192.0.2.0/24"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message %q does not name %q", msg, want)
 		}
@@ -89,13 +89,13 @@ func TestEvaluateServeNamesAcceptsAnAllowedAddress(t *testing.T) {
 	cfg := servingConfig("cp.example.internal")
 
 	if findings := cfg.EvaluateServeNames(map[string]ServeNameResolution{
-		"cp.example.internal": {Addrs: addrs(t, "198.18.0.2")},
+		"cp.example.internal": {Addrs: addrs(t, "10.4.200.2")},
 	}); len(findings) != 0 {
 		t.Fatalf("findings = %+v, want none for an allowed address", findings)
 	}
 
 	if findings := cfg.EvaluateServeNames(map[string]ServeNameResolution{
-		"cp.example.internal": {Addrs: addrs(t, "198.18.1.140", "198.18.0.2")},
+		"cp.example.internal": {Addrs: addrs(t, "10.4.2.140", "10.4.200.2")},
 	}); len(findings) != 0 {
 		t.Fatalf("findings = %+v, want none when one address is allowed", findings)
 	}
@@ -111,7 +111,7 @@ func TestEvaluateServeNamesSeparatesUnresolvedFromRefused(t *testing.T) {
 
 	findings := cfg.EvaluateServeNames(map[string]ServeNameResolution{
 		// cp resolved and is allowed; time was never looked up.
-		"cp.example.internal": {Addrs: addrs(t, "198.18.0.2")},
+		"cp.example.internal": {Addrs: addrs(t, "10.4.200.2")},
 	})
 	if len(findings) != 0 {
 		t.Fatalf("findings = %+v, want none: an unresolved name is not a refused name", findings)
@@ -131,7 +131,7 @@ func TestEvaluateServeNamesSeparatesUnresolvedFromRefused(t *testing.T) {
 // TestEvaluateServeNamesNotApplicable asserts the check is inert wherever
 // there is nothing to reconcile.
 func TestEvaluateServeNamesNotApplicable(t *testing.T) {
-	resolved := map[string]ServeNameResolution{"cp.example.internal": {Addrs: addrs(t, "198.18.1.140")}}
+	resolved := map[string]ServeNameResolution{"cp.example.internal": {Addrs: addrs(t, "10.4.2.140")}}
 
 	var nilCfg *Config
 	if findings := nilCfg.EvaluateServeNames(resolved); findings != nil {
@@ -155,16 +155,16 @@ func TestEvaluateServeNamesNotApplicable(t *testing.T) {
 // on top of a real configuration bug.
 func TestEvaluateServeNamesSkipsUnparseableAllowEntries(t *testing.T) {
 	cfg := servingConfig("cp.example.internal")
-	cfg.Serve.ListenNetworks = []string{"not-a-cidr", "198.18.0.0/24"}
+	cfg.Serve.ListenNetworks = []string{"not-a-cidr", "10.4.200.0/24"}
 
 	if findings := cfg.EvaluateServeNames(map[string]ServeNameResolution{
-		"cp.example.internal": {Addrs: addrs(t, "198.18.0.2")},
+		"cp.example.internal": {Addrs: addrs(t, "10.4.200.2")},
 	}); len(findings) != 0 {
 		t.Fatalf("findings = %+v, want none: the parseable entry still covers the address", findings)
 	}
 
 	findings := cfg.EvaluateServeNames(map[string]ServeNameResolution{
-		"cp.example.internal": {Addrs: addrs(t, "198.18.1.140")},
+		"cp.example.internal": {Addrs: addrs(t, "10.4.2.140")},
 	})
 	if len(findings) != 1 {
 		t.Fatalf("findings = %+v, want the mismatch reported from the parseable entries", findings)
@@ -191,9 +191,9 @@ func TestEvaluateServeNamesIPv6(t *testing.T) {
 	}
 
 	// A v4-mapped v6 answer for an allowed v4 address is the same host.
-	cfg.Serve.ListenNetworks = []string{"198.18.0.0/24"}
+	cfg.Serve.ListenNetworks = []string{"10.4.200.0/24"}
 	if findings := cfg.EvaluateServeNames(map[string]ServeNameResolution{
-		"cp.example.internal": {Addrs: addrs(t, "::ffff:198.18.0.2")},
+		"cp.example.internal": {Addrs: addrs(t, "::ffff:10.4.200.2")},
 	}); len(findings) != 0 {
 		t.Fatalf("findings = %+v, want none: a v4-mapped answer is the same host", findings)
 	}
@@ -247,7 +247,7 @@ func serveNameService(t *testing.T, cfg *Config) *Service {
 func TestCheckServeNamesLatchesTheFinding(t *testing.T) {
 	service := serveNameService(t, servingConfig("cp.example.internal"))
 	resolver := &stubResolver{answers: map[string][]netip.Addr{
-		"cp.example.internal": addrs(t, "198.18.1.140"),
+		"cp.example.internal": addrs(t, "10.4.2.140"),
 	}}
 
 	findings := service.CheckServeNames(context.Background(), resolver)
@@ -278,14 +278,14 @@ func TestCheckServeNamesLatchesTheFinding(t *testing.T) {
 func TestCheckServeNamesClearsAReconciledZone(t *testing.T) {
 	service := serveNameService(t, servingConfig("cp.example.internal"))
 	bad := &stubResolver{answers: map[string][]netip.Addr{
-		"cp.example.internal": addrs(t, "198.18.1.140"),
+		"cp.example.internal": addrs(t, "10.4.2.140"),
 	}}
 	if findings := service.CheckServeNames(context.Background(), bad); len(findings) != 1 {
 		t.Fatalf("setup: findings = %+v", findings)
 	}
 
 	good := &stubResolver{answers: map[string][]netip.Addr{
-		"cp.example.internal": addrs(t, "198.18.0.2"),
+		"cp.example.internal": addrs(t, "10.4.200.2"),
 	}}
 	if findings := service.CheckServeNames(context.Background(), good); len(findings) != 0 {
 		t.Fatalf("findings = %+v, want none after reconciliation", findings)
@@ -359,7 +359,7 @@ func TestCheckServeNamesUnresolvableClears(t *testing.T) {
 	}
 
 	if findings := service.CheckServeNames(context.Background(), &stubResolver{
-		answers: map[string][]netip.Addr{"cp.example.internal": addrs(t, "198.18.0.2")},
+		answers: map[string][]netip.Addr{"cp.example.internal": addrs(t, "10.4.200.2")},
 	}); len(findings) != 0 {
 		t.Fatalf("findings = %+v, want none once the resolver recovers", findings)
 	}
@@ -378,7 +378,7 @@ func TestCheckServeNamesReportsBothKindsTogether(t *testing.T) {
 		answers: map[string][]netip.Addr{
 			// cp resolves onto a segment the allow list refuses;
 			// time.example.internal is absent from the stub, so it fails.
-			"cp.example.internal": addrs(t, "198.18.1.140"),
+			"cp.example.internal": addrs(t, "10.4.2.140"),
 		},
 	})
 	if len(findings) != 2 {

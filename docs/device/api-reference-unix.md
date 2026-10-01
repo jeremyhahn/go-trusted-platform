@@ -106,7 +106,7 @@ platformctl profile find-serial --prefix "IOT-"
 # profile against (the pb DeviceProfile tls_server_name; docs/device/cli.md §3),
 # then confirm it over the same socket
 platformctl device profile list
-platformctl device profile update 123 --tls-server-name compute.trusted-platform.internal
+platformctl device profile update 123 --tls-server-name compute.example.internal
 platformctl device profile get 123 --output json
 ```
 

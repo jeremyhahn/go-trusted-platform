@@ -174,7 +174,7 @@ func TestInvoke_ProvisioningRequestEncodesPBFieldNames(t *testing.T) {
 func TestInvoke_ProvisioningFetchConfig_DeliveredRoundTrip(t *testing.T) {
 	encoded, err := quicapi.EncodePayload(&daemonFetchConfigWire{
 		Result:     "delivered",
-		ConfigJson: []byte(`{"hostname":"lab-node-2"}`),
+		ConfigJson: []byte(`{"hostname":"node-02"}`),
 		Status:     "ok",
 	})
 	if err != nil {
@@ -198,7 +198,7 @@ func TestInvoke_ProvisioningFetchConfig_DeliveredRoundTrip(t *testing.T) {
 	if delivered.GetStatus() != "ok" {
 		t.Errorf("status = %q, want ok", delivered.GetStatus())
 	}
-	if string(delivered.GetConfigJson()) != `{"hostname":"lab-node-2"}` {
+	if string(delivered.GetConfigJson()) != `{"hostname":"node-02"}` {
 		t.Errorf("config_json = %s", delivered.GetConfigJson())
 	}
 	if reply.GetPending() != nil {

@@ -59,7 +59,7 @@ func BenchmarkStatus(b *testing.B) {
 	controller := &fakeController{
 		tracking: []*Tracking{syncedTracking()},
 		sources: []Source{
-			{Address: "198.18.0.1", Reach: 377, Reachable: true},
+			{Address: "10.4.200.1", Reach: 377, Reachable: true},
 			{Address: "203.0.113.9", Reach: 0, Reachable: false},
 		},
 	}

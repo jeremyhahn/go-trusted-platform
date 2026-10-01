@@ -27,7 +27,7 @@ import (
 
 func peerWithFamilies(afiSafis []*api.AfiSafi, bfd *api.BfdPeerConfig, bfdState *api.BfdPeerState) *api.Peer {
 	return &api.Peer{
-		Conf:     &api.PeerConf{NeighborAddress: "10.255.0.2", PeerAsn: 401870},
+		Conf:     &api.PeerConf{NeighborAddress: "10.255.0.2", PeerAsn: 64512},
 		State:    &api.PeerState{SessionState: api.PeerState_SESSION_STATE_ESTABLISHED, BfdState: bfdState},
 		Bfd:      bfd,
 		AfiSafis: append([]*api.AfiSafi(nil), afiSafis...),

@@ -68,7 +68,7 @@ func TestBMCCertIssuanceAgainstSupermicro(t *testing.T) {
 
     cfg := bmctest.WithDNSCert(
         bmctest.ConfigFor(bmctest.VBMCFlavorSupermicro),
-        "vbmc-supermicro.trusted-platform.internal",
+        "vbmc-supermicro.example.internal",
     )
     cfg.Backend = "" // auto; AutoCertManager will pick SMC-CGI for Supermicro
 

@@ -104,7 +104,7 @@ GrapheneOS has experimental support for the following devices:
 
 ### Fastboot Protocol
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/android/fastboot/protocol.go`
+**Location**: `pkg/firmware/android/fastboot/protocol.go`
 
 ```go
 package fastboot
@@ -231,7 +231,7 @@ func (f *FastbootDevice) UnlockBootloader() error {
 
 ### USB Device Detection
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/android/fastboot/detect.go`
+**Location**: `pkg/firmware/android/fastboot/detect.go`
 
 ```go
 func DetectFastbootDevices() ([]*FastbootDevice, error) {
@@ -285,7 +285,7 @@ func isFastbootDevice(dev *gousb.Device) bool {
 
 ### Building GrapheneOS
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/android/grapheneos/builder.go`
+**Location**: `pkg/firmware/android/grapheneos/builder.go`
 
 ```go
 package grapheneos
@@ -387,7 +387,7 @@ func (b *GrapheneOSBuilder) signImages() (*BuildArtifacts, error) {
 
 ### Signing Keys
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/android/signing/keys.go`
+**Location**: `pkg/firmware/android/signing/keys.go`
 
 ```go
 package signing
@@ -454,7 +454,7 @@ func SignVBMeta(vbmetaImg string, key *rsa.PrivateKey) error {
 
 ### OTA Update Implementation
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/ota/android.go`
+**Location**: `pkg/ota/android.go`
 
 ```go
 package ota
@@ -555,7 +555,7 @@ func (u *AndroidOTAUpdater) getInactiveSlot() string {
 
 ### Rollback Protection
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/android/rollback/`
+**Location**: `pkg/firmware/android/rollback/`
 
 ```go
 package rollback
@@ -606,7 +606,7 @@ func (r *RollbackProtection) IncrementRollbackIndex() error {
 
 ### Android Key Attestation API
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/android/attestation/hardware.go`
+**Location**: `pkg/firmware/android/attestation/hardware.go`
 
 ```go
 package attestation
@@ -688,7 +688,7 @@ type AttestationExtension struct {
 
 ### Attestation Verification
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/android/attestation/verifier.go`
+**Location**: `pkg/firmware/android/attestation/verifier.go`
 
 ```go
 func VerifyHardwareAttestation(attestation *Attestation) error {
@@ -727,7 +727,7 @@ func VerifyHardwareAttestation(attestation *Attestation) error {
 
 ### ADB for Remote Operations
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/android/adb/client.go`
+**Location**: `pkg/firmware/android/adb/client.go`
 
 ```go
 package adb
@@ -774,7 +774,7 @@ func (c *Client) Reboot(mode string) error {
 
 ### Complete Flash Workflow
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/android/flasher/flasher.go`
+**Location**: `pkg/firmware/android/flasher/flasher.go`
 
 ```go
 package flasher
@@ -872,7 +872,7 @@ func (f *AndroidFlasher) isBootloaderLocked() (bool, error) {
 
 ### Emulator Testing
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/testing/android_emulator.go`
+**Location**: `pkg/firmware/testing/android_emulator.go`
 
 ```go
 type AndroidEmulator struct {

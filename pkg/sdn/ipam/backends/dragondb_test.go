@@ -1144,7 +1144,7 @@ func TestQuicBaaSBackend_GetAllocationsByDevice(t *testing.T) {
 	pool := &ipam.Pool{
 		ID:   "device-alloc-pool-1",
 		Name: "device-alloc-pool",
-		CIDR: netip.MustParsePrefix("198.18.1.0/24"),
+		CIDR: netip.MustParsePrefix("10.4.2.0/24"),
 	}
 	if err := backend.CreatePool(ctx, pool); err != nil {
 		t.Fatalf("failed to create pool: %v", err)
@@ -1373,7 +1373,7 @@ func TestQuicBaaSBackend_ExpireInactive(t *testing.T) {
 		pool := &ipam.Pool{
 			ID:                "expire-pool-2",
 			Name:              "expire-pool-2",
-			CIDR:              netip.MustParsePrefix("198.51.100.0/24"),
+			CIDR:              netip.MustParsePrefix("10.4.6.0/24"),
 			InactivityTimeout: 24 * time.Hour, // Long timeout
 		}
 		if err := backend.CreatePool(ctx, pool); err != nil {

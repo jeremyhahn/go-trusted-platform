@@ -85,8 +85,8 @@ OBJECT         HANDLE         CERTIFICATE                                NOTES
 EK             present        present (PEM)
 SSRK           present        n/a                                        0x81000001
 PlatformSRK    present        n/a                                        0x81000002; default handle assumed (daemon config not exposed); override with --platform-srk-handle
-IAK            present        present (cert lacks verifiedTPMRestricted) 0x81010002; issuer ca01.cp.trusted-platform.io
-IDevID         present        present                                    0x81020000; issuer ca01.cp.trusted-platform.io
+IAK            present        present (cert lacks verifiedTPMRestricted) 0x81010002; issuer ca01.cp.example.com
+IDevID         present        present                                    0x81020000; issuer ca01.cp.example.com
 ```
 
 How to read a row:

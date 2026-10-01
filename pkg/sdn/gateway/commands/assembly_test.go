@@ -798,7 +798,7 @@ func TestBuildHostRuntimeWithoutProxy(t *testing.T) {
 func TestLoadServeConfigSecretStore(t *testing.T) {
 	yaml := []byte(`
 secret-store:
-  quicbaas-addr: 198.18.0.10:9443
+  quicbaas-addr: 10.4.6.10:9443
   quicbaas-transport: grpc
   timeout: 3s
 `)
@@ -814,7 +814,7 @@ secret-store:
 	if cfg.Secrets == nil {
 		t.Fatal("secret-store section must decode")
 	}
-	if cfg.Secrets.QuicBaaSAddr != "198.18.0.10:9443" || cfg.Secrets.QuicBaaSTransport != "grpc" {
+	if cfg.Secrets.QuicBaaSAddr != "10.4.6.10:9443" || cfg.Secrets.QuicBaaSTransport != "grpc" {
 		t.Fatalf("secret store: %+v", cfg.Secrets)
 	}
 	if cfg.Secrets.Timeout != 3*time.Second {

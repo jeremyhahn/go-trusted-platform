@@ -1578,9 +1578,9 @@ func (p *authzStubPolicy) Anchors() []*x509.Certificate { return nil }
 func machineCallerRequest(path string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, path, nil)
 	req.TLS = &tls.ConnectionState{
-		PeerCertificates: []*x509.Certificate{{Subject: pkix.Name{CommonName: "lab-node-5-compute-01"}}},
+		PeerCertificates: []*x509.Certificate{{Subject: pkix.Name{CommonName: "node-05-compute-01"}}},
 	}
-	req.RemoteAddr = "198.18.1.143:41000"
+	req.RemoteAddr = "10.4.2.143:41000"
 	return req
 }
 
@@ -1589,7 +1589,7 @@ func TestQuoteRoutes_RefusedMachineCallerGets403FromTheGate(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			policy := &authzStubPolicy{decision: calleradmission.Decision{
 				Admitted: false,
-				Identity: "lab-node-5-compute-01",
+				Identity: "node-05-compute-01",
 				Strategy: calleradmission.StrategyReportingServers,
 				Reason:   calleradmission.ReasonNotListed,
 			}}
@@ -1611,7 +1611,7 @@ func TestQuoteRoutes_RefusedMachineCallerGets403FromTheGate(t *testing.T) {
 func TestQuoteRoutes_AdmittedMachineCallerBypassesTheOperatorChain(t *testing.T) {
 	policy := &authzStubPolicy{decision: calleradmission.Decision{
 		Admitted: true,
-		Identity: "cp.trusted-platform.internal",
+		Identity: "cp.example.internal",
 		Strategy: calleradmission.StrategyReportingServers,
 		Reason:   calleradmission.ReasonAdmitted,
 	}}

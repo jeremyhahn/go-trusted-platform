@@ -24,28 +24,28 @@ func TestBuildDNSMasqConf_LoopbackUpstreamForwards(t *testing.T) {
 	conf := buildDNSMasqConf(&DNSMasqConfig{
 		Enabled:         true,
 		UpstreamServers: []string{"127.0.0.1#9053"},
-		LocalDomain:     "trusted-platform.internal",
+		LocalDomain:     "example.internal",
 	})
 
 	assert.Contains(t, conf, "server=127.0.0.1#9053\n")
-	assert.Contains(t, conf, "domain=trusted-platform.internal\n")
+	assert.Contains(t, conf, "domain=example.internal\n")
 	assert.NotContains(t, conf, "local=")
 }
 
 // TestBuildDNSMasqConf_RemoteUpstreamForwardsInternalDomain is the
-// regression test for issue #128 (lab-node-5, run 8): a worker forwarding
+// regression test for issue #128 (node-05, run 8): a worker forwarding
 // to the control plane's IP must NOT declare the internal domain local,
 // or cp.<domain> resolves NXDOMAIN and platformd cannot reach the ACME
 // directory.
 func TestBuildDNSMasqConf_RemoteUpstreamForwardsInternalDomain(t *testing.T) {
 	conf := buildDNSMasqConf(&DNSMasqConfig{
 		Enabled:         true,
-		UpstreamServers: []string{"198.18.1.140#9053"},
-		LocalDomain:     "trusted-platform.internal",
+		UpstreamServers: []string{"10.4.2.140#9053"},
+		LocalDomain:     "example.internal",
 	})
 
-	assert.Contains(t, conf, "server=198.18.1.140#9053\n")
-	assert.Contains(t, conf, "domain=trusted-platform.internal\n")
+	assert.Contains(t, conf, "server=10.4.2.140#9053\n")
+	assert.Contains(t, conf, "domain=example.internal\n")
 	assert.NotContains(t, conf, "local=")
 }
 
@@ -57,14 +57,14 @@ func TestBuildDNSMasqConf_DomainScopedUpstreamPreserved(t *testing.T) {
 	conf := buildDNSMasqConf(&DNSMasqConfig{
 		Enabled: true,
 		UpstreamServers: []string{
-			"/example.internal/198.18.0.10#9053",
-			"198.18.0.10#8053",
+			"/example.internal/10.4.200.10#9053",
+			"10.4.200.10#8053",
 		},
 		LocalDomain: "example.internal",
 	})
 
-	assert.Contains(t, conf, "server=/example.internal/198.18.0.10#9053\n")
-	assert.Contains(t, conf, "server=198.18.0.10#8053\n")
+	assert.Contains(t, conf, "server=/example.internal/10.4.200.10#9053\n")
+	assert.Contains(t, conf, "server=10.4.200.10#8053\n")
 	assert.Contains(t, conf, "domain=example.internal\n")
 	assert.NotContains(t, conf, "local=")
 }
@@ -119,7 +119,7 @@ func TestBuildDNSMasqConf_NoLocalDomain(t *testing.T) {
 func TestBuildDNSMasqConf_BaseDirectivesAlwaysPresent(t *testing.T) {
 	for _, upstreams := range [][]string{
 		{"127.0.0.1#9053"},
-		{"198.18.1.140#9053"},
+		{"10.4.2.140#9053"},
 		nil,
 	} {
 		conf := buildDNSMasqConf(&DNSMasqConfig{
@@ -143,13 +143,13 @@ func TestBuildDNSMasqConf_NormalizesPortSeparator(t *testing.T) {
 		Enabled: true,
 		UpstreamServers: []string{
 			"10.0.1.1:9053",
-			"/example.internal/198.18.0.10:9053",
+			"/example.internal/10.4.200.10:9053",
 		},
 		LocalDomain: "example.internal",
 	})
 
 	assert.Contains(t, conf, "server=10.0.1.1#9053\n")
-	assert.Contains(t, conf, "server=/example.internal/198.18.0.10#9053\n")
+	assert.Contains(t, conf, "server=/example.internal/10.4.200.10#9053\n")
 	assert.NotContains(t, conf, ":9053")
 	assert.NotContains(t, conf, "local=")
 }
@@ -184,13 +184,13 @@ func TestBuildDNSMasqConf_MalformedEntryWrittenVerbatim(t *testing.T) {
 		Enabled: true,
 		UpstreamServers: []string{
 			"/unterminated-scope",
-			"198.18.1.140#9053#extra",
+			"10.4.2.140#9053#extra",
 		},
 		LocalDomain: "example.internal",
 	})
 
 	assert.Contains(t, conf, "server=/unterminated-scope\n")
-	assert.Contains(t, conf, "server=198.18.1.140#9053#extra\n")
+	assert.Contains(t, conf, "server=10.4.2.140#9053#extra\n")
 	assert.NotContains(t, conf, "local=")
 }
 
@@ -202,7 +202,7 @@ func TestNormalizeDNSMasqUpstream(t *testing.T) {
 		entry string
 		want  string
 	}{
-		{"hash form unchanged", "198.18.1.140#9053", "198.18.1.140#9053"},
+		{"hash form unchanged", "10.4.2.140#9053", "10.4.2.140#9053"},
 		{"colon form rewritten", "10.0.1.1:9053", "10.0.1.1#9053"},
 		{"bare ipv4 unchanged", "1.1.1.1", "1.1.1.1"},
 		{"bare ipv6 unchanged", "::1", "::1"},
@@ -210,9 +210,9 @@ func TestNormalizeDNSMasqUpstream(t *testing.T) {
 		{"bracketed ipv6 hash form unbracketed", "[::1]#9053", "::1#9053"},
 		{"domain-scoped bracketed hash form", "/example.internal/[::1]#9053", "/example.internal/::1#9053"},
 		{"bare bracketed ipv6 unbracketed", "[::1]", "::1"},
-		{"double hash passed through", "198.18.1.140#9053#extra", "198.18.1.140#9053#extra"},
-		{"domain-scoped hash unchanged", "/example.internal/198.18.0.10#9053", "/example.internal/198.18.0.10#9053"},
-		{"domain-scoped colon rewritten", "/example.internal/198.18.0.10:9053", "/example.internal/198.18.0.10#9053"},
+		{"double hash passed through", "10.4.2.140#9053#extra", "10.4.2.140#9053#extra"},
+		{"domain-scoped hash unchanged", "/example.internal/10.4.200.10#9053", "/example.internal/10.4.200.10#9053"},
+		{"domain-scoped colon rewritten", "/example.internal/10.4.200.10:9053", "/example.internal/10.4.200.10#9053"},
 		{"hostname colon rewritten", "cp.example.internal:9053", "cp.example.internal#9053"},
 		{"surrounding whitespace trimmed", " 127.0.0.1:9053 ", "127.0.0.1#9053"},
 		{"unparseable passed through", "/unterminated-scope", "/unterminated-scope"},
@@ -238,10 +238,10 @@ func TestDnsmasqZoneHasUpstreamRoute(t *testing.T) {
 		upstreams []string
 		want      bool
 	}{
-		{"unscoped remote routes the zone", "example.internal", []string{"198.18.1.140#9053"}, true},
+		{"unscoped remote routes the zone", "example.internal", []string{"10.4.2.140#9053"}, true},
 		{"unscoped loopback routes the zone", "example.internal", []string{"127.0.0.1#9053"}, true},
 		{"unscoped colon shorthand routes the zone", "example.internal", []string{"10.0.1.1:9053"}, true},
-		{"scoped exact match routes the zone", "example.internal", []string{"/example.internal/198.18.0.10#9053"}, true},
+		{"scoped exact match routes the zone", "example.internal", []string{"/example.internal/10.4.200.10#9053"}, true},
 		{"parent scope covers subdomain", "node.example.internal", []string{"/example.internal/10.0.0.1#9053"}, true},
 		{"scope match is case-insensitive", "Example.Internal", []string{"/EXAMPLE.INTERNAL/10.0.0.1#9053"}, true},
 		{"trailing dot on scope still matches", "example.internal", []string{"/example.internal./10.0.0.1#9053"}, true},

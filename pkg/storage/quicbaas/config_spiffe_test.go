@@ -27,11 +27,11 @@ import (
 func TestToQuicBaaSConfig_SPIFFETrustDomain(t *testing.T) {
 	c := &Config{
 		DataDir:           t.TempDir(),
-		SPIFFETrustDomain: "trusted-platform.internal",
+		SPIFFETrustDomain: "example.internal",
 	}
 	c.SetDefaults()
 	cfg := c.ToQuicBaaSConfig()
-	assert.Equal(t, "trusted-platform.internal", cfg.IAM.SPIFFETrustDomain)
+	assert.Equal(t, "example.internal", cfg.IAM.SPIFFETrustDomain)
 }
 
 // TestValidate_SPIFFETrustDomain_Required proves the embedded
@@ -49,7 +49,7 @@ func TestValidate_SPIFFETrustDomain_Required(t *testing.T) {
 // TestValidate_SPIFFETrustDomain_Format accepts valid trust domain names
 // and rejects malformed ones (scheme, path, port, uppercase, spaces).
 func TestValidate_SPIFFETrustDomain_Format(t *testing.T) {
-	valid := []string{"trusted-platform.internal", "example.internal", "a", "prod-1.corp_x.io"}
+	valid := []string{"example.internal", "example.internal", "a", "prod-1.corp_x.io"}
 	for _, d := range valid {
 		c := &Config{DataDir: t.TempDir(), SPIFFETrustDomain: d}
 		assert.NoError(t, c.Validate(), d)
@@ -71,14 +71,14 @@ func TestValidate_SPIFFETrustDomain_Format(t *testing.T) {
 func TestToQuicBaaSConfig_WebAuthnRP(t *testing.T) {
 	c := &Config{
 		DataDir:               t.TempDir(),
-		SPIFFETrustDomain:     "trusted-platform.internal",
-		WebAuthnRPID:          "cp.trusted-platform.io",
+		SPIFFETrustDomain:     "example.internal",
+		WebAuthnRPID:          "cp.example.com",
 		WebAuthnRPDisplayName: "Trusted Platform",
-		WebAuthnRPOrigins:     []string{"https://cp.trusted-platform.io:8443"},
+		WebAuthnRPOrigins:     []string{"https://cp.example.com:8443"},
 	}
 	c.SetDefaults()
 	cfg := c.ToQuicBaaSConfig()
-	assert.Equal(t, "cp.trusted-platform.io", cfg.IAM.WebAuthn.RPID)
+	assert.Equal(t, "cp.example.com", cfg.IAM.WebAuthn.RPID)
 	assert.Equal(t, "Trusted Platform", cfg.IAM.WebAuthn.RPDisplayName)
-	assert.Equal(t, []string{"https://cp.trusted-platform.io:8443"}, cfg.IAM.WebAuthn.RPOrigins)
+	assert.Equal(t, []string{"https://cp.example.com:8443"}, cfg.IAM.WebAuthn.RPOrigins)
 }

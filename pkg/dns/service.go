@@ -132,7 +132,7 @@ func NewService(params *Params) (*Service, error) {
 		// "DNSSEC enabled ... but no key store and no XKMS adapter
 		// are configured" even though the service has one.
 		//
-		// Observed on lab-node-2 2026-04-08: DNSSEC service was
+		// Observed on node-02 2026-04-08: DNSSEC service was
 		// created correctly here, but the plugin's package-level
 		// KeyStore var remained nil, so every example.com/
 		// example.internal zone load hard-failed and the DNS

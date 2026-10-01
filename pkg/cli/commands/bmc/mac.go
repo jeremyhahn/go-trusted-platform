@@ -53,7 +53,7 @@ This is a standalone command: it talks directly to the BMC and requires
 
 Examples:
   platformctl bmc mac \
-    --bmc-host 198.51.100.103 \
+    --bmc-host 10.4.2.103 \
     --bmc-user ADMIN \
     --bmc-pass-file ~/.bmc-pass \
     --bmc-protocol ipmi`,

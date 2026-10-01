@@ -377,8 +377,8 @@ func createProfileRequest(t *testing.T, templateID uint64, body profileRequest) 
 func TestHandleCreateProfile_MergedConfig(t *testing.T) {
 	templateID := util.NewID([]byte("control-plane"))
 	profile := &entities.DeviceProfile{
-		ID:     util.NewID([]byte("lab-node-2")),
-		Name:   "lab-node-2",
+		ID:     util.NewID([]byte("host-02")),
+		Name:   "host-02",
 		Config: map[string]interface{}{"os": map[string]interface{}{"hostname": "template-placeholder"}},
 		PlatformdConfig: &entities.PlatformdConfigRef{
 			ConfigType: "inline",
@@ -391,17 +391,17 @@ func TestHandleCreateProfile_MergedConfig(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler.HandleCreateProfile(rr, createProfileRequest(t, templateID, profileRequest{
-		MAC:      "00:25:90:5e:02:aa",
-		Hostname: "lab-node-2",
+		MAC:      "00:25:90:00:02:aa",
+		Hostname: "host-02",
 		Role:     "control-plane",
-		Config:   json.RawMessage(`{"os":{"hostname":"lab-node-2"},"platform":{"domain":"trusted-platform.io"}}`),
+		Config:   json.RawMessage(`{"os":{"hostname":"host-02"},"platform":{"domain":"example.com"}}`),
 	}))
 
 	assert.Equal(t, http.StatusCreated, rr.Code)
 	require.NotNil(t, profSvc.saved)
 	want := map[string]interface{}{
-		"os":       map[string]interface{}{"hostname": "lab-node-2"},
-		"platform": map[string]interface{}{"domain": "trusted-platform.io"},
+		"os":       map[string]interface{}{"hostname": "host-02"},
+		"platform": map[string]interface{}{"domain": "example.com"},
 	}
 	assert.Equal(t, want, profSvc.saved.Config)
 	require.NotNil(t, profSvc.saved.PlatformdConfig)
@@ -415,34 +415,34 @@ func TestHandleCreateProfile_MergedConfig(t *testing.T) {
 // config is delivered even when the template produced no inline config ref.
 func TestHandleCreateProfile_MergedConfig_NoPlatformdConfig(t *testing.T) {
 	templateID := util.NewID([]byte("worker"))
-	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: util.NewID([]byte("lab-node-3")), Name: "lab-node-3"}}
+	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: util.NewID([]byte("host-03")), Name: "host-03"}}
 	profSvc := &mockProfileService{}
 	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
 
 	rr := httptest.NewRecorder()
 	handler.HandleCreateProfile(rr, createProfileRequest(t, templateID, profileRequest{
-		Hostname: "lab-node-3",
-		Config:   json.RawMessage(`{"os":{"hostname":"lab-node-3"}}`),
+		Hostname: "host-03",
+		Config:   json.RawMessage(`{"os":{"hostname":"host-03"}}`),
 	}))
 
 	assert.Equal(t, http.StatusCreated, rr.Code)
 	require.NotNil(t, profSvc.saved)
 	require.NotNil(t, profSvc.saved.PlatformdConfig)
 	assert.Equal(t, "inline", profSvc.saved.PlatformdConfig.ConfigType)
-	assert.Equal(t, map[string]interface{}{"os": map[string]interface{}{"hostname": "lab-node-3"}}, profSvc.saved.PlatformdConfig.Inline)
+	assert.Equal(t, map[string]interface{}{"os": map[string]interface{}{"hostname": "host-03"}}, profSvc.saved.PlatformdConfig.Inline)
 	assert.Empty(t, profSvc.saved.EKCert)
 }
 
 // TestHandleCreateProfile_InvalidConfig verifies a config that is not a JSON
 // object is rejected with 400 before anything is saved.
 func TestHandleCreateProfile_InvalidConfig(t *testing.T) {
-	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: 1, Name: "lab-node-2"}}
+	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: 1, Name: "host-02"}}
 	profSvc := &mockProfileService{}
 	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
 
 	rr := httptest.NewRecorder()
 	handler.HandleCreateProfile(rr, createProfileRequest(t, 1, profileRequest{
-		Hostname: "lab-node-2",
+		Hostname: "host-02",
 		Config:   json.RawMessage(`["not","an","object"]`),
 	}))
 
@@ -454,13 +454,13 @@ func TestHandleCreateProfile_InvalidConfig(t *testing.T) {
 // TestHandleCreateProfile_NullConfig verifies an explicit "config": null is
 // rejected with 400 rather than silently keeping the template-derived config.
 func TestHandleCreateProfile_NullConfig(t *testing.T) {
-	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: 1, Name: "lab-node-2"}}
+	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: 1, Name: "host-02"}}
 	profSvc := &mockProfileService{}
 	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/devices/templates/1/create-profile",
-		bytes.NewReader([]byte(`{"hostname":"lab-node-2","config":null}`)))
+		bytes.NewReader([]byte(`{"hostname":"host-02","config":null}`)))
 	req.Header.Set("Content-Type", "application/json")
 	handler.HandleCreateProfile(rr, mux.SetURLVars(req, map[string]string{"id": "1"}))
 
@@ -473,7 +473,7 @@ func TestHandleCreateProfile_NullConfig(t *testing.T) {
 // ek_cert is refused with 400 on this unauthenticated route, before anything
 // is saved, so a caller cannot prestage hardware identity here.
 func TestHandleCreateProfile_EKCertRefused(t *testing.T) {
-	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: 1, Name: "lab-node-2"}}
+	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: 1, Name: "host-02"}}
 	profSvc := &mockProfileService{}
 	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
 
@@ -484,7 +484,7 @@ func TestHandleCreateProfile_EKCertRefused(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
 			handler.HandleCreateProfile(rr, createProfileRequest(t, 1, profileRequest{
-				Hostname: "lab-node-2",
+				Hostname: "host-02",
 				EKCert:   ekCert,
 			}))
 
@@ -526,11 +526,11 @@ func TestProfileToResponse_NoMatchRules(t *testing.T) {
 func TestHandleCreateProfile_WithConfigOverrides(t *testing.T) {
 	templateID := util.NewID([]byte("worker"))
 	profile := &entities.DeviceProfile{
-		ID:   util.NewID([]byte("lab-node-3")),
-		Name: "lab-node-3",
+		ID:   util.NewID([]byte("host-03")),
+		Name: "host-03",
 		Role: entities.DeviceRoleServer,
 		Config: map[string]interface{}{
-			"hostname": "lab-node-3",
+			"hostname": "host-03",
 			"domain":   "compute.example.com",
 		},
 	}
@@ -540,12 +540,12 @@ func TestHandleCreateProfile_WithConfigOverrides(t *testing.T) {
 
 	body := profileRequest{
 		MAC:      "aa:bb:cc:dd:ee:ff",
-		Hostname: "lab-node-3",
+		Hostname: "host-03",
 		Role:     "worker",
 		Overrides: map[string]interface{}{
-			"hostname": "lab-node-3",
+			"hostname": "host-03",
 			"os": map[string]interface{}{
-				"hostname": "lab-node-3",
+				"hostname": "host-03",
 			},
 		},
 	}
@@ -563,10 +563,10 @@ func TestHandleCreateProfile_WithConfigOverrides(t *testing.T) {
 
 	// Verify config overrides were passed to the service
 	require.NotNil(t, tmplSvc.configOverrides)
-	assert.Equal(t, "lab-node-3", tmplSvc.configOverrides["hostname"])
+	assert.Equal(t, "host-03", tmplSvc.configOverrides["hostname"])
 	osOverrides, ok := tmplSvc.configOverrides["os"].(map[string]interface{})
 	require.True(t, ok)
-	assert.Equal(t, "lab-node-3", osOverrides["hostname"])
+	assert.Equal(t, "host-03", osOverrides["hostname"])
 }
 
 // TestHandleCreateProfile_MissingHostname verifies a 400 response when hostname is empty.

@@ -382,7 +382,7 @@ func TestOrchestrator_DryRun_PreviewsHardwareIdentity(t *testing.T) {
 		Nodes: []NodeConfig{{
 			Hostname:    "cp-01",
 			Role:        RoleControlPlane,
-			BMCAddress:  "198.18.1.103",
+			BMCAddress:  "10.4.2.103",
 			BMCUser:     "admin",
 			BMCPassword: "pass",
 			BMCProtocol: "ipmi",

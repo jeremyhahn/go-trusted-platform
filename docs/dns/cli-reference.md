@@ -95,8 +95,8 @@ platformctl dns zone list --verbose
 
 ```
 NAME                          TYPE      RECORDS  DNSSEC    SERIAL
-trusted-platform.internal.    internal  45       disabled  2024011501
-trusted-platform.io.          public    23       enabled   2024011502
+example.internal.    internal  45       disabled  2024011501
+example.com.          public    23       enabled   2024011502
 example.com.                  public    67       enabled   2024011503
 ```
 
@@ -1322,23 +1322,23 @@ When `--attest` is enabled, the client includes TPM attestation evidence with th
 
 ```bash
 # Update A record with specific IP
-platformctl dns update myhost.trusted-platform.internal 203.0.113.100
+platformctl dns update myhost.example.internal 203.0.113.100
 
 # Auto-detect IP and update
-platformctl dns update myhost.trusted-platform.internal --auto
+platformctl dns update myhost.example.internal --auto
 
 # Update with custom TTL
-platformctl dns update myhost.trusted-platform.internal 203.0.113.100 --ttl 7200
+platformctl dns update myhost.example.internal 203.0.113.100 --ttl 7200
 
 # Update IPv6 record
-platformctl dns update myhost.trusted-platform.internal 2001:db8::1 --type AAAA
+platformctl dns update myhost.example.internal 2001:db8::1 --type AAAA
 
 # Update using specific server
-platformctl dns update myhost.trusted-platform.internal 203.0.113.100 \
-  --server ns1.trusted-platform.internal:53
+platformctl dns update myhost.example.internal 203.0.113.100 \
+  --server ns1.example.internal:53
 
 # Dry run to preview
-platformctl dns update myhost.trusted-platform.internal 203.0.113.100 --dry-run
+platformctl dns update myhost.example.internal 203.0.113.100 --dry-run
 
 # Update with TPM attestation (for attested zones)
 platformctl dns update myhost.secure.example.com 203.0.113.100 --attest
@@ -1385,16 +1385,16 @@ platformctl dns delete <fqdn> [options]
 
 ```bash
 # Delete A record
-platformctl dns delete myhost.trusted-platform.internal
+platformctl dns delete myhost.example.internal
 
 # Delete AAAA record
-platformctl dns delete myhost.trusted-platform.internal --type AAAA
+platformctl dns delete myhost.example.internal --type AAAA
 
 # Delete all records for a name
-platformctl dns delete myhost.trusted-platform.internal --all
+platformctl dns delete myhost.example.internal --all
 
 # Dry run
-platformctl dns delete myhost.trusted-platform.internal --dry-run
+platformctl dns delete myhost.example.internal --dry-run
 ```
 
 ---
@@ -1626,16 +1626,16 @@ platformctl dns dnssec verify example.com.
 
 ```bash
 # Register device with auto-detected IP
-platformctl dns update mydevice.trusted-platform.internal --auto
+platformctl dns update mydevice.example.internal --auto
 
 # Verify registration
-dig @localhost -p 9053 mydevice.trusted-platform.internal A
+dig @localhost -p 9053 mydevice.example.internal A
 
 # Update when IP changes
-platformctl dns update mydevice.trusted-platform.internal 203.0.113.200
+platformctl dns update mydevice.example.internal 203.0.113.200
 
 # Deregister device
-platformctl dns delete mydevice.trusted-platform.internal
+platformctl dns delete mydevice.example.internal
 ```
 
 ### DNSSEC Key Rollover

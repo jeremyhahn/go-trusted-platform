@@ -1626,7 +1626,7 @@ func TestDeviceGRPCService_profileToPb_IdentityAndConfigFields(t *testing.T) {
 		Assigned:   true,
 		AssignedAt: assignedAt,
 		Config: map[string]any{
-			"hostname": "lab-node-2",
+			"hostname": "node-02",
 			"secure-boot": map[string]any{
 				"enabled": true,
 			},
@@ -1644,7 +1644,7 @@ func TestDeviceGRPCService_profileToPb_IdentityAndConfigFields(t *testing.T) {
 	require.NotEmpty(t, result.Config)
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(result.Config, &decoded))
-	assert.Equal(t, "lab-node-2", decoded["hostname"])
+	assert.Equal(t, "node-02", decoded["hostname"])
 
 	// The domain entity carries no created/updated timestamps, so the pb
 	// fields must stay unset.
@@ -1697,7 +1697,7 @@ func TestDeviceGRPCService_pbToProfile_IdentityAndConfigFields(t *testing.T) {
 		MacAddress: "aa:bb:cc:dd:ee:40",
 		Assigned:   true,
 		AssignedAt: timestamppb.New(assignedAt),
-		Config:     []byte(`{"hostname":"lab-node-4","secure-boot":{"enabled":true}}`),
+		Config:     []byte(`{"hostname":"node-04","secure-boot":{"enabled":true}}`),
 	}
 
 	result, err := svc.pbToProfile(pb)
@@ -1710,7 +1710,7 @@ func TestDeviceGRPCService_pbToProfile_IdentityAndConfigFields(t *testing.T) {
 
 	config, ok := result.Config.(map[string]any)
 	require.True(t, ok, "config must decode to a JSON object, got %T", result.Config)
-	assert.Equal(t, "lab-node-4", config["hostname"])
+	assert.Equal(t, "node-04", config["hostname"])
 
 	// Round-trip: converting back to pb must reproduce the same identity
 	// and config payload.
@@ -1842,17 +1842,17 @@ func TestDeviceGRPCService_pbToNetworkPhaseConfig_WithDHCPPool(t *testing.T) {
 
 	pb := &platformv1.NetworkPhaseConfig{
 		Vlan:       50,
-		StaticIp:   "198.18.1.10",
-		Gateway:    "198.18.1.1",
+		StaticIp:   "10.4.2.10",
+		Gateway:    "10.4.2.1",
 		Dns:        []string{"8.8.8.8", "8.8.4.4"},
 		AuthMethod: platformv1.AuthMethod_AUTH_METHOD_802_1X,
-		Subnet:     "198.18.1.0/24",
+		Subnet:     "10.4.2.0/24",
 		DnsServers: []string{"1.1.1.1"},
 		Dhcp:       true,
 		DhcpPool: &platformv1.DHCPPoolConfig{
-			Network:    "198.18.1.0/24",
-			RangeStart: "198.18.1.100",
-			RangeEnd:   "198.18.1.200",
+			Network:    "10.4.2.0/24",
+			RangeStart: "10.4.2.100",
+			RangeEnd:   "10.4.2.200",
 			LeaseTime:  43200,
 		},
 		Zone: "dmz",
@@ -1860,7 +1860,7 @@ func TestDeviceGRPCService_pbToNetworkPhaseConfig_WithDHCPPool(t *testing.T) {
 			{
 				Priority: 5,
 				Protocol: "tcp",
-				SrcIp:    "198.18.1.0/24",
+				SrcIp:    "10.4.2.0/24",
 				DstIp:    "10.0.0.0/8",
 				SrcPort:  1024,
 				DstPort:  80,
@@ -1872,24 +1872,24 @@ func TestDeviceGRPCService_pbToNetworkPhaseConfig_WithDHCPPool(t *testing.T) {
 	result := svc.pbToNetworkPhaseConfig(pb)
 	require.NotNil(t, result)
 	assert.Equal(t, uint16(50), result.VLAN)
-	assert.Equal(t, "198.18.1.10", result.StaticIP)
-	assert.Equal(t, "198.18.1.1", result.Gateway)
+	assert.Equal(t, "10.4.2.10", result.StaticIP)
+	assert.Equal(t, "10.4.2.1", result.Gateway)
 	assert.Equal(t, []string{"8.8.8.8", "8.8.4.4"}, result.DNS)
 	assert.Equal(t, entities.AuthMethod802_1X, result.AuthMethod)
-	assert.Equal(t, "198.18.1.0/24", result.Subnet)
+	assert.Equal(t, "10.4.2.0/24", result.Subnet)
 	assert.True(t, result.DHCP)
 	assert.Equal(t, "dmz", result.Zone)
 
 	require.NotNil(t, result.DHCPPool)
-	assert.Equal(t, "198.18.1.0/24", result.DHCPPool.Network)
-	assert.Equal(t, "198.18.1.100", result.DHCPPool.RangeStart)
-	assert.Equal(t, "198.18.1.200", result.DHCPPool.RangeEnd)
+	assert.Equal(t, "10.4.2.0/24", result.DHCPPool.Network)
+	assert.Equal(t, "10.4.2.100", result.DHCPPool.RangeStart)
+	assert.Equal(t, "10.4.2.200", result.DHCPPool.RangeEnd)
 	assert.Equal(t, 43200, result.DHCPPool.LeaseTime)
 
 	require.Len(t, result.ACLs, 1)
 	assert.Equal(t, 5, result.ACLs[0].Priority)
 	assert.Equal(t, "tcp", result.ACLs[0].Protocol)
-	assert.Equal(t, "198.18.1.0/24", result.ACLs[0].SrcIP)
+	assert.Equal(t, "10.4.2.0/24", result.ACLs[0].SrcIP)
 	assert.Equal(t, "10.0.0.0/8", result.ACLs[0].DstIP)
 	assert.Equal(t, uint16(1024), result.ACLs[0].SrcPort)
 	assert.Equal(t, uint16(80), result.ACLs[0].DstPort)

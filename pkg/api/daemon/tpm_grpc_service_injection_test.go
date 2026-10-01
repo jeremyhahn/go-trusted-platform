@@ -31,7 +31,7 @@ import (
 // the TPMGRPCService.Info path. All other methods panic to surface any
 // incorrect reliance on them from the Info handler.
 //
-// This test exists to prevent a regression observed on lab-node-2
+// This test exists to prevent a regression observed on node-02
 // 2026-04-08 where NewTPMGRPCService was called without ever calling
 // SetTPM2Service, so every `platformctl tpm info` request returned
 // codes.Unavailable "TPM service not available" even though the live

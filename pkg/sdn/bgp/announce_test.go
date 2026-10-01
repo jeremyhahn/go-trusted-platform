@@ -34,27 +34,27 @@ func TestAnnounceConfig_Validate_Valid(t *testing.T) {
 		{
 			name: "IPv4 only",
 			config: AnnounceConfig{
-				IPv4Prefixes: []string{"23.143.36.0/24"},
+				IPv4Prefixes: []string{"203.0.113.0/24"},
 			},
 		},
 		{
 			name: "IPv6 only",
 			config: AnnounceConfig{
-				IPv6Prefixes: []string{"2602:F5BB::/36"},
+				IPv6Prefixes: []string{"2001:DB8::/36"},
 			},
 		},
 		{
 			name: "both IPv4 and IPv6",
 			config: AnnounceConfig{
-				IPv4Prefixes: []string{"23.143.36.0/24"},
-				IPv6Prefixes: []string{"2602:F5BB::/36"},
+				IPv4Prefixes: []string{"203.0.113.0/24"},
+				IPv6Prefixes: []string{"2001:DB8::/36"},
 			},
 		},
 		{
 			name: "multiple prefixes",
 			config: AnnounceConfig{
-				IPv4Prefixes: []string{"23.143.36.0/24", "10.0.0.0/8"},
-				IPv6Prefixes: []string{"2602:F5BB::/36", "fd00::/48"},
+				IPv4Prefixes: []string{"203.0.113.0/24", "10.0.0.0/8"},
+				IPv6Prefixes: []string{"2001:DB8::/36", "fd00::/48"},
 			},
 		},
 	}
@@ -81,7 +81,7 @@ func TestAnnounceConfig_Validate_Invalid(t *testing.T) {
 		{
 			name: "IPv6 in IPv4 list",
 			config: AnnounceConfig{
-				IPv4Prefixes: []string{"2602:F5BB::/36"},
+				IPv4Prefixes: []string{"2001:DB8::/36"},
 			},
 		},
 		{
@@ -93,7 +93,7 @@ func TestAnnounceConfig_Validate_Invalid(t *testing.T) {
 		{
 			name: "IPv4 in IPv6 list",
 			config: AnnounceConfig{
-				IPv6Prefixes: []string{"23.143.36.0/24"},
+				IPv6Prefixes: []string{"203.0.113.0/24"},
 			},
 		},
 	}
@@ -109,14 +109,14 @@ func TestAnnounceConfig_Validate_Invalid(t *testing.T) {
 func TestAnnounceConfig_AllPrefixes(t *testing.T) {
 	t.Run("returns all prefixes", func(t *testing.T) {
 		cfg := AnnounceConfig{
-			IPv4Prefixes: []string{"23.143.36.0/24"},
-			IPv6Prefixes: []string{"2602:F5BB::/36"},
+			IPv4Prefixes: []string{"203.0.113.0/24"},
+			IPv6Prefixes: []string{"2001:DB8::/36"},
 		}
 		prefixes, err := cfg.AllPrefixes()
 		require.NoError(t, err)
 		assert.Len(t, prefixes, 2)
-		assert.Equal(t, "23.143.36.0/24", prefixes[0].String())
-		assert.Equal(t, "2602:f5bb::/36", prefixes[1].String())
+		assert.Equal(t, "203.0.113.0/24", prefixes[0].String())
+		assert.Equal(t, "2001:db8::/36", prefixes[1].String())
 	})
 
 	t.Run("empty config returns empty slice", func(t *testing.T) {
@@ -158,7 +158,7 @@ func TestBGPConfig_Validate_WithAnnounce(t *testing.T) {
 	t.Run("valid config with announce", func(t *testing.T) {
 		cfg := validBGPConfigForAnnounce()
 		cfg.Announce = &AnnounceConfig{
-			IPv4Prefixes: []string{"23.143.36.0/24"},
+			IPv4Prefixes: []string{"203.0.113.0/24"},
 		}
 		err := cfg.Validate()
 		require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestBGPConfig_Validate_WithNeighbors(t *testing.T) {
 func validBGPConfigForAnnounce() BGPConfig {
 	return BGPConfig{
 		RouterID: netip.MustParseAddr("10.255.0.1"),
-		ASN:      401870,
+		ASN:      64512,
 		Capabilities: BGPCapabilities{
 			IPv4Unicast: true,
 		},
@@ -210,7 +210,7 @@ func validBGPConfigForAnnounce() BGPConfig {
 func validNeighborConfigForAnnounce() NeighborConfig {
 	return NeighborConfig{
 		Address:     netip.MustParseAddr("10.255.0.2"),
-		ASN:         401870,
+		ASN:         64512,
 		IPv4Unicast: true,
 	}
 }

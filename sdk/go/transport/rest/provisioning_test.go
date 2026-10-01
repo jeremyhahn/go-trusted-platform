@@ -83,7 +83,7 @@ func TestProvisioning_FetchConfig_Delivered(t *testing.T) {
 		captured.path = r.URL.Path
 		_ = json.NewDecoder(r.Body).Decode(&captured.body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(envelope(`{"config":{"hostname":"lab-node-2"},"status":"ok"}`)))
+		_, _ = w.Write([]byte(envelope(`{"config":{"hostname":"node-02"},"status":"ok"}`)))
 	})
 
 	conn := a.Connection()
@@ -108,7 +108,7 @@ func TestProvisioning_FetchConfig_Delivered(t *testing.T) {
 	if delivered.GetStatus() != "ok" {
 		t.Errorf("status = %q", delivered.GetStatus())
 	}
-	if string(delivered.GetConfigJson()) != `{"hostname":"lab-node-2"}` {
+	if string(delivered.GetConfigJson()) != `{"hostname":"node-02"}` {
 		t.Errorf("config_json = %s", delivered.GetConfigJson())
 	}
 }
@@ -191,7 +191,7 @@ func TestProvisioning_ListSessions_RouteAndDecode(t *testing.T) {
 		captured.method = r.Method
 		captured.path = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(envelope(`[{"id":"sess-1","ek_serial":"EK1","profile_id":42,"fulfilled":false,"created_at":"2026-08-01T10:00:00Z","expires_at":"2026-08-01T10:15:00Z","profile":{"id":42,"name":"lab-node-2","role":"gateway"}}]`)))
+		_, _ = w.Write([]byte(envelope(`[{"id":"sess-1","ek_serial":"EK1","profile_id":42,"fulfilled":false,"created_at":"2026-08-01T10:00:00Z","expires_at":"2026-08-01T10:15:00Z","profile":{"id":42,"name":"node-02","role":"gateway"}}]`)))
 	})
 
 	conn := a.Connection()

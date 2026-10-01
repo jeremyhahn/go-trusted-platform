@@ -200,7 +200,7 @@ The bootloader implements a **pseudo-OTP** (One-Time Programmable) root of trust
 
 ### Bootloader Implementation
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/avr/bootloader/`
+**Location**: `pkg/firmware/avr/bootloader/`
 
 **main.c** - Core bootloader logic:
 ```c
@@ -353,7 +353,7 @@ clean:
 
 ### Go Implementation
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/avr/flasher/isp.go`
+**Location**: `pkg/firmware/avr/flasher/isp.go`
 
 ```go
 package flasher
@@ -513,7 +513,7 @@ func (f *ISPFlasher) setLockBits(bits byte) error {
 
 ### Lock Bits Management
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/avr/lockbits/manager.go`
+**Location**: `pkg/firmware/avr/lockbits/manager.go`
 
 **Lock Bit Modes**:
 - **0xFF**: No protection (default, development)
@@ -583,7 +583,7 @@ func (lm *LockManager) ReadLockBits() (byte, error) {
 
 ### Auto-Detection
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/avr/crypto/atecc608a/detect.go`
+**Location**: `pkg/firmware/avr/crypto/atecc608a/detect.go`
 
 ```go
 func DetectATECC608A() (*ATECC608A, error) {
@@ -615,7 +615,7 @@ func DetectATECC608A() (*ATECC608A, error) {
 
 ### Unified Crypto Provider
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/avr/crypto/crypto.go`
+**Location**: `pkg/firmware/avr/crypto/crypto.go`
 
 ```go
 type CryptoProvider interface {
@@ -646,7 +646,7 @@ func NewCryptoProvider() CryptoProvider {
 
 ### ATECC608A Driver
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/avr/crypto/atecc608a/device.go`
+**Location**: `pkg/firmware/avr/crypto/atecc608a/device.go`
 
 ```go
 type ATECC608A struct {
@@ -770,7 +770,7 @@ platformctl firmware atecc608a lock-data
 
 ### Serial Attestation
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/avr/attestation/serial.go`
+**Location**: `pkg/firmware/avr/attestation/serial.go`
 
 ```go
 type SerialAttestor struct {
@@ -854,7 +854,7 @@ Staging Area (0x4000-0x6FFF)  ← Download new firmware here
 
 ### OTA Update Flow
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/ota/avr.go`
+**Location**: `pkg/ota/avr.go`
 
 ```go
 type AVROTAUpdater struct {
@@ -937,7 +937,7 @@ void bootloader_ota_check() {
 
 ### Encryption Flow
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/encryption/encryptor.go`
+**Location**: `pkg/firmware/encryption/encryptor.go`
 
 ```go
 func (e *Encryptor) Encrypt(firmware []byte, deviceID string) (*EncryptedFirmware, error) {
@@ -999,7 +999,7 @@ void decrypt_firmware() {
 
 ### simavr Integration
 
-**Location**: `/home/jhahn/sources/go-trusted-platform/pkg/firmware/testing/simavr.go`
+**Location**: `pkg/firmware/testing/simavr.go`
 
 ```go
 type SimAVR struct {

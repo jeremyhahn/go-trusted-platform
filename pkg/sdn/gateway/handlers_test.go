@@ -218,11 +218,11 @@ func baseGatewayConfig(id string) *GatewayConfig {
 func transitGatewayConfig(server bgp.BGPServerInterface) *GatewayConfig {
 	cfg := baseGatewayConfig("transit-gw")
 	cfg.BGP = &bgp.BGPConfig{
-		RouterID: netip.MustParseAddr("23.143.36.4"),
-		ASN:      401870,
+		RouterID: netip.MustParseAddr("203.0.113.4"),
+		ASN:      64512,
 		Neighbors: []bgp.NeighborConfig{{
 			Address:         netip.MustParseAddr("10.255.0.2"),
-			ASN:             401870,
+			ASN:             64512,
 			EnabledFamilies: []bgp.AddressFamily{bgp.AFamilyIPv4Unicast},
 		}},
 	}
@@ -495,36 +495,36 @@ func TestTunnelsService_Lifecycle(t *testing.T) {
 	mgr := &fakeTunnelManager{down: map[string]bool{}}
 	cfg := baseGatewayConfig("tunnel-gw")
 	cfg.Tunnels = []TunnelConfig{
-		{Name: "gre-mia", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"},
-		{Name: "gre-atl", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.2", TunnelIP: "10.255.0.5/30"},
+		{Name: "gre-pri", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"},
+		{Name: "gre-alt", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.2", TunnelIP: "10.255.0.5/30"},
 	}
 	cfg.Host = &HostRuntime{TunnelManager: mgr}
 	gw := startGateway(t, cfg)
 
 	assert.True(t, gw.HasService(ServiceTunnels))
-	assert.Equal(t, []string{"gre-mia", "gre-atl"}, mgr.ensured)
+	assert.Equal(t, []string{"gre-pri", "gre-alt"}, mgr.ensured)
 	assert.NoError(t, gw.serviceHandlers[ServiceTunnels].Health())
 	assert.Equal(t, "healthy", gw.Snapshot().Health.Components[ServiceTunnels])
 
 	// A tunnel that goes down degrades the service without stopping it.
 	mgr.mu.Lock()
-	mgr.down["gre-atl"] = true
+	mgr.down["gre-alt"] = true
 	mgr.mu.Unlock()
 	assert.Error(t, gw.serviceHandlers[ServiceTunnels].Health())
 	assert.True(t, gw.serviceHandlers[ServiceTunnels].IsActive())
 	assert.Equal(t, "degraded", gw.Snapshot().Health.Status)
 
 	require.NoError(t, gw.Stop(context.Background()))
-	assert.Equal(t, []string{"gre-atl", "gre-mia"}, mgr.removed, "removed in reverse order")
+	assert.Equal(t, []string{"gre-alt", "gre-pri"}, mgr.removed, "removed in reverse order")
 	assert.True(t, mgr.closed)
 }
 
 func TestTunnelsService_RollsBackOnEnsureFailure(t *testing.T) {
-	mgr := &fakeTunnelManager{ensureErr: map[string]error{"gre-atl": errors.New("EPERM")}}
+	mgr := &fakeTunnelManager{ensureErr: map[string]error{"gre-alt": errors.New("EPERM")}}
 	cfg := baseGatewayConfig("tunnel-gw-fail")
 	cfg.Tunnels = []TunnelConfig{
-		{Name: "gre-mia", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"},
-		{Name: "gre-atl", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.2", TunnelIP: "10.255.0.5/30"},
+		{Name: "gre-pri", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"},
+		{Name: "gre-alt", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.2", TunnelIP: "10.255.0.5/30"},
 	}
 	cfg.Host = &HostRuntime{TunnelManager: mgr}
 	gw, err := NewGateway(cfg)
@@ -534,7 +534,7 @@ func TestTunnelsService_RollsBackOnEnsureFailure(t *testing.T) {
 	var failed *ErrServiceStartFailed
 	require.True(t, errors.As(err, &failed), "got %v", err)
 	assert.Equal(t, ServiceTunnels, failed.Service)
-	assert.Equal(t, []string{"gre-mia"}, mgr.removed, "the tunnel created before the failure is removed")
+	assert.Equal(t, []string{"gre-pri"}, mgr.removed, "the tunnel created before the failure is removed")
 	assert.Empty(t, mgr.ensured)
 }
 
@@ -551,15 +551,15 @@ func TestTunnelConfig_MapsOntoTheTunnelPackage(t *testing.T) {
 // X10 template sets this field.
 func TestTunnelConfig_CarriesTheIPv6Address(t *testing.T) {
 	got := TunnelConfig{
-		Name:       "gre-mia-att",
+		Name:       "gre-pri-isp-a",
 		Type:       "gre",
 		Local:      "192.0.2.1",
 		Remote:     "198.51.100.1",
 		TunnelIP:   "10.255.0.33/30",
-		TunnelIPv6: "2602:F5BB:CAFE:11::1/64",
+		TunnelIPv6: "2001:DB8:CAFE:11::1/64",
 	}.tunnelConfig()
 
-	assert.Equal(t, "2602:F5BB:CAFE:11::1/64", got.TunnelIPv6,
+	assert.Equal(t, "2001:DB8:CAFE:11::1/64", got.TunnelIPv6,
 		"the IPv6 address must reach the tunnel package or the interface comes up v4-only")
 	assert.Equal(t, "10.255.0.33/30", got.TunnelIP, "the IPv4 address is unaffected")
 
@@ -575,9 +575,9 @@ func TestHostFWService_Lifecycle(t *testing.T) {
 	cfg.HostFW = &hostfw.Config{
 		Enabled: true,
 		Extra:   []hostfw.Listener{{Interface: "eth0", Protocol: hostfw.ProtocolTCP, Port: 22, Comment: "sshd"}},
-		Tunnels: []string{"gre-mia"},
+		Tunnels: []string{"gre-pri"},
 	}
-	cfg.Tunnels = []TunnelConfig{{Name: "gre-mia", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}}
+	cfg.Tunnels = []TunnelConfig{{Name: "gre-pri", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}}
 	cfg.Host = &HostRuntime{
 		HostFWApplier: applier,
 		Listeners:     hostfw.StaticInventory{{Protocol: hostfw.ProtocolTCP, Port: 8443, Comment: "proxy edge"}},
@@ -595,8 +595,8 @@ func TestHostFWService_Lifecycle(t *testing.T) {
 	text := rendered.Text
 	assert.Contains(t, text, "dport 22")
 	assert.Contains(t, text, "dport 8443", "the daemon's own listener inventory is admitted")
-	assert.Contains(t, text, "gre-mia", "the gateway's tunnels are BGP/BFD carriers the filter admits on")
-	assert.Equal(t, 1, strings.Count(text, `iifname "gre-mia" tcp dport 179`), "a tunnel the operator also listed is admitted once")
+	assert.Contains(t, text, "gre-pri", "the gateway's tunnels are BGP/BFD carriers the filter admits on")
+	assert.Equal(t, 1, strings.Count(text, `iifname "gre-pri" tcp dport 179`), "a tunnel the operator also listed is admitted once")
 
 	require.NoError(t, gw.ReconcileHostFW(context.Background()))
 	assert.Equal(t, "healthy", gw.Snapshot().Health.Components[ServiceHostFW])
@@ -620,7 +620,7 @@ func TestTransitService_Lifecycle(t *testing.T) {
 	require.True(t, ok)
 	assert.True(t, speaker.IsStarted())
 	assert.Equal(t, "healthy", gw.Snapshot().Health.Components[ServiceTransit])
-	assert.Equal(t, uint32(401870), gw.Snapshot().BGP.LocalASN)
+	assert.Equal(t, uint32(64512), gw.Snapshot().BGP.LocalASN)
 
 	require.NoError(t, gw.Stop(context.Background()))
 	assert.True(t, server.stopped)
@@ -633,8 +633,8 @@ func TestTransitService_SecretReferenceNeedsAResolver(t *testing.T) {
 	// A TCP-AO keychain carries its master key by reference only; it is
 	// FIPS-neutral, so this test runs identically in both builds.
 	cfg.BGP.Keychains = []bgp.TCPAOKeychainConfig{{
-		Name: "miami",
-		Keys: []bgp.TCPAOKeyConfig{{SendID: 1, ReceiveID: 1, Algorithm: bgp.TCPAOAlgorithmHMACSHA256_128, MasterKeyRef: "kms://platform/bgp/miami"}},
+		Name: "pop-a",
+		Keys: []bgp.TCPAOKeyConfig{{SendID: 1, ReceiveID: 1, Algorithm: bgp.TCPAOAlgorithmHMACSHA256_128, MasterKeyRef: "kms://platform/bgp/pop-a"}},
 	}}
 	gw, err := NewGateway(cfg)
 	require.NoError(t, err)
@@ -727,9 +727,9 @@ func TestGateway_BackendAccessorsWhenNotRunning(t *testing.T) {
 }
 
 func TestTunnelConfig_CarriesTheTransportSectionsThrough(t *testing.T) {
-	ipsec := &tunnel.IPsecConfig{KeyRef: "kms://tunnel/mia/out", PeerKeyRef: "kms://tunnel/mia/in", SPIOut: 0x100, SPIIn: 0x101}
+	ipsec := &tunnel.IPsecConfig{KeyRef: "kms://tunnel/pop-a/out", PeerKeyRef: "kms://tunnel/pop-a/in", SPIOut: 0x100, SPIIn: 0x101}
 	got := TunnelConfig{
-		Name: "ipsec-mia", Type: "gre", Transport: tunnel.TransportIPsec,
+		Name: "ipsec-a", Type: "gre", Transport: tunnel.TransportIPsec,
 		Local: "192.0.2.1", Remote: "198.51.100.1",
 		TunnelIP: "10.255.0.1/30", TunnelIPv6: "2001:db8::1/126",
 		IPsec: ipsec,
@@ -743,9 +743,9 @@ func TestBuildTunnels_AdaptsTheSecretResolverAsTheKeyProvider(t *testing.T) {
 	var asked []string
 	cfg := baseGatewayConfig("keyed-tunnels")
 	cfg.Tunnels = []TunnelConfig{{
-		Name: "ipsec-mia", Type: "gre", Transport: tunnel.TransportIPsec,
+		Name: "ipsec-a", Type: "gre", Transport: tunnel.TransportIPsec,
 		Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30",
-		IPsec: &tunnel.IPsecConfig{KeyRef: "kms://tunnel/mia/out", SPIOut: 0x100, SPIIn: 0x101},
+		IPsec: &tunnel.IPsecConfig{KeyRef: "kms://tunnel/pop-a/out", SPIOut: 0x100, SPIIn: 0x101},
 	}}
 	cfg.Host = &HostRuntime{
 		Logger: slog.Default(),
@@ -762,15 +762,15 @@ func TestBuildTunnels_AdaptsTheSecretResolverAsTheKeyProvider(t *testing.T) {
 	require.Error(t, err, "an ipsec tunnel whose key cannot be resolved must not start")
 	var material *tunnel.ErrKeyMaterial
 	require.True(t, errors.As(err, &material), "got %v", err)
-	assert.Equal(t, []string{"kms://tunnel/mia/out"}, asked, "the resolver is the key provider")
+	assert.Equal(t, []string{"kms://tunnel/pop-a/out"}, asked, "the resolver is the key provider")
 }
 
 func TestBuildTunnels_WithoutAResolverRefusesAKeyedTransport(t *testing.T) {
 	cfg := baseGatewayConfig("unkeyed-tunnels")
 	cfg.Tunnels = []TunnelConfig{{
-		Name: "ipsec-mia", Type: "gre", Transport: tunnel.TransportIPsec,
+		Name: "ipsec-a", Type: "gre", Transport: tunnel.TransportIPsec,
 		Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30",
-		IPsec: &tunnel.IPsecConfig{KeyRef: "kms://tunnel/mia/out", SPIOut: 0x100, SPIIn: 0x101},
+		IPsec: &tunnel.IPsecConfig{KeyRef: "kms://tunnel/pop-a/out", SPIOut: 0x100, SPIIn: 0x101},
 	}}
 	cfg.Host = &HostRuntime{Logger: slog.Default()}
 	svc, err := buildTunnels(&Gateway{config: cfg})
@@ -784,8 +784,8 @@ func TestTransitService_ZeroizesTheResolvedMasterKey(t *testing.T) {
 	server := &fakeBGPServer{}
 	cfg := transitGatewayConfig(server)
 	cfg.BGP.Keychains = []bgp.TCPAOKeychainConfig{{
-		Name: "miami",
-		Keys: []bgp.TCPAOKeyConfig{{SendID: 1, ReceiveID: 1, Algorithm: bgp.TCPAOAlgorithmHMACSHA256_128, MasterKeyRef: "kms://platform/bgp/miami"}},
+		Name: "pop-a",
+		Keys: []bgp.TCPAOKeyConfig{{SendID: 1, ReceiveID: 1, Algorithm: bgp.TCPAOAlgorithmHMACSHA256_128, MasterKeyRef: "kms://platform/bgp/pop-a"}},
 	}}
 	var handed [][]byte
 	cfg.Host.SecretResolver = func(context.Context, string) ([]byte, error) {
@@ -809,17 +809,17 @@ func TestTransitService_ZeroizesWhatItResolvedBeforeAFailure(t *testing.T) {
 	cfg := transitGatewayConfig(server)
 	cfg.BGP.Keychains = []bgp.TCPAOKeychainConfig{
 		{
-			Name: "miami",
-			Keys: []bgp.TCPAOKeyConfig{{SendID: 1, ReceiveID: 1, Algorithm: bgp.TCPAOAlgorithmHMACSHA256_128, MasterKeyRef: "kms://platform/bgp/miami"}},
+			Name: "pop-a",
+			Keys: []bgp.TCPAOKeyConfig{{SendID: 1, ReceiveID: 1, Algorithm: bgp.TCPAOAlgorithmHMACSHA256_128, MasterKeyRef: "kms://platform/bgp/pop-a"}},
 		},
 		{
-			Name: "atlanta",
-			Keys: []bgp.TCPAOKeyConfig{{SendID: 2, ReceiveID: 2, Algorithm: bgp.TCPAOAlgorithmHMACSHA256_128, MasterKeyRef: "kms://platform/bgp/atlanta"}},
+			Name: "pop-b",
+			Keys: []bgp.TCPAOKeyConfig{{SendID: 2, ReceiveID: 2, Algorithm: bgp.TCPAOAlgorithmHMACSHA256_128, MasterKeyRef: "kms://platform/bgp/pop-b"}},
 		},
 	}
 	var handed [][]byte
 	cfg.Host.SecretResolver = func(_ context.Context, ref string) ([]byte, error) {
-		if ref == "kms://platform/bgp/atlanta" {
+		if ref == "kms://platform/bgp/pop-b" {
 			return nil, errors.New("store unreachable")
 		}
 		material := []byte("master-key-material")

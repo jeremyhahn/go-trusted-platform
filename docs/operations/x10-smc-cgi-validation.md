@@ -56,7 +56,7 @@ curl -sk -u ADMIN:<pwd> https://<bmc-ip>/cgi/ipmi.cgi \
 
 ```bash
 # Build the vBMC harness binary (same wire protocol as production)
-cd /home/jhahn/sources/go-trusted-platform
+cd .
 go build -o /tmp/vbmc ./test/integration/bmc/vbmc
 
 # Confirm your platform CA can issue for the BMC's hostname
@@ -156,7 +156,7 @@ handle in `pkg/bmc/smc/cgi_cert.go`.
 
 ### 7. Record the firmware variant
 
-Update `/home/jhahn/sources/go-trusted-platform/docs/operations/x10-smc-cgi-validation-results.md`
+Update `docs/operations/x10-smc-cgi-validation-results.md`
 (create if absent) with:
 
 - Board model

@@ -157,7 +157,7 @@ collect its quotes through `POST /api/v1/attestation/host`.
 ```
 Strategy: identity-list
 Admits nobody: no
-Identities: cp.trusted-platform.internal
+Identities: cp.example.internal
 Identities source: attestation.callers.identities
 Identity list valid: yes
 Trust anchors configured: yes

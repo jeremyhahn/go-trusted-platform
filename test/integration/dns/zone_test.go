@@ -137,7 +137,7 @@ func TestZone_Create_InternalZone(t *testing.T) {
 	svc := createTestService(t)
 	ctx := context.Background()
 
-	zone := createTestZone("trusted-platform.internal.", true)
+	zone := createTestZone("example.internal.", true)
 
 	err := svc.Save(ctx, zone)
 	require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestZone_Create_InternalZone(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.True(t, retrieved.Internal)
-	assert.Equal(t, "trusted-platform.internal.", retrieved.Name)
+	assert.Equal(t, "example.internal.", retrieved.Name)
 }
 
 // TestZone_Update_Success tests successful zone update.

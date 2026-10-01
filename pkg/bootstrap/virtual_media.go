@@ -48,7 +48,7 @@ const (
 	// installer itself". Booting is not the thing being waited for. The node
 	// must complete install-reboot -> firstboot seal -> platformd
 	// auto-provision -> ACME enrollment -> service restart, and only then does
-	// /api/v1/status answer. On lab-node-1:
+	// /api/v1/status answer. On node-01:
 	//
 	//	12:19:29Z  post-install power state verified (installer exit 0)
 	//	12:29:29Z  10-minute deadline expired; run aborted
@@ -58,7 +58,7 @@ const (
 	//
 	// ~15.5 minutes, and the node was healthy with NO intervention — the run
 	// failed a node that was fine, and aborting it cancelled the whole
-	// remaining-nodes phase, leaving lab-node-5 mid-provisioning.
+	// remaining-nodes phase, leaving node-05 mid-provisioning.
 	//
 	// 25 minutes gives ~60% headroom over the observed cycle. Do not lower it
 	// back toward the boot time: the cycle, not the boot, sets the floor.
@@ -110,7 +110,7 @@ const (
 	// window must clear the slowest supported POST with margin, or a
 	// healthy slow boot is misread as a dead one.
 	//
-	// Measured 2026-08-29 on lab-node-2 (Supermicro X10SDV, SYS-5018D-FN8T-AS001,
+	// Measured 2026-08-29 on node-02 (Supermicro X10SDV, SYS-5018D-FN8T-AS001,
 	// ATEN FW 4.00): power-on → first per-MAC installer.yaml GET ≈ 6 min
 	// 15 s, install-log upload ≈ 10 min 30 s. The first ISO read lands
 	// shortly before the 6-minute mark, so the issue's 2–3 minute estimate

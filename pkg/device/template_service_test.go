@@ -65,7 +65,7 @@ network:
   interfaces:
     - name: eth0
       type: static
-      ipv4-address: 198.18.0.3/24
+      ipv4-address: 10.4.200.3/24
 `)
 }
 
@@ -878,37 +878,37 @@ func TestTemplateService_ToProfileWithConfigOverrides(t *testing.T) {
 
 	// Config overrides change the hostname and IP while preserving other fields
 	configOverrides := map[string]interface{}{
-		"hostname": "lab-node-3",
+		"hostname": "host-03",
 		"os": map[string]interface{}{
-			"hostname": "lab-node-3",
+			"hostname": "host-03",
 		},
 		"network": map[string]interface{}{
 			"interfaces": []interface{}{
 				map[string]interface{}{
 					"name":         "eth0",
 					"type":         "static",
-					"ipv4-address": "198.18.0.104/24",
+					"ipv4-address": "10.4.200.104/24",
 				},
 			},
 		},
 	}
 
 	overrides := &entities.DeviceProfile{
-		Name: "lab-node-3",
+		Name: "host-03",
 	}
 
 	profile, err := service.ToProfileWithConfigOverrides(ctx, template.ID, overrides, configOverrides)
 	require.NoError(t, err)
 
 	// Verify the profile name was overridden
-	assert.Equal(t, "lab-node-3", profile.Name)
+	assert.Equal(t, "host-03", profile.Name)
 
 	// Verify the config was deep-merged
 	configMap, ok := profile.Config.(map[string]interface{})
 	require.True(t, ok)
 
 	// hostname should be overridden
-	assert.Equal(t, "lab-node-3", configMap["hostname"])
+	assert.Equal(t, "host-03", configMap["hostname"])
 
 	// domain should be preserved from the template
 	assert.Equal(t, "compute.example.com", configMap["domain"])
@@ -916,7 +916,7 @@ func TestTemplateService_ToProfileWithConfigOverrides(t *testing.T) {
 	// os.hostname should be overridden
 	osMap, ok := configMap["os"].(map[string]interface{})
 	require.True(t, ok)
-	assert.Equal(t, "lab-node-3", osMap["hostname"])
+	assert.Equal(t, "host-03", osMap["hostname"])
 
 	// os.packages should be preserved from template
 	packages, ok := osMap["packages"].([]interface{})
@@ -927,7 +927,7 @@ func TestTemplateService_ToProfileWithConfigOverrides(t *testing.T) {
 	// PlatformdConfig.Inline should also have the merged config
 	inlineConfig, ok := profile.PlatformdConfig.Inline.(map[string]interface{})
 	require.True(t, ok)
-	assert.Equal(t, "lab-node-3", inlineConfig["hostname"])
+	assert.Equal(t, "host-03", inlineConfig["hostname"])
 	assert.Equal(t, "compute.example.com", inlineConfig["domain"])
 }
 

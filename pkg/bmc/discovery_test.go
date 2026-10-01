@@ -258,7 +258,7 @@ func TestDiscoverMAC_IPMIFallthroughRedfish(t *testing.T) {
 	})
 	mux.HandleFunc("/redfish/v1/Systems/1/EthernetInterfaces/1", func(w http.ResponseWriter, _ *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"MACAddress": "00:25:90:5E:02:AA",
+			"MACAddress": "00:25:90:00:02:AA",
 			"Name":       "OnBoardLAN1",
 		})
 	})
@@ -296,8 +296,8 @@ func TestDiscoverMAC_IPMIFallthroughRedfish(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected Redfish fallthrough to succeed, got error: %v", err)
 	}
-	if mac != "00:25:90:5E:02:AA" {
-		t.Errorf("expected MAC 00:25:90:5E:02:AA, got %q", mac)
+	if mac != "00:25:90:00:02:AA" {
+		t.Errorf("expected MAC 00:25:90:00:02:AA, got %q", mac)
 	}
 }
 
@@ -741,9 +741,9 @@ func startNonRedfishListener(t *testing.T) (string, int) {
 
 func TestDiscoverMACs_MultipleMACs(t *testing.T) {
 	macs := []string{
-		"00:25:90:5E:02:AA",
-		"00:25:90:5E:02:AB",
-		"00:25:90:5E:02:AC",
+		"00:25:90:00:02:AA",
+		"00:25:90:00:02:AB",
+		"00:25:90:00:02:AC",
 	}
 	host, port, ts := startTLSMux(t, multiNICRedfishMux(macs))
 	defer ts.Close()
@@ -774,9 +774,9 @@ func TestDiscoverMACs_FiltersInvalidSentinels(t *testing.T) {
 		"FF:FF:FF:FF:FF:FF", // broadcast sentinel - filtered
 		"00:00:00:00:00:00", // null sentinel - filtered
 		"not-a-mac",         // invalid format - filtered
-		"00:25:90:5E:02:AA", // valid
+		"00:25:90:00:02:AA", // valid
 		"",                  // empty - filtered
-		"00:25:90:5E:02:AB", // valid
+		"00:25:90:00:02:AB", // valid
 	}
 	host, port, ts := startTLSMux(t, multiNICRedfishMux(macs))
 	defer ts.Close()
@@ -793,7 +793,7 @@ func TestDiscoverMACs_FiltersInvalidSentinels(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 valid MACs after filtering, got %d (%v)", len(got), got)
 	}
-	if got[0] != "00:25:90:5E:02:AA" || got[1] != "00:25:90:5E:02:AB" {
+	if got[0] != "00:25:90:00:02:AA" || got[1] != "00:25:90:00:02:AB" {
 		t.Errorf("unexpected filtered set: %v", got)
 	}
 }
@@ -823,8 +823,8 @@ func TestDiscoverMACs_IPMIFallthroughMultipleMACs(t *testing.T) {
 	stubIPMIOEMHostMACUnsupported(t)
 
 	macs := []string{
-		"00:25:90:5E:02:AA",
-		"00:25:90:5E:02:AB",
+		"00:25:90:00:02:AA",
+		"00:25:90:00:02:AB",
 	}
 	host, port, ts := startTLSMux(t, multiNICRedfishMux(macs))
 	defer ts.Close()
@@ -933,7 +933,7 @@ func TestDiscoverMACs_IPMIFallthroughRejectsRedirectedServiceRoot(t *testing.T) 
 
 	var redfishAuthenticated, decoyAuthenticated atomic.Int64
 
-	redfish := multiNICRedfishMux([]string{"00:25:90:5E:02:AA"})
+	redfish := multiNICRedfishMux([]string{"00:25:90:00:02:AA"})
 	redfishHost, redfishPort, redfishTS := startTLSHandler(t, http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("Authorization") != "" {
@@ -1030,7 +1030,7 @@ func TestDiscoverMACs_IPMIFallthroughPinsIdentifiedPeer(t *testing.T) {
 
 	var handshakes, authenticated atomic.Int64
 
-	redfish := multiNICRedfishMux([]string{"00:25:90:5E:02:AA"})
+	redfish := multiNICRedfishMux([]string{"00:25:90:00:02:AA"})
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" {
 			authenticated.Add(1)
@@ -1135,7 +1135,7 @@ func (l *countingListener) Accept() (net.Conn, error) {
 func TestDiscoverMACs_IPMIFallthroughMakesNoPreflightRequest(t *testing.T) {
 	stubIPMIOEMHostMACUnsupported(t)
 
-	ts := httptest.NewUnstartedServer(multiNICRedfishMux([]string{"00:25:90:5E:02:AA"}))
+	ts := httptest.NewUnstartedServer(multiNICRedfishMux([]string{"00:25:90:00:02:AA"}))
 	listener := &countingListener{Listener: ts.Listener}
 	ts.Listener = listener
 	ts.StartTLS()
@@ -1173,8 +1173,8 @@ func TestDiscoverMACs_IPMIFallthroughMakesNoPreflightRequest(t *testing.T) {
 	if n := listener.accepted.Load(); n != 1 {
 		t.Errorf("expected discovery to open exactly the configured client's connection, got %d connection(s)", n)
 	}
-	if len(got) != 1 || got[0] != "00:25:90:5E:02:AA" {
-		t.Errorf("expected [00:25:90:5E:02:AA], got %v", got)
+	if len(got) != 1 || got[0] != "00:25:90:00:02:AA" {
+		t.Errorf("expected [00:25:90:00:02:AA], got %v", got)
 	}
 }
 

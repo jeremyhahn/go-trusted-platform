@@ -42,7 +42,7 @@ type MediaOpener struct {
 	// per-connection worker to "smbd: client [<ip>]"; Alpine/musl smbd
 	// titles it "smbd[<ip>]", and /proc/<pid>/comm truncates that to 15
 	// bytes, so the captured client may be an IP prefix with no closing
-	// bracket (measured live: comm "smbd[192.168.50"). It is what lets
+	// bracket (measured live: comm "smbd[198.51.100"). It is what lets
 	// the orchestrator tell one BMC's reads of a shared ISO from
 	// another's.
 	Client string `json:"client,omitempty"`
@@ -337,16 +337,16 @@ func readComm(path string) string {
 }
 
 // smbdClientTitleRE matches the process title Debian smbd gives each
-// per-connection worker: "smbd: client [198.18.1.103]"; the bracket
+// per-connection worker: "smbd: client [10.4.2.103]"; the bracket
 // content is taken whole so an IPv6 address or a port suffix survives,
 // and leading whitespace or a case change in the fixed words does not
 // lose the tag.
 var smbdClientTitleRE = regexp.MustCompile(`(?i)^\s*smbd:\s+client\s+\[([^\]]+)\]`)
 
 // smbdBracketTitleRE matches the title Alpine/musl smbd gives each
-// per-connection worker: "smbd[198.18.1.103]". The closing bracket is
+// per-connection worker: "smbd[10.4.2.103]". The closing bracket is
 // optional because /proc/<pid>/comm truncates the title to 15 bytes
-// (measured live: "smbd[192.168.50"); a missing bracket means the
+// (measured live: "smbd[198.51.100"); a missing bracket means the
 // captured client is a prefix of the real address.
 var smbdBracketTitleRE = regexp.MustCompile(`(?i)^\s*smbd\[([^\]]+)(\])?`)
 

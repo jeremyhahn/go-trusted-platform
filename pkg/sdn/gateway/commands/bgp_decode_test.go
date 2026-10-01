@@ -37,8 +37,8 @@ gateway:
   enabled: true
   id: gw-test
   bgp:
-    asn: 401870
-    router-id: 23.143.36.4
+    asn: 64512
+    router-id: 203.0.113.4
     listen-port: 179
     graceful-restart-time: 90
     keychains:
@@ -49,11 +49,11 @@ gateway:
             algorithm: hmac-sha256-128
             master-key-ref: kms://platform/bgp/vps-key-1
     peers:
-      - name: miami-att
+      - name: pop-a-isp-a
         address: 10.255.0.2
-        asn: 401870
+        asn: 64512
         auth-type: md5
-        auth-key-ref: kms://platform/bgp/miami-att
+        auth-key-ref: kms://platform/bgp/pop-a-isp-a
         hold-time: 30
         keepalive-interval: 10
         max-prefixes: 10
@@ -69,15 +69,15 @@ gateway:
           import-allow:
             - prefix: 0.0.0.0/0
             - prefix: ::/0
-      - name: atlanta-comcast
+      - name: pop-b-isp-b
         address: 10.255.0.18
-        asn: 401870
+        asn: 64512
         auth-type: tcp-ao
         keychain: vps
         families: [ipv4-unicast]
     announce:
-      ipv4: [23.143.36.0/24]
-      ipv6: [2602:F5BB::/36]
+      ipv4: [203.0.113.0/24]
+      ipv6: [2001:DB8::/36]
 `)
 	v := viper.New()
 	v.SetConfigType("yaml")
@@ -88,31 +88,31 @@ gateway:
 	b := cfg.Gateway.BGP
 	require.NotNil(t, b, "bgp section")
 
-	assert.Equal(t, uint32(401870), b.ASN)
-	assert.Equal(t, netip.MustParseAddr("23.143.36.4"), b.RouterID, "router-id must decode")
+	assert.Equal(t, uint32(64512), b.ASN)
+	assert.Equal(t, netip.MustParseAddr("203.0.113.4"), b.RouterID, "router-id must decode")
 	assert.Equal(t, uint16(179), b.ListenPort, "listen-port must decode")
 	assert.Equal(t, uint16(90), b.GracefulRestartTime)
 	assert.True(t, b.GracefulRestartEnabled(), "graceful restart defaults on")
 	require.Len(t, b.Neighbors, 2, "peers must decode")
 
-	miami := b.Neighbors[0]
-	assert.Equal(t, "miami-att", miami.Name)
-	assert.Equal(t, netip.MustParseAddr("10.255.0.2"), miami.Address)
-	assert.Equal(t, bgp.AuthTypeMD5, miami.AuthType)
-	assert.Equal(t, "kms://platform/bgp/miami-att", miami.AuthKeyRef)
-	assert.Empty(t, miami.AuthKey, "a secret is never decoded from configuration")
-	assert.Equal(t, uint16(30), miami.HoldTime)
-	assert.Equal(t, uint32(10), miami.MaxPrefixes)
-	assert.Equal(t, []bgp.AddressFamily{bgp.AFamilyIPv4Unicast, bgp.AFamilyIPv6Unicast}, miami.EnabledFamilies)
-	require.NotNil(t, miami.BFD)
-	assert.True(t, miami.BFD.Enabled)
-	assert.Equal(t, 300*time.Millisecond, miami.BFD.DesiredMinTxInterval)
-	require.Len(t, miami.Policy.ImportAllow, 2)
-	assert.Equal(t, netip.MustParsePrefix("::/0"), miami.Policy.ImportAllow[1].Prefix)
+	popA := b.Neighbors[0]
+	assert.Equal(t, "pop-a-isp-a", popA.Name)
+	assert.Equal(t, netip.MustParseAddr("10.255.0.2"), popA.Address)
+	assert.Equal(t, bgp.AuthTypeMD5, popA.AuthType)
+	assert.Equal(t, "kms://platform/bgp/pop-a-isp-a", popA.AuthKeyRef)
+	assert.Empty(t, popA.AuthKey, "a secret is never decoded from configuration")
+	assert.Equal(t, uint16(30), popA.HoldTime)
+	assert.Equal(t, uint32(10), popA.MaxPrefixes)
+	assert.Equal(t, []bgp.AddressFamily{bgp.AFamilyIPv4Unicast, bgp.AFamilyIPv6Unicast}, popA.EnabledFamilies)
+	require.NotNil(t, popA.BFD)
+	assert.True(t, popA.BFD.Enabled)
+	assert.Equal(t, 300*time.Millisecond, popA.BFD.DesiredMinTxInterval)
+	require.Len(t, popA.Policy.ImportAllow, 2)
+	assert.Equal(t, netip.MustParsePrefix("::/0"), popA.Policy.ImportAllow[1].Prefix)
 
-	atlanta := b.Neighbors[1]
-	assert.Equal(t, bgp.AuthTypeTCPAO, atlanta.AuthType)
-	assert.Equal(t, "vps", atlanta.Keychain)
+	popB := b.Neighbors[1]
+	assert.Equal(t, bgp.AuthTypeTCPAO, popB.AuthType)
+	assert.Equal(t, "vps", popB.Keychain)
 
 	require.Len(t, b.Keychains, 1)
 	assert.Equal(t, "kms://platform/bgp/vps-key-1", b.Keychains[0].Keys[0].MasterKeyRef)
@@ -120,7 +120,7 @@ gateway:
 	assert.Nil(t, b.Keychains[0].Keys[0].MasterKey)
 
 	require.NotNil(t, b.Announce)
-	assert.Equal(t, []string{"23.143.36.0/24"}, b.Announce.IPv4Prefixes)
+	assert.Equal(t, []string{"203.0.113.0/24"}, b.Announce.IPv4Prefixes)
 
 	// Decoding is build-neutral; whether an md5 neighbour VALIDATES is not
 	// (#598): the !fips build accepts the compat option, the fips build
@@ -185,12 +185,12 @@ gateway:
   enabled: true
   id: gw-test
   bgp:
-    asn: 401870
-    router-id: 23.143.36.4
+    asn: 64512
+    router-id: 203.0.113.4
     peers:
-      - name: miami-att
+      - name: pop-a-isp-a
         address: 10.255.0.34
-        asn: 401870
+        asn: 64512
         families: [ipv4-unicast]
         policy:
           import-allow:
@@ -199,18 +199,18 @@ gateway:
             local-pref: 200
             large-communities:
               action: add
-              values: ["401870:1:200"]
+              values: ["64512:1:200"]
           export:
             med: 50
             prepend:
               count: 3
-              asn: 401870
+              asn: 64512
             communities:
               action: add
               values: ["no-export"]
-      - name: atlanta-att
+      - name: pop-b-isp-a
         address: 10.255.0.46
-        asn: 401870
+        asn: 64512
         families: [ipv4-unicast]
         policy:
           import:
@@ -218,7 +218,7 @@ gateway:
           export:
             large-communities:
               action: remove
-              values: ["^401870:1:"]
+              values: ["^64512:1:"]
 `)
 	v := viper.New()
 	v.SetConfigType("yaml")
@@ -230,30 +230,30 @@ gateway:
 	require.NotNil(t, b)
 	require.Len(t, b.Neighbors, 2)
 
-	miami := b.Neighbors[0].Policy
-	require.NotNil(t, miami.Import, "the import attribute block must decode")
-	require.NotNil(t, miami.Import.LocalPref, "local-pref must decode")
-	assert.Equal(t, uint32(200), *miami.Import.LocalPref)
-	require.NotNil(t, miami.Import.LargeCommunities)
-	assert.Equal(t, bgp.CommunityOpAdd, miami.Import.LargeCommunities.Action)
-	assert.Equal(t, []string{"401870:1:200"}, miami.Import.LargeCommunities.Values)
+	popA := b.Neighbors[0].Policy
+	require.NotNil(t, popA.Import, "the import attribute block must decode")
+	require.NotNil(t, popA.Import.LocalPref, "local-pref must decode")
+	assert.Equal(t, uint32(200), *popA.Import.LocalPref)
+	require.NotNil(t, popA.Import.LargeCommunities)
+	assert.Equal(t, bgp.CommunityOpAdd, popA.Import.LargeCommunities.Action)
+	assert.Equal(t, []string{"64512:1:200"}, popA.Import.LargeCommunities.Values)
 
-	require.NotNil(t, miami.Export, "the export attribute block must decode")
-	require.NotNil(t, miami.Export.MED, "med must decode")
-	assert.Equal(t, uint32(50), *miami.Export.MED)
-	require.NotNil(t, miami.Export.Prepend, "prepend must decode")
-	assert.Equal(t, uint32(3), miami.Export.Prepend.Count)
-	assert.Equal(t, uint32(401870), miami.Export.Prepend.ASN)
-	require.NotNil(t, miami.Export.Communities)
-	assert.Equal(t, []string{"no-export"}, miami.Export.Communities.Values)
+	require.NotNil(t, popA.Export, "the export attribute block must decode")
+	require.NotNil(t, popA.Export.MED, "med must decode")
+	assert.Equal(t, uint32(50), *popA.Export.MED)
+	require.NotNil(t, popA.Export.Prepend, "prepend must decode")
+	assert.Equal(t, uint32(3), popA.Export.Prepend.Count)
+	assert.Equal(t, uint32(64512), popA.Export.Prepend.ASN)
+	require.NotNil(t, popA.Export.Communities)
+	assert.Equal(t, []string{"no-export"}, popA.Export.Communities.Values)
 
-	atlanta := b.Neighbors[1].Policy
-	require.NotNil(t, atlanta.Import.LocalPref)
-	assert.Equal(t, uint32(50), *atlanta.Import.LocalPref,
+	popB := b.Neighbors[1].Policy
+	require.NotNil(t, popB.Import.LocalPref)
+	assert.Equal(t, uint32(50), *popB.Import.LocalPref,
 		"the ladder's least preferred path")
-	assert.Nil(t, atlanta.Import.MED, "an unset attribute stays unset, it does not become zero")
-	require.NotNil(t, atlanta.Export.LargeCommunities)
-	assert.Equal(t, bgp.CommunityOpRemove, atlanta.Export.LargeCommunities.Action)
+	assert.Nil(t, popB.Import.MED, "an unset attribute stays unset, it does not become zero")
+	require.NotNil(t, popB.Export.LargeCommunities)
+	assert.Equal(t, bgp.CommunityOpRemove, popB.Export.LargeCommunities.Action)
 }
 
 // TestLoadServeConfig_BGPTrafficEngineeringRefusesTheUnprogrammable is the
@@ -284,7 +284,7 @@ func TestLoadServeConfig_BGPTrafficEngineeringRefusesTheUnprogrammable(t *testin
           export:
             communities:
               action: add
-              values: ["401870:100"]`,
+              values: ["4200000000:100"]`,
 		},
 		{
 			name: "a community action with no values",
@@ -299,7 +299,7 @@ func TestLoadServeConfig_BGPTrafficEngineeringRefusesTheUnprogrammable(t *testin
           export:
             large-communities:
               action: set
-              values: ["401870:1:1"]`,
+              values: ["64512:1:1"]`,
 		},
 	}
 	for _, tt := range tests {
@@ -309,12 +309,12 @@ gateway:
   enabled: true
   id: gw-test
   bgp:
-    asn: 401870
-    router-id: 23.143.36.4
+    asn: 64512
+    router-id: 203.0.113.4
     peers:
-      - name: miami-att
+      - name: pop-a-isp-a
         address: 10.255.0.34
-        asn: 401870
+        asn: 64512
         families: [ipv4-unicast]
         policy:` + tt.policy + "\n")
 			v := viper.New()

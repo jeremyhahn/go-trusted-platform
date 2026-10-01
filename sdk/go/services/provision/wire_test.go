@@ -27,7 +27,7 @@ import (
 // with a "config" key maps onto the pb Delivered oneof with the exact raw
 // config JSON in config_json.
 func TestDecodeFetchConfigJSON_Delivered(t *testing.T) {
-	payload := []byte(`{"config":{"hostname":"lab-node-2","tpm":{"device":"/dev/tpmrm0"}},"status":"ok"}`)
+	payload := []byte(`{"config":{"hostname":"node-02","tpm":{"device":"/dev/tpmrm0"}},"status":"ok"}`)
 
 	resp, err := DecodeFetchConfigJSON(payload)
 	if err != nil {
@@ -46,8 +46,8 @@ func TestDecodeFetchConfigJSON_Delivered(t *testing.T) {
 	if err := json.Unmarshal(delivered.GetConfigJson(), &cfg); err != nil {
 		t.Fatalf("config_json is not valid JSON: %v", err)
 	}
-	if cfg["hostname"] != "lab-node-2" {
-		t.Errorf("config hostname = %v, want lab-node-2", cfg["hostname"])
+	if cfg["hostname"] != "node-02" {
+		t.Errorf("config hostname = %v, want node-02", cfg["hostname"])
 	}
 }
 
@@ -156,7 +156,7 @@ const sessionFixtureJSON = `{
 	"profile": {
 		"id": 42,
 		"tenant_id": "tenant-1",
-		"name": "lab-node-2",
+		"name": "node-02",
 		"model": "X10SDV",
 		"role": "server",
 		"zone": "control-plane",
@@ -185,7 +185,7 @@ const sessionFixtureJSON = `{
 			"inline": {"listen": ":8443"}
 		},
 		"match_rules": {"mac_prefix": "aa:bb:cc"},
-		"bmc": {"address": "198.51.100.103", "port": 443, "protocol": "redfish"}
+		"bmc": {"address": "10.4.6.103", "port": 443, "protocol": "redfish"}
 	}
 }`
 
@@ -331,7 +331,7 @@ func assertSessionFixture(t *testing.T, s *platformv1.ProvisioningSession) {
 	if profile.GetMatchRules().GetMacPrefix() != "aa:bb:cc" {
 		t.Errorf("match_rules.mac_prefix = %q", profile.GetMatchRules().GetMacPrefix())
 	}
-	if profile.GetBmc().GetAddress() != "198.51.100.103" {
+	if profile.GetBmc().GetAddress() != "10.4.6.103" {
 		t.Errorf("bmc.address = %q", profile.GetBmc().GetAddress())
 	}
 	if profile.GetBmc().GetProtocol() != "redfish" {
@@ -488,7 +488,7 @@ func TestDecodeGetSessionJSON_ProfileBaselineAndTLSServerName(t *testing.T) {
 		"id": 7,
 		"name": "compute",
 		"role": "worker",
-		"tls_server_name": "compute.trusted-platform.internal",
+		"tls_server_name": "compute.example.internal",
 		"pcr_baseline": {
 			"values": {"0": "qrs=", "7": "AQ=="},
 			"source": "tofu",
@@ -502,7 +502,7 @@ func TestDecodeGetSessionJSON_ProfileBaselineAndTLSServerName(t *testing.T) {
 		t.Fatalf("DecodeGetSessionJSON() unexpected error: %v", err)
 	}
 	profile := resp.GetSession().GetProfile()
-	if profile.GetTlsServerName() != "compute.trusted-platform.internal" {
+	if profile.GetTlsServerName() != "compute.example.internal" {
 		t.Fatalf("tls_server_name = %q", profile.GetTlsServerName())
 	}
 	baseline := profile.GetPcrBaseline()

@@ -70,7 +70,7 @@ func registerProfileFlags(cmd *cobra.Command, pf *profileFlags) {
 	cmd.Flags().StringVar(&pf.mac, "mac", "", "exact MAC address for non-TPM device identification")
 	cmd.Flags().StringVar(&pf.ekCert, "ek-cert", "", "prestaged TPM EK certificate: path to a PEM file or an inline PEM string")
 	cmd.Flags().StringVar(&pf.configFile, "config-file", "", "path to the device platform config (YAML or JSON)")
-	cmd.Flags().StringVar(&pf.tlsServerName, "tls-server-name", "", "certificate name the attestation collector verifies nodes of this profile against (e.g. compute.trusted-platform.internal); empty means the device's own FQDN")
+	cmd.Flags().StringVar(&pf.tlsServerName, "tls-server-name", "", "certificate name the attestation collector verifies nodes of this profile against (e.g. compute.example.internal); empty means the device's own FQDN")
 }
 
 // newProfileCommand creates the profile subcommand group for device
@@ -89,7 +89,7 @@ and the full platform configuration delivered at install time.
 Examples:
   # Create a profile with a prestaged hardware EK certificate
   platformctl device profile create \
-    --name lab-node-2 \
+    --name node-02 \
     --role server \
     --ek-serial 1234567890 \
     --mac 00:25:90:FF:AA:02 \
@@ -101,7 +101,7 @@ Examples:
 
   # Name the certificate the attestation collector verifies workers against,
   # then confirm it
-  platformctl device profile update 123 --tls-server-name compute.trusted-platform.internal
+  platformctl device profile update 123 --tls-server-name compute.example.internal
   platformctl device profile get 123 --output json`,
 	}
 
@@ -135,7 +135,7 @@ Examples:
 
   # Create a profile with hardware-EK prestage and platform config
   platformctl device profile create \
-    --name lab-node-2 \
+    --name node-02 \
     --role server \
     --ek-serial 1234567890 \
     --mac 00:25:90:FF:AA:02 \
@@ -178,7 +178,7 @@ Examples:
 
   # Name the certificate the attestation collector verifies nodes of this
   # profile against (fleets whose node certificates carry a role name)
-  platformctl device profile update 123 --tls-server-name compute.trusted-platform.internal`,
+  platformctl device profile update 123 --tls-server-name compute.example.internal`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

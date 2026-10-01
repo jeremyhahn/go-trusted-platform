@@ -72,18 +72,9 @@ RUN echo "<VirtualHost *:80>" > /etc/apache2/sites-available/000-default.conf &&
     echo "    </Directory>" >> /etc/apache2/sites-available/000-default.conf && \
     echo "</VirtualHost>" >> /etc/apache2/sites-available/000-default.conf
 
-# Configure ISC DHCP server
-RUN echo "default-lease-time 600;" > /etc/dhcp/dhcpd.conf && \
-    echo "max-lease-time 7200;" >> /etc/dhcp/dhcpd.conf && \
-    echo "allow booting;" >> /etc/dhcp/dhcpd.conf && \
-    echo "subnet 198.18.1.0 netmask 255.255.255.0 {" >> /etc/dhcp/dhcpd.conf && \
-    echo "  range 198.18.1.150 198.18.1.253;" >> /etc/dhcp/dhcpd.conf && \
-    echo "  option broadcast-address 198.18.1.255;" >> /etc/dhcp/dhcpd.conf && \
-    echo "  option routers 198.18.1.1;" >> /etc/dhcp/dhcpd.conf && \
-    echo "  option domain-name-servers 8.8.8.8;" >> /etc/dhcp/dhcpd.conf && \
-    echo "  next-server 198.18.1.100;" >> /etc/dhcp/dhcpd.conf && \
-    echo "  filename \"pxelinux.0\";" >> /etc/dhcp/dhcpd.conf && \
-    echo "}" >> /etc/dhcp/dhcpd.conf
+# The ISC DHCP scope is the deployment's, so it is not baked into this image:
+# entrypoint.sh writes /etc/dhcp/dhcpd.conf at container start from the
+# DHCP_* environment and refuses to start without it.
 
 # Copy supervisord config to container
 # COPY ./supervisord.conf /etc/supervisord.conf

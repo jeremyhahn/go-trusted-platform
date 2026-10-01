@@ -398,7 +398,7 @@ func TestHTTPServer_handleLocalFiles(t *testing.T) {
 // every iPXE chainload that reaches the boot-entry script proceeds
 // to fetch kernel/initrd at /data/vmlinuz / /data/initramfs and
 // 404s, dropping the client to an iPXE shell with "Could not boot:
-// Not found" — exactly the failure mode observed on lab-node-4 PXE
+// Not found" — exactly the failure mode observed on node-04 PXE
 // boot before this handler was added.
 func TestHTTPServer_handleDataFiles(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -1020,7 +1020,7 @@ func TestHTTPServer_InstallUploadHappyPath(t *testing.T) {
 	server := newTestHTTPServer(t, cfg)
 
 	body := strings.NewReader("hello install log\n")
-	req := httptest.NewRequest("PUT", "/installs/lab-node-2/install.log", body)
+	req := httptest.NewRequest("PUT", "/installs/node-02/install.log", body)
 	w := httptest.NewRecorder()
 
 	server.handleInstalls(w, req)
@@ -1029,13 +1029,13 @@ func TestHTTPServer_InstallUploadHappyPath(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	written, err := os.ReadFile(filepath.Join(dir, "lab-node-2", "install.log"))
+	written, err := os.ReadFile(filepath.Join(dir, "node-02", "install.log"))
 	require.NoError(t, err)
 	assert.Equal(t, "hello install log\n", string(written))
 
 	// .partial file must NOT exist after a successful upload (atomic rename
 	// guarantee — half-uploaded logs should never appear in the index).
-	_, err = os.Stat(filepath.Join(dir, "lab-node-2", "install.log.partial"))
+	_, err = os.Stat(filepath.Join(dir, "node-02", "install.log.partial"))
 	assert.True(t, os.IsNotExist(err), "partial file should be removed after rename")
 }
 
@@ -1049,9 +1049,9 @@ func TestHTTPServer_InstallUploadPathTraversal(t *testing.T) {
 
 	cases := []string{
 		"/installs/../etc/passwd",
-		"/installs/lab-node-2/../../../etc/passwd",
-		"/installs/Mini-02/install.log", // uppercase rejected by regex
-		"/installs/lab-node-2",             // missing filename
+		"/installs/node-02/../../../etc/passwd",
+		"/installs/Node-02/install.log", // uppercase rejected by regex
+		"/installs/node-02",             // missing filename
 		"/installs/",                    // empty
 	}
 
@@ -1077,7 +1077,7 @@ func TestHTTPServer_InstallUploadSizeLimit(t *testing.T) {
 
 	// Send 17 MiB. The handler should refuse with 413.
 	body := strings.NewReader(strings.Repeat("x", 17*1024*1024))
-	req := httptest.NewRequest("PUT", "/installs/lab-node-2/big.log", body)
+	req := httptest.NewRequest("PUT", "/installs/node-02/big.log", body)
 	w := httptest.NewRecorder()
 	server.handleInstalls(w, req)
 	resp := w.Result()
@@ -1085,7 +1085,7 @@ func TestHTTPServer_InstallUploadSizeLimit(t *testing.T) {
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 
 	// And the partial file should not survive a rejected upload.
-	_, err := os.Stat(filepath.Join(dir, "lab-node-2", "big.log.partial"))
+	_, err := os.Stat(filepath.Join(dir, "node-02", "big.log.partial"))
 	assert.True(t, os.IsNotExist(err))
 }
 
@@ -1099,9 +1099,9 @@ func TestHTTPServer_InstallIndexBrowse(t *testing.T) {
 	server := newTestHTTPServer(t, cfg)
 
 	// Seed two hosts.
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "lab-node-2"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "lab-node-3"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "lab-node-2", "install.log"),
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "node-02"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "node-03"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "node-02", "install.log"),
 		[]byte("install transcript"), 0o644))
 
 	// GET /installs/ should list both hosts.
@@ -1112,11 +1112,11 @@ func TestHTTPServer_InstallIndexBrowse(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Contains(t, string(body), "lab-node-2")
-	assert.Contains(t, string(body), "lab-node-3")
+	assert.Contains(t, string(body), "node-02")
+	assert.Contains(t, string(body), "node-03")
 
-	// GET /installs/lab-node-2/install.log should return the transcript.
-	req = httptest.NewRequest("GET", "/installs/lab-node-2/install.log", nil)
+	// GET /installs/node-02/install.log should return the transcript.
+	req = httptest.NewRequest("GET", "/installs/node-02/install.log", nil)
 	w = httptest.NewRecorder()
 	server.handleInstalls(w, req)
 	resp = w.Result()

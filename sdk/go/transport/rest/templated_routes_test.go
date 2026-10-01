@@ -361,9 +361,9 @@ func TestSingularAccessors_IdentifierTravelsInThePath(t *testing.T) {
 		{
 			name:       "OverlayService/GetVTEP",
 			grpcMethod: "/platform.v1.OverlayService/GetVTEP",
-			req:        &platformv1.GetVTEPRequest{NodeId: "lab-node-3"},
+			req:        &platformv1.GetVTEPRequest{NodeId: "node-03"},
 			resp:       &platformv1.GetVTEPResponse{},
-			wantPath:   "/api/v1/overlay/vteps/lab-node-3",
+			wantPath:   "/api/v1/overlay/vteps/node-03",
 			strippedIn: "node_id",
 		},
 		{

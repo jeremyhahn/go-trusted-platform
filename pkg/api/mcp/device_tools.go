@@ -340,7 +340,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 				},
 				"tls_server_name": map[string]interface{}{
 					"type":        "string",
-					"description": "Certificate name the attestation collector verifies a node of this profile against when it dials it for a quote (e.g. compute.trusted-platform.internal); empty means the device's own FQDN. The result also reports the read-only pcr_baseline, which no argument can set",
+					"description": "Certificate name the attestation collector verifies a node of this profile against when it dials it for a quote (e.g. compute.example.internal); empty means the device's own FQDN. The result also reports the read-only pcr_baseline, which no argument can set",
 				},
 			},
 			"required": []string{"name"},

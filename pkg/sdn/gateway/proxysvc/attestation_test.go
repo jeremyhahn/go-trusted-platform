@@ -137,15 +137,15 @@ func TestSDKAttestationGateFresh(t *testing.T) {
 	base := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: base}
 	client := &fakeAttestationClient{
-		manifests: []*platformv1.HostManifest{manifestAt("lab-node-2", base.Add(-time.Hour))},
+		manifests: []*platformv1.HostManifest{manifestAt("node-02", base.Add(-time.Hour))},
 		status:    platformv1.ManifestVerificationStatus_MANIFEST_VERIFICATION_STATUS_VERIFIED,
 	}
 	gate := newGate(t, client, clock)
 
-	if err := gate.Fresh(context.Background(), "lab-node-2", 24*time.Hour); err != nil {
+	if err := gate.Fresh(context.Background(), "node-02", 24*time.Hour); err != nil {
 		t.Fatalf("Fresh: %v", err)
 	}
-	if client.lastList.GetHostId() != "lab-node-2" || client.lastList.GetLimit() != 1 {
+	if client.lastList.GetHostId() != "node-02" || client.lastList.GetLimit() != 1 {
 		t.Errorf("list request = %+v", client.lastList)
 	}
 }
@@ -167,7 +167,7 @@ func TestSDKAttestationGateStaleVerdicts(t *testing.T) {
 		{
 			"manifest without timestamp",
 			&fakeAttestationClient{
-				manifests: []*platformv1.HostManifest{{Id: "m", HostId: "lab-node-2"}},
+				manifests: []*platformv1.HostManifest{{Id: "m", HostId: "node-02"}},
 				status:    verified,
 			},
 			time.Hour,
@@ -175,7 +175,7 @@ func TestSDKAttestationGateStaleVerdicts(t *testing.T) {
 		{
 			"verification rejected",
 			&fakeAttestationClient{
-				manifests: []*platformv1.HostManifest{manifestAt("lab-node-2", base.Add(-time.Minute))},
+				manifests: []*platformv1.HostManifest{manifestAt("node-02", base.Add(-time.Minute))},
 				status:    failed,
 			},
 			time.Hour,
@@ -183,7 +183,7 @@ func TestSDKAttestationGateStaleVerdicts(t *testing.T) {
 		{
 			"manifest older than max age",
 			&fakeAttestationClient{
-				manifests: []*platformv1.HostManifest{manifestAt("lab-node-2", base.Add(-2*time.Hour))},
+				manifests: []*platformv1.HostManifest{manifestAt("node-02", base.Add(-2*time.Hour))},
 				status:    verified,
 			},
 			time.Hour,
@@ -192,7 +192,7 @@ func TestSDKAttestationGateStaleVerdicts(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			gate := newGate(t, tc.client, &testClock{now: base})
-			err := gate.Fresh(context.Background(), "lab-node-2", tc.maxAge)
+			err := gate.Fresh(context.Background(), "node-02", tc.maxAge)
 			if err == nil {
 				t.Fatal("expected stale error")
 			}
@@ -217,7 +217,7 @@ func TestSDKAttestationGateQueryFailures(t *testing.T) {
 		{
 			"verify error",
 			&fakeAttestationClient{
-				manifests: []*platformv1.HostManifest{manifestAt("lab-node-2", base.Add(-time.Minute))},
+				manifests: []*platformv1.HostManifest{manifestAt("node-02", base.Add(-time.Minute))},
 				verifyErr: errors.New("platformd down"),
 			},
 		},
@@ -225,7 +225,7 @@ func TestSDKAttestationGateQueryFailures(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			gate := newGate(t, tc.client, &testClock{now: base})
-			err := gate.Fresh(context.Background(), "lab-node-2", time.Hour)
+			err := gate.Fresh(context.Background(), "node-02", time.Hour)
 			if err == nil {
 				t.Fatal("expected query failure")
 			}
@@ -256,13 +256,13 @@ func TestSDKAttestationGateVerdictCache(t *testing.T) {
 	base := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: base}
 	client := &fakeAttestationClient{
-		manifests: []*platformv1.HostManifest{manifestAt("lab-node-2", base.Add(-time.Minute))},
+		manifests: []*platformv1.HostManifest{manifestAt("node-02", base.Add(-time.Minute))},
 		status:    platformv1.ManifestVerificationStatus_MANIFEST_VERIFICATION_STATUS_VERIFIED,
 	}
 	gate := newGate(t, client, clock)
 
 	for i := 0; i < 5; i++ {
-		if err := gate.Fresh(context.Background(), "lab-node-2", time.Hour); err != nil {
+		if err := gate.Fresh(context.Background(), "node-02", time.Hour); err != nil {
 			t.Fatalf("Fresh #%d: %v", i, err)
 		}
 	}
@@ -271,13 +271,13 @@ func TestSDKAttestationGateVerdictCache(t *testing.T) {
 	}
 
 	// One cached verdict serves different per-route max ages.
-	if err := gate.Fresh(context.Background(), "lab-node-2", 30*time.Second); !errors.Is(err, proxy.ErrAttestationStale) {
+	if err := gate.Fresh(context.Background(), "node-02", 30*time.Second); !errors.Is(err, proxy.ErrAttestationStale) {
 		t.Errorf("tight max age on cached verdict = %v, want stale", err)
 	}
 
 	// TTL expiry triggers exactly one refresh.
 	clock.Advance(DefaultAttestationCacheTTL + time.Second)
-	if err := gate.Fresh(context.Background(), "lab-node-2", time.Hour); err != nil {
+	if err := gate.Fresh(context.Background(), "node-02", time.Hour); err != nil {
 		t.Fatalf("Fresh after expiry: %v", err)
 	}
 	if list, _ := client.counts(); list != 2 {
@@ -292,7 +292,7 @@ func TestSDKAttestationGateNegativeCache(t *testing.T) {
 	gate := newGate(t, client, clock)
 
 	for i := 0; i < 3; i++ {
-		if err := gate.Fresh(context.Background(), "lab-node-2", time.Hour); err == nil {
+		if err := gate.Fresh(context.Background(), "node-02", time.Hour); err == nil {
 			t.Fatal("expected cached failure")
 		}
 	}
@@ -304,10 +304,10 @@ func TestSDKAttestationGateNegativeCache(t *testing.T) {
 	clock.Advance(DefaultAttestationNegativeTTL + time.Second)
 	client.mu.Lock()
 	client.listErr = nil
-	client.manifests = []*platformv1.HostManifest{manifestAt("lab-node-2", base.Add(-time.Minute))}
+	client.manifests = []*platformv1.HostManifest{manifestAt("node-02", base.Add(-time.Minute))}
 	client.status = platformv1.ManifestVerificationStatus_MANIFEST_VERIFICATION_STATUS_VERIFIED
 	client.mu.Unlock()
-	if err := gate.Fresh(context.Background(), "lab-node-2", time.Hour); err != nil {
+	if err := gate.Fresh(context.Background(), "node-02", time.Hour); err != nil {
 		t.Fatalf("Fresh after recovery: %v", err)
 	}
 }
@@ -316,7 +316,7 @@ func TestSDKAttestationGateSingleflight(t *testing.T) {
 	base := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: base}
 	client := &fakeAttestationClient{
-		manifests: []*platformv1.HostManifest{manifestAt("lab-node-2", base.Add(-time.Minute))},
+		manifests: []*platformv1.HostManifest{manifestAt("node-02", base.Add(-time.Minute))},
 		status:    platformv1.ManifestVerificationStatus_MANIFEST_VERIFICATION_STATUS_VERIFIED,
 		block:     make(chan struct{}),
 		started:   make(chan struct{}),
@@ -330,7 +330,7 @@ func TestSDKAttestationGateSingleflight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- gate.Fresh(context.Background(), "lab-node-2", time.Hour)
+			errs <- gate.Fresh(context.Background(), "node-02", time.Hour)
 		}()
 	}
 	// Let the flight leader block inside ListManifests, then release all.

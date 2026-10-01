@@ -115,13 +115,13 @@ func (f *fakeProfiles) FindProfileForDevice(context.Context, *entities.Device) (
 
 func TestDeviceRecordsAdapter(t *testing.T) {
 	devices := &fakeDevices{byID: map[uint64]*entities.Device{
-		42: {ID: 42, Serial: "SN-42", Model: "X10", Hostname: "lab-node-5-compute-01", LastHeartbeatAddr: "198.18.1.143:5"},
+		42: {ID: 42, Serial: "SN-42", Model: "X10", Hostname: "host-05-compute-01", LastHeartbeatAddr: "10.4.2.143:5"},
 	}}
 	a := &deviceRecordsAdapter{devices: devices, profiles: &fakeProfiles{profile: &entities.DeviceProfile{TLSServerName: "compute.example.internal"}}}
 	rec, err := a.AddressRecord(context.Background(), " 42 ")
 	require.NoError(t, err)
-	assert.Equal(t, "lab-node-5-compute-01", rec.Hostname)
-	assert.Equal(t, "198.18.1.143:5", rec.HeartbeatAddr)
+	assert.Equal(t, "host-05-compute-01", rec.Hostname)
+	assert.Equal(t, "10.4.2.143:5", rec.HeartbeatAddr)
 	assert.Equal(t, "compute.example.internal", rec.TLSServerName)
 
 	_, err = a.AddressRecord(context.Background(), "not-a-number")
@@ -255,7 +255,7 @@ func TestCollectorAnchors_OperatorBundleThenPlatformAnchor(t *testing.T) {
 // plane's own IDevID — with no trust configuration at all.
 func TestCollectorAnchors_PlatformAnchorWithoutConfiguration(t *testing.T) {
 	platformRoot, platformKey := controlPlaneTestRoot(t)
-	nodeCert := issueCollectorIdentity(t, platformRoot, platformKey, "lab-node-5.example.internal")
+	nodeCert := issueCollectorIdentity(t, platformRoot, platformKey, "host-05.example.internal")
 	idevid := issueCollectorIdentity(t, platformRoot, platformKey, "cp.example.internal")
 	a := &app.App{
 		TPM: &collectorAnchorTPM{idevid: idevid},
@@ -312,9 +312,9 @@ func TestDeviceRecordsAdapter_ResolvesTheBoundProfile(t *testing.T) {
 	profiles, err := device.NewProfileService(device.NewDatastore(storage, logging.DefaultLogger()))
 	require.NoError(t, err)
 	certPEM := reportingTestEKCertPEM(t)
-	dev := &entities.Device{ID: 970392025956353, Serial: "lab-node-5-compute-01", Model: "SuperMicro X10", EKCert: certPEM}
-	devices := &fakeDevices{byID: map[uint64]*entities.Device{dev.ID: dev, 2: {ID: 2, Serial: "lab-node-1-gw-01", Model: "SuperMicro X10"}}}
-	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{ID: 4631, Name: "lab-node-5", Role: entities.DeviceRoleWorker, TLSServerName: "compute.trusted-platform.internal"}))
+	dev := &entities.Device{ID: 970392025956353, Serial: "host-05-compute-01", Model: "SuperMicro X10", EKCert: certPEM}
+	devices := &fakeDevices{byID: map[uint64]*entities.Device{dev.ID: dev, 2: {ID: 2, Serial: "host-01-gw-01", Model: "SuperMicro X10"}}}
+	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{ID: 4631, Name: "host-05", Role: entities.DeviceRoleWorker, TLSServerName: "compute.example.internal"}))
 	a := &deviceRecordsAdapter{devices: devices, profiles: profiles}
 
 	rec, err := a.AddressRecord(ctx, "970392025956353")
@@ -327,13 +327,13 @@ func TestDeviceRecordsAdapter_ResolvesTheBoundProfile(t *testing.T) {
 
 	rec, err = a.AddressRecord(ctx, "970392025956353")
 	require.NoError(t, err)
-	assert.Equal(t, "compute.trusted-platform.internal", rec.TLSServerName, "the bound profile's name reaches the collector")
+	assert.Equal(t, "compute.example.internal", rec.TLSServerName, "the bound profile's name reaches the collector")
 
-	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{ID: 4632, Name: "gateways", Role: entities.DeviceRoleGateway, TLSServerName: "gw.trusted-platform.internal",
-		MatchRules: &entities.ProfileMatchRules{SerialPrefix: "MINI-01"}}))
+	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{ID: 4632, Name: "gateways", Role: entities.DeviceRoleGateway, TLSServerName: "gw.example.internal",
+		MatchRules: &entities.ProfileMatchRules{SerialPrefix: "HOST-01"}}))
 	rec, err = a.AddressRecord(ctx, "2")
 	require.NoError(t, err)
-	assert.Equal(t, "gw.trusted-platform.internal", rec.TLSServerName, "an unbound device still resolves through the match rules")
+	assert.Equal(t, "gw.example.internal", rec.TLSServerName, "an unbound device still resolves through the match rules")
 }
 
 // reportingTestEKCertPEM returns a self-signed certificate standing in for a

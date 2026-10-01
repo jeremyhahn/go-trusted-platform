@@ -44,7 +44,7 @@ func boolp(b bool) *bool { return &b }
 
 func backupConfig() GroupConfig {
 	return GroupConfig{VRID: 20, Interface: "br-int", Priority: 100, AdvertIntervalCentiseconds: 100,
-		Addresses: []string{"198.18.0.1/24"}, Source: "198.18.0.2"}
+		Addresses: []string{"10.4.200.1/24"}, Source: "10.4.200.2"}
 }
 
 func newGroupT(t *testing.T, cfg GroupConfig) (*Group, *recordingActuator) {
@@ -120,7 +120,7 @@ func TestGroup_OwnerStartsAsMaster(t *testing.T) {
 func TestGroup_BackupHearsMaster(t *testing.T) {
 	g, act := newGroupT(t, backupConfig())
 	require.NoError(t, g.Startup(t0))
-	master := netip.MustParseAddr("198.18.0.10")
+	master := netip.MustParseAddr("10.4.200.10")
 
 	t.Run("higher priority resets the timer with the master's interval", func(t *testing.T) {
 		adv := &Advertisement{VRID: 20, Priority: 200, MaxAdvertInterval: 50, Addresses: g.Addresses()}
@@ -154,7 +154,7 @@ func TestGroup_BackupWithoutPreemptAcceptsLowerMaster(t *testing.T) {
 	require.NoError(t, g.Startup(t0))
 	now := t0.Add(time.Second)
 	adv := &Advertisement{VRID: 20, Priority: 10, MaxAdvertInterval: 100, Addresses: g.Addresses()}
-	require.NoError(t, g.HandleAdvertisement(adv, netip.MustParseAddr("198.18.0.10"), now))
+	require.NoError(t, g.HandleAdvertisement(adv, netip.MustParseAddr("10.4.200.10"), now))
 	assert.Equal(t, now.Add(g.MasterDownInterval()), g.NextDeadline(), "a non-preempting backup defers to any master")
 }
 
@@ -165,7 +165,7 @@ func TestGroup_MasterYieldsAndReleases(t *testing.T) {
 	require.NoError(t, g.Startup(t0))
 	require.NoError(t, g.Tick(g.NextDeadline()))
 	require.Equal(t, StateMaster, g.State())
-	peer := netip.MustParseAddr("198.18.0.10")
+	peer := netip.MustParseAddr("10.4.200.10")
 
 	t.Run("lower priority is ignored", func(t *testing.T) {
 		adv := &Advertisement{VRID: 20, Priority: 100, MaxAdvertInterval: 100, Addresses: g.Addresses()}
@@ -174,7 +174,7 @@ func TestGroup_MasterYieldsAndReleases(t *testing.T) {
 	})
 	t.Run("equal priority from a lower source is ignored", func(t *testing.T) {
 		adv := &Advertisement{VRID: 20, Priority: 150, MaxAdvertInterval: 100, Addresses: g.Addresses()}
-		require.NoError(t, g.HandleAdvertisement(adv, netip.MustParseAddr("198.18.0.1"), t0.Add(10*time.Second)))
+		require.NoError(t, g.HandleAdvertisement(adv, netip.MustParseAddr("10.4.200.1"), t0.Add(10*time.Second)))
 		assert.Equal(t, StateMaster, g.State())
 	})
 	t.Run("release from another master triggers an immediate advertisement", func(t *testing.T) {
@@ -196,7 +196,7 @@ func TestGroup_MasterYieldsAndReleases(t *testing.T) {
 		require.NoError(t, g.Tick(g.NextDeadline()))
 		require.Equal(t, StateMaster, g.State())
 		adv := &Advertisement{VRID: 20, Priority: 200, MaxAdvertInterval: 100, Addresses: g.Addresses()}
-		require.NoError(t, g.HandleAdvertisement(adv, netip.MustParseAddr("198.18.0.3"), t0.Add(20*time.Second)))
+		require.NoError(t, g.HandleAdvertisement(adv, netip.MustParseAddr("10.4.200.3"), t0.Add(20*time.Second)))
 		assert.Equal(t, StateBackup, g.State())
 		assert.Equal(t, 2, act.releases)
 	})
@@ -246,8 +246,8 @@ func TestGroup_Accessors(t *testing.T) {
 	g, _ := newGroupT(t, backupConfig())
 	assert.Equal(t, FamilyIPv4, g.Family())
 	assert.Equal(t, uint8(20), g.Config().VRID)
-	assert.Equal(t, netip.MustParseAddr("198.18.0.2"), g.Source())
-	assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("198.18.0.1/24")}, g.Prefixes())
+	assert.Equal(t, netip.MustParseAddr("10.4.200.2"), g.Source())
+	assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("10.4.200.1/24")}, g.Prefixes())
 	assert.Equal(t, "initialize", StateInitialize.String())
 	assert.Equal(t, "backup", StateBackup.String())
 	assert.Equal(t, "master", StateMaster.String())

@@ -258,7 +258,7 @@ call answers `201` with the created profile inside the standard envelope:
 ```json
 {"code": 201, "success": true, "payload": {
   "id": "7416956686233238300", "name": "node-02", "role": "control-plane",
-  "match_rules": {"mac_prefix": "00:25:90:5e:02:aa"}, "assigned": false}}
+  "match_rules": {"mac_prefix": "00:25:90:00:02:aa"}, "assigned": false}}
 ```
 
 `payload.id` is the deterministic profile id (`util.NewID(hostname)`, so

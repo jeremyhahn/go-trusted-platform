@@ -1,10 +1,10 @@
 acme:
   client:
     account:
-      email: hostmaster@dev.trusted-platform.io
+      email: hostmaster@dev.example.com
       key:
         debug: true
-        cn: acme_dev.trusted-platform.io
+        cn: acme_dev.example.com
         default: false
         hash: SHA-256
         algorithm: RSA
@@ -15,7 +15,7 @@ acme:
         signature-algorithm: SHA256-RSA
         store: software
       register: true
-    directory: https://dev.trusted-platform.io/api/v1/acme/directory
+    directory: https://dev.example.com/api/v1/acme/directory
     enrollment:
       challenge: enroll-01
       ip: ${PREFERRED_IP}
@@ -123,11 +123,11 @@ certificate-authority:
       store: pkcs11
     sans:
       dns:
-      - root-ca.dev.trusted-platform.io
+      - root-ca.dev.example.com
       email:
-      - hostmaster@dev.trusted-platform.io
+      - hostmaster@dev.example.com
     subject:
-      cn: root-ca.dev.trusted-platform.io
+      cn: root-ca.dev.example.com
       organization: Example Corporation
       country: US
       locality: Hypervisor
@@ -220,12 +220,12 @@ certificate-authority:
       store: pkcs11
     sans:
       dns:
-      - intermediate-ca.dev.trusted-platform.io
-      - ca.dev.trusted-platform.io
+      - intermediate-ca.dev.example.com
+      - ca.dev.example.com
       email:
-      - hostmaster@dev.trusted-platform.io
+      - hostmaster@dev.example.com
     subject:
-      cn: intermediate-ca.dev.trusted-platform.io
+      cn: intermediate-ca.dev.example.com
       organization: Example Corporation
       country: US
       province: Linux
@@ -252,9 +252,9 @@ datastore:
     consistency-level: linearizable
 debug: true
 debug-secrets: true
-domain: dev.trusted-platform.io
+domain: dev.example.com
 hostname: omega
-hostmaster: hostmaster@dev.trusted-platform.io
+hostmaster: hostmaster@dev.example.com
 log-dir: trusted-data/log
 platform-dir: trusted-data
 tpm:
@@ -324,11 +324,11 @@ webservice:
       renew: 15
     sans:
       dns:
-      - dev.trusted-platform.io
+      - dev.example.com
       email:
-      - hostmaster@dev.trusted-platform.io
+      - hostmaster@dev.example.com
     subject:
-      cn: dev.trusted-platform.io
+      cn: dev.example.com
       organization: Example Corporation
       country: US
       province: Linux
@@ -361,11 +361,11 @@ webservice:
         renew: 15
       sans:
         dns:
-        - dashboard.dev.trusted-platform.io
+        - dashboard.dev.example.com
         email:
-        - hostmaster@dev.trusted-platform.io
+        - hostmaster@dev.example.com
       subject:
-        cn: dashboard.dev.trusted-platform.io
+        cn: dashboard.dev.example.com
         organization: Example Corporation
         country: US
         province: Linux
@@ -375,9 +375,9 @@ webservice:
       valid: 365
     cors:
       allowed-origins:
-      - https://dashboard.dev.trusted-platform.io
-      - https://dashboard.dev.trusted-platform.io:8080
-      - https://dashboard.dev.trusted-platform.io:8443
+      - https://dashboard.dev.example.com
+      - https://dashboard.dev.example.com:8080
+      - https://dashboard.dev.example.com:8443
       - https://localhost
       - https://localhost:8080
       - https://localhost:8443
@@ -391,9 +391,9 @@ webservice:
       allowed-headers:
       - '*'
       allow-credentials: true
-    home: dashboard.dev.trusted-platform.io
+    home: dashboard.dev.example.com
     hosts:
-    - dashboard.dev.trusted-platform.io
+    - dashboard.dev.example.com
     index: index.html
     key:
       debug: true
@@ -409,18 +409,18 @@ webservice:
     display-name: Example Corporation
     id: example.com
     origins:
-    - https://dev.trusted-platform.io
-    - https://dev.trusted-platform.io:8080
-    - https://dev.trusted-platform.io:8443
+    - https://dev.example.com
+    - https://dev.example.com:8080
+    - https://dev.example.com:8443
     - https://localhost
     - https://localhost:8080
     - https://localhost:8443
     - https://localhost:3000
   cors:
     allowed-origins:
-    - https://dev.trusted-platform.io
-    - https://dev.trusted-platform.io:8080
-    - https://dev.trusted-platform.io:8443
+    - https://dev.example.com
+    - https://dev.example.com:8080
+    - https://dev.example.com:8443
     - https://localhost
     - https://localhost:8080
     - https://localhost:8443

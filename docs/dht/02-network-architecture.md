@@ -89,11 +89,11 @@ A massively scalable **hierarchical Kademlia DHT** supporting billions of IoT no
 
 **Example Allocation:**
 ```
-Region 1 (North America East): 2602:F5BB:0001::/48
-Region 2 (North America West): 2602:F5BB:0002::/48
-Region 3 (Europe West): 2602:F5BB:0003::/48
+Region 1 (North America East): 2001:DB8:0001::/48
+Region 2 (North America West): 2001:DB8:0002::/48
+Region 3 (Europe West): 2001:DB8:0003::/48
 ...
-Region 65535: 2602:F5BB:FFFF::/48
+Region 65535: 2001:DB8:FFFF::/48
 ```
 
 ### IPv6 Assignment Process
@@ -465,7 +465,7 @@ const (
 // RegionalPrefix represents an aggregated regional route
 type RegionalPrefix struct {
     RegionID       RegionID
-    AggregateRoute netip.Prefix   // e.g., 2602:F5BB:0100::/40
+    AggregateRoute netip.Prefix   // e.g., 2001:DB8:0100::/40
     GatewayRoutes  []netip.Prefix // Internal /48 routes
     PrimaryGateway NodeID         // Primary BGP speaker for region
     BackupGateways []NodeID       // Backup speakers for failover
@@ -485,11 +485,11 @@ type RegionalPrefix struct {
 //
 // Allocation scheme:
 //   2001:db8::/36 = Full allocation
-//   2602:F5BB:0000::/40 = Region 0 (North America East)
-//   2602:F5BB:0100::/40 = Region 1 (North America West)
-//   2602:F5BB:0200::/40 = Region 2 (Europe West)
+//   2001:DB8:0000::/40 = Region 0 (North America East)
+//   2001:DB8:0100::/40 = Region 1 (North America West)
+//   2001:DB8:0200::/40 = Region 2 (Europe West)
 //   ...
-//   2602:F5BB:0F00::/40 = Region 15 (Asia Pacific South)
+//   2001:DB8:0F00::/40 = Region 15 (Asia Pacific South)
 
 func (ra *RegionalAggregation) CalculateRegionalPrefix(regionID RegionID) netip.Prefix {
     // Base: 2001:db8::/36
@@ -552,7 +552,7 @@ func (d *IGPRouteDistributor) AnnounceGatewayRoute(
 }
 
 // Traffic flow example:
-// 1. External traffic arrives at regional aggregate prefix (2602:F5BB:0100::/40)
+// 1. External traffic arrives at regional aggregate prefix (2001:DB8:0100::/40)
 // 2. Regional border gateway receives traffic
 // 3. IGP routing directs to specific gateway based on /48 destination
 // 4. Gateway forwards to target node via P2P mesh
@@ -724,7 +724,7 @@ Datacenter gateways announce more specific /48 prefixes:
 // Datacenter gateway announces its allocated /48
 announcement := &RouteAnnouncement{
     GatewayID: nodeID,
-    Prefix:    "2602:F5BB:0001::/48",  // Allocated prefix
+    Prefix:    "2001:DB8:0001::/48",  // Allocated prefix
     NextHop:   gatewayPublicIP,
 }
 
@@ -735,7 +735,7 @@ sigs, _ := coordinator.CollectSignatures(ctx, announcement)
 speaker.AnnounceRoute(ctx, announcement)
 
 // BGP prefers more specific routes:
-// Traffic to 2602:F5BB:0001::1234 goes directly to gateway
+// Traffic to 2001:DB8:0001::1234 goes directly to gateway
 ```
 
 #### Residential Gateway Tunnels
@@ -761,7 +761,7 @@ PersistentKeepalive = 25
 
 ### Multi-Path Routing
 
-**Traffic to 2602:F5BB:0001::1234 can arrive via MULTIPLE paths:**
+**Traffic to 2001:DB8:0001::1234 can arrive via MULTIPLE paths:**
 
 ```
 +-------------------------------------------------------------+
@@ -798,7 +798,7 @@ PersistentKeepalive = 25
 
 **Routing Decision (Client-Side):**
 ```
-Client wants to reach 2602:F5BB:0001::1234
+Client wants to reach 2001:DB8:0001::1234
 
 Option 1: Standard BGP routing
 - Client's OS does normal IPv6 routing
@@ -1207,7 +1207,7 @@ routing:
 ```go
 type GatewayNode struct {
     // Overlay addressing (P2P network identity)
-    OverlayIPv6   net.IP // 2602:F5BB:0001::1234
+    OverlayIPv6   net.IP // 2001:DB8:0001::1234
 
     // Underlay addressing (actual internet connectivity)
     PublicIPv4    string // "73.25.142.88" (node's ISP-provided IP)
@@ -1411,7 +1411,7 @@ func (g *GatewayNode) HandleInboundConnection(conn net.Conn) {
     }
 
     // 2. Read destination overlay IPv6
-    dstOverlay := readDestination(conn) // e.g., 2602:F5BB:0002::5678
+    dstOverlay := readDestination(conn) // e.g., 2001:DB8:0002::5678
 
     // 3. Look up target node in DHT
     targetNode := dht.Lookup(dstOverlay)
@@ -2083,7 +2083,7 @@ type NodeInfo struct {
     NodeID        [32]byte // SHA-256(public_key)
 
     // Overlay addressing (P2P network)
-    OverlayIPv6   net.IP // 2602:F5BB:0001::1234
+    OverlayIPv6   net.IP // 2001:DB8:0001::1234
 
     // Underlay addressing (actual connectivity)
     UnderlayAddrs []string // ["73.25.142.88:9999", "[2001:db8::1]:9999"]
@@ -2180,8 +2180,8 @@ func connectViaGateway(target NodeInfo) (net.Conn, error) {
 
 ```
 DNS returns BOTH record types:
-- A record: 23.143.36.10 (gateway IPv4, works for everyone)
-- AAAA record: 2602:F5BB:0001::1234 (direct IPv6, fastest for IPv6 users)
+- A record: 203.0.113.10 (gateway IPv4, works for everyone)
+- AAAA record: 2001:DB8:0001::1234 (direct IPv6, fastest for IPv6 users)
 
 Client behavior:
 - IPv6-capable clients: Try AAAA first (direct, fastest)
@@ -2191,8 +2191,8 @@ Client behavior:
 
 **Example DNS Zone:**
 ```dns
-myapp.example.com.    300  IN  A      23.143.36.10
-myapp.example.com.    300  IN  AAAA   2602:F5BB:0001::1234
+myapp.example.com.    300  IN  A      203.0.113.10
+myapp.example.com.    300  IN  AAAA   2001:DB8:0001::1234
 ```
 
 ### Gateway IP Configuration Options
@@ -2211,7 +2211,7 @@ records:
 dns_strategy: pool_ipv6_only
 records:
   - type: AAAA
-    value: 2602:F5BB:0001::1234
+    value: 2001:DB8:0001::1234
 # Best for: High-availability, portable addressing
 ```
 
@@ -2222,7 +2222,7 @@ records:
   - type: A
     value: 73.25.142.88
   - type: AAAA
-    value: 2602:F5BB:0001::1234
+    value: 2001:DB8:0001::1234
 # Best for: Maximum redundancy + performance
 ```
 
@@ -3014,7 +3014,7 @@ Attacker -> 100 Gbps DDoS -> Single Target
 Result: Target overwhelmed
 
 Distributed (This Architecture):
-Attacker -> 100 Gbps DDoS -> 2602:F5BB:0001::1234
+Attacker -> 100 Gbps DDoS -> 2001:DB8:0001::1234
 Traffic distributed across 10,000 gateway nodes
 Each gateway receives: 100 Gbps / 10,000 = 10 Mbps
 Attack diluted, target protected

@@ -821,14 +821,14 @@ func TestDecodeFinishRegistrationBody_BrowserShapeNoSession(t *testing.T) {
 // decoded handle bytes are returned for the handler to derive the
 // registration correlation key.
 func TestParseCreationOptions(t *testing.T) {
-	optionsJSON := `{"publicKey":{"rp":{"id":"cp.trusted-platform.io","name":"TP"},"user":{"id":"c2RrLW9wYXF1ZS1oYW5kbGU","name":"jeremy","displayName":"jeremy"},"challenge":"abc"}}`
+	optionsJSON := `{"publicKey":{"rp":{"id":"cp.example.com","name":"TP"},"user":{"id":"c2RrLW9wYXF1ZS1oYW5kbGU","name":"jeremy","displayName":"jeremy"},"challenge":"abc"}}`
 	out, handle, err := parseCreationOptions(optionsJSON)
 	require.NoError(t, err)
 	publicKey := out["publicKey"].(map[string]interface{})
 	user := publicKey["user"].(map[string]interface{})
 	assert.Equal(t, "c2RrLW9wYXF1ZS1oYW5kbGU", user["id"], "the SDK user handle must not be rewritten")
 	assert.Equal(t, []byte("sdk-opaque-handle"), handle)
-	assert.Equal(t, "cp.trusted-platform.io", publicKey["rp"].(map[string]interface{})["id"])
+	assert.Equal(t, "cp.example.com", publicKey["rp"].(map[string]interface{})["id"])
 }
 
 // TestParseCreationOptions_Malformed rejects options without the expected

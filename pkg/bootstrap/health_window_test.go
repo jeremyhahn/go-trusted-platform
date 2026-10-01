@@ -26,10 +26,10 @@ import (
 )
 
 // observedFirstbootCycle is the measured install-exit -> healthy interval from
-// #134 run 9 on lab-node-1 (12:19:29Z installer exit, ~12:35:00Z /api/v1/status
+// #134 run 9 on node-01 (12:19:29Z installer exit, ~12:35:00Z /api/v1/status
 // answering 200). The post-install health window must exceed it with margin,
 // because a node that is merely SLOW must not fail the run — in run 9 that
-// failure also cancelled the remaining-nodes phase and stranded lab-node-5.
+// failure also cancelled the remaining-nodes phase and stranded node-05.
 const observedFirstbootCycle = 15*time.Minute + 30*time.Second
 
 func TestPostInstallHealthTimeoutCoversObservedFirstbootCycle(t *testing.T) {
@@ -39,7 +39,7 @@ func TestPostInstallHealthTimeoutCoversObservedFirstbootCycle(t *testing.T) {
 			defaultPostInstallHealthTimeout, observedFirstbootCycle)
 	}
 	// Demand real margin, not a value tuned to sit just above the one
-	// observation we have. Hardware slower than lab-node-1 must still pass.
+	// observation we have. Hardware slower than node-01 must still pass.
 	const wantMargin = 5 * time.Minute
 	if got := defaultPostInstallHealthTimeout - observedFirstbootCycle; got < wantMargin {
 		t.Errorf("margin over the observed cycle is %v, want at least %v: one measurement is not the worst case", got, wantMargin)

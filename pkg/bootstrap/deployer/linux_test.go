@@ -442,7 +442,7 @@ func TestErrImageShipFailed(t *testing.T) {
 // entrypoint's own default takes effect rather than a bare `-e
 // BOOTSTRAP_HTTP_PORT=0` pinning the server to port 0.
 func TestBootstrapEnvFlags_PortsOmittedWhenZero(t *testing.T) {
-	got := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "198.18.1.91"})
+	got := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "10.4.2.91"})
 
 	for _, name := range []string{"BOOTSTRAP_HTTP_PORT", "BOOTSTRAP_DEVICE_SCRIPT_PORT"} {
 		if strings.Contains(got, name) {
@@ -456,7 +456,7 @@ func TestBootstrapEnvFlags_PortsOmittedWhenZero(t *testing.T) {
 // bootstrap.yaml field is decorative.
 func TestBootstrapEnvFlags_PortsEmittedWhenSet(t *testing.T) {
 	got := bootstrapEnvFlags(&DeployConfig{
-		BootstrapServerIP:         "198.18.1.91",
+		BootstrapServerIP:         "10.4.2.91",
 		BootstrapHTTPPort:         18080,
 		BootstrapDeviceScriptPort: 18081,
 	})

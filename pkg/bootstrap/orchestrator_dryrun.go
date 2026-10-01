@@ -413,32 +413,7 @@ func (o *Orchestrator) injectControlPlaneDNS(templateMap map[string]interface{})
 	// Search-domain list so bare hostnames resolve against the
 	// deployment's zones. dnsmasq doesn't own this — /etc/resolv.conf
 	// does — so the installer writes it from DNS.SearchDomains.
-	searchDomains := make(map[string]struct{})
-	addSearchDomain := func(d string) {
-		d = strings.TrimSpace(d)
-		if d != "" {
-			searchDomains[d] = struct{}{}
-		}
-	}
-	if s, _ := templateMap["domain"].(string); s != "" {
-		addSearchDomain(s)
-	}
-	if s, _ := templateMap["internal-domain"].(string); s != "" {
-		addSearchDomain(s)
-	}
-	if s, _ := templateMap["internal_domain"].(string); s != "" {
-		addSearchDomain(s)
-	}
-	addSearchDomain(o.config.Platform.Domain)
-	addSearchDomain(o.config.Platform.InternalDomain)
-
-	if len(searchDomains) > 0 {
-		sd := make([]interface{}, 0, len(searchDomains))
-		for s := range searchDomains {
-			sd = append(sd, s)
-		}
-		dns["search-domains"] = sd
-	}
+	o.setSearchDomains(dns, templateMap)
 }
 
 // defaultInternalDNSPort is the port platformd's internal DNS zone
@@ -469,30 +444,41 @@ func (o *Orchestrator) injectControlPlaneSelfDNS(templateMap map[string]interfac
 	}
 	dns["upstream-dns"] = "127.0.0.1#" + defaultInternalDNSPort
 
-	searchDomains := make(map[string]struct{})
-	addSearchDomain := func(d string) {
+	o.setSearchDomains(dns, templateMap)
+}
+
+// setSearchDomains writes network.dns.search-domains: the resolv.conf
+// search list, in configuration order — the node's resolved domain, its
+// internal domain (either key spelling), then the platform domain and the
+// platform internal domain. A domain named twice keeps its first position.
+// The order is fixed so that `platformctl bootstrap resolve` prints the same
+// config on every run and an installed node's resolver tries its zones in
+// the order the operator configured them. With no domain at all the key is
+// left unset.
+func (o *Orchestrator) setSearchDomains(dns, templateMap map[string]interface{}) {
+	candidates := make([]string, 0, 5)
+	for _, key := range []string{"domain", "internal-domain", "internal_domain"} {
+		if s, ok := templateMap[key].(string); ok {
+			candidates = append(candidates, s)
+		}
+	}
+	candidates = append(candidates, o.config.Platform.Domain, o.config.Platform.InternalDomain)
+
+	seen := make(map[string]struct{}, len(candidates))
+	ordered := make([]interface{}, 0, len(candidates))
+	for _, d := range candidates {
 		d = strings.TrimSpace(d)
-		if d != "" {
-			searchDomains[d] = struct{}{}
+		if d == "" {
+			continue
 		}
-	}
-	if s, _ := templateMap["domain"].(string); s != "" {
-		addSearchDomain(s)
-	}
-	if s, _ := templateMap["internal-domain"].(string); s != "" {
-		addSearchDomain(s)
-	}
-	if s, _ := templateMap["internal_domain"].(string); s != "" {
-		addSearchDomain(s)
-	}
-	addSearchDomain(o.config.Platform.Domain)
-	addSearchDomain(o.config.Platform.InternalDomain)
-	if len(searchDomains) > 0 {
-		sd := make([]interface{}, 0, len(searchDomains))
-		for s := range searchDomains {
-			sd = append(sd, s)
+		if _, dup := seen[d]; dup {
+			continue
 		}
-		dns["search-domains"] = sd
+		seen[d] = struct{}{}
+		ordered = append(ordered, d)
+	}
+	if len(ordered) > 0 {
+		dns["search-domains"] = ordered
 	}
 }
 

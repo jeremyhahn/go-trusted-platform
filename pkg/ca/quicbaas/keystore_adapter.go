@@ -573,7 +573,7 @@ func (ks *QuicBaaSKeyStore) CertExists(ctx context.Context, keyID string) (bool,
 // an explicit cross-sign or chain-import runs, which may not have
 // happened at first startup. Without this fallback the webserver's
 // startHTTPS path calls logger.FatalError and silently exits 255 (we
-// debugged this on lab-node-2 first boot: cert PEM was in QuicBaaS
+// debugged this on node-02 first boot: cert PEM was in QuicBaaS
 // objectstorage, `<cn>.chain.pem` was not, server died before opening
 // any listening ports). Serving only the leaf is correct in
 // single-hop CA topologies; clients that need the issuer chain pull

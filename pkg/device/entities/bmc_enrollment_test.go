@@ -29,7 +29,7 @@ func TestBMCEnrollment_JSONRoundTrip(t *testing.T) {
 		PinSPKISHA256:     strings.Repeat("ab", 32),
 		CertSerial:        "12345678901234567890",
 		CertNotAfter:      now.Add(90 * 24 * time.Hour),
-		DNSName:           "lab-node-1-bmc.internal.",
+		DNSName:           "node-01-bmc.internal.",
 		TLSAPublished:     true,
 		FactoryCertSHA256: strings.Repeat("cd", 32),
 	}
@@ -74,7 +74,7 @@ func TestBMCEnrollment_YAMLRoundTrip(t *testing.T) {
 		PinSPKISHA256:     strings.Repeat("ef", 32),
 		CertSerial:        "9876",
 		CertNotAfter:      now.Add(30 * 24 * time.Hour),
-		DNSName:           "lab-node-2-bmc.internal.",
+		DNSName:           "node-02-bmc.internal.",
 		TLSAPublished:     false,
 		FactoryCertSHA256: strings.Repeat("12", 32),
 	}
@@ -116,7 +116,7 @@ func TestDevice_BMCEnrollmentField(t *testing.T) {
 		PinSPKISHA256:     strings.Repeat("ab", 32),
 		CertSerial:        "42",
 		CertNotAfter:      now.Add(90 * 24 * time.Hour),
-		DNSName:           "lab-node-3-bmc.internal.",
+		DNSName:           "node-03-bmc.internal.",
 		TLSAPublished:     true,
 		FactoryCertSHA256: strings.Repeat("ff", 32),
 	}

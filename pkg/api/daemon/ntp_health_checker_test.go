@@ -110,8 +110,8 @@ func serveNameFinding() ntp.ServeNameFinding {
 	return ntp.ServeNameFinding{
 		Kind:           ntp.ServeNameUnreachable,
 		Name:           "cp.example.internal",
-		Address:        "198.18.1.140",
-		ListenNetworks: []string{"198.18.0.0/24", "172.16.201.0/24"},
+		Address:        "10.4.2.140",
+		ListenNetworks: []string{"10.4.200.0/24", "192.0.2.0/24"},
 	}
 }
 
@@ -140,7 +140,7 @@ func TestNTPHealthCheckerFlagsAnUnreachableServeName(t *testing.T) {
 		t.Fatalf("message %q must carry the %q marker for fleet monitoring",
 			result.Message, string(ntp.ServeNameUnreachable))
 	}
-	for _, want := range []string{"cp.example.internal", "198.18.1.140", "198.18.0.0/24"} {
+	for _, want := range []string{"cp.example.internal", "10.4.2.140", "10.4.200.0/24"} {
 		if !strings.Contains(result.Message, want) {
 			t.Errorf("message %q does not name %q", result.Message, want)
 		}

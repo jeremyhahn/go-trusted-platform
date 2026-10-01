@@ -1,4 +1,4 @@
-From: agent-go-trusted-platform <agent-go-trusted-platform@example.internal>
+From: go-trusted-platform <noreply@letstrust.org>
 Subject: [PATCH] lib/mbedtls: return errno, not mbedTLS codes, from the parsers
 
 pkcs7_parse_message() and x509_cert_parse() hand ERR_PTR() the raw

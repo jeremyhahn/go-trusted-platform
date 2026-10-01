@@ -68,7 +68,7 @@ values.
 |----------------------|----------------------------------|---------|
 | `VBMC_HTTPS_ADDR`    | `:8443`                          | HTTPS listen address |
 | `VBMC_VENDOR`        | `Supermicro`                     | `Supermicro` \| `Dell` \| any string set as `Vendor` field |
-| `VBMC_CN`            | `vbmc.trusted-platform.internal` | CN / DNS-SAN on the initial self-signed cert |
+| `VBMC_CN`            | `vbmc.example.internal` | CN / DNS-SAN on the initial self-signed cert |
 | `VBMC_LOG_LEVEL`     | `info`                           | `debug` \| `info` \| `warn` \| `error` |
 | `VBMC_IPMI_ADDR`     | `:6230`                          | UDP listen address for RMCP+ (6230 avoids privileged port 623) |
 | `VBMC_IPMI_USER`     | `ADMIN`                          | BMC account the simulator accepts |

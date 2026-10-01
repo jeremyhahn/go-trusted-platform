@@ -231,7 +231,7 @@ go-trusted-platform is a **Zero-Trust Trusted Computing Platform** for running s
 - [ ] Unit tests
 
 **Files:**
-- `/home/jhahn/sources/go-xkms/pkg/acme/challenges/certify-01/`
+- `../go-xkms/pkg/acme/challenges/certify-01/`
 
 ---
 

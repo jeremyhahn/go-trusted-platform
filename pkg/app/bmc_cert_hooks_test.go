@@ -331,7 +331,7 @@ func (f *fakeDanePublisher) PublishForCertificate(_ context.Context, leafCert, c
 func TestBuildBMCRenewalHooks_OnIssuedCallsPrePublish(t *testing.T) {
 	leaf := testIssuedCertificate()
 	dane := &fakeDanePublisher{}
-	dnsName := "lab-node-1-bmc.internal"
+	dnsName := "node-01-bmc.internal"
 
 	onIssued, _ := buildRenewalHooksForTest(dane, dnsName, "1.2.3.4", nil)
 	if err := onIssued(context.Background(), leaf); err != nil {
@@ -377,7 +377,7 @@ func TestBuildBMCRenewalHooks_OnDeployedUpdatesPinAndPublishes(t *testing.T) {
 		return nil
 	}
 
-	dnsName := "lab-node-1-bmc.internal"
+	dnsName := "node-01-bmc.internal"
 	_, onDeployed := buildRenewalHooksForTest(dane, dnsName, "1.2.3.4", pinUpdater)
 	if err := onDeployed(context.Background(), leaf, ca); err != nil {
 		t.Fatalf("onDeployed: %v", err)
@@ -437,7 +437,7 @@ func TestBuildBMCRenewalHooks_NilCATolerance(t *testing.T) {
 		return nil
 	}
 
-	_, onDeployed := buildRenewalHooksForTest(dane, "lab-node-1-bmc.internal", "1.2.3.4", pinUpdater)
+	_, onDeployed := buildRenewalHooksForTest(dane, "node-01-bmc.internal", "1.2.3.4", pinUpdater)
 	if err := onDeployed(context.Background(), leaf, nil); err != nil {
 		t.Fatalf("onDeployed with nil ca: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestBuildBMCRenewalHooks_PinErrorIsReturnedFromHook(t *testing.T) {
 		return pinErr
 	}
 
-	_, onDeployed := buildRenewalHooksForTest(nil, "lab-node-1-bmc.internal", "1.2.3.4", pinUpdater)
+	_, onDeployed := buildRenewalHooksForTest(nil, "node-01-bmc.internal", "1.2.3.4", pinUpdater)
 	err := onDeployed(context.Background(), leaf, nil)
 	if !errors.Is(err, pinErr) {
 		t.Errorf("err = %v, want pin error", err)
@@ -549,12 +549,12 @@ func TestInitBMCCert_HooksPropagateThroughOptions(t *testing.T) {
 // the platform's BMC address — never another device's name.
 func TestEnrolledDNSNameForHost_MatchesCorrectDevice(t *testing.T) {
 	devices := []*entities.Device{
-		{ID: 1, BMCEnrollment: &entities.BMCEnrollment{Host: "198.51.100.102", DNSName: "lab-node-1-bmc.internal."}},
-		{ID: 2, BMCEnrollment: &entities.BMCEnrollment{Host: "198.51.100.103", DNSName: "lab-node-2-bmc.internal."}},
+		{ID: 1, BMCEnrollment: &entities.BMCEnrollment{Host: "10.4.6.102", DNSName: "node-01-bmc.internal."}},
+		{ID: 2, BMCEnrollment: &entities.BMCEnrollment{Host: "10.4.6.103", DNSName: "node-02-bmc.internal."}},
 		{ID: 3, BMCEnrollment: nil},
 	}
-	if got := enrolledDNSNameForHost(devices, "198.51.100.103"); got != "lab-node-2-bmc.internal" {
-		t.Errorf("enrolledDNSNameForHost = %q, want %q", got, "lab-node-2-bmc.internal")
+	if got := enrolledDNSNameForHost(devices, "10.4.6.103"); got != "node-02-bmc.internal" {
+		t.Errorf("enrolledDNSNameForHost = %q, want %q", got, "node-02-bmc.internal")
 	}
 }
 
@@ -564,16 +564,16 @@ func TestEnrolledDNSNameForHost_MatchesCorrectDevice(t *testing.T) {
 func TestEnrolledDNSNameForHost_NoMatch(t *testing.T) {
 	devices := []*entities.Device{
 		nil,
-		{ID: 1, BMCEnrollment: &entities.BMCEnrollment{Host: "198.51.100.102", DNSName: "lab-node-1-bmc.internal."}},
-		{ID: 2, BMCEnrollment: &entities.BMCEnrollment{Host: "198.51.100.104"}},
+		{ID: 1, BMCEnrollment: &entities.BMCEnrollment{Host: "10.4.6.102", DNSName: "node-01-bmc.internal."}},
+		{ID: 2, BMCEnrollment: &entities.BMCEnrollment{Host: "10.4.6.104"}},
 	}
 	if got := enrolledDNSNameForHost(devices, "10.0.0.1"); got != "" {
 		t.Errorf("unmatched host: got %q, want empty", got)
 	}
-	if got := enrolledDNSNameForHost(devices, "198.51.100.104"); got != "" {
+	if got := enrolledDNSNameForHost(devices, "10.4.6.104"); got != "" {
 		t.Errorf("enrollment without DNS name: got %q, want empty", got)
 	}
-	if got := enrolledDNSNameForHost(nil, "198.51.100.102"); got != "" {
+	if got := enrolledDNSNameForHost(nil, "10.4.6.102"); got != "" {
 		t.Errorf("nil devices: got %q, want empty", got)
 	}
 }

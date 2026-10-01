@@ -23,11 +23,11 @@ import (
 func TestErrBootRetryExhausted(t *testing.T) {
 	t.Run("with cause", func(t *testing.T) {
 		err := ErrBootRetryExhausted{
-			Hostname:   "lab-node-3",
+			Hostname:   "node-03",
 			MaxRetries: 3,
 			Cause:      errors.New("install log not found"),
 		}
-		want := "bootstrap: node lab-node-3: boot retry exhausted after 3 attempts (check BIOS boot order: ATEN CDROM must be before Hard Disk): install log not found"
+		want := "bootstrap: node node-03: boot retry exhausted after 3 attempts (check BIOS boot order: ATEN CDROM must be before Hard Disk): install log not found"
 		if got := err.Error(); got != want {
 			t.Errorf("Error() = %q, want %q", got, want)
 		}
@@ -38,10 +38,10 @@ func TestErrBootRetryExhausted(t *testing.T) {
 
 	t.Run("without cause", func(t *testing.T) {
 		err := ErrBootRetryExhausted{
-			Hostname:   "lab-node-3",
+			Hostname:   "node-03",
 			MaxRetries: 3,
 		}
-		want := "bootstrap: node lab-node-3: boot retry exhausted after 3 attempts (check BIOS boot order: ATEN CDROM must be before Hard Disk)"
+		want := "bootstrap: node node-03: boot retry exhausted after 3 attempts (check BIOS boot order: ATEN CDROM must be before Hard Disk)"
 		if got := err.Error(); got != want {
 			t.Errorf("Error() = %q, want %q", got, want)
 		}
@@ -53,10 +53,10 @@ func TestErrBootRetryExhausted(t *testing.T) {
 
 func TestErrBootFromDiskDetected(t *testing.T) {
 	err := ErrBootFromDiskDetected{
-		Hostname: "lab-node-3",
+		Hostname: "node-03",
 		Attempt:  2,
 	}
-	want := "bootstrap: node lab-node-3: booted from disk instead of ISO on attempt 2"
+	want := "bootstrap: node node-03: booted from disk instead of ISO on attempt 2"
 	if got := err.Error(); got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}
@@ -98,11 +98,11 @@ func TestDeepMergeSeeder(t *testing.T) {
 			"port":     8443,
 		}
 		src := map[string]interface{}{
-			"hostname": "lab-node-3",
+			"hostname": "node-03",
 		}
 		result := deepMergeSeeder(dst, src)
-		if result["hostname"] != "lab-node-3" {
-			t.Errorf("hostname = %v, want lab-node-3", result["hostname"])
+		if result["hostname"] != "node-03" {
+			t.Errorf("hostname = %v, want node-03", result["hostname"])
 		}
 		if result["port"] != 8443 {
 			t.Errorf("port = %v, want 8443", result["port"])
@@ -118,7 +118,7 @@ func TestDeepMergeSeeder(t *testing.T) {
 		}
 		src := map[string]interface{}{
 			"os": map[string]interface{}{
-				"hostname": "lab-node-3",
+				"hostname": "node-03",
 			},
 		}
 		result := deepMergeSeeder(dst, src)
@@ -126,8 +126,8 @@ func TestDeepMergeSeeder(t *testing.T) {
 		if !ok {
 			t.Fatal("os should be a map")
 		}
-		if osMap["hostname"] != "lab-node-3" {
-			t.Errorf("os.hostname = %v, want lab-node-3", osMap["hostname"])
+		if osMap["hostname"] != "node-03" {
+			t.Errorf("os.hostname = %v, want node-03", osMap["hostname"])
 		}
 		if osMap["timezone"] != "UTC" {
 			t.Errorf("os.timezone = %v, want UTC", osMap["timezone"])

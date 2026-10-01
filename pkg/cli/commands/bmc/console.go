@@ -64,14 +64,14 @@ command requires --bmc-protocol ipmi (or auto-detection landing on IPMI).
 Examples:
   # Interactive console
   platformctl bmc console \
-    --bmc-host 198.18.1.103 \
+    --bmc-host 10.4.2.103 \
     --bmc-user admin \
     --bmc-pass-file /etc/platform/bmc.pass \
     --bmc-protocol ipmi
 
   # Capture session to a log file (no TTY required)
   platformctl bmc console \
-    --bmc-host 198.18.1.103 \
+    --bmc-host 10.4.2.103 \
     --bmc-user admin \
     --bmc-pass-file /etc/platform/bmc.pass \
     --bmc-protocol ipmi \
@@ -79,7 +79,7 @@ Examples:
 
   # Send a single serial-break and exit
   platformctl bmc console \
-    --bmc-host 198.18.1.103 \
+    --bmc-host 10.4.2.103 \
     --bmc-user admin \
     --bmc-pass-file /etc/platform/bmc.pass \
     --bmc-protocol ipmi \

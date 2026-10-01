@@ -79,13 +79,13 @@ func TestQUICDeviceCreateProfile_EKPrestageFields(t *testing.T) {
 
 	req := encodeQUICRequest(t, quic.OpDeviceCreateProfile, &platformv1.CreateProfileRequest{
 		Profile: &platformv1.DeviceProfile{
-			Name:       "lab-node-2",
+			Name:       "node-02",
 			Model:      "X10SDV",
 			Role:       platformv1.DeviceRole_DEVICE_ROLE_SERVER,
 			EkSerial:   "EK-1001",
 			MacAddress: "00:25:90:ff:aa:02",
 			EkCert:     ekCert,
-			Config:     []byte(`{"hostname":"lab-node-2"}`),
+			Config:     []byte(`{"hostname":"node-02"}`),
 		},
 	})
 
@@ -98,7 +98,7 @@ func TestQUICDeviceCreateProfile_EKPrestageFields(t *testing.T) {
 	assert.Equal(t, "EK-1001", created.GetProfile().GetEkSerial())
 	assert.Equal(t, "00:25:90:ff:aa:02", created.GetProfile().GetMacAddress())
 	assert.Equal(t, ekCert, created.GetProfile().GetEkCert())
-	assert.Equal(t, []byte(`{"hostname":"lab-node-2"}`), created.GetProfile().GetConfig())
+	assert.Equal(t, []byte(`{"hostname":"node-02"}`), created.GetProfile().GetConfig())
 
 	stored := profileSvc.profiles[created.GetProfile().GetId()]
 	require.NotNil(t, stored)

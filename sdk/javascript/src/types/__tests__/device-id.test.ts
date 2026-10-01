@@ -21,7 +21,7 @@ const ABOVE_PRECISION = '9007199254740993';
 
 describe('device id encoding', () => {
   it('survives a parse at a magnitude a JS number cannot hold', () => {
-    const parsed = JSON.parse(`{"id":"${ABOVE_PRECISION}","name":"lab-node-1"}`) as Device;
+    const parsed = JSON.parse(`{"id":"${ABOVE_PRECISION}","name":"node-01"}`) as Device;
     expect(parsed.id).toBe(ABOVE_PRECISION);
 
     // The control, and the defect this change exists for: the same value sent

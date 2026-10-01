@@ -223,12 +223,12 @@ func createTestSpeaker(t *testing.T) (*bgp.Speaker, *mockBGPServer) {
 }
 
 func createTestIPv6Prefix() net.IPNet {
-	_, prefix, _ := net.ParseCIDR("2602:F5BB::/36")
+	_, prefix, _ := net.ParseCIDR("2001:DB8::/36")
 	return *prefix
 }
 
 func createTestIPv4Prefix() net.IPNet {
-	_, prefix, _ := net.ParseCIDR("23.143.36.0/24")
+	_, prefix, _ := net.ParseCIDR("203.0.113.0/24")
 	return *prefix
 }
 
@@ -261,7 +261,7 @@ func validBackboneConfig() *TransitModeConfig {
 }
 
 func validDatacenterConfig() *TransitModeConfig {
-	_, ipv6Prefix, _ := net.ParseCIDR("2602:F5BB:1::/48")
+	_, ipv6Prefix, _ := net.ParseCIDR("2001:DB8:1::/48")
 	return &TransitModeConfig{
 		Tier:                bgp.SpeakerTierDatacenter,
 		IPv6Prefixes:        []net.IPNet{*ipv6Prefix},
@@ -741,7 +741,7 @@ func TestTransitModeHandler_SignRoute_Success(t *testing.T) {
 	_ = handler.Start(ctx)
 	defer handler.Stop(ctx)
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	signature, err := handler.SignRoute(ctx, prefix)
 	if err != nil {
 		t.Fatalf("expected no error signing route, got: %v", err)
@@ -776,7 +776,7 @@ func TestTransitModeHandler_SignRoute_NotCoordinator(t *testing.T) {
 	_ = handler.Start(ctx)
 	defer handler.Stop(ctx)
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	_, err := handler.SignRoute(ctx, prefix)
 	if !errors.Is(err, ErrNotCoordinatorTier) {
 		t.Errorf("expected ErrNotCoordinatorTier, got: %v", err)
@@ -791,7 +791,7 @@ func TestTransitModeHandler_SignRoute_NotRunning(t *testing.T) {
 	handler, _ := NewTransitModeHandler(config, speaker, WithTransitLogger(testLogger()))
 
 	ctx := context.Background()
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	_, err := handler.SignRoute(ctx, prefix)
 	if !errors.Is(err, ErrNotRunning) {
 		t.Errorf("expected ErrNotRunning, got: %v", err)
@@ -809,7 +809,7 @@ func TestTransitModeHandler_VerifyRouteSignature_Success(t *testing.T) {
 	_ = handler.Start(ctx)
 	defer handler.Stop(ctx)
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	signature, _ := handler.SignRoute(ctx, prefix)
 
 	err := handler.VerifyRouteSignature(ctx, prefix, signature, config.RouteSigningKey.KeyID)
@@ -829,7 +829,7 @@ func TestTransitModeHandler_VerifyRouteSignature_EmptySignature(t *testing.T) {
 	_ = handler.Start(ctx)
 	defer handler.Stop(ctx)
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	err := handler.VerifyRouteSignature(ctx, prefix, nil, config.RouteSigningKey.KeyID)
 	if !errors.Is(err, ErrEmptySignature) {
 		t.Errorf("expected ErrEmptySignature, got: %v", err)
@@ -847,7 +847,7 @@ func TestTransitModeHandler_VerifyRouteSignature_EmptySignerID(t *testing.T) {
 	_ = handler.Start(ctx)
 	defer handler.Stop(ctx)
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	err := handler.VerifyRouteSignature(ctx, prefix, []byte("signature"), "")
 	if !errors.Is(err, ErrEmptySignerID) {
 		t.Errorf("expected ErrEmptySignerID, got: %v", err)
@@ -865,7 +865,7 @@ func TestTransitModeHandler_VerifyRouteSignature_SignerNotFound(t *testing.T) {
 	_ = handler.Start(ctx)
 	defer handler.Stop(ctx)
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	err := handler.VerifyRouteSignature(ctx, prefix, []byte("signature"), "unknown-signer")
 
 	var signerNotFound ErrSignerNotFound
@@ -885,7 +885,7 @@ func TestTransitModeHandler_VerifyRouteSignature_InvalidSignature(t *testing.T) 
 	_ = handler.Start(ctx)
 	defer handler.Stop(ctx)
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	invalidSignature := make([]byte, 64)
 
 	err := handler.VerifyRouteSignature(ctx, prefix, invalidSignature, config.RouteSigningKey.KeyID)
@@ -904,7 +904,7 @@ func TestTransitModeHandler_VerifyRouteSignature_NotRunning(t *testing.T) {
 	handler, _ := NewTransitModeHandler(config, speaker, WithTransitLogger(testLogger()))
 
 	ctx := context.Background()
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	err := handler.VerifyRouteSignature(ctx, prefix, []byte("sig"), "signer")
 	if !errors.Is(err, ErrNotRunning) {
 		t.Errorf("expected ErrNotRunning, got: %v", err)
@@ -954,7 +954,7 @@ func TestTransitModeHandler_IsRouteVerified_NoMinGateways(t *testing.T) {
 	_ = handler.Start(ctx)
 	defer handler.Stop(ctx)
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 	if !handler.IsRouteVerified(prefix) {
 		t.Error("expected route to be verified when MinGatewaysForRoute is 0")
 	}
@@ -973,7 +973,7 @@ func TestTransitModeHandler_IsRouteVerified_BelowThreshold(t *testing.T) {
 	_ = handler.Start(ctx)
 	defer handler.Stop(ctx)
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 
 	// Add 2 verifications (below threshold of 3)
 	handler.recordRouteVerification(prefix, "gateway-1")
@@ -1002,7 +1002,7 @@ func TestTransitModeHandler_IsRouteVerified_AtThreshold(t *testing.T) {
 	_ = handler.Start(ctx)
 	defer handler.Stop(ctx)
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 
 	// Add 3 verifications (at threshold)
 	handler.recordRouteVerification(prefix, "gateway-1")
@@ -1031,7 +1031,7 @@ func TestTransitModeHandler_DatacenterTierPrefixScope(t *testing.T) {
 	defer handler.Stop(ctx)
 
 	// Try to announce a /36 prefix (too large for datacenter)
-	_, largePrefix, _ := net.ParseCIDR("2602:F5BB::/36")
+	_, largePrefix, _ := net.ParseCIDR("2001:DB8::/36")
 	err := handler.AnnouncePrefix(ctx, *largePrefix)
 
 	var tooLarge *ErrPrefixTooLarge
@@ -1293,7 +1293,7 @@ func BenchmarkTransitModeHandler_SignRoute(b *testing.B) {
 	_ = handler.Start(ctx)
 	defer handler.Stop(ctx)
 
-	prefix := netip.MustParsePrefix("2602:F5BB::/36")
+	prefix := netip.MustParsePrefix("2001:DB8::/36")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

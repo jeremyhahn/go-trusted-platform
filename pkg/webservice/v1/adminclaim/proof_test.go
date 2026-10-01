@@ -250,7 +250,7 @@ func TestVerifyAdminCertificate_RejectsAnotherTenantsAdmin(t *testing.T) {
 	p := newPKI(t)
 	cert, _, _ := p.issue(t, leafOptions{
 		commonName: "admin",
-		spiffeURI:  "spiffe://trusted-platform.internal/tenant/acme/user/admin",
+		spiffeURI:  "spiffe://example.internal/tenant/acme/user/admin",
 	})
 
 	err := verifyAdminCertificate(cert, p.pool, "admin", "system")

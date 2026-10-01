@@ -112,8 +112,8 @@ func TestMediaWatcher_KeepsClientsApart(t *testing.T) {
 	data := t.TempDir()
 	iso := filepath.Join(data, "platform.iso")
 	w := newMediaWatcher(proc.root, data, 999, time.Hour, nil)
-	proc.openFor("smbd", "198.18.1.103", 301, 5, iso, 1000)
-	proc.openFor("smbd", "198.18.1.104", 302, 5, iso, 2000)
+	proc.openFor("smbd", "10.4.2.103", 301, 5, iso, 1000)
+	proc.openFor("smbd", "10.4.2.104", 302, 5, iso, 2000)
 	require.NoError(t, w.sample())
 	// Only the first client reads further.
 	require.NoError(t, os.WriteFile(filepath.Join(proc.root, "301", "fdinfo", "5"), []byte("pos:\t5000\n"), 0o644))
@@ -121,9 +121,9 @@ func TestMediaWatcher_KeepsClientsApart(t *testing.T) {
 
 	openers := w.status().Files[0].OpenersNamed("smbd")
 	require.Len(t, openers, 2)
-	assert.Equal(t, "198.18.1.103", openers[0].Client)
+	assert.Equal(t, "10.4.2.103", openers[0].Client)
 	assert.Equal(t, 2, openers[0].Activity(), "open event plus one position change")
-	assert.Equal(t, "198.18.1.104", openers[1].Client)
+	assert.Equal(t, "10.4.2.104", openers[1].Client)
 	assert.Equal(t, 1, openers[1].Activity(), "open event only")
 	assert.Nil(t, w.status().Files[0].Opener("smbd"), "no client-less smbd record")
 }
@@ -135,15 +135,15 @@ func TestMediaWatcher_TruncatedAlpineWorkerKeepsItsRecord(t *testing.T) {
 	w := newMediaWatcher(proc.root, data, 999, time.Hour, nil)
 	// The measured Alpine worker: comm is the 15-byte-truncated title,
 	// cmdline is plain argv (#126).
-	proc.openTitled("smbd[192.168.50", "/usr/sbin/smbd\x00--foreground\x00", 401, 27, iso, 4096)
+	proc.openTitled("smbd[198.51.100", "/usr/sbin/smbd\x00--foreground\x00", 401, 27, iso, 4096)
 	require.NoError(t, w.sample())
 	require.NoError(t, os.WriteFile(filepath.Join(proc.root, "401", "fdinfo", "27"), []byte("pos:\t65536\n"), 0o644))
 	require.NoError(t, w.sample())
 
 	openers := w.status().Files[0].OpenersNamed("smbd")
 	require.Len(t, openers, 1)
-	assert.Equal(t, "smbd[192.168.50", openers[0].Name)
-	assert.Equal(t, "192.168.50", openers[0].Client)
+	assert.Equal(t, "smbd[198.51.100", openers[0].Name)
+	assert.Equal(t, "198.51.100", openers[0].Client)
 	assert.True(t, openers[0].ClientTruncated, "a client cut by the comm limit must say so")
 	assert.Equal(t, 2, openers[0].Activity(), "open event plus one position change")
 }

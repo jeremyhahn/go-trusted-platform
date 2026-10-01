@@ -35,17 +35,17 @@ import (
 func snapshotFixture(id string) *GatewaySnapshotInfo {
 	return &GatewaySnapshotInfo{
 		GatewayID:    id,
-		Hostname:     "lab-node-1",
+		Hostname:     "node-01",
 		HealthStatus: "healthy",
 		BGP: &SnapshotBGPInfo{
-			LocalAS: 401870, PeerCount: 1, EstablishedPeers: 1,
+			LocalAS: 64512, PeerCount: 1, EstablishedPeers: 1,
 			Peers: []SnapshotBGPPeerInfo{{
 				Address: "10.255.0.2", State: "Established", PrefixesAccepted: 118,
 				BFD: &SnapshotBFDInfo{State: "up", DetectionMultiplier: 3},
 			}},
 		},
-		Tunnels:  []SnapshotTunnelInfo{{Name: "gre-mia", Transport: "ipsec", State: "up", Uplink: "att", Bound: true}},
-		Uplinks:  []SnapshotUplinkInfo{{Name: "att", Table: 101, RuleCount: 1, Tunnels: []string{"gre-mia"}}},
+		Tunnels:  []SnapshotTunnelInfo{{Name: "gre-pri", Transport: "ipsec", State: "up", Uplink: "isp-a", Bound: true}},
+		Uplinks:  []SnapshotUplinkInfo{{Name: "isp-a", Table: 101, RuleCount: 1, Tunnels: []string{"gre-pri"}}},
 		Services: []SnapshotServiceInfo{{Name: "tunnels", Active: true, Healthy: true}},
 		Pipeline: &SnapshotPipelineInfo{Installed: true, Bridge: "br-fabric", Terminal: "normal", FailMode: "secure"},
 	}
@@ -56,9 +56,9 @@ func TestGatewayHandleSnapshot(t *testing.T) {
 
 	t.Run("returns the snapshot the service reports", func(t *testing.T) {
 		handler, service := createTestGatewayHandler()
-		service.snapshotResp = snapshotFixture("lab-node-1-gateway")
+		service.snapshotResp = snapshotFixture("node-01-gateway")
 
-		payload, err := EncodePayload(&GatewaySnapshotRequest{GatewayID: "lab-node-1-gateway"})
+		payload, err := EncodePayload(&GatewaySnapshotRequest{GatewayID: "node-01-gateway"})
 		require.NoError(t, err)
 		resp := handler.HandleRequest(ctx, &Request{Opcode: OpGatewaySnapshot, Payload: payload})
 		require.Equal(t, StatusOK, resp.Status)
@@ -66,8 +66,8 @@ func TestGatewayHandleSnapshot(t *testing.T) {
 		var decoded GatewaySnapshotResponse
 		require.NoError(t, DecodePayload(resp.Payload, &decoded))
 		require.NotNil(t, decoded.Snapshot)
-		assert.Equal(t, "lab-node-1-gateway", decoded.Snapshot.GatewayID)
-		assert.Equal(t, "lab-node-1-gateway", service.lastSnapshotID, "the request's gateway id reaches the service")
+		assert.Equal(t, "node-01-gateway", decoded.Snapshot.GatewayID)
+		assert.Equal(t, "node-01-gateway", service.lastSnapshotID, "the request's gateway id reaches the service")
 		require.NotNil(t, decoded.Snapshot.BGP)
 		require.Len(t, decoded.Snapshot.BGP.Peers, 1)
 		assert.Equal(t, int64(118), decoded.Snapshot.BGP.Peers[0].PrefixesAccepted)
@@ -118,7 +118,7 @@ func TestGatewayHandleListSnapshots(t *testing.T) {
 	ctx := context.Background()
 
 	handler, service := createTestGatewayHandler()
-	service.snapshotsResp = []*GatewaySnapshotInfo{snapshotFixture("lab-node-1-gateway"), snapshotFixture("lab-node-2-gateway")}
+	service.snapshotsResp = []*GatewaySnapshotInfo{snapshotFixture("node-01-gateway"), snapshotFixture("node-02-gateway")}
 
 	resp := handler.HandleRequest(ctx, &Request{Opcode: OpGatewayListSnapshots})
 	require.Equal(t, StatusOK, resp.Status)
@@ -127,7 +127,7 @@ func TestGatewayHandleListSnapshots(t *testing.T) {
 	require.NoError(t, DecodePayload(resp.Payload, &decoded))
 	assert.Equal(t, int32(2), decoded.Count)
 	require.Len(t, decoded.Snapshots, 2)
-	assert.Equal(t, "lab-node-2-gateway", decoded.Snapshots[1].GatewayID)
+	assert.Equal(t, "node-02-gateway", decoded.Snapshots[1].GatewayID)
 
 	t.Run("a listing failure is reported", func(t *testing.T) {
 		handler, service := createTestGatewayHandler()

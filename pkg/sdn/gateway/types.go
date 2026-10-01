@@ -692,7 +692,7 @@ type NATUplinkConfig struct {
 	Port string `yaml:"port,omitempty" json:"port,omitempty" mapstructure:"port"`
 
 	// Addresses is the IPv4 pool: single addresses or inclusive ranges
-	// ("96.65.171.20-96.65.171.21").
+	// ("192.0.2.4-192.0.2.5").
 	Addresses []string `yaml:"addresses" json:"addresses" mapstructure:"addresses"`
 
 	// PortRangeStart and PortRangeEnd override the NAT-wide port range for

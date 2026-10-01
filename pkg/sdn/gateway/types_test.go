@@ -537,7 +537,7 @@ func TestTunnelConfig_Validate(t *testing.T) {
 			name: "valid config",
 			config: TunnelConfig{
 				Name: "gre1", Type: "gre",
-				Local: "99.12.246.36", Remote: "45.63.110.165",
+				Local: "198.51.100.4", Remote: "198.51.100.100",
 				TunnelIP: "10.255.0.1",
 			},
 			expectError: false,
@@ -546,8 +546,8 @@ func TestTunnelConfig_Validate(t *testing.T) {
 			name: "valid with ipv6",
 			config: TunnelConfig{
 				Name: "gre2", Type: "gre",
-				Local: "99.12.246.37", Remote: "45.63.110.165",
-				TunnelIP: "10.255.0.5", TunnelIPv6: "2602:f5bb::1",
+				Local: "198.51.100.5", Remote: "198.51.100.100",
+				TunnelIP: "10.255.0.5", TunnelIPv6: "2001:db8::1",
 			},
 			expectError: false,
 		},
@@ -555,7 +555,7 @@ func TestTunnelConfig_Validate(t *testing.T) {
 			name: "empty name",
 			config: TunnelConfig{
 				Name: "", Type: "gre",
-				Local: "99.12.246.36", Remote: "45.63.110.165",
+				Local: "198.51.100.4", Remote: "198.51.100.100",
 				TunnelIP: "10.255.0.1",
 			},
 			expectError: true,
@@ -564,7 +564,7 @@ func TestTunnelConfig_Validate(t *testing.T) {
 			name: "empty type",
 			config: TunnelConfig{
 				Name: "gre1", Type: "",
-				Local: "99.12.246.36", Remote: "45.63.110.165",
+				Local: "198.51.100.4", Remote: "198.51.100.100",
 				TunnelIP: "10.255.0.1",
 			},
 			expectError: true,
@@ -573,7 +573,7 @@ func TestTunnelConfig_Validate(t *testing.T) {
 			name: "empty local",
 			config: TunnelConfig{
 				Name: "gre1", Type: "gre",
-				Local: "", Remote: "45.63.110.165",
+				Local: "", Remote: "198.51.100.100",
 				TunnelIP: "10.255.0.1",
 			},
 			expectError: true,
@@ -582,7 +582,7 @@ func TestTunnelConfig_Validate(t *testing.T) {
 			name: "empty remote",
 			config: TunnelConfig{
 				Name: "gre1", Type: "gre",
-				Local: "99.12.246.36", Remote: "",
+				Local: "198.51.100.4", Remote: "",
 				TunnelIP: "10.255.0.1",
 			},
 			expectError: true,
@@ -591,7 +591,7 @@ func TestTunnelConfig_Validate(t *testing.T) {
 			name: "empty tunnel ip",
 			config: TunnelConfig{
 				Name: "gre1", Type: "gre",
-				Local: "99.12.246.36", Remote: "45.63.110.165",
+				Local: "198.51.100.4", Remote: "198.51.100.100",
 				TunnelIP: "",
 			},
 			expectError: true,
@@ -637,8 +637,8 @@ func TestNATConfig_Validate(t *testing.T) {
 			name: "uplinks replace the external ip (#586)",
 			config: NATConfig{
 				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
-				Uplinks: []NATUplinkConfig{{Name: "att", Addresses: []string{"99.12.246.36"}, Default: true}, {Name: "comcast", Addresses: []string{"96.65.171.20-96.65.171.21"}}},
-				Static:  []NATStaticConfig{{Internal: "198.18.0.10", External: "23.143.36.4"}, {Internal: "198.18.0.11", External: "96.65.171.22", Uplink: "comcast"}},
+				Uplinks: []NATUplinkConfig{{Name: "isp-a", Addresses: []string{"198.51.100.4"}, Default: true}, {Name: "isp-b", Addresses: []string{"192.0.2.4-192.0.2.5"}}},
+				Static:  []NATStaticConfig{{Internal: "10.4.200.10", External: "203.0.113.4"}, {Internal: "10.4.200.11", External: "192.0.2.6", Uplink: "isp-b"}},
 			},
 			expectError: false,
 		},
@@ -646,7 +646,7 @@ func TestNATConfig_Validate(t *testing.T) {
 			name: "static without uplinks",
 			config: NATConfig{
 				Enabled: true, ExternalIP: "192.168.1.1", PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
-				Static: []NATStaticConfig{{Internal: "198.18.0.10", External: "23.143.36.4"}},
+				Static: []NATStaticConfig{{Internal: "10.4.200.10", External: "203.0.113.4"}},
 			},
 			expectError: true,
 		},
@@ -654,7 +654,7 @@ func TestNATConfig_Validate(t *testing.T) {
 			name: "uplink without a name",
 			config: NATConfig{
 				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
-				Uplinks: []NATUplinkConfig{{Addresses: []string{"99.12.246.36"}}},
+				Uplinks: []NATUplinkConfig{{Addresses: []string{"198.51.100.4"}}},
 			},
 			expectError: true,
 		},
@@ -662,7 +662,7 @@ func TestNATConfig_Validate(t *testing.T) {
 			name: "uplink without addresses",
 			config: NATConfig{
 				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
-				Uplinks: []NATUplinkConfig{{Name: "att"}},
+				Uplinks: []NATUplinkConfig{{Name: "isp-a"}},
 			},
 			expectError: true,
 		},
@@ -670,7 +670,7 @@ func TestNATConfig_Validate(t *testing.T) {
 			name: "duplicate uplink",
 			config: NATConfig{
 				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
-				Uplinks: []NATUplinkConfig{{Name: "att", Addresses: []string{"99.12.246.36"}}, {Name: "att", Addresses: []string{"99.12.246.37"}}},
+				Uplinks: []NATUplinkConfig{{Name: "isp-a", Addresses: []string{"198.51.100.4"}}, {Name: "isp-a", Addresses: []string{"198.51.100.5"}}},
 			},
 			expectError: true,
 		},
@@ -678,8 +678,8 @@ func TestNATConfig_Validate(t *testing.T) {
 			name: "static naming an unknown uplink",
 			config: NATConfig{
 				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
-				Uplinks: []NATUplinkConfig{{Name: "att", Addresses: []string{"99.12.246.36"}}},
-				Static:  []NATStaticConfig{{Internal: "198.18.0.10", External: "23.143.36.4", Uplink: "starlink"}},
+				Uplinks: []NATUplinkConfig{{Name: "isp-a", Addresses: []string{"198.51.100.4"}}},
+				Static:  []NATStaticConfig{{Internal: "10.4.200.10", External: "203.0.113.4", Uplink: "starlink"}},
 			},
 			expectError: true,
 		},
@@ -687,8 +687,8 @@ func TestNATConfig_Validate(t *testing.T) {
 			name: "static missing an address",
 			config: NATConfig{
 				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
-				Uplinks: []NATUplinkConfig{{Name: "att", Addresses: []string{"99.12.246.36"}}},
-				Static:  []NATStaticConfig{{Internal: "", External: "23.143.36.4"}},
+				Uplinks: []NATUplinkConfig{{Name: "isp-a", Addresses: []string{"198.51.100.4"}}},
+				Static:  []NATStaticConfig{{Internal: "", External: "203.0.113.4"}},
 			},
 			expectError: true,
 		},

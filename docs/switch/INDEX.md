@@ -160,13 +160,13 @@ SSH connection created on first Manager method call, reused for all subsequent c
 ## File Locations
 
 ### Documentation
-- All markdown files: `/home/jhahn/sources/go-trusted-platform/docs/switch/`
+- All markdown files: `docs/switch/`
 
 ### Source Code
-- Core package: `/home/jhahn/sources/go-trusted-platform/pkg/switch/`
-- Device handler: `/home/jhahn/sources/go-trusted-platform/pkg/webservice/v1/device/handler.go`
-- Configuration: `/home/jhahn/sources/go-trusted-platform/pkg/app/app.go`
-- Daemon integration: `/home/jhahn/sources/go-trusted-platform/pkg/daemon/commands/serve.go`
+- Core package: `pkg/switch/`
+- Device handler: `pkg/webservice/v1/device/handler.go`
+- Configuration: `pkg/app/app.go`
+- Daemon integration: `pkg/daemon/commands/serve.go`
 
 ### Tests
 - Unit tests: `pkg/switch/*_test.go`

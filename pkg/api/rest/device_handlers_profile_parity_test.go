@@ -29,7 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
-const testTLSServerName = "compute.trusted-platform.internal"
+const testTLSServerName = "compute.example.internal"
 
 func restProfileCall(t *testing.T, router *mux.Router, method, path string, body interface{}, want int) ProfileResponse {
 	t.Helper()

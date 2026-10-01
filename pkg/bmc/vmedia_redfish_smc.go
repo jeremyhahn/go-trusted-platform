@@ -34,7 +34,7 @@ const smcVirtualMediaPath = "/redfish/v1/Managers/1/VM1/CfgCD"
 // drive. On X10 ATEN BMC firmware 4.0, a PATCH to CfgCD stores the Host/Path
 // values but leaves the CD drive at Inserted=None until this action fires.
 // Without this POST the host sees an empty virtual CD and boots past it to
-// the next device in the boot order. Witnessed 2026-04-08 on lab-node-2.
+// the next device in the boot order. Witnessed 2026-04-08 on node-02.
 const smcIsoConfigMountPath = smcVirtualMediaPath + "/Actions/IsoConfig.Mount"
 
 // smcIsoConfigUnmountPath is the inverse action. Supermicro names it
@@ -108,7 +108,7 @@ type smcCfgCDBody struct {
 //     attachment. If nothing is attached the BMC returns an error we
 //     swallow; if something IS attached, leaving it in place would
 //     cause the next IsoConfig.Mount to fail with
-//     OemVmMountFail Error code: 11. Witnessed 2026-04-08 on lab-node-2
+//     OemVmMountFail Error code: 11. Witnessed 2026-04-08 on node-02
 //     when a previous orchestrator run crashed between install-log
 //     success and its own unmount call, leaving the BMC with a stale
 //     mount that blocked every subsequent Mount attempt.
@@ -121,7 +121,7 @@ type smcCfgCDBody struct {
 //     the BMC returns success on the PATCH but the CD drive stays
 //     empty, the host fails to boot from it, and falls through to
 //     the next boot device — reproducing the "missing boot loader"
-//     state we first hit on lab-node-2.
+//     state we first hit on node-02.
 func (b *vmediaRedfishSmc) Mount(ctx context.Context, spec *MediaSpec) error {
 	// Step 1: best-effort idempotent unmount of any existing attachment.
 	// Swallow errors — if nothing was mounted the BMC complains and
@@ -346,7 +346,7 @@ func smcBodyFromSpec(spec *MediaSpec) smcCfgCDBody {
 	// X10 ATEN BMC firmware (≤4.00) requires HTTP/HTTPS URLs to be
 	// split into Host + Path and REJECTS PATCH bodies that contain
 	// `Image` as an unknown property (witnessed 2026-05-18 against
-	// lab-node-2 BMC: "The property Image is not in the list of valid
+	// node-02 BMC: "The property Image is not in the list of valid
 	// properties for the resource."). X11+/X12 firmware accepts the
 	// combined Image form and also tolerates Host+Path with Image
 	// absent. Sending only Host+Path is therefore the lowest-common-

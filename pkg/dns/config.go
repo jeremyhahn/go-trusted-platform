@@ -62,15 +62,15 @@ var (
 			Forwarders: []string{"4.4.4.4", "8.8.8.8"},
 			Zone: entities.Zone{
 				ID:          1,
-				Name:        "trusted-platform.io.",
+				Name:        "example.com.",
 				TTL:         3600,
-				Description: "Public zone for trusted-platform.io",
+				Description: "Public zone for example.com",
 				Internal:    false,
 				RecordSet: entities.RecordSet{
 					SOARecord: entities.SOARecord{
-						Name:       "trusted-platform.io.",
-						MName:      "ns1.trusted-platform.io.",
-						RName:      "hostmaster.trusted-platform.io.",
+						Name:       "example.com.",
+						MName:      "ns1.example.com.",
+						RName:      "hostmaster.example.com.",
 						Serial:     1,
 						Refresh:    86400,
 						Retry:      7200,
@@ -79,9 +79,9 @@ var (
 						TTL:        3600,
 					},
 					NSRecords: []*entities.NSRecord{
-						{Name: "trusted-platform.io.", Value: "ns1.trusted-platform.io.", TTL: 3600},
-						{Name: "trusted-platform.io.", Value: "ns2.trusted-platform.io.", TTL: 3600},
-						{Name: "trusted-platform.io.", Value: "ns3.trusted-platform.io.", TTL: 3600},
+						{Name: "example.com.", Value: "ns1.example.com.", TTL: 3600},
+						{Name: "example.com.", Value: "ns2.example.com.", TTL: 3600},
+						{Name: "example.com.", Value: "ns3.example.com.", TTL: 3600},
 					},
 					ARecords: []*entities.ARecord{
 						{Name: "ns1", Value: "${PUBLIC_IPv4}", TTL: 3600},
@@ -91,10 +91,10 @@ var (
 					},
 					CNAMERecords: []*entities.CNAMERecord{},
 					MXRecords: []*entities.MXRecord{
-						{Name: "trusted-platform.io.", Value: "mail.trusted-platform.io.", Priority: 10, TTL: 3600},
+						{Name: "example.com.", Value: "mail.example.com.", Priority: 10, TTL: 3600},
 					},
 					TXTRecords: []*entities.TXTRecord{
-						{Name: "trusted-platform.io.", Value: "v=spf1 include:_spf.google.com ~all", TTL: 3600},
+						{Name: "example.com.", Value: "v=spf1 include:_spf.google.com ~all", TTL: 3600},
 					},
 				},
 			},
@@ -104,15 +104,15 @@ var (
 			Forwarders: []string{"192.168.1.1", "192.168.2.1", "192.168.3.1"},
 			Zone: entities.Zone{
 				ID:          2,
-				Name:        "trusted-platform.internal.",
+				Name:        "example.internal.",
 				TTL:         3600,
-				Description: "Internal zone for trusted-platform.internal",
+				Description: "Internal zone for example.internal",
 				Internal:    true,
 				RecordSet: entities.RecordSet{
 					SOARecord: entities.SOARecord{
-						Name:       "trusted-platform.internal.",
-						MName:      "ns1.trusted-platform.internal.",
-						RName:      "hostmaster.trusted-platform.internal.",
+						Name:       "example.internal.",
+						MName:      "ns1.example.internal.",
+						RName:      "hostmaster.example.internal.",
 						Serial:     1,
 						Refresh:    86400,
 						Retry:      7200,
@@ -121,9 +121,9 @@ var (
 						TTL:        3600,
 					},
 					NSRecords: []*entities.NSRecord{
-						{Name: "trusted-platform.internal.", Value: "ns1.trusted-platform.internal.", TTL: 3600},
-						{Name: "trusted-platform.internal.", Value: "ns2.trusted-platform.internal.", TTL: 3600},
-						{Name: "trusted-platform.internal.", Value: "ns3.trusted-platform.internal.", TTL: 3600},
+						{Name: "example.internal.", Value: "ns1.example.internal.", TTL: 3600},
+						{Name: "example.internal.", Value: "ns2.example.internal.", TTL: 3600},
+						{Name: "example.internal.", Value: "ns3.example.internal.", TTL: 3600},
 					},
 					ARecords: []*entities.ARecord{
 						{Name: "ns1", Value: "${PRIVATE_IPv4}", TTL: 3600},
@@ -132,7 +132,7 @@ var (
 						{Name: "${HOSTNAME}", Value: "${PRIVATE_IPv4}", TTL: 3600},
 					},
 					CNAMERecords: []*entities.CNAMERecord{
-						{Name: "www", Value: "trusted-platform.internal.", TTL: 3600},
+						{Name: "www", Value: "example.internal.", TTL: 3600},
 					},
 				},
 			},

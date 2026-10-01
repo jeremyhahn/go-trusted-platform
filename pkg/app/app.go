@@ -1268,7 +1268,7 @@ func (app *App) StartDNS() error {
 	// runs LATER in the startup sequence. Without this, the first
 	// zone load after Run starts fails with "DNSSEC enabled but
 	// no key store and no XKMS adapter are configured" and the
-	// DNS server never starts. Observed on lab-node-2 2026-04-08.
+	// DNS server never starts. Observed on node-02 2026-04-08.
 	//
 	// We replicate the keystore construction from newDNSService
 	// here — extracting a helper is overkill for two call sites
@@ -2320,7 +2320,7 @@ func (app *App) InitPlatformKeyStore(soPIN, userPIN xkmssdk.Password) error {
 				// every fresh TPM because firstboot intentionally leaves
 				// owner auth empty per
 				// docs/installer/factory-reset.md. Diagnosed 2026-04-08
-				// on lab-node-2: hierarchy_auth_hex showed the 8-digit
+				// on node-02: hierarchy_auth_hex showed the 8-digit
 				// autogen numeric soPIN instead of the expected empty.
 				useDefaults := app.TPMConfig.SSRK == nil || app.TPMConfig.SSRK.HierarchyAuth == ""
 				if useDefaults {

@@ -228,7 +228,7 @@ fails with `device profile: invalid pagination: …` — both before connecting.
 | `--mac` | string | | Exact MAC address for non-TPM identification |
 | `--ek-cert` | string | | Prestaged EK certificate: a PEM **file path** or an inline PEM string |
 | `--config-file` | string | | Device platform config, YAML or JSON; converted to JSON on the wire |
-| `--tls-server-name` | string | | Certificate name the attestation collector verifies nodes of this profile against when it dials them for a quote (e.g. `compute.trusted-platform.internal`); empty means the device's own FQDN (`docs/attestation/user.md`) |
+| `--tls-server-name` | string | | Certificate name the attestation collector verifies nodes of this profile against when it dials them for a quote (e.g. `compute.example.internal`); empty means the device's own FQDN (`docs/attestation/user.md`) |
 
 **`--ek-cert` decides path-versus-inline by looking for `-----BEGIN`.** A value
 containing that marker is used verbatim; anything else is treated as a file
@@ -263,7 +263,7 @@ non-numeric id fails with `device profile: invalid profile ID: <id>`.
 ```bash
 platformctl device profile update 123 --ek-cert /etc/platform/ek-certs/node-02.pem
 platformctl device profile update 123 --config-file /etc/platform/node-02.yaml
-platformctl device profile update 123 --tls-server-name compute.trusted-platform.internal
+platformctl device profile update 123 --tls-server-name compute.example.internal
 ```
 
 **`--tls-server-name` survives an update that omits it** twice over: this

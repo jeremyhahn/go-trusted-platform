@@ -2,10 +2,12 @@ ISODIR         ?= volume/iso
 IMAGE_NAME     ?= pxe-server
 CONTAINER_NAME ?= pxe-server
 NETWORK_NAME   ?= pxe-net
-SUBNET         ?= 198.18.1.0/24
-IP_RANGE       ?= 198.18.1.0/25
-GATEWAY        ?= 198.18.1.1
-STATIC_IP      ?= 198.18.1.100
+# The PXE network is the deployment's: SUBNET, NETMASK, IP_RANGE, GATEWAY,
+# STATIC_IP, DHCP_RANGE_START and DHCP_RANGE_END have no defaults, and the
+# pxe-server target refuses to run without them. The image itself is generic:
+# build and push need none of them, and the container writes its DHCP scope
+# from the DHCP_* environment at start.
+NETWORK_VARS   := SUBNET NETMASK IP_RANGE GATEWAY STATIC_IP DHCP_RANGE_START DHCP_RANGE_END
 QEMU_DISK      ?= debian12.qcow2
 QEMU_DISK_SIZE ?= 5G
 QEMU_BRIDGE    ?= br-3114e390c8a6
@@ -49,6 +51,19 @@ init:
 	@echo "Download and verification completed successfully!"
 
 
+DHCP_RUN_ENV = \
+	-e DHCP_SUBNET=$(firstword $(subst /, ,$(SUBNET))) \
+	-e DHCP_NETMASK=$(NETMASK) \
+	-e DHCP_RANGE_START=$(DHCP_RANGE_START) \
+	-e DHCP_RANGE_END=$(DHCP_RANGE_END) \
+	-e DHCP_ROUTER=$(GATEWAY) \
+	-e DHCP_NEXT_SERVER=$(STATIC_IP)
+
+.PHONY: require-network
+require-network:
+	$(foreach v,$(NETWORK_VARS),$(if $($(v)),,$(error pxe-server: $(v) is required; the deployment network has no default)))
+	@true
+
 .PHONY: build
 build:
 	docker buildx build --load \
@@ -59,13 +74,13 @@ build:
 		-t $(IMAGE_NAME) .
 
 .PHONY: push
-push: 
+push:
 	docker buildx build --push \
 		--platform=linux/amd64,linux/arm64 \
 		-t jeremyhahn/$(IMAGE_NAME) .
 
 .PHONY: pxe-server
-pxe-server:
+pxe-server: require-network
 	@docker network inspect $(NETWORK_NAME) >/dev/null 2>&1 || docker network create \
 		--driver=bridge \
 		--subnet=$(SUBNET) \
@@ -75,6 +90,7 @@ pxe-server:
 	docker run -d --name $(CONTAINER_NAME) \
 		--network $(NETWORK_NAME) \
 		--ip=$(STATIC_IP) \
+		$(DHCP_RUN_ENV) \
 		-v $(PWD)/$(ISODIR):/var/www/html/isos \
 		-p 69:69/udp -p 80:80 -p 2049:2049 \
 		$(IMAGE_NAME)

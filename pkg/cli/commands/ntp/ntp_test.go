@@ -44,7 +44,7 @@ func (f *fakeCLIClient) Status(context.Context) (*platformv1.NTPStatus, error) {
 		Stratum:          3,
 		LeapStatus:       "Normal",
 		Mode:             "both",
-		ReferenceName:    "198.18.0.1",
+		ReferenceName:    "10.4.200.1",
 		LastSyncUnix:     1755000000,
 		SourcesReachable: 1,
 		SourcesTotal:     2,
@@ -58,7 +58,7 @@ func (f *fakeCLIClient) Sources(context.Context) ([]*platformv1.NTPSource, error
 		return nil, f.err
 	}
 	return []*platformv1.NTPSource{
-		{Address: "198.18.0.1", Mode: "server", State: "selected", Stratum: 2,
+		{Address: "10.4.200.1", Mode: "server", State: "selected", Stratum: 2,
 			PollSeconds: 64, Reach: 377, LastRxSeconds: 23, Reachable: true},
 	}, nil
 }
@@ -264,8 +264,8 @@ func TestStatusTableNamesAnUnreachableServeName(t *testing.T) {
 		ServeNameFindings: []*platformv1.NTSServeNameFinding{{
 			Kind:           string(ntp.ServeNameUnreachable),
 			Name:           "cp.example.internal",
-			Address:        "198.18.1.140",
-			ListenNetworks: []string{"198.18.0.0/24", "172.16.201.0/24"},
+			Address:        "10.4.2.140",
+			ListenNetworks: []string{"10.4.200.0/24", "192.0.2.0/24"},
 		}},
 	})
 
@@ -278,7 +278,7 @@ func TestStatusTableNamesAnUnreachableServeName(t *testing.T) {
 	if line == "" {
 		t.Fatal("the advertised-name mismatch is missing from the status table")
 	}
-	for _, want := range []string{"cp.example.internal", "198.18.1.140", "198.18.0.0/24"} {
+	for _, want := range []string{"cp.example.internal", "10.4.2.140", "10.4.200.0/24"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("row %q does not name %q", line, want)
 		}

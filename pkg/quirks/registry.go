@@ -86,7 +86,7 @@ func buildRegistry() []entry {
 				VmediaRedfishOEMFallback: true,
 				// X10 ATEN BMC silently erases "Once" boot overrides
 				// before BIOS POST sees them (the reflash trap that
-				// burned lab-node-2 in the 2026-04-30 session). Continuous
+				// burned node-02 in the 2026-04-30 session). Continuous
 				// is the only mode that survives the X10 reset cycle.
 				BootOverrideContinuous: true,
 				// Try the Supermicro OEM IPMI 0x30/0x70/0x0c "Set
@@ -107,7 +107,7 @@ func buildRegistry() []entry {
 		// Supermicro X10SDV-TP8F
 		//
 		// SOL is wired to COM1 (ttyS0 / 0x3f8) on this board, the same as
-		// the manufacturer-wide entry. Measured 2026-08-29 on lab-node-2
+		// the manufacturer-wide entry. Measured 2026-08-29 on node-02
 		// (SYS-5018D-FN8T-AS001, ATEN FW 4.00): with the ISO cmdline
 		// naming both UARTs and the installed UKI ending in console=ttyS0,
 		// kernel printk, autoinstall (via kmsg), platform-initrd and
@@ -149,7 +149,7 @@ func buildRegistry() []entry {
 					"console=ttyS0,115200n8",
 					"loglevel=7",
 				},
-				// ttyS0 / 0x01 per the 2026-08-29 lab-node-2 measurement above.
+				// ttyS0 / 0x01 per the 2026-08-29 node-02 measurement above.
 				SOLPort:            "ttyS0",
 				SOLPayloadInstance: 0x01,
 				EarlyconSpec:       "uart8250,io,0x3f8,115200n8",

@@ -561,7 +561,7 @@ transit:
       - prefix: "2001:db8::/36"
         description: "Platform IPv6 aggregate"
         announce_level: "backbone"  # backbone, datacenter
-      - prefix: "2602:F5BB:0001::/48"
+      - prefix: "2001:DB8:0001::/48"
         description: "Region 1"
         announce_level: "datacenter"
 

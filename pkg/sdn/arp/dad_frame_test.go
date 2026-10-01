@@ -86,7 +86,7 @@ func TestPacketRoundTrip(t *testing.T) {
 		SenderHardwareAddr: responderMAC,
 		SenderProtocolAddr: probedIP,
 		TargetHardwareAddr: localMAC,
-		TargetProtocolAddr: net.IPv4(172, 16, 200, 2),
+		TargetProtocolAddr: net.IPv4(10, 4, 200, 2),
 	}
 	frame := mustFrame(t, original, responderMAC, localMAC)
 	if len(frame) != frameLen {

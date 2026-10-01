@@ -143,7 +143,7 @@ func TestLoadProfileConfig(t *testing.T) {
 
 	t.Run("yaml converts to JSON bytes", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "config.yaml")
-		if err := os.WriteFile(path, []byte("hostname: lab-node-2\nsecure-boot:\n  enabled: true\n"), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte("hostname: node-02\nsecure-boot:\n  enabled: true\n"), 0o600); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
 		configJSON, err := loadProfileConfig(path)
@@ -154,7 +154,7 @@ func TestLoadProfileConfig(t *testing.T) {
 		if err := json.Unmarshal(configJSON, &decoded); err != nil {
 			t.Fatalf("config is not JSON: %v", err)
 		}
-		if decoded["hostname"] != "lab-node-2" {
+		if decoded["hostname"] != "node-02" {
 			t.Fatalf("decoded = %v", decoded)
 		}
 	})
@@ -222,12 +222,12 @@ func TestBuildProfileOutput(t *testing.T) {
 	certPEM := newCLITestEKCertPEM(t)
 	output := buildProfileOutput(&platformv1.DeviceProfile{
 		Id:         18446744073709551615,
-		Name:       "lab-node-2",
+		Name:       "node-02",
 		Role:       platformv1.DeviceRole_DEVICE_ROLE_SERVER,
 		EkSerial:   "EK-CLI-1",
 		MacAddress: "aa:bb:cc:dd:ee:51",
 		EkCert:     certPEM,
-		Config:     []byte(`{"hostname":"lab-node-2"}`),
+		Config:     []byte(`{"hostname":"node-02"}`),
 	})
 
 	if output["id"] != "18446744073709551615" {
@@ -277,7 +277,7 @@ func TestBuildProfileOutput_TLSServerNameAndBaseline(t *testing.T) {
 	output := buildProfileOutput(&platformv1.DeviceProfile{
 		Id:            7,
 		Name:          "compute",
-		TlsServerName: "compute.trusted-platform.internal",
+		TlsServerName: "compute.example.internal",
 		PcrBaseline: &platformv1.PCRBaseline{
 			Values:               map[uint32][]byte{0: {0xaa, 0xbb}, 7: {0x01}},
 			Source:               "tofu",
@@ -285,7 +285,7 @@ func TestBuildProfileOutput_TLSServerNameAndBaseline(t *testing.T) {
 			RecordedFromDeviceId: 9007199254740993,
 		},
 	})
-	if output["tls_server_name"] != "compute.trusted-platform.internal" {
+	if output["tls_server_name"] != "compute.example.internal" {
 		t.Fatalf("tls_server_name = %v", output["tls_server_name"])
 	}
 	baseline, ok := output["pcr_baseline"].(map[string]interface{})
@@ -322,7 +322,7 @@ func TestApplyProfileUpdateFlags_SetAndPreserve(t *testing.T) {
 	fetched := func() *platformv1.DeviceProfile {
 		return &platformv1.DeviceProfile{
 			Id: 7, Name: "compute", Model: "X10SDV", Zone: "control-plane",
-			TlsServerName: "compute.trusted-platform.internal",
+			TlsServerName: "compute.example.internal",
 			PcrBaseline:   &platformv1.PCRBaseline{Source: "tofu", Values: map[uint32][]byte{7: {0xbb}}},
 		}
 	}
@@ -334,7 +334,7 @@ func TestApplyProfileUpdateFlags_SetAndPreserve(t *testing.T) {
 	if profile.GetModel() != "X10SDV-TP8F" {
 		t.Fatalf("model not applied: %q", profile.GetModel())
 	}
-	if profile.GetTlsServerName() != "compute.trusted-platform.internal" {
+	if profile.GetTlsServerName() != "compute.example.internal" {
 		t.Fatal("an update without --tls-server-name must not clear the fetched value")
 	}
 	if profile.GetPcrBaseline() == nil || profile.GetPcrBaseline().GetSource() != "tofu" {
@@ -345,10 +345,10 @@ func TestApplyProfileUpdateFlags_SetAndPreserve(t *testing.T) {
 	}
 
 	profile = fetched()
-	if err := applyProfileUpdateFlags(profile, &profileFlags{tlsServerName: "gw.trusted-platform.internal"}, "", nil); err != nil {
+	if err := applyProfileUpdateFlags(profile, &profileFlags{tlsServerName: "gw.example.internal"}, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if profile.GetTlsServerName() != "gw.trusted-platform.internal" {
+	if profile.GetTlsServerName() != "gw.example.internal" {
 		t.Fatalf("--tls-server-name not applied: %q", profile.GetTlsServerName())
 	}
 }
@@ -356,13 +356,13 @@ func TestApplyProfileUpdateFlags_SetAndPreserve(t *testing.T) {
 // TestApplyProfileUpdateFlags_InvalidRole proves a bad --role is rejected
 // before anything is written, with the typed CLI error.
 func TestApplyProfileUpdateFlags_InvalidRole(t *testing.T) {
-	profile := &platformv1.DeviceProfile{Id: 7, Name: "compute", TlsServerName: "compute.trusted-platform.internal"}
+	profile := &platformv1.DeviceProfile{Id: 7, Name: "compute", TlsServerName: "compute.example.internal"}
 	err := applyProfileUpdateFlags(profile, &profileFlags{role: "hypervisor", tlsServerName: "x"}, "", nil)
 	var invalid ErrProfileInvalidRole
 	if !errors.As(err, &invalid) || invalid.Role != "hypervisor" {
 		t.Fatalf("expected ErrProfileInvalidRole, got %v", err)
 	}
-	if profile.GetTlsServerName() != "compute.trusted-platform.internal" {
+	if profile.GetTlsServerName() != "compute.example.internal" {
 		t.Fatal("a rejected update must not have mutated the profile before the error")
 	}
 }
@@ -417,14 +417,14 @@ func TestRunProfileList_InvalidPagination(t *testing.T) {
 // compute profile and confirm its collector name in one call.
 func TestBuildProfileListOutput(t *testing.T) {
 	output := buildProfileListOutput(2, 20, 41, []*platformv1.DeviceProfile{
-		{Id: 7, Name: "compute", Role: platformv1.DeviceRole_DEVICE_ROLE_WORKER, TlsServerName: "compute.trusted-platform.internal"},
+		{Id: 7, Name: "compute", Role: platformv1.DeviceRole_DEVICE_ROLE_WORKER, TlsServerName: "compute.example.internal"},
 		{Id: 8, Name: "gw", Role: platformv1.DeviceRole_DEVICE_ROLE_GATEWAY},
 	})
 	if output["page"] != 2 || output["page_size"] != 20 || output["total"] != 41 || output["total_pages"] != 3 {
 		t.Fatalf("pagination envelope = %v", output)
 	}
 	items := output["profiles"].([]map[string]interface{})
-	if len(items) != 2 || items[0]["id"] != "7" || items[0]["tls_server_name"] != "compute.trusted-platform.internal" {
+	if len(items) != 2 || items[0]["id"] != "7" || items[0]["tls_server_name"] != "compute.example.internal" {
 		t.Fatalf("items = %v", items)
 	}
 	if _, present := items[1]["tls_server_name"]; present {

@@ -46,7 +46,7 @@ type BMCEnrollment struct {
 	CertNotAfter time.Time `yaml:"cert_not_after" json:"cert_not_after"`
 
 	// DNSName is the fully qualified DNS name registered for this BMC during
-	// enrollment (e.g. "lab-node-1-bmc.internal."). Empty when DNS registration
+	// enrollment (e.g. "node-01-bmc.internal."). Empty when DNS registration
 	// was skipped or unavailable.
 	DNSName string `yaml:"dns_name" json:"dns_name"`
 

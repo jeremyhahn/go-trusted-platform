@@ -31,7 +31,7 @@ import (
 
 // Test helper to create a valid EdgeModeConfig for stub tests.
 func newTestEdgeModeConfigStub() *EdgeModeConfig {
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	return &EdgeModeConfig{
 		IPv6Pool:              *ipNet,
 		IPv6InactivityTimeout: time.Hour,
@@ -172,7 +172,7 @@ func TestEdgeModeStub_StartStop(t *testing.T) {
 
 // TestEdgeModeStub_IPv6Allocator tests IPv6 allocator functionality.
 func TestEdgeModeStub_IPv6Allocator(t *testing.T) {
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
@@ -191,7 +191,7 @@ func TestEdgeModeStub_IPv6Allocator(t *testing.T) {
 	})
 
 	t.Run("allocate specific", func(t *testing.T) {
-		specificIP := net.ParseIP("2602:f5bb:1234::1234")
+		specificIP := net.ParseIP("2001:db8:1234::1234")
 		ip, err := allocator.AllocateSpecific(ctx, "device-specific", specificIP)
 		require.NoError(t, err)
 		assert.Equal(t, specificIP.String(), ip.String())
@@ -320,7 +320,7 @@ func TestEdgeModeStub_RegionFromIP(t *testing.T) {
 	})
 
 	t.Run("valid IPv6 extracts region", func(t *testing.T) {
-		ip := net.ParseIP("2602:f5bb:1234::1")
+		ip := net.ParseIP("2001:db8:1234::1")
 		region := regionFromIP(ip)
 		assert.NotEmpty(t, region)
 	})
@@ -346,7 +346,7 @@ func TestEdgeModeStub_IPv6Allocator_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("empty device ID", func(t *testing.T) {
-		_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+		_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 		allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 		require.NoError(t, err)
 		err = allocator.Start(ctx)
@@ -463,7 +463,7 @@ func TestEdgeModeStub_VerifyTPMQuote(t *testing.T) {
 
 // TestEdgeModeStub_ExpireInactive tests the expireInactive method.
 func TestEdgeModeStub_ExpireInactive(t *testing.T) {
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Millisecond) // Very short timeout
 	require.NoError(t, err)
 
@@ -582,7 +582,7 @@ func TestEdgeModeStub_DDOSProtection_StopNotRunning(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_DoubleStop tests double stop.
 func TestEdgeModeStub_IPv6Allocator_DoubleStop(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
@@ -646,7 +646,7 @@ func TestEdgeModeStub_EdgeHandler_GetStatusNotRunning(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_AllocateNotRunning tests allocate when not running.
 func TestEdgeModeStub_IPv6Allocator_AllocateNotRunning(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
@@ -658,12 +658,12 @@ func TestEdgeModeStub_IPv6Allocator_AllocateNotRunning(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_ReleaseNotRunning tests release when not running.
 func TestEdgeModeStub_IPv6Allocator_ReleaseNotRunning(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
 	// Try to release without starting
-	ip := net.ParseIP("2602:f5bb:1234::1")
+	ip := net.ParseIP("2001:db8:1234::1")
 	err = allocator.Release(ctx, ip)
 	assert.ErrorIs(t, err, ErrNotRunning)
 }
@@ -671,12 +671,12 @@ func TestEdgeModeStub_IPv6Allocator_ReleaseNotRunning(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_AllocateSpecificNotRunning tests allocate specific when not running.
 func TestEdgeModeStub_IPv6Allocator_AllocateSpecificNotRunning(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
 	// Try to allocate specific without starting
-	ip := net.ParseIP("2602:f5bb:1234::1")
+	ip := net.ParseIP("2001:db8:1234::1")
 	_, err = allocator.AllocateSpecific(ctx, "device-1", ip)
 	assert.ErrorIs(t, err, ErrNotRunning)
 }
@@ -684,12 +684,12 @@ func TestEdgeModeStub_IPv6Allocator_AllocateSpecificNotRunning(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_RefreshLeaseNotRunning tests refresh lease when not running.
 func TestEdgeModeStub_IPv6Allocator_RefreshLeaseNotRunning(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
 	// Try to refresh without starting
-	ip := net.ParseIP("2602:f5bb:1234::1")
+	ip := net.ParseIP("2001:db8:1234::1")
 	err = allocator.RefreshLease(ctx, ip)
 	assert.ErrorIs(t, err, ErrNotRunning)
 }
@@ -707,7 +707,7 @@ func TestEdgeModeStub_RateLimiter_CheckNotRunning(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_ReleaseNilIP tests release with nil IP.
 func TestEdgeModeStub_IPv6Allocator_ReleaseNilIP(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
@@ -722,7 +722,7 @@ func TestEdgeModeStub_IPv6Allocator_ReleaseNilIP(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_ReleaseNotAllocated tests release of unallocated IP.
 func TestEdgeModeStub_IPv6Allocator_ReleaseNotAllocated(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
@@ -730,7 +730,7 @@ func TestEdgeModeStub_IPv6Allocator_ReleaseNotAllocated(t *testing.T) {
 	require.NoError(t, err)
 	defer allocator.Stop(ctx)
 
-	ip := net.ParseIP("2602:f5bb:1234::dead")
+	ip := net.ParseIP("2001:db8:1234::dead")
 	err = allocator.Release(ctx, ip)
 	assert.ErrorIs(t, err, ErrIPv6NotAllocated)
 }
@@ -738,7 +738,7 @@ func TestEdgeModeStub_IPv6Allocator_ReleaseNotAllocated(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_AllocateSpecificAlreadyAllocated tests allocate specific when already allocated.
 func TestEdgeModeStub_IPv6Allocator_AllocateSpecificAlreadyAllocated(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
@@ -746,7 +746,7 @@ func TestEdgeModeStub_IPv6Allocator_AllocateSpecificAlreadyAllocated(t *testing.
 	require.NoError(t, err)
 	defer allocator.Stop(ctx)
 
-	ip := net.ParseIP("2602:f5bb:1234::cafe")
+	ip := net.ParseIP("2001:db8:1234::cafe")
 	_, err = allocator.AllocateSpecific(ctx, "device-1", ip)
 	require.NoError(t, err)
 
@@ -758,7 +758,7 @@ func TestEdgeModeStub_IPv6Allocator_AllocateSpecificAlreadyAllocated(t *testing.
 // TestEdgeModeStub_IPv6Allocator_AllocateSpecificOutsidePool tests allocate specific outside pool.
 func TestEdgeModeStub_IPv6Allocator_AllocateSpecificOutsidePool(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
@@ -775,7 +775,7 @@ func TestEdgeModeStub_IPv6Allocator_AllocateSpecificOutsidePool(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_AllocateSpecificNilIP tests allocate specific with nil IP.
 func TestEdgeModeStub_IPv6Allocator_AllocateSpecificNilIP(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
@@ -790,7 +790,7 @@ func TestEdgeModeStub_IPv6Allocator_AllocateSpecificNilIP(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_AllocateSameDevice tests allocating same device returns same IP.
 func TestEdgeModeStub_IPv6Allocator_AllocateSameDevice(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
@@ -810,7 +810,7 @@ func TestEdgeModeStub_IPv6Allocator_AllocateSameDevice(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_RefreshLeaseNilIP tests refresh lease with nil IP.
 func TestEdgeModeStub_IPv6Allocator_RefreshLeaseNilIP(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
@@ -825,7 +825,7 @@ func TestEdgeModeStub_IPv6Allocator_RefreshLeaseNilIP(t *testing.T) {
 // TestEdgeModeStub_IPv6Allocator_RefreshLeaseNotAllocated tests refresh lease on non-allocated IP.
 func TestEdgeModeStub_IPv6Allocator_RefreshLeaseNotAllocated(t *testing.T) {
 	ctx := context.Background()
-	_, ipNet, _ := net.ParseCIDR("2602:f5bb:1234::/48")
+	_, ipNet, _ := net.ParseCIDR("2001:db8:1234::/48")
 	allocator, err := NewIPv6Allocator(*ipNet, time.Hour)
 	require.NoError(t, err)
 
@@ -833,7 +833,7 @@ func TestEdgeModeStub_IPv6Allocator_RefreshLeaseNotAllocated(t *testing.T) {
 	require.NoError(t, err)
 	defer allocator.Stop(ctx)
 
-	ip := net.ParseIP("2602:f5bb:1234::ffff")
+	ip := net.ParseIP("2001:db8:1234::ffff")
 	err = allocator.RefreshLease(ctx, ip)
 	assert.ErrorIs(t, err, ErrIPv6NotAllocated)
 }

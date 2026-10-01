@@ -31,7 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 )
 
-const testTLSServerName = "compute.trusted-platform.internal"
+const testTLSServerName = "compute.example.internal"
 
 // TestProfileMapping_CarriesTLSServerName pins the one request mapping and
 // the one response mapping both carry tls_server_name (#430), and neither
@@ -90,9 +90,9 @@ func TestCRUDHandler_UpdateProfile_PreservesTLSServerName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, testTLSServerName, stored.TLSServerName, "a PUT that cannot carry the name must not erase it")
 
-	resp = put(`{"name": "compute-renamed", "role": "worker", "tls_server_name": "gw.trusted-platform.internal"}`)
-	assert.Equal(t, "gw.trusted-platform.internal", resp.TLSServerName)
+	resp = put(`{"name": "compute-renamed", "role": "worker", "tls_server_name": "gw.example.internal"}`)
+	assert.Equal(t, "gw.example.internal", resp.TLSServerName)
 	stored, err = profiles.Get(context.Background(), 4480)
 	require.NoError(t, err)
-	assert.Equal(t, "gw.trusted-platform.internal", stored.TLSServerName)
+	assert.Equal(t, "gw.example.internal", stored.TLSServerName)
 }

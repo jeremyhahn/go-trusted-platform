@@ -413,7 +413,7 @@ webservice:
         challenge: http-01
     valid: 365
     subject:
-      cn: www.trusted-platform.io
+      cn: www.example.com
       organization: Trusted Platform
       country: US
       province: Kernel
@@ -424,7 +424,7 @@ webservice:
       ips:
         - 127.0.0.1
       email:
-        - hostmaster@trusted-platform.io
+        - hostmaster@example.com
 
 
 # Argon2 Password Hashing

@@ -564,7 +564,7 @@ dns:
     forwarders:
       - 203.0.113.1
     zone:
-      name: "trusted-platform.internal."
+      name: "example.internal."
       internal: true
   public:
     port: 8053
@@ -572,7 +572,7 @@ dns:
       - 8.8.8.8
       - 4.4.4.4
     zone:
-      name: "trusted-platform.io."
+      name: "example.com."
       internal: false
 ```
 

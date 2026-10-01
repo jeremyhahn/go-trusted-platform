@@ -149,7 +149,7 @@ Gateway services are config-driven: if a service section is present with
 gateway:
   enabled: true
   id: "gw-01"
-  ipv6-pool: "2602:F5BB:0001::/48"
+  ipv6-pool: "2001:DB8:0001::/48"
 
   overlay:
     enabled: true

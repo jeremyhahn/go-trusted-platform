@@ -56,9 +56,9 @@ gateway:
           external: 203.0.113.10:2222
           internal: 10.0.100.5:22
 `)
-	cfg, err := src.DesiredConfig("lab-node-1-gateway")
+	cfg, err := src.DesiredConfig("node-01-gateway")
 	require.NoError(t, err)
-	assert.Equal(t, "lab-node-1-gateway", cfg.GatewayID)
+	assert.Equal(t, "node-01-gateway", cfg.GatewayID)
 	assert.Equal(t, "rev-4", cfg.Version)
 	require.NotNil(t, cfg.LoadBalancer)
 	require.Len(t, cfg.LoadBalancer.VIPs, 1)

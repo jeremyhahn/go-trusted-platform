@@ -756,7 +756,7 @@ func TestSessionCrossTransportParity(t *testing.T) {
 			Assigned:   true,
 			AssignedAt: assignedAt,
 			Config: map[string]any{
-				"hostname": "lab-node-2",
+				"hostname": "node-02",
 				"secure-boot": map[string]any{
 					"enabled": true,
 				},

@@ -105,7 +105,7 @@ func TestProvisioning_FetchConfig_SnakeCaseArgsAndDelivered(t *testing.T) {
 	var calls []toolCall
 	a := provisioningTestServer(t, map[string]interface{}{
 		"provision_fetch_config": map[string]interface{}{
-			"config": map[string]interface{}{"hostname": "lab-node-2"},
+			"config": map[string]interface{}{"hostname": "node-02"},
 			"status": "ok",
 		},
 	}, &calls)
@@ -138,7 +138,7 @@ func TestProvisioning_FetchConfig_SnakeCaseArgsAndDelivered(t *testing.T) {
 	if err := json.Unmarshal(delivered.GetConfigJson(), &cfg); err != nil {
 		t.Fatalf("config_json invalid: %v", err)
 	}
-	if cfg["hostname"] != "lab-node-2" {
+	if cfg["hostname"] != "node-02" {
 		t.Errorf("config = %v", cfg)
 	}
 }
@@ -286,7 +286,7 @@ func TestProvisioning_ListSessions_WrappedDecode(t *testing.T) {
 					"expires_at": "2026-08-01T10:15:00Z",
 					"profile": map[string]interface{}{
 						"id":   42,
-						"name": "lab-node-2",
+						"name": "node-02",
 						"role": "server",
 					},
 				},

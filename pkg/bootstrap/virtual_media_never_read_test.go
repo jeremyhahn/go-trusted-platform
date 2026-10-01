@@ -75,7 +75,7 @@ func newVmediaSink(t *testing.T) *vmediaSink {
 			for j := range f.Openers {
 				f.Openers[j].OpenSamples++
 				f.Openers[j].LastSeen = now
-				if s.reading && f.Openers[j].Name == "smbd" && (f.Openers[j].Client == "" || f.Openers[j].Client == "198.18.1.102") {
+				if s.reading && f.Openers[j].Name == "smbd" && (f.Openers[j].Client == "" || f.Openers[j].Client == "10.4.2.102") {
 					f.Openers[j].PosChanges++
 					f.Openers[j].LastActivity = now
 				}
@@ -129,7 +129,7 @@ func (s *vmediaSink) setMedia(files ...ipxe.MediaOpen) {
 	now := time.Now()
 	for i := range files {
 		if len(files[i].Openers) == 0 {
-			files[i].Openers = []ipxe.MediaOpener{{Name: "smbd", Client: "198.18.1.102", Opens: 1, OpenSamples: 1, OpenEvents: 1, MaxPos: files[i].MaxPos, LastActivity: now}}
+			files[i].Openers = []ipxe.MediaOpener{{Name: "smbd", Client: "10.4.2.102", Opens: 1, OpenSamples: 1, OpenEvents: 1, MaxPos: files[i].MaxPos, LastActivity: now}}
 		}
 		files[i].LastSeen = now
 	}
@@ -195,8 +195,8 @@ func vmediaOrchestrator(t *testing.T, sink *vmediaSink, client *bmc.MockClient, 
 		Platform:    PlatformGlobalConfig{Domain: "test.local"},
 		ISOPath:     "/isos/platform.iso",
 		Nodes: []NodeConfig{{
-			Hostname: "lab-node-2", Role: RoleControlPlane, BootMethod: BootMethodVirtualMedia,
-			BMCAddress: "198.18.1.102", BMCUser: "admin", BMCPassword: "pass", BMCProtocol: "ipmi",
+			Hostname: "node-02", Role: RoleControlPlane, BootMethod: BootMethodVirtualMedia,
+			BMCAddress: "10.4.2.102", BMCUser: "admin", BMCPassword: "pass", BMCProtocol: "ipmi",
 			MACs: []string{"aa:bb:cc:dd:ee:02"},
 		}},
 	}
@@ -311,7 +311,7 @@ var diskBootScript = []string{
 	"[    0.000000] Linux version 6.12.0 (root@builder)\r\n",
 	"[    0.000000] Command line: BOOT_IMAGE=/vmlinuz root=/dev/sda2 console=ttyS0,115200n8\r\n",
 	"[    1.204431] sd 0:0:0:0: [sda] Attached SCSI disk\r\n",
-	"\r\nmini-02 login: ",
+	"\r\nnode-02 login: ",
 }
 
 func TestBootNodeVirtualMedia_NeverObservedIsAdvisory(t *testing.T) {
@@ -351,9 +351,9 @@ func TestBootNodeVirtualMedia_NeverObservedIsAdvisory(t *testing.T) {
 		"install log never appeared",
 		"the media watcher also never saw the ISO opened",
 		"console transcript: ",
-		"/installs/lab-node-2/console-attempt" + strconv.Itoa(defaultBootRetryMax) + ".log",
+		"/installs/node-02/console-attempt" + strconv.Itoa(defaultBootRetryMax) + ".log",
 		"last 5 lines:\nGRUB loading.\n",
-		"lab-node-2 login:",
+		"node-02 login:",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error must contain %q:\n%s", want, msg)
@@ -379,7 +379,7 @@ func TestBootNodeVirtualMedia_NeverObservedIsAdvisory(t *testing.T) {
 	}
 	raw := strings.Join(diskBootScript, "")
 	for attempt := 1; attempt <= defaultBootRetryMax; attempt++ {
-		path := "/installs/lab-node-2/console-attempt" + strconv.Itoa(attempt) + ".log"
+		path := "/installs/node-02/console-attempt" + strconv.Itoa(attempt) + ".log"
 		if body, ok := sink.upload(path); !ok || string(body) != raw {
 			t.Errorf("expected the raw transcript uploaded at %s", path)
 		}
@@ -473,7 +473,7 @@ func TestBootNodeVirtualMedia_MediaReadThenInstalled(t *testing.T) {
 	if feed.opens.Load() != 1 || !feed.allClosed() {
 		t.Errorf("one console session for the one attempt, closed on success: opens=%d closed=%v", feed.opens.Load(), feed.allClosed())
 	}
-	if body, ok := sink.upload("/installs/lab-node-2/console-attempt1.log"); !ok || !strings.Contains(string(body), "autoinstall: done") {
+	if body, ok := sink.upload("/installs/node-02/console-attempt1.log"); !ok || !strings.Contains(string(body), "autoinstall: done") {
 		t.Errorf("the boot transcript is uploaded beside the install log on success too, got %v", sink.uploads)
 	}
 }
@@ -529,7 +529,7 @@ func TestBootNodeVirtualMedia_MonitoringOutageIsNotNeverRead(t *testing.T) {
 }
 
 func TestMediaReadWindow_CoversMeasuredFirstRead(t *testing.T) {
-	// Measured on lab-node-2 (2026-08-29): the first per-MAC installer.yaml
+	// Measured on node-02 (2026-08-29): the first per-MAC installer.yaml
 	// GET lands ≈ 6 min 15 s after power-on, and the first ISO read a
 	// little before it. The watch is advisory now (#126), but its window
 	// still covers the measured first read so any evidence that does
@@ -581,7 +581,7 @@ func TestBootNodeVirtualMedia_InstallLogMissingCarriesConsole(t *testing.T) {
 		t.Errorf("one console per attempt, all closed: opens=%d closed=%v", feed.opens.Load(), feed.allClosed())
 	}
 	for attempt := 1; attempt <= defaultBootRetryMax; attempt++ {
-		if _, ok := sink.upload("/installs/lab-node-2/console-attempt" + strconv.Itoa(attempt) + ".log"); !ok {
+		if _, ok := sink.upload("/installs/node-02/console-attempt" + strconv.Itoa(attempt) + ".log"); !ok {
 			t.Errorf("attempt %d transcript not uploaded", attempt)
 		}
 	}
@@ -709,7 +709,7 @@ func TestBootNodeVirtualMedia_AnotherNodesReadsDoNotCount(t *testing.T) {
 	// be satisfied by the neighbour's traffic.
 	sink := newVmediaSink(t)
 	sink.setMedia(ipxe.MediaOpen{Path: "/data/platform.iso", Opens: 1,
-		Openers: []ipxe.MediaOpener{{Name: "smbd", Client: "198.18.1.103", Opens: 1, OpenSamples: 1, OpenEvents: 1, LastActivity: time.Now()}}})
+		Openers: []ipxe.MediaOpener{{Name: "smbd", Client: "10.4.2.103", Opens: 1, OpenSamples: 1, OpenEvents: 1, LastActivity: time.Now()}}})
 	orig := sink.srv.Config.Handler
 	sink.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == mediaStatusPath {
@@ -808,7 +808,7 @@ func TestBootNodeVirtualMedia_CancelledDuringLogPollDoesNotRetry(t *testing.T) {
 func TestOpenSOLConsole_Errors(t *testing.T) {
 	client := bmc.NewMockClient()
 	o := &Orchestrator{logger: orchTestLogger(), bmcFactory: &bmc.MockClientFactory{Client: client}}
-	cfg := &bmc.Config{Address: "198.18.1.102"}
+	cfg := &bmc.Config{Address: "10.4.2.102"}
 
 	// The mock has no SOL: the error is the client's, and the client is
 	// released.
@@ -836,7 +836,7 @@ func TestConsoleRecorder_BoundKeepsTheEnd(t *testing.T) {
 	feed := &consoleFeed{chunks: script}
 	o.consoleOpener = feed.open
 
-	rec := o.startConsoleTranscript(t.Context(), &bmc.Config{}, "lab-node-2")
+	rec := o.startConsoleTranscript(t.Context(), &bmc.Config{}, "node-02")
 	// Drain: the recorder has consumed the whole script once Read blocks
 	// on the closed channel, which stop() forces.
 	rec.stop()
@@ -866,8 +866,8 @@ func TestFinishConsoleTranscript_UploadFailureIsReported(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	rec := o.startConsoleTranscript(t.Context(), &bmc.Config{}, "lab-node-2")
-	out := o.finishConsoleTranscript(rec, srv.URL, "lab-node-2", 1)
+	rec := o.startConsoleTranscript(t.Context(), &bmc.Config{}, "node-02")
+	out := o.finishConsoleTranscript(rec, srv.URL, "node-02", 1)
 	if out.Bytes != 5 || out.URL != "" || !strings.Contains(out.Error, "status 507") {
 		t.Errorf("upload failure must be recorded with the transcript kept: %+v", out)
 	}
@@ -894,9 +894,9 @@ func TestFinishConsoleTranscript_UploadOutlivesTheAttemptContext(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	attemptCtx, cancel := context.WithCancel(t.Context())
-	rec := o.startConsoleTranscript(attemptCtx, &bmc.Config{}, "lab-node-2")
+	rec := o.startConsoleTranscript(attemptCtx, &bmc.Config{}, "node-02")
 	cancel()
-	out := o.finishConsoleTranscript(rec, srv.URL, "lab-node-2", 1)
+	out := o.finishConsoleTranscript(rec, srv.URL, "node-02", 1)
 	if out.URL == "" || out.Error != "" || !uploaded.Load() {
 		t.Errorf("the upload must survive the attempt context's end: %+v", out)
 	}
@@ -940,7 +940,7 @@ func TestConsoleTranscript_Summary(t *testing.T) {
 }
 
 func TestErrInstallLogNotFound_Error(t *testing.T) {
-	notFound := ErrInstallLogNotFound{Hostname: "lab-node-2", URL: "http://x/install.log", Cause: context.DeadlineExceeded, Console: &ConsoleTranscript{}}
+	notFound := ErrInstallLogNotFound{Hostname: "node-02", URL: "http://x/install.log", Cause: context.DeadlineExceeded, Console: &ConsoleTranscript{}}
 	if !strings.HasSuffix(notFound.Error(), "; console: console silent for the whole window — BIOS POST is not redirected to SOL on this hardware, so the firmware halted before the OS, or console redirection is disabled in BIOS") {
 		t.Errorf("install-log suffix: %q", notFound.Error())
 	}
@@ -963,13 +963,13 @@ func TestUploadForensic_Errors(t *testing.T) {
 		w.WriteHeader(http.StatusInsufficientStorage)
 	}))
 	t.Cleanup(srv.Close)
-	if _, err := o.uploadForensic(t.Context(), srv.URL, "lab-node-2", "console-attempt1.log", []byte("x"), "text/plain"); err == nil {
+	if _, err := o.uploadForensic(t.Context(), srv.URL, "node-02", "console-attempt1.log", []byte("x"), "text/plain"); err == nil {
 		t.Error("non-2xx must be an error")
 	}
-	if _, err := o.uploadForensic(t.Context(), "http://127.0.0.1:1", "lab-node-2", "c.log", nil, "text/plain"); err == nil {
+	if _, err := o.uploadForensic(t.Context(), "http://127.0.0.1:1", "node-02", "c.log", nil, "text/plain"); err == nil {
 		t.Error("transport failure must be an error")
 	}
-	if _, err := o.uploadForensic(t.Context(), "://bad", "lab-node-2", "c.log", nil, "text/plain"); err == nil {
+	if _, err := o.uploadForensic(t.Context(), "://bad", "node-02", "c.log", nil, "text/plain"); err == nil {
 		t.Error("bad URL must be an error")
 	}
 }

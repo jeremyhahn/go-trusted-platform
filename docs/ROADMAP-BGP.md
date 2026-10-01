@@ -907,7 +907,7 @@ sdn:
       enabled: true
       tier: datacenter  # backbone | datacenter | coordinator
       ipv6_prefixes:
-        - "2602:F5BB:1234::/48"
+        - "2001:DB8:1234::/48"
       ipv4_prefixes:
         - "203.0.113.0/24"
       rpki:
@@ -946,7 +946,7 @@ sdn:
     # Edge mode config
     edge:
       enabled: true
-      ipv6_pool: "2602:F5BB:1234::/48"
+      ipv6_pool: "2001:DB8:1234::/48"
       ipv6_inactivity_timeout: 720h  # 30 days - reallocate only if inactive this long
       acme:
         endorse_enabled: true
