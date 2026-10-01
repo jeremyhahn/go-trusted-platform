@@ -190,7 +190,7 @@ func (h *refusedServiceHandler) Health() error {
 // enabledServices, so start order is deterministic for the datapath
 // services even though the registry itself is a map.
 func (g *Gateway) registerConfiguredServices() {
-	for _, name := range g.config.enabledServices() {
+	for _, name := range g.config.EnabledServices() {
 		if g.config.Supervisor != nil {
 			g.serviceHandlers[name] = newSupervisedServiceHandler(name, g.config.Supervisor)
 			g.serviceOrder = append(g.serviceOrder, name)

@@ -740,6 +740,183 @@ The handler wiring in `node.go` (a `backedServiceHandler` building
 fhrp.NewNetlinkProgrammer()})`) is not in gatewayd yet; it is tracked in #596,
 together with stateless NAT failover. Conntrack/NAT state sync is #710.
 
+### The process model — `pkg/sdn/gateway/process` (#557)
+
+| Type | What it is |
+|---|---|
+| `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `MemoryMax`, `CPUMax`, `Unprivileged` |
+| `DefinitionForService`, `DefinitionByName`, `Definitions`, `Processes` | the class table's lookups; `Processes(enabled)` returns only the processes those services need, each carrying only the enabled ones |
+| `Supervisor` | implements `gateway.ServiceSupervisor`: `StartService`, `StopService`, `ServiceActive`, `ServiceHealth`, `Apply`, plus `Snapshot` and `Shutdown` |
+| `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
+| `Launcher`, `Spec`, `Child`, `ExecLauncher` | how a child is started; tests substitute a launcher whose children are in-process IPC servers |
+| `CgroupManager` | one cgroup v2 leaf per process, `memory.max` and `cpu.max` written before the child exists |
+| `Harden` | the child-side privilege drop |
+
+**The class table is not configuration.** `definitions` in `class.go` is the
+one place a service's class, capabilities and limits are decided. An operator
+turns the model on and tunes its timings; nothing in YAML can give a parser
+process `CAP_NET_ADMIN`. Adding a service means adding it to a definition's
+`Services` — a service with no process is `ErrServiceUnplaced`, refused at
+assembly rather than placed somewhere by default.
+`TestClassTable_EveryGatewayServiceIsPlaced` checks the table against
+`GatewayConfig.EnabledServices` over a configuration that has every section
+switched on by reflection. A section added to the configuration without a
+process therefore fails the test, which is how `nat64` was caught after it
+landed (#631 review); it runs in `datapath`, the one process holding
+`CAP_NET_ADMIN`.
+
+**The privilege drop is split across the exec on purpose.** The parent sets
+the ambient capability set and the cgroup at clone time (`SysProcAttr`:
+`AmbientCaps`, `UseCgroupFD`, `Pdeathsig`). The child calls `Harden` before it
+reads the configuration or opens a socket, in the order the kernel requires:
+
+1. `no_new_privs`, so nothing it later execs can regain privilege.
+2. the bounding set reduced to the class's capabilities — **before** the uid
+   drop, because `PR_CAPBSET_DROP` needs `CAP_SETPCAP` in the effective set
+   and a parser class keeps at most `CAP_NET_BIND_SERVICE`. A reduction placed
+   after the drop `EPERM`s, and since a hardening failure is fatal, every
+   unprivileged process would fail to start.
+3. for an unprivileged class only: the supplementary groups reduced to the
+   service group (Linux keeps the inherited list across `setresgid` /
+   `setresuid`), `PR_SET_KEEPCAPS` so the uid change does not clear the
+   permitted set and with it the ambient capabilities the parent granted, then
+   gid and uid — gid first, because dropping the uid first takes away the
+   privilege needed to drop the gid.
+4. the capability sets rewritten to exactly the class's capabilities —
+   permitted, effective and inheritable — and those raised back into the
+   ambient set. **This runs for both classes.** Reducing the bounding set does
+   not take a capability out of the permitted or effective set, so a
+   kernel-class child that skipped this would still hold everything root
+   started with — `CAP_SYS_ADMIN`, `CAP_DAC_OVERRIDE`, `CAP_SYS_MODULE` —
+   while the class table says it has two. For an unprivileged class this is
+   also what takes back the root permitted set that `PR_SET_KEEPCAPS`
+   deliberately carried across the uid drop.
+5. the parent-death signal re-armed. `commit_creds()` clears a task's
+   `pdeath_signal` whenever its euid, egid or capability set changes, so every
+   step above that drops privilege also disarms the `Pdeathsig` the parent set
+   at clone time — and `Pdeathsig` is the guarantee that a dead supervisor
+   never leaves a child programming the kernel. If the supervisor exited
+   inside that disarmed window the child is already reparented, the kernel has
+   nothing to deliver, and the child refuses to continue
+   (`ErrSupervisorExited`) rather than becoming the orphan the signal exists
+   to prevent.
+
+A failure at any step is fatal to the child. The syscalls go through the
+unexported `hardenOps` seam so the ordering is a unit test rather than a
+hope — the drop is irreversible, so a test that made the real calls would
+strip the test binary for the rest of the run.
+
+> **Known gap, [#657](http://git.example.internal/jeremyhahn/go-trusted-platform/issues/657).**
+> `prctl` and `capset` apply to the calling thread only, while Go routes
+> `setresuid`/`setresgid`/`setgroups` through all-thread syscalls. `Harden`
+> therefore hardens one OS thread out of however many the Go runtime has
+> started. Nothing calls `Harden` yet — PR 3 is what wires it — and closing it
+> is an owner call between `syscall.AllThreadsSyscall` (which returns
+> `ENOTSUP` under cgo, and gatewayd is built both ways), libcap's Go bindings,
+> and dropping before the runtime starts threads.
+
+Hardening before the config read also means a parser never opens a file as
+root that it could not open as itself, so a permission bug surfaces on the
+first start rather than the first restart.
+
+**Restarts.** A child that exits while the parent still wants services from it
+is relaunched after a doubling backoff (`RestartBackoff` → `RestartBackoffMax`),
+and the supervisor keeps trying while the budget holds. A *failed* relaunch
+spends budget exactly like a crash does: without that, one transient launch
+failure would leave still-wanted services down for good, because the watch
+goroutine that would have tried again has already returned — and with it,
+nothing would ever stop a process that can never start from retrying at the
+backoff cap forever. A relaunched child must also answer on its control socket
+within `ReadyTimeout` before it counts: `ipc.Dial` is lazy (`grpc.NewClient`
+does not connect), so a child that starts and never listens would otherwise be
+published as live. One that does not answer is stopped before the next attempt.
+A process that stayed up longer than `RestartWindow`
+before dying has its crash history and backoff cleared — a daily crash is not
+a crash loop. More than `RestartBudget` crashes inside `RestartWindow` and the
+supervisor stops: the services stay unhealthy with `ErrRestartBudgetExhausted` in their
+health, which an operator sees in the snapshot. An endless crash loop at an
+internet edge is worse than a loud stop.
+
+**One launch per process, claimed under the lock.** Deciding to launch and
+assigning the child are separate critical sections — the launch itself must not
+hold the supervisor's mutex, because it execs — so a `launching` flag is
+claimed before the lock is released. Without it, two callers starting two
+services of the same process (`firewall` and `nat` both live in `datapath`)
+both see no child and both launch; the second launch overwrites `child`,
+`client`, `cancel` and `done`, leaving the first child running with nothing
+watching it and nothing able to stop it. `Pdeathsig` does not help there — the
+supervisor is still alive — so the result is an orphan holding
+`CAP_NET_ADMIN`, which is the failure this package exists to prevent. A caller
+that does not win the claim falls through to the readiness poll, which already
+tolerates a process mid-launch.
+
+**A launch publishes only if the process is still wanted.** The launch runs
+unlocked, so a stop can release the process's last service while a child is
+starting; that stop finds no child to signal — this one is not published yet —
+and tears the process down. Publishing afterwards would leave a live child with
+a watch goroutine for a service nobody wants, so the publish re-checks
+`stopped`/`stopping`/`wanted` under the lock and, when it has lost, signals and
+reaps the child, closes its client, drops the cgroup leaf and returns
+`ErrLaunchAbandoned`. A start that loses to a stop is a failed start.
+
+**A start that fails releases what it claimed.** `StartService` is only
+successful when the child reports the service active, and the paths that fail
+after a launch — the child answering that the service is inactive or
+unhealthy, a readiness timeout, an unreachable socket — used to return the
+error with the child still running. The gateway's own start rollback
+(`node.go`) unwinds the handlers it already started and the failing one is not
+among them, so nothing else would have stopped it: for the kernel class, a
+live `CAP_NET_ADMIN` child for a startup that failed. `releaseFailedStart`
+drops the service from `wanted` and stops the process when it was the last
+one; a service another caller still wants keeps its process running. The
+teardown does not inherit the caller's cancellation — a start that failed
+because its context was cancelled still has a child to stop, and `StopTimeout`
+already bounds the wait.
+
+**A stop cleans up whether or not there is a child to signal.** A process
+whose restart budget ran out has no child left, and the teardown still has to
+run: the cgroup leaf outlives the child that was born into it, and the crash
+history has to go so a later start is not judged by the previous run's budget.
+
+**An ambiguous datapath is refused, not resolved.** `Apply` and `Snapshot` go
+to the kernel-class process through `datapathClient()`. The class table has one
+today, but it is data rather than a type: two would make map iteration order
+decide where the desired configuration lands. Two live kernel-class processes
+are `ErrAmbiguousDatapath` naming both.
+
+**The supervisor creates `runtime-dir`** before the first launch, group-owned
+by the service account at mode `1770`, so a hand-started supervisor works
+without the packaged init script; the packaged script creates it too, and both
+are idempotent. An existing directory has its mode set rather than assumed,
+and one the service group still cannot write is a refusal naming the
+directory.
+
+Group **write** is the part that is easy to get wrong and fatal when it is:
+every unprivileged child binds its own control socket *after* dropping to the
+service uid, and creating an entry needs write on the directory. At 0750 —
+the directory still owned by the root supervisor with only its group
+changed — routing, proxy, provisioning and vpn all take `EACCES` from bind and
+time out in readiness, which reads as four broken children rather than as one
+directory permission. The sticky bit is what makes group write safe: the
+parsers share one account, so without it any one of them could unlink
+another's control socket and take over the name.
+
+**A stop signals before it cancels.** The launch context is what
+`exec.CommandContext` watches, and its default cancellation is `Process.Kill`.
+Cancelling before `SIGTERM` would race an immediate `SIGKILL` against every
+production stop and collapse the whole `StopTimeout` window, so the child would
+never withdraw its flows, tunnels or routes. `ExecLauncher` overrides
+`cmd.Cancel` to send `SIGTERM` — escalating is the supervisor's job, bounded by
+`StopTimeout` — and `stopProcess` releases the context only once the child has
+been reaped. Every path that ends a child goes through the same
+graceful-then-kill `terminate`, so none of them can wait on a wedged child
+forever.
+
+**Nothing launches a child yet.** The `process:` configuration section, the
+`gatewayd service run` command and the `serve` wiring that builds a supervisor
+land next; until then this package is complete, tested, and referenced by
+nothing in the daemon.
+
 ### Supervisor IPC — `pkg/sdn/gateway/ipc` (#557)
 
 The contract is `ipc/proto/ipc.proto`, generated into `ipc/gen` with

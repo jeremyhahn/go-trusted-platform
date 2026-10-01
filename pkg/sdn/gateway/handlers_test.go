@@ -259,7 +259,7 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 			},
 		},
 	}
-	names := cfg.enabledServices()
+	names := cfg.EnabledServices()
 	require.Len(t, names, 12)
 	assert.Equal(t, []string{
 		ServiceFirewall, ServiceNAT, ServiceLoadBalancer, ServiceNAT64, ServiceHostFW, ServiceTunnels, ServiceTransit,

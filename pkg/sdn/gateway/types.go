@@ -1290,16 +1290,19 @@ func (c *GatewayConfig) pipelineTerminal() PipelineTerminal {
 }
 
 func (c *GatewayConfig) HasEnabledServices() bool {
-	return len(c.enabledServices()) > 0
+	return len(c.EnabledServices()) > 0
 }
 
-// enabledServices lists the service sections this configuration enables,
+// EnabledServices lists the service sections this configuration enables,
 // in a fixed order: the OVS datapath services first (they gate out of the
 // base pipeline), then the host-programming services, then the sections
 // the gateway has no builder for. The registry keys off this list, so the
 // list and the builder table (handlers.go) are the two halves of one
 // contract: a section here without a builder is a typed refusal at Start.
-func (c *GatewayConfig) enabledServices() []string {
+// It is exported so the process model's class table can be checked
+// against it: a section here with no process is one the supervisor cannot
+// start (#631 review).
+func (c *GatewayConfig) EnabledServices() []string {
 	var out []string
 	add := func(on bool, name string) {
 		if on {
