@@ -228,6 +228,13 @@ func waitFor(ctx context.Context, t *testing.T, what string, interval, timeout t
 	}
 }
 
+// logBridge logs the bridge's flow table, with packet counts, now.
+func logBridge(t *testing.T, bridge string) {
+	t.Helper()
+	out, err := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "dump-flows", bridge).CombinedOutput()
+	t.Logf("flows on %s (err=%v):\n%s", bridge, err, out)
+}
+
 // dumpBridgeOnFailure logs the bridge's flow table, with packet counts,
 // when the test fails, so a red run shows where the frames stopped.
 // Register it after the cleanups that tear the flows down: cleanups run

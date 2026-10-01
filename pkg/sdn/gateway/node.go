@@ -26,6 +26,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/firewall"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
 )
 
 // Service name constants used as keys in the service handler registry.
@@ -649,6 +650,31 @@ func (g *Gateway) NATService() (*firewall.NAT, bool) {
 		return nil, false
 	}
 	return nat.NAT, true
+}
+
+// NAT64Service returns the running NAT64 translator service, or false when
+// the section is not registered, is refused, or has not started.
+func (g *Gateway) NAT64Service() (*nat64.Service, bool) {
+	b, ok := g.backend(ServiceNAT64)
+	if !ok {
+		return nil, false
+	}
+	svc, ok := b.(nat64Backend)
+	if !ok {
+		return nil, false
+	}
+	return svc.Service, true
+}
+
+// NAT64Status returns the NAT64 service health snapshot. It is the API
+// layers' entry point, so an unregistered or unstarted section is a typed
+// error rather than a zero value that reads as a healthy translator.
+func (g *Gateway) NAT64Status(ctx context.Context) (nat64.Health, error) {
+	svc, ok := g.NAT64Service()
+	if !ok {
+		return nat64.Health{}, &ErrServiceNotActive{Service: ServiceNAT64}
+	}
+	return svc.Health(), nil
 }
 
 // HostFWService returns the running host packet filter, or false when the

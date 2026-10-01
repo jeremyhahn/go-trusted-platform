@@ -139,6 +139,32 @@ platformctl sdn ipam release --ip 10.20.0.17
 | `lb vip remove` | Remove a VIP |
 | `lb vip set-backends` | Replace a VIP's backends |
 
+## 4a. `platformctl sdn gateway nat64`
+
+| Path | Purpose |
+|---|---|
+| `nat64 status` | NAT64 translator health |
+
+```
+platformctl sdn gateway nat64 status
+platformctl sdn gateway nat64 status -o json
+```
+
+Reports whether the service is started, whether the kernel instance is
+present, the translation prefix and instance name, the live session count,
+`pool4` usage, the module version, and the last reconcile error if there was
+one. A started service reporting `instance_present: false` means the kernel
+instance went away underneath it.
+
+There are no mutating verbs: the translator is configured declaratively in
+the `nat64:` section and reconciled, so anything set here would be undone on
+the next reconcile.
+
+Against a production `platformd` today this command fails with "nat64
+translator not configured", even while the `nat64:` section is running. The
+translator lives in `gatewayd`, and the control-plane path to it is #660
+([api.md §5a](api.md#5a-nat64-translator)).
+
 VIP-scoped verbs share two flags:
 
 | Flag | Type | Default | Meaning |

@@ -178,6 +178,7 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.GatewayService/ListVIPs":       scope(sdn, read),
 		"/platform.v1.GatewayService/SetVIPBackends": scope(sdn, write),
 		"/platform.v1.GatewayService/GetLBStatus":    scope(sdn, read),
+		"/platform.v1.GatewayService/GetNAT64Status": scope(sdn, read),
 
 		// -----------------------------------------------------------------
 		// Gateway telemetry snapshots (GatewayService, #594)

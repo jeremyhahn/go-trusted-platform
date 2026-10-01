@@ -42,6 +42,7 @@ const (
 	GatewayService_ListVIPs_FullMethodName              = "/platform.v1.GatewayService/ListVIPs"
 	GatewayService_SetVIPBackends_FullMethodName        = "/platform.v1.GatewayService/SetVIPBackends"
 	GatewayService_GetLBStatus_FullMethodName           = "/platform.v1.GatewayService/GetLBStatus"
+	GatewayService_GetNAT64Status_FullMethodName        = "/platform.v1.GatewayService/GetNAT64Status"
 	GatewayService_GetPerfFlows_FullMethodName          = "/platform.v1.GatewayService/GetPerfFlows"
 	GatewayService_GetPerfDatapath_FullMethodName       = "/platform.v1.GatewayService/GetPerfDatapath"
 	GatewayService_GetPerfConntrack_FullMethodName      = "/platform.v1.GatewayService/GetPerfConntrack"
@@ -86,6 +87,9 @@ type GatewayServiceClient interface {
 	ListVIPs(ctx context.Context, in *ListVIPsRequest, opts ...grpc.CallOption) (*ListVIPsResponse, error)
 	SetVIPBackends(ctx context.Context, in *SetVIPBackendsRequest, opts ...grpc.CallOption) (*SetVIPBackendsResponse, error)
 	GetLBStatus(ctx context.Context, in *GetLBStatusRequest, opts ...grpc.CallOption) (*GetLBStatusResponse, error)
+	// GetNAT64Status reports the stateful NAT64 translator's health: whether
+	// the kernel instance is present, and what it holds.
+	GetNAT64Status(ctx context.Context, in *GetNAT64StatusRequest, opts ...grpc.CallOption) (*GetNAT64StatusResponse, error)
 	// Performance verification operations. These report REAL datapath
 	// measurements only: GetPerfFlows times an actual flow install /
 	// teardown cycle against a live bridge, GetPerfDatapath and
@@ -333,6 +337,16 @@ func (c *gatewayServiceClient) GetLBStatus(ctx context.Context, in *GetLBStatusR
 	return out, nil
 }
 
+func (c *gatewayServiceClient) GetNAT64Status(ctx context.Context, in *GetNAT64StatusRequest, opts ...grpc.CallOption) (*GetNAT64StatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetNAT64StatusResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetNAT64Status_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) GetPerfFlows(ctx context.Context, in *GetPerfFlowsRequest, opts ...grpc.CallOption) (*GetPerfFlowsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetPerfFlowsResponse)
@@ -402,6 +416,9 @@ type GatewayServiceServer interface {
 	ListVIPs(context.Context, *ListVIPsRequest) (*ListVIPsResponse, error)
 	SetVIPBackends(context.Context, *SetVIPBackendsRequest) (*SetVIPBackendsResponse, error)
 	GetLBStatus(context.Context, *GetLBStatusRequest) (*GetLBStatusResponse, error)
+	// GetNAT64Status reports the stateful NAT64 translator's health: whether
+	// the kernel instance is present, and what it holds.
+	GetNAT64Status(context.Context, *GetNAT64StatusRequest) (*GetNAT64StatusResponse, error)
 	// Performance verification operations. These report REAL datapath
 	// measurements only: GetPerfFlows times an actual flow install /
 	// teardown cycle against a live bridge, GetPerfDatapath and
@@ -487,6 +504,9 @@ func (UnimplementedGatewayServiceServer) SetVIPBackends(context.Context, *SetVIP
 }
 func (UnimplementedGatewayServiceServer) GetLBStatus(context.Context, *GetLBStatusRequest) (*GetLBStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetLBStatus not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetNAT64Status(context.Context, *GetNAT64StatusRequest) (*GetNAT64StatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetNAT64Status not implemented")
 }
 func (UnimplementedGatewayServiceServer) GetPerfFlows(context.Context, *GetPerfFlowsRequest) (*GetPerfFlowsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetPerfFlows not implemented")
@@ -932,6 +952,24 @@ func _GatewayService_GetLBStatus_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_GetNAT64Status_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNAT64StatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetNAT64Status(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetNAT64Status_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetNAT64Status(ctx, req.(*GetNAT64StatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_GetPerfFlows_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetPerfFlowsRequest)
 	if err := dec(in); err != nil {
@@ -1084,6 +1122,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetLBStatus",
 			Handler:    _GatewayService_GetLBStatus_Handler,
+		},
+		{
+			MethodName: "GetNAT64Status",
+			Handler:    _GatewayService_GetNAT64Status_Handler,
 		},
 		{
 			MethodName: "GetPerfFlows",

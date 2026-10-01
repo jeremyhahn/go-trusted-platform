@@ -149,6 +149,16 @@ var unservedPrefixes = map[string]string{
 // client table rather than the server one. This map shrinking is what progress looks
 // like; it is not a suppression list. Nothing may be added without a route
 // having genuinely gone missing, which is the failure this test reports.
+//
+// The four GatewayService entries are one group with one cause: NAT64 status
+// (#601) and the three perf verbs are registered on the DAEMON REST stack
+// (pkg/api/rest/), and this router builds nothing for them. NAT64 is recorded
+// alongside its neighbours rather than registered here because #660 leaves no
+// production backend wired to any gatewayd-resident gateway surface — a route
+// added here would resolve and then return unavailable — and because #154/#656
+// is actively mounting the /sdn/gateway prefix on this router. The claims
+// describe the intended surface correctly; this router's half is what is
+// missing.
 var unroutedClaims = map[string]string{
 	"/platform.v1.AttestationService/ChallengeAK":              "POST /api/v1/attestation/challenge",
 	"/platform.v1.AttestationService/CreateAK":                 "POST /api/v1/attestation/ak",
@@ -183,6 +193,7 @@ var unroutedClaims = map[string]string{
 	"/platform.v1.EABService/GetEnrollmentURL":                 "GET /api/v1/eab/credentials/{id}/url",
 	"/platform.v1.EABService/MarkCredentialUsed":               "POST /api/v1/eab/credentials/{id}/used",
 	"/platform.v1.EABService/RevokeCredential":                 "POST /api/v1/eab/credentials/{id}/revoke",
+	"/platform.v1.GatewayService/GetNAT64Status":               "GET /api/v1/sdn/gateway/nat64/status",
 	"/platform.v1.GatewayService/GetPerfConntrack":             "GET /api/v1/sdn/gateway/perf/conntrack",
 	"/platform.v1.GatewayService/GetPerfDatapath":              "GET /api/v1/sdn/gateway/perf/datapath",
 	"/platform.v1.GatewayService/GetPerfFlows":                 "POST /api/v1/sdn/gateway/perf/flows",

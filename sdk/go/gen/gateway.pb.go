@@ -4627,6 +4627,218 @@ func (x *GetLBStatusResponse) GetStatus() *LBStatus {
 	return nil
 }
 
+// NAT64Status is a point-in-time snapshot of the NAT64 translator. Every
+// field except the identity pair is what the kernel reported, not what the
+// configuration asked for: a started service whose instance has gone
+// reports instance_present false.
+type NAT64Status struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// active reports whether the service is started.
+	Active bool `protobuf:"varint,1,opt,name=active,proto3" json:"active,omitempty"`
+	// instance_present reports whether the kernel held the instance at the
+	// last check.
+	InstancePresent bool `protobuf:"varint,2,opt,name=instance_present,json=instancePresent,proto3" json:"instance_present,omitempty"`
+	// prefix is the RFC 6052 translation prefix in use.
+	Prefix string `protobuf:"bytes,3,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	// instance is the kernel instance name.
+	Instance string `protobuf:"bytes,4,opt,name=instance,proto3" json:"instance,omitempty"`
+	// sessions is the live translation session count.
+	Sessions uint64 `protobuf:"varint,5,opt,name=sessions,proto3" json:"sessions,omitempty"`
+	// pool4_used is the number of allocated address:port pairs.
+	Pool4Used uint64 `protobuf:"varint,6,opt,name=pool4_used,json=pool4Used,proto3" json:"pool4_used,omitempty"`
+	// module_version is the translator's reported version.
+	ModuleVersion string `protobuf:"bytes,7,opt,name=module_version,json=moduleVersion,proto3" json:"module_version,omitempty"`
+	// flow_count is the number of pipeline flows the service holds.
+	FlowCount uint32 `protobuf:"varint,8,opt,name=flow_count,json=flowCount,proto3" json:"flow_count,omitempty"`
+	// last_reconcile is when the translator and flows were last converged.
+	LastReconcile *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=last_reconcile,json=lastReconcile,proto3" json:"last_reconcile,omitempty"`
+	// last_error is the last reconcile failure, empty when the last
+	// succeeded.
+	LastError     string `protobuf:"bytes,10,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NAT64Status) Reset() {
+	*x = NAT64Status{}
+	mi := &file_gateway_proto_msgTypes[70]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NAT64Status) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NAT64Status) ProtoMessage() {}
+
+func (x *NAT64Status) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[70]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NAT64Status.ProtoReflect.Descriptor instead.
+func (*NAT64Status) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{70}
+}
+
+func (x *NAT64Status) GetActive() bool {
+	if x != nil {
+		return x.Active
+	}
+	return false
+}
+
+func (x *NAT64Status) GetInstancePresent() bool {
+	if x != nil {
+		return x.InstancePresent
+	}
+	return false
+}
+
+func (x *NAT64Status) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *NAT64Status) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
+func (x *NAT64Status) GetSessions() uint64 {
+	if x != nil {
+		return x.Sessions
+	}
+	return 0
+}
+
+func (x *NAT64Status) GetPool4Used() uint64 {
+	if x != nil {
+		return x.Pool4Used
+	}
+	return 0
+}
+
+func (x *NAT64Status) GetModuleVersion() string {
+	if x != nil {
+		return x.ModuleVersion
+	}
+	return ""
+}
+
+func (x *NAT64Status) GetFlowCount() uint32 {
+	if x != nil {
+		return x.FlowCount
+	}
+	return 0
+}
+
+func (x *NAT64Status) GetLastReconcile() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastReconcile
+	}
+	return nil
+}
+
+func (x *NAT64Status) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
+type GetNAT64StatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetNAT64StatusRequest) Reset() {
+	*x = GetNAT64StatusRequest{}
+	mi := &file_gateway_proto_msgTypes[71]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetNAT64StatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetNAT64StatusRequest) ProtoMessage() {}
+
+func (x *GetNAT64StatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[71]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetNAT64StatusRequest.ProtoReflect.Descriptor instead.
+func (*GetNAT64StatusRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{71}
+}
+
+type GetNAT64StatusResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *NAT64Status           `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetNAT64StatusResponse) Reset() {
+	*x = GetNAT64StatusResponse{}
+	mi := &file_gateway_proto_msgTypes[72]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetNAT64StatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetNAT64StatusResponse) ProtoMessage() {}
+
+func (x *GetNAT64StatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[72]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetNAT64StatusResponse.ProtoReflect.Descriptor instead.
+func (*GetNAT64StatusResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{72}
+}
+
+func (x *GetNAT64StatusResponse) GetStatus() *NAT64Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
 // GetPerfFlowsRequest configures one measured flow-programming run.
 type GetPerfFlowsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -4642,7 +4854,7 @@ type GetPerfFlowsRequest struct {
 
 func (x *GetPerfFlowsRequest) Reset() {
 	*x = GetPerfFlowsRequest{}
-	mi := &file_gateway_proto_msgTypes[70]
+	mi := &file_gateway_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4654,7 +4866,7 @@ func (x *GetPerfFlowsRequest) String() string {
 func (*GetPerfFlowsRequest) ProtoMessage() {}
 
 func (x *GetPerfFlowsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[70]
+	mi := &file_gateway_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4667,7 +4879,7 @@ func (x *GetPerfFlowsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPerfFlowsRequest.ProtoReflect.Descriptor instead.
 func (*GetPerfFlowsRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{70}
+	return file_gateway_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *GetPerfFlowsRequest) GetCount() uint32 {
@@ -4710,7 +4922,7 @@ type GetPerfFlowsResponse struct {
 
 func (x *GetPerfFlowsResponse) Reset() {
 	*x = GetPerfFlowsResponse{}
-	mi := &file_gateway_proto_msgTypes[71]
+	mi := &file_gateway_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4722,7 +4934,7 @@ func (x *GetPerfFlowsResponse) String() string {
 func (*GetPerfFlowsResponse) ProtoMessage() {}
 
 func (x *GetPerfFlowsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[71]
+	mi := &file_gateway_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4735,7 +4947,7 @@ func (x *GetPerfFlowsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPerfFlowsResponse.ProtoReflect.Descriptor instead.
 func (*GetPerfFlowsResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{71}
+	return file_gateway_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *GetPerfFlowsResponse) GetInstalled() uint32 {
@@ -4784,7 +4996,7 @@ type GetPerfDatapathRequest struct {
 
 func (x *GetPerfDatapathRequest) Reset() {
 	*x = GetPerfDatapathRequest{}
-	mi := &file_gateway_proto_msgTypes[72]
+	mi := &file_gateway_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4796,7 +5008,7 @@ func (x *GetPerfDatapathRequest) String() string {
 func (*GetPerfDatapathRequest) ProtoMessage() {}
 
 func (x *GetPerfDatapathRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[72]
+	mi := &file_gateway_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4809,7 +5021,7 @@ func (x *GetPerfDatapathRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPerfDatapathRequest.ProtoReflect.Descriptor instead.
 func (*GetPerfDatapathRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{72}
+	return file_gateway_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *GetPerfDatapathRequest) GetBridge() string {
@@ -4842,7 +5054,7 @@ type GetPerfDatapathResponse struct {
 
 func (x *GetPerfDatapathResponse) Reset() {
 	*x = GetPerfDatapathResponse{}
-	mi := &file_gateway_proto_msgTypes[73]
+	mi := &file_gateway_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4854,7 +5066,7 @@ func (x *GetPerfDatapathResponse) String() string {
 func (*GetPerfDatapathResponse) ProtoMessage() {}
 
 func (x *GetPerfDatapathResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[73]
+	mi := &file_gateway_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4867,7 +5079,7 @@ func (x *GetPerfDatapathResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPerfDatapathResponse.ProtoReflect.Descriptor instead.
 func (*GetPerfDatapathResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{73}
+	return file_gateway_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *GetPerfDatapathResponse) GetHits() uint64 {
@@ -4930,7 +5142,7 @@ type GetPerfConntrackRequest struct {
 
 func (x *GetPerfConntrackRequest) Reset() {
 	*x = GetPerfConntrackRequest{}
-	mi := &file_gateway_proto_msgTypes[74]
+	mi := &file_gateway_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4942,7 +5154,7 @@ func (x *GetPerfConntrackRequest) String() string {
 func (*GetPerfConntrackRequest) ProtoMessage() {}
 
 func (x *GetPerfConntrackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[74]
+	mi := &file_gateway_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4955,7 +5167,7 @@ func (x *GetPerfConntrackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPerfConntrackRequest.ProtoReflect.Descriptor instead.
 func (*GetPerfConntrackRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{74}
+	return file_gateway_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *GetPerfConntrackRequest) GetZone() uint32 {
@@ -4978,7 +5190,7 @@ type GetPerfConntrackResponse struct {
 
 func (x *GetPerfConntrackResponse) Reset() {
 	*x = GetPerfConntrackResponse{}
-	mi := &file_gateway_proto_msgTypes[75]
+	mi := &file_gateway_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4990,7 +5202,7 @@ func (x *GetPerfConntrackResponse) String() string {
 func (*GetPerfConntrackResponse) ProtoMessage() {}
 
 func (x *GetPerfConntrackResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[75]
+	mi := &file_gateway_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5003,7 +5215,7 @@ func (x *GetPerfConntrackResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPerfConntrackResponse.ProtoReflect.Descriptor instead.
 func (*GetPerfConntrackResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{75}
+	return file_gateway_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *GetPerfConntrackResponse) GetTotalEntries() uint64 {
@@ -5388,7 +5600,25 @@ const file_gateway_proto_rawDesc = "" +
 	"\x03vip\x18\x02 \x01(\v2\x16.platform.v1.VIPStatusR\x03vip\"\x14\n" +
 	"\x12GetLBStatusRequest\"D\n" +
 	"\x13GetLBStatusResponse\x12-\n" +
-	"\x06status\x18\x01 \x01(\v2\x15.platform.v1.LBStatusR\x06status\"Y\n" +
+	"\x06status\x18\x01 \x01(\v2\x15.platform.v1.LBStatusR\x06status\"\xe7\x02\n" +
+	"\vNAT64Status\x12\x16\n" +
+	"\x06active\x18\x01 \x01(\bR\x06active\x12)\n" +
+	"\x10instance_present\x18\x02 \x01(\bR\x0finstancePresent\x12\x16\n" +
+	"\x06prefix\x18\x03 \x01(\tR\x06prefix\x12\x1a\n" +
+	"\binstance\x18\x04 \x01(\tR\binstance\x12\x1a\n" +
+	"\bsessions\x18\x05 \x01(\x04R\bsessions\x12\x1d\n" +
+	"\n" +
+	"pool4_used\x18\x06 \x01(\x04R\tpool4Used\x12%\n" +
+	"\x0emodule_version\x18\a \x01(\tR\rmoduleVersion\x12\x1d\n" +
+	"\n" +
+	"flow_count\x18\b \x01(\rR\tflowCount\x12A\n" +
+	"\x0elast_reconcile\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\rlastReconcile\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\n" +
+	" \x01(\tR\tlastError\"\x17\n" +
+	"\x15GetNAT64StatusRequest\"J\n" +
+	"\x16GetNAT64StatusResponse\x120\n" +
+	"\x06status\x18\x01 \x01(\v2\x18.platform.v1.NAT64StatusR\x06status\"Y\n" +
 	"\x13GetPerfFlowsRequest\x12\x14\n" +
 	"\x05count\x18\x01 \x01(\rR\x05count\x12\x14\n" +
 	"\x05batch\x18\x02 \x01(\bR\x05batch\x12\x16\n" +
@@ -5423,7 +5653,7 @@ const file_gateway_proto_rawDesc = "" +
 	"\x18GATEWAY_MODE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14GATEWAY_MODE_OVERLAY\x10\x01\x12\x15\n" +
 	"\x11GATEWAY_MODE_EDGE\x10\x02\x12\x18\n" +
-	"\x14GATEWAY_MODE_TRANSIT\x10\x042\x80\x12\n" +
+	"\x14GATEWAY_MODE_TRANSIT\x10\x042\xdb\x12\n" +
 	"\x0eGatewayService\x12_\n" +
 	"\x10GetGatewayStatus\x12$.platform.v1.GetGatewayStatusRequest\x1a%.platform.v1.GetGatewayStatusResponse\x12Y\n" +
 	"\x0eSetGatewayMode\x12\".platform.v1.SetGatewayModeRequest\x1a#.platform.v1.SetGatewayModeResponse\x12e\n" +
@@ -5448,7 +5678,8 @@ const file_gateway_proto_rawDesc = "" +
 	"\x06GetVIP\x12\x1a.platform.v1.GetVIPRequest\x1a\x1b.platform.v1.GetVIPResponse\x12G\n" +
 	"\bListVIPs\x12\x1c.platform.v1.ListVIPsRequest\x1a\x1d.platform.v1.ListVIPsResponse\x12Y\n" +
 	"\x0eSetVIPBackends\x12\".platform.v1.SetVIPBackendsRequest\x1a#.platform.v1.SetVIPBackendsResponse\x12P\n" +
-	"\vGetLBStatus\x12\x1f.platform.v1.GetLBStatusRequest\x1a .platform.v1.GetLBStatusResponse\x12S\n" +
+	"\vGetLBStatus\x12\x1f.platform.v1.GetLBStatusRequest\x1a .platform.v1.GetLBStatusResponse\x12Y\n" +
+	"\x0eGetNAT64Status\x12\".platform.v1.GetNAT64StatusRequest\x1a#.platform.v1.GetNAT64StatusResponse\x12S\n" +
 	"\fGetPerfFlows\x12 .platform.v1.GetPerfFlowsRequest\x1a!.platform.v1.GetPerfFlowsResponse\x12\\\n" +
 	"\x0fGetPerfDatapath\x12#.platform.v1.GetPerfDatapathRequest\x1a$.platform.v1.GetPerfDatapathResponse\x12_\n" +
 	"\x10GetPerfConntrack\x12$.platform.v1.GetPerfConntrackRequest\x1a%.platform.v1.GetPerfConntrackResponseBAZ?github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1b\x06proto3"
@@ -5466,7 +5697,7 @@ func file_gateway_proto_rawDescGZIP() []byte {
 }
 
 var file_gateway_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
+var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 83)
 var file_gateway_proto_goTypes = []any{
 	(GatewayModeEnum)(0),                  // 0: platform.v1.GatewayModeEnum
 	(*GetGatewaySnapshotRequest)(nil),     // 1: platform.v1.GetGatewaySnapshotRequest
@@ -5539,24 +5770,27 @@ var file_gateway_proto_goTypes = []any{
 	(*SetVIPBackendsResponse)(nil),        // 68: platform.v1.SetVIPBackendsResponse
 	(*GetLBStatusRequest)(nil),            // 69: platform.v1.GetLBStatusRequest
 	(*GetLBStatusResponse)(nil),           // 70: platform.v1.GetLBStatusResponse
-	(*GetPerfFlowsRequest)(nil),           // 71: platform.v1.GetPerfFlowsRequest
-	(*GetPerfFlowsResponse)(nil),          // 72: platform.v1.GetPerfFlowsResponse
-	(*GetPerfDatapathRequest)(nil),        // 73: platform.v1.GetPerfDatapathRequest
-	(*GetPerfDatapathResponse)(nil),       // 74: platform.v1.GetPerfDatapathResponse
-	(*GetPerfConntrackRequest)(nil),       // 75: platform.v1.GetPerfConntrackRequest
-	(*GetPerfConntrackResponse)(nil),      // 76: platform.v1.GetPerfConntrackResponse
-	nil,                                   // 77: platform.v1.GatewaySnapshot.AnnotationsEntry
-	nil,                                   // 78: platform.v1.SnapshotHealth.ComponentsEntry
-	nil,                                   // 79: platform.v1.SnapshotFirewall.CtZonesEntry
-	nil,                                   // 80: platform.v1.GetPerfConntrackResponse.PerZoneEntry
-	(*timestamppb.Timestamp)(nil),         // 81: google.protobuf.Timestamp
-	(*Status)(nil),                        // 82: platform.v1.Status
+	(*NAT64Status)(nil),                   // 71: platform.v1.NAT64Status
+	(*GetNAT64StatusRequest)(nil),         // 72: platform.v1.GetNAT64StatusRequest
+	(*GetNAT64StatusResponse)(nil),        // 73: platform.v1.GetNAT64StatusResponse
+	(*GetPerfFlowsRequest)(nil),           // 74: platform.v1.GetPerfFlowsRequest
+	(*GetPerfFlowsResponse)(nil),          // 75: platform.v1.GetPerfFlowsResponse
+	(*GetPerfDatapathRequest)(nil),        // 76: platform.v1.GetPerfDatapathRequest
+	(*GetPerfDatapathResponse)(nil),       // 77: platform.v1.GetPerfDatapathResponse
+	(*GetPerfConntrackRequest)(nil),       // 78: platform.v1.GetPerfConntrackRequest
+	(*GetPerfConntrackResponse)(nil),      // 79: platform.v1.GetPerfConntrackResponse
+	nil,                                   // 80: platform.v1.GatewaySnapshot.AnnotationsEntry
+	nil,                                   // 81: platform.v1.SnapshotHealth.ComponentsEntry
+	nil,                                   // 82: platform.v1.SnapshotFirewall.CtZonesEntry
+	nil,                                   // 83: platform.v1.GetPerfConntrackResponse.PerZoneEntry
+	(*timestamppb.Timestamp)(nil),         // 84: google.protobuf.Timestamp
+	(*Status)(nil),                        // 85: platform.v1.Status
 }
 var file_gateway_proto_depIdxs = []int32{
 	5,  // 0: platform.v1.GetGatewaySnapshotResponse.snapshot:type_name -> platform.v1.GatewaySnapshot
 	5,  // 1: platform.v1.ListGatewaySnapshotsResponse.snapshots:type_name -> platform.v1.GatewaySnapshot
-	81, // 2: platform.v1.GatewaySnapshot.reported_at:type_name -> google.protobuf.Timestamp
-	81, // 3: platform.v1.GatewaySnapshot.received_at:type_name -> google.protobuf.Timestamp
+	84, // 2: platform.v1.GatewaySnapshot.reported_at:type_name -> google.protobuf.Timestamp
+	84, // 3: platform.v1.GatewaySnapshot.received_at:type_name -> google.protobuf.Timestamp
 	6,  // 4: platform.v1.GatewaySnapshot.health:type_name -> platform.v1.SnapshotHealth
 	7,  // 5: platform.v1.GatewaySnapshot.bgp:type_name -> platform.v1.SnapshotBGP
 	10, // 6: platform.v1.GatewaySnapshot.services:type_name -> platform.v1.SnapshotService
@@ -5566,115 +5800,119 @@ var file_gateway_proto_depIdxs = []int32{
 	14, // 10: platform.v1.GatewaySnapshot.firewall:type_name -> platform.v1.SnapshotFirewall
 	15, // 11: platform.v1.GatewaySnapshot.nat:type_name -> platform.v1.SnapshotNAT
 	17, // 12: platform.v1.GatewaySnapshot.pipeline:type_name -> platform.v1.SnapshotPipeline
-	77, // 13: platform.v1.GatewaySnapshot.annotations:type_name -> platform.v1.GatewaySnapshot.AnnotationsEntry
-	78, // 14: platform.v1.SnapshotHealth.components:type_name -> platform.v1.SnapshotHealth.ComponentsEntry
+	80, // 13: platform.v1.GatewaySnapshot.annotations:type_name -> platform.v1.GatewaySnapshot.AnnotationsEntry
+	81, // 14: platform.v1.SnapshotHealth.components:type_name -> platform.v1.SnapshotHealth.ComponentsEntry
 	8,  // 15: platform.v1.SnapshotBGP.peers:type_name -> platform.v1.SnapshotBGPPeer
 	9,  // 16: platform.v1.SnapshotBGPPeer.bfd:type_name -> platform.v1.SnapshotBFD
-	81, // 17: platform.v1.SnapshotBFD.last_failure:type_name -> google.protobuf.Timestamp
-	81, // 18: platform.v1.SnapshotTunnel.last_rekey:type_name -> google.protobuf.Timestamp
-	81, // 19: platform.v1.SnapshotHostFirewall.last_reconcile:type_name -> google.protobuf.Timestamp
-	81, // 20: platform.v1.SnapshotFirewall.last_reconcile:type_name -> google.protobuf.Timestamp
-	79, // 21: platform.v1.SnapshotFirewall.ct_zones:type_name -> platform.v1.SnapshotFirewall.CtZonesEntry
+	84, // 17: platform.v1.SnapshotBFD.last_failure:type_name -> google.protobuf.Timestamp
+	84, // 18: platform.v1.SnapshotTunnel.last_rekey:type_name -> google.protobuf.Timestamp
+	84, // 19: platform.v1.SnapshotHostFirewall.last_reconcile:type_name -> google.protobuf.Timestamp
+	84, // 20: platform.v1.SnapshotFirewall.last_reconcile:type_name -> google.protobuf.Timestamp
+	82, // 21: platform.v1.SnapshotFirewall.ct_zones:type_name -> platform.v1.SnapshotFirewall.CtZonesEntry
 	16, // 22: platform.v1.SnapshotNAT.uplinks:type_name -> platform.v1.SnapshotNATUplink
-	81, // 23: platform.v1.GatewayStatus.started_at:type_name -> google.protobuf.Timestamp
-	81, // 24: platform.v1.BGPPeer.uptime:type_name -> google.protobuf.Timestamp
-	81, // 25: platform.v1.AnnouncedPrefix.announced_at:type_name -> google.protobuf.Timestamp
-	81, // 26: platform.v1.IPAMPool.created_at:type_name -> google.protobuf.Timestamp
-	81, // 27: platform.v1.IPAMPool.updated_at:type_name -> google.protobuf.Timestamp
-	81, // 28: platform.v1.IPAllocation.allocated_at:type_name -> google.protobuf.Timestamp
-	81, // 29: platform.v1.IPAllocation.expires_at:type_name -> google.protobuf.Timestamp
+	84, // 23: platform.v1.GatewayStatus.started_at:type_name -> google.protobuf.Timestamp
+	84, // 24: platform.v1.BGPPeer.uptime:type_name -> google.protobuf.Timestamp
+	84, // 25: platform.v1.AnnouncedPrefix.announced_at:type_name -> google.protobuf.Timestamp
+	84, // 26: platform.v1.IPAMPool.created_at:type_name -> google.protobuf.Timestamp
+	84, // 27: platform.v1.IPAMPool.updated_at:type_name -> google.protobuf.Timestamp
+	84, // 28: platform.v1.IPAllocation.allocated_at:type_name -> google.protobuf.Timestamp
+	84, // 29: platform.v1.IPAllocation.expires_at:type_name -> google.protobuf.Timestamp
 	18, // 30: platform.v1.GetGatewayStatusResponse.status:type_name -> platform.v1.GatewayStatus
-	82, // 31: platform.v1.SetGatewayModeResponse.status:type_name -> platform.v1.Status
+	85, // 31: platform.v1.SetGatewayModeResponse.status:type_name -> platform.v1.Status
 	18, // 32: platform.v1.SetGatewayModeResponse.gateway_status:type_name -> platform.v1.GatewayStatus
 	20, // 33: platform.v1.GetBGPStatusResponse.status:type_name -> platform.v1.BGPStatus
 	19, // 34: platform.v1.ListBGPPeersResponse.peers:type_name -> platform.v1.BGPPeer
-	82, // 35: platform.v1.AnnouncePrefixResponse.status:type_name -> platform.v1.Status
-	82, // 36: platform.v1.WithdrawPrefixResponse.status:type_name -> platform.v1.Status
+	85, // 35: platform.v1.AnnouncePrefixResponse.status:type_name -> platform.v1.Status
+	85, // 36: platform.v1.WithdrawPrefixResponse.status:type_name -> platform.v1.Status
 	21, // 37: platform.v1.ListAnnouncedPrefixesResponse.prefixes:type_name -> platform.v1.AnnouncedPrefix
-	82, // 38: platform.v1.CreateIPAMPoolResponse.status:type_name -> platform.v1.Status
+	85, // 38: platform.v1.CreateIPAMPoolResponse.status:type_name -> platform.v1.Status
 	22, // 39: platform.v1.CreateIPAMPoolResponse.pool:type_name -> platform.v1.IPAMPool
 	22, // 40: platform.v1.GetIPAMPoolResponse.pool:type_name -> platform.v1.IPAMPool
-	82, // 41: platform.v1.UpdateIPAMPoolResponse.status:type_name -> platform.v1.Status
+	85, // 41: platform.v1.UpdateIPAMPoolResponse.status:type_name -> platform.v1.Status
 	22, // 42: platform.v1.UpdateIPAMPoolResponse.pool:type_name -> platform.v1.IPAMPool
-	82, // 43: platform.v1.DeleteIPAMPoolResponse.status:type_name -> platform.v1.Status
+	85, // 43: platform.v1.DeleteIPAMPoolResponse.status:type_name -> platform.v1.Status
 	22, // 44: platform.v1.ListIPAMPoolsResponse.pools:type_name -> platform.v1.IPAMPool
-	82, // 45: platform.v1.AllocateIPResponse.status:type_name -> platform.v1.Status
+	85, // 45: platform.v1.AllocateIPResponse.status:type_name -> platform.v1.Status
 	23, // 46: platform.v1.AllocateIPResponse.allocation:type_name -> platform.v1.IPAllocation
-	82, // 47: platform.v1.ReleaseIPResponse.status:type_name -> platform.v1.Status
+	85, // 47: platform.v1.ReleaseIPResponse.status:type_name -> platform.v1.Status
 	23, // 48: platform.v1.ListAllocationsResponse.allocations:type_name -> platform.v1.IPAllocation
 	54, // 49: platform.v1.VIPConfig.backends:type_name -> platform.v1.VIPBackend
 	54, // 50: platform.v1.VIPBackendStatus.backend:type_name -> platform.v1.VIPBackend
 	55, // 51: platform.v1.VIPStatus.vip:type_name -> platform.v1.VIPConfig
 	56, // 52: platform.v1.VIPStatus.backends:type_name -> platform.v1.VIPBackendStatus
-	81, // 53: platform.v1.LBStatus.last_reconcile:type_name -> google.protobuf.Timestamp
+	84, // 53: platform.v1.LBStatus.last_reconcile:type_name -> google.protobuf.Timestamp
 	55, // 54: platform.v1.AddVIPRequest.vip:type_name -> platform.v1.VIPConfig
-	82, // 55: platform.v1.AddVIPResponse.status:type_name -> platform.v1.Status
+	85, // 55: platform.v1.AddVIPResponse.status:type_name -> platform.v1.Status
 	57, // 56: platform.v1.AddVIPResponse.vip:type_name -> platform.v1.VIPStatus
-	82, // 57: platform.v1.RemoveVIPResponse.status:type_name -> platform.v1.Status
+	85, // 57: platform.v1.RemoveVIPResponse.status:type_name -> platform.v1.Status
 	57, // 58: platform.v1.GetVIPResponse.vip:type_name -> platform.v1.VIPStatus
 	57, // 59: platform.v1.ListVIPsResponse.vips:type_name -> platform.v1.VIPStatus
 	54, // 60: platform.v1.SetVIPBackendsRequest.backends:type_name -> platform.v1.VIPBackend
-	82, // 61: platform.v1.SetVIPBackendsResponse.status:type_name -> platform.v1.Status
+	85, // 61: platform.v1.SetVIPBackendsResponse.status:type_name -> platform.v1.Status
 	57, // 62: platform.v1.SetVIPBackendsResponse.vip:type_name -> platform.v1.VIPStatus
 	58, // 63: platform.v1.GetLBStatusResponse.status:type_name -> platform.v1.LBStatus
-	80, // 64: platform.v1.GetPerfConntrackResponse.per_zone:type_name -> platform.v1.GetPerfConntrackResponse.PerZoneEntry
-	24, // 65: platform.v1.GatewayService.GetGatewayStatus:input_type -> platform.v1.GetGatewayStatusRequest
-	26, // 66: platform.v1.GatewayService.SetGatewayMode:input_type -> platform.v1.SetGatewayModeRequest
-	1,  // 67: platform.v1.GatewayService.GetGatewaySnapshot:input_type -> platform.v1.GetGatewaySnapshotRequest
-	3,  // 68: platform.v1.GatewayService.ListGatewaySnapshots:input_type -> platform.v1.ListGatewaySnapshotsRequest
-	28, // 69: platform.v1.GatewayService.GetBGPStatus:input_type -> platform.v1.GetBGPStatusRequest
-	30, // 70: platform.v1.GatewayService.ListBGPPeers:input_type -> platform.v1.ListBGPPeersRequest
-	32, // 71: platform.v1.GatewayService.AnnouncePrefix:input_type -> platform.v1.AnnouncePrefixRequest
-	34, // 72: platform.v1.GatewayService.WithdrawPrefix:input_type -> platform.v1.WithdrawPrefixRequest
-	36, // 73: platform.v1.GatewayService.ListAnnouncedPrefixes:input_type -> platform.v1.ListAnnouncedPrefixesRequest
-	38, // 74: platform.v1.GatewayService.CreateIPAMPool:input_type -> platform.v1.CreateIPAMPoolRequest
-	40, // 75: platform.v1.GatewayService.GetIPAMPool:input_type -> platform.v1.GetIPAMPoolRequest
-	42, // 76: platform.v1.GatewayService.UpdateIPAMPool:input_type -> platform.v1.UpdateIPAMPoolRequest
-	44, // 77: platform.v1.GatewayService.DeleteIPAMPool:input_type -> platform.v1.DeleteIPAMPoolRequest
-	46, // 78: platform.v1.GatewayService.ListIPAMPools:input_type -> platform.v1.ListIPAMPoolsRequest
-	48, // 79: platform.v1.GatewayService.AllocateIP:input_type -> platform.v1.AllocateIPRequest
-	50, // 80: platform.v1.GatewayService.ReleaseIP:input_type -> platform.v1.ReleaseIPRequest
-	52, // 81: platform.v1.GatewayService.ListAllocations:input_type -> platform.v1.ListAllocationsRequest
-	59, // 82: platform.v1.GatewayService.AddVIP:input_type -> platform.v1.AddVIPRequest
-	61, // 83: platform.v1.GatewayService.RemoveVIP:input_type -> platform.v1.RemoveVIPRequest
-	63, // 84: platform.v1.GatewayService.GetVIP:input_type -> platform.v1.GetVIPRequest
-	65, // 85: platform.v1.GatewayService.ListVIPs:input_type -> platform.v1.ListVIPsRequest
-	67, // 86: platform.v1.GatewayService.SetVIPBackends:input_type -> platform.v1.SetVIPBackendsRequest
-	69, // 87: platform.v1.GatewayService.GetLBStatus:input_type -> platform.v1.GetLBStatusRequest
-	71, // 88: platform.v1.GatewayService.GetPerfFlows:input_type -> platform.v1.GetPerfFlowsRequest
-	73, // 89: platform.v1.GatewayService.GetPerfDatapath:input_type -> platform.v1.GetPerfDatapathRequest
-	75, // 90: platform.v1.GatewayService.GetPerfConntrack:input_type -> platform.v1.GetPerfConntrackRequest
-	25, // 91: platform.v1.GatewayService.GetGatewayStatus:output_type -> platform.v1.GetGatewayStatusResponse
-	27, // 92: platform.v1.GatewayService.SetGatewayMode:output_type -> platform.v1.SetGatewayModeResponse
-	2,  // 93: platform.v1.GatewayService.GetGatewaySnapshot:output_type -> platform.v1.GetGatewaySnapshotResponse
-	4,  // 94: platform.v1.GatewayService.ListGatewaySnapshots:output_type -> platform.v1.ListGatewaySnapshotsResponse
-	29, // 95: platform.v1.GatewayService.GetBGPStatus:output_type -> platform.v1.GetBGPStatusResponse
-	31, // 96: platform.v1.GatewayService.ListBGPPeers:output_type -> platform.v1.ListBGPPeersResponse
-	33, // 97: platform.v1.GatewayService.AnnouncePrefix:output_type -> platform.v1.AnnouncePrefixResponse
-	35, // 98: platform.v1.GatewayService.WithdrawPrefix:output_type -> platform.v1.WithdrawPrefixResponse
-	37, // 99: platform.v1.GatewayService.ListAnnouncedPrefixes:output_type -> platform.v1.ListAnnouncedPrefixesResponse
-	39, // 100: platform.v1.GatewayService.CreateIPAMPool:output_type -> platform.v1.CreateIPAMPoolResponse
-	41, // 101: platform.v1.GatewayService.GetIPAMPool:output_type -> platform.v1.GetIPAMPoolResponse
-	43, // 102: platform.v1.GatewayService.UpdateIPAMPool:output_type -> platform.v1.UpdateIPAMPoolResponse
-	45, // 103: platform.v1.GatewayService.DeleteIPAMPool:output_type -> platform.v1.DeleteIPAMPoolResponse
-	47, // 104: platform.v1.GatewayService.ListIPAMPools:output_type -> platform.v1.ListIPAMPoolsResponse
-	49, // 105: platform.v1.GatewayService.AllocateIP:output_type -> platform.v1.AllocateIPResponse
-	51, // 106: platform.v1.GatewayService.ReleaseIP:output_type -> platform.v1.ReleaseIPResponse
-	53, // 107: platform.v1.GatewayService.ListAllocations:output_type -> platform.v1.ListAllocationsResponse
-	60, // 108: platform.v1.GatewayService.AddVIP:output_type -> platform.v1.AddVIPResponse
-	62, // 109: platform.v1.GatewayService.RemoveVIP:output_type -> platform.v1.RemoveVIPResponse
-	64, // 110: platform.v1.GatewayService.GetVIP:output_type -> platform.v1.GetVIPResponse
-	66, // 111: platform.v1.GatewayService.ListVIPs:output_type -> platform.v1.ListVIPsResponse
-	68, // 112: platform.v1.GatewayService.SetVIPBackends:output_type -> platform.v1.SetVIPBackendsResponse
-	70, // 113: platform.v1.GatewayService.GetLBStatus:output_type -> platform.v1.GetLBStatusResponse
-	72, // 114: platform.v1.GatewayService.GetPerfFlows:output_type -> platform.v1.GetPerfFlowsResponse
-	74, // 115: platform.v1.GatewayService.GetPerfDatapath:output_type -> platform.v1.GetPerfDatapathResponse
-	76, // 116: platform.v1.GatewayService.GetPerfConntrack:output_type -> platform.v1.GetPerfConntrackResponse
-	91, // [91:117] is the sub-list for method output_type
-	65, // [65:91] is the sub-list for method input_type
-	65, // [65:65] is the sub-list for extension type_name
-	65, // [65:65] is the sub-list for extension extendee
-	0,  // [0:65] is the sub-list for field type_name
+	84, // 64: platform.v1.NAT64Status.last_reconcile:type_name -> google.protobuf.Timestamp
+	71, // 65: platform.v1.GetNAT64StatusResponse.status:type_name -> platform.v1.NAT64Status
+	83, // 66: platform.v1.GetPerfConntrackResponse.per_zone:type_name -> platform.v1.GetPerfConntrackResponse.PerZoneEntry
+	24, // 67: platform.v1.GatewayService.GetGatewayStatus:input_type -> platform.v1.GetGatewayStatusRequest
+	26, // 68: platform.v1.GatewayService.SetGatewayMode:input_type -> platform.v1.SetGatewayModeRequest
+	1,  // 69: platform.v1.GatewayService.GetGatewaySnapshot:input_type -> platform.v1.GetGatewaySnapshotRequest
+	3,  // 70: platform.v1.GatewayService.ListGatewaySnapshots:input_type -> platform.v1.ListGatewaySnapshotsRequest
+	28, // 71: platform.v1.GatewayService.GetBGPStatus:input_type -> platform.v1.GetBGPStatusRequest
+	30, // 72: platform.v1.GatewayService.ListBGPPeers:input_type -> platform.v1.ListBGPPeersRequest
+	32, // 73: platform.v1.GatewayService.AnnouncePrefix:input_type -> platform.v1.AnnouncePrefixRequest
+	34, // 74: platform.v1.GatewayService.WithdrawPrefix:input_type -> platform.v1.WithdrawPrefixRequest
+	36, // 75: platform.v1.GatewayService.ListAnnouncedPrefixes:input_type -> platform.v1.ListAnnouncedPrefixesRequest
+	38, // 76: platform.v1.GatewayService.CreateIPAMPool:input_type -> platform.v1.CreateIPAMPoolRequest
+	40, // 77: platform.v1.GatewayService.GetIPAMPool:input_type -> platform.v1.GetIPAMPoolRequest
+	42, // 78: platform.v1.GatewayService.UpdateIPAMPool:input_type -> platform.v1.UpdateIPAMPoolRequest
+	44, // 79: platform.v1.GatewayService.DeleteIPAMPool:input_type -> platform.v1.DeleteIPAMPoolRequest
+	46, // 80: platform.v1.GatewayService.ListIPAMPools:input_type -> platform.v1.ListIPAMPoolsRequest
+	48, // 81: platform.v1.GatewayService.AllocateIP:input_type -> platform.v1.AllocateIPRequest
+	50, // 82: platform.v1.GatewayService.ReleaseIP:input_type -> platform.v1.ReleaseIPRequest
+	52, // 83: platform.v1.GatewayService.ListAllocations:input_type -> platform.v1.ListAllocationsRequest
+	59, // 84: platform.v1.GatewayService.AddVIP:input_type -> platform.v1.AddVIPRequest
+	61, // 85: platform.v1.GatewayService.RemoveVIP:input_type -> platform.v1.RemoveVIPRequest
+	63, // 86: platform.v1.GatewayService.GetVIP:input_type -> platform.v1.GetVIPRequest
+	65, // 87: platform.v1.GatewayService.ListVIPs:input_type -> platform.v1.ListVIPsRequest
+	67, // 88: platform.v1.GatewayService.SetVIPBackends:input_type -> platform.v1.SetVIPBackendsRequest
+	69, // 89: platform.v1.GatewayService.GetLBStatus:input_type -> platform.v1.GetLBStatusRequest
+	72, // 90: platform.v1.GatewayService.GetNAT64Status:input_type -> platform.v1.GetNAT64StatusRequest
+	74, // 91: platform.v1.GatewayService.GetPerfFlows:input_type -> platform.v1.GetPerfFlowsRequest
+	76, // 92: platform.v1.GatewayService.GetPerfDatapath:input_type -> platform.v1.GetPerfDatapathRequest
+	78, // 93: platform.v1.GatewayService.GetPerfConntrack:input_type -> platform.v1.GetPerfConntrackRequest
+	25, // 94: platform.v1.GatewayService.GetGatewayStatus:output_type -> platform.v1.GetGatewayStatusResponse
+	27, // 95: platform.v1.GatewayService.SetGatewayMode:output_type -> platform.v1.SetGatewayModeResponse
+	2,  // 96: platform.v1.GatewayService.GetGatewaySnapshot:output_type -> platform.v1.GetGatewaySnapshotResponse
+	4,  // 97: platform.v1.GatewayService.ListGatewaySnapshots:output_type -> platform.v1.ListGatewaySnapshotsResponse
+	29, // 98: platform.v1.GatewayService.GetBGPStatus:output_type -> platform.v1.GetBGPStatusResponse
+	31, // 99: platform.v1.GatewayService.ListBGPPeers:output_type -> platform.v1.ListBGPPeersResponse
+	33, // 100: platform.v1.GatewayService.AnnouncePrefix:output_type -> platform.v1.AnnouncePrefixResponse
+	35, // 101: platform.v1.GatewayService.WithdrawPrefix:output_type -> platform.v1.WithdrawPrefixResponse
+	37, // 102: platform.v1.GatewayService.ListAnnouncedPrefixes:output_type -> platform.v1.ListAnnouncedPrefixesResponse
+	39, // 103: platform.v1.GatewayService.CreateIPAMPool:output_type -> platform.v1.CreateIPAMPoolResponse
+	41, // 104: platform.v1.GatewayService.GetIPAMPool:output_type -> platform.v1.GetIPAMPoolResponse
+	43, // 105: platform.v1.GatewayService.UpdateIPAMPool:output_type -> platform.v1.UpdateIPAMPoolResponse
+	45, // 106: platform.v1.GatewayService.DeleteIPAMPool:output_type -> platform.v1.DeleteIPAMPoolResponse
+	47, // 107: platform.v1.GatewayService.ListIPAMPools:output_type -> platform.v1.ListIPAMPoolsResponse
+	49, // 108: platform.v1.GatewayService.AllocateIP:output_type -> platform.v1.AllocateIPResponse
+	51, // 109: platform.v1.GatewayService.ReleaseIP:output_type -> platform.v1.ReleaseIPResponse
+	53, // 110: platform.v1.GatewayService.ListAllocations:output_type -> platform.v1.ListAllocationsResponse
+	60, // 111: platform.v1.GatewayService.AddVIP:output_type -> platform.v1.AddVIPResponse
+	62, // 112: platform.v1.GatewayService.RemoveVIP:output_type -> platform.v1.RemoveVIPResponse
+	64, // 113: platform.v1.GatewayService.GetVIP:output_type -> platform.v1.GetVIPResponse
+	66, // 114: platform.v1.GatewayService.ListVIPs:output_type -> platform.v1.ListVIPsResponse
+	68, // 115: platform.v1.GatewayService.SetVIPBackends:output_type -> platform.v1.SetVIPBackendsResponse
+	70, // 116: platform.v1.GatewayService.GetLBStatus:output_type -> platform.v1.GetLBStatusResponse
+	73, // 117: platform.v1.GatewayService.GetNAT64Status:output_type -> platform.v1.GetNAT64StatusResponse
+	75, // 118: platform.v1.GatewayService.GetPerfFlows:output_type -> platform.v1.GetPerfFlowsResponse
+	77, // 119: platform.v1.GatewayService.GetPerfDatapath:output_type -> platform.v1.GetPerfDatapathResponse
+	79, // 120: platform.v1.GatewayService.GetPerfConntrack:output_type -> platform.v1.GetPerfConntrackResponse
+	94, // [94:121] is the sub-list for method output_type
+	67, // [67:94] is the sub-list for method input_type
+	67, // [67:67] is the sub-list for extension type_name
+	67, // [67:67] is the sub-list for extension extendee
+	0,  // [0:67] is the sub-list for field type_name
 }
 
 func init() { file_gateway_proto_init() }
@@ -5683,14 +5921,14 @@ func file_gateway_proto_init() {
 		return
 	}
 	file_common_proto_init()
-	file_gateway_proto_msgTypes[74].OneofWrappers = []any{}
+	file_gateway_proto_msgTypes[77].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gateway_proto_rawDesc), len(file_gateway_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   80,
+			NumMessages:   83,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

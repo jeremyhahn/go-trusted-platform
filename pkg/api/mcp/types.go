@@ -573,6 +573,9 @@ type ServiceProvider interface {
 	GatewayLBVIPSetBackends(ctx context.Context, protocol, address string, port uint16, backends []*LBBackendRequest) (interface{}, error)
 	GatewayLBStatus(ctx context.Context) (interface{}, error)
 
+	// GatewayNAT64Status returns the NAT64 translator's health snapshot.
+	GatewayNAT64Status(ctx context.Context) (interface{}, error)
+
 	// Gateway performance verification operations. Results are REAL
 	// measurements only (timed flow programming, live ovs-vswitchd
 	// counters); zone < 0 summarizes every conntrack zone. count == 0

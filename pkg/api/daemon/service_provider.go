@@ -40,8 +40,9 @@ import (
 //
 // CRITICAL: All methods MUST call service layer interfaces, never business logic directly.
 type PlatformServiceProvider struct {
-	gatewayLB   GatewayLoadBalancerInterface
-	gatewayPerf GatewayPerfInterface
+	gatewayLB    GatewayLoadBalancerInterface
+	gatewayNAT64 GatewayNAT64Interface
+	gatewayPerf  GatewayPerfInterface
 	// gatewaySnapshotTools serves the telemetry snapshot tools (#594).
 	gatewaySnapshotTools
 	ntpService     platformv1.NTPServiceServer

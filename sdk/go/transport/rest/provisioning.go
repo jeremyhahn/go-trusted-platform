@@ -25,6 +25,7 @@ package rest
 
 import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/provision"
 )
 
@@ -40,6 +41,22 @@ var restResponseDecoders = map[string]restResponseDecoder{
 	"/platform.v1.ConfigDeliveryService/PollSession":  decodeProvisioningPollSession,
 	"/platform.v1.ConfigDeliveryService/ListSessions": decodeProvisioningListSessions,
 	"/platform.v1.ConfigDeliveryService/GetSession":   decodeProvisioningGetSession,
+	"/platform.v1.GatewayService/GetNAT64Status":      decodeGatewayNAT64Status,
+}
+
+// decodeGatewayNAT64Status wraps the bare status object the NAT64 route
+// returns into the gRPC reply.
+func decodeGatewayNAT64Status(raw []byte, reply interface{}) error {
+	out, ok := reply.(*platformv1.GetNAT64StatusResponse)
+	if !ok {
+		return ErrUnexpectedReplyType{Method: "/platform.v1.GatewayService/GetNAT64Status"}
+	}
+	decoded, err := gateway.DecodeNAT64StatusJSON(raw)
+	if err != nil {
+		return err
+	}
+	out.Status = decoded.Status
+	return nil
 }
 
 // decodeProvisioningFetchConfig maps the tri-state FetchConfig JSON payload

@@ -76,6 +76,7 @@ func (r *ToolRegistry) registerTools() {
 
 	// Register Gateway load balancer tools
 	r.registerGatewayLBTools()
+	r.registerGatewayNAT64Tools()
 	r.registerGatewayPerfTools()
 
 	// Register NTP (time synchronization) tools
@@ -1736,6 +1737,11 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		// Gateway perf tool dispatch (gateway_perf_*) uses a map-based
 		// dispatcher for O(1) routing per project conventions.
 		if result, handled, err := r.dispatchGatewayPerfTool(ctx, name, args); handled {
+			return result, err
+		}
+		// Gateway NAT64 tool dispatch (gateway_nat64_*) uses a map-based
+		// dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchGatewayNAT64Tool(ctx, name, args); handled {
 			return result, err
 		}
 		// NTP tool dispatch (ntp_*) uses a map-based dispatcher for

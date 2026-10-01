@@ -514,3 +514,38 @@ export interface GatewaySnapshotPipeline {
 export interface ListGatewayStateResponse {
   gateways: GatewaySnapshot[];
 }
+
+/**
+ * NAT64 translator health (RFC 6146).
+ *
+ * Every field except the identity pair is what the kernel reported, not
+ * what the configuration asked for: a started service whose instance has
+ * gone reports `instance_present` false.
+ */
+export interface NAT64Status {
+  /** Whether the service is started. */
+  active: boolean;
+  /** Whether the kernel held the instance at the last check. */
+  instance_present: boolean;
+  /** The RFC 6052 translation prefix in use. */
+  prefix: string;
+  /** The kernel instance name. */
+  instance: string;
+  /** Live translation session count. */
+  sessions: number;
+  /** Allocated address:port pairs. */
+  pool4_used: number;
+  /** The translator's reported version. */
+  module_version?: string;
+  /** Pipeline flows the service holds. */
+  flow_count: number;
+  /** When the translator and flows were last converged. */
+  last_reconcile?: string;
+  /** The last reconcile failure, absent when the last succeeded. */
+  last_error?: string;
+  /** When this snapshot was taken. */
+  timestamp: string;
+}
+
+/** Response of the NAT64 status endpoint. */
+export type GetNAT64StatusResponse = NAT64Status;

@@ -16,6 +16,7 @@
 package quic
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -75,12 +76,14 @@ type testGatewayService struct {
 	vipResp           *LBVIPInfo
 	vipsResp          []*LBVIPInfo
 	lbStatusResp      *LBStatusInfo
+	nat64StatusResp   *NAT64StatusInfo
 	addVIPErr         error
 	removeVIPErr      error
 	getVIPErr         error
 	listVIPsErr       error
 	setVIPBackendsErr error
 	lbStatusErr       error
+	nat64StatusErr    error
 	lastVIPSpec       *LBVIPSpec
 
 	// Capture last request for validation
@@ -442,6 +445,13 @@ func (s *testGatewayService) LBStatus(ctx context.Context) (*LBStatusInfo, error
 		return nil, s.lbStatusErr
 	}
 	return s.lbStatusResp, nil
+}
+
+func (s *testGatewayService) NAT64Status(ctx context.Context) (*NAT64StatusInfo, error) {
+	if s.nat64StatusErr != nil {
+		return nil, s.nat64StatusErr
+	}
+	return s.nat64StatusResp, nil
 }
 
 // =============================================================================
@@ -2626,4 +2636,25 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		assert.Equal(t, StatusInternalError, resp.Status)
 	})
+}
+
+// TestGatewayHandlerErrorResponse_APreconditionIsNotAFault: a host that
+// cannot carry a configured service (a kernel without the NAT64 module) is
+// gRPC's FailedPrecondition, which the QUIC delegates bridge to
+// StatusInvalidRequest. It answered StatusInternalError before the #661
+// review, which reads as a daemon fault to retry or escalate.
+func TestGatewayHandlerErrorResponse_APreconditionIsNotAFault(t *testing.T) {
+	handler, service := createTestGatewayHandler()
+	service.nat64StatusErr = ErrGatewayPreconditionDetail{Reason: "module jool not found"}
+
+	resp := handler.handleNAT64Status(context.Background(), &Request{})
+	if resp.Status != StatusInvalidRequest {
+		t.Fatalf("status = %#x, want StatusInvalidRequest", resp.Status)
+	}
+	if !bytes.Contains(resp.Payload, []byte("module jool not found")) {
+		t.Fatalf("payload %q drops the kernel's reason", resp.Payload)
+	}
+	if !errors.Is(ErrGatewayPreconditionDetail{Reason: "x"}, ErrGatewayPreconditionFailed) {
+		t.Fatal("the detail does not match its sentinel")
+	}
 }

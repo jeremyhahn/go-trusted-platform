@@ -1105,6 +1105,9 @@ func registerGatewayHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.GatewayService_GetLBStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetLBStatus(ctx, req.(*platformv1.GetLBStatusRequest))
 	}
+	m[platformv1.GatewayService_GetNAT64Status_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetNAT64Status(ctx, req.(*platformv1.GetNAT64StatusRequest))
+	}
 	m[platformv1.GatewayService_GetPerfFlows_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetPerfFlows(ctx, req.(*platformv1.GetPerfFlowsRequest))
 	}

@@ -163,6 +163,14 @@ var (
 	// adapters) return this error for every unsupported method so the QUIC
 	// handler correctly emits StatusUnavailable to the client.
 	ErrGatewayFeatureNotConfigured = errors.New("gateway feature not configured")
+
+	// ErrGatewayPreconditionFailed is returned when the host cannot carry
+	// a configured gateway service until an operator acts on it, such as
+	// a kernel without the NAT64 translator module. It is gRPC's
+	// FailedPrecondition, bridged to StatusInvalidRequest as the other
+	// QUIC delegates bridge it, and is never a retryable StatusUnavailable
+	// or a daemon-fault StatusInternalError.
+	ErrGatewayPreconditionFailed = errors.New("gateway precondition failed")
 )
 
 // GatewayServiceInterface defines the interface for gateway operations.
@@ -210,6 +218,9 @@ type GatewayServiceInterface interface {
 	ListVIPs(ctx context.Context) ([]*LBVIPInfo, error)
 	SetVIPBackends(ctx context.Context, protocol, address string, port uint16, backends []*LBBackendSpec) (*LBVIPInfo, error)
 	LBStatus(ctx context.Context) (*LBStatusInfo, error)
+
+	// NAT64Status returns the NAT64 translator's health snapshot.
+	NAT64Status(ctx context.Context) (*NAT64StatusInfo, error)
 }
 
 // GatewayStatusInfo contains gateway status information
@@ -719,6 +730,10 @@ func (h *GatewayHandler) HandleRequest(ctx context.Context, req *Request) *Respo
 		}
 		// Perf sub-opcodes (0x36-0x38) dispatch via map lookup.
 		if handler, ok := gatewayPerfHandlers[req.Opcode]; ok {
+			return handler(h, ctx, req)
+		}
+		// NAT64 sub-opcodes (0x39) dispatch via map lookup.
+		if handler, ok := gatewayNAT64Handlers[req.Opcode]; ok {
 			return handler(h, ctx, req)
 		}
 		return &Response{
@@ -1737,6 +1752,8 @@ func (h *GatewayHandler) gatewayErrorResponse(err error) *Response {
 		status = StatusUnavailable
 	case errors.Is(err, ErrGatewayFeatureNotConfigured):
 		status = StatusUnavailable
+	case errors.Is(err, ErrGatewayPreconditionFailed):
+		status = StatusInvalidRequest
 	case errors.Is(err, ErrGatewayVIPNotFound):
 		status = StatusNotFound
 	case errors.Is(err, ErrGatewayVIPAlreadyExists):
@@ -1971,3 +1988,19 @@ func (e ErrGatewayIPAMWindowDetail) Error() string {
 
 // Unwrap lets errors.Is match ErrGatewayIPAMWindow.
 func (e ErrGatewayIPAMWindowDetail) Unwrap() error { return ErrGatewayIPAMWindow }
+
+// ErrGatewayPreconditionDetail carries the host's own reason a gateway
+// service cannot run; errors.Is(err, ErrGatewayPreconditionFailed) holds
+// for it.
+type ErrGatewayPreconditionDetail struct {
+	// Reason is the underlying refusal.
+	Reason string
+}
+
+// Error implements the error interface.
+func (e ErrGatewayPreconditionDetail) Error() string {
+	return ErrGatewayPreconditionFailed.Error() + ": " + e.Reason
+}
+
+// Unwrap lets errors.Is match ErrGatewayPreconditionFailed.
+func (e ErrGatewayPreconditionDetail) Unwrap() error { return ErrGatewayPreconditionFailed }

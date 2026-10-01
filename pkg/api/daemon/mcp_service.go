@@ -146,6 +146,7 @@ type MCPServiceProvider struct {
 	configDeliveryService *configdelivery.Service
 	proxyService          *grpcapi.ProxyGRPCService
 	gatewayLB             GatewayLoadBalancerInterface
+	gatewayNAT64          GatewayNAT64Interface
 	gatewayPerf           GatewayPerfInterface
 	// gatewaySnapshotTools serves the telemetry snapshot tools.
 	gatewaySnapshotTools

@@ -433,6 +433,10 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.GatewayService/GetPerfFlows":     quicapi.OpGatewayPerfFlows,
 	"/platform.v1.GatewayService/GetPerfDatapath":  quicapi.OpGatewayPerfDatapath,
 	"/platform.v1.GatewayService/GetPerfConntrack": quicapi.OpGatewayPerfConntrack,
+
+	// NAT64 translator status — sub-opcode 0x39, next after the perf
+	// range. Server dispatcher: pkg/api/quic/gateway_nat64_handlers.go.
+	"/platform.v1.GatewayService/GetNAT64Status": quicapi.OpGatewayNAT64Status,
 }
 
 // init asserts the cross-table invariant: every gRPC method whose
@@ -658,6 +662,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.GatewayService/GetPerfFlows":     quicapi.OpGatewayCategory,
 	"/platform.v1.GatewayService/GetPerfDatapath":  quicapi.OpGatewayCategory,
 	"/platform.v1.GatewayService/GetPerfConntrack": quicapi.OpGatewayCategory,
+	"/platform.v1.GatewayService/GetNAT64Status":   quicapi.OpGatewayCategory,
 
 	"/platform.v1.EABService/CreateCredential":          quicapi.OpProvisioningCategory,
 	"/platform.v1.EABService/GetCredential":             quicapi.OpProvisioningCategory,

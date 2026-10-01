@@ -2137,6 +2137,11 @@ func (m *mockServiceProvider) GatewayLBStatus(ctx context.Context) (interface{},
 	return map[string]interface{}{"active": true}, nil
 }
 
+// Gateway NAT64 operations
+func (m *mockServiceProvider) GatewayNAT64Status(ctx context.Context) (interface{}, error) {
+	return map[string]interface{}{"active": true, "instance_present": true}, nil
+}
+
 // Gateway perf operations
 func (m *mockServiceProvider) GatewayPerfFlows(ctx context.Context, bridge string, count int, batch bool) (interface{}, error) {
 	m.mu.Lock()

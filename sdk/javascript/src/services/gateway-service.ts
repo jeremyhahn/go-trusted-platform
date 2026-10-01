@@ -28,6 +28,7 @@ import type {
   ListAllocationsResponse,
   GatewaySnapshot,
   ListGatewayStateResponse,
+  GetNAT64StatusResponse,
 } from '../types/gateway.js';
 
 /**
@@ -126,6 +127,33 @@ export class GatewayService extends BaseService {
    */
   async deleteState(gatewayId: string): Promise<ApiResponse<void>> {
     return this.client.delete(this.buildUrl(`/state/${encodeURIComponent(gatewayId)}`));
+  }
+
+  // =========================================================================
+  // NAT64 Operations
+  // =========================================================================
+
+  /**
+   * Get the NAT64 translator health.
+   *
+   * The gateway owns a Jool kernel instance and hands it the frames
+   * addressed to the RFC 6052 translation prefix. What comes back is what
+   * the kernel said: a started service whose instance has gone reports
+   * `instance_present` false.
+   *
+   * The path is absolute rather than built from this service's `/v1/gateway`
+   * basePath: the gateway feature is served by two REST routers — the web
+   * service at `/api/v1/gateway/...` (status, mode, BGP, IPAM, state) and the
+   * daemon transport at `/api/v1/sdn/gateway/...` — and NAT64 is registered
+   * only on the daemon one (`pkg/api/rest/gateway_nat64_handlers.go`, and
+   * docs/gateway/api.md §5a). Building it from basePath would request a path
+   * nothing routes and return a 404 indistinguishable from a gateway with no
+   * translator configured.
+   *
+   * @returns NAT64 translator status
+   */
+  async getNAT64Status(): Promise<ApiResponse<GetNAT64StatusResponse>> {
+    return this.client.get<GetNAT64StatusResponse>('/v1/sdn/gateway/nat64/status');
   }
 
   // =========================================================================

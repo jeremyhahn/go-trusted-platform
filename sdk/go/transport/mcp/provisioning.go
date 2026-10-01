@@ -42,6 +42,7 @@ import (
 	"strconv"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/provision"
 )
 
@@ -80,6 +81,26 @@ var mcpReplyDecoders = map[string]mcpReplyDecoder{
 	"/platform.v1.ConfigDeliveryService/PollSession":  decodeProvisionPollSessionResult,
 	"/platform.v1.ConfigDeliveryService/ListSessions": decodeProvisionListSessionsResult,
 	"/platform.v1.ConfigDeliveryService/GetSession":   decodeProvisionGetSessionResult,
+	"/platform.v1.GatewayService/GetNAT64Status":      decodeGatewayNAT64StatusResult,
+}
+
+// decodeGatewayNAT64StatusResult wraps the bare status object the
+// gateway_nat64_status tool returns into the gRPC reply.
+func decodeGatewayNAT64StatusResult(result interface{}, reply interface{}) error {
+	out, ok := reply.(*platformv1.GetNAT64StatusResponse)
+	if !ok {
+		return ErrUnexpectedReplyType{Method: "/platform.v1.GatewayService/GetNAT64Status"}
+	}
+	data, err := resultJSON(result)
+	if err != nil {
+		return err
+	}
+	decoded, err := gateway.DecodeNAT64StatusJSON(data)
+	if err != nil {
+		return err
+	}
+	out.Status = decoded.Status
+	return nil
 }
 
 // resultJSON renders a generic MCP tool result back to JSON bytes for the

@@ -328,6 +328,10 @@ func (p *panicGatewayService) LBStatus(_ context.Context) (*quic.LBStatusInfo, e
 	return nil, quic.ErrGatewayFeatureNotConfigured
 }
 
+func (p *panicGatewayService) NAT64Status(_ context.Context) (*quic.NAT64StatusInfo, error) {
+	return nil, quic.ErrGatewayFeatureNotConfigured
+}
+
 // TestQUICHandler_RecoverGuard_PanicInHandler verifies that when a handler
 // panics, the QUICServiceHandler.HandleRequest recover() guard catches it and
 // returns StatusInternalError instead of propagating the panic.

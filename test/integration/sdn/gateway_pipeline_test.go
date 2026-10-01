@@ -145,6 +145,13 @@ func TestGatewayPipeline_FirewallVerdictsReachable(t *testing.T) {
 	cfg := baseGatewayConfig("gwpipe-fw", rt)
 	cfg.Firewall = &gateway.FirewallConfig{Enabled: true, DefaultPolicy: "deny"}
 	gw := startGatewayForTest(t, ctx, cfg)
+	// The negative control's connection left kernel megaflows behind. They
+	// were cached from NORMAL forwarding, which never reads L4 ports, so they
+	// match any alpha→gamma TCP segment. OVS replaces them after a flow-table
+	// change asynchronously; an OpenFlow barrier does not wait for that. A
+	// dial made inside that window rode the stale megaflow past the
+	// firewall: 11 failures in 30 runs, 0 in 30 with this wait (#601 PR 2).
+	runCmd(t, "ovs-appctl", "revalidator/wait")
 
 	t.Run("PipelineIsOwnedAndSecure", func(t *testing.T) {
 		require.True(t, rt.PipelineInstalled())
@@ -179,7 +186,11 @@ func TestGatewayPipeline_FirewallVerdictsReachable(t *testing.T) {
 	})
 
 	t.Run("DeniedPairTimesOut", func(t *testing.T) {
-		_, err := nsDial("tpgwf-a", deniedAddr, 2*time.Second)
+		conn, err := nsDial("tpgwf-a", deniedAddr, 2*time.Second)
+		if err == nil {
+			conn.Close()
+			logBridge(t, bridge.name)
+		}
 		require.Error(t, err, "denied pair alpha→gamma must not connect: the verdict is reachable now")
 	})
 

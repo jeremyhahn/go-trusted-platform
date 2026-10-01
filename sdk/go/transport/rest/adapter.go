@@ -1179,6 +1179,14 @@ var grpcMethodToRESTMap = map[string]struct {
 	// parameters (see templatedRouteTable).
 	"/platform.v1.GatewayService/GetPerfFlows": {"/api/v1/sdn/gateway/perf/flows", http.MethodPost},
 
+	// NAT64 translator status — server registration lives in
+	// pkg/api/rest/gateway_nat64_handlers.go::registerNAT64Routes. It is on
+	// the /sdn/gateway prefix, not /gateway, so it must be mapped explicitly:
+	// the fallback would derive POST /api/v1/gateway/getnat64status, which
+	// nothing routes, and the 404 is indistinguishable from a gateway with
+	// no translator configured (#601).
+	"/platform.v1.GatewayService/GetNAT64Status": {"/api/v1/sdn/gateway/nat64/status", http.MethodGet},
+
 	// Invitation Service — proto: pkg/api/grpc/proto/invitation.proto
 	// Server registrations live in pkg/webservice/v1/rest/invitation/.
 	// Detail/revoke routes carry {id}/{token} in the URL; the SDK

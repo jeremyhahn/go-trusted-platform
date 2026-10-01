@@ -222,6 +222,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.GatewayService/GetPerfFlows":     "gateway_perf_flows",
 	"/platform.v1.GatewayService/GetPerfDatapath":  "gateway_perf_datapath",
 	"/platform.v1.GatewayService/GetPerfConntrack": "gateway_perf_conntrack",
+	"/platform.v1.GatewayService/GetNAT64Status":   "gateway_nat64_status",
 
 	// Daemon / Health — proto: pkg/api/grpc/proto/daemon.proto
 	"/platform.v1.PlatformDaemon/GetHealth":        "platform_health",

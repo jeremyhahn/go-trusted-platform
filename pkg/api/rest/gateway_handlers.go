@@ -438,6 +438,7 @@ type GatewayServiceInterface interface {
 	RemoveVIP(ctx context.Context, protocol, address string, port uint16) error
 	SetVIPBackends(ctx context.Context, protocol, address string, port uint16, backends []LBBackend) (*LBVIPResponse, error)
 	GetLBStatus(ctx context.Context) (*LBStatusResponse, error)
+	GetNAT64Status(ctx context.Context) (*NAT64StatusResponse, error)
 }
 
 // =============================================================================
@@ -495,6 +496,7 @@ func (h *GatewayHandlers) RegisterRoutes(router *mux.Router) {
 
 	// Load balancer VIP operations
 	h.registerLBRoutes(router)
+	h.registerNAT64Routes(router)
 
 	// Performance verification operations
 	h.registerPerfRoutes(router)
@@ -1040,6 +1042,10 @@ func (h *GatewayHandlers) writeGatewayError(w http.ResponseWriter, operation str
 		statusCode = http.StatusBadRequest
 	case ErrGatewayServiceNotAvailable:
 		statusCode = http.StatusServiceUnavailable
+	case ErrNAT64NotConfigured:
+		statusCode = http.StatusServiceUnavailable
+	case ErrNAT64ModuleUnavailable:
+		statusCode = http.StatusPreconditionFailed
 	case ErrLBNotConfigured:
 		statusCode = http.StatusServiceUnavailable
 	case ErrLBVIPNotFound:

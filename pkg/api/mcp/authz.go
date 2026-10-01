@@ -122,6 +122,7 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	c.toolPermissions["gateway_lb_vip_list"] = "sdn:read"
 	c.toolPermissions["gateway_lb_vip_set_backends"] = "sdn:write"
 	c.toolPermissions["gateway_lb_status"] = "sdn:read"
+	c.toolPermissions["gateway_nat64_status"] = "sdn:read"
 	// gateway_perf_flows mutates bridge flow tables (ephemeral install +
 	// cookie-scoped delete), so it requires sdn:write; the counters are
 	// read-only.

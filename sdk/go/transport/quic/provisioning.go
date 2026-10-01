@@ -132,6 +132,7 @@ type categoryResponseDecoder func(payload []byte, reply interface{}) error
 var categoryResponseDecoders = map[string]categoryResponseDecoder{
 	platformv1.ConfigDeliveryService_FetchConfig_FullMethodName: decodeProvisioningFetchConfigReply,
 	platformv1.ConfigDeliveryService_PollSession_FullMethodName: decodeProvisioningPollSessionReply,
+	platformv1.GatewayService_GetNAT64Status_FullMethodName:     decodeGatewayNAT64StatusReply,
 }
 
 // decodeProvisioningFetchConfigReply decodes the flattened FetchConfig wire

@@ -343,6 +343,7 @@ type fullGatewayQUICAdapter struct {
 	ipamAlloc ipam.Allocator
 	zoneSvc   gateway.ZoneService          // may be nil
 	lb        GatewayLoadBalancerInterface // may be nil
+	nat64     GatewayNAT64Interface        // may be nil
 	// gatewaySnapshotQUICAdapter serves the telemetry snapshot sub-opcodes
 	// from the gateway gRPC service when one is wired (#594).
 	gatewaySnapshotQUICAdapter

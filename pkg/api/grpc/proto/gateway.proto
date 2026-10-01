@@ -48,6 +48,10 @@ service GatewayService {
   rpc SetVIPBackends(SetVIPBackendsRequest) returns (SetVIPBackendsResponse);
   rpc GetLBStatus(GetLBStatusRequest) returns (GetLBStatusResponse);
 
+  // GetNAT64Status reports the stateful NAT64 translator's health: whether
+  // the kernel instance is present, and what it holds.
+  rpc GetNAT64Status(GetNAT64StatusRequest) returns (GetNAT64StatusResponse);
+
   // Performance verification operations. These report REAL datapath
   // measurements only: GetPerfFlows times an actual flow install /
   // teardown cycle against a live bridge, GetPerfDatapath and
@@ -585,6 +589,42 @@ message SetVIPBackendsResponse {
 message GetLBStatusRequest {}
 message GetLBStatusResponse {
   LBStatus status = 1;
+}
+
+// Request/Response messages — NAT64 translator
+
+// NAT64Status is a point-in-time snapshot of the NAT64 translator. Every
+// field except the identity pair is what the kernel reported, not what the
+// configuration asked for: a started service whose instance has gone
+// reports instance_present false.
+message NAT64Status {
+  // active reports whether the service is started.
+  bool active = 1;
+  // instance_present reports whether the kernel held the instance at the
+  // last check.
+  bool instance_present = 2;
+  // prefix is the RFC 6052 translation prefix in use.
+  string prefix = 3;
+  // instance is the kernel instance name.
+  string instance = 4;
+  // sessions is the live translation session count.
+  uint64 sessions = 5;
+  // pool4_used is the number of allocated address:port pairs.
+  uint64 pool4_used = 6;
+  // module_version is the translator's reported version.
+  string module_version = 7;
+  // flow_count is the number of pipeline flows the service holds.
+  uint32 flow_count = 8;
+  // last_reconcile is when the translator and flows were last converged.
+  google.protobuf.Timestamp last_reconcile = 9;
+  // last_error is the last reconcile failure, empty when the last
+  // succeeded.
+  string last_error = 10;
+}
+
+message GetNAT64StatusRequest {}
+message GetNAT64StatusResponse {
+  NAT64Status status = 1;
 }
 
 // Request/Response messages — Performance verification

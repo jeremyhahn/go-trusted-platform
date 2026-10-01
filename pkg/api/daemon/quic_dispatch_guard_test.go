@@ -254,6 +254,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpGatewayPerfFlows":          {value: quic.OpGatewayPerfFlows, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
 	"OpGatewayPerfDatapath":       {value: quic.OpGatewayPerfDatapath, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
 	"OpGatewayPerfConntrack":      {value: quic.OpGatewayPerfConntrack, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayNAT64Status":        {value: quic.OpGatewayNAT64Status, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
 	"OpVTPMGetState":              {value: quic.OpVTPMGetState, mode: wireDirect, family: "vtpm"},
 	"OpVTPMList":                  {value: quic.OpVTPMList, mode: wireDirect, family: "vtpm"},
 	"OpVTPMGetEK":                 {value: quic.OpVTPMGetEK, mode: wireDirect, family: "vtpm"},

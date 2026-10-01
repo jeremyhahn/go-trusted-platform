@@ -111,6 +111,83 @@ the reduced `/gateway/ipam` surface keeps its protojson payloads.
 | Remove VIP | `MISSING — docs/13 G7` | `RemoveVIP` | as above | `gateway_lb_vip_remove` | ✅ |
 | Set VIP backends | `MISSING — docs/13 G7` | `SetVIPBackends` | as above | `gateway_lb_vip_set_backends` | ✅ |
 
+A production `platformd` does not wire the load balancer backend yet (#660,
+see §5a), so these verbs answer "not configured" on a live platform.
+
+---
+
+## 5a. NAT64 translator
+
+| Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
+|---|---|---|---|---|---|
+| NAT64 status | `GET /api/v1/sdn/gateway/nat64/status` | `GetNAT64Status` | `0x39` (`pkg/api/quic/gateway_nat64_handlers.go`) | `gateway_nat64_status` | ✅ |
+
+> **Production status: routed, not yet backed.** The translator runs in
+> `gatewayd`. Today `platformd` does not reach it: it builds the gateway
+> service with no NAT64 backend on any transport. On a live platform every
+> transport answers "not configured": `Unavailable` on gRPC and Unix, 503 on
+> REST, `StatusUnavailable` on QUIC, and "service not available" from MCP.
+> That holds even while the `nat64:` section is running and healthy.
+>
+> Connecting the control plane to gatewayd-resident services is #660. It is
+> blocked on an owner ruling: live IPC over the #557 seam, or the #594
+> telemetry snapshot. The load balancer (§5) and perf (§6) verbs share the
+> same gap. Until #660 lands, read translator health from `gatewayd` itself
+> or from the telemetry snapshot's `nat64` section.
+>
+> What is proven today:
+> - The verb is routed on every transport (`TestNAT64StatusMultiProtocol`).
+> - The translator itself works end to end (`make integration-test-nat64`).
+
+Read-only by design: the translator has no runtime verbs. Its `pool6`,
+`pool4` and session lifetimes are declarative — they come from the `nat64:`
+section and are reconciled, so there is nothing an operator would set over
+an API that the desired configuration would not immediately undo. The
+session table is the kernel's and is not the platform's to mutate.
+
+What comes back is what the kernel reported, not what the configuration
+asked for. `instance_present` false on an `active` service means the
+translator's instance disappeared underneath a started section, which is
+the failure this surface exists to make visible.
+
+Every transport carries the same nine fields, converted through one shared
+function per transport family so the transports cannot drift:
+
+| Field | Meaning |
+|---|---|
+| `active` | The service is started |
+| `instance_present` | The kernel held the instance at the last check |
+| `prefix` | The RFC 6052 translation prefix in use |
+| `instance` | The kernel instance name |
+| `sessions` | Live translation sessions |
+| `pool4_used` | Allocated address:port pairs |
+| `module_version` | The translator's reported version |
+| `flow_count` | Pipeline flows the service holds |
+| `last_error` | The last reconcile failure, absent when the last succeeded |
+
+On the wire, REST and MCP carry the bare status object above. QUIC carries
+it under `status`, with `last_reconcile` in Unix seconds. gRPC wraps it in
+`GetNAT64StatusResponse.status`. The Go SDK's REST, MCP and QUIC adapters
+each decode their transport's shape into that reply: REST and MCP through
+`sdk/go/services/gateway.DecodeNAT64StatusJSON`, QUIC through its own
+category decoder. A missing decoder does not fail loudly. It returns an
+empty status, or for QUIC an Internal error once the translator has
+reconciled. `TestNAT64StatusResponse_DecodesThroughTheSDK` in
+`pkg/api/rest` pins the served JSON to the decoder.
+
+Error mapping, the same on every transport:
+
+| Cause | gRPC / Unix | REST | QUIC | MCP |
+|---|---|---|---|---|
+| Section not running (may be starting, or refused and fixable in configuration) | `Unavailable` | 503 | `StatusUnavailable` | "service not available" |
+| Kernel cannot carry the translator (no retry helps until someone loads the module) | `FailedPrecondition` | 412 | `StatusInvalidRequest` | the error, with the kernel's reason |
+| Anything else | `Internal` | 500 | `StatusInternalError` | the error |
+
+QUIC has no failed-precondition byte. It carries this case as
+`StatusInvalidRequest`, which is how every QUIC delegate bridges
+`FailedPrecondition`. The Go SDK reads that byte as `InvalidArgument`. The
+kernel's reason is in the message on every transport.
+
 **The load balancer has no REST surface at all.** Six capabilities on gRPC,
 Unix, QUIC, MCP and embedded; zero on REST. A REST-only client cannot see or
 manage a VIP.
@@ -127,7 +204,9 @@ manage a VIP.
 
 The perf sub-opcodes `0x36`–`0x38` are served by the same shared perf service
 as the other transports; when the perf backend is not wired, they return
-`StatusUnavailable` rather than failing as unknown opcodes.
+`StatusUnavailable` rather than failing as unknown opcodes. A production
+`platformd` does not wire the perf backend yet (#660, see §5a), so on a live
+platform that is what every transport answers.
 
 ---
 
@@ -298,7 +377,7 @@ positions described above are unchanged. See
 | QUIC byte | Name | REST | Gateway cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | Malformed prefix, pool, VIP or route |
+| `0x01` | `StatusInvalidRequest` | 400 | Malformed prefix, pool, VIP or route; on REST a host precondition is 412 instead (the NAT64 module, §5a) |
 | `0x02` | `StatusNotFound` | 404 | Unknown pool, VIP, route or gateway ID |
 | `0x03` | `StatusUnauthorized` | 401 | Proxy auth chain rejected the request |
 | `0x04` | `StatusInternalError` | 500 | BGP speaker or datapath failure |

@@ -165,6 +165,10 @@ func (s *testTransportGatewayService) LBStatus(_ context.Context) (*LBStatusInfo
 	return nil, ErrGatewayFeatureNotConfigured
 }
 
+func (s *testTransportGatewayService) NAT64Status(_ context.Context) (*NAT64StatusInfo, error) {
+	return &NAT64StatusInfo{Active: true, InstancePresent: true}, nil
+}
+
 var _ GatewayServiceInterface = (*testTransportGatewayService)(nil)
 
 // =============================================================================

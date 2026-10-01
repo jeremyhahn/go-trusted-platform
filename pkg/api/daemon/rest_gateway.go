@@ -47,6 +47,7 @@ func (e ErrGatewayRESTNotConfigured) Error() string {
 type gatewayRESTService struct {
 	ipam   ipam.Allocator
 	lb     GatewayLoadBalancerInterface
+	nat64  GatewayNAT64Interface
 	logger *slog.Logger
 }
 

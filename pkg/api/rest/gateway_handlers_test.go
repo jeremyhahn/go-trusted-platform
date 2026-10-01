@@ -218,6 +218,8 @@ func TestGatewayErrorsImplementError(t *testing.T) {
 // =============================================================================
 
 type mockGatewayService struct {
+	nat64Resp           *NAT64StatusResponse
+	nat64Err            error
 	getStatusResp       *GatewayStatusResponse
 	getStatusErr        error
 	setModeResp         *SetGatewayModeResponse
@@ -503,6 +505,16 @@ func (m *mockGatewayService) SetVIPBackends(ctx context.Context, protocol, addre
 
 func (m *mockGatewayService) GetLBStatus(ctx context.Context) (*LBStatusResponse, error) {
 	return m.lbStatusResp, m.lbStatusErr
+}
+
+func (m *mockGatewayService) GetNAT64Status(ctx context.Context) (*NAT64StatusResponse, error) {
+	if m.nat64Err != nil {
+		return nil, m.nat64Err
+	}
+	if m.nat64Resp != nil {
+		return m.nat64Resp, nil
+	}
+	return &NAT64StatusResponse{Active: true, InstancePresent: true, Prefix: "64:ff9b::/96", Instance: "tp-nat64"}, nil
 }
 
 // =============================================================================

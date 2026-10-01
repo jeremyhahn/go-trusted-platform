@@ -47,20 +47,21 @@ const (
 // `Op<name> byte = 0x..` constant. Evidence for each is the file's own header
 // unless noted.
 var opcodeNamespaces = map[string]string{
-	"protocol.go":              nsTopLevel,
-	"kms_opcodes.go":           nsTopLevel, // "KMS extended and Secrets category opcodes" — category markers are top-level
-	"ntp_opcodes.go":           nsTopLevel, // "NTP (time synchronization) category opcode"
-	"phase35_opcodes.go":       nsTopLevel, // "Phase 3.5 category opcodes"
-	"provisioning_opcodes.go":  nsTopLevel, // "Provisioning (config delivery) category opcode"
-	"attestation_handlers.go":  nsTopLevel, // no header claim; measured — handleRequest switches on req.Opcode
-	"container_handlers.go":    nsCompute,  // "sub-opcodes carried in payload[0] under the compute extended category"
-	"container_ops_opcodes.go": nsCompute,  // "carried only as compute extended category (0x69)"
-	"vm_handlers.go":           nsCompute,  // "reach them as sub-opcodes carried in payload[0] under"
-	"vm_ops_opcodes.go":        nsCompute,  // "(quic.OpVMExtendedCategory, 0x69) sub-opcodes in payload[0]"
-	"gateway_handlers.go":      nsGateway,  // "Extended gateway opcode category marker"
-	"gateway_lb_handlers.go":   nsGateway,  // "Load balancer sub-opcodes ... under OpGatewayCategory"
-	"gateway_perf_handlers.go": nsGateway,  // "Performance verification sub-opcodes ... under"
-	"overlay_handlers.go":      nsOverlay,  // "Extended overlay opcode category marker"
+	"protocol.go":               nsTopLevel,
+	"kms_opcodes.go":            nsTopLevel, // "KMS extended and Secrets category opcodes" — category markers are top-level
+	"ntp_opcodes.go":            nsTopLevel, // "NTP (time synchronization) category opcode"
+	"phase35_opcodes.go":        nsTopLevel, // "Phase 3.5 category opcodes"
+	"provisioning_opcodes.go":   nsTopLevel, // "Provisioning (config delivery) category opcode"
+	"attestation_handlers.go":   nsTopLevel, // no header claim; measured — handleRequest switches on req.Opcode
+	"container_handlers.go":     nsCompute,  // "sub-opcodes carried in payload[0] under the compute extended category"
+	"container_ops_opcodes.go":  nsCompute,  // "carried only as compute extended category (0x69)"
+	"vm_handlers.go":            nsCompute,  // "reach them as sub-opcodes carried in payload[0] under"
+	"vm_ops_opcodes.go":         nsCompute,  // "(quic.OpVMExtendedCategory, 0x69) sub-opcodes in payload[0]"
+	"gateway_handlers.go":       nsGateway,  // "Extended gateway opcode category marker"
+	"gateway_lb_handlers.go":    nsGateway,  // "Load balancer sub-opcodes ... under OpGatewayCategory"
+	"gateway_perf_handlers.go":  nsGateway,  // "Performance verification sub-opcodes ... under"
+	"gateway_nat64_handlers.go": nsGateway,  // "NAT64 sub-opcodes ... takes the next free slot"
+	"overlay_handlers.go":       nsOverlay,  // "Extended overlay opcode category marker"
 }
 
 // knownCollisions is a RATCHET, not a suppression list. Seven same-namespace

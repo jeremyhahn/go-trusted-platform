@@ -72,6 +72,7 @@ type GatewayService struct {
 	bgpSpeaker BGPSpeakerInterface
 	ipam       ipam.Allocator
 	lb         GatewayLoadBalancerInterface
+	nat64      GatewayNAT64Interface
 	perf       GatewayPerfInterface
 	// snapshots is the control plane's telemetry store, and localSnapshot
 	// the gateway this node runs itself; either can be absent (#594).
