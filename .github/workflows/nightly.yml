@@ -235,8 +235,19 @@ jobs:
         with:
           platforms: linux/arm64
 
+      # The job container shares the runner host's kernel, where loop and
+      # dm_crypt are normally loaded already (visible under /sys/module).
+      # The container image has no kmod, so load a module only when it is
+      # absent, installing kmod first.
       - name: Load kernel modules the assemble container relies on
-        run: sudo modprobe loop dm_crypt
+        run: |
+          for m in loop dm_crypt; do
+            if [ ! -d "/sys/module/$m" ]; then
+              command -v modprobe >/dev/null || { sudo apt-get update && sudo apt-get install -y kmod; }
+              sudo modprobe "$m"
+            fi
+            test -d "/sys/module/$m"
+          done
 
       # The userspace suite's software TPM runs on the runner, natively:
       # swtpm cannot create its sockets inside a qemu-user emulated container.
