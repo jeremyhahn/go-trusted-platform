@@ -117,6 +117,16 @@ func TestConfigValidate(t *testing.T) {
 		{"negative fall", func(c *Config) { c.Fall = -1 }, ErrInvalidHealthCheck},
 		{"negative max backends", func(c *Config) { c.MaxBackends = -1 }, ErrInvalidMaxBackends},
 		{"invalid vip", func(c *Config) { c.VIPs = []VIP{{}} }, ErrInvalidVIPAddress},
+		{"zero hairpin prefix", func(c *Config) { c.HairpinPrefixes = []netip.Prefix{{}} }, ErrInvalidHairpinPrefix},
+		{"ipv6 hairpin prefix", func(c *Config) {
+			c.HairpinPrefixes = []netip.Prefix{netip.MustParsePrefix("2001:db8::/64")}
+		}, ErrInvalidHairpinPrefix},
+		{"the same vip twice", func(c *Config) { c.VIPs = []VIP{testVIP(), testVIP()} }, ErrVIPExists},
+		{"backend shared by two vips", func(c *Config) {
+			other := testVIP()
+			other.Address = netip.MustParseAddr("10.100.0.11")
+			c.VIPs = []VIP{testVIP(), other}
+		}, ErrBackendInUse},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -168,5 +178,50 @@ func TestOpErrorWrapping(t *testing.T) {
 	}
 	if !errors.Is(err, cause) {
 		t.Error("OpError does not unwrap to cause")
+	}
+}
+
+func TestConfigValidateAcceptsHairpinAndDistinctBackends(t *testing.T) {
+	udp := testVIP()
+	udp.Protocol = ProtocolUDP
+	cfg := Config{
+		Bridge:              "br0",
+		HealthCheckInterval: 10 * time.Second,
+		HealthCheckTimeout:  2 * time.Second,
+		HairpinPrefixes:     []netip.Prefix{netip.MustParsePrefix("10.0.1.0/24")},
+		// The same endpoints under UDP are a different reply tuple.
+		VIPs: []VIP{testVIP(), udp},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate = %v, want nil", err)
+	}
+}
+
+// TestStartRefusesADuplicateVIPBeforeProgrammingAnything is the review
+// finding on #728: a config naming one VIP twice used to pass validation,
+// so Start programmed the first copy and then failed on the second,
+// leaving datapath state behind a service that never became active.
+func TestStartRefusesADuplicateVIPBeforeProgrammingAnything(t *testing.T) {
+	deps, controller, _, groups := testDeps(testVIP(), testVIP())
+	if _, err := New(deps); !errors.Is(err, ErrVIPExists) {
+		t.Fatalf("New = %v, want ErrVIPExists", err)
+	}
+	if len(controller.allRules()) != 0 || groups.additions != 0 {
+		t.Error("nothing may be programmed for a refused configuration")
+	}
+}
+
+func TestValidateVIPSet(t *testing.T) {
+	if err := ValidateVIPSet(nil, 4); err != nil {
+		t.Errorf("an empty set is valid: %v", err)
+	}
+	other := testVIP()
+	other.Port = 8443
+	other.Backends = []Backend{{Address: netip.MustParseAddr("10.0.9.9"), Port: 1}}
+	if err := ValidateVIPSet([]VIP{testVIP(), other}, 4); err != nil {
+		t.Errorf("distinct VIPs with distinct backends: %v", err)
+	}
+	if err := ValidateVIPSet([]VIP{{}}, 4); !errors.Is(err, ErrInvalidVIPAddress) {
+		t.Errorf("an invalid VIP surfaces its own error: %v", err)
 	}
 }

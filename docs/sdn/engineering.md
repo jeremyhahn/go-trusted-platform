@@ -180,6 +180,31 @@ reconcile lands.
    [`firewall/architecture.md`](firewall/architecture.md) §Table 21.
 6. **`FlushFlows` is destructive and unconditional.** It has an RPC and a CLI
    verb; there is no per-flow filter on it.
+7. **A flow string is encoded completely or refused.** Every service writes
+   its flows in the ovs-ofctl grammar. `pkg/sdn/ovs` (`parseMatchString`,
+   `parseActions`) encodes them to OpenFlow itself, and an unknown match field
+   or action is an error (`unsupported match field` / `unsupported action`),
+   never skipped. Until #718 the encoder skipped what it did not know, so flows
+   were installed broader or weaker than written, and the logs said nothing:
+   - the zone compiler's `ipv6_dst` matches and ICMPv6 `icmp_type`
+     allowances (invariant 5) were installed without those fields;
+   - the NAT service's per-uplink `load:N->NXM_NX_REG0[]` / `reg0=N`
+     selection never reached OVS;
+   - the load balancer's reply mark and `resubmit` were dropped;
+   - the compute adapter's `set_field:` actions were dropped.
+
+   The grammar now covers:
+   - `regN=V[/M]` matches;
+   - `icmp_type`/`icmp_code` (ICMPv6 under `nw_proto=58`);
+   - `ipv6_src`/`ipv6_dst` (address or prefix);
+   - the protocol keywords (`ip`, `tcp`, `icmp6`, ...);
+   - `load:V->NXM_NX_REGn[a..b]`, `resubmit(,T)` and
+     `set_field:V->{eth,ip}_{src,dst}`.
+
+   The new encodings are pinned against `ovs-ofctl parse-actions`
+   (`pkg/sdn/ovs/flow_grammar_test.go`, `pkg/sdn/openflow/nicira_test.go`).
+   A flow dump's `table=` and `cookie=V/M` scope the stats request; they are
+   not match fields.
 
 ## 5. Error semantics and fail-closed paths
 

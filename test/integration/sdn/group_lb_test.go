@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -51,8 +53,22 @@ const (
 	lbBackend2N = "tplb-b2"
 
 	// lbVIPMAC is the locally-administered MAC the client resolves the
-	// VIP to (static neighbor entry; no host owns the VIP address).
+	// VIP to (static neighbor entry; no host owns the VIP address). The
+	// harness forwarding table also uses it as the gateway's source MAC.
 	lbVIPMAC = "0e:1b:00:00:00:aa"
+
+	// The hairpin segment: a client and a backend on one Linux bridge,
+	// reaching the OVS bridge through a single port, as hosts on a LAN
+	// behind one gateway interface do. The backend answers an on-link
+	// client directly, so only source NAT to the VIP brings its reply
+	// back through the gateway.
+	lbHairpinNet     = "10.241.0.0/24"
+	lbHairpinClient  = "10.241.0.2"
+	lbHairpinBackend = "10.241.0.12"
+	lbHairpinVIP     = "10.241.0.101"
+	lbSegmentNS      = "tplb-seg"
+	lbHairpinCNS     = "tplb-hc"
+	lbHairpinBNS     = "tplb-hb"
 )
 
 // lbBackendServer is a TCP server that identifies itself on every line.
@@ -61,8 +77,9 @@ type lbBackendServer struct {
 	listener net.Listener
 	wg       sync.WaitGroup
 
-	mu       sync.Mutex
-	accepted int
+	mu         sync.Mutex
+	accepted   int
+	lastRemote string
 }
 
 // startLBBackend starts an identifying echo server inside the namespace.
@@ -83,6 +100,7 @@ func startLBBackend(t *testing.T, ns, addr, id string) *lbBackendServer {
 			}
 			srv.mu.Lock()
 			srv.accepted++
+			srv.lastRemote = conn.RemoteAddr().(*net.TCPAddr).IP.String()
 			srv.mu.Unlock()
 			srv.wg.Add(1)
 			go func(c net.Conn) {
@@ -113,6 +131,13 @@ func (s *lbBackendServer) Accepted() int {
 	return s.accepted
 }
 
+// LastRemote returns the source address of the last accepted connection.
+func (s *lbBackendServer) LastRemote() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastRemote
+}
+
 // setupLBHostPort attaches the root namespace to the bridge via an OVS
 // internal port carrying lbHostIP and a static neighbor entry for the
 // VIP.
@@ -133,43 +158,113 @@ func setupLBHostPort(t *testing.T, bridge string) {
 	runCmd(t, "ip", "neigh", "replace", lbVIPAddr, "lladdr", lbVIPMAC, "dev", hostIf)
 }
 
+// segmentHost is a namespace on the hairpin segment.
+type segmentHost struct {
+	ns  string
+	mac string
+}
+
+// setupHairpinSegment builds the hairpin segment: a Linux bridge inside its
+// own namespace, uplinked to one OVS port, with a client and a backend
+// namespace attached to it. It returns the uplink's OpenFlow port.
+func setupHairpinSegment(t *testing.T, bridge string) (int, segmentHost, segmentHost) {
+	t.Helper()
+
+	uplink, inside := "tplb-sego", "tplb-segu"
+	runCmdQuiet("ip", "netns", "del", lbSegmentNS)
+	runCmdQuiet("ip", "link", "del", uplink)
+	t.Cleanup(func() {
+		runCmdQuiet("ovs-vsctl", "--if-exists", "del-port", bridge, uplink)
+		runCmdQuiet("ip", "link", "del", uplink)
+		runCmdQuiet("ip", "netns", "del", lbSegmentNS)
+	})
+	runCmd(t, "ip", "netns", "add", lbSegmentNS)
+	runCmd(t, "ip", "-n", lbSegmentNS, "link", "add", "sbr", "type", "bridge")
+	runCmd(t, "ip", "-n", lbSegmentNS, "link", "set", "sbr", "up")
+	runCmd(t, "ip", "link", "add", uplink, "type", "veth", "peer", "name", inside)
+	runCmd(t, "ip", "link", "set", inside, "netns", lbSegmentNS)
+	runCmd(t, "ip", "-n", lbSegmentNS, "link", "set", inside, "master", "sbr")
+	runCmd(t, "ip", "-n", lbSegmentNS, "link", "set", inside, "up")
+	runCmd(t, "ovs-vsctl", "add-port", bridge, uplink)
+	runCmd(t, "ip", "link", "set", uplink, "up")
+
+	attach := func(ns, cidr, peer string) segmentHost {
+		hostIf, segIf := ns+"-i", ns+"-s"
+		runCmdQuiet("ip", "netns", "del", ns)
+		t.Cleanup(func() { runCmdQuiet("ip", "netns", "del", ns) })
+		runCmd(t, "ip", "netns", "add", ns)
+		runCmd(t, "ip", "link", "add", hostIf, "type", "veth", "peer", "name", segIf)
+		runCmd(t, "ip", "link", "set", hostIf, "netns", ns)
+		runCmd(t, "ip", "link", "set", segIf, "netns", lbSegmentNS)
+		runCmd(t, "ip", "-n", lbSegmentNS, "link", "set", segIf, "master", "sbr")
+		runCmd(t, "ip", "-n", lbSegmentNS, "link", "set", segIf, "up")
+		runCmd(t, "ip", "-n", ns, "link", "set", "lo", "up")
+		runCmd(t, "ip", "-n", ns, "addr", "add", cidr, "dev", hostIf)
+		runCmd(t, "ip", "-n", ns, "link", "set", hostIf, "up")
+		// The VIP resolves to the gateway's MAC, as on a LAN where the
+		// gateway answers for it.
+		runCmd(t, "ip", "-n", ns, "neigh", "replace", lbHairpinVIP, "lladdr", lbVIPMAC, "dev", hostIf)
+		if peer != "" {
+			runCmd(t, "ip", "-n", ns, "route", "add", peer, "dev", hostIf)
+		}
+		mac := strings.TrimSpace(runCmd(t, "ip", "netns", "exec", ns, "cat", "/sys/class/net/"+hostIf+"/address"))
+		return segmentHost{ns: ns, mac: mac}
+	}
+	client := attach(lbHairpinCNS, lbHairpinClient+"/24", "")
+	// The backend also answers the prober in the root namespace, on-link
+	// through the gateway bridge.
+	backend := attach(lbHairpinBNS, lbHairpinBackend+"/24", lbSubnet)
+	return lookupOFPort(t, uplink), client, backend
+}
+
 // installLBHarnessFlows provides the pipeline context the full gateway
-// normally supplies around the LB service on a standalone bridge:
-//   - table 0 diverts into the table 10 gate
-//   - backend-sourced traffic passes ct(nat) in the VIP zone through a
-//     harness table (27, above the LB dispatch table 26 and below table 30
-//     so its goto_table continuation is legal) so committed DNAT state is
-//     reversed on replies without entering the LB's fail-closed dispatch
-//     table
-//   - table 30 statically plays the MAC-learning/forwarding role: DNATed
-//     packets get the backend MAC and port, everything else goes NORMAL
-func installLBHarnessFlows(t *testing.T, client *ovs.Client, bridge string, ctZone uint16, backends map[string]*nsEndpoint) {
+// normally supplies around the LB service on a standalone bridge, and
+// nothing of the load balancer's own:
+//   - table 0 diverts into the table 10 gate;
+//   - table 30 plays the forwarding role: a DNATed packet gets the
+//     backend's MAC and port, a packet routed back onto the hairpin segment
+//     leaves through the port it came in on with the gateway's source MAC,
+//     everything else goes NORMAL.
+//
+// It installs no reply flow. Reverse translation of a backend's reply is
+// the load balancer's job (#718); this harness used to supply it, which is
+// how a load balancer that never un-NATed replies passed this test.
+func installLBHarnessFlows(t *testing.T, client *ovs.Client, bridge string, backends map[string]*nsEndpoint, segmentPort int, hairpinClient, hairpinBackend segmentHost) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	flows := []*ovs.FlowMod{
 		{Table: 0, Priority: 1, Actions: "goto_table:10"},
-		{Table: 27, Priority: 0, Actions: "goto_table:30"},
 		{Table: 30, Priority: 0, Actions: "normal"},
 	}
 	for ip, endpoint := range backends {
-		flows = append(flows,
-			&ovs.FlowMod{
-				Table:    20,
-				Priority: 240,
-				Match:    "dl_type=0x0800,nw_src=" + ip,
-				Actions:  fmt.Sprintf("ct(table=27,zone=%d,nat)", ctZone),
-			},
-			&ovs.FlowMod{
-				Table:    30,
-				Priority: 10,
-				Match:    "dl_type=0x0800,nw_dst=" + ip,
-				Actions:  fmt.Sprintf("mod_dl_dst:%s,output:%d", endpoint.MAC, endpoint.OFPort),
-			},
-		)
+		flows = append(flows, &ovs.FlowMod{
+			Table:    30,
+			Priority: 10,
+			Match:    "dl_type=0x0800,nw_dst=" + ip,
+			Actions:  fmt.Sprintf("mod_dl_dst:%s,output:%d", endpoint.MAC, endpoint.OFPort),
+		})
+	}
+	for ip, host := range map[string]segmentHost{lbHairpinBackend: hairpinBackend, lbHairpinClient: hairpinClient} {
+		flows = append(flows, &ovs.FlowMod{
+			Table:    30,
+			Priority: 11,
+			Match:    fmt.Sprintf("in_port=%d,dl_type=0x0800,nw_dst=%s", segmentPort, ip),
+			Actions:  fmt.Sprintf("mod_dl_src:%s,mod_dl_dst:%s,in_port", lbVIPMAC, host.mac),
+		})
 	}
 	require.NoError(t, client.AddFlows(ctx, bridge, flows), "install LB harness flows")
+}
+
+// requireOVSRunning fails the test when Open vSwitch is not usable. This
+// suite runs in the devcontainer, where OVS is part of the environment; a
+// missing OVS is a broken environment, not a reason to pass silently.
+func requireOVSRunning(t *testing.T) {
+	t.Helper()
+	require.Zero(t, os.Geteuid(), "the load balancer datapath test needs root (run it in the devcontainer)")
+	out, err := exec.Command("ovs-vsctl", "list-br").CombinedOutput()
+	require.NoError(t, err, "Open vSwitch must be running: %s", out)
 }
 
 // dialVIPAndIdentify connects to the VIP from the root namespace and
@@ -199,8 +294,7 @@ func dialVIPAndIdentify(t *testing.T, timeout time.Duration) (string, error) {
 // per-connection stickiness, prober-driven group rebuilds on backend
 // failure, and fail-closed behavior with zero healthy backends.
 func TestGroupLoadBalancer(t *testing.T) {
-	requireOVSForTest(t)
-	SkipIfSDNUnavailable(t)
+	requireOVSRunning(t)
 
 	bridge := setupTestBridge(t, lbBridge)
 	client := newOVSDBClient(t)
@@ -209,8 +303,12 @@ func TestGroupLoadBalancer(t *testing.T) {
 	b1 := createNSEndpoint(t, bridge.name, lbBackend1N, lbBackend1+"/24", 0)
 	b2 := createNSEndpoint(t, bridge.name, lbBackend2N, lbBackend2+"/24", 0)
 
+	segmentPort, hairpinClient, hairpinBackend := setupHairpinSegment(t, bridge.name)
+	runCmd(t, "ip", "route", "add", lbHairpinNet, "dev", "tplb-host")
+
 	srv1 := startLBBackend(t, lbBackend1N, fmt.Sprintf("%s:%d", lbBackend1, lbBackPort), "backend-1")
 	srv2 := startLBBackend(t, lbBackend2N, fmt.Sprintf("%s:%d", lbBackend2, lbBackPort), "backend-2")
+	srvHairpin := startLBBackend(t, lbHairpinBNS, fmt.Sprintf("%s:%d", lbHairpinBackend, lbBackPort), "backend-hairpin")
 
 	controller, err := policy.NewOVSFlowController(client)
 	require.NoError(t, err, "create flow controller")
@@ -226,6 +324,7 @@ func TestGroupLoadBalancer(t *testing.T) {
 			HealthCheckTimeout:  150 * time.Millisecond,
 			Rise:                1,
 			Fall:                1,
+			HairpinPrefixes:     []netip.Prefix{netip.MustParsePrefix(lbHairpinNet)},
 		},
 		Allocator: ct.NewZoneAllocator(nil),
 	})
@@ -259,10 +358,36 @@ func TestGroupLoadBalancer(t *testing.T) {
 	require.NoError(t, err, "get VIP status")
 	require.NotZero(t, status.CTZone, "VIP conntrack zone")
 
-	installLBHarnessFlows(t, client, bridge.name, status.CTZone, map[string]*nsEndpoint{
+	hairpinVIP := loadbalancer.VIP{
+		Address:  netip.MustParseAddr(lbHairpinVIP),
+		Port:     lbVIPPort,
+		Protocol: "tcp",
+		Backends: []loadbalancer.Backend{{Address: netip.MustParseAddr(lbHairpinBackend), Port: lbBackPort}},
+	}
+	require.NoError(t, lbService.AddVIP(ctx, hairpinVIP), "add hairpin VIP")
+
+	// On failure, record what the datapath held: the flow tables with
+	// their packet counters, the groups and the conntrack entries. A
+	// timeout alone says nothing about which stage dropped the packet.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		for _, args := range [][]string{
+			{"ovs-ofctl", "-O", "OpenFlow13", "dump-flows", bridge.name},
+			{"ovs-ofctl", "-O", "OpenFlow13", "dump-groups", bridge.name},
+			{"ovs-appctl", "dpctl/dump-conntrack"},
+			{"ovs-appctl", "dpctl/dump-flows"},
+		} {
+			out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+			t.Logf("%s (err=%v):\n%s", strings.Join(args, " "), err, out)
+		}
+	})
+
+	installLBHarnessFlows(t, client, bridge.name, map[string]*nsEndpoint{
 		lbBackend1: b1,
 		lbBackend2: b2,
-	})
+	}, segmentPort, hairpinClient, hairpinBackend)
 
 	// Both backends must probe healthy before traffic assertions.
 	waitFor(ctx, t, "both backends healthy", 200*time.Millisecond, 20*time.Second, func() bool {
@@ -279,8 +404,58 @@ func TestGroupLoadBalancer(t *testing.T) {
 		return healthy == 2
 	})
 
+	// #718: the harness supplies no reply flow, so a completed handshake
+	// and an answer through the VIP mean the load balancer reversed the
+	// backend's reply itself. Before the fix the client's SYN reached the
+	// backend and its SYN-ACK came back from 10.240.0.1x:9001, which the
+	// client answers with a reset.
+	t.Run("RepliesAreReverseTranslated", func(t *testing.T) {
+		id, dialErr := dialVIPAndIdentify(t, 5*time.Second)
+		require.NoError(t, dialErr, "TCP handshake and exchange through the VIP")
+		require.Contains(t, []string{"backend-1", "backend-2"}, id)
+	})
+
+	// The reply divert matches a backend's source address:port, so the
+	// backend's own traffic from that port passes through it too. It must
+	// leave untouched: a client that talks to the backend directly still
+	// gets its answers.
+	t.Run("BackendStillReachableDirectly", func(t *testing.T) {
+		conn, dialErr := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", lbBackend1, lbBackPort), 5*time.Second)
+		require.NoError(t, dialErr, "direct connection to a backend")
+		defer conn.Close()
+		fmt.Fprintln(conn, "who")
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+		id, readErr := bufio.NewReader(conn).ReadString('\n')
+		require.NoError(t, readErr)
+		require.Equal(t, "backend-1", strings.TrimSpace(id))
+	})
+
+	// #718 hairpin: the client and the backend share a segment behind one
+	// gateway port. Without source NAT the backend answers the client
+	// directly from its own address and the handshake fails; with it the
+	// backend sees the VIP and answers through the gateway.
+	t.Run("HairpinThroughTheVIP", func(t *testing.T) {
+		waitFor(ctx, t, "hairpin backend healthy", 200*time.Millisecond, 20*time.Second, func() bool {
+			current, getErr := lbService.GetVIP("tcp", netip.AddrPortFrom(hairpinVIP.Address, hairpinVIP.Port))
+			return getErr == nil && len(current.Backends) == 1 && current.Backends[0].Healthy
+		})
+		for i := 0; i < 3; i++ {
+			conn, dialErr := nsDial(lbHairpinCNS, fmt.Sprintf("%s:%d", lbHairpinVIP, lbVIPPort), 5*time.Second)
+			require.NoError(t, dialErr, "hairpin TCP handshake %d through the VIP", i)
+			fmt.Fprintln(conn, "who")
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+			id, readErr := bufio.NewReader(conn).ReadString('\n')
+			conn.Close()
+			require.NoError(t, readErr, "hairpin exchange %d", i)
+			require.Equal(t, "backend-hairpin", strings.TrimSpace(id))
+			require.Equal(t, lbHairpinVIP, srvHairpin.LastRemote(),
+				"the hairpin backend must see the VIP as the client, so it answers through the gateway")
+		}
+	})
+
 	t.Run("DistributionAcrossBackends", func(t *testing.T) {
 		hits := map[string]int{}
+		before := srv1.Accepted() + srv2.Accepted()
 		for i := 0; i < 24; i++ {
 			id, dialErr := dialVIPAndIdentify(t, 5*time.Second)
 			require.NoError(t, dialErr, "VIP connection %d", i)
@@ -288,7 +463,7 @@ func TestGroupLoadBalancer(t *testing.T) {
 		}
 		require.Greater(t, hits["backend-1"], 0, "backend-1 must receive connections: %v", hits)
 		require.Greater(t, hits["backend-2"], 0, "backend-2 must receive connections: %v", hits)
-		require.Equal(t, srv1.Accepted()+srv2.Accepted(), 24, "every connection lands on a real backend")
+		require.Equal(t, 24, srv1.Accepted()+srv2.Accepted()-before, "every connection lands on a real backend")
 	})
 
 	t.Run("PerConnectionStickiness", func(t *testing.T) {

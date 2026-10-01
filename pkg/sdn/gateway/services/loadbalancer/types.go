@@ -209,6 +209,14 @@ type Config struct {
 	// DefaultMaxBackends; negative values are invalid.
 	MaxBackends int
 
+	// HairpinPrefixes are the client networks whose connections to a VIP
+	// are also source-NATed to the VIP address. A client on the same
+	// segment as the backend it is balanced to would otherwise get the
+	// backend's reply straight from the backend, bypassing the gateway
+	// and its reverse translation, and drop it. Clients outside these
+	// prefixes keep their own source address.
+	HairpinPrefixes []netip.Prefix
+
 	// VIPs are the config-driven virtual IPs installed at Start.
 	VIPs []VIP
 }
@@ -252,12 +260,48 @@ func (c Config) Validate() error {
 	if c.MaxBackends <= 0 {
 		return ErrInvalidMaxBackends
 	}
-	for _, vip := range c.VIPs {
-		if err := vip.Validate(c.MaxBackends); err != nil {
+	for _, p := range c.HairpinPrefixes {
+		if !p.IsValid() || !p.Addr().Is4() {
+			return ErrInvalidHairpinPrefix
+		}
+	}
+	return ValidateVIPSet(c.VIPs, c.MaxBackends)
+}
+
+// ValidateVIPSet checks a set of VIPs that are installed together: each VIP
+// on its own, then that no two share a key (ErrVIPExists) and that no
+// backend address:port serves two VIPs of one protocol (ErrBackendInUse).
+// Start installs VIPs one at a time, so a set that fails here would
+// otherwise leave the earlier VIPs programmed on the switch when a later
+// one is refused.
+func ValidateVIPSet(vips []VIP, maxBackends int) error {
+	seen := make(map[vipKey]struct{}, len(vips))
+	owners := make(map[backendEndpoint]vipKey)
+	for _, vip := range vips {
+		if err := vip.Validate(maxBackends); err != nil {
 			return err
+		}
+		key := vip.key()
+		if _, dup := seen[key]; dup {
+			return ErrVIPExists
+		}
+		seen[key] = struct{}{}
+		for _, b := range vip.Backends {
+			endpoint := backendEndpoint{proto: vip.Protocol, addr: b.addrPort()}
+			if _, taken := owners[endpoint]; taken {
+				return ErrBackendInUse
+			}
+			owners[endpoint] = key
 		}
 	}
 	return nil
+}
+
+// backendEndpoint identifies a backend by protocol and address:port: the
+// tuple its replies are matched on.
+type backendEndpoint struct {
+	proto string
+	addr  netip.AddrPort
 }
 
 // BackendStatus reports one backend and its probed health.

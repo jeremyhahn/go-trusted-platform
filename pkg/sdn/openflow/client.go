@@ -620,6 +620,21 @@ func (c *Client) GetFlowStats(ctx context.Context, match *Match) ([]FlowStats, e
 // GetTableFlowStats retrieves flow statistics restricted to one table.
 // tableID OFPTTAll queries every table.
 func (c *Client) GetTableFlowStats(ctx context.Context, tableID uint8, match *Match) ([]FlowStats, error) {
+	return c.QueryFlowStats(ctx, FlowStatsFilter{TableID: tableID, Match: match})
+}
+
+// FlowStatsFilter scopes a flow statistics request: to one table (OFPTTAll
+// for every table), to flows whose cookie matches Cookie under CookieMask
+// (a zero mask matches every cookie), and to flows matching Match.
+type FlowStatsFilter struct {
+	TableID    uint8
+	Cookie     uint64
+	CookieMask uint64
+	Match      *Match
+}
+
+// QueryFlowStats retrieves the statistics of the flows filter selects.
+func (c *Client) QueryFlowStats(ctx context.Context, filter FlowStatsFilter) ([]FlowStats, error) {
 	if !c.connected.Load() {
 		return nil, ErrNotConnected
 	}
@@ -628,9 +643,11 @@ func (c *Client) GetTableFlowStats(ctx context.Context, tableID uint8, match *Ma
 
 	// Build flow stats request body
 	req := NewFlowStatsRequest()
-	req.TableID = tableID
-	if match != nil {
-		req.Match = match
+	req.TableID = filter.TableID
+	req.Cookie = filter.Cookie
+	req.CookieMask = filter.CookieMask
+	if filter.Match != nil {
+		req.Match = filter.Match
 	}
 
 	body, err := req.MarshalBinary()

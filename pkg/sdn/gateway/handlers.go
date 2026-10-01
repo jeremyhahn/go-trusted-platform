@@ -279,6 +279,10 @@ func buildLoadBalancer(g *Gateway) (backedService, error) {
 	if cfg.Bridge != "" {
 		bridge = cfg.Bridge
 	}
+	hairpin, err := cfg.ServiceHairpinPrefixes()
+	if err != nil {
+		return nil, &ErrServiceStartFailed{Service: ServiceLoadBalancer, Cause: err}
+	}
 	vips := make([]loadbalancer.VIP, 0, len(cfg.VIPs))
 	for i := range cfg.VIPs {
 		vip, err := cfg.VIPs[i].ServiceVIP()
@@ -299,6 +303,7 @@ func buildLoadBalancer(g *Gateway) (backedService, error) {
 			Rise:                cfg.HealthCheckRise,
 			Fall:                cfg.HealthCheckFall,
 			MaxBackends:         cfg.MaxBackends,
+			HairpinPrefixes:     hairpin,
 			VIPs:                vips,
 		},
 		Allocator: runtime.CTZones,

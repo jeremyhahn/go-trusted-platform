@@ -91,6 +91,16 @@ var (
 	// ErrGroupIDExhausted is returned when no free group ID remains in the
 	// load balancer group range.
 	ErrGroupIDExhausted = errors.New("loadbalancer: group ID range exhausted")
+
+	// ErrBackendInUse is returned when a backend address:port already serves
+	// another VIP of the same protocol. A backend's replies are steered into
+	// its VIP's conntrack zone by their source address:port alone, so one
+	// endpoint cannot belong to two zones.
+	ErrBackendInUse = errors.New("loadbalancer: backend already serves another VIP of the same protocol")
+
+	// ErrInvalidHairpinPrefix is returned when a hairpin prefix is not a
+	// valid IPv4 prefix.
+	ErrInvalidHairpinPrefix = errors.New("loadbalancer: hairpin prefix must be a valid IPv4 prefix")
 )
 
 // OpError wraps a transport or controller failure with the load balancer

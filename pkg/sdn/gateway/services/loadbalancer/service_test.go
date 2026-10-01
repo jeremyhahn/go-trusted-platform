@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ct"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
@@ -35,6 +36,10 @@ type fakeController struct {
 	mu         sync.Mutex
 	batches    [][]zoneflows.FlowRule
 	installErr error
+	// failOnCall fails only the n-th InstallFlows call (1-based) with
+	// installErr; zero fails every call while installErr is set.
+	failOnCall int
+	calls      int
 }
 
 func (f *fakeController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
@@ -44,7 +49,8 @@ func (f *fakeController) InstallFlow(bridgeName string, priority int, match stri
 func (f *fakeController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.installErr != nil {
+	f.calls++
+	if f.installErr != nil && (f.failOnCall == 0 || f.failOnCall == f.calls) {
 		return f.installErr
 	}
 	f.batches = append(f.batches, rules)
@@ -105,6 +111,10 @@ type fakeGroups struct {
 	groups    map[uint32]*openflow.GroupMod
 	descs     []openflow.GroupDesc
 	addErr    error
+	failAddOn int // fail only the n-th AddGroup (1-based); zero fails every one
+	addCalls  int
+	failDelOn int // fail only the n-th DeleteGroup (1-based); zero fails every one
+	delCalls  int
 	modErr    error
 	delErr    error
 	descErr   error
@@ -120,7 +130,8 @@ func newFakeGroups() *fakeGroups {
 func (f *fakeGroups) AddGroup(ctx context.Context, bridgeName string, group *openflow.GroupMod) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.addErr != nil {
+	f.addCalls++
+	if f.addErr != nil && (f.failAddOn == 0 || f.failAddOn == f.addCalls) {
 		return f.addErr
 	}
 	f.groups[group.GroupID] = group
@@ -142,7 +153,8 @@ func (f *fakeGroups) ModifyGroup(ctx context.Context, bridgeName string, group *
 func (f *fakeGroups) DeleteGroup(ctx context.Context, bridgeName string, groupID uint32) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.delErr != nil {
+	f.delCalls++
+	if f.delErr != nil && (f.failDelOn == 0 || f.failDelOn == f.delCalls) {
 		return f.delErr
 	}
 	delete(f.groups, groupID)
@@ -316,6 +328,7 @@ func TestStartInstallsPipeline(t *testing.T) {
 		t.Errorf("missing pipeline flows: divert=%v dispatch=%v missT20=%v missT26=%v",
 			haveDivert, haveDispatch, haveMissT20, haveMissT26)
 	}
+	assertReplyPath(t, svc, rules, testVIP())
 
 	// One select group with one bucket per backend.
 	status, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443"))
@@ -507,12 +520,13 @@ func TestAddAndRemoveVIP(t *testing.T) {
 		t.Fatalf("second RemoveVIP = %v, want ErrVIPNotFound", err)
 	}
 
-	// Removal strict-deletes the two VIP flows and the group.
+	// Removal strict-deletes every VIP flow — the divert and dispatch, and
+	// both reply flows of each of the two backends — and the group.
 	ovsClient.mu.Lock()
 	strictCount := len(ovsClient.strictDeletes)
 	ovsClient.mu.Unlock()
-	if strictCount != 2 {
-		t.Errorf("strict deletes = %d, want 2", strictCount)
+	if strictCount != 6 {
+		t.Errorf("strict deletes = %d, want 6", strictCount)
 	}
 	groups.mu.Lock()
 	deletions := len(groups.deleted)
@@ -895,9 +909,446 @@ func TestBucketActionEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalBinary: %v", err)
 	}
-	const golden = "ffff0030000023200023000100000000002a1e0000000000" +
+	// ct(commit,zone=42,nat(dst=10.0.1.5:8080),table=28): the bucket
+	// recirculates into the hairpin stage, not straight to table 30.
+	const golden = "ffff0030000023200023000100000000002a1c0000000000" +
 		"ffff00180000232000240000000200110a0001051f900000"
 	if got := hex.EncodeToString(data); got != golden {
 		t.Errorf("bucket action bytes:\n got  %s\n want %s", got, golden)
+	}
+}
+
+// rulesIn returns the rules in table at priority.
+func rulesIn(rules []zoneflows.FlowRule, table, priority int) []zoneflows.FlowRule {
+	var out []zoneflows.FlowRule
+	for _, r := range rules {
+		if r.Table == table && r.Priority == priority {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// assertReplyPath checks the #718 half of a VIP's pipeline. Without the
+// reply divert a backend's reply never meets the VIP's conntrack zone and
+// reaches the client from the backend's address, which the client drops.
+func assertReplyPath(t *testing.T, svc *Service, rules []zoneflows.FlowRule, vip VIP) {
+	t.Helper()
+	status, err := svc.GetVIP(vip.Protocol, netip.AddrPortFrom(vip.Address, vip.Port))
+	if err != nil {
+		t.Fatalf("GetVIP: %v", err)
+	}
+	if svc.hairpinZone == 0 || svc.hairpinZone == status.CTZone {
+		t.Fatalf("hairpin zone %d must be allocated and distinct from the VIP zone %d", svc.hairpinZone, status.CTZone)
+	}
+
+	diverts := rulesIn(rules, int(modes.TableCTGate), prioLBReplyDivert)
+	undnat := rulesIn(rules, int(modes.TableLBReply), prioLBReplyUnDNAT)
+	if prioLBReplyUnDNAT <= prioLBReplyEst {
+		t.Error("the per-backend un-DNAT must be tried before the reply verdict")
+	}
+	if len(diverts) != len(vip.Backends) || len(undnat) != len(vip.Backends) {
+		t.Fatalf("reply flows = %d diverts, %d un-DNAT; want one each per backend (%d)",
+			len(diverts), len(undnat), len(vip.Backends))
+	}
+	for i, b := range vip.Backends {
+		source := fmt.Sprintf("dl_type=0x0800,nw_proto=6,nw_src=%s,tp_src=%d", b.Address, b.Port)
+		if want := "reg1=0/0x1," + source; diverts[i].Match != want {
+			t.Errorf("reply divert match = %q, want %q", diverts[i].Match, want)
+		}
+		if want := fmt.Sprintf("load:1->NXM_NX_REG1[0],ct(table=29,zone=%d,nat)", svc.hairpinZone); diverts[i].Actions != want {
+			t.Errorf("reply divert actions = %q, want %q (hairpin zone first)", diverts[i].Actions, want)
+		}
+		if want := fmt.Sprintf("ct_zone=%d,%s", svc.hairpinZone, source); undnat[i].Match != want {
+			t.Errorf("un-DNAT match = %q, want %q (only a packet back from the hairpin zone)", undnat[i].Match, want)
+		}
+		if want := fmt.Sprintf("ct(table=29,zone=%d,nat)", status.CTZone); undnat[i].Actions != want {
+			t.Errorf("un-DNAT actions = %q, want %q (the VIP's own zone)", undnat[i].Actions, want)
+		}
+	}
+
+	for _, check := range []struct {
+		table, priority int
+		match, actions  string
+		purpose         string
+	}{
+		{26, prioLBEstRel, "ct_state=+est+trk", "goto_table:28", "established requests pass the hairpin stage"},
+		{28, prioLBMissHairpin, "", "goto_table:30", "non-hairpin connections continue"},
+		{29, prioLBReplyEst, "ct_state=+est+rpl+trk", "goto_table:30", "a VIP reply continues un-NATed"},
+		{29, prioLBReplyMiss, "", "resubmit(,20)", "a backend's own traffic returns to the gate"},
+	} {
+		got := rulesIn(rules, check.table, check.priority)
+		found := false
+		for _, r := range got {
+			if r.Match == check.match && r.Actions == check.actions {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("table %d priority %d: no %q -> %q (%s); have %+v",
+				check.table, check.priority, check.match, check.actions, check.purpose, got)
+		}
+	}
+}
+
+// TestHairpinPrefixesSourceNATToTheVIP pins the hairpin half of #718: a
+// connection from a hairpin prefix is source-NATed to the VIP in the shared
+// hairpin zone, committed on its first packet and applied to the rest.
+func TestHairpinPrefixesSourceNATToTheVIP(t *testing.T) {
+	deps, controller, _, _ := testDeps(testVIP())
+	deps.Config.HairpinPrefixes = []netip.Prefix{
+		netip.MustParsePrefix("10.0.1.0/24"),
+		netip.MustParsePrefix("192.168.7.9/16"), // installed masked
+	}
+	svc := startService(t, deps)
+	status, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443"))
+	if err != nil {
+		t.Fatalf("GetVIP: %v", err)
+	}
+
+	hairpin := rulesIn(controller.allRules(), int(modes.TableLBHairpin), prioLBHairpin)
+	if len(hairpin) != 4 {
+		t.Fatalf("hairpin flows = %d, want a commit and an established flow per prefix", len(hairpin))
+	}
+	for i, src := range []string{"10.0.1.0/24", "192.168.0.0/16"} {
+		source := fmt.Sprintf("ct_zone=%d,dl_type=0x0800,nw_src=%s", status.CTZone, src)
+		commit, est := hairpin[2*i], hairpin[2*i+1]
+		if commit.Match != "ct_state=+new+trk,"+source {
+			t.Errorf("hairpin commit match = %q", commit.Match)
+		}
+		if want := fmt.Sprintf("ct(commit,zone=%d,nat(src=10.100.0.10),table=30)", svc.hairpinZone); commit.Actions != want {
+			t.Errorf("hairpin commit actions = %q, want %q", commit.Actions, want)
+		}
+		if est.Match != "ct_state=+est+trk,"+source {
+			t.Errorf("hairpin established match = %q", est.Match)
+		}
+		if want := fmt.Sprintf("ct(zone=%d,nat,table=30)", svc.hairpinZone); est.Actions != want {
+			t.Errorf("hairpin established actions = %q, want %q", est.Actions, want)
+		}
+	}
+}
+
+func TestNoHairpinPrefixesNoSourceNAT(t *testing.T) {
+	deps, controller, _, _ := testDeps(testVIP())
+	startService(t, deps)
+	if got := rulesIn(controller.allRules(), int(modes.TableLBHairpin), prioLBHairpin); len(got) != 0 {
+		t.Errorf("hairpin flows without hairpin prefixes: %+v", got)
+	}
+}
+
+func TestHairpinZoneLifecycle(t *testing.T) {
+	deps, _, _, _ := testDeps(testVIP())
+	svc := startService(t, deps)
+	zone := svc.hairpinZone
+	if err := svc.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	// Released: the allocator hands the same key a zone again, and the
+	// service starts cleanly a second time.
+	if err := svc.Start(context.Background()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if svc.hairpinZone == 0 {
+		t.Errorf("hairpin zone not re-allocated (was %d)", zone)
+	}
+}
+
+// refusingPersister fails every save, so every new zone allocation fails.
+type refusingPersister struct{}
+
+func (refusingPersister) Save(context.Context, map[string]uint16) error {
+	return errors.New("persist refused")
+}
+
+func (refusingPersister) Load(context.Context) (map[string]uint16, error) { return nil, nil }
+
+func TestStartFailsWhenTheHairpinZoneCannotBeAllocated(t *testing.T) {
+	deps, controller, _, groups := testDeps(testVIP())
+	deps.Allocator = ct.NewZoneAllocator(refusingPersister{})
+	svc, err := New(deps)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var opErr *OpError
+	if err := svc.Start(context.Background()); !errors.As(err, &opErr) || opErr.Op != "allocate" {
+		t.Fatalf("Start = %v, want an allocate OpError", err)
+	}
+	if len(controller.allRules()) != 0 || groups.additions != 0 {
+		t.Error("nothing may be programmed before the hairpin zone exists")
+	}
+}
+
+// TestBackendServesOneVIPPerProtocol pins the constraint the reply divert
+// imposes: a backend endpoint's replies go to exactly one VIP zone.
+func TestBackendServesOneVIPPerProtocol(t *testing.T) {
+	deps, _, _, _ := testDeps(testVIP())
+	svc := startService(t, deps)
+	ctx := context.Background()
+
+	shared := testVIP()
+	shared.Address = netip.MustParseAddr("10.100.0.11")
+	if err := svc.AddVIP(ctx, shared); !errors.Is(err, ErrBackendInUse) {
+		t.Errorf("AddVIP sharing a backend = %v, want ErrBackendInUse", err)
+	}
+
+	udp := shared
+	udp.Protocol = ProtocolUDP
+	if err := svc.AddVIP(ctx, udp); err != nil {
+		t.Errorf("the same endpoint under another protocol is a different tuple: %v", err)
+	}
+
+	other := VIP{
+		Address: netip.MustParseAddr("10.100.0.12"), Port: 80, Protocol: ProtocolTCP,
+		Backends: []Backend{{Address: netip.MustParseAddr("10.0.2.1"), Port: 80}},
+	}
+	if err := svc.AddVIP(ctx, other); err != nil {
+		t.Fatalf("AddVIP: %v", err)
+	}
+	if err := svc.SetBackends(ctx, ProtocolTCP, netip.AddrPortFrom(other.Address, other.Port), testVIP().Backends); !errors.Is(err, ErrBackendInUse) {
+		t.Errorf("SetBackends onto another VIP's backend = %v, want ErrBackendInUse", err)
+	}
+	// A VIP may of course keep its own backends.
+	if err := svc.SetBackends(ctx, ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443"), testVIP().Backends); err != nil {
+		t.Errorf("SetBackends to its own set: %v", err)
+	}
+}
+
+// TestSetBackendsMovesTheReplyDiverts pins that the reply path follows the
+// backend set: a new backend's divert is installed, a removed backend's is
+// strict-deleted, and a failed group update takes the new divert back out.
+func TestSetBackendsMovesTheReplyDiverts(t *testing.T) {
+	deps, controller, ovsClient, groups := testDeps(testVIP())
+	svc := startService(t, deps)
+	ctx := context.Background()
+	addr := netip.MustParseAddrPort("10.100.0.10:443")
+
+	replacement := []Backend{
+		{Address: netip.MustParseAddr("10.0.1.5"), Port: 8443},
+		{Address: netip.MustParseAddr("10.0.1.7"), Port: 9000},
+	}
+	if err := svc.SetBackends(ctx, ProtocolTCP, addr, replacement); err != nil {
+		t.Fatalf("SetBackends: %v", err)
+	}
+	last := controller.batches[len(controller.batches)-1]
+	if got := rulesIn(last, int(modes.TableCTGate), prioLBReplyDivert); len(got) != 2 ||
+		!strings.Contains(got[1].Match, "nw_src=10.0.1.7,tp_src=9000") {
+		t.Errorf("installed reply diverts = %+v", got)
+	}
+	if len(ovsClient.strictDeletes) != 2 {
+		t.Fatalf("strict deletes = %+v, want the removed backend's two reply flows", ovsClient.strictDeletes)
+	}
+	for _, d := range ovsClient.strictDeletes {
+		if !strings.Contains(d.Match, "nw_src=10.0.1.6,tp_src=8443") {
+			t.Errorf("deleted %+v, which is not the removed backend's", d)
+		}
+	}
+
+	groups.modErr = errors.New("of down")
+	before := len(ovsClient.strictDeletes)
+	if err := svc.SetBackends(ctx, ProtocolTCP, addr, append(replacement, Backend{Address: netip.MustParseAddr("10.0.1.8"), Port: 1})); err == nil {
+		t.Fatal("SetBackends must fail when the group cannot be modified")
+	}
+	added := ovsClient.strictDeletes[before:]
+	if len(added) != 2 {
+		t.Fatalf("rollback deletes = %+v, want the never-selectable backend's two reply flows", added)
+	}
+	for _, d := range added {
+		if !strings.Contains(d.Match, "nw_src=10.0.1.8,tp_src=1") {
+			t.Errorf("rollback deleted %+v", d)
+		}
+	}
+
+	groups.modErr = nil
+	ovsClient.strictErr = errors.New("delete refused")
+	var opErr *OpError
+	if err := svc.SetBackends(ctx, ProtocolTCP, addr, testVIP().Backends); !errors.As(err, &opErr) || opErr.Op != "delete" {
+		t.Errorf("SetBackends with a failing stale delete = %v, want a delete OpError", err)
+	}
+	ovsClient.strictErr = nil
+}
+
+func TestSetBackendsInstallFailure(t *testing.T) {
+	deps, controller, _, _ := testDeps(testVIP())
+	svc := startService(t, deps)
+	controller.installErr = errors.New("controller down")
+	var opErr *OpError
+	err := svc.SetBackends(context.Background(), ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443"), testVIP().Backends)
+	if !errors.As(err, &opErr) || opErr.Op != "install" {
+		t.Errorf("SetBackends = %v, want an install OpError", err)
+	}
+	controller.installErr = nil
+}
+
+func TestStaleFlows(t *testing.T) {
+	a := zoneflows.FlowRule{Table: 20, Priority: 260, Match: "a"}
+	b := zoneflows.FlowRule{Table: 20, Priority: 260, Match: "b"}
+	bOtherAction := zoneflows.FlowRule{Table: 20, Priority: 260, Match: "b", Actions: "changed"}
+	c := zoneflows.FlowRule{Table: 27, Priority: 100, Match: "a"}
+
+	got := staleFlows([]zoneflows.FlowRule{a, b, c}, []zoneflows.FlowRule{bOtherAction})
+	if len(got) != 2 || got[0].Match != "a" || got[1].Table != 27 {
+		t.Errorf("staleFlows = %+v; identity is table+priority+match, not actions", got)
+	}
+	if got := staleFlows(nil, []zoneflows.FlowRule{a}); len(got) != 0 {
+		t.Errorf("nothing installed, nothing stale: %+v", got)
+	}
+}
+
+// secondVIP is a TCP VIP with backends of its own, so it can sit beside
+// testVIP.
+func secondVIP() VIP {
+	v := testVIP()
+	v.Address = netip.MustParseAddr("10.100.0.11")
+	v.Backends = []Backend{{Address: netip.MustParseAddr("10.0.2.5"), Port: 8443}}
+	return v
+}
+
+// TestStartRollsBackEveryFailure is the second review finding on #728: the
+// gateway registers the service only after Start succeeds, so a Start that
+// fails part-way must take back what it programmed and allocated itself.
+func TestStartRollsBackEveryFailure(t *testing.T) {
+	tests := []struct {
+		name   string
+		inject func(*fakeController, *fakeGroups)
+		wantOp string
+	}{
+		{"the second VIP's group", func(_ *fakeController, g *fakeGroups) {
+			g.failAddOn = 2
+			g.addErr = errors.New("group table full")
+		}, "group-add"},
+		{"the second VIP's flows", func(c *fakeController, _ *fakeGroups) {
+			c.failOnCall = 2
+			c.installErr = errors.New("switch rejected")
+		}, "install"},
+		{"a stale group", func(_ *fakeController, g *fakeGroups) {
+			g.descs = []openflow.GroupDesc{{GroupID: GroupIDBase | 0xfffe}}
+			g.failDelOn = 1
+			g.delErr = errors.New("stale group busy")
+		}, "group-delete"},
+		{"the scaffolding", func(c *fakeController, _ *fakeGroups) {
+			c.failOnCall = 3
+			c.installErr = errors.New("switch rejected")
+		}, "install"},
+		{"the gate", func(c *fakeController, _ *fakeGroups) {
+			c.failOnCall = 4
+			c.installErr = errors.New("switch rejected")
+		}, "install"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps, controller, ovsClient, groups := testDeps(testVIP(), secondVIP())
+			tt.inject(controller, groups)
+			svc, err := New(deps)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			err = svc.Start(context.Background())
+			var opErr *OpError
+			if !errors.As(err, &opErr) || opErr.Op != tt.wantOp {
+				t.Fatalf("Start = %v, want a %s OpError", err, tt.wantOp)
+			}
+			if svc.Active() {
+				t.Fatal("a failed Start must not leave the service active")
+			}
+			ovsClient.mu.Lock()
+			cookieDeletes := len(ovsClient.cookieDeletes)
+			ovsClient.mu.Unlock()
+			if cookieDeletes != 1 {
+				t.Errorf("cookie deletes = %d, want one sweep of every LB flow", cookieDeletes)
+			}
+
+			// The stale group from a previous run is not Start's to keep
+			// or remove on failure; everything Start installed is gone.
+			groups.mu.Lock()
+			for id := range groups.groups {
+				if id != GroupIDBase|0xfffe {
+					t.Errorf("group 0x%x left on the switch", id)
+				}
+			}
+			groups.mu.Unlock()
+			if held := deps.Allocator.Snapshot(); len(held) != 0 {
+				t.Errorf("conntrack zones still held: %v", held)
+			}
+
+			// And the service starts cleanly once the fault is gone.
+			controller.installErr, groups.addErr, groups.delErr = nil, nil, nil
+			if err := svc.Start(context.Background()); err != nil {
+				t.Fatalf("restart after rollback: %v", err)
+			}
+			if err := svc.Stop(context.Background()); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+		})
+	}
+}
+
+// TestStartReportsAFailedRollback keeps the original error and adds the
+// rollback's, so neither is lost.
+func TestStartReportsAFailedRollback(t *testing.T) {
+	deps, controller, ovsClient, _ := testDeps(testVIP())
+	controller.failOnCall = 2
+	controller.installErr = errors.New("switch rejected")
+	ovsClient.cookieErr = errors.New("switch gone")
+	svc, err := New(deps)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	err = svc.Start(context.Background())
+	if !errors.Is(err, controller.installErr) || !errors.Is(err, ovsClient.cookieErr) {
+		t.Fatalf("Start = %v, want both the install and the rollback failure", err)
+	}
+}
+
+// TestAddVIPLeavesNothingWhenItFails covers the per-VIP half: a VIP whose
+// flows the switch refuses leaves no group and holds no zone.
+func TestAddVIPLeavesNothingWhenItFails(t *testing.T) {
+	deps, controller, ovsClient, groups := testDeps()
+	svc := startService(t, deps)
+	before := len(deps.Allocator.Snapshot())
+
+	controller.installErr = errors.New("switch rejected")
+	var opErr *OpError
+	if err := svc.AddVIP(context.Background(), testVIP()); !errors.As(err, &opErr) || opErr.Op != "install" {
+		t.Fatalf("AddVIP = %v, want an install OpError", err)
+	}
+	controller.installErr = nil
+
+	groups.mu.Lock()
+	left := len(groups.groups)
+	groups.mu.Unlock()
+	if left != 0 {
+		t.Errorf("%d groups left after a refused VIP", left)
+	}
+	if held := len(deps.Allocator.Snapshot()); held != before {
+		t.Errorf("zones held = %d, want %d (the hairpin zone only)", held, before)
+	}
+	ovsClient.mu.Lock()
+	deleted := len(ovsClient.strictDeletes)
+	ovsClient.mu.Unlock()
+	if deleted == 0 {
+		t.Error("the refused batch's flows must be strict-deleted in case some went in")
+	}
+	if _, err := svc.GetVIP(ProtocolTCP, netip.MustParseAddrPort("10.100.0.10:443")); !errors.Is(err, ErrVIPNotFound) {
+		t.Errorf("GetVIP = %v, want ErrVIPNotFound", err)
+	}
+	if err := svc.AddVIP(context.Background(), testVIP()); err != nil {
+		t.Errorf("the VIP installs once the switch accepts it: %v", err)
+	}
+}
+
+// TestAddVIPReportsAFailedUndo keeps the install error and adds the undo's.
+func TestAddVIPReportsAFailedUndo(t *testing.T) {
+	deps, controller, _, groups := testDeps()
+	svc := startService(t, deps)
+	installErr, delErr := errors.New("switch rejected"), errors.New("group busy")
+	controller.installErr, groups.delErr = installErr, delErr
+	err := svc.AddVIP(context.Background(), testVIP())
+	controller.installErr, groups.delErr = nil, nil
+	if !errors.Is(err, installErr) || !errors.Is(err, delErr) {
+		t.Fatalf("AddVIP = %v, want both the install and the undo failure", err)
+	}
+	var opErr *OpError
+	if !errors.As(err, &opErr) || opErr.Op != "install" {
+		t.Errorf("the first OpError is the cause: %v", err)
 	}
 }

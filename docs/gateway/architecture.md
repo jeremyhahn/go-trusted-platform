@@ -365,7 +365,7 @@ reportable.
 ## The base OpenFlow pipeline is the runtime's
 
 Every datapath service — the firewall into the conntrack tables (20/21), NAT
-into table 25, the load balancer into table 26 — gates traffic out of
+into table 25, the load balancer into tables 26, 28 and 29 — gates traffic out of
 **table 10**, and relies on something having routed table 0 into table 10
 first. Until #567 that something was the overlay mode handler, which nothing
 in a running binary constructs, so a bridge carried **no table-0 flow at all**:

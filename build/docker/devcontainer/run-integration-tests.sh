@@ -12,7 +12,7 @@
 #                Known targets: the keys of TARGET_PACKAGES below — all, bmc,
 #                bootstrap, ca, ceremony, piv, luks, fido2, provision,
 #                secureboot, device, tpm, cold-start, barrier-gate,
-#                restroutes, sdn, proxy, ntp, tenant, iam, attestation.
+#                restroutes, sdn, proxy, ntp, tenant, iam, attestation, lb.
 #                If the first argument is not a known target, it is treated
 #                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
 #                Default: all
@@ -55,6 +55,14 @@ declare -A TARGET_PACKAGES=(
     [attestation]="./test/integration/attestation/..."
     [diskimage]="./test/integration/diskimage"
     [netboot]="./test/integration/netboot"
+    [lb]="./test/integration/sdn/"
+)
+
+# Per-target -run filter, for a target that is one test of a larger
+# package. lb is the load balancer datapath test: real OVS, conntrack and
+# network namespaces, and nothing from the shared platformd.
+declare -A TARGET_RUN=(
+    [lb]='^TestGroupLoadBalancer$'
 )
 
 # Per-target go test timeout. The default fits a daemon-backed suite; the
@@ -707,6 +715,9 @@ elif [ "$RUN_TARGET" = "bmc" ]; then
     # modified config that trusts it), then start platformd with that config.
     start_vbmc || echo "WARNING: vBMC setup failed, BMC tests may fail"
     start_platformd "${VBMC_PLATFORMD_CONFIG}" || abort_no_daemon
+elif [ "$RUN_TARGET" = "lb" ]; then
+    # The load balancer test drives OVS directly and needs no daemon.
+    echo "=== lb target: skipping shared platformd ==="
 elif [ "$RUN_TARGET" = "diskimage" ]; then
     # The factory-image suite boots the image itself: the guest is a
     # single-node platform and is its own control plane, so no shared
@@ -767,7 +778,11 @@ run_test() {
     echo ""
     echo "--- Testing $pkg ---"
     local timeout="${TARGET_TIMEOUTS[$RUN_TARGET]:-10m}"
-    if go test -v -tags "${BUILD_TAGS}" -count=1 -parallel 1 -timeout "$timeout" "$pkg"; then
+    local run_args=()
+    if [ -n "${TARGET_RUN[$RUN_TARGET]:-}" ]; then
+        run_args=(-run "${TARGET_RUN[$RUN_TARGET]}")
+    fi
+    if go test -v -tags "${BUILD_TAGS}" -count=1 -parallel 1 -timeout "$timeout" "${run_args[@]}" "$pkg"; then
         echo "--- PASS: $pkg ---"
     else
         echo "--- FAIL: $pkg ---"

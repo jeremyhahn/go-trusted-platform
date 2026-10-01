@@ -665,16 +665,18 @@ func TestParseMatchString(t *testing.T) {
 		assert.Contains(t, err.Error(), "invalid tp_dst")
 	})
 
-	t.Run("unknown field ignored", func(t *testing.T) {
+	t.Run("unknown field refused", func(t *testing.T) {
 		match := openflow.NewMatch()
 		err := parseMatchString(match, "unknown_field=value,in_port=1")
-		assert.NoError(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported match field: unknown_field")
 	})
 
-	t.Run("malformed key-value skipped", func(t *testing.T) {
+	t.Run("malformed key-value refused", func(t *testing.T) {
 		match := openflow.NewMatch()
 		err := parseMatchString(match, "no_equals,in_port=1")
-		assert.NoError(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported match field: no_equals")
 	})
 }
 
@@ -1189,42 +1191,43 @@ func TestConcurrentFlowOperations(t *testing.T) {
 	})
 }
 
-// TestSplitTableFilter verifies extraction of the "table=N" stats scope key
-// from ovs-ofctl style match strings.
-func TestSplitTableFilter(t *testing.T) {
+// TestSplitStatsFilter verifies extraction of the "table=N" and
+// "cookie=V[/M]" stats scope keys from ovs-ofctl style dump filters.
+func TestSplitStatsFilter(t *testing.T) {
 	tests := []struct {
-		name      string
-		match     string
-		wantRest  string
-		wantTable uint8
-		wantErr   bool
+		name       string
+		match      string
+		wantRest   string
+		wantTable  uint8
+		wantCookie uint64
+		wantMask   uint64
+		wantErr    bool
 	}{
-		{"empty", "", "", openflow.OFPTTAll, false},
-		{"table only", "table=21", "", 21, false},
-		{"table with fields", "table=21,ct_state=+inv+trk,dl_vlan=100", "ct_state=+inv+trk,dl_vlan=100", 21, false},
-		{"fields only", "dl_type=0x0800,nw_dst=10.0.0.0/24", "dl_type=0x0800,nw_dst=10.0.0.0/24", openflow.OFPTTAll, false},
-		{"table zero", "table=0", "", 0, false},
-		{"invalid table", "table=abc", "", 0, true},
-		{"table out of range", "table=300", "", 0, true},
+		{"empty", "", "", openflow.OFPTTAll, 0, 0, false},
+		{"table only", "table=21", "", 21, 0, 0, false},
+		{"table with fields", "table=21,ct_state=+inv+trk,dl_vlan=100", "ct_state=+inv+trk,dl_vlan=100", 21, 0, 0, false},
+		{"fields only", "dl_type=0x0800,nw_dst=10.0.0.0/24", "dl_type=0x0800,nw_dst=10.0.0.0/24", openflow.OFPTTAll, 0, 0, false},
+		{"table zero", "table=0", "", 0, 0, 0, false},
+		{"masked cookie", "cookie=0xf1be000300000000/0xffffffff00000000,table=26", "", 26, 0xf1be000300000000, 0xffffffff00000000, false},
+		{"exact cookie", "cookie=0x5", "", openflow.OFPTTAll, 5, ^uint64(0), false},
+		{"invalid table", "table=abc", "", 0, 0, 0, true},
+		{"table out of range", "table=300", "", 0, 0, 0, true},
+		{"invalid cookie", "cookie=xyz", "", 0, 0, 0, true},
+		{"invalid cookie mask", "cookie=1/xyz", "", 0, 0, 0, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rest, table, err := splitTableFilter(tt.match)
+			rest, filter, err := splitStatsFilter(tt.match)
 			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
+				var msgErr *MessageError
+				require.ErrorAs(t, err, &msgErr)
 				return
 			}
-			if err != nil {
-				t.Fatalf("splitTableFilter(%q) error: %v", tt.match, err)
-			}
-			if rest != tt.wantRest {
-				t.Errorf("rest = %q, want %q", rest, tt.wantRest)
-			}
-			if table != tt.wantTable {
-				t.Errorf("table = %d, want %d", table, tt.wantTable)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantRest, rest)
+			assert.Equal(t, tt.wantTable, filter.TableID)
+			assert.Equal(t, tt.wantCookie, filter.Cookie)
+			assert.Equal(t, tt.wantMask, filter.CookieMask)
 		})
 	}
 }

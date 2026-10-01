@@ -331,18 +331,18 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 	// Build match for flow stats request. The ovs-ofctl grammar allows a
 	// "table=N" key alongside match fields; it scopes the stats request
 	// rather than matching a packet field.
-	matchFields, tableID, err := splitTableFilter(match)
+	matchFields, filter, err := splitStatsFilter(match)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to parse match", Err: err}
 	}
-	ofMatch := openflow.NewMatch()
+	filter.Match = openflow.NewMatch()
 	if matchFields != "" {
-		if err := parseMatchString(ofMatch, matchFields); err != nil {
+		if err := parseMatchString(filter.Match, matchFields); err != nil {
 			return nil, &WrappedError{Msg: "failed to parse match", Err: err}
 		}
 	}
 
-	stats, err := ofClient.GetTableFlowStats(ctx, tableID, ofMatch)
+	stats, err := ofClient.QueryFlowStats(ctx, filter)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to get flow stats", Err: err}
 	}
@@ -367,33 +367,41 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 	return flows, nil
 }
 
-// splitTableFilter separates an optional "table=N" key from an ovs-ofctl
-// style match string, returning the remaining match fields and the table ID
-// for the flow stats request (openflow.OFPTTAll when no table key is given).
-func splitTableFilter(match string) (string, uint8, error) {
+// splitStatsFilter separates the keys of an ovs-ofctl dump-flows filter
+// that scope the stats request rather than match a packet field — "table=N"
+// and "cookie=VALUE[/MASK]" — from the match fields. A cookie without a
+// mask must match exactly.
+func splitStatsFilter(match string) (string, openflow.FlowStatsFilter, error) {
+	filter := openflow.FlowStatsFilter{TableID: openflow.OFPTTAll}
 	if match == "" {
-		return "", openflow.OFPTTAll, nil
+		return "", filter, nil
 	}
 
-	tableID := uint8(openflow.OFPTTAll)
 	fields := make([]string, 0, 4)
 	for _, part := range strings.Split(match, ",") {
 		trimmed := strings.TrimSpace(part)
-		value, ok := strings.CutPrefix(trimmed, "table=")
-		if !ok {
-			if trimmed != "" {
-				fields = append(fields, trimmed)
+		if value, ok := strings.CutPrefix(trimmed, "table="); ok {
+			table, err := strconv.ParseUint(value, 10, 8)
+			if err != nil {
+				return "", filter, &MessageError{Msg: fmt.Sprintf("invalid table: %s", value)}
 			}
+			filter.TableID = uint8(table)
 			continue
 		}
-		table, err := strconv.ParseUint(value, 10, 8)
-		if err != nil {
-			return "", 0, &MessageError{Msg: fmt.Sprintf("invalid table: %s", value)}
+		if value, ok := strings.CutPrefix(trimmed, "cookie="); ok {
+			cookie, mask, err := parseValueMask(value, 64)
+			if err != nil {
+				return "", filter, &MessageError{Msg: fmt.Sprintf("invalid cookie: %s", value)}
+			}
+			filter.Cookie, filter.CookieMask = cookie, mask
+			continue
 		}
-		tableID = uint8(table)
+		if trimmed != "" {
+			fields = append(fields, trimmed)
+		}
 	}
 
-	return strings.Join(fields, ","), tableID, nil
+	return strings.Join(fields, ","), filter, nil
 }
 
 // convertToOpenFlow converts an OVS FlowMod to an OpenFlow FlowMod
@@ -443,7 +451,9 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 	// Parse key=value pairs from match string
 	parts := strings.Split(matchStr, ",")
 
-	// First pass: extract protocol to determine TCP vs UDP for port matching
+	// First pass: extract protocol to determine TCP vs UDP for port
+	// matching and ICMPv4 vs ICMPv6 for type/code matching. A protocol
+	// shorthand ("tcp", "icmp6", ...) names the protocol too.
 	var ipProto uint8
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -453,6 +463,10 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			if err == nil {
 				ipProto = uint8(proto)
 			}
+			break
+		}
+		if sh, ok := matchShorthands[part]; ok && sh.proto != 0 {
+			ipProto = sh.proto
 			break
 		}
 	}
@@ -466,11 +480,28 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 
 		kv := strings.SplitN(part, "=", 2)
 		if len(kv) != 2 {
+			sh, ok := matchShorthands[part]
+			if !ok {
+				return &MessageError{Msg: fmt.Sprintf("unsupported match field: %s", part)}
+			}
+			match.AddEthType(sh.ethType)
+			if sh.proto != 0 {
+				match.AddIPProto(sh.proto)
+			}
 			continue
 		}
 
 		key := strings.TrimSpace(kv[0])
 		value := strings.TrimSpace(kv[1])
+
+		if index, ok := regIndex(key); ok {
+			regValue, regMask, err := parseValueMask(value, 32)
+			if err != nil {
+				return &MessageError{Msg: fmt.Sprintf("invalid %s: %s", key, value)}
+			}
+			match.AddReg(index, uint32(regValue), uint32(regMask))
+			continue
+		}
 
 		switch key {
 		case "in_port":
@@ -591,10 +622,127 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 				return err
 			}
 			match.AddCTMark(mark, mask)
+
+		case "icmp_type", "icmp_code", "icmpv6_type", "icmpv6_code":
+			v, err := strconv.ParseUint(value, 10, 8)
+			if err != nil {
+				return &MessageError{Msg: fmt.Sprintf("invalid %s: %s", key, value)}
+			}
+			match.AddField(openflow.OFPXMCOpenflowBasic, icmpField(key, ipProto), []byte{uint8(v)}, nil)
+
+		case "ipv6_src", "ipv6_dst":
+			addr, mask, err := parseIPv6Match(value)
+			if err != nil {
+				return &MessageError{Msg: fmt.Sprintf("invalid %s: %s", key, value)}
+			}
+			field := uint8(openflow.OFPXMTOFBIPv6Src)
+			if key == "ipv6_dst" {
+				field = openflow.OFPXMTOFBIPv6Dst
+			}
+			match.AddField(openflow.OFPXMCOpenflowBasic, field, addr, mask)
+
+		default:
+			// A field this grammar does not know must not be dropped: the
+			// flow would be installed broader than it was written.
+			return &MessageError{Msg: fmt.Sprintf("unsupported match field: %s", key)}
 		}
 	}
 
 	return nil
+}
+
+// matchShorthand is what an ovs-ofctl protocol keyword stands for.
+type matchShorthand struct {
+	ethType uint16
+	proto   uint8
+}
+
+// matchShorthands are the ovs-ofctl protocol keywords the grammar accepts.
+var matchShorthands = map[string]matchShorthand{
+	"ip":    {ethType: 0x0800},
+	"ipv6":  {ethType: 0x86dd},
+	"arp":   {ethType: 0x0806},
+	"icmp":  {ethType: 0x0800, proto: 1},
+	"tcp":   {ethType: 0x0800, proto: 6},
+	"udp":   {ethType: 0x0800, proto: 17},
+	"sctp":  {ethType: 0x0800, proto: 132},
+	"icmp6": {ethType: 0x86dd, proto: 58},
+	"tcp6":  {ethType: 0x86dd, proto: 6},
+	"udp6":  {ethType: 0x86dd, proto: 17},
+	"sctp6": {ethType: 0x86dd, proto: 132},
+}
+
+// icmpField picks the OXM field for an ICMP type or code match: the ICMPv6
+// field when the key says so or the flow matches ICMPv6 (nw_proto=58),
+// as ovs-ofctl does for icmp_type/icmp_code.
+func icmpField(key string, ipProto uint8) uint8 {
+	v6 := strings.HasPrefix(key, "icmpv6_") || ipProto == 58
+	isCode := strings.HasSuffix(key, "_code")
+	switch {
+	case v6 && isCode:
+		return openflow.OFPXMTOFBICMPv6Code
+	case v6:
+		return openflow.OFPXMTOFBICMPv6Type
+	case isCode:
+		return openflow.OFPXMTOFBICMPv4Code
+	default:
+		return openflow.OFPXMTOFBICMPv4Type
+	}
+}
+
+// parseIPv6Match parses an IPv6 address or CIDR into an OXM value and,
+// for a prefix shorter than /128, its mask.
+func parseIPv6Match(value string) ([]byte, []byte, error) {
+	if strings.Contains(value, "/") {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil || !prefix.Addr().Is6() || prefix.Addr().Is4In6() {
+			return nil, nil, &MessageError{Msg: "not an IPv6 prefix"}
+		}
+		addr := prefix.Masked().Addr().As16()
+		if prefix.Bits() == 128 {
+			return addr[:], nil, nil
+		}
+		mask := net.CIDRMask(prefix.Bits(), 128)
+		return addr[:], []byte(mask), nil
+	}
+	addr, err := netip.ParseAddr(value)
+	if err != nil || !addr.Is6() || addr.Is4In6() {
+		return nil, nil, &MessageError{Msg: "not an IPv6 address"}
+	}
+	b := addr.As16()
+	return b[:], nil, nil
+}
+
+// regIndex reports whether key names a register ("reg0".."reg15").
+func regIndex(key string) (uint8, bool) {
+	digits, ok := strings.CutPrefix(key, "reg")
+	if !ok || digits == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(digits, 10, 8)
+	if err != nil || n >= openflow.NXRegCount {
+		return 0, false
+	}
+	return uint8(n), true
+}
+
+// parseValueMask parses "value" or "value/mask" (decimal or 0x-hex) of at
+// most bits bits. Without a mask every bit is matched.
+func parseValueMask(spec string, bits int) (uint64, uint64, error) {
+	full := ^uint64(0) >> (64 - bits)
+	valueStr, maskStr, masked := strings.Cut(spec, "/")
+	value, err := strconv.ParseUint(valueStr, 0, bits)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !masked {
+		return value, full, nil
+	}
+	mask, err := strconv.ParseUint(maskStr, 0, bits)
+	if err != nil {
+		return 0, 0, err
+	}
+	return value, mask, nil
 }
 
 // ctStateBits maps ct_state bit names from the ovs-ofctl match grammar to
@@ -793,6 +941,27 @@ func formatBasicMatchField(field openflow.OXMField) string {
 		if len(field.Value) == 2 {
 			return fmt.Sprintf("tp_dst=%d", openflow.ByteOrder.Uint16(field.Value))
 		}
+	case openflow.OFPXMTOFBICMPv4Type, openflow.OFPXMTOFBICMPv6Type:
+		if len(field.Value) == 1 {
+			return fmt.Sprintf("icmp_type=%d", field.Value[0])
+		}
+	case openflow.OFPXMTOFBICMPv4Code, openflow.OFPXMTOFBICMPv6Code:
+		if len(field.Value) == 1 {
+			return fmt.Sprintf("icmp_code=%d", field.Value[0])
+		}
+	case openflow.OFPXMTOFBIPv6Src, openflow.OFPXMTOFBIPv6Dst:
+		if len(field.Value) == 16 {
+			name := "ipv6_src="
+			if field.Field == openflow.OFPXMTOFBIPv6Dst {
+				name = "ipv6_dst="
+			}
+			addr := netip.AddrFrom16([16]byte(field.Value))
+			if field.HasMask && len(field.Mask) == 16 {
+				ones, _ := net.IPMask(field.Mask).Size()
+				return name + netip.PrefixFrom(addr, ones).String()
+			}
+			return name + addr.String()
+		}
 	}
 	return ""
 }
@@ -820,6 +989,14 @@ func formatNXMMatchField(field openflow.OXMField) string {
 				mark += fmt.Sprintf("/0x%x", openflow.ByteOrder.Uint32(field.Mask))
 			}
 			return mark
+		}
+	default:
+		if field.Field < openflow.NXRegCount && len(field.Value) == 4 {
+			reg := fmt.Sprintf("reg%d=0x%x", field.Field, openflow.ByteOrder.Uint32(field.Value))
+			if field.HasMask && len(field.Mask) == 4 {
+				reg += fmt.Sprintf("/0x%x", openflow.ByteOrder.Uint32(field.Mask))
+			}
+			return reg
 		}
 	}
 	return ""
@@ -956,10 +1133,164 @@ func parseActions(actionsStr string) ([]openflow.Action, *uint8, error) {
 			}
 			target := uint8(table)
 			gotoTable = &target
+
+		case strings.HasPrefix(part, "load:"):
+			load, err := parseRegLoad(part)
+			if err != nil {
+				return nil, nil, err
+			}
+			actions = append(actions, load)
+
+		case strings.HasPrefix(part, "resubmit("):
+			resubmit, err := parseResubmit(part)
+			if err != nil {
+				return nil, nil, err
+			}
+			actions = append(actions, resubmit)
+
+		case strings.HasPrefix(part, "set_field:"):
+			setField, err := parseSetField(part)
+			if err != nil {
+				return nil, nil, err
+			}
+			actions = append(actions, setField)
+
+		default:
+			// An action this grammar does not know must not be dropped:
+			// the flow would do less than it was written to.
+			return nil, nil, &MessageError{Msg: fmt.Sprintf("unsupported action: %s", part)}
 		}
 	}
 
 	return actions, gotoTable, nil
+}
+
+// parseRegLoad parses "load:VALUE->DST[RANGE]" where DST is NXM_NX_REGn or
+// regN and RANGE is empty (the whole register), "k" (one bit) or "a..b".
+func parseRegLoad(spec string) (*openflow.ActionRegLoad, error) {
+	valueStr, dst, ok := strings.Cut(strings.TrimPrefix(spec, "load:"), "->")
+	if !ok {
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid load (want load:VALUE->REG[RANGE]): %s", spec)}
+	}
+	value, err := strconv.ParseUint(valueStr, 0, 64)
+	if err != nil {
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid load value: %s", valueStr)}
+	}
+	name, rangeSpec, ok := strings.Cut(dst, "[")
+	if !ok || !strings.HasSuffix(rangeSpec, "]") {
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid load destination: %s", dst)}
+	}
+	index, ok := regIndex(strings.ToLower(strings.TrimPrefix(name, "NXM_NX_")))
+	if !ok {
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported load destination: %s", name)}
+	}
+	offset, nbits, err := parseBitRange(strings.TrimSuffix(rangeSpec, "]"), openflow.NXRegBits)
+	if err != nil {
+		return nil, err
+	}
+	return openflow.NewActionRegLoad(index, offset, nbits, value)
+}
+
+// parseBitRange parses an NXM bit range: "" (all width bits), "k" or
+// "a..b".
+func parseBitRange(spec string, width int) (uint16, uint16, error) {
+	if spec == "" {
+		return 0, uint16(width), nil
+	}
+	startStr, endStr, isRange := strings.Cut(spec, "..")
+	start, err := strconv.ParseUint(startStr, 10, 8)
+	if err != nil {
+		return 0, 0, &MessageError{Msg: fmt.Sprintf("invalid bit range: %s", spec)}
+	}
+	end := start
+	if isRange {
+		end, err = strconv.ParseUint(endStr, 10, 8)
+		if err != nil || end < start {
+			return 0, 0, &MessageError{Msg: fmt.Sprintf("invalid bit range: %s", spec)}
+		}
+	}
+	return uint16(start), uint16(end - start + 1), nil
+}
+
+// parseResubmit parses "resubmit(PORT,TABLE)" where PORT is empty or
+// in_port (the packet's own) or a number below 0xff00.
+func parseResubmit(spec string) (*openflow.ActionResubmit, error) {
+	inner, ok := strings.CutSuffix(strings.TrimPrefix(spec, "resubmit("), ")")
+	if !ok {
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid resubmit: %s", spec)}
+	}
+	portStr, tableStr, ok := strings.Cut(inner, ",")
+	if !ok || tableStr == "" {
+		return nil, &MessageError{Msg: fmt.Sprintf("resubmit needs a table (resubmit(,T)): %s", spec)}
+	}
+	table, err := strconv.ParseUint(tableStr, 10, 8)
+	if err != nil || table == 0xff {
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid resubmit table: %s", tableStr)}
+	}
+	action := openflow.NewActionResubmit(uint8(table))
+	if portStr != "" && portStr != "in_port" {
+		port, err := strconv.ParseUint(portStr, 10, 16)
+		if err != nil || port >= 0xff00 {
+			return nil, &MessageError{Msg: fmt.Sprintf("invalid resubmit port: %s", portStr)}
+		}
+		action.InPort = uint16(port)
+	}
+	return action, nil
+}
+
+// setFieldParser turns a set_field value into the OXM field it writes.
+type setFieldParser func(value string) (uint8, []byte, error)
+
+// setFieldParsers are the set_field destinations the grammar accepts.
+var setFieldParsers = map[string]setFieldParser{
+	"eth_src":  macSetField(openflow.OFPXMTOFBEthSrc),
+	"eth_dst":  macSetField(openflow.OFPXMTOFBEthDst),
+	"ip_src":   ipv4SetField(openflow.OFPXMTOFBIPv4Src),
+	"ip_dst":   ipv4SetField(openflow.OFPXMTOFBIPv4Dst),
+	"nw_src":   ipv4SetField(openflow.OFPXMTOFBIPv4Src),
+	"nw_dst":   ipv4SetField(openflow.OFPXMTOFBIPv4Dst),
+	"ipv4_src": ipv4SetField(openflow.OFPXMTOFBIPv4Src),
+	"ipv4_dst": ipv4SetField(openflow.OFPXMTOFBIPv4Dst),
+}
+
+// macSetField parses a MAC for an Ethernet address field.
+func macSetField(field uint8) setFieldParser {
+	return func(value string) (uint8, []byte, error) {
+		mac, err := net.ParseMAC(value)
+		if err != nil {
+			return 0, nil, &MessageError{Msg: fmt.Sprintf("invalid MAC: %s", value)}
+		}
+		return field, mac, nil
+	}
+}
+
+// ipv4SetField parses an IPv4 address for an IPv4 address field.
+func ipv4SetField(field uint8) setFieldParser {
+	return func(value string) (uint8, []byte, error) {
+		addr, err := netip.ParseAddr(value)
+		if err != nil || !addr.Is4() {
+			return 0, nil, &MessageError{Msg: fmt.Sprintf("invalid IPv4 address: %s", value)}
+		}
+		b := addr.As4()
+		return field, b[:], nil
+	}
+}
+
+// parseSetField parses "set_field:VALUE->FIELD".
+func parseSetField(spec string) (*openflow.ActionSetField, error) {
+	value, fieldName, ok := strings.Cut(strings.TrimPrefix(spec, "set_field:"), "->")
+	if !ok {
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid set_field (want set_field:VALUE->FIELD): %s", spec)}
+	}
+	parse, ok := setFieldParsers[fieldName]
+	if !ok {
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported set_field destination: %s", fieldName)}
+	}
+	field, b, err := parse(value)
+	if err != nil {
+		return nil, err
+	}
+	return openflow.NewActionSetField(openflow.OFPXMCOpenflowBasic, field, b), nil
 }
 
 // splitTopLevel splits a comma-separated action list on commas that are not

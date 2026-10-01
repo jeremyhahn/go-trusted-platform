@@ -2055,6 +2055,14 @@ integration-test-sdn-full: build-devcontainer
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/sdn/...
 
+.PHONY: integration-test-lb
+## integration-test-lb: Run the gateway load balancer datapath test in the devcontainer
+## Real OVS, kernel conntrack and network namespaces: TCP handshakes through a
+## VIP whose replies the load balancer reverse-translates, and through a
+## hairpin VIP whose client shares a segment with its backend (#718).
+integration-test-lb: build-devcontainer
+	$(call run-integration-suite,lb)
+
 .PHONY: integration-test-e2e
 ## integration-test-e2e: Run end-to-end tests with QEMU VMs and OVS networking
 integration-test-e2e: build-devcontainer

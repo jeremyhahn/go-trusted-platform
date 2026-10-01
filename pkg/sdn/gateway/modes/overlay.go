@@ -31,7 +31,10 @@ import (
 // OpenFlow table IDs for overlay mode pipeline.
 //
 // Tables 20, 21, and 25 are populated only when the gateway firewall or NAT
-// services are enabled (pkg/sdn/gateway/services/firewall). The base
+// services are enabled (pkg/sdn/gateway/services/firewall); tables 26, 28
+// and 29 only when the load balancer is
+// (pkg/sdn/gateway/services/loadbalancer). Table 27 is reserved for the
+// NAT64 translator hand-off (#601). The base
 // pipeline installed by installOpenFlowPipeline never references them: the
 // table 10 default continues straight to table 30, and the firewall service
 // diverts into table 20 with a higher-priority table 10 flow it owns
@@ -45,6 +48,8 @@ const (
 	TableCTVerdict      uint8 = 21 // Conntrack verdict (firewall service)
 	TableNAT            uint8 = 25 // NAT commit (NAT service)
 	TableLoadBalancer   uint8 = 26 // Load balancer VIP dispatch (load-balancer service)
+	TableLBHairpin      uint8 = 28 // Load balancer hairpin SNAT (load-balancer service)
+	TableLBReply        uint8 = 29 // Load balancer reply reverse NAT (load-balancer service)
 	TableMACLearning    uint8 = 30 // MAC learning / L2 forwarding
 	TableARP            uint8 = 40 // ARP handling (suppression)
 	TableL3Routing      uint8 = 50 // L3 routing (anycast gateway)

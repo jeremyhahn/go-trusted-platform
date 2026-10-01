@@ -347,6 +347,14 @@ func TestLoadBalancerConfigValidate(t *testing.T) {
 		{"zero max backends", func(c *LoadBalancerConfig) { c.MaxBackends = 0 }},
 		{"bad vip address", func(c *LoadBalancerConfig) { c.VIPs[0].Address = "bogus" }},
 		{"least-conn vip", func(c *LoadBalancerConfig) { c.VIPs[0].Algorithm = "least-conn" }},
+		{"unparseable hairpin prefix", func(c *LoadBalancerConfig) { c.HairpinPrefixes = []string{"10.0.1.0/33"} }},
+		{"ipv6 hairpin prefix", func(c *LoadBalancerConfig) { c.HairpinPrefixes = []string{"2001:db8::/64"} }},
+		{"the same vip twice", func(c *LoadBalancerConfig) { c.VIPs = append(c.VIPs, c.VIPs[0]) }},
+		{"a backend shared by two vips", func(c *LoadBalancerConfig) {
+			second := c.VIPs[0]
+			second.Address = "10.100.0.11"
+			c.VIPs = append(c.VIPs, second)
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -356,5 +364,43 @@ func TestLoadBalancerConfigValidate(t *testing.T) {
 				t.Errorf("Validate = %v, want ErrConfigurationInvalid", err)
 			}
 		})
+	}
+}
+
+func TestLoadBalancerConfig_ServiceHairpinPrefixes(t *testing.T) {
+	cfg := &LoadBalancerConfig{HairpinPrefixes: []string{"10.0.1.0/24", "192.168.0.0/16"}}
+	got, err := cfg.ServiceHairpinPrefixes()
+	if err != nil {
+		t.Fatalf("ServiceHairpinPrefixes = %v", err)
+	}
+	if len(got) != 2 || got[0] != netip.MustParsePrefix("10.0.1.0/24") || got[1] != netip.MustParsePrefix("192.168.0.0/16") {
+		t.Errorf("ServiceHairpinPrefixes = %v", got)
+	}
+
+	for _, bad := range []string{"", "10.0.1.0", "bogus/24", "2001:db8::/64"} {
+		cfg := &LoadBalancerConfig{HairpinPrefixes: []string{bad}}
+		if _, err := cfg.ServiceHairpinPrefixes(); !errors.Is(err, loadbalancer.ErrInvalidHairpinPrefix) {
+			t.Errorf("ServiceHairpinPrefixes(%q) = %v, want ErrInvalidHairpinPrefix", bad, err)
+		}
+	}
+}
+
+// TestLoadBalancerServiceHandler_HairpinPrefixesReachTheService proves the
+// gatewayd YAML field is carried into the service, and that a bad one stops
+// the service from being built rather than starting it without hairpin.
+func TestLoadBalancerServiceHandler_HairpinPrefixesReachTheService(t *testing.T) {
+	cfg := lbGatewayConfig()
+	cfg.LoadBalancer.HairpinPrefixes = []string{"10.0.1.0/24"}
+	gw := startGateway(t, cfg)
+	defer gw.Stop(context.Background())
+	if !gw.HasService(ServiceLoadBalancer) {
+		t.Fatal("load balancer service not active")
+	}
+
+	bad := lbGatewayConfig()
+	bad.LoadBalancer.HairpinPrefixes = []string{"bogus"}
+	g := &Gateway{config: bad}
+	if _, err := buildLoadBalancer(g); !errors.Is(err, loadbalancer.ErrInvalidHairpinPrefix) {
+		t.Errorf("buildLoadBalancer = %v, want ErrInvalidHairpinPrefix", err)
 	}
 }

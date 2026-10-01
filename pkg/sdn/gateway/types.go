@@ -793,8 +793,28 @@ type LoadBalancerConfig struct {
 	// carries the load balancer tables.
 	Bridge string `yaml:"bridge,omitempty" json:"bridge,omitempty" mapstructure:"bridge"`
 
+	// HairpinPrefixes are the IPv4 client networks that share a segment
+	// with the backends. A connection from one of them to a VIP is
+	// source-NATed to the VIP as well, so the backend replies through the
+	// gateway instead of straight to the client (which would drop a reply
+	// from an address it never connected to).
+	HairpinPrefixes []string `yaml:"hairpin-prefixes,omitempty" json:"hairpin_prefixes,omitempty" mapstructure:"hairpin-prefixes"`
+
 	// VIPs are the config-driven virtual IPs installed at service start.
 	VIPs []VIPConfig `yaml:"vips,omitempty" json:"vips,omitempty" mapstructure:"vips"`
+}
+
+// ServiceHairpinPrefixes parses the configured hairpin prefixes.
+func (c *LoadBalancerConfig) ServiceHairpinPrefixes() ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(c.HairpinPrefixes))
+	for _, raw := range c.HairpinPrefixes {
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil || !prefix.Addr().Is4() {
+			return nil, loadbalancer.ErrInvalidHairpinPrefix
+		}
+		out = append(out, prefix)
+	}
+	return out, nil
 }
 
 // VIPConfig defines one load-balanced virtual IP.
@@ -875,14 +895,21 @@ func (c *LoadBalancerConfig) Validate() error {
 	if c.MaxBackends <= 0 {
 		return ErrConfigurationInvalid
 	}
+	if _, err := c.ServiceHairpinPrefixes(); err != nil {
+		return ErrConfigurationInvalid
+	}
+	vips := make([]loadbalancer.VIP, 0, len(c.VIPs))
 	for i := range c.VIPs {
 		vip, err := c.VIPs[i].ServiceVIP()
 		if err != nil {
 			return ErrConfigurationInvalid
 		}
-		if err := vip.Validate(c.MaxBackends); err != nil {
-			return ErrConfigurationInvalid
-		}
+		vips = append(vips, vip)
+	}
+	// The set as a whole: a duplicate VIP or a shared backend refused here
+	// is refused before gatewayd programs any of it.
+	if err := loadbalancer.ValidateVIPSet(vips, c.MaxBackends); err != nil {
+		return ErrConfigurationInvalid
 	}
 	return nil
 }

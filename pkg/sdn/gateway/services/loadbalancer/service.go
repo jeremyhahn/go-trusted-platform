@@ -15,9 +15,13 @@
 // service. VIP traffic is diverted from the conntrack gate (table 20) into
 // the load balancer dispatch table (table 26), where new connections are
 // spread across an OpenFlow select group whose buckets DNAT to the healthy
-// backends via ct(commit,nat(dst=...),table=30). Selection is hash-based
-// (OVS dp_hash) and per-connection sticky through conntrack; established
-// and reply traffic follows the committed NAT state. See
+// backends via ct(commit,zone=Z,nat(dst=...),table=28). Table 28 also
+// source-NATs a connection to the VIP, in a second (hairpin) zone, when the
+// client is on a hairpin prefix. A backend's replies are steered by their
+// source address:port back through ct(nat) in the hairpin zone and then in
+// the VIP's zone (table 29), which reverses both translations, so the
+// client hears from the VIP it addressed. Selection is hash-based (OVS
+// dp_hash) and per-connection sticky through conntrack. See
 // docs/sdn/gateway/loadbalancer.md for the table design.
 package loadbalancer
 
@@ -82,11 +86,53 @@ const (
 	// prioLBMissT26 drops table 26 misses: VIP traffic must never leak
 	// unbalanced past the dispatch table.
 	prioLBMissT26 = 0
+
+	// prioLBReplyDivert steers a backend's packets (by source address and
+	// port) through the hairpin and VIP conntrack zones in table 20 so a
+	// reply is reverse-translated. It outranks the VIP divert so a packet
+	// that matches both is classified as a reply.
+	prioLBReplyDivert = 260
+
+	// prioLBHairpin source-NATs a connection from a hairpin prefix to the
+	// VIP in table 28.
+	prioLBHairpin = 200
+
+	// prioLBMissHairpin continues every other connection to table 30.
+	prioLBMissHairpin = 0
+
+	// prioLBReplyUnDNAT takes a backend reply, back from the hairpin zone,
+	// through ct(nat) in its VIP's zone, in table 29: one flow per backend.
+	// It matches ct_zone, so a packet already back from the VIP zone falls
+	// through to the verdicts below.
+	prioLBReplyUnDNAT = 200
+
+	// prioLBReplyEst forwards a reply of a VIP connection in table 29.
+	prioLBReplyEst = 100
+
+	// prioLBReplyMiss hands every other backend-sourced packet back to the
+	// table 20 conntrack gate.
+	prioLBReplyMiss = 0
+)
+
+// The reply mark is register 1 bit 0. The table 20 reply divert sets it
+// before the conntrack lookup and only matches packets that do not carry
+// it, so a backend packet that is not part of a VIP connection — the
+// backend's own traffic from its service port — can be resubmitted to
+// table 20 and pass through the firewall and NAT gates exactly as if the
+// load balancer were not there. The NAT service owns register 0.
+const (
+	replyMarkClear = "reg1=0/0x1"
+	replyMarkSet   = "load:1->NXM_NX_REG1[0]"
 )
 
 // AllocatorOwnerLB is the ct.ZoneAllocator owner name for per-VIP conntrack
 // zones. Keys are vipKey strings ("tcp/10.0.0.1:80").
 const AllocatorOwnerLB = "lb"
+
+// hairpinZoneKey is the AllocatorOwnerLB key of the one conntrack zone the
+// hairpin source NAT shares across VIPs. It cannot collide with a vipKey,
+// which always carries a protocol and an address.
+const hairpinZoneKey = "hairpin"
 
 // OpenFlow group ID range owned by the load balancer. Group IDs carry no
 // cookie, so the service claims a dedicated range ("LB" = 0x4C42) and
@@ -174,6 +220,7 @@ type Service struct {
 	mu            sync.Mutex
 	active        bool
 	vips          map[vipKey]*vipState
+	hairpinZone   uint16
 	lastReconcile time.Time
 
 	cancel context.CancelFunc
@@ -225,9 +272,11 @@ func (s *Service) gateRule() zoneflows.FlowRule {
 }
 
 // baseRules returns the shared scaffolding: the table 20 miss (so non-VIP
-// traffic continues to table 30 when no firewall bypass exists) and the
-// table 26 conntrack verdicts.
+// traffic continues to table 30 when no firewall bypass exists), the table
+// 26 conntrack verdicts, the table 28 miss, and the table 29 reply
+// verdicts.
 func (s *Service) baseRules() []zoneflows.FlowRule {
+	resubmitToGate := fmt.Sprintf("resubmit(,%d)", modes.TableCTGate)
 	return s.stamp([]zoneflows.FlowRule{
 		{
 			Table:    int(modes.TableCTGate),
@@ -241,30 +290,71 @@ func (s *Service) baseRules() []zoneflows.FlowRule {
 			Actions:  "drop",
 		},
 		{
+			// Established and related request packets pass the hairpin
+			// stage too: a hairpin connection's source NAT is applied per
+			// packet, not only at commit.
 			Table:    int(modes.TableLoadBalancer),
 			Priority: prioLBEstRel,
 			Match:    "ct_state=+est+trk",
-			Actions:  fmt.Sprintf("goto_table:%d", modes.TableMACLearning),
+			Actions:  fmt.Sprintf("goto_table:%d", modes.TableLBHairpin),
 		},
 		{
 			Table:    int(modes.TableLoadBalancer),
 			Priority: prioLBEstRel,
 			Match:    "ct_state=+rel+trk",
-			Actions:  fmt.Sprintf("goto_table:%d", modes.TableMACLearning),
+			Actions:  fmt.Sprintf("goto_table:%d", modes.TableLBHairpin),
 		},
 		{
 			Table:    int(modes.TableLoadBalancer),
 			Priority: prioLBMissT26,
 			Actions:  "drop",
 		},
+		{
+			Table:    int(modes.TableLBHairpin),
+			Priority: prioLBMissHairpin,
+			Actions:  fmt.Sprintf("goto_table:%d", modes.TableMACLearning),
+		},
+		{
+			// A reply of a committed VIP connection: both translations
+			// have been reversed.
+			Table:    int(modes.TableLBReply),
+			Priority: prioLBReplyEst,
+			Match:    "ct_state=+est+rpl+trk",
+			Actions:  fmt.Sprintf("goto_table:%d", modes.TableMACLearning),
+		},
+		{
+			// Anything else from a backend's address:port — its own
+			// traffic, not a VIP reply — goes back to the gate, marked so
+			// the reply divert does not take it again.
+			Table:    int(modes.TableLBReply),
+			Priority: prioLBReplyMiss,
+			Actions:  resubmitToGate,
+		},
 	})
 }
 
-// vipFlowRules builds the diversion and dispatch flows for a VIP.
+// vipFlowRules builds every flow one VIP owns:
+//
+//   - table 20: the request divert into the VIP's conntrack zone;
+//   - table 26: the dispatch of new connections to the select group;
+//   - table 28: per hairpin prefix, the source NAT to the VIP in the
+//     hairpin zone (committed on the first packet, applied to the rest);
+//   - table 20: per backend, the reply divert matching the backend's
+//     source address:port, through ct(nat) in the hairpin zone, which
+//     reverses a hairpin connection's source NAT;
+//   - table 29: per backend, for a packet back from the hairpin zone,
+//     ct(nat) in the VIP's zone, which reverses the DNAT so the reply's
+//     source is the VIP.
+//
+// The hairpin flows match ct_zone, which the bucket's conntrack commit
+// set: after the DNAT the packet's destination is the backend, so the zone
+// is what still says which VIP it is for. The hairpin zone is shared by
+// every VIP: its entries are keyed by the backend address:port, which
+// belongs to one VIP only.
 func (s *Service) vipFlowRules(vip VIP, zone uint16, groupID uint32) []zoneflows.FlowRule {
-	match := fmt.Sprintf("dl_type=0x0800,nw_proto=%d,nw_dst=%s,tp_dst=%d",
-		ipProtocols[vip.Protocol], vip.Address, vip.Port)
-	return s.stamp([]zoneflows.FlowRule{
+	proto := ipProtocols[vip.Protocol]
+	match := fmt.Sprintf("dl_type=0x0800,nw_proto=%d,nw_dst=%s,tp_dst=%d", proto, vip.Address, vip.Port)
+	rules := []zoneflows.FlowRule{
 		{
 			Table:    int(modes.TableCTGate),
 			Priority: prioLBDivert,
@@ -277,13 +367,50 @@ func (s *Service) vipFlowRules(vip VIP, zone uint16, groupID uint32) []zoneflows
 			Match:    "ct_state=+new+trk," + match,
 			Actions:  fmt.Sprintf("group:%d", groupID),
 		},
-	})
+	}
+	for _, prefix := range s.cfg.HairpinPrefixes {
+		source := fmt.Sprintf("ct_zone=%d,dl_type=0x0800,nw_src=%s", zone, prefix.Masked())
+		rules = append(rules,
+			zoneflows.FlowRule{
+				Table:    int(modes.TableLBHairpin),
+				Priority: prioLBHairpin,
+				Match:    "ct_state=+new+trk," + source,
+				Actions: fmt.Sprintf("ct(commit,zone=%d,nat(src=%s),table=%d)",
+					s.hairpinZone, vip.Address, modes.TableMACLearning),
+			},
+			zoneflows.FlowRule{
+				Table:    int(modes.TableLBHairpin),
+				Priority: prioLBHairpin,
+				Match:    "ct_state=+est+trk," + source,
+				Actions:  fmt.Sprintf("ct(zone=%d,nat,table=%d)", s.hairpinZone, modes.TableMACLearning),
+			},
+		)
+	}
+	for _, b := range vip.Backends {
+		source := fmt.Sprintf("dl_type=0x0800,nw_proto=%d,nw_src=%s,tp_src=%d", proto, b.Address, b.Port)
+		rules = append(rules,
+			zoneflows.FlowRule{
+				Table:    int(modes.TableCTGate),
+				Priority: prioLBReplyDivert,
+				Match:    replyMarkClear + "," + source,
+				Actions: fmt.Sprintf("%s,ct(table=%d,zone=%d,nat)",
+					replyMarkSet, modes.TableLBReply, s.hairpinZone),
+			},
+			zoneflows.FlowRule{
+				Table:    int(modes.TableLBReply),
+				Priority: prioLBReplyUnDNAT,
+				Match:    fmt.Sprintf("ct_zone=%d,%s", s.hairpinZone, source),
+				Actions:  fmt.Sprintf("ct(table=%d,zone=%d,nat)", modes.TableLBReply, zone),
+			},
+		)
+	}
+	return s.stamp(rules)
 }
 
 // groupMod builds the select group for a VIP from its healthy backends.
 // Each bucket commits the connection into the VIP's conntrack zone, DNATs
-// to the backend, and recirculates into table 30 — the standard OVS pattern
-// ct(commit,zone=Z,nat(dst=B:P),table=30). Zero healthy backends produce a
+// to the backend, and recirculates into the hairpin stage (table 28) —
+// ct(commit,zone=Z,nat(dst=B:P),table=28). Zero healthy backends produce a
 // bucketless group: new connections are dropped (fail closed) while
 // established connections continue through conntrack.
 func (s *Service) groupMod(state *vipState) *openflow.GroupMod {
@@ -292,11 +419,28 @@ func (s *Service) groupMod(state *vipState) *openflow.GroupMod {
 		g.AddBucket(b.weight(), openflow.NewActionCT(
 			openflow.NXCTFCommit,
 			state.zone,
-			modes.TableMACLearning,
+			modes.TableLBHairpin,
 			openflow.NewActionNATDst(b.Address, b.Port),
 		))
 	}
 	return g
+}
+
+// checkBackendsFreeLocked refuses backends any other VIP of the same
+// protocol already serves: a backend's replies are steered to its VIP's
+// zone by source address:port alone. The caller holds s.mu.
+func (s *Service) checkBackendsFreeLocked(self vipKey, protocol string, backends []Backend) error {
+	for key, state := range s.vips {
+		if key == self || key.proto != protocol {
+			continue
+		}
+		for _, b := range backends {
+			if _, serves := state.healthy[b.addrPort()]; serves {
+				return ErrBackendInUse
+			}
+		}
+	}
+	return nil
 }
 
 // groupIDFor derives the deterministic group ID for a key: the low 16 bits
@@ -329,16 +473,38 @@ func (s *Service) effectiveAlgorithm(vip VIP) string {
 // programs the select group, and installs the VIP flows. existingGroups
 // lists group IDs already present on the bridge (from Start recovery) so
 // the group is modified instead of re-added. The caller holds s.mu.
-func (s *Service) installVIPLocked(ctx context.Context, vip VIP, existingGroups map[uint32]struct{}) error {
+func (s *Service) installVIPLocked(ctx context.Context, vip VIP, existingGroups map[uint32]struct{}) (err error) {
 	key := vip.key()
 	if _, exists := s.vips[key]; exists {
 		return ErrVIPExists
+	}
+	if err := s.checkBackendsFreeLocked(key, vip.Protocol, vip.Backends); err != nil {
+		return err
 	}
 
 	zone, err := s.deps.Allocator.Allocate(ctx, AllocatorOwnerLB, key.String())
 	if err != nil {
 		return &OpError{Op: "allocate", Err: err}
 	}
+	// A VIP is installed whole or not at all: every step below that fails
+	// takes back what the steps before it put on the switch, so nothing is
+	// left behind that no VIP state accounts for.
+	var undo []func() error
+	undo = append(undo, func() error { return s.deps.Allocator.Release(ctx, AllocatorOwnerLB, key.String()) })
+	defer func() {
+		if err == nil {
+			return
+		}
+		var undoErrs []error
+		for i := len(undo) - 1; i >= 0; i-- {
+			if undoErr := undo[i](); undoErr != nil {
+				undoErrs = append(undoErrs, undoErr)
+			}
+		}
+		if len(undoErrs) > 0 {
+			err = errors.Join(err, &OpError{Op: "rollback", Err: errors.Join(undoErrs...)})
+		}
+	}()
 
 	groupID, err := s.groupIDFor(key)
 	if err != nil {
@@ -366,9 +532,12 @@ func (s *Service) installVIPLocked(ctx context.Context, vip VIP, existingGroups 
 	if err := program(ctx, s.cfg.Bridge, s.groupMod(state)); err != nil {
 		return &OpError{Op: "group-add", Err: err}
 	}
+	undo = append(undo, func() error { return s.deps.Groups.DeleteGroup(ctx, s.cfg.Bridge, groupID) })
 
 	flows := s.vipFlowRules(vip, zone, groupID)
 	if err := s.deps.Controller.InstallFlows(s.cfg.Bridge, flows); err != nil {
+		// A batch that failed may still have installed some of its flows.
+		undo = append(undo, func() error { return s.deleteFlowsLocked(ctx, flows) })
 		return &OpError{Op: "install", Err: err}
 	}
 	state.flows = flows
@@ -390,15 +559,8 @@ func (s *Service) removeVIPLocked(ctx context.Context, key vipKey) error {
 		return ErrVIPNotFound
 	}
 
-	for _, rule := range state.flows {
-		if err := s.deps.OVS.DeleteFlowStrict(ctx, s.cfg.Bridge, &ovs.FlowMod{
-			Table:    rule.Table,
-			Priority: rule.Priority,
-			Match:    rule.Match,
-			Cookie:   rule.Cookie,
-		}); err != nil {
-			return &OpError{Op: "delete", Err: err}
-		}
+	if err := s.deleteFlowsLocked(ctx, state.flows); err != nil {
+		return err
 	}
 
 	if err := s.deps.Groups.DeleteGroup(ctx, s.cfg.Bridge, state.groupID); err != nil {
@@ -418,13 +580,33 @@ func (s *Service) removeVIPLocked(ctx context.Context, key vipKey) error {
 // VIP flows, and the table 10 gate last so packets never enter the pipeline
 // before it is complete. Stale groups left in the load balancer range by a
 // previous run are removed, and health probing begins.
-func (s *Service) Start(ctx context.Context) error {
+func (s *Service) Start(ctx context.Context) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.active {
 		return ErrAlreadyStarted
 	}
+
+	// The hairpin zone comes first: every VIP's reply diverts name it.
+	hairpinZone, err := s.deps.Allocator.Allocate(ctx, AllocatorOwnerLB, hairpinZoneKey)
+	if err != nil {
+		return &OpError{Op: "allocate", Err: err}
+	}
+	s.hairpinZone = hairpinZone
+
+	// Start is transactional. The gateway registers the service only when
+	// Start succeeds, so a failed Start has no Stop to clean up after it:
+	// whatever it programmed or allocated is taken back here instead of
+	// being stranded on the bridge.
+	defer func() {
+		if err == nil {
+			return
+		}
+		if rollbackErr := s.rollbackStartLocked(ctx); rollbackErr != nil {
+			err = errors.Join(err, rollbackErr)
+		}
+	}()
 
 	// Recover the group table: IDs in the LB range from a previous run.
 	descs, err := s.deps.Groups.GetGroupDesc(ctx, s.cfg.Bridge)
@@ -485,6 +667,35 @@ func (s *Service) Start(ctx context.Context) error {
 	return nil
 }
 
+// rollbackStartLocked takes back a failed Start: every load-balancer flow
+// (one cookie-masked delete covers the gate, scaffolding and VIP flows),
+// the installed VIPs' groups and conntrack zones, and the hairpin zone. It
+// carries on past a failed step so one refusal does not strand the rest.
+// The caller holds s.mu.
+func (s *Service) rollbackStartLocked(ctx context.Context) error {
+	var errs []error
+	if err := s.deps.OVS.DeleteFlowsByCookie(ctx, s.cfg.Bridge, CookieLoadBalancer, CookieMask); err != nil {
+		errs = append(errs, err)
+	}
+	for key, state := range s.vips {
+		if err := s.deps.Groups.DeleteGroup(ctx, s.cfg.Bridge, state.groupID); err != nil {
+			errs = append(errs, err)
+		}
+		if err := s.deps.Allocator.Release(ctx, AllocatorOwnerLB, key.String()); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := s.deps.Allocator.Release(ctx, AllocatorOwnerLB, hairpinZoneKey); err != nil {
+		errs = append(errs, err)
+	}
+	s.vips = make(map[vipKey]*vipState)
+	s.hairpinZone = 0
+	if len(errs) > 0 {
+		return &OpError{Op: "rollback", Err: errors.Join(errs...)}
+	}
+	return nil
+}
+
 // Stop cancels health probing, removes the table 10 gate first (so traffic
 // falls back to the base pipeline), deletes every load-balancer-owned flow
 // by cookie, removes the select groups, and releases the conntrack zones.
@@ -525,6 +736,10 @@ func (s *Service) Stop(ctx context.Context) error {
 		if err := s.deps.Allocator.Release(ctx, AllocatorOwnerLB, key.String()); err != nil {
 			teardownErrs = append(teardownErrs, err)
 		}
+	}
+
+	if err := s.deps.Allocator.Release(ctx, AllocatorOwnerLB, hairpinZoneKey); err != nil {
+		teardownErrs = append(teardownErrs, err)
 	}
 
 	s.vips = make(map[vipKey]*vipState)
@@ -598,9 +813,13 @@ func (s *Service) ListVIPs() []VIPStatus {
 	return out
 }
 
-// SetBackends replaces the backend set of an installed VIP: the select
-// group is rebuilt and the healthy map re-seeded (new backends start
-// healthy; the prober demotes unreachable ones).
+// SetBackends replaces the backend set of an installed VIP: the reply
+// diverts follow the new set, the select group is rebuilt, and the healthy
+// map re-seeded (new backends start healthy; the prober demotes
+// unreachable ones). The new flows go in before the group can select a new
+// backend, and the flows of removed backends come out after it no longer
+// can; a removed backend's established connections stop being translated,
+// as a removed VIP's do.
 func (s *Service) SetBackends(ctx context.Context, protocol string, addr netip.AddrPort, backends []Backend) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -619,6 +838,13 @@ func (s *Service) SetBackends(ctx context.Context, protocol string, addr netip.A
 	if err := candidate.Validate(s.cfg.MaxBackends); err != nil {
 		return err
 	}
+	if err := s.checkBackendsFreeLocked(key, protocol, backends); err != nil {
+		return err
+	}
+	flows := s.vipFlowRules(candidate, state.zone, state.groupID)
+	if err := s.deps.Controller.InstallFlows(s.cfg.Bridge, flows); err != nil {
+		return &OpError{Op: "install", Err: err}
+	}
 
 	healthy := make(map[netip.AddrPort]bool, len(backends))
 	for _, b := range backends {
@@ -636,9 +862,54 @@ func (s *Service) SetBackends(ctx context.Context, protocol string, addr netip.A
 	if err := s.deps.Groups.ModifyGroup(ctx, s.cfg.Bridge, s.groupMod(state)); err != nil {
 		state.vip = prevVIP
 		state.healthy = prevHealthy
+		// The old backends' flows are all still installed; only the new
+		// ones' reply diverts have to come back out.
+		if delErr := s.deleteFlowsLocked(ctx, staleFlows(flows, state.flows)); delErr != nil {
+			return &OpError{Op: "group-modify", Err: errors.Join(err, delErr)}
+		}
 		return &OpError{Op: "group-modify", Err: err}
 	}
+	if err := s.deleteFlowsLocked(ctx, staleFlows(state.flows, flows)); err != nil {
+		return err
+	}
+	state.flows = flows
 	s.lastReconcile = time.Now()
+	return nil
+}
+
+// staleFlows returns the rules in from that keep is not installing again.
+// A rule is identified as OVS identifies it for a strict delete: table,
+// priority and match.
+func staleFlows(from, keep []zoneflows.FlowRule) []zoneflows.FlowRule {
+	type identity struct {
+		table, priority int
+		match           string
+	}
+	kept := make(map[identity]struct{}, len(keep))
+	for _, r := range keep {
+		kept[identity{r.Table, r.Priority, r.Match}] = struct{}{}
+	}
+	var out []zoneflows.FlowRule
+	for _, r := range from {
+		if _, ok := kept[identity{r.Table, r.Priority, r.Match}]; !ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// deleteFlowsLocked strict-deletes rules. The caller holds s.mu.
+func (s *Service) deleteFlowsLocked(ctx context.Context, rules []zoneflows.FlowRule) error {
+	for _, rule := range rules {
+		if err := s.deps.OVS.DeleteFlowStrict(ctx, s.cfg.Bridge, &ovs.FlowMod{
+			Table:    rule.Table,
+			Priority: rule.Priority,
+			Match:    rule.Match,
+			Cookie:   rule.Cookie,
+		}); err != nil {
+			return &OpError{Op: "delete", Err: err}
+		}
+	}
 	return nil
 }
 

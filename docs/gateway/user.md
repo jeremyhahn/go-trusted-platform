@@ -477,6 +477,29 @@ platformctl sdn lb vip set-backends --address 203.0.113.10 \
 The load balancer has **no REST API** — gRPC, Unix, QUIC, MCP and the CLI only.
 A REST-only client cannot see a VIP.
 
+**Clients on the backends' own network need `hairpin-prefixes`.** A backend
+replies to whatever source address it sees. For a client elsewhere that is
+fine: the reply routes back through the gateway, which translates it back to
+the VIP. A client on the same segment as the backend is different. The backend
+answers it directly, the reply never reaches the gateway, and the connection
+fails. List those client networks and their connections are source-NATed to
+the VIP as well, so the backend answers the gateway:
+
+```yaml
+load-balancer:
+  enabled: true
+  hairpin-prefixes: [10.20.0.0/24]   # the LAN the backends live on
+```
+
+Hairpin clients' connections reach the backend from the VIP address, not from
+the client's own; everyone else's keep the real client address.
+
+**A backend `address:port` serves one VIP per protocol.** The gateway steers a
+backend's replies back to its VIP by that endpoint alone, so adding a VIP whose
+backend already serves another VIP of the same protocol is refused
+(`ErrBackendInUse`). Run the service on another port to put it behind a second
+VIP.
+
 ---
 
 ## The trusted reverse proxy

@@ -131,16 +131,18 @@ func TestParseMatchStringEdgeCases(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("key-value pairs with no equals", func(t *testing.T) {
+	t.Run("a bare word that is not a protocol keyword is refused", func(t *testing.T) {
 		match := openflow.NewMatch()
 		err := parseMatchString(match, "invalidpair,in_port=1")
-		assert.NoError(t, err) // Should skip invalid pairs
+		require.Error(t, err, "a dropped field would install a broader flow than written")
+		assert.Contains(t, err.Error(), "unsupported match field: invalidpair")
 	})
 
-	t.Run("key-value pairs with multiple equals", func(t *testing.T) {
+	t.Run("an unknown key is refused", func(t *testing.T) {
 		match := openflow.NewMatch()
 		err := parseMatchString(match, "key=value=extra,in_port=1")
-		assert.NoError(t, err) // Should handle extra equals
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported match field: key")
 	})
 
 	t.Run("whitespace in values", func(t *testing.T) {
@@ -164,10 +166,10 @@ func TestParseActionsStringEdgeCases(t *testing.T) {
 		assert.Len(t, actions, 3)
 	})
 
-	t.Run("unknown action types", func(t *testing.T) {
-		actions, err := parseActionsString("unknown_action,output:1")
-		assert.NoError(t, err)
-		assert.Len(t, actions, 1) // Only output:1
+	t.Run("an unknown action is refused", func(t *testing.T) {
+		_, err := parseActionsString("unknown_action,output:1")
+		require.Error(t, err, "a dropped action would install a flow that does less than written")
+		assert.Contains(t, err.Error(), "unsupported action: unknown_action")
 	})
 
 	t.Run("action with prefix but invalid value", func(t *testing.T) {
@@ -432,7 +434,7 @@ func TestComplexFlowConversions(t *testing.T) {
 			Table:       255,
 			Priority:    65535,
 			Match:       "in_port=1,dl_src=aa:bb:cc:dd:ee:ff,dl_dst=11:22:33:44:55:66,dl_type=0x0800,dl_vlan=100,nw_src=192.168.1.1,nw_dst=10.0.0.1,nw_proto=6,tp_src=80,tp_dst=443",
-			Actions:     "mod_vlan_vid:200,mod_dl_src:ff:ee:dd:cc:bb:aa,mod_dl_dst:66:55:44:33:22:11,mod_nw_src:10.1.1.1,mod_nw_dst=192.168.2.1,output:2",
+			Actions:     "mod_vlan_vid:200,mod_dl_src:ff:ee:dd:cc:bb:aa,mod_dl_dst:66:55:44:33:22:11,mod_nw_src:10.1.1.1,mod_nw_dst:192.168.2.1,output:2",
 			Cookie:      "0xFEDCBA9876543210",
 			IdleTimeout: 3600,
 			HardTimeout: 7200,
