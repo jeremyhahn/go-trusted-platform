@@ -67,10 +67,9 @@ documents three BIOS settings that all ship wrong by default and, absent, produc
 install that reports success and cannot boot. A profile without a README has not been
 deployed on real hardware yet.
 
-The R640 `gateway.yaml` still configures the gateway with the `modes:` key, which is
-the deprecated `GatewayMode` compatibility surface, not the eleven service sections
-the gateway is modelled on (`docs/gateway/architecture.md`). The template is not
-changed by #559; it is recorded here so nobody copies the key into a new template.
+Every gateway template configures the gateway with service sections
+(`docs/gateway/architecture.md`); none uses the deprecated `modes:` key, and a new
+template must not reintroduce it.
 
 ## Quick Start
 
