@@ -35,6 +35,7 @@ import (
 type mockBGPServer struct {
 	keychains    []*api.TcpAoKeychain
 	policies     *api.SetPoliciesRequest
+	assigned     []*api.PolicyAssignment
 	mu           sync.RWMutex
 	paths        map[string]*api.Path
 	peers        map[string]*api.Peer
@@ -222,6 +223,13 @@ func (m *mockBGPServer) SetPolicies(ctx context.Context, req *api.SetPoliciesReq
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.policies = req
+	return nil
+}
+
+func (m *mockBGPServer) SetPolicyAssignment(ctx context.Context, req *api.SetPolicyAssignmentRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.assigned = append(m.assigned, req.GetAssignment())
 	return nil
 }
 

@@ -102,6 +102,9 @@ func (f *fakeBGPServer) AddTcpAoKeychain(context.Context, *api.AddTcpAoKeychainR
 	return nil
 }
 func (f *fakeBGPServer) SetPolicies(context.Context, *api.SetPoliciesRequest) error { return nil }
+func (f *fakeBGPServer) SetPolicyAssignment(context.Context, *api.SetPolicyAssignmentRequest) error {
+	return nil
+}
 
 var _ bgp.BGPServerInterface = (*fakeBGPServer)(nil)
 

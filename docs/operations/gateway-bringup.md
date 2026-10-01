@@ -143,6 +143,14 @@ step safe, and all three are visible in the template:
   of filling the gateway's RIB.
 - **`import-allow` is explicit** — default route only, v4 and v6.
 
+> **Use a build that carries #717.** Before it, two defects stood in front of
+> this step. The transit service never finished starting: `Speaker.Start` ran
+> GoBGP v4's blocking event loop inline, so no session came up at all. And had
+> it started, none of the three properties above would have held: the speaker
+> attached each peer's policy as a per-peer GoBGP assignment, which GoBGP
+> ignores for anything but a route-server client, so the allowlists, the empty
+> `announce:` and step 4's local-pref and MED were configured and not applied.
+
 > **If the daemon refuses to start here with `set_policies` in the error, you
 > are on a build older than #619.** `policySet` used to build one prefix set
 > per direction holding every entry, and GoBGP refuses a prefix set that mixes

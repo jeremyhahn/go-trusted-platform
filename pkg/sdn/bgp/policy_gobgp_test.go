@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"testing"
 
+	api "github.com/osrg/gobgp/v4/api"
 	"github.com/osrg/gobgp/v4/pkg/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,7 +69,9 @@ func TestRealGoBGP_AcceptsDualStackPolicySet(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 
 	s := &Speaker{config: cfg}
-	require.NoError(t, realGoBGP(t).SetPolicies(context.Background(), s.policySet()),
+	set, err := s.policySet()
+	require.NoError(t, err)
+	require.NoError(t, realGoBGP(t).SetPolicies(context.Background(), set),
 		"gobgp must accept the policy a dual-stack peer produces")
 }
 
@@ -100,7 +103,9 @@ func TestRealGoBGP_AcceptsTrafficEngineering(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 
 	s := &Speaker{config: cfg}
-	require.NoError(t, realGoBGP(t).SetPolicies(context.Background(), s.policySet()),
+	set, err := s.policySet()
+	require.NoError(t, err)
+	require.NoError(t, realGoBGP(t).SetPolicies(context.Background(), set),
 		"gobgp must accept every traffic-engineering action the config can express")
 }
 
@@ -118,7 +123,9 @@ func TestRealGoBGP_AcceptsTheEmptyPolicySet(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 
 	s := &Speaker{config: cfg}
-	require.NoError(t, realGoBGP(t).SetPolicies(context.Background(), s.policySet()))
+	set, err := s.policySet()
+	require.NoError(t, err)
+	require.NoError(t, realGoBGP(t).SetPolicies(context.Background(), set))
 }
 
 // TestPrefixDefinedSetsByFamily is the unit-level statement of #620's fix:
@@ -180,5 +187,49 @@ func TestPrefixDefinedSetsByFamily(t *testing.T) {
 			assert.Equal(t, tt.wantV4, gotV4, tt.wantReason)
 			assert.Equal(t, tt.wantV6, gotV6, tt.wantReason)
 		})
+	}
+}
+
+// TestRealGoBGP_AcceptsRouteTargetsAndGlobalAssignment hands GoBGP the
+// shape #717 introduced — neighbor sets, extended-community route-target
+// sets, an l2vpn-evpn family condition, a per-peer default-accept
+// statement — and then the global assignment that makes it apply.
+func TestRealGoBGP_AcceptsRouteTargetsAndGlobalAssignment(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Neighbors = []NeighborConfig{
+		{
+			Name: "rr", Address: netip.MustParseAddr("10.255.0.1"), ASN: cfg.ASN,
+			EnabledFamilies: []AddressFamily{AFamilyEVPN},
+			Policy: PeerPolicyConfig{
+				ImportRouteTargets: []string{"65000:100", "192.0.2.1:7"},
+				ExportRouteTargets: []string{"4200000000:9"},
+			},
+		},
+		{
+			Name: "v6-transit", Address: netip.MustParseAddr("2001:db8::2"), ASN: 401870,
+			EnabledFamilies: []AddressFamily{AFamilyIPv6Unicast},
+			Policy:          PeerPolicyConfig{ImportDefaultAccept: true},
+		},
+	}
+	require.NoError(t, cfg.Validate())
+
+	s := &Speaker{config: cfg}
+	set, err := s.policySet()
+	require.NoError(t, err)
+	srv := realGoBGP(t)
+	require.NoError(t, srv.SetPolicies(context.Background(), set))
+	for _, a := range globalAssignments() {
+		require.NoError(t, srv.SetPolicyAssignment(context.Background(), &api.SetPolicyAssignmentRequest{Assignment: a}))
+	}
+	// A second SetPolicies — what a runtime AddPeer does — must keep the
+	// assignment, because the policy names never change.
+	require.NoError(t, srv.SetPolicies(context.Background(), set))
+	var assigned []*api.PolicyAssignment
+	require.NoError(t, srv.ListPolicyAssignment(context.Background(), &api.ListPolicyAssignmentRequest{},
+		func(a *api.PolicyAssignment) { assigned = append(assigned, a) }))
+	require.Len(t, assigned, 2)
+	for _, a := range assigned {
+		assert.Equal(t, api.RouteAction_ROUTE_ACTION_REJECT, a.GetDefaultAction(), "%s", a.GetDirection())
+		require.Len(t, a.GetPolicies(), 1)
 	}
 }

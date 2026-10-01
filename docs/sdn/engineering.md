@@ -293,6 +293,19 @@ general switch-configuration API.
 `noop.go` in `pkg/switch/` is the fixture that lets switch-dependent paths run
 without hardware.
 
+BGP routing policy is tested against two real GoBGP speakers peered over
+loopback in the same process (`pkg/sdn/bgp/policy_session_test.go`), not
+against the mock server. A mock accepts whatever policy it is handed, which is
+how a per-peer policy GoBGP never applies passed every test until #717. The
+session tests assert what each speaker's RIB and adjacency tables actually hold:
+an out-of-allowlist route is present in Adj-RIB-In and absent from the RIB, and
+an out-of-allowlist export is absent from Adj-RIB-Out and from the peer, for an
+eBGP ipv4/ipv6 unicast session and an iBGP l2vpn-evpn session. The same file
+proves the EVPN prefix limit: 1500 EVPN routes hold the session, and a peer
+over its configured `max-evpn-prefixes` loses it. Each session comes up in
+about two seconds (GoBGP's minimum connect retry); waits poll the real
+condition with a bound.
+
 BGP peer health is tested by calling `PeerManager.checkPeerHealth` directly:
 what the subtests assert is what a health check does to a peer, which is a
 property of the check and not of how many checks fit inside a wall-clock window.

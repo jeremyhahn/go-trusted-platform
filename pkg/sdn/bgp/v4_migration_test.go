@@ -259,13 +259,8 @@ func TestSpeaker_AddPeerInstallsItsPolicyFirst(t *testing.T) {
 	mock.mu.Unlock()
 	require.NotNil(t, policies)
 	want := policyName(policyPrefixImport, peer.Address)
-	found := false
-	for _, pol := range policies.Policies {
-		if pol.GetName() == want {
-			found = true
-		}
-	}
-	assert.True(t, found, "the runtime-added peer's import policy %q was not installed", want)
+	assert.NotEmpty(t, statementsFor(t, policies, policyPrefixImport, want),
+		"the runtime-added peer's import statements %q were not installed", want)
 	assert.Len(t, s.config.Neighbors, 1)
 
 	require.NoError(t, s.DeletePeer(context.Background(), peer.Address))
@@ -310,35 +305,62 @@ func TestSpeaker_StartInstallsKeychainsAndPolicies(t *testing.T) {
 	assert.Equal(t, []byte("k"), mock.keychains[0].Keys[0].MasterKey)
 
 	require.NotNil(t, mock.policies)
-	// Two directions, each split into a v4 and a v6 prefix set: GoBGP
-	// refuses a set that holds both families (#620).
-	require.Len(t, mock.policies.DefinedSets, 4)
-	require.Len(t, mock.policies.Policies, 2)
-	importV4 := mock.policies.DefinedSets[0]
+	// The peer's neighbor set, then two directions, each split into a v4
+	// and a v6 prefix set: GoBGP refuses a set that holds both families
+	// (#620).
+	require.Len(t, mock.policies.DefinedSets, 5)
+	neighbors := mock.policies.DefinedSets[0]
+	assert.Equal(t, api.DefinedType_DEFINED_TYPE_NEIGHBOR, neighbors.DefinedType)
+	assert.Equal(t, "tp-peer-10-255-0-2", neighbors.Name)
+	assert.Equal(t, []string{"10.255.0.2/32"}, neighbors.List)
+	importV4 := mock.policies.DefinedSets[1]
 	assert.Equal(t, "tp-import-10-255-0-2-prefixes-v4", importV4.Name)
 	require.Len(t, importV4.Prefixes, 1)
 	assert.Equal(t, "0.0.0.0/0", importV4.Prefixes[0].IpPrefix)
 	assert.Equal(t, uint32(0), importV4.Prefixes[0].MaskLengthMax, "exact match only")
-	assert.Empty(t, mock.policies.DefinedSets[1].Prefixes,
+	assert.Empty(t, mock.policies.DefinedSets[2].Prefixes,
 		"tp-import-10-255-0-2-prefixes-v6 is empty, so v6 falls to the reject default")
 
-	exportV4 := mock.policies.DefinedSets[2]
+	exportV4 := mock.policies.DefinedSets[3]
 	assert.Equal(t, "tp-export-10-255-0-2-prefixes-v4", exportV4.Name)
 	require.Len(t, exportV4.Prefixes, 1, "export defaults to the announced prefixes, v4 half")
 	assert.Equal(t, "23.143.36.0/24", exportV4.Prefixes[0].IpPrefix)
-	exportV6 := mock.policies.DefinedSets[3]
+	exportV6 := mock.policies.DefinedSets[4]
 	assert.Equal(t, "tp-export-10-255-0-2-prefixes-v6", exportV6.Name)
 	require.Len(t, exportV6.Prefixes, 1, "and its v6 half")
 	assert.Equal(t, "2602:f5bb::/36", exportV6.Prefixes[0].IpPrefix)
 
-	// One accept statement per family, both naming their own set.
+	// Two global policies. Import opens with the local-origin accept, then
+	// one accept statement per family, both naming their own set and both
+	// scoped to the peer.
+	require.Len(t, mock.policies.Policies, 2)
 	importPolicy := mock.policies.Policies[0]
-	require.Len(t, importPolicy.Statements, 2)
-	assert.Equal(t, api.RouteAction_ROUTE_ACTION_ACCEPT, importPolicy.Statements[0].Actions.RouteAction)
-	assert.Equal(t, api.MatchSet_TYPE_ANY, importPolicy.Statements[0].Conditions.PrefixSet.Type)
-	assert.Equal(t, importV4.Name, importPolicy.Statements[0].Conditions.PrefixSet.Name)
+	assert.Equal(t, policyPrefixImport, importPolicy.Name)
+	assert.Equal(t, policyPrefixExport, mock.policies.Policies[1].Name)
+	require.Len(t, importPolicy.Statements, 3)
+	local := importPolicy.Statements[0]
+	assert.Equal(t, localOriginStatement, local.Name)
+	assert.Equal(t, api.Conditions_ROUTE_TYPE_LOCAL, local.Conditions.RouteType)
+	assert.Equal(t, api.RouteAction_ROUTE_ACTION_ACCEPT, local.Actions.RouteAction)
+	v4 := importPolicy.Statements[1]
+	assert.Equal(t, api.RouteAction_ROUTE_ACTION_ACCEPT, v4.Actions.RouteAction)
+	assert.Equal(t, api.MatchSet_TYPE_ANY, v4.Conditions.PrefixSet.Type)
+	assert.Equal(t, importV4.Name, v4.Conditions.PrefixSet.Name)
+	assert.Equal(t, neighbors.Name, v4.Conditions.NeighborSet.Name)
 	assert.Equal(t, "tp-import-10-255-0-2-prefixes-v6",
-		importPolicy.Statements[1].Conditions.PrefixSet.Name)
+		importPolicy.Statements[2].Conditions.PrefixSet.Name)
+
+	// Both global policies are assigned to the global RIB with the RFC 8212
+	// reject default: GoBGP evaluates every non-route-server peer there.
+	require.Len(t, mock.assigned, 2)
+	for i, dir := range []api.PolicyDirection{api.PolicyDirection_POLICY_DIRECTION_IMPORT, api.PolicyDirection_POLICY_DIRECTION_EXPORT} {
+		assert.Equal(t, dir, mock.assigned[i].Direction)
+		assert.Empty(t, mock.assigned[i].Name, "the empty name is the global RIB")
+		assert.Equal(t, api.RouteAction_ROUTE_ACTION_REJECT, mock.assigned[i].DefaultAction)
+		require.Len(t, mock.assigned[i].Policies, 1)
+	}
+	assert.Equal(t, policyPrefixImport, mock.assigned[0].Policies[0].Name)
+	assert.Equal(t, policyPrefixExport, mock.assigned[1].Policies[0].Name)
 
 	// Graceful restart is advertised by default.
 	require.NotNil(t, mock.global)
@@ -385,10 +407,8 @@ func TestSpeaker_PeerCarriesPolicyBFDAndPrefixLimit(t *testing.T) {
 		assert.Equal(t, uint32(7), as.PrefixLimits.MaxPrefixes)
 		assert.Equal(t, uint32(prefixLimitWarnPct), as.PrefixLimits.ShutdownThresholdPct)
 	}
-	require.NotNil(t, peer.ApplyPolicy)
-	assert.Equal(t, api.RouteAction_ROUTE_ACTION_REJECT, peer.ApplyPolicy.ImportPolicy.DefaultAction, "RFC 8212 import default")
-	assert.Equal(t, api.RouteAction_ROUTE_ACTION_ACCEPT, peer.ApplyPolicy.ExportPolicy.DefaultAction, "opted in")
-	assert.Equal(t, "tp-import-10-255-0-2", peer.ApplyPolicy.ImportPolicy.Policies[0].Name)
+	assert.Nil(t, peer.ApplyPolicy,
+		"GoBGP ignores a per-peer assignment on a non-route-server peer; the policy is global (#717)")
 	require.NotNil(t, peer.GracefulRestart)
 	assert.True(t, peer.GracefulRestart.Enabled)
 }

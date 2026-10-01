@@ -483,6 +483,33 @@ tenantAVRF := &VRFConfig{
 }
 ```
 
+### Session policy: route-target allowlists
+
+What an l2vpn-evpn peer may send and be sent is decided per neighbor by route
+target, under `policy` (see [configuration.md](configuration.md)):
+
+```yaml
+peers:
+  - address: 10.4.0.1
+    families: [evpn]
+    max-evpn-prefixes: 100000
+    policy:
+      import-route-targets: ["65000:10100"]   # admit a route carrying one of these
+      export-route-targets: ["65000:10100"]   # announce a route carrying one of these
+```
+
+Both directions default to reject (RFC 8212). A route is admitted when it
+carries **at least one** listed route target; an empty list admits nothing, so an
+EVPN neighbor without route targets exchanges no EVPN routes. The filter is a
+statement in the speaker's global import or export policy, matched on the
+neighbor, the l2vpn-evpn family and an extended-community set; GoBGP ignores
+per-neighbor policy on anything but a route-server client, which is why the
+policy is global (#717). Unicast prefix allowlists never match an EVPN route,
+and the route-target statement never admits a unicast one.
+
+`max-evpn-prefixes` is the session's EVPN route limit, separate from the
+unicast `max-prefixes`; size it to VTEPs x MACs. The default is 100000.
+
 ### Multi-Tenancy with RT
 
 ```

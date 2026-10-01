@@ -24,6 +24,8 @@ import (
 	"time"
 
 	api "github.com/osrg/gobgp/v4/api"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -31,6 +33,7 @@ import (
 type mockBGPServer struct {
 	keychains []*api.TcpAoKeychain
 	policies  *api.SetPoliciesRequest
+	assigned  []*api.PolicyAssignment
 	mu        sync.RWMutex
 	started   bool
 	stopped   bool
@@ -39,19 +42,20 @@ type mockBGPServer struct {
 	paths     []*api.Path
 
 	// Error injection
-	startErr      error
-	startBgpErr   error
-	stopBgpErr    error
-	addPeerErr    error
-	deletePeerErr error
-	updatePeerErr error
-	getBgpErr     error
-	listPeerErr   error
-	resetPeerErr  error
-	addPathErr    error
-	deletePathErr error
-	listPathErr   error
-	watchEventErr error
+	setAssignmentErr error
+	startErr         error
+	startBgpErr      error
+	stopBgpErr       error
+	addPeerErr       error
+	deletePeerErr    error
+	updatePeerErr    error
+	getBgpErr        error
+	listPeerErr      error
+	resetPeerErr     error
+	addPathErr       error
+	deletePathErr    error
+	listPathErr      error
+	watchEventErr    error
 
 	// Callback for watch events
 	watchCallback func(*api.WatchEventResponse)
@@ -287,6 +291,16 @@ func (m *mockBGPServer) SetPolicies(ctx context.Context, req *api.SetPoliciesReq
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.policies = req
+	return nil
+}
+
+func (m *mockBGPServer) SetPolicyAssignment(ctx context.Context, req *api.SetPolicyAssignmentRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.setAssignmentErr != nil {
+		return m.setAssignmentErr
+	}
+	m.assigned = append(m.assigned, req.GetAssignment())
 	return nil
 }
 
@@ -1273,26 +1287,15 @@ func TestSpeakerCallbacks(t *testing.T) {
 func TestNeighborConfigWithAllOptions(t *testing.T) {
 	ctx := context.Background()
 	mock := newMockBGPServer()
-	logger := speakerTestLogger()
-	config := speakerTestConfig()
+	speaker, err := NewSpeaker(speakerTestConfig(), speakerTestLogger(), WithBGPServer(mock))
+	require.NoError(t, err)
+	require.NoError(t, speaker.Start(ctx))
+	t.Cleanup(func() { _ = speaker.Stop(context.Background()) })
 
-	speaker, err := NewSpeaker(config, logger, WithBGPServer(mock))
-	if err != nil {
-		t.Fatalf("failed to create speaker: %v", err)
-	}
-
-	err = speaker.Start(ctx)
-	if err != nil {
-		t.Fatalf("failed to start speaker: %v", err)
-	}
-	defer func() {
-		closeErr := speaker.Stop(ctx)
-		if closeErr != nil {
-			t.Logf("failed to stop speaker: %v", closeErr)
-		}
-	}()
-
-	// Create neighbor config with all options
+	// Every option a neighbor can carry. md5 is the one whose fate depends
+	// on the build: a FIPS build refuses it (ruling R1, #621), so there the
+	// peer must be refused whole, and the remaining options are then proven
+	// on the same peer without it.
 	neighborCfg := &NeighborConfig{
 		Address:              netip.MustParseAddr("10.0.0.2"),
 		ASN:                  65002,
@@ -1311,33 +1314,37 @@ func TestNeighborConfigWithAllOptions(t *testing.T) {
 	}
 
 	err = speaker.AddPeer(ctx, neighborCfg)
-	if err != nil {
-		t.Fatalf("failed to add peer with full config: %v", err)
-	}
+	wantPassword := "secret"
+	if !md5SessionAuthPermitted() {
+		var refused ErrAuthTypeUnavailableInFIPS
+		require.ErrorAs(t, err, &refused, "a FIPS build must refuse an md5 peer")
+		assert.Equal(t, "10.0.0.2", refused.Peer)
+		assert.Empty(t, mock.peers, "a refused peer creates no session")
 
-	// Verify peer was added with correct settings
+		neighborCfg.AuthType, neighborCfg.AuthKey = AuthTypeNone, ""
+		err = speaker.AddPeer(ctx, neighborCfg)
+		wantPassword = ""
+	}
+	require.NoError(t, err)
+
 	peer := mock.peers["10.0.0.2"]
-	if peer == nil {
-		t.Fatal("peer not found")
-	}
-
-	if peer.Conf.Description != "Full config peer" {
-		t.Errorf("description mismatch: %s", peer.Conf.Description)
-	}
-	if peer.Conf.AuthPassword != "secret" {
-		t.Error("password not set")
-	}
-	if !peer.Transport.PassiveMode {
-		t.Error("passive mode not set")
-	}
-	if peer.EbgpMultihop == nil || !peer.EbgpMultihop.Enabled {
-		t.Error("EBGP multihop not enabled")
-	}
-	if peer.RouteReflector == nil || !peer.RouteReflector.RouteReflectorClient {
-		t.Error("route reflector client not set")
-	}
-	if len(peer.AfiSafis) != 3 {
-		t.Errorf("expected 3 address families, got %d", len(peer.AfiSafis))
+	require.NotNil(t, peer, "peer not found")
+	assert.Equal(t, "Full config peer", peer.Conf.Description)
+	assert.Equal(t, wantPassword, peer.Conf.AuthPassword)
+	assert.True(t, peer.Transport.PassiveMode, "passive mode not set")
+	require.NotNil(t, peer.EbgpMultihop)
+	assert.True(t, peer.EbgpMultihop.Enabled, "EBGP multihop not enabled")
+	require.NotNil(t, peer.RouteReflector)
+	assert.True(t, peer.RouteReflector.RouteReflectorClient, "route reflector client not set")
+	assert.Equal(t, api.RemovePrivate_REMOVE_PRIVATE_ALL, peer.Conf.RemovePrivate)
+	assert.Equal(t, api.PeerState_ADMIN_STATE_DOWN, peer.State.AdminState)
+	require.Len(t, peer.AfiSafis, 3)
+	for _, as := range peer.AfiSafis {
+		want := DefaultMaxPrefixes
+		if as.Config.Family.Afi == api.Family_AFI_L2VPN {
+			want = DefaultMaxEVPNPrefixes
+		}
+		assert.Equal(t, want, as.PrefixLimits.MaxPrefixes, "%v carries its own family's limit", as.Config.Family)
 	}
 }
 

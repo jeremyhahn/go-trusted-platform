@@ -16,6 +16,7 @@ package bgp
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"testing"
 
 	api "github.com/osrg/gobgp/v4/api"
@@ -346,22 +347,32 @@ func TestPeerPolicyConfig_Validate_ReachesBothDirections(t *testing.T) {
 	})
 }
 
-// findPolicy returns the named policy from an installed policy set.
-func findPolicy(t *testing.T, req *api.SetPoliciesRequest, name string) *api.Policy {
+// statementsFor returns the statements of one global policy that belong to
+// one peer, in order: every per-peer statement is named after the peer's
+// direction prefix (policyName).
+func statementsFor(t *testing.T, req *api.SetPoliciesRequest, policy, peerPrefix string) []*api.Statement {
 	t.Helper()
 	require.NotNil(t, req)
 	for _, p := range req.Policies {
-		if p.GetName() == name {
-			return p
+		if p.GetName() != policy {
+			continue
 		}
+		var out []*api.Statement
+		for _, st := range p.Statements {
+			if strings.HasPrefix(st.GetName(), peerPrefix+"-") {
+				out = append(out, st)
+			}
+		}
+		return out
 	}
-	t.Fatalf("policy %q was not installed; got %d policies", name, len(req.Policies))
+	t.Fatalf("policy %q was not installed; got %d policies", policy, len(req.Policies))
 	return nil
 }
 
 // TestPolicySet_CarriesTrafficEngineering is the end of the chain this
 // issue is about: a configured ladder reaches the speaker as GoBGP policy
-// statements, in the order that makes both of them take effect.
+// statements, in the order that makes both of them take effect, each
+// scoped to the peer it was configured for.
 func TestPolicySet_CarriesTrafficEngineering(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Neighbors = []NeighborConfig{{
@@ -382,33 +393,38 @@ func TestPolicySet_CarriesTrafficEngineering(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 
 	s, _ := startedSpeaker(t, cfg)
-	set := s.policySet()
+	set, err := s.policySet()
+	require.NoError(t, err)
+	peerSet := neighborSetName(cfg.Neighbors[0].Address)
 
 	importName := policyName(policyPrefixImport, cfg.Neighbors[0].Address)
-	imp := findPolicy(t, set, importName)
-	require.Len(t, imp.Statements, 3,
+	imp := statementsFor(t, set, policyPrefixImport, importName)
+	require.Len(t, imp, 3,
 		"the attribute statement, then one filter per address family")
 
-	attrs := imp.Statements[0]
+	attrs := imp[0]
 	assert.Equal(t, importName+"-attributes", attrs.GetName())
-	assert.Nil(t, attrs.GetConditions(),
+	assert.Equal(t, peerSet, attrs.GetConditions().GetNeighborSet().GetName(),
+		"the attributes apply to this peer's paths, not to every peer's")
+	assert.Nil(t, attrs.GetConditions().GetPrefixSet(),
 		"the attributes apply to the direction, not to a prefix list")
 	assert.Equal(t, api.RouteAction_ROUTE_ACTION_UNSPECIFIED, attrs.GetActions().GetRouteAction(),
 		"a route action here would stop evaluation before the filter")
 	assert.Equal(t, uint32(200), attrs.GetActions().GetLocalPref().GetValue())
 
 	for i, suffix := range []string{familySuffixV4, familySuffixV6} {
-		filter := imp.Statements[i+1]
+		filter := imp[i+1]
 		setName := importName + prefixSetSuffix + suffix
 		assert.Equal(t, setName+"-accept", filter.GetName())
 		assert.Equal(t, setName, filter.GetConditions().GetPrefixSet().GetName())
+		assert.Equal(t, peerSet, filter.GetConditions().GetNeighborSet().GetName())
 		assert.Equal(t, api.RouteAction_ROUTE_ACTION_ACCEPT, filter.GetActions().GetRouteAction())
 	}
 
 	exportName := policyName(policyPrefixExport, cfg.Neighbors[0].Address)
-	exp := findPolicy(t, set, exportName)
-	require.Len(t, exp.Statements, 3)
-	exportActions := exp.Statements[0].GetActions()
+	exp := statementsFor(t, set, policyPrefixExport, exportName)
+	require.Len(t, exp, 3)
+	exportActions := exp[0].GetActions()
 	assert.Equal(t, int64(50), exportActions.GetMed().GetValue())
 	assert.Equal(t, api.MedAction_TYPE_REPLACE, exportActions.GetMed().GetType())
 	assert.Equal(t, uint32(3), exportActions.GetAsPrepend().GetRepeat())
@@ -418,8 +434,7 @@ func TestPolicySet_CarriesTrafficEngineering(t *testing.T) {
 }
 
 // TestPolicySet_WithoutAttributesIsUnchanged pins that a peer that asks for
-// no traffic engineering still gets exactly the one-statement filter policy
-// it had before this feature existed.
+// no traffic engineering gets exactly its two family filters per direction.
 func TestPolicySet_WithoutAttributesIsUnchanged(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Neighbors = []NeighborConfig{{
@@ -432,14 +447,15 @@ func TestPolicySet_WithoutAttributesIsUnchanged(t *testing.T) {
 		},
 	}}
 	s, _ := startedSpeaker(t, cfg)
-	set := s.policySet()
+	set, err := s.policySet()
+	require.NoError(t, err)
 
 	for _, direction := range []string{policyPrefixImport, policyPrefixExport} {
 		name := policyName(direction, cfg.Neighbors[0].Address)
-		pol := findPolicy(t, set, name)
-		require.Len(t, pol.Statements, 2, "%s must carry the two filters alone", name)
-		assert.Equal(t, name+prefixSetSuffix+familySuffixV4+"-accept", pol.Statements[0].GetName())
-		assert.Equal(t, name+prefixSetSuffix+familySuffixV6+"-accept", pol.Statements[1].GetName())
+		pol := statementsFor(t, set, direction, name)
+		require.Len(t, pol, 2, "%s must carry the two filters alone", name)
+		assert.Equal(t, name+prefixSetSuffix+familySuffixV4+"-accept", pol[0].GetName())
+		assert.Equal(t, name+prefixSetSuffix+familySuffixV6+"-accept", pol[1].GetName())
 	}
 }
 

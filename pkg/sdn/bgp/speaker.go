@@ -49,6 +49,7 @@ type BGPServerInterface interface {
 	WatchEvent(ctx context.Context, req *api.WatchEventRequest, fn func(*api.WatchEventResponse)) error
 	AddTcpAoKeychain(ctx context.Context, req *api.AddTcpAoKeychainRequest) error
 	SetPolicies(ctx context.Context, req *api.SetPoliciesRequest) error
+	SetPolicyAssignment(ctx context.Context, req *api.SetPolicyAssignmentRequest) error
 }
 
 // gobgpServerWrapper wraps a real GoBGP server to implement BGPServerInterface.
@@ -64,8 +65,11 @@ func NewGoBGPServerAdapter(srv *server.BgpServer) BGPServerInterface {
 	return &gobgpServerWrapper{server: srv}
 }
 
+// Start runs the server's event loop. GoBGP v4's Serve blocks until Stop,
+// so it runs on its own goroutine; every later call reaches it through the
+// server's management channel, which Serve drains.
 func (w *gobgpServerWrapper) Start() error {
-	w.server.Serve()
+	go w.server.Serve()
 	return nil
 }
 
@@ -285,6 +289,11 @@ func (w *gobgpServerWrapper) SetPolicies(ctx context.Context, req *api.SetPolici
 	return w.server.SetPolicies(ctx, req)
 }
 
+// SetPolicyAssignment replaces one direction's policy assignment.
+func (w *gobgpServerWrapper) SetPolicyAssignment(ctx context.Context, req *api.SetPolicyAssignmentRequest) error {
+	return w.server.SetPolicyAssignment(ctx, req)
+}
+
 // apiPathToNative turns a wire-shaped path into the native path GoBGP v4's
 // in-process API consumes.
 func apiPathToNative(p *api.Path) (*apiutil.Path, error) {
@@ -484,11 +493,18 @@ func (s *Speaker) Start(ctx context.Context) error {
 		}
 	}
 
-	// RFC 8212: every peer's import and export default to reject; the
-	// policy set the peers reference is installed once, here.
-	if err := s.server.SetPolicies(ctx, s.policySet()); err != nil {
+	// RFC 8212: every peer's import and export default to reject. The two
+	// global policies are installed, then assigned to the global RIB once;
+	// later SetPolicies calls keep the assignment (policy.go).
+	if err := s.installPolicies(ctx); err != nil {
 		s.server.Stop()
-		return &ErrServerOperationFailed{Operation: "set_policies", Cause: err}
+		return err
+	}
+	for _, assignment := range globalAssignments() {
+		if err := s.server.SetPolicyAssignment(ctx, &api.SetPolicyAssignmentRequest{Assignment: assignment}); err != nil {
+			s.server.Stop()
+			return &ErrServerOperationFailed{Operation: "set_policy_assignment", Cause: err}
+		}
 	}
 
 	s.startTime = time.Now()
@@ -566,9 +582,9 @@ func (s *Speaker) AddPeer(ctx context.Context, cfg *NeighborConfig) error {
 	// session; a failed add takes the registration back out.
 	registered := s.registerNeighbor(cfg)
 	if registered {
-		if err := s.server.SetPolicies(ctx, s.policySet()); err != nil {
+		if err := s.installPolicies(ctx); err != nil {
 			s.unregisterNeighbor(cfg.Address)
-			return &ErrServerOperationFailed{Operation: "set_policies", Cause: err}
+			return err
 		}
 	}
 
@@ -590,6 +606,19 @@ func (s *Speaker) AddPeer(ctx context.Context, cfg *NeighborConfig) error {
 		}
 	}
 
+	return nil
+}
+
+// installPolicies builds the policy set for the configured neighbors and
+// installs it. Callers hold s.mu.
+func (s *Speaker) installPolicies(ctx context.Context) error {
+	set, err := s.policySet()
+	if err != nil {
+		return err
+	}
+	if err := s.server.SetPolicies(ctx, set); err != nil {
+		return &ErrServerOperationFailed{Operation: "set_policies", Cause: err}
+	}
 	return nil
 }
 
@@ -1094,10 +1123,10 @@ func (s *Speaker) neighborConfigToPeer(cfg *NeighborConfig) *api.Peer {
 		Transport: &api.Transport{
 			PassiveMode: cfg.PassiveMode,
 		},
+		// No ApplyPolicy: GoBGP ignores a per-peer assignment on any peer
+		// that is not a route-server client. The peer's RFC 8212 policy is
+		// its statements in the global policies (policy.go).
 		AfiSafis: make([]*api.AfiSafi, 0),
-		// RFC 8212: reject by default in both directions; the named
-		// policies (policySet) admit exactly the configured prefixes.
-		ApplyPolicy: s.peerApplyPolicy(cfg),
 	}
 
 	// MD5 session authentication (non-FIPS compatibility path). The secret
@@ -1145,11 +1174,7 @@ func (s *Speaker) neighborConfigToPeer(cfg *NeighborConfig) *api.Peer {
 		}
 	}
 
-	// Configure address families, each with its prefix limit.
-	maxPrefixes := cfg.MaxPrefixes
-	if maxPrefixes == 0 {
-		maxPrefixes = DefaultMaxPrefixes
-	}
+	// Configure address families, each with its own prefix limit.
 	for _, af := range cfg.Families() {
 		family := s.addressFamilyToAPI(af)
 		if family == nil {
@@ -1162,7 +1187,7 @@ func (s *Speaker) neighborConfigToPeer(cfg *NeighborConfig) *api.Peer {
 			},
 			PrefixLimits: &api.PrefixLimit{
 				Family:               family,
-				MaxPrefixes:          maxPrefixes,
+				MaxPrefixes:          cfg.PrefixLimit(af),
 				ShutdownThresholdPct: prefixLimitWarnPct,
 			},
 		})

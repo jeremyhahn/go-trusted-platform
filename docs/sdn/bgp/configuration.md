@@ -53,7 +53,8 @@ gateway:
         remove-private-as: false
         admin-down: false
         families: [ipv4-unicast, ipv6-unicast]
-        max-prefixes: 10             # per family; default 1000; session torn down at the limit
+        max-prefixes: 10             # each unicast family; default 1000; session torn down at the limit
+        max-evpn-prefixes: 100000    # l2vpn-evpn; default 100000 (VTEPs x MACs, not 1000)
         bfd:
           enabled: true
           port: 3784
@@ -65,6 +66,8 @@ gateway:
             - prefix: 0.0.0.0/0      # exact match unless max-length widens it
             - prefix: ::/0
           export-allow: []           # empty = exactly the announce prefixes
+          import-route-targets: []   # l2vpn-evpn: admit a route carrying one of these; empty = none
+          export-route-targets: []   # l2vpn-evpn: announce a route carrying one of these; empty = none
           import-default-accept: false
           export-default-accept: false
           import:                    # traffic engineering on paths received
@@ -100,11 +103,41 @@ with `ErrTCPAOSessionBindingUnsupported` rather than run unauthenticated. The
 refusal is lifted the moment the linked GoBGP release binds keychains to
 neighbors.
 
-**Policy.** Both directions default to reject. `import-allow` is the only way a
-prefix from a peer enters the RIB; `export-allow` defaults to the `announce`
-prefixes. The policy set is installed once with `SetPolicies` before any peer
-is added, and every peer's `ApplyPolicy` names its two policies with a reject
-default. `max-prefixes` is enforced per address family.
+**Policy.** Both directions default to reject (RFC 8212). `import-allow` is the
+only way a unicast prefix from a peer enters the RIB; `export-allow` defaults to
+the `announce` prefixes. An l2vpn-evpn route is admitted by route target instead:
+it is imported when it carries one of `import-route-targets` and announced when
+it carries one of `export-route-targets`. Both lists are empty by default, so a
+peer with EVPN enabled and no route targets exchanges no EVPN routes. A route
+target is `<asn>:<number>` (an AS up to 65535 takes a 32-bit number, a larger AS
+a 16-bit one) or `<ipv4>:<number>` (16-bit number); anything else, including a
+number too large for its form, is refused at load with `ErrRouteTargetInvalid`.
+
+**How the policy is installed (#717).** GoBGP honours a per-peer policy
+assignment only on a route-server client: `ApplyPolicy` looks the assignment up
+by `peer.TableID()`, which is the global RIB for every other peer, and
+`setPeerPolicy` discards the per-peer one (GoBGP v4.9.0 `server.go`). The
+speaker used to attach each peer's policy that way, so on every session — transit
+included — nothing was filtered and none of the `import:` / `export:` attributes
+applied. The policy is now **two global policies**, `tp-import` and `tp-export`,
+assigned once to the global RIB at start with a reject default. Each peer
+contributes statements to both, every one conditioned on a neighbor set holding
+only that peer's address; GoBGP matches it against the peer a path came from on
+import and the peer it is going to on export. The import policy opens with one
+statement accepting locally originated paths, because GoBGP runs those through
+the global import policy too; what leaves the speaker is still decided by the
+export statements. `import-default-accept` / `export-default-accept` become a
+last per-peer statement that accepts anything from or to that peer. The two
+policy names never change, so a peer added at runtime re-installs the
+definitions and the assignment keeps resolving to them.
+
+**Prefix limits.** `max-prefixes` applies to each unicast family separately
+(default 1000). `max-evpn-prefixes` applies to l2vpn-evpn (default 100000). It is
+a separate field because an EVPN session carries a Type-2 route per MAC/IP
+binding and a Type-3 route per VTEP and EVI: the route-reflector sessions are
+sized by the fabric, and the unicast default would tear a healthy one down at its
+thousand-and-first MAC. Size it to VTEPs x MACs plus headroom. GoBGP warns at
+80 % of a limit and tears the session down when the peer exceeds it.
 
 **Traffic engineering.** `policy.import` and `policy.export` carry the path
 attributes that rank one session against another. Without them a speaker with
@@ -119,15 +152,17 @@ decide which one carries traffic, which is not a choice an operator made.
 | `communities` | either | Standard communities (RFC 1997). |
 | `large-communities` | either | Large communities (RFC 8092). |
 
-Each direction becomes an attribute statement with no conditions and no route
-action, followed by one prefix filter per address family. GoBGP applies the
-attribute statement's actions and falls through, so the attributes hold for the
-whole direction rather than only for the allowlist — which is what keeps them
-correct when a direction is opted into accept-by-default.
+Each direction of a peer becomes an attribute statement with no route action
+and only the peer's neighbor set as its condition, followed by one prefix filter
+per unicast family and, when route targets are configured, one route-target
+filter restricted to l2vpn-evpn. GoBGP applies the attribute statement's actions
+and falls through, so the attributes hold for everything the peer sends or is
+sent rather than only for the allowlist — which is what keeps them correct when a
+direction is opted into accept-by-default.
 
 The filter is split per family because GoBGP refuses a prefix set holding both
 (#620); a path is only ever admitted by its own family's statement, and anything
-outside both lists falls through to the reject default as before.
+outside every list falls through to the reject default.
 
 A community block names **one** `action` and its `values`, because GoBGP carries
 one community action per direction; parallel add and remove lists would mean
@@ -620,21 +655,22 @@ neighbors:
 
 ### Prefix Limits
 
-Prevent route table overflow:
+Per neighbor, per family. The unicast families share `max-prefixes`, counted
+separately for IPv4 and IPv6; l2vpn-evpn has its own:
 
 ```yaml
-neighbors:
-  - address: "198.51.100.1"
-    prefix_limits:
-      ipv4_unicast:
-        max_prefixes: 10000
-        warning_threshold: 80  # Warn at 80%
-        action: "restart"      # restart, shutdown, warning-only
-      ipv6_unicast:
-        max_prefixes: 5000
-        warning_threshold: 80
-        action: "restart"
+peers:
+  - address: 10.4.255.2
+    families: [ipv4-unicast, ipv6-unicast]
+    max-prefixes: 10            # default 1000
+  - address: 10.4.0.1
+    families: [evpn]
+    max-evpn-prefixes: 250000   # default 100000
 ```
+
+See **Prefix limits** under the decoded schema above for why EVPN is separate.
+The warning threshold (80 %) is fixed; exceeding a limit always tears the
+session down.
 
 ### Route Signing
 

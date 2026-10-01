@@ -39,10 +39,18 @@ const (
 	// advertised when the configuration sets none.
 	DefaultGracefulRestartTime uint16 = 120
 
-	// DefaultMaxPrefixes is the per-family prefix limit applied to a peer
-	// that sets none. The iBGP relays send a default route; anything near
-	// this is a misconfigured or hostile peer.
+	// DefaultMaxPrefixes is the prefix limit applied to each unicast family
+	// (ipv4-unicast, ipv6-unicast) of a peer that sets none. The iBGP relays
+	// send a default route; anything near this is a misconfigured or hostile
+	// peer.
 	DefaultMaxPrefixes uint32 = 1000
+
+	// DefaultMaxEVPNPrefixes is the l2vpn-evpn prefix limit of a peer that
+	// sets none. EVPN carries a Type-2 route per MAC/IP binding and a Type-3
+	// route per VTEP and EVI, so a route-reflector session holds roughly
+	// VTEPs × MACs routes: the unicast limit would tear down a healthy
+	// fabric at its thousand-and-first MAC.
+	DefaultMaxEVPNPrefixes uint32 = 100000
 
 	// DefaultBFDPort is the single-hop BFD control port (RFC 5881).
 	DefaultBFDPort uint16 = 3784
@@ -766,10 +774,16 @@ type NeighborConfig struct {
 	// failure detection.
 	BFD *BFDConfig `yaml:"bfd" json:"bfd" mapstructure:"bfd"`
 
-	// MaxPrefixes caps the prefixes accepted from this peer per address
-	// family (0 = the default, DefaultMaxPrefixes); the session is torn
-	// down at the limit.
+	// MaxPrefixes caps the prefixes accepted from this peer in each unicast
+	// family, ipv4-unicast and ipv6-unicast counted separately (0 = the
+	// default, DefaultMaxPrefixes); the session is torn down at the limit.
 	MaxPrefixes uint32 `yaml:"max-prefixes" json:"max_prefixes" mapstructure:"max-prefixes"`
+
+	// MaxEVPNPrefixes caps the l2vpn-evpn routes accepted from this peer
+	// (0 = the default, DefaultMaxEVPNPrefixes). It is separate from
+	// MaxPrefixes because an EVPN session is sized by the fabric (VTEPs ×
+	// MACs), not by the handful of prefixes a transit peer sends.
+	MaxEVPNPrefixes uint32 `yaml:"max-evpn-prefixes" json:"max_evpn_prefixes" mapstructure:"max-evpn-prefixes"`
 
 	// Policy is the RFC 8212 import/export policy for this peer: default
 	// deny in both directions, with explicit prefix allowlists.
@@ -819,9 +833,12 @@ func (c *BFDConfig) Validate() error {
 }
 
 // PeerPolicyConfig is the per-peer routing policy. Both directions default
-// to reject (RFC 8212); a prefix is accepted or exported only if it is
-// covered by the corresponding allowlist. An empty export allowlist means
-// the speaker's own announced prefixes (BGPConfig.Announce).
+// to reject (RFC 8212); a unicast prefix is accepted or exported only if it
+// is covered by the corresponding prefix allowlist, and an l2vpn-evpn route
+// only if it carries a route target on the corresponding route-target
+// allowlist. An empty export prefix allowlist means the speaker's own
+// announced prefixes (BGPConfig.Announce); an empty route-target allowlist
+// means no EVPN route in that direction.
 type PeerPolicyConfig struct {
 	// ImportAllow lists the prefixes accepted from the peer. A prefix
 	// matches when it is equal to, or more specific than, an entry (up to
@@ -831,6 +848,15 @@ type PeerPolicyConfig struct {
 	// ExportAllow lists the prefixes announced to the peer. Empty means
 	// exactly the configured Announce prefixes.
 	ExportAllow []PrefixMatch `yaml:"export-allow" json:"export_allow" mapstructure:"export-allow"`
+
+	// ImportRouteTargets lists the route targets that admit an l2vpn-evpn
+	// route from the peer: the route is accepted when it carries at least
+	// one of them. Each is "<asn>:<number>" or "<ipv4>:<number>".
+	ImportRouteTargets []string `yaml:"import-route-targets" json:"import_route_targets" mapstructure:"import-route-targets"`
+
+	// ExportRouteTargets lists the route targets that let an l2vpn-evpn
+	// route be announced to the peer, in the same form.
+	ExportRouteTargets []string `yaml:"export-route-targets" json:"export_route_targets" mapstructure:"export-route-targets"`
 
 	// ImportDefaultAccept turns the import direction into accept-by-default
 	// (not RFC 8212 compliant; for a trusted internal peer only).
@@ -885,6 +911,11 @@ func (c *PeerPolicyConfig) Validate() error {
 	}
 	for i := range c.ExportAllow {
 		if err := c.ExportAllow[i].Validate(); err != nil {
+			return err
+		}
+	}
+	for _, rts := range [][]string{c.ImportRouteTargets, c.ExportRouteTargets} {
+		if _, err := routeTargetPatterns(rts); err != nil {
 			return err
 		}
 	}
@@ -1092,6 +1123,9 @@ func (c *NeighborConfig) Validate() error {
 	if c.MaxPrefixes == 0 {
 		c.MaxPrefixes = DefaultMaxPrefixes
 	}
+	if c.MaxEVPNPrefixes == 0 {
+		c.MaxEVPNPrefixes = DefaultMaxEVPNPrefixes
+	}
 	if c.BFD != nil {
 		if err := c.BFD.Validate(); err != nil {
 			return err
@@ -1113,6 +1147,23 @@ func (c *NeighborConfig) Validate() error {
 		}
 	}
 	return nil
+}
+
+// PrefixLimit returns the number of routes the peer may send in family
+// before the session is torn down. l2vpn-evpn has its own limit; every
+// other family takes the unicast one. A limit the configuration left at
+// zero is the family's default.
+func (c *NeighborConfig) PrefixLimit(family AddressFamily) uint32 {
+	if family == AFamilyEVPN {
+		if c.MaxEVPNPrefixes == 0 {
+			return DefaultMaxEVPNPrefixes
+		}
+		return c.MaxEVPNPrefixes
+	}
+	if c.MaxPrefixes == 0 {
+		return DefaultMaxPrefixes
+	}
+	return c.MaxPrefixes
 }
 
 // Families returns the peer's enabled address families in a stable order,
