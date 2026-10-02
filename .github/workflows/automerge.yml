@@ -1,145 +1,160 @@
-# automerge: Gitea owns the merge, not an agent.
+# automerge: a PR merges itself once CI is green -- unless it asks for review.
 #
-# The review workflow used to arm auto-merge itself, at the end of the review.
-# That put the merge on the reviewer's critical path: if the review job failed
-# -- as it did on 2026-09-06, posting to an already-merged PR -- nothing was
-# armed and the PR sat open waiting for a human to notice.
+# Owner rulings, 2026-10-01 (automatethethings#200):
+#   "automatically merges the branch to main when there is no code-review
+#    label. when a code-review label is present, the automerge does not run.
+#    no further action is taken by gitea. i dont want any approvers required
+#    for gitea merges to main once the PR CI jobs are all green"
+#   "quicbaas is going to be responsible for running the code review agents
+#    instead of gitea. we only want standard actions in gitea"
+#   "make sure that the automerge squashes and deletes the remote branch"
 #
-# Arming happens here instead, once, when the PR opens. Gitea then merges it
-# when every required check passes and the reviewer has approved the CURRENT
-# head. An agent opens the PR and walks away; there is nothing to remember.
+# NO MERGE IS EVER SCHEDULED. Gitea's merge-when-checks-succeed would arm a
+# merge that fires the instant CI goes green -- and a `code-review` label added
+# while CI runs could only cancel it from a job still waiting for a runner, so
+# the labelled PR would merge anyway. Instead this workflow merges IMMEDIATELY,
+# and only at a moment it has just checked both conditions:
+#   - CI finishing (workflow_run): CI is green now; re-read the labels; merge.
+#   - a PR event (opened, push, label change, ready): merge now if CI is
+#     already green; otherwise do nothing -- CI finishing will run this again.
+# The label is checked first on every run (cancelling any merge a legacy
+# workflow armed) and again immediately before the merge call, so
+# `code-review` added at any point before that holds the PR. With the label
+# Gitea does nothing further: QuicBaaS reviews the PR. Squash, then delete the
+# head branch.
 #
-# Gitea has no repository-level "always auto-merge" setting (checked against
-# the 1.27 API: EditRepoOption has default_merge_style and
-# default_delete_branch_after_merge, but no automerge flag), so this three-line
-# workflow is the mechanism. It runs no AI and makes two API calls.
+# FAIL CLOSED: nothing merges unless the base branch REQUIRES at least one
+# status check and every required context is `success` on the PR head.
+#
+# The merge is made as the repository's own agent (AGENT_TOKEN), one of the
+# principals on the merge whitelist (infra/gitea/scripts/setup-repo-guardrails.sh).
 name: Auto Merge
 
 on:
   pull_request:
-    types: [opened, reopened]
-  # A PR that opened before this workflow existed was never armed, and an
-  # `opened` event cannot be replayed -- the only remaining route was a hand
-  # -written API call, which is exactly the "remember to do it" this workflow
-  # exists to remove. Dispatch is that route, running the same two calls
-  # against a PR number given by hand.
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: Number of the pull request to arm
-        required: true
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
+  workflow_run:
+    # The repository's CI workflow; the documentation repos call theirs Docs.
+    workflows: [CI, Docs]
+    types: [completed]
+
+# One decision per PR (or per head commit for a CI completion) at a time; the
+# newest event wins.
+concurrency:
+  group: automerge-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
 
 jobs:
-  arm:
-    name: Arm Gitea auto-merge
-    # On a dispatch there is no pull_request payload, so the draft test would
-    # read a missing field. Ask the event first and let the dispatcher own the
-    # decision it already made by dispatching.
+  merge:
+    name: Merge when CI is green and there is no code-review label
     if: >-
       github.server_url != 'https://github.com' &&
-      (github.event_name == 'workflow_dispatch' ||
-       github.event.pull_request.draft != true)
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:
-      - name: Label for review, then hand the merge to Gitea
+      - name: Merge, hold, or wait
         env:
-          # THE REVIEWER MUST NOT MERGE. Owner ruling 2026-09-09: "the reviewers
-          # should not merge, only review. gitea merges or the project agent."
-          #
-          # Gitea's scheduled auto-merge has a DOER -- there is no "Gitea itself"
-          # actor -- so whoever arms it becomes the merger. Arming it with the
-          # reviewer's token is exactly why the reviewer was merging: opencode
-          # merged 153 pull requests, 38 of them in one day, and on go-xkms#493 a
-          # single automated APPROVED both satisfied protection and performed the
-          # merge. The issue-closing the owner noticed (go-xkms#131, closed one
-          # second after that merge) was a side effect of being the merger.
-          #
-          # The project agent arms; Gitea performs when the approval lands. Single
-          # approver, auto-merge and branch deletion are all UNCHANGED -- he kept
-          # those deliberately. Only the actor changes.
-          #
-          # This is the whole reason OPENCODE_BOT_TOKEN no longer appears in this
-          # file: after this change the reviewer's token exists only in the review
-          # workflow, so it cannot merge anything even by mistake.
           BOT: ${{ secrets.AGENT_TOKEN }}
           REPO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
-          PR: ${{ github.event.pull_request.number || github.event.inputs.pr }}
+          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
 
-          # Fail closed, naming the secret. A blank token here would not be
-          # inert: curl would send `Authorization: token ` and Gitea would answer
-          # as an anonymous caller, so the label POST fails and this reports a
-          # problem that looks like a permissions bug rather than a missing
-          # secret. Worse, an earlier shape of this fix could have fallen back to
-          # the reviewer's token, which would silently restore the very behaviour
-          # the owner just ruled out.
+          # A blank token would make Gitea answer as an anonymous caller, which
+          # reads as a permissions bug; it must never fall back to another token.
           [ -n "${BOT:-}" ] || {
-            echo "::error::AGENT_TOKEN is not set on this repository."
-            echo "::error::This workflow arms Gitea's auto-merge AS THE PROJECT AGENT so"
-            echo "::error::that the reviewer never merges. Without it nothing is armed;"
-            echo "::error::it must not fall back to the reviewer's token."
+            echo "::error::AGENT_TOKEN is not set on this repository; the merge is made as the project agent."
             exit 1; }
+          api() { # method path [body] -> http code; body in /tmp/api.json
+            curl -sS -o /tmp/api.json -w '%{http_code}' -X "$1" \
+              -H "Authorization: token $BOT" -H 'Content-Type: application/json' \
+              ${3:+-d "$3"} "$REPO_API$2"
+          }
 
-          # Fail closed. An empty number builds ".../issues//labels", a URL
-          # that is not this PR and whose answer says nothing about it, so an
-          # unnumbered dispatch could report success having armed nothing.
-          [ -n "${PR:-}" ] || {
-            echo "no PR number: dispatch this workflow with the 'pr' input"; exit 1; }
+          # Which PR. A CI completion names a commit; find the open PR whose
+          # head it is (none: a push to main, or the PR moved on -- nothing to do).
+          pr="${PR_FROM_EVENT:-}"
+          page=1
+          while [ -z "$pr" ]; do
+            # Every page: a PR beyond the first would otherwise never merge,
+            # since its CI completion is the event that was supposed to do it.
+            code=$(api GET "/pulls?state=open&limit=50&page=$page")
+            [ "$code" = "200" ] || { echo "::error::cannot list open PRs (HTTP $code)"; exit 1; }
+            [ "$(jq 'length' /tmp/api.json)" -gt 0 ] || { echo "no open PR has head $RUN_SHA; nothing to merge"; exit 0; }
+            pr=$(jq -r --arg s "$RUN_SHA" '[.[] | select(.head.sha == $s)][0].number // empty' /tmp/api.json)
+            page=$((page + 1))
+          done
 
-          # Every PR is reviewed, so the label is applied here rather than
-          # relied upon. Gitea accepts label NAMES as well as ids.
-          code=$(curl -sS -o /tmp/label.json -w '%{http_code}' -X POST \
-            -H "Authorization: token $BOT" -H 'Content-Type: application/json' \
-            -d '{"labels":["code-review"]}' "$REPO_API/issues/$PR/labels")
-          echo "label: HTTP $code"
+          code=$(api GET "/pulls/$pr")
+          [ "$code" = "200" ] || { echo "::error::cannot read PR $pr (HTTP $code)"; exit 1; }
+          cp /tmp/api.json /tmp/pr.json
+          [ "$(jq -r '.state' /tmp/pr.json)" = "open" ] || { echo "PR $pr is not open"; exit 0; }
+          [ "$(jq -r '.draft' /tmp/pr.json)" != "true" ] || { echo "PR $pr is a draft; not merging"; exit 0; }
+          head=$(jq -r '.head.sha' /tmp/pr.json)
+          base=$(jq -r '.base.ref' /tmp/pr.json)
+
+          # Required checks on the base branch -- fail closed without one.
+          code=$(api GET "/branch_protections/$base")
+          if [ "$code" != "200" ] || ! jq -e '.enable_status_check == true and ((.status_check_contexts // []) | length > 0)' /tmp/api.json >/dev/null; then
+            echo "::error::$base requires no status checks, so nothing would wait for CI. Not merging."
+            exit 1
+          fi
+          jq -c '.status_check_contexts' /tmp/api.json > /tmp/required.json
+
+          # The label is decided BEFORE CI, and every run enforces it: a PR held
+          # with `code-review` must carry no armed merge, even while CI is
+          # still running -- a schedule armed by the pre-2026-10-01 workflow
+          # (or by a legacy copy still on an old PR head) would otherwise fire
+          # the moment CI goes green. Read fresh, never from the event payload.
+          code=$(api GET "/issues/$pr/labels")
+          [ "$code" = "200" ] || { echo "::error::cannot read the labels of PR $pr (HTTP $code)"; exit 1; }
+          if jq -e 'any(.[]; .name == "code-review")' /tmp/api.json >/dev/null; then
+            code=$(api DELETE "/pulls/$pr/merge")
+            case "$code" in
+              204) echo "code-review label: cancelled a merge armed earlier; not merging; QuicBaaS reviews PR $pr." ;;
+              404) echo "code-review label: not merging; QuicBaaS reviews PR $pr." ;;
+              *)   echo "::error::PR $pr is held with code-review but an armed merge could not be cancelled (HTTP $code): $(cat /tmp/api.json)"; exit 1 ;;
+            esac
+            exit 0
+          fi
+
+          # Is every required context green on the PR head? The combined status
+          # carries the LATEST status per context (raw history would page out
+          # after enough re-runs); page it until total_count is covered.
+          echo '[]' > /tmp/latest.json
+          page=1
+          while :; do
+            code=$(api GET "/commits/$head/status?limit=50&page=$page")
+            [ "$code" = "200" ] || { echo "::error::cannot read the status of $head (HTTP $code)"; exit 1; }
+            jq -s '.[0] + (.[1].statuses // [])' /tmp/latest.json /tmp/api.json > /tmp/latest.next
+            mv /tmp/latest.next /tmp/latest.json
+            total=$(jq -r '.total_count // 0' /tmp/api.json)
+            got=$(jq 'length' /tmp/latest.json)
+            { [ "$(jq '.statuses // [] | length' /tmp/api.json)" -gt 0 ] && [ "$got" -lt "$total" ]; } || break
+            page=$((page + 1))
+          done
+          if ! jq -e --slurpfile req /tmp/required.json '
+                . as $latest | $req[0] | all(. as $c | any($latest[]; .context == $c and .status == "success"))
+              ' /tmp/latest.json >/dev/null; then
+            echo "CI is not green on $head yet; CI finishing will run this again."
+            exit 0
+          fi
+
+          # Last look at the label, one call before the merge: a label added
+          # while the statuses were read still holds the PR.
+          code=$(api GET "/issues/$pr/labels")
+          [ "$code" = "200" ] || { echo "::error::cannot re-read the labels of PR $pr (HTTP $code)"; exit 1; }
+          if jq -e 'any(.[]; .name == "code-review")' /tmp/api.json >/dev/null; then
+            echo "code-review label added just now: not merging; QuicBaaS reviews PR $pr."
+            exit 0
+          fi
+
+          # Merge now: squash, delete the head branch, and only if the head is
+          # still the commit whose checks were just read.
+          body=$(jq -nc --arg h "$head" '{Do: "squash", delete_branch_after_merge: true, head_commit_id: $h}')
+          code=$(api POST "/pulls/$pr/merge" "$body")
           case "$code" in
-            200|201) ;;
-            *) echo "could not label the PR: $(cat /tmp/label.json)"; exit 1 ;;
-          esac
-
-          # Field names are Gitea's WIRE format, not its Go field names:
-          # swagger's MergePullRequestOption gives
-          #   "merge_when_checks_succeed" (x-go-name: MergeWhenChecksSucceed)
-          #   "delete_branch_after_merge" (x-go-name: DeleteBranchAfterMerge)
-          # Sending the CamelCase Go names is what would be silently ignored --
-          # and an ignored merge_when_checks_succeed means an immediate merge,
-          # so this is worth being exact about. "Do" really is capitalised
-          # upstream (json:"Do"); the mixed casing is Gitea's.
-          # No head_commit_id: pinning the head would strand the schedule as
-          # soon as another commit lands. The required checks are what keep an
-          # unreviewed head from merging.
-          code=$(curl -sS -o /tmp/merge.json -w '%{http_code}' -X POST \
-            -H "Authorization: token $BOT" -H 'Content-Type: application/json' \
-            -d '{"Do":"squash","merge_when_checks_succeed":true,"delete_branch_after_merge":true}' \
-            "$REPO_API/pulls/$PR/merge")
-          echo "auto-merge: HTTP $code"
-          # This job reports a commit status of its own, and Gitea weighs the
-          # commit's overall status when it decides whether a scheduled merge
-          # may proceed. So "already scheduled" MUST NOT fail here: a red arm
-          # job would block the very merge it exists to enable.
-          case "$code" in
-            200|201) echo "Gitea will merge this when its required checks pass." ;;
-            409)     echo "already scheduled by an earlier run — nothing to do." ;;
-            405)
-              # 405 is Gitea's catch-all for "this merge cannot proceed", and
-              # one of its causes is benign: the PR has ALREADY MERGED. That is
-              # what a late arm job finds -- go-recountly #23 merged at
-              # 2026-09-06T00:08:40-04:00 and its arm job reached the API at
-              # 00:22:08, 13 minutes behind a saturated runner pool, and got
-              #   405 {"message":"The PR is already merged"}
-              # which fell through to the catch-all and failed the job. Nothing
-              # was wrong; the work was done. The status code alone cannot tell
-              # that from a genuine refusal, so the body is what decides.
-              # (405 is the code Gitea actually returns here. swagger.v1.json
-              # for this route documents 200/403/404/405/409/423 and no 422 --
-              # measure before adding an arm for a code this API cannot send.)
-              if grep -q 'already merged' /tmp/merge.json; then
-                echo "the PR is already merged — nothing to arm."
-              else
-                echo "merge not currently allowed ($code): $(cat /tmp/merge.json)"
-                exit 1
-              fi
-              ;;
-            *)       echo "unexpected $code: $(cat /tmp/merge.json)"; exit 1 ;;
+            200|201|204) echo "merged PR $pr ($head) into $base; branch deleted" ;;
+            *) echo "::error::PR $pr is green and unlabelled but did not merge (HTTP $code): $(cat /tmp/api.json)"; exit 1 ;;
           esac
