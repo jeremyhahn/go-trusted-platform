@@ -1841,6 +1841,8 @@ define run-integration-suite
 		-e CGO_ENABLED=1 \
 		-e GOTOOLCHAIN=auto \
 		-e GOWORK=off \
+		-e HOST_UID=$(shell id -u) \
+		-e HOST_GID=$(shell id -g) \
 		$(2) \
 		$(DEVCONTAINER_IMAGE) \
 		bash /workspace/build/docker/devcontainer/run-integration-tests.sh $(1) "$(strip $(TEST_BUILD_TAGS))"

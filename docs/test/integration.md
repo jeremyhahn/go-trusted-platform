@@ -348,6 +348,13 @@ deliberate exception. They run on the host against services the caller has
 already started, they say so in their help text, and they are not what CI or a
 lane runs.
 
+The runner hands back anything it created in the bind-mounted source tree
+before it exits. The container runs as root, so without that step a run leaves
+root-owned paths behind, `git status` reports a permission error on every
+invocation afterwards, and `git worktree remove` fails on the offending path.
+The owning user comes from `HOST_UID`/`HOST_GID` when the target passes them,
+and otherwise from the mount point's own ownership.
+
 ### Environment Variables
 
 | Variable | Default | Description |

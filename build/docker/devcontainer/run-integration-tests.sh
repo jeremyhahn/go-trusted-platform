@@ -20,6 +20,12 @@
 #   BUILD_TAGS - Space-separated list of build tags
 #                (default: "integration codec_msgpack codec_json codec_cbor")
 #
+# Environment:
+#   HOST_UID / HOST_GID - the invoking user on the host. Anything the run
+#                creates in the bind-mounted source tree is handed back to them
+#                on exit; see restore_workspace_ownership. Optional: the mount
+#                point's own ownership is used when they are unset.
+#
 # Examples:
 #   run-integration-tests.sh
 #   run-integration-tests.sh all
@@ -119,6 +125,62 @@ OVS_INT_BRIDGE="br-platform-int"
 # Cleanup
 # =============================================================================
 
+# restore_workspace_ownership gives back anything the run created in the
+# bind-mounted source tree.
+#
+# The container runs as root, so files it writes into the mount come back owned
+# by root. Two costs, both paid by whoever ran the suite: `git status` starts
+# reporting "could not open directory ... Permission denied" on every
+# invocation, and `git worktree remove` fails on the root-owned path, which
+# makes cleaning up a finished branch look like it needs sudo. It does not, but
+# each person has to discover that.
+#
+# The owning uid/gid come from HOST_UID/HOST_GID when the caller passes them,
+# and otherwise from the mount point itself: a bind mount preserves the host
+# directory's ownership, so stat on the workspace root is the invoking user by
+# construction. The fallback matters because not every target passes the
+# variables.
+#
+# Never fails the run. A chown problem is not a test result, and this function
+# is called from the EXIT trap, where a non-zero return would be noise.
+restore_workspace_ownership() {
+    local dir="${PLATFORM_BUILD_DIR:-/workspace}"
+
+    if [ ! -d "$dir" ]; then
+        return 0
+    fi
+
+    # Only root can hand files to another owner; a rootless container has
+    # nothing to fix, because it never created root-owned files.
+    if [ "$(id -u)" != "0" ]; then
+        return 0
+    fi
+
+    local uid="${HOST_UID:-}"
+    local gid="${HOST_GID:-}"
+    if [ -z "$uid" ] || [ -z "$gid" ]; then
+        uid="$(stat -c %u "$dir" 2>/dev/null || echo "")"
+        gid="$(stat -c %g "$dir" 2>/dev/null || echo "")"
+    fi
+
+    # Nothing to do when the workspace is genuinely owned by root on the host.
+    if [ -z "$uid" ] || [ -z "$gid" ] || [ "$uid" = "0" ]; then
+        return 0
+    fi
+
+    # Touch only what is wrong, so a clean tree costs a walk and no writes.
+    local count
+    count=$(find "$dir" \( ! -uid "$uid" -o ! -gid "$gid" \) -print 2>/dev/null | wc -l)
+    if [ "$count" = "0" ]; then
+        return 0
+    fi
+
+    echo "Restoring ownership of ${count} path(s) under ${dir} to ${uid}:${gid}..."
+    find "$dir" \( ! -uid "$uid" -o ! -gid "$gid" \) -print0 2>/dev/null \
+        | xargs -0 --no-run-if-empty chown -h "${uid}:${gid}" 2>/dev/null \
+        || echo "WARNING: could not restore ownership under ${dir}"
+}
+
 cleanup() {
     if [ "$CLEANUP_DONE" = true ]; then
         return
@@ -152,6 +214,8 @@ cleanup() {
     if [ -f /var/run/openvswitch/ovsdb-server.pid ]; then
         kill "$(cat /var/run/openvswitch/ovsdb-server.pid)" 2>/dev/null || true
     fi
+
+    restore_workspace_ownership
 
     echo "=== Cleanup complete ==="
 }
