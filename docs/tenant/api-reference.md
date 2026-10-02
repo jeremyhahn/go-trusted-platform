@@ -1136,6 +1136,22 @@ and Unix-socket transports so per-tenant state (CRUD, quotas, DEK, barrier
 lifecycle) is identical regardless of which transport
 the caller chose.
 
+`platformd serve` sets it in **both** modes, with and without webservices,
+through `platformTenantManager` (`pkg/daemon/commands/serve_tenant.go`). It
+builds the manager from the QuicBaaS SDK IAM tenant client. The manager is
+IAM-only: DEK isolation and the VLAN, quota and bridge subsystems are off
+until startup constructs them too (#721). Before #730, only the webservices
+path set the manager. A daemon-only node then registered `TenantService` but
+answered `FailedPrecondition` on every call.
+
+The daemon registers **one** `TenantGRPCServer` on both the TCP and the
+Unix-socket gRPC servers, so the manager `SetManager` installs serves both
+listeners. Before #730, each registration built its own `TenantGRPCServer`.
+The TCP listener then kept one that never received the manager.
+
+IAM must be on for any of this to exist. `--skip-iam-validation` (testing
+only) skips IAM, so it also skips `TenantService` registration.
+
 ---
 
 ## Related Documentation

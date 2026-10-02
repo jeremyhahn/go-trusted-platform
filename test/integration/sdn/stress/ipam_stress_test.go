@@ -17,136 +17,38 @@ package stress
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 )
 
-// testIPAMAllocator is a test implementation of the IPAM allocator.
-// In production tests, this would be replaced with a real allocator instance.
-// Thread-safe for concurrent stress testing.
-type testIPAMAllocator struct {
-	mu          sync.RWMutex
-	pools       map[string]*ipam.Pool
-	allocations map[netip.Addr]*ipam.Allocation
-	poolManager *ipam.PoolManager
-	counter     atomic.Uint64
-}
-
-func newTestIPAMAllocator() *testIPAMAllocator {
-	return &testIPAMAllocator{
-		pools:       make(map[string]*ipam.Pool),
-		allocations: make(map[netip.Addr]*ipam.Allocation),
-		poolManager: ipam.NewPoolManager(),
-	}
-}
-
-func (a *testIPAMAllocator) CreatePool(ctx context.Context, pool *ipam.Pool) error {
-	if err := a.poolManager.ValidatePool(pool); err != nil {
-		return err
-	}
-	a.poolManager.InitializePool(pool)
-
-	a.mu.Lock()
-	a.pools[pool.ID] = pool
-	a.mu.Unlock()
-	return nil
-}
-
-func (a *testIPAMAllocator) GetPool(ctx context.Context, poolID string) (*ipam.Pool, error) {
-	a.mu.RLock()
-	pool, exists := a.pools[poolID]
-	if !exists {
-		a.mu.RUnlock()
-		return nil, ipam.ErrPoolNotFound
-	}
-	// Clone the pool while holding the lock to avoid races
-	clone := pool.Clone()
-	a.mu.RUnlock()
-	return clone, nil
-}
-
-func (a *testIPAMAllocator) Allocate(ctx context.Context, req *ipam.AllocationRequest) (*ipam.Allocation, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	pool, exists := a.pools[req.PoolID]
-	if !exists {
-		return nil, ipam.ErrPoolNotFound
-	}
-
-	// Find next available IP - build allocated set from allocations map
-	allocated := make(map[netip.Addr]bool)
-	for ip, alloc := range a.allocations {
-		if alloc.PoolID == req.PoolID && alloc.Status == ipam.AllocationStatusActive {
-			allocated[ip] = true
+// newIPAMAllocator returns the allocator these stress tests drive: the
+// production memory backend (backends.NewMemoryBackend), which is what
+// platformd constructs when sdn.ipam.backend is empty or "memory"
+// (pkg/app/sdn_ipam_backends.go, pkg/api/daemon/daemon.go).
+//
+// These tests used to drive a test-local allocator that rebuilt the whole
+// allocated set on every call — O(n) per allocation, O(n^2) over a run — so
+// the latency they asserted measured that double, not the platform: its P99
+// grew with the number of prior allocations until TestIPAMAllocationStress
+// crossed its 100ms bound (#730). The real backend finds the next free
+// address with a bitmap scan and is what the bound was written for.
+func newIPAMAllocator(t *testing.T) ipam.Allocator {
+	t.Helper()
+	allocator := backends.NewMemoryBackend()
+	t.Cleanup(func() {
+		if err := allocator.Close(); err != nil {
+			t.Errorf("close IPAM allocator: %v", err)
 		}
-	}
-
-	ip, err := a.poolManager.NextAvailableIP(pool.CIDR, allocated)
-	if err != nil {
-		return nil, err
-	}
-
-	allocation := &ipam.Allocation{
-		ID:          fmt.Sprintf("alloc-%d", a.counter.Add(1)),
-		PoolID:      req.PoolID,
-		IP:          ip,
-		DeviceID:    req.DeviceID,
-		Hostname:    req.Hostname,
-		AllocatedAt: time.Now(),
-		LastSeen:    time.Now(),
-		Status:      ipam.AllocationStatusActive,
-	}
-
-	a.allocations[ip] = allocation
-	pool.AllocatedIPs++
-	pool.AvailableIPs--
-
-	return allocation, nil
-}
-
-func (a *testIPAMAllocator) Release(ctx context.Context, ip netip.Addr) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	alloc, exists := a.allocations[ip]
-	if !exists {
-		return ipam.ErrAllocationNotFound
-	}
-
-	pool := a.pools[alloc.PoolID]
-	if pool != nil {
-		pool.AllocatedIPs--
-		pool.AvailableIPs++
-	}
-
-	delete(a.allocations, ip)
-	return nil
-}
-
-func (a *testIPAMAllocator) GetPoolStats(ctx context.Context, poolID string) (*ipam.PoolStats, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	pool, exists := a.pools[poolID]
-	if !exists {
-		return nil, ipam.ErrPoolNotFound
-	}
-
-	// Read pool fields while holding the lock
-	return &ipam.PoolStats{
-		PoolID:       poolID,
-		TotalIPs:     pool.TotalIPs,
-		AllocatedIPs: pool.AllocatedIPs,
-		AvailableIPs: pool.AvailableIPs,
-	}, nil
+	})
+	return allocator
 }
 
 // TestIPAMAllocationStress tests sustained IP allocation load.
@@ -154,7 +56,7 @@ func TestIPAMAllocationStress(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	allocator := newTestIPAMAllocator()
+	allocator := newIPAMAllocator(t)
 
 	// Create a pool with enough IPs for stress testing
 	pool := &ipam.Pool{
@@ -213,14 +115,20 @@ func TestIPAMConcurrentStress(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	allocator := newTestIPAMAllocator()
+	allocator := newIPAMAllocator(t)
 
-	// Create multiple pools for different concurrency groups
-	for i := 0; i < 5; i++ {
+	// One pool per concurrency group. The run is unlimited-rate, so the pools
+	// must hold more than it can allocate: the production allocator sustains
+	// well over 300k allocations per second here, which drains five /16s
+	// (327k addresses) in about a second and turns every later call into
+	// ErrPoolExhausted. Five disjoint /10s hold 21M addresses -- capacity the
+	// eleven-second run cannot reach, so a refusal is a defect, not a full pool.
+	poolCIDRs := []string{"10.0.0.0/10", "10.64.0.0/10", "10.128.0.0/10", "10.192.0.0/10", "100.64.0.0/10"}
+	for i, cidr := range poolCIDRs {
 		pool := &ipam.Pool{
 			ID:   fmt.Sprintf("concurrent-pool-%d", i),
 			Name: fmt.Sprintf("Concurrent Pool %d", i),
-			CIDR: netip.MustParsePrefix(fmt.Sprintf("10.%d.0.0/16", i)),
+			CIDR: netip.MustParsePrefix(cidr),
 		}
 		if err := allocator.CreatePool(ctx, pool); err != nil {
 			t.Fatalf("Failed to create pool %d: %v", i, err)
@@ -237,6 +145,7 @@ func TestIPAMConcurrentStress(t *testing.T) {
 	}
 
 	deviceCounter := atomic.Uint64{}
+	allocated := atomic.Int64{}
 	op := func(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
@@ -244,13 +153,16 @@ func TestIPAMConcurrentStress(t *testing.T) {
 		default:
 		}
 		deviceID := deviceCounter.Add(1)
-		poolID := fmt.Sprintf("concurrent-pool-%d", deviceID%5)
+		poolID := fmt.Sprintf("concurrent-pool-%d", deviceID%uint64(len(poolCIDRs)))
 		req := &ipam.AllocationRequest{
 			PoolID:   poolID,
 			DeviceID: fmt.Sprintf("device-%d", deviceID),
 		}
-		_, err := allocator.Allocate(ctx, req)
-		return err
+		if _, err := allocator.Allocate(ctx, req); err != nil {
+			return err
+		}
+		allocated.Add(1)
+		return nil
 	}
 
 	reporter := NewTableReporter(os.Stdout)
@@ -263,7 +175,22 @@ func TestIPAMConcurrentStress(t *testing.T) {
 		t.Errorf("Success rate too low: %.2f%% (expected >= 85%%)", result.SuccessRate())
 	}
 
-	t.Logf("Completed %d concurrent allocations across 5 pools", result.TotalOperations)
+	// Every allocation the callers were granted must be held by exactly one
+	// pool: a lost update under concurrency shows up as pools that account
+	// for fewer (or more) addresses than were handed out.
+	var held int64
+	for i := range poolCIDRs {
+		stats, err := allocator.GetPoolStats(ctx, fmt.Sprintf("concurrent-pool-%d", i))
+		if err != nil {
+			t.Fatalf("Failed to get stats for pool %d: %v", i, err)
+		}
+		held += int64(stats.AllocatedIPs)
+	}
+	if held != allocated.Load() {
+		t.Errorf("pools hold %d allocations, callers were granted %d", held, allocated.Load())
+	}
+
+	t.Logf("Completed %d concurrent allocations across %d pools", result.TotalOperations, len(poolCIDRs))
 }
 
 // TestIPAMPoolExhaustionStress tests behavior when pools near capacity.
@@ -271,7 +198,7 @@ func TestIPAMPoolExhaustionStress(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	allocator := newTestIPAMAllocator()
+	allocator := newIPAMAllocator(t)
 
 	// Create a small pool that will be exhausted
 	pool := &ipam.Pool{
@@ -306,7 +233,7 @@ func TestIPAMPoolExhaustionStress(t *testing.T) {
 			DeviceID: fmt.Sprintf("device-%d", deviceCounter.Add(1)),
 		}
 		_, err := allocator.Allocate(ctx, req)
-		if err == ipam.ErrPoolExhausted {
+		if errors.Is(err, ipam.ErrPoolExhausted) {
 			exhaustionErrors.Add(1)
 		}
 		return err
@@ -342,7 +269,7 @@ func TestIPAMChurnStress(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	allocator := newTestIPAMAllocator()
+	allocator := newIPAMAllocator(t)
 
 	pool := &ipam.Pool{
 		ID:   "churn-pool",
@@ -439,7 +366,7 @@ func TestIPAMLatencyProfile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	allocator := newTestIPAMAllocator()
+	allocator := newIPAMAllocator(t)
 
 	pool := &ipam.Pool{
 		ID:   "latency-pool",

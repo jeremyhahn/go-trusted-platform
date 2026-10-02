@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/qlog"
@@ -538,7 +539,6 @@ type ipamPoolInfoWire struct {
 	Gateway       string            `codec:"gateway,omitempty"`
 	Zone          string            `codec:"zone,omitempty"`
 	Description   string            `codec:"description,omitempty"`
-	DNS           []string          `codec:"dns,omitempty"`
 	TotalIPs      int               `codec:"total_ips"`
 	AllocatedIPs  int               `codec:"allocated_ips"`
 	AvailableIPs  int               `codec:"available_ips"`
@@ -554,11 +554,10 @@ type ipamPoolInfoWire struct {
 
 // ipamPoolCreateRequest represents an IPAM pool create request.
 type ipamPoolCreateRequest struct {
-	Name          string   `codec:"name"`
-	CIDR          string   `codec:"cidr"`
-	Gateway       string   `codec:"gateway"`
-	DNS           []string `codec:"dns"`
-	LeaseDuration int64    `codec:"lease_duration_nanos"`
+	Name          string `codec:"name"`
+	CIDR          string `codec:"cidr"`
+	Gateway       string `codec:"gateway"`
+	LeaseDuration int64  `codec:"lease_duration_nanos"`
 }
 
 // ipamPoolCreateResponse represents an IPAM pool create response.
@@ -579,56 +578,6 @@ type ipamPoolDeleteResponse struct {
 	PoolID    string `codec:"pool_id"`
 	Success   bool   `codec:"success"`
 	Timestamp int64  `codec:"timestamp"`
-}
-
-// ipamAllocateRequest represents an IPAM allocate request.
-type ipamAllocateRequest struct {
-	PoolID   string `codec:"pool_id"`
-	DeviceID string `codec:"device_id"`
-	Hostname string `codec:"hostname"`
-}
-
-// ipamAllocateResponse represents an IPAM allocate response.
-type ipamAllocateResponse struct {
-	IP          string `codec:"ip"`
-	PoolID      string `codec:"pool_id"`
-	DeviceID    string `codec:"device_id"`
-	Hostname    string `codec:"hostname"`
-	LeaseExpiry int64  `codec:"lease_expiry"`
-}
-
-// ipamReleaseRequest represents an IPAM release request.
-type ipamReleaseRequest struct {
-	IP string `codec:"ip"`
-}
-
-// ipamReleaseResponse represents an IPAM release response.
-type ipamReleaseResponse struct {
-	IP       string `codec:"ip"`
-	Released bool   `codec:"released"`
-}
-
-// ipamListRequest represents an IPAM allocations list request.
-type ipamListRequest struct {
-	PoolID string `codec:"pool_id"`
-}
-
-// ipamListResponse represents an IPAM allocations list response.
-type ipamListResponse struct {
-	Allocations []ipamAllocationInfoWire `codec:"allocations"`
-	TotalCount  int                      `codec:"total_count"`
-}
-
-// ipamAllocationInfoWire represents IPAM allocation information in wire format.
-type ipamAllocationInfoWire struct {
-	IP          string `codec:"ip"`
-	PoolID      string `codec:"pool_id"`
-	DeviceID    string `codec:"device_id"`
-	Hostname    string `codec:"hostname"`
-	Status      string `codec:"status"`
-	AllocatedAt int64  `codec:"allocated_at"`
-	LeaseExpiry int64  `codec:"lease_expiry"`
-	LastSeen    int64  `codec:"last_seen"`
 }
 
 // =============================================================================
@@ -1351,7 +1300,6 @@ func (q *OverlayQUICAdapter) IPAMPoolList(ctx context.Context) (*IPAMPoolListRes
 			TotalIPs:      int64(wp.TotalIPs),
 			AllocatedIPs:  int64(wp.AllocatedIPs),
 			AvailableIPs:  int64(wp.AvailableIPs),
-			DNS:           wp.DNS,
 			LeaseDuration: time.Duration(wp.LeaseDuration),
 		}
 	}
@@ -1368,7 +1316,6 @@ func (q *OverlayQUICAdapter) IPAMPoolCreate(ctx context.Context, opts IPAMPoolCr
 		Name:          opts.Name,
 		CIDR:          opts.CIDR,
 		Gateway:       opts.Gateway,
-		DNS:           opts.DNS,
 		LeaseDuration: int64(opts.LeaseDuration),
 	}
 
@@ -1413,11 +1360,15 @@ func (q *OverlayQUICAdapter) IPAMPoolDelete(ctx context.Context, poolID string) 
 	}, nil
 }
 
-// IPAMAllocate allocates an IP address from a pool via QUIC.
+// IPAMAllocate allocates an IP address from a pool via QUIC. The request and
+// response are the server's own wire types (pkg/api/quic), so the adapter
+// cannot drift from them: the hand-written mirrors it used carried field
+// names the server never reads or writes (#730). QUIC names the device the
+// address is allocated to "owner".
 func (q *OverlayQUICAdapter) IPAMAllocate(ctx context.Context, opts IPAMAllocateOptions) (*IPAMAllocateResult, error) {
-	req := &ipamAllocateRequest{
+	req := &quic.GatewayAllocateIPRequest{
 		PoolID:   opts.PoolID,
-		DeviceID: opts.DeviceID,
+		Owner:    opts.DeviceID,
 		Hostname: opts.Hostname,
 	}
 
@@ -1426,75 +1377,97 @@ func (q *OverlayQUICAdapter) IPAMAllocate(ctx context.Context, opts IPAMAllocate
 		return nil, err
 	}
 
-	var wireResp ipamAllocateResponse
+	var wireResp quic.GatewayAllocateIPResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICOverlayDecodeFailed{Operation: "IPAMAllocate", Err: err}
 	}
+	if wireResp.Allocation == nil {
+		return nil, ErrQUICOverlayInvalidResponse{Operation: "IPAMAllocate", Details: "server returned no allocation"}
+	}
 
-	ip, _ := netip.ParseAddr(wireResp.IP)
-
+	info, err := quicAllocationInfo(wireResp.Allocation)
+	if err != nil {
+		return nil, err
+	}
 	return &IPAMAllocateResult{
-		IP:          ip,
-		PoolID:      wireResp.PoolID,
-		DeviceID:    wireResp.DeviceID,
-		Hostname:    wireResp.Hostname,
-		LeaseExpiry: time.Unix(0, wireResp.LeaseExpiry),
+		IP:          info.IP,
+		PoolID:      info.PoolID,
+		DeviceID:    info.DeviceID,
+		Hostname:    info.Hostname,
+		LeaseExpiry: info.LeaseExpiry,
 	}, nil
 }
 
-// IPAMRelease releases an IP address back to the pool via QUIC.
+// IPAMRelease releases an IP address back to its pool via QUIC.
 func (q *OverlayQUICAdapter) IPAMRelease(ctx context.Context, ip string) (*IPAMReleaseResult, error) {
-	req := &ipamReleaseRequest{IP: ip}
+	req := &quic.GatewayReleaseIPRequest{IPAddress: ip}
 
 	resp, err := q.sendCategoryRequest(ctx, OpCategoryIPAM, SubOpIPAMReleaseIP, "IPAMRelease", req)
 	if err != nil {
 		return nil, err
 	}
 
-	var wireResp ipamReleaseResponse
+	var wireResp quic.GatewayReleaseIPResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICOverlayDecodeFailed{Operation: "IPAMRelease", Err: err}
 	}
 
 	return &IPAMReleaseResult{
-		IP:       wireResp.IP,
-		Released: wireResp.Released,
+		IP:       wireResp.IPAddress,
+		Released: wireResp.Success,
 	}, nil
 }
 
 // IPAMList retrieves the list of IPAM allocations via QUIC.
 func (q *OverlayQUICAdapter) IPAMList(ctx context.Context, opts IPAMListOptions) (*IPAMListResult, error) {
-	req := &ipamListRequest{PoolID: opts.PoolID}
+	req := &quic.GatewayListAllocationsRequest{PoolID: opts.PoolID}
 
 	resp, err := q.sendCategoryRequest(ctx, OpCategoryIPAM, SubOpIPAMListAllocations, "IPAMList", req)
 	if err != nil {
 		return nil, err
 	}
 
-	var wireResp ipamListResponse
+	var wireResp quic.GatewayListAllocationsResponse
 	if err := decodeSDNPayload(resp.Payload, &wireResp); err != nil {
 		return nil, ErrQUICOverlayDecodeFailed{Operation: "IPAMList", Err: err}
 	}
 
-	allocations := make([]IPAMAllocationInfo, len(wireResp.Allocations))
-	for i, wa := range wireResp.Allocations {
-		ip, _ := netip.ParseAddr(wa.IP)
-		allocations[i] = IPAMAllocationInfo{
-			IP:          ip,
-			PoolID:      wa.PoolID,
-			DeviceID:    wa.DeviceID,
-			Hostname:    wa.Hostname,
-			Status:      wa.Status,
-			AllocatedAt: time.Unix(0, wa.AllocatedAt),
-			LeaseExpiry: time.Unix(0, wa.LeaseExpiry),
-			LastSeen:    time.Unix(0, wa.LastSeen),
+	allocations := make([]IPAMAllocationInfo, 0, len(wireResp.Allocations))
+	for _, wa := range wireResp.Allocations {
+		info, err := quicAllocationInfo(wa)
+		if err != nil {
+			return nil, err
 		}
+		allocations = append(allocations, info)
 	}
 
 	return &IPAMListResult{
 		Allocations: allocations,
-		TotalCount:  wireResp.TotalCount,
+		TotalCount:  len(allocations),
 	}, nil
+}
+
+// quicAllocationInfo converts the server's allocation record. Its times are
+// Unix seconds. An address that does not parse is an error rather than a
+// zero netip.Addr that would silently match nothing.
+func quicAllocationInfo(a *quic.IPAllocationInfo) (IPAMAllocationInfo, error) {
+	ip, err := netip.ParseAddr(a.IPAddress)
+	if err != nil {
+		return IPAMAllocationInfo{}, ErrQUICOverlayInvalidResponse{Operation: "IPAMAllocation", Details: "unparsable ip_address " + a.IPAddress}
+	}
+	info := IPAMAllocationInfo{
+		IP:          ip,
+		PoolID:      a.PoolID,
+		DeviceID:    a.Owner,
+		Hostname:    a.Hostname,
+		Status:      a.Status,
+		AllocatedAt: time.Unix(a.CreatedAt, 0),
+		LastSeen:    time.Unix(a.UpdatedAt, 0),
+	}
+	if a.ExpiresAt != 0 {
+		info.LeaseExpiry = time.Unix(a.ExpiresAt, 0)
+	}
+	return info, nil
 }
 
 // =============================================================================

@@ -707,37 +707,13 @@ func (s *GatewayService) ListAllocations(ctx context.Context, req *platformv1.Li
 		return nil, err
 	}
 
-	var allocations []*ipam.Allocation
-	var listErr error
-
-	if req.GetPoolId() != "" {
-		allocations, listErr = s.ipam.GetAllocationsByPool(ctx, req.GetPoolId())
-	} else {
-		// List all allocations by iterating all pools.
-		pools, poolErr := s.ipam.ListPools(ctx)
-		if poolErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to list pools: %v", poolErr)
-		}
-		for _, pool := range pools {
-			poolAllocs, allocErr := s.ipam.GetAllocationsByPool(ctx, pool.ID)
-			if allocErr != nil {
-				continue // Skip pools we can't read.
-			}
-			allocations = append(allocations, poolAllocs...)
-		}
+	allocations, err := activeAllocations(ctx, s.ipam, req.GetPoolId())
+	if err != nil {
+		return nil, ipamErrToGRPC(err)
 	}
 
-	if listErr != nil {
-		return nil, ipamErrToGRPC(listErr)
-	}
-
-	// Exclude Released allocations — they are logically gone from the active
-	// pool even though the memory backend retains them for audit.
 	result := make([]*platformv1.IPAllocation, 0, len(allocations))
 	for _, alloc := range allocations {
-		if alloc.Status == ipam.AllocationStatusReleased {
-			continue
-		}
 		result = append(result, ipamAllocationToProto(alloc))
 	}
 

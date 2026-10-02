@@ -339,7 +339,6 @@ type IPAMPoolInfo struct {
 	AllocatedIPs   int64
 	AvailableIPs   int64
 	UtilizationPct float64
-	DNS            []string
 	LeaseDuration  time.Duration
 }
 
@@ -348,7 +347,6 @@ type IPAMPoolCreateOptions struct {
 	Name          string
 	CIDR          string
 	Gateway       string
-	DNS           []string
 	LeaseDuration time.Duration
 }
 

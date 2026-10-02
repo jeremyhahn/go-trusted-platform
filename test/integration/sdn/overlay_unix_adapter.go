@@ -677,40 +677,25 @@ func (a *OverlayUnixAdapter) IPAMPoolList(ctx context.Context) (*IPAMPoolListRes
 		return nil, ErrOverlayUnixRPCFailed{Method: "ListIPAMPools", Err: err}
 	}
 
-	pools := make([]IPAMPoolInfo, 0, len(resp.Pools))
-	for _, p := range resp.Pools {
-		var utilizationPct float64
-		if p.Total > 0 {
-			utilizationPct = float64(p.Allocated) / float64(p.Total) * 100
-		}
-
-		pools = append(pools, IPAMPoolInfo{
-			ID:             p.Id,
-			CIDR:           p.Cidr,
-			Gateway:        p.Gateway,
-			TotalIPs:       int64(p.Total),
-			AllocatedIPs:   int64(p.Allocated),
-			AvailableIPs:   int64(p.Available),
-			UtilizationPct: utilizationPct,
-		})
-	}
-
-	return &IPAMPoolListResult{
-		Pools:      pools,
-		TotalCount: len(pools),
-	}, nil
+	return ipamPoolListFromProto(resp.GetPools()), nil
 }
 
-// IPAMPoolCreate creates an IPAM pool via Unix socket.
-// Note: The gateway proto does not define a CreateIPAMPool RPC, so this returns not implemented.
+// IPAMPoolCreate creates an IPAM pool via the GatewayService CreateIPAMPool RPC.
 func (a *OverlayUnixAdapter) IPAMPoolCreate(ctx context.Context, opts IPAMPoolCreateOptions) (*IPAMPoolCreateResult, error) {
-	return nil, ErrAdapterNotImplemented{Protocol: "Unix", Operation: "IPAMPoolCreate"}
+	result, err := createIPAMPoolRPC(ctx, a.gateway, opts)
+	if err != nil {
+		return nil, ErrOverlayUnixRPCFailed{Method: "CreateIPAMPool", Err: err}
+	}
+	return result, nil
 }
 
-// IPAMPoolDelete deletes an IPAM pool via Unix socket.
-// Note: The gateway proto does not define a DeleteIPAMPool RPC, so this returns not implemented.
+// IPAMPoolDelete deletes an IPAM pool via the GatewayService DeleteIPAMPool RPC.
 func (a *OverlayUnixAdapter) IPAMPoolDelete(ctx context.Context, poolID string) (*IPAMPoolDeleteResult, error) {
-	return nil, ErrAdapterNotImplemented{Protocol: "Unix", Operation: "IPAMPoolDelete"}
+	result, err := deleteIPAMPoolRPC(ctx, a.gateway, poolID)
+	if err != nil {
+		return nil, ErrOverlayUnixRPCFailed{Method: "DeleteIPAMPool", Err: err}
+	}
+	return result, nil
 }
 
 // IPAMAllocate allocates an IP address from a pool via Unix socket.

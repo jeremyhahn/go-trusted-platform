@@ -827,15 +827,14 @@ func (r *OverlayRESTAdapter) IPAMPoolList(ctx context.Context) (*IPAMPoolListRes
 
 	var result struct {
 		Pools []struct {
-			ID            string   `json:"id"`
-			Name          string   `json:"name"`
-			CIDR          string   `json:"cidr"`
-			Gateway       string   `json:"gateway"`
-			Total         uint32   `json:"total"`
-			Allocated     uint32   `json:"allocated"`
-			Available     uint32   `json:"available"`
-			DNS           []string `json:"dns"`
-			LeaseDuration int64    `json:"lease_duration_seconds"`
+			ID            string `json:"id"`
+			Name          string `json:"name"`
+			CIDR          string `json:"cidr"`
+			Gateway       string `json:"gateway"`
+			Total         uint32 `json:"total"`
+			Allocated     uint32 `json:"allocated"`
+			Available     uint32 `json:"available"`
+			LeaseDuration int64  `json:"lease_duration_seconds"`
 		} `json:"pools"`
 		Count int `json:"count"`
 	}
@@ -859,7 +858,6 @@ func (r *OverlayRESTAdapter) IPAMPoolList(ctx context.Context) (*IPAMPoolListRes
 			AllocatedIPs:   int64(p.Allocated),
 			AvailableIPs:   int64(p.Available),
 			UtilizationPct: utilizationPct,
-			DNS:            p.DNS,
 			LeaseDuration:  time.Duration(p.LeaseDuration) * time.Second,
 		}
 	}
@@ -873,11 +871,10 @@ func (r *OverlayRESTAdapter) IPAMPoolList(ctx context.Context) (*IPAMPoolListRes
 // IPAMPoolCreate creates an IPAM pool via REST API.
 func (r *OverlayRESTAdapter) IPAMPoolCreate(ctx context.Context, opts IPAMPoolCreateOptions) (*IPAMPoolCreateResult, error) {
 	reqBody := map[string]interface{}{
-		"name":                   opts.Name,
-		"cidr":                   opts.CIDR,
-		"gateway":                opts.Gateway,
-		"dns":                    opts.DNS,
-		"lease_duration_seconds": int64(opts.LeaseDuration.Seconds()),
+		"name":                         opts.Name,
+		"cidr":                         opts.CIDR,
+		"gateway":                      opts.Gateway,
+		"default_lease_duration_nanos": opts.LeaseDuration.Nanoseconds(),
 	}
 
 	respBody, err := r.doRequest(ctx, http.MethodPost, "/api/v1/sdn/gateway/ipam/pools", reqBody)

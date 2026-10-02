@@ -14,8 +14,6 @@
 package sdn
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
@@ -444,8 +442,12 @@ func runIPAMPoolDelete(flags *cli.CommonFlags, poolID string) error {
 		return &WrappedError{Msg: "failed to delete IPAM pool", Err: err}
 	}
 
-	fmt.Printf("IPAM pool %s deleted successfully\n", poolID)
-	return nil
+	// A structured result, like every other sdn delete, so --output json
+	// prints JSON rather than a sentence a script cannot parse.
+	return base.Output(map[string]interface{}{
+		"pool_id": poolID,
+		"deleted": true,
+	})
 }
 
 func runIPAMAllocate(flags *cli.CommonFlags, poolID, deviceID, hostname string) error {
@@ -482,8 +484,10 @@ func runIPAMRelease(flags *cli.CommonFlags, ip string) error {
 		return &WrappedError{Msg: "failed to release IP", Err: err}
 	}
 
-	fmt.Printf("IP %s released successfully\n", ip)
-	return nil
+	return base.Output(map[string]interface{}{
+		"ip":       ip,
+		"released": true,
+	})
 }
 
 func runIPAMAllocations(flags *cli.CommonFlags, poolID string) error {

@@ -118,6 +118,11 @@ undeclared zone (`ErrPoolZoneUndeclared`).
 not to nothing. That is what makes the allocation table joinable against the
 device registry.
 
+`pool delete` and `release` print a structured result in the selected output
+format, like every other `sdn` delete: `{"pool_id": "<id>", "deleted": true}`
+and `{"ip": "<ip>", "released": true}`. `--output json` therefore always yields
+JSON a script can parse.
+
 ```bash
 platformctl sdn ipam pool create --name tenant-a --cidr 10.20.0.0/24 \
     --gateway 10.20.0.1 --zone trusted --description "Tenant A workloads"

@@ -395,44 +395,97 @@ func (a *fullGatewayQUICAdapter) ListPrefixes(_ context.Context) ([]*quic.Prefix
 	return nil, errGatewayFeatureNotConfigured
 }
 
-func (a *fullGatewayQUICAdapter) AllocateIP(_ context.Context, _ string, _ *quic.AllocateIPOptions) (*quic.IPAllocationInfo, error) {
-	return nil, errGatewayFeatureNotConfigured
+// AllocateIP allocates an address from poolID through the daemon's IPAM
+// allocator -- the one gRPC and REST allocate from. It used to return
+// "gateway feature not configured" while ListAllocations on the same adapter
+// read that allocator, so QUIC could list allocations it could not make (#730).
+//
+// The QUIC owner is the device the address is allocated to (the response
+// carries the allocation's DeviceID as owner) and is required, as device_id is
+// on gRPC and REST. A requested ip_address allocates that address; ttl
+// overrides the pool's lease, in seconds; labels are recorded as metadata.
+// IPAM records no MAC address, so one is refused rather than dropped.
+func (a *fullGatewayQUICAdapter) AllocateIP(ctx context.Context, poolID string, opts *quic.AllocateIPOptions) (*quic.IPAllocationInfo, error) {
+	if opts == nil {
+		opts = &quic.AllocateIPOptions{}
+	}
+	req, err := quicAllocationRequest(poolID, opts)
+	if err != nil {
+		return nil, err
+	}
+	allocate := a.ipamAlloc.Allocate
+	if req.RequestedIP.IsValid() {
+		allocate = a.ipamAlloc.AllocateSpecific
+	}
+	alloc, err := allocate(ctx, req)
+	if err != nil {
+		return nil, mapIPAMToQUICError(err)
+	}
+	return ipamAllocationToQUICInfo(alloc), nil
 }
 
-func (a *fullGatewayQUICAdapter) ReleaseIP(_ context.Context, _ string, _ string) error {
-	return errGatewayFeatureNotConfigured
+// quicAllocationRequest validates a QUIC allocation and maps it onto the IPAM
+// request.
+func quicAllocationRequest(poolID string, opts *quic.AllocateIPOptions) (*ipam.AllocationRequest, error) {
+	if opts.Owner == "" {
+		return nil, quic.ErrGatewayMissingOwner
+	}
+	if opts.MACAddress != "" {
+		return nil, quic.ErrGatewayMACNotRecorded
+	}
+	switch opts.Type {
+	case "", "dynamic":
+	case "static":
+		if opts.IPAddress == "" {
+			return nil, quic.ErrGatewayMissingIPAddress
+		}
+	default:
+		return nil, quic.ErrGatewayInvalidAllocationType
+	}
+	req := &ipam.AllocationRequest{
+		PoolID:        poolID,
+		DeviceID:      opts.Owner,
+		Hostname:      opts.Hostname,
+		Metadata:      opts.Labels,
+		LeaseDuration: time.Duration(opts.TTL) * time.Second,
+	}
+	if opts.IPAddress != "" {
+		addr, err := netip.ParseAddr(opts.IPAddress)
+		if err != nil {
+			return nil, quic.ErrGatewayInvalidIPAddress
+		}
+		req.RequestedIP = addr
+	}
+	return req, nil
+}
+
+// ReleaseIP releases an allocated address. poolID is optional, as on gRPC and
+// REST; when it is set, an address held in another pool is reported not found
+// rather than released.
+func (a *fullGatewayQUICAdapter) ReleaseIP(ctx context.Context, poolID string, ip string) error {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return quic.ErrGatewayInvalidIPAddress
+	}
+	if poolID != "" {
+		alloc, err := a.ipamAlloc.GetAllocation(ctx, addr)
+		if err != nil {
+			return mapIPAMToQUICError(err)
+		}
+		if alloc.PoolID != poolID {
+			return quic.ErrGatewayAllocationNotFound
+		}
+	}
+	return mapIPAMToQUICError(a.ipamAlloc.Release(ctx, addr))
 }
 
 func (a *fullGatewayQUICAdapter) ListAllocations(ctx context.Context, poolID string) ([]*quic.IPAllocationInfo, error) {
-	var allocs []*ipam.Allocation
-	if poolID != "" {
-		poolAllocs, err := a.ipamAlloc.GetAllocationsByPool(ctx, poolID)
-		if err != nil {
-			return nil, mapIPAMToQUICError(err)
-		}
-		allocs = poolAllocs
-	} else {
-		// Empty pool ID means all allocations, aggregated across pools
-		// (mirrors the gRPC and REST service semantics).
-		pools, err := a.ipamAlloc.ListPools(ctx)
-		if err != nil {
-			return nil, mapIPAMToQUICError(err)
-		}
-		for _, pool := range pools {
-			poolAllocs, err := a.ipamAlloc.GetAllocationsByPool(ctx, pool.ID)
-			if err != nil {
-				continue // Skip pools we cannot read.
-			}
-			allocs = append(allocs, poolAllocs...)
-		}
+	allocs, err := activeAllocations(ctx, a.ipamAlloc, poolID)
+	if err != nil {
+		return nil, mapIPAMToQUICError(err)
 	}
-	// Exclude Released allocations — they are logically gone from the active
-	// pool even though the memory backend retains them for audit.
 	out := make([]*quic.IPAllocationInfo, 0, len(allocs))
 	for _, alloc := range allocs {
-		if alloc.Status == ipam.AllocationStatusReleased {
-			continue
-		}
 		out = append(out, ipamAllocationToQUICInfo(alloc))
 	}
 	return out, nil
@@ -664,6 +717,13 @@ func (a *fullGatewayQUICAdapter) DeleteNetworkZone(ctx context.Context, name str
 
 // mapIPAMToQUICError translates ipam sentinel errors to the QUIC gateway
 // sentinel errors recognised by quic.GatewayHandler.gatewayErrorResponse.
+// isIPConflict reports whether err is the backends' typed refusal of a
+// requested address that another allocation holds.
+func isIPConflict(err error) bool {
+	var conflict *ipam.ErrIPConflict
+	return errors.As(err, &conflict)
+}
+
 func mapIPAMToQUICError(err error) error {
 	if err == nil {
 		return nil
@@ -687,6 +747,20 @@ func mapIPAMToQUICError(err error) error {
 		return quic.ErrGatewayMissingPoolName
 	case isIPAMWindowError(err):
 		return quic.ErrGatewayIPAMWindowDetail{Reason: err.Error()}
+	case errors.Is(err, ipam.ErrPoolExhausted):
+		return quic.ErrGatewayPoolExhausted
+	case errors.Is(err, ipam.ErrAllocationNotFound),
+		errors.Is(err, ipam.ErrAllocationReleased):
+		return quic.ErrGatewayAllocationNotFound
+	case errors.Is(err, ipam.ErrIPAlreadyAllocated), isIPConflict(err):
+		return quic.ErrGatewayIPAlreadyAllocated
+	case errors.Is(err, ipam.ErrDeviceIDRequired):
+		return quic.ErrGatewayMissingOwner
+	case errors.Is(err, ipam.ErrInvalidIP),
+		errors.Is(err, ipam.ErrIPNotInPool),
+		errors.Is(err, ipam.ErrNetworkAddress),
+		errors.Is(err, ipam.ErrBroadcastAddress):
+		return quic.ErrGatewayInvalidIPAddress
 	}
 	return err
 }

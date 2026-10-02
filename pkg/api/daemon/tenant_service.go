@@ -130,19 +130,36 @@ func (s *TenantService) RegisterGRPCServices(server *grpc.Server) error {
 
 	s.tenantManager = tenantMgr
 
-	// Create and register the gRPC server
-	// Note: The gRPC server is registered without a platform tenant manager.
-	// Methods that require the platform tenant manager will return FailedPrecondition
-	// until SetManager is called. This allows the gRPC service to be registered
-	// even when the full platform orchestration is not yet configured.
-	s.grpcServer = NewTenantGRPCServer(WithTenantLogger(s.logger))
-	platformv1.RegisterTenantServiceServer(server, s.grpcServer)
+	s.registerTenantGRPCServer(server)
 
 	s.logger.Info("Tenant gRPC service registered",
 		slog.Bool("tenant_manager_ready", s.tenantManager != nil),
 	)
 
 	return nil
+}
+
+// registerTenantGRPCServer registers the service's single TenantGRPCServer on
+// server, creating it on first use.
+//
+// The daemon calls RegisterGRPCServices once for the TCP gRPC server and once
+// for the Unix-socket one, then hands the platform tenant manager to
+// s.grpcServer with SetManager. Each call used to build a fresh
+// TenantGRPCServer, so the second registration replaced the instance
+// SetManager would reach and the TCP listener kept one that never got a
+// manager: every tenant call over gRPC TCP answered "tenant manager not
+// initialized" while the same call over the Unix socket succeeded (#730).
+// One instance, registered on every server, is what makes the transports
+// share tenant state.
+//
+// The server starts without a platform tenant manager; methods that need one
+// return FailedPrecondition until SetManager is called, so the service can be
+// registered before the platform orchestration is configured.
+func (s *TenantService) registerTenantGRPCServer(server *grpc.Server) {
+	if s.grpcServer == nil {
+		s.grpcServer = NewTenantGRPCServer(WithTenantLogger(s.logger))
+	}
+	platformv1.RegisterTenantServiceServer(server, s.grpcServer)
 }
 
 // Start starts the tenant service.

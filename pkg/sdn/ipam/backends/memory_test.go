@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 )
 
@@ -2752,4 +2755,70 @@ func TestNewMemoryBackendWithConfig(t *testing.T) {
 			t.Fatal("expected non-nil backend")
 		}
 	})
+}
+
+// TestMemoryBackend_ReleaseAfterExpiryCountsTheAddressOnce is the #730
+// regression: ExpireInactive already returns the address to the pool, so a
+// later Release must record the release without counting it free again.
+// Before the fix AllocatedIPs, a uint64, wrapped to 2^64-1.
+func TestMemoryBackend_ReleaseAfterExpiryCountsTheAddressOnce(t *testing.T) {
+	ctx := context.Background()
+	backend := NewMemoryBackend()
+	defer backend.Close()
+
+	require.NoError(t, backend.CreatePool(ctx, &ipam.Pool{
+		ID:                "pool-1",
+		Name:              "expiry-pool",
+		CIDR:              netip.MustParsePrefix("10.0.0.0/24"),
+		InactivityTimeout: time.Hour,
+	}))
+	alloc, err := backend.Allocate(ctx, &ipam.AllocationRequest{PoolID: "pool-1", DeviceID: "device-1"})
+	require.NoError(t, err)
+
+	// Backdate the stored allocation past the inactivity timeout rather than
+	// waiting it out.
+	backend.mu.Lock()
+	backend.allocations[alloc.IP].LastSeen = time.Time{}
+	backend.mu.Unlock()
+
+	expired, err := backend.ExpireInactive(ctx, "pool-1")
+	require.NoError(t, err)
+	require.Len(t, expired, 1)
+
+	require.NoError(t, backend.Release(ctx, alloc.IP))
+
+	stats, err := backend.GetPoolStats(ctx, "pool-1")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), stats.AllocatedIPs, "the expired address must not be counted free a second time")
+	assert.Equal(t, stats.TotalIPs, stats.AvailableIPs)
+
+	got, err := backend.GetAllocation(ctx, alloc.IP)
+	require.NoError(t, err)
+	assert.Equal(t, ipam.AllocationStatusReleased, got.Status)
+}
+
+// TestMemoryBackend_ReleaseActiveFreesTheAddress covers the ordinary path the
+// guard must keep: an active allocation's release returns its address.
+func TestMemoryBackend_ReleaseActiveFreesTheAddress(t *testing.T) {
+	ctx := context.Background()
+	backend := NewMemoryBackend()
+	defer backend.Close()
+
+	require.NoError(t, backend.CreatePool(ctx, &ipam.Pool{
+		ID: "pool-1", Name: "active-pool", CIDR: netip.MustParsePrefix("10.0.1.0/30"),
+	}))
+	first, err := backend.Allocate(ctx, &ipam.AllocationRequest{PoolID: "pool-1", DeviceID: "a"})
+	require.NoError(t, err)
+	_, err = backend.Allocate(ctx, &ipam.AllocationRequest{PoolID: "pool-1", DeviceID: "b"})
+	require.NoError(t, err)
+
+	// A /30 holds two usable addresses: the pool is full until one is released.
+	_, err = backend.Allocate(ctx, &ipam.AllocationRequest{PoolID: "pool-1", DeviceID: "c"})
+	require.ErrorIs(t, err, ipam.ErrPoolExhausted)
+
+	require.NoError(t, backend.Release(ctx, first.IP))
+	again, err := backend.Allocate(ctx, &ipam.AllocationRequest{PoolID: "pool-1", DeviceID: "c"})
+	require.NoError(t, err)
+	assert.Equal(t, first.IP, again.IP, "the released address is allocatable again")
+	require.ErrorIs(t, backend.Release(ctx, netip.MustParseAddr("10.0.1.3")), ipam.ErrAllocationNotFound)
 }

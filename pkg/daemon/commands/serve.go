@@ -45,7 +45,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/log/jsonfile"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
@@ -845,40 +844,10 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	//     this earlier hands BMC ACME issuance a nil updater.
 	initCertManagement(ctx, logger, App)
 
-	// Construct the platform tenant.Manager so the daemon's tenant gRPC
-	// service (and the dashboard's GET /api/v1/tenants/{id}) can resolve
-	// tenants. The dashboard otherwise renders 400
-	// "tenant manager not initialized" on every page load. We use the
-	// QuicBaaS SDK IAM TenantClient (already wired via App.QuicBaaSSDKClient)
-	// and disable optional features (DEK isolation, VLAN/quota/bridge
-	// management) until the corresponding subsystems are also instantiated
-	// during startup. The daemon's TenantService gracefully accepts a
-	// minimal manager — list/get/create against IAM still work.
-	if App != nil {
-		if sdk := App.QuicBaaSSDKClient(); sdk != nil {
-			if iamClient := sdk.Identity().IAM(); iamClient != nil {
-				if tc := iamClient.Tenant(); tc != nil {
-					tenantCfg := tenant.DefaultConfig()
-					// Optional subsystems are not yet wired in this serve
-					// path; turn them off so NewManager() doesn't reject
-					// the construction for a missing DEK/VLAN/Bridge dep.
-					tenantCfg.EnableDEKIsolation = false
-					mgr, mgrErr := tenant.NewManager(&tenant.ManagerConfig{
-						IAMTenantClient: tc,
-						Config:          tenantCfg,
-						Logger:          slog.Default(),
-					})
-					if mgrErr != nil {
-						logger.Warn("failed to construct platform tenant manager",
-							"error", mgrErr)
-					} else {
-						daemonConfig.PlatformTenantManager = mgr
-						logger.Info("platform tenant manager wired (IAM-only)")
-					}
-				}
-			}
-		}
-	}
+	// The platform tenant.Manager behind every tenant transport (and the
+	// dashboard's GET /api/v1/tenants/{id}, which otherwise renders 400
+	// "tenant manager not initialized" on every page load).
+	daemonConfig.PlatformTenantManager = platformTenantManager(logger, App)
 
 	// Provision daemon mTLS identity for the gRPC TCP / QUIC listeners. In
 	// webservices mode this used to be skipped, leaving the gRPC TCP server
@@ -1610,6 +1579,10 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	}
 
 	initVTPMServiceOnConfig(logger, App, config)
+
+	// The same platform tenant.Manager the webservices path wires: without
+	// it a daemon-only node registers TenantService but cannot serve it.
+	config.PlatformTenantManager = platformTenantManager(logger, App)
 
 	if App != nil && App.DNSService != nil {
 		config.DNSService = App.DNSService

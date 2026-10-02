@@ -489,15 +489,21 @@ start_platformd() {
              /tmp/platformd-integration/vtpm \
              /tmp/platformd-integration/quicbaas
 
-    # Start platformd with mTLS authentication (all protocols).
-    # --skip-iam-validation disables token-based auth on MCP since integration
-    # tests don't set up an IAM/token infrastructure.
+    # Start platformd with mTLS authentication, as production runs it.
+    #
+    # No --skip-iam-validation. That testing-only opt-out stopped doing what
+    # this harness wanted from it: since #440 an MCP server without an
+    # authorization backend refuses every tool that needs a permission, so it
+    # bought MCP nothing -- and it still switched off IAM, which is where the
+    # daemon registers platform.v1.TenantService and PlatformIAMService. The
+    # tenant suite therefore met "unknown service platform.v1.TenantService"
+    # on every transport (#730). With IAM on, the daemon builds the same
+    # services, and the same MCP authorization backend, that production does.
     # Log goes to /tmp (writable on both host and devcontainer without root).
     # Socket path is /tmp/platformd-integration/platformd.sock for the same reason.
     /tmp/platformd serve \
         --config "${config_file}" \
         --enable-mtls \
-        --skip-iam-validation \
         --socket-path="${PLATFORMD_SOCK_PATH}" \
         --rest-port=8443 \
         --grpc-port=10443 \

@@ -564,40 +564,25 @@ func (g *OverlayGRPCAdapter) IPAMPoolList(ctx context.Context) (*IPAMPoolListRes
 		return nil, ErrGRPCCallFailed{Method: "ListIPAMPools", Err: err}
 	}
 
-	pools := make([]IPAMPoolInfo, len(resp.Pools))
-	for i, p := range resp.Pools {
-		var utilizationPct float64
-		if p.Total > 0 {
-			utilizationPct = float64(p.Allocated) / float64(p.Total) * 100
-		}
-		pools[i] = IPAMPoolInfo{
-			ID:             p.Id,
-			CIDR:           p.Cidr,
-			Gateway:        p.Gateway,
-			TotalIPs:       int64(p.Total),
-			AllocatedIPs:   int64(p.Allocated),
-			AvailableIPs:   int64(p.Available),
-			UtilizationPct: utilizationPct,
-		}
-	}
-
-	return &IPAMPoolListResult{
-		Pools:      pools,
-		TotalCount: len(pools),
-	}, nil
+	return ipamPoolListFromProto(resp.GetPools()), nil
 }
 
-// IPAMPoolCreate creates an IPAM pool.
+// IPAMPoolCreate creates an IPAM pool via the GatewayService CreateIPAMPool RPC.
 func (g *OverlayGRPCAdapter) IPAMPoolCreate(ctx context.Context, opts IPAMPoolCreateOptions) (*IPAMPoolCreateResult, error) {
-	// Note: This API may not exist in the current proto definition
-	// Fall back to not implemented for now
-	return nil, ErrGRPCNotImplemented{Method: "IPAMPoolCreate"}
+	result, err := createIPAMPoolRPC(ctx, g.gatewayClient, opts)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "CreateIPAMPool", Err: err}
+	}
+	return result, nil
 }
 
-// IPAMPoolDelete deletes an IPAM pool.
+// IPAMPoolDelete deletes an IPAM pool via the GatewayService DeleteIPAMPool RPC.
 func (g *OverlayGRPCAdapter) IPAMPoolDelete(ctx context.Context, poolID string) (*IPAMPoolDeleteResult, error) {
-	// Note: This API may not exist in the current proto definition
-	return nil, ErrGRPCNotImplemented{Method: "IPAMPoolDelete"}
+	result, err := deleteIPAMPoolRPC(ctx, g.gatewayClient, poolID)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "DeleteIPAMPool", Err: err}
+	}
+	return result, nil
 }
 
 // IPAMAllocate allocates an IP.

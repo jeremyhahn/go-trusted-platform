@@ -22,10 +22,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
 	tenantpkg "github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -58,7 +60,9 @@ func (e ErrCLICommandFailed) Error() string {
 
 // CLIAdapter implements TenantCommands using the platformctl CLI
 type CLIAdapter struct {
-	cliPath string
+	cliPath    string
+	configDir  string
+	configPath string
 }
 
 // NewCLIAdapter creates a new CLI adapter
@@ -74,12 +78,25 @@ func (a *CLIAdapter) Setup(ctx context.Context) error {
 	if err != nil {
 		return ErrCLINotFound{Path: a.cliPath}
 	}
+	dir, err := os.MkdirTemp("", "platformctl-tenant-test-*")
+	if err != nil {
+		return err
+	}
+	path, err := helpers.WriteLocalCLIConfig(dir, GetSocketPath(), GetGRPCEndpoint())
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return err
+	}
+	a.configDir, a.configPath = dir, path
 	return nil
 }
 
-// Teardown cleans up after testing
+// Teardown removes the platformctl config Setup wrote.
 func (a *CLIAdapter) Teardown(ctx context.Context) error {
-	return nil
+	if a.configDir == "" {
+		return nil
+	}
+	return os.RemoveAll(a.configDir)
 }
 
 // Name returns the adapter name
@@ -89,6 +106,9 @@ func (a *CLIAdapter) Name() string {
 
 // runCommand executes a CLI command and returns the output
 func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, error) {
+	if a.configPath != "" {
+		args = append([]string{"--config", a.configPath}, args...)
+	}
 	cmd := exec.CommandContext(ctx, a.cliPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

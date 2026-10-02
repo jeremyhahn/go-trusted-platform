@@ -106,17 +106,19 @@ func TestNAT64StatusMultiProtocol(t *testing.T) {
 		// The tool must be registered and carry a permission mapping. An
 		// unregistered or unmapped tool is refused with "has no permission
 		// mapping" before anything else is checked (#300). Past that check,
-		// this suite's platformd answers one of two ways. Today it runs MCP
-		// with no authorization backend, which refuses every protected tool
-		// (#440). That is also why the suite's other MCP tests fail. A
-		// platformd with a backend reaches the provider, which reports the
-		// translator absent. Both answers prove the verb is routed; anything
-		// else does not.
+		// AuthorizeTool (pkg/api/mcp/authz.go) refuses a call that carries no
+		// token with "Authentication required for this operation" -- with or
+		// without an authorization backend; without one the message goes on
+		// to name the missing backend (#440). This suite's platformd runs
+		// the production QuicBaaS backend and the adapter holds no token
+		// (#730), so that refusal is today's answer; a caller with a token
+		// reaches the provider, which reports the translator absent. Either
+		// answer is only reachable once the verb is routed and classified.
 		require.NotContains(t, err.Error(), "no permission mapping")
 		msg := err.Error()
 		require.True(t,
 			strings.Contains(msg, "service not available: nat64") ||
-				strings.Contains(msg, "no authorization backend is configured"),
+				strings.Contains(msg, "Authentication required for this operation"),
 			"gateway_nat64_status must be routed and classified: %v", err)
 	})
 }

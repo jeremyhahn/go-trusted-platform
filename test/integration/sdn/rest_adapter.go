@@ -27,6 +27,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -83,9 +84,14 @@ func (e ErrRESTDecodeFailed) Unwrap() error {
 // This adapter makes HTTP requests to the platform REST API for testing
 // the REST interface consistency with other protocol adapters.
 type RESTAdapter struct {
-	baseURL    string
-	client     *http.Client
-	authToken  string
+	baseURL   string
+	client    *http.Client
+	authToken string
+
+	// mu guards bridgeMTUs and vlans: TestSDNStressOperations drives one
+	// adapter from concurrent goroutines, and unguarded writes crashed the
+	// whole package with "concurrent map writes" (#730).
+	mu         sync.Mutex
 	bridgeMTUs map[string]int32
 	vlans      map[int32]*VLANCreateResult
 }
@@ -256,7 +262,9 @@ func (r *RESTAdapter) BridgeCreate(ctx context.Context, opts BridgeCreateOptions
 
 	// Store MTU for later retrieval (REST server does not track bridge MTU)
 	if opts.MTU > 0 {
+		r.mu.Lock()
 		r.bridgeMTUs[bridgeID] = opts.MTU
+		r.mu.Unlock()
 	}
 
 	return &BridgeCreateResult{
@@ -304,7 +312,9 @@ func (r *RESTAdapter) BridgeGet(ctx context.Context, bridgeID string) (*BridgeGe
 	}
 
 	// Retrieve stored MTU (REST server does not track bridge MTU natively)
+	r.mu.Lock()
 	mtu := r.bridgeMTUs[resolvedID]
+	r.mu.Unlock()
 
 	return &BridgeGetResult{
 		BridgeID:   resolvedID,
@@ -885,7 +895,9 @@ func (r *RESTAdapter) VLANCreate(ctx context.Context, opts VLANCreateOptions) (*
 	}
 
 	// Store locally since the REST server does not persist VLANs
+	r.mu.Lock()
 	r.vlans[result.VLANID] = vlanResult
+	r.mu.Unlock()
 
 	return vlanResult, nil
 }
@@ -908,7 +920,9 @@ func (r *RESTAdapter) VLANDelete(ctx context.Context, bridgeID string, vlanID in
 	}
 
 	// Remove from local state
+	r.mu.Lock()
 	delete(r.vlans, result.VLANID)
+	r.mu.Unlock()
 
 	return &VLANDeleteResult{
 		VLANID:  result.VLANID,
@@ -920,6 +934,8 @@ func (r *RESTAdapter) VLANDelete(ctx context.Context, bridgeID string, vlanID in
 // The REST server does not persist VLANs, so this returns locally tracked VLANs
 // that were created through this adapter instance.
 func (r *RESTAdapter) VLANList(ctx context.Context, opts VLANListOptions) (*VLANListResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	vlans := make([]VLANSummary, 0, len(r.vlans))
 	for _, v := range r.vlans {
 		vlans = append(vlans, VLANSummary{

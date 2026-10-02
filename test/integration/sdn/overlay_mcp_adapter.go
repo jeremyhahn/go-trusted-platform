@@ -996,16 +996,15 @@ func (m *OverlayMCPAdapter) IPAMPoolList(ctx context.Context) (*IPAMPoolListResu
 
 	var response struct {
 		Pools []struct {
-			ID                   string   `json:"id"`
-			Name                 string   `json:"name"`
-			CIDR                 string   `json:"cidr"`
-			Gateway              string   `json:"gateway"`
-			TotalIPs             int64    `json:"total_ips"`
-			AllocatedIPs         int64    `json:"allocated_ips"`
-			AvailableIPs         int64    `json:"available_ips"`
-			UtilizationPct       float64  `json:"utilization_pct"`
-			DNS                  []string `json:"dns"`
-			LeaseDurationSeconds int64    `json:"lease_duration_seconds"`
+			ID                   string  `json:"id"`
+			Name                 string  `json:"name"`
+			CIDR                 string  `json:"cidr"`
+			Gateway              string  `json:"gateway"`
+			TotalIPs             int64   `json:"total_ips"`
+			AllocatedIPs         int64   `json:"allocated_ips"`
+			AvailableIPs         int64   `json:"available_ips"`
+			UtilizationPct       float64 `json:"utilization_pct"`
+			LeaseDurationSeconds int64   `json:"lease_duration_seconds"`
 		} `json:"pools"`
 	}
 
@@ -1024,7 +1023,6 @@ func (m *OverlayMCPAdapter) IPAMPoolList(ctx context.Context) (*IPAMPoolListResu
 			AllocatedIPs:   p.AllocatedIPs,
 			AvailableIPs:   p.AvailableIPs,
 			UtilizationPct: p.UtilizationPct,
-			DNS:            p.DNS,
 			LeaseDuration:  time.Duration(p.LeaseDurationSeconds) * time.Second,
 		})
 	}
@@ -1045,9 +1043,6 @@ func (m *OverlayMCPAdapter) IPAMPoolCreate(ctx context.Context, opts IPAMPoolCre
 	}
 	if opts.Gateway != "" {
 		args["gateway"] = opts.Gateway
-	}
-	if len(opts.DNS) > 0 {
-		args["dns"] = opts.DNS
 	}
 	if opts.LeaseDuration > 0 {
 		args["lease_duration_seconds"] = int64(opts.LeaseDuration.Seconds())

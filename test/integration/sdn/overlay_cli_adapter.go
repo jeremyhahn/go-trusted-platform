@@ -29,6 +29,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -829,63 +831,29 @@ func (c *OverlayCLIAdapter) IPAMPoolList(ctx context.Context) (*IPAMPoolListResu
 		return nil, err
 	}
 
-	var result struct {
-		Pools []struct {
-			ID               string   `json:"id"`
-			Name             string   `json:"name"`
-			CIDR             string   `json:"cidr"`
-			Gateway          string   `json:"gateway"`
-			TotalIPs         int64    `json:"total_ips"`
-			AllocatedIPs     int64    `json:"allocated_ips"`
-			AvailableIPs     int64    `json:"available_ips"`
-			UtilizationPct   float64  `json:"utilization_pct"`
-			DNS              []string `json:"dns"`
-			LeaseDurationSec int64    `json:"lease_duration_sec"`
-		} `json:"pools"`
-		TotalCount int `json:"total_count"`
-	}
-
-	if err := c.parseJSONOutput(output, &result); err != nil {
+	// The CLI prints the gateway's []*platformv1.IPAMPool as a bare array.
+	var pools []*platformv1.IPAMPool
+	if err := c.parseJSONOutput(output, &pools); err != nil {
 		return nil, err
 	}
-
-	pools := make([]IPAMPoolInfo, len(result.Pools))
-	for i, p := range result.Pools {
-		pools[i] = IPAMPoolInfo{
-			ID:             p.ID,
-			Name:           p.Name,
-			CIDR:           p.CIDR,
-			Gateway:        p.Gateway,
-			TotalIPs:       p.TotalIPs,
-			AllocatedIPs:   p.AllocatedIPs,
-			AvailableIPs:   p.AvailableIPs,
-			UtilizationPct: p.UtilizationPct,
-			DNS:            p.DNS,
-			LeaseDuration:  time.Duration(p.LeaseDurationSec) * time.Second,
-		}
-	}
-
-	return &IPAMPoolListResult{
-		Pools:      pools,
-		TotalCount: result.TotalCount,
-	}, nil
+	return ipamPoolListFromProto(pools), nil
 }
 
-// IPAMPoolCreate creates an IPAM pool.
+// IPAMPoolCreate creates an IPAM pool with `sdn ipam pool create`.
+//
+// The CLI prints the created platformv1.IPAMPool through encoding/json, so the
+// output decodes straight back into that type; decoding into a hand-written
+// mirror is how this adapter drifted from the command it drives (#730).
 func (c *OverlayCLIAdapter) IPAMPoolCreate(ctx context.Context, opts IPAMPoolCreateOptions) (*IPAMPoolCreateResult, error) {
 	args := []string{"sdn", "ipam", "pool", "create",
 		"--name", opts.Name,
 		"--cidr", opts.CIDR,
 	}
-
 	if opts.Gateway != "" {
 		args = append(args, "--gateway", opts.Gateway)
 	}
-	if len(opts.DNS) > 0 {
-		args = append(args, "--dns", strings.Join(opts.DNS, ","))
-	}
 	if opts.LeaseDuration > 0 {
-		args = append(args, "--lease", opts.LeaseDuration.String())
+		args = append(args, "--lease-seconds", strconv.FormatInt(int64(opts.LeaseDuration/time.Second), 10))
 	}
 
 	output, err := c.runCommand(ctx, args...)
@@ -893,56 +861,46 @@ func (c *OverlayCLIAdapter) IPAMPoolCreate(ctx context.Context, opts IPAMPoolCre
 		return nil, err
 	}
 
-	var result struct {
-		ID        string `json:"id"`
-		Name      string `json:"name"`
-		CIDR      string `json:"cidr"`
-		CreatedAt string `json:"created_at"`
-	}
-
-	if err := c.parseJSONOutput(output, &result); err != nil {
+	var pool platformv1.IPAMPool
+	if err := c.parseJSONOutput(output, &pool); err != nil {
 		return nil, err
 	}
 
-	createdAt, _ := time.Parse(time.RFC3339, result.CreatedAt)
-
 	return &IPAMPoolCreateResult{
-		ID:        result.ID,
-		Name:      result.Name,
-		CIDR:      result.CIDR,
-		CreatedAt: createdAt,
+		ID:        pool.GetId(),
+		Name:      pool.GetName(),
+		CIDR:      pool.GetCidr(),
+		CreatedAt: protoTimestampToTime(pool.GetCreatedAt()),
 	}, nil
 }
 
-// IPAMPoolDelete deletes an IPAM pool.
+// IPAMPoolDelete deletes an IPAM pool with `sdn ipam pool delete --id`.
 func (c *OverlayCLIAdapter) IPAMPoolDelete(ctx context.Context, poolID string) (*IPAMPoolDeleteResult, error) {
-	output, err := c.runCommand(ctx, "sdn", "ipam", "pool", "delete", poolID)
+	output, err := c.runCommand(ctx, "sdn", "ipam", "pool", "delete", "--id", poolID)
 	if err != nil {
 		return nil, err
 	}
 
 	var result struct {
-		ID      string `json:"id"`
+		PoolID  string `json:"pool_id"`
 		Deleted bool   `json:"deleted"`
 	}
-
 	if err := c.parseJSONOutput(output, &result); err != nil {
 		return nil, err
 	}
 
 	return &IPAMPoolDeleteResult{
-		ID:      result.ID,
+		ID:      result.PoolID,
 		Deleted: result.Deleted,
 	}, nil
 }
 
-// IPAMAllocate allocates an IP.
+// IPAMAllocate allocates an IP with `sdn ipam allocate`.
 func (c *OverlayCLIAdapter) IPAMAllocate(ctx context.Context, opts IPAMAllocateOptions) (*IPAMAllocateResult, error) {
 	args := []string{"sdn", "ipam", "allocate",
-		"--pool", opts.PoolID,
-		"--device", opts.DeviceID,
+		"--pool-id", opts.PoolID,
+		"--device-id", opts.DeviceID,
 	}
-
 	if opts.Hostname != "" {
 		args = append(args, "--hostname", opts.Hostname)
 	}
@@ -952,33 +910,28 @@ func (c *OverlayCLIAdapter) IPAMAllocate(ctx context.Context, opts IPAMAllocateO
 		return nil, err
 	}
 
-	var result struct {
-		IP          string `json:"ip"`
-		PoolID      string `json:"pool_id"`
-		DeviceID    string `json:"device_id"`
-		Hostname    string `json:"hostname"`
-		LeaseExpiry string `json:"lease_expiry"`
-	}
-
-	if err := c.parseJSONOutput(output, &result); err != nil {
+	var alloc platformv1.IPAllocation
+	if err := c.parseJSONOutput(output, &alloc); err != nil {
 		return nil, err
 	}
 
-	ip, _ := netip.ParseAddr(result.IP)
-	leaseExpiry, _ := time.Parse(time.RFC3339, result.LeaseExpiry)
+	info, err := cliAllocationInfo(&alloc)
+	if err != nil {
+		return nil, err
+	}
 
 	return &IPAMAllocateResult{
-		IP:          ip,
-		PoolID:      result.PoolID,
-		DeviceID:    result.DeviceID,
-		Hostname:    result.Hostname,
-		LeaseExpiry: leaseExpiry,
+		IP:          info.IP,
+		PoolID:      info.PoolID,
+		DeviceID:    info.DeviceID,
+		Hostname:    info.Hostname,
+		LeaseExpiry: info.LeaseExpiry,
 	}, nil
 }
 
-// IPAMRelease releases an IP.
+// IPAMRelease releases an IP with `sdn ipam release --ip`.
 func (c *OverlayCLIAdapter) IPAMRelease(ctx context.Context, ip string) (*IPAMReleaseResult, error) {
-	output, err := c.runCommand(ctx, "sdn", "ipam", "release", ip)
+	output, err := c.runCommand(ctx, "sdn", "ipam", "release", "--ip", ip)
 	if err != nil {
 		return nil, err
 	}
@@ -987,7 +940,6 @@ func (c *OverlayCLIAdapter) IPAMRelease(ctx context.Context, ip string) (*IPAMRe
 		IP       string `json:"ip"`
 		Released bool   `json:"released"`
 	}
-
 	if err := c.parseJSONOutput(output, &result); err != nil {
 		return nil, err
 	}
@@ -998,10 +950,10 @@ func (c *OverlayCLIAdapter) IPAMRelease(ctx context.Context, ip string) (*IPAMRe
 	}, nil
 }
 
-// IPAMList lists IPAM allocations.
+// IPAMList lists IPAM allocations with `sdn ipam allocations`, which prints
+// the []*platformv1.IPAllocation the gateway returned.
 func (c *OverlayCLIAdapter) IPAMList(ctx context.Context, opts IPAMListOptions) (*IPAMListResult, error) {
 	args := []string{"sdn", "ipam", "allocations"}
-
 	if opts.PoolID != "" {
 		args = append(args, "--pool-id", opts.PoolID)
 	}
@@ -1011,45 +963,41 @@ func (c *OverlayCLIAdapter) IPAMList(ctx context.Context, opts IPAMListOptions) 
 		return nil, err
 	}
 
-	var result struct {
-		Allocations []struct {
-			IP          string `json:"ip"`
-			PoolID      string `json:"pool_id"`
-			DeviceID    string `json:"device_id"`
-			Hostname    string `json:"hostname"`
-			Status      string `json:"status"`
-			AllocatedAt string `json:"allocated_at"`
-			LeaseExpiry string `json:"lease_expiry"`
-			LastSeen    string `json:"last_seen"`
-		} `json:"allocations"`
-		TotalCount int `json:"total_count"`
-	}
-
+	var result []*platformv1.IPAllocation
 	if err := c.parseJSONOutput(output, &result); err != nil {
 		return nil, err
 	}
 
-	allocations := make([]IPAMAllocationInfo, len(result.Allocations))
-	for i, a := range result.Allocations {
-		ip, _ := netip.ParseAddr(a.IP)
-		allocatedAt, _ := time.Parse(time.RFC3339, a.AllocatedAt)
-		leaseExpiry, _ := time.Parse(time.RFC3339, a.LeaseExpiry)
-		lastSeen, _ := time.Parse(time.RFC3339, a.LastSeen)
-		allocations[i] = IPAMAllocationInfo{
-			IP:          ip,
-			PoolID:      a.PoolID,
-			DeviceID:    a.DeviceID,
-			Hostname:    a.Hostname,
-			Status:      a.Status,
-			AllocatedAt: allocatedAt,
-			LeaseExpiry: leaseExpiry,
-			LastSeen:    lastSeen,
+	allocations := make([]IPAMAllocationInfo, 0, len(result))
+	for _, a := range result {
+		info, err := cliAllocationInfo(a)
+		if err != nil {
+			return nil, err
 		}
+		allocations = append(allocations, info)
 	}
 
 	return &IPAMListResult{
 		Allocations: allocations,
-		TotalCount:  result.TotalCount,
+		TotalCount:  len(allocations),
+	}, nil
+}
+
+// cliAllocationInfo converts an allocation the CLI printed. An address that
+// does not parse is an error: a zero netip.Addr would compare unequal to
+// every real address and turn a decoding defect into a "not found" failure.
+func cliAllocationInfo(a *platformv1.IPAllocation) (IPAMAllocationInfo, error) {
+	ip, err := netip.ParseAddr(a.GetIp())
+	if err != nil {
+		return IPAMAllocationInfo{}, ErrCLIOutputParseFailed{Output: a.GetIp(), Err: err}
+	}
+	return IPAMAllocationInfo{
+		IP:          ip,
+		PoolID:      a.GetPoolId(),
+		DeviceID:    a.GetDeviceId(),
+		Hostname:    a.GetHostname(),
+		AllocatedAt: protoTimestampToTime(a.GetAllocatedAt()),
+		LeaseExpiry: protoTimestampToTime(a.GetExpiresAt()),
 	}, nil
 }
 

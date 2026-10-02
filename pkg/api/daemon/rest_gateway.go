@@ -16,7 +16,6 @@ package daemon
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/netip"
 	"time"
@@ -27,19 +26,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 )
 
-// ErrGatewayRESTNotConfigured is returned for gateway REST operations that
-// require a hardware gateway controller (BGP, mode, status) when none is
-// configured. Clients see it as 503 Service Unavailable.
-type ErrGatewayRESTNotConfigured struct{ Feature string }
-
-// Error implements the error interface.
-func (e ErrGatewayRESTNotConfigured) Error() string {
-	return fmt.Sprintf("gateway feature not configured: %s", e.Feature)
-}
-
 // gatewayRESTService implements rest.GatewayServiceInterface using the
 // daemon's ipam.Allocator directly. Gateway status/BGP/mode methods return
-// ErrGatewayRESTNotConfigured because those features require a full gateway
+// rest.ErrGatewayFeatureNotConfigured because those features require a full gateway
 // controller that is only present when an SDN fabric is wired in.
 //
 // This service is always registered so that IPAM pool CRUD and IP allocation
@@ -74,43 +63,43 @@ func newGatewayRESTService(allocator ipam.Allocator, logger *slog.Logger) *gatew
 // Gateway status / mode — not available without a hardware gateway
 // =============================================================================
 
-// GetGatewayStatus returns ErrGatewayRESTNotConfigured; no hardware gateway is wired.
+// GetGatewayStatus returns rest.ErrGatewayFeatureNotConfigured; no hardware gateway is wired.
 func (s *gatewayRESTService) GetGatewayStatus(_ context.Context) (*rest.GatewayStatusResponse, error) {
-	return nil, ErrGatewayRESTNotConfigured{Feature: "gateway status"}
+	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "gateway status"}
 }
 
-// SetGatewayMode returns ErrGatewayRESTNotConfigured; no hardware gateway is wired.
+// SetGatewayMode returns rest.ErrGatewayFeatureNotConfigured; no hardware gateway is wired.
 func (s *gatewayRESTService) SetGatewayMode(_ context.Context, _ uint32) (*rest.SetGatewayModeResponse, error) {
-	return nil, ErrGatewayRESTNotConfigured{Feature: "gateway mode"}
+	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "gateway mode"}
 }
 
 // =============================================================================
 // BGP operations — not available without a BGP speaker
 // =============================================================================
 
-// GetBGPStatus returns ErrGatewayRESTNotConfigured; no BGP speaker is wired.
+// GetBGPStatus returns rest.ErrGatewayFeatureNotConfigured; no BGP speaker is wired.
 func (s *gatewayRESTService) GetBGPStatus(_ context.Context) (*rest.BGPStatusResponse, error) {
-	return nil, ErrGatewayRESTNotConfigured{Feature: "bgp"}
+	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
 }
 
-// ListBGPPeers returns ErrGatewayRESTNotConfigured; no BGP speaker is wired.
+// ListBGPPeers returns rest.ErrGatewayFeatureNotConfigured; no BGP speaker is wired.
 func (s *gatewayRESTService) ListBGPPeers(_ context.Context) ([]rest.BGPPeerResponse, error) {
-	return nil, ErrGatewayRESTNotConfigured{Feature: "bgp"}
+	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
 }
 
-// AnnouncePrefix returns ErrGatewayRESTNotConfigured; no BGP speaker is wired.
+// AnnouncePrefix returns rest.ErrGatewayFeatureNotConfigured; no BGP speaker is wired.
 func (s *gatewayRESTService) AnnouncePrefix(_ context.Context, _, _ string) error {
-	return ErrGatewayRESTNotConfigured{Feature: "bgp"}
+	return rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
 }
 
-// WithdrawPrefix returns ErrGatewayRESTNotConfigured; no BGP speaker is wired.
+// WithdrawPrefix returns rest.ErrGatewayFeatureNotConfigured; no BGP speaker is wired.
 func (s *gatewayRESTService) WithdrawPrefix(_ context.Context, _ string) error {
-	return ErrGatewayRESTNotConfigured{Feature: "bgp"}
+	return rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
 }
 
-// ListAnnouncedPrefixes returns ErrGatewayRESTNotConfigured; no BGP speaker is wired.
+// ListAnnouncedPrefixes returns rest.ErrGatewayFeatureNotConfigured; no BGP speaker is wired.
 func (s *gatewayRESTService) ListAnnouncedPrefixes(_ context.Context) ([]rest.AnnouncedPrefixResponse, error) {
-	return nil, ErrGatewayRESTNotConfigured{Feature: "bgp"}
+	return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "bgp"}
 }
 
 // =============================================================================
@@ -283,27 +272,9 @@ func (s *gatewayRESTService) ReleaseIP(ctx context.Context, ipStr string) error 
 
 // ListAllocations returns all active IP allocations for a pool.
 func (s *gatewayRESTService) ListAllocations(ctx context.Context, poolID string) ([]rest.IPAllocationResponse, error) {
-	var allocs []*ipam.Allocation
-	if poolID != "" {
-		poolAllocs, err := s.ipam.GetAllocationsByPool(ctx, poolID)
-		if err != nil {
-			return nil, s.mapIPAMError(err)
-		}
-		allocs = poolAllocs
-	} else {
-		// pool_id is an optional filter: empty means all allocations,
-		// aggregated across pools (mirrors the gRPC service semantics).
-		pools, err := s.ipam.ListPools(ctx)
-		if err != nil {
-			return nil, s.mapIPAMError(err)
-		}
-		for _, pool := range pools {
-			poolAllocs, err := s.ipam.GetAllocationsByPool(ctx, pool.ID)
-			if err != nil {
-				continue // Skip pools we cannot read.
-			}
-			allocs = append(allocs, poolAllocs...)
-		}
+	allocs, err := activeAllocations(ctx, s.ipam, poolID)
+	if err != nil {
+		return nil, s.mapIPAMError(err)
 	}
 	resp := make([]rest.IPAllocationResponse, 0, len(allocs))
 	for _, a := range allocs {

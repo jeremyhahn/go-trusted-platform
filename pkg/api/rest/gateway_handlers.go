@@ -38,6 +38,18 @@ func (e ErrGatewayServiceNotAvailable) Error() string {
 	return "gateway service not available"
 }
 
+// ErrGatewayFeatureNotConfigured is returned by a gateway service for a
+// capability this node does not host -- gateway status, mode or BGP on a
+// platformd with no gateway runtime or BGP speaker wired in (#65). It is a
+// disabled capability, not a server fault, and is answered with 503 like
+// every other gateway section that is switched off (docs/gateway/api.md §9).
+type ErrGatewayFeatureNotConfigured struct{ Feature string }
+
+// Error implements the error interface.
+func (e ErrGatewayFeatureNotConfigured) Error() string {
+	return "gateway feature not configured: " + e.Feature
+}
+
 // ErrInvalidGatewayMode is returned when a gateway mode is invalid.
 type ErrInvalidGatewayMode struct {
 	Mode uint32
@@ -1041,6 +1053,8 @@ func (h *GatewayHandlers) writeGatewayError(w http.ResponseWriter, operation str
 	case ErrInvalidPoolID:
 		statusCode = http.StatusBadRequest
 	case ErrGatewayServiceNotAvailable:
+		statusCode = http.StatusServiceUnavailable
+	case ErrGatewayFeatureNotConfigured:
 		statusCode = http.StatusServiceUnavailable
 	case ErrNAT64NotConfigured:
 		statusCode = http.StatusServiceUnavailable

@@ -18,7 +18,9 @@ package sdn
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -118,7 +120,6 @@ func testOverlayStatus(t *testing.T, ctx context.Context, adapter OverlayCommand
 	t.Run("GetStatus", func(t *testing.T) {
 		result, err := adapter.OverlayStatus(ctx)
 		if err != nil {
-			skipIfOverlayNotImplemented(t, err)
 			t.Fatalf("OverlayStatus failed: %v", err)
 		}
 
@@ -153,7 +154,6 @@ func testVTEPOperations(t *testing.T, ctx context.Context, adapter OverlayComman
 func testVTEPList(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.VTEPList(ctx)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("VTEPList failed: %v", err)
 	}
 
@@ -174,7 +174,6 @@ func testVTEPGet(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	// First list VTEPs to get a valid node ID
 	listResult, err := adapter.VTEPList(ctx)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("VTEPList failed: %v", err)
 	}
 
@@ -186,7 +185,6 @@ func testVTEPGet(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	nodeID := listResult.VTEPs[0].NodeID
 	result, err := adapter.VTEPGet(ctx, nodeID)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("VTEPGet failed: %v", err)
 	}
 
@@ -232,7 +230,6 @@ func testVNIOperations(t *testing.T, ctx context.Context, adapter OverlayCommand
 func testVNIList(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.VNIList(ctx)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("VNIList failed: %v", err)
 	}
 
@@ -260,7 +257,6 @@ func testVNICreateDelete(t *testing.T, ctx context.Context, adapter OverlayComma
 	// Create VNI
 	createResult, err := adapter.VNICreate(ctx, opts)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("VNICreate failed: %v", err)
 	}
 
@@ -358,7 +354,6 @@ func testTunnelOperations(t *testing.T, ctx context.Context, adapter OverlayComm
 func testTunnelList(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.TunnelList(ctx, TunnelListOptions{})
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("TunnelList failed: %v", err)
 	}
 
@@ -378,7 +373,6 @@ func testTunnelListFilterByVNI(t *testing.T, ctx context.Context, adapter Overla
 	// First get all tunnels
 	allResult, err := adapter.TunnelList(ctx, TunnelListOptions{})
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("TunnelList failed: %v", err)
 	}
 
@@ -422,7 +416,6 @@ func testMACOperations(t *testing.T, ctx context.Context, adapter OverlayCommand
 func testMACList(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.MACList(ctx, MACListOptions{})
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("MACList failed: %v", err)
 	}
 
@@ -445,7 +438,6 @@ func testMACListFilterByVNI(t *testing.T, ctx context.Context, adapter OverlayCo
 	// First get all MACs
 	allResult, err := adapter.MACList(ctx, MACListOptions{})
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("MACList failed: %v", err)
 	}
 
@@ -497,7 +489,7 @@ func testGatewayOperations(t *testing.T, ctx context.Context, adapter OverlayCom
 func testGatewayStatus(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.GatewayStatus(ctx)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
+		skipIfGatewayNotHostedHere(t, err)
 		t.Fatalf("GatewayStatus failed: %v", err)
 	}
 
@@ -518,7 +510,7 @@ func testGatewaySetMode(t *testing.T, ctx context.Context, adapter OverlayComman
 	// Get current status to restore later
 	status, err := adapter.GatewayStatus(ctx)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
+		skipIfGatewayNotHostedHere(t, err)
 		t.Fatalf("GatewayStatus failed: %v", err)
 	}
 
@@ -528,7 +520,7 @@ func testGatewaySetMode(t *testing.T, ctx context.Context, adapter OverlayComman
 	newModes := []string{"overlay"}
 	result, err := adapter.GatewaySetMode(ctx, GatewayModeOptions{Modes: newModes})
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
+		skipIfGatewayNotHostedHere(t, err)
 		t.Fatalf("GatewaySetMode failed: %v", err)
 	}
 
@@ -590,7 +582,7 @@ func testBGPOperations(t *testing.T, ctx context.Context, adapter OverlayCommand
 func testBGPStatus(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.BGPStatus(ctx)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
+		skipIfGatewayNotHostedHere(t, err)
 		t.Fatalf("BGPStatus failed: %v", err)
 	}
 
@@ -607,7 +599,7 @@ func testBGPStatus(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 func testBGPPeers(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.BGPPeers(ctx)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
+		skipIfGatewayNotHostedHere(t, err)
 		t.Fatalf("BGPPeers failed: %v", err)
 	}
 
@@ -629,7 +621,7 @@ func testBGPPeers(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 func testBGPPrefixes(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.BGPPrefixes(ctx)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
+		skipIfGatewayNotHostedHere(t, err)
 		t.Fatalf("BGPPrefixes failed: %v", err)
 	}
 
@@ -649,7 +641,7 @@ func testBGPAnnounceWithdraw(t *testing.T, ctx context.Context, adapter OverlayC
 	// Check if BGP is enabled first
 	status, err := adapter.BGPStatus(ctx)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
+		skipIfGatewayNotHostedHere(t, err)
 		t.Fatalf("BGPStatus failed: %v", err)
 	}
 
@@ -667,7 +659,7 @@ func testBGPAnnounceWithdraw(t *testing.T, ctx context.Context, adapter OverlayC
 		NextHop: testNextHop,
 	})
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
+		skipIfGatewayNotHostedHere(t, err)
 		t.Fatalf("BGPAnnounce failed: %v", err)
 	}
 
@@ -707,7 +699,7 @@ func testBGPAnnounceInvalidPrefix(t *testing.T, ctx context.Context, adapter Ove
 	// Check if BGP is enabled first
 	status, err := adapter.BGPStatus(ctx)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
+		skipIfGatewayNotHostedHere(t, err)
 		t.Skip("Could not get BGP status")
 	}
 
@@ -758,7 +750,6 @@ func testIPAMOperations(t *testing.T, ctx context.Context, adapter OverlayComman
 func testIPAMPoolList(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.IPAMPoolList(ctx)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("IPAMPoolList failed: %v", err)
 	}
 
@@ -783,17 +774,16 @@ func testIPAMPoolList(t *testing.T, ctx context.Context, adapter OverlayCommands
 func testIPAMPoolCreateDelete(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	// Create a test pool
 	poolName := generateUniquePoolName()
+	poolCIDR := nextTestPoolCIDR()
 	createOpts := IPAMPoolCreateOptions{
 		Name:          poolName,
-		CIDR:          "10.200.0.0/24",
-		Gateway:       "10.200.0.1",
-		DNS:           []string{"8.8.8.8", "8.8.4.4"},
+		CIDR:          poolCIDR.String(),
+		Gateway:       poolCIDR.Addr().Next().String(),
 		LeaseDuration: 24 * time.Hour,
 	}
 
 	createResult, err := adapter.IPAMPoolCreate(ctx, createOpts)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("IPAMPoolCreate failed: %v", err)
 	}
 
@@ -851,29 +841,25 @@ func testIPAMPoolCreateDelete(t *testing.T, ctx context.Context, adapter Overlay
 }
 
 func testIPAMAllocateRelease(t *testing.T, ctx context.Context, adapter OverlayCommands) {
-	// First get available pools
-	pools, err := adapter.IPAMPoolList(ctx)
+	// The test owns its pool. It used to borrow whatever pool happened to
+	// exist and skip when none did -- and on a fresh daemon none does, so
+	// allocate and release were skipped on every transport and never ran
+	// (#730).
+	poolCIDR := nextTestPoolCIDR()
+	pool, err := adapter.IPAMPoolCreate(ctx, IPAMPoolCreateOptions{
+		Name:    generateUniquePoolName(),
+		CIDR:    poolCIDR.String(),
+		Gateway: poolCIDR.Addr().Next().String(),
+	})
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
-		t.Fatalf("IPAMPoolList failed: %v", err)
+		t.Fatalf("IPAMPoolCreate failed: %v", err)
 	}
-
-	if len(pools.Pools) == 0 {
-		t.Skip("No IPAM pools available for testing")
-	}
-
-	// Find a pool with available IPs
-	var poolID string
-	for _, pool := range pools.Pools {
-		if pool.AvailableIPs > 0 {
-			poolID = pool.ID
-			break
+	t.Cleanup(func() {
+		if _, err := adapter.IPAMPoolDelete(context.Background(), pool.ID); err != nil {
+			t.Errorf("IPAMPoolDelete(%s) failed: %v", pool.ID, err)
 		}
-	}
-
-	if poolID == "" {
-		t.Skip("No pools with available IPs")
-	}
+	})
+	poolID := pool.ID
 
 	// Allocate an IP
 	allocOpts := IPAMAllocateOptions{
@@ -884,7 +870,6 @@ func testIPAMAllocateRelease(t *testing.T, ctx context.Context, adapter OverlayC
 
 	allocResult, err := adapter.IPAMAllocate(ctx, allocOpts)
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("IPAMAllocate failed: %v", err)
 	}
 
@@ -908,7 +893,7 @@ func testIPAMAllocateRelease(t *testing.T, ctx context.Context, adapter OverlayC
 
 	found := false
 	for _, alloc := range listResult.Allocations {
-		if alloc.IP == allocResult.IP {
+		if alloc.IP == allocResult.IP && alloc.PoolID == poolID {
 			found = true
 			break
 		}
@@ -934,7 +919,7 @@ func testIPAMAllocateRelease(t *testing.T, ctx context.Context, adapter OverlayC
 	}
 
 	for _, alloc := range listResult.Allocations {
-		if alloc.IP == allocResult.IP {
+		if alloc.IP == allocResult.IP && alloc.PoolID == poolID {
 			t.Error("Released IP still found in allocations list")
 			break
 		}
@@ -944,7 +929,6 @@ func testIPAMAllocateRelease(t *testing.T, ctx context.Context, adapter OverlayC
 func testIPAMListAllocations(t *testing.T, ctx context.Context, adapter OverlayCommands) {
 	result, err := adapter.IPAMList(ctx, IPAMListOptions{})
 	if err != nil {
-		skipIfOverlayNotImplemented(t, err)
 		t.Fatalf("IPAMList failed: %v", err)
 	}
 
@@ -1201,7 +1185,6 @@ func TestOverlayStressOperations(t *testing.T) {
 	// Wait for all creations
 	for i := 0; i < numVNIs; i++ {
 		if err := <-errors; err != nil {
-			skipIfOverlayNotImplemented(t, err)
 			t.Logf("VNI creation error: %v", err)
 		}
 	}
@@ -1220,40 +1203,29 @@ func TestOverlayStressOperations(t *testing.T) {
 // Helper Functions
 // =============================================================================
 
-// skipIfOverlayNotImplemented skips the test if the error indicates the method is not implemented.
-func skipIfOverlayNotImplemented(t *testing.T, err error) {
+// skipIfGatewayNotHostedHere skips a gateway or BGP subtest when, and only
+// when, platformd refused it because this node hosts no gateway runtime or
+// BGP speaker. platformd's GatewayService has no production caller that sets
+// either (the gateway runs in gatewayd), so these verbs answer "not
+// configured" on every node: that is #65, an open product gap, and this skip
+// names it rather than hiding it.
+//
+// It replaces a catch-all that skipped on any error containing "not
+// implemented", "not available", "unknown flag", a 404, a cancelled context
+// and more. That helper is how an adapter passing a flag the CLI does not
+// have (`--dns`) reported as skipped instead of failing (#730). Every other
+// error now fails the subtest.
+func skipIfGatewayNotHostedHere(t *testing.T, err error) {
 	t.Helper()
-
-	switch err.(type) {
-	case ErrGRPCNotImplemented:
-		t.Skipf("Not implemented: %v", err)
-	case ErrQUICSDNNotImplemented:
-		t.Skipf("Not implemented: %v", err)
-	case ErrMCPSDNNotImplemented:
-		t.Skipf("Not implemented: %v", err)
-	case ErrUnixSDNNotImplemented:
-		t.Skipf("Not implemented: %v", err)
-	case ErrMCPOverlayNotImplemented:
-		t.Skipf("Not implemented: %v", err)
-	}
-
-	// Also check for service unavailability patterns (daemon test mode
-	// does not register overlay/sdn service handlers)
-	errMsg := strings.ToLower(err.Error())
-	if strings.Contains(errMsg, "not implemented") ||
-		strings.Contains(errMsg, "unimplemented") ||
-		strings.Contains(errMsg, "not defined") ||
-		strings.Contains(errMsg, "service unavailable") ||
-		strings.Contains(errMsg, "not available") ||
-		strings.Contains(errMsg, "not configured") ||
-		strings.Contains(errMsg, "unknown service") ||
-		strings.Contains(errMsg, "connection required") ||
-		strings.Contains(errMsg, "404 page not found") ||
-		strings.Contains(errMsg, "status: 404") ||
-		strings.Contains(errMsg, "unknown flag") ||
-		strings.Contains(errMsg, "context canceled") ||
-		strings.Contains(errMsg, "context deadline exceeded") {
-		t.Skipf("Service not available: %v", err)
+	msg := err.Error()
+	for _, refusal := range []string{
+		"gateway not configured on this node",     // gRPC, Unix, CLI
+		"BGP speaker not configured on this node", // gRPC, Unix, CLI
+		"gateway feature not configured",          // QUIC, REST
+	} {
+		if strings.Contains(msg, refusal) {
+			t.Skipf("platformd hosts no gateway runtime or BGP speaker (#65): %v", err)
+		}
 	}
 }
 
@@ -1271,6 +1243,18 @@ func generateUniqueVNI() uint32 {
 		panic(err) // n is in range by construction
 	}
 	return vni
+}
+
+// testPoolSeq numbers the pools the overlay IPAM tests create.
+var testPoolSeq atomic.Uint32
+
+// nextTestPoolCIDR returns a /24 no other pool in this run holds. The
+// transports run in parallel against one daemon, and pools may not overlap:
+// with a fixed CIDR every transport but the first was refused "pool already
+// exists" (#730).
+func nextTestPoolCIDR() netip.Prefix {
+	n := testPoolSeq.Add(1)
+	return netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 200, byte(n), 0}), 24)
 }
 
 // generateUniquePoolName generates a unique pool name for testing.

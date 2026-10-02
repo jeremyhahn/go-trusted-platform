@@ -317,11 +317,6 @@ func (r *ToolRegistry) registerGatewayTools() {
 					"type":        "string",
 					"description": "Optional human-readable pool description",
 				},
-				"dns": map[string]interface{}{
-					"type":        "array",
-					"items":       map[string]interface{}{"type": "string"},
-					"description": "Optional DNS server addresses for the pool",
-				},
 				"lease_duration_seconds": map[string]interface{}{
 					"type":        "integer",
 					"description": "Optional lease duration in seconds",
@@ -767,7 +762,6 @@ func (r *ToolRegistry) executeGatewayIPAMPoolCreate(ctx context.Context, args ma
 		Gateway:              getString(args, "gateway"),
 		Zone:                 getString(args, "zone"),
 		Description:          getString(args, "description"),
-		DNS:                  getStringSlice(args, "dns"),
 		LeaseDurationSeconds: getInt64(args, "lease_duration_seconds"),
 		Reserved:             getStringSlice(args, "reserved"),
 		RangeStart:           getString(args, "range_start"),

@@ -137,6 +137,23 @@ var (
 	// ErrGatewayAllocationNotFound is returned when a requested allocation does not exist.
 	ErrGatewayAllocationNotFound = errors.New("IP allocation not found")
 
+	// ErrGatewayMissingOwner is returned when an allocation names no owner. The
+	// owner is the device the address is allocated to -- the same identifier
+	// gRPC and REST call device_id, and which they also require.
+	ErrGatewayMissingOwner = errors.New("owner (the device the address is allocated to) is required")
+
+	// ErrGatewayIPAlreadyAllocated is returned when a specific address is
+	// requested that another allocation already holds.
+	ErrGatewayIPAlreadyAllocated = errors.New("IP address already allocated")
+
+	// ErrGatewayMACNotRecorded is returned when an allocation carries a MAC
+	// address. IPAM records no MAC, so accepting one would drop it silently.
+	ErrGatewayMACNotRecorded = errors.New("mac_address is not recorded by IPAM allocation")
+
+	// ErrGatewayInvalidAllocationType is returned for an allocation type other
+	// than "dynamic" or "static".
+	ErrGatewayInvalidAllocationType = errors.New("allocation type must be dynamic or static")
+
 	// ErrGatewayBGPNotEnabled is returned when BGP operations are attempted
 	// but BGP is not enabled.
 	ErrGatewayBGPNotEnabled = errors.New("BGP is not enabled")
@@ -453,7 +470,6 @@ type IPAMPoolInfo struct {
 	Gateway       string            `codec:"gateway,omitempty"`
 	Zone          string            `codec:"zone,omitempty"`
 	Description   string            `codec:"description,omitempty"`
-	DNS           []string          `codec:"dns,omitempty"`
 	TotalIPs      int               `codec:"total_ips"`
 	AllocatedIPs  int               `codec:"allocated_ips"`
 	AvailableIPs  int               `codec:"available_ips"`
@@ -502,14 +518,13 @@ type AllocateIPOptions struct {
 
 // CreateIPAMPoolOptions contains options for creating an IPAM pool
 type CreateIPAMPoolOptions struct {
-	ID            string   `codec:"id,omitempty"`
-	Name          string   `codec:"name"`
-	CIDR          string   `codec:"cidr"`
-	Gateway       string   `codec:"gateway,omitempty"`
-	Zone          string   `codec:"zone,omitempty"`
-	Description   string   `codec:"description,omitempty"`
-	DNS           []string `codec:"dns,omitempty"`
-	LeaseDuration int64    `codec:"lease_duration_nanos,omitempty"`
+	ID            string `codec:"id,omitempty"`
+	Name          string `codec:"name"`
+	CIDR          string `codec:"cidr"`
+	Gateway       string `codec:"gateway,omitempty"`
+	Zone          string `codec:"zone,omitempty"`
+	Description   string `codec:"description,omitempty"`
+	LeaseDuration int64  `codec:"lease_duration_nanos,omitempty"`
 	// Reserved lists never-allocatable prefixes (CIDR notation).
 	Reserved []string `codec:"reserved,omitempty"`
 	// RangeStart and RangeEnd bound dynamic allocation; set both or neither.
@@ -898,14 +913,13 @@ type GatewayListIPAMPoolsResponse struct {
 
 // GatewayCreateIPAMPoolRequest represents an IPAM pool create request
 type GatewayCreateIPAMPoolRequest struct {
-	ID            string   `codec:"id,omitempty"`
-	Name          string   `codec:"name"`
-	CIDR          string   `codec:"cidr"`
-	Gateway       string   `codec:"gateway,omitempty"`
-	Zone          string   `codec:"zone,omitempty"`
-	Description   string   `codec:"description,omitempty"`
-	DNS           []string `codec:"dns,omitempty"`
-	LeaseDuration int64    `codec:"lease_duration_nanos,omitempty"`
+	ID            string `codec:"id,omitempty"`
+	Name          string `codec:"name"`
+	CIDR          string `codec:"cidr"`
+	Gateway       string `codec:"gateway,omitempty"`
+	Zone          string `codec:"zone,omitempty"`
+	Description   string `codec:"description,omitempty"`
+	LeaseDuration int64  `codec:"lease_duration_nanos,omitempty"`
 	// Reserved lists never-allocatable prefixes (CIDR notation).
 	Reserved []string `codec:"reserved,omitempty"`
 	// RangeStart and RangeEnd bound dynamic allocation; set both or neither.
@@ -949,9 +963,10 @@ type GatewayAllocateIPResponse struct {
 	Timestamp  int64             `codec:"timestamp"`
 }
 
-// GatewayReleaseIPRequest represents an IP release request
+// GatewayReleaseIPRequest represents an IP release request. PoolID is
+// optional; when set, the address must belong to that pool.
 type GatewayReleaseIPRequest struct {
-	PoolID    string `codec:"pool_id"`
+	PoolID    string `codec:"pool_id,omitempty"`
 	IPAddress string `codec:"ip_address"`
 }
 
@@ -1392,7 +1407,6 @@ func (h *GatewayHandler) handleCreateIPAMPool(ctx context.Context, req *Request)
 		Gateway:       createReq.Gateway,
 		Zone:          createReq.Zone,
 		Description:   createReq.Description,
-		DNS:           createReq.DNS,
 		LeaseDuration: createReq.LeaseDuration,
 		Reserved:      createReq.Reserved,
 		RangeStart:    createReq.RangeStart,
@@ -1523,10 +1537,9 @@ func (h *GatewayHandler) handleReleaseIP(ctx context.Context, req *Request) *Res
 		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
 	}
 
-	if releaseReq.PoolID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrGatewayMissingPoolID)
-	}
-
+	// pool_id is optional: an address identifies its allocation, and gRPC,
+	// REST and the CLI release by address alone. When it is given, the
+	// service refuses an address that belongs to another pool.
 	if releaseReq.IPAddress == "" {
 		return h.errorResponse(StatusInvalidArgument, ErrGatewayMissingIPAddress)
 	}
@@ -1716,6 +1729,12 @@ func (h *GatewayHandler) gatewayErrorResponse(err error) *Response {
 		status = StatusNotFound
 	case errors.Is(err, ErrGatewayAllocationNotFound):
 		status = StatusNotFound
+	case errors.Is(err, ErrGatewayIPAlreadyAllocated):
+		status = StatusAlreadyExists
+	case errors.Is(err, ErrGatewayMissingOwner),
+		errors.Is(err, ErrGatewayMACNotRecorded),
+		errors.Is(err, ErrGatewayInvalidAllocationType):
+		status = StatusInvalidArgument
 	case errors.Is(err, ErrGatewayBGPPeerNotFound):
 		status = StatusNotFound
 	case errors.Is(err, ErrGatewayPrefixAlreadyExists):

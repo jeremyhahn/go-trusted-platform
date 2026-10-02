@@ -318,13 +318,12 @@ type KMSGenerateWrappedDataKeyRequest struct {
 
 // IPAMPoolCreateRequest represents an IPAM pool creation request for MCP.
 type IPAMPoolCreateRequest struct {
-	Name                 string   `json:"name"`
-	CIDR                 string   `json:"cidr"`
-	Gateway              string   `json:"gateway,omitempty"`
-	Zone                 string   `json:"zone,omitempty"`
-	Description          string   `json:"description,omitempty"`
-	DNS                  []string `json:"dns,omitempty"`
-	LeaseDurationSeconds int64    `json:"lease_duration_seconds,omitempty"`
+	Name                 string `json:"name"`
+	CIDR                 string `json:"cidr"`
+	Gateway              string `json:"gateway,omitempty"`
+	Zone                 string `json:"zone,omitempty"`
+	Description          string `json:"description,omitempty"`
+	LeaseDurationSeconds int64  `json:"lease_duration_seconds,omitempty"`
 	// Reserved lists never-allocatable prefixes in CIDR notation.
 	Reserved []string `json:"reserved,omitempty"`
 	// RangeStart and RangeEnd bound dynamic allocation; set both or neither.

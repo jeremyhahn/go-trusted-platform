@@ -2200,10 +2200,12 @@ func TestGatewayHandleReleaseIP(t *testing.T) {
 		assert.Equal(t, StatusUnavailable, resp.Status)
 	})
 
-	t.Run("returns error for missing pool ID", func(t *testing.T) {
+	t.Run("releases by address alone", func(t *testing.T) {
 		t.Parallel()
-		handler, _ := createTestGatewayHandler()
+		handler, service := createTestGatewayHandler()
 
+		// pool_id is optional, as on gRPC, REST and the CLI, which release
+		// by address; it used to be required on QUIC alone (#730).
 		releaseReq := &GatewayReleaseIPRequest{
 			IPAddress: "10.0.0.50",
 		}
@@ -2218,8 +2220,9 @@ func TestGatewayHandleReleaseIP(t *testing.T) {
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
-		assert.Contains(t, string(resp.Payload), "pool ID")
+		assert.Equal(t, StatusOK, resp.Status)
+		assert.Empty(t, service.lastPoolID)
+		assert.Equal(t, "10.0.0.50", service.lastReleaseIP)
 	})
 
 	t.Run("returns error for missing IP address", func(t *testing.T) {
@@ -2656,5 +2659,29 @@ func TestGatewayHandlerErrorResponse_APreconditionIsNotAFault(t *testing.T) {
 	}
 	if !errors.Is(ErrGatewayPreconditionDetail{Reason: "x"}, ErrGatewayPreconditionFailed) {
 		t.Fatal("the detail does not match its sentinel")
+	}
+}
+
+// TestGatewayHandlerErrorResponse_AllocationRefusals pins the statuses of the
+// refusals QUIC allocation gained when it was wired to the daemon's IPAM
+// allocator (#730): a caller's mistake is InvalidArgument, a taken address
+// AlreadyExists -- never the InternalError an unmapped error falls through to.
+func TestGatewayHandlerErrorResponse_AllocationRefusals(t *testing.T) {
+	t.Parallel()
+	handler, _ := createTestGatewayHandler()
+
+	tests := []struct {
+		err  error
+		want byte
+	}{
+		{ErrGatewayMissingOwner, StatusInvalidArgument},
+		{ErrGatewayMACNotRecorded, StatusInvalidArgument},
+		{ErrGatewayInvalidAllocationType, StatusInvalidArgument},
+		{ErrGatewayIPAlreadyAllocated, StatusAlreadyExists},
+	}
+	for _, tt := range tests {
+		t.Run(tt.err.Error(), func(t *testing.T) {
+			assert.Equal(t, tt.want, handler.gatewayErrorResponse(tt.err).Status)
+		})
 	}
 }

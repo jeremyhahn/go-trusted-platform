@@ -1974,6 +1974,9 @@ func TestGatewayWriteGatewayError(t *testing.T) {
 		{"ErrInvalidIPAddress", ErrInvalidIPAddress{IP: "test"}, http.StatusBadRequest},
 		{"ErrInvalidPoolID", ErrInvalidPoolID{ID: "test"}, http.StatusBadRequest},
 		{"ErrGatewayServiceNotAvailable", ErrGatewayServiceNotAvailable{}, http.StatusServiceUnavailable},
+		// A capability this node does not host is switched off, not broken:
+		// 503 like every disabled gateway section, never 500 (#730).
+		{"ErrGatewayFeatureNotConfigured", ErrGatewayFeatureNotConfigured{Feature: "bgp"}, http.StatusServiceUnavailable},
 		{"UnknownError", errors.New("unknown"), http.StatusInternalServerError},
 	}
 
@@ -2027,4 +2030,13 @@ func TestGatewayWriteError(t *testing.T) {
 		assert.Equal(t, "test error", errResp.Error)
 		assert.Equal(t, http.StatusBadRequest, errResp.Code)
 	})
+}
+
+// TestErrGatewayFeatureNotConfigured_NamesTheFeature pins the message the
+// transports and the integration suite rely on to tell a capability this node
+// does not host (#65) apart from a failure.
+func TestErrGatewayFeatureNotConfigured_NamesTheFeature(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "gateway feature not configured: bgp", ErrGatewayFeatureNotConfigured{Feature: "bgp"}.Error())
+	assert.Equal(t, "gateway feature not configured: ", ErrGatewayFeatureNotConfigured{}.Error())
 }

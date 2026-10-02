@@ -542,32 +542,32 @@ func (m *MemoryBackend) Release(ctx context.Context, ip netip.Addr) error {
 		return ipam.ErrPoolNotFound
 	}
 
-	// Calculate bitmap offset
-	offset, err := ipam.IPToOffset(pool.CIDR, ip)
-	if err != nil {
-		return err
-	}
+	// An expired allocation already gave its address back: ExpireInactive
+	// cleared the bitmap bit and adjusted the pool counts. Releasing it only
+	// records the release. The guard used to test the status after it had
+	// been overwritten with Released, so it was always true and a release
+	// after expiry counted the address free twice -- AllocatedIPs, a uint64,
+	// wrapped (#730).
+	holdsAddress := alloc.Status != ipam.AllocationStatusExpired
 
-	// Adjust offset for bitmap
-	bitmapOffset := offset
-	if pool.CIDR.Addr().Is4() && pool.CIDR.Bits() < 31 {
-		bitmapOffset = offset - 1
-	}
+	if holdsAddress {
+		offset, err := ipam.IPToOffset(pool.CIDR, ip)
+		if err != nil {
+			return err
+		}
+		bitmapOffset := offset
+		if pool.CIDR.Addr().Is4() && pool.CIDR.Bits() < 31 {
+			bitmapOffset = offset - 1
+		}
+		m.bitmaps[alloc.PoolID].Clear(bitmapOffset)
 
-	// Clear bitmap
-	bitmap := m.bitmaps[alloc.PoolID]
-	bitmap.Clear(bitmapOffset)
-
-	// Update allocation status
-	alloc.Status = ipam.AllocationStatusReleased
-	alloc.ReleasedAt = time.Now()
-
-	// Update pool stats (only if it was active)
-	if alloc.Status != ipam.AllocationStatusExpired {
 		pool.AllocatedIPs--
 		pool.AvailableIPs++
 		pool.UpdatedAt = time.Now()
 	}
+
+	alloc.Status = ipam.AllocationStatusReleased
+	alloc.ReleasedAt = time.Now()
 
 	m.logger.Debug("IP released",
 		slog.String("ip", ip.String()),
