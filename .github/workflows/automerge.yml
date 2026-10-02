@@ -1,27 +1,36 @@
-# automerge: a PR merges itself once CI is green -- unless it asks for review.
+# automerge v4: a PR merges itself once CI is green; a `code-review` PR also
+# needs one approval from the reviewer list.
 #
-# Owner rulings, 2026-10-01 (automatethethings#200):
-#   "automatically merges the branch to main when there is no code-review
-#    label. when a code-review label is present, the automerge does not run.
-#    no further action is taken by gitea. i dont want any approvers required
-#    for gitea merges to main once the PR CI jobs are all green"
-#   "quicbaas is going to be responsible for running the code review agents
-#    instead of gitea. we only want standard actions in gitea"
-#   "make sure that the automerge squashes and deletes the remote branch"
+# Owner rulings (automatethethings#200, #203):
+#   2026-10-02 "all projects should follow the same automerge convention.
+#    automatically merge to main when CI is green and the PR doesnt have a
+#    code-review label. If it has a code-review label, then we need at least 1
+#    approver, which should be one of - claude, codex, opencode, jeremyhahn,
+#    agent-company or agent-software."
+#   2026-10-01 "quicbaas is going to be responsible for running the code review
+#    agents instead of gitea. we only want standard actions in gitea"
+#   2026-10-01 "make sure that the automerge squashes and deletes the remote
+#    branch, we dont want to leave dangling branches"
 #
-# NO MERGE IS EVER SCHEDULED. Gitea's merge-when-checks-succeed would arm a
-# merge that fires the instant CI goes green -- and a `code-review` label added
-# while CI runs could only cancel it from a job still waiting for a runner, so
-# the labelled PR would merge anyway. Instead this workflow merges IMMEDIATELY,
-# and only at a moment it has just checked both conditions:
-#   - CI finishing (workflow_run): CI is green now; re-read the labels; merge.
-#   - a PR event (opened, push, label change, ready): merge now if CI is
-#     already green; otherwise do nothing -- CI finishing will run this again.
-# The label is checked first on every run (cancelling any merge a legacy
-# workflow armed) and again immediately before the merge call, so
-# `code-review` added at any point before that holds the PR. With the label
-# Gitea does nothing further: QuicBaaS reviews the PR. Squash, then delete the
-# head branch.
+#   no `code-review` label -> merge when every required CI check is green
+#   `code-review` label    -> merge when CI is green AND, on the current head,
+#                             at least one APPROVED review (not stale, not
+#                             dismissed) by one of APPROVERS, and no reviewer's
+#                             latest review is REQUEST_CHANGES
+#
+# Branch protection requires 0 approvals: Gitea cannot make an approval
+# conditional on a label, so this workflow is that gate. QuicBaaS posts the
+# reviews; this workflow only reads them.
+#
+# NO MERGE IS EVER SCHEDULED. Gitea's merge-when-checks-succeed fires the
+# instant CI goes green, so a label added while CI runs could not stop it. This
+# workflow merges IMMEDIATELY, only at a moment it has just checked everything:
+#   - CI finishing (workflow_run on the CI or Docs workflow);
+#   - a PR event (opened, push, label change, ready) once CI is already green;
+#   - a review being submitted or dismissed.
+# The label is read first on every run (cancelling any merge a legacy workflow
+# armed) and again immediately before the merge call. Squash, then delete the
+# head branch; the merge is pinned to the head commit whose checks were read.
 #
 # FAIL CLOSED: nothing merges unless the base branch REQUIRES at least one
 # status check and every required context is `success` on the PR head.
@@ -33,6 +42,8 @@ name: Auto Merge
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
   workflow_run:
     # The repository's CI workflow; the documentation repos call theirs Docs.
     workflows: [CI, Docs]
@@ -46,7 +57,7 @@ concurrency:
 
 jobs:
   merge:
-    name: Merge when CI is green and there is no code-review label
+    name: Merge when CI is green (code-review PRs also need an approval)
     if: >-
       github.server_url != 'https://github.com' &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
@@ -58,6 +69,9 @@ jobs:
           REPO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
           PR_FROM_EVENT: ${{ github.event.pull_request.number }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          # The reviewers whose approval releases a `code-review` PR (owner,
+          # 2026-10-02). Logins, exact.
+          APPROVERS: '["claude","codex","opencode","jeremyhahn","agent-company","agent-software"]'
         run: |
           set -euo pipefail
 
@@ -71,14 +85,17 @@ jobs:
               -H "Authorization: token $BOT" -H 'Content-Type: application/json' \
               ${3:+-d "$3"} "$REPO_API$2"
           }
+          has_label() { # -> 0 when the PR carries code-review
+            code=$(api GET "/issues/$pr/labels")
+            [ "$code" = "200" ] || { echo "::error::cannot read the labels of PR $pr (HTTP $code)"; exit 1; }
+            jq -e 'any(.[]; .name == "code-review")' /tmp/api.json >/dev/null
+          }
 
           # Which PR. A CI completion names a commit; find the open PR whose
-          # head it is (none: a push to main, or the PR moved on -- nothing to do).
+          # head it is, on any page (none: a push to main -- nothing to do).
           pr="${PR_FROM_EVENT:-}"
           page=1
           while [ -z "$pr" ]; do
-            # Every page: a PR beyond the first would otherwise never merge,
-            # since its CI completion is the event that was supposed to do it.
             code=$(api GET "/pulls?state=open&limit=50&page=$page")
             [ "$code" = "200" ] || { echo "::error::cannot list open PRs (HTTP $code)"; exit 1; }
             [ "$(jq 'length' /tmp/api.json)" -gt 0 ] || { echo "no open PR has head $RUN_SHA; nothing to merge"; exit 0; }
@@ -102,26 +119,22 @@ jobs:
           fi
           jq -c '.status_check_contexts' /tmp/api.json > /tmp/required.json
 
-          # The label is decided BEFORE CI, and every run enforces it: a PR held
-          # with `code-review` must carry no armed merge, even while CI is
-          # still running -- a schedule armed by the pre-2026-10-01 workflow
-          # (or by a legacy copy still on an old PR head) would otherwise fire
-          # the moment CI goes green. Read fresh, never from the event payload.
-          code=$(api GET "/issues/$pr/labels")
-          [ "$code" = "200" ] || { echo "::error::cannot read the labels of PR $pr (HTTP $code)"; exit 1; }
-          if jq -e 'any(.[]; .name == "code-review")' /tmp/api.json >/dev/null; then
+          # The label first, on every run. A merge armed by the pre-2026-10-01
+          # workflow (or a legacy copy still on an old PR head) must not
+          # outlive it: 204 cancelled one, 404 there was none.
+          held=0
+          if has_label; then
+            held=1
             code=$(api DELETE "/pulls/$pr/merge")
             case "$code" in
-              204) echo "code-review label: cancelled a merge armed earlier; not merging; QuicBaaS reviews PR $pr." ;;
-              404) echo "code-review label: not merging; QuicBaaS reviews PR $pr." ;;
-              *)   echo "::error::PR $pr is held with code-review but an armed merge could not be cancelled (HTTP $code): $(cat /tmp/api.json)"; exit 1 ;;
+              204) echo "cancelled a merge armed earlier by a legacy workflow" ;;
+              404) ;;
+              *)   echo "::error::PR $pr carries code-review but an armed merge could not be cancelled (HTTP $code): $(cat /tmp/api.json)"; exit 1 ;;
             esac
-            exit 0
           fi
 
-          # Is every required context green on the PR head? The combined status
-          # carries the LATEST status per context (raw history would page out
-          # after enough re-runs); page it until total_count is covered.
+          # Every required context green on the PR head? The combined status
+          # carries the LATEST status per context; page it to total_count.
           echo '[]' > /tmp/latest.json
           page=1
           while :; do
@@ -141,20 +154,48 @@ jobs:
             exit 0
           fi
 
+          # A `code-review` PR also needs an approval. Only reviews ON THIS HEAD
+          # count, not stale and not dismissed; each reviewer's latest decisive
+          # review (APPROVED or REQUEST_CHANGES) is theirs. Any REQUEST_CHANGES
+          # blocks; one APPROVED from APPROVERS releases.
+          if [ "$held" = "1" ]; then
+            echo '[]' > /tmp/reviews.json
+            page=1
+            while :; do
+              code=$(api GET "/pulls/$pr/reviews?limit=50&page=$page")
+              [ "$code" = "200" ] || { echo "::error::cannot read the reviews of PR $pr (HTTP $code)"; exit 1; }
+              [ "$(jq 'length' /tmp/api.json)" -gt 0 ] || break
+              jq -s '.[0] + .[1]' /tmp/reviews.json /tmp/api.json > /tmp/reviews.next
+              mv /tmp/reviews.next /tmp/reviews.json
+              page=$((page + 1))
+            done
+            verdict=$(jq -r --arg h "$head" --argjson ok "$APPROVERS" '
+                [ .[] | select(.commit_id == $h and (.stale | not) and (.dismissed | not)
+                               and (.state == "APPROVED" or .state == "REQUEST_CHANGES")) ]
+                | group_by(.user.login) | map(max_by(.id)) as $latest
+                | if any($latest[]; .state == "REQUEST_CHANGES") then "changes"
+                  elif any($latest[]; .state == "APPROVED" and (.user.login as $u | $ok | index($u))) then "approved"
+                  else "waiting" end' /tmp/reviews.json)
+            case "$verdict" in
+              approved) echo "code-review: approved on $head by $(jq -r --arg h "$head" --argjson ok "$APPROVERS" '[.[] | select(.commit_id == $h and .state == "APPROVED" and (.stale | not) and (.dismissed | not) and (.user.login as $u | $ok | index($u))) | .user.login] | unique | join(", ")' /tmp/reviews.json)" ;;
+              changes)  echo "code-review: changes requested on $head; not merging."; exit 0 ;;
+              *)        echo "code-review: CI is green; waiting for an approval from one of $(jq -r 'join(", ")' <<<"$APPROVERS") on $head."; exit 0 ;;
+            esac
+          fi
+
           # Last look at the label, one call before the merge: a label added
-          # while the statuses were read still holds the PR.
-          code=$(api GET "/issues/$pr/labels")
-          [ "$code" = "200" ] || { echo "::error::cannot re-read the labels of PR $pr (HTTP $code)"; exit 1; }
-          if jq -e 'any(.[]; .name == "code-review")' /tmp/api.json >/dev/null; then
-            echo "code-review label added just now: not merging; QuicBaaS reviews PR $pr."
+          # while the checks were read means the approval rule applies, and the
+          # labeled event re-runs this with it.
+          if [ "$held" = "0" ] && has_label; then
+            echo "code-review label added just now; its own run decides."
             exit 0
           fi
 
           # Merge now: squash, delete the head branch, and only if the head is
-          # still the commit whose checks were just read.
+          # still the commit whose checks (and approval) were just read.
           body=$(jq -nc --arg h "$head" '{Do: "squash", delete_branch_after_merge: true, head_commit_id: $h}')
           code=$(api POST "/pulls/$pr/merge" "$body")
           case "$code" in
             200|201|204) echo "merged PR $pr ($head) into $base; branch deleted" ;;
-            *) echo "::error::PR $pr is green and unlabelled but did not merge (HTTP $code): $(cat /tmp/api.json)"; exit 1 ;;
+            *) echo "::error::PR $pr is ready but did not merge (HTTP $code): $(cat /tmp/api.json)"; exit 1 ;;
           esac
