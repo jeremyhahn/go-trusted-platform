@@ -402,9 +402,19 @@ func (l *fakeLauncher) lastChild() *fakeChild {
 
 // testClock is a real-time clock with a recorded history of the delays it
 // was asked for, so backoff growth is asserted without waiting for it.
+//
+// It collapses the restart backoff and the readiness poll to a millisecond,
+// and only those. stopTimeout is the supervisor's configured StopTimeout, and
+// that wait runs in real time: it is the window a child gets to exit after
+// SIGTERM before it is killed. Collapsing it too gave every test a 1ms stop
+// window, so a child that took longer than that to exit -- routine under
+// -race on a loaded runner -- was SIGKILLed, and
+// TestStopService_SignalsBeforeItCancelsTheLaunchContext failed about once
+// in a hundred runs (#736).
 type testClock struct {
-	mu     sync.Mutex
-	delays []time.Duration
+	mu          sync.Mutex
+	delays      []time.Duration
+	stopTimeout time.Duration
 }
 
 func (c *testClock) Now() time.Time { return time.Now() }
@@ -412,7 +422,11 @@ func (c *testClock) Now() time.Time { return time.Now() }
 func (c *testClock) After(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	c.delays = append(c.delays, d)
+	stopTimeout := c.stopTimeout
 	c.mu.Unlock()
+	if d == stopTimeout {
+		return time.After(d)
+	}
 	// Restart delays are collapsed so the tests do not sleep; the recorded
 	// value is what the backoff policy chose.
 	return time.After(time.Millisecond)
@@ -453,6 +467,7 @@ func newSupervisor(t *testing.T, tune func(*Config)) (*Supervisor, *fakeLauncher
 	if tune != nil {
 		tune(&cfg)
 	}
+	clock.stopTimeout = cfg.StopTimeout
 	supervisor := New(cfg)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
