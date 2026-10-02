@@ -35,6 +35,11 @@
 # FAIL CLOSED: nothing merges unless the base branch REQUIRES at least one
 # status check and every required context is `success` on the PR head.
 #
+# BEHIND MAIN: a PR must carry the latest main (block_on_outdated_branch), and
+# every merge leaves the other open PRs behind. When Gitea refuses the merge
+# for that reason, this merges main into the PR branch (Gitea's update-branch
+# call, style merge -- never a rebase); CI re-runs and its completion merges.
+#
 # The merge is made as the repository's own agent (AGENT_TOKEN), one of the
 # principals on the merge whitelist (infra/gitea/scripts/setup-repo-guardrails.sh).
 name: Auto Merge
@@ -197,5 +202,23 @@ jobs:
           code=$(api POST "/pulls/$pr/merge" "$body")
           case "$code" in
             200|201|204) echo "merged PR $pr ($head) into $base; branch deleted" ;;
-            *) echo "::error::PR $pr is ready but did not merge (HTTP $code): $(cat /tmp/api.json)"; exit 1 ;;
+            *)
+              # A PR must carry the latest main (owner, 2026-09-24:
+              # block_on_outdated_branch), so every merge to main leaves the
+              # other open PRs behind. Bring main in the way that rule
+              # prescribes -- a merge, never a rebase -- through Gitea's
+              # update-branch call; CI re-runs on the new head and its
+              # completion runs this again. A conflict needs a human/agent.
+              if [ "$code" = "405" ] && grep -q 'behind the base branch' /tmp/api.json; then
+                code=$(api POST "/pulls/$pr/update?style=merge")
+                case "$code" in
+                  200)
+                    note=""
+                    [ "$held" = "1" ] && note=" (a code-review PR needs its approval again on the new head)"
+                    echo "PR $pr was behind $base: merged $base into it; CI re-runs on the new head and merges it when green$note." ;;
+                  *)   echo "::error::PR $pr is behind $base and $base could not be merged into it (HTTP $code): $(cat /tmp/api.json) -- merge $base into the branch by hand."; exit 1 ;;
+                esac
+                exit 0
+              fi
+              echo "::error::PR $pr is ready but did not merge (HTTP $code): $(cat /tmp/api.json)"; exit 1 ;;
           esac
