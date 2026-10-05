@@ -400,6 +400,42 @@ func (l *fakeLauncher) lastChild() *fakeChild {
 	return l.children[len(l.children)-1]
 }
 
+// awaitRelaunch waits until the n-th child launched is the one the supervisor
+// has published for process AND the restart that launched it has finished, and
+// returns that child.
+//
+// launchCount alone is not that signal (#742). Launch records the launch before
+// the child exists, so a test that waits on the count and then calls lastChild
+// can get the PREVIOUS child, already exited, and its exit() is a no-op: the
+// crash the test meant to cause never happens. And a child crashed while its
+// restart loop is still in its readiness check starts a second loop beside the
+// first, so the first sees the failure, stops the child and records the
+// StopTimeout as if it were a backoff. Both are invisible on an idle machine
+// and routine under -race on a loaded runner.
+func awaitRelaunch(t *testing.T, s *Supervisor, l *fakeLauncher, process string, n int) *fakeChild {
+	t.Helper()
+	var child *fakeChild
+	require.Eventually(t, func() bool {
+		l.mu.Lock()
+		if len(l.children) < n {
+			l.mu.Unlock()
+			return false
+		}
+		candidate := l.children[n-1]
+		l.mu.Unlock()
+
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		proc, ok := s.processes[process]
+		if !ok || proc.launching || proc.child != Child(candidate) {
+			return false
+		}
+		child = candidate
+		return true
+	}, 20*time.Second, 10*time.Millisecond, "launch %d of %s is published and its restart has settled", n, process)
+	return child
+}
+
 // testClock is a real-time clock with a recorded history of the delays it
 // was asked for, so backoff growth is asserted without waiting for it.
 //
@@ -849,10 +885,10 @@ func TestCrashedProcess_IsRestartedWithGrowingBackoff(t *testing.T) {
 	ctx := testContext(t)
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceFirewall))
 
+	child := launcher.lastChild()
 	for i := 0; i < 2; i++ {
-		launcher.lastChild().exit(errors.New("signal: killed"))
-		require.Eventually(t, func() bool { return launcher.launchCount() == i+2 }, 20*time.Second, 10*time.Millisecond,
-			"the supervisor relaunches a crashed process")
+		child.exit(errors.New("signal: killed"))
+		child = awaitRelaunch(t, supervisor, launcher, "datapath", i+2)
 	}
 	delays := clock.restartDelays(100 * time.Millisecond)
 	require.GreaterOrEqual(t, len(delays), 2)
@@ -874,11 +910,11 @@ func TestCrashLoop_StopsAtTheRestartBudget(t *testing.T) {
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
 
 	// Three crashes against a budget of two: the third exhausts it.
+	child := launcher.lastChild()
 	for i := 0; i < 3; i++ {
-		child := launcher.lastChild()
 		child.exit(errors.New("signal: killed"))
 		if i < 2 {
-			require.Eventually(t, func() bool { return launcher.launchCount() == i+2 }, 20*time.Second, 10*time.Millisecond)
+			child = awaitRelaunch(t, supervisor, launcher, "routing", i+2)
 		}
 	}
 
@@ -904,12 +940,12 @@ func TestLongUptime_ClearsTheCrashHistory(t *testing.T) {
 	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceFirewall))
 
 	launcher.lastChild().exit(errors.New("signal: killed"))
-	require.Eventually(t, func() bool { return launcher.launchCount() == 2 }, 20*time.Second, 10*time.Millisecond)
+	restarted := awaitRelaunch(t, supervisor, launcher, "datapath", 2)
 
 	// Two hours pass, then the restarted child dies too.
 	clockStub.advance(2 * time.Hour)
-	launcher.lastChild().exit(errors.New("signal: killed"))
-	require.Eventually(t, func() bool { return launcher.launchCount() == 3 }, 20*time.Second, 10*time.Millisecond)
+	restarted.exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "datapath", 3)
 
 	delays := clockStub.restartDelays(100 * time.Millisecond)
 	require.Len(t, delays, 2)
@@ -1600,12 +1636,8 @@ func TestStopService_CleansUpAProcessThatAlreadyExited(t *testing.T) {
 	require.NoError(t, err, "the leaf exists while the process runs")
 
 	// Crash past the budget: the supervisor gives up and no child remains.
-	for i := 0; i < 2; i++ {
-		launcher.lastChild().exit(errors.New("signal: killed"))
-		if i == 0 {
-			require.Eventually(t, func() bool { return launcher.launchCount() == 2 }, 20*time.Second, 10*time.Millisecond)
-		}
-	}
+	launcher.lastChild().exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "routing", 2).exit(errors.New("signal: killed"))
 	var exhausted *ErrRestartBudgetExhausted
 	require.Eventually(t, func() bool {
 		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)

@@ -18,3 +18,14 @@
 #
 # This file carries no suppressions and should not acquire one casually. An
 # entry needs the CVE, why it does not apply or cannot be fixed, and the date.
+#
+# Suppression (2026-10-05, #740)
+#
+# CVE-2026-93687 (braces 3.0.3, HIGH: DoS via stack overflow from deeply nested
+# brace patterns) in web/package-lock.json. No fixed version exists upstream.
+# braces is reached only through tailwindcss (micromatch, chokidar) and the
+# dev-only eslint-config-next -> fast-glob path: it runs at BUILD time over the
+# brace patterns in our own tailwind content globs, never on untrusted input,
+# and is not in the served console bundle. Remove this entry and bump the
+# lockfile when a fixed braces ships.
+CVE-2026-93687
