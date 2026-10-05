@@ -1,14 +1,15 @@
 name: CI
 
-# ci-template: v1.9 (staged fail-fast) — adopted 2026-08-20 per issues #21/#22.
+# ci-template: v1.15 — adopted 2026-10-05 per #738 (automatethethings#209).
 #
-# Fail-fast comes from ORDERING: the fast tier (lint + build, ~minutes) gates
-# the expensive tier (test, security). A broken push reports in minutes and
-# burns nothing downstream; a green push pays one fast-tier of extra latency.
+# Every job starts at once, so a run takes as long as its slowest job (v1.14
+# dropped v1.9's staged fail-fast `needs: [lint, build]`). CI Gate, the one
+# required check, still needs every gated job and fails closed on any result
+# but success. `push` runs on main only: automerge.yml v7's merge trains are
+# PRs from merge-train/* and get their CI from the pull_request trigger.
 #
-# Ordering handles a run that is WRONG. The `concurrency` block below handles a
-# run that is merely SUPERSEDED — see its comment. The two are complementary,
-# not alternatives: neither replaces the other.
+# The `concurrency` block below cancels a run that is merely SUPERSEDED — see
+# its comment.
 #
 # trivy and fips live in nightly.yml (schedule + workflow_dispatch) and gate
 # nothing here. Repo-specific caveat recorded there: trivy was NOT known-red in
@@ -247,20 +248,12 @@ jobs:
     # ci-gate FAILS on a skipped job by design, so doing (1) without (2), or
     # leaving this disabled while ci-gate still lists it, turns the gate red.
     if: false
-    # v1.9 staged fail-fast ordering: no point asking whether the tree builds on
-    # the NEXT toolchain until it builds on the current one.
-    #
-    # It gates ci-gate, and DELIBERATELY does not gate test/race/security/trivy.
-    # Putting it in their `needs` was proposed and rejected: this job is strictly
-    # heavier than `build` (same untagged compiles, PLUS both tagged modules,
-    # plus the initrd link, plus a second toolchain to download), so making the
-    # expensive tier wait on it would add that latency to EVERY green push to
-    # save runner-minutes only on the rare push that breaks solely on
-    # GO_NEXT_VERSION. The fast tier that gates is "lint + build, ~minutes" by
-    # design (see the header); this job is not that, and moving it there trades
-    # a certain per-push cost for a rare one. If it ever becomes cheap enough to
-    # belong in the gating tier, move it — but measure both first.
-    needs: [build]
+    # No `needs` (v1.14): like every job it starts at once. It gates ci-gate
+    # (once restored), and DELIBERATELY does not gate test/race/security/trivy:
+    # this job is strictly heavier than `build` (same untagged compiles, PLUS
+    # both tagged modules, plus the initrd link, plus a second toolchain to
+    # download), so making other jobs wait on it would add that latency to
+    # EVERY green push.
     steps:
       - uses: actions/checkout@v6
 
@@ -328,7 +321,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    needs: [lint, build]
+    # No `needs` (v1.14): starts with lint and build, not after them.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
@@ -394,7 +387,7 @@ jobs:
   race:
     name: Race
     runs-on: ubuntu-latest
-    needs: [lint, build]
+    # No `needs` (v1.14): starts with lint and build, not after them.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
@@ -432,15 +425,10 @@ jobs:
     name: Web Console
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Expensive tier, beside gonext, by measurement not by kind: the job is
-    # ~60s of npm (sdk/javascript `npm ci` 18s + `npm run build` 17s, web
-    # `npm ci` 27s, measured 2026-09-05 on d043be83) plus checkout and
-    # setup-node, ~2 minutes. Nothing it does is cheaper after `build`; it
-    # waits on it because runner capacity is 3 portfolio-wide (sdlc.md §0b):
-    # a FOURTH fast-tier job (lint, build, sdkjs, web) queues behind the other
-    # three and lengthens the gating tier's critical path on every push, while
-    # here it is one ~2-minute job among five already sharing three runners.
-    # If capacity grows, move it up — and measure both first, as gonext says.
+    # No `needs` (v1.14): every job starts at once. The job is ~60s of npm
+    # (sdk/javascript `npm ci` 18s + `npm run build` 17s, web `npm ci` 27s,
+    # measured 2026-09-05 on d043be83) plus checkout and setup-node, ~2
+    # minutes, and consumes nothing `build` produces.
     #
     # It exists because web/ was built, typechecked and linted by NO stage of
     # this workflow (#396): console edits merged unverified, the same gap #211
@@ -470,7 +458,6 @@ jobs:
     #     tracked as #419 — the shape sdk/javascript was in before #231.
     # It is not run as a non-blocking step either: a check that displays a
     # count without gating trains readers to scroll past red.
-    needs: [build]
     steps:
       - uses: actions/checkout@v6
 
@@ -511,11 +498,7 @@ jobs:
   security:
     name: Security
     runs-on: ubuntu-latest
-    # v1.9 staged fail-fast: the fast tier (lint + build) gates the expensive
-    # tier, so a broken push stops before spending security/test runner-minutes.
-    # Orthogonal to the workflow-level `concurrency` block, which cancels a
-    # superseded run rather than a wrong one.
-    needs: [lint, build]
+    # No `needs` (v1.14): starts with lint and build, not after them.
     steps:
       - uses: actions/checkout@v6
 
@@ -566,7 +549,7 @@ jobs:
   trivy:
     name: Trivy
     runs-on: ubuntu-latest
-    # v1.9 staged fail-fast ordering applies here too.
+    # No `needs` (v1.14): starts with lint and build, not after them.
     #
     # DELIBERATE DIVERGENCE from ci-template v1.9, which moves trivy to
     # nightly.yml. devops.md §8 is normative and says `trivy fs` is BLOCKING on
@@ -581,7 +564,6 @@ jobs:
     #
     # The template-vs-convention conflict is filed upstream; if that resolves in
     # favour of the template, delete this job and this comment together.
-    needs: [lint, build]
     steps:
       - uses: actions/checkout@v6
 
