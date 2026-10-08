@@ -62,17 +62,18 @@ type BuildConfig struct {
 	UBootBuilderDir string
 	UBootOutputDir  string
 	UBootDir        string
-	// UBootCacheDir caches the U-Boot tarball between builds.
-	UBootCacheDir string
+	// UBootCacheVolume names the docker volume that caches the U-Boot
+	// tarball between builds (default uboot.DefaultCacheVolume).
+	UBootCacheVolume string
 	// VirtKernelBuilderDir is the virt kernel builder context;
 	// VirtKernelOutputDir where its artifacts live (default
 	// <VirtKernelBuilderDir>/output); VirtKernelDir, when set, names
-	// prebuilt artifacts and skips the build; VirtKernelCacheDir caches the
-	// kernel tarball. Only targets whose BuiltKernel is true use them.
-	VirtKernelBuilderDir string
-	VirtKernelOutputDir  string
-	VirtKernelDir        string
-	VirtKernelCacheDir   string
+	// prebuilt artifacts and skips the build; VirtKernelCacheVolume names the
+	// docker volume that caches the kernel tarball. Only targets whose BuiltKernel is true use them.
+	VirtKernelBuilderDir  string
+	VirtKernelOutputDir   string
+	VirtKernelDir         string
+	VirtKernelCacheVolume string
 	// KMSClients opens the operator's platform clients for kms:// Secure
 	// Boot references in the platform config; nil when the build only signs
 	// with file keys.

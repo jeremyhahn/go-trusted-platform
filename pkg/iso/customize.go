@@ -28,6 +28,7 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/runner"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -1651,27 +1652,9 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 	// 1. Build complete FIPS-validated OpenSSL by running the container
 	c.logger.Info("Building complete FIPS-validated OpenSSL (OpenSSL 3.1.2, Certificate #4985)", "container", opensslContainer)
 
-	// Get absolute path for volume mount
-	absOpensslOutputDir, err := filepath.Abs(opensslOutputDir)
-	if err != nil {
-		return &WrappedError{Msg: "failed to get absolute path for OpenSSL output", Err: err}
-	}
-
-	runOpensslCmd := exec.CommandContext(ctx, runtime, "run", "--rm",
-		"-v", fmt.Sprintf("%s:/output", absOpensslOutputDir),
-		opensslContainer)
-
-	// Show Docker output in debug mode
-	if c.config.Build.Debug {
-		runOpensslCmd.Stdout = os.Stdout
-		runOpensslCmd.Stderr = os.Stderr
-		if err := runOpensslCmd.Run(); err != nil {
-			return &CommandOutputError{Msg: fmt.Sprintf("failed to build OpenSSL FIPS module using container %s", opensslContainer), Err: err, Detail: "\nHint: Build the container image first with: cd build/docker/openssl-fips-provider && make build"}
-		}
-	} else {
-		if output, err := runOpensslCmd.CombinedOutput(); err != nil {
-			return &CommandOutputError{Msg: fmt.Sprintf("failed to build OpenSSL FIPS module using container %s", opensslContainer), Err: err, Detail: fmt.Sprintf("\nOutput: %s\nHint: Build the container image first with: cd build/docker/openssl-fips-provider && make build", string(output))}
-		}
+	if err := runBuilderContainer(ctx, c.containerRunner(), runtime, "OpenSSL FIPS module", opensslContainer, opensslOutputDir,
+		"cd build/docker/openssl-fips-provider && make build"); err != nil {
+		return err
 	}
 
 	// Copy complete FIPS OpenSSL installation to ISO
@@ -1737,27 +1720,9 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 	// 2. Build FIPS kernel by running the container
 	c.logger.Info("Building FIPS-capable kernel (this may take 15-30 minutes)", "container", kernelContainer)
 
-	// Get absolute path for volume mount
-	absKernelOutputDir, err := filepath.Abs(kernelOutputDir)
-	if err != nil {
-		return &WrappedError{Msg: "failed to get absolute path for kernel output", Err: err}
-	}
-
-	runKernelCmd := exec.CommandContext(ctx, runtime, "run", "--rm",
-		"-v", fmt.Sprintf("%s:/output", absKernelOutputDir),
-		kernelContainer)
-
-	// Show Docker output in debug mode
-	if c.config.Build.Debug {
-		runKernelCmd.Stdout = os.Stdout
-		runKernelCmd.Stderr = os.Stderr
-		if err := runKernelCmd.Run(); err != nil {
-			return &CommandOutputError{Msg: fmt.Sprintf("failed to build FIPS kernel using container %s", kernelContainer), Err: err, Detail: "\nHint: Build the container image first with: cd build/docker/fips-kernel-builder && make build"}
-		}
-	} else {
-		if output, err := runKernelCmd.CombinedOutput(); err != nil {
-			return &CommandOutputError{Msg: fmt.Sprintf("failed to build FIPS kernel using container %s", kernelContainer), Err: err, Detail: fmt.Sprintf("\nOutput: %s\nHint: Build the container image first with: cd build/docker/fips-kernel-builder && make build", string(output))}
-		}
+	if err := runBuilderContainer(ctx, c.containerRunner(), runtime, "FIPS kernel", kernelContainer, kernelOutputDir,
+		"cd build/docker/fips-kernel-builder && make build"); err != nil {
+		return err
 	}
 
 	// Copy kernel to ISO
@@ -1828,6 +1793,41 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 		"modules", "modules-fips.tar.gz")
 
 	return nil
+}
+
+// runBuilderContainer runs a FIPS builder image to completion and copies its
+// /output directory to outputDir.
+//
+// The output comes out with `cp`, not a bind mount: the daemon resolves a bind
+// mount on its own filesystem, which is not this process's when the build runs
+// in a CI job container, so the artifacts would never reach outputDir.
+func runBuilderContainer(ctx context.Context, run runner.Runner, runtime, what, image, outputDir, buildHint string) error {
+	container := runner.Container{
+		Image: image,
+		Out:   []runner.Copy{{Host: outputDir, Container: "/output"}},
+	}
+	if err := container.Run(ctx, run, runtime); err != nil {
+		return &CommandOutputError{
+			Msg:    fmt.Sprintf("failed to build %s using container %s", what, image),
+			Err:    err,
+			Detail: "\nHint: Build the container image first with: " + buildHint,
+		}
+	}
+	return nil
+}
+
+// containerRunner runs the container runtime. In debug mode its output streams
+// to the terminal; otherwise it is captured and reported with the error.
+func (c *Customizer) containerRunner() runner.Runner {
+	if !c.config.Build.Debug {
+		return runner.Exec
+	}
+	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return nil, cmd.Run()
+	}
 }
 
 // GenerateAutoinstallScript generates the automated installation script

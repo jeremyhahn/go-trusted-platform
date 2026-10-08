@@ -13,10 +13,12 @@
 # Baked into the image (the kernelconfig build context):
 #   /build/kernel-config  platform-required.config + require-config.sh, shared
 #                         with the fips kernel builder
-# Mounts:
-#   /configs   the Kconfig fragment (virt.config)   read-only
-#   /output    artifacts + manifest.json
-#   /build/src tarball cache (optional)
+# Baked into the image: /configs/virt.config, the Kconfig fragment.
+# Directories (build/docker/run-builder.sh copies them with docker cp; a bind
+# mount would be resolved on the Docker daemon's filesystem, which is not the
+# checkout when the build runs in a CI job container):
+#   /output    artifacts + manifest.json, copied out when the build succeeds
+#   /build/src tarball cache, a named docker volume
 set -euo pipefail
 
 : "${KERNEL_VERSION:?KERNEL_VERSION is required}"

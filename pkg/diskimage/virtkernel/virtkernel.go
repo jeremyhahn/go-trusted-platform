@@ -38,6 +38,10 @@ const (
 	DefaultLocalVersion = "-0-virt"
 	// DefaultFlavor is the kernel flavour: vmlinuz-virt, modules-virt.tar.gz.
 	DefaultFlavor = "virt"
+	// DefaultCacheVolume is the docker volume holding the upstream tarball;
+	// it is the CACHE_VOLUME default of build/docker/virt-kernel-builder/
+	// Makefile, so `make` and this package share one cache.
+	DefaultCacheVolume = "trusted-platform-virt-kernel-src"
 	// Hint is the command that produces the artifacts.
 	Hint = "run `make virt-kernel-build`"
 )
@@ -99,8 +103,10 @@ type Options struct {
 	BuilderDir string
 	// OutputDir receives the artifacts (default <BuilderDir>/output).
 	OutputDir string
-	// CacheDir caches the upstream tarball between builds (optional).
-	CacheDir string
+	// CacheVolume is the named docker volume that caches the upstream
+	// tarball between builds; empty means DefaultCacheVolume, the volume
+	// `make build` in the builder directory uses.
+	CacheVolume string
 	// Version, TarballSHA256, LocalVersion and Flavor pin the build; empty
 	// means the defaults.
 	Version       string
@@ -122,6 +128,9 @@ func (o *Options) withDefaults() Options {
 	}
 	if out.OutputDir == "" {
 		out.OutputDir = filepath.Join(out.BuilderDir, "output")
+	}
+	if out.CacheVolume == "" {
+		out.CacheVolume = DefaultCacheVolume
 	}
 	if out.Version == "" {
 		out.Version = DefaultVersion
@@ -194,25 +203,23 @@ func Build(ctx context.Context, opts Options) (*Artifacts, error) {
 	if err := os.MkdirAll(o.OutputDir, 0o755); err != nil {
 		return nil, &BuildError{Step: "creating the output directory", Err: err}
 	}
-	args := []string{"run", "--rm",
-		"-v", artifacts.AbsPath(o.OutputDir) + ":/output",
-		"-v", artifacts.AbsPath(filepath.Join(o.BuilderDir, "configs")) + ":/configs:ro",
+	// The artifacts come out with cp, not a bind mount: the daemon may not
+	// share this process's filesystem (CI job container). The tarball cache is
+	// a named volume the daemon owns; the Kconfig fragment is baked into the
+	// image.
+	container := runner.Container{
+		Image: o.Image,
+		CreateArgs: []string{
+			"-v", o.CacheVolume + ":/build/src",
+			"-e", "KERNEL_VERSION=" + o.Version,
+			"-e", "KERNEL_SHA256=" + o.TarballSHA256,
+			"-e", "KERNEL_LOCALVERSION=" + o.LocalVersion,
+			"-e", "KERNEL_FLAVOR=" + o.Flavor,
+			"-e", "KERNEL_CACHE_KEY=" + key,
+		},
+		Out: []runner.Copy{{Host: artifacts.AbsPath(o.OutputDir), Container: "/output"}},
 	}
-	if o.CacheDir != "" {
-		if err := os.MkdirAll(o.CacheDir, 0o755); err != nil {
-			return nil, &BuildError{Step: "creating the tarball cache directory", Err: err}
-		}
-		args = append(args, "-v", artifacts.AbsPath(o.CacheDir)+":/build/src")
-	}
-	args = append(args,
-		"-e", "KERNEL_VERSION="+o.Version,
-		"-e", "KERNEL_SHA256="+o.TarballSHA256,
-		"-e", "KERNEL_LOCALVERSION="+o.LocalVersion,
-		"-e", "KERNEL_FLAVOR="+o.Flavor,
-		"-e", "KERNEL_CACHE_KEY="+key,
-		o.Image,
-	)
-	if _, err := o.Runner(ctx, o.Runtime, args...); err != nil {
+	if err := container.Run(ctx, o.Runner, o.Runtime); err != nil {
 		return nil, &BuildError{Step: "running the builder", Err: err}
 	}
 	manifest, err := ReadManifest(o.OutputDir)

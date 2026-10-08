@@ -14,8 +14,11 @@ KERNEL_LOCALVERSION ?= -0-virt
 KERNEL_FLAVOR  ?= virt
 
 OUTPUT_DIR   ?= $(CURDIR)/output
-CACHE_DIR    ?= $(HOME)/.cache/trusted-platform/virt-kernel
+# The kernel tarball cache is a named docker volume, not a host path: the
+# daemon owns it, so it works when the build runs in a CI job container.
+CACHE_VOLUME ?= trusted-platform-virt-kernel-src
 DOCKER       ?= docker
+RUN_BUILDER  ?= ../run-builder.sh
 DOCKER_IMAGE ?= trusted-platform-virt-kernel-builder:$(KERNEL_VERSION)
 
 # The shared platform kernel options (build/docker/kernel-config) are inputs
@@ -39,11 +42,8 @@ image:
 	$(DOCKER) build --build-context kernelconfig=$(KERNEL_CONFIG_DIR) -t $(DOCKER_IMAGE) .
 
 build: image
-	@mkdir -p $(OUTPUT_DIR) $(CACHE_DIR)
-	$(DOCKER) run --rm \
-		-v $(abspath $(OUTPUT_DIR)):/output \
-		-v $(CURDIR)/configs:/configs:ro \
-		-v $(abspath $(CACHE_DIR)):/build/src \
+	DOCKER=$(DOCKER) $(RUN_BUILDER) -o /output:$(abspath $(OUTPUT_DIR)) -- \
+		-v $(CACHE_VOLUME):/build/src \
 		-e KERNEL_VERSION=$(KERNEL_VERSION) \
 		-e KERNEL_SHA256=$(KERNEL_SHA256) \
 		-e KERNEL_LOCALVERSION=$(KERNEL_LOCALVERSION) \
@@ -58,10 +58,8 @@ build: image
 # olddefconfig, require-config.sh) and builds nothing: the quick proof that
 # every fragment line survives Kconfig, e.g. after a kernel version bump.
 config-check: image
-	@mkdir -p $(CACHE_DIR)
-	$(DOCKER) run --rm \
-		-v $(CURDIR)/configs:/configs:ro \
-		-v $(abspath $(CACHE_DIR)):/build/src \
+	DOCKER=$(DOCKER) $(RUN_BUILDER) -- \
+		-v $(CACHE_VOLUME):/build/src \
 		-e KERNEL_VERSION=$(KERNEL_VERSION) \
 		-e KERNEL_SHA256=$(KERNEL_SHA256) \
 		-e KERNEL_LOCALVERSION=$(KERNEL_LOCALVERSION) \

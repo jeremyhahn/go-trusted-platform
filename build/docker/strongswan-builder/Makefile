@@ -30,8 +30,11 @@ STRONGSWAN_PLUGINS ?= openssl pkcs11 vici counters nonce kernel-netlink socket-d
 ARCHES             ?= amd64 arm64
 
 OUTPUT_DIR   ?= $(CURDIR)/output
-CACHE_DIR    ?= $(HOME)/.cache/trusted-platform/strongswan
+# The source tarball cache is a named docker volume, not a host path: the
+# daemon owns it, so it works when the build runs in a CI job container.
+CACHE_VOLUME ?= trusted-platform-strongswan-src
 DOCKER       ?= docker
+RUN_BUILDER  ?= ../run-builder.sh
 DOCKER_IMAGE ?= trusted-platform-strongswan-builder:$(STRONGSWAN_VERSION)
 
 APK_SIGNING_KEY ?=
@@ -62,10 +65,9 @@ image-%: FORCE
 key: image-amd64
 ifeq ($(APK_SIGNING_KEY),)
 	@echo "WARNING: APK_SIGNING_KEY not set -- signing with a per-build ephemeral key (dev only)."
-	@mkdir -p $(EPHEMERAL_KEY_DIR)
-	@test -f $(EPHEMERAL_KEY_DIR)/$(EPHEMERAL_KEY) || $(DOCKER) run --rm --platform linux/amd64 \
-		--user $$(id -u):$$(id -g) -v $(EPHEMERAL_KEY_DIR):/k --entrypoint sh $(DOCKER_IMAGE)-amd64 -c \
-		'umask 077 && openssl genrsa -out /k/$(EPHEMERAL_KEY) 4096 2>/dev/null && openssl rsa -in /k/$(EPHEMERAL_KEY) -pubout -out /k/$(EPHEMERAL_KEY).pub 2>/dev/null && chmod 644 /k/$(EPHEMERAL_KEY).pub'
+	@test -f $(EPHEMERAL_KEY_DIR)/$(EPHEMERAL_KEY) || DOCKER=$(DOCKER) $(RUN_BUILDER) -o /tmp/k:$(EPHEMERAL_KEY_DIR) -- \
+		--platform linux/amd64 --entrypoint sh $(DOCKER_IMAGE)-amd64 -c \
+		'umask 077 && mkdir -p /tmp/k && openssl genrsa -out /tmp/k/$(EPHEMERAL_KEY) 4096 2>/dev/null && openssl rsa -in /tmp/k/$(EPHEMERAL_KEY) -pubout -out /tmp/k/$(EPHEMERAL_KEY).pub 2>/dev/null && chmod 644 /tmp/k/$(EPHEMERAL_KEY).pub'
 else
 	@test -r "$(APK_SIGNING_KEY)" || { echo "ERROR: APK_SIGNING_KEY '$(APK_SIGNING_KEY)' is not readable"; exit 1; }
 	@test -r "$(APK_SIGNING_KEY).pub" || { echo "ERROR: $(APK_SIGNING_KEY).pub must sit beside the private key"; exit 1; }
@@ -77,20 +79,17 @@ build: key $(addprefix build-,$(ARCHES))
 	@ls -lR $(OUTPUT_DIR) | grep -v '^total'
 
 build-%: image-% key FORCE
-	@mkdir -p $(OUTPUT_DIR) $(CACHE_DIR)
-	$(DOCKER) run --rm --platform linux/$* \
-		-v $(abspath $(OUTPUT_DIR)):/output \
-		-v $(KEY_DIR):/keys:ro \
-		-v $(abspath $(CACHE_DIR)):/build/src \
+	DOCKER=$(DOCKER) $(RUN_BUILDER) \
+		-i $(KEY_DIR)$(KEY_NAME):/keys/$(KEY_NAME) -i $(KEY_DIR)$(KEY_NAME).pub:/keys/$(KEY_NAME).pub \
+		-o /output:$(abspath $(OUTPUT_DIR)) -- \
+		--platform linux/$* \
+		-v $(CACHE_VOLUME):/build/src \
 		-e STRONGSWAN_VERSION=$(STRONGSWAN_VERSION) \
 		-e STRONGSWAN_SHA256=$(STRONGSWAN_SHA256) \
 		-e STRONGSWAN_SIGNER=$(STRONGSWAN_SIGNER) \
 		-e STRONGSWAN_PLUGINS="$(STRONGSWAN_PLUGINS)" \
 		-e APK_KEY_NAME=$(KEY_NAME) \
 		$(DOCKER_IMAGE)-$*
-	@# The container writes as root; hand the output back to the caller.
-	$(DOCKER) run --rm -v $(abspath $(OUTPUT_DIR)):/output --entrypoint chown $(DOCKER_IMAGE)-amd64 \
-		-R $$(id -u):$$(id -g) /output
 
 # verify re-checks everything a consumer relies on, from the output alone:
 # the SHA256SUMS of each arch, every apk's and APKINDEX's signature against
@@ -106,9 +105,9 @@ verify: image-amd64
 		grep -qF "\"plugins\": [$$want]" "$$d/manifest.json" || { echo "ERROR: $$d/manifest.json plugin set differs from STRONGSWAN_PLUGINS"; exit 1; }; \
 		echo "$$d: checksums, version and plugin set ok"; \
 	done
-	$(DOCKER) run --rm --platform linux/amd64 \
-		-v $(abspath $(OUTPUT_DIR)):/output:ro \
-		-v $(abspath $(CACHE_DIR)):/build/src:ro \
+	DOCKER=$(DOCKER) $(RUN_BUILDER) -i $(abspath $(OUTPUT_DIR)):/output -- \
+		--platform linux/amd64 \
+		-v $(CACHE_VOLUME):/build/src:ro \
 		-e STRONGSWAN_VERSION=$(STRONGSWAN_VERSION) \
 		-e STRONGSWAN_SHA256=$(STRONGSWAN_SHA256) \
 		-e STRONGSWAN_SIGNER=$(STRONGSWAN_SIGNER) \

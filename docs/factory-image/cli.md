@@ -58,8 +58,8 @@ and the staged media directory.
 | `--virt-kernel-dir` | string | | prebuilt virt kernel artifacts for `qemu-virt` (skips the kernel build) |
 | `--virt-kernel-builder-dir` | string | `build/docker/virt-kernel-builder` | virt kernel builder context |
 | `--virt-kernel-output-dir` | string | `<builder-dir>/output` | where the built kernel lives (`make virt-kernel-build`) |
-| `--virt-kernel-cache-dir` | string | | kernel tarball cache |
-| `--uboot-cache-dir` | string | | U-Boot tarball cache directory |
+| `--virt-kernel-cache-volume` | string | `trusted-platform-virt-kernel-src` | docker volume caching the kernel tarball |
+| `--uboot-cache-volume` | string | `trusted-platform-uboot-src` | docker volume caching the U-Boot tarball |
 | `--skip-preflight` | bool | `false` | skip the build-host checks (binfmt, container runtime, kernel modules) |
 
 ### Media flags (shared with `iso create`)

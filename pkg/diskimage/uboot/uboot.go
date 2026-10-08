@@ -45,6 +45,10 @@ const (
 	// DefaultOwnerGUID is the SignatureOwner written into the preseeded
 	// PK/KEK/db lists.
 	DefaultOwnerGUID = "7e5a1c6e-0b3f-4a5e-9c2d-3f1a2b4c5d6e"
+	// DefaultCacheVolume is the docker volume holding the upstream tarball;
+	// it is the CACHE_VOLUME default of build/docker/uboot-builder/Makefile,
+	// so `make` and this package share one cache.
+	DefaultCacheVolume = "trusted-platform-uboot-src"
 )
 
 // Certificate file names the builder reads from the keys directory: the
@@ -105,8 +109,10 @@ type Options struct {
 	OutputDir string
 	// KeysDir holds PK.crt, KEK.crt and DB.crt.
 	KeysDir string
-	// CacheDir caches the upstream tarball between builds (optional).
-	CacheDir string
+	// CacheVolume is the named docker volume that caches the upstream
+	// tarball between builds; empty means DefaultCacheVolume, the volume
+	// `make build` in the builder directory uses.
+	CacheVolume string
 	// Version and TarballSHA256 pin the upstream release; empty means the
 	// defaults.
 	Version       string
@@ -129,6 +135,9 @@ func (o *Options) withDefaults() Options {
 	}
 	if out.OutputDir == "" {
 		out.OutputDir = filepath.Join(out.BuilderDir, "output")
+	}
+	if out.CacheVolume == "" {
+		out.CacheVolume = DefaultCacheVolume
 	}
 	if out.Version == "" {
 		out.Version = DefaultVersion
@@ -203,26 +212,26 @@ func Build(ctx context.Context, opts Options) (map[Board]Artifacts, error) {
 	if err := os.MkdirAll(o.OutputDir, 0o755); err != nil {
 		return nil, &BuildError{Step: "creating the output directory", Err: err}
 	}
-	args := []string{"run", "--rm",
-		"-v", absPath(o.OutputDir) + ":/output",
-		"-v", absPath(o.KeysDir) + ":/keys:ro",
-		"-v", absPath(filepath.Join(o.BuilderDir, "configs")) + ":/configs:ro",
-		"-v", absPath(filepath.Join(o.BuilderDir, "patches")) + ":/patches:ro",
+	// Inputs go in and artifacts come out with cp, not bind mounts: the daemon
+	// may not share this process's filesystem (CI job container). The tarball
+	// cache is a named volume the daemon owns.
+	container := runner.Container{
+		Image: o.Image,
+		CreateArgs: []string{
+			"-v", o.CacheVolume + ":/build/src",
+			"-e", "UBOOT_VERSION=" + o.Version,
+			"-e", "UBOOT_SHA256=" + o.TarballSHA256,
+			"-e", "UBOOT_OWNER_GUID=" + o.OwnerGUID,
+			"-e", "UBOOT_CACHE_KEY=" + key,
+		},
+		In: []runner.Copy{
+			{Host: absPath(o.KeysDir), Container: "/keys"},
+			{Host: absPath(filepath.Join(o.BuilderDir, "configs")), Container: "/configs"},
+			{Host: absPath(filepath.Join(o.BuilderDir, "patches")), Container: "/patches"},
+		},
+		Out: []runner.Copy{{Host: absPath(o.OutputDir), Container: "/output"}},
 	}
-	if o.CacheDir != "" {
-		if err := os.MkdirAll(o.CacheDir, 0o755); err != nil {
-			return nil, &BuildError{Step: "creating the tarball cache directory", Err: err}
-		}
-		args = append(args, "-v", absPath(o.CacheDir)+":/build/src")
-	}
-	args = append(args,
-		"-e", "UBOOT_VERSION="+o.Version,
-		"-e", "UBOOT_SHA256="+o.TarballSHA256,
-		"-e", "UBOOT_OWNER_GUID="+o.OwnerGUID,
-		"-e", "UBOOT_CACHE_KEY="+key,
-		o.Image,
-	)
-	if _, err := o.Runner(ctx, o.Runtime, args...); err != nil {
+	if err := container.Run(ctx, o.Runner, o.Runtime); err != nil {
 		return nil, &BuildError{Step: "running the builder", Err: err}
 	}
 

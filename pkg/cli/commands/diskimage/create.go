@@ -21,18 +21,18 @@ import (
 // `netboot` alike: the ISO pipeline's media settings, the builder
 // containers, and the U-Boot and virt-kernel builds.
 type mediaFlags struct {
-	builderImage         string
-	builderDir           string
-	containerRuntime     string
-	ubootDir             string
-	ubootBuilderDir      string
-	ubootOutputDir       string
-	ubootCacheDir        string
-	virtKernelDir        string
-	virtKernelBuilderDir string
-	virtKernelOutputDir  string
-	virtKernelCacheDir   string
-	skipPreflight        bool
+	builderImage          string
+	builderDir            string
+	containerRuntime      string
+	ubootDir              string
+	ubootBuilderDir       string
+	ubootOutputDir        string
+	ubootCacheVolume      string
+	virtKernelDir         string
+	virtKernelBuilderDir  string
+	virtKernelOutputDir   string
+	virtKernelCacheVolume string
+	skipPreflight         bool
 
 	platformVersion string
 	alpineVersion   string
@@ -125,11 +125,11 @@ func addMediaFlags(f *pflag.FlagSet, flags *mediaFlags) {
 	f.StringVar(&flags.ubootDir, "uboot-dir", "", "Prebuilt U-Boot artifacts (skips the U-Boot build)")
 	f.StringVar(&flags.ubootBuilderDir, "uboot-builder-dir", pkgdiskimage.DefaultUBootBuilderDir, "U-Boot builder build context")
 	f.StringVar(&flags.ubootOutputDir, "uboot-output-dir", "", "U-Boot builder output directory (default <uboot-builder-dir>/output)")
-	f.StringVar(&flags.ubootCacheDir, "uboot-cache-dir", "", "U-Boot tarball cache directory")
+	f.StringVar(&flags.ubootCacheVolume, "uboot-cache-volume", "", "docker volume caching the U-Boot tarball (default trusted-platform-uboot-src)")
 	f.StringVar(&flags.virtKernelDir, "virt-kernel-dir", "", "Prebuilt virt kernel artifacts for the qemu-virt target (skips the kernel build)")
 	f.StringVar(&flags.virtKernelBuilderDir, "virt-kernel-builder-dir", pkgdiskimage.DefaultVirtKernelBuilderDir, "Virt kernel builder build context")
 	f.StringVar(&flags.virtKernelOutputDir, "virt-kernel-output-dir", "", "Virt kernel builder output directory (default <virt-kernel-builder-dir>/output)")
-	f.StringVar(&flags.virtKernelCacheDir, "virt-kernel-cache-dir", "", "Kernel tarball cache directory")
+	f.StringVar(&flags.virtKernelCacheVolume, "virt-kernel-cache-volume", "", "docker volume caching the kernel tarball (default trusted-platform-virt-kernel-src)")
 	f.BoolVar(&flags.skipPreflight, "skip-preflight", false, "Skip the build-host checks (binfmt, container runtime, kernel modules)")
 
 	f.StringVar(&flags.platformVersion, "platform-version", "", "Platform version baked into the media (default: the VERSION file, else dev)")
@@ -225,21 +225,21 @@ func (m *mediaFlags) isoConfig(target, model string) (*pkgiso.ISOBuildConfig, er
 // imageBuild is the image build configuration the shared flags describe.
 func (m *mediaFlags) imageBuild(iso *pkgiso.ISOBuildConfig, platformClient *cli.LazyClient, logger *logging.Logger) *pkgdiskimage.BuildConfig {
 	return &pkgdiskimage.BuildConfig{
-		ISO:                  iso,
-		VirtKernelDir:        m.virtKernelDir,
-		VirtKernelBuilderDir: m.virtKernelBuilderDir,
-		VirtKernelOutputDir:  m.virtKernelOutputDir,
-		VirtKernelCacheDir:   m.virtKernelCacheDir,
-		ContainerRuntime:     m.containerRuntime,
-		BuilderImage:         m.builderImage,
-		BuilderDir:           m.builderDir,
-		UBootBuilderDir:      m.ubootBuilderDir,
-		UBootOutputDir:       m.ubootOutputDir,
-		UBootDir:             m.ubootDir,
-		UBootCacheDir:        m.ubootCacheDir,
-		KMSClients:           kmsClients(platformClient),
-		Logger:               logger,
-		SkipPreflight:        m.skipPreflight,
+		ISO:                   iso,
+		VirtKernelDir:         m.virtKernelDir,
+		VirtKernelBuilderDir:  m.virtKernelBuilderDir,
+		VirtKernelOutputDir:   m.virtKernelOutputDir,
+		VirtKernelCacheVolume: m.virtKernelCacheVolume,
+		ContainerRuntime:      m.containerRuntime,
+		BuilderImage:          m.builderImage,
+		BuilderDir:            m.builderDir,
+		UBootBuilderDir:       m.ubootBuilderDir,
+		UBootOutputDir:        m.ubootOutputDir,
+		UBootDir:              m.ubootDir,
+		UBootCacheVolume:      m.ubootCacheVolume,
+		KMSClients:            kmsClients(platformClient),
+		Logger:                logger,
+		SkipPreflight:         m.skipPreflight,
 	}
 }
 

@@ -35,6 +35,31 @@ func buildConfigForTest(t *testing.T, target string, rec *diskimagetest.Runner) 
 	}
 }
 
+// callVerbs is the runtime subcommand of every call rec recorded.
+func callVerbs(rec *diskimagetest.Runner) []string {
+	verbs := make([]string, 0, len(rec.Calls))
+	for _, call := range rec.Calls {
+		verbs = append(verbs, call[1])
+	}
+	return verbs
+}
+
+// assertNoHostBindMounts fails when a recorded call bind-mounts a host path.
+// A bind mount is resolved on the daemon's filesystem, which is not this
+// process's when the build runs in a CI job container: inputs arrive empty and
+// outputs never reach the checkout. The fake runtime rejects them too; this
+// states the requirement where the argv is asserted.
+func assertNoHostBindMounts(t *testing.T, rec *diskimagetest.Runner) {
+	t.Helper()
+	for _, call := range rec.Calls {
+		for i, arg := range call {
+			if arg == "-v" && i+1 < len(call) && strings.HasPrefix(call[i+1], "/") && strings.Contains(call[i+1], ":") {
+				t.Errorf("host bind mount %q in %v", call[i+1], call)
+			}
+		}
+	}
+}
+
 func TestCreateStagesMediaAndRunsTheContainer(t *testing.T) {
 	rec := &diskimagetest.Runner{}
 	cfg := buildConfigForTest(t, "qemu-virt", rec)
@@ -61,19 +86,27 @@ func TestCreateStagesMediaAndRunsTheContainer(t *testing.T) {
 			t.Errorf("baked platform config lacks %q:\n%s", want, baked)
 		}
 	}
-	if len(rec.Calls) != 2 || rec.Calls[0][1] != "build" || rec.Calls[1][1] != "run" {
-		t.Fatalf("calls = %v", rec.Calls)
+	// Image build, then create, the media cp'd in, start, the image cp'd out, rm.
+	if got, want := strings.Join(callVerbs(rec), ","), "build,create,cp,start,cp,rm"; got != want {
+		t.Fatalf("calls = %s, want %s", got, want)
 	}
 	build := strings.Join(rec.Calls[0], " ")
 	if !strings.Contains(build, "--platform linux/arm64 -t "+DefaultBuilderImage) {
 		t.Errorf("build argv = %q", build)
 	}
-	run := strings.Join(rec.Calls[1], " ")
-	for _, want := range []string{"run --rm --privileged --platform linux/arm64", media + ":/media/cdrom:ro", ":/work",
+	run := rec.Joined()[1]
+	for _, want := range []string{"create --name builder-", "--privileged --platform linux/arm64 -v /work",
 		"/media/cdrom/platformd-bin/platformctl-static diskimage assemble", "--platform-config /media/cdrom/configs/installer.yaml", "--output /work/img.img", "--size 2048"} {
 		if !strings.Contains(run, want) {
 			t.Errorf("run argv %q lacks %q", run, want)
 		}
+	}
+	assertNoHostBindMounts(t, rec)
+	if cp := rec.Joined()[2]; !strings.HasPrefix(cp, "docker cp "+media+"/. ") || !strings.HasSuffix(cp, ":/media/cdrom") {
+		t.Errorf("media cp in = %q", cp)
+	}
+	if cp := rec.Joined()[4]; !strings.Contains(cp, ":/work/. ") || !strings.HasSuffix(cp, filepath.Dir(cfg.Output)) {
+		t.Errorf("image cp out = %q", cp)
 	}
 	if strings.Contains(run, "--debug") {
 		t.Error("debug flag passed without ISO.Debug")
@@ -131,7 +164,7 @@ func TestCreateFailures(t *testing.T) {
 	if _, err := Create(context.Background(), buildConfigForTest(t, "qemu-virt", rec)); !errors.As(err, &aerr) || aerr.Step != "building the assemble container image" {
 		t.Errorf("image build failure error = %v", err)
 	}
-	rec = &diskimagetest.Runner{Fail: "run"}
+	rec = &diskimagetest.Runner{Fail: "start"}
 	if _, err := Create(context.Background(), buildConfigForTest(t, "qemu-virt", rec)); !errors.As(err, &aerr) || aerr.Step != "running the assemble container" {
 		t.Errorf("container run failure error = %v", err)
 	}
@@ -281,14 +314,14 @@ func TestUBootPreseedsTheResolvedCertificates(t *testing.T) {
 	}
 
 	// The fake runner produces no artifacts, so the build itself fails
-	// afterwards; the mount it asked for is what this test is about.
+	// afterwards; the certificates it copied in are what this test is about.
 	_, _ = cfg.ubootArtifacts(context.Background(), target, &iso.SecureBootMaterial{CertDir: certDir})
 
-	var mounted bool
-	for _, call := range rec.Calls {
-		mounted = mounted || strings.Contains(strings.Join(call, " "), certDir+":/keys:ro")
+	var copied bool
+	for _, call := range rec.Joined() {
+		copied = copied || (strings.HasPrefix(call, "docker cp "+certDir+"/. ") && strings.HasSuffix(call, ":/keys"))
 	}
-	if !mounted {
+	if !copied {
 		t.Errorf("U-Boot was not built from the resolved certificates; calls = %v", rec.Calls)
 	}
 }

@@ -8,10 +8,12 @@
 #   IPXE_TARGETS    space-separated build targets, e.g. bin-arm64-efi/snponly.efi
 #   IPXE_CACHE_KEY  the key the caller derived from every build input,
 #                   recorded in the manifest
-# Mounts:
-#   /configs    iPXE config/local/*.h overrides   read-only
-#   /output     artifacts + manifest.json
-#   /build/src  tarball cache (optional)
+# Directories (build/docker/run-builder.sh copies them with docker cp; a bind
+# mount would be resolved on the Docker daemon's filesystem, which is not the
+# checkout when the build runs in a CI job container):
+#   /configs    iPXE config/local/*.h overrides, copied in
+#   /output     artifacts + manifest.json, copied out when the build succeeds
+#   /build/src  tarball cache, a named docker volume
 set -euo pipefail
 : "${IPXE_VERSION:?IPXE_VERSION is required}"
 : "${IPXE_SHA256:?IPXE_SHA256 is required}"

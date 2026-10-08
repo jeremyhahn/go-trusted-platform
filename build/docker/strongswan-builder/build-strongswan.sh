@@ -11,10 +11,13 @@
 #   STRONGSWAN_PLUGINS  the exact plugin set charon is built with
 #   APK_KEY_NAME        file name of the apk signing key in /keys
 #                       (<name>.rsa, with <name>.rsa.pub beside it)
-# Mounts:
-#   /keys        the apk signing key pair                 read-only
-#   /output      <arch>/ apks, APKINDEX, SHA256SUMS, manifest.json; keys/
-#   /build/src   tarball cache (optional)
+# Directories (build/docker/run-builder.sh copies them with docker cp; a bind
+# mount would be resolved on the Docker daemon's filesystem, which is not the
+# checkout when the build runs in a CI job container):
+#   /keys        the apk signing key pair, copied in
+#   /output      <arch>/ apks, APKINDEX, SHA256SUMS, manifest.json; keys/,
+#                copied out when the build succeeds
+#   /build/src   tarball cache, a named docker volume
 set -euo pipefail
 
 : "${STRONGSWAN_VERSION:?STRONGSWAN_VERSION is required}"

@@ -153,17 +153,26 @@ func (s *StagedMedia) BuildNetbootInitfs(ctx context.Context, outDir string) (*N
 		return nil, &StageError{Step: "building the builder container image", Err: err}
 	}
 	flavour := s.Kernel.Flavor
-	if _, err := c.Runner(ctx, c.ContainerRuntime, "run", "--rm", "--platform", arch,
-		"-v", absMedia+":"+containerMediaMount+":ro",
-		"-v", absKernel+":"+containerKernelMount+":ro",
-		"-v", absOut+":"+containerOutputMount,
-		c.BuilderImage,
-		containerMediaMount+"/platformd-bin/platformctl-static", "diskimage", "netboot-initfs",
-		"--modules", containerKernelMount+"/"+filepath.Base(s.Kernel.Modules),
-		"--release", s.Kernel.Release,
-		"--flavour", flavour,
-		"--output", containerOutputMount,
-	); err != nil {
+	// Inputs go in and the initramfs and modloop come out with cp, not bind
+	// mounts: the daemon may not share this process's filesystem (CI job
+	// container).
+	container := runner.Container{
+		Image:      c.BuilderImage,
+		CreateArgs: []string{"--platform", arch, "-v", containerOutputMount},
+		Command: []string{
+			containerMediaMount + "/platformd-bin/platformctl-static", "diskimage", "netboot-initfs",
+			"--modules", containerKernelMount + "/" + filepath.Base(s.Kernel.Modules),
+			"--release", s.Kernel.Release,
+			"--flavour", flavour,
+			"--output", containerOutputMount,
+		},
+		In: []runner.Copy{
+			{Host: absMedia, Container: containerMediaMount},
+			{Host: absKernel, Container: containerKernelMount},
+		},
+		Out: []runner.Copy{{Host: absOut, Container: containerOutputMount}},
+	}
+	if err := container.Run(ctx, c.Runner, c.ContainerRuntime); err != nil {
 		return nil, &StageError{Step: "running the netboot initfs step", Err: err}
 	}
 	out := &NetbootInitfs{

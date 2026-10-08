@@ -40,6 +40,13 @@ WORKDIR /build
 COPY build-virt-kernel.sh /build/
 RUN chmod +x /build/build-virt-kernel.sh
 
+# The Kconfig fragment is baked in, not bind-mounted: a bind mount is resolved
+# by the Docker daemon on ITS filesystem, so when the build runs inside a CI
+# job container the checkout's configs/ directory does not exist there and the
+# mount arrives empty ("missing builder input /configs/virt.config"). The
+# fragment is a cache-key input already, so the image is rebuilt when it changes.
+COPY configs/virt.config /configs/virt.config
+
 # The options every platform kernel carries and the check that enforces them,
 # shared with the fips kernel builder. "kernelconfig" is a named build context
 # (docker build --build-context kernelconfig=../kernel-config), so the one

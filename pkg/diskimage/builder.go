@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/runner"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/uboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/virtkernel"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/iso"
@@ -166,11 +167,11 @@ func (c *BuildConfig) kernelArtifacts(ctx context.Context, target Target) (*virt
 		kernel, err = virtkernel.Locate(c.VirtKernelDir, "")
 	} else {
 		kernel, err = virtkernel.Build(ctx, virtkernel.Options{
-			Runner:     c.Runner,
-			Runtime:    c.ContainerRuntime,
-			BuilderDir: c.VirtKernelBuilderDir,
-			OutputDir:  c.VirtKernelOutputDir,
-			CacheDir:   c.VirtKernelCacheDir,
+			Runner:      c.Runner,
+			Runtime:     c.ContainerRuntime,
+			BuilderDir:  c.VirtKernelBuilderDir,
+			OutputDir:   c.VirtKernelOutputDir,
+			CacheVolume: c.VirtKernelCacheVolume,
 		})
 	}
 	if err != nil {
@@ -194,12 +195,12 @@ func (c *BuildConfig) ubootArtifacts(ctx context.Context, target Target, materia
 		all, err = uboot.Locate(c.UBootDir)
 	} else {
 		all, err = uboot.Build(ctx, uboot.Options{
-			Runner:     c.Runner,
-			Runtime:    c.ContainerRuntime,
-			BuilderDir: c.UBootBuilderDir,
-			OutputDir:  c.UBootOutputDir,
-			KeysDir:    keysDir,
-			CacheDir:   c.UBootCacheDir,
+			Runner:      c.Runner,
+			Runtime:     c.ContainerRuntime,
+			BuilderDir:  c.UBootBuilderDir,
+			OutputDir:   c.UBootOutputDir,
+			KeysDir:     keysDir,
+			CacheVolume: c.UBootCacheVolume,
 		})
 	}
 	if err != nil {
@@ -234,20 +235,25 @@ func (c *BuildConfig) assembleInContainer(ctx context.Context, mediaDir, output 
 	if err != nil {
 		return &AssembleError{Step: "resolving the media directory", Err: err}
 	}
-	args := []string{"run", "--rm", "--privileged",
-		"--platform", "linux/" + goArchOf(string(target.Architecture())),
-		"-v", absMedia + ":" + containerMediaMount + ":ro",
-		"-v", outDir + ":" + containerWorkMount,
-		c.BuilderImage,
+	command := []string{
 		containerMediaMount + "/platformd-bin/platformctl-static", "diskimage", "assemble",
 		"--platform-config", containerMediaMount + "/configs/" + bakedPlatformConfigName,
 		"--output", containerWorkMount + "/" + filepath.Base(output),
 		"--size", strconv.Itoa(c.SizeMB),
 	}
 	if c.ISO.Debug {
-		args = append(args, "--debug")
+		command = append(command, "--debug")
 	}
-	if _, err := c.Runner(ctx, c.ContainerRuntime, args...); err != nil {
+	// The media goes in and the image comes out with cp, not bind mounts: the
+	// daemon may not share this process's filesystem (CI job container).
+	container := runner.Container{
+		Image:      c.BuilderImage,
+		CreateArgs: []string{"--privileged", "--platform", "linux/" + goArchOf(string(target.Architecture())), "-v", containerWorkMount},
+		Command:    command,
+		In:         []runner.Copy{{Host: absMedia, Container: containerMediaMount}},
+		Out:        []runner.Copy{{Host: outDir, Container: containerWorkMount}},
+	}
+	if err := container.Run(ctx, c.Runner, c.ContainerRuntime); err != nil {
 		return &AssembleError{Step: "running the assemble container", Err: err}
 	}
 	return nil

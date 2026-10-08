@@ -191,6 +191,14 @@ jobs:
       #
       # WITH_FIPS=1, never BUILD_TAGS="...": the second form does not mirror
       # `make test`, it replaces its tag list.
+      # pkg/diskimage/netboot builds each media set's installer initramfs,
+      # which extracts and repacks it with cpio (pkg/iso). The runner image
+      # has no cpio; ci.yml installs it for the same reason, and without it
+      # TestBuild_Set, TestBuild_SignsTheKernelWithTheKMSKey and
+      # TestBuild_X86Set fail here with nothing to do with FIPS.
+      - name: Install cpio for the netboot media tests
+        run: sudo apt-get update && sudo apt-get install -y cpio
+
       - name: Unit tests (FIPS mode)
         run: make test WITH_FIPS=1
 

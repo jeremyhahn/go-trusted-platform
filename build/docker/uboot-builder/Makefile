@@ -21,8 +21,11 @@ UBOOT_OWNER_GUID ?= 7e5a1c6e-0b3f-4a5e-9c2d-3f1a2b4c5d6e
 
 OUTPUT_DIR   ?= $(CURDIR)/output
 KEYS_DIR     ?= $(HOME)/.trusted-platform/secure-boot
-CACHE_DIR    ?= $(HOME)/.cache/trusted-platform/uboot
+# The tarball cache is a named docker volume, not a host path: the daemon owns
+# it, so it works when the build runs in a CI job container.
+CACHE_VOLUME ?= trusted-platform-uboot-src
 DOCKER       ?= docker
+RUN_BUILDER  ?= ../run-builder.sh
 DOCKER_IMAGE ?= trusted-platform-uboot-builder:$(UBOOT_VERSION)
 
 # Everything that shapes the binary: the fragments, the overlay, the patch,
@@ -53,13 +56,10 @@ image:
 
 build: image
 	@for f in $(KEY_INPUTS); do test -r "$$f" || { echo "ERROR: missing Secure Boot certificate $$f (PK.crt, KEK.crt, DB.crt are required; see docs/installer/iso-building.md)"; exit 1; }; done
-	@mkdir -p $(OUTPUT_DIR) $(CACHE_DIR)
-	$(DOCKER) run --rm \
-		-v $(abspath $(OUTPUT_DIR)):/output \
-		-v $(abspath $(KEYS_DIR)):/keys:ro \
-		-v $(CURDIR)/configs:/configs:ro \
-		-v $(CURDIR)/patches:/patches:ro \
-		-v $(abspath $(CACHE_DIR)):/build/src \
+	DOCKER=$(DOCKER) $(RUN_BUILDER) \
+		-i $(abspath $(KEYS_DIR)):/keys -i $(CURDIR)/configs:/configs -i $(CURDIR)/patches:/patches \
+		-o /output:$(abspath $(OUTPUT_DIR)) -- \
+		-v $(CACHE_VOLUME):/build/src \
 		-e UBOOT_VERSION=$(UBOOT_VERSION) \
 		-e UBOOT_SHA256=$(UBOOT_SHA256) \
 		-e UBOOT_BOARDS="$(UBOOT_BOARDS)" \

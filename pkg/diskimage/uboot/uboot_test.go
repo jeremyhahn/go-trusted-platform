@@ -276,7 +276,7 @@ func TestReadManifest(t *testing.T) {
 }
 
 // recordingRunner records every invocation and lays out artifacts when the
-// builder is "run".
+// builder container is started.
 type recordingRunner struct {
 	t     *testing.T
 	calls [][]string
@@ -290,7 +290,7 @@ func (r *recordingRunner) run(_ context.Context, name string, args ...string) ([
 	if r.fail != "" && args[0] == r.fail {
 		return []byte("boom"), errors.New("exit 1")
 	}
-	if args[0] == "run" {
+	if args[0] == "start" {
 		writeArtifacts(r.t, r.out, r.key)
 	}
 	return nil, nil
@@ -300,45 +300,58 @@ func TestBuildRunsTheBuilderAndVerifies(t *testing.T) {
 	builder := repoBuilderDir(t)
 	keys := fakeKeys(t)
 	out := t.TempDir()
-	cache := filepath.Join(t.TempDir(), "cache")
 	key, err := CacheKey(builder, keys, DefaultVersion, DefaultOwnerGUID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec := &recordingRunner{t: t, out: out, key: key}
-	found, err := Build(context.Background(), Options{Runner: rec.run, BuilderDir: builder, OutputDir: out, KeysDir: keys, CacheDir: cache})
+	found, err := Build(context.Background(), Options{Runner: rec.run, BuilderDir: builder, OutputDir: out, KeysDir: keys, CacheVolume: "my-cache"})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if len(found) != 2 {
 		t.Errorf("Build returned %d boards", len(found))
 	}
-	if len(rec.calls) != 2 || rec.calls[0][1] != "build" || rec.calls[1][1] != "run" {
-		t.Fatalf("calls = %v", rec.calls)
+	// Image build, then create, one cp per input in, start, cp out, rm.
+	if got, want := strings.Join(verbs(rec.calls), ","), "build,create,cp,cp,cp,start,cp,rm"; got != want {
+		t.Fatalf("calls = %s, want %s", got, want)
 	}
 	build := strings.Join(rec.calls[0], " ")
 	if !strings.Contains(build, "docker build -t trusted-platform-uboot-builder:"+DefaultVersion+" "+builder) {
 		t.Errorf("image build argv = %q", build)
 	}
-	run := strings.Join(rec.calls[1], " ")
+	create := strings.Join(rec.calls[1], " ")
 	for _, want := range []string{
-		"docker run --rm",
-		absPath(out) + ":/output",
-		absPath(keys) + ":/keys:ro",
-		absPath(filepath.Join(builder, "configs")) + ":/configs:ro",
-		absPath(filepath.Join(builder, "patches")) + ":/patches:ro",
-		absPath(cache) + ":/build/src",
+		"docker create --name builder-",
+		"-v my-cache:/build/src",
 		"-e UBOOT_VERSION=" + DefaultVersion,
 		"-e UBOOT_SHA256=" + DefaultTarballSHA256,
 		"-e UBOOT_OWNER_GUID=" + DefaultOwnerGUID,
 		"-e UBOOT_CACHE_KEY=" + key,
+		" trusted-platform-uboot-builder:" + DefaultVersion,
 	} {
-		if !strings.Contains(run, want) {
-			t.Errorf("run argv %q lacks %q", run, want)
+		if !strings.Contains(create, want) {
+			t.Errorf("create argv %q lacks %q", create, want)
 		}
 	}
-	if _, err := os.Stat(cache); err != nil {
-		t.Errorf("cache dir not created: %v", err)
+	// No host path is bind-mounted: the daemon may not see this filesystem.
+	for _, arg := range rec.calls[1] {
+		if strings.HasPrefix(arg, "/") && strings.Contains(arg, ":") {
+			t.Errorf("host bind mount %q in %q", arg, create)
+		}
+	}
+	// Inputs are copied in, the artifacts copied out.
+	for i, want := range []string{
+		absPath(keys) + "/. ",
+		absPath(filepath.Join(builder, "configs")) + "/. ",
+		absPath(filepath.Join(builder, "patches")) + "/. ",
+	} {
+		if cp := strings.Join(rec.calls[2+i], " "); !strings.Contains(cp, " cp "+want) {
+			t.Errorf("cp in %q lacks %q", cp, want)
+		}
+	}
+	if cp := strings.Join(rec.calls[6], " "); !strings.HasSuffix(cp, ":/output/. "+absPath(out)) {
+		t.Errorf("cp out = %q", cp)
 	}
 
 	// Second build with the same inputs is a cache hit: no runner calls.
@@ -359,7 +372,7 @@ func TestBuildRunsTheBuilderAndVerifies(t *testing.T) {
 	if _, err := Build(context.Background(), Options{Runner: rec.run, BuilderDir: builder, OutputDir: out, KeysDir: keys}); err != nil {
 		t.Fatal(err)
 	}
-	if len(rec.calls) != 2 {
+	if len(rec.calls) != 8 {
 		t.Errorf("rotated keys did not rebuild: %v", rec.calls)
 	}
 }
@@ -375,7 +388,7 @@ func TestBuildFailures(t *testing.T) {
 	if _, err := Build(context.Background(), Options{Runner: rec.run, BuilderDir: builder, OutputDir: out, KeysDir: keys}); !errors.As(err, &buildErr) || buildErr.Step != "building the builder image" {
 		t.Errorf("image build failure error = %v", err)
 	}
-	rec = &recordingRunner{t: t, out: out, key: key, fail: "run"}
+	rec = &recordingRunner{t: t, out: out, key: key, fail: "start"}
 	if _, err := Build(context.Background(), Options{Runner: rec.run, BuilderDir: builder, OutputDir: out, KeysDir: keys}); !errors.As(err, &buildErr) || buildErr.Step != "running the builder" {
 		t.Errorf("builder run failure error = %v", err)
 	}
@@ -457,11 +470,15 @@ func TestBuildOutputDirectoryErrors(t *testing.T) {
 	if _, err := Build(context.Background(), Options{Runner: rec.run, BuilderDir: builder, OutputDir: filepath.Join(blocker, "out"), KeysDir: keys}); !errors.As(err, &buildErr) || buildErr.Step != "creating the output directory" {
 		t.Errorf("unwritable output dir error = %v", err)
 	}
-	out := t.TempDir()
-	rec = &recordingRunner{t: t, out: out}
-	if _, err := Build(context.Background(), Options{Runner: rec.run, BuilderDir: builder, OutputDir: out, KeysDir: keys, CacheDir: filepath.Join(blocker, "cache")}); !errors.As(err, &buildErr) || buildErr.Step != "creating the tarball cache directory" {
-		t.Errorf("unwritable cache dir error = %v", err)
+}
+
+// verbs is the runtime subcommand of every recorded call.
+func verbs(calls [][]string) []string {
+	out := make([]string, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, call[1])
 	}
+	return out
 }
 
 func TestOptionsDefaults(t *testing.T) {

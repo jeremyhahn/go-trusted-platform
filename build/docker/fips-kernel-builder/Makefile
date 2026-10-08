@@ -10,8 +10,9 @@
 #   make module-key                       # one-time: generate the stable key
 #   make build MODULE_SIGNING_KEY=$(HOME)/.trusted-platform/secure-boot/module-signing-key.pem
 #
-# The key lives OUTSIDE the repository and is mounted read-only into the build
-# container — it is never copied into the image or the build context. When
+# The key lives OUTSIDE the repository and is copied into the build container
+# at run time (docker cp, never a bind mount) — it is never baked into the
+# image or the build context, and goes away with the container. When
 # MODULE_SIGNING_KEY is unset the kernel auto-generates a per-build ephemeral
 # key (dev builds only; see build-fips-kernel.sh).
 
@@ -28,13 +29,15 @@ KERNEL_CONFIG_DIR := ../kernel-config
 MODULE_SIGNING_KEY ?=
 DEFAULT_MODULE_SIGNING_KEY := $(HOME)/.trusted-platform/secure-boot/module-signing-key.pem
 
-# When a key is provided, mount its directory read-only at /keys and point the
-# build at the container-side path.
+# When a key is provided, copy the key file into the container at /keys and
+# point the build at the container-side path.
+RUN_BUILDER ?= ../run-builder.sh
 ifneq ($(MODULE_SIGNING_KEY),)
-KEY_MOUNT_ARGS := -v $(dir $(abspath $(MODULE_SIGNING_KEY))):/keys:ro \
-	-e MODULE_SIGNING_KEY=/keys/$(notdir $(MODULE_SIGNING_KEY))
+KEY_COPY_ARGS := -i $(abspath $(MODULE_SIGNING_KEY)):/keys/$(notdir $(MODULE_SIGNING_KEY))
+KEY_ENV_ARGS := -e MODULE_SIGNING_KEY=/keys/$(notdir $(MODULE_SIGNING_KEY))
 else
-KEY_MOUNT_ARGS :=
+KEY_COPY_ARGS :=
+KEY_ENV_ARGS :=
 endif
 
 .PHONY: all build image config-check module-key clean test
@@ -58,10 +61,8 @@ ifeq ($(MODULE_SIGNING_KEY),)
 else
 	@test -f "$(MODULE_SIGNING_KEY)" || { echo "ERROR: MODULE_SIGNING_KEY '$(MODULE_SIGNING_KEY)' does not exist (run 'make module-key')"; exit 1; }
 endif
-	@mkdir -p $(OUTPUT_DIR)
-	docker run --rm \
-		-v $(OUTPUT_DIR):/output \
-		$(KEY_MOUNT_ARGS) \
+	$(RUN_BUILDER) $(KEY_COPY_ARGS) -o /output:$(OUTPUT_DIR) -- \
+		$(KEY_ENV_ARGS) \
 		-e KERNEL_VERSION=$(KERNEL_VERSION) \
 		$(DOCKER_IMAGE)
 	@echo ""

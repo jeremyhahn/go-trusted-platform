@@ -121,12 +121,25 @@ func TestBuildNetbootInitfs(t *testing.T) {
 	if res.Initramfs != filepath.Join(out, "initramfs-virt") || res.Modloop != filepath.Join(out, "modloop-virt") {
 		t.Errorf("result = %+v", res)
 	}
-	run := rec.Joined()[len(rec.Calls)-1]
-	for _, want := range []string{"--platform linux/arm64", staged.Kernel.Dir + ":/kernel:ro", out + ":/out", staged.MediaDir + ":/media/cdrom:ro",
+	// Containers: create, media and kernel cp'd in, start, outputs cp'd out, rm.
+	calls := rec.Joined()
+	tail := calls[len(calls)-6:]
+	run := tail[0]
+	for _, want := range []string{"create --name builder-", "--platform linux/arm64 -v /out",
 		"/media/cdrom/platformd-bin/platformctl-static diskimage netboot-initfs", "--modules /kernel/modules-virt.tar.gz", "--release " + diskimagetest.VirtKernelRelease, "--flavour virt"} {
 		if !strings.Contains(run, want) {
 			t.Errorf("run %q lacks %q", run, want)
 		}
+	}
+	assertNoHostBindMounts(t, rec)
+	if !strings.HasPrefix(tail[1], "docker cp "+staged.MediaDir+"/. ") || !strings.HasSuffix(tail[1], ":/media/cdrom") {
+		t.Errorf("media cp in = %q", tail[1])
+	}
+	if !strings.HasPrefix(tail[2], "docker cp "+staged.Kernel.Dir+"/. ") || !strings.HasSuffix(tail[2], ":/kernel") {
+		t.Errorf("kernel cp in = %q", tail[2])
+	}
+	if !strings.Contains(tail[4], ":/out/. ") || !strings.HasSuffix(tail[4], out) {
+		t.Errorf("outputs cp out = %q", tail[4])
 	}
 
 	t.Run("failures", func(t *testing.T) {
@@ -134,7 +147,7 @@ func TestBuildNetbootInitfs(t *testing.T) {
 		if _, err := (&StagedMedia{}).BuildNetbootInitfs(context.Background(), t.TempDir()); !errors.As(err, &stage) {
 			t.Errorf("packaged kernel error = %v", err)
 		}
-		rec.Fail = "run"
+		rec.Fail = "start"
 		if _, err := staged.BuildNetbootInitfs(context.Background(), t.TempDir()); !errors.As(err, &stage) || stage.Step != "running the netboot initfs step" {
 			t.Errorf("container failure error = %v", err)
 		}

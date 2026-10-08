@@ -216,10 +216,19 @@ func (r *recordingRunner) run(_ context.Context, name string, args ...string) ([
 	if r.failErr != nil && len(r.calls) == r.failAt {
 		return nil, r.failErr
 	}
-	if len(args) > 0 && args[0] == "run" && r.onRun != nil {
+	if len(args) > 0 && args[0] == "start" && r.onRun != nil {
 		r.onRun()
 	}
 	return nil, nil
+}
+
+// verbs is the runtime subcommand of every recorded call.
+func verbs(calls [][]string) []string {
+	out := make([]string, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, call[1])
+	}
+	return out
 }
 
 func TestBuild_UsesTheCacheWhenTheManifestMatches(t *testing.T) {
@@ -244,20 +253,21 @@ func TestBuild_UsesTheCacheWhenTheManifestMatches(t *testing.T) {
 func TestBuild_RunsTheBuilderAndVerifiesTheManifest(t *testing.T) {
 	builder := fakeBuilderDir(t)
 	out := filepath.Join(builder, "output")
-	cache := filepath.Join(builder, "cache")
 	key, _ := CacheKey(builder, "", "")
 	rec := &recordingRunner{}
 	rec.onRun = func() { writeOutput(t, out, "virt", "6.12.110-0-virt", key) }
 
-	art, err := Build(context.Background(), Options{Runner: rec.run, BuilderDir: builder, CacheDir: cache})
+	art, err := Build(context.Background(), Options{Runner: rec.run, BuilderDir: builder, CacheVolume: "my-cache"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if art.Kernel != filepath.Join(out, "virt", "vmlinuz-virt") {
 		t.Errorf("kernel = %s", art.Kernel)
 	}
-	if len(rec.calls) != 2 || rec.calls[0][1] != "build" || rec.calls[1][1] != "run" {
-		t.Fatalf("calls = %v", rec.calls)
+	// Image build, then create, start, cp out, rm: nothing to copy in, the
+	// Kconfig fragment is baked into the image.
+	if got, want := strings.Join(verbs(rec.calls), ","), "build,create,start,cp,rm"; got != want {
+		t.Fatalf("calls = %s, want %s", got, want)
 	}
 	build := strings.Join(rec.calls[0], " ")
 	wantContext := "--build-context kernelconfig=" + filepath.Join(filepath.Dir(builder), "kernel-config")
@@ -266,9 +276,8 @@ func TestBuild_RunsTheBuilderAndVerifiesTheManifest(t *testing.T) {
 	}
 	run := strings.Join(rec.calls[1], " ")
 	for _, want := range []string{
-		artifacts.AbsPath(out) + ":/output",
-		artifacts.AbsPath(filepath.Join(builder, "configs")) + ":/configs:ro",
-		artifacts.AbsPath(cache) + ":/build/src",
+		"docker create --name builder-",
+		"-v my-cache:/build/src",
 		"-e KERNEL_VERSION=" + DefaultVersion,
 		"-e KERNEL_SHA256=" + DefaultTarballSHA256,
 		"-e KERNEL_LOCALVERSION=" + DefaultLocalVersion,
@@ -279,6 +288,19 @@ func TestBuild_RunsTheBuilderAndVerifiesTheManifest(t *testing.T) {
 		if !strings.Contains(run, want) {
 			t.Errorf("docker run lacks %q:\n%s", want, run)
 		}
+	}
+	// A bind mount resolves on the daemon's filesystem and arrives empty (or
+	// never reaches the checkout) when the build runs in a CI job container:
+	// the fragment is baked into the image and the artifacts come out with cp.
+	for _, call := range rec.calls {
+		for _, arg := range call {
+			if strings.HasPrefix(arg, "/") && strings.Contains(arg, ":") {
+				t.Errorf("host bind mount %q in %v", arg, call)
+			}
+		}
+	}
+	if cp := strings.Join(rec.calls[3], " "); !strings.HasSuffix(cp, ":/output/. "+artifacts.AbsPath(out)) {
+		t.Errorf("cp out = %q", cp)
 	}
 }
 
@@ -295,7 +317,7 @@ func TestBuild_Failures(t *testing.T) {
 	})
 	t.Run("builder run", func(t *testing.T) {
 		builder := fakeBuilderDir(t)
-		rec := &recordingRunner{failAt: 2, failErr: boom}
+		rec := &recordingRunner{failAt: 3, failErr: boom}
 		_, err := Build(context.Background(), Options{Runner: rec.run, BuilderDir: builder})
 		if !errors.Is(err, boom) {
 			t.Errorf("err = %v", err)

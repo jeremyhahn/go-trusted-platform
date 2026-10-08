@@ -9,11 +9,14 @@
 #                     recorded in the manifest so a later run can prove the
 #                     output matches its inputs without rebuilding
 #   UBOOT_OWNER_GUID  SignatureOwner GUID written into the PK/KEK/db lists
-# Mounts:
-#   /keys     PK.crt KEK.crt DB.crt (PEM or DER)   read-only
-#   /configs  Kconfig fragments + tpm-soft-spi.dts  read-only
-#   /output   per-board artifacts + manifest.json
-#   /build/src  tarball cache (optional)
+# Directories (build/docker/run-builder.sh copies them with docker cp; a bind
+# mount would be resolved on the Docker daemon's filesystem, which is not the
+# checkout when the build runs in a CI job container):
+#   /keys     PK.crt KEK.crt DB.crt (PEM or DER), copied in
+#   /configs  Kconfig fragments + tpm-soft-spi.dts, copied in
+#   /patches  U-Boot patches, copied in
+#   /output   per-board artifacts + manifest.json, copied out when the build succeeds
+#   /build/src  tarball cache, a named docker volume
 set -euo pipefail
 
 : "${UBOOT_VERSION:?UBOOT_VERSION is required}"

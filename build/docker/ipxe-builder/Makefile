@@ -14,8 +14,11 @@ IPXE_SHA256  ?= 9ed6d029be901a0ccc87cb2e5f9c774620f30f84ebdd507c6dd3e1e6229b7bd5
 IPXE_TARGETS ?= bin-arm64-efi/snponly.efi
 
 OUTPUT_DIR   ?= $(CURDIR)/output
-CACHE_DIR    ?= $(HOME)/.cache/trusted-platform/ipxe
+# The source tarball cache is a named docker volume, not a host path: the
+# daemon owns it, so it works when the build runs in a CI job container.
+CACHE_VOLUME ?= trusted-platform-ipxe-src
 DOCKER       ?= docker
+RUN_BUILDER  ?= ../run-builder.sh
 DOCKER_IMAGE ?= trusted-platform-ipxe-builder:$(IPXE_VERSION)
 
 # Everything that shapes the binary: the config overrides and the builder
@@ -42,14 +45,12 @@ image:
 # build skips the container when the manifest already carries the cache
 # key of the current inputs and every output verifies.
 build: image
-	@mkdir -p $(OUTPUT_DIR) $(CACHE_DIR)
 	@if [ -f $(OUTPUT_DIR)/manifest.json ] && grep -q '"cache_key": "$(IPXE_CACHE_KEY)"' $(OUTPUT_DIR)/manifest.json && $(MAKE) -s verify OUTPUT_DIR=$(OUTPUT_DIR) >/dev/null 2>&1; then \
 		echo "iPXE output is current (cache key $(IPXE_CACHE_KEY)); skipping build"; \
 	else \
-		$(DOCKER) run --rm \
-			-v $(abspath $(OUTPUT_DIR)):/output \
-			-v $(CURDIR)/configs:/configs:ro \
-			-v $(abspath $(CACHE_DIR)):/build/src \
+		DOCKER=$(DOCKER) $(RUN_BUILDER) \
+				-i $(CURDIR)/configs:/configs -o /output:$(abspath $(OUTPUT_DIR)) -- \
+				-v $(CACHE_VOLUME):/build/src \
 			-e IPXE_VERSION=$(IPXE_VERSION) \
 			-e IPXE_SHA256=$(IPXE_SHA256) \
 			-e IPXE_TARGETS="$(IPXE_TARGETS)" \

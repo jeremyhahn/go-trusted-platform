@@ -70,8 +70,8 @@ func ParseMBR(sector []byte) ([]Partition, error)
 `BuildConfig`: `ISO *iso.ISOBuildConfig` (required), `Target`, `Model`,
 `SizeMB`, `Output`, `BinariesDir`, `ContainerRuntime`, `BuilderImage`,
 `BuilderDir`, `UBootBuilderDir`, `UBootOutputDir`, `UBootDir` (prebuilt;
-skips the U-Boot build), `UBootCacheDir`, `VirtKernelBuilderDir`,
-`VirtKernelOutputDir`, `VirtKernelDir` (prebuilt), `VirtKernelCacheDir`,
+skips the U-Boot build), `UBootCacheVolume`, `VirtKernelBuilderDir`,
+`VirtKernelOutputDir`, `VirtKernelDir` (prebuilt), `VirtKernelCacheVolume`,
 `Runner`, `Logger`, `SkipPreflight`. `Result`: `Image`, `SHA256`,
 `SizeBytes`, `MediaDir`, `UBoot`, `Kernel` (nil for a packaged kernel). `AssembleOptions`: `Config` (required), `Output` (required),
 `SizeMB`, `Runner`, `Logger`. `AssembleResult`: `Image`, `SizeBytes`, `LoopDevice`.
@@ -172,7 +172,7 @@ release and are held equal to `build/docker/uboot-builder/Makefile` by
    after a failed install is logged, not raised.
 10. **The host's `/dev` is never bind-mounted into the container.** The
     installer's `mdev -s` resets the mode of every device node it walks;
-    `TestCreateStagesMediaAndRunsTheContainer` fails if the `docker run` argv ever names a
+    `TestCreateStagesMediaAndRunsTheContainer` fails if the `docker create` argv ever names a
     `/dev` path again. The private `/dev` is static, so the installer's
     partition-node refresh (installer engineering invariant 15) is what keeps
     `/dev/loopNp1` usable after the second partition-table re-read.
@@ -249,13 +249,41 @@ must hold `PK.crt`, `KEK.crt`, `DB.crt`), `UBOOT_OUTPUT_DIR`, `DISKIMAGE_TARGET`
 `DISKIMAGE_MODEL`, `DISKIMAGE_SIZE_MB`, `DISKIMAGE_OUTPUT`, `DISKIMAGE_BUILDER_IMG`,
 `DISKIMAGE_FLAGS`, `RPI_SDCARD`, `RPI_SDCARD_CONFIRM`; in the U-Boot builder,
 `UBOOT_VERSION`, `UBOOT_SHA256`, `UBOOT_BOARDS`, `UBOOT_OWNER_GUID`, `KEYS_DIR`,
-`OUTPUT_DIR`, `CACHE_DIR` (mirrored by `uboot.Options`).
+`OUTPUT_DIR`, `CACHE_VOLUME` (mirrored by `uboot.Options`; the docker volume
+holding the upstream tarball).
+
+### Builder containers never bind-mount the host
+
+A bind mount is resolved by the container daemon on **its** filesystem. When the
+build runs inside a CI job container the daemon is the host's and the checkout
+is not on it: inputs arrive as an empty directory and outputs never reach the
+checkout (this is how `make virt-kernel-build` failed with `missing builder
+input /configs/virt.config`). Every builder container is therefore run the
+same way, with data moved by `docker cp` and no `-v <host path>`:
+
+- inputs are baked into the image (`COPY`) or copied into the created
+  container before it starts;
+- outputs are copied out of the container after it exited successfully; a
+  failed build copies nothing out;
+- the source-tarball cache is a **named docker volume** (`CACHE_VOLUME`, e.g.
+  `trusted-platform-uboot-src`), which the daemon owns, not a host directory;
+- the container is always removed, with its anonymous volumes.
+
+`build/docker/run-builder.sh [-i HOST:CTR]... [-o CTR:HOST]... -- <docker create
+args>` does this for every Makefile builder (iPXE, U-Boot, virt kernel, FIPS
+kernel, OpenSSL FIPS provider, strongSwan); `runner.Container`
+(`pkg/diskimage/runner`) does it for the Go callers (`uboot.Build`,
+`virtkernel.Build`, the assemble and netboot-initfs containers, the FIPS
+artifact containers in `pkg/iso`). It behaves identically on a developer host.
+`diskimagetest.Runner` is a fake daemon with a private filesystem per
+container; it rejects `run` and any host bind mount, so a regression fails the
+unit tests.
 
 ## 6. Persistence and on-disk layout
 
 - `<work-dir>/media/` — the staged media root (`apks-prefetch/aarch64/`,
   `platformd-bin/`, `configs/installer.yaml`, `boot-firmware/`, keys),
-  bind-mounted at `/media/cdrom`; kept after the build.
+  copied into the assemble container at `/media/cdrom`; kept after the build.
 - `<work-dir>/trusted-platform-<target>.img` unless `--output` is given.
 - `build/docker/uboot-builder/output/{rpi_arm64,qemu_arm64}/` (`u-boot.bin`,
   `u-boot.config`, `SHA256SUMS`, `overlays/tpm-soft-spi.dtbo` for rpi) and

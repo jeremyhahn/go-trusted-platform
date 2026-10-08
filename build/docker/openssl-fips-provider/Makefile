@@ -5,6 +5,7 @@
 OPENSSL_VERSION ?= 3.4.1
 OUTPUT_DIR ?= $(PWD)/output
 DOCKER_IMAGE ?= openssl-fips-provider-builder
+RUN_BUILDER ?= ../run-builder.sh
 
 .PHONY: all build clean test
 
@@ -12,10 +13,8 @@ all: build
 
 build:
 	@echo "Building OpenSSL FIPS provider module..."
-	@mkdir -p $(OUTPUT_DIR)
 	docker build -t $(DOCKER_IMAGE) .
-	docker run --rm \
-		-v $(OUTPUT_DIR):/output \
+	$(RUN_BUILDER) -o /output:$(OUTPUT_DIR) -- \
 		-e OPENSSL_VERSION=$(OPENSSL_VERSION) \
 		$(DOCKER_IMAGE)
 	@echo ""
