@@ -38,13 +38,14 @@ What it does **not** prove, and must not be assumed from a green run:
   them at the relays. What a bring-up cannot show is the ladder bearing load:
   until the cutover the routers' own sessions still carry the traffic, so a
   wrong value here changes nothing and proves nothing.
-- **Return-path symmetry.** The per-uplink routing tables and rules that keep a
-  tunnel's outer packets on the ISP they were sourced from are implemented in
-  the tunnel package but not reachable from a gatewayd config (#606). Until
-  that lands, pin the relay host routes statically (step 2, note).
-- **Encrypted transport.** `transport: ipsec` is implemented and unreachable
-  from configuration for the same reason (#606). Bring-up runs plain GRE,
-  which is what the relays speak today.
+- **Return-path symmetry.** The template declares one `routing-uplinks:` table
+  per ISP and pins each tunnel to its own with `uplink:` (#606), so no static
+  relay host routes are needed. What a bring-up cannot show is that the ISP's
+  next hop in the template (`gateway-v4`) is the real one; check it against the
+  circuit.
+- **Encrypted transport.** `transport: ipsec` is selectable per tunnel
+  (#606; keys by `ipsec.key-ref`, see `docs/gateway/user.md`). Bring-up runs
+  plain GRE, which is what the relays speak today.
 
 None of the three is a reason to delay bring-up: each is additive, and the
 sessions this procedure establishes are the thing they will later improve.
@@ -122,12 +123,13 @@ ip -brief link show type gre
 ip -brief addr show gre-relay-ispa       # expect BOTH the /31 and the /127
 ```
 
-> **Return-path note.** Until #606 lands, add a host route per relay pinned to
-> the uplink its tunnel is sourced from, or the kernel will hash the outer
-> packets across both ISPs and the relay will see them arrive from an address
-> its session does not expect:
-> `ip route add 203.0.113.100/32 via <ispa-gateway> dev <ispa-if>`. Record what
-> you added; step 6 removes it on rollback.
+> **Return-path note.** Each tunnel's `uplink:` pins its outer packets to the
+> routing table of the ISP they are sourced from (#606), so the kernel does not
+> hash them across both ISPs. Confirm it with `ip rule show` (a rule per
+> uplink address and per tunnel) and `ip route show table 101`; if the
+> template's `routing-uplinks:` are removed, add a host route per relay by hand:
+> `ip route add 203.0.113.100/32 via <ispa-gateway> dev <ispa-if>`, and record
+> it, because step 6 removes it on rollback.
 
 **Undo:** `rc-service gatewayd stop` removes every tunnel the daemon created.
 
@@ -362,7 +364,7 @@ and cleans up after itself on stop.
 
 | Gap | Effect on bring-up | Issue |
 |---|---|---|
-| `tunnels:` drops `transport`/`uplink`/`ipsec`/`wireguard` | GRE only; uplink pinning is static routes | #606 |
+| Nothing drives `Rekey` on a timer for `ipsec` tunnels | Keys rotate by service restart | follow-up to #606 |
 | Gateway BGP operator verbs are stubs | Announce/withdraw is config plus restart | #65 |
 | TCP-AO cannot bind a keychain to a session | MD5 compat path; non-FIPS build for bring-up | upstream GoBGP |
 | Transit starts whenever `bgp:` exists | `transit.enabled: false` does not gate it; the section must be absent to keep the speaker out of a start | #620 |

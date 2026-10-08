@@ -20,6 +20,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"strconv"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
@@ -509,66 +510,52 @@ func (c *FirewallConfig) Validate() error {
 	return nil
 }
 
-// TunnelConfig holds configuration for a network tunnel (GRE, VXLAN, etc.).
-type TunnelConfig struct {
-	// Name is the tunnel interface name.
-	Name string `yaml:"name" json:"name" mapstructure:"name"`
+// TunnelConfig is the tunnel package's own configuration, not a copy of it:
+// the `tunnels:` section decodes straight into the type the manager
+// consumes, so a field added to pkg/sdn/tunnel is reachable from a gatewayd
+// YAML file the moment it exists, and nothing here can drop one. Validation
+// is the tunnel package's too (typed *tunnel.ErrInvalidTunnelConfig,
+// *tunnel.ErrTransportUnavailable for wireguard under the fips build tag).
+type TunnelConfig = tunnel.TunnelConfig
 
-	// Type is the tunnel type ("gre", "vxlan", etc.).
-	Type string `yaml:"type" json:"type" mapstructure:"type"`
+// RoutingUplinkConfig is a WAN uplink's policy-routing table, which tunnels
+// name through `uplink:` to pin their outer packets to one ISP. It is not
+// the NAT/NIC UplinkConfig above: that one describes a physical port the NAT
+// and load-balancer services bind to.
+type RoutingUplinkConfig = tunnel.UplinkConfig
 
-	// Transport wraps the tunnel: empty or "gre" is plain, "ipsec" is ESP
-	// with keys from IPsec, "wireguard" is WireGuard with keys from
-	// WireGuard (not available in FIPS builds). See pkg/sdn/tunnel.
-	Transport string `yaml:"transport,omitempty" json:"transport,omitempty" mapstructure:"transport"`
-
-	// Local is the local endpoint IP address.
-	Local string `yaml:"local" json:"local" mapstructure:"local"`
-
-	// Remote is the remote endpoint IP address.
-	Remote string `yaml:"remote" json:"remote" mapstructure:"remote"`
-
-	// TunnelIP is the IP address assigned to the tunnel interface.
-	TunnelIP string `yaml:"tunnel-ip" json:"tunnel_ip" mapstructure:"tunnel-ip"`
-
-	// TunnelIPv6 is the optional IPv6 address assigned to the tunnel interface.
-	TunnelIPv6 string `yaml:"tunnel-ipv6,omitempty" json:"tunnel_ipv6,omitempty" mapstructure:"tunnel-ipv6"`
-
-	// IPsec carries the ESP parameters for transport "ipsec"; its keys are
-	// references (kms://, secret://) resolved through HostRuntime's secret
-	// resolver at start, never values.
-	IPsec *tunnel.IPsecConfig `yaml:"ipsec,omitempty" json:"ipsec,omitempty" mapstructure:"ipsec"`
-
-	// WireGuard carries the parameters for transport "wireguard"; its
-	// private key is a reference resolved the same way.
-	WireGuard *tunnel.WireGuardConfig `yaml:"wireguard,omitempty" json:"wireguard,omitempty" mapstructure:"wireguard"`
-}
-
-// Validate checks if the tunnel configuration is valid.
-func (c *TunnelConfig) Validate() error {
-	if c.Name == "" {
-		return ErrConfigurationInvalid
+// validateTunnels checks the routing uplinks and the tunnels that reference
+// them. An uplink name or table used twice, and a tunnel naming an uplink the
+// section does not declare, are refused here at load time rather than as a
+// half-programmed routing state at Start.
+func (c *GatewayConfig) validateTunnels() error {
+	declared := make(map[string]struct{}, len(c.RoutingUplinks))
+	tables := make(map[int]string, len(c.RoutingUplinks))
+	for i := range c.RoutingUplinks {
+		up := &c.RoutingUplinks[i]
+		if err := up.Validate(); err != nil {
+			return err
+		}
+		if _, dup := declared[up.Name]; dup {
+			return &tunnel.ErrInvalidUplinkConfig{Name: up.Name, Reason: "name is declared more than once"}
+		}
+		if other, dup := tables[up.Table]; dup {
+			return &tunnel.ErrInvalidUplinkConfig{Name: up.Name, Reason: "table " + strconv.Itoa(up.Table) + " is already used by uplink " + other}
+		}
+		declared[up.Name] = struct{}{}
+		tables[up.Table] = up.Name
 	}
-	// A wireguard tunnel has no carrier type: its interface is the
-	// WireGuard device itself, and ValidateTransport below refuses a type
-	// that is set anyway.
-	if c.Type == "" && c.Transport != tunnel.TransportWireGuard {
-		return ErrConfigurationInvalid
+	for i := range c.Tunnels {
+		if err := c.Tunnels[i].Validate(); err != nil {
+			return err
+		}
+		if name := c.Tunnels[i].Uplink; name != "" {
+			if _, ok := declared[name]; !ok {
+				return &tunnel.ErrUplinkUnknown{Name: c.Tunnels[i].Name, Uplink: name}
+			}
+		}
 	}
-	if c.Local == "" {
-		return ErrConfigurationInvalid
-	}
-	if c.Remote == "" {
-		return ErrConfigurationInvalid
-	}
-	if c.TunnelIP == "" {
-		return ErrConfigurationInvalid
-	}
-	// The transport sections belong to pkg/sdn/tunnel, which states their
-	// rules once — a key reference per SA, wireguard refused under the fips
-	// build tag — and reports them as its own typed errors.
-	mapped := c.tunnelConfig()
-	return mapped.ValidateTransport()
+	return nil
 }
 
 // DHCPServiceConfig holds DHCP server configuration for the gateway.
@@ -1148,8 +1135,13 @@ type GatewayConfig struct {
 	// for authenticated operator access to management zone endpoints.
 	ManagementVPN *ManagementVPNServiceConfig `yaml:"management_vpn,omitempty" json:"management_vpn,omitempty" mapstructure:"management_vpn"`
 
-	// Tunnels are GRE/VXLAN tunnel configurations.
+	// Tunnels are the GRE, IPsec and WireGuard tunnel configurations.
 	Tunnels []TunnelConfig `yaml:"tunnels,omitempty" json:"tunnels,omitempty" mapstructure:"tunnels"`
+
+	// RoutingUplinks declare the WAN uplinks (routing table, next hops,
+	// source rules) that Tunnels pin their outer packets to through their
+	// `uplink:` key. Distinct from Uplinks, which are the NAT/NIC ports.
+	RoutingUplinks []RoutingUplinkConfig `yaml:"routing-uplinks,omitempty" json:"routing_uplinks,omitempty" mapstructure:"routing-uplinks"`
 
 	// HostFW is the nftables host packet filter configuration (#569): the
 	// operator-declared listeners, WAN peer allowances and tunnel
@@ -1254,12 +1246,7 @@ func (c *GatewayConfig) Validate() error {
 			return &ErrHostFWConfigInvalid{Cause: err}
 		}
 	}
-	for i := range c.Tunnels {
-		if err := c.Tunnels[i].Validate(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return c.validateTunnels()
 }
 
 // HasEnabledServices returns true if at least one service section is present and enabled.
@@ -1314,7 +1301,7 @@ func (c *GatewayConfig) EnabledServices() []string {
 	add(c.LoadBalancer != nil && c.LoadBalancer.Enabled, ServiceLoadBalancer)
 	add(c.NAT64 != nil && c.NAT64.Enabled, ServiceNAT64)
 	add(c.HostFW != nil && c.HostFW.Enabled, ServiceHostFW)
-	add(len(c.Tunnels) > 0, ServiceTunnels)
+	add(len(c.Tunnels) > 0 || len(c.RoutingUplinks) > 0, ServiceTunnels)
 	add(c.BGP != nil || (c.Transit != nil && c.Transit.Enabled), ServiceTransit)
 	add(c.Overlay != nil && c.Overlay.Enabled, ServiceOverlay)
 	add(c.Edge != nil && c.Edge.Enabled, ServiceEdge)

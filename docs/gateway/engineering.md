@@ -66,7 +66,8 @@ the builders need beyond OVS:
 |---|---|---|
 | `Listeners hostfw.ListenerInventory` | `hostfw.StaticInventory{}` (no daemon listener admitted) | `hostfw` |
 | `HostFWApplier hostfw.Applier` | `hostfw.NewNetlinkApplier()` | `hostfw` |
-| `TunnelManager` | `tunnel.NewManager(logger, WithKeyProvider(SecretResolver))` | `tunnels`; its tunnel names are appended to `hostfw.Config.Tunnels` |
+| `TunnelManager` | `tunnel.NewManager(logger, WithKeyProvider(SecretResolver), WithUplinks(tunnel.NewUplinkManager(logger)))` | `tunnels`; its tunnel names are appended to `hostfw.Config.Tunnels` |
+| `UplinkManager` | the `tunnel.UplinkManager` built with the default manager (this field is ignored then) | `tunnels`; required alongside an injected `TunnelManager` when `routing-uplinks:` is set (`ErrServiceUnavailable` otherwise) |
 | `BGPServer bgp.BGPServerInterface` | in-process GoBGP server | `transit` |
 | `SecretResolver bgp.SecretResolver` | none — a neighbour or tunnel that names a reference fails closed (`bgp.ErrSecretResolverRequired`, `tunnel.ErrKeyProviderRequired`) | `transit`, `tunnels` |
 | `Logger` | `Runtime.Logger`, else `slog.Default()` | all |
@@ -671,10 +672,36 @@ The `hostfw` handler (`handlers.go`, #568) builds `hostfw.New` from the
 `HostRuntime.HostFWApplier` as the applier; a section that fails
 `hostfw.Config.Validate` is reported as `ErrHostFWConfigInvalid` at start.
 
-### Tunnels and uplinks (`tunnels:`, `uplinks:`)
+### Tunnels and routing uplinks (`tunnels:`, `routing-uplinks:`)
 
-`pkg/sdn/tunnel` (#582). Field reference:
-[`docs/sdn/tunnel/configuration.md`](../sdn/tunnel/configuration.md).
+`pkg/sdn/tunnel` (#582, reachable from configuration since #606). Field
+reference: [`docs/sdn/tunnel/configuration.md`](../sdn/tunnel/configuration.md).
+
+**Schema decision (#606).** `gateway.TunnelConfig` is a type alias of
+`tunnel.TunnelConfig`, not a gateway-side struct mapped field by field. The
+section decodes straight into the type the manager consumes, so there is one
+schema and no copy function to fall behind: the old six-field copy silently
+dropped `uplink`, `mtu`, `ttl` and `key`, and had to be taught every new
+field by hand. The YAML/mapstructure keys of the two types were already
+identical, so nothing conflicted. The cost is that validation is the tunnel
+package's (`*tunnel.ErrInvalidTunnelConfig`, `*tunnel.ErrTransportUnavailable`
+for `wireguard` under the `fips` tag) rather than `ErrConfigurationInvalid`,
+and is stricter: `tunnel-ip` and `tunnel-ipv6` must be CIDR, the name at most 15
+characters, `local`/`remote` parseable IPs.
+
+**`routing-uplinks:` is a sibling section, not an overload of `uplinks:`.**
+`uplinks:` (`gateway.UplinkConfig`) describes the NICs the NAT and
+load-balancer services bind to; `routing-uplinks:` (`gateway.RoutingUplinkConfig`,
+an alias of `tunnel.UplinkConfig`) describes a policy-routing table (`name`,
+`interface`, `table`, `gateway-v4`/`gateway-v6`, `addresses`, `priority`).
+A tunnel's `uplink:` names an entry of `routing-uplinks:`.
+
+| Invariant | Where |
+|---|---|
+| A tunnel naming an `uplink:` not declared under `routing-uplinks:` fails `GatewayConfig.Validate` with `*tunnel.ErrUplinkUnknown`; so does a duplicate uplink name or table (`*tunnel.ErrInvalidUplinkConfig`) | `GatewayConfig.validateTunnels` |
+| Start programs every routing uplink first, then the tunnels; a failure at either step removes whatever was created (tunnels in reverse, then the uplink manager's state) | `tunnelsBackend.Start` |
+| Stop removes the tunnels, closes the tunnel manager, then closes the `UplinkManager`, so tables go after the tunnels pinned to them | `tunnelsBackend.Stop` |
+| A `routing-uplinks:` section alone enables the `tunnels` service | `GatewayConfig.EnabledServices` |
 
 | Invariant | Where |
 |---|---|
@@ -689,7 +716,7 @@ The `backedServiceHandler` (#568) builds both managers from these sections and
 hands the tunnel manager the `HostRuntime` secret resolver as its
 `KeyProvider` (#592, see the secret store above), so an `ipsec` or `wireguard`
 tunnel resolves its key references through the same store the transit speaker
-uses.
+uses, and the `UplinkManager` via `tunnel.WithUplinks`.
 
 Beside the point-to-point `Manager`, the package carries the two remote-access
 devices the VPN data planes own (#584 PR 2): `WireGuardHub` — one interface,

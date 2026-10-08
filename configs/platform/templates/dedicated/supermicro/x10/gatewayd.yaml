@@ -36,9 +36,7 @@ gateway:
 
   # WAN interfaces as the datapath sees them (NAT egress selection reads
   # these): the two 1G ports, one per ISP. The 10G ports are the bonded data
-  # trunk on br-fabric (gateway.yaml). Keeping each tunnel on the ISP it was
-  # sourced from is per-uplink tunnel pinning (#606); until it lands,
-  # return-path symmetry is the operator's static routes.
+  # trunk on br-fabric (gateway.yaml).
   uplinks:
     - name: eth0
       mtu: 1500
@@ -47,18 +45,37 @@ gateway:
       mtu: 1500
       ip-addresses: ["192.0.2.6/29"]         # ISP B
 
+  # Per-ISP routing tables (#606): each tunnel below names one through
+  # `uplink:`, which keeps its outer packets on the ISP they were sourced from
+  # so the return path is symmetric without static host routes. Not the NAT/NIC
+  # `uplinks:` above; tables are 100-252 and unique.
+  routing-uplinks:
+    - name: isp-a
+      interface: eth0
+      table: 101
+      gateway-v4: 198.51.100.1
+      addresses: ["198.51.100.6/29"]
+    - name: isp-b
+      interface: eth1
+      table: 102
+      gateway-v4: 192.0.2.1
+      addresses: ["192.0.2.6/29"]
+
   # One tunnel per uplink to the upstream relay. `type: gre` is what a relay
-  # typically speaks; the `transport: ipsec` upgrade needs #606 before it can
-  # be selected here.
+  # typically speaks. A relay that terminates ESP takes `transport: ipsec` with
+  # an `ipsec:` section whose `key-ref` names the key in the platform secret
+  # store (kms:// or secret://), never the key itself; see docs/gateway/user.md.
   tunnels:
     - name: gre-relay-ispa
       type: gre
+      uplink: isp-a
       local: 198.51.100.6
       remote: 203.0.113.100
       tunnel-ip: 10.4.128.2/31
       tunnel-ipv6: "2001:db8:0:1::/127"
     - name: gre-relay-ispb
       type: gre
+      uplink: isp-b
       local: 192.0.2.6
       remote: 203.0.113.100
       tunnel-ip: 10.4.128.4/31

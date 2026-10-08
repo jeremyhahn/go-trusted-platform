@@ -102,6 +102,11 @@ type HostRuntime struct {
 	HostFWApplier hostfw.Applier
 	// TunnelManager drives tunnel interfaces; nil uses the netlink manager.
 	TunnelManager TunnelManager
+	// UplinkManager programs the routing-uplinks: section for an injected
+	// TunnelManager, and is required with one when the section is set. The
+	// netlink manager built when TunnelManager is nil brings its own
+	// tunnel.UplinkManager and ignores this field.
+	UplinkManager UplinkManager
 	// NAT64Driver programs the kernel translator; nil drives the real jool
 	// tool, which needs the module the packaging installs (#601).
 	NAT64Driver nat64.Driver

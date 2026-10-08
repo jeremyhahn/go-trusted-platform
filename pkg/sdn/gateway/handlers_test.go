@@ -556,37 +556,6 @@ func TestTunnelsService_RollsBackOnEnsureFailure(t *testing.T) {
 	assert.Empty(t, mgr.ensured)
 }
 
-func TestTunnelConfig_MapsOntoTheTunnelPackage(t *testing.T) {
-	got := TunnelConfig{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}.tunnelConfig()
-	assert.Equal(t, tunnel.TunnelConfig{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}, got)
-}
-
-// TestTunnelConfig_CarriesTheIPv6Address: the gateway section decodes
-// `tunnel-ipv6` and the tunnel manager applies it when present, so an adapter
-// that drops it produces an IPv4-only interface from a configuration that
-// asked for dual-stack — accepted and silently discarded, which is the defect
-// class the bring-up runbook exists to describe. Every tunnel in the shipped
-// X10 template sets this field.
-func TestTunnelConfig_CarriesTheIPv6Address(t *testing.T) {
-	got := TunnelConfig{
-		Name:       "gre-pri-isp-a",
-		Type:       "gre",
-		Local:      "192.0.2.1",
-		Remote:     "198.51.100.1",
-		TunnelIP:   "10.255.0.33/30",
-		TunnelIPv6: "2001:DB8:CAFE:11::1/64",
-	}.tunnelConfig()
-
-	assert.Equal(t, "2001:DB8:CAFE:11::1/64", got.TunnelIPv6,
-		"the IPv6 address must reach the tunnel package or the interface comes up v4-only")
-	assert.Equal(t, "10.255.0.33/30", got.TunnelIP, "the IPv4 address is unaffected")
-
-	// An unset field stays unset rather than becoming an empty address the
-	// manager would try to add.
-	none := TunnelConfig{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}.tunnelConfig()
-	assert.Empty(t, none.TunnelIPv6)
-}
-
 func TestHostFWService_Lifecycle(t *testing.T) {
 	applier := &fakeHostFWApplier{}
 	cfg := baseGatewayConfig("hostfw-gw")
@@ -742,19 +711,6 @@ func TestGateway_BackendAccessorsWhenNotRunning(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = gw.backend("not-registered")
 	assert.False(t, ok)
-}
-
-func TestTunnelConfig_CarriesTheTransportSectionsThrough(t *testing.T) {
-	ipsec := &tunnel.IPsecConfig{KeyRef: "kms://tunnel/pop-a/out", PeerKeyRef: "kms://tunnel/pop-a/in", SPIOut: 0x100, SPIIn: 0x101}
-	got := TunnelConfig{
-		Name: "ipsec-a", Type: "gre", Transport: tunnel.TransportIPsec,
-		Local: "192.0.2.1", Remote: "198.51.100.1",
-		TunnelIP: "10.255.0.1/30", TunnelIPv6: "2001:db8::1/126",
-		IPsec: ipsec,
-	}.tunnelConfig()
-	assert.Equal(t, tunnel.TransportIPsec, got.Transport)
-	assert.Same(t, ipsec, got.IPsec, "the ipsec section is passed through, not copied field by field")
-	assert.Equal(t, "2001:db8::1/126", got.TunnelIPv6)
 }
 
 func TestBuildTunnels_AdaptsTheSecretResolverAsTheKeyProvider(t *testing.T) {

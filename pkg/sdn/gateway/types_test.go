@@ -538,7 +538,7 @@ func TestTunnelConfig_Validate(t *testing.T) {
 			config: TunnelConfig{
 				Name: "gre1", Type: "gre",
 				Local: "198.51.100.4", Remote: "198.51.100.100",
-				TunnelIP: "10.255.0.1",
+				TunnelIP: "10.255.0.1/30",
 			},
 			expectError: false,
 		},
@@ -547,7 +547,7 @@ func TestTunnelConfig_Validate(t *testing.T) {
 			config: TunnelConfig{
 				Name: "gre2", Type: "gre",
 				Local: "198.51.100.5", Remote: "198.51.100.100",
-				TunnelIP: "10.255.0.5", TunnelIPv6: "2001:db8::1",
+				TunnelIP: "10.255.0.5/30", TunnelIPv6: "2001:db8::1/64",
 			},
 			expectError: false,
 		},

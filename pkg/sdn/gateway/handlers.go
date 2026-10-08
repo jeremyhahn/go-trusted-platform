@@ -492,19 +492,38 @@ type TunnelManager interface {
 	Close() error
 }
 
+// UplinkManager is the routing-uplink surface the tunnels service drives.
+// *tunnel.UplinkManager implements it. The same instance is handed to the
+// tunnel manager (tunnel.WithUplinks) so a tunnel's `uplink:` pin resolves
+// against what this service programmed; Close removes every table, route and
+// rule it installed.
+type UplinkManager interface {
+	EnsureUplink(ctx context.Context, config tunnel.UplinkConfig) error
+	Close() error
+}
+
 // tunnelsBackend drives the netlink tunnel manager for the `tunnels:`
-// section: every configured tunnel is ensured on Start and removed on Stop;
-// the service is healthy while every tunnel interface reports up.
+// section: the `routing-uplinks:` are programmed first, then every
+// configured tunnel is ensured on Start; both are removed on Stop. The
+// service is healthy while every tunnel interface reports up.
 type tunnelsBackend struct {
-	manager TunnelManager
-	configs []tunnel.TunnelConfig
-	logger  *slog.Logger
+	manager       TunnelManager
+	uplinks       UplinkManager
+	configs       []tunnel.TunnelConfig
+	uplinkConfigs []tunnel.UplinkConfig
+	logger        *slog.Logger
 
 	mu     sync.Mutex
 	active bool
 }
 
 func (b *tunnelsBackend) Start(ctx context.Context) error {
+	for i := range b.uplinkConfigs {
+		if err := b.uplinks.EnsureUplink(ctx, b.uplinkConfigs[i]); err != nil {
+			b.closeUplinks()
+			return err
+		}
+	}
 	for i := range b.configs {
 		if err := b.manager.EnsureTunnel(ctx, b.configs[i]); err != nil {
 			// Undo what this call created before reporting.
@@ -513,6 +532,7 @@ func (b *tunnelsBackend) Start(ctx context.Context) error {
 					b.logger.Warn("tunnel rollback failed", slog.String("tunnel", b.configs[j].Name), slog.Any("error", rmErr))
 				}
 			}
+			b.closeUplinks()
 			return err
 		}
 	}
@@ -520,6 +540,18 @@ func (b *tunnelsBackend) Start(ctx context.Context) error {
 	b.active = true
 	b.mu.Unlock()
 	return nil
+}
+
+// closeUplinks removes the routing state this service programmed. It is a
+// rollback path as well as part of Stop, so a failure is logged rather than
+// replacing the error the caller acts on.
+func (b *tunnelsBackend) closeUplinks() {
+	if b.uplinks == nil {
+		return
+	}
+	if err := b.uplinks.Close(); err != nil {
+		b.logger.Warn("routing uplink cleanup failed", slog.Any("error", err))
+	}
 }
 
 func (b *tunnelsBackend) Stop(ctx context.Context) error {
@@ -534,6 +566,12 @@ func (b *tunnelsBackend) Stop(ctx context.Context) error {
 	b.mu.Unlock()
 	if err := b.manager.Close(); err != nil && firstErr == nil {
 		firstErr = err
+	}
+	// Uplinks go last: the tunnels pinned to them are already gone.
+	if b.uplinks != nil {
+		if err := b.uplinks.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	return firstErr
 }
@@ -576,27 +614,40 @@ func (b *tunnelsBackend) Uplinks() []tunnel.UplinkStatus {
 	return b.manager.Uplinks()
 }
 
-// buildTunnels maps the gateway's `tunnels:` section onto the netlink
-// tunnel manager. The manager comes from HostRuntime when the daemon (or a
-// test) injected one; otherwise the real netlink manager is used, with the
-// HostRuntime secret resolver as its key provider so `ipsec` and
-// `wireguard` tunnels resolve their key references through the same store
-// the transit speaker uses.
+// buildTunnels hands the gateway's `tunnels:` and `routing-uplinks:`
+// sections to the netlink tunnel manager. The manager comes from HostRuntime
+// when the daemon (or a test) injected one; otherwise the real netlink
+// manager is used, with the HostRuntime secret resolver as its key provider
+// so `ipsec` and `wireguard` tunnels resolve their key references through the
+// same store the transit speaker uses, and with the UplinkManager the
+// `uplink:` pins resolve against (tunnel.WithUplinks).
 func buildTunnels(g *Gateway) (backedService, error) {
 	host := g.config.hostRuntime()
+	routing := len(g.config.RoutingUplinks) > 0
+	uplinks := host.UplinkManager
 	manager := host.TunnelManager
 	if manager == nil {
 		var opts []tunnel.Option
 		if host.SecretResolver != nil {
 			opts = append(opts, tunnel.WithKeyProvider(resolverKeyProvider{resolve: host.SecretResolver}))
 		}
+		netlinkUplinks := tunnel.NewUplinkManager(host.Logger)
+		uplinks = netlinkUplinks
+		opts = append(opts, tunnel.WithUplinks(netlinkUplinks))
 		manager = tunnel.NewManager(host.Logger, opts...)
+	} else if routing && uplinks == nil {
+		return nil, &ErrServiceUnavailable{
+			Service: ServiceTunnels,
+			Reason:  "routing-uplinks are configured but the injected TunnelManager comes without an UplinkManager",
+		}
 	}
-	configs := make([]tunnel.TunnelConfig, 0, len(g.config.Tunnels))
-	for i := range g.config.Tunnels {
-		configs = append(configs, g.config.Tunnels[i].tunnelConfig())
-	}
-	return &tunnelsBackend{manager: manager, configs: configs, logger: host.Logger}, nil
+	return &tunnelsBackend{
+		manager:       manager,
+		uplinks:       uplinks,
+		configs:       slices.Clone(g.config.Tunnels),
+		uplinkConfigs: slices.Clone(g.config.RoutingUplinks),
+		logger:        host.Logger,
+	}, nil
 }
 
 // resolverKeyProvider adapts the HostRuntime secret resolver to the tunnel
@@ -608,27 +659,6 @@ type resolverKeyProvider struct {
 // Key implements tunnel.KeyProvider.
 func (p resolverKeyProvider) Key(ctx context.Context, ref string) ([]byte, error) {
 	return p.resolve(ctx, ref)
-}
-
-// tunnelConfig maps the gateway tunnel section onto the tunnel package's
-// configuration. The transport sections are the tunnel package's own
-// types, passed through unchanged.
-func (t TunnelConfig) tunnelConfig() tunnel.TunnelConfig {
-	return tunnel.TunnelConfig{
-		Name:      t.Name,
-		Type:      t.Type,
-		Transport: t.Transport,
-		Local:     t.Local,
-		Remote:    t.Remote,
-		TunnelIP:  t.TunnelIP,
-		// TunnelIPv6 must be carried: the manager applies it when present
-		// (tunnel/manager.go), so dropping it here silently produces an
-		// IPv4-only interface from a configuration that asked for
-		// dual-stack. Every tunnel in the shipped X10 template sets it.
-		TunnelIPv6: t.TunnelIPv6,
-		IPsec:      t.IPsec,
-		WireGuard:  t.WireGuard,
-	}
 }
 
 // transitBackend runs the BGP speaker for the transit service. The speaker

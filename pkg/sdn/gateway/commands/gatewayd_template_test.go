@@ -76,6 +76,20 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 		assert.False(t, haSync.Overlaps(p), "%s: the HA sync /31 is reserved", tun.Name)
 	}
 
+	// Return-path symmetry (#606): each tunnel is pinned to the routing table
+	// of the ISP its outer packets are sourced from, and the template's whole
+	// section satisfies the gateway's own validation (an undeclared uplink
+	// would fail it).
+	require.Len(t, g.RoutingUplinks, 2, "one routing table per ISP")
+	assert.Equal(t, "isp-a", g.Tunnels[0].Uplink)
+	assert.Equal(t, "isp-b", g.Tunnels[1].Uplink)
+	assert.Equal(t, "eth0", g.RoutingUplinks[0].Interface)
+	assert.Equal(t, 101, g.RoutingUplinks[0].Table)
+	assert.Equal(t, "198.51.100.1", g.RoutingUplinks[0].GatewayV4)
+	assert.Equal(t, []string{"198.51.100.6/29"}, g.RoutingUplinks[0].Addresses)
+	require.NoError(t, g.RoutingUplinks[0].Validate())
+	require.NoError(t, g.RoutingUplinks[1].Validate())
+
 	// enabledServices turns on transit whenever a `bgp:` section exists,
 	// transit starts the speaker, and the speaker installs its policy set
 	// during Start (the per-family prefix split, #619/#620, keeps that safe).

@@ -425,23 +425,47 @@ the wire. Field reference and the full refusal list:
 
 ## Tunnels to the relays
 
-The transit relays are reached over tunnels declared in `tunnels:`. What the
-gateway's section can express **today** is a plain GRE tunnel: `name`, `type`,
-`local`, `remote`, `tunnel-ip` and `tunnel-ipv6`.
-
-The tunnel package underneath implements more than that — three transports
-(`gre`, `ipsec` wrapping the tunnel in ESP with keys taken from the platform
-key store by reference, and `wireguard` outside FIPS builds), per-uplink
-pinning so a tunnel's outer packets always leave on the ISP they were sourced
-from, and `Rekey` for rotating an `ipsec` tunnel without dropping the session.
-**None of it is reachable from a gatewayd configuration yet**: the gateway
-section carries six fields and drops the rest
-(#606).
-Until that lands, run GRE and pin the relay host routes statically — the
-bring-up runbook
-([`docs/operations/gateway-bringup.md`](../operations/gateway-bringup.md))
-says exactly where. Field reference for the package's own schema:
+The transit relays are reached over tunnels declared in `tunnels:`. The section
+is the tunnel package's own schema, so every key it documents is accepted:
+`name`, `type`, `transport`, `uplink`, `local`, `remote`, `tunnel-ip`,
+`tunnel-ipv6`, `mtu`, `ttl`, `key`, and the `ipsec:` / `wireguard:` sections.
+Field reference:
 [`docs/sdn/tunnel/configuration.md`](../sdn/tunnel/configuration.md).
+
+- **Transport.** `gre` (the default) is what a relay typically speaks. `ipsec`
+  wraps the tunnel in ESP with keys taken from the platform key store by
+  reference (`ipsec.key-ref`, never the key), and needs the secret store below.
+  `wireguard` is refused when the configuration loads in a FIPS build; use
+  `ipsec` there.
+- **Pinning a tunnel to an ISP.** Declare each WAN's routing table under
+  `routing-uplinks:` and name it from the tunnel with `uplink:`, so the
+  tunnel's outer packets always leave on the ISP they were sourced from:
+
+  ```yaml
+  gateway:
+    routing-uplinks:
+      - name: isp-a
+        interface: eth0
+        table: 101                     # 100-252, unique per uplink
+        gateway-v4: 198.51.100.1       # gateway-v4 or gateway-v6 is required
+        addresses: ["198.51.100.6/29"] # traffic sourced from these uses the table
+    tunnels:
+      - name: gre-relay-ispa
+        type: gre
+        uplink: isp-a
+        local: 198.51.100.6
+        remote: 203.0.113.100
+        tunnel-ip: 10.4.128.2/31
+  ```
+
+  `routing-uplinks:` is not `uplinks:`: that one lists the NICs the NAT and
+  load-balancer services bind to. A tunnel that names an uplink
+  `routing-uplinks:` does not declare, or two uplinks sharing a name or table,
+  fail when the configuration loads.
+- **Rekeying.** The tunnel package can rotate an `ipsec` tunnel's keys in place,
+  but the gateway does not call it on a timer yet: `ipsec.rekey-interval` is
+  reported in the telemetry snapshot and nothing acts on it. Rotate by
+  restarting the service until a driver lands.
 
 ## Keys and passwords: where they come from
 
