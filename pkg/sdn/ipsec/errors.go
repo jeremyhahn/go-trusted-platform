@@ -13,7 +13,10 @@
 
 package ipsec
 
-import "errors"
+import (
+	"errors"
+	"net/netip"
+)
 
 var (
 	// ErrRequired is returned when a mandatory field is empty.
@@ -47,7 +50,65 @@ var (
 	// ErrInvalidRate is returned when a rate limit has a burst below its
 	// rate.
 	ErrInvalidRate = errors.New("ipsec: burst must be at least the rate")
+	// ErrNotEnabled is returned when a controller is built from an absent
+	// or disabled section.
+	ErrNotEnabled = errors.New("ipsec: overlay IPsec is not enabled")
+	// ErrMissingDependency is returned when a constructor or Attach is
+	// handed a nil collaborator.
+	ErrMissingDependency = errors.New("ipsec: missing dependency")
+	// ErrNotEvicted is returned when Readmit names a peer that is not
+	// evicted.
+	ErrNotEvicted = errors.New("ipsec: peer is not evicted")
 )
+
+// PeerError reports an operation on one peer that failed.
+type PeerError struct {
+	// Peer is the VTEP address.
+	Peer netip.Addr
+	// Op is the step: "admit", "load-conn", "unload-conn", "drop", ...
+	Op string
+	// Err is the cause.
+	Err error
+}
+
+// Error implements the error interface.
+func (e *PeerError) Error() string {
+	return "ipsec: " + e.Op + " " + e.Peer.String() + ": " + e.Err.Error()
+}
+
+// Unwrap implements errors.Unwrap.
+func (e *PeerError) Unwrap() error { return e.Err }
+
+// OpError reports a charon operation, not tied to one peer, that failed.
+type OpError struct {
+	// Op is the VICI command.
+	Op string
+	// Err is the cause.
+	Err error
+}
+
+// Error implements the error interface.
+func (e *OpError) Error() string { return "ipsec: " + e.Op + ": " + e.Err.Error() }
+
+// Unwrap implements errors.Unwrap.
+func (e *OpError) Unwrap() error { return e.Err }
+
+// IdentityMismatchError reports an IKE_SA whose peer authenticated as an
+// identity other than the address the connection runs to. The SA is
+// terminated.
+type IdentityMismatchError struct {
+	// Conn is the connection name.
+	Conn string
+	// RemoteHost is the address the SA runs to.
+	RemoteHost string
+	// RemoteID is the identity the peer authenticated as.
+	RemoteID string
+}
+
+// Error implements the error interface.
+func (e *IdentityMismatchError) Error() string {
+	return "ipsec: " + e.Conn + ": peer at " + e.RemoteHost + " authenticated as " + e.RemoteID
+}
 
 // ConfigError names the overlay.ipsec field that failed validation.
 type ConfigError struct {

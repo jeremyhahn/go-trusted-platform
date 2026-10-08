@@ -111,6 +111,7 @@ code never touches key material or ESP.
 |-------|---------|------|
 | VICI client | `pkg/sdn/ipsec/vici` | charon's control socket: commands, streamed commands, events |
 | Configuration | `pkg/sdn/ipsec` (`Config`) | the `overlay.ipsec` section and its derived timers |
+| Controller | `pkg/sdn/ipsec` (`Controller`) | the peer set, one charon connection per peer, eviction, the identity check |
 
 ### VICI client
 
@@ -134,6 +135,57 @@ wiped after the send.
   connection, because the stream position is then unknown. A refused
   command, `CMD_UNKNOWN` or `EVENT_UNKNOWN` leaves it usable.
 
+### Peer connections
+
+The controller's peers are the `static-peers` (route reflectors and
+gateways), plus every VTEP that an admitted Type-3 route names, minus the
+evicted. A VTEP is a peer while any VNI's route names it. Before a route
+counts, the controller asks the overlay's VTEP admitter
+(`modes.VTEPAdmitter`, restated as `ipsec.Admitter`). A refusal leaves the
+VTEP out and is returned to the route handler. Routes naming the local
+address, the other address family or a non-unicast address are ignored.
+`Controller.HandleEVPNRoute` is a `bgp.EVPNRouteHandler`.
+
+Each peer gets one connection, `vtep-<address>`, with no wildcard:
+
+| Setting | Value |
+|---------|-------|
+| IKE | v2, `local_addrs`/`remote_addrs` the two VTEP addresses, `mobike=no`, `unique=replace`, `dpd_delay=30s`, `reauth_time` from [Timers](#timers) |
+| Authentication | `pubkey` on both sides; `local.id` is the local address, and `remote.id` is the peer address with `revocation=strict` |
+| CHILD_SA `overlay` | `mode=transport`, `local_ts`/`remote_ts` `dynamic` (every packet between the pair: VXLAN and BGP tcp/179 alike), `start_action`/`dpd_action`/`close_action` `trap`, `replay_window` from the configuration |
+| IKE proposal | `aes256gcm16-prfsha384-ecp384-ke1_mlkem768`; the `fips` build drops `ke1_mlkem768` |
+| ESP proposal | `aes256gcm16-ecp384-ke1_mlkem768-esn` (the key exchange makes every rekey PFS); the `fips` build drops `ke1_mlkem768` |
+
+The trap means a peer's SA is negotiated by the first packet to it. A
+closed or dead SA returns to the trap, never to cleartext. The connection
+names no certificate or key. charon picks the certificate loaded with
+`load-cert` whose SAN is the local address, and the key in the loaded token
+that matches it.
+
+`Attach` hands the controller a VICI session. It unloads any `vtep-`
+connection charon holds for a peer that is gone, then loads every peer's
+connection. Connections without the prefix are left alone. `Detach` drops
+the session when charon goes away. Peers are still tracked while detached,
+and the next `Attach` pushes them, so a charon restart re-converges.
+
+`Evict(peer)` is the eviction primitive, applied in this order:
+
+1. Add a kernel drop for the peer's packets, IKE included. This step holds
+   even when charon is absent.
+2. Unload the peer's connection, which removes its trap.
+3. Force-terminate the peer's IKE_SAs.
+
+The peer stays evicted, whatever routes name it, until `Readmit`. Fleet-wide
+eviction is orchestrated elsewhere.
+
+`HandleEvent` checks every `ike-updown` event for a `vtep-` connection
+coming up: the peer must have authenticated as exactly the address the SA
+runs to. charon already pins `remote.id`; the check holds that pin to
+account. On a mismatch the SA is terminated and an
+`*ipsec.IdentityMismatchError` is returned. The check runs on VICI events
+rather than an updown script, because a script cannot reach the 0600 socket
+and cannot stop an SA.
+
 ### Timers
 
 The VTEP certificate outlives three tolerated control-plane outages
@@ -156,6 +208,10 @@ has been renewed at the same mark.
 | `ConfigError` | `ipsec` | an `overlay.ipsec` field broke a rule; names the field and wraps an `ipsec.Err*` sentinel |
 | `CommandError` | `vici` | charon ran a command and refused it (`success=no`); carries `errmsg` |
 | `ErrUnknownCommand`, `ErrUnknownEvent` | `vici` | charon does not know the command or event; the connection stays usable |
+| `PeerError` | `ipsec` | a step on one peer failed (`admit`, `load-conn`, `unload-conn`, `drop`, `undrop`, `list-sas`, `terminate`, `evict`, `readmit`); names the peer and wraps the cause |
+| `OpError` | `ipsec` | a charon command not tied to one peer failed (`get-conns` during `Attach`) |
+| `IdentityMismatchError` | `ipsec` | an SA came up with a peer identity other than its address; the SA was terminated |
+| `ErrNotEvicted` | `ipsec` | `Readmit` named a peer that is not evicted |
 
 ## See Also
 
