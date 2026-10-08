@@ -243,6 +243,93 @@ func (h *OverlayModeHandler) handlePrefixRoute(ctx context.Context, route *bgp.E
 	return nil
 }
 
+// RevokeVTEP withdraws every route currently installed from the VTEP using the
+// same route handlers that process EVPN withdrawals. Admission revocation uses
+// this path so decap authorization and overlay reachability leave through the
+// normal flow-table planner instead of a second flow implementation.
+func (h *OverlayModeHandler) RevokeVTEP(ctx context.Context, vtep netip.Addr) error {
+	if !vtep.Is4() || vtep.IsUnspecified() {
+		return &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "revoke", Cause: ErrInvalidVTEPIP}
+	}
+
+	h.mu.Lock()
+	if !h.running {
+		h.mu.Unlock()
+		return nil
+	}
+	routes := h.revocationRoutesLocked(vtep)
+	h.mu.Unlock()
+
+	for _, route := range routes {
+		if err := h.handleEVPNRoute(ctx, route); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *OverlayModeHandler) revocationRoutesLocked(vtep netip.Addr) []*bgp.EVPNRouteData {
+	var routes []*bgp.EVPNRouteData
+	for vni, segment := range h.segments {
+		if _, found := slices.BinarySearchFunc(segment.flood, vtep, netip.Addr.Compare); !found {
+			continue
+		}
+		routes = append(routes, &bgp.EVPNRouteData{
+			Type:       bgp.EVPNTypeInclusiveMulticast,
+			IMET:       &bgp.IMETEntry{VNI: vni, VTEPIP: vtep},
+			NextHop:    vtep,
+			IsWithdraw: true,
+		})
+	}
+	for key, host := range h.hosts {
+		if host == nil || host.local() || host.vtep != vtep {
+			continue
+		}
+		seen := make(map[netip.Addr]struct{}, len(host.ips)+len(host.held))
+		for ip, binding := range host.ips {
+			routes = append(routes, macIPWithdrawalRoute(key.vni, vtep, host, ip, binding))
+			seen[ip] = struct{}{}
+		}
+		for ip, binding := range host.held {
+			if _, ok := seen[ip]; ok {
+				continue
+			}
+			routes = append(routes, macIPWithdrawalRoute(key.vni, vtep, host, ip, binding))
+		}
+	}
+	for prefix, old := range h.prefixes {
+		if old == nil {
+			continue
+		}
+		if _, ok := old.routes[vtep]; !ok {
+			continue
+		}
+		routes = append(routes, &bgp.EVPNRouteData{
+			Type:       bgp.EVPNTypeIPPrefix,
+			PrefixData: &bgp.PrefixRoute{Prefix: prefix, VNI: h.config.L3VNI, VTEPIP: vtep},
+			NextHop:    vtep,
+			IsWithdraw: true,
+		})
+	}
+	return routes
+}
+
+func macIPWithdrawalRoute(vni uint32, vtep netip.Addr, host *overlayHost, ip netip.Addr, binding irbBinding) *bgp.EVPNRouteData {
+	return &bgp.EVPNRouteData{
+		Type: bgp.EVPNTypeMACIPAdvertisement,
+		MACIP: &bgp.MACIPEntry{
+			MAC:    host.mac,
+			IP:     ip,
+			VNI:    vni,
+			L3VNI:  binding.l3vni,
+			VTEPIP: vtep,
+		},
+		NextHop:    vtep,
+		RouterMAC:  binding.routerMAC,
+		IsWithdraw: true,
+	}
+}
+
 // routable reports whether a remote binding can be routed to over the
 // IP-VRF l3vni: it names that IP-VRF and the remote router MAC.
 func routable(l3vni uint32, binding irbBinding) bool {

@@ -620,6 +620,34 @@ func TestOverlayModeHandler_PrefixRoute(t *testing.T) {
 	})
 }
 
+func TestOverlayModeHandler_RevokeVTEP(t *testing.T) {
+	t.Run("withdraws flood MAC and prefix routes through the route handlers", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "10.44.0.0/24")))
+		require.NotEmpty(t, f.sw.matching("10.0.0.2"), "precondition: B has installed reachability")
+		require.NotEmpty(t, f.sw.matching("10.0.0.3"), "precondition: C remains as another remote VTEP")
+
+		require.NoError(t, f.handler.RevokeVTEP(context.Background(), ovlVTEPB))
+
+		assert.Empty(t, f.sw.matching("10.0.0.2"), "the revoked VTEP keeps no decap or reachability flows")
+		assert.NotEmpty(t, f.sw.matching("10.0.0.3"), "unrelated VTEPs stay installed")
+		_, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		assert.ErrorIs(t, err, ErrMACNotFound)
+	})
+
+	t.Run("rejects an invalid VTEP address", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+
+		err := f.handler.RevokeVTEP(context.Background(), netip.Addr{})
+
+		vtepErr := assertVTEPFailed(t, err, "revoke")
+		assert.ErrorIs(t, vtepErr, ErrInvalidVTEPIP)
+	})
+}
+
 // TestOverlayModeHandler_EVPNEvents drives the overlay the way a fabric
 // does: routes received from the BGP speaker, through the EVPN manager.
 func TestOverlayModeHandler_EVPNEvents(t *testing.T) {
