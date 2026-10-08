@@ -485,7 +485,11 @@ COVERAGE_DIR                := $(BUILD_DIR)/coverage
 #   v2.13.2 ships a non-rc staticcheck, which satisfies the original unpin
 #   condition, and is the version go-quicbaas pins for the same Go 1.27
 #   adoption — one version across the two repos that share this toolchain.
-GOLANGCI_LINT_VERSION       := v2.13.2
+#
+#   MOVED to v2.14.0 on 2026-10-07 (#744): the CI runner image carries the
+#   upstream latest of every analysis tool and the jobs assert the baked tool
+#   matches this pin. Never pin below the latest release.
+GOLANGCI_LINT_VERSION       := v2.14.0
 
 # golangci-lint v2 has NO default timeout ("Disabled by default"); this is the
 # only wall-clock bound on the run, and 15m was calibrated on an idle box. It is
@@ -3280,7 +3284,7 @@ GOVULN_MODULES := . sdk/go
 #       pkg/sdn/bgp/speaker.go (gobgpServerWrapper.Start -> BgpServer.Serve).
 #
 #       The 2026-09-08 migration to gobgp/v4 v4.9.0 (#556) did NOT close it:
-#       govulncheck v1.7.0 still reports "Fixed in: N/A" for v4.9.0. A claim
+#       govulncheck v1.8.0 still reports "Fixed in: N/A" for v4.9.0. A claim
 #       circulating that v4.3.0 fixed it is false against the database; the
 #       database is the authority here. The speaker's exposure is unchanged:
 #       it peers only with neighbours named in configuration (the iBGP relays),

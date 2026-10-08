@@ -4,7 +4,7 @@
 # Multi-stage build: compile statically, run on scratch with TLS
 # roots baked in from the build stage.
 
-FROM golang:1.26.7-bookworm AS build
+FROM golang:1.27.1-bookworm AS build
 
 WORKDIR /src
 
