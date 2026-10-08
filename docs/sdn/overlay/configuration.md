@@ -35,6 +35,52 @@ sdn:
 | vxlan-port | uint16 | 4789 | UDP port for VXLAN encapsulation |
 | underlay-interface | string | "lo" | Physical interface for VXLAN underlay traffic. The loopback default suits single-node and test environments; production deployments should set the uplink interface (e.g., `eth0`, `bond0`) |
 
+### Overlay IPsec (`sdn.overlay.ipsec`)
+
+Host-to-host IPsec between VTEPs, driven through charon over VICI
+(`pkg/sdn/ipsec`; design in [architecture.md](architecture.md#overlay-ipsec)).
+`sdn.Config.Validate` checks the section; a disabled or absent section is
+not checked.
+
+```yaml
+sdn:
+  overlay:
+    enabled: true
+    ipsec:
+      enabled: true
+      fabric-interface: bond0
+      local-address: 10.20.0.11
+      static-peers: [10.20.0.1, 10.20.0.2]   # route reflectors, gateways
+      token:
+        slot: 0
+        handle: "6970736563"                  # CKA_ID of the IKE key, hex
+```
+
+| Parameter | Type | Default | Rule |
+|-----------|------|---------|------|
+| enabled | bool | false | With it on, the fabric interface carries only IKE, ESP and SA-protected traffic |
+| fabric-interface | string | — | Required; a Linux interface name (1–15 characters) |
+| local-address | string | — | Required; this VTEP's unicast address, the IKE endpoint and certificate identity |
+| static-peers | []string | none | Explicit per-peer connections (route reflectors, gateways); single unicast addresses of the local address's family, no duplicates, never the local address. There is no wildcard peer |
+| vici-socket | string | `/var/run/charon.vici` | Absolute path |
+| token.module | string | `/usr/lib/pkcs11/p11-kit-client.so` | Absolute path; the p11-kit client that forwards to the node-local xkms token |
+| token.slot | uint32 | 0 | Token slot holding the IKE key |
+| token.handle | string | — | Required; the key's CKA_ID in hex |
+| cp-outage-tolerance | duration | 24h | Control-plane outage the overlay rides through on the certificate it holds |
+| cert-lifetime | duration | 3 × cp-outage-tolerance | At least 3 × cp-outage-tolerance. IKE reauthentication runs at half of it |
+| replay-window | uint32 | 1024 | At least 1024 |
+| ike-rate | uint32 | 20 | IKE packets per second per source address on UDP 500/4500 |
+| ike-burst | uint32 | 2 × ike-rate | At least ike-rate |
+
+A failure is an `*ipsec.ConfigError` naming the field
+(`overlay.ipsec.static-peers[1]: ipsec: duplicate peer`) and wrapping one
+of the `ipsec.Err*` sentinels.
+
+ESP in transport mode adds up to 40 bytes to each encapsulated frame
+(8-byte header, 8-byte IV, 16-byte ICV, padding and trailer), so an
+IPsec-protected underlay needs an MTU of at least 9090. Platform switch
+ports run 9216.
+
 ### Runtime-Derived Settings
 
 The daemon fills in the remaining overlay controller settings when it

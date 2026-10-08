@@ -1,0 +1,324 @@
+// Copyright (c) 2026 Jeremy Hahn
+// Copyright (c) 2026 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+// Package ipsec protects the overlay underlay with host-to-host IPsec. It
+// drives strongSwan's charon over VICI: one transport-mode SA per VTEP pair,
+// covering VXLAN and the BGP session between them, trapped on demand from
+// the admitted EVPN Type-3 routes and kept explicit (no wildcard) toward the
+// route reflectors and gateways. Beside charon it owns the fail-closed
+// floor that keeps cleartext off the fabric when charon is down: an
+// nftables table on the fabric interface and a low-priority XFRM block
+// policy.
+//
+// Configuration and behaviour: docs/sdn/overlay/.
+package ipsec
+
+import (
+	"encoding/hex"
+	"net/netip"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/vici"
+)
+
+// Defaults and limits for Config.
+const (
+	// MinReplayWindow is the smallest ESP replay window accepted. VXLAN
+	// flows hash across many sender CPUs, so a narrow window drops
+	// legitimately reordered packets.
+	MinReplayWindow = 1024
+
+	// OutageFactor is how many tolerated control-plane outages a VTEP
+	// certificate must outlive: renewal starts at half the lifetime, so a
+	// node that misses one renewal window still holds a valid certificate
+	// through a full outage.
+	OutageFactor = 3
+
+	// DefaultTokenModule is the PKCS#11 module charon loads: p11-kit's
+	// client, which forwards to the node-local xkms token server (charon
+	// is musl-linked; the xkms module is not).
+	DefaultTokenModule = "/usr/lib/pkcs11/p11-kit-client.so"
+
+	// DefaultCPOutageTolerance is the control-plane outage a node rides
+	// through on the certificate it holds.
+	DefaultCPOutageTolerance = 24 * time.Hour
+
+	// DefaultIKERate limits IKE packets per source address on the fabric,
+	// in packets per second; the burst defaults to twice the rate.
+	DefaultIKERate = 20
+)
+
+// Config is the overlay.ipsec section.
+//
+// YAML form:
+//
+//	overlay:
+//	  ipsec:
+//	    enabled: true
+//	    fabric-interface: bond0
+//	    local-address: 10.20.0.11
+//	    static-peers: [10.20.0.1, 10.20.0.2]
+//	    token:
+//	      handle: 6970736563
+type Config struct {
+	// Enabled turns overlay IPsec on. With it on, the fabric interface
+	// carries nothing but IKE, ESP and traffic already protected by an SA.
+	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+
+	// FabricInterface is the underlay interface the fail-closed filter
+	// guards.
+	FabricInterface string `yaml:"fabric-interface" json:"fabric_interface" mapstructure:"fabric-interface"`
+
+	// LocalAddress is this node's VTEP address: the IKE endpoint and the
+	// identity its certificate carries.
+	LocalAddress string `yaml:"local-address" json:"local_address" mapstructure:"local-address"`
+
+	// StaticPeers are the route reflectors and gateways this node always
+	// holds an explicit connection to, independent of EVPN routes. Every
+	// entry is a single address; there is no wildcard peer.
+	StaticPeers []string `yaml:"static-peers,omitempty" json:"static_peers,omitempty" mapstructure:"static-peers"`
+
+	// VICISocket is charon's control socket. Default vici.DefaultSocket.
+	VICISocket string `yaml:"vici-socket,omitempty" json:"vici_socket,omitempty" mapstructure:"vici-socket"`
+
+	// Token locates the IKE private key in the node-local token.
+	Token TokenConfig `yaml:"token" json:"token" mapstructure:"token"`
+
+	// CertLifetime is the VTEP certificate lifetime. Default and minimum:
+	// OutageFactor × CPOutageTolerance.
+	CertLifetime time.Duration `yaml:"cert-lifetime,omitempty" json:"cert_lifetime,omitempty" mapstructure:"cert-lifetime"`
+
+	// CPOutageTolerance is the control-plane outage the overlay must ride
+	// through without losing a tunnel. Default DefaultCPOutageTolerance.
+	CPOutageTolerance time.Duration `yaml:"cp-outage-tolerance,omitempty" json:"cp_outage_tolerance,omitempty" mapstructure:"cp-outage-tolerance"`
+
+	// ReplayWindow is the ESP anti-replay window in packets. Default and
+	// minimum MinReplayWindow.
+	ReplayWindow uint32 `yaml:"replay-window,omitempty" json:"replay_window,omitempty" mapstructure:"replay-window"`
+
+	// IKERate and IKEBurst limit IKE packets (UDP 500 and 4500) per source
+	// address. Defaults DefaultIKERate and twice the rate.
+	IKERate  uint32 `yaml:"ike-rate,omitempty" json:"ike_rate,omitempty" mapstructure:"ike-rate"`
+	IKEBurst uint32 `yaml:"ike-burst,omitempty" json:"ike_burst,omitempty" mapstructure:"ike-burst"`
+}
+
+// TokenConfig locates the IKE key: a sign-only object in the node-local
+// token, reached through p11-kit.
+type TokenConfig struct {
+	// Module is the PKCS#11 module charon loads. Default
+	// DefaultTokenModule.
+	Module string `yaml:"module,omitempty" json:"module,omitempty" mapstructure:"module"`
+
+	// Slot is the token slot holding the key.
+	Slot uint32 `yaml:"slot" json:"slot" mapstructure:"slot"`
+
+	// Handle is the key's CKA_ID in hex, as the KMS set it when the key
+	// was created.
+	Handle string `yaml:"handle" json:"handle" mapstructure:"handle"`
+}
+
+// Validate checks the section. A disabled or absent section is valid.
+func (c *Config) Validate() error {
+	if c == nil || !c.Enabled {
+		return nil
+	}
+	if err := validateInterface(c.FabricInterface); err != nil {
+		return &ConfigError{Field: "fabric-interface", Err: err}
+	}
+	local, err := parseUnicast(c.LocalAddress)
+	if err != nil {
+		return &ConfigError{Field: "local-address", Err: err}
+	}
+	if err := validatePeers(local, c.StaticPeers); err != nil {
+		return err
+	}
+	if c.VICISocket != "" && !filepath.IsAbs(c.VICISocket) {
+		return &ConfigError{Field: "vici-socket", Err: ErrRelativePath}
+	}
+	if err := c.Token.validate(); err != nil {
+		return err
+	}
+	return c.validateLimits()
+}
+
+func (c *Config) validateLimits() error {
+	if c.CPOutageTolerance < 0 {
+		return &ConfigError{Field: "cp-outage-tolerance", Err: ErrNegativeDuration}
+	}
+	if c.CertLifetime < 0 {
+		return &ConfigError{Field: "cert-lifetime", Err: ErrNegativeDuration}
+	}
+	if c.CertLifetime != 0 && c.CertLifetime < OutageFactor*c.EffectiveCPOutageTolerance() {
+		return &ConfigError{Field: "cert-lifetime", Err: ErrLifetimeTooShort}
+	}
+	if c.ReplayWindow != 0 && c.ReplayWindow < MinReplayWindow {
+		return &ConfigError{Field: "replay-window", Err: ErrReplayWindowTooSmall}
+	}
+	if c.EffectiveIKEBurst() < c.EffectiveIKERate() {
+		return &ConfigError{Field: "ike-burst", Err: ErrInvalidRate}
+	}
+	return nil
+}
+
+func validatePeers(local netip.Addr, peers []string) error {
+	seen := make(map[netip.Addr]struct{}, len(peers)+1)
+	seen[local] = struct{}{}
+	for i, p := range peers {
+		field := "static-peers[" + strconv.Itoa(i) + "]"
+		addr, err := parseUnicast(p)
+		if err != nil {
+			return &ConfigError{Field: field, Err: err}
+		}
+		if addr.Is4() != local.Is4() {
+			return &ConfigError{Field: field, Err: ErrFamilyMismatch}
+		}
+		if _, dup := seen[addr]; dup {
+			return &ConfigError{Field: field, Err: ErrDuplicatePeer}
+		}
+		seen[addr] = struct{}{}
+	}
+	return nil
+}
+
+func (t *TokenConfig) validate() error {
+	if t.Module != "" && !filepath.IsAbs(t.Module) {
+		return &ConfigError{Field: "token.module", Err: ErrRelativePath}
+	}
+	if t.Handle == "" {
+		return &ConfigError{Field: "token.handle", Err: ErrRequired}
+	}
+	if _, err := hex.DecodeString(t.Handle); err != nil {
+		return &ConfigError{Field: "token.handle", Err: ErrInvalidHandle}
+	}
+	return nil
+}
+
+// parseUnicast parses a single unicast address: not a prefix, not
+// unspecified, multicast or link-local, which an SA endpoint cannot be.
+func parseUnicast(s string) (netip.Addr, error) {
+	if s == "" {
+		return netip.Addr{}, ErrRequired
+	}
+	addr, err := netip.ParseAddr(s)
+	if err != nil || addr.Zone() != "" {
+		return netip.Addr{}, ErrInvalidAddress
+	}
+	addr = addr.Unmap()
+	if !addr.IsGlobalUnicast() {
+		return netip.Addr{}, ErrInvalidAddress
+	}
+	return addr, nil
+}
+
+// validateInterface accepts a Linux interface name: 1–15 characters, no
+// whitespace, slash or NUL.
+func validateInterface(name string) error {
+	if name == "" {
+		return ErrRequired
+	}
+	if len(name) > 15 || strings.ContainsAny(name, " \t\n/\x00\"") {
+		return ErrInvalidInterface
+	}
+	return nil
+}
+
+// Local parses the local address.
+func (c *Config) Local() (netip.Addr, error) {
+	addr, err := parseUnicast(c.LocalAddress)
+	if err != nil {
+		return netip.Addr{}, &ConfigError{Field: "local-address", Err: err}
+	}
+	return addr, nil
+}
+
+// Peers parses the static peers.
+func (c *Config) Peers() ([]netip.Addr, error) {
+	out := make([]netip.Addr, 0, len(c.StaticPeers))
+	for i, p := range c.StaticPeers {
+		addr, err := parseUnicast(p)
+		if err != nil {
+			return nil, &ConfigError{Field: "static-peers[" + strconv.Itoa(i) + "]", Err: err}
+		}
+		out = append(out, addr)
+	}
+	return out, nil
+}
+
+// EffectiveVICISocket is the configured socket or vici.DefaultSocket.
+func (c *Config) EffectiveVICISocket() string {
+	if c.VICISocket != "" {
+		return c.VICISocket
+	}
+	return vici.DefaultSocket
+}
+
+// EffectiveTokenModule is the configured module or DefaultTokenModule.
+func (c *Config) EffectiveTokenModule() string {
+	if c.Token.Module != "" {
+		return c.Token.Module
+	}
+	return DefaultTokenModule
+}
+
+// EffectiveCPOutageTolerance is the configured tolerance or
+// DefaultCPOutageTolerance.
+func (c *Config) EffectiveCPOutageTolerance() time.Duration {
+	if c.CPOutageTolerance > 0 {
+		return c.CPOutageTolerance
+	}
+	return DefaultCPOutageTolerance
+}
+
+// EffectiveCertLifetime is the configured lifetime or OutageFactor times
+// the outage tolerance.
+func (c *Config) EffectiveCertLifetime() time.Duration {
+	if c.CertLifetime > 0 {
+		return c.CertLifetime
+	}
+	return OutageFactor * c.EffectiveCPOutageTolerance()
+}
+
+// ReauthTime is the IKE reauthentication interval: half the certificate
+// lifetime, so every SA re-proves its identity — and re-checks revocation
+// — with the certificate renewed at the same mark.
+func (c *Config) ReauthTime() time.Duration {
+	return c.EffectiveCertLifetime() / 2
+}
+
+// EffectiveReplayWindow is the configured window or MinReplayWindow.
+func (c *Config) EffectiveReplayWindow() uint32 {
+	if c.ReplayWindow > 0 {
+		return c.ReplayWindow
+	}
+	return MinReplayWindow
+}
+
+// EffectiveIKERate is the configured per-source IKE rate or DefaultIKERate.
+func (c *Config) EffectiveIKERate() uint32 {
+	if c.IKERate > 0 {
+		return c.IKERate
+	}
+	return DefaultIKERate
+}
+
+// EffectiveIKEBurst is the configured per-source IKE burst or twice the
+// effective rate.
+func (c *Config) EffectiveIKEBurst() uint32 {
+	if c.IKEBurst > 0 {
+		return c.IKEBurst
+	}
+	return 2 * c.EffectiveIKERate()
+}

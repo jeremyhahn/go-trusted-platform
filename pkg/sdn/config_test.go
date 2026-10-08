@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -190,6 +191,29 @@ func TestValidate_ManagementVPN(t *testing.T) {
 	var target sdn.ErrManagementVPNUnknownZone
 	require.ErrorAs(t, c.Validate(), &target)
 	assert.Equal(t, "trusted", target.Zone)
+}
+
+// TestValidate_OverlayIPsec checks that sdn.Config.Validate reaches the
+// overlay.ipsec section: an overlay without one is valid, and a broken one
+// fails the whole configuration.
+func TestValidate_OverlayIPsec(t *testing.T) {
+	c := minValidConfig()
+	c.Overlay = &sdn.OverlayConfig{Enabled: true}
+	require.NoError(t, c.Validate())
+
+	c = minValidConfig()
+	c.Overlay = &sdn.OverlayConfig{Enabled: true, IPsec: &ipsec.Config{
+		Enabled:         true,
+		FabricInterface: "bond0",
+		LocalAddress:    "10.20.0.11",
+		Token:           ipsec.TokenConfig{Handle: "01"},
+	}}
+	require.NoError(t, c.Validate())
+
+	c.Overlay.IPsec.LocalAddress = ""
+	var target *ipsec.ConfigError
+	require.ErrorAs(t, c.Validate(), &target)
+	assert.Equal(t, "local-address", target.Field)
 }
 
 func TestResolvedZonesAndPlan_Nil(t *testing.T) {
