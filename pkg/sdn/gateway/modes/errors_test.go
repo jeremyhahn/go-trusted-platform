@@ -105,14 +105,21 @@ func TestSentinelErrors_OverlayMode(t *testing.T) {
 		{"ErrOVSClientNil", ErrOVSClientNil, "OVS client is nil"},
 		{"ErrOpenFlowClientNil", ErrOpenFlowClientNil, "OpenFlow client is nil"},
 		{"ErrVNIOutOfRange", ErrVNIOutOfRange, "VNI must be between 1 and 16777215"},
-		{"ErrVLANOutOfRange", ErrVLANOutOfRange, "VLAN ID must be between 0 and 4094"},
+		{"ErrVLANOutOfRange", ErrVLANOutOfRange, "VLAN ID must be between 1 and 4094"},
 		{"ErrVNIAlreadyExists", ErrVNIAlreadyExists, "VNI already exists"},
 		{"ErrVNINotFound", ErrVNINotFound, "VNI not found"},
 		{"ErrMACNil", ErrMACNil, "MAC address is nil"},
 		{"ErrMACInvalid", ErrMACInvalid, "MAC address must be 6 bytes"},
 		{"ErrMACNotFound", ErrMACNotFound, "MAC address not found"},
-		{"ErrARPPacketNil", ErrARPPacketNil, "ARP packet is nil"},
 		{"ErrInvalidVTEPIP", ErrInvalidVTEPIP, "invalid VTEP IP address"},
+		{"ErrAccessPortEmpty", ErrAccessPortEmpty, "access port is empty"},
+		{"ErrAccessPortUnresolved", ErrAccessPortUnresolved, "access port has no OpenFlow port number"},
+		{"ErrVLANInUse", ErrVLANInUse, "VLAN already carries another VNI"},
+		{"ErrAnycastGatewayIncomplete", ErrAnycastGatewayIncomplete, "anycast gateway needs both an IPv4 address and a MAC"},
+		{"ErrAnycastGatewayRequired", ErrAnycastGatewayRequired, "an L3VNI needs the anycast gateway to route into it"},
+		{"ErrRouterMACRequired", ErrRouterMACRequired, "an L3VNI needs the EVPN router MAC for symmetric IRB"},
+		{"ErrFlowNotTracked", ErrFlowNotTracked, "overlay flow is not installed"},
+		{"ErrAdmitterNil", ErrAdmitterNil, "EVPN needs a VTEP admitter to vet the VTEPs its routes name"},
 	}
 
 	for _, tt := range tests {
@@ -460,6 +467,30 @@ func TestContextualErrors_OverlayMode(t *testing.T) {
 		}
 		if err.Unwrap() != cause {
 			t.Error("Unwrap() should return cause")
+		}
+	})
+
+	t.Run("ErrFlowResyncFailed", func(t *testing.T) {
+		cause := errors.New("openflow error")
+		err := &ErrFlowResyncFailed{Cause: cause}
+		if got := err.Error(); got != "restoring the overlay flows after a failed change failed: openflow error" {
+			t.Errorf("Error() = %q", got)
+		}
+		if err.Unwrap() != cause {
+			t.Error("Unwrap() should return cause")
+		}
+	})
+
+	t.Run("ErrBindingConflict", func(t *testing.T) {
+		err := &ErrBindingConflict{
+			VNI:   10100,
+			MAC:   net.HardwareAddr{0x02, 0, 0, 0, 0x02, 0x20},
+			IP:    netip.MustParseAddr("10.1.0.1"),
+			Owner: "anycast gateway IP",
+		}
+		want := "remote binding 02:00:00:00:02:20 10.1.0.1 on VNI 10100 conflicts with the anycast gateway IP"
+		if got := err.Error(); got != want {
+			t.Errorf("Error() = %q", got)
 		}
 	})
 }

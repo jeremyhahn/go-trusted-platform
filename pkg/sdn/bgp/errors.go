@@ -579,6 +579,38 @@ func (e ErrUnsupportedRouteType) Error() string {
 	return fmt.Sprintf("unsupported EVPN route type: %s", e.RouteType)
 }
 
+// ErrTreatAsWithdraw reports an EVPN route whose NLRI parsed but whose
+// attributes are unusable. Per RFC 7606 the route is handled as a
+// withdrawal of that NLRI rather than resetting the session.
+type ErrTreatAsWithdraw struct {
+	RouteType EVPNRouteType
+	Reason    string
+}
+
+func (e ErrTreatAsWithdraw) Error() string {
+	return fmt.Sprintf("EVPN %s route treated as withdraw: %s", e.RouteType, e.Reason)
+}
+
+// ErrRouteDistinguishersExhausted is returned when an originator has
+// assigned all 65535 Type-1 RD numbers.
+type ErrRouteDistinguishersExhausted struct {
+	Admin netip.Addr
+}
+
+func (e ErrRouteDistinguishersExhausted) Error() string {
+	return fmt.Sprintf("route distinguishers of %s exhausted", e.Admin)
+}
+
+// ErrVNINotJoined is returned for an operation on a VNI this VTEP has not
+// joined.
+type ErrVNINotJoined struct {
+	VNI uint32
+}
+
+func (e ErrVNINotJoined) Error() string {
+	return fmt.Sprintf("VNI %d is not joined", e.VNI)
+}
+
 // ErrNLRITooShort is returned when NLRI data is too short.
 type ErrNLRITooShort struct {
 	Expected int

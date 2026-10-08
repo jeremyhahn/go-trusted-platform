@@ -169,11 +169,38 @@ var (
 	// ErrMACNotFound is returned when MAC address is not found.
 	ErrMACNotFound = &errMACNotFound{}
 
-	// ErrARPPacketNil is returned when ARP packet is nil.
-	ErrARPPacketNil = &errARPPacketNil{}
-
 	// ErrInvalidVTEPIP is returned when VTEP IP is invalid.
 	ErrInvalidVTEPIP = &errInvalidVTEPIP{}
+
+	// ErrAccessPortEmpty is returned when the overlay has no access port.
+	ErrAccessPortEmpty = &errAccessPortEmpty{}
+
+	// ErrAccessPortUnresolved is returned when the access port has no
+	// OpenFlow port number on the bridge.
+	ErrAccessPortUnresolved = &errAccessPortUnresolved{}
+
+	// ErrVLANInUse is returned when a VLAN already carries another VNI.
+	ErrVLANInUse = &errVLANInUse{}
+
+	// ErrAnycastGatewayIncomplete is returned when the anycast gateway
+	// has only one of its IPv4 address and MAC.
+	ErrAnycastGatewayIncomplete = &errAnycastGatewayIncomplete{}
+
+	// ErrAnycastGatewayRequired is returned when an L3VNI is configured
+	// without the anycast gateway that routes into it.
+	ErrAnycastGatewayRequired = &errAnycastGatewayRequired{}
+
+	// ErrRouterMACRequired is returned when an L3VNI is configured
+	// without the EVPN router MAC symmetric IRB addresses.
+	ErrRouterMACRequired = &errRouterMACRequired{}
+
+	// ErrAdmitterNil is returned when the overlay runs EVPN without a
+	// VTEP admitter.
+	ErrAdmitterNil = &errAdmitterNil{}
+
+	// ErrFlowNotTracked is returned when the overlay releases a flow it
+	// never installed.
+	ErrFlowNotTracked = &errFlowNotTracked{}
 )
 
 // Transit mode sentinel error types.
@@ -362,7 +389,7 @@ func (e *errVNIOutOfRange) Error() string { return "VNI must be between 1 and 16
 
 type errVLANOutOfRange struct{}
 
-func (e *errVLANOutOfRange) Error() string { return "VLAN ID must be between 0 and 4094" }
+func (e *errVLANOutOfRange) Error() string { return "VLAN ID must be between 1 and 4094" }
 
 type errVNIAlreadyExists struct{}
 
@@ -384,13 +411,49 @@ type errMACNotFound struct{}
 
 func (e *errMACNotFound) Error() string { return "MAC address not found" }
 
-type errARPPacketNil struct{}
-
-func (e *errARPPacketNil) Error() string { return "ARP packet is nil" }
-
 type errInvalidVTEPIP struct{}
 
 func (e *errInvalidVTEPIP) Error() string { return "invalid VTEP IP address" }
+
+type errAccessPortEmpty struct{}
+
+func (e *errAccessPortEmpty) Error() string { return "access port is empty" }
+
+type errAccessPortUnresolved struct{}
+
+func (e *errAccessPortUnresolved) Error() string { return "access port has no OpenFlow port number" }
+
+type errVLANInUse struct{}
+
+func (e *errVLANInUse) Error() string { return "VLAN already carries another VNI" }
+
+type errAnycastGatewayIncomplete struct{}
+
+func (e *errAnycastGatewayIncomplete) Error() string {
+	return "anycast gateway needs both an IPv4 address and a MAC"
+}
+
+type errAnycastGatewayRequired struct{}
+
+func (e *errAnycastGatewayRequired) Error() string {
+	return "an L3VNI needs the anycast gateway to route into it"
+}
+
+type errRouterMACRequired struct{}
+
+func (e *errRouterMACRequired) Error() string {
+	return "an L3VNI needs the EVPN router MAC for symmetric IRB"
+}
+
+type errAdmitterNil struct{}
+
+func (e *errAdmitterNil) Error() string {
+	return "EVPN needs a VTEP admitter to vet the VTEPs its routes name"
+}
+
+type errFlowNotTracked struct{}
+
+func (e *errFlowNotTracked) Error() string { return "overlay flow is not installed" }
 
 // Transit mode contextual error types.
 
@@ -772,4 +835,33 @@ func (e *ErrFlowOperationFailed) Error() string {
 
 func (e *ErrFlowOperationFailed) Unwrap() error {
 	return e.Cause
+}
+
+// ErrFlowResyncFailed reports that the switch refused the flow mods that
+// undo a failed change, so it may hold flows the overlay does not track,
+// or refused the flush-and-rebuild that replaces them on the next change.
+type ErrFlowResyncFailed struct {
+	Cause error
+}
+
+func (e *ErrFlowResyncFailed) Error() string {
+	return fmt.Sprintf("restoring the overlay flows after a failed change failed: %v", e.Cause)
+}
+
+func (e *ErrFlowResyncFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrBindingConflict reports a remote MAC/IP binding refused because it
+// claims an address this VTEP answers for: the anycast gateway's or a
+// local host's. Owner names which.
+type ErrBindingConflict struct {
+	VNI   uint32
+	MAC   net.HardwareAddr
+	IP    netip.Addr
+	Owner string
+}
+
+func (e *ErrBindingConflict) Error() string {
+	return fmt.Sprintf("remote binding %s %s on VNI %d conflicts with the %s", e.MAC, e.IP, e.VNI, e.Owner)
 }

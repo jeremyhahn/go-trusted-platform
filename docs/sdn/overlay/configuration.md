@@ -44,7 +44,7 @@ builds the configuration:
 |---------|--------|---------|
 | VTEP IP | Node public IPv4 | 127.0.0.1 when unset (test / loopback nodes) |
 | Bridge name | Applied default | `br-int`, the workload integration bridge. Never `sdn.ovs.bridge` (`br-fabric`, which carries the physical trunk) |
-| Underlay MTU | Applied default | 9000 |
+| Underlay MTU | Applied default | 9216, the platform switch-port MTU (`netplan.MTU`) |
 | Environment | `sdn.environment.id` | none: without an environment every VNI must be explicit |
 | State backend | Applied default | `memory` (or `quicbaas` for cluster-shared state) |
 | Health check interval | Applied default | 30s |
@@ -116,7 +116,7 @@ func WithStateManager(state *StateManager) Option
 | NodeID | string | Unique identifier for this node (required) |
 | VTEPIP | netip.Addr | This node's VTEP IP address (required) |
 | UnderlayInterface | string | Physical interface for underlay traffic (required) |
-| UnderlayMTU | int | Underlay MTU; must be >= 1550 |
+| UnderlayMTU | int | Underlay MTU; must be >= 9050 (`vxlan.MinimumUnderlayMTU`) |
 | VXLANPort | uint16 | UDP port for VXLAN (default 4789) |
 | Environment | uint16 | Environment number E. A zero VNI in AddVNI is derived as E·100000+n with n the lowest free overlay network number (`netplan.VNI`); an explicit VNI must lie in E's block |
 | BridgeName | string | OVS integration bridge for overlay traffic (`br-int`) |
@@ -127,6 +127,11 @@ func WithStateManager(state *StateManager) Option
 | HealthCheckInterval | time.Duration | Health check interval |
 | MACExpiration | time.Duration | Expiration for learned remote MACs |
 | EnableEVPN | bool | Enable EVPN MAC/IP advertisement and learning |
+
+With `EnableEVPN` and an EVPN manager (`WithEVPNManager`), `AddVNI` with
+`VNIConfig.AdvertiseIMET` joins the VNI's EVI, which originates its Type-3
+route, and `RemoveVNI` leaves it again (see [../bgp/evpn.md](../bgp/evpn.md)).
+A failed join is logged; the VNI is still added, with `IMETAdvertised` false.
 
 ## Multi-Host Deployment
 
@@ -144,10 +149,11 @@ sdn:
 
 ## MTU Planning
 
-VXLAN encapsulation adds 50 bytes of overhead, so the underlay MTU
-must be at least 1550. With a standard 1500-byte underlay, configure
-workload (VM) interfaces for 1450; with jumbo frames (9000) the
-effective workload MTU is 8950.
+The overlay MTU is fixed at 9000 bytes (`vxlan.OverlayMTU`): workload
+(VM) interfaces use 9000. VXLAN encapsulation adds 50 bytes, so the
+underlay MTU must be at least 9050 (`vxlan.MinimumUnderlayMTU`); a
+smaller one is refused at startup rather than fragmenting. Platform
+switch ports run 9216.
 
 ### MTU Configuration Checklist
 
@@ -159,11 +165,11 @@ effective workload MTU is 8950.
 # Verify underlay MTU
 ip link show eth0 | grep mtu
 
-# Test end-to-end MTU (jumbo frames)
-ping -M do -s 8972 10.0.0.2  # 8972 + 28 = 9000
+# Test the underlay carries an encapsulated 9000-byte frame
+ping -M do -s 9022 10.0.0.2  # 9022 + 28 = 9050
 
-# Test VXLAN path
-ping -M do -s 8922 <vm-on-remote-host>  # 8922 + 28 + 50 = 9000
+# Test the VXLAN path at the overlay MTU
+ping -M do -s 8972 <vm-on-remote-host>  # 8972 + 28 = 9000
 ```
 
 ## Validation
@@ -191,7 +197,7 @@ starts:
 | Node ID set | NodeID must be non-empty |
 | VTEP IP valid | VTEPIP must be a valid, specified address |
 | Underlay interface set | UnderlayInterface must be non-empty |
-| Underlay MTU | MTU must be >= 1550 (minimum for VXLAN) |
+| Underlay MTU | MTU must be >= 9050 (the 9000-byte overlay MTU plus encapsulation) |
 | VXLAN port | Port must be non-zero |
 | Bridge name set | BridgeName must be non-empty |
 
@@ -200,7 +206,7 @@ starts:
 | Issue | Check | Fix |
 |-------|-------|-----|
 | VTEP not reachable | `ip addr show` | Ensure the node's public IPv4 is bound to the underlay interface |
-| MTU too small | `ip link show eth0` | Raise the underlay interface MTU to >= 1550 |
+| MTU too small | `ip link show eth0` | Raise the underlay interface MTU to >= 9050 |
 | OVS not found | `ovs-vsctl show` | Install and start Open vSwitch; check `sdn.ovs.socket` |
 
 ## See Also

@@ -768,33 +768,6 @@ func TestStateManager_DAOAccessors(t *testing.T) {
 	assert.NotNil(t, sm.VLANDAO())
 }
 
-// VXLAN DAO accessor tests
-
-func TestStateManager_VXLANDAOAccessors(t *testing.T) {
-	sm, mock := setupMockStateManager(t)
-	defer mock.Stop(context.Background())
-
-	t.Run("VTEPs accessor returns non-nil DAO", func(t *testing.T) {
-		vtepDAO := sm.VTEPs()
-		assert.NotNil(t, vtepDAO)
-	})
-
-	t.Run("Tunnels accessor returns non-nil DAO", func(t *testing.T) {
-		tunnelDAO := sm.Tunnels()
-		assert.NotNil(t, tunnelDAO)
-	})
-
-	t.Run("VNIMappings accessor returns non-nil DAO", func(t *testing.T) {
-		vniMappingDAO := sm.VNIMappings()
-		assert.NotNil(t, vniMappingDAO)
-	})
-
-	t.Run("RemoteMACs accessor returns non-nil DAO", func(t *testing.T) {
-		remoteMACDAO := sm.RemoteMACs()
-		assert.NotNil(t, remoteMACDAO)
-	})
-}
-
 // Interface compliance test
 
 func TestStateManager_ImplementsInterface(t *testing.T) {

@@ -30,7 +30,7 @@ func newEnvController(t *testing.T, env uint16) *Controller {
 		NodeID:            "test-node-env",
 		VTEPIP:            netip.MustParseAddr("10.4.1.20"),
 		UnderlayInterface: "eth0",
-		UnderlayMTU:       9000,
+		UnderlayMTU:       9216,
 		VXLANPort:         4789,
 		BridgeName:        DefaultBridgeName,
 		Environment:       env,
@@ -43,7 +43,9 @@ func newEnvController(t *testing.T, env uint16) *Controller {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = c.Stop(context.Background())
+		if err := c.Stop(context.Background()); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
 	})
 	return c
 }

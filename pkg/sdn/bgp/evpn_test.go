@@ -15,10 +15,12 @@ package bgp
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -27,1924 +29,1153 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockSpeaker implements the Speaker interface for testing.
-type mockSpeaker struct {
-	mu          sync.Mutex
-	paths       map[string][]byte
-	addErr      error
-	deleteErr   error
-	localASN    uint32
-	routerID    netip.Addr
-	addCalls    int
-	deleteCalls int
-}
-
-func newMockSpeaker() *mockSpeaker {
-	return &mockSpeaker{
-		paths:    make(map[string][]byte),
-		localASN: 65000,
-		routerID: netip.MustParseAddr("10.0.0.1"),
-	}
-}
-
-func (m *mockSpeaker) AddEVPNPath(ctx context.Context, nlri []byte, attrs []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.addCalls++
-	if m.addErr != nil {
-		return m.addErr
-	}
-	key := string(nlri)
-	m.paths[key] = attrs
-	return nil
-}
-
-func (m *mockSpeaker) DeleteEVPNPath(ctx context.Context, nlri []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.deleteCalls++
-	if m.deleteErr != nil {
-		return m.deleteErr
-	}
-	key := string(nlri)
-	delete(m.paths, key)
-	return nil
-}
-
-func (m *mockSpeaker) LocalASN() uint32 {
-	return m.localASN
-}
-
-func (m *mockSpeaker) RouterID() netip.Addr {
-	return m.routerID
-}
-
-func (m *mockSpeaker) GetAddCalls() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.addCalls
-}
-
-func (m *mockSpeaker) GetDeleteCalls() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.deleteCalls
-}
-
-func (m *mockSpeaker) GetPathCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.paths)
-}
-
+// testLogger only reports errors, keeping test output small.
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
-func testConfig(speaker EVPNSpeaker) *EVPNManagerConfig {
+var errSpeakerFailed = errors.New("speaker failed")
+
+// recordingSpeaker is an in-memory EVPNSpeaker: it records what the
+// manager originates and withdraws, and feeds it events.
+type recordingSpeaker struct {
+	mu        sync.Mutex
+	added     []*EVPNRouteData
+	deleted   []*EVPNRouteData
+	addErr    error
+	deleteErr error
+	watchErr  error
+	events    chan *Event
+}
+
+func newRecordingSpeaker() *recordingSpeaker {
+	return &recordingSpeaker{events: make(chan *Event)}
+}
+
+func (s *recordingSpeaker) AddPath(_ context.Context, path *Path) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.addErr != nil {
+		return s.addErr
+	}
+	s.added = append(s.added, path.EVPN.Clone())
+	return nil
+}
+
+func (s *recordingSpeaker) DeletePath(_ context.Context, path *Path) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	s.deleted = append(s.deleted, path.EVPN.Clone())
+	return nil
+}
+
+func (s *recordingSpeaker) WatchEvent(context.Context, ...WatchOption) (<-chan *Event, error) {
+	if s.watchErr != nil {
+		return nil, s.watchErr
+	}
+	return s.events, nil
+}
+
+func (s *recordingSpeaker) fail(add, del error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.addErr, s.deleteErr = add, del
+}
+
+// lastAdded returns the last route originated.
+func (s *recordingSpeaker) lastAdded(t *testing.T) *EVPNRouteData {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	require.NotEmpty(t, s.added)
+	return s.added[len(s.added)-1]
+}
+
+func (s *recordingSpeaker) deletedRoutes() []*EVPNRouteData {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*EVPNRouteData(nil), s.deleted...)
+}
+
+func (s *recordingSpeaker) addedCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.added)
+}
+
+// testClock is a clock the test moves.
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *testClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// notifications records what the manager tells its handlers.
+type notifications struct {
+	mu     sync.Mutex
+	routes []*EVPNRouteData
+}
+
+func (n *notifications) handle(_ context.Context, route *EVPNRouteData) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.routes = append(n.routes, route)
+	return nil
+}
+
+// take returns and clears the notifications.
+func (n *notifications) take() []*EVPNRouteData {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	routes := n.routes
+	n.routes = nil
+	return routes
+}
+
+var testRouterMAC = net.HardwareAddr{0x02, 0x00, 0x5e, 0x00, 0x01, 0x0b}
+
+// evpnTestConfig is VTEP A (192.0.2.11) in overlay ASN 65000.
+func evpnTestConfig(speaker EVPNSpeaker, clock *testClock) *EVPNManagerConfig {
 	return &EVPNManagerConfig{
-		Speaker:   speaker,
-		Logger:    testLogger(),
-		LocalVTEP: netip.MustParseAddr("10.0.0.1"),
-		RD: RouteDistinguisher{
-			Type:           0,
-			Administrator:  65000,
-			AssignedNumber: 1,
-		},
-		ImportRT: []RouteTarget{
-			{Type: 0, GlobalAdmin: 65000, LocalAdmin: 100},
-		},
-		ExportRT: []RouteTarget{
-			{Type: 0, GlobalAdmin: 65000, LocalAdmin: 100},
-		},
+		Speaker:    speaker,
+		Logger:     testLogger(),
+		LocalVTEP:  vtepA,
+		OverlayASN: 65000,
+		RouterMAC:  testRouterMAC,
+		Mobility:   MobilityConfig{MaxMoves: 2, Window: time.Minute, Hold: time.Minute},
+		Clock:      clock.Now,
 	}
 }
 
-// --- EVPNManager Tests ---
+type evpnFixture struct {
+	manager  *EVPNManager
+	speaker  *recordingSpeaker
+	clock    *testClock
+	notified *notifications
+}
+
+func newEVPNFixture(t *testing.T) *evpnFixture {
+	t.Helper()
+	f := &evpnFixture{
+		speaker:  newRecordingSpeaker(),
+		clock:    &testClock{now: time.Unix(1_700_000_000, 0)},
+		notified: &notifications{},
+	}
+	manager, err := NewEVPNManager(evpnTestConfig(f.speaker, f.clock))
+	require.NoError(t, err)
+	manager.RegisterHandler(f.notified.handle)
+	f.manager = manager
+	return f
+}
+
+// receive hands the manager a received route, as its event loop would.
+func (f *evpnFixture) receive(route *EVPNRouteData) {
+	f.manager.process(context.Background(), route)
+}
+
+// withdrawn is route as withdrawn.
+func withdrawn(route *EVPNRouteData) *EVPNRouteData {
+	w := route.Clone()
+	w.IsWithdraw = true
+	return w
+}
+
+// remoteIMET is a Type-3 route of vtep on the codec L2VNI.
+func remoteIMET(vtep netip.Addr, rdIndex uint16) *EVPNRouteData {
+	return &EVPNRouteData{
+		Type:         EVPNTypeInclusiveMulticast,
+		RD:           RouteDistinguisher{Admin: vtep, Index: rdIndex},
+		RouteTargets: []RouteTarget{{AS: 65000, Value: 1<<28 | codecL2VNI}},
+		IMET:         &IMETEntry{VNI: codecL2VNI, VTEPIP: vtep},
+		NextHop:      vtep,
+	}
+}
+
+func TestEVPNManagerConfig_Validate(t *testing.T) {
+	clock := &testClock{}
+	assert.NoError(t, evpnTestConfig(newRecordingSpeaker(), clock).Validate())
+
+	for name, tc := range map[string]struct {
+		mutate func(c *EVPNManagerConfig)
+		want   any
+	}{
+		"no speaker":       {func(c *EVPNManagerConfig) { c.Speaker = nil }, &ErrSpeakerNil},
+		"no logger":        {func(c *EVPNManagerConfig) { c.Logger = nil }, &ErrLoggerNil},
+		"no VTEP":          {func(c *EVPNManagerConfig) { c.LocalVTEP = netip.Addr{} }, &ErrInvalidIP{}},
+		"IPv6 VTEP":        {func(c *EVPNManagerConfig) { c.LocalVTEP = netip.MustParseAddr("2001:db8::1") }, &ErrInvalidIP{}},
+		"unspecified VTEP": {func(c *EVPNManagerConfig) { c.LocalVTEP = netip.IPv4Unspecified() }, &ErrInvalidIP{}},
+		"public ASN":       {func(c *EVPNManagerConfig) { c.OverlayASN = 64001 }, &ErrRouteTargetInvalid{}},
+		"domain ID > 15":   {func(c *EVPNManagerConfig) { c.DomainID = 16 }, nil},
+		"group router MAC": {func(c *EVPNManagerConfig) { c.RouterMAC = net.HardwareAddr{0x01, 0, 0, 0, 0, 1} }, &ErrInvalidMAC{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := evpnTestConfig(newRecordingSpeaker(), clock)
+			tc.mutate(cfg)
+			err := cfg.Validate()
+			require.Error(t, err)
+			if tc.want != nil {
+				assert.ErrorAs(t, err, tc.want)
+			}
+		})
+	}
+
+	t.Run("no router MAC is valid without IRB", func(t *testing.T) {
+		cfg := evpnTestConfig(newRecordingSpeaker(), clock)
+		cfg.RouterMAC = nil
+		assert.NoError(t, cfg.Validate())
+	})
+}
 
 func TestNewEVPNManager(t *testing.T) {
-	t.Run("valid config", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
+	_, err := NewEVPNManager(nil)
+	var nilEntry ErrEntryNil
+	require.ErrorAs(t, err, &nilEntry)
 
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-		assert.NotNil(t, manager)
-		assert.Equal(t, config.LocalVTEP, manager.localVTEP)
-	})
+	cfg := evpnTestConfig(newRecordingSpeaker(), &testClock{})
+	cfg.Logger = nil
+	_, err = NewEVPNManager(cfg)
+	require.ErrorIs(t, err, ErrLoggerNil)
 
-	t.Run("nil config", func(t *testing.T) {
-		manager, err := NewEVPNManager(nil)
-		assert.Error(t, err)
-		assert.Nil(t, manager)
-		assert.IsType(t, ErrEntryNil{}, err)
-	})
-
-	t.Run("nil speaker", func(t *testing.T) {
-		config := testConfig(nil)
-		config.Speaker = nil
-
-		manager, err := NewEVPNManager(config)
-		assert.Error(t, err)
-		assert.Nil(t, manager)
-		assert.ErrorIs(t, err, ErrSpeakerNil)
-	})
-
-	t.Run("nil logger", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		config.Logger = nil
-
-		manager, err := NewEVPNManager(config)
-		assert.Error(t, err)
-		assert.Nil(t, manager)
-		assert.ErrorIs(t, err, ErrLoggerNil)
-	})
-
-	t.Run("invalid local VTEP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		config.LocalVTEP = netip.Addr{}
-
-		manager, err := NewEVPNManager(config)
-		assert.Error(t, err)
-		assert.Nil(t, manager)
-		assert.IsType(t, ErrInvalidIP{}, err)
-	})
-
-	t.Run("unspecified local VTEP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		config.LocalVTEP = netip.MustParseAddr("0.0.0.0")
-
-		manager, err := NewEVPNManager(config)
-		assert.Error(t, err)
-		assert.Nil(t, manager)
-	})
+	cfg = evpnTestConfig(newRecordingSpeaker(), &testClock{})
+	cfg.RouterMAC = cloneMAC(testRouterMAC)
+	cfg.Mobility = MobilityConfig{}
+	cfg.Clock = nil
+	manager, err := NewEVPNManager(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, DefaultMobilityMaxMoves, manager.config.Mobility.MaxMoves)
+	assert.NotNil(t, manager.clock)
+	cfg.RouterMAC[0] = 0x06
+	assert.Equal(t, testRouterMAC[0], manager.config.RouterMAC[0], "the manager keeps its own router MAC")
 }
 
 func TestEVPNManager_StartStop(t *testing.T) {
-	t.Run("start and stop", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	ctx := context.Background()
 
-		ctx := context.Background()
+	t.Run("events reach the handlers until Stop", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		seen := make(chan *EVPNRouteData, 1)
+		f.manager.RegisterHandler(func(_ context.Context, route *EVPNRouteData) error {
+			seen <- route
+			return nil
+		})
+		f.manager.RegisterHandler(nil)
 
-		err = manager.Start(ctx)
-		assert.NoError(t, err)
-		assert.True(t, manager.started.Load())
+		require.NoError(t, f.manager.Start(ctx))
+		assert.ErrorIs(t, f.manager.Start(ctx), ErrManagerAlreadyStarted)
 
-		err = manager.Stop(ctx)
-		assert.NoError(t, err)
-		assert.False(t, manager.started.Load())
+		f.speaker.events <- nil
+		f.speaker.events <- &Event{Type: EventPathReceived}
+		f.speaker.events <- &Event{Type: EventPathReceived, Path: &Path{Family: AFamilyEVPN, EVPN: remoteIMET(vtepB, 1)}}
+		select {
+		case route := <-seen:
+			assert.Equal(t, vtepB, route.IMET.VTEPIP)
+		case <-time.After(5 * time.Second):
+			t.Fatal("the event was not processed")
+		}
+
+		require.NoError(t, f.manager.Stop(ctx))
+		assert.ErrorIs(t, f.manager.Stop(ctx), ErrManagerNotStarted)
 	})
 
-	t.Run("double start", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		err = manager.Start(ctx)
-		assert.NoError(t, err)
-
-		err = manager.Start(ctx)
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrManagerAlreadyStarted)
-
-		_ = manager.Stop(ctx)
+	t.Run("the watch ending ends the loop", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.Start(ctx))
+		close(f.speaker.events)
+		<-f.manager.done
+		require.NoError(t, f.manager.Stop(ctx))
 	})
 
-	t.Run("stop without start", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		err = manager.Stop(ctx)
-		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrManagerNotStarted)
+	t.Run("a failed watch leaves the manager stopped", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		f.speaker.watchErr = errSpeakerFailed
+		require.ErrorIs(t, f.manager.Start(ctx), errSpeakerFailed)
+		assert.ErrorIs(t, f.manager.Stop(ctx), ErrManagerNotStarted)
 	})
 }
 
-// --- Type-2 MAC/IP Advertisement Tests ---
+func TestEVPNManager_JoinVNI(t *testing.T) {
+	ctx := context.Background()
 
-func TestEVPNManager_AdvertiseMAC(t *testing.T) {
-	t.Run("valid MAC advertisement", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("advertises the EVI's Type-3 route", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		imet := f.speaker.lastAdded(t)
+		assert.Equal(t, EVPNTypeInclusiveMulticast, imet.Type)
+		assert.Equal(t, "192.0.2.11:1", imet.RD.String())
+		assert.Equal(t, []RouteTarget{mustRT(t, codecL2VNI)}, imet.RouteTargets)
+		assert.Equal(t, IMETEntry{VNI: codecL2VNI, VTEPIP: vtepA}, *imet.IMET)
+		assert.Equal(t, vtepA, imet.NextHop)
 
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			VNI: 100,
-		}
-
-		err = manager.AdvertiseMAC(ctx, entry)
-		assert.NoError(t, err)
-		assert.Equal(t, 1, speaker.GetAddCalls())
+		rd, ok := f.manager.RouteDistinguisher(codecL2VNI)
+		assert.True(t, ok)
+		assert.Equal(t, imet.RD, rd)
 	})
 
-	t.Run("nil entry", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		err = manager.AdvertiseMAC(ctx, nil)
-		assert.Error(t, err)
-		assert.IsType(t, ErrEntryNil{}, err)
+	t.Run("rejoining is idempotent; another L3VNI conflicts", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		assert.Equal(t, 1, f.speaker.addedCount())
+		var invalid ErrInvalidVNI
+		assert.ErrorAs(t, f.manager.JoinVNI(ctx, codecL2VNI, 0), &invalid)
 	})
 
-	t.Run("invalid VNI", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
+	t.Run("invalid input", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		var invalid ErrInvalidVNI
+		assert.ErrorAs(t, f.manager.JoinVNI(ctx, 0, 0), &invalid)
+		assert.ErrorAs(t, f.manager.JoinVNI(ctx, codecL2VNI, MaxVNI+1), &invalid)
+		assert.ErrorAs(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL2VNI), &invalid)
+
+		cfg := evpnTestConfig(newRecordingSpeaker(), f.clock)
+		cfg.RouterMAC = nil
+		noIRB, err := NewEVPNManager(cfg)
 		require.NoError(t, err)
-
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			VNI: 0, // Invalid
-		}
-
-		err = manager.AdvertiseMAC(ctx, entry)
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidVNI{}, err)
+		var invalidMAC ErrInvalidMAC
+		assert.ErrorAs(t, noIRB.JoinVNI(ctx, codecL2VNI, codecL3VNI), &invalidMAC, "IRB needs a router MAC")
+		assert.NoError(t, noIRB.JoinVNI(ctx, codecL2VNI, 0))
 	})
 
-	t.Run("nil MAC", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("a failed advertisement rolls the join back", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		f.speaker.fail(errSpeakerFailed, nil)
+		var failed ErrRouteAdvertisementFailed
+		require.ErrorAs(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI), &failed)
+		assert.ErrorIs(t, failed, errSpeakerFailed)
+		_, ok := f.manager.RouteDistinguisher(codecL2VNI)
+		assert.False(t, ok)
 
-		ctx := context.Background()
-		entry := &MACIPEntry{
-			MAC: nil,
-			VNI: 100,
-		}
-
-		err = manager.AdvertiseMAC(ctx, entry)
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidMAC{}, err)
+		f.speaker.fail(nil, nil)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		rd, _ := f.manager.RouteDistinguisher(codecL2VNI)
+		assert.Equal(t, uint16(1), rd.Index, "the released RD is reused")
 	})
 
-	t.Run("speaker error", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		speaker.addErr = assert.AnError
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("a second join is not told it joined while the first waits on BGP", func(t *testing.T) {
+		f, speaker, _ := newGatedFixture(t)
+		speaker.holdNext(true, false)
+		first := make(chan error, 1)
+		go func() { first <- f.manager.JoinVNI(ctx, codecL2VNI, 0) }()
+		<-speaker.entered
 
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			VNI: 100,
-		}
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		assert.ErrorIs(t, f.manager.JoinVNI(cancelled, codecL2VNI, 0), context.Canceled,
+			"the second join waits for the first's outcome until its context ends")
 
-		err = manager.AdvertiseMAC(ctx, entry)
-		assert.Error(t, err)
-		assert.IsType(t, ErrRouteAdvertisementFailed{}, err)
+		close(speaker.release)
+		require.NoError(t, <-first)
+		assert.NoError(t, f.manager.JoinVNI(cancelled, codecL2VNI, 0), "a joined VNI answers at once")
+	})
+
+	t.Run("a second join waiting on a failed first one tries for itself", func(t *testing.T) {
+		f, speaker, _ := newGatedFixture(t)
+		speaker.holdNext(true, false)
+		first := make(chan error, 1)
+		go func() { first <- f.manager.JoinVNI(ctx, codecL2VNI, 0) }()
+		<-speaker.entered
+		second := make(chan error, 1)
+		go func() { second <- f.manager.JoinVNI(ctx, codecL2VNI, 0) }()
+
+		f.speaker.fail(errSpeakerFailed, nil)
+		close(speaker.release)
+
+		var failed ErrRouteAdvertisementFailed
+		require.ErrorAs(t, <-first, &failed)
+		require.ErrorAs(t, <-second, &failed, "the second join is not told it joined")
+		_, ok := f.manager.RouteDistinguisher(codecL2VNI)
+		assert.False(t, ok)
 	})
 }
 
-func TestEVPNManager_WithdrawMAC(t *testing.T) {
-	t.Run("withdraw existing MAC", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+func TestEVPNManager_LeaveVNI(t *testing.T) {
+	ctx := context.Background()
 
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			VNI: 100,
+	t.Run("withdraws the EVI's routes and the unused IP-VRF's", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, IP: netip.MustParseAddr("10.1.0.10"), VNI: codecL2VNI}))
+		require.NoError(t, f.manager.AdvertisePrefix(ctx, codecL3VNI, netip.MustParsePrefix("10.1.0.0/24")))
+		f.receive(remoteIMET(vtepB, 1))
+
+		require.NoError(t, f.manager.LeaveVNI(ctx, codecL2VNI))
+		types := map[EVPNRouteType]int{}
+		for _, route := range f.speaker.deletedRoutes() {
+			types[route.Type]++
 		}
-
-		// First advertise
-		err = manager.AdvertiseMAC(ctx, entry)
-		require.NoError(t, err)
-
-		// Then withdraw
-		err = manager.WithdrawMAC(ctx, 100, mac)
-		assert.NoError(t, err)
-		assert.Equal(t, 1, speaker.GetDeleteCalls())
+		assert.Equal(t, map[EVPNRouteType]int{EVPNTypeInclusiveMulticast: 1, EVPNTypeMACIPAdvertisement: 1, EVPNTypeIPPrefix: 1}, types)
+		assert.Empty(t, f.manager.RemoteVTEPs(codecL2VNI))
+		_, ok := f.manager.LookupMACForIP(codecL2VNI, netip.MustParseAddr("10.1.0.10"))
+		assert.False(t, ok)
+		var notJoined ErrVNINotJoined
+		assert.ErrorAs(t, f.manager.AdvertisePrefix(ctx, codecL3VNI, netip.MustParsePrefix("10.1.0.0/24")), &notJoined)
 	})
 
-	t.Run("withdraw non-existent MAC", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-		err = manager.WithdrawMAC(ctx, 100, mac)
-		assert.Error(t, err)
-		assert.IsType(t, ErrMACNotFound{}, err)
+	t.Run("a shared IP-VRF keeps its prefixes", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI+1, codecL3VNI))
+		require.NoError(t, f.manager.AdvertisePrefix(ctx, codecL3VNI, netip.MustParsePrefix("10.1.0.0/24")))
+		require.NoError(t, f.manager.LeaveVNI(ctx, codecL2VNI))
+		assert.Len(t, f.speaker.deletedRoutes(), 1, "only the Type-3 route")
+		require.NoError(t, f.manager.WithdrawPrefix(ctx, codecL3VNI, netip.MustParsePrefix("10.1.0.0/24")))
 	})
 
-	t.Run("invalid VNI", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("errors", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		var notJoined ErrVNINotJoined
+		require.ErrorAs(t, f.manager.LeaveVNI(ctx, codecL2VNI), &notJoined)
+		assert.Equal(t, codecL2VNI, notJoined.VNI)
 
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-		err = manager.WithdrawMAC(ctx, 0, mac)
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidVNI{}, err)
-	})
-
-	t.Run("nil MAC", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		err = manager.WithdrawMAC(ctx, 100, nil)
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidMAC{}, err)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		f.speaker.fail(nil, errSpeakerFailed)
+		var failed ErrRouteWithdrawalFailed
+		require.ErrorAs(t, f.manager.LeaveVNI(ctx, codecL2VNI), &failed)
+		assert.Equal(t, EVPNTypeInclusiveMulticast, failed.RouteType)
+		require.ErrorAs(t, f.manager.LeaveVNI(ctx, codecL2VNI), &notJoined, "the VNI is left all the same")
 	})
 }
 
 func TestEVPNManager_AdvertiseMACIP(t *testing.T) {
-	t.Run("valid MAC/IP advertisement", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	ctx := context.Background()
+	hostIP := netip.MustParseAddr("10.1.0.10")
 
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			IP:  netip.MustParseAddr("192.168.1.100"),
-			VNI: 100,
-		}
+	t.Run("symmetric IRB route", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, IP: hostIP, VNI: codecL2VNI, Sequence: 99}))
 
-		err = manager.AdvertiseMACIP(ctx, entry)
-		assert.NoError(t, err)
-		assert.Equal(t, 1, speaker.GetAddCalls())
+		route := f.speaker.lastAdded(t)
+		assert.Equal(t, EVPNTypeMACIPAdvertisement, route.Type)
+		assert.Equal(t, "192.0.2.11:1", route.RD.String())
+		assert.Equal(t, []RouteTarget{mustRT(t, codecL2VNI), mustRT(t, codecL3VNI)}, route.RouteTargets)
+		assert.Equal(t, codecL3VNI, route.MACIP.L3VNI)
+		assert.Equal(t, testRouterMAC, route.RouterMAC)
+		assert.Equal(t, vtepA, route.MACIP.VTEPIP)
+		assert.Zero(t, route.MACIP.Sequence, "the sequence is the manager's")
 
-		// Verify ARP suppression tables updated
-		ip, found := manager.LookupIPForMAC(100, mac)
-		assert.True(t, found)
-		assert.Equal(t, entry.IP, ip)
-
-		foundMAC, found := manager.LookupMACForIP(100, entry.IP)
-		assert.True(t, found)
-		assert.Equal(t, mac.String(), foundMAC.String())
+		mac, ok := f.manager.LookupMACForIP(codecL2VNI, hostIP)
+		assert.True(t, ok)
+		assert.Equal(t, codecHostMAC, mac)
+		_, err := encodeEVPNPath(route)
+		assert.NoError(t, err, "the route is one the codec sends")
 	})
 
-	t.Run("MAC/IP without IP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			VNI: 100,
-		}
-
-		err = manager.AdvertiseMACIP(ctx, entry)
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidIP{}, err)
+	t.Run("an L2-only EVI carries no IRB", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}))
+		route := f.speaker.lastAdded(t)
+		assert.Zero(t, route.MACIP.L3VNI)
+		assert.Nil(t, route.RouterMAC)
+		assert.Len(t, route.RouteTargets, 1)
 	})
 
-	t.Run("IPv6 MAC/IP advertisement", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("errors", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		var nilEntry ErrEntryNil
+		assert.ErrorAs(t, f.manager.AdvertiseMACIP(ctx, nil), &nilEntry)
+		var invalidMAC ErrInvalidMAC
+		assert.ErrorAs(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, VNI: codecL2VNI}), &invalidMAC)
+		var notJoined ErrVNINotJoined
+		assert.ErrorAs(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}), &notJoined)
+	})
 
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			IP:  netip.MustParseAddr("2001:db8::1"),
-			VNI: 100,
-		}
-
-		err = manager.AdvertiseMACIP(ctx, entry)
-		assert.NoError(t, err)
+	t.Run("a failed advertisement is rolled back", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		f.speaker.fail(errSpeakerFailed, nil)
+		var failed ErrRouteAdvertisementFailed
+		require.ErrorAs(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, IP: hostIP, VNI: codecL2VNI}), &failed)
+		_, ok := f.manager.LookupMACForIP(codecL2VNI, hostIP)
+		assert.False(t, ok)
+		var notFound ErrMACIPNotFound
+		assert.ErrorAs(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, hostIP), &notFound)
 	})
 }
 
 func TestEVPNManager_WithdrawMACIP(t *testing.T) {
-	t.Run("withdraw existing MAC/IP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	ctx := context.Background()
+	hostIP := netip.MustParseAddr("10.1.0.10")
 
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		ip := netip.MustParseAddr("192.168.1.100")
-		entry := &MACIPEntry{
-			MAC: mac,
-			IP:  ip,
-			VNI: 100,
-		}
+	t.Run("withdraws each route of the MAC", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}))
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, IP: hostIP, VNI: codecL2VNI}))
 
-		err = manager.AdvertiseMACIP(ctx, entry)
-		require.NoError(t, err)
+		require.NoError(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, hostIP))
+		_, ok := f.manager.LookupMACForIP(codecL2VNI, hostIP)
+		assert.False(t, ok)
+		require.NoError(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, netip.Addr{}))
 
-		err = manager.WithdrawMACIP(ctx, 100, mac, ip)
-		assert.NoError(t, err)
-
-		// Verify ARP suppression tables cleared
-		_, found := manager.LookupIPForMAC(100, mac)
-		assert.False(t, found)
-
-		_, found = manager.LookupMACForIP(100, ip)
-		assert.False(t, found)
+		deleted := f.speaker.deletedRoutes()
+		require.Len(t, deleted, 2)
+		assert.Equal(t, hostIP, deleted[0].MACIP.IP)
+		assert.False(t, deleted[1].MACIP.IP.IsValid())
 	})
 
-	t.Run("withdraw non-existent MAC/IP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("errors", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		var notFound ErrMACIPNotFound
+		assert.ErrorAs(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, hostIP), &notFound)
 
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		ip := netip.MustParseAddr("192.168.1.100")
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}))
+		assert.ErrorAs(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, hostIP), &notFound, "another IP of the MAC")
 
-		err = manager.WithdrawMACIP(ctx, 100, mac, ip)
-		assert.Error(t, err)
-		assert.IsType(t, ErrMACIPNotFound{}, err)
+		f.speaker.fail(nil, errSpeakerFailed)
+		var failed ErrRouteWithdrawalFailed
+		assert.ErrorAs(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, netip.Addr{}), &failed)
 	})
 
-	t.Run("invalid IP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("a failed withdrawal still hands the MAC to the remote VTEP", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}))
+		f.receive(remoteMACRoute(vtepB, "", 0))
+		assert.Empty(t, f.notified.take(), "our route wins the tie")
 
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
+		f.speaker.fail(nil, errSpeakerFailed)
+		var failed ErrRouteWithdrawalFailed
+		require.ErrorAs(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, netip.Addr{}), &failed)
+		assert.ErrorIs(t, failed, errSpeakerFailed)
 
-		err = manager.WithdrawMACIP(ctx, 100, mac, netip.Addr{})
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidIP{}, err)
-	})
-}
-
-func TestEVPNManager_GetRemoteMAC(t *testing.T) {
-	t.Run("get existing remote MAC", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-		// Simulate receiving a remote MAC
-		entry := &MACIPEntry{
-			MAC:    mac,
-			VNI:    100,
-			VTEPIP: netip.MustParseAddr("10.0.0.2"),
-		}
-		manager.remoteMACs.Store(entry.Key(), entry)
-
-		result, err := manager.GetRemoteMAC(ctx, 100, mac)
-		assert.NoError(t, err)
-		assert.NotNil(t, result)
-		assert.Equal(t, mac.String(), result.MAC.String())
+		moved := f.notified.take()
+		require.Len(t, moved, 1, "the handlers are told where the MAC is now")
+		assert.False(t, moved[0].IsWithdraw)
+		assert.Equal(t, vtepB, moved[0].MACIP.VTEPIP)
+		vtep, ok := f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		assert.True(t, ok)
+		assert.Equal(t, vtepB, vtep)
 	})
 
-	t.Run("get non-existent remote MAC", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("a retry completes a failed withdrawal", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, IP: hostIP, VNI: codecL2VNI}))
+		f.speaker.fail(nil, errSpeakerFailed)
+		var failed ErrRouteWithdrawalFailed
+		require.ErrorAs(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, hostIP), &failed)
+		f.speaker.fail(nil, nil)
 
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
+		require.NoError(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, hostIP))
 
-		result, err := manager.GetRemoteMAC(ctx, 100, mac)
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.IsType(t, ErrMACNotFound{}, err)
+		deleted := f.speaker.deletedRoutes()
+		require.Len(t, deleted, 1)
+		assert.Equal(t, hostIP, deleted[0].MACIP.IP)
+		var notFound ErrMACIPNotFound
+		assert.ErrorAs(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, hostIP), &notFound,
+			"a completed withdrawal is not repeated")
 	})
-}
 
-func TestEVPNManager_ListRemoteMACs(t *testing.T) {
-	t.Run("list remote MACs for VNI", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("leaving the VNI completes a failed withdrawal", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, IP: hostIP, VNI: codecL2VNI}))
+		f.speaker.fail(nil, errSpeakerFailed)
+		require.Error(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, hostIP))
+		f.speaker.fail(nil, nil)
 
-		ctx := context.Background()
+		require.NoError(t, f.manager.LeaveVNI(ctx, codecL2VNI))
 
-		// Add multiple remote MACs
-		macs := []string{"00:11:22:33:44:01", "00:11:22:33:44:02", "00:11:22:33:44:03"}
-		for _, macStr := range macs {
-			mac, _ := net.ParseMAC(macStr)
-			entry := &MACIPEntry{
-				MAC:    mac,
-				VNI:    100,
-				VTEPIP: netip.MustParseAddr("10.0.0.2"),
+		var macips []*EVPNRouteData
+		for _, route := range f.speaker.deletedRoutes() {
+			if route.MACIP != nil {
+				macips = append(macips, route)
 			}
-			manager.remoteMACs.Store(entry.Key(), entry)
 		}
-
-		// Add MAC for different VNI
-		otherMAC, _ := net.ParseMAC("00:11:22:33:44:99")
-		otherEntry := &MACIPEntry{
-			MAC:    otherMAC,
-			VNI:    200,
-			VTEPIP: netip.MustParseAddr("10.0.0.3"),
-		}
-		manager.remoteMACs.Store(otherEntry.Key(), otherEntry)
-
-		results, err := manager.ListRemoteMACs(ctx, 100)
-		assert.NoError(t, err)
-		assert.Len(t, results, 3)
+		require.Len(t, macips, 1)
+		assert.Equal(t, hostIP, macips[0].MACIP.IP)
 	})
 
-	t.Run("list remote MACs for empty VNI", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("advertising the binding again drops its failed withdrawal", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, IP: hostIP, VNI: codecL2VNI}))
+		f.speaker.fail(nil, errSpeakerFailed)
+		require.Error(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, hostIP))
+		f.speaker.fail(nil, nil)
 
-		ctx := context.Background()
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, IP: hostIP, VNI: codecL2VNI}))
+		require.NoError(t, f.manager.LeaveVNI(ctx, codecL2VNI))
 
-		results, err := manager.ListRemoteMACs(ctx, 100)
-		assert.NoError(t, err)
-		assert.Empty(t, results)
+		var macips int
+		for _, route := range f.speaker.deletedRoutes() {
+			if route.MACIP != nil {
+				macips++
+			}
+		}
+		assert.Equal(t, 1, macips, "the route is withdrawn once, as the advertised binding")
 	})
 }
 
-// --- Type-3 Inclusive Multicast Tests ---
+func TestEVPNManager_Prefixes(t *testing.T) {
+	ctx := context.Background()
+	prefix := netip.MustParsePrefix("10.1.0.0/24")
 
-func TestEVPNManager_AdvertiseIMET(t *testing.T) {
-	t.Run("valid IMET advertisement", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("interface-less Type-5 route in the IP-VRF", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		require.NoError(t, f.manager.AdvertisePrefix(ctx, codecL3VNI, netip.MustParsePrefix("10.1.0.77/24")))
 
-		ctx := context.Background()
-		vtepIP := netip.MustParseAddr("10.0.0.1")
+		route := f.speaker.lastAdded(t)
+		assert.Equal(t, EVPNTypeIPPrefix, route.Type)
+		assert.Equal(t, "192.0.2.11:2", route.RD.String(), "the IP-VRF has its own RD")
+		assert.Equal(t, []RouteTarget{mustRT(t, codecL3VNI)}, route.RouteTargets)
+		assert.Equal(t, prefix, route.PrefixData.Prefix, "the prefix is masked")
+		assert.Equal(t, codecL3VNI, route.PrefixData.VNI)
+		assert.Equal(t, testRouterMAC, route.RouterMAC)
 
-		err = manager.AdvertiseIMET(ctx, 100, vtepIP)
-		assert.NoError(t, err)
-		assert.Equal(t, 1, speaker.GetAddCalls())
-
-		// Verify VTEP added to VNI list
-		vteps, err := manager.GetIMETVTEPs(ctx, 100)
-		assert.NoError(t, err)
-		assert.Len(t, vteps, 1)
-		assert.Equal(t, vtepIP, vteps[0])
+		require.NoError(t, f.manager.WithdrawPrefix(ctx, codecL3VNI, prefix))
+		var notFound ErrPrefixNotFound
+		assert.ErrorAs(t, f.manager.WithdrawPrefix(ctx, codecL3VNI, prefix), &notFound)
 	})
 
-	t.Run("invalid VNI", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("errors", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		var invalid ErrPrefixInvalid
+		assert.ErrorAs(t, f.manager.AdvertisePrefix(ctx, codecL3VNI, netip.Prefix{}), &invalid)
+		var notJoined ErrVNINotJoined
+		assert.ErrorAs(t, f.manager.AdvertisePrefix(ctx, codecL3VNI, prefix), &notJoined)
+		assert.ErrorAs(t, f.manager.WithdrawPrefix(ctx, codecL3VNI, prefix), &notJoined)
 
-		ctx := context.Background()
-		vtepIP := netip.MustParseAddr("10.0.0.1")
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		f.speaker.fail(errSpeakerFailed, nil)
+		var advertise ErrRouteAdvertisementFailed
+		assert.ErrorAs(t, f.manager.AdvertisePrefix(ctx, codecL3VNI, prefix), &advertise)
+		f.speaker.fail(nil, nil)
+		assert.ErrorAs(t, f.manager.WithdrawPrefix(ctx, codecL3VNI, prefix), new(ErrPrefixNotFound), "the failed prefix was not kept")
 
-		err = manager.AdvertiseIMET(ctx, 0, vtepIP)
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidVNI{}, err)
-	})
-
-	t.Run("invalid VTEP IP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		err = manager.AdvertiseIMET(ctx, 100, netip.Addr{})
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidIP{}, err)
-	})
-
-	t.Run("unspecified VTEP IP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		err = manager.AdvertiseIMET(ctx, 100, netip.MustParseAddr("0.0.0.0"))
-		assert.Error(t, err)
+		require.NoError(t, f.manager.AdvertisePrefix(ctx, codecL3VNI, prefix))
+		f.speaker.fail(nil, errSpeakerFailed)
+		var withdraw ErrRouteWithdrawalFailed
+		assert.ErrorAs(t, f.manager.WithdrawPrefix(ctx, codecL3VNI, prefix), &withdraw)
 	})
 }
 
-func TestEVPNManager_WithdrawIMET(t *testing.T) {
-	t.Run("withdraw existing IMET", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+func TestEVPNManager_Import(t *testing.T) {
+	ctx := context.Background()
 
-		ctx := context.Background()
-		vtepIP := netip.MustParseAddr("10.0.0.1")
+	t.Run("only joined VNIs with their route target", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
 
-		err = manager.AdvertiseIMET(ctx, 100, vtepIP)
-		require.NoError(t, err)
+		foreign := remoteMACRoute(vtepB, "10.1.0.20", 0)
+		foreign.RouteTargets = []RouteTarget{{AS: 65000, Value: 1<<28 | 999}}
+		f.receive(foreign)
+		other := remoteMACRoute(vtepB, "", 0)
+		other.MACIP.VNI = codecL2VNI + 1
+		f.receive(other)
+		assert.Empty(t, f.notified.take())
 
-		err = manager.WithdrawIMET(ctx, 100)
-		assert.NoError(t, err)
-		assert.Equal(t, 1, speaker.GetDeleteCalls())
+		irb := remoteMACRoute(vtepB, "10.1.0.20", 0)
+		irb.MACIP.L3VNI = codecL3VNI
+		irb.RouteTargets = append(irb.RouteTargets, mustRT(t, codecL3VNI))
+		irb.RouterMAC = codecRouterMAC
+		f.receive(irb)
+		got := f.notified.take()
+		require.Len(t, got, 1)
+		assert.Equal(t, codecRouterMAC, got[0].RouterMAC)
+		assert.Equal(t, codecL3VNI, got[0].MACIP.L3VNI)
 
-		// Verify VTEP removed from list
-		vteps, err := manager.GetIMETVTEPs(ctx, 100)
-		assert.NoError(t, err)
-		assert.Empty(t, vteps)
+		mac, ok := f.manager.LookupMACForIP(codecL2VNI, netip.MustParseAddr("10.1.0.20"))
+		assert.True(t, ok, "ARP suppression learns the remote binding")
+		assert.Equal(t, codecHostMAC, mac)
+		vtep, ok := f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		assert.True(t, ok)
+		assert.Equal(t, vtepB, vtep)
 	})
 
-	t.Run("withdraw non-existent IMET", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("an L3VNI label without the IP-VRF's route target is not taken", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		// RFC 9135 §5.1: the label names an IP-VRF only with its route target.
+		bridged := remoteMACRoute(vtepB, "10.1.0.20", 0)
+		bridged.MACIP.L3VNI = codecL3VNI
+		bridged.RouterMAC = codecRouterMAC
+		f.receive(bridged)
+		got := f.notified.take()
+		require.Len(t, got, 1)
+		assert.Zero(t, got[0].MACIP.L3VNI)
+		assert.Nil(t, got[0].RouterMAC)
 
-		ctx := context.Background()
-
-		err = manager.WithdrawIMET(ctx, 100)
-		assert.Error(t, err)
-		assert.IsType(t, ErrIMETNotFound{}, err)
-	})
-}
-
-func TestEVPNManager_GetIMETVTEPs(t *testing.T) {
-	t.Run("get VTEPs for VNI", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		// Simulate multiple VTEPs for same VNI
-		vteps := []netip.Addr{
-			netip.MustParseAddr("10.0.0.1"),
-			netip.MustParseAddr("10.0.0.2"),
-			netip.MustParseAddr("10.0.0.3"),
-		}
-		for _, vtep := range vteps {
-			manager.addVNIVTEP(100, vtep)
-		}
-
-		result, err := manager.GetIMETVTEPs(ctx, 100)
-		assert.NoError(t, err)
-		assert.Len(t, result, 3)
+		f.receive(withdrawn(bridged))
+		gone := f.notified.take()
+		require.Len(t, gone, 1)
+		assert.True(t, gone[0].IsWithdraw)
+		assert.Zero(t, gone[0].MACIP.L3VNI, "the withdrawal matches what was reported")
 	})
 
-	t.Run("get VTEPs for empty VNI", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		result, err := manager.GetIMETVTEPs(ctx, 100)
-		assert.NoError(t, err)
-		assert.Empty(t, result)
-	})
-}
-
-// --- Type-5 IP Prefix Tests ---
-
-func TestEVPNManager_AdvertisePrefix(t *testing.T) {
-	t.Run("valid prefix advertisement", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		prefix := netip.MustParsePrefix("192.168.1.0/24")
-		gateway := netip.MustParseAddr("192.168.1.1")
-
-		err = manager.AdvertisePrefix(ctx, prefix, 100, gateway)
-		assert.NoError(t, err)
-		assert.Equal(t, 1, speaker.GetAddCalls())
+	t.Run("own routes are skipped", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		f.receive(remoteMACRoute(vtepA, "", 0))
+		reflected := remoteIMET(vtepB, 1)
+		reflected.NextHop = vtepA
+		f.receive(reflected)
+		assert.Empty(t, f.notified.take())
+		assert.Empty(t, f.manager.RemoteVTEPs(codecL2VNI))
 	})
 
-	t.Run("prefix without gateway", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		prefix := netip.MustParsePrefix("192.168.1.0/24")
-
-		err = manager.AdvertisePrefix(ctx, prefix, 100, netip.Addr{})
-		assert.NoError(t, err)
-	})
-
-	t.Run("IPv6 prefix", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		prefix := netip.MustParsePrefix("2001:db8::/32")
-		gateway := netip.MustParseAddr("2001:db8::1")
-
-		err = manager.AdvertisePrefix(ctx, prefix, 100, gateway)
-		assert.NoError(t, err)
-	})
-
-	t.Run("invalid prefix", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		err = manager.AdvertisePrefix(ctx, netip.Prefix{}, 100, netip.Addr{})
-		assert.Error(t, err)
-		var prefixErr ErrPrefixInvalid
-		assert.ErrorAs(t, err, &prefixErr)
-	})
-
-	t.Run("invalid VNI", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		prefix := netip.MustParsePrefix("192.168.1.0/24")
-
-		err = manager.AdvertisePrefix(ctx, prefix, 0, netip.Addr{})
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidVNI{}, err)
-	})
-}
-
-func TestEVPNManager_WithdrawPrefix(t *testing.T) {
-	t.Run("withdraw existing prefix", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		prefix := netip.MustParsePrefix("192.168.1.0/24")
-		gateway := netip.MustParseAddr("192.168.1.1")
-
-		err = manager.AdvertisePrefix(ctx, prefix, 100, gateway)
-		require.NoError(t, err)
-
-		err = manager.WithdrawPrefix(ctx, prefix, 100)
-		assert.NoError(t, err)
-		assert.Equal(t, 1, speaker.GetDeleteCalls())
-	})
-
-	t.Run("withdraw non-existent prefix", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		prefix := netip.MustParsePrefix("192.168.1.0/24")
-
-		err = manager.WithdrawPrefix(ctx, prefix, 100)
-		assert.Error(t, err)
-		assert.IsType(t, ErrPrefixNotFound{}, err)
-	})
-}
-
-func TestEVPNManager_GetPrefixRoutes(t *testing.T) {
-	t.Run("get prefix routes for VNI", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		// Add multiple prefixes
-		prefixes := []string{"192.168.1.0/24", "192.168.2.0/24", "192.168.3.0/24"}
-		for _, p := range prefixes {
-			prefix := netip.MustParsePrefix(p)
-			err = manager.AdvertisePrefix(ctx, prefix, 100, netip.Addr{})
-			require.NoError(t, err)
-		}
-
-		// Add prefix for different VNI
-		otherPrefix := netip.MustParsePrefix("10.0.0.0/8")
-		err = manager.AdvertisePrefix(ctx, otherPrefix, 200, netip.Addr{})
-		require.NoError(t, err)
-
-		results, err := manager.GetPrefixRoutes(ctx, 100)
-		assert.NoError(t, err)
-		assert.Len(t, results, 3)
-	})
-}
-
-// --- Route Encoding/Decoding Tests ---
-
-func TestBuildType2NLRI(t *testing.T) {
-	t.Run("MAC only", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			VNI: 100,
-		}
-
-		nlri, err := manager.buildType2NLRI(entry)
-		assert.NoError(t, err)
-		assert.NotEmpty(t, nlri)
-		assert.Equal(t, byte(EVPNTypeMACIPAdvertisement), nlri[0])
-	})
-
-	t.Run("MAC with IPv4", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			IP:  netip.MustParseAddr("192.168.1.100"),
-			VNI: 100,
-		}
-
-		nlri, err := manager.buildType2NLRI(entry)
-		assert.NoError(t, err)
-		assert.NotEmpty(t, nlri)
-	})
-
-	t.Run("MAC with IPv6", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			IP:  netip.MustParseAddr("2001:db8::1"),
-			VNI: 100,
-		}
-
-		nlri, err := manager.buildType2NLRI(entry)
-		assert.NoError(t, err)
-		assert.NotEmpty(t, nlri)
-	})
-}
-
-func TestBuildType3NLRI(t *testing.T) {
-	t.Run("IPv4 VTEP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		entry := &IMETEntry{
-			VNI:        100,
-			VTEPIP:     netip.MustParseAddr("10.0.0.1"),
-			TunnelType: TunnelTypeIngressReplication,
-		}
-
-		nlri, err := manager.buildType3NLRI(entry)
-		assert.NoError(t, err)
-		assert.NotEmpty(t, nlri)
-		assert.Equal(t, byte(EVPNTypeInclusiveMulticast), nlri[0])
-	})
-
-	t.Run("IPv6 VTEP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		entry := &IMETEntry{
-			VNI:        100,
-			VTEPIP:     netip.MustParseAddr("2001:db8::1"),
-			TunnelType: TunnelTypeIngressReplication,
-		}
-
-		nlri, err := manager.buildType3NLRI(entry)
-		assert.NoError(t, err)
-		assert.NotEmpty(t, nlri)
-	})
-}
-
-func TestBuildType5NLRI(t *testing.T) {
-	t.Run("IPv4 prefix with gateway", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		route := &PrefixRoute{
-			Prefix:    netip.MustParsePrefix("192.168.1.0/24"),
-			VNI:       100,
-			GatewayIP: netip.MustParseAddr("192.168.1.1"),
-		}
-
-		nlri, err := manager.buildType5NLRI(route)
-		assert.NoError(t, err)
-		assert.NotEmpty(t, nlri)
-		assert.Equal(t, byte(EVPNTypeIPPrefix), nlri[0])
-	})
-
-	t.Run("IPv4 prefix without gateway", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		route := &PrefixRoute{
-			Prefix: netip.MustParsePrefix("192.168.1.0/24"),
-			VNI:    100,
-		}
-
-		nlri, err := manager.buildType5NLRI(route)
-		assert.NoError(t, err)
-		assert.NotEmpty(t, nlri)
-	})
-}
-
-func TestParseEVPNRoute(t *testing.T) {
-	t.Run("NLRI too short", func(t *testing.T) {
-		_, err := parseEVPNRoute([]byte{})
-		assert.Error(t, err)
-		assert.IsType(t, ErrNLRITooShort{}, err)
-	})
-
-	t.Run("unsupported route type", func(t *testing.T) {
-		nlri := make([]byte, 20)
-		nlri[0] = 99 // Unknown type
-		nlri[1] = 18 // Length
-
-		_, err := parseEVPNRoute(nlri)
-		assert.Error(t, err)
-		assert.IsType(t, ErrUnsupportedRouteType{}, err)
-	})
-}
-
-func TestEncodeEVPNRoute(t *testing.T) {
-	t.Run("nil route", func(t *testing.T) {
-		_, err := encodeEVPNRoute(nil, RouteDistinguisher{})
-		assert.Error(t, err)
-		assert.IsType(t, ErrEntryNil{}, err)
-	})
-
-	t.Run("Type-2 with nil MACIP", func(t *testing.T) {
-		route := &EVPNRouteData{
-			Type: EVPNTypeMACIPAdvertisement,
-		}
-		_, err := encodeEVPNRoute(route, RouteDistinguisher{})
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidEVPNRoute{}, err)
-	})
-
-	t.Run("Type-3 with nil IMET", func(t *testing.T) {
-		route := &EVPNRouteData{
-			Type: EVPNTypeInclusiveMulticast,
-		}
-		_, err := encodeEVPNRoute(route, RouteDistinguisher{})
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidEVPNRoute{}, err)
-	})
-
-	t.Run("Type-5 with nil Prefix", func(t *testing.T) {
-		route := &EVPNRouteData{
-			Type: EVPNTypeIPPrefix,
-		}
-		_, err := encodeEVPNRoute(route, RouteDistinguisher{})
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidEVPNRoute{}, err)
-	})
-
-	t.Run("unsupported route type", func(t *testing.T) {
-		route := &EVPNRouteData{
-			Type: EVPNRouteType(99),
-		}
-		_, err := encodeEVPNRoute(route, RouteDistinguisher{})
-		assert.Error(t, err)
-		assert.IsType(t, ErrUnsupportedRouteType{}, err)
-	})
-}
-
-// --- MAC Mobility Tests ---
-
-func TestEVPNManager_HandleMACMove(t *testing.T) {
-	t.Run("new MAC", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC:    mac,
-			VNI:    100,
-			VTEPIP: netip.MustParseAddr("10.0.0.2"),
-		}
-
-		err = manager.HandleMACMove(ctx, entry)
-		assert.NoError(t, err)
-	})
-
-	t.Run("MAC from same VTEP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		vtep := netip.MustParseAddr("10.0.0.2")
-
-		// First entry
-		entry1 := &MACIPEntry{
-			MAC:    mac,
-			VNI:    100,
-			VTEPIP: vtep,
-		}
-		err = manager.HandleMACMove(ctx, entry1)
-		require.NoError(t, err)
-
-		// Update from same VTEP
-		entry2 := &MACIPEntry{
-			MAC:    mac,
-			IP:     netip.MustParseAddr("192.168.1.100"),
-			VNI:    100,
-			VTEPIP: vtep,
-		}
-		err = manager.HandleMACMove(ctx, entry2)
-		assert.NoError(t, err)
-	})
-
-	t.Run("MAC moved to different VTEP with higher sequence", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-		// First entry
-		entry1 := &MACIPEntry{
-			MAC:      mac,
-			VNI:      100,
-			VTEPIP:   netip.MustParseAddr("10.0.0.2"),
-			Sequence: 0,
-		}
-		err = manager.HandleMACMove(ctx, entry1)
-		require.NoError(t, err)
-
-		// MAC moved to different VTEP with higher sequence
-		entry2 := &MACIPEntry{
-			MAC:      mac,
-			VNI:      100,
-			VTEPIP:   netip.MustParseAddr("10.0.0.3"),
-			Sequence: 1,
-		}
-		err = manager.HandleMACMove(ctx, entry2)
-		assert.NoError(t, err)
-
-		// Verify mobility tracking updated
-		seq := manager.GetMACSequence(100, mac)
-		assert.Equal(t, uint32(1), seq)
-	})
-
-	t.Run("MAC mobility conflict with lower sequence", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-		// First entry with sequence 1
-		entry1 := &MACIPEntry{
-			MAC:      mac,
-			VNI:      100,
-			VTEPIP:   netip.MustParseAddr("10.0.0.2"),
-			Sequence: 1,
-		}
-		err = manager.HandleMACMove(ctx, entry1)
-		require.NoError(t, err)
-
-		// Set mobility sequence
-		manager.IncrementMACSequence(100, mac)
-
-		// Attempt move with lower sequence
-		entry2 := &MACIPEntry{
-			MAC:      mac,
-			VNI:      100,
-			VTEPIP:   netip.MustParseAddr("10.0.0.3"),
-			Sequence: 0,
-		}
-		err = manager.HandleMACMove(ctx, entry2)
-		assert.Error(t, err)
-		assert.IsType(t, ErrMACMobilityConflict{}, err)
-	})
-
-	t.Run("nil entry", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		err = manager.HandleMACMove(ctx, nil)
-		assert.Error(t, err)
-		assert.IsType(t, ErrEntryNil{}, err)
-	})
-}
-
-func TestEVPNManager_MACSequence(t *testing.T) {
-	t.Run("get non-existent sequence", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		seq := manager.GetMACSequence(100, mac)
-		assert.Equal(t, uint32(0), seq)
-	})
-
-	t.Run("increment sequence", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-		seq := manager.IncrementMACSequence(100, mac)
-		assert.Equal(t, uint32(1), seq)
-
-		seq = manager.IncrementMACSequence(100, mac)
-		assert.Equal(t, uint32(2), seq)
-
-		seq = manager.GetMACSequence(100, mac)
-		assert.Equal(t, uint32(2), seq)
-	})
-}
-
-// --- Event Handling Tests ---
-
-func TestEVPNManager_OnRouteReceived(t *testing.T) {
-	t.Run("Type-2 route received", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-		route := &EVPNRouteData{
-			Type:    EVPNTypeMACIPAdvertisement,
-			NextHop: netip.MustParseAddr("10.0.0.2"),
-			MACIP: &MACIPEntry{
-				MAC: mac,
-				VNI: 100,
-			},
-		}
-
-		err = manager.OnRouteReceived(ctx, route)
-		assert.NoError(t, err)
-	})
-
-	t.Run("Type-3 route received", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		route := &EVPNRouteData{
-			Type: EVPNTypeInclusiveMulticast,
-			IMET: &IMETEntry{
-				VNI:    100,
-				VTEPIP: netip.MustParseAddr("10.0.0.2"),
-			},
-		}
-
-		err = manager.OnRouteReceived(ctx, route)
-		assert.NoError(t, err)
-
-		// Verify VTEP added
-		vteps, err := manager.GetIMETVTEPs(ctx, 100)
-		assert.NoError(t, err)
-		assert.Len(t, vteps, 1)
-	})
-
-	t.Run("Type-5 route received", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		route := &EVPNRouteData{
-			Type:    EVPNTypeIPPrefix,
-			NextHop: netip.MustParseAddr("10.0.0.2"),
-			PrefixData: &PrefixRoute{
-				Prefix: netip.MustParsePrefix("192.168.1.0/24"),
-				VNI:    100,
-			},
-		}
-
-		err = manager.OnRouteReceived(ctx, route)
-		assert.NoError(t, err)
-	})
-
-	t.Run("nil route", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		err = manager.OnRouteReceived(ctx, nil)
-		assert.Error(t, err)
-		assert.IsType(t, ErrEntryNil{}, err)
-	})
-
-	t.Run("unsupported route type", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		route := &EVPNRouteData{
-			Type: EVPNRouteType(99),
-		}
-
-		err = manager.OnRouteReceived(ctx, route)
-		assert.Error(t, err)
-		assert.IsType(t, ErrUnsupportedRouteType{}, err)
-	})
-}
-
-func TestEVPNManager_OnRouteWithdrawn(t *testing.T) {
-	t.Run("Type-2 route withdrawn", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-		// First add the route
-		entry := &MACIPEntry{
-			MAC:    mac,
-			IP:     netip.MustParseAddr("192.168.1.100"),
-			VNI:    100,
-			VTEPIP: netip.MustParseAddr("10.0.0.2"),
-		}
-		manager.remoteMACs.Store(entry.Key(), entry)
-		ipKey := formatKey(entry.VNI, entry.IP.String())
-		manager.ipToMAC.Store(ipKey, entry.MAC)
-		manager.macToIP.Store(entry.Key(), entry.IP)
-
-		// Withdraw
-		route := &EVPNRouteData{
-			Type: EVPNTypeMACIPAdvertisement,
-			MACIP: &MACIPEntry{
-				MAC: mac,
-				IP:  netip.MustParseAddr("192.168.1.100"),
-				VNI: 100,
-			},
-		}
-
-		err = manager.OnRouteWithdrawn(ctx, route)
-		assert.NoError(t, err)
-
-		// Verify removed
-		_, found := manager.LookupMACForIP(100, entry.IP)
-		assert.False(t, found)
-	})
-
-	t.Run("Type-3 route withdrawn", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		// Add VTEP first
-		manager.addVNIVTEP(100, netip.MustParseAddr("10.0.0.2"))
-		entry := &IMETEntry{
-			VNI:    100,
-			VTEPIP: netip.MustParseAddr("10.0.0.2"),
-		}
-		manager.imetEntries.Store(entry.Key(), entry)
-
-		// Withdraw
-		route := &EVPNRouteData{
-			Type: EVPNTypeInclusiveMulticast,
-			IMET: &IMETEntry{
-				VNI:    100,
-				VTEPIP: netip.MustParseAddr("10.0.0.2"),
-			},
-		}
-
-		err = manager.OnRouteWithdrawn(ctx, route)
-		assert.NoError(t, err)
-	})
-
-	t.Run("Type-5 route withdrawn", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-
-		// Add prefix first
-		prefix := netip.MustParsePrefix("192.168.1.0/24")
-		prefixRoute := &PrefixRoute{
-			Prefix: prefix,
-			VNI:    100,
-		}
-		manager.prefixRoutes.Store(prefixRoute.Key(), prefixRoute)
-
-		// Withdraw
-		route := &EVPNRouteData{
-			Type: EVPNTypeIPPrefix,
-			PrefixData: &PrefixRoute{
-				Prefix: prefix,
-				VNI:    100,
-			},
-		}
-
-		err = manager.OnRouteWithdrawn(ctx, route)
-		assert.NoError(t, err)
-	})
-}
-
-func TestEVPNManager_RegisterHandler(t *testing.T) {
-	t.Run("handler called on route received", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		handlerCalled := false
-
-		manager.RegisterHandler(func(ctx context.Context, route *EVPNRouteData) error {
-			handlerCalled = true
-			return nil
+	t.Run("routes received before the join are taken in by it", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		f.receive(remoteIMET(vtepB, 1))
+		f.receive(remoteMACRoute(vtepB, "", 0))
+		f.receive(&EVPNRouteData{
+			Type:         EVPNTypeIPPrefix,
+			RD:           RouteDistinguisher{Admin: vtepB, Index: 2},
+			RouteTargets: []RouteTarget{mustRT(t, codecL3VNI)},
+			PrefixData:   &PrefixRoute{Prefix: netip.MustParsePrefix("10.9.0.0/16"), VNI: codecL3VNI, VTEPIP: vtepB},
+			NextHop:      vtepB,
+			RouterMAC:    codecRouterMAC,
 		})
+		assert.Empty(t, f.notified.take())
 
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		assert.Len(t, f.notified.take(), 3)
+		assert.Equal(t, []netip.Addr{vtepB}, f.manager.RemoteVTEPs(codecL2VNI))
+
+		require.NoError(t, f.manager.LeaveVNI(ctx, codecL2VNI))
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		assert.Len(t, f.notified.take(), 3, "leaving keeps the routes received")
+	})
+
+	t.Run("Type-3 membership is counted per VTEP", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		f.receive(remoteIMET(vtepB, 1))
+		f.receive(remoteIMET(vtepB, 1))
+		f.receive(remoteIMET(vtepB, 7))
+		f.receive(remoteIMET(vtepC, 1))
+		assert.Len(t, f.notified.take(), 2, "one join per VTEP")
+		assert.Equal(t, []netip.Addr{vtepB, vtepC}, f.manager.RemoteVTEPs(codecL2VNI))
+
+		f.receive(withdrawn(remoteIMET(vtepB, 1)))
+		assert.Empty(t, f.notified.take(), "B still has a Type-3 route")
+		f.receive(withdrawn(remoteIMET(vtepB, 7)))
+		left := f.notified.take()
+		require.Len(t, left, 1)
+		assert.True(t, left[0].IsWithdraw)
+		assert.Equal(t, []netip.Addr{vtepC}, f.manager.RemoteVTEPs(codecL2VNI))
+
+		f.receive(withdrawn(remoteIMET(vtepB, 7)))
+		assert.Empty(t, f.notified.take(), "an unknown withdrawal is ignored")
+	})
+
+	t.Run("a route that changes its route target leaves the import", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		f.receive(remoteIMET(vtepB, 1))
+		retargeted := remoteIMET(vtepB, 1)
+		retargeted.RouteTargets = []RouteTarget{{AS: 65000, Value: 1}}
+		f.receive(retargeted)
+		left := f.notified.take()
+		require.Len(t, left, 2)
+		assert.True(t, left[1].IsWithdraw)
+		assert.Empty(t, f.manager.RemoteVTEPs(codecL2VNI))
+	})
+
+	t.Run("a failing handler does not stop the others", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		f.manager.RegisterHandler(func(context.Context, *EVPNRouteData) error { return errSpeakerFailed })
+		second := &notifications{}
+		f.manager.RegisterHandler(second.handle)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		f.receive(remoteIMET(vtepB, 1))
+		assert.Len(t, second.take(), 1)
+	})
+}
+
+func TestEVPNManager_NextHopChange(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a Type-5 route moved to another VTEP leaves the old one", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
 		route := &EVPNRouteData{
-			Type:    EVPNTypeMACIPAdvertisement,
-			NextHop: netip.MustParseAddr("10.0.0.2"),
-			MACIP: &MACIPEntry{
-				MAC: mac,
-				VNI: 100,
-			},
+			Type:         EVPNTypeIPPrefix,
+			RD:           RouteDistinguisher{Admin: vtepB, Index: 2},
+			RouteTargets: []RouteTarget{mustRT(t, codecL3VNI)},
+			PrefixData:   &PrefixRoute{Prefix: netip.MustParsePrefix("10.9.0.0/16"), VNI: codecL3VNI, VTEPIP: vtepB},
+			NextHop:      vtepB,
+			RouterMAC:    codecRouterMAC,
 		}
+		f.receive(route)
+		f.notified.take()
 
-		err = manager.OnRouteReceived(ctx, route)
-		assert.NoError(t, err)
-		assert.True(t, handlerCalled)
+		moved := route.Clone()
+		moved.NextHop = vtepC
+		moved.PrefixData.VTEPIP = vtepC
+		f.receive(moved)
+		got := f.notified.take()
+		require.Len(t, got, 2)
+		assert.True(t, got[0].IsWithdraw)
+		assert.Equal(t, vtepB, got[0].PrefixData.VTEPIP, "the route at the old VTEP is withdrawn")
+		assert.False(t, got[1].IsWithdraw)
+		assert.Equal(t, vtepC, got[1].PrefixData.VTEPIP)
+	})
+
+	t.Run("a Type-2 binding moved to another VTEP leaves the old one", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		f.receive(remoteMACRoute(vtepB, "", 0))
+		binding := remoteMACRoute(vtepB, "10.1.0.20", 0)
+		f.receive(binding)
+		f.notified.take()
+
+		moved := binding.Clone()
+		moved.NextHop = vtepC
+		moved.MACIP.VTEPIP = vtepC
+		f.receive(moved)
+		got := f.notified.take()
+		require.Len(t, got, 1, "the MAC stays at B, its lower VTEP; the binding at B is gone")
+		assert.True(t, got[0].IsWithdraw)
+		assert.Equal(t, vtepB, got[0].MACIP.VTEPIP)
+		_, bound := f.manager.LookupMACForIP(codecL2VNI, netip.MustParseAddr("10.1.0.20"))
+		assert.False(t, bound, "ARP suppression forgets the binding at B")
+	})
+
+	t.Run("a Type-3 route with a new tunnel endpoint leaves the old one", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		route := remoteIMET(vtepB, 1)
+		route.IMET.OriginatorIP = vtepB
+		f.receive(route)
+		f.notified.take()
+
+		moved := route.Clone()
+		moved.IMET.VTEPIP = vtepC
+		f.receive(moved)
+		got := f.notified.take()
+		require.Len(t, got, 2)
+		assert.True(t, got[0].IsWithdraw)
+		assert.Equal(t, vtepB, got[0].IMET.VTEPIP)
+		assert.Equal(t, vtepC, got[1].IMET.VTEPIP)
+		assert.Equal(t, []netip.Addr{vtepC}, f.manager.RemoteVTEPs(codecL2VNI))
+
+		// A withdrawal carries only the NLRI, whose originator is B.
+		f.receive(&EVPNRouteData{
+			Type:       EVPNTypeInclusiveMulticast,
+			RD:         route.RD,
+			IMET:       &IMETEntry{VTEPIP: vtepB, OriginatorIP: vtepB},
+			IsWithdraw: true,
+		})
+		assert.Empty(t, f.manager.RemoteVTEPs(codecL2VNI), "the withdrawal removes the route at C")
 	})
 }
 
-// --- ARP Suppression Tests ---
+func TestEVPNManager_MACMobility(t *testing.T) {
+	ctx := context.Background()
+	hostIP := netip.MustParseAddr("10.1.0.10")
 
-func TestEVPNManager_ARPSuppression(t *testing.T) {
-	t.Run("lookup IP for MAC", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	join := func(t *testing.T) *evpnFixture {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		return f
+	}
 
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		ip := netip.MustParseAddr("192.168.1.100")
+	t.Run("a remote route with a higher sequence takes the MAC from us", func(t *testing.T) {
+		f := join(t)
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, IP: hostIP, VNI: codecL2VNI}))
 
-		// Add to table
-		key := formatKey(100, mac.String())
-		manager.macToIP.Store(key, ip)
-
-		result, found := manager.LookupIPForMAC(100, mac)
-		assert.True(t, found)
-		assert.Equal(t, ip, result)
+		f.receive(remoteMACRoute(vtepB, "10.1.0.10", 1))
+		deleted := f.speaker.deletedRoutes()
+		require.Len(t, deleted, 1, "our route is withdrawn")
+		assert.Equal(t, vtepA, deleted[0].MACIP.VTEPIP)
+		vtep, ok := f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		assert.True(t, ok)
+		assert.Equal(t, vtepB, vtep)
+		assert.Len(t, f.notified.take(), 1)
+		var notFound ErrMACIPNotFound
+		assert.ErrorAs(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, hostIP), &notFound)
 	})
 
-	t.Run("lookup IP for non-existent MAC", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
-
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-		_, found := manager.LookupIPForMAC(100, mac)
-		assert.False(t, found)
+	t.Run("a stale remote route loses to ours", func(t *testing.T) {
+		f := join(t)
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}))
+		f.receive(remoteMACRoute(vtepB, "", 0))
+		assert.Empty(t, f.speaker.deletedRoutes(), "a tie goes to the lower address: ours")
+		_, ok := f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		assert.False(t, ok)
+		assert.Empty(t, f.notified.take())
 	})
 
-	t.Run("lookup MAC for IP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("taking a MAC over uses the remote sequence plus one", func(t *testing.T) {
+		f := join(t)
+		f.receive(remoteMACRoute(vtepB, "", 2))
+		require.Len(t, f.notified.take(), 1)
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}))
+		assert.Equal(t, uint32(3), f.speaker.lastAdded(t).MACIP.Sequence)
+		_, ok := f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		assert.False(t, ok, "the MAC is local now")
 
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		ip := netip.MustParseAddr("192.168.1.100")
-
-		// Add to table
-		key := formatKey(100, ip.String())
-		manager.ipToMAC.Store(key, mac)
-
-		result, found := manager.LookupMACForIP(100, ip)
-		assert.True(t, found)
-		assert.Equal(t, mac.String(), result.String())
+		f.receive(withdrawn(remoteMACRoute(vtepB, "", 2)))
+		assert.Empty(t, f.notified.take(), "B's withdrawal after the move changes nothing")
 	})
 
-	t.Run("lookup MAC for non-existent IP", func(t *testing.T) {
-		speaker := newMockSpeaker()
-		config := testConfig(speaker)
-		manager, err := NewEVPNManager(config)
-		require.NoError(t, err)
+	t.Run("a remote move, then fallback on withdrawal", func(t *testing.T) {
+		f := join(t)
+		f.receive(remoteMACRoute(vtepB, "", 0))
+		f.receive(remoteMACRoute(vtepC, "", 1))
+		vtep, ok := f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		require.True(t, ok)
+		assert.Equal(t, vtepC, vtep)
+		require.Len(t, f.notified.take(), 2)
 
-		ip := netip.MustParseAddr("192.168.1.100")
+		f.receive(withdrawn(remoteMACRoute(vtepC, "", 1)))
+		vtep, ok = f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		require.True(t, ok)
+		assert.Equal(t, vtepB, vtep, "B still advertises the MAC")
+		back := f.notified.take()
+		require.Len(t, back, 1)
+		assert.Equal(t, vtepB, back[0].MACIP.VTEPIP)
 
-		_, found := manager.LookupMACForIP(100, ip)
-		assert.False(t, found)
-	})
-}
-
-// --- Type Tests ---
-
-func TestRouteDistinguisher(t *testing.T) {
-	t.Run("Type 0 bytes", func(t *testing.T) {
-		rd := RouteDistinguisher{
-			Type:           0,
-			Administrator:  65000,
-			AssignedNumber: 100,
-		}
-		bytes := rd.Bytes()
-		assert.Len(t, bytes, 8)
-	})
-
-	t.Run("Type 1 bytes", func(t *testing.T) {
-		rd := RouteDistinguisher{
-			Type:           1,
-			Administrator:  0x0A000001, // 10.0.0.1
-			AssignedNumber: 100,
-		}
-		bytes := rd.Bytes()
-		assert.Len(t, bytes, 8)
+		f.receive(withdrawn(remoteMACRoute(vtepB, "", 0)))
+		gone := f.notified.take()
+		require.Len(t, gone, 1)
+		assert.True(t, gone[0].IsWithdraw)
+		_, ok = f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		assert.False(t, ok)
 	})
 
-	t.Run("Type 2 bytes", func(t *testing.T) {
-		rd := RouteDistinguisher{
-			Type:           2,
-			Administrator:  4200000000,
-			AssignedNumber: 100,
-		}
-		bytes := rd.Bytes()
-		assert.Len(t, bytes, 8)
+	t.Run("withdrawing one of the active VTEP's routes reports that binding gone", func(t *testing.T) {
+		f := join(t)
+		f.receive(remoteMACRoute(vtepB, "", 0))
+		f.receive(remoteMACRoute(vtepB, "10.1.0.10", 0))
+		require.Len(t, f.notified.take(), 2)
+
+		f.receive(withdrawn(remoteMACRoute(vtepB, "10.1.0.10", 0)))
+		gone := f.notified.take()
+		require.Len(t, gone, 1)
+		assert.True(t, gone[0].IsWithdraw)
+		assert.Equal(t, hostIP, gone[0].MACIP.IP)
+		vtep, ok := f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		assert.True(t, ok, "the MAC-only route keeps the MAC at B")
+		assert.Equal(t, vtepB, vtep)
+		_, bound := f.manager.LookupMACForIP(codecL2VNI, hostIP)
+		assert.False(t, bound)
 	})
 
-	t.Run("parse round trip", func(t *testing.T) {
-		original := RouteDistinguisher{
-			Type:           0,
-			Administrator:  65000,
-			AssignedNumber: 100,
-		}
-		bytes := original.Bytes()
-		parsed := ParseRouteDistinguisher(bytes)
-
-		assert.Equal(t, original.Type, parsed.Type)
-		assert.Equal(t, original.Administrator, parsed.Administrator)
-		assert.Equal(t, original.AssignedNumber, parsed.AssignedNumber)
-	})
-}
-
-func TestRouteTarget(t *testing.T) {
-	t.Run("Type 0 bytes", func(t *testing.T) {
-		rt := RouteTarget{
-			Type:        0,
-			GlobalAdmin: 65000,
-			LocalAdmin:  100,
-		}
-		bytes := rt.Bytes()
-		assert.Len(t, bytes, 8)
-		assert.Equal(t, byte(0x00), bytes[0])
-		assert.Equal(t, byte(0x02), bytes[1])
+	t.Run("withdrawing our route hands the MAC to a remote VTEP", func(t *testing.T) {
+		f := join(t)
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}))
+		f.receive(remoteMACRoute(vtepB, "", 0))
+		require.NoError(t, f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, netip.Addr{}))
+		vtep, ok := f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		assert.True(t, ok)
+		assert.Equal(t, vtepB, vtep)
 	})
 
-	t.Run("Type 1 bytes", func(t *testing.T) {
-		rt := RouteTarget{
-			Type:        1,
-			GlobalAdmin: 0x0A000001,
-			LocalAdmin:  100,
-		}
-		bytes := rt.Bytes()
-		assert.Len(t, bytes, 8)
-		assert.Equal(t, byte(0x01), bytes[0])
-	})
+	t.Run("a MAC that keeps moving is frozen for the hold", func(t *testing.T) {
+		f := join(t)
+		f.receive(remoteMACRoute(vtepB, "", 0))
+		f.receive(remoteMACRoute(vtepC, "", 1))
+		f.receive(remoteMACRoute(vtepB, "", 2))
+		vtep, ok := f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		require.True(t, ok)
+		assert.Equal(t, vtepB, vtep)
+		f.notified.take()
 
-	t.Run("Type 2 bytes", func(t *testing.T) {
-		rt := RouteTarget{
-			Type:        2,
-			GlobalAdmin: 4200000000,
-			LocalAdmin:  100,
-		}
-		bytes := rt.Bytes()
-		assert.Len(t, bytes, 8)
-		assert.Equal(t, byte(0x02), bytes[0])
-	})
+		f.receive(remoteMACRoute(vtepC, "", 3))
+		vtep, ok = f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		require.True(t, ok)
+		assert.Equal(t, vtepB, vtep, "a frozen MAC ignores routes")
+		assert.Empty(t, f.notified.take())
+		assert.ErrorIs(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}), ErrDampeningActive)
 
-	t.Run("parse round trip", func(t *testing.T) {
-		original := RouteTarget{
-			Type:        0,
-			GlobalAdmin: 65000,
-			LocalAdmin:  100,
-		}
-		bytes := original.Bytes()
-		parsed := ParseRouteTarget(bytes)
-
-		assert.Equal(t, original.Type, parsed.Type)
-		assert.Equal(t, original.GlobalAdmin, parsed.GlobalAdmin)
-		assert.Equal(t, original.LocalAdmin, parsed.LocalAdmin)
+		f.clock.advance(time.Minute)
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}))
+		assert.Equal(t, uint32(3), f.speaker.lastAdded(t).MACIP.Sequence, "after B's 2")
 	})
 }
 
-func TestMACIPEntry(t *testing.T) {
-	t.Run("Key", func(t *testing.T) {
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			VNI: 100,
-		}
-		key := entry.Key()
-		assert.Equal(t, "100:00:11:22:33:44:55", key)
-	})
-
-	t.Run("Key nil entry", func(t *testing.T) {
-		var entry *MACIPEntry
-		assert.Equal(t, "", entry.Key())
-	})
-
-	t.Run("MACIPKey with IP", func(t *testing.T) {
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			IP:  netip.MustParseAddr("192.168.1.100"),
-			VNI: 100,
-		}
-		key := entry.MACIPKey()
-		assert.Equal(t, "100:00:11:22:33:44:55:192.168.1.100", key)
-	})
-
-	t.Run("MACIPKey without IP", func(t *testing.T) {
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACIPEntry{
-			MAC: mac,
-			VNI: 100,
-		}
-		key := entry.MACIPKey()
-		assert.Equal(t, "100:00:11:22:33:44:55", key)
-	})
-
-	t.Run("HasIP", func(t *testing.T) {
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-		entryWithIP := &MACIPEntry{
-			MAC: mac,
-			IP:  netip.MustParseAddr("192.168.1.100"),
-			VNI: 100,
-		}
-		assert.True(t, entryWithIP.HasIP())
-
-		entryWithoutIP := &MACIPEntry{
-			MAC: mac,
-			VNI: 100,
-		}
-		assert.False(t, entryWithoutIP.HasIP())
-
-		var nilEntry *MACIPEntry
-		assert.False(t, nilEntry.HasIP())
-	})
-
-	t.Run("Clone", func(t *testing.T) {
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		original := &MACIPEntry{
-			MAC:       mac,
-			IP:        netip.MustParseAddr("192.168.1.100"),
-			VNI:       100,
-			VTEPIP:    netip.MustParseAddr("10.0.0.1"),
-			Sequence:  5,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		}
-
-		clone := original.Clone()
-		assert.NotNil(t, clone)
-		assert.Equal(t, original.MAC.String(), clone.MAC.String())
-		assert.Equal(t, original.IP, clone.IP)
-		assert.Equal(t, original.VNI, clone.VNI)
-
-		// Verify deep copy of MAC
-		clone.MAC[0] = 0xFF
-		assert.NotEqual(t, original.MAC[0], clone.MAC[0])
-	})
-
-	t.Run("Clone nil", func(t *testing.T) {
-		var entry *MACIPEntry
-		assert.Nil(t, entry.Clone())
-	})
+// gatedSpeaker holds the next gated speaker call until the test releases
+// it, so the test can act while the manager waits on BGP.
+type gatedSpeaker struct {
+	*recordingSpeaker
+	gateMu     sync.Mutex
+	holdAdd    bool
+	holdDelete bool
+	entered    chan struct{}
+	release    chan struct{}
 }
 
-func TestIMETEntry(t *testing.T) {
-	t.Run("Key", func(t *testing.T) {
-		entry := &IMETEntry{
-			VNI:    100,
-			VTEPIP: netip.MustParseAddr("10.0.0.1"),
-		}
-		key := entry.Key()
-		assert.Equal(t, "100:10.0.0.1", key)
-	})
-
-	t.Run("Key nil entry", func(t *testing.T) {
-		var entry *IMETEntry
-		assert.Equal(t, "", entry.Key())
-	})
-
-	t.Run("Clone", func(t *testing.T) {
-		original := &IMETEntry{
-			VNI:           100,
-			VTEPIP:        netip.MustParseAddr("10.0.0.1"),
-			EthernetTagID: 0,
-			TunnelType:    TunnelTypeIngressReplication,
-			CreatedAt:     time.Now(),
-		}
-
-		clone := original.Clone()
-		assert.NotNil(t, clone)
-		assert.Equal(t, original.VNI, clone.VNI)
-		assert.Equal(t, original.VTEPIP, clone.VTEPIP)
-	})
-
-	t.Run("Clone nil", func(t *testing.T) {
-		var entry *IMETEntry
-		assert.Nil(t, entry.Clone())
-	})
+func newGatedSpeaker() *gatedSpeaker {
+	return &gatedSpeaker{
+		recordingSpeaker: newRecordingSpeaker(),
+		entered:          make(chan struct{}),
+		release:          make(chan struct{}),
+	}
 }
 
-func TestPrefixRoute(t *testing.T) {
-	t.Run("Key", func(t *testing.T) {
-		route := &PrefixRoute{
-			Prefix: netip.MustParsePrefix("192.168.1.0/24"),
-			VNI:    100,
+// holdNext gates the next AddPath, DeletePath, or both.
+func (s *gatedSpeaker) holdNext(add, del bool) {
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	s.holdAdd, s.holdDelete = add, del
+}
+
+func (s *gatedSpeaker) AddPath(ctx context.Context, path *Path) error {
+	s.hold(&s.holdAdd)
+	return s.recordingSpeaker.AddPath(ctx, path)
+}
+
+func (s *gatedSpeaker) DeletePath(ctx context.Context, path *Path) error {
+	s.hold(&s.holdDelete)
+	return s.recordingSpeaker.DeletePath(ctx, path)
+}
+
+// hold signals entered and waits for release when the call is gated.
+func (s *gatedSpeaker) hold(gate *bool) {
+	s.gateMu.Lock()
+	gated := *gate
+	*gate = false
+	s.gateMu.Unlock()
+	if gated {
+		s.entered <- struct{}{}
+		<-s.release
+	}
+}
+
+// fabricView is the fabric as a handler that applies the notifications in
+// the order it is told them sees it: the remote VTEPs of the VNI and where
+// each remote MAC is. The routes it is used with are MAC-only, so a Type-2
+// withdrawal is the MAC gone.
+type fabricView struct {
+	mu    sync.Mutex
+	vteps map[netip.Addr]bool
+	macs  map[string]netip.Addr
+}
+
+func (v *fabricView) handle(_ context.Context, route *EVPNRouteData) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	switch {
+	case route.IMET != nil && route.IsWithdraw:
+		delete(v.vteps, route.IMET.VTEPIP)
+	case route.IMET != nil:
+		v.vteps[route.IMET.VTEPIP] = true
+	case route.MACIP != nil && route.IsWithdraw:
+		if v.macs[route.MACIP.MAC.String()] == route.MACIP.VTEPIP {
+			delete(v.macs, route.MACIP.MAC.String())
 		}
-		key := route.Key()
-		assert.Equal(t, "100:192.168.1.0/24", key)
-	})
-
-	t.Run("Key nil route", func(t *testing.T) {
-		var route *PrefixRoute
-		assert.Equal(t, "", route.Key())
-	})
-
-	t.Run("HasGateway", func(t *testing.T) {
-		routeWithGW := &PrefixRoute{
-			Prefix:    netip.MustParsePrefix("192.168.1.0/24"),
-			VNI:       100,
-			GatewayIP: netip.MustParseAddr("192.168.1.1"),
-		}
-		assert.True(t, routeWithGW.HasGateway())
-
-		routeWithoutGW := &PrefixRoute{
-			Prefix: netip.MustParsePrefix("192.168.1.0/24"),
-			VNI:    100,
-		}
-		assert.False(t, routeWithoutGW.HasGateway())
-
-		var nilRoute *PrefixRoute
-		assert.False(t, nilRoute.HasGateway())
-	})
-
-	t.Run("Clone", func(t *testing.T) {
-		gwMAC, _ := net.ParseMAC("00:11:22:33:44:55")
-		original := &PrefixRoute{
-			Prefix:    netip.MustParsePrefix("192.168.1.0/24"),
-			VNI:       100,
-			GatewayIP: netip.MustParseAddr("192.168.1.1"),
-			NextHop:   netip.MustParseAddr("10.0.0.1"),
-			RouteTargets: []RouteTarget{
-				{Type: 0, GlobalAdmin: 65000, LocalAdmin: 100},
-			},
-			GatewayMAC: gwMAC,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
-		}
-
-		clone := original.Clone()
-		assert.NotNil(t, clone)
-		assert.Equal(t, original.Prefix, clone.Prefix)
-		assert.Equal(t, original.VNI, clone.VNI)
-		assert.Len(t, clone.RouteTargets, 1)
-
-		// Verify deep copy of RouteTargets
-		clone.RouteTargets[0].LocalAdmin = 999
-		assert.NotEqual(t, original.RouteTargets[0].LocalAdmin, clone.RouteTargets[0].LocalAdmin)
-
-		// Verify deep copy of GatewayMAC
-		clone.GatewayMAC[0] = 0xFF
-		assert.NotEqual(t, original.GatewayMAC[0], clone.GatewayMAC[0])
-	})
-
-	t.Run("Clone nil", func(t *testing.T) {
-		var route *PrefixRoute
-		assert.Nil(t, route.Clone())
-	})
+	case route.MACIP != nil:
+		v.macs[route.MACIP.MAC.String()] = route.MACIP.VTEPIP
+	}
+	return nil
 }
 
-func TestEVPNRouteData(t *testing.T) {
-	t.Run("Clone", func(t *testing.T) {
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		original := &EVPNRouteData{
-			Type: EVPNTypeMACIPAdvertisement,
-			RD: RouteDistinguisher{
-				Type:           0,
-				Administrator:  65000,
-				AssignedNumber: 1,
-			},
-			RouteTargets: []RouteTarget{
-				{Type: 0, GlobalAdmin: 65000, LocalAdmin: 100},
-			},
-			MACIP: &MACIPEntry{
-				MAC: mac,
-				VNI: 100,
-			},
-			NextHop:    netip.MustParseAddr("10.0.0.1"),
-			Label:      100,
-			IsWithdraw: false,
-			ReceivedAt: time.Now(),
-		}
-
-		clone := original.Clone()
-		assert.NotNil(t, clone)
-		assert.Equal(t, original.Type, clone.Type)
-		assert.NotNil(t, clone.MACIP)
-		assert.Len(t, clone.RouteTargets, 1)
-	})
-
-	t.Run("Clone nil", func(t *testing.T) {
-		var route *EVPNRouteData
-		assert.Nil(t, route.Clone())
-	})
+func (v *fabricView) remoteVTEPs() []netip.Addr {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	vteps := make([]netip.Addr, 0, len(v.vteps))
+	for vtep := range v.vteps {
+		vteps = append(vteps, vtep)
+	}
+	slices.SortFunc(vteps, netip.Addr.Compare)
+	return vteps
 }
 
-func TestMACMobilityEntry(t *testing.T) {
-	t.Run("Key", func(t *testing.T) {
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		entry := &MACMobilityEntry{
-			VNI: 100,
-			MAC: mac,
-		}
-		key := entry.Key()
-		assert.Equal(t, "100:00:11:22:33:44:55", key)
-	})
-
-	t.Run("Key nil entry", func(t *testing.T) {
-		var entry *MACMobilityEntry
-		assert.Equal(t, "", entry.Key())
-	})
+func (v *fabricView) remoteMAC(mac net.HardwareAddr) (netip.Addr, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	vtep, ok := v.macs[mac.String()]
+	return vtep, ok
 }
 
-// --- Validation Tests ---
-
-func TestValidateVNI(t *testing.T) {
-	t.Run("valid VNI", func(t *testing.T) {
-		assert.NoError(t, validateVNI(1))
-		assert.NoError(t, validateVNI(100))
-		assert.NoError(t, validateVNI(16777215))
-	})
-
-	t.Run("invalid VNI zero", func(t *testing.T) {
-		err := validateVNI(0)
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidVNI{}, err)
-	})
-
-	t.Run("invalid VNI too large", func(t *testing.T) {
-		err := validateVNI(16777216)
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidVNI{}, err)
-	})
+// newGatedFixture is an EVPN fixture whose speaker can be gated, with a
+// fabric view registered as a handler.
+func newGatedFixture(t *testing.T) (*evpnFixture, *gatedSpeaker, *fabricView) {
+	t.Helper()
+	speaker := newGatedSpeaker()
+	f := &evpnFixture{
+		speaker:  speaker.recordingSpeaker,
+		clock:    &testClock{now: time.Unix(1_700_000_000, 0)},
+		notified: &notifications{},
+	}
+	manager, err := NewEVPNManager(evpnTestConfig(speaker, f.clock))
+	require.NoError(t, err)
+	manager.RegisterHandler(f.notified.handle)
+	view := &fabricView{vteps: make(map[netip.Addr]bool), macs: make(map[string]netip.Addr)}
+	manager.RegisterHandler(view.handle)
+	f.manager = manager
+	return f, speaker, view
 }
 
-func TestValidateMAC(t *testing.T) {
-	t.Run("valid MAC", func(t *testing.T) {
-		mac, _ := net.ParseMAC("00:11:22:33:44:55")
-		assert.NoError(t, validateMAC(mac))
+// TestEVPNManager_HandlerOrder interleaves a received route with a join or
+// a local withdrawal waiting on BGP: the handlers must be told the changes
+// in the order they were made, so what they program matches the manager.
+func TestEVPNManager_HandlerOrder(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a Type-3 withdrawal during a join is not undone by the join", func(t *testing.T) {
+		f, speaker, view := newGatedFixture(t)
+		f.receive(remoteIMET(vtepB, 1))
+
+		speaker.holdNext(true, false)
+		joined := make(chan error, 1)
+		go func() { joined <- f.manager.JoinVNI(ctx, codecL2VNI, 0) }()
+		<-speaker.entered
+		f.receive(withdrawn(remoteIMET(vtepB, 1)))
+		close(speaker.release)
+		require.NoError(t, <-joined)
+
+		assert.Empty(t, f.manager.RemoteVTEPs(codecL2VNI))
+		assert.Empty(t, view.remoteVTEPs(), "the handlers were told B joined after it left")
 	})
 
-	t.Run("nil MAC", func(t *testing.T) {
-		err := validateMAC(nil)
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidMAC{}, err)
+	t.Run("a Type-3 route received during a join is taken in once", func(t *testing.T) {
+		f, speaker, view := newGatedFixture(t)
+
+		speaker.holdNext(true, false)
+		joined := make(chan error, 1)
+		go func() { joined <- f.manager.JoinVNI(ctx, codecL2VNI, 0) }()
+		<-speaker.entered
+		f.receive(remoteIMET(vtepB, 1))
+		assert.ErrorAs(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}), new(ErrVNINotJoined), "the join is not done")
+		assert.ErrorAs(t, f.manager.LeaveVNI(ctx, codecL2VNI), new(ErrVNINotJoined), "the join is not done")
+		close(speaker.release)
+		require.NoError(t, <-joined)
+
+		assert.Len(t, f.notified.take(), 1)
+		assert.Equal(t, []netip.Addr{vtepB}, f.manager.RemoteVTEPs(codecL2VNI))
+		assert.Equal(t, []netip.Addr{vtepB}, view.remoteVTEPs())
+		require.NoError(t, f.manager.LeaveVNI(ctx, codecL2VNI))
 	})
 
-	t.Run("short MAC", func(t *testing.T) {
-		mac := net.HardwareAddr{0x00, 0x11, 0x22}
-		err := validateMAC(mac)
-		assert.Error(t, err)
-		assert.IsType(t, ErrInvalidMAC{}, err)
-	})
-}
+	t.Run("a remote withdrawal during WithdrawMACIP is not undone by it", func(t *testing.T) {
+		f, speaker, view := newGatedFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		require.NoError(t, f.manager.AdvertiseMACIP(ctx, &MACIPEntry{MAC: codecHostMAC, VNI: codecL2VNI}))
+		f.receive(remoteMACRoute(vtepB, "", 0))
 
-// --- Helper Function Tests ---
+		speaker.holdNext(false, true)
+		released := make(chan error, 1)
+		go func() { released <- f.manager.WithdrawMACIP(ctx, codecL2VNI, codecHostMAC, netip.Addr{}) }()
+		<-speaker.entered
+		f.receive(withdrawn(remoteMACRoute(vtepB, "", 0)))
+		close(speaker.release)
+		require.NoError(t, <-released)
 
-func TestFormatKey(t *testing.T) {
-	t.Run("format key", func(t *testing.T) {
-		key := formatKey(100, "test")
-		assert.Equal(t, "100:test", key)
-	})
-
-	t.Run("format key zero VNI", func(t *testing.T) {
-		key := formatKey(0, "test")
-		assert.Equal(t, "0:test", key)
-	})
-}
-
-func TestFormatKeyThree(t *testing.T) {
-	t.Run("format key three", func(t *testing.T) {
-		key := formatKeyThree(100, "a", "b")
-		assert.Equal(t, "100:a:b", key)
-	})
-}
-
-func TestFormatUint32(t *testing.T) {
-	t.Run("zero", func(t *testing.T) {
-		assert.Equal(t, "0", formatUint32(0))
-	})
-
-	t.Run("positive", func(t *testing.T) {
-		assert.Equal(t, "123", formatUint32(123))
-	})
-
-	t.Run("large number", func(t *testing.T) {
-		assert.Equal(t, "4294967295", formatUint32(4294967295))
+		_, ok := f.manager.RemoteMAC(codecL2VNI, codecHostMAC)
+		assert.False(t, ok)
+		_, seen := view.remoteMAC(codecHostMAC)
+		assert.False(t, seen, "the handlers were told the MAC moved to B after B withdrew it")
 	})
 }

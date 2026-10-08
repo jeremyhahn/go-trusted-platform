@@ -694,31 +694,20 @@ func (c *Controller) ListVTEPs(ctx context.Context) ([]VTEPInfo, error) {
 	return c.state.ListVTEPs(ctx)
 }
 
-// advertiseIMET advertises an IMET route for a VNI.
+// advertiseIMET joins the VNI's EVI, which advertises its IMET route.
 func (c *Controller) advertiseIMET(ctx context.Context, vni uint32) error {
 	if c.evpnManager == nil {
 		return &ErrComponentNotInitialized{Component: "EVPNManager"}
 	}
-
-	// Implementation would call evpnManager.AdvertiseIMET()
-	// For now, just log the action
-	c.logger.Debug("would advertise IMET",
-		"vni", vni)
-
-	return nil
+	return c.evpnManager.JoinVNI(ctx, vni, 0)
 }
 
-// withdrawIMET withdraws an IMET route for a VNI.
+// withdrawIMET leaves the VNI's EVI, which withdraws its IMET route.
 func (c *Controller) withdrawIMET(ctx context.Context, vni uint32) error {
 	if c.evpnManager == nil {
 		return &ErrComponentNotInitialized{Component: "EVPNManager"}
 	}
-
-	// Implementation would call evpnManager.WithdrawIMET()
-	c.logger.Debug("would withdraw IMET",
-		"vni", vni)
-
-	return nil
+	return c.evpnManager.LeaveVNI(ctx, vni)
 }
 
 // IsRunning returns true if the controller is running.

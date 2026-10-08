@@ -28,6 +28,7 @@ const VXLANInterfaceType = "vxlan"
 // VXLANPortConfig holds VXLAN port configuration for OVS
 type VXLANPortConfig struct {
 	RemoteIP     netip.Addr // Remote VTEP IP (options:remote_ip)
+	RemoteFlow   bool       // Take the remote from each flow's tun_dst (options:remote_ip=flow); excludes RemoteIP
 	LocalIP      netip.Addr // Local VTEP IP (options:local_ip), optional
 	Key          uint32     // VNI/Key (options:key), 0 means use flow-based
 	DstPort      uint16     // UDP destination port (options:dst_port), default 4789
@@ -47,7 +48,14 @@ type VXLANPort struct {
 	DstPort   uint16     // UDP destination port
 	Options   map[string]string
 	IsFlowKey bool // True if VNI is determined by OpenFlow rules
+	// IsFlowRemote is true if the remote VTEP is determined by OpenFlow
+	// rules (options:remote_ip=flow); RemoteIP is then invalid.
+	IsFlowRemote bool
 }
+
+// FlowOption is the tunnel option value that defers a field (remote_ip,
+// key) to the tun_dst / tun_id each flow sets.
+const FlowOption = "flow"
 
 // DefaultVXLANPort is the standard VXLAN UDP port
 const DefaultVXLANPort uint16 = 4789
@@ -57,19 +65,27 @@ const MaxVNI uint32 = 16777215 // 2^24 - 1
 
 // Validate checks if the VXLAN configuration is valid
 func (cfg *VXLANPortConfig) Validate() error {
-	if !cfg.RemoteIP.IsValid() {
-		return ErrInvalidRemoteIP
-	}
+	// A flow-based port takes its remote from each flow's tun_dst, so a
+	// fixed RemoteIP alongside it is a contradiction, not a default.
+	if cfg.RemoteFlow {
+		if cfg.RemoteIP.IsValid() {
+			return ErrInvalidRemoteIP
+		}
+	} else {
+		if !cfg.RemoteIP.IsValid() {
+			return ErrInvalidRemoteIP
+		}
 
-	// RemoteIP must be either IPv4 or IPv6, not zero
-	if cfg.RemoteIP.IsUnspecified() {
-		return ErrInvalidRemoteIP
-	}
+		// RemoteIP must be either IPv4 or IPv6, not zero
+		if cfg.RemoteIP.IsUnspecified() {
+			return ErrInvalidRemoteIP
+		}
 
-	// LocalIP is optional, but if provided must be valid and same family as RemoteIP
-	if cfg.LocalIP.IsValid() && !cfg.LocalIP.IsUnspecified() {
-		if cfg.RemoteIP.Is4() != cfg.LocalIP.Is4() {
-			return ErrIPFamilyMismatch
+		// LocalIP is optional, but if provided must be valid and same family as RemoteIP
+		if cfg.LocalIP.IsValid() && !cfg.LocalIP.IsUnspecified() {
+			if cfg.RemoteIP.Is4() != cfg.LocalIP.Is4() {
+				return ErrIPFamilyMismatch
+			}
 		}
 	}
 
@@ -100,8 +116,12 @@ func generateVXLANPortName(remoteIP netip.Addr, key uint32) string {
 func buildVXLANOptions(cfg *VXLANPortConfig) map[string]string {
 	options := make(map[string]string)
 
-	// Required: remote_ip
-	options["remote_ip"] = cfg.RemoteIP.String()
+	// Required: remote_ip, fixed or taken from each flow's tun_dst
+	if cfg.RemoteFlow {
+		options["remote_ip"] = FlowOption
+	} else {
+		options["remote_ip"] = cfg.RemoteIP.String()
+	}
 
 	// Optional: local_ip
 	if cfg.LocalIP.IsValid() && !cfg.LocalIP.IsUnspecified() {
@@ -112,7 +132,7 @@ func buildVXLANOptions(cfg *VXLANPortConfig) map[string]string {
 	if cfg.Key > 0 {
 		options["key"] = strconv.FormatUint(uint64(cfg.Key), 10)
 	} else {
-		options["key"] = "flow"
+		options["key"] = FlowOption
 	}
 
 	// Optional: dst_port (only if not default 4789)
@@ -226,8 +246,9 @@ func (c *Client) AddVXLANPortWithName(ctx context.Context, bridgeName, portName 
 		[]Mutation{NewMutation("ports", "insert", NamedUUID{NamedUUID: "new_vxlan_port"})},
 	)
 
-	// Execute transaction
-	results, err := c.Transact(ctx, interfaceInsert, portInsert, bridgeMutate)
+	// Execute the transaction and wait for ovs-vswitchd to apply it, so the
+	// port has its ofport when this returns and flows can name it at once.
+	results, err := c.transactApplied(ctx, interfaceInsert, portInsert, bridgeMutate)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to add VXLAN port", Err: err}
 	}
@@ -361,6 +382,7 @@ func parseVXLANPort(port *Port, iface *Interface) *VXLANPort {
 
 	// Parse remote_ip
 	if remoteIPStr, ok := vxlanPort.Options["remote_ip"]; ok {
+		vxlanPort.IsFlowRemote = remoteIPStr == FlowOption
 		if addr, err := netip.ParseAddr(remoteIPStr); err == nil {
 			vxlanPort.RemoteIP = addr
 		}
@@ -375,7 +397,7 @@ func parseVXLANPort(port *Port, iface *Interface) *VXLANPort {
 
 	// Parse key
 	if keyStr, ok := vxlanPort.Options["key"]; ok {
-		if keyStr == "flow" {
+		if keyStr == FlowOption {
 			vxlanPort.Key = 0
 			vxlanPort.IsFlowKey = true
 		} else if key, err := strconv.ParseUint(keyStr, 10, 32); err == nil {
@@ -443,6 +465,7 @@ func (c *Client) GetVXLANPortWithOptions(ctx context.Context, bridgeName, portNa
 
 	// Re-parse the VXLAN-specific fields from options
 	if remoteIPStr, ok := options["remote_ip"]; ok {
+		vxlanPort.IsFlowRemote = remoteIPStr == FlowOption
 		if addr, err := netip.ParseAddr(remoteIPStr); err == nil {
 			vxlanPort.RemoteIP = addr
 		}
@@ -455,7 +478,7 @@ func (c *Client) GetVXLANPortWithOptions(ctx context.Context, bridgeName, portNa
 	}
 
 	if keyStr, ok := options["key"]; ok {
-		if keyStr == "flow" {
+		if keyStr == FlowOption {
 			vxlanPort.Key = 0
 			vxlanPort.IsFlowKey = true
 		} else if key, err := strconv.ParseUint(keyStr, 10, 32); err == nil {

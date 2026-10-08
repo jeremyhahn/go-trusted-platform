@@ -14,7 +14,6 @@
 package bgp
 
 import (
-	"net"
 	"net/netip"
 	"testing"
 	"time"
@@ -615,14 +614,14 @@ func TestBGPConfig_Validate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "evpn without route distinguisher",
+			name: "evpn needs no route distinguisher: each EVI derives its own",
 			config: BGPConfig{
 				RouterID:     validRouterID,
 				ASN:          65001,
 				ListenPort:   179,
 				Capabilities: BGPCapabilities{EVPN: true},
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name: "dampening without half life",
@@ -799,92 +798,6 @@ func TestNeighborConfig_HasAnyAFI(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.config.HasAnyAFI(); got != tt.expected {
 				t.Errorf("NeighborConfig.HasAnyAFI() = %v, want %v", got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestEVPNRoute_Validate(t *testing.T) {
-	mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-	tests := []struct {
-		name    string
-		route   EVPNRoute
-		wantErr bool
-	}{
-		{
-			name: "valid type2",
-			route: EVPNRoute{
-				Type:               EVPNTypeMACIPAdvertisement,
-				RouteDistinguisher: "65001:100",
-				MACAddress:         mac,
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid type3",
-			route: EVPNRoute{
-				Type:               EVPNTypeInclusiveMulticast,
-				RouteDistinguisher: "65001:100",
-				OriginatingIP:      netip.MustParseAddr("10.0.0.1"),
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid type5",
-			route: EVPNRoute{
-				Type:               EVPNTypeIPPrefix,
-				RouteDistinguisher: "65001:100",
-				IPPrefix:           netip.MustParsePrefix("10.0.0.0/24"),
-			},
-			wantErr: false,
-		},
-		{
-			name: "invalid route type",
-			route: EVPNRoute{
-				Type:               EVPNRouteType(100),
-				RouteDistinguisher: "65001:100",
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing route distinguisher",
-			route: EVPNRoute{
-				Type: EVPNTypeMACIPAdvertisement,
-			},
-			wantErr: true,
-		},
-		{
-			name: "type2 missing mac",
-			route: EVPNRoute{
-				Type:               EVPNTypeMACIPAdvertisement,
-				RouteDistinguisher: "65001:100",
-			},
-			wantErr: true,
-		},
-		{
-			name: "type3 missing originating ip",
-			route: EVPNRoute{
-				Type:               EVPNTypeInclusiveMulticast,
-				RouteDistinguisher: "65001:100",
-			},
-			wantErr: true,
-		},
-		{
-			name: "type5 missing prefix",
-			route: EVPNRoute{
-				Type:               EVPNTypeIPPrefix,
-				RouteDistinguisher: "65001:100",
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.route.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("EVPNRoute.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

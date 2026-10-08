@@ -197,7 +197,7 @@ func BenchmarkVTEPConfig_Validate(b *testing.B) {
 	config := &VTEPConfig{
 		LocalIP:       netip.MustParseAddr("10.0.0.1"),
 		UnderlayIface: "eth0",
-		UnderlayMTU:   9000,
+		UnderlayMTU:   9216,
 		VXLANPort:     4789,
 	}
 
@@ -205,55 +205,6 @@ func BenchmarkVTEPConfig_Validate(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = config.Validate()
-	}
-}
-
-func BenchmarkVTEPConfig_EffectiveMTU(b *testing.B) {
-	config := &VTEPConfig{
-		LocalIP:       netip.MustParseAddr("10.0.0.1"),
-		UnderlayIface: "eth0",
-		UnderlayMTU:   9000,
-		VXLANPort:     4789,
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = config.EffectiveMTU()
-	}
-}
-
-// RemoteMACEntry Benchmarks
-
-func BenchmarkRemoteMACEntry_IsExpired(b *testing.B) {
-	entry := &RemoteMACEntry{
-		VNI:        1000100,
-		RemoteVTEP: netip.MustParseAddr("10.0.0.2"),
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = entry.IsExpired()
-	}
-}
-
-// VXLANPortConfig Benchmarks
-
-func BenchmarkVXLANPortConfig_Options(b *testing.B) {
-	config := &VXLANPortConfig{
-		RemoteIP: netip.MustParseAddr("10.0.0.2"),
-		VNI:      1000100,
-		DstPort:  4789,
-		TOS:      0,
-		TTL:      64,
-		DF:       true,
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = config.Options()
 	}
 }
 

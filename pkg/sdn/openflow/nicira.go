@@ -23,6 +23,9 @@ const (
 	// NXASTRegLoad is the register load action subtype (NXAST_REG_LOAD).
 	NXASTRegLoad uint16 = 7
 
+	// NXASTRegMove is the field copy action subtype (NXAST_REG_MOVE).
+	NXASTRegMove uint16 = 6
+
 	// NXASTResubmitTable is the resubmit-to-table action subtype
 	// (NXAST_RESUBMIT_TABLE).
 	NXASTResubmitTable uint16 = 14
@@ -44,12 +47,22 @@ const (
 
 	// resubmitActionLength is the length of nx_action_resubmit.
 	resubmitActionLength = 16
+
+	// regMoveActionLength is the length of nx_action_reg_move.
+	regMoveActionLength = 24
 )
+
+// OXMHeader returns the 32-bit header of an unmasked OXM/NXM field:
+// class, field and the value length in bytes. NXAST_REG_MOVE names its
+// source and destination fields by this header.
+func OXMHeader(class uint16, field uint8, length uint8) uint32 {
+	return uint32(class)<<16 | uint32(field)<<9 | uint32(length)
+}
 
 // NXMHeaderReg returns the 32-bit NXM header of NXM_NX_REGn: class 0x0001,
 // field n, no mask, four bytes.
 func NXMHeaderReg(index uint8) uint32 {
-	return uint32(OFPXMCNxm1)<<16 | uint32(index)<<9 | 4
+	return OXMHeader(OFPXMCNxm1, index, 4)
 }
 
 // AddReg adds an NXM_NX_REGn match. A mask of 0xffffffff matches the
@@ -137,5 +150,45 @@ func (a *ActionResubmit) MarshalBinary() ([]byte, error) {
 	ByteOrder.PutUint16(data[10:12], a.InPort)
 	data[12] = a.Table
 	// 3 bytes padding
+	return data, nil
+}
+
+// ActionRegMove copies a field into another field of the packet
+// (NXAST_REG_MOVE; ovs-ofctl "move:SRC->DST"). It moves whole fields:
+// the two must be the same width, which is all an in-switch ARP
+// responder needs (eth_src->eth_dst, arp_sha->arp_tha, arp_spa->arp_tpa).
+type ActionRegMove struct {
+	Src   uint32 // OXM/NXM header of the source field
+	Dst   uint32 // OXM/NXM header of the destination field
+	NBits uint16 // Width of both fields in bits
+}
+
+// NewActionRegMove copies the whole of src into dst, refusing fields of
+// different or zero width, which the switch would reject.
+func NewActionRegMove(src, dst uint32) (*ActionRegMove, error) {
+	srcBytes := src & 0xff
+	dstBytes := dst & 0xff
+	if srcBytes == 0 || srcBytes != dstBytes {
+		return nil, &MessageError{Msg: fmt.Sprintf("openflow: cannot move a %d-byte field into a %d-byte field", srcBytes, dstBytes)}
+	}
+	return &ActionRegMove{Src: src, Dst: dst, NBits: uint16(srcBytes * 8)}, nil
+}
+
+// Length returns the action length.
+func (a *ActionRegMove) Length() uint16 {
+	return regMoveActionLength
+}
+
+// MarshalBinary encodes nx_action_reg_move with both offsets zero.
+func (a *ActionRegMove) MarshalBinary() ([]byte, error) {
+	data := make([]byte, regMoveActionLength)
+	ByteOrder.PutUint16(data[0:2], OFPATExperimenter)
+	ByteOrder.PutUint16(data[2:4], regMoveActionLength)
+	ByteOrder.PutUint32(data[4:8], NXVendorID)
+	ByteOrder.PutUint16(data[8:10], NXASTRegMove)
+	ByteOrder.PutUint16(data[10:12], a.NBits)
+	// src_ofs and dst_ofs (data[12:16]) stay zero: whole-field moves
+	ByteOrder.PutUint32(data[16:20], a.Src)
+	ByteOrder.PutUint32(data[20:24], a.Dst)
 	return data, nil
 }

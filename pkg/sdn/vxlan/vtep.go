@@ -15,50 +15,50 @@ package vxlan
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/netip"
 	"sync"
 	"sync/atomic"
-	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 )
 
-// OVSClient defines the interface for OVS operations required by VTEP management.
-// This interface is implemented by the ovs.Client type.
+// OVSClient is the part of *ovs.Client the VTEP manager drives.
 type OVSClient interface {
-	// AddVXLANPort creates a VXLAN port on the specified bridge.
-	AddVXLANPort(ctx context.Context, bridge, port string, remoteIP string, vni uint32, dstPort uint16) error
+	// AddVXLANPortWithName creates a VXLAN port and waits until
+	// ovs-vswitchd has applied it.
+	AddVXLANPortWithName(ctx context.Context, bridge, port string, cfg *ovs.VXLANPortConfig) (*ovs.VXLANPort, error)
 
-	// DeletePort removes a port from the specified bridge.
-	DeletePort(ctx context.Context, bridge, port string) error
+	// GetVXLANPortWithOptions reads an existing VXLAN port and its options.
+	GetVXLANPortWithOptions(ctx context.Context, bridge, port string) (*ovs.VXLANPort, error)
 
-	// GetOFPort retrieves the OpenFlow port number for an interface.
-	GetOFPort(ctx context.Context, portName string) (int32, error)
+	// DeleteVXLANPort removes a VXLAN port from a bridge.
+	DeleteVXLANPort(ctx context.Context, bridge, port string) error
 
-	// IsConnected returns true if connected to OVSDB.
-	IsConnected() bool
+	// GetOFPort returns the OpenFlow port number of an interface.
+	GetOFPort(ctx context.Context, port string) (int32, error)
 }
 
-// VTEPManager manages the local VTEP and tunnels to remote VTEPs.
-// It provides thread-safe operations for creating, managing, and
-// monitoring VXLAN tunnels.
+// VTEPManager owns the local VTEP's one flow-based VXLAN port. Every
+// remote VTEP and VNI is reached through that port: a flow sets tun_dst
+// and tun_id and outputs to it, and decapsulated traffic arrives on it with
+// tun_src and tun_id set. There is no port per tunnel.
 type VTEPManager struct {
 	config     VTEPConfig
 	ovsClient  OVSClient
 	bridgeName string
+	portName   string
 	logger     *slog.Logger
 
-	// tunnels maps tunnel keys to tunnel state
-	// Key format: "{remote_vtep}:{vni}"
-	tunnels map[string]*TunnelState
+	// ofPort is the OpenFlow number of the VXLAN port while started.
+	ofPort atomic.Uint32
 
 	// started indicates if the manager has been started
 	started atomic.Bool
 
-	// mu protects tunnels map
-	mu sync.RWMutex
+	// mu serialises Start and Stop
+	mu sync.Mutex
 }
 
 // VTEPManagerOption is a functional option for configuring the VTEPManager.
@@ -68,6 +68,13 @@ type VTEPManagerOption func(*VTEPManager)
 func WithVTEPLogger(logger *slog.Logger) VTEPManagerOption {
 	return func(m *VTEPManager) {
 		m.logger = logger
+	}
+}
+
+// WithPortName names the VXLAN port; DefaultPortName otherwise.
+func WithPortName(name string) VTEPManagerOption {
+	return func(m *VTEPManager) {
+		m.portName = name
 	}
 }
 
@@ -102,38 +109,47 @@ func NewVTEPManager(
 		config:     config,
 		ovsClient:  ovsClient,
 		bridgeName: bridgeName,
+		portName:   DefaultPortName,
 		logger:     logger,
-		tunnels:    make(map[string]*TunnelState),
 	}
 
 	for _, opt := range opts {
 		opt(manager)
 	}
 
+	if manager.portName == "" {
+		return nil, ErrInvalidPortName
+	}
+
 	return manager, nil
 }
 
-// Start initializes the VTEP manager.
-// It validates the configuration and prepares for tunnel management.
+// Start creates the flow-based VXLAN port, or adopts the one a previous
+// run left behind when it is configured alike, and resolves its OpenFlow
+// port number.
 func (m *VTEPManager) Start(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.started.Load() {
 		return ErrManagerAlreadyStarted
 	}
 
-	// Verify OVS connectivity
-	if !m.ovsClient.IsConnected() {
-		m.logger.Error("OVS client not connected during VTEP manager start")
-		return &ErrOVSOperationFailed{
-			Operation: "connect",
-			Target:    "OVSDB",
-			Cause:     ErrVTEPNotConfigured,
-		}
+	if err := m.ensurePort(ctx); err != nil {
+		return err
 	}
 
+	ofPort, err := m.ovsClient.GetOFPort(ctx, m.portName)
+	if err != nil {
+		return &ErrOVSOperationFailed{Operation: "resolve ofport", Target: m.portName, Cause: err}
+	}
+	m.ofPort.Store(uint32(ofPort))
 	m.started.Store(true)
 
 	m.logger.Info("VTEP manager started",
 		slog.String("local_vtep", m.config.LocalIP.String()),
+		slog.String("port", m.portName),
+		slog.Int("ofport", int(ofPort)),
 		slog.String("underlay_iface", m.config.UnderlayIface),
 		slog.Int("underlay_mtu", m.config.UnderlayMTU),
 		slog.Int("vxlan_port", int(m.config.VXLANPort)),
@@ -142,227 +158,67 @@ func (m *VTEPManager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop shuts down the VTEP manager and removes all tunnels.
-func (m *VTEPManager) Stop() error {
+// ensurePort creates the VXLAN port, adopting an existing one only when
+// its remote and key are flow-based and it uses the configured UDP port.
+func (m *VTEPManager) ensurePort(ctx context.Context) error {
+	cfg := &ovs.VXLANPortConfig{
+		RemoteFlow: true,
+		LocalIP:    m.config.LocalIP,
+		DstPort:    m.config.VXLANPort,
+	}
+	_, err := m.ovsClient.AddVXLANPortWithName(ctx, m.bridgeName, m.portName, cfg)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, ovs.ErrVXLANPortExists) {
+		return &ErrOVSOperationFailed{Operation: "create VXLAN port", Target: m.portName, Cause: err}
+	}
+
+	existing, err := m.ovsClient.GetVXLANPortWithOptions(ctx, m.bridgeName, m.portName)
+	if err != nil {
+		return &ErrOVSOperationFailed{Operation: "read VXLAN port", Target: m.portName, Cause: err}
+	}
+	dstPort := existing.DstPort
+	if dstPort == 0 {
+		dstPort = ovs.DefaultVXLANPort
+	}
+	if !existing.IsFlowRemote || !existing.IsFlowKey || dstPort != m.config.VXLANPort {
+		return &ErrPortConflict{Port: m.portName, Options: existing.Options}
+	}
+	return nil
+}
+
+// Stop removes the VXLAN port. Flows that output to it go with it.
+func (m *VTEPManager) Stop(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if !m.started.Load() {
 		return nil
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Mark as stopped first
 	m.started.Store(false)
+	m.ofPort.Store(0)
 
-	// Clean up tunnels
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	var lastErr error
-	for key, tunnel := range m.tunnels {
-		if err := m.removeTunnelLocked(ctx, tunnel); err != nil {
-			m.logger.Error("failed to remove tunnel during shutdown",
-				slog.String("tunnel_id", tunnel.ID),
-				slog.Any("error", err),
-			)
-			lastErr = err
-		}
-		delete(m.tunnels, key)
+	if err := m.ovsClient.DeleteVXLANPort(ctx, m.bridgeName, m.portName); err != nil {
+		return &ErrOVSOperationFailed{Operation: "delete VXLAN port", Target: m.portName, Cause: err}
 	}
 
-	m.logger.Info("VTEP manager stopped")
-
-	return lastErr
-}
-
-// AddTunnel creates a new VXLAN tunnel to a remote VTEP.
-func (m *VTEPManager) AddTunnel(ctx context.Context, remoteVTEP netip.Addr, vni VNI) (*TunnelState, error) {
-	if !m.started.Load() {
-		return nil, ErrManagerNotStarted
-	}
-
-	if !remoteVTEP.IsValid() || remoteVTEP.IsUnspecified() {
-		return nil, ErrInvalidVTEPIP
-	}
-
-	if !vni.Valid() {
-		return nil, ErrVNIOutOfRange
-	}
-
-	// Check if tunnel to same VTEP already exists
-	key := m.tunnelKey(remoteVTEP, vni)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if existing, ok := m.tunnels[key]; ok {
-		return existing, ErrTunnelExists
-	}
-
-	// Generate port name
-	portName := m.generatePortName(remoteVTEP, vni)
-
-	// Create VXLAN port in OVS
-	err := m.ovsClient.AddVXLANPort(
-		ctx,
-		m.bridgeName,
-		portName,
-		remoteVTEP.String(),
-		vni.Uint32(),
-		m.config.VXLANPort,
-	)
-	if err != nil {
-		return nil, &ErrTunnelCreationFailed{
-			RemoteVTEP: remoteVTEP,
-			VNI:        vni,
-			Cause:      err,
-		}
-	}
-
-	// Get OpenFlow port number
-	ofPort, err := m.ovsClient.GetOFPort(ctx, portName)
-	if err != nil {
-		// Cleanup on failure
-		cleanupErr := m.ovsClient.DeletePort(ctx, m.bridgeName, portName)
-		if cleanupErr != nil {
-			m.logger.Error("failed to cleanup port after OFPort retrieval failure",
-				slog.String("port", portName),
-				slog.Any("error", cleanupErr),
-			)
-		}
-		return nil, &ErrTunnelCreationFailed{
-			RemoteVTEP: remoteVTEP,
-			VNI:        vni,
-			Cause:      err,
-		}
-	}
-
-	now := time.Now()
-	tunnel := &TunnelState{
-		ID:         m.generateTunnelID(remoteVTEP, vni),
-		LocalVTEP:  m.config.LocalIP,
-		RemoteVTEP: remoteVTEP,
-		VNI:        vni,
-		OVSPort:    portName,
-		OFPort:     ofPort,
-		State:      TunnelStatusUp,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}
-
-	m.tunnels[key] = tunnel
-
-	m.logger.Info("tunnel created",
-		slog.String("tunnel_id", tunnel.ID),
-		slog.String("remote_vtep", remoteVTEP.String()),
-		slog.Int("vni", int(vni)),
-		slog.String("ovs_port", portName),
-		slog.Int("of_port", int(ofPort)),
-	)
-
-	return tunnel, nil
-}
-
-// RemoveTunnel removes a VXLAN tunnel to a remote VTEP.
-func (m *VTEPManager) RemoveTunnel(ctx context.Context, remoteVTEP netip.Addr, vni VNI) error {
-	if !m.started.Load() {
-		return ErrManagerNotStarted
-	}
-
-	key := m.tunnelKey(remoteVTEP, vni)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	tunnel, ok := m.tunnels[key]
-	if !ok {
-		return ErrTunnelNotFound
-	}
-
-	if err := m.removeTunnelLocked(ctx, tunnel); err != nil {
-		return err
-	}
-
-	delete(m.tunnels, key)
-
-	m.logger.Info("tunnel removed",
-		slog.String("tunnel_id", tunnel.ID),
-		slog.String("remote_vtep", remoteVTEP.String()),
-		slog.Int("vni", int(vni)),
-	)
-
+	m.logger.Info("VTEP manager stopped", slog.String("port", m.portName))
 	return nil
 }
 
-// removeTunnelLocked removes a tunnel from OVS.
-// Caller must hold the write lock.
-func (m *VTEPManager) removeTunnelLocked(ctx context.Context, tunnel *TunnelState) error {
-	err := m.ovsClient.DeletePort(ctx, m.bridgeName, tunnel.OVSPort)
-	if err != nil {
-		return &ErrTunnelDeletionFailed{
-			TunnelID: tunnel.ID,
-			Cause:    err,
-		}
-	}
-	return nil
-}
-
-// GetTunnel retrieves a tunnel by remote VTEP and VNI.
-func (m *VTEPManager) GetTunnel(remoteVTEP netip.Addr, vni VNI) (*TunnelState, error) {
+// OFPort returns the OpenFlow port number of the VXLAN port, or
+// ErrManagerNotStarted before Start.
+func (m *VTEPManager) OFPort() (uint32, error) {
 	if !m.started.Load() {
-		return nil, ErrManagerNotStarted
+		return 0, ErrManagerNotStarted
 	}
-
-	key := m.tunnelKey(remoteVTEP, vni)
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	tunnel, ok := m.tunnels[key]
-	if !ok {
-		return nil, ErrTunnelNotFound
-	}
-
-	// Return a copy to prevent external modification
-	tunnelCopy := *tunnel
-	return &tunnelCopy, nil
+	return m.ofPort.Load(), nil
 }
 
-// GetTunnelByID retrieves a tunnel by its ID.
-func (m *VTEPManager) GetTunnelByID(tunnelID string) (*TunnelState, error) {
-	if !m.started.Load() {
-		return nil, ErrManagerNotStarted
-	}
-
-	if tunnelID == "" {
-		return nil, ErrInvalidTunnelID
-	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, tunnel := range m.tunnels {
-		if tunnel.ID == tunnelID {
-			tunnelCopy := *tunnel
-			return &tunnelCopy, nil
-		}
-	}
-
-	return nil, ErrTunnelNotFound
-}
-
-// ListTunnels returns a list of all tunnels.
-func (m *VTEPManager) ListTunnels() []*TunnelState {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	result := make([]*TunnelState, 0, len(m.tunnels))
-	for _, tunnel := range m.tunnels {
-		tunnelCopy := *tunnel
-		result = append(result, &tunnelCopy)
-	}
-
-	return result
+// PortName returns the name of the VXLAN port.
+func (m *VTEPManager) PortName() string {
+	return m.portName
 }
 
 // GetLocalVTEP returns the local VTEP IP address.
@@ -375,7 +231,7 @@ func (m *VTEPManager) GetConfig() VTEPConfig {
 	return m.config
 }
 
-// GetBridgeName returns the bridge name.
+// GetBridgeName returns the OVS bridge name.
 func (m *VTEPManager) GetBridgeName() string {
 	return m.bridgeName
 }
@@ -383,85 +239,4 @@ func (m *VTEPManager) GetBridgeName() string {
 // IsStarted returns true if the manager has been started.
 func (m *VTEPManager) IsStarted() bool {
 	return m.started.Load()
-}
-
-// TunnelCount returns the number of active tunnels.
-func (m *VTEPManager) TunnelCount() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	return len(m.tunnels)
-}
-
-// UpdateTunnelState updates the state of a tunnel.
-func (m *VTEPManager) UpdateTunnelState(remoteVTEP netip.Addr, vni VNI, state TunnelStatus) error {
-	if !m.started.Load() {
-		return ErrManagerNotStarted
-	}
-
-	key := m.tunnelKey(remoteVTEP, vni)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	tunnel, ok := m.tunnels[key]
-	if !ok {
-		return ErrTunnelNotFound
-	}
-
-	tunnel.State = state
-	tunnel.UpdatedAt = time.Now()
-
-	m.logger.Debug("tunnel state updated",
-		slog.String("tunnel_id", tunnel.ID),
-		slog.String("state", state.String()),
-	)
-
-	return nil
-}
-
-// UpdateTunnelStats updates the statistics for a tunnel.
-func (m *VTEPManager) UpdateTunnelStats(remoteVTEP netip.Addr, vni VNI, bytesSent, bytesRecv uint64) error {
-	if !m.started.Load() {
-		return ErrManagerNotStarted
-	}
-
-	key := m.tunnelKey(remoteVTEP, vni)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	tunnel, ok := m.tunnels[key]
-	if !ok {
-		return ErrTunnelNotFound
-	}
-
-	tunnel.BytesSent = bytesSent
-	tunnel.BytesRecv = bytesRecv
-	tunnel.UpdatedAt = time.Now()
-
-	return nil
-}
-
-// tunnelKey generates a map key for a tunnel.
-func (m *VTEPManager) tunnelKey(remoteVTEP netip.Addr, vni VNI) string {
-	return fmt.Sprintf("%s:%d", remoteVTEP.String(), vni)
-}
-
-// generateTunnelID generates a unique tunnel ID.
-func (m *VTEPManager) generateTunnelID(remoteVTEP netip.Addr, vni VNI) string {
-	return fmt.Sprintf("%s-%s-%d", m.config.LocalIP.String(), remoteVTEP.String(), vni)
-}
-
-// generatePortName generates an OVS port name for a VXLAN tunnel.
-// Uses a hash-based approach for deterministic, collision-free names.
-func (m *VTEPManager) generatePortName(remoteVTEP netip.Addr, vni VNI) string {
-	// Create a deterministic hash of the tunnel parameters
-	input := fmt.Sprintf("%s:%s:%d", m.config.LocalIP.String(), remoteVTEP.String(), vni)
-	hash := sha256.Sum256([]byte(input))
-	hashStr := hex.EncodeToString(hash[:8]) // First 8 bytes = 16 hex chars
-
-	// OVS port names have a 15 character limit
-	// "vxlan-" (6) + hash (9) = 15
-	return fmt.Sprintf("vxlan-%s", hashStr[:9])
 }

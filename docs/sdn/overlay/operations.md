@@ -32,9 +32,9 @@ When adding a new compute host to the overlay network:
 # Check underlay connectivity from new host
 ping -c 3 10.0.0.1  # Existing VTEP
 
-# Verify MTU supports VXLAN (must be >= 1550, ideally 9000)
+# Verify MTU carries an encapsulated 9000-byte frame (must be >= 9050)
 ip link show eth0 | grep mtu
-# mtu 9000 qdisc mq state UP mode DEFAULT
+# mtu 9216 qdisc mq state UP mode DEFAULT
 
 # Verify OVS is running
 systemctl status openvswitch-switch
@@ -47,7 +47,7 @@ ovs-vsctl show
 # Start platformd with the overlay enabled; the VTEP registers itself
 systemctl start platformd
 
-# Verify VTEP registered with the cluster
+# Verify the local VTEP is registered
 platformctl sdn overlay vtep list
 
 # Inspect the new VTEP by node ID
@@ -60,8 +60,9 @@ platformctl sdn overlay vtep get node-005
 # Check tunnels from the new host
 platformctl sdn overlay tunnel list
 
-# Verify OVS VXLAN ports created
-ovs-vsctl show | grep -A 3 vxlan
+# Verify the one flow-based VXLAN port (remote_ip=flow, key=flow);
+# there is no port per remote VTEP
+ovs-vsctl list interface vxlan-evpn
 ```
 
 ### Removing a Host from the Overlay
@@ -97,12 +98,13 @@ watch platformctl sdn overlay vtep list
 # Create VNI mapped to VLAN 100
 platformctl sdn overlay vni create --vni 1000100 --vlan 100 --name production-web
 
-# Verify across the cluster
+# Verify the VNI is registered
 platformctl sdn overlay vni list
 platformctl sdn overlay vni list -o yaml
 
-# Verify encapsulation flows installed on the bridge
-ovs-ofctl dump-flows br-int | grep tun_id
+# Where the overlay mode handler runs, verify its decap flows: one
+# tun_id/tun_src flow per remote VTEP on the VNI (../gateway/overlay-mode.md)
+ovs-ofctl -O OpenFlow13 dump-flows br-int table=10
 ```
 
 ### Deleting a Virtual Network

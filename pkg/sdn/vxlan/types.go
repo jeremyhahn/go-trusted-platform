@@ -11,15 +11,15 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-// Package vxlan provides VXLAN tunnel management for SDN overlay networking.
-// It handles VTEP lifecycle management, VNI-to-VLAN mapping, and tunnel
-// operations for multi-host VXLAN networking.
+// Package vxlan owns the local VTEP of the SDN overlay: the one flow-based
+// VXLAN port a host carries (remote_ip=flow, key=flow), the overlay MTU,
+// and VNI-to-VLAN mapping. Which remote VTEP and VNI a frame travels to is
+// decided per flow (tun_dst, tun_id) by the overlay data plane, never by
+// a port per tunnel.
 package vxlan
 
 import (
-	"net"
 	"net/netip"
-	"time"
 )
 
 // VNI represents a VXLAN Network Identifier.
@@ -38,12 +38,21 @@ const DefaultVXLANPort uint16 = 4789
 // DefaultBaseVNI is the default base VNI for VLAN-to-VNI mapping.
 const DefaultBaseVNI VNI = 1000000
 
-// MinimumMTU is the minimum MTU required for VXLAN encapsulation.
-// VXLAN adds 50 bytes of overhead (14 outer Eth + 20 IP + 8 UDP + 8 VXLAN).
-const MinimumMTU = 1550
-
-// VXLANOverhead is the number of bytes added by VXLAN encapsulation.
+// VXLANOverhead is the number of bytes added by VXLAN encapsulation
+// (14 outer Ethernet + 20 IPv4 + 8 UDP + 8 VXLAN).
 const VXLANOverhead = 50
+
+// OverlayMTU is the MTU every overlay segment carries: jumbo frames end to
+// end, so a workload never has to fragment for the tunnel.
+const OverlayMTU = 9000
+
+// MinimumUnderlayMTU is the smallest underlay MTU that carries an
+// OverlayMTU frame once encapsulated.
+const MinimumUnderlayMTU = OverlayMTU + VXLANOverhead
+
+// DefaultPortName is the name of the one flow-based VXLAN port a VTEP
+// owns on its bridge. It fits the 15-byte Linux interface name limit.
+const DefaultPortName = "vxlan-evpn"
 
 // Valid returns true if the VNI is within the valid range.
 func (v VNI) Valid() bool {
@@ -63,9 +72,9 @@ type VTEPConfig struct {
 	// UnderlayIface is the physical interface name for underlay traffic.
 	UnderlayIface string
 
-	// UnderlayMTU is the MTU of the underlay network.
-	// Should be at least MinimumMTU (1550) for VXLAN to work.
-	// Recommended: 9000 for jumbo frames.
+	// UnderlayMTU is the MTU of the underlay network. It must be at least
+	// MinimumUnderlayMTU (9050) to carry OverlayMTU frames; platform switch
+	// ports run 9216.
 	UnderlayMTU int
 
 	// VXLANPort is the UDP destination port for VXLAN traffic.
@@ -84,19 +93,13 @@ func (c *VTEPConfig) Validate() error {
 	if c.UnderlayIface == "" {
 		return ErrUnderlayNotReady
 	}
-	if c.UnderlayMTU < MinimumMTU {
+	if c.UnderlayMTU < MinimumUnderlayMTU {
 		return ErrMTUTooSmall
 	}
 	if c.VXLANPort == 0 {
 		return ErrInvalidVXLANPort
 	}
 	return nil
-}
-
-// EffectiveMTU returns the effective MTU for overlay traffic
-// after accounting for VXLAN encapsulation overhead.
-func (c *VTEPConfig) EffectiveMTU() int {
-	return c.UnderlayMTU - VXLANOverhead
 }
 
 // TunnelStatus represents the operational state of a VXLAN tunnel.
@@ -130,88 +133,6 @@ func (s TunnelStatus) String() string {
 	}
 }
 
-// TunnelState represents a VXLAN tunnel to a remote VTEP.
-type TunnelState struct {
-	// ID is a unique identifier for this tunnel.
-	// Format: "{local_vtep}-{remote_vtep}-{vni}"
-	ID string
-
-	// LocalVTEP is the local tunnel endpoint IP address.
-	LocalVTEP netip.Addr
-
-	// RemoteVTEP is the remote tunnel endpoint IP address.
-	RemoteVTEP netip.Addr
-
-	// VNI is the VXLAN Network Identifier for this tunnel.
-	VNI VNI
-
-	// OVSPort is the OVS port name for this tunnel.
-	// Format: "vxlan-{hash}" or "vxlan-{last_octet}-{vni}"
-	OVSPort string
-
-	// OFPort is the OpenFlow port number assigned by OVS.
-	OFPort int32
-
-	// State is the current operational state of the tunnel.
-	State TunnelStatus
-
-	// CreatedAt is when this tunnel was created.
-	CreatedAt time.Time
-
-	// UpdatedAt is when this tunnel was last updated.
-	UpdatedAt time.Time
-
-	// BytesSent is the total bytes sent through this tunnel.
-	BytesSent uint64
-
-	// BytesRecv is the total bytes received through this tunnel.
-	BytesRecv uint64
-}
-
-// TunnelStats holds detailed tunnel statistics.
-type TunnelStats struct {
-	// BytesSent is the total bytes sent through the tunnel.
-	BytesSent uint64
-
-	// BytesRecv is the total bytes received through the tunnel.
-	BytesRecv uint64
-
-	// PacketsSent is the total packets sent through the tunnel.
-	PacketsSent uint64
-
-	// PacketsRecv is the total packets received through the tunnel.
-	PacketsRecv uint64
-
-	// ErrorsSent is the total send errors on the tunnel.
-	ErrorsSent uint64
-
-	// ErrorsRecv is the total receive errors on the tunnel.
-	ErrorsRecv uint64
-}
-
-// RemoteMACEntry represents a MAC address learned from a remote VTEP.
-type RemoteMACEntry struct {
-	// MAC is the hardware address of the remote endpoint.
-	MAC net.HardwareAddr
-
-	// VNI is the VXLAN Network Identifier where this MAC was learned.
-	VNI VNI
-
-	// RemoteVTEP is the VTEP IP address where this MAC resides.
-	RemoteVTEP netip.Addr
-
-	// LearnedAt is when this MAC entry was learned.
-	LearnedAt time.Time
-
-	// ExpiresAt is when this MAC entry expires and should be removed.
-	ExpiresAt time.Time
-}
-
-// IsExpired returns true if the MAC entry has expired.
-func (e *RemoteMACEntry) IsExpired() bool {
-	return time.Now().After(e.ExpiresAt)
-}
-
 // VNIMappingConfig holds VNI to VLAN mapping configuration.
 type VNIMappingConfig struct {
 	// BaseVNI is the base VNI value for VLAN-to-VNI calculation.
@@ -230,61 +151,4 @@ func DefaultVNIMappingConfig() VNIMappingConfig {
 		BaseVNI: DefaultBaseVNI,
 		MaxVLAN: 4094,
 	}
-}
-
-// VXLANPortConfig holds configuration for creating a VXLAN port in OVS.
-type VXLANPortConfig struct {
-	// RemoteIP is the remote VTEP IP address.
-	RemoteIP netip.Addr
-
-	// VNI is the VXLAN Network Identifier.
-	// If 0, the tunnel is created with flow-based VNI (key=flow).
-	VNI VNI
-
-	// DstPort is the UDP destination port for VXLAN traffic.
-	DstPort uint16
-
-	// TOS is the Type of Service value for the outer IP header.
-	// 0 means inherit from inner packet.
-	TOS uint8
-
-	// TTL is the Time To Live for the outer IP header.
-	// 0 means use system default.
-	TTL uint8
-
-	// DF controls the Don't Fragment flag on the outer IP header.
-	DF bool
-}
-
-// Options returns the OVS options map for this VXLAN port configuration.
-func (c *VXLANPortConfig) Options() map[string]string {
-	opts := make(map[string]string)
-
-	if c.RemoteIP.IsValid() {
-		opts["remote_ip"] = c.RemoteIP.String()
-	}
-
-	if c.VNI > 0 {
-		opts["key"] = string(rune(c.VNI.Uint32()))
-	} else {
-		opts["key"] = "flow"
-	}
-
-	if c.DstPort > 0 {
-		opts["dst_port"] = string(rune(c.DstPort))
-	}
-
-	if c.TOS > 0 {
-		opts["tos"] = string(rune(c.TOS))
-	}
-
-	if c.TTL > 0 {
-		opts["ttl"] = string(rune(c.TTL))
-	}
-
-	if c.DF {
-		opts["df_default"] = "true"
-	}
-
-	return opts
 }

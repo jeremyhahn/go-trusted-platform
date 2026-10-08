@@ -15,1273 +15,677 @@ package modes
 
 import (
 	"context"
-	"errors"
 	"net"
 	"net/netip"
+	"strconv"
+	"strings"
 	"testing"
-	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 )
 
-// TestOverlayModeHandler_HandleEVPNRoute tests the handleEVPNRoute method.
-func TestOverlayModeHandler_HandleEVPNRoute(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
+// fromVTEP is a frame arriving on the VXLAN port from vtep with tun_id vni.
+func fromVTEP(vni uint32, vtep netip.Addr) []string {
+	return []string{"in_port=7", "tun_id=" + strconv.FormatUint(uint64(vni), 10), "tun_src=" + vtep.String()}
+}
 
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
+func assertVTEPFailed(t *testing.T, err error, operation string) *ErrVTEPOperationFailed {
+	t.Helper()
+	var vtepErr *ErrVTEPOperationFailed
+	require.ErrorAs(t, err, &vtepErr)
+	assert.Equal(t, operation, vtepErr.Operation)
+	return vtepErr
+}
+
+func TestOverlayModeHandler_IMETRoute(t *testing.T) {
+	t.Run("authorises decap only from VTEPs placed on the VNI", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+
+		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
+		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPC)...),
+			"a VTEP not on the VNI is dropped")
+		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI+1, ovlVTEPB)...),
+			"a VTEP on the VNI cannot inject into another")
+		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...),
+			"Type-3 does not authorise the L3VNI")
+	})
+
+	t.Run("replicates BUM traffic to every VTEP on the VNI", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)))
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)), "a repeat changes nothing")
+
+		assert.Equal(t, "push_vlan,set:vlan=100,output:3,pop_vlan,"+
+			"set:tun_dst=10.0.0.2,output:7,set:tun_dst=10.0.0.3,output:7",
+			f.sw.lookup(t, TableEgress, "tun_id=10100"))
+		assert.Equal(t, 2, f.handler.GetStatus().RemoteVTEPCount)
+	})
+
+	t.Run("a withdrawal stops replication and decap from the VTEP", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)))
+
+		require.NoError(t, f.route(t, withdraw(imet(ovlL2VNI, ovlVTEPB))))
+		require.NoError(t, f.route(t, withdraw(imet(ovlL2VNI, ovlVTEPB))), "a repeat changes nothing")
+
+		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
+		assert.Equal(t, "push_vlan,set:vlan=100,output:3,pop_vlan,set:tun_dst=10.0.0.3,output:7",
+			f.sw.lookup(t, TableEgress, "tun_id=10100"))
+	})
+
+	t.Run("routes for a VNI not carried change nothing", func(t *testing.T) {
+		f := newOverlayFixture(t, nil)
+
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+
+		assert.Equal(t, ovlBaseTable, f.sw.table())
+	})
+
+	t.Run("a refused VTEP is not placed on the VNI", func(t *testing.T) {
+		admitter := &recordingAdmitter{refused: map[netip.Addr]bool{ovlVTEPB: true}}
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.Admitter = admitter }).withVNI(t)
+
+		err := f.route(t, imet(ovlL2VNI, ovlVTEPB))
+
+		assertVTEPFailed(t, err, "admit")
+		assert.ErrorIs(t, err, errAdmissionRefused)
+		assert.Equal(t, []string{"10100@10.0.0.2"}, admitter.asked)
+		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
+	})
+
+	t.Run("an IPv6 or unspecified VTEP is refused", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+
+		assert.ErrorIs(t, f.route(t, imet(ovlL2VNI, netip.MustParseAddr("fd00::2"))), ErrInvalidVTEPIP)
+		assert.ErrorIs(t, f.route(t, imet(ovlL2VNI, netip.IPv4Unspecified())), ErrInvalidVTEPIP)
+	})
+
+	t.Run("a switch refusing the flows leaves the list as it was", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		f.sw.fail(errSwitchDown)
+
+		err := f.route(t, imet(ovlL2VNI, ovlVTEPB))
+
+		assertVTEPFailed(t, err, "flood list")
+		f.sw.fail(nil)
+		assert.Zero(t, f.handler.GetStatus().RemoteVTEPCount)
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)), "the route applies once the switch is back")
+		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
+	})
+}
+
+func TestOverlayModeHandler_MACIPRoute(t *testing.T) {
+	t.Run("encapsulates to the VTEP, answers ARP and routes over the L3VNI", func(t *testing.T) {
+		admitter := &recordingAdmitter{}
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.Admitter = admitter }).withVNI(t)
+
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+
+		assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
+			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
+		assert.Contains(t, f.sw.lookup(t, TableARP, "in_port=3", "tun_id=10100", "eth_type=0x806", "arp_op=1",
+			"arp_tpa=10.1.0.20"), "set:arp_sha=02:00:00:00:02:20")
+		assert.Equal(t, "dec_ttl,set:eth_src=02:00:00:00:00:0a,set:eth_dst=02:00:00:00:00:0b,"+
+			"set:tun_id=50000,set:tun_dst=10.0.0.2,output:7",
+			f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.20"))
+		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...),
+			"routed replies from the VTEP are accepted on the L3VNI")
+		assert.Equal(t, "goto:50", f.sw.lookup(t, TableMACLearning, "tun_id=50000", "eth_dst=02:00:00:00:00:0a"))
+		assert.Equal(t, []string{"10100@10.0.0.2", "50000@10.0.0.2"}, admitter.asked)
+	})
+
+	t.Run("a second route of the same VTEP adds a binding", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		second := netip.MustParseAddr("10.1.0.21")
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, second)))
+
+		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		require.NoError(t, err)
+		assert.Equal(t, []netip.Addr{ovlRemoteIP, second}, entry.IPs)
+		assert.Len(t, f.sw.matching("t=50 ", "tun_dst=10.0.0.2"), 2)
+		assert.Len(t, f.sw.matching("t=10 ", "tun_src=10.0.0.2"), 1, "one decap flow serves both")
+	})
+
+	t.Run("a MAC moving to another VTEP takes everything with it", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, netip.MustParseAddr("10.1.0.21"))))
+
+		require.NoError(t, f.route(t, macip(ovlVTEPC, ovlRemoteMAC, ovlRemoteIP)))
+
+		assert.Equal(t, "set:tun_dst=10.0.0.3,output:7",
+			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
+		assert.Empty(t, f.sw.matching("10.0.0.2"), "nothing is left of B")
+		assert.Empty(t, f.sw.matching("10.1.0.21"), "B's other binding left with the MAC")
+	})
+
+	t.Run("withdrawals remove a binding, and the MAC with its last", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		second := netip.MustParseAddr("10.1.0.21")
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, second)))
+
+		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP))))
+
+		assert.Empty(t, f.sw.matching("10.1.0.20"))
+		assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
+			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
+		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...))
+
+		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPB, ovlRemoteMAC, second))))
+
+		assert.Empty(t, f.sw.matching("02:00:00:00:02:20"))
+		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...))
+	})
+
+	t.Run("stale and unknown withdrawals change nothing", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+		before := f.sw.table()
+
+		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPC, ovlRemoteMAC, ovlRemoteIP))), "the MAC left C")
+		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPB, ovlRemoteMAC, netip.MustParseAddr("10.1.0.99")))))
+		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPB, ovlHostMAC, ovlRemoteIP))))
+
+		assert.Equal(t, before, f.sw.table())
+	})
+
+	t.Run("a binding in another IP-VRF is bridged, not routed", func(t *testing.T) {
+		admitter := &recordingAdmitter{}
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.Admitter = admitter }).withVNI(t)
+		route := macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)
+		route.MACIP.L3VNI = ovlL3VNI + 1
+
+		require.NoError(t, f.route(t, route))
+
+		assert.Len(t, f.sw.matching("eth_dst=02:00:00:00:02:20"), 1)
+		assert.Empty(t, f.sw.matching("t=50 ", "10.1.0.20"))
+		assert.Equal(t, []string{"10100@10.0.0.2"}, admitter.asked, "the L3VNI is not asked for")
+	})
+
+	t.Run("without ARP suppression only the gateway is answered", func(t *testing.T) {
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.ARPSuppression = false }).withVNI(t)
+
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+
+		assert.Equal(t, []string{"10.1.0.1"}, arpTargets(f.sw.matching("t=40 ", "arp_tpa=")))
+	})
+
+	t.Run("a VTEP refused on the L3VNI installs nothing", func(t *testing.T) {
+		admitter := &recordingAdmitter{refused: map[netip.Addr]bool{ovlVTEPB: true}}
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.Admitter = admitter }).withVNI(t)
+
+		err := f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP))
+
+		assertVTEPFailed(t, err, "admit")
+		assert.Empty(t, f.sw.matching("02:00:00:00:02:20"))
+	})
+
+	t.Run("routes for an unknown VNI or an invalid MAC change nothing", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		before := f.sw.table()
+		unknown := macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)
+		unknown.MACIP.VNI = ovlL2VNI + 1
+
+		require.NoError(t, f.route(t, unknown))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, net.HardwareAddr{1, 2}, ovlRemoteIP)))
+		require.NoError(t, f.route(t, &bgp.EVPNRouteData{Type: bgp.EVPNTypeMACIPAdvertisement}))
+		require.NoError(t, f.route(t, nil))
+		require.NoError(t, f.route(t, &bgp.EVPNRouteData{Type: bgp.EVPNTypeEthernetSegment}))
+
+		assert.Equal(t, before, f.sw.table())
+	})
+
+	t.Run("a switch refusing the flows installs nothing", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		f.sw.fail(errSwitchDown)
+
+		err := f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP))
+
+		assertMACFailed(t, err, "install remote")
+		f.sw.fail(nil)
+		_, err = f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		assert.ErrorIs(t, err, ErrMACNotFound)
+	})
+
+	t.Run("a switch applying part of the flows is put back", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		before := f.sw.table()
+		f.sw.refuse(1, nil)
+
+		err := f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP))
+
+		assertMACFailed(t, err, "install remote")
+		var partial *openflow.ErrBatchPartialFailure
+		assert.ErrorAs(t, err, &partial)
+		assert.Equal(t, before, f.sw.table(), "no flow the table does not hold is left")
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)), "the route applies on a retry")
+		assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
+			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
+	})
+
+	t.Run("a switch refusing the put-back says the flows may have drifted", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		f.sw.refuse(1, errSwitchDown)
+
+		err := f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP))
+
+		assertMACFailed(t, err, "install remote")
+		f.sw.fail(nil)
+		var resyncErr *ErrFlowResyncFailed
+		require.ErrorAs(t, err, &resyncErr)
+		assert.ErrorIs(t, resyncErr, errSwitchDown)
+	})
+
+	t.Run("the next change after a refused put-back rebuilds the switch from the committed flows", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		f.sw.refuse(1, errSwitchDown)
+		var resyncErr *ErrFlowResyncFailed
+		require.ErrorAs(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)), &resyncErr)
+		f.sw.fail(nil)
+		require.NotEmpty(t, f.sw.matching("tun_src=10.0.0.2"), "the refused batch left a decap flow behind")
+
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)))
+
+		want := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, want.route(t, imet(ovlL2VNI, ovlVTEPC)))
+		assert.Equal(t, want.sw.table(), f.sw.table(), "the switch holds exactly the committed flows")
+		assert.Empty(t, f.sw.matching("tun_src=10.0.0.2"), "no stale decap authorisation survives")
+	})
+
+	t.Run("a refused rebuild is tried again on the next change", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		f.sw.refuse(1, errSwitchDown)
+		require.Error(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+
+		var resyncErr *ErrFlowResyncFailed
+		require.ErrorAs(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)), &resyncErr, "the rebuild is refused")
+		f.sw.fail(nil)
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)))
+
+		want := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, want.route(t, imet(ovlL2VNI, ovlVTEPC)))
+		assert.Equal(t, want.sw.table(), f.sw.table())
+	})
+
+	t.Run("a rebuild installs every drop before the flows it outranks, in the same order every time", func(t *testing.T) {
+		var orders [][]string
+		for range 5 {
+			f := newOverlayFixture(t, nil).withVNI(t)
+			require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)))
+			f.sw.refuse(1, errSwitchDown)
+			require.Error(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+			f.sw.fail(nil)
+			mark := f.sw.batchCount()
+
+			require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+
+			rebuild := f.sw.batchesSince(mark)[0]
+			require.Equal(t, uint8(openflow.OFPFCDelete), rebuild[0].Command, "the rebuild starts with the flush")
+			assertFailClosed(t, rebuild)
+			orders = append(orders, describeMods(rebuild))
+		}
+		for _, order := range orders[1:] {
+			assert.Equal(t, orders[0], order)
+		}
+	})
+
+	t.Run("a switch refusing a withdrawal keeps the MAC", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+		f.sw.fail(errSwitchDown)
+
+		err := f.route(t, withdraw(macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+
+		assertMACFailed(t, err, "withdraw remote")
+		f.sw.fail(nil)
+		_, err = f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		assert.NoError(t, err)
+	})
+}
+
+func TestOverlayModeHandler_BindingConflict(t *testing.T) {
+	conflicts := []struct {
+		name  string
+		mac   net.HardwareAddr
+		ip    netip.Addr
+		owner string
+	}{
+		{name: "the anycast gateway's MAC", mac: ovlAnycastMAC, ip: ovlRemoteIP, owner: "anycast gateway MAC"},
+		{name: "the anycast gateway's IP", mac: ovlRemoteMAC, ip: ovlAnycastIP, owner: "anycast gateway IP"},
 	}
-	defer handler.Stop(ctx)
+	for _, tt := range conflicts {
+		t.Run("a remote binding claiming "+tt.name+" is refused", func(t *testing.T) {
+			f := newOverlayFixture(t, nil).withVNI(t)
+			require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
+			before := f.sw.table()
 
-	// Add VNI first
-	err = handler.AddVNI(ctx, 1000, 100)
-	if err != nil {
-		t.Fatalf("AddVNI() error: %v", err)
+			err := f.route(t, macip(ovlVTEPB, tt.mac, tt.ip))
+
+			assertMACFailed(t, err, "install remote")
+			var conflict *ErrBindingConflict
+			require.ErrorAs(t, err, &conflict)
+			assert.Equal(t, tt.owner, conflict.Owner)
+			assert.Equal(t, before, f.sw.table(), "the gateway's and the host's flows are untouched")
+			assert.Equal(t, uint64(1), f.handler.GetStatus().RefusedBindings)
+			_, err = f.handler.LookupMAC(ovlL2VNI, tt.mac)
+			assert.ErrorIs(t, err, ErrMACNotFound)
+		})
 	}
 
-	t.Run("nil route returns nil", func(t *testing.T) {
-		err := handler.handleEVPNRoute(ctx, nil)
-		if err != nil {
-			t.Errorf("expected nil error for nil route, got: %v", err)
-		}
+	t.Run("a refused binding leaves the MAC's other bindings", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+
+		require.Error(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlAnycastIP)))
+
+		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		require.NoError(t, err)
+		assert.Equal(t, []netip.Addr{ovlRemoteIP}, entry.IPs)
 	})
 
-	t.Run("unknown route type returns nil", func(t *testing.T) {
-		route := &bgp.EVPNRouteData{
-			Type: bgp.EVPNRouteType(255), // Unknown type
-		}
-		err := handler.handleEVPNRoute(ctx, route)
-		if err != nil {
-			t.Errorf("expected nil error for unknown route type, got: %v", err)
-		}
+	t.Run("a binding claiming a local host's IP bridges the MAC and holds the IP back", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
+
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlHostIP)))
+
+		assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
+			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"),
+			"the MAC is bridged to its VTEP while its IP is held back")
+		assert.Contains(t, f.sw.lookup(t, TableARP, "in_port=3", "tun_id=10100", "eth_type=0x806", "arp_op=1",
+			"arp_tpa=10.1.0.10"), "set:arp_sha=02:00:00:00:01:10", "the local host still answers for its IP")
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.10"),
+			"set:eth_dst=02:00:00:00:01:10", "the local host still holds the host route")
+		assert.Equal(t, uint64(1), f.handler.GetStatus().RefusedBindings)
+		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		require.NoError(t, err)
+		assert.Equal(t, ovlVTEPB, entry.VTEPIP)
+		assert.Empty(t, entry.IPs)
 	})
 
-	t.Run("type-2 MAC/IP advertisement", func(t *testing.T) {
-		mac := net.HardwareAddr{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
-		ip := netip.MustParseAddr("192.168.1.50")
-		vtep := netip.MustParseAddr("10.0.0.5")
+	t.Run("a held binding applies once the local host holding the IP is forgotten", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlHostIP)))
 
-		route := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeMACIPAdvertisement,
-			MACIP: &bgp.MACIPEntry{
-				MAC:    mac,
-				IP:     ip,
-				VNI:    1000,
-				VTEPIP: vtep,
-			},
-		}
-		err := handler.handleEVPNRoute(ctx, route)
-		if err != nil {
-			t.Errorf("handleEVPNRoute() error: %v", err)
-		}
+		require.NoError(t, f.handler.ForgetMAC(context.Background(), ovlL2VNI, ovlHostMAC))
 
-		// Verify MAC was learned
-		key := formatMACKey(1000, mac)
-		if _, ok := handler.remoteMACs.Load(key); !ok {
-			t.Error("MAC should have been learned from Type-2 route")
-		}
+		assert.Contains(t, f.sw.lookup(t, TableARP, "in_port=3", "tun_id=10100", "eth_type=0x806", "arp_op=1",
+			"arp_tpa=10.1.0.10"), "set:arp_sha=02:00:00:00:02:20")
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.10"), "tun_dst=10.0.0.2")
+		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		require.NoError(t, err)
+		assert.Equal(t, []netip.Addr{ovlHostIP}, entry.IPs)
 	})
 
-	t.Run("type-3 inclusive multicast", func(t *testing.T) {
-		vtep := netip.MustParseAddr("10.0.0.10")
+	t.Run("a held binding applies once the VNI of the local host holding the IP is removed", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.handler.AddVNI(context.Background(), ovlL2VNI+1, ovlVLAN+1))
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI+1, ovlHostMAC, ovlHostIP))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlHostIP)))
 
-		route := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeInclusiveMulticast,
-			IMET: &bgp.IMETEntry{
-				VNI:    1000,
-				VTEPIP: vtep,
-			},
-		}
-		err := handler.handleEVPNRoute(ctx, route)
-		if err != nil {
-			t.Errorf("handleEVPNRoute() error: %v", err)
-		}
+		require.NoError(t, f.handler.RemoveVNI(context.Background(), ovlL2VNI+1))
 
-		// Verify VTEP was added to replication list
-		list := handler.getReplicationList(1000)
-		found := false
-		for _, v := range list {
-			if v == vtep {
-				found = true
-				break
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.10"), "tun_dst=10.0.0.2")
+	})
+
+	t.Run("a held binding withdrawn before the local host goes is never applied", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlHostIP)))
+
+		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPB, ovlRemoteMAC, ovlHostIP))))
+		require.NoError(t, f.handler.ForgetMAC(context.Background(), ovlL2VNI, ovlHostMAC))
+
+		assert.Empty(t, f.sw.matching("arp_tpa=10.1.0.10"))
+		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		require.NoError(t, err)
+		assert.Equal(t, []netip.Addr{ovlRemoteIP}, entry.IPs, "the MAC's other binding stays")
+	})
+
+	t.Run("a MAC whose only binding is held goes with its withdrawal", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlHostIP)))
+
+		require.NoError(t, f.route(t, withdraw(macip(ovlVTEPB, ovlRemoteMAC, ovlHostIP))))
+
+		_, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		assert.ErrorIs(t, err, ErrMACNotFound)
+		assert.Empty(t, f.sw.matching("eth_dst=02:00:00:00:02:20"))
+	})
+
+	t.Run("a switch refusing a held binding's flows fails the forget and keeps it held", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlHostIP)))
+		f.sw.failAfter(1, errSwitchDown) // the forget's own batch applies
+
+		err := f.handler.ForgetMAC(context.Background(), ovlL2VNI, ovlHostMAC)
+
+		assertMACFailed(t, err, "release held")
+		f.sw.fail(nil)
+		entry, lookupErr := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		require.NoError(t, lookupErr)
+		assert.Empty(t, entry.IPs, "the binding stays held")
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)),
+			"the next route for the MAC applies what it held")
+		entry, lookupErr = f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		require.NoError(t, lookupErr)
+		assert.Equal(t, []netip.Addr{ovlHostIP, ovlRemoteIP}, entry.IPs)
+	})
+
+	t.Run("a local MAC moving to a remote VTEP is not a conflict", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
+
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlHostMAC, ovlHostIP)))
+
+		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlHostMAC)
+		require.NoError(t, err)
+		assert.Equal(t, ovlVTEPB, entry.VTEPIP)
+		assert.Zero(t, f.handler.GetStatus().RefusedBindings)
+	})
+}
+
+// arpTargets returns the arp_tpa each ARP-reply flow answers for.
+func arpTargets(flows []string) []string {
+	var out []string
+	for _, f := range flows {
+		match, _, _ := strings.Cut(f, " -> ")
+		for _, field := range strings.FieldsFunc(match, func(r rune) bool { return r == ',' || r == ' ' }) {
+			if target, ok := strings.CutPrefix(field, "arp_tpa="); ok {
+				out = append(out, target)
 			}
 		}
-		if !found {
-			t.Error("VTEP should have been added to replication list from Type-3 route")
-		}
+	}
+	return out
+}
+
+func TestOverlayModeHandler_PrefixRoute(t *testing.T) {
+	t.Run("routes a prefix through its VTEP, the longest prefix first", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/16")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "10.2.3.9/24")))
+
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.3.7"), "tun_dst=10.0.0.2")
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.4.7"), "tun_dst=10.0.0.3")
+		assert.Equal(t, "drop", f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.3.0.1"))
+		assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPC)...))
+		assert.Equal(t, 2, f.handler.GetStatus().PrefixCount)
 	})
 
-	t.Run("type-5 IP prefix", func(t *testing.T) {
-		route := &bgp.EVPNRouteData{
-			Type:    bgp.EVPNTypeIPPrefix,
-			NextHop: netip.MustParseAddr("10.0.0.20"),
-			PrefixData: &bgp.PrefixRoute{
-				Prefix: netip.MustParsePrefix("172.16.0.0/24"),
-				VNI:    1000,
-			},
-		}
-		err := handler.handleEVPNRoute(ctx, route)
-		if err != nil {
-			t.Errorf("handleEVPNRoute() error: %v", err)
-		}
-		// Type-5 routes are logged but not stored in memory (handled at L3)
+	t.Run("the lowest VTEP carries a prefix, the next takes over", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPB, "10.2.0.0/24")))
+
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.0.7"), "tun_dst=10.0.0.2")
+		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPC)...),
+			"only the carrying VTEP is authorised")
+
+		require.NoError(t, f.route(t, withdraw(prefixRoute(ovlVTEPB, "10.2.0.0/24"))))
+
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.0.7"), "tun_dst=10.0.0.3")
+		assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...))
+
+		require.NoError(t, f.route(t, withdraw(prefixRoute(ovlVTEPC, "10.2.0.0/24"))))
+
+		assert.Equal(t, "drop", f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.0.7"))
+		assert.Empty(t, f.sw.matching("tun_src="))
+		assert.Zero(t, f.handler.GetStatus().PrefixCount)
+	})
+
+	t.Run("a host route outranks the prefix", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.1.0.0/24")))
+
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.20"), "tun_dst=10.0.0.2")
+	})
+
+	t.Run("a route without the router MAC is refused", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		route := prefixRoute(ovlVTEPC, "10.2.0.0/24")
+		route.RouterMAC = nil
+
+		err := f.route(t, route)
+
+		assertVTEPFailed(t, err, "route")
+		assert.ErrorIs(t, err, ErrRouterMACRequired)
+	})
+
+	t.Run("a refused VTEP routes nothing", func(t *testing.T) {
+		admitter := &recordingAdmitter{refused: map[netip.Addr]bool{ovlVTEPC: true}}
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.Admitter = admitter }).withVNI(t)
+
+		err := f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24"))
+
+		assert.ErrorIs(t, err, errAdmissionRefused)
+		assert.Equal(t, []string{"50000@10.0.0.3"}, admitter.asked)
+		assert.Empty(t, f.sw.matching("10.2.0.0"))
+	})
+
+	t.Run("other IP-VRFs, IPv6 and a VTEP without segments change nothing", func(t *testing.T) {
+		f := newOverlayFixture(t, nil)
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")), "no segment yet")
+		f.withVNI(t)
+		before := f.sw.table()
+		other := prefixRoute(ovlVTEPC, "10.2.0.0/24")
+		other.PrefixData.VNI = ovlL3VNI + 1
+
+		require.NoError(t, f.route(t, other))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "fd00:2::/64")))
+
+		assert.Equal(t, before, f.sw.table())
+	})
+
+	t.Run("a VTEP without an L3VNI ignores Type-5 routes", func(t *testing.T) {
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.L3VNI = 0 }).withVNI(t)
+		before := f.sw.table()
+
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
+
+		assert.Equal(t, before, f.sw.table())
+	})
+
+	t.Run("a switch refusing the route keeps the routing as it was", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
+		f.sw.fail(errSwitchDown)
+
+		err := f.route(t, prefixRoute(ovlVTEPB, "10.2.0.0/24"))
+
+		assertVTEPFailed(t, err, "prefix route")
+		f.sw.fail(nil)
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.0.7"), "tun_dst=10.0.0.3")
+		require.NoError(t, f.route(t, withdraw(prefixRoute(ovlVTEPC, "10.2.0.0/24"))),
+			"the table still knows only C's route")
+		assert.Zero(t, f.handler.GetStatus().PrefixCount)
 	})
 }
 
-// TestOverlayModeHandler_HandleType2Route tests the handleType2Route method.
-func TestOverlayModeHandler_HandleType2Route(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-	defer handler.Stop(ctx)
-
-	// Add VNI first
-	err = handler.AddVNI(ctx, 1000, 100)
-	if err != nil {
-		t.Fatalf("AddVNI() error: %v", err)
+// TestOverlayModeHandler_EVPNEvents drives the overlay the way a fabric
+// does: routes received from the BGP speaker, through the EVPN manager.
+func TestOverlayModeHandler_EVPNEvents(t *testing.T) {
+	f := newOverlayFixture(t, nil).withVNI(t)
+	receive := func(route *bgp.EVPNRouteData) {
+		t.Helper()
+		f.sw.drainSends()
+		f.speaker.events <- &bgp.Event{Path: &bgp.Path{EVPN: route}}
+		f.sw.awaitSend(t)
 	}
 
-	t.Run("nil MACIP returns nil", func(t *testing.T) {
-		route := &bgp.EVPNRouteData{
-			Type:  bgp.EVPNTypeMACIPAdvertisement,
-			MACIP: nil,
-		}
-		err := handler.handleType2Route(ctx, route)
-		if err != nil {
-			t.Errorf("expected nil error for nil MACIP, got: %v", err)
-		}
-	})
+	receive(importable(t, imet(ovlL2VNI, ovlVTEPB), ovlL2VNI))
 
-	t.Run("learn new MAC", func(t *testing.T) {
-		mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01}
-		ip := netip.MustParseAddr("192.168.1.101")
-		vtep := netip.MustParseAddr("10.0.0.50")
+	assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...))
+	assert.Contains(t, f.sw.lookup(t, TableEgress, "tun_id=10100"), "set:tun_dst=10.0.0.2,output:7")
 
-		route := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeMACIPAdvertisement,
-			MACIP: &bgp.MACIPEntry{
-				MAC:    mac,
-				IP:     ip,
-				VNI:    1000,
-				VTEPIP: vtep,
-			},
-			IsWithdraw: false,
-		}
-		err := handler.handleType2Route(ctx, route)
-		if err != nil {
-			t.Errorf("handleType2Route() error: %v", err)
-		}
+	receive(importable(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP), ovlL2VNI, ovlL3VNI))
 
-		// Verify MAC was learned
-		key := formatMACKey(1000, mac)
-		if _, ok := handler.remoteMACs.Load(key); !ok {
-			t.Error("MAC should have been learned")
-		}
+	assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
+		f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
+	assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.20"), "set:tun_id=50000")
 
-		// Verify ARP entry
-		arpKey := formatARPKey(1000, ip)
-		if _, ok := handler.arpTable.Load(arpKey); !ok {
-			t.Error("ARP entry should have been created")
-		}
-	})
+	receive(withdraw(importable(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP), ovlL2VNI, ovlL3VNI)))
 
-	t.Run("withdraw MAC", func(t *testing.T) {
-		mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02}
-		ip := netip.MustParseAddr("192.168.1.102")
-		vtep := netip.MustParseAddr("10.0.0.51")
-
-		// First learn the MAC
-		learnRoute := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeMACIPAdvertisement,
-			MACIP: &bgp.MACIPEntry{
-				MAC:    mac,
-				IP:     ip,
-				VNI:    1000,
-				VTEPIP: vtep,
-			},
-			IsWithdraw: false,
-		}
-		err := handler.handleType2Route(ctx, learnRoute)
-		if err != nil {
-			t.Fatalf("failed to learn MAC: %v", err)
-		}
-
-		// Verify MAC exists
-		key := formatMACKey(1000, mac)
-		if _, ok := handler.remoteMACs.Load(key); !ok {
-			t.Fatal("MAC should exist before withdrawal")
-		}
-
-		// Now withdraw
-		withdrawRoute := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeMACIPAdvertisement,
-			MACIP: &bgp.MACIPEntry{
-				MAC:    mac,
-				IP:     ip,
-				VNI:    1000,
-				VTEPIP: vtep,
-			},
-			IsWithdraw: true,
-		}
-		err = handler.handleType2Route(ctx, withdrawRoute)
-		if err != nil {
-			t.Errorf("handleType2Route() withdraw error: %v", err)
-		}
-
-		// Verify MAC was removed
-		if _, ok := handler.remoteMACs.Load(key); ok {
-			t.Error("MAC should have been withdrawn")
-		}
-
-		// Verify ARP entry was removed
-		arpKey := formatARPKey(1000, ip)
-		if _, ok := handler.arpTable.Load(arpKey); ok {
-			t.Error("ARP entry should have been removed")
-		}
-	})
-
-	t.Run("withdraw MAC without IP", func(t *testing.T) {
-		mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x03}
-		vtep := netip.MustParseAddr("10.0.0.52")
-
-		// First learn the MAC (without IP)
-		learnRoute := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeMACIPAdvertisement,
-			MACIP: &bgp.MACIPEntry{
-				MAC:    mac,
-				VNI:    1000,
-				VTEPIP: vtep,
-			},
-			IsWithdraw: false,
-		}
-		err := handler.handleType2Route(ctx, learnRoute)
-		if err != nil {
-			t.Fatalf("failed to learn MAC: %v", err)
-		}
-
-		// Now withdraw
-		withdrawRoute := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeMACIPAdvertisement,
-			MACIP: &bgp.MACIPEntry{
-				MAC:    mac,
-				VNI:    1000,
-				VTEPIP: vtep,
-			},
-			IsWithdraw: true,
-		}
-		err = handler.handleType2Route(ctx, withdrawRoute)
-		if err != nil {
-			t.Errorf("handleType2Route() withdraw error: %v", err)
-		}
-
-		// Verify MAC was removed
-		key := formatMACKey(1000, mac)
-		if _, ok := handler.remoteMACs.Load(key); ok {
-			t.Error("MAC should have been withdrawn")
-		}
-	})
+	assert.Empty(t, f.sw.matching("02:00:00:00:02:20"))
+	assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...))
+	assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL2VNI, ovlVTEPB)...),
+		"B is still on the VNI")
 }
 
-// TestOverlayModeHandler_HandleType3Route tests the handleType3Route method.
-func TestOverlayModeHandler_HandleType3Route(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
+// TestOverlayModeHandler_EVPNNextHopChange checks that a route sent again
+// with a new next hop leaves its old VTEP neither routed nor authorised.
+func TestOverlayModeHandler_EVPNNextHopChange(t *testing.T) {
+	f := newOverlayFixture(t, nil).withVNI(t)
+	route := importable(t, prefixRoute(ovlVTEPB, "10.2.0.0/24"), ovlL3VNI)
+	f.sw.drainSends()
+	f.speaker.events <- &bgp.Event{Path: &bgp.Path{EVPN: route}}
+	f.sw.awaitSend(t)
+	require.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...))
 
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-	defer handler.Stop(ctx)
+	moved := importable(t, prefixRoute(ovlVTEPC, "10.2.0.0/24"), ovlL3VNI)
+	moved.RD = route.RD
+	f.sw.drainSends()
+	f.speaker.events <- &bgp.Event{Path: &bgp.Path{EVPN: moved}}
+	f.sw.awaitSend(t) // the route at B withdrawn
+	f.sw.awaitSend(t) // the route at C installed
 
-	// Add VNI first
-	err = handler.AddVNI(ctx, 1000, 100)
-	if err != nil {
-		t.Fatalf("AddVNI() error: %v", err)
-	}
-
-	t.Run("nil IMET returns nil", func(t *testing.T) {
-		route := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeInclusiveMulticast,
-			IMET: nil,
-		}
-		err := handler.handleType3Route(ctx, route)
-		if err != nil {
-			t.Errorf("expected nil error for nil IMET, got: %v", err)
-		}
-	})
-
-	t.Run("add VTEP to replication list", func(t *testing.T) {
-		vtep := netip.MustParseAddr("10.0.0.100")
-
-		route := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeInclusiveMulticast,
-			IMET: &bgp.IMETEntry{
-				VNI:    1000,
-				VTEPIP: vtep,
-			},
-			IsWithdraw: false,
-		}
-		err := handler.handleType3Route(ctx, route)
-		if err != nil {
-			t.Errorf("handleType3Route() error: %v", err)
-		}
-
-		// Verify VTEP was added
-		list := handler.getReplicationList(1000)
-		found := false
-		for _, v := range list {
-			if v == vtep {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Error("VTEP should be in replication list")
-		}
-	})
-
-	t.Run("withdraw VTEP from replication list", func(t *testing.T) {
-		vtep := netip.MustParseAddr("10.0.0.101")
-
-		// First add
-		addRoute := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeInclusiveMulticast,
-			IMET: &bgp.IMETEntry{
-				VNI:    1000,
-				VTEPIP: vtep,
-			},
-			IsWithdraw: false,
-		}
-		err := handler.handleType3Route(ctx, addRoute)
-		if err != nil {
-			t.Fatalf("failed to add VTEP: %v", err)
-		}
-
-		// Now withdraw
-		withdrawRoute := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeInclusiveMulticast,
-			IMET: &bgp.IMETEntry{
-				VNI:    1000,
-				VTEPIP: vtep,
-			},
-			IsWithdraw: true,
-		}
-		err = handler.handleType3Route(ctx, withdrawRoute)
-		if err != nil {
-			t.Errorf("handleType3Route() withdraw error: %v", err)
-		}
-
-		// Verify VTEP was removed
-		list := handler.getReplicationList(1000)
-		for _, v := range list {
-			if v == vtep {
-				t.Error("VTEP should have been removed from replication list")
-			}
-		}
-	})
+	assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.2.0.7"), "tun_dst=10.0.0.3")
+	assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...),
+		"the old next hop is no longer authorised")
+	assert.Equal(t, "goto:20", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPC)...))
+	assert.Equal(t, 1, f.handler.GetStatus().PrefixCount)
 }
 
-// TestOverlayModeHandler_HandleType5Route tests the handleType5Route method.
-func TestOverlayModeHandler_HandleType5Route(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-	defer handler.Stop(ctx)
-
-	t.Run("nil PrefixData returns nil", func(t *testing.T) {
-		route := &bgp.EVPNRouteData{
-			Type:       bgp.EVPNTypeIPPrefix,
-			PrefixData: nil,
-		}
-		err := handler.handleType5Route(ctx, route)
-		if err != nil {
-			t.Errorf("expected nil error for nil PrefixData, got: %v", err)
-		}
-	})
-
-	t.Run("receive Type-5 route", func(t *testing.T) {
-		route := &bgp.EVPNRouteData{
-			Type:    bgp.EVPNTypeIPPrefix,
-			NextHop: netip.MustParseAddr("10.0.0.200"),
-			PrefixData: &bgp.PrefixRoute{
-				Prefix: netip.MustParsePrefix("10.100.0.0/16"),
-				VNI:    2000,
-			},
-			IsWithdraw: false,
-		}
-		err := handler.handleType5Route(ctx, route)
-		if err != nil {
-			t.Errorf("handleType5Route() error: %v", err)
-		}
-	})
-
-	t.Run("withdraw Type-5 route", func(t *testing.T) {
-		route := &bgp.EVPNRouteData{
-			Type: bgp.EVPNTypeIPPrefix,
-			PrefixData: &bgp.PrefixRoute{
-				Prefix: netip.MustParsePrefix("10.100.0.0/16"),
-				VNI:    2000,
-			},
-			IsWithdraw: true,
-		}
-		err := handler.handleType5Route(ctx, route)
-		if err != nil {
-			t.Errorf("handleType5Route() withdraw error: %v", err)
-		}
-	})
-}
-
-// TestOverlayModeHandler_RemoveRemoteMACFlow tests the removeRemoteMACFlow method.
-func TestOverlayModeHandler_RemoveRemoteMACFlow(t *testing.T) {
-	handler, _, ofClient := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-	defer handler.Stop(ctx)
-
-	t.Run("remove MAC flow success", func(t *testing.T) {
-		mac := net.HardwareAddr{0xde, 0xad, 0xbe, 0xef, 0x00, 0x01}
-		err := handler.removeRemoteMACFlow(ctx, 1000, mac)
-		if err != nil {
-			t.Errorf("removeRemoteMACFlow() error: %v", err)
-		}
-
-		// Verify flow was deleted
-		if ofClient.delFlowCount.Load() == 0 {
-			t.Error("expected flow deletion")
-		}
-	})
-
-	t.Run("remove MAC flow with error", func(t *testing.T) {
-		ofClient.delFlowErr = errMockError
-		defer func() { ofClient.delFlowErr = nil }()
-
-		mac := net.HardwareAddr{0xde, 0xad, 0xbe, 0xef, 0x00, 0x02}
-		err := handler.removeRemoteMACFlow(ctx, 1000, mac)
-		if err == nil {
-			t.Error("expected error when flow deletion fails")
-		}
-	})
-}
-
-// TestOverlayModeHandler_InstallAnycastGatewayFlows tests the installAnycastGatewayFlows method.
-func TestOverlayModeHandler_InstallAnycastGatewayFlows(t *testing.T) {
-	config := createTestOverlayConfig()
-	config.AnycastGatewayIP = netip.MustParseAddr("192.168.1.1")
-	config.AnycastGatewayMAC = net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}
-
-	ovsClient := newMockOVSClient()
-	ofClient := newMockOpenFlowClient()
-
-	handler, err := NewOverlayModeHandler(config, ovsClient, ofClient)
-	if err != nil {
-		t.Fatalf("failed to create handler: %v", err)
-	}
-
-	ctx := context.Background()
-	// Set running state manually for test
-	handler.running.Store(true)
-	handler.startedAt = time.Now()
-
-	t.Run("install anycast flows success", func(t *testing.T) {
-		initialCount := ofClient.addFlowCount.Load()
-		err := handler.installAnycastGatewayFlows(ctx)
-		if err != nil {
-			t.Errorf("installAnycastGatewayFlows() error: %v", err)
-		}
-
-		// Should install 2 flows (ARP responder + L3 routing)
-		flowsAdded := ofClient.addFlowCount.Load() - initialCount
-		if flowsAdded != 2 {
-			t.Errorf("expected 2 flows added, got %d", flowsAdded)
-		}
-	})
-
-	t.Run("install anycast flows with error", func(t *testing.T) {
-		ofClient.addFlowErr = errMockError
-		defer func() { ofClient.addFlowErr = nil }()
-
-		err := handler.installAnycastGatewayFlows(ctx)
-		if err == nil {
-			t.Error("expected error when flow installation fails")
-		}
-	})
-}
-
-// TestOverlayModeHandler_InstallOpenFlowPipeline tests the installOpenFlowPipeline method.
-func TestOverlayModeHandler_InstallOpenFlowPipeline(t *testing.T) {
-	handler, _, ofClient := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	handler.running.Store(true)
-	handler.startedAt = time.Now()
-
-	t.Run("install pipeline success", func(t *testing.T) {
-		err := handler.installOpenFlowPipeline(ctx)
-		if err != nil {
-			t.Errorf("installOpenFlowPipeline() error: %v", err)
-		}
-
-		// Should install multiple flows for the pipeline tables
-		if ofClient.addFlowCount.Load() == 0 {
-			t.Error("expected flows to be installed")
-		}
-	})
-
-	t.Run("install pipeline with first flow error", func(t *testing.T) {
-		ofClient.addFlowErr = errMockError
-		defer func() { ofClient.addFlowErr = nil }()
-
-		err := handler.installOpenFlowPipeline(ctx)
-		if err == nil {
-			t.Error("expected error when flow installation fails")
-		}
-	})
-}
-
-// TestOverlayModeHandler_InstallOpenFlowPipelineWithAnycast tests pipeline with anycast gateway.
-func TestOverlayModeHandler_InstallOpenFlowPipelineWithAnycast(t *testing.T) {
-	config := createTestOverlayConfig()
-	config.AnycastGatewayIP = netip.MustParseAddr("192.168.1.1")
-	config.AnycastGatewayMAC = net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}
-
-	ovsClient := newMockOVSClient()
-	ofClient := newMockOpenFlowClient()
-
-	handler, err := NewOverlayModeHandler(config, ovsClient, ofClient)
-	if err != nil {
-		t.Fatalf("failed to create handler: %v", err)
-	}
-
-	ctx := context.Background()
-	handler.running.Store(true)
-	handler.startedAt = time.Now()
-
-	t.Run("install pipeline with anycast", func(t *testing.T) {
-		err := handler.installOpenFlowPipeline(ctx)
-		if err != nil {
-			t.Errorf("installOpenFlowPipeline() error: %v", err)
-		}
-
-		// Should install base pipeline + anycast flows
-		if ofClient.addFlowCount.Load() < 8 { // 6 base + 2 anycast
-			t.Errorf("expected at least 8 flows for pipeline with anycast, got %d", ofClient.addFlowCount.Load())
-		}
-	})
-}
-
-// TestOverlayModeHandler_LookupMAC tests the LookupMAC method.
-func TestOverlayModeHandler_LookupMAC(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-	defer handler.Stop(ctx)
-
-	// Add VNI first
-	err = handler.AddVNI(ctx, 1000, 100)
-	if err != nil {
-		t.Fatalf("AddVNI() error: %v", err)
-	}
-
-	// Learn a MAC
-	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-	ip := netip.MustParseAddr("192.168.1.100")
-	localVTEP := handler.config.VTEPConfig.LocalIP
-	err = handler.LearnMAC(ctx, mac, ip, 1000, localVTEP)
-	if err != nil {
-		t.Fatalf("LearnMAC() error: %v", err)
-	}
-
-	t.Run("lookup existing local MAC", func(t *testing.T) {
-		entry, err := handler.LookupMAC(ctx, mac, 1000)
-		if err != nil {
-			t.Errorf("LookupMAC() error: %v", err)
-		}
-		if entry == nil {
-			t.Fatal("expected entry to be non-nil")
-		}
-		if entry.Source != MACSourceLocal {
-			t.Errorf("expected local source, got %v", entry.Source)
-		}
-	})
-
-	t.Run("lookup non-existent MAC", func(t *testing.T) {
-		unknownMAC := net.HardwareAddr{0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
-		_, err := handler.LookupMAC(ctx, unknownMAC, 1000)
-		if err != ErrMACNotFound {
-			t.Errorf("expected ErrMACNotFound, got: %v", err)
-		}
-	})
-
-	t.Run("lookup in wrong VNI", func(t *testing.T) {
-		_, err := handler.LookupMAC(ctx, mac, 9999)
-		if err != ErrMACNotFound {
-			t.Errorf("expected ErrMACNotFound for wrong VNI, got: %v", err)
-		}
-	})
-
-	t.Run("lookup nil MAC", func(t *testing.T) {
-		_, err := handler.LookupMAC(ctx, nil, 1000)
-		if err != ErrMACNil {
-			t.Errorf("expected ErrMACNil, got: %v", err)
-		}
-	})
-
-	t.Run("lookup invalid MAC length", func(t *testing.T) {
-		shortMAC := net.HardwareAddr{0xaa, 0xbb}
-		_, err := handler.LookupMAC(ctx, shortMAC, 1000)
-		if err != ErrMACInvalid {
-			t.Errorf("expected ErrMACInvalid, got: %v", err)
-		}
-	})
-}
-
-// TestOverlayModeHandler_LookupMAC_NotRunning tests LookupMAC when not running.
-func TestOverlayModeHandler_LookupMAC_NotRunning(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-
-	_, err := handler.LookupMAC(ctx, mac, 1000)
-	if err != ErrNotRunning {
-		t.Errorf("expected ErrNotRunning, got: %v", err)
-	}
-}
-
-// TestOverlayModeHandler_StartComponents tests Start with component initialization.
-func TestOverlayModeHandler_StartComponents(t *testing.T) {
-	handler, _, ofClient := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-
-	t.Run("start installs OpenFlow pipeline", func(t *testing.T) {
-		err := handler.Start(ctx)
-		if err != nil {
-			t.Fatalf("Start() error: %v", err)
-		}
-		defer handler.Stop(ctx)
-
-		// Verify flows were installed for pipeline
-		if ofClient.addFlowCount.Load() == 0 {
-			t.Error("expected pipeline flows to be installed")
-		}
-	})
-}
-
-// TestOverlayModeHandler_StartWithFlowError tests Start when flow installation fails.
-func TestOverlayModeHandler_StartWithFlowError(t *testing.T) {
-	handler, _, ofClient := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-
-	// Set error before start
-	ofClient.addFlowErr = errMockError
-
-	err := handler.Start(ctx)
-	if err == nil {
-		t.Error("expected error when pipeline installation fails")
-	}
-
-	// Handler should not be running
-	if handler.running.Load() {
-		t.Error("handler should not be running after failed start")
-	}
-}
-
-// TestOverlayModeHandler_StopComponents tests Stop with component cleanup.
-func TestOverlayModeHandler_StopComponents(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-
-	// Add some VNIs
-	handler.AddVNI(ctx, 1000, 100)
-	handler.AddVNI(ctx, 2000, 200)
-
-	// Stop should clean up
-	err = handler.Stop(ctx)
-	if err != nil {
-		t.Errorf("Stop() error: %v", err)
-	}
-
-	if handler.running.Load() {
-		t.Error("handler should not be running after stop")
-	}
-}
-
-// errMockError is a mock error for testing.
-var errMockError = &mockError{msg: "mock error"}
-
-// mockError implements error for testing.
-type mockError struct {
-	msg string
-}
-
-func (e *mockError) Error() string {
-	return e.msg
-}
-
-// TestOverlayModeHandler_GetStatusNotRunning tests GetStatus when not running.
-func TestOverlayModeHandler_GetStatusNotRunning(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
-
-	status := handler.GetStatus()
-	if status == nil {
-		t.Fatal("GetStatus() should not return nil")
-	}
-	if status.Running {
-		t.Error("status.Running should be false when not started")
-	}
-	if status.VNICount != 0 {
-		t.Errorf("expected VNICount 0, got %d", status.VNICount)
-	}
-}
-
-// TestOverlayModeHandler_CleanupVNIMACs tests the cleanupVNIMACs method.
-func TestOverlayModeHandler_CleanupVNIMACs(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-	defer handler.Stop(ctx)
-
-	// Add VNI
-	err = handler.AddVNI(ctx, 1000, 100)
-	if err != nil {
-		t.Fatalf("AddVNI() error: %v", err)
-	}
-
-	// Learn some MACs
-	localVTEP := handler.config.VTEPConfig.LocalIP
-	for i := 0; i < 5; i++ {
-		mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, byte(i)}
-		ip := netip.MustParseAddr("192.168.1.100")
-		handler.LearnMAC(ctx, mac, ip, 1000, localVTEP)
-	}
-
-	// Verify MACs exist
-	count := 0
-	handler.localMACs.Range(func(_, _ any) bool {
-		count++
-		return true
-	})
-	if count != 5 {
-		t.Fatalf("expected 5 local MACs, got %d", count)
-	}
-
-	// Cleanup
-	handler.cleanupVNIMACs(1000)
-
-	// Verify MACs are removed
-	count = 0
-	handler.localMACs.Range(func(_, _ any) bool {
-		count++
-		return true
-	})
-	if count != 0 {
-		t.Errorf("expected 0 local MACs after cleanup, got %d", count)
-	}
-}
-
-// TestOverlayModeHandler_ReplicationListOperations tests replication list operations.
-func TestOverlayModeHandler_ReplicationListOperations(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-	defer handler.Stop(ctx)
-
-	t.Run("get empty replication list", func(t *testing.T) {
-		list := handler.getReplicationList(9999)
-		if list != nil {
-			t.Errorf("expected nil for non-existent VNI, got %v", list)
-		}
-	})
-
-	t.Run("add to replication list", func(t *testing.T) {
-		vtep1 := netip.MustParseAddr("10.0.0.1")
-		vtep2 := netip.MustParseAddr("10.0.0.2")
-
-		handler.addToReplicationList(1000, vtep1)
-		handler.addToReplicationList(1000, vtep2)
-
-		list := handler.getReplicationList(1000)
-		if len(list) != 2 {
-			t.Errorf("expected 2 VTEPs, got %d", len(list))
-		}
-	})
-
-	t.Run("add duplicate to replication list", func(t *testing.T) {
-		vtep := netip.MustParseAddr("10.0.0.1")
-
-		// Should not add duplicate
-		handler.addToReplicationList(1000, vtep)
-
-		list := handler.getReplicationList(1000)
-		if len(list) != 2 {
-			t.Errorf("expected 2 VTEPs (no duplicate), got %d", len(list))
-		}
-	})
-
-	t.Run("remove from replication list", func(t *testing.T) {
-		vtep := netip.MustParseAddr("10.0.0.1")
-
-		handler.removeFromReplicationList(1000, vtep)
-
-		list := handler.getReplicationList(1000)
-		if len(list) != 1 {
-			t.Errorf("expected 1 VTEP after removal, got %d", len(list))
-		}
-	})
-
-	t.Run("remove non-existent from replication list", func(t *testing.T) {
-		vtep := netip.MustParseAddr("10.0.0.99")
-
-		// Should not panic
-		handler.removeFromReplicationList(1000, vtep)
-
-		list := handler.getReplicationList(1000)
-		if len(list) != 1 {
-			t.Errorf("expected 1 VTEP (unchanged), got %d", len(list))
-		}
-	})
-}
-
-// TestOverlayModeHandler_VTEPInUse tests the vtepInUse method.
-func TestOverlayModeHandler_VTEPInUse(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-	defer handler.Stop(ctx)
-
-	vtep := netip.MustParseAddr("10.0.0.50")
-
-	t.Run("VTEP not in use", func(t *testing.T) {
-		if handler.vtepInUse(vtep) {
-			t.Error("VTEP should not be in use initially")
-		}
-	})
-
-	t.Run("VTEP in use after adding to replication list", func(t *testing.T) {
-		handler.addToReplicationList(1000, vtep)
-
-		if !handler.vtepInUse(vtep) {
-			t.Error("VTEP should be in use after adding to replication list")
-		}
-	})
-
-	t.Run("VTEP not in use after removal", func(t *testing.T) {
-		handler.removeFromReplicationList(1000, vtep)
-
-		if handler.vtepInUse(vtep) {
-			t.Error("VTEP should not be in use after removal")
-		}
-	})
-}
-
-// TestOverlayModeHandler_FormatHelpers tests the format helper functions.
-func TestOverlayModeHandler_FormatHelpers(t *testing.T) {
-	t.Run("formatMACKey", func(t *testing.T) {
-		mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-		key := formatMACKey(1000, mac)
-		if key == "" {
-			t.Error("key should not be empty")
-		}
-	})
-
-	t.Run("formatARPKey", func(t *testing.T) {
-		ip := netip.MustParseAddr("192.168.1.100")
-		key := formatARPKey(1000, ip)
-		if key == "" {
-			t.Error("key should not be empty")
-		}
-	})
-
-	t.Run("formatVNIPrefix", func(t *testing.T) {
-		prefix := formatVNIPrefix(1000)
-		if prefix == "" {
-			t.Error("prefix should not be empty")
-		}
-	})
-
-	t.Run("formatUint32", func(t *testing.T) {
-		s := formatUint32(12345)
-		if s != "12345" {
-			t.Errorf("expected '12345', got '%s'", s)
-		}
-	})
-}
-
-// TestOverlayModeHandler_EncodeVLAN tests the encodeVLAN function.
-func TestOverlayModeHandler_EncodeVLAN(t *testing.T) {
-	t.Run("encode VLAN 100", func(t *testing.T) {
-		encoded := encodeVLAN(100)
-		if len(encoded) != 2 {
-			t.Errorf("expected 2 bytes, got %d", len(encoded))
-		}
-		// VLAN 100 with CFI bit set: 0x1064
-		expected := uint16(100) | 0x1000
-		got := uint16(encoded[0])<<8 | uint16(encoded[1])
-		if got != expected {
-			t.Errorf("expected 0x%04X, got 0x%04X", expected, got)
-		}
-	})
-
-	t.Run("encode VLAN 0", func(t *testing.T) {
-		encoded := encodeVLAN(0)
-		expected := uint16(0) | 0x1000
-		got := uint16(encoded[0])<<8 | uint16(encoded[1])
-		if got != expected {
-			t.Errorf("expected 0x%04X, got 0x%04X", expected, got)
-		}
-	})
-
-	t.Run("encode VLAN 4094", func(t *testing.T) {
-		encoded := encodeVLAN(4094)
-		expected := uint16(4094) | 0x1000
-		got := uint16(encoded[0])<<8 | uint16(encoded[1])
-		if got != expected {
-			t.Errorf("expected 0x%04X, got 0x%04X", expected, got)
-		}
-	})
-}
-
-// TestOverlayModeHandler_ValidateMAC tests the validateMAC function.
-func TestOverlayModeHandler_ValidateMAC(t *testing.T) {
-	t.Run("valid MAC", func(t *testing.T) {
-		mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-		err := validateMAC(mac)
-		if err != nil {
-			t.Errorf("expected no error, got: %v", err)
-		}
-	})
-
-	t.Run("nil MAC", func(t *testing.T) {
-		err := validateMAC(nil)
-		if err != ErrMACNil {
-			t.Errorf("expected ErrMACNil, got: %v", err)
-		}
-	})
-
-	t.Run("short MAC", func(t *testing.T) {
-		mac := net.HardwareAddr{0xaa, 0xbb}
-		err := validateMAC(mac)
-		if err != ErrMACInvalid {
-			t.Errorf("expected ErrMACInvalid, got: %v", err)
-		}
-	})
-
-	t.Run("long MAC (EUI-64) is invalid", func(t *testing.T) {
-		mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11}
-		err := validateMAC(mac)
-		// Standard Ethernet MACs are 6 bytes, EUI-64 (8-byte) is not supported
-		if err == nil {
-			t.Error("expected error for EUI-64 MAC, but got nil")
-		}
-	})
-}
-
-// TestOverlayModeHandler_ValidateVNI tests the validateVNI function.
-func TestOverlayModeHandler_ValidateVNI(t *testing.T) {
-	t.Run("valid VNI", func(t *testing.T) {
-		err := validateVNI(1000)
-		if err != nil {
-			t.Errorf("expected no error, got: %v", err)
-		}
-	})
-
-	t.Run("VNI 0 invalid", func(t *testing.T) {
-		err := validateVNI(0)
-		if err != ErrVNIOutOfRange {
-			t.Errorf("expected ErrVNIOutOfRange, got: %v", err)
-		}
-	})
-
-	t.Run("VNI too large", func(t *testing.T) {
-		err := validateVNI(16777216) // 2^24
-		if err != ErrVNIOutOfRange {
-			t.Errorf("expected ErrVNIOutOfRange, got: %v", err)
-		}
-	})
-
-	t.Run("VNI max valid", func(t *testing.T) {
-		err := validateVNI(16777215) // 2^24 - 1
-		if err != nil {
-			t.Errorf("expected no error for max VNI, got: %v", err)
-		}
-	})
-
-	t.Run("VNI 1 valid", func(t *testing.T) {
-		err := validateVNI(1)
-		if err != nil {
-			t.Errorf("expected no error for min VNI, got: %v", err)
-		}
-	})
-}
-
-// TestOverlayModeHandler_StartWithEVPN tests Start with EVPN manager.
-func TestOverlayModeHandler_StartWithEVPN(t *testing.T) {
-	config := createTestOverlayConfig()
-	ovsClient := newMockOVSClient()
-	ofClient := newMockOpenFlowClient()
-
-	handler, err := NewOverlayModeHandler(config, ovsClient, ofClient)
-	if err != nil {
-		t.Fatalf("failed to create handler: %v", err)
-	}
-
-	ctx := context.Background()
-	err = handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-
-	// Verify handler started
-	if !handler.running.Load() {
-		t.Error("expected handler to be running")
-	}
-
-	// Stop and verify cleanup
-	err = handler.Stop(ctx)
-	if err != nil {
-		t.Errorf("Stop() error: %v", err)
-	}
-
-	if handler.running.Load() {
-		t.Error("expected handler to be stopped")
-	}
-}
-
-// TestOverlayModeHandler_StopIdempotent tests that Stop is idempotent.
-func TestOverlayModeHandler_StopIdempotent(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-
-	// Stop twice
-	err = handler.Stop(ctx)
-	if err != nil {
-		t.Errorf("first Stop() error: %v", err)
-	}
-
-	err = handler.Stop(ctx)
-	if err != nil {
-		t.Errorf("second Stop() should also succeed: %v", err)
-	}
-}
-
-// TestOverlayModeHandler_NewWithNilConfig tests NewOverlayModeHandler with nil config.
-func TestOverlayModeHandler_NewWithNilConfig(t *testing.T) {
-	_, err := NewOverlayModeHandler(nil, nil, nil)
-	if err != ErrConfigNil {
-		t.Errorf("expected ErrConfigNil, got: %v", err)
-	}
-}
-
-// TestOverlayModeHandler_NewWithNilOVS tests NewOverlayModeHandler with nil OVS client.
-func TestOverlayModeHandler_NewWithNilOVS(t *testing.T) {
-	config := createTestOverlayConfig()
-	_, err := NewOverlayModeHandler(config, nil, nil)
-	if err != ErrOVSClientNil {
-		t.Errorf("expected ErrOVSClientNil, got: %v", err)
-	}
-}
-
-// TestOverlayModeHandler_NewWithNilOpenFlow tests NewOverlayModeHandler with nil OpenFlow client.
-func TestOverlayModeHandler_NewWithNilOpenFlow(t *testing.T) {
-	config := createTestOverlayConfig()
-	ovsClient := newMockOVSClient()
-	_, err := NewOverlayModeHandler(config, ovsClient, nil)
-	if err != ErrOpenFlowClientNil {
-		t.Errorf("expected ErrOpenFlowClientNil, got: %v", err)
-	}
-}
-
-// TestOverlayModeHandler_LearnMAC_LocalVTEP tests learning a MAC from local VTEP.
-func TestOverlayModeHandler_LearnMAC_LocalVTEP(t *testing.T) {
-	handler, _, _ := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-	defer handler.Stop(ctx)
-
-	// Add VNI first
-	err = handler.AddVNI(ctx, 1000, 100)
-	if err != nil {
-		t.Fatalf("AddVNI() error: %v", err)
-	}
-
-	// Learn a MAC from local VTEP
-	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01}
-	ip := netip.MustParseAddr("192.168.1.10")
-	localVTEP := handler.config.VTEPConfig.LocalIP
-
-	err = handler.LearnMAC(ctx, mac, ip, 1000, localVTEP)
-	if err != nil {
-		t.Errorf("LearnMAC() error: %v", err)
-	}
-
-	// Verify MAC was learned as local
-	entry, err := handler.LookupMAC(ctx, mac, 1000)
-	if err != nil {
-		t.Errorf("LookupMAC() error: %v", err)
-	}
-	if entry.Source != MACSourceLocal {
-		t.Errorf("expected local source, got %v", entry.Source)
-	}
-}
-
-// TestOverlayModeHandler_LearnMAC_RemoteVTEP tests learning a MAC from remote VTEP.
-func TestOverlayModeHandler_LearnMAC_RemoteVTEP(t *testing.T) {
-	handler, _, ofClient := createTestHandlerWithMocks(t)
-
-	ctx := context.Background()
-	err := handler.Start(ctx)
-	if err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-	defer handler.Stop(ctx)
-
-	// Add VNI first
-	err = handler.AddVNI(ctx, 1000, 100)
-	if err != nil {
-		t.Fatalf("AddVNI() error: %v", err)
-	}
-
-	// Learn a MAC from remote VTEP
-	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02}
-	ip := netip.MustParseAddr("192.168.1.20")
-	remoteVTEP := netip.MustParseAddr("10.0.0.100")
-
-	initialFlowCount := ofClient.addFlowCount.Load()
-
-	err = handler.LearnMAC(ctx, mac, ip, 1000, remoteVTEP)
-	if err != nil {
-		t.Errorf("LearnMAC() error: %v", err)
-	}
-
-	// Verify flow was installed for remote MAC
-	if ofClient.addFlowCount.Load() <= initialFlowCount {
-		t.Error("expected flow to be installed for remote MAC")
-	}
-}
-
-// TestOverlayModeHandler_PipelineBatching verifies the base pipeline, anycast
-// gateway, and VNI flows are installed as batched OpenFlow transactions.
-func TestOverlayModeHandler_PipelineBatching(t *testing.T) {
-	t.Run("base pipeline is one batch", func(t *testing.T) {
-		handler, _, ofClient := createTestHandlerWithMocks(t)
-		ctx := context.Background()
-
-		if err := handler.installOpenFlowPipeline(ctx); err != nil {
-			t.Fatalf("installOpenFlowPipeline() error: %v", err)
-		}
-		if batches := ofClient.batchCount.Load(); batches != 1 {
-			t.Errorf("expected 1 batch for base pipeline, got %d", batches)
-		}
-		if flows := ofClient.addFlowCount.Load(); flows != 6 {
-			t.Errorf("expected 6 pipeline flows, got %d", flows)
-		}
-	})
-
-	t.Run("pipeline with anycast is two batches", func(t *testing.T) {
-		config := createTestOverlayConfig()
-		config.AnycastGatewayIP = netip.MustParseAddr("192.168.1.1")
-		config.AnycastGatewayMAC = net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}
-
-		ovsClient := newMockOVSClient()
-		ofClient := newMockOpenFlowClient()
-		handler, err := NewOverlayModeHandler(config, ovsClient, ofClient)
-		if err != nil {
-			t.Fatalf("failed to create handler: %v", err)
-		}
-
-		if err := handler.installOpenFlowPipeline(context.Background()); err != nil {
-			t.Fatalf("installOpenFlowPipeline() error: %v", err)
-		}
-		if batches := ofClient.batchCount.Load(); batches != 2 {
-			t.Errorf("expected 2 batches (pipeline + anycast), got %d", batches)
-		}
-		if flows := ofClient.addFlowCount.Load(); flows != 8 {
-			t.Errorf("expected 8 flows (6 pipeline + 2 anycast), got %d", flows)
-		}
-	})
-
-	t.Run("VNI flows are one batch of two", func(t *testing.T) {
-		handler, _, ofClient := createTestHandlerWithMocks(t)
-
-		if err := handler.installVNIFlows(context.Background(), 1000, 100); err != nil {
-			t.Fatalf("installVNIFlows() error: %v", err)
-		}
-		if batches := ofClient.batchCount.Load(); batches != 1 {
-			t.Errorf("expected 1 batch for VNI flows, got %d", batches)
-		}
-		if flows := ofClient.addFlowCount.Load(); flows != 2 {
-			t.Errorf("expected 2 VNI flows (decap + encap), got %d", flows)
-		}
-	})
-
-	t.Run("pipeline batch failure surfaces typed error", func(t *testing.T) {
-		handler, _, ofClient := createTestHandlerWithMocks(t)
-		ofClient.addFlowErr = errMockError
-
-		err := handler.installOpenFlowPipeline(context.Background())
-		var initErr *ErrOverlayInitFailed
-		if !errors.As(err, &initErr) {
-			t.Fatalf("expected *ErrOverlayInitFailed, got %T: %v", err, err)
-		}
-		if !errors.Is(err, errMockError) {
-			t.Error("expected wrapped cause to match errMockError")
-		}
-	})
-
-	t.Run("VNI batch failure surfaces typed error", func(t *testing.T) {
-		handler, _, ofClient := createTestHandlerWithMocks(t)
-		ofClient.addFlowErr = errMockError
-
-		err := handler.installVNIFlows(context.Background(), 1000, 100)
-		var flowErr *ErrFlowOperationFailed
-		if !errors.As(err, &flowErr) {
-			t.Fatalf("expected *ErrFlowOperationFailed, got %T: %v", err, err)
-		}
-	})
+// TestOverlayModeHandler_EVPNIRBRouteTarget checks that a Type-2 route is
+// routed over the L3VNI only when it carries the IP-VRF's route target.
+func TestOverlayModeHandler_EVPNIRBRouteTarget(t *testing.T) {
+	f := newOverlayFixture(t, nil).withVNI(t)
+	f.sw.drainSends()
+
+	f.speaker.events <- &bgp.Event{Path: &bgp.Path{EVPN: importable(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP), ovlL2VNI)}}
+	f.sw.awaitSend(t)
+
+	assert.Equal(t, "set:tun_dst=10.0.0.2,output:7",
+		f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"), "the MAC is bridged")
+	assert.Empty(t, f.sw.matching("t=50 ", "10.1.0.20"), "the host is not routed")
+	assert.Equal(t, "drop", f.sw.lookup(t, TableVXLANDecap, fromVTEP(ovlL3VNI, ovlVTEPB)...),
+		"the VTEP is not authorised on the L3VNI")
 }

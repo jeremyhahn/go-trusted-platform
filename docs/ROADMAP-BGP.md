@@ -271,17 +271,11 @@ pkg/sdn/vxlan/
 
 ### QuicBaaS Cluster State
 
-- [x] **VXLAN State Types** (`pkg/sdn/cluster/vxlan_types.go`)
-  - [x] VTEPState with versioning
-  - [x] TunnelState with versioning
-  - [x] VNIMappingState with versioning
-  - [x] RemoteMACState with versioning and expiry
-
-- [x] **VXLAN DAOs** (`pkg/sdn/cluster/*_dao.go`)
-  - [x] VTEP DAO with CRUD operations
-  - [x] Tunnel DAO with CRUD operations
-  - [x] VNI Mapping DAO with CRUD operations
-  - [x] Remote MAC DAO with CRUD operations
+- **Removed (#709).** The VXLAN state types and the VTEP, tunnel, VNI
+  mapping and remote-MAC DAOs in `pkg/sdn/cluster`, and its state-change
+  notifier, were never consumed and were deleted. VTEP, VNI and remote-MAC
+  state is carried by EVPN routes; the data plane is built from them
+  ([sdn/gateway/overlay-mode.md](sdn/gateway/overlay-mode.md)).
 
 ### Unit Tests
 
@@ -991,10 +985,10 @@ sdn:
 
 | File | Changes |
 |------|---------|
-| `pkg/sdn/cluster/types.go` | Add VXLANState, VNIMappingState, RemoteMACState, GatewayState |
+| `pkg/sdn/cluster/types.go` | Add GatewayState (overlay state is carried by EVPN, #709) |
 | `pkg/sdn/ovs/client.go` | Add VXLAN port management methods |
 | `pkg/sdn/openflow/messages.go` | Add tunnel ID match/action |
-| `pkg/sdn/cluster/sync.go` | Extend for overlay and gateway state sync |
+| `pkg/sdn/cluster/sync.go` | Extend for gateway state sync |
 | `pkg/api/grpc/proto/sdn.proto` | Add overlay/bgp/gateway RPCs |
 | `pkg/device/sdn_integration.go` | Integrate edge gateway onboarding |
 

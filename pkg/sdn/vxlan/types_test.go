@@ -14,13 +14,10 @@
 package vxlan
 
 import (
-	"net"
 	"net/netip"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestVNI_Valid(t *testing.T) {
@@ -108,7 +105,7 @@ func TestVTEPConfig_Validate(t *testing.T) {
 			config: VTEPConfig{
 				LocalIP:       validIP,
 				UnderlayIface: "eth0",
-				UnderlayMTU:   9000,
+				UnderlayMTU:   9216,
 				VXLANPort:     DefaultVXLANPort,
 			},
 			expectError: nil,
@@ -118,7 +115,7 @@ func TestVTEPConfig_Validate(t *testing.T) {
 			config: VTEPConfig{
 				LocalIP:       netip.Addr{},
 				UnderlayIface: "eth0",
-				UnderlayMTU:   9000,
+				UnderlayMTU:   9216,
 				VXLANPort:     DefaultVXLANPort,
 			},
 			expectError: ErrInvalidVTEPIP,
@@ -128,7 +125,7 @@ func TestVTEPConfig_Validate(t *testing.T) {
 			config: VTEPConfig{
 				LocalIP:       netip.MustParseAddr("0.0.0.0"),
 				UnderlayIface: "eth0",
-				UnderlayMTU:   9000,
+				UnderlayMTU:   9216,
 				VXLANPort:     DefaultVXLANPort,
 			},
 			expectError: ErrInvalidVTEPIP,
@@ -138,17 +135,17 @@ func TestVTEPConfig_Validate(t *testing.T) {
 			config: VTEPConfig{
 				LocalIP:       validIP,
 				UnderlayIface: "",
-				UnderlayMTU:   9000,
+				UnderlayMTU:   9216,
 				VXLANPort:     DefaultVXLANPort,
 			},
 			expectError: ErrUnderlayNotReady,
 		},
 		{
-			name: "MTU too small",
+			name: "a 9000-byte underlay cannot carry a 9000-byte overlay",
 			config: VTEPConfig{
 				LocalIP:       validIP,
 				UnderlayIface: "eth0",
-				UnderlayMTU:   1500,
+				UnderlayMTU:   OverlayMTU,
 				VXLANPort:     DefaultVXLANPort,
 			},
 			expectError: ErrMTUTooSmall,
@@ -158,7 +155,7 @@ func TestVTEPConfig_Validate(t *testing.T) {
 			config: VTEPConfig{
 				LocalIP:       validIP,
 				UnderlayIface: "eth0",
-				UnderlayMTU:   9000,
+				UnderlayMTU:   9216,
 				VXLANPort:     0,
 			},
 			expectError: ErrInvalidVXLANPort,
@@ -168,7 +165,7 @@ func TestVTEPConfig_Validate(t *testing.T) {
 			config: VTEPConfig{
 				LocalIP:       validIP,
 				UnderlayIface: "eth0",
-				UnderlayMTU:   MinimumMTU,
+				UnderlayMTU:   MinimumUnderlayMTU,
 				VXLANPort:     DefaultVXLANPort,
 			},
 			expectError: nil,
@@ -183,39 +180,6 @@ func TestVTEPConfig_Validate(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
-		})
-	}
-}
-
-func TestVTEPConfig_EffectiveMTU(t *testing.T) {
-	tests := []struct {
-		name        string
-		underlayMTU int
-		expectedMTU int
-	}{
-		{
-			name:        "jumbo frames",
-			underlayMTU: 9000,
-			expectedMTU: 9000 - VXLANOverhead,
-		},
-		{
-			name:        "standard MTU",
-			underlayMTU: 1550,
-			expectedMTU: 1550 - VXLANOverhead,
-		},
-		{
-			name:        "large jumbo",
-			underlayMTU: 16000,
-			expectedMTU: 16000 - VXLANOverhead,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			config := VTEPConfig{
-				UnderlayMTU: tc.underlayMTU,
-			}
-			assert.Equal(t, tc.expectedMTU, config.EffectiveMTU())
 		})
 	}
 }
@@ -261,94 +225,11 @@ func TestTunnelStatus_String(t *testing.T) {
 	}
 }
 
-func TestRemoteMACEntry_IsExpired(t *testing.T) {
-	mac, err := net.ParseMAC("aa:bb:cc:dd:ee:ff")
-	require.NoError(t, err)
-
-	tests := []struct {
-		name          string
-		expiresAt     time.Time
-		expectExpired bool
-	}{
-		{
-			name:          "not expired - future",
-			expiresAt:     time.Now().Add(time.Hour),
-			expectExpired: false,
-		},
-		{
-			name:          "expired - past",
-			expiresAt:     time.Now().Add(-time.Hour),
-			expectExpired: true,
-		},
-		{
-			name:          "just expired",
-			expiresAt:     time.Now().Add(-time.Second),
-			expectExpired: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			entry := RemoteMACEntry{
-				MAC:        mac,
-				VNI:        1000100,
-				RemoteVTEP: netip.MustParseAddr("10.0.0.2"),
-				LearnedAt:  time.Now().Add(-time.Hour),
-				ExpiresAt:  tc.expiresAt,
-			}
-			assert.Equal(t, tc.expectExpired, entry.IsExpired())
-		})
-	}
-}
-
 func TestDefaultVNIMappingConfig(t *testing.T) {
 	config := DefaultVNIMappingConfig()
 
 	assert.Equal(t, DefaultBaseVNI, config.BaseVNI)
 	assert.Equal(t, uint16(4094), config.MaxVLAN)
-}
-
-func TestVXLANPortConfig_Options(t *testing.T) {
-	t.Run("valid configuration with all options", func(t *testing.T) {
-		config := VXLANPortConfig{
-			RemoteIP: netip.MustParseAddr("10.0.0.2"),
-			VNI:      1000100,
-			DstPort:  4789,
-			TOS:      0,
-			TTL:      64,
-			DF:       true,
-		}
-
-		opts := config.Options()
-
-		assert.Contains(t, opts, "remote_ip")
-		assert.Equal(t, "10.0.0.2", opts["remote_ip"])
-		assert.Contains(t, opts, "key")
-		assert.Contains(t, opts, "df_default")
-		assert.Equal(t, "true", opts["df_default"])
-	})
-
-	t.Run("flow-based VNI when VNI is zero", func(t *testing.T) {
-		config := VXLANPortConfig{
-			RemoteIP: netip.MustParseAddr("10.0.0.2"),
-			VNI:      0,
-		}
-
-		opts := config.Options()
-
-		assert.Equal(t, "flow", opts["key"])
-	})
-
-	t.Run("invalid remote IP", func(t *testing.T) {
-		config := VXLANPortConfig{
-			RemoteIP: netip.Addr{},
-			VNI:      1000100,
-		}
-
-		opts := config.Options()
-
-		assert.NotContains(t, opts, "remote_ip")
-	})
 }
 
 func TestConstants(t *testing.T) {
@@ -360,59 +241,10 @@ func TestConstants(t *testing.T) {
 
 	t.Run("VXLAN constants", func(t *testing.T) {
 		assert.Equal(t, uint16(4789), DefaultVXLANPort)
-		assert.Equal(t, 1550, MinimumMTU)
+		assert.Equal(t, 9000, OverlayMTU)
+		assert.Equal(t, 9050, MinimumUnderlayMTU)
 		assert.Equal(t, 50, VXLANOverhead)
 	})
-}
-
-func TestTunnelState_Fields(t *testing.T) {
-	now := time.Now()
-	localVTEP := netip.MustParseAddr("10.0.0.1")
-	remoteVTEP := netip.MustParseAddr("10.0.0.2")
-
-	tunnel := TunnelState{
-		ID:         "10.0.0.1-10.0.0.2-1000100",
-		LocalVTEP:  localVTEP,
-		RemoteVTEP: remoteVTEP,
-		VNI:        1000100,
-		OVSPort:    "vxlan-abc123",
-		OFPort:     10,
-		State:      TunnelStatusUp,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		BytesSent:  1000,
-		BytesRecv:  2000,
-	}
-
-	assert.Equal(t, "10.0.0.1-10.0.0.2-1000100", tunnel.ID)
-	assert.Equal(t, localVTEP, tunnel.LocalVTEP)
-	assert.Equal(t, remoteVTEP, tunnel.RemoteVTEP)
-	assert.Equal(t, VNI(1000100), tunnel.VNI)
-	assert.Equal(t, "vxlan-abc123", tunnel.OVSPort)
-	assert.Equal(t, int32(10), tunnel.OFPort)
-	assert.Equal(t, TunnelStatusUp, tunnel.State)
-	assert.Equal(t, now, tunnel.CreatedAt)
-	assert.Equal(t, now, tunnel.UpdatedAt)
-	assert.Equal(t, uint64(1000), tunnel.BytesSent)
-	assert.Equal(t, uint64(2000), tunnel.BytesRecv)
-}
-
-func TestTunnelStats_Fields(t *testing.T) {
-	stats := TunnelStats{
-		BytesSent:   1000,
-		BytesRecv:   2000,
-		PacketsSent: 100,
-		PacketsRecv: 200,
-		ErrorsSent:  5,
-		ErrorsRecv:  10,
-	}
-
-	assert.Equal(t, uint64(1000), stats.BytesSent)
-	assert.Equal(t, uint64(2000), stats.BytesRecv)
-	assert.Equal(t, uint64(100), stats.PacketsSent)
-	assert.Equal(t, uint64(200), stats.PacketsRecv)
-	assert.Equal(t, uint64(5), stats.ErrorsSent)
-	assert.Equal(t, uint64(10), stats.ErrorsRecv)
 }
 
 func TestVNIMappingConfig_Fields(t *testing.T) {

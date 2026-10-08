@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"math"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -967,69 +968,50 @@ func (s *Speaker) WatchEvent(ctx context.Context, opts ...WatchOption) (<-chan *
 
 	eventCh := make(chan *Event, 100)
 
-	// Build watch request
 	req := &api.WatchEventRequest{}
-
 	if wopts.peerStateChanges {
 		req.Peer = &api.WatchEventRequest_Peer{}
 	}
-
 	if wopts.pathChanges {
-		tableReq := &api.WatchEventRequest_Table{
-			Filters: []*api.WatchEventRequest_Table_Filter{},
-		}
-
-		// Add family filters
-		for _, fam := range wopts.families {
-			filter := &api.WatchEventRequest_Table_Filter{
+		// One best-path filter, replaying the current table first; the
+		// families are filtered as the paths are converted.
+		req.Table = &api.WatchEventRequest_Table{
+			Filters: []*api.WatchEventRequest_Table_Filter{{
 				Type: api.WatchEventRequest_Table_Filter_TYPE_BEST,
-			}
-			if wopts.bestPathOnly {
-				filter.Type = api.WatchEventRequest_Table_Filter_TYPE_BEST
-			}
-			filter.Init = true
-
-			// Set address family
-			switch fam {
-			case AFamilyIPv4Unicast:
-				tableReq.Filters = append(tableReq.Filters, &api.WatchEventRequest_Table_Filter{
-					Type: filter.Type,
-					Init: filter.Init,
-				})
-			case AFamilyIPv6Unicast:
-				tableReq.Filters = append(tableReq.Filters, &api.WatchEventRequest_Table_Filter{
-					Type: filter.Type,
-					Init: filter.Init,
-				})
-			case AFamilyEVPN:
-				tableReq.Filters = append(tableReq.Filters, &api.WatchEventRequest_Table_Filter{
-					Type: filter.Type,
-					Init: filter.Init,
-				})
-			}
+				Init: true,
+			}},
 		}
-
-		req.Table = tableReq
 	}
 
-	// Start watching in goroutine
-	go func() {
-		defer close(eventCh)
+	// GoBGP may still call back after the watch returns, so sends are
+	// guarded against the channel closing under them.
+	var sendMu sync.Mutex
+	closed := false
+	send := func(event *Event) {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		if closed {
+			return
+		}
+		select {
+		case eventCh <- event:
+		case <-ctx.Done():
+		}
+	}
 
+	go func() {
 		watchErr := s.server.WatchEvent(ctx, req, func(resp *api.WatchEventResponse) {
-			event := s.watchResponseToEvent(resp, wopts)
-			if event != nil {
-				select {
-				case eventCh <- event:
-				case <-ctx.Done():
-					return
-				}
+			for _, event := range s.watchResponseToEvents(resp, wopts) {
+				send(event)
 			}
 		})
-
 		if watchErr != nil {
 			s.logger.Error("watch event error", "error", watchErr)
 		}
+		sendMu.Lock()
+		closed = true
+		close(eventCh)
+		sendMu.Unlock()
 	}()
 
 	return eventCh, nil
@@ -1143,10 +1125,14 @@ func (s *Speaker) neighborConfigToPeer(cfg *NeighborConfig) *api.Peer {
 		}
 	}
 
-	// Set route reflector client
+	// Reflect to a route-reflector client under the speaker's cluster ID
+	// (RFC 4456); without one GoBGP falls back to the router ID.
 	if cfg.RouteReflectorClient {
 		peer.RouteReflector = &api.RouteReflector{
 			RouteReflectorClient: true,
+		}
+		if s.config != nil && s.config.IsRouteReflector {
+			peer.RouteReflector.RouteReflectorClusterId = s.config.ClusterID
 		}
 	}
 
@@ -1451,6 +1437,15 @@ func (s *Speaker) ribTypeToTableType(rt RIBType) api.TableType {
 
 // pathToAPIPath converts our Path to GoBGP's api.Path.
 func (s *Speaker) pathToAPIPath(path *Path) (*api.Path, error) {
+	// An EVPN route carries its own next hop, RD and RTs in MP_REACH_NLRI
+	// and its extended communities.
+	if path.Family == AFamilyEVPN {
+		if path.EVPN == nil {
+			return nil, ErrInvalidEVPNRoute{Reason: "EVPN route data is nil"}
+		}
+		return encodeEVPNPath(path.EVPN)
+	}
+
 	apiPath := &api.Path{
 		Family: s.addressFamilyToAPI(path.Family),
 		Pattrs: make([]*api.Attribute, 0, 6),
@@ -1467,12 +1462,6 @@ func (s *Speaker) pathToAPIPath(path *Path) (*api.Path, error) {
 			Prefix:    path.Prefix.Addr().String(),
 		}}}
 
-	case AFamilyEVPN:
-		if path.EVPNRoute == nil {
-			return nil, ErrInvalidEVPNRoute{RouteType: 0, Reason: "EVPN route data is nil"}
-		}
-		// EVPN NLRI encoding would go here
-		// This is complex and depends on the route type
 	}
 
 	// Add origin attribute
@@ -1563,7 +1552,26 @@ func (s *Speaker) apiPathToPath(p *api.Path, family AddressFamily) *Path {
 		path.Age = p.Age.AsTime()
 	}
 
+	if family == AFamilyEVPN {
+		s.decodeEVPN(p, path)
+	}
+
 	return path
+}
+
+// decodeEVPN attaches the decoded EVPN route to path. A route that cannot
+// be decoded at all is left without one and so ignored; a route with bad
+// attributes is treated as withdrawn (RFC 7606 §2).
+func (s *Speaker) decodeEVPN(p *api.Path, path *Path) {
+	route, err := decodeEVPNPath(p)
+	if route == nil {
+		s.logger.Debug("ignoring an undecodable EVPN route", "neighbor", p.NeighborIp, "error", err)
+		return
+	}
+	if err != nil {
+		s.logger.Warn("treating a malformed EVPN route as withdrawn", "neighbor", p.NeighborIp, "error", err)
+	}
+	path.EVPN = route
 }
 
 // parsePathAttribute parses a single path attribute.
@@ -1593,80 +1601,57 @@ func (s *Speaker) parsePathAttribute(attr *api.Attribute, path *Path) {
 	}
 }
 
-// watchResponseToEvent converts GoBGP's watch response to our Event.
-func (s *Speaker) watchResponseToEvent(resp *api.WatchEventResponse, wopts *watchOptions) *Event {
+// watchResponseToEvents converts a GoBGP watch response to events: one per
+// peer state change, or one per path of a table update in the watched
+// families.
+func (s *Speaker) watchResponseToEvents(resp *api.WatchEventResponse, wopts *watchOptions) []*Event {
 	if resp == nil {
 		return nil
 	}
 
-	event := &Event{
-		Timestamp: time.Now(),
-	}
-
-	// Handle peer events
-	if resp.GetPeer() != nil {
-		event.Type = EventPeerStateChange
-
-		if resp.GetPeer().Peer != nil && resp.GetPeer().Peer.Conf != nil {
-			event.PeerAddress, _ = netip.ParseAddr(resp.GetPeer().Peer.Conf.NeighborAddress)
+	if peer := resp.GetPeer(); peer != nil {
+		event := &Event{Type: EventPeerStateChange, Timestamp: time.Now()}
+		if conf := peer.GetPeer().GetConf(); conf != nil {
+			addr, err := netip.ParseAddr(conf.NeighborAddress)
+			if err != nil {
+				s.logger.Debug("ignoring a peer event without a neighbor address", "neighbor", conf.NeighborAddress)
+				return nil
+			}
+			event.PeerAddress = addr
 		}
-
-		if resp.GetPeer().Peer != nil && resp.GetPeer().Peer.State != nil {
-			event.PeerState = s.sessionStateToState(resp.GetPeer().Peer.State.SessionState)
+		if state := peer.GetPeer().GetState(); state != nil {
+			event.PeerState = s.sessionStateToState(state.SessionState)
 		}
-
-		// Filter by peer address if specified
 		if wopts.peerAddress.IsValid() && event.PeerAddress != wopts.peerAddress {
 			return nil
 		}
-
-		// Invoke callback
 		if s.onPeerStateChange != nil {
 			s.onPeerStateChange(event.PeerAddress, event.PeerState)
 		}
-
-		return event
+		return []*Event{event}
 	}
 
-	// Handle table events (path changes)
-	if resp.GetTable() != nil {
-		for _, dest := range resp.GetTable().Paths {
-			if dest.IsWithdraw {
-				event.Type = EventPathWithdrawn
-			} else {
-				event.Type = EventPathReceived
-			}
-
-			// Convert path
-			family := AFamilyIPv4Unicast
-			if dest.Family != nil {
-				family = s.apiFamilyToAddressFamily(dest.Family)
-			}
-
-			// Filter by family if specified
-			if len(wopts.families) > 0 {
-				found := false
-				for _, f := range wopts.families {
-					if f == family {
-						found = true
-						break
-					}
-				}
-				if !found {
-					continue
-				}
-			}
-
-			event.Path = s.apiPathToPath(dest, family)
-
-			// Invoke callback
-			if s.onRouteReceived != nil {
-				s.onRouteReceived(event.Path)
-			}
-
-			return event
+	table := resp.GetTable()
+	if table == nil {
+		return nil
+	}
+	events := make([]*Event, 0, len(table.Paths))
+	for _, dest := range table.Paths {
+		family := AFamilyIPv4Unicast
+		if dest.Family != nil {
+			family = s.apiFamilyToAddressFamily(dest.Family)
 		}
+		if len(wopts.families) > 0 && !slices.Contains(wopts.families, family) {
+			continue
+		}
+		event := &Event{Type: EventPathReceived, Timestamp: time.Now(), Path: s.apiPathToPath(dest, family)}
+		if dest.IsWithdraw {
+			event.Type = EventPathWithdrawn
+		}
+		if s.onRouteReceived != nil {
+			s.onRouteReceived(event.Path)
+		}
+		events = append(events, event)
 	}
-
-	return nil
+	return events
 }

@@ -951,6 +951,42 @@ func TestActionPopVLAN_MarshalBinary(t *testing.T) {
 	}
 }
 
+// TestActionDecNwTTL_MarshalBinary pins the OFPAT_DEC_NW_TTL wire form:
+// type 24, length 8, four bytes of padding.
+func TestActionDecNwTTL_MarshalBinary(t *testing.T) {
+	action := NewActionDecNwTTL()
+	if action.Length() != 8 {
+		t.Fatalf("Length() = %d, want 8", action.Length())
+	}
+
+	data, err := action.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary failed: %v", err)
+	}
+	want := []byte{0x00, 0x18, 0x00, 0x08, 0, 0, 0, 0}
+	if !bytes.Equal(data, want) {
+		t.Errorf("MarshalBinary() = %x, want %x", data, want)
+	}
+}
+
+// TestActionDecNwTTL_InFlowMod checks the action encodes inside an
+// apply-actions instruction, where its length must stay 8-aligned.
+func TestActionDecNwTTL_InFlowMod(t *testing.T) {
+	flow := NewFlowMod(1)
+	flow.Instructions = append(flow.Instructions, NewInstructionApplyActions(NewActionDecNwTTL(), NewActionOutput(2, 0)))
+
+	data, err := flow.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary failed: %v", err)
+	}
+	if len(data)%8 != 0 {
+		t.Errorf("flow mod length %d is not 8-aligned", len(data))
+	}
+	if !bytes.Contains(data, []byte{0x00, 0x18, 0x00, 0x08}) {
+		t.Error("flow mod does not carry the dec_ttl action")
+	}
+}
+
 // TestNewInstructionApplyActions tests creating apply-actions instruction
 func TestNewInstructionApplyActions(t *testing.T) {
 	action1 := NewActionOutput(1, 0)

@@ -84,6 +84,56 @@ func TestActionResubmitEncoding(t *testing.T) {
 	assert.Equal(t, int(a.Length()), len(data))
 }
 
+func TestActionRegMoveEncoding(t *testing.T) {
+	// Unlike the goldens above, these bytes are laid out by hand from
+	// nx_action_reg_move (openvswitch/include/openflow/nicira-ext.h) with
+	// OXM field headers; no ovs-ofctl was at hand to decode them.
+	tests := []struct {
+		name     string
+		src, dst uint32
+		golden   string
+	}{
+		// move:OXM_OF_ETH_SRC[]->OXM_OF_ETH_DST[]
+		{"eth_src to eth_dst",
+			OXMHeader(OFPXMCOpenflowBasic, OFPXMTOFBEthSrc, 6), OXMHeader(OFPXMCOpenflowBasic, OFPXMTOFBEthDst, 6),
+			"ffff00180000232000060030000000008000080680000606"},
+		// move:OXM_OF_ARP_SPA[]->OXM_OF_ARP_TPA[]
+		{"arp_spa to arp_tpa",
+			OXMHeader(OFPXMCOpenflowBasic, OFPXMTOFBArpSpa, 4), OXMHeader(OFPXMCOpenflowBasic, OFPXMTOFBArpTpa, 4),
+			"ffff001800002320000600200000000080002c0480002e04"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, err := NewActionRegMove(tt.src, tt.dst)
+			require.NoError(t, err)
+			data, err := a.MarshalBinary()
+			require.NoError(t, err)
+			assert.Equal(t, tt.golden, hex.EncodeToString(data))
+			assert.Equal(t, int(a.Length()), len(data))
+		})
+	}
+}
+
+func TestNewActionRegMoveRefuses(t *testing.T) {
+	ethSrc := OXMHeader(OFPXMCOpenflowBasic, OFPXMTOFBEthSrc, 6)
+	arpTpa := OXMHeader(OFPXMCOpenflowBasic, OFPXMTOFBArpTpa, 4)
+	for name, args := range map[string]struct{ src, dst uint32 }{
+		"different widths": {ethSrc, arpTpa},
+		"zero width":       {OXMHeader(OFPXMCOpenflowBasic, OFPXMTOFBEthSrc, 0), OXMHeader(OFPXMCOpenflowBasic, OFPXMTOFBEthDst, 0)},
+	} {
+		_, err := NewActionRegMove(args.src, args.dst)
+		var msgErr *MessageError
+		assert.ErrorAs(t, err, &msgErr, name)
+	}
+}
+
+func TestOXMHeader(t *testing.T) {
+	// OXM_OF_ETH_DST is 0x80000606 and NXM_NX_REG3 is 0x00010604 in
+	// openvswitch/include/openflow/nicira-ext.h and the OpenFlow 1.3 spec.
+	assert.Equal(t, uint32(0x80000606), OXMHeader(OFPXMCOpenflowBasic, OFPXMTOFBEthDst, 6))
+	assert.Equal(t, uint32(0x00010604), NXMHeaderReg(3))
+}
+
 func TestMatchAddReg(t *testing.T) {
 	m := NewMatch()
 	m.AddReg(1, 0, 1)

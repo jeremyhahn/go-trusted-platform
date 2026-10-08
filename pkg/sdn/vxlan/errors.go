@@ -16,7 +16,6 @@ package vxlan
 import (
 	"errors"
 	"fmt"
-	"net/netip"
 )
 
 // Sentinel errors for VXLAN operations.
@@ -26,12 +25,6 @@ var (
 
 	// ErrVNIInUse is returned when attempting to use a VNI that is already allocated.
 	ErrVNIInUse = errors.New("VNI already in use")
-
-	// ErrTunnelNotFound is returned when a requested tunnel does not exist.
-	ErrTunnelNotFound = errors.New("tunnel not found")
-
-	// ErrTunnelExists is returned when attempting to create a tunnel that already exists.
-	ErrTunnelExists = errors.New("tunnel already exists")
 
 	// ErrVTEPNotConfigured is returned when VTEP operations are attempted before configuration.
 	ErrVTEPNotConfigured = errors.New("VTEP not configured")
@@ -43,7 +36,7 @@ var (
 	ErrUnderlayNotReady = errors.New("underlay interface not ready")
 
 	// ErrMTUTooSmall is returned when the MTU is insufficient for VXLAN encapsulation.
-	ErrMTUTooSmall = errors.New("MTU too small for VXLAN (minimum 1550)")
+	ErrMTUTooSmall = errors.New("underlay MTU too small for a 9000-byte overlay (minimum 9050)")
 
 	// ErrInvalidVXLANPort is returned when an invalid VXLAN UDP port is specified.
 	ErrInvalidVXLANPort = errors.New("invalid VXLAN UDP port")
@@ -60,8 +53,8 @@ var (
 	// ErrManagerAlreadyStarted is returned when Start is called on an already running manager.
 	ErrManagerAlreadyStarted = errors.New("VTEP manager already started")
 
-	// ErrInvalidTunnelID is returned when a tunnel ID is malformed or empty.
-	ErrInvalidTunnelID = errors.New("invalid tunnel ID")
+	// ErrInvalidPortName is returned when the VXLAN port name is empty.
+	ErrInvalidPortName = errors.New("VXLAN port name is empty")
 
 	// ErrOVSClientNil is returned when OVS client is not provided.
 	ErrOVSClientNil = errors.New("OVS client is nil")
@@ -73,38 +66,18 @@ var (
 	ErrLoggerNil = errors.New("logger is nil")
 )
 
-// ErrTunnelCreationFailed represents a tunnel creation failure with context.
-type ErrTunnelCreationFailed struct {
-	RemoteVTEP netip.Addr
-	VNI        VNI
-	Cause      error
+// ErrPortConflict is returned when a port of the VTEP's name exists but is
+// not a flow-based VXLAN port on the configured UDP port, so adopting it
+// would carry traffic somewhere other than the overlay intends.
+type ErrPortConflict struct {
+	Port    string
+	Options map[string]string
 }
 
 // Error implements the error interface.
-func (e *ErrTunnelCreationFailed) Error() string {
-	return fmt.Sprintf("failed to create tunnel to %s for VNI %d: %v",
-		e.RemoteVTEP, e.VNI, e.Cause)
-}
-
-// Unwrap returns the underlying cause for errors.Is/As support.
-func (e *ErrTunnelCreationFailed) Unwrap() error {
-	return e.Cause
-}
-
-// ErrTunnelDeletionFailed represents a tunnel deletion failure with context.
-type ErrTunnelDeletionFailed struct {
-	TunnelID string
-	Cause    error
-}
-
-// Error implements the error interface.
-func (e *ErrTunnelDeletionFailed) Error() string {
-	return fmt.Sprintf("failed to delete tunnel %s: %v", e.TunnelID, e.Cause)
-}
-
-// Unwrap returns the underlying cause for errors.Is/As support.
-func (e *ErrTunnelDeletionFailed) Unwrap() error {
-	return e.Cause
+func (e *ErrPortConflict) Error() string {
+	return fmt.Sprintf("VXLAN port %s exists with options %v, not remote_ip=flow,key=flow on the configured UDP port",
+		e.Port, e.Options)
 }
 
 // ErrVNIMappingFailed represents a VNI mapping failure with context.
@@ -160,23 +133,5 @@ func (e *ErrVTEPValidationFailed) Error() string {
 
 // Unwrap returns the underlying cause for errors.Is/As support.
 func (e *ErrVTEPValidationFailed) Unwrap() error {
-	return e.Cause
-}
-
-// ErrHealthCheckFailed represents a tunnel health check failure.
-type ErrHealthCheckFailed struct {
-	TunnelID   string
-	RemoteVTEP netip.Addr
-	Cause      error
-}
-
-// Error implements the error interface.
-func (e *ErrHealthCheckFailed) Error() string {
-	return fmt.Sprintf("health check failed for tunnel %s (remote: %s): %v",
-		e.TunnelID, e.RemoteVTEP, e.Cause)
-}
-
-// Unwrap returns the underlying cause for errors.Is/As support.
-func (e *ErrHealthCheckFailed) Unwrap() error {
 	return e.Cause
 }

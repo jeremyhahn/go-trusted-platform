@@ -229,15 +229,6 @@ bgp:
         interval: 300  # milliseconds
         multiplier: 3
 
-  # EVPN configuration
-  evpn:
-    enabled: true
-    rd_type: "type1"  # ASN:assigned
-    rt_auto: true
-    vni_range:
-      start: 10000
-      end: 19999
-
   # Transit configuration
   transit:
     enabled: true
@@ -460,92 +451,26 @@ neighbors:
 
 ## EVPN Configuration
 
-### Basic EVPN Settings
+EVPN has no YAML section of its own. RDs and route targets are derived, not
+configured (see [evpn.md](evpn.md)); what an EVPN deployment sets is:
 
-```yaml
-evpn:
-  enabled: true
+- the speaker's l2vpn-evpn sessions: `families: [evpn]`, `max-evpn-prefixes`
+  and the route-target allowlists under each peer's `policy` (above);
+- on the route reflectors (control-plane nodes), `route-reflector: true`, a
+  `cluster-id` that is an IPv4 address, and `route-reflector-client: true` on
+  every VTEP neighbor. A route reflector without a cluster ID, or with one that
+  is not IPv4, fails validation;
+- the `bgp.EVPNManagerConfig` the overlay builds for each VTEP:
 
-  # Route Distinguisher configuration
-  rd_type: "type1"  # type0, type1, type2
-  rd_value: ""      # Auto-generated if empty
-
-  # Route Target auto-derivation
-  rt_auto: true
-  rt_import: []     # Manual import RTs
-  rt_export: []     # Manual export RTs
-
-  # VNI allocation
-  vni_range:
-    start: 10000
-    end: 19999
-
-  # VTEP configuration
-  vtep:
-    address: "10.0.0.1"
-    source_interface: "lo"
-```
-
-### Route Distinguisher Types
-
-| Type | Format | Example |
-|------|--------|---------|
-| type0 | 2-byte ASN : 4-byte assigned | 65001:10000 |
-| type1 | 4-byte IPv4 : 2-byte assigned | 203.0.113.1:100 |
-| type2 | 4-byte ASN : 2-byte assigned | 65001:100 |
-
-```yaml
-evpn:
-  rd_type: "type1"
-  rd_value: "203.0.113.1:100"  # IPv4:assigned format
-```
-
-### VRF Configuration
-
-```yaml
-evpn:
-  vrfs:
-    - name: "tenant-a"
-      rd: "65001:100"
-      rt_import:
-        - "65001:100"
-        - "65001:999"  # Shared services
-      rt_export:
-        - "65001:100"
-      l3_vni: 10000
-
-    - name: "tenant-b"
-      rd: "65001:200"
-      rt_import:
-        - "65001:200"
-        - "65001:999"
-      rt_export:
-        - "65001:200"
-      l3_vni: 20000
-
-    - name: "shared-services"
-      rd: "65001:999"
-      rt_import:
-        - "65001:100"
-        - "65001:200"
-      rt_export:
-        - "65001:999"
-      l3_vni: 99900
-```
-
-### MAC Mobility Settings
-
-```yaml
-evpn:
-  mac_mobility:
-    enabled: true
-    sequence_number_start: 0
-    duplicate_detection:
-      enabled: true
-      max_moves: 5           # Max moves per MAC
-      detection_window: "180s"
-      freeze_time: "30s"     # Time to freeze after detection
-```
+| Field | Meaning | Default |
+|-------|---------|---------|
+| `LocalVTEP` | the VTEP's IPv4 tunnel address: next hop and RD administrator | required |
+| `OverlayASN` | private 2-octet ASN the route targets are derived from | required |
+| `DomainID` | 4-bit D-ID field of the derived route targets | 0 |
+| `RouterMAC` | Router's MAC for symmetric IRB | required to join with an L3VNI |
+| `Mobility.MaxMoves` | moves within `Window` that freeze a MAC | 5 |
+| `Mobility.Window` | duplicate-MAC detection window | 180s |
+| `Mobility.Hold` | how long a duplicate MAC stays frozen | 180s |
 
 ## Transit Configuration
 
@@ -853,16 +778,6 @@ bgp:
           safi: "unicast"
         - afi: "l2vpn"
           safi: "evpn"
-
-  evpn:
-    enabled: true
-    rd_type: "type1"
-    rt_auto: true
-    vni_range:
-      start: 10000
-      end: 19999
-    vtep:
-      address: "10.0.0.1"
 
   transit:
     enabled: true

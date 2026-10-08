@@ -58,11 +58,12 @@ const (
 	// the pipeline changes nothing for traffic no service touches.
 	TerminalNormal PipelineTerminal = "normal"
 
-	// TerminalOverlay continues into the overlay tables (40 → 50 → 60).
-	// It is refused until the overlay service owns egress: the overlay
-	// config has no VTEP port to output to, and the table-60 encap flow
-	// has no output action (modes/overlay.go installVNIFlows), so the
-	// chain would be a drop funnel.
+	// TerminalOverlay leaves table 30 to the overlay handler
+	// (modes.OverlayModeHandler), whose MAC, ARP and egress tables forward
+	// over the flow-based VXLAN port. It is refused while gatewayd cannot
+	// build that handler: the overlay config carries no VTEP or access port
+	// (#709), so nothing would install those tables and the chain would be
+	// a drop funnel.
 	TerminalOverlay PipelineTerminal = "overlay"
 )
 
@@ -140,7 +141,7 @@ func BasePipelineRules(terminal PipelineTerminal) ([]zoneflows.FlowRule, error) 
 	case TerminalOverlay:
 		return nil, &ErrPipelineTerminalUnavailable{
 			Terminal: terminal,
-			Reason:   "the overlay service does not own egress: no VTEP port is configured and the table-60 encap flow has no output action",
+			Reason:   "the overlay service is not built: the overlay config carries no VTEP or access port, so nothing installs the overlay tables",
 		}
 	default:
 		return nil, &ErrPipelineTerminalUnknown{Terminal: terminal}

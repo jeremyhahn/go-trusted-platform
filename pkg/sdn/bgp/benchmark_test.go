@@ -15,213 +15,50 @@ package bgp
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/netip"
 	"testing"
-	"time"
 )
 
-// RouteDistinguisher Benchmarks
+// EVPN Benchmarks
 
-func BenchmarkRouteDistinguisher_Bytes(b *testing.B) {
-	rds := []RouteDistinguisher{
-		{Type: 0, Administrator: 65001, AssignedNumber: 100},
-		{Type: 1, Administrator: binary.BigEndian.Uint32(net.ParseIP("10.0.0.1").To4()), AssignedNumber: 100},
-		{Type: 2, Administrator: 4200000001, AssignedNumber: 100},
-	}
-
+func BenchmarkAutoRouteTarget(b *testing.B) {
 	b.ReportAllocs()
-	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rd := rds[i%len(rds)]
-		_ = rd.Bytes()
+		if _, err := AutoRouteTarget(65000, 0, uint32(i%int(MaxVNI))+1); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
-func BenchmarkParseRouteDistinguisher(b *testing.B) {
-	data := [8]byte{0x00, 0x00, 0xFD, 0xE9, 0x00, 0x00, 0x00, 0x64}
-
+func BenchmarkEncodeEVPNPath(b *testing.B) {
+	route := testIRBRoute()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = ParseRouteDistinguisher(data)
+		if _, err := encodeEVPNPath(route); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
-// RouteTarget Benchmarks
-
-func BenchmarkRouteTarget_Bytes(b *testing.B) {
-	rts := []RouteTarget{
-		{Type: 0, GlobalAdmin: 65001, LocalAdmin: 1000100},
-		{Type: 1, GlobalAdmin: binary.BigEndian.Uint32(net.ParseIP("10.0.0.1").To4()), LocalAdmin: 100},
-		{Type: 2, GlobalAdmin: 4200000001, LocalAdmin: 100},
+func BenchmarkDecodeEVPNPath(b *testing.B) {
+	path, err := encodeEVPNPath(testIRBRoute())
+	if err != nil {
+		b.Fatal(err)
 	}
-
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rt := rts[i%len(rts)]
-		_ = rt.Bytes()
+		if _, err := decodeEVPNPath(path); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
-
-func BenchmarkParseRouteTarget(b *testing.B) {
-	data := [8]byte{0x00, 0x02, 0xFD, 0xE9, 0x00, 0x0F, 0x42, 0x64}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = ParseRouteTarget(data)
-	}
-}
-
-// MACIPEntry Benchmarks
-
-func BenchmarkMACIPEntry_Key(b *testing.B) {
-	entry := &MACIPEntry{
-		MAC:    net.HardwareAddr{0x52, 0x54, 0x00, 0xaa, 0xbb, 0xcc},
-		IP:     netip.MustParseAddr("10.0.0.100"),
-		VNI:    1000100,
-		VTEPIP: netip.MustParseAddr("192.168.1.1"),
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = entry.Key()
-	}
-}
-
-func BenchmarkMACIPEntry_MACIPKey(b *testing.B) {
-	entry := &MACIPEntry{
-		MAC:    net.HardwareAddr{0x52, 0x54, 0x00, 0xaa, 0xbb, 0xcc},
-		IP:     netip.MustParseAddr("10.0.0.100"),
-		VNI:    1000100,
-		VTEPIP: netip.MustParseAddr("192.168.1.1"),
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = entry.MACIPKey()
-	}
-}
-
-func BenchmarkMACIPEntry_Clone(b *testing.B) {
-	entry := &MACIPEntry{
-		MAC:           net.HardwareAddr{0x52, 0x54, 0x00, 0xaa, 0xbb, 0xcc},
-		IP:            netip.MustParseAddr("10.0.0.100"),
-		VNI:           1000100,
-		VTEPIP:        netip.MustParseAddr("192.168.1.1"),
-		Sequence:      1,
-		EthernetTagID: 0,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = entry.Clone()
-	}
-}
-
-// IMETEntry Benchmarks
-
-func BenchmarkIMETEntry_Key(b *testing.B) {
-	entry := &IMETEntry{
-		VNI:           1000100,
-		VTEPIP:        netip.MustParseAddr("192.168.1.1"),
-		EthernetTagID: 0,
-		TunnelType:    TunnelTypeIngressReplication,
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = entry.Key()
-	}
-}
-
-func BenchmarkIMETEntry_Clone(b *testing.B) {
-	entry := &IMETEntry{
-		VNI:           1000100,
-		VTEPIP:        netip.MustParseAddr("192.168.1.1"),
-		EthernetTagID: 0,
-		TunnelType:    TunnelTypeIngressReplication,
-		CreatedAt:     time.Now(),
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = entry.Clone()
-	}
-}
-
-// PrefixRoute Benchmarks
-
-func BenchmarkPrefixRoute_Key(b *testing.B) {
-	route := &PrefixRoute{
-		Prefix:    netip.MustParsePrefix("10.0.0.0/24"),
-		VNI:       1000100,
-		GatewayIP: netip.MustParseAddr("10.0.0.1"),
-		NextHop:   netip.MustParseAddr("192.168.1.1"),
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = route.Key()
-	}
-}
-
-func BenchmarkPrefixRoute_Clone(b *testing.B) {
-	route := &PrefixRoute{
-		Prefix:        netip.MustParsePrefix("10.0.0.0/24"),
-		VNI:           1000100,
-		GatewayIP:     netip.MustParseAddr("10.0.0.1"),
-		NextHop:       netip.MustParseAddr("192.168.1.1"),
-		EthernetTagID: 0,
-		RouteTargets: []RouteTarget{
-			{Type: 0, GlobalAdmin: 65001, LocalAdmin: 1000100},
-		},
-		GatewayMAC: net.HardwareAddr{0x52, 0x54, 0x00, 0xaa, 0xbb, 0xcc},
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = route.Clone()
-	}
-}
-
-// EVPNRouteData Benchmarks
 
 func BenchmarkEVPNRouteData_Clone(b *testing.B) {
-	route := &EVPNRouteData{
-		Type: EVPNTypeMACIPAdvertisement,
-		RD:   RouteDistinguisher{Type: 0, Administrator: 65001, AssignedNumber: 100},
-		RouteTargets: []RouteTarget{
-			{Type: 0, GlobalAdmin: 65001, LocalAdmin: 1000100},
-		},
-		MACIP: &MACIPEntry{
-			MAC:    net.HardwareAddr{0x52, 0x54, 0x00, 0xaa, 0xbb, 0xcc},
-			IP:     netip.MustParseAddr("10.0.0.100"),
-			VNI:    1000100,
-			VTEPIP: netip.MustParseAddr("192.168.1.1"),
-		},
-		NextHop:    netip.MustParseAddr("192.168.1.1"),
-		Label:      1000100,
-		IsWithdraw: false,
-		ReceivedAt: time.Now(),
-	}
-
+	route := testIRBRoute()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -477,12 +314,11 @@ func BenchmarkAddressFamily_String(b *testing.B) {
 
 func BenchmarkBGPConfig_Validate(b *testing.B) {
 	config := &BGPConfig{
-		RouterID:           netip.MustParseAddr("10.0.0.1"),
-		ASN:                65001,
-		ListenPort:         179,
-		Tier:               SpeakerTierDatacenter,
-		RouteDistinguisher: "65001:100",
-		Capabilities:       BGPCapabilities{EVPN: true, IPv4Unicast: true},
+		RouterID:     netip.MustParseAddr("10.0.0.1"),
+		ASN:          65001,
+		ListenPort:   179,
+		Tier:         SpeakerTierDatacenter,
+		Capabilities: BGPCapabilities{EVPN: true, IPv4Unicast: true},
 	}
 
 	b.ReportAllocs()
@@ -541,36 +377,6 @@ func BenchmarkNeighborConfig_HasAnyAFI(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		config := configs[i%len(configs)]
 		_ = config.HasAnyAFI()
-	}
-}
-
-// EVPNRoute Benchmarks
-
-func BenchmarkEVPNRoute_Validate(b *testing.B) {
-	routes := []*EVPNRoute{
-		{
-			Type:               EVPNTypeMACIPAdvertisement,
-			RouteDistinguisher: "65001:100",
-			MAC:                "52:54:00:aa:bb:cc",
-			MACAddress:         net.HardwareAddr{0x52, 0x54, 0x00, 0xaa, 0xbb, 0xcc},
-		},
-		{
-			Type:               EVPNTypeInclusiveMulticast,
-			RouteDistinguisher: "65001:100",
-			OriginatingIP:      netip.MustParseAddr("192.168.1.1"),
-		},
-		{
-			Type:               EVPNTypeIPPrefix,
-			RouteDistinguisher: "65001:100",
-			IPPrefix:           netip.MustParsePrefix("10.0.0.0/24"),
-		},
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		route := routes[i%len(routes)]
-		_ = route.Validate()
 	}
 }
 
@@ -649,29 +455,6 @@ func BenchmarkDampeningManager_IsSuppressed_Parallel(b *testing.B) {
 		for pb.Next() {
 			prefix := prefixes[i%len(prefixes)]
 			_ = manager.IsSuppressed(prefix)
-			i++
-		}
-	})
-}
-
-func BenchmarkMACIPEntry_Key_Parallel(b *testing.B) {
-	entries := make([]*MACIPEntry, 100)
-	for i := 0; i < 100; i++ {
-		entries[i] = &MACIPEntry{
-			MAC:    net.HardwareAddr{0x52, 0x54, 0x00, byte(i), 0xbb, 0xcc},
-			IP:     netip.MustParseAddr(fmt.Sprintf("10.0.0.%d", i)),
-			VNI:    uint32(1000000 + i),
-			VTEPIP: netip.MustParseAddr("192.168.1.1"),
-		}
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			entry := entries[i%len(entries)]
-			_ = entry.Key()
 			i++
 		}
 	})

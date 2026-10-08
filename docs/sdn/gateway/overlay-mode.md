@@ -2,619 +2,200 @@
 
 ## Overview
 
-Overlay mode enables gateway nodes to act as VXLAN Tunnel Endpoints (VTEPs) for east-west traffic across the distributed network. Gateways in overlay mode encapsulate and decapsulate VXLAN frames, participate in EVPN route exchange, suppress broadcast traffic, and provide distributed anycast gateway services.
-
-## Key Components
-
-| Component | Description |
-|-----------|-------------|
-| **VTEP** | VXLAN Tunnel Endpoint for encap/decap |
-| **EVPN Integration** | BGP EVPN for MAC/IP advertisement |
-| **ARP Suppression** | Reduce broadcast with proxy ARP |
-| **Distributed Anycast Gateway** | Shared gateway IP across VTEPs |
-| **OpenFlow Pipeline** | Flow tables for packet processing |
-
-## VTEP Architecture
-
-### VTEP Responsibilities
-
-```
-+------------------------------------------------------------------+
-|                         VTEP Functions                            |
-+------------------------------------------------------------------+
-|                                                                   |
-|  Encapsulation (TX Path)                                          |
-|  +--------------------------------------------------------------+ |
-|  | 1. Receive L2 frame from OVS bridge                          | |
-|  | 2. Lookup destination MAC in local table                      | |
-|  |    - If local: Forward to local port                          | |
-|  |    - If remote: Encapsulate in VXLAN                          | |
-|  | 3. Add VXLAN header with VNI (VNI = 1000000 + VLAN)          | |
-|  | 4. Add UDP header (dest port 4789)                            | |
-|  | 5. Add IP header (src=local VTEP, dst=remote VTEP)            | |
-|  | 6. Send on underlay network                                   | |
-|  +--------------------------------------------------------------+ |
-|                                                                   |
-|  Decapsulation (RX Path)                                          |
-|  +--------------------------------------------------------------+ |
-|  | 1. Receive VXLAN packet on UDP 4789                           | |
-|  | 2. Validate VNI membership                                    | |
-|  | 3. Strip outer IP/UDP/VXLAN headers                           | |
-|  | 4. Learn source MAC (remote MAC -> source VTEP IP)            | |
-|  | 5. Forward inner frame to local OVS bridge                    | |
-|  +--------------------------------------------------------------+ |
-|                                                                   |
-+------------------------------------------------------------------+
-```
-
-### VTEP Configuration
-
-```go
-// VTEP represents a VXLAN Tunnel Endpoint
-type VTEP struct {
-    // Local endpoint
-    LocalIP     netip.Addr    // Underlay IP for tunnel source
-    ListenPort  uint16        // UDP port (default 4789)
-
-    // Remote endpoints (discovered via QuicBaaS)
-    RemoteVTEPs map[netip.Addr]*RemoteVTEP
-
-    // VNI membership
-    ActiveVNIs  map[uint32]*VNIState
-
-    // MAC table
-    MACTable    *MACTable
-
-    // Statistics
-    Stats       VTEPStats
-}
-
-type RemoteVTEP struct {
-    IP          netip.Addr
-    SharedVNIs  []uint32      // VNIs shared with this VTEP
-    LastSeen    time.Time
-    Status      VTEPStatus
-}
-
-type VNIState struct {
-    VNI         uint32
-    VLAN        uint16
-    TenantID    string
-    LocalMACs   map[string]netip.Addr  // MAC -> local port IP
-    RemoteMACs  map[string]netip.Addr  // MAC -> remote VTEP IP
-    ARPCache    map[netip.Addr]string  // IP -> MAC
-}
-```
-
-## EVPN Integration
-
-### EVPN Route Types
-
-The overlay gateway supports EVPN Type-2 (MAC/IP) and Type-3 (Inclusive Multicast) routes for efficient overlay networking.
-
-| Type | Name | Purpose |
-|------|------|---------|
-| Type-2 | MAC/IP Advertisement | MAC address and optional IP binding |
-| Type-3 | Inclusive Multicast Ethernet Tag | BUM traffic handling |
-
-### Type-2: MAC/IP Routes
-
-```go
-// EVPNType2Route advertises MAC/IP bindings
-type EVPNType2Route struct {
-    RouteDistinguisher RD         // VNI-based RD
-    EthernetSegmentID  ESI        // Multi-homing identifier
-    EthernetTag        uint32     // VLAN tag
-    MACAddress         net.HardwareAddr
-    IPAddress          netip.Addr // Optional IP binding
-    MPLS               uint32     // VNI as MPLS label
-}
-
-// AdvertiseMAC announces a local MAC address
-func (v *VTEP) AdvertiseMAC(vni uint32, mac net.HardwareAddr, ip netip.Addr) error {
-    route := &EVPNType2Route{
-        RouteDistinguisher: v.makeRD(vni),
-        EthernetTag:        vni,
-        MACAddress:         mac,
-        IPAddress:          ip,
-        MPLS:               vni,
-    }
-
-    // Announce via BGP EVPN
-    if err := v.bgpSpeaker.AnnounceEVPN(route); err != nil {
-        return fmt.Errorf("announce MAC: %w", err)
-    }
-
-    // Store locally
-    state := v.ActiveVNIs[vni]
-    state.LocalMACs[mac.String()] = v.LocalIP
-
-    return nil
-}
-
-// HandleType2Route processes received MAC/IP advertisement
-func (v *VTEP) HandleType2Route(route *EVPNType2Route, nextHop netip.Addr) {
-    vni := route.EthernetTag
-    state, ok := v.ActiveVNIs[vni]
-    if !ok {
-        return // VNI not active locally
-    }
-
-    // Learn remote MAC
-    mac := route.MACAddress.String()
-    state.RemoteMACs[mac] = nextHop
-
-    // Update ARP cache if IP present
-    if route.IPAddress.IsValid() {
-        state.ARPCache[route.IPAddress] = mac
-    }
-
-    // Install OpenFlow rule for this MAC
-    v.installRemoteMACFlow(vni, route.MACAddress, nextHop)
-}
-```
-
-### Type-3: Ingress Replication
-
-Type-3 routes establish the ingress replication list for BUM (Broadcast, Unknown unicast, Multicast) traffic:
-
-```go
-// EVPNType3Route for BUM traffic handling
-type EVPNType3Route struct {
-    RouteDistinguisher RD
-    EthernetTag        uint32
-    IP                 netip.Addr   // VTEP IP for replication
-    PMSITunnelType     uint8        // 6 = ingress replication
-}
-
-// AnnounceType3 advertises this VTEP for BUM replication
-func (v *VTEP) AnnounceType3(vni uint32) error {
-    route := &EVPNType3Route{
-        RouteDistinguisher: v.makeRD(vni),
-        EthernetTag:        vni,
-        IP:                 v.LocalIP,
-        PMSITunnelType:     6, // Ingress replication
-    }
-
-    return v.bgpSpeaker.AnnounceEVPN(route)
-}
-
-// GetReplicationList returns VTEPs for BUM replication
-func (v *VTEP) GetReplicationList(vni uint32) []netip.Addr {
-    var vteps []netip.Addr
-
-    for ip, remote := range v.RemoteVTEPs {
-        for _, sharedVNI := range remote.SharedVNIs {
-            if sharedVNI == vni {
-                vteps = append(vteps, ip)
-                break
-            }
-        }
-    }
-
-    return vteps
-}
-
-// HandleBUM processes broadcast/unknown/multicast traffic
-func (v *VTEP) HandleBUM(vni uint32, frame []byte) {
-    vteps := v.GetReplicationList(vni)
-
-    // Replicate to all remote VTEPs
-    for _, vtepIP := range vteps {
-        v.sendVXLAN(vtepIP, vni, frame)
-    }
-}
-```
-
-## ARP Suppression
-
-ARP suppression reduces broadcast traffic by answering ARP requests locally when the IP-MAC binding is known.
-
-### ARP Suppression Flow
-
-```
-+------------------------------------------------------------------+
-|                     ARP Suppression Flow                          |
-+------------------------------------------------------------------+
-|                                                                   |
-|  1. ARP Request Received                                          |
-|     +----------------------------------------------------------+ |
-|     | Guest VM sends ARP: "Who has 10.0.0.50?"                 | |
-|     +----------------------------------------------------------+ |
-|                              |                                    |
-|                              v                                    |
-|  2. Check Local ARP Cache                                         |
-|     +----------------------------------------------------------+ |
-|     | Lookup 10.0.0.50 in VNI ARP cache                        | |
-|     |                                                          | |
-|     | if found:                                                | |
-|     |   Generate proxy ARP reply with cached MAC               | |
-|     |   Send reply to requesting VM                            | |
-|     |   -> Broadcast suppressed!                               | |
-|     |                                                          | |
-|     | if not found:                                            | |
-|     |   Forward ARP to ingress replication list                | |
-|     |   Cache response when received                           | |
-|     +----------------------------------------------------------+ |
-|                                                                   |
-+------------------------------------------------------------------+
-```
-
-### Implementation
-
-```go
-// ARPSuppressor handles proxy ARP for known bindings
-type ARPSuppressor struct {
-    vtep      *VTEP
-    enabled   bool
-    cacheHits uint64
-    cacheMiss uint64
-}
-
-// HandleARP processes incoming ARP packets
-func (a *ARPSuppressor) HandleARP(vni uint32, arpPacket []byte) ([]byte, bool) {
-    arp, err := parseARP(arpPacket)
-    if err != nil || arp.Operation != ARPRequest {
-        return nil, false
-    }
-
-    state := a.vtep.ActiveVNIs[vni]
-    if state == nil {
-        return nil, false
-    }
-
-    // Lookup target IP in cache
-    targetIP := arp.TargetIP
-    targetMAC, found := state.ARPCache[targetIP]
-
-    if !found {
-        atomic.AddUint64(&a.cacheMiss, 1)
-        return nil, false // Forward to replication list
-    }
-
-    atomic.AddUint64(&a.cacheHits, 1)
-
-    // Generate proxy ARP reply
-    reply := &ARPPacket{
-        Operation:  ARPReply,
-        SenderMAC:  parseMAC(targetMAC),
-        SenderIP:   targetIP,
-        TargetMAC:  arp.SenderMAC,
-        TargetIP:   arp.SenderIP,
-    }
-
-    return reply.Encode(), true
-}
-```
-
-## Distributed Anycast Gateway
-
-The distributed anycast gateway allows the same gateway IP to be used across all VTEPs, enabling seamless L3 routing regardless of which VTEP a VM is attached to.
-
-### Anycast Gateway Design
-
-```
-                   Anycast Gateway IP: 10.0.0.1
-                           MAC: 00:00:5e:00:01:01
-
-    +----------+         +----------+         +----------+
-    |  VTEP A  |         |  VTEP B  |         |  VTEP C  |
-    |          |         |          |         |          |
-    | 10.0.0.1 |         | 10.0.0.1 |         | 10.0.0.1 |
-    | (anycast)|         | (anycast)|         | (anycast)|
-    +----+-----+         +----+-----+         +----+-----+
-         |                    |                    |
-    +----v----+          +----v----+          +----v----+
-    |   VM1   |          |   VM2   |          |   VM3   |
-    | 10.0.0.2|          | 10.0.0.3|          | 10.0.0.4|
-    +---------+          +---------+          +---------+
-
-    All VMs use 10.0.0.1 as default gateway
-    Each VTEP responds locally - no hairpin traffic
-```
-
-### Implementation
-
-```go
-// AnycastGateway configures distributed gateway
-type AnycastGateway struct {
-    // Shared gateway identity
-    GatewayIP   netip.Addr        // Same on all VTEPs
-    GatewayMAC  net.HardwareAddr  // Same on all VTEPs (00:00:5e:00:01:XX)
-
-    // VNI mappings
-    VNIToSubnet map[uint32]netip.Prefix
-
-    // Routing
-    routes      []Route
-}
-
-// ConfigureAnycastGateway sets up distributed gateway
-func (v *VTEP) ConfigureAnycastGateway(vni uint32, subnet netip.Prefix, gatewayIP netip.Addr) error {
-    // Standard anycast gateway MAC (VRRP-style)
-    gatewayMAC := net.HardwareAddr{0x00, 0x00, 0x5e, 0x00, 0x01, byte(vni % 256)}
-
-    v.anycastGateway.GatewayIP = gatewayIP
-    v.anycastGateway.GatewayMAC = gatewayMAC
-    v.anycastGateway.VNIToSubnet[vni] = subnet
-
-    // Install OpenFlow rules to respond to gateway MAC/IP
-    return v.installAnycastGatewayFlows(vni, gatewayIP, gatewayMAC)
-}
-
-// HandleRouting processes packets destined to gateway
-func (v *VTEP) HandleRouting(vni uint32, packet []byte) error {
-    ip := parseIPv4(packet)
-
-    // Is destination local to this VNI?
-    subnet := v.anycastGateway.VNIToSubnet[vni]
-    if subnet.Contains(ip.DstIP) {
-        // Lookup destination MAC
-        dstMAC, found := v.ActiveVNIs[vni].ARPCache[ip.DstIP]
-        if !found {
-            // Generate ARP request
-            return v.sendARPRequest(vni, ip.DstIP)
-        }
-
-        // L2 forward within VNI
-        return v.forwardL2(vni, packet, dstMAC)
-    }
-
-    // Inter-VNI routing
-    for targetVNI, targetSubnet := range v.anycastGateway.VNIToSubnet {
-        if targetSubnet.Contains(ip.DstIP) {
-            return v.routeToVNI(targetVNI, packet)
-        }
-    }
-
-    // External routing
-    return v.routeExternal(packet)
-}
-```
-
-## OpenFlow Pipeline
-
-The overlay gateway uses a multi-table OpenFlow pipeline for packet processing.
-
-### Pipeline Tables
+Overlay mode (`pkg/sdn/gateway/modes`, `OverlayModeHandler`) makes a node a
+VXLAN Tunnel Endpoint. It forwards between one local access port, which
+carries every local VNI as a VLAN, and remote VTEPs. Everything is driven
+by EVPN routes:
+
+| Route | Becomes |
+|-------|---------|
+| Type-2 MAC/IP | MAC forwarding to the VTEP; the binding's ARP reply; its IRB host route |
+| Type-3 IMET | ingress replication to the VTEP; decap authorisation of the VTEP on the VNI |
+| Type-5 IP prefix | a prefix route through the VTEP over the L3VNI |
+
+The route formats, RD/RT derivation and MAC Mobility rules are in
+[../bgp/evpn.md](../bgp/evpn.md). The VXLAN port is described in
+[../overlay/architecture.md](../overlay/architecture.md).
+
+Everything the handler does is OpenFlow on one bridge: there is no
+packet-in path, no controller-side ARP handling and no kernel VXLAN device
+per peer.
+
+## Data Plane
+
+### One flow-based VXLAN port
+
+`Start` creates one VXLAN port per bridge with `remote_ip=flow` and
+`key=flow`: the flows set the tunnel destination (`set_field:tun_dst`) and
+VNI (`set_field:tun_id`) of each frame they send to it, and match the VNI
+(`tun_id`) and source VTEP (`tun_src`) of each frame received on it. A new
+remote VTEP is a flow change, never a port change.
+
+The underlay must carry 9000-byte inner frames: the VTEP config refuses an
+underlay MTU below 9050 bytes (`vxlan.MinimumUnderlayMTU`: the 9000-byte
+`vxlan.OverlayMTU` plus 50 bytes of encapsulation).
+
+### Pipeline
 
 | Table | Name | Function |
 |-------|------|----------|
-| 0 | Ingress Classification | Classify packet source (local/tunnel) |
-| 10 | VXLAN Decap | Strip VXLAN headers, map VNI to VLAN |
-| 20 | Authentication | Certificate-based port authentication |
-| 30 | MAC Learning | Learn source MAC, L2 forwarding decisions |
-| 40 | ARP Handling | ARP suppression, proxy ARP |
-| 50 | L3 Routing | Anycast gateway, inter-VNI routing |
-| 60 | Egress | Output to local port or tunnel encap |
+| 0 | Ingress | everything → 10 |
+| 10 | VXLAN decap | access ingress (VLAN → VNI); decap authorisation; every other tunnelled frame dropped |
+| 20–29 | Services | firewall, NAT, load balancer (gatewayd services); miss → 30 |
+| 30 | MAC | anycast MAC from the access port, or router MAC on the L3VNI → 50; anycast MAC from a VTEP → drop; known MAC → its VTEP or 70; miss → 40 |
+| 40 | ARP | ARP replies in the switch; miss → 60 |
+| 50 | L3 | host and prefix routes (symmetric IRB); miss → drop |
+| 60 | Egress | flood: the access port, then every VTEP on the VNI; miss → drop |
+| 70 | Local delivery | out the access port (`IN_PORT` when it came from there) |
 
-### Flow Installation
+Every overlay flow carries `OverlayCookie` (`0xF1BE000000000005`); `Start`
+and `Stop` remove them with one cookie-scoped delete.
 
-```go
-// OpenFlowPipeline manages overlay flow tables
-type OpenFlowPipeline struct {
-    ofClient   *openflow.Client
-    bridge     string
-}
+### Decap authorisation
 
-// InstallBaseFlows sets up the pipeline
-func (p *OpenFlowPipeline) InstallBaseFlows() error {
-    // Table 0: Ingress Classification
-    flows := []openflow.FlowMod{
-        // From VXLAN tunnel
-        {
-            Table:    0,
-            Priority: 100,
-            Match:    openflow.Match{InPort: VXLANPort, UDPDst: 4789},
-            Actions:  []openflow.Action{{Type: openflow.ActionGotoTable, Value: 10}},
-        },
-        // From local ports
-        {
-            Table:    0,
-            Priority: 50,
-            Match:    openflow.Match{},
-            Actions:  []openflow.Action{{Type: openflow.ActionGotoTable, 20}},
-        },
-    }
+A tunnelled frame enters the pipeline only through a table-10 flow
+matching `in_port=vxlan, tun_id=<VNI>, tun_src=<VTEP>` (priority 300). Any
+other frame from the VXLAN port hits the drop at priority 200. A VTEP is
+authorised:
 
-    // Table 10: VXLAN Decap
-    // (VNI-specific rules installed dynamically)
+- on an L2VNI, while its Type-3 route places it there;
+- on the L3VNI, while one of its Type-2 IRB bindings or a Type-5 route it
+  carries is installed.
 
-    // Table 20: Authentication (handled by policy engine)
+So a VTEP can inject only into the VNIs EVPN says it serves. Before a
+route is installed the handler asks the configured `VTEPAdmitter` whether
+the VTEP may carry the VNI; a refusal leaves the route uninstalled and is
+returned as `ErrVTEPOperationFailed{Operation: "admit"}`. The admitter is
+required with EVPN: a config with `EVPNConfig` and no `Admitter` is refused
+with `ErrAdmitterNil`, so no route is ever installed unvetted.
 
-    // Table 30: MAC Learning
-    flows = append(flows, openflow.FlowMod{
-        Table:    30,
-        Priority: 1,
-        Match:    openflow.Match{},
-        Actions:  []openflow.Action{
-            {Type: openflow.ActionLearn},
-            {Type: openflow.ActionGotoTable, Value: 40},
-        },
-    })
+A Type-2 route may not claim an address this VTEP answers for. Its ARP
+reply and host route would share a flow identity with the gateway's or a
+local host's and take their traffic.
 
-    // Table 40: ARP Handling
-    flows = append(flows, openflow.FlowMod{
-        Table:    40,
-        Priority: 100,
-        Match:    openflow.Match{EthType: 0x0806}, // ARP
-        Actions:  []openflow.Action{{Type: openflow.ActionController}},
-    })
-    flows = append(flows, openflow.FlowMod{
-        Table:    40,
-        Priority: 50,
-        Match:    openflow.Match{},
-        Actions:  []openflow.Action{{Type: openflow.ActionGotoTable, Value: 50}},
-    })
+- A route claiming the anycast gateway's MAC or IP is refused whole and
+  never retried. The handler logs a warning, counts it in
+  `OverlayModeStatus.RefusedBindings`, and returns
+  `ErrMACOperationFailed{Operation: "install remote"}` wrapping an
+  `ErrBindingConflict` that names the owner.
+- A route claiming an IP a local host holds on any VNI is held back, not
+  refused. It still bridges its MAC to the advertising VTEP; only its ARP
+  reply and host route wait. It is logged and counted the same way, and
+  `LookupMAC` lists the MAC without the held IP. When the local host goes
+  (`ForgetMAC`, `RemoveVNI` of its VNI, or the MAC moving to a remote
+  VTEP), every held binding no local host still answers for is applied. A
+  failure to apply one is returned as `ErrMACOperationFailed{Operation:
+  "release held"}`, and the binding stays held until the next route for
+  that MAC. A withdrawal drops a held binding like any other.
 
-    // Table 50: L3 Routing (anycast gateway)
-    // (Gateway-specific rules installed by ConfigureAnycastGateway)
+This is what keeps a VM that comes back on another VTEP with a new MAC (a
+rebuilt VM, a failover VIP) reachable before its old local entry is
+forgotten. A route for a MAC local on the same VNI is no conflict: that is
+the MAC moving away, which MAC Mobility has already settled.
 
-    // Table 60: Egress
-    flows = append(flows, openflow.FlowMod{
-        Table:    60,
-        Priority: 1,
-        Match:    openflow.Match{},
-        Actions:  []openflow.Action{{Type: openflow.ActionNormal}},
-    })
+### BUM traffic
 
-    for _, flow := range flows {
-        if err := p.ofClient.AddFlow(context.Background(), &flow); err != nil {
-            return fmt.Errorf("install flow: %w", err)
-        }
-    }
+Ingress replication, from Type-3 routes: the VNI's table-60 flow outputs
+the frame to the access port (VLAN-tagged), then once per remote VTEP on
+the VNI. OpenFlow never outputs to a frame's ingress port, which gives
+split horizon: a flooded frame from a VTEP is never sent back into the
+fabric, and a local one never back to the access port.
 
-    return nil
-}
+### ARP suppression
 
-// InstallVNIFlows adds VNI-specific flows
-func (p *OpenFlowPipeline) InstallVNIFlows(vni uint32, vlan uint16) error {
-    // Table 10: VNI to VLAN mapping (decap)
-    decapFlow := openflow.FlowMod{
-        Table:    10,
-        Priority: 100,
-        Match:    openflow.Match{TunnelID: uint64(vni)},
-        Actions: []openflow.Action{
-            {Type: openflow.ActionSetVLAN, Value: int(vlan)},
-            {Type: openflow.ActionGotoTable, Value: 20},
-        },
-    }
+ARP requests from the access port for the anycast gateway — and, with
+`ARPSuppression`, for every known IPv4 binding, local or remote — are
+answered by a table-40 flow that rewrites the request into the reply and
+sends it back out `IN_PORT`. Unanswered ARP floods like other BUM traffic.
 
-    // Table 60: VLAN to VNI mapping (encap)
-    encapFlow := openflow.FlowMod{
-        Table:    60,
-        Priority: 100,
-        Match:    openflow.Match{VLANVid: vlan, OutPort: VXLANPort},
-        Actions: []openflow.Action{
-            {Type: openflow.ActionSetTunnel, Value: int(vni)},
-            {Type: openflow.ActionOutput, Value: VXLANPort},
-        },
-    }
+### Symmetric IRB
 
-    if err := p.ofClient.AddFlow(context.Background(), &decapFlow); err != nil {
-        return err
-    }
-    return p.ofClient.AddFlow(context.Background(), &encapFlow)
-}
+With `AnycastGatewayIP`/`AnycastGatewayMAC`, every VTEP is the same
+gateway: frames from the access port to the anycast MAC go to table 50. A
+tunnelled frame to the anycast MAC is dropped: its ingress VTEP routes it,
+so it never needs this one's gateway, and routing it here would let any VTEP
+authorised on an L2VNI reach table 50 without the L3VNI's decap
+authorisation.
 
-// InstallRemoteMACFlow adds forwarding for remote MAC
-func (p *OpenFlowPipeline) InstallRemoteMACFlow(vni uint32, mac net.HardwareAddr, vtepIP netip.Addr) error {
-    flow := openflow.FlowMod{
-        Table:    30,
-        Priority: 100,
-        Match: openflow.Match{
-            TunnelID: uint64(vni),
-            EthDst:   mac.String(),
-        },
-        Actions: []openflow.Action{
-            {Type: openflow.ActionSetTunnelDst, Value: vtepIP.String()},
-            {Type: openflow.ActionGotoTable, Value: 60},
-        },
-    }
+- A local host route rewrites the MACs (anycast MAC → host MAC), tags the
+  host's VLAN and delivers locally.
+- With an `L3VNI` and the EVPN router MAC, a remote host route (from a
+  Type-2 route naming the same L3VNI and a router MAC) or a Type-5 prefix
+  route sends the frame router MAC to router MAC on the L3VNI to the
+  remote VTEP, which routes the last hop. Frames arriving on the L3VNI
+  for this VTEP's router MAC go to table 50.
 
-    return p.ofClient.AddFlow(context.Background(), &flow)
-}
-```
+Host routes outrank prefix routes; among prefixes the longest wins. When
+several VTEPs advertise one prefix, the lowest VTEP address carries it and
+a withdrawal falls back to the next. Only IPv4 is routed.
 
-## State Synchronization
+## Control Plane
 
-### MAC Table Replication
+| Handler call | EVPN action |
+|--------------|-------------|
+| `AddVNI(vni, vlan)` | segment flows installed, then `JoinVNI(vni, L3VNI)`: the Type-3 route is originated and the routes already received are replayed. A refused join removes the segment again |
+| `RemoveVNI(vni)` | `LeaveVNI(vni)`, then everything on the VNI is removed — and the Type-5 prefixes with the last VNI |
+| `LearnMAC(vni, mac, ip)` | local delivery flows installed, then `AdvertiseMACIP`. A failed advertisement leaves the flows; learning again retries it |
+| `ForgetMAC(vni, mac)` | local flows removed, then `WithdrawMACIP` for each binding. A withdrawal BGP refuses fails the call and is remembered; forgetting the MAC again retries it until BGP takes it, and `RemoveVNI` or `Stop` withdraws it with the VNI. Learning the binding again drops it |
+| imported route change | the registered handler installs or removes the flows above |
 
-MAC tables are replicated via QuicBaaS with eventual consistency:
+A switch can apply part of a flow batch and refuse the rest
+(`openflow.ErrBatchPartialFailure`). When it refuses any of a change, the
+handler sends the mods that put every flow the batch touched back to what
+it had committed, so the switch and the handler's state are as they were
+and the operation or route can be applied again. A refused start flushes
+the overlay flows instead. If the switch refuses the put-back too, the
+error carries an `ErrFlowResyncFailed`: the switch may then hold flows the
+handler does not track. The handler marks its flows drifted, and the next
+change of any kind first flushes the overlay's flows (by cookie) and
+installs every flow it has committed, so stale flows such as a decap
+authorisation do not survive. A switch refusing that rebuild fails the
+change with an `ErrFlowResyncFailed`, and the rebuild is tried again on
+the change after. The OpenFlow client has no reconnect hook, so a
+reconnect alone does not trigger the rebuild; the next change does.
 
-```go
-// MACTable with QuicBaaS replication
-type MACTable struct {
-    db         *quicbaas.Client
-    partition  string
-    local      map[string]*MACEntry
-    mu         sync.RWMutex
-}
+OVS applies a batch one mod at a time, not atomically, and the OpenFlow
+client has no bundle support, so the start and the rebuild send the flows
+after the flush in a fail-closed order, the same on every rebuild: the
+pipeline's last table first, so a goto only ever reaches a table that is
+already complete and the table-0 goto that admits frames comes last, and
+within a table the highest priority first, so the table-10 drop of
+unauthorised tunnelled frames is in place before the table's miss. No
+tunnelled frame from an unauthorised VTEP passes while a batch is landing.
 
-type MACEntry struct {
-    MAC        string
-    VNI        uint32
-    VTEPIP     netip.Addr
-    LearnedAt  time.Time
-    ExpiresAt  time.Time
-}
+Flows several objects need — every host behind one VTEP needs that VTEP's
+L3VNI decap flow — are reference counted: installed with the first and
+deleted with the last. Holders of one flow can disagree on what it does;
+the handler keeps each holder's version, installs the newest, and when the
+installed version's last holder lets go, installs the newest version still
+held rather than deleting the flow.
 
-// Learn adds a MAC entry with replication
-func (m *MACTable) Learn(vni uint32, mac string, vtepIP netip.Addr) error {
-    entry := &MACEntry{
-        MAC:       mac,
-        VNI:       vni,
-        VTEPIP:    vtepIP,
-        LearnedAt: time.Now(),
-        ExpiresAt: time.Now().Add(5 * time.Minute),
-    }
+## Configuration
 
-    // Local cache
-    m.mu.Lock()
-    m.local[mac] = entry
-    m.mu.Unlock()
+`OverlayModeConfig`:
 
-    // Replicate to QuicBaaS
-    key := fmt.Sprintf("%s/%d/%s", m.partition, vni, mac)
-    value, _ := json.Marshal(entry)
+| Field | Meaning |
+|-------|---------|
+| `VTEPConfig` | local IPv4 VTEP, underlay interface and MTU, VXLAN UDP port |
+| `EVPNConfig` | EVPN manager; nil bridges local hosts only |
+| `BridgeName`, `AccessPort` | the bridge, and the port carrying the VNIs as VLANs |
+| `ARPSuppression` | answer ARP for every known binding |
+| `AnycastGatewayIP`, `AnycastGatewayMAC` | both or neither; turns on routing |
+| `L3VNI` | the IP-VRF of symmetric IRB; needs the anycast gateway and `EVPNConfig.RouterMAC` |
+| `Admitter` | vets remote VTEPs; required with `EVPNConfig` (`ErrAdmitterNil`) |
 
-    return m.db.PutWithTTL(context.Background(), key, value, 5*time.Minute)
-}
+## Status in gatewayd
 
-// Lookup finds MAC entry
-func (m *MACTable) Lookup(vni uint32, mac string) (*MACEntry, bool) {
-    m.mu.RLock()
-    entry, ok := m.local[mac]
-    m.mu.RUnlock()
-
-    if ok && entry.VNI == vni {
-        return entry, true
-    }
-
-    // Check QuicBaaS
-    key := fmt.Sprintf("%s/%d/%s", m.partition, vni, mac)
-    value, err := m.db.Get(context.Background(), key)
-    if err != nil {
-        return nil, false
-    }
-
-    var dbEntry MACEntry
-    if err := json.Unmarshal(value, &dbEntry); err != nil {
-        return nil, false
-    }
-
-    return &dbEntry, true
-}
-```
-
-## Performance Considerations
-
-| Aspect | Recommendation |
-|--------|----------------|
-| Underlay MTU | 9000 (jumbo frames) to avoid fragmentation |
-| VXLAN Overhead | 50 bytes (Ethernet + IP + UDP + VXLAN) |
-| Effective VM MTU | 8950 with jumbo, 1450 with standard |
-| Hardware Offload | Enable VXLAN offload on supported NICs |
-| MAC Table Size | 64K entries per VNI typical |
-| ARP Cache | 16K entries per VNI typical |
-
-## Metrics
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `vtep_vnis_active` | Gauge | - | Active VNI count |
-| `vtep_mac_entries` | Gauge | vni | MAC table entries |
-| `vtep_arp_cache_entries` | Gauge | vni | ARP cache entries |
-| `vtep_packets_encap` | Counter | vni | Encapsulated packets |
-| `vtep_packets_decap` | Counter | vni | Decapsulated packets |
-| `vtep_arp_suppressed` | Counter | vni | Suppressed ARP requests |
-| `vtep_bum_replicated` | Counter | vni | BUM packets replicated |
-| `vtep_evpn_routes_rx` | Counter | type | EVPN routes received |
-| `vtep_evpn_routes_tx` | Counter | type | EVPN routes sent |
+gatewayd still refuses `ServiceOverlay`: its overlay config section has no
+VTEP or access-port fields to build the handler from, and VTEP admission
+is not yet backed by anything (#709). The overlay's base flows (the table
+misses of 0, 10, 20 and 30) have the same table, priority and match as
+gatewayd's own pipeline flows, so installing them replaces gatewayd's and
+the overlay's flush then removes them: running both on one bridge needs
+the gatewayd pipeline to hand those tables to the overlay first.
 
 ## See Also
 
-- [Gateway Architecture](architecture.md) - Core gateway design
-- [VXLAN Overlay](../overlay/README.md) - Overlay networking overview
+- [VXLAN Overlay](../overlay/architecture.md) - the VXLAN port and VTEP manager
 - [BGP EVPN](../bgp/evpn.md) - EVPN route exchange
-- [Configuration](configuration.md) - Overlay configuration reference
+- [Gateway Architecture](architecture.md) - Core gateway design

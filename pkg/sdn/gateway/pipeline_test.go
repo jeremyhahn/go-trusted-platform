@@ -128,12 +128,12 @@ func TestBasePipelineRules_Normal(t *testing.T) {
 	assert.Equal(t, rules, empty, "the empty terminal is NORMAL")
 }
 
-func TestBasePipelineRules_OverlayIsRefusedUntilEgressExists(t *testing.T) {
+func TestBasePipelineRules_OverlayIsRefusedUntilTheHandlerIsBuilt(t *testing.T) {
 	_, err := BasePipelineRules(TerminalOverlay)
 	var unavailable *ErrPipelineTerminalUnavailable
 	require.True(t, errors.As(err, &unavailable), "got %v", err)
 	assert.Equal(t, TerminalOverlay, unavailable.Terminal)
-	assert.Contains(t, err.Error(), "encap")
+	assert.Contains(t, err.Error(), "VTEP")
 }
 
 func TestBasePipelineRules_UnknownTerminal(t *testing.T) {

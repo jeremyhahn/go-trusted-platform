@@ -18,7 +18,6 @@ package bgp
 
 import (
 	"context"
-	"net"
 	"net/netip"
 	"strings"
 	"time"
@@ -566,15 +565,6 @@ type BGPConfig struct {
 	// Capabilities defines supported address families and features.
 	Capabilities BGPCapabilities `yaml:"capabilities" json:"capabilities" mapstructure:"capabilities"`
 
-	// RouteDistinguisher for EVPN routes.
-	RouteDistinguisher string `yaml:"route-distinguisher" json:"route_distinguisher" mapstructure:"route-distinguisher"`
-
-	// ImportRT is the list of import route targets.
-	ImportRT []string `yaml:"import-rt" json:"import_rt" mapstructure:"import-rt"`
-
-	// ExportRT is the list of export route targets.
-	ExportRT []string `yaml:"export-rt" json:"export_rt" mapstructure:"export-rt"`
-
 	// GracefulRestart enables BGP graceful restart (RFC 4724). It is a
 	// pointer so an absent key means the default, which is ON: a speaker
 	// restart must not withdraw the site's prefixes.
@@ -648,9 +638,6 @@ func (c *BGPConfig) Validate() error {
 	if c.Tier != SpeakerTierUnknown && !c.Tier.Valid() {
 		return ErrConfigurationInvalid
 	}
-	if c.Capabilities.EVPN && c.RouteDistinguisher == "" {
-		return ErrConfigurationInvalid
-	}
 	if c.DampeningEnabled {
 		if c.DampeningHalfLife <= 0 {
 			return ErrConfigurationInvalid
@@ -662,8 +649,12 @@ func (c *BGPConfig) Validate() error {
 			return ErrConfigurationInvalid
 		}
 	}
-	if c.IsRouteReflector && c.ClusterID == "" {
-		return ErrConfigurationInvalid
+	if c.IsRouteReflector {
+		// GoBGP takes the cluster ID as a dotted quad (RFC 4456 §7).
+		clusterID, err := netip.ParseAddr(c.ClusterID)
+		if err != nil || !clusterID.Is4() {
+			return ErrConfigurationInvalid
+		}
 	}
 	if c.Announce != nil {
 		if err := c.Announce.Validate(); err != nil {
@@ -1278,57 +1269,16 @@ type Path struct {
 	Stale               bool
 	SourceID            netip.Addr
 	Age                 time.Time
-	EVPNRoute           *EVPNRoute
+
+	// EVPN is the decoded route of an l2vpn-evpn path; nil for every other
+	// family.
+	EVPN *EVPNRouteData
 }
 
 // Aggregator holds BGP aggregator information.
 type Aggregator struct {
 	ASN     uint32
 	Address netip.Addr
-}
-
-// EVPNRoute contains EVPN-specific route information.
-type EVPNRoute struct {
-	Type               EVPNRouteType
-	RouteDistinguisher string
-	EthernetTag        uint32
-	MAC                string
-	MACAddress         net.HardwareAddr
-	IPAddress          netip.Addr
-	IPPrefix           netip.Prefix
-	OriginatingIP      netip.Addr
-	Prefix             netip.Prefix
-	GatewayIP          netip.Addr
-	VNI                uint32
-	NextHop            netip.Addr
-	RouteTargets       []string
-	ESI                string
-	Labels             []uint32
-}
-
-// Validate checks if the EVPNRoute is valid.
-func (r *EVPNRoute) Validate() error {
-	if !r.Type.Valid() {
-		return ErrRouteRejected
-	}
-	if r.RouteDistinguisher == "" {
-		return ErrInvalidRouteTarget
-	}
-	switch r.Type {
-	case EVPNTypeMACIPAdvertisement:
-		if len(r.MACAddress) == 0 && r.MAC == "" {
-			return ErrRouteRejected
-		}
-	case EVPNTypeInclusiveMulticast:
-		if !r.OriginatingIP.IsValid() && !r.IPAddress.IsValid() {
-			return ErrRouteRejected
-		}
-	case EVPNTypeIPPrefix:
-		if !r.IPPrefix.IsValid() && !r.Prefix.IsValid() {
-			return ErrInvalidPrefix
-		}
-	}
-	return nil
 }
 
 // TransitRoute represents an IP prefix announcement.

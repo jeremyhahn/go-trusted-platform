@@ -542,6 +542,29 @@ func (a *ActionPopVLAN) MarshalBinary() ([]byte, error) {
 	return data, nil
 }
 
+// ActionDecNwTTL decrements the IP TTL of a routed packet; OVS drops the
+// packet when the TTL reaches zero.
+type ActionDecNwTTL struct{}
+
+// NewActionDecNwTTL creates a decrement-TTL action
+func NewActionDecNwTTL() *ActionDecNwTTL {
+	return &ActionDecNwTTL{}
+}
+
+// Length returns the action length
+func (a *ActionDecNwTTL) Length() uint16 {
+	return 8
+}
+
+// MarshalBinary encodes the action
+func (a *ActionDecNwTTL) MarshalBinary() ([]byte, error) {
+	data := make([]byte, 8)
+	ByteOrder.PutUint16(data[0:2], OFPATDecNwTTL)
+	ByteOrder.PutUint16(data[2:4], 8)
+	// 4 bytes padding
+	return data, nil
+}
+
 // Instruction represents an OpenFlow instruction
 type Instruction interface {
 	MarshalBinary() ([]byte, error)

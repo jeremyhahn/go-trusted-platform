@@ -80,6 +80,22 @@ func TestVXLANPortConfig_Validate(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
+	t.Run("valid flow-based remote", func(t *testing.T) {
+		cfg := &VXLANPortConfig{
+			RemoteFlow: true,
+			LocalIP:    netip.MustParseAddr("10.0.0.2"),
+		}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	t.Run("flow-based remote with a fixed remote IP", func(t *testing.T) {
+		cfg := &VXLANPortConfig{
+			RemoteFlow: true,
+			RemoteIP:   netip.MustParseAddr("10.0.0.1"),
+		}
+		assert.ErrorIs(t, cfg.Validate(), ErrInvalidRemoteIP)
+	})
+
 	t.Run("valid config with max VNI", func(t *testing.T) {
 		cfg := &VXLANPortConfig{
 			RemoteIP: netip.MustParseAddr("10.0.0.1"),
@@ -197,6 +213,18 @@ func TestBuildVXLANOptions(t *testing.T) {
 		assert.Equal(t, "flow", opts["key"]) // Default for Key=0
 		_, hasLocal := opts["local_ip"]
 		assert.False(t, hasLocal)
+	})
+
+	t.Run("flow-based remote and key", func(t *testing.T) {
+		cfg := &VXLANPortConfig{
+			RemoteFlow: true,
+			LocalIP:    netip.MustParseAddr("10.0.0.2"),
+		}
+		opts := buildVXLANOptions(cfg)
+
+		assert.Equal(t, FlowOption, opts["remote_ip"])
+		assert.Equal(t, FlowOption, opts["key"])
+		assert.Equal(t, "10.0.0.2", opts["local_ip"])
 	})
 
 	t.Run("full config", func(t *testing.T) {

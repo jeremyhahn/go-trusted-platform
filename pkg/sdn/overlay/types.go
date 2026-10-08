@@ -23,6 +23,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
 
@@ -40,8 +41,10 @@ const (
 	// DefaultVXLANPort is the standard IANA-assigned UDP port for VXLAN.
 	DefaultVXLANPort uint16 = 4789
 
-	// DefaultUnderlayMTU is the default MTU for underlay networks.
-	DefaultUnderlayMTU int = 9000
+	// DefaultUnderlayMTU is the default MTU for underlay networks: the
+	// platform switch-port MTU, which carries a vxlan.OverlayMTU frame once
+	// encapsulated.
+	DefaultUnderlayMTU int = netplan.MTU
 
 	// DefaultStateBackend is the default state storage backend.
 	DefaultStateBackend string = "memory"
@@ -181,7 +184,7 @@ func (c *Config) Validate() error {
 		return ErrUnderlayInterfaceEmpty
 	}
 
-	if c.UnderlayMTU < vxlan.MinimumMTU {
+	if c.UnderlayMTU < vxlan.MinimumUnderlayMTU {
 		return ErrMTUTooSmall
 	}
 

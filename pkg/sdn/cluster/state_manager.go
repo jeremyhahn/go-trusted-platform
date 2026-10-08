@@ -24,16 +24,12 @@ import (
 // QuicBaaSStateManager implements the StateManager interface using QuicBaaS.
 // It coordinates all entity DAOs and provides a unified API for SDN state management.
 type QuicBaaSStateManager struct {
-	storage       quicbaas.Storage
-	logger        *logging.Logger
-	bridgeDAO     *BridgeDAO
-	portDAO       *PortDAO
-	flowDAO       *FlowDAO
-	vlanDAO       *VLANDAO
-	vtepDAO       *VTEPDAO
-	tunnelDAO     *TunnelDAO
-	vniMappingDAO *VNIMappingDAO
-	remoteMACDAO  *RemoteMACDAO
+	storage   quicbaas.Storage
+	logger    *logging.Logger
+	bridgeDAO *BridgeDAO
+	portDAO   *PortDAO
+	flowDAO   *FlowDAO
+	vlanDAO   *VLANDAO
 }
 
 // StateManagerOption is a functional option for configuring QuicBaaSStateManager.
@@ -64,16 +60,12 @@ func NewQuicBaaSStateManager(
 	}
 
 	return &QuicBaaSStateManager{
-		storage:       storage,
-		logger:        logger,
-		bridgeDAO:     NewBridgeDAO(storage, logger, WithBridgeRequestTimeout(cfg.requestTimeout)),
-		portDAO:       NewPortDAO(storage, logger, WithPortRequestTimeout(cfg.requestTimeout)),
-		flowDAO:       NewFlowDAO(storage, logger, WithFlowRequestTimeout(cfg.requestTimeout)),
-		vlanDAO:       NewVLANDAO(storage, logger, WithVLANRequestTimeout(cfg.requestTimeout)),
-		vtepDAO:       NewVTEPDAO(storage, logger, WithVTEPRequestTimeout(cfg.requestTimeout)),
-		tunnelDAO:     NewTunnelDAO(storage, logger, WithTunnelRequestTimeout(cfg.requestTimeout)),
-		vniMappingDAO: NewVNIMappingDAO(storage, logger, WithVNIMappingRequestTimeout(cfg.requestTimeout)),
-		remoteMACDAO:  NewRemoteMACDAO(storage, logger, WithRemoteMACRequestTimeout(cfg.requestTimeout)),
+		storage:   storage,
+		logger:    logger,
+		bridgeDAO: NewBridgeDAO(storage, logger, WithBridgeRequestTimeout(cfg.requestTimeout)),
+		portDAO:   NewPortDAO(storage, logger, WithPortRequestTimeout(cfg.requestTimeout)),
+		flowDAO:   NewFlowDAO(storage, logger, WithFlowRequestTimeout(cfg.requestTimeout)),
+		vlanDAO:   NewVLANDAO(storage, logger, WithVLANRequestTimeout(cfg.requestTimeout)),
 	}
 }
 
@@ -95,26 +87,6 @@ func (sm *QuicBaaSStateManager) FlowDAO() *FlowDAO {
 // VLANDAO returns the underlying VLAN DAO for direct access if needed.
 func (sm *QuicBaaSStateManager) VLANDAO() *VLANDAO {
 	return sm.vlanDAO
-}
-
-// VTEPs returns the VTEP DAO for VXLAN Tunnel Endpoint operations.
-func (sm *QuicBaaSStateManager) VTEPs() *VTEPDAO {
-	return sm.vtepDAO
-}
-
-// Tunnels returns the Tunnel DAO for VXLAN tunnel operations.
-func (sm *QuicBaaSStateManager) Tunnels() *TunnelDAO {
-	return sm.tunnelDAO
-}
-
-// VNIMappings returns the VNI Mapping DAO for VNI-to-VLAN mapping operations.
-func (sm *QuicBaaSStateManager) VNIMappings() *VNIMappingDAO {
-	return sm.vniMappingDAO
-}
-
-// RemoteMACs returns the Remote MAC DAO for remote MAC address table operations.
-func (sm *QuicBaaSStateManager) RemoteMACs() *RemoteMACDAO {
-	return sm.remoteMACDAO
 }
 
 // Bridge operations
@@ -389,48 +361,20 @@ func (sm *QuicBaaSStateManager) GetStatistics(ctx context.Context) (*SDNStatisti
 		return nil, err
 	}
 
-	vtepCount, err := sm.vtepDAO.Count(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	tunnelCount, err := sm.tunnelDAO.Count(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	vniMappingCount, err := sm.vniMappingDAO.Count(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	remoteMACCount, err := sm.remoteMACDAO.Count(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	return &SDNStatistics{
-		BridgeCount:     bridgeCount,
-		PortCount:       portCount,
-		FlowCount:       flowCount,
-		VLANCount:       vlanCount,
-		VTEPCount:       vtepCount,
-		TunnelCount:     tunnelCount,
-		VNIMappingCount: vniMappingCount,
-		RemoteMACCount:  remoteMACCount,
+		BridgeCount: bridgeCount,
+		PortCount:   portCount,
+		FlowCount:   flowCount,
+		VLANCount:   vlanCount,
 	}, nil
 }
 
 // SDNStatistics holds statistics about the SDN state.
 type SDNStatistics struct {
-	BridgeCount     int `json:"bridge_count"`
-	PortCount       int `json:"port_count"`
-	FlowCount       int `json:"flow_count"`
-	VLANCount       int `json:"vlan_count"`
-	VTEPCount       int `json:"vtep_count"`
-	TunnelCount     int `json:"tunnel_count"`
-	VNIMappingCount int `json:"vni_mapping_count"`
-	RemoteMACCount  int `json:"remote_mac_count"`
+	BridgeCount int `json:"bridge_count"`
+	PortCount   int `json:"port_count"`
+	FlowCount   int `json:"flow_count"`
+	VLANCount   int `json:"vlan_count"`
 }
 
 // Ensure QuicBaaSStateManager implements StateManager

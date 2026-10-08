@@ -16,11 +16,13 @@ package modes
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
@@ -34,175 +36,63 @@ import (
 // services are enabled (pkg/sdn/gateway/services/firewall); tables 26, 28
 // and 29 only when the load balancer is
 // (pkg/sdn/gateway/services/loadbalancer). Table 27 is reserved for the
-// NAT64 translator hand-off (#601). The base
-// pipeline installed by installOpenFlowPipeline never references them: the
-// table 10 default continues straight to table 30, and the firewall service
-// diverts into table 20 with a higher-priority table 10 flow it owns
-// (installed on Start, removed on Stop), so the disabled-path pipeline
-// stays byte-identical.
+// NAT64 translator hand-off (#601). Overlay traffic — access ingress and
+// authorised decap alike — enters table 20 from table 10; with no service
+// enabled the table-20 miss continues to table 30.
 const (
-	TableIngress        uint8 = 0  // Ingress classification
-	TableVXLANDecap     uint8 = 10 // VXLAN decapsulation (VNI -> VLAN)
-	TableAuthentication uint8 = 20 // Cert-based authentication
-	TableCTGate         uint8 = 20 // Conntrack gate (firewall service; shares table 20)
-	TableCTVerdict      uint8 = 21 // Conntrack verdict (firewall service)
-	TableNAT            uint8 = 25 // NAT commit (NAT service)
-	TableLoadBalancer   uint8 = 26 // Load balancer VIP dispatch (load-balancer service)
-	TableNAT64          uint8 = 27 // NAT64 translator hand-off (nat64 service)
-	TableLBHairpin      uint8 = 28 // Load balancer hairpin SNAT (load-balancer service)
-	TableLBReply        uint8 = 29 // Load balancer reply reverse NAT (load-balancer service)
-	TableMACLearning    uint8 = 30 // MAC learning / L2 forwarding
-	TableARP            uint8 = 40 // ARP handling (suppression)
-	TableL3Routing      uint8 = 50 // L3 routing (anycast gateway)
-	TableEgress         uint8 = 60 // Egress (port or tunnel)
+	TableIngress       uint8 = 0  // Ingress classification
+	TableVXLANDecap    uint8 = 10 // Access ingress and VXLAN decap authorisation (tun_id, tun_src)
+	TableCTGate        uint8 = 20 // Conntrack gate (firewall service)
+	TableCTVerdict     uint8 = 21 // Conntrack verdict (firewall service)
+	TableNAT           uint8 = 25 // NAT commit (NAT service)
+	TableLoadBalancer  uint8 = 26 // Load balancer VIP dispatch (load-balancer service)
+	TableNAT64         uint8 = 27 // NAT64 translator hand-off (nat64 service)
+	TableLBHairpin     uint8 = 28 // Load balancer hairpin SNAT (load-balancer service)
+	TableLBReply       uint8 = 29 // Load balancer reply reverse NAT (load-balancer service)
+	TableMACLearning   uint8 = 30 // L2 forwarding by (VNI, MAC)
+	TableARP           uint8 = 40 // ARP suppression
+	TableL3Routing     uint8 = 50 // Symmetric IRB routing (anycast gateway)
+	TableEgress        uint8 = 60 // BUM ingress replication
+	TableLocalDelivery uint8 = 70 // Out the access port
 )
 
 // MACEntrySource indicates where a MAC entry was learned from.
 type MACEntrySource uint8
 
 const (
-	// MACSourceLocal indicates a locally learned MAC.
+	// MACSourceLocal indicates a MAC on this VTEP's access port.
 	MACSourceLocal MACEntrySource = iota
-	// MACSourceRemote indicates a MAC learned via EVPN.
+	// MACSourceRemote indicates a MAC behind another VTEP, learned via EVPN.
 	MACSourceRemote
-	// MACSourceStatic indicates a statically configured MAC.
-	MACSourceStatic
 )
 
-// String returns a string representation of the MAC entry source.
+// String returns the source name.
 func (s MACEntrySource) String() string {
-	switch s {
-	case MACSourceLocal:
+	if s == MACSourceLocal {
 		return "local"
-	case MACSourceRemote:
-		return "remote"
-	case MACSourceStatic:
-		return "static"
-	default:
-		return "unknown"
 	}
+	return "remote"
 }
 
-// MACEntry represents a MAC address entry in the forwarding database.
+// MACEntry is one MAC the overlay forwards to.
 type MACEntry struct {
-	// MAC is the hardware address.
+	// MAC is the host's hardware address.
 	MAC net.HardwareAddr
 
-	// IP is the associated IP address (optional).
-	IP netip.Addr
+	// IPs are the host's IP bindings, sorted.
+	IPs []netip.Addr
 
-	// VNI is the VXLAN Network Identifier.
+	// VNI is the L2VNI the host is on.
 	VNI uint32
 
-	// VTEPIP is the VTEP IP where this MAC resides.
-	// For local entries, this is the local VTEP IP.
+	// VTEPIP is the VTEP the host sits behind; invalid for a local host.
 	VTEPIP netip.Addr
 
-	// OFPort is the OpenFlow port number for local entries.
-	// Zero for remote entries (traffic goes through tunnel).
-	OFPort int32
-
-	// Source indicates how this entry was learned.
+	// Source is where the MAC was learned.
 	Source MACEntrySource
 
-	// Sequence is the MAC mobility sequence number.
-	Sequence uint32
-
-	// CreatedAt is when this entry was created.
-	CreatedAt time.Time
-
-	// UpdatedAt is when this entry was last updated.
+	// UpdatedAt is when the entry last changed.
 	UpdatedAt time.Time
-
-	// ExpiresAt is when this entry expires (zero means no expiration).
-	ExpiresAt time.Time
-}
-
-// IsExpired returns true if the entry has expired.
-func (e *MACEntry) IsExpired() bool {
-	if e.ExpiresAt.IsZero() {
-		return false
-	}
-	return time.Now().After(e.ExpiresAt)
-}
-
-// Clone creates a deep copy of the MAC entry.
-func (e *MACEntry) Clone() *MACEntry {
-	if e == nil {
-		return nil
-	}
-	clone := &MACEntry{
-		IP:        e.IP,
-		VNI:       e.VNI,
-		VTEPIP:    e.VTEPIP,
-		OFPort:    e.OFPort,
-		Source:    e.Source,
-		Sequence:  e.Sequence,
-		CreatedAt: e.CreatedAt,
-		UpdatedAt: e.UpdatedAt,
-		ExpiresAt: e.ExpiresAt,
-	}
-	if e.MAC != nil {
-		clone.MAC = make(net.HardwareAddr, len(e.MAC))
-		copy(clone.MAC, e.MAC)
-	}
-	return clone
-}
-
-// ARPOperation represents an ARP operation type.
-type ARPOperation uint16
-
-const (
-	// ARPRequest is an ARP request operation.
-	ARPRequest ARPOperation = 1
-	// ARPReply is an ARP reply operation.
-	ARPReply ARPOperation = 2
-)
-
-// ARPPacket represents a parsed ARP packet.
-type ARPPacket struct {
-	// Operation is the ARP operation (request or reply).
-	Operation ARPOperation
-
-	// SenderMAC is the sender hardware address.
-	SenderMAC net.HardwareAddr
-
-	// SenderIP is the sender protocol address.
-	SenderIP netip.Addr
-
-	// TargetMAC is the target hardware address.
-	TargetMAC net.HardwareAddr
-
-	// TargetIP is the target protocol address.
-	TargetIP netip.Addr
-
-	// VNI is the VNI this ARP was received on.
-	VNI uint32
-
-	// InPort is the OpenFlow port the packet was received on.
-	InPort int32
-}
-
-// ARPResponse represents an ARP response to send.
-type ARPResponse struct {
-	// ShouldRespond indicates whether we should respond locally.
-	ShouldRespond bool
-
-	// ReplyMAC is the MAC address to respond with (if ShouldRespond is true).
-	ReplyMAC net.HardwareAddr
-
-	// ShouldFlood indicates whether to flood the ARP request.
-	ShouldFlood bool
-
-	// FloodVTEPs is the list of VTEPs to flood to (for BUM traffic).
-	FloodVTEPs []netip.Addr
-}
-
-// VNIMapping represents a VNI to VLAN mapping.
-type VNIMapping struct {
-	VNI       uint32
-	VLAN      uint16
-	CreatedAt time.Time
 }
 
 // OverlayModeStatus represents the current status of the overlay mode.
@@ -216,14 +106,26 @@ type OverlayModeStatus struct {
 	// VNICount is the number of configured VNIs.
 	VNICount int
 
-	// TunnelCount is the number of active VXLAN tunnels.
-	TunnelCount int
+	// RemoteVTEPCount is the number of distinct VTEPs on the VNIs'
+	// ingress-replication lists.
+	RemoteVTEPCount int
 
-	// LocalMACCount is the number of locally learned MACs.
+	// LocalMACCount is the number of local MACs.
 	LocalMACCount int
 
-	// RemoteMACCount is the number of remotely learned MACs.
+	// RemoteMACCount is the number of remote MACs.
 	RemoteMACCount int
+
+	// PrefixCount is the number of Type-5 prefixes routed.
+	PrefixCount int
+
+	// RefusedBindings is how many remote MAC/IP bindings were refused for
+	// claiming the anycast gateway's address, or held back for claiming a
+	// local host's IP.
+	RefusedBindings uint64
+
+	// L3VNI is the IP-VRF of symmetric IRB; zero when off.
+	L3VNI uint32
 
 	// ARPSuppressionEnabled indicates whether ARP suppression is active.
 	ARPSuppressionEnabled bool
@@ -238,62 +140,61 @@ type OverlayModeStatus struct {
 	Uptime time.Duration
 }
 
-// OverlayOVSClient defines the OVS client interface required by the overlay handler.
-// This interface allows for dependency injection and testing.
+// OverlayOVSClient is the OVSDB client the overlay needs: the flow-based
+// VXLAN port, and the OpenFlow number of the access port.
 type OverlayOVSClient interface {
-	// AddVXLANPort creates a VXLAN port on the specified bridge.
-	AddVXLANPort(ctx context.Context, bridge, port string, remoteIP string, vni uint32, dstPort uint16) error
-
-	// DeletePort removes a port from the specified bridge.
-	DeletePort(ctx context.Context, bridge, port string) error
-
-	// GetOFPort retrieves the OpenFlow port number for an interface.
-	GetOFPort(ctx context.Context, portName string) (int32, error)
-
-	// IsConnected returns true if connected to OVSDB.
-	IsConnected() bool
+	vxlan.OVSClient
 }
 
-// OverlayOpenFlowClient defines the OpenFlow client interface required by the overlay handler.
+// OverlayOpenFlowClient is the OpenFlow client the overlay programs.
 type OverlayOpenFlowClient interface {
-	// AddFlow adds a flow entry to the bridge.
-	AddFlow(ctx context.Context, flow *openflow.FlowMod) error
-
-	// SendFlowMods adds a batch of flow entries in a single OpenFlow
-	// transaction (all flow mods followed by one barrier).
+	// SendFlowMods sends flow mods as one batch, followed by one barrier.
 	SendFlowMods(ctx context.Context, flows []*openflow.FlowMod) error
+}
 
-	// DeleteFlow deletes flows matching the criteria.
-	DeleteFlow(ctx context.Context, flow *openflow.FlowMod) error
-
-	// IsConnected returns whether the client is connected.
-	IsConnected() bool
+// VTEPAdmitter decides whether a remote VTEP may carry a VNI. The overlay
+// asks before it forwards to a VTEP or authorises its decap, once for
+// every (VNI, VTEP) pair a route names; a refusal leaves the route
+// uninstalled.
+type VTEPAdmitter interface {
+	AdmitVTEP(ctx context.Context, vni uint32, vtep netip.Addr) error
 }
 
 // OverlayModeConfig holds configuration for the overlay mode handler.
 type OverlayModeConfig struct {
-	// VTEPConfig is the VTEP configuration.
+	// VTEPConfig is the VTEP configuration; its local address must be
+	// IPv4, the only tunnel family the flows set and match.
 	VTEPConfig *vxlan.VTEPConfig
 
-	// EVPNConfig is the EVPN manager configuration.
+	// EVPNConfig is the EVPN manager configuration; nil runs the overlay
+	// without a control plane, bridging local hosts only.
 	EVPNConfig *bgp.EVPNManagerConfig
 
-	// ARPSuppression enables ARP suppression.
+	// ARPSuppression answers ARP for every known IPv4 binding in the
+	// switch, not only for the anycast gateway.
 	ARPSuppression bool
 
-	// AnycastGatewayIP is the distributed anycast gateway IP.
+	// AnycastGatewayIP is the distributed anycast gateway's IPv4 address;
+	// with AnycastGatewayMAC it turns on routing.
 	AnycastGatewayIP netip.Addr
 
 	// AnycastGatewayMAC is the distributed anycast gateway MAC.
 	// This MAC is shared across all nodes for seamless L3 routing.
 	AnycastGatewayMAC net.HardwareAddr
 
+	// L3VNI is the IP-VRF of symmetric IRB; zero routes between local
+	// segments only. It needs the anycast gateway and the EVPN router MAC.
+	L3VNI uint32
+
 	// BridgeName is the OVS bridge name.
 	BridgeName string
 
-	// MACEntryTimeout is the timeout for learned MAC entries.
-	// Zero means no timeout.
-	MACEntryTimeout time.Duration
+	// AccessPort is the bridge port that carries every local VNI as a
+	// VLAN.
+	AccessPort string
+
+	// Admitter vets the remote VTEPs routes name; EVPN requires it.
+	Admitter VTEPAdmitter
 
 	// Logger for logging operations.
 	Logger *slog.Logger
@@ -307,25 +208,120 @@ func (c *OverlayModeConfig) Validate() error {
 	if err := c.VTEPConfig.Validate(); err != nil {
 		return err
 	}
+	if !c.VTEPConfig.LocalIP.Is4() {
+		return ErrInvalidVTEPIP
+	}
 	if c.BridgeName == "" {
 		return ErrBridgeNameEmpty
+	}
+	if c.AccessPort == "" {
+		return ErrAccessPortEmpty
 	}
 	if c.Logger == nil {
 		return ErrLoggerNil
 	}
-	// EVPNConfig is optional - can run without BGP/EVPN
-	// AnycastGatewayIP and AnycastGatewayMAC are optional
+	if c.EVPNConfig != nil && c.Admitter == nil {
+		return ErrAdmitterNil
+	}
+	anycast := c.AnycastGatewayIP.IsValid() || c.AnycastGatewayMAC != nil
+	if anycast && (!c.AnycastGatewayIP.Is4() || len(c.AnycastGatewayMAC) != 6) {
+		return ErrAnycastGatewayIncomplete
+	}
+	if c.L3VNI == 0 {
+		return nil
+	}
+	if err := validateOverlayVNI(c.L3VNI); err != nil {
+		return err
+	}
+	if c.EVPNConfig == nil || len(c.EVPNConfig.RouterMAC) != 6 {
+		return ErrRouterMACRequired
+	}
+	if !anycast {
+		return ErrAnycastGatewayRequired
+	}
 	return nil
 }
 
-// replicationList wraps a slice of VTEP addresses for use in sync.Map.
-// Using a pointer to a struct allows CompareAndSwap to work correctly
-// since pointers are comparable while slices are not.
-type replicationList struct {
-	vteps []netip.Addr
+// hostKey names one MAC on one VNI.
+type hostKey struct {
+	vni uint32
+	mac string
 }
 
-// OverlayModeHandler handles VXLAN overlay networking for east-west VM/container traffic.
+// overlaySegment is one L2VNI: its access VLAN, the remote VTEPs placed on
+// it (its ingress-replication list, sorted) and the flows that carry it.
+type overlaySegment struct {
+	vlan  uint16
+	flood []netip.Addr
+	flows []*openflow.FlowMod
+}
+
+// irbBinding is what a remote IP binding needs to be routed to: the IP-VRF
+// it was advertised in and the remote VTEP's router MAC.
+type irbBinding struct {
+	l3vni     uint32
+	routerMAC net.HardwareAddr
+}
+
+// overlayHost is one MAC on one VNI. A local host has no VTEP. Its IP
+// bindings key on the address; the invalid address is the MAC-only route.
+type overlayHost struct {
+	mac  net.HardwareAddr
+	vtep netip.Addr
+	ips  map[netip.Addr]irbBinding
+	// held is a remote host's bindings to IPs a local host answers for:
+	// the MAC is bridged, but their ARP replies and host routes wait for
+	// the local host to go.
+	held      map[netip.Addr]irbBinding
+	updatedAt time.Time
+	flows     []*openflow.FlowMod
+}
+
+func (h *overlayHost) local() bool {
+	return !h.vtep.IsValid()
+}
+
+// sortedIPs returns the host's IP bindings, without the MAC-only route.
+func (h *overlayHost) sortedIPs() []netip.Addr {
+	ips := make([]netip.Addr, 0, len(h.ips))
+	for ip := range h.ips {
+		if ip.IsValid() {
+			ips = append(ips, ip)
+		}
+	}
+	slices.SortFunc(ips, netip.Addr.Compare)
+	return ips
+}
+
+// overlayPrefixRoute is one VTEP's Type-5 route to a prefix.
+type overlayPrefixRoute struct {
+	vtep      netip.Addr
+	routerMAC net.HardwareAddr
+}
+
+// overlayPrefix is a Type-5 prefix and every VTEP advertising it. The
+// lowest VTEP address carries the traffic, so every VTEP picks the same
+// one and a withdrawal falls back to the next.
+type overlayPrefix struct {
+	routes map[netip.Addr]*overlayPrefixRoute
+	flows  []*openflow.FlowMod
+}
+
+// best returns the route that carries the prefix, or nil when none is left.
+func (p *overlayPrefix) best() *overlayPrefixRoute {
+	var best *overlayPrefixRoute
+	for vtep, route := range p.routes {
+		if best == nil || vtep.Less(best.vtep) {
+			best = route
+		}
+	}
+	return best
+}
+
+// OverlayModeHandler forwards a VXLAN overlay between the local access
+// port and remote VTEPs, programmed from EVPN routes: Type-2 routes become
+// MAC forwarding, ARP replies and IRB host routes, Type-3 routes ingress
+// replication and decap authorisation, Type-5 routes prefix routes.
 type OverlayModeHandler struct {
 	config      *OverlayModeConfig
 	vtepManager *vxlan.VTEPManager
@@ -334,30 +330,32 @@ type OverlayModeHandler struct {
 	ofClient    OverlayOpenFlowClient
 	logger      *slog.Logger
 
-	// VNI to VLAN mappings
-	vniMappings sync.Map // map[uint32]*VNIMapping
+	// opMu serialises lifecycle, VNI and MAC operations. EVPN route
+	// events take only mu: the EVPN manager runs them synchronously from
+	// JoinVNI and WithdrawMACIP, so those calls are made without mu.
+	opMu sync.Mutex
+	// unwithdrawn is the IPs of forgotten local hosts whose Type-2
+	// withdrawal BGP refused; ForgetMAC for the MAC tries them again.
+	// opMu guards it.
+	unwithdrawn map[hostKey]map[netip.Addr]struct{}
 
-	// Local MAC table (key: "VNI:MAC")
-	localMACs sync.Map // map[string]*MACEntry
-
-	// Remote MAC table (key: "VNI:MAC")
-	remoteMACs sync.Map // map[string]*MACEntry
-
-	// ARP suppression table (key: "VNI:IP" -> MAC)
-	arpTable sync.Map // map[string]net.HardwareAddr
-
-	// Replication list per VNI (key: VNI -> *replicationList)
-	replicationLists sync.Map // map[uint32]*replicationList
-
-	// Running state
-	running atomic.Bool
-
-	// Start time
+	// mu guards the state and the flows below.
+	mu        sync.Mutex
+	running   bool
 	startedAt time.Time
+	builder   *flowBuilder
+	flows     *flowTable
+	// drifted is set when the switch refused a put-back and may hold
+	// flows the table does not; the next change rebuilds the switch.
+	drifted  bool
+	segments map[uint32]*overlaySegment
+	vlans    map[uint16]uint32
+	hosts    map[hostKey]*overlayHost
+	prefixes map[netip.Prefix]*overlayPrefix
 
-	// Shutdown coordination
-	done chan struct{}
-	wg   sync.WaitGroup
+	// refusedBindings counts the remote bindings refused or held back for
+	// a conflict.
+	refusedBindings uint64
 }
 
 // NewOverlayModeHandler creates a new overlay mode handler.
@@ -379,1007 +377,589 @@ func NewOverlayModeHandler(
 		return nil, ErrOpenFlowClientNil
 	}
 
-	handler := &OverlayModeHandler{
-		config:    config,
-		ovsClient: ovsClient,
-		ofClient:  ofClient,
-		logger:    config.Logger,
-		done:      make(chan struct{}),
+	h := &OverlayModeHandler{
+		config:      config,
+		ovsClient:   ovsClient,
+		ofClient:    ofClient,
+		logger:      config.Logger,
+		unwithdrawn: make(map[hostKey]map[netip.Addr]struct{}),
+		flows:       newFlowTable(),
+		segments:    make(map[uint32]*overlaySegment),
+		vlans:       make(map[uint16]uint32),
+		hosts:       make(map[hostKey]*overlayHost),
+		prefixes:    make(map[netip.Prefix]*overlayPrefix),
 	}
 
-	// Create VTEP manager using the OVS client interface
-	vtepManager, err := vxlan.NewVTEPManager(
-		*config.VTEPConfig,
-		ovsClient,
-		config.BridgeName,
-		config.Logger,
-	)
+	vtepManager, err := vxlan.NewVTEPManager(*config.VTEPConfig, ovsClient, config.BridgeName, config.Logger)
 	if err != nil {
 		return nil, &ErrOverlayInitFailed{Component: "VTEPManager", Cause: err}
 	}
-	handler.vtepManager = vtepManager
+	h.vtepManager = vtepManager
 
-	// Create EVPN manager if configured
 	if config.EVPNConfig != nil {
 		evpnManager, err := bgp.NewEVPNManager(config.EVPNConfig)
 		if err != nil {
 			return nil, &ErrOverlayInitFailed{Component: "EVPNManager", Cause: err}
 		}
-		handler.evpnManager = evpnManager
+		evpnManager.RegisterHandler(h.handleEVPNRoute)
+		h.evpnManager = evpnManager
 	}
-
-	return handler, nil
+	return h, nil
 }
 
-// Start starts the overlay mode handler.
+// Start creates the VXLAN port, starts the EVPN control plane and installs
+// the base pipeline, replacing any overlay flows a previous run left.
 func (h *OverlayModeHandler) Start(ctx context.Context) error {
-	if h.running.Swap(true) {
+	h.opMu.Lock()
+	defer h.opMu.Unlock()
+
+	h.mu.Lock()
+	running := h.running
+	h.mu.Unlock()
+	if running {
 		return ErrAlreadyRunning
 	}
 
-	h.startedAt = time.Now()
-	h.done = make(chan struct{})
-
-	// Start VTEP manager
 	if err := h.vtepManager.Start(ctx); err != nil {
-		h.running.Store(false)
 		return &ErrOverlayStartFailed{Component: "VTEPManager", Cause: err}
 	}
-
-	// Start EVPN manager if configured
+	builder, err := h.newBuilder(ctx)
+	if err != nil {
+		h.abortStart(ctx, false)
+		return err
+	}
 	if h.evpnManager != nil {
 		if err := h.evpnManager.Start(ctx); err != nil {
-			h.vtepManager.Stop()
-			h.running.Store(false)
+			h.abortStart(ctx, false)
 			return &ErrOverlayStartFailed{Component: "EVPNManager", Cause: err}
 		}
-
-		// Register EVPN route handler
-		h.evpnManager.RegisterHandler(h.handleEVPNRoute)
 	}
 
-	// Install base OpenFlow pipeline
-	if err := h.installOpenFlowPipeline(ctx); err != nil {
-		h.stopComponents(ctx)
-		h.running.Store(false)
+	h.mu.Lock()
+	err = h.installBase(ctx, builder)
+	h.mu.Unlock()
+	if err != nil {
+		h.abortStart(ctx, h.evpnManager != nil)
 		return &ErrOverlayStartFailed{Component: "OpenFlow", Cause: err}
 	}
 
 	h.logger.Info("overlay mode started",
 		slog.String("local_vtep", h.config.VTEPConfig.LocalIP.String()),
-		slog.Bool("arp_suppression", h.config.ARPSuppression),
-		slog.Bool("anycast_gateway", h.config.AnycastGatewayIP.IsValid()),
-	)
-
+		slog.String("vxlan_port", h.vtepManager.PortName()),
+		slog.Uint64("l3vni", uint64(h.config.L3VNI)))
 	return nil
 }
 
-// Stop stops the overlay mode handler.
-func (h *OverlayModeHandler) Stop(ctx context.Context) error {
-	if !h.running.Swap(false) {
-		return nil
-	}
-
-	// Signal shutdown
-	close(h.done)
-
-	// Wait for goroutines
-	h.wg.Wait()
-
-	// Stop components
-	h.stopComponents(ctx)
-
-	h.logger.Info("overlay mode stopped")
-	return nil
-}
-
-// stopComponents stops all sub-components.
-func (h *OverlayModeHandler) stopComponents(ctx context.Context) {
-	if h.evpnManager != nil {
-		if err := h.evpnManager.Stop(ctx); err != nil {
-			h.logger.Error("failed to stop EVPN manager", slog.Any("error", err))
-		}
-	}
-
-	if err := h.vtepManager.Stop(); err != nil {
-		h.logger.Error("failed to stop VTEP manager", slog.Any("error", err))
-	}
-}
-
-// AddVNI adds a VNI to the overlay.
-func (h *OverlayModeHandler) AddVNI(ctx context.Context, vni uint32, vlan uint16) error {
-	if !h.running.Load() {
-		return ErrNotRunning
-	}
-
-	if err := validateVNI(vni); err != nil {
+// installBase replaces whatever overlay flows the bridge holds with the
+// base pipeline, in fail-closed order, and marks the handler running.
+// Caller holds mu.
+func (h *OverlayModeHandler) installBase(ctx context.Context, builder *flowBuilder) error {
+	h.flows.reset()
+	h.drifted = false
+	plan, err := h.flows.plan(nil, builder.base())
+	if err != nil {
 		return err
 	}
-	if vlan > 4094 {
+	if err := h.ofClient.SendFlowMods(ctx, append([]*openflow.FlowMod{overlayFlush()}, failClosed(plan.mods)...)); err != nil {
+		return h.resync(ctx, err, []*openflow.FlowMod{overlayFlush()})
+	}
+	plan.commit()
+	h.builder = builder
+	h.running = true
+	h.startedAt = time.Now()
+	return nil
+}
+
+// newBuilder resolves the OpenFlow numbers of the VXLAN and access ports.
+func (h *OverlayModeHandler) newBuilder(ctx context.Context) (*flowBuilder, error) {
+	vxlanPort, err := h.vtepManager.OFPort()
+	if err != nil {
+		return nil, &ErrOverlayStartFailed{Component: "VXLANPort", Cause: err}
+	}
+	accessPort, err := h.ovsClient.GetOFPort(ctx, h.config.AccessPort)
+	if err != nil {
+		return nil, &ErrOverlayStartFailed{Component: "AccessPort", Cause: err}
+	}
+	if accessPort <= 0 {
+		return nil, &ErrOverlayStartFailed{Component: "AccessPort", Cause: ErrAccessPortUnresolved}
+	}
+	builder, err := newFlowBuilder(h.config, overlayPorts{vxlan: vxlanPort, access: uint32(accessPort)})
+	if err != nil {
+		return nil, &ErrOverlayStartFailed{Component: "OpenFlow", Cause: err}
+	}
+	return builder, nil
+}
+
+// abortStart undoes a partial Start. Its own failures are logged: the
+// start error is the one the caller reports.
+func (h *OverlayModeHandler) abortStart(ctx context.Context, evpnStarted bool) {
+	if evpnStarted {
+		if err := h.evpnManager.Stop(ctx); err != nil {
+			h.logger.Error("stopping EVPN after a failed start", slog.Any("error", err))
+		}
+	}
+	if err := h.vtepManager.Stop(ctx); err != nil {
+		h.logger.Error("removing the VXLAN port after a failed start", slog.Any("error", err))
+	}
+}
+
+// Stop withdraws this VTEP from every VNI, stops the control plane,
+// removes every overlay flow and the VXLAN port. It carries on past a
+// failure and reports them all.
+func (h *OverlayModeHandler) Stop(ctx context.Context) error {
+	h.opMu.Lock()
+	defer h.opMu.Unlock()
+
+	h.mu.Lock()
+	if !h.running {
+		h.mu.Unlock()
+		return ErrNotRunning
+	}
+	h.running = false
+	vnis := slices.Sorted(maps.Keys(h.segments))
+	h.mu.Unlock()
+
+	var errs []error
+	if h.evpnManager != nil {
+		for _, vni := range vnis {
+			if err := h.leaveVNI(ctx, vni); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if err := h.evpnManager.Stop(ctx); err != nil {
+			errs = append(errs, &ErrStopFailed{Component: "EVPNManager", Cause: err})
+		}
+	}
+	clear(h.unwithdrawn)
+
+	h.mu.Lock()
+	if err := h.ofClient.SendFlowMods(ctx, []*openflow.FlowMod{overlayFlush()}); err != nil {
+		errs = append(errs, &ErrFlowOperationFailed{Table: openflow.OFPTTAll, Operation: "delete", Cause: err})
+	}
+	h.flows.reset()
+	clear(h.segments)
+	clear(h.vlans)
+	clear(h.hosts)
+	clear(h.prefixes)
+	h.mu.Unlock()
+
+	if err := h.vtepManager.Stop(ctx); err != nil {
+		errs = append(errs, &ErrStopFailed{Component: "VTEPManager", Cause: err})
+	}
+	h.logger.Info("overlay mode stopped")
+	return errors.Join(errs...)
+}
+
+// AddVNI carries an L2VNI on an access VLAN and places this VTEP on it in
+// EVPN, which brings in the remote VTEPs and hosts already advertised.
+func (h *OverlayModeHandler) AddVNI(ctx context.Context, vni uint32, vlan uint16) error {
+	if err := validateOverlayVNI(vni); err != nil {
+		return err
+	}
+	if vlan == 0 || vlan > 4094 {
 		return ErrVLANOutOfRange
 	}
+	if vni == h.config.L3VNI {
+		return &ErrVNIOperationFailed{VNI: vni, Operation: "add", Cause: ErrVNIAlreadyExists}
+	}
 
-	// Check if VNI already exists
-	if _, exists := h.vniMappings.Load(vni); exists {
+	h.opMu.Lock()
+	defer h.opMu.Unlock()
+
+	h.mu.Lock()
+	if !h.running {
+		h.mu.Unlock()
+		return ErrNotRunning
+	}
+	if _, ok := h.segments[vni]; ok {
+		h.mu.Unlock()
 		return ErrVNIAlreadyExists
 	}
-
-	mapping := &VNIMapping{
-		VNI:       vni,
-		VLAN:      vlan,
-		CreatedAt: time.Now(),
+	if _, ok := h.vlans[vlan]; ok {
+		h.mu.Unlock()
+		return ErrVLANInUse
 	}
-	h.vniMappings.Store(vni, mapping)
-
-	// Install VNI-specific flows
-	if err := h.installVNIFlows(ctx, vni, vlan); err != nil {
-		h.vniMappings.Delete(vni)
-		return &ErrVNIOperationFailed{VNI: vni, Operation: "add", Cause: err}
+	segment := &overlaySegment{vlan: vlan}
+	segment.flows = h.builder.segment(vni, segment)
+	if err := h.apply(ctx, nil, segment.flows); err != nil {
+		h.mu.Unlock()
+		return &ErrVNIOperationFailed{VNI: vni, Operation: "install", Cause: err}
 	}
+	h.segments[vni] = segment
+	h.vlans[vlan] = vni
+	h.mu.Unlock()
 
-	// Advertise IMET for this VNI (Type-3) if EVPN is configured
-	if h.evpnManager != nil {
-		if err := h.evpnManager.AdvertiseIMET(ctx, vni, h.config.VTEPConfig.LocalIP); err != nil {
-			h.logger.Warn("failed to advertise IMET",
-				slog.Uint64("vni", uint64(vni)),
-				slog.Any("error", err),
-			)
+	if h.evpnManager == nil {
+		return nil
+	}
+	if err := h.evpnManager.JoinVNI(ctx, vni, h.config.L3VNI); err != nil {
+		h.mu.Lock()
+		if removeErr := h.removeSegment(ctx, vni); removeErr != nil {
+			h.logger.Error("removing a VNI EVPN refused", slog.Uint64("vni", uint64(vni)), slog.Any("error", removeErr))
 		}
+		h.mu.Unlock()
+		return &ErrVNIOperationFailed{VNI: vni, Operation: "join", Cause: err}
 	}
-
-	h.logger.Info("VNI added",
-		slog.Uint64("vni", uint64(vni)),
-		slog.Int("vlan", int(vlan)),
-	)
-
 	return nil
 }
 
-// RemoveVNI removes a VNI from the overlay.
+// RemoveVNI takes this VTEP off an L2VNI and removes everything forwarded
+// on it. The last VNI takes the Type-5 prefixes with it: EVPN drops the
+// IP-VRF with its last member.
 func (h *OverlayModeHandler) RemoveVNI(ctx context.Context, vni uint32) error {
-	if !h.running.Load() {
+	h.opMu.Lock()
+	defer h.opMu.Unlock()
+
+	h.mu.Lock()
+	if !h.running {
+		h.mu.Unlock()
 		return ErrNotRunning
 	}
-
-	val, exists := h.vniMappings.Load(vni)
-	if !exists {
+	if _, ok := h.segments[vni]; !ok {
+		h.mu.Unlock()
 		return ErrVNINotFound
 	}
-	mapping := val.(*VNIMapping)
+	h.mu.Unlock()
 
-	// Withdraw IMET if EVPN is configured
+	var errs []error
 	if h.evpnManager != nil {
-		if err := h.evpnManager.WithdrawIMET(ctx, vni); err != nil {
-			h.logger.Warn("failed to withdraw IMET",
-				slog.Uint64("vni", uint64(vni)),
-				slog.Any("error", err),
-			)
+		if err := h.leaveVNI(ctx, vni); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	// Remove VNI-specific flows
-	if err := h.removeVNIFlows(ctx, vni, mapping.VLAN); err != nil {
-		return &ErrVNIOperationFailed{VNI: vni, Operation: "remove", Cause: err}
+	h.mu.Lock()
+	if err := h.removeSegment(ctx, vni); err != nil {
+		errs = append(errs, &ErrVNIOperationFailed{VNI: vni, Operation: "remove", Cause: err})
+	} else if err := h.releaseHeld(ctx); err != nil {
+		errs = append(errs, err)
 	}
+	h.mu.Unlock()
+	return errors.Join(errs...)
+}
 
-	// Clean up MAC entries for this VNI
-	h.cleanupVNIMACs(vni)
+// leaveVNI takes this VTEP off a VNI in EVPN, which withdraws the VNI's
+// routes, those whose withdrawal BGP refused before included. A VNI
+// already left — by a removal whose flows the switch then refused — is not
+// an error, so the removal can be retried and Stop still completes.
+// Caller holds opMu.
+func (h *OverlayModeHandler) leaveVNI(ctx context.Context, vni uint32) error {
+	err := h.evpnManager.LeaveVNI(ctx, vni)
+	var notJoined bgp.ErrVNINotJoined
+	if err == nil || errors.As(err, &notJoined) {
+		maps.DeleteFunc(h.unwithdrawn, func(key hostKey, _ map[netip.Addr]struct{}) bool { return key.vni == vni })
+		return nil
+	}
+	return &ErrVNIOperationFailed{VNI: vni, Operation: "leave", Cause: err}
+}
 
-	// Remove replication list
-	h.replicationLists.Delete(vni)
-
-	h.vniMappings.Delete(vni)
-
-	h.logger.Info("VNI removed", slog.Uint64("vni", uint64(vni)))
-
+// removeSegment removes a VNI's flows and hosts, and the prefixes with
+// the last VNI. Caller holds mu.
+func (h *OverlayModeHandler) removeSegment(ctx context.Context, vni uint32) error {
+	segment := h.segments[vni]
+	release := slices.Clone(segment.flows)
+	var hosts []hostKey
+	for key, host := range h.hosts {
+		if key.vni == vni {
+			release = append(release, host.flows...)
+			hosts = append(hosts, key)
+		}
+	}
+	last := len(h.segments) == 1
+	if last {
+		for _, prefix := range h.prefixes {
+			release = append(release, prefix.flows...)
+		}
+	}
+	if err := h.apply(ctx, release, nil); err != nil {
+		return err
+	}
+	for _, key := range hosts {
+		delete(h.hosts, key)
+	}
+	if last {
+		clear(h.prefixes)
+	}
+	delete(h.vlans, segment.vlan)
+	delete(h.segments, vni)
 	return nil
 }
 
-// LearnMAC learns a MAC address from local or remote sources.
-func (h *OverlayModeHandler) LearnMAC(
-	ctx context.Context,
-	mac net.HardwareAddr,
-	ip netip.Addr,
-	vni uint32,
-	vtepIP netip.Addr,
-) error {
-	if !h.running.Load() {
+// LearnMAC records a host on the access port — its MAC alone, or a MAC/IP
+// binding when ip is valid — and advertises it in EVPN. The host is
+// forwarded to locally even when advertising fails; learning it again
+// retries the advertisement.
+func (h *OverlayModeHandler) LearnMAC(ctx context.Context, vni uint32, mac net.HardwareAddr, ip netip.Addr) error {
+	if err := validateOverlayMAC(mac); err != nil {
+		return err
+	}
+
+	h.opMu.Lock()
+	defer h.opMu.Unlock()
+
+	h.mu.Lock()
+	if !h.running {
+		h.mu.Unlock()
 		return ErrNotRunning
 	}
-
-	if err := validateMAC(mac); err != nil {
-		return err
+	segment, ok := h.segments[vni]
+	if !ok {
+		h.mu.Unlock()
+		return ErrVNINotFound
 	}
-	if err := validateVNI(vni); err != nil {
-		return err
+	key := hostKey{vni: vni, mac: mac.String()}
+	old := h.hosts[key]
+	next := &overlayHost{mac: slices.Clone(mac), ips: make(map[netip.Addr]irbBinding), updatedAt: time.Now()}
+	if old != nil && old.local() {
+		maps.Copy(next.ips, old.ips)
 	}
-
-	key := formatMACKey(vni, mac)
-	now := time.Now()
-
-	isLocal := vtepIP == h.config.VTEPConfig.LocalIP || !vtepIP.IsValid()
-
-	entry := &MACEntry{
-		MAC:       mac,
-		IP:        ip,
-		VNI:       vni,
-		CreatedAt: now,
-		UpdatedAt: now,
+	next.ips[ip] = irbBinding{}
+	if err := h.replaceHost(ctx, key, segment, old, next); err != nil {
+		h.mu.Unlock()
+		return &ErrMACOperationFailed{MAC: mac, Operation: "learn", Cause: err}
 	}
+	h.mu.Unlock()
 
-	if isLocal {
-		entry.Source = MACSourceLocal
-		entry.VTEPIP = h.config.VTEPConfig.LocalIP
-
-		// Set expiration if configured
-		if h.config.MACEntryTimeout > 0 {
-			entry.ExpiresAt = now.Add(h.config.MACEntryTimeout)
-		}
-
-		h.localMACs.Store(key, entry)
-
-		// Install local forwarding flow
-		if err := h.installLocalMACFlow(ctx, entry); err != nil {
-			return &ErrMACOperationFailed{MAC: mac, Operation: "learn-local", Cause: err}
-		}
-
-		// Advertise via EVPN Type-2 if configured
-		if h.evpnManager != nil {
-			evpnEntry := &bgp.MACIPEntry{
-				MAC:    mac,
-				IP:     ip,
-				VNI:    vni,
-				VTEPIP: h.config.VTEPConfig.LocalIP,
-			}
-			if ip.IsValid() {
-				if err := h.evpnManager.AdvertiseMACIP(ctx, evpnEntry); err != nil {
-					h.logger.Warn("failed to advertise MAC/IP",
-						slog.String("mac", mac.String()),
-						slog.Any("error", err),
-					)
-				}
-			} else {
-				if err := h.evpnManager.AdvertiseMAC(ctx, evpnEntry); err != nil {
-					h.logger.Warn("failed to advertise MAC",
-						slog.String("mac", mac.String()),
-						slog.Any("error", err),
-					)
-				}
-			}
-		}
-	} else {
-		entry.Source = MACSourceRemote
-		entry.VTEPIP = vtepIP
-
-		h.remoteMACs.Store(key, entry)
-
-		// Install remote forwarding flow (tunnel to VTEP)
-		if err := h.installRemoteMACFlow(ctx, entry); err != nil {
-			return &ErrMACOperationFailed{MAC: mac, Operation: "learn-remote", Cause: err}
-		}
+	if h.evpnManager == nil {
+		return nil
 	}
-
-	// Update ARP table if IP is provided
-	if ip.IsValid() && h.config.ARPSuppression {
-		arpKey := formatARPKey(vni, ip)
-		h.arpTable.Store(arpKey, mac)
+	if err := h.evpnManager.AdvertiseMACIP(ctx, &bgp.MACIPEntry{MAC: mac, IP: ip, VNI: vni}); err != nil {
+		return &ErrMACOperationFailed{MAC: mac, Operation: "advertise", Cause: err}
 	}
-
-	h.logger.Debug("MAC learned",
-		slog.String("mac", mac.String()),
-		slog.String("ip", ip.String()),
-		slog.Uint64("vni", uint64(vni)),
-		slog.String("source", entry.Source.String()),
-	)
-
+	h.settleWithdrawal(key, ip)
 	return nil
 }
 
-// LookupMAC looks up a MAC address in the forwarding database.
-func (h *OverlayModeHandler) LookupMAC(
-	ctx context.Context,
-	mac net.HardwareAddr,
-	vni uint32,
-) (*MACEntry, error) {
-	if !h.running.Load() {
-		return nil, ErrNotRunning
+// ForgetMAC removes a host from the access port and withdraws its routes.
+// A remote VTEP still advertising the MAC takes it over. A withdrawal BGP
+// refuses is remembered: forgetting the MAC again, once the host is gone,
+// tries it again, and RemoveVNI or Stop withdraws it with the VNI.
+func (h *OverlayModeHandler) ForgetMAC(ctx context.Context, vni uint32, mac net.HardwareAddr) error {
+	if err := validateOverlayMAC(mac); err != nil {
+		return err
 	}
 
-	if err := validateMAC(mac); err != nil {
+	h.opMu.Lock()
+	defer h.opMu.Unlock()
+
+	h.mu.Lock()
+	if !h.running {
+		h.mu.Unlock()
+		return ErrNotRunning
+	}
+	key := hostKey{vni: vni, mac: mac.String()}
+	withdraw := maps.Clone(h.unwithdrawn[key])
+	host, ok := h.hosts[key]
+	local := ok && host.local()
+	if !local && len(withdraw) == 0 {
+		h.mu.Unlock()
+		return ErrMACNotFound
+	}
+	var errs []error
+	if local {
+		if err := h.replaceHost(ctx, key, nil, host, nil); err != nil {
+			h.mu.Unlock()
+			return &ErrMACOperationFailed{MAC: mac, Operation: "forget", Cause: err}
+		}
+		errs = append(errs, h.releaseHeld(ctx))
+		if withdraw == nil {
+			withdraw = make(map[netip.Addr]struct{}, len(host.ips))
+		}
+		for ip := range host.ips {
+			withdraw[ip] = struct{}{}
+		}
+	}
+	h.mu.Unlock()
+
+	if h.evpnManager == nil {
+		return errors.Join(errs...)
+	}
+	for ip := range withdraw {
+		if err := h.withdrawLocal(ctx, key, mac, ip); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// withdrawLocal withdraws the Type-2 route of a forgotten local binding.
+// A withdrawal BGP refuses is kept in unwithdrawn for the next ForgetMAC
+// of the MAC; one EVPN no longer holds is done. Caller holds opMu.
+func (h *OverlayModeHandler) withdrawLocal(ctx context.Context, key hostKey, mac net.HardwareAddr, ip netip.Addr) error {
+	err := h.evpnManager.WithdrawMACIP(ctx, key.vni, mac, ip)
+	var notAdvertised bgp.ErrMACIPNotFound
+	if err == nil || errors.As(err, &notAdvertised) {
+		h.settleWithdrawal(key, ip)
+		return nil
+	}
+	if h.unwithdrawn[key] == nil {
+		h.unwithdrawn[key] = make(map[netip.Addr]struct{})
+	}
+	h.unwithdrawn[key][ip] = struct{}{}
+	return &ErrMACOperationFailed{MAC: mac, Operation: "withdraw", Cause: err}
+}
+
+// settleWithdrawal forgets a pending withdrawal, once BGP took it or the
+// binding was advertised again. Caller holds opMu.
+func (h *OverlayModeHandler) settleWithdrawal(key hostKey, ip netip.Addr) {
+	delete(h.unwithdrawn[key], ip)
+	if len(h.unwithdrawn[key]) == 0 {
+		delete(h.unwithdrawn, key)
+	}
+}
+
+// replaceHost swaps a host's flows for its next state; a nil next removes
+// it. Caller holds mu.
+func (h *OverlayModeHandler) replaceHost(ctx context.Context, key hostKey, segment *overlaySegment, old, next *overlayHost) error {
+	var release, acquire []*openflow.FlowMod
+	if old != nil {
+		release = old.flows
+	}
+	if next != nil {
+		next.flows = h.builder.host(key.vni, segment.vlan, next)
+		acquire = next.flows
+	}
+	if err := h.apply(ctx, release, acquire); err != nil {
+		return err
+	}
+	if next == nil {
+		delete(h.hosts, key)
+		return nil
+	}
+	h.hosts[key] = next
+	return nil
+}
+
+// LookupMAC returns the entry of a MAC on a VNI.
+func (h *OverlayModeHandler) LookupMAC(vni uint32, mac net.HardwareAddr) (*MACEntry, error) {
+	if err := validateOverlayMAC(mac); err != nil {
 		return nil, err
 	}
-
-	key := formatMACKey(vni, mac)
-
-	// Check local MACs first
-	if val, ok := h.localMACs.Load(key); ok {
-		entry := val.(*MACEntry)
-		if !entry.IsExpired() {
-			return entry.Clone(), nil
-		}
-		// Entry expired, remove it
-		h.localMACs.Delete(key)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	host, ok := h.hosts[hostKey{vni: vni, mac: mac.String()}]
+	if !ok {
+		return nil, ErrMACNotFound
 	}
-
-	// Check remote MACs
-	if val, ok := h.remoteMACs.Load(key); ok {
-		entry := val.(*MACEntry)
-		return entry.Clone(), nil
+	entry := &MACEntry{
+		MAC:       slices.Clone(host.mac),
+		IPs:       host.sortedIPs(),
+		VNI:       vni,
+		VTEPIP:    host.vtep,
+		Source:    MACSourceRemote,
+		UpdatedAt: host.updatedAt,
 	}
-
-	return nil, ErrMACNotFound
+	if host.local() {
+		entry.Source = MACSourceLocal
+	}
+	return entry, nil
 }
 
-// HandleARP handles an ARP request for ARP suppression.
-func (h *OverlayModeHandler) HandleARP(ctx context.Context, arp *ARPPacket) (*ARPResponse, error) {
-	if !h.running.Load() {
-		return nil, ErrNotRunning
-	}
-
-	if arp == nil {
-		return nil, ErrARPPacketNil
-	}
-
-	response := &ARPResponse{
-		ShouldRespond: false,
-		ShouldFlood:   false,
-	}
-
-	// Only handle ARP requests
-	if arp.Operation != ARPRequest {
-		return response, nil
-	}
-
-	// If ARP suppression is disabled, flood
-	if !h.config.ARPSuppression {
-		response.ShouldFlood = true
-		response.FloodVTEPs = h.getReplicationList(arp.VNI)
-		return response, nil
-	}
-
-	// Check if target IP is the anycast gateway
-	if h.config.AnycastGatewayIP.IsValid() && arp.TargetIP == h.config.AnycastGatewayIP {
-		response.ShouldRespond = true
-		response.ReplyMAC = h.config.AnycastGatewayMAC
-		h.logger.Debug("ARP response for anycast gateway",
-			slog.String("target_ip", arp.TargetIP.String()),
-		)
-		return response, nil
-	}
-
-	// Look up target IP in ARP table
-	arpKey := formatARPKey(arp.VNI, arp.TargetIP)
-	if val, ok := h.arpTable.Load(arpKey); ok {
-		mac := val.(net.HardwareAddr)
-		response.ShouldRespond = true
-		response.ReplyMAC = mac
-		h.logger.Debug("ARP suppressed",
-			slog.String("target_ip", arp.TargetIP.String()),
-			slog.String("reply_mac", mac.String()),
-		)
-		return response, nil
-	}
-
-	// Try EVPN manager lookup
-	if h.evpnManager != nil {
-		if mac, ok := h.evpnManager.LookupMACForIP(arp.VNI, arp.TargetIP); ok {
-			response.ShouldRespond = true
-			response.ReplyMAC = mac
-			// Cache in local ARP table
-			h.arpTable.Store(arpKey, mac)
-			h.logger.Debug("ARP suppressed via EVPN",
-				slog.String("target_ip", arp.TargetIP.String()),
-				slog.String("reply_mac", mac.String()),
-			)
-			return response, nil
-		}
-	}
-
-	// Not found, flood to all VTEPs in the VNI
-	response.ShouldFlood = true
-	response.FloodVTEPs = h.getReplicationList(arp.VNI)
-
-	h.logger.Debug("ARP flood",
-		slog.String("target_ip", arp.TargetIP.String()),
-		slog.Int("vtep_count", len(response.FloodVTEPs)),
-	)
-
-	return response, nil
-}
-
-// GetStatus returns the current overlay mode status.
+// GetStatus returns the overlay's current status.
 func (h *OverlayModeHandler) GetStatus() *OverlayModeStatus {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	status := &OverlayModeStatus{
-		Running:                  h.running.Load(),
+		Running:                  h.running,
+		LocalVTEP:                h.config.VTEPConfig.LocalIP,
+		VNICount:                 len(h.segments),
+		PrefixCount:              len(h.prefixes),
+		RefusedBindings:          h.refusedBindings,
+		L3VNI:                    h.config.L3VNI,
 		ARPSuppressionEnabled:    h.config.ARPSuppression,
 		AnycastGatewayConfigured: h.config.AnycastGatewayIP.IsValid(),
 	}
-
-	if status.Running {
-		status.LocalVTEP = h.config.VTEPConfig.LocalIP
+	vteps := make(map[netip.Addr]struct{})
+	for _, segment := range h.segments {
+		for _, vtep := range segment.flood {
+			vteps[vtep] = struct{}{}
+		}
+	}
+	status.RemoteVTEPCount = len(vteps)
+	for _, host := range h.hosts {
+		if host.local() {
+			status.LocalMACCount++
+		} else {
+			status.RemoteMACCount++
+		}
+	}
+	if h.running {
 		status.StartedAt = h.startedAt
 		status.Uptime = time.Since(h.startedAt)
-		status.TunnelCount = h.vtepManager.TunnelCount()
-
-		// Count VNIs
-		h.vniMappings.Range(func(_, _ any) bool {
-			status.VNICount++
-			return true
-		})
-
-		// Count local MACs
-		h.localMACs.Range(func(_, _ any) bool {
-			status.LocalMACCount++
-			return true
-		})
-
-		// Count remote MACs
-		h.remoteMACs.Range(func(_, _ any) bool {
-			status.RemoteMACCount++
-			return true
-		})
 	}
-
 	return status
 }
 
-// AddRemoteVTEP adds a remote VTEP to the replication list for a VNI.
-func (h *OverlayModeHandler) AddRemoteVTEP(ctx context.Context, vni uint32, vtepIP netip.Addr) error {
-	if !h.running.Load() {
-		return ErrNotRunning
-	}
-
-	if !vtepIP.IsValid() || vtepIP.IsUnspecified() {
-		return ErrInvalidVTEPIP
-	}
-
-	// Create tunnel to remote VTEP
-	_, err := h.vtepManager.AddTunnel(ctx, vtepIP, vxlan.VNI(vni))
-	if err != nil && err != vxlan.ErrTunnelExists {
-		return &ErrVTEPOperationFailed{VTEPIP: vtepIP, Operation: "add-tunnel", Cause: err}
-	}
-
-	// Add to replication list
-	h.addToReplicationList(vni, vtepIP)
-
-	h.logger.Debug("remote VTEP added",
-		slog.Uint64("vni", uint64(vni)),
-		slog.String("vtep", vtepIP.String()),
-	)
-
-	return nil
-}
-
-// RemoveRemoteVTEP removes a remote VTEP from the replication list.
-func (h *OverlayModeHandler) RemoveRemoteVTEP(ctx context.Context, vni uint32, vtepIP netip.Addr) error {
-	if !h.running.Load() {
-		return ErrNotRunning
-	}
-
-	// Remove from replication list
-	h.removeFromReplicationList(vni, vtepIP)
-
-	// Remove tunnel (if no other VNIs use it)
-	if !h.vtepInUse(vtepIP) {
-		if err := h.vtepManager.RemoveTunnel(ctx, vtepIP, vxlan.VNI(vni)); err != nil {
-			h.logger.Warn("failed to remove tunnel",
-				slog.String("vtep", vtepIP.String()),
-				slog.Any("error", err),
-			)
-		}
-	}
-
-	h.logger.Debug("remote VTEP removed",
-		slog.Uint64("vni", uint64(vni)),
-		slog.String("vtep", vtepIP.String()),
-	)
-
-	return nil
-}
-
-// handleEVPNRoute handles incoming EVPN routes.
-func (h *OverlayModeHandler) handleEVPNRoute(ctx context.Context, route *bgp.EVPNRouteData) error {
-	if route == nil {
-		return nil
-	}
-
-	switch route.Type {
-	case bgp.EVPNTypeMACIPAdvertisement:
-		return h.handleType2Route(ctx, route)
-	case bgp.EVPNTypeInclusiveMulticast:
-		return h.handleType3Route(ctx, route)
-	case bgp.EVPNTypeIPPrefix:
-		return h.handleType5Route(ctx, route)
-	}
-
-	return nil
-}
-
-// handleType2Route handles EVPN Type-2 MAC/IP advertisement routes.
-func (h *OverlayModeHandler) handleType2Route(ctx context.Context, route *bgp.EVPNRouteData) error {
-	if route.MACIP == nil {
-		return nil
-	}
-
-	entry := route.MACIP
-
-	if route.IsWithdraw {
-		// Remove MAC entry
-		key := formatMACKey(entry.VNI, entry.MAC)
-		h.remoteMACs.Delete(key)
-
-		// Remove from ARP table
-		if entry.IP.IsValid() {
-			arpKey := formatARPKey(entry.VNI, entry.IP)
-			h.arpTable.Delete(arpKey)
-		}
-
-		// Remove flow
-		if err := h.removeRemoteMACFlow(ctx, entry.VNI, entry.MAC); err != nil {
-			h.logger.Warn("failed to remove remote MAC flow",
-				slog.String("mac", entry.MAC.String()),
-				slog.Any("error", err),
-			)
-		}
-
-		h.logger.Debug("remote MAC withdrawn",
-			slog.String("mac", entry.MAC.String()),
-			slog.String("vtep", entry.VTEPIP.String()),
-		)
-	} else {
-		// Learn remote MAC
-		if err := h.LearnMAC(ctx, entry.MAC, entry.IP, entry.VNI, entry.VTEPIP); err != nil {
+// apply moves the switch and the flow table from one set of an object's
+// flows to the next. A switch can apply part of a batch and refuse the
+// rest, so when it refuses anything apply puts back every flow the batch
+// touched and leaves the table as it was. Caller holds mu.
+func (h *OverlayModeHandler) apply(ctx context.Context, release, acquire []*openflow.FlowMod) error {
+	if h.drifted {
+		if err := h.rebuild(ctx); err != nil {
 			return err
 		}
 	}
-
-	return nil
-}
-
-// handleType3Route handles EVPN Type-3 inclusive multicast routes.
-func (h *OverlayModeHandler) handleType3Route(ctx context.Context, route *bgp.EVPNRouteData) error {
-	if route.IMET == nil {
-		return nil
-	}
-
-	entry := route.IMET
-
-	if route.IsWithdraw {
-		// Remove VTEP from replication list
-		if err := h.RemoveRemoteVTEP(ctx, entry.VNI, entry.VTEPIP); err != nil {
-			h.logger.Warn("failed to remove remote VTEP",
-				slog.String("vtep", entry.VTEPIP.String()),
-				slog.Any("error", err),
-			)
-		}
-	} else {
-		// Add VTEP to replication list
-		if err := h.AddRemoteVTEP(ctx, entry.VNI, entry.VTEPIP); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// handleType5Route handles EVPN Type-5 IP prefix routes.
-func (h *OverlayModeHandler) handleType5Route(ctx context.Context, route *bgp.EVPNRouteData) error {
-	if route.PrefixData == nil {
-		return nil
-	}
-
-	// Type-5 routes are handled at the L3 routing layer
-	// Install/remove routes in the routing table
-	if route.IsWithdraw {
-		h.logger.Debug("Type-5 route withdrawn",
-			slog.String("prefix", route.PrefixData.Prefix.String()),
-		)
-	} else {
-		h.logger.Debug("Type-5 route received",
-			slog.String("prefix", route.PrefixData.Prefix.String()),
-			slog.String("next_hop", route.NextHop.String()),
-		)
-	}
-
-	return nil
-}
-
-// installOpenFlowPipeline installs the base OpenFlow pipeline as a single
-// batched OpenFlow transaction.
-func (h *OverlayModeHandler) installOpenFlowPipeline(ctx context.Context) error {
-	flows := []*openflow.FlowMod{
-		// Table 0: Ingress - classify packets, goto VXLANDecap
-		buildGotoTableFlow(TableIngress, 0, TableVXLANDecap),
-		// Table 10: VXLAN Decap - default to MAC learning
-		buildGotoTableFlow(TableVXLANDecap, 0, TableMACLearning),
-		// Table 30: MAC Learning - default to ARP table
-		buildGotoTableFlow(TableMACLearning, 0, TableARP),
-		// Table 40: ARP - default to L3 routing
-		buildGotoTableFlow(TableARP, 0, TableL3Routing),
-		// Table 50: L3 Routing - default to egress
-		buildGotoTableFlow(TableL3Routing, 0, TableEgress),
-		// Table 60: Egress - default drop (no output action)
-		buildDropFlow(TableEgress, 0),
-	}
-
-	for _, flow := range flows {
-		h.logger.Debug("installing pipeline flow",
-			slog.Int("table", int(flow.TableID)),
-			slog.Int("priority", int(flow.Priority)),
-		)
-	}
-
-	if err := h.ofClient.SendFlowMods(ctx, flows); err != nil {
-		return &ErrOverlayInitFailed{Component: "openflow pipeline batch", Cause: err}
-	}
-
-	// Install anycast gateway flows if configured
-	if h.config.AnycastGatewayIP.IsValid() && h.config.AnycastGatewayMAC != nil {
-		if err := h.installAnycastGatewayFlows(ctx); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// buildGotoTableFlow builds a flow that jumps to another table.
-func buildGotoTableFlow(tableID uint8, priority uint16, gotoTable uint8) *openflow.FlowMod {
-	flow := openflow.NewFlowMod(0)
-	flow.TableID = tableID
-	flow.Priority = priority
-	flow.Instructions = append(flow.Instructions, openflow.NewInstructionGotoTable(gotoTable))
-	return flow
-}
-
-// buildDropFlow builds a flow that drops packets (no actions).
-func buildDropFlow(tableID uint8, priority uint16) *openflow.FlowMod {
-	flow := openflow.NewFlowMod(0)
-	flow.TableID = tableID
-	flow.Priority = priority
-	// No actions = drop
-	return flow
-}
-
-// installVNIFlows installs flows for a specific VNI as a single batched
-// OpenFlow transaction.
-func (h *OverlayModeHandler) installVNIFlows(ctx context.Context, vni uint32, vlan uint16) error {
-	// Table 10: VNI -> VLAN mapping for VXLAN decap
-	// Match on tunnel ID (VNI), push VLAN, goto MAC learning
-	decapFlow := openflow.NewFlowMod(0)
-	decapFlow.TableID = TableVXLANDecap
-	decapFlow.Priority = 100
-	decapFlow.Match = openflow.NewMatch()
-	// Add tunnel ID match using OXM field
-	tunnelIDBytes := make([]byte, 8)
-	openflow.ByteOrder.PutUint64(tunnelIDBytes, uint64(vni))
-	decapFlow.Match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBTunnelId, tunnelIDBytes, nil)
-
-	// Push VLAN and goto MAC learning
-	pushVLAN := openflow.NewActionPushVLAN(0x8100)
-	setVLAN := openflow.NewActionSetField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBVlanVid, encodeVLAN(vlan))
-	applyActions := openflow.NewInstructionApplyActions(pushVLAN, setVLAN)
-	gotoMACLearning := openflow.NewInstructionGotoTable(TableMACLearning)
-	decapFlow.Instructions = append(decapFlow.Instructions, applyActions, gotoMACLearning)
-
-	// Table 60: VLAN -> VNI mapping for VXLAN encap
-	encapFlow := openflow.NewFlowMod(0)
-	encapFlow.TableID = TableEgress
-	encapFlow.Priority = 100
-	encapFlow.Match = openflow.NewMatch()
-	encapFlow.Match.AddVLANVid(vlan)
-
-	// Pop VLAN and set tunnel ID
-	popVLAN := openflow.NewActionPopVLAN()
-	setTunnelID := openflow.NewActionSetField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBTunnelId, tunnelIDBytes)
-	applyActionsEncap := openflow.NewInstructionApplyActions(popVLAN, setTunnelID)
-	encapFlow.Instructions = append(encapFlow.Instructions, applyActionsEncap)
-
-	h.logger.Debug("installing VNI flow batch",
-		slog.Uint64("vni", uint64(vni)),
-		slog.Uint64("vlan", uint64(vlan)),
-	)
-
-	if err := h.ofClient.SendFlowMods(ctx, []*openflow.FlowMod{decapFlow, encapFlow}); err != nil {
-		return &ErrFlowOperationFailed{Table: TableVXLANDecap, Operation: "install VNI flow batch", Cause: err}
-	}
-
-	return nil
-}
-
-// removeVNIFlows removes flows for a specific VNI.
-func (h *OverlayModeHandler) removeVNIFlows(ctx context.Context, vni uint32, vlan uint16) error {
-	// Remove decap flow
-	decapFlow := openflow.NewFlowMod(0)
-	decapFlow.TableID = TableVXLANDecap
-	decapFlow.Match = openflow.NewMatch()
-	tunnelIDBytes := make([]byte, 8)
-	openflow.ByteOrder.PutUint64(tunnelIDBytes, uint64(vni))
-	decapFlow.Match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBTunnelId, tunnelIDBytes, nil)
-	if err := h.ofClient.DeleteFlow(ctx, decapFlow); err != nil {
-		h.logger.Warn("failed to delete VNI decap flow", slog.Any("error", err))
-	}
-
-	// Remove encap flow
-	encapFlow := openflow.NewFlowMod(0)
-	encapFlow.TableID = TableEgress
-	encapFlow.Match = openflow.NewMatch()
-	encapFlow.Match.AddVLANVid(vlan)
-	if err := h.ofClient.DeleteFlow(ctx, encapFlow); err != nil {
-		h.logger.Warn("failed to delete VNI encap flow", slog.Any("error", err))
-	}
-
-	return nil
-}
-
-// installLocalMACFlow installs a flow for a locally learned MAC.
-func (h *OverlayModeHandler) installLocalMACFlow(ctx context.Context, entry *MACEntry) error {
-	flow := openflow.NewFlowMod(0)
-	flow.TableID = TableMACLearning
-	flow.Priority = 200
-	flow.Match = openflow.NewMatch()
-	flow.Match.AddEthDst(entry.MAC)
-
-	// Add tunnel ID match
-	tunnelIDBytes := make([]byte, 8)
-	openflow.ByteOrder.PutUint64(tunnelIDBytes, uint64(entry.VNI))
-	flow.Match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBTunnelId, tunnelIDBytes, nil)
-
-	// Output to local port
-	output := openflow.NewActionOutput(uint32(entry.OFPort), 0)
-	applyActions := openflow.NewInstructionApplyActions(output)
-	flow.Instructions = append(flow.Instructions, applyActions)
-
-	return h.ofClient.AddFlow(ctx, flow)
-}
-
-// installRemoteMACFlow installs a flow for a remotely learned MAC.
-func (h *OverlayModeHandler) installRemoteMACFlow(ctx context.Context, entry *MACEntry) error {
-	// Get tunnel port for remote VTEP
-	tunnel, err := h.vtepManager.GetTunnel(entry.VTEPIP, vxlan.VNI(entry.VNI))
+	plan, err := h.flows.plan(release, acquire)
 	if err != nil {
-		// Create tunnel if it doesn't exist
-		tunnel, err = h.vtepManager.AddTunnel(ctx, entry.VTEPIP, vxlan.VNI(entry.VNI))
-		if err != nil {
-			return err
-		}
+		return err
 	}
-
-	flow := openflow.NewFlowMod(0)
-	flow.TableID = TableMACLearning
-	flow.Priority = 200
-	flow.Match = openflow.NewMatch()
-	flow.Match.AddEthDst(entry.MAC)
-
-	// Add tunnel ID match
-	tunnelIDBytes := make([]byte, 8)
-	openflow.ByteOrder.PutUint64(tunnelIDBytes, uint64(entry.VNI))
-	flow.Match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBTunnelId, tunnelIDBytes, nil)
-
-	// Output to tunnel port
-	output := openflow.NewActionOutput(uint32(tunnel.OFPort), 0)
-	applyActions := openflow.NewInstructionApplyActions(output)
-	flow.Instructions = append(flow.Instructions, applyActions)
-
-	return h.ofClient.AddFlow(ctx, flow)
-}
-
-// removeRemoteMACFlow removes a flow for a remote MAC.
-func (h *OverlayModeHandler) removeRemoteMACFlow(ctx context.Context, vni uint32, mac net.HardwareAddr) error {
-	flow := openflow.NewFlowMod(0)
-	flow.TableID = TableMACLearning
-	flow.Match = openflow.NewMatch()
-	flow.Match.AddEthDst(mac)
-
-	// Add tunnel ID match
-	tunnelIDBytes := make([]byte, 8)
-	openflow.ByteOrder.PutUint64(tunnelIDBytes, uint64(vni))
-	flow.Match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBTunnelId, tunnelIDBytes, nil)
-
-	return h.ofClient.DeleteFlow(ctx, flow)
-}
-
-// installAnycastGatewayFlows installs flows for the distributed anycast
-// gateway as a single batched OpenFlow transaction.
-func (h *OverlayModeHandler) installAnycastGatewayFlows(ctx context.Context) error {
-	// ARP responder for anycast gateway IP
-	// Match ARP requests for the anycast gateway IP
-	arpFlow := openflow.NewFlowMod(0)
-	arpFlow.TableID = TableARP
-	arpFlow.Priority = 200
-	arpFlow.Match = openflow.NewMatch()
-	arpFlow.Match.AddEthType(0x0806) // ARP
-
-	// Match ARP operation (request = 1)
-	arpOpBytes := make([]byte, 2)
-	openflow.ByteOrder.PutUint16(arpOpBytes, 1)
-	arpFlow.Match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpOp, arpOpBytes, nil)
-
-	// Match target IP = anycast gateway IP
-	ipBytes := h.config.AnycastGatewayIP.As4()
-	arpFlow.Match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpTpa, ipBytes[:], nil)
-
-	// Note: Full ARP responder would require NX extensions for move/load actions
-	// For now, we send to controller for handling or use a simplified approach
-	// This is a placeholder - production would use Nicira extensions
-	controller := openflow.NewActionOutput(openflow.OFPPController, 128)
-	applyActions := openflow.NewInstructionApplyActions(controller)
-	arpFlow.Instructions = append(arpFlow.Instructions, applyActions)
-
-	// L3 routing: packets to anycast gateway MAC go to routing table
-	l3Flow := openflow.NewFlowMod(0)
-	l3Flow.TableID = TableMACLearning
-	l3Flow.Priority = 300
-	l3Flow.Match = openflow.NewMatch()
-	l3Flow.Match.AddEthDst(h.config.AnycastGatewayMAC)
-
-	gotoL3 := openflow.NewInstructionGotoTable(TableL3Routing)
-	l3Flow.Instructions = append(l3Flow.Instructions, gotoL3)
-
-	h.logger.Debug("installing anycast gateway flow batch",
-		slog.String("gateway_ip", h.config.AnycastGatewayIP.String()),
-		slog.String("gateway_mac", h.config.AnycastGatewayMAC.String()),
-	)
-
-	if err := h.ofClient.SendFlowMods(ctx, []*openflow.FlowMod{arpFlow, l3Flow}); err != nil {
-		return &ErrFlowOperationFailed{Table: TableARP, Operation: "install anycast gateway flow batch", Cause: err}
+	if err := h.ofClient.SendFlowMods(ctx, plan.mods); err != nil {
+		return h.resync(ctx, err, plan.restore)
 	}
-
+	plan.commit()
 	return nil
 }
 
-// cleanupVNIMACs removes all MAC entries for a VNI.
-func (h *OverlayModeHandler) cleanupVNIMACs(vni uint32) {
-	prefix := formatVNIPrefix(vni)
-
-	h.localMACs.Range(func(key, _ any) bool {
-		k := key.(string)
-		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
-			h.localMACs.Delete(key)
-		}
-		return true
-	})
-
-	h.remoteMACs.Range(func(key, _ any) bool {
-		k := key.(string)
-		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
-			h.remoteMACs.Delete(key)
-		}
-		return true
-	})
-}
-
-// getReplicationList returns the list of VTEPs for BUM traffic replication.
-func (h *OverlayModeHandler) getReplicationList(vni uint32) []netip.Addr {
-	val, ok := h.replicationLists.Load(vni)
-	if !ok {
-		return nil
+// resync sends the mods that undo a refused batch and returns the batch's
+// error, joined with an ErrFlowResyncFailed when the switch refuses those
+// too and may now hold flows the table does not; the next change then
+// rebuilds the switch first. Caller holds mu.
+func (h *OverlayModeHandler) resync(ctx context.Context, cause error, restore []*openflow.FlowMod) error {
+	err := h.ofClient.SendFlowMods(ctx, restore)
+	if err == nil {
+		return cause
 	}
-	list := val.(*replicationList)
-	result := make([]netip.Addr, len(list.vteps))
-	copy(result, list.vteps)
-	return result
+	h.drifted = true
+	h.logger.Error("overlay flows could not be restored after a refused change; the next change rebuilds them",
+		slog.Any("cause", cause), slog.Any("error", err))
+	return errors.Join(cause, &ErrFlowResyncFailed{Cause: err})
 }
 
-// addToReplicationList adds a VTEP to the replication list for a VNI.
-func (h *OverlayModeHandler) addToReplicationList(vni uint32, vtepIP netip.Addr) {
-	for {
-		newList := &replicationList{vteps: []netip.Addr{vtepIP}}
-		val, loaded := h.replicationLists.LoadOrStore(vni, newList)
-		if !loaded {
-			return
-		}
-
-		oldList := val.(*replicationList)
-		// Check if already exists
-		for _, v := range oldList.vteps {
-			if v == vtepIP {
-				return
-			}
-		}
-
-		// Add to list - create new slice to avoid modifying original
-		updatedVteps := make([]netip.Addr, len(oldList.vteps)+1)
-		copy(updatedVteps, oldList.vteps)
-		updatedVteps[len(oldList.vteps)] = vtepIP
-		updatedList := &replicationList{vteps: updatedVteps}
-
-		if h.replicationLists.CompareAndSwap(vni, val, updatedList) {
-			return
-		}
-		// CAS failed, retry
+// rebuild flushes the overlay's flows from the switch and installs every
+// flow the table holds, in fail-closed order, for a switch that may hold
+// flows the table does not. It stays due until the switch takes it.
+// Caller holds mu.
+func (h *OverlayModeHandler) rebuild(ctx context.Context) error {
+	mods := append([]*openflow.FlowMod{overlayFlush()}, h.flows.installed()...)
+	if err := h.ofClient.SendFlowMods(ctx, mods); err != nil {
+		return &ErrFlowResyncFailed{Cause: err}
 	}
+	h.drifted = false
+	h.logger.Info("overlay flows rebuilt from the committed state")
+	return nil
 }
 
-// removeFromReplicationList removes a VTEP from the replication list.
-func (h *OverlayModeHandler) removeFromReplicationList(vni uint32, vtepIP netip.Addr) {
-	for {
-		val, ok := h.replicationLists.Load(vni)
-		if !ok {
-			return
-		}
-
-		oldList := val.(*replicationList)
-		updatedVteps := make([]netip.Addr, 0, len(oldList.vteps))
-		found := false
-		for _, v := range oldList.vteps {
-			if v == vtepIP {
-				found = true
-				continue
-			}
-			updatedVteps = append(updatedVteps, v)
-		}
-
-		if !found {
-			return
-		}
-
-		if len(updatedVteps) == 0 {
-			// Try to delete - use CompareAndDelete if available, otherwise just delete
-			h.replicationLists.CompareAndDelete(vni, val)
-			return
-		}
-
-		updatedList := &replicationList{vteps: updatedVteps}
-		if h.replicationLists.CompareAndSwap(vni, val, updatedList) {
-			return
-		}
-		// CAS failed, retry
-	}
+// overlayFlush deletes every overlay flow in every table.
+func overlayFlush() *openflow.FlowMod {
+	f := openflow.NewFlowMod(0)
+	f.Command = openflow.OFPFCDelete
+	f.TableID = openflow.OFPTTAll
+	f.Cookie = OverlayCookie
+	f.CookieMask = ^uint64(0)
+	return f
 }
 
-// vtepInUse checks if a VTEP is in use by any VNI.
-func (h *OverlayModeHandler) vtepInUse(vtepIP netip.Addr) bool {
-	inUse := false
-	h.replicationLists.Range(func(_, value any) bool {
-		list := value.(*replicationList)
-		for _, v := range list.vteps {
-			if v == vtepIP {
-				inUse = true
-				return false
-			}
-		}
-		return true
-	})
-	return inUse
-}
-
-// Helper functions
-
-func formatMACKey(vni uint32, mac net.HardwareAddr) string {
-	return formatUint32(vni) + ":" + mac.String()
-}
-
-func formatARPKey(vni uint32, ip netip.Addr) string {
-	return formatUint32(vni) + ":" + ip.String()
-}
-
-func formatVNIPrefix(vni uint32) string {
-	return formatUint32(vni) + ":"
-}
-
-func formatUint32(n uint32) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := make([]byte, 10)
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte(n%10) + '0'
-		n /= 10
-	}
-	return string(buf[i:])
-}
-
-func validateVNI(vni uint32) error {
-	if vni < 1 || vni > 16777215 {
+// validateOverlayVNI checks a VNI is a non-zero 24-bit value.
+func validateOverlayVNI(vni uint32) error {
+	if vni == 0 || vni > 0xFFFFFF {
 		return ErrVNIOutOfRange
 	}
 	return nil
 }
 
-func validateMAC(mac net.HardwareAddr) error {
+// validateOverlayMAC checks a MAC is a 6-byte address.
+func validateOverlayMAC(mac net.HardwareAddr) error {
 	if mac == nil {
 		return ErrMACNil
 	}
@@ -1387,12 +967,4 @@ func validateMAC(mac net.HardwareAddr) error {
 		return ErrMACInvalid
 	}
 	return nil
-}
-
-// encodeVLAN encodes a VLAN ID with the OFPVID_PRESENT bit.
-func encodeVLAN(vlan uint16) []byte {
-	value := make([]byte, 2)
-	// VLAN VID uses 13 bits, bit 12 is OFPVID_PRESENT (0x1000)
-	openflow.ByteOrder.PutUint16(value, vlan|0x1000)
-	return value
 }

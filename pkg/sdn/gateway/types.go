@@ -1270,8 +1270,8 @@ func (c *GatewayConfig) needsPipeline() bool {
 
 // pipelineTerminal is the table-30 disposition this gateway asks for.
 // Today that is always NORMAL: the overlay terminal exists in the type
-// vocabulary and is refused by BasePipelineRules until the overlay service
-// owns egress (its encap flow has no output action yet).
+// vocabulary and is refused by BasePipelineRules until gatewayd can build
+// the overlay handler (its config carries no VTEP or access port yet).
 func (c *GatewayConfig) pipelineTerminal() PipelineTerminal {
 	return TerminalNormal
 }

@@ -1,487 +1,167 @@
-# EVPN Implementation
+# EVPN Control Plane
 
 ## Overview
 
-EVPN (Ethernet VPN) provides a BGP-based control plane for Layer 2 and Layer 3 VPN services. The go-trusted-platform BGP service implements EVPN to enable seamless VM and container connectivity across distributed datacenters.
+EVPN (RFC 7432) over VXLAN (RFC 8365) is the overlay's control plane: each
+VTEP tells the others which MACs, MAC/IP bindings and prefixes sit behind it,
+and which VNIs it serves. `bgp.EVPNManager` (`pkg/sdn/bgp/evpn.go`) owns the
+VTEP's EVPN state; it originates through the speaker and imports what the
+speaker's best-path watch delivers. Every route is built and parsed with GoBGP
+v4's native constructors (`pkg/sdn/bgp/evpn_codec.go`); the platform has no
+hand-rolled EVPN encoding.
 
-## EVPN Fundamentals
+| Type | Name | Status |
+|------|------|--------|
+| 1 | Ethernet Auto-Discovery | not used (single-homed VTEPs) |
+| 2 | MAC/IP Advertisement | implemented, symmetric IRB |
+| 3 | Inclusive Multicast Ethernet Tag | implemented, ingress replication |
+| 4 | Ethernet Segment | not used |
+| 5 | IP Prefix (RFC 9136) | implemented, interface-less |
 
-### Address Family
+A received Type-1 or Type-4 route is dropped with `ErrUnsupportedRouteType`.
 
-EVPN uses BGP with:
-- **AFI 25** (L2VPN)
-- **SAFI 70** (EVPN)
+## Topology
 
-### Route Types Implemented
+VTEPs are iBGP l2vpn-evpn route-reflector clients; the route reflectors run on
+the control-plane nodes (`route-reflector: true`, an IPv4 `cluster-id`, and
+`route-reflector-client: true` on each VTEP neighbor — see
+[configuration.md](configuration.md)). Each session carries its own EVPN prefix
+limit, `max-evpn-prefixes` (default 100000), separate from the unicast one.
 
-| Type | Name | RFC Section | Status |
-|------|------|-------------|--------|
-| 1 | Ethernet Auto-Discovery | RFC 7432 Sec 7.1 | Not Implemented |
-| 2 | MAC/IP Advertisement | RFC 7432 Sec 7.2 | Implemented |
-| 3 | Inclusive Multicast Ethernet Tag | RFC 7432 Sec 7.3 | Implemented |
-| 4 | Ethernet Segment | RFC 7432 Sec 7.4 | Not Implemented |
-| 5 | IP Prefix | RFC 9136 | Implemented |
+Routes are originated into the global RIB with an explicit RD and route
+targets. GoBGP VRFs are not used: import is decided by the manager from the
+route targets of the VNIs it has joined.
 
-## Type-2: MAC/IP Advertisement
+## Route distinguishers and route targets
 
-Type-2 routes advertise MAC addresses (and optionally IP addresses) learned on local VTEPs to remote VTEPs for ARP suppression and MAC forwarding.
+**RD.** Every route carries a Type-1 RD `VTEP-IPv4:index` (RFC 7432 §7.9).
+Each EVI (L2VNI) and each IP-VRF (L3VNI) on a VTEP gets its own index, assigned
+in join order and reused after a leave: the first EVI joined with an L3VNI gets
+`:1` and its IP-VRF `:2`. `EVPNManager.RouteDistinguisher(l2vni)` reports an
+EVI's RD. A received route with any other RD type is dropped.
 
-### Route Format
-
-```
-+---------------------------------------+
-|  Route Distinguisher (8 bytes)        |
-+---------------------------------------+
-|  Ethernet Tag ID (4 bytes)            |
-+---------------------------------------+
-|  MAC Address Length (1 byte)          |
-+---------------------------------------+
-|  MAC Address (6 bytes)                |
-+---------------------------------------+
-|  IP Address Length (1 byte)           |
-+---------------------------------------+
-|  IP Address (0, 4, or 16 bytes)       |
-+---------------------------------------+
-|  MPLS Label (3 bytes) - VNI           |
-+---------------------------------------+
-```
-
-### ARP Suppression
-
-Type-2 routes enable ARP suppression, reducing broadcast traffic in VXLAN overlays:
+**RT.** Route targets are auto-derived (RFC 8365 §5.1.2.1) as a two-octet
+AS-specific RT `ASN:value`, where `ASN` is the private overlay ASN
+(`OverlayASN`, 64512–65534) and
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                   ARP SUPPRESSION FLOW                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  Without EVPN (Traditional VXLAN):                          │
-│  ┌─────┐     ARP Request      ┌─────┐                       │
-│  │ VM1 │ ──────────────────►  │VTEP1│                       │
-│  └─────┘                      └──┬──┘                       │
-│                                  │  Flood to all VTEPs       │
-│                 ┌────────────────┼────────────────┐          │
-│                 ▼                ▼                ▼          │
-│            ┌─────┐          ┌─────┐          ┌─────┐        │
-│            │VTEP2│          │VTEP3│          │VTEP4│        │
-│            └─────┘          └─────┘          └─────┘        │
-│                                                              │
-│  With EVPN (Type-2):                                        │
-│  ┌─────┐     ARP Request      ┌─────┐                       │
-│  │ VM1 │ ──────────────────►  │VTEP1│                       │
-│  └─────┘                      └──┬──┘                       │
-│                                  │  Lookup EVPN cache        │
-│                                  │  (MAC -> VTEP mapping)    │
-│                                  ▼                           │
-│                             ┌─────────┐                      │
-│                             │ Direct  │                      │
-│                             │ ARP     │                      │
-│                             │ Reply   │                      │
-│                             └─────────┘                      │
-│                                                              │
-│  Benefit: No flooding, O(1) lookup                          │
-└─────────────────────────────────────────────────────────────┘
+value = Type(3 bits) = 1 (VXLAN) | D-ID (4 bits) | VNI (24 bits)
+      = 1<<28 | DomainID<<24 | VNI
 ```
 
-### Implementation
+so VNI 10100 in domain 0 under ASN 65000 is `65000:268445556`. An EVI exports
+and imports its L2VNI's RT; an IP-VRF its L3VNI's RT. `AutoRouteTarget`
+returns `ErrRouteTargetInvalid` for an ASN or D-ID out of range and
+`ErrInvalidVNI` for a VNI outside 1–16777215. The session policy allowlists
+(below) are written in the same `as:value` form.
 
-```go
-// Type-2 MAC/IP route structure
-type EVPNType2Route struct {
-    RD           RouteDistinguisher
-    EthernetTag  uint32
-    MACLength    uint8
-    MAC          net.HardwareAddr
-    IPLength     uint8
-    IP           net.IP  // Optional: IPv4 or IPv6
-    MPLSLabel    uint32  // VNI
-}
+## Labels
 
-// Create Type-2 route for MAC/IP binding
-func (s *Speaker) AdvertiseMacIP(ctx context.Context, mac net.HardwareAddr, ip net.IP, vni uint32) error {
-    rd := s.buildRD(vni)
-    rt := s.buildRT(vni)
+The VNI travels in the 24-bit MPLS label field unshifted (RFC 8365 §5.1.3):
+the label bytes on the wire are the raw VNI. This holds for the Type-2 labels,
+the Type-5 label and the PMSI tunnel label of the Type-3 route. Every route
+carries the BGP Encapsulation community with tunnel type VXLAN.
 
-    nlri := &api.EVPNMacIPRoute{
-        Rd: &api.RouteDistinguisher{
-            Type: api.RouteDistinguisher_TYPE_2OCTET_AS,
-            Admin: uint32(s.config.ASN),
-            Assigned: vni,
-        },
-        EthernetTag: 0,
-        MacAddress:  mac.String(),
-        IpAddress:   ip.String(),
-        Labels:      []uint32{vni},
-    }
+## Type-3: Inclusive Multicast
 
-    path := &api.Path{
-        Family: &api.Family{
-            Afi:  api.Family_AFI_L2VPN,
-            Safi: api.Family_SAFI_EVPN,
-        },
-        Nlri: marshal(nlri),
-        Pattrs: []*any.Any{
-            marshal(&api.OriginAttribute{Origin: 0}),  // IGP
-            marshal(&api.NextHopAttribute{NextHop: s.vtepIP.String()}),
-            marshal(&api.ExtendedCommunitiesAttribute{
-                Communities: [][]byte{rt.Bytes()},
-            }),
-        },
-    }
+`JoinVNI(ctx, l2vni, l3vni)` places the VTEP on an L2VNI: it assigns the EVI
+its RD, imports its RT, originates its Type-3 route and imports the routes
+already received for the VNI. The route carries a PMSI tunnel attribute of type
+ingress replication naming the VTEP, with the VNI as its label. The Type-3
+routes received for a VNI form its ingress-replication list,
+`RemoteVTEPs(vni)` (sorted). `LeaveVNI` withdraws the EVI's Type-3 route and
+its local Type-2 routes, and the IP-VRF's Type-5 routes when no other EVI uses
+it.
 
-    _, err := s.server.AddPath(ctx, &api.AddPathRequest{
-        TableType: api.TableType_GLOBAL,
-        Path:      path,
-    })
-    return err
-}
-```
+## Type-2: MAC/IP and symmetric IRB
 
-### MAC Learning Integration
+`AdvertiseMACIP` originates a MAC-only or a MAC/IP route for a MAC learned on
+the VTEP. When the EVI was joined with an L3VNI the route is a symmetric-IRB
+route: it carries both labels (L2VNI, then L3VNI), both route targets, and the
+Router's MAC extended community (`RouterMAC`). Remote routes feed
+`RemoteMAC(vni, mac)` and, for ARP suppression, `LookupMACForIP(vni, ip)`.
+A received route is imported by its MAC-VRF route target; its L3VNI label and
+Router's MAC are taken only when it also carries the route target of the EVI's
+IP-VRF (RFC 9135 §5.1). Without it the handlers are told the route with no
+L3VNI and no Router's MAC, so the MAC is bridged and not routed.
 
-```go
-// MAC learning callback from SDN layer
-func (s *Speaker) OnMACLearned(event *MACLearnEvent) {
-    // Skip if MAC already advertised
-    if s.macCache.Has(event.MAC, event.VNI) {
-        return
-    }
+### MAC Mobility (RFC 7432 §15)
 
-    // Advertise via EVPN Type-2
-    if err := s.AdvertiseMacIP(context.Background(),
-        event.MAC,
-        event.IP,  // May be nil if IP not yet learned
-        event.VNI,
-    ); err != nil {
-        s.logger.Error("Failed to advertise MAC",
-            slog.String("mac", event.MAC.String()),
-            slog.Any("error", err),
-        )
-        return
-    }
+Each Type-2 route carries a MAC Mobility sequence number.
 
-    s.macCache.Add(event.MAC, event.VNI)
-}
-```
+- A VTEP advertising a MAC another VTEP holds uses that VTEP's sequence plus
+  one, so its route wins and the other VTEP withdraws (§15.1).
+- The highest sequence wins; a tie goes to the lowest VTEP address.
+- A remote route that beats the local one withdraws the local routes.
+- A MAC that moves `Mobility.MaxMoves` times (default 5) within
+  `Mobility.Window` (180s) is a duplicate: it is frozen for `Mobility.Hold`
+  (180s), during which received routes for it are ignored and a local
+  advertisement fails with `ErrDampeningActive`.
 
-## Type-3: Inclusive Multicast Ethernet Tag
+## Type-5: IP Prefix
 
-Type-3 routes establish multicast trees for BUM (Broadcast, Unknown unicast, Multicast) traffic handling.
+`AdvertisePrefix(ctx, l3vni, prefix)` originates an interface-less Type-5 route
+in the IP-VRF of an L3VNI: the L3VNI label, the IP-VRF's RD and RT, and the
+Router's MAC. A received Type-5 route is accepted in the gateway-address model
+(a gateway IP, no Router's MAC) or the interface-less model (the Router's MAC).
 
-### Route Format
+The manager decodes the gateway IP into `PrefixRoute.GatewayIP` but nothing
+acts on it. The overlay data plane routes only the interface-less model
+(RFC 9136 §4.4.1): it sends a prefix to the advertising VTEP's Router's MAC,
+ignores the gateway IP, and refuses a route without a Router's MAC with
+`ErrRouterMACRequired`. A route in the gateway-address model is imported,
+but it is never routed.
 
-```
-+---------------------------------------+
-|  Route Distinguisher (8 bytes)        |
-+---------------------------------------+
-|  Ethernet Tag ID (4 bytes)            |
-+---------------------------------------+
-|  IP Address Length (1 byte)           |
-+---------------------------------------+
-|  Originating Router IP (4/16 bytes)   |
-+---------------------------------------+
-```
+## Decoding received routes (RFC 7606)
 
-### BUM Traffic Handling
+A path whose NLRI does not parse, that is not EVPN, or whose RD is not Type-1
+is dropped (`ErrRouteDecodingFailed`). A path whose NLRI parses but whose
+attributes are unusable is **treated as a withdrawal** of that NLRI
+(`ErrTreatAsWithdraw`): no next hop, no VXLAN encapsulation community, more
+than one distinct Router's MAC or MAC Mobility community, a non-unicast
+Router's MAC, a label outside the 24-bit VNI range, an L3VNI label without the
+Router's MAC, a Type-3 route without an ingress-replication PMSI tunnel naming
+an endpoint, or an interface-less Type-5 route without the Router's MAC. The
+decoder is fuzzed (`FuzzDecodeEVPNPath`).
 
-Type-3 routes enable efficient BUM traffic replication:
+Routes the VTEP originated itself (its own RD or next hop) are ignored on
+import.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   BUM TRAFFIC FLOW                           │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  1. VTEP1 originates Type-3 route:                          │
-│     RD: 65001:10000                                         │
-│     Ethernet Tag: 0                                         │
-│     Originator: 10.0.0.1 (VTEP1)                           │
-│                                                              │
-│  2. All VTEPs in VNI 10000 receive Type-3                   │
-│     ┌─────────────────────────────────────────────────┐     │
-│     │ VTEP1: 10.0.0.1 (self)                         │     │
-│     │ VTEP2: 10.0.0.2 (from BGP)                     │     │
-│     │ VTEP3: 10.0.0.3 (from BGP)                     │     │
-│     └─────────────────────────────────────────────────┘     │
-│                                                              │
-│  3. When BUM traffic arrives at VTEP1:                      │
-│     Source: VM-A (on VTEP1)                                 │
-│     Dest: ff:ff:ff:ff:ff:ff (broadcast)                     │
-│                                                              │
-│  4. VTEP1 replicates to all peers in multicast tree:        │
-│     ┌─────┐                                                 │
-│     │VTEP1│──────►  VTEP2 (10.0.0.2)                       │
-│     │     │──────►  VTEP3 (10.0.0.3)                       │
-│     └─────┘                                                 │
-│                                                              │
-│  Replication Mode: Ingress Replication (head-end)           │
-└─────────────────────────────────────────────────────────────┘
-```
+## Route handlers
 
-### Implementation
+`RegisterHandler` subscribes the data plane to imported changes: a route when a
+MAC, VTEP or prefix becomes reachable or moves, and the same route with
+`IsWithdraw` set when it goes. A Type-2 add names where the MAC is now; a
+Type-2 withdrawal from the VTEP holding the MAC removes that one binding (the
+MAC stays at the VTEP while it advertises others), and the last one the MAC.
+A local route displacing a remote one is not reported: the data plane learned
+the local MAC itself. A route sent again with a new next hop (Type-2, Type-5)
+or a new PMSI tunnel endpoint (Type-3) is reported as the withdrawal of the
+route at the old VTEP and then the new route, so the old VTEP is neither
+routed to nor authorised. A Type-3 route is named by the originator address in
+its NLRI, which its withdrawal also carries; its tunnel endpoint is the PMSI
+tunnel's.
 
-```go
-// Type-3 Inclusive Multicast route
-type EVPNType3Route struct {
-    RD              RouteDistinguisher
-    EthernetTag     uint32
-    IPLength        uint8
-    OriginatorIP    net.IP
-}
-
-// Advertise Type-3 for BUM traffic tree
-func (s *Speaker) AdvertiseInclusiveMulticast(ctx context.Context, vni uint32) error {
-    rd := s.buildRD(vni)
-    rt := s.buildRT(vni)
-
-    nlri := &api.EVPNInclusiveMulticastRoute{
-        Rd: &api.RouteDistinguisher{
-            Type:     api.RouteDistinguisher_TYPE_2OCTET_AS,
-            Admin:    uint32(s.config.ASN),
-            Assigned: vni,
-        },
-        EthernetTag: 0,
-        IpAddress:   s.vtepIP.String(),
-    }
-
-    path := &api.Path{
-        Family: &api.Family{
-            Afi:  api.Family_AFI_L2VPN,
-            Safi: api.Family_SAFI_EVPN,
-        },
-        Nlri: marshal(nlri),
-        Pattrs: []*any.Any{
-            marshal(&api.OriginAttribute{Origin: 0}),
-            marshal(&api.NextHopAttribute{NextHop: s.vtepIP.String()}),
-            marshal(&api.ExtendedCommunitiesAttribute{
-                Communities: [][]byte{rt.Bytes()},
-            }),
-            marshal(&api.PmsiTunnelAttribute{
-                Type:  api.PmsiTunnelType_INGRESS_REPLICATION,
-                Label: vni,
-                Id:    s.vtepIP,
-            }),
-        },
-    }
-
-    _, err := s.server.AddPath(ctx, &api.AddPathRequest{
-        TableType: api.TableType_GLOBAL,
-        Path:      path,
-    })
-    return err
-}
-```
-
-### VNI Registration
-
-```go
-// Register VNI and advertise Type-3
-func (s *Speaker) RegisterVNI(ctx context.Context, vni uint32, subnets []net.IPNet) error {
-    // 1. Advertise Type-3 for BUM traffic
-    if err := s.AdvertiseInclusiveMulticast(ctx, vni); err != nil {
-        return fmt.Errorf("failed to advertise Type-3: %w", err)
-    }
-
-    // 2. Advertise Type-5 for each subnet
-    for _, subnet := range subnets {
-        if err := s.AdvertiseIPPrefix(ctx, subnet, vni); err != nil {
-            return fmt.Errorf("failed to advertise Type-5: %w", err)
-        }
-    }
-
-    s.vniRegistry.Add(vni, subnets)
-    return nil
-}
-```
-
-## Type-5: IP Prefix Advertisement
-
-Type-5 routes advertise IP prefixes for inter-subnet routing, enabling routing between VNIs.
-
-### Route Format
-
-```
-+---------------------------------------+
-|  Route Distinguisher (8 bytes)        |
-+---------------------------------------+
-|  Ethernet Segment Identifier (10 b)   |
-+---------------------------------------+
-|  Ethernet Tag ID (4 bytes)            |
-+---------------------------------------+
-|  IP Prefix Length (1 byte)            |
-+---------------------------------------+
-|  IP Prefix (4 or 16 bytes)            |
-+---------------------------------------+
-|  GW IP Address (4 or 16 bytes)        |
-+---------------------------------------+
-|  MPLS Label (3 bytes) - L3 VNI        |
-+---------------------------------------+
-```
-
-### Inter-Subnet Routing
-
-Type-5 routes enable routing between different VNIs/subnets:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                INTER-SUBNET ROUTING                          │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  Tenant-A VRF:                                              │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │ VNI 10001: 192.168.1.0/24 (Web Tier)               │    │
-│  │ VNI 10002: 192.168.2.0/24 (App Tier)               │    │
-│  │ VNI 10003: 192.168.3.0/24 (DB Tier)                │    │
-│  │ L3 VNI: 10000 (symmetric IRB)                       │    │
-│  └─────────────────────────────────────────────────────┘    │
-│                                                              │
-│  Type-5 Routes Advertised:                                  │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │ Prefix: 192.168.1.0/24                              │    │
-│  │ RD: 65001:10000                                     │    │
-│  │ RT: 65001:10000 (Tenant-A VRF)                      │    │
-│  │ Label: 10000 (L3 VNI)                               │    │
-│  │ Gateway: Router MAC (for VXLAN routing)             │    │
-│  └─────────────────────────────────────────────────────┘    │
-│                                                              │
-│  Traffic Flow (Web -> DB):                                  │
-│  1. VM in Web (192.168.1.10) sends to DB (192.168.3.20)    │
-│  2. Local VTEP does L3 lookup in Tenant-A VRF              │
-│  3. Matches Type-5 route for 192.168.3.0/24                │
-│  4. Encapsulates with L3 VNI (10000) and router MAC        │
-│  5. Remote VTEP decaps, routes to destination VNI          │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Implementation
-
-```go
-// Type-5 IP Prefix route
-type EVPNType5Route struct {
-    RD            RouteDistinguisher
-    ESI           [10]byte  // Ethernet Segment ID (usually zero)
-    EthernetTag   uint32
-    IPPrefixLen   uint8
-    IPPrefix      net.IPNet
-    GatewayIP     net.IP
-    MPLSLabel     uint32  // L3 VNI
-}
-
-// Advertise IP prefix (Type-5)
-func (s *Speaker) AdvertiseIPPrefix(ctx context.Context, prefix net.IPNet, l3vni uint32) error {
-    rd := s.buildRD(l3vni)
-    rt := s.buildRT(l3vni)
-
-    prefixLen, _ := prefix.Mask.Size()
-
-    nlri := &api.EVPNIPPrefixRoute{
-        Rd: &api.RouteDistinguisher{
-            Type:     api.RouteDistinguisher_TYPE_2OCTET_AS,
-            Admin:    uint32(s.config.ASN),
-            Assigned: l3vni,
-        },
-        EthernetTag:  0,
-        IpPrefixLen:  uint32(prefixLen),
-        IpPrefix:     prefix.IP.String(),
-        GwAddress:    s.routerIP.String(),
-        Label:        l3vni,
-    }
-
-    path := &api.Path{
-        Family: &api.Family{
-            Afi:  api.Family_AFI_L2VPN,
-            Safi: api.Family_SAFI_EVPN,
-        },
-        Nlri: marshal(nlri),
-        Pattrs: []*any.Any{
-            marshal(&api.OriginAttribute{Origin: 0}),
-            marshal(&api.NextHopAttribute{NextHop: s.vtepIP.String()}),
-            marshal(&api.ExtendedCommunitiesAttribute{
-                Communities: [][]byte{
-                    rt.Bytes(),
-                    s.routerMACExtCommunity(),  // Router MAC for routing
-                },
-            }),
-        },
-    }
-
-    _, err := s.server.AddPath(ctx, &api.AddPathRequest{
-        TableType: api.TableType_GLOBAL,
-        Path:      path,
-    })
-    return err
-}
-```
-
-## Route Distinguisher and Route Targets
-
-### Route Distinguisher (RD)
-
-RD makes routes unique within the BGP table, even if the same prefix exists in multiple VRFs.
-
-```go
-// RD Types
-const (
-    RDType0 = 0  // 2-byte ASN : 4-byte assigned
-    RDType1 = 1  // 4-byte IPv4 : 2-byte assigned
-    RDType2 = 2  // 4-byte ASN : 2-byte assigned
-)
-
-// Build RD from ASN and VNI
-func (s *Speaker) buildRD(vni uint32) *api.RouteDistinguisher {
-    return &api.RouteDistinguisher{
-        Type:     api.RouteDistinguisher_TYPE_2OCTET_AS,
-        Admin:    uint32(s.config.ASN),  // 65001
-        Assigned: vni,                    // 10000
-    }
-    // Result: 65001:10000
-}
-```
-
-### Route Targets (RT)
-
-RT controls route import/export between VRFs.
-
-```go
-// Route Target Extended Community
-type RouteTarget struct {
-    Type     uint8   // 0x00 (2-byte AS) or 0x02 (4-byte AS)
-    Subtype  uint8   // 0x02 (route target)
-    ASN      uint16  // or uint32 for 4-byte AS
-    Assigned uint32  // or uint16 for 4-byte AS
-}
-
-// Build RT from ASN and VNI
-func (s *Speaker) buildRT(vni uint32) RouteTarget {
-    return RouteTarget{
-        Type:     0x00,
-        Subtype:  0x02,
-        ASN:      uint16(s.config.ASN),
-        Assigned: vni,
-    }
-    // Result: target:65001:10000
-}
-
-// RT Import/Export Configuration
-type VRFConfig struct {
-    Name       string
-    RD         RouteDistinguisher
-    ImportRT   []RouteTarget
-    ExportRT   []RouteTarget
-}
-
-// Example: Tenant-A VRF
-tenantAVRF := &VRFConfig{
-    Name: "Tenant-A",
-    RD:   RD{ASN: 65001, Assigned: 10000},
-    ImportRT: []RouteTarget{
-        {ASN: 65001, Assigned: 10000},  // Import own routes
-        {ASN: 65001, Assigned: 99999},  // Import shared services
-    },
-    ExportRT: []RouteTarget{
-        {ASN: 65001, Assigned: 10000},  // Export to own VRF
-    },
-}
-```
+Handlers are told the changes **one at a time, in the order they were made**:
+received routes on the manager's event goroutine, and synchronously from
+`JoinVNI` (the routes already received) and `WithdrawMACIP` (a remote route
+taking the MAC back). Every path that changes the imported state holds one
+ordering lock from the change until the handlers have been told, so a route
+withdrawn while a join waits on BGP is never reported added after its
+withdrawal. A VNI being joined imports nothing until its Type-3 route is
+advertised; until then it is not joined (`LeaveVNI`, `AdvertiseMACIP` and
+`AdvertisePrefix` return `ErrVNINotJoined`). A second `JoinVNI` of that VNI
+waits for the first's outcome, or its own context: it returns nil once the
+VNI is joined and makes its own attempt when the first was rolled back, so
+it is never told a join succeeded that failed. `WithdrawMACIP` tells the handlers
+where the MAC went before it withdraws the local route, so a failed withdrawal
+(`ErrRouteWithdrawalFailed`) still hands the MAC over. The manager keeps the
+route it could not withdraw: calling `WithdrawMACIP` again withdraws it, as
+does `LeaveVNI`, and advertising the binding again drops it. Handlers run without the
+lock the manager's lookups take, but a handler must not call `JoinVNI`,
+`LeaveVNI` or `WithdrawMACIP`.
+The overlay data plane that consumes them is
+[../gateway/overlay-mode.md](../gateway/overlay-mode.md).
 
 ### Session policy: route-target allowlists
 
@@ -494,8 +174,8 @@ peers:
     families: [evpn]
     max-evpn-prefixes: 100000
     policy:
-      import-route-targets: ["65000:10100"]   # admit a route carrying one of these
-      export-route-targets: ["65000:10100"]   # announce a route carrying one of these
+      import-route-targets: ["65000:268445556"]   # admit a route carrying one of these
+      export-route-targets: ["65000:268445556"]   # announce a route carrying one of these
 ```
 
 Both directions default to reject (RFC 8212). A route is admitted when it
@@ -510,200 +190,11 @@ and the route-target statement never admits a unicast one.
 `max-evpn-prefixes` is the session's EVPN route limit, separate from the
 unicast `max-prefixes`; size it to VTEPs x MACs. The default is 100000.
 
-### Multi-Tenancy with RT
+## Tests
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  MULTI-TENANCY WITH RT                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  Tenant-A VRF                    Tenant-B VRF               │
-│  ┌──────────────────┐            ┌──────────────────┐       │
-│  │ RD: 65001:100    │            │ RD: 65001:200    │       │
-│  │ Import: 65001:100│            │ Import: 65001:200│       │
-│  │ Export: 65001:100│            │ Export: 65001:200│       │
-│  │                  │            │                  │       │
-│  │ 192.168.1.0/24   │            │ 192.168.1.0/24   │       │
-│  │ (Tenant-A net)   │            │ (Tenant-B net)   │       │
-│  └──────────────────┘            └──────────────────┘       │
-│           │                               │                  │
-│           │ RT: 65001:100                 │ RT: 65001:200   │
-│           │                               │                  │
-│           ▼                               ▼                  │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │                  BGP RIB                            │    │
-│  │                                                     │    │
-│  │  192.168.1.0/24 RD:65001:100 RT:65001:100 (A)      │    │
-│  │  192.168.1.0/24 RD:65001:200 RT:65001:200 (B)      │    │
-│  │                                                     │    │
-│  │  Same prefix, different RDs -> unique in BGP       │    │
-│  │  Different RTs -> isolated VRFs                    │    │
-│  └─────────────────────────────────────────────────────┘    │
-│                                                              │
-│  Shared Services VRF                                        │
-│  ┌──────────────────┐                                       │
-│  │ RD: 65001:999    │                                       │
-│  │ Import: 65001:100│  <- Can reach Tenant-A                │
-│  │ Import: 65001:200│  <- Can reach Tenant-B                │
-│  │ Export: 65001:999│  -> Advertise to all tenants          │
-│  └──────────────────┘                                       │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## MAC Mobility Handling
-
-EVPN supports seamless VM migration with MAC mobility extended community.
-
-### MAC Move Detection
-
-```go
-// MAC Mobility Extended Community
-type MACMobility struct {
-    Flags    uint8   // Bit 0: Sticky (static MAC)
-    Reserved uint8
-    SeqNum   uint32  // Sequence number (increments on move)
-}
-
-// Handle MAC move event
-func (s *Speaker) OnMACMove(event *MACMoveEvent) error {
-    // Increment sequence number
-    seqNum := s.macSeqNum.Inc(event.MAC)
-
-    // Re-advertise with higher sequence number
-    nlri := &api.EVPNMacIPRoute{
-        Rd:          s.buildRD(event.VNI),
-        EthernetTag: 0,
-        MacAddress:  event.MAC.String(),
-        IpAddress:   event.IP.String(),
-        Labels:      []uint32{event.VNI},
-    }
-
-    // Add MAC Mobility extended community
-    macMobility := &MACMobility{
-        Flags:  0,       // Not sticky
-        SeqNum: seqNum,  // Higher seq wins
-    }
-
-    path := &api.Path{
-        Family: evpnFamily,
-        Nlri:   marshal(nlri),
-        Pattrs: []*any.Any{
-            marshal(&api.OriginAttribute{Origin: 0}),
-            marshal(&api.NextHopAttribute{NextHop: s.vtepIP.String()}),
-            marshal(&api.ExtendedCommunitiesAttribute{
-                Communities: [][]byte{
-                    s.buildRT(event.VNI).Bytes(),
-                    macMobility.Bytes(),
-                },
-            }),
-        },
-    }
-
-    _, err := s.server.AddPath(ctx, &api.AddPathRequest{
-        TableType: api.TableType_GLOBAL,
-        Path:      path,
-    })
-
-    s.logger.Info("MAC mobility advertised",
-        slog.String("mac", event.MAC.String()),
-        slog.Uint64("seq", uint64(seqNum)),
-        slog.String("old_vtep", event.OldVTEP.String()),
-        slog.String("new_vtep", s.vtepIP.String()),
-    )
-
-    return err
-}
-```
-
-### MAC Move Sequence Resolution
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  MAC MOBILITY RESOLUTION                     │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  Initial State:                                             │
-│  MAC aa:bb:cc:dd:ee:ff on VTEP1, Seq=0                      │
-│                                                              │
-│  VM Migrates to VTEP2:                                      │
-│  1. VTEP2 learns MAC locally                                │
-│  2. VTEP2 advertises Type-2 with Seq=1                      │
-│  3. All VTEPs receive update                                │
-│  4. Higher Seq (1 > 0) wins                                 │
-│  5. FIB updated: MAC -> VTEP2                               │
-│                                                              │
-│  Race Condition (simultaneous move):                        │
-│  - Both VTEPs advertise with Seq=1                          │
-│  - Tie-breaker: Highest VTEP IP wins                        │
-│  - Ensures deterministic convergence                        │
-│                                                              │
-│  Sticky MAC (prevent mobility):                             │
-│  - Flags bit 0 = 1                                          │
-│  - Used for static MAC entries                              │
-│  - Ignores sequence number from other VTEPs                 │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Integration with SDN Layer
-
-### OpenFlow Table Updates
-
-EVPN route updates trigger OpenFlow table programming:
-
-```go
-// EVPN route callback
-func (s *Speaker) onEVPNRouteReceived(route *EVPNRoute) {
-    switch route.Type {
-    case EVPNRouteType2:
-        // MAC/IP learned from remote VTEP
-        s.sdnController.AddRemoteMAC(
-            route.MAC,
-            route.IP,
-            route.VNI,
-            route.NextHop,  // Remote VTEP IP
-        )
-
-    case EVPNRouteType3:
-        // Add VTEP to multicast tree
-        s.sdnController.AddMulticastPeer(
-            route.VNI,
-            route.OriginatorIP,
-        )
-
-    case EVPNRouteType5:
-        // Add remote subnet route
-        s.sdnController.AddRemoteSubnet(
-            route.Prefix,
-            route.L3VNI,
-            route.NextHop,
-            route.GatewayMAC,
-        )
-    }
-}
-```
-
-### VXLAN Encapsulation
-
-```go
-// OpenFlow rules for VXLAN encapsulation
-func (c *SDNController) AddRemoteMAC(mac net.HardwareAddr, ip net.IP, vni uint32, vtep net.IP) error {
-    // Table 0: L2 forwarding
-    flow := &openflow.FlowMod{
-        TableID:  0,
-        Priority: 100,
-        Match: openflow.Match{
-            EthDst:  mac,
-            Metadata: vni,  // VNI in metadata
-        },
-        Actions: []openflow.Action{
-            // Set VXLAN tunnel destination
-            openflow.SetTunnelDst(vtep),
-            openflow.SetTunnelID(vni),
-            // Output to VXLAN tunnel port
-            openflow.Output(c.vxlanPort),
-        },
-    }
-
-    return c.ofClient.AddFlow(ctx, flow)
-}
-```
+`pkg/sdn/bgp/evpn_session_test.go` runs three in-process GoBGP speakers — a
+route reflector and two VTEPs on loopback — and proves Type-2/3/5 exchange with
+the derived RDs and RTs, a VNI using all 24 label bits, both VNIs and the Router's MAC on a
+symmetric-IRB Type-2 route, a MAC moving A→B→A with sequence numbers 1 and 2,
+and 1200 MACs reflected across the session. `evpn_codec_test.go` checks the
+label bytes on the wire.

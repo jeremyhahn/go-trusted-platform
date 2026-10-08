@@ -15,1129 +15,651 @@ package modes
 
 import (
 	"context"
-	"log/slog"
 	"net"
 	"net/netip"
-	"os"
 	"testing"
-	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
 
-// createTestLogger creates a logger for tests.
-func createTestLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-}
-
-// createTestVTEPConfig creates a valid VTEP configuration for testing.
-func createTestVTEPConfig() *vxlan.VTEPConfig {
-	return &vxlan.VTEPConfig{
-		LocalIP:       netip.MustParseAddr("10.0.0.1"),
-		UnderlayIface: "eth0",
-		UnderlayMTU:   9000,
-		VXLANPort:     4789,
-	}
-}
-
-// createTestOverlayConfig creates a valid overlay mode configuration for testing.
-func createTestOverlayConfig() *OverlayModeConfig {
-	return &OverlayModeConfig{
-		VTEPConfig:     createTestVTEPConfig(),
-		BridgeName:     "br-test",
-		ARPSuppression: true,
-		Logger:         createTestLogger(),
-	}
-}
-
-// TestMACEntrySource_String tests the MACEntrySource.String method.
-func TestMACEntrySource_String(t *testing.T) {
-	tests := []struct {
-		name   string
-		source MACEntrySource
-		want   string
-	}{
-		{
-			name:   "local source",
-			source: MACSourceLocal,
-			want:   "local",
-		},
-		{
-			name:   "remote source",
-			source: MACSourceRemote,
-			want:   "remote",
-		},
-		{
-			name:   "static source",
-			source: MACSourceStatic,
-			want:   "static",
-		},
-		{
-			name:   "unknown source",
-			source: MACEntrySource(99),
-			want:   "unknown",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.source.String(); got != tt.want {
-				t.Errorf("MACEntrySource.String() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-// TestMACEntry_IsExpired tests the MACEntry.IsExpired method.
-func TestMACEntry_IsExpired(t *testing.T) {
-	tests := []struct {
-		name      string
-		expiresAt time.Time
-		want      bool
-	}{
-		{
-			name:      "zero expiration time",
-			expiresAt: time.Time{},
-			want:      false,
-		},
-		{
-			name:      "future expiration",
-			expiresAt: time.Now().Add(time.Hour),
-			want:      false,
-		},
-		{
-			name:      "past expiration",
-			expiresAt: time.Now().Add(-time.Hour),
-			want:      true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			entry := &MACEntry{
-				ExpiresAt: tt.expiresAt,
-			}
-			if got := entry.IsExpired(); got != tt.want {
-				t.Errorf("MACEntry.IsExpired() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-// TestMACEntry_Clone tests the MACEntry.Clone method.
-func TestMACEntry_Clone(t *testing.T) {
-	t.Run("clone nil entry", func(t *testing.T) {
-		var entry *MACEntry
-		clone := entry.Clone()
-		if clone != nil {
-			t.Error("Clone of nil entry should be nil")
-		}
-	})
-
-	t.Run("clone valid entry", func(t *testing.T) {
-		mac, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
-		now := time.Now()
-		entry := &MACEntry{
-			MAC:       mac,
-			IP:        netip.MustParseAddr("192.168.1.100"),
-			VNI:       1000,
-			VTEPIP:    netip.MustParseAddr("10.0.0.1"),
-			OFPort:    10,
-			Source:    MACSourceLocal,
-			Sequence:  5,
-			CreatedAt: now,
-			UpdatedAt: now,
-			ExpiresAt: now.Add(time.Hour),
-		}
-
-		clone := entry.Clone()
-		if clone == nil {
-			t.Fatal("Clone should not be nil")
-		}
-
-		// Verify deep copy
-		if clone == entry {
-			t.Error("Clone should be a different instance")
-		}
-
-		// Verify values
-		if clone.VNI != entry.VNI {
-			t.Errorf("VNI mismatch: got %d, want %d", clone.VNI, entry.VNI)
-		}
-		if clone.IP != entry.IP {
-			t.Errorf("IP mismatch: got %v, want %v", clone.IP, entry.IP)
-		}
-		if clone.Source != entry.Source {
-			t.Errorf("Source mismatch: got %v, want %v", clone.Source, entry.Source)
-		}
-
-		// Verify MAC is deep copied
-		if &clone.MAC[0] == &entry.MAC[0] {
-			t.Error("MAC should be a deep copy")
-		}
-		if clone.MAC.String() != entry.MAC.String() {
-			t.Errorf("MAC value mismatch: got %s, want %s", clone.MAC.String(), entry.MAC.String())
-		}
-	})
-
-	t.Run("clone entry with nil MAC", func(t *testing.T) {
-		entry := &MACEntry{
-			VNI: 1000,
-		}
-		clone := entry.Clone()
-		if clone == nil {
-			t.Fatal("Clone should not be nil")
-		}
-		if clone.MAC != nil {
-			t.Error("Clone MAC should be nil")
-		}
-	})
-}
-
-// TestOverlayModeConfig_Validate tests the OverlayModeConfig.Validate method.
 func TestOverlayModeConfig_Validate(t *testing.T) {
 	tests := []struct {
-		name    string
-		config  *OverlayModeConfig
-		wantErr error
-	}{
-		{
-			name:    "valid config",
-			config:  createTestOverlayConfig(),
-			wantErr: nil,
-		},
-		{
-			name: "nil VTEP config",
-			config: &OverlayModeConfig{
-				VTEPConfig: nil,
-				BridgeName: "br-test",
-				Logger:     createTestLogger(),
-			},
-			wantErr: ErrVTEPConfigNil,
-		},
-		{
-			name: "empty bridge name",
-			config: &OverlayModeConfig{
-				VTEPConfig: createTestVTEPConfig(),
-				BridgeName: "",
-				Logger:     createTestLogger(),
-			},
-			wantErr: ErrBridgeNameEmpty,
-		},
-		{
-			name: "nil logger",
-			config: &OverlayModeConfig{
-				VTEPConfig: createTestVTEPConfig(),
-				BridgeName: "br-test",
-				Logger:     nil,
-			},
-			wantErr: ErrLoggerNil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
-			if tt.wantErr != nil {
-				if err == nil {
-					t.Errorf("Validate() should return error %v", tt.wantErr)
-				} else if err != tt.wantErr {
-					t.Errorf("Validate() error = %v, want %v", err, tt.wantErr)
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Validate() unexpected error: %v", err)
-				}
-			}
-		})
-	}
-}
-
-// TestNewOverlayModeHandler tests the NewOverlayModeHandler function.
-func TestNewOverlayModeHandler(t *testing.T) {
-	t.Run("nil config", func(t *testing.T) {
-		_, err := NewOverlayModeHandler(nil, nil, nil)
-		if err != ErrConfigNil {
-			t.Errorf("NewOverlayModeHandler(nil) error = %v, want %v", err, ErrConfigNil)
-		}
-	})
-
-	t.Run("invalid config", func(t *testing.T) {
-		config := &OverlayModeConfig{
-			VTEPConfig: nil, // Invalid
-		}
-		_, err := NewOverlayModeHandler(config, nil, nil)
-		if err == nil {
-			t.Error("NewOverlayModeHandler with invalid config should return error")
-		}
-	})
-
-	t.Run("nil OVS client", func(t *testing.T) {
-		config := createTestOverlayConfig()
-		_, err := NewOverlayModeHandler(config, nil, nil)
-		if err != ErrOVSClientNil {
-			t.Errorf("NewOverlayModeHandler with nil OVS client error = %v, want %v", err, ErrOVSClientNil)
-		}
-	})
-}
-
-// TestValidateVNI tests the validateVNI function.
-func TestValidateVNI(t *testing.T) {
-	tests := []struct {
-		name    string
-		vni     uint32
-		wantErr error
-	}{
-		{
-			name:    "valid VNI minimum",
-			vni:     1,
-			wantErr: nil,
-		},
-		{
-			name:    "valid VNI maximum",
-			vni:     16777215,
-			wantErr: nil,
-		},
-		{
-			name:    "valid VNI mid-range",
-			vni:     1000,
-			wantErr: nil,
-		},
-		{
-			name:    "invalid VNI zero",
-			vni:     0,
-			wantErr: ErrVNIOutOfRange,
-		},
-		{
-			name:    "invalid VNI too large",
-			vni:     16777216,
-			wantErr: ErrVNIOutOfRange,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateVNI(tt.vni)
-			if err != tt.wantErr {
-				t.Errorf("validateVNI(%d) error = %v, want %v", tt.vni, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-// TestValidateMAC tests the validateMAC function.
-func TestValidateMAC(t *testing.T) {
-	tests := []struct {
-		name    string
-		mac     net.HardwareAddr
-		wantErr error
-	}{
-		{
-			name:    "valid MAC",
-			mac:     net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff},
-			wantErr: nil,
-		},
-		{
-			name:    "nil MAC",
-			mac:     nil,
-			wantErr: ErrMACNil,
-		},
-		{
-			name:    "invalid MAC length (too short)",
-			mac:     net.HardwareAddr{0xaa, 0xbb, 0xcc},
-			wantErr: ErrMACInvalid,
-		},
-		{
-			name:    "invalid MAC length (too long)",
-			mac:     net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00},
-			wantErr: ErrMACInvalid,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateMAC(tt.mac)
-			if err != tt.wantErr {
-				t.Errorf("validateMAC() error = %v, want %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-// TestFormatMACKey tests the formatMACKey function.
-func TestFormatMACKey(t *testing.T) {
-	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-	key := formatMACKey(1000, mac)
-	expected := "1000:aa:bb:cc:dd:ee:ff"
-	if key != expected {
-		t.Errorf("formatMACKey() = %v, want %v", key, expected)
-	}
-}
-
-// TestFormatARPKey tests the formatARPKey function.
-func TestFormatARPKey(t *testing.T) {
-	ip := netip.MustParseAddr("192.168.1.100")
-	key := formatARPKey(1000, ip)
-	expected := "1000:192.168.1.100"
-	if key != expected {
-		t.Errorf("formatARPKey() = %v, want %v", key, expected)
-	}
-}
-
-// TestFormatVNIPrefix tests the formatVNIPrefix function.
-func TestFormatVNIPrefix(t *testing.T) {
-	prefix := formatVNIPrefix(1000)
-	expected := "1000:"
-	if prefix != expected {
-		t.Errorf("formatVNIPrefix() = %v, want %v", prefix, expected)
-	}
-}
-
-// TestFormatUint32 tests the formatUint32 function.
-func TestFormatUint32(t *testing.T) {
-	tests := []struct {
-		n    uint32
-		want string
-	}{
-		{0, "0"},
-		{1, "1"},
-		{10, "10"},
-		{100, "100"},
-		{1000, "1000"},
-		{4294967295, "4294967295"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			if got := formatUint32(tt.n); got != tt.want {
-				t.Errorf("formatUint32(%d) = %v, want %v", tt.n, got, tt.want)
-			}
-		})
-	}
-}
-
-// TestEncodeVLAN tests the encodeVLAN function.
-func TestEncodeVLAN(t *testing.T) {
-	tests := []struct {
 		name string
-		vlan uint16
-		want uint16
+		edit func(*OverlayModeConfig)
+		want error
 	}{
-		{
-			name: "VLAN 1",
-			vlan: 1,
-			want: 0x1001, // 0x1000 (OFPVID_PRESENT) | 1
-		},
-		{
-			name: "VLAN 100",
-			vlan: 100,
-			want: 0x1064, // 0x1000 (OFPVID_PRESENT) | 100
-		},
-		{
-			name: "VLAN 4094",
-			vlan: 4094,
-			want: 0x1FFE, // 0x1000 (OFPVID_PRESENT) | 4094
-		},
+		{name: "symmetric IRB", edit: func(*OverlayModeConfig) {}},
+		{name: "bridging only, without EVPN or an admitter", edit: func(c *OverlayModeConfig) {
+			c.EVPNConfig, c.AnycastGatewayIP, c.AnycastGatewayMAC, c.L3VNI = nil, netip.Addr{}, nil, 0
+			c.Admitter = nil
+		}},
+		{name: "EVPN without an admitter", edit: func(c *OverlayModeConfig) { c.Admitter = nil }, want: ErrAdmitterNil},
+		{name: "no VTEP config", edit: func(c *OverlayModeConfig) { c.VTEPConfig = nil }, want: ErrVTEPConfigNil},
+		{name: "invalid VTEP config", edit: func(c *OverlayModeConfig) { c.VTEPConfig.UnderlayIface = "" }, want: vxlan.ErrUnderlayNotReady},
+		{name: "IPv6 VTEP", edit: func(c *OverlayModeConfig) { c.VTEPConfig.LocalIP = netip.MustParseAddr("fd00::1") }, want: ErrInvalidVTEPIP},
+		{name: "no bridge", edit: func(c *OverlayModeConfig) { c.BridgeName = "" }, want: ErrBridgeNameEmpty},
+		{name: "no access port", edit: func(c *OverlayModeConfig) { c.AccessPort = "" }, want: ErrAccessPortEmpty},
+		{name: "no logger", edit: func(c *OverlayModeConfig) { c.Logger = nil }, want: ErrLoggerNil},
+		{name: "anycast IP without a MAC", edit: func(c *OverlayModeConfig) { c.AnycastGatewayMAC = nil }, want: ErrAnycastGatewayIncomplete},
+		{name: "anycast MAC without an IP", edit: func(c *OverlayModeConfig) { c.AnycastGatewayIP = netip.Addr{} }, want: ErrAnycastGatewayIncomplete},
+		{name: "IPv6 anycast gateway", edit: func(c *OverlayModeConfig) { c.AnycastGatewayIP = netip.MustParseAddr("fd00::1") }, want: ErrAnycastGatewayIncomplete},
+		{name: "L3VNI beyond 24 bits", edit: func(c *OverlayModeConfig) { c.L3VNI = 1 << 24 }, want: ErrVNIOutOfRange},
+		{name: "L3VNI without EVPN", edit: func(c *OverlayModeConfig) { c.EVPNConfig = nil }, want: ErrRouterMACRequired},
+		{name: "L3VNI without a router MAC", edit: func(c *OverlayModeConfig) { c.EVPNConfig.RouterMAC = nil }, want: ErrRouterMACRequired},
+		{name: "L3VNI without the anycast gateway", edit: func(c *OverlayModeConfig) {
+			c.AnycastGatewayIP, c.AnycastGatewayMAC = netip.Addr{}, nil
+		}, want: ErrAnycastGatewayRequired},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bytes := encodeVLAN(tt.vlan)
-			if len(bytes) != 2 {
-				t.Errorf("encodeVLAN() length = %d, want 2", len(bytes))
+			cfg := overlayConfig(newFakeSpeaker())
+			tt.edit(cfg)
+
+			err := cfg.Validate()
+
+			if tt.want == nil {
+				assert.NoError(t, err)
+				return
 			}
-			got := uint16(bytes[0])<<8 | uint16(bytes[1])
-			if got != tt.want {
-				t.Errorf("encodeVLAN(%d) = 0x%04X, want 0x%04X", tt.vlan, got, tt.want)
-			}
+			assert.ErrorIs(t, err, tt.want)
 		})
 	}
 }
 
-// TestOverlayModeStatus tests the OverlayModeStatus structure.
-func TestOverlayModeStatus(t *testing.T) {
-	status := &OverlayModeStatus{
-		Running:                  true,
-		LocalVTEP:                netip.MustParseAddr("10.0.0.1"),
-		VNICount:                 5,
-		TunnelCount:              3,
-		LocalMACCount:            10,
-		RemoteMACCount:           20,
-		ARPSuppressionEnabled:    true,
-		AnycastGatewayConfigured: true,
-		StartedAt:                time.Now(),
-		Uptime:                   time.Hour,
-	}
+func TestNewOverlayModeHandler(t *testing.T) {
+	ovs, sw := newFakeOverlayOVS(), newFakeSwitch()
 
-	if !status.Running {
-		t.Error("Status.Running should be true")
-	}
-	if status.VNICount != 5 {
-		t.Errorf("Status.VNICount = %d, want 5", status.VNICount)
-	}
-	if status.TunnelCount != 3 {
-		t.Errorf("Status.TunnelCount = %d, want 3", status.TunnelCount)
-	}
-	if status.LocalMACCount != 10 {
-		t.Errorf("Status.LocalMACCount = %d, want 10", status.LocalMACCount)
-	}
-	if status.RemoteMACCount != 20 {
-		t.Errorf("Status.RemoteMACCount = %d, want 20", status.RemoteMACCount)
-	}
-}
+	t.Run("builds a stopped handler", func(t *testing.T) {
+		h, err := NewOverlayModeHandler(overlayConfig(newFakeSpeaker()), ovs, sw)
 
-// TestVNIMapping tests the VNIMapping structure.
-func TestVNIMapping(t *testing.T) {
-	now := time.Now()
-	mapping := &VNIMapping{
-		VNI:       1000,
-		VLAN:      100,
-		CreatedAt: now,
-	}
-
-	if mapping.VNI != 1000 {
-		t.Errorf("VNIMapping.VNI = %d, want 1000", mapping.VNI)
-	}
-	if mapping.VLAN != 100 {
-		t.Errorf("VNIMapping.VLAN = %d, want 100", mapping.VLAN)
-	}
-	if !mapping.CreatedAt.Equal(now) {
-		t.Errorf("VNIMapping.CreatedAt mismatch")
-	}
-}
-
-// TestARPPacket tests the ARPPacket structure.
-func TestARPPacket(t *testing.T) {
-	senderMAC := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-	targetMAC := net.HardwareAddr{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-
-	packet := &ARPPacket{
-		Operation: ARPRequest,
-		SenderMAC: senderMAC,
-		SenderIP:  netip.MustParseAddr("192.168.1.1"),
-		TargetMAC: targetMAC,
-		TargetIP:  netip.MustParseAddr("192.168.1.100"),
-		VNI:       1000,
-		InPort:    10,
-	}
-
-	if packet.Operation != ARPRequest {
-		t.Errorf("ARPPacket.Operation = %d, want %d", packet.Operation, ARPRequest)
-	}
-	if packet.VNI != 1000 {
-		t.Errorf("ARPPacket.VNI = %d, want 1000", packet.VNI)
-	}
-	if packet.InPort != 10 {
-		t.Errorf("ARPPacket.InPort = %d, want 10", packet.InPort)
-	}
-}
-
-// TestARPResponse tests the ARPResponse structure.
-func TestARPResponse(t *testing.T) {
-	replyMAC := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-	floodVTEPs := []netip.Addr{
-		netip.MustParseAddr("10.0.0.2"),
-		netip.MustParseAddr("10.0.0.3"),
-	}
-
-	response := &ARPResponse{
-		ShouldRespond: true,
-		ReplyMAC:      replyMAC,
-		ShouldFlood:   false,
-		FloodVTEPs:    floodVTEPs,
-	}
-
-	if !response.ShouldRespond {
-		t.Error("ARPResponse.ShouldRespond should be true")
-	}
-	if response.ShouldFlood {
-		t.Error("ARPResponse.ShouldFlood should be false")
-	}
-	if len(response.FloodVTEPs) != 2 {
-		t.Errorf("ARPResponse.FloodVTEPs length = %d, want 2", len(response.FloodVTEPs))
-	}
-}
-
-// TestARPOperation tests the ARPOperation constants.
-func TestARPOperation(t *testing.T) {
-	if ARPRequest != 1 {
-		t.Errorf("ARPRequest = %d, want 1", ARPRequest)
-	}
-	if ARPReply != 2 {
-		t.Errorf("ARPReply = %d, want 2", ARPReply)
-	}
-}
-
-// TestTableConstants tests the OpenFlow table constants.
-func TestTableConstants(t *testing.T) {
-	if TableIngress != 0 {
-		t.Errorf("TableIngress = %d, want 0", TableIngress)
-	}
-	if TableVXLANDecap != 10 {
-		t.Errorf("TableVXLANDecap = %d, want 10", TableVXLANDecap)
-	}
-	if TableAuthentication != 20 {
-		t.Errorf("TableAuthentication = %d, want 20", TableAuthentication)
-	}
-	if TableMACLearning != 30 {
-		t.Errorf("TableMACLearning = %d, want 30", TableMACLearning)
-	}
-	if TableARP != 40 {
-		t.Errorf("TableARP = %d, want 40", TableARP)
-	}
-	if TableL3Routing != 50 {
-		t.Errorf("TableL3Routing = %d, want 50", TableL3Routing)
-	}
-	if TableEgress != 60 {
-		t.Errorf("TableEgress = %d, want 60", TableEgress)
-	}
-}
-
-// TestOverlayModeHandlerNotRunning tests operations on a non-running handler.
-func TestOverlayModeHandlerNotRunning(t *testing.T) {
-	// Create a handler without starting it (we can't easily create a real one without mocks)
-	// These tests verify the error handling for operations on a non-running handler
-	t.Run("AddVNI returns error when not running", func(t *testing.T) {
-		// Would need mock OVS and OpenFlow clients to test fully
-		// This test documents the expected behavior
-		t.Log("AddVNI should return ErrNotRunning when handler is not started")
+		require.NoError(t, err)
+		assert.False(t, h.GetStatus().Running)
+		assert.Empty(t, sw.table(), "nothing is installed before Start")
 	})
 
-	t.Run("RemoveVNI returns error when not running", func(t *testing.T) {
-		t.Log("RemoveVNI should return ErrNotRunning when handler is not started")
+	t.Run("refuses missing or invalid parts", func(t *testing.T) {
+		_, err := NewOverlayModeHandler(nil, ovs, sw)
+		assert.ErrorIs(t, err, ErrConfigNil)
+
+		cfg := overlayConfig(newFakeSpeaker())
+		cfg.BridgeName = ""
+		_, err = NewOverlayModeHandler(cfg, ovs, sw)
+		assert.ErrorIs(t, err, ErrBridgeNameEmpty)
+
+		_, err = NewOverlayModeHandler(overlayConfig(newFakeSpeaker()), nil, sw)
+		assert.ErrorIs(t, err, ErrOVSClientNil)
+
+		_, err = NewOverlayModeHandler(overlayConfig(newFakeSpeaker()), ovs, nil)
+		assert.ErrorIs(t, err, ErrOpenFlowClientNil)
 	})
 
-	t.Run("LearnMAC returns error when not running", func(t *testing.T) {
-		t.Log("LearnMAC should return ErrNotRunning when handler is not started")
-	})
+	t.Run("reports an EVPN manager it cannot build", func(t *testing.T) {
+		cfg := overlayConfig(nil)
 
-	t.Run("LookupMAC returns error when not running", func(t *testing.T) {
-		t.Log("LookupMAC should return ErrNotRunning when handler is not started")
-	})
+		_, err := NewOverlayModeHandler(cfg, ovs, sw)
 
-	t.Run("HandleARP returns error when not running", func(t *testing.T) {
-		t.Log("HandleARP should return ErrNotRunning when handler is not started")
+		var initErr *ErrOverlayInitFailed
+		require.ErrorAs(t, err, &initErr)
+		assert.Equal(t, "EVPNManager", initErr.Component)
 	})
 }
 
-// TestReplicationListOperations tests the replication list helper functions.
-func TestReplicationListOperations(t *testing.T) {
-	// Create a minimal handler for testing replication list operations
-	handler := &OverlayModeHandler{
-		logger: createTestLogger(),
-	}
+func TestOverlayModeHandler_Start(t *testing.T) {
+	t.Run("creates the flow-based VXLAN port and the base pipeline", func(t *testing.T) {
+		f := newOverlayFixture(t, nil)
 
-	t.Run("addToReplicationList adds new entry", func(t *testing.T) {
-		vtep := netip.MustParseAddr("10.0.0.2")
-		handler.addToReplicationList(1000, vtep)
+		port, err := f.ovs.GetVXLANPortWithOptions(context.Background(), "br-int", f.handler.vtepManager.PortName())
+		require.NoError(t, err)
+		assert.True(t, port.IsFlowRemote, "remote_ip=flow")
+		assert.True(t, port.IsFlowKey, "key=flow")
+		assert.Equal(t, ovlBaseTable, f.sw.table())
 
-		list := handler.getReplicationList(1000)
-		if len(list) != 1 {
-			t.Errorf("Expected 1 VTEP in list, got %d", len(list))
-		}
-		if list[0] != vtep {
-			t.Errorf("Expected VTEP %v, got %v", vtep, list[0])
-		}
+		status := f.handler.GetStatus()
+		assert.True(t, status.Running)
+		assert.Equal(t, ovlVTEPA, status.LocalVTEP)
+		assert.False(t, status.StartedAt.IsZero())
 	})
 
-	t.Run("addToReplicationList skips duplicate", func(t *testing.T) {
-		vtep := netip.MustParseAddr("10.0.0.2")
-		handler.addToReplicationList(1000, vtep) // Already added
-		handler.addToReplicationList(1000, vtep) // Duplicate
+	t.Run("replaces the flows a previous run left", func(t *testing.T) {
+		f := newStoppedOverlay(t, nil)
+		stale := testBuilder(t).decapAllow(ovlL2VNI, ovlVTEPC)
+		require.NoError(t, f.sw.SendFlowMods(context.Background(), []*openflow.FlowMod{stale}))
 
-		list := handler.getReplicationList(1000)
-		if len(list) != 1 {
-			t.Errorf("Expected 1 VTEP (no duplicate), got %d", len(list))
-		}
+		require.NoError(t, f.handler.Start(context.Background()))
+		t.Cleanup(func() { require.NoError(t, f.handler.Stop(context.Background())) })
+
+		assert.Equal(t, ovlBaseTable, f.sw.table())
 	})
 
-	t.Run("addToReplicationList adds multiple entries", func(t *testing.T) {
-		vtep3 := netip.MustParseAddr("10.0.0.3")
-		handler.addToReplicationList(1000, vtep3)
+	t.Run("installs the pipeline fail-closed", func(t *testing.T) {
+		f := newStoppedOverlay(t, nil)
+		mark := f.sw.batchCount()
 
-		list := handler.getReplicationList(1000)
-		if len(list) != 2 {
-			t.Errorf("Expected 2 VTEPs, got %d", len(list))
-		}
+		require.NoError(t, f.handler.Start(context.Background()))
+		t.Cleanup(func() { require.NoError(t, f.handler.Stop(context.Background())) })
+
+		assertFailClosed(t, f.sw.batchesSince(mark)[0])
 	})
 
-	t.Run("removeFromReplicationList removes entry", func(t *testing.T) {
-		vtep2 := netip.MustParseAddr("10.0.0.2")
-		handler.removeFromReplicationList(1000, vtep2)
+	t.Run("a running handler refuses a second start", func(t *testing.T) {
+		f := newOverlayFixture(t, nil)
 
-		list := handler.getReplicationList(1000)
-		if len(list) != 1 {
-			t.Errorf("Expected 1 VTEP after removal, got %d", len(list))
-		}
+		assert.ErrorIs(t, f.handler.Start(context.Background()), ErrAlreadyRunning)
 	})
 
-	t.Run("removeFromReplicationList handles non-existent entry", func(t *testing.T) {
-		vtep99 := netip.MustParseAddr("10.0.0.99")
-		handler.removeFromReplicationList(1000, vtep99) // Should not panic
+	t.Run("a VXLAN port OVS refuses fails the start", func(t *testing.T) {
+		f := newStoppedOverlay(t, nil)
+		f.ovs.addErr = errSwitchDown
 
-		list := handler.getReplicationList(1000)
-		if len(list) != 1 {
-			t.Errorf("Expected 1 VTEP after removing non-existent, got %d", len(list))
-		}
+		err := f.handler.Start(context.Background())
+
+		assertStartFailed(t, err, "VTEPManager")
+		assert.False(t, f.handler.GetStatus().Running)
 	})
 
-	t.Run("removeFromReplicationList handles non-existent VNI", func(t *testing.T) {
-		handler.removeFromReplicationList(9999, netip.MustParseAddr("10.0.0.1"))
-		// Should not panic
+	failures := []struct {
+		name      string
+		component string
+		breakIt   func(*overlayFixture)
+	}{
+		{name: "an unknown access port", component: "AccessPort", breakIt: func(f *overlayFixture) {
+			delete(f.ovs.ofPorts, ovlAccessPort)
+		}},
+		{name: "an access port without an OpenFlow number", component: "AccessPort", breakIt: func(f *overlayFixture) {
+			f.ovs.ofPorts[ovlAccessPort] = -1
+		}},
+		{name: "an EVPN watch the speaker refuses", component: "EVPNManager", breakIt: func(f *overlayFixture) {
+			f.speaker.watchErr = errSwitchDown
+		}},
+		{name: "a switch refusing the pipeline", component: "OpenFlow", breakIt: func(f *overlayFixture) {
+			f.sw.fail(errSwitchDown)
+		}},
+	}
+	for _, tt := range failures {
+		t.Run(tt.name+" fails the start and removes the VXLAN port", func(t *testing.T) {
+			f := newStoppedOverlay(t, nil)
+			tt.breakIt(f)
+
+			err := f.handler.Start(context.Background())
+
+			assertStartFailed(t, err, tt.component)
+			assert.False(t, f.handler.GetStatus().Running)
+			assert.False(t, f.ovs.hasPort(f.handler.vtepManager.PortName()))
+		})
+	}
+
+	t.Run("a failed start can be retried", func(t *testing.T) {
+		f := newStoppedOverlay(t, nil)
+		f.sw.fail(errSwitchDown)
+		require.Error(t, f.handler.Start(context.Background()))
+		f.sw.fail(nil)
+
+		require.NoError(t, f.handler.Start(context.Background()), "EVPN and the VTEP were stopped")
+		require.NoError(t, f.handler.Stop(context.Background()))
 	})
 
-	t.Run("removeFromReplicationList removes last entry and deletes VNI", func(t *testing.T) {
-		vtep3 := netip.MustParseAddr("10.0.0.3")
-		handler.removeFromReplicationList(1000, vtep3)
+	t.Run("a switch applying part of the pipeline is left with no overlay flows", func(t *testing.T) {
+		f := newStoppedOverlay(t, nil)
+		f.sw.refuse(2, nil)
 
-		list := handler.getReplicationList(1000)
-		if len(list) != 0 {
-			t.Errorf("Expected empty list after removing last VTEP, got %d", len(list))
-		}
-	})
+		err := f.handler.Start(context.Background())
 
-	t.Run("getReplicationList returns nil for non-existent VNI", func(t *testing.T) {
-		list := handler.getReplicationList(9999)
-		if list != nil {
-			t.Errorf("Expected nil for non-existent VNI, got %v", list)
-		}
+		assertStartFailed(t, err, "OpenFlow")
+		var partial *openflow.ErrBatchPartialFailure
+		assert.ErrorAs(t, err, &partial)
+		assert.Empty(t, f.sw.table())
 	})
 }
 
-// TestVTEPInUse tests the vtepInUse helper function.
-func TestVTEPInUse(t *testing.T) {
-	handler := &OverlayModeHandler{
-		logger: createTestLogger(),
-	}
-
-	vtep1 := netip.MustParseAddr("10.0.0.1")
-	vtep2 := netip.MustParseAddr("10.0.0.2")
-
-	// Initially no VTEPs in use
-	if handler.vtepInUse(vtep1) {
-		t.Error("VTEP should not be in use initially")
-	}
-
-	// Add VTEP to VNI
-	handler.addToReplicationList(1000, vtep1)
-	if !handler.vtepInUse(vtep1) {
-		t.Error("VTEP should be in use after adding to replication list")
-	}
-
-	// Check VTEP not in list
-	if handler.vtepInUse(vtep2) {
-		t.Error("VTEP2 should not be in use")
-	}
-
-	// Add same VTEP to another VNI
-	handler.addToReplicationList(2000, vtep1)
-	if !handler.vtepInUse(vtep1) {
-		t.Error("VTEP should still be in use")
-	}
-
-	// Remove from first VNI
-	handler.removeFromReplicationList(1000, vtep1)
-	if !handler.vtepInUse(vtep1) {
-		t.Error("VTEP should still be in use (in VNI 2000)")
-	}
-
-	// Remove from second VNI
-	handler.removeFromReplicationList(2000, vtep1)
-	if handler.vtepInUse(vtep1) {
-		t.Error("VTEP should not be in use after removing from all VNIs")
-	}
+func assertStartFailed(t *testing.T, err error, component string) {
+	t.Helper()
+	var startErr *ErrOverlayStartFailed
+	require.ErrorAs(t, err, &startErr)
+	assert.Equal(t, component, startErr.Component)
 }
 
-// TestCleanupVNIMACs tests the cleanupVNIMACs helper function.
-func TestCleanupVNIMACs(t *testing.T) {
-	handler := &OverlayModeHandler{
-		logger: createTestLogger(),
-	}
+func TestOverlayModeHandler_Stop(t *testing.T) {
+	t.Run("withdraws, removes every flow and the VXLAN port", func(t *testing.T) {
+		f := newStoppedOverlay(t, nil)
+		require.NoError(t, f.handler.Start(context.Background()))
+		f.withVNI(t)
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
 
-	mac1 := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01}
-	mac2 := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02}
-	mac3 := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x03}
+		require.NoError(t, f.handler.Stop(context.Background()))
 
-	// Add MACs to different VNIs
-	handler.localMACs.Store(formatMACKey(1000, mac1), &MACEntry{MAC: mac1, VNI: 1000})
-	handler.localMACs.Store(formatMACKey(1000, mac2), &MACEntry{MAC: mac2, VNI: 1000})
-	handler.localMACs.Store(formatMACKey(2000, mac3), &MACEntry{MAC: mac3, VNI: 2000})
-
-	handler.remoteMACs.Store(formatMACKey(1000, mac3), &MACEntry{MAC: mac3, VNI: 1000})
-
-	// Clean up VNI 1000
-	handler.cleanupVNIMACs(1000)
-
-	// Verify VNI 1000 MACs are removed
-	count1000 := 0
-	handler.localMACs.Range(func(key, _ any) bool {
-		k := key.(string)
-		if k[:5] == "1000:" {
-			count1000++
-		}
-		return true
+		assert.Empty(t, f.sw.table())
+		assert.False(t, f.ovs.hasPort(f.handler.vtepManager.PortName()))
+		assert.Contains(t, f.speaker.deletedTypes(), bgp.EVPNTypeInclusiveMulticast)
+		status := f.handler.GetStatus()
+		assert.False(t, status.Running)
+		assert.Zero(t, status.VNICount)
+		assert.Zero(t, status.RemoteVTEPCount)
 	})
-	if count1000 != 0 {
-		t.Errorf("Expected 0 local MACs for VNI 1000, got %d", count1000)
-	}
 
-	// Verify VNI 2000 MAC is still present
-	if _, ok := handler.localMACs.Load(formatMACKey(2000, mac3)); !ok {
-		t.Error("VNI 2000 MAC should still be present")
-	}
+	t.Run("a stopped handler refuses", func(t *testing.T) {
+		f := newStoppedOverlay(t, nil)
 
-	// Verify remote MAC for VNI 1000 is also removed
-	if _, ok := handler.remoteMACs.Load(formatMACKey(1000, mac3)); ok {
-		t.Error("Remote MAC for VNI 1000 should be removed")
-	}
+		assert.ErrorIs(t, f.handler.Stop(context.Background()), ErrNotRunning)
+	})
+
+	t.Run("carries on past failures and reports them all", func(t *testing.T) {
+		f := newStoppedOverlay(t, nil)
+		require.NoError(t, f.handler.Start(context.Background()))
+		f.sw.fail(errSwitchDown)
+		f.ovs.deleteErr = errSwitchDown
+
+		err := f.handler.Stop(context.Background())
+
+		var flowErr *ErrFlowOperationFailed
+		require.ErrorAs(t, err, &flowErr)
+		var stopErr *ErrStopFailed
+		require.ErrorAs(t, err, &stopErr)
+		assert.Equal(t, "VTEPManager", stopErr.Component)
+		assert.False(t, f.handler.GetStatus().Running)
+	})
 }
 
-// TestGetStatusWhenNotRunning tests GetStatus on a non-running handler.
-func TestGetStatusWhenNotRunning(t *testing.T) {
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{
-			ARPSuppression:    true,
-			AnycastGatewayIP:  netip.MustParseAddr("192.168.1.1"),
-			AnycastGatewayMAC: net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff},
-		},
-		logger: createTestLogger(),
-	}
+func TestOverlayModeHandler_AddVNI(t *testing.T) {
+	t.Run("carries the VNI and places this VTEP on it", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
 
-	status := handler.GetStatus()
-	if status == nil {
-		t.Fatal("GetStatus should not return nil")
-	}
-	if status.Running {
-		t.Error("Status.Running should be false")
-	}
-	if !status.ARPSuppressionEnabled {
-		t.Error("Status.ARPSuppressionEnabled should be true")
-	}
-	if !status.AnycastGatewayConfigured {
-		t.Error("Status.AnycastGatewayConfigured should be true")
-	}
-	// Counters should be zero when not running
-	if status.VNICount != 0 {
-		t.Errorf("Status.VNICount should be 0, got %d", status.VNICount)
-	}
+		assert.Len(t, f.sw.matching("tun_id=10100"), 3, "ingress, flood, gateway ARP")
+		assert.Equal(t, "pop_vlan,set:tun_id=10100 goto:20", f.sw.lookup(t, TableVXLANDecap, "in_port=3", "vlan=100"))
+		assert.Equal(t, "push_vlan,set:vlan=100,output:3,pop_vlan", f.sw.lookup(t, TableEgress, "tun_id=10100"))
+		assert.Contains(t, f.speaker.addedTypes(), bgp.EVPNTypeInclusiveMulticast)
+		assert.Equal(t, 1, f.handler.GetStatus().VNICount)
+	})
+
+	t.Run("refuses invalid VNIs and VLANs", func(t *testing.T) {
+		f := newOverlayFixture(t, nil)
+		ctx := context.Background()
+
+		assert.ErrorIs(t, f.handler.AddVNI(ctx, 0, ovlVLAN), ErrVNIOutOfRange)
+		assert.ErrorIs(t, f.handler.AddVNI(ctx, 1<<24, ovlVLAN), ErrVNIOutOfRange)
+		assert.ErrorIs(t, f.handler.AddVNI(ctx, ovlL2VNI, 0), ErrVLANOutOfRange)
+		assert.ErrorIs(t, f.handler.AddVNI(ctx, ovlL2VNI, 4095), ErrVLANOutOfRange)
+		assert.ErrorIs(t, f.handler.AddVNI(ctx, ovlL3VNI, ovlVLAN), ErrVNIAlreadyExists, "the L3VNI is not a segment")
+	})
+
+	t.Run("refuses a VNI or VLAN already in use", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		ctx := context.Background()
+
+		assert.ErrorIs(t, f.handler.AddVNI(ctx, ovlL2VNI, ovlVLAN+1), ErrVNIAlreadyExists)
+		assert.ErrorIs(t, f.handler.AddVNI(ctx, ovlL2VNI+1, ovlVLAN), ErrVLANInUse)
+	})
+
+	t.Run("a stopped handler refuses", func(t *testing.T) {
+		f := newStoppedOverlay(t, nil)
+
+		assert.ErrorIs(t, f.handler.AddVNI(context.Background(), ovlL2VNI, ovlVLAN), ErrNotRunning)
+	})
+
+	t.Run("a switch refusing the flows adds nothing", func(t *testing.T) {
+		f := newOverlayFixture(t, nil)
+		f.sw.fail(errSwitchDown)
+
+		err := f.handler.AddVNI(context.Background(), ovlL2VNI, ovlVLAN)
+
+		assertVNIFailed(t, err, "install")
+		f.sw.fail(nil)
+		assert.Zero(t, f.handler.GetStatus().VNICount)
+		assert.Empty(t, f.speaker.addedTypes(), "EVPN never heard of it")
+	})
+
+	t.Run("a join EVPN refuses removes the VNI again", func(t *testing.T) {
+		f := newOverlayFixture(t, nil)
+		f.speaker.failAdds(errSwitchDown)
+
+		err := f.handler.AddVNI(context.Background(), ovlL2VNI, ovlVLAN)
+
+		assertVNIFailed(t, err, "join")
+		assert.Equal(t, ovlBaseTable, f.sw.table())
+		f.speaker.failAdds(nil)
+		require.NoError(t, f.handler.AddVNI(context.Background(), ovlL2VNI, ovlVLAN), "the VLAN is free again")
+	})
+
+	t.Run("without EVPN the VNI bridges locally", func(t *testing.T) {
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) {
+			c.EVPNConfig, c.AnycastGatewayIP, c.AnycastGatewayMAC, c.L3VNI = nil, netip.Addr{}, nil, 0
+		}).withVNI(t)
+
+		assert.Len(t, f.sw.matching("tun_id=10100"), 2, "ingress and flood")
+	})
 }
 
-// TestHandleARPNilPacket tests HandleARP with nil packet.
-func TestHandleARPNilPacket(t *testing.T) {
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{},
-		logger: createTestLogger(),
-	}
-	handler.running.Store(true)
-
-	_, err := handler.HandleARP(context.Background(), nil)
-	if err != ErrARPPacketNil {
-		t.Errorf("HandleARP(nil) error = %v, want %v", err, ErrARPPacketNil)
-	}
+func assertVNIFailed(t *testing.T, err error, operation string) {
+	t.Helper()
+	var vniErr *ErrVNIOperationFailed
+	require.ErrorAs(t, err, &vniErr)
+	assert.Equal(t, operation, vniErr.Operation)
+	assert.Equal(t, ovlL2VNI, vniErr.VNI)
 }
 
-// TestHandleARPReply tests HandleARP with ARP reply (should not respond).
-func TestHandleARPReply(t *testing.T) {
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{
-			ARPSuppression: true,
-		},
-		logger: createTestLogger(),
-	}
-	handler.running.Store(true)
+func TestOverlayModeHandler_RemoveVNI(t *testing.T) {
+	t.Run("removes the segment, its hosts and, with the last VNI, the prefixes", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		ctx := context.Background()
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
+		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ovlHostIP))
 
-	packet := &ARPPacket{
-		Operation: ARPReply, // Not a request
-		VNI:       1000,
-	}
+		require.NoError(t, f.handler.RemoveVNI(ctx, ovlL2VNI))
 
-	response, err := handler.HandleARP(context.Background(), packet)
-	if err != nil {
-		t.Errorf("HandleARP() unexpected error: %v", err)
-	}
-	if response.ShouldRespond {
-		t.Error("Should not respond to ARP reply")
-	}
-	if response.ShouldFlood {
-		t.Error("Should not flood ARP reply")
-	}
+		assert.Equal(t, ovlBaseTable, f.sw.table())
+		status := f.handler.GetStatus()
+		assert.Zero(t, status.VNICount)
+		assert.Zero(t, status.LocalMACCount+status.RemoteMACCount)
+		assert.Zero(t, status.PrefixCount)
+		assert.Contains(t, f.speaker.deletedTypes(), bgp.EVPNTypeInclusiveMulticast)
+		require.NoError(t, f.handler.AddVNI(ctx, ovlL2VNI+1, ovlVLAN), "the VLAN is free again")
+	})
+
+	t.Run("keeps the prefixes while another VNI is left", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		ctx := context.Background()
+		require.NoError(t, f.handler.AddVNI(ctx, ovlL2VNI+1, ovlVLAN+1))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
+
+		require.NoError(t, f.handler.RemoveVNI(ctx, ovlL2VNI))
+
+		assert.Equal(t, 1, f.handler.GetStatus().PrefixCount)
+		assert.Len(t, f.sw.matching("ipv4_dst=10.2.0.0/24"), 1)
+	})
+
+	t.Run("refuses an unknown VNI or a stopped handler", func(t *testing.T) {
+		f := newOverlayFixture(t, nil)
+		assert.ErrorIs(t, f.handler.RemoveVNI(context.Background(), ovlL2VNI), ErrVNINotFound)
+
+		stopped := newStoppedOverlay(t, nil)
+		assert.ErrorIs(t, stopped.handler.RemoveVNI(context.Background(), ovlL2VNI), ErrNotRunning)
+	})
+
+	t.Run("a switch refusing the removal keeps the VNI", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		f.sw.fail(errSwitchDown)
+
+		err := f.handler.RemoveVNI(context.Background(), ovlL2VNI)
+
+		assertVNIFailed(t, err, "remove")
+		f.sw.fail(nil)
+		assert.Equal(t, 1, f.handler.GetStatus().VNICount)
+		require.NoError(t, f.handler.RemoveVNI(context.Background(), ovlL2VNI), "the removal can be retried")
+		assert.Equal(t, ovlBaseTable, f.sw.table())
+	})
+
+	t.Run("stop completes after a refused removal", func(t *testing.T) {
+		f := newStoppedOverlay(t, nil)
+		require.NoError(t, f.handler.Start(context.Background()))
+		f.withVNI(t)
+		f.sw.fail(errSwitchDown)
+		require.Error(t, f.handler.RemoveVNI(context.Background(), ovlL2VNI))
+		f.sw.fail(nil)
+
+		assert.NoError(t, f.handler.Stop(context.Background()))
+	})
 }
 
-// TestHandleARPNoSuppression tests HandleARP with ARP suppression disabled.
-func TestHandleARPNoSuppression(t *testing.T) {
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{
-			ARPSuppression: false,
-		},
-		logger: createTestLogger(),
-	}
-	handler.running.Store(true)
+func TestOverlayModeHandler_LearnMAC(t *testing.T) {
+	t.Run("delivers to a local host, routes to it and advertises it", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
 
-	// Add some VTEPs to replication list
-	vtep1 := netip.MustParseAddr("10.0.0.2")
-	handler.addToReplicationList(1000, vtep1)
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
 
-	packet := &ARPPacket{
-		Operation: ARPRequest,
-		TargetIP:  netip.MustParseAddr("192.168.1.100"),
-		VNI:       1000,
-	}
+		assert.Equal(t, "push_vlan,set:vlan=100 goto:70",
+			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:01:10"))
+		assert.Equal(t, "output:IN_PORT", f.sw.lookup(t, TableLocalDelivery, "in_port=3"), "hairpin to a local host")
+		assert.Equal(t, "output:3", f.sw.lookup(t, TableLocalDelivery, "in_port=7"))
+		assert.Contains(t, f.sw.lookup(t, TableL3Routing, "eth_type=0x800", "ipv4_dst=10.1.0.10"), "set:eth_dst=02:00:00:00:01:10")
+		assert.Len(t, f.sw.matching("t=40 ", "arp_tpa=10.1.0.10"), 1)
 
-	response, err := handler.HandleARP(context.Background(), packet)
-	if err != nil {
-		t.Errorf("HandleARP() unexpected error: %v", err)
-	}
-	if response.ShouldRespond {
-		t.Error("Should not respond when suppression is disabled")
-	}
-	if !response.ShouldFlood {
-		t.Error("Should flood when suppression is disabled")
-	}
-	if len(response.FloodVTEPs) != 1 {
-		t.Errorf("Expected 1 flood VTEP, got %d", len(response.FloodVTEPs))
-	}
+		advertised := f.speaker.addedMACIPs()
+		require.Len(t, advertised, 1)
+		assert.Equal(t, ovlHostMAC, advertised[0].MAC)
+		assert.Equal(t, ovlHostIP, advertised[0].IP)
+		assert.Equal(t, ovlL2VNI, advertised[0].VNI)
+	})
+
+	t.Run("a second IP adds to the host", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		ctx := context.Background()
+		second := netip.MustParseAddr("10.1.0.11")
+		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ovlHostIP))
+
+		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, second))
+
+		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlHostMAC)
+		require.NoError(t, err)
+		assert.Equal(t, []netip.Addr{ovlHostIP, second}, entry.IPs)
+		assert.Equal(t, MACSourceLocal, entry.Source)
+		assert.False(t, entry.VTEPIP.IsValid())
+		assert.Len(t, f.sw.matching("t=50 ", "eth_dst=02:00:00:00:01:10"), 2)
+	})
+
+	t.Run("a local host replaces a remote one", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlRemoteMAC, netip.Addr{}))
+
+		assert.Equal(t, "push_vlan,set:vlan=100 goto:70",
+			f.sw.lookup(t, TableMACLearning, "tun_id=10100", "eth_dst=02:00:00:00:02:20"))
+		assert.Empty(t, f.sw.matching("tun_src=10.0.0.2"), "nothing is tunnelled from B any more")
+		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
+		require.NoError(t, err)
+		assert.Empty(t, entry.IPs, "the remote bindings went with the remote host")
+	})
+
+	t.Run("refuses invalid input and unknown VNIs", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		ctx := context.Background()
+
+		assert.ErrorIs(t, f.handler.LearnMAC(ctx, ovlL2VNI, nil, ovlHostIP), ErrMACNil)
+		assert.ErrorIs(t, f.handler.LearnMAC(ctx, ovlL2VNI, net.HardwareAddr{1, 2, 3}, ovlHostIP), ErrMACInvalid)
+		assert.ErrorIs(t, f.handler.LearnMAC(ctx, ovlL2VNI+1, ovlHostMAC, ovlHostIP), ErrVNINotFound)
+
+		stopped := newStoppedOverlay(t, nil)
+		assert.ErrorIs(t, stopped.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ovlHostIP), ErrNotRunning)
+	})
+
+	t.Run("a switch refusing the flows learns nothing", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		f.sw.fail(errSwitchDown)
+
+		err := f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP)
+
+		assertMACFailed(t, err, "learn")
+		f.sw.fail(nil)
+		_, err = f.handler.LookupMAC(ovlL2VNI, ovlHostMAC)
+		assert.ErrorIs(t, err, ErrMACNotFound)
+		assert.Empty(t, f.speaker.addedMACIPs())
+	})
+
+	t.Run("a failed advertisement keeps the local flows", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		f.speaker.failAdds(errSwitchDown)
+
+		err := f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP)
+
+		assertMACFailed(t, err, "advertise")
+		_, err = f.handler.LookupMAC(ovlL2VNI, ovlHostMAC)
+		assert.NoError(t, err)
+		f.speaker.failAdds(nil)
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP), "learning again retries")
+		assert.Len(t, f.speaker.addedMACIPs(), 1)
+	})
 }
 
-// TestHandleARPAnycastGateway tests HandleARP for anycast gateway IP.
-func TestHandleARPAnycastGateway(t *testing.T) {
-	anycastMAC := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-	anycastIP := netip.MustParseAddr("192.168.1.1")
-
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{
-			ARPSuppression:    true,
-			AnycastGatewayIP:  anycastIP,
-			AnycastGatewayMAC: anycastMAC,
-			Logger:            createTestLogger(),
-		},
-		logger: createTestLogger(),
-	}
-	handler.running.Store(true)
-
-	packet := &ARPPacket{
-		Operation: ARPRequest,
-		TargetIP:  anycastIP,
-		VNI:       1000,
-	}
-
-	response, err := handler.HandleARP(context.Background(), packet)
-	if err != nil {
-		t.Errorf("HandleARP() unexpected error: %v", err)
-	}
-	if !response.ShouldRespond {
-		t.Error("Should respond for anycast gateway IP")
-	}
-	if response.ReplyMAC.String() != anycastMAC.String() {
-		t.Errorf("Reply MAC = %s, want %s", response.ReplyMAC.String(), anycastMAC.String())
-	}
-	if response.ShouldFlood {
-		t.Error("Should not flood for anycast gateway")
-	}
+func assertMACFailed(t *testing.T, err error, operation string) {
+	t.Helper()
+	var macErr *ErrMACOperationFailed
+	require.ErrorAs(t, err, &macErr)
+	assert.Equal(t, operation, macErr.Operation)
 }
 
-// TestHandleARPCachedEntry tests HandleARP with a cached ARP entry.
-func TestHandleARPCachedEntry(t *testing.T) {
-	cachedMAC := net.HardwareAddr{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
-	targetIP := netip.MustParseAddr("192.168.1.100")
+func TestOverlayModeHandler_ForgetMAC(t *testing.T) {
+	t.Run("removes the host and withdraws its routes", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		ctx := context.Background()
+		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ovlHostIP))
+		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, netip.Addr{}))
 
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{
-			ARPSuppression: true,
-			Logger:         createTestLogger(),
-		},
-		logger: createTestLogger(),
-	}
-	handler.running.Store(true)
+		require.NoError(t, f.handler.ForgetMAC(ctx, ovlL2VNI, ovlHostMAC))
 
-	// Add entry to ARP table
-	arpKey := formatARPKey(1000, targetIP)
-	handler.arpTable.Store(arpKey, cachedMAC)
+		assert.Empty(t, f.sw.matching("02:00:00:00:01:10"))
+		assert.Empty(t, f.sw.matching("10.1.0.10"))
+		assert.Len(t, f.speaker.deletedTypes(), 2, "both Type-2 routes withdrawn")
+		_, err := f.handler.LookupMAC(ovlL2VNI, ovlHostMAC)
+		assert.ErrorIs(t, err, ErrMACNotFound)
+	})
 
-	packet := &ARPPacket{
-		Operation: ARPRequest,
-		TargetIP:  targetIP,
-		VNI:       1000,
-	}
+	t.Run("a withdrawal BGP refused is retried by forgetting the MAC again", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		ctx := context.Background()
+		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ovlHostIP))
+		f.speaker.failDeletes(errSwitchDown)
 
-	response, err := handler.HandleARP(context.Background(), packet)
-	if err != nil {
-		t.Errorf("HandleARP() unexpected error: %v", err)
-	}
-	if !response.ShouldRespond {
-		t.Error("Should respond for cached entry")
-	}
-	if response.ReplyMAC.String() != cachedMAC.String() {
-		t.Errorf("Reply MAC = %s, want %s", response.ReplyMAC.String(), cachedMAC.String())
-	}
-	if response.ShouldFlood {
-		t.Error("Should not flood for cached entry")
-	}
+		err := f.handler.ForgetMAC(ctx, ovlL2VNI, ovlHostMAC)
+
+		assertMACFailed(t, err, "withdraw")
+		assert.Empty(t, f.sw.matching("02:00:00:00:01:10"), "the host is gone from the switch")
+		assertMACFailed(t, f.handler.ForgetMAC(ctx, ovlL2VNI, ovlHostMAC), "withdraw")
+		assert.Empty(t, f.speaker.deletedTypes())
+
+		f.speaker.failDeletes(nil)
+		require.NoError(t, f.handler.ForgetMAC(ctx, ovlL2VNI, ovlHostMAC))
+		assert.Equal(t, []bgp.EVPNRouteType{bgp.EVPNTypeMACIPAdvertisement}, f.speaker.deletedTypes())
+		assert.ErrorIs(t, f.handler.ForgetMAC(ctx, ovlL2VNI, ovlHostMAC), ErrMACNotFound, "nothing is left to withdraw")
+	})
+
+	t.Run("a pending withdrawal is dropped once the MAC is learned again", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		ctx := context.Background()
+		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ovlHostIP))
+		f.speaker.failDeletes(errSwitchDown)
+		require.Error(t, f.handler.ForgetMAC(ctx, ovlL2VNI, ovlHostMAC))
+		f.speaker.failDeletes(nil)
+
+		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ovlHostIP))
+
+		_, err := f.handler.LookupMAC(ovlL2VNI, ovlHostMAC)
+		assert.NoError(t, err)
+		assert.Empty(t, f.handler.unwithdrawn)
+	})
+
+	t.Run("removing the VNI drops its pending withdrawals", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		ctx := context.Background()
+		require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ovlHostIP))
+		f.speaker.failDeletes(errSwitchDown)
+		require.Error(t, f.handler.ForgetMAC(ctx, ovlL2VNI, ovlHostMAC))
+		f.speaker.failDeletes(nil)
+
+		require.NoError(t, f.handler.RemoveVNI(ctx, ovlL2VNI))
+
+		assert.Contains(t, f.speaker.deletedTypes(), bgp.EVPNTypeMACIPAdvertisement, "leaving the VNI withdrew the route")
+		assert.Empty(t, f.handler.unwithdrawn)
+		assert.ErrorIs(t, f.handler.ForgetMAC(ctx, ovlL2VNI, ovlHostMAC), ErrMACNotFound)
+	})
+
+	t.Run("a route never advertised is not an error", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		f.speaker.failAdds(errSwitchDown)
+		require.Error(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
+		f.speaker.failAdds(nil)
+
+		assert.NoError(t, f.handler.ForgetMAC(context.Background(), ovlL2VNI, ovlHostMAC))
+	})
+
+	t.Run("refuses invalid, unknown and remote MACs", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		ctx := context.Background()
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+
+		assert.ErrorIs(t, f.handler.ForgetMAC(ctx, ovlL2VNI, nil), ErrMACNil)
+		assert.ErrorIs(t, f.handler.ForgetMAC(ctx, ovlL2VNI, ovlHostMAC), ErrMACNotFound)
+		assert.ErrorIs(t, f.handler.ForgetMAC(ctx, ovlL2VNI, ovlRemoteMAC), ErrMACNotFound, "EVPN owns a remote MAC")
+
+		stopped := newStoppedOverlay(t, nil)
+		assert.ErrorIs(t, stopped.handler.ForgetMAC(ctx, ovlL2VNI, ovlHostMAC), ErrNotRunning)
+	})
+
+	t.Run("a switch refusing the removal keeps the host", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
+		f.sw.fail(errSwitchDown)
+
+		err := f.handler.ForgetMAC(context.Background(), ovlL2VNI, ovlHostMAC)
+
+		assertMACFailed(t, err, "forget")
+		f.sw.fail(nil)
+		_, err = f.handler.LookupMAC(ovlL2VNI, ovlHostMAC)
+		assert.NoError(t, err)
+		assert.Empty(t, f.speaker.deletedTypes())
+	})
 }
 
-// TestHandleARPFlood tests HandleARP when entry is not found.
-func TestHandleARPFlood(t *testing.T) {
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{
-			ARPSuppression: true,
-			Logger:         createTestLogger(),
-		},
-		logger: createTestLogger(),
-	}
-	handler.running.Store(true)
+func TestOverlayModeHandler_LookupMAC(t *testing.T) {
+	f := newOverlayFixture(t, nil).withVNI(t)
+	require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
 
-	// Add VTEPs to replication list
-	handler.addToReplicationList(1000, netip.MustParseAddr("10.0.0.2"))
-	handler.addToReplicationList(1000, netip.MustParseAddr("10.0.0.3"))
+	t.Run("returns a remote entry", func(t *testing.T) {
+		entry, err := f.handler.LookupMAC(ovlL2VNI, ovlRemoteMAC)
 
-	packet := &ARPPacket{
-		Operation: ARPRequest,
-		TargetIP:  netip.MustParseAddr("192.168.1.99"), // Unknown IP
-		VNI:       1000,
-	}
+		require.NoError(t, err)
+		assert.Equal(t, MACSourceRemote, entry.Source)
+		assert.Equal(t, ovlVTEPB, entry.VTEPIP)
+		assert.Equal(t, []netip.Addr{ovlRemoteIP}, entry.IPs)
+		assert.False(t, entry.UpdatedAt.IsZero())
+	})
 
-	response, err := handler.HandleARP(context.Background(), packet)
-	if err != nil {
-		t.Errorf("HandleARP() unexpected error: %v", err)
-	}
-	if response.ShouldRespond {
-		t.Error("Should not respond for unknown IP")
-	}
-	if !response.ShouldFlood {
-		t.Error("Should flood for unknown IP")
-	}
-	if len(response.FloodVTEPs) != 2 {
-		t.Errorf("Expected 2 flood VTEPs, got %d", len(response.FloodVTEPs))
-	}
+	t.Run("refuses invalid and unknown MACs", func(t *testing.T) {
+		_, err := f.handler.LookupMAC(ovlL2VNI, net.HardwareAddr{1})
+		assert.ErrorIs(t, err, ErrMACInvalid)
+
+		_, err = f.handler.LookupMAC(ovlL2VNI+1, ovlRemoteMAC)
+		assert.ErrorIs(t, err, ErrMACNotFound)
+	})
 }
 
-// TestLookupMACNotRunning tests LookupMAC when handler is not running.
-func TestLookupMACNotRunning(t *testing.T) {
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{},
-		logger: createTestLogger(),
-	}
-	// Not running
+func TestOverlayModeHandler_GetStatus(t *testing.T) {
+	t.Run("counts what the overlay forwards", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPC)))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+		require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.2.0.0/24")))
+		require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ovlHostIP))
 
-	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-	_, err := handler.LookupMAC(context.Background(), mac, 1000)
-	if err != ErrNotRunning {
-		t.Errorf("LookupMAC() error = %v, want %v", err, ErrNotRunning)
-	}
+		status := f.handler.GetStatus()
+
+		assert.Equal(t, 1, status.VNICount)
+		assert.Equal(t, 2, status.RemoteVTEPCount)
+		assert.Equal(t, 1, status.LocalMACCount)
+		assert.Equal(t, 1, status.RemoteMACCount)
+		assert.Equal(t, 1, status.PrefixCount)
+		assert.Equal(t, ovlL3VNI, status.L3VNI)
+		assert.True(t, status.ARPSuppressionEnabled)
+		assert.True(t, status.AnycastGatewayConfigured)
+		assert.Positive(t, status.Uptime)
+	})
+
+	t.Run("a stopped handler has no uptime", func(t *testing.T) {
+		status := newStoppedOverlay(t, nil).handler.GetStatus()
+
+		assert.False(t, status.Running)
+		assert.Zero(t, status.Uptime)
+		assert.True(t, status.StartedAt.IsZero())
+	})
 }
 
-// TestLookupMACInvalidMAC tests LookupMAC with invalid MAC.
-func TestLookupMACInvalidMAC(t *testing.T) {
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{},
-		logger: createTestLogger(),
-	}
-	handler.running.Store(true)
-
-	_, err := handler.LookupMAC(context.Background(), nil, 1000)
-	if err != ErrMACNil {
-		t.Errorf("LookupMAC(nil) error = %v, want %v", err, ErrMACNil)
-	}
-}
-
-// TestLookupMACNotFound tests LookupMAC when MAC is not found.
-func TestLookupMACNotFound(t *testing.T) {
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{},
-		logger: createTestLogger(),
-	}
-	handler.running.Store(true)
-
-	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-	_, err := handler.LookupMAC(context.Background(), mac, 1000)
-	if err != ErrMACNotFound {
-		t.Errorf("LookupMAC() error = %v, want %v", err, ErrMACNotFound)
-	}
-}
-
-// TestLookupMACLocalEntry tests LookupMAC finding a local entry.
-func TestLookupMACLocalEntry(t *testing.T) {
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{},
-		logger: createTestLogger(),
-	}
-	handler.running.Store(true)
-
-	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-	entry := &MACEntry{
-		MAC:    mac,
-		VNI:    1000,
-		Source: MACSourceLocal,
-	}
-	handler.localMACs.Store(formatMACKey(1000, mac), entry)
-
-	result, err := handler.LookupMAC(context.Background(), mac, 1000)
-	if err != nil {
-		t.Errorf("LookupMAC() unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("LookupMAC() result should not be nil")
-	}
-	if result.Source != MACSourceLocal {
-		t.Errorf("LookupMAC() source = %v, want %v", result.Source, MACSourceLocal)
-	}
-	// Verify it's a clone
-	if result == entry {
-		t.Error("LookupMAC() should return a clone")
-	}
-}
-
-// TestLookupMACExpiredEntry tests LookupMAC with an expired local entry.
-func TestLookupMACExpiredEntry(t *testing.T) {
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{},
-		logger: createTestLogger(),
-	}
-	handler.running.Store(true)
-
-	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-	entry := &MACEntry{
-		MAC:       mac,
-		VNI:       1000,
-		Source:    MACSourceLocal,
-		ExpiresAt: time.Now().Add(-time.Hour), // Expired
-	}
-	handler.localMACs.Store(formatMACKey(1000, mac), entry)
-
-	_, err := handler.LookupMAC(context.Background(), mac, 1000)
-	if err != ErrMACNotFound {
-		t.Errorf("LookupMAC() for expired entry error = %v, want %v", err, ErrMACNotFound)
-	}
-
-	// Verify entry was removed
-	if _, ok := handler.localMACs.Load(formatMACKey(1000, mac)); ok {
-		t.Error("Expired entry should be removed")
-	}
-}
-
-// TestLookupMACRemoteEntry tests LookupMAC finding a remote entry.
-func TestLookupMACRemoteEntry(t *testing.T) {
-	handler := &OverlayModeHandler{
-		config: &OverlayModeConfig{},
-		logger: createTestLogger(),
-	}
-	handler.running.Store(true)
-
-	mac := net.HardwareAddr{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
-	entry := &MACEntry{
-		MAC:    mac,
-		VNI:    1000,
-		Source: MACSourceRemote,
-	}
-	handler.remoteMACs.Store(formatMACKey(1000, mac), entry)
-
-	result, err := handler.LookupMAC(context.Background(), mac, 1000)
-	if err != nil {
-		t.Errorf("LookupMAC() unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("LookupMAC() result should not be nil")
-	}
-	if result.Source != MACSourceRemote {
-		t.Errorf("LookupMAC() source = %v, want %v", result.Source, MACSourceRemote)
-	}
+func TestMACEntrySource_String(t *testing.T) {
+	assert.Equal(t, "local", MACSourceLocal.String())
+	assert.Equal(t, "remote", MACSourceRemote.String())
 }

@@ -66,34 +66,6 @@ func TestWithPortShard(t *testing.T) {
 	assert.Equal(t, uint64(7), dao.shardID)
 }
 
-func TestWithRemoteMACShard(t *testing.T) {
-	mock := quicbaas.NewMockStorage()
-	require.NoError(t, mock.Start(context.Background()))
-	defer mock.Stop(context.Background())
-
-	logger := logging.DefaultLogger()
-	dao := NewRemoteMACDAO(mock, logger,
-		WithRemoteMACRequestTimeout(5*time.Second),
-		WithRemoteMACShard(15),
-	)
-	assert.NotNil(t, dao)
-	assert.Equal(t, uint64(15), dao.shardID)
-}
-
-func TestWithTunnelShard(t *testing.T) {
-	mock := quicbaas.NewMockStorage()
-	require.NoError(t, mock.Start(context.Background()))
-	defer mock.Stop(context.Background())
-
-	logger := logging.DefaultLogger()
-	dao := NewTunnelDAO(mock, logger,
-		WithTunnelRequestTimeout(5*time.Second),
-		WithTunnelShard(33),
-	)
-	assert.NotNil(t, dao)
-	assert.Equal(t, uint64(33), dao.shardID)
-}
-
 func TestWithVLANShard(t *testing.T) {
 	mock := quicbaas.NewMockStorage()
 	require.NoError(t, mock.Start(context.Background()))
@@ -106,32 +78,4 @@ func TestWithVLANShard(t *testing.T) {
 	)
 	assert.NotNil(t, dao)
 	assert.Equal(t, uint64(55), dao.shardID)
-}
-
-func TestWithVNIMappingShard(t *testing.T) {
-	mock := quicbaas.NewMockStorage()
-	require.NoError(t, mock.Start(context.Background()))
-	defer mock.Stop(context.Background())
-
-	logger := logging.DefaultLogger()
-	dao := NewVNIMappingDAO(mock, logger,
-		WithVNIMappingRequestTimeout(5*time.Second),
-		WithVNIMappingShard(128),
-	)
-	assert.NotNil(t, dao)
-	assert.Equal(t, uint64(128), dao.shardID)
-}
-
-func TestWithVTEPShard(t *testing.T) {
-	mock := quicbaas.NewMockStorage()
-	require.NoError(t, mock.Start(context.Background()))
-	defer mock.Stop(context.Background())
-
-	logger := logging.DefaultLogger()
-	dao := NewVTEPDAO(mock, logger,
-		WithVTEPRequestTimeout(5*time.Second),
-		WithVTEPShard(256),
-	)
-	assert.NotNil(t, dao)
-	assert.Equal(t, uint64(256), dao.shardID)
 }

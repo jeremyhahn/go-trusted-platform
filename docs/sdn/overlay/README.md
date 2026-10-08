@@ -4,19 +4,23 @@ Multi-host overlay networking for east-west VM and container traffic.
 
 ## Overview
 
-The VXLAN overlay subsystem provides Layer 2 connectivity across multiple physical hosts, enabling seamless VM and container communication without requiring physical network reconfiguration. It integrates with the existing SDN policy engine and uses QuicBaaS for distributed state replication.
+The overlay gives every VNI one Layer 2 segment across hosts, and routes
+between VNIs with an anycast gateway on every host. It is EVPN over
+VXLAN: BGP EVPN routes say which MACs, IPs and VNIs each VTEP serves,
+and OpenFlow flows on one OVS bridge forward accordingly through a
+single flow-based VXLAN port.
 
 ## Key Features
 
 | Feature | Description |
 |---------|-------------|
-| **VXLAN Encapsulation** | RFC 7348 compliant tunneling with 24-bit VNI space |
-| **Multi-Host Connectivity** | East-west traffic across physical host boundaries |
-| **VNI-VLAN Mapping** | Automatic VNI = 1000000 + VLAN ID mapping (code default; the [reference network](../../architecture/reference-network.md) uses VNI = E×100000 + n, tracked in #708) |
-| **VTEP Management** | Per-host VXLAN Tunnel Endpoint configuration |
-| **QuicBaaS Replication** | Distributed state synchronization across cluster |
-| **Policy Integration** | Seamless integration with existing 802.1X policy engine |
-| **OpenFlow Control** | Pipeline tables 0-60 for overlay processing |
+| **VXLAN Encapsulation** | RFC 7348, 24-bit VNI, one `remote_ip=flow` port per host |
+| **EVPN Control Plane** | Type-2 MAC/IP, Type-3 IMET and Type-5 prefix routes ([../bgp/evpn.md](../bgp/evpn.md)) |
+| **Decap Authorisation** | a tunnelled frame is accepted only from a VTEP EVPN places on its VNI |
+| **BUM Handling** | ingress replication to the VTEPs of the VNI, from Type-3 routes |
+| **ARP Suppression** | ARP for known bindings answered by a flow, with no packet-in |
+| **Symmetric IRB** | anycast gateway on every VTEP; routed traffic crosses the L3VNI |
+| **VNI Numbering** | overlay network n of environment E is VNI E·100000+n ([reference network](../../architecture/reference-network.md)) |
 
 ## Architecture Overview
 
@@ -24,116 +28,36 @@ The VXLAN overlay subsystem provides Layer 2 connectivity across multiple physic
 Host A                                              Host B
 +---------------------------+                       +---------------------------+
 |  VM1          VM2         |                       |  VM3          VM4         |
-|  VLAN 100     VLAN 200    |                       |  VLAN 100     VLAN 200    |
 |    |            |         |                       |    |            |         |
 |    +-----+------+         |                       |    +-----+------+         |
-|          |                |                       |          |                |
+|          | access port    |                       |          | access port    |
 |    +-----v------+         |                       |    +-----v------+         |
-|    | OVS Bridge |         |                       |    | OVS Bridge |         |
-|    | (br-int)   |         |                       |    | (br-int)   |         |
+|    | OVS br-int |         |                       |    | OVS br-int |         |
+|    | vxlan-evpn |         |                       |    | vxlan-evpn |         |
 |    +-----+------+         |                       |    +-----+------+         |
-|          |                |                       |          |                |
-|    +-----v------+         |                       |    +-----v------+         |
-|    |    VTEP    |         |                       |    |    VTEP    |         |
-|    | 10.0.0.1   |         |                       |    | 10.0.0.2   |         |
-|    +-----+------+         |                       |    +-----+------+         |
-|          |                |                       |          |                |
+|          | VTEP 10.0.0.1  |                       |          | VTEP 10.0.0.2  |
 +----------|----------------+                       +----------|----------------+
-           |         VXLAN Tunnel (VNI 1000100)                |
-           |            UDP Port 4789                          |
+           |      VXLAN, UDP 4789, VNI from the flow           |
            +---------------------------------------------------+
                               |
                       Physical Network
-                       (Underlay MTU 9000)
+                    (underlay MTU >= 9050)
 ```
 
-## VNI-VLAN Mapping
+Each host's flows pick the destination VTEP and VNI per frame; adding a
+host changes flows, not ports. The pipeline is specified in
+[../gateway/overlay-mode.md](../gateway/overlay-mode.md) and the
+components in [architecture.md](architecture.md).
 
-VXLAN Network Identifiers (VNIs) are derived from VLAN IDs using a deterministic formula:
+## VTEP Discovery
 
-```
-VNI = VNI_BASE + VLAN_ID
-VNI = 1000000 + VLAN_ID
-```
+VTEPs learn about each other from EVPN, not from replicated state:
 
-| VLAN ID | VNI | Purpose |
-|---------|-----|---------|
-| 1 | 1000001 | Default |
-| 6 | 1000006 | Quarantine |
-| 7 | 1000007 | Provisioning |
-| 100 | 1000100 | Tenant A Production |
-| 200 | 1000200 | Tenant B Production |
-
-This mapping ensures:
-- No collision with VNI space (0-16777215)
-- Easy debugging (VNI visually correlates with VLAN)
-- Consistent mapping across all hosts
-
-## VTEP (VXLAN Tunnel Endpoint)
-
-Each host runs a VTEP that terminates VXLAN tunnels.
-
-### VTEP Responsibilities
-
-| Function | Description |
-|----------|-------------|
-| Encapsulation | Wrap L2 frames in VXLAN/UDP/IP headers |
-| Decapsulation | Strip tunnel headers and deliver to local bridge |
-| MAC Learning | Track remote MAC addresses per VNI |
-| ARP Suppression | Reduce broadcast traffic via proxy ARP |
-| BUM Handling | Manage Broadcast, Unknown unicast, Multicast |
-
-### VTEP Discovery
-
-VTEPs discover each other through QuicBaaS:
-
-```
-1. Host A registers VTEP: {vtep_ip: 10.0.0.1, vnis: [1000100, 1000200]}
-2. QuicBaaS replicates to all nodes
-3. Host B learns about Host A's VTEP
-4. Host B establishes tunnel to 10.0.0.1 for shared VNIs
-```
-
-## QuicBaaS State Replication
-
-The overlay subsystem uses QuicBaaS for distributed state.
-
-### Replicated State
-
-| Entity | Partition | Description |
-|--------|-----------|-------------|
-| VTEP Registry | `sdn/overlay/vteps` | VTEP IP and capability info |
-| VNI Membership | `sdn/overlay/vnis` | Which VNIs are active on each host |
-| MAC Tables | `sdn/overlay/macs` | Remote MAC-to-VTEP mappings |
-| Tunnel State | `sdn/overlay/tunnels` | Active tunnel status |
-
-### Consistency Model
-
-- **VTEP/VNI changes**: Linearizable (strong consistency)
-- **MAC learning**: Eventual consistency (performance)
-- **Tunnel state**: Eventual consistency (health checks)
-
-## Policy Engine Integration
-
-The overlay subsystem integrates with the existing 802.1X policy engine.
-
-### Flow Processing
-
-When a device authenticates:
-
-1. Policy engine assigns VLAN from device profile
-2. Overlay subsystem derives VNI from VLAN
-3. OpenFlow rules installed for local and remote forwarding
-4. VTEP tunnels established to hosts with same VNI
-
-### Security Enforcement
-
-| Layer | Enforcement |
-|-------|-------------|
-| Port Authentication | 802.1X certificate validation |
-| VLAN Assignment | Policy-based VLAN from device profile |
-| VNI Isolation | VNI derived from VLAN |
-| ACLs | OpenFlow rules per VNI |
+1. Host A adds a VNI and joins its EVI, originating a Type-3 route.
+2. Host B imports it: Host A's VTEP is authorised to send on that VNI and
+   joins the VNI's flood list.
+3. As hosts learn local MACs, their Type-2 routes install the MAC and IRB
+   forwarding on every other host.
 
 ## Quick Start
 
@@ -149,9 +73,8 @@ sdn:
     underlay-interface: "eth0"
 ```
 
-The VTEP IP is derived from the node's public IPv4 address; MTU, VNI
-base, and bridge name use applied defaults (see
-[Configuration](configuration.md)).
+The VTEP IP is derived from the node's public IPv4 address; MTU and
+bridge name use applied defaults (see [Configuration](configuration.md)).
 
 ### Verify VTEP Status
 
@@ -162,20 +85,16 @@ platformctl sdn overlay vtep list
 
 # List active VNIs
 platformctl sdn overlay vni list
-
-# Show tunnel endpoints
-platformctl sdn overlay tunnel list
 ```
 
-### Check Tunnel Connectivity
+### Check Connectivity
 
 ```bash
-# Verify the remote VTEP is registered and tunnels exist
-platformctl sdn overlay vtep get node-002
-platformctl sdn overlay tunnel list --vni 1000100
+# The one VXLAN port and its options
+ovs-vsctl list interface vxlan-evpn
 
-# Check underlay reachability to the remote VTEP
-ping 10.0.0.2
+# Underlay reachability and MTU to the remote VTEP
+ping -M do -s 9022 10.0.0.2
 nc -zuv 10.0.0.2 4789
 ```
 
@@ -183,75 +102,42 @@ nc -zuv 10.0.0.2 4789
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](architecture.md) | Detailed component design and data flows |
+| [Architecture](architecture.md) | Components, the VXLAN port, encapsulation and MTU |
+| [Overlay mode](../gateway/overlay-mode.md) | The OpenFlow data plane |
 | [Configuration](configuration.md) | Complete configuration reference |
 | [API Reference](api-reference.md) | Multi-protocol API documentation |
 
-## Integration with SDN Components
-
-| Component | Integration |
-|-----------|-------------|
-| **OVS Bridge** | VXLAN ports attached to integration bridge |
-| **OpenFlow** | Pipeline tables 0-60 for overlay processing |
-| **Policy Engine** | VLAN-to-VNI mapping on device authentication |
-| **QuicBaaS** | Distributed state for VTEP and MAC tables |
-| **Cluster** | Multi-host coordination and health monitoring |
-
 ## Performance Considerations
 
-| Aspect | Recommendation |
-|--------|----------------|
-| Underlay MTU | 9000 (jumbo frames) to avoid fragmentation |
-| VXLAN Overhead | 50 bytes (Ethernet + IP + UDP + VXLAN) |
-| Effective VM MTU | 8950 with jumbo frames, 1450 with standard MTU |
-| Hardware Offload | Enable VXLAN offload on supported NICs |
+| Aspect | Value |
+|--------|-------|
+| Overlay (workload) MTU | 9000 |
+| VXLAN overhead | 50 bytes (Ethernet + IP + UDP + VXLAN) |
+| Underlay MTU | at least 9050; platform switch ports run 9216 |
+| Hardware offload | enable VXLAN offload on supported NICs |
 
 ## Security Model
 
-### Tunnel Security
-
-- VTEP-to-VTEP traffic traverses trusted underlay network
-- VNI isolation prevents cross-tenant traffic
-- MAC spoofing detected via OpenFlow rules
-- QuicBaaS communication uses mTLS
-
-### Defense in Depth
-
-```
-Layer 1: Physical network isolation (underlay)
-Layer 2: VNI segmentation (overlay)
-Layer 3: OpenFlow ACLs per VNI
-Layer 4: 802.1X port authentication
-Layer 5: mTLS for control plane
-```
+- A VTEP can inject frames only into the VNIs its EVPN routes place it
+  on; everything else from the VXLAN port is dropped in table 10.
+- Before a route is installed, the handler's `VTEPAdmitter` vets the
+  VTEP; EVPN without one is a config error (`ErrAdmitterNil`). Nothing
+  backs it in gatewayd yet (#709), so encryption and
+  admission of VTEP-to-VTEP traffic are still the underlay's to provide.
+- VNI isolation keeps segments apart; routing between them crosses the
+  anycast gateway.
 
 ## Troubleshooting
 
-### Common Issues
-
 | Issue | Check |
 |-------|-------|
-| No tunnel connectivity | Verify underlay MTU (9000 recommended) |
-| MAC not learned | Check QuicBaaS replication status |
-| Dropped packets | Verify OpenFlow rules with `ovs-ofctl dump-flows` |
-| VTEP not discovered | Check QuicBaaS cluster health |
-
-### Debug Commands
-
-```bash
-# Show VXLAN interface status
-ovs-vsctl show | grep vxlan
-
-# Dump overlay flows
-ovs-ofctl dump-flows br-int table=10
-
-# Check QuicBaaS replication
-platformctl cluster status
-```
+| No overlay connectivity | underlay MTU is at least 9050 on every hop |
+| Remote MAC unreachable | the remote host's Type-2 route is received (`../bgp/evpn.md`) |
+| Frames from a VTEP dropped | its Type-3 route for the VNI is received; table 10 has a `tun_src` flow for it |
+| Dropped packets | `ovs-ofctl -O OpenFlow13 dump-flows br-int` |
 
 ## See Also
 
 - [SDN Architecture](../architecture.md)
 - [SDN Configuration](../configuration.md)
-- [Policy Engine](../802.1x.md)
-- [Cluster Configuration](../../cluster/README.md)
+- [BGP EVPN](../bgp/evpn.md)

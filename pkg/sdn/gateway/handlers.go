@@ -68,9 +68,9 @@ var serviceBuilders = map[string]serviceBuilder{
 // operator reads in ErrServiceUnavailable; it names the missing piece, not
 // a promise.
 var serviceRefusals = map[string]string{
-	ServiceOverlay: "the overlay service has no runnable implementation: the overlay config carries no VTEP fields and " +
-		"the overlay handler's encap flow has no output action (pkg/sdn/gateway/modes/overlay.go); " +
-		"tracked under epic #553",
+	ServiceOverlay: "the overlay handler (modes.NewOverlayModeHandler) forwards over a flow-based VXLAN port, but the " +
+		"gateway overlay section carries no VTEP or access-port fields to build it from, and nothing backs its " +
+		"VTEP admission (modes.VTEPAdmitter) yet; tracked under #709",
 	ServiceEdge: "the edge service constructor (modes.NewEdgeModeHandler) needs an IPv6 pool, ACME endorse/enroll " +
 		"toggles and a FROST pool the gateway runtime does not inject; tracked under epic #553",
 	ServiceDHCP: "the DHCP service needs an IPAM allocator gatewayd does not have (GatewayRuntime carries none, " +
