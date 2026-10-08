@@ -8,6 +8,7 @@ package service
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
@@ -80,6 +81,81 @@ func (s *Service) RecordDeviceVerdict(ctx context.Context, v verdict.DeviceVerdi
 		s.dispatchVerdict(ctx, v.DeviceID, v.HostID, false, v.Reason)
 	}
 	return nil
+}
+
+// RecordedDeviceVerdict is a device verdict with the event-log timestamp that
+// made it durable.
+type RecordedDeviceVerdict struct {
+	Verdict    verdict.DeviceVerdict
+	EventID    string
+	RecordedAt time.Time
+}
+
+// ErrDeviceVerdictNotFound is returned when no device quote verdict has been
+// recorded for a device.
+type ErrDeviceVerdictNotFound struct {
+	DeviceID uint64
+}
+
+func (e ErrDeviceVerdictNotFound) Error() string {
+	return "attestation/service: latest device verdict not found for device " + strconv.FormatUint(e.DeviceID, 10)
+}
+
+// LatestDeviceVerdict returns the newest recorded device quote verdict for the
+// device. The attestation event store is the source of truth: it already holds
+// the durable verdict trail and supplies the freshness timestamp used by
+// relying-party admission checks.
+func (s *Service) LatestDeviceVerdict(ctx context.Context, deviceID uint64) (*RecordedDeviceVerdict, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	if deviceID == 0 {
+		return nil, ErrDeviceVerdictNotFound{DeviceID: deviceID}
+	}
+
+	events, err := s.store.ListEvents(store.EventFilter{})
+	if err != nil {
+		return nil, err
+	}
+	want := strconv.FormatUint(deviceID, 10)
+	for _, ev := range events {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		if ev == nil || ev.Metadata["device_id"] != want {
+			continue
+		}
+		switch ev.Kind {
+		case store.EventKindDeviceQuoteVerified, store.EventKindDeviceQuoteRejected:
+			return recordedVerdictFromEvent(ev, deviceID), nil
+		default:
+			continue
+		}
+	}
+	return nil, ErrDeviceVerdictNotFound{DeviceID: deviceID}
+}
+
+func recordedVerdictFromEvent(ev *store.Event, deviceID uint64) *RecordedDeviceVerdict {
+	passed := ev.Kind == store.EventKindDeviceQuoteVerified
+	profileID, _ := strconv.ParseUint(ev.Metadata["profile_id"], 10, 64)
+	return &RecordedDeviceVerdict{
+		Verdict: verdict.DeviceVerdict{
+			DeviceID:       deviceID,
+			HostID:         ev.HostID,
+			Serial:         ev.Metadata["serial"],
+			Passed:         passed,
+			Cryptographic:  ev.Metadata["cryptographic"] == "true",
+			Reason:         ev.Reason,
+			BaselineSource: ev.Metadata["baseline_source"],
+			ProfileID:      profileID,
+		},
+		EventID:    ev.ID,
+		RecordedAt: ev.Timestamp,
+	}
 }
 
 // dispatchVerdict fans one attestation outcome out to every registered

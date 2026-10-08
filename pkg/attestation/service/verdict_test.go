@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
@@ -75,6 +76,70 @@ func TestRecordDeviceVerdict_PassNotifiesObserversAndLogs(t *testing.T) {
 	events, _ := svc.Store().ListEvents(store.EventFilter{HostID: "node-7"})
 	if events[0].Metadata["baseline_source"] != "signed" || events[0].Metadata["profile_id"] != "3" || events[0].Metadata["cryptographic"] != "false" {
 		t.Fatalf("event metadata incomplete: %v", events[0].Metadata)
+	}
+}
+
+func TestLatestDeviceVerdict_ReturnsNewestRecordedVerdict(t *testing.T) {
+	svc, _ := newVerdictService(t)
+	older := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	newer := older.Add(time.Minute)
+
+	if err := svc.Store().PutEvent(&store.Event{
+		ID:        "older-pass",
+		Kind:      store.EventKindDeviceQuoteVerified,
+		HostID:    "node-7",
+		Timestamp: older,
+		Outcome:   "pass",
+		Metadata: map[string]string{
+			"device_id":       "7",
+			"serial":          "SN7",
+			"cryptographic":   "false",
+			"baseline_source": "signed",
+			"profile_id":      "3",
+		},
+	}); err != nil {
+		t.Fatalf("put older event: %v", err)
+	}
+	if err := svc.Store().PutEvent(&store.Event{
+		ID:        "newer-fail",
+		Kind:      store.EventKindDeviceQuoteRejected,
+		HostID:    "node-7",
+		Timestamp: newer,
+		Outcome:   "fail",
+		Reason:    "quote signature mismatch",
+		Metadata: map[string]string{
+			"device_id":       "7",
+			"serial":          "SN7",
+			"cryptographic":   "true",
+			"baseline_source": "signed",
+			"profile_id":      "3",
+		},
+	}); err != nil {
+		t.Fatalf("put newer event: %v", err)
+	}
+
+	got, err := svc.LatestDeviceVerdict(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("LatestDeviceVerdict: %v", err)
+	}
+	if got.EventID != "newer-fail" || !got.RecordedAt.Equal(newer) {
+		t.Fatalf("expected newest event, got id=%q at=%s", got.EventID, got.RecordedAt)
+	}
+	if got.Verdict.Passed || !got.Verdict.Cryptographic || got.Verdict.BaselineSource != "signed" || got.Verdict.ProfileID != 3 {
+		t.Fatalf("unexpected verdict: %+v", got.Verdict)
+	}
+}
+
+func TestLatestDeviceVerdict_NotFoundIsTyped(t *testing.T) {
+	svc, _ := newVerdictService(t)
+
+	_, err := svc.LatestDeviceVerdict(context.Background(), 99)
+	var notFound ErrDeviceVerdictNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected ErrDeviceVerdictNotFound, got %v", err)
+	}
+	if notFound.DeviceID != 99 {
+		t.Fatalf("wrong device id: %d", notFound.DeviceID)
 	}
 }
 
