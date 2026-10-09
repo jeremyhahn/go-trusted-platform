@@ -288,6 +288,7 @@ func (s *gatewayRESTService) ListAllocations(ctx context.Context, poolID string)
 	return resp, nil
 }
 
+// GetAdmittedVTEP returns one VTEP the gateway reported as admitted.
 func (s *gatewayRESTService) GetAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (*rest.GatewayAdmittedVTEPResponse, error) {
 	if s.reader == nil {
 		return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "gateway overlay admission"}
@@ -299,6 +300,7 @@ func (s *gatewayRESTService) GetAdmittedVTEP(ctx context.Context, gatewayID, vte
 	return admittedVTEPToREST(resp.GetVtep()), nil
 }
 
+// ListAdmittedVTEPs returns every VTEP the gateway reported as admitted.
 func (s *gatewayRESTService) ListAdmittedVTEPs(ctx context.Context, gatewayID string) ([]rest.GatewayAdmittedVTEPResponse, error) {
 	if s.reader == nil {
 		return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "gateway overlay admission"}

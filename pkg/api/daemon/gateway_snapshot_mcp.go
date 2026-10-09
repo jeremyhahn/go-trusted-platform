@@ -61,6 +61,7 @@ func (t gatewaySnapshotTools) GatewaySnapshots(ctx context.Context) ([]interface
 	return out, nil
 }
 
+// GatewayAdmittedVTEP returns one VTEP the gateway reported as admitted.
 func (t gatewaySnapshotTools) GatewayAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (interface{}, error) {
 	if t.reader == nil {
 		return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayAdmittedVTEP"}
@@ -72,6 +73,7 @@ func (t gatewaySnapshotTools) GatewayAdmittedVTEP(ctx context.Context, gatewayID
 	return resp.GetVtep(), nil
 }
 
+// GatewayAdmittedVTEPs returns every VTEP the gateway reported as admitted.
 func (t gatewaySnapshotTools) GatewayAdmittedVTEPs(ctx context.Context, gatewayID string) ([]interface{}, error) {
 	if t.reader == nil {
 		return nil, ErrGatewayOperationNotImplemented{Operation: "GatewayAdmittedVTEPs"}

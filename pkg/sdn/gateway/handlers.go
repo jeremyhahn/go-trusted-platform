@@ -737,6 +737,8 @@ func runVerdictFollower(ctx context.Context, stream OverlayVerdictStream, admitt
 	}
 }
 
+// overlayRevokerProxy hands VTEP revocations to the overlay handler once it is
+// running, and refuses them before then.
 type overlayRevokerProxy struct {
 	mu      sync.RWMutex
 	revoker OverlayVTEPRevoker

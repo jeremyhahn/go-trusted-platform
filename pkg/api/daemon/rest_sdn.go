@@ -44,6 +44,8 @@ func (s *RESTServer) SetGatewayIPAMService(allocator ipam.Allocator) {
 	s.logger.Info("Gateway REST routes registered (IPAM + gateway status)")
 }
 
+// SetGatewaySnapshotService wires the gateway telemetry reader that answers
+// the admitted-VTEP REST endpoints. A nil reader leaves them unconfigured.
 func (s *RESTServer) SetGatewaySnapshotService(reader GatewaySnapshotReader) {
 	if reader == nil {
 		return

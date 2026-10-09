@@ -175,6 +175,8 @@ func (e ErrIPAllocationNotFound) Error() string {
 	return fmt.Sprintf("IP allocation not found: %s", e.IP)
 }
 
+// ErrGatewayAdmittedVTEPNotFound is returned when the gateway has not admitted
+// the requested VTEP.
 type ErrGatewayAdmittedVTEPNotFound struct {
 	VTEP string
 }
@@ -407,6 +409,8 @@ type IPAllocationListResponse struct {
 	Timestamp   time.Time              `json:"timestamp"`
 }
 
+// GatewayAdmittedVTEPResponse is a remote VTEP the gateway admitted to the
+// overlay, with the device and attestation verdict that admitted it.
 type GatewayAdmittedVTEPResponse struct {
 	VTEP           string     `json:"vtep"`
 	DeviceID       uint64     `json:"device_id,omitempty"`
@@ -419,6 +423,7 @@ type GatewayAdmittedVTEPResponse struct {
 	VerdictAt      *time.Time `json:"verdict_at,omitempty"`
 }
 
+// GatewayAdmittedVTEPListResponse lists every VTEP a gateway admitted.
 type GatewayAdmittedVTEPListResponse struct {
 	VTEPs     []GatewayAdmittedVTEPResponse `json:"vteps"`
 	Count     int                           `json:"count"`

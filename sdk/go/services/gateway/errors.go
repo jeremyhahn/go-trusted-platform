@@ -53,6 +53,7 @@ func (e *ErrListSnapshotsFailed) Error() string {
 
 func (e *ErrListSnapshotsFailed) Unwrap() error { return e.Cause }
 
+// ErrGetAdmittedVTEPFailed reports an admitted VTEP read that failed.
 type ErrGetAdmittedVTEPFailed struct {
 	GatewayID string
 	VTEP      string
@@ -65,6 +66,7 @@ func (e *ErrGetAdmittedVTEPFailed) Error() string {
 
 func (e *ErrGetAdmittedVTEPFailed) Unwrap() error { return e.Cause }
 
+// ErrListAdmittedVTEPsFailed reports an admitted VTEP listing that failed.
 type ErrListAdmittedVTEPsFailed struct {
 	GatewayID string
 	Cause     error

@@ -70,6 +70,7 @@ func (a gatewaySnapshotQUICAdapter) ListSnapshots(ctx context.Context) ([]*quic.
 	return out, nil
 }
 
+// GetAdmittedVTEP returns one VTEP the gateway reported as admitted.
 func (a gatewaySnapshotQUICAdapter) GetAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (*quic.GatewayAdmittedVTEPInfo, error) {
 	if a.reader == nil {
 		return nil, errGatewayFeatureNotConfigured
@@ -82,6 +83,7 @@ func (a gatewaySnapshotQUICAdapter) GetAdmittedVTEP(ctx context.Context, gateway
 	return &entry, nil
 }
 
+// ListAdmittedVTEPs returns every VTEP the gateway reported as admitted.
 func (a gatewaySnapshotQUICAdapter) ListAdmittedVTEPs(ctx context.Context, gatewayID string) ([]*quic.GatewayAdmittedVTEPInfo, error) {
 	if a.reader == nil {
 		return nil, errGatewayFeatureNotConfigured

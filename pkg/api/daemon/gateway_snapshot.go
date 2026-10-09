@@ -117,6 +117,8 @@ func (s *GatewayService) ListGatewaySnapshots(ctx context.Context, req *platform
 	return &platformv1.ListGatewaySnapshotsResponse{Snapshots: out}, nil
 }
 
+// GetGatewayAdmittedVTEP returns one VTEP the gateway last reported as
+// admitted to its overlay, or NotFound when that report does not hold it.
 func (s *GatewayService) GetGatewayAdmittedVTEP(ctx context.Context, req *platformv1.GetGatewayAdmittedVTEPRequest) (*platformv1.GetGatewayAdmittedVTEPResponse, error) {
 	vtep := strings.TrimSpace(req.GetVtep())
 	if vtep == "" {
@@ -134,6 +136,9 @@ func (s *GatewayService) GetGatewayAdmittedVTEP(ctx context.Context, req *platfo
 	return nil, status.Errorf(codes.NotFound, "gateway admitted VTEP %s was not found", vtep)
 }
 
+// ListGatewayAdmittedVTEPs returns the VTEPs the gateway reported as admitted
+// in its latest telemetry snapshot. A gateway that reports no overlay section
+// answers that the overlay is not configured.
 func (s *GatewayService) ListGatewayAdmittedVTEPs(ctx context.Context, req *platformv1.ListGatewayAdmittedVTEPsRequest) (*platformv1.ListGatewayAdmittedVTEPsResponse, error) {
 	snapResp, err := s.GetGatewaySnapshot(ctx, &platformv1.GetGatewaySnapshotRequest{GatewayId: req.GetGatewayId()})
 	if err != nil {
