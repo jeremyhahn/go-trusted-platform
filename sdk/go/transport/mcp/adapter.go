@@ -224,6 +224,11 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.GatewayService/GetPerfConntrack": "gateway_perf_conntrack",
 	"/platform.v1.GatewayService/GetNAT64Status":   "gateway_nat64_status",
 
+	// Admitted overlay VTEPs — tools in pkg/api/mcp/gateway_tools.go. The
+	// single-VTEP tool returns the bare record; see gateway_admitted_vtep.go.
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   "gateway_admitted_vtep",
+	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": "gateway_admitted_vteps",
+
 	// Daemon / Health — proto: pkg/api/grpc/proto/daemon.proto
 	"/platform.v1.PlatformDaemon/GetHealth":        "platform_health",
 	"/platform.v1.PlatformDaemon/GetStatus":        "platform_daemon_status",

@@ -37,11 +37,27 @@ type restResponseDecoder func(raw []byte, reply interface{}) error
 // custom decoding. Methods absent from this map decode directly into the
 // reply via decodeJSONResult (protojson for pb messages).
 var restResponseDecoders = map[string]restResponseDecoder{
-	"/platform.v1.ConfigDeliveryService/FetchConfig":  decodeProvisioningFetchConfig,
-	"/platform.v1.ConfigDeliveryService/PollSession":  decodeProvisioningPollSession,
-	"/platform.v1.ConfigDeliveryService/ListSessions": decodeProvisioningListSessions,
-	"/platform.v1.ConfigDeliveryService/GetSession":   decodeProvisioningGetSession,
-	"/platform.v1.GatewayService/GetNAT64Status":      decodeGatewayNAT64Status,
+	"/platform.v1.ConfigDeliveryService/FetchConfig":     decodeProvisioningFetchConfig,
+	"/platform.v1.ConfigDeliveryService/PollSession":     decodeProvisioningPollSession,
+	"/platform.v1.ConfigDeliveryService/ListSessions":    decodeProvisioningListSessions,
+	"/platform.v1.ConfigDeliveryService/GetSession":      decodeProvisioningGetSession,
+	"/platform.v1.GatewayService/GetNAT64Status":         decodeGatewayNAT64Status,
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP": decodeGatewayAdmittedVTEP,
+}
+
+// decodeGatewayAdmittedVTEP wraps the bare VTEP record the admitted-VTEP
+// route returns into the gRPC reply.
+func decodeGatewayAdmittedVTEP(raw []byte, reply interface{}) error {
+	out, ok := reply.(*platformv1.GetGatewayAdmittedVTEPResponse)
+	if !ok {
+		return ErrUnexpectedReplyType{Method: "/platform.v1.GatewayService/GetGatewayAdmittedVTEP"}
+	}
+	vtep := &platformv1.GatewayAdmittedVTEP{}
+	if err := decodeJSONResult(raw, vtep); err != nil {
+		return err
+	}
+	out.Vtep = vtep
+	return nil
 }
 
 // decodeGatewayNAT64Status wraps the bare status object the NAT64 route

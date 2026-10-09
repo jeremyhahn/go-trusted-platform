@@ -56,7 +56,12 @@ gatewayd overlay handler maintains: punted, answered, meter-dropped,
 queue-dropped, and fell-through. The admitted-VTEP read/list verbs are backed
 by the same service layer and are exposed on REST, gRPC, QUIC, MCP, Unix and
 the SDK/CLI; they return `NotFound` for an address that is not currently
-admitted.
+admitted, and `Unavailable` (REST 503) on a gateway with no overlay section.
+The Go SDK reaches them on every transport: REST uses the two `GET` routes
+above (daemon REST stack only), QUIC translates to and from the
+`Gateway*AdmittedVTEP*` wire structs (whose field names differ from the pb
+messages, with `verdict_at` as Unix seconds), and REST and MCP wrap the bare
+single-VTEP record into `GetGatewayAdmittedVTEPResponse.vtep`.
 
 **`SetGatewayMode` is the deprecated compatibility surface.** `GatewayMode`
 carries a deprecation notice in `pkg/sdn/gateway/compat.go` and maps only three

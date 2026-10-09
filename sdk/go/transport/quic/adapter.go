@@ -223,6 +223,13 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 		if _, emptyBody := categoryEmptyBodyMethods[method]; emptyBody {
 			payloadArgs = nil
 		}
+		if encode, translated := categoryRequestEncoders[method]; translated {
+			wire, err := encode(args)
+			if err != nil {
+				return status.Error(codes.Internal, err.Error())
+			}
+			payloadArgs = wire
+		}
 
 		payload, err := buildCategoryPayload(subOpcode, payloadArgs)
 		if err != nil {
@@ -437,6 +444,12 @@ var categorySubOpcodeMap = map[string]byte{
 	// NAT64 translator status — sub-opcode 0x39, next after the perf
 	// range. Server dispatcher: pkg/api/quic/gateway_nat64_handlers.go.
 	"/platform.v1.GatewayService/GetNAT64Status": quicapi.OpGatewayNAT64Status,
+
+	// Admitted overlay VTEPs — read from the gateway telemetry snapshot.
+	// Server dispatcher: pkg/api/quic/gateway_handlers.go; requests and
+	// responses are translated in gateway_admitted_vtep.go.
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   quicapi.OpGatewayAdmittedVTEP,
+	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": quicapi.OpGatewayListAdmittedVTEPs,
 }
 
 // init asserts the cross-table invariant: every gRPC method whose
@@ -663,6 +676,9 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.GatewayService/GetPerfDatapath":  quicapi.OpGatewayCategory,
 	"/platform.v1.GatewayService/GetPerfConntrack": quicapi.OpGatewayCategory,
 	"/platform.v1.GatewayService/GetNAT64Status":   quicapi.OpGatewayCategory,
+
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   quicapi.OpGatewayCategory,
+	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": quicapi.OpGatewayCategory,
 
 	"/platform.v1.EABService/CreateCredential":          quicapi.OpProvisioningCategory,
 	"/platform.v1.EABService/GetCredential":             quicapi.OpProvisioningCategory,

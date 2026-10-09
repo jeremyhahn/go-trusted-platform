@@ -621,6 +621,21 @@ var templatedRouteTable = map[string]templatedRoute{
 		queryParams: []queryParam{{name: "handle", field: "handle"}},
 	},
 
+	// Admitted overlay VTEPs — server registrations in
+	// pkg/api/rest/gateway_handlers.go::RegisterRoutes. An empty gateway_id
+	// is omitted, so the server answers for this node's own gateway.
+	"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": {
+		path:        "/api/v1/sdn/gateway/overlay/vteps",
+		method:      http.MethodGet,
+		queryParams: []queryParam{{name: "gateway_id", field: "gateway_id"}},
+	},
+	"/platform.v1.GatewayService/GetGatewayAdmittedVTEP": {
+		path:        "/api/v1/sdn/gateway/overlay/vteps/{vtep}",
+		method:      http.MethodGet,
+		pathParams:  []pathParam{{placeholder: "{vtep}", field: "vtep"}},
+		queryParams: []queryParam{{name: "gateway_id", field: "gateway_id"}},
+	},
+
 	"/platform.v1.GatewayService/GetPerfDatapath": {
 		path:        "/api/v1/sdn/gateway/perf/datapath",
 		method:      http.MethodGet,

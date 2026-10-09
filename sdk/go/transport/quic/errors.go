@@ -116,3 +116,15 @@ type ErrInvalidReplyType struct {
 func (e ErrInvalidReplyType) Error() string {
 	return fmt.Sprintf("unexpected reply message type for gRPC method %s", e.Method)
 }
+
+// ErrInvalidArgsType indicates a category-opcode request encoder received
+// a request message of an unexpected concrete type. Like
+// ErrInvalidReplyType, it is a programming error in the method routing.
+type ErrInvalidArgsType struct {
+	Method string
+}
+
+// Error implements the error interface.
+func (e ErrInvalidArgsType) Error() string {
+	return fmt.Sprintf("unexpected request message type for gRPC method %s", e.Method)
+}
