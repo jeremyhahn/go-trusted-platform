@@ -51,9 +51,11 @@ sdn:
       fabric-interface: bond0
       local-address: 10.20.0.11
       static-peers: [10.20.0.1, 10.20.0.2]   # route reflectors, gateways
+      certificate-file: /etc/platform/ipsec/tunnel.pem   # leaf, then its CA chain
       token:
         slot: 0
         handle: "6970736563"                  # CKA_ID of the IKE key, hex
+        pin-file: /etc/platform/ipsec/token.pin
 ```
 
 | Parameter | Type | Default | Rule |
@@ -62,10 +64,12 @@ sdn:
 | fabric-interface | string | — | Required; a Linux interface name (1–15 characters) |
 | local-address | string | — | Required; this VTEP's unicast address, the IKE endpoint and certificate identity |
 | static-peers | []string | none | Explicit per-peer connections (route reflectors, gateways); single unicast addresses of the local address's family, no duplicates, never the local address. There is no wildcard peer |
-| vici-socket | string | `/var/run/charon.vici` | Absolute path |
+| vici-socket | string | `/var/run/charon.vici` | Absolute path. platformd refuses the socket unless it is mode 0600 and owned by platformd's user |
+| certificate-file | string | none | Absolute path; PEM tunnel certificate followed by its CA chain, read on every attach by `ipsec.FileIdentity`. Required when the identity comes from files |
 | token.module | string | `/usr/lib/pkcs11/p11-kit-client.so` | Absolute path; the p11-kit client that forwards to the node-local xkms token |
 | token.slot | uint32 | 0 | Token slot holding the IKE key |
 | token.handle | string | — | Required; the key's CKA_ID in hex |
+| token.pin-file | string | none | Absolute path; its first line is the token PIN, read once into a memguard enclave. Without it `load-token` sends no PIN |
 | cp-outage-tolerance | duration | 24h | Control-plane outage the overlay rides through on the certificate it holds |
 | cert-lifetime | duration | 3 × cp-outage-tolerance | At least 3 × cp-outage-tolerance. IKE reauthentication runs at half of it |
 | replay-window | uint32 | 1024 | At least 1024 |

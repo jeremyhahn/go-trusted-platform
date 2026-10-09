@@ -30,8 +30,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/vici"
 )
 
 // Defaults and limits for Config.
@@ -91,11 +89,17 @@ type Config struct {
 	// entry is a single address; there is no wildcard peer.
 	StaticPeers []string `yaml:"static-peers,omitempty" json:"static_peers,omitempty" mapstructure:"static-peers"`
 
-	// VICISocket is charon's control socket. Default vici.DefaultSocket.
+	// VICISocket is charon's control socket, which must be mode 0600 and
+	// owned by platformd's user. Default DefaultVICISocket.
 	VICISocket string `yaml:"vici-socket,omitempty" json:"vici_socket,omitempty" mapstructure:"vici-socket"`
 
 	// Token locates the IKE private key in the node-local token.
 	Token TokenConfig `yaml:"token" json:"token" mapstructure:"token"`
+
+	// CertificateFile is a PEM file holding the tunnel certificate, then
+	// the CA certificates peer certificates chain to. FileIdentity loads
+	// it; a node whose identity comes from issuance leaves it empty.
+	CertificateFile string `yaml:"certificate-file,omitempty" json:"certificate_file,omitempty" mapstructure:"certificate-file"`
 
 	// CertLifetime is the VTEP certificate lifetime. Default and minimum:
 	// OutageFactor × CPOutageTolerance.
@@ -128,6 +132,10 @@ type TokenConfig struct {
 	// Handle is the key's CKA_ID in hex, as the KMS set it when the key
 	// was created.
 	Handle string `yaml:"handle" json:"handle" mapstructure:"handle"`
+
+	// PINFile holds the token PIN on its first line. FileIdentity reads
+	// it once into an enclave. Empty when the token needs no PIN.
+	PINFile string `yaml:"pin-file,omitempty" json:"pin_file,omitempty" mapstructure:"pin-file"`
 }
 
 // Validate checks the section. A disabled or absent section is valid.
@@ -147,6 +155,9 @@ func (c *Config) Validate() error {
 	}
 	if c.VICISocket != "" && !filepath.IsAbs(c.VICISocket) {
 		return &ConfigError{Field: "vici-socket", Err: ErrRelativePath}
+	}
+	if c.CertificateFile != "" && !filepath.IsAbs(c.CertificateFile) {
+		return &ConfigError{Field: "certificate-file", Err: ErrRelativePath}
 	}
 	if err := c.Token.validate(); err != nil {
 		return err
@@ -196,6 +207,9 @@ func validatePeers(local netip.Addr, peers []string) error {
 func (t *TokenConfig) validate() error {
 	if t.Module != "" && !filepath.IsAbs(t.Module) {
 		return &ConfigError{Field: "token.module", Err: ErrRelativePath}
+	}
+	if t.PINFile != "" && !filepath.IsAbs(t.PINFile) {
+		return &ConfigError{Field: "token.pin-file", Err: ErrRelativePath}
 	}
 	if t.Handle == "" {
 		return &ConfigError{Field: "token.handle", Err: ErrRequired}
@@ -269,12 +283,12 @@ func (c *Config) Peers() ([]netip.Addr, error) {
 	return out, nil
 }
 
-// EffectiveVICISocket is the configured socket or vici.DefaultSocket.
+// EffectiveVICISocket is the configured socket or DefaultVICISocket.
 func (c *Config) EffectiveVICISocket() string {
 	if c.VICISocket != "" {
 		return c.VICISocket
 	}
-	return vici.DefaultSocket
+	return DefaultVICISocket
 }
 
 // EffectiveTokenModule is the configured module or DefaultTokenModule.

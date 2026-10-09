@@ -109,32 +109,88 @@ code never touches key material or ESP.
 
 | Piece | Package | Owns |
 |-------|---------|------|
-| VICI client | `pkg/sdn/ipsec/vici` | charon's control socket: commands, streamed commands, events |
+| VICI adapter | `pkg/sdn/ipsec` (`Session`, `EventStream`, `Dialer`; `VICIDialer`) | charon's control socket through `github.com/strongswan/govici`, and the socket check |
 | Configuration | `pkg/sdn/ipsec` (`Config`) | the `overlay.ipsec` section and its derived timers |
 | Controller | `pkg/sdn/ipsec` (`Controller`) | the peer set, one charon connection per peer, eviction, the identity check |
 | Fail-closed floor | `pkg/sdn/ipsec` (`Filter`, `BlockPolicy`) | the nftables table and XFRM block policies that leave no cleartext path when charon is down |
 
-### VICI client
+| Tunnel identity | `pkg/sdn/ipsec` (`TunnelIdentity`, `IdentityProvider`; `FileIdentity`) | the tunnel certificate, its chain and the token key charon signs with |
+| Runner | `pkg/sdn/ipsec` (`Runner`) | the connection to charon: dial, attach, follow events, reconnect |
 
-`vici.Conn` speaks strongSwan's VICI wire protocol directly (packets with
-a 4-byte length, at most 512 KiB; messages of key/value pairs, lists and
-sections). Values are byte strings, so DER certificates and CRLs travel
-unencoded, and a message holds the slices it is given so a PIN can be
-wiped after the send.
+### VICI adapter
 
-- `Call` returns the response. A response with `success=no` comes back
-  with a `*vici.CommandError` carrying charon's `errmsg`; responses without
-  a `success` key (`version`, `list-*`) succeed.
-- `CallStreaming` registers for the command's event (`list-sas` →
-  `list-sa`), hands each event to a callback, returns the final response,
-  then unregisters.
-- `Subscribe` and `NextEvent` read events such as `ike-updown`. Events
-  that arrive during another exchange are queued, up to 1024, then the
-  connection fails (`vici.ErrEventBacklog`).
-- Exchanges are serialised. A transport failure, a malformed packet, an
-  unexpected packet type or a context cancelled mid-exchange closes the
-  connection, because the stream position is then unknown. A refused
-  command, `CMD_UNKNOWN` or `EVENT_UNKNOWN` leaves it usable.
+The controller speaks to charon through three small interfaces: `Session`
+(the commands it sends), `EventStream` (`ike-updown` events) and `Dialer`
+(opens both). `VICIDialer` implements them over govici, which owns the
+wire protocol. Each command failure is a `*ipsec.CommandError` naming the
+command and wrapping govici's error, charon's `errmsg` included.
+
+Before every dial, `VICIDialer` checks the socket with `lstat`. It must be
+a socket, mode 0600 and owned by platformd's effective user. VICI carries
+no authentication, so whoever can open the socket commands charon. A
+refusal is a `*ipsec.SocketError` wrapping `ErrNotSocket`, `ErrSocketMode`
+or `ErrSocketOwner`, and nothing is sent.
+
+Commands and events use separate connections. govici ends every event
+channel of a session when its connection drops, and `Session.Done` closes
+then; that is how a dead command connection is noticed.
+
+### Tunnel identity
+
+charon authenticates with the VTEP's tunnel certificate and the token key
+behind it. `Attach` asks the `IdentityProvider` for a `TunnelIdentity`
+every time, so a renewed certificate is loaded on the next attach.
+`FileIdentity` reads the chain from `certificate-file` and the token PIN
+from the first line of `token.pin-file`. The identity is refused unless
+the leaf carries the local address as an IP SAN and names a key ID.
+
+| Step | VICI command | Body |
+|------|--------------|------|
+| Leaf | `load-cert` | `type=X509`, `flag=NONE`, the DER |
+| Chain | `load-cert` | `type=X509`, `flag=CA`, each DER in turn |
+| Key | `load-token` | `handle` (hex CKA_ID), `slot`, `module` (the strongswan.conf module name; empty searches every module), `pin` |
+
+The PIN lives in a memguard enclave (`quicbaas/sdk/go/xkms/secure`). It
+is opened only for the `load-token` call. The message's `pin` value is a string that
+aliases the locked buffer, not a copy, and the key is unset before the
+buffer is destroyed. govici's encoder still copies the bytes into its
+own unlocked frame buffer, which it does not wipe; closing that gap needs
+an upstream change.
+
+### CRLs
+
+charon never fetches CRLs; they are pushed down the controller stream to
+`Controller.PushCRL`. The controller keeps the newest CRL per issuer (a
+higher CRL number wins, or the later `thisUpdate` when either has no
+number) and loads it with `load-cert type=X509_CRL` at once if charon is
+attached. Every peer connection sets `revocation=strict`, so a peer whose
+status is unknown is refused.
+
+### Runner
+
+`Runner.Run` keeps the controller attached until its context ends:
+
+1. Subscribe to `ike-updown` on one connection, then dial the command
+   connection.
+2. `Attach` loads the tunnel identity, then every held CRL, then lists
+   charon's connections and loads every peer's. A failure before the
+   connections ends the attempt with the controller detached. A peer that
+   fails to load leaves the session up.
+3. Pass each event to `HandleEvent` until either connection ends, then
+   `Detach`.
+
+Between attempts the runner waits on a timer, starting at 500ms and
+doubling to 30s. An attempt that attached resets the wait. Because the
+identity, the CRLs and the peers are pushed on every attach, a charon
+restart re-converges with nothing lost.
+
+### Status
+
+`Controller.Status` reports whether charon is attached, the peers, the
+evicted peers, how many issuers' CRLs are held, and the tunnel
+certificate's renewal state (`CertificateStatus`): serial, validity,
+time to expiry, `RenewalDue` from half its lifetime and `Alert` from
+three quarters.
 
 ### Peer connections
 
@@ -163,11 +219,12 @@ names no certificate or key. charon picks the certificate loaded with
 `load-cert` whose SAN is the local address, and the key in the loaded token
 that matches it.
 
-`Attach` hands the controller a VICI session. It unloads any `vtep-`
-connection charon holds for a peer that is gone, then loads every peer's
-connection. Connections without the prefix are left alone. `Detach` drops
-the session when charon goes away. Peers are still tracked while detached,
-and the next `Attach` pushes them, so a charon restart re-converges.
+`Attach` hands the controller a VICI session. After the identity and the
+CRLs (see [Runner](#runner)), it unloads any `vtep-` connection charon
+holds for a peer that is gone, then loads every peer's connection.
+Connections without the prefix are left alone. `Detach` drops the session
+when charon goes away. Peers are still tracked while detached, and the
+next `Attach` pushes them, so a charon restart re-converges.
 
 `Evict(peer)` is the eviction primitive, applied in this order:
 
@@ -255,10 +312,15 @@ has been renewed at the same mark.
 | `ErrBindingConflict` | `modes` | a Type-2 route claimed the anycast gateway's MAC or IP; refused whole and counted in `RefusedBindings`. A route claiming a local host's IP is not an error: its MAC is bridged and its IP held back until the local host goes |
 | `ErrFlowResyncFailed` | `modes` | the switch refused the put-back too, or the rebuild after one; the next change flushes the overlay flows and reinstalls the committed ones before applying anything |
 | `ConfigError` | `ipsec` | an `overlay.ipsec` field broke a rule; names the field and wraps an `ipsec.Err*` sentinel |
-| `CommandError` | `vici` | charon ran a command and refused it (`success=no`); carries `errmsg` |
-| `ErrUnknownCommand`, `ErrUnknownEvent` | `vici` | charon does not know the command or event; the connection stays usable |
+| `CommandError` | `ipsec` | a VICI command failed: charon refused it (its `errmsg` included) or the connection failed under it |
+| `SocketError` | `ipsec` | the VICI socket was refused (`ErrNotSocket`, `ErrSocketMode`, `ErrSocketOwner`) or could not be opened |
+| `CloseError` | `ipsec` | a close failed after another failure; matches both |
+| `ErrCharonGone` | `ipsec` | a connection to charon ended; the runner reconnects |
+| `ErrInvalidMessage` | `ipsec` | a request lacked what charon needs: a credential without data, a token key without an ID |
+| `ErrNoCertificate`, `ErrCertificateAddress`, `ErrNoKeyID` | `ipsec` | the tunnel identity has no certificate, its leaf does not name the local address, or it names no key (inside an `OpError`, `identity`) |
+| `ErrMissingDependency` | `ipsec` | a constructor or `Attach` was handed a nil collaborator |
 | `PeerError` | `ipsec` | a step on one peer failed (`admit`, `load-conn`, `unload-conn`, `drop`, `undrop`, `list-sas`, `terminate`, `evict`, `readmit`); names the peer and wraps the cause |
-| `OpError` | `ipsec` | an operation not tied to one peer failed: `get-conns` during `Attach`, `nftables apply`/`remove`, `xfrm install`/`remove` |
+| `OpError` | `ipsec` | an operation not tied to one peer failed: `identity`, `load-cert`, `load-token`, `load-cert x509crl` or `get-conns` during `Attach`, `parse crl`, `nftables apply`/`remove`, `xfrm install`/`remove` |
 | `ErrFamilyMismatch` | `ipsec` | `Filter.Drop`/`Undrop` named a peer of the other address family (inside a `PeerError`) |
 | `IdentityMismatchError` | `ipsec` | an SA came up with a peer identity other than its address; the SA was terminated |
 | `ErrNotEvicted` | `ipsec` | `Readmit` named a peer that is not evicted |

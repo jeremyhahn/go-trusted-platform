@@ -19,8 +19,6 @@ import (
 	"slices"
 	"testing"
 	"time"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/vici"
 )
 
 func validConfig() *Config {
@@ -54,6 +52,10 @@ func TestConfigValidateAccepts(t *testing.T) {
 		{"explicit socket and module", func(c *Config) {
 			c.VICISocket = "/run/charon/charon.vici"
 			c.Token.Module = "/usr/lib/pkcs11/p11-kit-client.so"
+		}},
+		{"certificate and PIN files", func(c *Config) {
+			c.CertificateFile = "/etc/platform/ipsec/tunnel.pem"
+			c.Token.PINFile = "/etc/platform/ipsec/token.pin"
 		}},
 	}
 	for _, tt := range tests {
@@ -101,6 +103,8 @@ func TestConfigValidateRejects(t *testing.T) {
 		{"mixed families", func(c *Config) { c.StaticPeers = []string{"fd00::1"} }, "static-peers[0]", ErrFamilyMismatch},
 		{"relative socket", func(c *Config) { c.VICISocket = "charon.vici" }, "vici-socket", ErrRelativePath},
 		{"relative module", func(c *Config) { c.Token.Module = "p11-kit-client.so" }, "token.module", ErrRelativePath},
+		{"relative certificate file", func(c *Config) { c.CertificateFile = "tunnel.pem" }, "certificate-file", ErrRelativePath},
+		{"relative PIN file", func(c *Config) { c.Token.PINFile = "token.pin" }, "token.pin-file", ErrRelativePath},
 		{"missing handle", func(c *Config) { c.Token.Handle = "" }, "token.handle", ErrRequired},
 		{"handle not hex", func(c *Config) { c.Token.Handle = "ipsec" }, "token.handle", ErrInvalidHandle},
 		{"negative outage tolerance", func(c *Config) { c.CPOutageTolerance = -time.Hour }, "cp-outage-tolerance", ErrNegativeDuration},
@@ -131,8 +135,8 @@ func TestConfigValidateRejects(t *testing.T) {
 
 func TestConfigEffectiveDefaults(t *testing.T) {
 	c := validConfig()
-	if got := c.EffectiveVICISocket(); got != vici.DefaultSocket {
-		t.Errorf("socket = %q, want %q", got, vici.DefaultSocket)
+	if got := c.EffectiveVICISocket(); got != DefaultVICISocket {
+		t.Errorf("socket = %q, want %q", got, DefaultVICISocket)
 	}
 	if got := c.EffectiveTokenModule(); got != DefaultTokenModule {
 		t.Errorf("module = %q", got)

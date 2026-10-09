@@ -14,87 +14,18 @@
 package ipsec
 
 import (
+	"bytes"
 	"context"
+	"crypto/x509"
 	"errors"
-	"maps"
+	"math/big"
 	"net/netip"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/vici"
 )
-
-var errInjected = errors.New("injected failure")
-
-// fakeCharon models the part of charon the controller drives: the loaded
-// connections and the IKE_SAs of each.
-type fakeCharon struct {
-	conns    map[string]*vici.Message
-	sas      map[string][]string // connection → IKE_SA unique IDs
-	commands []string
-	killed   []string // terminated IKE_SA unique IDs
-	fail     map[string]error
-}
-
-func newFakeCharon(held ...string) *fakeCharon {
-	f := &fakeCharon{conns: make(map[string]*vici.Message), sas: make(map[string][]string), fail: make(map[string]error)}
-	for _, name := range held {
-		f.conns[name] = vici.NewMessage()
-	}
-	return f
-}
-
-func (f *fakeCharon) Call(_ context.Context, command string, req *vici.Message) (*vici.Message, error) {
-	f.commands = append(f.commands, command)
-	if err := f.fail[command]; err != nil {
-		return nil, err
-	}
-	resp := vici.NewMessage()
-	switch command {
-	case "load-conn":
-		for _, name := range req.Keys() {
-			f.conns[name], _ = req.Section(name)
-		}
-	case "unload-conn":
-		name, _ := req.Value("name")
-		if _, ok := f.conns[name]; !ok {
-			return nil, &vici.CommandError{Command: command, Message: "configuration not found"}
-		}
-		delete(f.conns, name)
-	case "get-conns":
-		resp.SetList("conns", slices.Sorted(maps.Keys(f.conns))...)
-	case "terminate":
-		id, _ := req.Value("ike-id")
-		if force, _ := req.Value("force"); force != "yes" {
-			return nil, &vici.CommandError{Command: command, Message: "terminate without force"}
-		}
-		f.killed = append(f.killed, id)
-	}
-	return resp, nil
-}
-
-func (f *fakeCharon) CallStreaming(_ context.Context, command, _ string, req *vici.Message, fn func(*vici.Message) error) (*vici.Message, error) {
-	f.commands = append(f.commands, command)
-	if err := f.fail[command]; err != nil {
-		return nil, err
-	}
-	name, _ := req.Value("ike")
-	for _, id := range f.sas[name] {
-		sa := vici.NewMessage()
-		sa.SetValue("uniqueid", id)
-		ev := vici.NewMessage()
-		ev.SetSection(name, sa)
-		if err := fn(ev); err != nil {
-			return nil, err
-		}
-	}
-	return vici.NewMessage(), nil
-}
-
-func (f *fakeCharon) loaded() []string {
-	return slices.Sorted(maps.Keys(f.conns))
-}
 
 type fakeAdmitter struct {
 	refuse map[netip.Addr]error
@@ -127,26 +58,38 @@ func (d *fakeDropper) Undrop(_ context.Context, peer netip.Addr) error {
 
 type harness struct {
 	ctl      *Controller
-	charon   *fakeCharon
+	charon   *fakeSession
 	admitter *fakeAdmitter
 	dropper  *fakeDropper
+	identity *fakeIdentity
+	pki      *testPKI
 }
 
-// newHarness builds a controller for validConfig (static peers 10.20.0.1
-// and 10.20.0.2) attached to an empty charon.
-func newHarness(t *testing.T) *harness {
+// newDetachedHarness builds a controller for validConfig (static peers
+// 10.20.0.1 and 10.20.0.2) with the test PKI's identity, not yet attached.
+func newDetachedHarness(t *testing.T) *harness {
 	t.Helper()
+	pki := newTestPKI(t)
 	h := &harness{
-		charon:   newFakeCharon(),
+		charon:   newFakeSession(),
 		admitter: &fakeAdmitter{refuse: make(map[netip.Addr]error)},
 		dropper:  &fakeDropper{dropped: make(map[netip.Addr]struct{})},
+		identity: &fakeIdentity{id: pki.identity(newSecret(t, "1234"))},
+		pki:      pki,
 	}
-	ctl, err := NewController(validConfig(), h.admitter, h.dropper)
+	ctl, err := NewController(validConfig(), h.admitter, h.dropper, h.identity)
 	if err != nil {
 		t.Fatalf("NewController: %v", err)
 	}
 	h.ctl = ctl
-	if err := ctl.Attach(context.Background(), h.charon); err != nil {
+	return h
+}
+
+// newHarness is newDetachedHarness attached to an empty charon.
+func newHarness(t *testing.T) *harness {
+	t.Helper()
+	h := newDetachedHarness(t)
+	if err := h.ctl.Attach(context.Background(), h.charon); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 	return h
@@ -163,7 +106,7 @@ func imet(vni uint32, vtep string, withdraw bool) *bgp.EVPNRouteData {
 func addr(s string) netip.Addr { return netip.MustParseAddr(s) }
 
 func TestNewControllerRejects(t *testing.T) {
-	admitter, dropper := &fakeAdmitter{}, &fakeDropper{}
+	admitter, dropper, identity := &fakeAdmitter{}, &fakeDropper{}, &fakeIdentity{}
 	invalid := validConfig()
 	invalid.Token.Handle = ""
 	tests := []struct {
@@ -171,17 +114,19 @@ func TestNewControllerRejects(t *testing.T) {
 		cfg      *Config
 		admitter Admitter
 		dropper  Dropper
+		identity IdentityProvider
 		want     error
 	}{
-		{"absent section", nil, admitter, dropper, ErrNotEnabled},
-		{"disabled section", &Config{}, admitter, dropper, ErrNotEnabled},
-		{"no admitter", validConfig(), nil, dropper, ErrMissingDependency},
-		{"no dropper", validConfig(), admitter, nil, ErrMissingDependency},
-		{"invalid section", invalid, admitter, dropper, ErrRequired},
+		{"absent section", nil, admitter, dropper, identity, ErrNotEnabled},
+		{"disabled section", &Config{}, admitter, dropper, identity, ErrNotEnabled},
+		{"no admitter", validConfig(), nil, dropper, identity, ErrMissingDependency},
+		{"no dropper", validConfig(), admitter, nil, identity, ErrMissingDependency},
+		{"no identity", validConfig(), admitter, dropper, nil, ErrMissingDependency},
+		{"invalid section", invalid, admitter, dropper, identity, ErrRequired},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := NewController(tt.cfg, tt.admitter, tt.dropper); !errors.Is(err, tt.want) {
+			if _, err := NewController(tt.cfg, tt.admitter, tt.dropper, tt.identity); !errors.Is(err, tt.want) {
 				t.Fatalf("err = %v, want %v", err, tt.want)
 			}
 		})
@@ -189,14 +134,11 @@ func TestNewControllerRejects(t *testing.T) {
 }
 
 func TestAttachLoadsStaticPeersAndPrunesStale(t *testing.T) {
-	ctl, err := NewController(validConfig(), &fakeAdmitter{}, &fakeDropper{})
-	if err != nil {
-		t.Fatalf("NewController: %v", err)
-	}
+	h := newDetachedHarness(t)
 	// charon outlived a platformd that knew 10.20.0.9; someone else's
 	// connection sits beside it.
-	charon := newFakeCharon("vtep-10.20.0.9", "vtep-10.20.0.1", "operator-test")
-	if err := ctl.Attach(context.Background(), charon); err != nil {
+	charon := newFakeSession("vtep-10.20.0.9", "vtep-10.20.0.1", "operator-test")
+	if err := h.ctl.Attach(context.Background(), charon); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 	want := []string{"operator-test", "vtep-10.20.0.1", "vtep-10.20.0.2"}
@@ -204,32 +146,265 @@ func TestAttachLoadsStaticPeersAndPrunesStale(t *testing.T) {
 		t.Fatalf("charon holds %v, want %v", got, want)
 	}
 
-	if err := ctl.Attach(context.Background(), nil); !errors.Is(err, ErrMissingDependency) {
+	if err := h.ctl.Attach(context.Background(), nil); !errors.Is(err, ErrMissingDependency) {
 		t.Fatalf("Attach(nil): err = %v", err)
 	}
 }
 
-func TestAttachReportsEveryFailure(t *testing.T) {
-	ctl, err := NewController(validConfig(), &fakeAdmitter{}, &fakeDropper{})
-	if err != nil {
-		t.Fatalf("NewController: %v", err)
+func TestAttachLoadsTheIdentityFirst(t *testing.T) {
+	h := newHarness(t)
+	want := []Credential{
+		{Kind: CredentialEndEntity, DER: h.pki.leaf.Raw},
+		{Kind: CredentialAuthority, DER: h.pki.ca.Raw},
 	}
-	charon := newFakeCharon()
-	charon.fail["load-conn"] = &vici.CommandError{Command: "load-conn", Message: "proposal unknown"}
-	err = ctl.Attach(context.Background(), charon)
+	if !slices.EqualFunc(h.charon.certs, want, func(a, b Credential) bool {
+		return a.Kind == b.Kind && bytes.Equal(a.DER, b.DER)
+	}) {
+		t.Fatalf("loaded %d credentials, want the leaf then the CA", len(h.charon.certs))
+	}
+	if len(h.charon.tokens) != 1 || !bytes.Equal(h.charon.tokens[0].KeyID, []byte("ipsec")) {
+		t.Fatalf("tokens = %v, want the identity's key", h.charon.tokens)
+	}
+	if !bytes.Equal(h.charon.pins[0], []byte("1234")) {
+		t.Fatal("load-token did not log in with the identity's PIN")
+	}
+	if first := slices.Index(h.charon.commands, "load-conn"); first < slices.Index(h.charon.commands, "load-token") {
+		t.Fatalf("commands %v: a connection was loaded before the identity", h.charon.commands)
+	}
+}
+
+func TestAttachWithoutPIN(t *testing.T) {
+	h := newDetachedHarness(t)
+	h.identity.id = h.pki.identity(nil)
+	if err := h.ctl.Attach(context.Background(), h.charon); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if len(h.charon.pins) != 1 || h.charon.pins[0] != nil {
+		t.Fatalf("pins = %v, want one load-token without a PIN", h.charon.pins)
+	}
+}
+
+func TestAttachIdentityFailuresLeaveItDetached(t *testing.T) {
+	pki := newTestPKI(t)
+	other := pki.identity(nil)
+	other.Chain = []*x509.Certificate{pki.ca}
+	noKey := pki.identity(nil)
+	noKey.Token.KeyID = nil
+
+	tests := []struct {
+		name   string
+		id     *fakeIdentity
+		fail   string
+		op     string
+		reason error
+	}{
+		{"provider fails", &fakeIdentity{err: errInjected}, "", "identity", errInjected},
+		{"no identity", &fakeIdentity{}, "", "identity", ErrNoCertificate},
+		{"certificate for another address", &fakeIdentity{id: other}, "", "identity", ErrCertificateAddress},
+		{"no key", &fakeIdentity{id: noKey}, "", "identity", ErrNoKeyID},
+		{"load-cert refused", &fakeIdentity{id: pki.identity(nil)}, "load-cert", "load-cert", errInjected},
+		{"load-token refused", &fakeIdentity{id: pki.identity(nil)}, "load-token", "load-token", errInjected},
+		{"get-conns fails", &fakeIdentity{id: pki.identity(nil)}, "get-conns", "get-conns", errInjected},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctl, err := NewController(validConfig(), &fakeAdmitter{}, &fakeDropper{}, tt.id)
+			if err != nil {
+				t.Fatalf("NewController: %v", err)
+			}
+			charon := newFakeSession()
+			if tt.fail != "" {
+				charon.fail[tt.fail] = errInjected
+			}
+			err = ctl.Attach(context.Background(), charon)
+			var opErr *OpError
+			if !errors.As(err, &opErr) || opErr.Op != tt.op || !errors.Is(err, tt.reason) {
+				t.Fatalf("err = %v, want a %s OpError for %v", err, tt.op, tt.reason)
+			}
+			if ctl.attached() || len(charon.conns) != 0 {
+				t.Fatal("a failed identity load left the controller attached")
+			}
+		})
+	}
+}
+
+func TestAttachReportsEveryPeerFailure(t *testing.T) {
+	h := newDetachedHarness(t)
+	h.charon.fail["load-conn"] = errInjected
+	err := h.ctl.Attach(context.Background(), h.charon)
 	var peerErr *PeerError
 	if !errors.As(err, &peerErr) || peerErr.Op != "load-conn" {
 		t.Fatalf("err = %v, want a load-conn PeerError", err)
 	}
-	if got := len(slices.DeleteFunc(slices.Clone(charon.commands), func(c string) bool { return c != "load-conn" })); got != 2 {
+	if got := len(slices.DeleteFunc(slices.Clone(h.charon.commands), func(c string) bool { return c != "load-conn" })); got != 2 {
 		t.Fatalf("load-conn tried %d times, want once per static peer", got)
 	}
+	if !h.ctl.attached() {
+		t.Fatal("peer failures detached the controller")
+	}
+}
 
-	charon = newFakeCharon()
-	charon.fail["get-conns"] = errInjected
+func TestPushCRL(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	day := h.pki.issued
+	first := h.pki.crl(t, 1, day)
+
+	if err := h.ctl.PushCRL(ctx, first); err != nil {
+		t.Fatalf("PushCRL: %v", err)
+	}
+	if got := h.charon.crls(); len(got) != 1 || !bytes.Equal(got[0], first) {
+		t.Fatal("the CRL was not loaded into the attached charon")
+	}
+
+	// An older or equal CRL is ignored; a newer one replaces it.
+	if err := h.ctl.PushCRL(ctx, h.pki.crl(t, 1, day.Add(time.Hour))); err != nil {
+		t.Fatalf("PushCRL(same number): %v", err)
+	}
+	if len(h.charon.crls()) != 1 {
+		t.Fatal("a CRL with the same number was loaded")
+	}
+	newer := h.pki.crl(t, 2, day.Add(time.Hour))
+	if err := h.ctl.PushCRL(ctx, newer); err != nil {
+		t.Fatalf("PushCRL(newer): %v", err)
+	}
+	if got := h.charon.crls(); len(got) != 2 || !bytes.Equal(got[1], newer) {
+		t.Fatal("the newer CRL was not loaded")
+	}
+	if got := h.ctl.Status().CRLs; got != 1 {
+		t.Fatalf("Status().CRLs = %d, want one issuer", got)
+	}
+
+	// A restarted charon gets the newest CRL before any connection.
+	restarted := newFakeSession()
+	if err := h.ctl.Attach(ctx, restarted); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if got := restarted.crls(); len(got) != 1 || !bytes.Equal(got[0], newer) {
+		t.Fatal("the held CRL was not pushed on attach")
+	}
+	if slices.Index(restarted.commands, "load-crl") > slices.Index(restarted.commands, "load-conn") {
+		t.Fatalf("commands %v: a connection was loaded before the CRL", restarted.commands)
+	}
+}
+
+func TestPushCRLFailures(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
 	var opErr *OpError
-	if err := ctl.Attach(context.Background(), charon); !errors.As(err, &opErr) || !errors.Is(err, errInjected) {
-		t.Fatalf("err = %v, want a get-conns OpError", err)
+	if err := h.ctl.PushCRL(ctx, []byte("not a crl")); !errors.As(err, &opErr) || opErr.Op != "parse crl" {
+		t.Fatalf("garbage: err = %v, want a parse crl OpError", err)
+	}
+
+	h.charon.fail["load-crl"] = errInjected
+	crl := h.pki.crl(t, 1, h.pki.issued)
+	if err := h.ctl.PushCRL(ctx, crl); !errors.As(err, &opErr) || opErr.Op != "load-cert x509crl" || !errors.Is(err, errInjected) {
+		t.Fatalf("refused: err = %v, want a load-cert x509crl OpError", err)
+	}
+	// The CRL is held although charon refused it, and a charon that cannot
+	// take it cannot be attached.
+	restarted := newFakeSession()
+	restarted.fail["load-crl"] = errInjected
+	if err := h.ctl.Attach(ctx, restarted); !errors.As(err, &opErr) || opErr.Op != "load-cert x509crl" {
+		t.Fatalf("Attach: err = %v, want the CRL refusal", err)
+	}
+	if h.ctl.attached() {
+		t.Fatal("attached without the CRL")
+	}
+}
+
+func TestPushCRLWhileDetached(t *testing.T) {
+	h := newDetachedHarness(t)
+	ctx := context.Background()
+	later := h.pki.crl(t, 2, h.pki.issued)
+	for _, crl := range [][]byte{h.pki.crl(t, 1, h.pki.issued), later, h.pki.crl(t, 1, h.pki.issued.Add(time.Hour))} {
+		if err := h.ctl.PushCRL(ctx, crl); err != nil {
+			t.Fatalf("PushCRL: %v", err)
+		}
+	}
+	if err := h.ctl.Attach(ctx, h.charon); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if got := h.charon.crls(); len(got) != 1 || !bytes.Equal(got[0], later) {
+		t.Fatal("attach did not load the highest-numbered CRL alone")
+	}
+}
+
+func TestSupersedes(t *testing.T) {
+	day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	crl := func(number int64, at time.Time) *x509.RevocationList {
+		l := &x509.RevocationList{ThisUpdate: at}
+		if number > 0 {
+			l.Number = big.NewInt(number)
+		}
+		return l
+	}
+	tests := []struct {
+		name       string
+		next, prev *x509.RevocationList
+		want       bool
+	}{
+		{"higher number", crl(2, day), crl(1, day.Add(time.Hour)), true},
+		{"same number, later", crl(1, day.Add(time.Hour)), crl(1, day), false},
+		{"lower number", crl(1, day.Add(time.Hour)), crl(2, day), false},
+		{"no numbers, later", crl(0, day.Add(time.Hour)), crl(0, day), true},
+		{"no numbers, same time", crl(0, day), crl(0, day), false},
+		{"one number missing, earlier", crl(3, day), crl(0, day.Add(time.Hour)), false},
+	}
+	for _, tt := range tests {
+		if got := supersedes(tt.next, tt.prev); got != tt.want {
+			t.Errorf("%s: supersedes = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestStatus(t *testing.T) {
+	h := newDetachedHarness(t)
+	if s := h.ctl.Status(); s.Attached || s.Certificate != nil || len(s.Peers) != 2 {
+		t.Fatalf("detached status = %+v", s)
+	}
+	h.ctl.now = func() time.Time { return h.pki.issued.Add(40 * time.Hour) }
+	if err := h.ctl.Attach(context.Background(), h.charon); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if err := h.ctl.Evict(context.Background(), addr("10.20.0.2")); err != nil {
+		t.Fatalf("Evict: %v", err)
+	}
+	s := h.ctl.Status()
+	if !s.Attached || !slices.Equal(s.Peers, []netip.Addr{addr("10.20.0.1")}) || !slices.Equal(s.Evicted, []netip.Addr{addr("10.20.0.2")}) {
+		t.Fatalf("status = %+v", s)
+	}
+	cert := s.Certificate
+	if cert == nil || cert.Serial != "2a" || cert.TimeToExpiry != 32*time.Hour || !cert.RenewalDue || cert.Alert {
+		t.Fatalf("certificate status = %+v, want renewal due 40h into a 72h lifetime", cert)
+	}
+}
+
+func TestCertificateStatusThresholds(t *testing.T) {
+	pki := newTestPKI(t)
+	tests := []struct {
+		at         time.Duration // since NotBefore, of a 72h lifetime
+		due, alert bool
+	}{
+		{0, false, false},
+		{36*time.Hour - time.Second, false, false},
+		{36 * time.Hour, true, false},
+		{54*time.Hour - time.Second, true, false},
+		{54 * time.Hour, true, true},
+		{80 * time.Hour, true, true},
+	}
+	for _, tt := range tests {
+		s := certificateStatus(pki.leaf, pki.issued.Add(tt.at))
+		if s.RenewalDue != tt.due || s.Alert != tt.alert {
+			t.Errorf("at %v: due=%v alert=%v, want %v %v", tt.at, s.RenewalDue, s.Alert, tt.due, tt.alert)
+		}
+		if want := 72*time.Hour - tt.at; s.TimeToExpiry != want {
+			t.Errorf("at %v: time to expiry %v, want %v", tt.at, s.TimeToExpiry, want)
+		}
+	}
+	s := certificateStatus(pki.leaf, pki.issued)
+	if !s.RenewAt.Equal(pki.issued.Add(36*time.Hour)) || !s.AlertAt.Equal(pki.issued.Add(54*time.Hour)) {
+		t.Fatalf("renew at %v, alert at %v", s.RenewAt, s.AlertAt)
 	}
 }
 
@@ -315,7 +490,7 @@ func TestDetachedRoutesArePushedOnAttach(t *testing.T) {
 		t.Fatalf("route while detached: %v", err)
 	}
 
-	restarted := newFakeCharon()
+	restarted := newFakeSession()
 	if err := h.ctl.Attach(ctx, restarted); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -392,7 +567,7 @@ func TestEvictHoldsWithoutCharon(t *testing.T) {
 	if err := h.ctl.Evict(ctx, addr("10.20.0.1")); err != nil {
 		t.Fatalf("Evict while detached: %v", err)
 	}
-	restarted := newFakeCharon()
+	restarted := newFakeSession()
 	if err := h.ctl.Attach(ctx, restarted); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -440,36 +615,31 @@ func TestEvictAndReadmitFailures(t *testing.T) {
 	}
 }
 
-func updown(name string, kv map[string]string) vici.Event {
-	sa := vici.NewMessage()
-	for k, v := range kv {
-		sa.SetValue(k, v)
-	}
-	msg := vici.NewMessage()
-	msg.SetSection(name, sa)
-	return vici.Event{Name: "ike-updown", Message: msg}
+func updown(up bool, name string, sa IKESA) IKEUpdown {
+	return IKEUpdown{Up: up, SAs: map[string]IKESA{name: sa}}
 }
 
 func TestIdentityCheck(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
 		name     string
-		ev       vici.Event
+		ev       IKEUpdown
 		mismatch bool
+		killed   []string
 	}{
-		{"matching identity", updown("vtep-10.20.0.1", map[string]string{
-			"up": "yes", "remote-host": "10.20.0.1", "remote-id": "10.20.0.1", "uniqueid": "4"}), false},
-		{"identity of another node", updown("vtep-10.20.0.1", map[string]string{
-			"up": "yes", "remote-host": "10.20.0.1", "remote-id": "10.20.0.2", "uniqueid": "4"}), true},
-		{"distinguished-name identity", updown("vtep-10.20.0.1", map[string]string{
-			"up": "yes", "remote-host": "10.20.0.1", "remote-id": "CN=10.20.0.1", "uniqueid": "4"}), true},
-		{"SA from another address", updown("vtep-10.20.0.1", map[string]string{
-			"up": "yes", "remote-host": "10.20.0.66", "remote-id": "10.20.0.1", "uniqueid": "4"}), true},
-		{"SA going down", updown("vtep-10.20.0.1", map[string]string{
-			"remote-host": "10.20.0.1", "remote-id": "10.20.0.2", "uniqueid": "4"}), false},
-		{"connection not ours", updown("operator-test", map[string]string{
-			"up": "yes", "remote-host": "10.20.0.1", "remote-id": "10.20.0.2", "uniqueid": "4"}), false},
-		{"other event", vici.Event{Name: "child-updown", Message: vici.NewMessage()}, false},
+		{"matching identity", updown(true, "vtep-10.20.0.1",
+			IKESA{UniqueID: "4", RemoteHost: "10.20.0.1", RemoteID: "10.20.0.1"}), false, nil},
+		{"identity of another node", updown(true, "vtep-10.20.0.1",
+			IKESA{UniqueID: "4", RemoteHost: "10.20.0.1", RemoteID: "10.20.0.2"}), true, []string{"4"}},
+		{"distinguished-name identity", updown(true, "vtep-10.20.0.1",
+			IKESA{UniqueID: "4", RemoteHost: "10.20.0.1", RemoteID: "CN=10.20.0.1"}), true, []string{"4"}},
+		{"SA from another address", updown(true, "vtep-10.20.0.1",
+			IKESA{UniqueID: "4", RemoteHost: "10.20.0.66", RemoteID: "10.20.0.1"}), true, []string{"4"}},
+		{"unreadable SA", updown(true, "vtep-10.20.0.1", IKESA{}), true, nil},
+		{"SA going down", updown(false, "vtep-10.20.0.1",
+			IKESA{UniqueID: "4", RemoteHost: "10.20.0.1", RemoteID: "10.20.0.2"}), false, nil},
+		{"connection not ours", updown(true, "operator-test",
+			IKESA{UniqueID: "4", RemoteHost: "10.20.0.1", RemoteID: "10.20.0.2"}), false, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -479,22 +649,30 @@ func TestIdentityCheck(t *testing.T) {
 			if got := errors.As(err, &mismatch); got != tt.mismatch {
 				t.Fatalf("err = %v, want mismatch=%v", err, tt.mismatch)
 			}
-			wantKilled := []string(nil)
-			if tt.mismatch {
-				wantKilled = []string{"4"}
-			}
-			if !slices.Equal(h.charon.killed, wantKilled) {
-				t.Fatalf("terminated %v, want %v", h.charon.killed, wantKilled)
+			if !slices.Equal(h.charon.killed, tt.killed) {
+				t.Fatalf("terminated %v, want %v", h.charon.killed, tt.killed)
 			}
 		})
+	}
+}
+
+func TestIdentityMismatchWhileDetached(t *testing.T) {
+	h := newHarness(t)
+	h.ctl.Detach()
+	ev := updown(true, "vtep-10.20.0.1", IKESA{UniqueID: "4", RemoteHost: "10.20.0.1", RemoteID: "10.20.0.2"})
+	var mismatch *IdentityMismatchError
+	if err := h.ctl.HandleEvent(context.Background(), ev); !errors.As(err, &mismatch) {
+		t.Fatalf("err = %v, want the mismatch", err)
+	}
+	if len(h.charon.killed) != 0 {
+		t.Fatal("a detached controller drove the old session")
 	}
 }
 
 func TestIdentityMismatchStillReportedWhenTerminateFails(t *testing.T) {
 	h := newHarness(t)
 	h.charon.fail["terminate"] = errInjected
-	ev := updown("vtep-10.20.0.1", map[string]string{
-		"up": "yes", "remote-host": "10.20.0.1", "remote-id": "10.20.0.2", "uniqueid": "4"})
+	ev := updown(true, "vtep-10.20.0.1", IKESA{UniqueID: "4", RemoteHost: "10.20.0.1", RemoteID: "10.20.0.2"})
 	err := h.ctl.HandleEvent(context.Background(), ev)
 	var mismatch *IdentityMismatchError
 	if !errors.As(err, &mismatch) || !errors.Is(err, errInjected) {

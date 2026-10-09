@@ -18,8 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/vici"
 )
 
 const (
@@ -64,42 +62,29 @@ func connPeer(name string) (netip.Addr, bool) {
 // The local certificate and key are not named here: charon picks the
 // certificate loaded with load-cert whose subject alternative name is the
 // local address, and the key in the loaded token that matches it.
-func (s *settings) connection(peer netip.Addr) *vici.Message {
-	local := vici.NewMessage()
-	local.SetValue("auth", "pubkey")
-	local.SetValue("id", s.local.String())
-
-	remote := vici.NewMessage()
-	remote.SetValue("auth", "pubkey")
-	remote.SetValue("id", peer.String())
-	remote.SetValue("revocation", "strict")
-
-	child := vici.NewMessage()
-	child.SetValue("mode", "transport")
-	child.SetValue("start_action", "trap")
-	child.SetValue("dpd_action", "trap")
-	child.SetValue("close_action", "trap")
-	child.SetList("esp_proposals", espProposal)
-	child.SetValue("replay_window", strconv.FormatUint(uint64(s.replayWindow), 10))
-	child.SetList("local_ts", "dynamic")
-	child.SetList("remote_ts", "dynamic")
-
-	children := vici.NewMessage()
-	children.SetSection(childName, child)
-
-	conn := vici.NewMessage()
-	conn.SetValue("version", "2")
-	conn.SetList("local_addrs", s.local.String())
-	conn.SetList("remote_addrs", peer.String())
-	conn.SetList("proposals", ikeProposal)
-	conn.SetValue("mobike", "no")
-	conn.SetValue("unique", "replace")
-	conn.SetValue("reauth_time", seconds(s.reauthTime))
-	conn.SetValue("dpd_delay", seconds(dpdDelay))
-	conn.SetSection("local", local)
-	conn.SetSection("remote", remote)
-	conn.SetSection("children", children)
-	return conn
+func (s *settings) connection(peer netip.Addr) *Connection {
+	return &Connection{
+		Version:     "2",
+		LocalAddrs:  []string{s.local.String()},
+		RemoteAddrs: []string{peer.String()},
+		Proposals:   []string{ikeProposal},
+		Mobike:      false,
+		Unique:      "replace",
+		ReauthTime:  seconds(s.reauthTime),
+		DPDDelay:    seconds(dpdDelay),
+		Local:       ConnAuth{Auth: "pubkey", ID: s.local.String()},
+		Remote:      ConnAuth{Auth: "pubkey", ID: peer.String(), Revocation: "strict"},
+		Children: map[string]ChildSA{childName: {
+			Mode:         "transport",
+			StartAction:  "trap",
+			DPDAction:    "trap",
+			CloseAction:  "trap",
+			ESPProposals: []string{espProposal},
+			ReplayWindow: s.replayWindow,
+			LocalTS:      []string{"dynamic"},
+			RemoteTS:     []string{"dynamic"},
+		}},
+	}
 }
 
 // seconds formats d in whole seconds, the unit strongSwan reads.
