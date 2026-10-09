@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
 
 // Gateway requirement constants.
@@ -436,6 +437,26 @@ type OverlayServiceConfig struct {
 	// Enabled indicates if the overlay service is enabled.
 	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
 
+	// LocalVTEP is the gateway's VTEP address on the fabric VLAN.
+	LocalVTEP netip.Addr `yaml:"local-vtep,omitempty" json:"local_vtep,omitempty" mapstructure:"local-vtep"`
+
+	// UnderlayInterface is the host interface carrying fabric VTEP traffic.
+	UnderlayInterface string `yaml:"underlay-interface,omitempty" json:"underlay_interface,omitempty" mapstructure:"underlay-interface"`
+
+	// UnderlayMTU is the MTU of the fabric underlay interface. Zero defaults
+	// to the overlay handler's minimum VXLAN-safe MTU.
+	UnderlayMTU int `yaml:"underlay-mtu,omitempty" json:"underlay_mtu,omitempty" mapstructure:"underlay-mtu"`
+
+	// AccessPort is the OVS port that carries local workload VLANs into the overlay.
+	AccessPort string `yaml:"access-port,omitempty" json:"access_port,omitempty" mapstructure:"access-port"`
+
+	// OverlayASN is the EVPN overlay ASN used for route targets and RR sessions.
+	OverlayASN uint32 `yaml:"overlay-asn,omitempty" json:"overlay_asn,omitempty" mapstructure:"overlay-asn"`
+
+	// RRPeers are route-reflector peers for the EVPN address family. The schema
+	// is the same BGP peer shape used by the gateway transit service.
+	RRPeers []bgp.NeighborConfig `yaml:"rr-peers,omitempty" json:"rr_peers,omitempty" mapstructure:"rr-peers"`
+
 	// VXLANPort is the UDP port for VXLAN encapsulation.
 	VXLANPort uint16 `yaml:"vxlan-port,omitempty" json:"vxlan_port,omitempty" mapstructure:"vxlan-port"`
 
@@ -444,12 +465,47 @@ type OverlayServiceConfig struct {
 
 	// MaxVNIs is the maximum number of VNIs.
 	MaxVNIs int `yaml:"max-vnis,omitempty" json:"max_vnis,omitempty" mapstructure:"max-vnis"`
+
+	// VerdictMaxAge bounds the age of the latest signed attestation verdict
+	// accepted for remote VTEP admission. Zero defaults to
+	// DefaultOverlayVerdictMaxAge.
+	VerdictMaxAge time.Duration `yaml:"verdict-max-age,omitempty" json:"verdict_max_age,omitempty" mapstructure:"verdict-max-age"`
 }
 
 // Validate checks if the overlay service configuration is valid.
 func (c *OverlayServiceConfig) Validate() error {
 	if !c.Enabled {
 		return nil
+	}
+	if !c.LocalVTEP.IsValid() || !c.LocalVTEP.Is4() || c.LocalVTEP.IsUnspecified() {
+		return ErrConfigurationInvalid
+	}
+	if c.UnderlayInterface == "" {
+		return ErrConfigurationInvalid
+	}
+	if c.UnderlayMTU == 0 {
+		c.UnderlayMTU = vxlan.MinimumUnderlayMTU
+	}
+	if c.UnderlayMTU < vxlan.MinimumUnderlayMTU {
+		return ErrConfigurationInvalid
+	}
+	if c.AccessPort == "" {
+		return ErrConfigurationInvalid
+	}
+	if c.OverlayASN < bgp.MinASN {
+		return ErrConfigurationInvalid
+	}
+	if c.VXLANPort == 0 {
+		return ErrConfigurationInvalid
+	}
+	if c.MaxVNIs < 0 {
+		return ErrConfigurationInvalid
+	}
+	if c.VerdictMaxAge < 0 {
+		return ErrConfigurationInvalid
+	}
+	if c.VerdictMaxAge == 0 {
+		c.VerdictMaxAge = DefaultOverlayVerdictMaxAge
 	}
 	return nil
 }

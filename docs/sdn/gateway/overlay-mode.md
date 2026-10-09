@@ -186,13 +186,14 @@ held rather than deleting the flow.
 
 ## Status in gatewayd
 
-gatewayd still refuses `ServiceOverlay`: its overlay config section has no
-VTEP or access-port fields to build the handler from, and VTEP admission
-is not yet backed by anything (#709). The overlay's base flows (the table
-misses of 0, 10, 20 and 30) have the same table, priority and match as
-gatewayd's own pipeline flows, so installing them replaces gatewayd's and
-the overlay's flush then removes them: running both on one bridge needs
-the gatewayd pipeline to hand those tables to the overlay first.
+gatewayd still refuses `ServiceOverlay` until the service builder and table
+hand-off are wired. The `gateway.overlay` section now carries the VTEP address,
+underlay interface/MTU, access port, overlay ASN, RR peers and verdict freshness
+window, and `gateway.VTEPAdmitter` backs admission from IPAM fabric allocations
+plus the platform attestation event log. The remaining hand-off is the OpenFlow
+pipeline ownership: the overlay's base flows (the table misses of 0, 10, 20 and
+30) overlap gatewayd's own pipeline flows, so gatewayd must hand those tables to
+the overlay rather than letting both owners install the same miss entries.
 
 ## See Also
 

@@ -277,7 +277,7 @@ func BenchmarkGatewayConfig_Validate(b *testing.B) {
 			MinReputation: MinReputation,
 			MinAgeDays:    MinAgeDays,
 			MinUptimePct:  MinUptimePct,
-			Overlay:       &OverlayServiceConfig{Enabled: true},
+			Overlay:       validOverlayServiceConfig(),
 		},
 		{Enabled: false},
 		{Enabled: true, ID: ""}, // Invalid

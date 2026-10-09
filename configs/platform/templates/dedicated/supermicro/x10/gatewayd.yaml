@@ -168,6 +168,25 @@ gateway:
     enabled: true
     default-policy: deny
 
+  # Overlay VTEP service (#709). The local VTEP is the node's address on the
+  # fabric VLAN; the access port carries local workload VLANs into the overlay.
+  overlay:
+    enabled: false
+    local-vtep: 10.4.100.20
+    underlay-interface: vtep0
+    underlay-mtu: 9216
+    access-port: patch-workloads
+    overlay-asn: 65000
+    vxlan-port: 4789
+    default-vni: 40100
+    max-vnis: 16384
+    verdict-max-age: 15m
+    rr-peers:
+      - name: cp-01-rr
+        address: 10.4.100.10
+        asn: 65000
+        families: [evpn]
+
   # The host packet filter. OVS cannot filter host-addressed traffic, so
   # this is what stands between the WAN and the daemon's own sockets.
   # `extra`/`peers`/`tunnels` are added to the listener inventory the

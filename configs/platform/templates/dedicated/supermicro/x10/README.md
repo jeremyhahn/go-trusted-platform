@@ -180,3 +180,8 @@ without it is absent from its own fleet view.
 - A successful install **powers the node off** rather than rebooting
   ("Remove the installation media and reboot"). A powered-off node after
   an install is the success case, not a failure.
+
+
+### Gateway overlay fields
+
+`gatewayd.yaml` includes a disabled `gateway.overlay:` example for #709. Fill `local-vtep` with the gateway's fabric VLAN address, `access-port` with the OVS port that carries workload VLANs into the overlay, and `rr-peers` with the control-plane route reflectors. `verdict-max-age` defaults to 15m and is the maximum age of a signed attestation verdict accepted for remote VTEP admission.

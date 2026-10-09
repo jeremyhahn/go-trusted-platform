@@ -273,6 +273,7 @@ Gateway-side, in `pkg/sdn/config.go`:
 | Type | Keys | Notes |
 |---|---|---|
 | `GatewayConfig` | `enabled` | Master switch |
+| `OverlayServiceConfig` | `enabled`, `local-vtep`, `underlay-interface`, `underlay-mtu`, `access-port`, `overlay-asn`, `rr-peers`, `vxlan-port`, `default-vni`, `max-vnis`, `verdict-max-age` | EVPN/VXLAN VTEP settings. `verdict-max-age` defaults to 15m and bounds the latest signed platform attestation verdict accepted for remote VTEP admission. |
 | (transit) | none | Transit is the environment's x00 zone: its VLAN and subnet come from `sdn.environment` like every zone's, and transit point-to-point links take `/31`s from the `tunnel-p2p` IPAM range ([`../architecture/reference-network.md`](../architecture/reference-network.md)). There is no transit section |
 | `ManagementVPNConfig` | `enabled`, `type` (only `wireguard` is defined), `allow_to` | Administrators reach management endpoints through this tunnel so operator workstations are **never dual-homed onto a data zone**. Gateways should expose it by default. The section is refused today (#558, [`docs/vpn/`](../vpn/)); owner design decision (2026-09-26): IPsec in FIPS builds, WireGuard only in non-FIPS builds |
 

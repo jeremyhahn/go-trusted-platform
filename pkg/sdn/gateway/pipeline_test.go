@@ -450,7 +450,7 @@ func TestGatewayStart_OverlayAloneInstallsNoPipeline(t *testing.T) {
 		MinAgeDays:    MinAgeDays,
 		MinUptimePct:  MinUptimePct,
 		Runtime:       newTestRuntime(),
-		Overlay:       &OverlayServiceConfig{Enabled: true},
+		Overlay:       validOverlayServiceConfig(),
 	}
 	assert.False(t, cfg.needsPipeline())
 	assert.Equal(t, TerminalNormal, cfg.pipelineTerminal())
@@ -468,7 +468,7 @@ func TestGatewayStart_OverlayAloneInstallsNoPipeline(t *testing.T) {
 // start, and the rollback removes the pipeline again.
 func TestGatewayStart_OverlayBesideFirewallRollsThePipelineBack(t *testing.T) {
 	cfg := firewallGatewayConfig()
-	cfg.Overlay = &OverlayServiceConfig{Enabled: true}
+	cfg.Overlay = validOverlayServiceConfig()
 	assert.True(t, cfg.needsPipeline())
 	assert.Equal(t, TerminalNormal, cfg.pipelineTerminal())
 	gw, err := NewGateway(cfg)

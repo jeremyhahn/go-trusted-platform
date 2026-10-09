@@ -583,7 +583,7 @@ func TestGateway_DisabledConfig(t *testing.T) {
 	// But we still need valid config to create gateway
 	cfg.Enabled = true
 	cfg.ID = "test"
-	cfg.Overlay = &OverlayServiceConfig{Enabled: true}
+	cfg.Overlay = validOverlayServiceConfig()
 
 	gw, err := NewGateway(cfg)
 	if err != nil {
@@ -602,7 +602,7 @@ func TestGateway_MeetsRequirementsWithCustomThresholds(t *testing.T) {
 		MinReputation: 0.90, // Higher than default
 		MinAgeDays:    200,  // Higher than default
 		MinUptimePct:  98.0, // Higher than default
-		Overlay:       &OverlayServiceConfig{Enabled: true},
+		Overlay:       validOverlayServiceConfig(),
 	}
 
 	gw, err := NewGateway(cfg)
@@ -635,7 +635,7 @@ func TestGateway_MeetsRequirementsWithCustomThresholds(t *testing.T) {
 // flipping a bool.
 func TestServiceHandler_RefusedSections(t *testing.T) {
 	cfg := baseGatewayConfig("refused-handlers")
-	cfg.Overlay = &OverlayServiceConfig{Enabled: true}
+	cfg.Overlay = validOverlayServiceConfig()
 	cfg.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50}
 	cfg.DHCP = &DHCPServiceConfig{Enabled: true, Interface: "eth0"}
 	cfg.PXE = &PXEServiceConfig{Enabled: true, HTTPPort: 8069}

@@ -244,7 +244,7 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 		HostFW:        &hostfw.Config{Enabled: true},
 		Tunnels:       []TunnelConfig{{Name: "gre1"}},
 		BGP:           &bgp.BGPConfig{},
-		Overlay:       &OverlayServiceConfig{Enabled: true},
+		Overlay:       validOverlayServiceConfig(),
 		Edge:          &EdgeConfig{Enabled: true},
 		DHCP:          &DHCPServiceConfig{Enabled: true},
 		PXE:           &PXEServiceConfig{Enabled: true, HTTPPort: 8069},
@@ -290,7 +290,7 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 func TestNewGateway_RegistersHandlersInDeclaredOrder(t *testing.T) {
 	cfg := firewallGatewayConfig()
 	cfg.Tunnels = []TunnelConfig{{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}}
-	cfg.Overlay = &OverlayServiceConfig{Enabled: true}
+	cfg.Overlay = validOverlayServiceConfig()
 	gw, err := NewGateway(cfg)
 	require.NoError(t, err)
 	assert.Equal(t, []string{ServiceFirewall, ServiceTunnels, ServiceOverlay}, gw.serviceOrder)
@@ -306,7 +306,7 @@ func TestNewGateway_RegistersHandlersInDeclaredOrder(t *testing.T) {
 // no pipeline behind.
 func TestGatewayStart_RefusedSectionIsATypedStartError(t *testing.T) {
 	sections := map[string]func(*GatewayConfig){
-		ServiceOverlay:       func(c *GatewayConfig) { c.Overlay = &OverlayServiceConfig{Enabled: true} },
+		ServiceOverlay:       func(c *GatewayConfig) { c.Overlay = validOverlayServiceConfig() },
 		ServiceEdge:          func(c *GatewayConfig) { c.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50} },
 		ServiceDHCP:          func(c *GatewayConfig) { c.DHCP = &DHCPServiceConfig{Enabled: true, Interface: "eth0"} },
 		ServicePXE:           func(c *GatewayConfig) { c.PXE = &PXEServiceConfig{Enabled: true, HTTPPort: 8069} },
@@ -335,7 +335,7 @@ func TestGatewayStart_RefusedSectionIsATypedStartError(t *testing.T) {
 
 func TestGatewayStart_RefusedSectionRollsBackTheStartedOnes(t *testing.T) {
 	cfg := firewallGatewayConfig()
-	cfg.Overlay = &OverlayServiceConfig{Enabled: true}
+	cfg.Overlay = validOverlayServiceConfig()
 	gw, err := NewGateway(cfg)
 	require.NoError(t, err)
 	gw.SetNodeMetrics(validNodeMetrics())

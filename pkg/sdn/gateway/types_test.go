@@ -15,11 +15,28 @@ package gateway
 
 import (
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/vxlan"
 )
+
+func validOverlayServiceConfig() *OverlayServiceConfig {
+	return &OverlayServiceConfig{
+		Enabled:           true,
+		LocalVTEP:         netip.MustParseAddr("10.4.100.20"),
+		UnderlayInterface: "vtep0",
+		UnderlayMTU:       9216,
+		AccessPort:        "patch-workloads",
+		OverlayASN:        65000,
+		VXLANPort:         4789,
+		DefaultVNI:        40100,
+		MaxVNIs:           DefaultMaxVNIs,
+		VerdictMaxAge:     time.Minute,
+	}
+}
 
 func TestPortState_String(t *testing.T) {
 	tests := []struct {
@@ -835,7 +852,7 @@ func TestGatewayConfig_Validate(t *testing.T) {
 				MinReputation: MinReputation,
 				MinAgeDays:    MinAgeDays,
 				MinUptimePct:  MinUptimePct,
-				Overlay:       &OverlayServiceConfig{Enabled: true},
+				Overlay:       validOverlayServiceConfig(),
 			},
 			expectError: false,
 		},
@@ -850,7 +867,7 @@ func TestGatewayConfig_Validate(t *testing.T) {
 			name: "empty ID",
 			config: &GatewayConfig{
 				Enabled: true, ID: "",
-				Overlay: &OverlayServiceConfig{Enabled: true},
+				Overlay: validOverlayServiceConfig(),
 			},
 			expectError: true,
 		},
@@ -924,7 +941,7 @@ func TestGatewayConfig_HasEnabledServices(t *testing.T) {
 	}{
 		{
 			name:     "overlay enabled",
-			config:   &GatewayConfig{Overlay: &OverlayServiceConfig{Enabled: true}},
+			config:   &GatewayConfig{Overlay: validOverlayServiceConfig()},
 			expected: true,
 		},
 		{
@@ -1116,6 +1133,18 @@ func TestDHCPServiceConfig_Validate(t *testing.T) {
 }
 
 func TestOverlayServiceConfig_Validate(t *testing.T) {
+	valid := OverlayServiceConfig{
+		Enabled:           true,
+		LocalVTEP:         netip.MustParseAddr("10.4.100.20"),
+		UnderlayInterface: "vtep0",
+		UnderlayMTU:       9216,
+		AccessPort:        "patch-workloads",
+		OverlayASN:        65000,
+		VXLANPort:         4789,
+		DefaultVNI:        10100,
+		MaxVNIs:           DefaultMaxVNIs,
+		VerdictMaxAge:     time.Minute,
+	}
 	tests := []struct {
 		name        string
 		config      OverlayServiceConfig
@@ -1123,12 +1152,67 @@ func TestOverlayServiceConfig_Validate(t *testing.T) {
 	}{
 		{
 			name:        "valid enabled config",
-			config:      OverlayServiceConfig{Enabled: true},
+			config:      valid,
 			expectError: false,
 		},
 		{
 			name:        "disabled skips validation",
 			config:      OverlayServiceConfig{Enabled: false},
+			expectError: false,
+		},
+		{
+			name: "enabled requires local VTEP",
+			config: func() OverlayServiceConfig {
+				cfg := valid
+				cfg.LocalVTEP = netip.Addr{}
+				return cfg
+			}(),
+			expectError: true,
+		},
+		{
+			name: "enabled requires underlay MTU at VXLAN minimum",
+			config: func() OverlayServiceConfig {
+				cfg := valid
+				cfg.UnderlayMTU = 1500
+				return cfg
+			}(),
+			expectError: true,
+		},
+		{
+			name: "enabled requires access port",
+			config: func() OverlayServiceConfig {
+				cfg := valid
+				cfg.AccessPort = ""
+				return cfg
+			}(),
+			expectError: true,
+		},
+		{
+			name: "enabled requires overlay ASN",
+			config: func() OverlayServiceConfig {
+				cfg := valid
+				cfg.OverlayASN = 0
+				return cfg
+			}(),
+			expectError: true,
+		},
+		{
+			name: "enabled accepts four byte overlay ASN",
+			config: func() OverlayServiceConfig {
+				cfg := valid
+				cfg.OverlayASN = 65536
+				return cfg
+			}(),
+			expectError: false,
+		},
+		{
+			name: "enabled defaults underlay MTU and verdict age",
+			config: func() OverlayServiceConfig {
+				cfg := valid
+				cfg.UnderlayMTU = 0
+				cfg.VerdictMaxAge = 0
+				return cfg
+			}(),
 			expectError: false,
 		},
 	}
@@ -1141,6 +1225,14 @@ func TestOverlayServiceConfig_Validate(t *testing.T) {
 			}
 			if !tt.expectError && err != nil {
 				t.Errorf("OverlayServiceConfig.Validate() unexpected error: %v", err)
+			}
+			if tt.name == "enabled defaults underlay MTU and verdict age" {
+				if tt.config.UnderlayMTU != vxlan.MinimumUnderlayMTU {
+					t.Errorf("UnderlayMTU default = %d", tt.config.UnderlayMTU)
+				}
+				if tt.config.VerdictMaxAge != DefaultOverlayVerdictMaxAge {
+					t.Errorf("VerdictMaxAge default = %s", tt.config.VerdictMaxAge)
+				}
 			}
 		})
 	}
