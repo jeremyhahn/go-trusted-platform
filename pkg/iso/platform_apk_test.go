@@ -432,7 +432,7 @@ func TestGenerateAPKINDEX_FailsOnAPlatformApkItCannotIndex(t *testing.T) {
 	b.packageIndex["trusted-platform-p11-host"] = &apkPackageEntry{
 		Name:      "trusted-platform-p11-host",
 		Version:   "1.0.0-r0",
-		LocalPath: filepath.Join("/builder", platformTestArch, "trusted-platform-p11-host-1.0.0-r0.apk"),
+		LocalPath: filepath.Join(string(filepath.Separator), "builder", platformTestArch, "trusted-platform-p11-host-1.0.0-r0.apk"),
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "unrelated-1.0-r0.apk"), []byte("not an apk"), 0o644))
 	require.NoError(t, b.GenerateAPKINDEX(context.Background(), dir), "a malformed mirror apk is skipped")
