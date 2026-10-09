@@ -322,7 +322,7 @@ general switch-configuration API.
 | Unit | `pkg/sdn/**/*_test.go`, `pkg/switch/*_test.go` | State machine transitions, config validation, flow generation, IPAM allocation |
 | Integration | `test/integration/sdn/`, `test/integration/network/` | OVS bridges, flows, port auth against a real datapath |
 | Unit, real GoBGP | `pkg/sdn/bgp/rtc_dynamic_gobgp_test.go` | RT-Constrain filtering of EVPN routes; dynamic neighbours admitted only from the fabric prefix (§9.4) |
-| Integration | `test/integration/ipsec/` (`make integration-test-ipsec`) | musl charon peers in netns, IKEv2 through the go-xkms PKCS#11 module, ESP checked with `ip xfrm` (§9.3) |
+| Integration | `test/integration/ipsec/` (`make integration-test-ipsec`) | musl charon peers in netns, IKEv2 through the go-xkms PKCS#11 module, ESP checked with `ip xfrm`; the fail-closed floor, eviction and IKE limiter on a real kernel (§9.3) |
 
 `pkg/sdn/netlink` is excluded from `make test` and needs `make integration-test`.
 `noop.go` in `pkg/switch/` is the fixture that lets switch-dependent paths run
@@ -545,7 +545,10 @@ packaged OpenRC services, and has its own token:
 |---|---|
 | `TestESPTransportThroughPKCS11Module` | <ul><li>both peers sign IKE_AUTH with the token key (`ECDSA_WITH_SHA*_DER`) and verify each other</li><li>the IKE SA uses the ML-KEM-768 hybrid</li><li>`ip xfrm state` holds one inbound and one outbound transport-mode `rfc4106(gcm(aes))` SA with a 16-byte ICV, ESN and `replay_window 1024`</li><li>the SPIs agree crosswise and a ping is carried by the SAs (packet counters)</li><li>the policies require ESP</li><li>charon runs as `strongswan` with `CAP_NET_ADMIN` only, and the VICI socket is mode 0600 owned by the platform user; the p11-kit socket is mode 0660, group `strongswan`</li></ul> |
 | `TestUntrustedPeerIsRefused` | a peer certified by another CA is refused (`AUTHENTICATION_FAILED`) and no SA reaches the kernel |
-| `TestSuiteInARM64VM` | the two tests above, cross-compiled for arm64, pass inside an aarch64 VM (`qemu-system-aarch64`, TCG, Alpine `linux-virt` 6.12): arm64 charon, arm64 p11-kit-client, arm64 module host, real aarch64 XFRM |
+| `TestFloorLeavesNoCleartextPath` | with no charon running, VXLAN and BGP do not cross the [fail-closed floor](overlay/architecture.md#fail-closed-floor) in any direction: to and from the node, and routed through it into and out of the fabric. The nftables filter alone, the XFRM block policies alone (whose forward block covers only what is routed out through the fabric interface) and both together are each checked against a positive control on the same flows |
+| `TestEvictedPeerIsDroppedBeforeESP` | an evicted peer's ESP (in, out, forwarded both ways) and IKE stop at the filter, although both are accepted before the eviction and again once it is lifted |
+| `TestIKELimiterHoldsWithAFullMeter` | with the IKE meter full (65535 sources), IKE from one more source is dropped while a source already in the meter is still admitted |
+| `TestSuiteInARM64VM` | the first two tests above, cross-compiled for arm64, pass inside an aarch64 VM (`qemu-system-aarch64`, TCG, Alpine `linux-virt` 6.12): arm64 charon, arm64 p11-kit-client, arm64 module host, real aarch64 XFRM |
 
 **Why a VM for arm64.** qemu-user cannot stand in for it, and a qemu upgrade
 does not change that:

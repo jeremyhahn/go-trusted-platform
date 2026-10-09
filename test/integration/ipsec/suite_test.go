@@ -22,6 +22,10 @@
 // cannot stand in, because it refuses NETLINK_XFRM sockets and charon will not
 // start without its kernel IPsec interface.
 //
+// filter_test.go checks pkg/sdn/ipsec's fail-closed floor (the nftables
+// filter and the XFRM block policies) on the devcontainer's kernel, in
+// network namespaces with no charon; it needs none of the inputs below.
+//
 // The suite runs in the devcontainer via `make integration-test-ipsec`; its
 // inputs come from the host build through the environment. Missing inputs
 // fail the suite -- there are no skip guards.

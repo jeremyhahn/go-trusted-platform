@@ -393,6 +393,12 @@ Both need CAP_NET_ADMIN. `NewFilter` takes nftables connection options
 and `NewBlockPolicy` takes a network namespace, so either can be pinned
 to a namespace.
 
+The ipsec integration suite applies both to a node in a network namespace
+and checks them on a real kernel ([../engineering.md](../engineering.md),
+§9.3). It covers three things: no cleartext path in any direction for each
+layer alone and for both, eviction ahead of the ESP and IKE accepts, and a
+full `ike_meter` that refuses new sources.
+
 ### Timers
 
 The VTEP certificate outlives three tolerated control-plane outages
