@@ -177,6 +177,13 @@ func (c *ISOBuildConfig) IsDynamicConfigMode() bool {
 		c.InstallConfig == nil && c.ConfigFile == "" && c.Profile == ""
 }
 
+// fetchesInstallConfig reports whether media built with this config server
+// and platform config file embeds no install configuration and leaves the
+// node to fetch one from the server at boot (Customizer.GenerateInstallConfig).
+func fetchesInstallConfig(configServerURL, platformConfigFile string) bool {
+	return configServerURL != "" && platformConfigFile == ""
+}
+
 // DefaultISOBuildConfig returns default configuration
 func DefaultISOBuildConfig() *ISOBuildConfig {
 	return &ISOBuildConfig{
@@ -291,7 +298,7 @@ func (c *ISOBuildConfig) Validate() error {
 		}
 	}
 
-	return nil
+	return c.ValidatePlatformAPKDir()
 }
 
 // GetInstallConfig returns or generates install config

@@ -11,6 +11,11 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
+//go:build !fips
+
+// The platform apks are verified against their APKINDEX C: checksum, which a
+// FIPS build refuses to compute (apk_checksum_fips_test.go).
+
 package iso
 
 import (
@@ -18,11 +23,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -52,35 +60,69 @@ func gzipTar(t *testing.T, files map[string]string) []byte {
 	return buf.Bytes()
 }
 
-// platformIndex is the APKINDEX of the strongSwan builder output: the four
-// platform-built packages, which depend on Alpine's p11-kit-server.
-func platformIndex(skip string) string {
-	blocks := map[string]string{
-		"trusted-platform-strongswan":        "P:trusted-platform-strongswan\nV:6.0.7-r0\nA:x86_64\nS:4\nC:Q1strongswan=\nD:!strongswan p11-kit-server>=0.26\n\n",
-		"trusted-platform-strongswan-openrc": "P:trusted-platform-strongswan-openrc\nV:6.0.7-r0\nA:x86_64\nS:4\nC:Q1strongswanrc=\nD:trusted-platform-strongswan=6.0.7-r0\n\n",
-		"trusted-platform-p11-host":          "P:trusted-platform-p11-host\nV:1.0.0-r0\nA:x86_64\nS:4\nC:Q1p11host=\nD:p11-kit-server>=0.26\n\n",
-		"trusted-platform-p11-host-openrc":   "P:trusted-platform-p11-host-openrc\nV:1.0.0-r0\nA:x86_64\nS:4\nC:Q1p11hostrc=\nD:trusted-platform-p11-host=1.0.0-r0\n\n",
-	}
-	var out string
-	for _, name := range platformBuiltPackages {
-		if name != skip {
-			out += blocks[name]
-		}
-	}
-	return out
+// apkSegment is one gzip stream of an apk: a tar of one file without the
+// end-of-archive blocks, the way abuild writes the signature and control
+// segments.
+func apkSegment(t *testing.T, name, content string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}))
+	_, err := tw.Write([]byte(content))
+	require.NoError(t, err)
+	require.NoError(t, tw.Flush())
+	require.NoError(t, gz.Close())
+	return buf.Bytes()
+}
+
+// platformAPK is an apk laid out as abuild writes one, its signature, control
+// and data segments each a gzip stream, and its APKINDEX C: checksum.
+func platformAPK(t *testing.T, name, version string) (apk []byte, checksum string) {
+	t.Helper()
+	control := apkSegment(t, ".PKGINFO", fmt.Sprintf("pkgname = %s\npkgver = %s\narch = %s\n", name, version, platformTestArch))
+	apk = slices.Concat(
+		apkSegment(t, ".SIGN.RSA.builder.rsa.pub", "signature"),
+		control,
+		gzipTar(t, map[string]string{"usr/share/doc/" + name + "/README": name}),
+	)
+	hasher, err := newAPKChecksumHasher()
+	require.NoError(t, err)
+	_, err = hasher.Write(control)
+	require.NoError(t, err)
+	return apk, "Q1" + base64.StdEncoding.EncodeToString(hasher.Sum(nil))
+}
+
+// platformBuilds are the strongSwan builder's four packages, which depend on
+// Alpine's p11-kit-server.
+var platformBuilds = []struct{ name, version, depends string }{
+	{"trusted-platform-strongswan", "6.0.7-r0", "!strongswan p11-kit-server>=0.26"},
+	{"trusted-platform-strongswan-openrc", "6.0.7-r0", "trusted-platform-strongswan=6.0.7-r0"},
+	{"trusted-platform-p11-host", "1.0.0-r0", "p11-kit-server>=0.26"},
+	{"trusted-platform-p11-host-openrc", "1.0.0-r0", "trusted-platform-p11-host=1.0.0-r0"},
 }
 
 // platformOutput lays out a strongSwan builder output the way the builder
-// does: <dir>/<arch>/APKINDEX.tar.gz beside the apks it lists.
-func platformOutput(t *testing.T, index string, apks ...string) string {
+// does: <dir>/<arch>/APKINDEX.tar.gz beside the apks it lists. The index lists
+// every package but skip; only the named apk files are written.
+func platformOutput(t *testing.T, skip string, apks ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	archDir := filepath.Join(dir, platformTestArch)
 	require.NoError(t, os.MkdirAll(archDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(archDir, "APKINDEX.tar.gz"), gzipTar(t, map[string]string{"APKINDEX": index}), 0o644))
-	for _, apk := range apks {
-		require.NoError(t, os.WriteFile(filepath.Join(archDir, apk), gzipTar(t, nil), 0o644))
+
+	var index strings.Builder
+	for _, p := range platformBuilds {
+		apk, checksum := platformAPK(t, p.name, p.version)
+		if p.name != skip {
+			fmt.Fprintf(&index, "P:%s\nV:%s\nA:%s\nS:%d\nC:%s\nD:%s\n\n", p.name, p.version, platformTestArch, len(apk), checksum, p.depends)
+		}
+		file := fmt.Sprintf("%s-%s.apk", p.name, p.version)
+		if slices.Contains(apks, file) {
+			require.NoError(t, os.WriteFile(filepath.Join(archDir, file), apk, 0o644))
+		}
 	}
+	require.NoError(t, os.WriteFile(filepath.Join(archDir, "APKINDEX.tar.gz"), gzipTar(t, map[string]string{"APKINDEX": index.String()}), 0o644))
 	return dir
 }
 
@@ -153,7 +195,7 @@ func readIndexNames(t *testing.T, path string) []string {
 // offline repository, and in its APKINDEX, where the installer finds them.
 func TestBuildLocalRepository_CarriesThePlatformPackages(t *testing.T) {
 	isoDir := t.TempDir()
-	platformDir := platformOutput(t, platformIndex(""), platformApkFiles...)
+	platformDir := platformOutput(t, "", platformApkFiles...)
 	b := newPlatformBuilder(t, platformMirror(t).URL, platformDir, isoDir)
 
 	require.NoError(t, b.BuildLocalRepository(context.Background()))
@@ -220,13 +262,13 @@ func TestLoadPlatformIndex_FailsClosed(t *testing.T) {
 		{
 			name: "index without the module host",
 			dir: func(t *testing.T) string {
-				return platformOutput(t, platformIndex("trusted-platform-p11-host"), platformApkFiles...)
+				return platformOutput(t, "trusted-platform-p11-host", platformApkFiles...)
 			},
 			missing: "trusted-platform-p11-host",
 		},
 		{
 			name:    "indexed apk that is not in the output",
-			dir:     func(t *testing.T) string { return platformOutput(t, platformIndex(""), platformApkFiles[:3]...) },
+			dir:     func(t *testing.T) string { return platformOutput(t, "", platformApkFiles[:3]...) },
 			missing: "trusted-platform-p11-host-openrc",
 		},
 	}
@@ -247,7 +289,7 @@ func TestLoadPlatformIndex_FailsClosed(t *testing.T) {
 // A platform-built entry replaces a mirror entry of the same name, and the
 // download step copies the builder's apk rather than fetching.
 func TestLoadPlatformIndex_PlatformEntriesWin(t *testing.T) {
-	platformDir := platformOutput(t, platformIndex(""), platformApkFiles...)
+	platformDir := platformOutput(t, "", platformApkFiles...)
 	b := newPlatformBuilder(t, "http://unused.invalid", platformDir, t.TempDir())
 	b.packageIndex["trusted-platform-strongswan"] = &apkPackageEntry{Name: "trusted-platform-strongswan", Version: "0-mirror"}
 
@@ -269,6 +311,140 @@ func TestCopyLocalPackage_Errors(t *testing.T) {
 	src := filepath.Join(dir, "in.apk")
 	require.NoError(t, os.WriteFile(src, []byte("apk"), 0o644))
 	assert.Error(t, copyLocalPackage(src, filepath.Join(dir, "no-such-dir", "out.apk")), "destination that cannot be created")
+}
+
+// An apk that is not the one its index entry describes fails the build as
+// ErrPlatformAPKInvalid, rather than being copied onto media whose install
+// then cannot find it.
+func TestLoadPlatformIndex_RejectsAnApkItsIndexDoesNotDescribe(t *testing.T) {
+	platformDir := platformOutput(t, "", platformApkFiles...)
+	apk := filepath.Join(platformDir, platformTestArch, platformApkFiles[2])
+	require.NoError(t, os.Truncate(apk, 64))
+	b := newPlatformBuilder(t, "http://unused.invalid", platformDir, t.TempDir())
+
+	err := b.loadPlatformIndex()
+
+	var invalid *ErrPlatformAPKInvalid
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, apk, invalid.Path)
+	assert.Contains(t, invalid.Error(), "make strongswan-build")
+}
+
+// writePlatformAPK writes apk and returns the index entry describing it.
+func writePlatformAPK(t *testing.T, apk []byte, checksum string) *apkPackageEntry {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "trusted-platform-p11-host-1.0.0-r0.apk")
+	require.NoError(t, os.WriteFile(path, apk, 0o644))
+	return &apkPackageEntry{Name: "trusted-platform-p11-host", Size: int64(len(apk)), Checksum: checksum, LocalPath: path}
+}
+
+func TestVerifyPlatformAPK_AcceptsTheApkItsEntryDescribes(t *testing.T) {
+	apk, checksum := platformAPK(t, "trusted-platform-p11-host", "1.0.0-r0")
+
+	assert.NoError(t, verifyPlatformAPK(writePlatformAPK(t, apk, checksum)))
+}
+
+// Each way a builder output apk can differ from its index entry is refused,
+// naming the apk and what differs.
+func TestVerifyPlatformAPK_RefusesWhatItsEntryDoesNotDescribe(t *testing.T) {
+	apk, checksum := platformAPK(t, "trusted-platform-p11-host", "1.0.0-r0")
+	_, otherChecksum := platformAPK(t, "trusted-platform-p11-host", "1.0.1-r0")
+
+	tests := []struct {
+		name   string
+		entry  func(t *testing.T) *apkPackageEntry
+		reason string
+		cause  error
+	}{
+		{
+			name: "file that is not there",
+			entry: func(t *testing.T) *apkPackageEntry {
+				return &apkPackageEntry{LocalPath: filepath.Join(t.TempDir(), "absent.apk")}
+			},
+			reason: "cannot be read",
+			cause:  os.ErrNotExist,
+		},
+		{
+			name: "truncated",
+			entry: func(t *testing.T) *apkPackageEntry {
+				entry := writePlatformAPK(t, apk[:len(apk)-8], checksum)
+				entry.Size = int64(len(apk))
+				return entry
+			},
+			reason: "bytes, its index entry",
+		},
+		{
+			name: "from another build",
+			entry: func(t *testing.T) *apkPackageEntry {
+				return writePlatformAPK(t, apk, otherChecksum)
+			},
+			reason: "control checksum",
+		},
+		{
+			name: "data segment that does not match its CRC",
+			entry: func(t *testing.T) *apkPackageEntry {
+				corrupt := slices.Clone(apk)
+				corrupt[len(corrupt)-6] ^= 0xff // the gzip trailer's CRC-32
+				return writePlatformAPK(t, corrupt, checksum)
+			},
+			reason: "not a well-formed apk",
+			cause:  gzip.ErrChecksum,
+		},
+		{
+			name: "no control segment",
+			entry: func(t *testing.T) *apkPackageEntry {
+				return writePlatformAPK(t, gzipTar(t, map[string]string{"usr/bin/charon": "elf"}), checksum)
+			},
+			reason: "not a well-formed apk",
+			cause:  ErrAPKNoControlSegment{},
+		},
+		{
+			name: "not gzip",
+			entry: func(t *testing.T) *apkPackageEntry {
+				return writePlatformAPK(t, []byte("not an apk"), checksum)
+			},
+			reason: "not a well-formed apk",
+			cause:  gzip.ErrHeader,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := tt.entry(t)
+
+			err := verifyPlatformAPK(entry)
+
+			var invalid *ErrPlatformAPKInvalid
+			require.ErrorAs(t, err, &invalid)
+			assert.Equal(t, entry.LocalPath, invalid.Path)
+			assert.Contains(t, invalid.Error(), tt.reason)
+			if tt.cause != nil {
+				assert.ErrorIs(t, err, tt.cause)
+			}
+		})
+	}
+}
+
+// GenerateAPKINDEX skips a malformed mirror apk, but not a platform-built one:
+// the install asks for it by name.
+func TestGenerateAPKINDEX_FailsOnAPlatformApkItCannotIndex(t *testing.T) {
+	dir := t.TempDir()
+	b := newPlatformBuilder(t, "http://unused.invalid", t.TempDir(), t.TempDir())
+	b.packageIndex["trusted-platform-p11-host"] = &apkPackageEntry{
+		Name:      "trusted-platform-p11-host",
+		Version:   "1.0.0-r0",
+		LocalPath: filepath.Join("/builder", platformTestArch, "trusted-platform-p11-host-1.0.0-r0.apk"),
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "unrelated-1.0-r0.apk"), []byte("not an apk"), 0o644))
+	require.NoError(t, b.GenerateAPKINDEX(context.Background(), dir), "a malformed mirror apk is skipped")
+
+	platformAPK := filepath.Join(dir, "trusted-platform-p11-host-1.0.0-r0.apk")
+	require.NoError(t, os.WriteFile(platformAPK, []byte("not an apk"), 0o644))
+
+	err := b.GenerateAPKINDEX(context.Background(), dir)
+
+	var invalid *ErrPlatformAPKInvalid
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, platformAPK, invalid.Path)
 }
 
 // builderApks returns the apks the strongSwan builder's Makefile verifies, the

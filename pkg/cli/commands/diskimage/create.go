@@ -204,6 +204,9 @@ func (m *mediaFlags) isoConfig(target, model string) (*pkgiso.ISOBuildConfig, er
 	cfg.CABundlePath = m.caBundle
 	cfg.CAKeyAlgorithm = m.caKeyAlgorithm
 	cfg.WebUIPath = m.webUI
+	if err := cfg.ValidatePlatformAPKDir(); err != nil {
+		return nil, err
+	}
 
 	platformConfig := m.platformConfig
 	if platformConfig == "" {

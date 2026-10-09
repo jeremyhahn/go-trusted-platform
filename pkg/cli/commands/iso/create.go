@@ -671,6 +671,9 @@ func mergeConfigs(base, override *pkgiso.ISOBuildConfig) *pkgiso.ISOBuildConfig 
 	if override.KeysDir != "" {
 		result.KeysDir = override.KeysDir
 	}
+	if override.PlatformAPKDir != "" {
+		result.PlatformAPKDir = override.PlatformAPKDir
+	}
 
 	// Always override boolean flags
 	result.SecureBoot = override.SecureBoot

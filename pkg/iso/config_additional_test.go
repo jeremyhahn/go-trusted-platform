@@ -292,6 +292,50 @@ func TestISOBuildConfig_Validate_CompleteConfig(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// The platform apks reach a node only from the media's offline repository and
+// only through the install config built into the media, so --platform-apk-dir
+// is refused wherever either is missing.
+func TestISOBuildConfig_Validate_PlatformAPKDir(t *testing.T) {
+	config := func(edit func(c *ISOBuildConfig)) *ISOBuildConfig {
+		c := DefaultISOBuildConfig()
+		c.WorkDir = t.TempDir()
+		c.PreFetch = true
+		c.PlatformAPKDir = "/builder/output"
+		edit(c)
+		return c
+	}
+
+	t.Run("accepted", func(t *testing.T) {
+		assert.NoError(t, config(func(*ISOBuildConfig) {}).Validate(), "pre-fetched media")
+		assert.NoError(t, config(func(c *ISOBuildConfig) {
+			c.ConfigServerURL = "https://config.example.com"
+			c.PlatformConfigFile = "/etc/platform.yaml"
+		}).Validate(), "a config server with the platform config embedded")
+		assert.NoError(t, config(func(c *ISOBuildConfig) {
+			c.PreFetch = false
+			c.PlatformAPKDir = ""
+		}).Validate(), "no platform apks, no pre-fetch")
+	})
+
+	refused := []struct {
+		name   string
+		edit   func(c *ISOBuildConfig)
+		reason string
+	}{
+		{name: "without pre-fetch", edit: func(c *ISOBuildConfig) { c.PreFetch = false }, reason: "without pre-fetch"},
+		{name: "dynamic install config", edit: func(c *ISOBuildConfig) { c.ConfigServerURL = "https://config.example.com" }, reason: "with a config server"},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			err := config(tt.edit).Validate()
+
+			var unusable *ErrPlatformAPKDirUnusable
+			require.ErrorAs(t, err, &unusable)
+			assert.Contains(t, unusable.Error(), tt.reason)
+		})
+	}
+}
+
 func TestISOBuildConfig_Validate_AllFields(t *testing.T) {
 	tests := []struct {
 		name    string

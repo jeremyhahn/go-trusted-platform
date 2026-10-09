@@ -242,7 +242,7 @@ Build:
 | `--work-dir` | string | `work` | Working directory |
 | `--debug` / `--verbose` | bool | `false` | Output verbosity |
 | `--pre-fetch` | bool | **`true`** | Pre-download all packages into the ISO for offline install. **Unavailable in a `fips`-tagged build** — see the note below |
-| `--platform-apk-dir` | string | `""` | strongSwan builder output (`make strongswan-build`; one `x86_64/` and `aarch64/` directory each) whose apks go into the offline repository and are installed for the overlay's IPsec transport. Takes effect with `--pre-fetch`; empty = the media carry none of them. See below |
+| `--platform-apk-dir` | string | `""` | strongSwan builder output (`make strongswan-build`; one `x86_64/` and `aarch64/` directory each) whose apks go into the offline repository and are installed for the overlay's IPsec transport. Requires `--pre-fetch` and an embedded platform config; empty = the media carry none of them. See below |
 
 Dynamic configuration and trust bootstrap:
 
@@ -296,8 +296,17 @@ install network is known to permit outbound HTTPS to the Alpine CDN.
 `trusted-platform-p11-host-openrc` (from the directory, signed by the builder's
 key) and `p11-kit-server` (from the Alpine mirror) to the offline repository.
 The build fails with `ErrPlatformAPKMissing` when the directory lacks one of
-them or its index does not list it. `platformctl diskimage create` takes the
-same flag; the factory image and the netboot sets carry the same packages. The
+them or its index does not list it, and with `ErrPlatformAPKInvalid` when an
+apk is not the one its index entry describes (size, gzip CRCs, or the `C:`
+checksum of its control segment) or the media's APKINDEX cannot list it. The
+flag is refused with `ErrPlatformAPKDirUnusable` together with
+`--pre-fetch=false` (the packages are in no Alpine mirror) and with
+`--config-server` when no `--platform-config` is embedded (the node then
+installs what the server's configuration names, not these packages). A
+`--config` file's value is used unless the flag is given.
+`platformctl diskimage create` takes the same flag, with the same
+`--pre-fetch` rule; the factory image and the netboot sets carry the same
+packages. The
 services they install are described in
 [`docs/sdn/engineering.md`](../sdn/engineering.md) §9.6.
 

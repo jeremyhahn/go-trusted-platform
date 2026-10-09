@@ -558,6 +558,11 @@ func (b *PreFetchBuilder) GenerateAPKINDEX(ctx context.Context, packagesDir stri
 			if isFIPSChecksumRefusal(err) {
 				return err
 			}
+			// Nor is skipping a platform-built package: the install config
+			// asks for it by name, so the media would not install.
+			if b.isPlatformAPK(apkFile) {
+				return &ErrPlatformAPKInvalid{Path: apkFile, Reason: "cannot be indexed", Err: err}
+			}
 			b.logger.Warn("[PREFETCH] Failed to extract metadata from package",
 				"file", apkFile, "error", err)
 			continue

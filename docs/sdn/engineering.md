@@ -779,7 +779,13 @@ builder's output; the install media, the factory image and the netboot sets all
 get them through the one `StageInstallMedia` hook, into the offline
 `apks-prefetch` repository. Without the flag the media carry none of them.
 `pkg/iso` fails the build when the directory lacks an apk, the index does not
-list it, or an apk is unreadable. The builder containers run without host bind
+list it, or an apk is not the one its index entry describes: its size against
+`S:`, every gzip stream against its CRC, and its control segment against `C:`
+(`verifyPlatformAPK`). `GenerateAPKINDEX` skips a malformed mirror apk but
+fails on a platform-built one, which the install asks for by name. The flag is
+refused without pre-fetch and for media that fetches its install config from a
+config server (`ValidatePlatformAPKDir`), the two cases in which a node could
+not install the packages. The builder containers run without host bind
 mounts (`pkg/diskimage/runner`, `build/docker/run-builder.sh`), so the
 directory is copied in, not mounted. `TestPlatformPackages_MatchTheBuilder` and
 `pkg/arch/ipsec_packaging_test.go` fail when the apk names, socket paths,

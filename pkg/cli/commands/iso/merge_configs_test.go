@@ -136,6 +136,18 @@ func TestMergeConfigs_EmptyStringOverridesNotApplied(t *testing.T) {
 	assert.Equal(t, "BASE", result.OutputLabel)
 }
 
+// --platform-apk-dir given with --config wins over the file; without the
+// flag the file's directory stays.
+func TestMergeConfigs_PlatformAPKDir(t *testing.T) {
+	base := &pkgiso.ISOBuildConfig{PlatformAPKDir: "/from/file"}
+
+	flagged := mergeConfigs(base, &pkgiso.ISOBuildConfig{PlatformAPKDir: "/from/flag"})
+	assert.Equal(t, "/from/flag", flagged.PlatformAPKDir)
+
+	unflagged := mergeConfigs(base, &pkgiso.ISOBuildConfig{})
+	assert.Equal(t, "/from/file", unflagged.PlatformAPKDir)
+}
+
 // =============================================================================
 // isTerminalFD
 // =============================================================================
