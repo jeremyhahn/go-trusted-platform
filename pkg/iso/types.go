@@ -140,6 +140,10 @@ type InstallerOverrides struct {
 	// (installer.OSConfig.KernelArtifactsDir); the kernel package is then
 	// neither prefetched nor installed from apk.
 	KernelArtifactsDir string `yaml:"kernel_artifacts_dir,omitempty" json:"kernel_artifacts_dir,omitempty"`
+	// PlatformAPKDir, when set, is the build/docker/strongswan-builder output
+	// the media takes the overlay's IPsec packages from (PlatformPackages):
+	// they are prefetched into the media's offline repository and installed.
+	PlatformAPKDir string `yaml:"platform_apk_dir,omitempty" json:"platform_apk_dir,omitempty"`
 }
 
 // AlpineConfig holds Alpine Linux ISO configuration

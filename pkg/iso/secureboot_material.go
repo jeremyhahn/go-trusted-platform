@@ -279,6 +279,7 @@ func StageInstallMedia(ctx context.Context, build *ISOBuildConfig, dirName strin
 	platformCfg := NewPlatformISOConfig(build, workDir)
 	platformCfg.Directories.ISO = mediaDir
 	platformCfg.Installer = overrides
+	platformCfg.Installer.PlatformAPKDir = build.PlatformAPKDir
 	if err := platformCfg.Validate(); err != nil {
 		return nil, &StageMediaError{Step: "validating the media configuration", Err: err}
 	}

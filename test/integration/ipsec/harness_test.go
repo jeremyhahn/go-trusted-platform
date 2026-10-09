@@ -4,7 +4,6 @@ package ipsec
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -27,19 +26,23 @@ import (
 
 // Paths inside a peer's root filesystem.
 const (
-	// p11Socket is where the peer's p11-kit server listens; charon and
-	// pkcs11-tool reach the module through it.
+	// p11Socket is where the peer's p11-kit server (the packaged module host
+	// service, xkms-p11-kit) listens; charon and pkcs11-tool reach the module
+	// through it.
 	p11Socket = "/run/p11-kit/xkms.sock"
 	// p11Client is the PKCS#11 module charon loads.
 	p11Client = "/usr/lib/pkcs11/p11-kit-client.so"
-	// moduleInHost is the go-xkms module inside the module host.
-	moduleInHost = "/usr/lib/xkms/libxkms_pkcs11.so"
 	// charonLog is the file log the suite configures.
 	charonLog = "/var/log/charon.log"
+	// moduleHostLog is where the packaged module host service logs.
+	moduleHostLog = "/var/log/xkms-p11-kit.log"
 	// charonPID is the pidfile charon writes itself.
 	charonPID = "/run/charon.pid"
 	// viciSocket is charon's VICI control socket.
 	viciSocket = "/run/charon.vici"
+	// platformUser owns the VICI socket: the account the platform daemon
+	// runs as, which the peer root filesystem creates.
+	platformUser = "platformd"
 )
 
 // Token credentials. The PINs exist only inside the test; a node's PIN
@@ -139,13 +142,11 @@ func fileExists(path string) func() (bool, error) {
 }
 
 // peer is one IPsec endpoint: an Alpine root filesystem in its own network
-// namespace, with its own token behind its own p11-kit server.
+// namespace, with its own token behind its own p11-kit server (the module
+// host the root filesystem's trusted-platform-p11-host apk carries).
 type peer struct {
-	name string
-	root string
-	// host is the peer's module host: the glibc root filesystem whose
-	// p11-kit server hosts the go-xkms module for this peer only.
-	host  string
+	name  string
+	root  string
 	netns string
 	addr  string
 	work  string
@@ -194,8 +195,7 @@ func unpack(t *testing.T, ctx context.Context, tarball, dir string) {
 	mount(t, ctx, "-t", "tmpfs", "tmpfs", filepath.Join(dir, "run"))
 }
 
-// newPeer unpacks the root filesystem, and the peer's own module host beside
-// it. Everything is undone at cleanup.
+// newPeer unpacks the root filesystem. Everything is undone at cleanup.
 func newPeer(t *testing.T, ctx context.Context, in inputs, name, addr string) *peer {
 	t.Helper()
 	p := &peer{
@@ -205,12 +205,10 @@ func newPeer(t *testing.T, ctx context.Context, in inputs, name, addr string) *p
 		work:  filepath.Join(in.workDir, t.Name(), name),
 	}
 	p.root = filepath.Join(p.work, "root")
-	p.host = filepath.Join(p.work, "modulehost")
 	if err := os.RemoveAll(p.work); err != nil {
 		t.Fatal(err)
 	}
 	unpack(t, ctx, in.rootfs, p.root)
-	unpack(t, ctx, in.moduleHost, p.host)
 	return p
 }
 
@@ -237,51 +235,45 @@ func link(t *testing.T, ctx context.Context, a, b *peer) {
 	}
 }
 
-// startModuleServer starts the peer's p11-kit server in its module host,
-// hosting the go-xkms module with the peer's own token. The socket
-// directory is shared into the peer's root, and the socket is handed to the
-// strongswan user: charon talks to it after it has dropped root.
-func (p *peer) startModuleServer(t *testing.T, ctx context.Context) {
+// startModuleHost starts the peer's module host with the packaged OpenRC
+// service: the p11-kit server hosting the go-xkms module with the peer's own
+// token, whose socket the service hands to charon's group. The service's own
+// log is shown when it fails.
+func (p *peer) startModuleHost(t *testing.T, ctx context.Context) {
 	t.Helper()
-	dir := filepath.Dir(p11Socket)
-	for _, root := range []string{p.root, p.host} {
-		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	mount(t, ctx, "--bind", p.path(dir), filepath.Join(p.host, dir))
-	cmd := exec.Command("chroot", p.host,
-		"p11-kit", "server", "-f", "-n", p11Socket, "--provider", moduleInHost, "pkcs11:")
-	cmd.Env = []string{
-		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-		"XKMS_PKCS11_MODE=local",
-		"XKMS_PKCS11_SEAL_STRATEGY=passphrase",
-		"XKMS_PKCS11_LOCAL_KEYDIR=/var/lib/xkms/keys",
-		"XKMS_PKCS11_STORAGE_PATH=/var/lib/xkms/state",
-	}
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
-	if err := cmd.Start(); err != nil {
-		t.Fatal(&CommandError{Command: "p11-kit server", Err: err})
-	}
-	t.Cleanup(func() {
-		if err := cmd.Process.Kill(); err != nil {
-			t.Logf("cleanup: p11-kit server: %v", err)
-		}
-		_ = cmd.Wait() // killed; its exit status says only that
-		t.Logf("p11-kit server (%s):\n%s", p.name, output.String())
-	})
-	sock := p.path(p11Socket)
+	t.Cleanup(func() { t.Logf("xkms-p11-kit log (%s):\n%s", p.name, p.readFile(moduleHostLog)) })
+	p.startService(t, ctx, "xkms-p11-kit", moduleHostLog)
 	wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if err := waitFor(wctx, "the p11-kit server socket of "+p.name, fileExists(sock)); err != nil {
+	if err := waitFor(wctx, "the p11-kit server socket of "+p.name, fileExists(p.path(p11Socket))); err != nil {
+		t.Fatalf("%v\n%s", err, p.readFile(moduleHostLog))
+	}
+}
+
+// startService starts a packaged OpenRC service in the peer's root filesystem
+// and stops it at cleanup; log is the file shown if either fails.
+func (p *peer) startService(t *testing.T, ctx context.Context, service, log string) {
+	t.Helper()
+	if err := os.MkdirAll(p.path("/run/openrc"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	uid, gid := p.lookupUser(t, "strongswan")
-	if err := os.Chown(sock, uid, gid); err != nil {
-		t.Fatal(err)
+	p.writeFile(t, "/run/openrc/softlevel", nil, 0o644)
+	out, err := p.chroot(ctx, nil, "rc-service", service, "start")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, p.readFile(log))
 	}
+	t.Logf("%s: rc-service %s start:\n%s", p.name, service, out)
+	t.Cleanup(func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		// supervise-daemon --stop waits for the supervisor's PID to vanish,
+		// which needs a reaping PID 1 (the Makefile runs the suite with
+		// --init); the process table says which process held it up.
+		if out, err := p.chroot(sctx, nil, "rc-service", service, "stop"); err != nil {
+			ps, _ := run(context.Background(), nil, "ps", "-eo", "pid,ppid,stat,args")
+			t.Errorf("%s: rc-service %s stop: %v\n%s\nprocesses:\n%s", p.name, service, err, out, ps)
+		}
+	})
 }
 
 // lookupUser reads a user's uid and gid from the peer's /etc/passwd.
@@ -425,15 +417,6 @@ func (p *peer) configure(t *testing.T, ca *testCA, cert []byte, remote *peer) {
 	t.Helper()
 	p.writeFile(t, "/etc/swanctl/x509ca/ca.pem", ca.pem, 0o644)
 	p.writeFile(t, "/etc/swanctl/x509/vtep.pem", cert, 0o644)
-	p.writeFile(t, "/etc/strongswan.d/charon/pkcs11.conf", []byte(`pkcs11 {
-    load = yes
-    modules {
-        xkms {
-            path = `+p11Client+`
-        }
-    }
-}
-`), 0o644)
 	p.writeFile(t, "/etc/strongswan.d/charon-logging.conf", []byte(`charon {
     filelog {
         suite {
@@ -446,8 +429,6 @@ func (p *peer) configure(t *testing.T, ca *testCA, cert []byte, remote *peer) {
         }
     }
 }
-`), 0o644)
-	p.writeFile(t, "/etc/conf.d/charon", []byte(`export P11_KIT_SERVER_ADDRESS="unix:path=`+p11Socket+`"
 `), 0o644)
 	p.writeFile(t, "/etc/swanctl/swanctl.conf", []byte(`connections {
     vtep-`+remote.name+` {
@@ -487,27 +468,8 @@ secrets {
 // its VICI socket. It is stopped the same way at cleanup.
 func (p *peer) startCharon(t *testing.T, ctx context.Context) {
 	t.Helper()
-	if err := os.MkdirAll(p.path("/run/openrc"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	p.writeFile(t, "/run/openrc/softlevel", nil, 0o644)
-	if out, err := p.chroot(ctx, nil, "rc-service", "charon", "start"); err != nil {
-		t.Fatalf("%v\n%s", err, p.log())
-	} else {
-		t.Logf("%s: rc-service charon start:\n%s", p.name, out)
-	}
-	t.Cleanup(func() {
-		sctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		// supervise-daemon --stop waits for the supervisor's PID to vanish,
-		// which needs a reaping PID 1 (the Makefile runs the suite with
-		// --init); the process table says which process held it up.
-		if out, err := p.chroot(sctx, nil, "rc-service", "charon", "stop"); err != nil {
-			ps, _ := run(context.Background(), nil, "ps", "-eo", "pid,ppid,stat,args")
-			t.Errorf("%s: rc-service charon stop: %v\n%s\nprocesses:\n%s", p.name, err, out, ps)
-		}
-		t.Logf("charon log (%s):\n%s", p.name, p.log())
-	})
+	t.Cleanup(func() { t.Logf("charon log (%s):\n%s", p.name, p.log()) })
+	p.startService(t, ctx, "charon", charonLog)
 	wctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	if err := waitFor(wctx, "the VICI socket of "+p.name, fileExists(p.path(viciSocket))); err != nil {
@@ -516,10 +478,14 @@ func (p *peer) startCharon(t *testing.T, ctx context.Context) {
 }
 
 // log returns charon's file log.
-func (p *peer) log() string {
-	data, err := os.ReadFile(p.path(charonLog))
+func (p *peer) log() string { return p.readFile(charonLog) }
+
+// readFile returns a file inside the peer's root filesystem, or what went
+// wrong reading it: it is for failure messages.
+func (p *peer) readFile(inside string) string {
+	data, err := os.ReadFile(p.path(inside))
 	if err != nil {
-		return "(no charon log: " + err.Error() + ")"
+		return "(no " + inside + ": " + err.Error() + ")"
 	}
 	return string(data)
 }

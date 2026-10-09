@@ -85,7 +85,7 @@ func pair(t *testing.T, ctx context.Context) (*peer, *peer) {
 	link(t, ctx, a, b)
 	ca := newTestCA(t)
 	for i, p := range []*peer{a, b} {
-		p.startModuleServer(t, ctx)
+		p.startModuleHost(t, ctx)
 		p.pub = p.provisionToken(t, ctx)
 		other := b
 		if p == b {
@@ -182,13 +182,23 @@ func TestESPTransportThroughPKCS11Module(t *testing.T) {
 		t.Logf("%s: charon CapEff=%#x", p.name, capEff)
 		assert.Equal(t, uint64(1)<<capNetAdmin, capEff, "%s: charon keeps CAP_NET_ADMIN and nothing else", p.name)
 
-		// The VICI socket belongs to charon's user and is not world-reachable.
+		// The VICI socket is the platform user's alone: charon created it for
+		// its own user and the packaged service handed it over at mode 0600.
 		info, err := os.Stat(p.path(viciSocket))
 		require.NoError(t, err)
 		st, ok := info.Sys().(*syscall.Stat_t)
 		require.True(t, ok)
-		assert.Equal(t, os.FileMode(0o660), info.Mode().Perm(), "%s: VICI socket mode", p.name)
-		assert.Equal(t, []uint32{uint32(uid), uint32(gid)}, []uint32{st.Uid, st.Gid}, "%s: VICI socket owner", p.name)
+		platformUID, platformGID := p.lookupUser(t, platformUser)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "%s: VICI socket mode", p.name)
+		assert.Equal(t, []uint32{uint32(platformUID), uint32(platformGID)}, []uint32{st.Uid, st.Gid}, "%s: VICI socket owner", p.name)
+
+		// The module host's socket is reachable by charon's group and no one else.
+		info, err = os.Stat(p.path(p11Socket))
+		require.NoError(t, err)
+		st, ok = info.Sys().(*syscall.Stat_t)
+		require.True(t, ok)
+		assert.Equal(t, os.FileMode(0o660), info.Mode().Perm(), "%s: p11-kit socket mode", p.name)
+		assert.Equal(t, gid, int(st.Gid), "%s: p11-kit socket group is charon's", p.name)
 	}
 }
 

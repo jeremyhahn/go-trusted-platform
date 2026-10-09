@@ -4,13 +4,19 @@
 # /etc/strongswan.conf and /etc/strongswan.d/).
 #CHARON_OPTS=""
 
-# supervise-daemon restart policy.
+# supervise-daemon restart policy, and how often (seconds) the service checks
+# that charon still answers VICI and that its socket has the right owner.
 #CHARON_RESPAWN_DELAY=2
 #CHARON_RESPAWN_MAX=10
 #CHARON_RESPAWN_PERIOD=60
+#CHARON_HEALTHCHECK_INTERVAL=30
 
-# Environment for the PKCS#11 provider charon loads (the pkcs11 plugin's
-# modules are configured in /etc/strongswan.d/charon/pkcs11.conf). For
-# example, when the provider is p11-kit-client.so talking to a p11-kit
-# server socket:
-#export P11_KIT_SERVER_ADDRESS="unix:path=/run/xkms/p11-kit.sock"
+# The owner of the VICI socket (/run/charon.vici, mode 0600): the account the
+# platform daemon runs as. The service refuses to start if it does not exist.
+#CHARON_VICI_USER="platformd"
+#CHARON_VICI_GROUP="platform"
+
+# charon reaches the IKE key through p11-kit-client.so (the pkcs11 plugin is
+# configured in /etc/strongswan.d/charon/pkcs11.conf), which talks to the
+# p11-kit server of the module host (/etc/init.d/xkms-p11-kit) on this socket.
+export P11_KIT_SERVER_ADDRESS="unix:path=/run/p11-kit/xkms.sock"

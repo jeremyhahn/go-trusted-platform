@@ -1,0 +1,124 @@
+#!/sbin/openrc-run
+# The module host: a glibc p11-kit server hosting the go-xkms PKCS#11 module
+# (libxkms_pkcs11.so), for charon.
+#
+# A Go c-shared library cannot be loaded by a musl process (golang/go#13492),
+# so the node's musl processes cannot dlopen the module. They load
+# p11-kit-client.so instead, which forwards PKCS#11 over the socket below to
+# this server. The server and the module run in a glibc root filesystem
+# (Ubuntu, p11-kit 0.26 or newer) that the trusted-platform-p11-host apk
+# carries as one archive: it is unpacked under /var/lib/xkms-p11-host the first
+# time the service starts and again whenever the apk brings a different one,
+# then chrooted into, so it never touches the musl system around it. Inside it
+# are bind mounts of /proc, /dev, the socket directory, and the module's state
+# (/var/lib/xkms, which survives an upgrade of the root filesystem).
+#
+# The p11-kit version is pinned at 0.26 (p11-kit-pin-check): the service
+# refuses to start a module host older than that.
+
+share="/usr/share/xkms-p11-host"
+libexec="/usr/libexec/xkms-p11-host"
+host_dir="/var/lib/xkms-p11-host"
+host_root="${host_dir}/rootfs"
+host_marker="${host_dir}/rootfs.sha256"
+state_dir="/var/lib/xkms"
+socket_dir="/run/p11-kit"
+socket="${socket_dir}/xkms.sock"
+module="/usr/lib/xkms/libxkms_pkcs11.so"
+socket_group="${XKMS_P11_SOCKET_GROUP:-strongswan}"
+
+description="p11-kit server hosting the go-xkms PKCS#11 module"
+supervisor="supervise-daemon"
+output_log="/var/log/xkms-p11-kit.log"
+error_log="/var/log/xkms-p11-kit.log"
+command="/usr/sbin/chroot"
+command_args="${host_root} /usr/bin/p11-kit server -f -n ${socket} --provider ${module} pkcs11:"
+respawn_delay="${XKMS_P11_RESPAWN_DELAY:-2}"
+respawn_max="${XKMS_P11_RESPAWN_MAX:-10}"
+respawn_period="${XKMS_P11_RESPAWN_PERIOD:-60}"
+healthcheck_timer="${XKMS_P11_HEALTHCHECK_INTERVAL:-30}"
+
+is_mounted() {
+	grep -q " $1 " /proc/mounts
+}
+
+mounts_up() {
+	mkdir -p "${host_root}/proc" "${host_root}/dev" "${host_root}${socket_dir}" "${host_root}${state_dir}" || return 1
+	is_mounted "${host_root}/proc" || mount -t proc proc "${host_root}/proc" || return 1
+	is_mounted "${host_root}/dev" || mount --bind /dev "${host_root}/dev" || return 1
+	is_mounted "${host_root}${socket_dir}" || mount --bind "${socket_dir}" "${host_root}${socket_dir}" || return 1
+	is_mounted "${host_root}${state_dir}" || mount --bind "${state_dir}" "${host_root}${state_dir}" || return 1
+}
+
+mounts_down() {
+	local dir
+	for dir in "${state_dir}" "${socket_dir}" /dev /proc; do
+		if is_mounted "${host_root}${dir}"; then
+			umount -l "${host_root}${dir}" || return 1
+		fi
+	done
+}
+
+# unpack_root makes ${host_root} the root filesystem of the installed apk. The
+# marker is written last, so an unpack that was interrupted is redone. The bind
+# mounts are detached first: removing the old root must not reach the module's
+# state through them.
+unpack_root() {
+	local want have
+	want=$(cat "${share}/rootfs.tar.sha256") || return 1
+	have=$(cat "${host_marker}" 2>/dev/null)
+	[ "${want}" = "${have}" ] && return 0
+
+	ebegin "Unpacking the module host"
+	mounts_down &&
+		rm -rf "${host_root}" "${host_marker}" &&
+		mkdir -p "${host_root}" &&
+		tar -xpf "${share}/rootfs.tar" -C "${host_root}" &&
+		echo "${want}" >"${host_marker}"
+	eend $?
+}
+
+# own_socket lets charon's group, and only it, reach the server.
+own_socket() {
+	chown "root:${socket_group}" "${socket}" && chmod 0660 "${socket}"
+}
+
+start_pre() {
+	if ! grep -q "^${socket_group}:" /etc/group; then
+		eerror "socket group ${socket_group} does not exist (XKMS_P11_SOCKET_GROUP in /etc/conf.d/${RC_SVCNAME})"
+		return 1
+	fi
+	checkpath -d -m 0755 "${host_dir}" &&
+		checkpath -d -m 0700 "${state_dir}" &&
+		checkpath -d -m 0755 "${socket_dir}" || return 1
+	# A socket left by a server that died must not look like a live one.
+	rm -f "${socket}"
+
+	unpack_root || return 1
+	"${libexec}/p11-kit-pin-check" "$(cat "${host_root}/usr/share/xkms/p11-kit.version")" || return 1
+	mounts_up
+}
+
+start_post() {
+	local tries=0
+	while [ ! -S "${socket}" ]; do
+		tries=$((tries + 1))
+		if [ "${tries}" -gt 300 ]; then
+			eerror "the p11-kit server did not create ${socket}"
+			return 1
+		fi
+		sleep 0.1
+	done
+	own_socket
+}
+
+# healthcheck runs every XKMS_P11_HEALTHCHECK_INTERVAL seconds under
+# supervise-daemon. A respawned server has recreated the socket as root only;
+# this gives it back to charon's group.
+healthcheck() {
+	own_socket
+}
+
+stop_post() {
+	mounts_down
+}

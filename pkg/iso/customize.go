@@ -1159,6 +1159,8 @@ func (c *Customizer) BuildPreFetchRepository(ctx context.Context) error {
 		FilesystemLVM: c.config.RootFS.Type == "lvm",
 		IMAEnabled:    false,
 		ExtraPackages: append([]string(nil), c.config.Installer.ExtraPackages...),
+
+		PlatformAPKDir: c.config.Installer.PlatformAPKDir,
 	}
 
 	// Check if mirror is empty and set default
@@ -5645,7 +5647,7 @@ func (c *Customizer) buildInstallerConfig() (*installer.Config, error) {
 		Version:            c.config.Alpine.Version,
 		Architecture:       string(c.config.architecture()),
 		KernelPackage:      c.config.Installer.KernelPackage,
-		Packages:           append([]string(nil), c.config.Installer.ExtraPackages...),
+		Packages:           c.config.Installer.installPackages(),
 		Hostname:           hostname,
 		Mirror:             c.config.Alpine.Mirror,
 		FilesystemType:     config.Disk.RootFilesystem,

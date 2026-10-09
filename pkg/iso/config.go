@@ -161,6 +161,13 @@ type ISOBuildConfig struct {
 	// Empty means the autoinstall repo setup falls back to the public
 	// Alpine mirror (dl-cdn) at install time.
 	APKMirror string `yaml:"apk-mirror,omitempty" json:"apk_mirror,omitempty"`
+
+	// PlatformAPKDir is the build/docker/strongswan-builder output (make
+	// strongswan-build) whose apks the media carries and installs for the
+	// overlay's IPsec transport. Empty builds media without them. Every
+	// medium built from this configuration -- the ISO, the factory image and
+	// the netboot sets -- takes them from here.
+	PlatformAPKDir string `yaml:"platform-apk-dir,omitempty" json:"platform_apk_dir,omitempty"`
 }
 
 // IsDynamicConfigMode returns true when the ISO should fetch config from a

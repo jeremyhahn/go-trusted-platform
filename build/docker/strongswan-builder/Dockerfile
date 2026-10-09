@@ -2,7 +2,9 @@
 #
 # Builds charon + swanctl (IKEv2, OpenSSL, PKCS#11, VICI) from a pinned,
 # signature-verified upstream release and packages them as a signed apk with
-# an OpenRC service. Built once per architecture: --platform linux/amd64
+# an OpenRC service, and packages the PKCS#11 module host (a glibc root
+# filesystem it is given) with its OpenRC service as a second apk. Built once
+# per architecture: --platform linux/amd64
 # natively, --platform linux/arm64 under binfmt/qemu-user.
 #
 # alpine-first per the company devops convention: the platform's nodes run
@@ -40,6 +42,7 @@ RUN gpg --dearmor < /build/strongswan-release-key.asc > /build/strongswan-releas
 
 COPY build-strongswan.sh /build/
 COPY aport/ /build/aport/
+COPY aport-p11-host/ /build/aport-p11-host/
 RUN chmod +x /build/build-strongswan.sh
 
 ENTRYPOINT ["/build/build-strongswan.sh"]

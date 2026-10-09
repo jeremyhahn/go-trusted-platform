@@ -37,6 +37,7 @@ type createFlags struct {
 	alpineVersion   string
 	mirror          string
 	apkMirror       string
+	platformAPKDir  string
 	arch            string
 	platformVersion string
 	platformConfig  string
@@ -123,6 +124,7 @@ Examples:
 	// kernel cmdline as platform_apk_mirror= so PXE nodes — which have no
 	// /media/cdrom — can resolve packages at install time. Empty means the
 	// autoinstall repo setup falls back to the public Alpine mirror.
+	cmd.Flags().StringVar(&flags.platformAPKDir, "platform-apk-dir", "", "strongSwan builder output (make strongswan-build) whose apks the ISO carries and installs for the overlay's IPsec transport")
 	cmd.Flags().StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL (e.g. http://10.4.6.11:8080); empty falls back to the public Alpine mirror")
 	cmd.Flags().StringVar(&flags.arch, "arch", "x86_64", "Architecture (x86_64 or aarch64)")
 
@@ -384,6 +386,9 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	}
 	if flags.apkMirror != "" {
 		config.APKMirror = flags.apkMirror
+	}
+	if flags.platformAPKDir != "" {
+		config.PlatformAPKDir = flags.platformAPKDir
 	}
 	if flags.arch != "" {
 		config.Architecture = flags.arch
