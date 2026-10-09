@@ -63,6 +63,8 @@ func buildGRPCMethodPermissions() map[string]string {
 		ca     = "ca"
 		prox   = "proxy"
 		ntp    = "ntp"
+
+		attestation = "attestation"
 	)
 
 	scope := func(resource, action string) string {
@@ -96,6 +98,11 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.VTPMService/ReadVTPMPCR":      scope(vtpm, read),
 		"/platform.v1.VTPMService/SealVTPM":         scope(vtpm, write),
 		"/platform.v1.VTPMService/UnsealVTPM":       scope(vtpm, read),
+
+		// ---------------------------------------------------------------------
+		// Attestation (AttestationService)
+		// ---------------------------------------------------------------------
+		"/platform.v1.AttestationService/StreamDeviceVerdicts": scope(attestation, read),
 
 		// ---------------------------------------------------------------------
 		// DNS (DNSService)

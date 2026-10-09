@@ -40,7 +40,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
-	sdkdaemon "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/daemon"
 	sdkdevice "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/device"
 	sdkgateway "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/gateway"
 	sdkproxy "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/proxy"
@@ -705,18 +704,15 @@ func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anc
 
 // WireOverlayPlatform points the overlay admission inputs of runtime at
 // platformd through client: the fabric allocations, the device records, the
-// latest device verdicts and the verdict event stream. The serve command
+// latest device verdicts and the device verdict stream. The serve command
 // calls it with the platformd connection it dials.
 func WireOverlayPlatform(runtime *gateway.GatewayRuntime, client platform.Client) {
 	runtime.OverlayPlatform = client
 	runtime.OverlayIPAM = &overlayRuntimeIPAM{client: sdkgateway.NewClientFromGRPC(client.Gateway()), now: time.Now}
 	runtime.OverlayDevices = &overlayRuntimeDevices{client: sdkdevice.NewClientFromGRPC(client.Device())}
-	runtime.OverlayVerdicts = &overlayRuntimeVerdicts{client: sdkattestation.NewClientFromGRPC(client.Attestation())}
-	logger := runtime.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	runtime.OverlayVerdictStream = &overlayRuntimeVerdictStream{client: sdkdaemon.NewClientFromGRPC(client.Daemon()), logger: logger}
+	attestation := sdkattestation.NewClientFromGRPC(client.Attestation())
+	runtime.OverlayVerdicts = &overlayRuntimeVerdicts{client: attestation}
+	runtime.OverlayVerdictStream = &overlayRuntimeVerdictStream{client: attestation}
 }
 
 func overlayPlatformdConfig(cfg *ServeConfig) proxysvc.PlatformdConfig {

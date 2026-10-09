@@ -33,6 +33,7 @@ const (
 	AttestationService_ListDeviceReports_FullMethodName           = "/platform.v1.AttestationService/ListDeviceReports"
 	AttestationService_RefreshDeviceReport_FullMethodName         = "/platform.v1.AttestationService/RefreshDeviceReport"
 	AttestationService_DescribeCallerPolicy_FullMethodName        = "/platform.v1.AttestationService/DescribeCallerPolicy"
+	AttestationService_StreamDeviceVerdicts_FullMethodName        = "/platform.v1.AttestationService/StreamDeviceVerdicts"
 )
 
 // AttestationServiceClient is the client API for AttestationService service.
@@ -82,6 +83,13 @@ type AttestationServiceClient interface {
 	// DescribeCallerPolicy reports the node's compiled caller-admission
 	// policy — what is enforced, not what was configured.
 	DescribeCallerPolicy(ctx context.Context, in *DescribeCallerPolicyRequest, opts ...grpc.CallOption) (*DescribeCallerPolicyResponse, error)
+	// StreamDeviceVerdicts streams every device verdict platformd records,
+	// passed or failed, from the moment the stream opens; verdicts recorded
+	// while no one follows are not replayed. It requires attestation:read, and
+	// a caller acting for a tenant receives only the verdicts of that tenant's
+	// devices. This is how the overlay gateways learn that a device's
+	// attestation failed or recovered.
+	StreamDeviceVerdicts(ctx context.Context, in *StreamDeviceVerdictsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DeviceVerdictEvent], error)
 }
 
 type attestationServiceClient struct {
@@ -232,6 +240,25 @@ func (c *attestationServiceClient) DescribeCallerPolicy(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *attestationServiceClient) StreamDeviceVerdicts(ctx context.Context, in *StreamDeviceVerdictsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DeviceVerdictEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AttestationService_ServiceDesc.Streams[0], AttestationService_StreamDeviceVerdicts_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamDeviceVerdictsRequest, DeviceVerdictEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AttestationService_StreamDeviceVerdictsClient = grpc.ServerStreamingClient[DeviceVerdictEvent]
+
 // AttestationServiceServer is the server API for AttestationService service.
 // All implementations must embed UnimplementedAttestationServiceServer
 // for forward compatibility.
@@ -279,6 +306,13 @@ type AttestationServiceServer interface {
 	// DescribeCallerPolicy reports the node's compiled caller-admission
 	// policy — what is enforced, not what was configured.
 	DescribeCallerPolicy(context.Context, *DescribeCallerPolicyRequest) (*DescribeCallerPolicyResponse, error)
+	// StreamDeviceVerdicts streams every device verdict platformd records,
+	// passed or failed, from the moment the stream opens; verdicts recorded
+	// while no one follows are not replayed. It requires attestation:read, and
+	// a caller acting for a tenant receives only the verdicts of that tenant's
+	// devices. This is how the overlay gateways learn that a device's
+	// attestation failed or recovered.
+	StreamDeviceVerdicts(*StreamDeviceVerdictsRequest, grpc.ServerStreamingServer[DeviceVerdictEvent]) error
 	mustEmbedUnimplementedAttestationServiceServer()
 }
 
@@ -330,6 +364,9 @@ func (UnimplementedAttestationServiceServer) RefreshDeviceReport(context.Context
 }
 func (UnimplementedAttestationServiceServer) DescribeCallerPolicy(context.Context, *DescribeCallerPolicyRequest) (*DescribeCallerPolicyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DescribeCallerPolicy not implemented")
+}
+func (UnimplementedAttestationServiceServer) StreamDeviceVerdicts(*StreamDeviceVerdictsRequest, grpc.ServerStreamingServer[DeviceVerdictEvent]) error {
+	return status.Error(codes.Unimplemented, "method StreamDeviceVerdicts not implemented")
 }
 func (UnimplementedAttestationServiceServer) mustEmbedUnimplementedAttestationServiceServer() {}
 func (UnimplementedAttestationServiceServer) testEmbeddedByValue()                            {}
@@ -604,6 +641,17 @@ func _AttestationService_DescribeCallerPolicy_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AttestationService_StreamDeviceVerdicts_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamDeviceVerdictsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AttestationServiceServer).StreamDeviceVerdicts(m, &grpc.GenericServerStream[StreamDeviceVerdictsRequest, DeviceVerdictEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AttestationService_StreamDeviceVerdictsServer = grpc.ServerStreamingServer[DeviceVerdictEvent]
+
 // AttestationService_ServiceDesc is the grpc.ServiceDesc for AttestationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -668,6 +716,12 @@ var AttestationService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AttestationService_DescribeCallerPolicy_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "StreamDeviceVerdicts",
+			Handler:       _AttestationService_StreamDeviceVerdicts_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "attestation.proto",
 }

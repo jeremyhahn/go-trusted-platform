@@ -115,6 +115,10 @@ type AttestationServiceServer struct {
 	// SetReporting is called; the report RPCs answer FailedPrecondition
 	// until then.
 	reporting atomic.Pointer[reportingHandles]
+
+	// verdicts is the hub StreamDeviceVerdicts serves from. Nil until
+	// SetVerdictHub is called; the RPC answers FailedPrecondition until then.
+	verdicts atomic.Pointer[deviceVerdictHub]
 }
 
 // NewAttestationServiceServer creates a new AttestationServiceServer.

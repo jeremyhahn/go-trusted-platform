@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"net/netip"
 	"testing"
 	"time"
@@ -26,12 +25,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/deviceverdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
-	sdkdaemon "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/daemon"
+	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
 )
 
 // fakeOverlayIPAMClient serves one fabric pool and counts the listings.
@@ -334,28 +333,26 @@ func TestOverlayRuntimeVerdicts_UnfreshReportDoesNotPass(t *testing.T) {
 	}
 }
 
-// fakeOverlayEventClient opens one stream of fixed events, ending in err.
-type fakeOverlayEventClient struct {
-	events  []*platformv1.Event
+// fakeOverlayVerdictClient opens one stream of fixed verdicts, ending in end.
+type fakeOverlayVerdictClient struct {
+	events  []*platformv1.DeviceVerdictEvent
 	end     error
 	openErr error
-	request *platformv1.StreamEventsRequest
 }
 
-func (f *fakeOverlayEventClient) StreamEvents(_ context.Context, req *platformv1.StreamEventsRequest) (sdkdaemon.EventStream, error) {
-	f.request = req
+func (f *fakeOverlayVerdictClient) StreamDeviceVerdicts(context.Context) (sdkattestation.DeviceVerdictStream, error) {
 	if f.openErr != nil {
 		return nil, f.openErr
 	}
-	return &fakeEventStream{events: f.events, end: f.end}, nil
+	return &fakeVerdictStream{events: f.events, end: f.end}, nil
 }
 
-type fakeEventStream struct {
-	events []*platformv1.Event
+type fakeVerdictStream struct {
+	events []*platformv1.DeviceVerdictEvent
 	end    error
 }
 
-func (s *fakeEventStream) Recv() (*platformv1.Event, error) {
+func (s *fakeVerdictStream) Recv() (*platformv1.DeviceVerdictEvent, error) {
 	if len(s.events) == 0 {
 		return nil, s.end
 	}
@@ -364,49 +361,36 @@ func (s *fakeEventStream) Recv() (*platformv1.Event, error) {
 	return event, nil
 }
 
-func (s *fakeEventStream) CloseSend() error { return nil }
-
-func verdictEvent(v verdict.DeviceVerdict) *platformv1.Event {
-	return &platformv1.Event{Source: verdict.EventSource, Metadata: verdict.EventMetadata(v)}
-}
-
-func TestOverlayRuntimeVerdictStream_DeliversOnlyDeviceVerdicts(t *testing.T) {
-	failed := verdict.DeviceVerdict{DeviceID: 42, Reason: "no attestation certificate enrolled"}
-	passed := verdict.DeviceVerdict{DeviceID: 43, Passed: true}
-	unreadable := verdictEvent(failed)
-	unreadable.Metadata["device_id"] = "forty-two"
-	client := &fakeOverlayEventClient{
-		events: []*platformv1.Event{
-			{Source: "sdn.addressing", Metadata: verdict.EventMetadata(failed)},
-			verdictEvent(failed),
-			unreadable,
-			verdictEvent(passed),
+func TestOverlayRuntimeVerdictStream_DeliversEveryVerdict(t *testing.T) {
+	client := &fakeOverlayVerdictClient{
+		events: []*platformv1.DeviceVerdictEvent{
+			{EventId: "ev-42", DeviceId: 42, TenantId: "tenant-a", HostId: "node-42", Serial: "SN42", Cryptographic: true, Reason: "signature invalid"},
+			{EventId: "ev-43", DeviceId: 43, Passed: true},
 		},
 		end: io.EOF,
 	}
-	s := &overlayRuntimeVerdictStream{client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &overlayRuntimeVerdictStream{client: client}
 
-	var got []verdict.DeviceVerdict
-	err := s.Follow(context.Background(), func(_ context.Context, v verdict.DeviceVerdict) {
+	var got []deviceverdict.DeviceVerdict
+	err := s.Follow(context.Background(), func(_ context.Context, v deviceverdict.DeviceVerdict) {
 		got = append(got, v)
 	})
 
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Follow = %v, want the stream's end", err)
 	}
+	failed := deviceverdict.DeviceVerdict{DeviceID: 42, TenantID: "tenant-a", HostID: "node-42", Serial: "SN42", Cryptographic: true, Reason: "signature invalid"}
+	passed := deviceverdict.DeviceVerdict{DeviceID: 43, Passed: true}
 	if len(got) != 2 || got[0] != failed || got[1] != passed {
-		t.Fatalf("delivered %+v, want only the two readable device verdicts", got)
-	}
-	if len(client.request.GetSources()) != 1 || client.request.GetSources()[0] != verdict.EventSource {
-		t.Fatalf("the subscription must ask for device verdicts only: %+v", client.request)
+		t.Fatalf("delivered %+v, want the failed and the passing verdict in order", got)
 	}
 }
 
 func TestOverlayRuntimeVerdictStream_ReportsAStreamThatCannotOpen(t *testing.T) {
 	down := status.Error(codes.Unavailable, "down")
-	s := &overlayRuntimeVerdictStream{client: &fakeOverlayEventClient{openErr: down}, logger: slog.Default()}
+	s := &overlayRuntimeVerdictStream{client: &fakeOverlayVerdictClient{openErr: down}}
 
-	err := s.Follow(context.Background(), func(context.Context, verdict.DeviceVerdict) {
+	err := s.Follow(context.Background(), func(context.Context, deviceverdict.DeviceVerdict) {
 		t.Fatal("nothing may be delivered")
 	})
 
@@ -433,13 +417,8 @@ func (overlayPlatformClient) Attestation() platformv1.AttestationServiceClient {
 	return platformv1.NewAttestationServiceClient(nil)
 }
 
-func (overlayPlatformClient) Daemon() platformv1.PlatformDaemonClient {
-	return platformv1.NewPlatformDaemonClient(nil)
-}
-
 func TestWireOverlayPlatform_WiresEveryAdmissionInput(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	runtime := &gateway.GatewayRuntime{Logger: logger}
+	runtime := &gateway.GatewayRuntime{}
 	client := overlayPlatformClient{}
 
 	WireOverlayPlatform(runtime, client)
@@ -451,18 +430,7 @@ func TestWireOverlayPlatform_WiresEveryAdmissionInput(t *testing.T) {
 		t.Fatalf("every admission input must be wired: %+v", runtime)
 	}
 	stream, ok := runtime.OverlayVerdictStream.(*overlayRuntimeVerdictStream)
-	if !ok || stream.logger != logger {
-		t.Fatalf("the verdict stream must log through the runtime's logger: %#v", runtime.OverlayVerdictStream)
-	}
-}
-
-func TestWireOverlayPlatform_WithoutALoggerUsesTheDefault(t *testing.T) {
-	runtime := &gateway.GatewayRuntime{}
-
-	WireOverlayPlatform(runtime, overlayPlatformClient{})
-
-	stream, ok := runtime.OverlayVerdictStream.(*overlayRuntimeVerdictStream)
-	if !ok || stream.logger == nil {
-		t.Fatalf("a runtime with no logger must still get a logging verdict stream: %#v", runtime.OverlayVerdictStream)
+	if !ok || stream.client == nil {
+		t.Fatalf("the verdict stream must follow platformd's attestation service: %#v", runtime.OverlayVerdictStream)
 	}
 }

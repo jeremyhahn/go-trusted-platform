@@ -83,6 +83,14 @@ service AttestationService {
   // DescribeCallerPolicy reports the node's compiled caller-admission
   // policy — what is enforced, not what was configured.
   rpc DescribeCallerPolicy(DescribeCallerPolicyRequest) returns (DescribeCallerPolicyResponse);
+
+  // StreamDeviceVerdicts streams every device verdict platformd records,
+  // passed or failed, from the moment the stream opens; verdicts recorded
+  // while no one follows are not replayed. It requires attestation:read, and
+  // a caller acting for a tenant receives only the verdicts of that tenant's
+  // devices. This is how the overlay gateways learn that a device's
+  // attestation failed or recovered.
+  rpc StreamDeviceVerdicts(StreamDeviceVerdictsRequest) returns (stream DeviceVerdictEvent);
 }
 
 // =============================================================================
@@ -686,4 +694,26 @@ message CallerPolicyDescription {
 message DescribeCallerPolicyResponse {
   Status status = 1;
   CallerPolicyDescription policy = 2;
+}
+
+message StreamDeviceVerdictsRequest {}
+
+// DeviceVerdictEvent is one device verdict as platformd recorded it in the
+// attestation event log.
+message DeviceVerdictEvent {
+  // EventId is the attestation event log entry that made the verdict durable.
+  string event_id = 1;
+  // RecordedAt is when the verdict was logged.
+  google.protobuf.Timestamp recorded_at = 2;
+  uint64 device_id = 3;
+  // TenantId is the tenant the device belongs to.
+  string tenant_id = 4;
+  string host_id = 5;
+  string serial = 6;
+  bool passed = 7;
+  // Cryptographic is true when a failed verdict was evidence of compromise
+  // rather than an absence of evidence. Meaningless when passed.
+  bool cryptographic = 8;
+  // Reason is the failure detail; empty when passed.
+  string reason = 9;
 }

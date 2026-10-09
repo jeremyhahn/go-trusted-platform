@@ -204,6 +204,7 @@ func newQuoteFixture(t *testing.T) *quoteFixture {
 		now:      ca.now,
 	}
 	f.device = &deviceentities.Device{
+		TenantID:   "tenant-a",
 		Model:      "test-model",
 		Serial:     "SN-1",
 		Hostname:   "node-1.example.test",

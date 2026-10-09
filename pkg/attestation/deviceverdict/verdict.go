@@ -17,6 +17,9 @@ import "time"
 type DeviceVerdict struct {
 	// DeviceID is the platform device record the quote was verified for.
 	DeviceID uint64
+	// TenantID is the tenant that owns the device record; empty for a device
+	// the platform itself owns. It decides which tenants may see the verdict.
+	TenantID string
 	// HostID is the device's enrolled hostname (IDevID CN) when known.
 	HostID string
 	// Serial is the device serial number when known.

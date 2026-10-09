@@ -218,7 +218,11 @@ type Daemon struct {
 	// flip it to NOT_SERVING on shutdown, draining load balancers before the
 	// listeners go away.
 	healthGRPCService *HealthGRPCService
-	zoneSvc           gateway.ZoneService
+	// verdictHub serves StreamDeviceVerdicts; nil when the attestation
+	// service cannot hand out its verdicts. Closed on shutdown so the open
+	// streams end before the gRPC servers stop gracefully.
+	verdictHub *deviceVerdictHub
+	zoneSvc    gateway.ZoneService
 
 	// Concrete server references for accessor methods (set only for real servers)
 	concreteRestServer    *RESTServer
@@ -765,6 +769,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// 404 from a missing route.
 	attestationService := NewAttestationServiceServer(config.AttestationService, logger.Slog())
 	attestationService.SetReporting(config.AttestationReporting)
+	// Serve every recorded device verdict on StreamDeviceVerdicts, so the
+	// overlay gateways withdraw a device whose quote fails (#709).
+	verdictHub := streamDeviceVerdicts(attestationService, config.AttestationService)
 	if grpcServer != nil {
 		platformv1.RegisterAttestationServiceServer(grpcServer, attestationService)
 	}
@@ -1327,6 +1334,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		pxeGRPCService:               pxeGRPCService,
 		ntpGRPCService:               ntpGRPCService,
 		healthRegistry:               healthRegistry,
+		verdictHub:                   verdictHub,
 		zoneSvc:                      zoneSvcInstance,
 	}
 
@@ -1714,10 +1722,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// recorded during App bring-up, which happens before any transport
 	// exists (#508).
 	daemon.publishBridgeAddressConflicts()
-
-	// Stream every recorded device verdict, so the overlay gateways withdraw
-	// a device whose quote fails (#709).
-	daemon.publishDeviceVerdicts()
 
 	logger.Info("Wiring health registry...")
 	// Wire health registry into the service for gRPC health endpoint
@@ -2492,6 +2496,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	// requests fail against a listener that is on its way out.
 	if d.healthGRPCService != nil {
 		d.healthGRPCService.Shutdown()
+	}
+	if d.verdictHub != nil {
+		d.verdictHub.Close()
 	}
 
 	d.mu.Lock()

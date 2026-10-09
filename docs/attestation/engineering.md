@@ -302,21 +302,34 @@ service on *any* failed verdict register a `verdict.Observer` instead
 (`Service.RegisterDeviceVerdictObserver`). It is handed every verdict once it
 is in the event log, with that event's ID and time.
 
-platformd registers one at start-up that raises a platform event per verdict
-on `PlatformDaemon.StreamEvents` (gRPC and Unix):
+platformd registers one at start-up (`streamDeviceVerdicts`,
+`pkg/api/daemon/attestation_verdict_stream.go`) that serves every verdict on
+`AttestationService.StreamDeviceVerdicts`, gRPC over TCP and over the Unix
+socket. Each `DeviceVerdictEvent` carries the event-log entry's `event_id` and
+`recorded_at`, and the verdict's `device_id`, `tenant_id`, `host_id`,
+`serial`, `passed`, `cryptographic` and `reason`. The verifier stamps
+`tenant_id` from the device record; it is empty for a device the platform
+itself owns.
 
-| Field | Value |
-|---|---|
-| `source` | `attestation.device-verdict` (`verdict.EventSource`) |
-| `type` | `EVENT_TYPE_ATTESTATION_VERIFIED` |
-| `severity` | `INFO` passed, `WARNING` absence of evidence, `CRITICAL` cryptographic failure |
-| `id`, `timestamp` | the attestation event-log entry |
-| `metadata` | `device_id`, `host_id`, `serial`, `passed`, `cryptographic`, `reason` |
+Who sees which verdicts:
 
-`verdict.EventMetadata` and `verdict.FromEventMetadata` are the one encoding
-of that metadata. The stream ignores request filters and drops events for a
-subscriber that falls behind, so a consumer filters on `source` and keeps a
-backstop. The overlay gateways use it to withdraw a failed device's VTEPs
+| Caller | Admitted | Sees |
+|---|---|---|
+| Platform token | holds `attestation:read` and names a tenant | its tenant's devices; the `system` tenant sees every device |
+| Bearer token the daemon can only check for validity | never | — |
+| mTLS certificate | always | its certificate's tenant; a certificate naming no tenant, or `system`, sees every device |
+| No credential (Unix socket peer, or a listener run without authentication) | always | every device |
+
+A verdict on a device with no tenant reaches only callers that see every
+device. The gRPC method catalog maps the RPC to `attestation:read`, so the
+token interceptor refuses a token without it before the handler runs.
+
+The stream starts at subscription and does not replay. A subscriber more than
+64 verdicts behind is cut off with `RESOURCE_EXHAUSTED` rather than losing a
+verdict silently, and every stream ends `UNAVAILABLE` when platformd shuts
+down, so its graceful gRPC stop does not wait on followers. A consumer follows
+again after either and keeps a backstop for what it missed. The overlay
+gateways use the stream to withdraw a failed device's VTEPs
 ([overlay mode](../sdn/gateway/overlay-mode.md#revocation-on-a-failed-verdict)).
 
 ## 10. Related

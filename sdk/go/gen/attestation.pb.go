@@ -3111,6 +3111,158 @@ func (x *DescribeCallerPolicyResponse) GetPolicy() *CallerPolicyDescription {
 	return nil
 }
 
+type StreamDeviceVerdictsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StreamDeviceVerdictsRequest) Reset() {
+	*x = StreamDeviceVerdictsRequest{}
+	mi := &file_attestation_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StreamDeviceVerdictsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamDeviceVerdictsRequest) ProtoMessage() {}
+
+func (x *StreamDeviceVerdictsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_attestation_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamDeviceVerdictsRequest.ProtoReflect.Descriptor instead.
+func (*StreamDeviceVerdictsRequest) Descriptor() ([]byte, []int) {
+	return file_attestation_proto_rawDescGZIP(), []int{40}
+}
+
+// DeviceVerdictEvent is one device verdict as platformd recorded it in the
+// attestation event log.
+type DeviceVerdictEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// EventId is the attestation event log entry that made the verdict durable.
+	EventId string `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	// RecordedAt is when the verdict was logged.
+	RecordedAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=recorded_at,json=recordedAt,proto3" json:"recorded_at,omitempty"`
+	DeviceId   uint64                 `protobuf:"varint,3,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	// TenantId is the tenant the device belongs to.
+	TenantId string `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	HostId   string `protobuf:"bytes,5,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	Serial   string `protobuf:"bytes,6,opt,name=serial,proto3" json:"serial,omitempty"`
+	Passed   bool   `protobuf:"varint,7,opt,name=passed,proto3" json:"passed,omitempty"`
+	// Cryptographic is true when a failed verdict was evidence of compromise
+	// rather than an absence of evidence. Meaningless when passed.
+	Cryptographic bool `protobuf:"varint,8,opt,name=cryptographic,proto3" json:"cryptographic,omitempty"`
+	// Reason is the failure detail; empty when passed.
+	Reason        string `protobuf:"bytes,9,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceVerdictEvent) Reset() {
+	*x = DeviceVerdictEvent{}
+	mi := &file_attestation_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceVerdictEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceVerdictEvent) ProtoMessage() {}
+
+func (x *DeviceVerdictEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_attestation_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceVerdictEvent.ProtoReflect.Descriptor instead.
+func (*DeviceVerdictEvent) Descriptor() ([]byte, []int) {
+	return file_attestation_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *DeviceVerdictEvent) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *DeviceVerdictEvent) GetRecordedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RecordedAt
+	}
+	return nil
+}
+
+func (x *DeviceVerdictEvent) GetDeviceId() uint64 {
+	if x != nil {
+		return x.DeviceId
+	}
+	return 0
+}
+
+func (x *DeviceVerdictEvent) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *DeviceVerdictEvent) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *DeviceVerdictEvent) GetSerial() string {
+	if x != nil {
+		return x.Serial
+	}
+	return ""
+}
+
+func (x *DeviceVerdictEvent) GetPassed() bool {
+	if x != nil {
+		return x.Passed
+	}
+	return false
+}
+
+func (x *DeviceVerdictEvent) GetCryptographic() bool {
+	if x != nil {
+		return x.Cryptographic
+	}
+	return false
+}
+
+func (x *DeviceVerdictEvent) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 var File_attestation_proto protoreflect.FileDescriptor
 
 const file_attestation_proto_rawDesc = "" +
@@ -3376,7 +3528,19 @@ const file_attestation_proto_rawDesc = "" +
 	"\radmits_nobody\x18\t \x01(\bR\fadmitsNobody\"\x89\x01\n" +
 	"\x1cDescribeCallerPolicyResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12<\n" +
-	"\x06policy\x18\x02 \x01(\v2$.platform.v1.CallerPolicyDescriptionR\x06policy*\xe0\x01\n" +
+	"\x06policy\x18\x02 \x01(\v2$.platform.v1.CallerPolicyDescriptionR\x06policy\"\x1d\n" +
+	"\x1bStreamDeviceVerdictsRequest\"\xad\x02\n" +
+	"\x12DeviceVerdictEvent\x12\x19\n" +
+	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12;\n" +
+	"\vrecorded_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"recordedAt\x12\x1b\n" +
+	"\tdevice_id\x18\x03 \x01(\x04R\bdeviceId\x12\x1b\n" +
+	"\ttenant_id\x18\x04 \x01(\tR\btenantId\x12\x17\n" +
+	"\ahost_id\x18\x05 \x01(\tR\x06hostId\x12\x16\n" +
+	"\x06serial\x18\x06 \x01(\tR\x06serial\x12\x16\n" +
+	"\x06passed\x18\a \x01(\bR\x06passed\x12$\n" +
+	"\rcryptographic\x18\b \x01(\bR\rcryptographic\x12\x16\n" +
+	"\x06reason\x18\t \x01(\tR\x06reason*\xe0\x01\n" +
 	"\x18AttestationHashAlgorithm\x12*\n" +
 	"&ATTESTATION_HASH_ALGORITHM_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fATTESTATION_HASH_ALGORITHM_SHA1\x10\x01\x12%\n" +
@@ -3388,7 +3552,7 @@ const file_attestation_proto_rawDesc = "" +
 	"$MANIFEST_VERIFICATION_STATUS_UNKNOWN\x10\x01\x12(\n" +
 	"$MANIFEST_VERIFICATION_STATUS_PENDING\x10\x02\x12)\n" +
 	"%MANIFEST_VERIFICATION_STATUS_VERIFIED\x10\x03\x12'\n" +
-	"#MANIFEST_VERIFICATION_STATUS_FAILED\x10\x042\xa5\v\n" +
+	"#MANIFEST_VERIFICATION_STATUS_FAILED\x10\x042\x8a\f\n" +
 	"\x12AttestationService\x12P\n" +
 	"\vGetManifest\x12\x1f.platform.v1.GetManifestRequest\x1a .platform.v1.GetManifestResponse\x12V\n" +
 	"\rBuildManifest\x12!.platform.v1.BuildManifestRequest\x1a\".platform.v1.BuildManifestResponse\x12Y\n" +
@@ -3403,7 +3567,8 @@ const file_attestation_proto_rawDesc = "" +
 	"\x0fGetDeviceReport\x12#.platform.v1.GetDeviceReportRequest\x1a$.platform.v1.GetDeviceReportResponse\x12b\n" +
 	"\x11ListDeviceReports\x12%.platform.v1.ListDeviceReportsRequest\x1a&.platform.v1.ListDeviceReportsResponse\x12h\n" +
 	"\x13RefreshDeviceReport\x12'.platform.v1.RefreshDeviceReportRequest\x1a(.platform.v1.RefreshDeviceReportResponse\x12k\n" +
-	"\x14DescribeCallerPolicy\x12(.platform.v1.DescribeCallerPolicyRequest\x1a).platform.v1.DescribeCallerPolicyResponseBAZ?github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1b\x06proto3"
+	"\x14DescribeCallerPolicy\x12(.platform.v1.DescribeCallerPolicyRequest\x1a).platform.v1.DescribeCallerPolicyResponse\x12c\n" +
+	"\x14StreamDeviceVerdicts\x12(.platform.v1.StreamDeviceVerdictsRequest\x1a\x1f.platform.v1.DeviceVerdictEvent0\x01BAZ?github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1b\x06proto3"
 
 var (
 	file_attestation_proto_rawDescOnce sync.Once
@@ -3418,7 +3583,7 @@ func file_attestation_proto_rawDescGZIP() []byte {
 }
 
 var file_attestation_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_attestation_proto_msgTypes = make([]protoimpl.MessageInfo, 46)
+var file_attestation_proto_msgTypes = make([]protoimpl.MessageInfo, 48)
 var file_attestation_proto_goTypes = []any{
 	(AttestationHashAlgorithm)(0),               // 0: platform.v1.AttestationHashAlgorithm
 	(ManifestVerificationStatus)(0),             // 1: platform.v1.ManifestVerificationStatus
@@ -3462,14 +3627,16 @@ var file_attestation_proto_goTypes = []any{
 	(*DescribeCallerPolicyRequest)(nil),         // 39: platform.v1.DescribeCallerPolicyRequest
 	(*CallerPolicyDescription)(nil),             // 40: platform.v1.CallerPolicyDescription
 	(*DescribeCallerPolicyResponse)(nil),        // 41: platform.v1.DescribeCallerPolicyResponse
-	nil,                                         // 42: platform.v1.VMAttestation.MetadataEntry
-	nil,                                         // 43: platform.v1.ContainerAttestation.MetadataEntry
-	nil,                                         // 44: platform.v1.HostManifest.MetadataEntry
-	nil,                                         // 45: platform.v1.ManifestVerificationResult.VmErrorsEntry
-	nil,                                         // 46: platform.v1.ManifestVerificationResult.ContainerErrorsEntry
-	nil,                                         // 47: platform.v1.VerifyManifestRequest.ExpectedPcrsEntry
-	(*timestamppb.Timestamp)(nil),               // 48: google.protobuf.Timestamp
-	(*Status)(nil),                              // 49: platform.v1.Status
+	(*StreamDeviceVerdictsRequest)(nil),         // 42: platform.v1.StreamDeviceVerdictsRequest
+	(*DeviceVerdictEvent)(nil),                  // 43: platform.v1.DeviceVerdictEvent
+	nil,                                         // 44: platform.v1.VMAttestation.MetadataEntry
+	nil,                                         // 45: platform.v1.ContainerAttestation.MetadataEntry
+	nil,                                         // 46: platform.v1.HostManifest.MetadataEntry
+	nil,                                         // 47: platform.v1.ManifestVerificationResult.VmErrorsEntry
+	nil,                                         // 48: platform.v1.ManifestVerificationResult.ContainerErrorsEntry
+	nil,                                         // 49: platform.v1.VerifyManifestRequest.ExpectedPcrsEntry
+	(*timestamppb.Timestamp)(nil),               // 50: google.protobuf.Timestamp
+	(*Status)(nil),                              // 51: platform.v1.Status
 }
 var file_attestation_proto_depIdxs = []int32{
 	0,  // 0: platform.v1.ManifestBuilderConfig.hash_algorithm:type_name -> platform.v1.AttestationHashAlgorithm
@@ -3477,96 +3644,99 @@ var file_attestation_proto_depIdxs = []int32{
 	0,  // 2: platform.v1.AttestationQuoteConfig.hash_algorithm:type_name -> platform.v1.AttestationHashAlgorithm
 	0,  // 3: platform.v1.AttestationPCRValue.algorithm:type_name -> platform.v1.AttestationHashAlgorithm
 	5,  // 4: platform.v1.HostAttestation.pcrs:type_name -> platform.v1.AttestationPCRValue
-	48, // 5: platform.v1.HostAttestation.timestamp:type_name -> google.protobuf.Timestamp
+	50, // 5: platform.v1.HostAttestation.timestamp:type_name -> google.protobuf.Timestamp
 	0,  // 6: platform.v1.HostAttestation.hash_algorithm:type_name -> platform.v1.AttestationHashAlgorithm
 	5,  // 7: platform.v1.VMAttestation.pcrs:type_name -> platform.v1.AttestationPCRValue
-	48, // 8: platform.v1.VMAttestation.timestamp:type_name -> google.protobuf.Timestamp
+	50, // 8: platform.v1.VMAttestation.timestamp:type_name -> google.protobuf.Timestamp
 	0,  // 9: platform.v1.VMAttestation.hash_algorithm:type_name -> platform.v1.AttestationHashAlgorithm
-	42, // 10: platform.v1.VMAttestation.metadata:type_name -> platform.v1.VMAttestation.MetadataEntry
-	48, // 11: platform.v1.ContainerAttestation.timestamp:type_name -> google.protobuf.Timestamp
-	43, // 12: platform.v1.ContainerAttestation.metadata:type_name -> platform.v1.ContainerAttestation.MetadataEntry
-	48, // 13: platform.v1.HostManifest.timestamp:type_name -> google.protobuf.Timestamp
+	44, // 10: platform.v1.VMAttestation.metadata:type_name -> platform.v1.VMAttestation.MetadataEntry
+	50, // 11: platform.v1.ContainerAttestation.timestamp:type_name -> google.protobuf.Timestamp
+	45, // 12: platform.v1.ContainerAttestation.metadata:type_name -> platform.v1.ContainerAttestation.MetadataEntry
+	50, // 13: platform.v1.HostManifest.timestamp:type_name -> google.protobuf.Timestamp
 	6,  // 14: platform.v1.HostManifest.host:type_name -> platform.v1.HostAttestation
 	7,  // 15: platform.v1.HostManifest.vms:type_name -> platform.v1.VMAttestation
 	8,  // 16: platform.v1.HostManifest.containers:type_name -> platform.v1.ContainerAttestation
-	44, // 17: platform.v1.HostManifest.metadata:type_name -> platform.v1.HostManifest.MetadataEntry
+	46, // 17: platform.v1.HostManifest.metadata:type_name -> platform.v1.HostManifest.MetadataEntry
 	1,  // 18: platform.v1.ManifestVerificationResult.status:type_name -> platform.v1.ManifestVerificationStatus
-	48, // 19: platform.v1.ManifestVerificationResult.verified_at:type_name -> google.protobuf.Timestamp
-	45, // 20: platform.v1.ManifestVerificationResult.vm_errors:type_name -> platform.v1.ManifestVerificationResult.VmErrorsEntry
-	46, // 21: platform.v1.ManifestVerificationResult.container_errors:type_name -> platform.v1.ManifestVerificationResult.ContainerErrorsEntry
+	50, // 19: platform.v1.ManifestVerificationResult.verified_at:type_name -> google.protobuf.Timestamp
+	47, // 20: platform.v1.ManifestVerificationResult.vm_errors:type_name -> platform.v1.ManifestVerificationResult.VmErrorsEntry
+	48, // 21: platform.v1.ManifestVerificationResult.container_errors:type_name -> platform.v1.ManifestVerificationResult.ContainerErrorsEntry
 	5,  // 22: platform.v1.AttestationQuote.pcr_values:type_name -> platform.v1.AttestationPCRValue
 	9,  // 23: platform.v1.GetManifestResponse.manifest:type_name -> platform.v1.HostManifest
 	2,  // 24: platform.v1.BuildManifestRequest.config:type_name -> platform.v1.ManifestBuilderConfig
-	49, // 25: platform.v1.BuildManifestResponse.status:type_name -> platform.v1.Status
+	51, // 25: platform.v1.BuildManifestResponse.status:type_name -> platform.v1.Status
 	9,  // 26: platform.v1.BuildManifestResponse.manifest:type_name -> platform.v1.HostManifest
 	9,  // 27: platform.v1.VerifyManifestRequest.manifest:type_name -> platform.v1.HostManifest
 	3,  // 28: platform.v1.VerifyManifestRequest.config:type_name -> platform.v1.ManifestVerifierConfig
-	47, // 29: platform.v1.VerifyManifestRequest.expected_pcrs:type_name -> platform.v1.VerifyManifestRequest.ExpectedPcrsEntry
-	49, // 30: platform.v1.VerifyManifestResponse.status:type_name -> platform.v1.Status
+	49, // 29: platform.v1.VerifyManifestRequest.expected_pcrs:type_name -> platform.v1.VerifyManifestRequest.ExpectedPcrsEntry
+	51, // 30: platform.v1.VerifyManifestResponse.status:type_name -> platform.v1.Status
 	10, // 31: platform.v1.VerifyManifestResponse.result:type_name -> platform.v1.ManifestVerificationResult
-	48, // 32: platform.v1.ListManifestsRequest.start_time:type_name -> google.protobuf.Timestamp
-	48, // 33: platform.v1.ListManifestsRequest.end_time:type_name -> google.protobuf.Timestamp
+	50, // 32: platform.v1.ListManifestsRequest.start_time:type_name -> google.protobuf.Timestamp
+	50, // 33: platform.v1.ListManifestsRequest.end_time:type_name -> google.protobuf.Timestamp
 	9,  // 34: platform.v1.ListManifestsResponse.manifests:type_name -> platform.v1.HostManifest
-	49, // 35: platform.v1.DeleteManifestResponse.status:type_name -> platform.v1.Status
+	51, // 35: platform.v1.DeleteManifestResponse.status:type_name -> platform.v1.Status
 	4,  // 36: platform.v1.GetAttestationQuoteRequest.config:type_name -> platform.v1.AttestationQuoteConfig
-	49, // 37: platform.v1.GetAttestationQuoteResponse.status:type_name -> platform.v1.Status
+	51, // 37: platform.v1.GetAttestationQuoteResponse.status:type_name -> platform.v1.Status
 	11, // 38: platform.v1.GetAttestationQuoteResponse.quote:type_name -> platform.v1.AttestationQuote
 	11, // 39: platform.v1.VerifyAttestationQuoteRequest.quote:type_name -> platform.v1.AttestationQuote
 	5,  // 40: platform.v1.VerifyAttestationQuoteRequest.expected_pcrs:type_name -> platform.v1.AttestationPCRValue
-	49, // 41: platform.v1.VerifyAttestationQuoteResponse.status:type_name -> platform.v1.Status
+	51, // 41: platform.v1.VerifyAttestationQuoteResponse.status:type_name -> platform.v1.Status
 	5,  // 42: platform.v1.VerifyAttestationQuoteResponse.actual_pcrs:type_name -> platform.v1.AttestationPCRValue
 	4,  // 43: platform.v1.CollectHostAttestationRequest.config:type_name -> platform.v1.AttestationQuoteConfig
-	49, // 44: platform.v1.CollectHostAttestationResponse.status:type_name -> platform.v1.Status
+	51, // 44: platform.v1.CollectHostAttestationResponse.status:type_name -> platform.v1.Status
 	6,  // 45: platform.v1.CollectHostAttestationResponse.attestation:type_name -> platform.v1.HostAttestation
 	4,  // 46: platform.v1.CollectVMAttestationRequest.config:type_name -> platform.v1.AttestationQuoteConfig
-	49, // 47: platform.v1.CollectVMAttestationResponse.status:type_name -> platform.v1.Status
+	51, // 47: platform.v1.CollectVMAttestationResponse.status:type_name -> platform.v1.Status
 	7,  // 48: platform.v1.CollectVMAttestationResponse.attestation:type_name -> platform.v1.VMAttestation
-	49, // 49: platform.v1.CollectContainerAttestationResponse.status:type_name -> platform.v1.Status
+	51, // 49: platform.v1.CollectContainerAttestationResponse.status:type_name -> platform.v1.Status
 	8,  // 50: platform.v1.CollectContainerAttestationResponse.attestation:type_name -> platform.v1.ContainerAttestation
-	48, // 51: platform.v1.DeviceAttestationReport.pcr_baseline_recorded_at:type_name -> google.protobuf.Timestamp
-	48, // 52: platform.v1.DeviceAttestationReport.attested_at:type_name -> google.protobuf.Timestamp
-	48, // 53: platform.v1.DeviceAttestationReport.collected_at:type_name -> google.protobuf.Timestamp
-	48, // 54: platform.v1.DeviceAttestationReport.as_of:type_name -> google.protobuf.Timestamp
-	49, // 55: platform.v1.GetDeviceReportResponse.status:type_name -> platform.v1.Status
+	50, // 51: platform.v1.DeviceAttestationReport.pcr_baseline_recorded_at:type_name -> google.protobuf.Timestamp
+	50, // 52: platform.v1.DeviceAttestationReport.attested_at:type_name -> google.protobuf.Timestamp
+	50, // 53: platform.v1.DeviceAttestationReport.collected_at:type_name -> google.protobuf.Timestamp
+	50, // 54: platform.v1.DeviceAttestationReport.as_of:type_name -> google.protobuf.Timestamp
+	51, // 55: platform.v1.GetDeviceReportResponse.status:type_name -> platform.v1.Status
 	32, // 56: platform.v1.GetDeviceReportResponse.report:type_name -> platform.v1.DeviceAttestationReport
-	49, // 57: platform.v1.ListDeviceReportsResponse.status:type_name -> platform.v1.Status
+	51, // 57: platform.v1.ListDeviceReportsResponse.status:type_name -> platform.v1.Status
 	32, // 58: platform.v1.ListDeviceReportsResponse.reports:type_name -> platform.v1.DeviceAttestationReport
-	49, // 59: platform.v1.RefreshDeviceReportResponse.status:type_name -> platform.v1.Status
-	49, // 60: platform.v1.DescribeCallerPolicyResponse.status:type_name -> platform.v1.Status
+	51, // 59: platform.v1.RefreshDeviceReportResponse.status:type_name -> platform.v1.Status
+	51, // 60: platform.v1.DescribeCallerPolicyResponse.status:type_name -> platform.v1.Status
 	40, // 61: platform.v1.DescribeCallerPolicyResponse.policy:type_name -> platform.v1.CallerPolicyDescription
-	12, // 62: platform.v1.AttestationService.GetManifest:input_type -> platform.v1.GetManifestRequest
-	14, // 63: platform.v1.AttestationService.BuildManifest:input_type -> platform.v1.BuildManifestRequest
-	16, // 64: platform.v1.AttestationService.VerifyManifest:input_type -> platform.v1.VerifyManifestRequest
-	18, // 65: platform.v1.AttestationService.ListManifests:input_type -> platform.v1.ListManifestsRequest
-	20, // 66: platform.v1.AttestationService.DeleteManifest:input_type -> platform.v1.DeleteManifestRequest
-	22, // 67: platform.v1.AttestationService.GetAttestationQuote:input_type -> platform.v1.GetAttestationQuoteRequest
-	24, // 68: platform.v1.AttestationService.VerifyAttestationQuote:input_type -> platform.v1.VerifyAttestationQuoteRequest
-	26, // 69: platform.v1.AttestationService.CollectHostAttestation:input_type -> platform.v1.CollectHostAttestationRequest
-	28, // 70: platform.v1.AttestationService.CollectVMAttestation:input_type -> platform.v1.CollectVMAttestationRequest
-	30, // 71: platform.v1.AttestationService.CollectContainerAttestation:input_type -> platform.v1.CollectContainerAttestationRequest
-	33, // 72: platform.v1.AttestationService.GetDeviceReport:input_type -> platform.v1.GetDeviceReportRequest
-	35, // 73: platform.v1.AttestationService.ListDeviceReports:input_type -> platform.v1.ListDeviceReportsRequest
-	37, // 74: platform.v1.AttestationService.RefreshDeviceReport:input_type -> platform.v1.RefreshDeviceReportRequest
-	39, // 75: platform.v1.AttestationService.DescribeCallerPolicy:input_type -> platform.v1.DescribeCallerPolicyRequest
-	13, // 76: platform.v1.AttestationService.GetManifest:output_type -> platform.v1.GetManifestResponse
-	15, // 77: platform.v1.AttestationService.BuildManifest:output_type -> platform.v1.BuildManifestResponse
-	17, // 78: platform.v1.AttestationService.VerifyManifest:output_type -> platform.v1.VerifyManifestResponse
-	19, // 79: platform.v1.AttestationService.ListManifests:output_type -> platform.v1.ListManifestsResponse
-	21, // 80: platform.v1.AttestationService.DeleteManifest:output_type -> platform.v1.DeleteManifestResponse
-	23, // 81: platform.v1.AttestationService.GetAttestationQuote:output_type -> platform.v1.GetAttestationQuoteResponse
-	25, // 82: platform.v1.AttestationService.VerifyAttestationQuote:output_type -> platform.v1.VerifyAttestationQuoteResponse
-	27, // 83: platform.v1.AttestationService.CollectHostAttestation:output_type -> platform.v1.CollectHostAttestationResponse
-	29, // 84: platform.v1.AttestationService.CollectVMAttestation:output_type -> platform.v1.CollectVMAttestationResponse
-	31, // 85: platform.v1.AttestationService.CollectContainerAttestation:output_type -> platform.v1.CollectContainerAttestationResponse
-	34, // 86: platform.v1.AttestationService.GetDeviceReport:output_type -> platform.v1.GetDeviceReportResponse
-	36, // 87: platform.v1.AttestationService.ListDeviceReports:output_type -> platform.v1.ListDeviceReportsResponse
-	38, // 88: platform.v1.AttestationService.RefreshDeviceReport:output_type -> platform.v1.RefreshDeviceReportResponse
-	41, // 89: platform.v1.AttestationService.DescribeCallerPolicy:output_type -> platform.v1.DescribeCallerPolicyResponse
-	76, // [76:90] is the sub-list for method output_type
-	62, // [62:76] is the sub-list for method input_type
-	62, // [62:62] is the sub-list for extension type_name
-	62, // [62:62] is the sub-list for extension extendee
-	0,  // [0:62] is the sub-list for field type_name
+	50, // 62: platform.v1.DeviceVerdictEvent.recorded_at:type_name -> google.protobuf.Timestamp
+	12, // 63: platform.v1.AttestationService.GetManifest:input_type -> platform.v1.GetManifestRequest
+	14, // 64: platform.v1.AttestationService.BuildManifest:input_type -> platform.v1.BuildManifestRequest
+	16, // 65: platform.v1.AttestationService.VerifyManifest:input_type -> platform.v1.VerifyManifestRequest
+	18, // 66: platform.v1.AttestationService.ListManifests:input_type -> platform.v1.ListManifestsRequest
+	20, // 67: platform.v1.AttestationService.DeleteManifest:input_type -> platform.v1.DeleteManifestRequest
+	22, // 68: platform.v1.AttestationService.GetAttestationQuote:input_type -> platform.v1.GetAttestationQuoteRequest
+	24, // 69: platform.v1.AttestationService.VerifyAttestationQuote:input_type -> platform.v1.VerifyAttestationQuoteRequest
+	26, // 70: platform.v1.AttestationService.CollectHostAttestation:input_type -> platform.v1.CollectHostAttestationRequest
+	28, // 71: platform.v1.AttestationService.CollectVMAttestation:input_type -> platform.v1.CollectVMAttestationRequest
+	30, // 72: platform.v1.AttestationService.CollectContainerAttestation:input_type -> platform.v1.CollectContainerAttestationRequest
+	33, // 73: platform.v1.AttestationService.GetDeviceReport:input_type -> platform.v1.GetDeviceReportRequest
+	35, // 74: platform.v1.AttestationService.ListDeviceReports:input_type -> platform.v1.ListDeviceReportsRequest
+	37, // 75: platform.v1.AttestationService.RefreshDeviceReport:input_type -> platform.v1.RefreshDeviceReportRequest
+	39, // 76: platform.v1.AttestationService.DescribeCallerPolicy:input_type -> platform.v1.DescribeCallerPolicyRequest
+	42, // 77: platform.v1.AttestationService.StreamDeviceVerdicts:input_type -> platform.v1.StreamDeviceVerdictsRequest
+	13, // 78: platform.v1.AttestationService.GetManifest:output_type -> platform.v1.GetManifestResponse
+	15, // 79: platform.v1.AttestationService.BuildManifest:output_type -> platform.v1.BuildManifestResponse
+	17, // 80: platform.v1.AttestationService.VerifyManifest:output_type -> platform.v1.VerifyManifestResponse
+	19, // 81: platform.v1.AttestationService.ListManifests:output_type -> platform.v1.ListManifestsResponse
+	21, // 82: platform.v1.AttestationService.DeleteManifest:output_type -> platform.v1.DeleteManifestResponse
+	23, // 83: platform.v1.AttestationService.GetAttestationQuote:output_type -> platform.v1.GetAttestationQuoteResponse
+	25, // 84: platform.v1.AttestationService.VerifyAttestationQuote:output_type -> platform.v1.VerifyAttestationQuoteResponse
+	27, // 85: platform.v1.AttestationService.CollectHostAttestation:output_type -> platform.v1.CollectHostAttestationResponse
+	29, // 86: platform.v1.AttestationService.CollectVMAttestation:output_type -> platform.v1.CollectVMAttestationResponse
+	31, // 87: platform.v1.AttestationService.CollectContainerAttestation:output_type -> platform.v1.CollectContainerAttestationResponse
+	34, // 88: platform.v1.AttestationService.GetDeviceReport:output_type -> platform.v1.GetDeviceReportResponse
+	36, // 89: platform.v1.AttestationService.ListDeviceReports:output_type -> platform.v1.ListDeviceReportsResponse
+	38, // 90: platform.v1.AttestationService.RefreshDeviceReport:output_type -> platform.v1.RefreshDeviceReportResponse
+	41, // 91: platform.v1.AttestationService.DescribeCallerPolicy:output_type -> platform.v1.DescribeCallerPolicyResponse
+	43, // 92: platform.v1.AttestationService.StreamDeviceVerdicts:output_type -> platform.v1.DeviceVerdictEvent
+	78, // [78:93] is the sub-list for method output_type
+	63, // [63:78] is the sub-list for method input_type
+	63, // [63:63] is the sub-list for extension type_name
+	63, // [63:63] is the sub-list for extension extendee
+	0,  // [0:63] is the sub-list for field type_name
 }
 
 func init() { file_attestation_proto_init() }
@@ -3582,7 +3752,7 @@ func file_attestation_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_attestation_proto_rawDesc), len(file_attestation_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   46,
+			NumMessages:   48,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -204,7 +204,7 @@ func (v *DeviceQuoteVerifier) Verify(ctx context.Context, deviceID string, evide
 		AttestedAt: now,
 	}
 	checks := &quoteChecks{}
-	dv := verdict.DeviceVerdict{DeviceID: dev.ID, HostID: dev.Hostname, Serial: dev.Serial}
+	dv := verdict.DeviceVerdict{DeviceID: dev.ID, TenantID: dev.TenantID, HostID: dev.Hostname, Serial: dev.Serial}
 
 	akPublicKey := v.verifyAKCertificate(dev, now, result, checks)
 

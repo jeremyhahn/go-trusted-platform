@@ -266,18 +266,20 @@ peer re-advertises it.
 ### Revocation on a failed verdict
 
 gatewayd does not wait for the sweep when a device's attestation fails. It
-streams platformd's events (`PlatformDaemon.StreamEvents`, over the same
-gRPC or Unix connection it reads the records on) and keeps those from source
-`attestation.device-verdict`. platformd raises one for every verdict it
-records (see [Attestation events](../../attestation/engineering.md#device-verdict-events)).
+follows platformd's device verdict stream
+(`AttestationService.StreamDeviceVerdicts`, over the same gRPC or Unix
+connection it reads the records on), which carries every verdict platformd
+records (see [Device verdict events](../../attestation/engineering.md#device-verdict-events)).
+gatewayd authenticates by its Unix-socket peer or its mTLS certificate, so it
+sees every tenant's devices; a tenant's token sees only that tenant's.
 A failed verdict, cryptographic or an absence of evidence, makes gatewayd
 revoke every VTEP of the device at once (`VTEPAdmitter.RevokeDevice`): the
 VTEPs it admitted for the device, and the device's fabric allocations. A
 passed verdict changes nothing; the device's routes are admitted when they are
 next advertised.
 
-The stream is lossy. platformd drops an event for a subscriber whose buffer is
-full and does not replay what was recorded while gatewayd was disconnected.
+The stream does not replay what was recorded while gatewayd was disconnected,
+and platformd cuts gatewayd off if it falls more than 64 verdicts behind.
 gatewayd follows a broken stream again after 5s, and the sweep remains the
 backstop: it re-reads every installed VTEP's latest verdict, so a missed
 failure still withdraws decap within one interval.
