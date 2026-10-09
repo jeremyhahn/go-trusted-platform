@@ -638,6 +638,21 @@ func TestOverlayModeHandler_RevokeVTEP(t *testing.T) {
 		assert.ErrorIs(t, err, ErrMACNotFound)
 	})
 
+	t.Run("a refused withdrawal does not stop the others", func(t *testing.T) {
+		f := newOverlayFixture(t, nil).withVNI(t)
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+		require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+		f.sw.fail(errSwitchDown)
+
+		err := f.handler.RevokeVTEP(context.Background(), ovlVTEPB)
+		f.sw.fail(nil)
+
+		var vtepErr *ErrVTEPOperationFailed
+		var macErr *ErrMACOperationFailed
+		assert.ErrorAs(t, err, &vtepErr, "the flood-list withdrawal failure is reported")
+		assert.ErrorAs(t, err, &macErr, "the MAC withdrawal was still tried")
+	})
+
 	t.Run("rejects an invalid VTEP address", func(t *testing.T) {
 		f := newOverlayFixture(t, nil).withVNI(t)
 
@@ -645,6 +660,45 @@ func TestOverlayModeHandler_RevokeVTEP(t *testing.T) {
 
 		vtepErr := assertVTEPFailed(t, err, "revoke")
 		assert.ErrorIs(t, vtepErr, ErrInvalidVTEPIP)
+	})
+}
+
+// TestOverlayModeHandler_RevokeDuringAdmission orders a revocation inside a
+// route's admission: the admitter has said yes, the route is not yet
+// installed, and the VTEP is revoked. The route must not install afterwards.
+func TestOverlayModeHandler_RevokeDuringAdmission(t *testing.T) {
+	routes := map[string]*bgp.EVPNRouteData{
+		"Type-3": imet(ovlL2VNI, ovlVTEPB),
+		"Type-2": macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP),
+		"Type-5": prefixRoute(ovlVTEPB, "10.44.0.0/24"),
+	}
+	for name, route := range routes {
+		t.Run(name, func(t *testing.T) {
+			admitter := newGatedAdmitter()
+			f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.Admitter = admitter }).withVNI(t)
+			routed := make(chan error, 1)
+			go func() { routed <- f.route(t, route) }()
+
+			<-admitter.entered
+			require.NoError(t, f.handler.RevokeVTEP(context.Background(), ovlVTEPB))
+			close(admitter.release)
+
+			err := <-routed
+			vtepErr := assertVTEPFailed(t, err, "admit")
+			assert.ErrorIs(t, vtepErr, ErrVTEPRevoked)
+			assert.Empty(t, f.sw.matching("10.0.0.2"), "a route admitted before its VTEP was revoked installs nothing")
+		})
+	}
+
+	t.Run("a route admitted after the revocation installs", func(t *testing.T) {
+		admitter := newGatedAdmitter()
+		close(admitter.release)
+		f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.Admitter = admitter }).withVNI(t)
+		require.NoError(t, f.handler.RevokeVTEP(context.Background(), ovlVTEPB))
+
+		require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+
+		assert.NotEmpty(t, f.sw.matching("10.0.0.2"))
 	})
 }
 

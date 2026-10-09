@@ -65,13 +65,13 @@ func (h *OverlayModeHandler) handleMACIPRoute(ctx context.Context, route *bgp.EV
 		return h.withdrawMACIP(ctx, route)
 	}
 	binding := irbBinding{l3vni: entry.L3VNI, routerMAC: route.RouterMAC}
-	if err := h.admit(ctx, entry.VNI, entry.VTEPIP); err != nil {
-		return err
-	}
+	vnis := []uint32{entry.VNI}
 	if routable(h.config.L3VNI, binding) {
-		if err := h.admit(ctx, h.config.L3VNI, entry.VTEPIP); err != nil {
-			return err
-		}
+		vnis = append(vnis, h.config.L3VNI)
+	}
+	epoch, err := h.admit(ctx, entry.VTEPIP, vnis...)
+	if err != nil {
+		return err
 	}
 
 	h.mu.Lock()
@@ -79,6 +79,9 @@ func (h *OverlayModeHandler) handleMACIPRoute(ctx context.Context, route *bgp.EV
 	segment, ok := h.segments[entry.VNI]
 	if !h.running || !ok {
 		return nil
+	}
+	if err := h.unrevoked(entry.VTEPIP, epoch); err != nil {
+		return err
 	}
 	key := hostKey{vni: entry.VNI, mac: entry.MAC.String()}
 	if owner := h.conflict(entry); owner != "" {
@@ -161,8 +164,10 @@ func (h *OverlayModeHandler) handleIMETRoute(ctx context.Context, route *bgp.EVP
 	if entry == nil {
 		return nil
 	}
+	var epoch uint64
 	if !route.IsWithdraw {
-		if err := h.admit(ctx, entry.VNI, entry.VTEPIP); err != nil {
+		var err error
+		if epoch, err = h.admit(ctx, entry.VTEPIP, entry.VNI); err != nil {
 			return err
 		}
 	}
@@ -172,6 +177,11 @@ func (h *OverlayModeHandler) handleIMETRoute(ctx context.Context, route *bgp.EVP
 	old, ok := h.segments[entry.VNI]
 	if !h.running || !ok {
 		return nil
+	}
+	if !route.IsWithdraw {
+		if err := h.unrevoked(entry.VTEPIP, epoch); err != nil {
+			return err
+		}
 	}
 	_, listed := slices.BinarySearchFunc(old.flood, entry.VTEPIP, netip.Addr.Compare)
 	if listed != route.IsWithdraw {
@@ -200,11 +210,13 @@ func (h *OverlayModeHandler) handlePrefixRoute(ctx context.Context, route *bgp.E
 	if entry == nil || h.config.L3VNI == 0 || entry.VNI != h.config.L3VNI || !entry.Prefix.Addr().Is4() {
 		return nil
 	}
+	var epoch uint64
 	if !route.IsWithdraw {
 		if len(route.RouterMAC) != 6 {
 			return &ErrVTEPOperationFailed{VTEPIP: entry.VTEPIP, Operation: "route", Cause: ErrRouterMACRequired}
 		}
-		if err := h.admit(ctx, entry.VNI, entry.VTEPIP); err != nil {
+		var err error
+		if epoch, err = h.admit(ctx, entry.VTEPIP, entry.VNI); err != nil {
 			return err
 		}
 	}
@@ -214,6 +226,11 @@ func (h *OverlayModeHandler) handlePrefixRoute(ctx context.Context, route *bgp.E
 	defer h.mu.Unlock()
 	if !h.running || len(h.segments) == 0 {
 		return nil
+	}
+	if !route.IsWithdraw {
+		if err := h.unrevoked(entry.VTEPIP, epoch); err != nil {
+			return err
+		}
 	}
 	old := h.prefixes[prefix]
 	next := &overlayPrefix{routes: make(map[netip.Addr]*overlayPrefixRoute)}
@@ -247,12 +264,18 @@ func (h *OverlayModeHandler) handlePrefixRoute(ctx context.Context, route *bgp.E
 // same route handlers that process EVPN withdrawals. Admission revocation uses
 // this path so decap authorization and overlay reachability leave through the
 // normal flow-table planner instead of a second flow implementation.
+//
+// A revocation also refuses every route of the VTEP whose admission was in
+// flight when it began (ErrVTEPRevoked). A withdrawal the switch refuses
+// does not stop the others: every route is tried and the failures are
+// joined, so one bad flow never leaves the rest of the VTEP installed.
 func (h *OverlayModeHandler) RevokeVTEP(ctx context.Context, vtep netip.Addr) error {
 	if !vtep.Is4() || vtep.IsUnspecified() {
 		return &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "revoke", Cause: ErrInvalidVTEPIP}
 	}
 
 	h.mu.Lock()
+	h.revocations[vtep]++
 	if !h.running {
 		h.mu.Unlock()
 		return nil
@@ -260,12 +283,13 @@ func (h *OverlayModeHandler) RevokeVTEP(ctx context.Context, vtep netip.Addr) er
 	routes := h.revocationRoutesLocked(vtep)
 	h.mu.Unlock()
 
+	var errs []error
 	for _, route := range routes {
 		if err := h.handleEVPNRoute(ctx, route); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (h *OverlayModeHandler) revocationRoutesLocked(vtep netip.Addr) []*bgp.EVPNRouteData {
@@ -336,14 +360,30 @@ func routable(l3vni uint32, binding irbBinding) bool {
 	return l3vni != 0 && binding.l3vni == l3vni && len(binding.routerMAC) == 6
 }
 
-// admit asks the admitter whether vtep may carry vni. Only IPv4 VTEPs are
-// admitted: the flows set and match IPv4 tunnel endpoints only.
-func (h *OverlayModeHandler) admit(ctx context.Context, vni uint32, vtep netip.Addr) error {
+// admit asks the admitter whether vtep may carry each of vnis. Only IPv4
+// VTEPs are admitted: the flows set and match IPv4 tunnel endpoints only.
+// It returns the VTEP's revocation epoch, read before the admitter is
+// asked, for the install to check with unrevoked.
+func (h *OverlayModeHandler) admit(ctx context.Context, vtep netip.Addr, vnis ...uint32) (uint64, error) {
 	if !vtep.Is4() || vtep.IsUnspecified() {
-		return &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "admit", Cause: ErrInvalidVTEPIP}
+		return 0, &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "admit", Cause: ErrInvalidVTEPIP}
 	}
-	if err := h.config.Admitter.AdmitVTEP(ctx, vni, vtep); err != nil {
-		return &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "admit", Cause: err}
+	h.mu.Lock()
+	epoch := h.revocations[vtep]
+	h.mu.Unlock()
+	for _, vni := range vnis {
+		if err := h.config.Admitter.AdmitVTEP(ctx, vni, vtep); err != nil {
+			return 0, &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "admit", Cause: err}
+		}
+	}
+	return epoch, nil
+}
+
+// unrevoked refuses the install of a route admitted at epoch when vtep has
+// been revoked since. Caller holds mu.
+func (h *OverlayModeHandler) unrevoked(vtep netip.Addr, epoch uint64) error {
+	if h.revocations[vtep] != epoch {
+		return &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "admit", Cause: ErrVTEPRevoked}
 	}
 	return nil
 }

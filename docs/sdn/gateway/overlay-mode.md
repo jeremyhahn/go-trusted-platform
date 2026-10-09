@@ -69,6 +69,15 @@ returned as `ErrVTEPOperationFailed{Operation: "admit"}`. The admitter is
 required with EVPN: a config with `EVPNConfig` and no `Admitter` is refused
 with `ErrAdmitterNil`, so no route is ever installed unvetted.
 
+`RevokeVTEP` withdraws every route a VTEP has installed through the same
+route handlers an EVPN withdrawal uses. It also bumps the VTEP's revocation
+epoch under the handler lock; a route handler reads the epoch before it asks
+the admitter and installs only while it is unchanged. A route admitted just
+before a revocation therefore fails with `ErrVTEPRevoked` instead of
+re-installing the decap the revocation removed. A withdrawal the switch
+refuses does not stop the others: every route is tried and the failures are
+joined.
+
 A Type-2 route may not claim an address this VTEP answers for. Its ARP
 reply and host route would share a flow identity with the gateway's or a
 local host's and take their traffic.

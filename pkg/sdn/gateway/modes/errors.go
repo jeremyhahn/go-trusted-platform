@@ -198,6 +198,10 @@ var (
 	// VTEP admitter.
 	ErrAdmitterNil = &errAdmitterNil{}
 
+	// ErrVTEPRevoked is returned when a VTEP is revoked while one of its
+	// routes is being admitted; the route is not installed.
+	ErrVTEPRevoked = &errVTEPRevoked{}
+
 	// ErrFlowNotTracked is returned when the overlay releases a flow it
 	// never installed.
 	ErrFlowNotTracked = &errFlowNotTracked{}
@@ -449,6 +453,12 @@ type errAdmitterNil struct{}
 
 func (e *errAdmitterNil) Error() string {
 	return "EVPN needs a VTEP admitter to vet the VTEPs its routes name"
+}
+
+type errVTEPRevoked struct{}
+
+func (e *errVTEPRevoked) Error() string {
+	return "the VTEP was revoked while its route was being admitted"
 }
 
 type errFlowNotTracked struct{}

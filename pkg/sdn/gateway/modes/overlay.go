@@ -364,6 +364,11 @@ type OverlayModeHandler struct {
 	vlans    map[uint16]uint32
 	hosts    map[hostKey]*overlayHost
 	prefixes map[netip.Prefix]*overlayPrefix
+	// revocations counts each remote VTEP's revocations. A route handler
+	// reads the count before it asks the admitter and installs only while
+	// it is unchanged, so a revocation landing inside an admission is never
+	// undone by the route that admission let through.
+	revocations map[netip.Addr]uint64
 
 	// refusedBindings counts the remote bindings refused or held back for
 	// a conflict.
@@ -400,6 +405,7 @@ func NewOverlayModeHandler(
 		vlans:       make(map[uint16]uint32),
 		hosts:       make(map[hostKey]*overlayHost),
 		prefixes:    make(map[netip.Prefix]*overlayPrefix),
+		revocations: make(map[netip.Addr]uint64),
 	}
 
 	vtepManager, err := vxlan.NewVTEPManager(*config.VTEPConfig, ovsClient, config.BridgeName, config.Logger)
