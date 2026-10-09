@@ -23,6 +23,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -217,8 +218,10 @@ func TestLoadPlatformIndex_FailsClosed(t *testing.T) {
 			missing: "APKINDEX.tar.gz",
 		},
 		{
-			name:    "index without the module host",
-			dir:     func(t *testing.T) string { return platformOutput(t, platformIndex("trusted-platform-p11-host"), platformApkFiles...) },
+			name: "index without the module host",
+			dir: func(t *testing.T) string {
+				return platformOutput(t, platformIndex("trusted-platform-p11-host"), platformApkFiles...)
+			},
 			missing: "trusted-platform-p11-host",
 		},
 		{
@@ -266,4 +269,35 @@ func TestCopyLocalPackage_Errors(t *testing.T) {
 	src := filepath.Join(dir, "in.apk")
 	require.NoError(t, os.WriteFile(src, []byte("apk"), 0o644))
 	assert.Error(t, copyLocalPackage(src, filepath.Join(dir, "no-such-dir", "out.apk")), "destination that cannot be created")
+}
+
+// builderApks returns the apks the strongSwan builder's Makefile verifies, the
+// ones the media require.
+func builderApks(t *testing.T, makefile string) []string {
+	t.Helper()
+	data, err := os.ReadFile(makefile)
+	require.NoError(t, err)
+	for _, line := range strings.Split(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(line, "PLATFORM_APKS"); ok {
+			_, list, found := strings.Cut(rest, "=")
+			require.True(t, found, "PLATFORM_APKS has no value")
+			return strings.Fields(list)
+		}
+	}
+	return nil
+}
+
+// The media require exactly the apks the builder produces and verifies; a name
+// changed on one side only would fail the image build late, on a node's media.
+func TestPlatformPackages_MatchTheBuilder(t *testing.T) {
+	makefile := filepath.Join("..", "..", "build", "docker", "strongswan-builder", "Makefile")
+
+	assert.ElementsMatch(t, platformBuiltPackages, builderApks(t, makefile))
+}
+
+func TestBuilderApks_UnnamedWhenTheMakefileHasNone(t *testing.T) {
+	makefile := filepath.Join(t.TempDir(), "Makefile")
+	require.NoError(t, os.WriteFile(makefile, []byte("all:\n\ttrue\n"), 0o600))
+
+	assert.Empty(t, builderApks(t, makefile))
 }

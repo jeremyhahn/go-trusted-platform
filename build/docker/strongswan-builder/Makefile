@@ -4,11 +4,17 @@
 # Builds trusted-platform-strongswan (charon + swanctl) for Alpine 3.22 on
 # amd64 and arm64 from a pinned upstream release whose tarball must carry a
 # good signature by the pinned strongSwan release key AND match the pinned
-# SHA-256, then packages it as signed apks with an OpenRC service.
+# SHA-256, then packages it as signed apks with an OpenRC service. The same
+# run packages trusted-platform-p11-host, the glibc root filesystem whose
+# p11-kit server hosts the go-xkms PKCS#11 module charon reaches (charon is
+# musl and cannot load the Go module), with its OpenRC service.
 #
-#   make build                                     # both arches, dev signing key
-#   make build APK_SIGNING_KEY=$(HOME)/.trusted-platform/apk/<name>.rsa
-#   make verify                                    # SHA256SUMS + apk signatures + plugin set
+#   make build XKMS_VERSION=v0.48.0-alpha MODULE_HOST_DIR=<dir with modulehost-<arch>.tar>
+#   make build ... APK_SIGNING_KEY=$(HOME)/.trusted-platform/apk/<name>.rsa
+#   make verify XKMS_VERSION=...                   # SHA256SUMS + apk signatures + plugin set
+#
+# `make strongswan-build` at the repository root builds the module host
+# archives first and passes both variables.
 #
 # APK_SIGNING_KEY is an abuild RSA private key with <name>.rsa.pub beside it;
 # the nodes trust it by carrying the .pub in /etc/apk/keys. It is mounted
@@ -28,6 +34,18 @@ STRONGSWAN_SIGNER  ?= 948F158A4E76A27BF3D07532DF42C170B34DBA77
 # get-counters command), so it is pinned here rather than discovered.
 STRONGSWAN_PLUGINS ?= openssl pkcs11 vici counters nonce kernel-netlink socket-default pem revocation constraints updown
 ARCHES             ?= amd64 arm64
+# The PKCS#11 module host (trusted-platform-p11-host): the go-xkms release its
+# module is built from, and the directory holding its root filesystem per
+# architecture, modulehost-<arch>.tar. `make strongswan-build` at the
+# repository root builds both and passes them; there is no default for either,
+# so a build never packages a module host of unknown origin.
+XKMS_VERSION       ?=
+MODULE_HOST_DIR    ?=
+# An apk version has no leading v and writes -alpha as _alpha.
+P11_HOST_VERSION    = $(subst -,_,$(patsubst v%,%,$(XKMS_VERSION)))
+# The apks every node installs for the overlay's IPsec transport; the install
+# media (pkg/iso, PlatformAPKDir) refuses output that lacks one.
+PLATFORM_APKS       = trusted-platform-strongswan trusted-platform-strongswan-openrc trusted-platform-p11-host trusted-platform-p11-host-openrc
 
 OUTPUT_DIR   ?= $(CURDIR)/output
 # The source tarball cache is a named docker volume, not a host path: the
@@ -49,7 +67,7 @@ KEY_DIR  := $(EPHEMERAL_KEY_DIR)
 KEY_NAME := $(EPHEMERAL_KEY)
 endif
 
-.PHONY: all build image key verify clean FORCE
+.PHONY: all build image key module-host-inputs verify clean FORCE
 
 # image-<arch> and build-<arch> are pattern rules, which GNU make never
 # applies to .PHONY targets; FORCE makes them always run instead.
@@ -73,14 +91,21 @@ else
 	@test -r "$(APK_SIGNING_KEY).pub" || { echo "ERROR: $(APK_SIGNING_KEY).pub must sit beside the private key"; exit 1; }
 endif
 
-build: key $(addprefix build-,$(ARCHES))
+module-host-inputs:
+	@test -n "$(XKMS_VERSION)" || { echo "ERROR: XKMS_VERSION is required: the go-xkms release of the module host, e.g. v0.48.0-alpha (make strongswan-build at the repository root sets it)"; exit 1; }
+	@for a in $(ARCHES); do \
+		test -f "$(MODULE_HOST_DIR)/modulehost-$$a.tar" || { echo "ERROR: $(MODULE_HOST_DIR)/modulehost-$$a.tar missing (run make ipsec-module-host at the repository root)"; exit 1; }; \
+	done
+
+build: key module-host-inputs $(addprefix build-,$(ARCHES))
 	@echo ""
 	@echo "Build complete. Artifacts in: $(OUTPUT_DIR)"
 	@ls -lR $(OUTPUT_DIR) | grep -v '^total'
 
-build-%: image-% key FORCE
+build-%: image-% key module-host-inputs FORCE
 	DOCKER=$(DOCKER) $(RUN_BUILDER) \
 		-i $(KEY_DIR)$(KEY_NAME):/keys/$(KEY_NAME) -i $(KEY_DIR)$(KEY_NAME).pub:/keys/$(KEY_NAME).pub \
+		-i $(abspath $(MODULE_HOST_DIR))/modulehost-$*.tar:/build/modulehost.tar \
 		-o /output:$(abspath $(OUTPUT_DIR)) -- \
 		--platform linux/$* \
 		-v $(CACHE_VOLUME):/build/src \
@@ -88,6 +113,7 @@ build-%: image-% key FORCE
 		-e STRONGSWAN_SHA256=$(STRONGSWAN_SHA256) \
 		-e STRONGSWAN_SIGNER=$(STRONGSWAN_SIGNER) \
 		-e STRONGSWAN_PLUGINS="$(STRONGSWAN_PLUGINS)" \
+		-e P11_HOST_VERSION=$(P11_HOST_VERSION) \
 		-e APK_KEY_NAME=$(KEY_NAME) \
 		$(DOCKER_IMAGE)-$*
 
@@ -96,6 +122,7 @@ build-%: image-% key FORCE
 # the published key, the manifest's version and plugin set against the pins,
 # and the cached source tarball's signature and hash.
 verify: image-amd64
+	@test -n "$(XKMS_VERSION)" || { echo "ERROR: XKMS_VERSION is required (the go-xkms release of the module host)"; exit 1; }
 	@for a in $(ARCHES); do \
 		d=$(OUTPUT_DIR)/$$(case $$a in amd64) echo x86_64;; arm64) echo aarch64;; esac); \
 		test -d "$$d" || { echo "ERROR: $$d missing (run make build)"; exit 1; }; \
@@ -103,7 +130,11 @@ verify: image-amd64
 		grep -q '"strongswan_version": "$(STRONGSWAN_VERSION)"' "$$d/manifest.json" || { echo "ERROR: $$d/manifest.json is not $(STRONGSWAN_VERSION)"; exit 1; }; \
 		want=$$(for p in $(STRONGSWAN_PLUGINS); do printf '"%s", ' $$p; done | sed 's/, $$//'); \
 		grep -qF "\"plugins\": [$$want]" "$$d/manifest.json" || { echo "ERROR: $$d/manifest.json plugin set differs from STRONGSWAN_PLUGINS"; exit 1; }; \
-		echo "$$d: checksums, version and plugin set ok"; \
+		grep -q '"p11_host_version": "$(P11_HOST_VERSION)"' "$$d/manifest.json" || { echo "ERROR: $$d/manifest.json module host is not $(P11_HOST_VERSION)"; exit 1; }; \
+		for p in $(PLATFORM_APKS); do \
+			ls "$$d/$$p"-[0-9]*.apk >/dev/null 2>&1 || { echo "ERROR: $$d has no $$p apk"; exit 1; }; \
+		done; \
+		echo "$$d: checksums, versions, plugin set and apks ok"; \
 	done
 	DOCKER=$(DOCKER) $(RUN_BUILDER) -i $(abspath $(OUTPUT_DIR)):/output -- \
 		--platform linux/amd64 \

@@ -14,12 +14,21 @@ COPY --from=apks keys/ /etc/apk/keys/
 COPY --from=apks x86_64/ /repo/platform/x86_64/
 COPY --from=apks aarch64/ /repo/platform/aarch64/
 
-# p11-kit-server carries p11-kit-client.so, the PKCS#11 module charon loads
-# (docs/sdn/engineering.md, "PKCS#11 on musl"); opensc's pkcs11-tool
-# provisions the token through it; openrc runs the packaged service.
+# The platform daemon's account: the owner of charon's VICI socket
+# (CHARON_VICI_USER and CHARON_VICI_GROUP default to platformd:platform).
+RUN addgroup -S platform && adduser -S -D -H -h /var/empty -s /sbin/nologin -G platform platformd
+
+# The two packages with their OpenRC services are what a node installs for the
+# overlay (pkg/iso PlatformPackages): charon, and the module host that serves
+# the go-xkms PKCS#11 module to it. p11-kit-server carries p11-kit-client.so,
+# the PKCS#11 module charon loads (docs/sdn/engineering.md, "PKCS#11 on
+# musl"); opensc's pkcs11-tool provisions the token through it; openrc runs
+# the packaged services.
 RUN apk add --no-cache --repository /repo/platform \
         trusted-platform-strongswan \
         trusted-platform-strongswan-openrc \
+        trusted-platform-p11-host \
+        trusted-platform-p11-host-openrc \
         iproute2 \
         opensc \
         openrc \

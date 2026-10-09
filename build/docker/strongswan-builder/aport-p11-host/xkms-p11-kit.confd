@@ -1,0 +1,19 @@
+# Configuration for /etc/init.d/xkms-p11-kit.
+#
+# The group that may connect to the p11-kit server's socket
+# (/run/p11-kit/xkms.sock, mode 0660): the group charon runs as.
+#XKMS_P11_SOCKET_GROUP="strongswan"
+
+# supervise-daemon restart policy, and how often (seconds) the service checks
+# the socket's owner.
+#XKMS_P11_RESPAWN_DELAY=2
+#XKMS_P11_RESPAWN_MAX=10
+#XKMS_P11_RESPAWN_PERIOD=60
+#XKMS_P11_HEALTHCHECK_INTERVAL=30
+
+# The go-xkms PKCS#11 module's environment. The paths are inside the module
+# host; /var/lib/xkms is the node's own directory, bind-mounted there.
+export XKMS_PKCS11_MODE="local"
+export XKMS_PKCS11_SEAL_STRATEGY="passphrase"
+export XKMS_PKCS11_LOCAL_KEYDIR="/var/lib/xkms/keys"
+export XKMS_PKCS11_STORAGE_PATH="/var/lib/xkms/state"
