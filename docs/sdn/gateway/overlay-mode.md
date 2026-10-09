@@ -202,6 +202,18 @@ the admission settings below. The OpenFlow table hand-off goes through
 installs no pipeline-cookie defaults, so the overlay handler is the only owner
 of the table-0, 10, 20, 30, 40, 50, 60 and 70 miss entries.
 
+With RR peers the overlay runs its own BGP speaker (the overlay ASN, the
+l2vpn-evpn family). It is **outbound-only** (`bgp.BGPConfig.OutboundOnly`):
+it opens no listener and dials each route reflector from `local-vtep`
+(`SessionSource`), so the route reflectors must know the gateway by that
+address and must not wait to be dialled — they are passive towards it. A
+gateway with a transit `bgp:` section already has a speaker on TCP 179, and a
+second listener on the VTEP address failed the overlay's start with "address
+in use". The two speakers cannot be one: they run different ASNs and address
+families. An RR peer marked `passive` is refused at validation
+(`ErrOverlayConfigInvalid{Field: "rr-peers"}`), since nothing would accept
+its session.
+
 The overlay is refused beside the firewall, NAT or load balancer
 (`ErrOverlayServiceConflict`). Those services lay their flows out for the
 NORMAL terminal (NAT, for one, installs a table-10 miss), and under this

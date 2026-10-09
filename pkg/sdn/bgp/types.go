@@ -559,6 +559,17 @@ type BGPConfig struct {
 	// ListenAddresses specifies addresses to bind to.
 	ListenAddresses []netip.Addr `yaml:"listen-addresses" json:"listen_addresses" mapstructure:"listen-addresses"`
 
+	// OutboundOnly runs the speaker without a listener: it dials its peers
+	// and accepts no session, so it can run beside another speaker that owns
+	// the BGP port. ListenPort and ListenAddresses are then ignored, and no
+	// peer may be passive. Set by code, not configuration.
+	OutboundOnly bool `yaml:"-" json:"-" mapstructure:"-"`
+
+	// SessionSource is the local address every session is dialled from, so
+	// a peer that knows this speaker by one address sees it there; unset
+	// lets the kernel choose. Set by code, not configuration.
+	SessionSource netip.Addr `yaml:"-" json:"-" mapstructure:"-"`
+
 	// Tier is the speaker tier in the hierarchy.
 	Tier SpeakerTier `yaml:"tier" json:"tier" mapstructure:"tier"`
 
@@ -680,6 +691,9 @@ func (c *BGPConfig) Validate() error {
 		}
 		if c.Neighbors[i].AuthType == AuthTypeTCPAO && !seen[c.Neighbors[i].Keychain] {
 			return ErrKeychainNotFound{Peer: c.Neighbors[i].Address.String(), Name: c.Neighbors[i].Keychain}
+		}
+		if c.OutboundOnly && c.Neighbors[i].PassiveMode {
+			return ErrPassivePeerWithoutListener{Peer: c.Neighbors[i].Address.String()}
 		}
 	}
 	if c.GracefulRestartEnabled() && c.GracefulRestartTime == 0 {

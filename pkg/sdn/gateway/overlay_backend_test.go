@@ -5,10 +5,12 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/netip"
 	"sync"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/deviceverdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
@@ -154,6 +156,35 @@ func TestOverlayBackend_HealthyNeedsEveryConfiguredVNI(t *testing.T) {
 
 	require.True(t, backend.Active())
 	require.False(t, backend.Healthy())
+}
+
+// With transit `bgp:` and overlay RR peers both configured, the transit
+// speaker holds port 179 and an overlay speaker listening on the VTEP address
+// failed the start with "address in use". The overlay speaker only dials,
+// from the VTEP address the route reflectors know it by.
+func TestOverlayBackend_SpeakerDialsTheRouteReflectorsWithoutListening(t *testing.T) {
+	cfg := validOverlayServiceConfig()
+	rr := netip.MustParseAddr("10.4.100.10")
+	cfg.RRPeers = []bgp.NeighborConfig{{
+		Name: "cp-01-rr", Address: rr, ASN: cfg.OverlayASN, EnabledFamilies: []bgp.AddressFamily{bgp.AFamilyEVPN},
+	}}
+	server := &fakeBGPServer{}
+	backend, _ := newTestOverlayBackend(t, cfg, &backendSwitch{})
+	backend.server = server
+	ctx := context.Background()
+
+	require.NoError(t, backend.Start(ctx))
+	t.Cleanup(func() { require.NoError(t, backend.Stop(ctx)) })
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	require.NotNil(t, server.global)
+	require.Equal(t, int32(-1), server.global.ListenPort, "the overlay speaker must open no listener")
+	require.Empty(t, server.global.ListenAddresses)
+	require.Len(t, server.added, 1)
+	require.Equal(t, rr.String(), server.added[0].Conf.NeighborAddress)
+	require.False(t, server.added[0].Transport.PassiveMode)
+	require.Equal(t, cfg.LocalVTEP.String(), server.added[0].Transport.LocalAddress)
 }
 
 func TestOverlayBackend_StartFailsWhenAVNIJoinIsRefused(t *testing.T) {

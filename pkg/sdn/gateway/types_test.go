@@ -1152,6 +1152,9 @@ func TestOverlayServiceConfig_Validate(t *testing.T) {
 		{name: "rejects four byte overlay ASN", edit: func(c *OverlayServiceConfig) { c.OverlayASN = 65536 }, field: "overlay-asn"},
 		{name: "accepts top private overlay ASN", edit: func(c *OverlayServiceConfig) { c.OverlayASN = 65534 }},
 		{name: "requires VXLAN port", edit: func(c *OverlayServiceConfig) { c.VXLANPort = 0 }, field: "vxlan-port"},
+		{name: "rejects a passive route reflector peer", edit: func(c *OverlayServiceConfig) {
+			c.RRPeers = []bgp.NeighborConfig{{Address: netip.MustParseAddr("10.4.100.10"), ASN: 65000, PassiveMode: true}}
+		}, field: "rr-peers"},
 		{name: "rejects negative max VNIs", edit: func(c *OverlayServiceConfig) { c.MaxVNIs = -1 }, field: "max-vnis"},
 		{name: "requires a VNI to join", edit: func(c *OverlayServiceConfig) { c.VNIs = nil; c.DefaultVNI = 0 }, field: "vnis"},
 		{name: "rejects more VNIs than max VNIs", edit: func(c *OverlayServiceConfig) { c.MaxVNIs = 1 }, field: "vnis"},

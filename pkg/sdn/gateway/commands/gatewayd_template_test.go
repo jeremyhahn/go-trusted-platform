@@ -179,6 +179,10 @@ func TestShippedGatewaydTemplate_OverlayExampleValidates(t *testing.T) {
 	require.NotNil(t, overlay, "the template carries an overlay example")
 	require.False(t, overlay.Enabled, "the example ships disabled")
 	require.NotEmpty(t, overlay.VNIs, "the overlay joins its VNIs at start")
+	// The combination that failed with "address in use": the transit speaker
+	// holds TCP 179 and the overlay speaker dials its route reflectors.
+	require.NotNil(t, cfg.Gateway.BGP, "the template runs a transit speaker")
+	require.NotEmpty(t, overlay.RRPeers, "the overlay runs its own EVPN speaker")
 
 	overlay.Enabled = true
 	require.NoError(t, overlay.Validate())

@@ -131,6 +131,78 @@ func requireEstablished(t *testing.T, s *Speaker, peer netip.Addr) {
 	}, sessionWait, 20*time.Millisecond, "the session with %s never established", peer)
 }
 
+// TestEVPNSession_OutboundOnlyBesideTransitListener is gatewayd with both a
+// transit `bgp:` section and overlay RR peers: the transit speaker holds the
+// BGP port on the VTEP's address, and the overlay speaker still starts and
+// reaches its route reflector, because it only dials. A second listener on
+// that address and port fails to start, which is how the combination broke.
+func TestEVPNSession_OutboundOnlyBesideTransitListener(t *testing.T) {
+	ctx := context.Background()
+	bgpPort := freePort(t)
+	rrPort := freePort(t)
+
+	startFabricSpeaker(t, &BGPConfig{
+		RouterID:        netip.MustParseAddr("192.0.2.20"),
+		ASN:             64600,
+		ListenAddresses: []netip.Addr{vtepASession},
+		ListenPort:      bgpPort,
+	})
+
+	rr := startFabricSpeaker(t, &BGPConfig{
+		RouterID:         netip.MustParseAddr("192.0.2.1"),
+		ASN:              64512,
+		ListenAddresses:  []netip.Addr{rrSession},
+		ListenPort:       rrPort,
+		EnabledFamilies:  []AddressFamily{AFamilyEVPN},
+		IsRouteReflector: true,
+		ClusterID:        "10.255.0.1",
+	})
+	require.NoError(t, rr.AddPeer(ctx, &NeighborConfig{
+		Name:                 "overlay-vtep",
+		Address:              vtepASession,
+		ASN:                  64512,
+		PassiveMode:          true,
+		RouteReflectorClient: true,
+		EnabledFamilies:      []AddressFamily{AFamilyEVPN},
+		Policy:               fabricPolicy(t),
+	}))
+
+	overlayConfig := func(outboundOnly bool) *BGPConfig {
+		return &BGPConfig{
+			RouterID:        netip.MustParseAddr("192.0.2.11"),
+			ASN:             64512,
+			ListenAddresses: []netip.Addr{vtepASession},
+			ListenPort:      bgpPort,
+			OutboundOnly:    outboundOnly,
+			SessionSource:   vtepASession,
+			EnabledFamilies: []AddressFamily{AFamilyEVPN},
+		}
+	}
+	dialRR := WithBGPServer(remotePortServer{
+		BGPServerInterface: NewGoBGPServerAdapter(server.NewBgpServer()),
+		port:               uint32(rrPort),
+	})
+
+	listening, err := NewSpeaker(overlayConfig(false), speakerTestLogger(), dialRR)
+	require.NoError(t, err)
+	require.Error(t, listening.Start(ctx), "a second listener on the transit speaker's address and port must not start")
+
+	overlay := startFabricSpeaker(t, overlayConfig(true), WithBGPServer(remotePortServer{
+		BGPServerInterface: NewGoBGPServerAdapter(server.NewBgpServer()),
+		port:               uint32(rrPort),
+	}))
+	require.NoError(t, overlay.AddPeer(ctx, &NeighborConfig{
+		Name:            "route-reflector",
+		Address:         rrSession,
+		ASN:             64512,
+		EnabledFamilies: []AddressFamily{AFamilyEVPN},
+		Policy:          fabricPolicy(t),
+	}))
+
+	requireEstablished(t, overlay, rrSession)
+	requireEstablished(t, rr, vtepASession)
+}
+
 // startVTEPManager runs an EVPN manager on a VTEP speaker, joined to the
 // test L2VNI with the test L3VNI, and records what it imports.
 func startVTEPManager(t *testing.T, s *Speaker, vtepIP netip.Addr, routerMAC net.HardwareAddr) (*EVPNManager, *notifications) {

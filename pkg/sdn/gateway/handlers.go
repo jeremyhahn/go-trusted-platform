@@ -963,10 +963,14 @@ func (b *overlayBackend) overlayEVPN(ctx context.Context, logger *slog.Logger) (
 	if b.config.OverlayASN > 65535 {
 		return nil, nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay EVPN route targets require a 2-byte overlay ASN"}
 	}
+	// The overlay speaker dials its route reflectors from the VTEP address
+	// and listens for nobody: the transit speaker owns port 179, and a second
+	// listener would fail the start with "address in use".
 	speakerCfg := &bgp.BGPConfig{
 		RouterID:        b.config.LocalVTEP,
 		ASN:             b.config.OverlayASN,
-		ListenAddresses: []netip.Addr{b.config.LocalVTEP},
+		OutboundOnly:    true,
+		SessionSource:   b.config.LocalVTEP,
 		Capabilities:    bgp.BGPCapabilities{EVPN: true},
 		EnabledFamilies: []bgp.AddressFamily{bgp.AFamilyEVPN},
 		Neighbors:       append([]bgp.NeighborConfig(nil), b.config.RRPeers...),

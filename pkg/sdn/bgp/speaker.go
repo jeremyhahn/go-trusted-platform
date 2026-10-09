@@ -456,8 +456,11 @@ func (s *Speaker) Start(ctx context.Context) error {
 		ListenPort: int32(s.config.ListenPort),
 	}
 
-	// Add listen addresses if specified
-	if len(s.config.ListenAddresses) > 0 {
+	// GoBGP opens no listener for a negative port; the speaker then only
+	// dials its peers.
+	if s.config.OutboundOnly {
+		global.ListenPort = -1
+	} else if len(s.config.ListenAddresses) > 0 {
 		addrs := make([]string, len(s.config.ListenAddresses))
 		for i, addr := range s.config.ListenAddresses {
 			addrs[i] = addr.String()
@@ -564,6 +567,9 @@ func (s *Speaker) AddPeer(ctx context.Context, cfg *NeighborConfig) error {
 	if s.config != nil {
 		if err := cfg.validateAttributeDirections(s.config.ASN); err != nil {
 			return err
+		}
+		if s.config.OutboundOnly && cfg.PassiveMode {
+			return ErrPassivePeerWithoutListener{Peer: cfg.Address.String()}
 		}
 	}
 
@@ -1064,13 +1070,22 @@ func (s *Speaker) GetServerInfo(ctx context.Context) (*ServerInfo, error) {
 	return &ServerInfo{
 		RouterID:               routerID,
 		ASN:                    resp.Global.Asn,
-		ListenPort:             uint16(resp.Global.ListenPort),
+		ListenPort:             statusListenPort(resp.Global.ListenPort),
 		PeerCount:              peerCount,
 		EstablishedCount:       establishedCount,
 		Uptime:                 time.Since(s.startTime),
 		PathCount:              pathCount,
 		GracefulRestartEnabled: resp.Global.GracefulRestart != nil && resp.Global.GracefulRestart.Enabled,
 	}, nil
+}
+
+// statusListenPort reports GoBGP's listen port, and 0 for an outbound-only
+// speaker, whose port GoBGP holds as -1.
+func statusListenPort(port int32) uint16 {
+	if port < 0 {
+		return 0
+	}
+	return uint16(port)
 }
 
 // IsStarted returns true if the speaker is started.
@@ -1109,6 +1124,10 @@ func (s *Speaker) neighborConfigToPeer(cfg *NeighborConfig) *api.Peer {
 		// that is not a route-server client. The peer's RFC 8212 policy is
 		// its statements in the global policies (policy.go).
 		AfiSafis: make([]*api.AfiSafi, 0),
+	}
+
+	if s.config != nil && s.config.SessionSource.IsValid() {
+		peer.Transport.LocalAddress = s.config.SessionSource.String()
 	}
 
 	// MD5 session authentication (non-FIPS compatibility path). The secret

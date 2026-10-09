@@ -46,6 +46,9 @@ type fakeBGPServer struct {
 	startErr  error
 	listPeers []*api.Peer
 	listErr   error
+	// global and added are what the speaker asked GoBGP to run.
+	global *api.Global
+	added  []*api.Peer
 }
 
 func (f *fakeBGPServer) Start() error {
@@ -57,12 +60,18 @@ func (f *fakeBGPServer) Start() error {
 	f.started = true
 	return nil
 }
-func (f *fakeBGPServer) Stop()                                                { f.mu.Lock(); f.stopped = true; f.mu.Unlock() }
-func (f *fakeBGPServer) StartBgp(context.Context, *api.StartBgpRequest) error { return nil }
-func (f *fakeBGPServer) StopBgp(context.Context, *api.StopBgpRequest) error   { return nil }
-func (f *fakeBGPServer) AddPeer(context.Context, *api.AddPeerRequest) error {
+func (f *fakeBGPServer) Stop() { f.mu.Lock(); f.stopped = true; f.mu.Unlock() }
+func (f *fakeBGPServer) StartBgp(_ context.Context, req *api.StartBgpRequest) error {
+	f.mu.Lock()
+	f.global = req.Global
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeBGPServer) StopBgp(context.Context, *api.StopBgpRequest) error { return nil }
+func (f *fakeBGPServer) AddPeer(_ context.Context, req *api.AddPeerRequest) error {
 	f.mu.Lock()
 	f.peers++
+	f.added = append(f.added, req.Peer)
 	f.mu.Unlock()
 	return nil
 }

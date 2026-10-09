@@ -373,6 +373,56 @@ func speakerTestLogger() *slog.Logger {
 	}))
 }
 
+// An outbound-only speaker asks GoBGP for no listener, dials every session
+// from its session source, and reports no listen port.
+func TestSpeaker_OutboundOnlyOpensNoListener(t *testing.T) {
+	ctx := context.Background()
+	mock := newMockBGPServer()
+	config := speakerTestConfig()
+	config.ListenAddresses = []netip.Addr{netip.MustParseAddr("10.0.0.1")}
+	config.OutboundOnly = true
+	config.SessionSource = netip.MustParseAddr("10.0.0.1")
+	speaker, err := NewSpeaker(config, speakerTestLogger(), WithBGPServer(mock))
+	require.NoError(t, err)
+	require.NoError(t, speaker.Start(ctx))
+
+	require.Equal(t, int32(-1), mock.global.ListenPort)
+	require.Empty(t, mock.global.ListenAddresses)
+
+	require.NoError(t, speaker.AddPeer(ctx, testNeighborConfig()))
+	require.Equal(t, "10.0.0.1", mock.peers["10.0.0.2"].Transport.LocalAddress)
+
+	info, err := speaker.GetServerInfo(ctx)
+	require.NoError(t, err)
+	require.Zero(t, info.ListenPort, "a speaker with no listener must not report port 65535")
+}
+
+// A passive peer waits to be dialled; an outbound-only speaker accepts no
+// session, so the peer could never come up.
+func TestSpeaker_OutboundOnlyRefusesPassivePeers(t *testing.T) {
+	passive := testNeighborConfig()
+	passive.PassiveMode = true
+
+	config := speakerTestConfig()
+	config.OutboundOnly = true
+	config.Neighbors = []NeighborConfig{*passive}
+	var refused ErrPassivePeerWithoutListener
+	require.ErrorAs(t, config.Validate(), &refused)
+	require.Equal(t, "10.0.0.2", refused.Peer)
+
+	config = speakerTestConfig()
+	config.OutboundOnly = true
+	speaker, err := NewSpeaker(config, speakerTestLogger(), WithBGPServer(newMockBGPServer()))
+	require.NoError(t, err)
+	require.NoError(t, speaker.Start(context.Background()))
+	require.ErrorAs(t, speaker.AddPeer(context.Background(), passive), &refused)
+
+	// A listening speaker keeps its passive peers.
+	config = speakerTestConfig()
+	config.Neighbors = []NeighborConfig{*passive}
+	require.NoError(t, config.Validate())
+}
+
 // TestNewSpeaker tests speaker creation.
 func TestNewSpeaker(t *testing.T) {
 	tests := []struct {

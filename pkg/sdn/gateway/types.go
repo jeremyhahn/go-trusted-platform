@@ -532,6 +532,14 @@ func (c *OverlayServiceConfig) Validate() error {
 			Reason: fmt.Sprintf("must be a private 2-octet ASN (%d-%d)", bgp.MinOverlayASN, bgp.MaxOverlayASN),
 		}
 	}
+	// The overlay speaker only dials its route reflectors (it shares the
+	// host with the transit speaker's listener), so a peer waiting to be
+	// dialled would never come up.
+	for _, peer := range c.RRPeers {
+		if peer.PassiveMode {
+			return &ErrOverlayConfigInvalid{Field: "rr-peers", Reason: fmt.Sprintf("peer %s is passive; the overlay speaker only dials", peer.Address)}
+		}
+	}
 	if c.VXLANPort == 0 {
 		return &ErrOverlayConfigInvalid{Field: "vxlan-port", Reason: "is required"}
 	}

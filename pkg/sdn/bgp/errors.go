@@ -970,6 +970,18 @@ func (e ErrKeychainNotFound) Error() string {
 	return "bgp: peer " + e.Peer + " references unknown tcp-ao keychain " + e.Name
 }
 
+// ErrPassivePeerWithoutListener is returned when an outbound-only speaker is
+// given a passive peer: that peer waits to be dialled, and nothing listens
+// for it.
+type ErrPassivePeerWithoutListener struct {
+	Peer string
+}
+
+// Error implements the error interface.
+func (e ErrPassivePeerWithoutListener) Error() string {
+	return "bgp: peer " + e.Peer + " is passive, but the speaker is outbound-only and accepts no session"
+}
+
 // ErrSecretResolverRequired is returned when a configuration carries a
 // secret reference and no resolver was supplied to resolve it.
 type ErrSecretResolverRequired struct {
