@@ -109,6 +109,7 @@ var gatewayAllowedPrefixes = []string{
 	// daemon in) stays forbidden: the VPN service takes a Verifier
 	// interface the daemon fills.
 	"pkg/attestation/calleradmission",
+	"pkg/attestation/deviceverdict",
 	"pkg/attestation/verdict",
 	"pkg/attestation/manifest",
 }

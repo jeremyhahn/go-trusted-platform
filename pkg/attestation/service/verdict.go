@@ -7,9 +7,11 @@ package service
 
 import (
 	"context"
+	"strconv"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/deviceverdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
-	"strconv"
 )
 
 // Compile-time check: the service is the platform's verdict sink.
@@ -95,7 +97,7 @@ func (e ErrDeviceVerdictNotFound) Error() string {
 // device. The attestation event store is the source of truth: it already holds
 // the durable verdict trail and supplies the freshness timestamp used by
 // relying-party admission checks.
-func (s *Service) LatestDeviceVerdict(ctx context.Context, deviceID uint64) (*verdict.RecordedDeviceVerdict, error) {
+func (s *Service) LatestDeviceVerdict(ctx context.Context, deviceID uint64) (*deviceverdict.RecordedDeviceVerdict, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -129,11 +131,11 @@ func (s *Service) LatestDeviceVerdict(ctx context.Context, deviceID uint64) (*ve
 	return nil, ErrDeviceVerdictNotFound{DeviceID: deviceID}
 }
 
-func recordedVerdictFromEvent(ev *store.Event, deviceID uint64) *verdict.RecordedDeviceVerdict {
+func recordedVerdictFromEvent(ev *store.Event, deviceID uint64) *deviceverdict.RecordedDeviceVerdict {
 	passed := ev.Kind == store.EventKindDeviceQuoteVerified
 	profileID, _ := strconv.ParseUint(ev.Metadata["profile_id"], 10, 64)
-	return &verdict.RecordedDeviceVerdict{
-		Verdict: verdict.DeviceVerdict{
+	return &deviceverdict.RecordedDeviceVerdict{
+		Verdict: deviceverdict.DeviceVerdict{
 			DeviceID:       deviceID,
 			HostID:         ev.HostID,
 			Serial:         ev.Metadata["serial"],

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/deviceverdict"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
@@ -36,11 +36,11 @@ func (s *admissionDeviceStore) Get(_ context.Context, id uint64) (*deviceentitie
 }
 
 type admissionVerdicts struct {
-	records map[uint64]*verdict.RecordedDeviceVerdict
+	records map[uint64]*deviceverdict.RecordedDeviceVerdict
 	err     error
 }
 
-func (s *admissionVerdicts) LatestDeviceVerdict(_ context.Context, deviceID uint64) (*verdict.RecordedDeviceVerdict, error) {
+func (s *admissionVerdicts) LatestDeviceVerdict(_ context.Context, deviceID uint64) (*deviceverdict.RecordedDeviceVerdict, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -81,7 +81,7 @@ func newAdmissionAllocator(t *testing.T, deviceID string, vtep netip.Addr) ipam.
 	return allocator
 }
 
-func newAdmissionAdmitter(t *testing.T, record *verdict.RecordedDeviceVerdict, revoker *admissionRevoker) *VTEPAdmitter {
+func newAdmissionAdmitter(t *testing.T, record *deviceverdict.RecordedDeviceVerdict, revoker *admissionRevoker) *VTEPAdmitter {
 	t.Helper()
 	if revoker == nil {
 		revoker = &admissionRevoker{}
@@ -89,7 +89,7 @@ func newAdmissionAdmitter(t *testing.T, record *verdict.RecordedDeviceVerdict, r
 	admitter, err := NewVTEPAdmitter(VTEPAdmissionConfig{
 		IPAM:    newAdmissionAllocator(t, "7", admissionVTEP),
 		Devices: &admissionDeviceStore{devices: map[uint64]*deviceentities.Device{7: {ID: 7, Hostname: "node-7", Serial: "SN7"}}},
-		Verdicts: &admissionVerdicts{records: map[uint64]*verdict.RecordedDeviceVerdict{
+		Verdicts: &admissionVerdicts{records: map[uint64]*deviceverdict.RecordedDeviceVerdict{
 			7: record,
 		}},
 		Revoker:       revoker,
@@ -101,11 +101,11 @@ func newAdmissionAdmitter(t *testing.T, record *verdict.RecordedDeviceVerdict, r
 	return admitter
 }
 
-func signedVerdict(recordedAt time.Time) *verdict.RecordedDeviceVerdict {
-	return &verdict.RecordedDeviceVerdict{
+func signedVerdict(recordedAt time.Time) *deviceverdict.RecordedDeviceVerdict {
+	return &deviceverdict.RecordedDeviceVerdict{
 		EventID:    "verdict-7",
 		RecordedAt: recordedAt,
-		Verdict: verdict.DeviceVerdict{
+		Verdict: deviceverdict.DeviceVerdict{
 			DeviceID:       7,
 			HostID:         "node-7",
 			Serial:         "SN7",

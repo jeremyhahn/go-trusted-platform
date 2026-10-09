@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	attestationverdict "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/deviceverdict"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
@@ -29,7 +29,7 @@ type OverlayDeviceGetter interface {
 
 // OverlayVerdictReader reads the platform-side attestation verdict log.
 type OverlayVerdictReader interface {
-	LatestDeviceVerdict(ctx context.Context, deviceID uint64) (*attestationverdict.RecordedDeviceVerdict, error)
+	LatestDeviceVerdict(ctx context.Context, deviceID uint64) (*deviceverdict.RecordedDeviceVerdict, error)
 }
 
 // OverlayVTEPRevoker withdraws all overlay reachability from a VTEP.
