@@ -15,6 +15,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"path/filepath"
@@ -24,7 +26,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/local"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -185,9 +187,20 @@ func TestStreamDeviceVerdictsOverTCPEnforcesScopeAndTenant(t *testing.T) {
 		"no-scope":  {Subject: "n", TenantID: "tenant-a", Scopes: []string{"device:read"}},
 		"no-tenant": {Subject: "x", Scopes: []string{"attestation:read"}},
 	}
+	// Bearer tokens cross the network only inside verified TLS: the
+	// self-signed test certificate is its own trust root.
+	cert := sharedTestTLSCertificate()
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(leaf)
 	attestation, _, subscribed := verdictStreamServer(t, listener,
+		grpc.Creds(credentials.NewServerTLSFromCert(&cert)),
 		grpc.StreamInterceptor(grpccreds.OIDCStreamInterceptor(grpccreds.WithTokenValidator(validator))))
-	client := dialVerdicts(t, listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	client := dialVerdicts(t, listener.Addr().String(),
+		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS13})))
 
 	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
 	defer cancel()
