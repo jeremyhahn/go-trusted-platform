@@ -1309,26 +1309,27 @@ func (c *GatewayConfig) Validate() error {
 // needsPipeline reports whether this gateway programs the datapath and so
 // must own the base pipeline before its services start (#567). A gateway
 // with no datapath service — proxy-only, telemetry-only — installs nothing
-// and leaves the bridge exactly as it found it. The overlay service is
-// deliberately absent from this list: its handler programs no flows and
-// gates nothing out of table 10 today, so it needs no pipeline, and asking
-// for the overlay terminal would refuse a start that used to succeed. When
-// the overlay service owns egress it joins this list with TerminalOverlay.
+// and leaves the bridge exactly as it found it. When overlay is enabled the
+// pipeline records the overlay terminal, but the overlay handler owns the
+// OpenFlow table defaults itself.
 func (c *GatewayConfig) needsPipeline() bool {
 	if c.Runtime == nil {
 		return false
 	}
-	return (c.Firewall != nil && c.Firewall.Enabled) ||
+	return (c.Overlay != nil && c.Overlay.Enabled) ||
+		(c.Firewall != nil && c.Firewall.Enabled) ||
 		(c.NAT != nil && c.NAT.Enabled) ||
 		(c.NAT64 != nil && c.NAT64.Enabled) ||
 		(c.LoadBalancer != nil && c.LoadBalancer.Enabled)
 }
 
-// pipelineTerminal is the table-30 disposition this gateway asks for.
-// Today that is always NORMAL: the overlay terminal exists in the type
-// vocabulary and is refused by BasePipelineRules until gatewayd can build
-// the overlay handler (its config carries no VTEP or access port yet).
+// pipelineTerminal is the table-30 disposition this gateway asks for. The
+// overlay terminal means modes.OverlayModeHandler owns the MAC-learning and
+// downstream overlay tables, so the base pipeline installs no default flows.
 func (c *GatewayConfig) pipelineTerminal() PipelineTerminal {
+	if c.Overlay != nil && c.Overlay.Enabled {
+		return TerminalOverlay
+	}
 	return TerminalNormal
 }
 

@@ -186,14 +186,17 @@ held rather than deleting the flow.
 
 ## Status in gatewayd
 
-gatewayd still refuses `ServiceOverlay` until the service builder and table
-hand-off are wired. The `gateway.overlay` section now carries the VTEP address,
-underlay interface/MTU, access port, overlay ASN, RR peers and verdict freshness
-window, and `gateway.VTEPAdmitter` backs admission from IPAM fabric allocations
-plus the platform attestation event log. The remaining hand-off is the OpenFlow
-pipeline ownership: the overlay's base flows (the table misses of 0, 10, 20 and
-30) overlap gatewayd's own pipeline flows, so gatewayd must hand those tables to
-the overlay rather than letting both owners install the same miss entries.
+gatewayd still refuses `ServiceOverlay` until the service builder is wired. The
+`gateway.overlay` section now carries the VTEP address, underlay interface/MTU,
+access port, overlay ASN, RR peers and verdict freshness window, and
+`gateway.VTEPAdmitter` backs admission from IPAM fabric allocations plus the
+platform attestation event log. The OpenFlow table hand-off is wired through
+`TerminalOverlay`: gatewayd records bridge ownership and secure fail-mode but
+installs no pipeline-cookie defaults, leaving the overlay handler as the only
+owner of the table-0, 10, 20, 30, 40, 50, 60 and 70 miss entries. Tables 20-29
+remain the service extension range; firewall, NAT, load-balancer and NAT64 may
+add higher-priority rules there, while the overlay table-20 miss carries
+unclaimed traffic onward to table 30.
 
 ## See Also
 

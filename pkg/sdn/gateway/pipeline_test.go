@@ -128,12 +128,10 @@ func TestBasePipelineRules_Normal(t *testing.T) {
 	assert.Equal(t, rules, empty, "the empty terminal is NORMAL")
 }
 
-func TestBasePipelineRules_OverlayIsRefusedUntilTheHandlerIsBuilt(t *testing.T) {
-	_, err := BasePipelineRules(TerminalOverlay)
-	var unavailable *ErrPipelineTerminalUnavailable
-	require.True(t, errors.As(err, &unavailable), "got %v", err)
-	assert.Equal(t, TerminalOverlay, unavailable.Terminal)
-	assert.Contains(t, err.Error(), "VTEP")
+func TestBasePipelineRules_OverlayHandsTablesToHandler(t *testing.T) {
+	rules, err := BasePipelineRules(TerminalOverlay)
+	require.NoError(t, err)
+	assert.Empty(t, rules, "overlay mode installs its own table defaults")
 }
 
 func TestBasePipelineRules_UnknownTerminal(t *testing.T) {
@@ -209,13 +207,17 @@ func TestEnsurePipeline_MissingDependencies(t *testing.T) {
 	var noBridge *ErrPipelineBridgeMissing
 	require.True(t, errors.As(rt.EnsurePipeline(context.Background(), "gw", TerminalNormal), &noBridge))
 
-	rt = newTestRuntime()
-	var unavailable *ErrPipelineTerminalUnavailable
-	require.True(t, errors.As(rt.EnsurePipeline(context.Background(), "gw", TerminalOverlay), &unavailable))
-	assert.False(t, rt.PipelineInstalled())
-
 	require.NoError(t, nilRuntime.RemovePipeline(context.Background()))
 	assert.False(t, nilRuntime.PipelineInstalled())
+}
+
+func TestEnsurePipeline_OverlayTerminalRecordsOwnershipOnly(t *testing.T) {
+	rt := newTestRuntime()
+	require.NoError(t, rt.EnsurePipeline(context.Background(), "gw-1", TerminalOverlay))
+	assert.True(t, rt.PipelineInstalled())
+	assert.Empty(t, pipelineRules(rt.Controller.(*fakeFlowController).allRules()))
+	assert.Equal(t, "gatewayd:gw-1", rt.OVS.(*fakeOVSClient).externalIDs[PipelineOwnerKey])
+	assert.Equal(t, string(TerminalOverlay), rt.OVS.(*fakeOVSClient).externalIDs[PipelineTerminalKey])
 }
 
 func TestEnsurePipeline_RollsBackWhenALaterStepFails(t *testing.T) {
@@ -442,7 +444,7 @@ func TestErrRollbackIncomplete_UnwrapsBothBranches(t *testing.T) {
 // TestGatewayStart_OverlayAloneInstallsNoPipeline: the overlay section is a
 // refused service (#568) and never a pipeline owner. A gateway that enables
 // only overlay installs nothing and fails Start with the typed refusal.
-func TestGatewayStart_OverlayAloneInstallsNoPipeline(t *testing.T) {
+func TestGatewayStart_OverlayAloneRollsBackOverlayTerminal(t *testing.T) {
 	cfg := &GatewayConfig{
 		Enabled:       true,
 		ID:            "overlay-only",
@@ -452,15 +454,15 @@ func TestGatewayStart_OverlayAloneInstallsNoPipeline(t *testing.T) {
 		Runtime:       newTestRuntime(),
 		Overlay:       validOverlayServiceConfig(),
 	}
-	assert.False(t, cfg.needsPipeline())
-	assert.Equal(t, TerminalNormal, cfg.pipelineTerminal())
+	assert.True(t, cfg.needsPipeline())
+	assert.Equal(t, TerminalOverlay, cfg.pipelineTerminal())
 	gw, err := NewGateway(cfg)
 	require.NoError(t, err)
 	gw.SetNodeMetrics(validNodeMetrics())
 	err = gw.Start(context.Background())
 	var unavailable *ErrServiceUnavailable
 	require.True(t, errors.As(err, &unavailable), "got %v", err)
-	assert.False(t, cfg.Runtime.PipelineInstalled())
+	assert.False(t, cfg.Runtime.PipelineInstalled(), "the overlay terminal is rolled back with the failed start")
 }
 
 // TestGatewayStart_OverlayBesideFirewallRollsThePipelineBack: the firewall
@@ -470,7 +472,7 @@ func TestGatewayStart_OverlayBesideFirewallRollsThePipelineBack(t *testing.T) {
 	cfg := firewallGatewayConfig()
 	cfg.Overlay = validOverlayServiceConfig()
 	assert.True(t, cfg.needsPipeline())
-	assert.Equal(t, TerminalNormal, cfg.pipelineTerminal())
+	assert.Equal(t, TerminalOverlay, cfg.pipelineTerminal())
 	gw, err := NewGateway(cfg)
 	require.NoError(t, err)
 	gw.SetNodeMetrics(validNodeMetrics())

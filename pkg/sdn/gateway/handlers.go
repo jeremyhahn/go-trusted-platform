@@ -68,9 +68,9 @@ var serviceBuilders = map[string]serviceBuilder{
 // operator reads in ErrServiceUnavailable; it names the missing piece, not
 // a promise.
 var serviceRefusals = map[string]string{
-	ServiceOverlay: "the overlay handler (modes.NewOverlayModeHandler) has config schema and a platform-backed " +
-		"VTEP admission policy, but gatewayd still needs the service builder and pipeline table hand-off wired; " +
-		"tracked under #709",
+	ServiceOverlay: "the overlay handler (modes.NewOverlayModeHandler) has config schema, TerminalOverlay " +
+		"table ownership and a platform-backed VTEP admission policy, but gatewayd still needs the service " +
+		"builder wired; tracked under #709",
 	ServiceEdge: "the edge service constructor (modes.NewEdgeModeHandler) needs an IPv6 pool, ACME endorse/enroll " +
 		"toggles and a FROST pool the gateway runtime does not inject; tracked under epic #553",
 	ServiceDHCP: "the DHCP service needs an IPAM allocator gatewayd does not have (GatewayRuntime carries none, " +

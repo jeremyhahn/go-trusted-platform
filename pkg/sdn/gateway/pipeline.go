@@ -58,12 +58,9 @@ const (
 	// the pipeline changes nothing for traffic no service touches.
 	TerminalNormal PipelineTerminal = "normal"
 
-	// TerminalOverlay leaves table 30 to the overlay handler
-	// (modes.OverlayModeHandler), whose MAC, ARP and egress tables forward
-	// over the flow-based VXLAN port. It is refused while gatewayd cannot
-	// build that handler: the overlay config carries no VTEP or access port
-	// (#709), so nothing would install those tables and the chain would be
-	// a drop funnel.
+	// TerminalOverlay hands every OpenFlow table to modes.OverlayModeHandler.
+	// The gateway pipeline still records bridge ownership and secure fail-mode,
+	// but installs no pipeline-cookie default flows for this terminal.
 	TerminalOverlay PipelineTerminal = "overlay"
 )
 
@@ -109,8 +106,18 @@ type PipelineOwner struct {
 // OVS's own table miss is a drop, so this flow is load-bearing (owner
 // ruling on #614, 2026-09-25).
 func BasePipelineRules(terminal PipelineTerminal) ([]zoneflows.FlowRule, error) {
+	if terminal == "" {
+		terminal = TerminalNormal
+	}
+	if terminal == TerminalOverlay {
+		return nil, nil
+	}
+	if terminal != TerminalNormal {
+		return nil, &ErrPipelineTerminalUnknown{Terminal: terminal}
+	}
+
 	cookie := fmt.Sprintf("0x%x", CookiePipeline)
-	rules := []zoneflows.FlowRule{
+	return []zoneflows.FlowRule{
 		{
 			Table:    int(modes.TableIngress),
 			Priority: 0,
@@ -129,24 +136,13 @@ func BasePipelineRules(terminal PipelineTerminal) ([]zoneflows.FlowRule, error) 
 			Actions:  fmt.Sprintf("goto_table:%d", modes.TableMACLearning),
 			Cookie:   cookie,
 		},
-	}
-	switch terminal {
-	case TerminalNormal, "":
-		rules = append(rules, zoneflows.FlowRule{
+		{
 			Table:    int(modes.TableMACLearning),
 			Priority: 0,
 			Actions:  "normal",
 			Cookie:   cookie,
-		})
-	case TerminalOverlay:
-		return nil, &ErrPipelineTerminalUnavailable{
-			Terminal: terminal,
-			Reason:   "the overlay service is not built: the overlay config carries no VTEP or access port, so nothing installs the overlay tables",
-		}
-	default:
-		return nil, &ErrPipelineTerminalUnknown{Terminal: terminal}
-	}
-	return rules, nil
+		},
+	}, nil
 }
 
 // pipelineState is what EnsurePipeline recorded so RemovePipeline can put
