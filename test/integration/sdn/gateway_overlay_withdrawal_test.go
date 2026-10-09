@@ -76,6 +76,8 @@ func TestGatewayOverlayWithdrawalRemovesDecapFlows(t *testing.T) {
 	ctx, cancel := LongRunningTestContext()
 	t.Cleanup(cancel)
 	logger := slog.Default()
+	client := connectGatewayOverlayAdmissionClient(t, ctx)
+	admitter, remoteVTEP := newSignedOverlayAdmitter(t, ctx, client)
 
 	bridge := setupTestBridge(t, overlayWithdrawalBridge)
 	runCmd(t, "ovs-vsctl", "add-port", bridge.name, overlayWithdrawalAccessPort,
@@ -87,7 +89,7 @@ func TestGatewayOverlayWithdrawalRemovesDecapFlows(t *testing.T) {
 	remote := startOverlayEVPNManager(t, ctx, &bgp.EVPNManagerConfig{
 		Speaker:    remoteSpeaker,
 		Logger:     logger,
-		LocalVTEP:  overlayRemoteVTEP,
+		LocalVTEP:  remoteVTEP,
 		OverlayASN: overlayWithdrawalOverlayASN,
 	})
 
@@ -106,7 +108,7 @@ func TestGatewayOverlayWithdrawalRemovesDecapFlows(t *testing.T) {
 		},
 		BridgeName: bridge.name,
 		AccessPort: overlayWithdrawalAccessPort,
-		Admitter:   admitOnlyVTEP{vtep: overlayRemoteVTEP},
+		Admitter:   admitter,
 		Logger:     logger,
 	}, ovsClient, ofClient)
 	require.NoError(t, err, "create overlay handler")
@@ -124,52 +126,28 @@ func TestGatewayOverlayWithdrawalRemovesDecapFlows(t *testing.T) {
 	require.NoError(t, remote.JoinVNI(ctx, overlayKeptVNI, 0))
 
 	waitFor(ctx, t, "the remote VTEP's decap flows", 100*time.Millisecond, overlayWithdrawalWait, func() bool {
-		return decapFlowCount(t, bridge.name, overlayWithdrawnVNI, overlayRemoteVTEP) == 1 &&
-			decapFlowCount(t, bridge.name, overlayKeptVNI, overlayRemoteVTEP) == 1
+		return decapFlowCount(t, bridge.name, overlayWithdrawnVNI, remoteVTEP) == 1 &&
+			decapFlowCount(t, bridge.name, overlayKeptVNI, remoteVTEP) == 1
 	})
 
 	t.Run("RouteWithdrawalRemovesThatVNIsDecapFlow", func(t *testing.T) {
 		require.NoError(t, remote.LeaveVNI(ctx, overlayWithdrawnVNI))
 
 		waitFor(ctx, t, "the withdrawn VNI's decap flow to go", 100*time.Millisecond, overlayWithdrawalWait, func() bool {
-			return decapFlowCount(t, bridge.name, overlayWithdrawnVNI, overlayRemoteVTEP) == 0
+			return decapFlowCount(t, bridge.name, overlayWithdrawnVNI, remoteVTEP) == 0
 		})
-		require.Equal(t, 1, decapFlowCount(t, bridge.name, overlayKeptVNI, overlayRemoteVTEP),
+		require.Equal(t, 1, decapFlowCount(t, bridge.name, overlayKeptVNI, remoteVTEP),
 			"a withdrawal must leave the VTEP's other segments decapsulating")
-		require.Equal(t, []modes.InstalledVTEP{{VTEP: overlayRemoteVTEP, VNIs: []uint32{overlayKeptVNI}}}, handler.InstalledVTEPs())
+		require.Equal(t, []modes.InstalledVTEP{{VTEP: remoteVTEP, VNIs: []uint32{overlayKeptVNI}}}, handler.InstalledVTEPs())
 	})
 
 	t.Run("RevocationRemovesEveryDecapFlow", func(t *testing.T) {
-		require.NoError(t, handler.RevokeVTEP(ctx, overlayRemoteVTEP))
+		require.NoError(t, handler.RevokeVTEP(ctx, remoteVTEP))
 
-		require.Zero(t, decapFlowCount(t, bridge.name, overlayKeptVNI, overlayRemoteVTEP),
+		require.Zero(t, decapFlowCount(t, bridge.name, overlayKeptVNI, remoteVTEP),
 			"a revoked VTEP must not keep a decap flow")
 		require.Empty(t, handler.InstalledVTEPs())
 	})
-}
-
-// admitOnlyVTEP stands in for gatewayd's attested admission, which needs a
-// passing TPM verdict no suite fixture produces yet (see
-// TestGatewayOverlayAdmissionFollowsPlatformdVerdicts). It admits one VTEP.
-type admitOnlyVTEP struct {
-	vtep netip.Addr
-}
-
-func (a admitOnlyVTEP) AdmitVTEP(_ context.Context, vni uint32, vtep netip.Addr) error {
-	if vtep != a.vtep {
-		return errVTEPNotAdmitted{vtep: vtep, vni: vni}
-	}
-	return nil
-}
-
-// errVTEPNotAdmitted is admitOnlyVTEP's refusal of any other VTEP.
-type errVTEPNotAdmitted struct {
-	vtep netip.Addr
-	vni  uint32
-}
-
-func (e errVTEPNotAdmitted) Error() string {
-	return fmt.Sprintf("VTEP %s is not admitted to VNI %d", e.vtep, e.vni)
 }
 
 // decapFlowCount counts the decap table's flows admitting frames tunnelled
