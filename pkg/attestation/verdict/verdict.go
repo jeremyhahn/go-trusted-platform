@@ -10,7 +10,10 @@
 // consumes them) can depend on it without depending on each other.
 package verdict
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // DeviceVerdict is the result of verifying one quote from one device.
 //
@@ -47,6 +50,14 @@ type DeviceVerdict struct {
 	// ProfileID is the device profile whose baseline was evaluated or
 	// captured; zero when none was.
 	ProfileID uint64
+}
+
+// RecordedDeviceVerdict is a device verdict with the event-log timestamp that
+// made it durable.
+type RecordedDeviceVerdict struct {
+	Verdict    DeviceVerdict
+	EventID    string
+	RecordedAt time.Time
 }
 
 // Sink receives device verdicts. The attestation service implements it by
