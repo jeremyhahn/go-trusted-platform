@@ -60,7 +60,7 @@ sdn:
 
 | Parameter | Type | Default | Rule |
 |-----------|------|---------|------|
-| enabled | bool | false | With it on, the fabric interface carries only IKE, ESP and SA-protected traffic |
+| enabled | bool | false | With it on, the fabric interface carries only IKE, ESP, SA-protected traffic and the link ICMPv6 -- received, sent or routed through the node |
 | fabric-interface | string | — | Required; a Linux interface name (1–15 characters) |
 | local-address | string | — | Required; this VTEP's unicast address, the IKE endpoint and certificate identity |
 | static-peers | []string | none | Explicit per-peer connections (route reflectors, gateways); single unicast addresses of the local address's family, no duplicates, never the local address. There is no wildcard peer |
@@ -75,6 +75,7 @@ sdn:
 | replay-window | uint32 | 1024 | At least 1024 |
 | ike-rate | uint32 | 20 | IKE packets per second per source address on UDP 500/4500 |
 | ike-burst | uint32 | 2 × ike-rate | At least ike-rate |
+| underlay-slaac | bool | false | Also pass ICMPv6 router solicitation and advertisement on an IPv6 fabric, for an underlay addressed by SLAAC. Neighbour discovery and MLD always pass; redirects never do |
 
 A failure is an `*ipsec.ConfigError` naming the field
 (`overlay.ipsec.static-peers[1]: ipsec: duplicate peer`) and wrapping one

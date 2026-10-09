@@ -33,6 +33,7 @@ const (
 	TableName = "tp_ipsec"
 
 	chainInput   = "fabric_in"
+	chainForward = "fabric_fwd"
 	chainOutput  = "fabric_out"
 	setEvicted   = "evicted"
 	setIKEMeter  = "ike_meter"
@@ -47,10 +48,19 @@ const (
 	// this table only ever narrows.
 	filterPriority = -10
 
-	ikePort      = 500
-	ikeNATTPort  = 4500
-	icmpv6NDLow  = 133 // router solicitation
-	icmpv6NDHigh = 137 // redirect
+	ikePort     = 500
+	ikeNATTPort = 4500
+
+	// The ICMPv6 types the link needs before any SA exists (RFC 4861,
+	// RFC 2710, RFC 3810). Redirect (137) is deliberately absent.
+	icmpv6MLDQuery    = 130
+	icmpv6MLDReport   = 131
+	icmpv6MLDDone     = 132
+	icmpv6RouterSol   = 133
+	icmpv6RouterAdv   = 134
+	icmpv6NeighSol    = 135
+	icmpv6NeighAdv    = 136
+	icmpv6MLDv2Report = 143
 
 	// metaKeySecpath and rtKeyXFRM are NFT_META_SECPATH and NFT_RT_XFRM
 	// (linux/netfilter/nf_tables.h), which neither x/sys/unix nor the
@@ -76,15 +86,19 @@ type nftConn interface {
 
 // Filter is the nftables half of the fail-closed floor. On the fabric
 // interface it passes, in both directions, only ESP, IKE between ports
-// 500 and 4500, traffic an SA decrypted or is about to encrypt, and IPv6
-// neighbour discovery. Everything else is dropped, so a stopped charon
-// leaves no cleartext path. IKE is rate-limited per source address, and
-// evicted peers are dropped outright, IKE included. It implements Dropper.
+// 500 and 4500, traffic an SA decrypted or is about to encrypt, and the
+// ICMPv6 the link needs (linkICMPv6). Traffic routed through the node to or
+// from the fabric passes only as ESP or once an SA decrypted it.
+// Everything else is dropped, so a stopped charon leaves no cleartext path.
+// IKE is accepted per source address only while it stays within the rate,
+// and evicted peers are dropped outright, IKE included. It implements
+// Dropper.
 type Filter struct {
 	iface string
 	local netip.Addr
 	rate  uint32
 	burst uint32
+	slaac bool
 
 	mu      sync.Mutex
 	conn    nftConn
@@ -114,6 +128,7 @@ func newFilter(cfg *Config, conn nftConn) (*Filter, error) {
 		local:   local,
 		rate:    cfg.EffectiveIKERate(),
 		burst:   cfg.EffectiveIKEBurst(),
+		slaac:   cfg.UnderlaySLAAC,
 		conn:    conn,
 		evicted: make(map[netip.Addr]struct{}),
 	}, nil
@@ -154,19 +169,23 @@ func (f *Filter) Apply(ctx context.Context) error {
 
 	accept := nftables.ChainPolicyAccept
 	prio := nftables.ChainPriorityRef(filterPriority)
-	input := f.conn.AddChain(&nftables.Chain{
-		Name: chainInput, Table: table, Type: nftables.ChainTypeFilter,
-		Hooknum: nftables.ChainHookInput, Priority: prio, Policy: &accept,
-	})
-	output := f.conn.AddChain(&nftables.Chain{
-		Name: chainOutput, Table: table, Type: nftables.ChainTypeFilter,
-		Hooknum: nftables.ChainHookOutput, Priority: prio, Policy: &accept,
-	})
-	for _, r := range f.inputRules(evicted, meter) {
-		f.conn.AddRule(&nftables.Rule{Table: table, Chain: input, Exprs: r})
+	chains := []struct {
+		name  string
+		hook  *nftables.ChainHook
+		rules [][]expr.Any
+	}{
+		{chainInput, nftables.ChainHookInput, f.inputRules(evicted, meter)},
+		{chainForward, nftables.ChainHookForward, f.forwardRules(evicted)},
+		{chainOutput, nftables.ChainHookOutput, f.outputRules(evicted)},
 	}
-	for _, r := range f.outputRules(evicted) {
-		f.conn.AddRule(&nftables.Rule{Table: table, Chain: output, Exprs: r})
+	for _, c := range chains {
+		chain := f.conn.AddChain(&nftables.Chain{
+			Name: c.name, Table: table, Type: nftables.ChainTypeFilter,
+			Hooknum: c.hook, Priority: prio, Policy: &accept,
+		})
+		for _, r := range c.rules {
+			f.conn.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: r})
+		}
 	}
 	if err := f.conn.Flush(); err != nil {
 		return &OpError{Op: "nftables apply", Err: err}
@@ -272,18 +291,22 @@ func (f *Filter) elements(addrs []netip.Addr) []nftables.SetElement {
 
 // inputRules is the fabric_in chain. Register 1 carries every loaded
 // value; the expressions of a rule are ANDed.
+//
+// An IKE packet is accepted only by a meter update that succeeds within
+// the rate. Over the rate the limit fails to match, and with the meter full
+// a new source cannot be added and the update fails: either way the packet
+// falls through to the final drop, so a flood of sources cannot open the
+// limiter.
 func (f *Filter) inputRules(evicted, meter *nftables.Set) [][]expr.Any {
-	rules := [][]expr.Any{
-		join(f.ifname(expr.MetaKeyIIFNAME, expr.CmpOpNeq), verdict(expr.VerdictAccept)),
-		join(neighbourDiscovery(), verdict(expr.VerdictAccept)),
+	rules := [][]expr.Any{join(f.ifname(expr.MetaKeyIIFNAME, expr.CmpOpNeq), verdict(expr.VerdictAccept))}
+	rules = append(rules, f.linkRules()...)
+	rules = append(rules,
 		join(f.family(), f.addr(srcOffset), lookup(evicted), verdict(expr.VerdictDrop)),
 		join(f.family(), l4proto(unix.IPPROTO_ESP), verdict(expr.VerdictAccept)),
-	}
+	)
 	for _, port := range []uint16{ikePort, ikeNATTPort} {
 		rules = append(rules,
-			join(f.family(), ikePorts(port), f.addr(srcOffset), f.overRate(meter), verdict(expr.VerdictDrop)),
-			join(f.family(), ikePorts(port), verdict(expr.VerdictAccept)),
-		)
+			join(f.family(), ikePorts(port), f.addr(srcOffset), f.withinRate(meter), verdict(expr.VerdictAccept)))
 	}
 	return append(rules,
 		join(meta(metaKeySecpath, []byte{1}), verdict(expr.VerdictAccept)),
@@ -291,11 +314,26 @@ func (f *Filter) inputRules(evicted, meter *nftables.Set) [][]expr.Any {
 	)
 }
 
+// forwardRules is the fabric_fwd chain: traffic routed through the node
+// that enters or leaves by the fabric passes only as ESP or once an SA has
+// decrypted it. Evicted peers are dropped either way.
+func (f *Filter) forwardRules(evicted *nftables.Set) [][]expr.Any {
+	return [][]expr.Any{
+		join(f.ifname(expr.MetaKeyIIFNAME, expr.CmpOpNeq), f.ifname(expr.MetaKeyOIFNAME, expr.CmpOpNeq),
+			verdict(expr.VerdictAccept)),
+		join(f.family(), f.addr(srcOffset), lookup(evicted), verdict(expr.VerdictDrop)),
+		join(f.family(), f.addr(dstOffset), lookup(evicted), verdict(expr.VerdictDrop)),
+		join(f.family(), l4proto(unix.IPPROTO_ESP), verdict(expr.VerdictAccept)),
+		join(meta(metaKeySecpath, []byte{1}), verdict(expr.VerdictAccept)),
+		verdict(expr.VerdictDrop),
+	}
+}
+
 // outputRules is the fabric_out chain.
 func (f *Filter) outputRules(evicted *nftables.Set) [][]expr.Any {
-	return [][]expr.Any{
-		join(f.ifname(expr.MetaKeyOIFNAME, expr.CmpOpNeq), verdict(expr.VerdictAccept)),
-		join(neighbourDiscovery(), verdict(expr.VerdictAccept)),
+	rules := [][]expr.Any{join(f.ifname(expr.MetaKeyOIFNAME, expr.CmpOpNeq), verdict(expr.VerdictAccept))}
+	rules = append(rules, f.linkRules()...)
+	return append(rules,
 		join(f.family(), f.addr(dstOffset), lookup(evicted), verdict(expr.VerdictDrop)),
 		join(f.family(), l4proto(unix.IPPROTO_ESP), verdict(expr.VerdictAccept)),
 		join(f.family(), ikePorts(ikePort), verdict(expr.VerdictAccept)),
@@ -305,7 +343,7 @@ func (f *Filter) outputRules(evicted *nftables.Set) [][]expr.Any {
 			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{1}},
 		}, verdict(expr.VerdictAccept)),
 		verdict(expr.VerdictDrop),
-	}
+	)
 }
 
 func join(parts ...[]expr.Any) []expr.Any {
@@ -368,9 +406,10 @@ func lookup(set *nftables.Set) []expr.Any {
 	return []expr.Any{&expr.Lookup{SourceRegister: 1, SetName: set.Name, SetID: set.ID}}
 }
 
-// overRate matches when the source in register 1 has sent IKE above the
-// configured rate.
-func (f *Filter) overRate(meter *nftables.Set) []expr.Any {
+// withinRate matches when the source in register 1 has sent IKE within the
+// configured rate. It fails when the source is over the rate, and when the
+// meter is full and cannot take the source.
+func (f *Filter) withinRate(meter *nftables.Set) []expr.Any {
 	return []expr.Any{&expr.Dynset{
 		SrcRegKey: 1,
 		SetName:   meter.Name,
@@ -379,7 +418,7 @@ func (f *Filter) overRate(meter *nftables.Set) []expr.Any {
 		Timeout:   ikeMeterTimeout,
 		Exprs: []expr.Any{&expr.Limit{
 			Type: expr.LimitTypePkts, Rate: uint64(f.rate), Unit: expr.LimitTimeSecond,
-			Burst: f.burst, Over: true,
+			Burst: f.burst,
 		}},
 	}}
 }
@@ -396,15 +435,33 @@ func ikePorts(port uint16) []expr.Any {
 	})
 }
 
-// neighbourDiscovery matches ICMPv6 types 133–137, which IPv6 needs on
-// the link before any SA exists.
-func neighbourDiscovery() []expr.Any {
-	return join(
-		meta(expr.MetaKeyNFPROTO, []byte{unix.NFPROTO_IPV6}),
-		l4proto(unix.IPPROTO_ICMPV6),
-		[]expr.Any{
-			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
-			&expr.Range{Op: expr.CmpOpEq, Register: 1, FromData: []byte{icmpv6NDLow}, ToData: []byte{icmpv6NDHigh}},
-		},
-	)
+// linkICMPv6 is the ICMPv6 the link needs before any SA exists: neighbour
+// solicitation and advertisement, and MLD, which multicast snooping on the
+// fabric switches relies on. Router solicitation and advertisement are added
+// only for an underlay addressed by SLAAC. Redirects are never exempt: an
+// unauthenticated redirect could steer the underlay.
+func linkICMPv6(slaac bool) []uint8 {
+	types := []uint8{icmpv6MLDQuery, icmpv6MLDReport, icmpv6MLDDone, icmpv6NeighSol, icmpv6NeighAdv, icmpv6MLDv2Report}
+	if slaac {
+		types = append(types, icmpv6RouterSol, icmpv6RouterAdv)
+	}
+	return types
+}
+
+// linkRules accepts the linkICMPv6 types, one rule each.
+func (f *Filter) linkRules() [][]expr.Any {
+	types := linkICMPv6(f.slaac)
+	rules := make([][]expr.Any, 0, len(types))
+	for _, typ := range types {
+		rules = append(rules, join(
+			meta(expr.MetaKeyNFPROTO, []byte{unix.NFPROTO_IPV6}),
+			l4proto(unix.IPPROTO_ICMPV6),
+			[]expr.Any{
+				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
+				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{typ}},
+			},
+			verdict(expr.VerdictAccept),
+		))
+	}
+	return rules
 }

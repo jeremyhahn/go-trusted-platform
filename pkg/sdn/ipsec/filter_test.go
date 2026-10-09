@@ -177,12 +177,22 @@ func (n *fakeNFT) evalRule(t *testing.T, rule []expr.Any, p packet, meters map[s
 				return 0, false
 			}
 		case *expr.Dynset:
-			limit := e.Exprs[0].(*expr.Limit)
-			if _, ok := n.sets[e.SetName]; !ok || !limit.Over {
-				t.Fatalf("meter %q is not declared or not an over-limit", e.SetName)
+			// The update fails, ending the rule, when the set is full and
+			// cannot take a new key; the limit fails it over the burst.
+			meter, declared := n.sets[e.SetName]
+			if !declared || len(e.Exprs) != 1 {
+				t.Fatalf("meter %q is not declared or has no single limit", e.SetName)
 			}
-			meters[string(reg)]++
-			if meters[string(reg)] <= int(limit.Burst) {
+			limit, ok := e.Exprs[0].(*expr.Limit)
+			if !ok || limit.Over {
+				t.Fatalf("meter %q does not match within the rate", e.SetName)
+			}
+			key := string(reg)
+			if _, tracked := meters[key]; !tracked && len(meters) >= int(meter.set.Size) {
+				return 0, false
+			}
+			meters[key]++
+			if meters[key] > int(limit.Burst) {
 				return 0, false
 			}
 		case *expr.Verdict:
@@ -311,10 +321,6 @@ func TestFilterFailsClosed(t *testing.T) {
 		{"UDP 500 from another port", udp(peer4, local4, 40000, 500).on("bond0"), drop},
 		{"VXLAN an SA decrypted", udp(peer4, local4, 49152, 4789).on("bond0").decrypted(), accept},
 		{"cleartext on another interface", udp(peer4, local4, 49152, 4789).on("eth9"), accept},
-		{"IPv6 neighbour solicitation", packet{src: addr("fe80::1"), dst: addr("ff02::1:ff00:11"),
-			l4: unix.IPPROTO_ICMPV6, icmpType: 135}.on("bond0"), accept},
-		{"IPv6 echo", packet{src: addr("fe80::1"), dst: addr("fe80::2"),
-			l4: unix.IPPROTO_ICMPV6, icmpType: 128}.on("bond0"), drop},
 	}
 	for _, tt := range inbound {
 		t.Run("in/"+tt.name, func(t *testing.T) {
@@ -343,6 +349,93 @@ func TestFilterFailsClosed(t *testing.T) {
 				t.Fatalf("verdict = %v, want %v", got, tt.want)
 			}
 		})
+	}
+
+	forwarded := []struct {
+		name string
+		p    packet
+		want expr.VerdictKind
+	}{
+		{"cleartext VXLAN from the fabric", udp(peer4, "10.30.0.5", 49152, 4789).on("bond0").out("eth9"), drop},
+		{"cleartext VXLAN into the fabric", udp("10.30.0.5", peer4, 49152, 4789).on("eth9").out("bond0"), drop},
+		{"cleartext BGP across the fabric", tcp(peer4, "10.20.0.31", 40000, 179).on("bond0").out("bond0"), drop},
+		{"IKE is not routed", udp(peer4, "10.30.0.5", 500, 500).on("bond0").out("eth9"), drop},
+		{"ESP", esp(peer4, "10.30.0.5").on("bond0").out("eth9"), accept},
+		{"traffic an SA decrypted", udp(peer4, "10.30.0.5", 49152, 4789).on("bond0").out("eth9").decrypted(), accept},
+		{"between other interfaces", udp("10.30.0.5", "10.40.0.5", 49152, 4789).on("eth9").out("eth8"), accept},
+	}
+	for _, tt := range forwarded {
+		t.Run("fwd/"+tt.name, func(t *testing.T) {
+			if got := conn.verdict(t, chainForward, tt.p, map[string]int{}); got != tt.want {
+				t.Fatalf("verdict = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func icmpv6(typ byte) packet {
+	return packet{src: addr("fe80::1"), dst: addr("ff02::1"), l4: unix.IPPROTO_ICMPV6, icmpType: typ}
+}
+
+// TestFilterLinkICMPv6 is the ICMPv6 the fabric passes without an SA:
+// neighbour discovery and MLD, router discovery only for a SLAAC underlay,
+// and never a redirect.
+func TestFilterLinkICMPv6(t *testing.T) {
+	accept, drop := expr.VerdictAccept, expr.VerdictDrop
+	tests := []struct {
+		name          string
+		typ           byte
+		want, slaacOn expr.VerdictKind
+	}{
+		{"MLD query", 130, accept, accept},
+		{"MLD report", 131, accept, accept},
+		{"MLD done", 132, accept, accept},
+		{"MLDv2 report", 143, accept, accept},
+		{"neighbour solicitation", 135, accept, accept},
+		{"neighbour advertisement", 136, accept, accept},
+		{"router solicitation", 133, drop, accept},
+		{"router advertisement", 134, drop, accept},
+		{"redirect", 137, drop, drop},
+		{"echo request", 128, drop, drop},
+	}
+	slaac := validConfig()
+	slaac.UnderlaySLAAC = true
+	_, plain := appliedFilter(t, validConfig())
+	_, withSLAAC := appliedFilter(t, slaac)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for chain, p := range map[string]packet{
+				chainInput:  icmpv6(tt.typ).on("bond0"),
+				chainOutput: icmpv6(tt.typ).out("bond0"),
+			} {
+				if got := plain.verdict(t, chain, p, map[string]int{}); got != tt.want {
+					t.Errorf("%s: verdict = %v, want %v", chain, got, tt.want)
+				}
+				if got := withSLAAC.verdict(t, chain, p, map[string]int{}); got != tt.slaacOn {
+					t.Errorf("%s with underlay-slaac: verdict = %v, want %v", chain, got, tt.slaacOn)
+				}
+			}
+		})
+	}
+}
+
+func TestLinkICMPv6(t *testing.T) {
+	plain, slaac := linkICMPv6(false), linkICMPv6(true)
+	for _, typ := range []uint8{icmpv6RouterSol, icmpv6RouterAdv} {
+		if bytes.IndexByte(plain, typ) >= 0 {
+			t.Errorf("router discovery type %d exempt without SLAAC", typ)
+		}
+		if bytes.IndexByte(slaac, typ) < 0 {
+			t.Errorf("router discovery type %d not exempt with SLAAC", typ)
+		}
+	}
+	for _, list := range [][]uint8{plain, slaac} {
+		if bytes.IndexByte(list, 137) >= 0 {
+			t.Error("redirect is exempt")
+		}
+		if bytes.IndexByte(list, icmpv6NeighSol) < 0 || bytes.IndexByte(list, icmpv6MLDv2Report) < 0 {
+			t.Errorf("%v lacks neighbour solicitation or MLDv2", list)
+		}
 	}
 }
 
@@ -387,6 +480,26 @@ func TestFilterIKERateLimit(t *testing.T) {
 	}
 }
 
+// TestFilterIKERateLimitFullMeter floods the meter with sources: once it
+// is full, a new source's IKE is dropped rather than passed unmetered.
+func TestFilterIKERateLimitFullMeter(t *testing.T) {
+	_, conn := appliedFilter(t, validConfig())
+	meters := make(map[string]int, ikeMeterSize)
+	known := addr(peer4).AsSlice()
+	meters[string(known)] = 0
+	for i := 1; len(meters) < ikeMeterSize; i++ {
+		key := []byte{10, 99, byte(i >> 8), byte(i)}
+		meters[string(key)] = 0
+	}
+
+	if got := conn.verdict(t, chainInput, udp("10.20.0.31", local4, 500, 500).on("bond0"), meters); got != expr.VerdictDrop {
+		t.Fatalf("IKE from a new source with the meter full: %v", got)
+	}
+	if got := conn.verdict(t, chainInput, udp(peer4, local4, 500, 500).on("bond0"), meters); got != expr.VerdictAccept {
+		t.Fatalf("IKE from a metered source with the meter full: %v", got)
+	}
+}
+
 func TestFilterEviction(t *testing.T) {
 	ctx := context.Background()
 	f, conn := newTestFilter(t, validConfig())
@@ -413,6 +526,14 @@ func TestFilterEviction(t *testing.T) {
 	}
 	if got := conn.verdict(t, chainOutput, udp(local4, peer4, 500, 500).out("bond0"), map[string]int{}); got != expr.VerdictDrop {
 		t.Fatalf("IKE to an evicted peer: %v", got)
+	}
+	for _, p := range []packet{
+		esp(peer4, "10.30.0.5").on("bond0").out("eth9"),
+		esp("10.30.0.5", peer4).on("eth9").out("bond0"),
+	} {
+		if got := conn.verdict(t, chainForward, p, map[string]int{}); got != expr.VerdictDrop {
+			t.Fatalf("%+v routed to or from an evicted peer: %v", p, got)
+		}
 	}
 
 	if err := f.Undrop(ctx, peer); err != nil {
@@ -485,9 +606,10 @@ func TestFilterApplyIsAReplacement(t *testing.T) {
 	if got := len(conn.rules[chainInput]); got != rules {
 		t.Fatalf("input chain has %d rules after a second Apply, want %d", got, rules)
 	}
-	in, out := conn.chains[chainInput], conn.chains[chainOutput]
-	if in.Hooknum != nftables.ChainHookInput || out.Hooknum != nftables.ChainHookOutput {
-		t.Fatal("chains are not on the input and output hooks")
+	in, fwd, out := conn.chains[chainInput], conn.chains[chainForward], conn.chains[chainOutput]
+	if in.Hooknum != nftables.ChainHookInput || fwd.Hooknum != nftables.ChainHookForward ||
+		out.Hooknum != nftables.ChainHookOutput {
+		t.Fatal("chains are not on the input, forward and output hooks")
 	}
 	if *in.Priority != nftables.ChainPriority(filterPriority) || *in.Policy != nftables.ChainPolicyAccept {
 		t.Fatalf("input chain priority %d policy %d", *in.Priority, *in.Policy)

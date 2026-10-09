@@ -26,11 +26,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// fabricIndex is the interface index of the fabric in fakeXFRM.
+const fabricIndex = 7
+
 // fakeXFRM is a security policy database. Like the kernel, it keys a
 // policy by direction and selector, and a lookup picks the matching policy
-// with the lowest priority number.
+// with the lowest priority number. It also resolves interface names.
 type fakeXFRM struct {
 	spd       map[string]*netlink.XfrmPolicy
+	links     map[string]int
 	updateErr error
 	delErr    error
 	updates   int
@@ -38,12 +42,15 @@ type fakeXFRM struct {
 }
 
 func newFakeXFRM() *fakeXFRM {
-	return &fakeXFRM{spd: make(map[string]*netlink.XfrmPolicy)}
+	return &fakeXFRM{
+		spd:   make(map[string]*netlink.XfrmPolicy),
+		links: map[string]int{"bond0": fabricIndex},
+	}
 }
 
 func policyKey(p *netlink.XfrmPolicy) string {
 	return p.Dir.String() + " " + p.Src.String() + " " + p.Dst.String() + " " +
-		p.Proto.String() + " " + strconv.Itoa(p.SrcPort)
+		p.Proto.String() + " " + strconv.Itoa(p.SrcPort) + " " + strconv.Itoa(p.Ifindex)
 }
 
 func (x *fakeXFRM) XfrmPolicyUpdate(p *netlink.XfrmPolicy) error {
@@ -66,14 +73,33 @@ func (x *fakeXFRM) XfrmPolicyDel(p *netlink.XfrmPolicy) error {
 	return nil
 }
 
+func (x *fakeXFRM) LinkByName(name string) (netlink.Link, error) {
+	index, ok := x.links[name]
+	if !ok {
+		return nil, unix.ENODEV
+	}
+	return &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: name, Index: index}}, nil
+}
+
 func (x *fakeXFRM) Close() { x.closed = true }
 
-// lookup returns the policy governing a packet, or nil when none does.
-func (x *fakeXFRM) lookup(dir netlink.Dir, src, dst netip.Addr, proto uint8, icmpType int) *netlink.XfrmPolicy {
+// flow is what a policy lookup needs of a packet. oif is the output
+// interface index, which only the forward direction is checked against.
+type flow struct {
+	dir      netlink.Dir
+	src, dst netip.Addr
+	proto    uint8
+	icmpType int
+	oif      int
+}
+
+// lookup returns the policy governing a flow, or nil when none does.
+func (x *fakeXFRM) lookup(f flow) *netlink.XfrmPolicy {
 	var best *netlink.XfrmPolicy
 	for _, p := range x.spd {
-		if p.Dir != dir || !selects(p.Src, src) || !selects(p.Dst, dst) ||
-			(p.Proto != 0 && uint8(p.Proto) != proto) || (p.SrcPort != 0 && p.SrcPort != icmpType) {
+		if p.Dir != f.dir || !selects(p.Src, f.src) || !selects(p.Dst, f.dst) ||
+			(p.Proto != 0 && uint8(p.Proto) != f.proto) || (p.SrcPort != 0 && p.SrcPort != f.icmpType) ||
+			(p.Ifindex != 0 && p.Ifindex != f.oif) {
 			continue
 		}
 		if best == nil || p.Priority < best.Priority {
@@ -99,32 +125,52 @@ func action(p *netlink.XfrmPolicy) string {
 	return p.Action.String()
 }
 
-func installedBlockPolicy(t *testing.T, cfg *Config) (*BlockPolicy, *fakeXFRM) {
+func testBlockPolicy(t *testing.T, cfg *Config) (*BlockPolicy, *fakeXFRM) {
 	t.Helper()
 	local, err := enabledLocal(cfg)
 	if err != nil {
 		t.Fatalf("config: %v", err)
 	}
 	x := newFakeXFRM()
-	b := &BlockPolicy{local: local, handle: x}
+	return &BlockPolicy{local: local, iface: cfg.FabricInterface, slaac: cfg.UnderlaySLAAC, handle: x}, x
+}
+
+func installedBlockPolicy(t *testing.T, cfg *Config) (*BlockPolicy, *fakeXFRM) {
+	t.Helper()
+	b, x := testBlockPolicy(t, cfg)
 	if err := b.Install(context.Background()); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	return b, x
 }
 
+func ipv6Config() *Config {
+	cfg := validConfig()
+	cfg.LocalAddress = "fd00:20::11"
+	cfg.StaticPeers = []string{"fd00:20::1"}
+	return cfg
+}
+
 func TestBlockPolicyFailsClosed(t *testing.T) {
 	_, x := installedBlockPolicy(t, validConfig())
-	local, peer := addr(local4), addr(peer4)
+	local, peer, beyond := addr(local4), addr(peer4), addr("10.30.0.5")
 
-	if got := action(x.lookup(netlink.XFRM_DIR_OUT, local, peer, unix.IPPROTO_UDP, 0)); got != "block" {
-		t.Fatalf("outbound VXLAN with charon stopped: %s", got)
-	}
-	if got := action(x.lookup(netlink.XFRM_DIR_IN, peer, local, unix.IPPROTO_TCP, 0)); got != "block" {
-		t.Fatalf("inbound BGP with charon stopped: %s", got)
-	}
-	if got := action(x.lookup(netlink.XFRM_DIR_OUT, addr("192.0.2.1"), peer, unix.IPPROTO_UDP, 0)); got != "none" {
-		t.Fatalf("traffic from another address is governed: %s", got)
+	for _, tt := range []struct {
+		name string
+		f    flow
+		want string
+	}{
+		{"outbound VXLAN", flow{dir: netlink.XFRM_DIR_OUT, src: local, dst: peer, proto: unix.IPPROTO_UDP}, "block"},
+		{"inbound BGP", flow{dir: netlink.XFRM_DIR_IN, src: peer, dst: local, proto: unix.IPPROTO_TCP}, "block"},
+		{"routed into the fabric", flow{dir: netlink.XFRM_DIR_FWD, src: beyond, dst: peer, proto: unix.IPPROTO_UDP, oif: fabricIndex}, "block"},
+		{"routed out of the fabric elsewhere", flow{dir: netlink.XFRM_DIR_FWD, src: peer, dst: beyond, proto: unix.IPPROTO_UDP, oif: 9}, "none"},
+		{"from another address", flow{dir: netlink.XFRM_DIR_OUT, src: addr("192.0.2.1"), dst: peer, proto: unix.IPPROTO_UDP}, "none"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := action(x.lookup(tt.f)); got != tt.want {
+				t.Fatalf("policy = %s, want %s", got, tt.want)
+			}
+		})
 	}
 
 	// A transport policy as charon installs it for a trapped peer, at its
@@ -135,37 +181,45 @@ func TestBlockPolicyFailsClosed(t *testing.T) {
 	if err := x.XfrmPolicyUpdate(charon); err != nil {
 		t.Fatalf("charon policy: %v", err)
 	}
-	if got := x.lookup(netlink.XFRM_DIR_OUT, local, peer, unix.IPPROTO_UDP, 0); got != charon {
+	if got := x.lookup(flow{dir: netlink.XFRM_DIR_OUT, src: local, dst: peer, proto: unix.IPPROTO_UDP}); got != charon {
 		t.Fatalf("charon's policy lost to %s", action(got))
 	}
 }
 
 func TestBlockPolicyIPv6(t *testing.T) {
-	cfg := validConfig()
-	cfg.LocalAddress = "fd00:20::11"
-	cfg.StaticPeers = []string{"fd00:20::1"}
-	_, x := installedBlockPolicy(t, cfg)
+	slaac := ipv6Config()
+	slaac.UnderlaySLAAC = true
+	_, plain := installedBlockPolicy(t, ipv6Config())
+	_, withSLAAC := installedBlockPolicy(t, slaac)
 	local, peer := addr("fd00:20::11"), addr("fd00:20::30")
+	icmp := func(dir netlink.Dir, src, dst netip.Addr, typ int) flow {
+		return flow{dir: dir, src: src, dst: dst, proto: unix.IPPROTO_ICMPV6, icmpType: typ}
+	}
 
 	for _, tt := range []struct {
-		name     string
-		dir      netlink.Dir
-		src, dst netip.Addr
-		proto    uint8
-		icmpType int
-		want     string
+		name          string
+		f             flow
+		want, slaacOn string
 	}{
-		{"neighbour solicitation out", netlink.XFRM_DIR_OUT, local, addr("ff02::1:ff00:30"), unix.IPPROTO_ICMPV6, 135, "allow"},
-		{"neighbour advertisement in", netlink.XFRM_DIR_IN, peer, local, unix.IPPROTO_ICMPV6, 136, "allow"},
-		{"router solicitation out", netlink.XFRM_DIR_OUT, local, addr("ff02::2"), unix.IPPROTO_ICMPV6, 133, "allow"},
-		{"redirect in", netlink.XFRM_DIR_IN, peer, local, unix.IPPROTO_ICMPV6, 137, "allow"},
-		{"echo request in", netlink.XFRM_DIR_IN, peer, local, unix.IPPROTO_ICMPV6, 128, "block"},
-		{"VXLAN out", netlink.XFRM_DIR_OUT, local, peer, unix.IPPROTO_UDP, 0, "block"},
-		{"BGP in", netlink.XFRM_DIR_IN, peer, local, unix.IPPROTO_TCP, 0, "block"},
+		{"neighbour solicitation out", icmp(netlink.XFRM_DIR_OUT, local, addr("ff02::1:ff00:30"), 135), "allow", "allow"},
+		{"neighbour advertisement in", icmp(netlink.XFRM_DIR_IN, peer, local, 136), "allow", "allow"},
+		{"MLD query in", icmp(netlink.XFRM_DIR_IN, peer, local, 130), "allow", "allow"},
+		{"MLDv2 report out", icmp(netlink.XFRM_DIR_OUT, local, addr("ff02::16"), 143), "allow", "allow"},
+		{"router solicitation out", icmp(netlink.XFRM_DIR_OUT, local, addr("ff02::2"), 133), "block", "allow"},
+		{"router advertisement in", icmp(netlink.XFRM_DIR_IN, peer, local, 134), "block", "allow"},
+		{"redirect in", icmp(netlink.XFRM_DIR_IN, peer, local, 137), "block", "block"},
+		{"echo request in", icmp(netlink.XFRM_DIR_IN, peer, local, 128), "block", "block"},
+		{"VXLAN out", flow{dir: netlink.XFRM_DIR_OUT, src: local, dst: peer, proto: unix.IPPROTO_UDP}, "block", "block"},
+		{"BGP in", flow{dir: netlink.XFRM_DIR_IN, src: peer, dst: local, proto: unix.IPPROTO_TCP}, "block", "block"},
+		{"routed into the fabric", flow{dir: netlink.XFRM_DIR_FWD, src: addr("fd00:30::5"), dst: peer,
+			proto: unix.IPPROTO_UDP, oif: fabricIndex}, "block", "block"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := action(x.lookup(tt.dir, tt.src, tt.dst, tt.proto, tt.icmpType)); got != tt.want {
-				t.Fatalf("policy = %s, want %s", got, tt.want)
+			if got := action(plain.lookup(tt.f)); got != tt.want {
+				t.Errorf("policy = %s, want %s", got, tt.want)
+			}
+			if got := action(withSLAAC.lookup(tt.f)); got != tt.slaacOn {
+				t.Errorf("with underlay-slaac: policy = %s, want %s", got, tt.slaacOn)
 			}
 		})
 	}
@@ -176,15 +230,13 @@ func TestBlockPolicyInstallIsIdempotent(t *testing.T) {
 	if err := b.Install(context.Background()); err != nil {
 		t.Fatalf("second Install: %v", err)
 	}
-	if len(x.spd) != 2 {
-		t.Fatalf("SPD holds %d policies after a second Install, want 2", len(x.spd))
+	if len(x.spd) != 3 {
+		t.Fatalf("SPD holds %d policies after a second Install, want 3", len(x.spd))
 	}
 }
 
 func TestBlockPolicyInstallFailures(t *testing.T) {
-	local := addr(local4)
-	x := newFakeXFRM()
-	b := &BlockPolicy{local: local, handle: x}
+	b, x := testBlockPolicy(t, validConfig())
 
 	x.updateErr = errInjected
 	var opErr *OpError
@@ -198,17 +250,21 @@ func TestBlockPolicyInstallFailures(t *testing.T) {
 	if err := b.Install(cancelled); !errors.As(err, &opErr) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("Install with a cancelled context: err = %v", err)
 	}
+
+	// Without the fabric interface the forward block has nothing to bind
+	// to, and Install writes nothing rather than a partial floor.
+	delete(x.links, "bond0")
+	if err := b.Install(context.Background()); !errors.As(err, &opErr) || !errors.Is(err, unix.ENODEV) {
+		t.Fatalf("Install without the fabric interface: err = %v", err)
+	}
 	if x.updates != 0 {
-		t.Fatalf("a cancelled Install wrote %d policies", x.updates)
+		t.Fatalf("failed Installs wrote %d policies", x.updates)
 	}
 }
 
 func TestBlockPolicyRemove(t *testing.T) {
 	ctx := context.Background()
-	cfg := validConfig()
-	cfg.LocalAddress = "fd00:20::11"
-	cfg.StaticPeers = []string{"fd00:20::1"}
-	b, x := installedBlockPolicy(t, cfg)
+	b, x := installedBlockPolicy(t, ipv6Config())
 
 	if err := b.Remove(ctx); err != nil {
 		t.Fatalf("Remove: %v", err)
@@ -229,8 +285,8 @@ func TestBlockPolicyRemove(t *testing.T) {
 	if err := b.Remove(ctx); !errors.As(err, &opErr) || !errors.Is(err, errInjected) {
 		t.Fatalf("Remove with a failing kernel: err = %v", err)
 	}
-	if len(x.spd) != 2 {
-		t.Fatalf("SPD holds %d policies, want only the two blocks left", len(x.spd))
+	if len(x.spd) != 3 {
+		t.Fatalf("SPD holds %d policies, want only the three blocks left", len(x.spd))
 	}
 
 	cancelled, cancel := context.WithCancel(ctx)
@@ -243,6 +299,38 @@ func TestBlockPolicyRemove(t *testing.T) {
 	if !x.closed {
 		t.Fatal("Close did not close the netlink handle")
 	}
+}
+
+func TestBlockPolicyRemoveForwardBlock(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("after the fabric interface is gone", func(t *testing.T) {
+		b, x := installedBlockPolicy(t, validConfig())
+		delete(x.links, "bond0")
+		if err := b.Remove(ctx); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		if len(x.spd) != 0 {
+			t.Fatalf("SPD still holds %d policies", len(x.spd))
+		}
+	})
+	t.Run("installed by an earlier process", func(t *testing.T) {
+		earlier, x := installedBlockPolicy(t, validConfig())
+		later := &BlockPolicy{local: earlier.local, iface: earlier.iface, handle: x}
+		if err := later.Remove(ctx); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		if len(x.spd) != 0 {
+			t.Fatalf("SPD still holds %d policies", len(x.spd))
+		}
+	})
+	t.Run("never installed and no interface", func(t *testing.T) {
+		b, x := testBlockPolicy(t, validConfig())
+		delete(x.links, "bond0")
+		if err := b.Remove(ctx); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+	})
 }
 
 func TestNewBlockPolicy(t *testing.T) {
@@ -264,10 +352,15 @@ func TestNewBlockPolicy(t *testing.T) {
 		})
 	}
 
-	// Opening the netlink socket needs no privilege; nothing is written.
-	b, err := NewBlockPolicy(validConfig(), netns.None())
+	// Opening the netlink sockets needs no privilege; nothing is written.
+	cfg := validConfig()
+	cfg.UnderlaySLAAC = true
+	b, err := NewBlockPolicy(cfg, netns.None())
 	if err != nil {
 		t.Fatalf("NewBlockPolicy: %v", err)
+	}
+	if b.iface != cfg.FabricInterface || !b.slaac {
+		t.Fatalf("BlockPolicy iface %q slaac %v, want the configuration's", b.iface, b.slaac)
 	}
 	b.Close()
 }

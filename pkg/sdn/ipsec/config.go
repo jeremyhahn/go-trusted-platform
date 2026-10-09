@@ -73,7 +73,8 @@ const (
 //	      handle: 6970736563
 type Config struct {
 	// Enabled turns overlay IPsec on. With it on, the fabric interface
-	// carries nothing but IKE, ESP and traffic already protected by an SA.
+	// carries nothing but IKE, ESP, traffic an SA protects and the ICMPv6
+	// the link needs -- received, sent or routed through the node.
 	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
 
 	// FabricInterface is the underlay interface the fail-closed filter
@@ -117,6 +118,12 @@ type Config struct {
 	// address. Defaults DefaultIKERate and twice the rate.
 	IKERate  uint32 `yaml:"ike-rate,omitempty" json:"ike_rate,omitempty" mapstructure:"ike-rate"`
 	IKEBurst uint32 `yaml:"ike-burst,omitempty" json:"ike_burst,omitempty" mapstructure:"ike-burst"`
+
+	// UnderlaySLAAC also passes ICMPv6 router solicitations and
+	// advertisements on the fabric, which an underlay addressed by SLAAC
+	// needs. Off by default: an unauthenticated advertisement can readdress
+	// or reroute the node.
+	UnderlaySLAAC bool `yaml:"underlay-slaac,omitempty" json:"underlay_slaac,omitempty" mapstructure:"underlay-slaac"`
 }
 
 // TokenConfig locates the IKE key: a sign-only object in the node-local

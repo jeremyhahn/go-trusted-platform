@@ -251,25 +251,43 @@ make sure nothing crosses the fabric in cleartext. With charon stopped,
 no SA and no trap exists, and both layers drop VXLAN and BGP alike.
 
 `ipsec.Filter` writes the nftables table `inet tp_ipsec`. Its chains,
-`fabric_in` and `fabric_out`, hook input and output at priority -10 with
-policy accept, and only judge packets on `fabric-interface`:
+`fabric_in`, `fabric_fwd` and `fabric_out`, hook input, forward and output
+at priority -10 with policy accept, and only judge packets that enter or
+leave by `fabric-interface`:
 
 | Order | Inbound (`iifname`) | Outbound (`oifname`) |
 |-------|---------------------|----------------------|
-| 1 | ICMPv6 types 133–137 (neighbour discovery) accepted | the same |
+| 1 | link ICMPv6 accepted (below) | the same |
 | 2 | source in `@evicted` dropped | destination in `@evicted` dropped |
 | 3 | ESP accepted (local address family) | ESP accepted |
-| 4 | UDP 500→500 and 4500→4500 over `ike-rate`/`ike-burst` per source dropped, the rest accepted | UDP 500→500 and 4500→4500 accepted |
+| 4 | UDP 500→500 and 4500→4500 accepted while the source's `ike_meter` update succeeds within `ike-rate`/`ike-burst` | UDP 500→500 and 4500→4500 accepted |
 | 5 | `meta secpath exists` (decrypted by an SA) accepted | `rt ipsec exists` (routed into an SA) accepted |
 | 6 | everything else dropped | everything else dropped |
 
-The per-source IKE limit is a dynamic set (`ike_meter`, entries expire a
-minute after a source's last packet). It complements charon's
-`cookie_threshold` and `init_limit_half_open`. The table only narrows:
-the host filter (`tp_host`) still has to accept ESP and IKE on the fabric.
-Cleartext ICMP, path-MTU messages included, is dropped. The underlay MTU
-requirement in [Encapsulation and MTU](#encapsulation-and-mtu) is what
-makes that safe.
+`fabric_fwd` judges traffic routed through the node whose `iifname` or
+`oifname` is the fabric: source or destination in `@evicted` dropped, ESP
+accepted, `meta secpath exists` accepted, everything else dropped. Link
+ICMPv6 and IKE are never routed, so neither is exempt there.
+
+The per-source IKE limit is a dynamic set (`ike_meter`, at most 65535
+sources, entries expire a minute after a source's last packet). The rule
+accepts only when the meter update succeeds and the source is within its
+rate. Over the rate, and when the meter is full and cannot take a new
+source, the update fails and the packet falls to the final drop, so a flood
+of spoofed sources fills the meter without opening it. It complements
+charon's `cookie_threshold` and `init_limit_half_open`. The table only
+narrows: the host filter (`tp_host`) still has to accept ESP and IKE on the
+fabric.
+
+The link ICMPv6 is what an IPv6 underlay needs before any SA exists:
+neighbour solicitation and advertisement (135, 136) and MLD (130–132,
+143), which multicast snooping on the fabric switches relies on. Router
+solicitation and advertisement (133, 134) are added only with
+`underlay-slaac`, for an underlay addressed by SLAAC; it is off by default,
+because an unauthenticated advertisement can readdress or reroute the node.
+Redirect (137) is never exempt. Every other cleartext ICMP, path-MTU
+messages included, is dropped. The underlay MTU requirement in
+[Encapsulation and MTU](#encapsulation-and-mtu) is what makes that safe.
 
 `Apply` replaces the whole table in one transaction, so there is never
 a moment without it. `Remove` deletes it. `Filter` is the controller's
@@ -279,14 +297,17 @@ keeps every drop.
 
 `ipsec.BlockPolicy` installs XFRM policies at priority 2^30. A larger
 number is a lower priority, so these sit below every policy charon
-installs. Direction `out` blocks everything from the local address, and
-direction `in` blocks everything to it. A packet passes only when one of
-charon's policies (a trap, or an SA's) takes precedence and sends it
-through ESP. charon's IKE sockets carry bypass socket policies, which
-the kernel checks first. On an IPv6 underlay, ICMPv6 types 133–137 are
-allowed in both directions one priority step above the blocks.
-`Install` is idempotent, and exemptions go in before blocks. `Remove`
-deletes the blocks first.
+installs. Direction `out` blocks everything from the local address,
+direction `in` blocks everything to it, and direction `fwd`, bound to the
+fabric interface's index, blocks everything routed out of the fabric. A
+packet passes only when one of charon's policies (a trap, or an SA's) takes
+precedence and sends it through ESP. charon's IKE sockets carry bypass
+socket policies, which the kernel checks first. On an IPv6 underlay, the
+link ICMPv6 types above are allowed in both directions one priority step
+above the blocks. `Install` resolves the fabric interface (it must exist),
+is idempotent, and puts exemptions in before blocks. `Remove` deletes the
+blocks first, the forward block for the interface index it was installed
+with.
 
 Both need CAP_NET_ADMIN. `NewFilter` takes nftables connection options
 and `NewBlockPolicy` takes a network namespace, so either can be pinned
