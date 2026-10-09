@@ -315,15 +315,17 @@ func (f *Filter) inputRules(evicted, meter *nftables.Set) [][]expr.Any {
 }
 
 // forwardRules is the fabric_fwd chain: traffic routed through the node
-// that enters or leaves by the fabric passes only as ESP or once an SA has
-// decrypted it. Evicted peers are dropped either way.
+// that enters or leaves by the fabric passes only once an SA has decrypted
+// it, and never from or to an evicted peer. ESP is not accepted: the
+// VTEP's own ESP is local and judged by fabric_in and fabric_out, while
+// ESP routed through the node is another host's tunnel, which the XFRM
+// forward block drops on its way out of the fabric as well.
 func (f *Filter) forwardRules(evicted *nftables.Set) [][]expr.Any {
 	return [][]expr.Any{
 		join(f.ifname(expr.MetaKeyIIFNAME, expr.CmpOpNeq), f.ifname(expr.MetaKeyOIFNAME, expr.CmpOpNeq),
 			verdict(expr.VerdictAccept)),
 		join(f.family(), f.addr(srcOffset), lookup(evicted), verdict(expr.VerdictDrop)),
 		join(f.family(), f.addr(dstOffset), lookup(evicted), verdict(expr.VerdictDrop)),
-		join(f.family(), l4proto(unix.IPPROTO_ESP), verdict(expr.VerdictAccept)),
 		join(meta(metaKeySecpath, []byte{1}), verdict(expr.VerdictAccept)),
 		verdict(expr.VerdictDrop),
 	}

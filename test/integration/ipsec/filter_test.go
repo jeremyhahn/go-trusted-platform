@@ -353,9 +353,11 @@ func requireDelivery(t *testing.T, flows []floorFlow, when string) {
 }
 
 // TestFloorLeavesNoCleartextPath sends VXLAN and BGP in cleartext every way
-// the fabric carries them while charon is stopped. Each half of the floor is
-// applied alone and then both together, as a node runs them, so neither half
-// can hide a hole in the other.
+// the fabric carries them while charon is stopped, and ESP routed through
+// the node, which is another host's tunnel and not the VTEP's. Each half of
+// the floor is applied alone and then both together, as a node runs them,
+// so neither half can hide a hole in the other, and the two must agree
+// that routed ESP does not pass.
 func TestFloorLeavesNoCleartextPath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -377,6 +379,10 @@ func TestFloorLeavesNoCleartextPath(t *testing.T) {
 				outOfFabric: true},
 		)
 	}
+	flows = append(flows,
+		floorFlow{name: "ESP routed into the fabric", network: espNetwork, from: n.client, to: n.peer},
+		floorFlow{name: "ESP routed out of the fabric", network: espNetwork, from: n.peer, to: n.client, outOfFabric: true},
+	)
 
 	for _, layer := range []struct {
 		name          string
@@ -410,8 +416,9 @@ func TestFloorLeavesNoCleartextPath(t *testing.T) {
 }
 
 // TestEvictedPeerIsDroppedBeforeESP evicts a peer whose ESP and IKE the
-// filter accepts, and checks that every chain drops them from then on: the
-// evicted-peer rules must come before the ESP and IKE accepts.
+// filter accepts, and checks that the input and output chains drop them
+// from then on: the evicted-peer rules must come before the ESP and IKE
+// accepts. Routed ESP is never accepted (TestFloorLeavesNoCleartextPath).
 func TestEvictedPeerIsDroppedBeforeESP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -421,8 +428,6 @@ func TestEvictedPeerIsDroppedBeforeESP(t *testing.T) {
 	flows := []floorFlow{
 		{name: "ESP from the peer", network: espNetwork, from: n.peer, to: n.node},
 		{name: "ESP to the peer", network: espNetwork, from: n.node, to: n.peer},
-		{name: "ESP routed to the peer", network: espNetwork, from: n.client, to: n.peer},
-		{name: "ESP routed from the peer", network: espNetwork, from: n.peer, to: n.client},
 		{name: "IKE from the peer", network: "udp4", from: n.peer, to: n.node, srcPort: ikePort, dstPort: ikePort},
 	}
 	requireDelivery(t, flows, "the filter before the eviction")

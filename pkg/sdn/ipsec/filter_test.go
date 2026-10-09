@@ -360,7 +360,10 @@ func TestFilterFailsClosed(t *testing.T) {
 		{"cleartext VXLAN into the fabric", udp("10.30.0.5", peer4, 49152, 4789).on("eth9").out("bond0"), drop},
 		{"cleartext BGP across the fabric", tcp(peer4, "10.20.0.31", 40000, 179).on("bond0").out("bond0"), drop},
 		{"IKE is not routed", udp(peer4, "10.30.0.5", 500, 500).on("bond0").out("eth9"), drop},
-		{"ESP", esp(peer4, "10.30.0.5").on("bond0").out("eth9"), accept},
+		// The VTEP's own ESP is local; ESP routed through the node is another
+		// tunnel, which the XFRM forward block drops out of the fabric too.
+		{"ESP is not routed from the fabric", esp(peer4, "10.30.0.5").on("bond0").out("eth9"), drop},
+		{"ESP is not routed into the fabric", esp("10.30.0.5", peer4).on("eth9").out("bond0"), drop},
 		{"traffic an SA decrypted", udp(peer4, "10.30.0.5", 49152, 4789).on("bond0").out("eth9").decrypted(), accept},
 		{"between other interfaces", udp("10.30.0.5", "10.40.0.5", 49152, 4789).on("eth9").out("eth8"), accept},
 	}
@@ -528,8 +531,8 @@ func TestFilterEviction(t *testing.T) {
 		t.Fatalf("IKE to an evicted peer: %v", got)
 	}
 	for _, p := range []packet{
-		esp(peer4, "10.30.0.5").on("bond0").out("eth9"),
-		esp("10.30.0.5", peer4).on("eth9").out("bond0"),
+		udp(peer4, "10.30.0.5", 49152, 4789).on("bond0").out("eth9").decrypted(),
+		udp("10.30.0.5", peer4, 49152, 4789).on("eth9").out("bond0").decrypted(),
 	} {
 		if got := conn.verdict(t, chainForward, p, map[string]int{}); got != expr.VerdictDrop {
 			t.Fatalf("%+v routed to or from an evicted peer: %v", p, got)

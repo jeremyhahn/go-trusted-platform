@@ -60,8 +60,8 @@ sdn:
 
 | Parameter | Type | Default | Rule |
 |-----------|------|---------|------|
-| enabled | bool | false | With it on, the fabric interface carries only IKE, ESP, SA-protected traffic and the link ICMPv6 -- received, sent or routed through the node |
-| fabric-interface | string | — | Required; a Linux interface name (1–15 characters) |
+| enabled | bool | false | With it on, the fabric interface carries only the VTEP's own IKE and ESP, SA-protected traffic and the link ICMPv6. Nothing is routed through the node into or out of the fabric unless an SA carries it, ESP of other hosts included |
+| fabric-interface | string | — | Required; a Linux interface name (1–15 characters). It must be dedicated to the underlay: routed north-south traffic out of this NIC is blocked by design (see the fail-closed floor in [architecture.md](architecture.md#fail-closed-floor)), so the node's uplink and any routed LAN need interfaces of their own |
 | local-address | string | — | Required; this VTEP's unicast address, the IKE endpoint and certificate identity |
 | static-peers | []string | none | Explicit per-peer connections (route reflectors, gateways); single unicast addresses of the local address's family, no duplicates, never the local address. There is no wildcard peer |
 | vici-socket | string | `/run/charon.vici` | Absolute path. platformd refuses the socket unless it is mode 0600 and owned by platformd's user, and served by a process that listened as charon's uid |

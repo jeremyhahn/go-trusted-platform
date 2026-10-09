@@ -362,9 +362,23 @@ leave by `fabric-interface`:
 | 6 | everything else dropped | everything else dropped |
 
 `fabric_fwd` judges traffic routed through the node whose `iifname` or
-`oifname` is the fabric: source or destination in `@evicted` dropped, ESP
-accepted, `meta secpath exists` accepted, everything else dropped. Link
-ICMPv6 and IKE are never routed, so neither is exempt there.
+`oifname` is the fabric: source or destination in `@evicted` dropped,
+`meta secpath exists` accepted, everything else dropped. Link ICMPv6 and
+IKE are never routed, so neither is exempt there.
+
+ESP is not exempt in `fabric_fwd` either, and the XFRM `fwd` block has no
+ESP exemption, so the two forward layers agree: routed ESP does not pass.
+The overlay never needs it. The VTEP's own ESP starts and ends at
+`local-address` and is judged by `fabric_in` and `fabric_out`. ESP that
+the node would route is another host's tunnel, and a VTEP is not a
+transit router for the underlay. An exemption in one layer only would
+also be dead: the XFRM block drops everything routed out by the fabric
+interface that no SA of charon's carries.
+
+The fabric interface is therefore dedicated to the underlay. Routed
+north-south traffic out of the fabric NIC is blocked by design, by both
+layers. A node whose uplink or routed LAN shares that NIC loses it while
+the overlay is enabled, and needs its own interface for that traffic.
 
 The per-source IKE limit is a dynamic set (`ike_meter`, at most 65535
 sources, entries expire a minute after a source's last packet). The rule
@@ -412,9 +426,9 @@ to a namespace.
 
 The ipsec integration suite applies both to a node in a network namespace
 and checks them on a real kernel ([../engineering.md](../engineering.md),
-§9.3). It covers three things: no cleartext path in any direction for each
-layer alone and for both, eviction ahead of the ESP and IKE accepts, and a
-full `ike_meter` that refuses new sources.
+§9.3). It covers three things: no cleartext path, and no routed ESP, in any
+direction for each layer alone and for both, eviction ahead of the ESP and
+IKE accepts, and a full `ike_meter` that refuses new sources.
 
 ### Timers
 
