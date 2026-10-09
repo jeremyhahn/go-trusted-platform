@@ -1,9 +1,37 @@
-# automerge v7: a PR merges itself once CI is green; a `code-review` PR also
-# needs one approval from the reviewer list, by someone other than its author.
-# PRs that are behind main land together as one merge-train PR.
+# automerge v10: a PR merges itself once CI is green; a `code-review` PR also
+# needs one approval from the reviewer list, by someone other than its
+# author. A restricted repository can replace that list entirely with its
+# own. PRs that are behind main land together as one merge-train PR.
 #
-# Owner rulings (automatethethings#200, #203, #211; handbook#99;
+# Owner rulings (automatethethings#200, #203, #211, #221; handbook#99;
 # go-enclave#118, #122):
+#   2026-10-06 (automatethethings, verbatim in repo-policy.sh) "lets make
+#    sure we are approving with the agent-software instead of the
+#    agent-company. agent-software should be able to approve any PR in gitea
+#    except for the platform-configs and automatethethings repos. The
+#    agent-infrastructure (department agent) and agent-platform-configs
+#    (project agent) should have access to the platform-configs repo.
+#    agent-infrastructure can approve. we only want to use the agent-company
+#    for the automatethethings company repo." APPROVERS below is one fixed
+#    list for every repository and cannot carry agent-infrastructure without
+#    also letting it release every OTHER repo's `code-review` PRs, which the
+#    ruling does not say. v8 ADDED the ruled approver for a repository
+#    outside the fixed six on top of APPROVERS -- but an addition can never
+#    enforce "we only want to use the agent-company for the automatethethings
+#    company repo" on a restricted repository, where every other name must
+#    be EXCLUDED, not joined. Measured 2026-10-06 on platform-configs PR #3:
+#    an agent-company approval (a name APPROVERS already carries) RELEASED a
+#    `code-review` PR there, though the ruling names only
+#    agent-infrastructure for that repo. v9 instead REPLACES APPROVERS
+#    entirely on such a repository, through the repo Actions variable
+#    AUTOMERGE_APPROVERS_ONLY (infra/gitea/scripts/repo-policy.sh's
+#    automerge_approvers_only, applied by setup-pr-sdlc.sh): a JSON array of
+#    logins that, when set, REPLACES APPROVERS entirely as
+#    EFFECTIVE_APPROVERS. Unset on a repo (every repo but platform-configs
+#    today) changes nothing from v7/v8. Set to anything that is not a JSON
+#    array of strings, or to an empty array (nobody could approve), this
+#    FAILS CLOSED -- a malformed or empty variable must never silently change
+#    who can release a PR.
 #   2026-10-04/05 "keep merging its PRs by hand as agent-company and leave the
 #    block_on_outdated_branch turned on, we want to make sure we are requiring
 #    the latest from main in all branches before they get merged in" and
@@ -30,8 +58,10 @@
 #   no `code-review` label -> ready when every required CI check is green
 #   `code-review` label    -> ready when CI is green AND, on the current head,
 #                             one APPROVED review (not stale, not dismissed) by
-#                             one of APPROVERS other than the PR's author, and
-#                             no reviewer's latest review is REQUEST_CHANGES
+#                             one of EFFECTIVE_APPROVERS (APPROVERS, or the
+#                             repo's own AUTOMERGE_APPROVERS_ONLY replacement
+#                             if set) other than the PR's author, and no
+#                             reviewer's latest review is REQUEST_CHANGES
 #
 # BASE-DEFINED ONLY. AGENT_TOKEN reaches only runs whose definition Gitea takes
 # from the base branch: pull_request_target, workflow_run and schedule. A
@@ -90,8 +120,12 @@ on:
     # The repository's CI workflow; the documentation repos call theirs Docs.
     workflows: [CI, Docs]
     types: [completed]
+  # v10: every 30 minutes, not 10. Across the fleet the 10-minute sweep made
+  # most of the Actions queue and starved CI (dept-software#59); PR events and
+  # CI completion cover a PR becoming mergeable, and the sweep picks up
+  # approvals and merge-train races.
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/30 * * * *'
 
 # Runs queue rather than cancel, so a train is never cut off mid-landing where
 # concurrency is honoured. Gitea may not honour it: see train() for the races.
@@ -128,8 +162,16 @@ jobs:
           # Gitea answers "try again later" while it re-tests a PR after main moved.
           RETRY_SLEEP: '3'
           # The reviewers whose approval releases a `code-review` PR (owner,
-          # 2026-10-02). Logins, exact.
+          # 2026-10-02). Logins, exact. A restricted repository replaces
+          # this list entirely via APPROVERS_ONLY below, rather than adding
+          # to it.
           APPROVERS: '["claude","codex","opencode","jeremyhahn","agent-company","agent-software"]'
+          # Per-repo REPLACEMENT for APPROVERS (v9; owner ruling 2026-10-06 --
+          # repo-policy.sh's automerge_approvers_only, applied by
+          # setup-pr-sdlc.sh). Gitea 1.27 supports the `vars` context. Unset
+          # on every repo except platform-configs today, so behaviour
+          # elsewhere is unchanged from v7/v8.
+          APPROVERS_ONLY: ${{ vars.AUTOMERGE_APPROVERS_ONLY }}
         run: |
           set -euo pipefail
           # A read that fails inside $( ) fails the assignment, not just itself.
@@ -151,6 +193,22 @@ jobs:
               ${3:+-d "$3"} "$REPO_API$2"
           }
           die() { echo "::error::$*" >&2; exit 1; }
+          # EFFECTIVE_APPROVERS = APPROVERS_ONLY when set and valid, else
+          # APPROVERS (v9). Unset APPROVERS_ONLY changes nothing from v7/v8.
+          # Anything else that is not a JSON array of strings, OR an empty
+          # array (nobody could approve), FAILS CLOSED: a malformed or empty
+          # variable must never silently change who can release a
+          # `code-review` PR.
+          EFFECTIVE_APPROVERS=$(jq -nc --argjson base "$APPROVERS" --arg only "${APPROVERS_ONLY:-}" '
+              def parsed: if . == "" then "__unset__" else (try fromjson catch "__invalid__") end;
+              ($only | parsed) as $o
+              | if $o == "__unset__" then $base
+                elif ($o | type) != "array" then "__invalid__"
+                elif ($o | length) == 0 then "__invalid__"
+                elif any($o[]; type != "string") then "__invalid__"
+                else ($o | unique) end')
+          [ "$EFFECTIVE_APPROVERS" != '"__invalid__"' ] ||
+            die "AUTOMERGE_APPROVERS_ONLY is set and not a non-empty JSON array of strings: ${APPROVERS_ONLY:-}"
           paged() { # path out -> every page of a JSON-array endpoint, concatenated
             echo '[]' > "$2"
             local page=1 sep='?'
@@ -173,8 +231,8 @@ jobs:
             paged "/pulls/$pr/reviews" /tmp/reviews.json
             # Only reviews ON THIS HEAD count, not stale and not dismissed; each
             # reviewer's latest decisive review is theirs. Any REQUEST_CHANGES
-            # blocks; one APPROVED from APPROVERS, not the author, releases.
-            jq -r --arg h "$head" --arg author "$author" --argjson ok "$APPROVERS" '
+            # blocks; one APPROVED from EFFECTIVE_APPROVERS, not the author, releases.
+            jq -r --arg h "$head" --arg author "$author" --argjson ok "$EFFECTIVE_APPROVERS" '
                 [ .[] | select(.commit_id == $h and (.stale | not) and (.dismissed | not)
                                and (.state == "APPROVED" or .state == "REQUEST_CHANGES")) ]
                 | group_by(.user.login) | map(max_by(.id))
@@ -359,7 +417,7 @@ jobs:
               case "$verdict" in
                 approved*) echo "code-review: approved on $head by ${verdict#approved }" ;;
                 changes)   echo "code-review: changes requested on $head; not merging."; exit 0 ;;
-                *)         echo "code-review: CI is green; waiting for an approval from one of $(jq -r 'join(", ")' <<<"$APPROVERS") other than $author on $head."; exit 0 ;;
+                *)         echo "code-review: CI is green; waiting for an approval from one of $(jq -r 'join(", ")' <<<"$EFFECTIVE_APPROVERS") other than $author on $head."; exit 0 ;;
               esac
             fi
             echo "PR $pr is ready on $head"
