@@ -24,6 +24,7 @@ import (
 
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -170,12 +171,12 @@ func (a verdictAudience) admits(tenantID string) bool {
 //     naming no tenant is refused.
 //   - A bearer token the daemon could only check for validity carries no
 //     scopes, so it is refused.
-//   - An mTLS identity sees its certificate's tenant, or every tenant when
-//     the certificate names none or the system tenant: it is infrastructure,
-//     such as an overlay gateway.
-//   - A caller with no credential in the context was admitted by the
-//     transport itself, as the Unix socket admits local peers by their
-//     credentials, and sees every tenant.
+//   - An mTLS identity sees its certificate's tenant only, or every tenant
+//     when that is the system tenant: the platform's own infrastructure, such
+//     as an overlay gateway. A certificate naming no tenant is refused.
+//   - A caller with no credential sees every tenant only when the Unix socket
+//     admitted it by its kernel-verified peer credentials. Any other caller
+//     without a credential, such as one on TCP, is refused.
 func verdictAudienceFor(ctx context.Context) (verdictAudience, error) {
 	if authCtx, ok := grpccreds.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
 		if !authCtx.HasScope(verdictStreamScope) {
@@ -189,10 +190,16 @@ func verdictAudienceFor(ctx context.Context) (verdictAudience, error) {
 	if _, ok := grpccreds.TokenFromContext(ctx); ok {
 		return verdictAudience{}, ErrVerdictStreamForbidden{Reason: "the token carries no scopes"}
 	}
-	if identity := IdentityFromContext(ctx); identity != nil && identity.TenantID != "" {
+	if identity := IdentityFromContext(ctx); identity != nil {
+		if identity.TenantID == "" {
+			return verdictAudience{}, ErrVerdictStreamForbidden{Reason: "the certificate names no tenant"}
+		}
 		return audienceOfTenant(identity.TenantID), nil
 	}
-	return verdictAudience{everyTenant: true}, nil
+	if _, ok := peercred.UnixCredentialsFromContext(ctx); ok {
+		return verdictAudience{everyTenant: true}, nil
+	}
+	return verdictAudience{}, ErrVerdictStreamForbidden{Reason: "the caller presented no credential"}
 }
 
 func audienceOfTenant(tenantID string) verdictAudience {

@@ -27,13 +27,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/local"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
 )
@@ -125,6 +126,15 @@ func dialVerdicts(t *testing.T, target string, creds grpc.DialOption) *sdkattest
 	return sdkattestation.NewClientFromGRPC(platformv1.NewAttestationServiceClient(conn))
 }
 
+// unixPeerServerOptions serve the way platformd's gRPC Unix socket does:
+// every caller is admitted by its kernel-verified peer credentials.
+func unixPeerServerOptions() []grpc.ServerOption {
+	return []grpc.ServerOption{
+		grpc.Creds(peercred.NewUnixTransportCredentials()),
+		grpc.ChainStreamInterceptor(peercred.UnixCredentialsStreamInterceptor()),
+	}
+}
+
 func withBearer(ctx context.Context, token string) context.Context {
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 }
@@ -137,8 +147,8 @@ func TestStreamDeviceVerdictsOverUnixSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	attestation, _, subscribed := verdictStreamServer(t, listener, grpc.Creds(local.NewCredentials()))
-	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(local.NewCredentials()))
+	attestation, _, subscribed := verdictStreamServer(t, listener, unixPeerServerOptions()...)
+	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
 	defer cancel()
@@ -247,6 +257,29 @@ func TestStreamDeviceVerdictsOverTCPEnforcesScopeAndTenant(t *testing.T) {
 	}
 }
 
+// TestStreamDeviceVerdictsOverTCPWithoutACredentialIsRefused serves TCP with
+// no authentication interceptor, as the testing-only SkipIAMValidation does:
+// a caller that brings no credential was not admitted by its transport, so
+// it is refused rather than shown every tenant.
+func TestStreamDeviceVerdictsOverTCPWithoutACredentialIsRefused(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	verdictStreamServer(t, listener)
+	client := dialVerdicts(t, listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
+	defer cancel()
+	stream, err := client.StreamDeviceVerdicts(ctx)
+	if err == nil {
+		_, err = stream.Recv()
+	}
+	if status.Code(errors.Unwrap(err)) != codes.PermissionDenied && status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("a TCP caller with no credential: got %v, want PermissionDenied", err)
+	}
+}
+
 func TestVerdictAudienceFor(t *testing.T) {
 	tokenCtx := func(authCtx *platformtoken.AuthorizedContext) context.Context {
 		return grpccreds.ContextWithToken(grpccreds.ContextWithAuthorizedContext(context.Background(), authCtx), "tok")
@@ -269,8 +302,11 @@ func TestVerdictAudienceFor(t *testing.T) {
 		{name: "token without a tenant", ctx: tokenCtx(&platformtoken.AuthorizedContext{Scopes: []string{"attestation:read"}}), forbidden: true},
 		{name: "unscoped bearer token", ctx: grpccreds.ContextWithToken(context.Background(), "tok"), forbidden: true},
 		{name: "tenant certificate", ctx: mtlsCtx("t2"), sees: []string{"t2"}, blind: []string{"t1", ""}},
-		{name: "infrastructure certificate", ctx: mtlsCtx(""), sees: []string{"t1", ""}},
-		{name: "local peer", ctx: context.Background(), sees: []string{"t1", "t2", ""}},
+		{name: "system-tenant certificate", ctx: mtlsCtx(platformTenantID), sees: []string{"t1", "t2", ""}},
+		{name: "certificate naming no tenant", ctx: mtlsCtx(""), forbidden: true},
+		{name: "local peer", ctx: peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{PID: 1, UID: 0}),
+			sees: []string{"t1", "t2", ""}},
+		{name: "no credential", ctx: context.Background(), forbidden: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -327,8 +363,8 @@ func TestDeviceVerdictHubShutdownEndsOpenStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	_, hub, subscribed := verdictStreamServer(t, listener, grpc.Creds(local.NewCredentials()))
-	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(local.NewCredentials()))
+	_, hub, subscribed := verdictStreamServer(t, listener, unixPeerServerOptions()...)
+	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
 	defer cancel()

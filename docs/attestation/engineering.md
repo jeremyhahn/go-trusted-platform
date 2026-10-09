@@ -317,8 +317,9 @@ Who sees which verdicts:
 |---|---|---|
 | Platform token | holds `attestation:read` and names a tenant | its tenant's devices; the `system` tenant sees every device |
 | Bearer token the daemon can only check for validity | never | — |
-| mTLS certificate | always | its certificate's tenant; a certificate naming no tenant, or `system`, sees every device |
-| No credential (Unix socket peer, or a listener run without authentication) | always | every device |
+| mTLS certificate | names a tenant | its certificate's tenant; a `system` certificate (platform infrastructure, such as an overlay gateway) sees every device |
+| Unix socket peer, admitted by its kernel-verified peer credentials | always | every device |
+| No credential on any other transport (a TCP listener run without authentication) | never | — |
 
 A verdict on a device with no tenant reaches only callers that see every
 device. The gRPC method catalog maps the RPC to `attestation:read`, so the

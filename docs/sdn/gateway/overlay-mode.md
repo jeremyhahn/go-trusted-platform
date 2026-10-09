@@ -317,8 +317,10 @@ follows platformd's device verdict stream
 (`AttestationService.StreamDeviceVerdicts`, over the same gRPC or Unix
 connection it reads the records on), which carries every verdict platformd
 records (see [Device verdict events](../../attestation/engineering.md#device-verdict-events)).
-gatewayd authenticates by its Unix-socket peer or its mTLS certificate, so it
-sees every tenant's devices; a tenant's token sees only that tenant's.
+gatewayd authenticates by its Unix-socket peer credentials or by an mTLS
+certificate of the `system` tenant, so it sees every tenant's devices; a
+tenant's token or certificate sees only that tenant's, and a certificate naming
+no tenant is refused.
 A failed verdict, cryptographic or an absence of evidence, makes gatewayd
 revoke every VTEP of the device at once (`VTEPAdmitter.RevokeDevice`): the
 VTEPs it admitted for the device, and the device's fabric allocations. A
