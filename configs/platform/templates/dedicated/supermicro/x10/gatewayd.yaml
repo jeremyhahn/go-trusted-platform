@@ -180,6 +180,11 @@ gateway:
     access-port: patch-workloads
     overlay-asn: 65000
     vxlan-port: 4789
+    # The L2VNIs joined at start, each on its own access-port VLAN. The
+    # overlay is healthy only while it carries every one of them.
+    vnis:
+      - vni: 40100
+        vlan: 401
     default-vni: 40100
     max-vnis: 16384
     verdict-max-age: 15m

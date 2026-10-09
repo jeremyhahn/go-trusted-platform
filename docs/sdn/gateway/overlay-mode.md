@@ -211,12 +211,21 @@ VTEPs. NAT64 hands off through tables 20-29 and may run beside it.
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `overlay-asn` | required | private 2-octet ASN (64512-65534); the auto-derived route targets carry it in a 2-octet field |
+| `vnis` | required | the L2VNIs joined at start: each `vni` (1-16777215) with the access-port `vlan` (1-4094) that carries it. At least one, at most `max-vnis`; no VNI or VLAN repeats |
+| `default-vni` | none | must be one of `vnis` |
 | `verdict-max-age` | 15m | oldest attestation verdict that still admits a VTEP |
 | `verdict-clock-skew` | 30s | how far past the gateway's clock a verdict's attestation time may lie |
 | `admission-sweep-interval` | 30s | period of the re-admission sweep |
 
 A field that fails validation is reported as `ErrOverlayConfigInvalid`, naming
 the YAML key.
+
+Start joins every entry of `vnis` (`AddVNI`, which with RR peers also joins it
+in EVPN) before the service counts as running. A join that fails stops the
+handler and the speaker again and fails the start with the join's error, so
+nothing is left half-running. The service is healthy only while the handler
+runs and carries every configured VNI: a running handler with no VNI forwards
+nothing, and used to report healthy anyway.
 
 ### VTEP admission
 

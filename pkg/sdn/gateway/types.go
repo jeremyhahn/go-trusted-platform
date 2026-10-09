@@ -434,6 +434,21 @@ func (c *UplinkConfig) Validate() error {
 }
 
 // OverlayServiceConfig holds overlay gateway specific configuration.
+const (
+	// MaxOverlayVNI is the largest VXLAN Network Identifier (24 bits).
+	MaxOverlayVNI uint32 = 0xFFFFFF
+
+	// MaxOverlayVLAN is the largest access VLAN an L2VNI can be carried on.
+	MaxOverlayVLAN uint16 = 4094
+)
+
+// OverlayVNIConfig is one L2VNI the overlay joins, and the access VLAN that
+// carries it on the access port.
+type OverlayVNIConfig struct {
+	VNI  uint32 `yaml:"vni" json:"vni" mapstructure:"vni"`
+	VLAN uint16 `yaml:"vlan" json:"vlan" mapstructure:"vlan"`
+}
+
 type OverlayServiceConfig struct {
 	// Enabled indicates if the overlay service is enabled.
 	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
@@ -461,7 +476,13 @@ type OverlayServiceConfig struct {
 	// VXLANPort is the UDP port for VXLAN encapsulation.
 	VXLANPort uint16 `yaml:"vxlan-port,omitempty" json:"vxlan_port,omitempty" mapstructure:"vxlan-port"`
 
-	// DefaultVNI is the default VXLAN Network Identifier.
+	// VNIs are the L2VNIs the gateway joins when the overlay starts, each
+	// carried on its own access VLAN. The overlay is not healthy until every
+	// one is joined.
+	VNIs []OverlayVNIConfig `yaml:"vnis,omitempty" json:"vnis,omitempty" mapstructure:"vnis"`
+
+	// DefaultVNI is the default VXLAN Network Identifier. When set it must
+	// name one of VNIs.
 	DefaultVNI uint32 `yaml:"default-vni,omitempty" json:"default_vni,omitempty" mapstructure:"default-vni"`
 
 	// MaxVNIs is the maximum number of VNIs.
@@ -517,6 +538,9 @@ func (c *OverlayServiceConfig) Validate() error {
 	if c.MaxVNIs < 0 {
 		return &ErrOverlayConfigInvalid{Field: "max-vnis", Reason: "must not be negative"}
 	}
+	if err := c.validateVNIs(); err != nil {
+		return err
+	}
 	if c.VerdictMaxAge < 0 {
 		return &ErrOverlayConfigInvalid{Field: "verdict-max-age", Reason: "must not be negative"}
 	}
@@ -528,6 +552,40 @@ func (c *OverlayServiceConfig) Validate() error {
 	}
 	if c.VerdictMaxAge == 0 {
 		c.VerdictMaxAge = DefaultOverlayVerdictMaxAge
+	}
+	return nil
+}
+
+// validateVNIs checks the VNIs the overlay joins at start: at least one, each
+// a 24-bit VNI on its own access VLAN, within max-vnis, and default-vni among
+// them. An overlay with no VNI would report running while forwarding nothing.
+func (c *OverlayServiceConfig) validateVNIs() error {
+	if len(c.VNIs) == 0 {
+		return &ErrOverlayConfigInvalid{Field: "vnis", Reason: "at least one VNI is required"}
+	}
+	if c.MaxVNIs > 0 && len(c.VNIs) > c.MaxVNIs {
+		return &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("%d VNIs exceed max-vnis %d", len(c.VNIs), c.MaxVNIs)}
+	}
+	vnis := make(map[uint32]struct{}, len(c.VNIs))
+	vlans := make(map[uint16]struct{}, len(c.VNIs))
+	for _, v := range c.VNIs {
+		if v.VNI == 0 || v.VNI > MaxOverlayVNI {
+			return &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("VNI %d is outside 1-%d", v.VNI, MaxOverlayVNI)}
+		}
+		if v.VLAN == 0 || v.VLAN > MaxOverlayVLAN {
+			return &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("VNI %d: VLAN %d is outside 1-%d", v.VNI, v.VLAN, MaxOverlayVLAN)}
+		}
+		if _, dup := vnis[v.VNI]; dup {
+			return &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("VNI %d is listed twice", v.VNI)}
+		}
+		if _, dup := vlans[v.VLAN]; dup {
+			return &ErrOverlayConfigInvalid{Field: "vnis", Reason: fmt.Sprintf("VLAN %d carries two VNIs", v.VLAN)}
+		}
+		vnis[v.VNI] = struct{}{}
+		vlans[v.VLAN] = struct{}{}
+	}
+	if _, listed := vnis[c.DefaultVNI]; c.DefaultVNI != 0 && !listed {
+		return &ErrOverlayConfigInvalid{Field: "default-vni", Reason: fmt.Sprintf("VNI %d is not one of vnis", c.DefaultVNI)}
 	}
 	return nil
 }

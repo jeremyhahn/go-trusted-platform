@@ -845,6 +845,11 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	if err := handler.Start(ctx); err != nil {
 		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
 	}
+	// A running handler with no VNI forwards nothing, so the overlay is not up
+	// until every configured VNI is joined.
+	if err := joinOverlayVNIs(ctx, handler, b.config.VNIs); err != nil {
+		return errors.Join(err, handler.Stop(ctx), stopOverlaySpeaker(ctx, speaker))
+	}
 
 	// The loops outlive the request that started the service; Stop ends them.
 	loopsCtx, stopLoops := context.WithCancel(context.WithoutCancel(ctx))
@@ -871,6 +876,17 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	b.speaker = speaker
 	b.stopLoops = stopLoops
 	b.loopsDone = loopsDone
+	return nil
+}
+
+// joinOverlayVNIs joins each configured L2VNI on its access VLAN. With EVPN a
+// join also advertises the VNI to the route reflectors.
+func joinOverlayVNIs(ctx context.Context, handler *modes.OverlayModeHandler, vnis []OverlayVNIConfig) error {
+	for _, v := range vnis {
+		if err := handler.AddVNI(ctx, v.VNI, v.VLAN); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -908,7 +924,16 @@ func (b *overlayBackend) Active() bool {
 	return b.handler != nil && b.handler.GetStatus().Running
 }
 
-func (b *overlayBackend) Healthy() bool { return b.Active() }
+// Healthy reports a running overlay that still carries every configured VNI.
+func (b *overlayBackend) Healthy() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.handler == nil {
+		return false
+	}
+	status := b.handler.GetStatus()
+	return status.Running && status.VNICount == len(b.config.VNIs)
+}
 
 func (b *overlayBackend) Status() *modes.OverlayModeStatus {
 	b.mu.Lock()
