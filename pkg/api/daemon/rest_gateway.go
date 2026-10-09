@@ -417,8 +417,13 @@ func admittedVTEPToREST(vtep *platformv1.GatewayAdmittedVTEP) *rest.GatewayAdmit
 }
 
 func gatewayAdmissionErrToREST(vtep string, err error) error {
-	if status.Code(err) == codes.NotFound {
+	switch status.Code(err) {
+	case codes.NotFound:
 		return rest.ErrGatewayAdmittedVTEPNotFound{VTEP: vtep}
+	case codes.Unavailable:
+		// A gateway with no overlay section is a disabled capability (503),
+		// not a server fault.
+		return rest.ErrGatewayFeatureNotConfigured{Feature: "gateway overlay admission"}
 	}
 	return err
 }

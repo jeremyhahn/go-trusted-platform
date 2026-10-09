@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -241,6 +242,28 @@ func TestGatewayAdmittedVTEPs_FromSnapshotOverlay(t *testing.T) {
 
 	_, err = svc.GetGatewayAdmittedVTEP(context.Background(), &platformv1.GetGatewayAdmittedVTEPRequest{GatewayId: "node-01-gateway", Vtep: "198.51.100.11"})
 	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestGatewayAdmittedVTEPs_RESTMapsDisabledOverlayTo503(t *testing.T) {
+	store := &memorySnapshotStore{}
+	require.NoError(t, store.Put(reportedSnapshot("no-overlay")))
+	require.NoError(t, store.Put(reportedOverlaySnapshot("node-01-gateway")))
+	svc := newGatewayRESTService(nil, discardLogger().Slog())
+	svc.reader = NewGatewayService(WithGatewaySnapshotStore(store))
+
+	_, err := svc.ListAdmittedVTEPs(context.Background(), "no-overlay")
+	var disabled rest.ErrGatewayFeatureNotConfigured
+	require.ErrorAs(t, err, &disabled, "a gateway with no overlay is a disabled capability, answered 503")
+	_, err = svc.GetAdmittedVTEP(context.Background(), "no-overlay", "198.51.100.10")
+	require.ErrorAs(t, err, &disabled)
+
+	_, err = svc.GetAdmittedVTEP(context.Background(), "node-01-gateway", "198.51.100.11")
+	var missing rest.ErrGatewayAdmittedVTEPNotFound
+	require.ErrorAs(t, err, &missing)
+	assert.Equal(t, "198.51.100.11", missing.VTEP)
+
+	internal := status.Error(codes.Internal, "disk gone")
+	assert.Equal(t, internal, gatewayAdmissionErrToREST("", internal), "a server fault is never relabelled a disabled capability")
 }
 
 func TestGatewaySnapshotToProto_OverlayStatus(t *testing.T) {
