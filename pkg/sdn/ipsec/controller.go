@@ -74,10 +74,15 @@ type Controller struct {
 	unsynced     map[netip.Addr]struct{}            // peers charon does not hold as wanted
 	auditPending bool                               // charon's IKE_SAs need an audit
 	crls         map[crlIssuer]*x509.RevocationList // issuer → its newest CRL
+	pendingCRLs  map[crlIssuer]*x509.RevocationList // issuer → its newest CRL awaiting a tunnel identity
 	cert         *x509.Certificate                  // the tunnel certificate last loaded
-	cas          []*x509.Certificate                // the CA certificates last loaded
 	cmd          Session                            // nil while detached
 }
+
+// maxPendingCRLs bounds the CRLs queued while no tunnel identity exists to
+// verify them against. A chain has an intermediate and a root, so a
+// handful of issuers covers a renewal in flight.
+const maxPendingCRLs = 8
 
 // crlIssuer identifies the issuer of a CRL: its name and, when the CRL
 // carries one, its key.
@@ -117,6 +122,7 @@ func NewController(cfg *Config, admitter Admitter, dropper Dropper, identity Ide
 		loaded:      make(map[netip.Addr]struct{}),
 		unsynced:    make(map[netip.Addr]struct{}),
 		crls:        make(map[crlIssuer]*x509.RevocationList),
+		pendingCRLs: make(map[crlIssuer]*x509.RevocationList),
 	}
 	for _, p := range peers {
 		c.static[p] = struct{}{}
@@ -148,9 +154,13 @@ func (c *Controller) Attach(ctx context.Context, sess Session) error {
 	c.loaded = make(map[netip.Addr]struct{})
 	c.unsynced = make(map[netip.Addr]struct{})
 
-	if err := c.loadIdentity(ctx, sess); err != nil {
+	id, err := c.loadIdentity(ctx, sess)
+	if err != nil {
 		return err
 	}
+	// The CRLs queued while there was no identity are verified against
+	// this one; those it refuses are dropped and reported.
+	errs := c.admitPending(ctx, id.Chain[1:])
 	for _, crl := range c.crls {
 		if err := loadCRL(ctx, sess, crl); err != nil {
 			return err
@@ -162,7 +172,6 @@ func (c *Controller) Attach(ctx context.Context, sess Session) error {
 	}
 	c.cmd = sess
 
-	var errs []error
 	for _, peer := range held {
 		if !c.wanted(peer) {
 			// Held by charon, so settle unloads it.
@@ -178,14 +187,11 @@ func (c *Controller) Attach(ctx context.Context, sess Session) error {
 }
 
 // loadIdentity loads the tunnel certificate, its CA chain and the token key
-// into sess. Callers hold mu.
-func (c *Controller) loadIdentity(ctx context.Context, sess Session) error {
-	id, err := c.identity.TunnelIdentity(ctx)
+// into sess, and returns the identity loaded. Callers hold mu.
+func (c *Controller) loadIdentity(ctx context.Context, sess Session) (*TunnelIdentity, error) {
+	id, err := c.currentIdentity(ctx)
 	if err != nil {
-		return &OpError{Op: "identity", Err: err}
-	}
-	if err := id.validate(c.cfg.local); err != nil {
-		return &OpError{Op: "identity", Err: err}
+		return nil, err
 	}
 	for i, cert := range id.Chain {
 		kind := CredentialAuthority
@@ -193,15 +199,14 @@ func (c *Controller) loadIdentity(ctx context.Context, sess Session) error {
 			kind = CredentialEndEntity
 		}
 		if err := sess.LoadCert(ctx, Credential{Kind: kind, DER: cert.Raw}); err != nil {
-			return &OpError{Op: "load-cert", Err: err}
+			return nil, &OpError{Op: "load-cert", Err: err}
 		}
 	}
 	if err := sess.LoadToken(ctx, id.Token, id.PIN); err != nil {
-		return &OpError{Op: "load-token", Err: err}
+		return nil, &OpError{Op: "load-token", Err: err}
 	}
 	c.cert = id.Chain[0]
-	c.cas = id.Chain[1:]
-	return nil
+	return id, nil
 }
 
 // loadCRL loads one CRL into sess.
@@ -218,9 +223,12 @@ func loadCRL(ctx context.Context, sess Session, crl *x509.RevocationList) error 
 // connection checks revocation strictly. A CRL no newer than the one held
 // for its issuer is ignored.
 //
-// A CRL must be signed by a CA of the tunnel identity, and its NextUpdate
-// must be in the future; one that is not is refused with an OpError and
-// the CRL held for its issuer stays.
+// A CRL must be signed by a CA of the tunnel identity the provider holds
+// now, so a renewal under a new intermediate is followed at once, and its
+// NextUpdate must be in the future; one that is not is refused with an
+// OpError and the CRL held for its issuer stays. While the provider has no
+// valid identity, a current CRL is queued instead, and verified against
+// the identity of the next Attach, or of the next PushCRL that finds one.
 func (c *Controller) PushCRL(ctx context.Context, der []byte) error {
 	crl, err := x509.ParseRevocationList(der)
 	if err != nil {
@@ -228,14 +236,66 @@ func (c *Controller) PushCRL(ctx context.Context, der []byte) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	cas, err := c.authorities(ctx)
+	id, err := c.currentIdentity(ctx)
 	if err != nil {
-		return err
+		return c.queueCRL(crl)
 	}
+	cas := id.Chain[1:]
+	errs := c.admitPending(ctx, cas)
+	errs = append(errs, c.admitCRL(ctx, crl, cas))
+	return errors.Join(errs...)
+}
+
+// currentIdentity returns the identity the provider holds now, validated.
+func (c *Controller) currentIdentity(ctx context.Context) (*TunnelIdentity, error) {
+	id, err := c.identity.TunnelIdentity(ctx)
+	if err != nil {
+		return nil, &OpError{Op: "identity", Err: err}
+	}
+	if err := id.validate(c.cfg.local); err != nil {
+		return nil, &OpError{Op: "identity", Err: err}
+	}
+	return id, nil
+}
+
+// queueCRL keeps crl until there is an identity to verify it against. Only
+// its currency can be checked now. The queue keeps the newest CRL per
+// issuer, for at most maxPendingCRLs issuers. Callers hold mu.
+func (c *Controller) queueCRL(crl *x509.RevocationList) error {
+	if !current(crl, c.now()) {
+		return &OpError{Op: "verify crl", Err: ErrCRLStale}
+	}
+	issuer := issuerOf(crl)
+	queued, ok := c.pendingCRLs[issuer]
+	if ok && !supersedes(crl, queued) {
+		return nil
+	}
+	if !ok && len(c.pendingCRLs) >= maxPendingCRLs {
+		return &OpError{Op: "queue crl", Err: ErrCRLQueueFull}
+	}
+	c.pendingCRLs[issuer] = crl
+	return nil
+}
+
+// admitPending empties the queue through admitCRL and returns the errors
+// of the CRLs it refused, which are dropped. Callers hold mu.
+func (c *Controller) admitPending(ctx context.Context, cas []*x509.Certificate) []error {
+	var errs []error
+	for issuer, crl := range c.pendingCRLs {
+		delete(c.pendingCRLs, issuer)
+		errs = append(errs, c.admitCRL(ctx, crl, cas))
+	}
+	return errs
+}
+
+// admitCRL verifies crl against cas and holds it if it supersedes the CRL
+// held for its issuer, loading it into charon when a session is up.
+// Callers hold mu.
+func (c *Controller) admitCRL(ctx context.Context, crl *x509.RevocationList, cas []*x509.Certificate) error {
 	if err := verifyCRL(crl, cas, c.now()); err != nil {
 		return &OpError{Op: "verify crl", Err: err}
 	}
-	issuer := crlIssuer{name: string(crl.RawIssuer), keyID: string(crl.AuthorityKeyId)}
+	issuer := issuerOf(crl)
 	if held, ok := c.crls[issuer]; ok && !supersedes(crl, held) {
 		return nil
 	}
@@ -246,21 +306,14 @@ func (c *Controller) PushCRL(ctx context.Context, der []byte) error {
 	return loadCRL(ctx, c.cmd, crl)
 }
 
-// authorities returns the CA certificates a CRL must be signed by: those of
-// the identity last loaded, or, before the first attach, of the identity
-// the provider holds now.
-func (c *Controller) authorities(ctx context.Context) ([]*x509.Certificate, error) {
-	if len(c.cas) > 0 {
-		return c.cas, nil
-	}
-	id, err := c.identity.TunnelIdentity(ctx)
-	if err != nil {
-		return nil, &OpError{Op: "identity", Err: err}
-	}
-	if err := id.validate(c.cfg.local); err != nil {
-		return nil, &OpError{Op: "identity", Err: err}
-	}
-	return id.Chain[1:], nil
+// issuerOf is the issuer a CRL is held under.
+func issuerOf(crl *x509.RevocationList) crlIssuer {
+	return crlIssuer{name: string(crl.RawIssuer), keyID: string(crl.AuthorityKeyId)}
+}
+
+// current reports whether crl is still current at now.
+func current(crl *x509.RevocationList, now time.Time) bool {
+	return !crl.NextUpdate.IsZero() && now.Before(crl.NextUpdate)
 }
 
 // verifyCRL checks a CRL before it is held: it must be current at now, and
@@ -268,7 +321,7 @@ func (c *Controller) authorities(ctx context.Context) ([]*x509.Certificate, erro
 // fails every peer of its issuer, and an unsigned one is not to be trusted
 // at all; either is refused, and the CRL held stays.
 func verifyCRL(crl *x509.RevocationList, cas []*x509.Certificate, now time.Time) error {
-	if crl.NextUpdate.IsZero() || !now.Before(crl.NextUpdate) {
+	if !current(crl, now) {
 		return ErrCRLStale
 	}
 	for _, ca := range cas {
@@ -324,6 +377,9 @@ type Status struct {
 	AuditPending bool
 	// CRLs is how many issuers' CRLs are held.
 	CRLs int
+	// PendingCRLs is how many issuers' CRLs wait for a tunnel identity to
+	// be verified against; the next Attach verifies them.
+	PendingCRLs int
 	// Certificate is the renewal state of the tunnel certificate last
 	// loaded; nil before the first attach.
 	Certificate *CertificateStatus
@@ -341,6 +397,7 @@ func (c *Controller) Status() Status {
 		Unsynced:     slices.SortedFunc(maps.Keys(c.unsynced), netip.Addr.Compare),
 		AuditPending: c.auditPending,
 		CRLs:         len(c.crls),
+		PendingCRLs:  len(c.pendingCRLs),
 	}
 	if c.cert != nil {
 		s.Certificate = certificateStatus(c.cert, c.now())

@@ -85,6 +85,12 @@ var (
 	ErrCertificateAddress = errors.New("ipsec: tunnel certificate does not name the local address")
 	// ErrNoKeyID is returned when a tunnel identity names no key.
 	ErrNoKeyID = errors.New("ipsec: tunnel identity names no token key")
+	// ErrNoRoot is returned when a tunnel identity's chain does not end in
+	// a self-signed root CA.
+	ErrNoRoot = errors.New("ipsec: tunnel identity chain does not end in a root CA")
+	// ErrCRLQueueFull is returned when a CRL cannot be verified yet and the
+	// queue of such CRLs already holds as many issuers as it takes.
+	ErrCRLQueueFull = errors.New("ipsec: too many CRLs await a tunnel identity")
 	// ErrCRLStale is returned when a pushed CRL has no NextUpdate, or one
 	// that has passed.
 	ErrCRLStale = errors.New("ipsec: CRL is past its next update")

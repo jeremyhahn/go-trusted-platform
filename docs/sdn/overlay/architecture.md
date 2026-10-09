@@ -160,7 +160,8 @@ behind it. `Attach` asks the `IdentityProvider` for a `TunnelIdentity`
 every time, so a renewed certificate is loaded on the next attach.
 `FileIdentity` reads the chain from `certificate-file` and the token PIN
 from the first line of `token.pin-file`. The identity is refused unless
-the leaf carries the local address as an IP SAN and names a key ID.
+the leaf carries the local address as an IP SAN, a key ID is named, and
+the chain ends in a self-signed root.
 
 | Step | VICI command | Body |
 |------|--------------|------|
@@ -193,9 +194,24 @@ stays:
   `ErrCRLUntrusted`;
 - its `nextUpdate` must be in the future, or `ErrCRLStale`.
 
-The CAs are those of the identity last loaded; before the first attach
-they are read from the identity provider. CRLs are held per issuer, keyed
-by the issuer name and authority key ID.
+The CAs are those of the identity the provider holds now, not the one last
+loaded. A renewal under a new intermediate is followed at once, and a
+CRL of an intermediate no longer in the chain is refused. CRLs are held
+per issuer, keyed by the issuer name and authority key ID.
+
+While the provider has no valid identity (before the first certificate
+lands, say), there is nothing to verify a CRL against, so a current CRL
+is queued instead of refused. The queue keeps the newest CRL per issuer
+for at most 8 issuers, and `ErrCRLQueueFull` refuses another issuer
+(`OpError`, `queue crl`). A stale CRL is refused at once. The next
+`Attach` verifies the queued CRLs against the identity it loads, before
+it loads the CRLs and any connection, and the next `PushCRL` that finds
+an identity does the same. A queued CRL that fails is dropped, and its
+`verify crl` error is returned without detaching the controller.
+`Status.PendingCRLs` counts the queued issuers.
+
+The identity is refused (`ErrNoRoot`) unless its chain ends in a
+self-signed root, so the root's own CRL always has its CA in the chain.
 
 **Strict mode, an assumption.** Per the strongSwan `swanctl.conf`
 documentation, `revocation=strict` fails authentication unless the
@@ -251,7 +267,8 @@ evicted peers, and the work still pending:
 - `Unsynced`: peers whose connection or SAs charon does not hold as wanted;
 - `AuditPending`: an SA audit is due.
 
-It also reports how many issuers' CRLs are held, and the tunnel
+It also reports how many issuers' CRLs are held and how many are queued
+awaiting an identity (`PendingCRLs`), and the tunnel
 certificate's renewal state (`CertificateStatus`): serial, validity,
 time to expiry, `RenewalDue` from half its lifetime and `Alert` from
 three quarters.
@@ -424,10 +441,11 @@ has been renewed at the same mark.
 | `CloseError` | `ipsec` | a close failed after another failure; matches both |
 | `ErrCharonGone` | `ipsec` | a connection to charon ended; the runner reconnects |
 | `ErrInvalidMessage` | `ipsec` | a request lacked what charon needs: a credential without data, a token key without an ID |
-| `ErrNoCertificate`, `ErrCertificateAddress`, `ErrNoKeyID` | `ipsec` | the tunnel identity has no certificate, its leaf does not name the local address, or it names no key (inside an `OpError`, `identity`) |
+| `ErrNoCertificate`, `ErrCertificateAddress`, `ErrNoKeyID`, `ErrNoRoot` | `ipsec` | the tunnel identity has no certificate, its leaf does not name the local address, it names no key, or its chain does not end in a self-signed root (inside an `OpError`, `identity`) |
+| `ErrCRLQueueFull` | `ipsec` | a CRL arrived while there was no identity to verify it against, and the queue already holds 8 issuers (inside an `OpError`, `queue crl`) |
 | `ErrMissingDependency` | `ipsec` | a constructor or `Attach` was handed a nil collaborator |
 | `PeerError` | `ipsec` | a step on one peer failed (`admit`, `load-conn`, `unload-conn`, `drop`, `undrop`, `list-sas`, `terminate`, `evict`, `readmit`); names the peer and wraps the cause |
-| `OpError` | `ipsec` | an operation not tied to one peer failed: `identity`, `load-cert`, `load-token`, `load-cert x509crl` or `get-conns` during `Attach`, `list-sas` during an audit, `parse crl`, `identity` or `verify crl` in `PushCRL`, `nftables apply`/`remove`, `xfrm install`/`remove` |
+| `OpError` | `ipsec` | an operation not tied to one peer failed: `identity`, `load-cert`, `load-token`, `load-cert x509crl` or `get-conns` during `Attach`, `list-sas` during an audit, `parse crl`, `verify crl` or `queue crl` in `PushCRL`, `verify crl` for a queued CRL during `Attach`, `nftables apply`/`remove`, `xfrm install`/`remove` |
 | `ErrCRLStale`, `ErrCRLUntrusted` | `ipsec` | a pushed CRL had no `nextUpdate` or one already passed, or was not signed by a CA of the tunnel identity (inside an `OpError`, `verify crl`); the CRL held for that issuer stays |
 | `ErrFamilyMismatch` | `ipsec` | `Filter.Drop`/`Undrop` named a peer of the other address family (inside a `PeerError`) |
 | `IdentityMismatchError` | `ipsec` | an SA came up with a peer identity other than its address; the SA was terminated, or the termination is pending and joined to this error |

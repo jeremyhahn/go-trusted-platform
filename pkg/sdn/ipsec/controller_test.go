@@ -192,6 +192,8 @@ func TestAttachIdentityFailuresLeaveItDetached(t *testing.T) {
 	other.Chain = []*x509.Certificate{pki.ca}
 	noKey := pki.identity(nil)
 	noKey.Token.KeyID = nil
+	noRoot := pki.intermediate(t, "tunnel intermediate").identity(nil)
+	noRoot.Chain = noRoot.Chain[:2]
 
 	tests := []struct {
 		name   string
@@ -204,6 +206,7 @@ func TestAttachIdentityFailuresLeaveItDetached(t *testing.T) {
 		{"no identity", &fakeIdentity{}, "", "identity", ErrNoCertificate},
 		{"certificate for another address", &fakeIdentity{id: other}, "", "identity", ErrCertificateAddress},
 		{"no key", &fakeIdentity{id: noKey}, "", "identity", ErrNoKeyID},
+		{"chain without its root", &fakeIdentity{id: noRoot}, "", "identity", ErrNoRoot},
 		{"load-cert refused", &fakeIdentity{id: pki.identity(nil)}, "load-cert", "load-cert", errInjected},
 		{"load-token refused", &fakeIdentity{id: pki.identity(nil)}, "load-token", "load-token", errInjected},
 		{"get-conns fails", &fakeIdentity{id: pki.identity(nil)}, "get-conns", "get-conns", errInjected},
@@ -359,23 +362,111 @@ func TestPushCRLRefusesStaleAndUntrustedCRLs(t *testing.T) {
 	}
 }
 
-func TestPushCRLBeforeTheFirstAttach(t *testing.T) {
+func TestPushCRLBeforeAnyIdentityIsQueued(t *testing.T) {
 	h := newDetachedHarness(t)
 	ctx := context.Background()
-	crl := h.pki.crl(t, 1, h.pki.issued)
+	older, newest := h.pki.crl(t, 1, h.pki.issued), h.pki.crl(t, 2, h.pki.issued)
 
-	// Before any attach the CAs come from the identity provider.
+	// Without a tunnel identity there is no chain to verify against, so the
+	// CRLs wait, the newest per issuer.
 	h.identity.err = errInjected
-	var opErr *OpError
-	if err := h.ctl.PushCRL(ctx, crl); !errors.As(err, &opErr) || opErr.Op != "identity" || !errors.Is(err, errInjected) {
-		t.Fatalf("no identity: err = %v, want an identity OpError", err)
+	for _, der := range [][]byte{newest, older} {
+		if err := h.ctl.PushCRL(ctx, der); err != nil {
+			t.Fatalf("PushCRL without an identity: %v", err)
+		}
 	}
+	if s := h.ctl.Status(); s.CRLs != 0 || s.PendingCRLs != 1 {
+		t.Fatalf("Status: %d CRLs held, %d pending; want one queued and none held", s.CRLs, s.PendingCRLs)
+	}
+	// Staleness needs no chain, so a stale CRL is refused at once.
+	var opErr *OpError
+	stale := h.pki.crl(t, 3, h.pki.issued.Add(-48*time.Hour))
+	if err := h.ctl.PushCRL(ctx, stale); !errors.As(err, &opErr) || opErr.Op != "verify crl" || !errors.Is(err, ErrCRLStale) {
+		t.Fatalf("stale: err = %v, want a verify crl OpError for ErrCRLStale", err)
+	}
+
+	// The attach that loads the identity verifies the queued CRL and loads
+	// it before any connection, so strict revocation can pass.
 	h.identity.err = nil
-	if err := h.ctl.PushCRL(ctx, crl); err != nil {
+	if err := h.ctl.Attach(ctx, h.charon); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if got := h.charon.crls(); len(got) != 1 || !bytes.Equal(got[0], newest) {
+		t.Fatal("the queued CRL was not loaded by the attach")
+	}
+	if slices.Index(h.charon.commands, "load-crl") > slices.Index(h.charon.commands, "load-conn") {
+		t.Fatalf("commands %v: a connection was loaded before the queued CRL", h.charon.commands)
+	}
+	if s := h.ctl.Status(); s.CRLs != 1 || s.PendingCRLs != 0 {
+		t.Fatalf("Status: %d CRLs held, %d pending; want the queued CRL held", s.CRLs, s.PendingCRLs)
+	}
+}
+
+func TestQueuedCRLsThatFailVerificationAreDropped(t *testing.T) {
+	h := newDetachedHarness(t)
+	ctx := context.Background()
+	h.identity.err = errInjected
+	if err := h.ctl.PushCRL(ctx, newTestPKI(t).crl(t, 1, h.pki.issued)); err != nil {
 		t.Fatalf("PushCRL: %v", err)
 	}
-	if h.ctl.Status().CRLs != 1 {
-		t.Fatal("the verified CRL is not held")
+
+	h.identity.err = nil
+	err := h.ctl.Attach(ctx, h.charon)
+	var opErr *OpError
+	if !errors.As(err, &opErr) || opErr.Op != "verify crl" || !errors.Is(err, ErrCRLUntrusted) {
+		t.Fatalf("Attach: err = %v, want a verify crl OpError for ErrCRLUntrusted", err)
+	}
+	if !h.ctl.attached() {
+		t.Fatal("a refused queued CRL kept the controller detached")
+	}
+	if s := h.ctl.Status(); len(h.charon.crls()) != 0 || s.CRLs != 0 || s.PendingCRLs != 0 {
+		t.Fatal("a queued CRL of a foreign CA was kept or loaded")
+	}
+}
+
+func TestPushCRLQueueIsBounded(t *testing.T) {
+	h := newDetachedHarness(t)
+	ctx := context.Background()
+	h.identity.err = errInjected
+	for range maxPendingCRLs {
+		if err := h.ctl.PushCRL(ctx, newTestPKI(t).crl(t, 1, h.pki.issued)); err != nil {
+			t.Fatalf("PushCRL: %v", err)
+		}
+	}
+	var opErr *OpError
+	if err := h.ctl.PushCRL(ctx, h.pki.crl(t, 1, h.pki.issued)); !errors.As(err, &opErr) || opErr.Op != "queue crl" || !errors.Is(err, ErrCRLQueueFull) {
+		t.Fatalf("one issuer too many: err = %v, want a queue crl OpError for ErrCRLQueueFull", err)
+	}
+	if got := h.ctl.Status().PendingCRLs; got != maxPendingCRLs {
+		t.Fatalf("PendingCRLs = %d, want %d", got, maxPendingCRLs)
+	}
+}
+
+func TestPushCRLVerifiesAgainstTheCurrentChain(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	// The certificate is renewed under a new intermediate. The provider
+	// holds the new chain before any attach loads it, and the CRLs of the
+	// new intermediate and of the root both verify against it.
+	renewed := h.pki.intermediate(t, "tunnel intermediate")
+	h.identity.id = renewed.identity(nil)
+	intermediate, root := renewed.crl(t, 1, h.pki.issued), h.pki.crl(t, 1, h.pki.issued)
+	for _, der := range [][]byte{intermediate, root} {
+		if err := h.ctl.PushCRL(ctx, der); err != nil {
+			t.Fatalf("PushCRL: %v", err)
+		}
+	}
+	if got := h.charon.crls(); len(got) != 2 || !bytes.Equal(got[0], intermediate) || !bytes.Equal(got[1], root) {
+		t.Fatal("the CRLs of the renewed chain were not loaded")
+	}
+
+	// Renewed again: the first intermediate is no longer a CA of the
+	// identity, so its CRLs are refused.
+	h.identity.id = h.pki.intermediate(t, "tunnel intermediate 2").identity(nil)
+	var opErr *OpError
+	if err := h.ctl.PushCRL(ctx, renewed.crl(t, 2, h.pki.issued)); !errors.As(err, &opErr) || !errors.Is(err, ErrCRLUntrusted) {
+		t.Fatalf("CRL of a replaced intermediate: err = %v, want ErrCRLUntrusted", err)
 	}
 }
 

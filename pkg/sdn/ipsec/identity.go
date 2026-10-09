@@ -19,8 +19,10 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
@@ -30,7 +32,8 @@ import (
 // tunnel certificate and its chain, and the token key that signs for it.
 type TunnelIdentity struct {
 	// Chain is the tunnel certificate, then the CA certificates peer
-	// certificates chain to: the tunnel intermediate and the root.
+	// certificates chain to: the tunnel intermediate and the root, which
+	// must come last.
 	Chain []*x509.Certificate
 	// Token locates the IKE key.
 	Token TokenKey
@@ -46,7 +49,9 @@ type IdentityProvider interface {
 }
 
 // validate checks the identity can authenticate local: a certificate whose
-// IP subject alternative names include local, and a key to sign with.
+// IP subject alternative names include local, a key to sign with, and a
+// chain that ends in its root. Every CA a pushed CRL may come from is then
+// in the chain, the root included.
 func (id *TunnelIdentity) validate(local netip.Addr) error {
 	if id == nil || len(id.Chain) == 0 || id.Chain[0] == nil {
 		return ErrNoCertificate
@@ -54,12 +59,21 @@ func (id *TunnelIdentity) validate(local netip.Addr) error {
 	if len(id.Token.KeyID) == 0 {
 		return ErrNoKeyID
 	}
-	for _, ip := range id.Chain[0].IPAddresses {
-		if addr, ok := netip.AddrFromSlice(ip); ok && addr.Unmap() == local {
-			return nil
-		}
+	if !slices.ContainsFunc(id.Chain[0].IPAddresses, func(ip net.IP) bool {
+		addr, ok := netip.AddrFromSlice(ip)
+		return ok && addr.Unmap() == local
+	}) {
+		return ErrCertificateAddress
 	}
-	return ErrCertificateAddress
+	if len(id.Chain) < 2 || !isRoot(id.Chain[len(id.Chain)-1]) {
+		return ErrNoRoot
+	}
+	return nil
+}
+
+// isRoot reports whether cert is a self-signed CA certificate.
+func isRoot(cert *x509.Certificate) bool {
+	return cert != nil && bytes.Equal(cert.RawSubject, cert.RawIssuer) && cert.CheckSignatureFrom(cert) == nil
 }
 
 // FileIdentity is the IdentityProvider of the overlay.ipsec section: the

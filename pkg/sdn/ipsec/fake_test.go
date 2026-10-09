@@ -186,10 +186,12 @@ func (f *fakeIdentity) TunnelIdentity(context.Context) (*TunnelIdentity, error) 
 }
 
 // testPKI is a CA and a tunnel certificate it issued for 10.20.0.11, the
-// local address of validConfig.
+// local address of validConfig. ca is a root, or, under root, an
+// intermediate.
 type testPKI struct {
 	ca     *x509.Certificate
 	caKey  crypto.Signer
+	root   *x509.Certificate // nil when ca is the root
 	leaf   *x509.Certificate
 	issued time.Time
 }
@@ -198,30 +200,54 @@ func newTestPKI(t *testing.T) *testPKI {
 	t.Helper()
 	issued := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	caKey := newKey(t)
-	ca := createCert(t, &x509.Certificate{
+	ca := createCert(t, caTemplate("tunnel CA", issued), nil, caKey, nil)
+	leaf := createCert(t, leafTemplate(issued), ca, newKey(t), caKey)
+	return &testPKI{ca: ca, caKey: caKey, leaf: leaf, issued: issued}
+}
+
+// intermediate is a PKI whose CA, named name, is an intermediate issued by
+// p's root CA, with a tunnel certificate of its own: the PKI after a
+// renewal that changed the intermediate.
+func (p *testPKI) intermediate(t *testing.T, name string) *testPKI {
+	t.Helper()
+	key := newKey(t)
+	ca := createCert(t, caTemplate(name, p.issued), p.ca, key, p.caKey)
+	leaf := createCert(t, leafTemplate(p.issued), ca, newKey(t), key)
+	return &testPKI{ca: ca, caKey: key, root: p.ca, leaf: leaf, issued: p.issued}
+}
+
+func caTemplate(name string, issued time.Time) *x509.Certificate {
+	return &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "tunnel CA"},
+		Subject:               pkix.Name{CommonName: name},
 		NotBefore:             issued,
 		NotAfter:              issued.Add(365 * 24 * time.Hour),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-	}, nil, caKey, nil)
-	leaf := createCert(t, &x509.Certificate{
+	}
+}
+
+func leafTemplate(issued time.Time) *x509.Certificate {
+	return &x509.Certificate{
 		SerialNumber: big.NewInt(0x2a),
 		Subject:      pkix.Name{CommonName: "10.20.0.11"},
 		NotBefore:    issued,
 		NotAfter:     issued.Add(72 * time.Hour),
 		IPAddresses:  []net.IP{net.ParseIP("10.20.0.11")},
 		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}, ca, newKey(t), caKey)
-	return &testPKI{ca: ca, caKey: caKey, leaf: leaf, issued: issued}
+	}
 }
 
-// identity is the PKI's tunnel identity, with pin as its PIN.
+// identity is the PKI's tunnel identity, with pin as its PIN: the leaf,
+// its CA, then the root above that CA if there is one.
 func (p *testPKI) identity(pin *secure.Secret) *TunnelIdentity {
+	chain := []*x509.Certificate{p.leaf, p.ca}
+	if p.root != nil {
+		chain = append(chain, p.root)
+	}
 	return &TunnelIdentity{
-		Chain: []*x509.Certificate{p.leaf, p.ca},
+		Chain: chain,
 		Token: TokenKey{Slot: 0, KeyID: []byte("ipsec")},
 		PIN:   pin,
 	}

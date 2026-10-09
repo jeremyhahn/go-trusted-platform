@@ -38,8 +38,17 @@ func TestTunnelIdentityValidate(t *testing.T) {
 		t.Fatalf("validate(16-byte SAN): %v", err)
 	}
 
+	renewed := pki.intermediate(t, "tunnel intermediate")
+	if err := renewed.identity(nil).validate(local); err != nil {
+		t.Fatalf("validate(leaf, intermediate, root): %v", err)
+	}
+
 	noKey := pki.identity(nil)
 	noKey.Token.KeyID = nil
+	leafOnly := pki.identity(nil)
+	leafOnly.Chain = leafOnly.Chain[:1]
+	noRoot := renewed.identity(nil)
+	noRoot.Chain = noRoot.Chain[:2]
 	tests := []struct {
 		name string
 		id   *TunnelIdentity
@@ -50,6 +59,8 @@ func TestTunnelIdentityValidate(t *testing.T) {
 		{"nil leaf", &TunnelIdentity{Chain: []*x509.Certificate{nil}, Token: TokenKey{KeyID: []byte{1}}}, ErrNoCertificate},
 		{"no key", noKey, ErrNoKeyID},
 		{"another address", &TunnelIdentity{Chain: []*x509.Certificate{pki.ca}, Token: TokenKey{KeyID: []byte{1}}}, ErrCertificateAddress},
+		{"the leaf alone", leafOnly, ErrNoRoot},
+		{"an intermediate without its root", noRoot, ErrNoRoot},
 	}
 	for _, tt := range tests {
 		if err := tt.id.validate(local); !errors.Is(err, tt.want) {
