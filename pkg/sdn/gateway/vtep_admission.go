@@ -37,9 +37,17 @@ type OverlayVTEPRevoker interface {
 	RevokeVTEP(ctx context.Context, vtep netip.Addr) error
 }
 
+// OverlayIPAMReader reads the fabric allocations that authorize remote VTEPs.
+type OverlayIPAMReader interface {
+	GetAllocation(ctx context.Context, ip netip.Addr) (*ipam.Allocation, error)
+	GetAllocationsByDevice(ctx context.Context, deviceID string) ([]*ipam.Allocation, error)
+	GetAllocationsByPool(ctx context.Context, poolID string) ([]*ipam.Allocation, error)
+	ListPoolsByZone(ctx context.Context, zone string) ([]*ipam.Pool, error)
+}
+
 // VTEPAdmissionConfig wires the production overlay VTEP admission policy.
 type VTEPAdmissionConfig struct {
-	IPAM          ipam.Allocator
+	IPAM          OverlayIPAMReader
 	Devices       OverlayDeviceGetter
 	Verdicts      OverlayVerdictReader
 	Revoker       OverlayVTEPRevoker
@@ -66,7 +74,7 @@ type AdmittedVTEP struct {
 // registry is the platform IPAM fabric allocation for the VTEP address; the
 // relying-party decision comes from the platform attestation event log.
 type VTEPAdmitter struct {
-	ipam          ipam.Allocator
+	ipam          OverlayIPAMReader
 	devices       OverlayDeviceGetter
 	verdicts      OverlayVerdictReader
 	revoker       OverlayVTEPRevoker

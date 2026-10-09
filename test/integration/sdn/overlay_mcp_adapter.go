@@ -803,6 +803,37 @@ func (m *OverlayMCPAdapter) GatewayStatus(ctx context.Context) (*GatewayStatusRe
 	}, nil
 }
 
+func (m *OverlayMCPAdapter) GatewayAdmittedVTEPList(ctx context.Context, gatewayID string) (*GatewayAdmittedVTEPListResult, error) {
+	args := map[string]interface{}{}
+	if gatewayID != "" {
+		args["gateway_id"] = gatewayID
+	}
+	var response struct {
+		VTEPs []restGatewayAdmittedVTEP `json:"vteps"`
+		Count int                       `json:"count"`
+	}
+	if err := m.callTool(ctx, "gateway_admitted_vteps", args, &response); err != nil {
+		return nil, err
+	}
+	vteps := make([]GatewayAdmittedVTEPInfo, 0, len(response.VTEPs))
+	for _, vtep := range response.VTEPs {
+		vteps = append(vteps, vtep.gatewayAdmittedVTEPInfo())
+	}
+	return &GatewayAdmittedVTEPListResult{VTEPs: vteps, Count: response.Count}, nil
+}
+
+func (m *OverlayMCPAdapter) GatewayAdmittedVTEPGet(ctx context.Context, gatewayID, vtep string) (*GatewayAdmittedVTEPGetResult, error) {
+	args := map[string]interface{}{"vtep": vtep}
+	if gatewayID != "" {
+		args["gateway_id"] = gatewayID
+	}
+	var response restGatewayAdmittedVTEP
+	if err := m.callTool(ctx, "gateway_admitted_vtep", args, &response); err != nil {
+		return nil, err
+	}
+	return &GatewayAdmittedVTEPGetResult{VTEP: response.gatewayAdmittedVTEPInfo()}, nil
+}
+
 // GatewaySetMode sets the gateway mode via MCP.
 func (m *OverlayMCPAdapter) GatewaySetMode(ctx context.Context, opts GatewayModeOptions) (*GatewayModeResult, error) {
 	const toolName = "gateway_mode_set"

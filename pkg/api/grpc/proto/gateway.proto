@@ -20,6 +20,8 @@ service GatewayService {
   // received; a node running its own gateway serves its live state.
   rpc GetGatewaySnapshot(GetGatewaySnapshotRequest) returns (GetGatewaySnapshotResponse);
   rpc ListGatewaySnapshots(ListGatewaySnapshotsRequest) returns (ListGatewaySnapshotsResponse);
+  rpc GetGatewayAdmittedVTEP(GetGatewayAdmittedVTEPRequest) returns (GetGatewayAdmittedVTEPResponse);
+  rpc ListGatewayAdmittedVTEPs(ListGatewayAdmittedVTEPsRequest) returns (ListGatewayAdmittedVTEPsResponse);
 
   // BGP operations (transit mode)
   rpc GetBGPStatus(GetBGPStatusRequest) returns (GetBGPStatusResponse);
@@ -77,6 +79,35 @@ message ListGatewaySnapshotsResponse {
   repeated GatewaySnapshot snapshots = 1;
 }
 
+message GetGatewayAdmittedVTEPRequest {
+  string gateway_id = 1;
+  string vtep = 2;
+}
+
+message GetGatewayAdmittedVTEPResponse {
+  GatewayAdmittedVTEP vtep = 1;
+}
+
+message ListGatewayAdmittedVTEPsRequest {
+  string gateway_id = 1;
+}
+
+message ListGatewayAdmittedVTEPsResponse {
+  repeated GatewayAdmittedVTEP vteps = 1;
+}
+
+message GatewayAdmittedVTEP {
+  string vtep = 1;
+  uint64 device_id = 2;
+  string host_id = 3;
+  string serial = 4;
+  string hostname = 5;
+  string allocation_id = 6;
+  string baseline_source = 7;
+  uint64 profile_id = 8;
+  google.protobuf.Timestamp verdict_at = 9;
+}
+
 // GatewaySnapshot is one gateway's telemetry: what its services programmed,
 // as those services report it.
 message GatewaySnapshot {
@@ -95,6 +126,33 @@ message GatewaySnapshot {
   SnapshotNAT nat = 13;
   SnapshotPipeline pipeline = 14;
   map<string, string> annotations = 15;
+  SnapshotOverlay overlay = 16;
+}
+
+message SnapshotOverlay {
+  bool running = 1;
+  string local_vtep = 2;
+  uint32 vni_count = 3;
+  uint32 remote_vtep_count = 4;
+  uint32 local_mac_count = 5;
+  uint32 remote_mac_count = 6;
+  uint32 prefix_count = 7;
+  uint64 refused_bindings = 8;
+  uint32 l3_vni = 9;
+  bool arp_suppression_enabled = 10;
+  bool anycast_gateway_configured = 11;
+  google.protobuf.Timestamp started_at = 12;
+  int64 uptime_seconds = 13;
+  repeated GatewayAdmittedVTEP admitted_vteps = 14;
+  SnapshotOverlayNDCounters nd_counters = 15;
+}
+
+message SnapshotOverlayNDCounters {
+  uint64 punted = 1;
+  uint64 answered = 2;
+  uint64 meter_dropped = 3;
+  uint64 queue_dropped = 4;
+  uint64 fell_through = 5;
 }
 
 message SnapshotHealth {

@@ -40,8 +40,8 @@ section from neither (see *Supervised handlers* below):
 
 | Table | Type | `Start` | `IsActive` / `Health` |
 |---|---|---|---|
-| `serviceBuilders` (`firewall`, `nat`, `load-balancer`, `hostfw`, `tunnels`, `transit`) | `backedServiceHandler` | builds the backend; a build or start failure returns the backend's error and leaves nothing registered | the built backend's own `Active` / `Healthy` |
-| `serviceRefusals` (`overlay`, `edge`, `dhcp`, `pxe`, `management-vpn`) | `refusedServiceHandler` | `ErrServiceUnavailable{Service, Reason}` | `false` / `ErrServiceUnavailable` |
+| `serviceBuilders` (`overlay`, `firewall`, `nat`, `load-balancer`, `hostfw`, `tunnels`, `transit`) | `backedServiceHandler` | builds the backend; a build or start failure returns the backend's error and leaves nothing registered | the built backend's own `Active` / `Healthy` |
+| `serviceRefusals` (`edge`, `dhcp`, `pxe`, `management-vpn`) | `refusedServiceHandler` | `ErrServiceUnavailable{Service, Reason}` | `false` / `ErrServiceUnavailable` |
 
 `proxy` is registered by `gatewayd serve` assembly through
 `RegisterServiceHandler`, which appends to the same start order. Adding a
@@ -55,9 +55,10 @@ start before transit so BGP sessions have their interfaces; a refused section
 fails startup before any datapath service has to be rolled back for it.
 
 Owner design decision (2026-09-26): the EVPN `overlay` service is required, not
-optional; it is on the roadmap as #709, and lighting a public address block
-depends on it plus gateway HA (#596, #710). Until #709 lands it stays in
-`serviceRefusals`.
+optional. Gatewayd now builds it from `ServiceOverlay` when the host runtime
+injects OVS/OpenFlow, IPAM fabric reservations, platform device lookup and the
+attestation verdict reader. Lighting a public address block still depends on it
+plus gateway HA (#596, #710).
 
 `HostRuntime` (`runtime.go`, `GatewayConfig.Host`, never from YAML) carries what
 the builders need beyond OVS:
@@ -320,11 +321,16 @@ subnet / zone bindings that feed the per-zone network summaries).
 Groups, and — via `policy.NewOVSFlowController` — Controller dependencies),
 the zone/network provider closures, and a conntrack `ct.ZoneAllocator`,
 then injects the result as `GatewayConfig.Runtime` before `NewGateway`.
+When `overlay:` is enabled, assembly also injects the overlay OpenFlow client,
+IPAM fabric reservation reader, device lookup, attestation verdict reader and
+the platform SDK connection that owns those readers. Missing overlay injection
+fails closed as `ErrRuntimeMissing`, not as an admitted tunnel.
 The runtime is assembled **only when a datapath service is enabled** — a
 proxy-only gatewayd never dials OVSDB even with an `sdn:` section present
 — the OVSDB dial is bounded by a 30s timeout, and the runtime owns the
 OVSDB connection: `GatewayRuntime.Close` releases it on every assembly
-error path and at daemon shutdown. All five config sections decode with
+error path and at daemon shutdown, including the overlay platform and OpenFlow
+clients when they were opened. All five config sections decode with
 the TextUnmarshaler hook set, so `netip.Prefix`/`netip.Addr` fields
 (`networks[].subnet`, IPAM addresses) parse from plain YAML strings.
 
@@ -1075,6 +1081,7 @@ the service it drives says so — extends to telemetry:
 | `host_firewall` | `hostfw.Service.Health()` — installed, fingerprint, rule count, last reconcile and last error (#569) |
 | `firewall` | `firewall.Service.Health()` — flow count and conntrack zones |
 | `nat` | `firewall.NAT.Health()` — SNAT/DNAT and the per-uplink pools (#586) |
+| `overlay` | overlay backend `Status()` plus `ListAdmittedVTEPs()` — local VTEP, table ids, admitted VTEPs and ND counters (punted, answered, meter-dropped, queue-dropped, fell-through) |
 | `pipeline` | `GatewayRuntime.PipelineStatus()` — owner, terminal and the held fail mode (#567) |
 
 Two invariants make the document readable:

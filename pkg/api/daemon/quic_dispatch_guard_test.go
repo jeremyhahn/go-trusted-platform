@@ -245,6 +245,8 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpVTPMStop":                  {value: quic.OpVTPMStop, mode: wireDirect, family: "vtpm"},
 	"OpGatewaySnapshot":           {value: quic.OpGatewaySnapshot, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
 	"OpGatewayListSnapshots":      {value: quic.OpGatewayListSnapshots, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayAdmittedVTEP":       {value: quic.OpGatewayAdmittedVTEP, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayListAdmittedVTEPs":  {value: quic.OpGatewayListAdmittedVTEPs, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
 	"OpGatewayLBAddVIP":           {value: quic.OpGatewayLBAddVIP, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
 	"OpGatewayLBRemoveVIP":        {value: quic.OpGatewayLBRemoveVIP, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
 	"OpGatewayLBGetVIP":           {value: quic.OpGatewayLBGetVIP, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},

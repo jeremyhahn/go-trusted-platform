@@ -278,8 +278,8 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 			refused[name] = true
 		}
 	}
-	assert.Equal(t, map[string]bool{ServiceFirewall: true, ServiceNAT: true, ServiceLoadBalancer: true, ServiceNAT64: true, ServiceHostFW: true, ServiceTunnels: true, ServiceTransit: true}, built)
-	assert.Equal(t, map[string]bool{ServiceOverlay: true, ServiceEdge: true, ServiceDHCP: true, ServicePXE: true, ServiceManagementVPN: true}, refused)
+	assert.Equal(t, map[string]bool{ServiceFirewall: true, ServiceNAT: true, ServiceLoadBalancer: true, ServiceNAT64: true, ServiceHostFW: true, ServiceTunnels: true, ServiceTransit: true, ServiceOverlay: true}, built)
+	assert.Equal(t, map[string]bool{ServiceEdge: true, ServiceDHCP: true, ServicePXE: true, ServiceManagementVPN: true}, refused)
 	for name := range refused {
 		assert.NotEmpty(t, serviceRefusals[name], "refusal for %s names no blocker", name)
 	}
@@ -296,8 +296,8 @@ func TestNewGateway_RegistersHandlersInDeclaredOrder(t *testing.T) {
 	assert.Equal(t, []string{ServiceFirewall, ServiceTunnels, ServiceOverlay}, gw.serviceOrder)
 	_, isBacked := gw.serviceHandlers[ServiceFirewall].(*backedServiceHandler)
 	assert.True(t, isBacked)
-	_, isRefused := gw.serviceHandlers[ServiceOverlay].(*refusedServiceHandler)
-	assert.True(t, isRefused)
+	_, isBacked = gw.serviceHandlers[ServiceOverlay].(*backedServiceHandler)
+	assert.True(t, isBacked)
 }
 
 // TestGatewayStart_RefusedSectionIsATypedStartError pins the core of #568:
@@ -306,7 +306,6 @@ func TestNewGateway_RegistersHandlersInDeclaredOrder(t *testing.T) {
 // no pipeline behind.
 func TestGatewayStart_RefusedSectionIsATypedStartError(t *testing.T) {
 	sections := map[string]func(*GatewayConfig){
-		ServiceOverlay:       func(c *GatewayConfig) { c.Overlay = validOverlayServiceConfig() },
 		ServiceEdge:          func(c *GatewayConfig) { c.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50} },
 		ServiceDHCP:          func(c *GatewayConfig) { c.DHCP = &DHCPServiceConfig{Enabled: true, Interface: "eth0"} },
 		ServicePXE:           func(c *GatewayConfig) { c.PXE = &PXEServiceConfig{Enabled: true, HTTPPort: 8069} },
@@ -335,14 +334,14 @@ func TestGatewayStart_RefusedSectionIsATypedStartError(t *testing.T) {
 
 func TestGatewayStart_RefusedSectionRollsBackTheStartedOnes(t *testing.T) {
 	cfg := firewallGatewayConfig()
-	cfg.Overlay = validOverlayServiceConfig()
+	cfg.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50}
 	gw, err := NewGateway(cfg)
 	require.NoError(t, err)
 	gw.SetNodeMetrics(validNodeMetrics())
 	err = gw.Start(context.Background())
 	var unavailable *ErrServiceUnavailable
 	require.True(t, errors.As(err, &unavailable), "got %v", err)
-	assert.Equal(t, ServiceOverlay, unavailable.Service)
+	assert.Equal(t, ServiceEdge, unavailable.Service)
 	assert.False(t, cfg.Runtime.PipelineInstalled(), "the pipeline installed for the firewall is rolled back")
 	_, fwRunning := gw.FirewallHealth()
 	assert.False(t, fwRunning, "the firewall started before the refusal is stopped again")
@@ -482,7 +481,7 @@ func TestRefusedServiceHandler(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBuilders_RefuseWithoutTheirRuntime(t *testing.T) {
-	for _, name := range []string{ServiceFirewall, ServiceNAT, ServiceLoadBalancer, ServiceNAT64} {
+	for _, name := range []string{ServiceFirewall, ServiceNAT, ServiceLoadBalancer, ServiceNAT64, ServiceOverlay} {
 		t.Run(name, func(t *testing.T) {
 			cfg := baseGatewayConfig("no-runtime")
 			cfg.Firewall = &FirewallConfig{Enabled: true}
@@ -497,6 +496,7 @@ func TestBuilders_RefuseWithoutTheirRuntime(t *testing.T) {
 					PortRangeEnd:   65535,
 				},
 			}
+			cfg.Overlay = validOverlayServiceConfig()
 			gw := &Gateway{config: cfg}
 			_, err := serviceBuilders[name](gw)
 			var missing *ErrRuntimeMissing

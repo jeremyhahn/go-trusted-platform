@@ -83,6 +83,22 @@ func (c *Client) ListSnapshots(ctx context.Context) ([]*platformv1.GatewaySnapsh
 	return resp.GetSnapshots(), nil
 }
 
+func (c *Client) GetAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (*platformv1.GatewayAdmittedVTEP, error) {
+	resp, err := c.grpc.GetGatewayAdmittedVTEP(ctx, &platformv1.GetGatewayAdmittedVTEPRequest{GatewayId: gatewayID, Vtep: vtep})
+	if err != nil {
+		return nil, &ErrGetAdmittedVTEPFailed{GatewayID: gatewayID, VTEP: vtep, Cause: err}
+	}
+	return resp.GetVtep(), nil
+}
+
+func (c *Client) ListAdmittedVTEPs(ctx context.Context, gatewayID string) ([]*platformv1.GatewayAdmittedVTEP, error) {
+	resp, err := c.grpc.ListGatewayAdmittedVTEPs(ctx, &platformv1.ListGatewayAdmittedVTEPsRequest{GatewayId: gatewayID})
+	if err != nil {
+		return nil, &ErrListAdmittedVTEPsFailed{GatewayID: gatewayID, Cause: err}
+	}
+	return resp.GetVteps(), nil
+}
+
 // SetMode sets the gateway operating mode(s).
 func (c *Client) SetMode(ctx context.Context, modes uint32) (*platformv1.GatewayStatus, error) {
 	resp, err := c.grpc.SetGatewayMode(ctx, &platformv1.SetGatewayModeRequest{Modes: modes})

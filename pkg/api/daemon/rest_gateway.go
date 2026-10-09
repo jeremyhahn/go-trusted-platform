@@ -21,9 +21,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // gatewayRESTService implements rest.GatewayServiceInterface using the
@@ -37,6 +41,7 @@ type gatewayRESTService struct {
 	ipam   ipam.Allocator
 	lb     GatewayLoadBalancerInterface
 	nat64  GatewayNAT64Interface
+	reader GatewaySnapshotReader
 	logger *slog.Logger
 }
 
@@ -283,6 +288,32 @@ func (s *gatewayRESTService) ListAllocations(ctx context.Context, poolID string)
 	return resp, nil
 }
 
+func (s *gatewayRESTService) GetAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (*rest.GatewayAdmittedVTEPResponse, error) {
+	if s.reader == nil {
+		return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "gateway overlay admission"}
+	}
+	resp, err := s.reader.GetGatewayAdmittedVTEP(ctx, &platformv1.GetGatewayAdmittedVTEPRequest{GatewayId: gatewayID, Vtep: vtep})
+	if err != nil {
+		return nil, gatewayAdmissionErrToREST(vtep, err)
+	}
+	return admittedVTEPToREST(resp.GetVtep()), nil
+}
+
+func (s *gatewayRESTService) ListAdmittedVTEPs(ctx context.Context, gatewayID string) ([]rest.GatewayAdmittedVTEPResponse, error) {
+	if s.reader == nil {
+		return nil, rest.ErrGatewayFeatureNotConfigured{Feature: "gateway overlay admission"}
+	}
+	resp, err := s.reader.ListGatewayAdmittedVTEPs(ctx, &platformv1.ListGatewayAdmittedVTEPsRequest{GatewayId: gatewayID})
+	if err != nil {
+		return nil, gatewayAdmissionErrToREST("", err)
+	}
+	out := make([]rest.GatewayAdmittedVTEPResponse, 0, len(resp.GetVteps()))
+	for _, vtep := range resp.GetVteps() {
+		out = append(out, *admittedVTEPToREST(vtep))
+	}
+	return out, nil
+}
+
 // =============================================================================
 // Error mapping
 // =============================================================================
@@ -360,4 +391,32 @@ func ipamAllocToRESTResponse(a *ipam.Allocation) *rest.IPAllocationResponse {
 		AllocatedAt: a.AllocatedAt,
 		ExpiresAt:   a.ExpiresAt,
 	}
+}
+
+func admittedVTEPToREST(vtep *platformv1.GatewayAdmittedVTEP) *rest.GatewayAdmittedVTEPResponse {
+	if vtep == nil {
+		return nil
+	}
+	out := &rest.GatewayAdmittedVTEPResponse{
+		VTEP:           vtep.GetVtep(),
+		DeviceID:       vtep.GetDeviceId(),
+		HostID:         vtep.GetHostId(),
+		Serial:         vtep.GetSerial(),
+		Hostname:       vtep.GetHostname(),
+		AllocationID:   vtep.GetAllocationId(),
+		BaselineSource: vtep.GetBaselineSource(),
+		ProfileID:      vtep.GetProfileId(),
+	}
+	if ts := vtep.GetVerdictAt(); ts != nil {
+		verdictAt := ts.AsTime()
+		out.VerdictAt = &verdictAt
+	}
+	return out
+}
+
+func gatewayAdmissionErrToREST(vtep string, err error) error {
+	if status.Code(err) == codes.NotFound {
+		return rest.ErrGatewayAdmittedVTEPNotFound{VTEP: vtep}
+	}
+	return err
 }

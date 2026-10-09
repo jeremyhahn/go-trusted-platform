@@ -409,6 +409,47 @@ func (g *OverlayGRPCAdapter) GatewayStatus(ctx context.Context) (*GatewayStatusR
 	}, nil
 }
 
+func (g *OverlayGRPCAdapter) GatewayAdmittedVTEPList(ctx context.Context, gatewayID string) (*GatewayAdmittedVTEPListResult, error) {
+	resp, err := g.gatewayClient.ListGatewayAdmittedVTEPs(ctx, &platformv1.ListGatewayAdmittedVTEPsRequest{GatewayId: gatewayID})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "ListGatewayAdmittedVTEPs", Err: err}
+	}
+	vteps := make([]GatewayAdmittedVTEPInfo, 0, len(resp.GetVteps()))
+	for _, vtep := range resp.GetVteps() {
+		vteps = append(vteps, grpcGatewayAdmittedVTEPInfo(vtep))
+	}
+	return &GatewayAdmittedVTEPListResult{VTEPs: vteps, Count: len(vteps)}, nil
+}
+
+func (g *OverlayGRPCAdapter) GatewayAdmittedVTEPGet(ctx context.Context, gatewayID, vtep string) (*GatewayAdmittedVTEPGetResult, error) {
+	resp, err := g.gatewayClient.GetGatewayAdmittedVTEP(ctx, &platformv1.GetGatewayAdmittedVTEPRequest{GatewayId: gatewayID, Vtep: vtep})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "GetGatewayAdmittedVTEP", Err: err}
+	}
+	return &GatewayAdmittedVTEPGetResult{VTEP: grpcGatewayAdmittedVTEPInfo(resp.GetVtep())}, nil
+}
+
+func grpcGatewayAdmittedVTEPInfo(vtep *platformv1.GatewayAdmittedVTEP) GatewayAdmittedVTEPInfo {
+	if vtep == nil {
+		return GatewayAdmittedVTEPInfo{}
+	}
+	var verdictAt time.Time
+	if vtep.GetVerdictAt() != nil {
+		verdictAt = vtep.GetVerdictAt().AsTime()
+	}
+	return GatewayAdmittedVTEPInfo{
+		VTEP:           vtep.GetVtep(),
+		DeviceID:       vtep.GetDeviceId(),
+		HostID:         vtep.GetHostId(),
+		Serial:         vtep.GetSerial(),
+		Hostname:       vtep.GetHostname(),
+		AllocationID:   vtep.GetAllocationId(),
+		BaselineSource: vtep.GetBaselineSource(),
+		ProfileID:      vtep.GetProfileId(),
+		VerdictAt:      verdictAt,
+	}
+}
+
 // GatewaySetMode sets gateway modes.
 func (g *OverlayGRPCAdapter) GatewaySetMode(ctx context.Context, opts GatewayModeOptions) (*GatewayModeResult, error) {
 	// Convert mode strings to bitmask

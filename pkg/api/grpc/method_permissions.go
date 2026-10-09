@@ -185,8 +185,10 @@ func buildGRPCMethodPermissions() map[string]string {
 		// -----------------------------------------------------------------
 		// The snapshot is a read of what the datapath programmed: sessions,
 		// tunnels, uplink policy routes, filters and the base pipeline.
-		"/platform.v1.GatewayService/GetGatewaySnapshot":   scope(sdn, read),
-		"/platform.v1.GatewayService/ListGatewaySnapshots": scope(sdn, read),
+		"/platform.v1.GatewayService/GetGatewaySnapshot":       scope(sdn, read),
+		"/platform.v1.GatewayService/ListGatewaySnapshots":     scope(sdn, read),
+		"/platform.v1.GatewayService/GetGatewayAdmittedVTEP":   scope(sdn, read),
+		"/platform.v1.GatewayService/ListGatewayAdmittedVTEPs": scope(sdn, read),
 
 		// -----------------------------------------------------------------
 		// Gateway performance verification (GatewayService)

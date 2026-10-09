@@ -55,6 +55,8 @@ type OverlayCommands interface {
 
 	// Gateway Commands (platformctl sdn gateway ...)
 	GatewayStatus(ctx context.Context) (*GatewayStatusResult, error)
+	GatewayAdmittedVTEPList(ctx context.Context, gatewayID string) (*GatewayAdmittedVTEPListResult, error)
+	GatewayAdmittedVTEPGet(ctx context.Context, gatewayID, vtep string) (*GatewayAdmittedVTEPGetResult, error)
 	GatewaySetMode(ctx context.Context, opts GatewayModeOptions) (*GatewayModeResult, error)
 
 	// BGP Commands (platformctl sdn gateway bgp ...)
@@ -238,6 +240,30 @@ type GatewayStatusResult struct {
 	BGPEnabled     bool
 	EVPNEnabled    bool
 	TransitEnabled bool
+}
+
+// GatewayAdmittedVTEPListResult contains admitted overlay VTEPs reported by gatewayd.
+type GatewayAdmittedVTEPListResult struct {
+	VTEPs []GatewayAdmittedVTEPInfo
+	Count int
+}
+
+// GatewayAdmittedVTEPGetResult contains a single admitted overlay VTEP.
+type GatewayAdmittedVTEPGetResult struct {
+	VTEP GatewayAdmittedVTEPInfo
+}
+
+// GatewayAdmittedVTEPInfo mirrors the gateway API's admitted VTEP shape.
+type GatewayAdmittedVTEPInfo struct {
+	VTEP           string
+	DeviceID       uint64
+	HostID         string
+	Serial         string
+	Hostname       string
+	AllocationID   string
+	BaselineSource string
+	ProfileID      uint64
+	VerdictAt      time.Time
 }
 
 // GatewayModeOptions contains options for setting gateway mode.

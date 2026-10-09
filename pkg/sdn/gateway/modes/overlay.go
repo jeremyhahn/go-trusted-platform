@@ -138,6 +138,18 @@ type OverlayModeStatus struct {
 
 	// Uptime is the duration the overlay mode has been running.
 	Uptime time.Duration
+
+	// NDCounters reports overlay neighbour-discovery handler counters.
+	NDCounters OverlayNDCounters
+}
+
+// OverlayNDCounters reports overlay neighbour-discovery datapath counters.
+type OverlayNDCounters struct {
+	Punted       uint64
+	Answered     uint64
+	MeterDropped uint64
+	QueueDropped uint64
+	FellThrough  uint64
 }
 
 // OverlayOVSClient is the OVSDB client the overlay needs: the flow-based

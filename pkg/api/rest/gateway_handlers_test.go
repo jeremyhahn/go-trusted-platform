@@ -483,6 +483,14 @@ func (m *mockGatewayService) ListAllocations(ctx context.Context, poolID string)
 	}, nil
 }
 
+func (m *mockGatewayService) GetAdmittedVTEP(context.Context, string, string) (*GatewayAdmittedVTEPResponse, error) {
+	return nil, ErrGatewayFeatureNotConfigured{Feature: "gateway overlay admission"}
+}
+
+func (m *mockGatewayService) ListAdmittedVTEPs(context.Context, string) ([]GatewayAdmittedVTEPResponse, error) {
+	return nil, ErrGatewayFeatureNotConfigured{Feature: "gateway overlay admission"}
+}
+
 func (m *mockGatewayService) AddVIP(ctx context.Context, req *LBVIPRequest) (*LBVIPResponse, error) {
 	return m.addVIPResp, m.addVIPErr
 }

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -172,6 +173,14 @@ type ErrIPAllocationNotFound struct {
 
 func (e ErrIPAllocationNotFound) Error() string {
 	return fmt.Sprintf("IP allocation not found: %s", e.IP)
+}
+
+type ErrGatewayAdmittedVTEPNotFound struct {
+	VTEP string
+}
+
+func (e ErrGatewayAdmittedVTEPNotFound) Error() string {
+	return fmt.Sprintf("gateway admitted VTEP not found: %s", e.VTEP)
 }
 
 // ErrIPAlreadyAllocated is returned when an IP is already allocated.
@@ -398,6 +407,24 @@ type IPAllocationListResponse struct {
 	Timestamp   time.Time              `json:"timestamp"`
 }
 
+type GatewayAdmittedVTEPResponse struct {
+	VTEP           string     `json:"vtep"`
+	DeviceID       uint64     `json:"device_id,omitempty"`
+	HostID         string     `json:"host_id,omitempty"`
+	Serial         string     `json:"serial,omitempty"`
+	Hostname       string     `json:"hostname,omitempty"`
+	AllocationID   string     `json:"allocation_id,omitempty"`
+	BaselineSource string     `json:"baseline_source,omitempty"`
+	ProfileID      uint64     `json:"profile_id,omitempty"`
+	VerdictAt      *time.Time `json:"verdict_at,omitempty"`
+}
+
+type GatewayAdmittedVTEPListResponse struct {
+	VTEPs     []GatewayAdmittedVTEPResponse `json:"vteps"`
+	Count     int                           `json:"count"`
+	Timestamp time.Time                     `json:"timestamp"`
+}
+
 // GatewayActionResponse represents a gateway action result.
 type GatewayActionResponse struct {
 	ResourceID   string `json:"resource_id"`
@@ -442,6 +469,10 @@ type GatewayServiceInterface interface {
 	AllocateIP(ctx context.Context, poolID, deviceID, hostname string) (*IPAllocationResponse, error)
 	ReleaseIP(ctx context.Context, ip string) error
 	ListAllocations(ctx context.Context, poolID string) ([]IPAllocationResponse, error)
+
+	// Gateway overlay admission operations
+	GetAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (*GatewayAdmittedVTEPResponse, error)
+	ListAdmittedVTEPs(ctx context.Context, gatewayID string) ([]GatewayAdmittedVTEPResponse, error)
 
 	// Load balancer VIP operations
 	AddVIP(ctx context.Context, req *LBVIPRequest) (*LBVIPResponse, error)
@@ -505,6 +536,10 @@ func (h *GatewayHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/sdn/gateway/ipam/allocations", h.handleAllocateIP).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/sdn/gateway/ipam/allocations/{ip}", h.handleReleaseIP).Methods(http.MethodDelete)
 	router.HandleFunc("/api/v1/sdn/gateway/ipam/allocations", h.handleListAllocations).Methods(http.MethodGet)
+
+	// Gateway overlay admission operations
+	router.HandleFunc("/api/v1/sdn/gateway/overlay/vteps", h.handleListAdmittedVTEPs).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/sdn/gateway/overlay/vteps/{vtep}", h.handleGetAdmittedVTEP).Methods(http.MethodGet)
 
 	// Load balancer VIP operations
 	h.registerLBRoutes(router)
@@ -993,6 +1028,47 @@ func (h *GatewayHandlers) handleListAllocations(w http.ResponseWriter, r *http.R
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
+func (h *GatewayHandlers) handleListAdmittedVTEPs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if h.gatewayService == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrGatewayServiceNotAvailable{})
+		return
+	}
+
+	gatewayID := r.URL.Query().Get("gateway_id")
+	vteps, err := h.gatewayService.ListAdmittedVTEPs(ctx, gatewayID)
+	if err != nil {
+		h.logger.Error("Failed to list admitted VTEPs", "error", err)
+		h.writeGatewayError(w, "list_admitted_vteps", err)
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, GatewayAdmittedVTEPListResponse{VTEPs: vteps, Count: len(vteps), Timestamp: time.Now().UTC()})
+}
+
+func (h *GatewayHandlers) handleGetAdmittedVTEP(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if h.gatewayService == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrGatewayServiceNotAvailable{})
+		return
+	}
+
+	vtep := mux.Vars(r)["vtep"]
+	if net.ParseIP(vtep) == nil {
+		h.writeGatewayError(w, "get_admitted_vtep", ErrInvalidIPAddress{IP: vtep})
+		return
+	}
+	gatewayID := r.URL.Query().Get("gateway_id")
+	admitted, err := h.gatewayService.GetAdmittedVTEP(ctx, gatewayID, vtep)
+	if err != nil {
+		h.logger.Error("Failed to get admitted VTEP", "vtep", vtep, "error", err)
+		h.writeGatewayError(w, "get_admitted_vtep", err)
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, admitted)
+}
+
 // =============================================================================
 // Helper Methods
 // =============================================================================
@@ -1037,6 +1113,8 @@ func (h *GatewayHandlers) writeGatewayError(w http.ResponseWriter, operation str
 	case ErrIPAMCIDRImmutable:
 		statusCode = http.StatusBadRequest
 	case ErrIPAllocationNotFound:
+		statusCode = http.StatusNotFound
+	case ErrGatewayAdmittedVTEPNotFound:
 		statusCode = http.StatusNotFound
 	case ErrIPAlreadyAllocated:
 		statusCode = http.StatusConflict

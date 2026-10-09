@@ -16,11 +16,13 @@ package commands
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ct"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/openflow"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
@@ -44,6 +46,8 @@ func datapathService(gwCfg *gateway.GatewayConfig) string {
 		return gateway.ServiceNAT
 	case gwCfg.LoadBalancer != nil && gwCfg.LoadBalancer.Enabled:
 		return gateway.ServiceLoadBalancer
+	case gwCfg.Overlay != nil && gwCfg.Overlay.Enabled:
+		return gateway.ServiceOverlay
 	default:
 		return ""
 	}
@@ -78,7 +82,7 @@ func zoneMatrixService(gwCfg *gateway.GatewayConfig) string {
 //
 // The returned runtime owns a live OVSDB connection; the caller is
 // responsible for runtime.Close() once the gateway no longer needs it.
-func buildGatewayRuntime(ctx context.Context, sdnCfg *sdn.Config, matrixService string, logger *slog.Logger) (*gateway.GatewayRuntime, error) {
+func buildGatewayRuntime(ctx context.Context, sdnCfg *sdn.Config, matrixService string, needsOverlay bool, logger *slog.Logger) (*gateway.GatewayRuntime, error) {
 	if sdnCfg == nil || !sdnCfg.Enabled {
 		return nil, nil
 	}
@@ -117,7 +121,7 @@ func buildGatewayRuntime(ctx context.Context, sdnCfg *sdn.Config, matrixService 
 		return nil, &ErrOVSClientInit{Socket: sdnCfg.OVS.Socket, Cause: err}
 	}
 
-	return &gateway.GatewayRuntime{
+	runtime := &gateway.GatewayRuntime{
 		Controller: controller,
 		OVS:        client,
 		Groups:     client,
@@ -126,7 +130,34 @@ func buildGatewayRuntime(ctx context.Context, sdnCfg *sdn.Config, matrixService 
 		Networks:   networksFn,
 		CTZones:    ct.NewZoneAllocator(nil),
 		Logger:     logger,
-	}, nil
+	}
+	if needsOverlay {
+		ofClient, err := buildOverlayOpenFlowClient(connectCtx, sdnCfg)
+		if err != nil {
+			closeOVSClient(client, logger)
+			return nil, err
+		}
+		runtime.OverlayOpenFlow = ofClient
+	}
+	return runtime, nil
+}
+
+func buildOverlayOpenFlowClient(ctx context.Context, sdnCfg *sdn.Config) (*openflow.Client, error) {
+	var opts []openflow.ClientOption
+	if sdnCfg.OVS.Socket != "" {
+		dir := filepath.Dir(sdnCfg.OVS.Socket)
+		if dir != "." {
+			opts = append(opts, openflow.WithSocketDir(dir))
+		}
+	}
+	client, err := openflow.NewClient(sdnCfg.OVS.Bridge, opts...)
+	if err != nil {
+		return nil, &ErrOVSClientInit{Socket: sdnCfg.OVS.Socket, Cause: err}
+	}
+	if err := client.Connect(ctx); err != nil {
+		return nil, &ErrOVSConnectFailed{Socket: sdnCfg.OVS.Socket, Cause: err}
+	}
+	return client, nil
 }
 
 // closeOVSClient closes the OVS client, logging rather than masking a

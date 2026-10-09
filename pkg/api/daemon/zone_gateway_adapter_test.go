@@ -255,6 +255,14 @@ func (p *panicGatewayService) Snapshot(_ context.Context, _ string) (*quic.Gatew
 func (p *panicGatewayService) ListSnapshots(_ context.Context) ([]*quic.GatewaySnapshotInfo, error) {
 	return nil, quic.ErrGatewayFeatureNotConfigured
 }
+
+func (p *panicGatewayService) GetAdmittedVTEP(_ context.Context, _, _ string) (*quic.GatewayAdmittedVTEPInfo, error) {
+	return nil, quic.ErrGatewayFeatureNotConfigured
+}
+
+func (p *panicGatewayService) ListAdmittedVTEPs(_ context.Context, _ string) ([]*quic.GatewayAdmittedVTEPInfo, error) {
+	return nil, quic.ErrGatewayFeatureNotConfigured
+}
 func (p *panicGatewayService) SetMode(_ context.Context, _ string) error {
 	return quic.ErrGatewayFeatureNotConfigured
 }

@@ -39,8 +39,20 @@ func (s *RESTServer) SetGatewayIPAMService(allocator ipam.Allocator) {
 	svc := newGatewayRESTService(allocator, s.logger)
 	handlers := rest.NewGatewayHandlers(svc, s.logger)
 	handlers.RegisterRoutes(s.router)
+	s.gatewayService = svc
 	s.gatewayHandlers = handlers
 	s.logger.Info("Gateway REST routes registered (IPAM + gateway status)")
+}
+
+func (s *RESTServer) SetGatewaySnapshotService(reader GatewaySnapshotReader) {
+	if reader == nil {
+		return
+	}
+	if s.gatewayService == nil {
+		s.SetGatewayIPAMService(nil)
+	}
+	s.gatewayService.reader = reader
+	s.logger.Info("Gateway overlay admission REST service wired into gateway handlers")
 }
 
 // SetGatewayPerfService wires the perf backend into the gateway REST

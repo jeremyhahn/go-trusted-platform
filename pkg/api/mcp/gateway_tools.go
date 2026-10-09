@@ -28,6 +28,11 @@ type GatewayError struct {
 	Message string
 }
 
+type gatewayAdmissionProvider interface {
+	GatewayAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (interface{}, error)
+	GatewayAdmittedVTEPs(ctx context.Context, gatewayID string) ([]interface{}, error)
+}
+
 func (e *GatewayError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
@@ -178,6 +183,39 @@ func (r *ToolRegistry) registerGatewayTools() {
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "gateway_admitted_vteps",
+		Description: "List VTEPs admitted by gatewayd overlay decap admission; omit gateway_id for this node's own gateway",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"gateway_id": map[string]interface{}{
+					"type":        "string",
+					"description": "The reporting gateway's id; omit for this node's own gateway",
+				},
+			},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "gateway_admitted_vtep",
+		Description: "Get one VTEP admitted by gatewayd overlay decap admission",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"gateway_id": map[string]interface{}{
+					"type":        "string",
+					"description": "The reporting gateway's id; omit for this node's own gateway",
+				},
+				"vtep": map[string]interface{}{
+					"type":        "string",
+					"description": "The remote VTEP IP address",
+				},
+			},
+			"required": []string{"vtep"},
 		},
 	})
 
@@ -658,6 +696,30 @@ func (r *ToolRegistry) executeGatewaySnapshots(ctx context.Context, args map[str
 		return nil, err
 	}
 	return map[string]interface{}{"snapshots": snapshots}, nil
+}
+
+func (r *ToolRegistry) executeGatewayAdmittedVTEP(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	provider, ok := r.service.(gatewayAdmissionProvider)
+	if !ok {
+		return nil, ErrGatewayServiceUnavailable
+	}
+	result, err := provider.GatewayAdmittedVTEP(ctx, getString(args, "gateway_id"), getString(args, "vtep"))
+	if err != nil {
+		return nil, &GatewayError{Code: "admitted_vtep", Message: err.Error()}
+	}
+	return result, nil
+}
+
+func (r *ToolRegistry) executeGatewayAdmittedVTEPs(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	provider, ok := r.service.(gatewayAdmissionProvider)
+	if !ok {
+		return nil, ErrGatewayServiceUnavailable
+	}
+	vteps, err := provider.GatewayAdmittedVTEPs(ctx, getString(args, "gateway_id"))
+	if err != nil {
+		return nil, &GatewayError{Code: "admitted_vteps", Message: err.Error()}
+	}
+	return map[string]interface{}{"vteps": vteps, "count": len(vteps)}, nil
 }
 
 func (r *ToolRegistry) executeGatewayModeSet(ctx context.Context, args map[string]interface{}) (interface{}, error) {

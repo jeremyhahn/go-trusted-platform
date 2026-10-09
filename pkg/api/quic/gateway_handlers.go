@@ -44,8 +44,10 @@ const (
 	// Telemetry snapshot operations (0x15-0x16): the whole datapath
 	// picture one gatewayd reports — sessions, BFD, tunnels, uplink policy
 	// routes, host filter, NAT and the base pipeline (#594).
-	OpGatewaySnapshot      byte = 0x15
-	OpGatewayListSnapshots byte = 0x16
+	OpGatewaySnapshot          byte = 0x15
+	OpGatewayListSnapshots     byte = 0x16
+	OpGatewayAdmittedVTEP      byte = 0x17
+	OpGatewayListAdmittedVTEPs byte = 0x18
 
 	// Network Zone Operations (0x10-0x13). 0x14 was the retired
 	// assign-network-to-zone operation (networks are zones since #708);
@@ -202,6 +204,10 @@ type GatewayServiceInterface interface {
 	// ListSnapshots returns every reported gateway's telemetry snapshot.
 	ListSnapshots(ctx context.Context) ([]*GatewaySnapshotInfo, error)
 
+	// Admitted VTEP operations read the overlay decap admission set.
+	GetAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (*GatewayAdmittedVTEPInfo, error)
+	ListAdmittedVTEPs(ctx context.Context, gatewayID string) ([]*GatewayAdmittedVTEPInfo, error)
+
 	// Mode operations
 	SetMode(ctx context.Context, mode string) error
 
@@ -277,6 +283,7 @@ type GatewaySnapshotInfo struct {
 	Firewall     *SnapshotFirewallInfo     `codec:"firewall,omitempty"`
 	NAT          *SnapshotNATInfo          `codec:"nat,omitempty"`
 	Pipeline     *SnapshotPipelineInfo     `codec:"pipeline,omitempty"`
+	Overlay      *SnapshotOverlayInfo      `codec:"overlay,omitempty"`
 	Annotations  map[string]string         `codec:"annotations,omitempty"`
 }
 
@@ -405,6 +412,44 @@ type SnapshotPipelineInfo struct {
 	Owner     string `codec:"owner,omitempty"`
 	Terminal  string `codec:"terminal,omitempty"`
 	FailMode  string `codec:"fail_mode,omitempty"`
+}
+
+type SnapshotOverlayInfo struct {
+	Running                  bool                         `codec:"running"`
+	LocalVTEP                string                       `codec:"local_vtep,omitempty"`
+	VNICount                 uint32                       `codec:"vni_count,omitempty"`
+	RemoteVTEPCount          uint32                       `codec:"remote_vtep_count,omitempty"`
+	LocalMACCount            uint32                       `codec:"local_mac_count,omitempty"`
+	RemoteMACCount           uint32                       `codec:"remote_mac_count,omitempty"`
+	PrefixCount              uint32                       `codec:"prefix_count,omitempty"`
+	RefusedBindings          uint64                       `codec:"refused_bindings,omitempty"`
+	L3VNI                    uint32                       `codec:"l3_vni,omitempty"`
+	ARPSuppressionEnabled    bool                         `codec:"arp_suppression_enabled,omitempty"`
+	AnycastGatewayConfigured bool                         `codec:"anycast_gateway_configured,omitempty"`
+	StartedAt                int64                        `codec:"started_at,omitempty"`
+	UptimeSeconds            int64                        `codec:"uptime_seconds,omitempty"`
+	AdmittedVTEPs            []GatewayAdmittedVTEPInfo    `codec:"admitted_vteps,omitempty"`
+	NDCounters               SnapshotOverlayNDCounterInfo `codec:"nd_counters"`
+}
+
+type SnapshotOverlayNDCounterInfo struct {
+	Punted       uint64 `codec:"punted"`
+	Answered     uint64 `codec:"answered"`
+	MeterDropped uint64 `codec:"meter_dropped"`
+	QueueDropped uint64 `codec:"queue_dropped"`
+	FellThrough  uint64 `codec:"fell_through"`
+}
+
+type GatewayAdmittedVTEPInfo struct {
+	VTEP           string `codec:"vtep"`
+	DeviceID       uint64 `codec:"device_id,omitempty"`
+	HostID         string `codec:"host_id,omitempty"`
+	Serial         string `codec:"serial,omitempty"`
+	Hostname       string `codec:"hostname,omitempty"`
+	AllocationID   string `codec:"allocation_id,omitempty"`
+	BaselineSource string `codec:"baseline_source,omitempty"`
+	ProfileID      uint64 `codec:"profile_id,omitempty"`
+	VerdictAt      int64  `codec:"verdict_at,omitempty"`
 }
 
 // BGPStatusInfo contains BGP status information
@@ -701,6 +746,10 @@ func (h *GatewayHandler) HandleRequest(ctx context.Context, req *Request) *Respo
 		return h.handleSnapshot(ctx, req)
 	case OpGatewayListSnapshots:
 		return h.handleListSnapshots(ctx, req)
+	case OpGatewayAdmittedVTEP:
+		return h.handleAdmittedVTEP(ctx, req)
+	case OpGatewayListAdmittedVTEPs:
+		return h.handleListAdmittedVTEPs(ctx, req)
 	case OpGatewayBGPStatus:
 		return h.handleBGPStatus(ctx, req)
 	case OpGatewayBGPPeers:
@@ -788,6 +837,26 @@ type GatewayListSnapshotsResponse struct {
 	Snapshots []*GatewaySnapshotInfo `codec:"snapshots"`
 	Count     int32                  `codec:"count"`
 	Timestamp int64                  `codec:"timestamp"`
+}
+
+type GatewayAdmittedVTEPRequest struct {
+	GatewayID string `codec:"gateway_id,omitempty"`
+	VTEP      string `codec:"vtep"`
+}
+
+type GatewayAdmittedVTEPResponse struct {
+	VTEP      *GatewayAdmittedVTEPInfo `codec:"vtep"`
+	Timestamp int64                    `codec:"timestamp"`
+}
+
+type GatewayListAdmittedVTEPsRequest struct {
+	GatewayID string `codec:"gateway_id,omitempty"`
+}
+
+type GatewayListAdmittedVTEPsResponse struct {
+	VTEPs     []*GatewayAdmittedVTEPInfo `codec:"vteps"`
+	Count     int32                      `codec:"count"`
+	Timestamp int64                      `codec:"timestamp"`
 }
 
 // GatewaySetModeRequest represents a mode set request
@@ -1064,6 +1133,53 @@ func (h *GatewayHandler) handleListSnapshots(ctx context.Context, req *Request) 
 		Count:     int32(len(snapshots)),
 		Timestamp: time.Now().Unix(),
 	})
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+	return &Response{Status: StatusOK, Payload: payload}
+}
+
+func (h *GatewayHandler) handleAdmittedVTEP(ctx context.Context, req *Request) *Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var vtepReq GatewayAdmittedVTEPRequest
+	if err := DecodePayload(req.Payload, &vtepReq); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	}
+	if vtepReq.VTEP == "" {
+		return h.errorResponse(StatusInvalidRequest, ErrGatewayMissingIPAddress)
+	}
+
+	vtep, err := h.gatewayService.GetAdmittedVTEP(ctx, vtepReq.GatewayID, vtepReq.VTEP)
+	if err != nil {
+		h.logger.Error(err, "failed to get gateway admitted VTEP")
+		return h.gatewayErrorResponse(err)
+	}
+	payload, err := EncodePayload(&GatewayAdmittedVTEPResponse{VTEP: vtep, Timestamp: time.Now().Unix()})
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+	return &Response{Status: StatusOK, Payload: payload}
+}
+
+func (h *GatewayHandler) handleListAdmittedVTEPs(ctx context.Context, req *Request) *Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var listReq GatewayListAdmittedVTEPsRequest
+	if err := DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	}
+
+	vteps, err := h.gatewayService.ListAdmittedVTEPs(ctx, listReq.GatewayID)
+	if err != nil {
+		h.logger.Error(err, "failed to list gateway admitted VTEPs")
+		return h.gatewayErrorResponse(err)
+	}
+	payload, err := EncodePayload(&GatewayListAdmittedVTEPsResponse{VTEPs: vteps, Count: int32(len(vteps)), Timestamp: time.Now().Unix()})
 	if err != nil {
 		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}

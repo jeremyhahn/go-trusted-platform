@@ -18,8 +18,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/spf13/viper"
@@ -27,8 +29,10 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsbootstrap "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/deviceverdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/proxy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
@@ -37,10 +41,15 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/controlplane"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
+	sdkdevice "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/device"
+	sdkgateway "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/gateway"
 	sdkproxy "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/proxy"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	// Register the sdk/go transports gatewayd uses to reach platformd:
 	// Unix (gRPC over UDS, the default) and gRPC over TLS.
@@ -219,7 +228,8 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	// path below must release it — the deferred close runs unless
 	// assembly reaches the success return.
 	if service := datapathService(gwCfg); service != "" {
-		runtime, err := buildGatewayRuntime(ctx, cfg.SDN, zoneMatrixService(gwCfg), logger)
+		needsOverlay := gwCfg.Overlay != nil && gwCfg.Overlay.Enabled
+		runtime, err := buildGatewayRuntime(ctx, cfg.SDN, zoneMatrixService(gwCfg), needsOverlay, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -248,6 +258,9 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	}
 	anchor, err := buildPlatformAnchor(cfg)
 	if err != nil {
+		return nil, err
+	}
+	if err := wireOverlayRuntime(ctx, cfg, anchor, gwCfg.Runtime); err != nil {
 		return nil, err
 	}
 
@@ -681,6 +694,255 @@ func platformdAttestationDial(pcfg proxysvc.PlatformdConfig, anchor *trust.Ancho
 		}
 		return sdkattestation.NewClientFromGRPC(client.Attestation()), nil
 	}
+}
+
+func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anchor, runtime *gateway.GatewayRuntime) error {
+	if runtime == nil || cfg == nil || cfg.Gateway == nil || cfg.Gateway.Overlay == nil || !cfg.Gateway.Overlay.Enabled {
+		return nil
+	}
+	pcfg := overlayPlatformdConfig(cfg)
+	client, err := dialPlatformd(ctx, pcfg, anchor)
+	if err != nil {
+		return err
+	}
+	runtime.OverlayPlatform = client
+	runtime.OverlayIPAM = &overlayRuntimeIPAM{client: sdkgateway.NewClientFromGRPC(client.Gateway())}
+	runtime.OverlayDevices = &overlayRuntimeDevices{client: sdkdevice.NewClientFromGRPC(client.Device())}
+	runtime.OverlayVerdicts = &overlayRuntimeVerdicts{client: sdkattestation.NewClientFromGRPC(client.Attestation())}
+	return nil
+}
+
+func overlayPlatformdConfig(cfg *ServeConfig) proxysvc.PlatformdConfig {
+	pcfg := proxysvc.PlatformdConfig{}
+	if cfg != nil && cfg.Proxy != nil {
+		pcfg = cfg.Proxy.Platformd
+	}
+	if pcfg.Protocol == "" {
+		pcfg.Protocol = proxysvc.PlatformdProtocolUnix
+	}
+	if pcfg.Protocol == proxysvc.PlatformdProtocolUnix && pcfg.Socket == "" {
+		pcfg.Socket = proxysvc.DefaultPlatformdSocket
+	}
+	return pcfg
+}
+
+type overlayRuntimeIPAM struct {
+	client *sdkgateway.Client
+}
+
+func (r *overlayRuntimeIPAM) ListPoolsByZone(ctx context.Context, zoneName string) ([]*ipam.Pool, error) {
+	pools, err := r.client.ListIPAMPools(ctx, zoneName)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*ipam.Pool, 0, len(pools))
+	for _, pool := range pools {
+		converted, err := overlayIPAMPoolFromProto(pool)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, converted)
+	}
+	return out, nil
+}
+
+func (r *overlayRuntimeIPAM) GetAllocation(ctx context.Context, addr netip.Addr) (*ipam.Allocation, error) {
+	pools, err := r.ListPoolsByZone(ctx, "fabric")
+	if err != nil {
+		return nil, err
+	}
+	for _, pool := range pools {
+		allocations, err := r.GetAllocationsByPool(ctx, pool.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, allocation := range allocations {
+			if allocation != nil && allocation.IP == addr {
+				return allocation, nil
+			}
+		}
+	}
+	return nil, ipam.ErrAllocationNotFound
+}
+
+func (r *overlayRuntimeIPAM) GetAllocationsByDevice(ctx context.Context, deviceID string) ([]*ipam.Allocation, error) {
+	pools, err := r.ListPoolsByZone(ctx, "fabric")
+	if err != nil {
+		return nil, err
+	}
+	var out []*ipam.Allocation
+	for _, pool := range pools {
+		allocations, err := r.GetAllocationsByPool(ctx, pool.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, allocation := range allocations {
+			if allocation != nil && allocation.DeviceID == deviceID {
+				out = append(out, allocation)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (r *overlayRuntimeIPAM) GetAllocationsByPool(ctx context.Context, poolID string) ([]*ipam.Allocation, error) {
+	pool, err := r.client.GetIPAMPool(ctx, poolID)
+	if err != nil {
+		return nil, err
+	}
+	allocations, err := r.client.ListAllocations(ctx, poolID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*ipam.Allocation, 0, len(allocations))
+	for _, allocation := range allocations {
+		converted, err := overlayIPAMAllocationFromProto(allocation, pool.GetZone())
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, converted)
+	}
+	return out, nil
+}
+
+type overlayRuntimeDevices struct {
+	client *sdkdevice.Client
+}
+
+func (r *overlayRuntimeDevices) Get(ctx context.Context, id uint64) (*deviceentities.Device, error) {
+	device, err := r.client.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &deviceentities.Device{
+		ID:            device.GetId(),
+		AttestPub:     device.GetAttestPub(),
+		AttestCert:    device.GetAttestCert(),
+		EKCert:        device.GetEkCert(),
+		EventLog:      device.GetEventLog(),
+		HashAlgoId:    device.GetHashAlgoId(),
+		Model:         device.GetModel(),
+		Serial:        device.GetSerial(),
+		SigningPub:    device.GetSigningPub(),
+		SwitchName:    device.GetSwitchName(),
+		SwitchPort:    device.GetSwitchPort(),
+		NetworkPortID: device.GetNetworkPortId(),
+		CreatedAt:     protoTime(device.GetCreatedAt()),
+		UpdatedAt:     protoTime(device.GetUpdatedAt()),
+	}, nil
+}
+
+type overlayRuntimeVerdicts struct {
+	client *sdkattestation.Client
+}
+
+func (r *overlayRuntimeVerdicts) LatestDeviceVerdict(ctx context.Context, deviceID uint64) (*deviceverdict.RecordedDeviceVerdict, error) {
+	report, err := r.client.GetDeviceReport(ctx, strconv.FormatUint(deviceID, 10))
+	if err != nil {
+		return nil, err
+	}
+	recordedAt := protoTime(report.GetAttestedAt())
+	if recordedAt.IsZero() {
+		recordedAt = protoTime(report.GetCollectedAt())
+	}
+	if recordedAt.IsZero() {
+		recordedAt = protoTime(report.GetAsOf())
+	}
+	return &deviceverdict.RecordedDeviceVerdict{
+		Verdict: deviceverdict.DeviceVerdict{
+			DeviceID:         deviceID,
+			Serial:           report.GetSerial(),
+			Passed:           report.GetVerified() && report.GetFresh(),
+			Cryptographic:    report.GetCryptographicFailure(),
+			Reason:           report.GetMessage(),
+			BaselineCaptured: report.GetPcrBaselineCaptured(),
+			BaselineSource:   report.GetPcrBaselineSource(),
+		},
+		EventID:    "device-report-" + strconv.FormatUint(deviceID, 10),
+		RecordedAt: recordedAt,
+	}, nil
+}
+
+func overlayIPAMPoolFromProto(pool *platformv1.IPAMPool) (*ipam.Pool, error) {
+	if pool == nil {
+		return nil, nil
+	}
+	prefix, err := netip.ParsePrefix(pool.GetCidr())
+	if err != nil {
+		return nil, err
+	}
+	converted := &ipam.Pool{
+		ID:                   pool.GetId(),
+		Name:                 pool.GetName(),
+		CIDR:                 prefix,
+		Zone:                 pool.GetZone(),
+		Description:          pool.GetDescription(),
+		TotalIPs:             pool.GetTotal(),
+		AllocatedIPs:         pool.GetAllocated(),
+		AvailableIPs:         pool.GetAvailable(),
+		DefaultLeaseDuration: time.Duration(pool.GetDefaultLeaseDurationNanos()),
+		InactivityTimeout:    time.Duration(pool.GetInactivityTimeoutNanos()),
+		CreatedAt:            protoTime(pool.GetCreatedAt()),
+		UpdatedAt:            protoTime(pool.GetUpdatedAt()),
+	}
+	if pool.GetGateway() != "" {
+		gatewayAddr, err := netip.ParseAddr(pool.GetGateway())
+		if err != nil {
+			return nil, err
+		}
+		converted.Gateway = gatewayAddr
+	}
+	for _, raw := range pool.GetReserved() {
+		reserved, err := netip.ParsePrefix(raw)
+		if err != nil {
+			return nil, err
+		}
+		converted.Reserved = append(converted.Reserved, reserved)
+	}
+	if pool.GetRangeStart() != "" {
+		start, err := netip.ParseAddr(pool.GetRangeStart())
+		if err != nil {
+			return nil, err
+		}
+		converted.RangeStart = start
+	}
+	if pool.GetRangeEnd() != "" {
+		end, err := netip.ParseAddr(pool.GetRangeEnd())
+		if err != nil {
+			return nil, err
+		}
+		converted.RangeEnd = end
+	}
+	return converted, nil
+}
+
+func overlayIPAMAllocationFromProto(allocation *platformv1.IPAllocation, zoneName string) (*ipam.Allocation, error) {
+	if allocation == nil {
+		return nil, nil
+	}
+	addr, err := netip.ParseAddr(allocation.GetIp())
+	if err != nil {
+		return nil, err
+	}
+	converted := &ipam.Allocation{
+		ID:          allocation.GetIp(),
+		PoolID:      allocation.GetPoolId(),
+		Zone:        zoneName,
+		IP:          addr,
+		DeviceID:    allocation.GetDeviceId(),
+		Hostname:    allocation.GetHostname(),
+		AllocatedAt: protoTime(allocation.GetAllocatedAt()),
+		ExpiresAt:   protoTime(allocation.GetExpiresAt()),
+		Status:      ipam.AllocationStatusActive,
+	}
+	return converted, nil
+}
+
+func protoTime(ts *timestamppb.Timestamp) time.Time {
+	if ts == nil {
+		return time.Time{}
+	}
+	return ts.AsTime()
 }
 
 // buildHostRuntime assembles the dependencies of the host-programming

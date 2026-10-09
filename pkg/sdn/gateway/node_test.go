@@ -635,7 +635,6 @@ func TestGateway_MeetsRequirementsWithCustomThresholds(t *testing.T) {
 // flipping a bool.
 func TestServiceHandler_RefusedSections(t *testing.T) {
 	cfg := baseGatewayConfig("refused-handlers")
-	cfg.Overlay = validOverlayServiceConfig()
 	cfg.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50}
 	cfg.DHCP = &DHCPServiceConfig{Enabled: true, Interface: "eth0"}
 	cfg.PXE = &PXEServiceConfig{Enabled: true, HTTPPort: 8069}
@@ -643,7 +642,7 @@ func TestServiceHandler_RefusedSections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create gateway: %v", err)
 	}
-	for _, name := range []string{ServiceOverlay, ServiceEdge, ServiceDHCP, ServicePXE} {
+	for _, name := range []string{ServiceEdge, ServiceDHCP, ServicePXE} {
 		handler, ok := gw.serviceHandlers[name]
 		if !ok {
 			t.Fatalf("%s handler not registered", name)

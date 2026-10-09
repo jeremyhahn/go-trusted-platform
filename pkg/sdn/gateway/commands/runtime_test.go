@@ -27,11 +27,11 @@ import (
 )
 
 func TestBuildGatewayRuntimeAbsentOrDisabled(t *testing.T) {
-	runtime, err := buildGatewayRuntime(context.Background(), nil, "", testLogger())
+	runtime, err := buildGatewayRuntime(context.Background(), nil, "", false, testLogger())
 	if err != nil || runtime != nil {
 		t.Fatalf("nil section: runtime=%v err=%v, want nil/nil", runtime, err)
 	}
-	runtime, err = buildGatewayRuntime(context.Background(), &sdn.Config{Enabled: false}, "", testLogger())
+	runtime, err = buildGatewayRuntime(context.Background(), &sdn.Config{Enabled: false}, "", false, testLogger())
 	if err != nil || runtime != nil {
 		t.Fatalf("disabled section: runtime=%v err=%v, want nil/nil", runtime, err)
 	}
@@ -39,7 +39,7 @@ func TestBuildGatewayRuntimeAbsentOrDisabled(t *testing.T) {
 
 func TestBuildGatewayRuntimeMissingOVS(t *testing.T) {
 	cfg := &sdn.Config{Enabled: true, Environment: &netplan.Environment{ID: 4}}
-	if _, err := buildGatewayRuntime(context.Background(), cfg, "", testLogger()); !errors.Is(err, ErrSDNOVSRequired) {
+	if _, err := buildGatewayRuntime(context.Background(), cfg, "", false, testLogger()); !errors.Is(err, ErrSDNOVSRequired) {
 		t.Fatalf("err = %v, want ErrSDNOVSRequired", err)
 	}
 }
@@ -52,7 +52,7 @@ func TestBuildGatewayRuntimeInvalidSection(t *testing.T) {
 		Environment: &netplan.Environment{ID: 1},
 	}
 	var sectionErr *ErrConfigSection
-	if _, err := buildGatewayRuntime(context.Background(), cfg, "", testLogger()); !errors.As(err, &sectionErr) {
+	if _, err := buildGatewayRuntime(context.Background(), cfg, "", false, testLogger()); !errors.As(err, &sectionErr) {
 		t.Fatalf("err = %v, want *ErrConfigSection", err)
 	}
 }
@@ -65,7 +65,7 @@ func TestBuildGatewayRuntimeConnectFailure(t *testing.T) {
 		Environment: &netplan.Environment{ID: 4},
 	}
 	var connectErr *ErrOVSConnectFailed
-	if _, err := buildGatewayRuntime(context.Background(), cfg, "", testLogger()); !errors.As(err, &connectErr) {
+	if _, err := buildGatewayRuntime(context.Background(), cfg, "", false, testLogger()); !errors.As(err, &connectErr) {
 		t.Fatalf("err = %v, want *ErrOVSConnectFailed", err)
 	}
 }
@@ -78,7 +78,7 @@ func TestBuildGatewayRuntimeNoEnvironment(t *testing.T) {
 		OVS:     &sdn.OVSConfig{Socket: "/nonexistent/db.sock", Bridge: "br-fabric"},
 	}
 	var sectionErr *ErrConfigSection
-	_, err := buildGatewayRuntime(context.Background(), cfg, gateway.ServiceFirewall, testLogger())
+	_, err := buildGatewayRuntime(context.Background(), cfg, gateway.ServiceFirewall, false, testLogger())
 	if !errors.As(err, &sectionErr) || !errors.As(err, new(sdn.ErrEnvironmentRequired)) {
 		t.Fatalf("err = %v, want ErrConfigSection wrapping ErrEnvironmentRequired", err)
 	}

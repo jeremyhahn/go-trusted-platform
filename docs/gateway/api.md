@@ -35,9 +35,10 @@ REST base path `/api/v1/gateway` (`pkg/webservice/v1/rest/gateway/router.go`).
 |---|---|---|---|---|---|
 | Gateway status | `GET /api/v1/gateway/status` | `GetGatewayStatus` | `OpGatewayStatus` (`0x01`) | `gateway_status` | ✅ |
 | Set gateway mode | `POST /api/v1/gateway/mode` | `SetGatewayMode` | `OpGatewaySetMode` (`0x02`) | `gateway_mode_set` | ✅ |
-
 | Gateway telemetry snapshot | `GET /api/v1/gateway/state/{id}` | `GetGatewaySnapshot` | `OpGatewaySnapshot` (`0x15`) | `gateway_snapshot` | ✅ |
 | List reported snapshots | `GET /api/v1/gateway/state` | `ListGatewaySnapshots` | `OpGatewayListSnapshots` (`0x16`) | `gateway_snapshots` | ✅ |
+| Get admitted overlay VTEP | `GET /api/v1/sdn/gateway/overlay/vteps/{vtep}?gateway_id=<id>` | `GetGatewayAdmittedVTEP` | `OpGatewayAdmittedVTEP` (`0x17`) | `gateway_admitted_vtep` | ✅ |
+| List admitted overlay VTEPs | `GET /api/v1/sdn/gateway/overlay/vteps?gateway_id=<id>` | `ListGatewayAdmittedVTEPs` | `OpGatewayListAdmittedVTEPs` (`0x18`) | `gateway_admitted_vteps` | ✅ |
 
 **The snapshot is served from the telemetry the control plane holds** (§8),
 which is why its REST form is the `state` route rather than a second path:
@@ -48,6 +49,14 @@ gateway's live state instead. A `gateway_id` that has never reported is
 nothing. The document's sections and their provenance are in
 [`engineering.md`](engineering.md) §8; the CLI form is
 `platformctl sdn gateway snapshot [--gateway-id <id> | --all]`.
+
+The overlay section of the snapshot includes the local VTEP, underlay bridge,
+OpenFlow table ids, admitted VTEPs, and the neighbor-discovery counters the
+gatewayd overlay handler maintains: punted, answered, meter-dropped,
+queue-dropped, and fell-through. The admitted-VTEP read/list verbs are backed
+by the same service layer and are exposed on REST, gRPC, QUIC, MCP, Unix and
+the SDK/CLI; they return `NotFound` for an address that is not currently
+admitted.
 
 **`SetGatewayMode` is the deprecated compatibility surface.** `GatewayMode`
 carries a deprecation notice in `pkg/sdn/gateway/compat.go` and maps only three

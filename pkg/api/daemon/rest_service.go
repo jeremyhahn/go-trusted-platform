@@ -80,6 +80,7 @@ type RESTServer struct {
 	bmcHandler            bmcwebsvc.RestHandler
 	sdnHandlers           *restapi.SDNHandlers
 	gatewayHandlers       *restapi.GatewayHandlers
+	gatewayService        *gatewayRESTService
 	idevidService         *IDevIDGRPCService
 }
 

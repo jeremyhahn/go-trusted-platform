@@ -718,3 +718,31 @@ func (g *Gateway) BGPSpeaker() (*bgp.Speaker, bool) {
 	}
 	return speaker, true
 }
+
+func (g *Gateway) GetAdmittedVTEP(ctx context.Context, vtep netip.Addr) (*AdmittedVTEP, error) {
+	b, ok := g.backend(ServiceOverlay)
+	if !ok {
+		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay service is not running"}
+	}
+	overlay, ok := b.(interface {
+		GetAdmittedVTEP(context.Context, netip.Addr) (*AdmittedVTEP, error)
+	})
+	if !ok {
+		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay admission is not available"}
+	}
+	return overlay.GetAdmittedVTEP(ctx, vtep)
+}
+
+func (g *Gateway) ListAdmittedVTEPs(ctx context.Context) ([]AdmittedVTEP, error) {
+	b, ok := g.backend(ServiceOverlay)
+	if !ok {
+		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay service is not running"}
+	}
+	overlay, ok := b.(interface {
+		ListAdmittedVTEPs(context.Context) ([]AdmittedVTEP, error)
+	})
+	if !ok {
+		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay admission is not available"}
+	}
+	return overlay.ListAdmittedVTEPs(ctx)
+}

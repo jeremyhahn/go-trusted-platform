@@ -27,6 +27,8 @@ import (
 type GatewaySnapshotReader interface {
 	GetGatewaySnapshot(ctx context.Context, req *platformv1.GetGatewaySnapshotRequest) (*platformv1.GetGatewaySnapshotResponse, error)
 	ListGatewaySnapshots(ctx context.Context, req *platformv1.ListGatewaySnapshotsRequest) (*platformv1.ListGatewaySnapshotsResponse, error)
+	GetGatewayAdmittedVTEP(ctx context.Context, req *platformv1.GetGatewayAdmittedVTEPRequest) (*platformv1.GetGatewayAdmittedVTEPResponse, error)
+	ListGatewayAdmittedVTEPs(ctx context.Context, req *platformv1.ListGatewayAdmittedVTEPsRequest) (*platformv1.ListGatewayAdmittedVTEPsResponse, error)
 }
 
 // Compile-time check: the gateway gRPC service is a snapshot reader.
@@ -64,6 +66,34 @@ func (a gatewaySnapshotQUICAdapter) ListSnapshots(ctx context.Context) ([]*quic.
 	out := make([]*quic.GatewaySnapshotInfo, 0, len(resp.GetSnapshots()))
 	for _, snap := range resp.GetSnapshots() {
 		out = append(out, protoSnapshotToQUIC(snap))
+	}
+	return out, nil
+}
+
+func (a gatewaySnapshotQUICAdapter) GetAdmittedVTEP(ctx context.Context, gatewayID, vtep string) (*quic.GatewayAdmittedVTEPInfo, error) {
+	if a.reader == nil {
+		return nil, errGatewayFeatureNotConfigured
+	}
+	resp, err := a.reader.GetGatewayAdmittedVTEP(ctx, &platformv1.GetGatewayAdmittedVTEPRequest{GatewayId: gatewayID, Vtep: vtep})
+	if err != nil {
+		return nil, err
+	}
+	entry := protoAdmittedVTEPToQUIC(resp.GetVtep())
+	return &entry, nil
+}
+
+func (a gatewaySnapshotQUICAdapter) ListAdmittedVTEPs(ctx context.Context, gatewayID string) ([]*quic.GatewayAdmittedVTEPInfo, error) {
+	if a.reader == nil {
+		return nil, errGatewayFeatureNotConfigured
+	}
+	resp, err := a.reader.ListGatewayAdmittedVTEPs(ctx, &platformv1.ListGatewayAdmittedVTEPsRequest{GatewayId: gatewayID})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*quic.GatewayAdmittedVTEPInfo, 0, len(resp.GetVteps()))
+	for _, vtep := range resp.GetVteps() {
+		entry := protoAdmittedVTEPToQUIC(vtep)
+		out = append(out, &entry)
 	}
 	return out, nil
 }
@@ -220,7 +250,51 @@ func protoSnapshotToQUIC(snap *platformv1.GatewaySnapshot) *quic.GatewaySnapshot
 			FailMode:  pipeline.GetFailMode(),
 		}
 	}
+	if overlay := snap.GetOverlay(); overlay != nil {
+		section := &quic.SnapshotOverlayInfo{
+			Running:                  overlay.GetRunning(),
+			LocalVTEP:                overlay.GetLocalVtep(),
+			VNICount:                 overlay.GetVniCount(),
+			RemoteVTEPCount:          overlay.GetRemoteVtepCount(),
+			LocalMACCount:            overlay.GetLocalMacCount(),
+			RemoteMACCount:           overlay.GetRemoteMacCount(),
+			PrefixCount:              overlay.GetPrefixCount(),
+			RefusedBindings:          overlay.GetRefusedBindings(),
+			L3VNI:                    overlay.GetL3Vni(),
+			ARPSuppressionEnabled:    overlay.GetArpSuppressionEnabled(),
+			AnycastGatewayConfigured: overlay.GetAnycastGatewayConfigured(),
+			StartedAt:                protoUnix(overlay.GetStartedAt()),
+			UptimeSeconds:            overlay.GetUptimeSeconds(),
+		}
+		if counters := overlay.GetNdCounters(); counters != nil {
+			section.NDCounters = quic.SnapshotOverlayNDCounterInfo{
+				Punted:       counters.GetPunted(),
+				Answered:     counters.GetAnswered(),
+				MeterDropped: counters.GetMeterDropped(),
+				QueueDropped: counters.GetQueueDropped(),
+				FellThrough:  counters.GetFellThrough(),
+			}
+		}
+		for _, admitted := range overlay.GetAdmittedVteps() {
+			section.AdmittedVTEPs = append(section.AdmittedVTEPs, protoAdmittedVTEPToQUIC(admitted))
+		}
+		out.Overlay = section
+	}
 	return out
+}
+
+func protoAdmittedVTEPToQUIC(vtep *platformv1.GatewayAdmittedVTEP) quic.GatewayAdmittedVTEPInfo {
+	return quic.GatewayAdmittedVTEPInfo{
+		VTEP:           vtep.GetVtep(),
+		DeviceID:       vtep.GetDeviceId(),
+		HostID:         vtep.GetHostId(),
+		Serial:         vtep.GetSerial(),
+		Hostname:       vtep.GetHostname(),
+		AllocationID:   vtep.GetAllocationId(),
+		BaselineSource: vtep.GetBaselineSource(),
+		ProfileID:      vtep.GetProfileId(),
+		VerdictAt:      protoUnix(vtep.GetVerdictAt()),
+	}
 }
 
 // protoUnix renders a wire timestamp as Unix seconds, or zero when the

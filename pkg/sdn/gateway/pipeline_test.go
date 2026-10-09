@@ -460,8 +460,9 @@ func TestGatewayStart_OverlayAloneRollsBackOverlayTerminal(t *testing.T) {
 	require.NoError(t, err)
 	gw.SetNodeMetrics(validNodeMetrics())
 	err = gw.Start(context.Background())
-	var unavailable *ErrServiceUnavailable
-	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	var missing *ErrRuntimeMissing
+	require.True(t, errors.As(err, &missing), "got %v", err)
+	assert.Equal(t, ServiceOverlay, missing.Service)
 	assert.False(t, cfg.Runtime.PipelineInstalled(), "the overlay terminal is rolled back with the failed start")
 }
 
@@ -477,9 +478,9 @@ func TestGatewayStart_OverlayBesideFirewallRollsThePipelineBack(t *testing.T) {
 	require.NoError(t, err)
 	gw.SetNodeMetrics(validNodeMetrics())
 	err = gw.Start(context.Background())
-	var unavailable *ErrServiceUnavailable
-	require.True(t, errors.As(err, &unavailable), "got %v", err)
-	assert.Equal(t, ServiceOverlay, unavailable.Service)
+	var missing *ErrRuntimeMissing
+	require.True(t, errors.As(err, &missing), "got %v", err)
+	assert.Equal(t, ServiceOverlay, missing.Service)
 	assert.False(t, cfg.Runtime.PipelineInstalled(), "the pipeline is rolled back with the failed start")
 }
 

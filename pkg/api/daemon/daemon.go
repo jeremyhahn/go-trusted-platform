@@ -1467,6 +1467,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// used by the gRPC service so REST and gRPC share the same state.
 	if daemon.concreteRestServer != nil && daemon.gatewayGRPCService != nil {
 		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator())
+		daemon.concreteRestServer.SetGatewaySnapshotService(daemon.gatewayGRPCService)
 		daemon.concreteRestServer.SetGatewayPerfService(daemon.gatewayPerfService)
 		logger.Info("Gateway IPAM REST service wired into REST server")
 	}

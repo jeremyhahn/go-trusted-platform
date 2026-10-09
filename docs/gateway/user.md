@@ -151,13 +151,16 @@ enabled: the client certificate is how the control plane knows which
 gateway is reporting.
 
 An enabled section reports **active** only while its backend is running:
-`firewall`, `nat`, `nat64`, `load-balancer`, `hostfw`, `tunnels`, `transit`
-(or a `bgp:` section) and `proxy` have backends today. Enabling `overlay`, `edge`,
-`dhcp`, `pxe` or `management-vpn` stops the daemon at startup with
+`overlay`, `firewall`, `nat`, `nat64`, `load-balancer`, `hostfw`, `tunnels`,
+`transit` (or a `bgp:` section) and `proxy` have backends today. Enabling
+`edge`, `dhcp`, `pxe` or `management-vpn` stops the daemon at startup with
 `gateway service "<name>" is enabled but cannot run: <reason>` — those sections
 have no implementation behind them yet and the gateway refuses to claim
-otherwise. (`overlay` is required by owner design decision 2026-09-26, #709.) When `proxy` is enabled, the host packet filter (`hostfw`) admits
-exactly the proxy's fixed listener ports and nothing else the daemon opens.
+otherwise. When `overlay` is enabled, gatewayd admits only VTEPs backed by IPAM
+fabric reservations and fresh platform attestation verdicts; revoked or failed
+verdicts withdraw decap. When `proxy` is enabled, the host packet filter
+(`hostfw`) admits exactly the proxy's fixed listener ports and nothing else the
+daemon opens.
 
 ### IPv6-only clients (`nat64:`)
 
@@ -328,13 +331,19 @@ platformctl sdn gateway snapshot
 
 # A gateway that reports to this control plane
 platformctl sdn gateway snapshot --gateway-id gw-01-gateway
+
+# Overlay VTEPs admitted for decapsulation
+platformctl sdn gateway overlay vteps --gateway-id gw-01-gateway
+platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id gw-01-gateway
 ```
 
 Sections are printed only for services the gateway runs. If the Tunnels
 section is missing, the tunnels service is not running; a tunnels section with
-no rows would mean it runs with nothing configured. The same document backs
-the console's Networking → Gateway page and, when the `metrics:` section is
-enabled, the gateway's Prometheus endpoint:
+no rows would mean it runs with nothing configured. When the Overlay section is
+present, it shows the local VTEP, admitted VTEPs and the ND counters for punted,
+answered, meter-dropped, queue-dropped and fell-through packets. The same
+document backs the console's Networking → Gateway page and, when the `metrics:`
+section is enabled, the gateway's Prometheus endpoint:
 
 ```yaml
 metrics:
@@ -679,11 +688,11 @@ Check the spelling in configuration. `load-balancer` and `management-vpn` are
 hyphenated; the other section names are single words.
 
 **Startup fails with `is enabled but cannot run`.**
-The section names a service with no implementation (`overlay`, `edge`, `dhcp`,
-`pxe`, `management-vpn`); the message carries the blocker and the tracking
-issue. Disable the section. `overlay` is required by owner design decision
-(2026-09-26) and lands with #709. The gateway will not start a service it cannot
-back.
+The section names a service with no implementation (`edge`, `dhcp`, `pxe`,
+`management-vpn`) or an enabled service is missing its runtime dependencies. The
+message carries the blocker and the tracking issue when one exists. Disable the
+section or supply the missing runtime wiring. The gateway will not start a
+service it cannot back.
 
 **Startup fails with `parsing configuration section proxy.listeners`.**
 A proxy listener `address` is not `host:port`. The host packet filter derives
