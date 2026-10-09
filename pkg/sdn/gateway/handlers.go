@@ -716,9 +716,11 @@ func runAdmissionSweep(ctx context.Context, ticks <-chan time.Time, datapath ove
 const overlayVerdictFollowRetry = 5 * time.Second
 
 // runVerdictFollower follows the platform's device verdicts until ctx ends,
-// withdrawing every device whose verdict failed. A broken stream is followed
+// withdrawing every device whose verdict failed and replaying the refused
+// VTEPs of every device whose verdict passed. A broken stream is followed
 // again after retry; a verdict recorded while it was down is caught by the
-// admission sweep, which re-reads every installed VTEP's latest verdict.
+// admission sweep, which re-reads the latest verdict of every installed and
+// every refused VTEP.
 func runVerdictFollower(ctx context.Context, stream OverlayVerdictStream, admitter *VTEPAdmitter, retry time.Duration, logger *slog.Logger) {
 	for {
 		err := stream.Follow(ctx, admitter.OnDeviceVerdict)
@@ -737,27 +739,60 @@ func runVerdictFollower(ctx context.Context, stream OverlayVerdictStream, admitt
 	}
 }
 
-// overlayRevokerProxy hands VTEP revocations to the overlay handler once it is
-// running, and refuses them before then.
-type overlayRevokerProxy struct {
-	mu      sync.RWMutex
-	revoker OverlayVTEPRevoker
+// overlayVTEPControl is the overlay handler's control of remote VTEPs the
+// admitter drives.
+type overlayVTEPControl interface {
+	OverlayVTEPRevoker
+	OverlayVTEPReplayer
 }
 
-func (p *overlayRevokerProxy) set(revoker OverlayVTEPRevoker) {
+// overlayHandlerProxy hands the admitter's revocations and replays to the
+// overlay handler once it is built, and refuses them before then: the admitter
+// is built first, because the handler is configured with it.
+type overlayHandlerProxy struct {
+	mu      sync.RWMutex
+	handler overlayVTEPControl
+}
+
+func (p *overlayHandlerProxy) set(handler overlayVTEPControl) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.revoker = revoker
+	p.handler = handler
 }
 
-func (p *overlayRevokerProxy) RevokeVTEP(ctx context.Context, vtep netip.Addr) error {
+func (p *overlayHandlerProxy) get() (overlayVTEPControl, error) {
 	p.mu.RLock()
-	revoker := p.revoker
-	p.mu.RUnlock()
-	if revoker == nil {
-		return &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay handler is not ready"}
+	defer p.mu.RUnlock()
+	if p.handler == nil {
+		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay handler is not ready"}
 	}
-	return revoker.RevokeVTEP(ctx, vtep)
+	return p.handler, nil
+}
+
+func (p *overlayHandlerProxy) RevokeVTEP(ctx context.Context, vtep netip.Addr) error {
+	handler, err := p.get()
+	if err != nil {
+		return err
+	}
+	return handler.RevokeVTEP(ctx, vtep)
+}
+
+func (p *overlayHandlerProxy) ReplayVTEP(ctx context.Context, vtep netip.Addr) error {
+	handler, err := p.get()
+	if err != nil {
+		return err
+	}
+	return handler.ReplayVTEP(ctx, vtep)
+}
+
+// RefusedVTEPs reports nothing before the handler is built: it has refused
+// nothing yet.
+func (p *overlayHandlerProxy) RefusedVTEPs() []netip.Addr {
+	handler, err := p.get()
+	if err != nil {
+		return nil
+	}
+	return handler.RefusedVTEPs()
 }
 
 func (b *overlayBackend) Start(ctx context.Context) error {
@@ -770,12 +805,13 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	revoker := &overlayRevokerProxy{}
+	proxy := &overlayHandlerProxy{}
 	admitter, err := NewVTEPAdmitter(VTEPAdmissionConfig{
 		IPAM:             b.ipam,
 		Devices:          b.devices,
 		Verdicts:         b.verdicts,
-		Revoker:          revoker,
+		Revoker:          proxy,
+		Replayer:         proxy,
 		MaxVerdictAge:    b.config.VerdictMaxAge,
 		VerdictClockSkew: b.config.VerdictClockSkew,
 		Logger:           logger,
@@ -805,7 +841,7 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
 	}
-	revoker.set(handler)
+	proxy.set(handler)
 	if err := handler.Start(ctx); err != nil {
 		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
 	}

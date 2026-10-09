@@ -1179,3 +1179,113 @@ func TestEVPNManager_HandlerOrder(t *testing.T) {
 		assert.False(t, seen, "the handlers were told the MAC moved to B after B withdrew it")
 	})
 }
+
+func TestEVPNManager_ReplayVTEP(t *testing.T) {
+	ctx := context.Background()
+	prefixOf := func(t *testing.T, vtep netip.Addr) *EVPNRouteData {
+		return &EVPNRouteData{
+			Type:         EVPNTypeIPPrefix,
+			RD:           RouteDistinguisher{Admin: vtep, Index: 2},
+			RouteTargets: []RouteTarget{mustRT(t, codecL3VNI)},
+			PrefixData:   &PrefixRoute{Prefix: netip.MustParsePrefix("10.9.0.0/16"), VNI: codecL3VNI, VTEPIP: vtep},
+			NextHop:      vtep,
+			RouterMAC:    codecRouterMAC,
+		}
+	}
+	replayed := func(t *testing.T, f *evpnFixture, vtep netip.Addr) []*EVPNRouteData {
+		t.Helper()
+		replay := &notifications{}
+		require.NoError(t, f.manager.ReplayVTEP(ctx, vtep, replay.handle))
+		return replay.take()
+	}
+
+	t.Run("hands the handler every route the handlers hold from the VTEP, without BGP", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		f.receive(remoteIMET(vtepB, 1))
+		f.receive(remoteMACRoute(vtepB, "10.1.0.10", 0))
+		f.receive(prefixOf(t, vtepB))
+		f.receive(remoteIMET(vtepC, 1))
+		f.notified.take()
+
+		routes := replayed(t, f, vtepB)
+
+		assert.ElementsMatch(t, []EVPNRouteType{EVPNTypeInclusiveMulticast, EVPNTypeMACIPAdvertisement, EVPNTypeIPPrefix},
+			routeTypesOf(routes))
+		for _, route := range routes {
+			assert.Equal(t, vtepB, route.NextHop, "only B's routes are replayed")
+			assert.False(t, route.IsWithdraw)
+		}
+		assert.Empty(t, f.notified.take(), "the registered handlers are not told again")
+		assert.Equal(t, []netip.Addr{vtepB, vtepC}, f.manager.ActiveVTEPs())
+	})
+
+	t.Run("a MAC is replayed only from the VTEP it is active at", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		f.receive(remoteMACRoute(vtepB, "", 0))
+		f.receive(remoteMACRoute(vtepC, "", 1))
+
+		assert.Empty(t, replayed(t, f, vtepB), "the MAC moved to C")
+		moved := replayed(t, f, vtepC)
+		require.Len(t, moved, 1)
+		assert.Equal(t, vtepC, moved[0].MACIP.VTEPIP)
+		assert.Equal(t, []netip.Addr{vtepC}, f.manager.ActiveVTEPs())
+	})
+
+	t.Run("routes withdrawn or not imported are not replayed", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		f.receive(remoteIMET(vtepB, 1))
+		assert.Empty(t, replayed(t, f, vtepB), "the VNI is not joined")
+		assert.Empty(t, f.manager.ActiveVTEPs())
+
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		f.receive(withdrawn(remoteIMET(vtepB, 1)))
+		assert.Empty(t, replayed(t, f, vtepB))
+		assert.Empty(t, f.manager.ActiveVTEPs())
+	})
+
+	t.Run("runs the handler under the notification order lock", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, 0))
+		f.receive(remoteIMET(vtepB, 1))
+
+		var unordered bool
+		require.NoError(t, f.manager.ReplayVTEP(ctx, vtepB, func(context.Context, *EVPNRouteData) error {
+			if f.manager.notifyMu.TryLock() {
+				f.manager.notifyMu.Unlock()
+				unordered = true
+			}
+			return nil
+		}))
+		assert.False(t, unordered, "a change could interleave with the replay")
+	})
+
+	t.Run("tries every route and joins the handler's failures", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		require.NoError(t, f.manager.JoinVNI(ctx, codecL2VNI, codecL3VNI))
+		f.receive(remoteIMET(vtepB, 1))
+		f.receive(prefixOf(t, vtepB))
+
+		calls := 0
+		err := f.manager.ReplayVTEP(ctx, vtepB, func(context.Context, *EVPNRouteData) error {
+			calls++
+			return errSpeakerFailed
+		})
+		assert.ErrorIs(t, err, errSpeakerFailed)
+		assert.Equal(t, 2, calls)
+	})
+
+	t.Run("a nil handler replays nothing", func(t *testing.T) {
+		f := newEVPNFixture(t)
+		assert.NoError(t, f.manager.ReplayVTEP(ctx, vtepB, nil))
+	})
+}
+
+func routeTypesOf(routes []*EVPNRouteData) []EVPNRouteType {
+	types := make([]EVPNRouteType, 0, len(routes))
+	for _, route := range routes {
+		types = append(types, route.Type)
+	}
+	return types
+}

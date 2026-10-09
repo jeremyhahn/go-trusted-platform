@@ -98,6 +98,7 @@ func testOverlayAdmissionFollowsVerdicts(t *testing.T, ctx context.Context, clie
 		Devices:  runtime.OverlayDevices,
 		Verdicts: runtime.OverlayVerdicts,
 		Revoker:  withdrawals,
+		Replayer: withdrawals,
 	})
 	if err != nil {
 		t.Fatalf("NewVTEPAdmitter: %v", err)
@@ -164,6 +165,12 @@ func (w *vtepWithdrawals) RevokeVTEP(_ context.Context, vtep netip.Addr) error {
 	}
 	return nil
 }
+
+// RefusedVTEPs reports nothing: the stand-in holds no routes to refuse.
+func (w *vtepWithdrawals) RefusedVTEPs() []netip.Addr { return nil }
+
+// ReplayVTEP replays nothing: the stand-in holds no routes to replay.
+func (w *vtepWithdrawals) ReplayVTEP(context.Context, netip.Addr) error { return nil }
 
 // enrollFabricDevice registers a device with no attestation certificate and
 // allocates it an address in a new fabric-zone pool, returning the device ID

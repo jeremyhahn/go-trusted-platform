@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -75,17 +76,41 @@ func (s *admissionVerdicts) LatestDeviceVerdict(_ context.Context, deviceID uint
 	return s.records[deviceID], nil
 }
 
-type admissionRevoker struct {
-	vteps []netip.Addr
-	fail  map[netip.Addr]error
+// admissionOverlay stands in for the overlay handler. It records the VTEPs
+// revoked and replayed and, as the handler does, leaves a revoked VTEP
+// refused until it is replayed.
+type admissionOverlay struct {
+	revoked    []netip.Addr
+	replayed   []netip.Addr
+	refused    []netip.Addr
+	fail       map[netip.Addr]error
+	failReplay error
 }
 
-func (r *admissionRevoker) RevokeVTEP(_ context.Context, vtep netip.Addr) error {
+func (r *admissionOverlay) RevokeVTEP(_ context.Context, vtep netip.Addr) error {
 	if err := r.fail[vtep]; err != nil {
 		return err
 	}
-	r.vteps = append(r.vteps, vtep)
+	r.revoked = append(r.revoked, vtep)
+	r.refuse(vtep)
 	return nil
+}
+
+func (r *admissionOverlay) ReplayVTEP(_ context.Context, vtep netip.Addr) error {
+	if r.failReplay != nil {
+		return r.failReplay
+	}
+	r.replayed = append(r.replayed, vtep)
+	r.refused = slices.DeleteFunc(r.refused, func(refused netip.Addr) bool { return refused == vtep })
+	return nil
+}
+
+func (r *admissionOverlay) RefusedVTEPs() []netip.Addr { return slices.Clone(r.refused) }
+
+func (r *admissionOverlay) refuse(vtep netip.Addr) {
+	if !slices.Contains(r.refused, vtep) {
+		r.refused = append(r.refused, vtep)
+	}
 }
 
 // admissionFixture is device 7, holding the fabric VTEPs it is given, with a
@@ -95,7 +120,7 @@ type admissionFixture struct {
 	ipam     *admissionIPAM
 	devices  *admissionDeviceStore
 	verdicts *admissionVerdicts
-	revoker  *admissionRevoker
+	overlay  *admissionOverlay
 	now      time.Time
 }
 
@@ -110,14 +135,15 @@ func newAdmissionFixture(t *testing.T, vteps ...netip.Addr) *admissionFixture {
 		verdicts: &admissionVerdicts{records: map[uint64]*deviceverdict.RecordedDeviceVerdict{
 			7: signedVerdict(admissionNow.Add(-time.Minute)),
 		}},
-		revoker: &admissionRevoker{},
+		overlay: &admissionOverlay{},
 		now:     admissionNow,
 	}
 	admitter, err := NewVTEPAdmitter(VTEPAdmissionConfig{
 		IPAM:             f.ipam,
 		Devices:          f.devices,
 		Verdicts:         f.verdicts,
-		Revoker:          f.revoker,
+		Revoker:          f.overlay,
+		Replayer:         f.overlay,
 		MaxVerdictAge:    5 * time.Minute,
 		VerdictClockSkew: 30 * time.Second,
 		Now:              func() time.Time { return f.now },
@@ -191,7 +217,8 @@ func TestNewVTEPAdmitter_RejectsBadConfig(t *testing.T) {
 			IPAM:     &admissionIPAM{},
 			Devices:  &admissionDeviceStore{},
 			Verdicts: &admissionVerdicts{},
-			Revoker:  &admissionRevoker{},
+			Revoker:  &admissionOverlay{},
+			Replayer: &admissionOverlay{},
 		}
 	}
 	cases := map[string]func(*VTEPAdmissionConfig){
@@ -199,6 +226,7 @@ func TestNewVTEPAdmitter_RejectsBadConfig(t *testing.T) {
 		"devices":            func(c *VTEPAdmissionConfig) { c.Devices = nil },
 		"verdicts":           func(c *VTEPAdmissionConfig) { c.Verdicts = nil },
 		"revoker":            func(c *VTEPAdmissionConfig) { c.Revoker = nil },
+		"replayer":           func(c *VTEPAdmissionConfig) { c.Replayer = nil },
 		"max_verdict_age":    func(c *VTEPAdmissionConfig) { c.MaxVerdictAge = -time.Second },
 		"verdict_clock_skew": func(c *VTEPAdmissionConfig) { c.VerdictClockSkew = -time.Second },
 	}
@@ -378,7 +406,7 @@ func TestVTEPAdmitter_Sweep(t *testing.T) {
 
 		require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
 
-		assert.Empty(t, f.revoker.vteps)
+		assert.Empty(t, f.overlay.revoked)
 		assert.Equal(t, 1, f.ipam.refreshes, "the sweep refreshes a caching IPAM reader")
 	})
 
@@ -397,7 +425,7 @@ func TestVTEPAdmitter_Sweep(t *testing.T) {
 
 			require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
 
-			assert.Equal(t, []netip.Addr{admissionVTEP}, f.revoker.vteps)
+			assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked)
 			assert.Equal(t, []AdmittedVTEP{{VTEP: admissionVTEP}}, f.admitter.Admitted(installed(admissionVTEP)))
 		})
 	}
@@ -411,12 +439,12 @@ func TestVTEPAdmitter_Sweep(t *testing.T) {
 
 		var unavailable ErrOverlayAdmissionUnavailable
 		require.True(t, errors.As(err, &unavailable), "got %v", err)
-		assert.Empty(t, f.revoker.vteps)
+		assert.Empty(t, f.overlay.revoked)
 
 		f.now = f.now.Add(4 * time.Minute)
 		require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
 
-		assert.Equal(t, []netip.Addr{admissionVTEP}, f.revoker.vteps, "trust never outlives the verdict's maximum age")
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked, "trust never outlives the verdict's maximum age")
 	})
 
 	t.Run("an outage revokes a VTEP installed without an admission", func(t *testing.T) {
@@ -425,20 +453,20 @@ func TestVTEPAdmitter_Sweep(t *testing.T) {
 
 		require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
 
-		assert.Equal(t, []netip.Addr{admissionVTEP}, f.revoker.vteps)
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked)
 	})
 
 	t.Run("continues past a failed revocation", func(t *testing.T) {
 		f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
 		f.verdict().Verdict.Passed = false
-		f.revoker.fail = map[netip.Addr]error{admissionVTEP: errPlatformDown}
+		f.overlay.fail = map[netip.Addr]error{admissionVTEP: errPlatformDown}
 
 		err := f.admitter.Sweep(ctx, installed(admissionVTEP, admissionVTEP2))
 
 		var revokeErr ErrOverlayVTEPRevoke
 		require.True(t, errors.As(err, &revokeErr), "got %v", err)
 		assert.Equal(t, admissionVTEP, revokeErr.VTEP)
-		assert.Equal(t, []netip.Addr{admissionVTEP2}, f.revoker.vteps)
+		assert.Equal(t, []netip.Addr{admissionVTEP2}, f.overlay.revoked)
 	})
 
 	t.Run("forgets admissions for VTEPs no longer installed", func(t *testing.T) {
@@ -450,6 +478,71 @@ func TestVTEPAdmitter_Sweep(t *testing.T) {
 
 		assert.Equal(t, []AdmittedVTEP{{VTEP: admissionVTEP}}, f.admitter.Admitted(installed(admissionVTEP)))
 	})
+
+	t.Run("replays a revoked VTEP once its device passes again", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.verdict().Verdict.Passed = false
+		require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
+		require.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.refused)
+
+		require.NoError(t, f.admitter.Sweep(ctx, nil))
+		require.Empty(t, f.overlay.replayed, "the device still fails")
+
+		f.verdicts.records[7] = signedVerdict(f.now)
+		require.NoError(t, f.admitter.Sweep(ctx, nil))
+
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.replayed)
+		assert.Empty(t, f.overlay.refused)
+	})
+
+	t.Run("replays the refused routes of an installed VTEP it admits", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.overlay.refused = []netip.Addr{admissionVTEP}
+
+		require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
+
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.replayed)
+	})
+
+	t.Run("does not judge again a VTEP it revoked", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.verdicts.err = errPlatformDown
+
+		require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
+
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked)
+		assert.Empty(t, f.overlay.replayed)
+	})
+
+	t.Run("reports a refused VTEP it cannot judge", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.overlay.refused = []netip.Addr{admissionVTEP}
+		f.verdicts.err = errPlatformDown
+
+		err := f.admitter.Sweep(ctx, nil)
+
+		var unavailable ErrOverlayAdmissionUnavailable
+		require.True(t, errors.As(err, &unavailable), "got %v", err)
+		assert.Empty(t, f.overlay.replayed)
+	})
+
+	t.Run("reports a replay that fails and continues", func(t *testing.T) {
+		f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
+		f.overlay.refused = []netip.Addr{admissionVTEP, admissionVTEP2}
+		f.overlay.failReplay = errPlatformDown
+
+		err := f.admitter.Sweep(ctx, nil)
+
+		require.Error(t, err)
+		var replayErrs []ErrOverlayVTEPReplay
+		for _, joined := range err.(interface{ Unwrap() []error }).Unwrap() {
+			var replayErr ErrOverlayVTEPReplay
+			require.True(t, errors.As(joined, &replayErr), "got %v", joined)
+			replayErrs = append(replayErrs, replayErr)
+		}
+		require.Len(t, replayErrs, 2, "the second VTEP is tried after the first fails")
+		assert.ErrorIs(t, err, errPlatformDown)
+	})
 }
 
 func TestVTEPAdmitter_RevokeDevice(t *testing.T) {
@@ -460,12 +553,12 @@ func TestVTEPAdmitter_RevokeDevice(t *testing.T) {
 
 		require.NoError(t, f.admitter.RevokeDevice(ctx, 7))
 
-		assert.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.revoker.vteps)
+		assert.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.overlay.revoked)
 	})
 
 	t.Run("continues past a failed withdrawal", func(t *testing.T) {
 		f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
-		f.revoker.fail = map[netip.Addr]error{admissionVTEP: errPlatformDown}
+		f.overlay.fail = map[netip.Addr]error{admissionVTEP: errPlatformDown}
 
 		err := f.admitter.RevokeDevice(ctx, 7)
 
@@ -473,7 +566,7 @@ func TestVTEPAdmitter_RevokeDevice(t *testing.T) {
 		require.True(t, errors.As(err, &revokeErr), "got %v", err)
 		assert.Equal(t, admissionVTEP, revokeErr.VTEP)
 		assert.ErrorIs(t, err, errPlatformDown)
-		assert.Equal(t, []netip.Addr{admissionVTEP2}, f.revoker.vteps)
+		assert.Equal(t, []netip.Addr{admissionVTEP2}, f.overlay.revoked)
 	})
 
 	t.Run("withdraws admitted VTEPs while IPAM is down", func(t *testing.T) {
@@ -485,7 +578,7 @@ func TestVTEPAdmitter_RevokeDevice(t *testing.T) {
 
 		var unavailable ErrOverlayAdmissionUnavailable
 		require.True(t, errors.As(err, &unavailable), "got %v", err)
-		assert.Equal(t, []netip.Addr{admissionVTEP}, f.revoker.vteps)
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked)
 	})
 }
 
@@ -513,7 +606,7 @@ func TestRunAdmissionSweep(t *testing.T) {
 		ticks <- f.now
 		cancel()
 		<-done
-		assert.Equal(t, []netip.Addr{admissionVTEP, admissionVTEP}, f.revoker.vteps,
+		assert.Equal(t, []netip.Addr{admissionVTEP, admissionVTEP}, f.overlay.revoked,
 			"each tick re-evaluates the installed VTEP and revokes it again")
 	})
 
@@ -523,7 +616,34 @@ func TestRunAdmissionSweep(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		runAdmissionSweep(ctx, make(chan time.Time), staticDatapath(installed(admissionVTEP)), f.admitter, logger)
-		assert.Empty(t, f.revoker.vteps)
+		assert.Empty(t, f.overlay.revoked)
+	})
+}
+
+func TestOverlayHandlerProxy(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("refuses revocations and replays before the handler is built", func(t *testing.T) {
+		proxy := &overlayHandlerProxy{}
+		var unavailable *ErrServiceUnavailable
+
+		assert.ErrorAs(t, proxy.RevokeVTEP(ctx, admissionVTEP), &unavailable)
+		assert.ErrorAs(t, proxy.ReplayVTEP(ctx, admissionVTEP), &unavailable)
+		assert.Empty(t, proxy.RefusedVTEPs())
+	})
+
+	t.Run("hands everything to the handler once built", func(t *testing.T) {
+		overlay := &admissionOverlay{}
+		proxy := &overlayHandlerProxy{}
+		proxy.set(overlay)
+
+		require.NoError(t, proxy.RevokeVTEP(ctx, admissionVTEP))
+		assert.Equal(t, []netip.Addr{admissionVTEP}, proxy.RefusedVTEPs())
+		require.NoError(t, proxy.ReplayVTEP(ctx, admissionVTEP))
+
+		assert.Equal(t, []netip.Addr{admissionVTEP}, overlay.revoked)
+		assert.Equal(t, []netip.Addr{admissionVTEP}, overlay.replayed)
+		assert.Empty(t, proxy.RefusedVTEPs())
 	})
 }
 
@@ -540,27 +660,75 @@ func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 
 			f.admitter.OnDeviceVerdict(ctx, failed)
 
-			assert.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.revoker.vteps)
+			assert.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.overlay.revoked)
 			assert.Equal(t, []AdmittedVTEP{{VTEP: admissionVTEP}}, f.admitter.Admitted(installed(admissionVTEP)))
 		})
 	}
+
+	passed := deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true}
 
 	t.Run("a passed verdict withdraws nothing", func(t *testing.T) {
 		f := newAdmissionFixture(t)
 		require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
 
-		f.admitter.OnDeviceVerdict(ctx, deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true})
+		f.admitter.OnDeviceVerdict(ctx, passed)
 
-		assert.Empty(t, f.revoker.vteps)
+		assert.Empty(t, f.overlay.revoked)
+		assert.Empty(t, f.overlay.replayed, "nothing was refused")
+	})
+
+	t.Run("a device withdrawn and then passing again is replayed", func(t *testing.T) {
+		f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
+		f.verdict().Verdict.Passed = false
+		f.admitter.OnDeviceVerdict(ctx, failures["cryptographic failure"])
+		require.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.overlay.refused)
+
+		f.verdicts.records[7] = signedVerdict(f.now)
+		f.admitter.OnDeviceVerdict(ctx, passed)
+
+		assert.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.overlay.replayed)
+		assert.Empty(t, f.overlay.refused)
+	})
+
+	t.Run("a passed verdict replays only the device's refused VTEPs", func(t *testing.T) {
+		f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
+		other := netip.MustParseAddr("10.4.100.30")
+		f.overlay.refused = []netip.Addr{admissionVTEP, other}
+
+		f.admitter.OnDeviceVerdict(ctx, passed)
+
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.replayed)
+		assert.Equal(t, []netip.Addr{other}, f.overlay.refused)
+	})
+
+	t.Run("a passed verdict the platform does not yet hold replays nothing", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.verdict().Verdict.Passed = false
+		f.overlay.refused = []netip.Addr{admissionVTEP}
+
+		f.admitter.OnDeviceVerdict(ctx, passed)
+
+		assert.Empty(t, f.overlay.replayed)
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.refused, "the sweep tries it again")
+	})
+
+	t.Run("a passed verdict replays nothing while IPAM is down", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.overlay.refused = []netip.Addr{admissionVTEP}
+		f.ipam.err = errPlatformDown
+
+		f.admitter.OnDeviceVerdict(ctx, passed)
+
+		assert.Empty(t, f.overlay.replayed)
 	})
 
 	t.Run("a failed withdrawal leaves the other VTEPs withdrawn", func(t *testing.T) {
 		f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
-		f.revoker.fail = map[netip.Addr]error{admissionVTEP: errPlatformDown}
+		f.overlay.fail = map[netip.Addr]error{admissionVTEP: errPlatformDown}
 
 		f.admitter.OnDeviceVerdict(ctx, failures["cryptographic failure"])
 
-		assert.Equal(t, []netip.Addr{admissionVTEP2}, f.revoker.vteps)
+		assert.Equal(t, []netip.Addr{admissionVTEP2}, f.overlay.revoked)
 	})
 }
 
@@ -623,7 +791,7 @@ func TestRunVerdictFollower(t *testing.T) {
 
 		follow(t, f, stream)
 
-		assert.Equal(t, []netip.Addr{admissionVTEP}, f.revoker.vteps)
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked)
 	})
 
 	t.Run("follows again after the stream breaks", func(t *testing.T) {
@@ -640,7 +808,7 @@ func TestRunVerdictFollower(t *testing.T) {
 		follow(t, f, stream)
 
 		assert.Equal(t, 4, stream.calls)
-		assert.Equal(t, []netip.Addr{admissionVTEP}, f.revoker.vteps)
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked)
 	})
 
 	t.Run("returns on cancel without following again", func(t *testing.T) {
@@ -652,6 +820,6 @@ func TestRunVerdictFollower(t *testing.T) {
 		runVerdictFollower(ctx, stream, f.admitter, time.Hour, logger)
 
 		assert.Equal(t, 1, stream.calls)
-		assert.Empty(t, f.revoker.vteps)
+		assert.Empty(t, f.overlay.revoked)
 	})
 }

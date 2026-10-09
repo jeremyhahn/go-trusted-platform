@@ -258,10 +258,26 @@ the VTEP only while its last admitting verdict is still within
 does not stop the sweep: every failure is joined into the sweep's error and
 logged.
 
+The sweep then runs admission for every refused VTEP (`RefusedVTEPs`: each
+remote VTEP a route was refused or revoked from that the EVPN manager still
+holds routes for) and replays the routes of each one it now admits. BGP does
+not send an unchanged route again, so a route refused before its device had a
+passing verdict is installed only by a replay.
+
 `ListAdmittedVTEPs` reports this installed set, with the verdict behind each
-admission. A route refused before its device had a verdict is not retried by
-the sweep. EVPN does not replay refused routes, so it is admitted when the
-peer re-advertises it.
+admission.
+
+### Replaying refused routes
+
+The overlay handler marks a VTEP refused whenever admission refuses one of its
+routes, a revocation lands during a route's admission, or the VTEP is revoked.
+`ReplayVTEP` hands the routes the EVPN manager holds from that VTEP (its IMET
+and prefix routes, and each MAC route at the VTEP the MAC is active at) back
+through the same route handlers, which run admission again. The replay holds
+the EVPN manager's notification lock, as every route change does, so a
+withdrawal received meanwhile is never undone by a replay of the route it
+withdrew. A replay that fails leaves the VTEP refused for the next one. A
+refused VTEP whose routes have all been withdrawn is forgotten.
 
 ### Revocation on a failed verdict
 
@@ -275,14 +291,19 @@ sees every tenant's devices; a tenant's token sees only that tenant's.
 A failed verdict, cryptographic or an absence of evidence, makes gatewayd
 revoke every VTEP of the device at once (`VTEPAdmitter.RevokeDevice`): the
 VTEPs it admitted for the device, and the device's fabric allocations. A
-passed verdict changes nothing; the device's routes are admitted when they are
-next advertised.
+passed verdict replays every refused VTEP among the device's fabric
+allocations that admission now lets in, so a device attested after its routes
+arrived is brought up without waiting for the sweep. The admitter reads the
+verdict back from platformd rather than trusting the event, so a passing event
+whose record is not yet readable replays nothing and the sweep brings the
+device up instead.
 
 The stream does not replay what was recorded while gatewayd was disconnected,
 and platformd cuts gatewayd off if it falls more than 64 verdicts behind.
 gatewayd follows a broken stream again after 5s, and the sweep remains the
-backstop: it re-reads every installed VTEP's latest verdict, so a missed
-failure still withdraws decap within one interval.
+backstop: it re-reads the latest verdict of every installed and every refused
+VTEP, so a missed failure still withdraws decap, and a missed pass still
+admits the device, within one interval.
 
 ### Trust assumptions
 

@@ -15,7 +15,9 @@ package bgp
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"slices"
@@ -1063,6 +1065,66 @@ func (m *EVPNManager) RemoteVTEPs(vni uint32) []netip.Addr {
 	}
 	slices.SortFunc(vteps, netip.Addr.Compare)
 	return vteps
+}
+
+// ReplayVTEP hands handler again every imported remote route of vtep that
+// the handlers were last told of: its Type-3 routes, its Type-2 routes for
+// the MACs it is the active VTEP of, and its Type-5 routes. BGP sends an
+// unchanged route once, so a handler that refused a route installs it this
+// way once it would accept it. The replay holds notifyMu, as every change
+// does, so a route withdrawn meanwhile is never replayed after its
+// withdrawal. It continues past a route the handler fails and returns the
+// failures joined.
+func (m *EVPNManager) ReplayVTEP(ctx context.Context, vtep netip.Addr, handler EVPNRouteHandler) error {
+	if handler == nil {
+		return nil
+	}
+	m.notifyMu.Lock()
+	defer m.notifyMu.Unlock()
+	m.mu.Lock()
+	routes := m.activeRoutes()[vtep]
+	m.mu.Unlock()
+
+	var errs []error
+	for _, route := range routes {
+		if err := handler(ctx, route.Clone()); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ActiveVTEPs returns, sorted, the remote VTEPs ReplayVTEP has routes for.
+func (m *EVPNManager) ActiveVTEPs() []netip.Addr {
+	m.mu.Lock()
+	active := m.activeRoutes()
+	m.mu.Unlock()
+	return slices.SortedFunc(maps.Keys(active), netip.Addr.Compare)
+}
+
+// activeRoutes groups by VTEP the imported remote routes the handlers were
+// last told of. Caller holds mu.
+func (m *EVPNManager) activeRoutes() map[netip.Addr][]*EVPNRouteData {
+	active := make(map[netip.Addr][]*EVPNRouteData)
+	for _, route := range m.received {
+		if !m.imported(route) {
+			continue
+		}
+		switch {
+		case route.IMET != nil:
+			active[route.IMET.VTEPIP] = append(active[route.IMET.VTEPIP], route)
+		case route.PrefixData != nil:
+			active[route.PrefixData.VTEPIP] = append(active[route.PrefixData.VTEPIP], route)
+		}
+	}
+	// A MAC's routes are told only from the VTEP it is active at.
+	for _, state := range m.macs {
+		if state.local != nil || !state.activeVTEP.IsValid() {
+			continue
+		}
+		active[state.activeVTEP] = append(active[state.activeVTEP], state.routesAt(state.activeVTEP)...)
+	}
+	return active
 }
 
 // RouteDistinguisher returns the RD of a joined L2VNI's EVI.

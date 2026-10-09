@@ -268,7 +268,8 @@ func (h *OverlayModeHandler) handlePrefixRoute(ctx context.Context, route *bgp.E
 // A revocation also refuses every route of the VTEP whose admission was in
 // flight when it began (ErrVTEPRevoked). A withdrawal the switch refuses
 // does not stop the others: every route is tried and the failures are
-// joined, so one bad flow never leaves the rest of the VTEP installed.
+// joined, so one bad flow never leaves the rest of the VTEP installed. The
+// VTEP is left refused, for ReplayVTEP to reinstall once it is admitted.
 func (h *OverlayModeHandler) RevokeVTEP(ctx context.Context, vtep netip.Addr) error {
 	if !vtep.Is4() || vtep.IsUnspecified() {
 		return &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "revoke", Cause: ErrInvalidVTEPIP}
@@ -276,6 +277,7 @@ func (h *OverlayModeHandler) RevokeVTEP(ctx context.Context, vtep netip.Addr) er
 
 	h.mu.Lock()
 	h.revocations[vtep]++
+	h.markRefusedLocked(vtep)
 	if !h.running {
 		h.mu.Unlock()
 		return nil
@@ -346,6 +348,62 @@ func (h *OverlayModeHandler) InstalledVTEPs() []InstalledVTEP {
 	}
 	slices.SortFunc(out, func(a, b InstalledVTEP) int { return a.VTEP.Compare(b.VTEP) })
 	return out
+}
+
+// RefusedVTEPs reports, sorted, every remote VTEP a route was refused or
+// revoked from that the EVPN manager still holds routes for: the set
+// ReplayVTEP can bring back once the VTEP is admitted. A refused VTEP whose
+// routes have all gone is forgotten.
+func (h *OverlayModeHandler) RefusedVTEPs() []netip.Addr {
+	if h.evpnManager == nil {
+		return nil
+	}
+	h.mu.Lock()
+	since := h.refusals
+	h.mu.Unlock()
+	active := h.evpnManager.ActiveVTEPs()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var refused []netip.Addr
+	for vtep, marked := range h.refused {
+		if _, found := slices.BinarySearchFunc(active, vtep, netip.Addr.Compare); found {
+			refused = append(refused, vtep)
+			continue
+		}
+		// A VTEP refused after active was read may have a route active
+		// was read too early to see: keep it for the next call.
+		if marked <= since {
+			delete(h.refused, vtep)
+		}
+	}
+	slices.SortFunc(refused, netip.Addr.Compare)
+	return refused
+}
+
+// ReplayVTEP hands the EVPN manager's routes from a refused vtep back
+// through the route handlers, which ask the admitter again. BGP does not
+// send an unchanged route twice, so a VTEP refused for a verdict that has
+// since passed is installed only by a replay. A VTEP not refused, or a
+// handler that is stopped, replays nothing. A replay that fails leaves the
+// VTEP refused for the next one.
+func (h *OverlayModeHandler) ReplayVTEP(ctx context.Context, vtep netip.Addr) error {
+	h.mu.Lock()
+	_, refused := h.refused[vtep]
+	if !h.running || !refused || h.evpnManager == nil {
+		h.mu.Unlock()
+		return nil
+	}
+	delete(h.refused, vtep)
+	h.mu.Unlock()
+
+	if err := h.evpnManager.ReplayVTEP(ctx, vtep, h.handleEVPNRoute); err != nil {
+		h.mu.Lock()
+		h.markRefusedLocked(vtep)
+		h.mu.Unlock()
+		return &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "replay", Cause: err}
+	}
+	return nil
 }
 
 func (h *OverlayModeHandler) revocationRoutesLocked(vtep netip.Addr) []*bgp.EVPNRouteData {
@@ -429,6 +487,9 @@ func (h *OverlayModeHandler) admit(ctx context.Context, vtep netip.Addr, vnis ..
 	h.mu.Unlock()
 	for _, vni := range vnis {
 		if err := h.config.Admitter.AdmitVTEP(ctx, vni, vtep); err != nil {
+			h.mu.Lock()
+			h.markRefusedLocked(vtep)
+			h.mu.Unlock()
 			return 0, &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "admit", Cause: err}
 		}
 	}
@@ -439,9 +500,17 @@ func (h *OverlayModeHandler) admit(ctx context.Context, vtep netip.Addr, vnis ..
 // been revoked since. Caller holds mu.
 func (h *OverlayModeHandler) unrevoked(vtep netip.Addr, epoch uint64) error {
 	if h.revocations[vtep] != epoch {
+		h.markRefusedLocked(vtep)
 		return &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "admit", Cause: ErrVTEPRevoked}
 	}
 	return nil
+}
+
+// markRefusedLocked records that a route of vtep was refused, for
+// RefusedVTEPs to report and ReplayVTEP to hand back. Caller holds mu.
+func (h *OverlayModeHandler) markRefusedLocked(vtep netip.Addr) {
+	h.refusals++
+	h.refused[vtep] = h.refusals
 }
 
 // conflict names the anycast gateway address a remote binding claims, or

@@ -369,6 +369,12 @@ type OverlayModeHandler struct {
 	// it is unchanged, so a revocation landing inside an admission is never
 	// undone by the route that admission let through.
 	revocations map[netip.Addr]uint64
+	// refused holds each remote VTEP a route was refused or revoked from,
+	// with the refusal count when it was last marked. BGP does not send an
+	// unchanged route again, so ReplayVTEP hands the EVPN manager's routes
+	// back through the handlers once the VTEP may be admitted.
+	refused  map[netip.Addr]uint64
+	refusals uint64
 
 	// refusedBindings counts the remote bindings refused or held back for
 	// a conflict.
@@ -406,6 +412,7 @@ func NewOverlayModeHandler(
 		hosts:       make(map[hostKey]*overlayHost),
 		prefixes:    make(map[netip.Prefix]*overlayPrefix),
 		revocations: make(map[netip.Addr]uint64),
+		refused:     make(map[netip.Addr]uint64),
 	}
 
 	vtepManager, err := vxlan.NewVTEPManager(*config.VTEPConfig, ovsClient, config.BridgeName, config.Logger)

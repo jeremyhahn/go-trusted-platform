@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -63,6 +64,16 @@ type OverlayVTEPRevoker interface {
 	RevokeVTEP(ctx context.Context, vtep netip.Addr) error
 }
 
+// OverlayVTEPReplayer brings back the routes of remote VTEPs the overlay
+// refused or revoked. BGP does not send an unchanged route again, so a VTEP
+// refused before its device passed attestation is installed only by a replay.
+type OverlayVTEPReplayer interface {
+	// RefusedVTEPs reports the refused VTEPs that still have routes.
+	RefusedVTEPs() []netip.Addr
+	// ReplayVTEP hands the VTEP's routes through admission again.
+	ReplayVTEP(ctx context.Context, vtep netip.Addr) error
+}
+
 // OverlayIPAMReader reads the fabric allocations that authorize remote VTEPs.
 // An address with no allocation is reported as ipam.ErrAllocationNotFound or
 // ErrOverlayRecordNotFound; any other error is an outage.
@@ -84,6 +95,7 @@ type VTEPAdmissionConfig struct {
 	Devices  OverlayDeviceGetter
 	Verdicts OverlayVerdictReader
 	Revoker  OverlayVTEPRevoker
+	Replayer OverlayVTEPReplayer
 	// MaxVerdictAge bounds the age of an admitting verdict. Zero defaults to
 	// DefaultOverlayVerdictMaxAge.
 	MaxVerdictAge time.Duration
@@ -126,6 +138,7 @@ type VTEPAdmitter struct {
 	devices       OverlayDeviceGetter
 	verdicts      OverlayVerdictReader
 	revoker       OverlayVTEPRevoker
+	replayer      OverlayVTEPReplayer
 	maxVerdictAge time.Duration
 	clockSkew     time.Duration
 	now           func() time.Time
@@ -151,6 +164,9 @@ func NewVTEPAdmitter(cfg VTEPAdmissionConfig) (*VTEPAdmitter, error) {
 	if cfg.Revoker == nil {
 		return nil, ErrOverlayAdmissionConfig{Field: "revoker", Reason: "nil"}
 	}
+	if cfg.Replayer == nil {
+		return nil, ErrOverlayAdmissionConfig{Field: "replayer", Reason: "nil"}
+	}
 	if cfg.MaxVerdictAge < 0 {
 		return nil, ErrOverlayAdmissionConfig{Field: "max_verdict_age", Reason: "negative"}
 	}
@@ -174,6 +190,7 @@ func NewVTEPAdmitter(cfg VTEPAdmissionConfig) (*VTEPAdmitter, error) {
 		devices:       cfg.Devices,
 		verdicts:      cfg.Verdicts,
 		revoker:       cfg.Revoker,
+		replayer:      cfg.Replayer,
 		maxVerdictAge: cfg.MaxVerdictAge,
 		clockSkew:     cfg.VerdictClockSkew,
 		now:           cfg.Now,
@@ -221,8 +238,11 @@ func (a *VTEPAdmitter) Admitted(installed []modes.InstalledVTEP) []AdmittedVTEP 
 // once for all the VNIs it is installed in. A denied VTEP is revoked. While
 // the platform cannot be read, a VTEP keeps its admission only until its
 // verdict would have gone stale, so an outage never extends trust past
-// MaxVerdictAge. Admissions of VTEPs no longer installed are forgotten. Sweep
-// continues past failures and returns them joined.
+// MaxVerdictAge. Every VTEP the overlay refused is judged again too, and its
+// routes replayed once the policy admits it, so a device whose passing
+// verdict was missed is still brought up. Admissions of VTEPs no longer
+// installed are forgotten. Sweep continues past failures and returns them
+// joined.
 func (a *VTEPAdmitter) Sweep(ctx context.Context, installed []modes.InstalledVTEP) error {
 	a.mu.Lock()
 	a.generation++
@@ -235,10 +255,26 @@ func (a *VTEPAdmitter) Sweep(ctx context.Context, installed []modes.InstalledVTE
 			errs = append(errs, ErrOverlayAdmissionUnavailable{Source: "ipam", Cause: err})
 		}
 	}
-	current := make(map[netip.Addr]struct{}, len(installed))
+	// judged holds whether each installed VTEP was admitted, so a VTEP both
+	// installed and refused is not judged twice.
+	judged := make(map[netip.Addr]bool, len(installed))
 	for _, vtep := range installed {
-		current[vtep.VTEP] = struct{}{}
-		if err := a.sweepVTEP(ctx, vtep.VTEP); err != nil {
+		admitted, err := a.sweepVTEP(ctx, vtep.VTEP)
+		judged[vtep.VTEP] = admitted
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, vtep := range a.replayer.RefusedVTEPs() {
+		var err error
+		admitted, ok := judged[vtep]
+		switch {
+		case !ok:
+			err = a.readmit(ctx, vtep)
+		case admitted:
+			err = a.replay(ctx, vtep)
+		}
+		if err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -247,7 +283,7 @@ func (a *VTEPAdmitter) Sweep(ctx context.Context, installed []modes.InstalledVTE
 	// installed after the snapshot of installed VTEPs was taken.
 	a.mu.Lock()
 	for vtep, record := range a.admitted {
-		if _, ok := current[vtep]; !ok && record.generation < generation {
+		if _, ok := judged[vtep]; !ok && record.generation < generation {
 			delete(a.admitted, vtep)
 		}
 	}
@@ -255,27 +291,36 @@ func (a *VTEPAdmitter) Sweep(ctx context.Context, installed []modes.InstalledVTE
 	return errors.Join(errs...)
 }
 
-func (a *VTEPAdmitter) sweepVTEP(ctx context.Context, vtep netip.Addr) error {
+// sweepVTEP re-judges an installed VTEP and reports whether the policy
+// admitted it.
+func (a *VTEPAdmitter) sweepVTEP(ctx context.Context, vtep netip.Addr) (bool, error) {
 	admitted, err := a.evaluate(ctx, 0, vtep)
 	if err == nil {
 		a.remember(*admitted)
-		return nil
+		return true, nil
 	}
 	if !isOverlayAdmissionDeny(err) && a.verdictStillFresh(vtep) {
-		return err
+		return false, err
 	}
 	a.logger.Warn("overlay: revoking a VTEP the admission policy no longer admits",
 		slog.String("vtep", vtep.String()), slog.Any("error", err))
-	return a.revoke(ctx, vtep)
+	return false, a.revoke(ctx, vtep)
 }
 
 // OnDeviceVerdict withdraws every VTEP of a device whose verdict failed,
 // whether cryptographically or for an absence of evidence: either way the
 // policy no longer admits it, and waiting for the sweep would leave its decap
-// state in place for up to a sweep interval. A passed verdict changes nothing;
-// the device's routes are admitted when they are next advertised.
+// state in place for up to a sweep interval. A passed verdict replays the
+// routes of the device's refused VTEPs, which BGP will not send again, so a
+// device attested after its routes arrived is admitted without waiting for
+// the sweep.
 func (a *VTEPAdmitter) OnDeviceVerdict(ctx context.Context, v deviceverdict.DeviceVerdict) {
 	if v.Passed {
+		if err := a.readmitDevice(ctx, v.DeviceID); err != nil {
+			a.logger.Warn("overlay: admitting a device that passed attestation did not complete; the sweep retries it",
+				slog.Uint64("device_id", v.DeviceID),
+				slog.Any("error", err))
+		}
 		return
 	}
 	a.logger.Warn("overlay: withdrawing a device whose attestation failed",
@@ -318,6 +363,51 @@ func (a *VTEPAdmitter) RevokeDevice(ctx context.Context, deviceID uint64) error 
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// readmitDevice replays the refused VTEPs among the device's fabric
+// allocations. It continues past a VTEP that fails and returns the failures
+// joined.
+func (a *VTEPAdmitter) readmitDevice(ctx context.Context, deviceID uint64) error {
+	refused := a.replayer.RefusedVTEPs()
+	if len(refused) == 0 {
+		return nil
+	}
+	allocations, err := a.ipam.GetAllocationsByDevice(ctx, strconv.FormatUint(deviceID, 10))
+	if err != nil {
+		return ErrOverlayAdmissionUnavailable{DeviceID: deviceID, Source: "ipam", Cause: err}
+	}
+	var errs []error
+	for _, allocation := range allocations {
+		if allocation == nil || !slices.Contains(refused, allocation.IP) {
+			continue
+		}
+		if err := a.readmit(ctx, allocation.IP); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// readmit replays the routes of a refused VTEP once the policy admits it; the
+// replayed routes are admitted, and remembered, as any route is. A VTEP the
+// policy still denies stays refused, which is not a failure.
+func (a *VTEPAdmitter) readmit(ctx context.Context, vtep netip.Addr) error {
+	_, err := a.evaluate(ctx, 0, vtep)
+	if isOverlayAdmissionDeny(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return a.replay(ctx, vtep)
+}
+
+func (a *VTEPAdmitter) replay(ctx context.Context, vtep netip.Addr) error {
+	if err := a.replayer.ReplayVTEP(ctx, vtep); err != nil {
+		return ErrOverlayVTEPReplay{VTEP: vtep, Cause: err}
+	}
+	return nil
 }
 
 func (a *VTEPAdmitter) revoke(ctx context.Context, vtep netip.Addr) error {
@@ -550,3 +640,16 @@ func (e ErrOverlayVTEPRevoke) Error() string {
 }
 
 func (e ErrOverlayVTEPRevoke) Unwrap() error { return e.Cause }
+
+// ErrOverlayVTEPReplay reports an admitted VTEP whose refused routes could
+// not be replayed into the overlay.
+type ErrOverlayVTEPReplay struct {
+	VTEP  netip.Addr
+	Cause error
+}
+
+func (e ErrOverlayVTEPReplay) Error() string {
+	return "gateway overlay admission: replay VTEP " + e.VTEP.String() + ": " + e.Cause.Error()
+}
+
+func (e ErrOverlayVTEPReplay) Unwrap() error { return e.Cause }
