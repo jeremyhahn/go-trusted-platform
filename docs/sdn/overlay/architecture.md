@@ -417,8 +417,21 @@ socket policies, which the kernel checks first. On an IPv6 underlay, the
 link ICMPv6 types above are allowed in both directions one priority step
 above the blocks. `Install` resolves the fabric interface (it must exist),
 is idempotent, and puts exemptions in before blocks. `Remove` deletes the
-blocks first, the forward block for the interface index it was installed
-with.
+blocks first, the forward block for the interface index it is installed
+for.
+
+XFRM selects an interface only by index, and an interface that is deleted
+and created again (a bond or VLAN the network configuration rebuilds)
+comes back under a new one. `Watch` keeps the forward block on it. It
+subscribes to the namespace's netlink link events, moves the block to the
+interface's current index, then moves it again on every event for a link
+of the fabric interface's name. A move installs the new block before it
+deletes the old, so there is no gap. While the interface is gone the block
+stays on the old index. `Watch` moves nothing while no floor is installed.
+It returns nil when its context ends, and an error when the subscription
+fails or ends (`ErrLinkWatchEnded`) or a move fails. The caller runs it
+again after a wait, and its first move catches up on any change it missed.
+The nftables filter needs no such watch: it matches the interface by name.
 
 Both need CAP_NET_ADMIN. `NewFilter` takes nftables connection options
 and `NewBlockPolicy` takes a network namespace, so either can be pinned
@@ -459,7 +472,8 @@ has been renewed at the same mark.
 | `ErrCRLQueueFull` | `ipsec` | a CRL arrived while there was no identity to verify it against, and the queue already holds 8 issuers (inside an `OpError`, `queue crl`) |
 | `ErrMissingDependency` | `ipsec` | a constructor or `Attach` was handed a nil collaborator |
 | `PeerError` | `ipsec` | a step on one peer failed (`admit`, `load-conn`, `unload-conn`, `drop`, `undrop`, `list-sas`, `terminate`, `evict`, `readmit`); names the peer and wraps the cause |
-| `OpError` | `ipsec` | an operation not tied to one peer failed: `identity`, `load-cert`, `load-token`, `load-cert x509crl` or `get-conns` during `Attach`, `list-sas` during an audit, `parse crl`, `verify crl` or `queue crl` in `PushCRL`, `verify crl` for a queued CRL during `Attach`, `nftables apply`/`remove`, `xfrm install`/`remove` |
+| `OpError` | `ipsec` | an operation not tied to one peer failed: `identity`, `load-cert`, `load-token`, `load-cert x509crl` or `get-conns` during `Attach`, `list-sas` during an audit, `parse crl`, `verify crl` or `queue crl` in `PushCRL`, `verify crl` for a queued CRL during `Attach`, `nftables apply`/`remove`, `xfrm install`/`remove`, `xfrm watch`/`rebind` in `BlockPolicy.Watch` |
+| `ErrLinkWatchEnded` | `ipsec` | the netlink link subscription `BlockPolicy.Watch` follows the fabric interface by ended (inside an `OpError`, `xfrm watch`) |
 | `ErrCRLStale`, `ErrCRLUntrusted` | `ipsec` | a pushed CRL had no `nextUpdate` or one already passed, or was not signed by a CA of the tunnel identity (inside an `OpError`, `verify crl`); the CRL held for that issuer stays |
 | `ErrFamilyMismatch` | `ipsec` | `Filter.Drop`/`Undrop` named a peer of the other address family (inside a `PeerError`) |
 | `IdentityMismatchError` | `ipsec` | an SA came up with a peer identity other than its address; the SA was terminated, or the termination is pending and joined to this error |

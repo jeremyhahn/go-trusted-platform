@@ -97,6 +97,9 @@ var (
 	// ErrCRLUntrusted is returned when a pushed CRL is not signed by a CA
 	// of the tunnel identity.
 	ErrCRLUntrusted = errors.New("ipsec: CRL is not signed by a tunnel CA")
+	// ErrLinkWatchEnded is returned when the kernel ends the link
+	// subscription the forward block follows the fabric interface by.
+	ErrLinkWatchEnded = errors.New("ipsec: fabric link subscription ended")
 )
 
 // CommandError reports a VICI command that failed: charon refused it, or
