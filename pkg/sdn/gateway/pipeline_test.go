@@ -466,22 +466,17 @@ func TestGatewayStart_OverlayAloneRollsBackOverlayTerminal(t *testing.T) {
 	assert.False(t, cfg.Runtime.PipelineInstalled(), "the overlay terminal is rolled back with the failed start")
 }
 
-// TestGatewayStart_OverlayBesideFirewallRollsThePipelineBack: the firewall
-// installs the pipeline on NORMAL, the refused overlay section fails the
-// start, and the rollback removes the pipeline again.
-func TestGatewayStart_OverlayBesideFirewallRollsThePipelineBack(t *testing.T) {
+// TestNewGateway_RefusesOverlayBesideFirewall: the overlay terminal owns the
+// table misses the firewall programs, so the combination is refused before
+// anything touches the bridge.
+func TestNewGateway_RefusesOverlayBesideFirewall(t *testing.T) {
 	cfg := firewallGatewayConfig()
 	cfg.Overlay = validOverlayServiceConfig()
-	assert.True(t, cfg.needsPipeline())
-	assert.Equal(t, TerminalOverlay, cfg.pipelineTerminal())
-	gw, err := NewGateway(cfg)
-	require.NoError(t, err)
-	gw.SetNodeMetrics(validNodeMetrics())
-	err = gw.Start(context.Background())
-	var missing *ErrRuntimeMissing
-	require.True(t, errors.As(err, &missing), "got %v", err)
-	assert.Equal(t, ServiceOverlay, missing.Service)
-	assert.False(t, cfg.Runtime.PipelineInstalled(), "the pipeline is rolled back with the failed start")
+	_, err := NewGateway(cfg)
+	var conflict *ErrOverlayServiceConflict
+	require.True(t, errors.As(err, &conflict), "got %v", err)
+	assert.Equal(t, ServiceFirewall, conflict.Service)
+	assert.False(t, cfg.Runtime.PipelineInstalled())
 }
 
 func TestGatewayStart_PipelineFailureIsAStartupFailure(t *testing.T) {

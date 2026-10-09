@@ -292,6 +292,62 @@ func (h *OverlayModeHandler) RevokeVTEP(ctx context.Context, vtep netip.Addr) er
 	return errors.Join(errs...)
 }
 
+// InstalledVTEP is a remote VTEP the overlay datapath holds state for, with
+// the VNIs that state is installed in.
+type InstalledVTEP struct {
+	VTEP netip.Addr
+	VNIs []uint32
+}
+
+// InstalledVTEPs reports every remote VTEP the handler holds flood-list,
+// host or prefix state for: the set a revocation would withdraw. It is sorted
+// by address, and each VTEP's VNIs are sorted.
+func (h *OverlayModeHandler) InstalledVTEPs() []InstalledVTEP {
+	installed := make(map[netip.Addr]map[uint32]struct{})
+	add := func(vtep netip.Addr, vni uint32) {
+		vnis := installed[vtep]
+		if vnis == nil {
+			vnis = make(map[uint32]struct{})
+			installed[vtep] = vnis
+		}
+		vnis[vni] = struct{}{}
+	}
+
+	h.mu.Lock()
+	for vni, segment := range h.segments {
+		for _, vtep := range segment.flood {
+			add(vtep, vni)
+		}
+	}
+	for key, host := range h.hosts {
+		if host == nil || host.local() {
+			continue
+		}
+		add(host.vtep, key.vni)
+		for _, binding := range host.ips {
+			if binding.l3vni != 0 {
+				add(host.vtep, binding.l3vni)
+			}
+		}
+	}
+	for _, prefix := range h.prefixes {
+		if prefix == nil {
+			continue
+		}
+		for vtep := range prefix.routes {
+			add(vtep, h.config.L3VNI)
+		}
+	}
+	h.mu.Unlock()
+
+	out := make([]InstalledVTEP, 0, len(installed))
+	for vtep, vnis := range installed {
+		out = append(out, InstalledVTEP{VTEP: vtep, VNIs: slices.Sorted(maps.Keys(vnis))})
+	}
+	slices.SortFunc(out, func(a, b InstalledVTEP) int { return a.VTEP.Compare(b.VTEP) })
+	return out
+}
+
 func (h *OverlayModeHandler) revocationRoutesLocked(vtep netip.Addr) []*bgp.EVPNRouteData {
 	var routes []*bgp.EVPNRouteData
 	for vni, segment := range h.segments {

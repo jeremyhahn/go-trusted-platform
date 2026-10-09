@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
@@ -663,12 +664,9 @@ func (p resolverKeyProvider) Key(ctx context.Context, ref string) ([]byte, error
 	return p.resolve(ctx, ref)
 }
 
-// transitBackend runs the BGP speaker for the transit service. The speaker
-// is built at Start, after the neighbor and keychain secret references
-// have been resolved through the injected resolver, so no session ever
-// starts with a secret the configuration only referenced.
 // overlayBackend adapts modes.OverlayModeHandler to the gateway service
-// lifecycle and keeps the admitted-VTEP reader beside the datapath it gates.
+// lifecycle. It keeps the admitter beside the datapath it gates and sweeps
+// what that datapath has installed against the admission policy.
 type overlayBackend struct {
 	config   *OverlayServiceConfig
 	ovs      modes.OverlayOVSClient
@@ -685,6 +683,30 @@ type overlayBackend struct {
 	handler *modes.OverlayModeHandler
 	admit   *VTEPAdmitter
 	speaker *bgp.Speaker
+	// stopSweep ends the admission sweep; sweepDone closes once it has.
+	stopSweep context.CancelFunc
+	sweepDone chan struct{}
+}
+
+// overlayDatapath is the overlay handler's view of the remote VTEPs it holds
+// state for.
+type overlayDatapath interface {
+	InstalledVTEPs() []modes.InstalledVTEP
+}
+
+// runAdmissionSweep re-judges the datapath's installed VTEPs on every tick
+// until ctx ends.
+func runAdmissionSweep(ctx context.Context, ticks <-chan time.Time, datapath overlayDatapath, admitter *VTEPAdmitter, logger *slog.Logger) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			if err := admitter.Sweep(ctx, datapath.InstalledVTEPs()); err != nil {
+				logger.Warn("overlay: the admission sweep did not complete", slog.Any("error", err))
+			}
+		}
+	}
 }
 
 type overlayRevokerProxy struct {
@@ -723,9 +745,10 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 		IPAM:          b.ipam,
 		Devices:       b.devices,
 		Verdicts:      b.verdicts,
-		Revoker:       revoker,
-		MaxVerdictAge: b.config.VerdictMaxAge,
-		Logger:        logger,
+		Revoker:          revoker,
+		MaxVerdictAge:    b.config.VerdictMaxAge,
+		VerdictClockSkew: b.config.VerdictClockSkew,
+		Logger:           logger,
 	})
 	if err != nil {
 		return err
@@ -750,22 +773,36 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	modeCfg.EVPNConfig = evpnCfg
 	handler, err := modes.NewOverlayModeHandler(modeCfg, b.ovs, b.of)
 	if err != nil {
-		if speaker != nil {
-			_ = speaker.Stop(ctx)
-		}
-		return err
+		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
 	}
 	revoker.set(handler)
 	if err := handler.Start(ctx); err != nil {
-		if speaker != nil {
-			_ = speaker.Stop(ctx)
-		}
-		return err
+		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
 	}
+
+	// The sweep outlives the request that started the service; Stop ends it.
+	sweepCtx, stopSweep := context.WithCancel(context.WithoutCancel(ctx))
+	sweepDone := make(chan struct{})
+	ticker := time.NewTicker(b.config.admissionSweepInterval())
+	go func() {
+		defer close(sweepDone)
+		defer ticker.Stop()
+		runAdmissionSweep(sweepCtx, ticker.C, handler, admitter, logger)
+	}()
+
 	b.handler = handler
 	b.admit = admitter
 	b.speaker = speaker
+	b.stopSweep = stopSweep
+	b.sweepDone = sweepDone
 	return nil
+}
+
+func stopOverlaySpeaker(ctx context.Context, speaker *bgp.Speaker) error {
+	if speaker == nil {
+		return nil
+	}
+	return speaker.Stop(ctx)
 }
 
 func (b *overlayBackend) Stop(ctx context.Context) error {
@@ -774,6 +811,8 @@ func (b *overlayBackend) Stop(ctx context.Context) error {
 	if b.handler == nil {
 		return nil
 	}
+	b.stopSweep()
+	<-b.sweepDone
 	var errs []error
 	errs = append(errs, b.handler.Stop(ctx))
 	if b.speaker != nil {
@@ -782,6 +821,8 @@ func (b *overlayBackend) Stop(ctx context.Context) error {
 	b.handler = nil
 	b.admit = nil
 	b.speaker = nil
+	b.stopSweep = nil
+	b.sweepDone = nil
 	return errors.Join(errs...)
 }
 
@@ -802,24 +843,16 @@ func (b *overlayBackend) Status() *modes.OverlayModeStatus {
 	return b.handler.GetStatus()
 }
 
-func (b *overlayBackend) GetAdmittedVTEP(ctx context.Context, vtep netip.Addr) (*AdmittedVTEP, error) {
+// ListAdmittedVTEPs reports the remote VTEPs the overlay datapath has
+// installed, each with the admission that let it in.
+func (b *overlayBackend) ListAdmittedVTEPs(context.Context) ([]AdmittedVTEP, error) {
 	b.mu.Lock()
-	admitter := b.admit
+	handler, admitter := b.handler, b.admit
 	b.mu.Unlock()
-	if admitter == nil {
+	if handler == nil {
 		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay admission is not running"}
 	}
-	return admitter.GetAdmittedVTEP(ctx, vtep)
-}
-
-func (b *overlayBackend) ListAdmittedVTEPs(ctx context.Context) ([]AdmittedVTEP, error) {
-	b.mu.Lock()
-	admitter := b.admit
-	b.mu.Unlock()
-	if admitter == nil {
-		return nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay admission is not running"}
-	}
-	return admitter.ListAdmittedVTEPs(ctx)
+	return admitter.Admitted(handler.InstalledVTEPs()), nil
 }
 
 func (b *overlayBackend) overlayEVPN(ctx context.Context, logger *slog.Logger) (*bgp.Speaker, *bgp.EVPNManagerConfig, error) {
@@ -891,6 +924,10 @@ func buildOverlay(g *Gateway) (backedService, error) {
 	}, nil
 }
 
+// transitBackend runs the BGP speaker for the transit service. The speaker
+// is built at Start, after the neighbor and keychain secret references
+// have been resolved through the injected resolver, so no session ever
+// starts with a secret the configuration only referenced.
 type transitBackend struct {
 	config   *bgp.BGPConfig
 	resolver bgp.SecretResolver

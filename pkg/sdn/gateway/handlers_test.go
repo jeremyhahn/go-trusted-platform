@@ -288,14 +288,23 @@ func TestEnabledServices_EveryEntryIsBuiltOrRefused(t *testing.T) {
 }
 
 func TestNewGateway_RegistersHandlersInDeclaredOrder(t *testing.T) {
+	tunnels := []TunnelConfig{{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}}
+
 	cfg := firewallGatewayConfig()
-	cfg.Tunnels = []TunnelConfig{{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}}
-	cfg.Overlay = validOverlayServiceConfig()
+	cfg.Tunnels = tunnels
 	gw, err := NewGateway(cfg)
 	require.NoError(t, err)
-	assert.Equal(t, []string{ServiceFirewall, ServiceTunnels, ServiceOverlay}, gw.serviceOrder)
+	assert.Equal(t, []string{ServiceFirewall, ServiceTunnels}, gw.serviceOrder)
 	_, isBacked := gw.serviceHandlers[ServiceFirewall].(*backedServiceHandler)
 	assert.True(t, isBacked)
+
+	// The overlay excludes the firewall, so it is ordered against tunnels alone.
+	cfg = baseGatewayConfig("overlay")
+	cfg.Tunnels = tunnels
+	cfg.Overlay = validOverlayServiceConfig()
+	gw, err = NewGateway(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, []string{ServiceTunnels, ServiceOverlay}, gw.serviceOrder)
 	_, isBacked = gw.serviceHandlers[ServiceOverlay].(*backedServiceHandler)
 	assert.True(t, isBacked)
 }

@@ -41,7 +41,7 @@ underlay MTU below 9050 bytes (`vxlan.MinimumUnderlayMTU`: the 9000-byte
 |-------|------|----------|
 | 0 | Ingress | everything → 10 |
 | 10 | VXLAN decap | access ingress (VLAN → VNI); decap authorisation; every other tunnelled frame dropped |
-| 20–29 | Services | firewall, NAT, load balancer (gatewayd services); miss → 30 |
+| 20–29 | Services | NAT64 (firewall, NAT and load balancer are refused beside the overlay); miss → 30 |
 | 30 | MAC | anycast MAC from the access port, or router MAC on the L3VNI → 50; anycast MAC from a VTEP → drop; known MAC → its VTEP or 70; miss → 40 |
 | 40 | ARP | ARP replies in the switch; miss → 60 |
 | 50 | L3 | host and prefix routes (symmetric IRB); miss → drop |
@@ -193,19 +193,78 @@ held rather than deleting the flow.
 | `L3VNI` | the IP-VRF of symmetric IRB; needs the anycast gateway and `EVPNConfig.RouterMAC` |
 | `Admitter` | vets remote VTEPs; required with `EVPNConfig` (`ErrAdmitterNil`) |
 
-## Status in gatewayd
+## In gatewayd
 
-gatewayd still refuses `ServiceOverlay` until the service builder is wired. The
-`gateway.overlay` section now carries the VTEP address, underlay interface/MTU,
-access port, overlay ASN, RR peers and verdict freshness window, and
-`gateway.VTEPAdmitter` backs admission from IPAM fabric allocations plus the
-platform attestation event log. The OpenFlow table hand-off is wired through
+The `gateway.overlay` section runs this handler in gatewayd. It carries the
+VTEP address, underlay interface/MTU, access port, overlay ASN, RR peers and
+the admission settings below. The OpenFlow table hand-off goes through
 `TerminalOverlay`: gatewayd records bridge ownership and secure fail-mode but
-installs no pipeline-cookie defaults, leaving the overlay handler as the only
-owner of the table-0, 10, 20, 30, 40, 50, 60 and 70 miss entries. Tables 20-29
-remain the service extension range; firewall, NAT, load-balancer and NAT64 may
-add higher-priority rules there, while the overlay table-20 miss carries
-unclaimed traffic onward to table 30.
+installs no pipeline-cookie defaults, so the overlay handler is the only owner
+of the table-0, 10, 20, 30, 40, 50, 60 and 70 miss entries.
+
+The overlay is refused beside the firewall, NAT or load balancer
+(`ErrOverlayServiceConflict`). Those services lay their flows out for the
+NORMAL terminal (NAT, for one, installs a table-10 miss), and under this
+pipeline the table-10 miss is what drops tunnelled frames from unadmitted
+VTEPs. NAT64 hands off through tables 20-29 and may run beside it.
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `overlay-asn` | required | private 2-octet ASN (64512-65534); the auto-derived route targets carry it in a 2-octet field |
+| `verdict-max-age` | 15m | oldest attestation verdict that still admits a VTEP |
+| `verdict-clock-skew` | 30s | how far past the gateway's clock a verdict's attestation time may lie |
+| `admission-sweep-interval` | 30s | period of the re-admission sweep |
+
+A field that fails validation is reported as `ErrOverlayConfigInvalid`, naming
+the YAML key.
+
+### VTEP admission
+
+`gateway.VTEPAdmitter` decides whether a remote VTEP may hold decap state. In
+order:
+
+1. The VTEP address is a fabric-zone IPAM allocation, and the allocation names
+   a numeric device ID.
+2. The platform holds that device.
+3. The device's latest recorded verdict passed against a signed baseline.
+4. The verdict's attestation time is set, at most `verdict-clock-skew` ahead
+   of the gateway's clock, and at most `verdict-max-age` old. A verdict without
+   an attestation time is refused, not dated by when it was recorded.
+5. The verdict names the device's serial whenever the device record has one.
+
+A missing record (allocation, device or verdict) is a denial. Any other read
+error is an outage (`ErrOverlayAdmissionUnavailable`). The route is refused
+for now, but the error is not a judgement on the VTEP.
+
+### Re-admission sweep
+
+Every `admission-sweep-interval` the sweep reads the handler's installed set
+(`InstalledVTEPs`: every remote VTEP with flood-list, host or prefix state)
+and runs admission again for each VTEP. Policy does not depend on the VNI, so
+one decision covers all of a VTEP's VNIs. A denial revokes the VTEP
+(`RevokeVTEP`), so a verdict that ages past `verdict-max-age` or turns failed,
+cryptographically or not, withdraws decap within one interval. An outage keeps
+the VTEP only while its last admitting verdict is still within
+`verdict-max-age`; after that the VTEP is revoked. A revocation that fails
+does not stop the sweep: every failure is joined into the sweep's error and
+logged.
+
+`ListAdmittedVTEPs` reports this installed set, with the verdict behind each
+admission. A route refused before its device had a verdict is not retried by
+the sweep. EVPN does not replay refused routes, so it is admitted when the
+peer re-advertises it.
+
+### Trust assumptions
+
+- **IPAM writers.** Admission trusts the fabric IPAM allocation to bind a VTEP
+  address to the right device. Anyone who can write fabric allocations can
+  point an address at a healthy device's verdict. The serial match narrows
+  this only for devices that have a serial on record. IPAM write access is
+  therefore part of the overlay's trust base.
+- **Underlay source addresses.** Decap authorisation matches the outer source
+  IP. On an underlay without source validation, a host can send VXLAN under an
+  admitted VTEP's address. The control for that is the authenticated underlay
+  (the IPsec underlay), not admission.
 
 ## See Also
 

@@ -170,6 +170,8 @@ gateway:
 
   # Overlay VTEP service (#709). The local VTEP is the node's address on the
   # fabric VLAN; the access port carries local workload VLANs into the overlay.
+  # Enabling it requires disabling the firewall above (and NAT/load balancer):
+  # the overlay owns the pipeline those services program.
   overlay:
     enabled: false
     local-vtep: 10.4.100.20
@@ -181,6 +183,8 @@ gateway:
     default-vni: 40100
     max-vnis: 16384
     verdict-max-age: 15m
+    verdict-clock-skew: 30s
+    admission-sweep-interval: 30s
     rr-peers:
       - name: cp-01-rr
         address: 10.4.100.10

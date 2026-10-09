@@ -142,7 +142,8 @@ control plane issued for the gateway. platformd itself does not decode
 Gateway overlay fields live in gatewayd's own `gateway.overlay:` section: the
 local fabric VTEP address (`local-vtep`), underlay interface/MTU, OVS access
 port, overlay ASN, route-reflector peers, VXLAN port, default VNI, maximum VNIs
-and `verdict-max-age` (15m default). Those values are not derived from the
+and the admission settings `verdict-max-age` (15m default), `verdict-clock-skew`
+(30s) and `admission-sweep-interval` (30s). Those values are not derived from the
 platformd-side `sdn.overlay:` block; templates must project the gatewayd fields
 when a profile enables the overlay service.
 

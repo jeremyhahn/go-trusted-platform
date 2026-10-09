@@ -702,6 +702,28 @@ func TestOverlayModeHandler_RevokeDuringAdmission(t *testing.T) {
 	})
 }
 
+// TestOverlayModeHandler_InstalledVTEPs pins the set the admission sweep
+// re-evaluates and the admitted-VTEP listing reports: every remote VTEP the
+// datapath holds state for, in the VNIs that state is in, and nothing a
+// revocation withdrew.
+func TestOverlayModeHandler_InstalledVTEPs(t *testing.T) {
+	f := newOverlayFixture(t, nil).withVNI(t)
+	assert.Empty(t, f.handler.InstalledVTEPs())
+
+	require.NoError(t, f.route(t, imet(ovlL2VNI, ovlVTEPB)))
+	require.NoError(t, f.route(t, macip(ovlVTEPB, ovlRemoteMAC, ovlRemoteIP)))
+	require.NoError(t, f.route(t, prefixRoute(ovlVTEPC, "10.44.0.0/24")))
+
+	assert.Equal(t, []InstalledVTEP{
+		{VTEP: ovlVTEPB, VNIs: []uint32{ovlL2VNI, ovlL3VNI}},
+		{VTEP: ovlVTEPC, VNIs: []uint32{ovlL3VNI}},
+	}, f.handler.InstalledVTEPs())
+
+	require.NoError(t, f.handler.RevokeVTEP(context.Background(), ovlVTEPB))
+
+	assert.Equal(t, []InstalledVTEP{{VTEP: ovlVTEPC, VNIs: []uint32{ovlL3VNI}}}, f.handler.InstalledVTEPs())
+}
+
 // TestOverlayModeHandler_EVPNEvents drives the overlay the way a fabric
 // does: routes received from the BGP speaker, through the EVPN manager.
 func TestOverlayModeHandler_EVPNEvents(t *testing.T) {

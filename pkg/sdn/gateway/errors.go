@@ -465,6 +465,27 @@ func (e *ErrTunnelConfigInvalid) Error() string {
 	return fmt.Sprintf("invalid tunnel config %q: %s", e.TunnelName, e.Reason)
 }
 
+// ErrOverlayConfigInvalid is returned when a field of the gateway overlay
+// section fails validation. Field is the YAML key.
+type ErrOverlayConfigInvalid struct {
+	Field  string
+	Reason string
+}
+
+func (e *ErrOverlayConfigInvalid) Error() string {
+	return fmt.Sprintf("gateway: invalid overlay config %s: %s", e.Field, e.Reason)
+}
+
+// ErrOverlayServiceConflict is returned when the overlay is enabled together
+// with a service that programs the pipeline the overlay terminal owns.
+type ErrOverlayServiceConflict struct {
+	Service string
+}
+
+func (e *ErrOverlayServiceConflict) Error() string {
+	return fmt.Sprintf("gateway: overlay cannot run with %s enabled: the overlay terminal owns the pipeline tables %s programs", e.Service, e.Service)
+}
+
 // ErrNilServiceHandler is returned when a nil or unnamed service handler is
 // registered on a gateway.
 type ErrNilServiceHandler struct{}

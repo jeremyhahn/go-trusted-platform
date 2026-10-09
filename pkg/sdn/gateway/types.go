@@ -18,6 +18,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"strconv"
@@ -470,6 +471,16 @@ type OverlayServiceConfig struct {
 	// accepted for remote VTEP admission. Zero defaults to
 	// DefaultOverlayVerdictMaxAge.
 	VerdictMaxAge time.Duration `yaml:"verdict-max-age,omitempty" json:"verdict_max_age,omitempty" mapstructure:"verdict-max-age"`
+
+	// VerdictClockSkew bounds how far past the gateway's clock a verdict's
+	// attestation time may lie and still admit a VTEP. Zero defaults to
+	// DefaultOverlayVerdictClockSkew.
+	VerdictClockSkew time.Duration `yaml:"verdict-clock-skew,omitempty" json:"verdict_clock_skew,omitempty" mapstructure:"verdict-clock-skew"`
+
+	// AdmissionSweepInterval is how often every installed remote VTEP is
+	// re-judged against the admission policy. Zero defaults to
+	// DefaultOverlayAdmissionSweepInterval.
+	AdmissionSweepInterval time.Duration `yaml:"admission-sweep-interval,omitempty" json:"admission_sweep_interval,omitempty" mapstructure:"admission-sweep-interval"`
 }
 
 // Validate checks if the overlay service configuration is valid.
@@ -478,36 +489,56 @@ func (c *OverlayServiceConfig) Validate() error {
 		return nil
 	}
 	if !c.LocalVTEP.IsValid() || !c.LocalVTEP.Is4() || c.LocalVTEP.IsUnspecified() {
-		return ErrConfigurationInvalid
+		return &ErrOverlayConfigInvalid{Field: "local-vtep", Reason: "must be a specified IPv4 address"}
 	}
 	if c.UnderlayInterface == "" {
-		return ErrConfigurationInvalid
+		return &ErrOverlayConfigInvalid{Field: "underlay-interface", Reason: "is required"}
 	}
 	if c.UnderlayMTU == 0 {
 		c.UnderlayMTU = vxlan.MinimumUnderlayMTU
 	}
 	if c.UnderlayMTU < vxlan.MinimumUnderlayMTU {
-		return ErrConfigurationInvalid
+		return &ErrOverlayConfigInvalid{Field: "underlay-mtu", Reason: fmt.Sprintf("must be at least %d", vxlan.MinimumUnderlayMTU)}
 	}
 	if c.AccessPort == "" {
-		return ErrConfigurationInvalid
+		return &ErrOverlayConfigInvalid{Field: "access-port", Reason: "is required"}
 	}
-	if c.OverlayASN < bgp.MinASN {
-		return ErrConfigurationInvalid
+	// EVPN route targets carry the ASN in a 2-octet field, so only the
+	// private 2-octet range the route-target derivation accepts can run.
+	if c.OverlayASN < uint32(bgp.MinOverlayASN) || c.OverlayASN > uint32(bgp.MaxOverlayASN) {
+		return &ErrOverlayConfigInvalid{
+			Field:  "overlay-asn",
+			Reason: fmt.Sprintf("must be a private 2-octet ASN (%d-%d)", bgp.MinOverlayASN, bgp.MaxOverlayASN),
+		}
 	}
 	if c.VXLANPort == 0 {
-		return ErrConfigurationInvalid
+		return &ErrOverlayConfigInvalid{Field: "vxlan-port", Reason: "is required"}
 	}
 	if c.MaxVNIs < 0 {
-		return ErrConfigurationInvalid
+		return &ErrOverlayConfigInvalid{Field: "max-vnis", Reason: "must not be negative"}
 	}
 	if c.VerdictMaxAge < 0 {
-		return ErrConfigurationInvalid
+		return &ErrOverlayConfigInvalid{Field: "verdict-max-age", Reason: "must not be negative"}
+	}
+	if c.VerdictClockSkew < 0 {
+		return &ErrOverlayConfigInvalid{Field: "verdict-clock-skew", Reason: "must not be negative"}
+	}
+	if c.AdmissionSweepInterval < 0 {
+		return &ErrOverlayConfigInvalid{Field: "admission-sweep-interval", Reason: "must not be negative"}
 	}
 	if c.VerdictMaxAge == 0 {
 		c.VerdictMaxAge = DefaultOverlayVerdictMaxAge
 	}
 	return nil
+}
+
+// admissionSweepInterval is how often installed VTEPs are re-admitted: the
+// configured interval, or DefaultOverlayAdmissionSweepInterval when unset.
+func (c *OverlayServiceConfig) admissionSweepInterval() time.Duration {
+	if c.AdmissionSweepInterval <= 0 {
+		return DefaultOverlayAdmissionSweepInterval
+	}
+	return c.AdmissionSweepInterval
 }
 
 // EdgeConfig holds edge gateway specific configuration.
@@ -1248,6 +1279,9 @@ func (c *GatewayConfig) Validate() error {
 		if err := c.Overlay.Validate(); err != nil {
 			return err
 		}
+		if err := c.validateOverlayExclusive(); err != nil {
+			return err
+		}
 	}
 	if c.Edge != nil {
 		if err := c.Edge.Validate(); err != nil {
@@ -1303,6 +1337,27 @@ func (c *GatewayConfig) Validate() error {
 		}
 	}
 	return c.validateTunnels()
+}
+
+// validateOverlayExclusive refuses an enabled overlay beside the firewall,
+// NAT or load balancer. Those services lay their flows out for the NORMAL
+// terminal (NAT, for one, installs a table-10 miss to table 20), while under
+// the overlay terminal table 10 is decap authorisation, whose miss drops
+// unadmitted tunnelled frames: a service miss there would forward frames from
+// revoked VTEPs.
+func (c *GatewayConfig) validateOverlayExclusive() error {
+	if !c.Overlay.Enabled {
+		return nil
+	}
+	switch {
+	case c.Firewall != nil && c.Firewall.Enabled:
+		return &ErrOverlayServiceConflict{Service: ServiceFirewall}
+	case c.NAT != nil && c.NAT.Enabled:
+		return &ErrOverlayServiceConflict{Service: ServiceNAT}
+	case c.LoadBalancer != nil && c.LoadBalancer.Enabled:
+		return &ErrOverlayServiceConflict{Service: ServiceLoadBalancer}
+	}
+	return nil
 }
 
 // HasEnabledServices returns true if at least one service section is present and enabled.
