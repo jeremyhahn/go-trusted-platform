@@ -85,6 +85,7 @@ func pair(t *testing.T, ctx context.Context) (*peer, *peer) {
 	link(t, ctx, a, b)
 	ca := newTestCA(t)
 	for i, p := range []*peer{a, b} {
+		p.initToken(t, ctx)
 		p.startModuleHost(t, ctx)
 		p.pub = p.provisionToken(t, ctx)
 		other := b

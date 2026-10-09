@@ -25,6 +25,10 @@ license="AGPL-3.0-or-later GPL-2.0-or-later LGPL-2.1-or-later"
 # host's server is.
 depends="p11-kit-server>=0.26"
 options="!check !tracedeps"
+# The p11-kit server's own unprivileged user (the pre-install creates it).
+pkgusers="xkms-p11"
+pkggroups="xkms-p11"
+install="$pkgname.pre-install"
 subpackages="$pkgname-openrc"
 # rootfs is the archive; the extension keeps abuild from unpacking it into
 # $srcdir.

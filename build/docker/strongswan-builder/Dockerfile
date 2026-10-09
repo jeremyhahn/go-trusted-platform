@@ -30,7 +30,8 @@ RUN adduser -D builder && addgroup builder abuild
 # creates them through its setuid abuild-addgroup/abuild-adduser helpers, and
 # under qemu-user (the arm64 build) a binfmt handler without the C flag runs
 # setuid binaries without their privilege, so that step fails.
-RUN addgroup -S strongswan && adduser -S -D -H -h /var/empty -s /sbin/nologin -G strongswan strongswan
+RUN addgroup -S strongswan && adduser -S -D -H -h /var/empty -s /sbin/nologin -G strongswan strongswan \
+    && addgroup -S xkms-p11 && adduser -S -D -H -h /var/empty -s /sbin/nologin -G xkms-p11 xkms-p11
 
 WORKDIR /build
 

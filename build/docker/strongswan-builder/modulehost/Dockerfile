@@ -16,14 +16,21 @@
 # server is older, and records the version beside the module so the apk
 # build and the service check it again (../aport-p11-host/p11-kit-pin-check).
 #
+# The service runs the server as its own unprivileged user, dropping to it
+# with util-linux's setpriv inside the chroot, and labels the token once, as
+# root, with OpenSC's pkcs11-tool loading the module directly. The build fails
+# if either is missing.
+#
 # Built by `make ipsec-module-host` with the module (built against glibc by
 # ipsec-pkcs11-module) as the named build context "module", then exported to
 # a tarball the apk build takes as its input.
 FROM ubuntu:26.04
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends p11-kit \
-    && rm -rf /var/lib/apt/lists/* /usr/share/man /usr/share/info
+    && apt-get install -y --no-install-recommends p11-kit opensc util-linux \
+    && rm -rf /var/lib/apt/lists/* /usr/share/man /usr/share/info \
+    && test -x /usr/bin/setpriv \
+    && test -x /usr/bin/pkcs11-tool
 
 RUN version="$(dpkg-query -W -f='${Version}' p11-kit)" \
     && dpkg --compare-versions "${version}" ge 0.26 \

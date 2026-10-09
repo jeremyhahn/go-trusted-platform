@@ -34,6 +34,8 @@ const (
 	ipsecSuiteDir    = "test/integration/ipsec"
 	viciSocketPath   = "/run/charon.vici"
 	p11KitSocketPath = "/run/p11-kit/xkms.sock"
+	p11HostUser      = "xkms-p11"
+	p11TokenLabel    = "trusted-platform-ipsec"
 )
 
 // PackagingFileError reports a packaging file the guard could not read.
@@ -224,6 +226,60 @@ func TestIPsecPackaging_ServicesRunUnderSocketTakeover(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			assert.NoError(t, requireContains(root, tt.file, tt.facts...))
 		})
+	}
+}
+
+// The module host exports the IPsec token alone, and its p11-kit server runs
+// as the module host's own unprivileged user. The service keeps root only for
+// the chroot and the socket handover; the server drops to the user inside the
+// chroot.
+func TestIPsecPackaging_ModuleHostIsConfined(t *testing.T) {
+	root := repoRoot(t)
+	initd := p11HostAport + "/xkms-p11-kit.initd"
+	tests := map[string]struct {
+		file  string
+		facts []string
+	}{
+		"the apk creates the user": {p11HostAport + "/APKBUILD", []string{
+			`pkgusers="` + p11HostUser + `"`, `pkggroups="` + p11HostUser + `"`, `install="$pkgname.pre-install"`}},
+		"the pre-install adds it": {p11HostAport + "/trusted-platform-p11-host.pre-install", []string{
+			"addgroup -S " + p11HostUser, "-G " + p11HostUser + " -g " + p11HostUser + " " + p11HostUser}},
+		"the builder creates it ahead of abuild": {builderDir + "/Dockerfile", []string{
+			"addgroup -S " + p11HostUser, "-G " + p11HostUser + " " + p11HostUser}},
+		"the root filesystem can drop to it": {builderDir + "/modulehost/Dockerfile", []string{"test -x /usr/bin/setpriv"}},
+		"the service names it":               {initd, []string{`p11_user="` + p11HostUser + `"`}},
+		"the server drops to it": {initd, []string{
+			`drop="/usr/bin/setpriv --reuid=${p11_uid} --regid=${p11_gid} --clear-groups --no-new-privs"`,
+			"/usr/sbin/chroot ${host_root} ${drop} /usr/bin/p11-kit server"}},
+		"the takeover waits for it":     {initd, []string{"${socket} ${p11_user} ${p11_user}:${socket_group} 0660"}},
+		"it owns the state":             {initd, []string{`checkpath -d -m 0700 -o "${p11_user}:${p11_user}" "${state_dir}"`}},
+		"it creates the socket":         {initd, []string{`checkpath -d -m 0755 -o "${p11_user}:${p11_user}" "${socket_dir}"`}},
+		"the export is the IPsec token": {initd, []string{`token_label="` + p11TokenLabel + `"`, `token_uri="pkcs11:token=${token_label}"`, "--provider ${module} ${token_uri}"}},
+		"root labels the token":         {initd, []string{`extra_stopped_commands="init_token"`, `--init-token --label "${token_label}"`}},
+		"the root filesystem can label": {builderDir + "/modulehost/Dockerfile", []string{"test -x /usr/bin/pkcs11-tool"}},
+		"the suite labels it as root":   {ipsecSuiteDir + "/harness_test.go", []string{`"rc-service", "xkms-p11-kit", "init_token"`}},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.NoError(t, requireContains(root, tt.file, tt.facts...))
+		})
+	}
+
+	// No line of the service exports a URI that names no token.
+	content, err := readPackagingFile(root, initd)
+	require.NoError(t, err)
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		for rest := line; ; {
+			_, after, found := strings.Cut(rest, "pkcs11:")
+			if !found {
+				break
+			}
+			assert.True(t, strings.HasPrefix(after, "token="), "unscoped PKCS#11 URI in %s: %s", initd, line)
+			rest = after
+		}
 	}
 }
 

@@ -690,7 +690,7 @@ Two apks and their OpenRC subpackages, built by one `abuild` run in
 |---|---|
 | `trusted-platform-strongswan` | charon, swanctl, `strongswan.d/trusted-platform.conf` and `strongswan.d/charon/pkcs11.conf`; depends on `p11-kit-server>=0.26` for `p11-kit-client.so` |
 | `trusted-platform-strongswan-openrc` | the `charon` service and `/etc/conf.d/charon` |
-| `trusted-platform-p11-host` | the glibc module-host root filesystem as one archive (`/usr/share/xkms-p11-host/rootfs.tar`, with its sha256) and `p11-kit-pin-check`; depends on `p11-kit-server>=0.26` |
+| `trusted-platform-p11-host` | the glibc module-host root filesystem as one archive (`/usr/share/xkms-p11-host/rootfs.tar`, with its sha256) and `p11-kit-pin-check`; creates the `xkms-p11` user the server runs as; depends on `p11-kit-server>=0.26` |
 | `trusted-platform-p11-host-openrc` | the `xkms-p11-kit` service and `/etc/conf.d/xkms-p11-kit` |
 
 **Settings** (`/etc/strongswan.d/trusted-platform.conf`):
@@ -719,8 +719,30 @@ group does not exist, and its start waits for the first takeover.
 bind-mounts `/proc`, `/dev`, `/run/p11-kit` and the node's `/var/lib/xkms`
 into it and runs `p11-kit server` in a chroot, which hosts
 `libxkms_pkcs11.so` on `/run/p11-kit/xkms.sock`. The server runs under
-`socket-takeover` too, which sets the socket to mode 0660, group `strongswan`
-(`XKMS_P11_SOCKET_GROUP`), after every (re)start.
+`socket-takeover` too, which sets the socket to mode 0660, owner `xkms-p11`,
+group `strongswan` (`XKMS_P11_SOCKET_GROUP`), after every (re)start.
+
+The server runs as `xkms-p11`, the apk's own system user, which owns
+`/var/lib/xkms` (0700) and `/run/p11-kit` and nothing else. The service keeps
+root for the mounts, the chroot and the handover, and the server drops to the
+user inside the chroot with `setpriv` (no new privileges, no supplementary
+groups). `command_user` cannot do this: it drops before `chroot` runs.
+
+The server exports one token, `pkcs11:token=trusted-platform-ipsec`, not every
+token the module has. A token's label is blank until it is initialized, so an
+uninitialized token is invisible through the socket, and nothing in charon's
+group can initialize it and become its SO. An operator labels it, as root,
+with the service stopped:
+
+```sh
+install -m 0600 /dev/stdin /run/xkms-p11-kit.so-pin   # the SO PIN, root's
+rc-service xkms-p11-kit init_token
+```
+
+`init_token` refuses a PIN file that is not root's with mode 0600. It loads the
+module directly in the chroot as `xkms-p11`, labels the token, and removes the
+file once that succeeds. The user PIN and the IKE key are then set through the
+socket.
 
 **`socket-takeover`.** Both services run their daemon through this wrapper,
 which supervise-daemon starts again on each respawn. It removes a stale socket,

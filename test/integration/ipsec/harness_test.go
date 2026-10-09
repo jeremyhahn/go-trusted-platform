@@ -36,6 +36,8 @@ const (
 	charonLog = "/var/log/charon.log"
 	// moduleHostLog is where the packaged module host service logs.
 	moduleHostLog = "/var/log/xkms-p11-kit.log"
+	// soPINFile is where the service's init_token command reads the SO PIN.
+	soPINFile = "/run/xkms-p11-kit.so-pin"
 	// charonPID is the pidfile charon writes itself.
 	charonPID = "/run/charon.pid"
 	// viciSocket is charon's VICI control socket.
@@ -250,14 +252,38 @@ func (p *peer) startModuleHost(t *testing.T, ctx context.Context) {
 	}
 }
 
-// startService starts a packaged OpenRC service in the peer's root filesystem
-// and stops it at cleanup; log is the file shown if either fails.
-func (p *peer) startService(t *testing.T, ctx context.Context, service, log string) {
+// initToken labels the peer's token with the packaged service's init_token
+// command, as an operator does, before the service starts: until then the
+// server exports no token at all. The SO PIN goes in the root-only file the
+// command reads, and the command removes it once the token has it.
+func (p *peer) initToken(t *testing.T, ctx context.Context) {
+	t.Helper()
+	p.openrcBooted(t)
+	p.writeFile(t, soPINFile, []byte(soPIN), 0o600)
+	out, err := p.chroot(ctx, nil, "rc-service", "xkms-p11-kit", "init_token")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s: rc-service xkms-p11-kit init_token:\n%s", p.name, out)
+	if _, err := os.Stat(p.path(soPINFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("%s: init_token left the SO PIN in %s (%v)", p.name, soPINFile, err)
+	}
+}
+
+// openrcBooted marks the peer's OpenRC as booted, which rc-service requires.
+func (p *peer) openrcBooted(t *testing.T) {
 	t.Helper()
 	if err := os.MkdirAll(p.path("/run/openrc"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	p.writeFile(t, "/run/openrc/softlevel", nil, 0o644)
+}
+
+// startService starts a packaged OpenRC service in the peer's root filesystem
+// and stops it at cleanup; log is the file shown if either fails.
+func (p *peer) startService(t *testing.T, ctx context.Context, service, log string) {
+	t.Helper()
+	p.openrcBooted(t)
 	out, err := p.chroot(ctx, nil, "rc-service", service, "start")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, p.readFile(log))
@@ -304,14 +330,13 @@ func (p *peer) lookupUser(t *testing.T, name string) (int, int) {
 	return 0, 0
 }
 
-// provisionToken initializes the peer's token and generates the IKE key
-// pair on it through p11-kit-client.so -- the same path charon uses -- and
-// returns the public key.
+// provisionToken sets the user PIN on the peer's labelled token and generates
+// the IKE key pair on it through p11-kit-client.so -- the same path charon
+// uses -- and returns the public key.
 func (p *peer) provisionToken(t *testing.T, ctx context.Context) *ecdsa.PublicKey {
 	t.Helper()
 	tool := []string{"pkcs11-tool", "--module", p11Client}
 	steps := [][]string{
-		{"--init-token", "--label", "vtep-" + p.name, "--so-pin", soPIN},
 		{"--init-pin", "--so-pin", soPIN, "--pin", userPIN},
 		{"--login", "--pin", userPIN, "--keypairgen", "--key-type", "EC:prime256v1", "--id", keyID, "--label", keyLabel},
 		// The module's key store is sealed under the user PIN, so even the
