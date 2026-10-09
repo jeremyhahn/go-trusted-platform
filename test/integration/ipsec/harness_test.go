@@ -43,8 +43,10 @@ const (
 	// viciSocket is charon's VICI control socket.
 	viciSocket = "/run/charon.vici"
 	// platformUser owns the VICI socket: the account the platform daemon
-	// runs as, which the peer root filesystem creates.
-	platformUser = "platformd"
+	// runs as, root on an installed node and the charon service's default.
+	// The peer root filesystem creates no account for it, as a node's does
+	// not.
+	platformUser = "root"
 )
 
 // Token credentials. The PINs exist only inside the test; a node's PIN

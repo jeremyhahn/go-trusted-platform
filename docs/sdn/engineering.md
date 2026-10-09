@@ -707,12 +707,18 @@ Two apks and their OpenRC subpackages, built by one `abuild` run in
 
 **`charon` service.** `need`s `net` and `xkms-p11-kit`, so charon never starts
 without its key store. charon drops to `strongswan` and runs under
-`socket-takeover` (below), which gives the vici plugin's socket to the platform
-user (`platformd:platform`, `CHARON_VICI_USER`/`CHARON_VICI_GROUP`) at mode 0600
-once charon has handed it to `strongswan`. A respawned charon recreates the
+`socket-takeover` (below), which gives the vici plugin's socket to the account
+platformd runs as (`CHARON_VICI_USER`/`CHARON_VICI_GROUP`, default `root:root`:
+the installer runs platformd as root) at mode 0600 once charon has handed it to
+`strongswan`. The VICI dialer refuses a socket its own uid does not own, so
+the two accounts change together. A respawned charon recreates the
 socket and the takeover runs again with it, so the window is that of one start,
 not one health-check interval. The service refuses to start when that user or
-group does not exist, and its start waits for the first takeover.
+group does not exist, and its start waits for the first takeover (owner and
+mode 0600 both, since charon creates the socket as root first). The installer
+adds `xkms-p11-kit` and `charon` to the default runlevel whenever their
+`-openrc` packages are installed, and both generated platformd scripts start
+`after charon`, so platformd finds the socket served at boot.
 
 **`xkms-p11-kit` service.** Unpacks the root filesystem under
 `/var/lib/xkms-p11-host` (again whenever the apk brings a different archive),

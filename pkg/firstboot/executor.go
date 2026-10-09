@@ -1277,7 +1277,7 @@ start_stop_daemon_args="--stdout /var/log/trusted-platform/platformd.log --stder
 
 depend() {
     need net
-    after firewall
+    after firewall charon
 }
 
 start_pre() {

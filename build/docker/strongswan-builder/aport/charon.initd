@@ -11,17 +11,20 @@
 # The VICI socket (/run/charon.vici, set in strongswan.d/trusted-platform.conf)
 # is the control plane: whoever can connect to it can load credentials and
 # bring tunnels up or down. charon hands it to its own user at mode 0660.
-# charon runs under socket-takeover, which gives the socket to the platform
-# user at mode 0600 as soon as charon has handed it over, on the first start
-# and on every respawn.
+# charon runs under socket-takeover, which gives the socket to the account
+# platformd runs as, at mode 0600, as soon as charon has handed it over, on the
+# first start and on every respawn. platformd runs as root on the nodes the
+# installer builds, so the owner is root:root unless /etc/conf.d/charon names
+# another account (CHARON_VICI_USER, CHARON_VICI_GROUP); platformd refuses a
+# socket its own uid does not own.
 #
 # The IKE key lives behind PKCS#11 in the module host, so charon starts only
 # after it (xkms-p11-kit, from trusted-platform-p11-host).
 
 vici_socket="/run/charon.vici"
 charon_user="strongswan"
-vici_user="${CHARON_VICI_USER:-platformd}"
-vici_group="${CHARON_VICI_GROUP:-platform}"
+vici_user="${CHARON_VICI_USER:-root}"
+vici_group="${CHARON_VICI_GROUP:-root}"
 
 description="strongSwan charon IKEv2 daemon"
 supervisor="supervise-daemon"
@@ -51,10 +54,12 @@ start_pre() {
 
 # start_post waits for the first takeover, so services that need charon start
 # only once platformd can reach it. It waits a little longer than the takeover
-# does.
+# does. The mode is part of the test: charon creates the socket as root before
+# it hands it to strongswan, so with the root default the owner alone would
+# match too early.
 start_post() {
 	local tries=0
-	while [ "$(stat -c %U "${vici_socket}" 2>/dev/null)" != "${vici_user}" ]; do
+	while [ "$(stat -c '%U:%G %a' "${vici_socket}" 2>/dev/null)" != "${vici_user}:${vici_group} 600" ]; do
 		tries=$((tries + 1))
 		if [ "${tries}" -gt $((SOCKET_TAKEOVER_TRIES + 20)) ]; then
 			eerror "charon did not serve ${vici_socket}"

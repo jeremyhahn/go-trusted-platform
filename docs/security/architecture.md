@@ -257,10 +257,12 @@ Nothing. Policies live in the binary and on disk; the engine's store is
     (`trusted-platform-strongswan`) authenticates IKEv2 with a P-256 key held
     behind the go-xkms module and signs through `p11-kit-client.so`; no key
     file exists on the node. The boundaries around it:
-    - *The VICI socket* (`/run/charon.vici`) is mode 0600 owned by the platform
-      user. Whoever can write to it can install SAs and policies; the
-      `charon` service re-owns it after every (re)start and refuses to start
-      without that user.
+    - *The VICI socket* (`/run/charon.vici`) is mode 0600 owned by the
+      account platformd runs as (root on installer-built nodes, the `charon`
+      service's default). Whoever can write to it can install SAs and
+      policies; the `charon` service re-owns it after every (re)start and
+      refuses to start without that account, and platformd refuses a socket
+      its uid does not own.
     - *The p11-kit socket* (`/run/p11-kit/xkms.sock`) is mode 0660, group
       `strongswan`. A member can sign with the IKE key.
     - *charon runs as `strongswan`* with `CAP_NET_ADMIN` only. It loads its

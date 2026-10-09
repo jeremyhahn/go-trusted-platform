@@ -17,9 +17,11 @@
 #CHARON_TAKEOVER_TRIES=100
 
 # The owner of the VICI socket (/run/charon.vici, mode 0600): the account the
-# platform daemon runs as. The service refuses to start if it does not exist.
-#CHARON_VICI_USER="platformd"
-#CHARON_VICI_GROUP="platform"
+# platform daemon runs as, root on the nodes the installer builds. Change it
+# only together with the account platformd runs as: platformd refuses a socket
+# its own uid does not own. The service refuses to start if it does not exist.
+#CHARON_VICI_USER="root"
+#CHARON_VICI_GROUP="root"
 
 # charon reaches the IKE key through p11-kit-client.so (the pkcs11 plugin is
 # configured in /etc/strongswan.d/charon/pkcs11.conf), which talks to the

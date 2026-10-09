@@ -229,6 +229,35 @@ func TestIPsecPackaging_ServicesRunUnderSocketTakeover(t *testing.T) {
 	}
 }
 
+// TestIPsecPackaging_PlatformdReachesCharon: an installed node gives the
+// VICI socket to the account platformd runs as (root: neither generated
+// platformd script sets command_user, and the VICI dialer refuses a socket
+// its own uid does not own), enables both IPsec services at boot, and starts
+// platformd after charon.
+func TestIPsecPackaging_PlatformdReachesCharon(t *testing.T) {
+	root := repoRoot(t)
+	tests := map[string]struct {
+		file  string
+		facts []string
+	}{
+		"charon gives the socket to root":     {strongSwanAport + "/charon.initd", []string{`vici_user="${CHARON_VICI_USER:-root}"`, `vici_group="${CHARON_VICI_GROUP:-root}"`}},
+		"its conf.d documents that default":   {strongSwanAport + "/charon.confd", []string{`#CHARON_VICI_USER="root"`, `#CHARON_VICI_GROUP="root"`}},
+		"the installer enables both at boot":  {"pkg/installer/alpine.go", []string{`{name: "xkms-p11-kit", runlevel: "default"}`, `{name: "charon", runlevel: "default"}`}},
+		"installed platformd follows charon":  {"pkg/installer/installer.go", []string{"after tpm-firstboot-seal charon\n"}},
+		"first-boot platformd follows charon": {"pkg/firstboot/executor.go", []string{"after firewall charon\n"}},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.NoError(t, requireContains(root, tt.file, tt.facts...))
+		})
+	}
+	for _, file := range []string{"pkg/installer/installer.go", "pkg/firstboot/executor.go"} {
+		body, err := readPackagingFile(root, file)
+		require.NoError(t, err)
+		assert.NotContains(t, body, "command_user", "%s: platformd must run as root, the VICI socket's owner", file)
+	}
+}
+
 // The module host exports the IPsec token alone, and its p11-kit server runs
 // as the module host's own unprivileged user. The service keeps root only for
 // the chroot and the socket handover; the server drops to the user inside the
