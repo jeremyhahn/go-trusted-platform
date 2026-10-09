@@ -15,7 +15,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -43,39 +45,21 @@ const (
 	verdictSubscriberBuffer = 64
 )
 
-// ErrVerdictStreamUnavailable is returned when the daemon has no verdict
-// stream to serve: the attestation service cannot hand out its verdicts.
-type ErrVerdictStreamUnavailable struct{}
-
-func (ErrVerdictStreamUnavailable) Error() string {
-	return "attestation: the device verdict stream is not available"
-}
-
-// ErrVerdictStreamClosed is returned when the daemon is shutting down.
-type ErrVerdictStreamClosed struct{}
-
-func (ErrVerdictStreamClosed) Error() string {
-	return "attestation: the device verdict stream is closed"
-}
-
-// ErrVerdictSubscriberBehind ends the stream of a subscriber that fell more
-// than verdictSubscriberBuffer verdicts behind. Ending the stream, rather than
-// dropping verdicts, tells the subscriber it missed some.
-type ErrVerdictSubscriberBehind struct{}
-
-func (ErrVerdictSubscriberBehind) Error() string {
-	return "attestation: the device verdict subscriber fell behind and missed verdicts"
-}
-
-// ErrVerdictStreamForbidden is returned when the caller may not follow
-// device verdicts.
-type ErrVerdictStreamForbidden struct {
-	Reason string
-}
-
-func (e ErrVerdictStreamForbidden) Error() string {
-	return "attestation: device verdict stream denied: " + e.Reason
-}
+// The verdict stream's errors are shared with the REST transport, which cannot
+// import this package, so they live in pkg/attestation/verdict.
+type (
+	// ErrVerdictStreamUnavailable is returned when the daemon has no verdict
+	// stream to serve.
+	ErrVerdictStreamUnavailable = verdict.ErrStreamUnavailable
+	// ErrVerdictStreamClosed is returned when the daemon is shutting down.
+	ErrVerdictStreamClosed = verdict.ErrStreamClosed
+	// ErrVerdictSubscriberBehind ends the stream of a subscriber that fell more
+	// than verdictSubscriberBuffer verdicts behind.
+	ErrVerdictSubscriberBehind = verdict.ErrSubscriberBehind
+	// ErrVerdictStreamForbidden is returned when the caller may not follow
+	// device verdicts.
+	ErrVerdictStreamForbidden = verdict.ErrStreamForbidden
+)
 
 // deviceVerdictHub fans every recorded device verdict out to the open
 // StreamDeviceVerdicts streams. It is a verdict.Observer, so the attestation
@@ -164,42 +148,63 @@ func (a verdictAudience) admits(tenantID string) bool {
 	return a.everyTenant || (tenantID != "" && tenantID == a.tenantID)
 }
 
-// verdictAudienceFor decides which verdicts the caller of ctx may follow.
+// resolveVerdictAudience is the one place that decides which verdicts a
+// principal may follow, whatever transport it came in on.
 //
-//   - A platform-token caller needs attestation:read and sees its token's
-//     tenant only, or every tenant when that is the system tenant. A token
-//     naming no tenant is refused.
-//   - A bearer token the daemon could only check for validity carries no
-//     scopes, so it is refused.
-//   - An mTLS identity sees its certificate's tenant only, or every tenant
-//     when that is the system tenant: the platform's own infrastructure, such
-//     as an overlay gateway. A certificate naming no tenant is refused.
-//   - A caller with no credential sees every tenant only when the Unix socket
-//     admitted it by its kernel-verified peer credentials. Any other caller
-//     without a credential, such as one on TCP, is refused.
-func verdictAudienceFor(ctx context.Context) (verdictAudience, error) {
-	if authCtx, ok := grpccreds.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
-		if !authCtx.HasScope(verdictStreamScope) {
-			return verdictAudience{}, ErrVerdictStreamForbidden{Reason: verdictStreamScope + " is required"}
-		}
-		if authCtx.TenantID == "" {
-			return verdictAudience{}, ErrVerdictStreamForbidden{Reason: "the token names no tenant"}
-		}
-		return audienceOfTenant(authCtx.TenantID), nil
+//   - A principal naming a tenant sees that tenant only, or every tenant when
+//     it is the system tenant: the platform's own infrastructure, such as an
+//     overlay gateway.
+//   - A certificate that names no tenant is refused.
+//   - A principal with no credential sees every tenant only when the Unix
+//     socket admitted it by its kernel-verified peer credentials. Any other
+//     caller without a credential, such as one on TCP, is refused.
+func resolveVerdictAudience(principal verdict.StreamPrincipal) (verdictAudience, error) {
+	if principal.TenantID != "" {
+		return audienceOfTenant(principal.TenantID), nil
 	}
-	if _, ok := grpccreds.TokenFromContext(ctx); ok {
-		return verdictAudience{}, ErrVerdictStreamForbidden{Reason: "the token carries no scopes"}
+	if principal.HasCertificate {
+		return verdictAudience{}, ErrVerdictStreamForbidden{Reason: "the certificate names no tenant"}
 	}
-	if identity := IdentityFromContext(ctx); identity != nil {
-		if identity.TenantID == "" {
-			return verdictAudience{}, ErrVerdictStreamForbidden{Reason: "the certificate names no tenant"}
-		}
-		return audienceOfTenant(identity.TenantID), nil
-	}
-	if _, ok := peercred.UnixCredentialsFromContext(ctx); ok {
+	if principal.UnixPeer {
 		return verdictAudience{everyTenant: true}, nil
 	}
 	return verdictAudience{}, ErrVerdictStreamForbidden{Reason: "the caller presented no credential"}
+}
+
+// verdictPrincipalFor reads the caller of a gRPC (or Unix socket) context.
+//
+//   - A platform-token caller needs attestation:read and is the tenant of its
+//     token. A token naming no tenant is refused.
+//   - A bearer token the daemon could only check for validity carries no
+//     scopes, so it is refused.
+//   - An mTLS identity is its certificate's tenant.
+func verdictPrincipalFor(ctx context.Context) (verdict.StreamPrincipal, error) {
+	if authCtx, ok := grpccreds.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		if !authCtx.HasScope(verdictStreamScope) {
+			return verdict.StreamPrincipal{}, ErrVerdictStreamForbidden{Reason: verdictStreamScope + " is required"}
+		}
+		if authCtx.TenantID == "" {
+			return verdict.StreamPrincipal{}, ErrVerdictStreamForbidden{Reason: "the token names no tenant"}
+		}
+		return verdict.StreamPrincipal{TenantID: authCtx.TenantID}, nil
+	}
+	if _, ok := grpccreds.TokenFromContext(ctx); ok {
+		return verdict.StreamPrincipal{}, ErrVerdictStreamForbidden{Reason: "the token carries no scopes"}
+	}
+	if identity := IdentityFromContext(ctx); identity != nil {
+		return verdict.StreamPrincipal{TenantID: identity.TenantID, HasCertificate: true}, nil
+	}
+	_, unixPeer := peercred.UnixCredentialsFromContext(ctx)
+	return verdict.StreamPrincipal{UnixPeer: unixPeer}, nil
+}
+
+// verdictAudienceFor decides which verdicts the caller of ctx may follow.
+func verdictAudienceFor(ctx context.Context) (verdictAudience, error) {
+	principal, err := verdictPrincipalFor(ctx)
+	if err != nil {
+		return verdictAudience{}, err
+	}
+	return resolveVerdictAudience(principal)
 }
 
 func audienceOfTenant(tenantID string) verdictAudience {
@@ -207,6 +212,82 @@ func audienceOfTenant(tenantID string) verdictAudience {
 		return verdictAudience{everyTenant: true}
 	}
 	return verdictAudience{tenantID: tenantID}
+}
+
+// OpenStream admits principal to the stream and registers its subscription.
+// It is the transport-neutral entry: gRPC, the Unix socket and REST all follow
+// verdicts through it.
+func (h *deviceVerdictHub) OpenStream(principal verdict.StreamPrincipal) (verdict.StreamSubscription, error) {
+	audience, err := resolveVerdictAudience(principal)
+	if err != nil {
+		return nil, err
+	}
+	sub, err := h.subscribe()
+	if err != nil {
+		return nil, err
+	}
+	return &verdictSubscription{hub: h, sub: sub, audience: audience}, nil
+}
+
+// verdictSubscription is one admitted follower of a deviceVerdictHub.
+type verdictSubscription struct {
+	hub      *deviceVerdictHub
+	sub      chan verdict.RecordedDeviceVerdict
+	audience verdictAudience
+}
+
+// Serve implements verdict.StreamSubscription.
+func (s *verdictSubscription) Serve(
+	ctx context.Context,
+	send func(verdict.RecordedDeviceVerdict) error,
+	heartbeat verdict.StreamHeartbeat,
+) error {
+	var beat <-chan time.Time
+	if heartbeat.Every > 0 && heartbeat.Beat != nil {
+		ticker := time.NewTicker(heartbeat.Every)
+		defer ticker.Stop()
+		beat = ticker.C
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.hub.done:
+			return ErrVerdictStreamClosed{}
+		case <-beat:
+			if err := heartbeat.Beat(); err != nil {
+				return err
+			}
+		case recorded, ok := <-s.sub:
+			if !ok {
+				return ErrVerdictSubscriberBehind{}
+			}
+			if !s.audience.admits(recorded.Verdict.TenantID) {
+				continue
+			}
+			if err := send(recorded); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// Close implements verdict.StreamSubscription.
+func (s *verdictSubscription) Close() {
+	s.hub.unsubscribe(s.sub)
+}
+
+// OpenVerdictStream implements verdict.StreamOpener. Until a hub is set it
+// answers ErrVerdictStreamUnavailable.
+func (s *AttestationServiceServer) OpenVerdictStream(principal verdict.StreamPrincipal) (verdict.StreamSubscription, error) {
+	if s == nil {
+		return nil, ErrVerdictStreamUnavailable{}
+	}
+	hub := s.verdicts.Load()
+	if hub == nil {
+		return nil, ErrVerdictStreamUnavailable{}
+	}
+	return hub.OpenStream(principal)
 }
 
 // SetVerdictHub installs the hub StreamDeviceVerdicts serves from. Until it
@@ -224,42 +305,50 @@ func (s *AttestationServiceServer) StreamDeviceVerdicts(
 	_ *platformv1.StreamDeviceVerdictsRequest,
 	stream grpc.ServerStreamingServer[platformv1.DeviceVerdictEvent],
 ) error {
-	if s == nil {
-		return status.Error(codes.FailedPrecondition, ErrVerdictStreamUnavailable{}.Error())
-	}
-	hub := s.verdicts.Load()
-	if hub == nil {
-		return status.Error(codes.FailedPrecondition, ErrVerdictStreamUnavailable{}.Error())
+	if s == nil || s.verdicts.Load() == nil {
+		return verdictStreamStatus(ErrVerdictStreamUnavailable{})
 	}
 	ctx := stream.Context()
-	audience, err := verdictAudienceFor(ctx)
+	principal, err := verdictPrincipalFor(ctx)
 	if err != nil {
-		return status.Error(codes.PermissionDenied, err.Error())
+		return verdictStreamStatus(err)
 	}
-	sub, err := hub.subscribe()
+	subscription, err := s.OpenVerdictStream(principal)
 	if err != nil {
-		return status.Error(codes.Unavailable, err.Error())
+		return verdictStreamStatus(err)
 	}
-	defer hub.unsubscribe(sub)
+	defer subscription.Close()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return status.FromContextError(ctx.Err()).Err()
-		case <-hub.done:
-			return status.Error(codes.Unavailable, ErrVerdictStreamClosed{}.Error())
-		case recorded, ok := <-sub:
-			if !ok {
-				return status.Error(codes.ResourceExhausted, ErrVerdictSubscriberBehind{}.Error())
-			}
-			if !audience.admits(recorded.Verdict.TenantID) {
-				continue
-			}
-			if err := stream.Send(deviceVerdictEvent(recorded)); err != nil {
-				return err
-			}
-		}
+	err = subscription.Serve(ctx, func(recorded verdict.RecordedDeviceVerdict) error {
+		return stream.Send(deviceVerdictEvent(recorded))
+	}, verdict.StreamHeartbeat{})
+	return verdictStreamStatus(err)
+}
+
+// verdictStreamStatus maps a stream error to its gRPC status. An error it does
+// not know, such as a failed send, passes through.
+func verdictStreamStatus(err error) error {
+	var (
+		unavailable ErrVerdictStreamUnavailable
+		forbidden   ErrVerdictStreamForbidden
+		closed      ErrVerdictStreamClosed
+		behind      ErrVerdictSubscriberBehind
+	)
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &unavailable):
+		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.As(err, &forbidden):
+		return status.Error(codes.PermissionDenied, err.Error())
+	case errors.As(err, &closed):
+		return status.Error(codes.Unavailable, err.Error())
+	case errors.As(err, &behind):
+		return status.Error(codes.ResourceExhausted, err.Error())
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return status.FromContextError(err).Err()
 	}
+	return err
 }
 
 // deviceVerdictEvent renders a recorded device verdict for the wire.
