@@ -106,6 +106,7 @@ examples/provisioning-client/provisioning-client
 trivy-results.sarif
 build/gosec-results.sarif
 build/gosec-report.txt
+build/gosec-stderr.txt
 
 # Deployment-private bootstrap configs. The canonical copies live in
 # the private platform-configs repository (deployments/), checked out

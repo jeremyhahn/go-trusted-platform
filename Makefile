@@ -491,6 +491,24 @@ COVERAGE_DIR                := $(BUILD_DIR)/coverage
 #   matches this pin. Never pin below the latest release.
 GOLANGCI_LINT_VERSION       := v2.14.0
 
+# gosec is pinned and built with THIS module's toolchain, for the same reason as
+# golangci-lint: a gosec built with an older Go cannot type-check a module that
+# declares a newer `go` line, so every package reports "type errors" and the
+# scan exits non-zero with an empty report. v2.29.0 is the newest gosec v2
+# release (and the only one) in the module cache.
+#
+# gosec is built from its own tools module, $(GOSEC_SRC), NOT with
+# `go install ...@$(GOSEC_VERSION)`: that resolves against gosec's own go.mod,
+# whose golang.org/x/tools is too old to read Go 1.27 export data, so every
+# package still reports type errors. The tools module requires gosec (a `tool`
+# directive) and a current x/tools (v0.51.0), and commits its go.sum. Bump
+# GOSEC_VERSION and the module's gosec requirement together; the main module's
+# go.mod is untouched.
+GOSEC_VERSION               := v2.29.0
+GOSEC_SRC                   := build/tools-src/gosec
+GOSEC_DIR                   := $(BUILD_DIR)/tools/gosec-$(GOSEC_VERSION)
+GOSEC                       := $(GOSEC_DIR)/gosec
+
 # golangci-lint v2 has NO default timeout ("Disabled by default"); this is the
 # only wall-clock bound on the run, and 15m was calibrated on an idle box. It is
 # process wall-clock from the moment the binary starts — queueing for a runner
@@ -3232,41 +3250,45 @@ lint: $(GOLANGCI_LINT)
 
 .PHONY: gosec
 ## gosec: Run security analysis with gosec
-gosec:
-	@echo "$(CYAN)$(BOLD)→ Running security analysis with gosec...$(RESET)"
+gosec: $(GOSEC)
+	@echo "$(CYAN)$(BOLD)→ Running security analysis with gosec $(GOSEC_VERSION)...$(RESET)"
 	@mkdir -p $(BUILD_DIR)
-	@GOSEC_BIN=$$(command -v gosec 2>/dev/null || echo "$$HOME/go/bin/gosec"); \
-	if [ -x "$$GOSEC_BIN" ]; then \
-		$$GOSEC_BIN -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
-			-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
-			-exclude-generated \
-			-fmt=text -out=$(BUILD_DIR)/gosec-report.txt ./... && \
-		echo "$(GREEN)✓ Security scan complete - no issues found$(RESET)" && \
-		echo "$(CYAN)Report saved to: $(BUILD_DIR)/gosec-report.txt$(RESET)" || \
-		(echo "$(RED)$(BOLD)✗ Security issues found:$(RESET)" && \
-			cat $(BUILD_DIR)/gosec-report.txt && exit 1); \
+	@rc=0; \
+	$(GOSEC) -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+		-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
+		-exclude-generated \
+		-fmt=text -out=$(BUILD_DIR)/gosec-report.txt ./... 2>$(BUILD_DIR)/gosec-stderr.txt || rc=$$?; \
+	if [ $$rc -eq 0 ]; then \
+		echo "$(GREEN)✓ Security scan complete - no issues found$(RESET)"; \
+		echo "$(CYAN)Report saved to: $(BUILD_DIR)/gosec-report.txt$(RESET)"; \
+	elif grep -qE 'type errors|Golang errors in' $(BUILD_DIR)/gosec-report.txt $(BUILD_DIR)/gosec-stderr.txt; then \
+		echo "$(RED)$(BOLD)✗ gosec could not analyze the module (packages failed to type-check; not a findings failure). First errors:$(RESET)"; \
+		grep -hE 'Golang errors in|^  > |type errors' $(BUILD_DIR)/gosec-report.txt $(BUILD_DIR)/gosec-stderr.txt | head -n 5; \
+		echo "$(YELLOW)  Full report: $(BUILD_DIR)/gosec-report.txt$(RESET)"; \
+		exit $$rc; \
 	else \
-		echo "$(YELLOW)⚠ gosec not found$(RESET)"; \
-		echo "$(YELLOW)  Install with: make install-gosec$(RESET)"; \
-		exit 1; \
+		echo "$(RED)$(BOLD)✗ Security issues found (gosec exit $$rc):$(RESET)"; \
+		cat $(BUILD_DIR)/gosec-stderr.txt $(BUILD_DIR)/gosec-report.txt; \
+		exit $$rc; \
 	fi
 
 .PHONY: gosec-sarif
 ## gosec-sarif: Run gosec and output SARIF format for GitHub Security tab
-gosec-sarif:
-	@echo "$(CYAN)$(BOLD)→ Running gosec with SARIF output...$(RESET)"
+gosec-sarif: $(GOSEC)
+	@echo "$(CYAN)$(BOLD)→ Running gosec $(GOSEC_VERSION) with SARIF output...$(RESET)"
 	@mkdir -p $(BUILD_DIR)
-	@GOSEC_BIN=$$(command -v gosec 2>/dev/null || echo "$$HOME/go/bin/gosec"); \
-	if [ -x "$$GOSEC_BIN" ]; then \
-		$$GOSEC_BIN -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
-			-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
-			-exclude-generated \
-			-fmt=sarif -out=$(BUILD_DIR)/gosec-results.sarif ./... || true; \
-		echo "$(GREEN)✓ SARIF report: $(BUILD_DIR)/gosec-results.sarif$(RESET)"; \
-	else \
-		echo "$(YELLOW)⚠ gosec not found$(RESET)"; \
+	@# Findings do not fail this target (the SARIF file carries them); only a
+	@# run that produced no report at all (type errors, crash) does.
+	@rm -f $(BUILD_DIR)/gosec-results.sarif
+	@$(GOSEC) -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+		-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
+		-exclude-generated \
+		-fmt=sarif -out=$(BUILD_DIR)/gosec-results.sarif ./... || true
+	@if [ ! -s $(BUILD_DIR)/gosec-results.sarif ]; then \
+		echo "$(RED)$(BOLD)✗ gosec produced no SARIF report$(RESET)"; \
 		exit 1; \
 	fi
+	@echo "$(GREEN)✓ SARIF report: $(BUILD_DIR)/gosec-results.sarif$(RESET)"
 
 # Modules scanned by `make vuln`, kept in step with the module split: the root
 # module and the separately-versioned SDK. Both are blocking.
@@ -3416,15 +3438,16 @@ install-tools: install-gosec install-govulncheck install-trivy install-grype ins
 
 .PHONY: install-gosec
 ## install-gosec: Install gosec security scanner
-install-gosec:
-	@echo "$(CYAN)$(BOLD)→ Installing gosec...$(RESET)"
-	@if ! command -v gosec >/dev/null 2>&1; then \
-		echo "$(CYAN)  Installing gosec security scanner...$(RESET)"; \
-		go install github.com/securego/gosec/v2/cmd/gosec@latest; \
-		echo "$(GREEN)  ✓ gosec installed$(RESET)"; \
-	else \
-		echo "$(GREEN)  ✓ gosec already installed$(RESET)"; \
-	fi
+install-gosec: $(GOSEC)
+	@echo "$(GREEN)  ✓ gosec $(GOSEC_VERSION) at $(GOSEC)$(RESET)"
+
+# Built from the gosec tools module ($(GOSEC_SRC)) with this module's toolchain
+# into a version-stamped directory; make skips it when the binary is present.
+# Never resolved from PATH.
+$(GOSEC):
+	@echo "$(CYAN)$(BOLD)→ Building gosec $(GOSEC_VERSION) from $(GOSEC_SRC) (module toolchain, x/tools v0.51.0)...$(RESET)"
+	@mkdir -p $(GOSEC_DIR)
+	@go build -C $(GOSEC_SRC) -o $(abspath $(GOSEC)) github.com/securego/gosec/v2/cmd/gosec
 
 .PHONY: install-govulncheck
 ## install-govulncheck: Install govulncheck vulnerability scanner

@@ -1,6 +1,6 @@
 module github.com/jeremyhahn/go-trusted-platform
 
-go 1.27.1
+go 1.27.2
 
 // VictoriaMetrics/metrics v1.18.1 requires deleted valyala/histogram repo
 replace github.com/VictoriaMetrics/metrics => github.com/VictoriaMetrics/metrics v1.35.1
@@ -76,7 +76,7 @@ require (
 	github.com/wailsapp/wails/v2 v2.12.0
 	github.com/yosida95/uritemplate/v3 v3.0.2
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.58.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0

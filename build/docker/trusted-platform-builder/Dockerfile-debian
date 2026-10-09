@@ -1,4 +1,4 @@
-ARG BASE_IMAGE="golang:1.27.1-bookworm"
+ARG BASE_IMAGE="golang:1.27.2-bookworm"
 
 FROM $BASE_IMAGE
 

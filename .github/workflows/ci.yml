@@ -60,7 +60,7 @@ permissions:
   security-events: write
 
 env:
-  GO_VERSION: "1.27.1"
+  GO_VERSION: "1.27.2"
   # The toolchain the repository must keep COMPILING under, one release ahead of
   # GO_VERSION — see the `gonext` job. Pinned exactly, like GO_VERSION, so the
   # lane cannot change what it tests without a commit. It is never allowed to

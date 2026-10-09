@@ -141,7 +141,7 @@ permissions:
   security-events: write
 
 env:
-  GO_VERSION: "1.27.1"
+  GO_VERSION: "1.27.2"
   # Builds never resolve through a workspace: first-party modules come from
   # Gitea tags (conventions/dependency-resolution.md §2).
   GOWORK: "off"

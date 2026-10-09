@@ -8,7 +8,7 @@
 # For integration tests with KVM acceleration:
 #   docker run --rm -it --privileged --device /dev/kvm -v $(pwd):/workspace go-trusted-platform-dev
 
-ARG BASE_IMAGE="golang:1.27.1-bookworm"
+ARG BASE_IMAGE="golang:1.27.2-bookworm"
 
 FROM ${BASE_IMAGE}
 
