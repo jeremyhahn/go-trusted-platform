@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
@@ -551,6 +552,15 @@ func (v1Router *Router) attestationRoutes() {
 	// collector and never quotes. Admin-gated: a report is a security
 	// verdict about a machine and the trigger spends TPM time.
 	restattestation.NewReportsRouter(v1Router.logger, rep, v1Router.responseWriter).
+		RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+
+	// The device verdict stream (#709) as Server-Sent Events. Admin-gated
+	// like the reports it follows; which tenants' verdicts the caller sees is
+	// decided by the stream service, the same for gRPC, Unix and REST. A
+	// server that serves no stream leaves the opener nil and the route
+	// answers 503.
+	opener, _ := server.(verdict.StreamOpener)
+	restattestation.NewVerdictsRouter(opener, v1Router.responseWriter).
 		RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 
 	// Events surface — distinct from the proto-defined manifest /

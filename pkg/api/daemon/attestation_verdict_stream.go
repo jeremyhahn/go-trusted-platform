@@ -22,7 +22,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
@@ -214,10 +213,10 @@ func audienceOfTenant(tenantID string) verdictAudience {
 	return verdictAudience{tenantID: tenantID}
 }
 
-// OpenStream admits principal to the stream and registers its subscription.
+// OpenVerdictStream admits principal to the stream and registers its subscription.
 // It is the transport-neutral entry: gRPC, the Unix socket and REST all follow
 // verdicts through it.
-func (h *deviceVerdictHub) OpenStream(principal verdict.StreamPrincipal) (verdict.StreamSubscription, error) {
+func (h *deviceVerdictHub) OpenVerdictStream(principal verdict.StreamPrincipal) (verdict.StreamSubscription, error) {
 	audience, err := resolveVerdictAudience(principal)
 	if err != nil {
 		return nil, err
@@ -287,7 +286,7 @@ func (s *AttestationServiceServer) OpenVerdictStream(principal verdict.StreamPri
 	if hub == nil {
 		return nil, ErrVerdictStreamUnavailable{}
 	}
-	return hub.OpenStream(principal)
+	return hub.OpenVerdictStream(principal)
 }
 
 // SetVerdictHub installs the hub StreamDeviceVerdicts serves from. Until it
@@ -320,7 +319,7 @@ func (s *AttestationServiceServer) StreamDeviceVerdicts(
 	defer subscription.Close()
 
 	err = subscription.Serve(ctx, func(recorded verdict.RecordedDeviceVerdict) error {
-		return stream.Send(deviceVerdictEvent(recorded))
+		return stream.Send(verdict.EventOf(recorded))
 	}, verdict.StreamHeartbeat{})
 	return verdictStreamStatus(err)
 }
@@ -349,22 +348,6 @@ func verdictStreamStatus(err error) error {
 		return status.FromContextError(err).Err()
 	}
 	return err
-}
-
-// deviceVerdictEvent renders a recorded device verdict for the wire.
-func deviceVerdictEvent(recorded verdict.RecordedDeviceVerdict) *platformv1.DeviceVerdictEvent {
-	v := recorded.Verdict
-	return &platformv1.DeviceVerdictEvent{
-		EventId:       recorded.EventID,
-		RecordedAt:    timestamppb.New(recorded.RecordedAt),
-		DeviceId:      v.DeviceID,
-		TenantId:      v.TenantID,
-		HostId:        v.HostID,
-		Serial:        v.Serial,
-		Passed:        v.Passed,
-		Cryptographic: v.Cryptographic,
-		Reason:        v.Reason,
-	}
 }
 
 // streamDeviceVerdicts serves the attestation service's recorded verdicts on

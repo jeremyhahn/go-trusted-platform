@@ -77,7 +77,7 @@ func TestResolveVerdictAudience(t *testing.T) {
 func TestOpenStreamDeliversOnlyTheAudience(t *testing.T) {
 	hub := newDeviceVerdictHub()
 	defer hub.Close()
-	subscription, err := hub.OpenStream(verdict.StreamPrincipal{TenantID: "t1"})
+	subscription, err := hub.OpenVerdictStream(verdict.StreamPrincipal{TenantID: "t1"})
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestOpenStreamDeliversOnlyTheAudience(t *testing.T) {
 func TestOpenStreamRefusesAnUnauthorisedPrincipal(t *testing.T) {
 	hub := newDeviceVerdictHub()
 	defer hub.Close()
-	if _, err := hub.OpenStream(verdict.StreamPrincipal{HasCertificate: true}); !errors.As(err, new(ErrVerdictStreamForbidden)) {
+	if _, err := hub.OpenVerdictStream(verdict.StreamPrincipal{HasCertificate: true}); !errors.As(err, new(ErrVerdictStreamForbidden)) {
 		t.Fatalf("err = %v, want ErrVerdictStreamForbidden", err)
 	}
 	if len(hub.subs) != 0 {
@@ -119,14 +119,14 @@ func TestOpenStreamRefusesAnUnauthorisedPrincipal(t *testing.T) {
 func TestOpenStreamOnAClosedHub(t *testing.T) {
 	hub := newDeviceVerdictHub()
 	hub.Close()
-	if _, err := hub.OpenStream(verdict.StreamPrincipal{UnixPeer: true}); !errors.As(err, new(ErrVerdictStreamClosed)) {
+	if _, err := hub.OpenVerdictStream(verdict.StreamPrincipal{UnixPeer: true}); !errors.As(err, new(ErrVerdictStreamClosed)) {
 		t.Fatalf("err = %v, want ErrVerdictStreamClosed", err)
 	}
 }
 
 func TestServeHeartbeatsWhileIdleAndStopsOnClose(t *testing.T) {
 	hub := newDeviceVerdictHub()
-	subscription, err := hub.OpenStream(verdict.StreamPrincipal{UnixPeer: true})
+	subscription, err := hub.OpenVerdictStream(verdict.StreamPrincipal{UnixPeer: true})
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestServeHeartbeatsWhileIdleAndStopsOnClose(t *testing.T) {
 func TestServeStopsWhenAHeartbeatFails(t *testing.T) {
 	hub := newDeviceVerdictHub()
 	defer hub.Close()
-	subscription, err := hub.OpenStream(verdict.StreamPrincipal{UnixPeer: true})
+	subscription, err := hub.OpenVerdictStream(verdict.StreamPrincipal{UnixPeer: true})
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestServeStopsWhenAHeartbeatFails(t *testing.T) {
 func TestServeEndsASubscriberThatFellBehind(t *testing.T) {
 	hub := newDeviceVerdictHub()
 	defer hub.Close()
-	subscription, err := hub.OpenStream(verdict.StreamPrincipal{UnixPeer: true})
+	subscription, err := hub.OpenVerdictStream(verdict.StreamPrincipal{UnixPeer: true})
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
