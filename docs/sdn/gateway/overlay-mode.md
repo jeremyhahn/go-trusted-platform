@@ -351,10 +351,33 @@ admits the device, within one interval.
 ### Trust assumptions
 
 - **IPAM writers.** Admission trusts the fabric IPAM allocation to bind a VTEP
-  address to the right device. Anyone who can write fabric allocations can
-  point an address at a healthy device's verdict. The serial match narrows
-  this only for devices that have a serial on record. IPAM write access is
-  therefore part of the overlay's trust base.
+  address to the right device. Admission checks the device behind the
+  allocation, never the host that actually holds the address. So anyone who
+  can write fabric allocations can point an address at a healthy device and
+  get that device's verdict. That includes allocating with any `device_id`,
+  releasing a device's address and allocating it again, or creating and
+  deleting fabric pools. Admission then lets in whichever host announces from
+  that address. The serial match does not help: it compares the verdict with
+  the device record, and both belong to the healthy device. IPAM write access
+  is therefore part of the overlay's trust base, on the same footing as the
+  attestation verifier.
+
+  Who holds it today: on REST the `/gateway/ipam/**` routes require an
+  authenticated `admin`. On gRPC, `AllocateIP`, `ReleaseIP` and the IPAM pool
+  CRUD are not in the scope catalog, so any validated platform token can call
+  them (see [Gateway API — Authorization](../../gateway/api.md#10-authorization)).
+  A QUIC allocation can also request a specific address for any owner. Until
+  those methods carry a scope, treat every principal that can get a platform
+  token as able to write fabric allocations. On a deployment that cannot
+  accept that, keep platformd's gRPC, QUIC and MCP listeners reachable only
+  by operators and gatewayd.
+
+  Two things limit how long a rebinding goes unnoticed. A new admission is
+  judged against a fresh listing (see [VTEP admission](#vtep-admission)). An
+  installed VTEP is judged again against the new allocation on the next sweep,
+  so a rebinding withdraws or re-admits it within one
+  `admission-sweep-interval`. Neither check can tell a legitimate rebinding
+  from a malicious one: that has to be enforced where IPAM is written.
 - **Underlay source addresses.** Decap authorisation matches the outer source
   IP. On an underlay without source validation, a host can send VXLAN under an
   admitted VTEP's address. The control for that is the authenticated underlay
