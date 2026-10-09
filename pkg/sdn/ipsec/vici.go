@@ -20,12 +20,14 @@ import (
 	"iter"
 	"net"
 	"os"
+	"strconv"
 	"sync"
-	"syscall"
 	"unsafe"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	govici "github.com/strongswan/govici/vici"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -53,19 +55,26 @@ var credentialTypes = map[CredentialKind][2]string{
 	CredentialCRL:       {"X509_CRL", ""},
 }
 
-// VICIDialer opens govici sessions on charon's VICI socket, after checking
-// that the socket is mode 0600 and owned by Owner.
+// VICIDialer opens govici sessions on charon's VICI socket. VICI carries no
+// authentication, so the dialer checks both ends of every connection: the
+// socket must be mode 0600 and owned by Owner, and the process serving it
+// must have listened as Charon.
 type VICIDialer struct {
 	// Socket is the socket path.
 	Socket string
 	// Owner is the uid that must own the socket: platformd's.
 	Owner int
+	// Charon is the uid the serving process listened as. SO_PEERCRED
+	// reports the credentials of the listen call, and charon creates the
+	// socket before it drops root, so for the shipped package this is 0.
+	Charon int
 }
 
 // NewVICIDialer returns a dialer for socket, which this process's
-// effective user must own.
-func NewVICIDialer(socket string) *VICIDialer {
-	return &VICIDialer{Socket: socket, Owner: os.Geteuid()}
+// effective user must own and a process that listened as uid charon must
+// serve.
+func NewVICIDialer(socket string, charon int) *VICIDialer {
+	return &VICIDialer{Socket: socket, Owner: os.Geteuid(), Charon: charon}
 }
 
 // Dial opens a command session.
@@ -89,38 +98,91 @@ func (d *VICIDialer) Subscribe(ctx context.Context) (EventStream, error) {
 	return newVICIEvents(s), nil
 }
 
+// open starts a govici session over d.dial. govici dials with a background
+// context; the dial honours ctx instead. govici returns the dial's error
+// as it is, a *SocketError.
 func (d *VICIDialer) open(ctx context.Context) (*govici.Session, error) {
-	if err := checkSocket(d.Socket, d.Owner); err != nil {
-		return nil, err
-	}
-	// govici dials with a background context; this one honours ctx.
-	dial := func(_ context.Context, network, addr string) (net.Conn, error) {
-		var nd net.Dialer
-		return nd.DialContext(ctx, network, addr)
-	}
-	s, err := govici.NewSession(govici.WithSocketPath(d.Socket), govici.WithDialContext(dial))
-	if err != nil {
-		return nil, &SocketError{Path: d.Socket, Err: err}
-	}
-	return s, nil
+	dial := func(context.Context, string, string) (net.Conn, error) { return d.dial(ctx) }
+	return govici.NewSession(govici.WithDialContext(dial))
 }
 
-// checkSocket refuses a path that is not a socket, not mode 0600, or not
-// owned by owner.
-func checkSocket(path string, owner int) error {
-	fi, err := os.Lstat(path)
+// dial connects through a descriptor opened on the socket path rather than
+// through the path, so the checks and the connect see the same inode: a
+// socket swapped in under the path after the checks is never reached. The
+// serving process is checked once connected.
+func (d *VICIDialer) dial(ctx context.Context) (net.Conn, error) {
+	fd, err := openSocket(d.Socket, d.Owner)
 	if err != nil {
-		return &SocketError{Path: path, Err: err}
+		return nil, err
 	}
-	if fi.Mode().Type() != fs.ModeSocket {
-		return &SocketError{Path: path, Err: ErrNotSocket}
+	var nd net.Dialer
+	conn, dialErr := nd.DialContext(ctx, "unix", fdPath(fd))
+	closeErr := unix.Close(fd)
+	if dialErr != nil {
+		if closeErr != nil {
+			dialErr = &CloseError{Cause: dialErr, Err: closeErr}
+		}
+		return nil, &SocketError{Path: d.Socket, Err: dialErr}
 	}
-	if fi.Mode().Perm() != socketMode {
-		return &SocketError{Path: path, Err: ErrSocketMode}
+	if closeErr != nil {
+		return nil, closeAfter(conn, &SocketError{Path: d.Socket, Err: closeErr})
 	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok || int(st.Uid) != owner {
-		return &SocketError{Path: path, Err: ErrSocketOwner}
+	if err := checkPeer(conn, d.Charon); err != nil {
+		return nil, closeAfter(conn, &SocketError{Path: d.Socket, Err: err})
+	}
+	return conn, nil
+}
+
+// fdPath names the file behind this process's descriptor fd. Connecting
+// to it reaches the socket fd was opened on, whatever its path names now.
+func fdPath(fd int) string { return "/proc/self/fd/" + strconv.Itoa(fd) }
+
+// openSocket opens path itself, never a symlink's target, as an O_PATH
+// descriptor, and refuses it unless it is a socket of mode 0600 owned by
+// owner. The caller closes the descriptor.
+func openSocket(path string, owner int) (int, error) {
+	fd, err := unix.Open(path, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, &SocketError{Path: path, Err: err}
+	}
+	if err := checkSocket(fd, owner); err != nil {
+		var cause error = &SocketError{Path: path, Err: err}
+		if closeErr := unix.Close(fd); closeErr != nil {
+			cause = &CloseError{Cause: cause, Err: closeErr}
+		}
+		return -1, cause
+	}
+	return fd, nil
+}
+
+// checkSocket refuses a descriptor that is not a socket, not mode 0600, or
+// not owned by owner.
+func checkSocket(fd, owner int) error {
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFSOCK {
+		return ErrNotSocket
+	}
+	if fs.FileMode(st.Mode&0o7777) != socketMode {
+		return ErrSocketMode
+	}
+	if int(st.Uid) != owner {
+		return ErrSocketOwner
+	}
+	return nil
+}
+
+// checkPeer refuses a connection whose serving process did not listen as
+// uid.
+func checkPeer(conn net.Conn, uid int) error {
+	cred, err := peercred.ExtractUnixCredentials(conn)
+	if err != nil {
+		return err
+	}
+	if int(cred.UID) != uid {
+		return ErrSocketPeer
 	}
 	return nil
 }

@@ -30,7 +30,9 @@ import (
 	"unsafe"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	govici "github.com/strongswan/govici/vici"
+	"golang.org/x/sys/unix"
 )
 
 // fakeCaller records the requests a viciSession sends.
@@ -468,7 +470,7 @@ func listenSocket(t *testing.T, mode fs.FileMode) (string, *net.UnixListener) {
 	return path, ln
 }
 
-func TestCheckSocket(t *testing.T) {
+func TestOpenSocket(t *testing.T) {
 	owner := os.Geteuid()
 	good, _ := listenSocket(t, 0o600)
 	open, _ := listenSocket(t, 0o660)
@@ -481,8 +483,12 @@ func TestCheckSocket(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
-	if err := checkSocket(good, owner); err != nil {
-		t.Fatalf("checkSocket: %v", err)
+	fd, err := openSocket(good, owner)
+	if err != nil {
+		t.Fatalf("openSocket: %v", err)
+	}
+	if err := unix.Close(fd); err != nil {
+		t.Fatalf("close: %v", err)
 	}
 	tests := []struct {
 		name  string
@@ -498,12 +504,107 @@ func TestCheckSocket(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := checkSocket(tt.path, tt.owner)
+			fd, err := openSocket(tt.path, tt.owner)
 			var sockErr *SocketError
-			if !errors.As(err, &sockErr) || sockErr.Path != tt.path || !errors.Is(err, tt.want) {
-				t.Fatalf("err = %v, want a SocketError for %v", err, tt.want)
+			if fd != -1 || !errors.As(err, &sockErr) || sockErr.Path != tt.path || !errors.Is(err, tt.want) {
+				t.Fatalf("fd = %d, err = %v, want a SocketError for %v", fd, err, tt.want)
 			}
 		})
+	}
+}
+
+func TestCheckSocketBadDescriptor(t *testing.T) {
+	if err := checkSocket(-1, os.Geteuid()); !errors.Is(err, unix.EBADF) {
+		t.Fatalf("err = %v, want EBADF", err)
+	}
+}
+
+// A socket swapped in under the path after the checks is never reached:
+// the connect goes through the descriptor the checks read.
+func TestOpenSocketSurvivesASwap(t *testing.T) {
+	path, checked := listenSocket(t, 0o600)
+	checked.SetUnlinkOnClose(false)
+	fd, err := openSocket(path, os.Geteuid())
+	if err != nil {
+		t.Fatalf("openSocket: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := unix.Close(fd); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	impostor, _ := listenSocket(t, 0o600)
+	if err := os.Rename(impostor, path); err != nil {
+		t.Fatalf("swap: %v", err)
+	}
+
+	conn, err := net.Dial("unix", fdPath(fd))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close conn: %v", err)
+		}
+	})
+	if err := checked.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("deadline: %v", err)
+	}
+	accepted, err := checked.Accept()
+	if err != nil {
+		t.Fatalf("the checked socket was not the one reached: %v", err)
+	}
+	if err := accepted.Close(); err != nil {
+		t.Fatalf("close accepted: %v", err)
+	}
+}
+
+func TestCheckPeer(t *testing.T) {
+	path, ln := listenSocket(t, 0o600)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			if err := c.Close(); err != nil {
+				t.Errorf("close: %v", err)
+			}
+		}
+	}()
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close conn: %v", err)
+		}
+	})
+
+	if err := checkPeer(conn, os.Geteuid()); err != nil {
+		t.Fatalf("checkPeer: %v", err)
+	}
+	if err := checkPeer(conn, os.Geteuid()+1); !errors.Is(err, ErrSocketPeer) {
+		t.Fatalf("another uid: err = %v, want ErrSocketPeer", err)
+	}
+	pipe, other := net.Pipe()
+	defer func() {
+		if err := errors.Join(pipe.Close(), other.Close()); err != nil {
+			t.Errorf("close pipe: %v", err)
+		}
+	}()
+	var notUnix peercred.ErrNotUnixConnection
+	if err := checkPeer(pipe, os.Geteuid()); !errors.As(err, &notUnix) {
+		t.Fatalf("not a unix socket: err = %v, want ErrNotUnixConnection", err)
+	}
+}
+
+func TestVICIDialerRefusesAnotherServer(t *testing.T) {
+	srv := newVICIServer(t, false)
+	d := NewVICIDialer(srv.path, os.Geteuid()+1)
+	var sockErr *SocketError
+	if _, err := d.Dial(context.Background()); !errors.As(err, &sockErr) || !errors.Is(err, ErrSocketPeer) {
+		t.Fatalf("Dial: err = %v, want ErrSocketPeer", err)
+	}
+	if _, err := d.Subscribe(context.Background()); !errors.Is(err, ErrSocketPeer) {
+		t.Fatalf("Subscribe: err = %v, want ErrSocketPeer", err)
 	}
 }
 
@@ -518,7 +619,7 @@ func TestVICIDialerRefusesBeforeConnecting(t *testing.T) {
 			}
 		}
 	}()
-	d := NewVICIDialer(path)
+	d := NewVICIDialer(path, os.Geteuid())
 	if _, err := d.Dial(context.Background()); !errors.Is(err, ErrSocketMode) {
 		t.Fatalf("Dial: err = %v, want ErrSocketMode", err)
 	}
@@ -542,7 +643,7 @@ func TestVICIDialerConnectionRefused(t *testing.T) {
 		t.Fatalf("close listener: %v", err)
 	}
 	var sockErr *SocketError
-	if _, err := NewVICIDialer(path).Dial(context.Background()); !errors.As(err, &sockErr) || errors.Is(err, ErrSocketMode) {
+	if _, err := NewVICIDialer(path, os.Geteuid()).Dial(context.Background()); !errors.As(err, &sockErr) || errors.Is(err, ErrSocketMode) {
 		t.Fatalf("err = %v, want the dial failure as a SocketError", err)
 	}
 }
@@ -648,7 +749,7 @@ func sectionOf(k string, elems ...[]byte) []byte {
 func TestVICIDialerOverASocket(t *testing.T) {
 	ctx := context.Background()
 	srv := newVICIServer(t, false)
-	d := NewVICIDialer(srv.path)
+	d := NewVICIDialer(srv.path, os.Geteuid())
 
 	events, err := d.Subscribe(ctx)
 	if err != nil {
@@ -695,7 +796,7 @@ func TestVICIDialerOverASocket(t *testing.T) {
 func TestVICIDialerSubscribeRefused(t *testing.T) {
 	srv := newVICIServer(t, true)
 	var cmdErr *CommandError
-	if _, err := NewVICIDialer(srv.path).Subscribe(context.Background()); !errors.As(err, &cmdErr) || cmdErr.Command != "subscribe ike-updown" {
+	if _, err := NewVICIDialer(srv.path, os.Geteuid()).Subscribe(context.Background()); !errors.As(err, &cmdErr) || cmdErr.Command != "subscribe ike-updown" {
 		t.Fatalf("err = %v, want a subscribe CommandError", err)
 	}
 }

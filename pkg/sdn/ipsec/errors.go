@@ -69,6 +69,9 @@ var (
 	// ErrSocketOwner is returned when the VICI socket is not owned by
 	// platformd's user.
 	ErrSocketOwner = errors.New("ipsec: socket is not owned by the platform user")
+	// ErrSocketPeer is returned when the process serving the VICI socket
+	// did not listen as charon's uid.
+	ErrSocketPeer = errors.New("ipsec: socket is not served by charon")
 	// ErrInvalidMessage is returned when a request lacks what charon needs:
 	// a certificate without data, a token key without an ID.
 	ErrInvalidMessage = errors.New("ipsec: incomplete request")
@@ -110,8 +113,9 @@ func (e *CommandError) Unwrap() error { return e.Err }
 type SocketError struct {
 	// Path is the socket path.
 	Path string
-	// Err is the cause: ErrNotSocket, ErrSocketMode, ErrSocketOwner, or
-	// the failure to stat or dial.
+	// Err is the cause: ErrNotSocket, ErrSocketMode, ErrSocketOwner,
+	// ErrSocketPeer, or the failure to open, stat, dial or read the peer's
+	// credentials.
 	Err error
 }
 

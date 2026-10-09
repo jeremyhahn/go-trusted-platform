@@ -125,11 +125,29 @@ The controller speaks to charon through three small interfaces: `Session`
 wire protocol. Each command failure is a `*ipsec.CommandError` naming the
 command and wrapping govici's error, charon's `errmsg` included.
 
-Before every dial, `VICIDialer` checks the socket with `lstat`. It must be
-a socket, mode 0600 and owned by platformd's effective user. VICI carries
-no authentication, so whoever can open the socket commands charon. A
-refusal is a `*ipsec.SocketError` wrapping `ErrNotSocket`, `ErrSocketMode`
-or `ErrSocketOwner`, and nothing is sent.
+VICI carries no authentication: whoever can open the socket commands
+charon, and whoever serves it receives the credentials platformd loads.
+`VICIDialer` therefore checks both ends of every connection (govici's
+`WithDialContext` hands it the dial):
+
+1. It opens the path itself with `O_PATH|O_NOFOLLOW`, so a symlink is
+   opened rather than followed, and `fstat`s the descriptor. The result
+   must be a socket, mode 0600, owned by platformd's effective user.
+2. It connects through `/proc/self/fd/N`, not the path. The checks and the
+   connect see the same inode, so a socket swapped in under the path after
+   the checks is never reached.
+3. On the connected socket, `SO_PEERCRED` (`pkg/util/peercred`) must name
+   `VICIDialer.Charon`. That is the uid the serving process listened as:
+   the kernel records the credentials of the `listen` call. charon creates
+   the socket before it drops from root to the `strongswan` user, so for
+   the shipped package the uid is 0. This is an assumption, taken from how
+   strongSwan orders plugin loading and the privilege drop. It has not
+   been checked against a running charon, because the transport suite
+   needs Docker.
+
+A refusal is a `*ipsec.SocketError` wrapping `ErrNotSocket`,
+`ErrSocketMode`, `ErrSocketOwner` or `ErrSocketPeer`. A refused path is
+never connected to, and nothing is sent over a refused peer.
 
 Commands and events use separate connections. govici ends every event
 channel of a session when its connection drops, and `Session.Done` closes
@@ -396,7 +414,7 @@ has been renewed at the same mark.
 | `ErrFlowResyncFailed` | `modes` | the switch refused the put-back too, or the rebuild after one; the next change flushes the overlay flows and reinstalls the committed ones before applying anything |
 | `ConfigError` | `ipsec` | an `overlay.ipsec` field broke a rule; names the field and wraps an `ipsec.Err*` sentinel |
 | `CommandError` | `ipsec` | a VICI command failed: charon refused it (its `errmsg` included) or the connection failed under it |
-| `SocketError` | `ipsec` | the VICI socket was refused (`ErrNotSocket`, `ErrSocketMode`, `ErrSocketOwner`) or could not be opened |
+| `SocketError` | `ipsec` | the VICI socket was refused (`ErrNotSocket`, `ErrSocketMode`, `ErrSocketOwner`, `ErrSocketPeer`) or could not be opened, connected to, or have its peer read |
 | `CloseError` | `ipsec` | a close failed after another failure; matches both |
 | `ErrCharonGone` | `ipsec` | a connection to charon ended; the runner reconnects |
 | `ErrInvalidMessage` | `ipsec` | a request lacked what charon needs: a credential without data, a token key without an ID |
