@@ -74,6 +74,8 @@ const (
 //	    static-peers: [10.20.0.1, 10.20.0.2]
 //	    token:
 //	      handle: 6970736563
+//	    certificate-file: /etc/platform/ipsec/tunnel.pem
+//	    crl-files: [/etc/platform/ipsec/root.crl, /etc/platform/ipsec/tunnel.crl]
 type Config struct {
 	// Enabled turns overlay IPsec on. With it on, the fabric interface
 	// carries nothing but IKE, ESP, traffic an SA protects and the ICMPv6
@@ -104,6 +106,12 @@ type Config struct {
 	// the CA certificates peer certificates chain to. FileIdentity loads
 	// it; a node whose identity comes from issuance leaves it empty.
 	CertificateFile string `yaml:"certificate-file,omitempty" json:"certificate_file,omitempty" mapstructure:"certificate-file"`
+
+	// CRLFiles hold the CRLs peers are checked against, one file per
+	// issuer of the tunnel chain: PEM ("X509 CRL") or DER. Service reads
+	// them at start and every CRLRefresh, so a CRL replaced on disk is
+	// pushed to charon within that.
+	CRLFiles []string `yaml:"crl-files,omitempty" json:"crl_files,omitempty" mapstructure:"crl-files"`
 
 	// CertLifetime is the VTEP certificate lifetime. Default and minimum:
 	// OutageFactor × CPOutageTolerance.
@@ -168,6 +176,11 @@ func (c *Config) Validate() error {
 	}
 	if c.CertificateFile != "" && !filepath.IsAbs(c.CertificateFile) {
 		return &ConfigError{Field: "certificate-file", Err: ErrRelativePath}
+	}
+	for i, path := range c.CRLFiles {
+		if !filepath.IsAbs(path) {
+			return &ConfigError{Field: crlFileField(i), Err: ErrRelativePath}
+		}
 	}
 	if err := c.Token.validate(); err != nil {
 		return err
@@ -300,6 +313,9 @@ func enabledLocal(cfg *Config) (netip.Addr, error) {
 	}
 	return cfg.Local()
 }
+
+// crlFileField names the i'th crl-files entry.
+func crlFileField(i int) string { return "crl-files[" + strconv.Itoa(i) + "]" }
 
 // Peers parses the static peers.
 func (c *Config) Peers() ([]netip.Addr, error) {

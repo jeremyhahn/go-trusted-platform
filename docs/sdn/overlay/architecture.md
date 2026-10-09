@@ -113,9 +113,9 @@ code never touches key material or ESP.
 | Configuration | `pkg/sdn/ipsec` (`Config`) | the `overlay.ipsec` section and its derived timers |
 | Controller | `pkg/sdn/ipsec` (`Controller`) | the peer set, one charon connection per peer, eviction, the identity check |
 | Fail-closed floor | `pkg/sdn/ipsec` (`Filter`, `BlockPolicy`) | the nftables table and XFRM block policies that leave no cleartext path when charon is down |
-
 | Tunnel identity | `pkg/sdn/ipsec` (`TunnelIdentity`, `IdentityProvider`; `FileIdentity`) | the tunnel certificate, its chain and the token key charon signs with |
 | Runner | `pkg/sdn/ipsec` (`Runner`) | the connection to charon: dial, attach, follow events, reconnect |
+| Service | `pkg/sdn/ipsec` (`Service`) | all of the above on a platformd node: the floor at start, then the runner, the fabric interface watch and the CRL feed |
 
 ### VICI adapter
 
@@ -178,8 +178,11 @@ an upstream change.
 
 ### CRLs
 
-charon never fetches CRLs; they are pushed down the controller stream to
-`Controller.PushCRL`. The controller keeps the newest CRL per issuer (a
+charon never fetches CRLs; they are pushed to `Controller.PushCRL`. On a
+platformd node the `Service` reads them from `crl-files` at start and every
+minute (`CRLRefresh`), so the CA's CRL distribution writes the files and
+platformd picks up a replaced one within the minute. A file that cannot be
+read is logged and the others are still pushed. The controller keeps the newest CRL per issuer (a
 higher CRL number wins, or the later `thisUpdate` when either has no
 number) and loads it with `load-cert type=X509_CRL` at once if charon is
 attached. Every peer connection sets `revocation=strict`, so a peer whose
@@ -265,6 +268,29 @@ govici queues up to 256 events and drops any it cannot queue. When the
 event stream finds its queue full, or one short of full, events may have
 been lost. It then marks the next event `Lost`, and `HandleEvent` audits
 every SA instead of checking only that event.
+
+### Startup in platformd
+
+`ipsec.NewService` builds everything from the `overlay.ipsec` section:
+the file identity, the floor, the controller, and a runner dialing the
+VICI socket. platformd's `daemon.New` builds it and calls `Install` before
+the overlay controller registers the local VTEP, so nothing is sent on
+the fabric before the floor is in. A section that cannot be built (a
+`ConfigError`; `certificate-file` and `crl-files` are required here) or a
+floor that cannot be installed (`FloorError`) stops platformd from
+starting. The overlay controller failing after the floor is in is only
+logged.
+
+`Daemon.Start` runs the service in the background and `Stop` ends it:
+the runner, the `BlockPolicy.Watch` loop (run again after each failure,
+waiting from 500ms and doubling to 30s) and the CRL feed. The floor is
+never removed, so a stopped platformd leaves the fabric dark rather than
+open.
+
+platformd has no EVPN route source, so its controller admits no VTEP a
+route names (`ErrNoVTEPAdmission`): its peers are the static peers.
+gatewayd does not host the overlay (it refuses `ServiceOverlay`), so it
+runs no IPsec.
 
 ### Status
 
@@ -487,6 +513,8 @@ has been renewed at the same mark.
 | `ErrFamilyMismatch` | `ipsec` | `Filter.Drop`/`Undrop` named a peer of the other address family (inside a `PeerError`) |
 | `IdentityMismatchError` | `ipsec` | an SA came up with a peer identity other than its address; the SA was terminated, or the termination is pending and joined to this error |
 | `ErrNotEvicted` | `ipsec` | `Readmit` named a peer that is not evicted |
+| `FloorError` | `ipsec` | `Service.Install` could not put the fail-closed floor in; wraps the `OpError` (`nftables apply` or `xfrm install`). platformd refuses to start |
+| `ErrNoVTEPAdmission` | `ipsec` | a route named a VTEP on a node with no EVPN route source; only static peers are admitted |
 
 ## See Also
 

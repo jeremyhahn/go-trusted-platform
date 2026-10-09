@@ -220,7 +220,7 @@ func loadCRL(ctx context.Context, sess Session, crl *x509.RevocationList) error 
 	return nil
 }
 
-// PushCRL takes a CRL pushed down the controller stream. It is kept, as
+// PushCRL takes a pushed CRL (Service reads them from crl-files). It is kept, as
 // its issuer's newest, and loaded into charon now if a session is up and
 // on every later attach. charon never fetches CRLs itself, and every peer
 // connection checks revocation strictly. A CRL no newer than the one held

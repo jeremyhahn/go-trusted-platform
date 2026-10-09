@@ -58,6 +58,9 @@ func TestConfigValidateAccepts(t *testing.T) {
 			c.CertificateFile = "/etc/platform/ipsec/tunnel.pem"
 			c.Token.PINFile = "/etc/platform/ipsec/token.pin"
 		}},
+		{"CRL files", func(c *Config) {
+			c.CRLFiles = []string{"/etc/platform/ipsec/root.crl", "/etc/platform/ipsec/tunnel.crl"}
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -109,6 +112,7 @@ func TestConfigValidateRejects(t *testing.T) {
 		{"module name too long", func(c *Config) { c.Token.Module = strings.Repeat("m", maxModuleName+1) }, "token.module", ErrInvalidModule},
 		{"relative certificate file", func(c *Config) { c.CertificateFile = "tunnel.pem" }, "certificate-file", ErrRelativePath},
 		{"relative PIN file", func(c *Config) { c.Token.PINFile = "token.pin" }, "token.pin-file", ErrRelativePath},
+		{"relative CRL file", func(c *Config) { c.CRLFiles = []string{"/etc/platform/ipsec/root.crl", "tunnel.crl"} }, "crl-files[1]", ErrRelativePath},
 		{"missing handle", func(c *Config) { c.Token.Handle = "" }, "token.handle", ErrRequired},
 		{"handle not hex", func(c *Config) { c.Token.Handle = "ipsec" }, "token.handle", ErrInvalidHandle},
 		{"negative outage tolerance", func(c *Config) { c.CPOutageTolerance = -time.Hour }, "cp-outage-tolerance", ErrNegativeDuration},

@@ -220,6 +220,11 @@ The MCP server (`mcp_service.go`) enables AI/LLM integration via the Model Conte
    |
    +-- Validate configuration
    +-- Create daemon service
+   +-- If sdn.overlay.ipsec enabled:
+   |   +-- Build ipsec.Service, install the fail-closed floor
+   |   +-- Refuse to start if either fails (ConfigError / FloorError)
+   +-- If sdn.overlay enabled:
+   |   +-- Start the overlay controller (registers the VTEP; a failure is logged)
    +-- Create Unix socket server
    +-- Register platform daemon service
    |
@@ -253,6 +258,7 @@ The MCP server (`mcp_service.go`) enables AI/LLM integration via the Model Conte
    +-- Start Unix socket server
    +-- Start gRPC TCP server (if enabled)
    +-- Start QUIC server (if enabled)
+   +-- Run overlay IPsec: charon runner, fabric watch, CRL feed (if enabled)
    +-- Auto-start configured services
    +-- Mark daemon ready
 ```
@@ -269,6 +275,7 @@ Stop()
    +-- Stop Tenant service
    +-- Stop IAM service
    +-- Stop KMS service
+   +-- Stop overlay IPsec (the fail-closed floor stays installed)
    +-- Disconnect SDN service
    +-- GracefulStop gRPC server
    +-- Close gRPC listener

@@ -52,6 +52,9 @@ sdn:
       local-address: 10.20.0.11
       static-peers: [10.20.0.1, 10.20.0.2]   # route reflectors, gateways
       certificate-file: /etc/platform/ipsec/tunnel.pem   # leaf, then its CA chain
+      crl-files:                                         # one per issuer of the chain
+        - /etc/platform/ipsec/root.crl
+        - /etc/platform/ipsec/intermediate.crl
       token:
         slot: 0
         handle: "6970736563"                  # CKA_ID of the IKE key, hex
@@ -65,7 +68,8 @@ sdn:
 | local-address | string | — | Required; this VTEP's unicast address, the IKE endpoint and certificate identity |
 | static-peers | []string | none | Explicit per-peer connections (route reflectors, gateways); single unicast addresses of the local address's family, no duplicates, never the local address. There is no wildcard peer |
 | vici-socket | string | `/run/charon.vici` | Absolute path. platformd refuses the socket unless it is mode 0600 and owned by platformd's user, and served by a process that listened as charon's uid |
-| certificate-file | string | none | Absolute path; PEM tunnel certificate followed by its CA chain, read on every attach by `ipsec.FileIdentity`. Required when the identity comes from files |
+| certificate-file | string | none | Absolute path; PEM tunnel certificate followed by its CA chain, read on every attach by `ipsec.FileIdentity`. Required by platformd |
+| crl-files | []string | none | Absolute paths; one CRL per issuer of the tunnel chain, PEM (`X509 CRL`) or DER. platformd reads them at start and again every minute (`ipsec.CRLRefresh`) and pushes each to charon; a CRL no newer than the one charon holds is ignored, so replacing a file on disk is how a revocation reaches the node. Required by platformd |
 | token.module | string | `xkms` | The name of the module under charon's `pkcs11 { modules { } }` in strongswan.conf, sent with `load-token`; letters, digits, `-` and `_`, at most 64. The shipped `pkcs11.conf` defines `xkms`, whose path is the p11-kit client that forwards to the node-local xkms token |
 | token.slot | uint32 | 0 | Token slot holding the IKE key |
 | token.handle | string | — | Required; the key's CKA_ID in hex |
@@ -80,6 +84,14 @@ sdn:
 A failure is an `*ipsec.ConfigError` naming the field
 (`overlay.ipsec.static-peers[1]: ipsec: duplicate peer`) and wrapping one
 of the `ipsec.Err*` sentinels.
+
+platformd starts IPsec whenever `overlay.ipsec.enabled` is set, even with
+`overlay.enabled` off. It installs the fail-closed floor before the overlay
+controller registers the VTEP, and refuses to start, with an
+`*ipsec.FloorError` or the `*ipsec.ConfigError`, when the section cannot be
+built or the floor cannot be installed. The floor is never removed, not even
+when platformd stops: switching IPsec off takes a reboot, or deleting the
+`inet tp_ipsec` table and the XFRM block policies by hand.
 
 ESP in transport mode adds up to 40 bytes to each encapsulated frame
 (8-byte header, 8-byte IV, 16-byte ICV, padding and trailer), so an

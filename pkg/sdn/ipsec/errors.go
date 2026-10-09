@@ -100,7 +100,26 @@ var (
 	// ErrLinkWatchEnded is returned when the kernel ends the link
 	// subscription the forward block follows the fabric interface by.
 	ErrLinkWatchEnded = errors.New("ipsec: fabric link subscription ended")
+	// ErrNoVTEPAdmission is returned when a route names a VTEP on a node
+	// that has no VTEP admitter: its peers are the static peers alone.
+	ErrNoVTEPAdmission = errors.New("ipsec: no VTEP admitter; only static peers are admitted")
 )
+
+// FloorError reports a fail-closed floor that could not be installed. The
+// node must not send on the fabric without it.
+type FloorError struct {
+	// Err is the layer's failure: an OpError of nftables apply or xfrm
+	// install.
+	Err error
+}
+
+// Error implements the error interface.
+func (e *FloorError) Error() string {
+	return "ipsec: fail-closed floor not installed: " + e.Err.Error()
+}
+
+// Unwrap implements errors.Unwrap.
+func (e *FloorError) Unwrap() error { return e.Err }
 
 // CommandError reports a VICI command that failed: charon refused it, or
 // the connection failed under it.

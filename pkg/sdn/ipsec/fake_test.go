@@ -177,13 +177,16 @@ func (f *fakeSession) crls() [][]byte {
 
 // fakeIdentity is an IdentityProvider handing out a fixed identity.
 type fakeIdentity struct {
-	id  *TunnelIdentity
-	err error
+	id     *TunnelIdentity
+	err    error
+	closed bool
 }
 
 func (f *fakeIdentity) TunnelIdentity(context.Context) (*TunnelIdentity, error) {
 	return f.id, f.err
 }
+
+func (f *fakeIdentity) Close() { f.closed = true }
 
 // testPKI is a CA and a tunnel certificate it issued for 10.20.0.11, the
 // local address of validConfig. ca is a root, or, under root, an

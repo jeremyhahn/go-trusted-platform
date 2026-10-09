@@ -210,9 +210,12 @@ type Daemon struct {
 	// backing the gRPC, REST, QUIC and MCP proxy transports.
 	proxyGRPCService   *grpccreds.ProxyGRPCService
 	overlayGRPCService *OverlayService
-	pxeGRPCService     *PXEGRPCService
-	ntpGRPCService     *NTPGRPCService
-	healthRegistry     health.Registry
+	// overlayIPsec runs overlay IPsec between Start and Stop; its floor was
+	// installed by New. nil when overlay.ipsec is disabled.
+	overlayIPsec   *overlayIPsecRun
+	pxeGRPCService *PXEGRPCService
+	ntpGRPCService *NTPGRPCService
+	healthRegistry health.Registry
 
 	// healthGRPCService serves grpc.health.v1.Health. Held so the daemon can
 	// flip it to NOT_SERVING on shutdown, draining load balancers before the
@@ -466,24 +469,31 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("Overlay service initialized and registered successfully")
 
-	// Wire the overlay controller when the SDN overlay is enabled. The controller
-	// is started synchronously here — Start() only registers the local VTEP in
-	// memory and launches lightweight background goroutines, so it does not block
-	// daemon startup. The VTEP IP defaults to loopback when App.PublicIPv4 is nil
-	// (test and single-node environments without a public IP), and the underlay
-	// interface defaults to "lo" when not set in config.
+	// Wire the overlay when the SDN overlay or its IPsec is enabled. With
+	// overlay.ipsec enabled, its fail-closed floor is installed first, before
+	// the overlay controller registers the local VTEP, and platformd refuses
+	// to start without it. The controller is started synchronously here —
+	// Start() only registers the local VTEP in memory and launches lightweight
+	// background goroutines, so it does not block daemon startup. The VTEP IP
+	// defaults to loopback when App.PublicIPv4 is nil (test and single-node
+	// environments without a public IP), and the underlay interface defaults
+	// to "lo" when not set in config.
 	//
 	// overlayCtrl is hoisted so the QUIC overlay adapter can reference it below
 	// when wiring quicHandler.SetOverlayHandler.
 	var overlayCtrl OverlayControllerInterface
-	if config.App != nil &&
-		config.App.SDNConfig != nil &&
-		config.App.SDNConfig.Overlay != nil &&
-		config.App.SDNConfig.Overlay.Enabled {
-		if ctrl, ctrlErr := buildOverlayController(context.Background(), config.App, config.OVSSocketPath, logger); ctrlErr != nil {
-			logger.Warn("overlay controller init failed; overlay endpoints will return unavailable",
-				"error", ctrlErr)
-		} else {
+	var overlayIPsecSvc *overlayIPsecRun
+	if config.App != nil && config.App.SDNConfig != nil {
+		sec, ctrl, overlayErr := startOverlay(context.Background(), config.App.SDNConfig.Overlay,
+			newOverlayStarters(config, logger), logger)
+		if overlayErr != nil {
+			logger.Error(overlayErr, "component", "overlay_ipsec")
+			return nil, overlayErr
+		}
+		if sec != nil {
+			overlayIPsecSvc = &overlayIPsecRun{svc: sec}
+		}
+		if ctrl != nil {
 			overlayCtrl = ctrl
 			overlayService.SetController(ctrl)
 			logger.Info("overlay controller wired and running")
@@ -1324,6 +1334,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		gatewayPerfService:           gatewayPerf,
 		proxyGRPCService:             proxyService,
 		overlayGRPCService:           overlayService,
+		overlayIPsec:                 overlayIPsecSvc,
 		pxeGRPCService:               pxeGRPCService,
 		ntpGRPCService:               ntpGRPCService,
 		healthRegistry:               healthRegistry,
@@ -2464,6 +2475,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	d.running.Store(true)
 
+	// Attach overlay IPsec to charon behind the floor New installed.
+	d.overlayIPsec.start()
+
 	// Register configured services so ListServices returns them
 	d.registerConfiguredServices()
 
@@ -2550,6 +2564,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Detach overlay IPsec from charon; its fail-closed floor stays.
+	d.overlayIPsec.stop()
+
 	// Disconnect SDN service if available
 	if d.sdnService != nil {
 		_ = d.sdnService.Disconnect()
@@ -2627,6 +2644,9 @@ func (d *Daemon) ForceStop() error {
 	if d.kmsService != nil {
 		_ = d.kmsService.Stop(context.Background())
 	}
+
+	// Detach overlay IPsec from charon; its fail-closed floor stays.
+	d.overlayIPsec.stop()
 
 	// Disconnect SDN service if available
 	if d.sdnService != nil {
