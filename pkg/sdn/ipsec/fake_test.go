@@ -41,7 +41,7 @@ var (
 // loaded connections, the IKE_SAs of each, and the credentials.
 type fakeSession struct {
 	conns    map[string]*Connection
-	sas      map[string][]string // connection → IKE_SA unique IDs
+	sas      map[string][]IKESA // connection → its IKE_SAs
 	commands []string
 	killed   []string // terminated IKE_SA unique IDs
 	certs    []Credential
@@ -55,7 +55,7 @@ type fakeSession struct {
 func newFakeSession(held ...string) *fakeSession {
 	f := &fakeSession{
 		conns: make(map[string]*Connection),
-		sas:   make(map[string][]string),
+		sas:   make(map[string][]IKESA),
 		fail:  make(map[string]error),
 		done:  make(chan struct{}),
 	}
@@ -96,11 +96,20 @@ func (f *fakeSession) Conns(context.Context) ([]string, error) {
 	return f.loaded(), nil
 }
 
-func (f *fakeSession) IKESAs(_ context.Context, conn string) ([]string, error) {
+func (f *fakeSession) IKESAs(_ context.Context, conn string) ([]HeldSA, error) {
 	if err := f.record("list-sas"); err != nil {
 		return nil, err
 	}
-	return f.sas[conn], nil
+	var out []HeldSA
+	for _, name := range slices.Sorted(maps.Keys(f.sas)) {
+		if conn != "" && name != conn {
+			continue
+		}
+		for _, sa := range f.sas[name] {
+			out = append(out, HeldSA{Conn: name, SA: sa})
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeSession) TerminateIKE(_ context.Context, uniqueID string) error {
@@ -108,6 +117,9 @@ func (f *fakeSession) TerminateIKE(_ context.Context, uniqueID string) error {
 		return err
 	}
 	f.killed = append(f.killed, uniqueID)
+	for name, sas := range f.sas {
+		f.sas[name] = slices.DeleteFunc(sas, func(sa IKESA) bool { return sa.UniqueID == uniqueID })
+	}
 	return nil
 }
 

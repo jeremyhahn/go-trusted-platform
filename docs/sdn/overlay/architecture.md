@@ -166,6 +166,32 @@ number) and loads it with `load-cert type=X509_CRL` at once if charon is
 attached. Every peer connection sets `revocation=strict`, so a peer whose
 status is unknown is refused.
 
+Before a CRL is kept, `PushCRL` checks it, and refuses it with an
+`OpError` (`verify crl`) if it fails; the CRL already held for the issuer
+stays:
+
+- it must be signed by a CA of the tunnel identity (`CheckSignatureFrom`
+  against a chain certificate whose subject is the CRL's issuer), or
+  `ErrCRLUntrusted`;
+- its `nextUpdate` must be in the future, or `ErrCRLStale`.
+
+The CAs are those of the identity last loaded; before the first attach
+they are read from the identity provider. CRLs are held per issuer, keyed
+by the issuer name and authority key ID.
+
+**Strict mode, an assumption.** Per the strongSwan `swanctl.conf`
+documentation, `revocation=strict` fails authentication unless the
+certificate is known to be unrevoked. A missing CRL and an expired one
+(stale, past `nextUpdate`) both leave the status unknown, so both fail.
+This has not been checked against a running charon (the transport suite
+needs Docker). Two consequences follow:
+
+- a node's IKE comes up only once a current CRL for each issuer in the
+  peers' chains has been pushed;
+- the CRL `nextUpdate` must be further out than `cp-outage-tolerance`.
+  charon cannot refresh a CRL during a control-plane outage, so a CRL that
+  expires inside the outage takes the whole fabric down with it.
+
 ### Runner
 
 `Runner.Run` keeps the controller attached until its context ends:
@@ -175,7 +201,8 @@ status is unknown is refused.
 2. `Attach` loads the tunnel identity, then every held CRL, then lists
    charon's connections and loads every peer's. A failure before the
    connections ends the attempt with the controller detached. A peer that
-   fails to load leaves the session up.
+   fails to load leaves the session up. Last, every IKE_SA charon holds is
+   audited (see [Peer connections](#peer-connections)).
 3. Pass each event to `HandleEvent` until either connection ends, then
    `Detach`.
 
@@ -184,10 +211,29 @@ doubling to 30s. An attempt that attached resets the wait. Because the
 identity, the CRLs and the peers are pushed on every attach, a charon
 restart re-converges with nothing lost.
 
+Work the controller fails to finish is not dropped. This covers a peer
+connection that failed to load or unload, an evicted peer's SAs that
+could not be ended, a kernel drop that failed, and an audit that could
+not run. Each failure is recorded and signals the runner. The runner then
+calls `Controller.Converge` after a wait that starts at 500ms and doubles
+to 30s while retries fail. While charon is away, the runner still retries
+failed kernel drops between connection attempts.
+
+govici queues up to 256 events and drops any it cannot queue. When the
+event stream finds its queue full, or one short of full, events may have
+been lost. It then marks the next event `Lost`, and `HandleEvent` audits
+every SA instead of checking only that event.
+
 ### Status
 
 `Controller.Status` reports whether charon is attached, the peers, the
-evicted peers, how many issuers' CRLs are held, and the tunnel
+evicted peers, and the work still pending:
+
+- `DropPending`: evicted peers whose kernel drop failed;
+- `Unsynced`: peers whose connection or SAs charon does not hold as wanted;
+- `AuditPending`: an SA audit is due.
+
+It also reports how many issuers' CRLs are held, and the tunnel
 certificate's renewal state (`CertificateStatus`): serial, validity,
 time to expiry, `RenewalDue` from half its lifetime and `Alert` from
 three quarters.
@@ -233,6 +279,15 @@ next `Attach` pushes them, so a charon restart re-converges.
 2. Unload the peer's connection, which removes its trap.
 3. Force-terminate the peer's IKE_SAs.
 
+Every step runs even when an earlier one fails, and the failures are
+returned joined. A failed drop does not leave the connection and SAs up.
+Nothing is rolled back. The peer stays evicted, `Status` shows the step
+still pending (`DropPending` or `Unsynced`), and `Converge` retries it. An
+eviction while detached drops the peer at once. The next `Attach` unloads
+the connection, and its audit ends the SAs that charon kept meanwhile.
+`Readmit` lifts the drop. A drop that never went in is not lifted. The
+connection is then reloaded.
+
 The peer stays evicted, whatever routes name it, until `Readmit`. Fleet-wide
 eviction is orchestrated elsewhere.
 
@@ -240,9 +295,16 @@ eviction is orchestrated elsewhere.
 coming up: the peer must have authenticated as exactly the address the SA
 runs to. charon already pins `remote.id`; the check holds that pin to
 account. On a mismatch the SA is terminated and an
-`*ipsec.IdentityMismatchError` is returned. The check runs on VICI events
+`*ipsec.IdentityMismatchError` is returned. An SA that comes up for an
+evicted peer is terminated as well. The check runs on VICI events
 rather than an updown script, because a script cannot reach the 0600 socket
 and cannot stop an SA.
+
+`Audit` applies the same check to every IKE_SA charon holds
+(`list-sas` with no connection named). It runs on every `Attach`, and
+`HandleEvent` runs it for an event marked `Lost`, so an SA whose
+`ike-updown` was never seen is still checked. An audit that cannot list
+the SAs, or fails to end one, stays pending for `Converge`.
 
 ### Fail-closed floor
 
@@ -341,9 +403,10 @@ has been renewed at the same mark.
 | `ErrNoCertificate`, `ErrCertificateAddress`, `ErrNoKeyID` | `ipsec` | the tunnel identity has no certificate, its leaf does not name the local address, or it names no key (inside an `OpError`, `identity`) |
 | `ErrMissingDependency` | `ipsec` | a constructor or `Attach` was handed a nil collaborator |
 | `PeerError` | `ipsec` | a step on one peer failed (`admit`, `load-conn`, `unload-conn`, `drop`, `undrop`, `list-sas`, `terminate`, `evict`, `readmit`); names the peer and wraps the cause |
-| `OpError` | `ipsec` | an operation not tied to one peer failed: `identity`, `load-cert`, `load-token`, `load-cert x509crl` or `get-conns` during `Attach`, `parse crl`, `nftables apply`/`remove`, `xfrm install`/`remove` |
+| `OpError` | `ipsec` | an operation not tied to one peer failed: `identity`, `load-cert`, `load-token`, `load-cert x509crl` or `get-conns` during `Attach`, `list-sas` during an audit, `parse crl`, `identity` or `verify crl` in `PushCRL`, `nftables apply`/`remove`, `xfrm install`/`remove` |
+| `ErrCRLStale`, `ErrCRLUntrusted` | `ipsec` | a pushed CRL had no `nextUpdate` or one already passed, or was not signed by a CA of the tunnel identity (inside an `OpError`, `verify crl`); the CRL held for that issuer stays |
 | `ErrFamilyMismatch` | `ipsec` | `Filter.Drop`/`Undrop` named a peer of the other address family (inside a `PeerError`) |
-| `IdentityMismatchError` | `ipsec` | an SA came up with a peer identity other than its address; the SA was terminated |
+| `IdentityMismatchError` | `ipsec` | an SA came up with a peer identity other than its address; the SA was terminated, or the termination is pending and joined to this error |
 | `ErrNotEvicted` | `ipsec` | `Readmit` named a peer that is not evicted |
 
 ## See Also

@@ -34,7 +34,9 @@ const (
 // either connection ends it detaches, waits, and starts over, so a charon
 // restart re-converges. The wait doubles from MinBackoff to MaxBackoff
 // while attempts fail and starts again at MinBackoff after a session that
-// attached.
+// attached. Work the controller failed to do (a peer connection, a kernel
+// drop, an SA audit) is retried through Controller.Converge with the same
+// doubling wait.
 type Runner struct {
 	ctl    *Controller
 	dialer Dialer
@@ -65,6 +67,10 @@ func (r *Runner) Run(ctx context.Context) {
 			backoff = MinBackoff
 		}
 		r.logger.Warn("ipsec: charon session ended", "error", err, "retry_in", backoff)
+		// Kernel drops do not need charon: retry those that failed.
+		if err := r.ctl.Converge(ctx); err != nil {
+			r.logger.Warn("ipsec: retry failed while detached", "error", err)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -94,16 +100,32 @@ func (r *Runner) session(ctx context.Context) (bool, error) {
 		if !r.ctl.attached() {
 			return false, err
 		}
-		r.logger.Warn("ipsec: peer connections failed to load", "error", err)
+		r.logger.Warn("ipsec: attach incomplete", "error", err)
 	}
 	defer r.ctl.Detach()
 
+	// Work that failed signals ctl.retry; Converge retries it after a wait
+	// that doubles while retries fail.
+	var retry <-chan time.Time
+	backoff := MinBackoff
 	for {
 		select {
 		case <-ctx.Done():
 			return true, ctx.Err()
 		case <-sess.Done():
 			return true, ErrCharonGone
+		case <-r.ctl.retry:
+			if retry == nil {
+				retry = r.after(backoff)
+			}
+		case <-retry:
+			retry = nil
+			if err := r.ctl.Converge(ctx); err != nil {
+				backoff = min(2*backoff, MaxBackoff)
+				r.logger.Warn("ipsec: retry failed", "error", err, "retry_in", backoff)
+				continue
+			}
+			backoff = MinBackoff
 		case ev, ok := <-events.Events():
 			if !ok {
 				return true, ErrCharonGone

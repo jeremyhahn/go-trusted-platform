@@ -70,7 +70,7 @@ sdn:
 | token.slot | uint32 | 0 | Token slot holding the IKE key |
 | token.handle | string | — | Required; the key's CKA_ID in hex |
 | token.pin-file | string | none | Absolute path; its first line is the token PIN, read once into a memguard enclave. Without it `load-token` sends no PIN |
-| cp-outage-tolerance | duration | 24h | Control-plane outage the overlay rides through on the certificate it holds |
+| cp-outage-tolerance | duration | 24h | Control-plane outage the overlay rides through on the certificate it holds. The CRLs pushed to charon must also outlast it: under `revocation=strict` an expired CRL fails IKE, so issue them with `nextUpdate` further out than this |
 | cert-lifetime | duration | 3 × cp-outage-tolerance | At least 3 × cp-outage-tolerance. IKE reauthentication runs at half of it |
 | replay-window | uint32 | 1024 | At least 1024 |
 | ike-rate | uint32 | 20 | IKE packets per second per source address on UDP 500/4500 |

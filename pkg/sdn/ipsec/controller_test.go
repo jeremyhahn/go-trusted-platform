@@ -81,6 +81,8 @@ func newDetachedHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatalf("NewController: %v", err)
 	}
+	// The test PKI's CRLs are current an hour after issue.
+	ctl.now = func() time.Time { return pki.issued.Add(time.Hour) }
 	h.ctl = ctl
 	return h
 }
@@ -330,6 +332,85 @@ func TestPushCRLWhileDetached(t *testing.T) {
 	}
 }
 
+func TestPushCRLRefusesStaleAndUntrustedCRLs(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	held := h.pki.crl(t, 1, h.pki.issued)
+	if err := h.ctl.PushCRL(ctx, held); err != nil {
+		t.Fatalf("PushCRL: %v", err)
+	}
+	tests := []struct {
+		name string
+		der  []byte
+		want error
+	}{
+		// Higher numbers, so only the check stands between them and charon.
+		{"past its next update", h.pki.crl(t, 5, h.pki.issued.Add(-48*time.Hour)), ErrCRLStale},
+		{"signed by another CA of the same name", newTestPKI(t).crl(t, 6, h.pki.issued), ErrCRLUntrusted},
+	}
+	for _, tt := range tests {
+		var opErr *OpError
+		if err := h.ctl.PushCRL(ctx, tt.der); !errors.As(err, &opErr) || opErr.Op != "verify crl" || !errors.Is(err, tt.want) {
+			t.Fatalf("%s: err = %v, want a verify crl OpError for %v", tt.name, err, tt.want)
+		}
+	}
+	if got := h.charon.crls(); len(got) != 1 || !bytes.Equal(got[0], held) || h.ctl.Status().CRLs != 1 {
+		t.Fatal("a refused CRL reached charon or replaced the one held")
+	}
+}
+
+func TestPushCRLBeforeTheFirstAttach(t *testing.T) {
+	h := newDetachedHarness(t)
+	ctx := context.Background()
+	crl := h.pki.crl(t, 1, h.pki.issued)
+
+	// Before any attach the CAs come from the identity provider.
+	h.identity.err = errInjected
+	var opErr *OpError
+	if err := h.ctl.PushCRL(ctx, crl); !errors.As(err, &opErr) || opErr.Op != "identity" || !errors.Is(err, errInjected) {
+		t.Fatalf("no identity: err = %v, want an identity OpError", err)
+	}
+	h.identity.err = nil
+	if err := h.ctl.PushCRL(ctx, crl); err != nil {
+		t.Fatalf("PushCRL: %v", err)
+	}
+	if h.ctl.Status().CRLs != 1 {
+		t.Fatal("the verified CRL is not held")
+	}
+}
+
+func TestVerifyCRL(t *testing.T) {
+	pki := newTestPKI(t)
+	parse := func(der []byte) *x509.RevocationList {
+		crl, err := x509.ParseRevocationList(der)
+		if err != nil {
+			t.Fatalf("ParseRevocationList: %v", err)
+		}
+		return crl
+	}
+	crl := parse(pki.crl(t, 1, pki.issued))
+	cas := []*x509.Certificate{pki.leaf, pki.ca}
+	tests := []struct {
+		name string
+		crl  *x509.RevocationList
+		cas  []*x509.Certificate
+		now  time.Time
+		want error
+	}{
+		{"current, signed by a CA", crl, cas, pki.issued, nil},
+		{"at its next update", crl, cas, crl.NextUpdate, ErrCRLStale},
+		{"without a next update", &x509.RevocationList{RawIssuer: crl.RawIssuer}, cas, pki.issued, ErrCRLStale},
+		{"no CA", crl, nil, pki.issued, ErrCRLUntrusted},
+		{"only a certificate of another name", crl, []*x509.Certificate{pki.leaf}, pki.issued, ErrCRLUntrusted},
+		{"another key", parse(newTestPKI(t).crl(t, 1, pki.issued)), cas, pki.issued, ErrCRLUntrusted},
+	}
+	for _, tt := range tests {
+		if err := verifyCRL(tt.crl, tt.cas, tt.now); !errors.Is(err, tt.want) {
+			t.Errorf("%s: err = %v, want %v", tt.name, err, tt.want)
+		}
+	}
+}
+
 func TestSupersedes(t *testing.T) {
 	day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	crl := func(number int64, at time.Time) *x509.RevocationList {
@@ -523,7 +604,7 @@ func TestEvictCutsThePeerOff(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	peer := addr("10.20.0.2")
-	h.charon.sas["vtep-10.20.0.2"] = []string{"7", "9"}
+	h.charon.sas["vtep-10.20.0.2"] = []IKESA{{UniqueID: "7"}, {UniqueID: "9"}}
 
 	if err := h.ctl.Evict(ctx, peer); err != nil {
 		t.Fatalf("Evict: %v", err)
@@ -588,17 +669,16 @@ func TestEvictAndReadmitFailures(t *testing.T) {
 		t.Fatalf("readmitting a live peer: err = %v", err)
 	}
 
+	if err := h.ctl.Evict(ctx, addr("10.20.0.1")); err != nil {
+		t.Fatalf("Evict: %v", err)
+	}
 	h.dropper.fail = errInjected
-	if err := h.ctl.Evict(ctx, addr("10.20.0.1")); !errors.As(err, &peerErr) || peerErr.Op != "drop" {
-		t.Fatalf("drop failure: err = %v", err)
-	}
-	// The eviction stands although the kernel half failed: the peer is
-	// not reloaded, and Readmit cannot lift a drop it cannot remove.
-	if slices.Contains(h.ctl.Peers(), addr("10.20.0.1")) {
-		t.Fatal("a failed eviction left the peer admitted")
-	}
 	if err := h.ctl.Readmit(ctx, addr("10.20.0.1")); !errors.As(err, &peerErr) || peerErr.Op != "undrop" {
 		t.Fatalf("undrop failure: err = %v", err)
+	}
+	// The eviction stands while the drop cannot be lifted.
+	if slices.Contains(h.ctl.Peers(), addr("10.20.0.1")) {
+		t.Fatal("a failed readmission admitted the peer")
 	}
 	h.dropper.fail = nil
 
@@ -606,12 +686,156 @@ func TestEvictAndReadmitFailures(t *testing.T) {
 	if err := h.ctl.Evict(ctx, addr("10.20.0.2")); !errors.As(err, &peerErr) || peerErr.Op != "list-sas" {
 		t.Fatalf("list-sas failure: err = %v", err)
 	}
+	delete(h.charon.fail, "list-sas")
 	h.charon.fail["unload-conn"] = errInjected
 	if err := h.ctl.Readmit(ctx, addr("10.20.0.2")); err != nil {
 		t.Fatalf("Readmit: %v", err)
 	}
 	if err := h.ctl.Evict(ctx, addr("10.20.0.2")); !errors.As(err, &peerErr) || peerErr.Op != "unload-conn" {
 		t.Fatalf("unload failure: err = %v", err)
+	}
+}
+
+func TestEvictRunsEveryStepWhenTheDropFails(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	peer := addr("10.20.0.2")
+	h.charon.sas["vtep-10.20.0.2"] = []IKESA{{UniqueID: "7"}}
+	h.dropper.fail = errInjected
+
+	var peerErr *PeerError
+	if err := h.ctl.Evict(ctx, peer); !errors.As(err, &peerErr) || peerErr.Op != "drop" {
+		t.Fatalf("Evict: err = %v, want the drop failure", err)
+	}
+	if _, loaded := h.charon.conns["vtep-10.20.0.2"]; loaded {
+		t.Fatal("a failed drop left the connection loaded")
+	}
+	if !slices.Equal(h.charon.killed, []string{"7"}) {
+		t.Fatalf("terminated %v, want the IKE_SA although the drop failed", h.charon.killed)
+	}
+	s := h.ctl.Status()
+	if !slices.Equal(s.Evicted, []netip.Addr{peer}) || !slices.Equal(s.DropPending, []netip.Addr{peer}) || len(s.Unsynced) != 0 {
+		t.Fatalf("status = %+v, want the peer evicted with its drop pending", s)
+	}
+	select {
+	case <-h.ctl.retry:
+	default:
+		t.Fatal("the failed drop did not signal a retry")
+	}
+
+	// Converge retries the drop until it holds.
+	if err := h.ctl.Converge(ctx); !errors.Is(err, errInjected) {
+		t.Fatalf("Converge with the drop still failing: err = %v", err)
+	}
+	h.dropper.fail = nil
+	if err := h.ctl.Converge(ctx); err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	if _, dropped := h.dropper.dropped[peer]; !dropped {
+		t.Fatal("Converge did not apply the drop")
+	}
+	if s := h.ctl.Status(); len(s.DropPending) != 0 {
+		t.Fatalf("drop still pending after Converge: %+v", s)
+	}
+}
+
+func TestEvictUnloadFailureStillTerminates(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	peer := addr("10.20.0.2")
+	h.charon.sas["vtep-10.20.0.2"] = []IKESA{{UniqueID: "7"}}
+	h.charon.fail["unload-conn"] = errInjected
+
+	var peerErr *PeerError
+	if err := h.ctl.Evict(ctx, peer); !errors.As(err, &peerErr) || peerErr.Op != "unload-conn" {
+		t.Fatalf("Evict: err = %v, want the unload failure", err)
+	}
+	if _, dropped := h.dropper.dropped[peer]; !dropped {
+		t.Fatal("no kernel drop")
+	}
+	if !slices.Equal(h.charon.killed, []string{"7"}) {
+		t.Fatalf("terminated %v, want the IKE_SA although the unload failed", h.charon.killed)
+	}
+	if s := h.ctl.Status(); !slices.Equal(s.Unsynced, []netip.Addr{peer}) || len(s.DropPending) != 0 {
+		t.Fatalf("status = %+v, want the peer unsynced", s)
+	}
+
+	// An SA that came up meanwhile is ended by the retry, with the unload.
+	delete(h.charon.fail, "unload-conn")
+	h.charon.sas["vtep-10.20.0.2"] = []IKESA{{UniqueID: "8"}}
+	if err := h.ctl.Converge(ctx); err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	if _, loaded := h.charon.conns["vtep-10.20.0.2"]; loaded {
+		t.Fatal("Converge did not unload the connection")
+	}
+	if !slices.Equal(h.charon.killed, []string{"7", "8"}) {
+		t.Fatalf("terminated %v, want the retry to end the new SA", h.charon.killed)
+	}
+	if s := h.ctl.Status(); len(s.Unsynced) != 0 {
+		t.Fatalf("still unsynced after Converge: %+v", s)
+	}
+}
+
+func TestReadmitWithThePendingDrop(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	peer := addr("10.20.0.2")
+	h.dropper.fail = errInjected
+	if err := h.ctl.Evict(ctx, peer); !errors.Is(err, errInjected) {
+		t.Fatalf("Evict: err = %v", err)
+	}
+	// The drop never went in, so there is none to lift: the dropper is
+	// not asked, and the readmission does not fail on it.
+	if err := h.ctl.Readmit(ctx, peer); err != nil {
+		t.Fatalf("Readmit: %v", err)
+	}
+	if s := h.ctl.Status(); len(s.DropPending) != 0 || len(s.Evicted) != 0 {
+		t.Fatalf("status = %+v, want nothing pending", s)
+	}
+	if _, loaded := h.charon.conns["vtep-10.20.0.2"]; !loaded {
+		t.Fatal("the readmitted peer was not reloaded")
+	}
+}
+
+func TestConvergeWhileDetachedRetriesOnlyDrops(t *testing.T) {
+	h := newDetachedHarness(t)
+	ctx := context.Background()
+	peer := addr("10.20.0.2")
+	h.dropper.fail = errInjected
+	if err := h.ctl.Evict(ctx, peer); !errors.Is(err, errInjected) {
+		t.Fatalf("Evict: err = %v", err)
+	}
+	h.dropper.fail = nil
+	if err := h.ctl.Converge(ctx); err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	if _, dropped := h.dropper.dropped[peer]; !dropped {
+		t.Fatal("Converge did not apply the drop while detached")
+	}
+	if len(h.charon.commands) != 0 {
+		t.Fatalf("Converge reached charon while detached: %v", h.charon.commands)
+	}
+}
+
+func TestAttachEndsSAsOfPeersEvictedWhileDetached(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.ctl.Detach()
+	if err := h.ctl.Evict(ctx, addr("10.20.0.2")); err != nil {
+		t.Fatalf("Evict: %v", err)
+	}
+	// charon kept running: it still holds the connection and its SA.
+	same := newFakeSession("vtep-10.20.0.1", "vtep-10.20.0.2")
+	same.sas["vtep-10.20.0.2"] = []IKESA{{UniqueID: "7", RemoteHost: "10.20.0.2", RemoteID: "10.20.0.2"}}
+	if err := h.ctl.Attach(ctx, same); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if !slices.Equal(same.killed, []string{"7"}) {
+		t.Fatalf("terminated %v, want the evicted peer's SA", same.killed)
+	}
+	if got := same.loaded(); !slices.Equal(got, []string{"vtep-10.20.0.1"}) {
+		t.Fatalf("charon holds %v, want the evicted peer's connection gone", got)
 	}
 }
 
@@ -678,7 +902,120 @@ func TestIdentityMismatchStillReportedWhenTerminateFails(t *testing.T) {
 	if !errors.As(err, &mismatch) || !errors.Is(err, errInjected) {
 		t.Fatalf("err = %v, want the mismatch and the terminate failure", err)
 	}
+	if !h.ctl.Status().AuditPending {
+		t.Fatal("an SA left up did not leave an audit pending")
+	}
 	if mismatch.RemoteID != "10.20.0.2" || mismatch.Error() != "ipsec: vtep-10.20.0.1: peer at 10.20.0.1 authenticated as 10.20.0.2" {
 		t.Fatalf("mismatch = %q", mismatch.Error())
+	}
+}
+
+func TestHandleEventEndsSAsOfEvictedPeers(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if err := h.ctl.Evict(ctx, addr("10.20.0.2")); err != nil {
+		t.Fatalf("Evict: %v", err)
+	}
+	// The peer authenticated correctly, but it is evicted.
+	ev := updown(true, "vtep-10.20.0.2", IKESA{UniqueID: "5", RemoteHost: "10.20.0.2", RemoteID: "10.20.0.2"})
+	if err := h.ctl.HandleEvent(ctx, ev); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if !slices.Equal(h.charon.killed, []string{"5"}) {
+		t.Fatalf("terminated %v, want the evicted peer's SA", h.charon.killed)
+	}
+}
+
+// heldSAs gives charon one good SA, one of another identity, and one of a
+// connection the controller does not own.
+func heldSAs(f *fakeSession) {
+	f.sas["vtep-10.20.0.1"] = []IKESA{{UniqueID: "1", RemoteHost: "10.20.0.1", RemoteID: "10.20.0.1"}}
+	f.sas["vtep-10.20.0.2"] = []IKESA{{UniqueID: "2", RemoteHost: "10.20.0.2", RemoteID: "10.20.0.66"}}
+	f.sas["operator-test"] = []IKESA{{UniqueID: "3", RemoteHost: "10.20.0.1", RemoteID: "10.20.0.2"}}
+}
+
+func TestAuditChecksEverySA(t *testing.T) {
+	h := newHarness(t)
+	heldSAs(h.charon)
+	err := h.ctl.Audit(context.Background())
+	var mismatch *IdentityMismatchError
+	if !errors.As(err, &mismatch) || mismatch.Conn != "vtep-10.20.0.2" {
+		t.Fatalf("err = %v, want the mismatch on vtep-10.20.0.2", err)
+	}
+	if !slices.Equal(h.charon.killed, []string{"2"}) {
+		t.Fatalf("terminated %v, want only the mismatched SA", h.charon.killed)
+	}
+}
+
+func TestAttachAuditsHeldSAs(t *testing.T) {
+	h := newDetachedHarness(t)
+	heldSAs(h.charon)
+	var mismatch *IdentityMismatchError
+	if err := h.ctl.Attach(context.Background(), h.charon); !errors.As(err, &mismatch) {
+		t.Fatalf("Attach: err = %v, want the mismatch the audit found", err)
+	}
+	if !h.ctl.attached() || !slices.Equal(h.charon.killed, []string{"2"}) {
+		t.Fatalf("attached=%v, terminated %v, want attached with the mismatched SA ended", h.ctl.attached(), h.charon.killed)
+	}
+}
+
+func TestAuditFailureIsRetried(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	heldSAs(h.charon)
+	h.charon.fail["list-sas"] = errInjected
+	var opErr *OpError
+	if err := h.ctl.Audit(ctx); !errors.As(err, &opErr) || opErr.Op != "list-sas" {
+		t.Fatalf("Audit: err = %v, want a list-sas OpError", err)
+	}
+	if !h.ctl.Status().AuditPending {
+		t.Fatal("a failed audit is not pending")
+	}
+	select {
+	case <-h.ctl.retry:
+	default:
+		t.Fatal("a failed audit did not signal a retry")
+	}
+
+	delete(h.charon.fail, "list-sas")
+	var mismatch *IdentityMismatchError
+	if err := h.ctl.Converge(ctx); !errors.As(err, &mismatch) {
+		t.Fatalf("Converge: err = %v, want the audit's mismatch", err)
+	}
+	if h.ctl.Status().AuditPending || !slices.Equal(h.charon.killed, []string{"2"}) {
+		t.Fatalf("pending=%v, terminated %v after the retried audit", h.ctl.Status().AuditPending, h.charon.killed)
+	}
+}
+
+func TestAuditWhileDetached(t *testing.T) {
+	h := newDetachedHarness(t)
+	if err := h.ctl.Audit(context.Background()); err != nil {
+		t.Fatalf("Audit: %v", err)
+	}
+	if len(h.charon.commands) != 0 {
+		t.Fatalf("a detached audit reached charon: %v", h.charon.commands)
+	}
+}
+
+func TestLostEventAuditsEverySA(t *testing.T) {
+	h := newHarness(t)
+	heldSAs(h.charon)
+	// The event itself carries nothing wrong; the SA that is wrong was missed.
+	ev := updown(true, "vtep-10.20.0.1", IKESA{UniqueID: "1", RemoteHost: "10.20.0.1", RemoteID: "10.20.0.1"})
+	ev.Lost = true
+	var mismatch *IdentityMismatchError
+	if err := h.ctl.HandleEvent(context.Background(), ev); !errors.As(err, &mismatch) {
+		t.Fatalf("HandleEvent: err = %v, want the mismatch the audit found", err)
+	}
+	if !slices.Equal(h.charon.killed, []string{"2"}) {
+		t.Fatalf("terminated %v, want the missed mismatched SA", h.charon.killed)
+	}
+	// A Lost event with no SAs audits as well.
+	h.charon.sas["vtep-10.20.0.1"] = []IKESA{{UniqueID: "6", RemoteHost: "10.20.0.1", RemoteID: "10.20.0.9"}}
+	if err := h.ctl.HandleEvent(context.Background(), IKEUpdown{Lost: true}); !errors.As(err, &mismatch) {
+		t.Fatalf("HandleEvent(Lost): err = %v", err)
+	}
+	if !slices.Equal(h.charon.killed, []string{"2", "6"}) {
+		t.Fatalf("terminated %v", h.charon.killed)
 	}
 }

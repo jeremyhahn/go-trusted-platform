@@ -253,6 +253,54 @@ func TestRunnerKeepsSessionThroughPeerFailures(t *testing.T) {
 	}
 }
 
+func TestRunnerRetriesFailedPeers(t *testing.T) {
+	sess, stream := newFakeSession(), newFakeStream()
+	sess.fail["load-conn"] = errInjected
+	rh := startRunner(t, attempt{sess: sess, stream: stream})
+
+	// The attach fails to load the peers, so a retry is due after the
+	// backoff, which doubles while the retry fails.
+	if d := rh.wait(t); d != MinBackoff {
+		t.Fatalf("first retry after %v, want %v", d, MinBackoff)
+	}
+	rh.next(t)
+	if d := rh.wait(t); d != 2*MinBackoff {
+		t.Fatalf("second retry after %v, want %v", d, 2*MinBackoff)
+	}
+	delete(sess.fail, "load-conn")
+	rh.next(t)
+
+	rh.stop(t)
+	if got := sess.loaded(); !slices.Equal(got, []string{"vtep-10.20.0.1", "vtep-10.20.0.2"}) {
+		t.Fatalf("charon holds %v after the retry, want both peers", got)
+	}
+	if s := rh.ctl.Status(); len(s.Unsynced) != 0 {
+		t.Fatalf("still unsynced after a retry that succeeded: %+v", s)
+	}
+}
+
+func TestRunnerRetriesDropsWhileDetached(t *testing.T) {
+	rh := startRunner(t) // charon never answers
+	ctx := context.Background()
+	peer := addr("10.20.0.2")
+	if d := rh.wait(t); d != MinBackoff {
+		t.Fatalf("first wait %v", d)
+	}
+	rh.dropper.fail = errInjected
+	if err := rh.ctl.Evict(ctx, peer); !errors.Is(err, errInjected) {
+		t.Fatalf("Evict: err = %v", err)
+	}
+	rh.dropper.fail = nil
+	rh.next(t)
+	rh.wait(t)
+	if _, dropped := rh.dropper.dropped[peer]; !dropped {
+		t.Fatal("the failed drop was not retried while charon was away")
+	}
+	if s := rh.ctl.Status(); len(s.DropPending) != 0 {
+		t.Fatalf("drop still pending: %+v", s)
+	}
+}
+
 func TestRunnerBackoff(t *testing.T) {
 	refused := newFakeSession()
 	refused.fail["load-token"] = errInjected

@@ -38,7 +38,8 @@ const (
 	socketMode fs.FileMode = 0o600
 
 	// eventBuffer is how many events govici queues for the stream. govici
-	// drops an event rather than block when the queue is full.
+	// drops an event rather than block when the queue is full; the stream
+	// then marks the next event Lost.
 	eventBuffer = 256
 
 	// updownEvent is the event the stream subscribes to.
@@ -245,27 +246,23 @@ func (s *viciSession) Conns(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-func (s *viciSession) IKESAs(ctx context.Context, conn string) ([]string, error) {
+func (s *viciSession) IKESAs(ctx context.Context, conn string) ([]HeldSA, error) {
 	req, err := request("list-sas", listSAsRequest{IKE: conn, NoBlock: true})
 	if err != nil {
 		return nil, err
 	}
-	var ids []string
+	var held []HeldSA
 	for ev, err := range s.c.CallStreaming(ctx, "list-sas", "list-sa", req) {
 		if err != nil {
 			return nil, &CommandError{Command: "list-sas", Err: err}
 		}
 		for _, name := range ev.Keys() {
-			sa, ok := ev.Get(name).(*govici.Message)
-			if !ok {
-				continue
-			}
-			if id, ok := sa.Get("uniqueid").(string); ok {
-				ids = append(ids, id)
+			if section, ok := ev.Get(name).(*govici.Message); ok {
+				held = append(held, HeldSA{Conn: name, SA: parseSA(section)})
 			}
 		}
 	}
-	return ids, nil
+	return held, nil
 }
 
 func (s *viciSession) TerminateIKE(ctx context.Context, uniqueID string) error {
@@ -355,8 +352,14 @@ func newVICIEvents(src eventSource) *viciEvents {
 
 // forward hands each ike-updown event on until govici closes in, which it
 // does when the connection ends, or the stream is closed.
+//
+// govici queues events in in and drops one it cannot queue. A queue found
+// full, or one short of full, after a receive may have dropped events, so
+// the next event handed on is marked Lost; when no ike-updown comes next,
+// a Lost event without SAs is handed on in place of whatever was read.
 func (e *viciEvents) forward(in <-chan govici.Event) {
 	defer close(e.out)
+	lost := false
 	for {
 		var ev govici.Event
 		select {
@@ -368,11 +371,20 @@ func (e *viciEvents) forward(in <-chan govici.Event) {
 			}
 			ev = next
 		}
-		if ev.Name != updownEvent || ev.Message == nil {
+		if len(in) >= cap(in)-1 {
+			lost = true
+		}
+		var up IKEUpdown
+		switch {
+		case ev.Name == updownEvent && ev.Message != nil:
+			up = parseUpdown(ev.Message)
+		case !lost:
 			continue
 		}
+		up.Lost = lost
 		select {
-		case e.out <- parseUpdown(ev.Message):
+		case e.out <- up:
+			lost = false
 		case <-e.done:
 			return
 		}
@@ -402,13 +414,19 @@ func parseUpdown(m *govici.Message) IKEUpdown {
 		if !ok {
 			continue
 		}
-		var sa IKESA
-		if err := govici.UnmarshalMessage(section, &sa); err != nil {
-			// An SA that does not parse cannot prove its identity: an
-			// empty remote-id fails the check, which ends the SA.
-			sa.RemoteID = ""
-		}
-		ev.SAs[name] = sa
+		ev.SAs[name] = parseSA(section)
 	}
 	return ev
+}
+
+// parseSA reads one IKE_SA section of an ike-updown event or a list-sas
+// reply.
+func parseSA(section *govici.Message) IKESA {
+	var sa IKESA
+	if err := govici.UnmarshalMessage(section, &sa); err != nil {
+		// An SA that does not parse cannot prove its identity: an empty
+		// remote-id fails the check, which ends the SA.
+		sa.RemoteID = ""
+	}
+	return sa
 }

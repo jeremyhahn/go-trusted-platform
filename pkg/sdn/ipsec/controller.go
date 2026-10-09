@@ -14,6 +14,7 @@
 package ipsec
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -62,15 +63,27 @@ type Controller struct {
 	dropper  Dropper
 	identity IdentityProvider
 	now      func() time.Time
+	retry    chan struct{} // signalled when work failed and Converge must retry it
 
-	mu      sync.Mutex
-	static  map[netip.Addr]struct{}
-	routed  map[netip.Addr]map[uint32]struct{} // VTEP → the VNIs whose routes name it
-	evicted map[netip.Addr]struct{}
-	loaded  map[netip.Addr]struct{}         // connections charon holds
-	crls    map[string]*x509.RevocationList // issuer → its newest CRL
-	cert    *x509.Certificate               // the tunnel certificate last loaded
-	cmd     Session                         // nil while detached
+	mu           sync.Mutex
+	static       map[netip.Addr]struct{}
+	routed       map[netip.Addr]map[uint32]struct{} // VTEP → the VNIs whose routes name it
+	evicted      map[netip.Addr]struct{}
+	dropPending  map[netip.Addr]struct{}            // evicted VTEPs whose kernel drop failed
+	loaded       map[netip.Addr]struct{}            // connections charon holds
+	unsynced     map[netip.Addr]struct{}            // peers charon does not hold as wanted
+	auditPending bool                               // charon's IKE_SAs need an audit
+	crls         map[crlIssuer]*x509.RevocationList // issuer → its newest CRL
+	cert         *x509.Certificate                  // the tunnel certificate last loaded
+	cas          []*x509.Certificate                // the CA certificates last loaded
+	cmd          Session                            // nil while detached
+}
+
+// crlIssuer identifies the issuer of a CRL: its name and, when the CRL
+// carries one, its key.
+type crlIssuer struct {
+	name  string
+	keyID string
 }
 
 // NewController builds the controller for an enabled configuration.
@@ -92,15 +105,18 @@ func NewController(cfg *Config, admitter Admitter, dropper Dropper, identity Ide
 			reauthTime:   cfg.ReauthTime(),
 			replayWindow: cfg.EffectiveReplayWindow(),
 		},
-		admitter: admitter,
-		dropper:  dropper,
-		identity: identity,
-		now:      time.Now,
-		static:   make(map[netip.Addr]struct{}, len(peers)),
-		routed:   make(map[netip.Addr]map[uint32]struct{}),
-		evicted:  make(map[netip.Addr]struct{}),
-		loaded:   make(map[netip.Addr]struct{}),
-		crls:     make(map[string]*x509.RevocationList),
+		admitter:    admitter,
+		dropper:     dropper,
+		identity:    identity,
+		now:         time.Now,
+		retry:       make(chan struct{}, 1),
+		static:      make(map[netip.Addr]struct{}, len(peers)),
+		routed:      make(map[netip.Addr]map[uint32]struct{}),
+		evicted:     make(map[netip.Addr]struct{}),
+		dropPending: make(map[netip.Addr]struct{}),
+		loaded:      make(map[netip.Addr]struct{}),
+		unsynced:    make(map[netip.Addr]struct{}),
+		crls:        make(map[crlIssuer]*x509.RevocationList),
 	}
 	for _, p := range peers {
 		c.static[p] = struct{}{}
@@ -116,8 +132,12 @@ func NewController(cfg *Config, admitter Admitter, dropper Dropper, identity Ide
 // A failure to load the identity or the CRLs, or to list charon's
 // connections, leaves the controller detached and is returned as an
 // OpError: charon cannot authenticate peers safely without them. Peers
-// whose connection fails to load leave it attached; their PeerErrors are
-// returned together.
+// whose connection fails to load or unload leave it attached; their
+// PeerErrors are returned together, and Converge retries them.
+//
+// Last, every IKE_SA charon holds is audited (see Audit), so an SA that
+// came up while the controller was detached, or one of a peer evicted
+// meanwhile, does not outlive the attach.
 func (c *Controller) Attach(ctx context.Context, sess Session) error {
 	if sess == nil {
 		return ErrMissingDependency
@@ -126,6 +146,7 @@ func (c *Controller) Attach(ctx context.Context, sess Session) error {
 	defer c.mu.Unlock()
 	c.cmd = nil
 	c.loaded = make(map[netip.Addr]struct{})
+	c.unsynced = make(map[netip.Addr]struct{})
 
 	if err := c.loadIdentity(ctx, sess); err != nil {
 		return err
@@ -144,12 +165,15 @@ func (c *Controller) Attach(ctx context.Context, sess Session) error {
 	var errs []error
 	for _, peer := range held {
 		if !c.wanted(peer) {
-			errs = append(errs, c.unload(ctx, peer))
+			// Held by charon, so settle unloads it.
+			c.loaded[peer] = struct{}{}
+			errs = append(errs, c.settle(ctx, peer, false))
 		}
 	}
 	for _, peer := range c.peers() {
-		errs = append(errs, c.load(ctx, peer))
+		errs = append(errs, c.settle(ctx, peer, false))
 	}
+	errs = append(errs, c.audit(ctx))
 	return errors.Join(errs...)
 }
 
@@ -176,6 +200,7 @@ func (c *Controller) loadIdentity(ctx context.Context, sess Session) error {
 		return &OpError{Op: "load-token", Err: err}
 	}
 	c.cert = id.Chain[0]
+	c.cas = id.Chain[1:]
 	return nil
 }
 
@@ -192,14 +217,25 @@ func loadCRL(ctx context.Context, sess Session, crl *x509.RevocationList) error 
 // on every later attach. charon never fetches CRLs itself, and every peer
 // connection checks revocation strictly. A CRL no newer than the one held
 // for its issuer is ignored.
+//
+// A CRL must be signed by a CA of the tunnel identity, and its NextUpdate
+// must be in the future; one that is not is refused with an OpError and
+// the CRL held for its issuer stays.
 func (c *Controller) PushCRL(ctx context.Context, der []byte) error {
 	crl, err := x509.ParseRevocationList(der)
 	if err != nil {
 		return &OpError{Op: "parse crl", Err: err}
 	}
-	issuer := string(crl.RawIssuer) + string(crl.AuthorityKeyId)
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	cas, err := c.authorities(ctx)
+	if err != nil {
+		return err
+	}
+	if err := verifyCRL(crl, cas, c.now()); err != nil {
+		return &OpError{Op: "verify crl", Err: err}
+	}
+	issuer := crlIssuer{name: string(crl.RawIssuer), keyID: string(crl.AuthorityKeyId)}
 	if held, ok := c.crls[issuer]; ok && !supersedes(crl, held) {
 		return nil
 	}
@@ -208,6 +244,39 @@ func (c *Controller) PushCRL(ctx context.Context, der []byte) error {
 		return nil
 	}
 	return loadCRL(ctx, c.cmd, crl)
+}
+
+// authorities returns the CA certificates a CRL must be signed by: those of
+// the identity last loaded, or, before the first attach, of the identity
+// the provider holds now.
+func (c *Controller) authorities(ctx context.Context) ([]*x509.Certificate, error) {
+	if len(c.cas) > 0 {
+		return c.cas, nil
+	}
+	id, err := c.identity.TunnelIdentity(ctx)
+	if err != nil {
+		return nil, &OpError{Op: "identity", Err: err}
+	}
+	if err := id.validate(c.cfg.local); err != nil {
+		return nil, &OpError{Op: "identity", Err: err}
+	}
+	return id.Chain[1:], nil
+}
+
+// verifyCRL checks a CRL before it is held: it must be current at now, and
+// signed by one of cas. charon checks revocation strictly, so a stale CRL
+// fails every peer of its issuer, and an unsigned one is not to be trusted
+// at all; either is refused, and the CRL held stays.
+func verifyCRL(crl *x509.RevocationList, cas []*x509.Certificate, now time.Time) error {
+	if crl.NextUpdate.IsZero() || !now.Before(crl.NextUpdate) {
+		return ErrCRLStale
+	}
+	for _, ca := range cas {
+		if bytes.Equal(ca.RawSubject, crl.RawIssuer) && crl.CheckSignatureFrom(ca) == nil {
+			return nil
+		}
+	}
+	return ErrCRLUntrusted
 }
 
 // supersedes reports whether next replaces prev: a higher CRL number, or
@@ -243,6 +312,16 @@ type Status struct {
 	Peers []netip.Addr
 	// Evicted are the evicted VTEPs, in address order.
 	Evicted []netip.Addr
+	// DropPending are the evicted VTEPs whose kernel drop is not in place:
+	// it failed, and Converge retries it. Their traffic is only cut off by
+	// the connection being gone.
+	DropPending []netip.Addr
+	// Unsynced are the peers whose connection or IKE_SAs charon does not
+	// hold as wanted yet, in address order; Converge retries them.
+	Unsynced []netip.Addr
+	// AuditPending is true while charon's IKE_SAs await an audit that
+	// failed or could not run.
+	AuditPending bool
 	// CRLs is how many issuers' CRLs are held.
 	CRLs int
 	// Certificate is the renewal state of the tunnel certificate last
@@ -255,10 +334,13 @@ func (c *Controller) Status() Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := Status{
-		Attached: c.cmd != nil,
-		Peers:    c.peers(),
-		Evicted:  slices.SortedFunc(maps.Keys(c.evicted), netip.Addr.Compare),
-		CRLs:     len(c.crls),
+		Attached:     c.cmd != nil,
+		Peers:        c.peers(),
+		Evicted:      slices.SortedFunc(maps.Keys(c.evicted), netip.Addr.Compare),
+		DropPending:  slices.SortedFunc(maps.Keys(c.dropPending), netip.Addr.Compare),
+		Unsynced:     slices.SortedFunc(maps.Keys(c.unsynced), netip.Addr.Compare),
+		AuditPending: c.auditPending,
+		CRLs:         len(c.crls),
 	}
 	if c.cert != nil {
 		s.Certificate = certificateStatus(c.cert, c.now())
@@ -292,7 +374,7 @@ func (c *Controller) HandleEVPNRoute(ctx context.Context, route *bgp.EVPNRouteDa
 		c.routed[vtep] = vnis
 	}
 	vnis[vni] = struct{}{}
-	return c.sync(ctx, vtep)
+	return c.settle(ctx, vtep, false)
 }
 
 func (c *Controller) withdraw(ctx context.Context, vni uint32, vtep netip.Addr) error {
@@ -306,7 +388,7 @@ func (c *Controller) withdraw(ctx context.Context, vni uint32, vtep netip.Addr) 
 	if len(vnis) == 0 {
 		delete(c.routed, vtep)
 	}
-	return c.sync(ctx, vtep)
+	return c.settle(ctx, vtep, false)
 }
 
 // candidate reports whether vtep can be a peer at all: a unicast address
@@ -321,6 +403,11 @@ func (c *Controller) candidate(vtep netip.Addr) bool {
 // connection is unloaded so no trap re-initiates it, and its IKE_SAs are
 // torn down. It stays evicted, whatever routes name it, until Readmit.
 // The kernel drop is applied first and holds even when charon is absent.
+//
+// Every step is attempted even when an earlier one fails, and the failures
+// are returned together. A failed step is not undone: the peer stays
+// evicted, Status reports what is still pending (DropPending, Unsynced),
+// and Converge retries it.
 func (c *Controller) Evict(ctx context.Context, peer netip.Addr) error {
 	peer = peer.Unmap()
 	if !c.candidate(peer) {
@@ -329,18 +416,9 @@ func (c *Controller) Evict(ctx context.Context, peer netip.Addr) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.evicted[peer] = struct{}{}
-	if err := c.dropper.Drop(ctx, peer); err != nil {
-		return &PeerError{Peer: peer, Op: "drop", Err: err}
-	}
-	if c.cmd == nil {
-		return nil
-	}
-	if _, loaded := c.loaded[peer]; loaded {
-		if err := c.unload(ctx, peer); err != nil {
-			return err
-		}
-	}
-	return c.terminate(ctx, peer)
+	// Every step runs whatever the one before did: a failed drop must not
+	// leave the peer's connection and SAs up.
+	return errors.Join(c.drop(ctx, peer), c.settle(ctx, peer, true))
 }
 
 // Readmit lifts an eviction: the kernel drop goes, and the connection is
@@ -352,11 +430,15 @@ func (c *Controller) Readmit(ctx context.Context, peer netip.Addr) error {
 	if _, ok := c.evicted[peer]; !ok {
 		return &PeerError{Peer: peer, Op: "readmit", Err: ErrNotEvicted}
 	}
-	if err := c.dropper.Undrop(ctx, peer); err != nil {
-		return &PeerError{Peer: peer, Op: "undrop", Err: err}
+	// A drop that never went in has nothing to lift.
+	if _, pending := c.dropPending[peer]; !pending {
+		if err := c.dropper.Undrop(ctx, peer); err != nil {
+			return &PeerError{Peer: peer, Op: "undrop", Err: err}
+		}
 	}
+	delete(c.dropPending, peer)
 	delete(c.evicted, peer)
-	return c.sync(ctx, peer)
+	return c.settle(ctx, peer, false)
 }
 
 // Peers returns the current peers in address order.
@@ -370,40 +452,126 @@ func (c *Controller) Peers() []netip.Addr {
 // connection that came up must have authenticated its peer as the address
 // it runs to. One that did not is terminated and reported as an
 // IdentityMismatchError. charon already pins the remote identity per
-// connection; this check holds that pin to account.
+// connection; this check holds that pin to account. An SA that came up for
+// an evicted peer is terminated too.
+//
+// An event marked Lost means others may have been missed, so every SA
+// charon holds is audited instead (see Audit).
 func (c *Controller) HandleEvent(ctx context.Context, ev IKEUpdown) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ev.Lost {
+		// The audit covers the event's own SAs too.
+		return c.audit(ctx)
+	}
 	if !ev.Up {
 		return nil
 	}
 	var errs []error
 	for name, sa := range ev.SAs {
-		errs = append(errs, c.checkIdentity(ctx, name, sa))
+		errs = append(errs, c.checkSA(ctx, name, sa))
 	}
 	return errors.Join(errs...)
 }
 
-func (c *Controller) checkIdentity(ctx context.Context, name string, sa IKESA) error {
+// Audit checks every IKE_SA charon holds, as HandleEvent checks one that
+// comes up: an SA of a controller connection is terminated when its peer
+// is evicted, or did not authenticate as the address the connection runs
+// to. Attach runs it, and so does HandleEvent for an event marked Lost, so
+// no SA escapes the check because its ike-updown was missed. An audit that
+// cannot list the SAs, or fails to end one, is retried by Converge.
+func (c *Controller) Audit(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.audit(ctx)
+}
+
+func (c *Controller) audit(ctx context.Context) error {
+	if c.cmd == nil {
+		// Attach audits.
+		return nil
+	}
+	c.auditPending = false
+	held, err := c.cmd.IKESAs(ctx, "")
+	if err != nil {
+		c.auditPending = true
+		c.signal()
+		return &OpError{Op: "list-sas", Err: err}
+	}
+	var errs []error
+	for _, h := range held {
+		errs = append(errs, c.checkSA(ctx, h.Conn, h.SA))
+	}
+	return errors.Join(errs...)
+}
+
+// Converge retries what failed before: kernel drops of evicted peers, then,
+// while attached, the peers charon does not hold as wanted, and a pending
+// audit. Whatever fails again stays pending and signals another retry. It
+// returns the failures together.
+func (c *Controller) Converge(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var errs []error
+	for _, peer := range slices.SortedFunc(maps.Keys(c.dropPending), netip.Addr.Compare) {
+		errs = append(errs, c.drop(ctx, peer))
+	}
+	for _, peer := range slices.SortedFunc(maps.Keys(c.unsynced), netip.Addr.Compare) {
+		errs = append(errs, c.settle(ctx, peer, false))
+	}
+	if c.auditPending {
+		errs = append(errs, c.audit(ctx))
+	}
+	return errors.Join(errs...)
+}
+
+// drop applies the kernel drop for an evicted peer. A failure is held as
+// pending for Converge.
+func (c *Controller) drop(ctx context.Context, peer netip.Addr) error {
+	if err := c.dropper.Drop(ctx, peer); err != nil {
+		c.dropPending[peer] = struct{}{}
+		c.signal()
+		return &PeerError{Peer: peer, Op: "drop", Err: err}
+	}
+	delete(c.dropPending, peer)
+	return nil
+}
+
+// signal tells whoever runs Converge that work is pending. It never blocks:
+// one pending signal stands for any number.
+func (c *Controller) signal() {
+	select {
+	case c.retry <- struct{}{}:
+	default:
+	}
+}
+
+// checkSA checks one IKE_SA of connection name, and terminates it when its
+// peer is evicted or did not prove its identity. An SA of a connection the
+// controller does not own is left alone. A mismatch is returned as an
+// IdentityMismatchError whether or not the SA could be ended; a failure to
+// end one leaves an audit pending. The caller holds mu.
+func (c *Controller) checkSA(ctx context.Context, name string, sa IKESA) error {
 	peer, ours := connPeer(name)
 	if !ours {
 		return nil
 	}
-	if host, err := netip.ParseAddr(sa.RemoteHost); err == nil && host.Unmap() == peer && sa.RemoteID == peer.String() {
-		return nil
+	var reason error
+	if _, evicted := c.evicted[peer]; !evicted {
+		if host, err := netip.ParseAddr(sa.RemoteHost); err == nil && host.Unmap() == peer && sa.RemoteID == peer.String() {
+			return nil
+		}
+		reason = &IdentityMismatchError{Conn: name, RemoteHost: sa.RemoteHost, RemoteID: sa.RemoteID}
 	}
-
-	mismatch := &IdentityMismatchError{Conn: name, RemoteHost: sa.RemoteHost, RemoteID: sa.RemoteID}
-	if sa.UniqueID == "" {
-		return mismatch
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.cmd == nil {
-		return mismatch
+	if c.cmd == nil || sa.UniqueID == "" {
+		return reason
 	}
 	if err := c.terminateSA(ctx, peer, sa.UniqueID); err != nil {
-		return errors.Join(mismatch, err)
+		c.auditPending = true
+		c.signal()
+		return errors.Join(reason, err)
 	}
-	return mismatch
+	return reason
 }
 
 // peers lists static and routed VTEPs that are not evicted. Callers hold mu.
@@ -435,6 +603,29 @@ func (c *Controller) wanted(peer netip.Addr) bool {
 
 // sync loads or unloads peer's connection to match whether it is wanted.
 // Callers hold mu.
+// settle brings charon to the wanted state for peer, as sync does, and ends
+// the IKE_SAs of an evicted peer when cut is set or an earlier attempt
+// failed. A peer that fails is recorded as unsynced and Converge retries
+// it. While detached there is nothing to settle: Attach does it.
+func (c *Controller) settle(ctx context.Context, peer netip.Addr, cut bool) error {
+	if c.cmd == nil {
+		return nil
+	}
+	_, evicted := c.evicted[peer]
+	_, retrying := c.unsynced[peer]
+	err := c.sync(ctx, peer)
+	if evicted && (cut || retrying) {
+		err = errors.Join(err, c.terminate(ctx, peer))
+	}
+	if err != nil {
+		c.unsynced[peer] = struct{}{}
+		c.signal()
+		return err
+	}
+	delete(c.unsynced, peer)
+	return nil
+}
+
 func (c *Controller) sync(ctx context.Context, peer netip.Addr) error {
 	_, loaded := c.loaded[peer]
 	switch want := c.wanted(peer); {
@@ -469,13 +660,13 @@ func (c *Controller) unload(ctx context.Context, peer netip.Addr) error {
 // terminate tears down every IKE_SA of peer's connection. Callers hold mu
 // and a session.
 func (c *Controller) terminate(ctx context.Context, peer netip.Addr) error {
-	ids, err := c.cmd.IKESAs(ctx, connName(peer))
+	held, err := c.cmd.IKESAs(ctx, connName(peer))
 	if err != nil {
 		return &PeerError{Peer: peer, Op: "list-sas", Err: err}
 	}
 	var errs []error
-	for _, id := range ids {
-		errs = append(errs, c.terminateSA(ctx, peer, id))
+	for _, h := range held {
+		errs = append(errs, c.terminateSA(ctx, peer, h.SA.UniqueID))
 	}
 	return errors.Join(errs...)
 }

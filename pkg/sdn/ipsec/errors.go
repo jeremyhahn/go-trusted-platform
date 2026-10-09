@@ -82,6 +82,12 @@ var (
 	ErrCertificateAddress = errors.New("ipsec: tunnel certificate does not name the local address")
 	// ErrNoKeyID is returned when a tunnel identity names no key.
 	ErrNoKeyID = errors.New("ipsec: tunnel identity names no token key")
+	// ErrCRLStale is returned when a pushed CRL has no NextUpdate, or one
+	// that has passed.
+	ErrCRLStale = errors.New("ipsec: CRL is past its next update")
+	// ErrCRLUntrusted is returned when a pushed CRL is not signed by a CA
+	// of the tunnel identity.
+	ErrCRLUntrusted = errors.New("ipsec: CRL is not signed by a tunnel CA")
 )
 
 // CommandError reports a VICI command that failed: charon refused it, or

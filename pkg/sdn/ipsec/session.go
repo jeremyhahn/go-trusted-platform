@@ -29,8 +29,9 @@ type Session interface {
 	UnloadConn(ctx context.Context, name string) error
 	// Conns lists the names of the connections charon holds.
 	Conns(ctx context.Context) ([]string, error)
-	// IKESAs lists the unique IDs of the named connection's IKE_SAs.
-	IKESAs(ctx context.Context, conn string) ([]string, error)
+	// IKESAs lists the named connection's IKE_SAs, or every IKE_SA charon
+	// holds when conn is empty.
+	IKESAs(ctx context.Context, conn string) ([]HeldSA, error)
 	// TerminateIKE destroys one IKE_SA without waiting for the peer to
 	// confirm the delete.
 	TerminateIKE(ctx context.Context, uniqueID string) error
@@ -98,6 +99,10 @@ type IKEUpdown struct {
 	Up bool
 	// SAs holds the IKE_SAs by connection name.
 	SAs map[string]IKESA
+	// Lost is true when events may have been dropped before this one, so
+	// an SA may have come up unchecked. The SAs charon holds must be
+	// audited. A Lost event may carry no SAs.
+	Lost bool
 }
 
 // IKESA is the part of an IKE_SA's state the identity check reads.
@@ -105,6 +110,12 @@ type IKESA struct {
 	UniqueID   string `vici:"uniqueid"`
 	RemoteHost string `vici:"remote-host"`
 	RemoteID   string `vici:"remote-id"`
+}
+
+// HeldSA is an IKE_SA charon holds, and the connection it belongs to.
+type HeldSA struct {
+	Conn string
+	SA   IKESA
 }
 
 // Connection is a load-conn connection. Empty fields are left out of the

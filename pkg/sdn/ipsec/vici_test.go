@@ -20,6 +20,7 @@ import (
 	"io"
 	"io/fs"
 	"iter"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -174,16 +175,24 @@ func TestVICISessionIKESAs(t *testing.T) {
 	ctx := context.Background()
 	s, c := newFakeVICISession(t)
 	c.stream = []*govici.Message{
-		message(t, "vtep-10.20.0.2", message(t, "uniqueid", "7", "state", "ESTABLISHED")),
-		message(t, "vtep-10.20.0.2", message(t, "uniqueid", "9")),
+		message(t, "vtep-10.20.0.2", message(t, "uniqueid", "7", "state", "ESTABLISHED",
+			"remote-host", "10.20.0.2", "remote-id", "10.20.0.2")),
+		message(t, "operator-test", message(t, "uniqueid", "9")),
 		message(t, "noise", "not a section"),
 	}
-	ids, err := s.IKESAs(ctx, "vtep-10.20.0.2")
-	if err != nil || !slices.Equal(ids, []string{"7", "9"}) {
-		t.Fatalf("IKESAs = %v, %v", ids, err)
+	held, err := s.IKESAs(ctx, "")
+	want := []HeldSA{
+		{Conn: "vtep-10.20.0.2", SA: IKESA{UniqueID: "7", RemoteHost: "10.20.0.2", RemoteID: "10.20.0.2"}},
+		{Conn: "operator-test", SA: IKESA{UniqueID: "9"}},
 	}
-	if c.reqs[0].Get("ike") != "vtep-10.20.0.2" || c.reqs[0].Get("noblock") != "yes" {
-		t.Fatalf("list-sas request = %v", c.reqs[0])
+	if err != nil || !slices.Equal(held, want) {
+		t.Fatalf("IKESAs = %+v, %v", held, err)
+	}
+	if c.reqs[0].Get("ike") != nil || c.reqs[0].Get("noblock") != "yes" {
+		t.Fatalf("list-sas request for every SA = %v", c.reqs[0])
+	}
+	if _, err := s.IKESAs(ctx, "vtep-10.20.0.2"); err != nil || c.reqs[1].Get("ike") != "vtep-10.20.0.2" {
+		t.Fatalf("list-sas request for one connection = %v, %v", c.reqs[1], err)
 	}
 
 	c.err = errInjected
@@ -382,6 +391,46 @@ func TestVICIEventsForward(t *testing.T) {
 	close(src.in)
 	if _, ok := recv(t, e.Events()); ok {
 		t.Fatal("the stream outlived the connection")
+	}
+}
+
+func TestVICIEventsForwardMarksLostEvents(t *testing.T) {
+	up := func(id string) govici.Event {
+		return govici.Event{Name: updownEvent, Message: message(t, "up", "yes", "vtep-10.20.0.1", message(t, "uniqueid", id))}
+	}
+	tests := []struct {
+		name  string
+		queue []govici.Event
+		first IKEUpdown
+	}{
+		{"an ike-updown read from a full queue", []govici.Event{up("1"), up("2"), up("3"), up("4")},
+			IKEUpdown{Up: true, SAs: map[string]IKESA{"vtep-10.20.0.1": {UniqueID: "1"}}, Lost: true}},
+		{"another event read from a full queue", []govici.Event{{Name: "child-updown"}, up("2"), up("3"), up("4")},
+			IKEUpdown{Lost: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A queue govici found full: the forwarder starts behind it.
+			in := make(chan govici.Event, len(tt.queue))
+			for _, ev := range tt.queue {
+				in <- ev
+			}
+			close(in)
+			e := &viciEvents{out: make(chan IKEUpdown), done: make(chan struct{})}
+			go e.forward(in)
+
+			ev, ok := recv(t, e.Events())
+			if !ok || ev.Lost != tt.first.Lost || ev.Up != tt.first.Up || !maps.Equal(ev.SAs, tt.first.SAs) {
+				t.Fatalf("first event = %+v, want %+v", ev, tt.first)
+			}
+			// Once the queue has room again, events are whole.
+			ev, ok = recv(t, e.Events())
+			if !ok || ev.Lost || ev.SAs["vtep-10.20.0.1"].UniqueID != "2" {
+				t.Fatalf("second event = %+v, want the next ike-updown, not lost", ev)
+			}
+			for range e.Events() {
+			}
+		})
 	}
 }
 
