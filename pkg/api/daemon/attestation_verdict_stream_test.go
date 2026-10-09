@@ -27,7 +27,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -148,7 +147,7 @@ func TestStreamDeviceVerdictsOverUnixSocket(t *testing.T) {
 		t.Fatalf("Listen: %v", err)
 	}
 	attestation, _, subscribed := verdictStreamServer(t, listener, unixPeerServerOptions()...)
-	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(peercred.NewUnixTransportCredentials()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
 	defer cancel()
@@ -266,8 +265,23 @@ func TestStreamDeviceVerdictsOverTCPWithoutACredentialIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	verdictStreamServer(t, listener)
-	client := dialVerdicts(t, listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort: %v", err)
+	}
+	pki := newNodeTestPKI(t, "localhost")
+	verdictStreamServer(t, listener, grpc.Creds(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{pki.server},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pki.pool,
+		MinVersion:   tls.VersionTLS12,
+	})))
+	client := dialVerdicts(t, net.JoinHostPort("localhost", port), grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{pki.client},
+		RootCAs:      pki.pool,
+		ServerName:   "localhost",
+		MinVersion:   tls.VersionTLS12,
+	})))
 
 	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
 	defer cancel()
@@ -364,7 +378,7 @@ func TestDeviceVerdictHubShutdownEndsOpenStreams(t *testing.T) {
 		t.Fatalf("Listen: %v", err)
 	}
 	_, hub, subscribed := verdictStreamServer(t, listener, unixPeerServerOptions()...)
-	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	client := dialVerdicts(t, "unix://"+listener.Addr().String(), grpc.WithTransportCredentials(peercred.NewUnixTransportCredentials()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), streamDeadline)
 	defer cancel()
