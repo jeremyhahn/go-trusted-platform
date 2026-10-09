@@ -114,7 +114,9 @@ func (r *VerdictsRouter) stream(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	// The comment tells the client its subscription is live before any verdict.
-	fmt.Fprint(w, ": subscribed\n\n")
+	if _, err := fmt.Fprint(w, ": subscribed\n\n"); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	err = subscription.Serve(req.Context(), func(recorded verdict.RecordedDeviceVerdict) error {
