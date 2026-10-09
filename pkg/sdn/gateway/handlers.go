@@ -674,6 +674,7 @@ type overlayBackend struct {
 	ipam     OverlayIPAMReader
 	devices  OverlayDeviceGetter
 	verdicts OverlayVerdictReader
+	stream   OverlayVerdictStream
 	resolver bgp.SecretResolver
 	server   bgp.BGPServerInterface
 	logger   *slog.Logger
@@ -683,9 +684,10 @@ type overlayBackend struct {
 	handler *modes.OverlayModeHandler
 	admit   *VTEPAdmitter
 	speaker *bgp.Speaker
-	// stopSweep ends the admission sweep; sweepDone closes once it has.
-	stopSweep context.CancelFunc
-	sweepDone chan struct{}
+	// stopLoops ends the admission sweep and the verdict follower; loopsDone
+	// closes once both have returned.
+	stopLoops context.CancelFunc
+	loopsDone chan struct{}
 }
 
 // overlayDatapath is the overlay handler's view of the remote VTEPs it holds
@@ -705,6 +707,32 @@ func runAdmissionSweep(ctx context.Context, ticks <-chan time.Time, datapath ove
 			if err := admitter.Sweep(ctx, datapath.InstalledVTEPs()); err != nil {
 				logger.Warn("overlay: the admission sweep did not complete", slog.Any("error", err))
 			}
+		}
+	}
+}
+
+// overlayVerdictFollowRetry is how long the verdict follower waits before
+// following a broken verdict stream again.
+const overlayVerdictFollowRetry = 5 * time.Second
+
+// runVerdictFollower follows the platform's device verdicts until ctx ends,
+// withdrawing every device whose verdict failed. A broken stream is followed
+// again after retry; a verdict recorded while it was down is caught by the
+// admission sweep, which re-reads every installed VTEP's latest verdict.
+func runVerdictFollower(ctx context.Context, stream OverlayVerdictStream, admitter *VTEPAdmitter, retry time.Duration, logger *slog.Logger) {
+	for {
+		err := stream.Follow(ctx, admitter.OnDeviceVerdict)
+		if ctx.Err() != nil {
+			return
+		}
+		logger.Warn("overlay: the verdict stream broke; following it again",
+			slog.Any("error", err), slog.Duration("retry", retry))
+		timer := time.NewTimer(retry)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
 		}
 	}
 }
@@ -742,9 +770,9 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 	}
 	revoker := &overlayRevokerProxy{}
 	admitter, err := NewVTEPAdmitter(VTEPAdmissionConfig{
-		IPAM:          b.ipam,
-		Devices:       b.devices,
-		Verdicts:      b.verdicts,
+		IPAM:             b.ipam,
+		Devices:          b.devices,
+		Verdicts:         b.verdicts,
 		Revoker:          revoker,
 		MaxVerdictAge:    b.config.VerdictMaxAge,
 		VerdictClockSkew: b.config.VerdictClockSkew,
@@ -780,21 +808,31 @@ func (b *overlayBackend) Start(ctx context.Context) error {
 		return errors.Join(err, stopOverlaySpeaker(ctx, speaker))
 	}
 
-	// The sweep outlives the request that started the service; Stop ends it.
-	sweepCtx, stopSweep := context.WithCancel(context.WithoutCancel(ctx))
-	sweepDone := make(chan struct{})
+	// The loops outlive the request that started the service; Stop ends them.
+	loopsCtx, stopLoops := context.WithCancel(context.WithoutCancel(ctx))
+	var loops sync.WaitGroup
 	ticker := time.NewTicker(b.config.admissionSweepInterval())
+	loops.Add(2)
 	go func() {
-		defer close(sweepDone)
+		defer loops.Done()
 		defer ticker.Stop()
-		runAdmissionSweep(sweepCtx, ticker.C, handler, admitter, logger)
+		runAdmissionSweep(loopsCtx, ticker.C, handler, admitter, logger)
+	}()
+	go func() {
+		defer loops.Done()
+		runVerdictFollower(loopsCtx, b.stream, admitter, overlayVerdictFollowRetry, logger)
+	}()
+	loopsDone := make(chan struct{})
+	go func() {
+		loops.Wait()
+		close(loopsDone)
 	}()
 
 	b.handler = handler
 	b.admit = admitter
 	b.speaker = speaker
-	b.stopSweep = stopSweep
-	b.sweepDone = sweepDone
+	b.stopLoops = stopLoops
+	b.loopsDone = loopsDone
 	return nil
 }
 
@@ -811,8 +849,8 @@ func (b *overlayBackend) Stop(ctx context.Context) error {
 	if b.handler == nil {
 		return nil
 	}
-	b.stopSweep()
-	<-b.sweepDone
+	b.stopLoops()
+	<-b.loopsDone
 	var errs []error
 	errs = append(errs, b.handler.Stop(ctx))
 	if b.speaker != nil {
@@ -821,8 +859,8 @@ func (b *overlayBackend) Stop(ctx context.Context) error {
 	b.handler = nil
 	b.admit = nil
 	b.speaker = nil
-	b.stopSweep = nil
-	b.sweepDone = nil
+	b.stopLoops = nil
+	b.loopsDone = nil
 	return errors.Join(errs...)
 }
 
@@ -903,7 +941,7 @@ func (b *overlayBackend) overlayEVPN(ctx context.Context, logger *slog.Logger) (
 
 func buildOverlay(g *Gateway) (backedService, error) {
 	runtime := g.config.Runtime
-	if runtime == nil || runtime.OVS == nil || runtime.OverlayOpenFlow == nil || runtime.OverlayIPAM == nil || runtime.OverlayDevices == nil || runtime.OverlayVerdicts == nil {
+	if runtime == nil || runtime.OVS == nil || runtime.OverlayOpenFlow == nil || runtime.OverlayIPAM == nil || runtime.OverlayDevices == nil || runtime.OverlayVerdicts == nil || runtime.OverlayVerdictStream == nil {
 		return nil, &ErrRuntimeMissing{Service: ServiceOverlay}
 	}
 	if g.config.Overlay == nil {
@@ -917,6 +955,7 @@ func buildOverlay(g *Gateway) (backedService, error) {
 		ipam:     runtime.OverlayIPAM,
 		devices:  runtime.OverlayDevices,
 		verdicts: runtime.OverlayVerdicts,
+		stream:   runtime.OverlayVerdictStream,
 		resolver: host.SecretResolver,
 		server:   host.BGPServer,
 		logger:   runtime.Logger,

@@ -40,6 +40,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
+	sdkdaemon "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/daemon"
 	sdkdevice "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/device"
 	sdkgateway "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/gateway"
 	sdkproxy "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/proxy"
@@ -702,6 +703,11 @@ func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anc
 	runtime.OverlayIPAM = &overlayRuntimeIPAM{client: sdkgateway.NewClientFromGRPC(client.Gateway()), now: time.Now}
 	runtime.OverlayDevices = &overlayRuntimeDevices{client: sdkdevice.NewClientFromGRPC(client.Device())}
 	runtime.OverlayVerdicts = &overlayRuntimeVerdicts{client: sdkattestation.NewClientFromGRPC(client.Attestation())}
+	logger := runtime.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	runtime.OverlayVerdictStream = &overlayRuntimeVerdictStream{client: sdkdaemon.NewClientFromGRPC(client.Daemon()), logger: logger}
 	return nil
 }
 

@@ -16,6 +16,8 @@ package service
 import (
 	"context"
 	"strconv"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 )
 
 // AttestationObserver is notified of attestation verification outcomes.
@@ -35,6 +37,15 @@ type AttestationObserver interface {
 	// OnAttestationPassed is called when manifest verification succeeds.
 	// It is the trigger for the quarantine restore path.
 	OnAttestationPassed(ctx context.Context, deviceID uint64, hostID string)
+}
+
+// RegisterDeviceVerdictObserver adds obs to the set handed every recorded
+// device verdict, in registration order. It implements
+// verdict.ObserverRegistry.
+func (s *Service) RegisterDeviceVerdictObserver(obs verdict.Observer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.verdictObs = append(s.verdictObs, obs)
 }
 
 // DeviceResolver maps a host identifier (CN / HostID from the manifest) to

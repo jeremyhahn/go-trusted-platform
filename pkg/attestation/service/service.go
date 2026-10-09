@@ -30,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 )
 
 // Service is the production AttestationService backed by a store +
@@ -38,6 +39,7 @@ type Service struct {
 	store          store.Store
 	mu             sync.RWMutex
 	observers      []AttestationObserver
+	verdictObs     []verdict.Observer
 	deviceResolver DeviceResolver
 
 	// tpm produces host quotes. Nil until WithTPM is applied; the

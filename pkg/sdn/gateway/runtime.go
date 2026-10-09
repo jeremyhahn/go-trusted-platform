@@ -74,6 +74,10 @@ type GatewayRuntime struct {
 	// OverlayVerdicts reads the latest attestation verdict for overlay admission.
 	OverlayVerdicts OverlayVerdictReader
 
+	// OverlayVerdictStream delivers device verdicts as platformd records
+	// them, so a failed verdict withdraws the device's VTEPs at once.
+	OverlayVerdictStream OverlayVerdictStream
+
 	// OverlayOpenFlow programs the overlay terminal's OpenFlow tables.
 	OverlayOpenFlow overlayOpenFlowClient
 

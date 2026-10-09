@@ -16,6 +16,8 @@ package commands
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net/netip"
 	"testing"
 	"time"
@@ -24,9 +26,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	sdkdaemon "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/daemon"
 )
 
 // fakeOverlayIPAMClient serves one fabric pool and counts the listings.
@@ -326,5 +330,86 @@ func TestOverlayRuntimeVerdicts_UnfreshReportDoesNotPass(t *testing.T) {
 	}
 	if recorded.Verdict.Passed {
 		t.Fatal("a verified report the platform marks stale must not pass")
+	}
+}
+
+// fakeOverlayEventClient opens one stream of fixed events, ending in err.
+type fakeOverlayEventClient struct {
+	events  []*platformv1.Event
+	end     error
+	openErr error
+	request *platformv1.StreamEventsRequest
+}
+
+func (f *fakeOverlayEventClient) StreamEvents(_ context.Context, req *platformv1.StreamEventsRequest) (sdkdaemon.EventStream, error) {
+	f.request = req
+	if f.openErr != nil {
+		return nil, f.openErr
+	}
+	return &fakeEventStream{events: f.events, end: f.end}, nil
+}
+
+type fakeEventStream struct {
+	events []*platformv1.Event
+	end    error
+}
+
+func (s *fakeEventStream) Recv() (*platformv1.Event, error) {
+	if len(s.events) == 0 {
+		return nil, s.end
+	}
+	event := s.events[0]
+	s.events = s.events[1:]
+	return event, nil
+}
+
+func (s *fakeEventStream) CloseSend() error { return nil }
+
+func verdictEvent(v verdict.DeviceVerdict) *platformv1.Event {
+	return &platformv1.Event{Source: verdict.EventSource, Metadata: verdict.EventMetadata(v)}
+}
+
+func TestOverlayRuntimeVerdictStream_DeliversOnlyDeviceVerdicts(t *testing.T) {
+	failed := verdict.DeviceVerdict{DeviceID: 42, Reason: "no attestation certificate enrolled"}
+	passed := verdict.DeviceVerdict{DeviceID: 43, Passed: true}
+	unreadable := verdictEvent(failed)
+	unreadable.Metadata["device_id"] = "forty-two"
+	client := &fakeOverlayEventClient{
+		events: []*platformv1.Event{
+			{Source: "sdn.addressing", Metadata: verdict.EventMetadata(failed)},
+			verdictEvent(failed),
+			unreadable,
+			verdictEvent(passed),
+		},
+		end: io.EOF,
+	}
+	s := &overlayRuntimeVerdictStream{client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	var got []verdict.DeviceVerdict
+	err := s.Follow(context.Background(), func(_ context.Context, v verdict.DeviceVerdict) {
+		got = append(got, v)
+	})
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Follow = %v, want the stream's end", err)
+	}
+	if len(got) != 2 || got[0] != failed || got[1] != passed {
+		t.Fatalf("delivered %+v, want only the two readable device verdicts", got)
+	}
+	if len(client.request.GetSources()) != 1 || client.request.GetSources()[0] != verdict.EventSource {
+		t.Fatalf("the subscription must ask for device verdicts only: %+v", client.request)
+	}
+}
+
+func TestOverlayRuntimeVerdictStream_ReportsAStreamThatCannotOpen(t *testing.T) {
+	down := status.Error(codes.Unavailable, "down")
+	s := &overlayRuntimeVerdictStream{client: &fakeOverlayEventClient{openErr: down}, logger: slog.Default()}
+
+	err := s.Follow(context.Background(), func(context.Context, verdict.DeviceVerdict) {
+		t.Fatal("nothing may be delivered")
+	})
+
+	if !errors.Is(err, down) {
+		t.Fatalf("Follow = %v, want the open error", err)
 	}
 }

@@ -1715,6 +1715,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// exists (#508).
 	daemon.publishBridgeAddressConflicts()
 
+	// Stream every recorded device verdict, so the overlay gateways withdraw
+	// a device whose quote fails (#709).
+	daemon.publishDeviceVerdicts()
+
 	logger.Info("Wiring health registry...")
 	// Wire health registry into the service for gRPC health endpoint
 	service.SetHealthRegistry(healthRegistry)

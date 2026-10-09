@@ -9,19 +9,23 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/deviceverdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 )
 
-// Compile-time check: the service is the platform's verdict sink.
-var _ verdict.Sink = (*Service)(nil)
+// Compile-time checks: the service is the platform's verdict sink, and hands
+// every verdict it records to the verdict observers.
+var (
+	_ verdict.Sink             = (*Service)(nil)
+	_ verdict.ObserverRegistry = (*Service)(nil)
+)
 
 // RecordDeviceVerdict writes the verdict to the attestation event log and
 // hands it to the registered observers, which is how a failed device quote
-// reaches the SDN quarantine manager.
+// reaches the SDN quarantine manager and the overlay gateways.
 //
-// Only a cryptographic failure is reported to observers as a failure. An
+// Every logged verdict reaches the verdict observers. Only a
+// cryptographic failure is reported to AttestationObservers as a failure. An
 // absence of evidence (no attestation certificate, no profile, no trust
 // anchor) is logged and denied service by the verifier, but it is not
 // evidence of compromise and never quarantines a device. A captured
@@ -73,6 +77,11 @@ func (s *Service) RecordDeviceVerdict(ctx context.Context, v verdict.DeviceVerdi
 	if err := s.store.PutEvent(ev); err != nil {
 		return err
 	}
+	s.dispatchRecordedVerdict(ctx, verdict.RecordedDeviceVerdict{
+		Verdict:    v,
+		EventID:    ev.ID,
+		RecordedAt: ev.Timestamp,
+	})
 
 	switch {
 	case v.Passed:
@@ -83,70 +92,14 @@ func (s *Service) RecordDeviceVerdict(ctx context.Context, v verdict.DeviceVerdi
 	return nil
 }
 
-// ErrDeviceVerdictNotFound is returned when no device quote verdict has been
-// recorded for a device.
-type ErrDeviceVerdictNotFound struct {
-	DeviceID uint64
-}
+// dispatchRecordedVerdict hands a logged verdict to every verdict observer.
+func (s *Service) dispatchRecordedVerdict(ctx context.Context, recorded verdict.RecordedDeviceVerdict) {
+	s.mu.RLock()
+	obs := s.verdictObs
+	s.mu.RUnlock()
 
-func (e ErrDeviceVerdictNotFound) Error() string {
-	return "attestation/service: latest device verdict not found for device " + strconv.FormatUint(e.DeviceID, 10)
-}
-
-// LatestDeviceVerdict returns the newest recorded device quote verdict for the
-// device. The attestation event store is the source of truth: it already holds
-// the durable verdict trail and supplies the freshness timestamp used by
-// relying-party admission checks.
-func (s *Service) LatestDeviceVerdict(ctx context.Context, deviceID uint64) (*deviceverdict.RecordedDeviceVerdict, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-	if deviceID == 0 {
-		return nil, ErrDeviceVerdictNotFound{DeviceID: deviceID}
-	}
-
-	events, err := s.store.ListEvents(store.EventFilter{})
-	if err != nil {
-		return nil, err
-	}
-	want := strconv.FormatUint(deviceID, 10)
-	for _, ev := range events {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-		if ev == nil || ev.Metadata["device_id"] != want {
-			continue
-		}
-		switch ev.Kind {
-		case store.EventKindDeviceQuoteVerified, store.EventKindDeviceQuoteRejected:
-			return recordedVerdictFromEvent(ev, deviceID), nil
-		default:
-			continue
-		}
-	}
-	return nil, ErrDeviceVerdictNotFound{DeviceID: deviceID}
-}
-
-func recordedVerdictFromEvent(ev *store.Event, deviceID uint64) *deviceverdict.RecordedDeviceVerdict {
-	passed := ev.Kind == store.EventKindDeviceQuoteVerified
-	profileID, _ := strconv.ParseUint(ev.Metadata["profile_id"], 10, 64)
-	return &deviceverdict.RecordedDeviceVerdict{
-		Verdict: deviceverdict.DeviceVerdict{
-			DeviceID:       deviceID,
-			HostID:         ev.HostID,
-			Serial:         ev.Metadata["serial"],
-			Passed:         passed,
-			Cryptographic:  ev.Metadata["cryptographic"] == "true",
-			Reason:         ev.Reason,
-			BaselineSource: ev.Metadata["baseline_source"],
-			ProfileID:      profileID,
-		},
-		EventID:    ev.ID,
-		RecordedAt: ev.Timestamp,
+	for _, o := range obs {
+		o.OnDeviceVerdict(ctx, recorded)
 	}
 }
 

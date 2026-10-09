@@ -79,67 +79,67 @@ func TestRecordDeviceVerdict_PassNotifiesObserversAndLogs(t *testing.T) {
 	}
 }
 
-func TestLatestDeviceVerdict_ReturnsNewestRecordedVerdict(t *testing.T) {
-	svc, _ := newVerdictService(t)
-	older := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	newer := older.Add(time.Minute)
+// recordedVerdicts collects every verdict a DeviceVerdictObserver is handed.
+type recordedVerdicts struct {
+	got []verdict.RecordedDeviceVerdict
+}
 
-	if err := svc.Store().PutEvent(&store.Event{
-		ID:        "older-pass",
-		Kind:      store.EventKindDeviceQuoteVerified,
-		HostID:    "node-7",
-		Timestamp: older,
-		Outcome:   "pass",
-		Metadata: map[string]string{
-			"device_id":       "7",
-			"serial":          "SN7",
-			"cryptographic":   "false",
-			"baseline_source": "signed",
-			"profile_id":      "3",
-		},
-	}); err != nil {
-		t.Fatalf("put older event: %v", err)
+func (r *recordedVerdicts) OnDeviceVerdict(_ context.Context, recorded verdict.RecordedDeviceVerdict) {
+	r.got = append(r.got, recorded)
+}
+
+func TestRecordDeviceVerdict_EveryVerdictReachesVerdictObservers(t *testing.T) {
+	svc, obs := newVerdictService(t)
+	verdicts := &recordedVerdicts{}
+	svc.RegisterDeviceVerdictObserver(verdicts)
+
+	recorded := []verdict.DeviceVerdict{
+		{DeviceID: 7, HostID: "node-7", Serial: "SN7", Passed: true},
+		{DeviceID: 7, HostID: "node-7", Serial: "SN7", Reason: "no attestation certificate enrolled"},
+		{DeviceID: 7, HostID: "node-7", Serial: "SN7", Cryptographic: true, Reason: "signature invalid"},
 	}
-	if err := svc.Store().PutEvent(&store.Event{
-		ID:        "newer-fail",
-		Kind:      store.EventKindDeviceQuoteRejected,
-		HostID:    "node-7",
-		Timestamp: newer,
-		Outcome:   "fail",
-		Reason:    "quote signature mismatch",
-		Metadata: map[string]string{
-			"device_id":       "7",
-			"serial":          "SN7",
-			"cryptographic":   "true",
-			"baseline_source": "signed",
-			"profile_id":      "3",
-		},
-	}); err != nil {
-		t.Fatalf("put newer event: %v", err)
+	for _, v := range recorded {
+		if err := svc.RecordDeviceVerdict(context.Background(), v); err != nil {
+			t.Fatalf("RecordDeviceVerdict: %v", err)
+		}
 	}
 
-	got, err := svc.LatestDeviceVerdict(context.Background(), 7)
+	if len(verdicts.got) != len(recorded) {
+		t.Fatalf("every recorded verdict must reach the verdict observers, got %d of %d", len(verdicts.got), len(recorded))
+	}
+	events, err := svc.Store().ListEvents(store.EventFilter{HostID: "node-7"})
 	if err != nil {
-		t.Fatalf("LatestDeviceVerdict: %v", err)
+		t.Fatalf("list events: %v", err)
 	}
-	if got.EventID != "newer-fail" || !got.RecordedAt.Equal(newer) {
-		t.Fatalf("expected newest event, got id=%q at=%s", got.EventID, got.RecordedAt)
+	eventTimes := make(map[string]time.Time, len(events))
+	for _, e := range events {
+		eventTimes[e.ID] = e.Timestamp
 	}
-	if got.Verdict.Passed || !got.Verdict.Cryptographic || got.Verdict.BaselineSource != "signed" || got.Verdict.ProfileID != 3 {
-		t.Fatalf("unexpected verdict: %+v", got.Verdict)
+	for i, got := range verdicts.got {
+		if got.Verdict != recorded[i] {
+			t.Fatalf("verdict %d: got %+v, want %+v", i, got.Verdict, recorded[i])
+		}
+		at, ok := eventTimes[got.EventID]
+		if !ok || !got.RecordedAt.Equal(at) {
+			t.Fatalf("verdict %d must carry its event's ID and time, got id=%q at=%s", i, got.EventID, got.RecordedAt)
+		}
+	}
+	if len(obs.failed) != 1 || obs.detail[0] != "signature invalid" {
+		t.Fatalf("only the cryptographic failure may reach the quarantine observers, got %v", obs.detail)
 	}
 }
 
-func TestLatestDeviceVerdict_NotFoundIsTyped(t *testing.T) {
+func TestRecordDeviceVerdict_UnloggedVerdictReachesNoVerdictObserver(t *testing.T) {
 	svc, _ := newVerdictService(t)
+	verdicts := &recordedVerdicts{}
+	svc.RegisterDeviceVerdictObserver(verdicts)
 
-	_, err := svc.LatestDeviceVerdict(context.Background(), 99)
-	var notFound ErrDeviceVerdictNotFound
-	if !errors.As(err, &notFound) {
-		t.Fatalf("expected ErrDeviceVerdictNotFound, got %v", err)
+	err := svc.RecordDeviceVerdict(context.Background(), verdict.DeviceVerdict{DeviceID: 7})
+	if !errors.As(err, new(verdict.ErrInvalidVerdict)) {
+		t.Fatalf("expected ErrInvalidVerdict, got %v", err)
 	}
-	if notFound.DeviceID != 99 {
-		t.Fatalf("wrong device id: %d", notFound.DeviceID)
+	if len(verdicts.got) != 0 {
+		t.Fatalf("a verdict that was never logged must reach no observer: %+v", verdicts.got)
 	}
 }
 

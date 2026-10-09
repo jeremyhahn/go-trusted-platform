@@ -526,3 +526,132 @@ func TestRunAdmissionSweep(t *testing.T) {
 		assert.Empty(t, f.revoker.vteps)
 	})
 }
+
+func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
+	ctx := context.Background()
+	failures := map[string]deviceverdict.DeviceVerdict{
+		"cryptographic failure": {DeviceID: 7, Cryptographic: true, Reason: "signature invalid"},
+		"absence of evidence":   {DeviceID: 7, Reason: "no attestation certificate enrolled"},
+	}
+	for name, failed := range failures {
+		t.Run("withdraws the device on a "+name, func(t *testing.T) {
+			f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
+			require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
+
+			f.admitter.OnDeviceVerdict(ctx, failed)
+
+			assert.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.revoker.vteps)
+			assert.Equal(t, []AdmittedVTEP{{VTEP: admissionVTEP}}, f.admitter.Admitted(installed(admissionVTEP)))
+		})
+	}
+
+	t.Run("a passed verdict withdraws nothing", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
+
+		f.admitter.OnDeviceVerdict(ctx, deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true})
+
+		assert.Empty(t, f.revoker.vteps)
+	})
+
+	t.Run("a failed withdrawal leaves the other VTEPs withdrawn", func(t *testing.T) {
+		f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
+		f.revoker.fail = map[netip.Addr]error{admissionVTEP: errPlatformDown}
+
+		f.admitter.OnDeviceVerdict(ctx, failures["cryptographic failure"])
+
+		assert.Equal(t, []netip.Addr{admissionVTEP2}, f.revoker.vteps)
+	})
+}
+
+type (
+	verdictDeliver = func(context.Context, deviceverdict.DeviceVerdict)
+	followScript   = func(context.Context, verdictDeliver) error
+)
+
+// scriptedVerdictStream plays one scripted follow per call, then follows
+// until the context ends.
+type scriptedVerdictStream struct {
+	calls  int
+	script []followScript
+}
+
+func (s *scriptedVerdictStream) Follow(ctx context.Context, deliver verdictDeliver) error {
+	call := s.calls
+	s.calls++
+	if call < len(s.script) {
+		return s.script[call](ctx, deliver)
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestRunVerdictFollower(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	failed := deviceverdict.DeviceVerdict{DeviceID: 7, Reason: "no attestation certificate enrolled"}
+
+	// follow runs the follower until the scripted follows are played and
+	// the next one is waiting, then stops it.
+	follow := func(t *testing.T, f *admissionFixture, stream *scriptedVerdictStream) {
+		t.Helper()
+		played := make(chan struct{})
+		stream.script = append(stream.script, func(ctx context.Context, _ verdictDeliver) error {
+			close(played)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			runVerdictFollower(ctx, stream, f.admitter, 0, logger)
+		}()
+		<-played
+		cancel()
+		<-done
+	}
+
+	t.Run("withdraws the device of every failed verdict", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		stream := &scriptedVerdictStream{script: []followScript{
+			func(ctx context.Context, deliver verdictDeliver) error {
+				deliver(ctx, deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true})
+				deliver(ctx, failed)
+				return errPlatformDown
+			},
+		}}
+
+		follow(t, f, stream)
+
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.revoker.vteps)
+	})
+
+	t.Run("follows again after the stream breaks", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		stream := &scriptedVerdictStream{script: []followScript{
+			func(context.Context, verdictDeliver) error { return errPlatformDown },
+			func(context.Context, verdictDeliver) error { return nil },
+			func(ctx context.Context, deliver verdictDeliver) error {
+				deliver(ctx, failed)
+				return errPlatformDown
+			},
+		}}
+
+		follow(t, f, stream)
+
+		assert.Equal(t, 4, stream.calls)
+		assert.Equal(t, []netip.Addr{admissionVTEP}, f.revoker.vteps)
+	})
+
+	t.Run("returns on cancel without following again", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		stream := &scriptedVerdictStream{}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		runVerdictFollower(ctx, stream, f.admitter, time.Hour, logger)
+
+		assert.Equal(t, 1, stream.calls)
+		assert.Empty(t, f.revoker.vteps)
+	})
+}

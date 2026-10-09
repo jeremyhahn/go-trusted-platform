@@ -263,6 +263,25 @@ admission. A route refused before its device had a verdict is not retried by
 the sweep. EVPN does not replay refused routes, so it is admitted when the
 peer re-advertises it.
 
+### Revocation on a failed verdict
+
+gatewayd does not wait for the sweep when a device's attestation fails. It
+streams platformd's events (`PlatformDaemon.StreamEvents`, over the same
+gRPC or Unix connection it reads the records on) and keeps those from source
+`attestation.device-verdict`. platformd raises one for every verdict it
+records (see [Attestation events](../../attestation/engineering.md#device-verdict-events)).
+A failed verdict, cryptographic or an absence of evidence, makes gatewayd
+revoke every VTEP of the device at once (`VTEPAdmitter.RevokeDevice`): the
+VTEPs it admitted for the device, and the device's fabric allocations. A
+passed verdict changes nothing; the device's routes are admitted when they are
+next advertised.
+
+The stream is lossy. platformd drops an event for a subscriber whose buffer is
+full and does not replay what was recorded while gatewayd was disconnected.
+gatewayd follows a broken stream again after 5s, and the sweep remains the
+backstop: it re-reads every installed VTEP's latest verdict, so a missed
+failure still withdraws decap within one interval.
+
 ### Trust assumptions
 
 - **IPAM writers.** Admission trusts the fabric IPAM allocation to bind a VTEP

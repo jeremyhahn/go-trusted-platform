@@ -50,6 +50,7 @@ verification against **PCR 10**.
 | `TPMDevice` / `VTPMDevice` / `TPMDeviceFactory` | `workload` | Abstracts the TPM; `SoftwareTPM` satisfies it for tests |
 | `DeviceResolver` | `push` | Resolves a device identity for a push target |
 | `AttestationObserver` | `service` | Receives attestation events |
+| `Observer` / `ObserverRegistry` | `verdict` | Hands every recorded device verdict, failed or passed, to relying parties |
 
 Every one of these is a fault-injection point. `SoftwareTPM` +
 `NewSoftwareTPMFactory` is how the suite runs without hardware.
@@ -292,6 +293,31 @@ attestation events; the REST surface exposes them at
 `GET /api/v1/attestation/events`. Quotes, nonces and raw evidence are **not**
 logged — a log is not an evidence store, and a logged nonce is a replay
 primitive.
+
+### Device verdict events
+
+`AttestationObserver` sees only passed verdicts and cryptographic failures, so
+an absence of evidence never quarantines a device. Relying parties that deny
+service on *any* failed verdict register a `verdict.Observer` instead
+(`Service.RegisterDeviceVerdictObserver`). It is handed every verdict once it
+is in the event log, with that event's ID and time.
+
+platformd registers one at start-up that raises a platform event per verdict
+on `PlatformDaemon.StreamEvents` (gRPC and Unix):
+
+| Field | Value |
+|---|---|
+| `source` | `attestation.device-verdict` (`verdict.EventSource`) |
+| `type` | `EVENT_TYPE_ATTESTATION_VERIFIED` |
+| `severity` | `INFO` passed, `WARNING` absence of evidence, `CRITICAL` cryptographic failure |
+| `id`, `timestamp` | the attestation event-log entry |
+| `metadata` | `device_id`, `host_id`, `serial`, `passed`, `cryptographic`, `reason` |
+
+`verdict.EventMetadata` and `verdict.FromEventMetadata` are the one encoding
+of that metadata. The stream ignores request filters and drops events for a
+subscriber that falls behind, so a consumer filters on `source` and keeps a
+backstop. The overlay gateways use it to withdraw a failed device's VTEPs
+([overlay mode](../sdn/gateway/overlay-mode.md#revocation-on-a-failed-verdict)).
 
 ## 10. Related
 

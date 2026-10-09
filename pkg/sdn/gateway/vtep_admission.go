@@ -50,6 +50,14 @@ type OverlayVerdictReader interface {
 	LatestDeviceVerdict(ctx context.Context, deviceID uint64) (*deviceverdict.RecordedDeviceVerdict, error)
 }
 
+// OverlayVerdictStream delivers the platform's device verdicts as they are
+// recorded. Follow hands each verdict to deliver until ctx ends or the stream
+// breaks, and returns why it stopped. Verdicts recorded while no one follows
+// are not replayed.
+type OverlayVerdictStream interface {
+	Follow(ctx context.Context, deliver func(context.Context, deviceverdict.DeviceVerdict)) error
+}
+
 // OverlayVTEPRevoker withdraws all overlay reachability from a VTEP.
 type OverlayVTEPRevoker interface {
 	RevokeVTEP(ctx context.Context, vtep netip.Addr) error
@@ -261,24 +269,25 @@ func (a *VTEPAdmitter) sweepVTEP(ctx context.Context, vtep netip.Addr) error {
 	return a.revoke(ctx, vtep)
 }
 
-// OnAttestationFailed implements the attestation quarantine observer. The
-// attestation service calls it for cryptographic failures; the admitter resolves
-// the device's fabric VTEP allocations and withdraws them through the overlay
-// route-handler path.
-func (a *VTEPAdmitter) OnAttestationFailed(ctx context.Context, deviceID uint64, hostID, detail string) {
-	if err := a.RevokeDevice(ctx, deviceID); err != nil {
-		a.logger.Warn("overlay VTEP revocation failed",
-			slog.Uint64("device_id", deviceID),
-			slog.String("host_id", hostID),
-			slog.String("detail", detail),
+// OnDeviceVerdict withdraws every VTEP of a device whose verdict failed,
+// whether cryptographically or for an absence of evidence: either way the
+// policy no longer admits it, and waiting for the sweep would leave its decap
+// state in place for up to a sweep interval. A passed verdict changes nothing;
+// the device's routes are admitted when they are next advertised.
+func (a *VTEPAdmitter) OnDeviceVerdict(ctx context.Context, v deviceverdict.DeviceVerdict) {
+	if v.Passed {
+		return
+	}
+	a.logger.Warn("overlay: withdrawing a device whose attestation failed",
+		slog.Uint64("device_id", v.DeviceID),
+		slog.Bool("cryptographic", v.Cryptographic),
+		slog.String("reason", v.Reason))
+	if err := a.RevokeDevice(ctx, v.DeviceID); err != nil {
+		a.logger.Warn("overlay: withdrawing the device did not complete; the sweep retries it",
+			slog.Uint64("device_id", v.DeviceID),
 			slog.Any("error", err))
 	}
 }
-
-// OnAttestationPassed implements the attestation observer interface. A fresh
-// pass makes future route admission possible; it does not re-add withdrawn
-// routes on its own.
-func (a *VTEPAdmitter) OnAttestationPassed(context.Context, uint64, string) {}
 
 // RevokeDevice withdraws every VTEP of the device: those admitted for it and
 // its fabric allocations. It continues past a VTEP whose withdrawal fails, and

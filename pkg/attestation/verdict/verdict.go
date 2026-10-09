@@ -29,5 +29,21 @@ type Sink interface {
 	RecordDeviceVerdict(ctx context.Context, v DeviceVerdict) error
 }
 
+// Observer is handed every device verdict once it is in the event log: passed,
+// cryptographic failure, and absence of evidence alike. Relying parties that
+// withdraw service from a device on any failed verdict subscribe here; the
+// quarantine loop observes the attestation service instead, which never
+// reports an absence of evidence as a failure. Observers are called
+// synchronously and must not block.
+type Observer interface {
+	OnDeviceVerdict(ctx context.Context, recorded RecordedDeviceVerdict)
+}
+
+// ObserverRegistry is implemented by a Sink that hands every verdict it
+// records to its observers.
+type ObserverRegistry interface {
+	RegisterDeviceVerdictObserver(obs Observer)
+}
+
 // ErrInvalidVerdict reports a verdict that violates its own invariants.
 type ErrInvalidVerdict = deviceverdict.ErrInvalidVerdict

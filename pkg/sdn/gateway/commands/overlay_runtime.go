@@ -15,6 +15,7 @@ package commands
 
 import (
 	"context"
+	"log/slog"
 	"net/netip"
 	"strconv"
 	"sync"
@@ -26,10 +27,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/deviceverdict"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	sdkdaemon "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/daemon"
 )
 
 // overlayIPAMClient is the part of the platform gateway SDK client the fabric
@@ -229,6 +232,52 @@ func (r *overlayRuntimeVerdicts) LatestDeviceVerdict(ctx context.Context, device
 		EventID:    "device-report-" + id,
 		RecordedAt: protoTime(report.GetAttestedAt()),
 	}, nil
+}
+
+// overlayEventClient is the part of the platform daemon SDK client the verdict
+// stream reads.
+type overlayEventClient interface {
+	StreamEvents(ctx context.Context, req *platformv1.StreamEventsRequest) (sdkdaemon.EventStream, error)
+}
+
+// overlayRuntimeVerdictStream serves gateway.OverlayVerdictStream from
+// platformd's event stream.
+type overlayRuntimeVerdictStream struct {
+	client overlayEventClient
+	logger *slog.Logger
+}
+
+// Follow streams platformd's events and hands each device verdict to deliver
+// until ctx ends or the stream breaks. platformd sends every event to every
+// subscriber, so Follow keeps only those from verdict.EventSource; a verdict
+// event it cannot read is logged and skipped.
+func (s *overlayRuntimeVerdictStream) Follow(ctx context.Context, deliver func(context.Context, verdict.DeviceVerdict)) error {
+	// Cancelling the stream's context is what releases it.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	events, err := s.client.StreamEvents(ctx, &platformv1.StreamEventsRequest{
+		Types:   []platformv1.EventType{platformv1.EventType_EVENT_TYPE_ATTESTATION_VERIFIED},
+		Sources: []string{verdict.EventSource},
+	})
+	if err != nil {
+		return err
+	}
+	for {
+		event, err := events.Recv()
+		if err != nil {
+			return err
+		}
+		if event.GetSource() != verdict.EventSource {
+			continue
+		}
+		v, err := verdict.FromEventMetadata(event.GetMetadata())
+		if err != nil {
+			s.logger.Warn("overlay: skipping an unreadable device verdict event",
+				slog.String("event_id", event.GetId()), slog.Any("error", err))
+			continue
+		}
+		deliver(ctx, v)
+	}
 }
 
 // overlayPlatformError marks a platformd NotFound as a missing record, so the
