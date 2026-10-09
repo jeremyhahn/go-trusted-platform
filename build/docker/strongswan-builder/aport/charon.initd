@@ -10,28 +10,31 @@
 #
 # The VICI socket (/run/charon.vici, set in strongswan.d/trusted-platform.conf)
 # is the control plane: whoever can connect to it can load credentials and
-# bring tunnels up or down. charon hands it to its own user at mode 0660; this
-# script gives it to the platform user at mode 0600, once charon is serving it
-# and again whenever the health check finds charon has recreated it.
+# bring tunnels up or down. charon hands it to its own user at mode 0660.
+# charon runs under socket-takeover, which gives the socket to the platform
+# user at mode 0600 as soon as charon has handed it over, on the first start
+# and on every respawn.
 #
 # The IKE key lives behind PKCS#11 in the module host, so charon starts only
 # after it (xkms-p11-kit, from trusted-platform-p11-host).
-
-description="strongSwan charon IKEv2 daemon"
-supervisor="supervise-daemon"
-command="/usr/lib/strongswan/charon"
-command_args="${CHARON_OPTS}"
-respawn_delay="${CHARON_RESPAWN_DELAY:-2}"
-respawn_max="${CHARON_RESPAWN_MAX:-10}"
-respawn_period="${CHARON_RESPAWN_PERIOD:-60}"
-healthcheck_timer="${CHARON_HEALTHCHECK_INTERVAL:-30}"
-extra_started_commands="reload"
-description_reload="Reload strongswan.conf and the swanctl configuration"
 
 vici_socket="/run/charon.vici"
 charon_user="strongswan"
 vici_user="${CHARON_VICI_USER:-platformd}"
 vici_group="${CHARON_VICI_GROUP:-platform}"
+
+description="strongSwan charon IKEv2 daemon"
+supervisor="supervise-daemon"
+command="/usr/lib/strongswan/socket-takeover"
+command_args="${vici_socket} ${charon_user} ${vici_user}:${vici_group} 0600 /usr/lib/strongswan/charon ${CHARON_OPTS}"
+respawn_delay="${CHARON_RESPAWN_DELAY:-2}"
+respawn_max="${CHARON_RESPAWN_MAX:-10}"
+respawn_period="${CHARON_RESPAWN_PERIOD:-60}"
+healthcheck_timer="${CHARON_HEALTHCHECK_INTERVAL:-30}"
+# How long the takeover waits for charon's socket, in tenths of a second.
+export SOCKET_TAKEOVER_TRIES="${CHARON_TAKEOVER_TRIES:-100}"
+extra_started_commands="reload"
+description_reload="Reload strongswan.conf and the swanctl configuration"
 
 depend() {
 	need net xkms-p11-kit
@@ -39,40 +42,33 @@ depend() {
 	provide ipsec
 }
 
-# own_vici_socket gives the VICI socket to the platform user, mode 0600.
-own_vici_socket() {
-	chown "${vici_user}:${vici_group}" "${vici_socket}" && chmod 0600 "${vici_socket}"
-}
-
 start_pre() {
 	if ! id "${vici_user}" >/dev/null 2>&1 || ! grep -q "^${vici_group}:" /etc/group; then
 		eerror "VICI socket owner ${vici_user}:${vici_group} does not exist (CHARON_VICI_USER, CHARON_VICI_GROUP in /etc/conf.d/${RC_SVCNAME})"
 		return 1
 	fi
-	# A socket left by a charon that died must not look like a live one.
-	rm -f "${vici_socket}"
 }
 
-# start_post waits for charon to serve the socket as its own user -- the sign
-# that it has finished with the socket and dropped root -- then takes it over.
+# start_post waits for the first takeover, so services that need charon start
+# only once platformd can reach it. It waits a little longer than the takeover
+# does.
 start_post() {
 	local tries=0
-	while [ "$(stat -c %U "${vici_socket}" 2>/dev/null)" != "${charon_user}" ]; do
+	while [ "$(stat -c %U "${vici_socket}" 2>/dev/null)" != "${vici_user}" ]; do
 		tries=$((tries + 1))
-		if [ "${tries}" -gt 100 ]; then
-			eerror "charon did not create ${vici_socket}"
+		if [ "${tries}" -gt $((SOCKET_TAKEOVER_TRIES + 20)) ]; then
+			eerror "charon did not serve ${vici_socket}"
 			return 1
 		fi
 		sleep 0.1
 	done
-	own_vici_socket
 }
 
 # healthcheck runs every CHARON_HEALTHCHECK_INTERVAL seconds under
-# supervise-daemon. It restores the socket's owner after a respawn and asks
-# charon for its statistics, which fails if it no longer answers VICI.
+# supervise-daemon. It asks charon for its statistics, which fails if it no
+# longer answers VICI.
 healthcheck() {
-	own_vici_socket && /usr/sbin/swanctl --stats >/dev/null
+	/usr/sbin/swanctl --stats >/dev/null
 }
 
 reload() {

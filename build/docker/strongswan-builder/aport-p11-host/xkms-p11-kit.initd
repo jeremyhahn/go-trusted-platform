@@ -31,12 +31,16 @@ description="p11-kit server hosting the go-xkms PKCS#11 module"
 supervisor="supervise-daemon"
 output_log="/var/log/xkms-p11-kit.log"
 error_log="/var/log/xkms-p11-kit.log"
-command="/usr/sbin/chroot"
-command_args="${host_root} /usr/bin/p11-kit server -f -n ${socket} --provider ${module} pkcs11:"
+# socket-takeover gives the server's socket to charon's group as soon as the
+# server serves it, on the first start and on every respawn.
+command="${libexec}/socket-takeover"
+command_args="${socket} root root:${socket_group} 0660 /usr/sbin/chroot ${host_root} /usr/bin/p11-kit server -f -n ${socket} --provider ${module} pkcs11:"
 respawn_delay="${XKMS_P11_RESPAWN_DELAY:-2}"
 respawn_max="${XKMS_P11_RESPAWN_MAX:-10}"
 respawn_period="${XKMS_P11_RESPAWN_PERIOD:-60}"
-healthcheck_timer="${XKMS_P11_HEALTHCHECK_INTERVAL:-30}"
+# The first module load can be slow, so the takeover waits up to 30s for the
+# server's socket, in tenths of a second.
+export SOCKET_TAKEOVER_TRIES="${XKMS_P11_TAKEOVER_TRIES:-300}"
 
 is_mounted() {
 	grep -q " $1 " /proc/mounts
@@ -78,11 +82,6 @@ unpack_root() {
 	eend $?
 }
 
-# own_socket lets charon's group, and only it, reach the server.
-own_socket() {
-	chown "root:${socket_group}" "${socket}" && chmod 0660 "${socket}"
-}
-
 start_pre() {
 	if ! grep -q "^${socket_group}:" /etc/group; then
 		eerror "socket group ${socket_group} does not exist (XKMS_P11_SOCKET_GROUP in /etc/conf.d/${RC_SVCNAME})"
@@ -91,32 +90,24 @@ start_pre() {
 	checkpath -d -m 0755 "${host_dir}" &&
 		checkpath -d -m 0700 "${state_dir}" &&
 		checkpath -d -m 0755 "${socket_dir}" || return 1
-	# A socket left by a server that died must not look like a live one.
-	rm -f "${socket}"
 
 	unpack_root || return 1
 	"${libexec}/p11-kit-pin-check" "$(cat "${host_root}/usr/share/xkms/p11-kit.version")" || return 1
 	mounts_up
 }
 
+# start_post waits for the first takeover, so charon starts only once it can
+# reach the server. It waits a little longer than the takeover does.
 start_post() {
 	local tries=0
-	while [ ! -S "${socket}" ]; do
+	while [ "$(stat -c %G "${socket}" 2>/dev/null)" != "${socket_group}" ]; do
 		tries=$((tries + 1))
-		if [ "${tries}" -gt 300 ]; then
-			eerror "the p11-kit server did not create ${socket}"
+		if [ "${tries}" -gt $((SOCKET_TAKEOVER_TRIES + 20)) ]; then
+			eerror "the p11-kit server did not serve ${socket}"
 			return 1
 		fi
 		sleep 0.1
 	done
-	own_socket
-}
-
-# healthcheck runs every XKMS_P11_HEALTHCHECK_INTERVAL seconds under
-# supervise-daemon. A respawned server has recreated the socket as root only;
-# this gives it back to charon's group.
-healthcheck() {
-	own_socket
 }
 
 stop_post() {

@@ -2,11 +2,18 @@ package arch
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
+	"net"
 	"os"
 	"os/exec"
+	"os/signal"
+	"os/user"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -196,4 +203,158 @@ func TestP11KitPinCheck(t *testing.T) {
 			assert.Equal(t, tt.exit, exit.ExitCode())
 		})
 	}
+}
+
+// Both services run their daemon under the shipped socket-takeover, so the
+// socket is handed over after every respawn, not at the next health check.
+func TestIPsecPackaging_ServicesRunUnderSocketTakeover(t *testing.T) {
+	root := repoRoot(t)
+	tests := map[string]struct {
+		file  string
+		facts []string
+	}{
+		"builder image carries it":  {builderDir + "/Dockerfile", []string{"COPY socket-takeover /build/"}},
+		"both aports are staged it": {builderDir + "/build-strongswan.sh", []string{`/build/socket-takeover "$aport/"`}},
+		"charon apk installs it":    {strongSwanAport + "/APKBUILD", []string{"\tsocket-takeover\n", `"$pkgdir"/usr/lib/strongswan/socket-takeover`}},
+		"charon runs under it":      {strongSwanAport + "/charon.initd", []string{`command="/usr/lib/strongswan/socket-takeover"`}},
+		"module host apk installs":  {p11HostAport + "/APKBUILD", []string{"\tsocket-takeover\n", `"$pkgdir"/usr/libexec/xkms-p11-host/socket-takeover`}},
+		"module host runs under it": {p11HostAport + "/xkms-p11-kit.initd", []string{`libexec="/usr/libexec/xkms-p11-host"`, `command="${libexec}/socket-takeover"`}},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.NoError(t, requireContains(root, tt.file, tt.facts...))
+		})
+	}
+}
+
+// takeoverDaemonEnv turns the test binary into the daemon the socket-takeover
+// tests run: it listens on the socket the variable names, at mode 0755, and
+// serves until SIGTERM, then exits 0.
+const takeoverDaemonEnv = "ARCH_TEST_TAKEOVER_DAEMON"
+
+func TestMain(m *testing.M) {
+	if path := os.Getenv(takeoverDaemonEnv); path != "" {
+		os.Exit(serveTakeoverSocket(path))
+	}
+	os.Exit(m.Run())
+}
+
+// serveTakeoverSocket is the daemon; it exits 1 if it cannot serve path.
+func serveTakeoverSocket(path string) int {
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	<-stop
+	if err := ln.Close(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// startTakeover runs the shipped socket-takeover with args and the extra
+// environment; done yields its exit. It is killed at cleanup if still running.
+func startTakeover(t *testing.T, env []string, args ...string) (cmd *exec.Cmd, done <-chan error) {
+	t.Helper()
+	script := filepath.Join(repoRoot(t), builderDir, "socket-takeover")
+	cmd = exec.Command("/bin/sh", append([]string{script}, args...)...)
+	cmd.Env = append(os.Environ(), env...)
+	require.NoError(t, cmd.Start())
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	t.Cleanup(func() {
+		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			t.Errorf("kill socket-takeover: %v", err)
+		}
+	})
+	return cmd, exited
+}
+
+// awaitExit waits for socket-takeover to exit on its own.
+func awaitExit(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatal("socket-takeover did not exit")
+		return nil
+	}
+}
+
+// awaitSocketMode waits for path to be a socket of mode, failing if
+// socket-takeover exits first.
+func awaitSocketMode(t *testing.T, done <-chan error, path string, mode fs.FileMode) {
+	t.Helper()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(10 * time.Second)
+	for {
+		if fi, err := os.Lstat(path); err == nil && fi.Mode().Type() == fs.ModeSocket && fi.Mode().Perm() == mode {
+			return
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("socket-takeover exited before the takeover: %v", err)
+		case <-deadline:
+			t.Fatalf("%s never became a socket of mode %v", path, mode)
+		case <-tick.C:
+		}
+	}
+}
+
+func TestSocketTakeoverHandsTheSocketOver(t *testing.T) {
+	me, err := user.Current()
+	require.NoError(t, err)
+	socket := filepath.Join(t.TempDir(), "daemon.sock")
+	// A socket file left by a daemon that died is removed first; the daemon
+	// could not listen over it.
+	require.NoError(t, os.WriteFile(socket, nil, 0o600))
+
+	cmd, done := startTakeover(t, []string{takeoverDaemonEnv + "=" + socket},
+		socket, me.Username, me.Uid+":"+me.Gid, "0600", os.Args[0])
+	awaitSocketMode(t, done, socket, 0o600)
+
+	// The daemon replaced the script's process, so the supervisor's signal
+	// reaches the daemon itself, which exits cleanly.
+	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+	assert.NoError(t, awaitExit(t, done))
+}
+
+func TestSocketTakeoverStopsADaemonThatNeverServes(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "daemon.sock")
+	_, done := startTakeover(t, []string{"SOCKET_TAKEOVER_TRIES=2"},
+		socket, "root", "0:0", "0600", "sleep", "30")
+
+	var exit *exec.ExitError
+	require.ErrorAs(t, awaitExit(t, done), &exit)
+	status, ok := exit.Sys().(syscall.WaitStatus)
+	require.True(t, ok)
+	assert.Equal(t, syscall.SIGTERM, status.Signal(), "the daemon must be stopped so supervise-daemon respawns it")
+}
+
+func TestSocketTakeoverStopsTheDaemonWhenTheTakeoverFails(t *testing.T) {
+	me, err := user.Current()
+	require.NoError(t, err)
+	socket := filepath.Join(t.TempDir(), "daemon.sock")
+	_, done := startTakeover(t, []string{takeoverDaemonEnv + "=" + socket},
+		socket, me.Username, "no-such-user-709:no-such-group-709", "0600", os.Args[0])
+
+	// The daemon exits only on SIGTERM; nothing but the failed takeover sends it.
+	assert.NoError(t, awaitExit(t, done))
+}
+
+func TestSocketTakeoverUsage(t *testing.T) {
+	_, done := startTakeover(t, nil, "/run/x.sock", "root", "0:0", "0600")
+	var exit *exec.ExitError
+	require.ErrorAs(t, awaitExit(t, done), &exit)
+	assert.Equal(t, 2, exit.ExitCode())
 }

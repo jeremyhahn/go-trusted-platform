@@ -32,6 +32,7 @@ source="modulehost.rootfs
 	xkms-p11-kit.initd
 	xkms-p11-kit.confd
 	p11-kit-pin-check
+	socket-takeover
 	"
 builddir="$srcdir"
 
@@ -53,6 +54,7 @@ package() {
 	install -Dm644 "$srcdir"/modulehost.rootfs "$pkgdir"/usr/share/xkms-p11-host/rootfs.tar
 	sha256sum "$srcdir"/modulehost.rootfs | cut -d' ' -f1 > "$pkgdir"/usr/share/xkms-p11-host/rootfs.tar.sha256
 	install -Dm755 "$srcdir"/p11-kit-pin-check "$pkgdir"/usr/libexec/xkms-p11-host/p11-kit-pin-check
+	install -Dm755 "$srcdir"/socket-takeover "$pkgdir"/usr/libexec/xkms-p11-host/socket-takeover
 	install -Dm755 "$srcdir"/xkms-p11-kit.initd "$pkgdir"/etc/init.d/xkms-p11-kit
 	install -Dm644 "$srcdir"/xkms-p11-kit.confd "$pkgdir"/etc/conf.d/xkms-p11-kit
 }

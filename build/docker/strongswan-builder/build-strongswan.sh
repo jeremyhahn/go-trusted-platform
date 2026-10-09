@@ -92,12 +92,13 @@ home=/home/builder
 rm -rf "$home/aports" "$home/packages" "$home/.abuild"
 mkdir -p "$home/aports/platform" "$home/.abuild" /var/cache/distfiles
 
-# stage_aport copies an aport's files into the repository and substitutes the
+# stage_aport copies an aport's files into the repository, with the
+# socket-takeover script both services run under, and substitutes the
 # builder's pins for the placeholders in its APKBUILD and settings files.
 stage_aport() {
     local pkg="$1" from="$2" aport="$home/aports/platform/$1"
     mkdir -p "$aport"
-    cp "$from"/* "$aport/"
+    cp "$from"/* /build/socket-takeover "$aport/"
     find "$aport" \( -name APKBUILD -o -name '*.conf' \) -exec sed -i \
         -e "s|@STRONGSWAN_VERSION@|$STRONGSWAN_VERSION|" \
         -e "s|@STRONGSWAN_PLUGINS@|$STRONGSWAN_PLUGINS|" \

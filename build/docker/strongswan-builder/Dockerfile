@@ -43,6 +43,7 @@ RUN gpg --dearmor < /build/strongswan-release-key.asc > /build/strongswan-releas
 COPY build-strongswan.sh /build/
 COPY aport/ /build/aport/
 COPY aport-p11-host/ /build/aport-p11-host/
+COPY socket-takeover /build/
 RUN chmod +x /build/build-strongswan.sh
 
 ENTRYPOINT ["/build/build-strongswan.sh"]

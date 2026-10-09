@@ -31,6 +31,7 @@ subpackages="$pkgname-doc $pkgname-openrc"
 source="https://download.strongswan.org/strongswan-$pkgver.tar.bz2
 	charon.initd
 	charon.confd
+	socket-takeover
 	trusted-platform.conf
 	pkcs11.conf
 	"
@@ -85,6 +86,7 @@ package() {
 	make DESTDIR="$pkgdir" install
 	install -Dm755 "$srcdir"/charon.initd "$pkgdir"/etc/init.d/charon
 	install -Dm644 "$srcdir"/charon.confd "$pkgdir"/etc/conf.d/charon
+	install -Dm755 "$srcdir"/socket-takeover "$pkgdir"/usr/lib/strongswan/socket-takeover
 	install -Dm644 "$srcdir"/trusted-platform.conf "$pkgdir"/etc/strongswan.d/trusted-platform.conf
 	install -Dm644 "$srcdir"/pkcs11.conf "$pkgdir"/etc/strongswan.d/charon/pkcs11.conf
 

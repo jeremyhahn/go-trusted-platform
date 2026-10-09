@@ -703,18 +703,31 @@ Two apks and their OpenRC subpackages, built by one `abuild` run in
   as well.
 
 **`charon` service.** `need`s `net` and `xkms-p11-kit`, so charon never starts
-without its key store. charon drops to `strongswan`; the service waits for the
-vici plugin's socket, then re-owns it to the platform user (`platformd:platform`,
-`CHARON_VICI_USER`/`CHARON_VICI_GROUP`) at mode 0600. A respawned charon
-recreates the socket, so the service's health check re-owns it, too. It refuses
-to start when that user or group does not exist.
+without its key store. charon drops to `strongswan` and runs under
+`socket-takeover` (below), which gives the vici plugin's socket to the platform
+user (`platformd:platform`, `CHARON_VICI_USER`/`CHARON_VICI_GROUP`) at mode 0600
+once charon has handed it to `strongswan`. A respawned charon recreates the
+socket and the takeover runs again with it, so the window is that of one start,
+not one health-check interval. The service refuses to start when that user or
+group does not exist, and its start waits for the first takeover.
 
 **`xkms-p11-kit` service.** Unpacks the root filesystem under
 `/var/lib/xkms-p11-host` (again whenever the apk brings a different archive),
 bind-mounts `/proc`, `/dev`, `/run/p11-kit` and the node's `/var/lib/xkms`
 into it and runs `p11-kit server` in a chroot, which hosts
-`libxkms_pkcs11.so` on `/run/p11-kit/xkms.sock`. The socket is mode 0660, group
-`strongswan` (`XKMS_P11_SOCKET_GROUP`).
+`libxkms_pkcs11.so` on `/run/p11-kit/xkms.sock`. The server runs under
+`socket-takeover` too, which sets the socket to mode 0660, group `strongswan`
+(`XKMS_P11_SOCKET_GROUP`), after every (re)start.
+
+**`socket-takeover`.** Both services run their daemon through this wrapper,
+which supervise-daemon starts again on each respawn. It removes a stale socket,
+starts a detached watcher and `exec`s the daemon, so supervise-daemon signals
+and reaps the daemon itself. The watcher waits until the socket exists and is
+owned by the daemon's own user, then sets the mode and hands it over, mode
+first. The wait is bounded (`CHARON_TAKEOVER_TRIES`, 10 s;
+`XKMS_P11_TAKEOVER_TRIES`, 30 s, for the slow first module load): a daemon that
+never serves the socket, or whose socket cannot be handed over, is stopped so
+supervise-daemon restarts it.
 
 **The version pin.** A 0.26 client against an older server corrupts CKA_ID
 (§9.2), so the 0.26 minimum is enforced four times, and none can be configured

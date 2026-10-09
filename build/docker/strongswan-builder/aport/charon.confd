@@ -5,11 +5,16 @@
 #CHARON_OPTS=""
 
 # supervise-daemon restart policy, and how often (seconds) the service checks
-# that charon still answers VICI and that its socket has the right owner.
+# that charon still answers VICI.
 #CHARON_RESPAWN_DELAY=2
 #CHARON_RESPAWN_MAX=10
 #CHARON_RESPAWN_PERIOD=60
 #CHARON_HEALTHCHECK_INTERVAL=30
+
+# How long (tenths of a second) each start waits for charon to serve the VICI
+# socket before it is given to the owner below. A charon that has not served
+# it by then is stopped and respawned.
+#CHARON_TAKEOVER_TRIES=100
 
 # The owner of the VICI socket (/run/charon.vici, mode 0600): the account the
 # platform daemon runs as. The service refuses to start if it does not exist.

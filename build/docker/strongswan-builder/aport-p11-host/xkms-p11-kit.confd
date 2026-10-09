@@ -4,12 +4,15 @@
 # (/run/p11-kit/xkms.sock, mode 0660): the group charon runs as.
 #XKMS_P11_SOCKET_GROUP="strongswan"
 
-# supervise-daemon restart policy, and how often (seconds) the service checks
-# the socket's owner.
+# supervise-daemon restart policy.
 #XKMS_P11_RESPAWN_DELAY=2
 #XKMS_P11_RESPAWN_MAX=10
 #XKMS_P11_RESPAWN_PERIOD=60
-#XKMS_P11_HEALTHCHECK_INTERVAL=30
+
+# How long (tenths of a second) each start waits for the server to serve its
+# socket before it is given to the group above. A server that has not served
+# it by then is stopped and respawned.
+#XKMS_P11_TAKEOVER_TRIES=300
 
 # The go-xkms PKCS#11 module's environment. The paths are inside the module
 # host; /var/lib/xkms is the node's own directory, bind-mounted there.
