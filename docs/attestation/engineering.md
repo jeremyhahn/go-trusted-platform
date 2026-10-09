@@ -305,7 +305,14 @@ is in the event log, with that event's ID and time.
 platformd registers one at start-up (`streamDeviceVerdicts`,
 `pkg/api/daemon/attestation_verdict_stream.go`) that serves every verdict on
 `AttestationService.StreamDeviceVerdicts`, gRPC over TCP and over the Unix
-socket. Each `DeviceVerdictEvent` carries the event-log entry's `event_id` and
+socket, and on `GET /api/v1/attestation/verdicts/stream` as Server-Sent Events
+([api §5.5](api.md#55-device-verdict-stream)). QUIC and MCP are pending an
+owner decision. All three transports open the stream through one
+transport-neutral service (`verdict.StreamOpener`) that takes an explicit
+principal (tenant, certificate presence, Unix peer credential) and applies the
+audience rules below; a transport only reports who is calling. Over REST the
+principal is the IAM session's tenant plus the presence of a client
+certificate. Each `DeviceVerdictEvent` carries the event-log entry's `event_id` and
 `recorded_at`, and the verdict's `device_id`, `tenant_id`, `host_id`,
 `serial`, `passed`, `cryptographic` and `reason`. The verifier stamps
 `tenant_id` from the device record; it is empty for a device the platform

@@ -52,7 +52,7 @@ MCP: fifteen `attestation_*` tools.
 | Device report (cached verdict + age) | `GET /api/v1/attestation/reports/{device_id}` | `GetDeviceReport` | `MISSING — #386` | `attestation_device_report` | ✅ |
 | Device reports (fleet) | `GET /api/v1/attestation/reports` | `ListDeviceReports` | `MISSING — #386` | `attestation_device_reports` | ✅ |
 | Refresh a device report (enqueue) | `POST /api/v1/attestation/reports/{device_id}/refresh` | `RefreshDeviceReport` | `MISSING — #386` | `attestation_device_refresh` | ✅ |
-| Device verdict stream (`attestation:read`, tenant-filtered — [engineering §9](engineering.md#device-verdict-events)) | gRPC-only by design: a server stream, like `PlatformDaemon.StreamEvents` | `StreamDeviceVerdicts` | gRPC-only by design | gRPC-only by design | — |
+| Device verdict stream (`attestation:read`, tenant-filtered — [engineering §9](engineering.md#device-verdict-events)) | `GET /api/v1/attestation/verdicts/stream` — Server-Sent Events, admin gate; see §5.5 | `StreamDeviceVerdicts` (the Unix socket serves the same RPC) | Pending an owner decision: QUIC has no streaming primitive | Pending an owner decision: MCP has no streaming primitive | — |
 | Challenge / response | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestChallenge` (`0x74`), `OpAttestResponse` (`0x75`) | `MISSING — docs/13 G7` | — |
 | Get AK | `MISSING` — served by the TPM surface, [`docs/tpm/`](../tpm/) | — | `OpAttestGetAK` (`0x73`) | — | — |
 
@@ -318,6 +318,30 @@ evidence carries a digest and a PCR value and **no signature**, so no
 cryptographic verification is defined for it; those responses are always
 `not_evaluated`, never a pass. Both transports call one implementation
 (`pkg/attestation/verdict`), so they cannot drift.
+
+### 5.5 Device verdict stream
+
+`GET /api/v1/attestation/verdicts/stream` follows every device verdict
+platformd records from the moment of subscription. It answers
+`text/event-stream` and is mounted on the admin gate. The same service backs
+gRPC `StreamDeviceVerdicts` (TCP and the Unix socket), so all three apply one
+set of audience rules ([engineering](engineering.md#device-verdict-events)).
+
+| Frame | Meaning |
+|---|---|
+| `: subscribed` | The subscription is live; sent before any verdict |
+| `: heartbeat` | Idle keep-alive, every 15 seconds |
+| `id: <event_id>`, `event: verdict`, `data: <DeviceVerdictEvent as protojson>` | One verdict |
+| `event: error`, `data: "<reason>"` | The server ended the stream (shutdown, or the subscriber fell more than 64 verdicts behind); follow again |
+
+A refusal arrives before the stream starts, as JSON: `403` when the caller's
+audience is empty (a session or certificate naming no tenant, or no
+credential), `503` when the node serves no verdict stream or it is closed.
+
+The Go SDK follows it with `attestation.StreamDeviceVerdictsREST`, which
+returns a stream with the same `Recv` as the gRPC client's.
+
+QUIC and MCP do not serve the stream yet; they wait on an owner decision.
 
 ---
 
