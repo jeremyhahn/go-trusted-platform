@@ -185,6 +185,13 @@ number) and loads it with `load-cert type=X509_CRL` at once if charon is
 attached. Every peer connection sets `revocation=strict`, so a peer whose
 status is unknown is refused.
 
+A held CRL that charon fails to load is not taken as loaded. Its issuer
+stays pending (`Status.UnloadedCRLs`) and signals the runner, which retries
+it through `Converge` with the backoff in [Runner](#runner). The same CRL
+pushed again is loaded again rather than ignored as already held. Until it
+loads, charon checks that issuer's peers against the CRL it held before,
+or none.
+
 Before a CRL is kept, `PushCRL` checks it, and refuses it with an
 `OpError` (`verify crl`) if it fails; the CRL already held for the issuer
 stays:
@@ -245,8 +252,9 @@ doubling to 30s. An attempt that attached resets the wait. Because the
 identity, the CRLs and the peers are pushed on every attach, a charon
 restart re-converges with nothing lost.
 
-Work the controller fails to finish is not dropped. This covers a peer
-connection that failed to load or unload, an evicted peer's SAs that
+Work the controller fails to finish is not dropped. This covers a CRL
+charon failed to load, a peer connection that failed to load or unload,
+an evicted peer's SAs that
 could not be ended, a kernel drop that failed, and an audit that could
 not run. Each failure is recorded and signals the runner. The runner then
 calls `Controller.Converge` after a wait that starts at 500ms and doubles
@@ -265,7 +273,8 @@ evicted peers, and the work still pending:
 
 - `DropPending`: evicted peers whose kernel drop failed;
 - `Unsynced`: peers whose connection or SAs charon does not hold as wanted;
-- `AuditPending`: an SA audit is due.
+- `AuditPending`: an SA audit is due;
+- `UnloadedCRLs`: issuers whose held CRL charon failed to load.
 
 It also reports how many issuers' CRLs are held and how many are queued
 awaiting an identity (`PendingCRLs`), and the tunnel

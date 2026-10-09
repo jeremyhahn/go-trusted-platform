@@ -318,6 +318,74 @@ func TestPushCRLFailures(t *testing.T) {
 	}
 }
 
+func TestPushCRLLoadFailureIsRetried(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	crl := h.pki.crl(t, 1, h.pki.issued)
+
+	h.charon.fail["load-crl"] = errInjected
+	if err := h.ctl.PushCRL(ctx, crl); !errors.Is(err, errInjected) {
+		t.Fatalf("PushCRL: err = %v, want the load failure", err)
+	}
+	if got := h.ctl.Status().UnloadedCRLs; got != 1 {
+		t.Fatalf("Status().UnloadedCRLs = %d, want the refused issuer", got)
+	}
+	select {
+	case <-h.ctl.retry:
+	default:
+		t.Fatal("a failed CRL load did not signal a retry")
+	}
+
+	// The same CRL pushed again is not taken as already held: it is loaded
+	// again, and fails again while charon still refuses it.
+	if err := h.ctl.PushCRL(ctx, crl); !errors.Is(err, errInjected) {
+		t.Fatalf("PushCRL(again): err = %v, want the load failure", err)
+	}
+	if err := h.ctl.Converge(ctx); !errors.Is(err, errInjected) {
+		t.Fatalf("Converge: err = %v, want the load failure", err)
+	}
+
+	delete(h.charon.fail, "load-crl")
+	if err := h.ctl.Converge(ctx); err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	if got := h.charon.crls(); len(got) != 1 || !bytes.Equal(got[0], crl) {
+		t.Fatal("Converge did not load the refused CRL")
+	}
+	if got := h.ctl.Status().UnloadedCRLs; got != 0 {
+		t.Fatalf("Status().UnloadedCRLs = %d after the retry, want 0", got)
+	}
+
+	// Once charon holds it, the same CRL is ignored.
+	if err := h.ctl.PushCRL(ctx, crl); err != nil {
+		t.Fatalf("PushCRL(held): %v", err)
+	}
+	if len(h.charon.crls()) != 1 {
+		t.Fatal("a CRL charon holds was loaded again")
+	}
+}
+
+func TestPushCRLAgainAfterFailureLoadsIt(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	crl := h.pki.crl(t, 1, h.pki.issued)
+
+	h.charon.fail["load-crl"] = errInjected
+	if err := h.ctl.PushCRL(ctx, crl); err == nil {
+		t.Fatal("PushCRL succeeded although charon refused the CRL")
+	}
+	delete(h.charon.fail, "load-crl")
+	if err := h.ctl.PushCRL(ctx, crl); err != nil {
+		t.Fatalf("PushCRL(again): %v", err)
+	}
+	if got := h.charon.crls(); len(got) != 1 || !bytes.Equal(got[0], crl) {
+		t.Fatal("the CRL pushed again was not loaded")
+	}
+	if got := h.ctl.Status().UnloadedCRLs; got != 0 {
+		t.Fatalf("Status().UnloadedCRLs = %d, want 0", got)
+	}
+}
+
 func TestPushCRLWhileDetached(t *testing.T) {
 	h := newDetachedHarness(t)
 	ctx := context.Background()

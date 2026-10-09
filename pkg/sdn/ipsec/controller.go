@@ -74,6 +74,7 @@ type Controller struct {
 	unsynced     map[netip.Addr]struct{}            // peers charon does not hold as wanted
 	auditPending bool                               // charon's IKE_SAs need an audit
 	crls         map[crlIssuer]*x509.RevocationList // issuer → its newest CRL
+	unloadedCRLs map[crlIssuer]struct{}             // issuers whose held CRL charon failed to load
 	pendingCRLs  map[crlIssuer]*x509.RevocationList // issuer → its newest CRL awaiting a tunnel identity
 	cert         *x509.Certificate                  // the tunnel certificate last loaded
 	cmd          Session                            // nil while detached
@@ -110,19 +111,20 @@ func NewController(cfg *Config, admitter Admitter, dropper Dropper, identity Ide
 			reauthTime:   cfg.ReauthTime(),
 			replayWindow: cfg.EffectiveReplayWindow(),
 		},
-		admitter:    admitter,
-		dropper:     dropper,
-		identity:    identity,
-		now:         time.Now,
-		retry:       make(chan struct{}, 1),
-		static:      make(map[netip.Addr]struct{}, len(peers)),
-		routed:      make(map[netip.Addr]map[uint32]struct{}),
-		evicted:     make(map[netip.Addr]struct{}),
-		dropPending: make(map[netip.Addr]struct{}),
-		loaded:      make(map[netip.Addr]struct{}),
-		unsynced:    make(map[netip.Addr]struct{}),
-		crls:        make(map[crlIssuer]*x509.RevocationList),
-		pendingCRLs: make(map[crlIssuer]*x509.RevocationList),
+		admitter:     admitter,
+		dropper:      dropper,
+		identity:     identity,
+		now:          time.Now,
+		retry:        make(chan struct{}, 1),
+		static:       make(map[netip.Addr]struct{}, len(peers)),
+		routed:       make(map[netip.Addr]map[uint32]struct{}),
+		evicted:      make(map[netip.Addr]struct{}),
+		dropPending:  make(map[netip.Addr]struct{}),
+		loaded:       make(map[netip.Addr]struct{}),
+		unsynced:     make(map[netip.Addr]struct{}),
+		crls:         make(map[crlIssuer]*x509.RevocationList),
+		unloadedCRLs: make(map[crlIssuer]struct{}),
+		pendingCRLs:  make(map[crlIssuer]*x509.RevocationList),
 	}
 	for _, p := range peers {
 		c.static[p] = struct{}{}
@@ -166,6 +168,7 @@ func (c *Controller) Attach(ctx context.Context, sess Session) error {
 			return err
 		}
 	}
+	clear(c.unloadedCRLs)
 	held, err := heldConns(ctx, sess)
 	if err != nil {
 		return err
@@ -221,7 +224,8 @@ func loadCRL(ctx context.Context, sess Session, crl *x509.RevocationList) error 
 // its issuer's newest, and loaded into charon now if a session is up and
 // on every later attach. charon never fetches CRLs itself, and every peer
 // connection checks revocation strictly. A CRL no newer than the one held
-// for its issuer is ignored.
+// for its issuer is ignored, unless charon failed to load the held one. A
+// load that fails is retried by Converge.
 //
 // A CRL must be signed by a CA of the tunnel identity the provider holds
 // now, so a renewal under a new intermediate is followed at once, and its
@@ -289,21 +293,38 @@ func (c *Controller) admitPending(ctx context.Context, cas []*x509.Certificate) 
 }
 
 // admitCRL verifies crl against cas and holds it if it supersedes the CRL
-// held for its issuer, loading it into charon when a session is up.
-// Callers hold mu.
+// held for its issuer, loading it into charon when a session is up. A CRL
+// no newer than the one held is ignored, unless charon failed to load the
+// held one: that is loaded again. Callers hold mu.
 func (c *Controller) admitCRL(ctx context.Context, crl *x509.RevocationList, cas []*x509.Certificate) error {
 	if err := verifyCRL(crl, cas, c.now()); err != nil {
 		return &OpError{Op: "verify crl", Err: err}
 	}
 	issuer := issuerOf(crl)
 	if held, ok := c.crls[issuer]; ok && !supersedes(crl, held) {
-		return nil
+		if _, unloaded := c.unloadedCRLs[issuer]; !unloaded {
+			return nil
+		}
+	} else {
+		c.crls[issuer] = crl
 	}
-	c.crls[issuer] = crl
+	return c.loadHeldCRL(ctx, issuer)
+}
+
+// loadHeldCRL loads the CRL held for issuer into charon. A failure is held
+// as pending for Converge. While detached there is nothing to load: Attach
+// loads every held CRL. Callers hold mu.
+func (c *Controller) loadHeldCRL(ctx context.Context, issuer crlIssuer) error {
 	if c.cmd == nil {
 		return nil
 	}
-	return loadCRL(ctx, c.cmd, crl)
+	if err := loadCRL(ctx, c.cmd, c.crls[issuer]); err != nil {
+		c.unloadedCRLs[issuer] = struct{}{}
+		c.signal()
+		return err
+	}
+	delete(c.unloadedCRLs, issuer)
+	return nil
 }
 
 // issuerOf is the issuer a CRL is held under.
@@ -348,6 +369,8 @@ func (c *Controller) Detach() {
 	defer c.mu.Unlock()
 	c.cmd = nil
 	c.loaded = make(map[netip.Addr]struct{})
+	// The next Attach loads every held CRL.
+	clear(c.unloadedCRLs)
 }
 
 // attached reports whether a session is up.
@@ -377,6 +400,10 @@ type Status struct {
 	AuditPending bool
 	// CRLs is how many issuers' CRLs are held.
 	CRLs int
+	// UnloadedCRLs is how many issuers' held CRLs the attached charon failed
+	// to load; Converge retries them. Until one loads, charon checks that
+	// issuer's peers against the CRL it held before, or none.
+	UnloadedCRLs int
 	// PendingCRLs is how many issuers' CRLs wait for a tunnel identity to
 	// be verified against; the next Attach verifies them.
 	PendingCRLs int
@@ -397,6 +424,7 @@ func (c *Controller) Status() Status {
 		Unsynced:     slices.SortedFunc(maps.Keys(c.unsynced), netip.Addr.Compare),
 		AuditPending: c.auditPending,
 		CRLs:         len(c.crls),
+		UnloadedCRLs: len(c.unloadedCRLs),
 		PendingCRLs:  len(c.pendingCRLs),
 	}
 	if c.cert != nil {
@@ -563,15 +591,18 @@ func (c *Controller) audit(ctx context.Context) error {
 }
 
 // Converge retries what failed before: kernel drops of evicted peers, then,
-// while attached, the peers charon does not hold as wanted, and a pending
-// audit. Whatever fails again stays pending and signals another retry. It
-// returns the failures together.
+// while attached, the CRLs charon failed to load, the peers charon does not
+// hold as wanted, and a pending audit. Whatever fails again stays pending
+// and signals another retry. It returns the failures together.
 func (c *Controller) Converge(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var errs []error
 	for _, peer := range slices.SortedFunc(maps.Keys(c.dropPending), netip.Addr.Compare) {
 		errs = append(errs, c.drop(ctx, peer))
+	}
+	for _, issuer := range slices.Collect(maps.Keys(c.unloadedCRLs)) {
+		errs = append(errs, c.loadHeldCRL(ctx, issuer))
 	}
 	for _, peer := range slices.SortedFunc(maps.Keys(c.unsynced), netip.Addr.Compare) {
 		errs = append(errs, c.settle(ctx, peer, false))
