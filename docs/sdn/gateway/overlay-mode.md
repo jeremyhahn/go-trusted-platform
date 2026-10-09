@@ -236,6 +236,15 @@ A missing record (allocation, device or verdict) is a denial. Any other read
 error is an outage (`ErrOverlayAdmissionUnavailable`). The route is refused
 for now, but the error is not a judgement on the VTEP.
 
+gatewayd reads all three records from platformd over the SDK. EVPN hands
+routes to handlers one at a time, so the fabric allocations are kept in an
+index keyed by address, and a route for an indexed VTEP makes no IPAM call.
+An address missing from the index makes gatewayd list the fabric pools again.
+Concurrent misses share one listing. Each sweep refreshes the index, so a
+released allocation leaves it within one interval. A failed listing keeps the
+previous index. The verdict's attestation time is the report's `attested_at`
+and nothing else; when the report was collected or served is not used.
+
 ### Re-admission sweep
 
 Every `admission-sweep-interval` the sweep reads the handler's installed set

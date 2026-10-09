@@ -644,6 +644,7 @@ func (s *DeviceGRPCService) deviceToPb(d *entities.Device) *platformv1.Device {
 		Id:            d.ID,
 		AttestPub:     d.AttestPub,
 		AttestCert:    d.AttestCert,
+		Hostname:      d.Hostname,
 		EkCert:        d.EKCert,
 		EventLog:      d.EventLog,
 		HashAlgoId:    d.HashAlgoId,

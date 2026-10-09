@@ -16,6 +16,8 @@ package commands
 import (
 	"errors"
 	"strconv"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 )
 
 var (
@@ -239,3 +241,23 @@ func (e *ErrTOFUPinDirUnusable) Error() string {
 }
 
 func (e *ErrTOFUPinDirUnusable) Unwrap() error { return e.Cause }
+
+// ErrOverlayPlatformRecordMissing reports that platformd holds no record an
+// overlay admission asked for. It matches gateway.ErrOverlayRecordNotFound, so
+// the admitter denies the VTEP instead of treating the miss as an outage.
+type ErrOverlayPlatformRecordMissing struct {
+	// Record names what was looked up, such as "device 42".
+	Record string
+	// Cause is the platformd NotFound error.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrOverlayPlatformRecordMissing) Error() string {
+	return "gatewayd: platformd has no " + e.Record + ": " + e.Cause.Error()
+}
+
+// Unwrap returns gateway.ErrOverlayRecordNotFound and the platformd error.
+func (e *ErrOverlayPlatformRecordMissing) Unwrap() []error {
+	return []error{gateway.ErrOverlayRecordNotFound, e.Cause}
+}
