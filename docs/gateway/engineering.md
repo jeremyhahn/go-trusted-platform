@@ -325,6 +325,13 @@ When `overlay:` is enabled, assembly also injects the overlay OpenFlow client,
 IPAM fabric reservation reader, device lookup, attestation verdict reader and
 the platform SDK connection that owns those readers. Missing overlay injection
 fails closed as `ErrRuntimeMissing`, not as an admitted tunnel.
+If `proxy.platformd.protocol: grpc` is selected for that overlay connection,
+gatewayd also presents the existing `control-plane.cert-file` /
+`control-plane.key-file` platform identity. That certificate must belong to the
+`system` tenant: the verdict stream shows every tenant's device verdicts only to
+the system tenant, while a tenant-scoped certificate sees only that tenant's
+records. A gRPC overlay configuration without that existing identity fails
+closed before the overlay starts.
 The runtime is assembled **only when a datapath service is enabled** — a
 proxy-only gatewayd never dials OVSDB even with an `sdn:` section present
 — the OVSDB dial is bounded by a 30s timeout, and the runtime owns the

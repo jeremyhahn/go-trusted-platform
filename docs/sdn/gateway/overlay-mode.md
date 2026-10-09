@@ -232,6 +232,14 @@ VTEPs. NAT64 hands off through tables 20-29 and may run beside it.
 A field that fails validation is reported as `ErrOverlayConfigInvalid`, naming
 the YAML key.
 
+Each `rr-peers` entry may still carry an explicit BGP `policy`. When it does
+not, gatewayd derives the EVPN import and export route-target allowlists from
+`overlay-asn` and every configured VNI using the RFC 8365 automatic RT
+(`ASN:VNI` in the VXLAN auto-derived layout). That is the documented template
+default: a route reflector peer with no policy exchanges Type-2 and Type-3
+routes for the configured VNIs, while an explicit policy remains the operator's
+complete policy.
+
 Start joins every entry of `vnis` (`AddVNI`, which with RR peers also joins it
 in EVPN) before the service counts as running. A join that fails stops the
 handler and the speaker again and fails the start with the join's error, so

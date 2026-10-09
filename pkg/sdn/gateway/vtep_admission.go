@@ -265,8 +265,10 @@ func (a *VTEPAdmitter) Sweep(ctx context.Context, installed []modes.InstalledVTE
 	a.mu.Unlock()
 
 	var errs []error
+	refreshOK := true
 	if refresher, ok := a.ipam.(OverlayIPAMRefresher); ok {
 		if err := refresher.Refresh(ctx); err != nil {
+			refreshOK = false
 			errs = append(errs, ErrOverlayAdmissionUnavailable{Source: "ipam", Cause: err})
 		}
 	}
@@ -286,7 +288,7 @@ func (a *VTEPAdmitter) Sweep(ctx context.Context, installed []modes.InstalledVTE
 		switch {
 		case !ok:
 			err = a.readmit(ctx, vtep)
-		case admitted:
+		case admitted && refreshOK:
 			err = a.replay(ctx, vtep)
 		}
 		if err != nil {

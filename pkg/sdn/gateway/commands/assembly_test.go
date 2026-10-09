@@ -562,6 +562,47 @@ func TestPlatformdDialGRPCWithPlatformAnchor(t *testing.T) {
 	})
 }
 
+func TestPlatformdTLSConfigCarriesGatewayPlatformIdentity(t *testing.T) {
+	certFile, keyFile, caFile := writeTLSFixtures(t)
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatalf("LoadX509KeyPair: %v", err)
+	}
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	tlsCfg, err := platformdTLSConfig(context.Background(), fileAnchor(t, caPEM), &cert)
+
+	if err != nil {
+		t.Fatalf("platformdTLSConfig: %v", err)
+	}
+	if len(tlsCfg.Certificates) != 1 {
+		t.Fatalf("Certificates = %d, want 1", len(tlsCfg.Certificates))
+	}
+	if !bytes.Equal(cert.Certificate[0], tlsCfg.Certificates[0].Certificate[0]) {
+		t.Fatal("platformd TLS config must present the gateway platform identity")
+	}
+}
+
+func TestWireOverlayRuntimeGRPCRequiresGatewayPlatformIdentity(t *testing.T) {
+	cfg := &ServeConfig{
+		Gateway: &gateway.GatewayConfig{Overlay: &gateway.OverlayServiceConfig{Enabled: true}},
+		Proxy: &proxysvc.Config{Platformd: proxysvc.PlatformdConfig{
+			Protocol: proxysvc.PlatformdProtocolGRPC,
+			GRPCAddr: "127.0.0.1:10443",
+		}},
+	}
+	runtime := &gateway.GatewayRuntime{}
+
+	err := wireOverlayRuntime(context.Background(), cfg, fileAnchor(t, testutil.GenerateTestTLSBundle(t).CACertPEM), runtime)
+
+	if !errors.Is(err, ErrPlatformIdentityRequiredForGRPC) {
+		t.Fatalf("wireOverlayRuntime = %v, want ErrPlatformIdentityRequiredForGRPC", err)
+	}
+}
+
 // mtlsProxyConfig returns a complete mTLS proxy configuration with TLS
 // fixtures applied.
 func mtlsProxyConfig(t *testing.T) *proxysvc.Config {

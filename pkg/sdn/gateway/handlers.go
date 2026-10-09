@@ -963,6 +963,10 @@ func (b *overlayBackend) overlayEVPN(ctx context.Context, logger *slog.Logger) (
 	if b.config.OverlayASN > 65535 {
 		return nil, nil, &ErrServiceUnavailable{Service: ServiceOverlay, Reason: "overlay EVPN route targets require a 2-byte overlay ASN"}
 	}
+	neighbors, err := overlayRRPeersWithDefaultPolicy(b.config)
+	if err != nil {
+		return nil, nil, err
+	}
 	// The overlay speaker dials its route reflectors from the VTEP address
 	// and listens for nobody: the transit speaker owns port 179, and a second
 	// listener would fail the start with "address in use".
@@ -973,7 +977,7 @@ func (b *overlayBackend) overlayEVPN(ctx context.Context, logger *slog.Logger) (
 		SessionSource:   b.config.LocalVTEP,
 		Capabilities:    bgp.BGPCapabilities{EVPN: true},
 		EnabledFamilies: []bgp.AddressFamily{bgp.AFamilyEVPN},
-		Neighbors:       append([]bgp.NeighborConfig(nil), b.config.RRPeers...),
+		Neighbors:       neighbors,
 	}
 	defer zeroizeBGPSecrets(speakerCfg)
 	if err := speakerCfg.ResolveSecrets(ctx, b.resolver); err != nil {
@@ -1004,6 +1008,45 @@ func (b *overlayBackend) overlayEVPN(ctx context.Context, logger *slog.Logger) (
 		LocalVTEP:  b.config.LocalVTEP,
 		OverlayASN: uint16(b.config.OverlayASN),
 	}, nil
+}
+
+func overlayRRPeersWithDefaultPolicy(config *OverlayServiceConfig) ([]bgp.NeighborConfig, error) {
+	neighbors := append([]bgp.NeighborConfig(nil), config.RRPeers...)
+	rts, err := overlayRouteTargets(config)
+	if err != nil {
+		return nil, err
+	}
+	for i := range neighbors {
+		if !overlayPeerPolicyEmpty(neighbors[i].Policy) {
+			continue
+		}
+		neighbors[i].Policy.ImportRouteTargets = append([]string(nil), rts...)
+		neighbors[i].Policy.ExportRouteTargets = append([]string(nil), rts...)
+	}
+	return neighbors, nil
+}
+
+func overlayRouteTargets(config *OverlayServiceConfig) ([]string, error) {
+	rts := make([]string, 0, len(config.VNIs))
+	for _, vni := range config.VNIs {
+		rt, err := bgp.AutoRouteTarget(uint16(config.OverlayASN), 0, vni.VNI)
+		if err != nil {
+			return nil, err
+		}
+		rts = append(rts, rt.String())
+	}
+	return rts, nil
+}
+
+func overlayPeerPolicyEmpty(policy bgp.PeerPolicyConfig) bool {
+	return len(policy.ImportAllow) == 0 &&
+		len(policy.ExportAllow) == 0 &&
+		len(policy.ImportRouteTargets) == 0 &&
+		len(policy.ExportRouteTargets) == 0 &&
+		!policy.ImportDefaultAccept &&
+		!policy.ExportDefaultAccept &&
+		policy.Import == nil &&
+		policy.Export == nil
 }
 
 func buildOverlay(g *Gateway) (backedService, error) {

@@ -187,6 +187,40 @@ func TestOverlayBackend_SpeakerDialsTheRouteReflectorsWithoutListening(t *testin
 	require.Equal(t, cfg.LocalVTEP.String(), server.added[0].Transport.LocalAddress)
 }
 
+func TestOverlayBackend_RRPeersDefaultToConfiguredVNIRouteTargets(t *testing.T) {
+	cfg := validOverlayServiceConfig()
+	cfg.RRPeers = []bgp.NeighborConfig{{
+		Name: "cp-01-rr", Address: netip.MustParseAddr("10.4.100.10"), ASN: cfg.OverlayASN,
+	}}
+
+	neighbors, err := overlayRRPeersWithDefaultPolicy(cfg)
+
+	require.NoError(t, err)
+	require.Len(t, neighbors, 1)
+	rt1, err := bgp.AutoRouteTarget(uint16(cfg.OverlayASN), 0, cfg.VNIs[0].VNI)
+	require.NoError(t, err)
+	rt2, err := bgp.AutoRouteTarget(uint16(cfg.OverlayASN), 0, cfg.VNIs[1].VNI)
+	require.NoError(t, err)
+	want := []string{rt1.String(), rt2.String()}
+	require.Equal(t, want, neighbors[0].Policy.ImportRouteTargets)
+	require.Equal(t, want, neighbors[0].Policy.ExportRouteTargets)
+}
+
+func TestOverlayBackend_RRPeerExplicitPolicyWins(t *testing.T) {
+	cfg := validOverlayServiceConfig()
+	cfg.RRPeers = []bgp.NeighborConfig{{
+		Name: "cp-01-rr", Address: netip.MustParseAddr("10.4.100.10"), ASN: cfg.OverlayASN,
+		Policy: bgp.PeerPolicyConfig{ImportRouteTargets: []string{"65000:7"}},
+	}}
+
+	neighbors, err := overlayRRPeersWithDefaultPolicy(cfg)
+
+	require.NoError(t, err)
+	require.Len(t, neighbors, 1)
+	require.Equal(t, []string{"65000:7"}, neighbors[0].Policy.ImportRouteTargets)
+	require.Empty(t, neighbors[0].Policy.ExportRouteTargets)
+}
+
 func TestOverlayBackend_StartFailsWhenAVNIJoinIsRefused(t *testing.T) {
 	ctx := context.Background()
 

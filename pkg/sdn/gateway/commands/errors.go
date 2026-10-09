@@ -48,6 +48,11 @@ var ErrGatewayDisabled = errors.New("gatewayd: gateway section disabled; the pro
 // verifies platformd's certificate.
 var ErrPlatformAnchorRequiredForGRPC = errors.New("gatewayd: platformd grpc protocol requires platform-ca-file: (the platform CA bundle that verifies platformd)")
 
+// ErrPlatformIdentityRequiredForGRPC is returned when gatewayd is configured
+// to reach platformd over gRPC without the existing gateway platform identity
+// certificate used by the control-plane reporter.
+var ErrPlatformIdentityRequiredForGRPC = errors.New("gatewayd: platformd grpc protocol requires control-plane.cert-file and control-plane.key-file (the gateway platform identity)")
+
 // ErrConfigSection wraps a configuration-section unmarshal failure.
 type ErrConfigSection struct {
 	// Section is the top-level configuration key.

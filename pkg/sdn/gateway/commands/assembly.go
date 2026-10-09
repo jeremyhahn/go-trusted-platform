@@ -468,6 +468,17 @@ func buildPlatformAnchor(cfg *ServeConfig) (*trust.Anchor, error) {
 	return trust.NewAnchor(trust.NewFileAnchorSource(cfg.PlatformCAFile))
 }
 
+func platformIdentityCertificate(cfg *ServeConfig) (*tls.Certificate, error) {
+	if cfg == nil || cfg.ControlPlane == nil || cfg.ControlPlane.CertFile == "" || cfg.ControlPlane.KeyFile == "" {
+		return nil, nil
+	}
+	cert, err := tls.LoadX509KeyPair(cfg.ControlPlane.CertFile, cfg.ControlPlane.KeyFile)
+	if err != nil {
+		return nil, &proxysvc.ErrCertificateLoadFailed{CertFile: cfg.ControlPlane.CertFile, Cause: err}
+	}
+	return &cert, nil
+}
+
 // loadClientCAs resolves the client-certificate verification pool: an
 // explicit client-ca-file wins; otherwise the platform anchor is used when
 // authentication is needed, since the proxy's callers are platform-issued.
@@ -638,7 +649,7 @@ func buildAuthChain(clientCAs *x509.CertPool, matrixProvider *proxysvc.ZoneMatri
 // configured transport. Control-plane interactions go through sdk/go
 // exclusively (see cmd/gatewayd/CLAUDE.md); connections live for the
 // process lifetime.
-func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) (platform.Client, error) {
+func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor, platformIdentity *tls.Certificate) (platform.Client, error) {
 	var opts []platform.Option
 	switch pcfg.Protocol {
 	case proxysvc.PlatformdProtocolUnix:
@@ -650,7 +661,7 @@ func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, anchor *t
 		if anchor == nil {
 			return nil, ErrPlatformAnchorRequiredForGRPC
 		}
-		tlsCfg, err := anchor.TLSConfig(ctx)
+		tlsCfg, err := platformdTLSConfig(ctx, anchor, platformIdentity)
 		if err != nil {
 			return nil, err
 		}
@@ -665,11 +676,23 @@ func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, anchor *t
 	return platform.Connect(ctx, platform.NewOptions(opts...))
 }
 
+func platformdTLSConfig(ctx context.Context, anchor *trust.Anchor, platformIdentity *tls.Certificate) (*tls.Config, error) {
+	tlsCfg, err := anchor.TLSConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if platformIdentity != nil {
+		tlsCfg = tlsCfg.Clone()
+		tlsCfg.Certificates = []tls.Certificate{*platformIdentity}
+	}
+	return tlsCfg, nil
+}
+
 // platformdDial returns the lazy dial function the sync loop uses to reach
 // the platformd proxy control-plane service.
 func platformdDial(pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) proxysvc.DialFunc {
 	return func(ctx context.Context) (proxysvc.ControlPlaneClient, error) {
-		client, err := dialPlatformd(ctx, pcfg, anchor)
+		client, err := dialPlatformd(ctx, pcfg, anchor, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -681,7 +704,7 @@ func platformdDial(pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) proxysvc
 // gate uses to reach the platformd attestation service.
 func platformdAttestationDial(pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) proxysvc.AttestationDialFunc {
 	return func(ctx context.Context) (proxysvc.AttestationClient, error) {
-		client, err := dialPlatformd(ctx, pcfg, anchor)
+		client, err := dialPlatformd(ctx, pcfg, anchor, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -694,7 +717,14 @@ func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anc
 		return nil
 	}
 	pcfg := overlayPlatformdConfig(cfg)
-	client, err := dialPlatformd(ctx, pcfg, anchor)
+	platformIdentity, err := platformIdentityCertificate(cfg)
+	if err != nil {
+		return err
+	}
+	if pcfg.Protocol == proxysvc.PlatformdProtocolGRPC && platformIdentity == nil {
+		return ErrPlatformIdentityRequiredForGRPC
+	}
+	client, err := dialPlatformd(ctx, pcfg, anchor, platformIdentity)
 	if err != nil {
 		return err
 	}

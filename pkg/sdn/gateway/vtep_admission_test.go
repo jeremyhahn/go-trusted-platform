@@ -631,6 +631,21 @@ func TestVTEPAdmitter_Sweep(t *testing.T) {
 	})
 }
 
+func TestVTEPAdmitter_SweepDoesNotReplayInstalledRefusedVTEPAfterFailedRefresh(t *testing.T) {
+	f, cache := reassignedFixture(t)
+	cache.current = cache.cached
+	require.NoError(t, f.admitter.AdmitVTEP(context.Background(), 10100, admissionVTEP))
+	f.overlay.refused = []netip.Addr{admissionVTEP}
+	cache.refreshErr = errPlatformDown
+
+	err := f.admitter.Sweep(context.Background(), installed(admissionVTEP))
+
+	var unavailable ErrOverlayAdmissionUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	assert.Equal(t, "ipam", unavailable.Source)
+	assert.Empty(t, f.overlay.replayed, "stale cached IPAM must not reopen refused routes after a failed refresh")
+}
+
 func TestVTEPAdmitter_RevokeDevice(t *testing.T) {
 	ctx := context.Background()
 
