@@ -39,6 +39,9 @@ var (
 	// ErrInvalidHandle is returned when a token key handle is not a hex
 	// CKA_ID.
 	ErrInvalidHandle = errors.New("ipsec: token handle must be a hex CKA_ID")
+	// ErrInvalidModule is returned when a token module is not a pkcs11
+	// module name from strongswan.conf.
+	ErrInvalidModule = errors.New("ipsec: token module must be a strongswan.conf pkcs11 module name")
 	// ErrReplayWindowTooSmall is returned when the replay window is below
 	// MinReplayWindow.
 	ErrReplayWindowTooSmall = errors.New("ipsec: replay window below the minimum")

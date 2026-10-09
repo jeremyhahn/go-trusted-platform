@@ -17,6 +17,7 @@ import (
 	"errors"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -51,7 +52,7 @@ func TestConfigValidateAccepts(t *testing.T) {
 		{"rate alone scales the burst", func(c *Config) { c.IKERate = 100 }},
 		{"explicit socket and module", func(c *Config) {
 			c.VICISocket = "/run/charon/charon.vici"
-			c.Token.Module = "/usr/lib/pkcs11/p11-kit-client.so"
+			c.Token.Module = "hsm_2-backup"
 		}},
 		{"certificate and PIN files", func(c *Config) {
 			c.CertificateFile = "/etc/platform/ipsec/tunnel.pem"
@@ -102,7 +103,10 @@ func TestConfigValidateRejects(t *testing.T) {
 		{"peer is the local address", func(c *Config) { c.StaticPeers = []string{"10.20.0.11"} }, "static-peers[0]", ErrDuplicatePeer},
 		{"mixed families", func(c *Config) { c.StaticPeers = []string{"fd00::1"} }, "static-peers[0]", ErrFamilyMismatch},
 		{"relative socket", func(c *Config) { c.VICISocket = "charon.vici" }, "vici-socket", ErrRelativePath},
-		{"relative module", func(c *Config) { c.Token.Module = "p11-kit-client.so" }, "token.module", ErrRelativePath},
+		{"module given as a path", func(c *Config) { c.Token.Module = "/usr/lib/pkcs11/p11-kit-client.so" }, "token.module", ErrInvalidModule},
+		{"module given as a file", func(c *Config) { c.Token.Module = "p11-kit-client.so" }, "token.module", ErrInvalidModule},
+		{"module name with a space", func(c *Config) { c.Token.Module = "x kms" }, "token.module", ErrInvalidModule},
+		{"module name too long", func(c *Config) { c.Token.Module = strings.Repeat("m", maxModuleName+1) }, "token.module", ErrInvalidModule},
 		{"relative certificate file", func(c *Config) { c.CertificateFile = "tunnel.pem" }, "certificate-file", ErrRelativePath},
 		{"relative PIN file", func(c *Config) { c.Token.PINFile = "token.pin" }, "token.pin-file", ErrRelativePath},
 		{"missing handle", func(c *Config) { c.Token.Handle = "" }, "token.handle", ErrRequired},

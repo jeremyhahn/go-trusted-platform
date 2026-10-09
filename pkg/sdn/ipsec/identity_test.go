@@ -97,8 +97,19 @@ func TestFileIdentity(t *testing.T) {
 	if len(id.Chain) != 2 || !id.Chain[0].Equal(pki.leaf) || !id.Chain[1].Equal(pki.ca) {
 		t.Fatalf("chain of %d, want the leaf then the CA, other blocks skipped", len(id.Chain))
 	}
-	if id.Token.Slot != 3 || string(id.Token.KeyID) != "ipsec" || id.Token.Module != "" {
+	if id.Token.Slot != 3 || string(id.Token.KeyID) != "ipsec" || id.Token.Module != DefaultTokenModule {
 		t.Fatalf("token = %+v", id.Token)
+	}
+
+	// A configured module name is what load-token is sent.
+	cfg.Token.Module = "hsm"
+	named, err := NewFileIdentity(cfg)
+	if err != nil {
+		t.Fatalf("NewFileIdentity with a module: %v", err)
+	}
+	t.Cleanup(named.Close)
+	if named.key.Module != "hsm" {
+		t.Fatalf("module = %q, want the configured name", named.key.Module)
 	}
 	buf, err := id.PIN.Open()
 	if err != nil {

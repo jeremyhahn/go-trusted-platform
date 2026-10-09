@@ -29,8 +29,9 @@ import (
 )
 
 const (
-	// DefaultVICISocket is charon's control socket.
-	DefaultVICISocket = "/var/run/charon.vici"
+	// DefaultVICISocket is charon's control socket, as the shipped
+	// strongswan.d/trusted-platform.conf sets it.
+	DefaultVICISocket = "/run/charon.vici"
 
 	// socketMode is the only mode the VICI socket may have: VICI carries
 	// no authentication, so whoever can open the socket commands charon.

@@ -88,7 +88,7 @@ func NewFileIdentity(cfg *Config) (*FileIdentity, error) {
 	}
 	f := &FileIdentity{
 		chainFile: cfg.CertificateFile,
-		key:       TokenKey{Slot: cfg.Token.Slot, KeyID: keyID},
+		key:       TokenKey{Module: cfg.EffectiveTokenModule(), Slot: cfg.Token.Slot, KeyID: keyID},
 	}
 	if cfg.Token.PINFile != "" {
 		if f.pin, err = readPIN(cfg.Token.PINFile); err != nil {

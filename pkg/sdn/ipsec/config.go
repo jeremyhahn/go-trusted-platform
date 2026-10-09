@@ -45,10 +45,13 @@ const (
 	// through a full outage.
 	OutageFactor = 3
 
-	// DefaultTokenModule is the PKCS#11 module charon loads: p11-kit's
-	// client, which forwards to the node-local xkms token server (charon
-	// is musl-linked; the xkms module is not).
-	DefaultTokenModule = "/usr/lib/pkcs11/p11-kit-client.so"
+	// DefaultTokenModule names the PKCS#11 module charon holds the IKE key
+	// in: the section under pkcs11 { modules { } } in the shipped
+	// strongswan.conf (/etc/strongswan.d/charon/pkcs11.conf), whose path
+	// is p11-kit's client, forwarding to the node-local xkms token server
+	// (charon is musl-linked; the xkms module is not). load-token takes the
+	// name, not the path.
+	DefaultTokenModule = "xkms"
 
 	// DefaultCPOutageTolerance is the control-plane outage a node rides
 	// through on the certificate it holds.
@@ -129,8 +132,8 @@ type Config struct {
 // TokenConfig locates the IKE key: a sign-only object in the node-local
 // token, reached through p11-kit.
 type TokenConfig struct {
-	// Module is the PKCS#11 module charon loads. Default
-	// DefaultTokenModule.
+	// Module is the name of the strongswan.conf pkcs11 module that holds
+	// the key, sent with load-token. Default DefaultTokenModule.
 	Module string `yaml:"module,omitempty" json:"module,omitempty" mapstructure:"module"`
 
 	// Slot is the token slot holding the key.
@@ -212,8 +215,8 @@ func validatePeers(local netip.Addr, peers []string) error {
 }
 
 func (t *TokenConfig) validate() error {
-	if t.Module != "" && !filepath.IsAbs(t.Module) {
-		return &ConfigError{Field: "token.module", Err: ErrRelativePath}
+	if t.Module != "" && !validModuleName(t.Module) {
+		return &ConfigError{Field: "token.module", Err: ErrInvalidModule}
 	}
 	if t.PINFile != "" && !filepath.IsAbs(t.PINFile) {
 		return &ConfigError{Field: "token.pin-file", Err: ErrRelativePath}
@@ -225,6 +228,27 @@ func (t *TokenConfig) validate() error {
 		return &ConfigError{Field: "token.handle", Err: ErrInvalidHandle}
 	}
 	return nil
+}
+
+// maxModuleName bounds a token module name; strongswan.conf section names
+// have no limit of their own, a configuration typo should still be caught.
+const maxModuleName = 64
+
+// validModuleName reports whether name can be a section under charon's
+// pkcs11 { modules { } } in strongswan.conf: letters, digits, '-' and '_'.
+// A path, which the field once held, is refused.
+func validModuleName(name string) bool {
+	if len(name) == 0 || len(name) > maxModuleName {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // parseUnicast parses a single unicast address: not a prefix, not
