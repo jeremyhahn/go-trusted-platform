@@ -112,6 +112,7 @@ code never touches key material or ESP.
 | VICI client | `pkg/sdn/ipsec/vici` | charon's control socket: commands, streamed commands, events |
 | Configuration | `pkg/sdn/ipsec` (`Config`) | the `overlay.ipsec` section and its derived timers |
 | Controller | `pkg/sdn/ipsec` (`Controller`) | the peer set, one charon connection per peer, eviction, the identity check |
+| Fail-closed floor | `pkg/sdn/ipsec` (`Filter`, `BlockPolicy`) | the nftables table and XFRM block policies that leave no cleartext path when charon is down |
 
 ### VICI client
 
@@ -186,6 +187,54 @@ account. On a mismatch the SA is terminated and an
 rather than an updown script, because a script cannot reach the 0600 socket
 and cannot stop an SA.
 
+### Fail-closed floor
+
+Two kernel layers, both owned by platformd and independent of charon,
+make sure nothing crosses the fabric in cleartext. With charon stopped,
+no SA and no trap exists, and both layers drop VXLAN and BGP alike.
+
+`ipsec.Filter` writes the nftables table `inet tp_ipsec`. Its chains,
+`fabric_in` and `fabric_out`, hook input and output at priority -10 with
+policy accept, and only judge packets on `fabric-interface`:
+
+| Order | Inbound (`iifname`) | Outbound (`oifname`) |
+|-------|---------------------|----------------------|
+| 1 | ICMPv6 types 133–137 (neighbour discovery) accepted | the same |
+| 2 | source in `@evicted` dropped | destination in `@evicted` dropped |
+| 3 | ESP accepted (local address family) | ESP accepted |
+| 4 | UDP 500→500 and 4500→4500 over `ike-rate`/`ike-burst` per source dropped, the rest accepted | UDP 500→500 and 4500→4500 accepted |
+| 5 | `meta secpath exists` (decrypted by an SA) accepted | `rt ipsec exists` (routed into an SA) accepted |
+| 6 | everything else dropped | everything else dropped |
+
+The per-source IKE limit is a dynamic set (`ike_meter`, entries expire a
+minute after a source's last packet). It complements charon's
+`cookie_threshold` and `init_limit_half_open`. The table only narrows:
+the host filter (`tp_host`) still has to accept ESP and IKE on the fabric.
+Cleartext ICMP, path-MTU messages included, is dropped. The underlay MTU
+requirement in [Encapsulation and MTU](#encapsulation-and-mtu) is what
+makes that safe.
+
+`Apply` replaces the whole table in one transaction, so there is never
+a moment without it. `Remove` deletes it. `Filter` is the controller's
+`Dropper`. `Drop`/`Undrop` change the `evicted` set in place. A drop
+recorded before `Apply` is installed with the table, and a re-`Apply`
+keeps every drop.
+
+`ipsec.BlockPolicy` installs XFRM policies at priority 2^30. A larger
+number is a lower priority, so these sit below every policy charon
+installs. Direction `out` blocks everything from the local address, and
+direction `in` blocks everything to it. A packet passes only when one of
+charon's policies (a trap, or an SA's) takes precedence and sends it
+through ESP. charon's IKE sockets carry bypass socket policies, which
+the kernel checks first. On an IPv6 underlay, ICMPv6 types 133–137 are
+allowed in both directions one priority step above the blocks.
+`Install` is idempotent, and exemptions go in before blocks. `Remove`
+deletes the blocks first.
+
+Both need CAP_NET_ADMIN. `NewFilter` takes nftables connection options
+and `NewBlockPolicy` takes a network namespace, so either can be pinned
+to a namespace.
+
 ### Timers
 
 The VTEP certificate outlives three tolerated control-plane outages
@@ -209,7 +258,8 @@ has been renewed at the same mark.
 | `CommandError` | `vici` | charon ran a command and refused it (`success=no`); carries `errmsg` |
 | `ErrUnknownCommand`, `ErrUnknownEvent` | `vici` | charon does not know the command or event; the connection stays usable |
 | `PeerError` | `ipsec` | a step on one peer failed (`admit`, `load-conn`, `unload-conn`, `drop`, `undrop`, `list-sas`, `terminate`, `evict`, `readmit`); names the peer and wraps the cause |
-| `OpError` | `ipsec` | a charon command not tied to one peer failed (`get-conns` during `Attach`) |
+| `OpError` | `ipsec` | an operation not tied to one peer failed: `get-conns` during `Attach`, `nftables apply`/`remove`, `xfrm install`/`remove` |
+| `ErrFamilyMismatch` | `ipsec` | `Filter.Drop`/`Undrop` named a peer of the other address family (inside a `PeerError`) |
 | `IdentityMismatchError` | `ipsec` | an SA came up with a peer identity other than its address; the SA was terminated |
 | `ErrNotEvicted` | `ipsec` | `Readmit` named a peer that is not evicted |
 

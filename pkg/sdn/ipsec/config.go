@@ -244,6 +244,18 @@ func (c *Config) Local() (netip.Addr, error) {
 	return addr, nil
 }
 
+// enabledLocal checks that the section is present, enabled and valid, and
+// returns its local address.
+func enabledLocal(cfg *Config) (netip.Addr, error) {
+	if cfg == nil || !cfg.Enabled {
+		return netip.Addr{}, ErrNotEnabled
+	}
+	if err := cfg.Validate(); err != nil {
+		return netip.Addr{}, err
+	}
+	return cfg.Local()
+}
+
 // Peers parses the static peers.
 func (c *Config) Peers() ([]netip.Addr, error) {
 	out := make([]netip.Addr, 0, len(c.StaticPeers))

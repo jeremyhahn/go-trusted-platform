@@ -75,18 +75,12 @@ type Controller struct {
 
 // NewController builds the controller for an enabled configuration.
 func NewController(cfg *Config, admitter Admitter, dropper Dropper) (*Controller, error) {
-	if cfg == nil || !cfg.Enabled {
-		return nil, ErrNotEnabled
+	local, err := enabledLocal(cfg)
+	if err != nil {
+		return nil, err
 	}
 	if admitter == nil || dropper == nil {
 		return nil, ErrMissingDependency
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	local, err := cfg.Local()
-	if err != nil {
-		return nil, err
 	}
 	peers, err := cfg.Peers()
 	if err != nil {
