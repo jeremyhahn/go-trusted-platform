@@ -145,6 +145,9 @@ message SnapshotOverlay {
   int64 uptime_seconds = 13;
   repeated GatewayAdmittedVTEP admitted_vteps = 14;
   SnapshotOverlayNDCounters nd_counters = 15;
+  // refused_replays counts the replays of a refused VTEP's routes that
+  // failed, leaving the VTEP refused for the next sweep.
+  uint64 refused_replays = 16;
 }
 
 message SnapshotOverlayNDCounters {

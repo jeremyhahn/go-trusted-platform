@@ -442,6 +442,7 @@ func (g *Gateway) collectOverlay(ctx context.Context) *gwstate.OverlayState {
 		RemoteMACCount:           status.RemoteMACCount,
 		PrefixCount:              status.PrefixCount,
 		RefusedBindings:          status.RefusedBindings,
+		RefusedReplays:           status.RefusedReplays,
 		L3VNI:                    status.L3VNI,
 		ARPSuppressionEnabled:    status.ARPSuppressionEnabled,
 		AnycastGatewayConfigured: status.AnycastGatewayConfigured,

@@ -262,6 +262,7 @@ func protoSnapshotToQUIC(snap *platformv1.GatewaySnapshot) *quic.GatewaySnapshot
 			RemoteMACCount:           overlay.GetRemoteMacCount(),
 			PrefixCount:              overlay.GetPrefixCount(),
 			RefusedBindings:          overlay.GetRefusedBindings(),
+			RefusedReplays:           overlay.GetRefusedReplays(),
 			L3VNI:                    overlay.GetL3Vni(),
 			ARPSuppressionEnabled:    overlay.GetArpSuppressionEnabled(),
 			AnycastGatewayConfigured: overlay.GetAnycastGatewayConfigured(),

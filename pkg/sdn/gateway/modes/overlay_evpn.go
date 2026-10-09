@@ -386,7 +386,7 @@ func (h *OverlayModeHandler) RefusedVTEPs() []netip.Addr {
 // send an unchanged route twice, so a VTEP refused for a verdict that has
 // since passed is installed only by a replay. A VTEP not refused, or a
 // handler that is stopped, replays nothing. A replay that fails leaves the
-// VTEP refused for the next one.
+// VTEP refused for the next one and is counted in RefusedReplays.
 func (h *OverlayModeHandler) ReplayVTEP(ctx context.Context, vtep netip.Addr) error {
 	h.mu.Lock()
 	_, refused := h.refused[vtep]
@@ -400,6 +400,7 @@ func (h *OverlayModeHandler) ReplayVTEP(ctx context.Context, vtep netip.Addr) er
 	if err := h.evpnManager.ReplayVTEP(ctx, vtep, h.handleEVPNRoute); err != nil {
 		h.mu.Lock()
 		h.markRefusedLocked(vtep)
+		h.refusedReplays++
 		h.mu.Unlock()
 		return &ErrVTEPOperationFailed{VTEPIP: vtep, Operation: "replay", Cause: err}
 	}

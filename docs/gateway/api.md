@@ -53,7 +53,9 @@ nothing. The document's sections and their provenance are in
 The overlay section of the snapshot includes the local VTEP, underlay bridge,
 OpenFlow table ids, admitted VTEPs, and the neighbor-discovery counters the
 gatewayd overlay handler maintains: punted, answered, meter-dropped,
-queue-dropped, and fell-through. The admitted-VTEP read/list verbs are backed
+queue-dropped, and fell-through. It also counts the routes refused for
+claiming the anycast gateway's address (`refused_bindings`) and the replays of
+a refused VTEP's routes that failed (`refused_replays`). The admitted-VTEP read/list verbs are backed
 by the same service layer and are exposed on REST, gRPC, QUIC, MCP, Unix and
 the SDK/CLI; they return `NotFound` for an address that is not currently
 admitted, and `Unavailable` (REST 503) on a gateway with no overlay section.

@@ -120,6 +120,7 @@ func reportedOverlaySnapshot(id string) *gwstate.Snapshot {
 		RemoteMACCount:           1,
 		PrefixCount:              1,
 		RefusedBindings:          3,
+		RefusedReplays:           4,
 		L3VNI:                    50100,
 		ARPSuppressionEnabled:    true,
 		AnycastGatewayConfigured: true,
@@ -273,8 +274,25 @@ func TestGatewaySnapshotToProto_OverlayStatus(t *testing.T) {
 	assert.True(t, overlay.GetRunning())
 	assert.Equal(t, "192.0.2.10", overlay.GetLocalVtep())
 	assert.Equal(t, uint64(11), overlay.GetNdCounters().GetPunted())
+	assert.Equal(t, uint64(3), overlay.GetRefusedBindings())
+	assert.Equal(t, uint64(4), overlay.GetRefusedReplays())
 	require.Len(t, overlay.GetAdmittedVteps(), 1)
 	assert.Equal(t, "198.51.100.10", overlay.GetAdmittedVteps()[0].GetVtep())
+}
+
+// TestGatewaySnapshotQUICAdapter_OverlayCounters carries the overlay's
+// refusal counters onto the QUIC wire, so a VTEP the sweep keeps failing to
+// replay shows on QUIC as it does on the other transports.
+func TestGatewaySnapshotQUICAdapter_OverlayCounters(t *testing.T) {
+	store := &memorySnapshotStore{}
+	require.NoError(t, store.Put(reportedOverlaySnapshot("node-01-gateway")))
+	adapter := gatewaySnapshotQUICAdapter{reader: NewGatewayService(WithGatewaySnapshotStore(store))}
+
+	info, err := adapter.Snapshot(context.Background(), "node-01-gateway")
+	require.NoError(t, err)
+	require.NotNil(t, info.Overlay)
+	assert.Equal(t, uint64(3), info.Overlay.RefusedBindings)
+	assert.Equal(t, uint64(4), info.Overlay.RefusedReplays)
 }
 
 func TestGatewaySnapshotToProto_AbsentSectionsStayNil(t *testing.T) {

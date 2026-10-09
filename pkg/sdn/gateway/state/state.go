@@ -81,6 +81,7 @@ type OverlayState struct {
 	RemoteMACCount           int                   `json:"remote_mac_count,omitempty"`
 	PrefixCount              int                   `json:"prefix_count,omitempty"`
 	RefusedBindings          uint64                `json:"refused_bindings,omitempty"`
+	RefusedReplays           uint64                `json:"refused_replays,omitempty"`
 	L3VNI                    uint32                `json:"l3_vni,omitempty"`
 	ARPSuppressionEnabled    bool                  `json:"arp_suppression_enabled,omitempty"`
 	AnycastGatewayConfigured bool                  `json:"anycast_gateway_configured,omitempty"`

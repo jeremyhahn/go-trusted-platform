@@ -720,8 +720,11 @@ type SnapshotOverlay struct {
 	UptimeSeconds            int64                      `protobuf:"varint,13,opt,name=uptime_seconds,json=uptimeSeconds,proto3" json:"uptime_seconds,omitempty"`
 	AdmittedVteps            []*GatewayAdmittedVTEP     `protobuf:"bytes,14,rep,name=admitted_vteps,json=admittedVteps,proto3" json:"admitted_vteps,omitempty"`
 	NdCounters               *SnapshotOverlayNDCounters `protobuf:"bytes,15,opt,name=nd_counters,json=ndCounters,proto3" json:"nd_counters,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// refused_replays counts the replays of a refused VTEP's routes that
+	// failed, leaving the VTEP refused for the next sweep.
+	RefusedReplays uint64 `protobuf:"varint,16,opt,name=refused_replays,json=refusedReplays,proto3" json:"refused_replays,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SnapshotOverlay) Reset() {
@@ -857,6 +860,13 @@ func (x *SnapshotOverlay) GetNdCounters() *SnapshotOverlayNDCounters {
 		return x.NdCounters
 	}
 	return nil
+}
+
+func (x *SnapshotOverlay) GetRefusedReplays() uint64 {
+	if x != nil {
+		return x.RefusedReplays
+	}
+	return 0
 }
 
 type SnapshotOverlayNDCounters struct {
@@ -5823,7 +5833,7 @@ const file_gateway_proto_rawDesc = "" +
 	"\aoverlay\x18\x10 \x01(\v2\x1c.platform.v1.SnapshotOverlayR\aoverlay\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb4\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdd\x05\n" +
 	"\x0fSnapshotOverlay\x12\x18\n" +
 	"\arunning\x18\x01 \x01(\bR\arunning\x12\x1d\n" +
 	"\n" +
@@ -5843,7 +5853,8 @@ const file_gateway_proto_rawDesc = "" +
 	"\x0euptime_seconds\x18\r \x01(\x03R\ruptimeSeconds\x12G\n" +
 	"\x0eadmitted_vteps\x18\x0e \x03(\v2 .platform.v1.GatewayAdmittedVTEPR\radmittedVteps\x12G\n" +
 	"\vnd_counters\x18\x0f \x01(\v2&.platform.v1.SnapshotOverlayNDCountersR\n" +
-	"ndCounters\"\xbc\x01\n" +
+	"ndCounters\x12'\n" +
+	"\x0frefused_replays\x18\x10 \x01(\x04R\x0erefusedReplays\"\xbc\x01\n" +
 	"\x19SnapshotOverlayNDCounters\x12\x16\n" +
 	"\x06punted\x18\x01 \x01(\x04R\x06punted\x12\x1a\n" +
 	"\banswered\x18\x02 \x01(\x04R\banswered\x12#\n" +

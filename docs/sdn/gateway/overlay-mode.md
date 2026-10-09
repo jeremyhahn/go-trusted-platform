@@ -307,8 +307,12 @@ and prefix routes, and each MAC route at the VTEP the MAC is active at) back
 through the same route handlers, which run admission again. The replay holds
 the EVPN manager's notification lock, as every route change does, so a
 withdrawal received meanwhile is never undone by a replay of the route it
-withdrew. A replay that fails leaves the VTEP refused for the next one. A
-refused VTEP whose routes have all been withdrawn is forgotten.
+withdrew. A replay that fails leaves the VTEP refused for the next one and
+is counted in `OverlayModeStatus.RefusedReplays`, which the gateway snapshot
+carries on every transport as `refused_replays` (`refused-replays=` in
+`platformctl sdn gateway snapshot`), so a VTEP the sweep keeps failing to
+replay is visible rather than only logged. A refused VTEP whose routes have
+all been withdrawn is forgotten.
 
 ### Revocation on a failed verdict
 
