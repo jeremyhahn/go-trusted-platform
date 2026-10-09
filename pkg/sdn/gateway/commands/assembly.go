@@ -699,6 +699,15 @@ func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anc
 	if err != nil {
 		return err
 	}
+	WireOverlayPlatform(runtime, client)
+	return nil
+}
+
+// WireOverlayPlatform points the overlay admission inputs of runtime at
+// platformd through client: the fabric allocations, the device records, the
+// latest device verdicts and the verdict event stream. The serve command
+// calls it with the platformd connection it dials.
+func WireOverlayPlatform(runtime *gateway.GatewayRuntime, client platform.Client) {
 	runtime.OverlayPlatform = client
 	runtime.OverlayIPAM = &overlayRuntimeIPAM{client: sdkgateway.NewClientFromGRPC(client.Gateway()), now: time.Now}
 	runtime.OverlayDevices = &overlayRuntimeDevices{client: sdkdevice.NewClientFromGRPC(client.Device())}
@@ -708,7 +717,6 @@ func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anc
 		logger = slog.Default()
 	}
 	runtime.OverlayVerdictStream = &overlayRuntimeVerdictStream{client: sdkdaemon.NewClientFromGRPC(client.Daemon()), logger: logger}
-	return nil
 }
 
 func overlayPlatformdConfig(cfg *ServeConfig) proxysvc.PlatformdConfig {

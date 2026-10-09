@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkdaemon "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/daemon"
 )
@@ -411,5 +412,57 @@ func TestOverlayRuntimeVerdictStream_ReportsAStreamThatCannotOpen(t *testing.T) 
 
 	if !errors.Is(err, down) {
 		t.Fatalf("Follow = %v, want the open error", err)
+	}
+}
+
+// overlayPlatformClient is a platformd connection whose service clients are
+// never called: wiring only has to hand them to the overlay inputs.
+type overlayPlatformClient struct {
+	platform.Client
+}
+
+func (overlayPlatformClient) Gateway() platformv1.GatewayServiceClient {
+	return platformv1.NewGatewayServiceClient(nil)
+}
+
+func (overlayPlatformClient) Device() platformv1.DeviceServiceClient {
+	return platformv1.NewDeviceServiceClient(nil)
+}
+
+func (overlayPlatformClient) Attestation() platformv1.AttestationServiceClient {
+	return platformv1.NewAttestationServiceClient(nil)
+}
+
+func (overlayPlatformClient) Daemon() platformv1.PlatformDaemonClient {
+	return platformv1.NewPlatformDaemonClient(nil)
+}
+
+func TestWireOverlayPlatform_WiresEveryAdmissionInput(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	runtime := &gateway.GatewayRuntime{Logger: logger}
+	client := overlayPlatformClient{}
+
+	WireOverlayPlatform(runtime, client)
+
+	if runtime.OverlayPlatform != client {
+		t.Fatal("the runtime must keep the platformd connection it was wired with")
+	}
+	if runtime.OverlayIPAM == nil || runtime.OverlayDevices == nil || runtime.OverlayVerdicts == nil {
+		t.Fatalf("every admission input must be wired: %+v", runtime)
+	}
+	stream, ok := runtime.OverlayVerdictStream.(*overlayRuntimeVerdictStream)
+	if !ok || stream.logger != logger {
+		t.Fatalf("the verdict stream must log through the runtime's logger: %#v", runtime.OverlayVerdictStream)
+	}
+}
+
+func TestWireOverlayPlatform_WithoutALoggerUsesTheDefault(t *testing.T) {
+	runtime := &gateway.GatewayRuntime{}
+
+	WireOverlayPlatform(runtime, overlayPlatformClient{})
+
+	stream, ok := runtime.OverlayVerdictStream.(*overlayRuntimeVerdictStream)
+	if !ok || stream.logger == nil {
+		t.Fatalf("a runtime with no logger must still get a logging verdict stream: %#v", runtime.OverlayVerdictStream)
 	}
 }
