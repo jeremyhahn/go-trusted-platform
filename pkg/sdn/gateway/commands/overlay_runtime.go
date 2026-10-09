@@ -54,7 +54,9 @@ type overlayIPAMIndex struct {
 // missing from the index lists the allocations again, unless a listing that
 // started after the miss already answers it, so a burst of misses costs one
 // listing. The admission sweep refreshes the index, which bounds how long a
-// released allocation stays in it.
+// released allocation stays in it, and route admission refreshes it before
+// it newly admits a VTEP, so an address IPAM gave to another device is judged
+// by that device.
 type overlayRuntimeIPAM struct {
 	client overlayIPAMClient
 	now    func() time.Time

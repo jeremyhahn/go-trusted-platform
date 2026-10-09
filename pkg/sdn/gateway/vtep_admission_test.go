@@ -369,6 +369,91 @@ func TestVTEPAdmitter_OutageIsNotADenial(t *testing.T) {
 	}
 }
 
+// cachedIPAM answers from the allocations of its last refresh, as the
+// gatewayd allocation index does, while platformd already holds current.
+type cachedIPAM struct {
+	cached, current ipam.Allocator
+	refreshErr      error
+	refreshes       int
+}
+
+func (c *cachedIPAM) GetAllocation(ctx context.Context, ip netip.Addr) (*ipam.Allocation, error) {
+	return c.cached.GetAllocation(ctx, ip)
+}
+
+func (c *cachedIPAM) GetAllocationsByDevice(ctx context.Context, deviceID string) ([]*ipam.Allocation, error) {
+	return c.cached.GetAllocationsByDevice(ctx, deviceID)
+}
+
+func (c *cachedIPAM) Refresh(context.Context) error {
+	c.refreshes++
+	if c.refreshErr != nil {
+		return c.refreshErr
+	}
+	c.cached = c.current
+	return nil
+}
+
+// reassignedFixture is the admission fixture whose cached allocations still
+// give admissionVTEP to device 7 after IPAM handed it to device 8, which has
+// no verdict.
+func reassignedFixture(t *testing.T) (*admissionFixture, *cachedIPAM) {
+	t.Helper()
+	f := newAdmissionFixture(t)
+	cache := &cachedIPAM{
+		cached:  newAdmissionAllocator(t, "7", admissionVTEP),
+		current: newAdmissionAllocator(t, "8", admissionVTEP),
+	}
+	f.admitter.ipam = cache
+	f.devices.devices[8] = &deviceentities.Device{ID: 8, Hostname: "node-8", Serial: "SN8"}
+	return f, cache
+}
+
+// An address IPAM gave to another device stayed in the cached allocations
+// until the next sweep, so the new holder's routes were judged, and admitted,
+// on the previous holder's verdict.
+func TestVTEPAdmitter_JudgesAReassignedAddressByItsNewDevice(t *testing.T) {
+	f, cache := reassignedFixture(t)
+
+	err := f.admitter.AdmitVTEP(context.Background(), 10100, admissionVTEP)
+
+	var verdictErr ErrOverlayVTEPVerdict
+	require.True(t, errors.As(err, &verdictErr), "got %v", err)
+	assert.Equal(t, uint64(8), verdictErr.DeviceID)
+	assert.Equal(t, 1, cache.refreshes)
+	assert.Equal(t, []AdmittedVTEP{{VTEP: admissionVTEP}}, f.admitter.Admitted(installed(admissionVTEP)))
+
+	t.Run("a denial from the cache costs no listing", func(t *testing.T) {
+		require.Error(t, f.admitter.AdmitVTEP(context.Background(), 10100, admissionVTEP))
+		assert.Equal(t, 1, cache.refreshes)
+	})
+}
+
+func TestVTEPAdmitter_ConfirmsANewAdmissionOnce(t *testing.T) {
+	f, cache := reassignedFixture(t)
+	cache.current = cache.cached
+
+	for range 3 {
+		require.NoError(t, f.admitter.AdmitVTEP(context.Background(), 10100, admissionVTEP))
+	}
+
+	assert.Equal(t, 1, cache.refreshes, "routes of an admitted VTEP are answered from the cache")
+	assert.Equal(t, uint64(7), f.admitter.Admitted(installed(admissionVTEP))[0].DeviceID)
+}
+
+func TestVTEPAdmitter_RefusesANewAdmissionItCannotConfirm(t *testing.T) {
+	f, cache := reassignedFixture(t)
+	cache.refreshErr = errPlatformDown
+
+	err := f.admitter.AdmitVTEP(context.Background(), 10100, admissionVTEP)
+
+	var unavailable ErrOverlayAdmissionUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	assert.Equal(t, "ipam", unavailable.Source)
+	assert.ErrorIs(t, err, errPlatformDown)
+	assert.Equal(t, []AdmittedVTEP{{VTEP: admissionVTEP}}, f.admitter.Admitted(installed(admissionVTEP)))
+}
+
 func TestVTEPAdmitter_Admitted(t *testing.T) {
 	f := newAdmissionFixture(t, admissionVTEP, admissionVTEP2)
 	require.NoError(t, f.admitter.AdmitVTEP(context.Background(), 10100, admissionVTEP))
@@ -403,11 +488,12 @@ func TestVTEPAdmitter_Sweep(t *testing.T) {
 	t.Run("keeps a VTEP the policy still admits", func(t *testing.T) {
 		f := newAdmissionFixture(t)
 		require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
+		refreshes := f.ipam.refreshes
 
 		require.NoError(t, f.admitter.Sweep(ctx, installed(admissionVTEP)))
 
 		assert.Empty(t, f.overlay.revoked)
-		assert.Equal(t, 1, f.ipam.refreshes, "the sweep refreshes a caching IPAM reader")
+		assert.Equal(t, refreshes+1, f.ipam.refreshes, "the sweep refreshes a caching IPAM reader")
 	})
 
 	denials := map[string]func(*admissionFixture){

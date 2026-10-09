@@ -83,8 +83,8 @@ type OverlayIPAMReader interface {
 }
 
 // OverlayIPAMRefresher is implemented by an OverlayIPAMReader that caches the
-// fabric allocations. The admission sweep refreshes it before each pass, so
-// route admission never has to list the allocations itself.
+// fabric allocations. The admission sweep refreshes it before each pass, and
+// route admission refreshes it only to confirm a VTEP it would newly admit.
 type OverlayIPAMRefresher interface {
 	Refresh(ctx context.Context) error
 }
@@ -204,8 +204,17 @@ func NewVTEPAdmitter(cfg VTEPAdmissionConfig) (*VTEPAdmitter, error) {
 // policy. An admission is remembered and a denial forgets any earlier one. An
 // outage refuses the route but leaves the earlier admission for the sweep to
 // judge.
+//
+// A caching IPAM reader can still hold an address IPAM has since given to
+// another device, so a decision that would newly admit the VTEP, or admit it
+// for another device, is made again against a fresh listing. A denial needs
+// no listing: refusing on a stale allocation fails closed, and the sweep
+// judges every refused VTEP again.
 func (a *VTEPAdmitter) AdmitVTEP(ctx context.Context, vni uint32, vtep netip.Addr) error {
 	admitted, err := a.evaluate(ctx, vni, vtep)
+	if err == nil && !a.admittedFor(vtep, admitted.DeviceID) {
+		admitted, err = a.confirm(ctx, vni, vtep, admitted)
+	}
 	switch {
 	case err == nil:
 		a.remember(*admitted)
@@ -416,6 +425,28 @@ func (a *VTEPAdmitter) revoke(ctx context.Context, vtep netip.Addr) error {
 		return ErrOverlayVTEPRevoke{VTEP: vtep, Cause: err}
 	}
 	return nil
+}
+
+// confirm judges vtep again after refreshing a caching IPAM reader, so the
+// admission rests on the address's current holder. A reader that does not
+// cache reads platformd every time, and admitted already stands.
+func (a *VTEPAdmitter) confirm(ctx context.Context, vni uint32, vtep netip.Addr, admitted *AdmittedVTEP) (*AdmittedVTEP, error) {
+	refresher, ok := a.ipam.(OverlayIPAMRefresher)
+	if !ok {
+		return admitted, nil
+	}
+	if err := refresher.Refresh(ctx); err != nil {
+		return nil, ErrOverlayAdmissionUnavailable{VTEP: vtep, Source: "ipam", Cause: err}
+	}
+	return a.evaluate(ctx, vni, vtep)
+}
+
+// admittedFor reports whether vtep is remembered as admitted for deviceID.
+func (a *VTEPAdmitter) admittedFor(vtep netip.Addr, deviceID uint64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	record, ok := a.admitted[vtep]
+	return ok && record.vtep.DeviceID == deviceID
 }
 
 func (a *VTEPAdmitter) remember(admitted AdmittedVTEP) {

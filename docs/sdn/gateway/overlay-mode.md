@@ -263,7 +263,17 @@ index keyed by address, and a route for an indexed VTEP makes no IPAM call.
 An address missing from the index makes gatewayd list the fabric pools again.
 Concurrent misses share one listing. Each sweep refreshes the index, so a
 released allocation leaves it within one interval. A failed listing keeps the
-previous index. The verdict's attestation time is the report's `attested_at`
+previous index.
+
+The index can still hold an address that IPAM has since given to another
+device. So a route admission that would newly admit a VTEP, or admit it for a
+different device than before, refreshes the index first. It then runs
+admission again, so the address is judged by the device that holds it now. If
+that refresh fails, the route is refused as an outage. Two cases need no
+refresh: a denial (refusing on a stale allocation fails closed, and the sweep
+judges every refused VTEP again) and a route from a VTEP already admitted for
+the same device. A VTEP that is already installed when its address moves keeps
+its decap state until the next sweep reads the new allocation. The verdict's attestation time is the report's `attested_at`
 and nothing else; when the report was collected or served is not used.
 
 ### Re-admission sweep
