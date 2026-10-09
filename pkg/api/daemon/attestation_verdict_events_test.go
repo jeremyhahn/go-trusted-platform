@@ -16,12 +16,12 @@ package daemon
 import (
 	"context"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/grpc/credentials/local"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -148,8 +148,11 @@ func TestDeviceVerdictReachesAnSDKEventStream(t *testing.T) {
 	attestation := &verdictRegistryService{}
 	(&Daemon{service: service, config: &Config{AttestationService: attestation}, logger: discardLogger()}).publishDeviceVerdicts()
 
-	listener := bufconn.Listen(1 << 20)
-	server := grpc.NewServer()
+	listener, err := net.Listen("unix", filepath.Join(t.TempDir(), "d.sock"))
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	server := grpc.NewServer(grpc.Creds(local.NewCredentials()))
 	platformv1.RegisterPlatformDaemonServer(server, service)
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()
@@ -159,9 +162,8 @@ func TestDeviceVerdictReachesAnSDKEventStream(t *testing.T) {
 			t.Errorf("Serve: %v", err)
 		}
 	})
-	conn, err := grpc.NewClient("passthrough:///bufnet",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) }),
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient("unix://"+listener.Addr().String(),
+		grpc.WithTransportCredentials(local.NewCredentials()))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
