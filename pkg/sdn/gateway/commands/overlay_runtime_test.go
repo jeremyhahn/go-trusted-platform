@@ -362,27 +362,32 @@ func (s *fakeVerdictStream) Recv() (*platformv1.DeviceVerdictEvent, error) {
 }
 
 func TestOverlayRuntimeVerdictStream_DeliversEveryVerdict(t *testing.T) {
+	recordedAt := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	client := &fakeOverlayVerdictClient{
 		events: []*platformv1.DeviceVerdictEvent{
-			{EventId: "ev-42", DeviceId: 42, TenantId: "tenant-a", HostId: "node-42", Serial: "SN42", Cryptographic: true, Reason: "signature invalid"},
+			{EventId: "ev-42", RecordedAt: timestamppb.New(recordedAt), DeviceId: 42, TenantId: "tenant-a", HostId: "node-42", Serial: "SN42", Cryptographic: true, Reason: "signature invalid"},
 			{EventId: "ev-43", DeviceId: 43, Passed: true},
 		},
 		end: io.EOF,
 	}
 	s := &overlayRuntimeVerdictStream{client: client}
 
-	var got []deviceverdict.DeviceVerdict
-	err := s.Follow(context.Background(), func(_ context.Context, v deviceverdict.DeviceVerdict) {
+	var got []deviceverdict.RecordedDeviceVerdict
+	err := s.Follow(context.Background(), func(_ context.Context, v deviceverdict.RecordedDeviceVerdict) {
 		got = append(got, v)
 	})
 
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Follow = %v, want the stream's end", err)
 	}
-	failed := deviceverdict.DeviceVerdict{DeviceID: 42, TenantID: "tenant-a", HostID: "node-42", Serial: "SN42", Cryptographic: true, Reason: "signature invalid"}
-	passed := deviceverdict.DeviceVerdict{DeviceID: 43, Passed: true}
+	failed := deviceverdict.RecordedDeviceVerdict{
+		Verdict:    deviceverdict.DeviceVerdict{DeviceID: 42, TenantID: "tenant-a", HostID: "node-42", Serial: "SN42", Cryptographic: true, Reason: "signature invalid"},
+		EventID:    "ev-42",
+		RecordedAt: recordedAt,
+	}
+	passed := deviceverdict.RecordedDeviceVerdict{Verdict: deviceverdict.DeviceVerdict{DeviceID: 43, Passed: true}, EventID: "ev-43"}
 	if len(got) != 2 || got[0] != failed || got[1] != passed {
-		t.Fatalf("delivered %+v, want the failed and the passing verdict in order", got)
+		t.Fatalf("delivered %+v, want the failed and the passing verdict in order with their recording times", got)
 	}
 }
 
@@ -390,7 +395,7 @@ func TestOverlayRuntimeVerdictStream_ReportsAStreamThatCannotOpen(t *testing.T) 
 	down := status.Error(codes.Unavailable, "down")
 	s := &overlayRuntimeVerdictStream{client: &fakeOverlayVerdictClient{openErr: down}}
 
-	err := s.Follow(context.Background(), func(context.Context, deviceverdict.DeviceVerdict) {
+	err := s.Follow(context.Background(), func(context.Context, deviceverdict.RecordedDeviceVerdict) {
 		t.Fatal("nothing may be delivered")
 	})
 

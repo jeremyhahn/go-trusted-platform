@@ -733,11 +733,16 @@ func TestOverlayHandlerProxy(t *testing.T) {
 	})
 }
 
+// streamed is v as the verdict stream delivers it, recorded at at.
+func streamed(v deviceverdict.DeviceVerdict, at time.Time) deviceverdict.RecordedDeviceVerdict {
+	return deviceverdict.RecordedDeviceVerdict{Verdict: v, EventID: "streamed-verdict", RecordedAt: at}
+}
+
 func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 	ctx := context.Background()
-	failures := map[string]deviceverdict.DeviceVerdict{
-		"cryptographic failure": {DeviceID: 7, Cryptographic: true, Reason: "signature invalid"},
-		"absence of evidence":   {DeviceID: 7, Reason: "no attestation certificate enrolled"},
+	failures := map[string]deviceverdict.RecordedDeviceVerdict{
+		"cryptographic failure": streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Cryptographic: true, Reason: "signature invalid"}, admissionNow),
+		"absence of evidence":   streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Reason: "no attestation certificate enrolled"}, admissionNow),
 	}
 	for name, failed := range failures {
 		t.Run("withdraws the device on a "+name, func(t *testing.T) {
@@ -751,7 +756,7 @@ func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 		})
 	}
 
-	passed := deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true}
+	passed := streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true}, admissionNow.Add(time.Second))
 
 	t.Run("a passed verdict withdraws nothing", func(t *testing.T) {
 		f := newAdmissionFixture(t)
@@ -769,7 +774,7 @@ func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 		f.admitter.OnDeviceVerdict(ctx, failures["cryptographic failure"])
 		require.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.overlay.refused)
 
-		f.verdicts.records[7] = signedVerdict(f.now)
+		f.verdicts.records[7] = signedVerdict(passed.RecordedAt)
 		f.admitter.OnDeviceVerdict(ctx, passed)
 
 		assert.ElementsMatch(t, []netip.Addr{admissionVTEP, admissionVTEP2}, f.overlay.replayed)
@@ -818,8 +823,76 @@ func TestVTEPAdmitter_OnDeviceVerdict(t *testing.T) {
 	})
 }
 
+// platformd streams a failed verdict before its report cache holds the failing
+// report, so for a moment the report still shows the device's previous pass.
+// Admission read that pass back and let the revoked device in again.
+func TestVTEPAdmitter_HoldsAStreamedFailureUntilANewerPass(t *testing.T) {
+	ctx := context.Background()
+	failedAt := admissionNow
+	failed := streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Reason: "PCR mismatch", Cryptographic: true}, failedAt)
+
+	f := newAdmissionFixture(t)
+	require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
+	f.admitter.OnDeviceVerdict(ctx, failed)
+	require.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.revoked)
+
+	err := f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP)
+	requireVerdictDenied(t, err, "failed verdict")
+
+	require.NoError(t, f.admitter.Sweep(ctx, installed()))
+	assert.Empty(t, f.overlay.replayed, "the sweep must not replay a device the stream failed")
+	assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.refused)
+
+	f.verdicts.records[7] = signedVerdict(failedAt)
+	requireVerdictDenied(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP), "failed verdict")
+
+	f.verdicts.records[7] = signedVerdict(failedAt.Add(time.Second))
+	f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true}, failedAt.Add(2*time.Second)))
+	assert.Equal(t, []netip.Addr{admissionVTEP}, f.overlay.replayed)
+	require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
+}
+
+func TestVTEPAdmitter_HeldFailure(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("an event without a recording time is held from the gateway's clock", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, time.Time{}))
+
+		requireVerdictDenied(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP), "failed verdict")
+	})
+
+	t.Run("a later failure moves the hold forward", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow.Add(-time.Hour)))
+		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow))
+		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow.Add(-2*time.Hour)))
+
+		requireVerdictDenied(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP), "failed verdict")
+	})
+
+	t.Run("holds only the failed device", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 8}, admissionNow))
+
+		require.NoError(t, f.admitter.AdmitVTEP(ctx, 10100, admissionVTEP))
+	})
+
+	t.Run("the sweep drops a hold no report could outlast", func(t *testing.T) {
+		f := newAdmissionFixture(t)
+		f.admitter.OnDeviceVerdict(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7}, admissionNow))
+		require.NoError(t, f.admitter.Sweep(ctx, installed()))
+		require.Len(t, f.admitter.heldFailures, 1)
+
+		f.now = f.now.Add(f.admitter.maxVerdictAge + f.admitter.clockSkew + time.Second)
+		require.NoError(t, f.admitter.Sweep(ctx, installed()))
+
+		assert.Empty(t, f.admitter.heldFailures)
+	})
+}
+
 type (
-	verdictDeliver = func(context.Context, deviceverdict.DeviceVerdict)
+	verdictDeliver = func(context.Context, deviceverdict.RecordedDeviceVerdict)
 	followScript   = func(context.Context, verdictDeliver) error
 )
 
@@ -842,7 +915,7 @@ func (s *scriptedVerdictStream) Follow(ctx context.Context, deliver verdictDeliv
 
 func TestRunVerdictFollower(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	failed := deviceverdict.DeviceVerdict{DeviceID: 7, Reason: "no attestation certificate enrolled"}
+	failed := streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Reason: "no attestation certificate enrolled"}, admissionNow)
 
 	// follow runs the follower until the scripted follows are played and
 	// the next one is waiting, then stops it.
@@ -869,7 +942,7 @@ func TestRunVerdictFollower(t *testing.T) {
 		f := newAdmissionFixture(t)
 		stream := &scriptedVerdictStream{script: []followScript{
 			func(ctx context.Context, deliver verdictDeliver) error {
-				deliver(ctx, deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true})
+				deliver(ctx, streamed(deviceverdict.DeviceVerdict{DeviceID: 7, Passed: true}, admissionNow))
 				deliver(ctx, failed)
 				return errPlatformDown
 			},

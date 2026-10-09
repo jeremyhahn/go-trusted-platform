@@ -104,7 +104,7 @@ func (s *backendSwitch) sent() int {
 // idleVerdictStream delivers no verdict and returns when ctx ends.
 type idleVerdictStream struct{}
 
-func (idleVerdictStream) Follow(ctx context.Context, _ func(context.Context, deviceverdict.DeviceVerdict)) error {
+func (idleVerdictStream) Follow(ctx context.Context, _ func(context.Context, deviceverdict.RecordedDeviceVerdict)) error {
 	<-ctx.Done()
 	return ctx.Err()
 }

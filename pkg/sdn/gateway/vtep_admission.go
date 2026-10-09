@@ -52,11 +52,11 @@ type OverlayVerdictReader interface {
 }
 
 // OverlayVerdictStream delivers the platform's device verdicts as they are
-// recorded. Follow hands each verdict to deliver until ctx ends or the stream
-// breaks, and returns why it stopped. Verdicts recorded while no one follows
-// are not replayed.
+// recorded. Follow hands each verdict, with the platform time it was recorded
+// at, to deliver until ctx ends or the stream breaks, and returns why it
+// stopped. Verdicts recorded while no one follows are not replayed.
 type OverlayVerdictStream interface {
-	Follow(ctx context.Context, deliver func(context.Context, deviceverdict.DeviceVerdict)) error
+	Follow(ctx context.Context, deliver func(context.Context, deviceverdict.RecordedDeviceVerdict)) error
 }
 
 // OverlayVTEPRevoker withdraws all overlay reachability from a VTEP.
@@ -147,6 +147,11 @@ type VTEPAdmitter struct {
 	mu         sync.Mutex
 	admitted   map[netip.Addr]admissionRecord
 	generation uint64
+	// heldFailures holds, per device, when the stream's latest failed verdict
+	// was recorded. platformd streams a verdict before its report shows it,
+	// so admission denies the device until it reads a report attested after
+	// that time.
+	heldFailures map[uint64]time.Time
 }
 
 // NewVTEPAdmitter validates cfg, applies its defaults and returns the
@@ -196,6 +201,7 @@ func NewVTEPAdmitter(cfg VTEPAdmissionConfig) (*VTEPAdmitter, error) {
 		now:           cfg.Now,
 		logger:        cfg.Logger,
 		admitted:      make(map[netip.Addr]admissionRecord),
+		heldFailures:  make(map[uint64]time.Time),
 	}, nil
 }
 
@@ -297,6 +303,7 @@ func (a *VTEPAdmitter) Sweep(ctx context.Context, installed []modes.InstalledVTE
 		}
 	}
 	a.mu.Unlock()
+	a.dropOutlastedFailures()
 	return errors.Join(errs...)
 }
 
@@ -323,7 +330,13 @@ func (a *VTEPAdmitter) sweepVTEP(ctx context.Context, vtep netip.Addr) (bool, er
 // routes of the device's refused VTEPs, which BGP will not send again, so a
 // device attested after its routes arrived is admitted without waiting for
 // the sweep.
-func (a *VTEPAdmitter) OnDeviceVerdict(ctx context.Context, v deviceverdict.DeviceVerdict) {
+//
+// A failed verdict is also held against the device: admission denies it
+// until the platform's report of the device was attested after the failure
+// was recorded. Without the hold, a report that does not show the failure
+// yet would let the device straight back in.
+func (a *VTEPAdmitter) OnDeviceVerdict(ctx context.Context, recorded deviceverdict.RecordedDeviceVerdict) {
+	v := recorded.Verdict
 	if v.Passed {
 		if err := a.readmitDevice(ctx, v.DeviceID); err != nil {
 			a.logger.Warn("overlay: admitting a device that passed attestation did not complete; the sweep retries it",
@@ -332,6 +345,7 @@ func (a *VTEPAdmitter) OnDeviceVerdict(ctx context.Context, v deviceverdict.Devi
 		}
 		return
 	}
+	a.holdFailure(v.DeviceID, recorded.RecordedAt)
 	a.logger.Warn("overlay: withdrawing a device whose attestation failed",
 		slog.Uint64("device_id", v.DeviceID),
 		slog.Bool("cryptographic", v.Cryptographic),
@@ -441,6 +455,50 @@ func (a *VTEPAdmitter) confirm(ctx context.Context, vni uint32, vtep netip.Addr,
 	return a.evaluate(ctx, vni, vtep)
 }
 
+// holdFailure holds a failed verdict recorded at failedAt against the device,
+// keeping the latest failure. An event with no recording time is held from
+// the gateway's own clock.
+func (a *VTEPAdmitter) holdFailure(deviceID uint64, failedAt time.Time) {
+	if failedAt.IsZero() {
+		failedAt = a.now()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if held, ok := a.heldFailures[deviceID]; !ok || failedAt.After(held) {
+		a.heldFailures[deviceID] = failedAt
+	}
+}
+
+// failureHeld reports whether a failed verdict held against the device is
+// newer than a report attested at attestedAt. A newer report has caught up
+// with the failure and releases the hold, whatever it says.
+func (a *VTEPAdmitter) failureHeld(deviceID uint64, attestedAt time.Time) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	held, ok := a.heldFailures[deviceID]
+	if !ok {
+		return false
+	}
+	if attestedAt.After(held) {
+		delete(a.heldFailures, deviceID)
+		return false
+	}
+	return true
+}
+
+// dropOutlastedFailures forgets the failures every report they could still
+// shadow is too old to admit by now.
+func (a *VTEPAdmitter) dropOutlastedFailures() {
+	cutoff := a.now().Add(-a.maxVerdictAge - a.clockSkew)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for deviceID, held := range a.heldFailures {
+		if held.Before(cutoff) {
+			delete(a.heldFailures, deviceID)
+		}
+	}
+}
+
 // admittedFor reports whether vtep is remembered as admitted for deviceID.
 func (a *VTEPAdmitter) admittedFor(vtep netip.Addr, deviceID uint64) bool {
 	a.mu.Lock()
@@ -510,6 +568,10 @@ func (a *VTEPAdmitter) evaluate(ctx context.Context, vni uint32, vtep netip.Addr
 	}
 	if err != nil {
 		return nil, ErrOverlayAdmissionUnavailable{VTEP: vtep, DeviceID: deviceID, Source: "verdict", Cause: err}
+	}
+	if a.failureHeld(deviceID, recorded.RecordedAt) {
+		return nil, ErrOverlayVTEPVerdict{VTEP: vtep, DeviceID: deviceID, VNI: vni,
+			Reason: "a failed verdict was streamed after the latest report was attested"}
 	}
 	if reason := a.verdictRefusal(recorded, device); reason != "" {
 		return nil, ErrOverlayVTEPVerdict{VTEP: vtep, DeviceID: deviceID, VNI: vni, Reason: reason}

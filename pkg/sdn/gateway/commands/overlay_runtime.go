@@ -247,8 +247,9 @@ type overlayRuntimeVerdictStream struct {
 }
 
 // Follow streams the device verdicts platformd records and hands each to
-// deliver, until ctx ends or the stream breaks.
-func (s *overlayRuntimeVerdictStream) Follow(ctx context.Context, deliver func(context.Context, deviceverdict.DeviceVerdict)) error {
+// deliver, with the time platformd recorded it, until ctx ends or the stream
+// breaks.
+func (s *overlayRuntimeVerdictStream) Follow(ctx context.Context, deliver func(context.Context, deviceverdict.RecordedDeviceVerdict)) error {
 	// Cancelling the stream's context is what releases it.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -265,15 +266,19 @@ func (s *overlayRuntimeVerdictStream) Follow(ctx context.Context, deliver func(c
 	}
 }
 
-func overlayVerdictFromProto(event *platformv1.DeviceVerdictEvent) deviceverdict.DeviceVerdict {
-	return deviceverdict.DeviceVerdict{
-		DeviceID:      event.GetDeviceId(),
-		TenantID:      event.GetTenantId(),
-		HostID:        event.GetHostId(),
-		Serial:        event.GetSerial(),
-		Passed:        event.GetPassed(),
-		Cryptographic: event.GetCryptographic(),
-		Reason:        event.GetReason(),
+func overlayVerdictFromProto(event *platformv1.DeviceVerdictEvent) deviceverdict.RecordedDeviceVerdict {
+	return deviceverdict.RecordedDeviceVerdict{
+		Verdict: deviceverdict.DeviceVerdict{
+			DeviceID:      event.GetDeviceId(),
+			TenantID:      event.GetTenantId(),
+			HostID:        event.GetHostId(),
+			Serial:        event.GetSerial(),
+			Passed:        event.GetPassed(),
+			Cryptographic: event.GetCryptographic(),
+			Reason:        event.GetReason(),
+		},
+		EventID:    event.GetEventId(),
+		RecordedAt: protoTime(event.GetRecordedAt()),
 	}
 }
 

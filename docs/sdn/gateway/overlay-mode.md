@@ -329,6 +329,18 @@ verdict back from platformd rather than trusting the event, so a passing event
 whose record is not yet readable replays nothing and the sweep brings the
 device up instead.
 
+platformd streams a verdict before its report cache holds the matching
+report, so for a moment the report it serves can still show the device's
+previous pass. gatewayd therefore holds each failed event against the device,
+keyed by the event's `recorded_at` (or by the gateway's own clock if the event
+has no recording time). Route admission, replays and the sweep all deny the
+device while the hold stands. A later failure moves the hold forward. A report
+attested after the failure was recorded releases the hold, whatever its
+result. The verifier stamps `attested_at` before it records the verdict, so a
+report from that same failing verification never releases it. The sweep drops
+a hold once it is older than `verdict-max-age` plus `verdict-clock-skew`.
+By then, any report it could still shadow is too old to admit anyway.
+
 The stream does not replay what was recorded while gatewayd was disconnected,
 and platformd cuts gatewayd off if it falls more than 64 verdicts behind.
 gatewayd follows a broken stream again after 5s, and the sweep remains the
