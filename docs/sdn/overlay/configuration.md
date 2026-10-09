@@ -66,7 +66,7 @@ sdn:
 | enabled | bool | false | With it on, the fabric interface carries only the VTEP's own IKE and ESP, SA-protected traffic and the link ICMPv6. Nothing is routed through the node into or out of the fabric unless an SA carries it, ESP of other hosts included |
 | fabric-interface | string | — | Required; a Linux interface name (1–15 characters). It must be dedicated to the underlay: routed north-south traffic out of this NIC is blocked by design (see the fail-closed floor in [architecture.md](architecture.md#fail-closed-floor)), so the node's uplink and any routed LAN need interfaces of their own. The interface may be deleted and created again: the floor follows it by name |
 | local-address | string | — | Required; this VTEP's unicast address, the IKE endpoint and certificate identity |
-| static-peers | []string | none | Explicit per-peer connections (route reflectors, gateways); single unicast addresses of the local address's family, no duplicates, never the local address. There is no wildcard peer |
+| static-peers | []string | none | Explicit per-peer connections (route reflectors, gateways and every remote VTEP the overlay may learn); single unicast addresses of the local address's family, no duplicates, never the local address. There is no wildcard peer. With overlay and IPsec both enabled, platformd refuses startup if a known remote VTEP is missing from this list; a VTEP learned later is reported as `unpeered_vteps` until the configuration is fixed |
 | vici-socket | string | `/run/charon.vici` | Absolute path. platformd refuses the socket unless it is mode 0600 and owned by platformd's user, and served by a process that listened as charon's uid |
 | certificate-file | string | none | Absolute path; PEM tunnel certificate followed by its CA chain, read on every attach by `ipsec.FileIdentity`. Required by platformd |
 | crl-files | []string | none | Absolute paths; one CRL per issuer of the tunnel chain, PEM (`X509 CRL`) or DER. platformd reads them at start and again every minute (`ipsec.CRLRefresh`) and pushes each to charon; a CRL no newer than the one charon holds is ignored, so replacing a file on disk is how a revocation reaches the node. Required by platformd |
@@ -80,6 +80,7 @@ sdn:
 | ike-rate | uint32 | 20 | IKE packets per second per source address on UDP 500/4500 |
 | ike-burst | uint32 | 2 × ike-rate | At least ike-rate |
 | underlay-slaac | bool | false | Also pass ICMPv6 router solicitation and advertisement on an IPv6 fabric, for an underlay addressed by SLAAC. Neighbour discovery and MLD always pass; redirects never do |
+| fabric-link-wait | duration | 60s | Startup wait for the fabric interface before installing the XFRM floor. The wait follows netlink link events and fails closed with `FloorError` when it expires |
 
 A failure is an `*ipsec.ConfigError` naming the field
 (`overlay.ipsec.static-peers[1]: ipsec: duplicate peer`) and wrapping one

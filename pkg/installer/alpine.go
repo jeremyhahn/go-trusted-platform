@@ -937,13 +937,26 @@ func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) 
 		ai.logger.Warn("[ALPINE] Failed to configure kernel modules", "error", err)
 	}
 
-	for _, svc := range installedServices(rootPath) {
+	for _, svc := range installedServices(rootPath, ai.config != nil && ai.config.OverlayIPsecEnabled) {
 		cmd := exec.CommandContext(ctx, "chroot", rootPath, "rc-update", "add", svc.name, svc.runlevel)
 		if output, err := cmd.CombinedOutput(); err != nil {
+			enableErr := &ErrOpenRCServiceEnable{
+				Service:  svc.name,
+				Runlevel: svc.runlevel,
+				Output:   string(output),
+				Err:      err,
+			}
+			if svc.name == "charon" || svc.name == "xkms-p11-kit" {
+				ai.logger.Error(enableErr, "[ALPINE] Failed to enable overlay IPsec service",
+					"service", svc.name,
+					"runlevel", svc.runlevel,
+					"output", string(output))
+				return enableErr
+			}
 			ai.logger.Warn("[ALPINE] Failed to enable service",
 				"service", svc.name,
 				"runlevel", svc.runlevel,
-				"error", err,
+				"error", enableErr,
 				"output", string(output))
 			// Don't fail installation if service enablement fails
 			continue
@@ -972,9 +985,9 @@ type openRCService struct {
 // default runlevel's services (networking, platformd) need it.
 //
 // xkms-p11-kit and charon, from the -openrc packages of the overlay's IPsec
-// transport (pkg/iso PlatformPackages), go into the default runlevel so the
-// VICI socket exists after every boot. charon needs xkms-p11-kit, its key
-// store, and platformd starts after charon.
+// transport (pkg/iso PlatformPackages), go into the default runlevel only
+// when overlay IPsec is enabled so the VICI socket exists after every boot.
+// charon needs xkms-p11-kit, its key store, and platformd starts after charon.
 var openRCServices = []openRCService{
 	{name: "ovs-modules", runlevel: "boot"},
 	{name: "ovsdb-server", runlevel: "boot"},
@@ -989,9 +1002,12 @@ var openRCServices = []openRCService{
 
 // installedServices returns the openRCServices whose init scripts are
 // installed under rootPath.
-func installedServices(rootPath string) []openRCService {
+func installedServices(rootPath string, overlayIPsecEnabled bool) []openRCService {
 	var installed []openRCService
 	for _, svc := range openRCServices {
+		if (svc.name == "charon" || svc.name == "xkms-p11-kit") && !overlayIPsecEnabled {
+			continue
+		}
 		if _, err := os.Stat(filepath.Join(rootPath, "etc", "init.d", svc.name)); err != nil {
 			continue
 		}

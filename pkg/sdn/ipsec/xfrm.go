@@ -20,6 +20,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
@@ -58,6 +59,7 @@ type BlockPolicy struct {
 	local     netip.Addr
 	iface     string
 	slaac     bool
+	linkWait  time.Duration
 	handle    xfrmHandle
 	subscribe linkSubscriber
 
@@ -89,7 +91,7 @@ func NewBlockPolicy(cfg *Config, ns netns.NsHandle) (*BlockPolicy, error) {
 	subscribe := func(ch chan<- netlink.LinkUpdate, done <-chan struct{}) error {
 		return netlink.LinkSubscribeWithOptions(ch, done, netlink.LinkSubscribeOptions{Namespace: &ns})
 	}
-	return &BlockPolicy{local: local, iface: cfg.FabricInterface, slaac: cfg.UnderlaySLAAC, handle: h, subscribe: subscribe}, nil
+	return &BlockPolicy{local: local, iface: cfg.FabricInterface, slaac: cfg.UnderlaySLAAC, linkWait: cfg.EffectiveFabricLinkWait(), handle: h, subscribe: subscribe}, nil
 }
 
 // Install writes the policies. Each one replaces any policy with the same
@@ -102,7 +104,7 @@ func (b *BlockPolicy) Install(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return &OpError{Op: "xfrm install", Err: err}
 	}
-	link, err := b.handle.LinkByName(b.iface)
+	link, err := b.waitForLink(ctx)
 	if err != nil {
 		return &OpError{Op: "xfrm install", Err: err}
 	}
@@ -116,6 +118,55 @@ func (b *BlockPolicy) Install(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (b *BlockPolicy) waitForLink(ctx context.Context) (netlink.Link, error) {
+	link, err := b.handle.LinkByName(b.iface)
+	if err == nil {
+		return link, nil
+	}
+	if !linkMissing(err) || b.linkWait <= 0 {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	updates := make(chan netlink.LinkUpdate)
+	if err := b.subscribe(updates, ctx.Done()); err != nil {
+		return nil, err
+	}
+	defer func() {
+		cancel()
+		for range updates {
+		}
+	}()
+	timer := time.NewTimer(b.linkWait)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			return nil, err
+		case u, ok := <-updates:
+			if !ok {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				return nil, ErrLinkWatchEnded
+			}
+			if u.Link == nil || u.Attrs().Name != b.iface {
+				continue
+			}
+			link, retryErr := b.handle.LinkByName(b.iface)
+			if retryErr == nil {
+				return link, nil
+			}
+			if !linkMissing(retryErr) {
+				return nil, retryErr
+			}
+			err = retryErr
+		}
+	}
 }
 
 // Remove deletes the policies, blocks first. A policy that is already

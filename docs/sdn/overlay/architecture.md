@@ -361,6 +361,10 @@ connection is then reloaded.
 The peer stays evicted, whatever routes name it, until `Readmit`. Fleet-wide
 eviction is orchestrated elsewhere.
 
+Evictions are held in platformd memory. They do not persist across a
+platformd restart, so a node that must keep a peer isolated after restart
+needs the orchestrator to reapply the eviction.
+
 `HandleEvent` checks every `ike-updown` event for a `vtep-` connection
 coming up: the peer must have authenticated as exactly the address the SA
 runs to. charon already pins `remote.id`; the check holds that pin to
@@ -513,8 +517,9 @@ has been renewed at the same mark.
 | `ErrFamilyMismatch` | `ipsec` | `Filter.Drop`/`Undrop` named a peer of the other address family (inside a `PeerError`) |
 | `IdentityMismatchError` | `ipsec` | an SA came up with a peer identity other than its address; the SA was terminated, or the termination is pending and joined to this error |
 | `ErrNotEvicted` | `ipsec` | `Readmit` named a peer that is not evicted |
-| `FloorError` | `ipsec` | `Service.Install` could not put the fail-closed floor in; wraps the `OpError` (`nftables apply` or `xfrm install`). platformd refuses to start |
+| `FloorError` | `ipsec` | `Service.Install` could not put the fail-closed floor in; wraps the `OpError` (`nftables apply` or `xfrm install`). A missing fabric link is waited for up to `fabric-link-wait` before this error is returned. platformd refuses to start |
 | `ErrNoVTEPAdmission` | `ipsec` | a route named a VTEP on a node with no EVPN route source; only static peers are admitted |
+| `MissingStaticPeersError` | `ipsec` | overlay IPsec is enabled and known remote VTEPs are absent from `static-peers`; platformd refuses startup and names the VTEPs |
 
 ## See Also
 

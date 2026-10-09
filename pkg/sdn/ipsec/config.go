@@ -57,6 +57,10 @@ const (
 	// through on the certificate it holds.
 	DefaultCPOutageTolerance = 24 * time.Hour
 
+	// DefaultFabricLinkWait is how long startup waits for a slow fabric link
+	// before failing closed.
+	DefaultFabricLinkWait = 60 * time.Second
+
 	// DefaultIKERate limits IKE packets per source address on the fabric,
 	// in packets per second; the burst defaults to twice the rate.
 	DefaultIKERate = 20
@@ -135,6 +139,10 @@ type Config struct {
 	// needs. Off by default: an unauthenticated advertisement can readdress
 	// or reroute the node.
 	UnderlaySLAAC bool `yaml:"underlay-slaac,omitempty" json:"underlay_slaac,omitempty" mapstructure:"underlay-slaac"`
+
+	// FabricLinkWait is how long Service.Install waits for the fabric link to
+	// appear before failing closed. Default DefaultFabricLinkWait.
+	FabricLinkWait time.Duration `yaml:"fabric-link-wait,omitempty" json:"fabric_link_wait,omitempty" mapstructure:"fabric-link-wait"`
 }
 
 // TokenConfig locates the IKE key: a sign-only object in the node-local
@@ -194,6 +202,9 @@ func (c *Config) validateLimits() error {
 	}
 	if c.CertLifetime < 0 {
 		return &ConfigError{Field: "cert-lifetime", Err: ErrNegativeDuration}
+	}
+	if c.FabricLinkWait < 0 {
+		return &ConfigError{Field: "fabric-link-wait", Err: ErrNegativeDuration}
 	}
 	if c.CertLifetime != 0 && c.CertLifetime < OutageFactor*c.EffectiveCPOutageTolerance() {
 		return &ConfigError{Field: "cert-lifetime", Err: ErrLifetimeTooShort}
@@ -369,6 +380,15 @@ func (c *Config) EffectiveCertLifetime() time.Duration {
 // — with the certificate renewed at the same mark.
 func (c *Config) ReauthTime() time.Duration {
 	return c.EffectiveCertLifetime() / 2
+}
+
+// EffectiveFabricLinkWait is the configured fabric-link wait or
+// DefaultFabricLinkWait.
+func (c *Config) EffectiveFabricLinkWait() time.Duration {
+	if c.FabricLinkWait > 0 {
+		return c.FabricLinkWait
+	}
+	return DefaultFabricLinkWait
 }
 
 // EffectiveReplayWindow is the configured window or MinReplayWindow.

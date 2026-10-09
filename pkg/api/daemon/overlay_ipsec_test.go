@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/netip"
 	"slices"
 	"testing"
 	"time"
@@ -33,11 +34,14 @@ var errOverlayStart = errors.New("injected overlay start failure")
 
 // fakeOverlayIPsec records its steps in the order the overlay was started.
 type fakeOverlayIPsec struct {
-	steps      *[]string
-	installErr error
-	closed     bool
-	running    chan struct{} // receives when Run starts
-	ended      chan struct{} // receives when Run returns
+	steps       *[]string
+	installErr  error
+	closed      bool
+	running     chan struct{} // receives when Run starts
+	ended       chan struct{} // receives when Run returns
+	status      ipsec.Status
+	validateErr error
+	observed    []netip.Addr
 }
 
 func (f *fakeOverlayIPsec) Install(context.Context) error {
@@ -52,6 +56,14 @@ func (f *fakeOverlayIPsec) Run(ctx context.Context) {
 }
 
 func (f *fakeOverlayIPsec) Close() { f.closed = true }
+
+func (f *fakeOverlayIPsec) Status() ipsec.Status { return f.status }
+
+func (f *fakeOverlayIPsec) ValidateVTEPs([]netip.Addr) error { return f.validateErr }
+
+func (f *fakeOverlayIPsec) ObserveVTEP(_ context.Context, vtep netip.Addr) {
+	f.observed = append(f.observed, vtep)
+}
 
 // overlayStartHarness drives startOverlay over a fake IPsec service and a
 // controller starter that records when it ran.
@@ -79,10 +91,13 @@ func newOverlayStartHarness(t *testing.T) *overlayStartHarness {
 func (h *overlayStartHarness) starters() overlayStarters {
 	return overlayStarters{
 		ipsec: func(*ipsec.Config) (overlayIPsec, error) { return h.sec, nil },
-		controller: func(context.Context) (*overlay.Controller, error) {
+		controller: func(_ context.Context, observer overlay.VTEPObserver) (*overlay.Controller, error) {
 			h.steps = append(h.steps, "overlay controller")
 			if h.ctlErr != nil {
 				return nil, h.ctlErr
+			}
+			if observer != nil {
+				observer.ObserveVTEP(context.Background(), netip.MustParseAddr("10.20.0.2"))
 			}
 			return h.ctrl, nil
 		},
@@ -118,6 +133,20 @@ func TestStartOverlay_InstallsTheIPsecFloorBeforeTheVTEP(t *testing.T) {
 	}
 	if sec != h.sec || ctrl != h.ctrl {
 		t.Fatal("startOverlay did not return what it started")
+	}
+}
+
+func TestStartOverlay_RefusesOverlayVTEPsMissingStaticPeers(t *testing.T) {
+	h := newOverlayStartHarness(t)
+	missing := netip.MustParseAddr("10.20.0.42")
+	h.sec.validateErr = &ipsec.MissingStaticPeersError{VTEPs: []netip.Addr{missing}}
+	sec, ctrl, err := h.start(overlayWithIPsec())
+	var missingErr *ipsec.MissingStaticPeersError
+	if sec != nil || ctrl != nil || !errors.As(err, &missingErr) || !errors.Is(err, ipsec.ErrMissingStaticPeer) {
+		t.Fatalf("startOverlay = %v, %v, %v; want missing static peer refusal", sec, ctrl, err)
+	}
+	if !h.sec.closed {
+		t.Fatal("service was not closed after missing static peer refusal")
 	}
 }
 
@@ -236,10 +265,15 @@ func TestOverlayIPsecRun_StartAndStop(t *testing.T) {
 	// A daemon started again runs the service again.
 	run.start()
 	recvSignal(t, h.sec.running, "Run after a restart")
-	go run.stop()
+	done = make(chan struct{})
+	go func() {
+		defer close(done)
+		run.stop()
+	}()
 	recvSignal(t, h.sec.ended, "Run returning after a restart")
-	if h.sec.closed {
-		t.Fatal("stop closed the service")
+	recvSignal(t, done, "second stop returning")
+	if !h.sec.closed {
+		t.Fatal("stop did not close the service")
 	}
 }
 

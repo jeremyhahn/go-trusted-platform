@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"net/netip"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
@@ -27,13 +28,16 @@ type overlayIPsec interface {
 	Install(ctx context.Context) error
 	Run(ctx context.Context)
 	Close()
+	Status() ipsec.Status
+	ValidateVTEPs(vteps []netip.Addr) error
+	ObserveVTEP(ctx context.Context, vtep netip.Addr)
 }
 
 // overlayStarters build the two halves of the overlay that startOverlay
 // brings up in order.
 type overlayStarters struct {
 	ipsec      func(cfg *ipsec.Config) (overlayIPsec, error)
-	controller func(ctx context.Context) (*overlay.Controller, error)
+	controller func(ctx context.Context, observer overlay.VTEPObserver) (*overlay.Controller, error)
 }
 
 // newOverlayStarters are the production starters: ipsec.Service and
@@ -43,8 +47,8 @@ func newOverlayStarters(config *Config, logger *logging.Logger) overlayStarters 
 		ipsec: func(cfg *ipsec.Config) (overlayIPsec, error) {
 			return ipsec.NewService(cfg, logger.Slog())
 		},
-		controller: func(ctx context.Context) (*overlay.Controller, error) {
-			return buildOverlayController(ctx, config.App, config.OVSSocketPath, logger)
+		controller: func(ctx context.Context, observer overlay.VTEPObserver) (*overlay.Controller, error) {
+			return buildOverlayController(ctx, config.App, config.OVSSocketPath, logger, observer)
 		},
 	}
 }
@@ -78,11 +82,24 @@ func startOverlay(ctx context.Context, cfg *sdn.OverlayConfig, start overlayStar
 	if !cfg.Enabled {
 		return sec, nil, nil
 	}
-	ctrl, err := start.controller(ctx)
+	ctrl, err := start.controller(ctx, sec)
 	if err != nil {
 		logger.Warn("overlay controller init failed; overlay endpoints will return unavailable",
 			"error", err)
 		return sec, nil, nil
+	}
+	if sec != nil {
+		state := ctrl.GetState()
+		if state != nil {
+			vteps := make([]netip.Addr, 0, len(state.VTEPs))
+			for _, vtep := range state.VTEPs {
+				vteps = append(vteps, vtep.IP)
+			}
+			if err := sec.ValidateVTEPs(vteps); err != nil {
+				sec.Close()
+				return nil, nil, err
+			}
+		}
 	}
 	return sec, ctrl, nil
 }
@@ -117,5 +134,6 @@ func (r *overlayIPsecRun) stop() {
 	}
 	r.cancel()
 	<-r.done
+	r.svc.Close()
 	r.cancel, r.done = nil, nil
 }

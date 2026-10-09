@@ -19,7 +19,8 @@ GET /api/v1/sdn/overlay/status
 ```
 
 Returns the overlay status: node ID, VTEP IP, VTEP/VNI/tunnel/remote-MAC
-counts, health flag, VXLAN port, underlay MTU, and a timestamp.
+counts, IPsec `unpeered_vteps`, health flag, VXLAN port, underlay MTU, and a
+timestamp.
 
 ### VTEP Endpoints
 

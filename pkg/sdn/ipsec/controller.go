@@ -407,6 +407,10 @@ type Status struct {
 	// PendingCRLs is how many issuers' CRLs wait for a tunnel identity to
 	// be verified against; the next Attach verifies them.
 	PendingCRLs int
+	// UnpeeredVTEPs are overlay VTEPs missing from static-peers, in address
+	// order. The fail-closed floor drops their VXLAN until configuration is
+	// corrected.
+	UnpeeredVTEPs []netip.Addr
 	// Certificate is the renewal state of the tunnel certificate last
 	// loaded; nil before the first attach.
 	Certificate *CertificateStatus

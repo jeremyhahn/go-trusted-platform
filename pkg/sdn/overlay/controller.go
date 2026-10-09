@@ -37,13 +37,14 @@ type Controller struct {
 	config *Config
 
 	// Component dependencies
-	ovsClient   *ovs.Client
-	ofClient    *openflow.Client
-	vtepManager *vxlan.VTEPManager
-	bgpSpeaker  *bgp.Speaker
-	evpnManager *bgp.EVPNManager
-	gateway     *gateway.Gateway
-	ipam        ipam.Allocator
+	ovsClient    *ovs.Client
+	ofClient     *openflow.Client
+	vtepManager  *vxlan.VTEPManager
+	bgpSpeaker   *bgp.Speaker
+	evpnManager  *bgp.EVPNManager
+	gateway      *gateway.Gateway
+	ipam         ipam.Allocator
+	vtepObserver VTEPObserver
 
 	// State management
 	state *StateManager
@@ -63,6 +64,11 @@ type Controller struct {
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
+}
+
+// VTEPObserver receives VTEPs learned by the overlay controller.
+type VTEPObserver interface {
+	ObserveVTEP(ctx context.Context, vtep netip.Addr)
 }
 
 // New creates a new overlay controller with the given configuration.
@@ -648,6 +654,9 @@ func (c *Controller) AddVTEP(ctx context.Context, vtep *VTEPInfo) error {
 
 	if err := c.state.AddVTEP(ctx, vtep); err != nil {
 		return &ErrVTEPOperationFailed{VTEP: vtep.IP, Operation: "add", Cause: err}
+	}
+	if c.vtepObserver != nil {
+		c.vtepObserver.ObserveVTEP(ctx, vtep.IP)
 	}
 
 	c.logger.Info("VTEP added successfully",

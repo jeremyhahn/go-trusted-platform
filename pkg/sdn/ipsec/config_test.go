@@ -117,6 +117,7 @@ func TestConfigValidateRejects(t *testing.T) {
 		{"handle not hex", func(c *Config) { c.Token.Handle = "ipsec" }, "token.handle", ErrInvalidHandle},
 		{"negative outage tolerance", func(c *Config) { c.CPOutageTolerance = -time.Hour }, "cp-outage-tolerance", ErrNegativeDuration},
 		{"negative lifetime", func(c *Config) { c.CertLifetime = -time.Hour }, "cert-lifetime", ErrNegativeDuration},
+		{"negative fabric link wait", func(c *Config) { c.FabricLinkWait = -time.Second }, "fabric-link-wait", ErrNegativeDuration},
 		{"lifetime under 3x the default outage", func(c *Config) { c.CertLifetime = 71 * time.Hour }, "cert-lifetime", ErrLifetimeTooShort},
 		{"lifetime under 3x a configured outage", func(c *Config) {
 			c.CPOutageTolerance = 48 * time.Hour
@@ -154,6 +155,9 @@ func TestConfigEffectiveDefaults(t *testing.T) {
 	}
 	if got := c.ReauthTime(); got != 36*time.Hour {
 		t.Errorf("reauth = %v, want half the lifetime", got)
+	}
+	if got := c.EffectiveFabricLinkWait(); got != DefaultFabricLinkWait {
+		t.Errorf("fabric link wait = %v, want %v", got, DefaultFabricLinkWait)
 	}
 	if got := c.EffectiveReplayWindow(); got != MinReplayWindow {
 		t.Errorf("replay window = %d", got)

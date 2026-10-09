@@ -84,6 +84,7 @@ message OverlayStatus {
   bool healthy = 7;
   uint32 vxlan_port = 8;
   uint32 underlay_mtu = 9;
+  uint32 unpeered_vteps = 10;
 }
 ```
 

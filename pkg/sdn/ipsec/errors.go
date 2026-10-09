@@ -16,6 +16,7 @@ package ipsec
 import (
 	"errors"
 	"net/netip"
+	"strings"
 )
 
 var (
@@ -103,6 +104,9 @@ var (
 	// ErrNoVTEPAdmission is returned when a route names a VTEP on a node
 	// that has no VTEP admitter: its peers are the static peers alone.
 	ErrNoVTEPAdmission = errors.New("ipsec: no VTEP admitter; only static peers are admitted")
+	// ErrMissingStaticPeer is returned when overlay IPsec is enabled but a
+	// known remote VTEP is absent from static-peers.
+	ErrMissingStaticPeer = errors.New("ipsec: VTEP missing from static-peers")
 )
 
 // FloorError reports a fail-closed floor that could not be installed. The
@@ -120,6 +124,27 @@ func (e *FloorError) Error() string {
 
 // Unwrap implements errors.Unwrap.
 func (e *FloorError) Unwrap() error { return e.Err }
+
+// MissingStaticPeersError reports remote VTEPs the overlay knows but IPsec
+// cannot connect to because they are not listed in static-peers.
+type MissingStaticPeersError struct {
+	VTEPs []netip.Addr
+}
+
+func (e *MissingStaticPeersError) Error() string {
+	if e == nil {
+		return ErrMissingStaticPeer.Error()
+	}
+	parts := make([]string, 0, len(e.VTEPs))
+	for _, vtep := range e.VTEPs {
+		parts = append(parts, vtep.String())
+	}
+	return ErrMissingStaticPeer.Error() + ": " + strings.Join(parts, ", ")
+}
+
+func (e *MissingStaticPeersError) Unwrap() error {
+	return ErrMissingStaticPeer
+}
 
 // CommandError reports a VICI command that failed: charon refused it, or
 // the connection failed under it.

@@ -27,6 +27,8 @@ platformctl --transport unix sdn overlay vtep list
 platformctl --transport unix sdn overlay vni create --vni 1000100 --vlan 100
 ```
 
+The status payload includes `unpeered_vteps` when overlay IPsec is enabled.
+
 ### Go (platform SDK)
 
 Use the platform Go SDK (`sdk/go`), which knows how to dial the Unix

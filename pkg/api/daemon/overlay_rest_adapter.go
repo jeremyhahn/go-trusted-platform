@@ -31,7 +31,8 @@ import (
 // controller. Controller errors are mapped to the typed REST sentinel errors
 // so that the REST handler's writeOverlayError emits the correct HTTP status.
 type overlayControllerRESTAdapter struct {
-	ctrl OverlayControllerInterface
+	ctrl  OverlayControllerInterface
+	ipsec overlayIPsec
 }
 
 // Compile-time check.
@@ -41,8 +42,12 @@ var _ restapi.OverlayServiceInterface = (*overlayControllerRESTAdapter)(nil)
 // restapi.OverlayServiceInterface. Callers must pass nil to
 // restapi.NewOverlayHandlers directly when no controller is available; they
 // should not wrap nil here.
-func newOverlayControllerRESTAdapter(ctrl OverlayControllerInterface) *overlayControllerRESTAdapter {
-	return &overlayControllerRESTAdapter{ctrl: ctrl}
+func newOverlayControllerRESTAdapter(ctrl OverlayControllerInterface, sec ...overlayIPsec) *overlayControllerRESTAdapter {
+	adapter := &overlayControllerRESTAdapter{ctrl: ctrl}
+	if len(sec) > 0 {
+		adapter.ipsec = sec[0]
+	}
+	return adapter
 }
 
 // =============================================================================
@@ -76,6 +81,9 @@ func (a *overlayControllerRESTAdapter) GetOverlayStatus(ctx context.Context) (*r
 		resp.VNICount = uint32(len(state.VNIs))
 		resp.TunnelCount = uint32(len(state.Tunnels))
 		resp.RemoteMACCount = uint32(len(state.RemoteMACs))
+	}
+	if a.ipsec != nil {
+		resp.UnpeeredVTEPs = uint32(len(a.ipsec.Status().UnpeeredVTEPs))
 	}
 
 	return resp, nil

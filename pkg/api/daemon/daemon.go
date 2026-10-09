@@ -483,6 +483,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// when wiring quicHandler.SetOverlayHandler.
 	var overlayCtrl OverlayControllerInterface
 	var overlayIPsecSvc *overlayIPsecRun
+	var overlayIPsecStatus overlayIPsec
 	if config.App != nil && config.App.SDNConfig != nil {
 		sec, ctrl, overlayErr := startOverlay(context.Background(), config.App.SDNConfig.Overlay,
 			newOverlayStarters(config, logger), logger)
@@ -492,6 +493,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		if sec != nil {
 			overlayIPsecSvc = &overlayIPsecRun{svc: sec}
+			overlayIPsecStatus = sec
+			overlayService.SetIPsec(sec)
 		}
 		if ctrl != nil {
 			overlayCtrl = ctrl
@@ -1183,7 +1186,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// handler emits StatusUnavailable for all overlay requests.
 		var overlayQUICService quic.OverlayServiceInterface
 		if overlayCtrl != nil {
-			overlayQUICService = newOverlayControllerQUICAdapter(overlayCtrl)
+			overlayQUICService = newOverlayControllerQUICAdapter(overlayCtrl, overlayIPsecStatus)
 		}
 		quicHandler.SetOverlayHandler(quic.NewOverlayHandler(quicLogger, overlayQUICService))
 
@@ -1470,7 +1473,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Uses the same controller hoisted during QUIC wiring so all transports
 	// share the same in-process overlay state.
 	if daemon.concreteRestServer != nil && overlayCtrl != nil {
-		daemon.concreteRestServer.SetOverlayHandlers(newOverlayControllerRESTAdapter(overlayCtrl))
+		daemon.concreteRestServer.SetOverlayHandlers(newOverlayControllerRESTAdapter(overlayCtrl, overlayIPsecStatus))
 		logger.Info("Overlay REST routes registered")
 	}
 

@@ -103,19 +103,20 @@ type OverlayServiceInterface interface {
 
 // OverlayStatusInfo contains overlay network status information
 type OverlayStatusInfo struct {
-	Enabled      bool   `codec:"enabled"`
-	NodeID       string `codec:"node_id,omitempty"`
-	Mode         string `codec:"mode"`
-	LocalVTEP    string `codec:"local_vtep"`
-	VXLANPort    uint16 `codec:"vxlan_port,omitempty"`
-	VTEPCount    int    `codec:"vtep_count"`
-	VNICount     int    `codec:"vni_count"`
-	TunnelCount  int    `codec:"tunnel_count"`
-	MACCount     int    `codec:"mac_count"`
-	UplinkIface  string `codec:"uplink_iface,omitempty"`
-	MTU          int    `codec:"mtu"`
-	EncapType    string `codec:"encap_type"`
-	HealthStatus string `codec:"health_status"`
+	Enabled       bool   `codec:"enabled"`
+	NodeID        string `codec:"node_id,omitempty"`
+	Mode          string `codec:"mode"`
+	LocalVTEP     string `codec:"local_vtep"`
+	VXLANPort     uint16 `codec:"vxlan_port,omitempty"`
+	VTEPCount     int    `codec:"vtep_count"`
+	VNICount      int    `codec:"vni_count"`
+	TunnelCount   int    `codec:"tunnel_count"`
+	MACCount      int    `codec:"mac_count"`
+	UnpeeredVTEPs int    `codec:"unpeered_vteps"`
+	UplinkIface   string `codec:"uplink_iface,omitempty"`
+	MTU           int    `codec:"mtu"`
+	EncapType     string `codec:"encap_type"`
+	HealthStatus  string `codec:"health_status"`
 }
 
 // VTEPInfo contains VTEP information

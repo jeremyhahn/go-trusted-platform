@@ -29,6 +29,8 @@ import (
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -264,6 +266,24 @@ func TestApp_GetInstallerConfig(t *testing.T) {
 		assert.Nil(t, cfg.OS)
 		assert.False(t, cfg.EnableTPMSealing)
 	})
+}
+
+func TestApp_GetInstallerConfig_CarriesOverlayIPsecEnabled(t *testing.T) {
+	osCfg := &installer.OSConfig{}
+	app := &App{
+		OSConfig: osCfg,
+		SDNConfig: &sdn.Config{
+			Overlay: &sdn.OverlayConfig{
+				IPsec: &ipsec.Config{Enabled: true},
+			},
+		},
+	}
+
+	cfg, err := app.GetInstallerConfig()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.OS)
+	assert.True(t, cfg.OS.OverlayIPsecEnabled)
+	assert.False(t, osCfg.OverlayIPsecEnabled)
 }
 
 // TestApp_SetInstallerConfig verifies that App fields are correctly populated from installer config.

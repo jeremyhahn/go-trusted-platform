@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
@@ -260,6 +261,52 @@ func TestBlockPolicyInstallFailures(t *testing.T) {
 	}
 	if x.updates != 0 {
 		t.Fatalf("failed Installs wrote %d policies", x.updates)
+	}
+}
+
+func TestBlockPolicyInstallWaitsForTheFabricLink(t *testing.T) {
+	b, x := testBlockPolicy(t, validConfig())
+	delete(x.links, "bond0")
+	b.linkWait = time.Second
+	subs := make(chan chan<- netlink.LinkUpdate, 1)
+	b.subscribe = func(ch chan<- netlink.LinkUpdate, done <-chan struct{}) error {
+		subs <- ch
+		go func() {
+			<-done
+			close(ch)
+		}()
+		return nil
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- b.Install(context.Background()) }()
+	updates := <-subs
+	x.links["bond0"] = fabricIndex
+	updates <- fabricUpdate(fabricIndex)
+	if err := <-errc; err != nil {
+		t.Fatalf("Install after link update: %v", err)
+	}
+	if len(x.spd) != 3 {
+		t.Fatalf("SPD holds %d policies after delayed link, want 3", len(x.spd))
+	}
+}
+
+func TestBlockPolicyInstallTimesOutWaitingForTheFabricLink(t *testing.T) {
+	b, x := testBlockPolicy(t, validConfig())
+	delete(x.links, "bond0")
+	b.linkWait = time.Nanosecond
+	b.subscribe = func(ch chan<- netlink.LinkUpdate, done <-chan struct{}) error {
+		go func() {
+			<-done
+			close(ch)
+		}()
+		return nil
+	}
+	var opErr *OpError
+	if err := b.Install(context.Background()); !errors.As(err, &opErr) || !errors.Is(err, unix.ENODEV) {
+		t.Fatalf("Install after fabric wait timeout: err = %v", err)
+	}
+	if x.updates != 0 {
+		t.Fatalf("timed-out Install wrote %d policies", x.updates)
 	}
 }
 

@@ -1,6 +1,7 @@
 package firstboot
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -142,5 +143,14 @@ func TestPlatformConfigStruct(t *testing.T) {
 	cfg := &PlatformConfig{}
 	if cfg.TPM != nil {
 		t.Error("expected nil TPM for zero-value PlatformConfig")
+	}
+}
+
+func TestPlatformdOpenRCScriptNeedsNetworking(t *testing.T) {
+	if !strings.Contains(platformdOpenRCScript, "need networking") {
+		t.Fatalf("platformd OpenRC script does not need networking")
+	}
+	if strings.Contains(platformdOpenRCScript, "\n    need net\n") {
+		t.Fatalf("platformd OpenRC script still uses the net virtual dependency")
 	}
 }

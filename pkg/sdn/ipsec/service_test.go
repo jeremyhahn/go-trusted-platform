@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/pem"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -181,6 +182,30 @@ func TestServicePushCRLsGoesOnPastABadFile(t *testing.T) {
 	}
 	if got := h.svc.ctl.Status().CRLs; got != 1 {
 		t.Fatalf("held CRLs %d, want the good file's", got)
+	}
+}
+
+func TestServiceValidateVTEPsRefusesMissingStaticPeers(t *testing.T) {
+	h := newTestService(t, serviceConfig(t, "root.crl"))
+	missing := netip.MustParseAddr("10.20.0.42")
+	err := h.svc.ValidateVTEPs([]netip.Addr{h.svc.local, missing})
+	var missingErr *MissingStaticPeersError
+	if !errors.As(err, &missingErr) || !errors.Is(err, ErrMissingStaticPeer) {
+		t.Fatalf("ValidateVTEPs err = %v, want MissingStaticPeersError", err)
+	}
+	if !slices.Equal(missingErr.VTEPs, []netip.Addr{missing}) {
+		t.Fatalf("missing VTEPs = %v, want %v", missingErr.VTEPs, []netip.Addr{missing})
+	}
+}
+
+func TestServiceObserveVTEPCountsUnpeeredVTEPs(t *testing.T) {
+	h := newTestService(t, serviceConfig(t, "root.crl"))
+	missing := netip.MustParseAddr("10.20.0.42")
+	h.svc.ObserveVTEP(context.Background(), missing)
+	h.svc.ObserveVTEP(context.Background(), missing)
+	status := h.svc.Status()
+	if !slices.Equal(status.UnpeeredVTEPs, []netip.Addr{missing}) {
+		t.Fatalf("unpeered VTEPs = %v, want %v", status.UnpeeredVTEPs, []netip.Addr{missing})
 	}
 }
 

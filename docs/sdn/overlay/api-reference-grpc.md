@@ -54,7 +54,8 @@ message ForgetMACRequest {
 
 See [api-reference.md](api-reference.md) for the shared data types
 (`VTEPInfo`, `VNIConfig`, `VNI`, `TunnelInfo`, `RemoteMACEntry`,
-`OverlayStatus`).
+`OverlayStatus`). `OverlayStatus.unpeered_vteps` counts overlay VTEPs that
+IPsec cannot peer with because `static-peers` omits them.
 
 ## Example (grpcurl)
 

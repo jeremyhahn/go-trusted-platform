@@ -18,6 +18,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"os"
 	"slices"
@@ -57,6 +58,10 @@ type Service struct {
 	crlFiles []string
 	logger   *slog.Logger
 	after    func(time.Duration) <-chan time.Time
+	local    netip.Addr
+	static   map[netip.Addr]struct{}
+	mu       sync.Mutex
+	unpeered map[netip.Addr]struct{}
 }
 
 // closingIdentity is an IdentityProvider holding a secret it releases on
@@ -113,6 +118,14 @@ func newService(cfg *Config, filter *Filter, block *BlockPolicy, identity closin
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	local, err := enabledLocal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	peers, err := cfg.Peers()
+	if err != nil {
+		return nil, err
+	}
 	ctl, err := NewController(cfg, staticPeersOnly{}, filter, identity)
 	if err != nil {
 		return nil, err
@@ -120,6 +133,10 @@ func newService(cfg *Config, filter *Filter, block *BlockPolicy, identity closin
 	runner, err := NewRunner(ctl, dialer, logger)
 	if err != nil {
 		return nil, err
+	}
+	static := make(map[netip.Addr]struct{}, len(peers))
+	for _, peer := range peers {
+		static[peer.Unmap()] = struct{}{}
 	}
 	return &Service{
 		filter:   filter,
@@ -130,7 +147,66 @@ func newService(cfg *Config, filter *Filter, block *BlockPolicy, identity closin
 		crlFiles: slices.Clone(cfg.CRLFiles),
 		logger:   logger,
 		after:    time.After,
+		local:    local.Unmap(),
+		static:   static,
+		unpeered: make(map[netip.Addr]struct{}),
 	}, nil
+}
+
+// ValidateVTEPs refuses startup when the overlay already knows remote VTEPs
+// that are missing from static-peers.
+func (s *Service) ValidateVTEPs(vteps []netip.Addr) error {
+	missing := s.missingStaticPeers(vteps)
+	if len(missing) == 0 {
+		return nil
+	}
+	return &MissingStaticPeersError{VTEPs: missing}
+}
+
+// ObserveVTEP records and warns about a remote VTEP that overlay learned but
+// IPsec cannot peer with because static-peers omits it.
+func (s *Service) ObserveVTEP(ctx context.Context, vtep netip.Addr) {
+	_ = ctx
+	missing := s.missingStaticPeers([]netip.Addr{vtep})
+	if len(missing) == 0 {
+		return
+	}
+	peer := missing[0]
+	s.mu.Lock()
+	_, logged := s.unpeered[peer]
+	s.unpeered[peer] = struct{}{}
+	s.mu.Unlock()
+	if !logged {
+		s.logger.Warn("overlay VTEP missing from IPsec static-peers", "vtep", peer)
+	}
+}
+
+// Status returns the IPsec controller state plus daemon-level peer checks.
+func (s *Service) Status() Status {
+	st := s.ctl.Status()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st.UnpeeredVTEPs = slices.SortedFunc(maps.Keys(s.unpeered), netip.Addr.Compare)
+	return st
+}
+
+func (s *Service) missingStaticPeers(vteps []netip.Addr) []netip.Addr {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	missing := make(map[netip.Addr]struct{})
+	for _, vtep := range vteps {
+		peer := vtep.Unmap()
+		if !peer.IsValid() || peer == s.local {
+			continue
+		}
+		if _, ok := s.static[peer]; ok {
+			delete(s.unpeered, peer)
+			continue
+		}
+		missing[peer] = struct{}{}
+		s.unpeered[peer] = struct{}{}
+	}
+	return slices.SortedFunc(maps.Keys(missing), netip.Addr.Compare)
 }
 
 // Install puts the fail-closed floor in: the nftables table, then the XFRM
