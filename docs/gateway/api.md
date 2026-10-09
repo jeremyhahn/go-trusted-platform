@@ -347,6 +347,14 @@ because a method absent from the map is allowed once the token validates. That
 asymmetry within a single service is raised as an owner question in the
 migration report.
 
+The admitted-VTEP reads (`GetGatewayAdmittedVTEP`, `ListGatewayAdmittedVTEPs`
+and the `gateway_admitted_vtep(s)` MCP tools) require `sdn:read`, the same
+scope as the snapshot they are read from. Each entry names the admitted
+device's ID, serial and hostname. `sdn:read` is a role permission that a tenant
+role can carry, and no transport except REST can yet require a system-tenant
+caller (#299), so a tenant granted `sdn:read` sees the fabric's device
+identities.
+
 ### REST is split by principal, and only the operator half is role-gated (#165)
 
 **Operator half — requires an authenticated `admin`:** the `GatewayService`

@@ -99,6 +99,9 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	// Gateway load balancer tools
 	// The telemetry snapshot is a read of what the datapath programmed.
 	c.toolPermissions["gateway_snapshot"] = "sdn:read"
+	// Admitted overlay VTEPs are read from the same snapshot.
+	c.toolPermissions["gateway_admitted_vtep"] = "sdn:read"
+	c.toolPermissions["gateway_admitted_vteps"] = "sdn:read"
 	// Underlay zones (#708). Every change re-derives the network plan and
 	// takes effect at restart; a privileged path is audited by the service.
 	c.toolPermissions["gateway_zone_list"] = "sdn:read"

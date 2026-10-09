@@ -193,3 +193,12 @@ func TestGatewayPerfToolPermissions(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayAdmittedVTEPToolPermissions(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+	for _, tool := range []string{"gateway_admitted_vtep", "gateway_admitted_vteps"} {
+		if got := checker.toolPermissions[tool]; got != "sdn:read" {
+			t.Errorf("permission for %s = %q, want %q", tool, got, "sdn:read")
+		}
+	}
+}

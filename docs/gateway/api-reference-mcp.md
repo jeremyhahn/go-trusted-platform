@@ -14,3 +14,4 @@ transports.
 
 The overlay snapshot object carries admitted VTEPs and ND counters. The direct
 admitted-VTEP tools return the same VTEP shape as the snapshot overlay list.
+Like `gateway_snapshot`, both admitted-VTEP tools require `sdn:read`.
