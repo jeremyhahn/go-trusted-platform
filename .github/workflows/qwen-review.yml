@@ -34,6 +34,7 @@ env:
   TOKEN_FILE: /run/reviewer/token
   WORK: /tmp/qwen-review
   MODEL: ollama/review-q8
+  GITEA_API: ${{ github.server_url }}/api/v1
   REPO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
   PR_NUM: ${{ github.event.pull_request.number }}
   EVENT_SHA: ${{ github.event.pull_request.head.sha }}
@@ -64,11 +65,13 @@ jobs:
           HDR=$WORK/auth.hdr
           die() { echo "::error::$*" >&2; printf '%s\n' "$*" >> "$WORK/error"; exit 1; }
           api() { # method path [json-file] -> response body; dies unless 2xx
-            local code retry=()
+            # Paths are the repository's, except /user (the token's owner).
+            local code url=$REPO_API$2 retry=()
+            case "$2" in /user|/user/*) url=$GITEA_API$2 ;; esac
             [ "$1" = GET ] && retry=(--retry 3 --retry-all-errors)
             code=$(curl -sS --max-time 60 "${retry[@]}" -o "$WORK/api.json" -w '%{http_code}' \
                      -X "$1" -H @"$HDR" -H 'Content-Type: application/json' \
-                     ${3:+--data-binary "@$3"} "$REPO_API$2") || die "cannot reach $REPO_API$2"
+                     ${3:+--data-binary "@$3"} "$url") || die "cannot reach $url"
             case "$code" in
               2??) cat "$WORK/api.json" ;;
               *)   die "$1 $2 answered HTTP $code" ;;
@@ -163,7 +166,6 @@ jobs:
         if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
         env:
           REPO: ${{ github.event.repository.name }}
-          GITEA_API: ${{ github.server_url }}/api/v1
           DRAFT: ${{ steps.guard.outputs.draft }}
         run: |
           # shellcheck source=/dev/null
