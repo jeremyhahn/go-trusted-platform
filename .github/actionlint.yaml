@@ -12,3 +12,7 @@ paths:
   .github/workflows/nightly.yml:
     ignore:
       - 'the runner of "actions/upload-artifact@v3" action is too old'
+
+self-hosted-runner:
+  labels:
+    - qwen
