@@ -24,10 +24,10 @@ import (
 
 	googleLogger "github.com/google/logger"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	platforminitrd "github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	storageluks "github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
-	"gopkg.in/yaml.v3"
 )
 
 // PlatformConfig represents the platform configuration file structure
@@ -38,6 +38,21 @@ type PlatformConfig struct {
 
 // srkHandleHex safely formats a PlatformSRK handle as hex, returning "none"
 // if the config is nil (e.g., config YAML lacks platform-srk section).
+// decodePlatformTPMConfig decodes a candidate platform config through the same
+// path platformd uses and returns its tpm section, or nil when the candidate
+// has none or does not decode (the failure is logged so the caller can fall
+// through to the next candidate).
+func decodePlatformTPMConfig(data []byte, path string, logger *logging.Logger) *xkmssdk.TPMConfig {
+	var platformCfg PlatformConfig
+	if err := config.DecodeYAML(data, &platformCfg); err != nil {
+		logger.Warn("Skipping platform config candidate: decode failed",
+			"path", path,
+			"error", err)
+		return nil
+	}
+	return platformCfg.TPM
+}
+
 func srkHandleHex(srk *xkmssdk.PlatformSRKConfig) string {
 	if srk == nil {
 		return "none"
@@ -133,9 +148,8 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 
 		for _, configPath := range configPaths {
 			if data, err := os.ReadFile(configPath); err == nil {
-				var platformCfg PlatformConfig
-				if err := yaml.Unmarshal(data, &platformCfg); err == nil && platformCfg.TPM != nil {
-					loadedTPMConfig = platformCfg.TPM
+				if tpmCfg := decodePlatformTPMConfig(data, configPath, logger); tpmCfg != nil {
+					loadedTPMConfig = tpmCfg
 					logger.Info("Loaded platform config from file",
 						"path", configPath,
 						"platform_pcr", loadedTPMConfig.PlatformPCR,

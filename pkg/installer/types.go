@@ -56,19 +56,19 @@ type DiskConfig struct {
 	Device string `yaml:"device" json:"device"`
 
 	// Partition scheme
-	PartitionTable PartitionTable `yaml:"partition-table" json:"partition_table"`
+	PartitionTable PartitionTable `yaml:"partition-table" json:"partition_table" mapstructure:"partition-table"`
 
 	// EFI partition size in MB (default: 538)
-	EFIPartitionSize int `yaml:"efi-partition-size" json:"efi_partition_size"`
+	EFIPartitionSize int `yaml:"efi-partition-size" json:"efi_partition_size" mapstructure:"efi-partition-size"`
 
 	// Filesystem type for root (default: lvm)
-	RootFilesystem FilesystemType `yaml:"root-filesystem" json:"root_filesystem"`
+	RootFilesystem FilesystemType `yaml:"root-filesystem" json:"root_filesystem" mapstructure:"root-filesystem"`
 
 	// LVM volume group name (used when RootFilesystem is lvm)
-	LVMVolumeGroup string `yaml:"lvm-volume-group" json:"lvm_volume_group"`
+	LVMVolumeGroup string `yaml:"lvm-volume-group" json:"lvm_volume_group" mapstructure:"lvm-volume-group"`
 
 	// LVM logical volume name (used when RootFilesystem is lvm)
-	LVMLogicalVolume string `yaml:"lvm-logical-volume" json:"lvm_logical_volume"`
+	LVMLogicalVolume string `yaml:"lvm-logical-volume" json:"lvm_logical_volume" mapstructure:"lvm-logical-volume"`
 
 	// LUKS encryption settings
 	Encryption *EncryptionConfig `yaml:"encryption" json:"encryption"`
@@ -100,19 +100,19 @@ type TPMSealConfig struct {
 
 	// SealPCRs specifies which PCRs to include in the seal policy.
 	// If empty, falls back to the top-level installer Config.PCRs.
-	SealPCRs []uint `yaml:"seal-pcrs" json:"seal_pcrs"`
+	SealPCRs []uint `yaml:"seal-pcrs" json:"seal_pcrs" mapstructure:"seal-pcrs"`
 
 	// PCRBanks specifies the PCR hash algorithm banks (e.g., "sha256").
 	// If empty, defaults to the TPM configuration value.
-	PCRBanks []string `yaml:"pcr-banks,omitempty" json:"pcr_banks,omitempty"`
+	PCRBanks []string `yaml:"pcr-banks,omitempty" json:"pcr_banks,omitempty" mapstructure:"pcr-banks"`
 
 	// PlatformPolicy controls whether the parent key requires platform policy
 	// (PCR 23 authorization). Should be false for LUKS sealing since the
 	// initrd must unseal before platformd creates the platform policy.
-	PlatformPolicy bool `yaml:"platform-policy" json:"platform_policy"`
+	PlatformPolicy bool `yaml:"platform-policy" json:"platform_policy" mapstructure:"platform-policy"`
 
 	// RecoveryKey configures LUKS recovery key generation.
-	RecoveryKey *RecoveryKeyConfig `yaml:"recovery-key,omitempty" json:"recovery_key,omitempty"`
+	RecoveryKey *RecoveryKeyConfig `yaml:"recovery-key,omitempty" json:"recovery_key,omitempty" mapstructure:"recovery-key"`
 
 	// FactoryResetOnFirstBoot, when true, instructs firstboot to call
 	// FactoryResetWithClear before provisioning the TPM. This issues a
@@ -137,7 +137,7 @@ type TPMSealConfig struct {
 	//
 	// The Go default is FALSE (safe). Reference templates set it true.
 	// See: docs/installer/factory-reset.md
-	FactoryResetOnFirstBoot bool `yaml:"factory-reset-on-firstboot,omitempty" json:"factory_reset_on_firstboot,omitempty"`
+	FactoryResetOnFirstBoot bool `yaml:"factory-reset-on-firstboot,omitempty" json:"factory_reset_on_firstboot,omitempty" mapstructure:"factory-reset-on-firstboot"`
 
 	// ForceClearViaPPI, when true, escalates to a UEFI Physical Presence
 	// Interface (PPI) ForceClear + reboot when the software TPM2_Clear
@@ -156,7 +156,7 @@ type TPMSealConfig struct {
 	//
 	// The Go default is FALSE. Reference X10 templates set it true because
 	// that hardware's DA lockout routinely blocks the software clear.
-	ForceClearViaPPI bool `yaml:"force-clear-via-ppi,omitempty" json:"force_clear_via_ppi,omitempty"`
+	ForceClearViaPPI bool `yaml:"force-clear-via-ppi,omitempty" json:"force_clear_via_ppi,omitempty" mapstructure:"force-clear-via-ppi"`
 
 	// RecoveryKeyStrategy controls what happens to the LUKS recovery
 	// passphrase after first-production-boot reseal.
@@ -187,7 +187,7 @@ type TPMSealConfig struct {
 	//               a break-glass path.
 	//
 	// Default (zero value and unset): "escrow".
-	RecoveryKeyStrategy string `yaml:"recovery-key-strategy,omitempty" json:"recovery_key_strategy,omitempty"`
+	RecoveryKeyStrategy string `yaml:"recovery-key-strategy,omitempty" json:"recovery_key_strategy,omitempty" mapstructure:"recovery-key-strategy"`
 }
 
 // Recovery key strategies for RecoveryKeyStrategy.
@@ -230,7 +230,7 @@ type EncryptionConfig struct {
 	Cipher string `yaml:"cipher" json:"cipher"`
 
 	// Key size in bits (default: 512)
-	KeySize int `yaml:"key-size" json:"key_size"`
+	KeySize int `yaml:"key-size" json:"key_size" mapstructure:"key-size"`
 
 	// Hash algorithm (default: sha256)
 	Hash string `yaml:"hash" json:"hash"`
@@ -245,7 +245,7 @@ type EncryptionConfig struct {
 	Passphrase string `yaml:"passphrase,omitempty" json:"passphrase,omitempty" secret:"true"`
 
 	// MappedName for the LUKS device mapper name (default: cryptroot)
-	MappedName string `yaml:"mapped-name" json:"mapped_name"`
+	MappedName string `yaml:"mapped-name" json:"mapped_name" mapstructure:"mapped-name"`
 
 	// TPM configures TPM-based LUKS key sealing. When set, the LUKS key is
 	// sealed to the TPM using the specified parent handle and PCR policy.
@@ -272,27 +272,27 @@ type IMAConfig struct {
 	EVM bool `yaml:"evm" json:"evm"`
 
 	// Hash algorithm for IMA measurements (sha256, sha1, sha512)
-	HashAlgorithm string `yaml:"hash-algorithm" json:"hash_algorithm"`
+	HashAlgorithm string `yaml:"hash-algorithm" json:"hash_algorithm" mapstructure:"hash-algorithm"`
 
 	// Additional files/directories to monitor beyond default policy
 	// These are added to the IMA policy for measurement
-	MonitorPaths []string `yaml:"monitor-paths" json:"monitor_paths"`
+	MonitorPaths []string `yaml:"monitor-paths" json:"monitor_paths" mapstructure:"monitor-paths"`
 
 	// Appraise mode: "off", "log", "enforce", "fix"
 	// - off: No appraisal
 	// - log: Log appraisal failures but allow execution
 	// - enforce: Block execution on appraisal failure
 	// - fix: Fix missing/invalid signatures (requires EVM key)
-	AppraiseMode string `yaml:"appraise-mode" json:"appraise_mode"`
+	AppraiseMode string `yaml:"appraise-mode" json:"appraise_mode" mapstructure:"appraise-mode"`
 
 	// Path to IMA signing key (for appraise mode)
-	SigningKeyPath string `yaml:"signing-key-path,omitempty" json:"signing_key_path,omitempty"`
+	SigningKeyPath string `yaml:"signing-key-path,omitempty" json:"signing_key_path,omitempty" mapstructure:"signing-key-path"`
 
 	// Path to IMA public key certificate (for signature verification)
-	PublicKeyPath string `yaml:"public-key-path,omitempty" json:"public_key_path,omitempty"`
+	PublicKeyPath string `yaml:"public-key-path,omitempty" json:"public_key_path,omitempty" mapstructure:"public-key-path"`
 
 	// Audit mode - log IMA events to audit subsystem
-	AuditEnabled bool `yaml:"audit-enabled" json:"audit_enabled"`
+	AuditEnabled bool `yaml:"audit-enabled" json:"audit_enabled" mapstructure:"audit-enabled"`
 }
 
 // DefaultIMAMonitorPaths returns common Linux paths for rootkit/intrusion detection
@@ -369,7 +369,7 @@ type OSConfig struct {
 	// linux-rpi for a Raspberry Pi). Ignored in FIPS mode, which installs the
 	// container-built FIPS kernel instead. It also names the kernel flavour
 	// (the part after "linux-") a platform-built kernel is installed under.
-	KernelPackage string `yaml:"kernel-package,omitempty" json:"kernel_package,omitempty"`
+	KernelPackage string `yaml:"kernel-package,omitempty" json:"kernel_package,omitempty" mapstructure:"kernel-package"`
 
 	// KernelArtifactsDir names a directory on the install media holding a
 	// platform-built kernel for the configured flavour — vmlinuz-<flavor>,
@@ -378,7 +378,7 @@ type OSConfig struct {
 	// is not installed from apk; the kernel and modules come from here and
 	// are verified against SHA256SUMS first. The QEMU virt stand-in of the
 	// Raspberry Pi image uses it (docs/factory-image/architecture.md).
-	KernelArtifactsDir string `yaml:"kernel-artifacts-dir,omitempty" json:"kernel_artifacts_dir,omitempty"`
+	KernelArtifactsDir string `yaml:"kernel-artifacts-dir,omitempty" json:"kernel_artifacts_dir,omitempty" mapstructure:"kernel-artifacts-dir"`
 
 	// Hostname for the installed system
 	Hostname string `yaml:"hostname" json:"hostname"`
@@ -390,17 +390,17 @@ type OSConfig struct {
 	Packages []string `yaml:"packages" json:"packages"`
 
 	// Inline post-install script (embedded in YAML as multiline string)
-	PostInstall string `yaml:"post-install,omitempty" json:"post_install,omitempty"`
+	PostInstall string `yaml:"post-install,omitempty" json:"post_install,omitempty" mapstructure:"post-install"`
 
 	// Path to post-install script file (local path or HTTP URL)
 	// For HTTP URLs, a .sha256 file must exist alongside for checksum validation
-	PostInstallScript string `yaml:"post-install-script,omitempty" json:"post_install_script,omitempty"`
+	PostInstallScript string `yaml:"post-install-script,omitempty" json:"post_install_script,omitempty" mapstructure:"post-install-script"`
 
 	// Root password
 	RootPassword string `yaml:"root-password,omitempty" json:"root_password,omitempty" secret:"true"`
 
 	// Filesystem type (lvm or ext4) - used to determine packages to install
-	FilesystemType FilesystemType `yaml:"filesystem-type" json:"filesystem_type"`
+	FilesystemType FilesystemType `yaml:"filesystem-type" json:"filesystem_type" mapstructure:"filesystem-type"`
 
 	// FIPS mode enabled
 	FIPS bool `yaml:"fips" json:"fips"`
@@ -409,25 +409,25 @@ type OSConfig struct {
 	Lockdown bool `yaml:"lockdown" json:"lockdown"`
 
 	// Kernel lockdown mode: "integrity" or "confidentiality"
-	LockdownMode string `yaml:"lockdown-mode" json:"lockdown_mode"`
+	LockdownMode string `yaml:"lockdown-mode" json:"lockdown_mode" mapstructure:"lockdown-mode"`
 
 	// Automatic TPM resealing on kernel upgrade
-	TPMAutoUpgradeSeal bool `yaml:"tpm-auto-upgrade-seal" json:"tpm_auto_upgrade_seal"`
+	TPMAutoUpgradeSeal bool `yaml:"tpm-auto-upgrade-seal" json:"tpm_auto_upgrade_seal" mapstructure:"tpm-auto-upgrade-seal"`
 
 	// Path to platformd binary to install (consolidated binary includes all initrd commands)
-	PlatformdBinary string `yaml:"platformd-binary" json:"platformd_binary"`
+	PlatformdBinary string `yaml:"platformd-binary" json:"platformd_binary" mapstructure:"platformd-binary"`
 
 	// WebUI installation directory (where public_html should be installed)
-	WebUIInstallPath string `yaml:"webui-install-path" json:"webui_install_path"`
+	WebUIInstallPath string `yaml:"webui-install-path" json:"webui_install_path" mapstructure:"webui-install-path"`
 
 	// Enable FIDO2 support (installs libfido2, fido2, coreutils packages)
-	EnableFIDO2 bool `yaml:"enable-fido2" json:"enable_fido2"`
+	EnableFIDO2 bool `yaml:"enable-fido2" json:"enable_fido2" mapstructure:"enable-fido2"`
 
 	// KernelModules is a list of kernel modules to load at boot.
 	// These are written to /etc/modules on the installed system.
 	// Required for bare metal deployments where NIC drivers are not
 	// built into the kernel (e.g., igb, ixgbe for Intel NICs).
-	KernelModules []string `yaml:"kernel-modules,omitempty" json:"kernel_modules,omitempty"`
+	KernelModules []string `yaml:"kernel-modules,omitempty" json:"kernel_modules,omitempty" mapstructure:"kernel-modules"`
 
 	// IMA (Integrity Measurement Architecture) configuration
 	IMA *IMAConfig `yaml:"ima,omitempty" json:"ima,omitempty"`
@@ -468,16 +468,16 @@ type UKIConfig struct {
 	Cmdline string `yaml:"cmdline" json:"cmdline"`
 
 	// Path to kernel on installed system (e.g., /boot/vmlinuz-lts)
-	KernelPath string `yaml:"kernel-path" json:"kernel_path"`
+	KernelPath string `yaml:"kernel-path" json:"kernel_path" mapstructure:"kernel-path"`
 
 	// Path to initramfs on installed system (e.g., /boot/initramfs-lts)
-	InitramfsPath string `yaml:"initramfs-path" json:"initramfs_path"`
+	InitramfsPath string `yaml:"initramfs-path" json:"initramfs_path" mapstructure:"initramfs-path"`
 
 	// OS release string (optional)
-	OSRelease string `yaml:"os-release" json:"os_release"`
+	OSRelease string `yaml:"os-release" json:"os_release" mapstructure:"os-release"`
 
 	// Path to microcode (optional)
-	MicrocodePath string `yaml:"microcode-path" json:"microcode_path"`
+	MicrocodePath string `yaml:"microcode-path" json:"microcode_path" mapstructure:"microcode-path"`
 }
 
 // Secure Boot re-sign modes. "remote" sends only a digest to the CP-KMS
@@ -587,16 +587,16 @@ type Config struct {
 	UKI *UKIConfig `yaml:"uki,omitempty" json:"uki,omitempty"`
 
 	// Secure Boot configuration
-	SecureBoot *SecureBootConfig `yaml:"secure-boot,omitempty" json:"secure_boot,omitempty"`
+	SecureBoot *SecureBootConfig `yaml:"secure-boot,omitempty" json:"secure_boot,omitempty" mapstructure:"secure-boot"`
 
 	// Enable TPM sealing
-	EnableTPMSealing bool `yaml:"enable-tpm-sealing" json:"enable_tpm_sealing"`
+	EnableTPMSealing bool `yaml:"enable-tpm-sealing" json:"enable_tpm_sealing" mapstructure:"enable-tpm-sealing"`
 
 	// PCRs to seal against
 	PCRs []uint `yaml:"pcrs,omitempty" json:"pcrs,omitempty"`
 
 	// Enable FIDO2 enrollment
-	EnableFIDO2Enrollment bool `yaml:"enable-fido2-enrollment" json:"enable_fido2_enrollment"`
+	EnableFIDO2Enrollment bool `yaml:"enable-fido2-enrollment" json:"enable_fido2_enrollment" mapstructure:"enable-fido2-enrollment"`
 
 	// FIDO2 configuration
 	FIDO2 *FIDO2Config `yaml:"fido2,omitempty" json:"fido2,omitempty"`
@@ -621,19 +621,19 @@ type Config struct {
 	// installer resolves vendor-specific quirks (kernel cmdline, Samba
 	// protocol) via pkg/quirks.ResolveIdentity. An empty string causes the
 	// generic cross-vendor defaults to be used.
-	HardwareManufacturer string `yaml:"hardware-manufacturer,omitempty" json:"hardware_manufacturer,omitempty"`
+	HardwareManufacturer string `yaml:"hardware-manufacturer,omitempty" json:"hardware_manufacturer,omitempty" mapstructure:"hardware-manufacturer"`
 
 	// HardwareModel is the Redfish System.Model string for the target host
 	// (e.g. "X10SDV-TP8F", "PowerEdge R640"). Used together with
 	// HardwareManufacturer to select board-specific quirks.
-	HardwareModel string `yaml:"hardware-model,omitempty" json:"hardware_model,omitempty"`
+	HardwareModel string `yaml:"hardware-model,omitempty" json:"hardware_model,omitempty" mapstructure:"hardware-model"`
 
 	// HardwarePartNumber is the Redfish System.PartNumber string for the
 	// target host (e.g. "SYS-5018D-FN8T-AS001"). Some firmware serves a
 	// placeholder Model ("Super Server") and names the board only here;
 	// the BMC clients match on it, and the installer must carry the same
 	// identity so both sides resolve the same quirk entry.
-	HardwarePartNumber string `yaml:"hardware-part-number,omitempty" json:"hardware_part_number,omitempty"`
+	HardwarePartNumber string `yaml:"hardware-part-number,omitempty" json:"hardware_part_number,omitempty" mapstructure:"hardware-part-number"`
 }
 
 // HardwareIdentity returns the quirk-matching identity carried by the
@@ -653,13 +653,13 @@ func (c *Config) HardwareIdentity() quirks.Identity {
 // FIDO2Config holds FIDO2 enrollment configuration
 type FIDO2Config struct {
 	// Relying Party ID for FIDO2 credentials
-	RelyingPartyID string `yaml:"relying-party-id" json:"relying_party_id"`
+	RelyingPartyID string `yaml:"relying-party-id" json:"relying_party_id" mapstructure:"relying-party-id"`
 
 	// LUKS keyslot to use for FIDO2 (default: 3)
 	Keyslot int `yaml:"keyslot" json:"keyslot"`
 
 	// User presence required for unlock
-	UserPresenceRequired bool `yaml:"user-presence-required" json:"user_presence_required"`
+	UserPresenceRequired bool `yaml:"user-presence-required" json:"user_presence_required" mapstructure:"user-presence-required"`
 
 	// Timeout for device operations in seconds
 	Timeout int `yaml:"timeout" json:"timeout"`

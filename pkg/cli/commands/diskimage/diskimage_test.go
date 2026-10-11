@@ -128,6 +128,20 @@ func TestLoadInstallerConfig(t *testing.T) {
 	}
 }
 
+// TestLoadInstallerConfigAcceptsSecretReferences is the regression for #778: a
+// platform config whose CA key passwords are kms:// references must load, as it
+// does in platformd, instead of failing to decode into secret.SecretValue.
+func TestLoadInstallerConfigAcceptsSecretReferences(t *testing.T) {
+	platform := filepath.Join("testdata", "platform-secret-refs.yaml")
+	cfg, err := loadInstallerConfig(&assembleFlags{platformConfig: platform})
+	if err != nil {
+		t.Fatalf("platform config with kms:// references: %v", err)
+	}
+	if cfg.Disk.Device != "/dev/mmcblk0" {
+		t.Errorf("disk device = %q", cfg.Disk.Device)
+	}
+}
+
 func TestBuildConfigResolvesBinariesAndOverrides(t *testing.T) {
 	dir := t.TempDir()
 	bins := filepath.Join(dir, "aarch64")
