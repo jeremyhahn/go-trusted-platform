@@ -179,9 +179,11 @@ release and are held equal to `build/docker/uboot-builder/Makefile` by
 11. **The size floor is 2048 MB** (default 4096); `Create` and `Assemble`
     fail below it before touching anything.
 12. **`Preflight` runs before any work** unless `SkipPreflight`: the runtime
-    answers `version`; on a foreign architecture
-    `/proc/sys/fs/binfmt_misc/qemu-<goarch>` exists with `F` in its
-    `flags:`; `/sys/module/loop` and `/sys/module/dm_crypt` exist.
+    answers `version`; on a foreign architecture a short-lived privileged
+    `alpine:3.22` container started through the runtime (so the answer is the
+    runtime host's, not the caller's `/proc`) reads
+    `/proc/sys/fs/binfmt_misc/qemu-<arch>` and it carries `F` in its
+    `flags:`; native builds run no probe; `/sys/module/loop` and `/sys/module/dm_crypt` exist.
 
 ## 4. Error semantics
 

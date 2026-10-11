@@ -270,12 +270,16 @@ func Preflight(ctx context.Context, run runnerFunc, containerRuntime, arch strin
 	hostArch := runtime.GOARCH
 	if goArchOf(arch) != hostArch {
 		// binfmt_misc entries are registered under the QEMU architecture
-		// name (qemu-aarch64), which is the Alpine name, not GOARCH.
-		flags, err := os.ReadFile(binfmtDir + "/qemu-" + arch)
+		// name (qemu-aarch64), which is the Alpine name, not GOARCH. The
+		// registration belongs to the container runtime's kernel, not to this
+		// process's /proc (a CI job container has no binfmt_misc mount), so
+		// ask a short-lived native container.
+		entry, err := run(ctx, containerRuntime, "run", "--rm", "--privileged", binfmtProbeImage,
+			"sh", "-c", "mountpoint -q "+binfmtMount+" || mount -t binfmt_misc none "+binfmtMount+"; cat "+binfmtMount+"/qemu-"+arch)
 		if err != nil {
 			return &PreflightError{Check: "no binfmt handler for " + arch + " containers", Remedy: "run `make init` (registers multiarch/qemu-user-static --reset -p yes)"}
 		}
-		if !binfmtHasFixedBinary(string(flags)) {
+		if !binfmtHasFixedBinary(string(entry)) {
 			return &PreflightError{Check: "the qemu-" + arch + " binfmt handler lacks the F flag, so chroot inside the container cannot exec", Remedy: "re-register with `docker run --rm --privileged multiarch/qemu-user-static --reset -p yes`"}
 		}
 	}
@@ -287,9 +291,13 @@ func Preflight(ctx context.Context, run runnerFunc, containerRuntime, arch strin
 	return nil
 }
 
-// binfmtDir is where the kernel exposes binfmt_misc registrations. It is a
-// variable so tests can point Preflight at a fixture directory.
-var binfmtDir = "/proc/sys/fs/binfmt_misc"
+const (
+	// binfmtProbeImage is the builder image's base, so the probe pulls nothing
+	// the build does not already need.
+	binfmtProbeImage = "alpine:3.22"
+	// binfmtMount is where binfmt_misc is mounted inside the probe container.
+	binfmtMount = "/proc/sys/fs/binfmt_misc"
+)
 
 // sysModuleDir is where the kernel lists loaded modules; overridable in tests.
 var sysModuleDir = "/sys/module"

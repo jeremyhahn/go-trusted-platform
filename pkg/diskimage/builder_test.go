@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -213,41 +214,54 @@ func TestPreflightHelpers(t *testing.T) {
 // directories: the binfmt entry is looked up under the QEMU name
 // (qemu-aarch64), and each failure names its remedy.
 func TestPreflightHostChecks(t *testing.T) {
-	ok := func(context.Context, string, ...string) ([]byte, error) { return []byte("28.0"), nil }
-	binfmt := t.TempDir()
 	modules := t.TempDir()
-	origBinfmt, origModules := binfmtDir, sysModuleDir
-	binfmtDir, sysModuleDir = binfmt, modules
-	t.Cleanup(func() { binfmtDir, sysModuleDir = origBinfmt, origModules })
+	origModules := sysModuleDir
+	sysModuleDir = modules
+	t.Cleanup(func() { sysModuleDir = origModules })
+
+	// fakeRuntime answers `version` and the binfmt probe `run`; probe is the
+	// registration the container sees, probeErr makes the probe container fail.
+	var probes [][]string
+	fakeRuntime := func(probe string, probeErr error) runnerFunc {
+		probes = nil
+		return func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if args[0] == "version" {
+				return []byte("28.0"), nil
+			}
+			probes = append(probes, args)
+			return []byte(probe), probeErr
+		}
+	}
 
 	var pre *PreflightError
-	if err := Preflight(context.Background(), ok, "docker", "aarch64"); !errors.As(err, &pre) || !strings.Contains(err.Error(), "no binfmt handler for aarch64") {
-		t.Errorf("missing binfmt entry: %v", err)
+	if err := Preflight(context.Background(), fakeRuntime("", errors.New("cat: no such file")), "docker", "aarch64"); !errors.As(err, &pre) || !strings.Contains(err.Error(), "no binfmt handler for aarch64") {
+		t.Errorf("absent binfmt handler: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(binfmt, "qemu-aarch64"), []byte("enabled\nflags: OC\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := Preflight(context.Background(), ok, "docker", "aarch64"); !errors.As(err, &pre) || !strings.Contains(err.Error(), "lacks the F flag") {
+	if err := Preflight(context.Background(), fakeRuntime("enabled\nflags: OC\n", nil), "docker", "aarch64"); !errors.As(err, &pre) || !strings.Contains(err.Error(), "lacks the F flag") {
 		t.Errorf("binfmt without F: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(binfmt, "qemu-aarch64"), []byte("enabled\nflags: POCF\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := Preflight(context.Background(), ok, "docker", "aarch64"); !errors.As(err, &pre) || !strings.Contains(err.Error(), "kernel module loop") {
+	if err := Preflight(context.Background(), fakeRuntime("enabled\nflags: POCF\n", nil), "docker", "aarch64"); !errors.As(err, &pre) || !strings.Contains(err.Error(), "kernel module loop") {
 		t.Errorf("missing loop module: %v", err)
+	}
+	// The probe is a privileged container that reads the qemu-aarch64 entry.
+	if len(probes) != 1 || probes[0][0] != "run" || !strings.Contains(strings.Join(probes[0], " "), "--privileged") || !strings.Contains(strings.Join(probes[0], " "), "binfmt_misc/qemu-aarch64") {
+		t.Errorf("probe args = %v", probes)
 	}
 	for _, m := range []string{"loop", "dm_crypt"} {
 		if err := os.Mkdir(filepath.Join(modules, m), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := Preflight(context.Background(), ok, "docker", "aarch64"); err != nil {
+	if err := Preflight(context.Background(), fakeRuntime("enabled\nflags: POCF\n", nil), "docker", "aarch64"); err != nil {
 		t.Errorf("all checks satisfied: %v", err)
 	}
-	// A same-architecture request never consults binfmt, so an unregistered
-	// handler for the host architecture is not a failure.
-	if err := Preflight(context.Background(), ok, "docker", "x86_64"); err != nil {
+	// A same-architecture request never probes binfmt, so an unregistered
+	// handler for the host architecture is not a failure and costs no container.
+	if err := Preflight(context.Background(), fakeRuntime("", errors.New("unregistered")), "docker", runtime.GOARCH); err != nil {
 		t.Errorf("same-arch preflight: %v", err)
+	}
+	if len(probes) != 0 {
+		t.Errorf("same-arch preflight ran a probe: %v", probes)
 	}
 }
 
