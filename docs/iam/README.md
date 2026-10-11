@@ -164,7 +164,7 @@ platformctl iam policy create -f policy.yaml
 | [API Reference](api-reference.md) | REST and gRPC API documentation |
 | [Invitation API](api-reference-invitations.md) | Invitation management API |
 | [CLI Usage](cli-usage.md) | Command-line interface |
-| [Roadmap](ROADMAP.md) | Development roadmap and progress tracker |
+| [Roadmap](../../ROADMAP.md) | Development roadmap and progress tracker |
 
 ## Integration with Platform Components
 

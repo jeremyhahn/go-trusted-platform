@@ -211,7 +211,7 @@ Instance States:
 - [CLI Usage](cli-usage.md) - Command-line reference
 - [swtpm Integration](swtpm-integration.md) - vTPM provisioning
 - [802.1X Network Attachment](802.1X-network-attachment.md) - Port authentication
-- [Development Roadmap](ROADMAP.md) - Phases 1-7 implementation status
+- [Development Roadmap](../../ROADMAP.md) - Phases 1-7 implementation status
 
 ### Related Documentation
 

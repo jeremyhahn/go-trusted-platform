@@ -831,4 +831,4 @@ platformctl device list -o json --page-size 1000 | \
 - [API Reference](api-reference.md) - REST and gRPC API
 - [Configuration](configuration.md) - Device configuration
 - [Architecture](architecture.md) - Device architecture
-- [Roadmap](ROADMAP.md) - Development roadmap
+- [Roadmap](../../ROADMAP.md) - Development roadmap

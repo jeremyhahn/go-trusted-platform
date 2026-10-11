@@ -1,5 +1,8 @@
 # Unified SDK Integration Roadmap for go-trusted-platform
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Archived 2026-10-11 (#780). The current roadmap is [ROADMAP.md](../../ROADMAP.md).
+
 > **Claude Plan Reference**: `~/.claude/plans/happy-coalescing-rivest.md`
 >
 > To continue this plan in a future Claude session, reference the plan file above.

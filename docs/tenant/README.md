@@ -108,7 +108,7 @@ platformctl tenant show engineering
 | [Isolation](isolation.md) | Network, storage, and key isolation mechanisms |
 | [API Reference](api-reference.md) | Full Tenant CRUD and Quota Management API |
 | [CLI Usage](cli-usage.md) | Complete platformctl tenant command reference |
-| [Roadmap](ROADMAP.md) | Development roadmap and progress tracker |
+| [Roadmap](../../ROADMAP.md) | Development roadmap and progress tracker |
 
 ## Tenant Lifecycle
 

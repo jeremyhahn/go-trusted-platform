@@ -87,8 +87,7 @@ is maintained.
 
 ## Quick Links
 
-- [Features](FEATURES.md) - Complete feature list
-- [Roadmap](ROADMAP.md) - Development progress and planned features
+- [Roadmap](../ROADMAP.md) - What is complete and what remains to the release candidate
 - [Build Guide](BUILD.md) - Building from source
 
 ---
@@ -239,8 +238,7 @@ Each component has its own directory under `docs/` with a consistent structure:
 ```
 docs/
 ├── README.md              # This file - main documentation index
-├── FEATURES.md            # Complete feature list
-├── ROADMAP.md             # Top-level development roadmap
+├── ROADMAP.md             # Pointer to the root ROADMAP.md
 ├── BUILD.md               # Build instructions
 │
 ├── {component}/           # Component documentation
@@ -249,7 +247,6 @@ docs/
 │   ├── configuration.md   # Configuration reference
 │   ├── api-reference.md   # REST/gRPC API documentation
 │   ├── cli-usage.md       # Command-line interface
-│   └── ROADMAP.md         # Component roadmap (if incomplete)
 ```
 
 ### Documentation Conventions
@@ -273,7 +270,6 @@ All documentation follows these conventions:
 | `configuration.md` | Complete YAML configuration reference |
 | `api-reference.md` | REST and gRPC endpoint documentation |
 | `cli-usage.md` | Command-line examples and options |
-| `ROADMAP.md` | Development status and planned work |
 
 ---
 
@@ -281,12 +277,7 @@ All documentation follows these conventions:
 
 ### Component Status
 
-Local mode is the only mode with shipping code, and it is roughly 85% complete — see [architecture/platform-modes.md](architecture/platform-modes.md). The per-component statuses below mean the component's core is in place and usable; they do not mean the platform as a whole is finished. Work outstanding across the whole platform:
-
-- **Phase 4, Device Enrollment Strategies** (TCG Spec Section 6) is entirely unchecked in [ROADMAP.md](ROADMAP.md): Full Pre-Provision, EK-Only, EAB, and Attestation enrollment.
-- **Phases 7 and 8** (LAK/LDevID key operations and the certify-01 challenge, both landing in go-xkms) are **deferred**, with Phase 8 blocked on Phase 7.
-- **P2P, P2P Federation, and Hosted** modes are Not Started.
-- **DHT** and **Firmware** are Not Started; both have design docs but no implementation package.
+Local mode is the only mode with shipping code, and it is roughly 85% complete — see [architecture/platform-modes.md](architecture/platform-modes.md). The per-component statuses below mean the component's core is in place and usable; they do not mean the platform as a whole is finished. What is complete and what remains to the release candidate is in the repository [ROADMAP.md](../ROADMAP.md), the one roadmap.
 
 | Component | Status | Documentation |
 |-----------|--------|---------------|
@@ -301,10 +292,10 @@ Local mode is the only mode with shipping code, and it is roughly 85% complete �
 | SDN | Complete | [sdn/](sdn/) |
 | Tenant | Complete | [tenant/](tenant/) |
 | TPM | Complete | [tpm/](tpm/) |
-| **DHT** | Not Started (design only, no `pkg/dht`) | [dht/ROADMAP.md](dht/ROADMAP.md) |
-| **Firmware** | Not Started (design only, no `pkg/firmware`) | [firmware/ROADMAP.md](firmware/ROADMAP.md) |
+| **DHT** | Not Started (design only, no `pkg/dht`) | [dht/](dht/) |
+| **Firmware** | Not Started (design only, no `pkg/firmware`) | [firmware/](firmware/) |
 
-See [ROADMAP.md](ROADMAP.md) for the full picture, including the unchecked Phase 4 enrollment strategies and the deferred Phases 7-8.
+See [ROADMAP.md](../ROADMAP.md) for the full picture.
 
 ---
 
@@ -314,39 +305,26 @@ We welcome contributions to go-trusted-platform! Here's how you can help:
 
 ### Contributing to Documentation
 
-1. **Find incomplete items** - Check component `ROADMAP.md` files for `- [ ]` items
-2. **Pick a task** - Choose an unchecked item to work on
-3. **Submit a PR** - Include the updated `ROADMAP.md` with your item checked
+1. **Find an issue** - The issue tracker is the backlog; [ROADMAP.md](../ROADMAP.md) orders it
+2. **Pick a task** - Choose an open, unblocked issue
+3. **Submit a PR** - Reference the issue and update the feature folder under `docs/`
 
 ### Contributing to Code
 
-1. **Review the roadmap** - See [ROADMAP.md](ROADMAP.md) for planned features
-2. **Check component roadmaps** - Each component has specific tasks in its `ROADMAP.md`
-3. **Follow conventions** - See [CLAUDE.md](../CLAUDE.md) for coding standards
-4. **Update documentation** - Include doc updates with code changes
-5. **Mark progress** - Update relevant `ROADMAP.md` checkboxes in your PR
+1. **Review the roadmap** - See [ROADMAP.md](../ROADMAP.md) for planned work
+2. **Follow conventions** - See [CLAUDE.md](../CLAUDE.md) for coding standards
+3. **Update documentation** - Include doc updates with code changes
 
 ### PR Checklist
 
 When submitting a PR, ensure you:
 
-- [ ] Update relevant `ROADMAP.md` files to mark completed items as `- [x]`
 - [ ] Add/update documentation for new features
 - [ ] Follow the documentation conventions above
 - [ ] Include tests with 90%+ coverage
-- [ ] Reference the roadmap item in your PR description
+- [ ] Reference the issue in your PR description
 
-### Priority Areas
-
-These components need work:
-
-| Priority | Component | Roadmap | Description |
-|----------|-----------|---------|-------------|
-| Next | Device Enrollment | [ROADMAP.md](ROADMAP.md) | Phase 4 strategies (TCG Section 6), all unchecked |
-| Future | [DHT](dht/) | [ROADMAP.md](dht/ROADMAP.md) | P2P network, FROST-DKG, distributed services |
-| Future | [Firmware](firmware/) | [ROADMAP.md](firmware/ROADMAP.md) | Raspberry Pi, Android, AVR support |
-
-See [ROADMAP.md](ROADMAP.md) for the full development roadmap.
+Priorities are in [ROADMAP.md](../ROADMAP.md).
 
 ---
 

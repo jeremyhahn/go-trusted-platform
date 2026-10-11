@@ -332,7 +332,7 @@ webservices:
 | [QUIC API Reference](api-reference-quic.md) | QUIC opcode documentation (extended + secrets categories) |
 | [MCP API Reference](api-reference-mcp.md) | MCP tools documentation (32 tools) |
 | [CLI Usage](cli-usage.md) | Command-line interface with new key lifecycle commands |
-| [Roadmap](ROADMAP.md) | Development roadmap and progress tracker |
+| [Roadmap](../../ROADMAP.md) | Development roadmap and progress tracker |
 
 ## Integration
 

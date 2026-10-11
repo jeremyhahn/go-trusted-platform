@@ -166,7 +166,7 @@ platformctl cluster status
 | [Cluster-Aware Services](cluster-aware-services.md) | SDN, CA, DNS clustering details |
 | [API Reference](api-reference.md) | Cluster management API |
 | [CLI Usage](cli-usage.md) | platformctl cluster commands |
-| [Roadmap](ROADMAP.md) | Development roadmap and progress tracker |
+| [Roadmap](../../ROADMAP.md) | Development roadmap and progress tracker |
 
 ## Key Concepts
 

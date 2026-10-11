@@ -31,11 +31,11 @@ Key capabilities include:
 These are designed but not yet implemented. They are documented here so the design is discoverable, not because the code ships today:
 
 - **DHT Network** (roadmap) - Decentralized operations with cryptocurrency and content sharing. The design lives in [docs/dht/](docs/dht/); there is no `pkg/dht`. The only P2P code today is libp2p peer discovery in `pkg/sdn/gateway/p2p/`, compiled only under the `platform_p2p` build tag.
-- **Firmware Support** (roadmap) - AVR, Raspberry Pi, and Android with secure OTA updates. See [docs/firmware/ROADMAP.md](docs/firmware/ROADMAP.md), which is at Phase 0 - Planned. There is no `pkg/firmware`.
+- **Firmware Support** (roadmap) - AVR, Raspberry Pi, and Android with secure OTA updates. See [docs/firmware/](docs/firmware/) and [ROADMAP.md](ROADMAP.md); it is at Phase 0 - Planned. There is no `pkg/firmware`.
 
-For a complete list of features, see [docs/FEATURES.md](docs/FEATURES.md).
+For what is complete and what remains, see [ROADMAP.md](ROADMAP.md).
 
-For development progress and planned features, see [docs/ROADMAP.md](docs/ROADMAP.md).
+Feature documentation is in [docs/](docs/README.md).
 
 
 ## Multi-Protocol API
@@ -76,8 +76,7 @@ For detailed documentation on architecture and components, see:
 
 - [Documentation Hub](docs/README.md) - Complete documentation index
 - [Architecture](docs/architecture/) - System design and security model
-- [Features](docs/FEATURES.md) - Complete feature list
-- [Roadmap](docs/ROADMAP.md) - Development progress
+- [Roadmap](ROADMAP.md) - Complete vs remaining to the release candidate
 
 
 ## Build
