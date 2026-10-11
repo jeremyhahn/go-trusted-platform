@@ -491,6 +491,10 @@ COVERAGE_DIR                := $(BUILD_DIR)/coverage
 #   matches this pin. Never pin below the latest release.
 GOLANGCI_LINT_VERSION       := v2.14.0
 
+# actionlint checks .github/workflows/ and is pinned and built the same way as
+# golangci-lint. `make lint` runs it so a broken workflow fails here, not in CI.
+ACTIONLINT_VERSION          := v1.7.12
+
 # gosec is pinned and built with THIS module's toolchain, for the same reason as
 # golangci-lint: a gosec built with an older Go cannot type-check a module that
 # declares a newer `go` line, so every package reports "type errors" and the
@@ -541,6 +545,8 @@ GOLANGCI_LINT_TIMEOUT       ?= 45m
 # That also makes the "is it already installed?" check exact instead of a guess.
 GOLANGCI_LINT_DIR           := $(BUILD_DIR)/tools/golangci-lint-$(GOLANGCI_LINT_VERSION)
 GOLANGCI_LINT               := $(GOLANGCI_LINT_DIR)/golangci-lint
+ACTIONLINT_DIR              := $(BUILD_DIR)/tools/actionlint-$(ACTIONLINT_VERSION)
+ACTIONLINT                  := $(ACTIONLINT_DIR)/actionlint
 # Per-checkout analysis cache. golangci-lint's default is one shared
 # ~/.cache/golangci-lint for every checkout on the machine, and cached issues
 # carry the ABSOLUTE path of the tree that produced them. Two checkouts with
@@ -3234,7 +3240,9 @@ lint-cli:
 
 .PHONY: lint
 ## lint: Run golangci-lint on all packages (GOLANGCI_LINT_TIMEOUT bounds the run; see its comment)
-lint: $(GOLANGCI_LINT)
+lint: $(GOLANGCI_LINT) $(ACTIONLINT)
+	@echo "$(CYAN)$(BOLD)→ Running actionlint ($(ACTIONLINT_VERSION))...$(RESET)"
+	@$(ACTIONLINT) || { echo "$(RED)$(BOLD)✗ actionlint failed$(RESET)"; exit 1; }
 	@echo "$(CYAN)$(BOLD)→ Running linters ($(GOLANGCI_LINT_VERSION))...$(RESET)"
 	@mkdir -p $(GOLANGCI_LINT_CACHE)
 	@if $(GOLANGCI_LINT) run --timeout=$(GOLANGCI_LINT_TIMEOUT) ./...; then \
@@ -3373,7 +3381,9 @@ trivy:
 			$(TRIVY_SKIP_DIRS) . && \
 		echo "$(GREEN)✓ Trivy scan complete - no critical/high vulnerabilities found$(RESET)"; \
 	else \
-		echo "$(YELLOW)⚠ trivy not found - skipping (install with: make install-trivy)$(RESET)"; \
+		echo "$(RED)$(BOLD)✗ trivy not found on PATH - the security suite cannot pass without it$(RESET)"; \
+		echo "$(YELLOW)  Install with: make install-trivy$(RESET)"; \
+		exit 1; \
 	fi
 
 .PHONY: trivy-image
@@ -3416,9 +3426,8 @@ mod-verify:
 ## security: Run the full security-analysis suite (devops.md §8)
 # The contract CI calls: gosec, govulncheck, go mod verify and trivy fs, in the
 # same form a developer runs locally. Container images are covered separately by
-# `make trivy-image`, which needs a built image. trivy carries its own
-# `command -v` guard so a developer without it installed still gets the Go half
-# of the suite; CI installs the CLI, so nothing is skipped there.
+# `make trivy-image`, which needs a built image. trivy fails closed when the CLI
+# is not on PATH: a suite that silently skips a scanner is not a passing suite.
 security: gosec vuln mod-verify trivy
 	@echo "$(GREEN)$(BOLD)✓ Security suite passed!$(RESET)"
 
@@ -3503,6 +3512,11 @@ $(GOLANGCI_LINT):
 	@echo "$(CYAN)$(BOLD)→ Installing golangci-lint $(GOLANGCI_LINT_VERSION) (built with this module's toolchain)...$(RESET)"
 	@mkdir -p $(GOLANGCI_LINT_DIR)
 	@GOBIN=$(abspath $(GOLANGCI_LINT_DIR)) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+$(ACTIONLINT):
+	@echo "$(CYAN)$(BOLD)→ Installing actionlint $(ACTIONLINT_VERSION) (built with this module's toolchain)...$(RESET)"
+	@mkdir -p $(ACTIONLINT_DIR)
+	@GOBIN=$(abspath $(ACTIONLINT_DIR)) go install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 
 .PHONY: install-gocovmerge
 ## install-gocovmerge: Install gocovmerge for merging coverage files
