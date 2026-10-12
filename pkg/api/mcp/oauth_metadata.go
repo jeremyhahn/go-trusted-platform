@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 )
 
 // OAuthProtectedResourceMetadata represents the OAuth 2.0 Protected Resource Metadata
@@ -110,57 +111,33 @@ func (h *OAuthMetadataHandler) buildMetadata() {
 	}
 }
 
-// getSupportedScopes returns all OAuth scopes supported by this MCP server.
+// getSupportedScopes returns the OAuth scopes this MCP server enforces. It is
+// derived from the tool permission catalog rather than kept as a second list,
+// because two hand-maintained lists drifted apart in both directions (#315).
 func (h *OAuthMetadataHandler) getSupportedScopes() []string {
-	return []string{
-		// MCP standard scopes
-		"mcp:tools",
-		"mcp:resources",
+	return advertisedScopes(toolPermissionCatalog())
+}
 
-		// Platform-specific scopes
-		"vtpm:read",
-		"vtpm:write",
-		"vtpm:delete",
-
-		"device:read",
-		"device:write",
-		"device:delete",
-
-		"dns:read",
-		"dns:write",
-		"dns:delete",
-
-		"sdn:read",
-		"sdn:write",
-		"sdn:delete",
-
-		"ca:read",
-		"ca:write",
-		"ca:delete",
-		"ca:sign-csr",
-
-		"kms:read",
-		"kms:write",
-		"kms:delete",
-
-		"iam:read",
-		"iam:write",
-		"iam:delete",
-
-		"container:read",
-		"container:write",
-		"container:delete",
-
-		"attestation:read",
-		"attestation:write",
-
-		"tenant:read",
-		"tenant:write",
-		"tenant:delete",
-
-		// Administrative scopes
-		"platform:admin",
+// advertisedScopes returns the sorted, deduplicated token scopes the given
+// tool permissions require. An open tool ("") requires no scope and a
+// malformed permission is not a scope a client can request; neither is
+// advertised.
+func advertisedScopes(permissions map[string]string) []string {
+	seen := make(map[string]struct{}, len(permissions))
+	scopes := make([]string, 0, len(permissions))
+	for _, permission := range permissions {
+		scope := scopeForToolPermission(permission)
+		if scope == "" {
+			continue
+		}
+		if _, duplicate := seen[scope]; duplicate {
+			continue
+		}
+		seen[scope] = struct{}{}
+		scopes = append(scopes, scope)
 	}
+	slices.Sort(scopes)
+	return scopes
 }
 
 // ServeHTTP handles HTTP requests for the OAuth metadata endpoint.

@@ -32,142 +32,143 @@ type AuthorizationChecker struct {
 
 // NewAuthorizationChecker creates a new authorization checker.
 func NewAuthorizationChecker(authService AuthorizationService, authManager AuthManager) *AuthorizationChecker {
-	c := &AuthorizationChecker{
+	return &AuthorizationChecker{
 		authService:     authService,
 		authManager:     authManager,
-		toolPermissions: make(map[string]string),
+		toolPermissions: toolPermissionCatalog(),
 	}
-
-	// Initialize tool permissions
-	c.initToolPermissions()
-
-	return c
 }
 
-// initToolPermissions sets up the permission mappings for tools.
-func (c *AuthorizationChecker) initToolPermissions() {
+// toolPermissionCatalog returns the permission each MCP tool requires, keyed
+// by tool name. It is the single source of the MCP scope vocabulary: the
+// authorization checker enforces it, and the OAuth protected-resource
+// metadata derives scopes_supported from it (#315), so a scope cannot be
+// required without being advertised, or advertised without being required.
+func toolPermissionCatalog() map[string]string {
+	permissions := make(map[string]string)
+
 	// vTPM tools
-	c.toolPermissions["vtpm_create"] = "vtpm:write"
-	c.toolPermissions["vtpm_delete"] = "vtpm:delete"
-	c.toolPermissions["vtpm_list"] = "vtpm:read"
-	c.toolPermissions["vtpm_start"] = "vtpm:write"
-	c.toolPermissions["vtpm_stop"] = "vtpm:write"
-	c.toolPermissions["vtpm_quote"] = "vtpm:read"
-	c.toolPermissions["vtpm_seal"] = "vtpm:write"
-	c.toolPermissions["vtpm_unseal"] = "vtpm:read"
-	c.toolPermissions["vtpm_extend_pcr"] = "vtpm:write"
-	c.toolPermissions["vtpm_read_pcr"] = "vtpm:read"
+	permissions["vtpm_create"] = "vtpm:write"
+	permissions["vtpm_delete"] = "vtpm:delete"
+	permissions["vtpm_list"] = "vtpm:read"
+	permissions["vtpm_start"] = "vtpm:write"
+	permissions["vtpm_stop"] = "vtpm:write"
+	permissions["vtpm_quote"] = "vtpm:read"
+	permissions["vtpm_seal"] = "vtpm:write"
+	permissions["vtpm_unseal"] = "vtpm:read"
+	permissions["vtpm_extend_pcr"] = "vtpm:write"
+	permissions["vtpm_read_pcr"] = "vtpm:read"
 
 	// DNS tools
-	c.toolPermissions["dns_add_record"] = "dns:write"
-	c.toolPermissions["dns_delete_record"] = "dns:delete"
-	c.toolPermissions["dns_get_record"] = "dns:read"
-	c.toolPermissions["dns_list_records"] = "dns:read"
-	c.toolPermissions["dns_resolve"] = "dns:read"
-	c.toolPermissions["dns_create_zone"] = "dns:write"
-	c.toolPermissions["dns_delete_zone"] = "dns:delete"
-	c.toolPermissions["dns_list_zones"] = "dns:read"
+	permissions["dns_add_record"] = "dns:write"
+	permissions["dns_delete_record"] = "dns:delete"
+	permissions["dns_get_record"] = "dns:read"
+	permissions["dns_list_records"] = "dns:read"
+	permissions["dns_resolve"] = "dns:read"
+	permissions["dns_create_zone"] = "dns:write"
+	permissions["dns_delete_zone"] = "dns:delete"
+	permissions["dns_list_zones"] = "dns:read"
 
 	// Device tools
-	c.toolPermissions["device_register"] = "device:write"
-	c.toolPermissions["device_get"] = "device:read"
-	c.toolPermissions["device_list"] = "device:read"
-	c.toolPermissions["device_delete"] = "device:delete"
-	c.toolPermissions["device_update"] = "device:write"
-	c.toolPermissions["device_attest"] = "device:read"
-	c.toolPermissions["device_record_attest_cert"] = "device:write"
+	permissions["device_register"] = "device:write"
+	permissions["device_get"] = "device:read"
+	permissions["device_list"] = "device:read"
+	permissions["device_delete"] = "device:delete"
+	permissions["device_update"] = "device:write"
+	permissions["device_attest"] = "device:read"
+	permissions["device_record_attest_cert"] = "device:write"
 
 	// Attestation reporting (#226). Reads serve the cache; the refresh
 	// enqueues work that spends a node's TPM time, so it is a write.
-	c.toolPermissions["attestation_device_report"] = "attestation:read"
-	c.toolPermissions["attestation_device_reports"] = "attestation:read"
-	c.toolPermissions["attestation_caller_policy"] = "attestation:read"
-	c.toolPermissions["attestation_device_refresh"] = "attestation:write"
-	c.toolPermissions["device_provision"] = "device:write"
+	permissions["attestation_device_report"] = "attestation:read"
+	permissions["attestation_device_reports"] = "attestation:read"
+	permissions["attestation_caller_policy"] = "attestation:read"
+	permissions["attestation_device_refresh"] = "attestation:write"
+	permissions["device_provision"] = "device:write"
 
 	// Device profile tools (same scopes as the gRPC DeviceService profile
 	// RPCs in pkg/api/grpc/method_permissions.go)
-	c.toolPermissions["profile_create"] = "device:write"
-	c.toolPermissions["profile_get_by_id"] = "device:read"
-	c.toolPermissions["profile_list_all"] = "device:read"
-	c.toolPermissions["profile_update_by_id"] = "device:write"
-	c.toolPermissions["profile_delete_by_id"] = "device:delete"
-	c.toolPermissions["profile_assign_to_device"] = "device:write"
-	c.toolPermissions["profile_unassign_from_device"] = "device:write"
+	permissions["profile_create"] = "device:write"
+	permissions["profile_get_by_id"] = "device:read"
+	permissions["profile_list_all"] = "device:read"
+	permissions["profile_update_by_id"] = "device:write"
+	permissions["profile_delete_by_id"] = "device:delete"
+	permissions["profile_assign_to_device"] = "device:write"
+	permissions["profile_unassign_from_device"] = "device:write"
 
 	// SDN tools
 	// Gateway load balancer tools
 	// The telemetry snapshot is a read of what the datapath programmed.
-	c.toolPermissions["gateway_snapshot"] = "sdn:read"
+	permissions["gateway_snapshot"] = "sdn:read"
 	// Underlay zones (#708). Every change re-derives the network plan and
 	// takes effect at restart; a privileged path is audited by the service.
-	c.toolPermissions["gateway_zone_list"] = "sdn:read"
-	c.toolPermissions["gateway_zone_create"] = "sdn:write"
-	c.toolPermissions["gateway_zone_update"] = "sdn:write"
-	c.toolPermissions["gateway_zone_delete"] = "sdn:delete"
+	permissions["gateway_zone_list"] = "sdn:read"
+	permissions["gateway_zone_create"] = "sdn:write"
+	permissions["gateway_zone_update"] = "sdn:write"
+	permissions["gateway_zone_delete"] = "sdn:delete"
 	// IPAM pools and allocations. Pools carry the reserved ranges and the
 	// dynamic window the network plan derives.
-	c.toolPermissions["gateway_ipam_pools"] = "sdn:read"
-	c.toolPermissions["gateway_ipam_pool_get"] = "sdn:read"
-	c.toolPermissions["gateway_ipam_pool_create"] = "sdn:write"
-	c.toolPermissions["gateway_ipam_pool_update"] = "sdn:write"
-	c.toolPermissions["gateway_ipam_pool_delete"] = "sdn:delete"
-	c.toolPermissions["gateway_ipam_allocations"] = "sdn:read"
-	c.toolPermissions["gateway_ipam_allocate"] = "sdn:write"
-	c.toolPermissions["gateway_ipam_release"] = "sdn:write"
-	c.toolPermissions["gateway_snapshots"] = "sdn:read"
-	c.toolPermissions["gateway_lb_vip_add"] = "sdn:write"
-	c.toolPermissions["gateway_lb_vip_remove"] = "sdn:delete"
-	c.toolPermissions["gateway_lb_vip_get"] = "sdn:read"
-	c.toolPermissions["gateway_lb_vip_list"] = "sdn:read"
-	c.toolPermissions["gateway_lb_vip_set_backends"] = "sdn:write"
-	c.toolPermissions["gateway_lb_status"] = "sdn:read"
-	c.toolPermissions["gateway_nat64_status"] = "sdn:read"
+	permissions["gateway_ipam_pools"] = "sdn:read"
+	permissions["gateway_ipam_pool_get"] = "sdn:read"
+	permissions["gateway_ipam_pool_create"] = "sdn:write"
+	permissions["gateway_ipam_pool_update"] = "sdn:write"
+	permissions["gateway_ipam_pool_delete"] = "sdn:delete"
+	permissions["gateway_ipam_allocations"] = "sdn:read"
+	permissions["gateway_ipam_allocate"] = "sdn:write"
+	permissions["gateway_ipam_release"] = "sdn:write"
+	permissions["gateway_snapshots"] = "sdn:read"
+	permissions["gateway_lb_vip_add"] = "sdn:write"
+	permissions["gateway_lb_vip_remove"] = "sdn:delete"
+	permissions["gateway_lb_vip_get"] = "sdn:read"
+	permissions["gateway_lb_vip_list"] = "sdn:read"
+	permissions["gateway_lb_vip_set_backends"] = "sdn:write"
+	permissions["gateway_lb_status"] = "sdn:read"
+	permissions["gateway_nat64_status"] = "sdn:read"
 	// gateway_perf_flows mutates bridge flow tables (ephemeral install +
 	// cookie-scoped delete), so it requires sdn:write; the counters are
 	// read-only.
-	c.toolPermissions["gateway_perf_flows"] = "sdn:write"
-	c.toolPermissions["gateway_perf_datapath"] = "sdn:read"
-	c.toolPermissions["gateway_perf_conntrack"] = "sdn:read"
+	permissions["gateway_perf_flows"] = "sdn:write"
+	permissions["gateway_perf_datapath"] = "sdn:read"
+	permissions["gateway_perf_conntrack"] = "sdn:read"
 
-	c.toolPermissions["sdn_get_port_state"] = "sdn:read"
-	c.toolPermissions["sdn_set_port_state"] = "sdn:write"
-	c.toolPermissions["sdn_list_bridges"] = "sdn:read"
-	c.toolPermissions["sdn_create_bridge"] = "sdn:write"
-	c.toolPermissions["sdn_delete_bridge"] = "sdn:delete"
-	c.toolPermissions["sdn_add_port"] = "sdn:write"
-	c.toolPermissions["sdn_delete_port"] = "sdn:delete"
-	c.toolPermissions["sdn_apply_policy"] = "sdn:write"
-	c.toolPermissions["sdn_get_policy"] = "sdn:read"
-	c.toolPermissions["sdn_list_policies"] = "sdn:read"
+	permissions["sdn_get_port_state"] = "sdn:read"
+	permissions["sdn_set_port_state"] = "sdn:write"
+	permissions["sdn_list_bridges"] = "sdn:read"
+	permissions["sdn_create_bridge"] = "sdn:write"
+	permissions["sdn_delete_bridge"] = "sdn:delete"
+	permissions["sdn_add_port"] = "sdn:write"
+	permissions["sdn_delete_port"] = "sdn:delete"
+	permissions["sdn_apply_policy"] = "sdn:write"
+	permissions["sdn_get_policy"] = "sdn:read"
+	permissions["sdn_list_policies"] = "sdn:read"
 
 	// Proxy (reverse-proxy configuration) tools
-	c.toolPermissions["proxy_route_create"] = "proxy:write"
-	c.toolPermissions["proxy_route_get"] = "proxy:read"
-	c.toolPermissions["proxy_route_update"] = "proxy:write"
-	c.toolPermissions["proxy_route_delete"] = "proxy:delete"
-	c.toolPermissions["proxy_route_list"] = "proxy:read"
-	c.toolPermissions["proxy_pool_create"] = "proxy:write"
-	c.toolPermissions["proxy_pool_get"] = "proxy:read"
-	c.toolPermissions["proxy_pool_update"] = "proxy:write"
-	c.toolPermissions["proxy_pool_delete"] = "proxy:delete"
-	c.toolPermissions["proxy_pool_list"] = "proxy:read"
-	c.toolPermissions["proxy_config"] = "proxy:read"
-	c.toolPermissions["proxy_status"] = "proxy:read"
-	c.toolPermissions["proxy_config_reload"] = "proxy:write"
-	c.toolPermissions["proxy_zone_matrix"] = "proxy:read"
+	permissions["proxy_route_create"] = "proxy:write"
+	permissions["proxy_route_get"] = "proxy:read"
+	permissions["proxy_route_update"] = "proxy:write"
+	permissions["proxy_route_delete"] = "proxy:delete"
+	permissions["proxy_route_list"] = "proxy:read"
+	permissions["proxy_pool_create"] = "proxy:write"
+	permissions["proxy_pool_get"] = "proxy:read"
+	permissions["proxy_pool_update"] = "proxy:write"
+	permissions["proxy_pool_delete"] = "proxy:delete"
+	permissions["proxy_pool_list"] = "proxy:read"
+	permissions["proxy_config"] = "proxy:read"
+	permissions["proxy_status"] = "proxy:read"
+	permissions["proxy_config_reload"] = "proxy:write"
+	permissions["proxy_zone_matrix"] = "proxy:read"
 
 	// NTP (time synchronization) tools. ntp_step mutates the system clock,
 	// so it requires ntp:write; the readings are ntp:read.
-	c.toolPermissions["ntp_status"] = "ntp:read"
-	c.toolPermissions["ntp_sources"] = "ntp:read"
-	c.toolPermissions["ntp_step"] = "ntp:write"
+	permissions["ntp_status"] = "ntp:read"
+	permissions["ntp_sources"] = "ntp:read"
+	permissions["ntp_step"] = "ntp:write"
 
 	// CA: signing a CSR certifies a KMS key for code signing, which is what
 	// the boot chain of every netbooted device trusts. It needs its own
 	// admin-level scope; ca:write, which issues ordinary certificates, does
 	// not confer it (#691).
-	c.toolPermissions["ca_sign_csr"] = "ca:sign-csr"
+	permissions["ca_sign_csr"] = "ca:sign-csr"
 
 	// The other CA tools carry exactly the scope of their gRPC CAService
 	// twin (pkg/api/grpc/method_permissions.go); QUIC's opcode table
@@ -175,20 +176,20 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	// split is not a scope and cannot be copied here: issue, get, list and
 	// revoke sit behind the admin role, and info, crl and bundle are public
 	// (docs/ca/api.md §4). Revocation is ca:write, as on gRPC, not ca:delete.
-	c.toolPermissions["ca_issue"] = "ca:write"
-	c.toolPermissions["ca_renew"] = "ca:write"
-	c.toolPermissions["ca_revoke"] = "ca:write"
-	c.toolPermissions["ca_get"] = "ca:read"
-	c.toolPermissions["ca_list"] = "ca:read"
-	c.toolPermissions["ca_verify"] = "ca:read"
-	c.toolPermissions["ca_info"] = "ca:read"
-	c.toolPermissions["ca_crl"] = "ca:read"
-	c.toolPermissions["ca_bundle"] = "ca:read"
+	permissions["ca_issue"] = "ca:write"
+	permissions["ca_renew"] = "ca:write"
+	permissions["ca_revoke"] = "ca:write"
+	permissions["ca_get"] = "ca:read"
+	permissions["ca_list"] = "ca:read"
+	permissions["ca_verify"] = "ca:read"
+	permissions["ca_info"] = "ca:read"
+	permissions["ca_crl"] = "ca:read"
+	permissions["ca_bundle"] = "ca:read"
 
 	// Health tools (no auth required)
-	c.toolPermissions["platform_health"] = ""
-	c.toolPermissions["platform_liveness"] = ""
-	c.toolPermissions["platform_readiness"] = ""
+	permissions["platform_health"] = ""
+	permissions["platform_liveness"] = ""
+	permissions["platform_readiness"] = ""
 
 	// Invitation tools. These mirror the REST surface exactly, which splits by
 	// principal (pkg/webservice/v1/router.go:591, and #171 for the unverified
@@ -203,11 +204,11 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	// only and has no expression of RequireSystemTenant (#299), so these grants
 	// are NECESSARY but not SUFFICIENT to match REST. Tracked in #304; do not
 	// read these entries as "MCP now equals REST".
-	c.toolPermissions["platform_invitation_create"] = "invitation:write"
-	c.toolPermissions["platform_invitation_list"] = "invitation:read"
-	c.toolPermissions["platform_invitation_get"] = "invitation:read"
-	c.toolPermissions["platform_invitation_revoke"] = "invitation:write"
-	c.toolPermissions["platform_invitation_delete"] = "invitation:delete"
+	permissions["platform_invitation_create"] = "invitation:write"
+	permissions["platform_invitation_list"] = "invitation:read"
+	permissions["platform_invitation_get"] = "invitation:read"
+	permissions["platform_invitation_revoke"] = "invitation:write"
+	permissions["platform_invitation_delete"] = "invitation:delete"
 
 	// The invitation token IS the credential for these two, exactly as on the
 	// ungated REST routes: an invitee has no platform session by construction,
@@ -215,8 +216,8 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	// is the faithful expression of that, not an under-authorization — but it
 	// must stay an EXPLICIT entry rather than relying on a default, which is
 	// the whole point of the change below.
-	c.toolPermissions["platform_invitation_get_by_token"] = ""
-	c.toolPermissions["platform_invitation_accept"] = ""
+	permissions["platform_invitation_get_by_token"] = ""
+	permissions["platform_invitation_accept"] = ""
 
 	// BMC tools (#304, first tranche of the 350). The authority is
 	// docs/bmc/api.md, not a REST route: neither BMC REST surface can serve as
@@ -252,31 +253,28 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	// Splitting media from power is what stops one grant conferring the whole
 	// set_boot_device + mount_iso + power_cycle sequence — "boot the machine off
 	// attacker-supplied media" — which a single bmc:write did confer.
-	c.toolPermissions["platform_bmc_power_status"] = "bmc:read"
-	c.toolPermissions["platform_bmc_get_boot_device"] = "bmc:read"
-	c.toolPermissions["platform_bmc_virtual_media_status"] = "bmc:read"
-	c.toolPermissions["platform_bmc_get_sensors"] = "bmc:read"
-	c.toolPermissions["platform_bmc_get_system_info"] = "bmc:read"
-	c.toolPermissions["platform_bmc_list_users"] = "bmc:read"
-	c.toolPermissions["platform_bmc_get_web_certificate"] = "bmc:read"
+	permissions["platform_bmc_power_status"] = "bmc:read"
+	permissions["platform_bmc_get_boot_device"] = "bmc:read"
+	permissions["platform_bmc_virtual_media_status"] = "bmc:read"
+	permissions["platform_bmc_get_sensors"] = "bmc:read"
+	permissions["platform_bmc_get_system_info"] = "bmc:read"
+	permissions["platform_bmc_list_users"] = "bmc:read"
+	permissions["platform_bmc_get_web_certificate"] = "bmc:read"
 
-	c.toolPermissions["platform_bmc_power_on"] = "bmc:write"
-	c.toolPermissions["platform_bmc_set_boot_device"] = "bmc:write"
+	permissions["platform_bmc_power_on"] = "bmc:write"
+	permissions["platform_bmc_set_boot_device"] = "bmc:write"
 
-	c.toolPermissions["platform_bmc_power_off"] = "bmc:power"
-	c.toolPermissions["platform_bmc_power_reset"] = "bmc:power"
-	c.toolPermissions["platform_bmc_power_cycle"] = "bmc:power"
+	permissions["platform_bmc_power_off"] = "bmc:power"
+	permissions["platform_bmc_power_reset"] = "bmc:power"
+	permissions["platform_bmc_power_cycle"] = "bmc:power"
 
-	c.toolPermissions["platform_bmc_mount_iso"] = "bmc:media"
-	c.toolPermissions["platform_bmc_unmount_iso"] = "bmc:media"
+	permissions["platform_bmc_mount_iso"] = "bmc:media"
+	permissions["platform_bmc_unmount_iso"] = "bmc:media"
 
-	c.toolPermissions["platform_bmc_enroll"] = "bmc:admin"
-	c.toolPermissions["platform_bmc_cert_restore"] = "bmc:admin"
+	permissions["platform_bmc_enroll"] = "bmc:admin"
+	permissions["platform_bmc_cert_restore"] = "bmc:admin"
 
-	// NOTE these five scopes are advertised nowhere: getSupportedScopes() offers
-	// 32 and none is BMC, so a client cannot discover that it may request them.
-	// That is #315 — the advertised list and this map are separate hardcoded
-	// manifests with nothing asserting they agree — and is not fixed here.
+	return permissions
 }
 
 // CheckToolAuthorization checks if the given token has permission to execute the

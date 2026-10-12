@@ -369,15 +369,30 @@ and otherwise from the mount point's own ownership.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `INTEGRATION_TEST` | - | Must be set to `1` to run |
-| `PLATFORMD_GRPC_ENDPOINT` | `127.0.0.1:10443` | platformd gRPC endpoint |
-| `PLATFORMD_REST_ENDPOINT` | `127.0.0.1:8443` | REST API endpoint |
-| `PLATFORMD_QUIC_ENDPOINT` | `127.0.0.1:9444` | QUIC protocol endpoint |
-| `PLATFORMD_MCP_ENDPOINT` | `127.0.0.1:9445` | MCP protocol endpoint; a bare host:port dials `https://` (TLS 1.3 only, #844) |
-| `PLATFORMD_UNIX_SOCKET` | `/tmp/platformd.sock` | Unix socket path for local IPC |
+| `PLATFORM_REST_ENDPOINT` | `https://localhost:8443` | REST API endpoint |
+| `PLATFORM_GRPC_ENDPOINT` | `localhost:10443` | platformd gRPC endpoint |
+| `PLATFORM_QUIC_ENDPOINT` | `localhost:9444` | QUIC protocol endpoint |
+| `PLATFORM_MCP_ENDPOINT` | `https://localhost:9445` | MCP protocol endpoint (TLS 1.3 only, #844) |
+| `PLATFORM_SOCKET_PATH` | `/run/platformd.sock` | Unix socket path for local IPC |
 | `PLATFORMCTL_PATH` | `/usr/local/bin/platformctl` | CLI binary path |
 | `PLATFORMD_CONFIG` | `test/integration/config.yaml` | Configuration file path |
 | `SKIP_IAM_VALIDATION` | (unset) | Set to `1` to skip IAM token validation in tests |
 | `RAFT_CLUSTER_TEST` | (unset) | Set to `1` to enable cluster replication tests |
+
+The endpoint variables are the ones the shared helpers in
+`test/integration/helpers/endpoints.go` read. Suites with a private namespace
+(`VTPM_*`, `TENANT_*`, `IAM_*`, `ATTESTATION_*`, `AUTH_*`, `INVITATION_*`) read
+their own name first and otherwise use the shared helper. The defaults are
+there only for running a suite by hand against a platformd on its standard
+ports.
+
+`run-integration-tests.sh` sets each listener port once
+(`PLATFORMD_{REST,GRPC,QUIC,MCP}_PORT`). It passes that port to
+`platformd serve` and builds every exported endpoint from it, so the daemon and
+the suites cannot drift apart: to move a port, change that one variable.
+`TestRunnerExportsEveryEndpointFromThePortItGivesPlatformd`, part of the unit
+suite, fails if a flag goes back to a literal port or if an endpoint the helpers
+read is no longer exported from the same variable (#502).
 
 ### Running in DevContainer
 

@@ -115,6 +115,15 @@ PLATFORMD_STARTUP_LOG="/tmp/platformd-integration/platformd-startup.log"
 # the host. The path is exported for use by setup_env_vars() and test adapters.
 PLATFORMD_SOCK_PATH="/tmp/platformd-integration/platformd.sock"
 
+# Platformd listener ports. Each one is written exactly once: start_platformd()
+# passes it to `platformd serve` and setup_env_vars() builds every exported
+# endpoint from it, so the daemon and the suites cannot disagree (#502).
+# test/integration/helpers/endpoints_test.go asserts that shape.
+PLATFORMD_REST_PORT="8443"
+PLATFORMD_GRPC_PORT="10443"
+PLATFORMD_QUIC_PORT="9444"
+PLATFORMD_MCP_PORT="9445"
+
 # OVS bridge name used by the integration test config (sdn.ovs.bridge).
 # Platformd reads this from test/integration/config.yaml; the bridge is
 # pre-created here so the App.initSDN path finds it immediately and avoids
@@ -569,10 +578,10 @@ start_platformd() {
         --config "${config_file}" \
         --enable-mtls \
         --socket-path="${PLATFORMD_SOCK_PATH}" \
-        --rest-port=8443 \
-        --grpc-port=10443 \
-        --quic-port=9444 \
-        --mcp-port=9445 \
+        --rest-port="${PLATFORMD_REST_PORT}" \
+        --grpc-port="${PLATFORMD_GRPC_PORT}" \
+        --quic-port="${PLATFORMD_QUIC_PORT}" \
+        --mcp-port="${PLATFORMD_MCP_PORT}" \
         --raw-so-pin="123456" \
         --raw-pin="123456" \
         --debug \
@@ -681,39 +690,37 @@ setup_env_vars() {
     export PLATFORM_CA_CERT="/tmp/platformd-integration/tls/ca-bundle.crt"
 
     # REST endpoint (mTLS requires HTTPS)
-    export PLATFORM_API_ENDPOINT="https://localhost:8443"
-    export PLATFORM_REST_ENDPOINT="https://localhost:8443"
-    export PLATFORM_REST_URL="https://localhost:8443"
-    export VTPM_REST_ENDPOINT="https://localhost:8443"
-    export TENANT_REST_ENDPOINT="https://localhost:8443"
-    export IAM_REST_ENDPOINT="https://localhost:8443"
-    export ATTESTATION_REST_ENDPOINT="https://localhost:8443"
+    export PLATFORM_API_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
+    export PLATFORM_REST_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
+    export VTPM_REST_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
+    export TENANT_REST_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
+    export IAM_REST_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
+    export ATTESTATION_REST_ENDPOINT="https://localhost:${PLATFORMD_REST_PORT}"
 
     # gRPC endpoint (mTLS over TCP)
-    export PLATFORM_GRPC_ENDPOINT="localhost:10443"
-    export PLATFORMD_GRPC_ENDPOINT="localhost:10443"
-    export PLATFORM_GRPC_PORT="10443"
-    export VTPM_GRPC_ENDPOINT="localhost:10443"
-    export TENANT_GRPC_ENDPOINT="localhost:10443"
-    export IAM_GRPC_ENDPOINT="localhost:10443"
-    export ATTESTATION_GRPC_ENDPOINT="localhost:10443"
+    export PLATFORM_GRPC_ENDPOINT="localhost:${PLATFORMD_GRPC_PORT}"
+    export PLATFORMD_GRPC_ENDPOINT="localhost:${PLATFORMD_GRPC_PORT}"
+    export VTPM_GRPC_ENDPOINT="localhost:${PLATFORMD_GRPC_PORT}"
+    export TENANT_GRPC_ENDPOINT="localhost:${PLATFORMD_GRPC_PORT}"
+    export IAM_GRPC_ENDPOINT="localhost:${PLATFORMD_GRPC_PORT}"
+    export ATTESTATION_GRPC_ENDPOINT="localhost:${PLATFORMD_GRPC_PORT}"
 
     # QUIC endpoint
-    export PLATFORM_QUIC_ENDPOINT="localhost:9444"
-    export QUIC_SERVER_ADDR="localhost:9444"
-    export VTPM_QUIC_ENDPOINT="localhost:9444"
-    export TENANT_QUIC_ENDPOINT="localhost:9444"
-    export IAM_QUIC_ENDPOINT="localhost:9444"
-    export ATTESTATION_QUIC_ENDPOINT="localhost:9444"
+    export PLATFORM_QUIC_ENDPOINT="localhost:${PLATFORMD_QUIC_PORT}"
+    export QUIC_SERVER_ADDR="localhost:${PLATFORMD_QUIC_PORT}"
+    export VTPM_QUIC_ENDPOINT="localhost:${PLATFORMD_QUIC_PORT}"
+    export TENANT_QUIC_ENDPOINT="localhost:${PLATFORMD_QUIC_PORT}"
+    export IAM_QUIC_ENDPOINT="localhost:${PLATFORMD_QUIC_PORT}"
+    export ATTESTATION_QUIC_ENDPOINT="localhost:${PLATFORMD_QUIC_PORT}"
 
     # MCP endpoint. The daemon serves MCP over TLS 1.3 only, with the same
     # certificate and client-CA pool as REST and gRPC (#844); there is no
     # plaintext listener. Adapters dial https:// with the mTLS trio below.
-    export PLATFORM_MCP_ENDPOINT="https://localhost:9445"
-    export VTPM_MCP_ENDPOINT="https://localhost:9445"
-    export TENANT_MCP_ENDPOINT="https://localhost:9445"
-    export IAM_MCP_ENDPOINT="https://localhost:9445"
-    export ATTESTATION_MCP_ENDPOINT="https://localhost:9445"
+    export PLATFORM_MCP_ENDPOINT="https://localhost:${PLATFORMD_MCP_PORT}"
+    export VTPM_MCP_ENDPOINT="https://localhost:${PLATFORMD_MCP_PORT}"
+    export TENANT_MCP_ENDPOINT="https://localhost:${PLATFORMD_MCP_PORT}"
+    export IAM_MCP_ENDPOINT="https://localhost:${PLATFORMD_MCP_PORT}"
+    export ATTESTATION_MCP_ENDPOINT="https://localhost:${PLATFORMD_MCP_PORT}"
     export PLATFORM_MCP_PATH="/tmp/platformd"
 
     # CLI binary path

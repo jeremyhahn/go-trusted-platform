@@ -392,7 +392,7 @@ func TestEveryRegisteredToolIsClassified(t *testing.T) {
 	assert.Empty(t, undeclared,
 		"these tools are registered with no permission entry and are not in "+
 			"knownUnclassified. Give each a resource:action entry in "+
-			"initToolPermissions, or an explicit \"\" if it genuinely needs none. "+
+			"toolPermissionCatalog, or an explicit \"\" if it genuinely needs none. "+
 			"Do not add them to knownUnclassified — that list may only shrink.")
 }
 

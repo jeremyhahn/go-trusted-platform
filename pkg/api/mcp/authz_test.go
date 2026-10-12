@@ -101,7 +101,7 @@ func TestNewAuthorizationChecker(t *testing.T) {
 	})
 }
 
-func TestAuthorizationChecker_initToolPermissions(t *testing.T) {
+func TestToolPermissionCatalog(t *testing.T) {
 	checker := NewAuthorizationChecker(nil, nil)
 
 	tests := []struct {

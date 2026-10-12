@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -272,34 +273,112 @@ func TestOAuthMetadataHandler_Validate(t *testing.T) {
 	})
 }
 
+// TestOAuthMetadataHandler_getSupportedScopes is the #315 ratchet:
+// scopes_supported must be exactly the set of scopes the MCP tools enforce.
+// A scope a tool requires but the metadata does not offer leaves a client
+// with no documented way to request the grant; a scope offered but consulted
+// by no tool advertises capability the server does not have.
 func TestOAuthMetadataHandler_getSupportedScopes(t *testing.T) {
 	handler := NewOAuthMetadataHandler(nil)
-	scopes := handler.getSupportedScopes()
+	advertised := make(map[string]bool)
+	for _, scope := range handler.getSupportedScopes() {
+		if advertised[scope] {
+			t.Errorf("scope %q is advertised twice", scope)
+		}
+		advertised[scope] = true
+	}
 
-	// Verify essential scopes are present
-	requiredScopes := []string{
-		"mcp:tools",
-		"mcp:resources",
-		"vtpm:read",
-		"vtpm:write",
-		"device:read",
-		"device:write",
-		"kms:read",
-		"kms:write",
-		"iam:read",
-		"iam:write",
+	enforced := make(map[string]bool)
+	for tool, permission := range NewAuthorizationChecker(nil, nil).toolPermissions {
+		if permission == "" {
+			continue
+		}
+		scope := scopeForToolPermission(permission)
+		if scope != permission {
+			t.Errorf("tool %q requires malformed permission %q: it is not a resource:action scope", tool, permission)
+			continue
+		}
+		enforced[scope] = true
+		if !advertised[scope] {
+			t.Errorf("tool %q requires scope %q, which scopes_supported does not advertise", tool, scope)
+		}
+	}
+
+	for scope := range advertised {
+		if !enforced[scope] {
+			t.Errorf("scope %q is advertised but no MCP tool requires it", scope)
+		}
+	}
+}
+
+// TestOAuthMetadataHandler_getSupportedScopes_Issue315 pins the two lists the
+// issue measured, so the regression reads by name.
+func TestOAuthMetadataHandler_getSupportedScopes_Issue315(t *testing.T) {
+	advertised := make(map[string]bool)
+	for _, scope := range NewOAuthMetadataHandler(nil).getSupportedScopes() {
+		advertised[scope] = true
+	}
+
+	usedButUnadvertised := []string{
+		"bmc:read", "bmc:write", "bmc:power", "bmc:media", "bmc:admin",
+		"invitation:read", "invitation:write", "invitation:delete",
+		"ntp:read", "ntp:write",
+		"proxy:read", "proxy:write", "proxy:delete",
+	}
+	for _, scope := range usedButUnadvertised {
+		if !advertised[scope] {
+			t.Errorf("scope %q is enforced by an MCP tool and must be advertised", scope)
+		}
+	}
+
+	advertisedButUnused := []string{
+		"mcp:tools", "mcp:resources",
+		"ca:delete",
+		"container:read", "container:write", "container:delete",
+		"iam:read", "iam:write", "iam:delete",
+		"kms:read", "kms:write", "kms:delete",
+		"tenant:read", "tenant:write", "tenant:delete",
 		"platform:admin",
 	}
+	for _, scope := range advertisedButUnused {
+		if advertised[scope] {
+			t.Errorf("scope %q is consulted by no MCP tool and must not be advertised", scope)
+		}
+	}
+}
 
-	scopeSet := make(map[string]bool)
-	for _, s := range scopes {
-		scopeSet[s] = true
+// TestAdvertisedScopes_NewResourceIsAdvertised is the mutation the issue asks
+// for: a tool permission with a scope nothing else uses must be advertised
+// without anyone editing a second list.
+func TestAdvertisedScopes_NewResourceIsAdvertised(t *testing.T) {
+	scopes := advertisedScopes(map[string]string{
+		"widget_create": "widget:write",
+		"widget_list":   "widget:read",
+		"widget_get":    "widget:read",
+	})
+
+	want := []string{"widget:read", "widget:write"}
+	if !slices.Equal(scopes, want) {
+		t.Fatalf("advertisedScopes = %v, want %v (sorted, deduplicated)", scopes, want)
+	}
+}
+
+// TestAdvertisedScopes_SkipsOpenAndMalformedPermissions: an open tool ("")
+// requires no scope, and a malformed permission is not a scope a client can
+// request, so neither is advertised.
+func TestAdvertisedScopes_SkipsOpenAndMalformedPermissions(t *testing.T) {
+	scopes := advertisedScopes(map[string]string{
+		"health":     "",
+		"no_colon":   "widgetwrite",
+		"no_action":  "widget:",
+		"no_service": ":write",
+	})
+	if len(scopes) != 0 {
+		t.Fatalf("advertisedScopes = %v, want none", scopes)
 	}
 
-	for _, required := range requiredScopes {
-		if !scopeSet[required] {
-			t.Errorf("missing required scope: %s", required)
-		}
+	if scopes := advertisedScopes(nil); len(scopes) != 0 {
+		t.Fatalf("advertisedScopes(nil) = %v, want none", scopes)
 	}
 }
 

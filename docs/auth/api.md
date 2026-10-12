@@ -382,23 +382,32 @@ Response body (`OAuthProtectedResourceMetadata`, RFC 9728):
 | `ResourceEncryptionAlgValuesSupported` | `resource_encryption_alg_values_supported` | Optional; not populated |
 | `ResourceEncryptionEncValuesSupported` | `resource_encryption_enc_values_supported` | Optional; not populated |
 
-`getSupportedScopes` returns a **hard-coded** list, verified 2026-08-18:
+`scopes_supported` is **derived, not maintained** (#315): `getSupportedScopes`
+returns every distinct scope the MCP tool permission catalog
+(`toolPermissionCatalog`, `pkg/api/mcp/authz.go`) requires, sorted. The
+authorization checker enforces the same catalog, so the advertised list is
+exactly the enforced vocabulary — a scope cannot be required by a tool without
+being advertised, or advertised without a tool requiring it. Open tools (empty
+permission) contribute nothing. As of 2026-10-12:
 
 ```
-mcp:tools, mcp:resources,
-vtpm:read|write|delete, device:read|write|delete, dns:read|write|delete,
-sdn:read|write|delete, ca:read|write|delete, kms:read|write|delete,
-iam:read|write|delete, container:read|write|delete,
-attestation:read|write, tenant:read|write|delete,
-platform:admin
+attestation:read|write,
+bmc:read|write|power|media|admin,
+ca:read|write|sign-csr,
+device:read|write|delete, dns:read|write|delete,
+invitation:read|write|delete,
+ntp:read|write,
+proxy:read|write|delete,
+sdn:read|write|delete,
+vtpm:read|write|delete
 ```
 
-**This list is advertised, not enforced.** It is broader than the MCP
-authorization map (`initToolPermissions` covers only the vtpm, dns, device,
-attestation-report, profile, gateway, sdn, proxy, ntp, ca, invitation and bmc
-families) and narrower than the tool set (449 declared tool names). A client
-that requests `container:write` because the metadata offers it will find no
-`container_*` tool checks it.
+Scopes no MCP tool consults — `mcp:tools`, `mcp:resources`, `platform:admin`,
+and the `kms:*`, `iam:*`, `container:*`, `tenant:*` and `ca:delete` families —
+are no longer advertised. A tool family added to the catalog is advertised by
+the same change; `TestOAuthMetadataHandler_getSupportedScopes` fails if the two
+ever disagree, or if a catalog permission is not a well-formed
+`resource:action` scope.
 
 `Validate()` requires a non-empty `Resource` and at least one authorization
 server, returning `OAuthMetadataError` with `OAuthMetadataErrorMissingResource`

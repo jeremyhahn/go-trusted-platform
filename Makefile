@@ -2931,7 +2931,12 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # integration suite uses to decide a subtest is "not implemented". It carries no
 # build tag and imports only errors and grpc/status, so it runs in-process in
 # milliseconds; left to the integration tag it would run in no unit stage.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/
+#
+# test/integration/helpers added 2026-10-12 (#502): without the integration tag
+# the package is endpoints.go and endpoints_test.go alone, which check that the
+# shared endpoint helpers read the variables run-integration-tests.sh exports,
+# built from the ports it gives platformd. Every other file keeps the tag.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue

@@ -21,20 +21,19 @@ GET /.well-known/oauth-protected-resource
   "resource": "https://platformd.example.com:9445",
   "authorization_servers": ["https://auth.example.com"],
   "scopes_supported": [
-    "mcp:tools",
-    "mcp:resources",
-    "vtpm:read",
-    "vtpm:write",
-    "device:read",
-    "device:write",
-    "dns:read",
-    "dns:write",
-    "sdn:read",
-    "sdn:write"
+    "attestation:read",
+    "attestation:write",
+    "bmc:admin",
+    "...",
+    "vtpm:write"
   ],
   "bearer_methods_supported": ["header"]
 }
 ```
+
+`scopes_supported` is derived from the MCP tool permission catalog: exactly
+the scopes some tool requires, sorted. The full list and its rules are in
+[api.md §5](api.md#5-oauth-21-protected-resource-metadata).
 
 ## Authentication Flow
 

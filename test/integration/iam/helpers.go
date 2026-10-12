@@ -18,6 +18,8 @@ package iam
 import (
 	"os"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // SkipIfNotIntegration skips the test if not running in integration mode
@@ -41,7 +43,7 @@ func GetRESTEndpoint() string {
 	if endpoint := os.Getenv("IAM_REST_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "https://localhost:8443"
+	return helpers.GetRESTEndpoint()
 }
 
 // GetGRPCEndpoint returns the gRPC API endpoint
@@ -49,7 +51,7 @@ func GetGRPCEndpoint() string {
 	if endpoint := os.Getenv("IAM_GRPC_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "localhost:10443"
+	return helpers.GetGRPCEndpoint()
 }
 
 // GetQUICEndpoint returns the QUIC API endpoint
@@ -57,7 +59,7 @@ func GetQUICEndpoint() string {
 	if endpoint := os.Getenv("IAM_QUIC_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "localhost:9444"
+	return helpers.GetQUICEndpoint()
 }
 
 // GetMCPEndpoint returns the MCP API endpoint
@@ -65,7 +67,7 @@ func GetMCPEndpoint() string {
 	if endpoint := os.Getenv("IAM_MCP_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "https://localhost:9445"
+	return helpers.GetMCPEndpoint()
 }
 
 // GetSocketPath returns the Unix socket path
@@ -73,7 +75,7 @@ func GetSocketPath() string {
 	if path := os.Getenv("IAM_SOCKET_PATH"); path != "" {
 		return path
 	}
-	return "/run/platformd.sock"
+	return helpers.GetSocketPath()
 }
 
 // GetCLIPath returns the path to the platformctl CLI

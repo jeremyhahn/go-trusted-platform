@@ -187,7 +187,7 @@ interceptor's documented behaviour for an uncatalogued method is that it
 validated."*
 
 **No `platform_eab_*` tool is in the MCP authorization map.**
-`AuthorizationChecker.initToolPermissions` (`pkg/api/mcp/authz.go`) has no EAB
+`toolPermissionCatalog` (`pkg/api/mcp/authz.go`) has no EAB
 entries, and since #300 `AuthorizeTool` refuses a tool absent from the map, so
 every EAB tool is refused on MCP.
 
