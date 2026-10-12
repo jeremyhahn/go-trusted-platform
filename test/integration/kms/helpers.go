@@ -63,7 +63,7 @@ const (
 	// Default: 127.0.0.1:8443
 	EnvPlatformdGRPCEndpoint = "PLATFORMD_GRPC_ENDPOINT"
 
-	// EnvPlatformAPIEndpoint is the environment variable for platform-api REST endpoint.
+	// EnvPlatformAPIEndpoint is the environment variable for the platformd REST endpoint.
 	// Default: 127.0.0.1:8080
 	EnvPlatformAPIEndpoint = "PLATFORM_API_ENDPOINT"
 )
@@ -85,7 +85,7 @@ const (
 	// DefaultPlatformdGRPCEndpoint is the default platformd gRPC endpoint.
 	DefaultPlatformdGRPCEndpoint = "127.0.0.1:10443"
 
-	// DefaultPlatformAPIEndpoint is the default platform-api REST endpoint.
+	// DefaultPlatformAPIEndpoint is the default platformd REST endpoint.
 	DefaultPlatformAPIEndpoint = "127.0.0.1:8443"
 )
 
@@ -424,12 +424,12 @@ func GetGRPCEndpoints() map[string]string {
 	}
 }
 
-// GetRESTEndpoints returns all REST endpoints (platform-api and QuicBaaS REST).
+// GetRESTEndpoints returns all REST endpoints (platformd and QuicBaaS REST).
 func GetRESTEndpoints() map[string]string {
 	endpoints := GetServiceEndpoints()
 	return map[string]string{
-		"platform-api": endpoints.PlatformAPI,
-		"quicbaas":     endpoints.QuicBaaSREST,
+		"platformd": endpoints.PlatformAPI,
+		"quicbaas":  endpoints.QuicBaaSREST,
 	}
 }
 

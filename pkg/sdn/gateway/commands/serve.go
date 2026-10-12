@@ -116,6 +116,17 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// With the `process:` section enabled, the supervised services run in
+	// child processes. The children outlive gw.Stop, which stops the
+	// services they host, so they are shut down after it on every exit path.
+	supervisor, err := BuildSupervisor(cfg, viper.ConfigFileUsed(), logger)
+	if err != nil {
+		return err
+	}
+	if supervisor != nil {
+		defer shutdownSupervisor(supervisor, logger)
+	}
+
 	startCtx, startCancel := context.WithCancel(context.Background())
 	defer startCancel()
 
@@ -130,13 +141,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	// The OVS runtime (when assembled) holds a live OVSDB connection;
 	// release it on every exit path, after gw.Stop has removed flows.
-	defer func() {
-		if rt := gw.GetConfig().Runtime; rt != nil {
-			if err := rt.Close(); err != nil {
-				logger.Warn("OVS runtime close failed", slog.Any("error", err))
-			}
-		}
-	}()
+	defer closeGatewayRuntime(gw, logger)
 
 	// Assemble the control-plane telemetry reporter before starting
 	// services so configuration errors surface before the datapath is
@@ -233,4 +238,20 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	logger.Info("Gateway daemon stopped")
 	return nil
+}
+
+// processShutdowner is the part of the process supervisor runServe stops.
+type processShutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
+// shutdownSupervisor stops every child within shutdownTimeout. A failure is
+// logged rather than returned: it runs on exit paths that already carry
+// their own result.
+func shutdownSupervisor(supervisor processShutdowner, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := supervisor.Shutdown(ctx); err != nil {
+		logger.Warn("Process supervisor shutdown failed", slog.Any("error", err))
+	}
 }

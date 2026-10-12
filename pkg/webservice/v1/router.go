@@ -455,7 +455,7 @@ func (v1Router *Router) deviceRoutes() {
 		return
 	}
 
-	deviceRouter := router.NewDeviceRouter(
+	deviceRouter, err := router.NewDeviceRouter(
 		v1Router.restHandlerRegistry.MTLSMiddleware(),
 		deviceHandler,
 		crudHandler,
@@ -463,6 +463,12 @@ func (v1Router *Router) deviceRoutes() {
 		configDeliveryHandler,
 		attestHandler,
 	)
+	if err != nil {
+		// Routes without a handler would nil-dereference on first request
+		// (#320); register none rather than a broken half.
+		v1Router.logger.Error(err, "Device routes not registered: the device, profile and template services are required")
+		return
+	}
 	deviceRouter.SetAttestCertHandler(attestCertHandler)
 	// Split by principal. Device and profile CRUD, templates, profile
 	// assignment and the provisioning SESSION surface are operator work and

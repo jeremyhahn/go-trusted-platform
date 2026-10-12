@@ -63,6 +63,26 @@ func TestClassTable_EveryGatewayServiceIsPlaced(t *testing.T) {
 	require.ErrorAs(t, err, &unplaced)
 }
 
+func TestSupervises_OnlyTheMovedProcessIsSupervised(t *testing.T) {
+	sup := &Supervisor{}
+
+	assert.True(t, sup.Supervises(gateway.ServiceTransit), "routing is the first process moved out (#557)")
+	for _, service := range []string{gateway.ServiceFirewall, gateway.ServiceNAT, gateway.ServiceProxy, gateway.ServiceDHCP, gateway.ServiceManagementVPN} {
+		assert.Falsef(t, sup.Supervises(service), "%s has not moved yet", service)
+	}
+	// Only a parser moves first: the kernel class stays with the parent
+	// until the datapath IPC is the parent's only way to program it.
+	for _, def := range Definitions() {
+		if def.Supervised {
+			assert.Equal(t, ClassParser, def.Class, def.Name)
+		}
+	}
+}
+
+func TestSupervises_AnUnplacedServiceIsNotSupervised(t *testing.T) {
+	assert.False(t, (&Supervisor{}).Supervises("not-a-service"))
+}
+
 func TestClassTable_TheTranslatorRunsInTheKernelClass(t *testing.T) {
 	// NAT64 programs OVS flows and drives the Jool kernel module, so it
 	// needs the datapath process's CAP_NET_ADMIN.
@@ -188,7 +208,13 @@ func (f *fakeNode) setHealth(service string, active bool, health error) {
 }
 
 func (f *fakeNode) Snapshot() *gwstate.Snapshot {
-	return &gwstate.Snapshot{GatewayID: "child"}
+	return &gwstate.Snapshot{
+		GatewayID: "child",
+		BGP: gwstate.BGPState{
+			PeerCount: 1,
+			Peers:     []gwstate.BGPPeerState{{Address: "10.255.0.2", State: "established"}},
+		},
+	}
 }
 
 func (f *fakeNode) Apply(_ context.Context, desired *gwstate.DesiredConfig) error {
@@ -713,6 +739,42 @@ func TestServiceHealth_ReportsAProcessThatWasNeverStarted(t *testing.T) {
 	var down *ErrProcessDown
 	require.ErrorAs(t, supervisor.ServiceHealth(gateway.ServiceProxy), &down)
 	assert.False(t, supervisor.ServiceActive(gateway.ServiceProxy))
+}
+
+func TestServiceSnapshot_ReadsTheChildOverItsControlSocket(t *testing.T) {
+	supervisor, _, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	snap, err := supervisor.ServiceSnapshot(ctx, gateway.ServiceTransit)
+	require.NoError(t, err)
+	assert.Equal(t, "child", snap.GatewayID)
+	require.Len(t, snap.BGP.Peers, 1, "the child's BGP peers cross the socket")
+	assert.Equal(t, "10.255.0.2", snap.BGP.Peers[0].Address)
+}
+
+func TestServiceSnapshot_ReportsAChildWhoseSocketIsGone(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+
+	var down *ErrProcessDown
+	_, err := supervisor.ServiceSnapshot(ctx, gateway.ServiceTransit)
+	require.ErrorAs(t, err, &down, "a process never started has no socket to read")
+	var neverStarted *ErrProcessNeverStarted
+	assert.ErrorAs(t, err, &neverStarted)
+
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+	// The child's control server goes away while the supervisor still holds
+	// its client, the way a wedged child's socket does.
+	launcher.lastChild().server.Stop()
+
+	_, err = supervisor.ServiceSnapshot(ctx, gateway.ServiceTransit)
+	require.ErrorAs(t, err, &down)
+	assert.Equal(t, "routing", down.Process)
+	assert.Equal(t, gateway.ServiceTransit, down.Service)
+
+	_, err = supervisor.ServiceSnapshot(ctx, "no-such-service")
+	assert.Error(t, err, "a service with no process class has no snapshot")
 }
 
 func TestStopService_StopsTheProcessOnlyWhenItsLastServiceGoes(t *testing.T) {

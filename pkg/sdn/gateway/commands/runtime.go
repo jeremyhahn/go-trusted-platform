@@ -33,16 +33,18 @@ import (
 const ovsConnectTimeout = 30 * time.Second
 
 // datapathService returns the first enabled datapath service (firewall,
-// NAT, load balancer) or "" when none is enabled. These are the services
-// that require the OVS runtime; when none is enabled the runtime is not
-// assembled and the sdn: section's OVS endpoint is never dialed.
+// NAT, load balancer) this gateway hosts, or "" when there is none. These are
+// the services that require the OVS runtime; when none is hosted the runtime
+// is not assembled and the sdn: section's OVS endpoint is never dialed — a
+// supervised parser child never opens OVSDB.
 func datapathService(gwCfg *gateway.GatewayConfig) string {
+	enabled := func(on bool, service string) bool { return on && gwCfg.Hosts(service) }
 	switch {
-	case gwCfg.Firewall != nil && gwCfg.Firewall.Enabled:
+	case enabled(gwCfg.Firewall != nil && gwCfg.Firewall.Enabled, gateway.ServiceFirewall):
 		return gateway.ServiceFirewall
-	case gwCfg.NAT != nil && gwCfg.NAT.Enabled:
+	case enabled(gwCfg.NAT != nil && gwCfg.NAT.Enabled, gateway.ServiceNAT):
 		return gateway.ServiceNAT
-	case gwCfg.LoadBalancer != nil && gwCfg.LoadBalancer.Enabled:
+	case enabled(gwCfg.LoadBalancer != nil && gwCfg.LoadBalancer.Enabled, gateway.ServiceLoadBalancer):
 		return gateway.ServiceLoadBalancer
 	default:
 		return ""

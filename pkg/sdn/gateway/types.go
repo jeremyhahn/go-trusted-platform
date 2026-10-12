@@ -20,6 +20,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"time"
 
@@ -1158,12 +1159,17 @@ type GatewayConfig struct {
 	// real netlink implementations.
 	Host *HostRuntime `yaml:"-" json:"-" mapstructure:"-"`
 
-	// Supervisor, when set, runs every enabled service in a supervised child
-	// process instead of this one (#557): the handlers registered for the
-	// sections relay start, stop and health to it, Runtime stays nil here
-	// because the datapath child owns the OVS pipeline, and Apply forwards
-	// the desired configuration to it. Never serialized.
+	// Supervisor, when set, runs the enabled services it Supervises in
+	// supervised child processes instead of this one (#557): the handlers
+	// registered for those sections relay start, stop and health to it, and
+	// once it supervises the datapath services Apply forwards the desired
+	// configuration to it. Never serialized.
 	Supervisor ServiceSupervisor `yaml:"-" json:"-" mapstructure:"-"`
+	// HostedServices, when non-empty, restricts this gateway to the listed
+	// enabled services. A supervised child sets it to its own process's
+	// services so it registers nothing another process owns. Never
+	// serialized.
+	HostedServices []string `yaml:"-" json:"-" mapstructure:"-"`
 }
 
 // Validate checks if the gateway configuration is valid.
@@ -1309,6 +1315,13 @@ func (c *GatewayConfig) EnabledServices() []string {
 	add(c.PXE != nil && c.PXE.Enabled, ServicePXE)
 	add(c.ManagementVPN != nil && c.ManagementVPN.Enabled, ServiceManagementVPN)
 	return out
+}
+
+// Hosts reports whether this gateway runs the service itself: always when
+// HostedServices is empty, otherwise only for the services it lists. It says
+// nothing about whether the service is enabled.
+func (c *GatewayConfig) Hosts(service string) bool {
+	return len(c.HostedServices) == 0 || slices.Contains(c.HostedServices, service)
 }
 
 // TransitServiceConfig holds gateway transit service configuration.

@@ -12,7 +12,7 @@ import "compute.proto";
 
 // PlatformDaemon is the main service exposed by platformd over unix socket.
 // This is an INTERNAL API for root-level operations.
-// Clients: platformctl (local), platform-api (REST gateway)
+// Clients: platformctl (local)
 service PlatformDaemon {
   // System operations
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);

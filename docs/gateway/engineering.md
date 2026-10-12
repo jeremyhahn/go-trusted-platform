@@ -789,13 +789,13 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 
 | Type | What it is |
 |---|---|
-| `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `MemoryMax`, `CPUMax`, `Unprivileged` |
+| `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `MemoryMax`, `CPUMax`, `Unprivileged`, `Supervised` |
 | `DefinitionForService`, `DefinitionByName`, `Definitions`, `Processes` | the class table's lookups; `Processes(enabled)` returns only the processes those services need, each carrying only the enabled ones |
-| `Supervisor` | implements `gateway.ServiceSupervisor`: `StartService`, `StopService`, `ServiceActive`, `ServiceHealth`, `Apply`, plus `Snapshot` and `Shutdown` |
+| `Supervisor` | implements `gateway.ServiceSupervisor`: `Supervises`, `StartService`, `StopService`, `ServiceActive`, `ServiceHealth`, `ServiceSnapshot`, `Apply`, plus `Snapshot` and `Shutdown` |
 | `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
 | `Launcher`, `Spec`, `Child`, `ExecLauncher` | how a child is started; tests substitute a launcher whose children are in-process IPC servers |
 | `CgroupManager` | one cgroup v2 leaf per process, `memory.max` and `cpu.max` written before the child exists |
-| `Harden` | the child-side privilege drop |
+| `EnterHardened` | the child-side privilege drop: harden one thread, re-execute from it, verify every thread |
 
 **The class table is not configuration.** `definitions` in `class.go` is the
 one place a service's class, capabilities and limits are decided. An operator
@@ -812,8 +812,9 @@ landed (#631 review); it runs in `datapath`, the one process holding
 
 **The privilege drop is split across the exec on purpose.** The parent sets
 the ambient capability set and the cgroup at clone time (`SysProcAttr`:
-`AmbientCaps`, `UseCgroupFD`, `Pdeathsig`). The child calls `Harden` before it
-reads the configuration or opens a socket, in the order the kernel requires:
+`AmbientCaps`, `UseCgroupFD`, `Pdeathsig`). The child calls `EnterHardened`
+before it reads the configuration or opens a socket; its first stage runs these
+steps on one locked OS thread, in the order the kernel requires:
 
 1. `no_new_privs`, so nothing it later execs can regain privilege.
 2. the bounding set reduced to the class's capabilities — **before** the uid
@@ -851,18 +852,43 @@ unexported `hardenOps` seam so the ordering is a unit test rather than a
 hope — the drop is irreversible, so a test that made the real calls would
 strip the test binary for the rest of the run.
 
-> **Known gap, [#657](http://git.example.internal/jeremyhahn/go-trusted-platform/issues/657).**
-> `prctl` and `capset` apply to the calling thread only, while Go routes
-> `setresuid`/`setresgid`/`setgroups` through all-thread syscalls. `Harden`
-> therefore hardens one OS thread out of however many the Go runtime has
-> started. Nothing calls `Harden` yet — PR 3 is what wires it — and closing it
-> is an owner call between `syscall.AllThreadsSyscall` (which returns
-> `ENOTSUP` under cgo, and gatewayd is built both ways), libcap's Go bindings,
-> and dropping before the runtime starts threads.
+**Every thread, not one: the drop re-executes ([#657](http://git.example.internal/jeremyhahn/go-trusted-platform/issues/657)).**
+`prctl` and `capset` apply to the calling thread only, while the Go runtime
+has started several threads before `main` runs, so the steps above harden one
+thread out of many. `EnterHardened` closes that by re-executing gatewayd from
+the hardened thread: `execve` keeps the calling thread's credentials and
+discards every other thread, and every thread the new runtime starts is cloned
+from the hardened one. The goroutine is locked to its thread first and never
+unlocked, so nothing else runs on a half-hardened thread. Across the exec the
+kernel derives the new sets from the old: an unprivileged child's ambient set
+becomes its permitted and effective sets; a root kernel-class child's
+permitted set becomes its bounding set (already the class mask) and its
+effective set follows. `no_new_privs` survives the exec, so a setuid or
+file-capability image cannot raise anything.
+
+The second stage is recognised by `GATEWAYD_HARDENED_PARENT`, which carries
+the supervisor's pid across the exec. The marker grants nothing: the second
+stage reads `/proc/self/task/*/status` and refuses unless **every** thread has
+`NoNewPrivs` set and `CapPrm`, `CapEff` and `CapBnd` equal to the class mask —
+and, for an unprivileged class, all four uids and gids equal to the service
+account and no supplementary group but its own (`ErrPrivilegeNotHeld`, naming
+the thread and the field). It then re-arms the parent-death signal against the
+pid the first stage saw, so a supervisor that died across the exec is
+`ErrSupervisorExited`, not an orphan.
+
+The re-exec was chosen over the alternatives #657 listed:
+`syscall.AllThreadsSyscall` returns `ENOTSUP` under cgo and gatewayd is built
+both ways; libcap's Go bindings add a dependency for the same per-thread
+replay; dropping before the runtime starts threads would need C that runs
+before the Go runtime, which a pure-Go build does not have.
+It is an **owner call taken reversibly**: the choice is contained in
+`process/child.go`, and replacing it changes no caller.
 
 Hardening before the config read also means a parser never opens a file as
 root that it could not open as itself, so a permission bug surfaces on the
-first start rather than the first restart.
+first start rather than the first restart. (The root command's own config read
+in the first stage is the same parse the supervisor already made of the same
+file; the services are built only from the read the second stage makes.)
 
 **Restarts.** A child that exits while the parent still wants services from it
 is relaunched after a doubling backoff (`RestartBackoff` → `RestartBackoffMax`),
@@ -957,10 +983,66 @@ been reaped. Every path that ends a child goes through the same
 graceful-then-kill `terminate`, so none of them can wait on a wedged child
 forever.
 
-**Nothing launches a child yet.** The `process:` configuration section, the
-`gatewayd service run` command and the `serve` wiring that builds a supervisor
-land next; until then this package is complete, tested, and referenced by
-nothing in the daemon.
+**Processes move one at a time — `routing` first.** `Definition.Supervised`
+marks the processes that have left `gatewayd serve`; `Supervisor.Supervises`
+answers from it, and the gateway (`handlers.go`) registers a supervised handler
+only for those services. Every other service keeps its in-process handler,
+exactly as with the model off. `routing` (`transit`: the BGP speaker) moved
+first: it has the smallest privilege set of the processes that have a backend —
+`CAP_NET_BIND_SERVICE` for port 179, no kernel programming (`pkg/sdn/bgp`
+uses no netlink) — and BGP is the most exposed untrusted parser gatewayd runs.
+`Gateway.Apply` forwards the desired document to the supervisor only once
+`nat` or `load-balancer` is supervised; until `datapath` moves, it is applied
+in-process.
+
+**The wiring in `cmd/gatewayd`** (`pkg/sdn/gateway/commands`):
+
+| Piece | What it does |
+|---|---|
+| `ServeConfig.Process` | the `process:` section, decoded by `LoadServeConfig` |
+| `BuildSupervisor` | builds the supervisor from `process:` and attaches it to `GatewayConfig.Supervisor` before `BuildGateway`; nil when the section is absent or `enabled: false`, or there is no `gateway:` section |
+| `runServe` | shuts the supervisor down after `gw.Stop` on every exit path, within `shutdownTimeout` |
+| `gatewayd service run <process>` | the child: `EnterHardened`, then the configuration read as the service account (`ErrServiceConfigUnreadable` if it cannot), `GatewayConfig.HostedServices` set to the process's enabled services, `BuildGateway`, the IPC server listening at mode `0660`, then `gw.Start` |
+
+`GatewayConfig.HostedServices` restricts a gateway to one process's services:
+`Hosts(service)` gates handler registration, the OVS runtime (built only when
+a hosted service is a datapath service, so a parser child never opens OVSDB)
+and the trust resolver and proxy handler (built only when the proxy is
+hosted). Empty means every service, which is the supervisor's own case, so a
+child whose configuration enables none of its services stops with
+`ErrProcessHostsNothing` instead of hosting everything.
+
+The child listens **before** it starts its services: a start failure is set
+with `SetStartError` and stays readable over `Status`, so the supervisor
+reports why (`ErrServiceNotActiveInProcess` with the detail) rather than a
+socket that never appeared. The child's IPC policy admits the supervisor's uid
+to the control service; only the kernel-class process also admits the service
+account to `DatapathService`, so one parser cannot reach another's surface
+though they share an account.
+
+**Readable as the service account.** The child reads the gatewayd
+configuration — and, for the processes that build them, the `secret-store:`
+client files and `platform-ca-file` — after dropping to `process.user`. Those
+files must be readable by that account or by `process.group`.
+
+**The snapshot reads the child.** With `transit` supervised, the parent's
+`Gateway.Snapshot` takes its `bgp` section from the routing child's own
+snapshot, read over the child's control socket
+(`ServiceSupervisor.ServiceSnapshot` → `ProcessControlService.Snapshot`), so
+the peer detail the speaker holds is not lost. A child that is down or whose
+socket no longer answers is `process.ErrProcessDown`; the parent wraps it in
+`gateway.ErrSupervisedSnapshot` and reports it in `bgp.error`, keeping the
+configured `local_asn` and `router_id`, rather than presenting a speaker with
+no peers.
+
+**Still pending:** the next processes, in this order: `proxy` (the same one
+capability, the next most exposed parser; its TLS material and the TOFU pin
+directory under `--data-dir` must then be usable by the service account),
+`provisioning` (`dhcp`/`pxe`/`edge`), `vpn` once it has a backend (the
+management VPN is a refused section today, #558), and `datapath` last —
+moving it changes where `Apply` and the rest of the snapshot come from. Each
+move must route the snapshot sections its services own through
+`ServiceSnapshot` the same way.
 
 ### Supervisor IPC — `pkg/sdn/gateway/ipc` (#557)
 

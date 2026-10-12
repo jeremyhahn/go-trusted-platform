@@ -112,7 +112,20 @@ export abstract class BaseService {
    * @returns The full path with query parameters if any
    */
   protected buildUrl(path: string = '', options?: ListOptions): string {
-    const fullPath = path.length > 0 ? `${this.basePath}${path}` : this.basePath;
+    return this.buildUrlUnder(this.basePath, path, options);
+  }
+
+  /**
+   * Builds a full URL path under an explicit base path, for the services
+   * whose routes span more than one prefix
+   *
+   * @param basePath - The base path to append the segment to
+   * @param path - The path segment to append to basePath
+   * @param options - Optional list options to convert to query params
+   * @returns The full path with query parameters if any
+   */
+  protected buildUrlUnder(basePath: string, path: string = '', options?: ListOptions): string {
+    const fullPath = path.length > 0 ? `${basePath}${path}` : basePath;
 
     if (options === undefined) {
       return fullPath;

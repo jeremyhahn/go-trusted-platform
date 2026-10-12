@@ -44,7 +44,7 @@ const (
 //
 // PlatformDaemon is the main service exposed by platformd over unix socket.
 // This is an INTERNAL API for root-level operations.
-// Clients: platformctl (local), platform-api (REST gateway)
+// Clients: platformctl (local)
 type PlatformDaemonClient interface {
 	// System operations
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
@@ -290,7 +290,7 @@ type PlatformDaemon_DumpEntityTypeClient = grpc.ServerStreamingClient[DumpEntity
 //
 // PlatformDaemon is the main service exposed by platformd over unix socket.
 // This is an INTERNAL API for root-level operations.
-// Clients: platformctl (local), platform-api (REST gateway)
+// Clients: platformctl (local)
 type PlatformDaemonServer interface {
 	// System operations
 	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)

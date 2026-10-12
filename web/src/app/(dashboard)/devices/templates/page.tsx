@@ -63,6 +63,12 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast, useDeviceTemplates } from '@/hooks';
 import type { DeviceRole, DeviceTemplate } from 'trusted-platform-sdk';
+import {
+  ASSIGNABLE_DEVICE_ROLES,
+  DEVICE_ROLES,
+  deviceRoleLabel,
+  toDeviceRole,
+} from '@/lib/device-role';
 
 // ============================================================================
 // Types
@@ -75,7 +81,7 @@ interface TemplateFilters {
 
 interface TemplateStats {
   total: number;
-  byRole: Record<string, number>;
+  byRole: Partial<Record<DeviceRole, number>>;
 }
 
 // ============================================================================
@@ -83,9 +89,9 @@ interface TemplateStats {
 // ============================================================================
 
 function computeStats(templates: DeviceTemplate[]): TemplateStats {
-  const byRole: Record<string, number> = {};
+  const byRole: Partial<Record<DeviceRole, number>> = {};
   templates.forEach((template) => {
-    const role = template.role || 'UNSPECIFIED';
+    const role = template.role || 'unknown';
     byRole[role] = (byRole[role] || 0) + 1;
   });
 
@@ -96,19 +102,7 @@ function computeStats(templates: DeviceTemplate[]): TemplateStats {
 }
 
 function getRoleBadge(role: DeviceRole) {
-  const roleLabels: Record<DeviceRole, string> = {
-    UNSPECIFIED: 'Unspecified',
-    UNKNOWN: 'Unknown',
-    SERVER: 'Server',
-    CLIENT: 'Client',
-    WORKSTATION: 'Workstation',
-    EDGE: 'Edge',
-    IOT: 'IoT',
-    GATEWAY: 'Gateway',
-    LOAD_BALANCER: 'Load Balancer',
-  };
-
-  return <Badge variant="outline">{roleLabels[role] ?? role}</Badge>;
+  return <Badge variant="outline">{deviceRoleLabel(role)}</Badge>;
 }
 
 function formatDate(dateString: string | null | undefined) {
@@ -222,7 +216,7 @@ export default function DeviceTemplatesPage() {
       await create.mutateAsync({
         name: formData.get('name') as string,
         description: (formData.get('description') as string) || undefined,
-        role: formData.get('role') as DeviceRole,
+        role: toDeviceRole(formData.get('role')),
       });
       toast({
         title: 'Template created',
@@ -313,18 +307,16 @@ export default function DeviceTemplatesPage() {
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="role">Device Role</Label>
-                    <Select name="role" defaultValue="SERVER">
+                    <Select name="role" defaultValue="server">
                       <SelectTrigger>
                         <SelectValue placeholder="Select device role" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="SERVER">Server</SelectItem>
-                        <SelectItem value="CLIENT">Client</SelectItem>
-                        <SelectItem value="WORKSTATION">Workstation</SelectItem>
-                        <SelectItem value="EDGE">Edge</SelectItem>
-                        <SelectItem value="IOT">IoT</SelectItem>
-                        <SelectItem value="GATEWAY">Gateway</SelectItem>
-                        <SelectItem value="LOAD_BALANCER">Load Balancer</SelectItem>
+                        {ASSIGNABLE_DEVICE_ROLES.map((role) => (
+                          <SelectItem key={role} value={role}>
+                            {deviceRoleLabel(role)}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -370,7 +362,7 @@ export default function DeviceTemplatesPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-              {stats.byRole.SERVER || 0}
+              {stats.byRole.server || 0}
             </div>
             <p className="text-xs text-muted-foreground">Server templates</p>
           </CardContent>
@@ -383,7 +375,7 @@ export default function DeviceTemplatesPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-              {(stats.byRole.EDGE || 0) + (stats.byRole.IOT || 0)}
+              {(stats.byRole.edge || 0) + (stats.byRole.iot || 0)}
             </div>
             <p className="text-xs text-muted-foreground">Edge and IoT templates</p>
           </CardContent>
@@ -396,7 +388,7 @@ export default function DeviceTemplatesPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
-              {(stats.byRole.GATEWAY || 0) + (stats.byRole.LOAD_BALANCER || 0)}
+              {(stats.byRole.gateway || 0) + (stats.byRole['load-balancer'] || 0)}
             </div>
             <p className="text-xs text-muted-foreground">Gateway templates</p>
           </CardContent>
@@ -424,13 +416,11 @@ export default function DeviceTemplatesPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All roles</SelectItem>
-              <SelectItem value="SERVER">Server</SelectItem>
-              <SelectItem value="CLIENT">Client</SelectItem>
-              <SelectItem value="WORKSTATION">Workstation</SelectItem>
-              <SelectItem value="EDGE">Edge</SelectItem>
-              <SelectItem value="IOT">IoT</SelectItem>
-              <SelectItem value="GATEWAY">Gateway</SelectItem>
-              <SelectItem value="LOAD_BALANCER">Load Balancer</SelectItem>
+              {DEVICE_ROLES.map((role) => (
+                <SelectItem key={role} value={role}>
+                  {deviceRoleLabel(role)}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
           {(filters.role || filters.search) && (

@@ -154,6 +154,9 @@ func (g *Gateway) collectBGP(ctx context.Context) gwstate.BGPState {
 		}
 	}
 
+	if g.supervisedHandler(ServiceTransit) {
+		return g.collectSupervisedBGP(ctx, bgpState)
+	}
 	speaker := g.transitSpeaker()
 	if speaker == nil {
 		return bgpState
@@ -181,6 +184,31 @@ func (g *Gateway) collectBGP(ctx context.Context) gwstate.BGPState {
 		bgpState.ReceivedPrefixes += int(bgpState.Peers[i].PrefixesAccepted)
 	}
 	return bgpState
+}
+
+// collectSupervisedBGP reads the BGP section from the child hosting the
+// speaker. A child that cannot be read leaves the locally configured fields
+// and the reason in the section's error, so the missing peer detail is
+// reported rather than looking like a speaker with no peers.
+func (g *Gateway) collectSupervisedBGP(ctx context.Context, local gwstate.BGPState) gwstate.BGPState {
+	child, err := g.config.Supervisor.ServiceSnapshot(ctx, ServiceTransit)
+	if err != nil {
+		failure := &ErrSupervisedSnapshot{Service: ServiceTransit, Cause: err}
+		g.logSnapshot("bgp peers unavailable for the snapshot", failure)
+		local.Error = failure.Error()
+		return local
+	}
+	return child.BGP
+}
+
+// supervisedHandler reports whether the service is registered as a relay
+// to a supervised child rather than hosted in this process.
+func (g *Gateway) supervisedHandler(name string) bool {
+	g.mu.RLock()
+	handler := g.serviceHandlers[name]
+	g.mu.RUnlock()
+	_, supervised := handler.(*supervisedServiceHandler)
+	return supervised
 }
 
 // peerState maps one speaker peer onto its snapshot entry.

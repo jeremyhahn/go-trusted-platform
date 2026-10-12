@@ -183,15 +183,19 @@ func (h *refusedServiceHandler) Health() error {
 	return &ErrServiceUnavailable{Service: h.name, Reason: h.reason}
 }
 
-// registerConfiguredServices registers one handler per enabled section: a
-// supervisedServiceHandler for every section when a ServiceSupervisor is
-// injected (#557), otherwise a backedServiceHandler when the builder table
-// has the section and a refusedServiceHandler when it does not. The order is the declared order of
-// enabledServices, so start order is deterministic for the datapath
-// services even though the registry itself is a map.
+// registerConfiguredServices registers one handler per enabled section this
+// gateway hosts: a supervisedServiceHandler for every section the injected
+// ServiceSupervisor supervises (#557), otherwise a backedServiceHandler when
+// the builder table has the section and a refusedServiceHandler when it does
+// not. The order is the declared order of enabledServices, so start order is
+// deterministic for the datapath services even though the registry itself
+// is a map.
 func (g *Gateway) registerConfiguredServices() {
 	for _, name := range g.config.EnabledServices() {
-		if g.config.Supervisor != nil {
+		if !g.config.Hosts(name) {
+			continue
+		}
+		if g.supervises(name) {
 			g.serviceHandlers[name] = newSupervisedServiceHandler(name, g.config.Supervisor)
 			g.serviceOrder = append(g.serviceOrder, name)
 			continue
@@ -207,6 +211,12 @@ func (g *Gateway) registerConfiguredServices() {
 		}
 		g.serviceOrder = append(g.serviceOrder, name)
 	}
+}
+
+// supervises reports whether the service runs in a supervised child rather
+// than in this process.
+func (g *Gateway) supervises(service string) bool {
+	return g.config.Supervisor != nil && g.config.Supervisor.Supervises(service)
 }
 
 // backend returns the running backend behind a config-driven service, or

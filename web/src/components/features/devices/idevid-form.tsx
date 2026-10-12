@@ -20,6 +20,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { numberFieldProps } from '@/lib/number-field';
 import {
   Select,
   SelectContent,
@@ -34,9 +35,9 @@ import type { IssueIDevIDInput } from '@/types/device';
 const idevidFormSchema = z.object({
   deviceId: z.string().min(1, 'Device is required'),
   subject: z.string().min(1, 'Subject is required'),
-  validityDays: z.coerce.number().min(1, 'Validity must be at least 1 day').max(3650),
+  validityDays: z.number().min(1, 'Validity must be at least 1 day').max(3650),
   keyAlgorithm: z.enum(['RSA', 'ECC']),
-  keySize: z.coerce.number().optional(),
+  keySize: z.number().optional(),
 });
 
 type IDevIDFormValues = z.infer<typeof idevidFormSchema>;
@@ -54,7 +55,7 @@ export function IDevIDForm({ onSuccess, onCancel }: IDevIDFormProps) {
   const [isLoadingDevices, setIsLoadingDevices] = useState(true);
 
   const form = useForm<IDevIDFormValues>({
-    resolver: zodResolver(idevidFormSchema) as any, // zod 4 input/output split on coerced number fields (#451)
+    resolver: zodResolver(idevidFormSchema),
     defaultValues: {
       deviceId: '',
       subject: '',
@@ -197,7 +198,7 @@ export function IDevIDForm({ onSuccess, onCancel }: IDevIDFormProps) {
             <FormItem>
               <FormLabel>Validity Period (Days)</FormLabel>
               <FormControl>
-                <Input type="number" min="1" max="3650" {...field} />
+                <Input type="number" min="1" max="3650" {...numberFieldProps(field)} />
               </FormControl>
               <FormDescription>
                 Certificate validity period (1-3650 days, default: 365)

@@ -35,7 +35,7 @@ import (
 // REST Adapter Implementation
 // =============================================================================
 
-// RESTAdapter implements PXECommands using HTTP/REST calls to platform-api.
+// RESTAdapter implements PXECommands using HTTP/REST calls to platformd.
 type RESTAdapter struct {
 	baseURL    string
 	httpClient *http.Client

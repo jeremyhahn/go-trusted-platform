@@ -76,7 +76,7 @@ func (e ErrRESTAPIError) Error() string {
 // REST Adapter Implementation
 // =============================================================================
 
-// RESTAdapter implements DNSCommands using HTTP/REST calls to platform-api.
+// RESTAdapter implements DNSCommands using HTTP/REST calls to platformd.
 type RESTAdapter struct {
 	baseURL    string
 	httpClient *http.Client

@@ -196,6 +196,9 @@ type BGPState struct {
 	ReceivedPrefixes  int      `json:"received_prefixes"`
 	// Peers is one entry per configured neighbour, sorted by address.
 	Peers []BGPPeerState `json:"peers,omitempty"`
+	// Error is why the peer detail is missing: set when the BGP speaker
+	// runs in a supervised child the snapshot could not reach (#557).
+	Error string `json:"error,omitempty"`
 }
 
 // BGPPeerState is one neighbour's session as the speaker reports it.

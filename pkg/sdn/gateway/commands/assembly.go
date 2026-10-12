@@ -35,6 +35,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/controlplane"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
@@ -98,6 +99,10 @@ type ServeConfig struct {
 	// Metrics is the `metrics:` section (the Prometheus endpoint exporting
 	// the same telemetry snapshot the control plane receives).
 	Metrics *MetricsConfig
+
+	// Process is the `process:` section (the supervised process model,
+	// #557). Absent or disabled, every service runs in this process.
+	Process *process.Settings
 
 	// DataDir is gatewayd's state directory (--data-dir). It is a flag
 	// rather than a configuration section, so it is carried here to reach
@@ -179,7 +184,36 @@ func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
 		}
 		cfg.Metrics = mc
 	}
+	if v.IsSet("process") {
+		pc := &process.Settings{}
+		if err := v.UnmarshalKey("process", pc, serveDecodeHook); err != nil {
+			return nil, &ErrConfigSection{Section: "process", Cause: err}
+		}
+		cfg.Process = pc
+	}
 	return cfg, nil
+}
+
+// BuildSupervisor assembles the process supervisor the `process:` section
+// enables (#557) and attaches it to the gateway configuration, so
+// BuildGateway hands every supervised service to a child process. It
+// returns nil when the section is absent or disabled, or when there is no
+// `gateway:` section whose services could move. The children read
+// configFile, the file this process loaded.
+func BuildSupervisor(cfg *ServeConfig, configFile string, logger *slog.Logger) (*process.Supervisor, error) {
+	if cfg == nil {
+		return nil, ErrConfigLoadFailed
+	}
+	if cfg.Process == nil || !cfg.Process.Enabled || cfg.Gateway == nil {
+		return nil, nil
+	}
+	processCfg, err := cfg.Process.Config(configFile, logger)
+	if err != nil {
+		return nil, &ErrConfigSection{Section: "process", Cause: err}
+	}
+	supervisor := process.New(processCfg)
+	cfg.Gateway.Supervisor = supervisor
+	return supervisor, nil
 }
 
 // BuildGateway assembles the gateway node from the parsed configuration:
@@ -242,9 +276,16 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	// platformd dials, the secret store's session; the resolver verifies
 	// what the platform did not issue (BMC backends). Building each once
 	// here keeps every consumer on the same trust.
-	trustResolver, err := buildTrustResolver(cfg.Trust, cfg.DataDir, logger)
-	if err != nil {
-		return nil, err
+	// The resolver serves the proxy alone, so a supervised child that does
+	// not host the proxy neither builds it nor touches its pin directory.
+	hostsProxy := gwCfg.Hosts(gateway.ServiceProxy)
+	var trustResolver trust.Resolver
+	if hostsProxy {
+		resolver, err := buildTrustResolver(cfg.Trust, cfg.DataDir, logger)
+		if err != nil {
+			return nil, err
+		}
+		trustResolver = resolver
 	}
 	anchor, err := buildPlatformAnchor(cfg)
 	if err != nil {
@@ -279,7 +320,7 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 		gwCfg.MinUptimePct,
 	)
 
-	if cfg.Proxy != nil && cfg.Proxy.Enabled {
+	if hostsProxy && cfg.Proxy != nil && cfg.Proxy.Enabled {
 		handler, err := BuildProxyHandler(cfg.Proxy, trustResolver, anchor, logger)
 		if err != nil {
 			return nil, err

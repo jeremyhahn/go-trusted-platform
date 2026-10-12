@@ -202,7 +202,7 @@ The template is sent as **JSON**, converted from the role YAML, because YAML
 comments are not valid JSON. `role` is one of the node roles of
 [`config-reference.md`](config-reference.md) — `control-plane`, `gateway`,
 `worker` — and is stored verbatim as the template's `name` **and** `role`, so
-`GET /api/v1/devices/templates` lists the three seeded roles by name. The
+`GET /api/v1/device/templates` lists the three seeded roles by name. The
 template id is `util.NewID(role)`, so re-seeding a role is idempotent. A role
 outside the device vocabulary ([`docs/device/api.md`](../device/api.md) §4.2)
 is a `400`; it is never stored as `unknown`. The seeder router is the only
@@ -233,7 +233,7 @@ call answers `201` with the created profile inside the standard envelope:
 `payload.id` is the deterministic profile id (`util.NewID(hostname)`, so
 re-seeding the same host is idempotent) **as a JSON string** — a `uint64`
 exceeds the precision of a double. The payload fields are the subset of the
-`GET /api/v1/devices/profiles` item shape the seeder consumes; see
+`GET /api/v1/device/profiles` item shape the seeder consumes; see
 [`docs/device/api.md`](../device/api.md) §4. The seeder reads `payload.id` and
 also accepts a bare `{"id": "<string>"}` body.
 `TestSeederContract_*` in `pkg/bootstrap` drives the real seeder client through

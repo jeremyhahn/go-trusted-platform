@@ -541,6 +541,23 @@ func (e *ErrServiceUnhealthy) Unwrap() error {
 	return e.Cause
 }
 
+// ErrSupervisedSnapshot reports a snapshot section whose state lives in a
+// supervised child that could not be read (#557). The snapshot carries it in
+// the section's error field rather than omitting the section's detail
+// silently. Cause is the supervisor's own typed error.
+type ErrSupervisedSnapshot struct {
+	Service string
+	Cause   error
+}
+
+func (e *ErrSupervisedSnapshot) Error() string {
+	return fmt.Sprintf("gateway service %q snapshot unavailable from its supervised process: %v", e.Service, e.Cause)
+}
+
+func (e *ErrSupervisedSnapshot) Unwrap() error {
+	return e.Cause
+}
+
 // ErrNAT64ConfigInvalid wraps a NAT64 configuration error with the section
 // it came from (#601).
 type ErrNAT64ConfigInvalid struct {

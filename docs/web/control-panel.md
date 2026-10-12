@@ -35,7 +35,7 @@ web/src/
 │   ├── ui/                       # shadcn/ui components
 │   ├── layout/                   # App sidebar, header, breadcrumbs
 │   └── features/                 # Feature-specific components
-├── hooks/                        # use-api, use-mutation, use-auth, use-toast
+├── hooks/                        # SDK hooks, use-toast; useAuth re-exported from contexts/AuthContext
 ├── lib/api/                      # Service API clients
 └── types/                        # TypeScript interfaces
 ```

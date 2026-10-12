@@ -72,8 +72,11 @@ export type {
 } from 'trusted-platform-sdk';
 
 // Local hooks (not provided by SDK)
-export { useAuth, AuthProvider } from './use-auth';
-export type { User, LoginCredentials, AuthContextValue, AuthProviderProps } from './use-auth';
+
+// Auth has exactly one implementation, the context in @/contexts/AuthContext.
+// The barrel re-exports it so every import path reaches the same provider.
+export { useAuth, useOptionalAuth, AuthProvider } from '@/contexts/AuthContext';
+export type { User, AuthContextType } from '@/contexts/AuthContext';
 
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';

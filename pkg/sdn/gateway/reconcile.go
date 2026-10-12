@@ -73,10 +73,11 @@ func (g *Gateway) Apply(ctx context.Context, desired *gwstate.DesiredConfig) err
 		return nil
 	}
 
-	// In the supervised process model the services live in the datapath
-	// child; the document goes to it whole and its reconciliation state
-	// is the truth this gateway reports (#557).
-	if g.config.Supervisor != nil {
+	// Once the datapath services are supervised they live in the datapath
+	// child; the document goes to it whole and its reconciliation state is
+	// the truth this gateway reports (#557). Until then they are in this
+	// process and the document is applied here.
+	if g.supervises(ServiceLoadBalancer) || g.supervises(ServiceNAT) {
 		state, err := g.config.Supervisor.Apply(ctx, desired)
 		d.state = state
 		d.state.AttemptedAt = d.clock()

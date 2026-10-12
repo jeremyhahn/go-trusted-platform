@@ -4569,62 +4569,16 @@ integration-test-testenv-enrollment-clean:
 	@echo "Cleanup complete"
 
 
-# ==============================================================================
-# Platform API Gateway Build Targets
-# ==============================================================================
-
-PLATFORM_API               ?= platform-api
-
-# Native local build (produces static binaries)
-.PHONY: build-api
-build-api:
-	cd cmd/platform-api; \
-	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o ../../$(PLATFORM_API) --ldflags '-w -s -linkmode external -extldflags -static -v ${LDFLAGS}'
-
-.PHONY: build-api-debug
-build-api-debug:
-	cd cmd/platform-api; \
-	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o ../../$(PLATFORM_API) -gcflags='all=-N -l' --ldflags '-linkmode external -extldflags -static -v ${LDFLAGS}'
-
-.PHONY: build-api-static
-build-api-static: build-api
-	@echo "build-api-static target is deprecated. Use 'make build-api' instead (now produces static binaries by default)."
-
-.PHONY: build-api-debug-static
-build-api-debug-static: build-api-debug
-	@echo "build-api-debug-static target is deprecated. Use 'make build-api-debug' instead (now produces static binaries by default)."
-
-# Cross-compile ARM 64-bit (pure-Go static build)
-.PHONY: build-api-arm64
-build-api-arm64:
-	cd cmd/platform-api; \
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -o ../../$(PLATFORM_API) --ldflags '-w -s ${LDFLAGS}'
-
-.PHONY: build-api-arm64-static
-build-api-arm64-static: build-api-arm64
-	@echo "build-api-arm64-static target is deprecated. Use 'make build-api-arm64' instead (now produces static binaries by default)."
-
-.PHONY: build-api-arm64-debug
-build-api-arm64-debug:
-	cd cmd/platform-api; \
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-	$(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -gcflags "all=-N -l" -o ../../$(PLATFORM_API) --ldflags='${LDFLAGS}'
-
-.PHONY: build-api-arm64-debug-static
-build-api-arm64-debug-static: build-api-arm64-debug
-	@echo "build-api-arm64-debug-static target is deprecated. Use 'make build-api-arm64-debug' instead (now produces static binaries by default)."
-
-# Build all - includes platformd, platformctl, platform-initrd, and platform-api
+# Build all shipped binaries: platformd and platformctl (build), plus platform-initrd
 .PHONY: build-all
-build-all: build platform-initrd build-api
+build-all: build platform-initrd
 
 .PHONY: build-all-debug
-build-all-debug: build-debug platform-initrd-debug build-api-debug
+build-all-debug: build-debug platform-initrd-debug
 
 .PHONY: build-all-static
-build-all-static: build platform-initrd build-api
-	@echo "build-all-static target is deprecated. Use 'make build && make platform-initrd && make build-api' instead (now produce static binaries by default)."
+build-all-static: build-all
+	@echo "build-all-static target is deprecated. Use 'make build-all' instead (now produces static binaries by default)."
 
 # Build all binaries for ISO/deployment (three-binary architecture)
 # All binaries are static by default
@@ -4661,35 +4615,12 @@ binaries-arm64: rpi-binaries
 binaries-arm64-static: binaries-arm64
 	@echo "binaries-arm64-static target is deprecated. Use 'make rpi-binaries' instead (a CGO_ENABLED=0 cross build is already static)."
 
-# Run platform-api for development/testing
-.PHONY: run-api
-run-api: build-api-debug
-	./$(PLATFORM_API) \
-		--debug \
-		--host 0.0.0.0 \
-		--port 8443 \
-		--socket /run/platformd/platformd.sock \
-		--tls-cert $(PLATFORM_DIR)/certs/api-server.crt \
-		--tls-key $(PLATFORM_DIR)/certs/api-server.key \
-		--log-dir trusted-data/log
-
 # Test the REST API
 .PHONY: test-api
 test-api:
 	# tag-independent
 	cd pkg/api/rest && go test -v
 
-# Integration test the REST API (requires platformd running)
-.PHONY: integration-test-api
-integration-test-api: build-api-debug
-	@echo "Testing REST API integration (requires platformd socket at /run/platformd/platformd.sock)"
-	@echo "Start platformd first with: sudo make run"
-	@echo "Then in another terminal run the API with: make run-api"
-	@echo "Test endpoints with curl:"
-	@echo "  curl -k https://localhost:8443/health"
-	@echo "  curl -k https://localhost:8443/api/v1/status"
-	@echo "  curl -k https://localhost:8443/api/v1/version"
-	@echo "  curl -k https://localhost:8443/api/v1/services"
 
 
 # Builds never resolve through a workspace: modules come from Gitea tags

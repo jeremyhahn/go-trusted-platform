@@ -29,6 +29,14 @@ verbs are subgroups of `sdn`:
 administrative CLI: its `main` calls `commands.Execute()` and it is run as a
 service, configured by file.
 
+`gatewayd service run <process>` is the child half of the supervised process
+model (`process:` in [`user.md`](user.md), #557). `gatewayd serve` starts it;
+an operator does not. It takes `--ipc-socket`, `--socket-group`,
+`--supervisor-uid`, `--uid` and `--gid` from the supervisor, plus the global
+`--config`. It drops to the process's privilege class before it reads the
+configuration, so it exits with an error if that file is unreadable by the
+service account, or if the process hosts no enabled service.
+
 ### Global flags
 
 `platformctl` persistent flags (`pkg/cli/commands/root.go:125`), precedence

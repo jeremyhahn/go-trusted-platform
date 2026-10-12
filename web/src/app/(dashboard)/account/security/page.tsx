@@ -7,7 +7,7 @@
  * Tenant admins can toggle the "Require N factors" policy.
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 import { Plus, Shield, ShieldCheck, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,20 +20,17 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { useToast } from "@/hooks";
+import { useApi, useToast } from "@/hooks";
 import { useAuth } from "@/contexts/AuthContext";
 import { FactorList } from "@/components/security/factor-list";
 import { AddFactorWizard } from "@/components/security/add-factor-wizard";
-import { authFactorsApi } from "@/utils/auth-factors-api";
+import { authFactorsApi, toApiResponse } from "@/utils/auth-factors-api";
 import type { AuthFactor } from "@/types/auth-factors";
 
 export default function AccountSecurityPage() {
   const { toast } = useToast();
   const { user } = useAuth();
 
-  const [factors, setFactors] = useState<AuthFactor[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Wizard state
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -46,37 +43,35 @@ export default function AccountSecurityPage() {
   const isTenantAdmin = user?.isTenantOwner ?? false;
   const userId = user?.id;
 
-  // Every setState here follows the await; `loading` starts true and is only
-  // ever cleared here.
-  const loadFactors = useCallback(async () => {
-    if (!userId) return;
-    const result = await authFactorsApi.list(userId);
-    if (!result.ok) {
-      setLoadError(result.error);
-      setLoading(false);
-      return;
-    }
-    setFactors(result.data?.factors ?? []);
-    setLoadError(null);
-    setLoading(false);
-  }, [userId]);
+  // The SDK's useApi owns the load: it fetches when userId is known, refetches
+  // on demand, and holds the list. Local edits go through its mutate.
+  const {
+    data: factorList,
+    error: loadError,
+    isLoading,
+    refetch,
+    mutate,
+  } = useApi(
+    () => authFactorsApi.list(userId ?? "").then(toApiResponse),
+    [userId],
+    { enabled: !!userId }
+  );
 
-  // User-initiated reload: shows the spinner again, then loads.
-  const refetchFactors = useCallback(() => {
-    setLoading(true);
-    setLoadError(null);
-    void loadFactors();
-  }, [loadFactors]);
+  const factors = factorList?.factors ?? [];
+  // No userId yet means the list cannot be fetched; show it as loading.
+  const loading = !userId || isLoading;
 
-  // Every setState in loadFactors follows its await, but the compiler's rule
-  // does not model the async boundary and reports the call from this mount
-  // effect. The fix is structural — load through the SDK's useApi like every
-  // other page and stop owning a local copy of `factors` — and is tracked as
-  // #435; this line goes with it.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadFactors();
-  }, [loadFactors]);
+  // Apply a local edit to the list; `total` moves by the entries it added.
+  function updateFactors(update: (prev: AuthFactor[]) => AuthFactor[]) {
+    mutate((prev) => {
+      const previous = prev?.factors ?? [];
+      const next = update(previous);
+      return {
+        factors: next,
+        total: (prev?.total ?? previous.length) + next.length - previous.length,
+      };
+    });
+  }
 
   async function handleRemove(factor: AuthFactor) {
     if (!user?.id) return;
@@ -86,7 +81,7 @@ export default function AccountSecurityPage() {
       return;
     }
     toast({ title: "Factor removed", description: `"${factor.label}" has been removed.` });
-    refetchFactors();
+    await refetch();
   }
 
   async function handleRelabel(factor: AuthFactor, label: string) {
@@ -96,7 +91,7 @@ export default function AccountSecurityPage() {
       toast({ title: "Error updating label", description: result.error, variant: "destructive" });
       return;
     }
-    setFactors((prev) =>
+    updateFactors((prev) =>
       prev.map((f) => (f.id === factor.id ? { ...f, label } : f))
     );
   }
@@ -107,7 +102,7 @@ export default function AccountSecurityPage() {
   }
 
   function handleAdded(factor: AuthFactor) {
-    setFactors((prev) => {
+    updateFactors((prev) => {
       if (rotateTarget) {
         // Mark the old factor revoked in UI immediately
         return prev
@@ -172,12 +167,12 @@ export default function AccountSecurityPage() {
         <Alert variant="destructive">
           <AlertTitle>Failed to load factors</AlertTitle>
           <AlertDescription>
-            {loadError}
+            {loadError.message}
             <Button
               variant="link"
               size="sm"
               className="p-0 h-auto ml-2"
-              onClick={refetchFactors}
+              onClick={() => void refetch()}
             >
               Retry
             </Button>

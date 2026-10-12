@@ -68,7 +68,7 @@ export interface UseDeviceTemplateResult {
  *   const handleCreate = () => {
  *     create.mutate({
  *       name: 'Edge Gateway Template',
- *       role: 'GATEWAY',
+ *       role: 'gateway',
  *       description: 'Standard edge gateway configuration',
  *     });
  *   };

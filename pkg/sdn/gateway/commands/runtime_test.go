@@ -126,6 +126,17 @@ func TestDatapathService(t *testing.T) {
 		{"nat", &gateway.GatewayConfig{NAT: &gateway.NATConfig{Enabled: true}}, gateway.ServiceNAT},
 		{"load-balancer", &gateway.GatewayConfig{LoadBalancer: &gateway.LoadBalancerConfig{Enabled: true}}, gateway.ServiceLoadBalancer},
 		{"none", &gateway.GatewayConfig{Enabled: true}, ""},
+		// A supervised child that hosts no datapath service never opens
+		// OVSDB, whatever else the shared configuration enables.
+		{"firewall hosted elsewhere", &gateway.GatewayConfig{
+			Firewall:       &gateway.FirewallConfig{Enabled: true},
+			HostedServices: []string{gateway.ServiceTransit},
+		}, ""},
+		{"nat hosted here", &gateway.GatewayConfig{
+			Firewall:       &gateway.FirewallConfig{Enabled: true},
+			NAT:            &gateway.NATConfig{Enabled: true},
+			HostedServices: []string{gateway.ServiceNAT},
+		}, gateway.ServiceNAT},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

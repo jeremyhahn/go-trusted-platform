@@ -78,6 +78,7 @@ func init() {
 
 	// Register daemon commands
 	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(serviceCmd)
 	rootCmd.AddCommand(versionCmd)
 }
 

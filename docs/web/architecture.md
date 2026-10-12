@@ -218,7 +218,9 @@ SPA index → 404.
 4. `AuthProvider` (`src/contexts/AuthContext.tsx`) reads that cookie, decodes
    the JWT **without verifying the signature**, and exposes
    `{id, email, tenantId, isTenantOwner, roles}` plus `isAuthenticated`,
-   `isLoading`, `login`, `logout`.
+   `isLoading`, `login`, `logout`. It is the console's only auth
+   implementation: `@/hooks` re-exports `useAuth` and `AuthProvider` from it, so
+   every import path reaches the same React context.
 5. `AuthGuard` renders nothing and `replace`s to `/auth/webauthn` whenever the
    decode yields no user.
 6. Every API call goes through `PlatformProvider` with `baseUrl: "/api"` and

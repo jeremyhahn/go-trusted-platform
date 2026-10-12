@@ -772,8 +772,8 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.DeviceService/RecordAttestationCertificate": itemRoute("/api/v1/devices/{id:[0-9]+}/attest-cert/record", http.MethodPost, "{id:[0-9]+}", "device_id"),
 
 	// GET /api/v1/device/profiles/{id:[0-9]+} -- note the singular "device"
-	// prefix: the router serves BOTH /api/v1/device/profiles and
-	// /api/v1/devices/profiles, and this claim targets the former.
+	// prefix: profiles live under /api/v1/device and device records under
+	// /api/v1/devices, and no path is served under both (#266).
 	"/platform.v1.DeviceService/GetProfile": itemRoute("/api/v1/device/profiles/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
 
 	// GET /api/v1/invitations/{id:[0-9]+} -- proto field is invitation_id.

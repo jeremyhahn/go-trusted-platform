@@ -21,7 +21,7 @@ systemd starts multi-user.target
     │
     ├──────────────────┬──────────────────┐
     ▼                  ▼                  ▼
-network.target   platform-api     systemd-networkd
+network.target   platformd        systemd-networkd
     │                  │                  │
     └──────────────────┴──────────────────┘
                        │

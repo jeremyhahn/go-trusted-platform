@@ -28,7 +28,7 @@ Integration Tests:    Public APIs (CLI, REST, gRPC, QUIC, MCP, Socket)
 | Protocol | Transport | Use Case |
 |----------|-----------|----------|
 | **CLI** | platformctl -> platformd | Human operators, scripts |
-| **REST** | HTTP/JSON via platform-api | External systems, web clients |
+| **REST** | HTTP/JSON via platformd | External systems, web clients |
 | **gRPC** | Protocol buffers via platformd | High-performance internal services |
 | **QUIC** | UDP low-latency | Real-time, mobile clients |
 | **MCP** | Model Context Protocol | AI/LLM integration |
@@ -93,7 +93,7 @@ func (c *cliAdapter) GenerateKey(ctx context.Context, req *GenerateKeyRequest) (
     return &resp, nil
 }
 
-// REST Adapter - calls platform-api HTTP endpoints
+// REST Adapter - calls platformd REST endpoints
 type restAdapter struct {
     baseURL    string
     httpClient *http.Client

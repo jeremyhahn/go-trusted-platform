@@ -56,18 +56,24 @@ passed.
 
 ## Profile Endpoints
 
+Profiles live under the singular `/device/` prefix and device records under
+the plural `/devices/`; no path is served under both (#266,
+[api.md §3.1](api.md#31-one-name-per-resource)).
+
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/profiles` | Create profile |
-| GET | `/profiles/{id}` | Get profile by ID |
-| PUT | `/profiles/{id}` | Update profile |
-| DELETE | `/profiles/{id}` | Delete profile |
-| GET | `/profiles` | List profiles |
-| GET | `/profiles/match` | Find matching profile |
-| GET | `/profiles/mac/{prefix}` | Find by MAC prefix |
-| GET | `/profiles/serial/{prefix}` | Find by serial prefix |
-| POST | `/devices/profiles/{id}/assign` | Bind profile to a device identity (EK serial / MAC), optionally prestaging the EK certificate |
-| POST | `/devices/profiles/{id}/unassign` | Clear a profile's device binding |
+| POST | `/device/profiles` | Create profile |
+| GET | `/device/profiles/{id}` | Get profile by ID |
+| PUT | `/device/profiles/{id}` | Update profile |
+| DELETE | `/device/profiles/{id}` | Delete profile |
+| GET | `/device/profiles` | List profiles |
+| GET | `/device/profiles/count` | Count profiles |
+| POST | `/device/profiles/match` | Find matching profile |
+| GET | `/device/profiles/mac/{mac}` | Find by MAC address |
+| GET | `/device/profiles/serial/{serial}` | Find by serial |
+| GET | `/device/profiles/find-config` | Find the config for a device (EK serial / MAC) |
+| POST | `/device/profiles/{id}/assign` | Bind profile to a device identity (EK serial / MAC), optionally prestaging the EK certificate |
+| POST | `/device/profiles/{id}/unassign` | Clear a profile's device binding |
 
 ## Device Operations
 
@@ -455,14 +461,14 @@ physical hardware TPM) and must parse as a PEM X.509 certificate. An empty
 `ek_cert` leaves any previously prestaged certificate untouched.
 
 ```http
-POST /api/v1/devices/profiles/1/assign
+POST /api/v1/device/profiles/1/assign
 Content-Type: application/json
 
 {"device_id": "970392025956353"}
 ```
 
 ```http
-POST /api/v1/devices/profiles/1/assign
+POST /api/v1/device/profiles/1/assign
 Content-Type: application/json
 
 {
@@ -481,7 +487,7 @@ Clears the profile's device binding: the EK serial, MAC address,
 prestaged EK certificate, and assignment state are all reset.
 
 ```http
-POST /api/v1/devices/profiles/1/unassign
+POST /api/v1/device/profiles/1/unassign
 ```
 
 Response `200 OK`: the updated profile (with `assigned: false` and the

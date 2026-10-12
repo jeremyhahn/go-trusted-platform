@@ -46,6 +46,7 @@ import type {
   CreateProfileRequest,
 } from 'trusted-platform-sdk';
 import { profileOverrides } from '@/lib/device-profile-networks';
+import { ASSIGNABLE_DEVICE_ROLES, deviceRoleLabel, toDeviceRole } from '@/lib/device-role';
 
 // ============================================================================
 // Helper Functions
@@ -119,7 +120,7 @@ export default function SessionDetailClient() {
 
   // Custom profile form state
   const [profileName, setProfileName] = useState('');
-  const [profileRole, setProfileRole] = useState<DeviceRole>('SERVER');
+  const [profileRole, setProfileRole] = useState<DeviceRole>('server');
   const [profileEkSerial, setProfileEkSerial] = useState('');
   const [profileMacAddress, setProfileMacAddress] = useState('');
 
@@ -554,19 +555,17 @@ export default function SessionDetailClient() {
                       <Label htmlFor="p-role">Device Role</Label>
                       <Select
                         value={profileRole}
-                        onValueChange={(v) => setProfileRole(v as DeviceRole)}
+                        onValueChange={(v) => setProfileRole(toDeviceRole(v))}
                       >
                         <SelectTrigger id="p-role">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="SERVER">Server</SelectItem>
-                          <SelectItem value="CLIENT">Client</SelectItem>
-                          <SelectItem value="WORKSTATION">Workstation</SelectItem>
-                          <SelectItem value="EDGE">Edge</SelectItem>
-                          <SelectItem value="IOT">IoT</SelectItem>
-                          <SelectItem value="GATEWAY">Gateway</SelectItem>
-                          <SelectItem value="LOAD_BALANCER">Load Balancer</SelectItem>
+                          {ASSIGNABLE_DEVICE_ROLES.map((role) => (
+                            <SelectItem key={role} value={role}>
+                              {deviceRoleLabel(role)}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>

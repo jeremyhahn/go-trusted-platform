@@ -6,7 +6,7 @@
 # (IDevID certificate), applies network configuration (VLAN, static IP, gateway, DNS),
 # and triggers device activation.
 #
-# The service runs early in the boot sequence after the platform API is available,
+# The service runs early in the boot sequence after platformd (which serves the API),
 # configures the trusted network, and activates the device on the platform.
 
 [Unit]
@@ -21,8 +21,8 @@ ConditionVirtualization=!container
 ConditionPathExists=/usr/local/bin/trusted-platform-network.sh
 ConditionPathExists=/etc/trusted-platform/certs/idevid.crt
 
-# Ensure platform API is running and available
-Requires=platform-api.service
+# The platform API (REST, 8443) is served by platformd
+Requires=platformd.service
 
 [Service]
 Type=oneshot

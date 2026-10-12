@@ -64,6 +64,10 @@ type Definition struct {
 	// service uid. Kernel-programming processes stay root with a bounding
 	// set of Capabilities; parsers do not stay root at all.
 	Unprivileged bool
+	// Supervised reports whether the process has moved out of gatewayd serve
+	// into a supervised child. The processes move one at a time; until one
+	// does, its services keep running inside the supervisor's own process.
+	Supervised bool
 }
 
 // definitions is the process table. It is the one place a service's class,
@@ -99,6 +103,10 @@ var definitions = []Definition{
 		MemoryMax:    512 << 20,
 		CPUMax:       "100000 100000",
 		Unprivileged: true,
+		// First to move: the smallest privilege set of the processes that
+		// have a backend (one capability, no kernel programming), and BGP
+		// is the most exposed untrusted parser gatewayd runs.
+		Supervised: true,
 	},
 	{
 		Name:         "proxy",

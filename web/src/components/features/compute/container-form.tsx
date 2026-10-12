@@ -24,6 +24,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { numberFieldProps } from '@/lib/number-field';
 import {
   Select,
   SelectContent,
@@ -34,8 +35,8 @@ import {
 import { useCompute, useMutation, useToast, MutationError } from '@/hooks';
 
 const portSchema = z.object({
-  container: z.coerce.number().min(1).max(65535),
-  host: z.coerce.number().min(1).max(65535),
+  container: z.number().min(1).max(65535),
+  host: z.number().min(1).max(65535),
   protocol: z.enum(['tcp', 'udp']),
 });
 
@@ -44,8 +45,8 @@ const formSchema = z.object({
   image: z.string().min(1, 'Image is required'),
   command: z.string().optional(),
   ports: z.array(portSchema).optional(),
-  memoryMB: z.coerce.number().min(128).optional(),
-  cpuShares: z.coerce.number().min(0).max(1024).optional(),
+  memoryMB: z.number().min(128).optional(),
+  cpuShares: z.number().min(0).max(1024).optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -61,7 +62,7 @@ export function ContainerForm({ open, onOpenChange, onSuccess }: ContainerFormPr
   const { toast } = useToast();
 
   const form = useForm<FormValues>({
-    resolver: zodResolver(formSchema) as any, // zod 4 input/output split on coerced number fields (#451)
+    resolver: zodResolver(formSchema),
     defaultValues: {
       name: '',
       image: '',
@@ -198,7 +199,7 @@ export function ContainerForm({ open, onOpenChange, onSuccess }: ContainerFormPr
                     render={({ field }) => (
                       <FormItem className="flex-1">
                         <FormControl>
-                          <Input type="number" placeholder="Host" {...field} />
+                          <Input type="number" placeholder="Host" {...numberFieldProps(field)} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -210,7 +211,7 @@ export function ContainerForm({ open, onOpenChange, onSuccess }: ContainerFormPr
                     render={({ field }) => (
                       <FormItem className="flex-1">
                         <FormControl>
-                          <Input type="number" placeholder="Container" {...field} />
+                          <Input type="number" placeholder="Container" {...numberFieldProps(field)} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -259,7 +260,7 @@ export function ContainerForm({ open, onOpenChange, onSuccess }: ContainerFormPr
                   <FormItem>
                     <FormLabel>Memory (MB)</FormLabel>
                     <FormControl>
-                      <Input type="number" min={128} {...field} />
+                      <Input type="number" min={128} {...numberFieldProps(field)} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -273,7 +274,7 @@ export function ContainerForm({ open, onOpenChange, onSuccess }: ContainerFormPr
                   <FormItem>
                     <FormLabel>CPU Shares</FormLabel>
                     <FormControl>
-                      <Input type="number" min={0} max={1024} {...field} />
+                      <Input type="number" min={0} max={1024} {...numberFieldProps(field)} />
                     </FormControl>
                     <FormDescription>0-1024 (512 = normal)</FormDescription>
                     <FormMessage />

@@ -10,18 +10,24 @@
 // =============================================================================
 
 /**
- * Device role
+ * Device role, as the REST API sends and accepts it: the ten lowercase
+ * strings of `entities.DeviceRole` (`pkg/device/entities/profile.go`).
+ * `unknown` is what the server reports for a profile or template saved
+ * without a role. The server reads a role case-insensitively and also takes
+ * `loadbalancer` for `load-balancer`, but it always writes one of these ten
+ * and rejects anything else with a 400 (#119).
  */
 export type DeviceRole =
-  | 'UNSPECIFIED'
-  | 'UNKNOWN'
-  | 'SERVER'
-  | 'CLIENT'
-  | 'WORKSTATION'
-  | 'EDGE'
-  | 'IOT'
-  | 'GATEWAY'
-  | 'LOAD_BALANCER';
+  | 'unknown'
+  | 'control-plane'
+  | 'gateway'
+  | 'worker'
+  | 'server'
+  | 'client'
+  | 'workstation'
+  | 'edge'
+  | 'iot'
+  | 'load-balancer';
 
 /**
  * Authentication method

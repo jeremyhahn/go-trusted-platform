@@ -255,11 +255,11 @@ and a saved device. The daemon REST handler rejects the same body with `400`.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create profile | `POST /api/v1/device/profiles`, `POST /api/v1/devices/profiles` | `CreateProfile` | `OpDeviceCreateProfile` (`0x38`) | `profile_create` | ✅ |
-| Get profile | `GET /api/v1/device/profiles/{id}`, `GET /api/v1/devices/profiles/{id}` | `GetProfile` | `OpDeviceGetProfile` (`0x35`) | `profile_get_by_id` | ✅ |
-| Update profile (full replace) | `PUT /api/v1/device/profiles/{id}`, `PUT /api/v1/devices/profiles/{id}` | `UpdateProfile` | `OpDeviceSetProfile` (`0x36`) | `profile_update_by_id` (partial merge) | ✅ |
-| Delete profile | `DELETE /api/v1/device/profiles/{id}`, `DELETE /api/v1/devices/profiles/{id}` | `DeleteProfile` | `OpDeviceDeleteProfile` (`0x39`) | `profile_delete_by_id` | ✅ |
-| List profiles | `GET /api/v1/device/profiles`, `GET /api/v1/devices/profiles` | `ListProfiles` | `OpDeviceListProfiles` (`0x37`) | `profile_list_all` | ✅ |
+| Create profile | `POST /api/v1/device/profiles` | `CreateProfile` | `OpDeviceCreateProfile` (`0x38`) | `profile_create` | ✅ |
+| Get profile | `GET /api/v1/device/profiles/{id}` | `GetProfile` | `OpDeviceGetProfile` (`0x35`) | `profile_get_by_id` | ✅ |
+| Update profile (full replace) | `PUT /api/v1/device/profiles/{id}` | `UpdateProfile` | `OpDeviceSetProfile` (`0x36`) | `profile_update_by_id` (partial merge) | ✅ |
+| Delete profile | `DELETE /api/v1/device/profiles/{id}` | `DeleteProfile` | `OpDeviceDeleteProfile` (`0x39`) | `profile_delete_by_id` | ✅ |
+| List profiles | `GET /api/v1/device/profiles` | `ListProfiles` | `OpDeviceListProfiles` (`0x37`) | `profile_list_all` | ✅ |
 | Count profiles | `GET /api/v1/device/profiles/count` | `CountProfiles` | `OpDeviceListProfiles` (`0x37`) — total in the list reply | `MISSING — docs/13 G7` | ✅ |
 | Find profile by MAC | `GET /api/v1/device/profiles/mac/{mac}` | `FindProfileByMACAddress` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
@@ -269,32 +269,39 @@ and a saved device. The daemon REST handler rejects the same body with `400`.
 | Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | `MISSING — docs/13 G7` |
 | Get profile over mTLS (device self-service) | `GET /api/v1/device/profile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 
-### 3.1 The singular / plural REST aliasing
+### 3.1 One name per resource
 
-`/api/v1/device/profiles` and `/api/v1/devices/profiles` dispatch to the **same
-handlers**. The source states why: *"the dashboard hits
-`/api/v1/devices/profiles` while the platform originally exposed singular
-`/api/v1/device/profiles`. Both forms must dispatch to the same handler so REST
-and SDK callers agree."* The same applies to `/device/templates` versus
-`/devices/templates` for `GET`, and for `GET`/`PUT`/`DELETE` on `{id}` — but
-**not** for `POST /devices/templates`, which is the bootstrap seeder's route
-(§4.1); CRUD creation is singular only.
+Device **records** live under the plural `/api/v1/devices`. Their **profiles
+and templates** live under the singular `/api/v1/device`. No path is served
+under both (#266). Until #266 the router also answered a partial set of plural
+aliases: `POST`/`GET /devices/profiles`, `GET`/`PUT`/`DELETE
+/devices/profiles/{id}`, `GET /devices/templates` and `GET`/`PUT`/`DELETE
+/devices/templates/{id}`. They stopped short of `count`, `match`,
+`serial/{serial}`, `mac/{mac}`, `find-config`, `assign` and `unassign`, so a
+client had to know which name each operation used. The aliases were deleted,
+and the plural sub-resources were not renamed. A plural profile or template
+request now gets `404`.
 
-**The aliasing is not complete.** Only these exist on the plural form:
-`POST` and `GET /devices/profiles`, and `GET`/`PUT`/`DELETE
-/devices/profiles/{id}`. `count`, `match`, `serial/{serial}`, `mac/{mac}`,
-`find-config`, `assign` and `unassign` are **singular-only**. Write new clients
-against the singular form.
+`TestDeviceRoutesHaveOneName` (`pkg/webservice/v1/device_route_names_test.go`)
+walks the router platformd builds and fails if any path below one prefix is
+also registered below the other. The bootstrap seeder's three plural routes are
+the only exemption. They are `GET /devices/config`, `POST /devices/templates`
+and `POST /devices/templates/{id}/create-profile` (§4.1, §4.3), and the
+exemption is keyed by method and path, so a CRUD alias on one of those paths is
+still caught.
 
-`GET /api/v1/devices/config` was listed beside `find-config` in the table above
-until #265. **It has never been registered** — `grep -rn '"/devices/config"'`
-over `pkg/` returns nothing — so it was a claimed route with no handler, in the
-one document a client author would consult to find the right one. Removed.
+The justification once quoted for the aliases did not hold: the dashboard
+never called `/api/v1/devices/profiles`. Every `/devices/...` string under
+`web/src` is a single-page-app route, such as the `app-sidebar.tsx` `href:`
+entries and the `${templateId}/edit` paths, not an API call.
 
-The quoted justification for the aliasing is also worth reading with care: the
-dashboard does **not** call `/api/v1/devices/profiles`. Every `/devices/...`
-string under `web/src` is a single-page-app route — `app-sidebar.tsx:123-124`
-`href:` entries and `${templateId}/edit` paths — not an API call. See #266.
+The JS SDK's `DeviceService` calls device records under `/v1/devices` and
+profiles, templates and `activate-json` under `/v1/device` (#228). The route
+table in `sdk/javascript/src/services/__tests__/device-service.test.ts` pins the
+verb and the path of every method. Before #228 it called eight routes the server
+has never registered: `devices/by-serial`, `devices/activate`,
+`devices/profiles/by-mac`, `devices/profiles/by-serial`, the plural `match`,
+`count` and `assign`, and `devices/templates/{id}/profiles` for create-from-template.
 
 ### 3.2 `GET /api/v1/device/profile` is a different shape
 
@@ -550,13 +557,13 @@ accepted gap rather than an untested one.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create template | `POST /api/v1/device/templates` (singular only — the plural `POST` is the seeder's, §4.1) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Get template | `GET /api/v1/device/templates/{id}`, `GET /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Update template | `PUT /api/v1/device/templates/{id}`, `PUT /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Delete template | `DELETE /api/v1/device/templates/{id}`, `DELETE /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| List templates | `GET /api/v1/device/templates`, `GET /api/v1/devices/templates` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Create template | `POST /api/v1/device/templates` (the plural `POST` is the seeder's, §4.1) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Get template | `GET /api/v1/device/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Update template | `PUT /api/v1/device/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Delete template | `DELETE /api/v1/device/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| List templates | `GET /api/v1/device/templates` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Find template by name | `GET /api/v1/device/templates/name/{name}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Create profile from template | `POST /api/v1/device/templates/{id}/create-profile`, `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (§4.3) | `CreateProfileFromTemplate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Create profile from template | `POST /api/v1/device/templates/{id}/create-profile`; the seeder's own `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (§4.3) | `CreateProfileFromTemplate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 
 **Device templates are REST-only, and that is deliberate — with a stated
 reason.** `device.proto` carries a comment where the RPCs used to be:
@@ -572,6 +579,23 @@ reason.** `device.proto` carries a comment where the RPCs used to be:
 This is the one row set in this document where `MISSING` is a recorded design
 decision rather than an untracked hole. The prefix requirement is binding on
 whoever adds it back.
+
+**The template routes always have a handler (#320).** `router.NewDeviceRouter`
+(`pkg/webservice/v1/router/device.go`) requires the device CRUD handler and the
+template handler, and returns `ErrDeviceHandlerRequired{Handler}` when either is
+nil. That is because `RegisterRoutes` mounts the device, profile and template
+routes, and `find-config` / `assign` / `unassign`, with no nil check. Before
+#320 every use of the template handler carried its own `if handler != nil`.
+The plural aliases #266 removed even had a second check nested inside the
+CRUD group. So the guarantee lasted only as long as each new route
+remembered its check, and a route that forgot one would dereference nil on
+its first request. The remaining handlers
+are optional, and each one gates a whole capability: the mTLS device handler,
+config delivery, and the attestation verifier. If `deviceRoutes`
+(`pkg/webservice/v1/router.go`) gets the constructor error, it logs at Error
+and registers no device routes at all. It does not serve a broken half.
+`TestNewDeviceRouter_RequiresTheHandlersRegisterRoutesDereferences` and
+`TestRegisterRoutes_MountsTheTemplateRoutes` pin both halves of this.
 
 ### 4.1 `POST /api/v1/devices/templates` belongs to the bootstrap seeder
 
@@ -589,16 +613,15 @@ templates listed as `name=""`, `role="unknown"` with no config (#114).
 [`docs/bootstrap/api.md`](../bootstrap/api.md) §6. The CRUD create
 (`TemplateCRUDHandler.CreateTemplate`, flat or `{template: {...}}` envelope)
 is singular `POST /api/v1/device/templates` only; the JS SDK's
-`createTemplate` posts there. `GET /devices/templates` and the
-`GET`/`PUT`/`DELETE /devices/templates/{id}` plural aliases remain CRUD
-because they do not collide. One handler per route — a request is never
+`createTemplate` posts there. Every other template operation is singular
+only (§3.1). One handler per route — a request is never
 interpreted by guessing its shape; `pkg/webservice/v1/router/device_templates_test.go`
 pins which handler answers the plural `POST`.
 
-The seeder's other two routes do not collide: `GET /api/v1/devices/config` is
-unique to it, and `POST /api/v1/devices/templates/{id}/create-profile` is not
-registered by the CRUD alias block (which only aliases `GET`/`PUT`/`DELETE` on
-`{id}`).
+The seeder's other two routes do not collide either. `GET /api/v1/devices/config`
+is unique to it. Its `POST /api/v1/devices/templates/{id}/create-profile` sits
+beside the singular CRUD `create-profile` under the other prefix, with a
+different body (§4.3).
 
 ### 4.2 Role vocabulary
 
@@ -619,6 +642,12 @@ gRPC and Unix services use, so a role written over REST reads back identically
 over every transport. `platformctl device profile --role` accepts the same
 list.
 
+The JavaScript SDK's `DeviceRole` (`sdk/javascript/src/types/device.ts`) is
+exactly these ten REST strings, with no index signature, so a role the server
+adds fails the web console's typecheck wherever it keeps an exhaustive
+`Record<DeviceRole, …>`. The console reads, labels and submits roles through
+`web/src/lib/device-role.ts`; it never sends the gRPC enum spelling (#119).
+
 ### 4.3 `create-profile` request and response (seeder shape)
 
 `POST /api/v1/devices/templates/{id}/create-profile` takes
@@ -630,7 +659,7 @@ a `400`); `ek_cert` is **refused** with `400` because this route is
 unauthenticated — EK binding belongs to the authenticated
 `POST /api/v1/device/profiles/{id}/assign`. It answers `201` with the
 created profile in the standard `{code, success, payload}` envelope. The
-payload is the subset of the `GET /api/v1/devices/profiles` item shape the
+payload is the subset of the `GET /api/v1/device/profiles` item shape the
 seeder consumes — `id` (**JSON string**, deterministic from the hostname),
 `name`, `role`, `mac_address`, `match_rules` and `assigned` — with identical
 field names and encoding, so a client that lists profiles parses this payload
@@ -958,9 +987,9 @@ always paginate.
 
 REST under `/api/v1`; gRPC package `platform.v1`; QUIC `ProtocolVersion`
 `0x01`. Nothing in the device surface is marked deprecated as of 2026-08-18.
-The singular/plural REST duplication (§3.1) and the triplicated MCP families
-(§6) are **not** a versioning scheme — they are drift, and the newer spelling
-is not automatically the better one.
+The singular/plural REST duplication was drift, not a versioning scheme, and
+#266 removed it (§3.1). The triplicated MCP families (§6) are the same kind of
+drift, and the newer spelling is not automatically the better one.
 
 ---
 

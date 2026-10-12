@@ -38,7 +38,7 @@ const (
 	// EnvPlatformdSocket is the Unix socket path for platformd.
 	EnvPlatformdSocket = "PLATFORMD_SOCKET"
 
-	// EnvPlatformAPIEndpoint is the environment variable for platform-api REST endpoint.
+	// EnvPlatformAPIEndpoint is the environment variable for the platformd REST endpoint.
 	EnvPlatformAPIEndpoint = "PLATFORM_API_ENDPOINT"
 
 	// EnvPlatformGRPCEndpoint is the environment variable for platformd gRPC endpoint.
@@ -62,7 +62,7 @@ const (
 	// DefaultPlatformdSocket is the default Unix socket path.
 	DefaultPlatformdSocket = "/run/platformd.sock"
 
-	// DefaultPlatformAPIEndpoint is the default platform-api REST endpoint.
+	// DefaultPlatformAPIEndpoint is the default platformd REST endpoint.
 	DefaultPlatformAPIEndpoint = "http://127.0.0.1:8443"
 
 	// DefaultPlatformGRPCEndpoint is the default platformd gRPC endpoint.

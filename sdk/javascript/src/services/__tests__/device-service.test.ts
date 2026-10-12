@@ -1,11 +1,17 @@
 /**
- * Unit tests for DeviceService template routes.
+ * Unit tests for DeviceService routes.
  *
- * Template creation is the one device operation that does not live under
- * the service's plural base path: `POST /v1/devices/templates` is the
- * bootstrap seeder's route (docs/device/api.md §4.1), so createTemplate
- * must post to the singular `/v1/device/templates` while the other template
- * operations keep the plural aliases.
+ * The server serves each device resource under exactly one name (#266,
+ * docs/device/api.md §3.1): device RECORDS under the plural `/v1/devices`,
+ * and profiles, templates and the machine-facing routes under the singular
+ * `/v1/device`. The plural profile and template aliases are gone, so a client
+ * that still calls one gets a 404. mux also answers a wrong verb with 404, not
+ * 405, which makes it look exactly like a missing route. The route table below
+ * therefore pins the verb as tightly as the path for every method (#228).
+ *
+ * Template creation must not use the plural `POST /v1/devices/templates`
+ * either: that is the bootstrap seeder's route, and it takes a different body
+ * (docs/device/api.md §4.1).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -41,14 +47,14 @@ describe('DeviceService templates', () => {
     const request: CreateDeviceTemplateRequest = {
       name: 'gw-default',
       description: 'gateway default',
-      role: 'GATEWAY',
+      role: 'gateway',
       config: { domain: 'example.com' },
     };
 
     it('posts the unchanged request to the singular CRUD path, not the seeder route', async () => {
       const mockResponse: ApiResponse<DeviceTemplate> = {
         success: true,
-        data: { id: '42', name: 'gw-default', role: 'GATEWAY' } as unknown as DeviceTemplate,
+        data: { id: '42', name: 'gw-default', role: 'gateway' } as unknown as DeviceTemplate,
       };
       vi.mocked(mockClient.post).mockResolvedValue(mockResponse);
 
@@ -58,8 +64,7 @@ describe('DeviceService templates', () => {
       expect(result.data?.name).toBe('gw-default');
       expect(mockClient.post).toHaveBeenCalledTimes(1);
       expect(mockClient.post).toHaveBeenCalledWith('/v1/device/templates', request);
-      const [path] = vi.mocked(mockClient.post).mock.calls[0];
-      expect(path).not.toBe('/v1/devices/templates');
+      expect(vi.mocked(mockClient.post).mock.calls[0]?.[0]).not.toBe('/v1/devices/templates');
     });
 
     it('propagates a transport error unchanged', async () => {
@@ -71,22 +76,157 @@ describe('DeviceService templates', () => {
     });
   });
 
-  describe('plural aliases that are still CRUD routes', () => {
-    it('lists templates from the plural path', async () => {
-      vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: [] });
+});
 
-      await service.listTemplates();
+type Verb = 'get' | 'post' | 'put' | 'delete';
 
-      expect(mockClient.get).toHaveBeenCalledWith('/v1/devices/templates');
-    });
+interface RouteCase {
+  method: string;
+  verb: Verb;
+  path: string;
+  call: (service: DeviceService) => Promise<unknown>;
+}
 
-    it('gets a template by id from the plural path', async () => {
-      vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: {} });
+/**
+ * Every DeviceService method whose route sits under the device prefixes, with
+ * the verb and path the server registers for it (pkg/webservice/v1/router/device.go).
+ * Inputs are cast because the tests care about the URL that goes out, not the
+ * shape of the object that goes in.
+ */
+const routes: RouteCase[] = [
+  // Device records: plural.
+  { method: 'createDevice', verb: 'post', path: '/v1/devices', call: (s) => s.createDevice({} as never) },
+  { method: 'getDevice', verb: 'get', path: '/v1/devices/5', call: (s) => s.getDevice('5') },
+  { method: 'deleteDevice', verb: 'delete', path: '/v1/devices/5', call: (s) => s.deleteDevice('5') },
+  { method: 'listDevices', verb: 'get', path: '/v1/devices', call: (s) => s.listDevices() },
+  { method: 'countDevices', verb: 'get', path: '/v1/devices/count', call: (s) => s.countDevices() },
+  {
+    method: 'findDeviceBySerial',
+    verb: 'get',
+    path: '/v1/devices/serial/SN%2F1',
+    call: (s) => s.findDeviceBySerial('SN/1'),
+  },
+  // Operator activation: the singular JSON-body route, not the mTLS one.
+  {
+    method: 'activateDevice',
+    verb: 'post',
+    path: '/v1/device/activate-json',
+    call: (s) => s.activateDevice({} as never),
+  },
+  // Profiles: singular.
+  { method: 'createProfile', verb: 'post', path: '/v1/device/profiles', call: (s) => s.createProfile({} as never) },
+  { method: 'getProfile', verb: 'get', path: '/v1/device/profiles/7', call: (s) => s.getProfile('7') },
+  {
+    method: 'updateProfile',
+    verb: 'put',
+    path: '/v1/device/profiles/7',
+    call: (s) => s.updateProfile({ profile: { id: 7 } } as never),
+  },
+  { method: 'deleteProfile', verb: 'delete', path: '/v1/device/profiles/7', call: (s) => s.deleteProfile('7') },
+  { method: 'listProfiles', verb: 'get', path: '/v1/device/profiles', call: (s) => s.listProfiles() },
+  {
+    method: 'findProfileByMACAddress',
+    verb: 'get',
+    path: '/v1/device/profiles/mac/aa%3Abb%3Acc%3Add%3Aee%3Aff',
+    call: (s) => s.findProfileByMACAddress('aa:bb:cc:dd:ee:ff'),
+  },
+  {
+    method: 'findProfileBySerial',
+    verb: 'get',
+    path: '/v1/device/profiles/serial/SN1',
+    call: (s) => s.findProfileBySerial('SN1'),
+  },
+  {
+    method: 'findMatchingProfile',
+    verb: 'post',
+    path: '/v1/device/profiles/match',
+    call: (s) => s.findMatchingProfile({} as never),
+  },
+  { method: 'countProfiles', verb: 'get', path: '/v1/device/profiles/count', call: (s) => s.countProfiles() },
+  {
+    method: 'assignProfileToDevice',
+    verb: 'post',
+    path: '/v1/device/profiles/7/assign',
+    call: (s) => s.assignProfileToDevice({ profileId: 7 } as never),
+  },
+  // Templates: singular.
+  { method: 'createTemplate', verb: 'post', path: '/v1/device/templates', call: (s) => s.createTemplate({} as never) },
+  { method: 'getTemplate', verb: 'get', path: '/v1/device/templates/42', call: (s) => s.getTemplate('42') },
+  {
+    method: 'updateTemplate',
+    verb: 'put',
+    path: '/v1/device/templates/42',
+    call: (s) => s.updateTemplate({ id: 42 } as never),
+  },
+  { method: 'deleteTemplate', verb: 'delete', path: '/v1/device/templates/42', call: (s) => s.deleteTemplate('42') },
+  { method: 'listTemplates', verb: 'get', path: '/v1/device/templates', call: (s) => s.listTemplates() },
+  {
+    method: 'createProfileFromTemplate',
+    verb: 'post',
+    path: '/v1/device/templates/42/create-profile',
+    call: (s) => s.createProfileFromTemplate({ templateId: 42 } as never),
+  },
+];
 
-      await service.getTemplate('42');
+const verbs: Verb[] = ['get', 'post', 'put', 'delete'];
 
-      expect(mockClient.get).toHaveBeenCalledWith('/v1/devices/templates/42');
-    });
+describe('DeviceService route table', () => {
+  let service: DeviceService;
+  let mockClient: ApiClient;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    service = new DeviceService(mockClient);
+  });
+
+  it.each(routes)('$method sends $verb $path and no other request', async ({ verb, path, call }) => {
+    vi.mocked(mockClient[verb]).mockResolvedValue({ success: true, data: {} });
+
+    const result = await call(service);
+
+    expect(result).toEqual({ success: true, data: {} });
+    expect(mockClient[verb]).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(mockClient[verb]).mock.calls[0]?.[0]).toBe(path);
+    for (const other of verbs.filter((v) => v !== verb)) {
+      expect(mockClient[other]).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(routes)('$method propagates a transport error unchanged', async ({ verb, path, call }) => {
+    const failure = new Error('404 Not Found');
+    vi.mocked(mockClient[verb]).mockRejectedValue(failure);
+
+    await expect(call(service)).rejects.toBe(failure);
+    expect(vi.mocked(mockClient[verb]).mock.calls[0]?.[0]).toBe(path);
+  });
+
+  it('never calls a removed plural profile or template alias', async () => {
+    for (const verb of verbs) {
+      vi.mocked(mockClient[verb]).mockResolvedValue({ success: true, data: {} });
+    }
+
+    for (const route of routes) {
+      await route.call(service);
+    }
+
+    const sent = verbs.flatMap((verb) => vi.mocked(mockClient[verb]).mock.calls.map((c) => String(c[0])));
+    expect(sent).toHaveLength(routes.length);
+    for (const path of sent) {
+      expect(path.startsWith('/v1/devices/profiles')).toBe(false);
+      expect(path.startsWith('/v1/devices/templates')).toBe(false);
+    }
+  });
+
+  it('passes list pagination through as query parameters on the singular prefix', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: [] });
+
+    await service.listProfiles({ page: 2, pageSize: 10 } as never);
+    await service.listTemplates({ page: 3, pageSize: 5 } as never);
+
+    expect(vi.mocked(mockClient.get).mock.calls.map((c) => c[0])).toEqual([
+      '/v1/device/profiles?page=2&limit=10',
+      '/v1/device/templates?page=3&limit=5',
+    ]);
   });
 });
 

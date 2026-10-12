@@ -20,13 +20,18 @@ import (
 )
 
 // ServiceSupervisor runs the gateway's services out of process (#557). When
-// GatewayConfig.Supervisor is set, every enabled section is registered as a
-// supervisedServiceHandler that asks the supervisor to start, stop and
-// report the service instead of building the backend in this process; the
+// GatewayConfig.Supervisor is set, every enabled section it Supervises is
+// registered as a supervisedServiceHandler that asks the supervisor to start,
+// stop and report the service instead of building the backend in this
+// process; the sections it does not supervise yet stay in-process. The
 // supervisor owns the `gatewayd service run <process>` children, their
 // restart policy and the IPC that reaches them. The interface is defined
 // here so pkg/sdn/gateway/process can implement it without a cycle.
 type ServiceSupervisor interface {
+	// Supervises reports whether the service runs in a supervised child.
+	// The services move out of process one process at a time; one that has
+	// not moved yet keeps its in-process handler.
+	Supervises(service string) bool
 	// StartService makes sure the process owning the service is running and
 	// the service reports active inside it. The error names the process and
 	// the child's own start failure when the child came up but the service
@@ -40,6 +45,10 @@ type ServiceSupervisor interface {
 	// ServiceHealth is nil when the owning process is up and the child
 	// reports the service healthy.
 	ServiceHealth(service string) error
+	// ServiceSnapshot is the snapshot of the child process hosting the
+	// service, read over its control socket, so the state the service keeps
+	// in the child reaches this process's snapshot.
+	ServiceSnapshot(ctx context.Context, service string) (*gwstate.Snapshot, error)
 	// Apply forwards the control plane's desired configuration to the
 	// datapath process and returns the reconciliation state it reports.
 	Apply(ctx context.Context, desired *gwstate.DesiredConfig) (gwstate.DesiredConfigState, error)

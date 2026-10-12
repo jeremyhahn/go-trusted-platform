@@ -855,6 +855,15 @@ func (s *Supervisor) removeCgroup(proc *supervised) {
 // ServiceActive implements gateway.ServiceSupervisor. It is the child's own
 // verdict, read over the control socket; a process that is down reports
 // nothing active.
+// Supervises implements gateway.ServiceSupervisor: a service is supervised
+// once the process the class table places it in has moved out of process.
+// A service the table does not place is not supervised, so the gateway keeps
+// it in-process and reports its own refusal for it.
+func (s *Supervisor) Supervises(service string) bool {
+	def, err := DefinitionForService(service)
+	return err == nil && def.Supervised
+}
+
 func (s *Supervisor) ServiceActive(service string) bool {
 	status, _, err := s.serviceStatus(service)
 	if err != nil {
@@ -889,27 +898,9 @@ type serviceView struct {
 
 // serviceStatus asks the owning child about one service.
 func (s *Supervisor) serviceStatus(service string) (serviceView, string, error) {
-	def, err := DefinitionForService(service)
+	def, client, err := s.serviceClient(service)
 	if err != nil {
-		return serviceView{}, "", err
-	}
-	s.mu.Lock()
-	proc, ok := s.processes[def.Name]
-	var client *ipc.Client
-	var failure error
-	if ok {
-		client, failure = proc.client, proc.failure
-	}
-	s.mu.Unlock()
-
-	if !ok || client == nil {
-		if failure == nil {
-			// No client and no recorded failure means nothing ever started
-			// this process. Saying "supervisor stopped" there would report a
-			// shutdown that has not happened.
-			failure = &ErrProcessNeverStarted{Process: def.Name}
-		}
-		return serviceView{}, def.Name, &ErrProcessDown{Process: def.Name, Service: service, Cause: failure}
+		return serviceView{}, def.Name, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), statusTimeout)
@@ -929,6 +920,49 @@ func (s *Supervisor) serviceStatus(service string) (serviceView, string, error) 
 		view.healthError = svc.GetHealthError()
 	}
 	return view, def.Name, nil
+}
+
+// serviceClient is the control client of the process owning the service,
+// or ErrProcessDown naming why there is none.
+func (s *Supervisor) serviceClient(service string) (Definition, *ipc.Client, error) {
+	def, err := DefinitionForService(service)
+	if err != nil {
+		return Definition{}, nil, err
+	}
+	s.mu.Lock()
+	proc, ok := s.processes[def.Name]
+	var client *ipc.Client
+	var failure error
+	if ok {
+		client, failure = proc.client, proc.failure
+	}
+	s.mu.Unlock()
+
+	if !ok || client == nil {
+		if failure == nil {
+			// No client and no recorded failure means nothing ever started
+			// this process. Saying "supervisor stopped" there would report a
+			// shutdown that has not happened.
+			failure = &ErrProcessNeverStarted{Process: def.Name}
+		}
+		return def, nil, &ErrProcessDown{Process: def.Name, Service: service, Cause: failure}
+	}
+	return def, client, nil
+}
+
+// ServiceSnapshot reads the snapshot of the child process hosting the
+// service over its control socket. A process that is down, or a socket that
+// no longer answers, is ErrProcessDown.
+func (s *Supervisor) ServiceSnapshot(ctx context.Context, service string) (*gwstate.Snapshot, error) {
+	def, client, err := s.serviceClient(service)
+	if err != nil {
+		return nil, err
+	}
+	snap, err := client.Snapshot(ctx)
+	if err != nil {
+		return nil, &ErrProcessDown{Process: def.Name, Service: service, Cause: err}
+	}
+	return snap, nil
 }
 
 // statusTimeout bounds a status question to a child.

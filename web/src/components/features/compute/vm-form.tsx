@@ -23,6 +23,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { numberFieldProps } from '@/lib/number-field';
 import {
   Select,
   SelectContent,
@@ -37,9 +38,9 @@ const formSchema = z.object({
   name: z.string().min(1, 'Name is required').max(64, 'Name too long'),
   description: z.string().optional(),
   osType: z.string().min(1, 'OS type is required'),
-  vcpus: z.coerce.number().min(1).max(64),
-  memoryMB: z.coerce.number().min(512).max(524288),
-  storageMB: z.coerce.number().min(1024).max(10485760),
+  vcpus: z.number().min(1).max(64),
+  memoryMB: z.number().min(512).max(524288),
+  storageMB: z.number().min(1024).max(10485760),
   networkId: z.string().optional(),
 });
 
@@ -56,7 +57,7 @@ export function VMForm({ open, onOpenChange, onSuccess }: VMFormProps) {
   const { toast } = useToast();
 
   const form = useForm<FormValues>({
-    resolver: zodResolver(formSchema) as any, // zod 4 input/output split on coerced number fields (#451)
+    resolver: zodResolver(formSchema),
     defaultValues: {
       name: '',
       description: '',
@@ -184,7 +185,7 @@ export function VMForm({ open, onOpenChange, onSuccess }: VMFormProps) {
                   <FormItem>
                     <FormLabel>vCPUs</FormLabel>
                     <FormControl>
-                      <Input type="number" min={1} max={64} {...field} />
+                      <Input type="number" min={1} max={64} {...numberFieldProps(field)} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -198,7 +199,7 @@ export function VMForm({ open, onOpenChange, onSuccess }: VMFormProps) {
                   <FormItem>
                     <FormLabel>Memory (MB)</FormLabel>
                     <FormControl>
-                      <Input type="number" min={512} {...field} />
+                      <Input type="number" min={512} {...numberFieldProps(field)} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -212,7 +213,7 @@ export function VMForm({ open, onOpenChange, onSuccess }: VMFormProps) {
                   <FormItem>
                     <FormLabel>Storage (MB)</FormLabel>
                     <FormControl>
-                      <Input type="number" min={1024} {...field} />
+                      <Input type="number" min={1024} {...numberFieldProps(field)} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

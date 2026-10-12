@@ -57,8 +57,8 @@ web/
 │   │       ├── iam/ tenant/ ca/ kms/ devices/ attestation/ tpm/
 │   │       ├── compute/ networking/ storage/ provisioning/ platform/
 │   ├── components/{ui,layout,features,security,brand}/, theme-*.tsx
-│   ├── contexts/AuthContext.tsx
-│   ├── hooks/{index.ts,use-auth.tsx,use-toast.ts}
+│   ├── contexts/AuthContext.tsx    # the only auth implementation
+│   ├── hooks/{index.ts,use-toast.ts,...}   # index.ts re-exports AuthContext
 │   ├── lib/utils.ts
 │   ├── types/*.ts
 │   └── utils/{cookie.ts,jwt.ts,getBaseUrl.ts,dynamic-route.ts,auth-factors-api.ts}
@@ -359,7 +359,23 @@ linked local SDK (`"trusted-platform-sdk": "file:../sdk/javascript"`) resolves
 more reliably under it; `next.config.mjs` carries a webpack `resolve.alias` for
 the SDK's subpath exports and `transpilePackages: ["trusted-platform-sdk"]`.
 `playwright.config.ts` explicitly starts `npm run dev:webpack` for the same
-reason.
+reason. `vitest.config.ts` does the test-side equivalent: it inlines
+`trusted-platform-sdk` and dedupes `react`/`react-dom`, because the linked SDK
+carries its own dev copy of React and an externalized SDK hook (`useApi`)
+otherwise fails with "Invalid hook call".
+
+Console pages load server data through the SDK's `useApi`, never through a
+local `useState` + `useEffect` pair. The account security page
+(`account/security/page.tsx`) reads factors this way: `toApiResponse`
+(`src/utils/auth-factors-api.ts`) adapts the factor client's result to the
+SDK's `ApiResponse`, and local edits go through `useApi`'s `mutate` (#435).
+
+Form schemas declare numeric fields as `z.number()`, never `z.coerce.number()`:
+coercion makes the schema's input type `unknown`, which no longer matches the
+form values and forces an `as any` on `zodResolver`. A number field binds to
+`<Input type="number">` through `numberFieldProps(field)`
+(`src/lib/number-field.ts`), which reads the input's `valueAsNumber` and turns
+a blank into `undefined` (#451).
 
 ## 9. Test strategy
 

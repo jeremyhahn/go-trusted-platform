@@ -317,10 +317,12 @@ names a reference fails closed rather than running unauthenticated.
 ## The supervisor seam: a section can be a handler for a child process
 
 The same registration walk has a third mode, and it is the one an internet
-edge runs in (#557). When `GatewayConfig.Supervisor` is set, **every** enabled
-section registers a `supervisedServiceHandler` instead — the builder and
-refusal tables are not consulted, because in that model the service is built
-inside a child process and this process only relays:
+edge runs in (#557). When `GatewayConfig.Supervisor` is set (the `process:`
+section, `enabled: true`), every enabled section whose process the supervisor
+`Supervises` registers a `supervisedServiceHandler` instead — the builder and
+refusal tables are not consulted for it, because the service is built inside a
+child process (`gatewayd service run <process>`, dropped to its R14 privilege
+class) and this process only relays:
 
 | Call | What it does under a supervisor |
 |---|---|
@@ -329,11 +331,31 @@ inside a child process and this process only relays:
 | `IsActive` | the child's own verdict, read over the IPC — never a bool this process set |
 | `Health` | `ErrServiceUnhealthy{Service, Cause}` when the child is down, over its restart budget, or reports the service unhealthy |
 
-Two consequences are deliberate. `Gateway.Apply` forwards the whole desired
-document to the supervisor and records the state the datapath child reports,
-rather than reconciling anything locally — the services it would reconcile are
-not in this process. And the parent installs no base pipeline: `Runtime` is nil
-here because the datapath child holds the OVSDB connection and owns the bridge.
+**The processes move one at a time.** `routing` (`transit`, the BGP speaker)
+is the only supervised process today: the smallest privilege set of the
+processes with a backend (`CAP_NET_BIND_SERVICE` alone) and the most exposed
+parser. Every other section keeps its in-process handler, exactly as with the
+model off. The order still to come is `proxy`, `provisioning`, `vpn` once it
+has a backend, and `datapath` last;
+[`engineering.md`](engineering.md) §The process model carries the state.
+
+Once `datapath` moves, two consequences are deliberate. `Gateway.Apply`
+forwards the whole desired document to the supervisor and records the state
+the datapath child reports, rather than reconciling anything locally — the
+services it would reconcile are not in this process. And the parent installs
+no base pipeline: `Runtime` is nil there because the datapath child holds the
+OVSDB connection and owns the bridge. Until then `Apply` forwards only when
+`nat` or `load-balancer` is supervised, so today it reconciles in-process.
+
+A child hosts only its own process's services (`GatewayConfig.HostedServices`):
+it builds no OVS runtime unless it hosts a datapath service, and no trust
+resolver or proxy handler unless it hosts the proxy.
+
+The parent's telemetry snapshot does not lose what a child holds: its `bgp`
+section comes from the routing child's own snapshot, read over the control
+socket. When the child cannot be read, the section keeps its configured fields
+and says why in `bgp.error` (`ErrSupervisedSnapshot`) instead of showing a
+speaker with no peers.
 
 `ServiceReports()` is the one place liveness is collected: one
 `{Name, Active, Health}` per registered handler in registration order. The
@@ -350,7 +372,7 @@ cannot be forged.
 | Service | Method | Who may call it |
 |---|---|---|
 | `ProcessControlService` | `Status`, `Snapshot` | the supervisor's uid (root) |
-| `DatapathService` | `ApplyDesired` | the supervisor, plus the parser class's unprivileged uid |
+| `DatapathService` | `ApplyDesired` | the supervisor, plus — on the kernel-class process only — the parser class's unprivileged uid; a parser process admits no other parser |
 
 The supervisor is root and the parser class runs unprivileged, so the uid is
 the whole authorization question. `Policy` is the per-service uid table; an RPC for a service it does not know is

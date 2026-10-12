@@ -7,18 +7,16 @@ This package contains the gRPC service definitions for the `platformd` daemon's 
 The platformd daemon exposes a comprehensive gRPC API over a Unix socket for root-level operations. This is an **INTERNAL API** not intended for direct external access. Clients include:
 
 - `platformctl` - Local CLI tool for platform operations
-- `platform-api` - REST API gateway (future implementation)
+
+`platformd` is the only process that serves gRPC. REST, QUIC, MCP and the Unix socket are served by the same daemon; see `docs/daemon/api.md` for the transport model.
 
 ## Architecture
 
 ```
 ┌──────────────┐         ┌──────────────┐
-│ platformctl  │────────▶│              │
-└──────────────┘         │  platformd   │
-                         │   (daemon)   │
-┌──────────────┐         │              │
-│ platform-api │────────▶│ Unix Socket  │
-└──────────────┘         │              │
+│ platformctl  │────────▶│  platformd   │
+└──────────────┘         │   (daemon)   │
+                         │ Unix Socket  │
                          └──────────────┘
 ```
 
@@ -373,7 +371,7 @@ chmod 0660 /var/run/platformd.sock
 
 ### TLS (Future)
 
-For remote access via platform-api:
+For remote access to the platformd gRPC listener:
 - Mutual TLS authentication
 - Certificate-based authorization
 - Client certificate validation
@@ -431,8 +429,7 @@ resp, err := client.GetStatus(ctx, req)
 
 ## Future Enhancements
 
-1. Remote access via platform-api REST gateway
-2. gRPC-Web support for browser clients
+1. gRPC-Web support for browser clients
 3. Policy-based authorization
 4. Audit logging for all operations
 5. Rate limiting per client

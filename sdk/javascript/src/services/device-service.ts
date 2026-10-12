@@ -8,6 +8,7 @@ import type { ApiClient } from '../client/api-client.js';
 import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
+import type { ListOptions } from './base-service.js';
 import type {
   CreateDeviceRequest,
   UpdateDeviceRequest,
@@ -47,6 +48,14 @@ import type {
   AssignProfileToDeviceRequest,
   FulfillSessionRequest,
 } from '../types/device.js';
+
+/**
+ * The server's device surface has one name per resource (docs/device/api.md
+ * §3.1, #266): device RECORDS live under the plural base path `/v1/devices`,
+ * and profiles, templates and the machine-facing routes under the singular
+ * `/v1/device`. No route is served under both.
+ */
+const SINGULAR_BASE_PATH = '/v1/device';
 import type { DeviceSelfServiceProfile } from '../types/device-self-service.js';
 
 /**
@@ -76,6 +85,18 @@ export class DeviceService extends BaseService {
    */
   constructor(client: Transport | ApiClient) {
     super(client, '/v1/devices');
+  }
+
+  /**
+   * Builds a path under the singular `/v1/device` prefix, where profiles,
+   * templates and the machine-facing routes live
+   *
+   * @param path - The path segment to append to the singular prefix
+   * @param options - Optional list options to convert to query params
+   * @returns The full path with query parameters if any
+   */
+  private singularUrl(path: string, options?: ListOptions): string {
+    return this.buildUrlUnder(SINGULAR_BASE_PATH, path, options);
   }
 
   // =========================================================================
@@ -164,7 +185,7 @@ export class DeviceService extends BaseService {
    */
   async findDeviceBySerial(serial: string): Promise<ApiResponse<FindDeviceBySerialResponse>> {
     return this.client.get<FindDeviceBySerialResponse>(
-      this.buildUrl(`/by-serial/${this.encodePathSegment(serial)}`)
+      this.buildUrl(`/serial/${this.encodePathSegment(serial)}`)
     );
   }
 
@@ -180,11 +201,16 @@ export class DeviceService extends BaseService {
   /**
    * Activate a device
    *
+   * Posts to the operator's JSON-body route, `POST /api/v1/device/activate-json`.
+   * The other activation route, `POST /api/v1/device/activate`, is
+   * machine-facing: it reads the serial from the device's verified client
+   * certificate, not from a body.
+   *
    * @param request - Activation request
    * @returns Activation result
    */
   async activateDevice(request: ActivateDeviceRequest): Promise<ApiResponse<ActivateDeviceResponse>> {
-    return this.client.post<ActivateDeviceResponse>(this.buildUrl('/activate'), request);
+    return this.client.post<ActivateDeviceResponse>(this.singularUrl('/activate-json'), request);
   }
 
   // =========================================================================
@@ -198,7 +224,7 @@ export class DeviceService extends BaseService {
    * @returns Created profile
    */
   async createProfile(request: CreateProfileRequest): Promise<ApiResponse<CreateProfileResponse>> {
-    return this.client.post<CreateProfileResponse>(this.buildUrl('/profiles'), request);
+    return this.client.post<CreateProfileResponse>(this.singularUrl('/profiles'), request);
   }
 
   /**
@@ -208,7 +234,7 @@ export class DeviceService extends BaseService {
    * @returns Profile information
    */
   async getProfile(id: string): Promise<ApiResponse<GetProfileResponse>> {
-    return this.client.get<GetProfileResponse>(this.buildUrl(`/profiles/${id}`));
+    return this.client.get<GetProfileResponse>(this.singularUrl(`/profiles/${id}`));
   }
 
   /**
@@ -219,7 +245,7 @@ export class DeviceService extends BaseService {
    */
   async updateProfile(request: UpdateProfileRequest): Promise<ApiResponse<UpdateProfileResponse>> {
     return this.client.put<UpdateProfileResponse>(
-      this.buildUrl(`/profiles/${request.profile.id}`),
+      this.singularUrl(`/profiles/${request.profile.id}`),
       request
     );
   }
@@ -231,7 +257,7 @@ export class DeviceService extends BaseService {
    * @returns Deletion result
    */
   async deleteProfile(id: string): Promise<ApiResponse<DeleteProfileResponse>> {
-    return this.client.delete<DeleteProfileResponse>(this.buildUrl(`/profiles/${id}`));
+    return this.client.delete<DeleteProfileResponse>(this.singularUrl(`/profiles/${id}`));
   }
 
   /**
@@ -241,7 +267,7 @@ export class DeviceService extends BaseService {
    * @returns List of profiles
    */
   async listProfiles(request?: ListProfilesRequest): Promise<ApiResponse<ListProfilesResponse>> {
-    return this.client.get<ListProfilesResponse>(this.buildUrl('/profiles', {
+    return this.client.get<ListProfilesResponse>(this.singularUrl('/profiles', {
       page: request?.page,
       limit: request?.pageSize,
     }));
@@ -255,7 +281,7 @@ export class DeviceService extends BaseService {
    */
   async findProfileByMACAddress(macAddress: string): Promise<ApiResponse<FindProfileByMACAddressResponse>> {
     return this.client.get<FindProfileByMACAddressResponse>(
-      this.buildUrl(`/profiles/by-mac/${this.encodePathSegment(macAddress)}`)
+      this.singularUrl(`/profiles/mac/${this.encodePathSegment(macAddress)}`)
     );
   }
 
@@ -267,7 +293,7 @@ export class DeviceService extends BaseService {
    */
   async findProfileBySerial(serial: string): Promise<ApiResponse<FindProfileBySerialResponse>> {
     return this.client.get<FindProfileBySerialResponse>(
-      this.buildUrl(`/profiles/by-serial/${this.encodePathSegment(serial)}`)
+      this.singularUrl(`/profiles/serial/${this.encodePathSegment(serial)}`)
     );
   }
 
@@ -279,7 +305,7 @@ export class DeviceService extends BaseService {
    */
   async findMatchingProfile(request: FindMatchingProfileRequest): Promise<ApiResponse<FindMatchingProfileResponse>> {
     return this.client.post<FindMatchingProfileResponse>(
-      this.buildUrl('/profiles/match'),
+      this.singularUrl('/profiles/match'),
       request
     );
   }
@@ -290,7 +316,7 @@ export class DeviceService extends BaseService {
    * @returns Profile count
    */
   async countProfiles(): Promise<ApiResponse<CountProfilesResponse>> {
-    return this.client.get<CountProfilesResponse>(this.buildUrl('/profiles/count'));
+    return this.client.get<CountProfilesResponse>(this.singularUrl('/profiles/count'));
   }
 
   // =========================================================================
@@ -300,15 +326,15 @@ export class DeviceService extends BaseService {
   /**
    * Create a device template
    *
-   * Posts to the singular `/v1/device/templates`: the plural
-   * `POST /v1/devices/templates` is the bootstrap seeder's route and takes
-   * a different body (`{role, template}`), so it is not an alias here.
+   * `POST /api/v1/device/templates`. The plural `POST /api/v1/devices/templates`
+   * is the bootstrap seeder's route and takes a different body
+   * (`{role, template}`, docs/device/api.md §4.1).
    *
    * @param request - Template creation request
    * @returns Created template
    */
   async createTemplate(request: CreateDeviceTemplateRequest): Promise<ApiResponse<DeviceTemplate>> {
-    return this.client.post<DeviceTemplate>('/v1/device/templates', request);
+    return this.client.post<DeviceTemplate>(this.singularUrl('/templates'), request);
   }
 
   /**
@@ -318,7 +344,7 @@ export class DeviceService extends BaseService {
    * @returns Template information
    */
   async getTemplate(id: string): Promise<ApiResponse<DeviceTemplate>> {
-    return this.client.get<DeviceTemplate>(this.buildUrl(`/templates/${id}`));
+    return this.client.get<DeviceTemplate>(this.singularUrl(`/templates/${id}`));
   }
 
   /**
@@ -329,7 +355,7 @@ export class DeviceService extends BaseService {
    */
   async updateTemplate(request: UpdateDeviceTemplateRequest): Promise<ApiResponse<DeviceTemplate>> {
     return this.client.put<DeviceTemplate>(
-      this.buildUrl(`/templates/${request.id}`),
+      this.singularUrl(`/templates/${request.id}`),
       request
     );
   }
@@ -341,7 +367,7 @@ export class DeviceService extends BaseService {
    * @returns Deletion result
    */
   async deleteTemplate(id: string): Promise<ApiResponse<void>> {
-    return this.client.delete(this.buildUrl(`/templates/${id}`));
+    return this.client.delete(this.singularUrl(`/templates/${id}`));
   }
 
   /**
@@ -351,7 +377,7 @@ export class DeviceService extends BaseService {
    * @returns List of templates
    */
   async listTemplates(request?: ListDeviceTemplatesRequest): Promise<ApiResponse<DeviceTemplate[]>> {
-    return this.client.get<DeviceTemplate[]>(this.buildUrl('/templates', {
+    return this.client.get<DeviceTemplate[]>(this.singularUrl('/templates', {
       page: request?.page,
       limit: request?.pageSize,
     }));
@@ -367,7 +393,7 @@ export class DeviceService extends BaseService {
     request: CreateProfileFromTemplateRequest
   ): Promise<ApiResponse<DeviceProfile>> {
     return this.client.post<DeviceProfile>(
-      this.buildUrl(`/templates/${request.templateId}/profiles`),
+      this.singularUrl(`/templates/${request.templateId}/create-profile`),
       request
     );
   }
@@ -379,8 +405,7 @@ export class DeviceService extends BaseService {
   /**
    * Find config for a device by EK serial or MAC address
    *
-   * Server route: `GET /api/v1/device/profiles/find-config`
-   * (`pkg/webservice/v1/router/device.go:251`). This method previously POSTed
+   * Server route: `GET /api/v1/device/profiles/find-config`. This method previously POSTed
    * a JSON body to `/v1/devices/profiles/config`, which the server has never
    * served — wrong prefix, wrong path segment and wrong verb at once (#265).
    *
@@ -390,12 +415,6 @@ export class DeviceService extends BaseService {
    * in the type system catches that rename, so `findConfigForDevice` is
    * covered by a test asserting the URL that goes out rather than the object
    * that goes in.
-   *
-   * The absolute path bypasses `buildUrl`, which unconditionally prepends this
-   * service's `basePath` of `/v1/devices` and therefore cannot express any
-   * route under the singular `/v1/device/...` prefix. That is a workaround for
-   * the split tracked in #266, not an idiom to copy — `createTemplate` above
-   * carries the same one for the same reason.
    *
    * @param request - Device identifier request; at least one of ekSerial or
    *   macAddress must be set, or the server answers 400.
@@ -412,9 +431,8 @@ export class DeviceService extends BaseService {
       params.set('mac', request.macAddress);
     }
     const query = params.toString();
-    const path = query.length > 0
-      ? `/v1/device/profiles/find-config?${query}`
-      : '/v1/device/profiles/find-config';
+    const route = this.singularUrl('/profiles/find-config');
+    const path = query.length > 0 ? `${route}?${query}` : route;
 
     return this.client.get<DeviceProfile | null>(path);
   }
@@ -429,14 +447,10 @@ export class DeviceService extends BaseService {
    * (`docs/device/api.md` §3.2) — and NOT a `DeviceProfile`; the two are
    * different wires (#402).
    *
-   * The absolute path bypasses `buildUrl` for the reason `findConfigForDevice`
-   * documents: the service's `basePath` is the plural `/v1/devices` and this
-   * route lives under the singular prefix (#266).
-   *
    * @returns The device's own profile
    */
   async getDeviceProfile(): Promise<ApiResponse<DeviceSelfServiceProfile>> {
-    return this.client.get<DeviceSelfServiceProfile>('/v1/device/profile');
+    return this.client.get<DeviceSelfServiceProfile>(this.singularUrl('/profile'));
   }
 
   /**
@@ -449,7 +463,7 @@ export class DeviceService extends BaseService {
     request: AssignProfileToDeviceRequest
   ): Promise<ApiResponse<DeviceProfile>> {
     return this.client.post<DeviceProfile>(
-      this.buildUrl(`/profiles/${request.profileId}/assign`),
+      this.singularUrl(`/profiles/${request.profileId}/assign`),
       request
     );
   }

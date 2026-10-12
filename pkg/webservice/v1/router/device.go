@@ -46,8 +46,28 @@ func (r *DeviceRouter) SetAttestCertHandler(handler device.AttestCertHandler) {
 	r.attestCertHandler = handler
 }
 
-// NewDeviceRouter creates a DeviceRouter. All handlers except mtlsMiddleware and
-// deviceHandler are optional — pass nil to skip those route groups.
+// ErrDeviceHandlerRequired is returned by NewDeviceRouter when a handler that
+// RegisterRoutes dereferences unconditionally is nil. Handler names the
+// missing handler's interface.
+type ErrDeviceHandlerRequired struct {
+	Handler string
+}
+
+func (e ErrDeviceHandlerRequired) Error() string {
+	return "device router: missing required handler: " + e.Handler
+}
+
+// NewDeviceRouter creates a DeviceRouter.
+//
+// crudHandler and templateHandler are required, and a nil one is an
+// ErrDeviceHandlerRequired. RegisterRoutes mounts the device, profile and
+// template routes unconditionally, so the constructor is what guarantees
+// those routes have a handler (#320). The other handlers are optional, and
+// each one gates a whole capability: deviceHandler the mTLS device routes,
+// configDeliveryHandler the provisioning routes, attestHandler the quote
+// verifier. An absent capability is not registered, rather than registered
+// broken.
+//
 // It returns the concrete *DeviceRouter rather than WebServiceRouter because
 // the device surface is split by principal (#165): the caller mounts
 // RegisterRoutes on a gated router and RegisterMachineFacingRoutes on the
@@ -60,7 +80,13 @@ func NewDeviceRouter(
 	templateHandler device.TemplateCRUDHandler,
 	configDeliveryHandler configdelivery.RestHandler,
 	attestHandler device.AttestHandler,
-) *DeviceRouter {
+) (*DeviceRouter, error) {
+	if crudHandler == nil {
+		return nil, ErrDeviceHandlerRequired{Handler: "DeviceCRUDHandler"}
+	}
+	if templateHandler == nil {
+		return nil, ErrDeviceHandlerRequired{Handler: "TemplateCRUDHandler"}
+	}
 	return &DeviceRouter{
 		mtlsMiddleware:        mtlsMiddleware,
 		deviceHandler:         deviceHandler,
@@ -68,7 +94,7 @@ func NewDeviceRouter(
 		templateHandler:       templateHandler,
 		configDeliveryHandler: configDeliveryHandler,
 		attestHandler:         attestHandler,
-	}
+	}, nil
 }
 
 // RegisterRoutes registers the OPERATOR half of the device surface on the
@@ -81,17 +107,12 @@ func NewDeviceRouter(
 // session, and several are reached before the device has any platform
 // credential at all.
 func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
-	// CRUD endpoints (if handler is available)
-	if r.crudHandler != nil {
-		r.registerDeviceCRUD(router)
-		r.registerProfileCRUD(router)
-	}
-
-	// Template endpoints (if handler is available)
-	if r.templateHandler != nil {
-		r.registerTemplateCRUD(router)
-		r.registerConfigDeliveryRoutes(router)
-	}
+	// NewDeviceRouter refuses a nil CRUD or template handler, so these
+	// groups are always complete (#320).
+	r.registerDeviceCRUD(router)
+	r.registerProfileCRUD(router)
+	r.registerTemplateCRUD(router)
+	r.registerConfigDeliveryRoutes(router)
 
 	// The provisioning session views and the fulfilment action. Fulfilment
 	// binds a profile to a device that is waiting for one, which decides
@@ -194,6 +215,12 @@ func (r *DeviceRouter) registerDeviceCRUD(router *mux.Router) {
 }
 
 // registerProfileCRUD registers device profile CRUD endpoints.
+//
+// Profiles and templates live under the singular `/device/` prefix, and
+// device records under the plural `/devices/`. No path is served under both
+// (#266). The plural profile and template aliases are gone, and
+// TestDeviceRoutesHaveOneName fails if either prefix gains a path the other
+// already serves.
 func (r *DeviceRouter) registerProfileCRUD(router *mux.Router) {
 	// Profile CRUD operations
 	// POST /api/v1/device/profiles - Create profile
@@ -201,26 +228,6 @@ func (r *DeviceRouter) registerProfileCRUD(router *mux.Router) {
 
 	// GET /api/v1/device/profiles - List profiles
 	router.HandleFunc("/device/profiles", r.crudHandler.ListProfiles).Methods("GET")
-
-	// /devices/profiles aliases match the WebUI's plural-noun convention
-	// — the dashboard hits `/api/v1/devices/profiles` while the platform
-	// originally exposed singular `/api/v1/device/profiles`. Both forms
-	// must dispatch to the same handler so REST and SDK callers agree.
-	router.HandleFunc("/devices/profiles", r.crudHandler.CreateProfile).Methods("POST")
-	router.HandleFunc("/devices/profiles", r.crudHandler.ListProfiles).Methods("GET")
-	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.GetProfileByID).Methods("GET")
-	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.UpdateProfile).Methods("PUT")
-	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.DeleteProfile).Methods("DELETE")
-	// /devices/templates plural aliases for the same reason — except POST,
-	// which the bootstrap seeder router owns outright
-	// (pkg/webservice/v1/rest/device, `{role, template}` body). One handler
-	// per route: CRUD template creation is singular `/device/templates` only.
-	if r.templateHandler != nil {
-		router.HandleFunc("/devices/templates", r.templateHandler.ListTemplates).Methods("GET")
-		router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.GetTemplate).Methods("GET")
-		router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.UpdateTemplate).Methods("PUT")
-		router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.DeleteTemplate).Methods("DELETE")
-	}
 
 	// GET /api/v1/device/profiles/count - Count profiles
 	router.HandleFunc("/device/profiles/count", r.crudHandler.CountProfiles).Methods("GET")

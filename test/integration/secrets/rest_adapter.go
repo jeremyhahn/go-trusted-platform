@@ -34,8 +34,8 @@ import (
 // REST Protocol Adapter
 // =============================================================================
 
-// RESTAdapter implements SecretsCommands using HTTP/REST calls to platform-api.
-// This adapter makes REST API calls to the platform-api server for testing
+// RESTAdapter implements SecretsCommands using HTTP/REST calls to platformd.
+// This adapter makes REST API calls to the platformd server for testing
 // the REST transport layer consistency with other protocol adapters.
 type RESTAdapter struct {
 	baseURL    string

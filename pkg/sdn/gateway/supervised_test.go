@@ -38,6 +38,12 @@ type fakeSupervisor struct {
 	applied    *gwstate.DesiredConfig
 	applyState gwstate.DesiredConfigState
 	applyErr   error
+
+	snapshots   map[string]*gwstate.Snapshot
+	snapshotErr error
+
+	// unsupervised are the services that have not moved out of process.
+	unsupervised map[string]bool
 }
 
 func newFakeSupervisor() *fakeSupervisor {
@@ -46,8 +52,14 @@ func newFakeSupervisor() *fakeSupervisor {
 		stopErr:  map[string]error{},
 		active:   map[string]bool{},
 		health:   map[string]error{},
+
+		snapshots: map[string]*gwstate.Snapshot{},
+
+		unsupervised: map[string]bool{},
 	}
 }
+
+func (f *fakeSupervisor) Supervises(service string) bool { return !f.unsupervised[service] }
 
 func (f *fakeSupervisor) StartService(_ context.Context, service string) error {
 	f.started = append(f.started, service)
@@ -70,6 +82,13 @@ func (f *fakeSupervisor) StopService(_ context.Context, service string) error {
 func (f *fakeSupervisor) ServiceActive(service string) bool { return f.active[service] }
 
 func (f *fakeSupervisor) ServiceHealth(service string) error { return f.health[service] }
+
+func (f *fakeSupervisor) ServiceSnapshot(_ context.Context, service string) (*gwstate.Snapshot, error) {
+	if f.snapshotErr != nil {
+		return nil, f.snapshotErr
+	}
+	return f.snapshots[service], nil
+}
 
 func (f *fakeSupervisor) Apply(_ context.Context, desired *gwstate.DesiredConfig) (gwstate.DesiredConfigState, error) {
 	f.applied = desired
@@ -111,6 +130,105 @@ func TestSupervisor_EverySectionIsSupervisedIncludingRefusedOnes(t *testing.T) {
 		assert.IsType(t, &supervisedServiceHandler{}, handler, "%s is supervised", name)
 	}
 	assert.Equal(t, []string{ServiceFirewall, ServiceNAT, ServiceManagementVPN}, gw.serviceOrder)
+}
+
+func TestSupervisor_ServicesThatHaveNotMovedStayInProcess(t *testing.T) {
+	sup := newFakeSupervisor()
+	sup.unsupervised[ServiceFirewall] = true
+	sup.unsupervised[ServiceNAT] = true
+	gw := newSupervisedGateway(t, sup)
+
+	assert.IsType(t, &backedServiceHandler{}, gw.serviceHandlers[ServiceFirewall])
+	assert.IsType(t, &backedServiceHandler{}, gw.serviceHandlers[ServiceNAT])
+	assert.IsType(t, &supervisedServiceHandler{}, gw.serviceHandlers[ServiceManagementVPN])
+	assert.Equal(t, []string{ServiceFirewall, ServiceNAT, ServiceManagementVPN}, gw.serviceOrder,
+		"a partial move keeps the declared start order")
+}
+
+// supervisedTransitGateway is a gateway whose BGP speaker runs in a
+// supervised child.
+func supervisedTransitGateway(t *testing.T, sup *fakeSupervisor) *Gateway {
+	t.Helper()
+	cfg := transitGatewayConfig(nil)
+	cfg.Supervisor = sup
+	gw, err := NewGateway(cfg)
+	require.NoError(t, err)
+	return gw
+}
+
+func TestSupervisedSnapshot_CarriesTheChildsBGPPeers(t *testing.T) {
+	sup := newFakeSupervisor()
+	childBGP := gwstate.BGPState{
+		LocalASN:         64512,
+		RouterID:         "203.0.113.4",
+		PeerCount:        1,
+		EstablishedPeers: 1,
+		Peers:            []gwstate.BGPPeerState{{Address: "10.255.0.2", ASN: 64512, State: "established"}},
+	}
+	sup.snapshots[ServiceTransit] = &gwstate.Snapshot{BGP: childBGP}
+	gw := supervisedTransitGateway(t, sup)
+	require.IsType(t, &supervisedServiceHandler{}, gw.serviceHandlers[ServiceTransit])
+
+	snap := gw.Snapshot()
+	assert.Equal(t, childBGP, snap.BGP, "the peer detail comes from the child, not from this process")
+}
+
+func TestSupervisedSnapshot_ReportsAnUnreachableChild(t *testing.T) {
+	sup := newFakeSupervisor()
+	sup.snapshotErr = errors.New("control socket gone")
+	gw := supervisedTransitGateway(t, sup)
+
+	snap := gw.Snapshot()
+	want := &ErrSupervisedSnapshot{Service: ServiceTransit, Cause: sup.snapshotErr}
+	assert.Equal(t, want.Error(), snap.BGP.Error, "the missing detail is reported, not silently empty")
+	assert.Empty(t, snap.BGP.Peers)
+	assert.Equal(t, uint32(64512), snap.BGP.LocalASN, "the configured fields stay")
+	assert.Equal(t, "203.0.113.4", snap.BGP.RouterID)
+	assert.ErrorIs(t, want, sup.snapshotErr, "the supervisor's cause stays reachable")
+	assert.Contains(t, want.Error(), `"transit"`)
+}
+
+func TestSupervisedSnapshot_AnUnsupervisedSpeakerIsReadInProcess(t *testing.T) {
+	sup := newFakeSupervisor()
+	sup.unsupervised[ServiceTransit] = true
+	sup.snapshotErr = errors.New("must not be asked")
+	gw := supervisedTransitGateway(t, sup)
+
+	snap := gw.Snapshot()
+	assert.Empty(t, snap.BGP.Error, "a speaker in this process is not read from a child")
+	assert.Equal(t, uint32(64512), snap.BGP.LocalASN)
+}
+
+func TestSupervisor_UnsupervisedRefusedSectionKeepsItsOwnRefusal(t *testing.T) {
+	sup := newFakeSupervisor()
+	sup.unsupervised[ServiceManagementVPN] = true
+	gw := newSupervisedGateway(t, sup)
+
+	assert.IsType(t, &refusedServiceHandler{}, gw.serviceHandlers[ServiceManagementVPN])
+	require.Error(t, gw.Start(context.Background()))
+	assert.NotContains(t, sup.started, ServiceManagementVPN, "the supervisor is never asked for a service it does not own")
+}
+
+func TestHostedServices_RestrictsTheGatewayToItsOwnServices(t *testing.T) {
+	cfg := supervisedConfig(nil)
+	cfg.Supervisor = nil
+	cfg.HostedServices = []string{ServiceManagementVPN}
+	gw, err := NewGateway(cfg)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{ServiceManagementVPN}, gw.serviceOrder)
+	assert.NotContains(t, gw.serviceHandlers, ServiceFirewall)
+	assert.NotContains(t, gw.serviceHandlers, ServiceNAT)
+}
+
+func TestHostedServices_AServiceThatIsNotEnabledIsNotHosted(t *testing.T) {
+	cfg := supervisedConfig(nil)
+	cfg.Supervisor = nil
+	cfg.HostedServices = []string{ServiceTransit}
+	gw, err := NewGateway(cfg)
+	require.NoError(t, err)
+
+	assert.Empty(t, gw.serviceOrder, "hosting a service is not enabling it")
 }
 
 func TestSupervisedStart_StartsEverySectionThroughTheSupervisor(t *testing.T) {
@@ -210,6 +328,18 @@ func TestSupervisedApply_ReportsTheChildFailureWithItsState(t *testing.T) {
 	sup.applied = nil
 	require.Error(t, gw.Apply(context.Background(), nil))
 	assert.Nil(t, sup.applied)
+}
+
+func TestSupervisedApply_StaysInProcessUntilTheDatapathMoves(t *testing.T) {
+	sup := newFakeSupervisor()
+	sup.unsupervised[ServiceNAT] = true
+	sup.unsupervised[ServiceLoadBalancer] = true
+	gw := newSupervisedGateway(t, sup)
+
+	require.NoError(t, gw.Apply(context.Background(), &gwstate.DesiredConfig{GatewayID: "supervised-gw", Version: "v5"}))
+
+	assert.Nil(t, sup.applied, "the document is not forwarded to a datapath child that does not exist")
+	assert.Equal(t, "v5", gw.DesiredConfigState().Version)
 }
 
 func TestServiceReports_OneEntryPerHandlerInRegistrationOrder(t *testing.T) {

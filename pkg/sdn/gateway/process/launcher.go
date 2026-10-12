@@ -209,7 +209,7 @@ func (kernelHardenOps) capset(header *unix.CapUserHeader, data *[2]unix.CapUserD
 
 func (kernelHardenOps) getppid() int { return os.Getppid() }
 
-// Harden applies the child-side half of the privilege drop.
+// harden applies the child-side half of the privilege drop.
 //
 // The order is the one the kernel requires, and every step exists:
 //
@@ -246,10 +246,9 @@ func (kernelHardenOps) getppid() int { return os.Getppid() }
 //
 // A failure at any step is fatal to the child: running with more privilege
 // than the class allows is the thing this model exists to prevent.
-func Harden(def Definition, uid, gid uint32) error {
-	return harden(def, uid, gid, kernelHardenOps{})
-}
-
+//
+// Every step changes the calling thread only; EnterHardened is what turns
+// the one hardened thread into a hardened process.
 func harden(def Definition, uid, gid uint32, ops hardenOps) error {
 	// Read before anything drops privilege, so the re-arm below can tell
 	// whether the supervisor died inside the window where nothing was armed.
@@ -342,14 +341,12 @@ func dropBoundingSet(def Definition, ops hardenOps) error {
 // unprivileged parser holding a permitted set it could raise into effective
 // at will.
 func setCapabilities(capabilities []uintptr, ops hardenOps) error {
-	var mask [2]uint32
-	for _, capability := range capabilities {
-		mask[capability>>5] |= 1 << (capability & 31)
-	}
+	mask := capabilityMask(capabilities)
+	low, high := uint32(mask), uint32(mask>>32)
 	header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3, Pid: 0}
 	data := [2]unix.CapUserData{
-		{Effective: mask[0], Permitted: mask[0], Inheritable: mask[0]},
-		{Effective: mask[1], Permitted: mask[1], Inheritable: mask[1]},
+		{Effective: low, Permitted: low, Inheritable: low},
+		{Effective: high, Permitted: high, Inheritable: high},
 	}
 	if err := ops.capset(&header, &data); err != nil {
 		return &ErrHardening{Step: "set the class capabilities after the uid drop", Cause: err}

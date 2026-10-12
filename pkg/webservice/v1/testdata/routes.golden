@@ -7,8 +7,6 @@ DELETE /api/v1/compute/vms/{id}/disks/{diskId}
 DELETE /api/v1/compute/vms/{id}/snapshots/{snapshotId}
 DELETE /api/v1/device/profiles/{id:[0-9]+}
 DELETE /api/v1/device/templates/{id:[0-9]+}
-DELETE /api/v1/devices/profiles/{id:[0-9]+}
-DELETE /api/v1/devices/templates/{id:[0-9]+}
 DELETE /api/v1/devices/{id:[0-9]+}
 DELETE /api/v1/dns/zones/{zone}
 DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}
@@ -123,11 +121,7 @@ GET /api/v1/device/templates/{id:[0-9]+}
 GET /api/v1/devices
 GET /api/v1/devices/config
 GET /api/v1/devices/count
-GET /api/v1/devices/profiles
-GET /api/v1/devices/profiles/{id:[0-9]+}
 GET /api/v1/devices/serial/{serial}
-GET /api/v1/devices/templates
-GET /api/v1/devices/templates/{id:[0-9]+}
 GET /api/v1/devices/{id:[0-9]+}
 GET /api/v1/dns
 GET /api/v1/dns/zones
@@ -355,7 +349,6 @@ POST /api/v1/device/profiles/{id:[0-9]+}/unassign
 POST /api/v1/device/templates
 POST /api/v1/device/templates/{id:[0-9]+}/create-profile
 POST /api/v1/devices
-POST /api/v1/devices/profiles
 POST /api/v1/devices/templates
 POST /api/v1/devices/templates/{id:[0-9]+}/create-profile
 POST /api/v1/devices/{id:[0-9]+}/attest-cert/record
@@ -491,8 +484,6 @@ POST /api/v1/vtpm/templates
 POST /api/v1/vtpm/templates/{id}/clone
 PUT /api/v1/device/profiles/{id:[0-9]+}
 PUT /api/v1/device/templates/{id:[0-9]+}
-PUT /api/v1/devices/profiles/{id:[0-9]+}
-PUT /api/v1/devices/templates/{id:[0-9]+}
 PUT /api/v1/devices/{id:[0-9]+}
 PUT /api/v1/dns/zones/{zone}
 PUT /api/v1/iam/apps/{id}

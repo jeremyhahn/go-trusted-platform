@@ -250,6 +250,23 @@ func (e *ErrSupervisorExited) Error() string {
 	return fmt.Sprintf("gatewayd service: the supervisor (pid %d) exited during the privilege drop; reparented to pid %d", e.Parent, e.Now)
 }
 
+// ErrPrivilegeNotHeld is a re-executed child whose credentials do not match
+// its class: a thread kept a capability, a uid or a group the class does not
+// allow, or no_new_privs is unset. The child refuses to start rather than
+// run with more privilege than the class table gives it.
+type ErrPrivilegeNotHeld struct {
+	// Task is the thread id the mismatch was read from.
+	Task string
+	// Field is the /proc status field, e.g. "CapEff" or "Uid".
+	Field string
+	// Want and Got are the expected and the observed value.
+	Want, Got string
+}
+
+func (e *ErrPrivilegeNotHeld) Error() string {
+	return fmt.Sprintf("gatewayd service: thread %s: %s is %q, the class requires %q", e.Task, e.Field, e.Got, e.Want)
+}
+
 // ErrSocketDir reports a control-socket directory the supervisor could not
 // create or secure.
 type ErrSocketDir struct {

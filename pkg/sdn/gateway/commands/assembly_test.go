@@ -224,6 +224,26 @@ func TestBuildGatewayWithoutProxy(t *testing.T) {
 	}
 }
 
+func TestBuildGatewayProxyHostedElsewhere(t *testing.T) {
+	cfg := &ServeConfig{
+		Gateway: &gateway.GatewayConfig{
+			Enabled:        true,
+			ID:             "routing-child",
+			HostedServices: []string{gateway.ServiceTransit},
+		},
+		Proxy: publicProxyConfig(),
+	}
+	gw, err := BuildGateway(context.Background(), cfg, testLogger())
+	if err != nil {
+		t.Fatalf("BuildGateway: %v", err)
+	}
+	for _, report := range gw.ServiceReports() {
+		if report.Name == gateway.ServiceProxy {
+			t.Fatal("a child that does not host the proxy must not register it")
+		}
+	}
+}
+
 func TestBuildProxyHandlerDisabled(t *testing.T) {
 	var disabledErr *proxysvc.ErrProxyDisabled
 	_, err := BuildProxyHandler(nil, nil, nil, testLogger())

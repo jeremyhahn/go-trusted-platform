@@ -44,10 +44,10 @@ curl -X POST https://platform:8443/api/v1/device/templates \
   }'
 
 # List templates
-curl https://platform:8443/api/v1/devices/templates
+curl https://platform:8443/api/v1/device/templates
 
 # Get template
-curl https://platform:8443/api/v1/devices/templates/1
+curl https://platform:8443/api/v1/device/templates/1
 ```
 
 ### Web UI
