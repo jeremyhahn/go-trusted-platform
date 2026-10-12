@@ -201,35 +201,28 @@ Upon successful registration, the platform issues a JWT token containing user an
 
 ```json
 {
-  "uid": 12345678901234567890,
+  "svcs": null,
+  "uid": "12345678901234567890",
+  "user_id": "12345678901234567890",
+  "email": "alice@example.com",
   "tenant_id": "tenant-550e8400-e29b-41d4",
   "is_tenant_owner": true,
   "roles": ["owner", "admin"],
-  "orgs": [],
-  "svcs": [],
   "iss": "trusted-platform",
+  "sub": "12345678901234567890",
   "aud": ["trusted-platform"],
-  "iat": 1705320000,
   "exp": 1705323600,
-  "nbf": 1705320000
+  "nbf": 1705320000,
+  "iat": 1705320000
 }
 ```
 
 ### Claim Descriptions
 
-| Claim | Type | Description |
-|-------|------|-------------|
-| `uid` | uint64 | Unique user identifier |
-| `tenant_id` | string | UUID of the user's tenant |
-| `is_tenant_owner` | bool | True if user owns the tenant |
-| `roles` | []string | Assigned roles within tenant |
-| `orgs` | []uint64 | Organization references |
-| `svcs` | []uint64 | Service references |
-| `iss` | string | Token issuer |
-| `aud` | []string | Token audience |
-| `iat` | int64 | Issued at timestamp |
-| `exp` | int64 | Expiration timestamp |
-| `nbf` | int64 | Not before timestamp |
+The claim set, with types, is defined once in
+[`docs/auth/api.md` §3 — Platform session token claims](../auth/api.md#platform-session-token-claims).
+`uid` is a decimal **string**: user ids exceed 2^53, and a JSON number would
+decode as a float64 naming a different user (#642).
 
 ## User Entity Model
 

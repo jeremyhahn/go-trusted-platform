@@ -17,6 +17,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func createTestMiddleware(t *testing.T, config MiddlewareConfig) *Middleware {
 	return m
 }
 
-func createValidJWT(t *testing.T, secret []byte, claims *TenantClaims) string {
+func createValidJWT(t *testing.T, secret []byte, claims jwt.Claims) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString(secret)
@@ -109,7 +110,7 @@ func TestMiddleware_Handler(t *testing.T) {
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		},
 		TenantID:      "tenant-123",
-		UserID:        42,
+		UID:           strconv.FormatUint(hostileUserID, 10),
 		Email:         "test@example.com",
 		IsTenantOwner: true,
 	}
@@ -133,8 +134,53 @@ func TestMiddleware_Handler(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, "tenant-123", capturedTenantID)
-	assert.Equal(t, uint64(42), capturedUserID)
+	assert.Equal(t, hostileUserID, capturedUserID)
 	assert.True(t, capturedIsOwner)
+}
+
+// hostileUserID is above 2^53, so a float64 round-trip changes it; user
+// ids are xxhash64 values and almost all of them are in this range (#642).
+const hostileUserID uint64 = 5083343080743762020
+
+// A uid that is not a decimal string names no platform user: a JSON number
+// (the pre-#642 shape, which a float64 decode corrupts) or a non-numeric
+// subject is refused, never coerced.
+func TestMiddleware_MalformedUserID(t *testing.T) {
+	secret := []byte("test-secret-key-for-jwt-signing!")
+	m := createTestMiddleware(t, MiddlewareConfig{
+		JWTSecret:     secret,
+		SigningMethod: "HS256",
+	})
+
+	for name, uid := range map[string]any{
+		"json number":   hostileUserID,
+		"not a number":  "operator@platform",
+		"zero":          "0",
+		"above uint64":  "18446744073709551616",
+		"leading space": " 42",
+	} {
+		t.Run(name, func(t *testing.T) {
+			claims := jwt.MapClaims{
+				"exp":       time.Now().Add(time.Hour).Unix(),
+				"tenant_id": "tenant-123",
+				"uid":       uid,
+			}
+			tokenString := createValidJWT(t, secret, claims)
+
+			called := false
+			handler := m.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.Header.Set("Authorization", "Bearer "+tokenString)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			assert.False(t, called)
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+		})
+	}
 }
 
 func TestMiddleware_MissingAuthorizationHeader(t *testing.T) {
@@ -213,8 +259,7 @@ func TestMiddleware_MissingUserID(t *testing.T) {
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		},
-		TenantID: "tenant-123",
-		UserID:   0, // missing user ID
+		TenantID: "tenant-123", // no uid claim
 	}
 	tokenString := createValidJWT(t, secret, claims)
 
@@ -246,7 +291,7 @@ func TestMiddleware_RequireTenantID(t *testing.T) {
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		},
 		TenantID: "", // missing tenant ID when required
-		UserID:   42,
+		UID:      "42",
 	}
 	tokenString := createValidJWT(t, secret, claims)
 
@@ -278,7 +323,7 @@ func TestMiddleware_CookieAuth(t *testing.T) {
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		},
 		TenantID: "tenant-cookie",
-		UserID:   99,
+		UID:      "99",
 	}
 	tokenString := createValidJWT(t, secret, claims)
 
@@ -313,7 +358,7 @@ func TestMiddleware_WrongSigningMethod(t *testing.T) {
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		},
 		TenantID: "tenant-123",
-		UserID:   42,
+		UID:      "42",
 	}
 	tokenString := createValidJWT(t, secret, claims) // uses HS256
 
@@ -455,7 +500,7 @@ func TestErrors(t *testing.T) {
 		{
 			name:     "ErrMissingUserClaim",
 			err:      ErrMissingUserClaim{},
-			contains: "user_id",
+			contains: "uid",
 		},
 		{
 			name:     "ErrInvalidConfig with reason",

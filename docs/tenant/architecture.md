@@ -743,7 +743,7 @@ Authenticated users receive a JWT containing their tenant association:
 
 ```json
 {
-  "uid": 12345678901234567890,
+  "uid": "12345678901234567890",
   "tenant_id": "tenant-550e8400-e29b-41d4",
   "is_tenant_owner": true,
   "roles": ["owner", "admin"],
@@ -751,6 +751,10 @@ Authenticated users receive a JWT containing their tenant association:
   "exp": 1705323600
 }
 ```
+
+The tenant middleware reads `uid` as a decimal string
+(`strconv.ParseUint`) and refuses a missing, zero or non-decimal value with
+401; see [`docs/auth/api.md`](../auth/api.md#platform-session-token-claims).
 
 ## Related Documentation
 

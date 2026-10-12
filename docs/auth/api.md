@@ -183,6 +183,31 @@ store independently of one another.
 | Credential submit / list / rotate | `MISSING` (CLI stub) | `MISSING` | `MISSING` | `MISSING` | `MISSING` | `MISSING` |
 | Certificate → identity (mTLS authentication) | `auth.MTLSAdapter.Authenticate` | see §4 | see §4 | see §4 | see §4 | see §4 |
 
+### Platform session token claims
+
+`jwt.Service` signs the platform session bearer (RS256 with the web
+service's key) with these claims (`jwt.TokenClaims`):
+
+| Claim | JSON type | Meaning |
+|---|---|---|
+| `sub` | string | Session principal (same value as `user_id`) |
+| `user_id` | string | Session principal: the platform user id in a platform-issued token, the backbone subject in a backbone-issued session |
+| `uid` | string, decimal | The platform user-store key. Omitted in a backbone-issued session |
+| `email` | string | Principal's email |
+| `tenant_id` | string | Tenant the session is scoped to |
+| `is_tenant_owner` | bool | Tenant owner flag |
+| `roles` | string array | RBAC roles |
+| `svcs` | number array | Service references. No issuer sets it, so it is always `null` today; it must become a string array before it carries an id |
+| `iss`, `aud`, `iat`, `nbf`, `exp` | registered claims | Issuer, audience, validity window |
+
+User ids are xxhash64 values, almost all above 2^53, so `uid` is a decimal
+**string**, never a JSON number. A number reaches every schemaless decoder
+(`jwt.MapClaims`, a browser's `JSON.parse`) as a float64 that names a different
+user (#642). Read it with `TokenClaims.PlatformUserID()` or
+`strconv.ParseUint(uid, 10, 64)`. A missing or non-decimal `uid` is refused:
+`/api/v1/login/refresh` answers 401, session creation answers 400, and the
+tenant middleware answers 401 (`ErrMissingUserClaim`).
+
 ### Registration model — iam.self_service_registration
 
 Whether an uninvited user may register is governed by the canonical

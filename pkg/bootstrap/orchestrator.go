@@ -661,29 +661,7 @@ func (o *Orchestrator) provisionControlPlane(ctx context.Context, result *Bootst
 	o.logger.Info("bootstrap: provisioning control plane nodes",
 		slog.Int("count", len(cpNodes)))
 
-	errCh := make(chan error, len(cpNodes))
-	var wg sync.WaitGroup
-
-	for i := range cpNodes {
-		node := &cpNodes[i]
-		wg.Add(1)
-		go func(n *DiscoveredNode) {
-			defer wg.Done()
-			errCh <- o.provisionNode(ctx, n, result)
-		}(node)
-	}
-
-	go func() {
-		wg.Wait()
-		close(errCh)
-	}()
-
-	for err := range errCh {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return o.provisionNodes(ctx, cpNodes, result)
 }
 
 // provisionRemainingNodes provisions gateway and worker nodes.
@@ -703,29 +681,33 @@ func (o *Orchestrator) provisionRemainingNodes(ctx context.Context, result *Boot
 	o.logger.Info("bootstrap: provisioning remaining nodes",
 		slog.Int("count", len(remaining)))
 
-	errCh := make(chan error, len(remaining))
+	return o.provisionNodes(ctx, remaining, result)
+}
+
+// provisionNodes provisions nodes in parallel and returns only once every
+// one has finished, so a node that fails early never ends the phase — and
+// with it the PXE and registration servers — under a sibling that is still
+// installing. One failure is returned as is; several are returned together
+// as ErrNodesProvisionFailed, in node order.
+func (o *Orchestrator) provisionNodes(ctx context.Context, nodes []DiscoveredNode, result *BootstrapResult) error {
+	errs := make([]error, len(nodes))
 	var wg sync.WaitGroup
-
-	for i := range remaining {
-		node := &remaining[i]
-		wg.Add(1)
-		go func(n *DiscoveredNode) {
-			defer wg.Done()
-			errCh <- o.provisionNode(ctx, n, result)
-		}(node)
+	for i := range nodes {
+		wg.Go(func() {
+			errs[i] = o.provisionNode(ctx, &nodes[i], result)
+		})
 	}
+	wg.Wait()
 
-	go func() {
-		wg.Wait()
-		close(errCh)
-	}()
-
-	for err := range errCh {
-		if err != nil {
-			return err
-		}
+	failures := nonNilErrors(errs...)
+	switch len(failures) {
+	case 0:
+		return nil
+	case 1:
+		return failures[0]
+	default:
+		return ErrNodesProvisionFailed{Failures: failures}
 	}
-	return nil
 }
 
 // provisionNode handles a single node: BMC boot setup + health wait. The
@@ -1431,23 +1413,27 @@ func (o *Orchestrator) newTicker(interval time.Duration) (<-chan time.Time, func
 
 // awaitPostInstallHealth is the post-install health wait shared by the
 // PXE, virtual-media and unmanaged paths. It runs under
-// defaultPostInstallHealthTimeout and, for a control-plane node whose
-// probes the built-in checker verifies, captures the node's CA bundle
-// first so the probe has the trust anchor it verifies against, and
-// probes with the control plane's TLS name so a certificate issued for
-// that name verifies while the node is dialed by address.
+// defaultPostInstallHealthTimeout and, when the built-in checker owns
+// probe trust, verifies every role against the platform anchor: it
+// captures the control plane's CA bundle first so the probe has the
+// anchor, and probes with the name the node's certificate carries — the
+// control plane's public webservice name, or a gateway's or worker's
+// platform-listener name from its role template — so a DNS-only leaf
+// verifies while the node is dialed by address.
 //
 // The ordering is the whole point (#107): a control plane self-provisions
 // its CA seconds before it starts serving, so probing before the bundle is
 // captured verifies its leaf against the system pool and fails for the
-// entire window, however healthy the node is.
+// entire window, however healthy the node is. Every other node's platform
+// listener serves a leaf the control plane issued (device-attest-01), so
+// the same bundle, already cached by then, verifies it (#655).
 func (o *Orchestrator) awaitPostInstallHealth(ctx context.Context, node *DiscoveredNode, healthAddrs []string, installURL string) error {
 	healthCtx, healthCancel := context.WithTimeout(ctx, o.config.EffectivePostInstallHealthTimeout())
 	defer healthCancel()
 	joined := strings.Join(healthAddrs, ",")
 	serverName := ""
-	if node.Role == RoleControlPlane && o.ownsHealthCheckerTrust() {
-		tlsName, err := o.controlPlaneTLSName()
+	if o.ownsHealthCheckerTrust() {
+		tlsName, err := o.postInstallTLSName(node)
 		if err != nil {
 			return ErrHealthCheckFailed{Address: joined, Cause: err}
 		}
@@ -1804,7 +1790,7 @@ func (h *httpHealthChecker) CheckServerName(ctx context.Context, address, server
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			lastErr = err
+			lastErr = probeFailure(lastErr, err)
 			continue
 		}
 		resp.Body.Close()
@@ -1817,4 +1803,21 @@ func (h *httpHealthChecker) CheckServerName(ctx context.Context, address, server
 		return ErrHealthCheckFailed{Address: probeAddr, Cause: lastErr}
 	}
 	return ErrHealthCheckFailed{Address: probeAddr}
+}
+
+// probeFailure keeps the more telling of two port failures. A port that
+// answered — and then failed TLS verification or returned a bad status —
+// says more about the node than a port that refused the dial, so a dial
+// failure never replaces it.
+func probeFailure(kept, next error) error {
+	if kept != nil && !isDialError(kept) && isDialError(next) {
+		return kept
+	}
+	return next
+}
+
+// isDialError reports whether err is a failure to open the connection.
+func isDialError(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }

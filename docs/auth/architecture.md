@@ -247,7 +247,7 @@ identity (who it succeeded for); a bearer with no identity is refused 401
 rather than minted into an anonymous session, and a mint that fails is a 500 —
 a platform fault — never a rejected login. The claims are a projection of the
 backbone's identity: `sub`/`user_id`/`email` from its subject, `tenant_id` and
-`roles` from its tenant and roles. `uid` is deliberately left unset: it keys the
+`roles` from its tenant and roles. `uid` is deliberately omitted: it keys the
 platform user store and the backbone's subject keys a different one, so copying
 one into the other could resolve an unrelated platform user on a numeric
 collision. The routes that re-read the platform user from it (`/login/refresh`)

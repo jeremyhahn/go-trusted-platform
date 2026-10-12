@@ -337,8 +337,13 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
     one board can resolve different entries.
 
 9. **Provisioning is concurrent within a phase and sequential across phases.**
-   `provisionControlPlane` and `provisionRemainingNodes` both fan out and return
-   the first error.
+   `provisionControlPlane` and `provisionRemainingNodes` both fan out through
+   `provisionNodes`, which returns only after **every** node has finished — an
+   early failure must not end the phase, and with it the run's PXE and
+   registration services, under a sibling still installing. One failure is
+   returned as that node's `ErrNodeProvisionFailed`; several as
+   `ErrNodesProvisionFailed{Failures}`, in node order. Any failure still aborts
+   the run at that phase.
 
 10. **Override keys that duplicate authoritative fields are rejected, not
     merged.** Class A (`os.hostname`, `network.interfaces`, `bmc.address`,
@@ -359,9 +364,10 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
 13. **Trust material is captured before it is used.** `ControlPlaneCAPool` fetches
     once and caches; the seeder and health checker verify against that pool.
     Operations that establish trust material refuse to run without it
-    (`ErrCABundleRequired`). The control plane's own post-install health wait
+    (`ErrCABundleRequired`). Every node's post-install health wait
     (`awaitPostInstallHealth`, shared by the PXE, virtual-media and unmanaged
-    paths) captures the bundle first — `awaitControlPlaneCAPool` retries
+    paths) captures the bundle first — for a gateway or worker it is already
+    cached from Phase 3 — `awaitControlPlaneCAPool` retries
     "not up yet" failures on the health cadence, and a bundle that fails
     capture-then-verify, an empty bundle, or a control plane with no address
     or TLS name is terminal — and only then probes. The capture runs only when the
@@ -389,9 +395,7 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
     `ControlPlaneCAPool` — `platformctl bootstrap status` — get the same name
     from `ControlPlaneTLSName` and the same addresses from
     `ControlPlaneAddresses`; the pool alone does not verify a control-plane
-    certificate dialed by hostname or IP. Other nodes are still probed by
-    `nodes[].hostname` with no expected name, which holds only while that
-    hostname is a DNS SAN of the certificate the node serves.
+    certificate dialed by hostname or IP.
 
 13b. **Trust material is captured only from the operator-declared address.**
     `fetchControlPlaneCABundle` and `fetchControlPlaneSPKIPin` dial the
@@ -414,6 +418,24 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
     pool for the control plane's TLS name, so a redirected registration produces
     a TLS failure (and, where candidates are tried, the next candidate), never
     trust.
+
+13c. **Gateways and workers are verified by name too (#655).** A node's platform
+    listener (`nodeWebserviceTLSPort`, 9443) serves a leaf the control-plane CA
+    issued through `device-attest-01`, with DNS SANs only. `postInstallTLSName`
+    gives the post-install probe the control plane's name for the control plane
+    and `nodeTLSName` for every other role: the subject CN, else first DNS SAN,
+    of the `tls-port: 9443` entry — a `webservices:` list entry or the singular
+    `webservice:` block — in the node's merged role template from
+    `resolveNodeConfig`, logged at INFO with its config key. There is no
+    fallback name: a template that names no such listener, or no template, is
+    `NodeTLSNameUnknownError` before any probe runs. The probe verifies against
+    the same captured pool as the control plane's, so a leaf from the node's
+    local CA fails. Every shipped gateway and compute template therefore sets
+    `certificate.acme.challenge: device-attest-01` on that listener;
+    `TestShippedNodeTemplates_PlatformListenerIsIssuedByTheControlPlane` walks
+    `configs/platform/templates/`, resolves each one's name through
+    `nodeTLSName` and requires the challenge, and fails on any template file it
+    cannot classify by role.
 
 14. **Teardown is gated on control-plane health.** A failed gate skips teardown.
     A failed teardown is a warning.
@@ -924,7 +946,14 @@ plane's CA is captured into it by `propagateCAPool`. Probing a freshly installed
 control plane before that capture fails every probe with `x509: certificate
 signed by unknown authority` for the whole post-install health window and, until
 #107, reported only `context deadline exceeded`. The wait now captures first, then probes, and
-the error carries the last per-probe failure.
+the error carries the last failure of every candidate address
+(`HealthProbeFailures` when there is more than one). Within one address, a port
+that answered and failed TLS or returned a bad status is reported over a port
+that refused the dial, and a probe cut off by the deadline keeps the previous
+round's failure. Until #655 a gateway or worker was probed by address with no
+expected name, so its DNS-only leaf never verified and every healthy node timed
+out reporting `x509: cannot validate certificate for <ip> because it doesn't
+contain any IP SANs`.
 
 **No metric names are defined by this feature.** Progress is the phase name in
 `BootstrapResult`; there is no counter or gauge to scrape.
@@ -938,7 +967,7 @@ code logs only the first bytes of a key hash, never the key.
 
 | Layer | Location | Covers |
 |---|---|---|
-| Unit | `pkg/bootstrap/*_test.go` | Config load and validation, forbidden-override detection with line numbers, MAC union, merge precedence, dry-run planning and SEL pre-flight warnings, seeder profile-ID parsing, DANE record derivation, rollover phases, cert reloader, virtual-media retry, advisory media-read watch and console transcript (`virtual_media_never_read_test.go`, against a scripted sink, `bmc.MockClient` and a scripted console), trust capture |
+| Unit | `pkg/bootstrap/*_test.go` | Config load and validation, forbidden-override detection with line numbers, MAC union, merge precedence, dry-run planning and SEL pre-flight warnings, seeder profile-ID parsing, DANE record derivation, rollover phases, cert reloader, virtual-media retry, advisory media-read watch and console transcript (`virtual_media_never_read_test.go`, against a scripted sink, `bmc.MockClient` and a scripted console), trust capture, post-install health of a gateway and worker against an `httptest` server on `127.0.0.1:0` serving a DNS-only leaf from a test CA (`post_install_health_noncp_test.go`) |
 | Unit | `pkg/firstboot/*_test.go`, `pkg/boot/commands/*_test.go` | Types, executor helpers, PCR-list parsing |
 | Integration | `test/integration/`, `make integration-test-bootstrap` | Real deploy host, real container, real BMC paths |
 

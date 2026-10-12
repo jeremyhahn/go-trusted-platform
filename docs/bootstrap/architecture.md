@@ -96,7 +96,8 @@ pin before planning a partial rollout. The platform moved from 0.2.0-alpha to
 | Alternative | Why it was rejected |
 |---|---|
 | **Trust-on-first-use as an implicit fallback for the CA bundle** | A silent TOFU fallback means the weakest channel is the one that runs when the strong ones are merely misconfigured. `tofu` must appear explicitly in a scope's `strategies` chain, and a scope that lists it without a pin store fails construction rather than degrading. |
-| **`InsecureSkipVerify` when fetching the control plane's own CA bundle** | The bundle *is* the trust anchor, so there is nothing to verify against at handshake time — but "nothing to verify against" is not the same as "verify nothing". `fetchControlPlaneCABundle` captures the served chain in `VerifyConnection` and then verifies that chain **against the bundle it just downloaded**, rejecting a mismatch with `ErrCABundleVerifyFailed`. `SessionTicketsDisabled` is set so a resumed session cannot skip the capture. The capture also has to happen **before** the control plane's own post-install health probe: the probe verifies with ordinary chain validation, so probing before the bundle is captured judges a self-provisioned CA against the system pool and fails for the whole window (#107). `awaitPostInstallHealth` therefore captures first — retrying "not up yet" failures on the health cadence — and probes only once the pool is in place. |
+| **`InsecureSkipVerify` when fetching the control plane's own CA bundle** | The bundle *is* the trust anchor, so there is nothing to verify against at handshake time — but "nothing to verify against" is not the same as "verify nothing". `fetchControlPlaneCABundle` captures the served chain in `VerifyConnection` and then verifies that chain **against the bundle it just downloaded**, rejecting a mismatch with `ErrCABundleVerifyFailed`. `SessionTicketsDisabled` is set so a resumed session cannot skip the capture. The capture also has to happen **before** the control plane's own post-install health probe: the probe verifies with ordinary chain validation, so probing before the bundle is captured judges a self-provisioned CA against the system pool and fails for the whole window (#107). `awaitPostInstallHealth` therefore captures first — retrying "not up yet" failures on the health cadence — and probes only once the pool is in place. Every later node's probe verifies against that same captured pool. |
+| **Probing a gateway or worker by address with no expected name, or only for liveness (#655)** | A node's platform listener (`tls-port: 9443`) serves a leaf the control-plane CA issued through `device-attest-01`, carrying DNS SANs only. Verifying it by the dialed address can never succeed, so the wait timed out for every healthy gateway and worker; dropping verification to make it pass would accept any listener on that address. The probe instead verifies every role against the platform anchor (the captured control-plane bundle) under the name the node's role template declares for that listener. A template that declares none is a configuration error (`NodeTLSNameUnknownError`), never a guessed name or a skipped check. |
 | **Trust-on-first-use for the deployer and switch SSH host keys** | The deployer host runs the DHCP/TFTP/HTTP services every node boots from; accepting its host key blindly puts the whole fleet's install path behind an unauthenticated first contact. `deployer.NewSSHClient` fails closed when `known_hosts_path` is empty — there is no TOFU path at all. |
 | **Persisting BMC pins to disk** | A persisted pin is a long-lived credential nobody rotates. BMC pins live in an in-memory store for the lifetime of that `platformctl bootstrap run` process only; SPKI pins are public-key hashes, so nothing is lost by discarding them. (This originally described TOFU-captured pins; tofu is not available for the bmc class — #83 — so today the pin comes from `bmc_spki_pin`.) |
 | **Requiring a BMC on every node** | It would make the same automation unusable for a machine with no out-of-band controller. `BoardController` is the board-agnostic contract and `hasBoardManagement` is the single predicate; a node without a management block gets **zero** hardware operations and is observed rather than driven. |
@@ -196,14 +197,24 @@ back to the config baked into the media.
 Health is not "the installer said so". The install log is the installer's own
 report; health is a separate HTTPS probe of the running daemon.
 
-For a control-plane node the probe's trust anchor is the CA that node
-self-provisioned moments earlier, so the wait is two steps in a fixed order:
-capture-then-verify the CA bundle (retrying a refused connection or an HTTP
-error until the health deadline — that is a node still booting), then probe
-`/api/v1/status` against the captured pool. A bundle the served chain does not
-verify against ends the wait immediately (`ErrCABundleVerifyFailed`). Whatever
-ends the wait, the error names the last capture or probe failure, not only the
-deadline.
+Every role is probed against the platform anchor — the control plane's CA —
+so the wait is two steps in a fixed order: capture-then-verify the CA bundle
+(retrying a refused connection or an HTTP error until the health deadline —
+that is a control plane still booting), then probe `/api/v1/status` against the
+captured pool. For the control plane that CA was self-provisioned moments
+earlier; for a gateway or worker the bundle is already cached from Phase 3, and
+its platform listener serves a leaf that CA issued. A bundle the served chain
+does not verify against ends the wait immediately (`ErrCABundleVerifyFailed`).
+Whatever ends the wait, the error names each candidate address's last failure —
+a stale address that refuses the dial never hides the TLS failure of the one
+that answered — not only the deadline.
+
+The probe asks for the name the node's certificate carries, never the address it
+is dialed on: the control plane's public webservice name (below), or, for a
+gateway or worker, the `webservice[s]` entry on `tls-port: 9443` in its merged
+role template — subject CN, else first DNS SAN. A template that declares no such
+name ends the wait at once with `NodeTLSNameUnknownError`. An injected
+`HealthChecker` owns its own trust and is called without a name.
 
 The CA bundle — the trust anchor — is captured only from the control plane's
 operator-declared static IPv4 in the bootstrap config; a control plane without
@@ -297,7 +308,16 @@ Same per-node paths as Phase 3, run concurrently for every non-control-plane
 node. Before a client node boots, the orchestrator fetches the control plane's
 CA bundle (capture-then-verify) and captures its TLS SPKI pin, and stages both
 alongside the per-MAC config — so the new node has two independent ways to trust
-the control plane at its first enrollment.
+the control plane at its first enrollment. Its post-install health probe then
+verifies the leaf it serves on `:9443` against that same bundle, by the name its
+role template declares (see Phase 3).
+
+Like Phase 3, the phase waits for **every** node to finish before it returns, so
+an early failure never tears down the PXE and registration services under a
+sibling that is still installing. One failure is returned as the node's
+`ErrNodeProvisionFailed`; several are returned together as
+`ErrNodesProvisionFailed`. Either way the run then aborts (`ErrBootstrapFailed`,
+phase recorded) with every node's outcome in the result.
 
 ### Phase 6 · BMC enrollment (conditional, non-fatal)
 

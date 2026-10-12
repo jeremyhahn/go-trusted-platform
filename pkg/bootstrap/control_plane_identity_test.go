@@ -197,14 +197,39 @@ func TestWebserviceTLSNameFromConfig(t *testing.T) {
 		"other port ignored": {
 			yaml: "webservices:\n  - tls-port: 9443\n    certificate:\n      subject: {cn: a.test}\n",
 		},
-		"no webservices":   {yaml: "network: {}\n"},
-		"unparseable yaml": {yaml: "webservices: [\n"},
+		"singular webservice": {
+			yaml:       "webservice:\n  tls-port: 8443\n  certificate:\n    sans: {dns: [c.test]}\n",
+			wantName:   "c.test",
+			wantSource: "webservice.certificate.sans.dns[0]",
+		},
+		"list wins over singular": {
+			yaml:       "webservices:\n  - tls-port: 8443\n    certificate:\n      subject: {cn: a.test}\nwebservice:\n  tls-port: 8443\n  certificate:\n    subject: {cn: c.test}\n",
+			wantName:   "a.test",
+			wantSource: "webservices[0].certificate.subject.cn",
+		},
+		"singular on other port ignored": {
+			yaml: "webservice:\n  tls-port: 9443\n  certificate:\n    subject: {cn: c.test}\n",
+		},
+		"no webservices": {yaml: "network: {}\n"},
 	}
 	for name, tc := range cases {
-		gotName, gotSource := webserviceTLSNameFromConfig(tc.yaml, cpWebserviceTLSPort)
+		gotName, gotSource, err := webserviceTLSNameFromConfig(tc.yaml, cpWebserviceTLSPort)
+		if err != nil {
+			t.Errorf("%s: unexpected error %v", name, err)
+		}
 		if gotName != tc.wantName || gotSource != tc.wantSource {
 			t.Errorf("%s: got (%q, %q), want (%q, %q)", name, gotName, gotSource, tc.wantName, tc.wantSource)
 		}
+	}
+}
+
+func TestWebserviceTLSNameFromConfig_UnparseableYAMLIsAnError(t *testing.T) {
+	name, source, err := webserviceTLSNameFromConfig("webservices: [\n", cpWebserviceTLSPort)
+	if err == nil {
+		t.Fatal("a config that is not YAML must be reported, not read as carrying no name")
+	}
+	if name != "" || source != "" {
+		t.Errorf("no name may be returned with an error, got (%q, %q)", name, source)
 	}
 }
 

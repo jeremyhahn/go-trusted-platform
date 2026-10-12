@@ -106,3 +106,43 @@ func TestShippedTemplates_GatewayRoleIsTheGatewayTemplatesOnly(t *testing.T) {
 		})
 	}
 }
+
+// TestGatewaydPackages_AreTheJoolTranslator pins the gateway's apk set to
+// Alpine's Jool packaging, the NAT64 PLAT ruled in R6 (#603).
+func TestGatewaydPackages_AreTheJoolTranslator(t *testing.T) {
+	assert.Equal(t, []string{"jool-modules-lts", "jool-tools", "jool-tools-openrc"}, GatewaydPackages)
+}
+
+// TestShippedTemplates_GatewaydPackagesOnGatewaysOnly pins where the Jool
+// packages land: every shipped gateway template installs them, and no other
+// role does — the kernel translator has no business on a worker (#603).
+func TestShippedTemplates_GatewaydPackagesOnGatewaysOnly(t *testing.T) {
+	root := filepath.Join("..", "..", "configs", "platform", "templates", "dedicated")
+	cases := map[string]bool{
+		"supermicro/x10/gateway.yaml":       true,
+		"dell/r640/gateway.yaml":            true,
+		"supermicro/x10/control-plane.yaml": false,
+		"supermicro/x10/compute.yaml":       false,
+		"dell/r640/control-plane.yaml":      false,
+		"dell/r640/compute.yaml":            false,
+	}
+	for rel, gateway := range cases {
+		t.Run(rel, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(root, rel))
+			require.NoError(t, err)
+			var doc struct {
+				OS struct {
+					Packages []string `yaml:"packages"`
+				} `yaml:"os"`
+			}
+			require.NoError(t, yaml.Unmarshal(data, &doc))
+			for _, pkg := range GatewaydPackages {
+				if gateway {
+					assert.Contains(t, doc.OS.Packages, pkg)
+				} else {
+					assert.NotContains(t, doc.OS.Packages, pkg)
+				}
+			}
+		})
+	}
+}

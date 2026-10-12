@@ -15,9 +15,12 @@ package iso
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -842,6 +845,62 @@ func TestCollectRequiredPackages_EmptyExtraPackages(t *testing.T) {
 
 	// Both should produce the same result
 	assert.Equal(t, packages1, packages2)
+}
+
+// TestCollectRequiredPackages_GatewayRoleAddsJool pins the offline repo of a
+// gateway ISO: the installed gateway's apk add of the Jool packages has no
+// upstream to fall back to (#603). jool-modules-lts depends on one exact
+// linux-lts build, so it is left out whenever the media carries another
+// kernel — prefetching it would drag linux-lts onto that node.
+func TestCollectRequiredPackages_GatewayRoleAddsJool(t *testing.T) {
+	cases := map[string]struct {
+		config *PreFetchConfig
+		want   bool
+	}{
+		"gateway on linux-lts":      {&PreFetchConfig{GatewayRole: true}, true},
+		"gateway names linux-lts":   {&PreFetchConfig{GatewayRole: true, KernelPackage: "linux-lts"}, true},
+		"not a gateway":             {&PreFetchConfig{}, false},
+		"gateway on a FIPS kernel":  {&PreFetchConfig{GatewayRole: true, FIPS: true}, false},
+		"gateway on a built kernel": {&PreFetchConfig{GatewayRole: true, SkipKernel: true}, false},
+		"gateway on another kernel": {&PreFetchConfig{GatewayRole: true, KernelPackage: "linux-rpi"}, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			packages := CollectRequiredPackages(tc.config)
+			for _, pkg := range tpconfig.GatewaydPackages {
+				if tc.want {
+					assert.Contains(t, packages, pkg)
+				} else {
+					assert.NotContains(t, packages, pkg)
+				}
+			}
+		})
+	}
+}
+
+func TestCustomizerPreFetchConfig_GatewayRoleFromBundledConfig(t *testing.T) {
+	dir := t.TempDir()
+	gw := filepath.Join(dir, "gateway.yaml")
+	require.NoError(t, os.WriteFile(gw, []byte("gateway:\n  enabled: true\n"), 0644))
+
+	c := newGatewaydCustomizer(t)
+	c.config.Platform.ConfigFile = gw
+	cfg, err := c.preFetchConfig()
+	require.NoError(t, err)
+	assert.True(t, cfg.GatewayRole)
+	assert.Equal(t, "https://dl-cdn.alpinelinux.org/alpine", cfg.Mirror)
+
+	c.config.Platform.ConfigFile = ""
+	cfg, err = c.preFetchConfig()
+	require.NoError(t, err)
+	assert.False(t, cfg.GatewayRole)
+}
+
+func TestCustomizerPreFetchConfig_UnreadableBundledConfig(t *testing.T) {
+	c := newGatewaydCustomizer(t)
+	c.config.Platform.ConfigFile = filepath.Join(t.TempDir(), "missing.yaml")
+	_, err := c.preFetchConfig()
+	require.Error(t, err)
 }
 
 func TestPreFetchBuilderFields(t *testing.T) {

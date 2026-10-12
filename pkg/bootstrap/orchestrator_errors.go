@@ -15,6 +15,7 @@ package bootstrap
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -61,6 +62,21 @@ func (e ErrNodeProvisionFailed) Error() string {
 
 func (e ErrNodeProvisionFailed) Unwrap() error {
 	return e.Cause
+}
+
+// ErrNodesProvisionFailed is returned by a provisioning phase when more than
+// one of its nodes failed. The phase waits for every node before returning,
+// so Failures holds each node's ErrNodeProvisionFailed.
+type ErrNodesProvisionFailed struct {
+	Failures []error
+}
+
+func (e ErrNodesProvisionFailed) Error() string {
+	return fmt.Sprintf("bootstrap: %d nodes failed: %s", len(e.Failures), joinErrors(e.Failures))
+}
+
+func (e ErrNodesProvisionFailed) Unwrap() []error {
+	return nonNilErrors(e.Failures...)
 }
 
 // ErrHealthCheckFailed indicates a health check did not succeed.
@@ -558,6 +574,52 @@ func (e HealthWaitTimeoutError) Error() string {
 
 func (e HealthWaitTimeoutError) Unwrap() []error {
 	return nonNilErrors(e.Cause, e.LastProbe)
+}
+
+// HealthProbeFailures is the last probe error of every candidate address a
+// health wait tried, in probe order. Reporting each one keeps a refused dial
+// on a stale address from hiding the TLS failure of the address that answered.
+type HealthProbeFailures []error
+
+func (e HealthProbeFailures) Error() string {
+	return joinErrors(e)
+}
+
+func (e HealthProbeFailures) Unwrap() []error {
+	return nonNilErrors(e...)
+}
+
+// NodeTLSNameUnknownError is returned when the name a node's platform
+// listener serves cannot be read from its role template. Identity
+// certificates carry DNS SANs only, so without that name the post-install
+// probe could verify nothing; it fails instead of polling.
+type NodeTLSNameUnknownError struct {
+	Hostname string
+	Role     string
+	TLSPort  int
+	Cause    error
+}
+
+func (e NodeTLSNameUnknownError) Error() string {
+	msg := fmt.Sprintf("bootstrap: no TLS name for node %s (role=%s): no webservice certificate cn or dns san on tls-port %d in its role template",
+		e.Hostname, e.Role, e.TLSPort)
+	if e.Cause != nil {
+		msg = fmt.Sprintf("bootstrap: no TLS name for node %s (role=%s) on tls-port %d: %v", e.Hostname, e.Role, e.TLSPort, e.Cause)
+	}
+	return msg
+}
+
+func (e NodeTLSNameUnknownError) Unwrap() error {
+	return e.Cause
+}
+
+// joinErrors renders the non-nil errors of errs separated by "; ".
+func joinErrors(errs []error) string {
+	parts := make([]string, 0, len(errs))
+	for _, err := range nonNilErrors(errs...) {
+		parts = append(parts, err.Error())
+	}
+	return strings.Join(parts, "; ")
 }
 
 // nonNilErrors drops nil entries so a multi-error Unwrap never hands

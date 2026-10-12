@@ -183,7 +183,7 @@ platformctl bootstrap run --config deployments/ha-cluster/bootstrap.yaml
 
 ### Compute Worker Nodes
 
-- Run in **client mode** — auto-enroll with control-plane CA via ACME
+- Run in **client mode** — auto-enroll with control-plane CA via custom ACME extensions (enroll-01, device-attest-01)
 - Host application workloads (QEMU/KVM virtual machines, Podman embedded containers)
 - Report to control plane for policy enforcement and resource management
 - Optional: hardware TPM for workload attestation and vTPM provision for guests

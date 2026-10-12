@@ -18,6 +18,7 @@ package tenant
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -54,8 +55,12 @@ const (
 // TenantClaims represents the JWT claims structure with tenant information.
 type TenantClaims struct {
 	jwt.RegisteredClaims
-	TenantID      string   `json:"tenant_id,omitempty"`
-	UserID        uint64   `json:"user_id,omitempty"`
+	TenantID string `json:"tenant_id,omitempty"`
+	// UID is the platform user id as a decimal string, as the platform
+	// issuer writes it: user ids are xxhash64 values above 2^53, which a
+	// JSON number cannot carry exactly (#642). ExtractTenantContext
+	// parses it with strconv.ParseUint.
+	UID           string   `json:"uid,omitempty"`
 	Email         string   `json:"email,omitempty"`
 	IsTenantOwner bool     `json:"is_tenant_owner,omitempty"`
 	Roles         []string `json:"roles,omitempty"`
@@ -142,8 +147,9 @@ func (m *Middleware) ExtractTenantContext(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if claims.UserID == 0 {
-		m.logger.Debugf("tenant: missing user_id claim")
+	userID, err := strconv.ParseUint(claims.UID, 10, 64)
+	if err != nil || userID == 0 {
+		m.logger.Debugf("tenant: missing or malformed uid claim")
 		m.responseWriter.Error401(w, r, ErrMissingUserClaim{})
 		return
 	}
@@ -151,7 +157,7 @@ func (m *Middleware) ExtractTenantContext(w http.ResponseWriter, r *http.Request
 	// Add tenant context to request
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, TenantIDKey, claims.TenantID)
-	ctx = context.WithValue(ctx, UserIDKey, claims.UserID)
+	ctx = context.WithValue(ctx, UserIDKey, userID)
 	ctx = context.WithValue(ctx, IsTenantOwnerKey, claims.IsTenantOwner)
 	ctx = context.WithValue(ctx, UserEmailKey, claims.Email)
 

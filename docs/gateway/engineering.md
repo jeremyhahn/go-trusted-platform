@@ -629,11 +629,29 @@ translate is not addressed to the host. The translator port is therefore not
 an unfiltered interface: leaving it open, as the first cut of #601 did,
 exposed every local listener to anything arriving on it.
 
-**Packaging (#603, not yet in).** The gatewayd OpenRC package depends on Alpine's
-`jool-modules-lts`, `jool-tools`, `jool-tools-openrc`; the init script's
-`start_pre` runs `modprobe jool` when a `nat64:` section is configured. A
-kernel upgrade that lags the module package shows up as a refused section,
-never as a silent pass-through.
+**Packaging (#603).** gatewayd is not an apk; the installer lays down its
+binary and firstboot writes its init script (docs/installer/engineering.md §8),
+so the Jool packages arrive the way every other package does:
+
+- `tpconfig.GatewaydPackages` (`pkg/config/gateway_role.go`) names Alpine's
+  `jool-modules-lts`, `jool-tools` and `jool-tools-openrc`. The gateway
+  templates list them in `os.packages` and the installer's `InstallPackages`
+  installs them; a test pins the gateway templates to the list and keeps it
+  off control-plane and compute templates.
+- A gateway-role ISO (`isoTargetsGatewayRole`) prefetches the same list into
+  its offline repository (`CollectRequiredPackages`, `PreFetchConfig.GatewayRole`),
+  but only beside the stock `linux-lts` kernel: `jool-modules-lts` depends on
+  one exact `linux-lts` build, so a FIPS, kernel-less or non-lts ISO would
+  otherwise drag `linux-lts` in beside the kernel it actually boots.
+- The init script (`renderGatewaydInitScript`, `pkg/firstboot/gatewayd.go`)
+  gains `modprobe jool` in `start_pre` only when the rendered config has
+  `gateway.nat64.enabled: true`, decided in Go when firstboot writes it. A
+  failed modprobe is an `ewarn`, not a failed `start_pre`: gatewayd is
+  launched and the driver refuses the section with `ErrNAT64ModuleUnavailable`
+  (`driver.go`), so the reason reaches gatewayd's log instead of OpenRC's.
+
+A kernel upgrade that lags the module package therefore shows up as a refused
+section, never as a silent pass-through.
 
 **Fallback (#604).** A Go userspace driver behind the same `Driver` interface,
 per-core workers over an OVS internal port. The spike that bounded it is

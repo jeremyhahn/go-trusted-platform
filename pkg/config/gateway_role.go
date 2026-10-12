@@ -38,6 +38,15 @@ var GatewaydConfigSections = []string{
 	"gateway", "proxy", "trust", "platform-ca-file", "secret-store", "sdn", "control-plane",
 }
 
+// GatewaydPackages are the Alpine packages a gateway-role node needs beyond
+// the gatewayd binary: the Jool NAT64 kernel translator that the `nat64:`
+// section drives (ruling R6, #603). jool-modules-lts is built against one
+// exact linux-lts version, so the module follows the kernel package; a kernel
+// upgrade that outruns it leaves the module unloadable and gatewayd refuses
+// the section. The gateway templates list these in os.packages, and an ISO
+// whose bundled config enables the gateway role prefetches them.
+var GatewaydPackages = []string{"jool-modules-lts", "jool-tools", "jool-tools-openrc"}
+
 // gatewayRoleProbe is the minimal shape of the `gateway:` section a role
 // decision needs. The rest of the section belongs to gatewayd.
 type gatewayRoleProbe struct {

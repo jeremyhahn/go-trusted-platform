@@ -161,10 +161,31 @@ exactly the proxy's fixed listener ports and nothing else the daemon opens.
 
 ### IPv6-only clients (`nat64:`)
 
-A `nat64:` section gives an IPv6-only client zone the IPv4 internet. The
-gateway owns a Jool kernel instance and hands it the frames addressed to the
-translation prefix; the translation itself happens in the kernel, not in the
-OVS pipeline, because OpenFlow cannot rewrite between address families.
+A `nat64:` section under `gateway:` gives an IPv6-only client zone the IPv4
+internet. The gateway owns a Jool kernel instance and hands it the frames
+addressed to the translation prefix; the translation itself happens in the
+kernel, not in the OVS pipeline, because OpenFlow cannot rewrite between
+address families.
+
+**Installing it.** The translator is Alpine's Jool, three packages a gateway
+node needs and no other node does:
+
+1. List `jool-modules-lts`, `jool-tools` and `jool-tools-openrc` in the
+   gateway template's `os.packages`. The shipped gateway templates
+   (`configs/platform/templates/dedicated/*/*/gateway.yaml`) already do; an
+   ISO built for a gateway-role config also carries them in its offline
+   repository.
+2. Add the `nat64:` section below to the gateway's config. The x10 profile's
+   `gatewayd.yaml` carries it commented out; uncommenting it gives a section
+   the gateway accepts, ready for your own addresses and translator port.
+3. Install or re-provision the node. The gatewayd init script platformd
+   writes at first boot runs `modprobe jool` in `start_pre` when
+   `nat64.enabled` is true, and loads nothing otherwise. A module that does
+   not load is a warning there, not a failed `start_pre`: gatewayd is still
+   launched, and it refuses the `nat64:` section with
+   `ErrNAT64ModuleUnavailable` — a refused start with the reason in the log,
+   like any enabled section it cannot run, never a translator reported as
+   running.
 
 ```yaml
 nat64:
@@ -183,10 +204,11 @@ nat64:
 
 Three things refuse the start rather than half-working:
 
-- **The kernel module has to be there.** Alpine packages it as
-  `jool-modules-lts` and `jool-tools`. A kernel upgrade that outruns the
-  module package shows up as a refused section, never as traffic silently
-  passing untranslated.
+- **The kernel module has to be there.** `jool-modules-lts` is built for
+  exactly one `linux-lts` release, so its version follows the kernel's.
+  Upgrade the two together: a kernel upgrade that outruns the module package
+  leaves `jool` unloadable, and that shows up as a refused section, never as
+  traffic silently passing untranslated.
 - **`translator-port` has no default.** It is an OVS internal port on the
   bridge (`ovs-vsctl add-port <bridge> nat640 -- set interface nat640
   type=internal`, then `ip link set nat640 up`) — the host interface the

@@ -117,24 +117,26 @@ func TestAwaitPostInstallHealth_ControlPlane_PassesAgainstSelfProvisionedCA(t *t
 	}
 }
 
-func TestAwaitPostInstallHealth_Worker_SkipsCapture_ProbeReportsTLSCause(t *testing.T) {
+func TestAwaitPostInstallHealth_Worker_CapturesAnchor_NameMismatchFails(t *testing.T) {
 	pki := newTestCPPKI(t)
 	srv := startTestCPServer(t, pki, http.StatusOK, pki.caPEM)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	// The worker path performs no capture, so the probe verifies the
-	// self-signed leaf against the system pool and fails; the ticker hook
-	// ends the wait right after that first failed probe.
+	// The worker's probe captures the platform anchor, so the leaf chains;
+	// but the leaf names the control plane, not the worker's declared
+	// listener, so verification still fails. The ticker hook ends the wait
+	// right after that first failed probe.
 	ticker := newHookedHealthTicker(0, cancel)
 	o := newGateTestOrchestrator(t, srv, ticker)
+	writeRoleTemplate(t, o, RoleWorker, workerTemplate)
 	worker := &DiscoveredNode{NodeConfig: NodeConfig{Hostname: "w1", Role: RoleWorker}}
 
 	err := o.awaitPostInstallHealth(ctx, worker, []string{"127.0.0.1"}, "")
 	if err == nil {
-		t.Fatal("expected the probe to fail TLS verification against the system pool")
+		t.Fatal("a leaf issued for another name must fail verification")
 	}
-	if o.cpCAPool != nil {
-		t.Error("a worker's health wait must not capture the control-plane CA bundle")
+	if o.cachedControlPlaneCAPool() == nil {
+		t.Error("a worker's health wait must capture the platform anchor it verifies against")
 	}
 	var hcErr ErrHealthCheckFailed
 	if !errors.As(err, &hcErr) {
@@ -147,8 +149,8 @@ func TestAwaitPostInstallHealth_Worker_SkipsCapture_ProbeReportsTLSCause(t *test
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("the context error must remain reachable, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "x509") {
-		t.Errorf("the TLS failure must be reported, not just the context error: %v", err)
+	if !strings.Contains(err.Error(), "not w1.example.test") {
+		t.Errorf("the name mismatch must be reported, not just the context error: %v", err)
 	}
 }
 

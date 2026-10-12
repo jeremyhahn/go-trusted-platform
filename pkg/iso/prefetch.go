@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer/alpine"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -103,6 +104,9 @@ type PreFetchConfig struct {
 	// SkipKernel leaves the kernel package out of the prefetch: the media
 	// carries a platform-built kernel instead (InstallerOverrides.KernelArtifactsDir).
 	SkipKernel bool
+	// GatewayRole adds the gateway's packages (tpconfig.GatewaydPackages):
+	// the bundled platform config enables the gateway role.
+	GatewayRole bool
 }
 
 // defaultKernelPackage is the Alpine kernel package the platform installs
@@ -348,6 +352,13 @@ func CollectRequiredPackages(config *PreFetchConfig) []string {
 		if config.IMAAuditEnabled {
 			packages = append(packages, "audit", "audit-openrc")
 		}
+	}
+
+	// A gateway's Jool translator (#603). jool-modules-lts depends on one
+	// exact linux-lts build, so it is prefetched only alongside that kernel;
+	// with any other kernel it would drag linux-lts onto the node.
+	if config.GatewayRole && !config.FIPS && !config.SkipKernel && config.kernelPackage() == defaultKernelPackage {
+		packages = append(packages, tpconfig.GatewaydPackages...)
 	}
 
 	// Add user-specified extra packages

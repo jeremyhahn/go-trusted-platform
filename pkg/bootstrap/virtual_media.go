@@ -949,7 +949,9 @@ func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string,
 		seen[a] = struct{}{}
 	}
 
-	var lastProbe error
+	// lastProbe holds each candidate's latest failure, so the report names
+	// the address that answered rather than whichever was probed last.
+	lastProbe := make(map[string]error, len(addresses))
 	for {
 		// Re-read registration.json on each tick to pick up new IP.
 		// MAC-keyed path is tried before hostname to tolerate shared
@@ -972,16 +974,40 @@ func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string,
 					slog.String("address", addr))
 				return nil
 			}
-			lastProbe = err
+			// A probe cut off by the deadline says nothing new about the
+			// node; keep the failure the previous round observed.
+			if _, seenBefore := lastProbe[addr]; !seenBefore || ctx.Err() == nil {
+				lastProbe[addr] = err
+			}
 		}
 		if tick == nil {
 			tick, stop = o.newTicker(defaultHealthInterval)
 		}
 		select {
 		case <-ctx.Done():
-			return HealthWaitTimeoutError{Cause: ctx.Err(), LastProbe: lastProbe}
+			return HealthWaitTimeoutError{Cause: ctx.Err(), LastProbe: candidateFailures(addresses, lastProbe)}
 		case <-tick:
 		}
+	}
+}
+
+// candidateFailures returns the last failure of each probed address in
+// probe order: the lone error when only one address was probed, else a
+// HealthProbeFailures naming every one.
+func candidateFailures(addresses []string, lastProbe map[string]error) error {
+	failures := make(HealthProbeFailures, 0, len(lastProbe))
+	for _, addr := range addresses {
+		if err := lastProbe[addr]; err != nil {
+			failures = append(failures, err)
+		}
+	}
+	switch len(failures) {
+	case 0:
+		return nil
+	case 1:
+		return failures[0]
+	default:
+		return failures
 	}
 }
 

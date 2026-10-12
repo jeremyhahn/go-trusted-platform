@@ -75,8 +75,9 @@ An IPv6-only client zone (RFC 6146 NAT64 with RFC 6147 DNS64, and RFC 6877
 464XLAT for clients that need literal IPv4) is a Phase 5 feature. The spike
 measured the alternatives on 2026-09-08 and the decision is below. The
 translator, its pipeline gate and its health are implemented (#601,
-`pkg/sdn/gateway/services/nat64`); DNS64 (#602) and the OpenRC packaging
-(#603) are not.
+`pkg/sdn/gateway/services/nat64`), and gateway nodes install the Jool
+packages and load the module for an enabled `nat64:` section (#603); DNS64
+(#602) is not.
 
 - **The PLAT is the Jool kernel translator, packaged by Alpine.** The gateway
   owns the Jool instance the way it owns nftables and the OVS bridge: it

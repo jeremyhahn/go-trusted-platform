@@ -57,6 +57,15 @@ completes a challenge, and receives the production webservice
 certificates. The root CA bundle is baked into the install ISO so the
 first ACME connection can verify TLS before any cert has been issued.
 
+The platform listener (`tls-port: 9443`) of every `gateway.yaml` and
+`compute.yaml` here, Supermicro X10 and Dell R640 alike, sets
+`certificate.acme.challenge: device-attest-01`, so its certificate comes from
+the control-plane CA and not the node's own. The reporting collector and the
+bootstrap orchestrator's post-install health probe verify that listener
+against the platform anchor by its subject CN; a locally-issued certificate
+fails both. [`supermicro/x10/README.md`](./supermicro/x10/README.md#certificate-identity-which-ca-issues-what)
+explains why. `control-plane.yaml` has no challenge: it is the CA.
+
 ---
 
 ## Network Architecture

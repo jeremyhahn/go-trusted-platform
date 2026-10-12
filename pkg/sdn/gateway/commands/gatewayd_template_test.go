@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -146,6 +147,10 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("203.0.113.100")}, g.HostFW.Peers[0].Addresses)
 	assert.Len(t, g.HostFW.Tunnels, 2, "179 and 3784 are allowed on the tunnels only")
 
+	// The translator ships as a commented example: it needs addresses and an
+	// OVS port only the operator knows (TestShippedGatewaydTemplate_NAT64ExampleValidates).
+	assert.Nil(t, g.NAT64, "nat64 ships commented out")
+
 	require.NotNil(t, cfg.SDN, "sdn section supplies the OVS runtime")
 	require.NotNil(t, cfg.SDN.OVS)
 	assert.Equal(t, "br-fabric", cfg.SDN.OVS.Bridge, "the gateway datapath rides the trunk bridge")
@@ -188,4 +193,54 @@ func TestShippedGatewaydTemplate_CarriesNoSecrets(t *testing.T) {
 			assert.Nil(t, k.MasterKey)
 		}
 	}
+}
+
+// TestShippedGatewaydTemplate_NAT64ExampleValidates uncomments the template's
+// `nat64:` example the way an operator enables it — one comment level off
+// the `# nat64:` line and the lines indented under it — and loads the result
+// as gatewayd does. A shipped example the gateway or the nat64 service
+// refuses is worse than none: the operator meets the error on a live node.
+func TestShippedGatewaydTemplate_NAT64ExampleValidates(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "..", "configs", "platform", "templates",
+		"dedicated", "supermicro", "x10", "gatewayd.yaml")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	enabled, uncommented := uncommentNAT64Example(raw)
+	require.Greater(t, uncommented, 1, "the template carries a commented nat64: example under gateway:")
+
+	v := viper.New()
+	v.SetConfigType("yaml")
+	require.NoError(t, v.ReadConfig(bytes.NewReader(enabled)))
+	cfg, err := LoadServeConfig(v)
+	require.NoError(t, err)
+
+	nat := cfg.Gateway.NAT64
+	require.NotNil(t, nat, "the example is the gateway's nat64 section")
+	assert.True(t, nat.Enabled)
+	require.NoError(t, nat.Validate(), "the gateway accepts the section")
+	svc := nat.ServiceConfig(cfg.SDN.OVS.Bridge)
+	require.NoError(t, svc.Validate(), "nat64.Config accepts it")
+}
+
+// uncommentNAT64Example strips one comment level ("  # ") from the
+// template's `  # nat64:` line and from every line indented under it, and
+// reports how many lines it uncommented.
+func uncommentNAT64Example(raw []byte) ([]byte, int) {
+	lines := strings.Split(string(raw), "\n")
+	uncommented := 0
+	inExample := false
+	for i, line := range lines {
+		if line == "  # nat64:" {
+			inExample = true
+		} else if !strings.HasPrefix(line, "  #   ") {
+			inExample = false
+		}
+		if !inExample {
+			continue
+		}
+		lines[i] = "  " + strings.TrimPrefix(line, "  # ")
+		uncommented++
+	}
+	return []byte(strings.Join(lines, "\n")), uncommented
 }

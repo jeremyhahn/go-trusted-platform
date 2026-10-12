@@ -191,7 +191,7 @@ After successful WebAuthn login, the JWT token includes tenant context:
 
 ```json
 {
-  "uid": 12345678901234567890,
+  "uid": "12345678901234567890",
   "tenant_id": "tenant-550e8400-e29b-41d4",
   "is_tenant_owner": true,
   "roles": ["owner", "admin"],
@@ -234,35 +234,12 @@ webservices:
 
 JWT tokens issued by the platform include standard and custom claims for identity and authorization.
 
-### Token Structure
-
-```go
-type TokenClaims struct {
-    UserID         uint64   `json:"uid"`           // Unique user identifier
-    TenantID       string   `json:"tenant_id"`     // Tenant UUID
-    IsTenantOwner  bool     `json:"is_tenant_owner"` // Ownership flag
-    Roles          []string `json:"roles"`         // Assigned roles
-    Organizations  []uint64 `json:"orgs"`          // Organization refs
-    Services       []uint64 `json:"svcs"`          // Service refs
-    jwt.RegisteredClaims                           // Standard JWT claims
-}
-```
-
 ### Claim Reference
 
-| Claim | Type | Required | Description |
-|-------|------|----------|-------------|
-| `uid` | uint64 | Yes | Unique user identifier |
-| `tenant_id` | string | Yes | UUID of user's tenant |
-| `is_tenant_owner` | bool | Yes | True if user owns tenant |
-| `roles` | []string | No | Roles assigned to user |
-| `orgs` | []uint64 | No | Organization references |
-| `svcs` | []uint64 | No | Service references |
-| `iss` | string | Yes | Token issuer |
-| `aud` | []string | Yes | Token audience |
-| `iat` | int64 | Yes | Issued at timestamp |
-| `exp` | int64 | Yes | Expiration timestamp |
-| `nbf` | int64 | Yes | Not before timestamp |
+The claim set, with types, is defined once in
+[`docs/auth/api.md` §3 — Platform session token claims](../auth/api.md#platform-session-token-claims).
+`uid` is a decimal **string**: user ids exceed 2^53, and a JSON number would
+decode as a float64 naming a different user (#642).
 
 ### Decoding Example
 
@@ -272,17 +249,19 @@ echo "eyJ1aWQiOjEyMzQ1..." | base64 -d | jq .
 
 # Output:
 {
-  "uid": 12345678901234567890,
+  "svcs": null,
+  "uid": "12345678901234567890",
+  "user_id": "12345678901234567890",
+  "email": "alice@example.com",
   "tenant_id": "tenant-550e8400-e29b-41d4",
   "is_tenant_owner": true,
   "roles": ["owner", "admin"],
-  "orgs": [],
-  "svcs": [],
   "iss": "trusted-platform",
+  "sub": "12345678901234567890",
   "aud": ["trusted-platform"],
-  "iat": 1705320000,
   "exp": 1705323600,
-  "nbf": 1705320000
+  "nbf": 1705320000,
+  "iat": 1705320000
 }
 ```
 

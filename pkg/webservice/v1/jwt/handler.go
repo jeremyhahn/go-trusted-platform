@@ -105,7 +105,13 @@ func (handler *RestHandler) CreateSession(
 		requestedServiceID, _ = strconv.ParseUint(serviceIDParam, 10, 64)
 	}
 
-	user, err := handler.userService.Get(r.Context(), claims.UserID)
+	userID, err := claims.PlatformUserID()
+	if err != nil {
+		handler.responseWriter.Error400(w, r, err)
+		return nil, err
+	}
+
+	user, err := handler.userService.Get(r.Context(), userID)
 	if err != nil {
 		handler.responseWriter.Error400(w, r, err)
 		return nil, err
@@ -186,7 +192,13 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 	//
 	// The store is the authority on current authorization, so a refresh
 	// picks up a revocation and fails closed when the user is gone.
-	user, err := handler.userService.Get(r.Context(), claims.UserID)
+	userID, err := claims.PlatformUserID()
+	if err != nil {
+		handler.logger.Error(err, "rest/jwt: refresh token carries no platform user id")
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+	user, err := handler.userService.Get(r.Context(), userID)
 	if err != nil {
 		handler.logger.Error(err, "rest/jwt: refresh could not resolve the user")
 		handler.responseWriter.Error401(w, r, ErrInvalidToken)

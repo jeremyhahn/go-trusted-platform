@@ -69,7 +69,7 @@ var (
 //
 // Three claims are deliberately NOT what GenerateToken would put there:
 //
-//   - "uid" stays zero. It is the PLATFORM user-store key, and the
+//   - "uid" is omitted. It is the PLATFORM user-store key, and the
 //     backbone's subject is a key in a DIFFERENT store; copying one into
 //     the other would let a numeric collision resolve some unrelated
 //     platform user. The routes that re-read the platform user from it

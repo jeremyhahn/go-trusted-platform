@@ -167,6 +167,26 @@ starts the collector. That key is also the gate on the control plane
 registering itself as a device in its own registry (#472), so a control plane
 without it is absent from its own fleet view.
 
+## Gateway node: the NAT64 translator packages
+
+`gateway.yaml` lists Alpine's Jool packages in `os.packages` —
+`jool-modules-lts`, `jool-tools` and `jool-tools-openrc` — so the gateway node
+can run gatewayd's `nat64:` section. Only the gateway carries them; the control
+plane and compute nodes do not run gatewayd. A gateway-role ISO prefetches the
+same three into its offline repository.
+
+`gatewayd.yaml` ships the `nat64:` section commented out, because its
+`translator-port` and `pool4` addresses are site decisions. Uncommenting it
+yields a section the gateway accepts as-is (the profile's template test loads it
+that way). With it enabled, the gatewayd init script platformd writes at first
+boot runs `modprobe jool` before starting the daemon.
+
+`jool-modules-lts` is built for exactly one `linux-lts` release. Upgrade the
+two together: a kernel that outruns the module package leaves `jool`
+unloadable, the init script warns and starts gatewayd anyway, and gatewayd
+refuses the `nat64:` section (`ErrNAT64ModuleUnavailable`) instead of passing
+IPv6-only traffic untranslated. See `docs/gateway/user.md`, "IPv6-only clients".
+
 ## Other notes
 
 - **Serial-over-LAN** works (`ipmitool -I lanplus … sol activate`) and the

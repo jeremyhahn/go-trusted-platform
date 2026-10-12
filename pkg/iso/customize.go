@@ -1136,6 +1136,34 @@ func (c *Customizer) applySecurityOverrides(data []byte) ([]byte, error) {
 
 // BuildPreFetchRepository downloads all required packages and creates a local APK repository
 func (c *Customizer) BuildPreFetchRepository(ctx context.Context) error {
+	prefetchConfig, err := c.preFetchConfig()
+	if err != nil {
+		return err
+	}
+
+	// Create pre-fetch builder
+	builder := NewPreFetchBuilder(prefetchConfig, c.logger)
+
+	// Build the local repository
+	if err := builder.BuildLocalRepository(ctx); err != nil {
+		return err
+	}
+
+	c.logger.Info("Pre-fetch repository created successfully",
+		"location", filepath.Join(c.config.Directories.ISO, "apks"))
+
+	return nil
+}
+
+// preFetchConfig derives the offline repository's package inputs from the
+// ISO configuration, including the gateway role of the bundled platform
+// config (#603).
+func (c *Customizer) preFetchConfig() (*PreFetchConfig, error) {
+	gatewayRole, err := isoTargetsGatewayRole(c.config.Platform.ConfigFile)
+	if err != nil {
+		return nil, err
+	}
+
 	// Extract Alpine version major.minor (e.g., "3.22.2" -> "3.22")
 	version := c.config.Alpine.Version
 	versionParts := strings.Split(version, ".")
@@ -1159,25 +1187,14 @@ func (c *Customizer) BuildPreFetchRepository(ctx context.Context) error {
 		FilesystemLVM: c.config.RootFS.Type == "lvm",
 		IMAEnabled:    false,
 		ExtraPackages: append([]string(nil), c.config.Installer.ExtraPackages...),
+		GatewayRole:   gatewayRole,
 	}
 
 	// Check if mirror is empty and set default
 	if prefetchConfig.Mirror == "" {
 		prefetchConfig.Mirror = "https://dl-cdn.alpinelinux.org/alpine"
 	}
-
-	// Create pre-fetch builder
-	builder := NewPreFetchBuilder(prefetchConfig, c.logger)
-
-	// Build the local repository
-	if err := builder.BuildLocalRepository(ctx); err != nil {
-		return err
-	}
-
-	c.logger.Info("Pre-fetch repository created successfully",
-		"location", filepath.Join(c.config.Directories.ISO, "apks"))
-
-	return nil
+	return prefetchConfig, nil
 }
 
 // Secure Boot key staging. The ISO embeds the PK/KEK/DB certificates and the

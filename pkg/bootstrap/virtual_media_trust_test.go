@@ -47,6 +47,7 @@ const testCPTLSName = "cp.example.test"
 type testCPPKI struct {
 	caPEM    []byte
 	caCert   *x509.Certificate
+	caKey    *ecdsa.PrivateKey
 	tlsCert  tls.Certificate
 	spkiPinB string // base64-std SHA-256 of the CA's SPKI
 }
@@ -107,6 +108,7 @@ func newTestCPPKI(t *testing.T) *testCPPKI {
 	return &testCPPKI{
 		caPEM:  pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
 		caCert: caCert,
+		caKey:  caKey,
 		tlsCert: tls.Certificate{
 			Certificate: [][]byte{leafDER, caDER},
 			PrivateKey:  leafKey,

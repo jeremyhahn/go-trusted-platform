@@ -190,6 +190,28 @@ gateway:
       rate: 10
       burst: 20
 
+  # IPv6-only clients: a Jool NAT64 translator (docs/gateway/user.md). To
+  # enable it, uncomment the block below. gatewayd's init script then loads
+  # the jool kernel module, which gateway.yaml installs (jool-modules-lts).
+  # The module is built for one linux-lts release: a kernel upgrade that
+  # outruns jool-modules-lts leaves the module unloadable, and gatewayd then
+  # refuses this section. translator-port is an OVS internal port you create
+  # on br-fabric (there is no default); pool4 is the uplink's own address on
+  # ports the host does not use. client-zones names the zones that get
+  # translation (here the `lab` zone from the sdn example below, VLAN 409);
+  # an empty list translates for every zone.
+  # nat64:
+  #   enabled: true
+  #   prefix: "64:ff9b::/96"
+  #   translator-port: nat640
+  #   pool4:
+  #     addresses: ["198.51.100.6"]
+  #     port-range-start: 61001
+  #     port-range-end: 65535
+  #   client-zones:
+  #     - name: lab
+  #       vlan: 409
+
 # The OVS runtime the datapath services attach to. The environment and the
 # bridge match the platformd config on the same node (x10/gateway.yaml).
 sdn:

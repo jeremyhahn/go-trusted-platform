@@ -117,6 +117,12 @@ os:
     - openvswitch-openrc
     - chrony
     - chrony-openrc
+    # The NAT64 kernel translator gateway.nat64 drives (#603). The module
+    # follows linux-lts: a kernel upgrade that outruns jool-modules-lts
+    # leaves it unloadable, and gatewayd refuses the nat64: section.
+    - jool-modules-lts
+    - jool-tools
+    - jool-tools-openrc
   kernel-modules:
     - igb
     - ixgbe

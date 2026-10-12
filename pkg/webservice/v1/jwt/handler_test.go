@@ -317,7 +317,7 @@ func TestHandlerRefreshToken_ExpiredToken(t *testing.T) {
 	// Create an expired token manually
 	now := time.Now()
 	expiredClaims := TokenClaims{
-		UserID: 12345,
+		UID: "12345",
 		RegisteredClaims: jwt.RegisteredClaims{
 			Audience:  jwt.ClaimStrings{params.Audience},
 			Issuer:    params.Issuer,
@@ -480,7 +480,7 @@ func TestHandlerVerify_VerificationFailure(t *testing.T) {
 	// Create a token with different audience
 	now := time.Now()
 	wrongAudienceClaims := TokenClaims{
-		UserID: 12345,
+		UID: "12345",
 		RegisteredClaims: jwt.RegisteredClaims{
 			Audience:  jwt.ClaimStrings{"wrong-audience"}, // Different from service audience
 			Issuer:    params.Issuer,
@@ -530,14 +530,13 @@ func TestCreateSession_Success(t *testing.T) {
 	handler, err := NewRestHandler(logger, responseWriter, jwtService, mockUserService)
 	assert.Nil(t, err)
 
-	// Generate a valid token
-	user := entities.NewUser("test@localhost")
-	user.ID = 12345
+	// Generate a valid token for an id a float64 cannot hold exactly
+	user := hostileUser(t)
 	tokenString, err := jwtService.GenerateToken(user)
 	assert.Nil(t, err)
 
-	// Setup mock to return the user
-	mockUserService.On("Get", mock.Anything, uint64(12345)).Return(user, nil)
+	// The store must be asked for exactly the id that was issued
+	mockUserService.On("Get", mock.Anything, user.ID).Return(user, nil)
 
 	// Create request with the token
 	req := httptest.NewRequest("GET", "/session", nil)
@@ -819,14 +818,15 @@ func TestHandlerRefreshToken_PreservesTenantAndRoles(t *testing.T) {
 		jwtService, users)
 	require.NoError(t, err)
 
-	user := entities.NewUser("admin")
+	user := hostileUser(t)
 	user.TenantID = "system"
 	user.IsTenantOwner = true
 	user.AddRole(&entities.Role{Name: "admin"})
 	original, err := jwtService.GenerateToken(user)
 	require.NoError(t, err)
 
-	// The store is the authority the refresh reads back.
+	// The store is the authority the refresh reads back, keyed by exactly
+	// the id that was issued.
 	users.On("Get", mock.Anything, user.ID).Return(user, nil)
 
 	req := httptest.NewRequest("POST", "/login/refresh", nil)
@@ -851,8 +851,11 @@ func TestHandlerRefreshToken_PreservesTenantAndRoles(t *testing.T) {
 
 	assert.Equal(t, "system", claims.TenantID, "tenant must survive a refresh")
 	assert.Equal(t, []string{"admin"}, claims.Roles, "roles must survive a refresh")
-	assert.Equal(t, "admin", claims.Email)
+	assert.Equal(t, user.Email, claims.Email)
 	assert.True(t, claims.IsTenantOwner)
+	refreshedID, err := claims.PlatformUserID()
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, refreshedID, "the user id must survive a refresh")
 
 	// And the refreshed token still satisfies a role guard.
 	session := sessionFromClaims(claims)
@@ -999,6 +1002,44 @@ func TestHandlerRefreshToken_RejectsAWrongAudienceToken(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code,
 		"refresh must not launder a token the protected routes reject")
+}
+
+// backboneSessionRequest returns a request bearing a backbone-issued
+// session whose subject is all digits: it parses as a uint64, so a reader
+// that took the platform user id from "user_id" or "sub" would resolve
+// whichever unrelated platform user holds that key.
+func backboneSessionRequest(t *testing.T, handler *RestHandler, target string) *http.Request {
+	t.Helper()
+	bearer, _, err := handler.jwtService.IssueSession(&quicbaas.Identity{
+		Subject: "5083343080743762020", TenantID: "tenant-a",
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, target, nil)
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	req.Header.Set("Accept", "application/json")
+	return req
+}
+
+func TestHandlerRefreshToken_RefusesABackboneSession(t *testing.T) {
+	handler := newHandlerForLoginTest(t)
+	rec := httptest.NewRecorder()
+
+	handler.RefreshToken(rec, backboneSessionRequest(t, handler, "/login/refresh"))
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	handler.userService.(*MockUserService).AssertNotCalled(t, "Get", mock.Anything, mock.Anything)
+}
+
+func TestCreateSession_RefusesABackboneSession(t *testing.T) {
+	handler := newHandlerForLoginTest(t)
+	rec := httptest.NewRecorder()
+
+	session, err := handler.CreateSession(rec, backboneSessionRequest(t, handler, "/session"))
+
+	assert.ErrorIs(t, err, ErrInvalidUserClaim)
+	assert.Nil(t, session)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	handler.userService.(*MockUserService).AssertNotCalled(t, "Get", mock.Anything, mock.Anything)
 }
 
 // stubLoginClient is a UnifiedLoginClient that returns a fixed bearer and
