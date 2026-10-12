@@ -38,20 +38,16 @@ platformctl device register \
   --serial SRV-2024-001 \
   --model TrustedServer-v2 \
   --ek-cert /path/to/ek.crt \
-  --attest-pub /path/to/attest.pub \
-  --attest-cert /path/to/attest.crt
+  --hash-algo 11
 
 # Get device
-platformctl device get --id 1234567890
+platformctl device get 1234567890
 
 # Get device by serial
-platformctl device get --serial SRV-2024-001
-
-# Update device
-platformctl device update --id 1234567890 --model TrustedServer-v3
+platformctl device find-serial SRV-2024-001
 
 # Delete device
-platformctl device delete --id 1234567890
+platformctl device delete 1234567890
 
 # List devices
 platformctl device list --page 1 --page-size 10

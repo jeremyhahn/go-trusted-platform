@@ -221,6 +221,73 @@ func TestSDKRouteClaims_NoGetResolvesToList(t *testing.T) {
 	}
 }
 
+// deviceServiceHandlers names the handler each DeviceService SDK claim must
+// dispatch to on the built router (#321). The SDK test
+// TestDeviceServiceRoutes_MatchTheServerRouter requires a claim for every
+// method in the generated descriptor; this map requires each of those claims
+// to land on its own operation here, so the two together pin every method.
+var deviceServiceHandlers = map[string]string{
+	"CreateDevice":                 "CreateDevice",
+	"GetDevice":                    "GetDevice",
+	"UpdateDevice":                 "UpdateDevice",
+	"DeleteDevice":                 "DeleteDevice",
+	"ListDevices":                  "ListDevices",
+	"FindDeviceBySerial":           "FindDeviceBySerial",
+	"CountDevices":                 "CountDevices",
+	"CreateProfile":                "CreateProfile",
+	"GetProfile":                   "GetProfileByID",
+	"UpdateProfile":                "UpdateProfile",
+	"DeleteProfile":                "DeleteProfile",
+	"ListProfiles":                 "ListProfiles",
+	"FindProfileByMACAddress":      "FindProfileByMAC",
+	"FindProfileBySerial":          "FindProfileBySerial",
+	"FindMatchingProfile":          "FindMatchingProfile",
+	"CountProfiles":                "CountProfiles",
+	"ActivateDevice":               "ActivateDevice",
+	"AttestDevice":                 "HandleAttestDevice",
+	"RecordAttestationCertificate": "HandleRecordAttestCert",
+	"CreateProfileFromTemplate":    "CreateProfileFromTemplate",
+	"FindConfigForDevice":          "FindConfigForDevice",
+	"AssignProfileToDevice":        "AssignProfileToDevice",
+	"UnassignProfileFromDevice":    "UnassignProfileFromDevice",
+}
+
+// TestSDKRouteClaims_DeviceServiceDispatchesToItsHandler resolves every
+// DeviceService SDK claim on the router built in-process and checks the
+// handler it reaches. A claim on a path or verb the server does not register,
+// or on another operation's route, fails; so does a claim with no row here.
+func TestSDKRouteClaims_DeviceServiceDispatchesToItsHandler(t *testing.T) {
+	resolved, _ := builtHandlers(t)
+
+	const prefix = "/platform.v1.DeviceService/"
+	claimed := map[string]bool{}
+	for _, claim := range sdkrest.RouteClaims() {
+		if !strings.HasPrefix(claim.GRPCMethod, prefix) {
+			continue
+		}
+		method := strings.TrimPrefix(claim.GRPCMethod, prefix)
+		claimed[method] = true
+
+		want, ok := deviceServiceHandlers[method]
+		if !ok {
+			t.Errorf("%s has an SDK claim but no row in deviceServiceHandlers", claim.GRPCMethod)
+			continue
+		}
+		route := claim.Method + " " + normalisePath(claim.Path)
+		got, ok := resolved[route]
+		if !ok {
+			t.Errorf("%s claims %q, which the built router does not register", claim.GRPCMethod, route)
+			continue
+		}
+		require.Equalf(t, want, got, "%s claims %q, which dispatches to the wrong handler",
+			claim.GRPCMethod, route)
+	}
+
+	for method := range deviceServiceHandlers {
+		require.Truef(t, claimed[method], "%s%s has no SDK route claim", prefix, method)
+	}
+}
+
 // collisionRoute splits a "METHOD /path: Get… is identical to List…" line at
 // its separator.
 //

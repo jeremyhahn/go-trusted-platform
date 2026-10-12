@@ -25,7 +25,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials/local"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -135,11 +135,15 @@ func GRPCTransportCredentials() grpc.DialOption {
 	return grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
 }
 
-// GRPCUnixCredentials returns insecure gRPC transport credentials for use
-// with Unix domain sockets. Unix sockets do not use TLS since they provide
-// kernel-level access control through file system permissions.
+// GRPCUnixCredentials returns the gRPC transport credentials for platformd's
+// Unix domain socket. The UDS is the daemon's one sanctioned non-TLS transport:
+// it authenticates the caller by SO_PEERCRED and is scoped by file-system
+// permissions (docs/daemon/architecture.md), so a TLS dial fails its handshake
+// against it (#532). Local credentials send no handshake bytes, like insecure
+// ones, but refuse to carry a dial that is not to a local address, so a
+// misrouted adapter fails instead of speaking plaintext over the network.
 func GRPCUnixCredentials() grpc.DialOption {
-	return grpc.WithTransportCredentials(insecure.NewCredentials())
+	return grpc.WithTransportCredentials(local.NewCredentials())
 }
 
 // MCPBaseURL returns the MCP server base URL for endpoint. platformd serves

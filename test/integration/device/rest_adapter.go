@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	wsdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -132,7 +135,175 @@ func (a *RESTAdapter) doRequest(ctx context.Context, method, path string, body i
 		}
 	}
 
-	return respBody, nil
+	return unwrapPayload(method+" "+path, respBody)
+}
+
+// restEnvelope is the response envelope every device, profile, template
+// and attestation route answers inside (pkg/webservice/v1/response). The
+// resource the caller asked for is its payload.
+type restEnvelope struct {
+	Payload json.RawMessage `json:"payload"`
+}
+
+// unwrapPayload returns the payload of the daemon's response envelope. An
+// empty body carries no envelope and yields no payload.
+func unwrapPayload(operation string, body []byte) ([]byte, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, nil
+	}
+	var envelope restEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, &RESTAdapterError{
+			Operation: operation,
+			Message:   "failed to parse response envelope: " + err.Error(),
+			Body:      string(body),
+		}
+	}
+	return envelope.Payload, nil
+}
+
+// decodePayload decodes an unwrapped payload into out.
+func decodePayload(operation string, payload []byte, out any) error {
+	if err := json.Unmarshal(payload, out); err != nil {
+		return &RESTAdapterError{
+			Operation: operation,
+			Message:   "failed to parse response: " + err.Error(),
+			Body:      string(payload),
+		}
+	}
+	return nil
+}
+
+// ErrRESTNoFilter reports a list filter the server's route has no query
+// parameter for. Sending it anyway would return an unfiltered page that
+// looks like a filtered one, so the adapter refuses it.
+type ErrRESTNoFilter struct {
+	Operation string
+	Filter    string
+}
+
+func (e ErrRESTNoFilter) Error() string {
+	return fmt.Sprintf("REST route for %s has no %s query parameter", e.Operation, e.Filter)
+}
+
+// pageQuery maps the suite's limit/offset window onto the server's 1-based
+// page/page_size query parameters. A zero limit keeps the server defaults.
+func pageQuery(limit, offset int) string {
+	if limit <= 0 {
+		return ""
+	}
+	query := url.Values{}
+	query.Set("page", strconv.Itoa(offset/limit+1))
+	query.Set("page_size", strconv.Itoa(limit))
+	return "?" + query.Encode()
+}
+
+// decodeDevice decodes the daemon's DeviceResponse payload.
+func decodeDevice(operation string, payload []byte) (*entities.Device, error) {
+	var device deviceJSON
+	if err := decodePayload(operation, payload, &device); err != nil {
+		return nil, err
+	}
+	return device.entity(), nil
+}
+
+// decodeProfile decodes the daemon's ProfileFullResponse payload.
+func decodeProfile(operation string, payload []byte) (*entities.DeviceProfile, error) {
+	var profile wsdevice.ProfileFullResponse
+	if err := decodePayload(operation, payload, &profile); err != nil {
+		return nil, err
+	}
+	return profileEntity(&profile), nil
+}
+
+// decodeTemplate decodes the daemon's TemplateResponse payload.
+func decodeTemplate(operation string, payload []byte) (*entities.DeviceTemplate, error) {
+	var template wsdevice.TemplateResponse
+	if err := decodePayload(operation, payload, &template); err != nil {
+		return nil, err
+	}
+	return templateEntity(&template), nil
+}
+
+// profileEntity maps the daemon's ProfileFullResponse onto the entity the
+// suite asserts on. The response carries no tenant or BMC block, and its PCR
+// baseline is a read-only hex rendering the suite never compares, so those
+// entity fields stay zero.
+func profileEntity(p *wsdevice.ProfileFullResponse) *entities.DeviceProfile {
+	profile := &entities.DeviceProfile{
+		ID:                    p.ID.Uint64(),
+		Name:                  p.Name,
+		Model:                 p.Model,
+		Role:                  entities.DeviceRole(p.Role),
+		EventLog:              p.EventLog,
+		Zone:                  p.Zone,
+		EnrollmentNetwork:     p.EnrollmentNetwork,
+		PostEnrollmentNetwork: p.PostEnrollmentNetwork,
+		FailureNetwork:        p.FailureNetwork,
+		MatchRules:            (*entities.ProfileMatchRules)(p.MatchRules),
+		TLSServerName:         p.TLSServerName,
+		Config:                p.Config,
+		EKSerial:              p.EKSerial,
+		EKCert:                p.EKCert,
+		MACAddress:            p.MACAddress,
+		Assigned:              p.Assigned,
+		AssignedAt:            p.AssignedAt,
+	}
+	if p.PlatformdConfig != nil {
+		profile.PlatformdConfig = &entities.PlatformdConfigRef{
+			ConfigType: p.PlatformdConfig.ConfigType,
+			Reference:  p.PlatformdConfig.Reference,
+			ConfigName: p.PlatformdConfig.ConfigName,
+			ConfigPath: p.PlatformdConfig.ConfigPath,
+			Version:    p.PlatformdConfig.Version,
+		}
+	}
+	if len(p.Networks) > 0 {
+		profile.Networks = make(map[string]*entities.NetworkPhaseConfig, len(p.Networks))
+		for name, phase := range p.Networks {
+			profile.Networks[name] = networkPhaseEntity(phase)
+		}
+	}
+	return profile
+}
+
+// networkPhaseEntity maps one network phase of a ProfileFullResponse.
+func networkPhaseEntity(phase *wsdevice.NetworkPhaseResponse) *entities.NetworkPhaseConfig {
+	if phase == nil {
+		return nil
+	}
+	config := &entities.NetworkPhaseConfig{
+		VLAN:       phase.VLAN,
+		DHCPPool:   (*entities.DHCPPoolConfig)(phase.DHCPPool),
+		StaticIP:   phase.StaticIP,
+		Gateway:    phase.Gateway,
+		DNS:        phase.DNS,
+		AuthMethod: entities.AuthMethod(phase.AuthMethod),
+		Zone:       phase.Zone,
+		Subnet:     phase.Subnet,
+		DNSServers: phase.DNSServers,
+		DHCP:       phase.DHCP,
+	}
+	for _, acl := range phase.ACLs {
+		config.ACLs = append(config.ACLs, entities.ACLConfig(acl))
+	}
+	return config
+}
+
+// templateEntity maps the daemon's TemplateResponse onto the entity the
+// suite asserts on. The response carries no BMC block.
+func templateEntity(t *wsdevice.TemplateResponse) *entities.DeviceTemplate {
+	return &entities.DeviceTemplate{
+		ID:          t.ID.Uint64(),
+		TenantID:    t.TenantID,
+		Name:        t.Name,
+		Description: t.Description,
+		Role:        entities.DeviceRole(t.Role),
+		Config:      t.Config,
+		MatchRules:  (*entities.ProfileMatchRules)(t.MatchRules),
+		CreatedAt:   t.CreatedAt,
+		UpdatedAt:   t.UpdatedAt,
+	}
 }
 
 // ============================================================================
@@ -141,70 +312,55 @@ func (a *RESTAdapter) doRequest(ctx context.Context, method, path string, body i
 
 // RegisterDevice registers a new device
 func (a *RESTAdapter) RegisterDevice(ctx context.Context, opts RegisterDeviceOptions) (*RegisterDeviceResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/devices", opts.TenantID)
+	path := "/api/v1/devices"
 
 	body, err := a.doRequest(ctx, http.MethodPost, path, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	var device entities.Device
-	if err := json.Unmarshal(body, &device); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "RegisterDevice",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	device, err := decodeDevice("RegisterDevice", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &RegisterDeviceResult{Device: &device}, nil
+	return &RegisterDeviceResult{Device: device}, nil
 }
 
 // GetDevice retrieves a device by its key
 func (a *RESTAdapter) GetDevice(ctx context.Context, opts GetDeviceOptions) (*GetDeviceResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/devices/%s", opts.TenantID, opts.DeviceID)
+	path := fmt.Sprintf("/api/v1/devices/%s", opts.DeviceID)
 
 	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var device entities.Device
-	if err := json.Unmarshal(body, &device); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "GetDevice",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	device, err := decodeDevice("GetDevice", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &GetDeviceResult{Device: &device}, nil
+	return &GetDeviceResult{Device: device}, nil
 }
 
 // UpdateDevice updates an existing device
 func (a *RESTAdapter) UpdateDevice(ctx context.Context, opts UpdateDeviceOptions) (*UpdateDeviceResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/devices/%s", opts.TenantID, opts.DeviceID)
+	path := fmt.Sprintf("/api/v1/devices/%s", opts.DeviceID)
 
 	body, err := a.doRequest(ctx, http.MethodPut, path, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	var device entities.Device
-	if err := json.Unmarshal(body, &device); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "UpdateDevice",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	device, err := decodeDevice("UpdateDevice", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &UpdateDeviceResult{Device: &device}, nil
+	return &UpdateDeviceResult{Device: device}, nil
 }
 
 // DeleteDevice removes a device
 func (a *RESTAdapter) DeleteDevice(ctx context.Context, opts DeleteDeviceOptions) (*DeleteDeviceResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/devices/%s", opts.TenantID, opts.DeviceID)
+	path := fmt.Sprintf("/api/v1/devices/%s", opts.DeviceID)
 
 	_, err := a.doRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
@@ -216,47 +372,31 @@ func (a *RESTAdapter) DeleteDevice(ctx context.Context, opts DeleteDeviceOptions
 
 // ListDevices lists all devices with optional filtering
 func (a *RESTAdapter) ListDevices(ctx context.Context, opts ListDevicesOptions) (*ListDevicesResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/devices", opts.TenantID)
-
-	// Build query parameters
-	params := ""
-	if opts.ProfileID != "" {
-		params += fmt.Sprintf("&profile_id=%s", opts.ProfileID)
-	}
-	if opts.Status != "" {
-		params += fmt.Sprintf("&status=%s", opts.Status)
-	}
-	if opts.Limit > 0 {
-		params += fmt.Sprintf("&limit=%d", opts.Limit)
-	}
-	if opts.Offset > 0 {
-		params += fmt.Sprintf("&offset=%d", opts.Offset)
-	}
-	if params != "" {
-		path += "?" + params[1:] // Remove leading &
+	if opts.ProfileID != "" || opts.Status != "" {
+		return nil, ErrRESTNoFilter{Operation: "ListDevices", Filter: "profile or status"}
 	}
 
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	body, err := a.doRequest(ctx, http.MethodGet, "/api/v1/devices"+pageQuery(opts.Limit, opts.Offset), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var result ListDevicesResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		// Try parsing as array
-		var devices []*entities.Device
-		if err := json.Unmarshal(body, &devices); err != nil {
-			return nil, &RESTAdapterError{
-				Operation: "ListDevices",
-				Message:   "failed to parse response: " + err.Error(),
-				Body:      string(body),
-			}
-		}
-		result.Devices = devices
-		result.Total = len(devices)
+	var page struct {
+		Devices    []deviceJSON                `json:"devices"`
+		Pagination wsdevice.PaginationResponse `json:"pagination"`
+	}
+	if err := decodePayload("ListDevices", body, &page); err != nil {
+		return nil, err
 	}
 
-	return &result, nil
+	result := &ListDevicesResult{
+		Devices: make([]*entities.Device, 0, len(page.Devices)),
+		Total:   page.Pagination.Total,
+	}
+	for _, d := range page.Devices {
+		result.Devices = append(result.Devices, d.entity())
+	}
+	return result, nil
 }
 
 // ============================================================================
@@ -265,23 +405,18 @@ func (a *RESTAdapter) ListDevices(ctx context.Context, opts ListDevicesOptions) 
 
 // FindBySerial finds a device by its serial number
 func (a *RESTAdapter) FindBySerial(ctx context.Context, opts FindBySerialOptions) (*FindBySerialResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/devices/by-serial/%s", opts.TenantID, opts.Serial)
+	path := fmt.Sprintf("/api/v1/devices/serial/%s", opts.Serial)
 
 	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var device entities.Device
-	if err := json.Unmarshal(body, &device); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "FindBySerial",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	device, err := decodeDevice("FindBySerial", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &FindBySerialResult{Device: &device}, nil
+	return &FindBySerialResult{Device: device}, nil
 }
 
 // ============================================================================
@@ -290,70 +425,55 @@ func (a *RESTAdapter) FindBySerial(ctx context.Context, opts FindBySerialOptions
 
 // CreateProfile creates a new device profile
 func (a *RESTAdapter) CreateProfile(ctx context.Context, opts CreateProfileOptions) (*CreateProfileResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-profiles", opts.TenantID)
+	path := "/api/v1/devices/profiles"
 
 	body, err := a.doRequest(ctx, http.MethodPost, path, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(body, &profile); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "CreateProfile",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	profile, err := decodeProfile("CreateProfile", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &CreateProfileResult{Profile: &profile}, nil
+	return &CreateProfileResult{Profile: profile}, nil
 }
 
 // GetProfile retrieves a profile by its key
 func (a *RESTAdapter) GetProfile(ctx context.Context, opts GetProfileOptions) (*GetProfileResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-profiles/%s", opts.TenantID, opts.ProfileID)
+	path := fmt.Sprintf("/api/v1/devices/profiles/%s", opts.ProfileID)
 
 	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(body, &profile); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "GetProfile",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	profile, err := decodeProfile("GetProfile", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &GetProfileResult{Profile: &profile}, nil
+	return &GetProfileResult{Profile: profile}, nil
 }
 
 // UpdateProfile updates an existing profile
 func (a *RESTAdapter) UpdateProfile(ctx context.Context, opts UpdateProfileOptions) (*UpdateProfileResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-profiles/%s", opts.TenantID, opts.ProfileID)
+	path := fmt.Sprintf("/api/v1/devices/profiles/%s", opts.ProfileID)
 
 	body, err := a.doRequest(ctx, http.MethodPut, path, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(body, &profile); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "UpdateProfile",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	profile, err := decodeProfile("UpdateProfile", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &UpdateProfileResult{Profile: &profile}, nil
+	return &UpdateProfileResult{Profile: profile}, nil
 }
 
 // DeleteProfile removes a profile
 func (a *RESTAdapter) DeleteProfile(ctx context.Context, opts DeleteProfileOptions) (*DeleteProfileResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-profiles/%s", opts.TenantID, opts.ProfileID)
+	path := fmt.Sprintf("/api/v1/devices/profiles/%s", opts.ProfileID)
 
 	_, err := a.doRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
@@ -365,44 +485,28 @@ func (a *RESTAdapter) DeleteProfile(ctx context.Context, opts DeleteProfileOptio
 
 // ListProfiles lists all profiles with optional filtering
 func (a *RESTAdapter) ListProfiles(ctx context.Context, opts ListProfilesOptions) (*ListProfilesResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-profiles", opts.TenantID)
-
-	// Build query parameters
-	params := ""
 	if opts.Role != "" {
-		params += fmt.Sprintf("&role=%s", opts.Role)
-	}
-	if opts.Limit > 0 {
-		params += fmt.Sprintf("&limit=%d", opts.Limit)
-	}
-	if opts.Offset > 0 {
-		params += fmt.Sprintf("&offset=%d", opts.Offset)
-	}
-	if params != "" {
-		path += "?" + params[1:] // Remove leading &
+		return nil, ErrRESTNoFilter{Operation: "ListProfiles", Filter: "role"}
 	}
 
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	body, err := a.doRequest(ctx, http.MethodGet, "/api/v1/devices/profiles"+pageQuery(opts.Limit, opts.Offset), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var result ListProfilesResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		// Try parsing as array
-		var profiles []*entities.DeviceProfile
-		if err := json.Unmarshal(body, &profiles); err != nil {
-			return nil, &RESTAdapterError{
-				Operation: "ListProfiles",
-				Message:   "failed to parse response: " + err.Error(),
-				Body:      string(body),
-			}
-		}
-		result.Profiles = profiles
-		result.Total = len(profiles)
+	var page wsdevice.ProfileListResponse
+	if err := decodePayload("ListProfiles", body, &page); err != nil {
+		return nil, err
 	}
 
-	return &result, nil
+	result := &ListProfilesResult{
+		Profiles: make([]*entities.DeviceProfile, 0, len(page.Profiles)),
+		Total:    page.Pagination.Total,
+	}
+	for i := range page.Profiles {
+		result.Profiles = append(result.Profiles, profileEntity(&page.Profiles[i]))
+	}
+	return result, nil
 }
 
 // ============================================================================
@@ -411,65 +515,50 @@ func (a *RESTAdapter) ListProfiles(ctx context.Context, opts ListProfilesOptions
 
 // FindProfileByMACAddress finds a profile by MAC address prefix
 func (a *RESTAdapter) FindProfileByMACAddress(ctx context.Context, opts FindProfileByMACAddressOptions) (*FindProfileByMACAddressResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-profiles/by-mac/%s", opts.TenantID, opts.MACAddress)
+	path := fmt.Sprintf("/api/v1/device/profiles/mac/%s", opts.MACAddress)
 
 	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(body, &profile); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "FindProfileByMACAddress",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	profile, err := decodeProfile("FindProfileByMACAddress", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &FindProfileByMACAddressResult{Profile: &profile}, nil
+	return &FindProfileByMACAddressResult{Profile: profile}, nil
 }
 
 // FindProfileBySerial finds a profile by serial pattern
 func (a *RESTAdapter) FindProfileBySerial(ctx context.Context, opts FindProfileBySerialOptions) (*FindProfileBySerialResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-profiles/by-serial/%s", opts.TenantID, opts.Serial)
+	path := fmt.Sprintf("/api/v1/device/profiles/serial/%s", opts.Serial)
 
 	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(body, &profile); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "FindProfileBySerial",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	profile, err := decodeProfile("FindProfileBySerial", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &FindProfileBySerialResult{Profile: &profile}, nil
+	return &FindProfileBySerialResult{Profile: profile}, nil
 }
 
 // FindMatchingProfile finds a profile matching device attributes
 func (a *RESTAdapter) FindMatchingProfile(ctx context.Context, opts FindMatchingProfileOptions) (*FindMatchingProfileResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-profiles/match", opts.TenantID)
+	path := "/api/v1/device/profiles/match"
 
 	body, err := a.doRequest(ctx, http.MethodPost, path, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(body, &profile); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "FindMatchingProfile",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	profile, err := decodeProfile("FindMatchingProfile", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &FindMatchingProfileResult{Profile: &profile}, nil
+	return &FindMatchingProfileResult{Profile: profile}, nil
 }
 
 // ============================================================================
@@ -490,12 +579,8 @@ func (a *RESTAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 	}
 
 	var result RecordAttestCertResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "RecordAttestCert",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	if err := decodePayload("RecordAttestCert", body, &result); err != nil {
+		return nil, err
 	}
 	return &result, nil
 }
@@ -514,12 +599,8 @@ func (a *RESTAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions
 	}
 
 	var result AttestDeviceResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "AttestDevice",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	if err := decodePayload("AttestDevice", body, &result); err != nil {
+		return nil, err
 	}
 	if result.DeviceID == "" {
 		result.DeviceID = opts.DeviceID
@@ -534,70 +615,55 @@ func (a *RESTAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions
 
 // CreateTemplate creates a new device template
 func (a *RESTAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-templates", opts.TenantID)
+	path := "/api/v1/device/templates"
 
 	body, err := a.doRequest(ctx, http.MethodPost, path, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	var template entities.DeviceTemplate
-	if err := json.Unmarshal(body, &template); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "CreateTemplate",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	template, err := decodeTemplate("CreateTemplate", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &CreateTemplateResult{Template: &template}, nil
+	return &CreateTemplateResult{Template: template}, nil
 }
 
 // GetTemplate retrieves a template by ID
 func (a *RESTAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-templates/%s", opts.TenantID, opts.TemplateID)
+	path := fmt.Sprintf("/api/v1/device/templates/%s", opts.TemplateID)
 
 	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var template entities.DeviceTemplate
-	if err := json.Unmarshal(body, &template); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "GetTemplate",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	template, err := decodeTemplate("GetTemplate", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &GetTemplateResult{Template: &template}, nil
+	return &GetTemplateResult{Template: template}, nil
 }
 
 // UpdateTemplate updates an existing template
 func (a *RESTAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-templates/%s", opts.TenantID, opts.TemplateID)
+	path := fmt.Sprintf("/api/v1/device/templates/%s", opts.TemplateID)
 
 	body, err := a.doRequest(ctx, http.MethodPut, path, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	var template entities.DeviceTemplate
-	if err := json.Unmarshal(body, &template); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "UpdateTemplate",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	template, err := decodeTemplate("UpdateTemplate", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &UpdateTemplateResult{Template: &template}, nil
+	return &UpdateTemplateResult{Template: template}, nil
 }
 
 // DeleteTemplate removes a template
 func (a *RESTAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-templates/%s", opts.TenantID, opts.TemplateID)
+	path := fmt.Sprintf("/api/v1/device/templates/%s", opts.TemplateID)
 
 	_, err := a.doRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
@@ -609,44 +675,28 @@ func (a *RESTAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOpt
 
 // ListTemplates lists all templates
 func (a *RESTAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-templates", opts.TenantID)
-
-	// Build query parameters
-	params := ""
 	if opts.Role != "" {
-		params += fmt.Sprintf("&role=%s", opts.Role)
-	}
-	if opts.Limit > 0 {
-		params += fmt.Sprintf("&limit=%d", opts.Limit)
-	}
-	if opts.Offset > 0 {
-		params += fmt.Sprintf("&offset=%d", opts.Offset)
-	}
-	if params != "" {
-		path += "?" + params[1:] // Remove leading &
+		return nil, ErrRESTNoFilter{Operation: "ListTemplates", Filter: "role"}
 	}
 
-	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
+	body, err := a.doRequest(ctx, http.MethodGet, "/api/v1/device/templates"+pageQuery(opts.Limit, opts.Offset), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var result ListTemplatesResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		// Try parsing as array
-		var templates []*entities.DeviceTemplate
-		if err := json.Unmarshal(body, &templates); err != nil {
-			return nil, &RESTAdapterError{
-				Operation: "ListTemplates",
-				Message:   "failed to parse response: " + err.Error(),
-				Body:      string(body),
-			}
-		}
-		result.Templates = templates
-		result.Total = len(templates)
+	var page wsdevice.TemplateListResponse
+	if err := decodePayload("ListTemplates", body, &page); err != nil {
+		return nil, err
 	}
 
-	return &result, nil
+	result := &ListTemplatesResult{
+		Templates: make([]*entities.DeviceTemplate, 0, len(page.Templates)),
+		Total:     page.Pagination.Total,
+	}
+	for i := range page.Templates {
+		result.Templates = append(result.Templates, templateEntity(&page.Templates[i]))
+	}
+	return result, nil
 }
 
 // ============================================================================
@@ -655,28 +705,23 @@ func (a *RESTAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptio
 
 // CreateProfileFromTemplate creates a profile from a template
 func (a *RESTAdapter) CreateProfileFromTemplate(ctx context.Context, opts CreateProfileFromTemplateOptions) (*CreateProfileResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-templates/%s/create-profile", opts.TenantID, opts.TemplateID)
+	path := fmt.Sprintf("/api/v1/device/templates/%s/create-profile", opts.TemplateID)
 
 	body, err := a.doRequest(ctx, http.MethodPost, path, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(body, &profile); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "CreateProfileFromTemplate",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	profile, err := decodeProfile("CreateProfileFromTemplate", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &CreateProfileResult{Profile: &profile}, nil
+	return &CreateProfileResult{Profile: profile}, nil
 }
 
 // FindConfigForDevice finds the config for a device by EK serial or MAC
 func (a *RESTAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-profiles/find-config", opts.TenantID)
+	path := "/api/v1/device/profiles/find-config"
 
 	// Build query parameters
 	params := ""
@@ -695,37 +740,27 @@ func (a *RESTAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigFo
 		return nil, err
 	}
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(body, &profile); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "FindConfigForDevice",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	profile, err := decodeProfile("FindConfigForDevice", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &FindConfigForDeviceResult{Profile: &profile}, nil
+	return &FindConfigForDeviceResult{Profile: profile}, nil
 }
 
 // AssignProfileToDevice assigns a profile to a device identity
 func (a *RESTAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProfileToDeviceOptions) (*AssignProfileToDeviceResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/device-profiles/%s/assign", opts.TenantID, opts.ProfileID)
+	path := fmt.Sprintf("/api/v1/device/profiles/%s/assign", opts.ProfileID)
 
 	body, err := a.doRequest(ctx, http.MethodPost, path, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	var profile entities.DeviceProfile
-	if err := json.Unmarshal(body, &profile); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "AssignProfileToDevice",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	profile, err := decodeProfile("AssignProfileToDevice", body)
+	if err != nil {
+		return nil, err
 	}
-
-	return &AssignProfileToDeviceResult{Profile: &profile}, nil
+	return &AssignProfileToDeviceResult{Profile: profile}, nil
 }
 
 // Verify RESTAdapter implements DeviceCommands

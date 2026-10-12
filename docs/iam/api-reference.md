@@ -1674,62 +1674,65 @@ The Unix socket serves HTTP requests with the same REST API as the TCP listener.
 
 ### Usage with platformctl CLI
 
+platformctl's default local context dials `/run/platformd.sock`; for another
+path, see `docs/daemon/api-reference-unix.md`.
+
 ```bash
 # User Operations
-platformctl --socket /run/platformd.sock iam user create \
+platformctl iam user create \
   --tenant acme-corp \
   --email alice@acme.com \
   --name "Alice Smith" \
   --roles developer \
   --groups engineering
 
-platformctl --socket /run/platformd.sock iam user list \
+platformctl iam user list \
   --tenant acme-corp \
   --limit 100
 
-platformctl --socket /run/platformd.sock iam user get \
+platformctl iam user get \
   --tenant acme-corp \
   --user user_abc123
 
-platformctl --socket /run/platformd.sock iam user delete \
+platformctl iam user delete \
   --tenant acme-corp \
   --user user_abc123
 
 # Role Operations
-platformctl --socket /run/platformd.sock iam role create \
+platformctl iam role create \
   --tenant acme-corp \
   --id team-lead \
   --name "Team Lead" \
   --permissions "read:users,write:users"
 
-platformctl --socket /run/platformd.sock iam role assign \
+platformctl iam role assign \
   --tenant acme-corp \
   --user user_abc123 \
   --role developer
 
-platformctl --socket /run/platformd.sock iam role revoke \
+platformctl iam role revoke \
   --tenant acme-corp \
   --user user_abc123 \
   --role developer
 
 # Group Operations
-platformctl --socket /run/platformd.sock iam group create \
+platformctl iam group create \
   --tenant acme-corp \
   --id engineering \
   --name "Engineering Team"
 
-platformctl --socket /run/platformd.sock iam group add-member \
+platformctl iam group add-member \
   --tenant acme-corp \
   --group engineering \
   --user user_abc123
 
 # Policy Operations
-platformctl --socket /run/platformd.sock iam policy create \
+platformctl iam policy create \
   --tenant acme-corp \
   --name developer-access \
   --spec-file policy.yaml
 
-platformctl --socket /run/platformd.sock iam policy test \
+platformctl iam policy test \
   --tenant acme-corp \
   --subject user_abc123 \
   --action read \

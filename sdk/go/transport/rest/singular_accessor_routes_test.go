@@ -187,8 +187,8 @@ func TestTemplatedRouteTable_PathParamsResolveOnTheRequestMessage(t *testing.T) 
 			seen := map[string]int{}
 			for _, p := range route.pathParams {
 				seen[p.placeholder]++
-				fd := input.Fields().ByName(p.field)
-				require.NotNilf(t, fd,
+				_, ok := fieldPathDescriptor(input, p.field)
+				require.Truef(t, ok,
 					"pathParam %q names proto field %q, which does not exist on %s. "+
 						"buildTemplatedRequest returns codes.Internal for this at runtime.",
 					p.placeholder, p.field, input.FullName())

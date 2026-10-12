@@ -297,13 +297,21 @@ Manages attestation manifests and TPM quotes.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/manifest` | Get current host manifest |
-| POST | `/manifest/build` | Generate fresh manifest |
-| POST | `/verify` | Verify a manifest |
-| GET | `/quote` | Get TPM quote |
+| GET | `/manifests` | List manifests |
+| POST | `/manifests/build` | Build and sign a host manifest |
+| POST | `/manifests/verify` | Verify a manifest (the request carries it) |
+| GET | `/manifests/{id}` | Get a manifest |
+| DELETE | `/manifests/{id}` | Delete a manifest |
+| POST | `/quote` | Get a TPM quote |
 | POST | `/quote/verify` | Verify a quote |
+| POST | `/host` | Collect host attestation |
+| POST | `/vm/{id}` | Collect VM attestation |
+| POST | `/container/{id}` | Collect container attestation |
 
-**Source**: `pkg/webservice/v1/rest/attestation/router.go`
+The full attestation REST surface, including events, reports and the node
+clock, is in [`docs/attestation/api.md`](../attestation/api.md).
+
+**Source**: `pkg/webservice/v1/rest/attestation/server_router.go`
 
 ## Authentication
 

@@ -20,7 +20,7 @@ appears here.
 - **Embedded** is `ServiceRegistry.Device`
   (`sdk/go/transport/embedded/adapter.go:37`), dispatched by gRPC method string
   through `registerDeviceHandlers` (`sdk/go/transport/embedded/dispatch.go:336`).
-- gRPC: `DeviceService`, **21 RPCs** (`pkg/api/grpc/proto/device.proto`).
+- gRPC: `DeviceService`, **23 RPCs** (`pkg/api/grpc/proto/device.proto`).
 - REST: `/api/v1/devices/*`, `/api/v1/device/*`
   (`pkg/webservice/v1/router/device.go`, `pkg/webservice/v1/rest/device/router.go`).
 - QUIC: top-level opcodes **`0x30`–`0x3E`**, dispatched by
@@ -28,7 +28,14 @@ appears here.
   (`pkg/api/daemon/quic_service.go:489`). No category indirection.
 - MCP: two device tool families plus one profile family — see §6.
 - Go SDK: `sdk/go/services/device` — `NewClient(transport.Adapter)` or
-  `NewClientFromGRPC(platformv1.DeviceServiceClient)`.
+  `NewClientFromGRPC(platformv1.DeviceServiceClient)`. Over REST the SDK sends
+  every RPC to the exact route in §2, verb and id constraint included (#321).
+  `ActivateDevice` targets the admin `/device/activate-json`, not the mTLS
+  `/device/activate`. `TestDeviceServiceRoutes_MatchTheServerRouter`
+  (`sdk/go/transport/rest`) and
+  `TestSDKRouteClaims_DeviceServiceDispatchesToItsHandler`
+  (`pkg/webservice/v1`) fail on any drift. The body it sends and the reply it
+  decodes are the handlers' own shapes, not the gRPC messages — see §1b.
 
 **Four DeviceService RPCs have no embedded route.**
 `CreateProfileFromTemplate`, `FindConfigForDevice`, `AssignProfileToDevice` and
@@ -79,6 +86,43 @@ does not round, and it does not land on a neighbouring record.
 **Absent ids.** `null` and `""` both decode to zero, the same value an omitted
 field leaves in place. On fields tagged `omitempty`, a zero id is still elided
 from the output.
+
+## 1b. REST wire shapes the SDK translates
+
+The REST handlers do not speak the gRPC messages. They decode their own request
+types (`pkg/webservice/v1/device/types.go`) and answer through the webservice
+response writer, so every body arrives in the envelope
+`{"code", "success", "payload"}` with the resource **bare** in `payload` and its
+`id` a string (§1a). The Go SDK's REST transport translates in both directions
+(`sdk/go/transport/rest/device.go`, mappings in
+`sdk/go/wire/restwire/device_profile.go`). `TestDeviceSDKREST_*`
+(`pkg/webservice/v1/router/device_sdk_rest_test.go`) drives the profile writes,
+the template create and device register and read through the real router and
+handlers.
+
+| RPC | request body sent | reply decoded |
+|---|---|---|
+| `CreateProfile`, `UpdateProfile` | the profile **flat** — the `ProfileRequest` fields at the top level, never `{"profile": {...}}` | bare `ProfileFullResponse` → `reply.profile` |
+| `CreateProfileFromTemplate` | `{"overrides": {...}}`, the overrides as a flat `ProfileRequest`; `{}` when there are none | bare `ProfileFullResponse` → `reply.profile` |
+| `CreateDevice`, `GetDevice`, `UpdateDevice`, `FindDeviceBySerial` | unchanged | bare `DeviceResponse` → `reply.device` |
+| the other single-profile RPCs (find, match, assign, config) | unchanged | bare `ProfileFullResponse` → `reply.profile` |
+| `ListDevices`, `ListProfiles` | unchanged | `pagination.total` → `pagination.total_items` |
+| `ActivateDevice` | unchanged | `status` → `activation_status` |
+
+Field mapping on profiles, both directions:
+
+- `role` and a network's `auth_method` are the handler's strings
+  (`load-balancer`, `802.1x`), not the proto enum names;
+- `config` is inline JSON, not base64 — a non-JSON `config` is refused before
+  the request is sent (`ErrProfileConfigNotJSON`);
+- the digests in a reply's `pcr_baseline.values` are hex, not base64
+  (`ErrPCRDigestNotHex` on a bad one);
+- a zero `assigned_at` in a reply (`0001-01-01T00:00:00Z`) is dropped rather
+  than decoded as a timestamp.
+
+REST does not carry `tenant_id` or `bmc` on a profile, nor `pcr_baseline` on a
+write, so those fields are lost on a round trip over REST and survive one over
+gRPC, Unix, QUIC and embedded.
 
 ## 2. Devices
 
@@ -1001,7 +1045,8 @@ before it does on REST.
 `ListDevices` and `ListProfiles` take `common.ListOptions` with
 `common.NewPagination(page, pageSize)`; the reply carries a `PageResult` whose
 `TotalItems` is also how `CountDevices`/`CountProfiles` are satisfied over QUIC.
-The CLI defaults are `--page 1 --page-size 20`; the MCP `profile_list_all`
+Over REST the count is `pagination.total`; the SDK renames it to `total_items`
+(§1b). The CLI defaults are `--page 1 --page-size 20`; the MCP `profile_list_all`
 default is `page 1, page_size 50`. Both result sets are unbounded in principle —
 always paginate.
 

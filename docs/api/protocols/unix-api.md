@@ -12,8 +12,7 @@ Default path: `/run/platformd.sock`
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PLATFORM_SOCKET_PATH` | Socket path | `/run/platformd.sock` |
-| `PLATFORMD_SOCKET` | Alternative name | `/run/platformd.sock` |
+| `PLATFORMCTL_CONTEXT` | platformctl context to use; a local context names the socket | the config's current context (`/run/platformd.sock`) |
 
 ### Requirements
 
@@ -142,8 +141,9 @@ socket:
 # Use Unix socket by default (when running as root)
 sudo platformctl ca info
 
-# Explicit socket path
-sudo platformctl --socket /run/platformd.sock ca info
+# Another socket path: name it in a local context, then select it
+sudo platformctl context add custom --socket-path /path/to/custom.sock
+sudo platformctl --context custom ca info
 
 # Issue certificate
 sudo platformctl ca issue \
@@ -178,12 +178,12 @@ if [ ! -S "$SOCKET" ]; then
 fi
 
 # Get platform version
-VERSION=$(platformctl --socket "$SOCKET" version)
+VERSION=$(platformctl version)
 echo "Platform version: $VERSION"
 
 # Issue certificate for this host
 HOSTNAME=$(hostname -f)
-platformctl --socket "$SOCKET" ca issue \
+platformctl ca issue \
     --common-name "$HOSTNAME" \
     --dns-names "$HOSTNAME,localhost" \
     --output /etc/ssl/certs/server.crt

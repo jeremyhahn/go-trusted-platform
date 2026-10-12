@@ -1,6 +1,6 @@
 # Attestation — API
 
-> **Status: NORMATIVE** · Scope: attestation routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: attestation routes on every transport · Last verified: 2026-10-12
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -24,7 +24,7 @@ two share a column below. `ServiceRegistry.Attestation`
 
 gRPC: `AttestationService` in `pkg/api/grpc/proto/attestation.proto` — ten RPCs.
 REST: `pkg/webservice/v1/rest/attestation/` (`server_router.go`,
-`events_router.go`, and a second legacy router — see §3).
+`events_router.go`, `reports_router.go`, `clock_router.go` — see §3).
 QUIC: `pkg/api/quic/attestation_handlers.go` plus the base range in
 `sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x70`–`0x77`
 (`pkg/api/daemon/quic_service.go:522`).
@@ -64,23 +64,22 @@ register as G7.
 
 ---
 
-## 3. Two REST attestation routers
+## 3. One REST attestation surface
 
-There are two, mounted on the same `/api/v1/attestation` prefix:
+The REST rows above are the whole surface: every route is registered under
+`/api/v1/attestation` by `server_router.go` (`/manifests`, `/manifests/build`,
+`/manifests/verify`, `/manifests/{id}`, `/quote`, `/quote/verify`, `/host`,
+`/vm/{id}`, `/container/{id}`) or by the events, reports and clock routers.
+`pkg/webservice/v1/testdata/routes.golden` is the authority. The older router
+that registered `/manifest` (singular), `/manifest/build`, `/verify` and
+`GET /quote` no longer exists, and the daemon answers those paths `404`.
 
-- **`server_router.go`** — the current surface, listed above: `/manifests`,
-  `/manifests/build`, `/manifests/verify`, `/manifests/{id}`, `/quote`,
-  `/quote/verify`, `/host`, `/vm/{id}`, `/container/{id}`.
-- **A second, older router** registering `/manifest` (singular),
-  `/manifest/build`, `/verify`, and `GET /quote`.
-
-The old paths differ from the new by more than a plural: the old `/verify`
-became `/manifests/verify`, and the old **`GET`** `/quote` became **`POST`**
-`/quote` (a quote request carries a nonce, which does not belong in a query
-string). New clients use the `server_router.go` forms. **Which of the two is
-canonical, and whether the older one should be removed or kept as a compatibility
-alias, is an open question for the owner** — recorded in the migration report,
-not decided here.
+The REST adapter in `test/integration/attestation/rest_adapter.go` calls only
+these routes. The suite verbs no route serves — VM identity, a separate
+manifest-signing step, push, and the workload chain — return `ErrRESTNoRoute`
+instead of calling a path the daemon never registered (#546).
+`BuildManifest` signs as it builds, and `VerifyManifest` fetches the stored
+manifest and posts it to `/manifests/verify`, which takes the manifest itself.
 
 ---
 

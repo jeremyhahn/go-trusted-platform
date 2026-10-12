@@ -78,13 +78,8 @@ func (a *CLIAdapter) Setup(ctx context.Context) error {
 	if err != nil {
 		return ErrCLINotFound{Path: a.cliPath}
 	}
-	dir, err := os.MkdirTemp("", "platformctl-tenant-test-*")
+	dir, path, err := helpers.WriteTempLocalCLIConfig(GetSocketPath(), GetGRPCEndpoint())
 	if err != nil {
-		return err
-	}
-	path, err := helpers.WriteLocalCLIConfig(dir, GetSocketPath(), GetGRPCEndpoint())
-	if err != nil {
-		_ = os.RemoveAll(dir)
 		return err
 	}
 	a.configDir, a.configPath = dir, path

@@ -90,149 +90,36 @@ func (e ErrFindDeviceBySerialFailed) Error() string {
 
 // Register command errors
 
-// ErrRegisterHostnameRequired is returned when hostname is not provided
-type ErrRegisterHostnameRequired struct{}
+// ErrRegisterSerialRequired is returned when --serial is not provided
+type ErrRegisterSerialRequired struct{}
 
-func (e ErrRegisterHostnameRequired) Error() string {
-	return "device register: --hostname is required"
+func (e ErrRegisterSerialRequired) Error() string {
+	return "device register: --serial is required"
 }
 
-// ErrRegisterMACRequired is returned when MAC address is not provided
-type ErrRegisterMACRequired struct{}
-
-func (e ErrRegisterMACRequired) Error() string {
-	return "device register: --mac is required"
-}
-
-// ErrRegisterRoleRequired is returned when role is not provided
-type ErrRegisterRoleRequired struct{}
-
-func (e ErrRegisterRoleRequired) Error() string {
-	return "device register: --role is required"
-}
-
-// ErrRegisterInvalidRole is returned when an invalid role is provided
-type ErrRegisterInvalidRole struct {
-	Role string
-}
-
-func (e ErrRegisterInvalidRole) Error() string {
-	return fmt.Sprintf("device register: invalid role %q, must be one of: control-plane, gateway, worker", e.Role)
-}
-
-// ErrRegisterTemplateRequired is returned when template name is not provided
-type ErrRegisterTemplateRequired struct{}
-
-func (e ErrRegisterTemplateRequired) Error() string {
-	return "device register: --template is required"
-}
-
-// ErrRegisterServerRequired is returned when server URL is not provided
-type ErrRegisterServerRequired struct{}
-
-func (e ErrRegisterServerRequired) Error() string {
-	return "device register: --server is required"
-}
-
-// ErrRegisterReadOverrideFile is returned when the override file cannot be read
-type ErrRegisterReadOverrideFile struct {
-	Path  string
-	Cause error
-}
-
-func (e ErrRegisterReadOverrideFile) Error() string {
-	return fmt.Sprintf("device register: failed to read override file %s: %v", e.Path, e.Cause)
-}
-
-func (e ErrRegisterReadOverrideFile) Unwrap() error {
-	return e.Cause
-}
-
-// ErrRegisterParseOverrideFile is returned when the override file cannot be parsed
-type ErrRegisterParseOverrideFile struct {
-	Path  string
-	Cause error
-}
-
-func (e ErrRegisterParseOverrideFile) Error() string {
-	return fmt.Sprintf("device register: failed to parse override file %s: %v", e.Path, e.Cause)
-}
-
-func (e ErrRegisterParseOverrideFile) Unwrap() error {
-	return e.Cause
-}
-
-// ErrRegisterLoadCACert is returned when the CA certificate cannot be loaded
-type ErrRegisterLoadCACert struct {
-	Path  string
-	Cause error
-}
-
-func (e ErrRegisterLoadCACert) Error() string {
-	return fmt.Sprintf("device register: failed to load CA certificate %s: %v", e.Path, e.Cause)
-}
-
-func (e ErrRegisterLoadCACert) Unwrap() error {
-	return e.Cause
-}
-
-// ErrRegisterInvalidCACert is returned when the CA certificate PEM is invalid
-type ErrRegisterInvalidCACert struct {
-	Path string
-}
-
-func (e ErrRegisterInvalidCACert) Error() string {
-	return fmt.Sprintf("device register: CA certificate file contains no valid PEM data: %s", e.Path)
-}
-
-// ErrRegisterTemplateLookupFailed is returned when the template lookup fails
-type ErrRegisterTemplateLookupFailed struct {
-	Name  string
-	Cause error
-}
-
-func (e ErrRegisterTemplateLookupFailed) Error() string {
-	return fmt.Sprintf("device register: failed to look up template %q: %v", e.Name, e.Cause)
-}
-
-func (e ErrRegisterTemplateLookupFailed) Unwrap() error {
-	return e.Cause
-}
-
-// ErrRegisterCreateProfileFailed is returned when creating the profile from template fails
-type ErrRegisterCreateProfileFailed struct {
-	Cause error
-}
-
-func (e ErrRegisterCreateProfileFailed) Error() string {
-	return fmt.Sprintf("device register: failed to create profile: %v", e.Cause)
-}
-
-func (e ErrRegisterCreateProfileFailed) Unwrap() error {
-	return e.Cause
-}
-
-// ErrRegisterInvalidMACAddress is returned when the MAC address format is invalid
-type ErrRegisterInvalidMACAddress struct {
-	MAC string
-}
-
-func (e ErrRegisterInvalidMACAddress) Error() string {
-	return fmt.Sprintf("device register: invalid MAC address %q", e.MAC)
-}
-
-// ErrRegisterInvalidServerURL is returned when the server URL cannot be parsed
-type ErrRegisterInvalidServerURL struct {
-	Server string
+// ErrRegisterCreateDeviceFailed is returned when the control plane rejects
+// the CreateDevice call
+type ErrRegisterCreateDeviceFailed struct {
+	Serial string
 	Cause  error
 }
 
-func (e ErrRegisterInvalidServerURL) Error() string {
-	return fmt.Sprintf("device register: invalid server URL %q: %v", e.Server, e.Cause)
+func (e ErrRegisterCreateDeviceFailed) Error() string {
+	return fmt.Sprintf("device register: failed to create device %q: %v", e.Serial, e.Cause)
 }
 
-func (e ErrRegisterInvalidServerURL) Unwrap() error {
+func (e ErrRegisterCreateDeviceFailed) Unwrap() error {
 	return e.Cause
+}
+
+// ErrRegisterEmptyResponse is returned when CreateDevice succeeds but the
+// response carries no device record
+type ErrRegisterEmptyResponse struct {
+	Serial string
+}
+
+func (e ErrRegisterEmptyResponse) Error() string {
+	return fmt.Sprintf("device register: control plane returned no device for serial %q", e.Serial)
 }
 
 // Profile command errors

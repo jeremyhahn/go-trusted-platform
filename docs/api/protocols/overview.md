@@ -29,8 +29,8 @@ The Trusted Platform daemon exposes all services via five protocols, providing m
 - Local host only
 
 ```bash
-# Example: CLI using Unix socket
-platformctl --socket /run/platformd.sock ca info
+# Example: CLI using Unix socket (the default local context dials /run/platformd.sock)
+platformctl ca info
 ```
 
 ### gRPC

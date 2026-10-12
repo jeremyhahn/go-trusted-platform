@@ -16,6 +16,7 @@
 package helpers
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 )
@@ -45,4 +46,21 @@ func WriteLocalCLIConfig(dir, socketPath, grpcAddr string) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// WriteTempLocalCLIConfig writes the WriteLocalCLIConfig file into a new
+// temporary directory and returns the directory, which the caller removes on
+// teardown, and the file's path. Pass the path with --config: platformctl has
+// no --socket flag, so a CLI adapter that tried to name the harness socket on
+// the command line had every command rejected before it dialled (#540).
+func WriteTempLocalCLIConfig(socketPath, grpcAddr string) (dir, path string, err error) {
+	dir, err = os.MkdirTemp("", "platformctl-config-*")
+	if err != nil {
+		return "", "", err
+	}
+	path, err = WriteLocalCLIConfig(dir, socketPath, grpcAddr)
+	if err != nil {
+		return "", "", errors.Join(err, os.RemoveAll(dir))
+	}
+	return dir, path, nil
 }

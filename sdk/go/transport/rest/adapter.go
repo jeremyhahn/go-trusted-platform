@@ -342,6 +342,10 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 		if err != nil {
 			return err
 		}
+		body, err = encodeRequestBody(method, body)
+		if err != nil {
+			return err
+		}
 		if reqErr := c.adapter.DoRequest(ctx, entry.method, path, body, result); reqErr != nil {
 			return translateErrorToGRPC(reqErr)
 		}
@@ -351,10 +355,38 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 	// Flat routes: today's behavior — derive path from the static map
 	// (or fall back to the gRPC method-name heuristic).
 	path, httpMethod := mapGRPCMethodToREST(method)
-	if err := c.adapter.DoRequest(ctx, httpMethod, path, args, result); err != nil {
+	body, err := encodeRequestBody(method, args)
+	if err != nil {
+		return err
+	}
+	if err := c.adapter.DoRequest(ctx, httpMethod, path, body, result); err != nil {
 		return translateErrorToGRPC(err)
 	}
 	return c.finishInvoke(hasDecoder, decode, raw, reply)
+}
+
+// restRequestEncoder rewrites a request body into the JSON shape the
+// server handler decodes, for methods whose handler does not accept the pb
+// request message as is.
+type restRequestEncoder func(body interface{}) (interface{}, error)
+
+// restRequestEncoders routes gRPC methods whose REST request bodies need
+// custom encoding. Methods absent from this map send the body unchanged.
+var restRequestEncoders = map[string]restRequestEncoder{}
+
+// encodeRequestBody applies the method's request encoder, if any. An encoder
+// failure is the caller's request, so it surfaces as InvalidArgument and
+// nothing is sent.
+func encodeRequestBody(method string, body interface{}) (interface{}, error) {
+	encode, ok := restRequestEncoders[method]
+	if !ok {
+		return body, nil
+	}
+	encoded, err := encode(body)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return encoded, nil
 }
 
 // finishInvoke applies the method's custom response decoder, if any, to the
@@ -384,17 +416,16 @@ func buildTemplatedRequest(route templatedRoute, args interface{}) (path string,
 	resolved := route.path
 
 	for _, p := range route.pathParams {
-		fd := rm.Descriptor().Fields().ByName(p.field)
-		if fd == nil {
+		v, fd, ok := fieldPathValue(rm, p.field)
+		if !ok {
 			return "", nil, status.Errorf(codes.Internal,
 				"REST adapter: proto field %q missing on %s", p.field, rm.Descriptor().FullName())
 		}
-		raw, encoded, ok := encodePathField(rm.Get(fd), fd)
+		_, encoded, ok := encodePathField(v, fd)
 		if !ok {
 			return "", nil, status.Errorf(codes.InvalidArgument,
 				"%s requires non-zero %s for templated REST route", rm.Descriptor().FullName(), p.field)
 		}
-		_ = raw
 		resolved = strings.ReplaceAll(resolved, p.placeholder, encoded)
 	}
 
@@ -422,10 +453,7 @@ func buildTemplatedRequest(route templatedRoute, args interface{}) (path string,
 	clone := proto.Clone(msg)
 	cloneRefl := clone.ProtoReflect()
 	for _, p := range route.pathParams {
-		fd := cloneRefl.Descriptor().Fields().ByName(p.field)
-		if fd != nil {
-			cloneRefl.Clear(fd)
-		}
+		clearProtoFieldPath(cloneRefl, p.field)
 	}
 	for _, qp := range route.queryParams {
 		clearProtoFieldPath(cloneRefl, qp.field)
@@ -508,6 +536,39 @@ func clearProtoFieldPath(rm protoreflect.Message, fieldPath string) {
 	}
 }
 
+// fieldPathDescriptor resolves a dotted proto field path ("device.id")
+// against md and returns the leaf field. Every segment but the last must
+// name a singular message field; ok is false otherwise.
+func fieldPathDescriptor(md protoreflect.MessageDescriptor, fieldPath string) (protoreflect.FieldDescriptor, bool) {
+	segments := strings.Split(fieldPath, ".")
+	for _, segment := range segments[:len(segments)-1] {
+		fd := md.Fields().ByName(protoreflect.Name(segment))
+		if fd == nil || fd.Kind() != protoreflect.MessageKind || fd.IsList() || fd.IsMap() {
+			return nil, false
+		}
+		md = fd.Message()
+	}
+	leaf := md.Fields().ByName(protoreflect.Name(segments[len(segments)-1]))
+	return leaf, leaf != nil
+}
+
+// fieldPathValue reads the value at a dotted proto field path. An unset
+// intermediate message reads as empty, so its leaf reads as the zero
+// value and encodePathField rejects it. ok is false when the path does not
+// resolve on the message's descriptor.
+func fieldPathValue(rm protoreflect.Message, fieldPath string) (protoreflect.Value, protoreflect.FieldDescriptor, bool) {
+	leaf, ok := fieldPathDescriptor(rm.Descriptor(), fieldPath)
+	if !ok {
+		return protoreflect.Value{}, nil, false
+	}
+	segments := strings.Split(fieldPath, ".")
+	current := rm
+	for _, segment := range segments[:len(segments)-1] {
+		current = current.Get(current.Descriptor().Fields().ByName(protoreflect.Name(segment))).Message()
+	}
+	return current.Get(leaf), leaf, true
+}
+
 // encodePathField extracts a path-parameter value from a proto field.
 // Returns (rawString, urlEscapedString, ok). ok is false when the field
 // is missing or has its zero value, so callers can reject zero IDs as
@@ -567,10 +628,12 @@ func (c *restClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, m
 // pathParam describes a single placeholder substitution in a templated
 // REST route. The placeholder is a literal segment in the route's path
 // template (e.g. "{profileID}") and field is the proto field name in
-// the request message (snake_case, as protoreflect surfaces it).
+// the request message (snake_case, as protoreflect surfaces it). field
+// may be a dotted path ("device.id") into a singular nested message, for
+// update requests that carry the identifier inside the resource.
 type pathParam struct {
 	placeholder string
-	field       protoreflect.Name
+	field       string
 }
 
 // queryParam describes a single query-string parameter derived from a
@@ -781,6 +844,41 @@ var templatedRouteTable = map[string]templatedRoute{
 	// /api/v1/devices, and no path is served under both (#266).
 	"/platform.v1.DeviceService/GetProfile": itemRoute("/api/v1/device/profiles/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
 
+	// The remaining DeviceService item and lookup routes, each written with
+	// the exact template pkg/webservice/v1/router/device.go registers (#321).
+	// Before #321 the update, delete and lookup rows sat in the flat table on
+	// the collection path or on invented by-serial / by-mac paths, so every
+	// one of them answered 404 or 405. Update requests carry the identifier
+	// inside the resource, hence the dotted field.
+	"/platform.v1.DeviceService/UpdateDevice":            itemRoute("/api/v1/devices/{id:[0-9]+}", http.MethodPut, "{id:[0-9]+}", "device.id"),
+	"/platform.v1.DeviceService/DeleteDevice":            itemRoute("/api/v1/devices/{id:[0-9]+}", http.MethodDelete, "{id:[0-9]+}", "id"),
+	"/platform.v1.DeviceService/FindDeviceBySerial":      itemRoute("/api/v1/devices/serial/{serial}", http.MethodGet, "{serial}", "serial"),
+	"/platform.v1.DeviceService/UpdateProfile":           itemRoute("/api/v1/device/profiles/{id:[0-9]+}", http.MethodPut, "{id:[0-9]+}", "profile.id"),
+	"/platform.v1.DeviceService/DeleteProfile":           itemRoute("/api/v1/device/profiles/{id:[0-9]+}", http.MethodDelete, "{id:[0-9]+}", "id"),
+	"/platform.v1.DeviceService/FindProfileByMACAddress": itemRoute("/api/v1/device/profiles/mac/{mac}", http.MethodGet, "{mac}", "mac_address"),
+	"/platform.v1.DeviceService/FindProfileBySerial":     itemRoute("/api/v1/device/profiles/serial/{serial}", http.MethodGet, "{serial}", "serial"),
+
+	// POST /api/v1/devices/{id}/attest (admin gate). The server leaves this
+	// id unconstrained; evidence travels in the body.
+	"/platform.v1.DeviceService/AttestDevice": itemRoute("/api/v1/devices/{id}/attest", http.MethodPost, "{id}", "device_id"),
+
+	// POST /api/v1/device/templates/{id:[0-9]+}/create-profile. The body
+	// keeps {"overrides": {...}}.
+	"/platform.v1.DeviceService/CreateProfileFromTemplate": itemRoute("/api/v1/device/templates/{id:[0-9]+}/create-profile", http.MethodPost, "{id:[0-9]+}", "template_id"),
+
+	// Config delivery: the lookup keys are query parameters, and the server
+	// names the MAC parameter "mac".
+	"/platform.v1.DeviceService/FindConfigForDevice": {
+		path:   "/api/v1/device/profiles/find-config",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "ek_serial", field: "ek_serial"},
+			{name: "mac", field: "mac_address"},
+		},
+	},
+	"/platform.v1.DeviceService/AssignProfileToDevice":     itemRoute("/api/v1/device/profiles/{id:[0-9]+}/assign", http.MethodPost, "{id:[0-9]+}", "profile_id"),
+	"/platform.v1.DeviceService/UnassignProfileFromDevice": itemRoute("/api/v1/device/profiles/{id:[0-9]+}/unassign", http.MethodPost, "{id:[0-9]+}", "profile_id"),
+
 	// GET /api/v1/invitations/{id:[0-9]+} -- proto field is invitation_id.
 	"/platform.v1.InvitationService/GetInvitation": itemRoute("/api/v1/invitations/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "invitation_id"),
 
@@ -868,7 +966,7 @@ var templatedRouteTable = map[string]templatedRoute{
 // and returned the collection with a 200, forever (#379). placeholder is the
 // literal {segment} in path; field is the snake_case proto field on the
 // request message that fills it.
-func itemRoute(path, method, placeholder string, field protoreflect.Name) templatedRoute {
+func itemRoute(path, method, placeholder, field string) templatedRoute {
 	return templatedRoute{
 		path:       path,
 		method:     method,
@@ -1050,22 +1148,18 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.TPMService/UndefineNVRAM":       {"/api/v1/tpm/nvram", http.MethodDelete},
 	"/platform.v1.TPMService/GetRandom":           {"/api/v1/tpm/random", http.MethodPost},
 
-	// Device Service
-	"/platform.v1.DeviceService/CreateDevice":            {"/api/v1/devices", http.MethodPost},
-	"/platform.v1.DeviceService/DeleteDevice":            {"/api/v1/devices", http.MethodDelete},
-	"/platform.v1.DeviceService/ListDevices":             {"/api/v1/devices", http.MethodGet},
-	"/platform.v1.DeviceService/UpdateDevice":            {"/api/v1/devices", http.MethodPut},
-	"/platform.v1.DeviceService/CountDevices":            {"/api/v1/devices/count", http.MethodGet},
-	"/platform.v1.DeviceService/FindDeviceBySerial":      {"/api/v1/devices/by-serial", http.MethodGet},
-	"/platform.v1.DeviceService/ActivateDevice":          {"/api/v1/devices/activate", http.MethodPost},
-	"/platform.v1.DeviceService/CreateProfile":           {"/api/v1/device/profiles", http.MethodPost},
-	"/platform.v1.DeviceService/UpdateProfile":           {"/api/v1/device/profiles", http.MethodPut},
-	"/platform.v1.DeviceService/DeleteProfile":           {"/api/v1/device/profiles", http.MethodDelete},
-	"/platform.v1.DeviceService/ListProfiles":            {"/api/v1/device/profiles", http.MethodGet},
-	"/platform.v1.DeviceService/CountProfiles":           {"/api/v1/device/profiles/count", http.MethodGet},
-	"/platform.v1.DeviceService/FindProfileByMACAddress": {"/api/v1/device/profiles/by-mac", http.MethodGet},
-	"/platform.v1.DeviceService/FindProfileBySerial":     {"/api/v1/device/profiles/by-serial", http.MethodGet},
-	"/platform.v1.DeviceService/FindMatchingProfile":     {"/api/v1/device/profiles/match", http.MethodPost},
+	// Device Service. The item, lookup and nested-action routes live in
+	// templatedRouteTable; these are the collection, count and match routes.
+	// ActivateDevice targets the admin JSON route: /device/activate is the
+	// machine-facing mTLS route a device calls for itself.
+	"/platform.v1.DeviceService/CreateDevice":        {"/api/v1/devices", http.MethodPost},
+	"/platform.v1.DeviceService/ListDevices":         {"/api/v1/devices", http.MethodGet},
+	"/platform.v1.DeviceService/CountDevices":        {"/api/v1/devices/count", http.MethodGet},
+	"/platform.v1.DeviceService/ActivateDevice":      {"/api/v1/device/activate-json", http.MethodPost},
+	"/platform.v1.DeviceService/CreateProfile":       {"/api/v1/device/profiles", http.MethodPost},
+	"/platform.v1.DeviceService/ListProfiles":        {"/api/v1/device/profiles", http.MethodGet},
+	"/platform.v1.DeviceService/CountProfiles":       {"/api/v1/device/profiles/count", http.MethodGet},
+	"/platform.v1.DeviceService/FindMatchingProfile": {"/api/v1/device/profiles/match", http.MethodPost},
 
 	// SDN Service
 	"/platform.v1.SDNService/CreateBridge":     {"/api/v1/sdn/bridges", http.MethodPost},

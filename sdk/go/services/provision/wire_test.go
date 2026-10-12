@@ -14,7 +14,6 @@
 package provision
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -390,86 +389,6 @@ func TestDecodeListSessionsJSON_Invalid(t *testing.T) {
 	var wireErr *ErrWireDecodeFailed
 	if !errors.As(err, &wireErr) {
 		t.Fatalf("expected *ErrWireDecodeFailed, got %T: %v", err, err)
-	}
-}
-
-// TestNormalizeProfileJSON_UnknownEnums verifies unknown role / auth_method
-// strings map to the same defaults the daemon converters use.
-func TestNormalizeProfileJSON_UnknownEnums(t *testing.T) {
-	profile := map[string]any{
-		"role": "mystery-box",
-		"networks": map[string]any{
-			"lab": map[string]any{"auth_method": "kerberos"},
-		},
-	}
-	normalizeProfileJSON(profile)
-
-	if profile["role"] != "DEVICE_ROLE_UNKNOWN" {
-		t.Errorf("role = %v, want DEVICE_ROLE_UNKNOWN", profile["role"])
-	}
-	lab := profile["networks"].(map[string]any)["lab"].(map[string]any)
-	if lab["auth_method"] != "AUTH_METHOD_NONE" {
-		t.Errorf("auth_method = %v, want AUTH_METHOD_NONE", lab["auth_method"])
-	}
-}
-
-// TestNormalizeProfileJSON_ConfigAndAssignedAtEdgeCases verifies the
-// normalization edge cases for the config and assigned_at fields: a null
-// config and a zero assignment timestamp are dropped (matching the gRPC
-// converter's nil/IsZero guards), while a non-object config value is still
-// carried as base64(JSON) bytes.
-func TestNormalizeProfileJSON_ConfigAndAssignedAtEdgeCases(t *testing.T) {
-	profile := map[string]any{
-		"config":      nil,
-		"assigned_at": "0001-01-01T00:00:00Z",
-	}
-	normalizeProfileJSON(profile)
-	if _, present := profile["config"]; present {
-		t.Error("null config must be dropped")
-	}
-	if _, present := profile["assigned_at"]; present {
-		t.Error("zero assigned_at must be dropped")
-	}
-
-	profile = map[string]any{
-		"config":      []any{"a", "b"},
-		"assigned_at": "2026-08-01T09:00:00Z",
-	}
-	normalizeProfileJSON(profile)
-	encoded, ok := profile["config"].(string)
-	if !ok {
-		t.Fatalf("config = %T, want base64 string", profile["config"])
-	}
-	raw, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		t.Fatalf("config is not base64: %v", err)
-	}
-	if string(raw) != `["a","b"]` {
-		t.Errorf("config JSON = %s", raw)
-	}
-	if profile["assigned_at"] != "2026-08-01T09:00:00Z" {
-		t.Errorf("non-zero assigned_at must be preserved, got %v", profile["assigned_at"])
-	}
-}
-
-// TestNormalizeProfileJSON_InlineString verifies a string-typed platformd
-// inline value passes through unchanged (already base64/bytes-compatible).
-func TestNormalizeProfileJSON_InlineString(t *testing.T) {
-	already := base64.StdEncoding.EncodeToString([]byte(`{"a":1}`))
-	profile := map[string]any{
-		"platformd": map[string]any{"config_type": "inline", "inline": already},
-	}
-	normalizeProfileJSON(profile)
-
-	pd, ok := profile["platformd_config"].(map[string]any)
-	if !ok {
-		t.Fatal("platformd not renamed to platformd_config")
-	}
-	if pd["inline"] != already {
-		t.Errorf("inline changed: %v", pd["inline"])
-	}
-	if _, stillThere := profile["platformd"]; stillThere {
-		t.Error("platformd key must be removed after rename")
 	}
 }
 

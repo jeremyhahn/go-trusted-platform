@@ -52,12 +52,7 @@ Examples:
   platformctl device find-serial ABC123
 
   # Register a device with the control plane
-  platformctl device register \
-    --hostname gw-01 \
-    --mac 00:25:90:FF:AA:01 \
-    --role gateway \
-    --template gateway-default \
-    --server https://10.4.2.140:8443
+  platformctl device register --serial SN-0001 --model r640
 
   # Delete a device
   platformctl device delete 123

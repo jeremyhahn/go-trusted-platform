@@ -201,10 +201,12 @@ platformctl service stop dns
 platformctl health
 ```
 
-Override socket path:
+Override socket path. platformctl has no `--socket` flag; name the socket in a
+local context and select it with `--context` (or `PLATFORMCTL_CONTEXT`):
 
 ```bash
-platformctl --socket /tmp/platformd.sock status
+platformctl context add custom --socket-path /tmp/platformd.sock
+platformctl --context custom status
 ```
 
 ## Socket Management
@@ -348,7 +350,7 @@ Health check via systemd:
 
 ```ini
 [Service]
-ExecStartPost=/usr/local/bin/platformctl --socket /run/platformd.sock health
+ExecStartPost=/usr/local/bin/platformctl health
 ```
 
 ## See Also

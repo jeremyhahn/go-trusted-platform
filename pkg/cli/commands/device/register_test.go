@@ -15,569 +15,193 @@ package device
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/device"
 )
 
-// ============================================================================
-// Register Command Creation Tests
-// ============================================================================
+// recordingDeviceService is a DeviceServiceClient stub that records which
+// create RPC register reached. Any RPC it does not override panics through
+// the nil embedded interface, so a stray call fails the test.
+type recordingDeviceService struct {
+	platformv1.DeviceServiceClient
 
-func TestNewRegisterCommand(t *testing.T) {
-	getFlags := getTestFlagsWithFormat(cli.OutputFormatJSON)
-
-	cmd := newRegisterCommand(getFlags)
-
-	require.NotNil(t, cmd)
-	assert.Equal(t, "register", cmd.Use)
-	assert.Equal(t, "Register a device with the control plane", cmd.Short)
-	assert.Contains(t, cmd.Long, "Register a new device")
-
-	// Verify all flags exist with correct defaults
-	hostnameFlag := cmd.Flag("hostname")
-	require.NotNil(t, hostnameFlag)
-	assert.Equal(t, "", hostnameFlag.DefValue)
-
-	macFlag := cmd.Flag("mac")
-	require.NotNil(t, macFlag)
-	assert.Equal(t, "", macFlag.DefValue)
-
-	roleFlag := cmd.Flag("role")
-	require.NotNil(t, roleFlag)
-	assert.Equal(t, "", roleFlag.DefValue)
-
-	templateFlag := cmd.Flag("template")
-	require.NotNil(t, templateFlag)
-	assert.Equal(t, "", templateFlag.DefValue)
-
-	overrideFlag := cmd.Flag("override-file")
-	require.NotNil(t, overrideFlag)
-	assert.Equal(t, "", overrideFlag.DefValue)
-
-	serverFlag := cmd.Flag("server")
-	require.NotNil(t, serverFlag)
-	assert.Equal(t, "", serverFlag.DefValue)
-
-	caCertFlag := cmd.Flag("ca-cert")
-	require.NotNil(t, caCertFlag)
-	assert.Equal(t, "", caCertFlag.DefValue)
+	createDeviceReq *platformv1.CreateDeviceRequest
+	createProfiles  int
+	reply           *platformv1.CreateDeviceResponse
+	err             error
 }
 
-func TestNewRegisterCommand_FlagParsing(t *testing.T) {
-	getFlags := getTestFlagsWithFormat(cli.OutputFormatJSON)
-	cmd := newRegisterCommand(getFlags)
+func (s *recordingDeviceService) CreateDevice(_ context.Context, in *platformv1.CreateDeviceRequest, _ ...grpc.CallOption) (*platformv1.CreateDeviceResponse, error) {
+	s.createDeviceReq = in
+	return s.reply, s.err
+}
 
-	args := []string{
-		"--hostname", "gw-01",
-		"--mac", "00:25:90:FF:AA:01",
-		"--role", "gateway",
-		"--template", "gateway-default",
-		"--server", "https://10.4.2.140:8443",
-		"--ca-cert", "/etc/platform/ca.pem",
-		"--override-file", "/tmp/overrides.yaml",
+func (s *recordingDeviceService) CreateProfile(_ context.Context, _ *platformv1.CreateProfileRequest, _ ...grpc.CallOption) (*platformv1.CreateProfileResponse, error) {
+	s.createProfiles++
+	return &platformv1.CreateProfileResponse{}, nil
+}
+
+func TestNewRegisterCommand_Flags(t *testing.T) {
+	cmd := newRegisterCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
+
+	for _, name := range []string{"serial", "model", "ek-cert", "attest-pub", "attest-cert", "signing-pub", "hash-algo"} {
+		assert.NotNil(t, cmd.Flags().Lookup(name), "flag --%s", name)
 	}
+	for _, name := range []string{"hostname", "mac", "role", "template", "override-file", "server", "ca-cert"} {
+		assert.Nil(t, cmd.Flags().Lookup(name), "profile-era flag --%s must be gone", name)
+	}
+}
 
-	err := cmd.ParseFlags(args)
+func TestNewRegisterCommand_RejectsArgs(t *testing.T) {
+	cmd := newRegisterCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
+	cmd.SetArgs([]string{"--serial", "SN-1", "extra"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+
+	require.Error(t, cmd.Execute())
+}
+
+func TestBuildRegisterDevice(t *testing.T) {
+	ekPEM := newCLITestEKCertPEM(t)
+	ekPath := filepath.Join(t.TempDir(), "ek.pem")
+	require.NoError(t, os.WriteFile(ekPath, []byte(ekPEM), 0o600))
+
+	got, err := buildRegisterDevice(&registerFlags{
+		serial:     "SN-0001",
+		model:      "r640",
+		ekCert:     ekPath,
+		attestPub:  "attest-pub",
+		attestCert: "attest-cert",
+		signingPub: "signing-pub",
+		hashAlgo:   11,
+	})
 	require.NoError(t, err)
 
-	assert.Equal(t, "gw-01", cmd.Flag("hostname").Value.String())
-	assert.Equal(t, "00:25:90:FF:AA:01", cmd.Flag("mac").Value.String())
-	assert.Equal(t, "gateway", cmd.Flag("role").Value.String())
-	assert.Equal(t, "gateway-default", cmd.Flag("template").Value.String())
-	assert.Equal(t, "https://10.4.2.140:8443", cmd.Flag("server").Value.String())
-	assert.Equal(t, "/etc/platform/ca.pem", cmd.Flag("ca-cert").Value.String())
-	assert.Equal(t, "/tmp/overrides.yaml", cmd.Flag("override-file").Value.String())
+	assert.Equal(t, "SN-0001", got.Serial)
+	assert.Equal(t, "r640", got.Model)
+	assert.Equal(t, ekPEM, got.EkCert)
+	assert.Equal(t, "attest-pub", got.AttestPub)
+	assert.Equal(t, "attest-cert", got.AttestCert)
+	assert.Equal(t, "signing-pub", got.SigningPub)
+	assert.Equal(t, uint32(11), got.HashAlgoId)
 }
 
-// ============================================================================
-// Flag Validation Tests
-// ============================================================================
-
-func TestValidateRegisterFlags_AllValid(t *testing.T) {
-	rf := &registerFlags{
-		hostname: "gw-01",
-		mac:      "00:25:90:FF:AA:01",
-		role:     "gateway",
-		template: "gateway-default",
-		server:   "https://10.4.2.140:8443",
-	}
-
-	err := validateRegisterFlags(rf)
-	assert.NoError(t, err)
+func TestBuildRegisterDevice_SerialRequired(t *testing.T) {
+	_, err := buildRegisterDevice(&registerFlags{model: "r640"})
+	require.ErrorAs(t, err, &ErrRegisterSerialRequired{})
 }
 
-func TestValidateRegisterFlags_AllRoles(t *testing.T) {
-	tests := []struct {
-		name string
-		role string
-	}{
-		{name: "control-plane", role: "control-plane"},
-		{name: "gateway", role: "gateway"},
-		{name: "worker", role: "worker"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &registerFlags{
-				hostname: "node-01",
-				mac:      "00:25:90:FF:AA:01",
-				role:     tt.role,
-				template: "default",
-				server:   "https://cp:8443",
-			}
-			err := validateRegisterFlags(rf)
-			assert.NoError(t, err)
-		})
-	}
+func TestBuildRegisterDevice_InvalidEKCert(t *testing.T) {
+	_, err := buildRegisterDevice(&registerFlags{
+		serial: "SN-0001",
+		ekCert: "-----BEGIN CERTIFICATE-----\nnot-a-cert\n-----END CERTIFICATE-----\n",
+	})
+	require.ErrorAs(t, err, &ErrProfileEKCertInvalid{})
 }
 
-func TestValidateRegisterFlags_MissingHostname(t *testing.T) {
-	rf := &registerFlags{
-		mac:      "00:25:90:FF:AA:01",
-		role:     "gateway",
-		template: "gateway-default",
-		server:   "https://cp:8443",
-	}
-
-	err := validateRegisterFlags(rf)
-	require.Error(t, err)
-	var hostnameErr ErrRegisterHostnameRequired
-	require.ErrorAs(t, err, &hostnameErr)
+func TestRunRegister_ValidatesBeforeConnecting(t *testing.T) {
+	// No GetContext: reaching the connect step would return ErrNoContextSet.
+	err := runRegister(&cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}, &registerFlags{})
+	require.ErrorAs(t, err, &ErrRegisterSerialRequired{})
 }
 
-func TestValidateRegisterFlags_MissingMAC(t *testing.T) {
-	rf := &registerFlags{
-		hostname: "gw-01",
-		role:     "gateway",
-		template: "gateway-default",
-		server:   "https://cp:8443",
+// TestRegisterAndPrint_CreatesDevice is the #534 regression: register must
+// reach CreateDevice, never CreateProfile, and print the stored device.
+func TestRegisterAndPrint_CreatesDevice(t *testing.T) {
+	stub := &recordingDeviceService{
+		reply: &platformv1.CreateDeviceResponse{Device: &platformv1.Device{
+			Id:         4242,
+			Serial:     "SN-0001",
+			Model:      "r640",
+			HashAlgoId: 11,
+		}},
 	}
+	var out bytes.Buffer
+	printer := cli.NewPrinterWithWriter(cli.OutputFormatJSON, true, &out)
 
-	err := validateRegisterFlags(rf)
-	require.Error(t, err)
-	var macErr ErrRegisterMACRequired
-	require.ErrorAs(t, err, &macErr)
-}
-
-func TestValidateRegisterFlags_InvalidMAC(t *testing.T) {
-	tests := []struct {
-		name string
-		mac  string
-	}{
-		{name: "not a MAC", mac: "not-a-mac"},
-		{name: "too short", mac: "00:25:90"},
-		{name: "invalid chars", mac: "ZZ:ZZ:ZZ:ZZ:ZZ:ZZ"},
-		{name: "too long", mac: "00:25:90:FF:AA:01:BB:CC:DD"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &registerFlags{
-				hostname: "gw-01",
-				mac:      tt.mac,
-				role:     "gateway",
-				template: "gateway-default",
-				server:   "https://cp:8443",
-			}
-
-			err := validateRegisterFlags(rf)
-			require.Error(t, err)
-			var macErr ErrRegisterInvalidMACAddress
-			require.ErrorAs(t, err, &macErr)
-			assert.Equal(t, tt.mac, macErr.MAC)
-		})
-	}
-}
-
-func TestValidateRegisterFlags_ValidMACFormats(t *testing.T) {
-	tests := []struct {
-		name string
-		mac  string
-	}{
-		{name: "colon separated", mac: "00:25:90:FF:AA:01"},
-		{name: "dash separated", mac: "00-25-90-FF-AA-01"},
-		{name: "no separators", mac: "002590FFAA01"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &registerFlags{
-				hostname: "gw-01",
-				mac:      tt.mac,
-				role:     "gateway",
-				template: "gateway-default",
-				server:   "https://cp:8443",
-			}
-
-			err := validateRegisterFlags(rf)
-			assert.NoError(t, err)
-		})
-	}
-}
-
-func TestValidateRegisterFlags_MissingRole(t *testing.T) {
-	rf := &registerFlags{
-		hostname: "gw-01",
-		mac:      "00:25:90:FF:AA:01",
-		template: "gateway-default",
-		server:   "https://cp:8443",
-	}
-
-	err := validateRegisterFlags(rf)
-	require.Error(t, err)
-	var roleErr ErrRegisterRoleRequired
-	require.ErrorAs(t, err, &roleErr)
-}
-
-func TestValidateRegisterFlags_InvalidRole(t *testing.T) {
-	tests := []struct {
-		name string
-		role string
-	}{
-		{name: "unknown role", role: "leader"},
-		{name: "uppercase", role: "GATEWAY"},
-		{name: "mixed case", role: "Control-Plane"},
-		{name: "spaces", role: "  "},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rf := &registerFlags{
-				hostname: "gw-01",
-				mac:      "00:25:90:FF:AA:01",
-				role:     tt.role,
-				template: "gateway-default",
-				server:   "https://cp:8443",
-			}
-
-			err := validateRegisterFlags(rf)
-			require.Error(t, err)
-			var roleErr ErrRegisterInvalidRole
-			require.ErrorAs(t, err, &roleErr)
-			assert.Equal(t, tt.role, roleErr.Role)
-		})
-	}
-}
-
-func TestValidateRegisterFlags_MissingTemplate(t *testing.T) {
-	rf := &registerFlags{
-		hostname: "gw-01",
-		mac:      "00:25:90:FF:AA:01",
-		role:     "gateway",
-		server:   "https://cp:8443",
-	}
-
-	err := validateRegisterFlags(rf)
-	require.Error(t, err)
-	var templateErr ErrRegisterTemplateRequired
-	require.ErrorAs(t, err, &templateErr)
-}
-
-func TestValidateRegisterFlags_MissingServer(t *testing.T) {
-	rf := &registerFlags{
-		hostname: "gw-01",
-		mac:      "00:25:90:FF:AA:01",
-		role:     "gateway",
-		template: "gateway-default",
-	}
-
-	err := validateRegisterFlags(rf)
-	require.Error(t, err)
-	var serverErr ErrRegisterServerRequired
-	require.ErrorAs(t, err, &serverErr)
-}
-
-// ============================================================================
-// Override File Tests
-// ============================================================================
-
-func TestRunRegister_OverrideFileNotFound(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-	}
-	rf := &registerFlags{
-		hostname:     "gw-01",
-		mac:          "00:25:90:FF:AA:01",
-		role:         "gateway",
-		template:     "gateway-default",
-		server:       "https://cp:8443",
-		overrideFile: "/nonexistent/path/overrides.yaml",
-	}
-
-	err := runRegister(flags, rf)
-	require.Error(t, err)
-	var readErr ErrRegisterReadOverrideFile
-	require.ErrorAs(t, err, &readErr)
-	assert.Equal(t, "/nonexistent/path/overrides.yaml", readErr.Path)
-}
-
-func TestRunRegister_InvalidOverrideYAML(t *testing.T) {
-	tmpDir := t.TempDir()
-	overridePath := filepath.Join(tmpDir, "bad.yaml")
-	err := os.WriteFile(overridePath, []byte("{{invalid yaml: ["), 0600)
+	err := registerAndPrint(context.Background(), device.NewClientFromGRPC(stub), printer, cli.OutputFormatJSON,
+		&platformv1.Device{Serial: "SN-0001", Model: "r640", HashAlgoId: 11})
 	require.NoError(t, err)
 
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-	}
-	rf := &registerFlags{
-		hostname:     "gw-01",
-		mac:          "00:25:90:FF:AA:01",
-		role:         "gateway",
-		template:     "gateway-default",
-		server:       "https://cp:8443",
-		overrideFile: overridePath,
-	}
+	require.NotNil(t, stub.createDeviceReq, "register must call CreateDevice")
+	assert.Equal(t, "SN-0001", stub.createDeviceReq.GetDevice().GetSerial())
+	assert.Zero(t, stub.createProfiles, "register must not call CreateProfile")
 
-	err = runRegister(flags, rf)
-	require.Error(t, err)
-	var parseErr ErrRegisterParseOverrideFile
-	require.ErrorAs(t, err, &parseErr)
-	assert.Equal(t, overridePath, parseErr.Path)
+	var printed map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &printed), out.String())
+	assert.EqualValues(t, 4242, printed["id"])
+	assert.Equal(t, "SN-0001", printed["serial"])
+	assert.Equal(t, "r640", printed["model"])
 }
 
-// ============================================================================
-// Context Builder Tests
-// ============================================================================
-
-func TestBuildRegisterContext_WithoutCACert(t *testing.T) {
-	rf := &registerFlags{
-		server: "https://10.4.2.140:8443",
+func TestRegisterAndPrint_Table(t *testing.T) {
+	stub := &recordingDeviceService{
+		reply: &platformv1.CreateDeviceResponse{Device: &platformv1.Device{Id: 7, Serial: "SN-7"}},
 	}
+	var out bytes.Buffer
+	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &out)
 
-	getCtx := buildRegisterContext(rf)
-	ctx, err := getCtx()
-
+	err := registerAndPrint(context.Background(), device.NewClientFromGRPC(stub), printer, cli.OutputFormatTable,
+		&platformv1.Device{Serial: "SN-7"})
 	require.NoError(t, err)
-	require.NotNil(t, ctx)
-	assert.Equal(t, "register", ctx.Name)
-	assert.Equal(t, cli.ContextTypeRemote, ctx.Type)
-	assert.Equal(t, "rest", ctx.Protocol)
-	assert.Equal(t, "https://10.4.2.140:8443", ctx.Remote.Server)
-	assert.Equal(t, "", ctx.Remote.CACert)
+
+	assert.Contains(t, out.String(), "SN-7")
+	assert.Contains(t, out.String(), "7")
 }
 
-func TestBuildRegisterContext_WithCACert(t *testing.T) {
-	rf := &registerFlags{
-		server: "https://cp.example.com:8443",
-		caCert: "/etc/platform/ca.pem",
-	}
+func TestRegisterAndPrint_ServerRejects(t *testing.T) {
+	rejection := status.Error(codes.AlreadyExists, "device with serial SN-0001 already exists")
+	stub := &recordingDeviceService{err: rejection}
+	var out bytes.Buffer
+	printer := cli.NewPrinterWithWriter(cli.OutputFormatJSON, true, &out)
 
-	getCtx := buildRegisterContext(rf)
-	ctx, err := getCtx()
+	err := registerAndPrint(context.Background(), device.NewClientFromGRPC(stub), printer, cli.OutputFormatJSON,
+		&platformv1.Device{Serial: "SN-0001"})
 
-	require.NoError(t, err)
-	require.NotNil(t, ctx)
-	assert.Equal(t, "https://cp.example.com:8443", ctx.Remote.Server)
-	assert.Equal(t, "/etc/platform/ca.pem", ctx.Remote.CACert)
+	var createErr ErrRegisterCreateDeviceFailed
+	require.ErrorAs(t, err, &createErr)
+	assert.Equal(t, "SN-0001", createErr.Serial)
+	assert.ErrorIs(t, err, rejection, "the server's rejection must survive the wrapping")
+	assert.Empty(t, out.String(), "nothing is printed for a rejected device")
 }
 
-// ============================================================================
-// Output Builder Tests
-// ============================================================================
+func TestRegisterDevice_EmptyResponse(t *testing.T) {
+	stub := &recordingDeviceService{reply: &platformv1.CreateDeviceResponse{}}
 
-func TestBuildRegisterOutput(t *testing.T) {
-	profile := &platformv1.DeviceProfile{
-		Id:   42,
-		Name: "gw-01",
-	}
-	rf := &registerFlags{
-		hostname: "gw-01",
-		mac:      "00:25:90:FF:AA:01",
-		role:     "gateway",
-		template: "gateway-default",
-	}
+	_, err := registerDevice(context.Background(), device.NewClientFromGRPC(stub), &platformv1.Device{Serial: "SN-0001"})
 
-	output := buildRegisterOutput(profile, rf)
-
-	assert.Equal(t, uint64(42), output["profile_id"])
-	assert.Equal(t, "gw-01", output["hostname"])
-	assert.Equal(t, "00:25:90:FF:AA:01", output["mac"])
-	assert.Equal(t, "gateway", output["role"])
-	assert.Equal(t, "gateway-default", output["template"])
-	assert.Equal(t, "gw-01", output["name"])
+	var emptyErr ErrRegisterEmptyResponse
+	require.ErrorAs(t, err, &emptyErr)
+	assert.Equal(t, "SN-0001", emptyErr.Serial)
 }
 
-func TestBuildRegisterOutput_AllRoles(t *testing.T) {
-	tests := []struct {
-		name string
-		role string
-	}{
-		{name: "control-plane", role: "control-plane"},
-		{name: "gateway", role: "gateway"},
-		{name: "worker", role: "worker"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			profile := &platformv1.DeviceProfile{Id: 1, Name: "node"}
-			rf := &registerFlags{
-				hostname: "node",
-				mac:      "00:11:22:33:44:55",
-				role:     tt.role,
-				template: "tmpl",
-			}
-
-			output := buildRegisterOutput(profile, rf)
-			assert.Equal(t, tt.role, output["role"])
-		})
-	}
+func TestErrRegisterSerialRequired(t *testing.T) {
+	assert.Equal(t, "device register: --serial is required", ErrRegisterSerialRequired{}.Error())
 }
 
-// ============================================================================
-// Print Result Tests
-// ============================================================================
+func TestErrRegisterCreateDeviceFailed(t *testing.T) {
+	cause := errors.New("rejected")
+	err := ErrRegisterCreateDeviceFailed{Serial: "SN-1", Cause: cause}
 
-func TestPrintRegisterResult(t *testing.T) {
-	var buf bytes.Buffer
-	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
-
-	profile := &platformv1.DeviceProfile{
-		Id:   42,
-		Name: "gw-01",
-	}
-	rf := &registerFlags{
-		hostname: "gw-01",
-		mac:      "00:25:90:FF:AA:01",
-		role:     "gateway",
-		template: "gateway-default",
-	}
-
-	// Verify function executes without panic
-	printRegisterResult(printer, profile, rf)
-}
-
-func TestPrintRegisterResult_ZeroProfileID(t *testing.T) {
-	var buf bytes.Buffer
-	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
-
-	profile := &platformv1.DeviceProfile{
-		Id:   0,
-		Name: "worker-01",
-	}
-	rf := &registerFlags{
-		hostname: "worker-01",
-		mac:      "AA:BB:CC:DD:EE:FF",
-		role:     "worker",
-		template: "worker-default",
-	}
-
-	printRegisterResult(printer, profile, rf)
-}
-
-// ============================================================================
-// Role Mapping Tests
-// ============================================================================
-
-func TestValidRoles_Mapping(t *testing.T) {
-	tests := []struct {
-		label    string
-		expected platformv1.DeviceRole
-	}{
-		{"control-plane", platformv1.DeviceRole_DEVICE_ROLE_SERVER},
-		{"gateway", platformv1.DeviceRole_DEVICE_ROLE_GATEWAY},
-		{"worker", platformv1.DeviceRole_DEVICE_ROLE_CLIENT},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.label, func(t *testing.T) {
-			role, ok := validRoles[tt.label]
-			require.True(t, ok, "role %q should be in validRoles", tt.label)
-			assert.Equal(t, tt.expected, role)
-		})
-	}
-}
-
-func TestValidRoles_InvalidNotPresent(t *testing.T) {
-	invalidRoles := []string{"leader", "primary", "master", "node", ""}
-	for _, role := range invalidRoles {
-		_, ok := validRoles[role]
-		assert.False(t, ok, "role %q should not be in validRoles", role)
-	}
-}
-
-// ============================================================================
-// Register Error Type Tests
-// ============================================================================
-
-func TestErrRegisterHostnameRequired(t *testing.T) {
-	err := ErrRegisterHostnameRequired{}
-	assert.Equal(t, "device register: --hostname is required", err.Error())
-}
-
-func TestErrRegisterMACRequired(t *testing.T) {
-	err := ErrRegisterMACRequired{}
-	assert.Equal(t, "device register: --mac is required", err.Error())
-}
-
-func TestErrRegisterRoleRequired(t *testing.T) {
-	err := ErrRegisterRoleRequired{}
-	assert.Equal(t, "device register: --role is required", err.Error())
-}
-
-func TestErrRegisterInvalidRole(t *testing.T) {
-	err := ErrRegisterInvalidRole{Role: "leader"}
-	assert.Equal(t, `device register: invalid role "leader", must be one of: control-plane, gateway, worker`, err.Error())
-}
-
-func TestErrRegisterTemplateRequired(t *testing.T) {
-	err := ErrRegisterTemplateRequired{}
-	assert.Equal(t, "device register: --template is required", err.Error())
-}
-
-func TestErrRegisterServerRequired(t *testing.T) {
-	err := ErrRegisterServerRequired{}
-	assert.Equal(t, "device register: --server is required", err.Error())
-}
-
-func TestErrRegisterInvalidMACAddress(t *testing.T) {
-	err := ErrRegisterInvalidMACAddress{MAC: "not-a-mac"}
-	assert.Equal(t, `device register: invalid MAC address "not-a-mac"`, err.Error())
-}
-
-func TestErrRegisterReadOverrideFile(t *testing.T) {
-	cause := os.ErrNotExist
-	err := ErrRegisterReadOverrideFile{Path: "/tmp/missing.yaml", Cause: cause}
-	assert.Contains(t, err.Error(), "failed to read override file /tmp/missing.yaml")
+	assert.Equal(t, `device register: failed to create device "SN-1": rejected`, err.Error())
 	assert.ErrorIs(t, err, cause)
 }
 
-func TestErrRegisterParseOverrideFile(t *testing.T) {
-	cause := os.ErrInvalid
-	err := ErrRegisterParseOverrideFile{Path: "/tmp/bad.yaml", Cause: cause}
-	assert.Contains(t, err.Error(), "failed to parse override file /tmp/bad.yaml")
-	assert.ErrorIs(t, err, cause)
-}
-
-func TestErrRegisterLoadCACert(t *testing.T) {
-	cause := os.ErrNotExist
-	err := ErrRegisterLoadCACert{Path: "/tmp/ca.pem", Cause: cause}
-	assert.Contains(t, err.Error(), "failed to load CA certificate /tmp/ca.pem")
-	assert.ErrorIs(t, err, cause)
-}
-
-func TestErrRegisterInvalidCACert(t *testing.T) {
-	err := ErrRegisterInvalidCACert{Path: "/tmp/bad-ca.pem"}
-	assert.Contains(t, err.Error(), "no valid PEM data")
-	assert.Contains(t, err.Error(), "/tmp/bad-ca.pem")
-}
-
-func TestErrRegisterTemplateLookupFailed(t *testing.T) {
-	cause := os.ErrNotExist
-	err := ErrRegisterTemplateLookupFailed{Name: "gateway-default", Cause: cause}
-	assert.Contains(t, err.Error(), `failed to look up template "gateway-default"`)
-	assert.ErrorIs(t, err, cause)
-}
-
-func TestErrRegisterCreateProfileFailed(t *testing.T) {
-	cause := os.ErrPermission
-	err := ErrRegisterCreateProfileFailed{Cause: cause}
-	assert.Contains(t, err.Error(), "failed to create profile")
-	assert.ErrorIs(t, err, cause)
+func TestErrRegisterEmptyResponse(t *testing.T) {
+	assert.Equal(t, `device register: control plane returned no device for serial "SN-1"`,
+		ErrRegisterEmptyResponse{Serial: "SN-1"}.Error())
 }

@@ -3256,12 +3256,13 @@ check-insecure-tls:
 	@# ONLY for the Unix-domain-socket client transport — filesystem-
 	@# permission-scoped, not network-exposed. Every other use is a
 	@# plaintext network dial and a fail-open regression.
-	@# Allowlist: sdk/go/transport/unix/adapter.go (UDS SDK client) and
-	@# test/integration/helpers/mtls.go GRPCUnixCredentials (UDS test dial).
+	@# Allowlist: sdk/go/transport/unix/adapter.go (UDS SDK client). The
+	@# integration UDS dial (test/integration/helpers/mtls.go
+	@# GRPCUnixCredentials) uses credentials/local, which refuses a non-local
+	@# dial, and needs no entry.
 	@violations=$$(grep -rn 'insecure\.NewCredentials' --include="*.go" . \
 		| grep -Pv '^[^:]+:[0-9]+:[[:space:]]*//' \
 		| grep -v 'sdk/go/transport/unix/adapter.go' \
-		| grep -v 'test/integration/helpers/mtls.go' \
 		|| true); \
 	if [ -n "$$violations" ]; then \
 		echo "$(RED)$(BOLD)✗ FORBIDDEN insecure.NewCredentials outside the UDS allowlist:$(RESET)"; \

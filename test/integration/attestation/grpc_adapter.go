@@ -18,8 +18,6 @@ package attestation
 import (
 	"context"
 	"fmt"
-	"strings"
-	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
@@ -117,43 +115,17 @@ func (a *GRPCAdapter) Name() string {
 
 // GenerateVMQuote generates a TPM quote for a VM via the GetAttestationQuote RPC.
 func (a *GRPCAdapter) GenerateVMQuote(ctx context.Context, opts GenerateVMQuoteOptions) (*GenerateVMQuoteResult, error) {
-	pcrIndices := make([]uint32, len(opts.PCRIndices))
-	for i, idx := range opts.PCRIndices {
-		pcrIndices[i] = uint32(idx)
-	}
-
-	req := &platformv1.CollectVMAttestationRequest{
-		VmId: opts.VMID,
-		Config: &platformv1.AttestationQuoteConfig{
-			PcrIndices:    pcrIndices,
-			HashAlgorithm: hashAlgorithmFromString(opts.HashAlgorithm),
-		},
-		Nonce: opts.Nonce,
-	}
-
+	req := collectVMAttestationRequest(opts.VMID, opts.Nonce, opts.PCRIndices, opts.HashAlgorithm)
 	resp, err := a.client.CollectVMAttestation(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GenerateVMQuote", Err: err}
 	}
 
-	attest := resp.GetAttestation()
-	if attest == nil {
-		return nil, ErrGRPCCallFailed{Method: "GenerateVMQuote", Err: fmt.Errorf("nil attestation in response")}
+	result, err := vmQuoteResult(resp)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "GenerateVMQuote", Err: err}
 	}
-
-	var ts time.Time
-	if attest.GetTimestamp() != nil {
-		ts = attest.GetTimestamp().AsTime()
-	}
-
-	return &GenerateVMQuoteResult{
-		QuoteData:     attest.GetQuoteData(),
-		Signature:     attest.GetSignature(),
-		PCRDigest:     attest.GetPcrDigest(),
-		AIKPublicKey:  attest.GetAikPublicKey(),
-		Timestamp:     ts,
-		HashAlgorithm: hashAlgorithmToString(attest.GetHashAlgorithm()),
-	}, nil
+	return result, nil
 }
 
 // GetVMIdentity retrieves VM identity from vTPM EK certificate.
@@ -164,87 +136,26 @@ func (a *GRPCAdapter) GetVMIdentity(ctx context.Context, opts GetVMIdentityOptio
 
 // GetVMAttestation generates a full VM attestation via CollectVMAttestation RPC.
 func (a *GRPCAdapter) GetVMAttestation(ctx context.Context, opts GetVMAttestationOptions) (*GetVMAttestationResult, error) {
-	pcrIndices := make([]uint32, len(opts.PCRIndices))
-	for i, idx := range opts.PCRIndices {
-		pcrIndices[i] = uint32(idx)
-	}
-
-	req := &platformv1.CollectVMAttestationRequest{
-		VmId: opts.VMID,
-		Config: &platformv1.AttestationQuoteConfig{
-			PcrIndices:    pcrIndices,
-			HashAlgorithm: hashAlgorithmFromString(opts.HashAlgorithm),
-		},
-		Nonce: opts.Nonce,
-	}
-
+	req := collectVMAttestationRequest(opts.VMID, opts.Nonce, opts.PCRIndices, opts.HashAlgorithm)
 	resp, err := a.client.CollectVMAttestation(ctx, req)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetVMAttestation", Err: err}
 	}
 
-	attest := resp.GetAttestation()
-	if attest == nil {
-		return nil, ErrGRPCCallFailed{Method: "GetVMAttestation", Err: fmt.Errorf("nil attestation in response")}
+	result, err := vmAttestationResult(resp)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "GetVMAttestation", Err: err}
 	}
-
-	pcrs := pcrValuesFromProto(attest.GetPcrs())
-
-	var ts time.Time
-	if attest.GetTimestamp() != nil {
-		ts = attest.GetTimestamp().AsTime()
-	}
-
-	return &GetVMAttestationResult{
-		AttestationID: attest.GetVmId(),
-		VMID:          attest.GetVmId(),
-		HostID:        attest.GetHostId(),
-		QuoteData:     attest.GetQuoteData(),
-		Signature:     attest.GetSignature(),
-		PCRs:          pcrs,
-		PCRDigest:     attest.GetPcrDigest(),
-		WorkloadPCR:   attest.GetWorkloadPcr(),
-		AIKPublicKey:  attest.GetAikPublicKey(),
-		EKCertPEM:     string(attest.GetEkCertificate()),
-		Timestamp:     ts,
-		Metadata:      attest.GetMetadata(),
-	}, nil
+	return result, nil
 }
 
 // VerifyVMAttestation verifies a VM attestation via VerifyAttestationQuote RPC.
 func (a *GRPCAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (*VerifyVMAttestationResult, error) {
-	expectedPCRs := make([]*platformv1.AttestationPCRValue, len(opts.ExpectedPCRs))
-	for i, pcrVal := range opts.ExpectedPCRs {
-		expectedPCRs[i] = &platformv1.AttestationPCRValue{
-			Index: uint32(i),
-			Value: pcrVal,
-		}
-	}
-
-	req := &platformv1.VerifyAttestationQuoteRequest{
-		ExpectedNonce: opts.ExpectedNonce,
-		ExpectedPcrs:  expectedPCRs,
-	}
-
-	resp, err := a.client.VerifyAttestationQuote(ctx, req)
+	resp, err := a.client.VerifyAttestationQuote(ctx, verifyAttestationQuoteRequest(opts))
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "VerifyVMAttestation", Err: err}
 	}
-
-	var errors []string
-	if resp.GetMessage() != "" {
-		errors = append(errors, resp.GetMessage())
-	}
-
-	return &VerifyVMAttestationResult{
-		Valid:          resp.GetVerified(),
-		AttestationID:  opts.AttestationID,
-		NonceMatch:     resp.GetVerified(),
-		SignatureValid: resp.GetVerified(),
-		PCRsMatch:      resp.GetVerified(),
-		EKTrusted:      resp.GetVerified(),
-		Errors:         errors,
-	}, nil
+	return verifyVMAttestationResult(opts, resp), nil
 }
 
 // =============================================================================
@@ -253,42 +164,16 @@ func (a *GRPCAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAtte
 
 // BuildManifest builds a host manifest with attestations via BuildManifest RPC.
 func (a *GRPCAdapter) BuildManifest(ctx context.Context, opts BuildManifestOptions) (*BuildManifestResult, error) {
-	req := &platformv1.BuildManifestRequest{
-		Config: &platformv1.ManifestBuilderConfig{
-			HostId:        opts.HostID,
-			HashAlgorithm: hashAlgorithmFromString(opts.HashAlgorithm),
-			Version:       opts.Version,
-		},
-		IncludeVms:        len(opts.VMAttestations) > 0,
-		IncludeContainers: len(opts.ContainerAttestations) > 0,
-		Sign:              true,
-	}
-
-	resp, err := a.client.BuildManifest(ctx, req)
+	resp, err := a.client.BuildManifest(ctx, buildManifestRequest(opts))
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "BuildManifest", Err: err}
 	}
 
-	manifest := resp.GetManifest()
-	if manifest == nil {
-		return nil, ErrGRPCCallFailed{Method: "BuildManifest", Err: fmt.Errorf("nil manifest in response")}
+	result, err := buildManifestResult(resp)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "BuildManifest", Err: err}
 	}
-
-	var ts time.Time
-	if manifest.GetTimestamp() != nil {
-		ts = manifest.GetTimestamp().AsTime()
-	}
-
-	return &BuildManifestResult{
-		ManifestID:     manifest.GetId(),
-		HostID:         manifest.GetHostId(),
-		MerkleRoot:     manifest.GetMerkleRoot(),
-		VMCount:        len(manifest.GetVms()),
-		ContainerCount: len(manifest.GetContainers()),
-		Timestamp:      ts,
-		Version:        manifest.GetVersion(),
-		Metadata:       manifest.GetMetadata(),
-	}, nil
+	return result, nil
 }
 
 // SignManifest signs a manifest with the host TPM.
@@ -299,87 +184,39 @@ func (a *GRPCAdapter) SignManifest(ctx context.Context, opts SignManifestOptions
 
 // VerifyManifest verifies a signed manifest via VerifyManifest RPC.
 func (a *GRPCAdapter) VerifyManifest(ctx context.Context, opts VerifyManifestOptions) (*VerifyManifestResult, error) {
-	// First retrieve the manifest to verify
-	getResp, err := a.client.GetManifest(ctx, &platformv1.GetManifestRequest{
-		Id: opts.ManifestID,
-	})
+	getResp, err := a.client.GetManifest(ctx, &platformv1.GetManifestRequest{Id: opts.ManifestID})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "VerifyManifest/GetManifest", Err: err}
+	}
+	manifest, err := storedManifest(getResp)
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "VerifyManifest/GetManifest", Err: err}
 	}
 
-	manifest := getResp.GetManifest()
-	if manifest == nil {
-		return nil, ErrGRPCCallFailed{Method: "VerifyManifest", Err: fmt.Errorf("manifest not found: %s", opts.ManifestID)}
-	}
-
-	req := &platformv1.VerifyManifestRequest{
-		Manifest: manifest,
-		Config: &platformv1.ManifestVerifierConfig{
-			RequireHostAttestation: true,
-			VerifyMerkleRoot:       true,
-		},
-	}
-
-	resp, err := a.client.VerifyManifest(ctx, req)
+	resp, err := a.client.VerifyManifest(ctx, verifyManifestRequest(manifest))
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "VerifyManifest", Err: err}
 	}
 
-	result := resp.GetResult()
-	if result == nil {
-		return nil, ErrGRPCCallFailed{Method: "VerifyManifest", Err: fmt.Errorf("nil verification result")}
+	result, err := verifyManifestResult(opts, manifest, resp)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "VerifyManifest", Err: err}
 	}
-
-	valid := result.GetStatus() == platformv1.ManifestVerificationStatus_MANIFEST_VERIFICATION_STATUS_VERIFIED
-
-	hostIDMatch := true
-	if opts.ExpectedHostID != "" {
-		hostIDMatch = manifest.GetHostId() == opts.ExpectedHostID
-	}
-
-	return &VerifyManifestResult{
-		Valid:           valid,
-		ManifestID:      opts.ManifestID,
-		SignatureValid:  result.GetSignatureValid(),
-		MerkleRootValid: result.GetMerkleRootValid(),
-		HostIDMatch:     hostIDMatch,
-		SignerTrusted:   result.GetSignatureValid(),
-		Errors:          result.GetErrors(),
-	}, nil
+	return result, nil
 }
 
 // GetManifest retrieves a manifest by ID via GetManifest RPC.
 func (a *GRPCAdapter) GetManifest(ctx context.Context, opts GetManifestOptions) (*GetManifestResult, error) {
-	req := &platformv1.GetManifestRequest{
-		Id: opts.ManifestID,
-	}
-
-	resp, err := a.client.GetManifest(ctx, req)
+	resp, err := a.client.GetManifest(ctx, &platformv1.GetManifestRequest{Id: opts.ManifestID})
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "GetManifest", Err: err}
 	}
 
-	manifest := resp.GetManifest()
-	if manifest == nil {
-		return nil, ErrGRPCCallFailed{Method: "GetManifest", Err: fmt.Errorf("manifest not found: %s", opts.ManifestID)}
+	result, err := getManifestResult(resp)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "GetManifest", Err: err}
 	}
-
-	var ts time.Time
-	if manifest.GetTimestamp() != nil {
-		ts = manifest.GetTimestamp().AsTime()
-	}
-
-	return &GetManifestResult{
-		ManifestID:     manifest.GetId(),
-		HostID:         manifest.GetHostId(),
-		MerkleRoot:     manifest.GetMerkleRoot(),
-		Signature:      manifest.GetSignature(),
-		VMCount:        len(manifest.GetVms()),
-		ContainerCount: len(manifest.GetContainers()),
-		Timestamp:      ts,
-		Version:        manifest.GetVersion(),
-		Metadata:       manifest.GetMetadata(),
-	}, nil
+	return result, nil
 }
 
 // =============================================================================
@@ -431,57 +268,6 @@ func (a *GRPCAdapter) VerifyWorkloadChain(ctx context.Context, opts VerifyWorklo
 func (a *GRPCAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error) {
 	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "GetWorkloadChainStats"}
 }
-
-// =============================================================================
-// Proto Conversion Helpers
-// =============================================================================
-
-// hashAlgorithmFromString converts a string hash algorithm name to the proto enum.
-func hashAlgorithmFromString(algo string) platformv1.AttestationHashAlgorithm {
-	hashAlgorithmMap := map[string]platformv1.AttestationHashAlgorithm{
-		"sha1":   platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA1,
-		"sha256": platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA256,
-		"sha384": platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA384,
-		"sha512": platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA512,
-	}
-
-	if v, ok := hashAlgorithmMap[strings.ToLower(algo)]; ok {
-		return v
-	}
-	return platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_UNSPECIFIED
-}
-
-// hashAlgorithmToString converts the proto enum to a string hash algorithm name.
-func hashAlgorithmToString(algo platformv1.AttestationHashAlgorithm) string {
-	hashAlgorithmStringMap := map[platformv1.AttestationHashAlgorithm]string{
-		platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA1:   "sha1",
-		platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA256: "sha256",
-		platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA384: "sha384",
-		platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA512: "sha512",
-	}
-
-	if v, ok := hashAlgorithmStringMap[algo]; ok {
-		return v
-	}
-	return ""
-}
-
-// pcrValuesFromProto converts proto PCR values to the test adapter PCRValueResult slice.
-func pcrValuesFromProto(pcrs []*platformv1.AttestationPCRValue) []PCRValueResult {
-	results := make([]PCRValueResult, len(pcrs))
-	for i, pcr := range pcrs {
-		results[i] = PCRValueResult{
-			Index:     int(pcr.GetIndex()),
-			Value:     pcr.GetValue(),
-			Algorithm: hashAlgorithmToString(pcr.GetAlgorithm()),
-		}
-	}
-	return results
-}
-
-// =============================================================================
-// Compile-time Interface Verification
-// =============================================================================
 
 // Verify GRPCAdapter implements AttestationCommands
 var _ AttestationCommands = (*GRPCAdapter)(nil)

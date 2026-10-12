@@ -19,7 +19,7 @@ The dependency runs one way. The root module requires `sdk/go` through
 |---|---|---|
 | `wire/quicwire` | QUIC frame and message types, opcodes, codecs, status codes, `ClientConfig`, the client | `pkg/api/quic`, `pkg/api/daemon` |
 | `wire/mcpwire` | JSON-RPC request, response and error types, the MCP client | `pkg/api/mcp` |
-| `wire/restwire` | `WebServiceResponse`, the `/api/v1` response envelope | `pkg/webservice/v1/response` and the REST handlers |
+| `wire/restwire` | `WebServiceResponse`, the `/api/v1` response envelope; the device role and auth-method strings and `NormalizeProfileJSON` | `pkg/webservice/v1/response` and the REST handlers |
 | `wire/switchwire` | `PortMode`, `PortStatus` | `pkg/switch` and the switch REST handlers |
 
 Server behaviour stays in root: the QUIC server and `ServerConfig`, the MCP tool
@@ -97,8 +97,16 @@ change set:
    `initServiceClients`. Add a domain wrapper under `services/<name>/` when
    callers need more than raw protobuf.
 3. **REST.** Add the method to `grpcMethodToRESTMap`. Use `templatedRouteTable`
-   when the route has path parameters, and `restResponseDecoders` for a
-   non-default body. An unmapped method falls back to a guessed
+   when the route has path parameters. When the handler's request type is not
+   the gRPC message, register a `restRequestEncoders` entry that builds the
+   body it decodes; when its reply is not the gRPC reply, a
+   `restResponseDecoders` entry. Prove both against the real handler, not a
+   fixture — the device profile routes once sent `{"profile": {...}}` to a
+   handler that decodes a flat `ProfileRequest`
+   ([../device/api.md](../device/api.md) §1b). A path parameter may name a nested field with a dotted
+   path (`device.id`) when the request carries the id inside the resource;
+   the field is cleared from the body, and a zero value is
+   `codes.InvalidArgument` before anything is sent. An unmapped method falls back to a guessed
    `POST /api/v1/<service>/<method>`. Do not rely on the fallback: map the
    method explicitly.
 4. **QUIC.** Add the method to `grpcMethodToOpcodeMap`. For a method in a

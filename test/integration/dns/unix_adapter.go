@@ -61,7 +61,7 @@ func (s *UnixAdapter) Setup(ctx context.Context) error {
 	}
 
 	conn, err := grpc.DialContext(ctx, "unix://"+s.socketPath,
-		helpers.GRPCTransportCredentials(),
+		helpers.GRPCUnixCredentials(),
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
 			socketAddr := strings.TrimPrefix(addr, "unix://")
 			var d net.Dialer

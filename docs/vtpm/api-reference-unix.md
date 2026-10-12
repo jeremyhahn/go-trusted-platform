@@ -163,11 +163,12 @@ platformctl vtpm bundle export --id <bundle-id> --output bundle.tar.gz
 ### Unix Socket Configuration
 
 ```bash
-# Use custom socket path
-platformctl --socket /path/to/custom.sock vtpm bundle list
+# Use a custom socket path: name it in a local context, then select it
+platformctl context add custom --socket-path /path/to/custom.sock
+platformctl --context custom vtpm bundle list
 
-# Or via environment variable
-export PLATFORMD_SOCKET=/path/to/custom.sock
+# Or select the context via environment variable
+export PLATFORMCTL_CONTEXT=custom
 platformctl vtpm bundle list
 ```
 
@@ -200,4 +201,4 @@ sudo usermod -aG platform $USER
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PLATFORMD_SOCKET` | Socket path | `/run/platformd.sock` |
+| `PLATFORMCTL_CONTEXT` | platformctl context to use; a local context names the socket | the config's current context (`/run/platformd.sock`) |

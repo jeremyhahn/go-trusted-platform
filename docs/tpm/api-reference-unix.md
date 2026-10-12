@@ -297,11 +297,12 @@ platformctl tpm unseal --cn app-secret --pcr-indices 7,8,9
 ### Unix Socket Configuration
 
 ```bash
-# Use custom socket path
-platformctl --socket /path/to/custom.sock tpm info
+# Use a custom socket path: name it in a local context, then select it
+platformctl context add custom --socket-path /path/to/custom.sock
+platformctl --context custom tpm info
 
-# Or via environment variable
-export PLATFORMD_SOCKET=/path/to/custom.sock
+# Or select the context via environment variable
+export PLATFORMCTL_CONTEXT=custom
 platformctl tpm info
 ```
 
@@ -395,7 +396,7 @@ for i := 0; i < 100; i++ {
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PLATFORMD_SOCKET` | Socket path | `/run/platformd.sock` |
+| `PLATFORMCTL_CONTEXT` | platformctl context to use; a local context names the socket | the config's current context (`/run/platformd.sock`) |
 | `GRPC_GO_LOG_VERBOSITY_LEVEL` | gRPC log level (0-99) | 0 |
 | `GRPC_GO_LOG_SEVERITY_LEVEL` | gRPC log level (info, warning, error) | info |
 

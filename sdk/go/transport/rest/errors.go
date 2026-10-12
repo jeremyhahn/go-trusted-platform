@@ -107,3 +107,42 @@ type ErrUnexpectedReplyType struct {
 func (e ErrUnexpectedReplyType) Error() string {
 	return fmt.Sprintf("unexpected reply message type for gRPC method %s", e.Method)
 }
+
+// ErrUnexpectedRequestType indicates a custom REST request encoder received
+// a request message of an unexpected concrete type. Like
+// ErrUnexpectedReplyType, it is a routing defect in the adapter.
+type ErrUnexpectedRequestType struct {
+	Method string
+}
+
+// Error implements the error interface.
+func (e ErrUnexpectedRequestType) Error() string {
+	return fmt.Sprintf("unexpected request message type for gRPC method %s", e.Method)
+}
+
+// ErrProfileConfigNotJSON indicates a DeviceProfile's config bytes are not a
+// JSON document. The REST profile routes carry config as a JSON value, so
+// bytes that are not JSON cannot be sent without corrupting them.
+type ErrProfileConfigNotJSON struct{}
+
+// Error implements the error interface.
+func (e ErrProfileConfigNotJSON) Error() string {
+	return "device profile config is not valid JSON; the REST transport sends it as a JSON value"
+}
+
+// ErrPCRDigestNotHex indicates a profile's PCR baseline carried a digest
+// that is not hex, the encoding the device webservice uses for it.
+type ErrPCRDigestNotHex struct {
+	Index string
+	Err   error
+}
+
+// Error implements the error interface.
+func (e ErrPCRDigestNotHex) Error() string {
+	return fmt.Sprintf("PCR %s baseline digest is not hex: %v", e.Index, e.Err)
+}
+
+// Unwrap returns the underlying error.
+func (e ErrPCRDigestNotHex) Unwrap() error {
+	return e.Err
+}

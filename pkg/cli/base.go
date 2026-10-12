@@ -271,8 +271,8 @@ func buildTLSConfig(remote *RemoteContext) (*tls.Config, error) {
 	}
 
 	// CA-only mode: server TLS verification without client certificates.
-	// This is used by commands like 'device register' that connect to the
-	// control plane before the device has been issued a client certificate.
+	// This serves a remote context that connects to the control plane before
+	// the client has been issued a client certificate.
 	hasClientCert := remote.ClientCert != "" || remote.ClientKey != ""
 	if !hasClientCert && remote.CACert != "" {
 		return buildCACertOnlyTLSConfig(remote.CACert)

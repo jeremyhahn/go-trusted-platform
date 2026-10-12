@@ -93,8 +93,7 @@ and the check happens locally before anything is sent. A malformed certificate
 fails fast with `EK certificate is not a valid PEM x509 certificate`.
 
 **`--role` is the device role vocabulary** ([api.md](api.md) §4.2): the node
-roles `control-plane`, `gateway`, `worker` — the same three `device register
---role` takes — plus `server`, `client`, `workstation`, `edge`, `iot`,
+roles `control-plane`, `gateway`, `worker` plus `server`, `client`, `workstation`, `edge`, `iot`,
 `load-balancer` (and `unknown`). The same list is accepted over REST and by the
 bootstrap seeder and is stored verbatim; any other string is rejected, never
 silently `unknown`.
@@ -157,28 +156,27 @@ public key truncated in table form; use `--output json` to get the full values.
 
 ---
 
-## Task 4 — Register a node against a control plane it has no context for
+## Task 4 — Register a device record by hand
 
-This is the bootstrap case: a fresh machine, no saved `platformctl` context.
+Machines that enroll through bootstrap create their own device record. To add
+one by hand — a machine enrolled out of band, or a record you want before the
+machine first boots — register it through your usual context:
 
 ```bash
 platformctl device register \
-    --hostname gw-01 \
-    --mac 00:25:90:FF:AA:01 \
-    --role gateway \
-    --template gateway-default \
-    --server https://cp.example.com:8443 \
-    --ca-cert /etc/platform/ca.pem
+    --serial SRV-2024-001 \
+    --model r640 \
+    --ek-cert /etc/platform/ek-certs/node-02.pem \
+    --hash-algo 11
 ```
 
-Three things about this command that surprise people:
+It prints the stored device, including the id the control plane assigned — the
+id `device profile assign --device` takes (Task 2).
 
-- **It creates a profile, not a device.** The name is historical.
-- **`--role` here is `control-plane` | `gateway` | `worker`.** See Task 1.
-- **`--override-file` contents go into the profile's `event_log` field**, not
-  into a config field, and are not delivered as configuration. If you want a
-  platform config delivered, use
-  `device profile create --config-file` instead.
+- **It creates a device, not a profile.** Use `device profile create` (Task 1)
+  for a profile.
+- **Use a Unix, gRPC or QUIC context.** Over REST it fails today: the daemon's
+  REST handler does not accept the shape the SDK sends ([cli.md](cli.md) §2.4).
 
 ---
 

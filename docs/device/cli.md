@@ -46,9 +46,7 @@ An invalid `--transport` is rejected before any command runs, with
 embedded transport. Every implemented verb builds a `cli.BaseCommand` and
 speaks to a `DeviceServiceClient`. `--transport embedded` runs the services
 in-process and is the only way to use them with no daemon listening.
-`device register` is the one exception to context handling — it constructs its
-own ad-hoc **REST** remote context from `--server`, because *"the device being
-registered may not have a context configured yet."*
+`device register` uses the selected context like every other verb.
 
 ---
 
@@ -59,7 +57,7 @@ registered may not have a context configured yet."*
 | `list` | — | List devices, paginated |
 | `get` | `<id>` | Get a device by id |
 | `find-serial` | `<serial>` | Find a device by serial number |
-| `register` | — | Create a device profile on a named control plane |
+| `register` | — | Create a device record (`CreateDevice`) |
 | `delete` | `<id>` | Delete a device by id |
 | `profile` | — | Sub-group, §3 |
 
@@ -105,39 +103,36 @@ platformctl device find-serial SRV-2024-001
 
 ### 2.4 `device register`
 
-Creates a **device profile** on a control plane — the verb name is historical.
-It does not create a `Device` record.
+Creates a **device record** through the SDK's `CreateDevice` call and prints
+the device the control plane stored, in the same format as `device get`. The
+control plane assigns the id. Device profiles are a separate resource — create
+one with `device profile create` (§3).
 
 | Flag | Type | Default | Required | Meaning |
 |---|---|---|---|---|
-| `--hostname` | string | | **yes** | Device hostname; becomes the profile `Name` |
-| `--mac` | string | | **yes** | MAC address; parsed with `net.ParseMAC` |
-| `--role` | string | | **yes** | `control-plane`, `gateway`, or `worker` |
-| `--template` | string | | **yes** | Template name, recorded in match-rule custom attributes |
-| `--server` | string | | **yes** | Control plane URL |
-| `--override-file` | string | | no | YAML file; validated as YAML, stored in the profile `event_log` field |
-| `--ca-cert` | string | | no | CA certificate PEM path for TLS verification |
+| `--serial` | string | | **yes** | Device serial number |
+| `--model` | string | | no | Device model |
+| `--ek-cert` | string | | no | TPM EK certificate: a PEM file path or inline PEM; must parse as X.509 |
+| `--attest-pub` | string | | no | Attestation public key |
+| `--attest-cert` | string | | no | PEM attestation (IAK/AK) certificate |
+| `--signing-pub` | string | | no | Signing public key |
+| `--hash-algo` | uint32 | `0` | no | TPM hash algorithm id (e.g. `11` for SHA-256) |
 
-**`--role` here is a three-value set, and it is not the profile role set.**
-`control-plane` maps to `DEVICE_ROLE_SERVER`, `gateway` to
-`DEVICE_ROLE_GATEWAY`, `worker` to `DEVICE_ROLE_CLIENT`. The seven-value role
-list in §3 belongs to `device profile create/update`. Passing `server` here
-fails with `invalid role "server", must be one of: control-plane, gateway, worker`.
+A missing `--serial` fails with `device register: --serial is required` before
+connecting. A server rejection fails with
+`device register: failed to create device "<serial>": <cause>` and prints
+nothing.
 
-**`--override-file` contents land in `event_log`, not in a config field.** The
-source says so: *"Override config bytes are stored in event_log until the proto
-is regenerated with a dedicated config field."* Use
-`device profile create --config-file` when you want a platform config
-delivered.
+**Over a REST context it does not reach the daemon REST server today.** The
+SDK REST transport posts the proto shape `{"device": {…}}` to
+`POST /api/v1/devices`; the daemon REST handler accepts only the flat body and
+answers `400` for the missing serial ([api.md](api.md) §2.2). Use a `local`
+(Unix), gRPC or QUIC context.
 
 ```bash
-platformctl device register \
-    --hostname gw-01 \
-    --mac 00:25:90:FF:AA:01 \
-    --role gateway \
-    --template gateway-default \
-    --server https://cp.example.com:8443 \
-    --ca-cert /etc/platform/ca.pem
+platformctl device register --serial SN-0001 --model r640
+platformctl device register --serial SN-0002 --ek-cert /var/lib/platform/ek.pem \
+    --hash-algo 11 --output json
 ```
 
 ### 2.5 `device delete <id>`
@@ -393,8 +388,7 @@ Use `platformctl device profile get|list` for reads and
 matching and the by-MAC / by-serial lookups remain REST/gRPC/QUIC/MCP only
 ([api.md](api.md) §3) until the group is implemented (#460).
 
-**No CLI verb covers**: device create/update (only `register`, which creates a
-profile), profile delete, profile list, template CRUD, device activation, or
+**No CLI verb covers**: device update, profile delete, template CRUD, device activation, or
 `find-config`. Reach those through the transports in [api.md](api.md).
 
 **Parity gap.** `conventions/feature-docs.md` §4 requires every verb here to
