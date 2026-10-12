@@ -1,0 +1,364 @@
+# batch-template: v1.1 — token-free CPU work on the batch runners: fuzz,
+# race-full, soak, bench. Dispatch only; never in a merge gate.
+#
+# Owner order 2026-10-12 10:43 EDT (relayed by the Company Agent 17:24Z):
+# "the fleet is still not working hard. omega is 21%, both dell servers are
+# under 50%. we need to give them more work!" Lanes are bound by Claude
+# accounts; this workflow is work that needs none and still finds defects in
+# the release-candidate products.
+#
+# WHO RUNS IT. The project's coordinator dispatches it on `main` when the
+# workflow lands and again after every merge to `main`:
+#   POST /repos/{owner}/{repo}/actions/workflows/batch.yml/dispatches
+#        {"ref":"main","inputs":{"jobs":"all"}}
+# and files ONE issue per real finding, quoting the log lines that start
+# with `BATCH-FINDING`:
+#   fuzz       a crasher (the new corpus file is in the log and the artifact)
+#   race-full  a DATA RACE report, or a test that fails in any of the 3 runs
+#   soak       an iteration that fails
+#   bench      a regression > 20 % against the previous dispatch on main
+#              (benchstat old.txt new.txt; the coordinator compares, the
+#              workflow does not, because a run cannot read another run's
+#              artifact on Gitea)
+# A finding that is already an open issue gets a comment, not a new issue.
+#
+# RUNNERS. `runs-on: batch`: Infrastructure registers "batch" runners with
+# capacity 8 (ci-node-1), 8 (ci-node-2) and 3 (omega). Nothing else uses
+# that label, so batch work never takes a CI slot from a pull request.
+#
+# ARTIFACTS. actions/upload-artifact v4 and later refuse any server that is
+# not github.com ("not currently supported on GHES"; Gitea presents as one),
+# so Gitea uploads with v3 and github.com with v6. Every finding is ALSO
+# printed in the log, so a coordinator can file it without the artifact.
+#
+# CUSTOMIZE, per repo (keep everything else verbatim):
+#   FUZZ_TAGS, RACE_TAGS   build tags the repo's fuzz and unit suites need
+#                          (go-quicraft: quicraft_fuzz)
+#   RACE_PKGS              the unit-test package scope, the same as ci.yml's
+#                          Test job (dark or environment-bound suites excluded)
+#   SOAK_CMD               the repo's integration suite. go-quicraft and
+#                          go-qrdb run their cluster suites, and their soak
+#                          job's runs-on names the raft-guest runner label
+#                          where Infrastructure has registered one
+#   BENCH_PKGS             benchmark scope (harness modules excluded)
+# A repo with no Fuzz* targets keeps the fuzz job; it finds none and passes.
+#
+# go-trusted-platform (#860). Where this file departs from the template, and why:
+#   - FUZZ_TAGS, RACE_TAGS, RACE_PKGS and BENCH_PKGS are not literals in `env`.
+#     BUILD_TAGS is a `:=` literal plus conditional `+=` appends, so a typed
+#     list silently drops tags (every codec among them: "no codec available
+#     for encoding"), and the package scope is the Makefile's discovered set
+#     minus TEST_EXCLUDE and RACE_EXCLUDE, plus TEST_UNIT_PKGS. Each job's
+#     "Resolve" step asks the Makefile (`print-build-tags`, `print-race-pkgs`,
+#     `print-test-skip`) and writes the values to $GITHUB_ENV. RACE_PKGS is
+#     exactly `make test-race`'s set; BENCH_PKGS is the same set, so the
+#     benchmarks of excluded harness, sdk and host-bound packages stay out.
+#   - race-full passes `-skip "$RACE_SKIP"` (TEST_SKIP), as `make test-race`
+#     does; the bench job passes `-tags="$BENCH_TAGS"`, without which nothing
+#     compiles.
+#   - race-full and soak install cpio, as ci.yml's Race job does:
+#     pkg/diskimage/netboot repacks an initramfs with it.
+#   - SOAK_CMD loops `make test-race`, not an integration suite: the
+#     integration suites need the devcontainer (docs/test/integration.md), and
+#     no workflow runs them.
+#   - GO_VERSION follows ci.yml's, not ci-template's.
+
+name: Batch
+
+permissions:
+  contents: read
+
+env:
+  # In lockstep with ci.yml's GO_VERSION.
+  GO_VERSION: '1.27.2'
+  # FUZZ_TAGS, RACE_TAGS, RACE_SKIP, RACE_PKGS, BENCH_TAGS and BENCH_PKGS are
+  # resolved from the Makefile by each job's "Resolve" step (see above).
+  SOAK_CMD: 'make test-race'  # CUSTOMIZE
+
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: 'all, fuzz, race-full, soak or bench'
+        type: choice
+        options: [all, fuzz, race-full, soak, bench]
+        default: all
+      fuzztime:
+        description: 'go test -fuzztime per target'
+        default: '20m'
+      soak_minutes:
+        description: 'how long soak loops the integration suite'
+        default: '60'
+
+# One run per ref at a time. A dispatch while one runs waits; a newer one
+# replaces a waiting one (where the server honours concurrency).
+concurrency:
+  group: batch-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Every package with Fuzz* targets; every target fuzzed for `fuzztime`.
+  # The runner does not expand a matrix built from another job's output
+  # (go-quicraft ci.yml), so the targets are split over a static matrix of
+  # four shards, and each shard fuzzes two targets at a time with
+  # -parallel=4: 8 cores per shard, 20 minutes per pair of targets.
+  fuzz:
+    name: Fuzz (shard ${{ matrix.shard }}/4)
+    if: inputs.jobs == 'all' || inputs.jobs == 'fuzz'
+    runs-on: batch
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Resolve FUZZ_TAGS from the Makefile
+        run: |
+          set -e
+          tags=$(make -s print-build-tags)
+          echo "FUZZ_TAGS=$tags" >> "$GITHUB_ENV"
+          echo "FUZZ_TAGS=$tags"
+
+      - name: List this shard's fuzz targets
+        # `go test -list` prints a package's matching tests, then its
+        # "ok <pkg>" line. Targets are numbered across the whole module and
+        # dealt to shards round-robin, so every shard sees the same order.
+        run: |
+          set -o pipefail
+          go test -tags="$FUZZ_TAGS" -run='^$' -list='^Fuzz' ./... |
+            awk '/^Fuzz/ {t[n++]=$1; next}
+                 /^ok/   {for (i = 0; i < n; i++) print $2, t[i]; n = 0}' |
+            awk -v s=${{ matrix.shard }} '(NR - 1) % 4 == s' > fuzz-targets.txt
+          echo "shard ${{ matrix.shard }}: $(wc -l < fuzz-targets.txt) targets"
+          cat fuzz-targets.txt
+
+      - name: Fuzz each target for ${{ inputs.fuzztime }}
+        env:
+          FUZZTIME: ${{ inputs.fuzztime }}
+        run: |
+          mkdir -p fuzz-logs
+          # shellcheck disable=SC2329 # xargs calls it through bash -c
+          fuzz_one() {
+            pkg=$1 target=$2 log="fuzz-logs/$(echo "$pkg" | tr / _).$target.log"
+            if go test -tags="$FUZZ_TAGS" -run='^$' -fuzz="^${target}\$" \
+                 -fuzztime="$FUZZTIME" -parallel=4 "$pkg" > "$log" 2>&1; then
+              echo "ok   $pkg $target"
+            elif grep -q 'context deadline exceeded' "$log" &&
+                 ! grep -q 'Failing input written to' "$log"; then
+              # A target stopped by a duration -fuzztime can fail on the
+              # deadline itself with no failing input written: there is no
+              # crasher and no reproducer, so it is not a finding (handbook #306).
+              echo "deadline $pkg $target (no failing input; not a finding)"
+            else
+              echo "BATCH-FINDING fuzz $pkg $target"
+              tail -n 60 "$log"
+              return 1
+            fi
+          }
+          export -f fuzz_one
+          export FUZZ_TAGS FUZZTIME
+          rc=0
+          xargs -r -P 2 -L 1 bash -c 'fuzz_one "$@"' _ < fuzz-targets.txt || rc=1
+          # A failing input is written to <pkg dir>/testdata/fuzz/<Target>/.
+          git ls-files --others --exclude-standard | grep '/testdata/fuzz/' > fuzz-new.txt || true
+          mkdir -p fuzz-findings
+          while read -r f; do
+            echo "BATCH-FINDING fuzz corpus $f"
+            sed 's/^/    /' "$f"
+            mkdir -p "fuzz-findings/$(dirname "$f")"
+            cp "$f" "fuzz-findings/$f"
+          done < fuzz-new.txt
+          exit $rc
+
+      - name: Upload fuzz findings (Gitea)
+        if: failure() && github.server_url != 'https://github.com'
+        uses: actions/upload-artifact@c6a366c94c3e0affe28c06c8df20a878f24da3cf # v3.2.2
+        with:
+          name: fuzz-findings-${{ matrix.shard }}
+          path: |
+            fuzz-findings/
+            fuzz-logs/
+          retention-days: 30
+
+      - name: Upload fuzz findings (GitHub)
+        if: failure() && github.server_url == 'https://github.com'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: fuzz-findings-${{ matrix.shard }}
+          path: |
+            fuzz-findings/
+            fuzz-logs/
+          retention-days: 30
+
+  # The unit suite under the race detector, three times, on main.
+  race-full:
+    name: Race (full, -count=3)
+    if: inputs.jobs == 'all' || inputs.jobs == 'race-full'
+    runs-on: batch
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: UDP buffers for QUIC suites
+        # QUIC suites need larger socket buffers (go-quicraft ci.yml); a runner
+        # that refuses sudo runs them with the defaults (handbook #306).
+        run: |
+          sudo -n sysctl -w net.core.rmem_max=7340032 net.core.wmem_max=7340032 ||
+            echo "batch: sysctl not permitted; UDP buffers left at the defaults"
+
+      - name: Install cpio for the netboot media tests
+        run: sudo apt-get update && sudo apt-get install -y cpio
+
+      - name: Resolve RACE_TAGS, RACE_SKIP and RACE_PKGS from the Makefile
+        run: |
+          set -e
+          tags=$(make -s print-build-tags)
+          skip=$(make -s print-test-skip)
+          pkgs=$(make -s print-race-pkgs)
+          {
+            echo "RACE_TAGS=$tags"
+            echo "RACE_SKIP=$skip"
+            echo "RACE_PKGS=$pkgs"
+          } >> "$GITHUB_ENV"
+          echo "RACE_TAGS=$tags"
+          echo "RACE_PKGS: $(echo "$pkgs" | wc -w) packages"
+
+      - name: go test -race -count=3
+        run: |
+          set -o pipefail
+          rc=0
+          # shellcheck disable=SC2086 # RACE_PKGS is a package list
+          go test -race -count=3 -timeout=170m -tags="$RACE_TAGS" -skip "$RACE_SKIP" $RACE_PKGS 2>&1 | tee race.log || rc=$?
+          grep -n 'WARNING: DATA RACE' race.log | sed 's/^/BATCH-FINDING race /' || true
+          grep -E '^(--- FAIL|FAIL)' race.log | sed 's/^/BATCH-FINDING race-fail /' || true
+          exit "$rc"
+
+  # The integration suite in a loop for soak_minutes. Every iteration runs to
+  # the end; a failing one is reported and the loop goes on, so one flake does
+  # not hide a second, different failure.
+  soak:
+    name: Soak (${{ inputs.soak_minutes }} min)
+    if: inputs.jobs == 'all' || inputs.jobs == 'soak'
+    runs-on: batch  # CUSTOMIZE: the raft-guest label for go-quicraft and go-qrdb
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: UDP buffers for QUIC suites
+        # QUIC suites need larger socket buffers (go-quicraft ci.yml); a runner
+        # that refuses sudo runs them with the defaults (handbook #306).
+        run: |
+          sudo -n sysctl -w net.core.rmem_max=7340032 net.core.wmem_max=7340032 ||
+            echo "batch: sysctl not permitted; UDP buffers left at the defaults"
+
+      - name: Install cpio for the netboot media tests
+        run: sudo apt-get update && sudo apt-get install -y cpio
+
+      - name: Loop the integration suite
+        env:
+          SOAK_MINUTES: ${{ inputs.soak_minutes }}
+        run: |
+          end=$(( $(date +%s) + SOAK_MINUTES * 60 ))
+          i=0 failed=0
+          mkdir -p soak-logs
+          while [ "$(date +%s)" -lt "$end" ]; do
+            i=$((i + 1))
+            if bash -c "$SOAK_CMD" > "soak-logs/$i.log" 2>&1; then
+              echo "iteration $i ok"
+            else
+              failed=$((failed + 1))
+              echo "BATCH-FINDING soak iteration $i failed"
+              grep -E '^(--- FAIL|FAIL|panic:)|WARNING: DATA RACE' "soak-logs/$i.log" | head -n 40
+            fi
+          done
+          echo "soak: $i iterations, $failed failed"
+          [ "$failed" -eq 0 ]
+
+      - name: Upload soak logs (Gitea)
+        if: failure() && github.server_url != 'https://github.com'
+        uses: actions/upload-artifact@c6a366c94c3e0affe28c06c8df20a878f24da3cf # v3.2.2
+        with:
+          name: soak-logs
+          path: soak-logs/
+          retention-days: 30
+
+      - name: Upload soak logs (GitHub)
+        if: failure() && github.server_url == 'https://github.com'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: soak-logs
+          path: soak-logs/
+          retention-days: 30
+
+  # Benchmarks with allocations. -count=5 gives benchstat enough samples to
+  # tell a 20 % regression from noise; one sample cannot.
+  bench:
+    name: Bench
+    if: inputs.jobs == 'all' || inputs.jobs == 'bench'
+    runs-on: batch
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Resolve BENCH_TAGS and BENCH_PKGS from the Makefile
+        run: |
+          set -e
+          tags=$(make -s print-build-tags)
+          pkgs=$(make -s print-race-pkgs)
+          {
+            echo "BENCH_TAGS=$tags"
+            echo "BENCH_PKGS=$pkgs"
+          } >> "$GITHUB_ENV"
+          echo "BENCH_TAGS=$tags"
+          echo "BENCH_PKGS: $(echo "$pkgs" | wc -w) packages"
+
+      - name: go test -bench=. -benchmem
+        run: |
+          set -o pipefail
+          # shellcheck disable=SC2086 # BENCH_PKGS is a package list
+          go test -run='^$' -bench=. -benchmem -count=5 -timeout=170m -tags="$BENCH_TAGS" $BENCH_PKGS 2>&1 | tee "bench-${GITHUB_SHA}.txt"
+
+      - name: Post the results to the run summary
+        if: always()
+        run: |
+          {
+            echo "## Benchmarks at ${GITHUB_SHA}"
+            echo
+            echo '```'
+            grep -E '^(Benchmark|goos|goarch|pkg|cpu)' "bench-${GITHUB_SHA}.txt" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the results (Gitea)
+        if: always() && github.server_url != 'https://github.com'
+        uses: actions/upload-artifact@c6a366c94c3e0affe28c06c8df20a878f24da3cf # v3.2.2
+        with:
+          name: bench-${{ github.sha }}
+          path: bench-${{ github.sha }}.txt
+          retention-days: 90
+
+      - name: Upload the results (GitHub)
+        if: always() && github.server_url == 'https://github.com'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: bench-${{ github.sha }}
+          path: bench-${{ github.sha }}.txt
+          retention-days: 90

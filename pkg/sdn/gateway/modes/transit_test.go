@@ -1224,43 +1224,68 @@ func TestRPKIValidatorStatus_Structure(t *testing.T) {
 
 // Benchmark tests
 
-func BenchmarkTransitModeHandler_AnnouncePrefix(b *testing.B) {
-	mockServer := newMockBGPServer()
-	config := testBGPConfig()
-
-	speaker, _ := bgp.NewSpeaker(config, testLogger(), bgp.WithBGPServer(mockServer))
+// startBenchTransitHandler starts a speaker on a mock BGP server and a
+// running TransitModeHandler for config, stopping both when b ends. Every
+// setup error fails the benchmark: a discarded one leaves a nil handler that
+// panics inside the timed loop.
+func startBenchTransitHandler(b *testing.B, config *TransitModeConfig) *TransitModeHandler {
+	b.Helper()
 	ctx := context.Background()
-	_ = speaker.Start(ctx)
-	defer speaker.Stop(ctx)
 
-	handlerConfig := validBackboneConfig()
-	handlerConfig.IPv6Prefixes = nil
-	handlerConfig.IPv4Prefixes = nil
+	speaker, err := bgp.NewSpeaker(testBGPConfig(), testLogger(), bgp.WithBGPServer(newMockBGPServer()))
+	if err != nil {
+		b.Fatalf("NewSpeaker: %v", err)
+	}
+	if err := speaker.Start(ctx); err != nil {
+		b.Fatalf("speaker.Start: %v", err)
+	}
+	b.Cleanup(func() {
+		if err := speaker.Stop(ctx); err != nil {
+			b.Errorf("speaker.Stop: %v", err)
+		}
+	})
 
-	handler, _ := NewTransitModeHandler(handlerConfig, speaker, WithTransitLogger(testLogger()))
-	_ = handler.Start(ctx)
-	defer handler.Stop(ctx)
+	handler, err := NewTransitModeHandler(config, speaker, WithTransitLogger(testLogger()))
+	if err != nil {
+		b.Fatalf("NewTransitModeHandler: %v", err)
+	}
+	if err := handler.Start(ctx); err != nil {
+		b.Fatalf("handler.Start: %v", err)
+	}
+	b.Cleanup(func() {
+		if err := handler.Stop(ctx); err != nil {
+			b.Errorf("handler.Stop: %v", err)
+		}
+	})
+	return handler
+}
+
+// BenchmarkTransitModeHandler_AnnouncePrefix measures an announce and the
+// withdraw that frees the prefix again, so b.N may exceed the 256 prefixes
+// without hitting ErrPrefixAlreadyAnnounced.
+func BenchmarkTransitModeHandler_AnnouncePrefix(b *testing.B) {
+	handler := startBenchTransitHandler(b, validBackboneConfig())
+	ctx := context.Background()
+
+	prefixes := make([]net.IPNet, 256)
+	for i := range prefixes {
+		prefixes[i] = net.IPNet{IP: net.IPv4(10, byte(i), 0, 0).To4(), Mask: net.CIDRMask(16, 32)}
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, prefix, _ := net.ParseCIDR("10." + string(rune(i%256)) + ".0.0/16")
-		_ = handler.AnnouncePrefix(ctx, *prefix)
+		prefix := prefixes[i%len(prefixes)]
+		if err := handler.AnnouncePrefix(ctx, prefix); err != nil {
+			b.Fatalf("AnnouncePrefix(%s): %v", prefix.String(), err)
+		}
+		if err := handler.WithdrawPrefix(ctx, prefix); err != nil {
+			b.Fatalf("WithdrawPrefix(%s): %v", prefix.String(), err)
+		}
 	}
 }
 
 func BenchmarkTransitModeHandler_GetStatus(b *testing.B) {
-	mockServer := newMockBGPServer()
-	config := testBGPConfig()
-
-	speaker, _ := bgp.NewSpeaker(config, testLogger(), bgp.WithBGPServer(mockServer))
-	ctx := context.Background()
-	_ = speaker.Start(ctx)
-	defer speaker.Stop(ctx)
-
-	handlerConfig := validBackboneConfig()
-	handler, _ := NewTransitModeHandler(handlerConfig, speaker, WithTransitLogger(testLogger()))
-	_ = handler.Start(ctx)
-	defer handler.Stop(ctx)
+	handler := startBenchTransitHandler(b, validBackboneConfig())
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -1269,16 +1294,11 @@ func BenchmarkTransitModeHandler_GetStatus(b *testing.B) {
 }
 
 func BenchmarkTransitModeHandler_SignRoute(b *testing.B) {
-	mockServer := newMockBGPServer()
-	config := testBGPConfig()
-
-	speaker, _ := bgp.NewSpeaker(config, testLogger(), bgp.WithBGPServer(mockServer))
-	ctx := context.Background()
-	_ = speaker.Start(ctx)
-	defer speaker.Stop(ctx)
-
-	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
-	handlerConfig := &TransitModeConfig{
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		b.Fatalf("GenerateKey: %v", err)
+	}
+	handler := startBenchTransitHandler(b, &TransitModeConfig{
 		Tier:         bgp.SpeakerTierCoordinator,
 		IPv6Prefixes: []net.IPNet{createTestIPv6Prefix()},
 		LocalASN:     65001,
@@ -1287,16 +1307,14 @@ func BenchmarkTransitModeHandler_SignRoute(b *testing.B) {
 			PublicKey:  pub,
 			PrivateKey: priv,
 		},
-	}
-
-	handler, _ := NewTransitModeHandler(handlerConfig, speaker, WithTransitLogger(testLogger()))
-	_ = handler.Start(ctx)
-	defer handler.Stop(ctx)
-
+	})
+	ctx := context.Background()
 	prefix := netip.MustParsePrefix("2001:DB8::/36")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = handler.SignRoute(ctx, prefix)
+		if _, err := handler.SignRoute(ctx, prefix); err != nil {
+			b.Fatalf("SignRoute: %v", err)
+		}
 	}
 }

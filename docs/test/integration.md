@@ -348,6 +348,15 @@ deliberate exception. They run on the host against services the caller has
 already started, they say so in their help text, and they are not what CI or a
 lane runs.
 
+No workflow runs these suites; they need the devcontainer. `.github/workflows/batch.yml`
+(#860) is the closest thing: a `workflow_dispatch`-only workflow, dispatched on
+`main` and never part of a merge gate, that runs on the self-hosted `batch`
+runners. It fuzzes every `Fuzz*` target, runs the `make test-race` package set
+with `-count=3`, soaks by looping `make test-race` (not these suites), and
+benchmarks the same package set. It reads its tags and packages from the
+Makefile (`print-build-tags`, `print-race-pkgs`, `print-test-skip`). Each
+finding is a log line that starts with `BATCH-FINDING`.
+
 The runner hands back anything it created in the bind-mounted source tree
 before it exits. The container runs as root, so without that step a run leaves
 root-owned paths behind, `git status` reports a permission error on every

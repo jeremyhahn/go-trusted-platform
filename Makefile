@@ -2971,13 +2971,31 @@ RACE_EXCLUDE := ^$$
 # a discovery failure would vanish (no pipefail, stderr suppressed) and the
 # gate would pass having raced only TEST_UNIT_PKGS. `-tags` matches the test
 # invocation so tag-specific package-loading failures surface here, not there.
+RACE_PKGS_DISCOVER = \
+	pkgs=$$(go list -tags "$(BUILD_TAGS)" ./pkg/... ./cmd/...); \
+	pkgs=$$(printf '%s\n' "$$pkgs" | grep -v -E "$(TEST_EXCLUDE)" | grep -v -E "$(RACE_EXCLUDE)"); \
+	[ -n "$$pkgs" ] || { echo "$@: package discovery produced no packages" >&2; exit 1; }
+
 test-race:
 	@echo "Running unit tests under the race detector..."
 	@set -e; \
-	pkgs=$$(go list -tags "$(BUILD_TAGS)" ./pkg/... ./cmd/...); \
-	pkgs=$$(printf '%s\n' "$$pkgs" | grep -v -E "$(TEST_EXCLUDE)" | grep -v -E "$(RACE_EXCLUDE)"); \
-	[ -n "$$pkgs" ] || { echo "test-race: package discovery produced no packages" >&2; exit 1; }; \
+	$(RACE_PKGS_DISCOVER); \
 	go test -race -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" -timeout 20m $$pkgs $(TEST_UNIT_PKGS)
+
+## print-race-pkgs: Print test-race's package set on one line (batch.yml race-full and bench read it)
+#
+# The same fail-closed discovery as test-race, so batch.yml's race-full job
+# races exactly the packages the CI Race job does, at a different -count.
+.PHONY: print-race-pkgs
+print-race-pkgs:
+	@set -e; \
+	$(RACE_PKGS_DISCOVER); \
+	echo $$pkgs $(TEST_UNIT_PKGS)
+
+## print-test-skip: Print the TEST_SKIP pattern the unit suites pass to -skip
+.PHONY: print-test-skip
+print-test-skip:
+	@echo '$(TEST_SKIP)'
 
 .PHONY: coverage
 ## coverage: Run unit tests with coverage analysis
