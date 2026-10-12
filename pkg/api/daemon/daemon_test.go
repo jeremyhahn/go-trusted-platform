@@ -149,6 +149,9 @@ func testConfig(socketPath string) *Config {
 	cert := sharedTestTLSCertificate()
 	config.TLSCertificate = &cert
 	config.RESTListenAddr = "127.0.0.1:0"
+	// An enabled QUIC transport that cannot be constructed fails New
+	// (#444), so a test that enables QUIC gets TLS material for it too.
+	config.QUICConfig = testQUICServerConfig(cert)
 	return config
 }
 

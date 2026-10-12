@@ -795,53 +795,61 @@ var templatedRouteTable = map[string]templatedRoute{
 	// GET /api/v1/tenants/{id}
 	"/platform.v1.TenantService/GetTenant": itemRoute("/api/v1/tenants/{id}", http.MethodGet, "{id}", "tenant_id"),
 
-	// GET /api/v1/iam/users/{id} -- pkg/webservice/v1/rest/iam/router.go:127.
+	// GET /api/v1/iam/tenants/{tenant}/users/{id} --
+	// pkg/webservice/v1/rest/iam/router.go registerUserRoutes.
 	//
-	// These four take the UNSCOPED form, which is the tree the flat claim
-	// already named; the id segment is the only thing added. The router also
-	// serves a tenant-scoped twin (/api/v1/iam/tenants/{tenant}/users/{id}),
-	// and GetIAMUserRequest carries tenant_id alongside user_id, so an SDK
-	// caller who sets tenant_id still gets whatever tenant the unscoped
-	// handler derives from context or the token. That ambiguity is
-	// docs/iam/api.md §2's, it predates this change, and choosing the scoped
-	// form instead would be a behaviour decision rather than a repair -- so it
-	// is raised on #379, not settled here.
-	"/platform.v1.PlatformIAMService/GetUser": itemRoute("/api/v1/iam/users/{id}", http.MethodGet, "{id}", "user_id"),
+	// Every IAM request that carries tenant_id alongside an item identifier
+	// targets the TENANT-SCOPED tree, with tenant_id in the {tenant} segment
+	// (#401). The unscoped twin (/api/v1/iam/users/{id}) serves whatever tenant
+	// the session is bound to and never reads tenant_id, so a caller naming
+	// another tenant was answered from its own with a 200 -- while gRPC served
+	// the tenant it named. On the scoped tree the server's RequireOwnTenant
+	// refuses a tenant other than the session's with 403 (PermissionDenied
+	// here), which is what gRPC now returns too; an empty tenant_id never
+	// leaves the client (InvalidArgument), matching gRPC's required field.
+	"/platform.v1.PlatformIAMService/GetUser": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}", http.MethodGet,
+		pathParam{placeholder: "{id}", field: "user_id"}),
 
-	// GET /api/v1/iam/roles/{id} -- router.go:145.
-	"/platform.v1.PlatformIAMService/GetRole": itemRoute("/api/v1/iam/roles/{id}", http.MethodGet, "{id}", "role_id"),
+	// GET /api/v1/iam/tenants/{tenant}/roles/{id} -- registerRoleRoutes.
+	"/platform.v1.PlatformIAMService/GetRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodGet,
+		pathParam{placeholder: "{id}", field: "role_id"}),
 
-	// GET /api/v1/iam/groups/{id} -- router.go:136.
-	"/platform.v1.PlatformIAMService/GetGroup": itemRoute("/api/v1/iam/groups/{id}", http.MethodGet, "{id}", "group_id"),
+	// GET /api/v1/iam/tenants/{tenant}/groups/{id} -- registerGroupRoutes.
+	"/platform.v1.PlatformIAMService/GetGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodGet,
+		pathParam{placeholder: "{id}", field: "group_id"}),
 
 	// GET /api/v1/iam/tenants/{tenant} -- router.go:208. The server names this
 	// segment {tenant}, not {id}, and the request has only tenant_id.
 	"/platform.v1.PlatformIAMService/GetTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodGet, "{tenant}", "tenant_id"),
 
-	// DELETE /api/v1/iam/groups/{id}/members/{user} -- rest/iam/router.go:137.
+	// DELETE /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}.
 	// The flat row sent DELETE /api/v1/iam/groups/members, and the server
 	// routed that to DELETE /groups/{id} with id="members": a DeleteGroup on
 	// whatever group carries that name, not a membership removal (#415).
-	// RemoveGroupMemberRequest carries group_id and user_id; both travel in
-	// the path.
-	"/platform.v1.PlatformIAMService/RemoveGroupMember": nestedItemRoute("/api/v1/iam/groups/{id}/members/{user}", http.MethodDelete,
+	// RemoveGroupMemberRequest carries tenant_id, group_id and user_id; all
+	// three travel in the path.
+	"/platform.v1.PlatformIAMService/RemoveGroupMember": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}", http.MethodDelete,
 		pathParam{placeholder: "{id}", field: "group_id"}, pathParam{placeholder: "{user}", field: "user_id"}),
 
 	// The seven item operations #416 repairs (#379's shape on the mutating
 	// verbs, found by #400's fixture). Each sent a collection path the server
 	// does not serve for that verb; the server's routes are the item paths
-	// below (pkg/webservice/v1/rest/iam/router.go, flat tree), and the
-	// identifiers travel in the path, never the body.
-	"/platform.v1.PlatformIAMService/DeleteUser":   itemRoute("/api/v1/iam/users/{id}", http.MethodDelete, "{id}", "user_id"),
-	"/platform.v1.PlatformIAMService/DeleteRole":   itemRoute("/api/v1/iam/roles/{id}", http.MethodDelete, "{id}", "role_id"),
-	"/platform.v1.PlatformIAMService/DeleteGroup":  itemRoute("/api/v1/iam/groups/{id}", http.MethodDelete, "{id}", "group_id"),
+	// below (pkg/webservice/v1/rest/iam/router.go), and the identifiers
+	// travel in the path, never the body. All but DeleteTenant are on the
+	// tenant-scoped tree for the reason given at GetUser (#401).
+	"/platform.v1.PlatformIAMService/DeleteUser": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}", http.MethodDelete,
+		pathParam{placeholder: "{id}", field: "user_id"}),
+	"/platform.v1.PlatformIAMService/DeleteRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles/{id}", http.MethodDelete,
+		pathParam{placeholder: "{id}", field: "role_id"}),
+	"/platform.v1.PlatformIAMService/DeleteGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodDelete,
+		pathParam{placeholder: "{id}", field: "group_id"}),
 	"/platform.v1.PlatformIAMService/DeleteTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodDelete, "{tenant}", "tenant_id"),
-	"/platform.v1.PlatformIAMService/AssignRole": nestedItemRoute("/api/v1/iam/users/{id}/roles/{role}", http.MethodPost,
+	"/platform.v1.PlatformIAMService/AssignRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", http.MethodPost,
 		pathParam{placeholder: "{id}", field: "user_id"}, pathParam{placeholder: "{role}", field: "role_id"}),
 	// RevokeRole changes verb as well as path: the server revokes with DELETE.
-	"/platform.v1.PlatformIAMService/RevokeRole": nestedItemRoute("/api/v1/iam/users/{id}/roles/{role}", http.MethodDelete,
+	"/platform.v1.PlatformIAMService/RevokeRole": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", http.MethodDelete,
 		pathParam{placeholder: "{id}", field: "user_id"}, pathParam{placeholder: "{role}", field: "role_id"}),
-	"/platform.v1.PlatformIAMService/AddGroupMember": nestedItemRoute("/api/v1/iam/groups/{id}/members/{user}", http.MethodPost,
+	"/platform.v1.PlatformIAMService/AddGroupMember": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}", http.MethodPost,
 		pathParam{placeholder: "{id}", field: "group_id"}, pathParam{placeholder: "{user}", field: "user_id"}),
 }
 
@@ -863,16 +871,19 @@ func itemRoute(path, method, placeholder string, field protoreflect.Name) templa
 	}
 }
 
-// nestedItemRoute is itemRoute for a route that names TWO identifiers -- a
-// parent and a child, e.g. /users/{id}/roles/{role} -- each filled from its
-// own request field. Both must be non-zero; a placeholder left unfilled is an
-// error, never a shorter path (#415: the collection-path form of
-// RemoveGroupMember routed to DeleteGroup with id="members").
-func nestedItemRoute(path, method string, parent, child pathParam) templatedRoute {
+// tenantItemRoute is itemRoute for the IAM tenant-scoped tree,
+// /api/v1/iam/tenants/{tenant}/...: the request's tenant_id fills {tenant},
+// and items fill the identifiers after it (one, or a parent and a child such
+// as /users/{id}/roles/{role}). Every identifier must be non-zero; a
+// placeholder left unfilled is an error, never a shorter path (#415: the
+// collection-path form of RemoveGroupMember routed to DeleteGroup with
+// id="members"). Putting tenant_id in the path is what lets the server's
+// RequireOwnTenant guard refuse a tenant the caller is not bound to (#401).
+func tenantItemRoute(path, method string, items ...pathParam) templatedRoute {
 	return templatedRoute{
 		path:       path,
 		method:     method,
-		pathParams: []pathParam{parent, child},
+		pathParams: append([]pathParam{{placeholder: "{tenant}", field: "tenant_id"}}, items...),
 	}
 }
 

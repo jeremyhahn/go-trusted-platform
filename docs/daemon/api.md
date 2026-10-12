@@ -48,6 +48,15 @@ DNS, Gateway, Proxy, Overlay, Registry, Cluster, EAB, Invitation and
 ConfigDelivery. Anything not in that list has **no embedded route** —
 `SwitchService` is the notable absentee ([`docs/sdn/api.md`](../sdn/api.md) §7).
 
+**An enabled transport that cannot be constructed or started stops the
+daemon (#444).** `New` returns `ErrTransportConstructionFailed` (transport name
+plus the wrapped cause) when the QUIC, REST or MCP server cannot be built;
+`Start` returns the transport's typed start error; `platformd` exits non-zero.
+There is no degraded mode, so a running daemon serves every transport its
+configuration enables. A disabled transport is never constructed and never
+fails startup. The rule and its errors are specified in
+[`architecture.md` § Protocol Feature Matrix](architecture.md#protocol-feature-matrix).
+
 `/api/v1/platform/protocols` reports which transports are actually serving.
 
 ---
@@ -283,8 +292,8 @@ platform-token validator nor the QuicBaaS auth adapter configured,
 `AuthorizeTool` refuses every tool that requires a permission (`-32001`, the
 message names the missing backend); only the five tools explicitly mapped to
 `""` answer. The daemon refuses to create the MCP server in that state
-(`ErrMCPAuthorizationBackendRequired`; `New` logs it and runs without MCP)
-unless `SkipIAMValidation`, the testing-only opt-out, is set. Before #440 that
+(`New` fails with `ErrTransportConstructionFailed` wrapping
+`ErrMCPAuthorizationBackendRequired`, #444) unless `SkipIAMValidation`, the testing-only opt-out, is set. Before #440 that
 state was a `Warn` and every registered tool was served to any caller.
 
 **MCP over HTTP serves TLS 1.3 only (#844).** The listener presents the
@@ -296,8 +305,9 @@ pinned to TLS 1.3 by the MCP server itself (`pkg/api/mcp/server.go`
 `serverTLSConfig`), per-client configs included. There is no plaintext
 listener and no option that brings one back: a plain `http://` request gets
 `400` from the TLS listener and never reaches tool dispatch. A daemon
-configured for MCP over HTTP without a usable certificate refuses to start
-with `ErrTLSConfigFailed` and binds nothing, and an MCP start failure (for
+configured for MCP over HTTP without a usable certificate is refused by `New`
+(`ErrTransportConstructionFailed` wrapping `ErrTLSConfigFailed`, #444) and
+binds nothing, and an MCP start failure (for
 example a bind error) fails `Daemon.Start` with `MCPServerStartError` and
 rolls back what had started. `platformd serve` provisions the daemon identity
 when MCP over HTTP is the only network transport. The stdio transport binds no

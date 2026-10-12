@@ -60,13 +60,15 @@ func testServerCertPool(t *testing.T) *x509.CertPool {
 
 func TestDaemon_MCPHTTPFailsClosedWithoutTLS(t *testing.T) {
 	config := mcpOnlyConfig(reservePort(t))
-	// No TLSCertificate: TLS material is absent.
+	// No TLSCertificate: TLS material is absent, so the enabled MCP server
+	// cannot be constructed and New itself refuses (#444).
 
 	d, err := New(config)
-	require.NoError(t, err)
-
-	err = d.Start(context.Background())
 	require.Error(t, err)
+	assert.Nil(t, d)
+	var constructFailed ErrTransportConstructionFailed
+	require.ErrorAs(t, err, &constructFailed)
+	assert.Equal(t, transportMCP, constructFailed.Transport)
 	var tlsFailed ErrTLSConfigFailed
 	require.ErrorAs(t, err, &tlsFailed)
 	assert.Contains(t, tlsFailed.Reason, "MCP")
@@ -232,10 +234,11 @@ func TestDaemon_MCPHTTPEnforcesDaemonMTLS(t *testing.T) {
 
 func TestDaemon_CreateMCPServerWithoutCertificateRefused(t *testing.T) {
 	config := mcpOnlyConfig(reservePort(t))
+	config.EnableMCP = false // New would refuse; build the daemon, then ask directly
 
 	d, err := New(config)
 	require.NoError(t, err)
-	assert.Nil(t, d.concreteMcpServer, "no MCP server may be built without TLS material")
+	assert.Nil(t, d.concreteMcpServer, "a disabled MCP server is never built")
 
 	server, err := d.createMCPServer()
 	assert.Nil(t, server)

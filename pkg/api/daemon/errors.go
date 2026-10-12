@@ -53,6 +53,24 @@ func (e ErrTransportAuthRequired) Error() string {
 	return msg + "; refusing to start the transport without one"
 }
 
+// ErrTransportConstructionFailed is returned by New when an enabled transport
+// (QUIC, REST or MCP) cannot be constructed. Until #444 New logged a Warn and
+// continued, so a daemon reported healthy without a transport its
+// configuration enabled. A transport that is not enabled is never constructed
+// and never produces this error.
+type ErrTransportConstructionFailed struct {
+	Transport string
+	Cause     error
+}
+
+func (e ErrTransportConstructionFailed) Error() string {
+	return fmt.Sprintf("%s: server could not be constructed: %v; refusing to run without the enabled transport", e.Transport, e.Cause)
+}
+
+func (e ErrTransportConstructionFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrDaemonAlreadyRunning is returned when attempting to start an already running daemon
 type ErrDaemonAlreadyRunning struct{}
 
@@ -973,6 +991,17 @@ type ErrIAMPermissionDenied struct {
 
 func (e ErrIAMPermissionDenied) Error() string {
 	return fmt.Sprintf("IAM permission denied: subject %s cannot perform %s on %s", e.Subject, e.Action, e.Resource)
+}
+
+// ErrIAMTenantForbidden is returned when an IAM request names a tenant other
+// than the one the authenticated caller is bound to. It is the gRPC twin of
+// the REST guard's 403 "caller may not act on another tenant".
+type ErrIAMTenantForbidden struct {
+	Requested string
+}
+
+func (e ErrIAMTenantForbidden) Error() string {
+	return fmt.Sprintf("IAM request names tenant %q: caller may not act on another tenant", e.Requested)
 }
 
 // ErrIAMOperationFailed is returned when an IAM operation fails

@@ -1045,6 +1045,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Create QUIC service handler and server if enabled
 	var quicServerIntf QUICServerInterface // Use interface type to avoid typed nil issue
 	var quicHandler *QUICServiceHandler
+	// quicConstructErr is decided after the options are applied: a
+	// WithQUICServer replacement supersedes the built-in server (#444).
+	var quicConstructErr error
 	if config.EnableQUIC {
 		// Initialize QUIC protocol codec before creating server
 		if codecErr := quicwire.SetDefaultCodecType(codec.MsgPack); codecErr != nil {
@@ -1266,7 +1269,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quic.WithLogger(quicLogger),
 		)
 		if quicErr != nil {
-			logger.Warn("QUIC server creation failed", "error", quicErr)
+			quicConstructErr = ErrTransportConstructionFailed{Transport: transportQUIC, Cause: quicErr}
 			// quicServerIntf stays nil (interface nil, not typed nil)
 			quicHandler = nil
 		} else {
@@ -1339,6 +1342,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		opt(daemon)
 	}
 
+	// An enabled transport that cannot be constructed stops the daemon
+	// (#444); only a WithQUICServer replacement supersedes the failure.
+	if quicConstructErr != nil && !daemon.quicServerReplaced {
+		logger.Error(quicConstructErr, "component", "quic_server")
+		return nil, quicConstructErr
+	}
+
 	// Wire the platform InvitationServicer from the App's service registry
 	// so the gRPC/MCP/REST invitation surfaces all share one backend
 	// instead of returning Unimplemented.
@@ -1357,15 +1367,16 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Create REST server if enabled and not overridden by option
 	if config.EnableREST && daemon.restServer == nil {
-		restServer, restErr := NewRESTServer(config, service, logger.Slog())
+		restServer, restErr := newRESTServer(config, service, logger.Slog())
 		if restErr != nil {
-			logger.Warn("REST server creation failed", "error", restErr)
-		} else {
-			daemon.restServer = restServer
-			daemon.concreteRestServer = restServer
-			restServer.SetIDevIDService(idevidService)
-			logger.Info("REST server created", "addr", config.RESTListenAddr)
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: restErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
 		}
+		daemon.restServer = restServer
+		daemon.concreteRestServer = restServer
+		restServer.SetIDevIDService(idevidService)
+		logger.Info("REST server created", "addr", config.RESTListenAddr)
 	} else if !config.EnableREST {
 		logger.Info("REST server not enabled")
 	}
@@ -1688,13 +1699,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if config.EnableMCP && daemon.mcpServer == nil {
 		mcpServer, mcpErr := daemon.createMCPServer()
 		if mcpErr != nil {
-			logger.Warn("MCP server creation failed", "error", mcpErr)
-		} else {
-			daemon.mcpServer = mcpServer
-			daemon.concreteMcpServer = mcpServer
-			mcpCfg := config.effectiveMCPConfig()
-			logger.Info("MCP server created", "transport", mcpCfg.Transport, "addr", mcpCfg.HTTPAddr)
+			constructErr := ErrTransportConstructionFailed{Transport: transportMCP, Cause: mcpErr}
+			logger.Error(constructErr, "component", "mcp_server")
+			return nil, constructErr
 		}
+		daemon.mcpServer = mcpServer
+		daemon.concreteMcpServer = mcpServer
+		mcpCfg := config.effectiveMCPConfig()
+		logger.Info("MCP server created", "transport", mcpCfg.Transport, "addr", mcpCfg.HTTPAddr)
 	} else if !config.EnableMCP {
 		logger.Info("MCP server not enabled")
 	}
@@ -1933,8 +1945,8 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			// tool that requires a permission, so a server started here would
 			// be dark for everything but the explicitly open tools -- and the
 			// old behaviour, a Warn followed by a server that allowed every
-			// tool, is the defect. Refuse to create it; the caller logs the
-			// error and the daemon runs without MCP.
+			// tool, is the defect. Refuse to create it; New fails with the
+			// error (#444) rather than run without the enabled transport.
 			return nil, ErrMCPAuthorizationBackendRequired{}
 		}
 	}
@@ -2256,8 +2268,8 @@ func (d *Daemon) tlsPreflight() error {
 	}
 
 	// MCP over HTTP serves TLS 1.3 only with the daemon certificate (#844).
-	// Without one New built no MCP server, and starting anyway would
-	// report success while the configured transport is silently absent.
+	// Without one New refuses to build the daemon (#444); this check covers
+	// a certificate removed from the shared config after New.
 	if d.config.MCPServesHTTP() && !d.mcpServerReplaced && !tlsCertificateUsable(d.config.TLSCertificate) {
 		return ErrTLSConfigFailed{
 			Reason: "MCP: TLS material absent (no usable in-memory certificate): refusing to start the HTTP transport on " + d.config.effectiveMCPConfig().HTTPAddr,
@@ -2476,8 +2488,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 	// protocol; a missing or certificate-less tls.Config is refused here
 	// with a typed error rather than left to fail (or improvise) deeper in
 	// the stack. The check keys off EnableQUIC, not server non-nilness —
-	// New leaves quicServer nil when creation fails, and a daemon asked to
-	// serve QUIC that cannot must not start quietly without it.
+	// New refuses a QUIC server it cannot construct (#444), but a nil
+	// WithQUICServer replacement still leaves quicServer nil, and a daemon
+	// asked to serve QUIC that cannot must not start quietly without it.
 	if d.config.EnableQUIC {
 		d.logger.Info("Starting QUIC server...", "addr", d.config.QUICListenAddr)
 		if err := d.quicServer.Start(); err != nil {

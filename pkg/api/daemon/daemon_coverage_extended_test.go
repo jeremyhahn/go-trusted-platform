@@ -95,26 +95,6 @@ func TestStartExtended_MCPServerStartSuccess(t *testing.T) {
 	_ = d.Stop(ctx)
 }
 
-func TestStartExtended_QUICServerNilWithoutTLS(t *testing.T) {
-	config := testConfig("/tmp/test-start-quic-no-tls.sock")
-	config.EnableQUIC = true
-	config.QUICListenAddr = "127.0.0.1:0"
-
-	d, err := New(config)
-	require.NoError(t, err)
-
-	// QUIC server is nil since no TLS config; fail-closed (#32): a daemon
-	// asked to serve QUIC that cannot must refuse to start.
-	assert.Nil(t, d.quicServer)
-
-	ctx := context.Background()
-	err = d.Start(ctx)
-	require.Error(t, err)
-	var quicFailed ErrQUICServerStartFailed
-	assert.ErrorAs(t, err, &quicFailed)
-	assert.False(t, d.IsRunning())
-}
-
 func TestStartExtended_GRPCTCPServerCreated(t *testing.T) {
 	config := testConfig("/tmp/test-start-grpc-tcp.sock")
 	config.EnableGRPCTCP = true
@@ -152,25 +132,6 @@ func TestStopExtended_WithoutOptionalServices(t *testing.T) {
 	err = d.Stop(ctx)
 	require.NoError(t, err)
 
-	assert.False(t, d.IsRunning())
-}
-
-func TestStopExtended_WithQUICServerNotConfigured(t *testing.T) {
-	config := testConfig("/tmp/test-stop-quic-not-conf.sock")
-	config.EnableQUIC = true
-	config.QUICListenAddr = "127.0.0.1:0"
-
-	d, err := New(config)
-	require.NoError(t, err)
-
-	// QUIC server is nil (no TLS); fail-closed (#32): startup refuses.
-	assert.Nil(t, d.quicServer)
-
-	ctx := context.Background()
-	err = d.Start(ctx)
-	require.Error(t, err)
-	var quicFailed ErrQUICServerStartFailed
-	assert.ErrorAs(t, err, &quicFailed)
 	assert.False(t, d.IsRunning())
 }
 
@@ -283,18 +244,6 @@ func TestNewExtended_WithNilDeviceService(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Nil(t, d.deviceService)
-}
-
-func TestNewExtended_WithQUICEnabled_NilQUICConfig(t *testing.T) {
-	config := testConfig("/tmp/test-new-quic-nil-cfg.sock")
-	config.EnableQUIC = true
-	config.QUICListenAddr = "127.0.0.1:0"
-	config.QUICConfig = nil
-
-	d, err := New(config)
-	require.NoError(t, err)
-
-	assert.NotNil(t, d.config)
 }
 
 func TestNewExtended_WithQUICEnabled_CustomConfig_NoTLS(t *testing.T) {

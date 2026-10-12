@@ -395,23 +395,23 @@ func TestSingularAccessors_IdentifierTravelsInThePath(t *testing.T) {
 			grpcMethod: "/platform.v1.PlatformIAMService/GetUser",
 			req:        &platformv1.GetIAMUserRequest{TenantId: "acme-prod", UserId: "u-5"},
 			resp:       &platformv1.IAMUserResponse{},
-			wantPath:   "/api/v1/iam/users/u-5",
+			wantPath:   "/api/v1/iam/tenants/acme-prod/users/u-5",
 			strippedIn: "user_id",
 		},
 		{
 			name:       "PlatformIAMService/GetRole",
 			grpcMethod: "/platform.v1.PlatformIAMService/GetRole",
-			req:        &platformv1.GetIAMRoleRequest{RoleId: "r-2"},
+			req:        &platformv1.GetIAMRoleRequest{TenantId: "acme-prod", RoleId: "r-2"},
 			resp:       &platformv1.IAMRoleResponse{},
-			wantPath:   "/api/v1/iam/roles/r-2",
+			wantPath:   "/api/v1/iam/tenants/acme-prod/roles/r-2",
 			strippedIn: "role_id",
 		},
 		{
 			name:       "PlatformIAMService/GetGroup",
 			grpcMethod: "/platform.v1.PlatformIAMService/GetGroup",
-			req:        &platformv1.GetIAMGroupRequest{GroupId: "g-3"},
+			req:        &platformv1.GetIAMGroupRequest{TenantId: "acme-prod", GroupId: "g-3"},
 			resp:       &platformv1.IAMGroupResponse{},
-			wantPath:   "/api/v1/iam/groups/g-3",
+			wantPath:   "/api/v1/iam/tenants/acme-prod/groups/g-3",
 			strippedIn: "group_id",
 		},
 		{
@@ -538,7 +538,7 @@ func TestRemoveGroupMember_BothIdentifiersTravelInThePath(t *testing.T) {
 	if captured.method != http.MethodDelete {
 		t.Errorf("method = %q, want DELETE", captured.method)
 	}
-	if want := "/api/v1/iam/groups/g-3/members/u-5"; captured.path != want {
+	if want := "/api/v1/iam/tenants/acme-prod/groups/g-3/members/u-5"; captured.path != want {
 		t.Errorf("path = %q, want %q", captured.path, want)
 	}
 	for _, field := range []string{"group_id", "user_id"} {

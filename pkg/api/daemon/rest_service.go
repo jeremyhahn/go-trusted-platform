@@ -84,6 +84,11 @@ type RESTServer struct {
 }
 
 // NewRESTServer creates a new REST server for the daemon
+// newRESTServer is the constructor New uses for the built-in REST server. It
+// is a variable so a test can force a construction failure and assert that
+// New refuses to run without an enabled transport (#444).
+var newRESTServer = NewRESTServer
+
 func NewRESTServer(config *Config, service *Service, logger *slog.Logger) (*RESTServer, error) {
 	if logger == nil {
 		logger = slog.Default()

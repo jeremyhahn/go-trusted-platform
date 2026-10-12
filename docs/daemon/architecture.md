@@ -68,6 +68,15 @@ the four lower-layer modules, `_test.go` files included;
 terminating untrusted traffic does not acquire the whole platform's dependency
 tree. A guard failure is an architecture violation, not a flaky test.
 
+**Two run paths, one wiring.** `platformd serve` composes `daemon.Config` on
+one of two paths: `runWithWebservices` when a `webservices:` section exists,
+`runDaemonOnly` otherwise (`pkg/daemon/commands/serve.go`). Both serve gRPC,
+Unix and MCP, so every service those transports register is built by a helper
+**both** paths call — never inline in one of them. A service the daemon-only
+path skips is registered as its stub and answers every RPC with an error on a
+node that is otherwise configured for it (#544: attestation and the OCI
+registry). Only REST-only consumers belong to `runWithWebservices` alone.
+
 ## Trust boundaries
 
 1. **Client → daemon.** Crossed by mTLS (`mtls_interceptor.go`), a broker token
@@ -372,14 +381,24 @@ type ManagedService interface {
 | Streaming | No | Yes | No | No | Yes |
 | Binary Protocol | No | Yes | Yes | No | Yes |
 
+**An enabled transport that cannot be constructed or started stops the
+daemon (#444).** There is no degraded mode: `New` returns
+`ErrTransportConstructionFailed` (naming the transport and wrapping the
+cause) when the QUIC, REST or MCP server cannot be built, `Start` returns the
+transport's typed start error (`ErrQUICServerStartFailed`,
+`ErrRESTServerStartFailed`, `MCPServerStartError`, `ErrTLSConfigFailed`), and
+`platformd` exits non-zero through `ErrServeStartup`. gRPC TCP and Unix obey
+the same rule through their own errors. A transport that is not enabled is
+never constructed and never fails the daemon; a `With*Server` replacement
+stands in for the built-in server it replaces.
+
 Network transports fail closed (#32): absent TLS material, REST, gRPC TCP
-and QUIC refuse to start with a typed error and bind no listener, and
-`Daemon.Start` propagates the failure instead of degrading. A daemon with
-`EnableQUIC` set whose QUIC server could not be created also refuses to
-start. The Unix-domain-socket transport is the single sanctioned non-TLS
-carve-out (filesystem-permission-scoped); MCP binds loopback only. With no
-TLS-terminating transport enabled (UDS-only mode), startup proceeds without
-provisioning a TLS identity.
+and QUIC refuse to start with a typed error and bind no listener; QUIC
+without TLS material cannot even be constructed, and MCP over HTTP without
+the daemon's certificate is refused by `New` (#844). The
+Unix-domain-socket transport is the single sanctioned non-TLS carve-out
+(filesystem-permission-scoped); MCP binds loopback only. With no
+TLS-terminating transport enabled (UDS-only mode), startup proceeds without provisioning a TLS identity.
 
 Network transports also fail closed on **authentication** (#550, #312). With
 `SkipIAMValidation` off, gRPC TCP and QUIC refuse to be constructed — `New`

@@ -889,48 +889,15 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	snapshotStore := initSnapshotStore(logger, App)
 	_ = snapshotStore // installed onto the daemon Service below
 
-	// Attestation store + service backs /api/v1/attestation/manifests
-	// and the per-enrollment capture hook below. When no attestation
-	// backend is configured this is a no-op and the REST surface
-	// returns 503 via the service registry.
-	attestationSvcs := initAttestationServices(logger, App)
-	attachAttestationServiceToDaemonConfig(daemonConfig, attestationSvcs)
-
-	// Build the shared SDN flow-policy machinery (engine + zone flow manager)
-	// once; the quarantine observer and the SDN enrollment hook below both
-	// consume it so port-policy state lives in a single engine. Nil when SDN
-	// or OVS is unavailable.
-	sdnPolicy := initSDNPolicy(App, logger.Slog())
-
-	// Wire the quarantine observer: when both attestation and SDN-OVS are
-	// available, failed attestations move devices to the quarantine zone and
-	// successful re-attestations restore them. No-op when either subsystem is
-	// absent so boot behavior is unchanged on nodes without OVS.
-	wireQuarantineObserver(attestationSvcs, sdnPolicy, daemonConfig.DeviceService, logger)
-
-	// Attestation reporting (#226): the collector on a control plane, and
-	// on every node the caller policy for the quote routes. The policy is
-	// built after the collector so the any-attested strategy can consult
-	// this node's own report cache. One surface, shared by every listener
-	// and by the gRPC/Unix and MCP transports.
-	// The control plane is a device in its own registry (#472): it writes
-	// its own record from its own TPM through the same registration the
-	// ACME finalize hook uses, so the collector below attests it exactly
-	// like a node. Runs before the collector because the collector needs
-	// the resulting device id to resolve the control plane's own endpoint.
-	controlPlaneDevice := initControlPlaneDevice(ctx, logger.Slog(), App, daemonConfig)
-
-	reportingRest := initCallerPolicy(logger.Slog(), App, attestationSvcs)
-	if rep := initReportingCollector(ctx, logger.Slog(), App, daemonConfig, attestationSvcs, controlPlaneDevice); rep != nil {
-		defer rep.Stop()
-		reportingRest = withCollectorSurface(logger.Slog(), reportingRest, rep, App, attestationSvcs)
-		daemonConfig.AttestationReporting = rep.Handles
-		if reportingRest != nil && reportingRest.Policy != nil {
-			rep.Handles.Policy = reportingRest.Policy
-		}
-	} else if reportingRest != nil && reportingRest.Policy != nil {
-		daemonConfig.AttestationReporting = &daemon.ReportingHandles{Policy: reportingRest.Policy}
-	}
+	// Attestation backend, quarantine observer, caller policy and reporting
+	// collector: built by the one helper both run paths call (#544). The
+	// REST-only consumers below read the services, the SDN policy and the
+	// REST reporting surface back out of it.
+	attestation := wireAttestationOnConfig(ctx, logger, App, daemonConfig)
+	defer attestation.Stop()
+	attestationSvcs := attestation.Services
+	sdnPolicy := attestation.SDNPolicy
+	reportingRest := attestation.ReportingRest
 
 	// Construct the SDN enrollment hook on the same engine. The webservice
 	// registry registers it as an ACME order-finalization hook; on device
@@ -1638,6 +1605,14 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		config.ComputeOrchestrator = computeOrchestrator
 		logger.Info("Compute orchestrator initialized successfully")
 	}
+
+	// The OCI registry and the attestation backend are served over gRPC,
+	// Unix and MCP on this path too. Without them daemon.New registers a
+	// dark registry and the attestation stub, whose every RPC answers
+	// FailedPrecondition (#544). Same helpers as runWithWebservices.
+	initRegistryServiceOnConfig(logger, App, config)
+	attestation := wireAttestationOnConfig(ctx, logger, App, config)
+	defer attestation.Stop()
 
 	// M6 barrier-unseal gate: bind only the Unix socket + a loopback
 	// /healthz + /init + /unseal HTTP listener and block until the

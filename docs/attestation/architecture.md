@@ -503,6 +503,27 @@ answers `ErrAttestationServiceNotAvailable`. An earlier revision of this
 section said all five transports carried the capability; that was written on
 a false premise and is corrected here rather than left contradicting the code.
 
+### Backend wiring on both run paths (#544)
+
+`platformd serve` has two run paths: with a `webservices:` section
+(`runWithWebservices`) and without one (`runDaemonOnly`). Both build the
+attestation backend through the one helper, `wireAttestationOnConfig`
+(`pkg/daemon/commands/attestation_init.go`): the manifest store and service
+under `<platform-dir>/attestation`, the quarantine observer, the caller
+policy and the reporting collector. It sets `daemon.Config.AttestationService`
+and `AttestationReporting` before `daemon.New`, so a daemon-only node serves
+the same gRPC, Unix and MCP attestation surface as one with webservices. The
+webservices path adds only its REST consumers (the enrollment capture hook,
+the event reader, the SDN enrollment hook) on top.
+
+When the backend is absent the RPCs are still registered and answer
+`FailedPrecondition` ("attestation service backend is not configured"); that
+happens only when the store cannot be opened (`ErrAttestationStoreUnavailable`,
+logged, startup continues). A node with no TPM still gets the backend: manifest
+operations work, and quote production answers `ErrTPMSessionNotConfigured`.
+Before #544 the daemon-only path never built the backend, so every attestation
+RPC on it answered `FailedPrecondition`.
+
 ### Quote production (#387)
 
 `CollectHostAttestation` and `GetQuote` produce real quotes once the daemon

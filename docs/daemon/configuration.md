@@ -148,7 +148,9 @@ TLS material is mandatory: with no in-memory certificate (provisioned at
 startup from the platform CA) and no cert/key file pair, the REST server
 refuses to start with `ErrRESTServerStartFailed` instead of serving plain
 HTTP. The same fail-closed rule applies to gRPC TCP (`ErrTLSConfigFailed`)
-and QUIC (`ErrQUICServerStartFailed`). The Unix-domain-socket transport is
+and QUIC (`ErrQUICServerStartFailed`, or `ErrTransportConstructionFailed`
+from `New` when the QUIC config carries no TLS at all, #444). The
+Unix-domain-socket transport is
 the single sanctioned non-TLS carve-out — it is filesystem-permission-scoped,
 not network-exposed.
 

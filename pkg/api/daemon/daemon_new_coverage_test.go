@@ -222,23 +222,6 @@ func TestNew_MCPDisabled(t *testing.T) {
 	assert.False(t, d.IsMCPEnabled())
 }
 
-func TestNew_QUICEnabled_DefaultConfig(t *testing.T) {
-	// Note: QUIC server creation requires TLS certificates which we don't have
-	// in unit tests, so it will fail and quicServer will be nil
-	config := testConfig("/tmp/test-quic-enabled-default.sock")
-	config.EnableQUIC = true
-	config.QUICListenAddr = "127.0.0.1:0"
-	config.QUICConfig = nil // Should use quic.DefaultServerConfig()
-
-	d, err := New(config)
-	require.NoError(t, err)
-
-	// QUIC server may or may not be created depending on TLS cert availability
-	// The important thing is that the daemon was created successfully
-	assert.NotNil(t, d.config)
-	assert.True(t, d.config.EnableQUIC)
-}
-
 func TestNew_QUICDisabled(t *testing.T) {
 	config := testConfig("/tmp/test-quic-disabled.sock")
 	config.EnableQUIC = false
@@ -1786,50 +1769,6 @@ func TestSetTPM2Service_AllHandlers(t *testing.T) {
 // =============================================================================
 // Start/Stop/ForceStop - QUIC Path Coverage
 // =============================================================================
-
-func TestStart_QUICServerNotStarted(t *testing.T) {
-	// Create daemon with QUIC enabled but server creation fails (no TLS)
-	config := testConfig("/tmp/test-start-quic-nostart.sock")
-	config.EnableQUIC = true
-	config.QUICListenAddr = "127.0.0.1:0"
-	config.QUICConfig = nil // No TLS
-
-	d, err := New(config)
-	require.NoError(t, err)
-	defer d.ForceStop()
-
-	// QUIC server is nil due to the TLS requirement; fail-closed (#32):
-	// the daemon refuses to start rather than running without QUIC.
-	assert.Nil(t, d.quicServer)
-
-	ctx := context.Background()
-	err = d.Start(ctx)
-	require.Error(t, err)
-	var quicFailed ErrQUICServerStartFailed
-	assert.ErrorAs(t, err, &quicFailed)
-	assert.False(t, d.IsRunning())
-}
-
-func TestStop_QUICServerNotRunning(t *testing.T) {
-	config := testConfig("/tmp/test-stop-quic-notrun.sock")
-	config.EnableQUIC = true
-	config.QUICListenAddr = "127.0.0.1:0"
-
-	d, err := New(config)
-	require.NoError(t, err)
-	defer d.ForceStop()
-
-	// QUIC server is nil without TLS; fail-closed (#32): Start refuses
-	// and the daemon never transitions to running.
-	assert.Nil(t, d.quicServer)
-
-	ctx := context.Background()
-	err = d.Start(ctx)
-	require.Error(t, err)
-	var quicFailed ErrQUICServerStartFailed
-	assert.ErrorAs(t, err, &quicFailed)
-	assert.False(t, d.IsRunning())
-}
 
 // =============================================================================
 // QUICListenAddr - With Running Server Simulation
