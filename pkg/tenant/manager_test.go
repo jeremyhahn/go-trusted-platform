@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -38,13 +39,52 @@ type mockIAMClient struct {
 	listErr   error
 	updateErr error
 	deleteErr error
+
+	// Role reconcile state: the roles each tenant carries, and how many
+	// Reconcile calls wrote something.
+	roles          map[string][]string
+	reconcileCalls int
+	reconcileErr   error
 }
+
+// mockBuiltInRoles mirrors the built-in role set the IAM role reconciler
+// seeds into a tenant.
+var mockBuiltInRoles = []string{"so", "admin", "operator", "user", "auditor", "custodian"}
 
 func newMockIAMClient() *mockIAMClient {
 	return &mockIAMClient{
 		tenants: make(map[string]*iam.Tenant),
+		roles:   make(map[string][]string),
 		nextID:  1,
 	}
+}
+
+// Reconcile implements RoleReconciler the way the IAM server does: absent
+// built-in roles are created and reported, present ones are left alone.
+func (m *mockIAMClient) Reconcile(_ context.Context, tenantID string) (*iam.ReconcileRolesResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.reconcileCalls++
+	if m.reconcileErr != nil {
+		return nil, m.reconcileErr
+	}
+
+	resp := &iam.ReconcileRolesResponse{TenantID: tenantID}
+	if len(m.roles[tenantID]) == 0 {
+		m.roles[tenantID] = append([]string(nil), mockBuiltInRoles...)
+		for _, name := range mockBuiltInRoles {
+			resp.Roles = append(resp.Roles, iam.RoleReconcileResult{RoleID: name, Name: name, Created: true})
+		}
+		resp.Changed = true
+	}
+	return resp, nil
+}
+
+func (m *mockIAMClient) tenantRoles(tenantID string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]string(nil), m.roles[tenantID]...)
 }
 
 func (m *mockIAMClient) Create(ctx context.Context, req *iam.CreateTenantRequest) (*iam.Tenant, error) {
@@ -405,6 +445,7 @@ func newTestManager(t *testing.T) (*Manager, *mockIAMClient) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		Config:          DefaultConfig(),
 		Logger:          logger,
 	}
@@ -440,6 +481,7 @@ func newTestManagerWithQuota(t *testing.T) (*Manager, *mockIAMClient, *mockQuota
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		QuotaEnforcer:   enforcer,
 		UsageTracker:    tracker,
 		Config:          DefaultConfig(),
@@ -465,6 +507,7 @@ func TestNewManager_Success(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		Config:          config,
 		Logger:          logger,
 	}
@@ -512,11 +555,26 @@ func TestNewManager_NilIAMClient(t *testing.T) {
 	}
 }
 
+func TestNewManager_NilIAMRoleClient(t *testing.T) {
+	cfg := &ManagerConfig{
+		IAMTenantClient: newMockIAMClient(),
+		Config:          DefaultConfig(),
+	}
+
+	_, err := NewManager(cfg)
+
+	var invalidReq ErrInvalidRequest
+	if !errors.As(err, &invalidReq) {
+		t.Fatalf("expected ErrInvalidRequest for nil IAM role client, got %v", err)
+	}
+}
+
 func TestNewManager_DefaultConfig(t *testing.T) {
 	iamClient := newMockIAMClient()
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		DEKClient:       newMockDEKClient(),
 		Config:          nil, // Should use defaults
 	}
@@ -536,6 +594,7 @@ func TestNewManager_DefaultLogger(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		DEKClient:       newMockDEKClient(),
 		Config:          DefaultConfig(),
 		Logger:          nil, // Should use default
@@ -746,6 +805,87 @@ func TestCreateTenant_IAMError(t *testing.T) {
 	var storageFailed ErrStorageFailed
 	if !errors.As(err, &storageFailed) {
 		t.Errorf("expected ErrStorageFailed, got %T", err)
+	}
+}
+
+func TestCreateTenant_ProvisionsDefaultRoles(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+
+	entity, err := manager.CreateTenant(context.Background(), &CreateTenantRequest{Name: "roles-tenant"})
+	if err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+
+	roles := iamClient.tenantRoles(entity.ID)
+	if len(roles) != len(mockBuiltInRoles) {
+		t.Fatalf("new tenant carries roles %v, want %v", roles, mockBuiltInRoles)
+	}
+	if !slices.Contains(roles, "admin") {
+		t.Errorf("new tenant lacks the admin role the owner is mirrored with: %v", roles)
+	}
+}
+
+func TestCreateTenant_DefaultRolesFailureRollsBackIAMTenant(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	iamClient.reconcileErr = errors.New("role store unavailable")
+
+	_, err := manager.CreateTenant(context.Background(), &CreateTenantRequest{Name: "no-roles"})
+
+	var rolesFailed ErrDefaultRolesFailed
+	if !errors.As(err, &rolesFailed) {
+		t.Fatalf("expected ErrDefaultRolesFailed, got %v", err)
+	}
+	if !errors.Is(err, iamClient.reconcileErr) {
+		t.Errorf("ErrDefaultRolesFailed does not wrap the SDK error: %v", err)
+	}
+
+	iamClient.mu.RLock()
+	remaining := len(iamClient.tenants)
+	iamClient.mu.RUnlock()
+	if remaining != 0 {
+		t.Errorf("IAM tenant left behind after role provisioning failed: %d tenants", remaining)
+	}
+}
+
+func TestEnsureDefaultRoles_Idempotent(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	ctx := context.Background()
+
+	if err := manager.EnsureDefaultRoles(ctx, "tenant-a"); err != nil {
+		t.Fatalf("first EnsureDefaultRoles: %v", err)
+	}
+	first := iamClient.tenantRoles("tenant-a")
+
+	if err := manager.EnsureDefaultRoles(ctx, "tenant-a"); err != nil {
+		t.Fatalf("second EnsureDefaultRoles: %v", err)
+	}
+	second := iamClient.tenantRoles("tenant-a")
+
+	if !slices.Equal(first, second) {
+		t.Errorf("second provisioning changed the roles: %v -> %v", first, second)
+	}
+	if iamClient.reconcileCalls != 2 {
+		t.Errorf("Reconcile calls = %d, want 2", iamClient.reconcileCalls)
+	}
+}
+
+func TestEnsureDefaultRoles_Errors(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	ctx := context.Background()
+
+	var invalidReq ErrInvalidRequest
+	if err := manager.EnsureDefaultRoles(ctx, ""); !errors.As(err, &invalidReq) {
+		t.Errorf("empty tenant ID: expected ErrInvalidRequest, got %v", err)
+	}
+	if iamClient.reconcileCalls != 0 {
+		t.Errorf("empty tenant ID reached the SDK")
+	}
+
+	iamClient.reconcileErr = errors.New("permission denied")
+	err := manager.EnsureDefaultRoles(ctx, "tenant-b")
+	var rolesFailed ErrDefaultRolesFailed
+	if !errors.As(err, &rolesFailed) || rolesFailed.TenantID != "tenant-b" {
+		t.Fatalf("expected ErrDefaultRolesFailed for tenant-b, got %v", err)
 	}
 }
 
@@ -1987,6 +2127,7 @@ func newTestManagerWithDEK(t *testing.T) (*Manager, *mockIAMClient, *mockDEKClie
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		DEKClient:       dekClient,
 		Config:          DefaultConfig(),
 		Logger:          logger,
@@ -2193,6 +2334,7 @@ func TestNewManager_DEKClientRequired(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		Config:          DefaultConfig(),
 		Logger:          logger,
 	}
@@ -2300,6 +2442,7 @@ func BenchmarkCreateTenant(b *testing.B) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		Config:          DefaultConfig(),
 		Logger:          logger,
 	}
@@ -2325,6 +2468,7 @@ func BenchmarkGetTenant(b *testing.B) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		Config:          DefaultConfig(),
 		Logger:          logger,
 	}
@@ -2356,6 +2500,7 @@ func BenchmarkConcurrentGetTenant(b *testing.B) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		Config:          DefaultConfig(),
 		Logger:          logger,
 	}
@@ -2389,6 +2534,7 @@ func BenchmarkListTenants(b *testing.B) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		Config:          DefaultConfig(),
 		Logger:          logger,
 	}
@@ -2438,6 +2584,7 @@ func TestRotateTenantDEKWithOptions_NoDEKClient(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		DEKClient:       nil, // No DEK client
 		Config:          DefaultConfig(),
 		Logger:          logger,
@@ -2650,6 +2797,7 @@ func TestCreateTenant_DEKCreateError(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		DEKClient:       dekClient,
 		Config:          DefaultConfig(),
 		Logger:          logger,
@@ -2684,6 +2832,7 @@ func TestNewManager_InvalidConfig(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient: iamClient,
+		IAMRoleClient:   iamClient,
 		Config: &Config{
 			EnableDEKIsolation: true,
 			DEKAlgorithm:       "rot13",

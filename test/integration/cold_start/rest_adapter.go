@@ -18,18 +18,18 @@ package cold_start
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // RESTAdapter drives cold-start operations over HTTPS REST against the
 // dedicated cold-start daemon. The auth/factor surface is wired by
-// upstream tasks (#143-b/c and surrounding); this adapter speaks the
-// canonical /api/v1/auth/* shape and lets the test treat 404/501 as
-// "transport not yet wired".
+// upstream tasks (#143-b/c and surrounding); until it lands every auth
+// method returns surface.ErrNoSurface. A 404 or 501 from the daemon is a
+// failure, never a skip (#487).
 type RESTAdapter struct {
 	baseURL string
 	client  *http.Client
@@ -102,10 +102,10 @@ func (r *RESTAdapter) RemoveFactor(ctx context.Context, username, factorID strin
 	return notWired("REST", "auth factor remove")
 }
 
-// notWired is the canonical "not yet implemented" error for stub
-// adapter methods. Tests treat this as "skip, blocked by upstream".
+// notWired declares that an adapter method has no transport surface yet.
+// Tests skip on the typed declaration, never on its text (#487).
 func notWired(protocol, method string) error {
-	return fmt.Errorf("cold_start %s: %s not yet wired (blocked by #143-b/c follow-ups)", protocol, method)
+	return surface.ErrNoSurface{Transport: protocol, Operation: method, Reason: "blocked by #143-b/c follow-ups"}
 }
 
 var _ ColdStartCommands = (*RESTAdapter)(nil)

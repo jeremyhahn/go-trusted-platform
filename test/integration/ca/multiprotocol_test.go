@@ -37,6 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -130,7 +131,7 @@ func testCAInfo(t *testing.T, ctx context.Context, cmd CACommands) {
 
 	t.Run("GetCAInfo", func(t *testing.T) {
 		result, err := cmd.Info(testCtx)
-		skipIfNotImplemented(t, err)
+		surface.SkipIfNotImplemented(t, err)
 		require.NoError(t, err, "Info should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 
@@ -162,7 +163,7 @@ func testIssueCertificate(t *testing.T, ctx context.Context, cmd CACommands, pre
 		}
 
 		result, err := cmd.IssueCertificate(testCtx, opts)
-		skipIfNotImplemented(t, err)
+		surface.SkipIfNotImplemented(t, err)
 		require.NoError(t, err, "Issue certificate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Success, "Issue should be successful")
@@ -223,7 +224,7 @@ func testGetCertificate(t *testing.T, ctx context.Context, cmd CACommands, prefi
 	}
 
 	issueResult, err := cmd.IssueCertificate(testCtx, issueOpts)
-	skipIfNotImplemented(t, err)
+	surface.SkipIfNotImplemented(t, err)
 	require.NoError(t, err, "Issue certificate should succeed")
 	require.True(t, issueResult.Success, "Issue should be successful")
 	require.NotNil(t, issueResult.Certificate, "Certificate should be present")
@@ -235,7 +236,7 @@ func testGetCertificate(t *testing.T, ctx context.Context, cmd CACommands, prefi
 		}
 
 		result, err := cmd.GetCertificate(testCtx, opts)
-		skipIfNotImplemented(t, err)
+		surface.SkipIfNotImplemented(t, err)
 		require.NoError(t, err, "Get certificate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		require.NotNil(t, result.Certificate, "Certificate should be present")
@@ -280,7 +281,7 @@ func testListCertificates(t *testing.T, ctx context.Context, cmd CACommands) {
 		}
 
 		result, err := cmd.ListCertificates(testCtx, opts)
-		skipIfNotImplemented(t, err)
+		surface.SkipIfNotImplemented(t, err)
 		require.NoError(t, err, "List certificates should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 
@@ -335,7 +336,7 @@ func testVerifyCertificate(t *testing.T, ctx context.Context, cmd CACommands, pr
 	}
 
 	issueResult, err := cmd.IssueCertificate(testCtx, issueOpts)
-	skipIfNotImplemented(t, err)
+	surface.SkipIfNotImplemented(t, err)
 	require.NoError(t, err, "Issue certificate should succeed")
 	require.True(t, issueResult.Success, "Issue should be successful")
 	require.NotNil(t, issueResult.Certificate, "Certificate should be present")
@@ -413,7 +414,7 @@ func testRenewCertificate(t *testing.T, ctx context.Context, cmd CACommands, pre
 	}
 
 	issueResult, err := cmd.IssueCertificate(testCtx, issueOpts)
-	skipIfNotImplemented(t, err)
+	surface.SkipIfNotImplemented(t, err)
 	require.NoError(t, err, "Issue certificate should succeed")
 	require.True(t, issueResult.Success, "Issue should be successful")
 	require.NotNil(t, issueResult.Certificate, "Certificate should be present")
@@ -426,7 +427,7 @@ func testRenewCertificate(t *testing.T, ctx context.Context, cmd CACommands, pre
 		}
 
 		result, err := cmd.RenewCertificate(testCtx, opts)
-		skipIfNotImplemented(t, err)
+		surface.SkipIfNotImplemented(t, err)
 		require.NoError(t, err, "Renew certificate should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Success, "Renew should be successful")
@@ -456,7 +457,7 @@ func testRevokeCertificate(t *testing.T, ctx context.Context, cmd CACommands, pr
 	}
 
 	issueResult, err := cmd.IssueCertificate(testCtx, issueOpts)
-	skipIfNotImplemented(t, err)
+	surface.SkipIfNotImplemented(t, err)
 	require.NoError(t, err, "Issue certificate should succeed")
 	require.True(t, issueResult.Success, "Issue should be successful")
 	require.NotNil(t, issueResult.Certificate, "Certificate should be present")
@@ -520,7 +521,7 @@ func testCRL(t *testing.T, ctx context.Context, cmd CACommands) {
 		}
 
 		result, err := cmd.GetCRL(testCtx, opts)
-		skipIfNotImplemented(t, err)
+		surface.SkipIfNotImplemented(t, err)
 		require.NoError(t, err, "Get CRL should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 
@@ -534,7 +535,7 @@ func testCRL(t *testing.T, ctx context.Context, cmd CACommands) {
 		result, err := cmd.GenerateCRL(testCtx)
 		if err != nil {
 			// Some adapters may not support CRL generation
-			if _, ok := err.(ErrNotImplemented); ok {
+			if surface.IsNotImplemented(err) {
 				t.Skipf("CRL generate not implemented for this adapter")
 			}
 			require.Fail(t, "Generate CRL failed", err.Error())
@@ -555,7 +556,7 @@ func testExportBundle(t *testing.T, ctx context.Context, cmd CACommands) {
 
 	t.Run("ExportCABundle", func(t *testing.T) {
 		result, err := cmd.ExportBundle(testCtx, "")
-		skipIfNotImplemented(t, err)
+		surface.SkipIfNotImplemented(t, err)
 		require.NoError(t, err, "Export bundle should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.True(t, result.Success, "Export should be successful")

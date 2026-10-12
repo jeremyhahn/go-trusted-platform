@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"io"
 	"net/http"
 	"net/url"
@@ -425,7 +426,7 @@ func (r *RESTAdapter) Info(ctx context.Context) (*InfoResult, error) {
 // Init initializes the CA via REST.
 // Note: CA initialization is done during daemon startup, not exposed via REST.
 func (r *RESTAdapter) Init(ctx context.Context, opts InitOptions) (*InitResult, error) {
-	return nil, ErrNotImplemented{Feature: "CA init via REST"}
+	return nil, surface.ErrNoSurface{Transport: "REST", Operation: "CA init"}
 }
 
 // =============================================================================
@@ -701,7 +702,7 @@ func (r *RESTAdapter) GenerateCRL(ctx context.Context) (*GenerateCRLResult, erro
 // ExportCRL exports the CRL via REST.
 // Note: CRL export to file is a CLI operation, not exposed via REST.
 func (r *RESTAdapter) ExportCRL(ctx context.Context, output string) (*ExportCRLResult, error) {
-	return nil, ErrNotImplemented{Feature: "CRL export via REST"}
+	return nil, surface.ErrNoSurface{Transport: "REST", Operation: "CRL export"}
 }
 
 // =============================================================================
@@ -738,13 +739,13 @@ func (r *RESTAdapter) ExportBundle(ctx context.Context, output string) (*ExportB
 // InstallCACertificates installs CA certificates via REST.
 // Note: CA certificate installation is a local OS operation, not exposed via REST.
 func (r *RESTAdapter) InstallCACertificates(ctx context.Context) (*InstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "install CA certificates via REST"}
+	return nil, surface.ErrNoSurface{Transport: "REST", Operation: "install CA certificates"}
 }
 
 // UninstallCACertificates uninstalls CA certificates via REST.
 // Note: CA certificate uninstallation is a local OS operation, not exposed via REST.
 func (r *RESTAdapter) UninstallCACertificates(ctx context.Context) (*UninstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "uninstall CA certificates via REST"}
+	return nil, surface.ErrNoSurface{Transport: "REST", Operation: "uninstall CA certificates"}
 }
 
 // =============================================================================

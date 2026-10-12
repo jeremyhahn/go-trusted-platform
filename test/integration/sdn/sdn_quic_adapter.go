@@ -32,6 +32,7 @@ import (
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	quicgo "github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/qlog"
 )
@@ -325,7 +326,7 @@ func (q *SDNQUICAdapter) Setup(ctx context.Context) error {
 			q.conn = nil
 		}
 		q.mu.Unlock()
-		return ErrQUICSDNNotImplemented{Method: "ListNetworkZones", Cause: err}
+		return ErrQUICSDNUnavailable{Operation: "ListNetworkZones", Cause: err}
 	}
 
 	return nil
@@ -359,7 +360,7 @@ func (q *SDNQUICAdapter) sendCategoryRequest(ctx context.Context, categoryOpcode
 	q.mu.RUnlock()
 
 	if closed || conn == nil {
-		return nil, ErrQUICSDNNotImplemented{Method: "sendCategoryRequest"}
+		return nil, ErrQUICSDNUnavailable{Operation: "sendCategoryRequest", Cause: ErrQUICSDNNotConnected{}}
 	}
 
 	// Encode structured body (may be nil for no-payload requests)
@@ -401,7 +402,7 @@ func (q *SDNQUICAdapter) sendCategoryRequest(ctx context.Context, categoryOpcode
 		}
 		switch status {
 		case quicStatusUnavailable:
-			return nil, ErrQUICSDNNotImplemented{Method: fmt.Sprintf("sub-op 0x%02x: %s", subOpcode, msg)}
+			return nil, ErrQUICSDNUnavailable{Operation: fmt.Sprintf("sub-op 0x%02x: %s", subOpcode, msg)}
 		case quicStatusNotFound:
 			return nil, fmt.Errorf("not found: %s", msg)
 		case quicStatusAlreadyExists:
@@ -524,27 +525,27 @@ func quicDecode(data []byte, entity interface{}) error {
 
 // ListVTEPs returns all discovered VTEPs. QUIC zone adapter does not support overlay.
 func (q *SDNQUICAdapter) ListVTEPs(ctx context.Context) (*VTEPListResponse, error) {
-	return nil, ErrQUICSDNNotImplemented{Method: "ListVTEPs"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ListVTEPs"}
 }
 
 // CreateVNI creates a new VNI. Not supported via QUIC zone adapter.
 func (q *SDNQUICAdapter) CreateVNI(ctx context.Context, vni uint32) error {
-	return ErrQUICSDNNotImplemented{Method: "CreateVNI"}
+	return surface.ErrNoSurface{Transport: "QUIC", Operation: "CreateVNI"}
 }
 
 // DeleteVNI removes a VNI. Not supported via QUIC zone adapter.
 func (q *SDNQUICAdapter) DeleteVNI(ctx context.Context, vni uint32) error {
-	return ErrQUICSDNNotImplemented{Method: "DeleteVNI"}
+	return surface.ErrNoSurface{Transport: "QUIC", Operation: "DeleteVNI"}
 }
 
 // ListTunnels returns active tunnels. Not supported via QUIC zone adapter.
 func (q *SDNQUICAdapter) ListTunnels(ctx context.Context) (*TunnelListResponse, error) {
-	return nil, ErrQUICSDNNotImplemented{Method: "ListTunnels"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ListTunnels"}
 }
 
 // ListRemoteMACs returns learned remote MACs. Not supported via QUIC zone adapter.
 func (q *SDNQUICAdapter) ListRemoteMACs(ctx context.Context, vni uint32) (*RemoteMACListResponse, error) {
-	return nil, ErrQUICSDNNotImplemented{Method: "ListRemoteMACs"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ListRemoteMACs"}
 }
 
 // =============================================================================
@@ -553,12 +554,12 @@ func (q *SDNQUICAdapter) ListRemoteMACs(ctx context.Context, vni uint32) (*Remot
 
 // GetGatewayStatus returns gateway status. Not available without full gateway service.
 func (q *SDNQUICAdapter) GetGatewayStatus(ctx context.Context) (*GatewayStatusResponse, error) {
-	return nil, ErrQUICSDNNotImplemented{Method: "GetGatewayStatus"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetGatewayStatus"}
 }
 
 // SetGatewayMode sets the gateway mode. Not available without full gateway service.
 func (q *SDNQUICAdapter) SetGatewayMode(ctx context.Context, mode GatewayMode) error {
-	return ErrQUICSDNNotImplemented{Method: "SetGatewayMode"}
+	return surface.ErrNoSurface{Transport: "QUIC", Operation: "SetGatewayMode"}
 }
 
 // =============================================================================
@@ -566,19 +567,19 @@ func (q *SDNQUICAdapter) SetGatewayMode(ctx context.Context, mode GatewayMode) e
 // =============================================================================
 
 func (q *SDNQUICAdapter) GetBGPStatus(ctx context.Context) (*BGPStatusResponse, error) {
-	return nil, ErrQUICSDNNotImplemented{Method: "GetBGPStatus"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetBGPStatus"}
 }
 
 func (q *SDNQUICAdapter) ListBGPPeers(ctx context.Context) (*BGPPeerListResponse, error) {
-	return nil, ErrQUICSDNNotImplemented{Method: "ListBGPPeers"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ListBGPPeers"}
 }
 
 func (q *SDNQUICAdapter) AnnouncePrefix(ctx context.Context, prefix string) error {
-	return ErrQUICSDNNotImplemented{Method: "AnnouncePrefix"}
+	return surface.ErrNoSurface{Transport: "QUIC", Operation: "AnnouncePrefix"}
 }
 
 func (q *SDNQUICAdapter) WithdrawPrefix(ctx context.Context, prefix string) error {
-	return ErrQUICSDNNotImplemented{Method: "WithdrawPrefix"}
+	return surface.ErrNoSurface{Transport: "QUIC", Operation: "WithdrawPrefix"}
 }
 
 // =============================================================================
@@ -680,12 +681,12 @@ func (q *SDNQUICAdapter) ListPools(ctx context.Context, zoneFilter string) (*IPA
 
 // AllocateIP is not exercised by the IPAM suite — returns not-implemented.
 func (q *SDNQUICAdapter) AllocateIP(ctx context.Context, poolID string) (*IPAllocationResponse, error) {
-	return nil, ErrQUICSDNNotImplemented{Method: "AllocateIP"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "AllocateIP"}
 }
 
 // ReleaseIP is not exercised by the IPAM suite — returns not-implemented.
 func (q *SDNQUICAdapter) ReleaseIP(ctx context.Context, poolID, ip string) error {
-	return ErrQUICSDNNotImplemented{Method: "ReleaseIP"}
+	return surface.ErrNoSurface{Transport: "QUIC", Operation: "ReleaseIP"}
 }
 
 // =============================================================================
@@ -693,11 +694,11 @@ func (q *SDNQUICAdapter) ReleaseIP(ctx context.Context, poolID, ip string) error
 // =============================================================================
 
 func (q *SDNQUICAdapter) GetDHCPStatus(ctx context.Context) (*DHCPStatusResponse, error) {
-	return nil, ErrQUICSDNNotImplemented{Method: "GetDHCPStatus"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetDHCPStatus"}
 }
 
 func (q *SDNQUICAdapter) ListLeases(ctx context.Context) (*DHCPLeaseListResponse, error) {
-	return nil, ErrQUICSDNNotImplemented{Method: "ListLeases"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ListLeases"}
 }
 
 // =============================================================================

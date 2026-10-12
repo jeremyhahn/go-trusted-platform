@@ -17,7 +17,6 @@ package compute_test
 
 import (
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
@@ -60,37 +59,6 @@ func GetMCPEndpoint() string {
 // GetSocketPath returns the Unix socket path for compute tests.
 func GetSocketPath() string {
 	return helpers.GetSocketPath()
-}
-
-// skipIfNotImplemented skips the test if the error indicates the method
-// is not implemented for the current protocol adapter.
-func skipIfNotImplemented(t *testing.T, err error) {
-	t.Helper()
-	if err == nil {
-		return
-	}
-
-	errMsg := strings.ToLower(err.Error())
-	notImplementedPatterns := []string{
-		"not implemented",
-		"unimplemented",
-		"not supported",
-		"service unavailable",
-		"not available",
-		"unknown service",
-		"connection required",
-		"404 page not found",
-		"status: 404",
-		"unknown flag",
-		"context canceled",
-		"context deadline exceeded",
-	}
-
-	for _, pattern := range notImplementedPatterns {
-		if strings.Contains(errMsg, pattern) {
-			t.Skipf("Not implemented: %v", err)
-		}
-	}
 }
 
 // generateTestVMName generates a unique VM name for testing.

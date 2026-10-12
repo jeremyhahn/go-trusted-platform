@@ -23,6 +23,7 @@ import (
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -57,15 +58,6 @@ func (e ErrGRPCCallFailed) Error() string {
 
 func (e ErrGRPCCallFailed) Unwrap() error {
 	return e.Err
-}
-
-// ErrNotImplemented indicates a feature has no corresponding gRPC RPC.
-type ErrNotImplemented struct {
-	Feature string
-}
-
-func (e ErrNotImplemented) Error() string {
-	return fmt.Sprintf("not implemented: %s", e.Feature)
 }
 
 // =============================================================================
@@ -167,7 +159,7 @@ func (a *GRPCAdapter) GenerateVMQuote(ctx context.Context, opts GenerateVMQuoteO
 // GetVMIdentity retrieves VM identity from vTPM EK certificate.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *GRPCAdapter) GetVMIdentity(ctx context.Context, opts GetVMIdentityOptions) (*GetVMIdentityResult, error) {
-	return nil, ErrNotImplemented{Feature: "GetVMIdentity via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "GetVMIdentity"}
 }
 
 // GetVMAttestation generates a full VM attestation via CollectVMAttestation RPC.
@@ -302,7 +294,7 @@ func (a *GRPCAdapter) BuildManifest(ctx context.Context, opts BuildManifestOptio
 // SignManifest signs a manifest with the host TPM.
 // No dedicated gRPC RPC exists; signing is done during BuildManifest with Sign=true.
 func (a *GRPCAdapter) SignManifest(ctx context.Context, opts SignManifestOptions) (*SignManifestResult, error) {
-	return nil, ErrNotImplemented{Feature: "SignManifest via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "SignManifest"}
 }
 
 // VerifyManifest verifies a signed manifest via VerifyManifest RPC.
@@ -397,19 +389,19 @@ func (a *GRPCAdapter) GetManifest(ctx context.Context, opts GetManifestOptions) 
 // PushAttestation pushes an attestation to a target.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *GRPCAdapter) PushAttestation(ctx context.Context, opts PushAttestationOptions) (*PushAttestationResult, error) {
-	return nil, ErrNotImplemented{Feature: "PushAttestation via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "PushAttestation"}
 }
 
 // PushAttestationBatch pushes to multiple targets concurrently.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *GRPCAdapter) PushAttestationBatch(ctx context.Context, opts PushAttestationBatchOptions) (*PushAttestationBatchResult, error) {
-	return nil, ErrNotImplemented{Feature: "PushAttestationBatch via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "PushAttestationBatch"}
 }
 
 // GetPushStatus retrieves the status of a push operation.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *GRPCAdapter) GetPushStatus(ctx context.Context, opts GetPushStatusOptions) (*GetPushStatusResult, error) {
-	return nil, ErrNotImplemented{Feature: "GetPushStatus via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "GetPushStatus"}
 }
 
 // =============================================================================
@@ -419,25 +411,25 @@ func (a *GRPCAdapter) GetPushStatus(ctx context.Context, opts GetPushStatusOptio
 // ExtendWorkloadChain extends the workload PCR with a measurement.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *GRPCAdapter) ExtendWorkloadChain(ctx context.Context, opts ExtendWorkloadChainOptions) (*ExtendWorkloadChainResult, error) {
-	return nil, ErrNotImplemented{Feature: "ExtendWorkloadChain via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "ExtendWorkloadChain"}
 }
 
 // GetWorkloadChainHistory retrieves the chain history.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *GRPCAdapter) GetWorkloadChainHistory(ctx context.Context, opts GetWorkloadChainHistoryOptions) (*GetWorkloadChainHistoryResult, error) {
-	return nil, ErrNotImplemented{Feature: "GetWorkloadChainHistory via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "GetWorkloadChainHistory"}
 }
 
 // VerifyWorkloadChain verifies the chain against expected PCR.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *GRPCAdapter) VerifyWorkloadChain(ctx context.Context, opts VerifyWorkloadChainOptions) (*VerifyWorkloadChainResult, error) {
-	return nil, ErrNotImplemented{Feature: "VerifyWorkloadChain via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "VerifyWorkloadChain"}
 }
 
 // GetWorkloadChainStats retrieves chain statistics.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *GRPCAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error) {
-	return nil, ErrNotImplemented{Feature: "GetWorkloadChainStats via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "GetWorkloadChainStats"}
 }
 
 // =============================================================================

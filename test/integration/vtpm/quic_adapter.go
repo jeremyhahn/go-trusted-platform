@@ -63,15 +63,6 @@ const (
 // Error Types
 // =============================================================================
 
-// ErrQUICVTPMNotImplemented indicates a method is not yet implemented.
-type ErrQUICVTPMNotImplemented struct {
-	Method string
-}
-
-func (e ErrQUICVTPMNotImplemented) Error() string {
-	return fmt.Sprintf("QUIC vTPM method %s not implemented", e.Method)
-}
-
 // ErrQUICVTPMConnectionFailed indicates a QUIC connection failure.
 type ErrQUICVTPMConnectionFailed struct {
 	Endpoint string

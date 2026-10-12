@@ -19,14 +19,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 
 	daemonpkg "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	lukssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/luks"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // Environment variable names for service endpoints.
@@ -61,42 +62,16 @@ func GetServiceEndpoints() *ServiceEndpoints {
 	}
 }
 
-// isBackendUnavailable returns true when the supplied error indicates the
-// LUKS backend is not configured or available on this host.
+// isBackendUnavailable reports whether err is a declared gap: a typed
+// not-implemented declaration or one of the daemon's LUKS sentinels (backend
+// not configured, root required). Any other error fails the test (#487).
 func isBackendUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, daemonpkg.ErrLUKSNotConfigured) {
-		return true
-	}
-	if errors.Is(err, daemonpkg.ErrLUKSRootRequired) {
-		return true
-	}
-	if errors.Is(err, lukssdk.ErrNotYetWired) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	needles := []string{
-		"backend not configured",
-		"not yet wired",
-		"unavailable",
-		"not implemented",
-		"501",
-		"503",
-		"phase35: service provider not configured",
-		"luks: ",
-		"root required",
-		"permission denied",
-		"no such device",
-		"no such file",
-	}
-	for _, n := range needles {
-		if strings.Contains(msg, n) {
-			return true
-		}
-	}
-	return false
+	return surface.IsNotImplemented(err) || surface.IsDeclaredRefusal(err,
+		daemonpkg.ErrLUKSNotConfigured,
+		daemonpkg.ErrLUKSRootRequired,
+		lukssdk.ErrNotYetWired,
+		mcpapi.ErrPhase35NotConfigured,
+	)
 }
 
 // SkipIfNotIntegration skips when INTEGRATION_TEST is not set.

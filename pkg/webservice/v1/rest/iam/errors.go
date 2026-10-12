@@ -167,3 +167,11 @@ type ErrAuthorizationRequired struct {
 func (e ErrAuthorizationRequired) Error() string {
 	return fmt.Sprintf("rest/iam: authorization guard is required: %s", e.Guard)
 }
+
+// ErrMirrorClientMissing is returned when the user mirror is asked to read the
+// IAM tenant without an IAM client to read it through.
+type ErrMirrorClientMissing struct{}
+
+func (e ErrMirrorClientMissing) Error() string {
+	return "rest/iam: user mirror has no IAM client"
+}

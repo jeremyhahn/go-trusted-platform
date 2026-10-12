@@ -113,15 +113,6 @@ func (e ErrMCPSDNClientClosed) Error() string {
 	return "MCP client is closed"
 }
 
-// ErrMCPSDNNotImplemented indicates a method is not yet implemented.
-type ErrMCPSDNNotImplemented struct {
-	Method string
-}
-
-func (e ErrMCPSDNNotImplemented) Error() string {
-	return fmt.Sprintf("MCP method %s not implemented", e.Method)
-}
-
 // ErrMCPSDNRequestFailed indicates an MCP request failed.
 type ErrMCPSDNRequestFailed struct {
 	Err error

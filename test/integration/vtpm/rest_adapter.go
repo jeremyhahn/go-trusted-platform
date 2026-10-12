@@ -55,16 +55,6 @@ func (e *RESTAdapterError) Error() string {
 		e.Operation, e.Message, e.StatusCode, e.Body)
 }
 
-// ErrRESTVTPMNotImplemented is returned when a vTPM operation is not implemented in REST.
-type ErrRESTVTPMNotImplemented struct {
-	Operation string
-}
-
-// Error returns the error message.
-func (e *ErrRESTVTPMNotImplemented) Error() string {
-	return fmt.Sprintf("REST vTPM operation not implemented: %s", e.Operation)
-}
-
 // RESTAdapter implements VTPMCommands using REST API.
 type RESTAdapter struct {
 	endpoint string

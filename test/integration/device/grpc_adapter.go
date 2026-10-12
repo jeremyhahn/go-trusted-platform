@@ -26,6 +26,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -60,15 +61,6 @@ func (e ErrGRPCCallFailed) Error() string {
 
 func (e ErrGRPCCallFailed) Unwrap() error {
 	return e.Err
-}
-
-// ErrGRPCNotImplemented indicates a method is not yet implemented for gRPC.
-type ErrGRPCNotImplemented struct {
-	Method string
-}
-
-func (e ErrGRPCNotImplemented) Error() string {
-	return fmt.Sprintf("gRPC method %s not implemented", e.Method)
 }
 
 // =============================================================================
@@ -538,27 +530,27 @@ func (a *GRPCAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 
 // CreateTemplate creates a new device template via gRPC.
 func (a *GRPCAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	return nil, ErrGRPCNotImplemented{Method: "CreateTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "CreateTemplate"}
 }
 
 // GetTemplate retrieves a template by ID via gRPC.
 func (a *GRPCAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	return nil, ErrGRPCNotImplemented{Method: "GetTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "GetTemplate"}
 }
 
 // UpdateTemplate updates an existing template via gRPC.
 func (a *GRPCAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	return nil, ErrGRPCNotImplemented{Method: "UpdateTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "UpdateTemplate"}
 }
 
 // DeleteTemplate removes a template via gRPC.
 func (a *GRPCAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	return nil, ErrGRPCNotImplemented{Method: "DeleteTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "DeleteTemplate"}
 }
 
 // ListTemplates lists all templates via gRPC.
 func (a *GRPCAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	return nil, ErrGRPCNotImplemented{Method: "ListTemplates"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "ListTemplates"}
 }
 
 // CreateProfileFromTemplate creates a profile from a template via gRPC.
@@ -600,7 +592,7 @@ func (a *GRPCAdapter) CreateProfileFromTemplate(ctx context.Context, opts Create
 
 // FindConfigForDevice finds the config for a device via gRPC.
 func (a *GRPCAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, ErrGRPCNotImplemented{Method: "FindConfigForDevice"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "FindConfigForDevice"}
 }
 
 // AssignProfileToDevice assigns a profile to a device via gRPC.

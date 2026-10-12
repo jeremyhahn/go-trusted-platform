@@ -209,13 +209,30 @@ func (s *TenantUserService) RegisterNewUser(
 		s.logger.Error(err, "failed to save user, rolling back tenant creation",
 			"tenant_id", tenantID,
 		)
-		// Rollback: attempt to clean up the tenant
-		if cleanupErr := s.tenantManager.DeleteTenant(ctx, tenantID); cleanupErr != nil {
-			s.logger.Error(cleanupErr, "failed to cleanup tenant after user save failure",
+		s.rollbackTenant(ctx, tenantID)
+		return nil, ErrUserSaveFailed{Cause: err}
+	}
+
+	// Mirror the owner into the QuicBaaS IAM tenant so /api/v1/iam/users
+	// surfaces them and the per-user role / group / policy paths have an
+	// entity to operate on. The owner's mirror is part of registration, not
+	// best-effort: an owner the IAM surface cannot see is rolled back the
+	// same way the tenant is (#641).
+	if s.iamMirror != nil {
+		if err := s.iamMirror.MirrorUser(ctx, tenantID, user.Email, user.DisplayName, iamMirrorRoles(user)); err != nil {
+			s.logger.Error(err, "failed to mirror new owner into IAM tenant, rolling back registration",
+				"user_id", user.ID,
+				"email", user.Email,
 				"tenant_id", tenantID,
 			)
+			if delErr := s.userService.Delete(ctx, user.ID); delErr != nil {
+				s.logger.Error(delErr, "failed to delete user after IAM mirror failure",
+					"user_id", user.ID,
+				)
+			}
+			s.rollbackTenant(ctx, tenantID)
+			return nil, ErrIAMMirrorFailed{Email: user.Email, TenantID: tenantID, Cause: err}
 		}
-		return nil, ErrUserSaveFailed{Cause: err}
 	}
 
 	s.logger.Info("new user registered with tenant",
@@ -226,28 +243,31 @@ func (s *TenantUserService) RegisterNewUser(
 		"role", DefaultTenantOwnerRole,
 	)
 
-	// Mirror the user into the QuicBaaS IAM tenant so /api/v1/iam/users
-	// surfaces them and the per-user role / group / policy paths have
-	// an entity to operate on. Failure is non-fatal — the platform
-	// registration already succeeded — but loud-log so operators can
-	// reconcile manually if the mirror is misconfigured.
-	if s.iamMirror != nil {
-		mirrorRoles := []string{DefaultTenantOwnerRole}
-		if err := s.iamMirror.MirrorUser(ctx, tenantID, user.Email, user.DisplayName, mirrorRoles); err != nil {
-			s.logger.Warn("failed to mirror user into IAM tenant",
-				"user_id", user.ID,
-				"email", user.Email,
-				"tenant_id", tenantID,
-				"error", err,
-			)
-		}
-	}
-
 	return &RegisterResult{
 		User:        user,
 		Tenant:      tenantEntity,
 		IsNewTenant: true,
 	}, nil
+}
+
+// rollbackTenant deletes a tenant created by a registration that then failed.
+// A cleanup failure is logged, not returned: the caller is already returning
+// the error that caused the rollback.
+func (s *TenantUserService) rollbackTenant(ctx context.Context, tenantID string) {
+	if err := s.tenantManager.DeleteTenant(ctx, tenantID); err != nil {
+		s.logger.Error(err, "failed to clean up tenant after failed registration",
+			"tenant_id", tenantID,
+		)
+	}
+}
+
+// iamMirrorRoles is the IAM role set a platform user is mirrored with: the
+// tenant owner gets DefaultTenantOwnerRole, every other user none.
+func iamMirrorRoles(user *entities.User) []string {
+	if user.IsTenantOwner {
+		return []string{DefaultTenantOwnerRole}
+	}
+	return nil
 }
 
 // DefaultTenantOwnerRole is the role granted automatically to the

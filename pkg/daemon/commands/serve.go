@@ -57,7 +57,6 @@ import (
 	"github.com/spf13/viper"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
-	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
 	acmequicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/acme/storage/quicbaas"
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	platformquicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
@@ -484,22 +483,24 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 		return ErrTLSIdentityRequiresConfig{}
 	case a.CA == nil:
 		return ErrProvisionMissingCA{}
+	case a.PlatformDir == "":
+		return ErrTLSIdentityRequiresPlatformDir{}
 	}
-	mtlsDir := "/tmp/platformd-integration/tls"
-	if mkErr := os.MkdirAll(mtlsDir, 0700); mkErr != nil {
-		return ErrProvisionPersist{Path: mtlsDir, Cause: mkErr}
+	// The server key lives in the CA keystore (#33). Only the admin
+	// bootstrap bundle and the public CA bundle are written, under
+	// <platform-dir>/tls.
+	tlsDir := filepath.Join(a.PlatformDir, "tls")
+	if mkErr := os.MkdirAll(tlsDir, 0700); mkErr != nil {
+		return ErrProvisionPersist{Path: tlsDir, Cause: mkErr}
 	}
-	// Prefer the SDK-based issuer (matches the documented architecture
-	// where all cert issuance flows through QuicBaaS), but fall back to
-	// the local CA when the embedded transport doesn't register a
-	// Certificate service. This keeps daemon TLS bootstrap working in
-	// the current stack where the platform CA is loaded in-process but
-	// QuicBaaS Certificate is not yet wired into embedded.
+	// Prefer the SDK-based issuer for the admin bootstrap certificate, but
+	// fall back to the local CA when the embedded transport doesn't
+	// register a Certificate service.
 	var issuer = newSDKCertIssuer(a.QuicBaaSSDKClient())
 	if localIssuer := newLocalCACertIssuer(a.CA); localIssuer != nil {
 		issuer = localIssuer
 	}
-	identity, mtlsErr := provisionDaemonIdentity(ctx, logger, issuer, a.CA, mtlsDir, daemonServerSANs(a))
+	identity, mtlsErr := provisionDaemonIdentity(ctx, logger, a.CA, issuer, tlsDir, daemonServerSANs(a))
 	if mtlsErr != nil {
 		return mtlsErr
 	}
@@ -516,7 +517,7 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 	}
 	cfg.EnableMTLS = requireClientCert
 	logger.Info("Daemon TLS identity provisioned",
-		"server_bundle", identity.ServerBundlePath,
+		"server_key", "ca-keystore:"+daemonServerCN,
 		"admin_bundle", identity.AdminBundlePath,
 		"ca_bundle", identity.CABundlePath,
 		"client_cert_required", requireClientCert,
@@ -1684,17 +1685,19 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 // =============================================================================
 
 // ProvisionedIdentity describes the TLS material the daemon needs to bind
-// remote transports. ServerCert is the in-memory cert+key for the daemon's
-// gRPC TCP / QUIC / REST listeners; AdminTrustPool gates incoming mTLS
-// client certificates; the *Path fields point at on-disk PEM bundles for
-// operator pickup (admin-bundle.pem, server-bundle.pem, ca-bundle.crt).
+// remote transports. ServerCert is the daemon's gRPC TCP / QUIC / REST / MCP
+// HTTP server certificate; its PrivateKey is the CA keystore's crypto.Signer,
+// so the server key never leaves the keystore (#33). AdminTrustPool gates
+// incoming mTLS client certificates. AdminBundlePath and CABundlePath point
+// at the operator-pickup files under <platform-dir>/tls: the admin bootstrap
+// bundle (the one argued on-disk key) and the public CA bundle. Reused reports
+// that the keystore already held a current server certificate.
 type ProvisionedIdentity struct {
-	ServerCert       tls.Certificate
-	AdminTrustPool   *x509.CertPool
-	ServerBundlePath string
-	AdminBundlePath  string
-	CABundlePath     string
-	Reused           bool
+	ServerCert      tls.Certificate
+	AdminTrustPool  *x509.CertPool
+	AdminBundlePath string
+	CABundlePath    string
+	Reused          bool
 }
 
 // renewalThreshold is the minimum time-to-expiry below which a persisted
@@ -1769,6 +1772,31 @@ func (ErrTLSIdentityNotProvisioned) Error() string {
 	return "daemon TLS identity was not provisioned"
 }
 
+// ErrTLSIdentityRequiresPlatformDir is returned when the app has no platform
+// directory to hold the admin bootstrap bundle and the public CA bundle.
+type ErrTLSIdentityRequiresPlatformDir struct{}
+
+// Error returns a human-readable description of the error.
+func (ErrTLSIdentityRequiresPlatformDir) Error() string {
+	return "daemon TLS identity requires a platform directory"
+}
+
+// ErrTLSIdentityKeystore is returned when the CA keystore that holds the
+// daemon's server key cannot issue, supersede or load the server identity.
+// The daemon starts no TLS listener without it.
+type ErrTLSIdentityKeystore struct {
+	Op    string
+	Cause error
+}
+
+// Error returns a human-readable description of the error.
+func (e ErrTLSIdentityKeystore) Error() string {
+	return fmt.Sprintf("daemon TLS identity: keystore %s failed: %v", e.Op, e.Cause)
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrTLSIdentityKeystore) Unwrap() error { return e.Cause }
+
 // ErrProvisionPersist wraps a disk-write failure for one of the on-disk
 // bundles produced by the provisioner.
 type ErrProvisionPersist struct {
@@ -1784,215 +1812,6 @@ func (e ErrProvisionPersist) Error() string {
 // Unwrap returns the underlying cause.
 func (e ErrProvisionPersist) Unwrap() error { return e.Cause }
 
-// =============================================================================
-// provisionDaemonIdentity
-// =============================================================================
-
-// provisionDaemonIdentity returns the daemon's TLS material, reusing a
-// persisted bundle when valid (§8 #7) and otherwise issuing a fresh pair
-// via the quicbaas SDK CertificateService (§5d / §7). The function never
-// imports go-xkms directly: the platform CA is consumed via local
-// interfaces (caTrustPoolProvider for the admin trust pool) and the SDK
-// transport is provided by the caller.
-//
-// On success it writes:
-//   - <dir>/server-bundle.pem  (cert + key, mode 0600)
-//   - <dir>/client-bundle.pem  (admin cert + key, mode 0600)
-//   - <dir>/ca-bundle.crt      (CA trust bundle, mode 0644)
-//
-// and populates ProvisionedIdentity. The daemon caller wires ServerCert
-// into config.TLSCertificate / QUICConfig.TLSConfig.Certificates and
-// AdminTrustPool into config.MTLSClientCAPool.
-func provisionDaemonIdentity(
-	ctx context.Context,
-	logger *logging.Logger,
-	issuer daemonCertIssuer,
-	ca caTrustPoolProvider,
-	outputDir string,
-	sans daemonSANs,
-) (*ProvisionedIdentity, error) {
-
-	if ca == nil {
-		return nil, ErrProvisionMissingCA{}
-	}
-
-	trustPool, err := ca.CABundleCertPool()
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: "trust-pool", Cause: err}
-	}
-
-	serverBundlePath := filepath.Join(outputDir, "server-bundle.pem")
-	adminBundlePath := filepath.Join(outputDir, "client-bundle.pem")
-	caBundlePath := filepath.Join(outputDir, "ca-bundle.crt")
-
-	dnsNames, ipStrings := daemonCertSANs(sans)
-
-	// Reuse existing on-disk bundles when both are valid. The CA trust
-	// pool is the single source of truth for chain verification.
-	if reused, ok := loadPersistedIdentity(logger, serverBundlePath, adminBundlePath, caBundlePath, trustPool, dnsNames); ok {
-		reused.AdminTrustPool = trustPool
-		logger.Info("provisionDaemonIdentity: reusing persisted daemon identity",
-			"server_bundle", serverBundlePath,
-			"admin_bundle", adminBundlePath,
-			"server_not_after", reused.ServerCert.Leaf.NotAfter.Format(time.RFC3339),
-		)
-		return reused, nil
-	}
-
-	if issuer == nil {
-		return nil, ErrProvisionMissingSDK{}
-	}
-
-	// --- Server certificate (gRPC TCP / QUIC / REST listeners) ---------------
-	serverReq := &certclient.IssueCertificateRequest{
-		CommonName:   "platformd.localhost",
-		Organization: "Trusted Platform",
-		DNSNames:     dnsNames,
-		IPAddresses:  ipStrings,
-		Usage:        "server",
-		KeyAlgorithm: "ecdsa",
-		ValidityDays: 365,
-	}
-	serverResp, err := issuer.IssueCertificate(ctx, serverReq)
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: "server", Cause: err}
-	}
-
-	serverCert, err := tlsCertificateFromPEM(serverResp.CertificatePEM, serverResp.PrivateKeyPEM)
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: "server", Cause: err}
-	}
-
-	if err := writeBundle(serverBundlePath, serverResp.CertificatePEM, serverResp.PrivateKeyPEM, 0600); err != nil {
-		return nil, ErrProvisionPersist{Path: serverBundlePath, Cause: err}
-	}
-
-	// --- Admin client certificate (one-shot per init: §8 #7) -----------------
-	adminReq := &certclient.IssueCertificateRequest{
-		CommonName:   "admin",
-		Organization: "Trusted Platform",
-		Usage:        "client",
-		KeyAlgorithm: "ecdsa",
-		ValidityDays: 365,
-	}
-	adminResp, err := issuer.IssueCertificate(ctx, adminReq)
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: "admin", Cause: err}
-	}
-
-	if err := writeBundle(adminBundlePath, adminResp.CertificatePEM, adminResp.PrivateKeyPEM, 0600); err != nil {
-		return nil, ErrProvisionPersist{Path: adminBundlePath, Cause: err}
-	}
-
-	// --- CA bundle (operator pickup) ----------------------------------------
-	caResp, err := issuer.GetCABundle(ctx, &certclient.GetCABundleRequest{})
-	if err != nil {
-		return nil, ErrProvisionIssue{Role: "ca-bundle", Cause: err}
-	}
-	if err := os.WriteFile(caBundlePath, []byte(caResp.BundlePEM), 0644); err != nil {
-		return nil, ErrProvisionPersist{Path: caBundlePath, Cause: err}
-	}
-
-	logger.Info("provisionDaemonIdentity: issued fresh daemon identity",
-		"server_serial", serverResp.SerialNumber,
-		"admin_serial", adminResp.SerialNumber,
-		"server_not_after", serverResp.NotAfter.Format(time.RFC3339),
-	)
-
-	return &ProvisionedIdentity{
-		ServerCert:       serverCert,
-		AdminTrustPool:   trustPool,
-		ServerBundlePath: serverBundlePath,
-		AdminBundlePath:  adminBundlePath,
-		CABundlePath:     caBundlePath,
-		Reused:           false,
-	}, nil
-}
-
-// daemonCertSANs composes the loopback + caller-supplied SAN sets into the
-// SDK request shape (DNS names and string-form IP addresses).
-func daemonCertSANs(extra daemonSANs) (dnsNames []string, ipStrings []string) {
-	dnsNames = append(dnsNames, "localhost", "platformd.localhost")
-	dnsNames = append(dnsNames, extra.DNS...)
-	ipStrings = append(ipStrings, "127.0.0.1", "::1")
-	ipStrings = append(ipStrings, extra.IPs...)
-	return
-}
-
-// loadPersistedIdentity attempts to reuse an existing daemon identity from
-// disk. The bundles must exist, be parseable, contain a non-expired cert
-// (with renewalThreshold headroom), and the server cert's SAN set must
-// still cover the supplied dnsNames. The chain is verified against the
-// supplied trust pool.
-func loadPersistedIdentity(
-	logger *logging.Logger,
-	serverBundlePath, adminBundlePath, caBundlePath string,
-	trustPool *x509.CertPool,
-	dnsNames []string,
-) (*ProvisionedIdentity, bool) {
-
-	serverCert, err := tlsCertificateFromFile(serverBundlePath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			logger.Debug("provisionDaemonIdentity: server bundle invalid, will reissue",
-				"path", serverBundlePath, "error", err.Error())
-		}
-		return nil, false
-	}
-	if !certWithinRenewalWindow(serverCert.Leaf, renewalThreshold) {
-		logger.Debug("provisionDaemonIdentity: server bundle expired or near-expiry, will reissue",
-			"path", serverBundlePath,
-			"not_after", serverCert.Leaf.NotAfter.Format(time.RFC3339))
-		return nil, false
-	}
-	if !certCoversDNSNames(serverCert.Leaf, dnsNames) {
-		logger.Debug("provisionDaemonIdentity: server bundle SANs no longer cover required hostnames, will reissue",
-			"path", serverBundlePath,
-			"required", dnsNames,
-			"present", serverCert.Leaf.DNSNames)
-		return nil, false
-	}
-	if err := verifyChain(serverCert.Leaf, trustPool); err != nil {
-		logger.Debug("provisionDaemonIdentity: server bundle chain invalid, will reissue",
-			"path", serverBundlePath, "error", err.Error())
-		return nil, false
-	}
-
-	adminCert, err := tlsCertificateFromFile(adminBundlePath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			logger.Debug("provisionDaemonIdentity: admin bundle invalid, will reissue",
-				"path", adminBundlePath, "error", err.Error())
-		}
-		return nil, false
-	}
-	if !certWithinRenewalWindow(adminCert.Leaf, renewalThreshold) {
-		logger.Debug("provisionDaemonIdentity: admin bundle expired or near-expiry, will reissue",
-			"path", adminBundlePath,
-			"not_after", adminCert.Leaf.NotAfter.Format(time.RFC3339))
-		return nil, false
-	}
-	if err := verifyChain(adminCert.Leaf, trustPool); err != nil {
-		logger.Debug("provisionDaemonIdentity: admin bundle chain invalid, will reissue",
-			"path", adminBundlePath, "error", err.Error())
-		return nil, false
-	}
-
-	if _, err := os.Stat(caBundlePath); err != nil {
-		// CA bundle is operator-facing; if missing we still reuse the
-		// in-memory material but the caller will see an empty path.
-		caBundlePath = ""
-	}
-
-	return &ProvisionedIdentity{
-		ServerCert:       serverCert,
-		ServerBundlePath: serverBundlePath,
-		AdminBundlePath:  adminBundlePath,
-		CABundlePath:     caBundlePath,
-		Reused:           true,
-	}, true
-}
-
 // tlsCertificateFromFile loads a PEM cert+key bundle (concatenated) from
 // disk and returns the parsed tls.Certificate with Leaf populated.
 func tlsCertificateFromFile(path string) (tls.Certificate, error) {
@@ -2001,13 +1820,6 @@ func tlsCertificateFromFile(path string) (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 	return tlsCertificateFromBundle(pemBytes)
-}
-
-// tlsCertificateFromPEM parses PEM cert and key strings into a populated
-// tls.Certificate. The Leaf is parsed for downstream callers.
-func tlsCertificateFromPEM(certPEM, keyPEM string) (tls.Certificate, error) {
-	bundle := append([]byte(certPEM), []byte(keyPEM)...)
-	return tlsCertificateFromBundle(bundle)
 }
 
 // tlsCertificateFromBundle parses a single PEM blob containing one or more

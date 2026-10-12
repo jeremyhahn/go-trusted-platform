@@ -30,6 +30,7 @@ import (
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -57,23 +58,6 @@ type ErrQUICStatus struct {
 
 func (e ErrQUICStatus) Error() string {
 	return fmt.Sprintf("QUIC %s refused with status 0x%02X: %s", e.Operation, e.Status, e.Message)
-}
-
-// ErrQUICNoSurface reports that an operation has no QUIC opcode to call.
-//
-// Its text is deliberately free of every phrase skipIfNotImplemented matches
-// on ("not implemented", "unimplemented", "not supported", "not available",
-// "service unavailable", ...). A missing transport surface is a reported
-// gap, and the suite must see it as one rather than skip past it - a suite
-// that skips its way to green is how #403's always-true attest verifier
-// survived.
-type ErrQUICNoSurface struct {
-	Operation string
-	Reason    string
-}
-
-func (e ErrQUICNoSurface) Error() string {
-	return fmt.Sprintf("device operation %s has no QUIC opcode: %s", e.Operation, e.Reason)
 }
 
 // =============================================================================
@@ -563,50 +547,50 @@ func (a *QUICAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProf
 // =============================================================================
 // Operations with no QUIC opcode
 //
-// Each returns ErrQUICNoSurface naming the gap. docs/device/api.md §2-4
+// Each returns surface.ErrNoSurface naming the gap. docs/device/api.md §2-4
 // records these as MISSING on QUIC; the template rows are a deliberate
 // design decision rather than an untracked hole. The error is returned
 // rather than faked so the absence stays visible in the suite.
 // =============================================================================
 
 func (a *QUICAdapter) FindProfileByMACAddress(ctx context.Context, opts FindProfileByMACAddressOptions) (*FindProfileByMACAddressResult, error) {
-	return nil, ErrQUICNoSurface{Operation: "FindProfileByMACAddress", Reason: "docs/device/api.md §3 records QUIC as MISSING for profile lookup by MAC"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "FindProfileByMACAddress", Reason: "docs/device/api.md §3 records QUIC as MISSING for profile lookup by MAC"}
 }
 
 func (a *QUICAdapter) FindProfileBySerial(ctx context.Context, opts FindProfileBySerialOptions) (*FindProfileBySerialResult, error) {
-	return nil, ErrQUICNoSurface{Operation: "FindProfileBySerial", Reason: "docs/device/api.md §3 records QUIC as MISSING for profile lookup by serial"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "FindProfileBySerial", Reason: "docs/device/api.md §3 records QUIC as MISSING for profile lookup by serial"}
 }
 
 func (a *QUICAdapter) FindMatchingProfile(ctx context.Context, opts FindMatchingProfileOptions) (*FindMatchingProfileResult, error) {
-	return nil, ErrQUICNoSurface{Operation: "FindMatchingProfile", Reason: "docs/device/api.md §3 records QUIC as MISSING for profile matching"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "FindMatchingProfile", Reason: "docs/device/api.md §3 records QUIC as MISSING for profile matching"}
 }
 
 func (a *QUICAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, ErrQUICNoSurface{Operation: "FindConfigForDevice", Reason: "docs/device/api.md §3 records QUIC as MISSING for config lookup"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "FindConfigForDevice", Reason: "docs/device/api.md §3 records QUIC as MISSING for config lookup"}
 }
 
 func (a *QUICAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	return nil, ErrQUICNoSurface{Operation: "CreateTemplate", Reason: templateNoSurfaceReason}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "CreateTemplate", Reason: templateNoSurfaceReason}
 }
 
 func (a *QUICAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	return nil, ErrQUICNoSurface{Operation: "GetTemplate", Reason: templateNoSurfaceReason}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetTemplate", Reason: templateNoSurfaceReason}
 }
 
 func (a *QUICAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	return nil, ErrQUICNoSurface{Operation: "UpdateTemplate", Reason: templateNoSurfaceReason}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "UpdateTemplate", Reason: templateNoSurfaceReason}
 }
 
 func (a *QUICAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	return nil, ErrQUICNoSurface{Operation: "DeleteTemplate", Reason: templateNoSurfaceReason}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "DeleteTemplate", Reason: templateNoSurfaceReason}
 }
 
 func (a *QUICAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	return nil, ErrQUICNoSurface{Operation: "ListTemplates", Reason: templateNoSurfaceReason}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ListTemplates", Reason: templateNoSurfaceReason}
 }
 
 func (a *QUICAdapter) CreateProfileFromTemplate(ctx context.Context, opts CreateProfileFromTemplateOptions) (*CreateProfileResult, error) {
-	return nil, ErrQUICNoSurface{Operation: "CreateProfileFromTemplate", Reason: templateNoSurfaceReason}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "CreateProfileFromTemplate", Reason: templateNoSurfaceReason}
 }
 
 // templateNoSurfaceReason cites the recorded decision rather than treating

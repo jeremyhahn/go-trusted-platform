@@ -13,7 +13,7 @@
 
 // This file implements the BMCCommands interface using the QUIC protocol.
 // Non-enrollment BMC operations are not yet wired to the QUIC transport layer;
-// Setup returns ErrQUICNotImplemented for those paths. EnrollBMC and RestoreBMC
+// Setup returns surface.ErrNoSurface for those paths. EnrollBMC and RestoreBMC
 // are fully implemented via the OpBMCCategory category opcode pattern.
 
 //go:build integration
@@ -31,6 +31,7 @@ import (
 	bmcsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	quicgo "github.com/quic-go/quic-go"
 )
 
@@ -45,7 +46,7 @@ const (
 
 // QUICAdapter implements BMCCommands using the QUIC protocol. Non-enrollment
 // BMC operations (power, boot, media, sensors, etc.) are not yet wired to the
-// QUIC transport; Setup returns ErrQUICNotImplemented so the test runner skips
+// QUIC transport; Setup returns surface.ErrNoSurface so the test runner skips
 // those subtests gracefully. EnrollBMC and RestoreBMC are fully implemented
 // via the category-opcode pattern (OpBMCCategory / BMCSubEnroll, BMCSubRestore).
 type QUICAdapter struct {
@@ -69,11 +70,11 @@ func (q *QUICAdapter) Name() string {
 	return "QUIC"
 }
 
-// Setup returns ErrQUICNotImplemented because the general BMC service is not
+// Setup returns surface.ErrNoSurface because the general BMC service is not
 // yet exposed over the QUIC transport. Enrollment and restore via EnrollBMC /
 // RestoreBMC are available independently once the connection is established.
 func (q *QUICAdapter) Setup(ctx context.Context) error {
-	return ErrQUICNotImplemented{}
+	return surface.ErrNoSurface{Transport: "QUIC", Operation: "Setup"}
 }
 
 // Teardown closes the QUIC connection if one was established.
@@ -173,62 +174,62 @@ func (q *QUICAdapter) sendBMCSub(ctx context.Context, sub byte, in interface{}, 
 
 // PowerOn is not implemented for QUIC.
 func (q *QUICAdapter) PowerOn(ctx context.Context, profileID uint64) (*bmcsvc.PowerResponse, error) {
-	return nil, ErrQUICNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "PowerOn"}
 }
 
 // PowerOff is not implemented for QUIC.
 func (q *QUICAdapter) PowerOff(ctx context.Context, profileID uint64) (*bmcsvc.PowerResponse, error) {
-	return nil, ErrQUICNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "PowerOff"}
 }
 
 // PowerStatus is not implemented for QUIC.
 func (q *QUICAdapter) PowerStatus(ctx context.Context, profileID uint64) (bmcsvc.PowerState, error) {
-	return bmcsvc.PowerStateUnspecified, ErrQUICNotImplemented{}
+	return bmcsvc.PowerStateUnspecified, surface.ErrNoSurface{Transport: "QUIC", Operation: "PowerStatus"}
 }
 
 // SetBootDevice is not implemented for QUIC.
 func (q *QUICAdapter) SetBootDevice(ctx context.Context, profileID uint64, device bmcsvc.BootDevice, persistent bool) error {
-	return ErrQUICNotImplemented{}
+	return surface.ErrNoSurface{Transport: "QUIC", Operation: "SetBootDevice"}
 }
 
 // GetBootDevice is not implemented for QUIC.
 func (q *QUICAdapter) GetBootDevice(ctx context.Context, profileID uint64) (bmcsvc.BootDevice, error) {
-	return bmcsvc.BootDeviceUnspecified, ErrQUICNotImplemented{}
+	return bmcsvc.BootDeviceUnspecified, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetBootDevice"}
 }
 
 // MountISO is not implemented for QUIC.
 func (q *QUICAdapter) MountISO(ctx context.Context, profileID uint64, isoURL string) error {
-	return ErrQUICNotImplemented{}
+	return surface.ErrNoSurface{Transport: "QUIC", Operation: "MountISO"}
 }
 
 // UnmountISO is not implemented for QUIC.
 func (q *QUICAdapter) UnmountISO(ctx context.Context, profileID uint64) error {
-	return ErrQUICNotImplemented{}
+	return surface.ErrNoSurface{Transport: "QUIC", Operation: "UnmountISO"}
 }
 
 // VirtualMediaStatus is not implemented for QUIC.
 func (q *QUICAdapter) VirtualMediaStatus(ctx context.Context, profileID uint64) (*bmcsvc.VirtualMediaInfo, error) {
-	return nil, ErrQUICNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "VirtualMediaStatus"}
 }
 
 // GetSensors is not implemented for QUIC.
 func (q *QUICAdapter) GetSensors(ctx context.Context, profileID uint64) ([]bmcsvc.SensorReading, error) {
-	return nil, ErrQUICNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetSensors"}
 }
 
 // GetSystemInfo is not implemented for QUIC.
 func (q *QUICAdapter) GetSystemInfo(ctx context.Context, profileID uint64) (*bmcsvc.SystemInfo, error) {
-	return nil, ErrQUICNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetSystemInfo"}
 }
 
 // GetWebCertificate is not implemented for QUIC.
 func (q *QUICAdapter) GetWebCertificate(ctx context.Context, profileID uint64) (*bmcsvc.CertificateInfo, error) {
-	return nil, ErrQUICNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetWebCertificate"}
 }
 
 // ListUsers is not implemented for QUIC.
 func (q *QUICAdapter) ListUsers(ctx context.Context, profileID uint64) ([]bmcsvc.User, error) {
-	return nil, ErrQUICNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ListUsers"}
 }
 
 // =============================================================================

@@ -21,6 +21,7 @@ import (
 
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"google.golang.org/grpc"
 )
 
@@ -130,7 +131,7 @@ func (g *GRPCAdapter) Info(ctx context.Context) (*InfoResult, error) {
 // Note: CA initialization is typically done during daemon startup, not via gRPC.
 // This method returns an error as init is not exposed via gRPC.
 func (g *GRPCAdapter) Init(ctx context.Context, opts InitOptions) (*InitResult, error) {
-	return nil, ErrNotImplemented{Feature: "CA init via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "CA init"}
 }
 
 // =============================================================================
@@ -437,7 +438,7 @@ func (g *GRPCAdapter) GenerateCRL(ctx context.Context) (*GenerateCRLResult, erro
 // ExportCRL exports the CRL via gRPC.
 // Note: CRL export to file is a CLI operation, not exposed via gRPC.
 func (g *GRPCAdapter) ExportCRL(ctx context.Context, output string) (*ExportCRLResult, error) {
-	return nil, ErrNotImplemented{Feature: "CRL export via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "CRL export"}
 }
 
 // =============================================================================
@@ -482,13 +483,13 @@ func (g *GRPCAdapter) ExportBundle(ctx context.Context, output string) (*ExportB
 // InstallCACertificates installs CA certificates via gRPC.
 // Note: CA certificate installation is a local OS operation, not exposed via gRPC.
 func (g *GRPCAdapter) InstallCACertificates(ctx context.Context) (*InstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "install CA certificates via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "install CA certificates"}
 }
 
 // UninstallCACertificates uninstalls CA certificates via gRPC.
 // Note: CA certificate uninstallation is a local OS operation, not exposed via gRPC.
 func (g *GRPCAdapter) UninstallCACertificates(ctx context.Context) (*UninstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "uninstall CA certificates via gRPC"}
+	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "uninstall CA certificates"}
 }
 
 // =============================================================================

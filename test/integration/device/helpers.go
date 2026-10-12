@@ -3,9 +3,7 @@
 package device
 
 import (
-	"errors"
 	"os"
-	"strings"
 	"testing"
 )
 
@@ -91,45 +89,4 @@ func GenerateTestProfileName(suffix string) string {
 // GenerateTestTemplateName generates a unique template name for testing
 func GenerateTestTemplateName(suffix string) string {
 	return "test-template-" + suffix
-}
-
-// skipIfNotImplemented skips the test if the error indicates the method
-// is not implemented for the current protocol adapter.
-//
-// The substring list below is the reason #403's always-true attest verifier
-// survived: every kind of adapter breakage - a 404 from a path no router
-// registers, an unknown CLI flag, a timeout from a protocol the server does
-// not speak - produces one of these phrases, so unrelated defects were all
-// reported as "this feature is not built yet", the one category nobody
-// investigates. Narrowing it is tracked separately; do not add to it.
-//
-// A DECLARED gap is different and is matched first, by type. An adapter that
-// states it has no surface for an operation can only do so by returning that
-// error explicitly, so the declaration cannot be produced by breakage.
-func skipIfNotImplemented(t *testing.T, err error) {
-	t.Helper()
-	if err == nil {
-		return
-	}
-
-	var noSurface ErrQUICNoSurface
-	if errors.As(err, &noSurface) {
-		t.Skipf("Declared gap, no QUIC opcode: %v", err)
-	}
-
-	errMsg := strings.ToLower(err.Error())
-	if strings.Contains(errMsg, "not implemented") ||
-		strings.Contains(errMsg, "unimplemented") ||
-		strings.Contains(errMsg, "not supported") ||
-		strings.Contains(errMsg, "service unavailable") ||
-		strings.Contains(errMsg, "not available") ||
-		strings.Contains(errMsg, "unknown service") ||
-		strings.Contains(errMsg, "connection required") ||
-		strings.Contains(errMsg, "404 page not found") ||
-		strings.Contains(errMsg, "status: 404") ||
-		strings.Contains(errMsg, "unknown flag") ||
-		strings.Contains(errMsg, "context canceled") ||
-		strings.Contains(errMsg, "context deadline exceeded") {
-		t.Skipf("Not implemented: %v", err)
-	}
 }

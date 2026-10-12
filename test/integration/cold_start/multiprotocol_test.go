@@ -19,11 +19,11 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // TestColdStartMultiProtocol walks the canonical cold-start lifecycle
@@ -131,7 +131,7 @@ func TestColdStartMultiProtocol(t *testing.T) {
 }
 
 // runColdStartScenario walks steps 5-10 against a single adapter. The
-// adapter implementations gracefully report "not yet wired" for steps
+// adapter implementations gracefully report surface.ErrNoSurface for steps
 // that depend on follow-up tasks (#143-b/c); the scenario translates
 // those into t.Skip rather than fail.
 func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartCommands, adminBundle string) {
@@ -160,7 +160,7 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 				t.Fatalf("mint mTLS cert: %v", err)
 			}
 			err = cmd.AddMTLSFactor(ctx, testUser, result.BundlePath, "primary-mtls")
-			if isNotWired(err) {
+			if surface.IsNotImplemented(err) {
 				t.Skipf("blocked by upstream auth-factor wiring: %v", err)
 				return
 			}
@@ -178,7 +178,7 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 
 	t.Run("Step07_ListFactors", func(t *testing.T) {
 		records, err := cmd.ListFactors(ctx, testUser)
-		if isNotWired(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skipf("blocked by upstream auth-factor wiring: %v", err)
 			return
 		}
@@ -193,7 +193,7 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 	t.Run("Step08_Login", func(t *testing.T) {
 		t.Run("mTLS", func(t *testing.T) {
 			snap, err := cmd.LoginMTLS(ctx, testUser, adminBundle)
-			if isNotWired(err) {
+			if surface.IsNotImplemented(err) {
 				t.Skipf("blocked by upstream auth wiring: %v", err)
 				return
 			}
@@ -228,7 +228,7 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 				t.Fatalf("mint mTLS cert: %v", err)
 			}
 			_, err = cmd.RotateMTLSFactor(ctx, testUser, "primary-mtls", fresh.BundlePath)
-			if isNotWired(err) {
+			if surface.IsNotImplemented(err) {
 				t.Skipf("blocked by upstream auth wiring: %v", err)
 				return
 			}
@@ -238,7 +238,7 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 		})
 		t.Run("LastFactorEnforced", func(t *testing.T) {
 			err := cmd.RemoveFactor(ctx, testUser, "primary-mtls")
-			if isNotWired(err) {
+			if surface.IsNotImplemented(err) {
 				t.Skipf("blocked by upstream auth wiring: %v", err)
 				return
 			}
@@ -248,19 +248,4 @@ func runColdStartScenario(t *testing.T, ctx context.Context, cmd ColdStartComman
 			}
 		})
 	})
-}
-
-// isNotWired returns true when the error matches the canonical "not yet
-// wired" surface emitted by every stub adapter method.
-func isNotWired(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	for _, needle := range []string{"not yet wired", "not implemented", "stub authenticator"} {
-		if strings.Contains(msg, needle) {
-			return true
-		}
-	}
-	return false
 }

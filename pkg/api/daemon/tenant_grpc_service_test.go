@@ -47,6 +47,11 @@ func newMockIAMClientForTenant() *mockIAMClientForTenant {
 	}
 }
 
+// Reconcile satisfies tenant.RoleReconciler; these tests do not inspect roles.
+func (m *mockIAMClientForTenant) Reconcile(_ context.Context, tenantID string) (*sdkiam.ReconcileRolesResponse, error) {
+	return &sdkiam.ReconcileRolesResponse{TenantID: tenantID}, nil
+}
+
 func (m *mockIAMClientForTenant) Create(ctx context.Context, req *sdkiam.CreateTenantRequest) (*sdkiam.Tenant, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -125,6 +130,7 @@ func createTestTenantManager(t *testing.T) *tenant.Manager {
 
 	mgr, err := tenant.NewManager(&tenant.ManagerConfig{
 		IAMTenantClient: newMockIAMClientForTenant(),
+		IAMRoleClient:   newMockIAMClientForTenant(),
 		Config:          cfg,
 		Logger:          nil,
 	})

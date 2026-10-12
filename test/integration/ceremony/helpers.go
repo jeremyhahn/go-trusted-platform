@@ -16,12 +16,12 @@
 package ceremony
 
 import (
-	"errors"
 	"os"
-	"strings"
 
 	daemonpkg "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	ceremonysdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ceremony"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // Environment variable names for service endpoints. Keep in sync with the CA
@@ -63,34 +63,14 @@ func GetServiceEndpoints() *ServiceEndpoints {
 // "ceremony backend not configured" at any transport layer. All transports
 // (gRPC Unavailable, REST 503, QUIC StatusUnavailable, MCP tool error,
 // CLI exit code) eventually surface a string containing the daemon error
-// message, so we match both the sentinel error and its string form.
+// message, so we match both the sentinel error and its exact text. Generic
+// phrases ("unavailable", "501", "not implemented") no longer skip (#487).
 func isBackendUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, daemonpkg.ErrCeremonyNotConfigured) {
-		return true
-	}
-	if errors.Is(err, ceremonysdk.ErrNotYetWired) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	needles := []string{
-		"backend not configured",
-		"not yet wired",
-		"unavailable",
-		"not implemented",
-		"501",
-		"503",
-		"ceremony: ",
-		"phase35: service provider not configured",
-	}
-	for _, needle := range needles {
-		if strings.Contains(msg, needle) {
-			return true
-		}
-	}
-	return false
+	return surface.IsNotImplemented(err) || surface.IsDeclaredRefusal(err,
+		daemonpkg.ErrCeremonyNotConfigured,
+		ceremonysdk.ErrNotYetWired,
+		mcpapi.ErrPhase35NotConfigured,
+	)
 }
 
 // SkipIfNotIntegration skips the test when INTEGRATION_TEST is not set.

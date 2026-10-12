@@ -24,7 +24,7 @@ import (
 
 // GRPCAdapter drives cold-start auth operations over a TLS gRPC
 // connection. The auth/factor service is being stood up under #143-b/c;
-// until those land the adapter surfaces "not yet wired" for every
+// until those land the adapter surfaces surface.ErrNoSurface for every
 // auth-mutating call.
 type GRPCAdapter struct {
 	endpoint string

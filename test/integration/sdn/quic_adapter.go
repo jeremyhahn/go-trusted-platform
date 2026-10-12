@@ -156,23 +156,30 @@ func (e ErrQUICSDNClientClosed) Error() string {
 	return "QUIC client is closed"
 }
 
-// ErrQUICSDNNotImplemented indicates a method is not yet implemented. Cause,
-// when set, carries the underlying transport/server error so skip messages
-// stay diagnosable instead of masking the real failure.
-type ErrQUICSDNNotImplemented struct {
-	Method string
-	Cause  error
+// ErrQUICSDNUnavailable reports that a QUIC SDN call could not be served: the
+// adapter has no connection, or the server answered StatusUnavailable. It is
+// a failure, not a declared gap; adapters declare a missing surface with
+// surface.ErrNoSurface. Cause, when set, carries the underlying error.
+type ErrQUICSDNUnavailable struct {
+	Operation string
+	Cause     error
 }
 
-func (e ErrQUICSDNNotImplemented) Error() string {
+func (e ErrQUICSDNUnavailable) Error() string {
 	if e.Cause != nil {
-		return fmt.Sprintf("QUIC method %s not implemented: %v", e.Method, e.Cause)
+		return fmt.Sprintf("QUIC %s unavailable: %v", e.Operation, e.Cause)
 	}
-	return fmt.Sprintf("QUIC method %s not implemented", e.Method)
+	return fmt.Sprintf("QUIC %s unavailable", e.Operation)
 }
 
 // Unwrap returns the underlying cause.
-func (e ErrQUICSDNNotImplemented) Unwrap() error { return e.Cause }
+func (e ErrQUICSDNUnavailable) Unwrap() error { return e.Cause }
+
+// ErrQUICSDNNotConnected reports a call on an adapter that has no open
+// QUIC connection.
+type ErrQUICSDNNotConnected struct{}
+
+func (ErrQUICSDNNotConnected) Error() string { return "no open QUIC connection" }
 
 // =============================================================================
 // Wire Protocol Types

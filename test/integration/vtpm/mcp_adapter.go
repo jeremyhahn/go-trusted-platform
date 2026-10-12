@@ -91,15 +91,6 @@ const (
 // Error Types
 // =============================================================================
 
-// ErrMCPVTPMNotImplemented indicates a method is not yet implemented.
-type ErrMCPVTPMNotImplemented struct {
-	Method string
-}
-
-func (e ErrMCPVTPMNotImplemented) Error() string {
-	return fmt.Sprintf("MCP vTPM method %s not implemented", e.Method)
-}
-
 // ErrMCPVTPMConnectionFailed indicates an MCP connection failure.
 type ErrMCPVTPMConnectionFailed struct {
 	Endpoint string

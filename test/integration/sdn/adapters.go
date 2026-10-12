@@ -745,16 +745,6 @@ func (e ErrAdapterSetupFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrAdapterNotImplemented indicates the operation is not implemented for this adapter.
-type ErrAdapterNotImplemented struct {
-	Protocol  string
-	Operation string
-}
-
-func (e ErrAdapterNotImplemented) Error() string {
-	return "operation " + e.Operation + " not implemented for protocol " + e.Protocol
-}
-
 // ErrVTEPNotFound indicates a VTEP was not found.
 type ErrVTEPNotFound struct {
 	NodeID string

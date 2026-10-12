@@ -140,13 +140,6 @@ func (e ErrGRPCCallFailed) Unwrap() error { return e.Err }
 // QUIC Adapter Errors
 // =============================================================================
 
-// ErrQUICNotImplemented indicates the QUIC adapter is not yet wired for BMC.
-type ErrQUICNotImplemented struct{}
-
-func (e ErrQUICNotImplemented) Error() string {
-	return "bmc: QUIC protocol adapter not implemented for BMC service"
-}
-
 // ErrQUICConnectionFailed indicates a QUIC connection failure.
 type ErrQUICConnectionFailed struct {
 	Endpoint string
@@ -174,13 +167,6 @@ func (e ErrQUICCallFailed) Unwrap() error { return e.Err }
 // =============================================================================
 // MCP Adapter Errors
 // =============================================================================
-
-// ErrMCPNotImplemented indicates the MCP adapter is not yet wired for BMC.
-type ErrMCPNotImplemented struct{}
-
-func (e ErrMCPNotImplemented) Error() string {
-	return "bmc: MCP protocol adapter not implemented for BMC service"
-}
 
 // ErrMCPConnectionFailed indicates the MCP connection failed.
 type ErrMCPConnectionFailed struct {

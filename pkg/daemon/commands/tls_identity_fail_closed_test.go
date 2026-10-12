@@ -20,7 +20,13 @@ package commands
 
 import (
 	"context"
+	"crypto"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"net"
+	"os"
+	"path/filepath"
 	"testing"
 
 	daemon "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
@@ -124,5 +130,103 @@ func TestApplyDaemonTLSIdentity_UDSOnlySkips(t *testing.T) {
 	}
 	if cfg.TLSCertificate != nil {
 		t.Error("UDS-only mode must not install TLS material")
+	}
+}
+
+// handshakeServerLeaf runs a TLS handshake over an in-memory pipe against a
+// server presenting serverCert and returns the leaf the client verified.
+func handshakeServerLeaf(t *testing.T, serverCert tls.Certificate, roots *x509.CertPool) *x509.Certificate {
+	t.Helper()
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	server := tls.Server(serverConn, &tls.Config{Certificates: []tls.Certificate{serverCert}, MinVersion: tls.VersionTLS12})
+	client := tls.Client(clientConn, &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12})
+
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.Handshake() }()
+	if err := client.Handshake(); err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server handshake: %v", err)
+	}
+	peers := client.ConnectionState().PeerCertificates
+	if len(peers) == 0 {
+		t.Fatal("server presented no certificate")
+	}
+	return peers[0]
+}
+
+// TestApplyDaemonTLSIdentity_ServesKeystoreHeldIdentity asserts the boot
+// path (#33): the listener certificate's key is the CA keystore's signer,
+// no server key file is written under the platform directory, and a TLS
+// client is presented the keystore-held certificate.
+func TestApplyDaemonTLSIdentity_ServesKeystoreHeldIdentity(t *testing.T) {
+	ca := newFakeKeystoreCA(t)
+	platformDir := t.TempDir()
+	cfg := tlsTransportConfig()
+
+	err := applyDaemonTLSIdentity(context.Background(), newTestLogger(), &app.App{CA: ca, PlatformDir: platformDir}, cfg, true)
+	if err != nil {
+		t.Fatalf("applyDaemonTLSIdentity: %v", err)
+	}
+	signer := ca.serverSigner()
+	if signer == nil {
+		t.Fatal("the keystore holds no daemon server key")
+	}
+	if cfg.TLSCertificate == nil || cfg.TLSCertificate.PrivateKey != crypto.PrivateKey(signer) {
+		t.Fatal("the listener certificate is not backed by the keystore signer")
+	}
+	assertNoServerKeyOnDisk(t, platformDir, signer.Public())
+	if want := filepath.Join(platformDir, "tls", "ca-bundle.crt"); cfg.MTLSClientCAFile != want {
+		t.Errorf("MTLSClientCAFile = %q, want %q", cfg.MTLSClientCAFile, want)
+	}
+	if !cfg.EnableMTLS {
+		t.Error("requireClientCert must enable mTLS")
+	}
+
+	leaf := handshakeServerLeaf(t, *cfg.TLSCertificate, ca.root.pool())
+	if !leaf.Equal(ca.certs[daemonServerCN]) {
+		t.Error("the listener presented a certificate other than the keystore-held one")
+	}
+}
+
+// TestApplyDaemonTLSIdentity_KeystoreUnavailableFailsClosed asserts an
+// unavailable keystore is a typed error that installs no TLS material, so
+// serve starts no TLS listener, and writes no TLS file.
+func TestApplyDaemonTLSIdentity_KeystoreUnavailableFailsClosed(t *testing.T) {
+	ca := newFakeKeystoreCA(t)
+	ca.unavailable = true
+	platformDir := t.TempDir()
+	cfg := tlsTransportConfig()
+
+	err := applyDaemonTLSIdentity(context.Background(), newTestLogger(), &app.App{CA: ca, PlatformDir: platformDir}, cfg, false)
+	var typed ErrTLSIdentityKeystore
+	if !errors.As(err, &typed) {
+		t.Fatalf("expected ErrTLSIdentityKeystore, got %T (%v)", err, err)
+	}
+	if cfg.TLSCertificate != nil || cfg.MTLSClientCAPool != nil {
+		t.Error("a keystore failure must install no TLS material")
+	}
+	entries, readErr := os.ReadDir(filepath.Join(platformDir, "tls"))
+	if readErr != nil {
+		t.Fatalf("read tls dir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("a keystore failure must write no TLS file, found %d", len(entries))
+	}
+}
+
+func TestApplyDaemonTLSIdentity_RequiresPlatformDir(t *testing.T) {
+	cfg := tlsTransportConfig()
+	err := applyDaemonTLSIdentity(context.Background(), newTestLogger(), &app.App{CA: newFakeKeystoreCA(t)}, cfg, false)
+	var typed ErrTLSIdentityRequiresPlatformDir
+	if !errors.As(err, &typed) {
+		t.Fatalf("expected ErrTLSIdentityRequiresPlatformDir, got %T (%v)", err, err)
+	}
+	if cfg.TLSCertificate != nil {
+		t.Error("no TLS material may be installed without a platform directory")
 	}
 }

@@ -225,6 +225,11 @@ The MCP server (`mcp_service.go`) enables AI/LLM integration via the Model Conte
 ## Startup Sequence
 
 ```
+0. platformd serve: applyDaemonTLSIdentity()
+   |
+   +-- Load or issue the server identity in the CA keystore
+   +-- Write the admin bootstrap bundle and CA bundle to <platform-dir>/tls
+
 1. Create()
    |
    +-- Validate configuration
@@ -418,6 +423,44 @@ single explicit opt-out, mirroring MCP (#440); before #550 the interceptors
 were installed with `WithRequireAuth(tokenValidator != nil)` and the whole
 daemon API was served anonymously in that state. The Unix-domain-socket
 transport is unaffected: peer-credential authentication is unconditional.
+
+### Daemon TLS identity and key custody (#33)
+
+`platformd serve` provisions the daemon identity in `applyDaemonTLSIdentity`
+(`pkg/daemon/commands/serve.go`), before `Create()`. The work is done by
+`provisionDaemonIdentity` (`pkg/daemon/commands/provision_identity.go`).
+
+| Material | Where it lives | Notes |
+|----------|----------------|-------|
+| Server key (`platformd.localhost`, ECDSA P-256) | Platform CA keystore | Never written to disk. The listeners get a `tls.Certificate` whose `PrivateKey` is the keystore's `crypto.Signer`, from `CA.TLSCertificate` via the `sdk/go/xkms/ca` re-export. |
+| Server certificate | Platform CA certificate store | Issued by `CA.IssueCertificate` with `KeyAttributes`, so the CA generates the key in its keystore. |
+| Admin bootstrap bundle | `<platform-dir>/tls/client-bundle.pem`, mode 0600 | The one key on disk. See below. |
+| CA bundle | `<platform-dir>/tls/ca-bundle.crt`, mode 0644 | Public. Rewritten from `CA.CABundle()` on every boot. |
+
+On each boot the server identity is loaded from the keystore. It is reused
+when it chains to the CA, covers the required DNS SANs and is outside the
+30-day renewal window. Otherwise it is superseded: the stored certificate is
+looked up on its own (`CA.Certificate`, which does not need the key),
+`RevokeCert` with `DeleteKeys` revokes it and destroys any old key, and a fresh
+key and certificate are issued. The certificate lookup is what lets an
+installation upgrade from the pre-#33 PEM-backed identity, whose certificate is
+in the CA store but whose key never was in the keystore
+([engineering.md](engineering.md) §7).
+
+**Why the admin bundle stays on disk.** It is the client credential an
+operator (or the integration harness) hands to `platformctl` for the first mTLS
+connection, before any other identity exists. It therefore has to be a file a
+separate process can read. It is client-auth only, signed by the platform CA,
+and lives in the 0700 `<platform-dir>/tls` directory rather than `/tmp`.
+
+**Fail closed.** The server identity is resolved before any file is written:
+
+- A keystore that cannot issue, load or supersede the key returns
+  `ErrTLSIdentityKeystore{Op}`. `Op` is `issue`, `load` or `supersede`.
+- With no platform directory, `ErrTLSIdentityRequiresPlatformDir` is returned.
+
+In both cases no TLS material is installed in the daemon config, so no TLS
+listener starts.
 
 ## Configuration Files
 

@@ -26,7 +26,7 @@ import (
 // UnixAdapter drives cold-start auth operations over gRPC-over-UDS. The
 // auth surface is being stood up upstream; this adapter dials the
 // cold-start socket so connectivity is validated, but every mutating
-// method returns "not yet wired".
+// method returns surface.ErrNoSurface.
 type UnixAdapter struct {
 	socketPath string
 	conn       *grpc.ClientConn

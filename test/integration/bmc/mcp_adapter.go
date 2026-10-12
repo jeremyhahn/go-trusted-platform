@@ -13,7 +13,7 @@
 
 // This file implements the BMCCommands interface using the MCP (Model Context Protocol).
 // General BMC operations are not yet wired to the MCP transport layer; Setup returns
-// ErrMCPNotImplemented so the test runner skips those subtests gracefully.
+// surface.ErrNoSurface so the test runner skips those subtests gracefully.
 // EnrollBMC and RestoreBMC are fully implemented via the platform_bmc_enroll and
 // platform_bmc_cert_restore MCP tools respectively.
 
@@ -33,6 +33,7 @@ import (
 
 	bmcsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // MCP tool name constants, matching pkg/api/mcp/bmc_tools.go.
@@ -47,7 +48,7 @@ const (
 
 // MCPAdapter implements BMCCommands using the MCP (Model Context Protocol).
 // General BMC operations are not yet wired to the MCP transport layer; all
-// such methods return ErrMCPNotImplemented. EnrollBMC and RestoreBMC are
+// such methods return surface.ErrNoSurface. EnrollBMC and RestoreBMC are
 // fully implemented via the MCP tools listed above.
 type MCPAdapter struct {
 	endpoint   string
@@ -65,11 +66,11 @@ func (m *MCPAdapter) Name() string {
 	return "MCP"
 }
 
-// Setup returns ErrMCPNotImplemented because the general BMC service is not
+// Setup returns surface.ErrNoSurface because the general BMC service is not
 // yet exposed over the MCP transport. EnrollBMC and RestoreBMC connect
 // independently on first use.
 func (m *MCPAdapter) Setup(ctx context.Context) error {
-	return ErrMCPNotImplemented{}
+	return surface.ErrNoSurface{Transport: "MCP", Operation: "Setup"}
 }
 
 // Teardown closes idle HTTP connections.
@@ -230,62 +231,62 @@ func (m *MCPAdapter) callTool(ctx context.Context, name string, args map[string]
 
 // PowerOn is not implemented for MCP.
 func (m *MCPAdapter) PowerOn(ctx context.Context, profileID uint64) (*bmcsvc.PowerResponse, error) {
-	return nil, ErrMCPNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "PowerOn"}
 }
 
 // PowerOff is not implemented for MCP.
 func (m *MCPAdapter) PowerOff(ctx context.Context, profileID uint64) (*bmcsvc.PowerResponse, error) {
-	return nil, ErrMCPNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "PowerOff"}
 }
 
 // PowerStatus is not implemented for MCP.
 func (m *MCPAdapter) PowerStatus(ctx context.Context, profileID uint64) (bmcsvc.PowerState, error) {
-	return bmcsvc.PowerStateUnspecified, ErrMCPNotImplemented{}
+	return bmcsvc.PowerStateUnspecified, surface.ErrNoSurface{Transport: "MCP", Operation: "PowerStatus"}
 }
 
 // SetBootDevice is not implemented for MCP.
 func (m *MCPAdapter) SetBootDevice(ctx context.Context, profileID uint64, device bmcsvc.BootDevice, persistent bool) error {
-	return ErrMCPNotImplemented{}
+	return surface.ErrNoSurface{Transport: "MCP", Operation: "SetBootDevice"}
 }
 
 // GetBootDevice is not implemented for MCP.
 func (m *MCPAdapter) GetBootDevice(ctx context.Context, profileID uint64) (bmcsvc.BootDevice, error) {
-	return bmcsvc.BootDeviceUnspecified, ErrMCPNotImplemented{}
+	return bmcsvc.BootDeviceUnspecified, surface.ErrNoSurface{Transport: "MCP", Operation: "GetBootDevice"}
 }
 
 // MountISO is not implemented for MCP.
 func (m *MCPAdapter) MountISO(ctx context.Context, profileID uint64, isoURL string) error {
-	return ErrMCPNotImplemented{}
+	return surface.ErrNoSurface{Transport: "MCP", Operation: "MountISO"}
 }
 
 // UnmountISO is not implemented for MCP.
 func (m *MCPAdapter) UnmountISO(ctx context.Context, profileID uint64) error {
-	return ErrMCPNotImplemented{}
+	return surface.ErrNoSurface{Transport: "MCP", Operation: "UnmountISO"}
 }
 
 // VirtualMediaStatus is not implemented for MCP.
 func (m *MCPAdapter) VirtualMediaStatus(ctx context.Context, profileID uint64) (*bmcsvc.VirtualMediaInfo, error) {
-	return nil, ErrMCPNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "VirtualMediaStatus"}
 }
 
 // GetSensors is not implemented for MCP.
 func (m *MCPAdapter) GetSensors(ctx context.Context, profileID uint64) ([]bmcsvc.SensorReading, error) {
-	return nil, ErrMCPNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "GetSensors"}
 }
 
 // GetSystemInfo is not implemented for MCP.
 func (m *MCPAdapter) GetSystemInfo(ctx context.Context, profileID uint64) (*bmcsvc.SystemInfo, error) {
-	return nil, ErrMCPNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "GetSystemInfo"}
 }
 
 // GetWebCertificate is not implemented for MCP.
 func (m *MCPAdapter) GetWebCertificate(ctx context.Context, profileID uint64) (*bmcsvc.CertificateInfo, error) {
-	return nil, ErrMCPNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "GetWebCertificate"}
 }
 
 // ListUsers is not implemented for MCP.
 func (m *MCPAdapter) ListUsers(ctx context.Context, profileID uint64) ([]bmcsvc.User, error) {
-	return nil, ErrMCPNotImplemented{}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "ListUsers"}
 }
 
 // =============================================================================

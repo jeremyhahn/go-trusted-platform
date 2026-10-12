@@ -28,7 +28,7 @@ import (
 // QUICAdapter drives cold-start auth operations via QUIC. The auth
 // sub-opcode space is being defined in #143-b/c follow-ups; this adapter
 // dials the cold-start QUIC port so connectivity is validated, but
-// every mutating method returns "not yet wired".
+// every mutating method returns surface.ErrNoSurface.
 type QUICAdapter struct {
 	endpoint  string
 	tlsConfig *tls.Config

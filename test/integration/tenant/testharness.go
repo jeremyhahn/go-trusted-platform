@@ -235,6 +235,7 @@ quicbaasReady:
 
 	h.tenantManager, err = tenant.NewManager(&tenant.ManagerConfig{
 		IAMTenantClient: iamTenantClient,
+		IAMRoleClient:   iam.NewRoleClient(h.grpcTransport),
 		Config:          tenantConfig,
 		Logger:          h.logger.Slog(),
 	})

@@ -66,24 +66,3 @@ func (e ErrCallFailed) Error() string {
 }
 
 func (e ErrCallFailed) Unwrap() error { return e.Err }
-
-// ErrNotImplemented indicates the transport has not wired a given operation.
-type ErrNotImplemented struct {
-	Protocol string
-	Method   string
-}
-
-func (e ErrNotImplemented) Error() string {
-	return fmt.Sprintf("%s: %s not implemented", e.Protocol, e.Method)
-}
-
-// ErrTransportNotAvailable indicates the transport endpoint is disabled for
-// this integration run (for example REST Phase 3.5 routes are not yet wired).
-type ErrTransportNotAvailable struct {
-	Protocol string
-	Reason   string
-}
-
-func (e ErrTransportNotAvailable) Error() string {
-	return fmt.Sprintf("%s transport not available: %s", e.Protocol, e.Reason)
-}

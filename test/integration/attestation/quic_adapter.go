@@ -22,6 +22,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	quicgo "github.com/quic-go/quic-go"
 )
 
@@ -98,20 +99,6 @@ func (e ErrQUICStatus) Error() string {
 	return fmt.Sprintf("QUIC %s refused with status 0x%02X: %s", e.Operation, e.Status, e.Message)
 }
 
-// ErrQUICNoSurface reports that an operation has no QUIC opcode to call.
-//
-// Its text deliberately avoids every phrase a skip guard matches on ("not
-// implemented", "unimplemented", "not supported", "not available"). A missing
-// transport surface is a reported gap, and the suite must see it as one rather
-// than skip past it.
-type ErrQUICNoSurface struct {
-	Operation string
-}
-
-func (e ErrQUICNoSurface) Error() string {
-	return fmt.Sprintf("QUIC carries no opcode for %s; this operation has no wire surface", e.Operation)
-}
-
 func (a *QUICAdapter) doOp(ctx context.Context, op string, opcode byte, body interface{}) ([]byte, error) {
 
 	if a.conn == nil {
@@ -160,13 +147,13 @@ func (a *QUICAdapter) doOp(ctx context.Context, op string, opcode byte, body int
 // GenerateVMQuote generates a TPM quote for a VM
 func (a *QUICAdapter) GenerateVMQuote(ctx context.Context, opts GenerateVMQuoteOptions) (*GenerateVMQuoteResult, error) {
 	_ = opts
-	return nil, ErrQUICNoSurface{Operation: "GenerateVMQuote"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GenerateVMQuote"}
 }
 
 // GetVMIdentity retrieves VM identity from vTPM EK certificate
 func (a *QUICAdapter) GetVMIdentity(ctx context.Context, opts GetVMIdentityOptions) (*GetVMIdentityResult, error) {
 	_ = opts
-	return nil, ErrQUICNoSurface{Operation: "GetVMIdentity"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetVMIdentity"}
 }
 
 // GetVMAttestation generates a full VM attestation
@@ -190,7 +177,7 @@ func (a *QUICAdapter) GetVMAttestation(ctx context.Context, opts GetVMAttestatio
 // VerifyVMAttestation verifies a VM attestation
 func (a *QUICAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (*VerifyVMAttestationResult, error) {
 	_ = opts
-	return nil, ErrQUICNoSurface{Operation: "VerifyVMAttestation"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "VerifyVMAttestation"}
 }
 
 // =============================================================================
@@ -218,7 +205,7 @@ func (a *QUICAdapter) BuildManifest(ctx context.Context, opts BuildManifestOptio
 // SignManifest signs a manifest with the host TPM
 func (a *QUICAdapter) SignManifest(ctx context.Context, opts SignManifestOptions) (*SignManifestResult, error) {
 	_ = opts
-	return nil, ErrQUICNoSurface{Operation: "SignManifest"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "SignManifest"}
 }
 
 // VerifyManifest verifies a signed manifest
@@ -264,19 +251,19 @@ func (a *QUICAdapter) GetManifest(ctx context.Context, opts GetManifestOptions) 
 // PushAttestation pushes an attestation to a target
 func (a *QUICAdapter) PushAttestation(ctx context.Context, opts PushAttestationOptions) (*PushAttestationResult, error) {
 	_ = opts
-	return nil, ErrQUICNoSurface{Operation: "PushAttestation"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "PushAttestation"}
 }
 
 // PushAttestationBatch pushes to multiple targets concurrently
 func (a *QUICAdapter) PushAttestationBatch(ctx context.Context, opts PushAttestationBatchOptions) (*PushAttestationBatchResult, error) {
 	_ = opts
-	return nil, ErrQUICNoSurface{Operation: "PushAttestationBatch"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "PushAttestationBatch"}
 }
 
 // GetPushStatus retrieves the status of a push operation
 func (a *QUICAdapter) GetPushStatus(ctx context.Context, opts GetPushStatusOptions) (*GetPushStatusResult, error) {
 	_ = opts
-	return nil, ErrQUICNoSurface{Operation: "GetPushStatus"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetPushStatus"}
 }
 
 // =============================================================================
@@ -286,25 +273,25 @@ func (a *QUICAdapter) GetPushStatus(ctx context.Context, opts GetPushStatusOptio
 // ExtendWorkloadChain extends the workload PCR with a measurement
 func (a *QUICAdapter) ExtendWorkloadChain(ctx context.Context, opts ExtendWorkloadChainOptions) (*ExtendWorkloadChainResult, error) {
 	_ = opts
-	return nil, ErrQUICNoSurface{Operation: "ExtendWorkloadChain"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ExtendWorkloadChain"}
 }
 
 // GetWorkloadChainHistory retrieves the chain history
 func (a *QUICAdapter) GetWorkloadChainHistory(ctx context.Context, opts GetWorkloadChainHistoryOptions) (*GetWorkloadChainHistoryResult, error) {
 	_ = opts
-	return nil, ErrQUICNoSurface{Operation: "GetWorkloadChainHistory"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetWorkloadChainHistory"}
 }
 
 // VerifyWorkloadChain verifies the chain against expected PCR
 func (a *QUICAdapter) VerifyWorkloadChain(ctx context.Context, opts VerifyWorkloadChainOptions) (*VerifyWorkloadChainResult, error) {
 	_ = opts
-	return nil, ErrQUICNoSurface{Operation: "VerifyWorkloadChain"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "VerifyWorkloadChain"}
 }
 
 // GetWorkloadChainStats retrieves chain statistics
 func (a *QUICAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error) {
 	_ = opts
-	return nil, ErrQUICNoSurface{Operation: "GetWorkloadChainStats"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetWorkloadChainStats"}
 }
 
 // Verify QUICAdapter implements AttestationCommands

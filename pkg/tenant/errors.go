@@ -123,6 +123,23 @@ func (e ErrDEKOperationFailed) Unwrap() error {
 	return e.Err
 }
 
+// ErrDefaultRolesFailed is returned when the IAM tenant's default roles
+// could not be provisioned. A tenant without them cannot hold a user: every
+// user the platform mirrors into IAM names a role, and a name that resolves
+// to nothing fails the create (#641).
+type ErrDefaultRolesFailed struct {
+	TenantID string
+	Err      error
+}
+
+func (e ErrDefaultRolesFailed) Error() string {
+	return fmt.Sprintf("failed to provision default IAM roles for tenant %s: %v", e.TenantID, e.Err)
+}
+
+func (e ErrDefaultRolesFailed) Unwrap() error {
+	return e.Err
+}
+
 // ErrConfigValidation is returned when configuration validation fails.
 type ErrConfigValidation struct {
 	Field  string

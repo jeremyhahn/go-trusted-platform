@@ -30,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -116,6 +117,12 @@ func (s stubTenantClient) List(ctx context.Context, req *quicbaasiam.ListTenants
 	return &quicbaasiam.ListTenantsResponse{}, nil
 }
 
+type stubRoleClient struct{}
+
+func (stubRoleClient) Reconcile(ctx context.Context, tenantID string) (*quicbaasiam.ReconcileRolesResponse, error) {
+	return &quicbaasiam.ReconcileRolesResponse{TenantID: tenantID}, nil
+}
+
 type stubWiringFIDO2Client struct{}
 
 func (s stubWiringFIDO2Client) BeginRegistration(ctx context.Context, req *quicbaassdk.FIDO2BeginRegistrationRequest) (*quicbaassdk.FIDO2BeginRegistrationResponse, error) {
@@ -137,6 +144,7 @@ func newWiringTenantManager(t *testing.T) *tenant.Manager {
 	cfg.EnableDEKIsolation = false
 	mgr, err := tenant.NewManager(&tenant.ManagerConfig{
 		IAMTenantClient: stubTenantClient{},
+		IAMRoleClient:   stubRoleClient{},
 		Config:          cfg,
 		Logger:          slog.Default(),
 	})
@@ -195,6 +203,26 @@ func TestWebAuthnRestService_WiresTenantUserService(t *testing.T) {
 	require.NotNil(t, handler)
 	assert.NotNil(t, svcReg.TenantUserService(),
 		"tenant user service must be materialized and pushed into the platform registry")
+}
+
+func TestStartIAMUserReconcile_RunsInTheBackground(t *testing.T) {
+	registry, _ := newWiringRegistry(t, newWiringTenantManager(t), &jwt.Service{})
+
+	done := registry.startIAMUserReconcile(restiam.NewQuicBaaSUserMirror(nil))
+
+	require.NotNil(t, done, "a wired registry starts the reconcile")
+	<-done
+}
+
+func TestStartIAMUserReconcile_NotStartedWithoutDependencies(t *testing.T) {
+	mirror := restiam.NewQuicBaaSUserMirror(nil)
+
+	noTenantManager, _ := newWiringRegistry(t, nil, &jwt.Service{})
+	assert.Nil(t, noTenantManager.startIAMUserReconcile(mirror))
+
+	noUserStore, _ := newWiringRegistry(t, newWiringTenantManager(t), &jwt.Service{})
+	noUserStore.params.ServiceRegistry = &service.Registry{}
+	assert.Nil(t, noUserStore.startIAMUserReconcile(mirror))
 }
 
 // TestWebAuthnRestService_NoTenantManager_LeavesServiceUnwired proves

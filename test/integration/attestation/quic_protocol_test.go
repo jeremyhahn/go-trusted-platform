@@ -20,6 +20,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // This adapter had both defects: it offered ALPN "attestation-quic" while the
@@ -79,7 +81,7 @@ func TestQUICAdapter_DaemonAnswers(t *testing.T) {
 
 // TestQUICAdapter_OperationsWithoutAnOpcodeSaySo asserts the gap is reported
 // rather than skipped. PushAttestation has no opcode in any dispatched range,
-// so it must surface ErrQUICNoSurface -- a named absence, not a timeout and
+// so it must surface surface.ErrNoSurface -- a named absence, not a timeout and
 // not a phrase a skip guard would swallow.
 func TestQUICAdapter_OperationsWithoutAnOpcodeSaySo(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), quicNegativeTimeout)
@@ -92,7 +94,7 @@ func TestQUICAdapter_OperationsWithoutAnOpcodeSaySo(t *testing.T) {
 	defer func() { _ = a.Teardown(ctx) }()
 
 	_, err := a.PushAttestation(ctx, PushAttestationOptions{})
-	var noSurface ErrQUICNoSurface
+	var noSurface surface.ErrNoSurface
 	if !errors.As(err, &noSurface) {
 		t.Fatalf("PushAttestation: expected a named absent surface, got %v", err)
 	}
@@ -151,7 +153,7 @@ func TestQUICAdapter_EveryOperationIsClassified(t *testing.T) {
 			t.Errorf("%s: returned success with no connection; it reached neither an opcode nor a declaration", p.name)
 			continue
 		}
-		var noSurface ErrQUICNoSurface
+		var noSurface surface.ErrNoSurface
 		if errors.As(err, &noSurface) {
 			withoutSurface = append(withoutSurface, p.name)
 			continue

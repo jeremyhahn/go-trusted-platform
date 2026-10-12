@@ -2946,7 +2946,12 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # `cat /dev/tpm0` refused inside the same sandbox as the negative control. A
 # dev-host pass cannot distinguish "does not need the TPM" from "quietly used
 # the one that was there."
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/
+#
+# test/integration/helpers/surface added 2026-10-12 (#487): the matcher every
+# integration suite uses to decide a subtest is "not implemented". It carries no
+# build tag and imports only errors and grpc/status, so it runs in-process in
+# milliseconds; left to the integration tag it would run in no unit stage.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue

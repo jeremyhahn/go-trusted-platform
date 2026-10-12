@@ -17,22 +17,13 @@ package compute_test
 
 import (
 	"context"
-	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
 // Error Types
 // =============================================================================
-
-// ErrQUICNotImplemented indicates a compute method is not yet implemented
-// for the QUIC wire protocol.
-type ErrQUICNotImplemented struct {
-	Method string
-}
-
-func (e ErrQUICNotImplemented) Error() string {
-	return fmt.Sprintf("compute: QUIC method %s not implemented", e.Method)
-}
 
 // =============================================================================
 // QUIC Adapter
@@ -40,7 +31,7 @@ func (e ErrQUICNotImplemented) Error() string {
 
 // QUICAdapter implements ComputeCommands using the QUIC protocol.
 // The QUIC compute wire protocol is not yet defined, so all methods return
-// ErrQUICNotImplemented to allow the test runner to skip cleanly.
+// surface.ErrNoSurface, the typed declaration the suite skips on.
 type QUICAdapter struct {
 	endpoint string
 }
@@ -69,30 +60,30 @@ func (a *QUICAdapter) Name() string {
 
 // CreateVM is not implemented for the QUIC protocol.
 func (a *QUICAdapter) CreateVM(ctx context.Context, opts CreateVMOptions) (*CreateVMResult, error) {
-	return nil, ErrQUICNotImplemented{Method: "CreateVM"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "CreateVM"}
 }
 
 // StartVM is not implemented for the QUIC protocol.
 func (a *QUICAdapter) StartVM(ctx context.Context, opts StartVMOptions) (*StartVMResult, error) {
-	return nil, ErrQUICNotImplemented{Method: "StartVM"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "StartVM"}
 }
 
 // StopVM is not implemented for the QUIC protocol.
 func (a *QUICAdapter) StopVM(ctx context.Context, opts StopVMOptions) (*StopVMResult, error) {
-	return nil, ErrQUICNotImplemented{Method: "StopVM"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "StopVM"}
 }
 
 // DeleteVM is not implemented for the QUIC protocol.
 func (a *QUICAdapter) DeleteVM(ctx context.Context, opts DeleteVMOptions) (*DeleteVMResult, error) {
-	return nil, ErrQUICNotImplemented{Method: "DeleteVM"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "DeleteVM"}
 }
 
 // GetVM is not implemented for the QUIC protocol.
 func (a *QUICAdapter) GetVM(ctx context.Context, opts GetVMOptions) (*GetVMResult, error) {
-	return nil, ErrQUICNotImplemented{Method: "GetVM"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetVM"}
 }
 
 // ListVMs is not implemented for the QUIC protocol.
 func (a *QUICAdapter) ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVMsResult, error) {
-	return nil, ErrQUICNotImplemented{Method: "ListVMs"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ListVMs"}
 }

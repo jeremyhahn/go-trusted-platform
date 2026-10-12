@@ -30,14 +30,25 @@ import (
 // the failure we want if construction starts doing I/O.
 type stubTenantClient struct{ iam.TenantClient }
 
+// stubRoleClient satisfies tenant.RoleReconciler the same way.
+type stubRoleClient struct{ iam.RoleClient }
+
 func TestNewIAMOnlyTenantManager_BuildsWithoutOptionalSubsystems(t *testing.T) {
-	mgr, err := newIAMOnlyTenantManager(stubTenantClient{})
+	mgr, err := newIAMOnlyTenantManager(stubTenantClient{}, stubRoleClient{})
 	require.NoError(t, err)
 	assert.NotNil(t, mgr)
 }
 
 func TestNewIAMOnlyTenantManager_RefusesMissingIAMClient(t *testing.T) {
-	mgr, err := newIAMOnlyTenantManager(nil)
+	mgr, err := newIAMOnlyTenantManager(nil, stubRoleClient{})
+	require.Error(t, err)
+	assert.Nil(t, mgr)
+}
+
+func TestNewIAMOnlyTenantManager_RefusesMissingRoleClient(t *testing.T) {
+	// Without a role client a new tenant would be created with no roles,
+	// and every user mirrored into it would fail (#641).
+	mgr, err := newIAMOnlyTenantManager(stubTenantClient{}, nil)
 	require.Error(t, err)
 	assert.Nil(t, mgr)
 }

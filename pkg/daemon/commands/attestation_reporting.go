@@ -226,11 +226,7 @@ func collectorTLSDialer(a *app.App, c *config.CollectorConfig, logger *slog.Logg
 		if err != nil {
 			return nil, ErrCollectorIdentity{Reason: "client certificate unavailable: " + err.Error()}
 		}
-		if len(cert.Certificate) == 1 {
-			if inter, err := ca.TrustedIntermediate(); err == nil && inter != nil {
-				cert.Certificate = append(cert.Certificate, inter.Raw)
-			}
-		}
+		cert = appendTrustedIntermediate(ca, cert)
 		pool, err := anchors(ctx, ep)
 		if err != nil {
 			return nil, err

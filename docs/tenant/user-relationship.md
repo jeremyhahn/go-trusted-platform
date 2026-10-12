@@ -142,12 +142,11 @@ flowchart LR
 
 ### Default Roles
 
-| Role | Default Permissions |
-|------|---------------------|
-| `owner` | `*:*` (all resources, all actions) |
-| `admin` | `user:*`, `resource:*`, `invitation:*` |
-| `developer` | `resource:create`, `resource:read`, `resource:update` |
-| `viewer` | `resource:read` |
+Creating a tenant provisions the IAM built-in roles `so`, `admin`,
+`operator`, `user`, `auditor` and `custodian` in that tenant's IAM tenant
+(see [IAM architecture](../iam/architecture.md)). The tenant owner is given
+`admin` when registration mirrors them into IAM; other users are mirrored
+with no IAM role.
 
 ## Tenant Creation Triggers
 

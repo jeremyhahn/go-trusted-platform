@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-codec/pkg/factory"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	quicgo "github.com/quic-go/quic-go"
 )
 
@@ -610,7 +611,7 @@ func (q *QUICAdapter) Info(ctx context.Context) (*InfoResult, error) {
 // Init initializes the CA via QUIC.
 // Note: CA initialization is done during daemon startup, not via QUIC.
 func (q *QUICAdapter) Init(ctx context.Context, opts InitOptions) (*InitResult, error) {
-	return nil, ErrNotImplemented{Feature: "CA init via QUIC"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "CA init"}
 }
 
 // =============================================================================
@@ -897,7 +898,7 @@ func (q *QUICAdapter) GenerateCRL(ctx context.Context) (*GenerateCRLResult, erro
 // ExportCRL exports the CRL via QUIC.
 // Note: CRL export to file is a CLI operation, not exposed via QUIC.
 func (q *QUICAdapter) ExportCRL(ctx context.Context, output string) (*ExportCRLResult, error) {
-	return nil, ErrNotImplemented{Feature: "CRL export via QUIC"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "CRL export"}
 }
 
 // =============================================================================
@@ -941,13 +942,13 @@ func (q *QUICAdapter) ExportBundle(ctx context.Context, output string) (*ExportB
 // InstallCACertificates installs CA certificates via QUIC.
 // Note: CA certificate installation is a local OS operation, not exposed via QUIC.
 func (q *QUICAdapter) InstallCACertificates(ctx context.Context) (*InstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "install CA certificates via QUIC"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "install CA certificates"}
 }
 
 // UninstallCACertificates uninstalls CA certificates via QUIC.
 // Note: CA certificate uninstallation is a local OS operation, not exposed via QUIC.
 func (q *QUICAdapter) UninstallCACertificates(ctx context.Context) (*UninstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "uninstall CA certificates via QUIC"}
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "uninstall CA certificates"}
 }
 
 // =============================================================================

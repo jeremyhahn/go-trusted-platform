@@ -188,13 +188,13 @@ func (m *MockTenantManager) GetTenant(ctx context.Context, id string) (*tenant.T
 	return args.Get(0).(*tenant.TenantEntity), args.Error(1)
 }
 
-// TestableTenantUserService wraps TenantUserService for testing with mocked TenantManager
+// TestableTenantUserService wraps the real TenantUserService, wired to a mock
+// TenantManager, and flattens RegisterNewUser's result for the assertions.
 type TestableTenantUserService struct {
 	*TenantUserService
-	mockTenantManager *MockTenantManager
 }
 
-// newTestableTenantUserService creates a testable service with mocked dependencies
+// newTestableTenantUserService creates a service over mocked dependencies.
 func newTestableTenantUserService(
 	logger *logging.Logger,
 	userService UserServicer,
@@ -203,82 +203,28 @@ func newTestableTenantUserService(
 ) (*TestableTenantUserService, *MockTenantManager) {
 	mockTM := new(MockTenantManager)
 
-	// Create the base service - TenantManager will be nil, we override the methods
 	service := &TenantUserService{
 		logger:            logger,
 		userService:       userService,
 		invitationService: invitationService,
-		tenantManager:     nil, // We use mock via wrapper
+		tenantManager:     mockTM,
 		tokenIssuer:       tokenIssuer,
 	}
 
-	return &TestableTenantUserService{
-		TenantUserService: service,
-		mockTenantManager: mockTM,
-	}, mockTM
+	return &TestableTenantUserService{TenantUserService: service}, mockTM
 }
 
-// RegisterNewUser overrides to use mock tenant manager
+// RegisterNewUser runs the production RegisterNewUser and returns the user and
+// tenant ID it registered.
 func (s *TestableTenantUserService) RegisterNewUser(
 	ctx context.Context,
 	user *entities.User,
 ) (*entities.User, string, error) {
-	s.logger.Info("registering new user with tenant creation",
-		"email", user.Email,
-	)
-
-	// Check if user already exists
-	existingUser, err := s.userService.GetByEmail(ctx, user.Email)
-	if err == nil && existingUser != nil {
-		return nil, "", ErrUserAlreadyExists{Email: user.Email}
-	}
-
-	// Create tenant via mock TenantManager
-	tenantRequest := &tenant.CreateTenantRequest{
-		Name:        "", // Will be set by manager
-		DisplayName: user.DisplayName,
-		Labels: map[string]string{
-			"owner_email": user.Email,
-		},
-	}
-
-	tenantEntity, err := s.mockTenantManager.CreateTenant(ctx, tenantRequest)
+	result, err := s.TenantUserService.RegisterNewUser(ctx, user)
 	if err != nil {
-		s.logger.Error(err, "failed to create tenant")
-		return nil, "", ErrTenantCreationFailed{Cause: err}
+		return nil, "", err
 	}
-
-	tenantID := tenantEntity.ID
-
-	// Configure user as tenant owner. Mirrors the production
-	// RegisterNewUser flow which grants the default tenant-owner
-	// role on the first user; without this the test harness drifts
-	// from real behavior and a regression in the role-grant code
-	// path goes undetected.
-	now := time.Now().UTC()
-	user.TenantID = tenantID
-	user.IsTenantOwner = true
-	user.CreatedAt = now
-	user.UpdatedAt = now
-	user.AddRole(entities.NewRole(DefaultTenantOwnerRole))
-
-	// Save the user
-	if err := s.userService.Save(ctx, user); err != nil {
-		s.logger.Error(err, "failed to save user")
-		// Attempt to clean up the tenant
-		if cleanupErr := s.mockTenantManager.DeleteTenant(ctx, tenantID); cleanupErr != nil {
-			s.logger.Error(cleanupErr, "failed to cleanup tenant after user save failure")
-		}
-		return nil, "", ErrUserSaveFailed{Cause: err}
-	}
-
-	s.logger.Info("new user registered with tenant",
-		"user_id", user.ID,
-		"email", user.Email,
-		"tenant_id", tenantID,
-	)
-
-	return user, tenantID, nil
+	return result.User, result.Tenant.ID, nil
 }
 
 // Helper function to create test logger

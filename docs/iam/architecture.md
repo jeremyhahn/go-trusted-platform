@@ -85,6 +85,34 @@ Given different clients they diverge, and nothing detects it. That makes the
 mirror the first place to look when a user exists on one surface and not the
 other.
 
+### What keeps the mirror working (#641)
+
+The mirror names a role for every user it writes (the owner is mirrored as
+`admin`), and the IAM store refuses a user whose role does not exist. An IAM
+tenant created without its roles therefore cannot hold anyone, and every
+registration's mirror failed with `iam.role: not_found`.
+
+- **Every IAM tenant carries its default roles.** `tenant.Manager.CreateTenant`
+  provisions them straight after creating the IAM tenant, through the SDK's
+  role reconcile (`SDK().Identity().IAM().Role().Reconcile`). It seeds the built-in
+  roles (`so`, `admin`, `operator`, `user`, `auditor`, `custodian`) that are
+  absent, never touches a custom role, and writes nothing on a tenant that
+  already has them. A failure is `tenant.ErrDefaultRolesFailed` and rolls the
+  IAM tenant back: a tenant that cannot hold users is not created.
+- **The owner's mirror is part of registration.** When `RegisterNewUser`
+  cannot mirror the new tenant owner, it deletes the platform user and the
+  tenant it just created and returns `service.ErrIAMMirrorFailed`. The
+  registration fails as a whole rather than leaving an owner the IAM surface
+  cannot see. Invited registrations do not mirror at registration time.
+- **Users registered before the fix are repaired at startup.** When the
+  WebAuthn surface wires the mirror, the daemon starts a background reconcile
+  that reads every platform user, lists each tenant's IAM users once, and
+  mirrors only the users missing from it, provisioning the default roles
+  first for any tenant that lacks them. Users already present are left alone, so
+  the run is idempotent and safe on every start. A failure is logged with the
+  user ID and counted, never fatal: one unreachable tenant does not stop the
+  others, and startup is never blocked.
+
 ## Trust boundaries
 
 1. **Caller → IAM.** Crossed by a scoped platform token on gRPC (41 methods,

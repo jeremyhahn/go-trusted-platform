@@ -50,7 +50,7 @@ func platformTenantManager(logger *logging.Logger, a *app.App) *tenant.Manager {
 		logger.Warn("platform tenant manager not wired: QuicBaaS IAM client unavailable")
 		return nil
 	}
-	mgr, err := newIAMOnlyTenantManager(iamClient.Tenant())
+	mgr, err := newIAMOnlyTenantManager(iamClient.Tenant(), iamClient.Role())
 	if err != nil {
 		logger.Warn("failed to construct platform tenant manager", "error", err)
 		return nil
@@ -63,11 +63,12 @@ func platformTenantManager(logger *logging.Logger, a *app.App) *tenant.Manager {
 // client with the subsystems that are not yet constructed at startup turned
 // off, so NewManager does not refuse it for a missing DEK, VLAN or bridge
 // dependency.
-func newIAMOnlyTenantManager(tc iam.TenantClient) (*tenant.Manager, error) {
+func newIAMOnlyTenantManager(tc iam.TenantClient, rc tenant.RoleReconciler) (*tenant.Manager, error) {
 	cfg := tenant.DefaultConfig()
 	cfg.EnableDEKIsolation = false
 	return tenant.NewManager(&tenant.ManagerConfig{
 		IAMTenantClient: tc,
+		IAMRoleClient:   rc,
 		Config:          cfg,
 		Logger:          slog.Default(),
 	})

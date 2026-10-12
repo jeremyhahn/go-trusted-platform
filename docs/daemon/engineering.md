@@ -154,7 +154,41 @@ this migration: **both authorization catalogs default to allow.** Whether that
 default should invert is the single largest question the migration surfaced, and
 it is raised for the owner rather than decided here.
 
-## 7. Test strategy
+## 7. Daemon TLS identity: reuse, supersede, upgrade
+
+`daemonServerIdentity` (`pkg/daemon/commands/provision_identity.go`) resolves
+the `platformd.localhost` server identity on every boot. Key custody is in
+[architecture.md](architecture.md) §Daemon TLS identity and key custody.
+
+1. **Reuse.** `CA.TLSCertificate` loads the keystore signer and its
+   certificate. If the certificate chains to the CA, covers the required DNS
+   SANs and is outside the 30-day renewal window, it is served as is. Nothing
+   is issued or revoked, so a restart causes no churn.
+2. **Supersede.** In every other case the certificate the CA store holds for
+   the CN is looked up with `CA.Certificate`, which reads the certificate
+   store and never needs the key. If there is one, `RevokeCert` with
+   `DeleteKeys` revokes it and removes the cert-store entry and any keystore
+   key.
+3. **Issue.** `CA.IssueCertificate` with `KeyAttributes` generates a fresh key
+   in the keystore and issues its certificate.
+
+**Upgrade from the PEM-backed identity (before #33).** The old provisioner
+signed an externally generated CSR for `platformd.localhost`. `SignCSR` stored
+the certificate in the CA certificate store, but the key existed only in the
+PEM bundle under `/tmp/platformd-integration/tls`. On the first boot after the
+upgrade, `TLSCertificate` fails because the keystore has no key. Step 2 still
+finds the certificate, because the lookup does not go through the key, and
+revokes it. Without that step, `IssueCertificate` would reject the CN with
+`ErrCertificateAlreadyExists` and the daemon would not start. The old PEM
+bundle is not read and not migrated: its key is not imported into the keystore.
+
+**Failure leaves nothing half-provisioned.** A lookup that fails with anything
+other than `ErrCertificateNotFound`, or a failed revocation, returns
+`ErrTLSIdentityKeystore{Op: "supersede"}` before anything is issued or written.
+The stored certificate stays in place, no TLS listener starts, and the next
+boot retries.
+
+## 8. Test strategy
 
 | Layer | Location | Covers |
 |---|---|---|
@@ -193,7 +227,7 @@ symptom.
 `conventions/feature-docs.md` §4 is unmet repo-wide — which is a
 daemon-and-CLI-level observation, not a per-feature one.
 
-## 8. Observability
+## 9. Observability
 
 `StreamEvents`, `StreamLogs` and `StreamMetrics` are the live surfaces;
 `/api/v1/platform/logs`, `/logs/services`, `/logs/stream`, `/metrics`,
@@ -207,7 +241,7 @@ Health has three shapes on MCP: `platform_health`, `platform_liveness`,
 `platform_readiness`. Liveness and readiness are different questions; do not
 wire a load balancer to the wrong one.
 
-## 9. Related
+## 10. Related
 
 - [architecture.md](architecture.md) · [api.md](api.md) · [cli.md](cli.md) · [user.md](user.md)
 - [`docs/gateway/`](../gateway/) — the `gatewayd` binary and the edge role

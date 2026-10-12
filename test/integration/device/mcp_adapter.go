@@ -15,6 +15,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // MCPAdapterError represents an error from the MCP adapter
@@ -26,15 +27,6 @@ type MCPAdapterError struct {
 
 func (e *MCPAdapterError) Error() string {
 	return fmt.Sprintf("MCP adapter error [%s]: %s (code: %d)", e.Operation, e.Message, e.Code)
-}
-
-// ErrMCPNotImplemented indicates a method is not yet implemented for MCP.
-type ErrMCPNotImplemented struct {
-	Method string
-}
-
-func (e ErrMCPNotImplemented) Error() string {
-	return fmt.Sprintf("MCP method %s not implemented", e.Method)
 }
 
 // JSONRPCRequest represents a JSON-RPC 2.0 request
@@ -509,37 +501,37 @@ func (a *MCPAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions)
 
 // CreateTemplate creates a new device template via MCP.
 func (a *MCPAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	return nil, ErrMCPNotImplemented{Method: "CreateTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "CreateTemplate"}
 }
 
 // GetTemplate retrieves a template by ID via MCP.
 func (a *MCPAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	return nil, ErrMCPNotImplemented{Method: "GetTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "GetTemplate"}
 }
 
 // UpdateTemplate updates an existing template via MCP.
 func (a *MCPAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	return nil, ErrMCPNotImplemented{Method: "UpdateTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "UpdateTemplate"}
 }
 
 // DeleteTemplate removes a template via MCP.
 func (a *MCPAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	return nil, ErrMCPNotImplemented{Method: "DeleteTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "DeleteTemplate"}
 }
 
 // ListTemplates lists all templates via MCP.
 func (a *MCPAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	return nil, ErrMCPNotImplemented{Method: "ListTemplates"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "ListTemplates"}
 }
 
 // CreateProfileFromTemplate creates a profile from a template via MCP.
 func (a *MCPAdapter) CreateProfileFromTemplate(ctx context.Context, opts CreateProfileFromTemplateOptions) (*CreateProfileResult, error) {
-	return nil, ErrMCPNotImplemented{Method: "CreateProfileFromTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "CreateProfileFromTemplate"}
 }
 
 // FindConfigForDevice finds the config for a device via MCP.
 func (a *MCPAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, ErrMCPNotImplemented{Method: "FindConfigForDevice"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "FindConfigForDevice"}
 }
 
 // AssignProfileToDevice assigns a profile to a device via MCP.

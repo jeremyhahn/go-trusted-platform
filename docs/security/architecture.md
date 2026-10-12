@@ -249,6 +249,21 @@ Nothing. Policies live in the binary and on disk; the engine's store is
    `EscapeIdentifier` and `ValidateIdentifier` exist; escaping is strictly worse
    than a bound parameter and should be the last resort, not the pattern.
 
+10. **Daemon key custody: the server key never leaves the keystore (#33).** The
+   daemon's mTLS server key is generated and held in the platform CA keystore.
+   The listeners present it through a `crypto.Signer`. Before #33 it was
+   written as a PEM bundle to `/tmp/platformd-integration/tls`.
+   - **The admin bootstrap bundle is the one argued on-disk key.** It lives at
+     `<platform-dir>/tls/client-bundle.pem` (0600, in a 0700 directory) because
+     a separate process (`platformctl`) needs it for the first mTLS connection.
+     **Read access to that file is admin access to the daemon API.**
+   - The CA bundle beside it is public.
+   - The QEMU migration tls-creds directory is a second on-disk key. QEMU reads
+     its credentials from files, so that key is not a daemon key.
+
+   Detail: [`docs/daemon/architecture.md`](../daemon/architecture.md) §Daemon
+   TLS identity and key custody.
+
 ---
 
 ## 7. What this section deliberately does not do

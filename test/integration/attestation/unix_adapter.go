@@ -24,6 +24,7 @@ import (
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"google.golang.org/grpc"
 )
 
@@ -161,7 +162,7 @@ func (a *UnixAdapter) GenerateVMQuote(ctx context.Context, opts GenerateVMQuoteO
 // GetVMIdentity retrieves VM identity from vTPM EK certificate.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *UnixAdapter) GetVMIdentity(ctx context.Context, opts GetVMIdentityOptions) (*GetVMIdentityResult, error) {
-	return nil, ErrNotImplemented{Feature: "GetVMIdentity via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "GetVMIdentity"}
 }
 
 // GetVMAttestation generates a full VM attestation via CollectVMAttestation over Unix socket.
@@ -296,7 +297,7 @@ func (a *UnixAdapter) BuildManifest(ctx context.Context, opts BuildManifestOptio
 // SignManifest signs a manifest with the host TPM.
 // No dedicated gRPC RPC exists; signing is done during BuildManifest with Sign=true.
 func (a *UnixAdapter) SignManifest(ctx context.Context, opts SignManifestOptions) (*SignManifestResult, error) {
-	return nil, ErrNotImplemented{Feature: "SignManifest via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "SignManifest"}
 }
 
 // VerifyManifest verifies a signed manifest via VerifyManifest over Unix socket.
@@ -391,19 +392,19 @@ func (a *UnixAdapter) GetManifest(ctx context.Context, opts GetManifestOptions) 
 // PushAttestation pushes an attestation to a target.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *UnixAdapter) PushAttestation(ctx context.Context, opts PushAttestationOptions) (*PushAttestationResult, error) {
-	return nil, ErrNotImplemented{Feature: "PushAttestation via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "PushAttestation"}
 }
 
 // PushAttestationBatch pushes to multiple targets concurrently.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *UnixAdapter) PushAttestationBatch(ctx context.Context, opts PushAttestationBatchOptions) (*PushAttestationBatchResult, error) {
-	return nil, ErrNotImplemented{Feature: "PushAttestationBatch via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "PushAttestationBatch"}
 }
 
 // GetPushStatus retrieves the status of a push operation.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *UnixAdapter) GetPushStatus(ctx context.Context, opts GetPushStatusOptions) (*GetPushStatusResult, error) {
-	return nil, ErrNotImplemented{Feature: "GetPushStatus via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "GetPushStatus"}
 }
 
 // =============================================================================
@@ -413,25 +414,25 @@ func (a *UnixAdapter) GetPushStatus(ctx context.Context, opts GetPushStatusOptio
 // ExtendWorkloadChain extends the workload PCR with a measurement.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *UnixAdapter) ExtendWorkloadChain(ctx context.Context, opts ExtendWorkloadChainOptions) (*ExtendWorkloadChainResult, error) {
-	return nil, ErrNotImplemented{Feature: "ExtendWorkloadChain via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "ExtendWorkloadChain"}
 }
 
 // GetWorkloadChainHistory retrieves the chain history.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *UnixAdapter) GetWorkloadChainHistory(ctx context.Context, opts GetWorkloadChainHistoryOptions) (*GetWorkloadChainHistoryResult, error) {
-	return nil, ErrNotImplemented{Feature: "GetWorkloadChainHistory via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "GetWorkloadChainHistory"}
 }
 
 // VerifyWorkloadChain verifies the chain against expected PCR.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *UnixAdapter) VerifyWorkloadChain(ctx context.Context, opts VerifyWorkloadChainOptions) (*VerifyWorkloadChainResult, error) {
-	return nil, ErrNotImplemented{Feature: "VerifyWorkloadChain via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "VerifyWorkloadChain"}
 }
 
 // GetWorkloadChainStats retrieves chain statistics.
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *UnixAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error) {
-	return nil, ErrNotImplemented{Feature: "GetWorkloadChainStats via Unix"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "GetWorkloadChainStats"}
 }
 
 // =============================================================================

@@ -1348,7 +1348,9 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 	// available, and the cleanest decoupling is "the IAM REST adapter
 	// owns the mirror; the platform service receives it via setter."
 	if tus != nil && registry.params.IAMClient != nil {
-		tus.SetIAMMirror(restiam.NewQuicBaaSUserMirror(registry.params.IAMClient))
+		mirror := restiam.NewQuicBaaSUserMirror(registry.params.IAMClient)
+		tus.SetIAMMirror(mirror)
+		registry.startIAMUserReconcile(mirror)
 	}
 	params := webauthn.ServiceParams{
 		Config:                    registry.params.WebAuthnConfig,
@@ -1371,6 +1373,48 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		registry.params.Logger.FatalError(err)
 	}
 	return handler
+}
+
+// iamReconcileTimeout bounds the startup IAM user reconcile.
+const iamReconcileTimeout = 5 * time.Minute
+
+// startIAMUserReconcile mirrors the platform users missing from their IAM
+// tenant (#641) in the background, so a slow IAM backend never delays
+// startup. It returns a channel closed when the run finishes, or nil when the
+// run was not started.
+func (registry *HandlerRegistry) startIAMUserReconcile(mirror *restiam.QuicBaaSUserMirror) <-chan struct{} {
+	if registry.params.TenantManager == nil {
+		registry.params.Logger.Warn("tenant manager not wired, IAM user reconcile not started")
+		return nil
+	}
+	reconciler, err := registry.params.ServiceRegistry.IAMUserReconciler(mirror, mirror, registry.params.TenantManager)
+	if err != nil {
+		registry.params.Logger.Warn("IAM user reconcile not started", "error", err)
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		registry.reconcileIAMUsers(reconciler)
+	}()
+	return done
+}
+
+// reconcileIAMUsers runs one IAM user reconcile and logs its report.
+func (registry *HandlerRegistry) reconcileIAMUsers(reconciler *service.IAMUserReconciler) {
+	ctx, cancel := context.WithTimeout(context.Background(), iamReconcileTimeout)
+	defer cancel()
+	report, err := reconciler.Reconcile(ctx)
+	if err != nil {
+		registry.params.Logger.Warn("IAM user reconcile failed", "error", err)
+		return
+	}
+	registry.params.Logger.Info("IAM user reconcile finished",
+		"scanned", report.Scanned,
+		"skipped", report.Skipped,
+		"present", report.Present,
+		"mirrored", report.Mirrored,
+		"failed", report.Failed)
 }
 
 // AdminClaimRestHandler returns the platform-admin claim ceremony handler,

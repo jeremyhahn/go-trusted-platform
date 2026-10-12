@@ -92,7 +92,7 @@ func TestNAT64StatusMultiProtocol(t *testing.T) {
 		require.NoError(t, q.Setup(ctx))
 		t.Cleanup(func() { _ = q.Teardown() })
 		_, err := q.sendCategoryRequest(ctx, opGatewayCategory, quicOpNAT64Status, nil)
-		var unavailable ErrQUICSDNNotImplemented
+		var unavailable ErrQUICSDNUnavailable
 		require.ErrorAs(t, err, &unavailable, "the sub-opcode is dispatched and reports the translator absent")
 		require.Contains(t, err.Error(), "not configured")
 	})

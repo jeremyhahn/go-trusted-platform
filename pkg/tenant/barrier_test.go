@@ -108,6 +108,7 @@ func newTestManagerWithBarrier(t *testing.T) (*Manager, *mockIAMClient, *testBar
 
 	cfg := &ManagerConfig{
 		IAMTenantClient:     iamClient,
+		IAMRoleClient:       iamClient,
 		TenantBarrierClient: barrierClient,
 		Config:              DefaultConfig(),
 		Logger:              logger,
@@ -136,6 +137,7 @@ func TestNewManager_AcceptsNilBarrierManager(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient:     iamClient,
+		IAMRoleClient:       iamClient,
 		TenantBarrierClient: nil,
 		BarrierManager:      nil,
 		Config:              DefaultConfig(),
@@ -167,6 +169,7 @@ func TestNewManager_AcceptsBarrierClient(t *testing.T) {
 
 	cfg := &ManagerConfig{
 		IAMTenantClient:     iamClient,
+		IAMRoleClient:       iamClient,
 		TenantBarrierClient: barrierClient,
 		Config:              DefaultConfig(),
 		Logger:              logger,

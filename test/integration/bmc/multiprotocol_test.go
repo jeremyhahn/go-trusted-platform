@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	bmcsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -60,7 +61,7 @@ func TestBMCMultiProtocol(t *testing.T) {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
 			if err := adapter.Setup(ctx); err != nil {
-				if isNotImplementedError(err) {
+				if surface.IsNotImplemented(err) {
 					t.Skipf("Skipping %s: %v", adapter.Name(), err)
 					return
 				}
@@ -149,7 +150,7 @@ func testSingleProtocol(t *testing.T, adapter BMCCommands) {
 	t.Cleanup(cancel)
 
 	if err := adapter.Setup(ctx); err != nil {
-		if isNotImplementedError(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skipf("Skipping %s: %v", adapter.Name(), err)
 			return
 		}
@@ -409,7 +410,7 @@ func testListUsers(t *testing.T, ctx context.Context, adapter BMCCommands) {
 
 // TestBMCEnrollMultiProtocol runs the EnrollBMC test against all protocol
 // adapters. QUIC and MCP skip the general Setup() path (their adapters return
-// ErrQUICNotImplemented / ErrMCPNotImplemented there) and connect independently
+// surface.ErrNoSurface there) and connect independently
 // for the enrollment sub-operation, so this test drives enrollment directly
 // rather than going through the common testSingleProtocol helper.
 func TestBMCEnrollMultiProtocol(t *testing.T) {
@@ -430,8 +431,8 @@ func TestBMCEnrollMultiProtocol(t *testing.T) {
 
 // testEnrollBMC exercises the EnrollBMC method on a single adapter.
 //
-// Adapters for which the general Setup path returns ErrQUICNotImplemented /
-// ErrMCPNotImplemented are not set up here — EnrollBMC establishes its own
+// Adapters for which the general Setup path returns surface.ErrNoSurface
+// are not set up here — EnrollBMC establishes its own
 // connection internally. Adapters that do require Setup (CLI, REST, gRPC, Unix)
 // are set up and torn down around the call.
 //
@@ -453,7 +454,7 @@ func testEnrollBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 	// not-implemented there) and connect lazily inside EnrollBMC.
 	needsTeardown := false
 	if err := adapter.Setup(ctx); err != nil {
-		if isNotImplementedError(err) {
+		if surface.IsNotImplemented(err) {
 			// QUIC / MCP: skip setup, proceed directly to EnrollBMC.
 		} else {
 			t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
@@ -525,7 +526,7 @@ func TestBMCEnrollWithOptions(t *testing.T) {
 		t.Run(adapter.Name(), func(t *testing.T) {
 			needsTeardown := false
 			if err := adapter.Setup(ctx); err != nil {
-				if isNotImplementedError(err) {
+				if surface.IsNotImplemented(err) {
 					// QUIC / MCP connect lazily — proceed.
 				} else {
 					t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
@@ -573,7 +574,7 @@ func TestBMCErrorHandling(t *testing.T) {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
 			if err := adapter.Setup(ctx); err != nil {
-				if isNotImplementedError(err) {
+				if surface.IsNotImplemented(err) {
 					t.Skipf("Skipping %s: %v", adapter.Name(), err)
 					return
 				}
@@ -628,7 +629,7 @@ func testInvalidProfileEnroll(t *testing.T, ctx context.Context, adapter BMCComm
 
 // TestBMCRestoreMultiProtocol runs the RestoreBMC test against all protocol
 // adapters. QUIC and MCP skip the general Setup() path (their adapters return
-// ErrQUICNotImplemented / ErrMCPNotImplemented there) and connect independently
+// surface.ErrNoSurface there) and connect independently
 // for the restore sub-operation, so this test drives restore directly rather
 // than going through the common testSingleProtocol helper.
 func TestBMCRestoreMultiProtocol(t *testing.T) {
@@ -649,8 +650,8 @@ func TestBMCRestoreMultiProtocol(t *testing.T) {
 
 // testRestoreBMC exercises the RestoreBMC method on a single adapter.
 //
-// Adapters for which the general Setup path returns ErrQUICNotImplemented /
-// ErrMCPNotImplemented are not set up here — RestoreBMC establishes its own
+// Adapters for which the general Setup path returns surface.ErrNoSurface
+// are not set up here — RestoreBMC establishes its own
 // connection internally. Adapters that do require Setup (CLI, REST, gRPC, Unix)
 // are set up and torn down around the call.
 //
@@ -671,7 +672,7 @@ func testRestoreBMC(t *testing.T, ctx context.Context, adapter BMCCommands) {
 	// not-implemented there) and connect lazily inside RestoreBMC.
 	needsTeardown := false
 	if err := adapter.Setup(ctx); err != nil {
-		if isNotImplementedError(err) {
+		if surface.IsNotImplemented(err) {
 			// QUIC / MCP: skip setup, proceed directly to RestoreBMC.
 		} else {
 			t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)
@@ -740,7 +741,7 @@ func TestBMCRestoreInvalidProfile(t *testing.T) {
 		t.Run(adapter.Name(), func(t *testing.T) {
 			needsTeardown := false
 			if err := adapter.Setup(ctx); err != nil {
-				if isNotImplementedError(err) {
+				if surface.IsNotImplemented(err) {
 					// QUIC / MCP connect lazily — proceed.
 				} else {
 					t.Fatalf("%s: Setup failed: %v", adapter.Name(), err)

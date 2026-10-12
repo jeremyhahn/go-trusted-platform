@@ -34,6 +34,8 @@ type Registry struct {
 	webAuthnSessionService WebAuthnSessionServicer
 	invitationService      InvitationServicer
 	tenantUserService      TenantUserServicer
+	logger                 *logging.Logger
+	userDAO                datastore.UserDAO
 }
 
 // RegistryConfig holds configuration for creating a Registry.
@@ -141,6 +143,8 @@ func NewRegistryWithConfig(config *RegistryConfig) (*Registry, error) {
 		webAuthnSessionService: webAuthnSessionService,
 		invitationService:      invitationService,
 		tenantUserService:      tenantUserService,
+		logger:                 config.Logger,
+		userDAO:                userDAO,
 	}, nil
 }
 
@@ -185,6 +189,26 @@ func (registry *Registry) InvitationService() InvitationServicer {
 
 func (registry *Registry) TenantUserService() TenantUserServicer {
 	return registry.tenantUserService
+}
+
+// IAMUserReconciler returns a reconciler that mirrors the registry's platform
+// users into their IAM tenants through the given mirror, directory and role
+// provisioner (#641).
+func (registry *Registry) IAMUserReconciler(
+	mirror IAMUserMirror,
+	directory IAMUserDirectory,
+	roles IAMRoleProvisioner,
+) (*IAMUserReconciler, error) {
+	config := &IAMUserReconcilerConfig{
+		Logger:    registry.logger,
+		Mirror:    mirror,
+		Directory: directory,
+		Roles:     roles,
+	}
+	if registry.userDAO != nil {
+		config.Users = registry.userDAO
+	}
+	return NewIAMUserReconciler(config)
 }
 
 // SetTenantUserService allows setting the tenant user service after initialization.

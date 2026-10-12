@@ -32,7 +32,6 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +40,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -138,7 +138,7 @@ func testBundleCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		}
 
 		result, err := cmd.CreateBundle(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CreateBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "CreateBundle should succeed")
@@ -163,7 +163,7 @@ func testBundleCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		}
 
 		result, err := cmd.CreateBundle(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CreateBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "CreateBundle with ECC should succeed")
@@ -187,7 +187,7 @@ func testBundleCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		}
 
 		result, err := cmd.CreateBundle(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CreateBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "CreateBundle with SecureBoot should succeed")
@@ -209,7 +209,7 @@ func testBundleCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		}
 
 		_, err := cmd.CreateBundle(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CreateBundle not implemented for this adapter")
 		}
 		require.Error(t, err, "CreateBundle should fail with missing hostname")
@@ -229,7 +229,7 @@ func testBundleGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateBundle not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
@@ -243,7 +243,7 @@ func testBundleGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 
 	t.Run("GetExistingBundle", func(t *testing.T) {
 		result, err := cmd.GetBundle(testCtx, GetBundleOptions{ID: createResult.Bundle.ID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("GetBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "GetBundle should succeed")
@@ -255,7 +255,7 @@ func testBundleGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 
 	t.Run("GetNonexistentBundleFails", func(t *testing.T) {
 		_, err := cmd.GetBundle(testCtx, GetBundleOptions{ID: prefix + "-nonexistent-bundle-id"})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("GetBundle not implemented for this adapter")
 		}
 		require.Error(t, err, "GetBundle should fail for nonexistent bundle")
@@ -275,7 +275,7 @@ func testBundleDelete(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateBundle not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
@@ -284,7 +284,7 @@ func testBundleDelete(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("DeleteExistingBundle", func(t *testing.T) {
 		result, err := cmd.DeleteBundle(testCtx, DeleteBundleOptions{ID: createResult.Bundle.ID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("DeleteBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "DeleteBundle should succeed")
@@ -294,7 +294,7 @@ func testBundleDelete(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("VerifyBundleIsDeleted", func(t *testing.T) {
 		_, err := cmd.GetBundle(testCtx, GetBundleOptions{ID: createResult.Bundle.ID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("GetBundle not implemented for this adapter")
 		}
 		require.Error(t, err, "GetBundle should fail for deleted bundle")
@@ -302,7 +302,7 @@ func testBundleDelete(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("DeleteNonexistentBundleFails", func(t *testing.T) {
 		_, err := cmd.DeleteBundle(testCtx, DeleteBundleOptions{ID: prefix + "-nonexistent-delete-id"})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("DeleteBundle not implemented for this adapter")
 		}
 		require.Error(t, err, "DeleteBundle should fail for nonexistent bundle")
@@ -327,7 +327,7 @@ func testBundleList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			},
 		}
 		result, err := cmd.CreateBundle(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CreateBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "Setup: CreateBundle should succeed")
@@ -346,7 +346,7 @@ func testBundleList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			Limit: 100,
 		}
 		result, err := cmd.ListBundles(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ListBundles not implemented for this adapter")
 		}
 		require.NoError(t, err, "ListBundles should succeed")
@@ -359,7 +359,7 @@ func testBundleList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			Limit: 2,
 		}
 		result, err := cmd.ListBundles(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ListBundles not implemented for this adapter")
 		}
 		require.NoError(t, err, "ListBundles should succeed with limit")
@@ -373,7 +373,7 @@ func testBundleList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			Limit: 100,
 		}
 		result, err := cmd.ListBundles(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ListBundles not implemented for this adapter")
 		}
 		require.NoError(t, err, "ListBundles should succeed for mode filter")
@@ -403,7 +403,7 @@ func testBundleLifecycle(t *testing.T, ctx context.Context, cmd VTPMCommands, pr
 		}
 
 		createResult, err := cmd.CreateBundle(testCtx, createOpts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CreateBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "CreateBundle should succeed")
@@ -415,7 +415,7 @@ func testBundleLifecycle(t *testing.T, ctx context.Context, cmd VTPMCommands, pr
 
 		// Get bundle
 		getResult, err := cmd.GetBundle(testCtx, GetBundleOptions{ID: bundleID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("GetBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "GetBundle should succeed")
@@ -425,7 +425,7 @@ func testBundleLifecycle(t *testing.T, ctx context.Context, cmd VTPMCommands, pr
 
 		// Validate bundle
 		validateResult, err := cmd.ValidateBundle(testCtx, ValidateBundleOptions{ID: bundleID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Log("ValidateBundle not implemented, skipping validation step")
 		} else {
 			require.NoError(t, err, "ValidateBundle should succeed")
@@ -435,7 +435,7 @@ func testBundleLifecycle(t *testing.T, ctx context.Context, cmd VTPMCommands, pr
 
 		// Get bundle path
 		pathResult, err := cmd.GetBundlePath(testCtx, GetBundlePathOptions{ID: bundleID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Log("GetBundlePath not implemented, skipping path check")
 		} else {
 			require.NoError(t, err, "GetBundlePath should succeed")
@@ -444,7 +444,7 @@ func testBundleLifecycle(t *testing.T, ctx context.Context, cmd VTPMCommands, pr
 
 		// Get TPM socket path
 		socketResult, err := cmd.GetTPMSocketPath(testCtx, GetTPMSocketPathOptions{ID: bundleID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Log("GetTPMSocketPath not implemented, skipping socket check")
 		} else {
 			require.NoError(t, err, "GetTPMSocketPath should succeed")
@@ -453,7 +453,7 @@ func testBundleLifecycle(t *testing.T, ctx context.Context, cmd VTPMCommands, pr
 
 		// Delete bundle
 		deleteResult, err := cmd.DeleteBundle(testCtx, DeleteBundleOptions{ID: bundleID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("DeleteBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "DeleteBundle should succeed")
@@ -492,7 +492,7 @@ func testTemplateCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		}
 
 		result, err := cmd.CreateTemplate(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CreateTemplate not implemented for this adapter")
 		}
 		require.NoError(t, err, "CreateTemplate should succeed")
@@ -517,7 +517,7 @@ func testTemplateCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		}
 
 		result, err := cmd.CreateTemplate(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CreateTemplate not implemented for this adapter")
 		}
 		require.NoError(t, err, "CreateTemplate with SecureBoot should succeed")
@@ -542,7 +542,7 @@ func testTemplateCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		}
 
 		result, err := cmd.CreateTemplate(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CreateTemplate not implemented for this adapter")
 		}
 		require.NoError(t, err, "CreateTemplate with ECC should succeed")
@@ -563,7 +563,7 @@ func testTemplateCreate(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		}
 
 		_, err := cmd.CreateTemplate(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CreateTemplate not implemented for this adapter")
 		}
 		require.Error(t, err, "CreateTemplate should fail with missing ID")
@@ -583,7 +583,7 @@ func testTemplateGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateTemplate(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateTemplate not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateTemplate should succeed")
@@ -595,7 +595,7 @@ func testTemplateGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix
 
 	t.Run("GetExistingTemplate", func(t *testing.T) {
 		result, err := cmd.GetTemplate(testCtx, GetTemplateOptions{ID: templateID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("GetTemplate not implemented for this adapter")
 		}
 		require.NoError(t, err, "GetTemplate should succeed")
@@ -607,7 +607,7 @@ func testTemplateGet(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix
 
 	t.Run("GetNonexistentTemplateFails", func(t *testing.T) {
 		_, err := cmd.GetTemplate(testCtx, GetTemplateOptions{ID: prefix + "-nonexistent-template-id"})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("GetTemplate not implemented for this adapter")
 		}
 		require.Error(t, err, "GetTemplate should fail for nonexistent template")
@@ -627,14 +627,14 @@ func testTemplateDelete(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		SecureBootEnabled: false,
 	}
 	_, err := cmd.CreateTemplate(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateTemplate not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateTemplate should succeed")
 
 	t.Run("DeleteExistingTemplate", func(t *testing.T) {
 		result, err := cmd.DeleteTemplate(testCtx, DeleteTemplateOptions{ID: templateID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("DeleteTemplate not implemented for this adapter")
 		}
 		require.NoError(t, err, "DeleteTemplate should succeed")
@@ -644,7 +644,7 @@ func testTemplateDelete(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 
 	t.Run("VerifyTemplateIsDeleted", func(t *testing.T) {
 		_, err := cmd.GetTemplate(testCtx, GetTemplateOptions{ID: templateID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("GetTemplate not implemented for this adapter")
 		}
 		require.Error(t, err, "GetTemplate should fail for deleted template")
@@ -652,7 +652,7 @@ func testTemplateDelete(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 
 	t.Run("DeleteNonexistentTemplateFails", func(t *testing.T) {
 		_, err := cmd.DeleteTemplate(testCtx, DeleteTemplateOptions{ID: prefix + "-nonexistent-template-delete"})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("DeleteTemplate not implemented for this adapter")
 		}
 		require.Error(t, err, "DeleteTemplate should fail for nonexistent template")
@@ -674,7 +674,7 @@ func testTemplateList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 			SecureBootEnabled: false,
 		}
 		result, err := cmd.CreateTemplate(testCtx, opts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CreateTemplate not implemented for this adapter")
 		}
 		require.NoError(t, err, "Setup: CreateTemplate should succeed")
@@ -690,7 +690,7 @@ func testTemplateList(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("ListAllTemplates", func(t *testing.T) {
 		result, err := cmd.ListTemplates(testCtx, ListTemplatesOptions{})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ListTemplates not implemented for this adapter")
 		}
 		require.NoError(t, err, "ListTemplates should succeed")
@@ -712,7 +712,7 @@ func testTemplateClone(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 		SecureBootEnabled: false,
 	}
 	_, err := cmd.CreateTemplate(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateTemplate not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateTemplate should succeed")
@@ -736,7 +736,7 @@ func testTemplateClone(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 		}
 
 		result, err := cmd.CloneTemplate(testCtx, cloneOpts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CloneTemplate not implemented for this adapter")
 		}
 		require.NoError(t, err, "CloneTemplate should succeed")
@@ -756,7 +756,7 @@ func testTemplateClone(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 		}
 
 		_, err := cmd.CloneTemplate(testCtx, cloneOpts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CloneTemplate not implemented for this adapter")
 		}
 		require.Error(t, err, "CloneTemplate should fail for nonexistent template")
@@ -769,7 +769,7 @@ func testTemplateClone(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 		}
 
 		_, err := cmd.CloneTemplate(testCtx, cloneOpts)
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("CloneTemplate not implemented for this adapter")
 		}
 		require.Error(t, err, "CloneTemplate should fail with missing hostname")
@@ -798,7 +798,7 @@ func testExportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateBundle not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
@@ -812,7 +812,7 @@ func testExportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("ExportExistingBundle", func(t *testing.T) {
 		result, err := cmd.ExportBundle(testCtx, ExportBundleOptions{ID: createResult.Bundle.ID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ExportBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "ExportBundle should succeed")
@@ -822,7 +822,7 @@ func testExportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("ExportNonexistentBundleFails", func(t *testing.T) {
 		_, err := cmd.ExportBundle(testCtx, ExportBundleOptions{ID: prefix + "-nonexistent-export"})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ExportBundle not implemented for this adapter")
 		}
 		require.Error(t, err, "ExportBundle should fail for nonexistent bundle")
@@ -842,7 +842,7 @@ func testImportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateBundle not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
@@ -850,7 +850,7 @@ func testImportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 	require.NotNil(t, createResult.Bundle, "Bundle should not be nil")
 
 	exportResult, err := cmd.ExportBundle(testCtx, ExportBundleOptions{ID: createResult.Bundle.ID})
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("ExportBundle not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: ExportBundle should succeed")
@@ -868,7 +868,7 @@ func testImportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("ImportValidBundle", func(t *testing.T) {
 		result, err := cmd.ImportBundle(testCtx, ImportBundleOptions{ArchivePath: exportResult.ArchivePath})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ImportBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "ImportBundle should succeed")
@@ -881,7 +881,7 @@ func testImportBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, prefi
 
 	t.Run("ImportInvalidPathFails", func(t *testing.T) {
 		_, err := cmd.ImportBundle(testCtx, ImportBundleOptions{ArchivePath: "/nonexistent/path/bundle.tar.gz"})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ImportBundle not implemented for this adapter")
 		}
 		require.Error(t, err, "ImportBundle should fail with invalid path")
@@ -909,7 +909,7 @@ func testValidateBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateBundle not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
@@ -923,7 +923,7 @@ func testValidateBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 
 	t.Run("ValidateExistingBundle", func(t *testing.T) {
 		result, err := cmd.ValidateBundle(testCtx, ValidateBundleOptions{ID: createResult.Bundle.ID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ValidateBundle not implemented for this adapter")
 		}
 		require.NoError(t, err, "ValidateBundle should succeed")
@@ -934,7 +934,7 @@ func testValidateBundle(t *testing.T, ctx context.Context, cmd VTPMCommands, pre
 
 	t.Run("ValidateNonexistentBundleFails", func(t *testing.T) {
 		_, err := cmd.ValidateBundle(testCtx, ValidateBundleOptions{ID: prefix + "-nonexistent-validate"})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ValidateBundle not implemented for this adapter")
 		}
 		require.Error(t, err, "ValidateBundle should fail for nonexistent bundle")
@@ -965,7 +965,7 @@ func testStartStop(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateBundle not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
@@ -985,7 +985,7 @@ func testStartStop(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 
 	t.Run("StartVTPM", func(t *testing.T) {
 		result, err := cmd.Start(testCtx, StartOptions{BundleID: bundleID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("Start not implemented for this adapter")
 		}
 		require.NoError(t, err, "Start should succeed")
@@ -1001,7 +1001,7 @@ func testStartStop(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 			t.Skip("Skipping: Start did not succeed")
 		}
 		result, err := cmd.IsRunning(testCtx, IsRunningOptions{BundleID: bundleID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("IsRunning not implemented for this adapter")
 		}
 		require.NoError(t, err, "IsRunning should succeed")
@@ -1015,7 +1015,7 @@ func testStartStop(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 			t.Skip("Skipping: Start did not succeed")
 		}
 		result, err := cmd.Stop(testCtx, StopOptions{BundleID: bundleID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("Stop not implemented for this adapter")
 		}
 		require.NoError(t, err, "Stop should succeed")
@@ -1029,7 +1029,7 @@ func testStartStop(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix s
 			t.Skip("Skipping: Start did not succeed")
 		}
 		result, err := cmd.IsRunning(testCtx, IsRunningOptions{BundleID: bundleID})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("IsRunning not implemented for this adapter")
 		}
 		require.NoError(t, err, "IsRunning should succeed")
@@ -1051,7 +1051,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateBundle not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
@@ -1066,7 +1066,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 
 	// Start the vTPM
 	_, err = cmd.Start(testCtx, StartOptions{BundleID: bundleID})
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("Start not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: Start should succeed")
@@ -1082,7 +1082,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			BundleID: bundleID,
 			Data:     plaintext,
 		})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("Seal not implemented for this adapter")
 		}
 		require.NoError(t, err, "Seal should succeed")
@@ -1095,7 +1095,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			BundleID:   bundleID,
 			SealedData: sealResult.SealedData,
 		})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("Unseal not implemented for this adapter")
 		}
 		require.NoError(t, err, "Unseal should succeed")
@@ -1115,7 +1115,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			Data:     plaintext,
 			PCRs:     []int{0, 1, 7},
 		})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("Seal not implemented for this adapter")
 		}
 		require.NoError(t, err, "Seal with PCR policy should succeed")
@@ -1127,7 +1127,7 @@ func testSealUnseal(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix 
 			BundleID:   bundleID,
 			SealedData: sealResult.SealedData,
 		})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("Unseal not implemented for this adapter")
 		}
 		require.NoError(t, err, "Unseal should succeed when PCRs match")
@@ -1149,7 +1149,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateBundle not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
@@ -1164,7 +1164,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 
 	// Start the vTPM
 	_, err = cmd.Start(testCtx, StartOptions{BundleID: bundleID})
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("Start not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: Start should succeed")
@@ -1174,7 +1174,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 			BundleID: bundleID,
 			PCRIndex: 0,
 		})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ReadPCR not implemented for this adapter")
 		}
 		require.NoError(t, err, "ReadPCR should succeed")
@@ -1191,7 +1191,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 			BundleID: bundleID,
 			PCRIndex: 16, // Use PCR 16 which is typically user-extendable
 		})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ReadPCR not implemented for this adapter")
 		}
 		require.NoError(t, err, "ReadPCR should succeed")
@@ -1204,7 +1204,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 			PCRIndex: 16,
 			Data:     extendData,
 		})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("ExtendPCR not implemented for this adapter")
 		}
 		require.NoError(t, err, "ExtendPCR should succeed")
@@ -1228,7 +1228,7 @@ func testPCROperations(t *testing.T, ctx context.Context, cmd VTPMCommands, pref
 				BundleID: bundleID,
 				PCRIndex: pcrIndex,
 			})
-			if isNotImplemented(err) {
+			if surface.IsNotImplemented(err) {
 				t.Skipf("ReadPCR not implemented for this adapter")
 			}
 			require.NoError(t, err, "ReadPCR for PCR %d should succeed", pcrIndex)
@@ -1251,7 +1251,7 @@ func testQuote(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix strin
 		SecureBootEnabled: false,
 	}
 	createResult, err := cmd.CreateBundle(testCtx, createOpts)
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("CreateBundle not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: CreateBundle should succeed")
@@ -1266,7 +1266,7 @@ func testQuote(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix strin
 
 	// Start the vTPM
 	_, err = cmd.Start(testCtx, StartOptions{BundleID: bundleID})
-	if isNotImplemented(err) {
+	if surface.IsNotImplemented(err) {
 		t.Skip("Start not implemented for this adapter")
 	}
 	require.NoError(t, err, "Setup: Start should succeed")
@@ -1282,7 +1282,7 @@ func testQuote(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix strin
 			Nonce:    nonce,
 			PCRs:     []int{0, 1, 7},
 		})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("Quote not implemented for this adapter")
 		}
 		require.NoError(t, err, "Quote should succeed")
@@ -1312,7 +1312,7 @@ func testQuote(t *testing.T, ctx context.Context, cmd VTPMCommands, prefix strin
 			Nonce:    nonce1,
 			PCRs:     []int{0},
 		})
-		if isNotImplemented(err) {
+		if surface.IsNotImplemented(err) {
 			t.Skip("Quote not implemented for this adapter")
 		}
 		require.NoError(t, err, "Quote with nonce1 should succeed")
@@ -1472,7 +1472,7 @@ func TestVTPMErrorHandling(t *testing.T) {
 
 			t.Run("GetBundle_NotFound", func(t *testing.T) {
 				_, err := adapter.GetBundle(ctx, GetBundleOptions{ID: "nonexistent-bundle-id-" + prefix})
-				if isNotImplemented(err) {
+				if surface.IsNotImplemented(err) {
 					t.Skip("GetBundle not implemented for this adapter")
 				}
 				require.Error(t, err, "GetBundle should return error for non-existent bundle")
@@ -1480,7 +1480,7 @@ func TestVTPMErrorHandling(t *testing.T) {
 
 			t.Run("GetTemplate_NotFound", func(t *testing.T) {
 				_, err := adapter.GetTemplate(ctx, GetTemplateOptions{ID: "nonexistent-template-id-" + prefix})
-				if isNotImplemented(err) {
+				if surface.IsNotImplemented(err) {
 					t.Skip("GetTemplate not implemented for this adapter")
 				}
 				require.Error(t, err, "GetTemplate should return error for non-existent template")
@@ -1493,7 +1493,7 @@ func TestVTPMErrorHandling(t *testing.T) {
 					EKAlgorithm: vtpm.EKAlgorithmRSA,
 				}
 				_, err := adapter.CreateBundle(ctx, opts)
-				if isNotImplemented(err) {
+				if surface.IsNotImplemented(err) {
 					t.Skip("CreateBundle not implemented for this adapter")
 				}
 				// Some adapters may accept empty mode, which is fine
@@ -1502,7 +1502,7 @@ func TestVTPMErrorHandling(t *testing.T) {
 
 			t.Run("DeleteBundle_NotFound", func(t *testing.T) {
 				_, err := adapter.DeleteBundle(ctx, DeleteBundleOptions{ID: "nonexistent-delete-id-" + prefix})
-				if isNotImplemented(err) {
+				if surface.IsNotImplemented(err) {
 					t.Skip("DeleteBundle not implemented for this adapter")
 				}
 				require.Error(t, err, "DeleteBundle should fail for non-existent bundle")
@@ -1514,7 +1514,7 @@ func TestVTPMErrorHandling(t *testing.T) {
 					Hostname:   "test-clone-invalid",
 				}
 				_, err := adapter.CloneTemplate(ctx, opts)
-				if isNotImplemented(err) {
+				if surface.IsNotImplemented(err) {
 					t.Skip("CloneTemplate not implemented for this adapter")
 				}
 				require.Error(t, err, "CloneTemplate should fail for non-existent template")
@@ -1522,7 +1522,7 @@ func TestVTPMErrorHandling(t *testing.T) {
 
 			t.Run("ExportBundle_NotFound", func(t *testing.T) {
 				_, err := adapter.ExportBundle(ctx, ExportBundleOptions{ID: "nonexistent-export-id-" + prefix})
-				if isNotImplemented(err) {
+				if surface.IsNotImplemented(err) {
 					t.Skip("ExportBundle not implemented for this adapter")
 				}
 				require.Error(t, err, "ExportBundle should fail for non-existent bundle")
@@ -1530,7 +1530,7 @@ func TestVTPMErrorHandling(t *testing.T) {
 
 			t.Run("ValidateBundle_NotFound", func(t *testing.T) {
 				_, err := adapter.ValidateBundle(ctx, ValidateBundleOptions{ID: "nonexistent-validate-id-" + prefix})
-				if isNotImplemented(err) {
+				if surface.IsNotImplemented(err) {
 					t.Skip("ValidateBundle not implemented for this adapter")
 				}
 				require.Error(t, err, "ValidateBundle should fail for non-existent bundle")
@@ -1542,24 +1542,3 @@ func TestVTPMErrorHandling(t *testing.T) {
 // =============================================================================
 // Helper Functions
 // =============================================================================
-
-// isNotImplemented checks if an error indicates the operation is not implemented
-// or the service is unavailable (not registered in daemon test mode).
-func isNotImplemented(err error) bool {
-	if err == nil {
-		return false
-	}
-	errMsg := strings.ToLower(err.Error())
-	return strings.Contains(errMsg, "not implemented") ||
-		strings.Contains(errMsg, "unimplemented") ||
-		strings.Contains(errMsg, "not supported") ||
-		strings.Contains(errMsg, "service unavailable") ||
-		strings.Contains(errMsg, "not available") ||
-		strings.Contains(errMsg, "unknown service") ||
-		strings.Contains(errMsg, "connection required") ||
-		strings.Contains(errMsg, "404 page not found") ||
-		strings.Contains(errMsg, "status: 404") ||
-		strings.Contains(errMsg, "context canceled") ||
-		strings.Contains(errMsg, "context deadline exceeded") ||
-		strings.Contains(errMsg, "invalid hash function")
-}

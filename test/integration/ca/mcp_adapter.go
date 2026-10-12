@@ -25,6 +25,7 @@ import (
 	"net/http"
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"os"
 	"sync/atomic"
 	"time"
@@ -511,7 +512,7 @@ func (m *MCPAdapter) Info(ctx context.Context) (*InfoResult, error) {
 // Init initializes the CA via MCP.
 // Note: CA initialization is done during daemon startup, not via MCP.
 func (m *MCPAdapter) Init(ctx context.Context, opts InitOptions) (*InitResult, error) {
-	return nil, ErrNotImplemented{Feature: "CA init via MCP"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "CA init"}
 }
 
 // =============================================================================
@@ -853,7 +854,7 @@ func (m *MCPAdapter) GenerateCRL(ctx context.Context) (*GenerateCRLResult, error
 // ExportCRL exports the CRL via MCP.
 // Note: CRL export to file is a CLI operation, not exposed via MCP.
 func (m *MCPAdapter) ExportCRL(ctx context.Context, output string) (*ExportCRLResult, error) {
-	return nil, ErrNotImplemented{Feature: "CRL export via MCP"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "CRL export"}
 }
 
 // =============================================================================
@@ -902,13 +903,13 @@ func (m *MCPAdapter) ExportBundle(ctx context.Context, output string) (*ExportBu
 // InstallCACertificates installs CA certificates via MCP.
 // Note: CA certificate installation is a local OS operation, not exposed via MCP.
 func (m *MCPAdapter) InstallCACertificates(ctx context.Context) (*InstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "install CA certificates via MCP"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "install CA certificates"}
 }
 
 // UninstallCACertificates uninstalls CA certificates via MCP.
 // Note: CA certificate uninstallation is a local OS operation, not exposed via MCP.
 func (m *MCPAdapter) UninstallCACertificates(ctx context.Context) (*UninstallCACertificatesResult, error) {
-	return nil, ErrNotImplemented{Feature: "uninstall CA certificates via MCP"}
+	return nil, surface.ErrNoSurface{Transport: "MCP", Operation: "uninstall CA certificates"}
 }
 
 // Ensure MCPAdapter implements CACommands interface.

@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"google.golang.org/grpc"
 )
 
@@ -61,15 +62,6 @@ func (e ErrUnixRPCFailed) Error() string {
 
 func (e ErrUnixRPCFailed) Unwrap() error {
 	return e.Err
-}
-
-// ErrUnixNotImplemented indicates a method is not yet implemented for Unix.
-type ErrUnixNotImplemented struct {
-	Method string
-}
-
-func (e ErrUnixNotImplemented) Error() string {
-	return fmt.Sprintf("Unix method %s not implemented", e.Method)
 }
 
 // =============================================================================
@@ -528,27 +520,27 @@ func (a *UnixAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 
 // CreateTemplate creates a new device template via Unix socket.
 func (a *UnixAdapter) CreateTemplate(ctx context.Context, opts CreateTemplateOptions) (*CreateTemplateResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "CreateTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "CreateTemplate"}
 }
 
 // GetTemplate retrieves a template by ID via Unix socket.
 func (a *UnixAdapter) GetTemplate(ctx context.Context, opts GetTemplateOptions) (*GetTemplateResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "GetTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "GetTemplate"}
 }
 
 // UpdateTemplate updates an existing template via Unix socket.
 func (a *UnixAdapter) UpdateTemplate(ctx context.Context, opts UpdateTemplateOptions) (*UpdateTemplateResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "UpdateTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "UpdateTemplate"}
 }
 
 // DeleteTemplate removes a template via Unix socket.
 func (a *UnixAdapter) DeleteTemplate(ctx context.Context, opts DeleteTemplateOptions) (*DeleteTemplateResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "DeleteTemplate"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "DeleteTemplate"}
 }
 
 // ListTemplates lists all templates via Unix socket.
 func (a *UnixAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptions) (*ListTemplatesResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "ListTemplates"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "ListTemplates"}
 }
 
 // CreateProfileFromTemplate creates a profile from a template via Unix socket.
@@ -590,7 +582,7 @@ func (a *UnixAdapter) CreateProfileFromTemplate(ctx context.Context, opts Create
 
 // FindConfigForDevice finds the config for a device via Unix socket.
 func (a *UnixAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigForDeviceOptions) (*FindConfigForDeviceResult, error) {
-	return nil, ErrUnixNotImplemented{Method: "FindConfigForDevice"}
+	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "FindConfigForDevice"}
 }
 
 // AssignProfileToDevice assigns a profile to a device via Unix socket.

@@ -16,12 +16,12 @@
 package piv
 
 import (
-	"errors"
 	"os"
-	"strings"
 
 	daemonpkg "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	pivsdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/piv"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // Environment variable names for service endpoints, identical to the CA
@@ -58,36 +58,16 @@ func GetServiceEndpoints() *ServiceEndpoints {
 	}
 }
 
-// isBackendUnavailable returns true when the supplied error indicates the PIV
-// backend is not configured in the running platformd. All transports funnel
-// this into an Unavailable-style error that includes one of these markers.
+// isBackendUnavailable reports whether err is a declared gap: a typed
+// not-implemented declaration or the daemon's PIV not-configured sentinel,
+// which every transport carries as the sentinel's text. Any other error
+// fails the test (#487).
 func isBackendUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, daemonpkg.ErrPIVNotConfigured) {
-		return true
-	}
-	if errors.Is(err, pivsdk.ErrNotYetWired) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	needles := []string{
-		"backend not configured",
-		"not yet wired",
-		"unavailable",
-		"not implemented",
-		"501",
-		"503",
-		"phase35: service provider not configured",
-		"piv: ",
-	}
-	for _, n := range needles {
-		if strings.Contains(msg, n) {
-			return true
-		}
-	}
-	return false
+	return surface.IsNotImplemented(err) || surface.IsDeclaredRefusal(err,
+		daemonpkg.ErrPIVNotConfigured,
+		pivsdk.ErrNotYetWired,
+		mcpapi.ErrPhase35NotConfigured,
+	)
 }
 
 // SkipIfNotIntegration skips the test when INTEGRATION_TEST is not set.
