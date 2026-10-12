@@ -425,7 +425,10 @@ dispatch also runs the emulated first boot.
   is asserted argument by argument; `pkg/qemu/harness` fakes the swtpm
   behind its `TPM` interface and drives `Console` against an in-process
   unix socket; the installer's release-on-failure and embedded-kernel signing
-  run against recorders and a `authenticodetest.MinimalPE`.
+  run against recorders and a `authenticodetest.MinimalPE`. That package
+  (`pkg/authenticode/authenticodetest`) is the one home for hand-built PE
+  fixtures: `MinimalPE` for tests that sign, `SectionedPE(sections, padding)`
+  for tests that rewrite the section table (`pkg/uki`). Do not add a local copy.
   `TestCacheKeyMatchesMakeCacheKey` runs `make -s cache-key` in the builder
   directory (needs `make`, no container).
 - **Image layout** (`test/integration/diskimage/image_test.go`, part of

@@ -290,20 +290,6 @@ const (
 	machineRISCV uint16 = 0x5064 // IMAGE_FILE_MACHINE_RISCV64 (EFI/BOOT/BOOTRISCV64.EFI)
 )
 
-// createMinimalPE creates a minimal valid AMD64 PE32+ file for testing
-func createMinimalPE(t *testing.T) []byte {
-	t.Helper()
-	return createMinimalPEWithMachine(t, machineAMD64)
-}
-
-// createMinimalPEWithMachine creates a minimal valid PE32+ file whose COFF
-// machine field is set to the given value. Everything else is identical to
-// createMinimalPE so tests can prove the signer is machine-agnostic.
-func createMinimalPEWithMachine(t *testing.T, machine uint16) []byte {
-	t.Helper()
-	return authenticodetest.MinimalPE(machine)
-}
-
 // createMinimalPE32 creates a minimal valid PE32 (32-bit) file for testing
 func createMinimalPE32(t *testing.T) []byte {
 	t.Helper()
@@ -486,7 +472,7 @@ func TestSign(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create minimal PE file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 
 	// Sign the PE file
 	input := bytes.NewReader(peData)
@@ -536,7 +522,7 @@ func TestSignFile(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "test-signed.efi")
 
 	// Write minimal PE file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	err = os.WriteFile(inputPath, peData, 0644)
 	require.NoError(t, err)
 
@@ -605,7 +591,7 @@ func TestParsePE(t *testing.T) {
 	}{
 		{
 			name:    "valid PE32+",
-			data:    createMinimalPE(&testing.T{}),
+			data:    authenticodetest.MinimalPE(authenticodetest.MachineAMD64),
 			wantErr: false,
 		},
 		{
@@ -699,7 +685,7 @@ func TestComputeAuthenticodeDigest(t *testing.T) {
 		cert: cert,
 	}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -728,7 +714,7 @@ func TestComputeAuthenticodeDigestWithExistingSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign PE first
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 	err = signer.Sign(input, output)
@@ -836,7 +822,7 @@ func TestEmbedSignature(t *testing.T) {
 		cert: cert,
 	}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -878,7 +864,7 @@ func TestEmbedSignature_DwLengthExcludesPadding(t *testing.T) {
 	signature := createTestASN1Sequence(make([]byte, 250))
 	require.Len(t, signature, 253)
 
-	pe, err := parsePE(createMinimalPE(t))
+	pe, err := parsePE(authenticodetest.MinimalPE(authenticodetest.MachineAMD64))
 	require.NoError(t, err)
 	signedPE, err := s.embedSignature(pe, signature)
 	require.NoError(t, err)
@@ -907,7 +893,7 @@ func TestExtractSignature_ToleratesPaddingInsideDwLength(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 	signature := createTestASN1Sequence(make([]byte, 250)) // 253 bytes
-	pe, err := parsePE(createMinimalPE(t))
+	pe, err := parsePE(authenticodetest.MinimalPE(authenticodetest.MachineAMD64))
 	require.NoError(t, err)
 	signedPE, err := s.embedSignature(pe, signature)
 	require.NoError(t, err)
@@ -932,7 +918,7 @@ func TestExtractSignature(t *testing.T) {
 	}
 
 	// Test unsigned PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -959,7 +945,7 @@ func TestExtractSignatureLongFormLength(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -1002,7 +988,7 @@ func TestExtractSignatureInvalidStructure(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -1044,7 +1030,7 @@ func TestExtractSignatureInvalidBounds(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -1061,7 +1047,7 @@ func TestExtractSignatureSmallWinCert(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -1193,7 +1179,7 @@ func TestVerify(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and sign a PE file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -1226,7 +1212,7 @@ func TestVerifyFile(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "test-signed.efi")
 
 	// Write and sign PE file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	err = os.WriteFile(inputPath, peData, 0644)
 	require.NoError(t, err)
 
@@ -1251,7 +1237,7 @@ func TestVerifyUnsignedPE(t *testing.T) {
 	require.NoError(t, err)
 
 	// Try to verify unsigned PE - should fail
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 
 	err = signer.Verify(input)
@@ -1272,7 +1258,7 @@ func TestExtractCertificate(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and sign a PE file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -1310,7 +1296,7 @@ func TestExtractCertificateFile(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "test-signed.efi")
 
 	// Write and sign PE file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	err = os.WriteFile(inputPath, peData, 0644)
 	require.NoError(t, err)
 
@@ -1337,7 +1323,7 @@ func TestExtractCertificateUnsigned(t *testing.T) {
 	require.NoError(t, err)
 
 	// Try to extract certificate from unsigned PE - should fail
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 
 	extractedCert, err := signer.ExtractCertificate(input)
@@ -1360,7 +1346,7 @@ func TestSigningTime(t *testing.T) {
 
 	// Create and sign a PE file
 	beforeSign := time.Now().UTC()
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -1382,7 +1368,7 @@ func TestSigningTime(t *testing.T) {
 
 func TestSigningTimeUnsigned(t *testing.T) {
 	// Try to get signing time from unsigned PE - should fail
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 
 	signingTime, err := SigningTime(input)
@@ -1406,7 +1392,7 @@ func TestSignWithTimestamp(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -1476,7 +1462,7 @@ func TestSignWithCertChain(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign with chain
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -1580,7 +1566,7 @@ func TestReSigning(t *testing.T) {
 	require.NoError(t, err)
 
 	// First signing
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input1 := bytes.NewReader(peData)
 	output1 := &bytes.Buffer{}
 
@@ -1622,7 +1608,7 @@ func TestSignTwice(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 
 	// Sign twice
 	for i := 0; i < 2; i++ {
@@ -1694,7 +1680,7 @@ func TestSignedPEStructure(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -1732,7 +1718,7 @@ func TestSignAndVerifyWithECDSA(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and sign a PE file with ECDSA
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -1755,7 +1741,7 @@ func TestComputePEChecksum(t *testing.T) {
 		cert: cert,
 	}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 
 	// Compute checksum
 	checksum := s.computePEChecksum(peData)
@@ -1781,7 +1767,7 @@ func TestComputePEChecksumOddSize(t *testing.T) {
 	}
 
 	// Test with odd-sized PE (tests the single byte handling path)
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	oddPE := peData[:len(peData)-1] // Remove last byte
 
 	checksum := s.computePEChecksum(oddPE)
@@ -1793,7 +1779,7 @@ func TestGetChecksumOffset(t *testing.T) {
 	s := &Signer{cert: cert}
 
 	// Test with valid PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	offset := s.getChecksumOffset(peData)
 	require.Greater(t, offset, uint32(0))
 
@@ -1807,7 +1793,7 @@ func TestVerifyPKCS7SignatureNoSignerInfos(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -1848,7 +1834,7 @@ func TestVerifyPKCS7SignatureWrongContentType(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -2023,7 +2009,7 @@ func TestSignFileOutputCreateError(t *testing.T) {
 	inputPath := filepath.Join(tmpDir, "test.efi")
 
 	// Write minimal PE file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	err = os.WriteFile(inputPath, peData, 0644)
 	require.NoError(t, err)
 
@@ -2168,7 +2154,7 @@ func TestExtractSignatureUnsupportedLengthEncoding(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -2205,7 +2191,7 @@ func TestExtractSignatureLengthExceedsData(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -2252,7 +2238,7 @@ func TestExtractCertificateFromPKCS7LongFormCertLength(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE to get a real PKCS#7 signature
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -2287,7 +2273,7 @@ func TestVerifyDigestMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -2360,7 +2346,7 @@ func TestEmbedSignatureWithExistingSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign PE first
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -2425,7 +2411,7 @@ func TestVerifyPKCS7SignatureInvalidContentInfo(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -2441,7 +2427,7 @@ func TestVerifyPKCS7SignatureInvalidSignedData(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -2477,7 +2463,7 @@ func TestExtractCertificateFromPKCS7ShortFormLength(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE - this creates a real PKCS#7 with proper certificate encoding
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -2566,7 +2552,7 @@ func TestComputeAuthenticodeDigestWithPadding(t *testing.T) {
 	s := &Signer{cert: cert}
 
 	// Create a PE that will require padding (not aligned to 8 bytes)
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 
 	// Remove some bytes to make it unaligned
 	unalignedPE := peData[:len(peData)-3]
@@ -2635,7 +2621,7 @@ func TestSignWithMultipleCerts(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -2663,7 +2649,7 @@ func TestComputeAuthenticodeDigestAlreadySigned(t *testing.T) {
 	require.NoError(t, err)
 
 	// First sign the PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -2688,7 +2674,7 @@ func TestVerifyPKCS7SignatureExtractDigestError(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -2714,7 +2700,7 @@ func TestSignAndVerifyLargeFile(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create larger PE file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 
 	// Extend with more data
 	largePE := make([]byte, 16384)
@@ -2831,7 +2817,7 @@ func TestSignAndExtractCertificateChain(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -2861,7 +2847,7 @@ func TestVerifyTamperedSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -2939,7 +2925,7 @@ func TestSignFileTempError(t *testing.T) {
 	inputPath := filepath.Join(tmpDir, "test.efi")
 
 	// Write minimal PE file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	err = os.WriteFile(inputPath, peData, 0644)
 	require.NoError(t, err)
 
@@ -3042,7 +3028,7 @@ func TestSignFailedSigning(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3072,7 +3058,7 @@ func TestSignFailedWrite(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &errorWriter{err: errors.New("write error")}
 
@@ -3094,7 +3080,7 @@ func TestVerifyExtractCertError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3160,7 +3146,7 @@ func TestExtractCertificateParseError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3204,7 +3190,7 @@ func TestSignFileChmodError(t *testing.T) {
 	inputPath := filepath.Join(tmpDir, "test.efi")
 
 	// Write minimal PE file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	err = os.WriteFile(inputPath, peData, 0644)
 	require.NoError(t, err)
 
@@ -3232,7 +3218,7 @@ func TestVerifyInvalidSignatureData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3296,7 +3282,7 @@ func TestVerifyWithWrongCertificate(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign with first key
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3331,7 +3317,7 @@ func TestMultipleReSigning(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 
 	// Sign multiple times (re-signing)
 	for i := 0; i < 3; i++ {
@@ -3432,7 +3418,7 @@ func TestSignFileOutputChmodSuccess(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "output.efi")
 
 	// Write PE file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	err = os.WriteFile(inputPath, peData, 0644)
 	require.NoError(t, err)
 
@@ -3459,7 +3445,7 @@ func TestSignWithDifferentPESizes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test with various PE sizes to exercise padding and alignment code
-	basePE := createMinimalPE(t)
+	basePE := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 
 	sizes := []int{
 		len(basePE),       // Original size
@@ -3494,7 +3480,7 @@ func TestExtractSignatureShortWinCertData(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -3547,7 +3533,7 @@ func TestVerifyModifiedChecksumField(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3595,7 +3581,7 @@ func TestCreatePKCS7SignatureEdgeCases(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test with very long time (far future)
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3632,7 +3618,7 @@ func TestSignAndVerifyMultipleFilesSequentially(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		t.Run(fmt.Sprintf("file_%d", i), func(t *testing.T) {
 			// Create slightly different PE files
-			peData := createMinimalPE(t)
+			peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 			// Modify data to make each PE unique
 			if len(peData) > 0x200+i {
 				peData[0x200+i] = byte(i + 1)
@@ -3666,7 +3652,7 @@ func TestExtractCertificateChainVerification(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3696,7 +3682,7 @@ func TestVerifyPKCS7TrailingDataDetection(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE to get valid signature
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3732,7 +3718,7 @@ func TestExtractSignatureVariousLengthEncodings(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE to get valid signature with 0x82 length encoding
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3773,7 +3759,7 @@ func TestSigningTimeExtraction(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3802,7 +3788,7 @@ func TestComputeAuthenticodeDigestConsistency(t *testing.T) {
 		logger:   logger,
 	}
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	pe, err := parsePE(peData)
 	require.NoError(t, err)
 
@@ -3917,7 +3903,7 @@ func TestVerifyCryptographicSignatureRSA(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign and verify to exercise RSA verification path
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -3981,7 +3967,7 @@ func TestSignFileFullCycle(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "output.efi")
 
 	// Create input file
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	err = os.WriteFile(inputPath, peData, 0644)
 	require.NoError(t, err)
 
@@ -4112,7 +4098,7 @@ func TestGetChecksumOffsetVariousPEs(t *testing.T) {
 	s := &Signer{cert: cert}
 
 	// Test with minimal PE32+
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	offset := s.getChecksumOffset(peData)
 	require.Greater(t, offset, uint32(0))
 
@@ -4590,7 +4576,7 @@ func TestSignWithTimestampURL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -4615,7 +4601,7 @@ func TestSignWithCertificateChainMultiple(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -4637,7 +4623,7 @@ func TestSigningTimeParseError(t *testing.T) {
 
 // TestSigningTimeUnsignedPE tests SigningTime on unsigned PE
 func TestSigningTimeUnsignedPE(t *testing.T) {
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	_, err := SigningTime(bytes.NewReader(peData))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "PE file is not signed")
@@ -4656,7 +4642,7 @@ func TestExtractCertificateUnsignedPE(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	_, err = signer.ExtractCertificate(bytes.NewReader(peData))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "PE file is not signed")
@@ -4675,7 +4661,7 @@ func TestVerifyUnsignedPEFile(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	err = signer.Verify(bytes.NewReader(peData))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "PE file is not signed")
@@ -4712,7 +4698,7 @@ func TestVerifyPKCS7SignatureNoSignerInfoError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -4838,7 +4824,7 @@ func TestSignFileOutputPathError(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "input.efi")
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	err = os.WriteFile(inputPath, peData, 0644)
 	require.NoError(t, err)
 
@@ -4914,7 +4900,7 @@ func TestVerifyPKCS7SignatureCorruptedContent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -4990,7 +4976,7 @@ func TestComputeAuthenticodeDigestWithAlignedPE(t *testing.T) {
 	}
 
 	// Create PE that's already 8-byte aligned
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	// Pad to 8-byte alignment if not already
 	for len(peData)%8 != 0 {
 		peData = append(peData, 0x00)
@@ -5018,7 +5004,7 @@ func TestComputeAuthenticodeDigestSignedPE(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign a PE
-	peData := createMinimalPE(t)
+	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
 	input := bytes.NewReader(peData)
 	output := &bytes.Buffer{}
 
@@ -5064,7 +5050,7 @@ func TestSignAndVerifyARM64PE(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			peData := createMinimalPEWithMachine(t, tt.machine)
+			peData := authenticodetest.MinimalPE(tt.machine)
 
 			// The parser must report the machine it was given.
 			unsignedPE, err := parsePE(peData)
@@ -5138,7 +5124,7 @@ func TestVerifyARM64PEMachineTampered(t *testing.T) {
 	require.NoError(t, err)
 
 	output := &bytes.Buffer{}
-	require.NoError(t, signer.Sign(bytes.NewReader(createMinimalPEWithMachine(t, machineARM64)), output))
+	require.NoError(t, signer.Sign(bytes.NewReader(authenticodetest.MinimalPE(machineARM64)), output))
 	signedImage := output.Bytes()
 
 	// Retarget the signed aarch64 image to x86-64.

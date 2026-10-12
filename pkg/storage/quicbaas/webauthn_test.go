@@ -18,7 +18,6 @@ package quicbaas
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -27,68 +26,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestWebAuthnDAO(t *testing.T) (*WebAuthnDAO, *Client, func()) {
+func newTestWebAuthnDAO(t *testing.T) *WebAuthnDAO {
 	t.Helper()
-
-	cfg := TestConfig(t)
-	logger := logging.DefaultLogger()
-
-	// Create embedded server
-	server, err := NewEmbeddedServer(cfg, logger)
-	require.NoError(t, err, "failed to create embedded server")
-
-	// Start embedded server
-	// context.Background(), deliberately (#270): a deadline here bounds
-	// nothing and can only manufacture a false failure. The embedded
-	// server's Start takes no context — it runs first boot synchronously and
-	// the context is consulted only afterwards — and StartWithService
-	// ignores its context entirely. So a deadline cannot interrupt slow
-	// startup; it can only report a startup that already SUCCEEDED as a
-	// failure when the machine was loaded, which is exactly what happened.
-	// go test -timeout is the backstop for a genuine hang, and it prints a
-	// goroutine dump, which says WHERE it hung rather than only that it did.
-	err = server.Start(context.Background())
-	require.NoError(t, err, "failed to start embedded server")
-
-	// Create client
-	client, err := NewClient(cfg, logger)
-	require.NoError(t, err, "failed to create client")
-
-	// Start client with embedded service
-	err = client.StartWithService(context.Background(), server.Service())
-	require.NoError(t, err, "failed to start client with service")
-
-	dao := NewWebAuthnDAO(client, logger)
-
-	cleanup := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		// Stop client first
-		if err := client.Stop(ctx); err != nil {
-			t.Logf("client stop error: %v", err)
-		}
-
-		// Stop embedded server
-		if err := server.Stop(ctx); err != nil {
-			t.Logf("server stop error: %v", err)
-		}
-	}
-
-	return dao, client, cleanup
+	return NewWebAuthnDAO(newSharedTestClient(t), logging.DefaultLogger())
 }
 
 func TestNewWebAuthnDAO(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	assert.NotNil(t, dao)
 	assert.NotNil(t, dao.GenericDAO)
 }
 
 func TestWebAuthnDAO_Save_NewBlob(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 	blob := entities.NewBlob(0, []byte("test credential data"))
@@ -99,8 +50,7 @@ func TestWebAuthnDAO_Save_NewBlob(t *testing.T) {
 }
 
 func TestWebAuthnDAO_Save_WithExistingID(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 	blob := entities.NewBlob(12345, []byte("existing credential"))
@@ -111,8 +61,7 @@ func TestWebAuthnDAO_Save_WithExistingID(t *testing.T) {
 }
 
 func TestWebAuthnDAO_Get_Success(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 	data := []byte(`{"credentialId":"abc123","publicKey":"xyz789"}`)
@@ -128,8 +77,7 @@ func TestWebAuthnDAO_Get_Success(t *testing.T) {
 }
 
 func TestWebAuthnDAO_Get_NotFound(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 	_, err := dao.Get(ctx, 88888888)
@@ -140,8 +88,7 @@ func TestWebAuthnDAO_Get_NotFound(t *testing.T) {
 }
 
 func TestWebAuthnDAO_Delete_Success(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 	blob := entities.NewBlob(77777, []byte("to delete"))
@@ -158,8 +105,7 @@ func TestWebAuthnDAO_Delete_Success(t *testing.T) {
 }
 
 func TestWebAuthnDAO_Update_Success(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 	blob := entities.NewBlob(66666, []byte("original data"))
@@ -179,8 +125,7 @@ func TestWebAuthnDAO_Update_Success(t *testing.T) {
 }
 
 func TestWebAuthnDAO_Count(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 
@@ -196,8 +141,7 @@ func TestWebAuthnDAO_Count(t *testing.T) {
 }
 
 func TestWebAuthnDAO_Page(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 
@@ -214,8 +158,7 @@ func TestWebAuthnDAO_Page(t *testing.T) {
 }
 
 func TestWebAuthnDAO_ForEachPage(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 
@@ -239,8 +182,7 @@ func TestWebAuthnDAO_ForEachPage(t *testing.T) {
 }
 
 func TestWebAuthnDAO_LargeBinaryData(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 
@@ -261,8 +203,7 @@ func TestWebAuthnDAO_LargeBinaryData(t *testing.T) {
 }
 
 func TestWebAuthnDAO_WithEntity(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 	blob := &entities.Blob{
@@ -285,8 +226,7 @@ func TestWebAuthnDAO_WithEntity(t *testing.T) {
 }
 
 func TestWebAuthnDAO_EmptyBytes(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 	blob := entities.NewBlob(9000, []byte{})
@@ -300,8 +240,7 @@ func TestWebAuthnDAO_EmptyBytes(t *testing.T) {
 }
 
 func TestWebAuthnDAO_NilBytes(t *testing.T) {
-	dao, _, cleanup := newTestWebAuthnDAO(t)
-	defer cleanup()
+	dao := newTestWebAuthnDAO(t)
 
 	ctx := context.Background()
 	blob := &entities.Blob{

@@ -22,6 +22,12 @@ Two flavors of vBMC run alongside the devcontainer via docker-compose:
 Both expose HTTPS on port `8443` and IPMI RMCP+ on UDP port `6230`,
 sharing the `trusted-platform-net` network with the devcontainer.
 
+Both serve `/redfish/v1/Systems/1` and `/redfish/v1/Chassis/1` with a
+vendor-specific hardware identity (`Manufacturer`, `Model`, `PartNumber`,
+`SerialNumber`, `SKU`) that `pkg/quirks` resolves to the vendor's quirk, so
+hardware-identity behaviour can be integration-tested. Every resource the
+service root advertises is served; see the vBMC README for the values.
+
 ## Running the tests
 
 From inside the devcontainer:

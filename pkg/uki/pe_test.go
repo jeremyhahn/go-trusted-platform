@@ -19,113 +19,13 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode/authenticodetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// createMinimalPE builds a valid PE32+ binary in memory with the specified
-// number of existing sections and extra header padding bytes (space for
-// additional section header entries between the section table and the first
-// section's raw data).
-//
-// Layout:
-//
-//	[0x00]  DOS header          (64 bytes)  - MZ sig, PE offset at 0x3C
-//	[0x40]  PE signature        (4 bytes)   - "PE\0\0"
-//	[0x44]  COFF header         (20 bytes)  - numSections, sizeOfOptionalHeader=112
-//	[0x58]  Optional header     (112 bytes) - Magic=0x20b, SizeOfHeaders, SizeOfImage
-//	[0xC8]  Section headers     (40 * numSections bytes)
-//	[...]   Header padding      (headerPadding bytes of zeros)
-//	[aligned to 512] Section data (512 bytes of 0xCC per section)
-func createMinimalPE(t *testing.T, numSections int, headerPadding int) []byte {
-	t.Helper()
-
-	const (
-		dosHeaderSize      = 64
-		peSignatureSize    = 4
-		coffHeaderSize     = 20
-		optionalHeaderSize = 112 // PE32+ fixed fields, no data directories
-		sectionDataSize    = 512 // each section gets 512 bytes of 0xCC
-	)
-
-	peOffset := uint32(dosHeaderSize) // PE sig starts right after DOS header
-	coffOff := peOffset + peSignatureSize
-	optOff := coffOff + coffHeaderSize
-	sectionTableOff := optOff + optionalHeaderSize
-	sectionTableSize := uint32(numSections) * sectionHeaderSize
-
-	// First section raw data starts at the next 512-byte boundary after
-	// the section table + padding.
-	rawHeaderEnd := sectionTableOff + sectionTableSize + uint32(headerPadding)
-	firstSectionRawData := alignUp(rawHeaderEnd, fileAlignment)
-
-	totalSize := firstSectionRawData + uint32(numSections)*sectionDataSize
-	sizeOfImage := alignUp(totalSize, defaultSectionAlignment)
-
-	buf := make([]byte, totalSize)
-
-	// --- DOS header ---
-	binary.LittleEndian.PutUint16(buf[0:2], dosSignature)   // "MZ"
-	binary.LittleEndian.PutUint32(buf[0x3C:0x40], peOffset) // e_lfanew
-
-	// --- PE signature ---
-	binary.LittleEndian.PutUint32(buf[peOffset:peOffset+4], peSignature)
-
-	// --- COFF header (20 bytes at coffOff) ---
-	// Machine (offset 0): 0x8664 = AMD64
-	binary.LittleEndian.PutUint16(buf[coffOff:coffOff+2], 0x8664)
-	// NumberOfSections (offset 2)
-	binary.LittleEndian.PutUint16(buf[coffOff+2:coffOff+4], uint16(numSections))
-	// SizeOfOptionalHeader (offset 16)
-	binary.LittleEndian.PutUint16(buf[coffOff+16:coffOff+18], optionalHeaderSize)
-
-	// --- Optional header (112 bytes at optOff) ---
-	// Magic (offset 0): 0x20b = PE32+
-	binary.LittleEndian.PutUint16(buf[optOff:optOff+2], 0x20b)
-	// AddressOfEntryPoint (offset 16)
-	binary.LittleEndian.PutUint32(buf[optOff+16:optOff+20], 0x1000)
-	// SizeOfCode (offset 4)
-	binary.LittleEndian.PutUint32(buf[optOff+4:optOff+8], 0x2000)
-	// SizeOfImage (offset 56)
-	binary.LittleEndian.PutUint32(buf[optOff+56:optOff+60], sizeOfImage)
-	// SizeOfHeaders (offset 60)
-	binary.LittleEndian.PutUint32(buf[optOff+60:optOff+64], firstSectionRawData)
-
-	// --- Section headers (40 bytes each at sectionTableOff) ---
-	for i := 0; i < numSections; i++ {
-		off := sectionTableOff + uint32(i)*sectionHeaderSize
-		rawDataPtr := firstSectionRawData + uint32(i)*sectionDataSize
-
-		// Name (8 bytes)
-		name := []byte(".sect")
-		name = append(name, byte('0'+i))
-		copy(buf[off:off+8], name)
-
-		// VirtualSize (offset 8)
-		binary.LittleEndian.PutUint32(buf[off+8:off+12], sectionDataSize)
-		// VirtualAddress (offset 12)
-		binary.LittleEndian.PutUint32(buf[off+12:off+16], 0x1000+uint32(i)*0x1000)
-		// SizeOfRawData (offset 16)
-		binary.LittleEndian.PutUint32(buf[off+16:off+20], sectionDataSize)
-		// PointerToRawData (offset 20)
-		binary.LittleEndian.PutUint32(buf[off+20:off+24], rawDataPtr)
-		// Characteristics (offset 36): IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ
-		binary.LittleEndian.PutUint32(buf[off+36:off+40], 0x40000040)
-	}
-
-	// --- Section data: fill each section with 0xCC ---
-	for i := 0; i < numSections; i++ {
-		dataStart := firstSectionRawData + uint32(i)*sectionDataSize
-		for j := uint32(0); j < sectionDataSize; j++ {
-			buf[dataStart+j] = 0xCC
-		}
-	}
-
-	return buf
-}
-
 func TestNewPEPatcher_ValidPE(t *testing.T) {
-	pe := createMinimalPE(t, 1, 200)
+	pe := authenticodetest.SectionedPE(1, 200)
 
 	p, err := newPEPatcher(pe)
 	require.NoError(t, err)
@@ -227,7 +127,7 @@ func TestNewPEPatcher_InvalidInputs(t *testing.T) {
 
 func TestPEPatcher_AddSection(t *testing.T) {
 	// Create PE with 1 section and 200 bytes padding (room for ~5 more headers)
-	originalPE := createMinimalPE(t, 1, 200)
+	originalPE := authenticodetest.SectionedPE(1, 200)
 	originalCopy := make([]byte, len(originalPE))
 	copy(originalCopy, originalPE)
 
@@ -330,7 +230,7 @@ func TestPEPatcher_AddSection(t *testing.T) {
 }
 
 func TestPEPatcher_AddSection_NameTooLong(t *testing.T) {
-	pe := createMinimalPE(t, 1, 200)
+	pe := authenticodetest.SectionedPE(1, 200)
 	p, err := newPEPatcher(pe)
 	require.NoError(t, err)
 
@@ -349,7 +249,7 @@ func TestPEPatcher_AddSection_NoSpace(t *testing.T) {
 	//   table end = 200 + 7*40 = 480
 	//   firstSectionRawData = alignUp(480, 512) = 512
 	//   available = 512 - 480 = 32 bytes (less than 40 needed for a header)
-	pe := createMinimalPE(t, 7, 0)
+	pe := authenticodetest.SectionedPE(7, 0)
 	p, err := newPEPatcher(pe)
 	require.NoError(t, err)
 
@@ -368,7 +268,7 @@ func TestPEPatcher_AddSection_NoSpace(t *testing.T) {
 }
 
 func TestPEPatcher_PreservesOriginalHeaders(t *testing.T) {
-	pe := createMinimalPE(t, 2, 200)
+	pe := authenticodetest.SectionedPE(2, 200)
 
 	// Record known values from the optional header and section headers
 	// before patching.
@@ -466,7 +366,7 @@ func TestPEPatcher_PreservesOriginalHeaders(t *testing.T) {
 }
 
 func TestPEPatcher_MultipleAddSections(t *testing.T) {
-	pe := createMinimalPE(t, 1, 400) // 400 bytes padding = room for 10 more headers
+	pe := authenticodetest.SectionedPE(1, 400) // 400 bytes padding = room for 10 more headers
 	p, err := newPEPatcher(pe)
 	require.NoError(t, err)
 
@@ -577,7 +477,7 @@ func TestPEPatcher_MultipleAddSections(t *testing.T) {
 }
 
 func TestNewPEPatcher_MultipleSectionsParseCorrectly(t *testing.T) {
-	pe := createMinimalPE(t, 3, 100)
+	pe := authenticodetest.SectionedPE(3, 100)
 
 	p, err := newPEPatcher(pe)
 	require.NoError(t, err)
@@ -603,7 +503,7 @@ func TestNewPEPatcher_MultipleSectionsParseCorrectly(t *testing.T) {
 }
 
 func TestNewPEPatcher_ZeroSections(t *testing.T) {
-	pe := createMinimalPE(t, 0, 100)
+	pe := authenticodetest.SectionedPE(0, 100)
 
 	p, err := newPEPatcher(pe)
 	require.NoError(t, err)
@@ -654,7 +554,7 @@ func TestPEPatcher_SizeOfRawDataAlignment(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			pe := createMinimalPE(t, 1, 200)
+			pe := authenticodetest.SectionedPE(1, 200)
 			p, err := newPEPatcher(pe)
 			require.NoError(t, err)
 
@@ -700,7 +600,7 @@ func TestPEPatcher_SizeOfRawDataAlignment(t *testing.T) {
 // equals the sum of headers + all aligned section data, with no gaps or
 // truncation that would cause OVMF's PE loader to reject the image.
 func TestPEPatcher_TotalFileSizeConsistency(t *testing.T) {
-	pe := createMinimalPE(t, 1, 400)
+	pe := authenticodetest.SectionedPE(1, 400)
 	p, err := newPEPatcher(pe)
 	require.NoError(t, err)
 
@@ -742,7 +642,7 @@ func TestPEPatcher_TotalFileSizeConsistency(t *testing.T) {
 // do not include object-file-only alignment flags (0x00100000 through
 // 0x00E00000) which cause UEFI PE loaders to reject the image.
 func TestPEPatcher_NoObjectFileFlags(t *testing.T) {
-	pe := createMinimalPE(t, 1, 200)
+	pe := authenticodetest.SectionedPE(1, 200)
 	p, err := newPEPatcher(pe)
 	require.NoError(t, err)
 
@@ -764,7 +664,7 @@ func TestPEPatcher_NoObjectFileFlags(t *testing.T) {
 // TestPEPatcher_StdlibRoundTrip builds a PE with added sections and verifies
 // the result can be parsed by Go's debug/pe standard library.
 func TestPEPatcher_StdlibRoundTrip(t *testing.T) {
-	pe := createMinimalPE(t, 1, 400)
+	pe := authenticodetest.SectionedPE(1, 400)
 	p, err := newPEPatcher(pe)
 	require.NoError(t, err)
 

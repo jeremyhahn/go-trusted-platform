@@ -44,11 +44,25 @@ Any other string is accepted and set as the `Vendor` field in the
 Redfish root response; CGI endpoints are disabled for non-Supermicro
 values.
 
+The System and Chassis identity follows the vendor, so `pkg/quirks`
+resolves a distinct quirk per variant:
+
+| Value        | `Manufacturer` | `Model`          | `PartNumber`           | Resolves to quirk |
+|--------------|----------------|------------------|------------------------|-------------------|
+| `Supermicro` | `Supermicro`   | `X10SDV-TP8F`    | `SYS-5018D-FN8T-AS001` | Supermicro X10SDV |
+| `Dell`       | `Dell Inc.`    | `PowerEdge R650` | `0X3D66A00`            | Dell Inc.         |
+| other        | the value      | `Virtual BMC`    | `VBMC-GENERIC`         | generic defaults  |
+
+Every resource the service root advertises is served; a unit test follows
+each advertised `@odata.id` and fails on a 404.
+
 ## Endpoints
 
 | Method | Path                                                                        | Purpose |
 |--------|-----------------------------------------------------------------------------|---------|
 | GET    | `/redfish/v1/`                                                              | vendor probe (sets `Vendor` + `Oem`) |
+| GET    | `/redfish/v1/Systems`, `/redfish/v1/Chassis`                                | collections (one member each) |
+| GET    | `/redfish/v1/Systems/1`, `/redfish/v1/Chassis/1`                            | hardware identity: `Manufacturer`, `Model`, `PartNumber`, `SerialNumber`, `SKU` |
 | GET    | `/redfish/v1/Managers`                                                      | collection |
 | GET    | `/redfish/v1/Managers/1`                                                    | manager resource + reset action |
 | POST   | `/redfish/v1/Managers/1/Actions/Manager.Reset`                              | reset ack |

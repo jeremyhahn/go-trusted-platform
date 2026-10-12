@@ -171,6 +171,17 @@ Two things to know when reading a startup failure:
   when the caller's 30s deadline was the constraint and the budget had 56
   seconds left.
 
+**The package's DAO tests share one embedded server** (#208). Booting a server
+per test made bootstrap nearly all of the package's wall time, and that cost
+grows with host load. `newSharedTestClient` (`shared_server_test.go`) boots
+the server on first use and `TestMain` stops it. Before each test it deletes
+every entity of the types the DAO tests write, which leaves the store in the
+state a fresh server has. `TestSharedServer_FreshServerHoldsNoTestEntities`
+pins that equivalence: if first boot ever seeds one of those types, that test
+fails before any data is wiped. Tests whose subject is the server or client
+lifecycle still boot their own server. Tests on the shared server must not
+call `t.Parallel`.
+
 **Correction to `docs/cluster/configuration.md`:** that file documents
 `storage-backend: raft` as the way to enable clustering. It is not.
 `validateEmbeddedConfig` rejects anything but `memory`, `file` and `pebble` with
