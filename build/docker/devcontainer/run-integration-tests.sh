@@ -841,14 +841,14 @@ elif [ "$RUN_TARGET" = "netboot" ]; then
 elif [ "$RUN_TARGET" = "ipsec" ]; then
     # The IPsec suite runs strongSwan peers in their own network namespaces
     # and needs no platform daemon. Its inputs -- per arch the peer root
-    # filesystems and glibc module hosts, plus the aarch64 VM and the arm64
-    # test binary -- come from the host build (make integration-test-ipsec)
+    # filesystems (which carry the glibc module host), plus the aarch64 VM and
+    # the arm64 test binary -- come from the host build (make integration-test-ipsec)
     # through IPSEC_*; the suite fails, not skips, when they are unset.
     echo "=== ipsec target: skipping shared platformd ==="
     export IPSEC_WORK_DIR="${IPSEC_WORK_DIR:-/tmp/ipsec-integration}"
     rm -rf "${IPSEC_WORK_DIR}"
     mkdir -p "${IPSEC_WORK_DIR}"
-    for v in IPSEC_ROOTFS_AMD64 IPSEC_ROOTFS_ARM64 IPSEC_MODULE_HOST_AMD64 IPSEC_MODULE_HOST_ARM64 \
+    for v in IPSEC_ROOTFS_AMD64 IPSEC_ROOTFS_ARM64 \
         IPSEC_VM_KERNEL IPSEC_VM_INITRD IPSEC_TEST_ARM64; do
         echo "${v}: ${!v:-<unset>}"
     done

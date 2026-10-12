@@ -3420,7 +3420,7 @@ BASE_ARGS="%s"
 
 depend() {
     need localmount networking ovsdb-server ovs-vswitchd
-    after tpm-firstboot-seal
+    after tpm-firstboot-seal charon
     keyword -shutdown
 }
 

@@ -1,0 +1,32 @@
+#!/bin/sh
+# p11-kit-pin-check VERSION
+#
+# Exits 0 if the p11-kit VERSION (for example 0.26.2-1ubuntu1) is the 0.26 the
+# module host must run or newer, 1 if it is older, 2 if it is not a version.
+#
+# p11-kit's RPC changed in 0.26. A 0.26 client (Alpine's p11-kit-client.so,
+# which charon loads) against an older server silently corrupts byte-array
+# attributes: CKA_ID 01 arrives as 01000000 and labels vanish, so the IKE key
+# is not found. The pin is checked when the apk is built and every time the
+# module host starts; there is deliberately no way to configure it.
+min_major=0
+min_minor=26
+
+version="${1:?usage: p11-kit-pin-check VERSION}"
+numeric="${version%%[!0-9.]*}"
+case "${numeric}" in
+[0-9]*.[0-9]*) ;;
+*)
+	echo "p11-kit-pin-check: '${version}' is not a major.minor version" >&2
+	exit 2
+	;;
+esac
+
+major="${numeric%%.*}"
+rest="${numeric#*.}"
+minor="${rest%%.*}"
+if [ "${major}" -gt "${min_major}" ] || { [ "${major}" -eq "${min_major}" ] && [ "${minor}" -ge "${min_minor}" ]; }; then
+	exit 0
+fi
+echo "p11-kit ${version} is older than ${min_major}.${min_minor}: its RPC corrupts attributes for a 0.26 client" >&2
+exit 1

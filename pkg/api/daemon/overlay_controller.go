@@ -15,19 +15,127 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/netip"
+	"slices"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/overlay"
 )
 
+// ErrVTEPNotOnFabric is returned when the overlay IPsec local address is not
+// configured on the fabric interface, so VXLAN could not be sourced from it.
+var ErrVTEPNotOnFabric = errors.New("overlay.ipsec.local-address is not an address of overlay.ipsec.fabric-interface")
+
+// ErrUnderlayNotFabric is returned when overlay.underlay-interface names an
+// interface other than the IPsec fabric interface.
+var ErrUnderlayNotFabric = errors.New("overlay.underlay-interface is not overlay.ipsec.fabric-interface")
+
+// OverlayVTEPError refuses an overlay VTEP the IPsec fail-closed floor would
+// not protect: the VTEP address and the interface it was checked against.
+type OverlayVTEPError struct {
+	Address   netip.Addr
+	Interface string
+	Err       error
+}
+
+func (e *OverlayVTEPError) Error() string {
+	return "daemon: overlay VTEP " + e.Address.String() + " on " + e.Interface + ": " + e.Err.Error()
+}
+
+func (e *OverlayVTEPError) Unwrap() error {
+	return e.Err
+}
+
+// overlayVTEP is the local VTEP: the address the overlay controller
+// registers and sources VXLAN from, and the underlay interface it leaves by.
+type overlayVTEP struct {
+	addr  netip.Addr
+	iface string
+}
+
+// interfaceAddrsFunc lists the addresses configured on a named interface.
+type interfaceAddrsFunc func(name string) ([]netip.Addr, error)
+
+// resolveOverlayVTEP is the one place that decides the local VTEP.
+//
+// With overlay.ipsec enabled the VTEP is the IPsec local endpoint
+// (overlay.ipsec.local-address) on the fabric interface: the SAs and the
+// fail-closed floor cover only that address on that interface, so VXLAN
+// sourced anywhere else would be dropped. overlay.underlay-interface may be
+// unset or name the fabric interface; the local address must be one of the
+// fabric interface's addresses. Anything else is an *OverlayVTEPError.
+//
+// Without IPsec the VTEP is publicIPv4 (127.0.0.1 when nil or unspecified,
+// for test and loopback nodes) on overlay.underlay-interface ("lo" when
+// unset), and the interfaces are not read.
+func resolveOverlayVTEP(publicIPv4 net.IP, cfg *sdn.OverlayConfig, addrsOf interfaceAddrsFunc) (overlayVTEP, error) {
+	if cfg.IPsec != nil && cfg.IPsec.Enabled {
+		return ipsecVTEP(cfg, addrsOf)
+	}
+	vtep := overlayVTEP{addr: netip.MustParseAddr("127.0.0.1"), iface: "lo"}
+	if addr, ok := netip.AddrFromSlice(publicIPv4); ok && !addr.Unmap().IsUnspecified() {
+		vtep.addr = addr.Unmap()
+	}
+	if cfg.UnderlayInterface != "" {
+		vtep.iface = cfg.UnderlayInterface
+	}
+	return vtep, nil
+}
+
+// ipsecVTEP is the IPsec local endpoint on the fabric interface, refused
+// when the two do not agree (see resolveOverlayVTEP).
+func ipsecVTEP(cfg *sdn.OverlayConfig, addrsOf interfaceAddrsFunc) (overlayVTEP, error) {
+	local, err := cfg.IPsec.Local()
+	if err != nil {
+		return overlayVTEP{}, err
+	}
+	fabric := cfg.IPsec.FabricInterface
+	if cfg.UnderlayInterface != "" && cfg.UnderlayInterface != fabric {
+		return overlayVTEP{}, &OverlayVTEPError{Address: local, Interface: cfg.UnderlayInterface, Err: ErrUnderlayNotFabric}
+	}
+	addrs, err := addrsOf(fabric)
+	if err != nil {
+		return overlayVTEP{}, &OverlayVTEPError{Address: local, Interface: fabric, Err: err}
+	}
+	if !slices.Contains(addrs, local) {
+		return overlayVTEP{}, &OverlayVTEPError{Address: local, Interface: fabric, Err: ErrVTEPNotOnFabric}
+	}
+	return overlayVTEP{addr: local, iface: fabric}, nil
+}
+
+// interfaceAddrs lists the IP addresses of the named host interface,
+// IPv4 unmapped.
+func interfaceAddrs(name string) ([]netip.Addr, error) {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return nil, err
+	}
+	ifAddrs, err := iface.Addrs()
+	if err != nil {
+		return nil, err
+	}
+	addrs := make([]netip.Addr, 0, len(ifAddrs))
+	for _, a := range ifAddrs {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if addr, ok := netip.AddrFromSlice(ipNet.IP); ok {
+			addrs = append(addrs, addr.Unmap())
+		}
+	}
+	return addrs, nil
+}
+
 // buildOverlayController constructs and starts the overlay controller from App
-// configuration. The controller config is derived as follows:
+// configuration and the local VTEP. The controller config is derived as follows:
 //
 //   - NodeID: App.Hostname (unique per node).
-//   - VTEPIP: App.PublicIPv4; falls back to 127.0.0.1 when nil (test / loopback nodes).
-//   - UnderlayInterface: SDNConfig.Overlay.UnderlayInterface; defaults to "lo".
+//   - VTEPIP and UnderlayInterface: the VTEP resolveOverlayVTEP decided.
 //   - BridgeName: the overlay integration bridge br-int (overlay.DefaultBridgeName),
 //     never the trunk bridge (sdn.ovs.bridge, br-fabric).
 //   - Environment: the environment number of the network plan, so derived
@@ -38,28 +146,13 @@ import (
 // The controller is started synchronously. Start() only registers the local VTEP
 // in memory and launches lightweight background goroutines, so it does not block
 // daemon startup.
-func buildOverlayController(ctx context.Context, a *app.App, ovsSocketPath string, logger *logging.Logger) (*overlay.Controller, error) {
+func buildOverlayController(ctx context.Context, a *app.App, vtep overlayVTEP, ovsSocketPath string, logger *logging.Logger) (*overlay.Controller, error) {
 	cfg := &overlay.Config{
-		NodeID:       a.Hostname,
-		StateBackend: overlay.DefaultStateBackend,
+		NodeID:            a.Hostname,
+		StateBackend:      overlay.DefaultStateBackend,
+		VTEPIP:            vtep.addr,
+		UnderlayInterface: vtep.iface,
 	}
-
-	// VTEP IP: use the node's public IPv4, fall back to loopback for test nodes.
-	if a.PublicIPv4 != nil {
-		if addr, err := netip.ParseAddr(a.PublicIPv4.String()); err == nil {
-			cfg.VTEPIP = addr
-		}
-	}
-	if !cfg.VTEPIP.IsValid() || cfg.VTEPIP.IsUnspecified() {
-		cfg.VTEPIP = netip.MustParseAddr("127.0.0.1")
-	}
-
-	// Underlay interface: from overlay config, default "lo".
-	underlayIface := "lo"
-	if a.SDNConfig.Overlay.UnderlayInterface != "" {
-		underlayIface = a.SDNConfig.Overlay.UnderlayInterface
-	}
-	cfg.UnderlayInterface = underlayIface
 
 	// VXLAN port from overlay config (ApplyDefaults fills in 4789 when zero).
 	cfg.VXLANPort = a.SDNConfig.Overlay.VXLANPort

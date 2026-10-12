@@ -1,0 +1,180 @@
+#!/sbin/openrc-run
+# The module host: a glibc p11-kit server hosting the go-xkms PKCS#11 module
+# (libxkms_pkcs11.so), for charon.
+#
+# A Go c-shared library cannot be loaded by a musl process (golang/go#13492),
+# so the node's musl processes cannot dlopen the module. They load
+# p11-kit-client.so instead, which forwards PKCS#11 over the socket below to
+# this server. The server and the module run in a glibc root filesystem
+# (Ubuntu, p11-kit 0.26 or newer) that the trusted-platform-p11-host apk
+# carries as one archive: it is unpacked under /var/lib/xkms-p11-host the first
+# time the service starts and again whenever the apk brings a different one,
+# then chrooted into, so it never touches the musl system around it. Inside it
+# are bind mounts of /proc, /dev, the socket directory, and the module's state
+# (/var/lib/xkms, which survives an upgrade of the root filesystem).
+#
+# The p11-kit version is pinned at 0.26 (p11-kit-pin-check): the service
+# refuses to start a module host older than that.
+#
+# The server exports one token, the IPsec token, by its label, and runs as the
+# module host's own user (xkms-p11, which the apk creates). The service keeps
+# root for what needs it -- the mounts, the chroot, the socket handover -- and
+# the server drops to the user inside the chroot with setpriv. command_user
+# cannot do this: it drops before the command runs, and chroot needs root.
+#
+# A token reports a blank label until it is initialized, so the export shows
+# no token before then, and nothing that can reach the socket can initialize
+# it. `rc-service xkms-p11-kit init_token` labels it, as root, with the
+# service stopped (init_token below). The user PIN and the IKE key are then
+# set up through the socket, as for any token.
+
+share="/usr/share/xkms-p11-host"
+libexec="/usr/libexec/xkms-p11-host"
+host_dir="/var/lib/xkms-p11-host"
+host_root="${host_dir}/rootfs"
+host_marker="${host_dir}/rootfs.sha256"
+state_dir="/var/lib/xkms"
+socket_dir="/run/p11-kit"
+socket="${socket_dir}/xkms.sock"
+module="/usr/lib/xkms/libxkms_pkcs11.so"
+socket_group="${XKMS_P11_SOCKET_GROUP:-strongswan}"
+p11_user="xkms-p11"
+token_label="trusted-platform-ipsec"
+token_uri="pkcs11:token=${token_label}"
+so_pin_file="/run/xkms-p11-kit.so-pin"
+
+# drop runs the rest of a command line inside the chroot as p11_user. The ids
+# are the node's: the module host has no passwd entry for the user, and needs
+# none. host_up refuses to go on when the user does not exist.
+p11_uid=$(id -u "${p11_user}" 2>/dev/null)
+p11_gid=$(id -g "${p11_user}" 2>/dev/null)
+drop="/usr/bin/setpriv --reuid=${p11_uid} --regid=${p11_gid} --clear-groups --no-new-privs"
+# The user has no home of its own: the server and the module read only the
+# root filesystem's configuration, and never root's home, which they cannot.
+export HOME="${state_dir}"
+export P11_KIT_NO_USER_CONFIG=1
+
+description="p11-kit server hosting the go-xkms PKCS#11 module"
+supervisor="supervise-daemon"
+output_log="/var/log/xkms-p11-kit.log"
+error_log="/var/log/xkms-p11-kit.log"
+# socket-takeover gives the server's socket to charon's group as soon as the
+# server serves it, on the first start and on every respawn.
+command="${libexec}/socket-takeover"
+command_args="${socket} ${p11_user} ${p11_user}:${socket_group} 0660 /usr/sbin/chroot ${host_root} ${drop} /usr/bin/p11-kit server -f -n ${socket} --provider ${module} ${token_uri}"
+respawn_delay="${XKMS_P11_RESPAWN_DELAY:-2}"
+respawn_max="${XKMS_P11_RESPAWN_MAX:-10}"
+respawn_period="${XKMS_P11_RESPAWN_PERIOD:-60}"
+# The first module load can be slow, so the takeover waits up to 30s for the
+# server's socket, in tenths of a second.
+export SOCKET_TAKEOVER_TRIES="${XKMS_P11_TAKEOVER_TRIES:-300}"
+extra_stopped_commands="init_token"
+description_init_token="Label the IPsec token, as root, so the service exports it"
+
+is_mounted() {
+	grep -q " $1 " /proc/mounts
+}
+
+mounts_up() {
+	mkdir -p "${host_root}/proc" "${host_root}/dev" "${host_root}${socket_dir}" "${host_root}${state_dir}" || return 1
+	is_mounted "${host_root}/proc" || mount -t proc proc "${host_root}/proc" || return 1
+	is_mounted "${host_root}/dev" || mount --bind /dev "${host_root}/dev" || return 1
+	is_mounted "${host_root}${socket_dir}" || mount --bind "${socket_dir}" "${host_root}${socket_dir}" || return 1
+	is_mounted "${host_root}${state_dir}" || mount --bind "${state_dir}" "${host_root}${state_dir}" || return 1
+}
+
+mounts_down() {
+	local dir
+	for dir in "${state_dir}" "${socket_dir}" /dev /proc; do
+		if is_mounted "${host_root}${dir}"; then
+			umount -l "${host_root}${dir}" || return 1
+		fi
+	done
+}
+
+# unpack_root makes ${host_root} the root filesystem of the installed apk. The
+# marker is written last, so an unpack that was interrupted is redone. The bind
+# mounts are detached first: removing the old root must not reach the module's
+# state through them.
+unpack_root() {
+	local want have
+	want=$(cat "${share}/rootfs.tar.sha256") || return 1
+	have=$(cat "${host_marker}" 2>/dev/null)
+	[ "${want}" = "${have}" ] && return 0
+
+	ebegin "Unpacking the module host"
+	mounts_down &&
+		rm -rf "${host_root}" "${host_marker}" &&
+		mkdir -p "${host_root}" &&
+		tar -xpf "${share}/rootfs.tar" -C "${host_root}" &&
+		echo "${want}" >"${host_marker}"
+	eend $?
+}
+
+# host_up readies the module host for whatever runs in it: the server's user,
+# the directories, the root filesystem and the mounts. The state and the
+# socket directory are the user's, as the server writes to both.
+host_up() {
+	if [ -z "${p11_uid}" ] || [ -z "${p11_gid}" ]; then
+		eerror "user ${p11_user} does not exist (the trusted-platform-p11-host apk creates it)"
+		return 1
+	fi
+	checkpath -d -m 0755 "${host_dir}" &&
+		checkpath -d -m 0700 -o "${p11_user}:${p11_user}" "${state_dir}" &&
+		checkpath -d -m 0755 -o "${p11_user}:${p11_user}" "${socket_dir}" || return 1
+
+	unpack_root || return 1
+	"${libexec}/p11-kit-pin-check" "$(cat "${host_root}/usr/share/xkms/p11-kit.version")" || return 1
+	mounts_up
+}
+
+start_pre() {
+	if ! grep -q "^${socket_group}:" /etc/group; then
+		eerror "socket group ${socket_group} does not exist (XKMS_P11_SOCKET_GROUP in /etc/conf.d/${RC_SVCNAME})"
+		return 1
+	fi
+	host_up
+}
+
+# init_token labels the token ${token_label}, the label the server exports. It
+# loads the module directly, in the chroot and as the server's user, so the
+# token state stays the user's; it runs with the service stopped, so no server
+# holds that state meanwhile. The SO PIN is read from ${so_pin_file}, which
+# must be root's with mode 0600, and the file is removed once the token has
+# the PIN. Initializing a token that already has a label needs its SO PIN, and
+# destroys its objects.
+init_token() {
+	local pin rc
+	if [ "$(stat -c %u:%a "${so_pin_file}" 2>/dev/null)" != "0:600" ]; then
+		eerror "${so_pin_file} must hold the SO PIN, owned by root with mode 0600"
+		return 1
+	fi
+	pin=$(cat "${so_pin_file}") || return 1
+	host_up || return 1
+
+	ebegin "Labelling the token ${token_label}"
+	XKMS_P11_SO_PIN="${pin}" /usr/sbin/chroot "${host_root}" ${drop} \
+		/usr/bin/pkcs11-tool --module "${module}" --init-token --label "${token_label}" --so-pin env:XKMS_P11_SO_PIN
+	rc=$?
+	mounts_down
+	[ "${rc}" -eq 0 ] && rm -f "${so_pin_file}"
+	eend "${rc}"
+}
+
+# start_post waits for the first takeover, so charon starts only once it can
+# reach the server. It waits a little longer than the takeover does.
+start_post() {
+	local tries=0
+	while [ "$(stat -c %G "${socket}" 2>/dev/null)" != "${socket_group}" ]; do
+		tries=$((tries + 1))
+		if [ "${tries}" -gt $((SOCKET_TAKEOVER_TRIES + 20)) ]; then
+			eerror "the p11-kit server did not serve ${socket}"
+			return 1
+		fi
+		sleep 0.1
+	done
+}
+
+stop_post() {
+	mounts_down
+}

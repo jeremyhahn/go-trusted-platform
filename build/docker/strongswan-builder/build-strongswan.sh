@@ -9,12 +9,17 @@
 #   STRONGSWAN_SIGNER   fingerprint of the primary key that must have signed
 #                       the tarball (the strongSwan release signing key)
 #   STRONGSWAN_PLUGINS  the exact plugin set charon is built with
+#   P11_HOST_VERSION    apk version of trusted-platform-p11-host: the go-xkms
+#                       release its module is built from, as an apk version
 #   APK_KEY_NAME        file name of the apk signing key in /keys
 #                       (<name>.rsa, with <name>.rsa.pub beside it)
-# Directories (build/docker/run-builder.sh copies them with docker cp; a bind
-# mount would be resolved on the Docker daemon's filesystem, which is not the
-# checkout when the build runs in a CI job container):
+# Directories and files (build/docker/run-builder.sh copies them with docker
+# cp; a bind mount would be resolved on the Docker daemon's filesystem, which
+# is not the checkout when the build runs in a CI job container):
 #   /keys        the apk signing key pair, copied in
+#   /build/modulehost.tar
+#                the module host's root filesystem (modulehost/Dockerfile,
+#                exported by `make ipsec-module-host`), copied in
 #   /output      <arch>/ apks, APKINDEX, SHA256SUMS, manifest.json; keys/,
 #                copied out when the build succeeds
 #   /build/src   tarball cache, a named docker volume
@@ -25,15 +30,18 @@ set -euo pipefail
 : "${STRONGSWAN_SIGNER:?STRONGSWAN_SIGNER is required}"
 : "${STRONGSWAN_PLUGINS:?STRONGSWAN_PLUGINS is required}"
 : "${APK_KEY_NAME:?APK_KEY_NAME is required}"
+: "${P11_HOST_VERSION:?P11_HOST_VERSION is required}"
 
 SRC=/build/src
 KEYRING=/build/strongswan-release-key.gpg
 PKG=trusted-platform-strongswan
+HOST_PKG=trusted-platform-p11-host
+MODULE_HOST=/build/modulehost.tar
 ARCH=$(apk --print-arch)
 tarball="strongswan-${STRONGSWAN_VERSION}.tar.bz2"
 
-for f in "/keys/$APK_KEY_NAME" "/keys/$APK_KEY_NAME.pub"; do
-    [ -r "$f" ] || { echo "missing apk signing key $f" >&2; exit 2; }
+for f in "/keys/$APK_KEY_NAME" "/keys/$APK_KEY_NAME.pub" "$MODULE_HOST"; do
+    [ -r "$f" ] || { echo "missing input $f" >&2; exit 2; }
 done
 
 # --- Fetch -------------------------------------------------------------------
@@ -76,18 +84,29 @@ echo "$STRONGSWAN_SHA256  $SRC/$tarball" | sha256sum -c - >/dev/null || {
 echo "verified $tarball (signer $signer, sha256 $STRONGSWAN_SHA256)"
 
 # --- abuild ------------------------------------------------------------------
-# abuild refuses to run as root, so the package is built by the unprivileged
-# builder user. The aport sits under a directory named "platform", which
-# abuild uses as the repository name in its output path.
+# abuild refuses to run as root, so the packages are built by the unprivileged
+# builder user. The aports sit under a directory named "platform", which
+# abuild uses as the repository name in its output path; both land in the same
+# repository and APKINDEX.
 home=/home/builder
-aport="$home/aports/platform/$PKG"
 rm -rf "$home/aports" "$home/packages" "$home/.abuild"
-mkdir -p "$aport" "$home/.abuild" /var/cache/distfiles
-cp /build/aport/* "$aport/"
-sed -i \
-    -e "s|@STRONGSWAN_VERSION@|$STRONGSWAN_VERSION|" \
-    -e "s|@STRONGSWAN_PLUGINS@|$STRONGSWAN_PLUGINS|" \
-    "$aport/APKBUILD"
+mkdir -p "$home/aports/platform" "$home/.abuild" /var/cache/distfiles
+
+# stage_aport copies an aport's files into the repository, with the
+# socket-takeover script both services run under, and substitutes the
+# builder's pins for the placeholders in its APKBUILD and settings files.
+stage_aport() {
+    local pkg="$1" from="$2" aport="$home/aports/platform/$1"
+    mkdir -p "$aport"
+    cp "$from"/* /build/socket-takeover "$aport/"
+    find "$aport" \( -name APKBUILD -o -name '*.conf' \) -exec sed -i \
+        -e "s|@STRONGSWAN_VERSION@|$STRONGSWAN_VERSION|" \
+        -e "s|@STRONGSWAN_PLUGINS@|$STRONGSWAN_PLUGINS|" \
+        -e "s|@P11_HOST_VERSION@|$P11_HOST_VERSION|" {} +
+}
+stage_aport "$PKG" /build/aport
+stage_aport "$HOST_PKG" /build/aport-p11-host
+cp "$MODULE_HOST" "$home/aports/platform/$HOST_PKG/modulehost.rootfs"
 cp "$SRC/$tarball" /var/cache/distfiles/
 cp "/keys/$APK_KEY_NAME" "/keys/$APK_KEY_NAME.pub" "$home/.abuild/"
 chmod 600 "$home/.abuild/$APK_KEY_NAME"
@@ -101,7 +120,9 @@ EOF
 install -m 644 "/keys/$APK_KEY_NAME.pub" /etc/apk/keys/
 chown -R builder:builder "$home" /var/cache/distfiles
 
-su builder -s /bin/sh -c "cd '$aport' && abuild checksum && abuild -d -P '$home/packages'"
+for pkg in "$PKG" "$HOST_PKG"; do
+    su builder -s /bin/sh -c "cd '$home/aports/platform/$pkg' && abuild checksum && abuild -d -P '$home/packages'"
+done
 
 # --- Output ------------------------------------------------------------------
 dest="/output/$ARCH"
@@ -113,8 +134,9 @@ apks=$(cd "$dest" && ls ./*.apk | sed 's|^\./||' | sort | awk '{ printf "%s\"%s\
 plugins=$(printf '%s\n' $STRONGSWAN_PLUGINS | awk '{ printf "%s\"%s\"", (NR > 1 ? ", " : ""), $0 }')
 cat > "$dest/manifest.json" <<JSON
 {
-  "package": "$PKG",
+  "packages": ["$PKG", "$HOST_PKG"],
   "strongswan_version": "$STRONGSWAN_VERSION",
+  "p11_host_version": "$P11_HOST_VERSION",
   "arch": "$ARCH",
   "tarball_sha256": "$STRONGSWAN_SHA256",
   "tarball_signer": "$signer",

@@ -15,8 +15,12 @@ pkgdesc="strongSwan charon IKEv2 daemon for the Trusted Platform overlay (openss
 url="https://www.strongswan.org/"
 arch="x86_64 aarch64"
 license="GPL-2.0-or-later WITH OpenSSL-Exception"
-# Alpine's own strongswan package installs the same files.
-depends="!strongswan"
+# Alpine's own strongswan package installs the same files. p11-kit-server
+# carries p11-kit-client.so, the PKCS#11 module charon loads. It must be 0.26 or
+# newer: a 0.26 client against an older p11-kit server silently corrupts
+# byte-array attributes (CKA_ID 01 arrives as 01000000), and the module host
+# (trusted-platform-p11-host) runs a 0.26 server.
+depends="!strongswan p11-kit-server>=0.26"
 makedepends="libcap-dev linux-headers openssl-dev>3"
 # The libstrongswan time-format test formats in Europe/Zurich.
 checkdepends="tzdata"
@@ -27,6 +31,9 @@ subpackages="$pkgname-doc $pkgname-openrc"
 source="https://download.strongswan.org/strongswan-$pkgver.tar.bz2
 	charon.initd
 	charon.confd
+	socket-takeover
+	trusted-platform.conf
+	pkcs11.conf
 	"
 builddir="$srcdir/strongswan-$pkgver"
 
@@ -79,6 +86,9 @@ package() {
 	make DESTDIR="$pkgdir" install
 	install -Dm755 "$srcdir"/charon.initd "$pkgdir"/etc/init.d/charon
 	install -Dm644 "$srcdir"/charon.confd "$pkgdir"/etc/conf.d/charon
+	install -Dm755 "$srcdir"/socket-takeover "$pkgdir"/usr/lib/strongswan/socket-takeover
+	install -Dm644 "$srcdir"/trusted-platform.conf "$pkgdir"/etc/strongswan.d/trusted-platform.conf
+	install -Dm644 "$srcdir"/pkcs11.conf "$pkgdir"/etc/strongswan.d/charon/pkcs11.conf
 
 	# The installed plugin set must be exactly _plugins: a configure default
 	# that changes between releases must fail the build, not ship silently.

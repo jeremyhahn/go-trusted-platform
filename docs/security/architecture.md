@@ -268,6 +268,30 @@ Nothing. Policies live in the binary and on disk; the engine's store is
 
 ## 7. What this section deliberately does not do
 
+10. **The overlay IPsec key never leaves the PKCS#11 module (#709).** charon
+    (`trusted-platform-strongswan`) authenticates IKEv2 with a P-256 key held
+    behind the go-xkms module and signs through `p11-kit-client.so`; no key
+    file exists on the node. The boundaries around it:
+    - *The VICI socket* (`/run/charon.vici`) is mode 0600 owned by the
+      account platformd runs as (root on installer-built nodes, the `charon`
+      service's default). Whoever can write to it can install SAs and
+      policies; the `charon` service re-owns it after every (re)start and
+      refuses to start without that account, and platformd refuses a socket
+      its uid does not own.
+    - *The p11-kit socket* (`/run/p11-kit/xkms.sock`) is mode 0660, group
+      `strongswan`. A member can sign with the IKE key.
+    - *charon runs as `strongswan`* with `CAP_NET_ADMIN` only. It loads its
+      plugins, the PKCS#11 provider among them, before dropping root.
+    - *Fail closed.* charon `need`s the module host, so it never runs without
+      its key store; the SAs are ESP-required transport policies, so a tunnel
+      that is not established carries nothing; PSK authentication cannot be
+      compiled out, so connections say `auth = pubkey`.
+    - *The p11-kit version is pinned at 0.26 or newer.* A 0.26 client against
+      an older server silently corrupts `CKA_ID` and labels, so the apk
+      dependencies, the module-host build and the service start refuse an older
+      server. See [`docs/sdn/engineering.md`](../sdn/engineering.md) §9.2 and
+      §9.6.
+
 - **It does not authenticate anyone.** [`docs/auth/`](../auth/).
 - **It does not decide RBAC.** There is one decision point and it is in
   go-qrdb. [`docs/iam/`](../iam/).

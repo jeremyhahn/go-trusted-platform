@@ -589,6 +589,14 @@ together. A kernel that outruns the module leaves `jool` unloadable, the init
 script warns, and gatewayd refuses its `nat64:` section
 (`ErrNAT64ModuleUnavailable`).
 
+Nodes installed from media built with `--platform-apk-dir` carry the overlay's
+IPsec packages (#709). `EnableServices` adds every service of its list whose
+`/etc/init.d` script is installed (`openRCServices`, `pkg/installer/alpine.go`),
+so on these nodes `xkms-p11-kit` and `charon` join the default runlevel and the
+VICI socket exists after every boot. Both generated platformd scripts start
+`after charon`, and platformd runs as root, the socket's default owner
+([sdn engineering](../sdn/engineering.md) §9.6).
+
 ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 `pkg/firstboot/strategy.go`):
 

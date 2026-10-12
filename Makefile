@@ -3933,21 +3933,26 @@ uboot-clean:
 # docs/sdn/engineering.md "IPsec transport"): charon + swanctl from a pinned
 # release whose tarball must carry the pinned release key's signature and the
 # pinned SHA-256, built for Alpine 3.22 (musl) on amd64 and arm64 (arm64 under
-# binfmt/qemu-user) and packaged as signed apks with an OpenRC service. Sign
-# with APK_SIGNING_KEY=<path>/<name>.rsa (<name>.rsa.pub beside it); without
-# it the build uses a per-build ephemeral key (dev only).
+# binfmt/qemu-user) and packaged as signed apks with an OpenRC service. The same
+# build packages the PKCS#11 module host (trusted-platform-p11-host: the glibc
+# p11-kit server that hosts the go-xkms module for musl charon, ipsec-module-host
+# below) with its OpenRC service. The output is what the install media carry
+# (--platform-apk-dir). Sign with APK_SIGNING_KEY=<path>/<name>.rsa
+# (<name>.rsa.pub beside it); without it the build uses a per-build ephemeral
+# key (dev only).
 STRONGSWAN_OUTPUT_DIR ?= build/docker/strongswan-builder/output
 STRONGSWAN_ARCHES     ?= amd64 arm64
 
 .PHONY: strongswan-build
-## strongswan-build: Build the signed trusted-platform-strongswan apks (amd64, arm64) from the signature-verified strongSwan release
-strongswan-build:
-	$(MAKE) -C build/docker/strongswan-builder build OUTPUT_DIR=$(abspath $(STRONGSWAN_OUTPUT_DIR)) ARCHES="$(STRONGSWAN_ARCHES)"
+## strongswan-build: Build the signed strongSwan and PKCS#11 module-host apks (amd64, arm64) from the signature-verified strongSwan release
+strongswan-build: ipsec-module-host
+	$(MAKE) -C build/docker/strongswan-builder build OUTPUT_DIR=$(abspath $(STRONGSWAN_OUTPUT_DIR)) ARCHES="$(STRONGSWAN_ARCHES)" \
+		XKMS_VERSION=$(IPSEC_XKMS_VERSION) MODULE_HOST_DIR=$(abspath $(IPSEC_WORK_DIR))
 
 .PHONY: strongswan-verify
-## strongswan-verify: Re-verify the strongSwan apks: SHA256SUMS, apk and APKINDEX signatures, plugin set, source signature
+## strongswan-verify: Re-verify the strongSwan and module-host apks: SHA256SUMS, apk and APKINDEX signatures, plugin set, source signature
 strongswan-verify:
-	$(MAKE) -C build/docker/strongswan-builder verify OUTPUT_DIR=$(abspath $(STRONGSWAN_OUTPUT_DIR)) ARCHES="$(STRONGSWAN_ARCHES)"
+	$(MAKE) -C build/docker/strongswan-builder verify OUTPUT_DIR=$(abspath $(STRONGSWAN_OUTPUT_DIR)) ARCHES="$(STRONGSWAN_ARCHES)" XKMS_VERSION=$(IPSEC_XKMS_VERSION)
 
 .PHONY: strongswan-clean
 ## strongswan-clean: Remove the built strongSwan apks (and a dev build's ephemeral signing key)
@@ -3961,13 +3966,14 @@ strongswan-clean:
 # aarch64 VM (qemu-system-aarch64, TCG) on arm64, because qemu-user refuses
 # NETLINK_XFRM and charon will not start without it. Its inputs are built
 # here, on the host, per architecture:
-#   - rootfs-<arch>.tar: Alpine with the strongSwan apks installed through apk
-#     (signatures checked);
+#   - rootfs-<arch>.tar: Alpine with the strongSwan and module-host apks
+#     installed through apk (signatures checked), as a node has them;
 #   - modulehost-<arch>.tar: a glibc root filesystem (Ubuntu 26.04, p11-kit
 #     0.26.2 like Alpine's client) whose p11-kit server hosts the module,
 #     built c-shared against glibc: a Go c-shared library cannot be loaded by
 #     a musl process (golang/go#13492), so charon loads p11-kit-client.so
-#     (docs/sdn/engineering.md §9.2);
+#     (docs/sdn/engineering.md §9.2). strongswan-build packages it as the
+#     trusted-platform-p11-host apk, so it reaches the peers through the rootfs;
 #   - for arm64, the VM's kernel and initramfs and the suite's own test
 #     binary cross-compiled for arm64.
 # IPSEC_XKMS_VERSION pins the go-xkms the module is built from: the first
@@ -3988,8 +3994,6 @@ IPSEC_XKMS_VERSION ?= v0.48.0-alpha
 IPSEC_SUITE_ENV := --init \
 	-e IPSEC_ROOTFS_AMD64=/workspace/$(IPSEC_WORK_DIR)/rootfs-amd64.tar \
 	-e IPSEC_ROOTFS_ARM64=/workspace/$(IPSEC_WORK_DIR)/rootfs-arm64.tar \
-	-e IPSEC_MODULE_HOST_AMD64=/workspace/$(IPSEC_WORK_DIR)/modulehost-amd64.tar \
-	-e IPSEC_MODULE_HOST_ARM64=/workspace/$(IPSEC_WORK_DIR)/modulehost-arm64.tar \
 	-e IPSEC_VM_KERNEL=/workspace/$(IPSEC_WORK_DIR)/vm/Image \
 	-e IPSEC_VM_INITRD=/workspace/$(IPSEC_WORK_DIR)/vm/initrd.gz \
 	-e IPSEC_TEST_ARM64=/workspace/$(IPSEC_WORK_DIR)/ipsec-arm64.test \
@@ -4032,11 +4036,11 @@ ipsec-pkcs11-module:
 	done
 
 .PHONY: ipsec-module-host
-## ipsec-module-host: Export the ipsec suite's glibc module-host root filesystems (p11-kit 0.26 server + the module), amd64 and arm64
+## ipsec-module-host: Export the glibc module-host root filesystems (p11-kit 0.26 server + the module) the p11-host apk packages, amd64 and arm64
 ipsec-module-host: ipsec-pkcs11-module
 	@for a in $(IPSEC_ARCHES); do \
 		docker build --platform linux/$$a --build-context module=$(abspath $(IPSEC_WORK_DIR))/$$a \
-			-t $(IPSEC_HOST_IMAGE):$$a test/integration/ipsec/modulehost || exit 1; \
+			-t $(IPSEC_HOST_IMAGE):$$a build/docker/strongswan-builder/modulehost || exit 1; \
 		cid=$$(docker create --platform linux/$$a $(IPSEC_HOST_IMAGE):$$a /bin/true) || exit 1; \
 		docker export -o $(IPSEC_WORK_DIR)/modulehost-$$a.tar $$cid; rc=$$?; \
 		docker rm $$cid >/dev/null; \
@@ -4054,7 +4058,7 @@ ipsec-arm64-vm:
 
 .PHONY: ipsec-test-inputs
 ## ipsec-test-inputs: Build every input of the ipsec integration suite from the strongSwan apks already built
-ipsec-test-inputs: ipsec-peer-rootfs ipsec-module-host ipsec-arm64-vm
+ipsec-test-inputs: ipsec-peer-rootfs ipsec-arm64-vm
 
 .PHONY: integration-test-ipsec
 ## integration-test-ipsec: IKEv2 through the go-xkms PKCS#11 module between musl charon peers, ESP asserted with ip xfrm, on amd64 and in an aarch64 VM (builds the apks first)

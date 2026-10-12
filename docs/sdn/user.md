@@ -31,7 +31,10 @@ This is not 802.1X. There is no RADIUS server in the picture.
 3. **A zone plan.** Decide your zones before creating bridges. Almost every
    startup failure is a zone that refers to something that does not exist.
 4. For multi-host overlay: **reachability between hosts** on the VXLAN transport
-   network, and BGP if you are using EVPN.
+   network, and BGP if you are using EVPN. With overlay IPsec on, the VTEP is
+   `overlay.ipsec.local-address`, which must be an address of
+   `overlay.ipsec.fabric-interface`; platformd refuses to start otherwise
+   (`OverlayVTEPError`, see [overlay configuration](overlay/configuration.md)).
 
 ---
 

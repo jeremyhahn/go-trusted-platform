@@ -12,6 +12,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	pkgdiskimage "github.com/jeremyhahn/go-trusted-platform/pkg/diskimage"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 )
 
@@ -182,6 +183,23 @@ func TestBuildConfigResolvesBinariesAndOverrides(t *testing.T) {
 	}
 	if _, err := mergeOverrides(template, filepath.Join(dir, "missing.yaml")); err == nil {
 		t.Error("missing overrides file accepted")
+	}
+}
+
+// The platform apks reach a node only from the image's offline repository, so
+// --platform-apk-dir without --pre-fetch is refused before anything is built.
+func TestBuildConfigRefusesPlatformAPKDirWithoutPreFetch(t *testing.T) {
+	flags := &createFlags{target: "rpi", alpineVersion: "3.22.2", mirror: "http://m", platformType: "server", workDir: t.TempDir(), keyBackend: "file", platformAPKDir: "/builder/output"}
+
+	var unusable *pkgiso.ErrPlatformAPKDirUnusable
+	if _, err := buildConfig(flags); !errors.As(err, &unusable) {
+		t.Fatalf("buildConfig without pre-fetch = %v, want ErrPlatformAPKDirUnusable", err)
+	}
+
+	flags.preFetch = true
+	var notFound ErrBinariesNotFound
+	if _, err := buildConfig(flags); !errors.As(err, &notFound) {
+		t.Errorf("buildConfig with pre-fetch = %v, want it past the check to the binaries", err)
 	}
 }
 

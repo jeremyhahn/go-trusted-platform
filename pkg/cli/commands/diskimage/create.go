@@ -38,6 +38,7 @@ type mediaFlags struct {
 	alpineVersion   string
 	mirror          string
 	apkMirror       string
+	platformAPKDir  string
 	platformConfig  string
 	overrides       string
 	platformType    string
@@ -136,6 +137,7 @@ func addMediaFlags(f *pflag.FlagSet, flags *mediaFlags) {
 	f.StringVar(&flags.alpineVersion, "alpine-version", "3.22.2", "Alpine Linux version")
 	f.StringVar(&flags.mirror, "mirror", "http://mirror.cs.odu.edu/alpine", "Alpine Linux mirror URL (build-time pre-fetch source)")
 	f.StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL baked into the kernel cmdline")
+	f.StringVar(&flags.platformAPKDir, "platform-apk-dir", "", "strongSwan builder output (make strongswan-build) whose apks the media carries and installs for the overlay's IPsec transport")
 	f.StringVar(&flags.platformConfig, "platform-config", "", "Path to the platform config template baked into the media (auto-detected)")
 	f.StringVar(&flags.overrides, "overrides", "", "Path to override YAML (deep-merged onto --platform-config)")
 	f.StringVar(&flags.platformType, "platform-type", "server", "Platform type: 'server' or 'client'")
@@ -187,6 +189,7 @@ func (m *mediaFlags) isoConfig(target, model string) (*pkgiso.ISOBuildConfig, er
 	cfg.AlpineVersion = m.alpineVersion
 	cfg.AlpineMirror = m.mirror
 	cfg.APKMirror = m.apkMirror
+	cfg.PlatformAPKDir = m.platformAPKDir
 	cfg.PlatformType = pkgiso.PlatformType(m.platformType)
 	cfg.SecureBoot = m.secureBoot
 	cfg.GenerateKeys = m.generateKeys
@@ -201,6 +204,9 @@ func (m *mediaFlags) isoConfig(target, model string) (*pkgiso.ISOBuildConfig, er
 	cfg.CABundlePath = m.caBundle
 	cfg.CAKeyAlgorithm = m.caKeyAlgorithm
 	cfg.WebUIPath = m.webUI
+	if err := cfg.ValidatePlatformAPKDir(); err != nil {
+		return nil, err
+	}
 
 	platformConfig := m.platformConfig
 	if platformConfig == "" {

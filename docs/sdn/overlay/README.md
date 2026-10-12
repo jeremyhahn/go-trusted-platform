@@ -73,8 +73,9 @@ sdn:
     underlay-interface: "eth0"
 ```
 
-The VTEP IP is derived from the node's public IPv4 address; MTU and
-bridge name use applied defaults (see [Configuration](configuration.md)).
+The VTEP IP is derived from the node's public IPv4 address, or with
+overlay IPsec is `overlay.ipsec.local-address` on its fabric interface; MTU
+and bridge name use applied defaults (see [Configuration](configuration.md)).
 
 ### Verify VTEP Status
 

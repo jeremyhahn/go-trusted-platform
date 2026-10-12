@@ -1,0 +1,8 @@
+#!/bin/sh
+# The module host's p11-kit server runs as this user: the service keeps root
+# for the chroot and the socket handover only, and the server drops to it
+# inside the chroot. It owns the module's state (/var/lib/xkms) and nothing
+# else on the node.
+addgroup -S xkms-p11 2>/dev/null
+adduser -S -D -H -h /var/empty -s /sbin/nologin -G xkms-p11 -g xkms-p11 xkms-p11 2>/dev/null
+exit 0

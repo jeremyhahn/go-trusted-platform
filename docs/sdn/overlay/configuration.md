@@ -35,14 +35,92 @@ sdn:
 | vxlan-port | uint16 | 4789 | UDP port for VXLAN encapsulation |
 | underlay-interface | string | "lo" | Physical interface for VXLAN underlay traffic. The loopback default suits single-node and test environments; production deployments should set the uplink interface (e.g., `eth0`, `bond0`) |
 
+### Overlay IPsec (`sdn.overlay.ipsec`)
+
+Host-to-host IPsec between VTEPs, driven through charon over VICI
+(`pkg/sdn/ipsec`; design in [architecture.md](architecture.md#overlay-ipsec)).
+`sdn.Config.Validate` checks the section; a disabled or absent section is
+not checked.
+
+```yaml
+sdn:
+  overlay:
+    enabled: true
+    ipsec:
+      enabled: true
+      fabric-interface: bond0
+      local-address: 10.20.0.11
+      static-peers: [10.20.0.1, 10.20.0.2]   # route reflectors, gateways
+      certificate-file: /etc/platform/ipsec/tunnel.pem   # leaf, then its CA chain
+      crl-files:                                         # one per issuer of the chain
+        - /etc/platform/ipsec/root.crl
+        - /etc/platform/ipsec/intermediate.crl
+      token:
+        slot: 0
+        handle: "6970736563"                  # CKA_ID of the IKE key, hex
+        pin-file: /etc/platform/ipsec/token.pin
+```
+
+| Parameter | Type | Default | Rule |
+|-----------|------|---------|------|
+| enabled | bool | false | With it on, the fabric interface carries only the VTEP's own IKE and ESP, SA-protected traffic and the link ICMPv6. Nothing is routed through the node into or out of the fabric unless an SA carries it, ESP of other hosts included |
+| fabric-interface | string | — | Required; a Linux interface name (1–15 characters). It must be dedicated to the underlay: routed north-south traffic out of this NIC is blocked by design (see the fail-closed floor in [architecture.md](architecture.md#fail-closed-floor)), so the node's uplink and any routed LAN need interfaces of their own. The interface may be deleted and created again: the floor follows it by name |
+| local-address | string | — | Required; this VTEP's unicast address, the IKE endpoint and certificate identity. With the overlay enabled it is also the VTEP address the overlay controller registers and sources VXLAN from, so it must be an address of `fabric-interface` (see [Runtime-Derived Settings](#runtime-derived-settings)) |
+| static-peers | []string | none | Explicit per-peer connections (route reflectors, gateways); single unicast addresses of the local address's family, no duplicates, never the local address. There is no wildcard peer |
+| vici-socket | string | `/run/charon.vici` | Absolute path. platformd refuses the socket unless it is mode 0600 and owned by platformd's user, and served by a process that listened as charon's uid |
+| certificate-file | string | none | Absolute path; PEM tunnel certificate followed by its CA chain, read on every attach by `ipsec.FileIdentity`. Required by platformd |
+| crl-files | []string | none | Absolute paths; one CRL per issuer of the tunnel chain, PEM (`X509 CRL`) or DER. platformd reads them at start and again every minute (`ipsec.CRLRefresh`) and pushes each to charon; a CRL no newer than the one charon holds is ignored, so replacing a file on disk is how a revocation reaches the node. Required by platformd |
+| token.module | string | `xkms` | The name of the module under charon's `pkcs11 { modules { } }` in strongswan.conf, sent with `load-token`; letters, digits, `-` and `_`, at most 64. The shipped `pkcs11.conf` defines `xkms`, whose path is the p11-kit client that forwards to the node-local xkms token |
+| token.slot | uint32 | 0 | Token slot holding the IKE key |
+| token.handle | string | — | Required; the key's CKA_ID in hex |
+| token.pin-file | string | none | Absolute path; its first line is the token PIN, read once into a memguard enclave. Without it `load-token` sends no PIN |
+| cp-outage-tolerance | duration | 24h | Control-plane outage the overlay rides through on the certificate it holds. The CRLs pushed to charon must also outlast it: under `revocation=strict` an expired CRL fails IKE, so issue them with `nextUpdate` further out than this |
+| cert-lifetime | duration | 3 × cp-outage-tolerance | At least 3 × cp-outage-tolerance. IKE reauthentication runs at half of it |
+| replay-window | uint32 | 1024 | At least 1024 |
+| ike-rate | uint32 | 20 | IKE packets per second per source address on UDP 500/4500 |
+| ike-burst | uint32 | 2 × ike-rate | At least ike-rate |
+| underlay-slaac | bool | false | Also pass ICMPv6 router solicitation and advertisement on an IPv6 fabric, for an underlay addressed by SLAAC. Neighbour discovery and MLD always pass; redirects never do |
+
+The section, its defaults and its validation live in `pkg/sdn/ipsec/config`,
+which imports only the standard library, so `pkg/sdn` and everything that
+reads the SDN configuration (the SDK module included) carry it without
+linking the data plane in `pkg/sdn/ipsec` (govici, nftables, GoBGP).
+A failure is a `*config.ConfigError` naming the field
+(`overlay.ipsec.static-peers[1]: ipsec: duplicate peer`) and wrapping one
+of that package's `Err*` sentinels.
+
+platformd starts IPsec whenever `overlay.ipsec.enabled` is set, even with
+`overlay.enabled` off. It installs the fail-closed floor before the overlay
+controller registers the VTEP, and refuses to start, with an
+`*ipsec.FloorError` or the `*config.ConfigError`, when the section cannot be
+built or the floor cannot be installed. With the overlay enabled as well,
+the VTEP is `local-address` on `fabric-interface`, the only traffic the SAs
+and the floor carry; platformd refuses to start, before the floor goes in,
+with a `*daemon.OverlayVTEPError` when `local-address` is not an address of
+`fabric-interface` (`daemon.ErrVTEPNotOnFabric`), the interface cannot be
+read, or `overlay.underlay-interface` names another interface
+(`daemon.ErrUnderlayNotFabric`). The floor is never removed, not even
+when platformd stops: switching IPsec off takes a reboot, or deleting the
+`inet tp_ipsec` table and the XFRM block policies by hand.
+
+ESP in transport mode adds up to 40 bytes to each encapsulated frame
+(8-byte header, 8-byte IV, 16-byte ICV, padding and trailer), so an
+IPsec-protected underlay needs an MTU of at least 9090. Platform switch
+ports run 9216.
+
 ### Runtime-Derived Settings
 
 The daemon fills in the remaining overlay controller settings when it
-builds the configuration:
+builds the configuration. One function, `resolveOverlayVTEP` in
+`pkg/api/daemon`, decides the VTEP address and underlay interface; with
+overlay IPsec it hands the controller the same endpoint the SAs and the
+fail-closed floor protect, so VXLAN is never sourced from an address the
+floor drops.
 
 | Setting | Source | Default |
 |---------|--------|---------|
-| VTEP IP | Node public IPv4 | 127.0.0.1 when unset (test / loopback nodes) |
+| VTEP IP | With overlay IPsec: `overlay.ipsec.local-address`. Without: node public IPv4 | Without IPsec, 127.0.0.1 when unset (test / loopback nodes) |
+| Underlay interface | With overlay IPsec: `overlay.ipsec.fabric-interface`. Without: `overlay.underlay-interface` | Without IPsec, `lo` when unset |
 | Bridge name | Applied default | `br-int`, the workload integration bridge. Never `sdn.ovs.bridge` (`br-fabric`, which carries the physical trunk) |
 | Underlay MTU | Applied default | 9216, the platform switch-port MTU (`netplan.MTU`) |
 | Environment | `sdn.environment.id` | none: without an environment every VNI must be explicit |
@@ -136,7 +214,10 @@ A failed join is logged; the VNI is still added, with `IMETAdvertised` false.
 ## Multi-Host Deployment
 
 Each host sets its own underlay interface; the VTEP IP is derived from
-the node's public IPv4 address.
+the node's public IPv4 address. With overlay IPsec, each host instead sets
+its own `overlay.ipsec.fabric-interface` and `overlay.ipsec.local-address`,
+which are its underlay interface and VTEP IP; `underlay-interface` may be
+left unset.
 
 ```yaml
 # /etc/platformd/config.yaml on each host
@@ -205,7 +286,8 @@ starts:
 
 | Issue | Check | Fix |
 |-------|-------|-----|
-| VTEP not reachable | `ip addr show` | Ensure the node's public IPv4 is bound to the underlay interface |
+| VTEP not reachable | `ip addr show` | Ensure the node's public IPv4 is bound to the underlay interface; with overlay IPsec, `local-address` on `fabric-interface` |
+| platformd refuses to start with `OverlayVTEPError` | `ip addr show <fabric-interface>` | Bind `overlay.ipsec.local-address` to `overlay.ipsec.fabric-interface`, and leave `overlay.underlay-interface` unset or equal to it |
 | MTU too small | `ip link show eth0` | Raise the underlay interface MTU to >= 9050 |
 | OVS not found | `ovs-vsctl show` | Install and start Open vSwitch; check `sdn.ovs.socket` |
 

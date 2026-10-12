@@ -233,6 +233,27 @@ the main table's default changes. This replaces an upstream router's `tunnel rou
 mandatory` and return-path PBR. Liveness is BFD on the BGP session (#556), not
 vendor keepalives.
 
+## The overlay's IPsec transport: packaging (#709)
+
+The overlay's `ipsec` transport is not the kernel-keyed one above: it is IKEv2.
+A strongSwan 6 charon negotiates each tunnel and installs the SAs, and the
+platform drives it over VICI (`/run/charon.vici`, mode 0600, the platform user).
+Each tunnel is **transport-mode ESP**, AES-256-GCM (`rfc4106(gcm(aes))`, 16-byte
+ICV) with ESN and a 1024 replay window, under an ML-KEM-768 hybrid IKE
+exchange, authenticated with certificates whose private key lives behind the
+go-xkms PKCS#11 module (`pubkey` only, strict revocation). The policies require
+ESP, so a tunnel without an SA carries no traffic.
+
+charon is a node package, not a library: the install media, the factory
+image and the netboot sets carry the `trusted-platform-strongswan` and
+`trusted-platform-p11-host` apks (with their OpenRC services) and
+`p11-kit-server`, offline. charon reaches its key through
+`p11-kit-client.so` and a glibc p11-kit **0.26+** server hosting the module,
+because a Go module cannot be loaded into a musl process. How the apks are
+built, the services and the version pin are in
+[`docs/sdn/engineering.md`](../sdn/engineering.md) §9.6; how to put them on
+media is in [`docs/installer/cli.md`](../installer/cli.md).
+
 ## Trust boundaries
 
 1. **Internet / IoT segment → gateway.** The primary boundary. Everything

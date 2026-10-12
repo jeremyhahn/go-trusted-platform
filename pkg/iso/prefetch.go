@@ -104,6 +104,13 @@ type PreFetchConfig struct {
 	// SkipKernel leaves the kernel package out of the prefetch: the media
 	// carries a platform-built kernel instead (InstallerOverrides.KernelArtifactsDir).
 	SkipKernel bool
+
+	// PlatformAPKDir, when set, is the build/docker/strongswan-builder output
+	// the media carries the overlay's IPsec packages from: the platform-built
+	// apks are copied from it, and the packages they need from the mirror are
+	// prefetched with them. See PlatformPackages.
+	PlatformAPKDir string
+
 	// GatewayRole adds the gateway's packages (tpconfig.GatewaydPackages):
 	// the bundled platform config enables the gateway role.
 	GatewayRole bool
@@ -136,6 +143,9 @@ type apkPackageEntry struct {
 	// checksum, soname versions, etc.) which apk's signature/dependency
 	// resolver verifies byte-for-byte.
 	RawBlock string
+	// LocalPath is where a platform-built apk lives on the build host
+	// (PreFetchConfig.PlatformAPKDir); empty for a package of the mirror.
+	LocalPath string
 }
 
 // PreFetchBuilder handles pre-fetching of APK packages for air-gapped installation.
@@ -354,6 +364,11 @@ func CollectRequiredPackages(config *PreFetchConfig) []string {
 		}
 	}
 
+	// Add the overlay's IPsec transport when the media carries it
+	if config.PlatformAPKDir != "" {
+		packages = append(packages, PlatformPackages()...)
+	}
+
 	// A gateway's Jool translator (#603). jool-modules-lts depends on one
 	// exact linux-lts build, so it is prefetched only alongside that kernel;
 	// with any other kernel it would drag linux-lts onto the node.
@@ -555,6 +570,11 @@ func (b *PreFetchBuilder) GenerateAPKINDEX(ctx context.Context, packagesDir stri
 			if isFIPSChecksumRefusal(err) {
 				return err
 			}
+			// Nor is skipping a platform-built package: the install config
+			// asks for it by name, so the media would not install.
+			if b.isPlatformAPK(apkFile) {
+				return &ErrPlatformAPKInvalid{Path: apkFile, Reason: "cannot be indexed", Err: err}
+			}
 			b.logger.Warn("[PREFETCH] Failed to extract metadata from package",
 				"file", apkFile, "error", err)
 			continue
@@ -668,6 +688,12 @@ func (b *PreFetchBuilder) loadPackageIndex(ctx context.Context) error {
 		// Continue without community repo - not all packages may be available
 	}
 
+	if b.config.PlatformAPKDir != "" {
+		if err := b.loadPlatformIndex(); err != nil {
+			return err
+		}
+	}
+
 	b.logger.Info("[PREFETCH] Package index loaded", "packages", len(b.packageIndex))
 
 	return nil
@@ -690,7 +716,12 @@ func (b *PreFetchBuilder) downloadAndParseIndex(ctx context.Context, indexURL st
 		return &MessageError{Msg: fmt.Sprintf("failed to download APKINDEX: HTTP %d", resp.StatusCode)}
 	}
 
-	gzReader, err := gzip.NewReader(resp.Body)
+	return b.parseIndexArchive(resp.Body)
+}
+
+// parseIndexArchive parses the APKINDEX inside an APKINDEX.tar.gz stream.
+func (b *PreFetchBuilder) parseIndexArchive(r io.Reader) error {
+	gzReader, err := gzip.NewReader(r)
 	if err != nil {
 		return err
 	}
@@ -953,6 +984,17 @@ func (b *PreFetchBuilder) downloadPackages(ctx context.Context, packages []strin
 func (b *PreFetchBuilder) downloadPackage(ctx context.Context, pkg *apkPackageEntry, destDir string) error {
 	filename := fmt.Sprintf("%s-%s.apk", pkg.Name, pkg.Version)
 	destPath := filepath.Join(destDir, filename)
+
+	// A platform-built apk comes from the builder output, not a mirror. It is
+	// copied every time, never taken from a reused directory: a rebuild keeps
+	// its version and pkgrel, so a file of that name may be an earlier build.
+	// The copy is then checked against the builder's index entry.
+	if pkg.LocalPath != "" {
+		if err := copyLocalPackage(pkg.LocalPath, destPath); err != nil {
+			return err
+		}
+		return verifyPlatformAPK(destPath, pkg)
+	}
 
 	// Check if already downloaded
 	if _, err := os.Stat(destPath); err == nil {

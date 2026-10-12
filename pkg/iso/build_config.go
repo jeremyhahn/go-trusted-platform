@@ -66,6 +66,9 @@ func NewPlatformISOConfig(build *ISOBuildConfig, workDir string) *PlatformISOCon
 		Output: OutputConfig{
 			Label: build.OutputLabel,
 		},
+		Installer: InstallerOverrides{
+			PlatformAPKDir: build.PlatformAPKDir,
+		},
 	}
 	cfg.SetDefaults()
 	return cfg
