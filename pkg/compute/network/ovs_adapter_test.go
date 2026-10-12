@@ -34,7 +34,16 @@ type ovsControllerInterface interface {
 }
 
 // mockOVSController is a mock implementation of the OVS controller interface.
+//
+// The mock is safe for concurrent use: every method takes mu, so tests that
+// drive an adapter from several goroutines race only on the adapter's own
+// state. Tests that read the recorded fields directly must do so after the
+// calls have returned; use callCounts when goroutines may still be running.
 type mockOVSController struct {
+	mu sync.Mutex
+
+	installFlowCount    int
+	deleteFlowCount     int
 	installFlowCalled   bool
 	installFlowBridge   string
 	installFlowPriority int
@@ -59,6 +68,9 @@ type mockOVSController struct {
 }
 
 func (m *mockOVSController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.installFlowCount++
 	m.installFlowCalled = true
 	m.installFlowBridge = bridgeName
 	m.installFlowPriority = priority
@@ -68,6 +80,9 @@ func (m *mockOVSController) InstallFlow(bridgeName string, priority int, match s
 }
 
 func (m *mockOVSController) DeleteFlow(bridgeName string, match string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteFlowCount++
 	m.deleteFlowCalled = true
 	m.deleteFlowBridge = bridgeName
 	m.deleteFlowMatch = match
@@ -75,12 +90,24 @@ func (m *mockOVSController) DeleteFlow(bridgeName string, match string) error {
 }
 
 func (m *mockOVSController) ListFlows(bridgeName string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.listFlowsCalled = true
 	m.listFlowsBridge = bridgeName
 	return m.listFlowsResult, m.listFlowsErr
 }
 
+// callCounts returns how many InstallFlow and DeleteFlow calls the mock has
+// recorded. It is safe to call while other goroutines are still calling.
+func (m *mockOVSController) callCounts() (installs, deletes int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.installFlowCount, m.deleteFlowCount
+}
+
 func (m *mockOVSController) SetPortVLAN(ctx context.Context, portName string, vlan int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.setPortVLANCalled = true
 	m.setPortVLANPort = portName
 	m.setPortVLANValue = vlan
@@ -1015,6 +1042,17 @@ func TestOVSFlowControllerAdapter_ConcurrentAccess(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		<-done
 	}
+
+	installs, deletes := mock.callCounts()
+	assert.Equal(t, 1000, installs, "every AddFlow must reach the controller")
+	assert.Equal(t, 1000, deletes, "every DeleteFlow must find its rule and reach the controller")
+
+	remaining := 0
+	adapter.ruleIndex.Range(func(_, _ any) bool {
+		remaining++
+		return true
+	})
+	assert.Zero(t, remaining, "rule index must be empty after every rule was deleted")
 }
 
 // TestOVSFlowControllerAdapter_AddFlow_MatchBuilding verifies match string is built correctly.

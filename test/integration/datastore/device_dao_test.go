@@ -188,7 +188,7 @@ func TestDeviceDAO_FindBySerial_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// Create unique serial for this test
-	uniqueSerial := "SERIAL-" + time.Now().Format("20060102150405.000")
+	uniqueSerial := uniqueID("SERIAL")
 	device := createTestDevice(uniqueSerial, "Model-E")
 	require.NoError(t, dao.Save(ctx, device))
 
@@ -232,7 +232,7 @@ func TestDeviceDAO_GetByModel_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// Create unique model for this test
-	uniqueModel := "MODEL-" + time.Now().Format("20060102150405.000")
+	uniqueModel := uniqueID("MODEL")
 
 	// Create multiple devices with same model
 	device1 := createTestDevice("SN-MODEL-1", uniqueModel)
@@ -290,9 +290,8 @@ func TestDeviceDAO_Count(t *testing.T) {
 	// Add devices
 	numDevices := 5
 	for i := 0; i < numDevices; i++ {
-		device := createTestDevice("SN-COUNT-"+time.Now().Format("150405.000000"), "Model-Count")
+		device := createTestDevice(uniqueID("SN-COUNT"), "Model-Count")
 		require.NoError(t, dao.Save(ctx, device))
-		time.Sleep(time.Millisecond) // Ensure unique timestamp-based IDs
 	}
 
 	// Verify count increased
@@ -361,7 +360,7 @@ func TestDeviceDAO_ConcurrentOperations(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(idx int) {
 			device := createTestDevice(
-				"SN-CONCURRENT-"+time.Now().Format("150405.000000000"),
+				uniqueID("SN-CONCURRENT"),
 				"Model-Concurrent",
 			)
 			if err := dao.Save(ctx, device); err != nil {
@@ -369,7 +368,6 @@ func TestDeviceDAO_ConcurrentOperations(t *testing.T) {
 			}
 			done <- true
 		}(i)
-		time.Sleep(time.Microsecond) // Small delay for unique timestamps
 	}
 
 	// Wait for all goroutines

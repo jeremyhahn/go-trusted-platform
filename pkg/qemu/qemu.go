@@ -46,6 +46,9 @@ type VM struct {
 	stdoutBuf bytes.Buffer
 	stderrBuf bytes.Buffer
 	monitor   *Monitor
+
+	// runtimeDir is the socket directory this VM created and must remove.
+	runtimeDir string
 }
 
 // NewVM creates a new QEMU VM instance
@@ -407,6 +410,21 @@ func (vm *VM) Start(ctx context.Context, mode string) error {
 		}
 	}
 
+	// Sockets live in a short per-run directory; it is released on every
+	// path that does not leave QEMU running.
+	if err := vm.createRuntimeDir(); err != nil {
+		return err
+	}
+	started := false
+	defer func() {
+		if !started {
+			vm.releaseRuntimeDir()
+		}
+	}()
+	if err := vm.config.validateSocketPaths(); err != nil {
+		return err
+	}
+
 	// Clean up any stale QMP socket from previous run
 	qmpSocketPath := vm.config.GetQMPSocketPath()
 	if err := os.Remove(qmpSocketPath); err != nil && !os.IsNotExist(err) {
@@ -462,6 +480,7 @@ func (vm *VM) Start(ctx context.Context, mode string) error {
 		return &SentinelCauseError{Sentinel: ErrQEMUFailed, Cause: &MessageError{Msg: fmt.Sprintf("%v", err)}}
 	}
 
+	started = true
 	vm.running.Store(true)
 	vm.logger.Infof("VM started (PID: %d)", vm.cmd.Process.Pid)
 
@@ -502,6 +521,7 @@ func (vm *VM) Wait() error {
 		_ = vm.monitor.Close()
 		vm.monitor = nil
 	}
+	vm.releaseRuntimeDir()
 	vm.mu.Unlock()
 
 	if err != nil {
@@ -598,6 +618,7 @@ func (vm *VM) StopWithTimeout(timeout time.Duration) error {
 				// Close monitor connection
 				_ = vm.monitor.Close()
 				vm.monitor = nil
+				vm.releaseRuntimeDir()
 				return nil
 			case <-ctx.Done():
 				vm.logger.Warnf("Graceful shutdown timed out after %v, falling back to SIGTERM", timeout)
@@ -620,6 +641,7 @@ func (vm *VM) StopWithTimeout(timeout time.Duration) error {
 	}
 
 	vm.running.Store(false)
+	vm.releaseRuntimeDir()
 	vm.logger.Info("VM stopped")
 
 	return nil
@@ -653,6 +675,7 @@ func (vm *VM) ForceStop() error {
 	}
 
 	vm.running.Store(false)
+	vm.releaseRuntimeDir()
 	vm.logger.Info("VM force stopped")
 
 	return nil

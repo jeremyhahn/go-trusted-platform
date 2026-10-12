@@ -322,6 +322,15 @@ Flags shared by `install`, `firstboot`, `boot` and `all`:
 | `--qemu-binary` | string | `""` | Custom QEMU binary |
 | `--network` | string | `""` | `user`, `bridge`, `none`; empty auto-detects |
 
+`--work-dir` holds the artefacts (disk, NVRAM, TPM state, logs) and may be as
+deep as you like. The VM's runtime unix sockets (QMP, console) do **not** live
+there: a unix socket path is capped at 107 bytes, which a deep work dir
+exceeds. Each run creates a short `tp-vm-*` directory under `$TMPDIR` for its
+sockets and removes it when the VM stops. The software TPM already relocates
+its own socket the same way. A socket path that is still over the limit (a long
+`$TMPDIR`, or a path set explicitly) fails before QEMU starts with
+`ErrSocketPathTooLong`, naming the path and the limit.
+
 `install` and `all` additionally take `--iso` (default: resolved as
 `trusted-alpine-<VERSION>-x86_64.iso`, then the `-fips` variant).
 

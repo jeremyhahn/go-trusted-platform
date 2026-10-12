@@ -579,9 +579,8 @@ func TestDumpCommand_LargeDataset(t *testing.T) {
 
 	numRoles := 20
 	for i := 0; i < numRoles; i++ {
-		role := &entities.Role{Name: "BulkRole-" + time.Now().Format("20060102150405.000000000")}
+		role := &entities.Role{Name: fmt.Sprintf("BulkRole-%d", i)}
 		require.NoError(t, roleDAO.Save(ctx, role))
-		time.Sleep(time.Microsecond) // Ensure unique timestamps
 	}
 
 	// Dump all organizations
@@ -677,9 +676,8 @@ func TestDumpCommand_ConcurrentDump(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := 0; i < 5; i++ {
-		role := &entities.Role{Name: "ConcurrentRole-" + time.Now().Format("150405.000000000")}
+		role := &entities.Role{Name: fmt.Sprintf("ConcurrentRole-%d", i)}
 		require.NoError(t, roleDAO.Save(ctx, role))
-		time.Sleep(time.Microsecond)
 	}
 
 	// Concurrent dumps to different directories
@@ -691,7 +689,7 @@ func TestDumpCommand_ConcurrentDump(t *testing.T) {
 		go func(idx int) {
 			defer func() { done <- true }()
 
-			outputDir := filepath.Join(tc.outputDir, fmt.Sprintf("concurrent-dump-%d-%s", idx, time.Now().Format("150405.000000000")))
+			outputDir := filepath.Join(tc.outputDir, fmt.Sprintf("concurrent-dump-%d", idx))
 			if err := os.MkdirAll(outputDir, 0755); err != nil {
 				errChan <- err
 				return
@@ -719,7 +717,6 @@ func TestDumpCommand_ConcurrentDump(t *testing.T) {
 				}
 			}
 		}(i)
-		time.Sleep(time.Microsecond)
 	}
 
 	// Wait for all goroutines

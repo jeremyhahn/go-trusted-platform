@@ -20,9 +20,9 @@ package dns
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
@@ -397,7 +397,7 @@ func TestZone_ConcurrentOperations(t *testing.T) {
 
 	for i := 0; i < numGoroutines; i++ {
 		go func(idx int) {
-			zoneName := "concurrent-" + time.Now().Format("150405.000000000") + ".com."
+			zoneName := fmt.Sprintf("concurrent-%d.com.", idx)
 			zone := createTestZone(zoneName, idx%2 == 0)
 			if err := svc.Save(ctx, zone); err != nil {
 				errChan <- err
@@ -409,7 +409,6 @@ func TestZone_ConcurrentOperations(t *testing.T) {
 			}
 			done <- true
 		}(i)
-		time.Sleep(time.Microsecond) // Small delay for unique timestamps
 	}
 
 	// Wait for all goroutines

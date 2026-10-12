@@ -516,8 +516,9 @@ GOSEC                       := $(GOSEC_DIR)/gosec
 # golangci-lint v2 has NO default timeout ("Disabled by default"); this is the
 # only wall-clock bound on the run, and 15m was calibrated on an idle box. It is
 # process wall-clock from the moment the binary starts — queueing for a runner
-# does not count, but waiting on golangci-lint's own instance lock does (parallel
-# runners are disallowed by default, and #309 keeps them serialised). Measured
+# does not count, but waiting on golangci-lint's own instance lock does (`lint`
+# passes --allow-serial-runners, so a concurrent invocation waits for the lock
+# instead of exiting with "parallel golangci-lint is running", #309). Measured
 # 2026-09-05 on the shared capacity-3 fleet (#426), linter phase only, from
 # "Running linters" to "issues.":
 #     406s  #405 rerun (job 49321)   green
@@ -530,7 +531,7 @@ GOSEC                       := $(GOSEC_DIR)/gosec
 # further doubling of contention still lands. The CI lint job carries a
 # timeout-minutes backstop above this so a genuinely hung linter still fails
 # with a job timeout rather than running unbounded. Not --allow-parallel-runners
-# (#309), and not a rerun policy.
+# (runs would share one cache and contend for CPU), and not a rerun policy.
 GOLANGCI_LINT_TIMEOUT       ?= 45m
 
 # Installed with `go install`, NOT downloaded prebuilt. That is the whole point:
@@ -2950,12 +2951,12 @@ TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue
 # number, and the entry is deleted when that issue lands — this list only ever
-# shrinks. Measured 2026-08-23 at daa039a over the full unit set:
-#
-#   pkg/compute/network #41 — test-only race. mockOVSController's maps are
-#                      written from the goroutines TestOVSFlowControllerAdapter_
-#                      ConcurrentAccess starts, with no mutex in the double.
-RACE_EXCLUDE := pkg/compute/network$$
+# shrinks. It is empty now: #41 (mockOVSController written from the goroutines
+# TestOVSFlowControllerAdapter_ConcurrentAccess starts) was fixed by guarding
+# the double with a mutex. The pattern must stay non-empty because grep -E with
+# an empty pattern matches every package and test-race would then run none; the
+# never-matching ^$$ keeps the filter a no-op.
+RACE_EXCLUDE := ^$$
 
 .PHONY: test-race
 ## test-race: Run unit tests under the race detector (CI gate job)
@@ -3269,7 +3270,7 @@ lint: $(GOLANGCI_LINT) $(ACTIONLINT)
 	@$(ACTIONLINT) || { echo "$(RED)$(BOLD)✗ actionlint failed$(RESET)"; exit 1; }
 	@echo "$(CYAN)$(BOLD)→ Running linters ($(GOLANGCI_LINT_VERSION))...$(RESET)"
 	@mkdir -p $(GOLANGCI_LINT_CACHE)
-	@if $(GOLANGCI_LINT) run --timeout=$(GOLANGCI_LINT_TIMEOUT) ./...; then \
+	@if $(GOLANGCI_LINT) run --allow-serial-runners --timeout=$(GOLANGCI_LINT_TIMEOUT) ./...; then \
 		echo "$(GREEN)✓ Linting complete$(RESET)"; \
 	else \
 		echo "$(RED)$(BOLD)✗ Linting failed with errors$(RESET)"; \
@@ -4691,27 +4692,16 @@ integration-test-api: build-api-debug
 	@echo "  curl -k https://localhost:8443/api/v1/services"
 
 
-SUBMODULE_TAGS := sdk/go
 # Builds never resolve through a workspace: modules come from Gitea tags
 # (dependency-resolution.md §2). Immunizes against stray go.work files.
 export GOWORK=off
 
 # ---- dependency-resolution.md targets (2026-08-13 cutover) ----
-# SUBMODULE_TAGS lists nested modules tagged in lockstep with the root
-# (release-versioning.md P2). deps-latest runs before compiling in a
-# consumer repo; release-alpha publishes this repo's next -alpha tag to dev.
-# deps-latest picks the highest tag INCLUDING -alpha prereleases — bare
-# 'go get @latest' ignores prereleases and would downgrade to legacy v0.0.0.
+# deps-latest runs before compiling in a consumer repo. It picks the highest
+# tag INCLUDING -alpha prereleases — bare 'go get @latest' ignores
+# prereleases and would downgrade to legacy v0.0.0.
 
-.PHONY: release-alpha deps-latest
-
-release-alpha:
-	@V=$$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo v0.0.0-alpha); \
-	NEXT=$$(echo $$V | awk -F'[.-]' '{printf "v%s.%s.%d-alpha", substr($$1,2), $$2, $$3+1}'); \
-	echo $${NEXT#v} > VERSION && git add VERSION && git commit -q -m "chore(release): $$NEXT" || true; \
-	git tag $$NEXT; \
-	for s in $(SUBMODULE_TAGS); do git tag "$$s/$$NEXT"; done; \
-	git push dev HEAD --tags && echo "Tagged $$NEXT"
+.PHONY: deps-latest
 
 deps-latest:
 	@GOWORK=off sh -c ' \
@@ -4721,3 +4711,26 @@ deps-latest:
 	  V=$$(go list -m -versions "$$m" 2>/dev/null | tr " " "\n" | tail -1); \
 	  if [ -n "$$V" ] && [ "$$V" != "$$m" ]; then go get "$$m@$$V" || exit 1; fi; \
 	done; go mod tidy'
+
+# ---- release-alpha: handbook template release-alpha v2.4.0 ----
+# make release-alpha VERSION=vX.Y.Z-alpha cuts an internal alpha from main
+# (release-versioning.md §1a). It writes VERSION, re-pins the root's sdk/go
+# requirement, commits, tags vX.Y.Z-alpha and sdk/go/vX.Y.Z-alpha (annotated,
+# signed through agent-git.sh), and pushes the commit and exactly those two
+# tags in one atomic push. CHANGELOG.md must already hold a
+# "## [X.Y.Z-alpha]" section. build/make/ holds verbatim copies of the
+# handbook templates: refresh them by copying, never edit them here.
+# Set these before the include; the template reads them as it is parsed.
+REPO_NAME        ?= go-trusted-platform
+AGENT_GIT        ?= agent-git.sh
+RELEASE_REMOTE   ?= origin
+LOCKSTEP_MODULES := sdk/go
+include build/make/release-alpha.mk
+
+# The template's version guard is an ordinary recipe line, which `make -n`
+# prints instead of running. This prerequisite runs the same guard under
+# -n as well ('+'), so a dry run without VERSION fails like the real one.
+.PHONY: release-alpha-version
+release-alpha: release-alpha-version
+release-alpha-version:
+	+@test -n "$$REL_VERSION" || { echo 'ERROR: state the version explicitly: make release-alpha VERSION=vX.Y.Z-alpha (release-versioning.md decides patch/minor/major — the recipe refuses to guess)'; exit 1; }

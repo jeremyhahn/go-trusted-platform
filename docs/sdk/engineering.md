@@ -32,6 +32,15 @@ converters (`pkg/proxy/proto.go`). A type both sides put on the wire belongs in
 throwaway consumer module with `GOWORK=off`, and fails if any root-module
 package is in the dependency graph. Run it after changing an SDK import.
 
+`sdk/go` is tagged in lockstep with the root (release-versioning.md §6).
+`make release-alpha VERSION=vX.Y.Z-alpha`, run on `main`, writes `VERSION`,
+re-pins the root's `sdk/go` requirement to the new version, commits, and tags
+`vX.Y.Z-alpha` and `sdk/go/vX.Y.Z-alpha` on that commit: annotated, signed
+through `agent-git.sh`, and pushed with the commit in one atomic push that
+carries no other tag. The version is never inferred; `CHANGELOG.md` must hold a
+`## [X.Y.Z-alpha]` section first. The recipe is the handbook template, copied
+verbatim into `build/make/`.
+
 The module has its own build. Run Go commands from `sdk/go/` and take the tags
 from the root Makefile; never type the tag list:
 

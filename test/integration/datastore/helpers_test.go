@@ -18,7 +18,9 @@ package datastore
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -82,4 +84,12 @@ func newIntegrationClient(t *testing.T) (quicbaas.Storage, func()) {
 // testContext returns a context with the test timeout.
 func testContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), testTimeout)
+}
+
+// idCounter makes entity names unique across tests and goroutines in this package.
+var idCounter atomic.Uint64
+
+// uniqueID returns prefix with a process-unique suffix, safe to call concurrently.
+func uniqueID(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, idCounter.Add(1))
 }

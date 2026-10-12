@@ -113,8 +113,15 @@ type Config struct {
 	// QMPSocketPath is the path to the QMP (QEMU Machine Protocol) socket.
 	// This socket enables runtime control of the VM via QMP commands for
 	// graceful shutdown, pause/resume, status queries, and other operations.
-	// If empty, defaults to $WorkDir/qmp.sock
+	// If empty, defaults to qmp.sock in the per-run RuntimeDir.
 	QMPSocketPath string `yaml:"qmp_socket_path" json:"qmp_socket_path" mapstructure:"qmp_socket_path"`
+
+	// RuntimeDir is the short directory that holds the VM's unix sockets.
+	// Start creates it under the system temp directory (tp-vm-*) when unset and
+	// removes it when the VM stops; WorkDir is not used because a deep WorkDir
+	// exceeds the 108-byte unix socket path limit. A directory set by the
+	// caller is used as is and never removed.
+	RuntimeDir string `yaml:"-" json:"-" mapstructure:"-"`
 
 	// EnableKVM enables KVM acceleration
 	EnableKVM bool `yaml:"enable_kvm" json:"enable_kvm" mapstructure:"enable_kvm"`
@@ -540,7 +547,7 @@ func (c *Config) GetQMPSocketPath() string {
 	if c.QMPSocketPath != "" {
 		return c.QMPSocketPath
 	}
-	return filepath.Join(c.WorkDir, "qmp.sock")
+	return c.socketPath(qmpSocketName)
 }
 
 // GetConsoleSocketPath returns the interactive console socket path. It returns

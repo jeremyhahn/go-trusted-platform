@@ -95,6 +95,10 @@ The included [Makefile](Makefile) provides automated builds on 64-bit x86 Debian
     # Build platform binaries, docker images, and ISOs
     make release-local
 
+    # Cut an internal alpha from main: signed, annotated vX.Y.Z-alpha and
+    # sdk/go/vX.Y.Z-alpha tags (docs/sdk/engineering.md §1)
+    make release-alpha VERSION=v0.2.0-alpha
+
 #### Core Dependencies
 
 * [Linux](https://www.debian.org/)

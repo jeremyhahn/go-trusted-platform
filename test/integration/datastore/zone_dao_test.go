@@ -207,7 +207,7 @@ func TestZoneDAO_GetByName_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// Create unique zone name for this test
-	uniqueName := "getbyname-" + time.Now().Format("20060102150405") + ".com."
+	uniqueName := uniqueID("getbyname") + ".com."
 	zone := createTestZone(uniqueName, false)
 	require.NoError(t, dao.Save(ctx, zone))
 
@@ -287,9 +287,8 @@ func TestZoneDAO_Count(t *testing.T) {
 	// Add zones
 	numZones := 3
 	for i := 0; i < numZones; i++ {
-		zone := createTestZone("count-test"+time.Now().Format("150405.000000")+".com.", false)
+		zone := createTestZone(uniqueID("count-test")+".com.", false)
 		require.NoError(t, dao.Save(ctx, zone))
-		time.Sleep(time.Millisecond) // Ensure unique timestamp-based IDs
 	}
 
 	// Verify count increased
@@ -477,7 +476,7 @@ func TestZoneDAO_ConcurrentOperations(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(idx int) {
 			zone := createTestZone(
-				"concurrent-"+time.Now().Format("150405.000000000")+".com.",
+				uniqueID("concurrent")+".com.",
 				idx%2 == 0,
 			)
 			if err := dao.Save(ctx, zone); err != nil {
@@ -485,7 +484,6 @@ func TestZoneDAO_ConcurrentOperations(t *testing.T) {
 			}
 			done <- true
 		}(i)
-		time.Sleep(time.Microsecond) // Small delay for unique timestamps
 	}
 
 	// Wait for all goroutines
