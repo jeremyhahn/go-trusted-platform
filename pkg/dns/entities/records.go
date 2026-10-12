@@ -94,6 +94,10 @@ type NSRecord struct {
 }
 
 type RRSIGRecord struct {
+	// Name is the owner of the RRset the signature covers. Empty or "@" is
+	// the zone apex, which is also how a signature persisted before the
+	// owner was recorded is read.
+	Name        string `yaml:"name,omitempty" json:"name,omitempty" mapstructure:"name,omitempty"`
 	Algorithm   uint8  `yaml:"algorithm" json:"algorithm" mapstructure:"algorithm"`
 	Expiration  string `yaml:"expiration" json:"expiration" mapstructure:"expiration"`
 	Inception   string `yaml:"inception" json:"inception" mapstructure:"inception"`

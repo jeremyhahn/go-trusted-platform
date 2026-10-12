@@ -594,6 +594,7 @@ func (s *DNSServiceServer) recordSetToProto(rs *entities.RecordSet) *platformv1.
 
 	for _, r := range rs.RRSIGRecords {
 		protoRS.RrsigRecords = append(protoRS.RrsigRecords, &platformv1.RRSIGRecord{
+			Name:        r.Name,
 			TypeCovered: r.TypeCovered,
 			Algorithm:   uint32(r.Algorithm),
 			Labels:      uint32(r.Labels),

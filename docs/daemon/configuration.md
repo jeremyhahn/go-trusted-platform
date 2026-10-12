@@ -57,6 +57,11 @@ by the listener. A value outside `1..65535`, or a host carrying a port, stops
 startup with `ErrServeStartup{Phase: "daemon listener configuration"}` naming
 the field.
 
+Both serve paths apply the resolved section in one place
+(`applyDaemonListeners`); `daemon.rest` takes effect in daemon-only mode, where
+the daemon serves REST itself. With webservices enabled, REST is the
+webservice's listener and its own `bind-host`.
+
 The Unix socket (`--socket-path`) is unaffected. The webservice listeners
 (`webservices[].bind-host`) are documented in [`docs/web/engineering.md`](../web/engineering.md).
 

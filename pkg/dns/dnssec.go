@@ -16,7 +16,6 @@ package dns
 import (
 	"context"
 	"crypto"
-	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net"
@@ -1157,7 +1156,10 @@ func (s *DNSSECService) dsToEntity(ds *dns.DS) *entities.DSRecord {
 }
 
 func (s *DNSSECService) rrsigToEntity(rrsig *dns.RRSIG) *entities.RRSIGRecord {
+	// rrsig.Signature is already base64 in miekg/dns; it is stored as is so
+	// the resolver and AXFR can hand it back unchanged.
 	return &entities.RRSIGRecord{
+		Name:        rrsig.Hdr.Name,
 		TypeCovered: dns.TypeToString[rrsig.TypeCovered],
 		Algorithm:   rrsig.Algorithm,
 		Labels:      rrsig.Labels,
@@ -1166,7 +1168,7 @@ func (s *DNSSECService) rrsigToEntity(rrsig *dns.RRSIG) *entities.RRSIGRecord {
 		Inception:   fmt.Sprintf("%d", rrsig.Inception),
 		KeyTag:      rrsig.KeyTag,
 		SignerName:  rrsig.SignerName,
-		Signature:   base64.StdEncoding.EncodeToString([]byte(rrsig.Signature)),
+		Signature:   rrsig.Signature,
 	}
 }
 

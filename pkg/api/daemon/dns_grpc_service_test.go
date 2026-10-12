@@ -1412,7 +1412,7 @@ func TestDNSServiceServer_RecordSetToProto_WithAllRecordTypes(t *testing.T) {
 		TLSARecords:   []*entities.TLSARecord{{Name: "_443._tcp.www", Usage: 3, Selector: 1, MatchingType: 1, Data: "aabbccdd", TTL: 3600}},
 		DNSKEYRecords: []*entities.DNSKEYRecord{{Name: "example.com.", Flags: 257, Protocol: 3, Algorithm: 13, Key: "testkey", TTL: 3600}},
 		DSRecords:     []*entities.DSRecord{{Name: "example.com.", KeyTag: 12345, Algorithm: 13, DigestType: 2, Digest: "aabbccdd", TTL: 3600}},
-		RRSIGRecords:  []*entities.RRSIGRecord{{TypeCovered: "A", Algorithm: 13, Labels: 2, OriginalTTL: 3600, Expiration: "20260101000000", Inception: "20250101000000", KeyTag: 12345, SignerName: "example.com.", Signature: "sig"}},
+		RRSIGRecords:  []*entities.RRSIGRecord{{Name: "www.example.com.", TypeCovered: "A", Algorithm: 13, Labels: 2, OriginalTTL: 3600, Expiration: "20260101000000", Inception: "20250101000000", KeyTag: 12345, SignerName: "example.com.", Signature: "sig"}},
 	}
 
 	result := server.recordSetToProto(rs)
@@ -1430,7 +1430,8 @@ func TestDNSServiceServer_RecordSetToProto_WithAllRecordTypes(t *testing.T) {
 	assert.Len(t, result.TlsaRecords, 1)
 	assert.Len(t, result.DnskeyRecords, 1)
 	assert.Len(t, result.DsRecords, 1)
-	assert.Len(t, result.RrsigRecords, 1)
+	require.Len(t, result.RrsigRecords, 1)
+	assert.Equal(t, "www.example.com.", result.RrsigRecords[0].Name)
 }
 
 func TestDNSServiceServer_ExtractRecords_ByType(t *testing.T) {

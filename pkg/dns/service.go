@@ -829,6 +829,7 @@ func NewRRSIGRecord(
 	signature string) *entities.RRSIGRecord {
 
 	return &entities.RRSIGRecord{
+		Name:        name,
 		SignerName:  signerName,
 		Signature:   signature,
 		Labels:      labels,

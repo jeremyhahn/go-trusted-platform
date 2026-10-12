@@ -289,7 +289,7 @@ func BuildZoneTransfer(zone *entities.Zone) []dns.RR {
 	}
 	for _, r := range rs.RRSIGRecords {
 		records = append(records, &dns.RRSIG{
-			Hdr:         transferHeader(zone.Name, zone.Name, dns.TypeRRSIG, r.OriginalTTL, zone.TTL),
+			Hdr:         transferHeader(r.Name, zone.Name, dns.TypeRRSIG, r.OriginalTTL, zone.TTL),
 			TypeCovered: dns.StringToType[strings.ToUpper(r.TypeCovered)],
 			Algorithm:   r.Algorithm,
 			Labels:      r.Labels,

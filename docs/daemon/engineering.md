@@ -131,6 +131,15 @@ it is REST-only.
    are the coupling.
 6. **`gatewayd`'s import closure is guarded separately** and the guard is
    normative — a failure is an architecture violation, not a flaky test.
+7. **No listen address is a literal (#93).** Both `platformd serve` paths
+   (webservice and daemon-only) write transport addresses only through
+   `applyDaemonListeners` (`pkg/daemon/commands/serve.go`), from the `daemon:`
+   section resolved as flag > env > file > defaults
+   ([configuration.md](configuration.md)). In webservice mode the daemon does
+   not serve REST, so `daemon.rest` is not applied; the webservice binds its
+   own `bind-host`. `TestServeCommands_NoListenAddressOutsideApplyDaemonListeners`
+   fails with `file:line` on any other assignment, or on a string literal or
+   `fmt.Sprintf` in an address field, anywhere in `pkg/daemon/commands`.
 
 ## 6. Authorization
 

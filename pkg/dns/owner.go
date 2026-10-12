@@ -57,8 +57,7 @@ func equalNames(a, b string) bool {
 }
 
 // isZoneApex reports whether the queried name is the top of the zone. The
-// SOA, and in this data model the zone's RRSIGs, are owned by the apex and by
-// nothing else.
+// SOA is owned by the apex and by nothing else.
 func isZoneApex(qname, zoneName string) bool {
 	return equalNames(qname, zoneName)
 }
@@ -78,9 +77,6 @@ func zoneDataOwnerNames(zone *entities.Zone) []string {
 // zoneOwnerNames returns EVERY owner name in the zone, DNSSEC meta-records
 // included, resolved to FQDNs, deduplicated and canonically sorted. A name
 // that owns only an NSEC3 or a DS record is still a name the zone defines.
-//
-// RRSIG needs no entry of its own: RRSIGRecord carries no owner name, so the
-// zone's signatures are attributed to the apex, which is always in the set.
 func zoneOwnerNames(zone *entities.Zone) []string {
 	zoneFQDN := dns.Fqdn(zone.Name)
 	names := dataOwnerNameSet(zone)
@@ -101,6 +97,9 @@ func zoneOwnerNames(zone *entities.Zone) []string {
 		add(r.Name)
 	}
 	for _, r := range zone.RecordSet.NSEC3PARAMRecords {
+		add(r.Name)
+	}
+	for _, r := range zone.RecordSet.RRSIGRecords {
 		add(r.Name)
 	}
 	return sortedOwnerNames(names)

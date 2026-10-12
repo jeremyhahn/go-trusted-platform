@@ -634,6 +634,7 @@ func TestNewRRSIGRecord(t *testing.T) {
 				tt.originalTTL, tt.expiration, tt.inception,
 				tt.keyTag, tt.signerName, tt.signature,
 			)
+			assert.Equal(t, tt.recName, record.Name)
 			assert.Equal(t, tt.signerName, record.SignerName)
 			assert.Equal(t, tt.signature, record.Signature)
 			assert.Equal(t, tt.typeCovered, record.TypeCovered)

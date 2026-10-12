@@ -1748,20 +1748,7 @@ integration-test-cold-start: build-devcontainer
 ## integration-test-barrier-gate: Run M6 barrier-gate (init-only loopback) integration tests in devcontainer
 .PHONY: integration-test-barrier-gate
 integration-test-barrier-gate: build-devcontainer
-	@echo "Running M6 barrier-gate integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-barrier-gate-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w $(SOURCES_BASE)/go-trusted-platform \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=1 \
-		-e GOTOOLCHAIN=auto \
-		$(DEVCONTAINER_IMAGE) \
-		bash /workspace/build/docker/devcontainer/run-integration-tests.sh barrier-gate
+	$(call run-integration-suite,barrier-gate)
 
 ## integration-test-tpm: Run TPM multi-protocol integration tests in devcontainer
 .PHONY: integration-test-tpm
@@ -1911,22 +1898,9 @@ endef
 ## integration-test: Run all integration tests in development container
 ## Starts OVS, swtpm, and platformd before running tests.
 ## Set WITH_CODEC_* or other WITH_* flags for additional build tags.
+## The runner's `all` keyword selects every suite.
 integration-test: build-devcontainer
-	@echo "Running all integration tests in development container..."
-	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@docker run --rm --privileged \
-		--name go-trusted-platform-integration-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w $(SOURCES_BASE)/go-trusted-platform \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=1 \
-		-e GOTOOLCHAIN=auto \
-		$(DEVCONTAINER_IMAGE) \
-		bash /workspace/build/docker/devcontainer/run-integration-tests.sh "$(strip $(TEST_BUILD_TAGS))"
+	$(call run-integration-suite,all)
 
 .PHONY: integration-test-webservice
 integration-test-webservice: docker-builder-load

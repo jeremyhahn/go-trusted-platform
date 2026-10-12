@@ -265,8 +265,9 @@ that route to no translator.
    (`owner.go`) compares the WHOLE query name against the record's owner,
    resolved from the relative or fully qualified stored form, case- and
    trailing-dot insensitively (RFC 4343 §3). There is no wildcard synthesis:
-   a `*` owner matches the literal name `*.<zone>`. SOA and RRSIG answer at the
-   zone apex only. Restoring first-label matching re-opens #182, where a zone
+   a `*` owner matches the literal name `*.<zone>`. The SOA answers at the
+   zone apex only; an RRSIG answers at, and transfers under, the owner it
+   signs (`RRSIGRecord.Name`, set by `rrsigToEntity`). Restoring first-label matching re-opens #182, where a zone
    holding `www` answered `www.anything.example.com`.
 7. **A query with no matching record gets the right KIND of negative answer.**
    `buildResponse` (`plugin.go`) sends NXDOMAIN when `zoneHasName` reports the

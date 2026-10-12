@@ -93,12 +93,16 @@ Comparison is case-insensitive and trailing-dot insensitive (RFC 4343 §3), so a
 0x20-case-randomised query matches, and the answer echoes the query's own
 spelling.
 
-Two record types are owned by the zone apex and answer nowhere else:
+The SOA is owned by the zone apex and answers nowhere else: a zone has exactly
+one SOA and it sits at the apex (RFC 1034 §4.2). The SOA entity's `name` field
+is not used for matching.
 
-| Type | Why |
-|---|---|
-| SOA | A zone has exactly one SOA and it sits at the apex (RFC 1034 §4.2). The SOA entity's `name` field is not used for matching. |
-| RRSIG | `RRSIGRecord` carries no owner name, so the zone's signatures are attributed to the apex — the same assumption `BuildZoneTransfer` makes for AXFR. A direct `RRSIG` query for a non-apex owner is therefore NODATA; modelling per-record RRSIG owners is a schema change tracked separately. |
+An RRSIG answers at the owner of the RRset it signs. The signer records that
+owner in `RRSIGRecord.name`, so `RRSIG www.example.com.` returns the signatures
+over the `www` RRsets and `RRSIG example.com.` returns only the apex ones. A
+signature persisted before the owner was recorded has no `name`, which resolves
+to the apex like any other record. Re-signing the zone, which every zone save
+does while DNSSEC is enabled, records the real owners.
 
 **Wildcards are not supported.** A record named `*` is matched literally, as the
 name `*.example.com.`; there is no RFC 4592 synthesis. Nothing in the zone model,
@@ -116,6 +120,13 @@ cannot synthesise wildcard answers without the wildcard RRSIG handling of RFC
 > PERSISTED in the datastore, which `processZone` does not re-seed from the
 > configuration file. See
 > [troubleshooting.md](troubleshooting.md#owner-names-after-the-exact-matching-change).
+
+> **Changed 2026-10-12 (#219).** `RRSIGRecord` now persists its owner (`name`).
+> Before, the signer dropped it: every signature answered at the apex only, and
+> AXFR sent each one under the apex owner, so a secondary received mis-owned
+> signatures for every non-apex RRset. The signer also stored the signature
+> base64-encoded twice, so no served or transferred RRSIG verified. Zones signed
+> before this change keep both defects until they are next saved.
 
 ## Negative answers
 

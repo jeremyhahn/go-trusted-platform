@@ -104,6 +104,28 @@ func resolveDaemonListeners(cmd *cobra.Command) (tpconfig.DaemonListeners, error
 	return listeners, nil
 }
 
+// applyDaemonListeners writes the resolved listener addresses into cfg. It
+// is the one place either serve path sets a transport address, so the
+// `daemon:` section (file, env, flag) always reaches the listeners and no
+// path can pin a literal over it (#93). REST is written only when the
+// daemon serves it: in webservice mode the webservice owns REST and its
+// own bind host. Call it after cfg.QUICConfig is built so the QUIC
+// server's own address matches.
+func applyDaemonListeners(cfg *daemon.Config, listeners tpconfig.DaemonListeners) {
+	if cfg.EnableREST {
+		cfg.RESTListenAddr = listeners.REST.Address()
+	}
+	cfg.GRPCListenAddr = listeners.GRPC.Address()
+	cfg.QUICListenAddr = listeners.QUIC.Address()
+	if cfg.QUICConfig != nil {
+		cfg.QUICConfig.ListenAddr = listeners.QUIC.Address()
+	}
+	if cfg.MCPConfig == nil {
+		cfg.MCPConfig = daemon.DefaultMCPConfig()
+	}
+	cfg.MCPConfig.HTTPAddr = listeners.MCP.Address()
+}
+
 // =============================================================================
 // CA helper interfaces (M5: SDK-only dependency)
 // =============================================================================
@@ -735,12 +757,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		return err
 	}
 
+	// The webservice serves REST in this mode, on its own bind host.
 	daemonConfig.EnableREST = false
 	daemonConfig.EnableGRPCTCP = serveEnableGRPC
-	daemonConfig.GRPCListenAddr = listeners.GRPC.Address()
-
 	daemonConfig.EnableQUIC = serveEnableQUIC
-	daemonConfig.QUICListenAddr = listeners.QUIC.Address()
+	daemonConfig.EnableMCP = serveEnableMCP
 	if serveEnableQUIC {
 		quicConfig, quicErr := quic.DefaultServerConfigWithTLS()
 		if quicErr != nil {
@@ -748,16 +769,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			cmd.PrintErrln(fmt.Sprintf("Failed to generate QUIC TLS configuration: %v", quicErr))
 			return ErrServeStartup{Phase: "QUIC TLS configuration", Cause: quicErr}
 		}
-		quicConfig.ListenAddr = listeners.QUIC.Address()
 		daemonConfig.QUICConfig = quicConfig
 		logger.Debug("QUIC TLS configuration generated with self-signed certificate")
 	}
 
-	daemonConfig.EnableMCP = serveEnableMCP
-	if daemonConfig.MCPConfig == nil {
-		daemonConfig.MCPConfig = daemon.DefaultMCPConfig()
-	}
-	daemonConfig.MCPConfig.HTTPAddr = listeners.MCP.Address()
+	applyDaemonListeners(daemonConfig, listeners)
 
 	ovsSocketPathWS := "/var/run/openvswitch/db.sock"
 	if envPath := os.Getenv("SDN_OVS_SOCKET"); envPath != "" {
@@ -1448,13 +1464,9 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	}
 
 	config.EnableREST = serveEnableREST
-	config.RESTListenAddr = listeners.REST.Address()
-
 	config.EnableGRPCTCP = serveEnableGRPC
-	config.GRPCListenAddr = listeners.GRPC.Address()
-
 	config.EnableQUIC = serveEnableQUIC
-	config.QUICListenAddr = listeners.QUIC.Address()
+	config.EnableMCP = serveEnableMCP
 	if serveEnableQUIC {
 		quicConfig, quicErr := quic.DefaultServerConfigWithTLS()
 		if quicErr != nil {
@@ -1462,16 +1474,11 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 			cmd.PrintErrln(fmt.Sprintf("Failed to generate QUIC TLS configuration: %v", quicErr))
 			return ErrServeStartup{Phase: "QUIC TLS configuration", Cause: quicErr}
 		}
-		quicConfig.ListenAddr = listeners.QUIC.Address()
 		config.QUICConfig = quicConfig
 		logger.Debug("QUIC TLS configuration generated with self-signed certificate")
 	}
 
-	config.EnableMCP = serveEnableMCP
-	if config.MCPConfig == nil {
-		config.MCPConfig = daemon.DefaultMCPConfig()
-	}
-	config.MCPConfig.HTTPAddr = listeners.MCP.Address()
+	applyDaemonListeners(config, listeners)
 
 	if err := daemon.AttachNodeCA(ctx, config, InitParams); err != nil {
 		logger.Warn("CA will not be available", "error", err)

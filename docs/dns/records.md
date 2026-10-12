@@ -323,7 +323,8 @@ Resource Record Signature - cryptographic signature over an RRset.
 
 ```yaml
 rrsig:
-  - type-covered: "A"
+  - name: "www.example.com."
+    type-covered: "A"
     algorithm: 13
     labels: 3
     original-ttl: 3600
@@ -336,6 +337,7 @@ rrsig:
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `name` | string | Owner of the signed RRset; empty means the zone apex (optional) |
 | `type-covered` | string | Record type being signed |
 | `algorithm` | uint8 | Signing algorithm |
 | `labels` | uint8 | Number of labels in owner name |

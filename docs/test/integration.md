@@ -427,6 +427,15 @@ passive thing to host: it `chmod 666`s `/dev/net/tun` and `/dev/kvm`,
 and `ovsdb-server` — including ones it did not start. Fifteen targets did
 exactly that until #492.
 
+No target hand-writes its own `docker run` of the runner either, including
+`make integration-test`, which calls the define with the runner's `all`
+keyword. A hand-written block drifts: `integration-test`, `-sdn` and
+`-barrier-gate` lost the define's module-cache mount and `GOWORK=off`, so the
+container resolved every module over the network and the SDN suite never got
+past building `platformd` (#539). `pkg/arch/integrationsuite_test.go` fails
+`make test` on any recipe that invokes the runner outside the define, and on a
+define that drops either flag.
+
 ## Protocol Parity Assertions
 
 Integration tests must verify identical behavior across all protocols:
