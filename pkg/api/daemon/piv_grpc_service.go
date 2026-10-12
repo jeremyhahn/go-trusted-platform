@@ -60,6 +60,8 @@ func pivErrorToGRPC(err error) error {
 		return nil
 	}
 	switch {
+	case errors.Is(err, ErrPIVKeyImportUnsupported):
+		return status.Error(codes.Unimplemented, err.Error())
 	case errors.Is(err, ErrPIVNotConfigured):
 		return status.Error(codes.Unavailable, err.Error())
 	case errors.Is(err, ErrPIVSlotRequired),

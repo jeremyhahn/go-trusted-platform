@@ -100,6 +100,9 @@ field only when no enclave was supplied at all. An enclave that was supplied
 and then destroyed is a lifecycle error and surfaces `memguard.ErrDestroyed`
 — it never falls back, because that would turn a use-after-destroy into a
 PIV operation with a stale or empty PIN.
+`PIVImportRequest` is currently validated but never stored: PIV `Import`
+fails closed with `ErrPIVKeyImportUnsupported` until the go-quicbaas SDK
+re-exports go-xkms `ImportPIVKey` (see [piv CLI](../cli/piv.md)).
 All five transports populate the enclave — REST (`piv_rest.go`), gRPC
 (`piv_grpc_service.go`), QUIC (`phase35_quic.go`), MCP (`mcp_phase35.go`),
 and Unix, which serves the same gRPC PIV service over a UDS listener

@@ -131,8 +131,10 @@ func runPIVScenario(t *testing.T, ctx context.Context, cmd PIVCommands) {
 			PrivateKeyPEM: "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
 			PIN:           "123456",
 		})
+		// Import fails closed (ErrPIVKeyImportUnsupported): reporting
+		// success would mean the key was filed as a certificate.
 		if err == nil {
-			return
+			t.Fatal("Import reported success; it must fail closed")
 		}
 		if !isBackendUnavailable(err) {
 			t.Fatalf("unexpected Import error: %v", err)

@@ -40,6 +40,13 @@ var ErrPIVPayloadRequired = errors.New("piv: signing payload is required")
 // ErrPIVPrivateKeyRequired indicates Import was called without a key PEM.
 var ErrPIVPrivateKeyRequired = errors.New("piv: private_key_pem is required")
 
+// ErrPIVKeyImportUnsupported indicates PIV private-key import is not
+// available: go-xkms implements ImportPIVKey, but the go-quicbaas SDK does
+// not yet re-export it. Import fails closed rather than filing the key in a
+// certificate slot. Transports map it to unimplemented (REST 501, gRPC
+// Unimplemented, QUIC StatusNotImplemented, MCP tool error).
+var ErrPIVKeyImportUnsupported = errors.New("piv: private key import is not supported (go-quicbaas SDK does not re-export go-xkms ImportPIVKey)")
+
 // PIVAlgorithm enumerates the supported PIV key algorithms.
 type PIVAlgorithm string
 

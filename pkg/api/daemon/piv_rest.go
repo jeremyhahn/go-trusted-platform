@@ -47,6 +47,8 @@ func (h *pivRESTHandlers) registerPIVRoutes(router *mux.Router) {
 
 func pivErrorToHTTP(err error) int {
 	switch {
+	case errors.Is(err, ErrPIVKeyImportUnsupported):
+		return http.StatusNotImplemented
 	case errors.Is(err, ErrPIVNotConfigured):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrPIVSlotRequired),

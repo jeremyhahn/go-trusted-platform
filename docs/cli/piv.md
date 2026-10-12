@@ -64,11 +64,18 @@ platformctl piv generate --slot 9c --algorithm ecdsa --pin 123456
 
 ### `piv import`
 
-Import a PEM private key into a slot. Prefer `generate` for hardware
-binding.
+**Unsupported — fails closed.** Every `piv import` returns
+`ErrPIVKeyImportUnsupported` and writes nothing. The command was previously
+filing the private key PEM in the slot's *certificate* object (often listed,
+logged or exported as public) while reporting `imported: true`. go-xkms has
+`ImportPIVKey` (go-xkms#207), but the go-quicbaas SDK (`sdk/go` v0.12) does not
+re-export it; import will be enabled once it does. Use `generate` instead.
+
+Status per transport: REST `501 Not Implemented`, gRPC `Unimplemented`, QUIC
+`StatusNotImplemented`, MCP tool error (`platform_piv_import`), Unix as REST.
 
 ```
-platformctl piv import --slot 82 --key-file ./key.pem --pin 123456
+platformctl piv import --slot 82 --key-file ./key.pem --pin 123456   # error
 ```
 
 ### `piv sign`

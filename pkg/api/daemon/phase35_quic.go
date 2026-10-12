@@ -54,6 +54,8 @@ func errResponseFrom(err error) *quicwire.Response {
 	switch {
 	case err == nil:
 		return &quicwire.Response{Status: quicwire.StatusOK}
+	case errors.Is(err, ErrPIVKeyImportUnsupported):
+		return &quicwire.Response{Status: quicwire.StatusNotImplemented}
 	case errors.Is(err, ErrCeremonyNotConfigured),
 		errors.Is(err, ErrPIVNotConfigured),
 		errors.Is(err, ErrLUKSNotConfigured),
