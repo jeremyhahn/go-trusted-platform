@@ -171,6 +171,7 @@ store independently of one another.
 |---|---|---|---|---|---|---|
 | Issue session (mTLS factor) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/login` (`GenerateToken`) — **declined 403**, see below | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Refresh session token | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/login/refresh` (`RefreshToken`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Revoke session (logout) | `MISSING — #213` | `MISSING — #213` | `MISSING — #213` | `MISSING — #213` (no route; see below) | `MISSING — #213` (`OpAuthLogout` reserved) | `MISSING — #213` |
 | WebAuthn: begin registration | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/webauthn/registration/begin` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | WebAuthn: finish registration | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `/api/v1/webauthn/registration/finish` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | WebAuthn: registration status | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `GET /api/v1/webauthn/registration/status` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
@@ -256,6 +257,22 @@ own client certificate for an unauthenticated caller. The refusal is in the
 binder, before the backbone is reached, on both ceremony verbs. Rationale and
 failure mode: `docs/auth/architecture.md` §The mTLS factor is declined. WebAuthn
 login is unaffected — it is a different factor on the same driver.
+
+**There is no server-side logout, and the SDK cannot provide one yet (#213).**
+The console's session is the platform JWT that `login.SessionIssuer` mints
+(`jwt.Service.IssueSession`), not the backbone's bearer. The backbone never
+issued it and never sees it: `jwt.Service` verifies it by signature, audience
+and expiry and checks no session state, and it carries no `jti`. The SDK's revocation verb,
+`sdk/go/client/auth` `Logout(ctx, accessToken)`, reaches the backbone's
+`OIDCProvider.RevokeSessionToken`, which revokes only bearers the backbone itself
+issued through `IssueSessionToken`. So passing the platform JWT to it cannot make
+a replay fail. A platform-local deny-list would be a local reimplementation of
+session revocation, which this repository does not build. Logout becomes possible
+when the backbone's bearer *is* the session (#202, phases 3 and 4 of #644). That
+needs an inbound SDK validator, and `ValidateToken` is still broken on the
+embedded transport in `sdk/go` v0.14.0-alpha (jeremyhahn/go-quicbaas#955).
+Until then, the console's sign-out only clears the browser's copy, and the token
+stays valid until it expires.
 
 **"not this repo"** means the capability is served by
 `go-quicbaas/sdk/go`'s `Security().Auth().Factors()` (M10, over go-qrdb's M14

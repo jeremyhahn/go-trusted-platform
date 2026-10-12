@@ -115,7 +115,7 @@ anything inside `pkg/proxy`.
 | `platformctl proxy` | `pkg/cli/commands/proxy/` | this repo |
 | **mTLS identity adapter** | `pkg/auth` (`MTLSAdapter`, `ValidateIDevID`) | this repo, separate feature |
 | **Zone matrix** (`zone.Matrix`, `Allowed`) | `pkg/sdn/zone` — [`docs/sdn/`](../sdn/) | this repo, separate feature |
-| **Trust classes** (`default` / `bmc` / `internal`) | `pkg/trust` | this repo, separate feature |
+| **Platform anchor and trust classes** | `pkg/trust` — [`docs/trust/`](../trust/) | this repo, separate feature |
 | **OPA engine and embedded policies** | `pkg/policy/opa` | this repo, separate feature |
 | **Attestation manifests and verification** | `pkg/attestation` — [`docs/attestation/`](../attestation/) | this repo, separate feature |
 | **`OIDTPNetworkZone` OID and its parser** | `go-quicbaas/sdk/go/xkms/ca` | **not this repo** |

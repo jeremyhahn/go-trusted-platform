@@ -18,7 +18,7 @@
 | `pkg/diskimage/assemble.go` | `Assemble`, `AssembleOptions`, `AssembleResult` — the in-container step |
 | `pkg/diskimage/inspect.go` | `Inspect`, `Report`, `Partition`, `ParseMBR` |
 | `pkg/diskimage/boot.go` | `Boot`, `BootOptions`, `BootResult`, `DefaultBootWorkDir`, `DefaultBootMemory` — the emulated boot (QEMU virt + swtpm) behind `diskimage test boot` and the integration suite |
-| `pkg/diskimage/errors.go` | `UnknownTargetError`, `PreflightError`, `StageError`, `AssembleError`, `LoopDeviceError`, `InspectError`, `BootError` |
+| `pkg/diskimage/errors.go` | `UnknownTargetError`, `PreflightError`, `StageError`, `AssembleError`, `HostInstallerMissingError`, `LoopDeviceError`, `InspectError`, `BootError` |
 | `pkg/diskimage/rpi/` | `Name`, `KernelPackage`, `DefaultModel`, `Model`, `Models`, `LookupModel`, `New`, `Target`, `ConfigTxt`; `apk.go` (apk extraction); `errors.go` |
 | `pkg/diskimage/qemuvirt/` | `Name`, `KernelPackage`, `New`, `Target` |
 | `pkg/diskimage/uboot/` | `Board`, `Boards`, `Manifest`, `Artifacts`, `Options`, `CacheKey`, `Build`, `ReadManifest`, `Locate`; `errors.go` |
@@ -39,7 +39,7 @@
 | `pkg/iso/types.go` | `InstallerOverrides` |
 | `build/docker/uboot-builder/` | `Dockerfile`, `Makefile`, `build-uboot.sh`, `mkesl.py`, `configs/{common-efi.config,rpi_arm64-tpm.config,qemu_arm64-tpm.config,tpm-soft-spi.dts}`, `patches/0001-mbedtls-glue-return-errno-for-parse-failures.patch`, `README.md` — every file but the README is a cache-key input |
 | `build/docker/trusted-platform/Dockerfile-alpine-swtpm-arm64` | arm64 Alpine + swtpm for the userspace suite; the platform binaries are bind-mounted from `bin/aarch64` |
-| `build/docker/diskimage-builder/Dockerfile` | the arm64 Alpine assemble container (apk-tools, parted, dosfstools, e2fsprogs, lvm2, util-linux, kmod, cpio, xz, mkinitfs, squashfs-tools — no platform binaries, no keys); it also runs `diskimage netboot-initfs` |
+| `build/docker/diskimage-builder/Dockerfile` | the arm64 Alpine assemble container (apk-tools, parted, dosfstools, e2fsprogs, lvm2, util-linux, kmod, cpio, xz, mkinitfs, squashfs-tools — no platform binaries, no keys); it also runs `diskimage netboot-initfs`. One image per platform: `BuildConfig.builderImageFor(arch)` tags `<BuilderImage>:<arch>` — host arch for assemble, target arch for netboot-initfs — so neither step can run the other's image |
 | `pkg/diskimage/netboot_initfs.go` | `GenerateNetbootInitfs` (in-container), `StagedMedia.BuildNetbootInitfs` (host side), `NetbootInitfsOptions`, `NetbootInitfs`, `NetbootInitfsFeatures` |
 
 ## 2. Exported surface
@@ -184,6 +184,17 @@ release and are held equal to `build/docker/uboot-builder/Makefile` by
     runtime host's, not the caller's `/proc`) reads
     `/proc/sys/fs/binfmt_misc/qemu-<arch>` and it carries `F` in its
     `flags:`; native builds run no probe; `/sys/module/loop` and `/sys/module/dm_crypt` exist.
+13. **The assemble container runs at the host platform** (`BuildConfig.HostArch`,
+    default `runtime.GOARCH`), never the target's: qemu-user has no keyring
+    syscalls, so go-luks2 cannot open the volume under emulation (#802). A
+    foreign target runs the installer from `BuildConfig.HostInstallerBinary`
+    (a host-architecture `platformctl-static`, copied to `/installer`; the CLI
+    takes the one beside the running `platformctl`), and `Create` fails with
+    `HostInstallerMissingError` when there is none. The target architecture
+    reaches the installer through the baked config (`os.architecture`); the
+    installer never derives it from its own GOARCH (the UKI builder is set to
+    the install target). Native: partitioning, LUKS, mkfs, losetup. Emulated
+    (binfmt, in the target chroot): apk, dracut, depmod.
 
 ## 4. Error semantics
 

@@ -159,7 +159,7 @@ routes.
 | `--id` | string | `""` | **yes** | Pool identifier |
 | `--backend` | string slice | none | **yes (≥1)** | Backend URL, optionally `URL=WEIGHT`; repeatable |
 | `--balancer` | string | `""` | no | Empty defaults to `round-robin`, the only registered balancer |
-| `--trust-class` | string | `""` | no | `default`, `bmc` or `internal` (`pkg/trust`). Unknown → `ErrUnknownTrustClass` |
+| `--trust-class` | string | `""` | no | `platform` or `bmc` ([`docs/trust/`](../trust/architecture.md)). Unknown → `ErrUnknownTrustClass` |
 | `--mtls-client-cert` | bool | `false` | no | Present a client certificate to backends |
 | `--max-idle-conns-per-host` | int | `0` | no | `0` ⇒ engine default 128 |
 | `--idle-conn-timeout` | duration | `0` | no | `0` ⇒ engine default 90s |

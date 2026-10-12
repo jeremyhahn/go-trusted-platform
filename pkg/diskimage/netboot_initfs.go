@@ -133,7 +133,9 @@ func (s *StagedMedia) BuildNetbootInitfs(ctx context.Context, outDir string) (*N
 		return nil, &StageError{Step: "netboot initfs", Err: errNoBuiltKernel}
 	}
 	c := s.config
-	arch := "linux/" + goArchOf(string(s.Target.Architecture()))
+	targetArch := goArchOf(string(s.Target.Architecture()))
+	arch := "linux/" + targetArch
+	image := c.builderImageFor(targetArch)
 	absOut, err := filepath.Abs(outDir)
 	if err != nil {
 		return nil, &StageError{Step: "resolving the output directory", Err: err}
@@ -149,7 +151,7 @@ func (s *StagedMedia) BuildNetbootInitfs(ctx context.Context, outDir string) (*N
 	if err != nil {
 		return nil, &StageError{Step: "resolving the kernel directory", Err: err}
 	}
-	if _, err := c.Runner(ctx, c.ContainerRuntime, "build", "--platform", arch, "-t", c.BuilderImage, c.BuilderDir); err != nil {
+	if _, err := c.Runner(ctx, c.ContainerRuntime, "build", "--platform", arch, "-t", image, c.BuilderDir); err != nil {
 		return nil, &StageError{Step: "building the builder container image", Err: err}
 	}
 	flavour := s.Kernel.Flavor
@@ -157,7 +159,7 @@ func (s *StagedMedia) BuildNetbootInitfs(ctx context.Context, outDir string) (*N
 	// mounts: the daemon may not share this process's filesystem (CI job
 	// container).
 	container := runner.Container{
-		Image:      c.BuilderImage,
+		Image:      image,
 		CreateArgs: []string{"--platform", arch, "-v", containerOutputMount},
 		Command: []string{
 			containerMediaMount + "/platformd-bin/platformctl-static", "diskimage", "netboot-initfs",

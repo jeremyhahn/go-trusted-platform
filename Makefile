@@ -4159,15 +4159,16 @@ DISKIMAGE_TARGET      ?= rpi
 DISKIMAGE_MODEL       ?= rpi4
 DISKIMAGE_SIZE_MB     ?= 4096
 DISKIMAGE_OUTPUT      ?= bin/trusted-platform-$(DISKIMAGE_TARGET).img
-DISKIMAGE_BUILDER_IMG ?= trusted-platform-diskimage-builder:arm64
+DISKIMAGE_BUILDER_IMG ?= trusted-platform-diskimage-builder
+DISKIMAGE_HOST_ARCH   ?= $(shell go env GOARCH)
 DISKIMAGE_FLAGS       ?=
 RPI_SDCARD            ?=
 RPI_SDCARD_CONFIRM    ?=
 
 .PHONY: docker-diskimage-builder-load
-## docker-diskimage-builder-load: Build the arm64 assemble container image for platformctl diskimage
+## docker-diskimage-builder-load: Build the host-platform assemble container image (tag :<hostarch>) for platformctl diskimage
 docker-diskimage-builder-load:
-	docker buildx build --load --platform=linux/arm64 -t $(DISKIMAGE_BUILDER_IMG) build/docker/diskimage-builder
+	docker buildx build --load --platform=linux/$(DISKIMAGE_HOST_ARCH) -t $(DISKIMAGE_BUILDER_IMG):$(DISKIMAGE_HOST_ARCH) build/docker/diskimage-builder
 
 .PHONY: image-rpi
 ## image-rpi: Build the Raspberry Pi SD-card image (DISKIMAGE_MODEL=rpi4, DISKIMAGE_OUTPUT=bin/trusted-platform-rpi.img)

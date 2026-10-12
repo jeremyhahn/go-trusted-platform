@@ -125,6 +125,9 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if resolved.SizeMB < minimumSizeMB {
 		return nil, &StageError{Step: "configuration", Err: &sizeError{resolved.SizeMB}}
 	}
+	if err := validateBuilderImage(resolved.BuilderImage); err != nil {
+		return nil, &StageError{Step: "configuration", Err: err}
+	}
 	if !resolved.SkipPreflight {
 		target, err := NewTarget(resolved.Target, resolved.Model)
 		if err != nil {
@@ -214,8 +217,11 @@ func (c *BuildConfig) ubootArtifacts(ctx context.Context, target Target, materia
 }
 
 // assembleInContainer runs `platformctl diskimage assemble` from the staged
-// media inside the arm64 builder container, privileged for loop devices and
-// device-mapper, with the media read-only and the image directory writable.
+// media inside the builder container at the HOST platform, privileged for
+// loop devices and device-mapper. Under qemu-user there are no keyring
+// syscalls, so go-luks2 cannot open the volume in a foreign-architecture
+// container (#802); the target's packages are laid down by the installer's
+// chroot steps, which run under binfmt.
 // The container keeps its own private /dev: the host's /dev is never
 // bind-mounted, because the installer's `mdev -s` (which creates the
 // partition nodes) resets the mode of every node it walks, and on the
@@ -228,15 +234,35 @@ func (c *BuildConfig) assembleInContainer(ctx context.Context, mediaDir, output 
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return &AssembleError{Step: "creating the output directory", Err: err}
 	}
-	if _, err := c.Runner(ctx, c.ContainerRuntime, "build", "--platform", "linux/"+goArchOf(string(target.Architecture())), "-t", c.BuilderImage, c.BuilderDir); err != nil {
+	platform := "linux/" + c.HostArch
+	image := c.builderImageFor(c.HostArch)
+	if _, err := c.Runner(ctx, c.ContainerRuntime, "build", "--platform", platform, "-t", image, c.BuilderDir); err != nil {
 		return &AssembleError{Step: "building the assemble container image", Err: err}
 	}
 	absMedia, err := filepath.Abs(mediaDir)
 	if err != nil {
 		return &AssembleError{Step: "resolving the media directory", Err: err}
 	}
+	in := []runner.Copy{{Host: absMedia, Container: containerMediaMount}}
+	// The media's platformctl-static is the target's. It runs here only when
+	// the target is the host; otherwise the host-architecture installer does,
+	// so partitioning, LUKS and mkfs are native and only the chroot steps
+	// run under binfmt.
+	installer := containerMediaMount + "/platformd-bin/platformctl-static"
+	if targetArch := goArchOf(string(target.Architecture())); targetArch != c.HostArch {
+		if c.HostInstallerBinary == "" {
+			return &HostInstallerMissingError{HostArch: c.HostArch, TargetArch: targetArch}
+		}
+		installerDir, cleanup, err := stageHostInstaller(c.HostInstallerBinary)
+		if err != nil {
+			return &AssembleError{Step: "staging the host installer", Err: err}
+		}
+		defer cleanup()
+		in = append(in, runner.Copy{Host: installerDir, Container: containerInstallerMount})
+		installer = containerInstallerMount + "/" + hostInstallerName
+	}
 	command := []string{
-		containerMediaMount + "/platformd-bin/platformctl-static", "diskimage", "assemble",
+		installer, "diskimage", "assemble",
 		"--platform-config", containerMediaMount + "/configs/" + bakedPlatformConfigName,
 		"--output", containerWorkMount + "/" + filepath.Base(output),
 		"--size", strconv.Itoa(c.SizeMB),
@@ -247,16 +273,48 @@ func (c *BuildConfig) assembleInContainer(ctx context.Context, mediaDir, output 
 	// The media goes in and the image comes out with cp, not bind mounts: the
 	// daemon may not share this process's filesystem (CI job container).
 	container := runner.Container{
-		Image:      c.BuilderImage,
-		CreateArgs: []string{"--privileged", "--platform", "linux/" + goArchOf(string(target.Architecture())), "-v", containerWorkMount},
+		Image:      image,
+		CreateArgs: []string{"--privileged", "--platform", platform, "-v", containerWorkMount},
 		Command:    command,
-		In:         []runner.Copy{{Host: absMedia, Container: containerMediaMount}},
+		In:         in,
 		Out:        []runner.Copy{{Host: outDir, Container: containerWorkMount}},
 	}
 	if err := container.Run(ctx, c.Runner, c.ContainerRuntime); err != nil {
 		return &AssembleError{Step: "running the assemble container", Err: err}
 	}
 	return nil
+}
+
+// stageHostInstaller copies the host-architecture installer binary into a
+// fresh directory (the container copy moves directories) and returns it with
+// its cleanup.
+func stageHostInstaller(binary string) (dir string, cleanup func(), err error) {
+	dir, err = os.MkdirTemp("", "host-installer-")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	src, err := os.Open(binary)
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(filepath.Join(dir, hostInstallerName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		cleanup()
+		return "", nil, err
+	}
+	if err := dst.Close(); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return dir, cleanup, nil
 }
 
 // Preflight checks the host can run the assemble container: the runtime is
@@ -350,6 +408,25 @@ var errMissingISOConfig = &configError{"ISO build configuration is required"}
 type configError struct{ msg string }
 
 func (e *configError) Error() string { return "diskimage: " + e.msg }
+
+// builderImageError reports a --builder-image that is not a bare repository.
+type builderImageError struct{ value string }
+
+func (e *builderImageError) Error() string {
+	return "diskimage: --builder-image " + strconv.Quote(e.value) +
+		" must be an image repository without a tag or digest (for example trusted-platform-diskimage-builder or registry:5000/builder); the tag is the architecture"
+}
+
+// validateBuilderImage rejects a repository that already carries a tag or a
+// digest: builderImageFor appends the architecture tag. A registry port
+// (host:5000/foo) is not a tag, so only the last path segment is checked.
+func validateBuilderImage(image string) error {
+	last := image[strings.LastIndex(image, "/")+1:]
+	if strings.Contains(image, "@") || strings.Contains(last, ":") {
+		return &builderImageError{image}
+	}
+	return nil
+}
 
 // sizeError reports an image size below the minimum.
 type sizeError struct{ mb int }

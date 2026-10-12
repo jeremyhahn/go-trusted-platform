@@ -40,10 +40,17 @@ the device.**
   install media exactly as `platformctl iso create` does (`pkg/iso`'s
   `StageMedia`: pre-fetched apk repository for the target architecture,
   platform binaries, the baked platform config, Secure Boot keys, CA bundle),
-  adds the target's boot firmware, then starts an arm64 Alpine container
-  (`build/docker/diskimage-builder`) with `--privileged` but its own private
-  `/dev`, the media read-only at `/media/cdrom` and the output directory at
-  `/work`. Inside it, the target-architecture `platformctl-static diskimage
+  adds the target's boot firmware, then starts an Alpine container
+  (`build/docker/diskimage-builder`) **at the host platform** (`linux/<host
+  GOARCH>`, not the target's) with `--privileged` but its own private
+  `/dev`, the media at `/media/cdrom` and the output directory at `/work`.
+  Under qemu-user there are no keyring syscalls, so go-luks2 cannot open the
+  LUKS volume in a foreign-architecture container (#802): partitioning, LUKS
+  and mkfs therefore run natively, and only the target-chroot steps (apk,
+  dracut, depmod) run under binfmt. For a foreign target the installer is the
+  host-architecture `platformctl-static` (`BuildConfig.HostInstallerBinary`,
+  copied in at `/installer`; the media's target-architecture one is what the
+  image carries); for a native target it is the media's. Inside it, `platformctl-static diskimage
   assemble --platform-config /media/cdrom/configs/installer.yaml` creates a
   sparse image, takes a free loop device from `/dev/loop-control` (creating
   its node when the private `/dev` lacks it), attaches the image with
@@ -155,7 +162,7 @@ testing.
 | Alternative | Why it was rejected |
 |---|---|
 | **A separate image-building installer** | It would duplicate partitioning, LUKS, the OS install and the UKI, and drift. The installer gained two seams instead — a boot-firmware dispatch (`uefi` / `uboot`) and an install target (`disk` / `image`) that skips the host-only steps — and the image builder runs the same code the ISO runs. |
-| **Cross-install from the x86-64 host without a container** | apk, dracut and the UKI build have to run in the target chroot; that needs the target architecture's userspace, which binfmt gives a container. The container also confines `--privileged` and the loop-device work to one process. |
+| **Cross-install from the x86-64 host without a container** | apk, dracut and the UKI build have to run in the target chroot; that needs the target architecture's userspace, which binfmt gives a chroot inside a container. The container also confines `--privileged` and the loop-device work to one process. |
 | **Load U-Boot's Secure Boot keys from the ESP** | U-Boot will not: authenticated variables restored from a plain file would let anyone with the card replace the root of trust. Preseeding the keys into the binary is the only path U-Boot accepts, at the cost of one U-Boot build per key set. |
 | **Use the kernel's `tpm-slb9670` overlay** | It enables the hardware SPI0 controller U-Boot cannot drive, so U-Boot would boot without a TPM and measure nothing. The bit-banged overlay costs bus speed and buys a TPM that is present from the first instruction U-Boot executes. |
 | **One LUKS passphrase for every image built** | Every copy of an image would open with it. The keyslot-0 passphrase is 32 random bytes per build and exists only until firstboot replaces it with the TPM-sealed key. |
@@ -186,7 +193,7 @@ platformctl diskimage create --target rpi --model rpi4
   ├─ uboot.Build          reuse output/ when manifest.json carries the cache key, else build
   ├─ StageMedia           <work>/media: apks-prefetch/aarch64, platformd-bin/, configs/installer.yaml, keys, ...
   ├─ StageBootFirmware    <work>/media/boot-firmware: kernel8.img, config.txt, DTBs, overlays, blobs
-  └─ docker run --privileged -v media:/media/cdrom:ro -v out:/work  (linux/arm64, private /dev)
+  └─ docker run --privileged -v media:/media/cdrom:ro -v out:/work  (linux/<host arch>, private /dev; host-arch installer at /installer when the target is foreign)
        platformctl-static diskimage assemble --platform-config /media/cdrom/configs/installer.yaml
          ├─ sparse image → LOOP_CTL_GET_FREE, mknod /dev/loopN if missing, losetup --partscan
          ├─ installer.Install with Target=image, Boot.Firmware=uboot, Disk.Device=/dev/loopN

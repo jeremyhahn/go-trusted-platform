@@ -49,7 +49,7 @@ and the staged media directory.
 | `--size` | int | `4096` | image size in MB; minimum `2048` |
 | `--output` | string | `<work-dir>/trusted-platform-<target>.img` | output image path |
 | `--binaries-dir` | string | `aarch64/` next to the running binary | directory holding the target-architecture `platformd`, `platformctl`, `platformctl-static`, `platform-initrd`, `gatewayd` |
-| `--builder-image` | string | `trusted-platform-diskimage-builder:arm64` | assemble container image tag |
+| `--builder-image` | string | `trusted-platform-diskimage-builder` | assemble container image repository, without a tag or digest (a registry port such as `registry:5000/foo` is fine; `foo:latest` and `foo@sha256:…` are rejected); tagged `:<arch>` (host arch for assemble, target arch for netboot-initfs) so each platform has its own image |
 | `--builder-dir` | string | `build/docker/diskimage-builder` | assemble container build context |
 | `--container-runtime` | string | `docker` | container runtime binary |
 | `--uboot-dir` | string | | prebuilt U-Boot artifacts; skips the U-Boot build |

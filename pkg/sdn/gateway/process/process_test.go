@@ -271,7 +271,12 @@ type fakeLauncher struct {
 	children []*fakeChild
 	nodes    map[string]*fakeNode
 	failWith error
-	nextPID  int
+	// failCount, when positive, is how many more launches fail with
+	// failWith before it clears, so a transient failure ends after a counted
+	// number of launches rather than after a wall-clock wait the restart
+	// loop can outrun (#742).
+	failCount int
+	nextPID   int
 	// gate, when set, blocks inside Launch until it is closed, so a test
 	// can run a stop while a launch is in flight. launched is closed once
 	// Launch has been entered.
@@ -333,6 +338,12 @@ func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	l.mu.Lock()
 	l.launches = append(l.launches, spec)
 	failure := l.failWith
+	if l.failCount > 0 {
+		l.failCount--
+		if l.failCount == 0 {
+			l.failWith = nil
+		}
+	}
 	l.nextPID++
 	pid := l.nextPID
 	l.mu.Unlock()
@@ -805,18 +816,16 @@ func TestRestart_KeepsTryingWhileTheBudgetHolds(t *testing.T) {
 
 	launcher.mu.Lock()
 	launcher.failWith = errors.New("fork/exec: resource temporarily unavailable")
+	launcher.failCount = 3
 	launcher.mu.Unlock()
 	launcher.lastChild().exit(errors.New("signal: killed"))
 
-	// The transient failure clears, and the supervisor is still trying.
-	require.Eventually(t, func() bool { return launcher.launchCount() >= 3 }, 5*time.Second, 10*time.Millisecond,
-		"one failed relaunch does not end supervision")
-	launcher.mu.Lock()
-	launcher.failWith = nil
-	launcher.mu.Unlock()
-
-	assert.Eventually(t, func() bool { return supervisor.ServiceActive(gateway.ServiceTransit) },
-		5*time.Second, 20*time.Millisecond, "the service comes back once the launcher recovers")
+	// Three relaunches fail, then the transient failure clears. The recovery
+	// is counted in launches, not timed: the collapsed backoff spends a whole
+	// budget in milliseconds, faster than a poll on a loaded runner (#742).
+	awaitRelaunch(t, supervisor, launcher, "routing", 2)
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceTransit), "the service comes back once the launcher recovers")
+	assert.Equal(t, 5, launcher.launchCount(), "the start, three failed relaunches, then the one that succeeded")
 }
 
 func TestRestart_AFailingLaunchSpendsTheBudgetInsteadOfSpinningForever(t *testing.T) {

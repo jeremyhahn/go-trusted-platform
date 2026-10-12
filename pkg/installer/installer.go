@@ -1518,7 +1518,12 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		ukiConfig.OSRelease = generateOSRelease(i.config.OS)
 	}
 
+	// The UKI is for the install target, which is not the architecture this
+	// process runs on when an image is assembled for a foreign architecture.
 	ukiBuilder := uki.NewBuilder(i.logger)
+	if err := ukiBuilder.SetArchitecture(string(i.bootTarget().arch)); err != nil {
+		return ErrUKIBuild(fmt.Sprintf("unsupported UKI architecture: %v", err), err)
+	}
 	if err := ukiBuilder.BuildFile(ukiConfig, ukiPath); err != nil {
 		return ErrUKIBuild(fmt.Sprintf("native UKI builder failed: %v", err), err)
 	}

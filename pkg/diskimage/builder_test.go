@@ -32,6 +32,7 @@ func buildConfigForTest(t *testing.T, target string, rec *diskimagetest.Runner) 
 	return &BuildConfig{
 		ISO: isoCfg, Target: target, SizeMB: 2048, Output: filepath.Join(work, "out", "img.img"),
 		BinariesDir: bins, UBootDir: diskimagetest.UBootOutput(t), VirtKernelDir: diskimagetest.VirtKernelOutput(t), Runner: rec.Run, Logger: logging.DefaultLogger(),
+		HostArch: "amd64", HostInstallerBinary: writeHostInstaller(t),
 		SkipPreflight: true, BuilderDir: t.TempDir(), UBootBuilderDir: t.TempDir(), VirtKernelBuilderDir: t.TempDir(),
 	}
 }
@@ -87,17 +88,20 @@ func TestCreateStagesMediaAndRunsTheContainer(t *testing.T) {
 			t.Errorf("baked platform config lacks %q:\n%s", want, baked)
 		}
 	}
-	// Image build, then create, the media cp'd in, start, the image cp'd out, rm.
-	if got, want := strings.Join(callVerbs(rec), ","), "build,create,cp,start,cp,rm"; got != want {
+	// Image build, then create, the media and the host installer cp'd in,
+	// start, the image cp'd out, rm.
+	if got, want := strings.Join(callVerbs(rec), ","), "build,create,cp,cp,start,cp,rm"; got != want {
 		t.Fatalf("calls = %s, want %s", got, want)
 	}
+	// An aarch64 image on an amd64 host: the container runs at the HOST
+	// platform (#802), never the target's.
 	build := strings.Join(rec.Calls[0], " ")
-	if !strings.Contains(build, "--platform linux/arm64 -t "+DefaultBuilderImage) {
+	if !strings.Contains(build, "--platform linux/amd64 -t "+DefaultBuilderImage+":amd64") || strings.Contains(build, "arm64") {
 		t.Errorf("build argv = %q", build)
 	}
 	run := rec.Joined()[1]
-	for _, want := range []string{"create --name builder-", "--privileged --platform linux/arm64 -v /work",
-		"/media/cdrom/platformd-bin/platformctl-static diskimage assemble", "--platform-config /media/cdrom/configs/installer.yaml", "--output /work/img.img", "--size 2048"} {
+	for _, want := range []string{"create --name builder-", "--privileged --platform linux/amd64 -v /work",
+		"/installer/platformctl-static diskimage assemble", "--platform-config /media/cdrom/configs/installer.yaml", "--output /work/img.img", "--size 2048"} {
 		if !strings.Contains(run, want) {
 			t.Errorf("run argv %q lacks %q", run, want)
 		}
@@ -106,7 +110,10 @@ func TestCreateStagesMediaAndRunsTheContainer(t *testing.T) {
 	if cp := rec.Joined()[2]; !strings.HasPrefix(cp, "docker cp "+media+"/. ") || !strings.HasSuffix(cp, ":/media/cdrom") {
 		t.Errorf("media cp in = %q", cp)
 	}
-	if cp := rec.Joined()[4]; !strings.Contains(cp, ":/work/. ") || !strings.HasSuffix(cp, filepath.Dir(cfg.Output)) {
+	if cp := rec.Joined()[3]; !strings.HasSuffix(cp, ":/installer") {
+		t.Errorf("host installer cp in = %q", cp)
+	}
+	if cp := rec.Joined()[5]; !strings.Contains(cp, ":/work/. ") || !strings.HasSuffix(cp, filepath.Dir(cfg.Output)) {
 		t.Errorf("image cp out = %q", cp)
 	}
 	if strings.Contains(run, "--debug") {
@@ -117,6 +124,51 @@ func TestCreateStagesMediaAndRunsTheContainer(t *testing.T) {
 	// never be exposed to it.
 	if strings.Contains(run, "/dev") {
 		t.Errorf("run argv %q exposes a host device path", run)
+	}
+}
+
+// writeHostInstaller is a stand-in host-architecture platformctl-static.
+func writeHostInstaller(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "platformctl-static")
+	if err := os.WriteFile(path, []byte("host-installer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A target that is the host runs the media's own installer at the host
+// platform, with no second binary copied in.
+func TestCreateNativeTargetRunsTheMediaInstaller(t *testing.T) {
+	rec := &diskimagetest.Runner{}
+	cfg := buildConfigForTest(t, "qemu-virt", rec)
+	cfg.HostArch = "arm64"
+	cfg.HostInstallerBinary = ""
+	if _, err := Create(context.Background(), cfg); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got, want := strings.Join(callVerbs(rec), ","), "build,create,cp,start,cp,rm"; got != want {
+		t.Fatalf("calls = %s, want %s", got, want)
+	}
+	if run := rec.Joined()[1]; !strings.Contains(run, "--platform linux/arm64") ||
+		!strings.Contains(run, "/media/cdrom/platformd-bin/platformctl-static diskimage assemble") {
+		t.Errorf("run argv = %q", run)
+	}
+}
+
+func TestCreateForeignTargetNeedsAHostInstaller(t *testing.T) {
+	rec := &diskimagetest.Runner{}
+	cfg := buildConfigForTest(t, "qemu-virt", rec)
+	cfg.HostInstallerBinary = ""
+	var missing *HostInstallerMissingError
+	if _, err := Create(context.Background(), cfg); !errors.As(err, &missing) || missing.HostArch != "amd64" || missing.TargetArch != "arm64" {
+		t.Fatalf("error = %v", err)
+	}
+	cfg = buildConfigForTest(t, "qemu-virt", rec)
+	cfg.HostInstallerBinary = filepath.Join(t.TempDir(), "absent")
+	var assemble *AssembleError
+	if _, err := Create(context.Background(), cfg); !errors.As(err, &assemble) || assemble.Step != "staging the host installer" {
+		t.Errorf("unreadable installer error = %v", err)
 	}
 }
 
@@ -175,6 +227,31 @@ func TestCreateFailures(t *testing.T) {
 	cfg = buildConfigForTest(t, "rpi", rec)
 	if _, err := Create(context.Background(), cfg); !errors.As(err, &stage) || stage.Step != "staging the boot firmware" {
 		t.Errorf("rpi without packages error = %v", err)
+	}
+}
+
+func TestBuilderImageForSeparatesPlatforms(t *testing.T) {
+	c := (&BuildConfig{}).withDefaults()
+	host, target := c.builderImageFor("amd64"), c.builderImageFor("arm64")
+	if host == target {
+		t.Fatalf("host and target share one tag: %q", host)
+	}
+	if host != DefaultBuilderImage+":amd64" || target != DefaultBuilderImage+":arm64" {
+		t.Fatalf("tags = %q, %q", host, target)
+	}
+}
+
+func TestValidateBuilderImage(t *testing.T) {
+	for _, ok := range []string{"foo", "registry:5000/foo", "ghcr.io/x/foo"} {
+		if err := validateBuilderImage(ok); err != nil {
+			t.Errorf("%q rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"foo:latest", "registry:5000/foo:1", "foo@sha256:abc"} {
+		var target *builderImageError
+		if err := validateBuilderImage(bad); !errors.As(err, &target) {
+			t.Errorf("%q: want builderImageError, got %v", bad, err)
+		}
 	}
 }
 

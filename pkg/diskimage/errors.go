@@ -57,6 +57,19 @@ func (e *AssembleError) Error() string {
 // Unwrap returns the underlying error.
 func (e *AssembleError) Unwrap() error { return e.Err }
 
+// HostInstallerMissingError reports a foreign-architecture build with no
+// host-architecture installer binary to run natively.
+type HostInstallerMissingError struct {
+	HostArch   string
+	TargetArch string
+}
+
+// Error implements error.
+func (e *HostInstallerMissingError) Error() string {
+	return "diskimage: assemble: building a " + e.TargetArch + " image on a " + e.HostArch +
+		" host needs a " + e.HostArch + " platformctl-static to run the installer natively (set HostInstallerBinary / build it with `make build`)"
+}
+
 // LoopDeviceError reports a failure obtaining or naming the loop device the
 // image is attached to.
 type LoopDeviceError struct {

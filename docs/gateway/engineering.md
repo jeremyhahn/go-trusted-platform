@@ -367,8 +367,8 @@ none is supported — the routes are absolute under `/api/v1/gateway`.
 gateway node ID; `interval` defaults to 30s and rejects values below 1s
 (a unitless YAML `interval: 30` would otherwise decode as nanoseconds and
 hot-loop); `ca-file` anchors server verification, falling back to the
-trust resolver's internal-class pool when a `trust:` section is
-configured, then to the OS trust store. The reporter POSTs
+[platform anchor](../trust/architecture.md#21-platform-anchor) when
+`platform-ca-file:` is configured, then to the OS trust store. The reporter POSTs
 `gwstate.Snapshot` (assembled by `Gateway.Snapshot`,
 `pkg/sdn/gateway/snapshot.go`) to `/api/v1/gateway/telemetry` over mTLS.
 **The reported `gateway_id` is bound to the client certificate.** The

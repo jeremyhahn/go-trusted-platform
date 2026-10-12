@@ -32,9 +32,9 @@ The server publishes and serves CA bundles through multiple channels:
 
 Clients fetch and install the CA bundle before TLS connections:
 
-- **Trust Resolver** (`pkg/trust`): Map-based strategy dispatch keyed by
-  trust class (default / bmc / internal), each class carrying an ordered
-  strategy chain that falls through to the next strategy on failure
+- **Trust Resolver** (`pkg/trust`): resolves the `bootstrap` class to the
+  platform CA bundle through an ordered strategy chain; see
+  [`docs/trust/`](../trust/architecture.md)
 - **System Trust Installation**: Optional write to system certificate store (e.g., `/usr/local/share/ca-certificates/`)
 
 ## Trust Model

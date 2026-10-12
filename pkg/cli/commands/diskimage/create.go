@@ -264,6 +264,25 @@ func binariesDir(dir, sub string) (string, error) {
 
 // buildConfig turns create's flags into the ISO build configuration with
 // its target-architecture binaries.
+// hostInstallerBinary is the host-architecture platformctl-static that sits
+// beside the running platformctl; a foreign-architecture image build runs the
+// installer with it so LUKS and the filesystems are native (#802).
+func hostInstallerBinary() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", ErrBuildFailed{Reason: "cannot resolve the running binary: " + err.Error()}
+	}
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		self = resolved
+	}
+	path := filepath.Join(filepath.Dir(self), "platformctl-static")
+	if _, err := os.Stat(path); err != nil {
+		// Only a foreign-architecture build needs it; Create reports it then.
+		return "", nil
+	}
+	return path, nil
+}
+
 func buildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	cfg, err := flags.isoConfig(flags.target, flags.model)
 	if err != nil {
@@ -298,6 +317,9 @@ func runCreate(common *cli.CommonFlags, flags *createFlags) (err error) {
 	build.SizeMB = flags.sizeMB
 	build.Output = flags.output
 	build.BinariesDir = filepath.Dir(cfg.PlatformdBinary)
+	if build.HostInstallerBinary, err = hostInstallerBinary(); err != nil {
+		return err
+	}
 	result, err := pkgdiskimage.Create(context.Background(), build)
 	if err != nil {
 		return ErrBuildFailed{Reason: err.Error()}
