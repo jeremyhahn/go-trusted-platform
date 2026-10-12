@@ -315,3 +315,61 @@ type ErrRecordAttestCertFailed struct {
 func (e ErrRecordAttestCertFailed) Error() string {
 	return fmt.Sprintf("attestation certificate not recorded for device %d: %s", e.ID, e.Reason)
 }
+
+// ErrBootKeyUnreadable is returned when the --key file cannot be read or
+// holds no PEM private key that can sign.
+type ErrBootKeyUnreadable struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrBootKeyUnreadable) Error() string {
+	if e.Cause == nil {
+		return fmt.Sprintf("device boot: %s holds no PEM private key that can sign", e.Path)
+	}
+	return fmt.Sprintf("device boot: %s is not a usable private key: %v", e.Path, e.Cause)
+}
+
+func (e ErrBootKeyUnreadable) Unwrap() error {
+	return e.Cause
+}
+
+// ErrBootQuoteCommandFailed is returned when the --quote-command program
+// fails or prints no evidence. Stderr carries what the program reported.
+type ErrBootQuoteCommandFailed struct {
+	Command string
+	Stderr  string
+	Cause   error
+}
+
+func (e ErrBootQuoteCommandFailed) Error() string {
+	if e.Cause == nil {
+		return fmt.Sprintf("device boot: quote command %s printed no evidence", e.Command)
+	}
+	return fmt.Sprintf("device boot: quote command %s failed: %v: %s", e.Command, e.Cause, e.Stderr)
+}
+
+func (e ErrBootQuoteCommandFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrBootCertificateFailed is returned when the control plane refuses or
+// fails a boot-certificate request.
+type ErrBootCertificateFailed struct {
+	Identity string
+	Reason   string
+}
+
+func (e ErrBootCertificateFailed) Error() string {
+	return fmt.Sprintf("boot certificate not returned for %q: %s", e.Identity, e.Reason)
+}
+
+// ErrBootDeliveryFailed is returned when the control plane refuses or fails a
+// boot-delivery request.
+type ErrBootDeliveryFailed struct {
+	Reason string
+}
+
+func (e ErrBootDeliveryFailed) Error() string {
+	return fmt.Sprintf("boot delivery not returned: %s", e.Reason)
+}

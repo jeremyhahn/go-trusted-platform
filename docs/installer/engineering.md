@@ -612,10 +612,17 @@ ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 | `/boot/efi/tpm2/pcr-seal-values.txt` | `EFIPCRValues` | permanent |
 | `/boot/efi/tpm2/swtpm-state` | `EFISwtpmStateDir` | swtpm deployments only |
 | `/boot/efi/tpm2/ppi-clear-attempted` | — | loop guard for `force-clear-via-ppi` |
-| `/boot/efi/tpm2/network.conf` | — | written by `writeFirstbootNetworkConfig` at install; sourced by the dracut hook on first boot and by the firstboot service |
+| `/boot/efi/tpm2/network.conf` | — | written by `writeFirstbootNetworkConfig` at install; parsed (never sourced) by the dracut hook on first boot and by the firstboot service |
 
-**`network.conf` contract.** A `key=value` file meant to be sourced by
-POSIX sh. Keys: `INTERFACE`, `TYPE` (`static` or `dhcp`), and for static
+**`network.conf` contract.** A `KEY=value` file the ESP holds, which anyone with
+the disk can edit, so it is **parsed, never sourced**: `platformd_load_network_conf`
+(`pkg/disklessroot/network_conf_shell.go`, shared by the dracut hook and the
+firstboot service) splits each line at the first `=`, accepts only the keys
+below, strips one pair of surrounding double quotes, and accepts a value only
+if it is made of letters, digits and `. _ : / -` and spaces. Any other line (a
+command, `$(...)`, a `;`, a backtick, `${...}`, an unknown key) is reported on
+stderr, skipped and never executed or applied; the lines that pass still load.
+Keys: `INTERFACE`, `TYPE` (`static` or `dhcp`), and for static
 interfaces `IPV4_ADDRESS` (the **bare** address, never with a CIDR suffix),
 `IPV4_PREFIX` (0–32, derived by `firstbootStaticAddress` from the config's
 CIDR suffix, else its dotted netmask, else 24), `IPV4_NETMASK` (as configured,
@@ -629,6 +636,26 @@ The initramfs brings the address up as a serial-console diagnostic and to set
 the hostname the IAK/IDevID certificates are named after; nothing in
 `platform-initrd` needs the network, and ACME enrollment runs after
 `switch_root` in the firstboot service.
+
+`buildUKI` omits dracut's `network` and `network-legacy` modules, so the
+platformd module carries the network itself: `platformd_install_network`
+(`pkg/iso/dracut_network.go`, run from `module-setup.sh`'s `install()`)
+installs busybox `udhcpc`, the `default.script` that applies its lease
+(`/usr/share/udhcpc/default.script`, with `/etc/udhcpc/udhcpc.conf`, both from
+the busybox package of the root dracut runs in), and `ip`, `cut`, `chmod` and
+`mv`, which that script runs; `ping` and `hostname` are optional. `udhcpc`
+without its script obtains a lease and never puts the address or route on the
+interface. A diskless node fetches its root over that network, so when its
+embedded command line selects the diskless root a missing piece fails the
+dracut run, and the install, rather than producing a node that cannot boot; a
+disk install only warns.
+
+A diskless node's root is shared by every node of the media set, so its own
+`/etc/hostname`, `/etc/network/interfaces` and `/etc/resolv.conf` would
+override the per-node `network.conf`. After mounting the overlay, and before
+`switch_root`, `platformd_seed_node_settings` writes the node's hostname,
+interface (static or DHCP) and resolver into the tmpfs upper layer, replacing
+any symlink; the shared root is never written.
 
 Inside the container while it is mounted at `/mnt/installer`:
 `luks-key.bin` (the only path `KeyfileStrategy` looks at),

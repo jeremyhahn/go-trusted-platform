@@ -286,6 +286,43 @@ type ErrRecordAttestCertFailed struct {
 	Cause error
 }
 
+// ErrBootCertificateFailed is returned when a diskless node's boot-certificate
+// request fails or is refused by the control plane.
+type ErrBootCertificateFailed struct {
+	Identity string
+	Cause    error
+}
+
+func (e *ErrBootCertificateFailed) Error() string {
+	return fmt.Sprintf("failed to fetch boot certificate for %q: %v", e.Identity, e.Cause)
+}
+
+func (e *ErrBootCertificateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrBootDeliveryFailed is returned when a diskless node's boot-delivery
+// request fails or is refused by the control plane.
+type ErrBootDeliveryFailed struct {
+	Cause error
+}
+
+func (e *ErrBootDeliveryFailed) Error() string {
+	return fmt.Sprintf("failed to fetch boot delivery: %v", e.Cause)
+}
+
+func (e *ErrBootDeliveryFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrBootProofMissing is returned when a boot call is made without the
+// callback that computes its proof over the connection's channel binding.
+type ErrBootProofMissing struct{}
+
+func (e *ErrBootProofMissing) Error() string {
+	return "a boot call needs a proof callback; a proof cannot be computed before the connection exists"
+}
+
 func (e *ErrRecordAttestCertFailed) Error() string {
 	return fmt.Sprintf("failed to record attestation certificate for device %d: %v", e.ID, e.Cause)
 }

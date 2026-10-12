@@ -54,6 +54,17 @@ route is registered only when the daemon has a verifier wired, so a `404`
 means attestation is not configured on this node, never that it silently
 passed.
 
+## Diskless Boot Endpoints
+
+Machine-facing, called by a diskless node's platformd during startup — not an
+operator API, so REST only. Request/response shapes, refusal rules and status
+codes: [api.md §4.6](api.md#46-diskless-boot-delivery-690).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/device/boot/certificate` | IDevID key proof over the connection (no client certificate) | The IDevID chain recorded at enrollment; body `{"identity": "<name>", "signature": "<base64>"}`. Every unproven request gets one identical 403 |
+| POST | `/device/boot` | mTLS (IDevID) | Attested, channel-bound delivery of the node's IDevID chain, IAK certificate, CA bundle and profile; body `{"evidence": "<base64 DeviceQuoteEvidence>"}` |
+
 ## Profile Endpoints
 
 Profiles live under the singular `/device/` prefix and device records under

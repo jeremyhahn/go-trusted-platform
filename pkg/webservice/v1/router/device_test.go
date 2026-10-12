@@ -568,6 +568,7 @@ func TestRegisterMachineFacingRoutes_IsExactlyTheDeviceFacingSet(t *testing.T) {
 		nil,
 	)
 	require.NoError(t, err)
+	r.SetBootHandler(&stubBootHandler{})
 
 	assert.Equal(t, map[string]bool{
 		"GET /device/profile":                         true,
@@ -577,7 +578,57 @@ func TestRegisterMachineFacingRoutes_IsExactlyTheDeviceFacingSet(t *testing.T) {
 		"GET /provisioning/config/nonce":              true,
 		"POST /provisioning/sign":                     true,
 		"GET /provisioning/sessions/{sessionID}/poll": true,
+		"POST /device/boot/certificate":               true,
+		"POST /device/boot":                           true,
 	}, registeredDevicePaths(r.RegisterMachineFacingRoutes))
+}
+
+// stubBootHandler records which boot route reached it.
+type stubBootHandler struct {
+	certificate, delivery bool
+}
+
+func (h *stubBootHandler) HandleBootCertificate(http.ResponseWriter, *http.Request) {
+	h.certificate = true
+}
+
+func (h *stubBootHandler) HandleBootDelivery(http.ResponseWriter, *http.Request) {
+	h.delivery = true
+}
+
+// TestDeviceRouter_BootRoutes proves the delivery route sits behind the mTLS
+// verifier and the certificate route does not: a diskless node fetches the
+// chain because it has nothing to present yet, and proves its key in the
+// request instead.
+func TestDeviceRouter_BootRoutes(t *testing.T) {
+	cases := map[string]struct {
+		method, path string
+		wantMTLS     bool
+	}{
+		"certificate is reached without a client certificate": {http.MethodPost, "/device/boot/certificate", false},
+		"delivery is verified by the mTLS middleware":         {http.MethodPost, "/device/boot", true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			mockMTLS := &MockMTLSMiddleware{}
+			mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
+			boot := &stubBootHandler{}
+			deviceRouter := newTestDeviceRouter(t, mockMTLS, &MockDeviceRestHandler{}, &MockDeviceCRUDHandler{})
+			deviceRouter.SetBootHandler(boot)
+			muxRouter := mux.NewRouter()
+			deviceRouter.RegisterMachineFacingRoutes(muxRouter)
+
+			muxRouter.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(tc.method, tc.path, nil))
+
+			assert.Equal(t, tc.path == "/device/boot/certificate", boot.certificate)
+			assert.Equal(t, tc.path == "/device/boot", boot.delivery)
+			if tc.wantMTLS {
+				mockMTLS.AssertCalled(t, "Verify", mock.Anything, mock.Anything, mock.Anything)
+			} else {
+				mockMTLS.AssertNotCalled(t, "Verify", mock.Anything, mock.Anything, mock.Anything)
+			}
+		})
+	}
 }
 
 // TestRegisterRoutes_ExcludesEveryMachineFacingRoute is the assertion that
@@ -593,6 +644,7 @@ func TestRegisterRoutes_ExcludesEveryMachineFacingRoute(t *testing.T) {
 		nil,
 	)
 	require.NoError(t, err)
+	r.SetBootHandler(&stubBootHandler{})
 
 	operator := registeredDevicePaths(r.RegisterRoutes)
 	machine := registeredDevicePaths(r.RegisterMachineFacingRoutes)

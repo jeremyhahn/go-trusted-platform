@@ -161,15 +161,44 @@ func (c *Client) SetToken(token string) {
 
 // SendRequest sends a request and returns the response
 func (c *Client) SendRequest(ctx context.Context, opcode byte, payload []byte) (*Response, error) {
-	c.mu.RLock()
-	if c.closed {
-		c.mu.RUnlock()
-		return nil, ErrClientClosed
+	conn, token, err := c.current()
+	if err != nil {
+		return nil, err
 	}
-	conn := c.conn
-	token := c.token
-	c.mu.RUnlock()
+	return exchange(ctx, conn, token, opcode, payload)
+}
 
+// SendBoundRequest sends a request whose payload depends on the connection
+// that carries it: build receives the TLS state of the client's connection
+// and returns the payload, which is then sent on that same connection. The
+// client holds one QUIC connection for its lifetime, so the state build
+// sees is the state the server reads for this request.
+func (c *Client) SendBoundRequest(ctx context.Context, opcode byte, build func(state *tls.ConnectionState) ([]byte, error)) (*Response, error) {
+	conn, token, err := c.current()
+	if err != nil {
+		return nil, err
+	}
+	state := conn.ConnectionState().TLS
+	payload, err := build(&state)
+	if err != nil {
+		return nil, err
+	}
+	return exchange(ctx, conn, token, opcode, payload)
+}
+
+// current returns the client's connection and token, or ErrClientClosed.
+func (c *Client) current() (*quicgo.Conn, string, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closed {
+		return nil, "", ErrClientClosed
+	}
+	return c.conn, c.token, nil
+}
+
+// exchange sends one request on its own stream of conn and reads the
+// response, turning a non-OK status into an error.
+func exchange(ctx context.Context, conn *quicgo.Conn, token string, opcode byte, payload []byte) (*Response, error) {
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, err

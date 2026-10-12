@@ -312,6 +312,68 @@ func (c *Client) RecordAttestationCertificate(ctx context.Context, id uint64, op
 	return resp, nil
 }
 
+// BootProofFunc computes a diskless node's boot proof over binding, the
+// channel binding of the connection the call travels on
+// (provisioning.BootChannelNonce of that TLS 1.3 connection). The SDK calls
+// it after the connection exists, so a proof always matches the connection
+// that carries it; one computed in advance for another connection never
+// can.
+type BootProofFunc func(ctx context.Context, binding []byte) ([]byte, error)
+
+// BootCertificate asks the control plane for a diskless node's recorded
+// IDevID chain. sign proves the node holds the chain's key: it receives the
+// connection's channel binding and returns the signature
+// provisioning.SignBootCertificateProof makes over the identity and that
+// binding. The server refuses every unproven request alike, so the call
+// cannot enumerate devices. It needs no token and no client certificate,
+// and is refused with transport.ErrChannelBindingUnavailable on a transport
+// with no TLS connection (Unix socket, MCP, embedded).
+func (c *Client) BootCertificate(ctx context.Context, identity string, sign BootProofFunc) (*platformv1.BootCertificateResponse, error) {
+	if sign == nil {
+		return nil, &ErrBootCertificateFailed{Identity: identity, Cause: &ErrBootProofMissing{}}
+	}
+	req := &platformv1.BootCertificateRequest{Identity: identity}
+	bind := transport.WithChannelBinding(func(ctx context.Context, binding []byte) error {
+		signature, err := sign(ctx, binding)
+		if err != nil {
+			return err
+		}
+		req.Signature = signature
+		return nil
+	})
+	resp, err := c.grpc.BootCertificate(ctx, req, bind)
+	if err != nil {
+		return nil, &ErrBootCertificateFailed{Identity: identity, Cause: err}
+	}
+	return resp, nil
+}
+
+// BootDelivery presents a diskless node's attestation evidence and, once the
+// control plane has verified it against the connection's client certificate
+// and channel binding, returns the node's network profile and the CA bundle.
+// quote receives the connection's channel binding and returns the evidence
+// quoted over it. The node's identity is the client certificate, never a
+// request field.
+func (c *Client) BootDelivery(ctx context.Context, quote BootProofFunc) (*platformv1.BootDeliveryResponse, error) {
+	if quote == nil {
+		return nil, &ErrBootDeliveryFailed{Cause: &ErrBootProofMissing{}}
+	}
+	req := &platformv1.BootDeliveryRequest{}
+	bind := transport.WithChannelBinding(func(ctx context.Context, binding []byte) error {
+		evidence, err := quote(ctx, binding)
+		if err != nil {
+			return err
+		}
+		req.Evidence = evidence
+		return nil
+	})
+	resp, err := c.grpc.BootDelivery(ctx, req, bind)
+	if err != nil {
+		return nil, &ErrBootDeliveryFailed{Cause: err}
+	}
+	return resp, nil
+}
+
 // AssignProfile binds a profile to a specific device identity by EK serial
 // and/or MAC address, optionally prestaging the device's PEM-encoded EK
 // certificate (source-agnostic: swtpm-backed vTPM or physical hardware

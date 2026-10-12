@@ -283,7 +283,7 @@ type TSIGKey struct {
 	// to hmac-sha256 when empty.
 	Algorithm string `yaml:"algorithm" json:"algorithm" mapstructure:"algorithm"`
 	// Secret is the base64-encoded shared HMAC secret.
-	Secret string `yaml:"secret" json:"secret" mapstructure:"secret"`
+	Secret string `yaml:"secret" json:"secret" mapstructure:"secret" secret:"true"`
 }
 
 // DNSSECConfig configures DNSSEC zone signing.

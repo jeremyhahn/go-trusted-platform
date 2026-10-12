@@ -22,7 +22,7 @@ func TestCommandTree(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names[sub.Name()] = sub.Hidden
 	}
-	for _, name := range []string{"assemble", "netboot-initfs"} {
+	for _, name := range []string{"assemble", "netboot-initfs", "diskless-root"} {
 		if hidden, ok := names[name]; !ok || !hidden {
 			t.Errorf("%s missing or not hidden: %v", name, names)
 		}

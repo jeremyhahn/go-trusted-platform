@@ -90,6 +90,7 @@ type testHandlerRegistry struct {
 	webauthn       webauthn.RestHandler
 	mtls           middleware.MTLSMiddleware
 	deviceHandler  device.RestHandler
+	bootHandler    device.BootHandler
 	acmeService    trustedca.ACMERestServicer
 	sdnService     platformv1.SDNServiceServer
 	tpm            xkmssdk.TrustedPlatformModule
@@ -146,6 +147,10 @@ func (r *testHandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 
 func (r *testHandlerRegistry) DeviceRestHandler() device.RestHandler {
 	return r.deviceHandler
+}
+
+func (r *testHandlerRegistry) DeviceBootHandler() device.BootHandler {
+	return r.bootHandler
 }
 
 func (r *testHandlerRegistry) IAMClients() (restiam.IAMClient, restiam.PEPClient) {

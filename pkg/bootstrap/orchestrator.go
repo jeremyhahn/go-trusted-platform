@@ -1615,6 +1615,7 @@ func toDiscoveredNodeInfos(nodes []DiscoveredNode) []container.DiscoveredNodeInf
 			Hostname:     nodes[i].Hostname,
 			Architecture: nodes[i].IPXEArchitecture(),
 			MediaSet:     nodes[i].MediaSet(),
+			BootModel:    nodes[i].EffectiveBootModel(),
 		}
 	}
 	return infos

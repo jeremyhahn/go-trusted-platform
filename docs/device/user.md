@@ -339,6 +339,12 @@ when the request context carries no switch name and port. "Activated" means the
 device record and SDN policy were updated; it does not by itself mean a
 physical port changed VLAN. See [`docs/switch/`](../switch/).
 
+**`device boot certificate` or `device boot delivery` fails at once with "channel binding unavailable" or "diskless boot needs a TLS 1.3 connection".**
+Unix sockets and MCP are not valid channels for boot proofs. The proof is bound
+to the TLS session of the connection that carries it, and neither transport has
+one, so the call is refused before anything is sent. Use `--protocol grpc`,
+`quic` or `rest` ([cli.md](cli.md) §2.7).
+
 **An MCP client says `unknown tool: device_create`.**
 That tool is advertised and has no implementation. Use `device_register`,
 `device_get`, `device_list`, `device_update`, `device_delete` — the older

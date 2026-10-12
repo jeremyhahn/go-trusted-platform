@@ -452,7 +452,11 @@ func (v1Router *Router) deviceRoutes() {
 		v1Router.restHandlerRegistry.DeviceServiceServer(),
 	)
 
-	if deviceHandler == nil && configDeliveryHandler == nil && templateHandler == nil && crudHandler == nil && attestHandler == nil {
+	// A diskless node's per-boot delivery (#690) runs the same verifier as
+	// attestHandler, behind the node's IDevID instead of an operator role.
+	bootHandler := v1Router.restHandlerRegistry.DeviceBootHandler()
+
+	if deviceHandler == nil && configDeliveryHandler == nil && templateHandler == nil && crudHandler == nil && attestHandler == nil && bootHandler == nil {
 		v1Router.logger.Debug("Device, config delivery, template, and CRUD handlers are nil - device routes not registered")
 		return
 	}
@@ -472,10 +476,11 @@ func (v1Router *Router) deviceRoutes() {
 		return
 	}
 	deviceRouter.SetAttestCertHandler(attestCertHandler)
+	deviceRouter.SetBootHandler(bootHandler)
 	// Split by principal. Device and profile CRUD, templates, profile
 	// assignment and the provisioning SESSION surface are operator work and
 	// take the admin gate. The machine-facing half — the mTLS-verified
-	// /device/{profile,activate,heartbeat} and the EAB-authenticated
+	// /device/{profile,activate,heartbeat,boot} and the EAB-authenticated
 	// /provisioning/{config,config/nonce,sign} plus the client's session
 	// poll — stays off it: a machine at boot has no operator session, and
 	// several of those routes run before it holds any platform credential.

@@ -33,9 +33,10 @@ var (
 	// ErrNilDevice is returned when a write is handed no device at all.
 	ErrNilDevice = &MessageError{Msg: "device is required"}
 
-	// ErrHeartbeatIdentityRequired is returned when RecordHeartbeat is
-	// called without the certificate-derived identity.
-	ErrHeartbeatIdentityRequired = &MessageError{Msg: "heartbeat identity is required"}
+	// ErrIdentityRequired is returned when an identity lookup
+	// (RecordHeartbeat, ResolveIdentity) is called without the
+	// certificate-derived identity.
+	ErrIdentityRequired = &MessageError{Msg: "device identity is required"}
 )
 
 // writeLockStripes sizes the striped write-lock table. Device write
@@ -237,6 +238,9 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 	if device.AttestCert == "" {
 		device.AttestCert = existing.AttestCert
 	}
+	if device.IDevIDCert == "" {
+		device.IDevIDCert = existing.IDevIDCert
+	}
 	if device.SigningPub == "" {
 		device.SigningPub = existing.SigningPub
 	}
@@ -340,40 +344,51 @@ func isLookupMiss(err error) bool {
 	return errors.As(err, &byID)
 }
 
-// RecordHeartbeat stamps the device's liveness timestamp. The identity
-// argument is the value extracted from the caller's verified mTLS
-// client certificate: it is matched against the device serial first and
-// the enrollment hostname (the IDevID common name) second, because
-// enrolled nodes authenticate with certificates naming their FQDN
-// rather than the hardware serial. Only LastHeartbeatAt and UpdatedAt
-// change — a heartbeat never moves the lifecycle state machine.
-func (s *Service) RecordHeartbeat(ctx context.Context, identity string, peerAddr string) (*entities.Device, error) {
+// ResolveIdentity finds the device a verified certificate identity names.
+// The identity is matched against the device serial first and the
+// enrollment hostname (the IDevID common name) second, because enrolled
+// nodes authenticate with certificates naming their FQDN rather than the
+// hardware serial. A miss is an *IdentityNotFoundError; a storage fault is
+// never reported as one.
+func (s *Service) ResolveIdentity(ctx context.Context, identity string) (*entities.Device, error) {
 	if identity == "" {
-		return nil, ErrHeartbeatIdentityRequired
+		return nil, ErrIdentityRequired
 	}
 	resolved, serialErr := s.deviceDAO.FindBySerial(ctx, identity)
-	if serialErr != nil || resolved == nil || resolved.Serial != identity {
-		// A storage fault during the serial lookup must surface as a
-		// server error, never masquerade as an unknown device.
-		if serialErr != nil && !isLookupMiss(serialErr) {
-			return nil, &WrappedError{Msg: "heartbeat device lookup failed", Err: serialErr}
+	if serialErr == nil && resolved != nil && resolved.Serial == identity {
+		return resolved, nil
+	}
+	// A storage fault during the serial lookup must surface as a server
+	// error, never masquerade as an unknown device.
+	if serialErr != nil && !isLookupMiss(serialErr) {
+		return nil, &WrappedError{Msg: "device identity lookup failed", Err: serialErr}
+	}
+	resolved, hostErr := s.deviceDAO.FindByHostname(ctx, identity)
+	if hostErr != nil {
+		if isLookupMiss(hostErr) {
+			return nil, &IdentityNotFoundError{Identity: identity, Cause: hostErr}
 		}
-		var hostErr error
-		resolved, hostErr = s.deviceDAO.FindByHostname(ctx, identity)
-		if hostErr != nil {
-			if isLookupMiss(hostErr) {
-				return nil, &HeartbeatDeviceNotFoundError{Identity: identity, Cause: hostErr}
-			}
-			return nil, &WrappedError{Msg: "heartbeat device lookup failed", Err: hostErr}
-		}
-		// Post-condition, independent of any DAO/index behavior: the
-		// record a heartbeat stamps MUST carry the authenticated
-		// identity — stamping a near-miss would report another node
-		// alive.
-		if resolved == nil || resolved.Hostname != identity {
-			return nil, &HeartbeatDeviceNotFoundError{Identity: identity,
-				Cause: &MessageError{Msg: "resolved device does not match heartbeat identity"}}
-		}
+		return nil, &WrappedError{Msg: "device identity lookup failed", Err: hostErr}
+	}
+	// Post-condition, independent of any DAO/index behavior: the record
+	// returned MUST carry the authenticated identity — answering with a
+	// near-miss would act on another node.
+	if resolved == nil || resolved.Hostname != identity {
+		return nil, &IdentityNotFoundError{Identity: identity,
+			Cause: &MessageError{Msg: "resolved device does not match identity"}}
+	}
+	return resolved, nil
+}
+
+// RecordHeartbeat stamps the device's liveness timestamp. The identity
+// argument is the value extracted from the caller's verified mTLS
+// client certificate, resolved by ResolveIdentity. Only LastHeartbeatAt
+// and UpdatedAt change — a heartbeat never moves the lifecycle state
+// machine.
+func (s *Service) RecordHeartbeat(ctx context.Context, identity string, peerAddr string) (*entities.Device, error) {
+	resolved, err := s.ResolveIdentity(ctx, identity)
+	if err != nil {
+		return nil, err
 	}
 	// Serialize against every other service-layer device write and
 	// RE-READ under the lock: stamping the copy resolved above would
@@ -390,7 +405,7 @@ func (s *Service) RecordHeartbeat(ctx context.Context, identity string, peerAddr
 	// renamed the record between lookup and lock, and the post-condition
 	// is on the record actually stamped, not the one first resolved.
 	if device.Serial != identity && device.Hostname != identity {
-		return nil, &HeartbeatDeviceNotFoundError{Identity: identity,
+		return nil, &IdentityNotFoundError{Identity: identity,
 			Cause: &MessageError{Msg: "device no longer carries the heartbeat identity"}}
 	}
 	now := time.Now().UTC()

@@ -27,6 +27,14 @@ The Device API provides management operations for device identity and profile ma
 | ListDevices | List devices with pagination |
 | FindBySerial | Find device by serial number |
 | AttestDevice | Perform TPM-based attestation |
+| BootCertificate | A diskless node's recorded IDevID chain, for a channel-bound proof of the key |
+| BootDelivery | A diskless node's profile and CA bundle, for channel-bound attestation evidence |
+
+The two boot operations are machine-facing: a diskless node's platformd
+recovers its identity certificates through them each boot. They exist on every
+transport and enforce the same checks through one service; see
+[api.md §4.6](api.md#46-diskless-boot-delivery-690) and
+[api-reference-rest.md](api-reference-rest.md#diskless-boot-endpoints).
 
 ### Profile Operations
 

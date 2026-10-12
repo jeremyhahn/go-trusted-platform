@@ -325,6 +325,7 @@ underlying DAO error — including `quicbaas.ErrNotFoundByIndex`.
 | `ViolationEvent.Validate` | Unrecognised severity or source ⇒ error, never the lenient branch. |
 | `Handler.Activate` | A switch-move validation error ⇒ HTTP 500 before the SDN policy step; a physical-commit error after enforcement ⇒ HTTP 500 with the port fail-closed on the provisioning VLAN. |
 | `Handler.GetProfile` / `Handler.Activate` | Missing serial in the mTLS-populated context ⇒ 400 `ErrMissingSerial`. The serial is never taken from the request body. |
+| Diskless boot (`BootCertificate` / `BootDelivery`) over Unix or MCP | Not a valid channel for boot proofs: neither carries TLS, so there is no exporter to bind the proof to. The SDK refuses with `*transport.ErrChannelBindingUnavailable` before sending; the daemon answers `ErrBootChannelRequired` without calling the boot service. No weaker binding is substituted ([architecture.md §4.5](architecture.md), [api.md §4.6](api.md#46-diskless-boot-delivery-690)). |
 
 **One path is deliberately open:** `prepareSwitchTransition` returns a nil
 move when no switch service is configured or when the context carries no
@@ -447,8 +448,9 @@ exercise the derivation logic without a live daemon."*
   contains `password`, `secret`, `token`, `private` and similar substrings,
   substituting `••••`. `BMCConfig.Password` is additionally tagged
   `secret:"true"`. Note that `pkg/bootstrap.SecretStructTag` (the constant
-  naming that tag) has **no consumer in non-test code** — the tag is currently
-  declarative. Do not assume a resolver walks it.
+  naming that tag) has one consumer, `bootstrap.PlaintextSecretFields`, which
+  the diskless image build uses to refuse plaintext secrets in the installed
+  platform config. No resolver or redactor walks it.
 - **Never log**: `DeviceProfile.BMC.Password`, and the delivered
   `DeviceProfile.Config` (it is a full platform configuration and may embed
   secret references).

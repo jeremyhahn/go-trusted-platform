@@ -125,6 +125,16 @@ var deviceServerRoutes = map[protoreflect.Name]deviceServerRoute{
 		req:      &platformv1.ActivateDeviceRequest{},
 		wire:     "POST /api/v1/device/activate-json",
 	},
+	"BootCertificate": {
+		template: "POST /api/v1/device/boot/certificate",
+		req:      &platformv1.BootCertificateRequest{},
+		wire:     "POST /api/v1/device/boot/certificate",
+	},
+	"BootDelivery": {
+		template: "POST /api/v1/device/boot",
+		req:      &platformv1.BootDeliveryRequest{},
+		wire:     "POST /api/v1/device/boot",
+	},
 	"AttestDevice": {
 		template: "POST /api/v1/devices/{id}/attest",
 		req:      &platformv1.AttestDeviceRequest{DeviceId: "dev-1"},

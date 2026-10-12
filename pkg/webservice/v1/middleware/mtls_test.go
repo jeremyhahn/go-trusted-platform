@@ -430,7 +430,7 @@ func TestExtractSerialFromCert(t *testing.T) {
 			DNSNames: []string{"device-dns.local"},
 		}
 
-		result := extractSerialFromCert(cert)
+		result := DeviceSerialFromCert(cert)
 
 		assert.Equal(t, "device-cn", result)
 	})
@@ -444,7 +444,7 @@ func TestExtractSerialFromCert(t *testing.T) {
 			DNSNames: []string{"device-dns.local", "device-dns2.local"},
 		}
 
-		result := extractSerialFromCert(cert)
+		result := DeviceSerialFromCert(cert)
 
 		assert.Equal(t, "device-dns.local", result)
 	})
@@ -458,7 +458,7 @@ func TestExtractSerialFromCert(t *testing.T) {
 			DNSNames: nil,
 		}
 
-		result := extractSerialFromCert(cert)
+		result := DeviceSerialFromCert(cert)
 
 		assert.Equal(t, "device-serial", result)
 	})
@@ -472,7 +472,7 @@ func TestExtractSerialFromCert(t *testing.T) {
 			DNSNames: nil,
 		}
 
-		result := extractSerialFromCert(cert)
+		result := DeviceSerialFromCert(cert)
 
 		assert.Equal(t, "", result)
 	})
@@ -486,7 +486,7 @@ func TestExtractSerialFromCert(t *testing.T) {
 			DNSNames: []string{},
 		}
 
-		result := extractSerialFromCert(cert)
+		result := DeviceSerialFromCert(cert)
 
 		assert.Equal(t, "", result)
 	})

@@ -311,6 +311,50 @@ Two details the legacy documentation had wrong and that matter operationally:
 partition named by `device.DatastorePartition` (`"devices"`), sharded by
 `Config.ShardID`. Nothing in this feature writes to the local filesystem.
 
+### 4.5 Diskless boot: a proof is made on the connection that carries it (#690)
+
+A diskless node proves two things on every boot ([api.md §4.6](api.md#46-diskless-boot-delivery-690)):
+that it holds its IDevID key (`BootCertificate`) and that its TPM quote is
+fresh (`BootDelivery`). Both proofs cover the TLS 1.3 exporter of the
+connection they travel on (`provisioning.BootChannelNonce`), so a proof
+relayed onto another connection fails. The derivation itself — label, size,
+the TLS 1.3 requirement — is defined once, in the SDK
+(`transport.ExportChannelBinding`), and `pkg/provisioning` delegates to it, so
+the client and the daemon cannot disagree and the SDK never imports platform
+packages (gatewayd links the SDK; [docs/gateway/](../gateway/)). That exporter exists only once the
+connection is open, so the proof cannot be an input to the call. The SDK takes
+a callback, `device.BootProofFunc`. Each transport connects, reads its own
+connection's exporter, runs the callback, and sends the result on that same
+connection. Transport-level plumbing is one SDK primitive,
+`transport.WithChannelBinding`: a call option that carries the callback and
+that each adapter honours or refuses.
+
+| Transport | How the binding is the carrying connection's | Without a channel |
+|---|---|---|
+| REST | The bound call dials a dedicated TLS 1.3 connection (HTTP/1.1, no keep-alive), reads its exporter, and sends exactly one request on it. A second dial of that connection is refused (`ErrBoundConnectionReused`), so the request cannot leave on a pooled connection. | Not https: the SDK refuses. The daemon answers `400`. |
+| gRPC (TCP) | The adapter's credentials record each completed handshake; the binding interceptor waits until the client connection is `Ready` and binds to that handshake. If gRPC reconnects between binding and send, the daemon sees a different exporter and refuses the proof — the race fails closed (`PermissionDenied`), never open. | The daemon answers `FailedPrecondition`. |
+| QUIC | One QUIC connection per client: the bound request is sent on it after its exporter is read. | The daemon answers `StatusInvalidRequest`. |
+| Unix socket | No TLS. The SDK refuses with `*transport.ErrChannelBindingUnavailable` before anything is sent. | The daemon recognises the `unix` peer and answers `FailedPrecondition`. |
+| MCP | Served over plain HTTP or stdio, so there is no TLS. The SDK refuses the same way. | Both MCP service providers answer `ErrBootChannelRequired` without calling the boot service. |
+| Embedded | In-process, so there is no TLS. The SDK refuses the same way. | — |
+
+On the daemon, every transport derives the nonce with
+`restdevice.BootChannel(state, transport)` before it calls `BootService`. A
+connection with no TLS 1.3 exporter is refused there with the typed
+`ErrBootChannelRequired{Transport}`, so **an empty nonce never reaches
+`BootService`**. `BootService` then checks the certificate proof against that
+nonce and requires the quote's nonce to equal it. A proof made for another
+connection is the same `403` / `PermissionDenied` as any proof that does not
+verify.
+
+Rejected alternatives:
+
+| Alternative | Why it was rejected |
+|---|---|
+| **Accept proof bytes from the caller** (`--signature`, `--evidence`) | Bytes computed before the call cannot cover the exporter of a connection that did not exist yet, so the daemon could only refuse them. The flags were removed; the CLI takes a key (`--key`) and a quote program (`--quote-command`) and the transport runs them once connected. |
+| **A nonce endpoint** | It adds a round trip, and the nonce still has to be tied to one connection; the exporter already is, with no server state to keep. |
+| **Serving boot over Unix or MCP with some other nonce** | Neither transport has a TLS session, so there is nothing to bind to. Refusing explicitly, with a typed error on both sides, is preferable to a weaker binding that looks equivalent. |
+
 ## 5. Trust boundaries
 
 **Device identity is a trust boundary.** Specifically:

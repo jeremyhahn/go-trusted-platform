@@ -28,8 +28,9 @@ var ErrUnknownContainer = errors.New("diskimagetest: no such container")
 // records every invocation and behaves like a daemon on its own filesystem:
 // every container has a private root that `cp` fills and drains. Starting it
 // produces what the builder container would: the assembled image for
-// `diskimage assemble --output <path>`, and the initramfs and modloop for
-// `diskimage netboot-initfs --output <dir>`.
+// `diskimage assemble --output <path>`, the initramfs and modloop for
+// `diskimage netboot-initfs --output <dir>`, and the squashfs, hash tree and
+// root hash for `diskimage diskless-root --output <dir>`.
 type Runner struct {
 	Calls [][]string
 	// Fail names a runtime subcommand (build, create, cp, start) that fails.
@@ -142,6 +143,19 @@ func (r *Runner) start(name string) error {
 			return err
 		}
 		return os.WriteFile(filepath.Join(output, "modloop-"+flavour), []byte("modloop"), 0o644)
+	case contains(args, "diskless-root"):
+		if err := os.MkdirAll(output, 0o755); err != nil {
+			return err
+		}
+		// A squashfs is padded to 4 KiB blocks; the manifest refuses less.
+		if err := os.WriteFile(filepath.Join(output, "rootfs.squashfs"), make([]byte, 4096), 0o644); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(output, "rootfs.verity"), []byte("verity"), 0o644); err != nil {
+			return err
+		}
+		hash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+		return os.WriteFile(filepath.Join(output, "rootfs.roothash"), []byte(hash), 0o644)
 	}
 	return nil
 }

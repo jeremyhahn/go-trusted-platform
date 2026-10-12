@@ -260,8 +260,12 @@ operation, whatever its `scp`. `HandleRequest` now runs
 
 1. **Pre-auth list.** `OpHealth`, `OpLiveness`, `OpReadiness` (probes run
    before a caller holds a token) and `OpIAMAuthenticate` (the token
-   exchange itself) pass with no credential. Each entry in `preAuthOpcodes`
-   carries its reason; nothing else is exempt.
+   exchange itself) pass with no credential, as do the diskless boot
+   sub-operations `DeviceSubBootCertificate` and `DeviceSubBootDelivery`
+   under `OpProvisioningCategory` (the node holds no token; the boot service
+   authenticates it against its own TLS channel). Each entry in
+   `preAuthOpcodes` and `preAuthSubOpcodes` carries its reason; nothing else
+   is exempt.
 2. **Authentication** of the token (`StatusUnauthorized` when missing or
    invalid).
 3. **Classification** by `LookupOperationPermission`: the opcode, or for a

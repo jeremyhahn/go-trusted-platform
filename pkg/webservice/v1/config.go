@@ -176,11 +176,11 @@ type PlatformTokenConfig struct {
 
 	// IntrospectionClientSecret is the RFC 7662 client_secret sent as HTTP
 	// Basic credentials on the introspection request.
-	IntrospectionClientSecret string `yaml:"introspection-client-secret" json:"introspection_client_secret" mapstructure:"introspection-client-secret"`
+	IntrospectionClientSecret string `yaml:"introspection-client-secret" json:"introspection_client_secret" mapstructure:"introspection-client-secret" secret:"true"`
 
 	// IntrospectionBearerToken, when set, is sent as a Bearer Authorization
 	// header on the introspection request instead of Basic credentials.
-	IntrospectionBearerToken string `yaml:"introspection-bearer-token" json:"introspection_bearer_token" mapstructure:"introspection-bearer-token"`
+	IntrospectionBearerToken string `yaml:"introspection-bearer-token" json:"introspection_bearer_token" mapstructure:"introspection-bearer-token" secret:"true"`
 
 	// AuthzMode selects how tokens are authorized: "offline" (signed scopes +
 	// expiry only), "online" (uncached liveness every request), or "hybrid"

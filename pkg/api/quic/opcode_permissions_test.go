@@ -116,6 +116,27 @@ func TestLookupOperationPermission_PreAuth(t *testing.T) {
 	}
 }
 
+func TestLookupOperationPermission_PreAuthSubOpcodes(t *testing.T) {
+	for _, sub := range []byte{quicwire.DeviceSubBootCertificate, quicwire.DeviceSubBootDelivery} {
+		perm, preAuth, err := LookupOperationPermission(quicwire.OpProvisioningCategory, []byte{sub, 0xAA})
+		if err != nil {
+			t.Fatalf("sub-opcode 0x%02X: unexpected error %v", sub, err)
+		}
+		if !preAuth {
+			t.Fatalf("sub-opcode 0x%02X: expected pre-auth", sub)
+		}
+		if perm != (OpcodePermission{}) {
+			t.Fatalf("sub-opcode 0x%02X: pre-auth entry carries a permission %+v", sub, perm)
+		}
+	}
+
+	// A sibling sub-opcode of the same category still needs its permission.
+	_, preAuth, err := LookupOperationPermission(quicwire.OpProvisioningCategory, []byte{quicwire.DeviceSubRecordAttestCert})
+	if err != nil || preAuth {
+		t.Fatalf("record attest cert: preAuth=%v err=%v, want a classified, authenticated operation", preAuth, err)
+	}
+}
+
 func TestLookupOperationPermission_UnclassifiedIsDenied(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -206,6 +227,20 @@ func TestOperationCatalog_EntriesAreWellFormed(t *testing.T) {
 		}
 		if _, ok := categoryPermissions[opcode]; ok {
 			t.Errorf("pre-auth opcode %s is a category", hexByte(opcode))
+		}
+	}
+	for category, subs := range preAuthSubOpcodes {
+		classified, ok := categoryPermissions[category]
+		if !ok {
+			t.Errorf("pre-auth sub-opcodes under %s, which is not a category", hexByte(category))
+		}
+		for sub, reason := range subs {
+			if reason == "" {
+				t.Errorf("pre-auth sub-opcode %s/%s carries no reason", hexByte(category), hexByte(sub))
+			}
+			if _, ok := classified[sub]; ok {
+				t.Errorf("pre-auth sub-opcode %s/%s also has a permission that is never enforced", hexByte(category), hexByte(sub))
+			}
 		}
 	}
 }

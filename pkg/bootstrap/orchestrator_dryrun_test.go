@@ -352,6 +352,23 @@ func TestOrchestrator_DryRun_ManualNodes(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_DryRun_ReportsDisklessBootModel(t *testing.T) {
+	o := &Orchestrator{}
+	node := &NodeConfig{
+		Hostname:  "w-diskless",
+		Role:      RoleWorker,
+		BootModel: BootModelDiskless,
+		MACs:      []string{"aa:bb:cc:dd:ee:10"},
+	}
+	result := o.dryRunSingleNode(context.Background(), node)
+	if result.BootModel != BootModelDiskless {
+		t.Fatalf("boot model = %q, want %q", result.BootModel, BootModelDiskless)
+	}
+	if result.Status != dryRunStatusManual {
+		t.Fatalf("status = %q", result.Status)
+	}
+}
+
 func TestOrchestrator_DryRun_NoNodes(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer:    DeployerConfig{NetbootMediaDir: fleetMedia, Host: "deploy-host"},

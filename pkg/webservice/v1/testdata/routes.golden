@@ -342,6 +342,8 @@ POST /api/v1/compute/vms/{id}/start
 POST /api/v1/compute/vms/{id}/stop
 POST /api/v1/device/activate
 POST /api/v1/device/activate-json
+POST /api/v1/device/boot
+POST /api/v1/device/boot/certificate
 POST /api/v1/device/heartbeat
 POST /api/v1/device/profiles
 POST /api/v1/device/profiles/match

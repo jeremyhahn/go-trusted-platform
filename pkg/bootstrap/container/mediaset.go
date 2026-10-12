@@ -24,6 +24,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 )
 
@@ -65,6 +66,12 @@ type MediaSet struct {
 	// Default makes the set its architecture's choice for a machine that
 	// is not in the manifest, or whose entry names no set.
 	Default bool `yaml:"default"`
+	// Diskless marks a set that also serves the diskless root: the squashfs
+	// and its dm-verity hash tree in the set's directory under their
+	// disklessroot names, and the signed manifest in its install media. Only
+	// a node whose boot_model is diskless boots it diskless; the root hash is
+	// in the signed manifest alone, never here.
+	Diskless bool `yaml:"diskless,omitempty"`
 
 	// dir is the set's directory in the container; urlPath its path on
 	// the HTTP server (under /data); payload its payload list, verified
@@ -130,10 +137,17 @@ func (m *MediaSet) validate(dirName string) error {
 }
 
 // checkFiles verifies the set's kernel, initrd and modloop are in its
-// directory, and loads its payload list.
+// directory — and a diskless set's squashfs and hash tree — and loads its
+// payload list.
 func (m *MediaSet) checkFiles() error {
 	descriptor := filepath.Join(m.dir, MediaSetDescriptor)
-	for _, f := range []struct{ field, file string }{{"kernel", m.Kernel}, {"initrd", m.Initrd}, {"modloop", m.Modloop}} {
+	files := []struct{ field, file string }{{"kernel", m.Kernel}, {"initrd", m.Initrd}, {"modloop", m.Modloop}}
+	if m.Diskless {
+		files = append(files,
+			struct{ field, file string }{"rootfs", disklessroot.RootFSFile},
+			struct{ field, file string }{"verity", disklessroot.VerityFile})
+	}
+	for _, f := range files {
 		if f.file == "" || strings.ContainsAny(f.file, "/\\") {
 			return ErrMediaSet{Path: descriptor, Reason: fmt.Sprintf("%s must be a file name in the set's directory, got %q", f.field, f.file)}
 		}
@@ -161,8 +175,18 @@ func (m *MediaSet) loadPayload() error {
 	if err := VerifyPayload(m.dir, entries); err != nil {
 		return ErrMediaSet{Path: listPath, Reason: "does not match the set", Err: err}
 	}
-	if !slices.ContainsFunc(entries, func(e PayloadEntry) bool { return e.Dest == InstallerEntryPoint }) {
-		return ErrMediaSet{Path: listPath, Reason: "provides no " + InstallerEntryPoint + ", which the installer runs"}
+	required := []string{InstallerEntryPoint}
+	if m.Diskless {
+		// The installer reads the diskless root's signed manifest from its
+		// media: a diskless set without it could only boot unverified.
+		required = append(required,
+			path.Join(disklessroot.Dir, disklessroot.ManifestFile),
+			path.Join(disklessroot.Dir, disklessroot.SignatureFile))
+	}
+	for _, dest := range required {
+		if !slices.ContainsFunc(entries, func(e PayloadEntry) bool { return e.Dest == dest }) {
+			return ErrMediaSet{Path: listPath, Reason: "provides no " + dest + ", which the installer needs"}
+		}
 	}
 	m.payload = entries
 	return nil

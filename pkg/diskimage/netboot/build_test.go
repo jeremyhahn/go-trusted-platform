@@ -24,6 +24,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/diskimagetest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/uboot"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/iso/isotest"
@@ -147,6 +148,125 @@ func TestBuild_Set(t *testing.T) {
 	require.Len(t, sets, 1)
 	assert.Equal(t, ARM64VirtSet.KernelArgs, sets[0].KernelArgs)
 	assert.True(t, sets[0].Default)
+	assert.False(t, sets[0].Diskless, "the diskless root is opt-in")
+	assert.NoFileExists(t, filepath.Join(set, disklessroot.RootFSFile))
+	assert.NoDirExists(t, filepath.Join(set, CDROMDir, disklessroot.Dir))
+}
+
+// kmsSecureBootConfig turns cfg into a Secure Boot build whose keys are held
+// by a test KMS, and returns the DB certificate.
+func kmsSecureBootConfig(t *testing.T, cfg *Config) *x509.Certificate {
+	t.Helper()
+	dbKey, db := secureboottest.KeyPair(t, "DB")
+	_, pk := secureboottest.KeyPair(t, "PK")
+	_, kek := secureboottest.KeyPair(t, "KEK")
+	config := filepath.Join(t.TempDir(), "platform.yaml")
+	require.NoError(t, os.WriteFile(config, []byte(`os:
+  hostname: node
+seal-pcrs: [0, 7, 9]
+secure-boot:
+  enabled: true
+  resign-mode: remote
+  pk: {key-uri: "kms://sb/pk"}
+  kek: {key-uri: "kms://sb/kek"}
+  db: {key-uri: "kms://sb/db"}
+`), 0o644))
+	cfg.Build.ISO.PlatformConfigFile = config
+	cfg.Build.ISO.SecureBoot = true
+	cfg.Build.ISO.GenerateKeys = false
+	cfg.Build.KMSClients = func() (*iso.KMSClients, error) {
+		return &iso.KMSClients{KMS: &secureboottest.KMS{Key: dbKey}, CA: &secureboottest.CA{Certs: map[string]*x509.Certificate{"sb/pk": pk, "sb/kek": kek, "sb/db": db}}}, nil
+	}
+	return db
+}
+
+// TestBuild_DisklessSet builds the virt set with the diskless root: the
+// artifacts beside the kernel, the manifest signed by the DB key in the
+// install media, where the payload list carries it to the installer.
+func TestBuild_DisklessSet(t *testing.T) {
+	cfg := buildConfig(t, "")
+	db := kmsSecureBootConfig(t, cfg)
+	cfg.Diskless, cfg.SourceDateEpoch, cfg.Version = true, 1700000000, "1.0.0-test"
+
+	res, err := Build(context.Background(), cfg)
+	require.NoError(t, err)
+	set := filepath.Join(res.Dir, container.NetbootMediaSetsDir, container.MediaSetARM64Virt)
+	for _, rel := range []string{disklessroot.RootFSFile, disklessroot.VerityFile} {
+		assert.FileExists(t, filepath.Join(set, rel))
+	}
+	assert.NoFileExists(t, filepath.Join(set, diskimage.DisklessRootHashFile), "the root hash is published only signed")
+	manifest, err := disklessroot.ReadSigned(filepath.Join(set, CDROMDir, disklessroot.Dir), db)
+	require.NoError(t, err, "the manifest verifies against the DB certificate")
+	assert.Equal(t, disklessroot.DeriveSalt(1700000000, "1.0.0-test"), manifest.Salt)
+
+	payload, err := os.ReadFile(filepath.Join(set, container.PayloadListName))
+	require.NoError(t, err)
+	assert.Contains(t, string(payload), " "+disklessroot.Dir+"/"+disklessroot.ManifestFile+" ")
+	verifySums(t, res.Dir)
+
+	sets, err := container.LoadMediaSets(filepath.Join(res.Dir, container.NetbootMediaSetsDir), "/data/media")
+	require.NoError(t, err)
+	require.Len(t, sets, 1)
+	assert.True(t, sets[0].Diskless)
+}
+
+// A default --diskless build leaves out the sets with no diskless image rather
+// than aborting on them; a set named explicitly stays, and fails at build time
+// with UnsupportedDisklessSetError (TestBuild_X86SetRejectsDiskless).
+func TestResolve_DisklessDefaultSetsSkipUnsupported(t *testing.T) {
+	names := func(sets []Set) []string {
+		var out []string
+		for _, s := range sets {
+			out = append(out, s.Name)
+		}
+		return out
+	}
+	cfg := buildConfig(t, "")
+	cfg.Sets = nil
+	cfg.X86BinariesDir = t.TempDir()
+	cfg.IPXEFile = filepath.Join(t.TempDir(), "snponly.efi")
+	cfg.Build.ISO.SecureBoot = true
+	cfg.Version = "1.0.0-test"
+
+	resolved, err := cfg.resolve()
+	require.NoError(t, err)
+	assert.Equal(t, []string{container.MediaSetX86_64, container.MediaSetRaspberryPi, container.MediaSetARM64Virt}, names(resolved.Sets), "without --diskless every default set builds")
+
+	cfg.Diskless = true
+	resolved, err = cfg.resolve()
+	require.NoError(t, err)
+	assert.Equal(t, []string{container.MediaSetRaspberryPi, container.MediaSetARM64Virt}, names(resolved.Sets), "x86_64 has no diskless image")
+
+	cfg.Sets = []Set{X86_64Set}
+	resolved, err = cfg.resolve()
+	require.NoError(t, err)
+	assert.Equal(t, []string{container.MediaSetX86_64}, names(resolved.Sets), "an explicit set is never filtered")
+}
+
+// SetsToBuild is what the CLI asks before it resolves per-set inputs, so it
+// must answer for a configuration that has no build yet.
+func TestSetsToBuild(t *testing.T) {
+	assert.Equal(t, DefaultSets, (&Config{}).SetsToBuild())
+	assert.Equal(t, []Set{RaspberryPiSet, ARM64VirtSet}, (&Config{Diskless: true}).SetsToBuild(),
+		"a default diskless build leaves out the x86_64 set")
+	assert.Equal(t, []Set{X86_64Set}, (&Config{Diskless: true, Sets: []Set{X86_64Set}}).SetsToBuild(),
+		"a named set is kept, so resolve refuses it")
+}
+
+func TestBuild_DisklessNeedsSecureBootAndAVersion(t *testing.T) {
+	cfg := buildConfig(t, diskimagetest.PlatformConfig(t))
+	cfg.Diskless, cfg.Version = true, "1.0.0-test"
+	_, err := Build(context.Background(), cfg)
+	var missing *MissingFileError
+	require.ErrorAs(t, err, &missing)
+	assert.Contains(t, missing.File, "Secure Boot")
+
+	cfg = buildConfig(t, "")
+	kmsSecureBootConfig(t, cfg)
+	cfg.Diskless = true
+	_, err = Build(context.Background(), cfg)
+	require.ErrorAs(t, err, &missing)
+	assert.Contains(t, missing.File, "version")
 }
 
 func TestBuild_SignsTheKernelWithTheKMSKey(t *testing.T) {
@@ -402,6 +522,19 @@ func TestBuild_X86Set(t *testing.T) {
 	assert.Equal(t, ipxe.ArchitectureX86_64, sets[0].Architecture)
 	assert.Equal(t, X86_64Set.KernelArgs, sets[0].KernelArgs)
 	verifySums(t, res.Dir)
+}
+
+func TestBuild_X86SetRejectsDiskless(t *testing.T) {
+	cfg := buildConfig(t, diskimagetest.PlatformConfig(t))
+	cfg.X86BinariesDir = diskimagetest.Binaries(t, elf.EM_X86_64)
+	cfg.Sets = []Set{X86_64Set}
+	cfg.Diskless, cfg.SourceDateEpoch, cfg.Version = true, 1700000000, "1.0.0-test"
+	kmsSecureBootConfig(t, cfg)
+
+	_, err := Build(context.Background(), cfg)
+	var unsupported *UnsupportedDisklessSetError
+	require.ErrorAs(t, err, &unsupported)
+	assert.Equal(t, container.MediaSetX86_64, unsupported.Set)
 }
 
 // A failed build names the set and the step that stopped it.

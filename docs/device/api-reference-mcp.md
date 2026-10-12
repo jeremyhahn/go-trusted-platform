@@ -196,6 +196,50 @@ proto names (`device_id`, `changed`, `source`, `source_detail`, `reissued`,
 }
 ```
 
+### device_boot_certificate
+
+A diskless node's proof-of-possession request for its recorded IDevID chain
+([api.md §4.6](api.md#46-diskless-boot-delivery-690)). No permission is required:
+the service authenticates the request itself. `identity` is the claimed device
+identity and `signature` is base64 (the proof over the identity and the
+channel nonce). MCP carries no TLS connection, so the nonce is empty and the
+service refuses the request; the tool exists so every transport enforces the
+same check.
+
+```json
+{
+  "name": "device_boot_certificate",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "identity": {"type": "string", "description": "Claimed device identity"},
+      "signature": {"type": "string", "description": "Base64 proof-of-possession signature"}
+    },
+    "required": ["identity", "signature"]
+  }
+}
+```
+
+### device_boot_delivery
+
+A diskless node's attestation evidence in, network profile and CA bundle out
+([api.md §4.6](api.md#46-diskless-boot-delivery-690)). No permission is required.
+`evidence` is base64. The node's identity is the client certificate of the
+connection, which MCP does not have, so the service refuses the request.
+
+```json
+{
+  "name": "device_boot_delivery",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "evidence": {"type": "string", "description": "Base64 attestation evidence"}
+    },
+    "required": ["evidence"]
+  }
+}
+```
+
 ### profile_create
 
 Create a new device profile. In addition to the base fields, the tool

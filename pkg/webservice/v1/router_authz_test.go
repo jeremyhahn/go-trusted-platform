@@ -227,7 +227,9 @@ type probePEP struct{ restiam.PEPClient }
 //     new-nonce and CA-bundle routes are public by protocol; every other route
 //     is JWS-authenticated inside the xkms ACME server (docs/ca/api.md §5).
 //   - probeDeviceHandler registers the mTLS-verified /device/{profile,
-//     activate,heartbeat} (router/device.go RegisterMachineFacingRoutes).
+//     activate,heartbeat} (router/device.go RegisterMachineFacingRoutes);
+//     probeBootHandler adds the diskless per-boot POST /device/boot behind
+//     the same middleware (#690).
 //     The middleware in front of it is the REAL middleware.NewMTLSMiddleware
 //     over an empty pool, not a double: a plain-HTTP probe is refused 401 by
 //     the same code path production runs, so the refusal under test is
@@ -243,6 +245,7 @@ type probePEP struct{ restiam.PEPClient }
 //     asserts for a ceremony route.
 type probeACME struct{ trustedca.ACMERestServicer }
 type probeDeviceHandler struct{ webdevice.RestHandler }
+type probeBootHandler struct{ webdevice.BootHandler }
 type probeClaimCeremony struct{ adminclaim.FIDO2Ceremony }
 type probeClaimFactors struct{ adminclaim.FactorLister }
 type probeClaimUsers struct{ service.UserServicer }
@@ -313,6 +316,7 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.webauthn = &mockWebAuthnHandler{}
 	registry.acmeService = &probeACME{}
 	registry.deviceHandler = &probeDeviceHandler{}
+	registry.bootHandler = &probeBootHandler{}
 	registry.mtls = middleware.NewMTLSMiddleware(logger, respWriter, x509.NewCertPool())
 	registry.adminClaim = adminClaimFixture(t, logger, respWriter)
 	registry.tenantID = "system"
@@ -463,6 +467,14 @@ var publicRoutes = map[string]string{
 	// flow is still open, so the console can route a fresh node to its setup
 	// page").
 	"GET /api/v1/admin/claim/status": "admin-claim status: whether the one-time claim is still open; no secret disclosed (docs/auth/api.md §2b).",
+
+	// A diskless node's IDevID chain (#690; docs/device/api.md). The node
+	// keeps no disk, so it fetches its own chain before it can present it in
+	// the mTLS handshake that POST /device/boot demands. It authenticates in
+	// the request instead: a signature by the TPM-resident IDevID key over
+	// the connection, checked against the recorded chain. Every other
+	// request is refused alike, so a name alone learns nothing.
+	"POST /api/v1/device/boot/certificate": "a diskless node's IDevID chain, released for proof of its TPM-resident key over the connection, needed before it can present that chain over mTLS (docs/device/api.md).",
 }
 
 // pendingRoutes is the rest of #165: routes still reachable without a

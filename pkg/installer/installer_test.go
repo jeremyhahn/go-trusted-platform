@@ -736,3 +736,19 @@ func TestNewAlpineInstaller_QuirkFromPartNumber(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "default", inst.(*alpineInstaller).quirk.Key)
 }
+
+func TestHostUKICmdlineParamsCarriesOnlyTheDebugSink(t *testing.T) {
+	live := strings.Join([]string{
+		"BOOT_IMAGE=/vmlinuz-lts",
+		"platform_debug_sink=192.0.2.10:514",
+		"platform_boot_model=diskless",
+		"platform_rootfs_url=http://192.0.2.10/rootfs.squashfs",
+		"platform_roothash=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"roothash=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}, " ")
+
+	assert.Equal(t, []string{"platform_debug=1", "platform_debug_sink=192.0.2.10:514"}, hostUKICmdlineParams(live, true),
+		"the live command line never names a root")
+	assert.Empty(t, hostUKICmdlineParams(live, false))
+	assert.Equal(t, []string{"platform_debug=1"}, hostUKICmdlineParams("BOOT_IMAGE=/vmlinuz-lts", true))
+}

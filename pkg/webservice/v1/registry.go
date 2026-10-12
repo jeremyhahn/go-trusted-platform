@@ -39,6 +39,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
@@ -234,11 +235,22 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 		// the one registration implementation. The control plane writes its
 		// own record through the same function from its own TPM (#472), so an
 		// enrolled node and the control plane are the same kind of record.
+		//
+		// The issued certificate is the IDevID. Its chain and Common Name are
+		// recorded so a diskless node, which keeps neither across a reboot,
+		// can fetch the chain back by that name and present it over mTLS
+		// with its TPM-resident key (#690).
+		idevidChain, err := issuedChainPEM(ctx.CertificatePEM, ctx.Certificate)
+		if err != nil {
+			return err
+		}
 		result, err := devicepkg.Register(ctx.Context, deviceService, devicepkg.Registration{
 			Model:         ctx.TCGData.ProductModel,
 			Serial:        serial,
+			Hostname:      issuedCommonName(ctx.Certificate),
 			EKCertPEM:     devicepkg.EncodeCertificatePEM(ctx.TCGData.EKCertificate),
 			AttestCertPEM: devicepkg.EncodeCertificateDERPEM(ctx.TCGData.IAKCertificateDER),
+			IDevIDCertPEM: idevidChain,
 			AttestPub:     ctx.TCGData.AttestationPublicKey,
 			SigningPub:    ctx.TCGData.SigningPublicKey,
 			EventLog:      ctx.TCGData.EventLog,
@@ -268,6 +280,55 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 		return nil
 	}
 }
+
+// issuedCommonName returns the issued certificate's Common Name, or "" when
+// the finalize carried no parsed certificate.
+func issuedCommonName(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
+	return strings.TrimSpace(cert.Subject.CommonName)
+}
+
+// issuedChainPEM returns the IDevID chain to record: the issued IDevID leaf
+// first, then the CA certificates of the issuing chain.
+//
+// It does not trust the order of the finalize PEM. enroll-01 delivers two
+// end-entity certificates before the chain, the IAK and then the IDevID, so
+// the PEM's first certificate is the IAK. A diskless node presents the
+// recorded chain as its mTLS identity and proves the key of its first
+// certificate (BootService.Certificate), so only the IDevID may lead it.
+// Every end-entity certificate in the PEM, the IAK and the IDevID itself
+// included, is therefore dropped and the leaf put back in front.
+func issuedChainPEM(chainPEM []byte, leaf *x509.Certificate) (string, error) {
+	recorded := devicepkg.EncodeCertificatePEM(leaf)
+	if recorded == "" || len(chainPEM) == 0 {
+		return recorded, nil
+	}
+	chain, err := provisioning.ParseCertificateChain(chainPEM)
+	if err != nil {
+		return "", ErrIssuedChainInvalid{Cause: err}
+	}
+	for _, cert := range chain {
+		if cert.IsCA {
+			recorded += devicepkg.EncodeCertificatePEM(cert)
+		}
+	}
+	return recorded, nil
+}
+
+// ErrIssuedChainInvalid is returned by the device registration hook when the
+// certificate chain the CA issued does not parse. Recording it anyway would
+// leave a diskless node with an identity it cannot present.
+type ErrIssuedChainInvalid struct {
+	Cause error
+}
+
+func (e ErrIssuedChainInvalid) Error() string {
+	return "device registration: issued certificate chain does not parse: " + e.Cause.Error()
+}
+
+func (e ErrIssuedChainInvalid) Unwrap() error { return e.Cause }
 
 // NewDNSRegistrationHook creates an order finalization hook that registers
 // DNS records for enrolled devices. This hook is called by go-trusted-ca's
@@ -728,6 +789,7 @@ type RestHandlerRegistry interface {
 	ComputeServiceServer() platformv1.ComputeServiceServer
 	DeviceServiceServer() platformv1.DeviceServiceServer
 	DeviceRestHandler() device.RestHandler
+	DeviceBootHandler() device.BootHandler
 	ConfigDeliveryHandler() configdelivery.RestHandler
 	DeviceService() devicepkg.DeviceService
 	DNSService() dns.DNSService
@@ -1527,6 +1589,25 @@ func (registry *HandlerRegistry) DeviceRestHandler() device.RestHandler {
 		activator,
 		profileService,
 		opts...,
+	)
+}
+
+// DeviceBootHandler returns the handler for a diskless node's per-boot
+// routes (#690), or nil when the device service, profile service, quote
+// verifier or CA is missing — the routes are then not registered.
+func (registry *HandlerRegistry) DeviceBootHandler() device.BootHandler {
+	if registry.params.ServiceRegistry == nil || registry.params.DeviceServiceServer == nil || registry.params.CA == nil {
+		return nil
+	}
+	devices := registry.params.ServiceRegistry.DeviceService()
+	profiles := registry.params.ServiceRegistry.ProfileService()
+	if devices == nil || profiles == nil {
+		return nil
+	}
+	return device.NewBootHandler(
+		registry.params.Logger,
+		registry.params.HTTPWriter,
+		device.NewBootService(devices, profiles, registry.params.DeviceServiceServer, registry.params.CA),
 	)
 }
 

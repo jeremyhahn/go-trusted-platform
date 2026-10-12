@@ -802,6 +802,18 @@ func (p *MCPServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceI
 	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, clearOnRefusal, p.logger)
 }
 
+// DeviceBootCertificate refuses a diskless node's boot-certificate request:
+// MCP carries no TLS connection for the proof to be bound to.
+func (p *MCPServiceProvider) DeviceBootCertificate(context.Context, string, []byte) (interface{}, error) {
+	return nil, errBootOverMCP()
+}
+
+// DeviceBootDelivery refuses a diskless node's boot-delivery request: MCP
+// carries no TLS connection for the evidence to be bound to.
+func (p *MCPServiceProvider) DeviceBootDelivery(context.Context, []byte) (interface{}, error) {
+	return nil, errBootOverMCP()
+}
+
 // akTrust returns the CA behind the MCP provider's CA service, or nil when
 // none is configured (every device quote then fails closed).
 func (p *MCPServiceProvider) akTrust() AKTrustAnchor {

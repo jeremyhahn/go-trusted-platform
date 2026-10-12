@@ -83,6 +83,15 @@ precedent as the EAB sub-range): `payload[0]` is the sub-opcode and
 | `0x20` | Assign profile to device | `AssignProfileToDeviceRequest` | `AssignProfileToDeviceResponse` |
 | `0x21` | Unassign profile from device | `UnassignProfileFromDeviceRequest` | `UnassignProfileFromDeviceResponse` |
 | `0x22` | Record the device's attestation certificate without re-enrolling ([api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473)); a refusal is status `0x01` with the reason, and a `clear_on_refusal` clear that lost its compare-and-clear is `0x06` | `RecordAttestationCertificateRequest` | `RecordAttestationCertificateResponse` |
+| `0x23` | Boot certificate: a diskless node's proof-of-possession request for its recorded IDevID chain ([api.md §4.6](api.md#46-diskless-boot-delivery-690)) | `BootCertificateRequest` | `BootCertificateResponse` |
+| `0x24` | Boot delivery: attestation evidence in, network profile and CA bundle out ([api.md §4.6](api.md#46-diskless-boot-delivery-690)) | `BootDeliveryRequest` | `BootDeliveryResponse` |
+
+Sub-opcodes `0x23` and `0x24` are exempt from token authentication: a
+diskless node holds no token, and the service authenticates every request
+itself. The proof and the evidence are bound to a nonce exported from the
+QUIC connection's TLS 1.3 session, so input computed for another connection
+is refused. A refusal of the request is status `0x09` (invalid argument) or
+`0x07` (permission denied); a service that is not configured is `Unavailable`.
 
 `AssignProfileToDeviceRequest` binds the profile to a device identity
 (`ek_serial` and/or `mac_address`) and may prestage the device's

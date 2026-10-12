@@ -68,6 +68,7 @@ type DryRunNodeResult struct {
 	BMCProtocol    string   `json:"bmc_protocol,omitempty" yaml:"bmc_protocol,omitempty"`
 	BMCReachable   bool     `json:"bmc_reachable" yaml:"bmc_reachable"`
 	BMCManaged     bool     `json:"bmc_managed" yaml:"bmc_managed"`
+	BootModel      string   `json:"boot_model,omitempty" yaml:"boot_model,omitempty"`
 	MACs           []string `json:"macs,omitempty" yaml:"macs,omitempty"`
 	DiscoveredMACs []string `json:"discovered_macs,omitempty" yaml:"discovered_macs,omitempty"`
 	ResolvedConfig string   `json:"resolved_config,omitempty" yaml:"resolved_config,omitempty"`
@@ -591,6 +592,7 @@ func (o *Orchestrator) dryRunSingleNode(ctx context.Context, node *NodeConfig) D
 		Hostname:   node.Hostname,
 		Role:       node.Role,
 		BMCAddress: node.BMCAddress,
+		BootModel:  node.EffectiveBootModel(),
 		MACs:       append([]string(nil), node.MACs...),
 	}
 

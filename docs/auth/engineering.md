@@ -583,8 +583,11 @@ DPoP frame**, so proof / htm / htu are always empty: every QUIC token is a
 bearer token.
 
 The pre-auth list (`preAuthOpcodes`) is `OpHealth`, `OpLiveness`,
-`OpReadiness` and `OpIAMAuthenticate`, each with its reason; nothing else is
-exempt. Under mTLS (`WithQUICPeerAuthenticated`) a tokenless frame is
+`OpReadiness` and `OpIAMAuthenticate`; the sub-operation list
+(`preAuthSubOpcodes`) is the diskless boot pair `DeviceSubBootCertificate` and
+`DeviceSubBootDelivery` under `OpProvisioningCategory`, which the boot service
+authenticates against the node's own TLS channel. Each entry carries its
+reason; nothing else is exempt. Under mTLS (`WithQUICPeerAuthenticated`) a tokenless frame is
 authenticated by the verified peer certificate, and a presented token is
 still validated.
 

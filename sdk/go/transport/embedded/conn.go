@@ -21,6 +21,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
 
 // handlerFunc is the signature for all unary gRPC service method handlers.
@@ -48,6 +51,15 @@ func newEmbeddedClientConn(registry *ServiceRegistry) *embeddedClientConn {
 // serialization semantics as a real gRPC transport. The registry's
 // CallerContext, if set, supplies the caller's identity first.
 func (c *embeddedClientConn) Invoke(ctx context.Context, method string, args, reply interface{}, opts ...grpc.CallOption) error {
+	// An in-process call has no connection at all, so a call that must be
+	// bound to its connection's channel is refused before dispatch.
+	if _, bound := transport.ChannelBindingFrom(opts); bound {
+		return &transport.ErrChannelBindingUnavailable{
+			Transport: platform.ProtocolEmbedded.String(),
+			Reason:    "an in-process call has no TLS connection to bind to",
+		}
+	}
+
 	handler, ok := c.handlers[method]
 	if !ok {
 		return status.Errorf(codes.Unimplemented, "embedded: method %s not registered", method)

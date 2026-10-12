@@ -20,13 +20,15 @@ import "strings"
 
 // URI scheme prefixes for secret resolution.
 const (
-	SchemeKMS       = "kms://"
-	SchemeRemoteKMS = "remote-kms://"
-	SchemeEnv       = "env://"
-	SchemeIDevID    = "idevid://"
-	SchemeFile      = "file://"
-	SchemeDynamic   = "dynamic://"
-	SchemeXKMS      = "xkms://"
+	SchemeKMS        = "kms://"
+	SchemeRemoteKMS  = "remote-kms://"
+	SchemeEnv        = "env://"
+	SchemeIDevID     = "idevid://"
+	SchemeFile       = "file://"
+	SchemeDynamic    = "dynamic://"
+	SchemeXKMS       = "xkms://"
+	SchemeCredential = "credential://"
+	SchemeAutoGen    = "autogen://"
 )
 
 // Strategy constants for tracking how secrets were resolved.
@@ -46,7 +48,8 @@ const (
 const SecretStructTag = "secret"
 
 // IsSecretURI returns true if the string appears to be a secret URI handled
-// by one of the known TP-specific URI schemes.
+// by one of the schemes the platform resolves: its own, and credential:// and
+// autogen://, which the go-quicbaas registry resolves.
 func IsSecretURI(s string) bool {
 	return strings.HasPrefix(s, SchemeKMS) ||
 		strings.HasPrefix(s, SchemeRemoteKMS) ||
@@ -54,7 +57,9 @@ func IsSecretURI(s string) bool {
 		strings.HasPrefix(s, SchemeIDevID) ||
 		strings.HasPrefix(s, SchemeFile) ||
 		strings.HasPrefix(s, SchemeDynamic) ||
-		strings.HasPrefix(s, SchemeXKMS)
+		strings.HasPrefix(s, SchemeXKMS) ||
+		strings.HasPrefix(s, SchemeCredential) ||
+		strings.HasPrefix(s, SchemeAutoGen)
 }
 
 // ExpandShortKMSPath expands a short KMS path that does not start with

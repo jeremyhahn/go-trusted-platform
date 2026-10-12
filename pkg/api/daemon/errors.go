@@ -391,6 +391,17 @@ func (e ErrQUICNilRequest) Error() string {
 	return "QUIC request cannot be nil"
 }
 
+// ErrClientCertRequired is returned when a request needing a verified client
+// certificate arrives on a connection without one. The listener verifies a
+// certificate only if given, so the request is where it is enforced.
+type ErrClientCertRequired struct {
+	Operation string
+}
+
+func (e ErrClientCertRequired) Error() string {
+	return "a verified client certificate is required for " + e.Operation
+}
+
 // ErrQUICHandlerPanic is returned when a handler sub-function panics.
 // The recover() guard in QUICServiceHandler.HandleRequest catches the panic,
 // logs a stack trace, and converts it to a StatusInternalError response so the

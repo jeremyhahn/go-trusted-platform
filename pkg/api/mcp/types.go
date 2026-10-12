@@ -449,6 +449,12 @@ type ServiceProvider interface {
 	// the stored certificate when every candidate is refused, so the
 	// device reads as absent instead of quarantined.
 	DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error)
+	// DeviceBootCertificate and DeviceBootDelivery serve a diskless node's
+	// boot requests through the shared boot service, which enforces the
+	// proof of possession and the channel binding. A transport with no TLS
+	// connection (MCP) cannot satisfy that binding and is refused.
+	DeviceBootCertificate(ctx context.Context, identity string, signature []byte) (interface{}, error)
+	DeviceBootDelivery(ctx context.Context, evidence []byte) (interface{}, error)
 	DeviceProvision(ctx context.Context, deviceID string, profile string) error
 
 	// SDN Bridge operations

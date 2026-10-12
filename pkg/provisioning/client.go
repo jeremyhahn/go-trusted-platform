@@ -42,6 +42,7 @@ import (
 // Client is a provisioning client that uses mTLS with IDevID certificate
 type Client struct {
 	config     *ClientConfig
+	tlsConfig  *tls.Config
 	httpClient *http.Client
 	logger     *logging.Logger
 }
@@ -102,6 +103,7 @@ func NewClient(config *ClientConfig, logger *logging.Logger) (*Client, error) {
 
 	return &Client{
 		config:     config,
+		tlsConfig:  tlsConfig,
 		httpClient: httpClient,
 		logger:     logger,
 	}, nil

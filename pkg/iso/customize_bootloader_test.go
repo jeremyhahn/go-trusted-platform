@@ -23,15 +23,45 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
+func installFakeGrubMkstandalone(t *testing.T, root string) {
+	t.Helper()
+	binDir := filepath.Join(root, "fake-bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("create fake bin dir: %v", err)
+	}
+	path := filepath.Join(binDir, "grub-mkstandalone")
+	script := `#!/bin/sh
+set -eu
+out=""
+for arg in "$@"; do
+	case "$arg" in
+		--output=*) out=${arg#--output=} ;;
+	esac
+done
+if [ -z "$out" ]; then
+	exit 1
+fi
+printf fake-grub > "$out"
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake grub-mkstandalone: %v", err)
+	}
+	for _, name := range []string{"mkfs.vfat", "mmd", "mcopy"} {
+		path := filepath.Join(binDir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("write fake %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // TestConfigureBootloader verifies GRUB cmdline mutation: quiet stripped,
-// "Linux lts" renamed to "Trusted Alpine LTS", console= and
-// console params injected. UpdateEFIBootloader (called at the
-// end of ConfigureBootloader) requires grub-mkstandalone which isn't
-// available in unit tests, but it only logs a warning on failure and
-// returns nil — so these tests still validate the grub.cfg mutation
-// path without needing a real EFI toolchain.
+// "Linux lts" renamed to "Trusted Alpine LTS", console= and console params
+// injected. A fake grub-mkstandalone keeps the EFI update path fatal without
+// requiring the host EFI toolchain.
 func TestConfigureBootloader(t *testing.T) {
 	tmpDir := t.TempDir()
+	installFakeGrubMkstandalone(t, tmpDir)
 
 	tests := []struct {
 		name             string

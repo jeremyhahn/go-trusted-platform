@@ -29,8 +29,12 @@ import (
 
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -684,6 +688,245 @@ func TestNewDeviceRegistrationHook_CreatesNewDevice(t *testing.T) {
 	assert.Equal(t, []byte("event-log-bytes"), saved.EventLog)
 	assert.Equal(t, deviceentities.DeviceStateRegistered, saved.State)
 	assert.False(t, saved.CreatedAt.IsZero())
+	// The issued IDevID is what a diskless node fetches back on every boot
+	// (#690): with no chain in the finalize, the leaf alone is recorded.
+	assert.Equal(t, "Test-IDevID", saved.Hostname)
+	assert.Equal(t, devicepkg.EncodeCertificatePEM(cert), saved.IDevIDCert)
+}
+
+// TestNewDeviceRegistrationHook_RecordsTheIssuedChain feeds the hook the
+// finalize ordering enroll-01 really delivers — IAK, IDevID, then the issuing
+// chain — and proves the recorded chain is the IDevID leaf and its issuing
+// chain: one a diskless node can present over mTLS and recover after a reboot
+// by proving its IDevID key.
+func TestNewDeviceRegistrationHook_RecordsTheIssuedChain(t *testing.T) {
+	pki := newEnrollPKI(t)
+	reg := newMockDeviceRegistrar()
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	err := hook(pki.finalizeContext())
+	require.NoError(t, err)
+	require.Len(t, reg.saveCalls, 1)
+	recorded := reg.saveCalls[0].IDevIDCert
+	assert.Equal(t, pki.pem(pki.idevid, pki.intermediate, pki.root), recorded,
+		"the IDevID leads the recorded chain and the IAK is not in it")
+	assert.Equal(t, "node-7", reg.saveCalls[0].Hostname)
+
+	// The node presents the recorded chain over mTLS, so it must chain to
+	// the platform root as it stands.
+	chain, err := provisioning.ParseCertificateChain([]byte(recorded))
+	require.NoError(t, err)
+	intermediates := x509.NewCertPool()
+	for _, cert := range chain[1:] {
+		intermediates.AddCert(cert)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(pki.root)
+	_, err = chain[0].Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
+	require.NoError(t, err)
+
+	// After a reboot the node proves its TPM-resident IDevID key to get the
+	// chain back; the boot service checks that proof against the recorded
+	// chain's first certificate.
+	nonce := []byte("connection-exporter-value-32-byt")
+	proof, err := provisioning.SignBootCertificateProof(pki.idevidKey, "node-7", nonce)
+	require.NoError(t, err)
+	boot := device.NewBootService(&enrollBootBackend{dev: reg.saveCalls[0], bundle: pki.pem(pki.root)},
+		&enrollBootBackend{}, &enrollBootBackend{}, &enrollBootBackend{})
+	resp, err := boot.Certificate(context.Background(), device.BootCertificateInput{
+		Identity: "node-7", ChannelNonce: nonce, Signature: proof,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, recorded, resp.IDevIDChain)
+}
+
+// TestNewDeviceRegistrationHook_IAKFirstChainIsNotRecordedAsIs proves the
+// order of the finalize PEM is corrected, not trusted: a chain with the IAK
+// in front — the order enroll-01 delivers — would leave the node proving a
+// key that is not its IDevID, and the boot service refuses that.
+func TestNewDeviceRegistrationHook_IAKFirstChainIsNotRecordedAsIs(t *testing.T) {
+	pki := newEnrollPKI(t)
+	iakFirst := pki.pem(pki.iak, pki.idevid, pki.intermediate, pki.root)
+	reg := newMockDeviceRegistrar()
+
+	require.NoError(t, NewDeviceRegistrationHook(reg, slog.Default())(pki.finalizeContext()))
+	require.Len(t, reg.saveCalls, 1)
+	assert.NotEqual(t, iakFirst, reg.saveCalls[0].IDevIDCert)
+
+	// Had it been recorded as delivered, recovery would be refused.
+	dev := *reg.saveCalls[0]
+	dev.IDevIDCert = iakFirst
+	nonce := []byte("connection-exporter-value-32-byt")
+	proof, err := provisioning.SignBootCertificateProof(pki.idevidKey, "node-7", nonce)
+	require.NoError(t, err)
+	boot := device.NewBootService(&enrollBootBackend{dev: &dev, bundle: pki.pem(pki.root)},
+		&enrollBootBackend{}, &enrollBootBackend{}, &enrollBootBackend{})
+	_, err = boot.Certificate(context.Background(), device.BootCertificateInput{
+		Identity: "node-7", ChannelNonce: nonce, Signature: proof,
+	})
+	var refused device.ErrBootCertificateRefused
+	require.ErrorAs(t, err, &refused)
+}
+
+// TestNewDeviceRegistrationHook_RefusesAnUnparseableChain proves a chain
+// that does not parse fails the registration instead of being recorded.
+func TestNewDeviceRegistrationHook_RefusesAnUnparseableChain(t *testing.T) {
+	pki := newEnrollPKI(t)
+	ctx := pki.finalizeContext()
+	ctx.CertificatePEM = []byte("-----BEGIN CERTIFICATE-----\nbm90LWEtY2VydA==\n-----END CERTIFICATE-----\n")
+	reg := newMockDeviceRegistrar()
+
+	err := NewDeviceRegistrationHook(reg, slog.Default())(ctx)
+	var invalid ErrIssuedChainInvalid
+	require.ErrorAs(t, err, &invalid)
+	assert.ErrorIs(t, err, provisioning.ErrCertificateChainInvalid)
+	assert.Empty(t, reg.saveCalls)
+}
+
+// enrollPKI is the certificate set one enroll-01 finalize produces: a root
+// and an intermediate CA, and the IDevID and IAK end-entity certificates the
+// intermediate issued for the same device.
+type enrollPKI struct {
+	root, intermediate *x509.Certificate
+	idevid, iak        *x509.Certificate
+	idevidKey          *ecdsa.PrivateKey
+}
+
+func newEnrollPKI(t *testing.T) *enrollPKI {
+	t.Helper()
+	pki := &enrollPKI{}
+	var rootKey, intermediateKey *ecdsa.PrivateKey
+	pki.root, rootKey = issueEnrollCert(t, "platform root", nil, nil, true)
+	pki.intermediate, intermediateKey = issueEnrollCert(t, "platform intermediate", pki.root, rootKey, true)
+	pki.idevid, pki.idevidKey = issueEnrollCert(t, "node-7", pki.intermediate, intermediateKey, false)
+	pki.iak, _ = issueEnrollCert(t, "IAK node-7", pki.intermediate, intermediateKey, false)
+	return pki
+}
+
+// issueEnrollCert issues a certificate signed by parent, or a self-signed one
+// when parent is nil.
+func issueEnrollCert(t *testing.T, cn string, parent *x509.Certificate, parentKey *ecdsa.PrivateKey, isCA bool) (*x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  isCA,
+	}
+	if isCA {
+		tmpl.KeyUsage = x509.KeyUsageCertSign
+	} else {
+		tmpl.KeyUsage = x509.KeyUsageDigitalSignature
+		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	}
+	if parent == nil {
+		parent, parentKey = tmpl, key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &key.PublicKey, parentKey)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert, key
+}
+
+func (p *enrollPKI) pem(certs ...*x509.Certificate) string {
+	var out string
+	for _, cert := range certs {
+		out += devicepkg.EncodeCertificatePEM(cert)
+	}
+	return out
+}
+
+// finalizeContext is the hook context the pinned go-xkms enroll-01 finalize
+// handler builds: Certificate is the IDevID, CertificatePEM is the IAK, the
+// IDevID, then the issuing chain.
+func (p *enrollPKI) finalizeContext() *trustedca.ACMEOrderFinalizeHookContext {
+	return &trustedca.ACMEOrderFinalizeHookContext{
+		Context:        context.Background(),
+		IsTCGCSR:       true,
+		Certificate:    p.idevid,
+		CertificatePEM: []byte(p.pem(p.iak, p.idevid, p.intermediate, p.root)),
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial:        "SN-7",
+			IAKCertificateDER:    p.iak.Raw,
+			IDevIDCertificateDER: p.idevid.Raw,
+		},
+	}
+}
+
+// enrollBootBackend serves the boot service one recorded device and the
+// platform CA bundle; the certificate route uses nothing else.
+type enrollBootBackend struct {
+	dev    *deviceentities.Device
+	bundle string
+}
+
+func (b *enrollBootBackend) ResolveIdentity(_ context.Context, _ string) (*deviceentities.Device, error) {
+	return b.dev, nil
+}
+
+func (b *enrollBootBackend) FindProfileForDevice(_ context.Context, _ *deviceentities.Device) (*deviceentities.DeviceProfile, error) {
+	return &deviceentities.DeviceProfile{}, nil
+}
+
+func (b *enrollBootBackend) AttestDevice(_ context.Context, _ *platformv1.AttestDeviceRequest) (*platformv1.AttestDeviceResponse, error) {
+	return &platformv1.AttestDeviceResponse{}, nil
+}
+
+func (b *enrollBootBackend) CABundle() ([]byte, error) {
+	return []byte(b.bundle), nil
+}
+
+// TestNewDeviceRegistrationHook_BindsEKIdentityToTheProvenEK proves a diskless
+// node's EK-derived name (#690) is recorded only beside the EK certificate the
+// enrollment proved, and that a node claiming another TPM's name is refused.
+func TestNewDeviceRegistrationHook_BindsEKIdentityToTheProvenEK(t *testing.T) {
+	ek := createHookTestCert("ek")
+	identity, err := deviceentities.EKNodeIdentity(ek.PublicKey)
+	require.NoError(t, err)
+
+	t.Run("its own EK", func(t *testing.T) {
+		reg := newMockDeviceRegistrar()
+		hook := NewDeviceRegistrationHook(reg, slog.Default())
+		err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+			Context:     context.Background(),
+			IsTCGCSR:    true,
+			Certificate: createHookTestCert(identity),
+			TCGData:     &trustedca.ACMETCGEnrollmentData{ProductSerial: identity, EKCertificate: ek},
+		})
+		require.NoError(t, err)
+		require.Len(t, reg.saveCalls, 1)
+		assert.Equal(t, identity, reg.saveCalls[0].Serial)
+		assert.Equal(t, identity, reg.saveCalls[0].Hostname)
+	})
+
+	t.Run("another TPM's EK", func(t *testing.T) {
+		reg := newMockDeviceRegistrar()
+		hook := NewDeviceRegistrationHook(reg, slog.Default())
+		err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+			Context:     context.Background(),
+			IsTCGCSR:    true,
+			Certificate: createHookTestCert(identity),
+			TCGData: &trustedca.ACMETCGEnrollmentData{
+				ProductSerial: identity,
+				EKCertificate: createHookTestCert("another-ek"),
+			},
+		})
+		var unbound devicepkg.ErrRegistrationEKIdentityUnbound
+		require.ErrorAs(t, err, &unbound)
+		assert.Empty(t, reg.saveCalls)
+		assert.Empty(t, reg.updateCalls)
+	})
 }
 
 func TestNewDeviceRegistrationHook_UpdatesExistingDeviceOnReEnroll(t *testing.T) {

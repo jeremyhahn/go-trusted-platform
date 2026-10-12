@@ -18,6 +18,7 @@ package quic
 
 import (
 	"context"
+	"crypto/tls"
 	"sync/atomic"
 	"time"
 
@@ -153,6 +154,7 @@ func (a *Adapter) SetToken(token string) {
 type quicSender interface {
 	Send(ctx context.Context, opcode byte, reqData, respData interface{}) error
 	SendRequest(ctx context.Context, opcode byte, payload []byte) (*quicwire.Response, error)
+	SendBoundRequest(ctx context.Context, opcode byte, build func(state *tls.ConnectionState) ([]byte, error)) (*quicwire.Response, error)
 }
 
 // realQUICSender wraps the concrete *quicwire.Client to satisfy quicSender.
@@ -166,6 +168,10 @@ func (s *realQUICSender) Send(ctx context.Context, opcode byte, reqData, respDat
 
 func (s *realQUICSender) SendRequest(ctx context.Context, opcode byte, payload []byte) (*quicwire.Response, error) {
 	return s.client.SendRequest(ctx, opcode, payload)
+}
+
+func (s *realQUICSender) SendBoundRequest(ctx context.Context, opcode byte, build func(state *tls.ConnectionState) ([]byte, error)) (*quicwire.Response, error) {
+	return s.client.SendBoundRequest(ctx, opcode, build)
 }
 
 // quicClientConn implements grpc.ClientConnInterface for QUIC transport.
@@ -229,14 +235,16 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 			payloadArgs = nil
 		}
 
-		payload, err := buildCategoryPayload(subOpcode, payloadArgs)
-		if err != nil {
-			return status.Error(codes.Internal, err.Error())
+		encode := func() ([]byte, error) {
+			payload, err := buildCategoryPayload(subOpcode, payloadArgs)
+			if err != nil {
+				return nil, status.Error(codes.Internal, err.Error())
+			}
+			return payload, nil
 		}
-
-		resp, err := c.sender.SendRequest(ctx, opcode, payload)
+		resp, err := c.sendRaw(ctx, opcode, encode, opts)
 		if err != nil {
-			return translateQUICErrorToGRPC(err)
+			return err
 		}
 
 		if reply != nil && len(resp.Payload) > 0 {
@@ -262,21 +270,16 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 	// (Count* derived from List* pagination totals) decode through a
 	// method-specific decoder; everything else decodes directly into the pb
 	// reply by Go field name.
-	if encode, hasEncoder := methodRequestEncoders[method]; hasEncoder {
-		wire, encErr := encode(args)
-		if encErr != nil {
-			return status.Error(codes.InvalidArgument, encErr.Error())
-		}
-		args = wire
+	// A call bound to its channel always takes the raw-payload path, so the
+	// payload is encoded after the binding completes args.
+	decode, hasDecoder := methodResponseDecoders[method]
+	if _, bound := transport.ChannelBindingFrom(opts); bound && !hasDecoder {
+		decode, hasDecoder = decodeReplyPayload, true
 	}
-	if decode, hasDecoder := methodResponseDecoders[method]; hasDecoder {
-		payload, encErr := quicwire.EncodePayload(args)
-		if encErr != nil {
-			return status.Error(codes.Internal, ErrEncodingFailed{Err: encErr}.Error())
-		}
-		resp, err := c.sender.SendRequest(ctx, opcode, payload)
+	if hasDecoder {
+		resp, err := c.sendRaw(ctx, opcode, encodeArgs(method, args), opts)
 		if err != nil {
-			return translateQUICErrorToGRPC(err)
+			return err
 		}
 		if reply != nil && len(resp.Payload) > 0 {
 			if decErr := decode(resp.Payload, reply); decErr != nil {
@@ -286,11 +289,94 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 		return nil
 	}
 
-	err := c.sender.Send(ctx, opcode, args, reply)
+	wire, err := wireRequest(method, args)
+	if err != nil {
+		return err
+	}
+	err = c.sender.Send(ctx, opcode, wire, reply)
 	if err != nil {
 		return translateQUICErrorToGRPC(err)
 	}
 
+	return nil
+}
+
+// sendRaw sends the payload encode builds and returns the response, with
+// send failures already translated to gRPC status errors. A call bound to
+// its channel (transport.WithChannelBinding) encodes only after handing the
+// binding of the client's connection to the call's BindFunc, and the
+// request travels on that same connection, so the proof the BindFunc adds
+// to args is over the connection the daemon reads. Binding failures are
+// returned as they are.
+func (c *quicClientConn) sendRaw(ctx context.Context, opcode byte, encode func() ([]byte, error), opts []grpc.CallOption) (*quicwire.Response, error) {
+	bind, bound := transport.ChannelBindingFrom(opts)
+	if !bound {
+		payload, err := encode()
+		if err != nil {
+			return nil, err
+		}
+		resp, err := c.sender.SendRequest(ctx, opcode, payload)
+		if err != nil {
+			return nil, translateQUICErrorToGRPC(err)
+		}
+		return resp, nil
+	}
+
+	var buildErr error
+	resp, err := c.sender.SendBoundRequest(ctx, opcode, func(state *tls.ConnectionState) ([]byte, error) {
+		if buildErr = transport.BindChannel(ctx, platform.ProtocolQUIC.String(), state, bind); buildErr != nil {
+			return nil, buildErr
+		}
+		var payload []byte
+		payload, buildErr = encode()
+		return payload, buildErr
+	})
+	if buildErr != nil {
+		return nil, buildErr
+	}
+	if err != nil {
+		return nil, translateQUICErrorToGRPC(err)
+	}
+	return resp, nil
+}
+
+// wireRequest returns the daemon wire request for args: the result of the
+// method's request encoder when it has one, args itself otherwise.
+func wireRequest(method string, args interface{}) (interface{}, error) {
+	encode, hasEncoder := methodRequestEncoders[method]
+	if !hasEncoder {
+		return args, nil
+	}
+	wire, err := encode(args)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return wire, nil
+}
+
+// encodeArgs returns an encoder for the method's wire request in the
+// protocol codec. The wire request is built when the encoder runs, so a
+// channel binding has already completed args.
+func encodeArgs(method string, args interface{}) func() ([]byte, error) {
+	return func() ([]byte, error) {
+		wire, err := wireRequest(method, args)
+		if err != nil {
+			return nil, err
+		}
+		payload, err := quicwire.EncodePayload(wire)
+		if err != nil {
+			return nil, status.Error(codes.Internal, ErrEncodingFailed{Err: err}.Error())
+		}
+		return payload, nil
+	}
+}
+
+// decodeReplyPayload decodes a response payload straight into the reply,
+// as Send does for unbound calls.
+func decodeReplyPayload(payload []byte, reply interface{}) error {
+	if err := quicwire.DecodePayload(payload, reply); err != nil {
+		return ErrDecodingFailed{Err: err}
+	}
 	return nil
 }
 
@@ -419,6 +505,10 @@ var categorySubOpcodeMap = map[string]byte{
 	// 0x22. Server dispatcher: handleDeviceProfileCategorySub ->
 	// handleDeviceRecordAttestCert.
 	"/platform.v1.DeviceService/RecordAttestationCertificate": quicwire.DeviceSubRecordAttestCert,
+	// A diskless node's per-boot requests: sub-opcodes 0x23 and 0x24, which
+	// the server serves without a token (the node holds none).
+	"/platform.v1.DeviceService/BootCertificate": quicwire.DeviceSubBootCertificate,
+	"/platform.v1.DeviceService/BootDelivery":    quicwire.DeviceSubBootDelivery,
 
 	// Proxy Service — multiplexed under OpGatewayCategory (0x2F),
 	// sub-range 0x20-0x2D (the single-byte opcode space is fully
@@ -578,6 +668,8 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/AssignProfileToDevice":        quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/UnassignProfileFromDevice":    quicwire.OpProvisioningCategory,
 	"/platform.v1.DeviceService/RecordAttestationCertificate": quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/BootCertificate":              quicwire.OpProvisioningCategory,
+	"/platform.v1.DeviceService/BootDelivery":                 quicwire.OpProvisioningCategory,
 
 	// SDN Service — proto: pkg/api/grpc/proto/sdn.proto
 	"/platform.v1.SDNService/CreateBridge": quicwire.OpSDNCreateBridge,

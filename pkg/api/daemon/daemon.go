@@ -15,7 +15,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/tls"
 	"net"
 	"os"
 	"strconv"
@@ -26,7 +25,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 
 	"github.com/jeremyhahn/go-codec"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -339,41 +337,23 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			grpc.ChainStreamInterceptor(RecoveryStreamInterceptor(logger)),
 		)
 
-		// Configure TLS: prefer a USABLE in-memory certificate, fall back
-		// to files. The inner selection mirrors grpcTLSMaterialPresent —
-		// keying on mere non-nilness here would attach a structurally
-		// empty in-memory certificate even when a valid file pair is
-		// configured (#32).
-		if config.grpcTLSMaterialPresent() {
-			var cert tls.Certificate
-			if tlsCertificateUsable(config.TLSCertificate) {
-				cert = *config.TLSCertificate
-			} else {
-				var err error
-				cert, err = tls.LoadX509KeyPair(config.GRPCTLSCertFile, config.GRPCTLSKeyFile)
-				if err != nil {
-					return nil, ErrTLSConfigFailed{Reason: "gRPC: " + err.Error()}
-				}
-			}
-			// Enable mutual TLS if configured. Fails closed: mTLS with no
-			// resolvable client CA pool is a typed error, never a listener
-			// that merely does not ask for a client certificate (#550).
-			tlsConfig, tlsErr := newServerTLSConfig(config, transportGRPCTCP, cert)
-			if tlsErr != nil {
-				return nil, tlsErr
-			}
-			if tlsConfig.ClientCAs != nil {
-				logger.Info("gRPC TCP server mTLS enabled", "addr", config.GRPCListenAddr)
-			}
-
-			grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
-			grpcTLSCredsAttached = true
+		tlsOpts, tlsErr := grpcTCPServerTLS(config, logger)
+		if tlsErr != nil {
+			return nil, tlsErr
 		}
+		grpcOpts = append(grpcOpts, tlsOpts...)
+		grpcTLSCredsAttached = config.grpcTLSMaterialPresent()
 
 		// Skip health check methods from authentication
 		skipMethods := []string{
 			"/platform.v1.PlatformDaemon/HealthCheck",
 			"/grpc.health.v1.Health/Check",
+			// A diskless node holds no platform token and, for
+			// BootCertificate, no certificate yet. Both calls authenticate
+			// themselves: the boot service verifies the node's proof or its
+			// chain and quote, bound to the connection.
+			platformv1.DeviceService_BootCertificate_FullMethodName,
+			platformv1.DeviceService_BootDelivery_FullMethodName,
 		}
 
 		// Configure authentication interceptors. Fails closed (#550): with
@@ -724,6 +704,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			WithDeviceAKTrust(deviceAKTrust(config)),
 			WithDeviceVerdictSink(deviceVerdictSink(config)),
 			WithDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, logger.Slog())),
+			WithDeviceBootCA(config.CAService),
 		)
 
 		// Register with TCP gRPC server if enabled
@@ -1130,6 +1111,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		if config.DeviceService != nil {
 			quicHandler.SetDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, quicLogger.Slog()))
+			if config.CAService != nil {
+				quicHandler.SetDeviceBootCA(config.CAService)
+			}
 		}
 
 		// Set Container orchestrator if available
@@ -1258,20 +1242,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// it fails closed: no TLS config to enforce it on, or no resolvable
 		// client CA pool, refuses the transport instead of a Warn followed by
 		// an unauthenticated listener (#550).
-		if config.EnableMTLS {
-			if quicConfig.TLSConfig == nil {
-				return nil, ErrTransportAuthRequired{
-					Transport: transportQUIC,
-					Reason:    "mTLS is enabled but the QUIC server has no TLS configuration to enforce it on",
-				}
-			}
-			clientCAPool, poolErr := resolveMTLSClientCAPool(config, transportQUIC)
-			if poolErr != nil {
-				return nil, poolErr
-			}
-			quicConfig.TLSConfig.ClientAuth = tls.RequireAndVerifyClientCert
-			quicConfig.TLSConfig.ClientCAs = clientCAPool
-			logger.Info("QUIC server mTLS enabled on TLS config")
+		if err := quicServerMTLS(config, quicConfig.TLSConfig, quicHandler, logger); err != nil {
+			return nil, err
 		}
 
 		// Create QUIC server

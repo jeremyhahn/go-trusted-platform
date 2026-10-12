@@ -228,11 +228,19 @@ func TestBootCmdFlags(t *testing.T) {
 		"timeout", "pcrs", "fallback", "emergency",
 		"device", "name", "tpm-path", "efi-path",
 		"xkms-dir", "verbose", "debug", "fips",
+		"diskless", "root-mount", "diskless-work-dir",
 	}
 	for _, flagName := range expectedFlags {
 		flag := BootCmd.Flags().Lookup(flagName)
 		if flag == nil {
 			t.Errorf("flag %s should exist on boot command", flagName)
+		}
+	}
+	// The diskless root is described only by the signed command line; a flag
+	// that overrode its URLs or root hash would bypass the signature.
+	for _, flagName := range []string{"rootfs-url", "verity-url", "roothash"} {
+		if BootCmd.Flags().Lookup(flagName) != nil {
+			t.Errorf("flag %s must not exist on boot command", flagName)
 		}
 	}
 }

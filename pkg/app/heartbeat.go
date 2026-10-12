@@ -188,6 +188,43 @@ func (s certSigner) Public() crypto.PublicKey {
 	return s.pub
 }
 
+// idevidSigner is the TLS client key of the node's TPM-resident IDevID,
+// reporting idevidPub as its public half. Heartbeat and the diskless
+// per-boot fetch and delivery all authenticate with it.
+func (app *App) idevidSigner(idevidPub crypto.PublicKey) (crypto.Signer, error) {
+	// Build the IDevID key attributes from the platform configuration —
+	// the same constructor the enrollment flow signs with. The TPM's
+	// steady-state IDevIDAttributes() accessor rebuilds attributes from
+	// the persistent handle alone and cannot sign (observed live:
+	// "invalid parent key attributes", then a blob lookup for a
+	// TPM-persistent key).
+	if app.TPMConfig.IDevID == nil || app.PlatformKS == nil {
+		return nil, provisioning.ErrMissingCertificate
+	}
+	// Retained as a precondition though the digest is no longer passed to
+	// the attribute builder (go-xkms #355): a TPM that cannot produce it
+	// cannot satisfy the IDevID key's policy either.
+	if _, policyErr := app.TPM.PlatformPolicyDigest(); policyErr != nil {
+		return nil, &WrappedError{Msg: "IDevID: platform policy digest unavailable", Err: policyErr}
+	}
+	idevidAttrs, err := xkmssdk.IDevIDAttributesFromConfig(*app.TPMConfig.IDevID)
+	if err != nil {
+		return nil, &WrappedError{Msg: "IDevID: key attributes unavailable", Err: err}
+	}
+	// The TLS client cert's signer MUST report the certificate's public
+	// key: TPMSigner resolves its key from TPMAttributes and returns nil
+	// when those bytes are absent (the steady-state shape on enrolled
+	// nodes), and a nil Public() makes crypto/tls silently present NO
+	// client certificate — observed live as 401 "client certificate
+	// required" from the control plane. The caller supplies the public
+	// half: the IDevID certificate's key, or the key read from its
+	// persistent handle before the certificate is known.
+	return certSigner{
+		Signer: platform.NewTPMSigner(app.TPM, idevidAttrs, app.PlatformKS.Backend()),
+		pub:    idevidPub,
+	}, nil
+}
+
 // heartbeatServerPool resolves the CA pool for verifying the control
 // plane's server certificate: the local platform CA store when it can
 // chain the node's IDevID issuer, otherwise the operating-system trust
@@ -225,35 +262,9 @@ func (app *App) newHeartbeatClient(serverURL string) (*provisioning.Client, erro
 	if err != nil {
 		return nil, &WrappedError{Msg: "heartbeat: IDevID certificate unavailable", Err: err}
 	}
-	// Build the IDevID key attributes from the platform configuration —
-	// the same constructor the enrollment flow signs with. The TPM's
-	// steady-state IDevIDAttributes() accessor rebuilds attributes from
-	// the persistent handle alone and cannot sign (observed live:
-	// "invalid parent key attributes", then a blob lookup for a
-	// TPM-persistent key).
-	if app.TPMConfig.IDevID == nil {
-		return nil, provisioning.ErrMissingCertificate
-	}
-	// Retained as a precondition though the digest is no longer passed to
-	// the attribute builder (go-xkms #355): a TPM that cannot produce it
-	// cannot satisfy the IDevID key's policy either.
-	if _, policyErr := app.TPM.PlatformPolicyDigest(); policyErr != nil {
-		return nil, &WrappedError{Msg: "heartbeat: platform policy digest unavailable", Err: policyErr}
-	}
-	idevidAttrs, err := xkmssdk.IDevIDAttributesFromConfig(*app.TPMConfig.IDevID)
+	tpmSigner, err := app.idevidSigner(idevidCert.PublicKey)
 	if err != nil {
-		return nil, &WrappedError{Msg: "heartbeat: IDevID key attributes unavailable", Err: err}
-	}
-	// The TLS client cert's signer MUST report the certificate's public
-	// key: TPMSigner resolves its key from TPMAttributes and returns nil
-	// when those bytes are absent (the steady-state shape on enrolled
-	// nodes), and a nil Public() makes crypto/tls silently present NO
-	// client certificate — observed live as 401 "client certificate
-	// required" from the control plane. The IDevID certificate itself is
-	// the authoritative source for the public half.
-	tpmSigner := certSigner{
-		Signer: platform.NewTPMSigner(app.TPM, idevidAttrs, app.PlatformKS.Backend()),
-		pub:    idevidCert.PublicKey,
+		return nil, err
 	}
 	caPool, err := app.heartbeatServerPool(idevidCert)
 	if err != nil {

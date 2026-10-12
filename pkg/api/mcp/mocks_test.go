@@ -81,6 +81,8 @@ type mockServiceProvider struct {
 	deviceUpdateFunc           func(ctx context.Context, deviceID string, updates map[string]interface{}) error
 	deviceAttestFunc           func(ctx context.Context, deviceID string, evidence []byte) (interface{}, error)
 	deviceRecordAttestCertFunc func(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error)
+	deviceBootCertificateFunc  func(ctx context.Context, identity string, signature []byte) (interface{}, error)
+	deviceBootDeliveryFunc     func(ctx context.Context, evidence []byte) (interface{}, error)
 	deviceProvisionFunc        func(ctx context.Context, deviceID, profile string) error
 
 	// SDN Bridge
@@ -1117,6 +1119,20 @@ func (m *mockServiceProvider) DeviceAttest(ctx context.Context, deviceID string,
 func (m *mockServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error) {
 	if m.deviceRecordAttestCertFunc != nil {
 		return m.deviceRecordAttestCertFunc(ctx, deviceID, reissue, clearOnRefusal)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) DeviceBootCertificate(ctx context.Context, identity string, signature []byte) (interface{}, error) {
+	if m.deviceBootCertificateFunc != nil {
+		return m.deviceBootCertificateFunc(ctx, identity, signature)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) DeviceBootDelivery(ctx context.Context, evidence []byte) (interface{}, error) {
+	if m.deviceBootDeliveryFunc != nil {
+		return m.deviceBootDeliveryFunc(ctx, evidence)
 	}
 	return nil, nil
 }

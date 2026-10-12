@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -303,6 +304,10 @@ func (s *Server) deviceBootInfo(mac string) (*ipxe.DeviceBootInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	args, err := nodeBootArgs(entry, set, s.config)
+	if err != nil {
+		return nil, err
+	}
 	base := serverBaseURL(s.config)
 	return &ipxe.DeviceBootInfo{
 		MAC:             mac,
@@ -311,8 +316,24 @@ func (s *Server) deviceBootInfo(mac string) (*ipxe.DeviceBootInfo, error) {
 		Architecture:    set.Architecture,
 		KernelURL:       set.url(base, set.Kernel),
 		InitrdURL:       set.url(base, set.Initrd),
-		ExtraKernelArgs: []string{set.bootArgs(s.config)},
+		ExtraKernelArgs: []string{args},
 	}, nil
+}
+
+// nodeBootArgs are the set's kernel arguments for one node. A diskless node
+// also gets the boot model, which tells its installer to build a diskless UKI
+// from the set's signed manifest; the root itself — URLs, hash, salt, sizes —
+// is never on this command line, which nothing signs. A disk node, or a node
+// the manifest does not know, gets the set's arguments alone.
+func nodeBootArgs(entry *ManifestEntry, set MediaSet, config *ServerConfig) (string, error) {
+	args := set.bootArgs(config)
+	if entry.BootModel != disklessroot.BootModel {
+		return args, nil
+	}
+	if !set.Diskless {
+		return "", ErrDisklessUnavailable{MAC: entry.MAC, MediaSet: set.Name}
+	}
+	return args + " " + disklessroot.ParamBootModel + "=" + disklessroot.BootModel, nil
 }
 
 // setFor resolves the media set a manifest entry boots.

@@ -39,6 +39,7 @@ Targets:
 	cmd.AddCommand(newAssembleCommand(getFlags))
 	cmd.AddCommand(newNetbootCommand(getFlags))
 	cmd.AddCommand(newNetbootInitfsCommand(getFlags))
+	cmd.AddCommand(newDisklessRootCommand(getFlags))
 	cmd.AddCommand(newRPIEEPROMHSMCommand(getFlags))
 	return cmd
 }

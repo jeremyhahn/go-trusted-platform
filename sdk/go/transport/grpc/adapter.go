@@ -16,6 +16,7 @@ package grpc
 
 import (
 	"context"
+	"crypto/tls"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
@@ -52,7 +53,14 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 	// Build dial options - TLS is mandatory for gRPC transport
 	var dialOpts []grpc.DialOption
 
-	dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(opts.ClientTLSConfig())))
+	// The recorded handshake state lets calls bound to their channel
+	// (transport.WithChannelBinding) read the exporter of the connection
+	// they travel on.
+	handshake := &atomic.Pointer[tls.ConnectionState]{}
+	dialOpts = append(dialOpts,
+		grpc.WithTransportCredentials(&recordingCreds{TransportCredentials: credentials.NewTLS(opts.ClientTLSConfig()), state: handshake}),
+		grpc.WithChainUnaryInterceptor(bindingInterceptor(handshake)),
+	)
 
 	dialOpts = append(dialOpts, grpc.WithDefaultCallOptions(
 		grpc.MaxCallRecvMsgSize(maxMsgSize),

@@ -71,6 +71,13 @@ func handleServiceErr(responseWriter response.HttpWriter, w http.ResponseWriter,
 		return
 	}
 
+	// No profile matches the identity: not found, not a server fault.
+	var noMatch device.ErrNoMatchingConfig
+	if errors.As(err, &noMatch) {
+		responseWriter.Error404(w, r, err)
+		return
+	}
+
 	errStr := err.Error()
 
 	switch {

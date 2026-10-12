@@ -23,24 +23,10 @@ import (
 // verification. It is the same shape on every transport: gRPC and Unix carry
 // it as the AttestDeviceRequest.evidence bytes, QUIC and the live REST stack
 // pass those bytes through, and MCP carries it as the tool's evidence
-// argument.
-//
-// PCRs are the values the device READ from its TPM for the quoted selection.
-// They are not trusted as-is: the verifier proves they hash to the digest the
-// TPM signed, then compares them against the baseline recorded on the
-// device's profile. The attester never supplies the expected state (#373).
-type DeviceQuoteEvidence struct {
-	// Quote is the marshaled TPMS_ATTEST structure the TPM produced.
-	Quote []byte `json:"quote"`
-	// Signature is the attestation-key signature over Quote.
-	Signature []byte `json:"signature"`
-	// Nonce is the verifier-issued anti-replay value that must appear in
-	// the quote's extraData.
-	Nonce []byte `json:"nonce"`
-	// PCRs maps PCR index to the SHA-256 value the device read for it. The
-	// index set must exactly match the quote's PCR selection.
-	PCRs map[int][]byte `json:"pcrs"`
-}
+// argument. The type lives in pkg/attestation/vm so the attester side — a
+// diskless node's platformd (#690) — builds the same shape this verifier
+// reads.
+type DeviceQuoteEvidence = vm.QuoteEvidence
 
 // DeviceAttestationResult reports what was verified, check by check, so a
 // caller can tell a bad signature from a PCR mismatch from a device that has

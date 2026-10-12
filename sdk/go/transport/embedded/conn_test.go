@@ -2,10 +2,13 @@ package embedded
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -50,6 +53,32 @@ func TestInvoke_UnregisteredMethod(t *testing.T) {
 
 	if !strings.Contains(st.Message(), "not registered") {
 		t.Errorf("expected error message to contain 'not registered', got %q", st.Message())
+	}
+}
+
+// An in-process call has no connection, so a call bound to its channel is
+// refused with the typed error before dispatch and its proof callback never
+// runs.
+func TestInvoke_RefusesChannelBinding(t *testing.T) {
+	conn := newEmbeddedClientConn(testRegistry())
+	called := false
+	bind := transport.WithChannelBinding(func(context.Context, []byte) error {
+		called = true
+		return nil
+	})
+
+	err := conn.Invoke(context.Background(), platformv1.PlatformDaemon_GetVersion_FullMethodName,
+		&platformv1.GetVersionRequest{}, &platformv1.GetVersionResponse{}, bind)
+
+	var unavailable *transport.ErrChannelBindingUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("err = %v, want ErrChannelBindingUnavailable", err)
+	}
+	if unavailable.Transport != platform.ProtocolEmbedded.String() {
+		t.Errorf("transport = %q, want %q", unavailable.Transport, platform.ProtocolEmbedded.String())
+	}
+	if called {
+		t.Error("the proof callback ran on a transport with no connection to bind to")
 	}
 }
 

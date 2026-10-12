@@ -288,6 +288,11 @@ func (h *TemplateHandler) CreateProfileFromTemplate(w http.ResponseWriter, r *ht
 		handleServiceErr(h.responseWriter, w, r, err)
 		return
 	}
+	// The template carries no profile id; one is minted server-side unless
+	// the overrides name it, as on the other create routes.
+	if profile.ID == 0 {
+		profile.ID = device.NewID()
+	}
 
 	if err := h.profileService.Save(r.Context(), profile); err != nil {
 		h.logger.Errorf("failed to save profile from template: %v", err)

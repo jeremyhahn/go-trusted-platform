@@ -337,6 +337,32 @@ func (r *ToolRegistry) executeDeviceRecordAttestCert(ctx context.Context, args m
 	return marshalResult(result)
 }
 
+func (r *ToolRegistry) executeDeviceBootCertificate(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	signature, err := base64.StdEncoding.DecodeString(getString(args, "signature"))
+	if err != nil {
+		return nil, &mcpwire.WrappedError{Msg: "invalid signature encoding", Err: err}
+	}
+
+	result, err := r.service.DeviceBootCertificate(ctx, getString(args, "identity"), signature)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeDeviceBootDelivery(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	evidence, err := base64.StdEncoding.DecodeString(getString(args, "evidence"))
+	if err != nil {
+		return nil, &mcpwire.WrappedError{Msg: "invalid evidence encoding", Err: err}
+	}
+
+	result, err := r.service.DeviceBootDelivery(ctx, evidence)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
 func (r *ToolRegistry) executeDeviceProvision(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	deviceID := getString(args, "device_id")
 	profile := getString(args, "profile")

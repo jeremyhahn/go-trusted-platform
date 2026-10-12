@@ -153,6 +153,18 @@ func (e ErrUnknownMediaSet) Error() string {
 	return "bootstrap container: " + e.MAC + " is " + e.Architecture + " and no media set is that architecture's default"
 }
 
+// ErrDisklessUnavailable is a diskless node whose media set was built without
+// the diskless root (netboot media build without --diskless). Booting it
+// anyway would install it to a disk it is not meant to have.
+type ErrDisklessUnavailable struct {
+	MAC      string
+	MediaSet string
+}
+
+func (e ErrDisklessUnavailable) Error() string {
+	return "bootstrap container: " + e.MAC + " boots diskless and media set " + e.MediaSet + " has no diskless root (rebuild the netboot media with --diskless)"
+}
+
 // ErrNetbootMedia is a netboot media build whose index is unreadable or
 // names something the build does not hold.
 type ErrNetbootMedia struct {

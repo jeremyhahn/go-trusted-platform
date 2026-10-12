@@ -39,8 +39,13 @@
 | `pkg/iso/types.go` | `InstallerOverrides` |
 | `build/docker/uboot-builder/` | `Dockerfile`, `Makefile`, `build-uboot.sh`, `mkesl.py`, `configs/{common-efi.config,rpi_arm64-tpm.config,qemu_arm64-tpm.config,tpm-soft-spi.dts}`, `patches/0001-mbedtls-glue-return-errno-for-parse-failures.patch`, `README.md` — every file but the README is a cache-key input |
 | `build/docker/trusted-platform/Dockerfile-alpine-swtpm-arm64` | arm64 Alpine + swtpm for the userspace suite; the platform binaries are bind-mounted from `bin/aarch64` |
-| `build/docker/diskimage-builder/Dockerfile` | the arm64 Alpine assemble container (apk-tools, parted, dosfstools, e2fsprogs, lvm2, util-linux, kmod, cpio, xz, mkinitfs, squashfs-tools — no platform binaries, no keys); it also runs `diskimage netboot-initfs`. One image per platform: `BuildConfig.builderImageFor(arch)` tags `<BuilderImage>:<arch>` — host arch for assemble, target arch for netboot-initfs — so neither step can run the other's image |
+| `build/docker/diskimage-builder/Dockerfile` | the arm64 Alpine assemble container (apk-tools, parted, dosfstools, e2fsprogs, lvm2, util-linux, kmod, cpio, xz, mkinitfs, squashfs-tools, cryptsetup — no platform binaries, no keys); it also runs `diskimage netboot-initfs` and `diskimage diskless-root`. One image per platform: `BuildConfig.builderImageFor(arch)` tags `<BuilderImage>:<arch>` — host arch for assemble, target arch for netboot-initfs and diskless-root — so no step can run another platform's image |
 | `pkg/diskimage/netboot_initfs.go` | `GenerateNetbootInitfs` (in-container), `StagedMedia.BuildNetbootInitfs` (host side), `NetbootInitfsOptions`, `NetbootInitfs`, `NetbootInitfsFeatures` |
+| `pkg/diskimage/diskless_root.go` | `GenerateDisklessRoot` (in-container), `StagedMedia.BuildDisklessRoot` (host side through `runner.Container`), `DisklessRootOptions`, `DisklessRoot`, `DisklessRootFSFile`, `DisklessVerityFile`, `DisklessRootHashFile` |
+| `pkg/diskimage/diskless_secrets.go` | `refuseRootPrivateKeys`, the pre-`mksquashfs` walk that refuses a root carrying private key material, and its `DisklessRootPrivateKeyError` |
+| `pkg/diskimage/diskless_credentials.go` | `lockRootAccounts` (locks usable shadow hashes before packing), `refuseRootCredentials` and its `DisklessRootCredentialError` |
+| `pkg/diskimage/diskless_config.go` | `refuseRootConfigSecrets` (refuses an installed platform config holding a plaintext `secret:"true"` field, found by `bootstrap.PlaintextSecretFields` against `app.App`) and its `DisklessRootConfigSecretError` |
+| `pkg/initrd/diskless_root.go` | the initramfs-side diskless root path: fetch squashfs plus dm-verity hash tree, open with the signed `platform_roothash=` and pinned verity parameters, mount read-only squashfs and tmpfs overlay |
 
 ## 2. Exported surface
 
@@ -61,6 +66,8 @@ func NewTarget(name, model string) (Target, error)   // UnknownTargetError
 
 func Create(ctx context.Context, cfg *BuildConfig) (*Result, error)
 func Assemble(ctx context.Context, opts AssembleOptions) (*AssembleResult, error)
+func GenerateDisklessRoot(ctx context.Context, opts DisklessRootOptions) (*DisklessRoot, error)
+func (s *StagedMedia) BuildDisklessRoot(ctx context.Context, outDir, manifestDir string, sourceDateEpoch int64, version string) (*DisklessRoot, error)
 func Inspect(ctx context.Context, path string, run runner.Runner) (*Report, error)
 func Boot(ctx context.Context, opts BootOptions) (*BootResult, error)
 func Preflight(ctx context.Context, run runnerFunc, containerRuntime, arch string) error
@@ -143,7 +150,20 @@ release and are held equal to `build/docker/uboot-builder/Makefile` by
    board directory, checks every file against its `SHA256SUMS`
    (`ChecksumMismatchError` for a bad digest *or* a file with no entry), and
    requires `overlays/tpm-soft-spi.dtbo` for `rpi_arm64`.
-7. **The cache key is one value in two implementations, over every input
+7. **Diskless image boot fails closed.** The builder refuses a root without
+   `/sbin/init` or `/usr/bin/platformd` (`DisklessRootContentError`), checked
+   in the installed tree and again in the squashfs listing, before any verity
+   tree is made. The root hash is published only inside the DB-signed
+   manifest. `platform-initrd` accepts a diskless root only when the signed
+   UKI's `platform_roothash=`, `platform_verity_salt=`, sizes and URLs are all
+   present and valid; it fetches the squashfs and hash tree into bounded
+   tmpfs, and opens dm-verity before any mount with a device-mapper table
+   (`dmsetup create --readonly`) whose every parameter is pinned or signed —
+   there is no superblock to read them from, and no cryptsetup in the
+   initramfs. dm-verity checks each block as it is read, starting with the
+   squashfs superblock at mount; one that does not hash up to the signed root
+   panics the node (`panic_on_corruption`) rather than serve it.
+8. **The cache key is one value in two implementations, over every input
    that shapes the binary.** `uboot.CacheKey` and `make cache-key` hash
    `uboot:<version>`, `owner:<GUID>` (the SignatureOwner written into every
    preseeded list), then the sha256 of each config input — the fragments,
@@ -157,34 +177,34 @@ release and are held equal to `build/docker/uboot-builder/Makefile` by
    the ESL writer therefore misses the cache; before this (review finding
    on #680) it could stage an old `u-boot.bin` into a new image under a
    manifest reporting a matching key.
-8. **The baked config makes the node self-describing.** `applyInstallerOverrides`
+9. **The baked config makes the node self-describing.** `applyInstallerOverrides`
    (`pkg/iso/customize.go`) always writes `os.architecture`, and writes
    `os.kernel-package`, `disk.device`, `disk.partition-table`,
    `hardware-manufacturer`, `hardware-model`, `install-target` and
    `boot.firmware` when the target sets them. The node's own config therefore
    says `aarch64` / `uboot`, so `platformctl install uki-rebuild` on the
    node produces `BOOTAA64.EFI`.
-9. **The loop device comes from `/dev/loop-control`**, not `losetup --find`:
+10. **The loop device comes from `/dev/loop-control`**, not `losetup --find`:
    `allocateLoopDevice` issues `LOOP_CTL_GET_FREE` and creates `/dev/loopN`
    with `mknod` when the container's private `/dev` has no node for it
    (`LoopDeviceError` otherwise), then `losetup --partscan` attaches the
    image. Detach runs whether or not the install succeeded; a detach failure
    after a failed install is logged, not raised.
-10. **The host's `/dev` is never bind-mounted into the container.** The
+11. **The host's `/dev` is never bind-mounted into the container.** The
     installer's `mdev -s` resets the mode of every device node it walks;
     `TestCreateStagesMediaAndRunsTheContainer` fails if the `docker create` argv ever names a
     `/dev` path again. The private `/dev` is static, so the installer's
     partition-node refresh (installer engineering invariant 15) is what keeps
     `/dev/loopNp1` usable after the second partition-table re-read.
-11. **The size floor is 2048 MB** (default 4096); `Create` and `Assemble`
+12. **The size floor is 2048 MB** (default 4096); `Create` and `Assemble`
     fail below it before touching anything.
-12. **`Preflight` runs before any work** unless `SkipPreflight`: the runtime
+13. **`Preflight` runs before any work** unless `SkipPreflight`: the runtime
     answers `version`; on a foreign architecture a short-lived privileged
     `alpine:3.22` container started through the runtime (so the answer is the
     runtime host's, not the caller's `/proc`) reads
     `/proc/sys/fs/binfmt_misc/qemu-<arch>` and it carries `F` in its
     `flags:`; native builds run no probe; `/sys/module/loop` and `/sys/module/dm_crypt` exist.
-13. **The assemble container runs at the host platform** (`BuildConfig.HostArch`,
+14. **The assemble container runs at the host platform** (`BuildConfig.HostArch`,
     default `runtime.GOARCH`), never the target's: qemu-user has no keyring
     syscalls, so go-luks2 cannot open the volume under emulation (#802). A
     foreign target runs the installer from `BuildConfig.HostInstallerBinary`
@@ -322,6 +342,11 @@ served by the bootstrap container instead of written to a card.
   (`iso.StageInstallMedia` with the x86 binaries: no U-Boot, no boot
   firmware, the machine's own UEFI) and boots Alpine's `lts` flavour.
   `DefaultSets` = `X86_64Set` + `RaspberryPiSet` + `ARM64VirtSet`.
+  `Config.SetsToBuild` is the one answer to "which sets": the named `Sets`,
+  else `DefaultSets`, less every set with no diskless image when `Diskless`
+  is set. `platformctl diskimage netboot` passes no sets when `--sets` is
+  absent and asks `SetsToBuild` before resolving per-set binaries, so a
+  default `--diskless` build never needs the x86_64 binaries.
 - Every set's `initramfs-<flavour>` is rewritten as the installer's
   (`iso.InstallMedia.InstallerInitramfs` → `Customizer.InstallerInitramfs`):
   the autoinstall overlay generated from the set's own media configuration,

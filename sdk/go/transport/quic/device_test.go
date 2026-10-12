@@ -72,8 +72,13 @@ func TestGRPCMethodToOpcodeMap_Device(t *testing.T) {
 		{"/platform.v1.DeviceService/AssignProfileToDevice", quicwire.DeviceProfileSubAssign},
 		{"/platform.v1.DeviceService/UnassignProfileFromDevice", quicwire.DeviceProfileSubUnassign},
 		{"/platform.v1.DeviceService/RecordAttestationCertificate", quicwire.DeviceSubRecordAttestCert},
+		{"/platform.v1.DeviceService/BootCertificate", quicwire.DeviceSubBootCertificate},
+		{"/platform.v1.DeviceService/BootDelivery", quicwire.DeviceSubBootDelivery},
 	}
 	for _, tt := range subTests {
+		if opcode := grpcMethodToOpcodeMap[tt.method]; opcode != quicwire.OpProvisioningCategory {
+			t.Errorf("method %q opcode = 0x%02X, want OpProvisioningCategory", tt.method, opcode)
+		}
 		sub, ok := categorySubOpcodeMap[tt.method]
 		if !ok {
 			t.Errorf("method %q has no category sub-opcode", tt.method)
@@ -82,6 +87,38 @@ func TestGRPCMethodToOpcodeMap_Device(t *testing.T) {
 		if sub != tt.sub {
 			t.Errorf("method %q sub-opcode = 0x%02X, want 0x%02X", tt.method, sub, tt.sub)
 		}
+	}
+}
+
+// TestInvoke_DeviceBootDelivery_CategoryFraming verifies BootDelivery
+// travels under OpProvisioningCategory with the DeviceSubBootDelivery prefix
+// and decodes the pb response.
+func TestInvoke_DeviceBootDelivery_CategoryFraming(t *testing.T) {
+	respPayload, err := quicwire.EncodePayload(&platformv1.BootDeliveryResponse{Serial: "SN-1"})
+	if err != nil {
+		t.Fatalf("encode response: %v", err)
+	}
+
+	sender := &recordingSender{respPayload: respPayload}
+	conn := newConnWithSender(t, sender)
+
+	var reply platformv1.BootDeliveryResponse
+	err = conn.Invoke(context.Background(),
+		"/platform.v1.DeviceService/BootDelivery",
+		&platformv1.BootDeliveryRequest{Evidence: []byte("evidence")},
+		&reply)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	if sender.rawOpcode != quicwire.OpProvisioningCategory {
+		t.Errorf("opcode = 0x%02X, want OpProvisioningCategory", sender.rawOpcode)
+	}
+	if len(sender.rawPayload) < 2 || sender.rawPayload[0] != quicwire.DeviceSubBootDelivery {
+		t.Fatalf("payload = %v, want DeviceSubBootDelivery prefix", sender.rawPayload)
+	}
+	if reply.GetSerial() != "SN-1" {
+		t.Errorf("serial = %q, want SN-1", reply.GetSerial())
 	}
 }
 

@@ -160,11 +160,11 @@ type AWSProviderConfig struct {
 	AccessKeyID string `json:"access_key_id,omitempty" yaml:"access_key_id,omitempty" mapstructure:"access_key_id"`
 
 	// SecretAccessKey is an optional static secret access key.
-	SecretAccessKey string `json:"secret_access_key,omitempty" yaml:"secret_access_key,omitempty" mapstructure:"secret_access_key"`
+	SecretAccessKey string `json:"secret_access_key,omitempty" yaml:"secret_access_key,omitempty" mapstructure:"secret_access_key" secret:"true"`
 
 	// SessionToken is an optional STS session token for temporary
 	// credentials.
-	SessionToken string `json:"session_token,omitempty" yaml:"session_token,omitempty" mapstructure:"session_token"`
+	SessionToken string `json:"session_token,omitempty" yaml:"session_token,omitempty" mapstructure:"session_token" secret:"true"`
 
 	// Endpoint overrides the EC2 API endpoint. Empty uses the region default.
 	// Set this to point the orchestrator at a local AWS emulator for

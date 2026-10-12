@@ -33,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/partition"
@@ -81,6 +82,14 @@ type installer struct {
 	// espRoot overrides the mounted EFI system partition path for tests;
 	// empty means the installer's own mount point (see espRootDir).
 	espRoot string
+
+	// disklessManifestDir overrides where the media set's signed diskless
+	// root manifest is read for tests; empty means the install media's.
+	disklessManifestDir string
+
+	// efivarsDir overrides the efivarfs directory the enrolled db is read
+	// from for tests; empty means uefi.EfivarsPath.
+	efivarsDir string
 }
 
 // InstallerOption customises a newly constructed installer. The primary use is
@@ -1166,50 +1175,26 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		i.logger.Debug("[UKI] Using kernel", "path", kernelPath)
 	}
 
+	// The live command line comes from the boot server, so only the debug
+	// sink and the diskless selector are read from it; a diskless node's
+	// root comes from the media set's signed manifest (disklessCmdlineParams).
+	liveCmdline := ""
+	if !i.skip(stepHostCmdlinePropagation) {
+		if data, readErr := os.ReadFile("/proc/cmdline"); readErr == nil {
+			liveCmdline = string(data)
+		}
+	}
+	disklessParams, err := i.disklessCmdlineParams(ctx, liveCmdline)
+	if err != nil {
+		return err
+	}
+
 	// Build kernel command line
-	var cmdlineParts []string
-
-	// Add root device
-	rootDevice := diskInfo.RootPartition
-	if diskInfo.LVMDevice != "" {
-		rootDevice = diskInfo.LVMDevice
-	} else if diskInfo.MappedDevice != "" {
-		rootDevice = diskInfo.MappedDevice
-	}
-	cmdlineParts = append(cmdlineParts, fmt.Sprintf("root=%s", rootDevice))
-
-	// Add LUKS parameters if encryption is enabled
-	if diskInfo.MappedDevice != "" {
-		luksName := "cryptroot"
-		if i.config.Disk != nil && i.config.Disk.Encryption != nil && i.config.Disk.Encryption.MappedName != "" {
-			luksName = i.config.Disk.Encryption.MappedName
-		}
-		if diskInfo.LUKSUUID != "" {
-			cmdlineParts = append(cmdlineParts,
-				fmt.Sprintf("rd.luks.uuid=%s", diskInfo.LUKSUUID),
-				fmt.Sprintf("rd.luks.name=%s=%s", diskInfo.LUKSUUID, luksName),
-			)
-		} else {
-			i.logger.Warn("[UKI] LUKS UUID not available, using device path")
-			cmdlineParts = append(cmdlineParts, fmt.Sprintf("rd.luks.name=%s", luksName))
-		}
-	}
-
-	// Add LVM parameters if using LVM
-	if diskInfo.LVMDevice != "" {
-		cmdlineParts = append(cmdlineParts, "rd.lvm=1")
-		if diskInfo.LVMVolumeGroup != "" {
-			cmdlineParts = append(cmdlineParts, fmt.Sprintf("rd.lvm.vg=%s", diskInfo.LVMVolumeGroup))
-		}
-	}
+	cmdlineParts := i.ukiRootCmdlineParams(diskInfo, disklessParams)
 
 	hwQuirk := i.resolveHardwareQuirk()
 
-	// Add standard boot parameters
-	cmdlineParts = append(cmdlineParts,
-		"rootfstype=ext4",
-		"ro",
-	)
+	cmdlineParts = append(cmdlineParts, "ro")
 	// Append vendor-specific console/earlycon parameters from the quirk
 	// table.  These cover SOL UART wiring, early console binding, and VGA
 	// mirroring for the resolved hardware platform.
@@ -1279,20 +1264,8 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		}
 	}
 
-	// In debug mode, propagate debug params from the installer's kernel
-	// cmdline into the UKI cmdline so firstboot-log-upload and platformd
-	// self-registration can reach the bootstrap server after disk reboot.
+	cmdlineParts = append(cmdlineParts, hostUKICmdlineParams(liveCmdline, i.config.Debug)...)
 	if i.config.Debug {
-		cmdlineParts = append(cmdlineParts, "platform_debug=1")
-		// Read the bootstrap server address from the installer's live env cmdline
-		if liveCmdline, readErr := os.ReadFile("/proc/cmdline"); readErr == nil && !i.skip(stepHostCmdlinePropagation) {
-			for _, param := range strings.Fields(string(liveCmdline)) {
-				if strings.HasPrefix(param, "platform_debug_sink=") {
-					cmdlineParts = append(cmdlineParts, param)
-					i.logger.Info("[UKI] Propagating debug sink to UKI cmdline", "param", param)
-				}
-			}
-		}
 		i.logger.Info("[UKI] Debug mode: baked platform_debug params into UKI cmdline")
 	}
 
@@ -1574,6 +1547,29 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 
 	i.logger.Info("[UKI] UKI built and synced successfully", "path", ukiPath, "size", ukiInfo.Size(), "cmdline", cmdline)
 	return nil
+}
+
+// hostUKICmdlineParams are the live-boot parameters a debug install carries
+// into its UKI: platform_debug and the boot server's diagnostics sink. Nothing
+// else on the live command line reaches the signed one.
+func hostUKICmdlineParams(liveCmdline string, debug bool) []string {
+	if !debug {
+		return nil
+	}
+	params := []string{"platform_debug=1"}
+	if value := cmdlineParam(strings.Fields(liveCmdline), "platform_debug_sink="); value != "" {
+		params = append(params, value)
+	}
+	return params
+}
+
+func cmdlineParam(fields []string, prefix string) string {
+	for _, param := range fields {
+		if strings.HasPrefix(param, prefix) {
+			return param
+		}
+	}
+	return ""
 }
 
 // generateOSRelease creates an os-release string
@@ -3207,7 +3203,45 @@ func (i *installer) installFirstbootService(ctx context.Context) error {
 		return &WrappedError{Msg: "failed to create /etc/init.d directory", Err: err}
 	}
 
-	firstbootService := `#!/sbin/openrc-run
+	firstbootServicePath := filepath.Join(initdDir, "tpm-firstboot-seal")
+	if err := os.WriteFile(firstbootServicePath, []byte(tpmFirstbootSealService), 0755); err != nil {
+		return &WrappedError{Msg: "failed to write tpm-firstboot-seal service", Err: err}
+	}
+	i.logger.Info("[FIRSTBOOT] Created tpm-firstboot-seal OpenRC service")
+
+	// 4. Enable tpm-firstboot-seal service in default runlevel
+	rcUpdateCmd := exec.CommandContext(ctx, "chroot", mountPoint, "rc-update", "add", "tpm-firstboot-seal", "default")
+	if output, err := rcUpdateCmd.CombinedOutput(); err != nil {
+		i.logger.Warn("[FIRSTBOOT] Failed to enable tpm-firstboot-seal service", "error", err, "output", string(output))
+		// Don't fail, service can be enabled manually
+	} else {
+		i.logger.Info("[FIRSTBOOT] Enabled tpm-firstboot-seal service in default runlevel")
+	}
+
+	i.logger.Info("[FIRSTBOOT] First-boot TPM sealing service installation complete")
+	i.logger.Info("[FIRSTBOOT] On first boot, system will seal LUKS key to TPM with PCR policy")
+
+	// Install firstboot log upload service (debug mode only)
+	if err := i.installFirstbootLogUploadService(ctx); err != nil {
+		i.logger.Warn("[FIRSTBOOT] Failed to install firstboot-log-upload service", "error", err)
+		// Don't fail - debug log upload is best-effort
+	}
+
+	// Install platformd OpenRC service
+	if err := i.installPlatformdService(ctx); err != nil {
+		i.logger.Warn("[FIRSTBOOT] Failed to install platformd service", "error", err)
+		// Don't fail - service can be installed manually
+	}
+
+	return nil
+}
+
+// tpmFirstbootSealService is the tpm-firstboot-seal OpenRC service. On a
+// diskless node (platform_boot_model=diskless on the signed command line) it
+// stops before the LUKS lookup: the root is a verified image with no LUKS
+// volume to seal, and platformd adopts or provisions the TPM itself
+// (docs/tpm/architecture.md §4d).
+const tpmFirstbootSealService = `#!/sbin/openrc-run
 
 description="First-boot TPM sealing and re-sealing after kernel upgrades"
 
@@ -3217,8 +3251,15 @@ depend() {
     keyword -shutdown
 }
 
+` + disklessroot.BootModelShell + disklessroot.NetworkConfShell + `
 start() {
     ebegin "Running platformd TPM sealing"
+
+    if [ "$(platformd_boot_model /proc/cmdline)" = "diskless" ]; then
+        einfo "Diskless node: no LUKS root to seal; platformd provisions the TPM"
+        eend 0
+        return 0
+    fi
 
     RESEAL_MODE=false
 
@@ -3254,7 +3295,7 @@ start() {
     # Apply network configuration from EFI partition
     if [ -f /boot/efi/tpm2/network.conf ]; then
         einfo "Loading network configuration from EFI partition"
-        . /boot/efi/tpm2/network.conf
+        platformd_load_network_conf /boot/efi/tpm2/network.conf || ewarn "Ignored lines in network.conf that are not allow-listed KEY=value"
 
         # Set hostname if provided
         if [ -n "$HOSTNAME" ]; then
@@ -3355,39 +3396,6 @@ stop() {
     return 0
 }
 `
-
-	firstbootServicePath := filepath.Join(initdDir, "tpm-firstboot-seal")
-	if err := os.WriteFile(firstbootServicePath, []byte(firstbootService), 0755); err != nil {
-		return &WrappedError{Msg: "failed to write tpm-firstboot-seal service", Err: err}
-	}
-	i.logger.Info("[FIRSTBOOT] Created tpm-firstboot-seal OpenRC service")
-
-	// 4. Enable tpm-firstboot-seal service in default runlevel
-	rcUpdateCmd := exec.CommandContext(ctx, "chroot", mountPoint, "rc-update", "add", "tpm-firstboot-seal", "default")
-	if output, err := rcUpdateCmd.CombinedOutput(); err != nil {
-		i.logger.Warn("[FIRSTBOOT] Failed to enable tpm-firstboot-seal service", "error", err, "output", string(output))
-		// Don't fail, service can be enabled manually
-	} else {
-		i.logger.Info("[FIRSTBOOT] Enabled tpm-firstboot-seal service in default runlevel")
-	}
-
-	i.logger.Info("[FIRSTBOOT] First-boot TPM sealing service installation complete")
-	i.logger.Info("[FIRSTBOOT] On first boot, system will seal LUKS key to TPM with PCR policy")
-
-	// Install firstboot log upload service (debug mode only)
-	if err := i.installFirstbootLogUploadService(ctx); err != nil {
-		i.logger.Warn("[FIRSTBOOT] Failed to install firstboot-log-upload service", "error", err)
-		// Don't fail - debug log upload is best-effort
-	}
-
-	// Install platformd OpenRC service
-	if err := i.installPlatformdService(ctx); err != nil {
-		i.logger.Warn("[FIRSTBOOT] Failed to install platformd service", "error", err)
-		// Don't fail - service can be installed manually
-	}
-
-	return nil
-}
 
 // installPlatformdService installs the platformd OpenRC service
 // This service starts the platform daemon (web services auto-start if configured)

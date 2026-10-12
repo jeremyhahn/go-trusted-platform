@@ -227,6 +227,13 @@ if errors.As(err, &timeout) {
 Unix and gRPC connect lazily, so they time out on the first call instead, as a
 gRPC `DeadlineExceeded` status.
 
+A REST call bound to its TLS channel (the diskless `BootCertificate` and
+`BootDelivery`) dials a connection of its own. `WithTimeout` bounds that dial
+and its TLS handshake even when the call's context has no deadline, and an
+earlier context deadline still wins. A daemon that accepts the connection and
+never answers TLS fails the call with `transport.ErrChannelBindingUnavailable`
+wrapping `ErrTimeout` (operation `REST bound dial`).
+
 `ErrInsecureTransport` and `ErrUnsupportedOption` mean the options and the
 address do not fit the transport ([§3](#3-credentials)); fix the configuration
 rather than retrying.

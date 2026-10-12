@@ -34,7 +34,15 @@ type DeviceRouter struct {
 	configDeliveryHandler configdelivery.RestHandler
 	attestHandler         device.AttestHandler
 	attestCertHandler     device.AttestCertHandler
+	bootHandler           device.BootHandler
 	WebServiceRouter
+}
+
+// SetBootHandler supplies the handler for a diskless node's per-boot routes,
+// POST /device/boot/certificate and POST /device/boot (#690). Both are
+// machine-facing. Nil leaves them unregistered.
+func (r *DeviceRouter) SetBootHandler(handler device.BootHandler) {
+	r.bootHandler = handler
 }
 
 // SetAttestCertHandler supplies the handler for
@@ -151,6 +159,12 @@ func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
 //   - /provisioning/sessions/{id}/poll is polled by the provisioning client
 //     while it waits for an operator to fulfil its session, so it follows the
 //     device-facing half rather than the session views.
+//   - /device/boot/certificate returns a diskless node's recorded IDevID
+//     chain without a client certificate, because the node needs the chain
+//     to present one; it answers only a signature by the chain's key over
+//     the connection, and refuses everything else alike, so it cannot
+//     enumerate devices. /device/boot is mTLS like the other /device routes,
+//     and additionally demands a quote bound to the connection.
 //
 // Nothing that an operator drives may be added here.
 func (r *DeviceRouter) RegisterMachineFacingRoutes(router *mux.Router) {
@@ -162,6 +176,19 @@ func (r *DeviceRouter) RegisterMachineFacingRoutes(router *mux.Router) {
 	if r.configDeliveryHandler != nil {
 		r.registerProvisioningDeviceRoutes(router)
 	}
+	if r.bootHandler != nil {
+		r.boot(router)
+	}
+}
+
+// POST /api/v1/device/boot/certificate - a diskless node's recorded IDevID chain, for proof of its key
+// POST /api/v1/device/boot - attested, channel-bound per-boot delivery (mTLS)
+func (r *DeviceRouter) boot(router *mux.Router) {
+	router.HandleFunc("/device/boot/certificate", r.bootHandler.HandleBootCertificate).Methods("POST")
+	router.Handle("/device/boot", negroni.New(
+		negroni.HandlerFunc(r.mtlsMiddleware.Verify),
+		negroni.Wrap(http.HandlerFunc(r.bootHandler.HandleBootDelivery)),
+	)).Methods("POST")
 }
 
 // GET /api/v1/device/profile - Get device profile via mTLS

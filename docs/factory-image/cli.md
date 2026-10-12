@@ -18,6 +18,7 @@ platformctl diskimage rpi-eeprom-hsm Sign an EEPROM digest through the fleet KMS
 platformctl diskimage inspect    Report an image's partitions, EFI partition contents and UKI
 platformctl diskimage assemble   (hidden) Run the installer against a loop-mounted image
 platformctl diskimage netboot-initfs (hidden) Netboot initramfs + modloop for a platform-built kernel
+platformctl diskimage diskless-root (hidden) Squashfs root + dm-verity tree for diskless media
 ```
 
 All verbs except `rpi-eeprom-hsm` run on a build host without a running daemon;
@@ -51,7 +52,7 @@ and the staged media directory.
 | `--size` | int | `4096` | image size in MB; minimum `2048` |
 | `--output` | string | `<work-dir>/trusted-platform-<target>.img` | output image path |
 | `--binaries-dir` | string | `aarch64/` next to the running binary | directory holding the target-architecture `platformd`, `platformctl`, `platformctl-static`, `platform-initrd`, `gatewayd` |
-| `--builder-image` | string | `trusted-platform-diskimage-builder` | assemble container image repository, without a tag or digest (a registry port such as `registry:5000/foo` is fine; `foo:latest` and `foo@sha256:…` are rejected); tagged `:<arch>` (host arch for assemble, target arch for netboot-initfs) so each platform has its own image |
+| `--builder-image` | string | `trusted-platform-diskimage-builder` | assemble container image repository, without a tag or digest (a registry port such as `registry:5000/foo` is fine; `foo:latest` and `foo@sha256:…` are rejected); tagged `:<arch>` (host arch for assemble, target arch for netboot-initfs and diskless-root) so each platform has its own image |
 | `--builder-dir` | string | `build/docker/diskimage-builder` | assemble container build context |
 | `--container-runtime` | string | `docker` | container runtime binary |
 | `--uboot-dir` | string | | prebuilt U-Boot artifacts; skips the U-Boot build |
@@ -117,8 +118,10 @@ platformctl diskimage create --platform-config configs/platform/templates/single
 
 Builds a netboot media build (`container.NetbootMedia`, layout in
 [engineering.md §6](engineering.md)): one media set per architecture and board
-— `x86_64`, `aarch64-rpi`, `aarch64-virt` — plus the Raspberry Pi TFTP tree
-and the db-signed arm64 iPXE. `bootstrap.yaml`'s `deployer.netboot_media_dir`
+— `x86_64`, `aarch64-rpi`, `aarch64-virt` — plus the Raspberry Pi TFTP tree,
+the db-signed arm64 iPXE, and — with `--diskless` — the diskless root of every
+set that installs a target image.
+`bootstrap.yaml`'s `deployer.netboot_media_dir`
 points at the output. It takes every **Build** and **Media** flag of `create`
 (one `--platform-config` bakes into every set; the node's own config fetched
 per MAC replaces it at install), and:
@@ -132,13 +135,15 @@ per MAC replaces it at install), and:
 | `--ipxe` | string | `build/docker/ipxe-builder/output/bin-arm64-efi/snponly.efi` | the arm64 iPXE to sign (`make ipxe-build`; checked against its `SHA256SUMS`) |
 | `--model` | string | `rpi4` | board the TFTP tree's `config.txt` is written for |
 | `--sets` | strings | all | sets to build; an unknown name is `ErrUnknownMediaSet` |
+| `--diskless` | bool | `false` | also build the diskless root: `rootfs.squashfs` and `rootfs.verity` in the set, and `cdrom/diskless/manifest.json` (+ `.sig`) signed by the DB key; needs Secure Boot and a platform version. With no `--sets`, sets that have no diskless image (x86_64) are left out of the defaults with a logged notice; naming one in `--sets` fails with `UnsupportedDisklessSetError` |
 | `--fleet-key` | string | `""` | `kms://` reference of the RSA-2048 fleet key that signs the Pi's HTTP `boot.sig`; turns HTTP boot on (needs the `aarch64-rpi` set and a board with an EEPROM, not the 3B+) |
 | `--fleet-cert` | string | the `--fleet-key` id | `kms://` reference of the fleet key's certificate, which carries its public key; `kms://<ref>#sha256=<fingerprint>` pins it |
-| `--source-date-epoch` | int | now | `boot.sig`'s `ts` as a Unix time, for a reproducible build |
+| `--source-date-epoch` | int | `$SOURCE_DATE_EPOCH`; for `boot.sig`, now | the build time as a Unix time: the diskless root's every timestamp and, with the platform version, its verity salt, and `boot.sig`'s `ts`; with `--diskless`, missing or invalid is `ErrSourceDateEpoch` |
 | `--target-soc` | string | `""` | optional `boot.sig` `target-soc` (`2711` or `2712`); omitted by default for fleet `boot.img` |
 
-`--fleet-cert`, `--source-date-epoch`, and `--target-soc` without `--fleet-key`
-are an `ErrHTTPBootFlags`. A non-`kms://` `--fleet-key` is refused (the fleet
+`--fleet-cert` and `--target-soc` without `--fleet-key`, and
+`--source-date-epoch` without `--fleet-key` or `--diskless`, are an
+`ErrHTTPBootFlags`. A non-`kms://` `--fleet-key` is refused (the fleet
 key never exists as a file).
 
 **Pin the fleet certificate.** `--fleet-cert kms://rpi/fleet#sha256=<fingerprint>`
@@ -294,6 +299,35 @@ layout Alpine's init mounts).
 | `--output` | string | directory receiving both |
 
 All four are required.
+
+## 5b. `platformctl diskimage diskless-root` (hidden)
+
+The in-container step of a diskless media build, run in the builder image by
+`StagedMedia.BuildDisklessRoot` with the staged media as its input and no
+bind mount. It installs the media's platform onto a scratch image (no LUKS,
+ext4 root, Secure Boot off so no DB key is generated), packs the installed
+root partition with a reproducible `mksquashfs`, refuses a root without
+`/sbin/init` or `/usr/bin/platformd` or with any private key material in it
+(a `*.key` file, a PEM `PRIVATE KEY` block, a DER key). Before packing it
+locks every account in `/etc/shadow` (and `shadow-`) that has a usable password
+(`!` in the password field) and refuses any root where one remains: the
+installer's root password must not reach the public image. It refuses a root
+whose `/etc/trusted-platform/config.yaml` holds a plaintext value in any
+`secret:"true"` field of the platform config, naming the fields; a secret
+reference (`kms://`, `env://`, `file://`, …) passes. It then formats the
+dm-verity tree with pinned parameters (sha256, 4096/4096, no
+superblock, the given salt). It writes `rootfs.squashfs`, `rootfs.verity` and
+`rootfs.roothash`; the host signs the manifest and drops `rootfs.roothash`.
+
+| Flag | Type | Meaning |
+|---|---|---|
+| `--config` / `--platform-config` | string | the install configuration, as for `assemble` (exactly one) |
+| `--size` | int | scratch image size in MB |
+| `--work-dir` | string | scratch image and mount point |
+| `--output` | string | directory receiving the three files |
+| `--source-date-epoch` | int | every timestamp in the squashfs |
+| `--salt` | string | dm-verity salt, 64 hex characters |
+| `--debug` | bool | rejected: debug mode (SSH root login, host keys) cannot be baked into the shared public root |
 
 ## 6. Parity gap
 

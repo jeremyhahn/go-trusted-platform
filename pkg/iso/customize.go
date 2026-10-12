@@ -4619,6 +4619,7 @@ depends() {
     return 0
 }
 
+` + platformdInstallNetworkShell + `
 install() {
     # Install platform-initrd binary for boot operations (CRITICAL)
     # This is the minimal binary with boot, firstboot, recovery commands
@@ -4642,7 +4643,7 @@ install() {
     # Install required system utilities individually to avoid silent failures.
     # NOTE: No cryptsetup needed - platform-initrd uses go-luks2 for all LUKS operations
     for _bin in dd cat rm mkdir mount umount findmnt grep awk sleep head tee basename cp chmod \
-                modprobe lsmod blkid losetup stat dmsetup; do
+                modprobe lsmod blkid losetup stat dmsetup tr mountpoint; do
         inst_multiple "$_bin" 2>/dev/null || dinfo "PLATFORMD: binary $_bin not found, skipping"
     done
 
@@ -4662,6 +4663,11 @@ install() {
     inst_libdir_file "libdevmapper.so*" 2>/dev/null || true
     inst_libdir_file "liblvm2*.so*" 2>/dev/null || true
     inst_libdir_file "libdevmapper-event*.so*" 2>/dev/null || true
+
+    # Network bring-up (platformd_network_up): the diskless root fetch and
+    # the first-boot network.conf diagnostic. dracut's network modules are
+    # omitted, so the DHCP client and its lease script are installed here.
+    platformd_install_network "" /etc/kernel/cmdline || return 1
 
     # Install firstboot keyfile if it exists (for automated firstboot unlock)
     # The installer creates this keyfile on the EFI partition during installation
@@ -4715,6 +4721,11 @@ installkernel() {
     # Install loop device module (required for installer.luks container)
     instmods loop 2>/dev/null || true
 
+    # Diskless root: dm-verity over a squashfs image under a tmpfs overlay,
+    # fetched over the network
+    instmods dm_verity squashfs overlay 2>/dev/null || true
+    instmods virtio_net e1000 e1000e igb ixgbe i40e ice mlx5_core bnxt_en 2>/dev/null || true
+
     # Install filesystem modules for EFI partition
     instmods vfat fat nls_cp437 nls_iso8859_1 2>/dev/null || true
 
@@ -4756,7 +4767,24 @@ kcarg() {
     fi
 }
 
-` + platformdStaticCIDRShell + `
+` + platformdStaticCIDRShell + platformdNetworkUpShell + platformdBootModelShell + platformdRunInitrdShell + platformdDisklessRootShell + `
+# Check for completion marker to prevent re-execution in initqueue loop
+if [ -f /tmp/platformd-unlock-done ]; then
+    return 0
+fi
+
+# Check for failure marker to prevent infinite loops
+if [ -f /tmp/platformd-unlock-failed ]; then
+    return 0
+fi
+
+# A diskless node (platform_boot_model=diskless in the signed command line)
+# has no local root to find or unlock: its root is the verified image.
+if [ "$(platformd_boot_model /etc/kernel/cmdline)" = "diskless" ]; then
+    platformd_diskless_root
+    return 0
+fi
+
 # Parse config from kernel cmdline with /etc/kernel/cmdline fallback
 # rd.luks.name format: <uuid>=<name>
 _luks_name_param="$(getarg rd.luks.name=)"
@@ -4785,16 +4813,6 @@ LVM_VG="$(getarg rd.lvm.vg=)"
 # Root device from root=
 ROOT_DEV="$(getarg root=)"
 [ -z "$ROOT_DEV" ] && ROOT_DEV="$(kcarg root)"
-
-# Check for completion marker to prevent re-execution in initqueue loop
-if [ -f /tmp/platformd-unlock-done ]; then
-    return 0
-fi
-
-# Check for failure marker to prevent infinite loops
-if [ -f /tmp/platformd-unlock-failed ]; then
-    return 0
-fi
 
 # Check if LUKS device is already open
 if [ -n "$LUKS_NAME" ] && [ -e "/dev/mapper/$LUKS_NAME" ]; then
@@ -4934,90 +4952,7 @@ fi
 # IAK/IDevID certificates are named after.
 if [ "$BOOT_MODE" = "firstboot" ]; then
     info "PLATFORMD: Bringing up network from network.conf (diagnostic only; enrollment runs after switch_root)..."
-
-    # Load all common NIC drivers (virtual and bare metal)
-    for drv in virtio_net e1000 e1000e igb ixgbe i40e ice mlx5_core bnxt_en; do
-        modprobe "$drv" 2>/dev/null || true
-    done
-    modprobe e1000e 2>/dev/null || true
-
-    NETWORK_CONF="/boot/efi/tpm2/network.conf"
-    NET_IFACE=""
-    NET_TYPE=""
-    NET_IP=""
-    NET_PREFIX=""
-    NET_MASK=""
-    NET_GW=""
-
-    if [ -f "$NETWORK_CONF" ]; then
-        info "PLATFORMD: Reading network config from $NETWORK_CONF"
-        . "$NETWORK_CONF"
-        NET_IFACE="${INTERFACE:-eth0}"
-        NET_TYPE="${TYPE:-dhcp}"
-        NET_IP="${IPV4_ADDRESS:-}"
-        NET_PREFIX="${IPV4_PREFIX:-}"
-        NET_MASK="${IPV4_NETMASK:-}"
-        NET_GW="${IPV4_GATEWAY:-}"
-        NET_DNS="${DNS:-8.8.8.8}"
-        NET_HOSTNAME="${HOSTNAME:-}"
-        info "PLATFORMD: Network config: iface=$NET_IFACE type=$NET_TYPE ip=$NET_IP gw=$NET_GW dns=$NET_DNS hostname=$NET_HOSTNAME"
-
-        if [ -n "$NET_HOSTNAME" ]; then
-            info "PLATFORMD: Setting hostname to $NET_HOSTNAME"
-            echo "$NET_HOSTNAME" > /etc/hostname
-            hostname "$NET_HOSTNAME" 2>/dev/null || true
-        fi
-    else
-        info "PLATFORMD: No network.conf found, will try DHCP"
-        NET_IFACE="eth0"
-        NET_TYPE="dhcp"
-        NET_DNS="8.8.8.8"
-    fi
-
-    for i in 1 2 3 4 5; do
-        if ip link show "$NET_IFACE" >/dev/null 2>&1; then
-            break
-        fi
-        info "PLATFORMD: Waiting for network interface $NET_IFACE... ($i/5)"
-        sleep 1
-    done
-
-    if ip link show "$NET_IFACE" >/dev/null 2>&1; then
-        info "PLATFORMD: Configuring network interface $NET_IFACE..."
-        ip link set "$NET_IFACE" up
-
-        if [ "$NET_TYPE" = "static" ] && [ -n "$NET_IP" ] && [ -n "$NET_GW" ]; then
-            NET_CIDR=$(platformd_static_cidr "$NET_IP" "$NET_PREFIX" "$NET_MASK")
-            info "PLATFORMD: Configuring static IP: $NET_CIDR gateway: $NET_GW"
-            ip addr add "$NET_CIDR" dev "$NET_IFACE" 2>/dev/null || true
-            ip route add default via "$NET_GW" 2>/dev/null || true
-
-            info "PLATFORMD: Configuring DNS: $NET_DNS"
-            : > /etc/resolv.conf
-            for dns_server in $NET_DNS; do
-                echo "nameserver $dns_server" >> /etc/resolv.conf
-            done
-        else
-            info "PLATFORMD: Configuring DHCP on $NET_IFACE..."
-            udhcpc -i "$NET_IFACE" -n -q -t 5 2>/dev/null || true
-            if [ ! -s /etc/resolv.conf ]; then
-                info "PLATFORMD: DHCP did not configure DNS, using fallback"
-                echo "nameserver 8.8.8.8" > /etc/resolv.conf
-            fi
-        fi
-
-        ip addr show "$NET_IFACE" 2>/dev/null | grep inet || warn "PLATFORMD: No IP address on $NET_IFACE"
-        info "PLATFORMD: DNS configuration:"
-        cat /etc/resolv.conf 2>/dev/null || warn "PLATFORMD: No resolv.conf"
-
-        if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
-            info "PLATFORMD: Network connectivity confirmed"
-        else
-            warn "PLATFORMD: No network connectivity from the initramfs - boot continues; check the static config before firstboot enrollment after switch_root"
-        fi
-    else
-        warn "PLATFORMD: Network interface $NET_IFACE not found"
-    fi
+    platformd_network_up /boot/efi/tpm2/network.conf
 fi
 
 modprobe loop 2>/dev/null || true
@@ -5091,26 +5026,8 @@ if [ -x /usr/bin/platform-initrd ]; then
     fi
 
     info "PLATFORMD: Running platform-initrd boot (mode: $BOOT_MODE)..."
-    info "PLATFORMD: invoking platform-initrd boot --device=$LUKS_DEV --name=$LUKS_NAME $PCR_FLAG"
-    # Capture all output to a tmpfs file so we can replay it through dracut's
-    # info/warn helpers regardless of where /dev/console actually points. This
-    # gives us reliable visibility on every BMC SOL channel, every kernel
-    # console redirect setting, and every dracut version. The cost is one
-    # tmpfs file (cleaned up on switch_root).
-    : > /run/platformd-initrd.log
-    /usr/bin/platform-initrd boot --device "$LUKS_DEV" --name "$LUKS_NAME" $PCR_FLAG --verbose < /dev/null > /run/platformd-initrd.log 2>&1
+    platformd_run_initrd boot --device "$LUKS_DEV" --name "$LUKS_NAME" $PCR_FLAG
     rc=$?
-    info "PLATFORMD: platform-initrd boot exited rc=$rc — log follows:"
-    if [ -s /run/platformd-initrd.log ]; then
-        # Replay through dracut's info helper so every line lands on the
-        # console regardless of redirection. Truncate per-line to keep the
-        # log readable on slow SOL channels.
-        while IFS= read -r line; do
-            info "PLATFORMD-LOG: $line"
-        done < /run/platformd-initrd.log
-    else
-        warn "PLATFORMD-LOG: (empty — binary produced no output)"
-    fi
     if [ $rc -eq 0 ]; then
         info "PLATFORMD: Boot successful"
         UNLOCK_SUCCESS=1
@@ -5160,26 +5077,15 @@ return 0
 	rootScriptPath := filepath.Join(destDir, "platformd-root.sh")
 	rootScript := `#!/bin/sh
 # Platformd root detection hook for dracut (cmdline phase)
-# Reads root= and rootfstype= from the embedded /etc/kernel/cmdline.
-# The installer builds this cmdline from config (root device, fstype, LUKS, LVM params).
+# Reads the root from the embedded /etc/kernel/cmdline the installer built and
+# signed into the UKI: the diskless root for platform_boot_model=diskless,
+# otherwise root= and rootfstype= (the root device, LUKS and LVM params).
 # This overrides any incorrect cmdline that dracut may embed in the UKI .cmdline section.
 
 type getarg >/dev/null 2>&1 || . /lib/dracut-lib.sh
 
-# Parse root device and filesystem type from embedded kernel cmdline
-if [ -f /etc/kernel/cmdline ]; then
-    _root=$(grep -o 'root=[^ ]*' /etc/kernel/cmdline | head -1)
-    if [ -n "$_root" ]; then
-        root="${_root#root=}"
-        rootok=1
-        info "PLATFORMD: Root device from /etc/kernel/cmdline: $root"
-    fi
-    _fstype=$(grep -o 'rootfstype=[^ ]*' /etc/kernel/cmdline | head -1)
-    if [ -n "$_fstype" ]; then
-        rootfstype="${_fstype#rootfstype=}"
-        info "PLATFORMD: Root fstype: $rootfstype"
-    fi
-fi
+` + platformdBootModelShell + `
+platformd_set_root /etc/kernel/cmdline
 `
 	if err := os.WriteFile(rootScriptPath, []byte(rootScript), 0755); err != nil {
 		return &WrappedError{Msg: "failed to write platformd-root.sh", Err: err}
@@ -5194,6 +5100,12 @@ fi
 	finishedScript := `#!/bin/sh
 # Tell dracut root device is available (initqueue/finished hook)
 # Returns 0 when root is ready, 1 to keep waiting.
+
+# The diskless root is ready once the unlock hook has mounted it.
+if [ "$root" = "` + platformdDisklessRoot + `" ]; then
+    mountpoint -q "${NEWROOT:-/sysroot}"
+    return $?
+fi
 
 # Check if the root device (set by cmdline hook from /etc/kernel/cmdline) exists
 if [ -n "$root" ] && [ -e "$root" ]; then
@@ -5225,6 +5137,13 @@ type getarg >/dev/null 2>&1 || . /lib/dracut-lib.sh
 # Skip if already mounted
 if mountpoint -q "$NEWROOT" 2>/dev/null; then
     return 0
+fi
+
+# The diskless root is mounted by the unlock hook or not at all: there is no
+# device here to fall back to.
+if [ "$root" = "` + platformdDisklessRoot + `" ]; then
+    warn "PLATFORMD: Diskless root is not mounted at $NEWROOT"
+    return 1
 fi
 
 _root="$root"

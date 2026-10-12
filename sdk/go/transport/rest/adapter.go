@@ -194,6 +194,13 @@ func (a *Adapter) GetToken() string {
 
 // DoRequest performs an HTTP request to the REST API.
 func (a *Adapter) DoRequest(ctx context.Context, method, path string, body interface{}, result interface{}) error {
+	return a.do(ctx, a.httpClient, method, path, body, result)
+}
+
+// do sends one request through client and decodes the response; DoRequest
+// uses the adapter's pooled client, a bound call a one-shot client that
+// owns the connection its proof was computed for.
+func (a *Adapter) do(ctx context.Context, client *http.Client, method, path string, body interface{}, result interface{}) error {
 	if a.closed.Load() {
 		return ErrClientClosed{}
 	}
@@ -221,7 +228,7 @@ func (a *Adapter) DoRequest(ctx context.Context, method, path string, body inter
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := a.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return ErrRequestFailed{Method: method, Path: path, Err: err}
 	}
@@ -318,7 +325,7 @@ type restClientConn struct {
 // have their path params substituted from the request message and
 // stripped from the request body so the server never sees the same
 // field in both URL and body. Flat routes are passed through untouched.
-func (c *restClientConn) Invoke(ctx context.Context, method string, args interface{}, reply interface{}, opts ...grpc.CallOption) error {
+func (c *restClientConn) Invoke(ctx context.Context, method string, args interface{}, reply interface{}, opts ...grpc.CallOption) (err error) {
 	if c.adapter.closed.Load() {
 		return status.Error(codes.Unavailable, "connection closed")
 	}
@@ -334,35 +341,56 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 		result = &raw
 	}
 
-	// Templated routes: substitute path params and strip them from the
-	// body. The body is sent as a clone of args so the caller's message
-	// is not mutated.
-	if entry, ok := templatedRouteTable[method]; ok {
-		path, body, err := buildTemplatedRequest(entry, args)
-		if err != nil {
-			return err
+	// A call bound to its channel gets a dedicated connection: the
+	// BindFunc completes args with a proof over that connection's
+	// exporter, and the request travels on the same connection. The route
+	// and body are built after the binding so they carry the proof.
+	send := c.adapter.DoRequest
+	if bind, bound := transport.ChannelBindingFrom(opts); bound {
+		boundConn, bindErr := c.adapter.bindChannel(ctx, bind)
+		if bindErr != nil {
+			return bindErr
 		}
-		body, err = encodeRequestBody(method, body)
-		if err != nil {
-			return err
+		defer func() { err = errors.Join(err, boundConn.release()) }()
+		send = func(ctx context.Context, method, path string, body, result interface{}) error {
+			return c.adapter.do(ctx, boundConn.client, method, path, body, result)
 		}
-		if reqErr := c.adapter.DoRequest(ctx, entry.method, path, body, result); reqErr != nil {
-			return translateErrorToGRPC(reqErr)
-		}
-		return c.finishInvoke(hasDecoder, decode, raw, reply)
 	}
 
-	// Flat routes: today's behavior — derive path from the static map
-	// (or fall back to the gRPC method-name heuristic).
-	path, httpMethod := mapGRPCMethodToREST(method)
-	body, err := encodeRequestBody(method, args)
+	httpMethod, path, body, err := route(method, args)
 	if err != nil {
 		return err
 	}
-	if err := c.adapter.DoRequest(ctx, httpMethod, path, body, result); err != nil {
-		return translateErrorToGRPC(err)
+	if reqErr := send(ctx, httpMethod, path, body, result); reqErr != nil {
+		return translateErrorToGRPC(reqErr)
 	}
 	return c.finishInvoke(hasDecoder, decode, raw, reply)
+}
+
+// route resolves the HTTP method, path and body of a gRPC method call.
+// Templated routes substitute path params and strip them from the body,
+// which is sent as a clone of args so the caller's message is not
+// mutated; flat routes derive the path from the static map (or the gRPC
+// method-name heuristic) and send args. Either body then passes through
+// the method's request encoder, if it has one.
+func route(method string, args interface{}) (httpMethod, path string, body interface{}, err error) {
+	if entry, ok := templatedRouteTable[method]; ok {
+		path, body, err := buildTemplatedRequest(entry, args)
+		if err != nil {
+			return "", "", nil, err
+		}
+		body, err = encodeRequestBody(method, body)
+		if err != nil {
+			return "", "", nil, err
+		}
+		return entry.method, path, body, nil
+	}
+	path, httpMethod = mapGRPCMethodToREST(method)
+	body, err = encodeRequestBody(method, args)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return httpMethod, path, body, nil
 }
 
 // restRequestEncoder rewrites a request body into the JSON shape the
@@ -1160,6 +1188,10 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.DeviceService/ListProfiles":        {"/api/v1/device/profiles", http.MethodGet},
 	"/platform.v1.DeviceService/CountProfiles":       {"/api/v1/device/profiles/count", http.MethodGet},
 	"/platform.v1.DeviceService/FindMatchingProfile": {"/api/v1/device/profiles/match", http.MethodPost},
+	// A diskless node's per-boot routes. BootDelivery's identity is the
+	// connection's client certificate, so the request carries only evidence.
+	"/platform.v1.DeviceService/BootCertificate": {"/api/v1/device/boot/certificate", http.MethodPost},
+	"/platform.v1.DeviceService/BootDelivery":    {"/api/v1/device/boot", http.MethodPost},
 
 	// SDN Service
 	"/platform.v1.SDNService/CreateBridge":     {"/api/v1/sdn/bridges", http.MethodPost},

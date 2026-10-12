@@ -50,6 +50,48 @@ every boot after that; `pkg/iso` builds the media that carries Phase A;
 `pkg/qemu` is the harness that exercises all of it under a software TPM before
 any of it touches hardware.
 
+For diskless image boots, `platform-initrd` has a second early-boot root path.
+A node is diskless because its `boot_model: diskless` says so: the bootstrap
+server puts `platform_boot_model=diskless` on that node's installer command
+line and on no other. The installer then takes the root — hash, salt, sizes —
+from the media set's signed `diskless/manifest.json` and writes it into the
+UKI's `.cmdline` as `platform_roothash=`, `platform_rootfs_url=` and the rest
+([kernel-cmdline.md](../reference/kernel-cmdline.md#diskless-root-parameters)).
+Nothing on the live command line can name the root.
+
+The manifest is verified only against a **pinned anchor**, never against the
+key the installer is about to sign with:
+
+- the **platform's DB certificate** where it is enrolled in the node's UEFI
+  `db`, read from efivarfs (`uefi.ReadDBCertificates`) and picked by subject
+  common name: the configured `secure-boot.db.cn` (default `Trusted Platform
+  Secure Boot DB`), alone or followed by ` - <hostname>`. The rest of `db` — the
+  vendor's and Microsoft's certificates the firmware also trusts to run boot
+  code — is not an anchor; or
+- the KMS-held DB certificate, fetched over the SDK when
+  `secure-boot.resign-mode: remote`.
+
+Any one anchor verifying the signature suffices. Key pairs staged on the media
+(`secure-boot-keys/DB.{key,crt}`), a `file://` `secure-boot.db.key-uri`, and a
+locally generated key are **never** anchors on the diskless path, so blanking
+`key-uri` cannot swap in a media-staged signer. With no anchor at all — no
+efivarfs, an empty `db`, and no reachable KMS — the install fails closed.
+
+**Remaining gap: netboot trust on first use.** A node in Secure Boot setup mode
+has nothing of the platform's in `db` yet, so its only anchor is the KMS
+certificate. That fetch is authenticated by the CA bundle inside the installer
+image, and on a netboot first install that image itself arrived over the
+network before any platform key was enrolled — the firmware did not verify it
+against a platform anchor. The first install of a fresh node therefore trusts
+whatever the network delivered; every boot after `db` enrolment is anchored in
+the firmware. Closing the gap needs the platform DB certificate enrolled before
+the first netboot (factory provisioning, or HTTPS boot with a pre-enrolled TLS
+CA). At boot `platform-initrd`
+fetches the squashfs root and dm-verity hash tree into RAM, verifies before
+mount under the pinned parameters, then overlays the read-only root with tmpfs
+at `/sysroot`. This path does not unlock local LUKS root storage; mutable state
+lives in platform services after `switch_root`.
+
 ## 3. Rejected alternatives
 
 | Alternative | Why it was rejected |
@@ -180,6 +222,21 @@ UEFI → signed UKI → dracut hook → platform-initrd boot --device ...
      secure-wipe installer.luks (only if sealing succeeded)
    ⇒ switch_root
 ```
+
+A diskless node takes neither path. Its signed command line carries
+`platform_boot_model=diskless` and no `root=` or `rd.luks.*`, so the dracut
+cmdline hook gives dracut a root that names no device, the unlock hook runs
+`platform-initrd boot --diskless` instead of `--device`, and the finished and
+mount hooks wait only for the verified overlay at `/sysroot`. After
+`switch_root` nothing is sealed: the `tpm-firstboot-seal` service reads the
+same selector and exits before its LUKS lookup, and `platformd` adopts a
+TPM that holds the node's identity or provisions an empty one once. On every
+boot after the first, `platformd` recovers the identity certificates the
+tmpfs lost from the control plane, over an mTLS connection authenticated by
+the TPM-resident IDevID and an IAK quote bound to that connection
+([docs/tpm/architecture.md §4d](../tpm/architecture.md)). The image therefore
+carries the control plane's address (`acme.client.directory-url`) and, unless
+the OS trust store already anchors it, its CA as `ca-bundle.pem`.
 
 ### Steady state
 

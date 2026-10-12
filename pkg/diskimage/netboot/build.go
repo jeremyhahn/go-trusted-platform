@@ -27,6 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/artifacts"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/disklessroot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -137,6 +138,16 @@ type Config struct {
 	OutputDir string
 	// Sets are the sets to build (default DefaultSets).
 	Sets []Set
+	// Diskless adds the diskless root to every set with a diskimage target:
+	// the squashfs and its dm-verity hash tree beside the kernel, and the
+	// manifest, signed with the Secure Boot DB key, in the install media.
+	// It needs Secure Boot and a Version. A set serves it only to the nodes
+	// whose boot_model is diskless; every other node installs to its disk.
+	Diskless bool
+	// SourceDateEpoch and Version fix the diskless root's timestamps and its
+	// verity salt, so the same release builds the same root hash.
+	SourceDateEpoch int64
+	Version         string
 	// HTTPBoot, when set, also builds the signed boot.img and boot.sig the
 	// Raspberry Pi bootloader EEPROM fetches over HTTP, from the Pi set's
 	// boot partition; nil builds none.
@@ -250,8 +261,14 @@ func (cfg *Config) resolve() (*Config, error) {
 	if c.Model == "" {
 		c.Model = "rpi4"
 	}
-	if len(c.Sets) == 0 {
-		c.Sets = DefaultSets
+	c.Sets = c.SetsToBuild()
+	if c.Diskless {
+		if !c.Build.ISO.SecureBoot {
+			return nil, &BuildError{Step: "configuration", Err: &MissingFileError{File: "Secure Boot, whose DB key signs the diskless root manifest"}}
+		}
+		if c.Version == "" {
+			return nil, &BuildError{Step: "configuration", Err: &MissingFileError{File: "a version for the diskless root"}}
+		}
 	}
 	for _, set := range c.Sets {
 		if c.binariesDir(set) == "" {
@@ -270,6 +287,41 @@ func (cfg *Config) resolve() (*Config, error) {
 		}
 	}
 	return &c, nil
+}
+
+// disklessDefaultSets is DefaultSets without the sets that have no diskless
+// image (no diskimage target, the x86_64 installer), logging each one left
+// out. A set named explicitly is never filtered: it fails with
+// UnsupportedDisklessSetError.
+func (cfg *Config) disklessDefaultSets() []Set {
+	logger := logging.DefaultLogger()
+	if cfg.Build != nil && cfg.Build.Logger != nil {
+		logger = cfg.Build.Logger
+	}
+	sets := make([]Set, 0, len(DefaultSets))
+	for _, set := range DefaultSets {
+		if set.Target == "" {
+			logger.Infof("[NETBOOT] --diskless: leaving the %s set out of the default sets, it has no diskless image; name it in --sets to make this an error", set.Name)
+			continue
+		}
+		sets = append(sets, set)
+	}
+	return sets
+}
+
+// SetsToBuild returns the sets a build of this configuration produces: Sets
+// when any are named, otherwise DefaultSets, less the sets with no diskless
+// image when Diskless is set. A caller that prepares per-set inputs (binaries
+// directories) asks here rather than starting from DefaultSets, so a default
+// diskless build never needs inputs for a set it leaves out.
+func (cfg *Config) SetsToBuild() []Set {
+	if len(cfg.Sets) > 0 {
+		return cfg.Sets
+	}
+	if cfg.Diskless {
+		return cfg.disklessDefaultSets()
+	}
+	return DefaultSets
 }
 
 // setMedia is a set's staged install media and what staging it produced.
@@ -310,6 +362,9 @@ func (c *Config) buildSet(ctx context.Context, set Set, work string) (*stagedSet
 	if err != nil {
 		return nil, fail("staging the install media", err)
 	}
+	if c.Diskless && media.image == nil {
+		return nil, fail("validating the diskless root", &UnsupportedDisklessSetError{Set: set.Name})
+	}
 
 	setDir := filepath.Join(c.OutputDir, container.NetbootMediaSetsDir, set.Name)
 	if err := os.MkdirAll(setDir, 0o755); err != nil {
@@ -346,10 +401,18 @@ func (c *Config) buildSet(ctx context.Context, set Set, work string) (*stagedSet
 		}
 	}
 
+	// The diskless root is built before the payload list, so the signed
+	// manifest under cdrom/ reaches the installer with the rest of the media.
+	diskless := c.Diskless
+	if diskless {
+		if _, err := media.image.BuildDisklessRoot(ctx, setDir, filepath.Join(cdrom, disklessroot.Dir), c.SourceDateEpoch, c.Version); err != nil {
+			return nil, fail("building the diskless root", err)
+		}
+	}
 	if err := writePayloadList(setDir); err != nil {
 		return nil, fail("writing the payload list", err)
 	}
-	if err := writeDescriptor(setDir, container.MediaSet{
+	descriptor := container.MediaSet{
 		Name:         set.Name,
 		Architecture: set.Architecture,
 		Kernel:       files.Kernel,
@@ -357,7 +420,9 @@ func (c *Config) buildSet(ctx context.Context, set Set, work string) (*stagedSet
 		Modloop:      files.Modloop,
 		KernelArgs:   set.KernelArgs,
 		Default:      set.Default,
-	}); err != nil {
+		Diskless:     diskless,
+	}
+	if err := writeDescriptor(setDir, descriptor); err != nil {
 		return nil, fail("writing the descriptor", err)
 	}
 	return &stagedSet{dir: setDir, media: media}, nil
@@ -590,6 +655,14 @@ func writeChecksums(root string) error {
 
 // BuildError is a step of a netboot media build that failed, for a set or
 // for the build as a whole.
+type UnsupportedDisklessSetError struct {
+	Set string
+}
+
+func (e *UnsupportedDisklessSetError) Error() string {
+	return "diskless root is not available for media set " + e.Set
+}
+
 type BuildError struct {
 	Set  string
 	Step string

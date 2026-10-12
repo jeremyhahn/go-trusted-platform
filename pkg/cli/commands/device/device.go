@@ -69,6 +69,7 @@ Examples:
 	cmd.AddCommand(newDeleteCommand(getFlags))
 	cmd.AddCommand(newProfileCommand(getFlags))
 	cmd.AddCommand(newAttestCertCommand(getFlags))
+	cmd.AddCommand(newBootCommand(getFlags))
 
 	return cmd
 }

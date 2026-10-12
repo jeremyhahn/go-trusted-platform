@@ -223,6 +223,15 @@ srw-rw---- 1 root platformd 0 Jan 15 10:00 /run/platformd.sock
 2. **File permissions**: Restricted to platformd group
 3. **No TLS required**: Communication is local and protected by filesystem permissions
 4. **Audit logging**: All operations logged with caller UID/GID
+5. **Boot requests are refused**: `BootCertificate` and `BootDelivery`
+   ([api.md §4.6](api.md#46-diskless-boot-delivery-690)) are served on the
+   socket through the same service as every other transport, but they bind
+   the proof and the evidence to a TLS channel nonce. The socket has no TLS
+   connection, so the SDK refuses before sending
+   (`*transport.ErrChannelBindingUnavailable`, Transport `unix`) and the
+   daemon answers any other client `FailedPrecondition`
+   (`ErrBootChannelRequired`) before the boot service runs.
+   A diskless node reaches them over REST, gRPC or QUIC.
 
 ## Error Handling
 

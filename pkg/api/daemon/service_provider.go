@@ -643,6 +643,18 @@ func (p *PlatformServiceProvider) DeviceRecordAttestCert(ctx context.Context, de
 	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, clearOnRefusal, p.logger)
 }
 
+// DeviceBootCertificate refuses a diskless node's boot-certificate request:
+// MCP carries no TLS connection for the proof to be bound to.
+func (p *PlatformServiceProvider) DeviceBootCertificate(context.Context, string, []byte) (interface{}, error) {
+	return nil, errBootOverMCP()
+}
+
+// DeviceBootDelivery refuses a diskless node's boot-delivery request: MCP
+// carries no TLS connection for the evidence to be bound to.
+func (p *PlatformServiceProvider) DeviceBootDelivery(context.Context, []byte) (interface{}, error) {
+	return nil, errBootOverMCP()
+}
+
 // DeviceProvision binds a device to a device profile. The profile argument is
 // resolved as a numeric profile ID first; failing that, a matching profile is
 // found from the device's serial and model. The profile must carry an

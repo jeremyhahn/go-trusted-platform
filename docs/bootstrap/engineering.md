@@ -179,12 +179,14 @@ rollover path.
 ### Secrets
 
 ```go
-const ( SchemeKMS; SchemeRemoteKMS; SchemeEnv; SchemeIDevID; SchemeFile; SchemeDynamic; SchemeXKMS )
+const ( SchemeKMS; SchemeRemoteKMS; SchemeEnv; SchemeIDevID; SchemeFile; SchemeDynamic; SchemeXKMS;
+        SchemeCredential; SchemeAutoGen )
 const ( StrategyKMS; StrategyRemoteKMS; StrategyEnv; StrategyIDevID; StrategyFile;
         StrategyDynamic; StrategyXKMS; StrategyLiteral; StrategyPlainText )
 const SecretStructTag = "secret"
 func IsSecretURI(s string) bool
 func ExpandShortKMSPath(path, tenantID, nodeID string) string
+func PlaintextSecretFields(doc []byte, schema reflect.Type) ([]string, error)
 
 func NewConfigWriter(path string, logger *slog.Logger) (*ConfigWriter, error)
 func (w *ConfigWriter) Backup() (string, error)
@@ -198,6 +200,16 @@ Resolution itself is **not** implemented here: the package doc states that
 "secret resolution and config walking are delegated to the unified qrdb-SDK
 `ResolverRegistry` / `ConfigProcessor`". `pkg/bootstrap` owns only the scheme
 vocabulary, the `secret:"true"` struct tag, and the YAML rewriter.
+
+`PlaintextSecretFields` (`secret_fields.go`) reads the tag: it walks a YAML
+document against the struct it loads into and returns the paths
+(`bmc.password`, `switches[1].password`) of every tagged field holding a
+literal rather than an `IsSecretURI` reference. Keys match by yaml,
+mapstructure or json name or field name, case-insensitively; inline and
+squashed structs, anchors and merge keys are followed; unknown keys are
+ignored. It fails with `ErrSecretSchemaNotStruct` or `ErrSecretDocumentParse`.
+The diskless image build uses it against `app.App` to keep plaintext
+credentials out of the public root ([factory-image](../factory-image/architecture.md)).
 
 ### First boot
 
@@ -740,11 +752,11 @@ rather than silently ignored.
 | `nodes[].bmc_enroll` | bool | `false` | Opts the node into the enrollment phase |
 | `nodes[].boot_method` | string | `pxe` | `pxe` or `virtual-media` |
 | `nodes[].skip_install` | bool | `false` | Already-deployed node |
-| `nodes[].platform` | string | — (generic server) | `raspberrypi`; without it `model`, `serial` and `boot_model` are rejected |
+| `nodes[].platform` | string | — (generic server) | `raspberrypi`; without it `model` and `serial` are rejected |
 | `nodes[].model` | string | — | **Required** for `raspberrypi`: `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (`rpinetboot.Models`) |
 | `nodes[].architecture` | string | `aarch64` for a Pi, else `x86_64` | `x86_64` or `aarch64`; a Pi must be `aarch64` (`EffectiveArchitecture`) |
 | `nodes[].serial` | string | — | Pi only: up to eight hex digits, the bootloader's serial; names the node's per-device TFTP directory |
-| `nodes[].boot_model` | string | `sd` for a Pi | Pi only: `sd` (install to the card once over the network). Diskless models arrive with their implementations (#689, #690) |
+| `nodes[].boot_model` | string | `sd` for a Pi, empty for a generic server | `sd` for Pi SD-card install, or `diskless` for a stateless node whose root comes from the media set's squashfs+verity artifacts; carried per MAC in the container manifest, and its device script adds `platform_boot_model=diskless` (`ErrDisklessUnavailable` when the set has no diskless root) |
 | `nodes[].interfaces` | list | — | Authoritative for `network.interfaces` |
 | `nodes[].overrides`, `nodes[].overrides_file` | map / path | — | File merged first, inline wins |
 | `nodes[].switch_port` | string | — | Recorded for operator verification. There is no post-enrollment port move: a hypervisor trunk's native VLAN is provisioning |

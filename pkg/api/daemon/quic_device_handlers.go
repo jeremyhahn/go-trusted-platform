@@ -122,6 +122,7 @@ func (h *QUICServiceHandler) rebuildDeviceGRPC() {
 		WithDeviceAKTrust(h.akTrust),
 		WithDeviceVerdictSink(h.deviceVerdicts),
 		WithDeviceAttestCertRecorder(h.attestCertRecorder),
+		WithDeviceBootCA(h.bootCA),
 	)
 }
 
@@ -438,6 +439,10 @@ func (h *QUICServiceHandler) handleDeviceProfileCategorySub(ctx context.Context,
 		return h.handleDeviceProfileUnassign(ctx, req.Payload[1:]), true
 	case quicwire.DeviceSubRecordAttestCert:
 		return h.handleDeviceRecordAttestCert(ctx, req.Payload[1:]), true
+	case quicwire.DeviceSubBootCertificate:
+		return h.handleDeviceBootCertificate(ctx, req.Payload[1:]), true
+	case quicwire.DeviceSubBootDelivery:
+		return h.handleDeviceBootDelivery(ctx, req.Payload[1:]), true
 	default:
 		return nil, false
 	}
@@ -459,6 +464,38 @@ func (h *QUICServiceHandler) handleDeviceRecordAttestCert(ctx context.Context, p
 	resp, err := h.deviceGRPC.RecordAttestationCertificate(ctx, &recordReq)
 	if err != nil {
 		return h.deviceGRPCErrorToQUIC("DeviceRecordAttestCert", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceBootCertificate answers a diskless node's boot-certificate
+// request via the shared gRPC service. ctx carries this connection's TLS
+// state (set by the QUIC server), which the service binds the proof to.
+func (h *QUICServiceHandler) handleDeviceBootCertificate(ctx context.Context, payload []byte) *quicwire.Response {
+	var bootReq platformv1.BootCertificateRequest
+	if err := quicwire.DecodePayload(payload, &bootReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.deviceGRPC.BootCertificate(ctx, &bootReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceBootCertificate", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceBootDelivery answers a diskless node's boot-delivery request
+// via the shared gRPC service; the node's identity is its connection's
+// client certificate, never a payload field.
+func (h *QUICServiceHandler) handleDeviceBootDelivery(ctx context.Context, payload []byte) *quicwire.Response {
+	var bootReq platformv1.BootDeliveryRequest
+	if err := quicwire.DecodePayload(payload, &bootReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.deviceGRPC.BootDelivery(ctx, &bootReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceBootDelivery", err)
 	}
 	return h.encodeDeviceQUICResponse(resp)
 }

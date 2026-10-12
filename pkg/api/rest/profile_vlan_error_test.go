@@ -96,3 +96,13 @@ func TestTemplateHandlers_writeProfileError_UnrelatedStaysInternal(t *testing.T)
 	h.writeProfileError(rec, "create-profile", &device.WrappedError{Msg: "failed to save profile", Err: assert.AnError})
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
+
+// TestTemplateHandlers_writeProfileError_NoMatchingConfigIsNotFound: a find-config
+// lookup for an unknown identity answers 404, not 500.
+func TestTemplateHandlers_writeProfileError_NoMatchingConfigIsNotFound(t *testing.T) {
+	h := &TemplateHandlers{logger: vlanErrTestLogger()}
+
+	rec := httptest.NewRecorder()
+	h.writeProfileError(rec, "find-config", device.ErrNoMatchingConfig{EKSerial: "EK-UNKNOWN"})
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}

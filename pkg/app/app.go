@@ -304,8 +304,8 @@ func ParseEnvironment(env string) Environment {
 // PIN values can be set in the YAML config to enable non-interactive startup,
 // for example when using kms:// URIs resolved by the secrets engine.
 type PlatformInitConfig struct {
-	SOPin   string `yaml:"so-pin,omitempty" json:"so-pin,omitempty" mapstructure:"so-pin"`
-	UserPin string `yaml:"user-pin,omitempty" json:"user-pin,omitempty" mapstructure:"user-pin"`
+	SOPin   string `yaml:"so-pin,omitempty" json:"so-pin,omitempty" mapstructure:"so-pin" secret:"true"`
+	UserPin string `yaml:"user-pin,omitempty" json:"user-pin,omitempty" mapstructure:"user-pin" secret:"true"`
 }
 
 type App struct {
@@ -381,6 +381,12 @@ type App struct {
 	TenantID         string                        `yaml:"tenant-id" json:"tenant_id" mapstructure:"tenant-id"`
 	ShutdownChan     chan bool                     `yaml:"-" json:"-" mapstructure:"-"`
 	TPM              xkmssdk.TrustedPlatformModule `yaml:"-" json:"-" mapstructure:"-"`
+	// nodeIdentity is a diskless node's EK-derived identity
+	// (applyDisklessNodeIdentity). Every node built from one media set boots
+	// the same hostname, so a diskless node enrolls and recovers its
+	// certificates under this name instead; empty on a disk node.
+	nodeIdentity string
+
 	// tpmManufacturerCode caches the TCG TPM manufacturer code, e.g.
 	// "id:49465800". It is read once from TPM_PT_MANUFACTURER and kept:
 	// the value is a property of the silicon and cannot change for the
@@ -1829,6 +1835,13 @@ func (app *App) ParsePINs(soPIN, userPIN []byte) (xkmssdk.Password, xkmssdk.Pass
 // will support a HSM TRNG.
 func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, initParams *AppInitParams) error {
 	err := app.OpenTPM(initParams.Initialize)
+	// A diskless node's provisioning state is its TPM-resident identity
+	// alone (tpm_diskless.go): none of the disk path's on-disk evidence
+	// survives its boots.
+	diskless, bootModelErr := bootsDiskless()
+	if bootModelErr != nil {
+		return bootModelErr
+	}
 	needsProvisioning := false
 	ranFullProvision := false
 	provisionCause := tpmCauseUnprovisioned
@@ -1838,7 +1851,7 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 		} else {
 			return err
 		}
-	} else if app.TPMConfig.IAK != nil && app.TPMConfig.IDevID != nil && app.TPM != nil {
+	} else if !diskless && app.TPMConfig.IAK != nil && app.TPMConfig.IDevID != nil && app.TPM != nil {
 		// EK is resident but the platform may still be un-provisioned —
 		// or PARTIALLY provisioned if a prior boot crashed mid-flow.
 		// Check IAK and Platform SRK both; missing EITHER means the
@@ -1879,7 +1892,11 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 			}
 		}
 	}
-	if needsProvisioning {
+	if diskless {
+		if ranFullProvision, err = app.provisionDisklessTPM(ctx, soPIN, userPIN, initParams); err != nil {
+			return err
+		}
+	} else if needsProvisioning {
 		// Whenever we determine a provisioning run is needed, factory
 		// reset stale platform handles (preserving EKs) first. When
 		// the TPM is in DA lockout or the Lockout hierarchy auth is
@@ -2145,6 +2162,9 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 	if !ranFullProvision && app.TPM != nil && app.CAConfig != nil &&
 		app.TPMConfig.IAK != nil && app.TPMConfig.IDevID != nil &&
 		!platformIdentityComplete(app.TPM) {
+		if diskless {
+			return app.recoverDisklessIdentity(ctx, soPIN, userPIN, initParams)
+		}
 		app.Logger.Info("TPM handles present but identity certificates missing — completing platform identity without re-provisioning")
 		if _, err := app.CompletePlatformIdentity(ctx, soPIN, userPIN, initParams); err != nil {
 			return err
@@ -2400,18 +2420,9 @@ func (app *App) InitACMEClient(ctx context.Context, initialize bool) error {
 	// 1. The OS trust store isn't properly updated
 	// 2. request-server-bundle fails due to network issues
 	// 3. The CA bundle was embedded in the ISO during installation
-	caBundlePaths := []string{
-		"/usr/local/share/ca-certificates/trusted-platform-ca.crt", // Alpine installer target
-		filepath.Join(app.ConfigDir, "ca-bundle.pem"),              // Config directory
-		filepath.Join(app.PlatformDir, "ca-bundle.pem"),            // Platform directory
-		"/media/cdrom/configs/ca-bundle.pem",                       // ISO mount point
-	}
-	for _, bundlePath := range caBundlePaths {
-		if bundleData, err := os.ReadFile(bundlePath); err == nil {
-			app.Logger.Info("Loaded CA bundle from file", "path", bundlePath)
-			trustedRoots = append(trustedRoots, string(bundleData))
-			break // Use the first one found
-		}
+	if bundlePath, bundleData, ok := app.readWellKnownCABundle(); ok {
+		app.Logger.Info("Loaded CA bundle from file", "path", bundlePath)
+		trustedRoots = append(trustedRoots, string(bundleData))
 	}
 
 	clientConfig := &trustedca.ACMEClientConfig{
@@ -2495,6 +2506,28 @@ func (app *App) InitACMEClient(ctx context.Context, initialize bool) error {
 	return nil
 }
 
+// wellKnownCABundlePaths lists where an installed system or a booted image
+// carries the platform CA bundle, in the order they are consulted.
+func (app *App) wellKnownCABundlePaths() []string {
+	return []string{
+		"/usr/local/share/ca-certificates/trusted-platform-ca.crt", // Alpine installer target
+		filepath.Join(app.ConfigDir, "ca-bundle.pem"),              // Config directory
+		filepath.Join(app.PlatformDir, "ca-bundle.pem"),            // Platform directory
+		"/media/cdrom/configs/ca-bundle.pem",                       // ISO mount point
+	}
+}
+
+// readWellKnownCABundle returns the first well-known CA bundle that exists.
+// An absent or unreadable path is the normal case and is skipped.
+func (app *App) readWellKnownCABundle() (string, []byte, bool) {
+	for _, bundlePath := range app.wellKnownCABundlePaths() {
+		if bundleData, err := os.ReadFile(bundlePath); err == nil {
+			return bundlePath, bundleData, true
+		}
+	}
+	return "", nil, false
+}
+
 // Initializes a new ACME cross-signer client using the account email
 // provided in the platform configuration.
 func (app *App) NewACMECrossSigner(crossSigner *trustedca.ACMECrossSignConfig, initialize bool) (*trustedca.ACMEClient, error) {
@@ -2529,13 +2562,24 @@ func (app *App) ProvisionPlatform(
 	soPIN, userPIN xkmssdk.Password,
 	initParams *AppInitParams) (*xkmssdk.KeyAttributes, error) {
 
+	if err := app.provisionTPMHierarchies(soPIN); err != nil {
+		return nil, err
+	}
+	return app.provisionPlatformIdentity(ctx, soPIN, userPIN, initParams)
+}
+
+// provisionTPMHierarchies is ProvisionPlatform's first half: TPM.Provision,
+// which leaves the EK resident, and the hierarchy auth it set mirrored into
+// TPMConfig. Nothing has been enrolled when it returns, so a diskless node
+// derives its identity from that EK here (provisionDisklessTPM).
+func (app *App) provisionTPMHierarchies(soPIN xkmssdk.Password) error {
 	app.Logger.Debug("Provisioning TPM 2.0")
 
 	// Provision the TPM — this sets Lockout/Endorsement/Owner hierarchy
 	// auth to soPIN. After this call, the TPM owner hierarchy is
 	// authenticated with soPIN, NOT the empty default.
 	if err := app.TPM.Provision(soPIN); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Reflect the post-Provision TPM state in TPMConfig.SSRK so that
@@ -2558,6 +2602,15 @@ func (app *App) ProvisionPlatform(
 		app.TPMConfig.EK = &xkmssdk.EKConfig{}
 	}
 	app.TPMConfig.EK.HierarchyAuth = string(soPIN.Bytes())
+	return nil
+}
+
+// provisionPlatformIdentity is ProvisionPlatform's second half: the
+// platform key store, then the IAK/IDevID enrollment.
+func (app *App) provisionPlatformIdentity(
+	ctx context.Context,
+	soPIN, userPIN xkmssdk.Password,
+	initParams *AppInitParams) (*xkmssdk.KeyAttributes, error) {
 
 	// Provision the platform TPM 2.0 key store
 	if err := app.InitPlatformKeyStore(soPIN, userPIN); err != nil {
@@ -2682,7 +2735,7 @@ func (app *App) CompletePlatformIdentity(
 				Challenge:  app.ACMEConfig.Client.Enrollment.Challenge,
 				IPAddress:  enrollmentIP,
 				TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
-				CommonName: app.Hostname,
+				CommonName: app.enrollmentName(),
 			}
 			enrollResult, err := app.ACMEClient.EnrollDevice(enrollCtx, enrollConfig)
 			if err != nil {
@@ -3091,7 +3144,7 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 					Challenge:  "endorse-01",
 					IPAddress:  enrollmentIP,
 					TPMModule:  trustedca.NewACMEXKMSTPMAdapter(app.TPM),
-					CommonName: app.Hostname,
+					CommonName: app.enrollmentName(),
 				}
 				ekCert, err = app.ACMEClient.RequestEndorsementKeyCertificate(ctx, ekConfig)
 				if err != nil {

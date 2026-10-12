@@ -13,7 +13,11 @@
 
 package provisioning
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+)
 
 var (
 	// ErrProfileFetchFailed is returned when the profile API request fails
@@ -45,7 +49,41 @@ var (
 
 	// ErrTimeout is returned when the request times out
 	ErrTimeout = errors.New("provisioning: request timed out")
+
+	// ErrBootCertificateFetchFailed is returned when a diskless node cannot
+	// fetch its recorded IDevID chain back from the control plane
+	ErrBootCertificateFetchFailed = errors.New("provisioning: failed to fetch boot certificate")
+
+	// ErrBootDeliveryFailed is returned when the attested boot delivery fails
+	ErrBootDeliveryFailed = errors.New("provisioning: boot delivery failed")
+
+	// ErrBootIdentityRequired is returned when a boot certificate is
+	// requested for no identity
+	ErrBootIdentityRequired = errors.New("provisioning: boot identity is required")
+
+	// ErrBootQuoteRequired is returned when a boot delivery is attempted
+	// without a quote producer
+	ErrBootQuoteRequired = errors.New("provisioning: boot delivery requires a quote producer")
+
+	// ErrBootProofInvalid is returned when a boot-certificate proof does not
+	// verify: another key, another identity, another connection, or no
+	// connection value at all
+	ErrBootProofInvalid = errors.New("provisioning: boot certificate proof does not verify")
+
+	// ErrBootProofKeyUnsupported is returned when a boot-certificate proof is
+	// made or checked with a key that is neither RSA nor ECDSA
+	ErrBootProofKeyUnsupported = errors.New("provisioning: boot certificate proof key must be RSA or ECDSA")
+
+	// ErrCertificateChainInvalid is returned when a PEM certificate chain
+	// holds no certificate, or one that does not parse
+	ErrCertificateChainInvalid = errors.New("provisioning: invalid PEM certificate chain")
 )
+
+// ErrBootChannelUnbound reports a TLS connection a boot delivery cannot be
+// bound to: no connection state, a version below TLS 1.3, or an exporter
+// that produced no keying material. The derivation lives in the SDK, so the
+// error is the SDK's.
+type ErrBootChannelUnbound = transport.ErrChannelUnbound
 
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap

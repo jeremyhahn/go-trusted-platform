@@ -201,6 +201,36 @@ After a successful record, the attestation collector's next sweep verifies a
 quote against the new certificate and the device's report changes state
 ([attestation/user.md](../attestation/user.md)).
 
+### 2.7 `device boot certificate` and `device boot delivery`
+
+Send a diskless node's two per-boot requests ([api.md §4.6](api.md#46-diskless-boot-delivery-690))
+over whichever SDK transport `--protocol` selects. The control plane
+authenticates both itself; the proof of possession and the attestation
+evidence are bound to a nonce exported from the TLS session of the connection
+that carries them. The commands therefore make the proof only after they have
+connected, on that connection — there is no flag that takes proof bytes
+computed in advance, because such bytes cannot be for this connection.
+
+```bash
+platformctl device boot certificate --identity node-1.example --key idevid.key
+platformctl device boot delivery --quote-command /usr/libexec/node-quote
+```
+
+| Flag | Command | Meaning |
+|---|---|---|
+| `--identity` | certificate | The claimed device identity (serial or enrollment hostname) |
+| `--key` | certificate | PEM private key of that identity's IDevID: PKCS#8 (`PRIVATE KEY`), SEC 1 (`EC PRIVATE KEY`) or PKCS#1 (`RSA PRIVATE KEY`). The proof is RSA-PSS or ECDSA, so any other key type is refused |
+| `--quote-command` | delivery | A program run once connected, with the connection's nonce, base64-encoded, as its only argument. It prints the `vm.QuoteEvidence` JSON over that nonce on stdout |
+
+All three flags are required. The key is read and parsed before any connection
+is made; an unreadable or non-key file exits non-zero naming the path
+(`ErrBootKeyUnreadable`). A quote program that exits non-zero or prints
+nothing fails the command with its stderr (`ErrBootQuoteCommandFailed`).
+`--protocol unix` and `--protocol mcp` exit non-zero without sending anything:
+those transports carry no TLS connection to bind to. A refusal from the
+control plane exits non-zero with its reason. A diskless node makes the real
+requests itself; the commands exist to exercise the same path by hand.
+
 ---
 
 ## 3. `platformctl device profile`

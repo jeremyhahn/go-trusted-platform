@@ -157,6 +157,57 @@ needs. Owner ruling 2026-09-21: a platform-built kernel over an out-of-tree
 module (which would have needed lockdown off) or hardware-only firstboot
 testing.
 
+### The diskless root image
+
+A diskless node boots the same operating system a disk install writes, so
+the diskless root is that install: `diskimage netboot --diskless` runs the
+installer onto a scratch image inside the builder container
+(`pkg/diskimage/runner.Container`, the staged media copied in, the artifacts
+copied out, no bind mounts), and packs the installed root partition into
+`rootfs.squashfs` plus its dm-verity hash tree `rootfs.verity`. Both are
+served over HTTP beside the set's kernel; neither is trusted for what it is.
+
+The root is public — every node that boots the set fetches it, and so can
+anyone who can reach the boot server — so it must hold no private key and no
+reusable credential. The build locks every shadow entry (the installer writes a
+root password) and refuses a root with a usable hash; `--debug` is rejected for
+a diskless build because it would enable SSH root login in the shared root.
+The installer also copies the platform config to
+`/etc/trusted-platform/config.yaml`, and the build refuses the root, naming
+each field, if any field the config schema tags `secret:"true"` (root
+password, BMC password and IPMI key, PKCS#11 SO and user PINs, switch and disk
+encryption passwords, …) holds a literal instead of a secret reference
+(`kms://`, `env://`, `file://`, …). It refuses rather than strips: a stripped
+config would ship a node that fails later, far from the cause, while the
+reference is already the supported way to write the field.
+Per-node credentials come after attestation, from the TPM-resident identity,
+never from the image. The
+in-container install runs with Secure Boot off: it signs nothing the root
+carries (the UKI is on the ESP, which is not packed), and with Secure Boot on
+the installer would generate a DB key onto the very root it publishes. Before
+`mksquashfs` the build walks the installed tree and refuses, naming the path,
+any `*.key` file, any PEM block of a `PRIVATE KEY` type anywhere in a file,
+and any small file that parses as a DER PKCS#8, PKCS#1 or SEC 1 key. A node's
+own keys live in its TPM and in the tmpfs overlay, never in the image.
+
+The root's identity — root hash, salt and the two sizes — is a manifest
+(`cdrom/diskless/manifest.json`) signed with the Secure Boot DB key, carried
+to the installer in the install media. The installer verifies it against a
+pinned anchor — the platform's DB certificate enrolled in the node's UEFI `db` (not any other `db` entry) or the KMS-held
+DB certificate, never a key pair staged on the media (see
+[installer architecture](../installer/architecture.md) for the first-netboot
+trust gap) — and writes the root parameters into the UKI command line it
+signs; nothing on the network-supplied command line or iPXE script can name
+a root. `platform-initrd` fetches both artifacts into bounded RAM, opens
+dm-verity with the pinned parameters before any mount, mounts the verified
+squashfs read-only under a tmpfs overlay, and fails before mounting root on
+any mismatch.
+
+The build is reproducible: `mksquashfs -reproducible` with every timestamp
+set to `SOURCE_DATE_EPOCH`, and the verity salt derived from
+`SOURCE_DATE_EPOCH` and the platform version, so the same inputs give the
+same root hash.
+
 ## 3. Rejected alternatives
 
 | Alternative | Why it was rejected |

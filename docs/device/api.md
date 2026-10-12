@@ -533,7 +533,8 @@ profile's networks as:
   `ProfileRequest` and maps it through the one mapper both routes share
   (`pkg/webservice/v1/device/profile_mapping.go`); its `201` — and the
   `find-config`, `assign` and `unassign` replies from the same handler — is the
-  full shape above. The template merge (`pkg/device`
+  full shape above. Like the CRUD route, it mints the profile `id` server-side
+  when `overrides` names none. The template merge (`pkg/device`
   `ToProfileWithConfigOverrides`) then applies `name`, `model`, `role`, `zone`,
   `networks` (per key, over the template's), the three selectors,
   `platformd_config`, `match_rules`, `ek_serial` and `mac_address`. It does
@@ -942,6 +943,175 @@ sub-range the profile-assignment verbs use; MCP's `device_record_attest_cert`
 (`device:write`) and REST delegate to the same in-process gRPC service; the
 Go SDK exposes `device.Client.RecordAttestationCertificate`; the CLI is
 `platformctl device attest-cert record <id> [--reissue] [--clear-on-refusal]`.
+
+### 4.6 Diskless boot delivery (#690)
+
+A provisioned diskless node keeps its keys in the TPM and nothing else across
+a reboot. Each boot, platformd fetches its identity certificates back
+(`pkg/app/tpm_diskless_boot.go`; the node side is
+[docs/tpm/architecture.md](../tpm/architecture.md) §4d). Two machine-facing
+REST routes serve it, through one service (`BootService`,
+`pkg/webservice/v1/device/boot_service.go`):
+
+| Method | Path | Auth | Returns |
+|---|---|---|---|
+| POST | `/api/v1/device/boot/certificate` | proof of the IDevID key (no client certificate) | `{"identity":"…","idevidChain":"<PEM>"}` — the IDevID chain recorded at enrollment |
+| POST | `/api/v1/device/boot` | mTLS (the node's IDevID) | `BootDeliveryResponse`, below |
+
+The certificate route takes no client certificate because the node needs the
+chain before it can present it. It authenticates in the body instead,
+`{"identity":"<name>","signature":"<base64>"}`: the signature is made with the
+TPM-resident IDevID key over SHA-256 of
+`go-trusted-platform diskless boot certificate v1 ‖ 0x00 ‖ identity ‖ 0x00 ‖ nonce`,
+where the nonce is the same connection channel value the delivery quotes over
+(below). It is RSASSA-PSS with a salt as long as the hash, or ASN.1 ECDSA
+(`provisioning.SignBootCertificateProof`). The control plane looks the identity
+up by serial, then by enrollment hostname, and verifies the signature against
+the recorded IDevID leaf. It returns the chain only to the node that holds that
+key, on the connection the proof was made for.
+
+The recorded chain is the IDevID leaf first, then the CA certificates of its
+issuing chain; the IAK certificate is not in it (it is recorded on its own, as
+the attestation certificate). The enrollment hook builds it that way rather than
+storing the finalize PEM as delivered: an enroll-01 finalize delivers the IAK,
+then the IDevID, then the issuing chain, and a chain led by the IAK would make
+every proof above fail against the IAK's key. A finalize chain that does not
+parse fails the enrollment instead of being recorded.
+
+An unknown name, a device enrolled before its chain was recorded, and a proof
+that does not verify all get the same `403` body,
+`device: boot certificate refused`. The route therefore cannot be used to learn
+which names are enrolled.
+
+A diskless node's identity is its EK-derived name, `ek-<32 hex>`
+([docs/tpm/architecture.md](../tpm/architecture.md) §4d step 5). It enrolls
+under that serial and Common Name, and registration refuses either unless it is
+the identity of the enrollment's proven EK certificate. The delivery route takes the identity from the
+verified client certificate, like the heartbeat, and its body is
+`{"evidence":"<base64 vm.QuoteEvidence JSON>"}` — the evidence shape
+`POST /api/v1/device/attest` takes. The control plane serves it only when all
+of these hold:
+
+1. the presented leaf is byte-for-byte the recorded IDevID, and it chains to
+   the platform CA bundle with the client-auth usage;
+2. the quote's nonce is the connection's channel value — the TLS 1.3 exporter
+   with label `EXPORTER-go-trusted-platform-diskless-boot`, 32 bytes
+   (`provisioning.BootChannelNonce`). There is no nonce endpoint: a quote is
+   valid only on the connection that produced it, and a TLS 1.2 connection
+   cannot be bound and is refused;
+3. the device quote verifier (§4.4) returns a verified verdict for that
+   device; and
+4. the device is not `revoked` or `suspended`. A `quarantined` device may
+   boot, because quarantine is enforced on its port and remediation needs it
+   up.
+
+```json
+{"serial":"SN0042","idevidChain":"-----BEGIN CERTIFICATE-----…",
+ "attestCert":"-----BEGIN CERTIFICATE-----…","caBundle":"-----BEGIN CERTIFICATE-----…",
+ "profile":{"serialNumber":"SN0042","admittedNetwork":{"vlan":200,…}},
+ "pcrBaselineSource":"tofu","pcrBaselineCaptured":true}
+```
+
+`profile` is the §3.2 `ProfileResponse`. `pcrBaselineSource` is `signed` or
+`tofu` — what the quote was compared against — and the node logs it: a `tofu`
+boot proved freshness and IAK possession, not the expected boot state.
+
+| Status | Cause |
+|---|---|
+| 400 | no identity, a body that is not the JSON above, or a connection with no TLS 1.3 exporter to bind to (`ErrBootChannelRequired`) |
+| 403 | certificate: any request that does not prove the recorded IDevID key, one body for all of them. Delivery: wrong or unchained certificate, a quote nonce that is not this connection's, failed or unevaluable attestation, revoked or suspended device |
+| 404 | delivery: identity unknown, or no profile bound to the device |
+| 500 | recorded chain unparseable, CA bundle, storage or verifier fault |
+
+#### Transports
+
+Both operations are `DeviceService.BootCertificate` and
+`DeviceService.BootDelivery` on every transport. They are not an operator API:
+the client is a diskless node's platformd before it has started. Every
+transport reaches the same `BootService`, which holds all enforcement — the
+proof of possession, the leaf-to-CA and recorded-IDevID check, the channel
+binding and the attestation verdict — so a transport only peels off its framing
+and maps the typed outcome. No transport can serve a node the others refuse.
+
+| Transport | BootCertificate | BootDelivery |
+|---|---|---|
+| REST | `POST /api/v1/device/boot/certificate` | `POST /api/v1/device/boot` (mTLS) |
+| gRPC | `platform.v1.DeviceService/BootCertificate` | `platform.v1.DeviceService/BootDelivery` |
+| QUIC | `OpProvisioningCategory` (0xCF), sub-opcode `0x23` | `OpProvisioningCategory` (0xCF), sub-opcode `0x24` |
+| MCP | tool `device_boot_certificate` | tool `device_boot_delivery` |
+| Unix socket | gRPC over the socket | gRPC over the socket |
+
+The gRPC messages mirror the REST bodies (`BootCertificateRequest{identity,
+signature}`, `BootDeliveryRequest{evidence}`, and the `BootDeliveryResponse`
+with its `BootProfile`). gRPC statuses map the REST statuses: `InvalidArgument`
+(400), `PermissionDenied` (403), `NotFound` (404), `Unavailable` and `Internal`
+(500). QUIC carries the same messages in the codec payload after the sub-opcode
+byte, with the matching QUIC status.
+
+**Authentication.** A diskless node holds no token, so these methods are exempt
+from the transport's token check: the gRPC interceptor skip list, the QUIC
+`AuthMiddleware` sub-opcode skip, and an explicitly open (`""`) MCP tool
+permission. The exemption is safe only because the boot service authenticates
+every request itself. On gRPC and QUIC the connection's TLS state reaches the
+service — the gRPC peer's `TLSInfo`, the QUIC connection state carried in the
+request context — and the delivery identity is the verified client
+certificate, never a request field.
+
+**Where a transport cannot serve a node.** The channel nonce is a TLS 1.3
+exporter, so a transport with no TLS connection has none. The transport
+refuses the request itself, with the typed `ErrBootChannelRequired` naming
+it, before the boot service runs — an empty nonce never reaches it:
+
+| Transport | Refusal for a connection with no channel |
+|---|---|
+| REST | `400` |
+| gRPC, Unix socket | `FailedPrecondition` |
+| QUIC | `StatusInvalidRequest` |
+| MCP | tool error `ErrBootChannelRequired` (Transport `MCP`), from both MCP service providers |
+
+- The Unix socket and MCP (plain HTTP or stdio) carry no TLS connection; both
+  operations are refused there, by the SDK before anything is sent (below)
+  and by the daemon for any other client. A proof made for another
+  connection is refused on REST, gRPC and QUIC with `403` /
+  `PermissionDenied`, the same as any proof that does not verify.
+- The gRPC TCP and QUIC listeners with mutual TLS enabled (`EnableMTLS`)
+  verify a client certificate **if one is given** (`tls.VerifyClientCertIfGiven`,
+  set by `grpcTCPServerTLS` and `quicServerMTLS` in
+  `pkg/api/daemon/client_cert_gate.go`) and require one per request: `BootCertificate` may arrive without one (the
+  node has none yet); `BootDelivery` and every other RPC or QUIC opcode are
+  refused (`Unauthenticated` / `StatusUnauthorized`) without a verified
+  certificate. A certificate that does not chain to the client CA fails the
+  handshake. Both boot calls therefore share one listener.
+- A TLS-terminating proxy or load balancer in front of the control plane breaks
+  diskless boot: the channel nonce and the client certificate belong to the
+  proxy's connection, not the node's, so the proof fails closed. Pass TLS
+  through (layer 4) to the control plane.
+- A gRPC or QUIC listener that never requests a client certificate cannot serve
+  `BootDelivery`: there is no leaf to verify, so it fails closed.
+
+**Client.** The proof and the evidence are bound to the connection that
+carries them, and that connection's exporter exists only once it is open, so
+the Go SDK takes a callback rather than proof bytes:
+
+```go
+type BootProofFunc func(ctx context.Context, binding []byte) ([]byte, error)
+
+resp, err := client.BootCertificate(ctx, identity, sign)  // sign returns the IDevID proof over binding
+resp, err := client.BootDelivery(ctx, quote)              // quote returns vm.QuoteEvidence JSON whose nonce is binding
+```
+
+The transport calls the function after it has connected, with that
+connection's `provisioning.BootChannelNonce`, and sends the request on the
+same connection ([architecture.md §4.5](architecture.md#45-diskless-boot-a-proof-is-made-on-the-connection-that-carries-it-690)).
+Every failure is the typed `ErrBootCertificateFailed` /
+`ErrBootDeliveryFailed` wrapping its cause: the control plane's status, the
+callback's own error, `ErrBootProofMissing` for a nil callback, or — on a
+transport with no TLS connection (Unix, MCP, embedded) —
+`*transport.ErrChannelBindingUnavailable{Transport, Reason}`, returned
+without calling the function or sending anything. The CLI is
+`platformctl device boot certificate --identity <name> --key <PEM>` and
+`platformctl device boot delivery --quote-command <program>`
+([cli.md §2.7](cli.md#27-device-boot-certificate-and-device-boot-delivery)).
 
 ## 5. Adjacent routes on the same router
 

@@ -16,7 +16,11 @@ package iso
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"debug/elf"
 	"errors"
@@ -70,6 +74,18 @@ func signs(t *testing.T, m *SecureBootMaterial, want *x509.Certificate) {
 	embedded, err := verifier.ExtractCertificate(bytes.NewReader(signed.Bytes()))
 	require.NoError(t, err)
 	assert.True(t, embedded.Equal(want))
+
+	// The same key, as a plain signer, signs the diskless root manifest.
+	require.NotNil(t, m.DBKey)
+	assert.True(t, m.DBCert.Equal(want))
+	digest := sha256.Sum256([]byte("manifest"))
+	sig, err := m.DBKey.Sign(rand.Reader, digest[:], crypto.SHA256)
+	require.NoError(t, err)
+	algorithm := x509.SHA256WithRSA
+	if _, ok := want.PublicKey.(*ecdsa.PublicKey); ok {
+		algorithm = x509.ECDSAWithSHA256
+	}
+	require.NoError(t, want.CheckSignature(algorithm, []byte("manifest"), sig), "signed by the DB certificate's key")
 }
 
 func TestResolveSecureBootMaterial_Off(t *testing.T) {

@@ -45,7 +45,12 @@ type DeviceGRPCService struct {
 	// attestCertRecorder backs RecordAttestationCertificate; nil answers
 	// Unavailable.
 	attestCertRecorder AttestCertRecorder
-	logger             *slog.Logger
+	// bootCA is the CA bundle source for BootDelivery; boot is built from it
+	// once the service exists (it is its own quote verifier). A nil boot
+	// answers Unavailable.
+	bootCA BootCABundle
+	boot   BootProvider
+	logger *slog.Logger
 }
 
 // DeviceGRPCOption configures optional dependencies of a DeviceGRPCService.
@@ -82,6 +87,7 @@ func NewDeviceGRPCService(
 		opt(s)
 	}
 	s.verifier = NewDeviceQuoteVerifier(deviceService, profileService, s.akTrust, s.verdictSink, logger)
+	s.boot = newDeviceBootProvider(s)
 	return s
 }
 

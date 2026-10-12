@@ -872,7 +872,7 @@ func TestHeartbeat_RecorderNotConfigured(t *testing.T) {
 func TestHeartbeat_DeviceNotFound(t *testing.T) {
 	recorder := new(mockHeartbeatRecorder)
 	recorder.On("RecordHeartbeat", mock.Anything, "GHOST-1").
-		Return(nil, &pkgdevice.HeartbeatDeviceNotFoundError{Identity: "GHOST-1", Cause: errors.New("no record")})
+		Return(nil, &pkgdevice.IdentityNotFoundError{Identity: "GHOST-1", Cause: errors.New("no record")})
 
 	handler := NewHandler(newTestLogger(), newTestResponseWriter(), nil, nil,
 		WithHeartbeatRecorder(recorder))

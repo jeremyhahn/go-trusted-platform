@@ -20,6 +20,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
@@ -58,7 +59,13 @@ type QUICServiceHandler struct {
 	deviceVerdicts verdict.Sink
 	// attestCertRecorder backs the DeviceSubRecordAttestCert sub-opcode.
 	attestCertRecorder AttestCertRecorder
-	dnsService         DNSService
+	// bootCA backs the DeviceSubBootDelivery sub-opcode.
+	bootCA BootCABundle
+	// requireClientCert makes every request but the boot-certificate one need
+	// a verified client certificate on its connection (the listener verifies
+	// one only if given).
+	requireClientCert atomic.Bool
+	dnsService        DNSService
 	// dnsGRPC is the shared *DNSServiceServer the SDK-mapped DNS QUIC handlers
 	// delegate to so the QUIC transport has identical semantics to gRPC.
 	// It is (re)built by the DNS service setters (rebuildDNSGRPC).
@@ -331,6 +338,22 @@ func (h *QUICServiceHandler) SetDeviceAttestCertRecorder(recorder AttestCertReco
 	h.rebuildDeviceGRPC()
 }
 
+// SetDeviceBootCA sets the CA bundle source behind the diskless boot
+// sub-opcodes (DeviceSubBootCertificate, DeviceSubBootDelivery) after
+// construction.
+func (h *QUICServiceHandler) SetDeviceBootCA(ca BootCABundle) {
+	h.bootCA = ca
+	h.rebuildDeviceGRPC()
+}
+
+// RequireClientCert makes the handler refuse every request that does not
+// arrive over a connection with a verified client certificate, except the
+// diskless boot-certificate request (the node has no certificate yet). The
+// listener must verify a client certificate if one is given.
+func (h *QUICServiceHandler) RequireClientCert() {
+	h.requireClientCert.Store(true)
+}
+
 // SetVTPMService sets the vTPM service after construction
 func (h *QUICServiceHandler) SetVTPMService(svc vtpm.VTPMService) {
 	h.vtpmService = svc
@@ -489,6 +512,10 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 
 	if req == nil {
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICNilRequest{})
+	}
+
+	if refusal := h.clientCertRefusal(ctx, req); refusal != nil {
+		return refusal
 	}
 
 	// Every request is authenticated and authorized against the operation

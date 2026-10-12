@@ -17,6 +17,7 @@ package quic
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"reflect"
 	"testing"
@@ -119,6 +120,11 @@ func (s refusingSender) Send(context.Context, byte, interface{}, interface{}) er
 }
 
 func (s refusingSender) SendRequest(context.Context, byte, []byte) (*quicwire.Response, error) {
+	s.t.Fatal("the request was sent")
+	return nil, nil
+}
+
+func (s refusingSender) SendBoundRequest(context.Context, byte, func(*tls.ConnectionState) ([]byte, error)) (*quicwire.Response, error) {
 	s.t.Fatal("the request was sent")
 	return nil, nil
 }

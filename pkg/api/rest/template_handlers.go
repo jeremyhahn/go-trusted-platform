@@ -728,12 +728,13 @@ func (h *TemplateHandlers) writeProfileError(w http.ResponseWriter, operation st
 	var status int
 
 	var vlans device.ErrProfileVLANsNotDistinct
+	var noMatch device.ErrNoMatchingConfig
 
 	switch {
 	// Typed validation failures from the service layer are client errors.
 	case errors.As(err, &vlans):
 		status = http.StatusBadRequest
-	case isNotFoundError(err):
+	case errors.As(err, &noMatch), isNotFoundError(err):
 		status = http.StatusNotFound
 	case isAlreadyExistsError(err):
 		status = http.StatusConflict

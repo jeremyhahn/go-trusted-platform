@@ -13,6 +13,8 @@ service DeviceService {
   rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse);
   rpc FindDeviceBySerial(FindDeviceBySerialRequest) returns (FindDeviceBySerialResponse);
   rpc AttestDevice(AttestDeviceRequest) returns (AttestDeviceResponse);
+  rpc BootCertificate(BootCertificateRequest) returns (BootCertificateResponse);
+  rpc BootDelivery(BootDeliveryRequest) returns (BootDeliveryResponse);
 }
 
 service ProfileService {
@@ -363,6 +365,26 @@ a PEM X.509 certificate. `UnassignProfileFromDevice` clears the EK
 serial, MAC address, prestaged EK certificate, and assignment state.
 Both RPCs return the updated profile. The same RPCs are reachable over
 the Unix socket transport (gRPC over UDS).
+
+## Diskless Boot
+
+`BootCertificate` and `BootDelivery` are a diskless node's two per-boot
+requests ([api.md §4.6](api.md#46-diskless-boot-delivery-690)). They are exempt
+from token authentication (a node holds no token); the service authenticates
+every request itself and binds the proof and the evidence to a nonce exported
+from the connection's TLS 1.3 session.
+
+| RPC | Request | Response |
+|-----|---------|----------|
+| `BootCertificate` | `identity`, `signature` (proof over the identity and the channel nonce) | `identity`, `idevid_chain` |
+| `BootDelivery` | `evidence` (the node's identity is the client certificate) | `serial`, `idevid_chain`, `attest_cert`, `ca_bundle`, `profile`, `pcr_baseline_source`, `pcr_baseline_captured` |
+
+A malformed or unverifiable request is `InvalidArgument`, a request that
+fails the identity or channel check is `PermissionDenied`, and an
+unconfigured service is `Unavailable`. With mutual TLS enabled the listener
+verifies a client certificate only if given; `BootCertificate` may arrive
+without one, `BootDelivery` and every other method need a verified one
+(`Unauthenticated`). A listener without mutual TLS cannot serve `BootDelivery`.
 
 ## Usage Examples
 

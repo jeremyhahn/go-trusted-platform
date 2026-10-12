@@ -646,6 +646,31 @@ func (r *ToolRegistry) registerDeviceTools() {
 	})
 
 	r.addTool(mcpwire.ToolDefinition{
+		Name:        "device_boot_certificate",
+		Description: "Return a diskless node's recorded IDevID chain to the node that proves it holds the chain's key over the connection it asks on (channel-bound proof of possession). Needs no token; refused on a transport with no TLS connection.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"identity":  map[string]interface{}{"type": "string", "description": "Claimed device identity"},
+				"signature": map[string]interface{}{"type": "string", "description": "Base64-encoded proof-of-possession signature over the connection's channel nonce"},
+			},
+			"required": []string{"identity", "signature"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "device_boot_delivery",
+		Description: "Return a verified diskless node's network profile and CA bundle. The node is identified by its connection's client certificate and its attestation evidence is verified before anything is released. Needs no token; refused on a transport with no TLS connection.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"evidence": map[string]interface{}{"type": "string", "description": "Base64-encoded attestation evidence"},
+			},
+			"required": []string{"evidence"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_provision",
 		Description: "Provision a device with a profile",
 		InputSchema: map[string]interface{}{
@@ -1349,6 +1374,10 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeDeviceAttest(ctx, args)
 	case "device_record_attest_cert":
 		return r.executeDeviceRecordAttestCert(ctx, args)
+	case "device_boot_certificate":
+		return r.executeDeviceBootCertificate(ctx, args)
+	case "device_boot_delivery":
+		return r.executeDeviceBootDelivery(ctx, args)
 	case "device_provision":
 		return r.executeDeviceProvision(ctx, args)
 

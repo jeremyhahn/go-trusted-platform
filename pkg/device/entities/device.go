@@ -170,6 +170,12 @@ type Device struct {
 	// DevID v1 r12 §8.2 requires before signed data is trusted as TPM
 	// internal data (#374).
 	AttestCert string `yaml:"att-cert,omitempty" json:"attest_cert,omitempty"`
+	// IDevIDCert is the PEM-encoded IDevID certificate chain (leaf first) the
+	// platform CA issued at enrollment. A diskless node keeps no certificate
+	// across a reboot: it fetches this chain back to present its
+	// TPM-resident IDevID key over mTLS, and the control plane requires the
+	// presented leaf to be this one before it delivers anything (#690).
+	IDevIDCert string `yaml:"idevid-cert,omitempty" json:"idevid_cert,omitempty"`
 	EKCert     string `yaml:"ek-cert" json:"ek_cert"`
 	EventLog   []byte `yaml:"event-log" json:"event_log"`
 	HashAlgoId uint32 `yaml:"hash-algo" json:"hash_algo"`

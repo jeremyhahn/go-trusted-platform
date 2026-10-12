@@ -208,6 +208,8 @@ Alpine:
 | `--apk-mirror` | string | `""` | **Install-time** APK repository base, baked into the cmdline as `platform_apk_mirror=`; empty falls back to the public Alpine mirror |
 | `--arch` | string | `x86_64` | `x86_64` or `aarch64` |
 
+`--diskless` netboot media is supported only for media sets that include a diskless root, currently the arm64 QEMU `virt` and Raspberry Pi sets; an x86_64-only set is rejected instead of silently falling back to a disk-backed install.
+
 Platform:
 
 | Flag | Type | Default | Meaning |
@@ -516,8 +518,11 @@ platform-initrd version     Print version information
 
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
-| `--device` | `-d` | string | — (**required**) | LUKS device path |
+| `--device` | `-d` | string | — (**required** without `--diskless`) | LUKS device path |
 | `--name` | `-n` | string | `cryptroot` | LUKS mapping name |
+| `--diskless` | | bool | `false` | Mount the diskless dm-verity root the signed command line describes instead of unlocking `--device`; the two are mutually exclusive. The dracut hook passes it only when the signed command line carries `platform_boot_model=diskless` |
+| `--root-mount` | | string | `/sysroot` | Where `--diskless` mounts the overlay root |
+| `--diskless-work-dir` | | string | `/run/platform/diskless-root` | Tmpfs directory for the fetched image and hash tree |
 | `--timeout` | | int | `30` | Unlock timeout in seconds |
 | `--pcrs` | | []uint | unset | PCR selection; falls back to the `pcr-banks` file, then `config.yaml` |
 | `--fallback` | | bool | **`true`** | Enable fallback unlock methods |
@@ -532,6 +537,7 @@ platform-initrd version     Print version information
 ```bash
 platform-initrd boot --device /dev/sda2
 platform-initrd boot --device /dev/sda2 --timeout 60 --pcrs 0,7,9
+platform-initrd boot --diskless --root-mount /sysroot
 ```
 
 ### 6.2 `platform-initrd recovery`

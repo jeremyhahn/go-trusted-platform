@@ -391,7 +391,9 @@ native VLAN on an access port, and bounds the MTU to 1500–9216.
 **There are no switch-specific environment variables** (grepped 2026-08-18).
 
 **The `secret:"true"` tag is declarative here.** `pkg/bootstrap.SecretStructTag`
-names it, but nothing in non-test code walks it, so the secret-URI schemes
+names it, and its only reader is the diskless image build, which refuses a
+platform config holding the field as plaintext
+(`bootstrap.PlaintextSecretFields`); nothing resolves it, so the secret-URI schemes
 (`kms://`, `xkms://`, `env://`, `file://`, `idevid://`, `dynamic://`,
 `remote-kms://`) are **not resolved for this field** by anything in this
 feature. The legacy `configuration.md` described `kms://` password resolution as

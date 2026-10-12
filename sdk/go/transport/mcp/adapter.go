@@ -186,6 +186,16 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 		return status.Error(codes.Unimplemented, ErrMethodNotMapped{Method: method}.Error())
 	}
 
+	// The daemon serves MCP over plain HTTP and stdio: there is no TLS
+	// connection whose exporter a proof could be bound to, so a call that
+	// needs one is refused before anything is sent (docs/device/architecture.md).
+	if _, bound := transport.ChannelBindingFrom(opts); bound {
+		return &transport.ErrChannelBindingUnavailable{
+			Transport: platform.ProtocolMCP.String(),
+			Reason:    "MCP is served over plain HTTP or stdio, with no TLS connection to bind to",
+		}
+	}
+
 	// Check connection state
 	if c.adapter.closed.Load() {
 		return status.Error(codes.Unavailable, "connection closed")
@@ -342,6 +352,11 @@ var grpcMethodToMCPToolMap = map[string]string{
 	// the result carries proto field names, so the generic round-trip
 	// decodes straight into RecordAttestationCertificateResponse.
 	"/platform.v1.DeviceService/RecordAttestationCertificate": "device_record_attest_cert",
+	// A diskless node's per-boot requests. Server tools: pkg/api/mcp/tools.go
+	// device_boot_certificate / device_boot_delivery. MCP carries no TLS
+	// connection, so the server refuses both; the mapping exists for parity.
+	"/platform.v1.DeviceService/BootCertificate": "device_boot_certificate",
+	"/platform.v1.DeviceService/BootDelivery":    "device_boot_delivery",
 
 	// SDN — proto: pkg/api/grpc/proto/sdn.proto
 	"/platform.v1.SDNService/CreateBridge": "sdn_create_bridge",

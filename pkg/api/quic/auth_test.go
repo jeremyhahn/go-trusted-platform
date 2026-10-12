@@ -238,6 +238,30 @@ func TestAuthMiddleware_AuthenticateRequest_PeerAuthenticatedWithoutValidator(t 
 	}
 }
 
+// A diskless node holds no token: only the two boot sub-opcodes under the
+// provisioning category bypass authentication, not the category itself.
+func TestAuthMiddleware_GuardRequest_PreAuthOnlyTheBootSubOpcodes(t *testing.T) {
+	m := NewAuthMiddleware(WithQUICTokenValidator(&mockQUICTokenValidator{valid: false}))
+
+	for _, sub := range []byte{quicwire.DeviceSubBootCertificate, quicwire.DeviceSubBootDelivery} {
+		req := &quicwire.Request{Opcode: quicwire.OpProvisioningCategory, Payload: []byte{sub}}
+		_, resp := m.GuardRequest(context.Background(), req)
+		if resp != nil {
+			t.Errorf("sub-opcode %#x should need no credentials, got %+v", sub, resp)
+		}
+	}
+
+	for _, req := range []*quicwire.Request{
+		{Opcode: quicwire.OpProvisioningCategory, Payload: []byte{quicwire.DeviceSubRecordAttestCert}},
+		{Opcode: quicwire.OpProvisioningCategory},
+	} {
+		_, resp := m.GuardRequest(context.Background(), req)
+		if resp == nil {
+			t.Errorf("payload %v must still be authenticated", req.Payload)
+		}
+	}
+}
+
 func TestAuthMiddleware_AuthenticateRequest_NoValidator_RequireAuth(t *testing.T) {
 	m := NewAuthMiddleware(
 		WithQUICRequireAuth(true),

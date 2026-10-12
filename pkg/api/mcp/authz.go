@@ -77,6 +77,13 @@ func toolPermissionCatalog() map[string]string {
 	permissions["device_update"] = "device:write"
 	permissions["device_attest"] = "device:read"
 	permissions["device_record_attest_cert"] = "device:write"
+	// Diskless boot: a node holds no token. These tools are explicitly open
+	// ("") because the boot service authenticates the caller itself --
+	// proof of possession of the IDevID key bound to the connection, and the
+	// client certificate -- and MCP carries no TLS state, so it refuses.
+	// Open tools require no scope, so they add none to scopes_supported.
+	permissions["device_boot_certificate"] = ""
+	permissions["device_boot_delivery"] = ""
 
 	// Attestation reporting (#226). Reads serve the cache; the refresh
 	// enqueues work that spends a node's TPM time, so it is a write.

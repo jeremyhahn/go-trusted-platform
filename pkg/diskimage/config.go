@@ -105,8 +105,9 @@ type BuildConfig struct {
 }
 
 // builderImageFor is the builder image tag for a Go architecture. The assemble
-// step (host) and netboot-initfs (target) build different platforms, so each
-// gets its own tag and neither can run the other's image.
+// step (host) and the netboot-initfs and diskless-root steps (target) build
+// different platforms, so each gets its own tag and no step can run another
+// platform's image.
 func (c *BuildConfig) builderImageFor(arch string) string {
 	return c.BuilderImage + ":" + arch
 }

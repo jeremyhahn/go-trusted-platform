@@ -222,7 +222,7 @@ observed, with these fields beside the manual-node ones
 | `model` | string | **Required**. `rpi4`, `rpi400`, `cm4`, `rpi3b+` or `rpi5` |
 | `architecture` | string | `aarch64` (the default for a Pi; `x86_64` is rejected) |
 | `serial` | string | The board serial, up to eight hex digits (`/proc/cpuinfo` `Serial`, low 32 bits) — what the bootloader sends in DHCP option 97 and the name of its per-device boot directory |
-| `boot_model` | string | `sd` (default): the card is installed over the network once; the bootloader's `BOOT_ORDER` must try the card first and the network second (`0xf21`) |
+| `boot_model` | string | `sd` (default): the card is installed over the network once; `diskless`: boot stateless from the media set's squashfs root plus dm-verity tree (see below) |
 | `bmc_address` | — | Not allowed: a Pi has no BMC, so `boot_method: virtual-media` is not possible either |
 
 ```yaml
@@ -235,7 +235,16 @@ observed, with these fields beside the manual-node ones
 ```
 
 `architecture` is also accepted on a generic node (`aarch64` for an Arm
-server); `model`, `serial` and `boot_model` are not.
+server). Generic nodes may set `boot_model: diskless`; `model` and
+`serial` remain platform-specific and are not accepted.
+
+`boot_model: diskless` is per node. The bootstrap container's device script
+for that node's MACs adds only `platform_boot_model=diskless`; the root it
+boots is named by the media set's DB-signed manifest, which the installer
+verifies and writes into the node's signed UKI. The node's media set must
+be built with `diskimage netboot --diskless`, or its device script fails
+with `ErrDisklessUnavailable`. Every other node on the same media set, and
+any machine the manifest does not know, installs to its disk.
 
 ### Authoritative Node Identity
 

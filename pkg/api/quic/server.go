@@ -229,6 +229,11 @@ func (s *Server) handleConnection(conn *quicgo.Conn) {
 		slog.Int64("active_conns", s.activeConns.Load()),
 	)
 
+	// Handlers that bind a request to its own connection (diskless boot)
+	// read the TLS state from the context.
+	tlsState := conn.ConnectionState().TLS
+	connCtx := WithConnectionTLS(s.ctx, &tlsState)
+
 	for s.running.Load() {
 		stream, err := conn.AcceptStream(s.ctx)
 		if err != nil {
@@ -257,7 +262,7 @@ func (s *Server) handleConnection(conn *quicgo.Conn) {
 
 		s.activeStreams.Add(1)
 		s.wg.Add(1)
-		go s.handleStream(stream, remoteAddr)
+		go s.handleStream(connCtx, stream, remoteAddr)
 	}
 }
 
@@ -267,7 +272,7 @@ func (s *Server) handleConnection(conn *quicgo.Conn) {
 // guard ensures the stream goroutine is never silently killed). A panicking
 // handler produces a StatusInternalError response so the client always receives
 // a valid response frame rather than an EOF.
-func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
+func (s *Server) handleStream(ctx context.Context, stream *quicgo.Stream, remoteAddr string) {
 	defer s.wg.Done()
 	defer s.activeStreams.Add(-1)
 
@@ -344,7 +349,7 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 
 	var resp *quicwire.Response
 	if s.handler != nil {
-		resp = s.handler.HandleRequest(s.ctx, req)
+		resp = s.handler.HandleRequest(ctx, req)
 	} else {
 		resp = &quicwire.Response{
 			Status:  quicwire.StatusNotImplemented,

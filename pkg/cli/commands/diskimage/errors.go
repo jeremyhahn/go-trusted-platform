@@ -47,6 +47,19 @@ func (e ErrInvalidPortForward) Error() string {
 	return "diskimage test: invalid --forward " + e.Spec + " (want host:guest[/tcp|udp])"
 }
 
+// ErrSourceDateEpoch is a diskless build without a valid SOURCE_DATE_EPOCH,
+// which every timestamp in the diskless root and its salt derive from.
+type ErrSourceDateEpoch struct {
+	Value string
+}
+
+func (e ErrSourceDateEpoch) Error() string {
+	if e.Value == "" {
+		return "diskimage netboot: --diskless needs --source-date-epoch or SOURCE_DATE_EPOCH"
+	}
+	return "diskimage netboot: invalid SOURCE_DATE_EPOCH " + e.Value + " (want seconds since 1970, >= 0)"
+}
+
 // ErrUnknownMediaSet is a --sets name the netboot build does not produce.
 type ErrUnknownMediaSet struct {
 	Name  string
@@ -58,7 +71,7 @@ func (e ErrUnknownMediaSet) Error() string {
 }
 
 // ErrHTTPBootFlags is an HTTP boot flag given without --fleet-key, the flag
-// that turns HTTP boot on.
+// that turns HTTP boot on (--source-date-epoch: without --diskless either).
 type ErrHTTPBootFlags struct {
 	Flag string
 }
@@ -95,5 +108,8 @@ func (e *ErrEEPROMHSMSign) Error() string {
 func (e *ErrEEPROMHSMSign) Unwrap() error { return e.Err }
 
 func (e ErrHTTPBootFlags) Error() string {
+	if e.Flag == "source-date-epoch" {
+		return "--source-date-epoch needs --fleet-key or --diskless: it times only the HTTP boot files and the diskless root"
+	}
 	return "--" + e.Flag + " needs --fleet-key: the HTTP boot files are only built when the fleet key is given"
 }

@@ -23,6 +23,11 @@ For architectural context see:
 | `platform_apk_mirror` | `iso create --apk-mirror` (GRUB), bootstrap server `BOOTSTRAP_APK_MIRROR` (PXE) | `autoinstall.sh` | Install-time APK repository base for nodes with no `/media/cdrom` |
 | `alpine_repo` | Bootstrap server (PXE only) | Alpine initramfs `init` | Live-system (diskless root) repository; without it PXE installs 0 packages |
 | `modloop` | Bootstrap server (PXE only) | Alpine initramfs `init`, `run-autoinstall.sh` | Kernel-modules squashfs URL; `run-autoinstall.sh` fetches+mounts it over HTTP when no CD is present (dm-crypt/LUKS/ext4/TPM modules) |
+| `platform_boot_model` | Bootstrap server (per node, from `boot_model`) | installer, `platform-initrd` | `diskless` selects the diskless root; absent means the disk install. The installer copies it into the signed UKI `.cmdline` |
+| `platform_rootfs_url` | Installer, from the signed media-set manifest | `platform-initrd` | HTTP(S) URL of the squashfs root image for stateless boot |
+| `platform_verity_url` | Installer, from the signed media-set manifest | `platform-initrd` | HTTP(S) URL of the dm-verity hash tree for `platform_rootfs_url` |
+| `platform_roothash` | Signed UKI `.cmdline`, from the signed media-set manifest | `platform-initrd` | dm-verity SHA-256 root hash of the diskless root; Secure Boot and measured boot cover it |
+| `platform_verity_salt`, `platform_rootfs_size`, `platform_verity_size` | Signed UKI `.cmdline`, from the signed media-set manifest | `platform-initrd` | Pinned dm-verity salt and the exact byte sizes fetched; nothing is read from a superblock |
 | `platform_autoinstall_debug` | Operator (manual) | `autoinstall.sh` | Enable `set -x` for verbose install trace |
 | `platform_server` | Operator (post-bootstrap) | Interactive provisioning client | Server URL for interactive QR mode |
 | `bootstrap_strategy` | `iso create --bootstrap-strategy` | Post-bootstrap provisioning client | `dane`, `noise`, `spki`, or `auto` |
@@ -312,6 +317,33 @@ to find the LUKS device to unlock.
 
 Override the unlock strategy order. Defaults to the order compiled
 into the initrd config. See `docs/installer/UNLOCK_STRATEGIES.md`.
+
+### Diskless root parameters
+
+Diskless image boot only. Every one of these comes from the **signed UKI
+`.cmdline`**, never from a live command line or an iPXE script. The bootstrap
+server marks a node with `platform_boot_model=diskless` (from its
+`boot_model`) and nothing more; the installer then reads the media set's
+`diskless/manifest.json`, verifies its `.sig` against a pinned anchor — the
+platform's DB certificate enrolled in the node's UEFI `db` (not any other `db`
+entry), or the KMS-held DB certificate,
+never a media-staged key ([installer architecture](../installer/architecture.md))
+— and writes the root parameters from that manifest into the UKI. A root hash on the installer's command line is ignored,
+so a tampered boot script cannot change the root a node boots. `platform-initrd`
+rejects a command line that names any of these keys twice.
+
+| Parameter | Meaning |
+|-----------|---------|
+| `platform_boot_model=diskless` | Selects the diskless root; any other value is refused |
+| `platform_rootfs_url=<url>` | Absolute HTTP(S) URL of the squashfs root, fetched into RAM, attached read-only, and used as the lower root under a tmpfs overlay |
+| `platform_verity_url=<url>` | Absolute HTTP(S) URL of the dm-verity hash tree for that image |
+| `platform_roothash=<sha256-hex>` | 64-hex dm-verity root hash; a mismatch fails closed before any root mount |
+| `platform_verity_salt=<hex>` | dm-verity salt, pinned so the open does not trust on-media parameters |
+| `platform_rootfs_size=<bytes>`, `platform_verity_size=<bytes>` | Exact sizes; the fetch stops at them and the RAM spent is bounded |
+
+The names carry the `platform_` prefix because systemd's
+`systemd-veritysetup-generator` claims `roothash=` and would try to open a
+verity root of its own.
 
 ---
 

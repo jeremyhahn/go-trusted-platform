@@ -266,13 +266,15 @@ coordinated wave, not that the site is acceptable.
 | ~57 `secret:"true"`-tagged DTO fields across 19 packages | **Deferred** — see below |
 | Untagged plaintext credentials on service-layer and config types | **Deferred** — see below |
 
-### The `secret:"true"` tag delivers nothing today
+### The `secret:"true"` tag delivers no protection today
 
 `SecretStructTag` (`pkg/bootstrap/secrets.go:46`) marks fields whose value
-may be a secret *reference URI* for the bootstrap secret resolver. It is
-**declared and never read** — there is no `Tag.Get("secret")` call site in
-the repo. So the tag is purely documentary: it provides neither redaction
-nor locked memory. Reading it as a redaction marker overstates it.
+may be a secret *reference URI* for the bootstrap secret resolver. Its one
+reader is `bootstrap.PlaintextSecretFields`, which the diskless image build
+uses to refuse a platform config holding a tagged field as plaintext
+(`pkg/diskimage/diskless_config.go`). Nothing reads it on a log, marshal or
+memory path, so it provides neither redaction nor locked memory. Reading it
+as a redaction marker overstates it.
 
 Giving the tag real enforcement — a reflective redactor on log/marshal
 paths, and/or enclave typing for the fields — is a platform-wide API change
@@ -287,7 +289,6 @@ sweep:
 
 | Site | Material |
 |---|---|
-| `pkg/dns/config.go:275` | TSIG shared HMAC secret |
 | `pkg/storage/luks/types.go:272` | LUKS format passphrase |
 | `pkg/api/daemon/ceremony_service.go:166` | Shamir share (claim-share result) |
 | `pkg/api/quic/phase35_types.go:99` | Shamir share (QUIC wire) |

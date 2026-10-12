@@ -17,6 +17,7 @@ package quic
 
 import (
 	"context"
+	"crypto/tls"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -49,6 +50,11 @@ type recordingSender struct {
 	// Optional error returns
 	sendErr        error
 	sendRequestErr error
+
+	// SendBoundRequest: the connection state handed to the payload
+	// builder, and the number of bound sends.
+	boundState *tls.ConnectionState
+	boundCalls int
 }
 
 func (r *recordingSender) Send(ctx context.Context, opcode byte, reqData, respData interface{}) error {
@@ -67,6 +73,18 @@ func (r *recordingSender) SendRequest(ctx context.Context, opcode byte, payload 
 		return nil, r.sendRequestErr
 	}
 	return &quicwire.Response{Status: quicwire.StatusOK, Payload: r.respPayload}, nil
+}
+
+// SendBoundRequest builds the payload over boundState, the TLS state the
+// test stands in for the client's connection, then records it as
+// SendRequest does.
+func (r *recordingSender) SendBoundRequest(ctx context.Context, opcode byte, build func(state *tls.ConnectionState) ([]byte, error)) (*quicwire.Response, error) {
+	r.boundCalls++
+	payload, err := build(r.boundState)
+	if err != nil {
+		return nil, err
+	}
+	return r.SendRequest(ctx, opcode, payload)
 }
 
 // fakeRequest is a minimal codec-friendly type used to verify that the

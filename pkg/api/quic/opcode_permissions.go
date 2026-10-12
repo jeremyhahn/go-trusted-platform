@@ -105,6 +105,9 @@ func LookupOperationPermission(opcode byte, payload []byte) (perm OpcodePermissi
 		if len(payload) == 0 {
 			return OpcodePermission{}, false, ErrSubOpcodeMissing{Opcode: opcode}
 		}
+		if _, ok := preAuthSubOpcodes[opcode][payload[0]]; ok {
+			return OpcodePermission{}, true, nil
+		}
 		perm, ok := subs[payload[0]]
 		if !ok {
 			return OpcodePermission{}, false, ErrOperationNotClassified{Opcode: opcode, Sub: payload[0], HasSub: true}
@@ -126,6 +129,18 @@ var preAuthOpcodes = map[byte]string{
 	quicwire.OpReadiness: "readiness probe; same reasoning as OpHealth",
 	quicwire.OpIAMAuthenticate: "credential exchange: the caller presents a username and password to obtain " +
 		"the token every other operation requires, so it cannot itself require one",
+}
+
+// preAuthSubOpcodes are the single sub-operations of a category opcode that
+// are served without credentials, keyed by category and then sub-opcode.
+// Each value records why the operation cannot require a token.
+var preAuthSubOpcodes = map[byte]map[byte]string{
+	quicwire.OpProvisioningCategory: {
+		quicwire.DeviceSubBootCertificate: "a diskless node holds no platform token and no certificate yet; " +
+			"the boot service authenticates the request itself against the node's own TLS channel",
+		quicwire.DeviceSubBootDelivery: "a diskless node holds no platform token; the boot service verifies " +
+			"the node's attestation evidence, bound to its own TLS channel, before it delivers anything",
+	},
 }
 
 // Permissions shared by many entries.

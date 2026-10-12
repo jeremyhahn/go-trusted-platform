@@ -14,6 +14,7 @@
 package v1
 
 import (
+	"crypto/x509"
 	"reflect"
 	"regexp"
 	"runtime"
@@ -24,6 +25,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	sdkrest "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 )
 
@@ -136,7 +139,14 @@ func handlerName(h any) (string, bool) {
 func builtHandlers(t *testing.T) (resolved map[string]string, wrapped []string) {
 	t.Helper()
 
-	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	// The diskless per-boot routes register only with a boot handler, and
+	// POST /device/boot sits behind the mTLS middleware.
+	logger := testLogger()
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &anonymousAuth{},
+		bootHandler:  &probeBootHandler{},
+		mtls:         middleware.NewMTLSMiddleware(logger, response.NewResponseWriter(logger, nil), x509.NewCertPool()),
+	})
 	resolved = map[string]string{}
 
 	require.NoError(t, router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
@@ -250,6 +260,15 @@ var deviceServiceHandlers = map[string]string{
 	"FindConfigForDevice":          "FindConfigForDevice",
 	"AssignProfileToDevice":        "AssignProfileToDevice",
 	"UnassignProfileFromDevice":    "UnassignProfileFromDevice",
+	"BootCertificate":              "HandleBootCertificate",
+}
+
+// deviceServiceWrappedRoutes lists the DeviceService claims whose route sits
+// behind middleware, so the built router yields no handler name for it. The
+// claim must still land on that registered route; the handler the middleware
+// reaches is pinned by the router package's own tests.
+var deviceServiceWrappedRoutes = map[string]string{
+	"BootDelivery": "POST /api/v1/device/boot",
 }
 
 // TestSDKRouteClaims_DeviceServiceDispatchesToItsHandler resolves every
@@ -257,7 +276,11 @@ var deviceServiceHandlers = map[string]string{
 // handler it reaches. A claim on a path or verb the server does not register,
 // or on another operation's route, fails; so does a claim with no row here.
 func TestSDKRouteClaims_DeviceServiceDispatchesToItsHandler(t *testing.T) {
-	resolved, _ := builtHandlers(t)
+	resolved, wrapped := builtHandlers(t)
+	behindMiddleware := map[string]bool{}
+	for _, route := range wrapped {
+		behindMiddleware[route] = true
+	}
 
 	const prefix = "/platform.v1.DeviceService/"
 	claimed := map[string]bool{}
@@ -267,6 +290,14 @@ func TestSDKRouteClaims_DeviceServiceDispatchesToItsHandler(t *testing.T) {
 		}
 		method := strings.TrimPrefix(claim.GRPCMethod, prefix)
 		claimed[method] = true
+
+		if wantRoute, ok := deviceServiceWrappedRoutes[method]; ok {
+			route := claim.Method + " " + normalisePath(claim.Path)
+			require.Equalf(t, wantRoute, route, "%s claims the wrong route", claim.GRPCMethod)
+			require.Truef(t, behindMiddleware[route],
+				"%s claims %q, which the built router does not register behind middleware", claim.GRPCMethod, route)
+			continue
+		}
 
 		want, ok := deviceServiceHandlers[method]
 		if !ok {
@@ -284,6 +315,9 @@ func TestSDKRouteClaims_DeviceServiceDispatchesToItsHandler(t *testing.T) {
 	}
 
 	for method := range deviceServiceHandlers {
+		require.Truef(t, claimed[method], "%s%s has no SDK route claim", prefix, method)
+	}
+	for method := range deviceServiceWrappedRoutes {
 		require.Truef(t, claimed[method], "%s%s has no SDK route claim", prefix, method)
 	}
 }

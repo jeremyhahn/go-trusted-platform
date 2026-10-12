@@ -90,6 +90,7 @@ func fullRegistration(t *testing.T) Registration {
 		Hostname:      "node-02",
 		EKCertPEM:     EncodeCertificatePEM(selfSignedTestCert(t, "ek")),
 		AttestCertPEM: EncodeCertificatePEM(selfSignedTestIAKCert(t, "iak")),
+		IDevIDCertPEM: EncodeCertificatePEM(selfSignedTestCert(t, "idevid")),
 		AttestPub:     []byte{0x00, 0x23, 0x01},
 		SigningPub:    []byte{0x00, 0x23, 0x02},
 		EventLog:      []byte("event-log"),
@@ -156,6 +157,7 @@ func TestRegister_CreatesTheRecordFromTheEnrollment(t *testing.T) {
 	assert.Equal(t, reg.Hostname, dev.Hostname)
 	assert.Equal(t, reg.EKCertPEM, dev.EKCert)
 	assert.Equal(t, reg.AttestCertPEM, dev.AttestCert)
+	assert.Equal(t, reg.IDevIDCertPEM, dev.IDevIDCert)
 	assert.Equal(t, hex.EncodeToString(reg.AttestPub), dev.AttestPub)
 	assert.Equal(t, hex.EncodeToString(reg.SigningPub), dev.SigningPub)
 	assert.Equal(t, reg.EventLog, dev.EventLog)
@@ -196,6 +198,7 @@ func TestRegister_EmptyMaterialNeverErasesWhatIsRecorded(t *testing.T) {
 		Hostname:   "node-02",
 		EKCert:     "EK-PEM",
 		AttestCert: "IAK-PEM",
+		IDevIDCert: "IDEVID-PEM",
 		AttestPub:  "aabb",
 		SigningPub: "ccdd",
 		EventLog:   []byte("log"),
@@ -209,6 +212,7 @@ func TestRegister_EmptyMaterialNeverErasesWhatIsRecorded(t *testing.T) {
 	assert.Equal(t, "node-02", dev.Hostname)
 	assert.Equal(t, "EK-PEM", dev.EKCert)
 	assert.Equal(t, "IAK-PEM", dev.AttestCert)
+	assert.Equal(t, "IDEVID-PEM", dev.IDevIDCert)
 	assert.Equal(t, "aabb", dev.AttestPub)
 	assert.Equal(t, "ccdd", dev.SigningPub)
 	assert.Equal(t, []byte("log"), dev.EventLog)
@@ -250,6 +254,87 @@ func TestRegister_RefusesWithoutASerial(t *testing.T) {
 	_, err := Register(context.Background(), registrar, Registration{Serial: "   "}, time.Now().UTC())
 	assert.ErrorAs(t, err, &ErrRegistrationNoSerial{})
 	assert.Empty(t, registrar.saved)
+}
+
+// disklessRegistration is what a diskless node enrolls with: the serial and
+// Common Name are the identity of its own EK (#690), and the model is the
+// image's, the same for every node built from it.
+func disklessRegistration(t *testing.T) Registration {
+	t.Helper()
+	ek := selfSignedTestCert(t, "ek")
+	identity, err := entities.EKNodeIdentity(ek.PublicKey)
+	require.NoError(t, err)
+	return Registration{
+		Model:         "r640",
+		Serial:        identity,
+		Hostname:      identity,
+		EKCertPEM:     EncodeCertificatePEM(ek),
+		IDevIDCertPEM: EncodeCertificatePEM(selfSignedTestCert(t, identity)),
+	}
+}
+
+// TestRegister_DisklessNodesFromOneImageGetTheirOwnRecords enrolls two nodes
+// that boot one image with different TPMs, and asserts the registry holds two
+// records, each under its own EK's identity with its own certificate chain.
+func TestRegister_DisklessNodesFromOneImageGetTheirOwnRecords(t *testing.T) {
+	registrar := newStubRegistrar()
+	nodeA, nodeB := disklessRegistration(t), disklessRegistration(t)
+	require.NotEqual(t, nodeA.Serial, nodeB.Serial)
+
+	for _, reg := range []Registration{nodeA, nodeB} {
+		result, err := Register(context.Background(), registrar, reg, time.Now().UTC())
+		require.NoError(t, err)
+		assert.True(t, result.Created, "a second node must not take over the first one's record")
+	}
+	require.Len(t, registrar.bySerial, 2)
+	assert.Equal(t, nodeA.IDevIDCertPEM, registrar.bySerial[nodeA.Serial].IDevIDCert)
+	assert.Equal(t, nodeB.IDevIDCertPEM, registrar.bySerial[nodeB.Serial].IDevIDCert)
+	assert.NotEqual(t, registrar.bySerial[nodeA.Serial].IDevIDCert, registrar.bySerial[nodeB.Serial].IDevIDCert)
+}
+
+// TestRegister_RefusesAnEKIdentityTheEKDoesNotBind asserts an EK-derived name
+// is recorded only beside the EK it derives from: claiming another node's
+// identity, or one with no EK to check it against, writes nothing.
+func TestRegister_RefusesAnEKIdentityTheEKDoesNotBind(t *testing.T) {
+	victim := disklessRegistration(t)
+	cases := map[string]struct {
+		mutate func(*Registration)
+		cause  bool
+	}{
+		"another node's identity as serial": {mutate: func(r *Registration) { r.Serial = victim.Serial }},
+		"another node's identity as name":   {mutate: func(r *Registration) { r.Hostname = victim.Hostname }},
+		"no EK certificate":                 {mutate: func(r *Registration) { r.EKCertPEM = "" }},
+		"an EK certificate that does not parse": {
+			mutate: func(r *Registration) {
+				r.EKCertPEM = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+			},
+			cause: true,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			registrar := newStubRegistrar()
+			reg := disklessRegistration(t)
+			tc.mutate(&reg)
+			_, err := Register(context.Background(), registrar, reg, time.Now().UTC())
+			var unbound ErrRegistrationEKIdentityUnbound
+			require.ErrorAs(t, err, &unbound)
+			assert.True(t, entities.IsEKNodeIdentity(unbound.Claimed))
+			assert.Equal(t, tc.cause, unbound.Unwrap() != nil)
+			assert.Contains(t, err.Error(), unbound.Claimed)
+			assert.Empty(t, registrar.saved)
+			assert.Empty(t, registrar.updated)
+		})
+	}
+}
+
+// TestRegister_OperatorNamesNeedNoEK asserts names without the EK prefix are
+// operator-chosen and recorded as before, EK certificate or not.
+func TestRegister_OperatorNamesNeedNoEK(t *testing.T) {
+	reg := fullRegistration(t)
+	reg.EKCertPEM = ""
+	_, err := Register(context.Background(), newStubRegistrar(), reg, time.Now().UTC())
+	require.NoError(t, err)
 }
 
 func TestRegister_SaveFailureIsReportedAndNothingIsClaimed(t *testing.T) {

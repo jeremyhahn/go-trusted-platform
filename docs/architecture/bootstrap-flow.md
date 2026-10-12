@@ -226,6 +226,47 @@ unchanged Phase B (platform-initrd unlock, firstboot provisioning and
 sealing, platformd). The Raspberry Pi is the first target; the QEMU virt
 stand-in exists so the chain is tested without the hardware.
 
+### Diskless image boot is the stateless sibling of the factory image
+
+The diskless image path reuses the media pipeline but serves the root over the
+boot server instead of writing it to local block storage. A media set built
+with `diskimage netboot --diskless` carries a squashfs of the installed root,
+a separate dm-verity hash tree, and a manifest of the root hash, salt and
+sizes signed with the Secure Boot DB key. Diskless is chosen per node:
+`boot_model: diskless` in `bootstrap.yaml` reaches the container manifest, and
+only that node's device script adds `platform_boot_model=diskless`. The root
+hash is never served as mutable metadata or taken from a command line the
+network supplies: the installer verifies the signed manifest against the DB
+certificate and writes `platform_roothash=` (not systemd's `roothash=`, which
+dracut's systemd-veritysetup generator would also act on), the salt, the sizes
+and `platform_rootfs_url=` / `platform_verity_url=` into the UKI command line
+it signs, so Secure Boot and measured boot bind the fetched root to the
+verified UKI.
+
+During early boot the dracut hooks read `platform_boot_model=diskless` from the
+signed command line and take the diskless branch: they wait on and unlock no
+local root, bring the network up, and run `platform-initrd boot --diskless`. A
+disk node's command line carries no diskless parameter and its hooks unlock
+LUKS exactly as before. `platform-initrd` fetches both files into bounded
+tmpfs, opens the root as a device-mapper verity table with the signed root
+hash and pinned parameters, mounts the squashfs read-only, and overlays it
+with tmpfs at `/sysroot`. dm-verity checks every block as it is read, so a
+substituted image panics the node at the squashfs mount instead of booting.
+After `switch_root` the node is stateless. There is no LUKS root to seal, so
+the `tpm-firstboot-seal` service exits before its LUKS lookup. `platformd` reads the boot model from the
+kernel command line and decides provisioning from the TPM alone: a TPM holding
+the EK, SSRK, Platform SRK, IAK and IDevID at their persistent handles is
+adopted untouched on every boot, and an unprovisioned one runs first
+provisioning once ([docs/tpm/architecture.md §4d](../tpm/architecture.md)).
+On every later boot the identity certificates are gone with the tmpfs, so
+`platformd` fetches them back from the control plane rather than re-mint them.
+It presents its recorded IDevID over mTLS with the TPM-resident key and
+answers an IAK quote bound to that TLS connection. The control plane runs the
+device quote verifier and returns that device's IDevID chain, IAK
+certificate, the platform CA bundle and its profile
+([docs/device/api.md §4.6](../device/api.md)). Any refusal stops startup at
+`ErrDisklessIdentityUnavailable`.
+
 ---
 
 ## 5. End-to-End Bootstrap Sequence (multi-node, dynamic)

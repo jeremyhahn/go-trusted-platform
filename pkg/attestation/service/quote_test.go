@@ -225,26 +225,6 @@ func TestHostQuote_RefusesABankOfAnotherAlgorithm(t *testing.T) {
 	assert.Contains(t, err.Error(), "no sha256 bank")
 }
 
-func TestBankMatches(t *testing.T) {
-	cases := []struct {
-		label string
-		alg   manifest.HashAlgorithm
-		want  bool
-	}{
-		{"SHA256", manifest.HashAlgorithmSHA256, true},
-		{"sha256", manifest.HashAlgorithmSHA256, true},
-		{"SHA-256", manifest.HashAlgorithmSHA256, true},
-		{" sha-256 ", manifest.HashAlgorithmSHA256, true},
-		{"SHA1", manifest.HashAlgorithmSHA256, false},
-		{"SHA384", manifest.HashAlgorithmSHA256, false},
-		{"", manifest.HashAlgorithmSHA256, false},
-		{"SHA256", manifest.HashAlgorithm(""), false},
-	}
-	for _, tc := range cases {
-		assert.Equal(t, tc.want, bankMatches(tc.label, tc.alg), "%q vs %q", tc.label, tc.alg)
-	}
-}
-
 func TestHostQuote_RefusesWithoutACallerNonce(t *testing.T) {
 	svc := newQuoteService(t, newFakeQuoter(t))
 	for name, nonce := range map[string][]byte{"nil": nil, "empty": {}} {

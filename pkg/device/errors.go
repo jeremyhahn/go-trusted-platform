@@ -161,22 +161,23 @@ func (e *WrappedError) Unwrap() error {
 	return e.Err
 }
 
-// HeartbeatDeviceNotFoundError is returned when the heartbeat identity
-// resolves to no device by serial or hostname. It lets transport
-// handlers answer 404 for an unknown identity while a storage failure
-// after resolution surfaces as a server error.
-type HeartbeatDeviceNotFoundError struct {
+// IdentityNotFoundError is returned when a certificate identity (a
+// heartbeat's, or a diskless node's at boot) resolves to no device by
+// serial or hostname. It lets transport handlers answer 404 for an
+// unknown identity while a storage failure after resolution surfaces as
+// a server error.
+type IdentityNotFoundError struct {
 	Identity string
 	Cause    error
 }
 
 // Error implements the error interface.
-func (e *HeartbeatDeviceNotFoundError) Error() string {
-	return "device: no device matches heartbeat identity " + e.Identity + ": " + e.Cause.Error()
+func (e *IdentityNotFoundError) Error() string {
+	return "device: no device matches identity " + e.Identity + ": " + e.Cause.Error()
 }
 
 // Unwrap exposes the cause for errors.Is / errors.As.
-func (e *HeartbeatDeviceNotFoundError) Unwrap() error {
+func (e *IdentityNotFoundError) Unwrap() error {
 	return e.Cause
 }
 
@@ -432,6 +433,29 @@ type ErrRegistrationNoSerial struct{}
 func (ErrRegistrationNoSerial) Error() string {
 	return "device registration: the enrollment carries no product serial"
 }
+
+// ErrRegistrationEKIdentityUnbound reports an enrollment whose serial or
+// Common Name claims an EK-derived node identity (entities.IsEKNodeIdentity)
+// that is not the identity of the EK certificate the enrollment carries. A
+// diskless node is found by that name on every boot (#690), so recording an
+// unbound claim would hand one node's record to another.
+type ErrRegistrationEKIdentityUnbound struct {
+	Claimed string
+	Reason  string
+	Cause   error
+}
+
+// Error returns the error message.
+func (e ErrRegistrationEKIdentityUnbound) Error() string {
+	msg := fmt.Sprintf("device registration: %q is not bound to the enrollment's EK: %s", e.Claimed, e.Reason)
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrRegistrationEKIdentityUnbound) Unwrap() error { return e.Cause }
 
 // ErrRegistrationSaveFailed reports a new device record that could not be
 // written.

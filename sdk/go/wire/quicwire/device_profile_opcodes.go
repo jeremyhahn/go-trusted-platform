@@ -40,4 +40,20 @@ const (
 	// the device: DeviceService.RecordAttestationCertificate. Payload after
 	// the sub-opcode byte is the encoded RecordAttestationCertificateRequest.
 	DeviceSubRecordAttestCert byte = 0x22
+
+	// DeviceSubBootCertificate returns a diskless node's recorded IDevID
+	// chain to the node that proves it holds the key:
+	// DeviceService.BootCertificate. Payload after the sub-opcode byte is the
+	// encoded BootCertificateRequest. The node holds no platform token, so
+	// the auth middleware lets this sub-opcode through (see the pre-auth
+	// catalog in pkg/api/quic); the boot service authenticates the
+	// request itself, bound to this connection's TLS exporter value.
+	DeviceSubBootCertificate byte = 0x23
+
+	// DeviceSubBootDelivery returns a verified diskless node's profile and CA
+	// bundle: DeviceService.BootDelivery. Payload after the sub-opcode byte is
+	// the encoded BootDeliveryRequest. Like DeviceSubBootCertificate it
+	// carries no token; the node's client certificate and quote, both bound
+	// to this connection, are its credential.
+	DeviceSubBootDelivery byte = 0x24
 )
