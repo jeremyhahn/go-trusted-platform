@@ -95,7 +95,6 @@ platform-initrd recovery --device /dev/sda2
 
 ## See Also
 
-- [platformctl.md](platformctl.md) - CLI operations (install system, wipe, etc.)
-- [platformd.md](platformd.md) - Platform daemon
+- [daemon/cli.md](../daemon/cli.md) - platformctl root verbs (wipe, etc.) and the platformd daemon
 - [../installer/README.md](../installer/README.md) - Installation architecture
 - [../installer/UNLOCK_STRATEGIES.md](../installer/UNLOCK_STRATEGIES.md) - Unlock strategies

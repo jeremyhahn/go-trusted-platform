@@ -393,4 +393,4 @@ It is recorded here rather than quietly marked satisfied.
 ## 7. Related
 
 - [architecture.md](architecture.md) · [engineering.md](engineering.md) · [api.md](api.md) · [user.md](user.md)
-- [`docs/cli/global-flags.md`](../cli/global-flags.md) · [`docs/cli/platformctl.md`](../cli/platformctl.md)
+- [`docs/daemon/cli.md`](../daemon/cli.md) — global flags and the `platformctl` command tree

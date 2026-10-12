@@ -190,7 +190,7 @@ grpcurl localhost:9443 platform.v1.PlatformDaemon/GetHealth
 
 ## See Also
 
-- [CLI Reference](../cli/README.md)
+- [CLI Reference](cli.md)
 - [CA Documentation](../ca/README.md)
 - [TPM Documentation](../tpm/README.md)
 - [SDN Documentation](../sdn/README.md)

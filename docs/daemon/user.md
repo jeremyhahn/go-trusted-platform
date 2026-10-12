@@ -53,11 +53,13 @@ a client cannot connect on a transport you assumed was running.
 ## Transports
 
 ```bash
-platformctl --transport embedded status   # in-process; no daemon required
 platformctl --transport unix status       # gRPC over a Unix socket
 platformctl --transport rest status
 platformctl --transport quic status
 ```
+
+`--transport embedded` is for the desktop GUI's standalone mode; from the
+command line it fails ([cli.md](cli.md) §2.3).
 
 Precedence for every setting is **flag > environment > config file > default**,
 so `PLATFORMCTL_TRANSPORT=quic` sets it for a shell and `--transport rest`

@@ -374,5 +374,5 @@ Not a divergence, worth stating: `auth` matches the locked surface exactly
 ## 7. Related
 
 - [architecture.md](architecture.md) · [engineering.md](engineering.md) · [api.md](api.md) · [user.md](user.md)
-- [`docs/cli/global-flags.md`](../cli/global-flags.md) — the persistent flag set
+- [`docs/daemon/cli.md`](../daemon/cli.md) §2 — the persistent flag set
 - [`docs/iam/cli.md`](../iam/cli.md) — user, group, role and policy verbs

@@ -2,7 +2,7 @@
 
 Certificate Authority operations exposed by `platformctl`. All commands
 work against any of the platform's six transports (`unix`, `grpc`, `rest`,
-`quic`, `mcp`, `embedded`) — see [global-flags.md](global-flags.md) for
+`quic`, `mcp`, `embedded`) — see [daemon/cli.md](../daemon/cli.md) §2 for
 how to select a transport.
 
 ## Subcommands

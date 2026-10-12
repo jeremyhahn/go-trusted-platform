@@ -207,7 +207,7 @@ platformctl device activate --port tap0
 | [Go SDK](api/sdk-go.md) | Go SDK for `platformctl` and service integration |
 | [JavaScript SDK](api/sdk-javascript.md) | TypeScript SDK for web applications |
 | [API Reference](api/) | Multi-protocol API docs: REST, gRPC, QUIC, MCP, Unix Socket |
-| [CLI Reference](cli/) | Command-line interface documentation |
+| [CLI Reference](daemon/cli.md) | `platformctl` global flags and command tree; the six binaries |
 | [Man Pages](man/) | Unix manual pages |
 | [Operations](operations/) | Monitoring, troubleshooting, and maintenance |
 | [Web UI](web/) | Platform management dashboard and admin interface |

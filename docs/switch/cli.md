@@ -254,5 +254,5 @@ rather than quietly marked satisfied.
 ## 10. Related
 
 - [architecture.md](architecture.md) · [engineering.md](engineering.md) · [api.md](api.md) · [user.md](user.md)
-- [`docs/cli/global-flags.md`](../cli/global-flags.md) · [`docs/cli/platformctl.md`](../cli/platformctl.md)
+- [`docs/daemon/cli.md`](../daemon/cli.md) — global flags and the `platformctl` command tree
 - [`docs/sdn/cli.md`](../sdn/cli.md) — the virtual datapath equivalent

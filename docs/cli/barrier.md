@@ -54,7 +54,7 @@ platformctl barrier recovery recover
 | `--transport` | `unix` | `rest`, `grpc`, `quic`, `mcp`, `unix`, `embedded` | `PLATFORMCTL_TRANSPORT` |
 
 `unix` is the default across all four CLIs. See
-[`docs/cli/global-flags.md`](global-flags.md) for the full root-flag
+[`docs/daemon/cli.md`](../daemon/cli.md) §2 for the full root-flag
 set.
 
 ### Security-officer ceremony verbs (canonical; platformctl mirror pending)
@@ -251,7 +251,7 @@ flag (or `PLATFORMCTL_TRANSPORT`) to select:
 * Canonical narrative + PIN flow + strategy taxonomy:
   [`go-qrdb/docs/cli/barrier.md`](../../../go-qrdb/docs/cli/barrier.md)
 * Spec: `08-bootstrap-auth-architecture.md` §6 (software architecture docs)
-* Global flags: [`docs/cli/global-flags.md`](global-flags.md)
+* Global flags: [`docs/daemon/cli.md`](../daemon/cli.md) §2
 * Sibling CLI docs:
   [`qrdb barrier`](../../../go-qrdb/docs/cli/barrier.md) ·
   [`xkmsctl barrier`](../../../go-xkms/docs/cli/barrier.md) ·

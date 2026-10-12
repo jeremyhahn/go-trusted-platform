@@ -439,7 +439,7 @@ For detailed security information, see [Security Architecture](../architecture/s
 
 - [REST API](../api/rest-reference.md)
 - [gRPC API](../api/grpc-reference.md)
-- [CLI Reference](../cli/)
+- [CLI Reference](../daemon/cli.md)
 
 ### Community
 

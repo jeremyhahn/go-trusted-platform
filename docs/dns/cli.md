@@ -9,7 +9,7 @@
 
 **There is no `platformctl dns` command group.** `pkg/cli/commands/` has no
 `dns` directory, and `pkg/cli/commands/root.go` registers no DNS group among its
-41 top-level commands (verified 2026-08-18). Nothing else in the CLI carries DNS
+44 top-level commands (verified 2026-10-11; [`docs/daemon/cli.md`](../daemon/cli.md) §3). Nothing else in the CLI carries DNS
 verbs either.
 
 Authoritative DNS is reachable only through the SDK, REST, gRPC, Unix, QUIC and

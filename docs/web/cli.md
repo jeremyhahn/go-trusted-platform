@@ -72,7 +72,7 @@ daemon.
 no `--web`, `--http-port`, `--tls-port` or `--home` flag** — the listener
 addresses, the static root, TLS identity, CORS, virtual hosts and JWT settings
 are all configuration
-([engineering.md](engineering.md) §6, [`docs/cli/platformd.md`](../cli/platformd.md)).
+([engineering.md](engineering.md) §6, [`docs/daemon/cli.md`](../daemon/cli.md) §7.1).
 
 Consequences worth stating:
 
@@ -143,5 +143,4 @@ here.
 ## 6. Related
 
 - [architecture.md](architecture.md) · [engineering.md](engineering.md) · [api.md](api.md) · [user.md](user.md)
-- [`docs/cli/platformd.md`](../cli/platformd.md) — the daemon that hosts this server
-- [`docs/cli/platformctl.md`](../cli/platformctl.md) · [`docs/cli/global-flags.md`](../cli/global-flags.md)
+- [`docs/daemon/cli.md`](../daemon/cli.md) — `platformd`, the daemon that hosts this server (§7.1), plus the global flags and the `platformctl` command tree

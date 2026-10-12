@@ -8,7 +8,8 @@
 ## 1. Where the gateway CLI actually lives
 
 **There is no `platformctl gateway` command group.** `pkg/cli/commands/root.go`
-registers 41 top-level groups and `gateway` is not one of them. The gateway
+registers 44 top-level commands and `gateway` is not one of them
+([`docs/daemon/cli.md`](../daemon/cli.md) §3). The gateway
 verbs are subgroups of `sdn`:
 
 | Path | Covers |

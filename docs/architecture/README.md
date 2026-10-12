@@ -275,7 +275,7 @@ Multi-node deployment with Raft consensus:
 
 - [Binary Separation](binary-separation.md) - Detailed three-binary architecture
 - [Platform Modes](platform-modes.md) - Local, P2P, and Hosted modes
-- [CLI Reference](../cli/) - platform-initrd, platformd, and platformctl commands
+- [CLI Reference](../daemon/cli.md) - platformd, platformctl and the other binaries
 - [SDN Architecture](../sdn/architecture.md)
 - [Compute Architecture](../compute/)
 - [CA/ACME Documentation](../ca/)

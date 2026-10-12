@@ -60,4 +60,4 @@ The reason differs per package:
 
 - [architecture.md](architecture.md) · [engineering.md](engineering.md) · [api.md](api.md) · [user.md](user.md)
 - [`docs/proxy/`](../proxy/) — the gateway that loads these policies
-- [`docs/cli/global-flags.md`](../cli/global-flags.md) — the persistent `platformctl` flag set
+- [`docs/daemon/cli.md`](../daemon/cli.md) §2 — the persistent `platformctl` flag set
