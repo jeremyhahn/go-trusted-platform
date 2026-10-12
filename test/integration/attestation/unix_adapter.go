@@ -18,9 +18,8 @@ package attestation
 import (
 	"context"
 	"fmt"
-	"net"
-	"strings"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
@@ -79,14 +78,7 @@ func NewUnixAdapter() *UnixAdapter {
 
 // Setup prepares the adapter for testing.
 func (a *UnixAdapter) Setup(ctx context.Context) error {
-	conn, err := grpc.DialContext(ctx, "unix://"+a.socketPath,
-		helpers.GRPCUnixCredentials(),
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			socketAddr := strings.TrimPrefix(addr, "unix://")
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socketAddr)
-		}),
-	)
+	conn, err := grpc.NewClient("unix://"+a.socketPath, helpers.GRPCUnixCredentials())
 	if err != nil {
 		return ErrUnixConnectionFailed{
 			Path: a.socketPath,
@@ -271,6 +263,38 @@ func (a *UnixAdapter) VerifyWorkloadChain(ctx context.Context, opts VerifyWorklo
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *UnixAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error) {
 	return nil, surface.ErrNoSurface{Transport: "Unix", Operation: "GetWorkloadChainStats"}
+}
+
+func (a *UnixAdapter) reporting() reportingRPC {
+	return reportingRPC{
+		client:    a.client,
+		transport: a.Name(),
+		wrap: func(method string, err error) error {
+			return ErrUnixRPCFailed{Method: method, Err: err}
+		},
+	}
+}
+
+// ListDeviceReports reads every cached device report over the Unix socket.
+func (a *UnixAdapter) ListDeviceReports(ctx context.Context) (*DeviceReportsResult, error) {
+	return a.reporting().list(ctx)
+}
+
+// GetDeviceReport reads one device's cached report over the Unix socket.
+func (a *UnixAdapter) GetDeviceReport(ctx context.Context, opts DeviceReportOptions) (*DeviceReport, error) {
+	return a.reporting().get(ctx, opts)
+}
+
+// RefreshDeviceReport asks the collector to re-collect one device over the
+// Unix socket.
+func (a *UnixAdapter) RefreshDeviceReport(ctx context.Context, opts DeviceReportOptions) (*RefreshDeviceReportResult, error) {
+	return a.reporting().refresh(ctx, opts)
+}
+
+// DescribeCallerPolicy reads the node's caller-admission policy over the
+// Unix socket.
+func (a *UnixAdapter) DescribeCallerPolicy(ctx context.Context) (*calleradmission.Description, error) {
+	return a.reporting().callers(ctx)
 }
 
 // =============================================================================

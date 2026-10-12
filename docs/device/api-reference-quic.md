@@ -63,9 +63,13 @@ Profile messages are the pb `DeviceProfile` (`docs/device/api-reference-grpc.md`
 so `0x35`–`0x38` carry `tls_server_name` (writable) and the read-only
 `pcr_baseline` exactly as gRPC does: a `0x36` / `0x38` payload that names
 `pcr_baseline` is ignored, and one that omits `tls_server_name` keeps the
-stored value. The daemon-native dark QUIC handler (`pkg/api/quic`) mirrors
-this on its own `ProfileInfo` (`tls_server_name`, `pcr_baseline` with hex
-digests keyed by register index and a Unix `recorded_at`).
+stored value; an `UpdateProfileRequest` clears it only with
+`clear_tls_server_name = true` (`docs/device/api.md` §3.2). The
+daemon-native dark QUIC handler (`pkg/api/quic`) mirrors this on its own
+`ProfileInfo` (`tls_server_name`, `pcr_baseline` with hex digests keyed by
+register index and a Unix `recorded_at`); its `ProfileUpdateRequest` carries
+`tls_server_name` as a pointer, so an omitted name keeps the stored one and
+an explicit `""` clears it.
 
 ## Profile Assignment and Attestation Certificate (sub-opcodes under 0xCF)
 

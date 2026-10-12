@@ -248,7 +248,8 @@ func TestNewDaemon_ServiceConfiguration(t *testing.T) {
 func TestStartDaemon_BasicStartup(t *testing.T) {
 	config := testConfig("/tmp/test-lifecycle-start-basic.sock")
 
-	d, err := New(config)
+	autoStarted := make(chan struct{}, 1)
+	d, err := New(config, withAutoStartObserver(func() { autoStarted <- struct{}{} }))
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -264,11 +265,11 @@ func TestStartDaemon_BasicStartup(t *testing.T) {
 		t.Error("daemon should be running after Start()")
 	}
 
-	// Give time for autostart goroutine
-	time.Sleep(50 * time.Millisecond)
+	<-autoStarted
 
-	// Stop cleanly
-	_ = d.Stop(ctx)
+	if err := d.Stop(ctx); err != nil {
+		t.Fatalf("Stop() failed: %v", err)
+	}
 }
 
 func TestStartDaemon_AlreadyRunningError(t *testing.T) {
@@ -568,7 +569,8 @@ func TestStopDaemon_StopsRegisteredServices(t *testing.T) {
 		},
 	}
 
-	d, err := New(config)
+	autoStarted := make(chan struct{}, 1)
+	d, err := New(config, withAutoStartObserver(func() { autoStarted <- struct{}{} }))
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -585,8 +587,7 @@ func TestStopDaemon_StopsRegisteredServices(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	// Wait for autostart
-	time.Sleep(100 * time.Millisecond)
+	<-autoStarted
 
 	err = d.Stop(ctx)
 	if err != nil {
@@ -676,8 +677,7 @@ func TestForceStopDaemon_BasicForceStop(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	// May return "server is not running" if shutdown handler already stopped it
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 }
@@ -718,8 +718,7 @@ func TestForceStopDaemon_ClosesHealthRegistry(t *testing.T) {
 	registry := d.healthRegistry
 
 	err = d.ForceStop()
-	// May return server error
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 
@@ -757,7 +756,7 @@ func TestForceStopDaemon_HandlesNilServices(t *testing.T) {
 
 	// ForceStop should not panic with nil services
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() with nil services failed: %v", err)
 	}
 }
@@ -773,7 +772,8 @@ func TestForceStopDaemon_QuickerThanGracefulStop(t *testing.T) {
 		},
 	}
 
-	d, err := New(config)
+	autoStarted := make(chan struct{}, 1)
+	d, err := New(config, withAutoStartObserver(func() { autoStarted <- struct{}{} }))
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -792,15 +792,13 @@ func TestForceStopDaemon_QuickerThanGracefulStop(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	// Wait for autostart
-	time.Sleep(100 * time.Millisecond)
+	<-autoStarted
 
 	start := time.Now()
 	err = d.ForceStop()
 	elapsed := time.Since(start)
 
-	// May return server error
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 

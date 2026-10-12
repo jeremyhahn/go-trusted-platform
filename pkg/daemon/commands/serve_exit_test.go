@@ -36,14 +36,14 @@ import (
 // is wired to a handler capable of reporting failure, and that both run
 // functions are typed to produce one.
 //
-// # What these do NOT prove
+// # Where the last link is proved
 //
-// The final link — cmd/platformd/main.go turning a non-nil Execute() error into
-// os.Exit(1) — is asserted by READING (main.go:23-25), not by these tests.
-// Exercising it needs a built binary and a real startup attempt, which is
-// integration-shaped: it modifies the host and cannot run in a unit suite.
-// Recorded here rather than implied, because "the process exits non-zero" is
-// the property that matters and this file establishes only its preconditions.
+// The final links — Execute() handing the error back to main() rather than
+// exiting itself, and cmd/platformd/main.go turning it into exit 1 — are
+// asserted against the running process by cmd/platformd/main_test.go (#352),
+// which re-executes its test binary as `platformd serve` with an unreadable
+// config, beside a control run that exits 0. This file establishes the
+// preconditions; that one the property.
 
 // TestServeCmdReportsFailureToCobra is the structural half. `Run` cannot report
 // a failure however carefully its body is written; only `RunE` can.

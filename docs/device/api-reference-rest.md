@@ -302,9 +302,11 @@ reads echo it back for operator auditability. See
 Both routes also accept `tls_server_name`: the certificate name the
 attestation collector verifies a node of this profile against when it dials
 it for a quote (e.g. `compute.example.internal`); omitted means the
-device's own FQDN. On `PUT` an omitted `tls_server_name` keeps the stored
-value (`api.md` §3.3). The operator path is
-`platformctl device profile update <id> --tls-server-name <name>`.
+device's own FQDN. On `PUT` an omitted or `null` `tls_server_name` keeps the
+stored value (`api.md` §3.3), and an explicit `"tls_server_name": ""` clears
+it (`api.md` §3.2). The operator path is
+`platformctl device profile update <id> --tls-server-name <name>` (or
+`--clear-tls-server-name`).
 
 ### Get Profile
 

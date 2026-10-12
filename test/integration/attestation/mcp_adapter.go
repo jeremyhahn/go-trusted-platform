@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -474,6 +475,63 @@ func (a *MCPAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkload
 	}
 
 	return &resp, nil
+}
+
+// mcpNeverCollected is the MCP tool's phrase for a device with no report.
+const mcpNeverCollected = "no report has been collected for device"
+
+// reportingTool calls one reporting tool and decodes its result into out.
+// deviceID is the tool's device_id argument and, when set, lets a
+// never-collected failure be told apart.
+func (a *MCPAdapter) reportingTool(ctx context.Context, tool, operation, deviceID string, out any) error {
+	args := map[string]any{}
+	if deviceID != "" {
+		args["device_id"] = deviceID
+	}
+	result, err := a.callTool(ctx, tool, args)
+	if err != nil {
+		return classifyReportingText(a.Name(), operation, deviceID, mcpNeverCollected, err)
+	}
+	if err := json.Unmarshal(result, out); err != nil {
+		return &MCPAdapterError{Operation: operation, Message: "failed to parse response: " + err.Error()}
+	}
+	return nil
+}
+
+// ListDeviceReports reads every cached device report via MCP.
+func (a *MCPAdapter) ListDeviceReports(ctx context.Context) (*DeviceReportsResult, error) {
+	var result DeviceReportsResult
+	if err := a.reportingTool(ctx, "attestation_device_reports", "ListDeviceReports", "", &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetDeviceReport reads one device's cached report via MCP.
+func (a *MCPAdapter) GetDeviceReport(ctx context.Context, opts DeviceReportOptions) (*DeviceReport, error) {
+	var result DeviceReport
+	if err := a.reportingTool(ctx, "attestation_device_report", "GetDeviceReport", opts.DeviceID, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// RefreshDeviceReport asks the collector to re-collect one device via MCP.
+func (a *MCPAdapter) RefreshDeviceReport(ctx context.Context, opts DeviceReportOptions) (*RefreshDeviceReportResult, error) {
+	var result RefreshDeviceReportResult
+	if err := a.reportingTool(ctx, "attestation_device_refresh", "RefreshDeviceReport", opts.DeviceID, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// DescribeCallerPolicy reads the node's caller-admission policy via MCP.
+func (a *MCPAdapter) DescribeCallerPolicy(ctx context.Context) (*calleradmission.Description, error) {
+	var result calleradmission.Description
+	if err := a.reportingTool(ctx, "attestation_caller_policy", "DescribeCallerPolicy", "", &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // Verify MCPAdapter implements AttestationCommands

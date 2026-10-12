@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
@@ -81,9 +82,31 @@ func TestDeviceHandlers_TLSServerName_UpdateReplaces(t *testing.T) {
 	profiles.profiles[9] = &entities.DeviceProfile{ID: 9, Name: "gw", TLSServerName: "old"}
 	_, router := setupDeviceTestHandler(newMockDeviceService(), profiles)
 
-	updated := restProfileCall(t, router, http.MethodPut, "/api/v1/devices/profiles/9", ProfileUpdateRequest{TLSServerName: testTLSServerName}, http.StatusOK)
+	updated := restProfileCall(t, router, http.MethodPut, "/api/v1/devices/profiles/9", map[string]string{"tls_server_name": testTLSServerName}, http.StatusOK)
 	assert.Equal(t, testTLSServerName, updated.TLSServerName)
 	assert.Equal(t, testTLSServerName, profiles.profiles[9].TLSServerName)
+}
+
+// TestDeviceHandlers_TLSServerName_ExplicitClear is the dark REST #462 round
+// trip: set → clear with "" → get shows none, the clear reaching the service
+// as the explicit option it honours, while an omitted or null name asks for
+// no clear and keeps the stored one.
+func TestDeviceHandlers_TLSServerName_ExplicitClear(t *testing.T) {
+	profiles := newMockProfileService()
+	profiles.profiles[11] = &entities.DeviceProfile{ID: 11, Name: "compute", TLSServerName: testTLSServerName}
+	_, router := setupDeviceTestHandler(newMockDeviceService(), profiles)
+
+	for _, body := range []string{`{"model": "X10SDV"}`, `{"tls_server_name": null}`} {
+		restProfileCall(t, router, http.MethodPut, "/api/v1/devices/profiles/11", json.RawMessage(body), http.StatusOK)
+		assert.NotContains(t, profiles.updateOpts, device.ClearTLSServerName, body)
+		assert.Equal(t, testTLSServerName, profiles.profiles[11].TLSServerName, body)
+	}
+
+	cleared := restProfileCall(t, router, http.MethodPut, "/api/v1/devices/profiles/11", json.RawMessage(`{"tls_server_name": ""}`), http.StatusOK)
+	assert.Contains(t, profiles.updateOpts, device.ClearTLSServerName, "the clear must reach the service explicitly")
+	assert.Empty(t, cleared.TLSServerName)
+	got := restProfileCall(t, router, http.MethodGet, "/api/v1/devices/profiles/11", nil, http.StatusOK)
+	assert.Empty(t, got.TLSServerName, "get after clear still reports a name")
 }
 
 // TestProfileToResponse_CarriesPCRBaseline pins the serialiser every profile

@@ -108,11 +108,15 @@ platformctl profile find-serial --prefix "IOT-"
 platformctl device profile list
 platformctl device profile update 123 --tls-server-name compute.example.internal
 platformctl device profile get 123 --output json
+
+# Clear it again (sets UpdateProfileRequest.clear_tls_server_name)
+platformctl device profile update 123 --clear-tls-server-name
 ```
 
 Profile reads over the socket carry the read-only `pcr_baseline` and
 `tls_server_name` like gRPC (`api-reference-grpc.md`); `platformctl device
-profile` prints both.
+profile` prints both. An update clears `tls_server_name` only through
+`clear_tls_server_name`, exactly as gRPC does (`docs/device/api.md` §3.2).
 
 ### Output Formats
 

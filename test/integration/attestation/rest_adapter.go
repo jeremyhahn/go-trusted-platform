@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
@@ -138,22 +140,35 @@ func (a *RESTAdapter) call(ctx context.Context, operation, method, path string, 
 		reqBody = bytes.NewReader(data)
 	}
 
+	statusCode, respBody, err := a.send(ctx, operation, method, path, reqBody)
+	if err != nil {
+		return err
+	}
+	if out == nil {
+		return nil
+	}
+	return decodeRESTPayload(operation, statusCode, respBody, out)
+}
+
+// send performs one HTTP request and returns the status code and body of a
+// 2xx response; any other status is a RESTAdapterError carrying the body.
+func (a *RESTAdapter) send(ctx context.Context, operation, method, path string, reqBody io.Reader) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, a.endpoint+path, reqBody)
 	if err != nil {
-		return &RESTAdapterError{
+		return 0, nil, &RESTAdapterError{
 			Operation: operation,
 			Message:   "failed to create request",
 			Err:       err,
 		}
 	}
-	if in != nil {
+	if reqBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return &RESTAdapterError{
+		return 0, nil, &RESTAdapterError{
 			Operation: operation,
 			Message:   method + " " + path + " failed",
 			Err:       err,
@@ -163,7 +178,7 @@ func (a *RESTAdapter) call(ctx context.Context, operation, method, path string, 
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return &RESTAdapterError{
+		return 0, nil, &RESTAdapterError{
 			Operation:  operation,
 			StatusCode: resp.StatusCode,
 			Message:    "failed to read response",
@@ -172,18 +187,14 @@ func (a *RESTAdapter) call(ctx context.Context, operation, method, path string, 
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &RESTAdapterError{
+		return 0, nil, &RESTAdapterError{
 			Operation:  operation,
 			StatusCode: resp.StatusCode,
 			Message:    method + " " + path + " failed",
 			Body:       string(respBody),
 		}
 	}
-
-	if out == nil {
-		return nil
-	}
-	return decodeRESTPayload(operation, resp.StatusCode, respBody, out)
+	return resp.StatusCode, respBody, nil
 }
 
 // decodeRESTPayload unwraps a success envelope and decodes its payload into out.
@@ -380,6 +391,73 @@ func (a *RESTAdapter) VerifyWorkloadChain(ctx context.Context, opts VerifyWorklo
 // GetWorkloadChainStats has no REST route.
 func (a *RESTAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error) {
 	return nil, ErrRESTNoRoute{Operation: "GetWorkloadChainStats"}
+}
+
+// reportingRequest runs one reporting route and decodes the envelope's
+// payload into out. A 503 is the node's "reporting unavailable"; a 404 is
+// "never collected" only for the single-device read, the one caller that
+// passes deviceID.
+func (a *RESTAdapter) reportingRequest(ctx context.Context, method, path, operation, deviceID string, out any) error {
+	_, body, err := a.send(ctx, operation, method, path, nil)
+	if err != nil {
+		var restErr *RESTAdapterError
+		if errors.As(err, &restErr) {
+			switch {
+			case restErr.StatusCode == http.StatusServiceUnavailable:
+				return ErrReportingUnavailable{Transport: a.Name(), Operation: operation, Err: err}
+			case restErr.StatusCode == http.StatusNotFound && deviceID != "":
+				return ErrReportNotCollected{Transport: a.Name(), DeviceID: deviceID, Err: err}
+			}
+		}
+		return err
+	}
+
+	var envelope restEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return &RESTAdapterError{Operation: operation, Message: "failed to parse response: " + err.Error(), Body: string(body)}
+	}
+	if err := json.Unmarshal(envelope.Payload, out); err != nil {
+		return &RESTAdapterError{Operation: operation, Message: "failed to parse payload: " + err.Error(), Body: string(body)}
+	}
+	return nil
+}
+
+// ListDeviceReports reads every cached device report via REST.
+func (a *RESTAdapter) ListDeviceReports(ctx context.Context) (*DeviceReportsResult, error) {
+	var result DeviceReportsResult
+	if err := a.reportingRequest(ctx, http.MethodGet, "/api/v1/attestation/reports", "ListDeviceReports", "", &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetDeviceReport reads one device's cached report via REST.
+func (a *RESTAdapter) GetDeviceReport(ctx context.Context, opts DeviceReportOptions) (*DeviceReport, error) {
+	path := "/api/v1/attestation/reports/" + url.PathEscape(opts.DeviceID)
+	var result DeviceReport
+	if err := a.reportingRequest(ctx, http.MethodGet, path, "GetDeviceReport", opts.DeviceID, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// RefreshDeviceReport asks the collector to re-collect one device via REST.
+func (a *RESTAdapter) RefreshDeviceReport(ctx context.Context, opts DeviceReportOptions) (*RefreshDeviceReportResult, error) {
+	path := "/api/v1/attestation/reports/" + url.PathEscape(opts.DeviceID) + "/refresh"
+	var result RefreshDeviceReportResult
+	if err := a.reportingRequest(ctx, http.MethodPost, path, "RefreshDeviceReport", "", &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// DescribeCallerPolicy reads the node's caller-admission policy via REST.
+func (a *RESTAdapter) DescribeCallerPolicy(ctx context.Context) (*calleradmission.Description, error) {
+	var result calleradmission.Description
+	if err := a.reportingRequest(ctx, http.MethodGet, "/api/v1/attestation/callers", "DescribeCallerPolicy", "", &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // Verify RESTAdapter implements AttestationCommands

@@ -385,7 +385,9 @@ func (h *CRUDHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.profileService.Update(r.Context(), profileEntity); err != nil {
+	// An explicit "" clears the stored TLS server name; an omitted one keeps it.
+	opts := device.ApplyTLSServerName(profileEntity, req.TLSServerName)
+	if err := h.profileService.Update(r.Context(), profileEntity, opts...); err != nil {
 		h.logger.Errorf("failed to update profile: id=%d error=%v", id, err)
 		h.handleServiceError(w, r, err)
 		return

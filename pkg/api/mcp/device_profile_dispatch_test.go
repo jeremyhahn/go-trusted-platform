@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
@@ -72,6 +73,7 @@ type deviceProfileStubProvider struct {
 	profiles           map[uint64]*entities.DeviceProfile
 	nextID             uint64
 	lastAssignDeviceID uint64
+	lastUpdateOpts     []device.ProfileUpdateOption
 }
 
 func newDeviceProfileStubProvider() *deviceProfileStubProvider {
@@ -106,7 +108,8 @@ func (s *deviceProfileStubProvider) DeviceProfileList(ctx context.Context, page,
 	return profiles, len(profiles), nil
 }
 
-func (s *deviceProfileStubProvider) DeviceProfileUpdate(ctx context.Context, profile *entities.DeviceProfile) (*entities.DeviceProfile, error) {
+func (s *deviceProfileStubProvider) DeviceProfileUpdate(ctx context.Context, profile *entities.DeviceProfile, opts ...device.ProfileUpdateOption) (*entities.DeviceProfile, error) {
+	s.lastUpdateOpts = opts
 	if _, ok := s.profiles[profile.ID]; !ok {
 		return nil, errors.New("profile not found")
 	}

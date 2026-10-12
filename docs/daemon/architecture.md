@@ -296,6 +296,23 @@ Stop()
    +-- Shutdown via service
 ```
 
+`ForceStop()` follows the same order without waiting for in-flight work.
+
+### Lifecycle guarantees
+
+- `Start`, `Stop` and `ForceStop` each take effect once, even when called
+  concurrently. Exactly one `Start` succeeds and the others return
+  `ErrDaemonAlreadyRunning`. Exactly one `Stop` or `ForceStop` succeeds and
+  the others return `ErrDaemonNotRunning`.
+- The service's shutdown handler stops only the gRPC servers. The QUIC server
+  is stopped by `Stop` or `ForceStop` alone, so a successful stop never returns
+  a QUIC "server is not running" error.
+- QUIC `Server.Stop` claims the stop atomically: one caller tears the server
+  down and the rest get `ErrServerNotRunning`.
+- The auto-start pass runs in a goroutine launched by `Start`. If `Stop` wins
+  the lock first, the pass starts nothing, so no service is left running on a
+  stopped daemon.
+
 ## Health Checking
 
 The daemon maintains a centralized health registry with checkers for all enabled components:

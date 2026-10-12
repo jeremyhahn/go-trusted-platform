@@ -542,6 +542,9 @@ platformctl pkcs11 --softhsm2 --label platform --pin "$PIN"   # fails today: dae
 
 `platformd` is the control-plane **or** worker daemon — by configuration, not by
 binary. Its commands are `serve`, `version` and `completion`; nothing else.
+Run without a subcommand, `platformd` runs `serve` with that command's flag
+defaults; only the persistent flags below are accepted in that form, so a unit
+that sets `--socket-path` or a listener flag names `serve` explicitly.
 
 Persistent flags:
 
@@ -618,7 +621,15 @@ platformd serve: CA key store does not implement XKMSSigner
 
 `1` rather than `2` because that is what `cmd/platformd` returns for every other
 failure — a bad flag, an unknown subcommand — and one place decides it
-(`main.go`) rather than each call site choosing.
+(`main.go`) rather than each call site choosing. `platformd` with no subcommand
+reports a failed startup the same way.
+
+The contract is asserted against the running process, not by reading `main.go`:
+`cmd/platformd/main_test.go` re-executes its test binary as `platformd` and
+checks a successful command exits with this table's `0`, and that `serve` with an
+unreadable config exits with its `1` and names the phase once on stderr. The
+test reads the codes from this table, by the rows beginning "The daemon
+started" and "Startup failed" — keep those openings if the wording changes.
 
 ### 7.2 `gatewayd`, `pxeboot`, `platform-initrd`
 

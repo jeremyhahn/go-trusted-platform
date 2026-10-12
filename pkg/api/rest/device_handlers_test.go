@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -143,6 +144,7 @@ func (m *mockDeviceService) addDevice(d *entities.Device) {
 }
 
 type mockProfileService struct {
+	updateOpts    []device.ProfileUpdateOption
 	profiles      map[uint64]*entities.DeviceProfile
 	saveErr       error
 	getErr        error
@@ -190,7 +192,8 @@ func (m *mockProfileService) Delete(ctx context.Context, profile *entities.Devic
 	return nil
 }
 
-func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile) error {
+func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile, opts ...device.ProfileUpdateOption) error {
+	m.updateOpts = opts
 	if m.updateErr != nil {
 		return m.updateErr
 	}

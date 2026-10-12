@@ -562,10 +562,7 @@ func TestForceStopLifecycle_ClosesHealthRegistry(t *testing.T) {
 
 	err = d.ForceStop()
 	if err != nil {
-		// May return "server is not running" - that's acceptable
-		if err.Error() != "server is not running" {
-			t.Fatalf("ForceStop() failed: %v", err)
-		}
+		t.Fatalf("ForceStop() failed: %v", err)
 	}
 }
 
@@ -588,7 +585,7 @@ func TestForceStopLifecycle_WithRESTServer(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Fatalf("ForceStop() failed: %v", err)
 	}
 }
@@ -619,7 +616,7 @@ func TestForceStopLifecycle_WithMCPServer(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Fatalf("ForceStop() failed: %v", err)
 	}
 }
@@ -643,7 +640,7 @@ func TestForceStopLifecycle_WithGRPCServer(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Fatalf("ForceStop() failed: %v", err)
 	}
 }
@@ -668,8 +665,8 @@ func TestForceStopLifecycle_WithNilHealthRegistry(t *testing.T) {
 
 	// ForceStop should not panic
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
-		t.Logf("ForceStop() returned error: %v", err)
+	if err != nil {
+		t.Fatalf("ForceStop() failed: %v", err)
 	}
 }
 

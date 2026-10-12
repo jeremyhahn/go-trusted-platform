@@ -910,7 +910,8 @@ type DeviceProfile struct {
 	// Set it for fleets whose node webservice certificates carry a role name
 	// rather than the device name (the shipped worker templates issue
 	// compute.<domain>.internal to every worker). Writable on create and
-	// update; an update that omits it keeps the stored value.
+	// update; an update that omits it keeps the stored value. To clear it,
+	// set UpdateProfileRequest.clear_tls_server_name.
 	TlsServerName string `protobuf:"bytes,26,opt,name=tls_server_name,json=tlsServerName,proto3" json:"tls_server_name,omitempty"`
 	// pcr_baseline is the expected measured state devices on this profile are
 	// verified against (#373). It is READ-ONLY on every transport: the
@@ -2141,10 +2142,16 @@ func (x *GetProfileResponse) GetProfile() *DeviceProfile {
 }
 
 type UpdateProfileRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Profile       *DeviceProfile         `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Profile *DeviceProfile         `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
+	// clear_tls_server_name blanks the stored tls_server_name. proto3 cannot
+	// tell an unset string from an empty one, so an empty
+	// profile.tls_server_name keeps the stored name; this flag is the
+	// deliberate clear (#462). Setting it together with a non-empty
+	// profile.tls_server_name is rejected with InvalidArgument.
+	ClearTlsServerName bool `protobuf:"varint,2,opt,name=clear_tls_server_name,json=clearTlsServerName,proto3" json:"clear_tls_server_name,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *UpdateProfileRequest) Reset() {
@@ -2182,6 +2189,13 @@ func (x *UpdateProfileRequest) GetProfile() *DeviceProfile {
 		return x.Profile
 	}
 	return nil
+}
+
+func (x *UpdateProfileRequest) GetClearTlsServerName() bool {
+	if x != nil {
+		return x.ClearTlsServerName
+	}
+	return false
 }
 
 type UpdateProfileResponse struct {
@@ -3924,9 +3938,10 @@ const file_device_proto_rawDesc = "" +
 	"\x11GetProfileRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\"J\n" +
 	"\x12GetProfileResponse\x124\n" +
-	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"L\n" +
+	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"\x7f\n" +
 	"\x14UpdateProfileRequest\x124\n" +
-	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"z\n" +
+	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\x121\n" +
+	"\x15clear_tls_server_name\x18\x02 \x01(\bR\x12clearTlsServerName\"z\n" +
 	"\x15UpdateProfileResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x124\n" +
 	"\aprofile\x18\x02 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"&\n" +

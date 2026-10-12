@@ -2369,6 +2369,13 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// Re-check under the lock: a concurrent Start that won the lock has
+	// started every transport, and a second pass would fail on them and roll
+	// the first one's servers back.
+	if d.running.Load() {
+		return ErrDaemonAlreadyRunning{}
+	}
+
 	// A prior failed Start that had to stop a served gRPC server left
 	// that server permanently unusable (grpc.Server.Stop). Refuse the
 	// retry rather than reporting a running daemon with a dead transport.
@@ -2547,6 +2554,13 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// Re-check under the lock: a concurrent Stop or ForceStop that won the
+	// lock has already torn everything down, and running only flips to false
+	// at the end of that teardown.
+	if !d.running.Load() {
+		return ErrDaemonNotRunning{}
+	}
+
 	// Close health registry
 	if d.healthRegistry != nil {
 		if err := d.healthRegistry.Close(); err != nil {
@@ -2650,6 +2664,11 @@ func (d *Daemon) ForceStop() error {
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	// Re-check under the lock, as Stop does.
+	if !d.running.Load() {
+		return ErrDaemonNotRunning{}
+	}
 
 	// Close health registry
 	if d.healthRegistry != nil {
@@ -3150,6 +3169,16 @@ func (d *Daemon) registerConfiguredServices() {
 func (d *Daemon) autoStartServices(ctx context.Context) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+	if d.onAutoStart != nil {
+		defer d.onAutoStart()
+	}
+
+	// Start launches this pass in a goroutine, so a Stop can take the lock
+	// first. Starting services on a daemon that has already stopped would
+	// leave them running with nothing left to stop them.
+	if !d.running.Load() {
+		return
+	}
 
 	for name, svcConfig := range d.config.Services {
 		if !svcConfig.Enabled || !svcConfig.AutoStart {
@@ -3190,10 +3219,6 @@ func (d *Daemon) autoStartServices(ctx context.Context) {
 		state.mu.Unlock()
 
 		d.logger.Info("Auto-started service", "service", name)
-	}
-
-	if d.onAutoStart != nil {
-		d.onAutoStart()
 	}
 }
 

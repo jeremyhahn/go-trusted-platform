@@ -285,6 +285,26 @@ left this table with #429 (§3).
 unmet repo-wide. Raised as an owner question in the migration report rather than
 marked satisfied. The reporting verbs' behaviour is pinned by the unit suite in
 `pkg/cli/commands/attestation/` (success and failure per verb against a fake SDK
-client, table goldens under `testdata/`, and the never-collected mutation check);
-the multi-protocol integration exercise in `test/integration/attestation/` is
-#429's remaining verification item.
+client, table goldens under `testdata/`, and the never-collected mutation check).
+
+End to end, `test/integration/attestation/` drives the same four operations on
+every transport: the CLI adapter runs these verbs with `--output json` against a
+local context on the daemon's socket, beside REST, gRPC, MCP and Unix
+(`reporting_test.go`). Each adapter maps its transport's spelling of the two
+non-result states onto one typed error — `ErrReportingUnavailable` (gRPC
+`FailedPrecondition`/`Unavailable`, REST 503, the "reporting service is not
+configured" text on MCP and the CLI) and `ErrReportNotCollected` (gRPC
+`NotFound`, REST 404, the never-collected text) — so the suite asserts states,
+not wire formats. It checks:
+
+- `callers` always answers, and never describes a policy with no strategy, no
+  trust anchor or an unparseable list as admitting anyone;
+- on a node without reporting, `reports get` and `reports refresh` report
+  unavailable like `reports list` does, and `get` is never read as never
+  collected;
+- on a node with reporting, `count` matches the rows, every row carries an age,
+  `get` of an unknown device is never collected, and `refresh` echoes the
+  device, enqueued, with a note and no verdict;
+- every transport describes the same caller policy and the same reporting state
+  (`TestAttestationReporting_TransportsAgree`);
+- QUIC declares the #386 gap (`ErrQUICNoSurface`) for all four.

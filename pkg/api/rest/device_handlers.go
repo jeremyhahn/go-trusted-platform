@@ -389,9 +389,10 @@ type ProfileUpdateRequest struct {
 	Assigned *bool `json:"assigned,omitempty"`
 	// AssignedAt updates the assignment timestamp when present.
 	AssignedAt *time.Time `json:"assigned_at,omitempty"`
-	// TLSServerName replaces the collector server name when non-empty;
-	// omitted, the stored value is kept.
-	TLSServerName string `json:"tls_server_name,omitempty"`
+	// TLSServerName is tri-state like Assigned: omitted keeps the stored
+	// collector server name, a value replaces it, and "" clears it so the
+	// collector verifies against each device's own FQDN again (#462).
+	TLSServerName *string `json:"tls_server_name,omitempty"`
 }
 
 // NetworkPhaseConfigRequest represents network phase configuration in requests.
@@ -505,7 +506,7 @@ type ProfileServiceInterface interface {
 	Save(ctx context.Context, profile *entities.DeviceProfile) error
 	Get(ctx context.Context, id uint64) (*entities.DeviceProfile, error)
 	Delete(ctx context.Context, profile *entities.DeviceProfile) error
-	Update(ctx context.Context, profile *entities.DeviceProfile) error
+	Update(ctx context.Context, profile *entities.DeviceProfile, opts ...device.ProfileUpdateOption) error
 	Count(ctx context.Context) (int, error)
 	Page(ctx context.Context, query datastore.PageQuery) (datastore.PageResult[*entities.DeviceProfile], error)
 	FindByMACAddress(ctx context.Context, macAddr string) (*entities.DeviceProfile, error)
@@ -1404,11 +1405,10 @@ func (h *DeviceHandlers) handleUpdateProfile(w http.ResponseWriter, r *http.Requ
 	if req.AssignedAt != nil {
 		existing.AssignedAt = *req.AssignedAt
 	}
-	if req.TLSServerName != "" {
-		existing.TLSServerName = req.TLSServerName
-	}
+	// tls_server_name is tri-state too; "" clears it explicitly (#462).
+	opts := device.ApplyTLSServerName(existing, req.TLSServerName)
 
-	if err := h.profileService.Update(ctx, existing); err != nil {
+	if err := h.profileService.Update(ctx, existing, opts...); err != nil {
 		h.logger.Error("Failed to update profile", "id", id, "error", err)
 		h.writeProfileError(w, "update", err)
 		return

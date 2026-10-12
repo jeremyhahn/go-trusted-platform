@@ -157,9 +157,26 @@ func (c *Client) GetProfile(ctx context.Context, id uint64) (*platformv1.DeviceP
 	return resp.Profile, nil
 }
 
+// ProfileUpdateOption sets an UpdateProfile request field that the profile
+// itself cannot carry.
+type ProfileUpdateOption func(*platformv1.UpdateProfileRequest)
+
+// WithClearTLSServerName blanks the profile's stored tls_server_name. proto3
+// cannot tell an unset string from an empty one, so an empty
+// profile.TlsServerName alone keeps the stored name (#462).
+func WithClearTLSServerName() ProfileUpdateOption {
+	return func(req *platformv1.UpdateProfileRequest) {
+		req.ClearTlsServerName = true
+	}
+}
+
 // UpdateProfile updates an existing device profile.
-func (c *Client) UpdateProfile(ctx context.Context, profile *platformv1.DeviceProfile) (*platformv1.DeviceProfile, error) {
-	resp, err := c.grpc.UpdateProfile(ctx, &platformv1.UpdateProfileRequest{Profile: profile})
+func (c *Client) UpdateProfile(ctx context.Context, profile *platformv1.DeviceProfile, opts ...ProfileUpdateOption) (*platformv1.DeviceProfile, error) {
+	req := &platformv1.UpdateProfileRequest{Profile: profile}
+	for _, opt := range opts {
+		opt(req)
+	}
+	resp, err := c.grpc.UpdateProfile(ctx, req)
 	if err != nil {
 		return nil, &ErrUpdateProfileFailed{ID: profile.Id, Cause: err}
 	}

@@ -62,12 +62,15 @@ Use 'platformctl' for all operational commands (tpm, ca, vtpm, iso, etc.)
 Use 'platform-initrd' for boot-time operations in the initramfs.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 	},
-	Run: func(cmd *cobra.Command, args []string) {
-		// Default to serve command if no subcommand specified
-		if len(args) == 0 && len(cmd.Flags().Args()) == 0 {
-			serveCmd.Run(cmd, args)
-			return
+	// Without a subcommand, platformd runs serve. RunE, not Run, so a failed
+	// startup reaches main() as an error rather than an exit 0 (#53, #352).
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) > 0 || len(cmd.Flags().Args()) > 0 {
+			return nil
 		}
+		// Flags parsed; what follows is a startup, not a usage error.
+		cmd.SilenceUsage = true
+		return serveCmd.RunE(cmd, args)
 	},
 	TraverseChildren: true,
 }
@@ -154,10 +157,9 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 }
 
-// Execute runs the root command.
+// Execute runs the root command and returns its error, which cobra has already
+// printed. It never exits the process: cmd/platformd/main.go is the one place
+// that turns an error into an exit status (docs/daemon/cli.md §7.1).
 func Execute() error {
-	if err := rootCmd.Execute(); err != nil {
-		log.Fatal(err)
-	}
-	return nil
+	return rootCmd.Execute()
 }

@@ -460,7 +460,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 				},
 				"tls_server_name": map[string]interface{}{
 					"type":        "string",
-					"description": "New certificate name the attestation collector verifies a node of this profile against; omitted, the stored name is kept. pcr_baseline is read-only and ignored if supplied",
+					"description": "New certificate name the attestation collector verifies a node of this profile against; omitted, the stored name is kept; an empty string clears it, so the collector verifies against each device's own FQDN again. pcr_baseline is read-only and ignored if supplied",
 				},
 			},
 			"required": []string{"id"},

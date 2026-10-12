@@ -174,9 +174,10 @@ type ProfileRequest struct {
 	AssignedAt time.Time `json:"assigned_at,omitempty"`
 	// TLSServerName is the certificate name the attestation collector
 	// verifies a node of this profile against when it dials it for a quote
-	// (#430). Empty means the device's own FQDN; an omitted value on PUT
-	// keeps the stored name (ProfileService.Update restores it).
-	TLSServerName string `json:"tls_server_name,omitempty"`
+	// (#430). An unset name means the device's own FQDN. On PUT an omitted
+	// (or null) value keeps the stored name and an explicit "" clears it
+	// (#462).
+	TLSServerName *string `json:"tls_server_name,omitempty"`
 }
 
 // NetworkPhaseRequest represents network configuration for a phase.

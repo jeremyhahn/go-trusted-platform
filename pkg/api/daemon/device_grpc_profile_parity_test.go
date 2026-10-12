@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
@@ -144,6 +146,42 @@ func TestDeviceGRPCService_TLSServerName_SurvivesUpdateWithoutIt(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	assert.Equal(t, "gw.example.internal", replaced.GetProfile().GetTlsServerName())
+}
+
+// TestDeviceGRPCService_TLSServerName_ExplicitClear is the #462 round trip on
+// the daemon gRPC wire with the real profile service: set, clear through
+// clear_tls_server_name, and read back no name. A request that both sets and
+// clears the name is InvalidArgument and leaves the stored name untouched.
+func TestDeviceGRPCService_TLSServerName_ExplicitClear(t *testing.T) {
+	ctx := context.Background()
+	svc := NewDeviceGRPCService(newMockDeviceService(), newRealProfileService(t), nil)
+
+	_, err := svc.CreateProfile(ctx, &platformv1.CreateProfileRequest{Profile: &platformv1.DeviceProfile{
+		Id: 4485, Name: "compute", Role: platformv1.DeviceRole_DEVICE_ROLE_WORKER, TlsServerName: testTLSServerName,
+	}})
+	require.NoError(t, err)
+
+	_, err = svc.UpdateProfile(ctx, &platformv1.UpdateProfileRequest{
+		Profile: &platformv1.DeviceProfile{
+			Id: 4485, Name: "compute", Role: platformv1.DeviceRole_DEVICE_ROLE_WORKER, TlsServerName: "gw.example.internal",
+		},
+		ClearTlsServerName: true,
+	})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "set-and-clear must be a client error: %v", err)
+	got, err := svc.GetProfile(ctx, &platformv1.GetProfileRequest{Id: 4485})
+	require.NoError(t, err)
+	assert.Equal(t, testTLSServerName, got.GetProfile().GetTlsServerName(), "a rejected update must not touch the stored name")
+
+	cleared, err := svc.UpdateProfile(ctx, &platformv1.UpdateProfileRequest{
+		Profile:            &platformv1.DeviceProfile{Id: 4485, Name: "compute", Role: platformv1.DeviceRole_DEVICE_ROLE_WORKER},
+		ClearTlsServerName: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, cleared.GetProfile().GetTlsServerName())
+
+	got, err = svc.GetProfile(ctx, &platformv1.GetProfileRequest{Id: 4485})
+	require.NoError(t, err)
+	assert.Empty(t, got.GetProfile().GetTlsServerName(), "clear_tls_server_name must blank the stored name")
 }
 
 // TestDeviceGRPCService_PCRBaseline_ReadOnlyRoundTrip is the #448 round

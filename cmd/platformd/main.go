@@ -20,6 +20,9 @@ import (
 )
 
 func main() {
+	// Every failure, startup or usage, exits 1; a clean shutdown returns and
+	// exits 0. The contract is docs/daemon/cli.md §7.1 and main_test.go
+	// asserts it against the running process (#352).
 	if err := commands.Execute(); err != nil {
 		os.Exit(1)
 	}

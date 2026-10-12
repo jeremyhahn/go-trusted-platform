@@ -218,7 +218,10 @@ message ProfileMatchRules {
 > Since #448 it also carries `tls_server_name` (writable: the certificate
 > name the attestation collector verifies a node of this profile against;
 > empty means the device FQDN; an `UpdateProfile` that omits it keeps the
-> stored value) and `pcr_baseline` (`PCRBaseline` message:
+> stored value, and `UpdateProfileRequest.clear_tls_server_name = true`
+> clears it — proto3 cannot tell an unset string from an empty one, so the
+> flag is the only clear; with a non-empty name it is `INVALID_ARGUMENT`,
+> `docs/device/api.md` §3.2) and `pcr_baseline` (`PCRBaseline` message:
 > `map<uint32, bytes> values`, `string source`, `Timestamp recorded_at`,
 > `uint64 recorded_from_device_id`). `pcr_baseline` is **read-only**:
 > `GetProfile`/`ListProfiles` populate it, `CreateProfile`/`UpdateProfile`

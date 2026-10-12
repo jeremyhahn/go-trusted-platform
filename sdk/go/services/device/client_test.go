@@ -35,14 +35,65 @@ type fakeDeviceServiceClient struct {
 	unassignReq  *platformv1.UnassignProfileFromDeviceRequest
 	unassignResp *platformv1.UnassignProfileFromDeviceResponse
 	unassignErr  error
+	updateReq    *platformv1.UpdateProfileRequest
+	updateErr    error
 	recordReq    *platformv1.RecordAttestationCertificateRequest
 	recordResp   *platformv1.RecordAttestationCertificateResponse
 	recordErr    error
 }
 
+func (f *fakeDeviceServiceClient) UpdateProfile(ctx context.Context, in *platformv1.UpdateProfileRequest, opts ...grpc.CallOption) (*platformv1.UpdateProfileResponse, error) {
+	f.updateReq = in
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	return &platformv1.UpdateProfileResponse{Profile: in.GetProfile()}, nil
+}
+
 func (f *fakeDeviceServiceClient) RecordAttestationCertificate(ctx context.Context, in *platformv1.RecordAttestationCertificateRequest, opts ...grpc.CallOption) (*platformv1.RecordAttestationCertificateResponse, error) {
 	f.recordReq = in
 	return f.recordResp, f.recordErr
+}
+
+// TestClient_UpdateProfile_ClearTLSServerName verifies that only
+// WithClearTLSServerName sets clear_tls_server_name on the wire (#462).
+func TestClient_UpdateProfile_ClearTLSServerName(t *testing.T) {
+	fake := &fakeDeviceServiceClient{}
+	client := NewClientFromGRPC(fake)
+
+	profile, err := client.UpdateProfile(context.Background(), &platformv1.DeviceProfile{Id: 7})
+	if err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+	if profile.GetId() != 7 || fake.updateReq.GetProfile().GetId() != 7 {
+		t.Errorf("profile id not carried: request %+v, response %+v", fake.updateReq, profile)
+	}
+	if fake.updateReq.GetClearTlsServerName() {
+		t.Error("an update without the option must not clear tls_server_name")
+	}
+
+	if _, err := client.UpdateProfile(context.Background(), &platformv1.DeviceProfile{Id: 7}, WithClearTLSServerName()); err != nil {
+		t.Fatalf("UpdateProfile with clear: %v", err)
+	}
+	if !fake.updateReq.GetClearTlsServerName() {
+		t.Error("WithClearTLSServerName must set clear_tls_server_name")
+	}
+}
+
+// TestClient_UpdateProfile_Error verifies transport errors wrap into the
+// typed ErrUpdateProfileFailed.
+func TestClient_UpdateProfile_Error(t *testing.T) {
+	cause := errors.New("boom")
+	client := NewClientFromGRPC(&fakeDeviceServiceClient{updateErr: cause})
+
+	_, err := client.UpdateProfile(context.Background(), &platformv1.DeviceProfile{Id: 9}, WithClearTLSServerName())
+	var typed *ErrUpdateProfileFailed
+	if !errors.As(err, &typed) {
+		t.Fatalf("err = %v, want ErrUpdateProfileFailed", err)
+	}
+	if typed.ID != 9 || !errors.Is(err, cause) {
+		t.Errorf("typed = %+v, cause lost", typed)
+	}
 }
 
 func (f *fakeDeviceServiceClient) AssignProfileToDevice(ctx context.Context, in *platformv1.AssignProfileToDeviceRequest, opts ...grpc.CallOption) (*platformv1.AssignProfileToDeviceResponse, error) {

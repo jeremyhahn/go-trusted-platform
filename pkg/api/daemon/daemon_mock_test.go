@@ -391,7 +391,7 @@ func TestForceStopMock_WithRESTServer(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 }
@@ -420,7 +420,7 @@ func TestForceStopMock_WithMCPServer(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 }
@@ -442,7 +442,7 @@ func TestForceStopMock_WithGRPCTCP(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() failed: %v", err)
 	}
 }

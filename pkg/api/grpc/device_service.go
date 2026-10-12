@@ -140,7 +140,7 @@ type DeviceService interface {
 type DeviceProfileService interface {
 	Save(ctx context.Context, profile *entities.DeviceProfile) error
 	Get(ctx context.Context, id uint64) (*entities.DeviceProfile, error)
-	Update(ctx context.Context, profile *entities.DeviceProfile) error
+	Update(ctx context.Context, profile *entities.DeviceProfile, opts ...device.ProfileUpdateOption) error
 	Delete(ctx context.Context, profile *entities.DeviceProfile) error
 	Page(ctx context.Context, query datastore.PageQuery) (datastore.PageResult[*entities.DeviceProfile], error)
 	FindByMACAddress(ctx context.Context, mac string) (*entities.DeviceProfile, error)
@@ -425,7 +425,14 @@ func (s *DeviceGRPCService) UpdateProfile(
 
 	profile := protoProfileToEntity(req.GetProfile())
 
-	if err := s.profileService.Update(ctx, profile); err != nil {
+	// proto3 cannot tell an unset tls_server_name from an empty one, so the
+	// deliberate clear rides on its own request flag (#462).
+	var opts []device.ProfileUpdateOption
+	if req.GetClearTlsServerName() {
+		opts = append(opts, device.ClearTLSServerName)
+	}
+
+	if err := s.profileService.Update(ctx, profile, opts...); err != nil {
 		return nil, s.mapProfileError("UpdateProfile", err)
 	}
 
@@ -1078,6 +1085,10 @@ func (s *DeviceGRPCService) mapProfileError(operation string, err error) error {
 	// not internal ones. errors.As so a wrapped error still maps.
 	var vlans device.ErrProfileVLANsNotDistinct
 	if errors.As(err, &vlans) {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	var tlsClear device.ErrTLSServerNameClearConflict
+	if errors.As(err, &tlsClear) {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 

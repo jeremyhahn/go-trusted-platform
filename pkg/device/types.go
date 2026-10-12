@@ -68,7 +68,9 @@ type DeviceProfileService interface {
 	Delete(ctx context.Context, profile *entities.DeviceProfile) error
 
 	// Update modifies an existing device profile. The profile must exist.
-	Update(ctx context.Context, profile *entities.DeviceProfile) error
+	// An empty TLSServerName keeps the stored name unless opts carries
+	// ClearTLSServerName.
+	Update(ctx context.Context, profile *entities.DeviceProfile, opts ...ProfileUpdateOption) error
 
 	// Count returns the total number of device profiles.
 	Count(ctx context.Context) (int, error)

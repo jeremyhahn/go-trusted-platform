@@ -20,6 +20,8 @@ package attestation
 import (
 	"context"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 )
 
 // AttestationCommands defines the interface for attestation operations across all protocols.
@@ -85,6 +87,23 @@ type AttestationCommands interface {
 
 	// GetWorkloadChainStats retrieves chain statistics
 	GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error)
+
+	// Device attestation reporting (#226, #429). The reads fail with
+	// ErrReportingUnavailable on a node without a reporting service, and
+	// GetDeviceReport with ErrReportNotCollected for a device the collector
+	// has never reached.
+
+	// ListDeviceReports reads every cached device report.
+	ListDeviceReports(ctx context.Context) (*DeviceReportsResult, error)
+
+	// GetDeviceReport reads one device's cached report.
+	GetDeviceReport(ctx context.Context, opts DeviceReportOptions) (*DeviceReport, error)
+
+	// RefreshDeviceReport asks the collector to re-collect one device.
+	RefreshDeviceReport(ctx context.Context, opts DeviceReportOptions) (*RefreshDeviceReportResult, error)
+
+	// DescribeCallerPolicy reads the node's compiled caller-admission policy.
+	DescribeCallerPolicy(ctx context.Context) (*calleradmission.Description, error)
 }
 
 // =============================================================================

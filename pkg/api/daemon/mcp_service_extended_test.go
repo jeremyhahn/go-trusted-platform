@@ -459,7 +459,7 @@ func (m *mcpMockDeviceProfileService) Delete(ctx context.Context, profile *devic
 	return nil
 }
 
-func (m *mcpMockDeviceProfileService) Update(ctx context.Context, profile *deviceentities.DeviceProfile) error {
+func (m *mcpMockDeviceProfileService) Update(ctx context.Context, profile *deviceentities.DeviceProfile, opts ...device.ProfileUpdateOption) error {
 	if _, ok := m.profiles[profile.ID]; !ok {
 		return ErrProfileNotFound{Profile: string(rune(profile.ID))}
 	}

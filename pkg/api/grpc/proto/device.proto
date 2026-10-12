@@ -254,7 +254,8 @@ message DeviceProfile {
   // Set it for fleets whose node webservice certificates carry a role name
   // rather than the device name (the shipped worker templates issue
   // compute.<domain>.internal to every worker). Writable on create and
-  // update; an update that omits it keeps the stored value.
+  // update; an update that omits it keeps the stored value. To clear it,
+  // set UpdateProfileRequest.clear_tls_server_name.
   string tls_server_name = 26;
   // pcr_baseline is the expected measured state devices on this profile are
   // verified against (#373). It is READ-ONLY on every transport: the
@@ -377,6 +378,12 @@ message GetProfileResponse {
 
 message UpdateProfileRequest {
   DeviceProfile profile = 1;
+  // clear_tls_server_name blanks the stored tls_server_name. proto3 cannot
+  // tell an unset string from an empty one, so an empty
+  // profile.tls_server_name keeps the stored name; this flag is the
+  // deliberate clear (#462). Setting it together with a non-empty
+  // profile.tls_server_name is rejected with InvalidArgument.
+  bool clear_tls_server_name = 2;
 }
 
 message UpdateProfileResponse {

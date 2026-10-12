@@ -155,6 +155,7 @@ func (m *mockDeviceService) FindByHostname(ctx context.Context, hostname string)
 
 // Mock profile service for testing
 type mockProfileService struct {
+	updateOpts             []devicepkg.ProfileUpdateOption
 	profiles               map[uint64]*entities.DeviceProfile
 	saveErr                error
 	getErr                 error
@@ -202,7 +203,8 @@ func (m *mockProfileService) Delete(ctx context.Context, profile *entities.Devic
 	return nil
 }
 
-func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile) error {
+func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile, opts ...devicepkg.ProfileUpdateOption) error {
+	m.updateOpts = opts
 	if m.updateErr != nil {
 		return m.updateErr
 	}

@@ -16,12 +16,17 @@
 package attestation
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 )
 
 // CLIAdapterError represents an error from the CLI adapter
@@ -38,6 +43,10 @@ func (e *CLIAdapterError) Error() string {
 // CLIAdapter implements AttestationCommands using the platformctl CLI
 type CLIAdapter struct {
 	cliPath string
+	// configDir holds the platformctl config whose local context reaches
+	// the daemon's Unix socket; Setup writes it, Teardown removes it.
+	configDir  string
+	configPath string
 }
 
 // NewCLIAdapter creates a new CLI adapter
@@ -56,12 +65,36 @@ func (a *CLIAdapter) Setup(ctx context.Context) error {
 			Message:   "CLI not found",
 		}
 	}
+
+	configDir, err := os.MkdirTemp("", "platformctl-attestation-test-*")
+	if err != nil {
+		return &CLIAdapterError{Operation: "Setup", Message: "failed to create config dir: " + err.Error()}
+	}
+	a.configDir = configDir
+	a.configPath = filepath.Join(configDir, "config.yaml")
+	config := fmt.Sprintf(`current_context: %s
+contexts:
+  - name: %s
+    type: local
+    local:
+      socket_path: %s
+      grpc_addr: %s
+`, cliContextName, cliContextName, GetSocketPath(), GetGRPCEndpoint())
+	if err := os.WriteFile(a.configPath, []byte(config), 0o600); err != nil {
+		return &CLIAdapterError{Operation: "Setup", Message: "failed to write config: " + err.Error()}
+	}
 	return nil
 }
 
 // Teardown cleans up after testing
 func (a *CLIAdapter) Teardown(ctx context.Context) error {
-	return nil
+	if a.configDir == "" {
+		return nil
+	}
+	err := os.RemoveAll(a.configDir)
+	a.configDir = ""
+	a.configPath = ""
+	return err
 }
 
 // Name returns the adapter name
@@ -81,6 +114,47 @@ func (a *CLIAdapter) runCommand(ctx context.Context, args ...string) ([]byte, er
 		}
 	}
 	return output, nil
+}
+
+// cliContextName is the context Setup writes into the adapter's config.
+const cliContextName = "integration-test"
+
+// runJSON runs platformctl against the adapter's local context with JSON
+// output. Stdout and stderr are kept apart so a warning on stderr never
+// corrupts the JSON document.
+func (a *CLIAdapter) runJSON(ctx context.Context, args ...string) ([]byte, error) {
+	full := append([]string{"--config", a.configPath, "--context", cliContextName}, args...)
+	full = append(full, "--output", "json")
+
+	cmd := exec.CommandContext(ctx, a.cliPath, full...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, &CLIAdapterError{
+			Operation: strings.Join(args, " "),
+			Message:   err.Error(),
+			Output:    stdout.String() + stderr.String(),
+		}
+	}
+	return stdout.Bytes(), nil
+}
+
+// cliNeverCollected is platformctl's phrase for a device with no report.
+const cliNeverCollected = "has never been collected"
+
+// reportingCommand runs one reporting verb and decodes its JSON into out.
+// deviceID is the verb's argument and, when set, lets a never-collected
+// failure be told apart.
+func (a *CLIAdapter) reportingCommand(ctx context.Context, operation, deviceID string, out any, args ...string) error {
+	output, err := a.runJSON(ctx, args...)
+	if err != nil {
+		return classifyReportingText(a.Name(), operation, deviceID, cliNeverCollected, err)
+	}
+	if err := json.Unmarshal(output, out); err != nil {
+		return &CLIAdapterError{Operation: operation, Message: "failed to parse output: " + err.Error(), Output: string(output)}
+	}
+	return nil
 }
 
 // =============================================================================
@@ -528,6 +602,42 @@ func (a *CLIAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkload
 		}
 	}
 
+	return &result, nil
+}
+
+// ListDeviceReports runs `platformctl attestation reports list`.
+func (a *CLIAdapter) ListDeviceReports(ctx context.Context) (*DeviceReportsResult, error) {
+	var result DeviceReportsResult
+	if err := a.reportingCommand(ctx, "ListDeviceReports", "", &result, "attestation", "reports", "list"); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetDeviceReport runs `platformctl attestation reports get <device-id>`.
+func (a *CLIAdapter) GetDeviceReport(ctx context.Context, opts DeviceReportOptions) (*DeviceReport, error) {
+	var result DeviceReport
+	if err := a.reportingCommand(ctx, "GetDeviceReport", opts.DeviceID, &result, "attestation", "reports", "get", opts.DeviceID); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// RefreshDeviceReport runs `platformctl attestation reports refresh <device-id>`.
+func (a *CLIAdapter) RefreshDeviceReport(ctx context.Context, opts DeviceReportOptions) (*RefreshDeviceReportResult, error) {
+	var result RefreshDeviceReportResult
+	if err := a.reportingCommand(ctx, "RefreshDeviceReport", "", &result, "attestation", "reports", "refresh", opts.DeviceID); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// DescribeCallerPolicy runs `platformctl attestation callers`.
+func (a *CLIAdapter) DescribeCallerPolicy(ctx context.Context) (*calleradmission.Description, error) {
+	var result calleradmission.Description
+	if err := a.reportingCommand(ctx, "DescribeCallerPolicy", "", &result, "attestation", "callers"); err != nil {
+		return nil, err
+	}
 	return &result, nil
 }
 

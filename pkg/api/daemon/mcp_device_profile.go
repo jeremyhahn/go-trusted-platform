@@ -68,11 +68,11 @@ func (p *MCPServiceProvider) DeviceProfileList(ctx context.Context, page, pageSi
 }
 
 // DeviceProfileUpdate replaces an existing device profile.
-func (p *MCPServiceProvider) DeviceProfileUpdate(ctx context.Context, profile *deviceentities.DeviceProfile) (*deviceentities.DeviceProfile, error) {
+func (p *MCPServiceProvider) DeviceProfileUpdate(ctx context.Context, profile *deviceentities.DeviceProfile, opts ...device.ProfileUpdateOption) (*deviceentities.DeviceProfile, error) {
 	if p.deviceProfileService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device_profile"}
 	}
-	if err := p.deviceProfileService.Update(ctx, profile); err != nil {
+	if err := p.deviceProfileService.Update(ctx, profile, opts...); err != nil {
 		return nil, err
 	}
 	return profile, nil

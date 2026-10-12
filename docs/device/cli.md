@@ -239,6 +239,7 @@ fails with `device profile: invalid pagination: …` — both before connecting.
 | `--ek-cert` | string | | Prestaged EK certificate: a PEM **file path** or an inline PEM string |
 | `--config-file` | string | | Device platform config, YAML or JSON; converted to JSON on the wire |
 | `--tls-server-name` | string | | Certificate name the attestation collector verifies nodes of this profile against when it dials them for a quote (e.g. `compute.example.internal`); empty means the device's own FQDN (`docs/attestation/user.md`) |
+| `--clear-tls-server-name` | bool | `false` | **`update` only.** Clears the stored TLS server name, so the collector verifies nodes against their own FQDN again (§3.3). Mutually exclusive with `--tls-server-name` |
 
 **`--ek-cert` decides path-versus-inline by looking for `-----BEGIN`.** A value
 containing that marker is used verbatim; anything else is treated as a file
@@ -274,11 +275,17 @@ non-numeric id fails with `device profile: invalid profile ID: <id>`.
 platformctl device profile update 123 --ek-cert /etc/platform/ek-certs/node-02.pem
 platformctl device profile update 123 --config-file /etc/platform/node-02.yaml
 platformctl device profile update 123 --tls-server-name compute.example.internal
+platformctl device profile update 123 --clear-tls-server-name
 ```
 
 **`--tls-server-name` survives an update that omits it** twice over: this
 command writes back the fetched profile with only the named flags changed,
-and the server restores the stored name when an update carries none. The
+and the server restores the stored name when an update carries none. Only
+`--clear-tls-server-name` removes it: the command blanks the name and sets
+`clear_tls_server_name` on the pb `UpdateProfileRequest`, the one signal the
+server treats as a clear (`docs/device/api.md` §3.2). Passing it with
+`--tls-server-name` fails before connecting, with cobra's mutually-exclusive
+flag error naming both flags. The
 same holds for the read-only `pcr_baseline` the fetched profile carries: it
 travels back unchanged and the server ignores it on the way in
 (`docs/device/api.md` §3.6).

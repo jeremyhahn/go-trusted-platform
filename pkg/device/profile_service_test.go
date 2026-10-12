@@ -1201,6 +1201,85 @@ func TestProfileService_Update_CallerTLSServerNameStillWins(t *testing.T) {
 	assert.Equal(t, "gw.example.internal", stored.TLSServerName)
 }
 
+// TestProfileService_Update_ClearTLSServerName pins the #462 clear path: the
+// explicit option blanks the stored name, the very next update that omits it
+// keeps it blank, and an update without the option still preserves a name
+// set again afterwards.
+func TestProfileService_Update_ClearTLSServerName(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{
+		ID: 4483, Name: "compute", Role: entities.DeviceRoleWorker,
+		TLSServerName: "compute.example.internal",
+	}))
+	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{
+		ID: 4483, Name: "compute", Role: entities.DeviceRoleWorker,
+	}, ClearTLSServerName))
+
+	stored, err := service.Get(ctx, 4483)
+	require.NoError(t, err)
+	assert.Empty(t, stored.TLSServerName, "the explicit clear must blank the name")
+
+	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{
+		ID: 4483, Name: "compute", Role: entities.DeviceRoleWorker, TLSServerName: "gw.example.internal",
+	}))
+	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{ID: 4483, Name: "compute", Role: entities.DeviceRoleWorker}))
+	stored, err = service.Get(ctx, 4483)
+	require.NoError(t, err)
+	assert.Equal(t, "gw.example.internal", stored.TLSServerName, "omission must still preserve after a clear")
+}
+
+// TestProfileService_Update_ClearTLSServerNameConflict pins that an update
+// both naming a TLSServerName and clearing it is refused with the typed error
+// and leaves the stored name untouched.
+func TestProfileService_Update_ClearTLSServerNameConflict(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{
+		ID: 4484, Name: "compute", Role: entities.DeviceRoleWorker,
+		TLSServerName: "compute.example.internal",
+	}))
+	err = service.Update(ctx, &entities.DeviceProfile{
+		ID: 4484, Name: "compute", Role: entities.DeviceRoleWorker, TLSServerName: "gw.example.internal",
+	}, ClearTLSServerName)
+	require.ErrorAs(t, err, &ErrTLSServerNameClearConflict{})
+
+	stored, err := service.Get(ctx, 4484)
+	require.NoError(t, err)
+	assert.Equal(t, "compute.example.internal", stored.TLSServerName)
+}
+
+// TestApplyTLSServerName pins the tri-state every merge handler shares: an
+// absent name keeps the profile's and asks for nothing, a value replaces it,
+// and "" blanks it and asks the service for the explicit clear.
+func TestApplyTLSServerName(t *testing.T) {
+	name := func(s string) *string { return &s }
+	tests := []struct {
+		label    string
+		in       *string
+		wantName string
+		wantOpts []ProfileUpdateOption
+	}{
+		{"omitted keeps", nil, "compute.example.internal", nil},
+		{"value replaces", name("gw.example.internal"), "gw.example.internal", nil},
+		{"empty clears", name(""), "", []ProfileUpdateOption{ClearTLSServerName}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			profile := &entities.DeviceProfile{TLSServerName: "compute.example.internal"}
+			opts := ApplyTLSServerName(profile, tt.in)
+			assert.Equal(t, tt.wantName, profile.TLSServerName)
+			assert.Equal(t, tt.wantOpts, opts)
+		})
+	}
+}
+
 // TestProfileService_FindProfileForDevice_BoundProfileWins pins the resolver's
 // precedence (#463): a profile whose EKSerial equals the serial of the
 // device's stored EK certificate wins over one whose match rules cover the

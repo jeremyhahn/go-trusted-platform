@@ -325,7 +325,14 @@ func (s *DeviceGRPCService) UpdateProfile(
 		return nil, status.Error(codes.InvalidArgument, convErr.Error())
 	}
 
-	if err := s.profileService.Update(ctx, profile); err != nil {
+	// proto3 cannot tell an unset tls_server_name from an empty one, so the
+	// deliberate clear rides on its own request flag (#462).
+	var opts []device.ProfileUpdateOption
+	if req.GetClearTlsServerName() {
+		opts = append(opts, device.ClearTLSServerName)
+	}
+
+	if err := s.profileService.Update(ctx, profile, opts...); err != nil {
 		s.logger.Error("failed to update profile", "id", profile.ID, "error", err)
 		return nil, s.toGRPCError(err)
 	}
@@ -1024,6 +1031,10 @@ func (s *DeviceGRPCService) toGRPCError(err error) error {
 	// Typed validation failures from the service layer are client errors.
 	var vlans device.ErrProfileVLANsNotDistinct
 	if errors.As(err, &vlans) {
+		return status.Error(codes.InvalidArgument, errStr)
+	}
+	var tlsClear device.ErrTLSServerNameClearConflict
+	if errors.As(err, &tlsClear) {
 		return status.Error(codes.InvalidArgument, errStr)
 	}
 

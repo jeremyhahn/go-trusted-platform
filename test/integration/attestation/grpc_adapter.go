@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
@@ -267,6 +268,36 @@ func (a *GRPCAdapter) VerifyWorkloadChain(ctx context.Context, opts VerifyWorklo
 // No corresponding gRPC RPC exists in the AttestationService proto.
 func (a *GRPCAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error) {
 	return nil, surface.ErrNoSurface{Transport: "gRPC", Operation: "GetWorkloadChainStats"}
+}
+
+func (a *GRPCAdapter) reporting() reportingRPC {
+	return reportingRPC{
+		client:    a.client,
+		transport: a.Name(),
+		wrap: func(method string, err error) error {
+			return ErrGRPCCallFailed{Method: method, Err: err}
+		},
+	}
+}
+
+// ListDeviceReports reads every cached device report via gRPC.
+func (a *GRPCAdapter) ListDeviceReports(ctx context.Context) (*DeviceReportsResult, error) {
+	return a.reporting().list(ctx)
+}
+
+// GetDeviceReport reads one device's cached report via gRPC.
+func (a *GRPCAdapter) GetDeviceReport(ctx context.Context, opts DeviceReportOptions) (*DeviceReport, error) {
+	return a.reporting().get(ctx, opts)
+}
+
+// RefreshDeviceReport asks the collector to re-collect one device via gRPC.
+func (a *GRPCAdapter) RefreshDeviceReport(ctx context.Context, opts DeviceReportOptions) (*RefreshDeviceReportResult, error) {
+	return a.reporting().refresh(ctx, opts)
+}
+
+// DescribeCallerPolicy reads the node's caller-admission policy via gRPC.
+func (a *GRPCAdapter) DescribeCallerPolicy(ctx context.Context) (*calleradmission.Description, error) {
+	return a.reporting().callers(ctx)
 }
 
 // Verify GRPCAdapter implements AttestationCommands

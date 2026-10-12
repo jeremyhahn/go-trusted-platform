@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -134,6 +135,7 @@ var _ DeviceService = (*mockDeviceService)(nil)
 
 // mockProfileService implements DeviceProfileService for testing.
 type mockProfileService struct {
+	updateOpts      []device.ProfileUpdateOption
 	profiles        map[uint64]*entities.DeviceProfile
 	saveErr         error
 	getErr          error
@@ -182,7 +184,8 @@ func (m *mockProfileService) Delete(ctx context.Context, profile *entities.Devic
 	return nil
 }
 
-func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile) error {
+func (m *mockProfileService) Update(ctx context.Context, profile *entities.DeviceProfile, opts ...device.ProfileUpdateOption) error {
+	m.updateOpts = opts
 	if m.updateErr != nil {
 		return m.updateErr
 	}

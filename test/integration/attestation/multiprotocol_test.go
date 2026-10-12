@@ -65,6 +65,9 @@ func TestAttestationMultiProtocol(t *testing.T) {
 			t.Run("WorkloadChain", func(t *testing.T) {
 				testWorkloadChain(t, ctx, adapter)
 			})
+			t.Run("Reporting", func(t *testing.T) {
+				testReporting(t, ctx, adapter)
+			})
 		})
 	}
 }

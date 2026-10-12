@@ -15,11 +15,15 @@ package grpc
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -96,6 +100,55 @@ func TestDeviceGRPCService_TLSServerName_RoundTrip(t *testing.T) {
 	}
 	if got.GetProfile().GetTlsServerName() != testTLSServerName {
 		t.Fatal("GetProfile response dropped tls_server_name")
+	}
+}
+
+// TestDeviceGRPCService_UpdateProfile_ClearTLSServerName pins #462 on the
+// gRPC wire: only clear_tls_server_name asks the service to blank the name;
+// an update without it must not, so the service still restores the stored
+// name on omission.
+func TestDeviceGRPCService_UpdateProfile_ClearTLSServerName(t *testing.T) {
+	service, _, profileMock := newTestDeviceService()
+	ctx := context.Background()
+	if _, err := service.CreateProfile(ctx, &platformv1.CreateProfileRequest{Profile: &platformv1.DeviceProfile{
+		Id: 8, Name: "compute", TlsServerName: testTLSServerName,
+	}}); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+
+	if _, err := service.UpdateProfile(ctx, &platformv1.UpdateProfileRequest{Profile: &platformv1.DeviceProfile{
+		Id: 8, Name: "compute-renamed",
+	}}); err != nil {
+		t.Fatalf("UpdateProfile without the flag: %v", err)
+	}
+	if slices.Contains(profileMock.updateOpts, device.ClearTLSServerName) {
+		t.Fatal("an update without clear_tls_server_name must not ask for a clear")
+	}
+
+	if _, err := service.UpdateProfile(ctx, &platformv1.UpdateProfileRequest{
+		Profile:            &platformv1.DeviceProfile{Id: 8, Name: "compute-renamed"},
+		ClearTlsServerName: true,
+	}); err != nil {
+		t.Fatalf("UpdateProfile with the flag: %v", err)
+	}
+	if !slices.Contains(profileMock.updateOpts, device.ClearTLSServerName) {
+		t.Fatal("clear_tls_server_name must reach the service as ClearTLSServerName")
+	}
+}
+
+// TestDeviceGRPCService_UpdateProfile_ClearConflictIsInvalidArgument pins the
+// error mapping: a request that both sets and clears the name is a client
+// error, not an internal one.
+func TestDeviceGRPCService_UpdateProfile_ClearConflictIsInvalidArgument(t *testing.T) {
+	service, _, profileMock := newTestDeviceService()
+	profileMock.updateErr = &device.WrappedError{Msg: "failed to update profile", Err: device.ErrTLSServerNameClearConflict{}}
+
+	_, err := service.UpdateProfile(context.Background(), &platformv1.UpdateProfileRequest{
+		Profile:            &platformv1.DeviceProfile{Id: 9, Name: "compute", TlsServerName: testTLSServerName},
+		ClearTlsServerName: true,
+	})
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Fatalf("status code = %v, want InvalidArgument (err=%v)", got, err)
 	}
 }
 

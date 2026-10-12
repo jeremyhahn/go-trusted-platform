@@ -314,8 +314,9 @@ control plane composes them in `pkg/daemon/commands/attestation_reporting.go`:
   the device FQDN unless the device **profile** sets `tls-server-name`, for
   fleets whose node certificates carry a role name
   (`platformctl device profile update <id> --tls-server-name <name>`; the
-  field is on every profile transport since #448 and survives an update that
-  omits it).
+  field is on every profile transport since #448, survives an update that
+  omits it, and is removed only by an explicit clear such as
+  `--clear-tls-server-name`, `docs/device/api.md` §3.2).
 - **Profile resolution has one implementation and one precedence (#463).**
   `ProfileService.FindProfileForDevice` is the only device → profile lookup
   the attestation path uses — the collector for the node's TLS server name,
@@ -640,7 +641,8 @@ a MUST before trusting a quote.
   gRPC / Unix / live QUIC, the dark REST/QUIC profile responses, the MCP
   profile results and `platformctl device profile` all report it; every
   create/update path ignores a supplied one, and `ProfileService.Update`
-  keeps the stored baseline (and `tls_server_name`) when an update carries
+  keeps the stored baseline (and `tls_server_name`, unless the update
+  clears it explicitly, `docs/device/api.md` §3.2) when an update carries
   none.
 - What is **not** in this slice: the dark REST/QUIC device handlers that
   still carry a stub verifier (#403) and the signed-manifest baseline writer

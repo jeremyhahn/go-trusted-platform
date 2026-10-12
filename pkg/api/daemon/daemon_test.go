@@ -342,12 +342,9 @@ func TestDaemon_ForceStop(t *testing.T) {
 		t.Errorf("Start() error: %v", err)
 	}
 
-	// Give servers time to fully start
-	time.Sleep(50 * time.Millisecond)
-
-	// ForceStop may return error if underlying servers have timing issues,
-	// but the important thing is that the daemon stops
-	_ = d.ForceStop()
+	if err := d.ForceStop(); err != nil {
+		t.Fatalf("ForceStop() failed: %v", err)
+	}
 
 	// After ForceStop, daemon should not be running
 	if d.IsRunning() {

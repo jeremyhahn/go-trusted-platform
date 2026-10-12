@@ -22,9 +22,11 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -350,6 +352,42 @@ func TestApplyProfileUpdateFlags_SetAndPreserve(t *testing.T) {
 	}
 	if profile.GetTlsServerName() != "gw.example.internal" {
 		t.Fatalf("--tls-server-name not applied: %q", profile.GetTlsServerName())
+	}
+}
+
+// TestApplyProfileUpdateFlags_ClearTLSServerName pins #462 in the merge:
+// --clear-tls-server-name blanks the fetched name before it goes back.
+func TestApplyProfileUpdateFlags_ClearTLSServerName(t *testing.T) {
+	profile := &platformv1.DeviceProfile{Id: 7, Name: "compute", TlsServerName: "compute.example.internal"}
+	if err := applyProfileUpdateFlags(profile, &profileFlags{clearTLSServerName: true}, "", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if profile.GetTlsServerName() != "" {
+		t.Fatalf("--clear-tls-server-name left %q", profile.GetTlsServerName())
+	}
+	if profile.GetName() != "compute" {
+		t.Fatal("unset flags must leave their fields untouched")
+	}
+}
+
+// TestProfileUpdateCommand_ClearTLSServerNameExclusive verifies the update
+// command offers --clear-tls-server-name and rejects it together with
+// --tls-server-name before any connection is attempted.
+func TestProfileUpdateCommand_ClearTLSServerNameExclusive(t *testing.T) {
+	update := newProfileUpdateCommand(func() *cli.CommonFlags {
+		t.Fatal("flags must not be resolved when the flag set is invalid")
+		return nil
+	})
+	if update.Flags().Lookup("clear-tls-server-name") == nil {
+		t.Fatal("update missing flag --clear-tls-server-name")
+	}
+
+	update.SetArgs([]string{"7", "--tls-server-name", "gw.example.internal", "--clear-tls-server-name"})
+	update.SetOut(io.Discard)
+	update.SetErr(io.Discard)
+	err := update.Execute()
+	if err == nil || !strings.Contains(err.Error(), "clear-tls-server-name") {
+		t.Fatalf("expected a mutually-exclusive flag error, got %v", err)
 	}
 }
 

@@ -122,7 +122,7 @@ func (m *mockProfileService) Delete(_ context.Context, _ *entities.DeviceProfile
 	return nil
 }
 
-func (m *mockProfileService) Update(_ context.Context, _ *entities.DeviceProfile) error {
+func (m *mockProfileService) Update(_ context.Context, _ *entities.DeviceProfile, _ ...device.ProfileUpdateOption) error {
 	return nil
 }
 

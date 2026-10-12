@@ -42,18 +42,20 @@ func profileRequestToEntity(req *ProfileRequest) (*entities.DeviceProfile, error
 		return nil, err
 	}
 	profile := &entities.DeviceProfile{
-		ID:            uint64(req.ID),
-		Name:          req.Name,
-		Model:         req.Model,
-		Role:          role,
-		EventLog:      req.EventLog,
-		EKSerial:      req.EKSerial,
-		EKCert:        req.EKCert,
-		MACAddress:    req.MACAddress,
-		Config:        req.Config,
-		Assigned:      req.Assigned,
-		AssignedAt:    req.AssignedAt,
-		TLSServerName: req.TLSServerName,
+		ID:         uint64(req.ID),
+		Name:       req.Name,
+		Model:      req.Model,
+		Role:       role,
+		EventLog:   req.EventLog,
+		EKSerial:   req.EKSerial,
+		EKCert:     req.EKCert,
+		MACAddress: req.MACAddress,
+		Config:     req.Config,
+		Assigned:   req.Assigned,
+		AssignedAt: req.AssignedAt,
+	}
+	if req.TLSServerName != nil {
+		profile.TLSServerName = *req.TLSServerName
 	}
 
 	profile.Zone = req.Zone

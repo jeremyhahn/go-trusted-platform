@@ -471,7 +471,7 @@ func TestForceStopExtended_WithoutOptionalServices(t *testing.T) {
 	require.NoError(t, err)
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() unexpected error: %v", err)
 	}
 }
@@ -491,7 +491,7 @@ func TestForceStopExtended_WithGRPCServer(t *testing.T) {
 	assert.NotNil(t, d.grpcServer)
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() unexpected error: %v", err)
 	}
 }
@@ -514,7 +514,7 @@ func TestForceStopExtended_WithGRPCListenerClosed(t *testing.T) {
 	}
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() unexpected error: %v", err)
 	}
 }
@@ -536,7 +536,7 @@ func TestForceStopExtended_AllServersNil(t *testing.T) {
 	require.NoError(t, err)
 
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() unexpected error: %v", err)
 	}
 }

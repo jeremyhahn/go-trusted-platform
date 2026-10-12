@@ -438,7 +438,21 @@ platformctl device profile update <profile-id> --tls-server-name compute.example
 ```
 
 An update that omits the name keeps the stored one (§3.3), so a console edit
-cannot silently disarm the collector.
+cannot silently disarm the collector. Clearing it is a deliberate act (#462),
+spelled per transport:
+
+| Transport | Clear | Keep |
+|-----------|-------|------|
+| Live REST `PUT /device/profiles/{id}`, dark REST/QUIC update, MCP `profile_update_by_id` | `"tls_server_name": ""` | omit the field, or send `null` |
+| pb `UpdateProfileRequest` (gRPC, Unix, live QUIC) | `clear_tls_server_name: true` | leave the flag unset; an empty `profile.tls_server_name` keeps the name, because proto3 cannot tell unset from empty |
+| CLI | `platformctl device profile update <id> --clear-tls-server-name` | omit both flags |
+
+A pb request that sets `clear_tls_server_name` together with a non-empty
+`profile.tls_server_name` is `InvalidArgument`
+(`device.ErrTLSServerNameClearConflict`), and the CLI rejects
+`--clear-tls-server-name` with `--tls-server-name`. The service learns about
+the clear through the `device.ClearTLSServerName` option on
+`ProfileService.Update`; the entity alone cannot say it.
 
 `POST /api/v1/device/activate` returns
 `{"status":"activated","vlan":200,"transitionedAt":"…"}` (`ActivateResponse`).
@@ -469,12 +483,12 @@ Two consequences worth knowing before writing a client:
 `ProfileService.Update` restores from the stored record when the incoming
 entity carries none: the read-only `pcr_baseline` (§3.6) and
 `tls_server_name` (§3.2) — both are state the attestation collector depends
-on, and neither can be erased by omission on any transport. Every other
-field is replaced. `profile_update_by_id` (MCP), the dark REST/QUIC update
+on, and neither can be erased by omission on any transport; only the explicit
+clear in §3.2 blanks `tls_server_name`. Every other field is replaced. `profile_update_by_id` (MCP), the dark REST/QUIC update
 handlers and `platformctl device profile update` are **partial merges**: they
 fetch the profile and apply only the supplied non-zero fields, with
-`assigned` and `assigned_at` as tri-state pointers where the wire allows so
-"not sent" and "set to zero" are distinguishable. A client that switches
+`assigned`, `assigned_at` and `tls_server_name` as tri-state pointers where
+the wire allows so "not sent" and "set to zero" are distinguishable. A client that switches
 transports and keeps the same payload will get different semantics.
 
 ### 3.4 uint64 ids on the wire
@@ -564,8 +578,8 @@ not come back through any profile route (#448):
 The update route is otherwise a full replace, but the baseline is
 server-owned: `ProfileService.Update` restores `PCRBaseline` (and
 `Assigned` / `AssignedAt`, which only the assign/unassign flows may change,
-and `tls_server_name`, §3.2) from the stored record when the incoming entity
-carries none, the same way `device.Service.Update` restores a device's
+and `tls_server_name` unless the update carries the explicit clear, §3.2)
+from the stored record when the incoming entity carries none, the same way `device.Service.Update` restores a device's
 enrollment material (§3.3). A `PUT` that edits a profile's name or networks
 cannot erase the baseline the verifier captured (#446), and a pb
 `UpdateProfile` that supplies a different baseline does not replace the

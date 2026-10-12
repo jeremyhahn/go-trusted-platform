@@ -16,6 +16,7 @@ package device
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"time"
 
@@ -42,6 +43,44 @@ func (e ErrProfileVLANsNotDistinct) Error() string {
 	return "device: invalid profile: provisioning and admitted networks share VLAN " +
 		strconv.FormatUint(uint64(e.VLAN), 10) +
 		"; the provisioning VLAN is the fail-closed revert target and must differ"
+}
+
+// ErrTLSServerNameClearConflict is returned when one update both names a
+// TLSServerName and asks for it to be cleared: the request contradicts
+// itself, and guessing which half was meant could leave the attestation
+// collector verifying nodes against the wrong name.
+type ErrTLSServerNameClearConflict struct{}
+
+func (ErrTLSServerNameClearConflict) Error() string {
+	return "device: invalid profile update: tls_server_name is both set and cleared"
+}
+
+// ProfileUpdateOption states an intent the entity handed to
+// ProfileService.Update cannot carry: an empty field there is an omission
+// and keeps the stored value, so asking for the empty value needs a
+// separate, explicit signal.
+type ProfileUpdateOption uint8
+
+const (
+	// ClearTLSServerName blanks the stored TLSServerName, so the
+	// attestation collector verifies nodes of the profile against each
+	// device's own FQDN again (#462). Without it an empty TLSServerName
+	// keeps the stored name (#430).
+	ClearTLSServerName ProfileUpdateOption = iota + 1
+)
+
+// ApplyTLSServerName applies an update request's tri-state tls_server_name
+// to profile and returns the Update options it needs: nil keeps the stored
+// name, a value replaces it, and "" clears it (#462).
+func ApplyTLSServerName(profile *entities.DeviceProfile, name *string) []ProfileUpdateOption {
+	if name == nil {
+		return nil
+	}
+	profile.TLSServerName = *name
+	if *name == "" {
+		return []ProfileUpdateOption{ClearTLSServerName}
+	}
+	return nil
 }
 
 // ErrRetiredNetworkKey is returned for a profile that still keys a network
@@ -199,10 +238,15 @@ func (s *ProfileService) Delete(ctx context.Context, profile *entities.DevicePro
 	return nil
 }
 
-// Update updates an existing device profile.
-func (s *ProfileService) Update(ctx context.Context, profile *entities.DeviceProfile) error {
+// Update updates an existing device profile. An empty TLSServerName keeps
+// the stored name unless opts carries ClearTLSServerName.
+func (s *ProfileService) Update(ctx context.Context, profile *entities.DeviceProfile, opts ...ProfileUpdateOption) error {
 	if profile == nil || profile.ID == 0 {
 		return ErrInvalidProfileID{}
+	}
+	clearTLSServerName := slices.Contains(opts, ClearTLSServerName)
+	if clearTLSServerName && profile.TLSServerName != "" {
+		return ErrTLSServerNameClearConflict{}
 	}
 
 	// Validated up front, ahead of the existence check, so an invalid
@@ -238,8 +282,9 @@ func (s *ProfileService) Update(ctx context.Context, profile *entities.DevicePro
 	// form. A console edit that does not know the field must not erase the
 	// name the attestation collector verifies node certificates against
 	// (#430): without it the collector fails closed for every device on the
-	// profile. Omission fills from the stored record; a supplied value wins.
-	if profile.TLSServerName == "" {
+	// profile. Omission fills from the stored record; a supplied value wins,
+	// and only the explicit ClearTLSServerName option blanks it (#462).
+	if profile.TLSServerName == "" && !clearTLSServerName {
 		profile.TLSServerName = existing.TLSServerName
 	}
 	if !profile.Assigned && existing.Assigned {

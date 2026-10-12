@@ -264,8 +264,10 @@ Update profile properties by ID. Partial update: only supplied fields
 replace stored values. Accepts the same pre-boot record fields as
 `profile_create` (`ek_serial`, `ek_cert`, `mac_address`, `config`,
 `assigned`, `assigned_at`, `tls_server_name`); an unparseable `ek_cert` is
-rejected with a typed validation error, and an omitted `tls_server_name`
-keeps the stored name.
+rejected with a typed validation error. An omitted (or `null`)
+`tls_server_name` keeps the stored name, and an explicit `""` clears it, so
+the collector verifies each node against its own FQDN again
+(`docs/device/api.md` §3.2).
 
 ```json
 {

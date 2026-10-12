@@ -144,6 +144,10 @@ func TestQUICAdapter_EveryOperationIsClassified(t *testing.T) {
 		{"GetWorkloadChainHistory", func() error { _, e := a.GetWorkloadChainHistory(ctx, GetWorkloadChainHistoryOptions{}); return e }},
 		{"VerifyWorkloadChain", func() error { _, e := a.VerifyWorkloadChain(ctx, VerifyWorkloadChainOptions{}); return e }},
 		{"GetWorkloadChainStats", func() error { _, e := a.GetWorkloadChainStats(ctx, GetWorkloadChainStatsOptions{}); return e }},
+		{"ListDeviceReports", func() error { _, e := a.ListDeviceReports(ctx); return e }},
+		{"GetDeviceReport", func() error { _, e := a.GetDeviceReport(ctx, DeviceReportOptions{}); return e }},
+		{"RefreshDeviceReport", func() error { _, e := a.RefreshDeviceReport(ctx, DeviceReportOptions{}); return e }},
+		{"DescribeCallerPolicy", func() error { _, e := a.DescribeCallerPolicy(ctx); return e }},
 	}
 
 	var withOpcode, withoutSurface []string

@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -67,9 +68,34 @@ func TestDeviceHandler_TLSServerName_UpdateReplaces(t *testing.T) {
 	profiles.profiles[9] = &entities.DeviceProfile{ID: 9, Name: "gw", TLSServerName: "old"}
 
 	var updated ProfileUpdateResponse
-	quicDeviceCall(t, handler, quicwire.OpDeviceSetProfile, &ProfileUpdateRequest{ID: 9, TLSServerName: testTLSServerName}, &updated)
+	name := testTLSServerName
+	quicDeviceCall(t, handler, quicwire.OpDeviceSetProfile, &ProfileUpdateRequest{ID: 9, TLSServerName: &name}, &updated)
 	assert.Equal(t, testTLSServerName, updated.Profile.TLSServerName)
 	assert.Equal(t, testTLSServerName, profiles.profiles[9].TLSServerName)
+}
+
+// TestDeviceHandler_TLSServerName_ExplicitClear is the dark QUIC #462 round
+// trip: set → clear with "" → get shows none, the clear surviving the codec
+// as a present-but-empty name and reaching the service as the explicit
+// option, while an update that omits the name asks for no clear.
+func TestDeviceHandler_TLSServerName_ExplicitClear(t *testing.T) {
+	handler, _, profiles := createTestDeviceHandler()
+	profiles.profiles[11] = &entities.DeviceProfile{ID: 11, Name: "compute", TLSServerName: testTLSServerName}
+
+	var updated ProfileUpdateResponse
+	quicDeviceCall(t, handler, quicwire.OpDeviceSetProfile, &ProfileUpdateRequest{ID: 11, Model: "X10SDV"}, &updated)
+	assert.NotContains(t, profiles.updateOpts, device.ClearTLSServerName)
+	assert.Equal(t, testTLSServerName, updated.Profile.TLSServerName, "an update that omits tls_server_name must not erase it")
+
+	empty := ""
+	var cleared ProfileUpdateResponse
+	quicDeviceCall(t, handler, quicwire.OpDeviceSetProfile, &ProfileUpdateRequest{ID: 11, TLSServerName: &empty}, &cleared)
+	assert.Contains(t, profiles.updateOpts, device.ClearTLSServerName, "the clear must reach the service explicitly")
+	assert.Empty(t, cleared.Profile.TLSServerName)
+
+	var got ProfileGetResponse
+	quicDeviceCall(t, handler, quicwire.OpDeviceGetProfile, &ProfileGetRequest{ID: 11}, &got)
+	assert.Empty(t, got.Profile.TLSServerName, "get after clear still reports a name")
 }
 
 // TestProfileToInfo_CarriesPCRBaseline pins the serialiser every profile

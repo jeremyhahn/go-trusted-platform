@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"fmt"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
@@ -292,6 +293,28 @@ func (a *QUICAdapter) VerifyWorkloadChain(ctx context.Context, opts VerifyWorklo
 func (a *QUICAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error) {
 	_ = opts
 	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetWorkloadChainStats"}
+}
+
+// The device-report verbs have no QUIC opcode (#386).
+
+// ListDeviceReports has no QUIC wire surface.
+func (a *QUICAdapter) ListDeviceReports(_ context.Context) (*DeviceReportsResult, error) {
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "ListDeviceReports"}
+}
+
+// GetDeviceReport has no QUIC wire surface.
+func (a *QUICAdapter) GetDeviceReport(_ context.Context, _ DeviceReportOptions) (*DeviceReport, error) {
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "GetDeviceReport"}
+}
+
+// RefreshDeviceReport has no QUIC wire surface.
+func (a *QUICAdapter) RefreshDeviceReport(_ context.Context, _ DeviceReportOptions) (*RefreshDeviceReportResult, error) {
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "RefreshDeviceReport"}
+}
+
+// DescribeCallerPolicy has no QUIC wire surface.
+func (a *QUICAdapter) DescribeCallerPolicy(_ context.Context) (*calleradmission.Description, error) {
+	return nil, surface.ErrNoSurface{Transport: "QUIC", Operation: "DescribeCallerPolicy"}
 }
 
 // Verify QUICAdapter implements AttestationCommands

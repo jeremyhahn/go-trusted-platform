@@ -161,13 +161,15 @@ func (s *Server) Start() error {
 
 // Stop gracefully stops the QUIC server
 func (s *Server) Stop() error {
-	if !s.running.Load() {
+	// Claim the stop atomically so concurrent callers cannot both pass the
+	// check and tear the server down twice: exactly one wins, the rest get
+	// ErrServerNotRunning.
+	if !s.running.CompareAndSwap(true, false) {
 		return ErrServerNotRunning
 	}
 
 	s.logger.Info("Stopping QUIC server")
 
-	s.running.Store(false)
 	s.cancel()
 
 	// Swap the listener out before closing it, so ListenAddr never reads a

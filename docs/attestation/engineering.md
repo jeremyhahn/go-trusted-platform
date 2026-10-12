@@ -245,7 +245,7 @@ warms from the store at start and keeps each report's original `CollectedAt`.
 | Layer | Location | Covers |
 |---|---|---|
 | Unit | `pkg/attestation/**/*_test.go`, `pkg/ima/*_test.go` | Merkle chain, quote verification, PCR comparison, config validation, error mapping |
-| Integration | `test/integration/attestation/` | End-to-end host, VM and container attestation against a daemon |
+| Integration | `test/integration/attestation/` | End-to-end host, VM and container attestation against a daemon; the device-report and caller-policy verbs on every transport ([CLI §7](cli.md#7-parity-gap)) |
 
 `SoftwareTPM` is the fixture that makes unit tests hardware-free. Integration
 tests that need a *real* TPM run against the development cluster, not CI.

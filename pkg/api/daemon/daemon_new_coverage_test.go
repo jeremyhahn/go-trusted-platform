@@ -560,8 +560,7 @@ func TestForceStop_BasicForceStop(t *testing.T) {
 	require.NoError(t, err)
 
 	err = d.ForceStop()
-	// May return "server is not running" if shutdown handler already stopped it
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() unexpected error: %v", err)
 	}
 }
@@ -591,11 +590,8 @@ func TestForceStop_WithRESTServer(t *testing.T) {
 	err = d.Start(ctx)
 	require.NoError(t, err)
 
-	// Give REST server time to start
-	time.Sleep(50 * time.Millisecond)
-
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() unexpected error: %v", err)
 	}
 }
@@ -619,11 +615,8 @@ func TestForceStop_WithMCPServer(t *testing.T) {
 	err = d.Start(ctx)
 	require.NoError(t, err)
 
-	// Give MCP server time to start
-	time.Sleep(50 * time.Millisecond)
-
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() unexpected error: %v", err)
 	}
 }
@@ -670,7 +663,7 @@ func TestForceStop_WithNilOptionalServers(t *testing.T) {
 
 	// ForceStop should not panic with nil servers
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() unexpected error: %v", err)
 	}
 }
@@ -1485,11 +1478,8 @@ func TestForceStop_WithAllOptionalServers(t *testing.T) {
 	err = d.Start(ctx)
 	require.NoError(t, err)
 
-	// Give servers time to start
-	time.Sleep(100 * time.Millisecond)
-
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() unexpected error: %v", err)
 	}
 }
@@ -1510,7 +1500,7 @@ func TestForceStop_WithServicesSet(t *testing.T) {
 
 	// ForceStop should work even without optional services
 	err = d.ForceStop()
-	if err != nil && err.Error() != "server is not running" {
+	if err != nil {
 		t.Errorf("ForceStop() unexpected error: %v", err)
 	}
 }

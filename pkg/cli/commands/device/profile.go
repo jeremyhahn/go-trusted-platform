@@ -58,6 +58,8 @@ type profileFlags struct {
 	// tlsServerName is the certificate name the attestation collector
 	// verifies a node of this profile against (#430).
 	tlsServerName string
+	// clearTLSServerName blanks the stored tlsServerName on update (#462).
+	clearTLSServerName bool
 }
 
 // registerProfileFlags binds the shared profile field flags onto cmd.
@@ -178,7 +180,10 @@ Examples:
 
   # Name the certificate the attestation collector verifies nodes of this
   # profile against (fleets whose node certificates carry a role name)
-  platformctl device profile update 123 --tls-server-name compute.example.internal`,
+  platformctl device profile update 123 --tls-server-name compute.example.internal
+
+  # Clear it again, so the collector verifies nodes against their own FQDN
+  platformctl device profile update 123 --clear-tls-server-name`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -191,6 +196,8 @@ Examples:
 	}
 
 	registerProfileFlags(cmd, &pf)
+	cmd.Flags().BoolVar(&pf.clearTLSServerName, "clear-tls-server-name", false, "clear the profile's TLS server name so the attestation collector verifies nodes against their own FQDN")
+	cmd.MarkFlagsMutuallyExclusive("tls-server-name", "clear-tls-server-name")
 
 	return cmd
 }
@@ -273,7 +280,12 @@ func runProfileUpdate(flags *cli.CommonFlags, id uint64, pf *profileFlags) error
 		return err
 	}
 
-	updated, err := deviceClient.UpdateProfile(ctx, profile)
+	var opts []device.ProfileUpdateOption
+	if pf.clearTLSServerName {
+		opts = append(opts, device.WithClearTLSServerName())
+	}
+
+	updated, err := deviceClient.UpdateProfile(ctx, profile, opts...)
 	if err != nil {
 		return ErrProfileUpdateFailed{ID: id, Cause: err}
 	}
@@ -317,6 +329,9 @@ func applyProfileUpdateFlags(profile *platformv1.DeviceProfile, pf *profileFlags
 	}
 	if pf.tlsServerName != "" {
 		profile.TlsServerName = pf.tlsServerName
+	}
+	if pf.clearTLSServerName {
+		profile.TlsServerName = ""
 	}
 	return nil
 }

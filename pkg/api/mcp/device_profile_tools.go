@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
@@ -89,8 +90,9 @@ type DeviceProfileProvider interface {
 	// profile count.
 	DeviceProfileList(ctx context.Context, page, pageSize int) ([]*entities.DeviceProfile, int, error)
 
-	// DeviceProfileUpdate replaces an existing device profile.
-	DeviceProfileUpdate(ctx context.Context, profile *entities.DeviceProfile) (*entities.DeviceProfile, error)
+	// DeviceProfileUpdate replaces an existing device profile. opts carries
+	// the intents the entity cannot, such as device.ClearTLSServerName.
+	DeviceProfileUpdate(ctx context.Context, profile *entities.DeviceProfile, opts ...device.ProfileUpdateOption) (*entities.DeviceProfile, error)
 
 	// DeviceProfileDelete removes a device profile by ID.
 	DeviceProfileDelete(ctx context.Context, id uint64) error
@@ -144,8 +146,9 @@ type deviceProfileToolRequest struct {
 	// verifies a node of this profile against (#430). There is deliberately
 	// no pcr_baseline field: the baseline is read-only, so a pcr_baseline
 	// argument is dropped by the typed decode and never reaches the entity
-	// (#373, #448).
-	TLSServerName string `json:"tls_server_name"`
+	// (#373, #448). A pointer so profile_update_by_id can tell an omitted
+	// name (keep) from "" (clear, #462).
+	TLSServerName *string `json:"tls_server_name"`
 }
 
 // decodeDeviceProfileToolRequest binds the raw tool arguments onto the
@@ -271,13 +274,15 @@ func (r *ToolRegistry) executeDeviceProfileCreate(ctx context.Context, args map[
 		EKCert:                req.EKCert,
 		MACAddress:            req.MACAddress,
 		Config:                req.Config,
-		TLSServerName:         req.TLSServerName,
 	}
 	if req.Assigned != nil {
 		profile.Assigned = *req.Assigned
 	}
 	if req.AssignedAt != nil {
 		profile.AssignedAt = *req.AssignedAt
+	}
+	if req.TLSServerName != nil {
+		profile.TLSServerName = *req.TLSServerName
 	}
 
 	created, err := p.DeviceProfileCreate(ctx, profile)
@@ -417,11 +422,10 @@ func (r *ToolRegistry) executeDeviceProfileUpdate(ctx context.Context, args map[
 	if req.AssignedAt != nil {
 		profile.AssignedAt = *req.AssignedAt
 	}
-	if req.TLSServerName != "" {
-		profile.TLSServerName = req.TLSServerName
-	}
+	// tls_server_name is tri-state too; "" clears it explicitly (#462).
+	opts := device.ApplyTLSServerName(profile, req.TLSServerName)
 
-	updated, err := p.DeviceProfileUpdate(ctx, profile)
+	updated, err := p.DeviceProfileUpdate(ctx, profile, opts...)
 	if err != nil {
 		return nil, err
 	}

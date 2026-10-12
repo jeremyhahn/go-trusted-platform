@@ -37,7 +37,7 @@ const testTLSServerName = "compute.example.internal"
 // the one response mapping both carry tls_server_name (#430), and neither
 // invents one.
 func TestProfileMapping_CarriesTLSServerName(t *testing.T) {
-	profile, err := profileRequestToEntity(&ProfileRequest{ID: 1, Name: "compute", Role: "worker", TLSServerName: testTLSServerName})
+	profile, err := profileRequestToEntity(&ProfileRequest{ID: 1, Name: "compute", Role: "worker", TLSServerName: new(testTLSServerName)})
 	require.NoError(t, err)
 	assert.Equal(t, testTLSServerName, profile.TLSServerName)
 
@@ -95,4 +95,14 @@ func TestCRUDHandler_UpdateProfile_PreservesTLSServerName(t *testing.T) {
 	stored, err = profiles.Get(context.Background(), 4480)
 	require.NoError(t, err)
 	assert.Equal(t, "gw.example.internal", stored.TLSServerName)
+
+	// #462: null is the same as omission; only an explicit "" clears.
+	resp = put(`{"name": "compute-renamed", "role": "worker", "tls_server_name": null}`)
+	assert.Equal(t, "gw.example.internal", resp.TLSServerName, "null must keep the stored name")
+
+	resp = put(`{"name": "compute-renamed", "role": "worker", "tls_server_name": ""}`)
+	assert.Empty(t, resp.TLSServerName, "an explicit empty name must clear it")
+	stored, err = profiles.Get(context.Background(), 4480)
+	require.NoError(t, err)
+	assert.Empty(t, stored.TLSServerName, "the clear must reach storage, not be restored")
 }

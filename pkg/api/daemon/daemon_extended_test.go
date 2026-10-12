@@ -305,8 +305,7 @@ func TestDaemon_ForceStopWithNilServices(t *testing.T) {
 
 		// ForceStop should not panic with nil services
 		err = d.ForceStop()
-		// May return server error if already stopped
-		if err != nil && err.Error() != "server is not running" {
+		if err != nil {
 			t.Errorf("ForceStop() unexpected error: %v", err)
 		}
 	})
