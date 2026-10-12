@@ -175,6 +175,33 @@ func TestContextWithUnixCredentials(t *testing.T) {
 	}
 }
 
+// An in-process caller is this process: the identity is the one the kernel
+// would report for it over SO_PEERCRED.
+func TestContextWithProcessCredentials_IsThisProcess(t *testing.T) {
+	got, ok := UnixCredentialsFromContext(ContextWithProcessCredentials(context.Background()))
+	if !ok {
+		t.Fatal("expected credentials to be found in context")
+	}
+	want := UnixCredentials{PID: int32(os.Getpid()), UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}
+	if got != want {
+		t.Errorf("credentials = %+v, want %+v", got, want)
+	}
+}
+
+// Credentials already on the caller's context do not survive: the process
+// identity replaces them.
+func TestContextWithProcessCredentials_ReplacesTheCallersClaim(t *testing.T) {
+	claimed := ContextWithUnixCredentials(context.Background(), UnixCredentials{PID: 1, UID: uint32(os.Geteuid()) + 1, GID: 0})
+
+	got, ok := UnixCredentialsFromContext(ContextWithProcessCredentials(claimed))
+	if !ok {
+		t.Fatal("expected credentials to be found in context")
+	}
+	if got.UID != uint32(os.Geteuid()) || got.PID != int32(os.Getpid()) {
+		t.Errorf("credentials = %+v, want this process's", got)
+	}
+}
+
 func TestUnixCredentialsFromContext_NotFound(t *testing.T) {
 	ctx := context.Background()
 

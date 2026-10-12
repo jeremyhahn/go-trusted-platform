@@ -40,10 +40,11 @@ import (
 
 // Action names of the platform token scope vocabulary ("resource:action").
 const (
-	actionRead   = "read"
-	actionWrite  = "write"
-	actionDelete = "delete"
-	actionAdmin  = "admin"
+	actionRead    = "read"
+	actionWrite   = "write"
+	actionDelete  = "delete"
+	actionAdmin   = "admin"
+	actionSignCSR = "sign-csr"
 )
 
 // ErrOperationNotClassified is returned for an opcode, or a category
@@ -709,6 +710,7 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 		quicwire.KMSSubSetKeyPolicy:           kmsWrite,
 		quicwire.KMSSubGetKeyPolicy:           kmsRead,
 		quicwire.KMSSubGetSupportedAlgorithms: kmsRead,
+		quicwire.KMSSubSignCSR:                CASignCSRPermission,
 	},
 
 	quicwire.OpSecretsCategory: {

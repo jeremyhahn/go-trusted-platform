@@ -41,7 +41,12 @@ type fakeDHCPServer struct {
 	yiaddr   net.IP
 	// silent servers never answer; strangers answer without option 43.
 	silent bool
-	seen   chan dhcpv4.MessageType
+	// noServerID leaves the server identifier out of every reply.
+	noServerID bool
+	// noise precedes each reply with a datagram that is not DHCP and a
+	// reply to another transaction.
+	noise bool
+	seen  chan dhcpv4.MessageType
 }
 
 // newFakeDHCPServer starts a server after applying configure, so the serving
@@ -92,7 +97,9 @@ func (s *fakeDHCPServer) serve() {
 			continue
 		}
 		reply.ServerIPAddr = s.siaddr
-		reply.UpdateOption(dhcpv4.OptServerIdentifier(net.ParseIP("127.0.0.1").To4()))
+		if !s.noServerID {
+			reply.UpdateOption(dhcpv4.OptServerIdentifier(net.ParseIP("127.0.0.1").To4()))
+		}
 		if !s.proxy {
 			reply.YourIPAddr = s.yiaddr
 			reply.UpdateOption(dhcpv4.OptSubnetMask(net.CIDRMask(24, 32)))
@@ -102,6 +109,13 @@ func (s *fakeDHCPServer) serve() {
 			reply.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionVendorSpecificInformation, s.option43))
 		}
 		reply.UpdateOption(dhcpv4.OptClassIdentifier("PXEClient"))
+		if s.noise {
+			_, _ = s.conn.WriteTo([]byte("not dhcp"), from)
+			stranger := *reply
+			stranger.TransactionID = dhcpv4.TransactionID{0xde, 0xad, 0xbe, 0xef}
+			stranger.YourIPAddr = net.ParseIP("10.99.99.200").To4()
+			_, _ = s.conn.WriteTo(stranger.ToBytes(), from)
+		}
 		_, _ = s.conn.WriteTo(reply.ToBytes(), from)
 	}
 }
@@ -313,6 +327,142 @@ func TestIsTFTPNotFound(t *testing.T) {
 	assert.False(t, isTFTPNotFound(errors.New("code: 2, message: Access violation")))
 	assert.False(t, isTFTPNotFound(nil))
 }
+
+// A busy segment carries datagrams that are not DHCP and replies to other
+// clients; the bootloader takes only a reply to its own transaction.
+func TestProbe_IgnoresRepliesToOtherTransactions(t *testing.T) {
+	server := newFakeDHCPServer(t, func(s *fakeDHCPServer) { s.noise = true })
+	opts := loopbackOptions(t, server, tftpTree(t, stageTree(t)))
+
+	report, err := Probe(context.Background(), opts)
+	require.NoError(t, err)
+	require.NotNil(t, report.Lease)
+	assert.Equal(t, "10.99.99.100", report.Lease.IP.String(), "not the address offered to another transaction")
+}
+
+func TestProbe_OfferNamingNoTFTPServer(t *testing.T) {
+	server := newFakeDHCPServer(t, func(s *fakeDHCPServer) {
+		s.siaddr = net.IPv4zero.To4()
+		s.noServerID = true
+	})
+	opts := loopbackOptions(t, server, 0)
+
+	report, err := Probe(context.Background(), opts)
+	var dhcpErr *DHCPError
+	require.ErrorAs(t, err, &dhcpErr)
+	assert.Equal(t, "offer", dhcpErr.Stage)
+	assert.ErrorIs(t, err, errNoTFTPServer)
+	assert.Nil(t, report.Offer.TFTPServer)
+}
+
+// Without DialDHCP the probe opens the bootloader's own socket on the named
+// interface; an interface that cannot be bound fails at the socket stage and
+// names the interface.
+func TestProbe_UnbindableInterface(t *testing.T) {
+	model, err := LookupModel("rpi4")
+	require.NoError(t, err)
+
+	_, err = Probe(context.Background(), Options{Interface: "no-such-if0", Identity: pi4(), Model: model})
+	var dhcpErr *DHCPError
+	require.ErrorAs(t, err, &dhcpErr)
+	assert.Equal(t, "socket", dhcpErr.Stage)
+	var sockErr *SocketError
+	require.ErrorAs(t, err, &sockErr)
+	assert.Equal(t, "SO_BINDTODEVICE(no-such-if0)", sockErr.Option)
+	assert.Contains(t, err.Error(), "no-such-if0")
+}
+
+// A TFTP server that stops answering is a failure at the file the
+// bootloader asked for; it is not "not found", so the root is not tried.
+func TestProbe_StalledTFTPServer(t *testing.T) {
+	stalled, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { stalled.Close() })
+	opts := loopbackOptions(t, newFakeDHCPServer(t), stalled.LocalAddr().(*net.UDPAddr).Port)
+	opts.TFTPFileTimeout = 200 * time.Millisecond
+
+	report, err := Probe(context.Background(), opts)
+	var tftpErr *TFTPError
+	require.ErrorAs(t, err, &tftpErr)
+	assert.Equal(t, "9ffefdef/start4.elf", tftpErr.File)
+	var timeout *TimeoutError
+	require.ErrorAs(t, err, &timeout)
+	assert.Equal(t, "tftp 9ffefdef/start4.elf", timeout.What)
+	require.Len(t, report.Files, 1)
+	assert.Equal(t, "9ffefdef/start4.elf", report.Files[0].Path)
+}
+
+func TestOptions_DefaultsAreTheBootloaders(t *testing.T) {
+	o := (&Options{}).withDefaults()
+
+	assert.Equal(t, Option43Match, o.Option43)
+	assert.Equal(t, DHCPTimeout, o.DHCPTimeout)
+	assert.Equal(t, DHCPRequestTimeout, o.DHCPRequestTimeout)
+	assert.Equal(t, TFTPFileTimeout, o.TFTPFileTimeout)
+	assert.Equal(t, TFTPRetries, o.TFTPRetries)
+	assert.Equal(t, TFTPRetryInterval, o.TFTPRetryInterval)
+	assert.Equal(t, tftpPort, o.TFTPPort)
+	assert.NotNil(t, o.Logger)
+	assert.NotNil(t, o.DialDHCP)
+	assert.Equal(t, "255.255.255.255:67", o.DHCPServerAddr.String(), "the limited broadcast to the server port")
+
+	set := Options{Option43: "custom", TFTPPort: 6969, DHCPTimeout: time.Second}
+	o = set.withDefaults()
+	assert.Equal(t, "custom", o.Option43, "a set field is kept")
+	assert.Equal(t, 6969, o.TFTPPort)
+	assert.Equal(t, time.Second, o.DHCPTimeout)
+}
+
+func TestTFTPServerOf(t *testing.T) {
+	offer := func(siaddr net.IP, opts ...dhcpv4.Option) *dhcpv4.DHCPv4 {
+		t.Helper()
+		p, err := dhcpv4.New()
+		require.NoError(t, err)
+		p.ServerIPAddr = siaddr
+		for _, o := range opts {
+			p.UpdateOption(o)
+		}
+		return p
+	}
+	zero := net.IPv4zero.To4()
+	serverID := dhcpv4.OptServerIdentifier(net.ParseIP("10.0.0.1").To4())
+
+	cases := []struct {
+		name  string
+		offer *dhcpv4.DHCPv4
+		want  string
+	}{
+		{"siaddr first", offer(net.ParseIP("10.0.0.9").To4(), dhcpv4.OptTFTPServerName("10.0.0.5"), serverID), "10.0.0.9"},
+		{"then option 66 as an address", offer(zero, dhcpv4.OptTFTPServerName("10.0.0.5"), serverID), "10.0.0.5"},
+		{"option 66 as a name is not resolved", offer(zero, dhcpv4.OptTFTPServerName("tftp.example"), serverID), "10.0.0.1"},
+		{"then the server identifier", offer(zero, serverID), "10.0.0.1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tftpServerOf(tc.offer).String())
+		})
+	}
+	assert.Nil(t, tftpServerOf(offer(zero)), "an offer naming no server")
+}
+
+func TestFirstIP(t *testing.T) {
+	assert.Nil(t, firstIP(nil), "an ACK without a router")
+	assert.Equal(t, "10.0.0.1", firstIP([]net.IP{net.ParseIP("10.0.0.1"), net.ParseIP("10.0.0.2")}).String())
+}
+
+// A read deadline surfaces as a net.Error timeout that need not wrap
+// os.ErrDeadlineExceeded; both end the wait, other errors do not.
+func TestIsTimeout(t *testing.T) {
+	assert.True(t, isTimeout(&net.OpError{Op: "read", Err: timeoutError{}}))
+	assert.False(t, isTimeout(&net.OpError{Op: "read", Err: errors.New("connection refused")}))
+	assert.False(t, isTimeout(errors.New("closed")))
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
 
 func mustRead(t *testing.T, path string) []byte {
 	t.Helper()

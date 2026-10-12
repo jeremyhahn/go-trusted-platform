@@ -23,6 +23,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -151,6 +152,19 @@ type Config struct {
 	// When set, the daemon will initialize the SDN service and register
 	// SDN, Overlay, and Gateway gRPC services.
 	OVSSocketPath string `yaml:"ovs_socket_path"`
+}
+
+// csrKMS returns the platform KMS a CSR's key is checked against before the
+// CA certifies it, or nil when the daemon runs without one — CSR signing then
+// fails closed.
+func (c *Config) csrKMS() issuance.KMS {
+	if c.App == nil {
+		return nil
+	}
+	if kms := c.App.KMS(); kms != nil {
+		return kms
+	}
+	return nil
 }
 
 // MCPConfig holds MCP server configuration

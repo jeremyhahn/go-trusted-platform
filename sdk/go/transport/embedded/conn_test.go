@@ -113,6 +113,56 @@ func (s *errorDaemonServer) GetStatus(ctx context.Context, req *platformv1.GetSt
 	return nil, status.Error(codes.Internal, "test error from handler")
 }
 
+// callerKey marks the context a CallerContext hook returns.
+type callerKey struct{}
+
+// callerDaemonServer reports, as its version, the caller identity the
+// context reached it with.
+type callerDaemonServer struct {
+	platformv1.UnimplementedPlatformDaemonServer
+}
+
+func (s *callerDaemonServer) GetVersion(ctx context.Context, req *platformv1.GetVersionRequest) (*platformv1.GetVersionResponse, error) {
+	caller, ok := ctx.Value(callerKey{}).(string)
+	if !ok {
+		caller = "none"
+	}
+	return &platformv1.GetVersionResponse{Version: caller}, nil
+}
+
+// The embedder states who is calling, as a network transport's interceptors
+// do; the hook's context is the one the service sees.
+func TestInvoke_CallerContextReachesTheHandler(t *testing.T) {
+	conn := newEmbeddedClientConn(&ServiceRegistry{
+		Daemon: &callerDaemonServer{},
+		CallerContext: func(ctx context.Context) context.Context {
+			return context.WithValue(ctx, callerKey{}, "the embedder")
+		},
+	})
+
+	reply := &platformv1.GetVersionResponse{}
+	if err := conn.Invoke(context.Background(), platformv1.PlatformDaemon_GetVersion_FullMethodName, &platformv1.GetVersionRequest{}, reply); err != nil {
+		t.Fatalf("Invoke() error: %v", err)
+	}
+	if reply.GetVersion() != "the embedder" {
+		t.Fatalf("caller = %q, want the embedder", reply.GetVersion())
+	}
+}
+
+// Without a hook the call carries no identity, and a service that checks
+// one refuses it.
+func TestInvoke_NoCallerContextAddsNoIdentity(t *testing.T) {
+	conn := newEmbeddedClientConn(&ServiceRegistry{Daemon: &callerDaemonServer{}})
+
+	reply := &platformv1.GetVersionResponse{}
+	if err := conn.Invoke(context.Background(), platformv1.PlatformDaemon_GetVersion_FullMethodName, &platformv1.GetVersionRequest{}, reply); err != nil {
+		t.Fatalf("Invoke() error: %v", err)
+	}
+	if reply.GetVersion() != "none" {
+		t.Fatalf("caller = %q, want none", reply.GetVersion())
+	}
+}
+
 func TestNewStream_ReturnsUnimplemented(t *testing.T) {
 	registry := testRegistry()
 	conn := newEmbeddedClientConn(registry)

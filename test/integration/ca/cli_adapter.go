@@ -439,14 +439,47 @@ func (c *CLIAdapter) IssueCertificate(ctx context.Context, opts IssueCertificate
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca issue", Err: err}
 	}
+	return parseCLIIssueResult(output, "ca issue")
+}
 
-	// CLI prints *casvc.IssueCertificateResult: {certificate: {...}}
+// SignCSR certifies opts.CSRPEM through 'ca sign-csr', which reads the CSR
+// from a file.
+func (c *CLIAdapter) SignCSR(ctx context.Context, opts SignCSROptions) (*IssueCertificateResult, error) {
+	csrFile, err := os.CreateTemp("", "ca-sign-csr-*.csr")
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca sign-csr", Err: err}
+	}
+	defer os.Remove(csrFile.Name())
+
+	if _, err := csrFile.WriteString(opts.CSRPEM); err != nil {
+		csrFile.Close()
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca sign-csr", Err: err}
+	}
+	if err := csrFile.Close(); err != nil {
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca sign-csr", Err: err}
+	}
+
+	args := []string{"ca", "sign-csr", csrFile.Name(), "--output", "json"}
+	if opts.ValidDays > 0 {
+		args = append(args, "--valid-days", fmt.Sprintf("%d", opts.ValidDays))
+	}
+
+	output, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca sign-csr", Err: err}
+	}
+	return parseCLIIssueResult(output, "ca sign-csr")
+}
+
+// parseCLIIssueResult decodes the *casvc.IssueCertificateResult that both
+// 'ca issue' and 'ca sign-csr' print: {certificate: {...}}.
+func parseCLIIssueResult(output []byte, method string) (*IssueCertificateResult, error) {
 	var resp struct {
 		Certificate *cliCertificate `json:"certificate,omitempty"`
 	}
 
 	if err := json.Unmarshal(output, &resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "ca issue", Err: err}
+		return nil, ErrCallFailed{Protocol: "CLI", Method: method, Err: err}
 	}
 
 	result := &IssueCertificateResult{}

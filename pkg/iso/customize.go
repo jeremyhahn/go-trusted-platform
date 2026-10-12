@@ -2488,8 +2488,19 @@ func (c *Customizer) createAutoinstallOverlay(initramfsDir string) error {
 	// Falls back to /dev/console which always routes to the active console.
 	wrapperScript := `#!/bin/sh
 # Autoinstall wrapper - launched by BusyBox init after switch_root
-# Redirect all output to serial console for visibility in logs
-exec > /dev/ttyS0 2>&1 || exec > /dev/console 2>&1 || true
+# Redirect all output to the kernel's primary console for visibility in logs.
+# The last entry of /sys/class/tty/console/active is the primary console: ttyS0
+# on an x86 serial console, ttyAMA0 or ttyS1 on a Raspberry Pi, tty0 on a
+# machine with only a display.
+console=/dev/console
+if [ -r /sys/class/tty/console/active ]; then
+    active=$(cat /sys/class/tty/console/active)
+    active=${active##* }
+    if [ -n "$active" ] && [ -c "/dev/$active" ]; then
+        console="/dev/$active"
+    fi
+fi
+exec > "$console" 2>&1 || exec > /dev/console 2>&1 || true
 
 echo "[autoinstall] run-autoinstall.sh starting (PID $$)"
 echo "[autoinstall] run-autoinstall.sh starting (PID $$)" > /dev/kmsg 2>/dev/null

@@ -9,10 +9,16 @@
 > boot, a signed UKI at `EFI/BOOT/BOOTAA64.EFI`, and the unchanged
 > platform-initrd / firstboot / platformd first boot with the LUKS key sealed
 > to the Infineon SLB9670 on SPI. The root of trust of that image is the
-> U-Boot binary on the unauthenticated FAT partition. Everything below —
-> OTP-based root of trust, `boot.sig` signed firmware, A/B slots, OTA — is
-> the design that has not been built, and nothing here should be read as a
-> description of the shipped image.
+> U-Boot binary on the unauthenticated FAT partition. One part of the signed
+> first stage is now built: the **netboot pipeline's signed HTTP boot**
+> (`boot.img` + `boot.sig` signed by a KMS-held fleet key, served to the
+> EEPROM, verified by `platformctl bootstrap probe rpi-http`), whose runbook
+> is [docs/factory-image/user.md](../factory-image/user.md#provision-a-fleet-signed-http-boot).
+> Its OTP burn and the EEPROM's acceptance of the signature are not yet
+> validated on hardware. Everything below — the OTP layout and `pkg/firmware`
+> code sketches, the signed `bootcode`/`start4.elf`/kernel chain, A/B slots,
+> OTA — is the design that has not been built, and nothing here should be
+> read as a description of the shipped image.
 
 ## Overview
 

@@ -257,6 +257,47 @@ func TestServerListenAddr(t *testing.T) {
 	}
 }
 
+// A server configured on port 0 reports the port it bound while it runs,
+// so a caller can dial it, and the configured address once it stops.
+func TestServerListenAddr_ReportsTheBoundPortWhileRunning(t *testing.T) {
+	server, err := NewServer(&ServerConfig{ListenAddr: "127.0.0.1:0", TLSConfig: generateTestTLSConfig()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+
+	host, port, err := net.SplitHostPort(server.ListenAddr())
+	if err != nil {
+		t.Fatalf("ListenAddr() = %q: %v", server.ListenAddr(), err)
+	}
+	if host != "127.0.0.1" || port == "0" {
+		t.Errorf("ListenAddr() = %q, want 127.0.0.1 with the bound port", server.ListenAddr())
+	}
+
+	if err := server.Stop(); err != nil {
+		t.Fatalf("failed to stop server: %v", err)
+	}
+	if server.ListenAddr() != "127.0.0.1:0" {
+		t.Errorf("ListenAddr() after Stop = %q, want the configured 127.0.0.1:0", server.ListenAddr())
+	}
+}
+
+// A server marked running before it has a listener (the health checker's
+// tests do this) reports the configured address instead of panicking.
+func TestServerListenAddr_RunningWithoutListenerReportsConfiguredAddr(t *testing.T) {
+	server, err := NewServer(&ServerConfig{ListenAddr: "127.0.0.1:9999", TLSConfig: generateTestTLSConfig()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	server.running.Store(true)
+
+	if got := server.ListenAddr(); got != "127.0.0.1:9999" {
+		t.Errorf("ListenAddr() = %q, want the configured 127.0.0.1:9999", got)
+	}
+}
+
 func TestServerIsRunningInitialState(t *testing.T) {
 	tlsConfig := generateTestTLSConfig()
 	config := &ServerConfig{

@@ -97,6 +97,75 @@ func TestAuthorizeTool_ClaimsPath_DeniesMissingScope(t *testing.T) {
 	}
 }
 
+// Signing a CSR certifies a key for code signing, so ca:write — which issues
+// ordinary certificates — must not reach it. Only ca:sign-csr, or a
+// wildcard that covers it, does (#691).
+func TestAuthorizeTool_SignCSRNeedsItsOwnScope(t *testing.T) {
+	cases := []struct {
+		scopes  []string
+		allowed bool
+	}{
+		{[]string{"ca:write"}, false},
+		{[]string{"ca:read", "ca:write", "ca:delete"}, false},
+		{[]string{"*:write"}, false},
+		{[]string{"ca:sign-csr"}, true},
+		{[]string{"ca:*"}, true},
+		{[]string{"*:*"}, true},
+	}
+	for _, tc := range cases {
+		mgr := &claimsAuthManagerStub{authCtx: &platformtoken.AuthorizedContext{Scopes: tc.scopes}}
+		checker := NewAuthorizationChecker(nil, mgr)
+
+		_, authErr := checker.AuthorizeTool(context.Background(), "ca_sign_csr", "tok")
+		if tc.allowed && authErr != nil {
+			t.Errorf("%v: denied: %v", tc.scopes, authErr)
+		}
+		if !tc.allowed && (authErr == nil || authErr.Type != AuthErrorPermissionDenied) {
+			t.Errorf("%v: err = %v, want permission denied", tc.scopes, authErr)
+		}
+	}
+}
+
+// The CA tools carry the scope of their gRPC CAService twin
+// (pkg/api/grpc/method_permissions.go), which QUIC's opcode table agrees with
+// where it maps the operation: issue, renew and revoke need ca:write, the rest
+// ca:read (#304).
+func TestAuthorizeTool_CAToolsMirrorCAServiceScopes(t *testing.T) {
+	cases := []struct {
+		tool   string
+		scope  string
+		denied []string
+	}{
+		{"ca_issue", "ca:write", []string{"ca:read"}},
+		{"ca_renew", "ca:write", []string{"ca:read"}},
+		{"ca_revoke", "ca:write", []string{"ca:read"}},
+		{"ca_get", "ca:read", []string{"device:read"}},
+		{"ca_list", "ca:read", []string{"device:read"}},
+		{"ca_verify", "ca:read", []string{"device:read"}},
+		{"ca_info", "ca:read", []string{"device:read"}},
+		{"ca_crl", "ca:read", []string{"device:read"}},
+		{"ca_bundle", "ca:read", []string{"device:read"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			granted := &claimsAuthManagerStub{authCtx: &platformtoken.AuthorizedContext{Scopes: []string{tc.scope}}}
+			_, authErr := NewAuthorizationChecker(nil, granted).AuthorizeTool(context.Background(), tc.tool, "tok")
+			if authErr != nil {
+				t.Fatalf("token granting %s denied: %v", tc.scope, authErr)
+			}
+			if granted.gotPerm != tc.scope {
+				t.Errorf("validator asked for %q, want %q", granted.gotPerm, tc.scope)
+			}
+
+			lacking := &claimsAuthManagerStub{authCtx: &platformtoken.AuthorizedContext{Scopes: tc.denied}}
+			_, authErr = NewAuthorizationChecker(nil, lacking).AuthorizeTool(context.Background(), tc.tool, "tok")
+			if authErr == nil || authErr.Type != AuthErrorPermissionDenied {
+				t.Errorf("token granting %v: err = %v, want permission denied", tc.denied, authErr)
+			}
+		})
+	}
+}
+
 func TestAuthorizeTool_ClaimsPath_InvalidTokenRejected(t *testing.T) {
 	mgr := &claimsAuthManagerStub{err: &platformtoken.InvalidTokenError{Detail: "bad"}}
 	checker := NewAuthorizationChecker(nil, mgr)

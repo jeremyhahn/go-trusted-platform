@@ -176,16 +176,16 @@ func (u *UnixAdapter) IssueCertificate(ctx context.Context, opts IssueCertificat
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "Unix", Method: "IssueCertificate", Err: err}
 	}
+	return issueResult(resp), nil
+}
 
-	result := &IssueCertificateResult{
-		Success: resp.Status != nil && resp.Status.Success,
+// SignCSR certifies a KMS key for code signing via Unix socket.
+func (u *UnixAdapter) SignCSR(ctx context.Context, opts SignCSROptions) (*IssueCertificateResult, error) {
+	resp, err := u.ca.SignCSR(ctx, &pb.SignCSRRequest{CsrPem: opts.CSRPEM, ValidDays: opts.ValidDays})
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "Unix", Method: "SignCSR", Err: err}
 	}
-
-	if resp.Certificate != nil {
-		result.Certificate = convertCertificate(resp.Certificate)
-	}
-
-	return result, nil
+	return issueResult(resp), nil
 }
 
 // =============================================================================

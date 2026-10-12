@@ -702,7 +702,7 @@ rather than silently ignored.
 | `deployer.bootstrap_dhcp_start` / `_end` | string | container defaults | `BOOTSTRAP_DHCP_START` / `BOOTSTRAP_DHCP_END` |
 | `deployer.bootstrap_gateway`, `deployer.bootstrap_dns` | string | container defaults | `BOOTSTRAP_GATEWAY`, `BOOTSTRAP_DNS` |
 | `deployer.bootstrap_apk_mirror` | string | public mirror | `BOOTSTRAP_APK_MIRROR`; required on networks with no outbound internet |
-| `deployer.netboot_media_dir` | string | — | A netboot media build (`container.NetbootMedia`: `netboot-media.yaml`, `SHA256SUMS`, `media/<set>/…`, the Pi TFTP tree, the db-signed arm64 iPXE), relative to `bootstrap.yaml`. **Required** for a Linux deployer: the image carries no installer media. `validateNetbootMedia` checks, before anything deploys, that the build carries what each PXE-installed node boots — its architecture's default set, or for a Pi the `aarch64-rpi` set, the TFTP tree and the arm64 iPXE. The deployer copies it into `data_dir` as laid out, skipping the upload when the staged `SHA256SUMS` is the build's and still verifies, and removing what the build owns first otherwise |
+| `deployer.netboot_media_dir` | string | — | A netboot media build (`container.NetbootMedia`: `netboot-media.yaml`, `SHA256SUMS`, `media/<set>/…`, the Pi TFTP tree, the db-signed arm64 iPXE, and optionally `http_boot`, the Pi's signed `boot.img`/`boot.sig`/`pubkey.bin`), relative to `bootstrap.yaml`. **Required** for a Linux deployer: the image carries no installer media. `validateNetbootMedia` checks, before anything deploys, that the build carries what each PXE-installed node boots — its architecture's default set, or for a Pi the `aarch64-rpi` set, the TFTP tree and the arm64 iPXE. The deployer copies it into `data_dir` as laid out, skipping the upload when the staged `SHA256SUMS` is the build's and still verifies, and removing what the build owns first otherwise |
 | `deployer.proxy_dhcp` | bool | `false` | `BOOTSTRAP_PROXY_DHCP`: the container answers PXE clients with boot options and no lease, for a segment with its own DHCP server |
 | `deployer.pxe_service_host` | string | gateway role | Which node hosts PXE after hand-off |
 | `environment.id` | int | **required** | Environment number _E_ (2–40) |
@@ -805,6 +805,10 @@ refuses to run.
 ├── media/<set>/                # each media set: kernel, installer initramfs,
 │                               #   modloop, payload.list, cdrom/
 ├── rpi-tftp/, firmware/        # the Pi TFTP tree, the db-signed arm64 iPXE
+├── http-boot/                  # the Pi's signed HTTP boot: boot.img, boot.sig,
+│                               #   pubkey.bin — served at /data/http-boot/ (the
+│                               #   EEPROM's HTTP_PATH=data/http-boot); only when
+│                               #   the build had --fleet-key
 ├── <platform>.iso              # staged for virtual-media, served over SMB
 ├── installs/<key>/install.log  # forensic sink, key is a MAC or a hostname
 ├── installs/<host>/registration.json

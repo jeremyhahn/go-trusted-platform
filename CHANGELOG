@@ -1,3 +1,4 @@
+- Factory image: document the `pkg/iso/customize.go` console routing change for Raspberry Pi/QEMU images and harden the signed HTTP boot EEPROM runbook.
 - Create docker pxe-server
 - Iterate on docker platform builder and runtime containers
 - Create docker ansible execution environment

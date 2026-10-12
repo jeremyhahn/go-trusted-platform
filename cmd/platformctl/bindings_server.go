@@ -15,13 +15,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync/atomic"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/embedded"
 )
 
 // EmbeddedServerBinding manages an in-process platformd instance for
@@ -32,8 +31,7 @@ type EmbeddedServerBinding struct {
 	logger  *slog.Logger
 	conn    *ConnectionBinding
 	running atomic.Bool
-	app     *app.App
-	daemon  *daemon.Daemon
+	host    *daemon.EmbeddedHost
 }
 
 // NewEmbeddedServerBinding creates a new EmbeddedServerBinding.
@@ -66,85 +64,29 @@ func (b *EmbeddedServerBinding) Start(configPath string, skipIAMValidation bool)
 	// same reason.
 	ctx := context.Background()
 
-	// Initialize the platform App
-	a := app.NewApp()
-	initParams := &app.AppInitParams{
-		ConfigFile: configPath,
-		Initialize: true,
-	}
-
-	if _, err := a.Init(ctx, initParams); err != nil {
-		return &EmbeddedServerError{Op: "init", Err: err}
-	}
-	b.app = a
-
-	// Build daemon config for embedded mode
-	config := daemon.DefaultConfig()
-	config.App = a
-
 	if skipIAMValidation {
-		config.SkipIAMValidation = true
 		b.logger.Warn("WARNING: IAM validation is DISABLED for embedded daemon. DO NOT USE IN PRODUCTION.",
 			"transports", "embedded")
 	}
 
-	// Disable all network protocols for embedded mode
-	config.EnableGRPCTCP = false
-	config.EnableGRPCUDS = false
-	config.EnableQUIC = false
-	config.EnableREST = false
-	config.EnableMCP = false
-
-	// Create the daemon (initializes all service implementations)
-	d, err := daemon.New(config)
+	// The CLI hosts an embedded context the same way (pkg/cli/commands).
+	host, err := daemon.StartEmbeddedHost(ctx, daemon.EmbeddedHostOptions{
+		ConfigFile:        configPath,
+		SkipIAMValidation: skipIAMValidation,
+	})
 	if err != nil {
-		return &EmbeddedServerError{Op: "daemon", Err: err}
-	}
-	b.daemon = d
-
-	// Build the ServiceRegistry from the daemon's service implementations
-	registry := &embedded.ServiceRegistry{
-		Daemon: d.Service(),
+		return &EmbeddedServerError{Op: "start", Err: err}
 	}
 
-	// Add optional services if they were initialized
-	if svc := d.CAGRPCService(); svc != nil {
-		registry.CA = svc
-	}
-	if svc := d.TPMGRPCService(); svc != nil {
-		registry.TPM = svc
-	}
-	if svc := d.VTPMServiceServer(); svc != nil {
-		registry.VTPM = svc
-	}
-	if svc := d.DeviceGRPCService(); svc != nil {
-		registry.Device = svc
-	}
-	if svc := d.SDNService(); svc != nil {
-		registry.SDN = svc
-	}
-	if svc := d.ComputeGRPCService(); svc != nil {
-		registry.Compute = svc
-	}
-	if svc := d.IDevIDGRPCService(); svc != nil {
-		registry.IDevID = svc
-	}
-	if svc := d.AttestationGRPCService(); svc != nil {
-		registry.Attestation = svc
-	}
-	if svc := d.KMSGRPCService(); svc != nil {
-		registry.KMS = svc
-	}
-
-	// Create embedded transport client
 	cl, err := platform.NewClient(
 		ctx,
 		platform.WithOnlyProtocol(platform.ProtocolEmbedded),
-		platform.WithEmbeddedServices(registry),
+		platform.WithEmbeddedServices(host.Services()),
 	)
 	if err != nil {
-		return &EmbeddedServerError{Op: "client", Err: err}
+		return &EmbeddedServerError{Op: "client", Err: errors.Join(err, host.Stop(ctx))}
 	}
+	b.host = host
 
 	// Inject client into ConnectionBinding
 	b.conn.SetClient(&cl)
@@ -167,11 +109,11 @@ func (b *EmbeddedServerBinding) Stop() error {
 		b.logger.Error("Failed to disconnect client", "error", err)
 	}
 
-	// Stop the daemon
-	if b.daemon != nil {
-		if err := b.daemon.Stop(context.Background()); err != nil {
+	if b.host != nil {
+		if err := b.host.Stop(context.Background()); err != nil {
 			b.logger.Error("Failed to stop daemon", "error", err)
 		}
+		b.host = nil
 	}
 
 	b.running.Store(false)

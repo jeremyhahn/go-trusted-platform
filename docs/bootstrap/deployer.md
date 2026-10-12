@@ -18,7 +18,11 @@ see [switch-management.md](switch-management.md).)
 
 **How it works:**
 1. Connects to the host via SSH
-2. Copies the bootstrap manifest and stages the netboot media build
+2. Copies the bootstrap manifest and stages the netboot media build (including the
+   Raspberry Pi's signed HTTP boot files, `http-boot/`, when the build has them; they
+   are owned by the build and replaced with it; a build without them removes an earlier
+   build's `http-boot/`). A staged copy is accepted only if every file matches the
+   build's `SHA256SUMS` and no file under a build-owned directory is missing from it
 3. Ships or pulls and starts the bootstrap container
 4. Binds the container to the provisioning network interface
 

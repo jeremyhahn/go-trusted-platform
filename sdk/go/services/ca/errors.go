@@ -92,6 +92,27 @@ func (e *ErrIssueCertificateFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrSignCSRFailed is returned when the CA refuses or fails to certify a CSR.
+type ErrSignCSRFailed struct {
+	Cause error
+}
+
+func (e *ErrSignCSRFailed) Error() string {
+	return fmt.Sprintf("failed to sign CSR: %v", e.Cause)
+}
+
+func (e *ErrSignCSRFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrNilSignCSRParams is returned when SignCSRDomain is called without
+// parameters.
+type ErrNilSignCSRParams struct{}
+
+func (e ErrNilSignCSRParams) Error() string {
+	return "sign CSR parameters are required"
+}
+
 // ErrGetCertificateFailed is returned when certificate retrieval fails.
 type ErrGetCertificateFailed struct {
 	Serial string

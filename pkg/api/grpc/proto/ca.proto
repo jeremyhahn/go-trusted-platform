@@ -24,6 +24,10 @@ service CAService {
   // IssueCertificate issues a new certificate
   rpc IssueCertificate(IssueCertificateRequest) returns (IssueCertificateResponse);
 
+  // SignCSR certifies a KMS key for code signing from a CSR the KMS signed.
+  // It requires the ca:sign-csr scope, which ca:write does not grant.
+  rpc SignCSR(SignCSRRequest) returns (IssueCertificateResponse);
+
   // GetCertificate retrieves a certificate by serial number
   rpc GetCertificate(GetCertificateRequest) returns (GetCertificateResponse);
 
@@ -165,6 +169,9 @@ message CertificateRequest {
   int32 max_path_len = 9;
   CertificateType certificate_type = 10;
   map<string, string> metadata = 11;
+  // CSR signing moved to SignCSR, behind its own scope.
+  reserved 12;
+  reserved "csr_pem";
 }
 
 // RevokedCertEntry represents a revoked certificate entry
@@ -247,6 +254,16 @@ message IssueCertificateResponse {
   Status status = 1;
   Certificate certificate = 2;
   google.protobuf.Timestamp timestamp = 3;
+}
+
+// SignCSR request. The certificate's subject is the CSR's common name, which
+// must name a KMS key whose public key is the CSR's; the certificate is for
+// code signing only. A CSR with any other subject attribute or any subject
+// alternative name is refused.
+message SignCSRRequest {
+  // A PEM PKCS#10 request signed by the KMS key it names.
+  string csr_pem = 1;
+  int32 valid_days = 2;
 }
 
 // GetCertificate request/response

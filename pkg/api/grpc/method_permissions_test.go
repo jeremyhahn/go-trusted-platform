@@ -61,6 +61,7 @@ func TestScopeForMethod_KnownMethods(t *testing.T) {
 		"/platform.v1.PlatformIAMService/GetUser":        "iam:read",
 		"/platform.v1.PlatformIAMService/DeleteUser":     "iam:delete",
 		"/platform.v1.CAService/IssueCertificate":        "ca:write",
+		"/platform.v1.CAService/SignCSR":                 "ca:sign-csr",
 		"/platform.v1.CAService/GetCAInfo":               "ca:read",
 		"/platform.v1.CAService/UninstallCACertificates": "ca:delete",
 	}
@@ -88,7 +89,7 @@ func TestGRPCMethodPermissions_WellFormed(t *testing.T) {
 		"sdn": true, "kms": true, "iam": true, "ca": true,
 		"proxy": true, "ntp": true,
 	}
-	validActions := map[string]bool{"read": true, "write": true, "delete": true}
+	validActions := map[string]bool{"read": true, "write": true, "delete": true, "sign-csr": true}
 
 	for method, scope := range buildGRPCMethodPermissions() {
 		parts := strings.SplitN(scope, ":", 2)
@@ -159,6 +160,42 @@ func TestOIDCUnaryInterceptor_ScopeEnforced_Denies(t *testing.T) {
 	}
 	if called {
 		t.Error("handler must not run when scope is denied")
+	}
+}
+
+// TestOIDCUnaryInterceptor_SignCSRNeedsItsOwnScope verifies ca:write, which
+// issues certificates for keys the CA generates, does not reach CSR signing:
+// only ca:sign-csr or a wildcard covering it does.
+func TestOIDCUnaryInterceptor_SignCSRNeedsItsOwnScope(t *testing.T) {
+	cases := []struct {
+		scopes []string
+		allow  bool
+	}{
+		{[]string{"ca:write", "ca:read", "ca:delete"}, false},
+		{[]string{"*:write"}, false},
+		{[]string{"ca:sign-csr"}, true},
+		{[]string{"ca:*"}, true},
+		{[]string{"*:*"}, true},
+	}
+	for _, tc := range cases {
+		stub := &claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{Subject: "u", Scopes: tc.scopes}}
+		interceptor := OIDCUnaryInterceptor(WithTokenValidator(stub))
+		called := false
+		handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+			called = true
+			return "ok", nil
+		}
+		info := &grpc.UnaryServerInfo{FullMethod: "/platform.v1.CAService/SignCSR"}
+		_, err := interceptor(bearerCtx("tok"), nil, info, handler)
+		if tc.allow {
+			if err != nil || !called {
+				t.Errorf("scopes %v: SignCSR refused: %v", tc.scopes, err)
+			}
+			continue
+		}
+		if status.Code(err) != codes.PermissionDenied || called {
+			t.Errorf("scopes %v: SignCSR err = %v, called = %v; want PermissionDenied", tc.scopes, err, called)
+		}
 	}
 }
 

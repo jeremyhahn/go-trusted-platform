@@ -53,18 +53,22 @@ func ScopeForMethod(fullMethod string) string {
 // contract test pins the parity.
 func buildGRPCMethodPermissions() map[string]string {
 	const (
-		read   = "read"
-		write  = "write"
-		del    = "delete"
-		vtpm   = "vtpm"
-		dns    = "dns"
-		device = "device"
-		sdn    = "sdn"
-		kms    = "kms"
-		iam    = "iam"
-		ca     = "ca"
-		prox   = "proxy"
-		ntp    = "ntp"
+		read  = "read"
+		write = "write"
+		del   = "delete"
+		// signCSR certifies an existing KMS key. It is its own action
+		// so that ca:write, which issues certificates the CA keys
+		// itself, does not reach it; only ca:* or *:* covers it.
+		signCSR = "sign-csr"
+		vtpm    = "vtpm"
+		dns     = "dns"
+		device  = "device"
+		sdn     = "sdn"
+		kms     = "kms"
+		iam     = "iam"
+		ca      = "ca"
+		prox    = "proxy"
+		ntp     = "ntp"
 	)
 
 	scope := func(resource, action string) string {
@@ -303,6 +307,7 @@ func buildGRPCMethodPermissions() map[string]string {
 		// ---------------------------------------------------------------------
 		"/platform.v1.CAService/InitCA":                  scope(ca, write),
 		"/platform.v1.CAService/IssueCertificate":        scope(ca, write),
+		"/platform.v1.CAService/SignCSR":                 scope(ca, signCSR),
 		"/platform.v1.CAService/RenewCertificate":        scope(ca, write),
 		"/platform.v1.CAService/RevokeCertificate":       scope(ca, write),
 		"/platform.v1.CAService/GetCertificate":          scope(ca, read),

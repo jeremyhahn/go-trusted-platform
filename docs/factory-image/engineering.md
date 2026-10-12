@@ -1,6 +1,6 @@
 # Factory Image — Engineering Contract
 
-> **Status: NORMATIVE** · Scope: `pkg/diskimage/` (`rpi`, `qemuvirt`, `uboot`, `runner`), `pkg/cli/commands/diskimage/`, `pkg/qemu` (aarch64 profile), `pkg/qemu/harness/`, `build/docker/uboot-builder/`, `build/docker/diskimage-builder/`, `test/integration/diskimage/` · Last verified: 2026-09-20
+> **Status: NORMATIVE** · Scope: `pkg/diskimage/` (`rpi`, `qemuvirt`, `uboot`, `runner`), `pkg/cli/commands/diskimage/`, `pkg/qemu` (aarch64 profile), `pkg/qemu/harness/`, `build/docker/uboot-builder/`, `build/docker/diskimage-builder/`, `test/integration/diskimage/` · Last verified: 2026-10-09
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -334,6 +334,8 @@ served by the bootstrap container instead of written to a card.
 - `rpi-tftp/` (the Pi set: `Stage` from the set's own packages and U-Boot)
   and `firmware/snponly-aarch64.efi` (the ipxe-builder's arm64 iPXE, verified
   against its `SHA256SUMS`, then db-signed).
+- `http-boot/{boot.img,boot.sig,pubkey.bin}` when `Config.HTTPBoot` is set (the
+  Pi's signed HTTP boot, below); indexed as `http_boot`.
 - `netboot-media.yaml`, `SHA256SUMS` (relative paths, `sha256sum -c`
   format). `Build` loads the result back through `LoadNetbootMedia` and
   `LoadMediaSets`, so a build the container would refuse fails the build.
@@ -345,6 +347,66 @@ served by the bootstrap container instead of written to a card.
 - Alpine tarballs are cached under `CacheDir` (default
   `<output>.cache/alpine`) and verified against the digests pinned in
   `alpine.go`; an unpinned Alpine release is an `UnpinnedReleaseError`.
+
+**Signed HTTP boot** (`netboot.StageHTTPBoot`, `pkg/rpibootsig`,
+`pkg/diskimage/fatimage`): the Pi's first stage over HTTP. The bootloader EEPROM
+fetches `boot.img` and `boot.sig` from `HTTP_HOST`/`HTTP_PATH`; with
+`SIGNED_BOOT=1` it runs the image only if `boot.sig` verifies against the public
+key whose SHA-256 is in OTP.
+
+- `boot.img` is `fatimage.Build` of the staged Pi tree: a FAT16 ramdisk,
+  written in pure Go (no loop device, no `mkfs`), reproducible for a tree
+  (a fixed FAT epoch). The writer uses lowercase 8.3 short names with NT case
+  flags when a name fits, emits VFAT long-name entries only when needed, and
+  the reader rejects malformed geometry, cluster cycles, and cross-linked
+  directory chains before walking files.
+- `boot.sig` is `rpibootsig.Sign`, byte-compatible with upstream's
+  `rpi-eeprom-digest`: `<sha256 of boot.img>\nts: <epoch>\n[target-soc: 2711|2712\n]rsa2048: <hex>`,
+  the signature RSA-2048 PKCS#1 v1.5 over SHA-256 of the image. `target-soc`
+  is optional and omitted by default for `boot.img`; `platformctl diskimage
+  netboot --target-soc 2711|2712` writes it explicitly for hardware validation.
+  `--model` still selects the Pi tree to stage, and 3B+ has no EEPROM and is a
+  `NoEEPROMError`. Golden tests pin the format against vectors made with
+  upstream's script.
+- `pubkey.bin` is the modulus (256 bytes) and exponent (8 bytes), both
+  little-endian: `rpibootsig.KeyBlob`. Its SHA-256 (`KeyHash`) is the OTP
+  customer key hash; `ParseKeyBlob` reads it back. Raspberry Pi's
+  `rpi-eeprom-config --pubkey` takes the fleet certificate/public key as PEM,
+  so operators export that PEM separately through `platformctl ca certificate`.
+- **The private key never leaves the KMS.** The signer is
+  `secureboot.NewKMSSigner` on the build's platform client: the KMS is sent the
+  prehashed SHA-256 digest (`PreHashed=true`). `FleetKey` must be a `kms://`
+  reference (`FleetKeyRefError`), an RSA-2048 key - the only size the
+  bootloader verifies - and `rpibootsig.Sign` verifies its own signature before
+  emitting it, so a KMS that signs with the wrong key or scheme fails the
+  build. The same signer backs `platformctl diskimage rpi-eeprom-hsm`, whose
+  stdout contract matches upstream `rpi-eeprom-digest -H` for signing the
+  EEPROM config without exporting the private key. Signing the 2712 (Pi 5/CM5)
+  first-stage `bootcode.bin` is not this flow and is unsupported until Phase 6
+  hardware validation (#692).
+- The build reads the staged files back (`VerifyHTTPBoot`: the key against its
+  hash, the digest, the signature) before it
+  returns, and `container.LoadNetbootMedia` refuses an index whose `http_boot`
+  directory lacks any of the three files.
+- Serving: the deployer owns `http-boot/` (it is cleared and replaced with the
+  rest of the build) and the container serves it from the data directory at
+  `/data/http-boot/`, so `HTTP_PATH` is `container.NetbootMedia.HTTPBootPath()`
+  (`data/http-boot`). The HTTP server's read/write timeout is 30 s.
+- The emulator side, `rpinetboot.HTTPBoot`, is the EEPROM's: fetch both
+  files, require the public key to hash to the OTP value
+  (`KeyHashMismatchError`), verify `boot.sig` over `boot.img`
+  (`DigestMismatchError`, `SignatureError`, `MalformedError`), then mount the
+  image (`RamdiskError`). A refusal is an `HTTPBootRefusedError`. It is
+  exposed as `platformctl bootstrap probe rpi-http` ([bootstrap cli.md](../bootstrap/cli.md))
+  and driven end to end by `test/integration/netboot/rpi_httpboot_test.go`,
+  which signs with an in-process RSA key: the integration suite has no KMS
+  service, and the KMS path is covered by the builder's unit tests against the
+  platform-client fake.
+
+What only hardware can confirm (OTP programming, signed EEPROM config,
+explicit `target-soc` behaviour, the EEPROM FAT reader, `HTTP_HOST`/`HTTP_PORT`
+syntax, the image size limit, HTTPS and a custom CA on the Pi 5 and CM5) is
+listed in [user.md](user.md#what-hardware-must-still-confirm).
 
 ## 7. Test strategy
 

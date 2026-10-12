@@ -39,7 +39,8 @@ platformctl acme    ACME certificate management
 |---|---|---|
 | `init` | — | Initialise the Certificate Authority |
 | `info` | — | CA information |
-| `issue` | `[cn] [store] [algorithm]` | Issue a new x509 certificate |
+| `issue` | `[cn] [store] [algorithm]` | Issue a certificate for a newly generated key |
+| `sign-csr` | `[csr-file]` | Certify the key that signed a CSR |
 | `certificate` | `[serial]` | Retrieve a certificate by serial |
 | `list` | — | List issued certificates |
 | `renew` | `<serial>` | Renew an existing certificate |
@@ -61,6 +62,14 @@ unverifiable against the new one. `--force` is not a retry flag.
 
 Positional: `[cn] [store] [algorithm]`.
 
+**`ca issue` always generates a new key** in `[store]` and certifies it. It
+cannot certify a key that already exists — use `ca sign-csr` for that.
+
+`[store]` is one of `pkcs8` / `software` (also the default when empty),
+`tpm` / `tpm2`, `pkcs11`, `awskms`, `gcpkms`, `azurekv`, `vault`, `quantum`,
+`frost`. **Any other name is rejected** with `unknown key store type`; it never
+falls back to a software key. In particular `kms` is not a store name.
+
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
 | `--key-size` | int | `0` | RSA key size (2048, 3072, 4096) |
@@ -76,6 +85,44 @@ Note the flag names here are `--sans-dns` / `--sans-ips` / `--sans-email` taking
 `--sans-ip` / `--sans-email` as **repeatable string arrays**. Singular `--sans-ip`
 in one group, plural `--sans-ips` in the other, and different types. Check which
 group you are in.
+
+### `ca sign-csr [csr-file]`
+
+Certifies an existing KMS key for **code signing** from a PEM PKCS#10 request
+the KMS signed. No key is generated, and the private key never reaches the
+CA — this is how a KMS- or HSM-held key gets its certificate, paired with
+`platformctl kms key csr`.
+
+The CA refuses the CSR unless:
+
+- its subject is one common name and nothing else — no `O`, `OU` or other
+  attribute, and no SANs;
+- that common name is the ID of a key the platform KMS holds, and the CSR's
+  public key is that key's.
+
+The certificate's usages are fixed: key usage `digitalSignature`, extended key
+usage `codeSigning` only. There are no usage flags.
+
+**Only the platform admin may run it**: root on the platformd host (over the
+Unix socket, or with `--transport embedded`, which hosts platformd inside
+platformctl), or a caller whose platform token grants `ca:sign-csr`. `ca:write`
+does not grant it. See `api.md` §4.
+
+The desktop GUI offers the same operation as `CABinding.SignCSR`: it makes
+the same SDK call, is held to the same rule, and returns the object
+`--output json` prints ([docs/daemon/cli.md](../daemon/cli.md) §8).
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--valid-days` | int | `365` | Validity period in days |
+| `--out` | string | | Write the certificate PEM here instead of stdout |
+
+With `--output json|yaml` it prints the same result object as `ca issue`.
+
+```bash
+sudo platformctl kms key csr rpi/fleet --out fleet.csr
+sudo platformctl ca sign-csr fleet.csr --out fleet.pem
+```
 
 ### `ca certificate [serial]`
 
@@ -120,7 +167,7 @@ the certificate, deleting removes the key.
 
 ```bash
 platformctl ca info
-platformctl ca issue web-01.example.com kms rsa --valid-days 90 \
+platformctl ca issue web-01.example.com pkcs8 RSA-2048 --valid-days 90 \
     --sans-dns web-01.example.com,web.example.com --ext-key-usage serverAuth
 platformctl ca list --status valid
 platformctl ca revoke 0A1B2C3D --reason superseded

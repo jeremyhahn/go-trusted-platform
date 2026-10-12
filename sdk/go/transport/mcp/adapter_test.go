@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
@@ -520,6 +521,7 @@ func TestGRPCMethodToMCPToolMap_CA(t *testing.T) {
 	}{
 		{"/platform.v1.CAService/GetCAInfo", "ca_info"},
 		{"/platform.v1.CAService/IssueCertificate", "ca_issue"},
+		{"/platform.v1.CAService/SignCSR", "ca_sign_csr"},
 		{"/platform.v1.CAService/RevokeCertificate", "ca_revoke"},
 		{"/platform.v1.CAService/RenewCertificate", "ca_renew"},
 		{"/platform.v1.CAService/VerifyCertificate", "ca_verify"},
@@ -694,6 +696,18 @@ func TestStructToMap(t *testing.T) {
 	}
 	if result["value"].(float64) != 42 {
 		t.Errorf("result[value] = %v, want 42", result["value"])
+	}
+}
+
+// The ca_sign_csr tool takes csr_pem and valid_days; the SDK request must
+// reach it under those names or the server sees an empty CSR.
+func TestStructToMap_SignCSRRequestMatchesTheTool(t *testing.T) {
+	result, err := structToMap(&platformv1.SignCSRRequest{CsrPem: "csr", ValidDays: 30})
+	if err != nil {
+		t.Fatalf("structToMap() returned error: %v", err)
+	}
+	if result["csr_pem"] != "csr" || result["valid_days"] != float64(30) {
+		t.Errorf("arguments = %v, want csr_pem and valid_days", result)
 	}
 }
 

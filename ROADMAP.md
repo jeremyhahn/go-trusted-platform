@@ -19,7 +19,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - [#742](../../issues/742) — deterministic EVPN session and gateway restart tests ([PR #811](../../pulls/811)) — [docs/sdn/](docs/sdn/) — in review
 - [#802](../../issues/802) — Pi image assembles LUKS natively on a foreign-arch host ([PR #808](../../pulls/808)) — [docs/factory-image/](docs/factory-image/) — in review
 - [#690](../../issues/690) — diskless squashfs + dm-verity root ([PR #764](../../pulls/764)) — [docs/factory-image/](docs/factory-image/) — in review
-- [#691](../../issues/691) — Pi HTTP boot with a KMS-signed boot.img ([PR #761](../../pulls/761)) — [docs/ipxe/](docs/ipxe/) — blocked: owner decision pending
+- [#691](../../issues/691) — Pi HTTP boot: the signed pipeline with a KMS-signed `boot.img`/`boot.sig`; hardware validation of the OTP burn and the EEPROM's acceptance remains, [runbook](docs/factory-image/user.md#provision-a-fleet-signed-http-boot) ([PR #761](../../pulls/761)) — [docs/ipxe/](docs/ipxe/) — blocked: owner decision pending
 - [#685](../../issues/685) — Raspberry Pi network boot and bootstrap epic — [docs/ipxe/](docs/ipxe/) — open
 - [#696](../../issues/696), [#771](../../issues/771) — AVR trusted firmware on trusted-firmware — [docs/firmware/](docs/firmware/) — open
 - [#772](../../issues/772) — enroll a DICE AVR end to end — [docs/firmware/](docs/firmware/) — blocked: go-xkms#1441

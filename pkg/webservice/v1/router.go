@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
@@ -389,10 +390,11 @@ func (v1Router *Router) caRoutes() {
 	v1Router.serviceRegistry.requireService(
 		v1Router.router, "ca", "/ca", v1Router.ca,
 		func() {
+			kmsClient, _, _, _ := v1Router.restHandlerRegistry.KMSSDKClients()
 			caRouter := restca.NewCARouter(
 				v1Router.logger,
 				v1Router.ca,
-				v1Router.responseWriter)
+				v1Router.responseWriter).WithKMS(issuance.ClientKMS(kmsClient))
 			caRouter.RegisterPublicRoutes(v1Router.router)
 			caRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},

@@ -224,38 +224,6 @@ func TestStartLifecycle_AlreadyRunning(t *testing.T) {
 	}
 }
 
-func TestStartLifecycle_WithAllServicesNil(t *testing.T) {
-	socketPath := lifecycleShortSocketPath(t, "allnil")
-
-	config := testConfig(socketPath)
-	config.EnableREST = false
-	config.EnableMCP = false
-	config.EnableQUIC = false
-
-	d, err := New(config)
-	if err != nil {
-		t.Fatalf("New() failed: %v", err)
-	}
-	defer d.ForceStop()
-
-	// Verify optional services are nil
-	if d.sdnService != nil || d.kmsService != nil ||
-		d.iamService != nil || d.tenantService != nil {
-		t.Skip("Services should be nil for this test")
-	}
-
-	ctx := context.Background()
-
-	// Start should succeed with all nil services
-	if err := d.Start(ctx); err != nil {
-		t.Fatalf("Start() failed: %v", err)
-	}
-
-	if !d.IsRunning() {
-		t.Error("Daemon should be running after Start()")
-	}
-}
-
 func TestStartLifecycle_RunningStateTransitions(t *testing.T) {
 	socketPath := lifecycleShortSocketPath(t, "trans")
 

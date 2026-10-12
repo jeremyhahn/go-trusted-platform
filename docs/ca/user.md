@@ -204,12 +204,18 @@ repository contains adapters and transport frontage — no certificate logic.
 
 ---
 
-## One thing to be aware of
+## Two things to be aware of
 
-`IssueCertificate` over gRPC requires the `ca:write` scope. **The `ca_issue` MCP
-tool requires nothing beyond a valid token**, because it is not in the MCP
-authorization map. Certificate issuance is the highest-value operation the
-platform performs. Recorded in [api.md](api.md) §4 and raised for the owner.
+Over MCP each `ca_*` tool needs the scope its gRPC method needs: `ca:write`
+to issue, renew or revoke, `ca:read` for everything else, including
+`ca_info`, `ca_crl` and `ca_bundle`, whose REST routes are public. Recorded in
+[api.md](api.md) §4.
+
+`ca sign-csr` certifies a KMS key for code signing — the fleet key every
+netbooted device's boot chain trusts. **Only the platform admin may run it**:
+root on the platformd host, or a platform token granting `ca:sign-csr`, which
+`ca:write` does not include. The CSR must name the KMS key and nothing else.
+See [cli.md](cli.md).
 
 ---
 

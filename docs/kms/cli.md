@@ -35,6 +35,7 @@ platformctl kms
         delete <key-id>                     works
         rotate <key-id>                     works
         revoke <key-id>                     works
+        csr <key-id>                        works
         algorithms                          works
         metadata get <key-id>               works
         metadata update <key-id>            works
@@ -204,6 +205,28 @@ Mark a key compromised and unusable for every operation.
 
 ```bash
 platformctl kms key revoke tenant-a-kek --reason "key material exposed in incident review"
+```
+
+### `key csr <key-id>`
+
+Write a PEM certificate signing request for an asymmetric key: the public key as
+the KMS reports it, the key ID as the subject common name, and a signature the
+KMS makes — the private key never leaves the KMS. Building the request checks
+the KMS's signature against the public key it reported, so a mismatch fails
+here, not at the CA.
+
+| Flag | Short | Type | Default | Required |
+|---|---|---|---|---|
+| `--out` | | path | stdout | no |
+
+Certify it with `platformctl ca sign-csr` (`docs/ca/cli.md`), which only the
+platform admin may run and which issues a code-signing certificate; the CA
+stores the certificate under the key ID, which is where KMS signers
+(`kms://<key-id>`) look it up.
+
+```bash
+sudo platformctl kms key csr rpi/fleet --out fleet.csr
+sudo platformctl ca sign-csr fleet.csr --out fleet.pem
 ```
 
 ### `key algorithms`

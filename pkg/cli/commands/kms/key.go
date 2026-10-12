@@ -75,6 +75,7 @@ Supported operations:
 	cmd.AddCommand(newKeyListCommand(getFlags))
 	cmd.AddCommand(newKeyDeleteCommand(getFlags))
 	cmd.AddCommand(newKeyRotateCommand(getFlags))
+	cmd.AddCommand(newKeyCSRCommand(getFlags))
 
 	// Key import/export operations
 	cmd.AddCommand(newKeyImportCommand(getFlags))

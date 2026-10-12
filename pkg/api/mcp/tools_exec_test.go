@@ -1017,12 +1017,15 @@ func TestCAToolExecution(t *testing.T) {
 
 	t.Run("executeCAGet success", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.caGetFunc = func(ctx context.Context, serial string, includePEM bool) (interface{}, error) {
+		svc.caGetFunc = func(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error) {
 			if serial != "abc123" {
 				t.Errorf("serial = %s, want abc123", serial)
 			}
 			if !includePEM {
 				t.Error("includePEM should be true")
+			}
+			if !includeDER {
+				t.Error("includeDER should be true")
 			}
 			return map[string]interface{}{"serial": serial}, nil
 		}
@@ -1031,6 +1034,7 @@ func TestCAToolExecution(t *testing.T) {
 		args := map[string]interface{}{
 			"serial":      "abc123",
 			"include_pem": true,
+			"include_der": true,
 		}
 
 		result, err := registry.ExecuteTool(ctx, "ca_get", args)
@@ -1044,7 +1048,7 @@ func TestCAToolExecution(t *testing.T) {
 
 	t.Run("executeCAGet error", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.caGetFunc = func(ctx context.Context, serial string, includePEM bool) (interface{}, error) {
+		svc.caGetFunc = func(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)

@@ -10,12 +10,13 @@
 ## 1. This repository does not implement a CA
 
 That is the first thing to know, and the package tree says it plainly.
-`pkg/ca/` contains exactly three things (verified 2026-08-18):
+`pkg/ca/` contains exactly four things (verified 2026-10-12):
 
 ```
 pkg/ca/
     AGENTS.md          (symlinked mirror of CLAUDE.md)
     CLAUDE.md
+    issuance/          (Sign CSR policy, see the gap below)
     quicbaas/
         errors.go
         keystore_adapter.go
@@ -29,6 +30,29 @@ whole feature is **adapters plus transport frontage**: the CA and ACME
 implementation is go-xkms's `TrustedCA`, consumed through
 `go-quicbaas/sdk/go`, and this repo re-exports it as the platform product's
 CA surface (docs/00 L5).
+
+**One gap, not a decision: Sign CSR's checks in `pkg/ca/issuance`.** Sign CSR
+certifies a KMS key for code signing. Before `issuance.SignCSR` calls the CA's
+`SignCSR`, it parses the CSR and verifies its self-signature (`parseCSR`),
+refuses any subject attribute but the common name and any subject alternative
+name (`checkNamesOnlyTheKey`), and requires the CSR's key to be the KMS key the
+common name names (`checkKMSKey`). The parse is CSR processing, which belongs
+to the CA. It stays here only because the pinned stack has no seam for the
+policy: go-xkms v0.17.0-alpha (behind go-quicbaas `sdk/go` v0.12.0-alpha)
+copies the CSR's subject and names into the template and has no
+`TemplateValidator`, and go-quicbaas v0.12.0-alpha re-exports no profile type
+or registry, so the platform cannot give its CA a profile. go-xkms v0.49.0-alpha has that hook, the profile
+`TemplateValidator`, which `Issuer.Template` calls last on every issuance path
+with `template.PublicKey` set. go-quicbaas `sdk/go` v0.14.0-alpha re-exports
+it with `ProfileProvider`, `ProfileRegistry` and `NewDefaultProfileRegistry`.
+Once the platform is on that SDK (#720), the CA factory registers a
+code-signing profile in `Params.Profiles`, and that profile's
+`ValidateTemplate` refuses extra names and any key that is not the named KMS
+key. `issuance.SignCSR` then only calls `SignCSR` with the profile, and
+`parseCSR` is deleted. The KMS lookup stays in the platform, because the KMS
+key names are the platform's. `CallerSANProfile` does not fit this case: it
+requires caller-supplied names (`ErrCallerSANsRequired`), and this
+certificate carries none.
 
 The two adapters are the whole local surface:
 
@@ -71,12 +95,17 @@ retargeted at go-xkms, and the mirror updated in the same commit.
 
 There is no CA type exported from this repository. The surface is:
 
-- **gRPC** `CAService` — 12 RPCs (`pkg/api/grpc/proto/ca.proto`), implemented by
+- **gRPC** `CAService` — 13 RPCs (`pkg/api/grpc/proto/ca.proto`), implemented by
   `pkg/api/grpc/ca_service.go` and `pkg/api/daemon/ca_grpc_service.go`.
 - **REST** — `pkg/webservice/v1/rest/ca/` plus the ACME router
   `pkg/webservice/v1/router/acme.go`.
-- **QUIC** — nine opcodes, `0xA0`–`0xA8`.
-- **MCP** — nine `ca_*` tools.
+- **QUIC** — nine opcodes, `0xA0`–`0xA8`, plus Sign CSR at `0xCD`/`0x07`.
+- **MCP** — ten `ca_*` tools.
+
+Sign CSR's policy and its `ca:sign-csr` check live once, in
+`pkg/ca/issuance` (`SignCSR`, `AuthorizeSignCSR`); every transport's handler
+calls them rather than restating them. gRPC adds the one transport-specific
+grant, root on the Unix socket (`grpc.AuthorizeSignCSR`).
 - **SDK** — `sdk/go/services/ca`.
 
 ## 4. ACME is a protocol server, not a management API
@@ -100,8 +129,8 @@ implement the protocol.
 
 ## 5. Certificate lifecycle asymmetry
 
-The 12 gRPC RPCs are `GetCAInfo`, `InitCA`, `InstallCACertificates`,
-`UninstallCACertificates`, `IssueCertificate`, `GetCertificate`,
+The 13 gRPC RPCs are `GetCAInfo`, `InitCA`, `InstallCACertificates`,
+`UninstallCACertificates`, `IssueCertificate`, `SignCSR`, `GetCertificate`,
 `ListCertificates`, `RevokeCertificate`, `RenewCertificate`,
 `VerifyCertificate`, `GetCRL`, `GetCABundle`.
 
@@ -136,6 +165,7 @@ exists.
 | Unit | `pkg/webservice/v1/router/acme_test.go`, `pkg/webservice/v1/rest/ca/*_test.go` | Route registration, handler behaviour |
 | Integration | `test/integration/ca/`, `test/integration/acme/` | End-to-end issuance |
 | ACME enrollment | `test/integration/acme_enrollment_integration_test.go`, `acme_enrollment_mock_server_test.go` | Enrollment against a mock ACME server |
+| Transport parity | `pkg/api/daemon/ca_transport_parity_test.go` | Issue and get through the SDK on every transport return the gRPC service's certificate and send the CA the same request ([api.md](api.md) §2) |
 
 `test/integration/ACME_ENROLLMENT_TESTS_README.md` documents that suite.
 

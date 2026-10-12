@@ -221,6 +221,17 @@ type IssueCertificateParams struct {
 	ExtKeyUsage []string
 }
 
+// SignCSRParams contains parameters for certifying a KMS key from its CSR.
+// The CSR's common name names the KMS key, and the CSR must carry that key's
+// public key. The CA certifies it for code signing only; it requires the
+// ca:sign-csr scope.
+type SignCSRParams struct {
+	// CSRPEM is the PEM-encoded PKCS#10 request.
+	CSRPEM string
+	// ValidDays is the validity period in days; zero selects the CA default.
+	ValidDays int32
+}
+
 // IssueCertificateResult contains the result of issuing a certificate.
 type IssueCertificateResult struct {
 	// Certificate is the issued certificate.

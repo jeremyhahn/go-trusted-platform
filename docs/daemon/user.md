@@ -58,8 +58,9 @@ platformctl --transport rest status
 platformctl --transport quic status
 ```
 
-`--transport embedded` is for the desktop GUI's standalone mode; from the
-command line it fails ([cli.md](cli.md) §2.3).
+`--transport embedded` hosts platformd inside `platformctl` itself, with the
+node's own configuration and the calling user's credentials, and opens no
+network listener — run it as root on the node ([cli.md](cli.md) §2.3).
 
 Precedence for every setting is **flag > environment > config file > default**,
 so `PLATFORMCTL_TRANSPORT=quic` sets it for a shell and `--transport rest`

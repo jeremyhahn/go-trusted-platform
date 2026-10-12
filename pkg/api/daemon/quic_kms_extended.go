@@ -132,6 +132,7 @@ var kmsExtendedQUICDispatch = map[byte]kmsExtendedQUICHandler{
 	quicwire.KMSSubSetKeyPolicy:           (*QUICServiceHandler).handleKMSSetKeyPolicy,
 	quicwire.KMSSubGetKeyPolicy:           (*QUICServiceHandler).handleKMSGetKeyPolicy,
 	quicwire.KMSSubGetSupportedAlgorithms: (*QUICServiceHandler).handleKMSGetSupportedAlgorithms,
+	quicwire.KMSSubSignCSR:                (*QUICServiceHandler).handleCASignCSR,
 }
 
 // handleKMSExtendedCategory routes a KMS extended request to the correct

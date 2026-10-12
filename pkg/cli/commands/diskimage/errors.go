@@ -56,3 +56,44 @@ type ErrUnknownMediaSet struct {
 func (e ErrUnknownMediaSet) Error() string {
 	return "unknown media set " + e.Name + " (known: " + strings.Join(e.Known, ", ") + ")"
 }
+
+// ErrHTTPBootFlags is an HTTP boot flag given without --fleet-key, the flag
+// that turns HTTP boot on.
+type ErrHTTPBootFlags struct {
+	Flag string
+}
+
+// ErrEEPROMHSMAlgorithm reports the algorithm requested by rpi-eeprom-digest's
+// HSM wrapper contract is not the one the Raspberry Pi bootloader verifies.
+type ErrEEPROMHSMAlgorithm struct {
+	Algorithm string
+}
+
+func (e *ErrEEPROMHSMAlgorithm) Error() string {
+	return "rpi-eeprom HSM wrapper: unsupported algorithm " + e.Algorithm + " (want rsa2048-sha256)"
+}
+
+// ErrEEPROMHSMFlag reports a missing wrapper flag.
+type ErrEEPROMHSMFlag struct {
+	Flag string
+}
+
+func (e *ErrEEPROMHSMFlag) Error() string {
+	return "rpi-eeprom HSM wrapper: --" + e.Flag + " is required"
+}
+
+// ErrEEPROMHSMSign wraps a failure while signing a file for rpi-eeprom-digest.
+type ErrEEPROMHSMSign struct {
+	Step string
+	Err  error
+}
+
+func (e *ErrEEPROMHSMSign) Error() string {
+	return "rpi-eeprom HSM wrapper: " + e.Step + ": " + e.Err.Error()
+}
+
+func (e *ErrEEPROMHSMSign) Unwrap() error { return e.Err }
+
+func (e ErrHTTPBootFlags) Error() string {
+	return "--" + e.Flag + " needs --fleet-key: the HTTP boot files are only built when the fleet key is given"
+}

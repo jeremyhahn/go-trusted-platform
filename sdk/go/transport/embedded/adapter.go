@@ -56,6 +56,14 @@ type ServiceRegistry struct {
 	// (nonce issuance, config fetch, remote Secure Boot digest signing,
 	// provisioning session management).
 	ConfigDelivery platformv1.ConfigDeliveryServiceServer
+
+	// CallerContext attaches the in-process caller's identity to every
+	// call, as a network transport's authentication interceptors do; the
+	// embedded transport runs none. The embedder sets it: the services
+	// authorize on what it attaches (platformd's own services read
+	// peercred.UnixCredentials, the Unix socket's identity). Nil attaches
+	// nothing, and a service that requires an identity refuses the call.
+	CallerContext func(context.Context) context.Context
 }
 
 // Adapter implements the transport.Adapter interface for in-process

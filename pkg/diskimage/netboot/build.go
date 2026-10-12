@@ -137,6 +137,10 @@ type Config struct {
 	OutputDir string
 	// Sets are the sets to build (default DefaultSets).
 	Sets []Set
+	// HTTPBoot, when set, also builds the signed boot.img and boot.sig the
+	// Raspberry Pi bootloader EEPROM fetches over HTTP, from the Pi set's
+	// boot partition; nil builds none.
+	HTTPBoot *HTTPBoot
 }
 
 // Result is a finished netboot media build.
@@ -145,6 +149,11 @@ type Result struct {
 	Dir string
 	// Sets names the media sets built.
 	Sets []string
+	// HTTPBoot describes the HTTP boot files when the build made them.
+	HTTPBoot *HTTPBootFiles
+	// HTTPBootPath is the EEPROM's HTTP_PATH for them, under the HTTP_HOST
+	// the container is reached at; empty without HTTP boot.
+	HTTPBootPath string
 }
 
 // Build produces a netboot media build: one media set per Set, the
@@ -166,6 +175,7 @@ func Build(ctx context.Context, cfg *Config) (*Result, error) {
 	}
 
 	index := container.NetbootMedia{}
+	var httpBoot *HTTPBootFiles
 	for _, set := range c.Sets {
 		staged, err := c.buildSet(ctx, set, work)
 		if err != nil {
@@ -180,6 +190,13 @@ func Build(ctx context.Context, cfg *Config) (*Result, error) {
 		}
 		index.TFTPTree = TFTPTreeDir
 		index.ARM64IPXE = ARM64IPXEFile
+		if c.HTTPBoot == nil {
+			continue
+		}
+		if httpBoot, err = c.httpBootFiles(ctx); err != nil {
+			return nil, &BuildError{Set: set.Name, Step: "the HTTP boot files", Err: err}
+		}
+		index.HTTPBoot = HTTPBootDir
 	}
 	if err := os.RemoveAll(work); err != nil {
 		return nil, &BuildError{Step: "removing the work directory", Err: err}
@@ -197,7 +214,25 @@ func Build(ctx context.Context, cfg *Config) (*Result, error) {
 	if _, err := container.LoadMediaSets(filepath.Join(c.OutputDir, container.NetbootMediaSetsDir), "/data/"+container.NetbootMediaSetsDir); err != nil {
 		return nil, &BuildError{Step: "loading the media sets back", Err: err}
 	}
-	return &Result{Dir: c.OutputDir, Sets: index.MediaSets}, nil
+	result := &Result{Dir: c.OutputDir, Sets: index.MediaSets}
+	if httpBoot != nil {
+		if err := readBackHTTPBoot(c.OutputDir, httpBoot); err != nil {
+			return nil, err
+		}
+		result.HTTPBoot = httpBoot
+		result.HTTPBootPath = (&container.NetbootMedia{HTTPBoot: HTTPBootDir}).HTTPBootPath()
+	}
+	return result, nil
+}
+
+// readBackHTTPBoot reads the HTTP boot files staged under outputDir back as
+// the EEPROM reads them, against the key hash they were staged for. Build's
+// last step: what fails here is never served.
+func readBackHTTPBoot(outputDir string, files *HTTPBootFiles) error {
+	if _, err := VerifyHTTPBoot(filepath.Join(outputDir, HTTPBootDir), files.KeyHash); err != nil {
+		return &BuildError{Step: "loading the HTTP boot files back", Err: err}
+	}
+	return nil
 }
 
 // resolve checks the configuration and fills its defaults.
@@ -227,6 +262,11 @@ func (cfg *Config) resolve() (*Config, error) {
 		}
 		if set.Name == container.MediaSetRaspberryPi && c.IPXEFile == "" {
 			return nil, &BuildError{Set: set.Name, Step: "configuration", Err: &MissingFileError{File: "the arm64 iPXE"}}
+		}
+	}
+	if c.HTTPBoot != nil {
+		if err := c.resolveHTTPBoot(); err != nil {
+			return nil, err
 		}
 	}
 	return &c, nil

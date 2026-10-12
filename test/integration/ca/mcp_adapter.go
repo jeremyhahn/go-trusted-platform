@@ -53,15 +53,16 @@ const (
 
 // MCP Tool names for CA operations.
 const (
-	MCPToolCAInfo   = "ca_info"
-	MCPToolCAIssue  = "ca_issue"
-	MCPToolCAGet    = "ca_get"
-	MCPToolCAList   = "ca_list"
-	MCPToolCARevoke = "ca_revoke"
-	MCPToolCARenew  = "ca_renew"
-	MCPToolCAVerify = "ca_verify"
-	MCPToolCACRL    = "ca_crl"
-	MCPToolCABundle = "ca_bundle"
+	MCPToolCAInfo    = "ca_info"
+	MCPToolCAIssue   = "ca_issue"
+	MCPToolCASignCSR = "ca_sign_csr"
+	MCPToolCAGet     = "ca_get"
+	MCPToolCAList    = "ca_list"
+	MCPToolCARevoke  = "ca_revoke"
+	MCPToolCARenew   = "ca_renew"
+	MCPToolCAVerify  = "ca_verify"
+	MCPToolCACRL     = "ca_crl"
+	MCPToolCABundle  = "ca_bundle"
 )
 
 // =============================================================================
@@ -556,6 +557,33 @@ func (m *MCPAdapter) IssueCertificate(ctx context.Context, opts IssueCertificate
 		return nil, err
 	}
 
+	return mcpIssueResult(&resp), nil
+}
+
+// SignCSR certifies a KMS key's CSR via the ca_sign_csr tool.
+func (m *MCPAdapter) SignCSR(ctx context.Context, opts SignCSROptions) (*IssueCertificateResult, error) {
+	args := map[string]interface{}{
+		"csr_pem": opts.CSRPEM,
+	}
+	if opts.ValidDays > 0 {
+		args["valid_days"] = opts.ValidDays
+	}
+
+	result, err := m.callTool(ctx, MCPToolCASignCSR, args)
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "MCP", Method: MCPToolCASignCSR, Err: err}
+	}
+
+	var resp mcpCACertResp
+	if err := m.parseToolResult(result, MCPToolCASignCSR, &resp); err != nil {
+		return nil, err
+	}
+
+	return mcpIssueResult(&resp), nil
+}
+
+// mcpIssueResult converts an issued-certificate response into the shared result.
+func mcpIssueResult(resp *mcpCACertResp) *IssueCertificateResult {
 	issueResult := &IssueCertificateResult{}
 
 	if resp.Status != nil {
@@ -569,7 +597,7 @@ func (m *MCPAdapter) IssueCertificate(ctx context.Context, opts IssueCertificate
 		}
 	}
 
-	return issueResult, nil
+	return issueResult
 }
 
 // =============================================================================

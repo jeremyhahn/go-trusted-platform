@@ -39,7 +39,7 @@ Controls where the PXE bootstrap container is deployed.
 | `container_runtime` | string | `docker` | Container runtime: `docker` or `podman` |
 | `bootstrap_http_port` | int | `8080` | Container HTTP service: per-MAC config, install-log sink, `/health` |
 | `bootstrap_device_script_port` | int | `bootstrap_http_port` + 1 | Per-device boot script listener. Move it when the deployer already has something on the derived port |
-| `netboot_media_dir` | string | — | The netboot media build to stage (media sets, the Raspberry Pi TFTP tree, the db-signed arm64 iPXE), relative to this file — built by `make netboot-media` / `platformctl diskimage netboot`. **Required**: the container image carries no installer media, and every PXE-installed node — x86_64 included — boots a set from this build |
+| `netboot_media_dir` | string | — | The netboot media build to stage (media sets, the Raspberry Pi TFTP tree, the db-signed arm64 iPXE, and when it was built with `--fleet-key` the Pi's signed HTTP boot files, `http_boot: http-boot`, served at `/data/http-boot/`), relative to this file — built by `make netboot-media` / `platformctl diskimage netboot`. **Required**: the container image carries no installer media, and every PXE-installed node — x86_64 included — boots a set from this build |
 | `proxy_dhcp` | bool | `false` | Answer PXE clients with boot options only; the segment's own DHCP server leases addresses |
 
 ```yaml

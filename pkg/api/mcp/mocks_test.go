@@ -122,15 +122,16 @@ type mockServiceProvider struct {
 	daemonListProtocolsFunc  func(ctx context.Context) (interface{}, error)
 
 	// CA
-	caInfoFunc   func(ctx context.Context) (interface{}, error)
-	caIssueFunc  func(ctx context.Context, req *CAIssueRequest) (interface{}, error)
-	caGetFunc    func(ctx context.Context, serial string, includePEM bool) (interface{}, error)
-	caListFunc   func(ctx context.Context, limit int, cursor string, status string) (interface{}, error)
-	caRevokeFunc func(ctx context.Context, serial string, reason int, deleteKeys bool) (interface{}, error)
-	caRenewFunc  func(ctx context.Context, serial string, extendDays int, preserveAttrs bool) (interface{}, error)
-	caVerifyFunc func(ctx context.Context, certificatePEM string, certificateDER []byte, checkRevoked bool) (interface{}, error)
-	caCRLFunc    func(ctx context.Context) (interface{}, error)
-	caBundleFunc func(ctx context.Context, storeType string, algorithm string) (interface{}, error)
+	caInfoFunc    func(ctx context.Context) (interface{}, error)
+	caIssueFunc   func(ctx context.Context, req *CAIssueRequest) (interface{}, error)
+	caSignCSRFunc func(ctx context.Context, req *CASignCSRRequest) (interface{}, error)
+	caGetFunc     func(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error)
+	caListFunc    func(ctx context.Context, limit int, cursor string, status string) (interface{}, error)
+	caRevokeFunc  func(ctx context.Context, serial string, reason int, deleteKeys bool) (interface{}, error)
+	caRenewFunc   func(ctx context.Context, serial string, extendDays int, preserveAttrs bool) (interface{}, error)
+	caVerifyFunc  func(ctx context.Context, certificatePEM string, certificateDER []byte, checkRevoked bool) (interface{}, error)
+	caCRLFunc     func(ctx context.Context) (interface{}, error)
+	caBundleFunc  func(ctx context.Context, storeType string, algorithm string) (interface{}, error)
 
 	// IAM
 	iamCreateUserFunc      func(ctx context.Context, req *IAMCreateUserRequest) (interface{}, error)
@@ -508,7 +509,7 @@ func newMockServiceProvider() *mockServiceProvider {
 				"key_algorithm": req.Algorithm,
 			}, nil
 		},
-		caGetFunc: func(ctx context.Context, serial string, includePEM bool) (interface{}, error) {
+		caGetFunc: func(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error) {
 			result := map[string]interface{}{
 				"serial":        serial,
 				"common_name":   "test.example.com",
@@ -1369,9 +1370,16 @@ func (m *mockServiceProvider) CAIssue(ctx context.Context, req *CAIssueRequest) 
 	return nil, nil
 }
 
-func (m *mockServiceProvider) CAGet(ctx context.Context, serial string, includePEM bool) (interface{}, error) {
+func (m *mockServiceProvider) CASignCSR(ctx context.Context, req *CASignCSRRequest) (interface{}, error) {
+	if m.caSignCSRFunc != nil {
+		return m.caSignCSRFunc(ctx, req)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) CAGet(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error) {
 	if m.caGetFunc != nil {
-		return m.caGetFunc(ctx, serial, includePEM)
+		return m.caGetFunc(ctx, serial, includePEM, includeDER)
 	}
 	return nil, nil
 }

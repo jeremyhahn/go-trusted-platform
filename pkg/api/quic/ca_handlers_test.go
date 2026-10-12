@@ -21,6 +21,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -569,6 +570,26 @@ func TestCAHandler_HandleGet_Success(t *testing.T) {
 	assert.NotNil(t, getResp.Certificate)
 	assert.Equal(t, "test.example.com", getResp.Certificate.Subject.CommonName)
 	assert.NotEmpty(t, getResp.Certificate.Pem)
+	assert.Nil(t, getResp.Certificate.Der, "DER was not asked for")
+}
+
+// A get that asks for DER receives the certificate's raw bytes, as the gRPC
+// service returns them (#691).
+func TestCAHandler_HandleGet_IncludeDer(t *testing.T) {
+	ca := newMockCA()
+	handler := NewCAHandler(logging.DefaultLogger(), ca, nil)
+	cert := generateTestCertificate("der.example.com", false, ca.intermCert, ca.privateKey)
+	require.NoError(t, ca.certStore.StoreCertificate(cert))
+	payload, err := quicwire.EncodePayload(&CAGetRequest{Serial: cert.SerialNumber.String(), IncludeDer: true})
+	require.NoError(t, err)
+
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpCAGet, Payload: payload})
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var getResp CAGetResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &getResp))
+	assert.Equal(t, cert.Raw, getResp.Certificate.Der)
+	assert.Empty(t, getResp.Certificate.Pem, "PEM was not asked for")
 }
 
 func TestCAHandler_HandleGet_MissingSerial(t *testing.T) {
@@ -1908,6 +1929,47 @@ func TestCAHandler_CertToFull_WithSubjectDetails(t *testing.T) {
 	assert.Equal(t, "123 Test St", full.Subject.Address)
 	assert.Equal(t, "94102", full.Subject.PostalCode)
 	assert.NotEmpty(t, full.Pem)
+}
+
+// The QUIC certificate carries the usages, path length and fingerprint the
+// gRPC service reports, with the same names (#691).
+func TestCAHandler_CertToFull_ReportsUsagesPathLenAndFingerprint(t *testing.T) {
+	handler := &CAHandler{}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(42),
+		Subject:               pkix.Name{CommonName: "usages.example"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            3,
+		KeyUsage:              x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageOCSPSigning, x509.ExtKeyUsageCodeSigning},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+
+	full := handler.certToFull(cert, false)
+
+	sum := sha256.Sum256(der)
+	assert.Equal(t, int32(3), full.MaxPathLen)
+	assert.Equal(t, []string{"DIGITAL_SIGNATURE", "CERT_SIGN", "CRL_SIGN"}, full.KeyUsage)
+	assert.Equal(t, []string{"OCSP_SIGNING", "CODE_SIGNING"}, full.ExtKeyUsage)
+	assert.Equal(t, hex.EncodeToString(sum[:]), full.FingerprintSHA256)
+	assert.Nil(t, full.Der, "certToFull leaves DER to the caller that asked for it")
+}
+
+// A usage the gRPC service does not name is left out rather than reported
+// under a guessed name, and an empty usage set names nothing.
+func TestUsageNames_LeaveUnnamedUsagesOut(t *testing.T) {
+	assert.Nil(t, keyUsageNames(0))
+	assert.Nil(t, extKeyUsageNames(nil))
+	assert.Equal(t, []string{"SERVER_AUTH"},
+		extKeyUsageNames([]x509.ExtKeyUsage{x509.ExtKeyUsageMicrosoftKernelCodeSigning, x509.ExtKeyUsageServerAuth}))
 }
 
 func TestFirstOrEmpty(t *testing.T) {

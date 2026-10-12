@@ -15,6 +15,7 @@ package rpinetboot
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -79,6 +80,70 @@ type SocketError struct {
 
 func (e *SocketError) Error() string { return "rpinetboot: socket " + e.Option + ": " + e.Err.Error() }
 func (e *SocketError) Unwrap() error { return e.Err }
+
+// HTTPBootConfigError is an HTTPBootOptions field the bootloader could not run
+// with.
+type HTTPBootConfigError struct {
+	Field string
+	Err   error
+}
+
+func (e *HTTPBootConfigError) Error() string {
+	if e.Err == nil {
+		return "rpinetboot: http boot: " + e.Field + " is required"
+	}
+	return "rpinetboot: http boot: invalid " + e.Field + ": " + e.Err.Error()
+}
+func (e *HTTPBootConfigError) Unwrap() error { return e.Err }
+
+// HTTPFetchError is a failure fetching one HTTP boot file.
+type HTTPFetchError struct {
+	URL string
+	Err error
+}
+
+func (e *HTTPFetchError) Error() string { return "rpinetboot: http " + e.URL + ": " + e.Err.Error() }
+func (e *HTTPFetchError) Unwrap() error { return e.Err }
+
+// HTTPStatusError is a server answer other than 200 OK.
+type HTTPStatusError struct {
+	Status int
+}
+
+func (e *HTTPStatusError) Error() string { return "the server answered " + strconv.Itoa(e.Status) }
+
+// HTTPSizeError is a file larger than the bootloader will take.
+type HTTPSizeError struct {
+	Limit int64
+}
+
+func (e *HTTPSizeError) Error() string {
+	return "the file is larger than the limit of " + strconv.FormatInt(e.Limit, 10) + " bytes"
+}
+
+// HTTPBootRefusedError is a boot.img the bootloader would not run because its
+// signature does not verify against the key in OTP; Err is the rpibootsig error
+// that says why.
+type HTTPBootRefusedError struct {
+	URL string
+	Err error
+}
+
+func (e *HTTPBootRefusedError) Error() string {
+	return "rpinetboot: the bootloader refuses " + e.URL + ": " + e.Err.Error()
+}
+func (e *HTTPBootRefusedError) Unwrap() error { return e.Err }
+
+// RamdiskError is a boot.img that verifies but is not a FAT ramdisk the
+// bootloader can mount.
+type RamdiskError struct {
+	Err error
+}
+
+func (e *RamdiskError) Error() string {
+	return "rpinetboot: boot.img is not a mountable ramdisk: " + e.Err.Error()
+}
+func (e *RamdiskError) Unwrap() error { return e.Err }
 
 var (
 	errNoTFTPServer = errors.New("the offer names no TFTP server (no siaddr, option 66 or server identifier)")

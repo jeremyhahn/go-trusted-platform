@@ -482,6 +482,7 @@ func TestGRPCMethodToOpcodeMap_CA(t *testing.T) {
 	}{
 		{"/platform.v1.CAService/GetCAInfo", quicwire.OpCAInfo},
 		{"/platform.v1.CAService/IssueCertificate", quicwire.OpCAIssue},
+		{"/platform.v1.CAService/SignCSR", quicwire.OpKMSExtendedCategory},
 		{"/platform.v1.CAService/RevokeCertificate", quicwire.OpCARevoke},
 		{"/platform.v1.CAService/RenewCertificate", quicwire.OpCARenew},
 		{"/platform.v1.CAService/VerifyCertificate", quicwire.OpCAVerify},

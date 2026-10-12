@@ -137,6 +137,7 @@ func (h *OAuthMetadataHandler) getSupportedScopes() []string {
 		"ca:read",
 		"ca:write",
 		"ca:delete",
+		"ca:sign-csr",
 
 		"kms:read",
 		"kms:write",

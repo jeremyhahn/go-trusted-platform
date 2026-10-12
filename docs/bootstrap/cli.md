@@ -26,7 +26,7 @@ mixing them up is the commonest mistake here:
 |---|---|---|
 | Day-zero fleet orchestration | `run`, `discover`, `deploy`, `status`, `teardown` | BMCs, the deployer host, the control plane |
 | Config preview | `resolve` | Nothing: the config file and its templates only |
-| Boot-server probing | `probe rpi` | The boot server on a segment, spoken to as a Raspberry Pi's bootloader would |
+| Boot-server probing | `probe rpi`, `probe rpi-http` | The boot server on a segment, spoken to as a Raspberry Pi's bootloader would: DHCP and TFTP, or signed HTTP boot |
 | Trust bootstrap | `trust`, plus the canonical modes `auto`, `dane`, `noise`, `spki`, `direct` | A platform server's CA bundle endpoint |
 | Secret migration | `secrets migrate`, `secrets verify`, `secrets status`, `secrets resolve` | A local configuration file and the KMS |
 
@@ -260,6 +260,43 @@ the platform's UKI carries the command line.
 port 68 is tolerated (`SO_REUSEADDR`), but a DHCP client that answers the
 probe's own DISCOVER on that host is not what is being measured; run it from
 a host that is not itself a DHCP client on that interface.
+
+## 6a-1. `platformctl bootstrap probe rpi-http`
+
+The other first stage: boot over HTTP with `SIGNED_BOOT`, the way a Raspberry
+Pi's bootloader does (`pkg/rpinetboot` `HTTPBoot`). It fetches
+`http://<http-host>/<http-path>/boot.img` and `boot.sig`, requires the public key
+the EEPROM carries to hash to the customer key hash in OTP, verifies `boot.sig`
+over `boot.img` with it (RSA-2048 PKCS#1 v1.5 over SHA-256, in the
+`rpi-eeprom-digest` format), and mounts `boot.img` as the FAT ramdisk. It fails
+on whatever the bootloader would refuse: a tampered image
+(`DigestMismatchError`), a signature by another key (`SignatureError`), an OTP
+hash of another key (`KeyHashMismatchError`), a malformed `boot.sig` (including a
+`target-soc` other than 2711 or 2712, `TargetSoCError`), an image
+that is not a FAT ramdisk. It needs no privilege and no DHCP: it is an HTTP
+client.
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--http-host` | string | `""` | The EEPROM's `HTTP_HOST`: the boot server's address, with its port unless 80 (**required**) |
+| `--http-path` | string | `data/http-boot` | The EEPROM's `HTTP_PATH`; the container serves the data directory under `/data/` |
+| `--pubkey` | string | `""` | The public key the EEPROM carries: a `pubkey.bin` file (**required**) |
+| `--otp-key-hash` | string | `""` | The customer key hash in OTP: 64 hex digits (**required**) |
+| `--timeout` | duration | `0` | Overall deadline; none otherwise |
+
+```bash
+platformctl bootstrap probe rpi-http --http-host 10.99.99.1:8080 \
+    --pubkey bin/netboot-media/http-boot/pubkey.bin --otp-key-hash 3f9a…c1
+platformctl bootstrap probe rpi-http --http-host 10.99.99.1:8080 --pubkey pubkey.bin --otp-key-hash 3f9a…c1 -o json
+```
+
+Give `--pubkey` and `--otp-key-hash` from the device's provisioning record,
+**not** from the server being probed: a probe that takes both from the server it
+checks proves only that the server agrees with itself. The report names the URL,
+`boot.img`'s size and SHA-256, `boot.sig`'s `ts` and `target-soc`, and the files
+in the ramdisk. The build that makes these files, and the runbook for the
+EEPROM and the OTP burn (**irreversible**), are in
+[docs/factory-image/](../factory-image/user.md#provision-a-fleet-signed-http-boot).
 
 ## 6b. `platformctl bootstrap resolve`
 

@@ -1375,10 +1375,72 @@ func TestExecuteCAIssue_ServiceError(t *testing.T) {
 	}
 }
 
+// A key request gets the default algorithm, store and validity.
+func TestExecuteCAIssue_KeyDefaults(t *testing.T) {
+	var got *CAIssueRequest
+	svc := newMockServiceProvider()
+	svc.caIssueFunc = func(ctx context.Context, req *CAIssueRequest) (interface{}, error) {
+		got = req
+		return map[string]string{}, nil
+	}
+	registry := NewToolRegistry(svc, newTestLogger())
+	if _, err := registry.ExecuteTool(context.Background(), "ca_issue", map[string]interface{}{"common_name": "a"}); err != nil {
+		t.Fatalf("ca_issue: %v", err)
+	}
+	if got.Algorithm != "ECDSA" || got.StoreType != "software" || got.ValidDays != 365 {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+// ca_sign_csr is its own tool: the CSR goes to CASignCSR, never CAIssue.
+func TestExecuteCASignCSR(t *testing.T) {
+	cases := []struct {
+		name string
+		args map[string]interface{}
+		days int
+	}{
+		{"unset validity is left to the CA default", map[string]interface{}{"csr_pem": "PEM"}, 0},
+		{"explicit validity", map[string]interface{}{"csr_pem": "PEM", "valid_days": 30}, 30},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got *CASignCSRRequest
+			svc := newMockServiceProvider()
+			svc.caSignCSRFunc = func(ctx context.Context, req *CASignCSRRequest) (interface{}, error) {
+				got = req
+				return map[string]string{}, nil
+			}
+			svc.caIssueFunc = func(ctx context.Context, req *CAIssueRequest) (interface{}, error) {
+				t.Error("ca_sign_csr reached CAIssue")
+				return nil, nil
+			}
+			registry := NewToolRegistry(svc, newTestLogger())
+			if _, err := registry.ExecuteTool(context.Background(), "ca_sign_csr", tc.args); err != nil {
+				t.Fatalf("ca_sign_csr: %v", err)
+			}
+			if got.CSRPEM != "PEM" || got.ValidDays != tc.days {
+				t.Errorf("request = %+v", got)
+			}
+		})
+	}
+}
+
+func TestExecuteCASignCSR_ServiceError(t *testing.T) {
+	svc := newMockServiceProvider()
+	svc.caSignCSRFunc = func(ctx context.Context, req *CASignCSRRequest) (interface{}, error) {
+		return nil, ErrMockServiceError
+	}
+	registry := NewToolRegistry(svc, newTestLogger())
+
+	if _, err := registry.ExecuteTool(context.Background(), "ca_sign_csr", map[string]interface{}{"csr_pem": "PEM"}); err == nil {
+		t.Error("expected error from service")
+	}
+}
+
 func TestExecuteCAGet_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.caGetFunc = func(ctx context.Context, serial string, includePEM bool) (interface{}, error) {
+	svc.caGetFunc = func(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())

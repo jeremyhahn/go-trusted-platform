@@ -679,28 +679,10 @@ Example:
 func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os.Signal, logger *logging.Logger, jsonlQuerier *jsonfile.Querier) error {
 	logger.Info("runWithWebservices: starting CA initialization")
 
-	if App.CA == nil {
-		logger.Info("runWithWebservices: CA is nil, parsing PINs")
-		soPIN, userPIN, err := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
-		if err != nil {
-			logger.Error(err, "runWithWebservices: PIN parsing failed")
-			cmd.PrintErrln(err)
-			return ErrServeStartup{Phase: "PIN parsing", Cause: err}
-		}
-		logger.Info("runWithWebservices: loading CA")
-		if err := App.LoadCA(ctx, soPIN, userPIN); err != nil {
-			logger.Warn("CA not found, attempting to initialize", "error", err)
-			if _, initErr := App.InitCA(ctx, soPIN, userPIN, InitParams); initErr != nil {
-				logger.Error(initErr)
-				cmd.PrintErrln(fmt.Sprintf("Failed to load or initialize CA: load error: %v, init error: %v", err, initErr))
-				return ErrServeStartup{Phase: "CA initialization", Cause: initErr}
-			}
-			logger.Info("CA initialized successfully")
-		} else {
-			logger.Info("runWithWebservices: CA loaded successfully")
-		}
-	} else {
-		logger.Info("runWithWebservices: CA already initialized")
+	if err := App.LoadOrInitCA(ctx, InitParams); err != nil {
+		logger.Error(err, "runWithWebservices: CA unavailable")
+		cmd.PrintErrln(err)
+		return ErrServeStartup{Phase: "CA initialization", Cause: err}
 	}
 
 	logger.Info("runWithWebservices: initializing web server")
@@ -1491,26 +1473,9 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	}
 	config.MCPConfig.HTTPAddr = listeners.MCP.Address()
 
-	if App != nil && App.CAConfig != nil && App.CA == nil {
-		soPIN, userPIN, pinErr := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
-		if pinErr != nil {
-			logger.Warn("CA PIN parsing failed (CA will not be available)", "error", pinErr)
-		} else {
-			if loadErr := App.LoadCA(ctx, soPIN, userPIN); loadErr != nil {
-				logger.Warn("CA not found, attempting to initialize", "error", loadErr)
-				if _, initErr := App.InitCA(ctx, soPIN, userPIN, InitParams); initErr != nil {
-					logger.Warn("CA initialization failed (CA will not be available)",
-						"load_error", loadErr, "init_error", initErr)
-				} else {
-					logger.Info("CA initialized successfully")
-				}
-			} else {
-				logger.Info("CA loaded successfully")
-			}
-		}
-	}
-	if App != nil && App.CA != nil {
-		config.CAService = App.CA
+	if err := daemon.AttachNodeCA(ctx, config, InitParams); err != nil {
+		logger.Warn("CA will not be available", "error", err)
+	} else {
 		logger.Info("CA service configured for daemon")
 	}
 

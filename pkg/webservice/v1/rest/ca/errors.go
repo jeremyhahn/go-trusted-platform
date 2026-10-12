@@ -173,6 +173,23 @@ func (e ErrInvalidPaginationParams) Error() string {
 	return fmt.Sprintf("invalid pagination parameters: %s", e.Reason)
 }
 
+// ErrSignCSRScopeRequired is returned when a caller without the ca:sign-csr
+// scope asks the CA to certify a CSR.
+type ErrSignCSRScopeRequired struct {
+	Cause error
+}
+
+func (e ErrSignCSRScopeRequired) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("signing a CSR requires the %s scope: %v", SignCSRScope, e.Cause)
+	}
+	return fmt.Sprintf("signing a CSR requires a platform token with the %s scope", SignCSRScope)
+}
+
+func (e ErrSignCSRScopeRequired) Unwrap() error {
+	return e.Cause
+}
+
 // ErrBootstrapBundleFailed is returned when the bootstrap bundle retrieval fails.
 type ErrBootstrapBundleFailed struct {
 	Cause error

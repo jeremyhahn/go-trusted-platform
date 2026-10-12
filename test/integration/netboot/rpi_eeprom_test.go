@@ -52,24 +52,10 @@ var rpiPackages = []string{"raspberrypi-bootloader", "raspberrypi-bootloader-com
 // booted in practice.
 func TestRaspberryPiEEPROMStage(t *testing.T) {
 	in := requireInputs(t)
-	ubootDir := requireEnvPath(t, envUBootDir)
-	apkDir := os.Getenv(envRPiAPKDir)
-	mirror, version := os.Getenv(envAlpineMirror), os.Getenv(envAlpineVersion)
-	if apkDir == "" || mirror == "" || version == "" {
-		t.Fatal(&MissingInputError{Variable: envRPiAPKDir + ", " + envAlpineMirror + ", " + envAlpineVersion})
-	}
 	logger := logging.DefaultLogger()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-
-	// The tree: U-Boot from the builder, firmware from the Alpine packages
-	// (fetched once into the cache directory the Makefile passes).
-	boards, err := uboot.Locate(ubootDir)
-	require.NoError(t, err)
-	art := boards[uboot.BoardRPiArm64]
-	fetchRPiPackages(t, ctx, apkDir, mirror, version, logger)
-	treeDir := filepath.Join(in.workDir, "rpi-tftp")
-	require.NoError(t, netboot.Stage(ctx, netboot.Inputs{Model: "rpi4", PrefetchDir: apkDir, UBoot: art}, treeDir))
+	treeDir, art := stageRPiTree(t, ctx, in, "rpi-tftp", logger)
 
 	// A per-device directory for one Pi: its own config.txt, everything
 	// else from the root — the shape TFTP_PREFIX is for.
@@ -93,21 +79,7 @@ func TestRaspberryPiEEPROMStage(t *testing.T) {
 			cfg.LocalFilesDir = filepath.Join(in.workDir, "pxe-files")
 			require.NoError(t, os.MkdirAll(cfg.LocalFilesDir, 0o755))
 			cfg.BootEntries = []ipxe.BootEntry{{Name: "unused", Description: "unused", Kernel: "http://10.99.99.1:8080/files/none"}}
-			env, err := ipxe.NewTestEnv(cfg, logger)
-			require.NoError(t, err)
-			require.NoError(t, env.Setup())
-			t.Cleanup(func() { _ = env.Cleanup() })
-			envCtx, stopEnv := context.WithCancel(ctx)
-			t.Cleanup(stopEnv)
-			started := make(chan error, 1)
-			go func() { started <- env.Start(envCtx) }()
-			select {
-			case <-env.Ready():
-			case err := <-started:
-				t.Fatalf("the PXE environment did not start: %v", err)
-			case <-time.After(30 * time.Second):
-				t.Fatal("the PXE environment did not become ready")
-			}
+			startPXEEnv(t, ctx, cfg, logger)
 
 			// The Pi: its own network namespace on the bridge, as a board
 			// on the segment is, driven through the operator's command. A
@@ -148,6 +120,47 @@ func TestRaspberryPiEEPROMStage(t *testing.T) {
 				assert.Greater(t, byName[name].Bytes, int64(0), name)
 			}
 		})
+	}
+}
+
+// startPXEEnv sets up and starts the PXE test environment for cfg and stops it
+// when the test ends.
+// stageRPiTree stages the Pi's boot partition under the work directory: U-Boot
+// from the builder, firmware from the Alpine packages (fetched once into the
+// cache directory the Makefile passes).
+func stageRPiTree(t *testing.T, ctx context.Context, in inputs, name string, logger *logging.Logger) (string, uboot.Artifacts) {
+	t.Helper()
+	ubootDir := requireEnvPath(t, envUBootDir)
+	apkDir := os.Getenv(envRPiAPKDir)
+	mirror, version := os.Getenv(envAlpineMirror), os.Getenv(envAlpineVersion)
+	if apkDir == "" || mirror == "" || version == "" {
+		t.Fatal(&MissingInputError{Variable: envRPiAPKDir + ", " + envAlpineMirror + ", " + envAlpineVersion})
+	}
+	boards, err := uboot.Locate(ubootDir)
+	require.NoError(t, err)
+	art := boards[uboot.BoardRPiArm64]
+	fetchRPiPackages(t, ctx, apkDir, mirror, version, logger)
+	treeDir := filepath.Join(in.workDir, name)
+	require.NoError(t, netboot.Stage(ctx, netboot.Inputs{Model: "rpi4", PrefetchDir: apkDir, UBoot: art}, treeDir))
+	return treeDir, art
+}
+
+func startPXEEnv(t *testing.T, ctx context.Context, cfg *ipxe.TestEnvConfig, logger *logging.Logger) {
+	t.Helper()
+	env, err := ipxe.NewTestEnv(cfg, logger)
+	require.NoError(t, err)
+	require.NoError(t, env.Setup())
+	t.Cleanup(func() { _ = env.Cleanup() })
+	envCtx, stopEnv := context.WithCancel(ctx)
+	t.Cleanup(stopEnv)
+	started := make(chan error, 1)
+	go func() { started <- env.Start(envCtx) }()
+	select {
+	case <-env.Ready():
+	case err := <-started:
+		t.Fatalf("the PXE environment did not start: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the PXE environment did not become ready")
 	}
 }
 

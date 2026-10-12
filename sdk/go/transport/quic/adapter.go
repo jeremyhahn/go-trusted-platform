@@ -175,6 +175,15 @@ type quicClientConn struct {
 	sender  quicSender
 }
 
+// methodRequestEncoder converts a pb request into the daemon's wire request
+// for a non-category method whose request shape differs from the pb.
+type methodRequestEncoder func(args interface{}) (interface{}, error)
+
+// methodRequestEncoders routes non-category methods whose daemon request
+// differs from the pb request. Methods absent from this map send the pb
+// request as is; the codec pairs its fields with the daemon's by Go name.
+var methodRequestEncoders = map[string]methodRequestEncoder{}
+
 // Invoke performs a unary RPC call by translating to QUIC opcode requests.
 // Category opcodes (overlay, gateway, IPAM, switch, tenant barrier, etc.)
 // multiplex multiple operations under one wire opcode by stuffing the
@@ -247,10 +256,19 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 		return nil
 	}
 
-	// Standard non-category path. Methods whose reply shape differs from
-	// the daemon wire response (Count* derived from List* pagination
-	// totals) decode through a method-specific decoder; everything else
-	// decodes directly into the pb reply by Go field name.
+	// Standard non-category path. Methods whose request shape differs from
+	// the daemon wire request encode through a method-specific encoder.
+	// Methods whose reply shape differs from the daemon wire response
+	// (Count* derived from List* pagination totals) decode through a
+	// method-specific decoder; everything else decodes directly into the pb
+	// reply by Go field name.
+	if encode, hasEncoder := methodRequestEncoders[method]; hasEncoder {
+		wire, encErr := encode(args)
+		if encErr != nil {
+			return status.Error(codes.InvalidArgument, encErr.Error())
+		}
+		args = wire
+	}
 	if decode, hasDecoder := methodResponseDecoders[method]; hasDecoder {
 		payload, encErr := quicwire.EncodePayload(args)
 		if encErr != nil {
@@ -322,6 +340,7 @@ var categoryOpcodes = map[byte]struct{}{
 	quicwire.OpSwitchCategory:        {},
 	quicwire.OpProvisioningCategory:  {},
 	quicwire.OpVMExtendedCategory:    {},
+	quicwire.OpKMSExtendedCategory:   {},
 }
 
 // categorySubOpcodeMap routes gRPC method paths to the sub-opcode byte
@@ -433,6 +452,12 @@ var categorySubOpcodeMap = map[string]byte{
 	// NAT64 translator status — sub-opcode 0x39, next after the perf
 	// range. Server dispatcher: pkg/api/quic/gateway_nat64_handlers.go.
 	"/platform.v1.GatewayService/GetNAT64Status": quicwire.OpGatewayNAT64Status,
+
+	// CA CSR signing — multiplexed under OpKMSExtendedCategory (0xCD),
+	// because it certifies an existing KMS key and the opcode space is
+	// fully allocated. Server dispatcher:
+	// pkg/api/daemon/quic_kms_extended.go::handleKMSExtendedCategory.
+	"/platform.v1.CAService/SignCSR": quicwire.KMSSubSignCSR,
 }
 
 // init asserts the cross-table invariant: every gRPC method whose
@@ -458,6 +483,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	// CA Service — proto: pkg/api/grpc/proto/ca.proto
 	"/platform.v1.CAService/GetCAInfo":         quicwire.OpCAInfo,
 	"/platform.v1.CAService/IssueCertificate":  quicwire.OpCAIssue,
+	"/platform.v1.CAService/SignCSR":           quicwire.OpKMSExtendedCategory,
 	"/platform.v1.CAService/GetCertificate":    quicwire.OpCAGet,
 	"/platform.v1.CAService/ListCertificates":  quicwire.OpCAList,
 	"/platform.v1.CAService/RevokeCertificate": quicwire.OpCARevoke,

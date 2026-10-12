@@ -1000,6 +1000,14 @@ func (r *ToolRegistry) registerCATools() {
 					"type":        "string",
 					"description": "City or locality for the certificate subject",
 				},
+				"address": map[string]interface{}{
+					"type":        "string",
+					"description": "Street address for the certificate subject",
+				},
+				"postal_code": map[string]interface{}{
+					"type":        "string",
+					"description": "Postal code for the certificate subject",
+				},
 				"dns_names": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
@@ -1061,6 +1069,27 @@ func (r *ToolRegistry) registerCATools() {
 	})
 
 	r.addTool(mcpwire.ToolDefinition{
+		Name: "ca_sign_csr",
+		Description: "Certify a KMS key for code signing from a CSR the KMS signed. The CSR's subject must be " +
+			"only a common name naming the KMS key, its key must be that key's public key, and it must carry " +
+			"no subject alternative names. Requires the ca:sign-csr scope",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"csr_pem": map[string]interface{}{
+					"type":        "string",
+					"description": "PEM PKCS#10 request whose common name is the KMS key ID",
+				},
+				"valid_days": map[string]interface{}{
+					"type":        "integer",
+					"description": "Number of days the certificate should be valid; omit for the CA's configured default",
+				},
+			},
+			"required": []string{"csr_pem"},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "ca_get",
 		Description: "Get a certificate by its serial number",
 		InputSchema: map[string]interface{}{
@@ -1073,6 +1102,11 @@ func (r *ToolRegistry) registerCATools() {
 				"include_pem": map[string]interface{}{
 					"type":        "boolean",
 					"description": "Include PEM-encoded certificate in response",
+					"default":     false,
+				},
+				"include_der": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Include DER-encoded certificate in response",
 					"default":     false,
 				},
 			},
@@ -1221,7 +1255,7 @@ func (r *ToolRegistry) SetAuthorizationChecker(checker *AuthorizationChecker) {
 
 // ExecuteTool executes a tool by name with the given arguments.
 func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (interface{}, error) {
-	r.logger.Debug("Executing tool=%s", name)
+	r.logger.Debug("Executing tool", "tool", name)
 
 	// Add timeout to context if not present
 	if _, ok := ctx.Deadline(); !ok {
@@ -1458,6 +1492,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeCAInfo(ctx, args)
 	case "ca_issue":
 		return r.executeCAIssue(ctx, args)
+	case "ca_sign_csr":
+		return r.executeCASignCSR(ctx, args)
 	case "ca_get":
 		return r.executeCAGet(ctx, args)
 	case "ca_list":

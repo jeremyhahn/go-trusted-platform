@@ -718,8 +718,15 @@ func TestPlatformServiceProvider_CAOperations_NilService(t *testing.T) {
 		}
 	})
 
+	t.Run("CASignCSR returns error", func(t *testing.T) {
+		_, err := provider.CASignCSR(ctx, &mcp.CASignCSRRequest{})
+		if _, ok := err.(ErrServiceNotAvailable); !ok {
+			t.Errorf("expected ErrServiceNotAvailable, got %T", err)
+		}
+	})
+
 	t.Run("CAGet returns error", func(t *testing.T) {
-		_, err := provider.CAGet(ctx, "123456", true)
+		_, err := provider.CAGet(ctx, "123456", true, false)
 		if err == nil {
 			t.Error("expected error")
 		}

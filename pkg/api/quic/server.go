@@ -48,7 +48,7 @@ type ServerStats struct {
 type Server struct {
 	config   *ServerConfig
 	handler  Handler
-	listener *quicgo.Listener
+	listener atomic.Pointer[quicgo.Listener]
 	logger   *logging.Logger
 
 	// Server state
@@ -148,13 +148,13 @@ func (s *Server) Start() error {
 		return err
 	}
 
-	s.listener = listener
+	s.listener.Store(listener)
 	s.running.Store(true)
 
 	s.logger.Infof("QUIC server started on %s", s.config.ListenAddr)
 
 	s.wg.Add(1)
-	go s.acceptConnections()
+	go s.acceptConnections(listener)
 
 	return nil
 }
@@ -170,8 +170,10 @@ func (s *Server) Stop() error {
 	s.running.Store(false)
 	s.cancel()
 
-	if s.listener != nil {
-		if err := s.listener.Close(); err != nil {
+	// Swap the listener out before closing it, so ListenAddr never reads a
+	// closed listener.
+	if listener := s.listener.Swap(nil); listener != nil {
+		if err := listener.Close(); err != nil {
 			s.logger.Warnf("Error closing QUIC listener: %v", err)
 		}
 	}
@@ -194,11 +196,11 @@ func (s *Server) Stop() error {
 }
 
 // acceptConnections accepts incoming QUIC connections
-func (s *Server) acceptConnections() {
+func (s *Server) acceptConnections(listener *quicgo.Listener) {
 	defer s.wg.Done()
 
 	for s.running.Load() {
-		conn, err := s.listener.Accept(s.ctx)
+		conn, err := listener.Accept(s.ctx)
 		if err != nil {
 			if !s.running.Load() {
 				return
@@ -419,7 +421,17 @@ func (s *Server) IsRunning() bool {
 	return s.running.Load()
 }
 
-// ListenAddr returns the configured listen address
+// ListenAddr returns the address the server is bound to while it runs, so a
+// configured port 0 reports the port the kernel chose, and the configured
+// address otherwise, including a server marked running that has no
+// listener yet or whose listener Stop has already taken.
 func (s *Server) ListenAddr() string {
-	return s.config.ListenAddr
+	if !s.running.Load() {
+		return s.config.ListenAddr
+	}
+	listener := s.listener.Load()
+	if listener == nil {
+		return s.config.ListenAddr
+	}
+	return listener.Addr().String()
 }

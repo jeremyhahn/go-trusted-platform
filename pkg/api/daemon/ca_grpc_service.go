@@ -26,6 +26,8 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
@@ -39,6 +41,15 @@ const (
 	caMaxPageSize     uint32 = 1000
 )
 
+// ErrCANotInitialized is the FailedPrecondition every CA call answers when
+// the node has no certificate authority loaded.
+type ErrCANotInitialized struct{}
+
+// Error implements the error interface.
+func (ErrCANotInitialized) Error() string {
+	return "certificate authority not initialized"
+}
+
 // CAGRPCService implements the CA gRPC service for certificate authority operations.
 type CAGRPCService struct {
 	platformv1.UnimplementedCAServiceServer
@@ -46,6 +57,14 @@ type CAGRPCService struct {
 	logger     *logging.Logger
 	ca         quicbaasca.CACertificateAuthority
 	objStorage objectstorage.Client
+	// kms holds the keys SignCSR certifies; without it SignCSR fails closed.
+	kms issuance.KMS
+}
+
+// WithKMS sets the KMS whose keys SignCSR certifies, and returns s.
+func (s *CAGRPCService) WithKMS(kms issuance.KMS) *CAGRPCService {
+	s.kms = kms
+	return s
 }
 
 // TrustAnchor exposes the CA behind this service as the trust anchor for
@@ -70,7 +89,7 @@ func NewCAGRPCService(logger *logging.Logger, ca quicbaasca.CACertificateAuthori
 // GetCAInfo returns CA certificate information.
 func (s *CAGRPCService) GetCAInfo(ctx context.Context, req *platformv1.GetCAInfoRequest) (*platformv1.GetCAInfoResponse, error) {
 	if s.ca == nil {
-		return nil, status.Error(codes.FailedPrecondition, "certificate authority not initialized")
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
 	now := timestamppb.Now()
@@ -107,7 +126,7 @@ func (s *CAGRPCService) GetCAInfo(ctx context.Context, req *platformv1.GetCAInfo
 // IssueCertificate issues a new certificate.
 func (s *CAGRPCService) IssueCertificate(ctx context.Context, req *platformv1.IssueCertificateRequest) (*platformv1.IssueCertificateResponse, error) {
 	if s.ca == nil {
-		return nil, status.Error(codes.FailedPrecondition, "certificate authority not initialized")
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
 	certReq := req.GetRequest()
@@ -157,9 +176,9 @@ func (s *CAGRPCService) IssueCertificate(ctx context.Context, req *platformv1.Is
 	}
 
 	// Set key attributes
-	storeType := s.parseStoreType(certReq.GetStoreType())
-	if storeType == xkmssdk.StoreUnknown {
-		storeType = xkmssdk.StoreSoftware
+	storeType, err := issuance.StoreType(certReq.GetStoreType())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
@@ -187,11 +206,43 @@ func (s *CAGRPCService) IssueCertificate(ctx context.Context, req *platformv1.Is
 	}, nil
 }
 
+// SignCSR certifies a KMS key for code signing from a CSR the KMS signed.
+// The method is authorized by its own scope, ca:sign-csr, which ca:write
+// does not grant; issuance.SignCSR decides which CSRs are certified.
+func (s *CAGRPCService) SignCSR(ctx context.Context, req *platformv1.SignCSRRequest) (*platformv1.IssueCertificateResponse, error) {
+	if err := grpcapi.AuthorizeSignCSR(ctx); err != nil {
+		return nil, err
+	}
+	if s.ca == nil {
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
+	}
+	cert, err := issuance.SignCSR(ctx, s.ca, s.kms, &issuance.CSR{
+		PEM:       []byte(req.GetCsrPem()),
+		ValidDays: int(req.GetValidDays()),
+	})
+	if err != nil {
+		if issuance.IsInvalidRequest(err) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		s.logger.Error(err, "failed to sign CSR")
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return &platformv1.IssueCertificateResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "certificate issued successfully",
+		},
+		Certificate: s.certToProto(cert, true, false),
+		Timestamp:   timestamppb.Now(),
+	}, nil
+}
+
 // GetCertificate retrieves a certificate by serial number or common name.
 // The serial field accepts either a hex-encoded serial number or a common name.
 func (s *CAGRPCService) GetCertificate(ctx context.Context, req *platformv1.GetCertificateRequest) (*platformv1.GetCertificateResponse, error) {
 	if s.ca == nil {
-		return nil, status.Error(codes.FailedPrecondition, "certificate authority not initialized")
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
 	identifier := req.GetSerial()
@@ -213,7 +264,7 @@ func (s *CAGRPCService) GetCertificate(ctx context.Context, req *platformv1.GetC
 // ListCertificates lists certificates with pagination.
 func (s *CAGRPCService) ListCertificates(ctx context.Context, req *platformv1.ListCertificatesRequest) (*platformv1.ListCertificatesResponse, error) {
 	if s.ca == nil {
-		return nil, status.Error(codes.FailedPrecondition, "certificate authority not initialized")
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
 	pagination := req.GetPagination()
@@ -273,7 +324,7 @@ func (s *CAGRPCService) ListCertificates(ctx context.Context, req *platformv1.Li
 // RevokeCertificate revokes a certificate.
 func (s *CAGRPCService) RevokeCertificate(ctx context.Context, req *platformv1.RevokeCertificateRequest) (*platformv1.RevokeCertificateResponse, error) {
 	if s.ca == nil {
-		return nil, status.Error(codes.FailedPrecondition, "certificate authority not initialized")
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
 	serial := req.GetSerial()
@@ -318,7 +369,7 @@ func (s *CAGRPCService) RevokeCertificate(ctx context.Context, req *platformv1.R
 // RenewCertificate renews an existing certificate with extended validity.
 func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.RenewCertificateRequest) (*platformv1.RenewCertificateResponse, error) {
 	if s.ca == nil {
-		return nil, status.Error(codes.FailedPrecondition, "certificate authority not initialized")
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
 	serial := req.GetSerial()
@@ -426,7 +477,7 @@ func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.Re
 // VerifyCertificate verifies a certificate against the CA bundle.
 func (s *CAGRPCService) VerifyCertificate(ctx context.Context, req *platformv1.VerifyCertificateRequest) (*platformv1.VerifyCertificateResponse, error) {
 	if s.ca == nil {
-		return nil, status.Error(codes.FailedPrecondition, "certificate authority not initialized")
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
 	certPem := req.GetCertificatePem()
@@ -544,7 +595,7 @@ func (s *CAGRPCService) VerifyCertificate(ctx context.Context, req *platformv1.V
 // GetCRL returns the Certificate Revocation List.
 func (s *CAGRPCService) GetCRL(ctx context.Context, req *platformv1.GetCRLRequest) (*platformv1.GetCRLResponse, error) {
 	if s.ca == nil {
-		return nil, status.Error(codes.FailedPrecondition, "certificate authority not initialized")
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
 	// Try to generate CRL if the CA supports it
@@ -610,7 +661,7 @@ func (s *CAGRPCService) GetCRL(ctx context.Context, req *platformv1.GetCRLReques
 // the unfiltered path.
 func (s *CAGRPCService) GetCABundle(ctx context.Context, req *platformv1.GetCABundleRequest) (*platformv1.GetCABundleResponse, error) {
 	if s.ca == nil {
-		return nil, status.Error(codes.FailedPrecondition, "certificate authority not initialized")
+		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
 
 	bundle, err := s.ca.CABundle()
@@ -809,10 +860,6 @@ func (s *CAGRPCService) revocationReasonToProto(reason int) platformv1.Revocatio
 	default:
 		return platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED
 	}
-}
-
-func (s *CAGRPCService) parseStoreType(storeType string) xkmssdk.StoreType {
-	return xkmssdk.ParseStoreType(storeType)
 }
 
 func (s *CAGRPCService) parseKeyUsage(usages []string) x509.KeyUsage {

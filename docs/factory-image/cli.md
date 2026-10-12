@@ -1,10 +1,10 @@
 # Factory Image — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl diskimage` · Last verified: 2026-09-16
+> **Status: NORMATIVE** · Scope: `platformctl diskimage` · Last verified: 2026-10-09
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
-> Every verb and flag below was read out of `pkg/cli/commands/diskimage/` on 2026-09-16.
+> Every verb and flag below was read out of `pkg/cli/commands/diskimage/` on 2026-10-09.
 
 ---
 
@@ -14,15 +14,17 @@
 platformctl diskimage            Factory disk images (Raspberry Pi SD card, QEMU virt)
 platformctl diskimage create     Build a factory disk image
 platformctl diskimage netboot    Build the netboot media the bootstrap container serves
+platformctl diskimage rpi-eeprom-hsm Sign an EEPROM digest through the fleet KMS key
 platformctl diskimage inspect    Report an image's partitions, EFI partition contents and UKI
 platformctl diskimage assemble   (hidden) Run the installer against a loop-mounted image
 platformctl diskimage netboot-initfs (hidden) Netboot initramfs + modloop for a platform-built kernel
 ```
 
-**None of these verbs needs a running daemon and none takes a transport.**
-They run on a build host; the root `--transport` / `--server` flags are
-accepted and ignored. Exit status is `0` on success and non-zero on any
-error, with the typed error message on stderr ([engineering.md §4](engineering.md#4-error-semantics)).
+All verbs except `rpi-eeprom-hsm` run on a build host without a running daemon;
+the root `--transport` / `--server` flags are accepted and ignored there.
+`rpi-eeprom-hsm` uses the root context to reach platformd's KMS and CA clients.
+Exit status is `0` on success and non-zero on any error, with the typed error
+message on stderr ([engineering.md §4](engineering.md#4-error-semantics)).
 Output is plain text; `--output` on the root command does not apply.
 
 The Makefile wraps the common invocations ([user.md](user.md)): `make
@@ -130,6 +132,27 @@ per MAC replaces it at install), and:
 | `--ipxe` | string | `build/docker/ipxe-builder/output/bin-arm64-efi/snponly.efi` | the arm64 iPXE to sign (`make ipxe-build`; checked against its `SHA256SUMS`) |
 | `--model` | string | `rpi4` | board the TFTP tree's `config.txt` is written for |
 | `--sets` | strings | all | sets to build; an unknown name is `ErrUnknownMediaSet` |
+| `--fleet-key` | string | `""` | `kms://` reference of the RSA-2048 fleet key that signs the Pi's HTTP `boot.sig`; turns HTTP boot on (needs the `aarch64-rpi` set and a board with an EEPROM, not the 3B+) |
+| `--fleet-cert` | string | the `--fleet-key` id | `kms://` reference of the fleet key's certificate, which carries its public key; `kms://<ref>#sha256=<fingerprint>` pins it |
+| `--source-date-epoch` | int | now | `boot.sig`'s `ts` as a Unix time, for a reproducible build |
+| `--target-soc` | string | `""` | optional `boot.sig` `target-soc` (`2711` or `2712`); omitted by default for fleet `boot.img` |
+
+`--fleet-cert`, `--source-date-epoch`, and `--target-soc` without `--fleet-key`
+are an `ErrHTTPBootFlags`. A non-`kms://` `--fleet-key` is refused (the fleet
+key never exists as a file).
+
+**Pin the fleet certificate.** `--fleet-cert kms://rpi/fleet#sha256=<fingerprint>`
+signs only if the certificate the CA returns has that SHA-256 fingerprint of
+its DER — the value `platformctl ca sign-csr` and `ca certificate` print as
+"SHA-256 Fingerprint", with or without colons, in either case. Any other
+certificate under the reference is a `CertPinError` and nothing is signed; a
+malformed pin is a `CertPinFormatError`. `rpi-eeprom-hsm` takes the same
+form. With `--fleet-key` the build also writes
+`http-boot/{boot.img,boot.sig,pubkey.bin}`, verifies them as the bootloader
+does, and prints the OTP customer key hash plus the EEPROM's `HTTP_HOST`,
+`HTTP_PORT`, and `HTTP_PATH` inputs. The hash is what an operator burns into
+OTP - **irreversible**; the runbook is
+[user.md](user.md#provision-a-fleet-signed-http-boot).
 
 **Secure Boot keys must be in the KMS.** A set is served over HTTP, so it
 never carries a private key: with `--secure-boot` the platform config's
@@ -143,6 +166,24 @@ platformctl diskimage netboot --output bin/netboot-media \
   --x86-binaries-dir bin --arm64-binaries-dir bin/aarch64 \
   --uboot-output-dir build/docker/uboot-builder/output \
   --virt-kernel-output-dir build/docker/virt-kernel-builder/output
+```
+
+## 2b. `platformctl diskimage rpi-eeprom-hsm FILE`
+
+Signs `FILE` through the same KMS signer used for Raspberry Pi HTTP `boot.sig`
+and prints the raw RSA signature as lowercase hex on stdout. It exists for
+upstream `rpi-eeprom-digest -H`, which invokes the wrapper as
+`<wrapper> -a rsa2048-sha256 <file>`.
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--fleet-key` | string | required | `kms://` reference of the RSA-2048 fleet signing key |
+| `--fleet-cert` | string | the `--fleet-key` id | `kms://` reference of the fleet certificate/public key; `#sha256=<fingerprint>` pins it (§2a) |
+| `-a`, `--algorithm` | string | `rsa2048-sha256` | upstream HSM-wrapper algorithm; other values are refused |
+
+```sh
+RPI_EEPROM_FLEET_KEY=kms://rpi/fleet \
+  scripts/rpi-eeprom-kms-hsm-wrapper.sh -a rsa2048-sha256 bootconf.txt
 ```
 
 ## 3. `platformctl diskimage inspect IMAGE`

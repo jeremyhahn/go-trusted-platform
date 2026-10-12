@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -53,13 +56,53 @@ func TestBuildHandlerMap_FullRegistry(t *testing.T) {
 	// All 20 services registered should yield 336 handlers (320 base +
 	// 6 gateway load balancer VIP methods + 3 gateway perf methods +
 	// 4 IPAM pool CRUD + 4 network zone CRUD - 2 retired tenant VLAN/bridge
-	// methods, #708 + gateway.GetNAT64Status, #601).
+	// methods, #708 + gateway.GetNAT64Status, #601 + ca.SignCSR, #691).
 	if len(m) < 300 {
 		t.Errorf("expected at least 300 handlers for full registry, got %d", len(m))
 	}
 
-	if len(m) != 336 {
-		t.Errorf("expected exactly 336 handlers for full registry, got %d", len(m))
+	if len(m) != 337 {
+		t.Errorf("expected exactly 337 handlers for full registry, got %d", len(m))
+	}
+}
+
+// signCSRServer records the SignCSR request the dispatcher hands it.
+type signCSRServer struct {
+	platformv1.UnimplementedCAServiceServer
+	got *platformv1.SignCSRRequest
+}
+
+func (s *signCSRServer) SignCSR(_ context.Context, req *platformv1.SignCSRRequest) (*platformv1.IssueCertificateResponse, error) {
+	s.got = req
+	return &platformv1.IssueCertificateResponse{Certificate: &platformv1.Certificate{Serial: "01"}}, nil
+}
+
+func TestDispatch_CASignCSR(t *testing.T) {
+	server := &signCSRServer{}
+	handler, ok := buildHandlerMap(&ServiceRegistry{CA: server})[platformv1.CAService_SignCSR_FullMethodName]
+	if !ok {
+		t.Fatal("expected SignCSR handler to be registered")
+	}
+
+	req := &platformv1.SignCSRRequest{CsrPem: "csr", ValidDays: 30}
+	resp, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler returned unexpected error: %v", err)
+	}
+	if server.got != req {
+		t.Errorf("SignCSR received %v, want the dispatched request", server.got)
+	}
+	if issued, isIssued := resp.(*platformv1.IssueCertificateResponse); !isIssued || issued.GetCertificate().GetSerial() != "01" {
+		t.Errorf("response = %v, want the server's certificate", resp)
+	}
+}
+
+// A CA server without SignCSR answers Unimplemented; dispatch must not mask
+// that as an empty certificate.
+func TestDispatch_CASignCSR_Unimplemented(t *testing.T) {
+	handler := buildHandlerMap(&ServiceRegistry{CA: &platformv1.UnimplementedCAServiceServer{}})[platformv1.CAService_SignCSR_FullMethodName]
+	if _, err := handler(context.Background(), &platformv1.SignCSRRequest{}); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("handler error = %v, want Unimplemented", err)
 	}
 }
 

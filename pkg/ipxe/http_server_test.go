@@ -14,6 +14,7 @@
 package ipxe
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -23,6 +24,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -477,6 +479,48 @@ func TestHTTPServer_handleDataFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The Raspberry Pi bootloader EEPROM fetches http://HTTP_HOST/HTTP_PATH/boot.img
+// and boot.sig; HTTP_PATH is the data directory's http-boot folder under /data/.
+// The bytes must arrive exactly as staged (boot.sig signs them), with a length
+// the client can check.
+func TestHTTPServer_handleDataFiles_ServesTheHTTPBootFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	dir := filepath.Join(dataDir, "http-boot")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	files := map[string][]byte{
+		"boot.img":   bytes.Repeat([]byte{0x00, 0xff, 0xeb, 0x3c}, 4096),
+		"boot.sig":   []byte("0123\nts: 1790856000\ntarget-soc: 2711\nrsa2048: ab\n"),
+		"pubkey.bin": bytes.Repeat([]byte{0x80}, 264),
+	}
+	for name, data := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o644))
+	}
+	cfg := DefaultServerConfig()
+	cfg.DataDir = dataDir
+	server := newTestHTTPServer(t, cfg)
+
+	for name, want := range files {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			server.handleDataFiles(w, httptest.NewRequest("GET", "/data/http-boot/"+name, nil))
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, strconv.Itoa(len(want)), resp.Header.Get("Content-Length"))
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Equal(t, want, body)
+		})
+	}
+
+	t.Run("a file that was not staged is a 404", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		server.handleDataFiles(w, httptest.NewRequest("GET", "/data/http-boot/boot.img.old", nil))
+		assert.Equal(t, http.StatusNotFound, w.Result().StatusCode)
+	})
 }
 
 func TestHTTPServer_handleProxy(t *testing.T) {

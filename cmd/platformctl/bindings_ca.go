@@ -20,6 +20,7 @@ import (
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 )
 
 // CABinding exposes Certificate Authority service methods to the Wails frontend.
@@ -83,6 +84,34 @@ func (b *CABinding) IssueCertificate(commonName, algorithm string, validDays int
 	}
 
 	return protoToMap(resp)
+}
+
+// SignCSR certifies, for code signing only, the KMS key that signed the PEM
+// PKCS#10 request csrPEM: `platformctl ca sign-csr`, through the same SDK
+// call. validDays zero selects the CA default. Only the platform admin may
+// sign (docs/ca/api.md §4); anyone else gets the CA's PermissionDenied.
+// The result is the object the CLI prints with --output json.
+func (b *CABinding) SignCSR(csrPEM string, validDays int32) (*casvc.IssueCertificateResult, error) {
+	cl, err := b.getClient()
+	if err != nil {
+		return nil, err
+	}
+	grpcClient := cl.CA()
+	if grpcClient == nil {
+		return nil, &ServiceUnavailableError{Service: "CA"}
+	}
+
+	result, err := casvc.NewClientFromGRPC(grpcClient).SignCSRDomain(b.conn.ctx, &casvc.SignCSRParams{
+		CSRPEM:    csrPEM,
+		ValidDays: validDays,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result.Certificate == nil || len(result.Certificate.Pem) == 0 {
+		return nil, &NoCertificateIssuedError{}
+	}
+	return result, nil
 }
 
 // GetCertificate retrieves a certificate by serial number.

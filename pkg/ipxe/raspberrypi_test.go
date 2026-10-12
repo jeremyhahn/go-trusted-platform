@@ -204,10 +204,12 @@ func TestTFTPServer_NoTreeKeepsTheFirmwareOnlyBehaviour(t *testing.T) {
 func TestTestEnv_RaspberryPiSettingsPassThrough(t *testing.T) {
 	cfg := DefaultTestEnvConfig()
 	cfg.TFTPDir = "/srv/tftp"
+	cfg.DataDir = "/srv/data"
 	cfg.ProxyDHCP = true
 	env, err := NewTestEnv(cfg, logging.DefaultLogger())
 	require.NoError(t, err)
 	assert.Equal(t, "/srv/tftp", env.ServerConfig().TFTPDir)
+	assert.Equal(t, "/srv/data", env.ServerConfig().DataDir, "the HTTP server serves it under /data/")
 	assert.True(t, env.ServerConfig().DHCPProxyOnly)
 	assert.True(t, env.dhcpConfig().ProxyOnly)
 }

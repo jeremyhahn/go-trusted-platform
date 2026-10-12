@@ -131,7 +131,7 @@ pxeboot, which is why the port is configurable rather than derived-only.
 | GET | `/health` | Liveness | always |
 | GET | `/static/*` | Static files | always |
 | GET | `/files/*` | Files under `LocalFilesDir` | `LocalFilesDir != ""` |
-| GET | `/data/*` | Files under `DataDir` — kernel, initramfs, ISOs | `DataDir != ""` |
+| GET | `/data/*` | Files under `DataDir` — kernel, initramfs, ISOs, and the Raspberry Pi's signed HTTP boot files (`/data/http-boot/{boot.img,boot.sig}`, the EEPROM's `HTTP_PATH=data/http-boot`) | `DataDir != ""` |
 | GET | `/media/status` | Open files under `DataDir` with read offsets and opener process names — the orchestrator's evidence that a virtual-media host is reading the ISO | always (503 if `DataDir == ""`, 405 on any other method) |
 | GET | `/proxy/https/{host}/{path}` | HTTPS→HTTP relay for iPXE | always |
 | PUT | `/installs/{hostname}/{filename}` | Install-log upload | always |

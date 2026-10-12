@@ -18,6 +18,7 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
@@ -64,8 +65,8 @@ func NewCARouterWithStorage(
 
 // RegisterRoutes registers the CA's PROTECTED REST routes on the provided
 // router, which the caller must have gated. The CA is a mixed surface and
-// the split is deliberate: certificate issuance and revocation are
-// privileged operations, and the list of certificates this CA has issued is
+// the split is deliberate: certificate issuance, CSR signing and revocation
+// are privileged operations, and the list of certificates this CA has issued is
 // an inventory of every identity on the platform, so the whole
 // /ca/certificates group is protected.
 //
@@ -137,14 +138,22 @@ func (r *CARouter) registerInfoRoutes(router *mux.Router) {
 	router.HandleFunc("/intermediate", r.handlers.GetIntermediate).Methods("GET")
 }
 
+// WithKMS sets the KMS whose keys POST /api/v1/ca/sign-csr certifies.
+func (r *CARouter) WithKMS(kms issuance.KMS) *CARouter {
+	r.handlers.WithKMS(kms)
+	return r
+}
+
 // registerCertificateRoutes registers certificate management endpoints
 // POST   /api/v1/ca/certificates               - Issue certificate
+// POST   /api/v1/ca/sign-csr                   - Certify a KMS key for code signing (ca:sign-csr)
 // GET    /api/v1/ca/certificates               - List certificates
 // GET    /api/v1/ca/certificates/{serial}      - Get certificate by serial
 // DELETE /api/v1/ca/certificates/{serial}      - Revoke certificate
 func (r *CARouter) registerCertificateRoutes(router *mux.Router) {
 	// Certificate collection routes
 	router.HandleFunc("/certificates", r.handlers.IssueCertificate).Methods("POST")
+	router.HandleFunc("/sign-csr", r.handlers.SignCSR).Methods("POST")
 	router.HandleFunc("/certificates", r.handlers.ListCertificates).Methods("GET")
 
 	// Certificate instance routes

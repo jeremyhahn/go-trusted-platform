@@ -609,6 +609,8 @@ func (r *ToolRegistry) executeCAIssue(ctx context.Context, args map[string]inter
 		Country:            getString(args, "country"),
 		Province:           getString(args, "province"),
 		Locality:           getString(args, "locality"),
+		Address:            getString(args, "address"),
+		PostalCode:         getString(args, "postal_code"),
 		DNSNames:           getStringSlice(args, "dns_names"),
 		IPAddresses:        getStringSlice(args, "ip_addresses"),
 		EmailAddresses:     getStringSlice(args, "email_addresses"),
@@ -640,11 +642,25 @@ func (r *ToolRegistry) executeCAIssue(ctx context.Context, args map[string]inter
 	return marshalResult(cert)
 }
 
+func (r *ToolRegistry) executeCASignCSR(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	req := &CASignCSRRequest{
+		CSRPEM:    getString(args, "csr_pem"),
+		ValidDays: getInt(args, "valid_days"),
+	}
+
+	cert, err := r.service.CASignCSR(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(cert)
+}
+
 func (r *ToolRegistry) executeCAGet(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	serial := getString(args, "serial")
 	includePEM := getBool(args, "include_pem")
+	includeDER := getBool(args, "include_der")
 
-	cert, err := r.service.CAGet(ctx, serial, includePEM)
+	cert, err := r.service.CAGet(ctx, serial, includePEM, includeDER)
 	if err != nil {
 		return nil, err
 	}

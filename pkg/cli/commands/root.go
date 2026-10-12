@@ -215,6 +215,8 @@ func getCommonFlags() *cli.CommonFlags {
 		NoColor:      noColor,
 		GetConfig:    getConfig,
 		GetContext:   getContext,
+		// An embedded context hosts platformd in this process.
+		StartEmbedded: startEmbeddedHost,
 	}
 }
 

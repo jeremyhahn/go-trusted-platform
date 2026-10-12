@@ -734,6 +734,8 @@ platformctl firmware atecc608a provision --slot 0 --generate-key
 platformctl firmware atecc608a export-pubkey --slot 0 --output device-pubkey.pem
 
 # 3. Create CSR and sign with platform CA
+#    (ca sign-csr only certifies a key the platform KMS holds, for code
+#    signing; it refuses an ATECC608A device key — see docs/ca/cli.md)
 platformctl ca sign-csr --csr device.csr --output device.crt
 
 # 4. Write device serial to OTP zone

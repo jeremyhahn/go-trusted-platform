@@ -184,7 +184,10 @@ directory holding an extracted ISO.**
 13. **The `/data/` and `/files/` routes are conditional** on `DataDir` and
     `LocalFilesDir` being non-empty. Setting `DataDir: ""` disables the endpoint
     entirely — which is why a chainload can succeed and the subsequent
-    kernel fetch 404.
+    kernel fetch 404. The same holds for a Pi's HTTP boot: with no `DataDir` the
+    EEPROM's `boot.img` request is a 404 and the Pi boots nothing from the
+    network. Both `http.Server` timeouts are 30 s, which also bounds how long a
+    large `boot.img` may take to transfer.
 14. **`/config/*` returns 503 when `InstallsDir` is empty**, because values are
     stored under it.
 18. **`/boot.ipxe` has one shape per configuration.** With a `DeviceLookup`

@@ -153,6 +153,9 @@ func registerCAHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.CAService_IssueCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.IssueCertificate(ctx, req.(*platformv1.IssueCertificateRequest))
 	}
+	m[platformv1.CAService_SignCSR_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SignCSR(ctx, req.(*platformv1.SignCSRRequest))
+	}
 	m[platformv1.CAService_GetCertificate_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.GetCertificate(ctx, req.(*platformv1.GetCertificateRequest))
 	}

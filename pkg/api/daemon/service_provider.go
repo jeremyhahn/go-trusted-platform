@@ -1315,8 +1315,13 @@ func (p *PlatformServiceProvider) CAIssue(ctx context.Context, req *mcp.CAIssueR
 	return nil, ErrServiceNotAvailable{Service: "ca"}
 }
 
+// CASignCSR certifies a KMS key for code signing from its CSR.
+func (p *PlatformServiceProvider) CASignCSR(ctx context.Context, req *mcp.CASignCSRRequest) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "ca"}
+}
+
 // CAGet retrieves a certificate by serial number.
-func (p *PlatformServiceProvider) CAGet(ctx context.Context, serial string, includePEM bool) (interface{}, error) {
+func (p *PlatformServiceProvider) CAGet(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error) {
 	return nil, ErrServiceNotAvailable{Service: "ca"}
 }
 

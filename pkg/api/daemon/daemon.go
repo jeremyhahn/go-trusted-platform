@@ -574,7 +574,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if config.App != nil {
 			caObjStorage = config.App.Storage
 		}
-		caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage)
+		caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage).WithKMS(config.csrKMS())
 
 		// Register with TCP gRPC server if available
 		if grpcServer != nil {
@@ -1107,7 +1107,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if config.App != nil {
 				quicObjStorage = config.App.Storage
 			}
-			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage))
+			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage).WithKMS(config.csrKMS()))
 			quicHandler.SetDeviceAKTrust(config.CAService)
 		}
 
@@ -1429,7 +1429,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// the same CA instance as the gRPC, QUIC, MCP and Unix-socket adapters
 	// so all transports return identical results.
 	if daemon.concreteRestServer != nil && config.CAService != nil {
-		daemon.concreteRestServer.SetCAHandlers(config.CAService)
+		daemon.concreteRestServer.SetCAHandlers(config.CAService, platformTokenValidatorShared)
 	}
 
 	// Wire KMS REST handlers when the platform KMS backend is available.

@@ -134,7 +134,7 @@ func (r *ResourceRegistry) ListResources() []mcpwire.ResourceDefinition {
 
 // ReadResource reads a resource by URI and returns its content.
 func (r *ResourceRegistry) ReadResource(ctx context.Context, uri string) (interface{}, error) {
-	r.logger.Debug("Reading resource uri=%s", uri)
+	r.logger.Debug("Reading resource", "uri", uri)
 
 	// Parse URI and route to appropriate handler
 	if !strings.HasPrefix(uri, "platform://") {

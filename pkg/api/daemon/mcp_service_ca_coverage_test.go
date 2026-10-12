@@ -496,6 +496,42 @@ func TestMCPServiceProvider_CAIssue_ErrorCoverage(t *testing.T) {
 	}
 }
 
+// A key algorithm the CA does not issue is refused before the CA is asked,
+// as the gRPC service refuses an unknown enum; it is never issued as the
+// default (#691).
+func TestMCPServiceProvider_CAIssue_RefusesAnUnknownKeyAlgorithm(t *testing.T) {
+	mockCA := newMockCAForMCPCoverage()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		CAService: createCAGRPCServiceForMCPCoverage(mockCA),
+		Logger:    slog.Default(),
+	})
+
+	_, err := provider.CAIssue(context.Background(), &mcp.CAIssueRequest{
+		CommonName: "test.example.com",
+		Algorithm:  "DSA",
+	})
+
+	var invalid ErrCAInvalidKeyAlgorithm
+	if !errors.As(err, &invalid) || invalid.Algorithm != "DSA" {
+		t.Fatalf("CAIssue() error = %v, want ErrCAInvalidKeyAlgorithm{DSA}", err)
+	}
+	if len(mockCA.issuedCerts) != 0 {
+		t.Fatalf("CA issued %d certificates, want 0", len(mockCA.issuedCerts))
+	}
+}
+
+// An empty algorithm leaves the CA's default, as an unset enum does on gRPC.
+func TestParsePlatformKeyAlgorithm_EmptyLeavesTheDefault(t *testing.T) {
+	got, err := parsePlatformKeyAlgorithm("")
+	if err != nil || got != platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED {
+		t.Fatalf("parsePlatformKeyAlgorithm(\"\") = %v, %v; want UNSPECIFIED, nil", got, err)
+	}
+	got, err = parsePlatformKeyAlgorithm("ECDSA-P384")
+	if err != nil || got != platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384 {
+		t.Fatalf("parsePlatformKeyAlgorithm(ECDSA-P384) = %v, %v; want ECDSA_P384, nil", got, err)
+	}
+}
+
 // =============================================================================
 // CAGet Tests - Success Paths
 // =============================================================================
@@ -512,7 +548,7 @@ func TestMCPServiceProvider_CAGet_SuccessRootCertCoverage(t *testing.T) {
 
 	serial := hex.EncodeToString(mockCA.rootCert.SerialNumber.Bytes())
 
-	result, err := provider.CAGet(ctx, serial, true)
+	result, err := provider.CAGet(ctx, serial, true, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -539,7 +575,7 @@ func TestMCPServiceProvider_CAGet_SuccessIntermediateCertCoverage(t *testing.T) 
 
 	serial := hex.EncodeToString(mockCA.intermCert.SerialNumber.Bytes())
 
-	result, err := provider.CAGet(ctx, serial, false)
+	result, err := provider.CAGet(ctx, serial, false, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -571,7 +607,7 @@ func TestMCPServiceProvider_CAGet_SuccessStoredCertCoverage(t *testing.T) {
 
 	serial := hex.EncodeToString(cert.SerialNumber.Bytes())
 
-	result, err := provider.CAGet(ctx, serial, true)
+	result, err := provider.CAGet(ctx, serial, true, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -596,7 +632,7 @@ func TestMCPServiceProvider_CAGet_NotFoundCoverage(t *testing.T) {
 		Logger:    slog.Default(),
 	})
 
-	_, err := provider.CAGet(ctx, "nonexistent-serial", true)
+	_, err := provider.CAGet(ctx, "nonexistent-serial", true, false)
 	if err == nil {
 		t.Fatal("expected error for nonexistent certificate")
 	}
@@ -1087,7 +1123,7 @@ func TestMCPServiceProvider_CA_NilServiceCoverage(t *testing.T) {
 			return err
 		}},
 		{"CAGet", func() error {
-			_, err := provider.CAGet(ctx, "serial", true)
+			_, err := provider.CAGet(ctx, "serial", true, false)
 			return err
 		}},
 		{"CAList", func() error {
@@ -1144,7 +1180,7 @@ func TestMCPServiceProvider_Health_WithCAServiceCoverage(t *testing.T) {
 	healthConfig := DefaultConfig()
 	healthService, err := NewService(healthConfig)
 	if err != nil {
-		t.Skipf("cannot create health service: %v", err)
+		t.Fatalf("NewService(DefaultConfig()) failed: %v", err)
 	}
 	healthService.MarkReady()
 

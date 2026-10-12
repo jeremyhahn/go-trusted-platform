@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -149,6 +150,54 @@ func TestInvoke_CategoryPrefix_AllSwitchMethods(t *testing.T) {
 				t.Errorf("round-trip SwitchName = %q, want %q", roundTrip.SwitchName, args.SwitchName)
 			}
 		})
+	}
+}
+
+// TestInvoke_SignCSR_ReachesTheServersSignCSRRequest pins the wire contract
+// with pkg/api/quic.CAHandler.SignCSR: the KMS extended category, the
+// sign-CSR sub-opcode, and a body that decodes into the server's request.
+func TestInvoke_SignCSR_ReachesTheServersSignCSRRequest(t *testing.T) {
+	sender := &recordingSender{}
+	conn := newConnWithSender(t, sender)
+
+	args := &platformv1.SignCSRRequest{CsrPem: "-----BEGIN CERTIFICATE REQUEST-----", ValidDays: 30}
+	if err := conn.Invoke(context.Background(), "/platform.v1.CAService/SignCSR", args, &platformv1.IssueCertificateResponse{}); err != nil {
+		t.Fatalf("Invoke() unexpected error: %v", err)
+	}
+
+	if sender.rawOpcode != quicwire.OpKMSExtendedCategory {
+		t.Errorf("opcode = 0x%02X, want 0x%02X", sender.rawOpcode, quicwire.OpKMSExtendedCategory)
+	}
+	if len(sender.rawPayload) == 0 || sender.rawPayload[0] != quicwire.KMSSubSignCSR {
+		t.Fatalf("payload = %x, want sub-opcode 0x%02X first", sender.rawPayload, quicwire.KMSSubSignCSR)
+	}
+	// The daemon's CASignCSRRequest (pkg/api/quic/ca_handlers.go), which this
+	// module cannot import; TestQUICSignCSR_DecodesTheDaemonsReply in
+	// pkg/api/daemon runs the same request through the daemon itself.
+	var got struct {
+		CsrPem    string `codec:"csr_pem"`
+		ValidDays int32  `codec:"valid_days"`
+	}
+	if err := quicwire.DecodePayload(sender.rawPayload[1:], &got); err != nil {
+		t.Fatalf("payload[1:] decode failed: %v", err)
+	}
+	if got.CsrPem != args.CsrPem || got.ValidDays != args.ValidDays {
+		t.Errorf("server request = %+v, want the CSR and validity sent", got)
+	}
+}
+
+// TestInvoke_SignCSR_Refused surfaces the server's ca:sign-csr refusal as
+// PermissionDenied instead of an empty certificate.
+func TestInvoke_SignCSR_Refused(t *testing.T) {
+	sender := &recordingSender{
+		sendRequestErr: &quicwire.ErrProtocol{Status: quicwire.StatusPermissionDenied, Message: "ca:sign-csr required"},
+	}
+	conn := newConnWithSender(t, sender)
+
+	err := conn.Invoke(context.Background(), "/platform.v1.CAService/SignCSR",
+		&platformv1.SignCSRRequest{CsrPem: "csr"}, &platformv1.IssueCertificateResponse{})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Invoke() = %v, want PermissionDenied", err)
 	}
 }
 
@@ -351,6 +400,7 @@ func TestIsCategoryOpcode_KnownAndUnknown(t *testing.T) {
 		quicwire.OpFIDO2Category,
 		quicwire.OpTenantBarrierCategory,
 		quicwire.OpSwitchCategory,
+		quicwire.OpKMSExtendedCategory,
 	}
 	for _, op := range known {
 		if !isCategoryOpcode(op) {

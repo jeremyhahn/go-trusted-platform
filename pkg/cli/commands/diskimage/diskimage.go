@@ -22,11 +22,12 @@ arm64 container against a loop-mounted image, and the device's first boot
 is the same first-boot provisioning the ISO install produces (TPM
 provisioning, LUKS sealing, platformd enrollment and attestation).
 
-  create   - build an image (U-Boot, media staging, container assemble)
-  netboot  - build the netboot media the bootstrap container serves
-  inspect  - report an image's partitions, EFI partition and UKI
-  test     - boot an image under QEMU with a software TPM
-  assemble - the in-container step create runs (not for direct use)
+  create         - build an image (U-Boot, media staging, container assemble)
+  netboot        - build the netboot media the bootstrap container serves
+  rpi-eeprom-hsm - sign rpi-eeprom-digest inputs with the fleet KMS key
+  inspect        - report an image's partitions, EFI partition and UKI
+  test           - boot an image under QEMU with a software TPM
+  assemble       - the in-container step create runs (not for direct use)
 
 Targets:
   rpi        Raspberry Pi SD-card image (models: rpi4, rpi400, cm4, rpi3b+, rpi5)
@@ -38,5 +39,6 @@ Targets:
 	cmd.AddCommand(newAssembleCommand(getFlags))
 	cmd.AddCommand(newNetbootCommand(getFlags))
 	cmd.AddCommand(newNetbootInitfsCommand(getFlags))
+	cmd.AddCommand(newRPIEEPROMHSMCommand(getFlags))
 	return cmd
 }

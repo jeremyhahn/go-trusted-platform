@@ -545,7 +545,7 @@ func TestStopDaemon_StopsGRPCServer(t *testing.T) {
 
 	// Verify gRPC is set up
 	if d.grpcServer == nil {
-		t.Skip("gRPC server not available - skipping")
+		t.Error("gRPC server should exist after Start() with gRPC TCP enabled")
 	}
 
 	err = d.Stop(ctx)
@@ -903,7 +903,7 @@ func TestSetTPM2ServiceDaemon_WithNilRESTServer(t *testing.T) {
 
 	// Ensure REST server is nil
 	if d.restServer != nil {
-		t.Skip("REST server should be nil for this test")
+		t.Fatal("REST server should be nil when REST is disabled")
 	}
 
 	// SetTPM2Service should not panic with nil REST server
@@ -923,7 +923,7 @@ func TestSetTPM2ServiceDaemon_WithNilQUICHandler(t *testing.T) {
 
 	// Ensure QUIC handler is nil
 	if d.quicHandler != nil {
-		t.Skip("QUIC handler should be nil for this test")
+		t.Fatal("QUIC handler should be nil when QUIC is disabled")
 	}
 
 	// SetTPM2Service should not panic with nil QUIC handler
@@ -941,7 +941,7 @@ func TestSetTPM2ServiceDaemon_WithNilMCPProvider(t *testing.T) {
 
 	// Ensure MCP provider is nil
 	if d.mcpProvider != nil {
-		t.Skip("MCP provider should be nil for this test")
+		t.Fatal("MCP provider should be nil when MCP is disabled")
 	}
 
 	// SetTPM2Service should not panic with nil MCP provider

@@ -17,13 +17,19 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"strings"
 	"testing"
+
+	"google.golang.org/grpc"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot/secureboottest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -108,6 +114,175 @@ func TestNewKMSSigner_Errors(t *testing.T) {
 	var hashErr *UnsupportedHashError
 	if _, err := signer.Sign(rand.Reader, digest[:], crypto.MD5); !errors.As(err, &hashErr) {
 		t.Errorf("unsupported hash: %v", err)
+	}
+}
+
+// ed25519KMS signs the request's message with an Ed25519 key, as a KMS does
+// for a pure Ed25519 key.
+type ed25519KMS struct {
+	key     ed25519.PrivateKey
+	LastReq *platformv1.SignRequest
+}
+
+func (k *ed25519KMS) Sign(_ context.Context, in *platformv1.SignRequest, _ ...grpc.CallOption) (*platformv1.SignResponse, error) {
+	k.LastReq = in
+	return &platformv1.SignResponse{Signature: ed25519.Sign(k.key, in.GetMessage())}, nil
+}
+
+// TestNewKMSKeySigner_Ed25519SignsTheMessage: x509.CreateCertificateRequest
+// hands an Ed25519 signer the whole request with no hash function, which the
+// KMS has to receive as the message, not as a digest.
+func TestNewKMSKeySigner_Ed25519SignsTheMessage(t *testing.T) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kms := &ed25519KMS{key: private}
+	signer, err := NewKMSKeySigner(kms, "kms://rpi/fleet", public)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "rpi/fleet"}}, signer)
+	if err != nil {
+		t.Fatalf("a CSR for an Ed25519 KMS key: %v", err)
+	}
+	csr, err := x509.ParseCertificateRequest(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		t.Errorf("the KMS's signature does not verify: %v", err)
+	}
+	if kms.LastReq.GetPreHashed() || kms.LastReq.GetHashAlgorithm() != platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED ||
+		!bytes.Equal(kms.LastReq.GetMessage(), csr.RawTBSCertificateRequest) {
+		t.Errorf("sign request = %v, want the request's TBS bytes, not pre-hashed", kms.LastReq)
+	}
+}
+
+// A key that is not Ed25519 still needs a hash function: without one there is
+// no digest to send PreHashed.
+func TestNewKMSKeySigner_NoHashIsRefusedForOtherKeys(t *testing.T) {
+	key, _ := secureboottest.KeyPair(t, "db")
+	kms := &secureboottest.KMS{Key: key}
+	signer, err := NewKMSKeySigner(kms, "kms://db", &key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hashErr *UnsupportedHashError
+	if _, err := signer.Sign(rand.Reader, []byte("message"), crypto.Hash(0)); !errors.As(err, &hashErr) {
+		t.Errorf("no hash function with an RSA key: %v", err)
+	}
+	if kms.LastReq != nil {
+		t.Error("the KMS was contacted")
+	}
+}
+
+// A cert-uri pinned with #sha256= signs only with the certificate whose
+// DER has that fingerprint, in the forms the CLI and openssl print it, and
+// refuses any other certificate the CA returns for the reference.
+func TestNewKMSSigner_PinnedCertificate(t *testing.T) {
+	key, dbCert := secureboottest.KeyPair(t, "db")
+	_, otherCert := secureboottest.KeyPair(t, "db")
+	sum := sha256.Sum256(dbCert.Raw)
+	pin := hex.EncodeToString(sum[:])
+
+	for name, certURI := range map[string]string{
+		"lowercase hex":      "kms://certs/db#sha256=" + pin,
+		"openssl colon form": "kms://certs/db#sha256=" + strings.ToUpper(colonHex(sum[:])),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ca := &secureboottest.CA{Certs: map[string]*x509.Certificate{"certs/db": dbCert}}
+			_, cert, err := NewKMSSigner(context.Background(), &secureboottest.KMS{Key: key}, ca, "kms://db", certURI)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ca.LastRef != "certs/db" || !cert.Equal(dbCert) {
+				t.Errorf("fetched %q, got the pinned certificate = %v", ca.LastRef, cert.Equal(dbCert))
+			}
+		})
+	}
+
+	t.Run("another certificate under the reference", func(t *testing.T) {
+		ca := &secureboottest.CA{Certs: map[string]*x509.Certificate{"db": otherCert}}
+		var pinErr *CertPinError
+		_, _, err := NewKMSSigner(context.Background(), &secureboottest.KMS{Key: key}, ca, "kms://db", "kms://db#sha256="+pin)
+		if !errors.As(err, &pinErr) || pinErr.Ref != "db" || pinErr.Want != pin {
+			t.Fatalf("err = %v, want a CertPinError for db", err)
+		}
+	})
+
+	for name, certURI := range map[string]string{
+		"empty pin":    "kms://db#sha256=",
+		"not hex":      "kms://db#sha256=" + strings.Repeat("zz", sha256.Size),
+		"short":        "kms://db#sha256=" + pin[:10],
+		"no reference": "#sha256=" + pin,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ca := &secureboottest.CA{Certs: map[string]*x509.Certificate{"db": dbCert}}
+			var formatErr *CertPinFormatError
+			if _, _, err := NewKMSSigner(context.Background(), &secureboottest.KMS{Key: key}, ca, "kms://db", certURI); !errors.As(err, &formatErr) {
+				t.Fatalf("err = %v, want a CertPinFormatError", err)
+			}
+			if ca.LastRef != "" {
+				t.Errorf("a malformed pin still fetched %q from the CA", ca.LastRef)
+			}
+		})
+	}
+}
+
+// colonHex is b as colon-separated hex pairs, the form openssl prints a
+// fingerprint in.
+func colonHex(b []byte) string {
+	pairs := make([]string, len(b))
+	for i, c := range b {
+		pairs[i] = hex.EncodeToString([]byte{c})
+	}
+	return strings.Join(pairs, ":")
+}
+
+func TestCertPinErrors_Name(t *testing.T) {
+	if msg := (&CertPinError{Ref: "rpi/fleet", Want: "aa", Got: "bb"}).Error(); !strings.Contains(msg, "rpi/fleet") || !strings.Contains(msg, "aa") || !strings.Contains(msg, "bb") {
+		t.Errorf("CertPinError = %q", msg)
+	}
+	if msg := (&CertPinFormatError{CertURI: "kms://x#sha256=q"}).Error(); !strings.Contains(msg, "kms://x#sha256=q") {
+		t.Errorf("CertPinFormatError = %q", msg)
+	}
+}
+
+// A key with no certificate yet signs with the public key the caller holds.
+func TestNewKMSKeySigner_SignsWithTheGivenKey(t *testing.T) {
+	key, _ := secureboottest.KeyPair(t, "fleet")
+	kms := &secureboottest.KMS{Key: key}
+
+	signer, err := NewKMSKeySigner(kms, "kms://rpi/fleet", &key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("boot.img"))
+	sig, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kms.LastReq.GetKeyId() != "rpi/fleet" {
+		t.Errorf("signed with key %q, want rpi/fleet", kms.LastReq.GetKeyId())
+	}
+	if err := rsa.VerifyPKCS1v15(signer.Public().(*rsa.PublicKey), crypto.SHA256, digest[:], sig); err != nil {
+		t.Fatalf("signature does not verify against Public(): %v", err)
+	}
+}
+
+func TestNewKMSKeySigner_Errors(t *testing.T) {
+	key, _ := secureboottest.KeyPair(t, "fleet")
+	kms := &secureboottest.KMS{Key: key}
+
+	var refErr *KMSKeyRefError
+	if _, err := NewKMSKeySigner(kms, "kms://", &key.PublicKey); !errors.As(err, &refErr) {
+		t.Errorf("empty key-uri: %v", err)
+	}
+	var pubErr *KMSPublicKeyError
+	if _, err := NewKMSKeySigner(kms, "rpi/fleet", nil); !errors.As(err, &pubErr) {
+		t.Errorf("no public key: %v", err)
 	}
 }
 

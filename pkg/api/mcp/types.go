@@ -71,6 +71,8 @@ type CAIssueRequest struct {
 	Country            string   `json:"country,omitempty"`
 	Province           string   `json:"province,omitempty"`
 	Locality           string   `json:"locality,omitempty"`
+	Address            string   `json:"address,omitempty"`
+	PostalCode         string   `json:"postal_code,omitempty"`
 	DNSNames           []string `json:"dns_names,omitempty"`
 	IPAddresses        []string `json:"ip_addresses,omitempty"`
 	EmailAddresses     []string `json:"email_addresses,omitempty"`
@@ -82,6 +84,13 @@ type CAIssueRequest struct {
 	ExtKeyUsage        []string `json:"ext_key_usage,omitempty"`
 	IsCA               bool     `json:"is_ca,omitempty"`
 	MaxPathLen         int      `json:"max_path_len,omitempty"`
+}
+
+// CASignCSRRequest certifies a KMS key for code signing from a CSR the KMS
+// signed; the CSR's common name is the key ID.
+type CASignCSRRequest struct {
+	CSRPEM    string `json:"csr_pem"`
+	ValidDays int    `json:"valid_days,omitempty"`
 }
 
 // IAMCreateUserRequest represents a user creation request for MCP.
@@ -559,7 +568,8 @@ type ServiceProvider interface {
 	// CA operations
 	CAInfo(ctx context.Context) (interface{}, error)
 	CAIssue(ctx context.Context, req *CAIssueRequest) (interface{}, error)
-	CAGet(ctx context.Context, serial string, includePEM bool) (interface{}, error)
+	CASignCSR(ctx context.Context, req *CASignCSRRequest) (interface{}, error)
+	CAGet(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error)
 	CAList(ctx context.Context, limit int, cursor string, status string) (interface{}, error)
 	CARevoke(ctx context.Context, serial string, reason int, deleteKeys bool) (interface{}, error)
 	CARenew(ctx context.Context, serial string, extendDays int, preserveAttrs bool) (interface{}, error)

@@ -95,7 +95,9 @@ through `services/ca`.
 ## What this feature deliberately does not do
 
 - **It does not implement certificate issuance, parsing or the ACME protocol.**
-  Adapters and frontage only.
+  Adapters and frontage only. One recorded gap: Sign CSR still parses the CSR
+  for its pre-sign checks until the CA's template-validator seam is adopted
+  ([engineering.md](engineering.md) §1).
 - **It does not implement the TPM challenge handlers.** `endorse-01`,
   `enroll-01` and `device-attest-01` are the stack's.
 - **It does not hold CA private keys.**

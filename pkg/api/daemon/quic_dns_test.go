@@ -30,15 +30,6 @@ import (
 // Shared test harness (used by all quic_dns*_test.go files)
 // =============================================================================
 
-// skipIfNoCodec skips the test if the QUIC codec is not available. The codec
-// requires building with -tags codec_msgpack.
-func skipIfNoCodec(t *testing.T) {
-	t.Helper()
-	if _, err := quicwire.EncodePayload(struct{}{}); err != nil {
-		t.Skip("Skipping test - no codec available (build with -tags codec_msgpack)")
-	}
-}
-
 // createDNSUnitTestHandler creates a QUICServiceHandler wired to the given DNS
 // service. SetDNSService rebuilds the shared *DNSServiceServer delegate when
 // the service implements the full dns.DNSService interface.
@@ -53,7 +44,6 @@ func createDNSUnitTestHandler(svc DNSService) *QUICServiceHandler {
 // opcode. A nil payload yields an empty body.
 func createDNSUnitTestRequest(t *testing.T, opcode byte, payload interface{}) *quicwire.Request {
 	t.Helper()
-	skipIfNoCodec(t)
 
 	var data []byte
 	if payload != nil {

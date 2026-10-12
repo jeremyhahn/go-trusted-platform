@@ -1527,6 +1527,11 @@ func (p *MCPServiceProvider) CAIssue(ctx context.Context, req *mcp.CAIssueReques
 		return nil, ErrServiceNotAvailable{Service: "ca"}
 	}
 
+	keyAlgorithm, err := parsePlatformKeyAlgorithm(req.Algorithm)
+	if err != nil {
+		return nil, err
+	}
+
 	// Convert MCP request to platformv1 request
 	certRequest := &platformv1.CertificateRequest{
 		Subject: &platformv1.Subject{
@@ -1536,9 +1541,11 @@ func (p *MCPServiceProvider) CAIssue(ctx context.Context, req *mcp.CAIssueReques
 			Country:            req.Country,
 			Province:           req.Province,
 			Locality:           req.Locality,
+			Address:            req.Address,
+			PostalCode:         req.PostalCode,
 		},
 		ValidDays:    int32(req.ValidDays),
-		KeyAlgorithm: parsePlatformKeyAlgorithm(req.Algorithm),
+		KeyAlgorithm: keyAlgorithm,
 		StoreType:    req.StoreType,
 		KeyUsage:     req.KeyUsage,
 		ExtKeyUsage:  req.ExtKeyUsage,
@@ -1563,14 +1570,32 @@ func (p *MCPServiceProvider) CAIssue(ctx context.Context, req *mcp.CAIssueReques
 	return p.caService.IssueCertificate(ctx, caReq)
 }
 
+// CASignCSR certifies the KMS key a CSR names for code signing. The CA
+// service authorizes the caller from the gRPC context, so the MCP caller's
+// validated platform token is carried over to it; a caller without one is
+// refused there.
+func (p *MCPServiceProvider) CASignCSR(ctx context.Context, req *mcp.CASignCSRRequest) (interface{}, error) {
+	if p.caService == nil {
+		return nil, ErrServiceNotAvailable{Service: "ca"}
+	}
+	if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok {
+		ctx = grpcapi.ContextWithAuthorizedContext(ctx, authCtx)
+	}
+	return p.caService.SignCSR(ctx, &platformv1.SignCSRRequest{
+		CsrPem:    req.CSRPEM,
+		ValidDays: int32(req.ValidDays),
+	})
+}
+
 // CAGet retrieves a certificate by serial number.
-func (p *MCPServiceProvider) CAGet(ctx context.Context, serial string, includePEM bool) (interface{}, error) {
+func (p *MCPServiceProvider) CAGet(ctx context.Context, serial string, includePEM, includeDER bool) (interface{}, error) {
 	if p.caService == nil {
 		return nil, ErrServiceNotAvailable{Service: "ca"}
 	}
 	return p.caService.GetCertificate(ctx, &platformv1.GetCertificateRequest{
 		Serial:     serial,
 		IncludePem: includePEM,
+		IncludeDer: includeDER,
 	})
 }
 
@@ -2932,24 +2957,29 @@ func parseUint64(s string) (uint64, error) {
 }
 
 // parsePlatformKeyAlgorithm converts a string algorithm to platformv1.KeyAlgorithm.
-func parsePlatformKeyAlgorithm(alg string) platformv1.KeyAlgorithm {
+// An empty name leaves the CA's default; a name it does not know is refused,
+// as the gRPC service refuses an unknown enum, rather than issued as the
+// default.
+func parsePlatformKeyAlgorithm(alg string) (platformv1.KeyAlgorithm, error) {
 	switch alg {
+	case "":
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, nil
 	case "RSA", "RSA2048", "RSA-2048":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, nil
 	case "RSA3072", "RSA-3072":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072, nil
 	case "RSA4096", "RSA-4096":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096, nil
 	case "ECDSA", "EC", "ECDSA-P256", "P256":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, nil
 	case "ECDSA-P384", "P384":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384, nil
 	case "ECDSA-P521", "P521":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521, nil
 	case "ED25519":
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519, nil
 	default:
-		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED
+		return platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED, ErrCAInvalidKeyAlgorithm{Algorithm: alg}
 	}
 }
 

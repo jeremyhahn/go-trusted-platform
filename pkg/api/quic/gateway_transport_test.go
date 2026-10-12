@@ -302,7 +302,7 @@ func startGatewayTransportServer(t *testing.T) (srv *Server, addr string, client
 		t.Fatalf("Server.Start: %v", err)
 	}
 
-	addr = srv.listener.Addr().String()
+	addr = srv.ListenAddr()
 
 	// Build client TLS that trusts the server's self-signed cert — no InsecureSkipVerify.
 	serverCertDER := serverTLS.Certificates[0].Certificate[0]

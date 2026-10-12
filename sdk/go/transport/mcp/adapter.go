@@ -266,6 +266,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	// CA Service — proto: pkg/api/grpc/proto/ca.proto
 	"/platform.v1.CAService/GetCAInfo":         "ca_info",
 	"/platform.v1.CAService/IssueCertificate":  "ca_issue",
+	"/platform.v1.CAService/SignCSR":           "ca_sign_csr",
 	"/platform.v1.CAService/GetCertificate":    "ca_get",
 	"/platform.v1.CAService/ListCertificates":  "ca_list",
 	"/platform.v1.CAService/RevokeCertificate": "ca_revoke",

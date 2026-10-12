@@ -745,7 +745,12 @@ var templatedRouteTable = map[string]templatedRoute{
 	// that serves none.
 
 	// GET /api/v1/ca/certificates/{serial}
-	"/platform.v1.CAService/GetCertificate": itemRoute("/api/v1/ca/certificates/{serial}", http.MethodGet, "{serial}", "serial"),
+	"/platform.v1.CAService/GetCertificate": {
+		path:        "/api/v1/ca/certificates/{serial}",
+		method:      http.MethodGet,
+		pathParams:  []pathParam{{placeholder: "{serial}", field: "serial"}},
+		queryParams: []queryParam{{name: "include_pem", field: "include_pem"}, {name: "include_der", field: "include_der"}},
+	},
 
 	// GET /api/v1/compute/containers/{id}
 	"/platform.v1.ComputeService/GetContainer": itemRoute("/api/v1/compute/containers/{id}", http.MethodGet, "{id}", "id"),
@@ -958,6 +963,7 @@ var grpcMethodToRESTMap = map[string]struct {
 	// CA Service
 	"/platform.v1.CAService/GetCAInfo":         {"/api/v1/ca/info", http.MethodGet},
 	"/platform.v1.CAService/IssueCertificate":  {"/api/v1/ca/certificates", http.MethodPost},
+	"/platform.v1.CAService/SignCSR":           {"/api/v1/ca/sign-csr", http.MethodPost},
 	"/platform.v1.CAService/ListCertificates":  {"/api/v1/ca/certificates", http.MethodGet},
 	"/platform.v1.CAService/RevokeCertificate": {"/api/v1/ca/certificates/revoke", http.MethodPost},
 	"/platform.v1.CAService/RenewCertificate":  {"/api/v1/ca/certificates/renew", http.MethodPost},

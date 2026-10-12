@@ -52,7 +52,7 @@ client is nil. Each then wraps the gRPC client in
 **All five are client verbs** — they need a reachable `platformd`.
 `--transport embedded` runs the services in-process, but the embedded
 `ServiceRegistry.Cluster` field is not populated by the one place a registry is
-built (`cmd/platformctl/bindings_server.go`), so embedded does not reach the
+built (`pkg/api/daemon/embedded_host.go`), so embedded does not reach the
 cluster service either ([api.md](api.md) §3).
 
 ### Global flags

@@ -1342,8 +1342,13 @@ test-fips:
 # changed, which is how the nightly FIPS job spent weeks reporting it as a FIPS
 # finding. Deriving the tags here means nobody has to know that.
 #
-# TESTFLAGS passes anything else through:
+# TESTFLAGS passes anything else through, split on whitespace only:
 #   make test-pkg PKG=./pkg/api/daemon/ TESTFLAGS='-run TestFoo -v'
+#   make test-pkg PKG=./pkg/api/daemon/ TESTFLAGS='-run TestFoo|TestBar -race'
+# The recipe single-quotes TESTFLAGS into a shell variable and expands it
+# unquoted with globbing off, so `|`, `*`, `;` and `'` reach go test verbatim
+# instead of being read as shell syntax. Do not quote inside TESTFLAGS: a
+# pattern cannot contain spaces (go test -run patterns never need them).
 test-pkg:
 	@if [ -z "$(strip $(PKG))" ]; then \
 		echo "$(RED)$(BOLD)PKG is required$(RESET)"; \
@@ -1351,7 +1356,8 @@ test-pkg:
 		echo "         make test-pkg PKG=./pkg/api/daemon/ TESTFLAGS='-run TestFoo -v'"; \
 		exit 2; \
 	fi
-	go test -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" $(TESTFLAGS) $(PKG)
+	set -f; testflags='$(subst ','\'',$(TESTFLAGS))'; \
+	go test -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" $$testflags $(PKG)
 
 # Tagged for the reason test-pkg above documents. Untagged, the codec registry
 # is empty and every encode fails with "no codec available for encoding";

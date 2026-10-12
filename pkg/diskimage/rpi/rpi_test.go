@@ -116,6 +116,18 @@ func TestModels(t *testing.T) {
 	}
 }
 
+// TestModelSoC pins which boards HTTP-boot: the 2711 and 2712 EEPROMs do; the
+// 3B+'s boot ROM has no EEPROM to fetch or verify boot.img.
+func TestModelSoC(t *testing.T) {
+	want := map[string]string{"rpi4": "2711", "rpi400": "2711", "cm4": "2711", "rpi5": "2712", "rpi3b+": ""}
+	for name, soc := range want {
+		m, err := LookupModel(name)
+		if err != nil || m.SoC != soc {
+			t.Errorf("%s: SoC = %q, %v; want %q", name, m.SoC, err, soc)
+		}
+	}
+}
+
 func TestTargetContract(t *testing.T) {
 	tgt, err := New("cm4")
 	if err != nil {

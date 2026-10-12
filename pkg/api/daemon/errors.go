@@ -1144,6 +1144,31 @@ func (e ErrKMSInvalidAlgorithm) Error() string {
 	return fmt.Sprintf("invalid KMS algorithm: %s", e.Algorithm)
 }
 
+// ErrCAInvalidKeyAlgorithm is returned when a certificate request names a
+// key algorithm the CA does not issue.
+type ErrCAInvalidKeyAlgorithm struct {
+	Algorithm string
+}
+
+func (e ErrCAInvalidKeyAlgorithm) Error() string {
+	return fmt.Sprintf("invalid certificate key algorithm: %s", e.Algorithm)
+}
+
+// ErrEmbeddedHostFailed is returned when platformd cannot be hosted inside
+// the calling process for the SDK's embedded transport.
+type ErrEmbeddedHostFailed struct {
+	Op  string
+	Err error
+}
+
+func (e ErrEmbeddedHostFailed) Error() string {
+	return fmt.Sprintf("embedded platformd %s failed: %v", e.Op, e.Err)
+}
+
+func (e ErrEmbeddedHostFailed) Unwrap() error {
+	return e.Err
+}
+
 // ErrKMSInvalidKeyUsage is returned when an invalid key usage is specified
 type ErrKMSInvalidKeyUsage struct {
 	Usage string

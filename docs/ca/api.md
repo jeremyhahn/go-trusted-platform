@@ -1,6 +1,6 @@
 # Certificate Authority — API
 
-> **Status: NORMATIVE** · Scope: CA and ACME routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: CA and ACME routes on every transport · Last verified: 2026-10-09
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -14,11 +14,12 @@
 over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.CA` carries the service in-process.
 
-gRPC: `CAService`, 12 RPCs (`pkg/api/grpc/proto/ca.proto`).
+gRPC: `CAService`, 13 RPCs (`pkg/api/grpc/proto/ca.proto`).
 REST: base path `/api/v1/ca` (`pkg/webservice/v1/rest/ca/router.go`), plus the
 ACME protocol routes (§3).
-QUIC: nine top-level opcodes, `0xA0`–`0xA8`.
-MCP: nine `ca_*` tools.
+QUIC: nine top-level opcodes, `0xA0`–`0xA8`, plus Sign CSR under the KMS
+extended category (`0xCD`, sub-opcode `0x07`).
+MCP: ten `ca_*` tools.
 
 ---
 
@@ -31,6 +32,7 @@ MCP: nine `ca_*` tools.
 | Install CA certificates | `MISSING — docs/13 G7` | `InstallCACertificates` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Uninstall CA certificates | `MISSING — docs/13 G7` | `UninstallCACertificates` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Issue certificate | `POST /api/v1/ca/certificates` | `IssueCertificate` | `OpCAIssue` (`0xA1`) | `ca_issue` | ✅ |
+| Sign CSR (certify a KMS key for code signing) | `POST /api/v1/ca/sign-csr` | `SignCSR` | `OpKMSExtendedCategory` (`0xCD`) sub `KMSSubSignCSR` (`0x07`) | `ca_sign_csr` | ✅ |
 | List certificates | `GET /api/v1/ca/certificates` | `ListCertificates` | `OpCAList` (`0xA5`) | `ca_list` | ✅ |
 | Get certificate | `GET /api/v1/ca/certificates/{serial}` | `GetCertificate` | `OpCAGet` (`0xA4`) | `ca_get` | ✅ |
 | Revoke certificate | `DELETE /api/v1/ca/certificates/{serial}` | `RevokeCertificate` | `OpCARevoke` (`0xA2`) | `ca_revoke` | ✅ |
@@ -53,8 +55,97 @@ Two shapes:
   that have none yet, which is why they are HTTP-only — a client that cannot
   establish trust cannot use a mutually authenticated transport.
 
+### One certificate on every transport
+
+The gRPC service is the reference shape for a certificate. Its `Certificate`
+carries the subject, SANs (only when the certificate has any), validity,
+status, key family, signature algorithm, `is_ca`, `max_path_len`, key usages,
+extended key usages, the SHA-256 fingerprint, PEM, and DER when
+`include_der` asks for it.
+
+The daemon's QUIC handler speaks its own wire structs: a flat
+`CAIssueRequest` with a string `key_algorithm`, and a `Certificate` with
+unix-second times and string enums. That `Certificate` carries
+`max_path_len`, `key_usage`, `ext_key_usage`, `fingerprint_sha256` and
+`der`, and `CAGetRequest` takes `include_der`. The SDK's QUIC adapter
+translates both directions for `IssueCertificate`, `GetCertificate` and
+`SignCSR` (`sdk/go/transport/quic/ca_sign_csr.go`, value maps in
+`sdk/go/transport/internal/cawire`). A key algorithm the gRPC service
+refuses is refused by the SDK before anything is sent.
+
+REST has one wire format for issue, sign-csr and get: the gRPC messages as
+proto-JSON. `POST /api/v1/ca/certificates` takes an `IssueCertificateRequest`
+(`{"request": {"subject": {...}, "sans": {...}, "key_algorithm":
+"KEY_ALGORITHM_ECDSA_P256", ...}}`), `POST /api/v1/ca/sign-csr` takes a
+`SignCSRRequest`, and both answer an `IssueCertificateResponse`.
+`GET /api/v1/ca/certificates/{serial}` takes `include_pem` and `include_der`
+as query parameters and answers a `GetCertificateResponse`. Field names may be
+snake_case or camelCase.
+
+Two servers serve these routes, and they differ only in framing:
+
+| Server | Code | Reply |
+|--------|------|-------|
+| CA webservice | `pkg/webservice/v1/rest/ca` | the message inside the `{code, success, payload}` envelope |
+| Daemon REST listener | `pkg/api/rest` | the message bare |
+
+The SDK's REST adapter sends the message as it is and unwraps the envelope
+when one is present, so the same client works against either server.
+`TestCARESTWire_*` (`pkg/api/daemon/ca_rest_wire_parity_test.go`) drives
+the SDK against both real handlers over one CA for issue, get and sign-csr,
+including the refusals. The daemon's other CA routes (list, revoke, renew,
+verify) still answer their own flat JSON.
+
+The MCP `ca_issue` tool takes the request flat — subject fields including
+`address` and `postal_code`, SANs as `dns_names` / `ip_addresses` /
+`email_addresses` / `uris`, and the key algorithm as a string under
+`algorithm` — and `ca_get` takes `include_pem` and `include_der`. Both answer
+with the gRPC service's own reply. The SDK's MCP adapter flattens
+`IssueCertificate` (`sdk/go/transport/mcp/ca.go`). An `algorithm` the tool
+does not know is refused, never issued as the default. One difference
+remains: `ca_issue` defaults an unset `valid_days` to 365 where gRPC passes
+0 (the CA's default). Both tools need the scope gRPC needs, `ca:write` and
+`ca:read` (§4).
+
+`TestCACertificateParity` (`pkg/api/daemon/ca_transport_parity_test.go`)
+issues and reads one fully populated certificate over every transport. It
+requires each transport to return the gRPC service's certificate and to ask
+the CA for the same certificate.
+
 **Revocation is `DELETE .../{serial}`, not `POST .../{serial}/revoke`.** An
 earlier planning document specified the `POST` form; the code registers `DELETE`.
+
+### Issuing from a CSR
+
+Issue certificate always generates the key: the CA creates a new key in
+`store_type` and certifies it. `store_type` must name a real store —
+`software` / `pkcs8` / empty, `tpm2` / `tpm`, `pkcs11`, `awskms`, `gcpkms`,
+`azurekv`, `vault`, `quantum`, `frost`. Any other name is an invalid request;
+it never falls back to a new software key. It takes no CSR: `csr_pem` is a
+reserved field of `CertificateRequest`.
+
+**Sign CSR** is the separate operation that certifies a key that already
+exists — a key that never leaves a KMS or HSM. It takes only `csr_pem` and
+`valid_days`, and every transport applies the same policy
+(`issuance.SignCSR` in `pkg/ca/issuance`) before the CA is reached:
+
+- The CSR's self-signature must verify.
+- Its subject must be **one common name and nothing else**. `O`, `OU`, `C`,
+  `serialNumber` or any other attribute is refused, and so is any SAN (DNS,
+  IP, URI or email). The CA copies the subject and SANs into the
+  certificate, and the platform's mTLS reads an identity from CN and a
+  tenant from O.
+- The common name must be the ID of a key the platform KMS holds, and the
+  CSR's public key must equal that key's public key, read through the SDK
+  KMS. A CSR for any other key, or one naming no KMS key, is refused.
+- The usages are fixed, not requested: key usage `digitalSignature`, extended
+  key usage **`codeSigning` only**. The certificate can never act as a TLS
+  server or client identity.
+
+A refused CSR is the caller's error: `InvalidArgument` / 400 /
+`StatusInvalidRequest`. The flow is `platformctl kms key csr` then
+`platformctl ca sign-csr` (see `cli.md`); the netboot fleet key is certified
+this way.
 
 ---
 
@@ -91,24 +182,77 @@ hosts the server.
 
 ## 4. Authorization
 
-**`CAService` is in the gRPC scope catalog** with all 12 methods mapped —
-resource `ca`, actions `read`/`write`/`delete`. It is one of only eleven services
-in the catalog, and one of the few with complete coverage.
+**`CAService` is in the gRPC scope catalog** with all 13 methods mapped —
+resource `ca`, actions `read`/`write`/`delete`, and `sign-csr` for `SignCSR`.
+It is one of only eleven services in the catalog, and one of the few with
+complete coverage.
 
-**None of the nine `ca_*` MCP tools is in the MCP authorization map, so every
-one of them is refused.** Of 428 registered tools, 94 carry a permission; the CA
-tools are not among them, and since #300 `AuthorizeTool` **denies** a tool
-absent from the map (`AuthErrorToolNotClassified`, `-32603` on the wire) rather
-than allowing it. They are enumerated in `knownUnclassified`
-(`pkg/api/mcp/authz_completeness_test.go`); classifying them is #304's work.
+**Every `ca_*` MCP tool needs the scope of its gRPC twin** (#304):
 
-So `IssueCertificate` over gRPC requires `ca:write`, while `ca_issue` over MCP is
-**non-functional for every caller** until classified. The exposure this section
-previously described — certificate issuance behind nothing but a valid token —
-was closed by #300 (#412).
+| MCP tool | Scope | gRPC twin |
+|---|---|---|
+| `ca_issue`, `ca_renew`, `ca_revoke` | `ca:write` | `IssueCertificate`, `RenewCertificate`, `RevokeCertificate` |
+| `ca_get`, `ca_list`, `ca_verify`, `ca_info`, `ca_crl`, `ca_bundle` | `ca:read` | `GetCertificate`, `ListCertificates`, `VerifyCertificate`, `GetCAInfo`, `GetCRL`, `GetCABundle` |
+| `ca_sign_csr` | `ca:sign-csr` | `SignCSR` (below) |
+
+QUIC's opcode table (`pkg/api/quic/auth.go`) requires the same scopes for the
+operations it maps. Revocation is `ca:write`, not `ca:delete`, on every
+scoped transport. A token without the scope is refused with
+`AuthErrorPermissionDenied`. The map is in `AuthorizationChecker`
+(`pkg/api/mcp/authz.go`); a tool absent from it is denied
+(`AuthErrorToolNotClassified`, since #300).
+
+The REST split below is by role and by public route, not by scope, so MCP
+does not copy it: `ca_info`, `ca_crl` and `ca_bundle` need `ca:read` over MCP
+although their REST routes are public.
 
 ACME authenticates by its own protocol mechanisms (account keys, EAB) rather
 than by platform tokens.
+
+### Sign CSR needs `ca:sign-csr`, granted only to the platform admin (#691)
+
+A code-signing certificate for a KMS key is what every netbooted device's
+boot chain trusts, so Sign CSR has an admin-level scope of its own,
+`ca:sign-csr`. **`ca:write` does not grant it, and neither does `*:write`**;
+`ca:sign-csr`, `ca:*` and `*:*` do. Grant it to the platform admin only —
+and remember that `ca:*` and `*:*` carry it.
+
+Each transport's handler checks it itself and fails closed, so a transport
+that authenticates without scopes cannot reach it:
+
+| Transport | Allowed caller | Refused |
+|---|---|---|
+| REST (`/api/v1/ca/sign-csr`, both stacks) | Platform token granting `ca:sign-csr` | No token → 401; token without the scope, or no platform-token validator configured → 403 |
+| gRPC (TCP) | Platform token granting `ca:sign-csr` | mTLS or a legacy token alone → `PermissionDenied` |
+| Unix (gRPC over the socket) | Root (uid 0), by peer credentials, or a platform token granting `ca:sign-csr` | Any other uid → `PermissionDenied` |
+| QUIC | Platform token granting `ca:sign-csr` | Anything else → `StatusPermissionDenied` |
+| MCP (`ca_sign_csr`) | Platform token granting `ca:sign-csr` | Anything else → refused |
+| Embedded | Root, by the identity the embedder attaches through `ServiceRegistry.CallerContext`, or a context carrying a `ca:sign-csr` platform token | Any other uid, or no identity attached → `PermissionDenied` |
+
+`platformctl ca sign-csr` run as root on the platformd host therefore works
+with no token configured; from anywhere else it needs a `ca:sign-csr` token.
+
+The embedded transport runs no interceptors, so it cannot learn who is
+calling; the embedder says so. platformctl's embedded host
+(`pkg/api/daemon/embedded_host.go`), which serves both the desktop GUI's
+standalone mode and a CLI context whose transport is `embedded`, attaches its
+own process's credentials (`peercred.ContextWithProcessCredentials`, the PID
+and effective UID and GID) to every call. In-process callers then hold exactly
+what that process would hold as a Unix socket peer: a GUI or CLI running as
+root may sign, and any other uid is refused. A registry with no `CallerContext` attaches
+nothing, and sign-csr refuses every call that brings no token. None of this
+reaches the network transports, which never use the embedded connection.
+
+The embedded host brings up the node's CA the way `platformd serve` does,
+through the same two functions: `App.LoadOrInitCA` loads it from storage, or
+initializes it when there is none yet. `daemon.AttachNodeCA` then sets it as
+the daemon's CA service. A node with no CA configured, or whose CA can be
+neither loaded nor initialized, still hosts everything else. Its embedded
+registry still carries the CA service, so every CA call, `ca sign-csr`
+included, answers `FailedPrecondition` with `ErrCANotInitialized`
+("certificate authority not initialized"), not an unregistered method.
+Authorization runs first, so a non-root caller is still refused sign-csr with
+`PermissionDenied`.
 
 ### REST is split, and the privileged half is gated on `admin` (#165)
 
@@ -116,7 +260,8 @@ than by platform tokens.
 /api/v1/ca/certificates/{serial}` require an authenticated caller holding
 `admin`. Issuance and revocation are privileged, and the list of
 certificates this CA has issued is an inventory of every identity on the
-platform.
+platform. `POST /api/v1/ca/sign-csr` is in the same gated half and in
+addition requires `ca:sign-csr` (above).
 
 `GET /api/v1/ca/bootstrap`, `/ca/crl`, `/ca/bundle`, `/ca/root`,
 `/ca/intermediate` and `/ca/info` stay **public**, and must: the
@@ -137,12 +282,12 @@ the public half. **This does not change the gRPC or MCP positions above.**
 | QUIC byte | Name | REST | CA cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | Malformed CSR or serial |
+| `0x01` | `StatusInvalidRequest` | 400 | Malformed CSR, a CSR naming more than a KMS key or a key the KMS does not hold, unknown store type, malformed serial |
 | `0x02` | `StatusNotFound` | 404 | Unknown serial |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid; ACME account unknown |
 | `0x04` | `StatusInternalError` | 500 | Signing or keystore failure |
 | `0x06` | `StatusAlreadyExists` | 409 | CA already initialised |
-| `0x07` | `StatusPermissionDenied` | 403 | Missing `ca:*` scope |
+| `0x07` | `StatusPermissionDenied` | 403 | Missing `ca:*` scope; Sign CSR without `ca:sign-csr` |
 | `0x08` | `StatusResourceExhausted` | 429 | **ACME rate limit** |
 | `0x0A` | `StatusUnavailable` | 503 | CA not wired into the daemon |
 

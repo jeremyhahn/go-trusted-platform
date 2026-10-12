@@ -106,14 +106,24 @@ platformctl --server 192.0.2.10:9444 --server-name cp.example.com --transport qu
 platformctl --server https://cp.example.com:9445 --transport mcp status
 ```
 
-**`embedded` does not work from the CLI.** The embedded transport dispatches to
-service implementations held in a `ServiceRegistry`, and only the desktop GUI's
-standalone mode builds one (`cmd/platformctl/bindings_server.go`). From the
-command line it fails with no daemon involved:
+**`embedded` hosts platformd inside platformctl.** The embedded transport
+dispatches to service implementations held in a `ServiceRegistry`, so an
+embedded context first starts platformd in the platformctl process
+(`pkg/api/daemon/embedded_host.go`, the same host the desktop GUI's standalone
+mode uses) and stops it when the command ends. Nothing listens on the network.
+The host reads the platformd configuration from the locations platformd
+searches, so on a node it runs with the node's own configuration and needs the
+access platformd needs to its data and key stores. It loads the node's CA
+as `platformd serve` does, initializing it on first use. A node without one
+answers CA commands with `certificate authority not initialized`
+([CA API](../ca/api.md) §4). Every call carries
+platformctl's own process credentials, the identity it would have as a Unix
+socket peer: root may do what root may over the socket, and any other uid is
+refused what needs root (for example `ca sign-csr`, see
+[CA authorization](../ca/api.md)).
 
-```
-$ platformctl --transport embedded status
-Error: failed to connect to local: embedded transport: ServiceRegistry is nil
+```bash
+sudo platformctl --transport embedded status
 ```
 
 **Every verb that reaches a service needs a reachable daemon.** The verbs that
@@ -651,6 +661,14 @@ deployer-pin --host 192.0.2.20 --dir <install-dir>/known_hosts \
 `cmd/platformctl/` holds one `bindings_*.go` per service surface, plus a
 build-tagged `gui_desktop.go` / `gui_stub.go` pair and per-platform display
 code.
+
+The desktop window exposes the bindings `newGUIBindings`
+(`cmd/platformctl/gui_bindings.go`) returns, all sharing one connection:
+`ConnectionBinding`, `DaemonBinding` and `CABinding`. `CABinding.SignCSR` makes
+the same SDK call as `platformctl ca sign-csr` and returns the object that
+command prints with `--output json`; it is admin-only like the CLI
+([docs/ca/api.md](../ca/api.md) §4). The other `bindings_*.go` files are not
+yet bound to the window.
 
 The GUI is compiled out by default. The consequence for anyone changing a
 service surface: **the matching `bindings_*.go` must be updated or the GUI

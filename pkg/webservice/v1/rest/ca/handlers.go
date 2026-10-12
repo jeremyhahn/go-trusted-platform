@@ -31,7 +31,9 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -52,7 +54,12 @@ type CAHandlers struct {
 	ca         quicbaasca.CACertificateAuthority
 	respWriter response.HttpWriter
 	objStorage objectstorage.Client
+	kms        issuance.KMS
 }
+
+// SignCSRScope is the scope that authorizes certifying a CSR. ca:write,
+// which issues ordinary certificates, does not grant it.
+const SignCSRScope = issuance.SignCSRScope
 
 // NewCAHandlers creates a new CAHandlers instance.
 // objStorage may be nil; if nil, the revocation object-store check is skipped.
@@ -68,6 +75,13 @@ func NewCAHandlers(
 		respWriter: respWriter,
 		objStorage: objStorage,
 	}
+}
+
+// WithKMS sets the KMS whose keys SignCSR certifies. Without one,
+// POST /api/v1/ca/sign-csr refuses every request.
+func (h *CAHandlers) WithKMS(kms issuance.KMS) *CAHandlers {
+	h.kms = kms
+	return h
 }
 
 // Helper methods
@@ -736,7 +750,6 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 			status.Error(codes.InvalidArgument, "certificate request is required"))
 		return
 	}
-
 	subject := certReq.GetSubject()
 	if subject == nil || subject.GetCommonName() == "" {
 		protorest.WriteError(w, r, h.respWriter,
@@ -778,9 +791,11 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	storeType := h.parseStoreType(certReq.GetStoreType())
-	if storeType == xkmssdk.StoreUnknown {
-		storeType = xkmssdk.StoreSoftware
+	storeType, err := issuance.StoreType(certReq.GetStoreType())
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.InvalidArgument, err.Error()))
+		return
 	}
 
 	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
@@ -796,13 +811,69 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 			status.Error(codes.Internal, ErrInvalidCertificateRequest{Reason: err.Error()}.Error()))
 		return
 	}
+	h.writeIssued(w, r, issued.Certificate)
+}
 
+// SignCSR handles POST /api/v1/ca/sign-csr. It certifies, for code signing
+// only, the KMS key a CSR names — a key the CA never holds.
+//
+// The route is admin-gated like the rest of /ca/certificates, and the
+// handler additionally requires a platform token carrying ca:sign-csr: a
+// session with no token scopes, or a token holding only ca:write, is
+// refused before the request body is read.
+func (h *CAHandlers) SignCSR(w http.ResponseWriter, r *http.Request) {
+	if h.ca == nil {
+		protorest.WriteError(w, r, h.respWriter,
+			&protorest.ErrServiceUnavailable{Service: "ca"})
+		return
+	}
+	if err := requireSignCSRScope(r); err != nil {
+		h.respWriter.Error403(w, r, err, nil)
+		return
+	}
+
+	req := &platformv1.SignCSRRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+
+	cert, err := issuance.SignCSR(r.Context(), h.ca, h.kms, &issuance.CSR{
+		PEM:       []byte(req.GetCsrPem()),
+		ValidDays: int(req.GetValidDays()),
+	})
+	if err != nil {
+		code := codes.Internal
+		if issuance.IsInvalidRequest(err) {
+			code = codes.InvalidArgument
+		}
+		protorest.WriteError(w, r, h.respWriter, status.Error(code, err.Error()))
+		return
+	}
+	h.writeIssued(w, r, cert)
+}
+
+// requireSignCSRScope requires that the request carries a platform token
+// granted SignCSRScope.
+func requireSignCSRScope(r *http.Request) error {
+	authCtx, ok := iammw.AuthorizedContextFromRequest(r)
+	if !ok {
+		return ErrSignCSRScopeRequired{}
+	}
+	if err := authCtx.RequireScope(SignCSRScope); err != nil {
+		return ErrSignCSRScopeRequired{Cause: err}
+	}
+	return nil
+}
+
+// writeIssued answers a request with the certificate it issued.
+func (h *CAHandlers) writeIssued(w http.ResponseWriter, r *http.Request, cert *x509.Certificate) {
 	protorest.WriteSuccessStatus(w, r, h.respWriter, http.StatusCreated, &platformv1.IssueCertificateResponse{
 		Status: &platformv1.Status{
 			Success: true,
 			Message: "certificate issued successfully",
 		},
-		Certificate: h.certToProto(issued.Certificate, true, false),
+		Certificate: h.certToProto(cert, true, false),
 		Timestamp:   timestamppb.Now(),
 	})
 }

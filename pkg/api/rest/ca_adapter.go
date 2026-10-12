@@ -101,6 +101,11 @@ func (a *CAAuthorityAdapter) IssueCertificate(ctx context.Context, req *quicbaas
 	return issued.Certificate, nil
 }
 
+// SignCSR certifies the key in a PEM CSR via the underlying CA.
+func (a *CAAuthorityAdapter) SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error) {
+	return a.ca.SignCSR(ctx, csrPEM, opts)
+}
+
 // Revoke revokes a certificate. The production CA exposes RevokeCert(cert,
 // opts); we map the keyAttrs nil/non-nil signal into RevokeOptions.DeleteKeys.
 func (a *CAAuthorityAdapter) Revoke(ctx context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error {

@@ -101,6 +101,11 @@ var gatewayAllowedPrefixes = []string{
 	// dhcpv4, tftp, logging; the TFTP tree staging, which needs the image
 	// tooling, is pkg/diskimage/netboot and stays forbidden.
 	"pkg/rpinetboot",
+	// Carried by pkg/rpinetboot's signed HTTP-boot client: the boot.sig
+	// verifier and the FAT ramdisk reader. Both are pure-Go leaf packages
+	// with no project imports.
+	"pkg/rpibootsig",
+	"pkg/diskimage/fatimage",
 
 	// Carried by pkg/sdn/gateway/services/vpn (#584): the caller-admission
 	// policy, the verdict type and the host-attestation manifest are leaf

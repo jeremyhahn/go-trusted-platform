@@ -191,6 +191,21 @@ the boot options and no address, the network's server leases as usual.
 `platformctl bootstrap probe rpi` and the netboot integration suite speak
 this stage from the Pi's side, since no emulator has a Pi's EEPROM.
 
+**The other first stage: signed HTTP boot.** A Pi whose EEPROM has the HTTP
+nibble in `BOOT_ORDER` skips DHCP-and-TFTP for its first stage and fetches
+`boot.img` (the boot partition as a FAT ramdisk) and `boot.sig` from
+`HTTP_HOST`/`HTTP_PATH` instead. There is nothing new to serve: the HTTP
+server's `/data/` handler (`handleDataFiles`, `ServerConfig.DataDir`) serves the
+netboot media build's `http-boot/` directory, so `HTTP_PATH` is `data/http-boot`
+(`container.NetbootMedia.HTTPBootPath()`) and `HTTP_HOST` is the container's
+address and `bootstrap_http_port`. With `SIGNED_BOOT=1` the EEPROM runs the
+image only if `boot.sig` verifies against the fleet key hash in the Pi's OTP;
+the fleet key is held in the KMS and signs at build time, never in the
+container. `platformctl bootstrap probe rpi-http` speaks this stage from the
+Pi's side, and `ipxe.TestEnvConfig.DataDir` gives the integration environment
+the same `/data/` the container has. The build, the signature format and the
+provisioning runbook are in [docs/factory-image/](../factory-image/user.md#provision-a-fleet-signed-http-boot).
+
 **What crosses a process boundary.** The DHCP, TFTP and HTTP surfaces are all
 plain network protocols on the boot segment — none of them is one of the
 platform's six transports. `IPAMAllocator` calls out to the platform IPAM.

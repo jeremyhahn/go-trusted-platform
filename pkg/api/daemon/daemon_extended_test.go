@@ -331,7 +331,7 @@ func TestDaemon_StopWithNilGRPCServer(t *testing.T) {
 
 		// Verify gRPC server is nil
 		if d.grpcServer != nil {
-			t.Skip("gRPC server should be nil when disabled")
+			t.Error("gRPC server should be nil when gRPC TCP is disabled")
 		}
 
 		// Stop should not panic with nil gRPC server

@@ -134,6 +134,43 @@ func (e ErrPlatformCAInit) Error() string {
 // Unwrap returns the underlying cause.
 func (e ErrPlatformCAInit) Unwrap() error { return e.Cause }
 
+// ErrCANotConfigured is returned by LoadOrInitCA when the platform
+// configuration has no certificate authority section.
+type ErrCANotConfigured struct{}
+
+// Error returns the error message.
+func (ErrCANotConfigured) Error() string {
+	return "app: no certificate authority is configured"
+}
+
+// ErrCAPINs is returned by LoadOrInitCA when the CA's PINs cannot be read.
+type ErrCAPINs struct {
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrCAPINs) Error() string {
+	return fmt.Sprintf("app: failed to read the CA PINs: %v", e.Cause)
+}
+
+// Unwrap returns the underlying cause.
+func (e ErrCAPINs) Unwrap() error { return e.Cause }
+
+// ErrCALoadOrInit is returned by LoadOrInitCA when the CA can neither be
+// loaded nor initialized.
+type ErrCALoadOrInit struct {
+	LoadErr error
+	InitErr error
+}
+
+// Error returns the error message.
+func (e ErrCALoadOrInit) Error() string {
+	return fmt.Sprintf("app: failed to load or initialize the CA: load error: %v, init error: %v", e.LoadErr, e.InitErr)
+}
+
+// Unwrap returns both causes.
+func (e ErrCALoadOrInit) Unwrap() []error { return []error{e.LoadErr, e.InitErr} }
+
 // ErrStorageInit is returned when platform storage cannot be configured.
 type ErrStorageInit struct {
 	Cause error

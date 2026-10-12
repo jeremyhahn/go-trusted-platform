@@ -325,7 +325,7 @@ This is what each transport does to every request, not a capability you call.
 
 | Transport | Mechanism | Implementation | Failure |
 |---|---|---|---|
-| Embedded | **None.** In-process calls are trusted; there is no wire to authenticate. | `sdk/go/transport/embedded/` | — |
+| Embedded | **None on the wire** — there is none. The embedder attaches the caller's identity through `ServiceRegistry.CallerContext`; platformctl's embedded host (GUI standalone mode and CLI `embedded` contexts) attaches its own process's PID/UID/GID (`peercred.ContextWithProcessCredentials`), so its calls hold what a Unix socket peer of that uid holds. No hook, no identity. | `sdk/go/transport/embedded/`, `pkg/api/daemon/embedded_host.go` | Whatever the service refuses an unidentified caller, e.g. sign-csr → `codes.PermissionDenied` (`docs/ca/api.md`) |
 | Unix | `SO_PEERCRED` — kernel-verified PID/UID/GID. No token, no certificate. | `pkg/util/peercred/peercred.go` | `ErrUnixCredentialsUnavailable`, `ErrNotUnixConnection`, `ErrPeerNotAvailable` |
 | gRPC (TCP) | mTLS client certificate → `auth.Authenticator` → `*auth.Identity` on the context | `pkg/api/daemon/mtls_interceptor.go` | `codes.Unauthenticated` |
 | gRPC (TCP) | Bearer platform token in the `authorization` metadata header; claims path projects `scp` → RBAC and `tenant_id` → RLS | `pkg/api/grpc/oidc_interceptor.go` | `codes.Unauthenticated`; scope denial → `codes.PermissionDenied` |
@@ -386,9 +386,10 @@ platform:admin
 
 **This list is advertised, not enforced.** It is broader than the MCP
 authorization map (`initToolPermissions` covers only the vtpm, dns, device,
-profile, gateway-lb, gateway-perf, sdn, proxy and ntp families) and narrower
-than the tool set (449 declared tool names). A client that requests `ca:write`
-because the metadata offers it will find no `ca_*` tool checks it.
+attestation-report, profile, gateway, sdn, proxy, ntp, ca, invitation and bmc
+families) and narrower than the tool set (449 declared tool names). A client
+that requests `container:write` because the metadata offers it will find no
+`container_*` tool checks it.
 
 `Validate()` requires a non-empty `Resource` and at least one authorization
 server, returning `OAuthMetadataError` with `OAuthMetadataErrorMissingResource`

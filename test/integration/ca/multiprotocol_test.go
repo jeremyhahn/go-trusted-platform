@@ -29,7 +29,15 @@ package ca
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -90,6 +98,10 @@ func testCAProtocol(t *testing.T, ctx context.Context, cmd CACommands) {
 
 	t.Run("IssueCertificate", func(t *testing.T) {
 		testIssueCertificate(t, ctx, cmd, prefix)
+	})
+
+	t.Run("SignCSR", func(t *testing.T) {
+		testSignCSR(t, ctx, cmd, prefix)
 	})
 
 	t.Run("GetCertificate", func(t *testing.T) {
@@ -204,6 +216,131 @@ func testIssueCertificate(t *testing.T, ctx context.Context, cmd CACommands, pre
 			assert.NotEmpty(t, result.Certificate.SANsDNS, "DNS SANs should be present")
 		}
 	})
+
+	// An unknown store must fail, not fall back to a new software key.
+	t.Run("RejectsUnknownStoreType", func(t *testing.T) {
+		_, err := cmd.IssueCertificate(testCtx, IssueCertificateOptions{
+			CommonName: fmt.Sprintf("%s-badstore.example.com", prefix),
+			StoreType:  "kms",
+			Algorithm:  "RSA-2048",
+			ValidDays:  30,
+		})
+		require.Error(t, err, "An unknown store type must be rejected")
+	})
+}
+
+// =============================================================================
+// CSR Signing Tests
+// =============================================================================
+
+// platformAdminAdapters are the adapters that reach platformd as the
+// platform admin: root on the Unix socket. The devcontainer issues no
+// platform tokens, so every other adapter holds no ca:sign-csr grant.
+var platformAdminAdapters = map[string]bool{
+	"CLI":  true,
+	"Unix": true,
+}
+
+// testSignCSR certifies a KMS key's CSR for code signing, and checks that a
+// CSR whose key the KMS does not hold under the named key is refused. Only
+// the platform admin may sign a CSR: over any other adapter even the KMS
+// key's own CSR is refused.
+func testSignCSR(t *testing.T, ctx context.Context, cmd CACommands, prefix string) {
+	testCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	keyID := fmt.Sprintf("%s-fleet", prefix)
+	csrPEM := kmsKeyCSR(t, testCtx, keyID)
+
+	if !platformAdminAdapters[cmd.Name()] {
+		t.Run("RefusesACallerWithoutCASignCSR", func(t *testing.T) {
+			_, err := cmd.SignCSR(testCtx, SignCSROptions{CSRPEM: string(csrPEM), ValidDays: 30})
+			require.Error(t, err, "Signing a CSR without ca:sign-csr must be refused")
+		})
+		return
+	}
+
+	t.Run("CertifiesTheKMSKeyForCodeSigning", func(t *testing.T) {
+		result, err := cmd.SignCSR(testCtx, SignCSROptions{CSRPEM: string(csrPEM), ValidDays: 30})
+		require.NoError(t, err, "Signing the KMS key's CSR should succeed")
+		require.NotNil(t, result.Certificate, "Certificate should be present")
+		assert.True(t, result.Success, "Signing should be successful")
+
+		got, err := cmd.GetCertificate(testCtx, GetCertificateOptions{Serial: result.Certificate.Serial, IncludePEM: true})
+		require.NoError(t, err, "The certified CSR should be retrievable")
+		require.NotNil(t, got.Certificate)
+		cert := parseCertificatePEM(t, got.Certificate.PEM)
+
+		csrBlock, _ := pem.Decode(csrPEM)
+		require.NotNil(t, csrBlock, "CSR PEM should decode")
+		csr, err := x509.ParseCertificateRequest(csrBlock.Bytes)
+		require.NoError(t, err)
+		csrKey, ok := csr.PublicKey.(interface{ Equal(crypto.PublicKey) bool })
+		require.True(t, ok, "CSR public key type %T has no Equal", csr.PublicKey)
+
+		assert.True(t, csrKey.Equal(cert.PublicKey), "The certificate must hold the KMS key")
+		assert.Equal(t, keyID, cert.Subject.CommonName)
+		assert.Equal(t, []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}, cert.ExtKeyUsage, "The certificate must be for code signing only")
+		assert.Empty(t, cert.Subject.Organization, "The certificate must not name a tenant")
+		assert.Empty(t, cert.DNSNames, "The certificate must carry no SANs")
+	})
+
+	// A key generated here has the right CN but is not the KMS key: signing
+	// it would certify a key the platform does not hold.
+	t.Run("RefusesAKeyTheKMSDoesNotHold", func(t *testing.T) {
+		_, err := cmd.SignCSR(testCtx, SignCSROptions{CSRPEM: localCSR(t, keyID), ValidDays: 30})
+		require.Error(t, err, "A CSR for a key the KMS does not hold must be refused")
+	})
+
+	t.Run("RefusesACommonNameThatNamesNoKMSKey", func(t *testing.T) {
+		_, err := cmd.SignCSR(testCtx, SignCSROptions{CSRPEM: localCSR(t, keyID+"-missing"), ValidDays: 30})
+		require.Error(t, err, "A CSR naming no KMS key must be refused")
+	})
+}
+
+// kmsKeyCSR creates an ECDSA signing key in the KMS and returns the CSR the
+// KMS signs for it, both through platformctl.
+func kmsKeyCSR(t *testing.T, ctx context.Context, keyID string) []byte {
+	t.Helper()
+
+	cli := NewCLIAdapter()
+	require.NoError(t, cli.Setup(ctx), "platformctl setup")
+	t.Cleanup(func() {
+		require.NoError(t, cli.Teardown())
+	})
+
+	_, err := cli.runCommand(ctx, "kms", "key", "generate", keyID, "--algorithm", "ECDSA-P256", "--purpose", "sign")
+	require.NoError(t, err, "Generating the KMS key should succeed")
+
+	csrPath := filepath.Join(t.TempDir(), "key.csr")
+	_, err = cli.runCommand(ctx, "kms", "key", "csr", keyID, "--out", csrPath)
+	require.NoError(t, err, "Creating the KMS key's CSR should succeed")
+
+	csrPEM, err := os.ReadFile(csrPath)
+	require.NoError(t, err)
+	return csrPEM
+}
+
+// localCSR returns a PEM CSR named commonName for a freshly generated key.
+func localCSR(t *testing.T, commonName string) string {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: commonName}}, key)
+	require.NoError(t, err)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
+}
+
+// parseCertificatePEM decodes a single PEM certificate.
+func parseCertificatePEM(t *testing.T, certPEM []byte) *x509.Certificate {
+	t.Helper()
+
+	block, _ := pem.Decode(certPEM)
+	require.NotNil(t, block, "Certificate PEM should decode")
+	cert, err := x509.ParseCertificate(block.Bytes)
+	require.NoError(t, err)
+	return cert
 }
 
 // =============================================================================

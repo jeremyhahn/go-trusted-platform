@@ -209,7 +209,7 @@ func TestStop_WithRESTServerRunning(t *testing.T) {
 	}
 
 	if d.restServer == nil || !d.restServer.IsRunning() {
-		t.Skip("REST server not running, skipping test")
+		t.Fatal("REST server should be running after Start()")
 	}
 
 	err = d.Stop(ctx)
@@ -241,7 +241,7 @@ func TestStop_WithMCPServerRunning(t *testing.T) {
 	}
 
 	if d.mcpServer == nil {
-		t.Skip("MCP server not created, skipping test")
+		t.Fatal("MCP server should be created when MCP is enabled")
 	}
 
 	ctx := context.Background()
@@ -276,10 +276,10 @@ func TestStop_WithGRPCServerRunning(t *testing.T) {
 
 	// Verify gRPC is set up
 	if d.grpcServer == nil {
-		t.Skip("gRPC server not created, skipping test")
+		t.Error("gRPC server should exist after Start() with gRPC TCP enabled")
 	}
 	if d.grpcListener == nil {
-		t.Skip("gRPC listener not created, skipping test")
+		t.Error("gRPC listener should exist after Start() with gRPC TCP enabled")
 	}
 
 	err = d.Stop(ctx)
@@ -845,7 +845,7 @@ func TestStop_HandlesNilGRPCListener(t *testing.T) {
 
 	// Verify gRPC listener is nil
 	if d.grpcListener != nil {
-		t.Skip("Expected nil gRPC listener")
+		t.Error("gRPC listener should be nil when gRPC TCP is disabled")
 	}
 
 	// Stop should handle nil gRPC listener gracefully

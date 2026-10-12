@@ -57,6 +57,10 @@ type fakeProdCA struct {
 	parseBundle     []*x509.Certificate
 	parseBundleErr  error
 	certStore       xkmssdk.CertStore
+	signed          *x509.Certificate
+	signErr         error
+	signedCSR       []byte
+	signOpts        *xkmsca.SignOptions
 }
 
 func (f *fakeProdCA) Identity() string                                { return f.identity }
@@ -67,6 +71,11 @@ func (f *fakeProdCA) TrustedRoot() (*x509.Certificate, error)         { return f
 func (f *fakeProdCA) TrustedIntermediate() (*x509.Certificate, error) { return f.intermediate, nil }
 func (f *fakeProdCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return f.issued, f.issueErr
+}
+func (f *fakeProdCA) SignCSR(_ context.Context, csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error) {
+	f.signedCSR = csrPEM
+	f.signOpts = opts
+	return f.signed, f.signErr
 }
 func (f *fakeProdCA) RevokeCert(_ context.Context, cert *x509.Certificate, opts xkmsca.RevokeOptions) error {
 	f.revokeCert = cert
@@ -164,6 +173,28 @@ func TestCAAuthorityAdapter_IssueCertificate_NilCertReturnsErr(t *testing.T) {
 	got, err := a.IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{})
 	assert.Nil(t, got)
 	require.Error(t, err)
+}
+
+func TestCAAuthorityAdapter_SignCSR_Success(t *testing.T) {
+	cert := &x509.Certificate{}
+	prod := &fakeProdCA{signed: cert}
+	a := NewCAAuthorityAdapter(prod)
+	opts := &quicbaasca.SignOptions{ValidityDays: 30}
+
+	got, err := a.SignCSR(context.Background(), []byte("csr"), opts)
+	require.NoError(t, err)
+	assert.Same(t, cert, got)
+	assert.Equal(t, []byte("csr"), prod.signedCSR)
+	assert.Same(t, opts, prod.signOpts)
+}
+
+func TestCAAuthorityAdapter_SignCSR_PropagatesError(t *testing.T) {
+	prodErr := errors.New("backend offline")
+	a := NewCAAuthorityAdapter(&fakeProdCA{signErr: prodErr})
+
+	got, err := a.SignCSR(context.Background(), []byte("csr"), &quicbaasca.SignOptions{})
+	assert.Nil(t, got)
+	assert.ErrorIs(t, err, prodErr)
 }
 
 func TestCAAuthorityAdapter_Revoke_DeleteKeysTrue(t *testing.T) {

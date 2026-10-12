@@ -55,8 +55,8 @@ For cluster:
 - **MCP**: five `platform_cluster_*` tools (`pkg/api/mcp/cluster_tools.go`).
 - **Embedded**: `ServiceRegistry.Cluster` exists as a field
   (`sdk/go/transport/embedded/adapter.go`) but the only place a registry is
-  constructed — `cmd/platformctl/bindings_server.go` — populates nine fields and
-  **not** `Cluster`.
+  constructed — `pkg/api/daemon/embedded_host.go`, shared by the GUI and the
+  CLI — populates nine fields and **not** `Cluster`.
 
 ## 3. Capabilities
 

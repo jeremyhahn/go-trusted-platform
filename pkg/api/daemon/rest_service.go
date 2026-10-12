@@ -34,6 +34,7 @@ import (
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
@@ -451,7 +452,10 @@ func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface) {
 // the same CA instance used by the gRPC, QUIC, MCP and Unix-socket adapters.
 // All transports therefore share state — certificates issued via gRPC are
 // visible via REST and vice-versa.
-func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority) {
+//
+// tokens authorizes POST /api/v1/ca/sign-csr, which needs a platform token
+// granting ca:sign-csr; when it is nil, sign-csr refuses every request.
+func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, tokens *platformTokenValidator) {
 	if ca == nil {
 		return
 	}
@@ -460,10 +464,18 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority) {
 		return
 	}
 	var caObjStorage objectstorage.Client
-	if s.config != nil && s.config.App != nil {
-		caObjStorage = s.config.App.Storage
+	var caKMS issuance.KMS
+	if s.config != nil {
+		caKMS = s.config.csrKMS()
+		if s.config.App != nil {
+			caObjStorage = s.config.App.Storage
+		}
 	}
-	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage)
+	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage).WithKMS(caKMS)
+	// A nil *platformTokenValidator must not become a non-nil interface.
+	if tokens != nil {
+		handlers.WithTokenAuthorizer(tokens)
+	}
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("CA REST routes registered")
 

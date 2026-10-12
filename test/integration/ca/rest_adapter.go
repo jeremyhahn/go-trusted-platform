@@ -20,13 +20,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
-	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"time"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/surface"
 )
 
 // =============================================================================
@@ -119,18 +125,6 @@ type restCASANsRequest struct {
 	URIs  []string `json:"uris,omitempty"`
 }
 
-type restCertificateIssueRequest struct {
-	Subject      restCASubjectRequest `json:"subject"`
-	SANs         *restCASANsRequest   `json:"sans,omitempty"`
-	ValidDays    int                  `json:"valid_days,omitempty"`
-	KeyAlgorithm string               `json:"key_algorithm,omitempty"`
-	StoreType    string               `json:"store_type,omitempty"`
-	KeyUsage     []string             `json:"key_usage,omitempty"`
-	ExtKeyUsage  []string             `json:"ext_key_usage,omitempty"`
-	IsCA         bool                 `json:"is_ca,omitempty"`
-	MaxPathLen   int                  `json:"max_path_len,omitempty"`
-}
-
 type restCACertificateResponse struct {
 	Serial             string               `json:"serial"`
 	Subject            restCASubjectRequest `json:"subject"`
@@ -150,18 +144,6 @@ type restCACertificateResponse struct {
 	EmailAddresses     []string             `json:"email_addresses,omitempty"`
 	URIs               []string             `json:"uris,omitempty"`
 	PEM                string               `json:"pem,omitempty"`
-}
-
-type restCAIssueCertificateResponse struct {
-	Success     bool                       `json:"success"`
-	Message     string                     `json:"message"`
-	Certificate *restCACertificateResponse `json:"certificate,omitempty"`
-	Timestamp   int64                      `json:"timestamp"`
-}
-
-type restCAGetCertificateResponse struct {
-	Certificate *restCACertificateResponse `json:"certificate"`
-	Timestamp   int64                      `json:"timestamp"`
 }
 
 type restCACertificateListResponse struct {
@@ -303,90 +285,94 @@ func (r *RESTAdapter) Teardown() error {
 
 // doGet sends an HTTP GET request and decodes the JSON response.
 func (r *RESTAdapter) doGet(ctx context.Context, path string, result interface{}) error {
-	reqURL := r.baseURL + path
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	body, err := r.send(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return ErrRESTRequestFailed{Method: "GET", Path: path, Err: err}
+		return err
 	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := r.httpClient.Do(req)
-	if err != nil {
-		return ErrRESTRequestFailed{Method: "GET", Path: path, Err: err}
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return ErrRESTRequestFailed{Method: "GET", Path: path, StatusCode: resp.StatusCode, Err: err}
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ErrRESTRequestFailed{
-			Method:     "GET",
-			Path:       path,
-			StatusCode: resp.StatusCode,
-			Body:       string(body),
-		}
-	}
-
 	if result != nil {
 		if err := json.Unmarshal(body, result); err != nil {
 			return ErrRESTResponseParseFailed{Operation: "GET " + path, Err: err}
 		}
 	}
-
 	return nil
 }
 
 // doPost sends an HTTP POST request with a JSON body and decodes the response.
 func (r *RESTAdapter) doPost(ctx context.Context, path string, reqBody interface{}, result interface{}) error {
-	reqURL := r.baseURL + path
-
-	var bodyReader io.Reader
+	var bodyBytes []byte
 	if reqBody != nil {
-		bodyBytes, err := json.Marshal(reqBody)
-		if err != nil {
-			return ErrRESTRequestFailed{Method: "POST", Path: path, Err: err}
-		}
-		bodyReader = bytes.NewReader(bodyBytes)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bodyReader)
-	if err != nil {
-		return ErrRESTRequestFailed{Method: "POST", Path: path, Err: err}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := r.httpClient.Do(req)
-	if err != nil {
-		return ErrRESTRequestFailed{Method: "POST", Path: path, Err: err}
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return ErrRESTRequestFailed{Method: "POST", Path: path, StatusCode: resp.StatusCode, Err: err}
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ErrRESTRequestFailed{
-			Method:     "POST",
-			Path:       path,
-			StatusCode: resp.StatusCode,
-			Body:       string(body),
+		var err error
+		if bodyBytes, err = json.Marshal(reqBody); err != nil {
+			return ErrRESTRequestFailed{Method: http.MethodPost, Path: path, Err: err}
 		}
 	}
-
+	body, err := r.send(ctx, http.MethodPost, path, bodyBytes)
+	if err != nil {
+		return err
+	}
 	if result != nil {
 		if err := json.Unmarshal(body, result); err != nil {
 			return ErrRESTResponseParseFailed{Operation: "POST " + path, Err: err}
 		}
 	}
-
 	return nil
+}
+
+// doProto performs a request whose body and response are proto-JSON, the
+// wire format of the daemon's CA issue, sign-csr and get routes. A nil req
+// sends no body.
+func (r *RESTAdapter) doProto(ctx context.Context, method, path string, req, result proto.Message) error {
+	var bodyBytes []byte
+	if req != nil {
+		var err error
+		if bodyBytes, err = protojson.Marshal(req); err != nil {
+			return ErrRESTRequestFailed{Method: method, Path: path, Err: err}
+		}
+	}
+	body, err := r.send(ctx, method, path, bodyBytes)
+	if err != nil {
+		return err
+	}
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(body, result); err != nil {
+		return ErrRESTResponseParseFailed{Operation: method + " " + path, Err: err}
+	}
+	return nil
+}
+
+// send performs one request and returns the body of a 2xx response.
+func (r *RESTAdapter) send(ctx context.Context, method, path string, reqBody []byte) ([]byte, error) {
+	var bodyReader io.Reader
+	if reqBody != nil {
+		bodyReader = bytes.NewReader(reqBody)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, r.baseURL+path, bodyReader)
+	if err != nil {
+		return nil, ErrRESTRequestFailed{Method: method, Path: path, Err: err}
+	}
+	if reqBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, ErrRESTRequestFailed{Method: method, Path: path, Err: err}
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, ErrRESTRequestFailed{Method: method, Path: path, StatusCode: resp.StatusCode, Err: err}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, ErrRESTRequestFailed{
+			Method:     method,
+			Path:       path,
+			StatusCode: resp.StatusCode,
+			Body:       string(body),
+		}
+	}
+	return body, nil
 }
 
 // =============================================================================
@@ -435,41 +421,21 @@ func (r *RESTAdapter) Init(ctx context.Context, opts InitOptions) (*InitResult, 
 
 // IssueCertificate issues a new certificate via REST.
 func (r *RESTAdapter) IssueCertificate(ctx context.Context, opts IssueCertificateOptions) (*IssueCertificateResult, error) {
-	reqBody := restCertificateIssueRequest{
-		Subject: restCASubjectRequest{
-			CommonName: opts.CommonName,
-		},
-		ValidDays:    int(opts.ValidDays),
-		KeyAlgorithm: opts.Algorithm,
-		StoreType:    opts.StoreType,
-		KeyUsage:     opts.KeyUsage,
-		ExtKeyUsage:  opts.ExtKeyUsage,
-		IsCA:         opts.IsCA,
-		MaxPathLen:   int(opts.MaxPathLen),
-	}
-
-	if len(opts.SANsDNS) > 0 || len(opts.SANsIPs) > 0 || len(opts.SANsEmail) > 0 {
-		reqBody.SANs = &restCASANsRequest{
-			DNS:   opts.SANsDNS,
-			IPs:   opts.SANsIPs,
-			Email: opts.SANsEmail,
-		}
-	}
-
-	var resp restCAIssueCertificateResponse
-	if err := r.doPost(ctx, "/api/v1/ca/certificates", reqBody, &resp); err != nil {
+	resp := &pb.IssueCertificateResponse{}
+	if err := r.doProto(ctx, http.MethodPost, "/api/v1/ca/certificates", issueCertificateRequest(opts), resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "IssueCertificate", Err: err}
 	}
+	return issueResult(resp), nil
+}
 
-	result := &IssueCertificateResult{
-		Success: resp.Success,
+// SignCSR certifies a KMS key for code signing via REST.
+func (r *RESTAdapter) SignCSR(ctx context.Context, opts SignCSROptions) (*IssueCertificateResult, error) {
+	resp := &pb.IssueCertificateResponse{}
+	req := &pb.SignCSRRequest{CsrPem: opts.CSRPEM, ValidDays: opts.ValidDays}
+	if err := r.doProto(ctx, http.MethodPost, "/api/v1/ca/sign-csr", req, resp); err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "SignCSR", Err: err}
 	}
-
-	if resp.Certificate != nil {
-		result.Certificate = convertRESTCertificate(resp.Certificate)
-	}
-
-	return result, nil
+	return issueResult(resp), nil
 }
 
 // =============================================================================
@@ -489,22 +455,16 @@ func (r *RESTAdapter) GetCertificate(ctx context.Context, opts GetCertificateOpt
 		return nil, ErrCallFailed{Protocol: "REST", Method: "GetCertificate", Err: ErrInvalidSerial{Serial: "<empty>"}}
 	}
 
-	path := fmt.Sprintf("/api/v1/ca/certificates/%s", url.PathEscape(identifier))
-	if opts.IncludePEM {
-		path += "?include_pem=true"
-	}
+	query := url.Values{}
+	query.Set("include_pem", strconv.FormatBool(opts.IncludePEM))
+	query.Set("include_der", strconv.FormatBool(opts.IncludeDER))
+	path := fmt.Sprintf("/api/v1/ca/certificates/%s?%s", url.PathEscape(identifier), query.Encode())
 
-	var resp restCAGetCertificateResponse
-	if err := r.doGet(ctx, path, &resp); err != nil {
+	resp := &pb.GetCertificateResponse{}
+	if err := r.doProto(ctx, http.MethodGet, path, nil, resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "GetCertificate", Err: err}
 	}
-
-	result := &GetCertificateResult{}
-	if resp.Certificate != nil {
-		result.Certificate = convertRESTCertificate(resp.Certificate)
-	}
-
-	return result, nil
+	return &GetCertificateResult{Certificate: convertCertificate(resp.Certificate)}, nil
 }
 
 // =============================================================================

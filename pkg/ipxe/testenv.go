@@ -104,6 +104,11 @@ type TestEnvConfig struct {
 	// firmware (ServerConfig.TFTPDir): the Raspberry Pi boot files.
 	TFTPDir string
 
+	// DataDir is the directory the HTTP server serves under /data/
+	// (ServerConfig.DataDir): the netboot media a container serves, the
+	// Raspberry Pi's HTTP boot files among them.
+	DataDir string
+
 	// ProxyDHCP runs the DHCP server as a proxy (DHCPConfig.ProxyOnly):
 	// boot options only, no leases, as on a segment that already has a
 	// DHCP server.
@@ -249,6 +254,7 @@ func NewTestEnv(cfg *TestEnvConfig, logger *logging.Logger) (*TestEnv, error) {
 		FirmwareSigner:    cfg.FirmwareSigner,
 		FirmwareOverrides: cfg.FirmwareOverrides,
 		TFTPDir:           cfg.TFTPDir,
+		DataDir:           cfg.DataDir,
 		DHCPProxyOnly:     cfg.ProxyDHCP,
 	}
 

@@ -300,8 +300,8 @@ curl -s https://platform.example.com:8000/.well-known/oauth-protected-resource
 
 It returns the resource identifier, the authorization servers, and a list of
 supported scopes. Note that **the advertised scope list is broader than what is
-actually enforced** — requesting `ca:write` will be accepted and no `ca_*` tool
-checks it. See [api.md](api.md) §5.
+actually enforced** — requesting `container:write` will be accepted and no
+`container_*` tool checks it. See [api.md](api.md) §5.
 
 ---
 

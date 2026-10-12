@@ -137,6 +137,18 @@ func (e ErrConnectionFailed) Error() string {
 	return fmt.Sprintf("failed to connect to %s: %v", e.Target, e.Err)
 }
 
+func (e ErrConnectionFailed) Unwrap() error {
+	return e.Err
+}
+
+// ErrEmbeddedHostUnavailable is returned when a context uses the embedded
+// transport and the command has no way to host platformd in-process.
+type ErrEmbeddedHostUnavailable struct{}
+
+func (e ErrEmbeddedHostUnavailable) Error() string {
+	return "the embedded transport needs platformd hosted in this process, and this command cannot host it"
+}
+
 // ErrInvalidServiceType is returned when an invalid service type is specified
 type ErrInvalidServiceType struct {
 	Type string

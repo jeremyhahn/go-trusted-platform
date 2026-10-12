@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -31,9 +32,30 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
+
+// caMarshalOptions serializes the protobuf CA responses (issue, sign-csr,
+// get certificate) in the proto-JSON shape the CA webservice also speaks, so
+// the SDK REST transport decodes both servers alike. Unpopulated fields are
+// emitted so response shapes stay stable.
+var caMarshalOptions = protojson.MarshalOptions{
+	EmitUnpopulated: true,
+}
+
+// caUnmarshalOptions decodes protobuf CA request bodies. Unknown fields are
+// discarded for forward compatibility.
+var caUnmarshalOptions = protojson.UnmarshalOptions{
+	DiscardUnknown: true,
+}
 
 const (
 	caDefaultPageSize int32 = 50
@@ -43,6 +65,24 @@ const (
 // =============================================================================
 // CA REST Handler Errors
 // =============================================================================
+
+// ErrSignCSRTokenRequired is returned when a sign-csr request carries no
+// platform bearer token.
+type ErrSignCSRTokenRequired struct{}
+
+func (e ErrSignCSRTokenRequired) Error() string {
+	return "signing a CSR requires a platform bearer token granting " + issuance.SignCSRScope
+}
+
+// ErrSignCSRForbidden is returned when a sign-csr request's token does not
+// grant ca:sign-csr.
+type ErrSignCSRForbidden struct {
+	Reason string
+}
+
+func (e ErrSignCSRForbidden) Error() string {
+	return "signing a CSR requires " + issuance.SignCSRScope + ": " + e.Reason
+}
 
 // ErrCAServiceNotAvailable is returned when the CA service is not configured.
 type ErrCAServiceNotAvailable struct{}
@@ -100,6 +140,14 @@ type ErrMissingCommonName struct{}
 
 func (e ErrMissingCommonName) Error() string {
 	return "common name is required"
+}
+
+// ErrMissingCertificateRequest is returned when an issue request carries no
+// certificate request.
+type ErrMissingCertificateRequest struct{}
+
+func (e ErrMissingCertificateRequest) Error() string {
+	return "certificate request is required"
 }
 
 // ErrInvalidKeyAlgorithm is returned when an invalid key algorithm is specified.
@@ -248,19 +296,6 @@ type CASANsRequest struct {
 	URIs  []string `json:"uris,omitempty"`
 }
 
-// CertificateIssueRequest is the request body for issuing a certificate.
-type CertificateIssueRequest struct {
-	Subject      CASubjectRequest `json:"subject"`
-	SANs         *CASANsRequest   `json:"sans,omitempty"`
-	ValidDays    int              `json:"valid_days,omitempty"`
-	KeyAlgorithm string           `json:"key_algorithm,omitempty"`
-	StoreType    string           `json:"store_type,omitempty"`
-	KeyUsage     []string         `json:"key_usage,omitempty"`
-	ExtKeyUsage  []string         `json:"ext_key_usage,omitempty"`
-	IsCA         bool             `json:"is_ca,omitempty"`
-	MaxPathLen   int              `json:"max_path_len,omitempty"`
-}
-
 // CertificateRevokeRequest is the request body for revoking a certificate.
 type CertificateRevokeRequest struct {
 	Reason     int  `json:"reason,omitempty"`
@@ -303,6 +338,7 @@ type CACertificateResponse struct {
 	EmailAddresses     []string         `json:"email_addresses,omitempty"`
 	URIs               []string         `json:"uris,omitempty"`
 	PEM                string           `json:"pem,omitempty"`
+	DER                []byte           `json:"der,omitempty"`
 }
 
 // CACertificateSummary contains a summary of a certificate for list responses.
@@ -336,20 +372,6 @@ type CACertificateListResponse struct {
 	TotalItems   int                    `json:"total_items"`
 	TotalPages   int                    `json:"total_pages"`
 	Timestamp    int64                  `json:"timestamp"`
-}
-
-// CAGetCertificateResponse is the response for getting a certificate.
-type CAGetCertificateResponse struct {
-	Certificate *CACertificateResponse `json:"certificate"`
-	Timestamp   int64                  `json:"timestamp"`
-}
-
-// CAIssueCertificateResponse is the response for issuing a certificate.
-type CAIssueCertificateResponse struct {
-	Success     bool                   `json:"success"`
-	Message     string                 `json:"message"`
-	Certificate *CACertificateResponse `json:"certificate,omitempty"`
-	Timestamp   int64                  `json:"timestamp"`
 }
 
 // CARevokeCertificateResponse is the response for revoking a certificate.
@@ -434,6 +456,8 @@ type CAServiceInterface interface {
 	TrustedIntermediate() (*x509.Certificate, error)
 	// IssueCertificate issues a new certificate.
 	IssueCertificate(ctx context.Context, req *quicbaasca.CACertificateRequest) (*x509.Certificate, error)
+	// SignCSR certifies the key in a PEM CSR, a key the CA never holds.
+	SignCSR(ctx context.Context, csrPEM []byte, opts *quicbaasca.SignOptions) (*x509.Certificate, error)
 	// Revoke revokes a certificate.
 	Revoke(ctx context.Context, cert *x509.Certificate, keyAttrs *xkmssdk.KeyAttributes) error
 	// CertificateStore returns the certificate store.
@@ -453,6 +477,28 @@ type CAHandlers struct {
 	ca         CAServiceInterface
 	logger     *slog.Logger
 	objStorage objectstorage.Client
+	kms        issuance.KMS
+	tokens     TokenAuthorizer
+}
+
+// TokenAuthorizer validates a platform bearer token, with its DPoP proof
+// when present, and authorizes it for requiredPerm.
+type TokenAuthorizer interface {
+	AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error)
+}
+
+// WithTokenAuthorizer sets the platform-token authorizer that gates
+// sign-csr. Without one, sign-csr refuses every request.
+func (h *CAHandlers) WithTokenAuthorizer(tokens TokenAuthorizer) *CAHandlers {
+	h.tokens = tokens
+	return h
+}
+
+// WithKMS sets the KMS a CSR's key must belong to. Without one,
+// POST /api/v1/ca/sign-csr refuses every request.
+func (h *CAHandlers) WithKMS(kms issuance.KMS) *CAHandlers {
+	h.kms = kms
+	return h
 }
 
 // NewCAHandlers creates a new CAHandlers instance.
@@ -479,6 +525,9 @@ func (h *CAHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/ca/certificates/{serial}", h.handleGetCertificate).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/ca/certificates/{serial}/revoke", h.handleRevokeCertificate).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/ca/certificates/{serial}/renew", h.handleRenewCertificate).Methods(http.MethodPost)
+
+	// Code-signing certification of a KMS key from its CSR
+	router.HandleFunc("/api/v1/ca/sign-csr", h.handleSignCSR).Methods(http.MethodPost)
 
 	// Certificate verification
 	router.HandleFunc("/api/v1/ca/certificates/verify", h.handleVerifyCertificate).Methods(http.MethodPost)
@@ -538,19 +587,23 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var req CertificateIssueRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+	req := &platformv1.IssueCertificateRequest{}
+	if !h.decodeProto(w, r, req) {
 		return
 	}
 
-	if req.Subject.CommonName == "" {
+	certReq := req.GetRequest()
+	if certReq == nil {
+		h.writeError(w, http.StatusBadRequest, ErrMissingCertificateRequest{})
+		return
+	}
+	subject := certReq.GetSubject()
+	if subject.GetCommonName() == "" {
 		h.writeError(w, http.StatusBadRequest, ErrMissingCommonName{})
 		return
 	}
 
-	// Parse key algorithm
-	keyAlg, err := h.parseKeyAlgorithm(req.KeyAlgorithm)
+	keyAlg, err := protoKeyAlgorithmToX509(certReq.GetKeyAlgorithm())
 	if err != nil {
 		h.writeError(w, http.StatusBadRequest, err)
 		return
@@ -559,40 +612,41 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 	// Build certificate request
 	caReq := &quicbaasca.CACertificateRequest{
 		Subject: quicbaasca.CASubject{
-			CommonName:         req.Subject.CommonName,
-			Organization:       req.Subject.Organization,
-			OrganizationalUnit: req.Subject.OrganizationalUnit,
-			Country:            req.Subject.Country,
-			Province:           req.Subject.Province,
-			Locality:           req.Subject.Locality,
-			Address:            req.Subject.Address,
-			PostalCode:         req.Subject.PostalCode,
+			CommonName:         subject.GetCommonName(),
+			Organization:       subject.GetOrganization(),
+			OrganizationalUnit: subject.GetOrganizationalUnit(),
+			Country:            subject.GetCountry(),
+			Province:           subject.GetProvince(),
+			Locality:           subject.GetLocality(),
+			Address:            subject.GetAddress(),
+			PostalCode:         subject.GetPostalCode(),
 		},
-		Valid:       req.ValidDays,
-		IsCA:        req.IsCA,
-		MaxPathLen:  req.MaxPathLen,
-		KeyUsage:    h.parseKeyUsage(req.KeyUsage),
-		ExtKeyUsage: h.parseExtKeyUsage(req.ExtKeyUsage),
+		Valid:       int(certReq.GetValidDays()),
+		IsCA:        certReq.GetIsCa(),
+		MaxPathLen:  int(certReq.GetMaxPathLen()),
+		KeyUsage:    h.parseKeyUsage(certReq.GetKeyUsage()),
+		ExtKeyUsage: h.parseExtKeyUsage(certReq.GetExtKeyUsage()),
 	}
 
 	// Add SANs if provided
-	if req.SANs != nil {
+	if sans := certReq.GetSans(); sans != nil {
 		caReq.SANS = &quicbaasca.CASubjectAlternativeNames{
-			DNS:   req.SANs.DNS,
-			IPs:   req.SANs.IPs,
-			Email: req.SANs.Email,
-			URIs:  req.SANs.URIs,
+			DNS:   sans.GetDnsNames(),
+			IPs:   sans.GetIpAddresses(),
+			Email: sans.GetEmailAddresses(),
+			URIs:  sans.GetUris(),
 		}
 	}
 
 	// Set key attributes
-	storeType := xkmssdk.ParseStoreType(req.StoreType)
-	if storeType == xkmssdk.StoreUnknown {
-		storeType = xkmssdk.StoreSoftware
+	storeType, err := issuance.StoreType(certReq.GetStoreType())
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
 	}
 
 	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           req.Subject.CommonName,
+		CN:           subject.GetCommonName(),
 		KeyAlgorithm: keyAlg,
 		StoreType:    storeType,
 		KeyType:      xkmssdk.KeyTypeTLS,
@@ -601,20 +655,90 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 	// Issue the certificate
 	cert, err := h.ca.IssueCertificate(r.Context(), caReq)
 	if err != nil {
-		h.logger.Error("Failed to issue certificate", "error", err, "cn", req.Subject.CommonName)
+		h.logger.Error("Failed to issue certificate", "error", err, "cn", subject.GetCommonName())
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateIssueFailed{Err: err})
 		return
 	}
+	h.writeIssued(w, cert)
+}
 
-	resp := CAIssueCertificateResponse{
-		Success:     true,
-		Message:     "certificate issued successfully",
-		Certificate: h.certToResponse(cert, true),
-		Timestamp:   time.Now().Unix(),
+// handleSignCSR handles POST /api/v1/ca/sign-csr. It certifies, for code
+// signing only, the KMS key a CSR names — a key the CA never holds.
+func (h *CAHandlers) handleSignCSR(w http.ResponseWriter, r *http.Request) {
+	if h.ca == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
+		return
+	}
+	if status, err := h.authorizeSignCSR(r); err != nil {
+		h.writeError(w, status, err)
+		return
+	}
+
+	req := &platformv1.SignCSRRequest{}
+	if !h.decodeProto(w, r, req) {
+		return
+	}
+
+	cert, err := issuance.SignCSR(r.Context(), h.ca, h.kms, &issuance.CSR{
+		PEM:       []byte(req.GetCsrPem()),
+		ValidDays: int(req.GetValidDays()),
+	})
+	if err != nil {
+		if issuance.IsInvalidRequest(err) {
+			h.writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		h.logger.Error("Failed to sign CSR", "error", err)
+		h.writeError(w, http.StatusInternalServerError, ErrCertificateIssueFailed{Err: err})
+		return
+	}
+	h.writeIssued(w, cert)
+}
+
+// authorizeSignCSR requires a platform bearer token granting ca:sign-csr.
+// It returns the HTTP status to refuse the request with.
+func (h *CAHandlers) authorizeSignCSR(r *http.Request) (int, error) {
+	if h.tokens == nil {
+		return http.StatusForbidden, ErrSignCSRForbidden{Reason: "no platform-token validator is configured"}
+	}
+	token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !found || strings.TrimSpace(token) == "" {
+		return http.StatusUnauthorized, ErrSignCSRTokenRequired{}
+	}
+
+	authCtx, err := h.tokens.AuthorizeToken(r.Context(), token, issuance.SignCSRScope, r.Header.Get("DPoP"), r.Method, requestURL(r))
+	if err != nil {
+		return http.StatusForbidden, ErrSignCSRForbidden{Reason: err.Error()}
+	}
+	if err := issuance.AuthorizeSignCSR(authCtx); err != nil {
+		return http.StatusForbidden, err
+	}
+	return http.StatusOK, nil
+}
+
+// requestURL is the DPoP htu of r: its absolute URL without query or
+// fragment (RFC 9449 §4.3).
+func requestURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host + r.URL.Path
+}
+
+// writeIssued answers a request with the certificate it issued.
+func (h *CAHandlers) writeIssued(w http.ResponseWriter, cert *x509.Certificate) {
+	resp := &platformv1.IssueCertificateResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "certificate issued successfully",
+		},
+		Certificate: h.certToProto(cert, true, false),
+		Timestamp:   timestamppb.Now(),
 	}
 
 	h.logger.Info("Certificate issued", "serial", hex.EncodeToString(cert.SerialNumber.Bytes()), "cn", cert.Subject.CommonName)
-	h.writeJSON(w, http.StatusCreated, resp)
+	h.writeProto(w, http.StatusCreated, resp)
 }
 
 // handleListCertificates handles GET /api/v1/ca/certificates
@@ -710,7 +834,9 @@ func (h *CAHandlers) handleGetCertificate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	includePEM := r.URL.Query().Get("include_pem") == "true"
+	query := r.URL.Query()
+	includePEM := query.Get("include_pem") == "true"
+	includeDER := query.Get("include_der") == "true"
 
 	// Look up certificate by serial number
 	cert := h.findCertificateBySerial(serial)
@@ -719,12 +845,10 @@ func (h *CAHandlers) handleGetCertificate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	resp := CAGetCertificateResponse{
-		Certificate: h.certToResponse(cert, includePEM),
-		Timestamp:   time.Now().Unix(),
-	}
-
-	h.writeJSON(w, http.StatusOK, resp)
+	h.writeProto(w, http.StatusOK, &platformv1.GetCertificateResponse{
+		Certificate: h.certToProto(cert, includePEM, includeDER),
+		Timestamp:   timestamppb.Now(),
+	})
 }
 
 // handleRevokeCertificate handles POST /api/v1/ca/certificates/{serial}/revoke
@@ -1324,6 +1448,149 @@ func (h *CAHandlers) certToResponse(cert *x509.Certificate, includePEM bool) *CA
 	}
 
 	return resp
+}
+
+// certToProto converts a certificate to the protobuf shape the gRPC CA
+// service and the proto-JSON CA webservice return, so the issue, sign-csr
+// and get-certificate routes answer in the same shape on every server.
+func (h *CAHandlers) certToProto(cert *x509.Certificate, includePEM, includeDER bool) *platformv1.Certificate {
+	if cert == nil {
+		return nil
+	}
+
+	fingerprint := sha256.Sum256(cert.Raw)
+
+	out := &platformv1.Certificate{
+		Serial: hex.EncodeToString(cert.SerialNumber.Bytes()),
+		Subject: &platformv1.Subject{
+			CommonName:         cert.Subject.CommonName,
+			Organization:       h.firstOrEmpty(cert.Subject.Organization),
+			OrganizationalUnit: h.firstOrEmpty(cert.Subject.OrganizationalUnit),
+			Country:            h.firstOrEmpty(cert.Subject.Country),
+			Province:           h.firstOrEmpty(cert.Subject.Province),
+			Locality:           h.firstOrEmpty(cert.Subject.Locality),
+			Address:            h.firstOrEmpty(cert.Subject.StreetAddress),
+			PostalCode:         h.firstOrEmpty(cert.Subject.PostalCode),
+		},
+		Issuer:             cert.Issuer.CommonName,
+		NotBefore:          timestamppb.New(cert.NotBefore),
+		NotAfter:           timestamppb.New(cert.NotAfter),
+		Status:             certStatusToProto(cert, time.Now()),
+		KeyAlgorithm:       keyAlgorithmToProto(cert.PublicKeyAlgorithm),
+		SignatureAlgorithm: cert.SignatureAlgorithm.String(),
+		IsCa:               cert.IsCA,
+		MaxPathLen:         int32(cert.MaxPathLen),
+		KeyUsage:           h.keyUsageToStrings(cert.KeyUsage),
+		ExtKeyUsage:        h.extKeyUsageToStrings(cert.ExtKeyUsage),
+		FingerprintSha256:  hex.EncodeToString(fingerprint[:]),
+	}
+
+	if len(cert.DNSNames) > 0 || len(cert.IPAddresses) > 0 ||
+		len(cert.EmailAddresses) > 0 || len(cert.URIs) > 0 {
+		out.Sans = &platformv1.SubjectAlternativeNames{
+			DnsNames:       cert.DNSNames,
+			EmailAddresses: cert.EmailAddresses,
+		}
+		for _, ip := range cert.IPAddresses {
+			out.Sans.IpAddresses = append(out.Sans.IpAddresses, ip.String())
+		}
+		for _, uri := range cert.URIs {
+			out.Sans.Uris = append(out.Sans.Uris, uri.String())
+		}
+	}
+
+	if includePEM && len(cert.Raw) > 0 {
+		out.Pem = pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: cert.Raw,
+		})
+	}
+	if includeDER {
+		out.Der = cert.Raw
+	}
+	return out
+}
+
+// certStatusToProto reports a certificate's validity at now.
+func certStatusToProto(cert *x509.Certificate, now time.Time) platformv1.CertificateStatus {
+	if now.Before(cert.NotBefore) {
+		return platformv1.CertificateStatus_CERTIFICATE_STATUS_PENDING
+	}
+	if now.After(cert.NotAfter) {
+		return platformv1.CertificateStatus_CERTIFICATE_STATUS_EXPIRED
+	}
+	return platformv1.CertificateStatus_CERTIFICATE_STATUS_VALID
+}
+
+// keyAlgorithmToProtoMap names each x509 public-key algorithm by its
+// default protobuf size, matching the gRPC CA service.
+var keyAlgorithmToProtoMap = map[x509.PublicKeyAlgorithm]platformv1.KeyAlgorithm{
+	x509.RSA:     platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+	x509.ECDSA:   platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+	x509.Ed25519: platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519,
+}
+
+// keyAlgorithmToProto maps an x509 public-key algorithm to its protobuf
+// enum; algorithms the CA does not issue map to UNSPECIFIED.
+func keyAlgorithmToProto(alg x509.PublicKeyAlgorithm) platformv1.KeyAlgorithm {
+	return keyAlgorithmToProtoMap[alg]
+}
+
+// protoKeyAlgorithmMap maps the protobuf key algorithms the CA can issue to
+// their x509 algorithm. UNSPECIFIED selects the ECDSA default.
+var protoKeyAlgorithmMap = map[platformv1.KeyAlgorithm]x509.PublicKeyAlgorithm{
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED: x509.ECDSA,
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048:    x509.RSA,
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072:    x509.RSA,
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:    x509.RSA,
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256:  x509.ECDSA,
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384:  x509.ECDSA,
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:  x509.ECDSA,
+	platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519:     x509.Ed25519,
+}
+
+// protoKeyAlgorithmToX509 maps a requested protobuf key algorithm to the
+// x509 algorithm the CA issues, rejecting algorithms it cannot issue.
+func protoKeyAlgorithmToX509(alg platformv1.KeyAlgorithm) (x509.PublicKeyAlgorithm, error) {
+	keyAlg, ok := protoKeyAlgorithmMap[alg]
+	if !ok {
+		return x509.UnknownPublicKeyAlgorithm, ErrInvalidKeyAlgorithm{Algorithm: alg.String()}
+	}
+	return keyAlg, nil
+}
+
+// decodeProto reads a protojson request body into msg. An empty body
+// leaves msg at its zero value. It writes a 400 and reports false when the
+// body cannot be read or decoded.
+func (h *CAHandlers) decodeProto(w http.ResponseWriter, r *http.Request, msg proto.Message) bool {
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+		return false
+	}
+	if len(data) == 0 {
+		return true
+	}
+	if err := caUnmarshalOptions.Unmarshal(data, msg); err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+		return false
+	}
+	return true
+}
+
+// writeProto writes msg as protojson with the given HTTP status.
+func (h *CAHandlers) writeProto(w http.ResponseWriter, statusCode int, msg proto.Message) {
+	payload, err := caMarshalOptions.Marshal(msg)
+	if err != nil {
+		h.logger.Error("Failed to marshal CA response", "error", err)
+		h.writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if _, err := w.Write(payload); err != nil {
+		h.logger.Error("Failed to write CA response", "error", err)
+	}
 }
 
 // certToSummary converts an x509.Certificate to CACertificateSummary.

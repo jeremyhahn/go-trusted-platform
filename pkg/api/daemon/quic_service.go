@@ -753,6 +753,17 @@ func (h *QUICServiceHandler) handleCA(ctx context.Context, req *quicwire.Request
 	return h.caHandler.HandleRequest(ctx, req)
 }
 
+// handleCASignCSR serves quicwire.KMSSubSignCSR. The dispatcher has already
+// authorized the request against the operation catalog, where the sub-opcode
+// needs ca:sign-csr: a token holding only ca:write must not certify a key for
+// code signing.
+func (h *QUICServiceHandler) handleCASignCSR(ctx context.Context, payload []byte) *quicwire.Response {
+	if h.caHandler == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "ca"})
+	}
+	return h.caHandler.SignCSR(ctx, payload)
+}
+
 // handleTPM2Category handles the physical TPM2 category opcode (0x99).
 // The first byte of the payload is the sub-opcode that selects the TPM2
 // operation; the remaining payload bytes are the operation request payload.

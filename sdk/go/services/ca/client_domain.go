@@ -90,6 +90,24 @@ func (c *Client) IssueCertificateDomain(ctx context.Context, params *IssueCertif
 	}, nil
 }
 
+// SignCSRDomain certifies, for code signing only, the KMS key a CSR names,
+// and returns domain types.
+func (c *Client) SignCSRDomain(ctx context.Context, params *SignCSRParams) (*IssueCertificateResult, error) {
+	if params == nil {
+		return nil, &ErrSignCSRFailed{Cause: ErrNilSignCSRParams{}}
+	}
+	resp, err := c.grpc.SignCSR(ctx, &platformv1.SignCSRRequest{
+		CsrPem:    params.CSRPEM,
+		ValidDays: params.ValidDays,
+	})
+	if err != nil {
+		return nil, &ErrSignCSRFailed{Cause: err}
+	}
+	return &IssueCertificateResult{
+		Certificate: CertificateFromProto(resp.Certificate),
+	}, nil
+}
+
 // RevokeCertificateDomain revokes a certificate and returns domain types.
 func (c *Client) RevokeCertificateDomain(ctx context.Context, params *RevokeCertificateParams) (*RevokeCertificateResult, error) {
 	req := revokeParamsToProto(params)

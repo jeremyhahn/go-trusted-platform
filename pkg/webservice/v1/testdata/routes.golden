@@ -323,6 +323,7 @@ POST /api/v1/attestation/quote/verify
 POST /api/v1/attestation/reports/{device_id}/refresh
 POST /api/v1/attestation/vm/{id}
 POST /api/v1/ca/certificates
+POST /api/v1/ca/sign-csr
 POST /api/v1/compute/containers
 POST /api/v1/compute/containers/{id}/exec
 POST /api/v1/compute/containers/{id}/start

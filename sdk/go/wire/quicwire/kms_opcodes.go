@@ -44,6 +44,11 @@ const (
 	KMSSubGetKeyPolicy byte = 0x05
 	// KMSSubGetSupportedAlgorithms lists algorithms supported by the backend.
 	KMSSubGetSupportedAlgorithms byte = 0x06
+	// KMSSubSignCSR has the CA certify a KMS key for code signing, from a
+	// CSR the key signed (CAHandler.SignCSR). It needs CASignCSRPermission,
+	// not a kms permission. It lives here because the single-byte CA range
+	// is full and the operation certifies a KMS key.
+	KMSSubSignCSR byte = 0x07
 )
 
 // Secrets sub-opcodes.

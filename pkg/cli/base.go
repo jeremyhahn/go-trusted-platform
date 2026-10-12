@@ -17,14 +17,15 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/auth"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/embedded"
 
 	// Import transport adapters to register them with the platform package
-	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/embedded"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/quic"
@@ -41,6 +42,17 @@ type CommonFlags struct {
 	NoColor      bool
 	GetConfig    func() (*Config, error)
 	GetContext   func() (*Context, error)
+
+	// StartEmbedded hosts platformd in this process for a context whose
+	// transport is embedded. Nil means the command cannot host one.
+	StartEmbedded func(ctx context.Context, c *Context) (EmbeddedHost, error)
+}
+
+// EmbeddedHost is platformd running inside this process. The SDK's embedded
+// transport dispatches to its services.
+type EmbeddedHost interface {
+	Services() *embedded.ServiceRegistry
+	Stop(ctx context.Context) error
 }
 
 // BaseCommand provides common functionality for all commands
@@ -48,6 +60,7 @@ type BaseCommand struct {
 	flags   *CommonFlags
 	client  platform.Client
 	printer *Printer
+	host    EmbeddedHost
 }
 
 // NewBaseCommand creates a new base command with SDK client
@@ -69,9 +82,17 @@ func NewBaseCommand(flags *CommonFlags) (*BaseCommand, error) {
 		return nil, ErrConnectionFailed{Target: ctx.Name, Err: err}
 	}
 
+	host, err := startEmbeddedHost(flags, ctx, opts)
+	if err != nil {
+		return nil, ErrConnectionFailed{Target: ctx.Name, Err: err}
+	}
+
 	// Create SDK client
 	client, err := platform.Connect(context.Background(), opts)
 	if err != nil {
+		if host != nil {
+			err = errors.Join(err, host.Stop(context.Background()))
+		}
 		return nil, ErrConnectionFailed{Target: ctx.Name, Err: err}
 	}
 
@@ -82,7 +103,31 @@ func NewBaseCommand(flags *CommonFlags) (*BaseCommand, error) {
 		flags:   flags,
 		client:  client,
 		printer: printer,
+		host:    host,
 	}, nil
+}
+
+// startEmbeddedHost hosts platformd in this process when the context's
+// transport is embedded, and gives its services to the SDK options. Any other
+// transport needs no host, and nil is returned.
+//
+// The host attaches this process's own credentials to every call, the
+// identity a Unix socket peer has, so an embedded command may do what the
+// same user may do over /run/platformd.sock. The network transports'
+// authentication is not involved.
+func startEmbeddedHost(flags *CommonFlags, ctx *Context, opts *platform.Options) (EmbeddedHost, error) {
+	if protocolMap[ctx.ResolveProtocol()] != platform.ProtocolEmbedded {
+		return nil, nil
+	}
+	if flags.StartEmbedded == nil {
+		return nil, ErrEmbeddedHostUnavailable{}
+	}
+	host, err := flags.StartEmbedded(context.Background(), ctx)
+	if err != nil {
+		return nil, err
+	}
+	opts.EmbeddedServices = host.Services()
+	return host, nil
 }
 
 // protocolMap provides O(1) lookup from protocol string to platform.Protocol.
@@ -146,8 +191,8 @@ func contextToSDKOptions(ctx *Context) (*platform.Options, error) {
 		}
 
 	case ContextTypeEmbedded:
-		// Embedded contexts are handled by the caller providing services
-		// via platform.WithEmbeddedServices()
+		// The services come from the platformd NewBaseCommand hosts
+		// in-process (startEmbeddedHost).
 
 	default:
 		return nil, ErrInvalidContext{Context: string(ctx.Type)}
@@ -277,12 +322,17 @@ func buildCACertOnlyTLSConfig(caCertPath string) (*tls.Config, error) {
 	}, nil
 }
 
-// Close closes the client connection
+// Close closes the client connection, then stops platformd if this command
+// hosted it.
 func (b *BaseCommand) Close() error {
+	var errs []error
 	if b.client != nil {
-		return b.client.Close()
+		errs = append(errs, b.client.Close())
 	}
-	return nil
+	if b.host != nil {
+		errs = append(errs, b.host.Stop(context.Background()))
+	}
+	return errors.Join(errs...)
 }
 
 // Client returns the platform SDK client

@@ -30,6 +30,7 @@ type handlerFunc func(ctx context.Context, req interface{}) (interface{}, error)
 // gRPC method strings to in-process service handlers using O(1) map lookup.
 type embeddedClientConn struct {
 	handlers map[string]handlerFunc
+	caller   func(context.Context) context.Context
 }
 
 // newEmbeddedClientConn creates a new embedded client connection from a
@@ -37,17 +38,23 @@ type embeddedClientConn struct {
 func newEmbeddedClientConn(registry *ServiceRegistry) *embeddedClientConn {
 	return &embeddedClientConn{
 		handlers: buildHandlerMap(registry),
+		caller:   registry.CallerContext,
 	}
 }
 
 // Invoke implements grpc.ClientConnInterface.Invoke by dispatching the gRPC
 // method to the corresponding in-process service handler. The response is
 // copied into reply via protobuf marshal/unmarshal to maintain the same
-// serialization semantics as a real gRPC transport.
+// serialization semantics as a real gRPC transport. The registry's
+// CallerContext, if set, supplies the caller's identity first.
 func (c *embeddedClientConn) Invoke(ctx context.Context, method string, args, reply interface{}, opts ...grpc.CallOption) error {
 	handler, ok := c.handlers[method]
 	if !ok {
 		return status.Errorf(codes.Unimplemented, "embedded: method %s not registered", method)
+	}
+
+	if c.caller != nil {
+		ctx = c.caller(ctx)
 	}
 
 	resp, err := handler(ctx, args)

@@ -3155,6 +3155,39 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 }
 
 // Loads an initialized Certificate Authority
+// LoadOrInitCA makes the node's certificate authority available as app.CA:
+// it loads the CA from storage and, when there is none yet, initializes
+// it. PINs not given in initParams come from the platform configuration.
+// An already loaded CA is kept. platformd serve and the embedded host
+// both bring up the CA through this one path.
+func (app *App) LoadOrInitCA(ctx context.Context, initParams *AppInitParams) error {
+	if app.CA != nil {
+		return nil
+	}
+	if app.CAConfig == nil {
+		return ErrCANotConfigured{}
+	}
+	if initParams == nil {
+		initParams = &AppInitParams{}
+	}
+
+	soPIN, userPIN, err := app.ParsePINs(initParams.SOPin, initParams.Pin)
+	if err != nil {
+		return ErrCAPINs{Cause: err}
+	}
+	loadErr := app.LoadCA(ctx, soPIN, userPIN)
+	if loadErr == nil {
+		app.Logger.Info("CA loaded successfully")
+		return nil
+	}
+	app.Logger.Warn("CA not found, attempting to initialize", "error", loadErr)
+	if _, initErr := app.InitCA(ctx, soPIN, userPIN, initParams); initErr != nil {
+		return ErrCALoadOrInit{LoadErr: loadErr, InitErr: initErr}
+	}
+	app.Logger.Info("CA initialized successfully")
+	return nil
+}
+
 func (app *App) LoadCA(ctx context.Context, soPIN, userPIN xkmssdk.Password) error {
 
 	if len(app.CAConfig.Identity) == 0 {

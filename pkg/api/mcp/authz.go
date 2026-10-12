@@ -163,6 +163,28 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	c.toolPermissions["ntp_sources"] = "ntp:read"
 	c.toolPermissions["ntp_step"] = "ntp:write"
 
+	// CA: signing a CSR certifies a KMS key for code signing, which is what
+	// the boot chain of every netbooted device trusts. It needs its own
+	// admin-level scope; ca:write, which issues ordinary certificates, does
+	// not confer it (#691).
+	c.toolPermissions["ca_sign_csr"] = "ca:sign-csr"
+
+	// The other CA tools carry exactly the scope of their gRPC CAService
+	// twin (pkg/api/grpc/method_permissions.go); QUIC's opcode table
+	// (pkg/api/quic/auth.go) agrees wherever it maps the operation. REST's
+	// split is not a scope and cannot be copied here: issue, get, list and
+	// revoke sit behind the admin role, and info, crl and bundle are public
+	// (docs/ca/api.md §4). Revocation is ca:write, as on gRPC, not ca:delete.
+	c.toolPermissions["ca_issue"] = "ca:write"
+	c.toolPermissions["ca_renew"] = "ca:write"
+	c.toolPermissions["ca_revoke"] = "ca:write"
+	c.toolPermissions["ca_get"] = "ca:read"
+	c.toolPermissions["ca_list"] = "ca:read"
+	c.toolPermissions["ca_verify"] = "ca:read"
+	c.toolPermissions["ca_info"] = "ca:read"
+	c.toolPermissions["ca_crl"] = "ca:read"
+	c.toolPermissions["ca_bundle"] = "ca:read"
+
 	// Health tools (no auth required)
 	c.toolPermissions["platform_health"] = ""
 	c.toolPermissions["platform_liveness"] = ""

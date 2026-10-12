@@ -72,7 +72,7 @@ curl --tlsv1.3 --cacert platform-ca.pem -X POST https://127.0.0.1:8000/mcp \
 | dns_* tools | dns:read, dns:write, or dns:delete |
 | device_* tools | device:read, device:write, or device:delete |
 | sdn_* tools | sdn:read, sdn:write, or sdn:delete |
-| ca_* tools | ca:read, ca:write, or ca:admin |
+| ca_* tools | ca:read, ca:write, or ca:sign-csr (`ca_sign_csr` only); see docs/ca/api.md §4 |
 | platform_health | No scope required (public) |
 
 ### Authentication Errors
@@ -265,6 +265,22 @@ Get Certificate Authority information.
 
 ---
 
+#### ca_sign_csr
+
+Certify an existing KMS key for code signing from a CSR the KMS signed.
+Requires a platform token granting `ca:sign-csr` (`ca:write` does not). The
+CSR's subject must be one common name naming a KMS key, with that key's
+public key and no SANs; the certificate's extended key usage is
+`codeSigning` only. See `docs/ca/api.md`.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| csr_pem | string | Yes | PEM PKCS#10 request signed by the KMS key it names |
+| valid_days | int | No | Validity in days; omitted or 0 selects the CA's configured default, as on every other transport |
+
+---
+
 #### ca_issue
 
 Issue a new certificate.
@@ -278,8 +294,10 @@ Issue a new certificate.
 | country | string | No | Country code |
 | province | string | No | State/province |
 | locality | string | No | City/locality |
+| address | string | No | Street address |
+| postal_code | string | No | Postal code |
 | valid_days | int | No | Validity in days |
-| algorithm | string | No | Key algorithm |
+| algorithm | string | No | Key algorithm: `RSA-2048`/`3072`/`4096`, `ECDSA-P256`/`P384`/`P521`, `ED25519`; an unknown name is refused |
 | store_type | string | No | Key store type |
 | dns_names | []string | No | SAN DNS names |
 | ip_addresses | []string | No | SAN IP addresses |
@@ -290,14 +308,9 @@ Issue a new certificate.
 | is_ca | bool | No | CA certificate flag |
 | max_path_len | int | No | CA max path length |
 
-**Returns:**
-```json
-{
-  "serial": "789012",
-  "certificate_pem": "-----BEGIN CERTIFICATE-----...",
-  "private_key_pem": "-----BEGIN PRIVATE KEY-----..."
-}
-```
+**Returns:** the gRPC `IssueCertificateResponse` as JSON — `status`,
+`certificate` and `timestamp`. The CA keeps the key; no private key is
+returned.
 
 ---
 
@@ -310,6 +323,7 @@ Get certificate by serial number.
 |------|------|----------|-------------|
 | serial | string | Yes | Certificate serial |
 | include_pem | bool | No | Include PEM data |
+| include_der | bool | No | Include DER data |
 
 ---
 

@@ -38,6 +38,9 @@ type CACommands interface {
 	// Certificate Issue Commands (platformctl ca issue)
 	IssueCertificate(ctx context.Context, opts IssueCertificateOptions) (*IssueCertificateResult, error)
 
+	// CSR Signing Commands (platformctl ca sign-csr)
+	SignCSR(ctx context.Context, opts SignCSROptions) (*IssueCertificateResult, error)
+
 	// Certificate Get Commands (platformctl ca certificate)
 	GetCertificate(ctx context.Context, opts GetCertificateOptions) (*GetCertificateResult, error)
 
@@ -127,6 +130,13 @@ type IssueCertificateOptions struct {
 	ExtKeyUsage []string
 	IsCA        bool
 	MaxPathLen  int32
+}
+
+// SignCSROptions contains the CSR that asks the CA to certify a KMS key for
+// code signing. Its common name is the KMS key ID.
+type SignCSROptions struct {
+	CSRPEM    string
+	ValidDays int32
 }
 
 // IssueCertificateResult contains the result of a certificate issuance.

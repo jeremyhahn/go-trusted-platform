@@ -199,6 +199,11 @@ type quicCAIssueReq struct {
 	MaxPathLen   int32          `codec:"max_path_len"`
 }
 
+type quicCASignCSRReq struct {
+	CsrPem    string `codec:"csr_pem"`
+	ValidDays int32  `codec:"valid_days"`
+}
+
 type quicCAIssueResp struct {
 	Certificate *quicCACert `codec:"certificate"`
 	Timestamp   int64       `codec:"timestamp"`
@@ -381,14 +386,6 @@ func (q *QUICAdapter) Teardown() error {
 
 // sendRequest sends a QUIC request and returns the response.
 func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload interface{}) (*quicCAResponse, error) {
-	q.mu.RLock()
-	if q.closed {
-		q.mu.RUnlock()
-		return nil, ErrQUICCAClientClosed{}
-	}
-	conn := q.conn
-	q.mu.RUnlock()
-
 	var payloadBytes []byte
 	if payload != nil {
 		var err error
@@ -397,6 +394,19 @@ func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload inte
 			return nil, ErrQUICCAEncodeFailed{Operation: caOpcodeToString(opcode), Err: err}
 		}
 	}
+	return q.sendRaw(ctx, opcode, payloadBytes)
+}
+
+// sendRaw sends an already-encoded payload, which category opcodes need for
+// their sub-opcode prefix, and returns the response.
+func (q *QUICAdapter) sendRaw(ctx context.Context, opcode byte, payloadBytes []byte) (*quicCAResponse, error) {
+	q.mu.RLock()
+	if q.closed {
+		q.mu.RUnlock()
+		return nil, ErrQUICCAClientClosed{}
+	}
+	conn := q.conn
+	q.mu.RUnlock()
 
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
@@ -645,10 +655,29 @@ func (q *QUICAdapter) IssueCertificate(ctx context.Context, opts IssueCertificat
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CAIssue", Err: err}
 	}
+	return quicIssueResult(resp, "CAIssue")
+}
 
+// SignCSR certifies a KMS key for code signing via QUIC: sub-opcode
+// KMSSubSignCSR under the KMS extended category.
+func (q *QUICAdapter) SignCSR(ctx context.Context, opts SignCSROptions) (*IssueCertificateResult, error) {
+	body, err := encodeCAPayload(&quicCASignCSRReq{CsrPem: opts.CSRPEM, ValidDays: opts.ValidDays})
+	if err != nil {
+		return nil, ErrQUICCAEncodeFailed{Operation: "CASignCSR", Err: err}
+	}
+
+	resp, err := q.sendRaw(ctx, quicwire.OpKMSExtendedCategory, append([]byte{quicwire.KMSSubSignCSR}, body...))
+	if err != nil {
+		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CASignCSR", Err: err}
+	}
+	return quicIssueResult(resp, "CASignCSR")
+}
+
+// quicIssueResult decodes the response both issue and sign-CSR return.
+func quicIssueResult(resp *quicCAResponse, operation string) (*IssueCertificateResult, error) {
 	var issueResp quicCAIssueResp
 	if err := decodeCAPayload(resp.Payload, &issueResp); err != nil {
-		return nil, ErrQUICCADecodeFailed{Operation: "CAIssue", Err: err}
+		return nil, ErrQUICCADecodeFailed{Operation: operation, Err: err}
 	}
 
 	result := &IssueCertificateResult{

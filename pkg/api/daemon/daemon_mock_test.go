@@ -359,7 +359,7 @@ func TestStopMock_ClosesGRPCListener(t *testing.T) {
 
 	// Verify listener was created
 	if d.grpcListener == nil {
-		t.Skip("gRPC listener not created")
+		t.Error("gRPC listener should exist after Start() with gRPC TCP enabled")
 	}
 
 	err = d.Stop(ctx)

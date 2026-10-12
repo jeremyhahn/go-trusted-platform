@@ -70,6 +70,7 @@ Examples:
 	cmd.AddCommand(newInitCommand(getFlags))
 	cmd.AddCommand(newInfoCommand(getFlags))
 	cmd.AddCommand(newIssueCommand(getFlags))
+	cmd.AddCommand(newSignCSRCommand(getFlags))
 	cmd.AddCommand(newCertificateCommand(getFlags))
 	cmd.AddCommand(newListCommand(getFlags))
 	cmd.AddCommand(newVerifyCommand(getFlags))

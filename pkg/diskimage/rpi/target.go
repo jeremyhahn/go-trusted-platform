@@ -43,15 +43,19 @@ type Model struct {
 	// Experimental marks boards mainline U-Boot only recently gained
 	// (validation on hardware is still owed).
 	Experimental bool
+	// SoC is the target-soc of the board's bootloader EEPROM ("2711" or
+	// "2712"), which fetches and verifies a signed boot.img over HTTP. Empty
+	// for a board with a boot ROM and no EEPROM (the 3B+), which cannot.
+	SoC string
 }
 
 // models is the supported board table, keyed by --model.
 var models = map[string]Model{
-	"rpi4":   {Name: "rpi4", Description: "Raspberry Pi 4 Model B", DTB: "bcm2711-rpi-4-b.dtb"},
-	"rpi400": {Name: "rpi400", Description: "Raspberry Pi 400", DTB: "bcm2711-rpi-400.dtb"},
-	"cm4":    {Name: "cm4", Description: "Raspberry Pi Compute Module 4", DTB: "bcm2711-rpi-cm4.dtb"},
+	"rpi4":   {Name: "rpi4", Description: "Raspberry Pi 4 Model B", DTB: "bcm2711-rpi-4-b.dtb", SoC: "2711"},
+	"rpi400": {Name: "rpi400", Description: "Raspberry Pi 400", DTB: "bcm2711-rpi-400.dtb", SoC: "2711"},
+	"cm4":    {Name: "cm4", Description: "Raspberry Pi Compute Module 4", DTB: "bcm2711-rpi-cm4.dtb", SoC: "2711"},
 	"rpi3b+": {Name: "rpi3b+", Description: "Raspberry Pi 3 Model B+", DTB: "bcm2710-rpi-3-b-plus.dtb"},
-	"rpi5":   {Name: "rpi5", Description: "Raspberry Pi 5 (experimental: mainline U-Boot support is recent)", DTB: "bcm2712-rpi-5-b.dtb", Experimental: true},
+	"rpi5":   {Name: "rpi5", Description: "Raspberry Pi 5 (experimental: mainline U-Boot support is recent)", DTB: "bcm2712-rpi-5-b.dtb", Experimental: true, SoC: "2712"},
 }
 
 // DefaultModel is used when --model is not given.
