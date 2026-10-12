@@ -33,9 +33,8 @@ built-in default**.
 | `--verbose` | `-v` | `false` | | Verbose output |
 | `--no-color` | | `false` | `NO_COLOR` | Disable coloured output |
 
-**`-v` is `--verbose` at the root**, and `registry pull` separately binds `-v`
-to `--verify`. Cobra resolves the local flag first, so inside `registry pull`
-the short form means `--verify`. Prefer the long forms in scripts.
+**`-v` is always `--verbose`.** `registry pull --verify` has no short form.
+Prefer the long forms in scripts.
 
 **Which verbs work without a server.** All seven are client verbs: they need a
 reachable `platformd` on the selected transport. `--transport embedded` runs the
@@ -92,7 +91,7 @@ Pull an image. Writes to `--output` or stdout.
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
 | `--decrypt` | `-d` | bool | `false` | Decrypt encrypted image layers |
-| `--verify` | `-v` | bool | `false` | Verify the image signature |
+| `--verify` | | bool | `false` | Verify the image signature |
 | `--platform` | `-p` | string | `""` | Target platform, e.g. `linux/amd64` |
 | `--output` | `-o` | string | `""` | Output file path; writes stdout when unset |
 

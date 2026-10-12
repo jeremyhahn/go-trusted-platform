@@ -86,7 +86,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().Uint64VarP(&version, "version", "v", 0, "specific key version (0 for all versions)")
+	cmd.Flags().Uint64Var(&version, "version", 0, "specific key version (0 for all versions)")
 
 	return cmd
 }
@@ -111,7 +111,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().Uint64VarP(&version, "version", "v", 0, "specific key version (0 for all versions)")
+	cmd.Flags().Uint64Var(&version, "version", 0, "specific key version (0 for all versions)")
 
 	return cmd
 }

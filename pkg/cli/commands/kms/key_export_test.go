@@ -64,8 +64,8 @@ func TestNewKeyExportCommand_Flags(t *testing.T) {
 		{"wrapping-key", "", ""},
 		{"wrapping-algorithm", "", "aes-kw"},
 		{"format", "", "raw"},
-		{"version", "v", "0"},
-		{"output-file", "o", ""},
+		{"version", "", "0"},
+		{"output-file", "", ""},
 	}
 
 	for _, tt := range tests {
@@ -75,7 +75,7 @@ func TestNewKeyExportCommand_Flags(t *testing.T) {
 				t.Errorf("flag %q not found", tt.flagName)
 				return
 			}
-			if tt.shorthand != "" && flag.Shorthand != tt.shorthand {
+			if flag.Shorthand != tt.shorthand {
 				t.Errorf("flag %q shorthand: got %q, want %q", tt.flagName, flag.Shorthand, tt.shorthand)
 			}
 			if flag.DefValue != tt.defaultValue {

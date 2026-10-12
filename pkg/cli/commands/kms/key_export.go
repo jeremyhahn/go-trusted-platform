@@ -111,8 +111,8 @@ Examples:
 	cmd.Flags().StringVar(&wrappingKeyID, "wrapping-key", "", "ID of the key to wrap the exported key (required)")
 	cmd.Flags().StringVar(&wrappingAlgorithm, "wrapping-algorithm", "aes-kw", "wrapping algorithm")
 	cmd.Flags().StringVar(&exportFormat, "format", "raw", "export format (raw, jwk, pem)")
-	cmd.Flags().Uint64VarP(&version, "version", "v", 0, "specific key version (0 for latest)")
-	cmd.Flags().StringVarP(&outputFile, "output-file", "o", "", "write wrapped key to file")
+	cmd.Flags().Uint64Var(&version, "version", 0, "specific key version (0 for latest)")
+	cmd.Flags().StringVar(&outputFile, "output-file", "", "write wrapped key to file")
 
 	return cmd
 }

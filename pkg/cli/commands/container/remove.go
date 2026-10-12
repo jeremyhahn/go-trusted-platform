@@ -61,7 +61,7 @@ Examples:
 	}
 
 	cmd.Flags().BoolVarP(&opts.force, "force", "f", false, "force remove running container")
-	cmd.Flags().BoolVarP(&opts.deleteVolumes, "volumes", "v", false, "remove associated volumes")
+	cmd.Flags().BoolVar(&opts.deleteVolumes, "volumes", false, "remove associated volumes")
 
 	return cmd
 }

@@ -35,9 +35,9 @@ the first thing that costs someone a minute.
 | `--no-color` | | `false` | `NO_COLOR` |
 
 **Short-flag shadowing.** `compute list` and `container list` bind `-f` to
-`--filter`, `compute delete` and `container remove` bind `-f` to `--force`, and
-`container remove` binds `-v` to `--volumes` while the root binds `-v` to
-`--verbose`. Cobra resolves the local flag first. **Use long forms in scripts.**
+`--filter`, and `compute delete` and `container remove` bind `-f` to `--force`.
+`container remove --volumes` has no short form: `-v` is the global
+`--verbose`. **Use long forms in scripts.**
 
 ---
 
@@ -185,8 +185,8 @@ suppress one; passing `--stdout` alone changes nothing.
 
 ### `container remove`
 
-`--force` / `-f` removes a running container; `--volumes` / `-v` removes
-associated volumes.
+`--force` / `-f` removes a running container; `--volumes` removes associated
+volumes.
 
 ### `container attest`
 

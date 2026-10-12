@@ -113,15 +113,17 @@ There is no KMS type exported from this repository. The surface is:
 5. **Hash and HMAC are distinct.** `Hash` is unkeyed; `HMAC` and `VerifyHMAC`
    are keyed by a KMS key. Using `Hash` where an HMAC is required is a real
    defect, not a style choice.
-6. **AEAD safety limits are a correctness control.** `kms safety` exists because
+6. **AEAD safety limits are a correctness control.** They exist because
    AES-GCM has a bound on the number of invocations per key before nonce reuse
    becomes probable. Exceeding it is a break, not a slowdown.
 
-## 5. AEAD safety limits — the part with no API counterpart
+## 5. AEAD safety limits — no surface at all
 
-`platformctl kms safety` has five verbs — `set`, `get`, `clear`, `check`,
-`report` — and **no gRPC RPC, REST route, QUIC opcode or MCP tool**. It is the
-one implemented capability in this feature that exists only on the CLI.
+`pkg/cli/commands/kms/key_safety.go` declares `kms key safety set|get|clear|check|report`
+behind the `key_safety` build tag. The shipped tag set omits it, and under it
+the file does not compile (no `SetKeySafety` / `GetKeySafety` on the SDK
+client); [cli.md](cli.md) §10. There is **no gRPC RPC, REST route, QUIC opcode
+or MCP tool** either.
 
 Given that the limits guard against nonce reuse under a single key, "there is no
 programmatic way to check whether a fleet's keys are approaching their limit" is
@@ -150,13 +152,13 @@ to test for a stub and means the stubs will not silently start half-working.
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in
 `conventions/feature-docs.md` §4 is unmet repo-wide. For KMS it would be
-actively misleading if satisfied naively, since 36 verb declarations across
-eight files are stubs.
+actively misleading if satisfied naively, since many verbs are stubs
+([cli.md](cli.md) §8).
 
 ## 8. Observability
 
-`BackendStatus` is the health signal. `kms safety report` and `kms safety check`
-are the operational reports and, per §5, are CLI-only.
+`BackendStatus` is the health signal. There is no AEAD safety report on any
+surface (§5).
 
 **Never log key material, plaintext passed to `Encrypt`, or the output of
 `Decrypt`, `GenerateDataKey` or `Unseal`-style operations.** This repository sits

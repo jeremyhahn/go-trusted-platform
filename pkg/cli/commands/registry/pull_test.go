@@ -96,7 +96,7 @@ func TestNewPullCommand_HasFlags(t *testing.T) {
 		shorthand string
 	}{
 		{name: "decrypt", shorthand: "d"},
-		{name: "verify", shorthand: "v"},
+		{name: "verify", shorthand: ""},
 		{name: "platform", shorthand: "p"},
 		{name: "output", shorthand: "o"},
 	}
@@ -108,7 +108,7 @@ func TestNewPullCommand_HasFlags(t *testing.T) {
 				t.Errorf("expected flag %q to exist", tt.name)
 				return
 			}
-			if tt.shorthand != "" && flag.Shorthand != tt.shorthand {
+			if flag.Shorthand != tt.shorthand {
 				t.Errorf("expected shorthand %q for flag %q, got %q",
 					tt.shorthand, tt.name, flag.Shorthand)
 			}

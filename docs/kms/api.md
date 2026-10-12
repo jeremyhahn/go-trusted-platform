@@ -108,9 +108,10 @@ and (partially) MCP. That means the SDK's typed gRPC path cannot reach them, and
 an embedded-mode consumer cannot use them.
 
 **The CLI cannot reach them either** — the entire `platformctl kms secrets`
-subtree and `kms datakey` are stubs that return typed
+and `kms dek` subtrees are stubs that return typed
 `ErrSecretsNotImplemented` / `ErrDEKNotImplemented` errors. See
-[engineering.md](engineering.md) §2 and [cli.md](cli.md) §4.
+[engineering.md](engineering.md) §2 and [cli.md](cli.md) §7–§8. (`kms crypto
+datakey`, which mints a wrapped DEK, does work.)
 
 `{path:.+}` on the DEK routes is a catch-all because DEK paths contain slashes.
 Note the ordering: `/deks/{path}/status` and `/deks/{path}/rotate` are registered
@@ -118,15 +119,17 @@ Note the ordering: `/deks/{path}/status` and `/deks/{path}/rotate` are registere
 
 ---
 
-## 5. AEAD safety limits are CLI-only
+## 5. AEAD safety limits have no surface at all
 
-`platformctl kms safety set|get|clear|check|report` has **no gRPC RPC, no REST
-route, no QUIC opcode and no MCP tool** (grepped 2026-08-18).
+AEAD safety limits have **no gRPC RPC, no REST route, no QUIC opcode and no MCP
+tool** (grepped 2026-08-18). The CLI's `kms key safety` group is compiled only
+under a build tag the shipped binary does not use, and does not compile under it
+([cli.md](cli.md) §10).
 
 These limits guard against AES-GCM nonce reuse under a single key — a
 catastrophic rather than gradual failure. There is currently **no programmatic
 way to check whether a fleet's keys are approaching their invocation limit**;
-it can only be done by running the CLI against each daemon. Raised as an owner
+no shipped CLI can do it either. Raised as an owner
 question in the migration report.
 
 ---
