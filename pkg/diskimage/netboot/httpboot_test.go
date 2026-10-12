@@ -23,6 +23,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -113,8 +114,10 @@ func TestStageHTTPBoot_Errors(t *testing.T) {
 	key, _ := secureboottest.KeyPair(t, "fleet")
 	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	shortKey, err := rsa.GenerateKey(rand.Reader, 1024)
-	require.NoError(t, err)
+	// A fixed 1024-bit modulus, not rsa.GenerateKey: fips140=only refuses to
+	// generate a key that short, and StageHTTPBoot refuses it on its size
+	// alone, before any RSA operation.
+	shortKey := &rsa.PrivateKey{PublicKey: rsa.PublicKey{N: new(big.Int).Lsh(big.NewInt(1), 1023), E: 65537}}
 	tree := bootTree(t)
 	file := filepath.Join(t.TempDir(), "file")
 	require.NoError(t, os.WriteFile(file, nil, 0o644))
