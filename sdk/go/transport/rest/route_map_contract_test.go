@@ -141,11 +141,10 @@ func TestRouteMaps_DeclareNoMethodThatDoesNotExist(t *testing.T) {
 	//   - Some name a method that does not exist AND a path that is served
 	//     nowhere — pure cruft, safe to delete.
 	//   - Others name a method that does not exist but a path that IS served.
-	//     "/platform.v1.PlatformDaemon/Health" maps to "/health", which
-	//     pkg/api/daemon/rest_service.go really registers; the proto method is
-	//     GetHealth. That entry is a MISNAMED BRIDGE to a working route, so
-	//     the fix is to correct the key, not to remove the row — deleting it
-	//     would drop a correctable link to a live endpoint.
+	//     Liveness and Readiness map to routes pkg/api/daemon/rest_service.go
+	//     serves, but the proto declares no such methods. They are MISNAMED
+	//     BRIDGES to working routes; Health was one until #138 renamed its key
+	//     to the real GetHealth.
 	//
 	// Sorting the two apart is per-entry work tracked separately; doing it by
 	// eye here would be the guess this test exists to remove.
@@ -165,7 +164,6 @@ func TestRouteMaps_DeclareNoMethodThatDoesNotExist(t *testing.T) {
 		"/platform.v1.IDevIDService/GetCert":             true,
 		"/platform.v1.IDevIDService/GetInfo":             true,
 		"/platform.v1.IDevIDService/InstallCert":         true,
-		"/platform.v1.PlatformDaemon/Health":             true,
 		"/platform.v1.PlatformDaemon/Liveness":           true,
 		"/platform.v1.PlatformDaemon/Readiness":          true,
 		"/platform.v1.SDNService/GetPortState":           true,

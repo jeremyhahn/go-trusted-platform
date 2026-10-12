@@ -39,6 +39,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
 
@@ -293,6 +294,9 @@ func (a *Adapter) DoRequest(ctx context.Context, method, path string, body inter
 // server emits via protorest.WriteSuccess. For non-proto types
 // (domain DTOs, raw maps), regular encoding/json is used.
 func decodeJSONResult(data []byte, result interface{}) error {
+	if resp, ok := result.(*platformv1.GetStatusResponse); ok {
+		return decodeStatusResponse(data, resp)
+	}
 	if msg, ok := result.(proto.Message); ok {
 		opts := protojson.UnmarshalOptions{
 			DiscardUnknown: true,
@@ -936,7 +940,7 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.PlatformDaemon/GetStatus":  {"/api/v1/status", http.MethodGet},
 
 	// Health endpoints
-	"/platform.v1.PlatformDaemon/Health":    {"/health", http.MethodGet},
+	"/platform.v1.PlatformDaemon/GetHealth": {"/health", http.MethodGet},
 	"/platform.v1.PlatformDaemon/Liveness":  {"/health/live", http.MethodGet},
 	"/platform.v1.PlatformDaemon/Readiness": {"/health/ready", http.MethodGet},
 

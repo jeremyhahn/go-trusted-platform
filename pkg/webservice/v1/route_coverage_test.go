@@ -217,7 +217,7 @@ var unroutedClaims = map[string]string{
 	"/platform.v1.PXEService/Authorize":                        "POST /api/v1/pxe/devices/authorize",
 	"/platform.v1.PXEService/Quarantine":                       "POST /api/v1/pxe/devices/quarantine",
 	"/platform.v1.PXEService/UpdateState":                      "PUT /api/v1/pxe/devices/state",
-	"/platform.v1.PlatformDaemon/Health":                       "GET /health",
+	"/platform.v1.PlatformDaemon/GetHealth":                    "GET /health",
 	"/platform.v1.PlatformDaemon/Liveness":                     "GET /health/live",
 	"/platform.v1.PlatformDaemon/Readiness":                    "GET /health/ready",
 	"/platform.v1.ProvisioningGateway/GetBootConfig":           "GET /api/v1/provisioning/boot-config",
