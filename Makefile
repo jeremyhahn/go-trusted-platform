@@ -1311,6 +1311,25 @@ test: check-insecure-tls
 	@echo "Running all unit tests..."
 	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)") $(TEST_UNIT_PKGS)
 
+.PHONY: test-fips
+## test-fips: FIPS 140-3 suite: build ./... and run `make test`, both with the fips tag under GODEBUG=fips140=only
+#
+# The ONE definition of the FIPS job: ci.yml (push to main, workflow_dispatch)
+# and nightly.yml (workflow_dispatch) both run this target, so the two cannot
+# drift apart. BOTH halves matter and they do different jobs:
+#   WITH_FIPS=1 (the `fips` tag) selects the FIPS implementations at COMPILE
+#       time, so MD5/SHA-1 are not linked in at all;
+#   GODEBUG=fips140=only enforces at RUNTIME, and is what proves the
+#       compile-time gate was complete.
+# STRICT mode, not `fips140=on` (ratified 2026-08-17): `on` loads the Go
+# Cryptographic Module but still PERMITS non-approved algorithms, so the suite
+# would report green while a regulated path used prohibited cryptography.
+# WITH_FIPS=1, never BUILD_TAGS="...": a command-line BUILD_TAGS replaces the
+# Makefile's tag list instead of appending to it.
+test-fips:
+	GOFIPS140=latest GODEBUG=fips140=only go build -tags "$$($(MAKE) -s --no-print-directory print-build-tags WITH_FIPS=1)" ./...
+	GOFIPS140=latest GODEBUG=fips140=only $(MAKE) --no-print-directory test WITH_FIPS=1
+
 .PHONY: test-pkg
 ## test-pkg: Run unit tests for ONE package with the derived tag set, e.g. make test-pkg PKG=./pkg/api/daemon/
 #

@@ -3,13 +3,16 @@
 # Owner ruling 2026-08-20 (fail-fast pipeline for iteration speed): jobs that
 # are known-red with tracked issues, or that verify a slow-moving property, do
 # NOT run per push — a known-red job burning runner-minutes per push produces
-# information we already have. They run here nightly, plus on demand via
-# workflow_dispatch, and are NOT in any merge gate. When their tracked issues
+# information we already have. They run here on demand via workflow_dispatch
+# (the nightly schedule was removed by #852), and are NOT in any merge gate. When their tracked issues
 # land, a job may move back to ci.yml — that move is deliberate, not automatic.
 #
 # Repo-specific notes for go-trusted-platform:
 #
-#   fips  — STILL RED, on causes this repo cannot close. Retriaged 2026-09-03
+#   fips  — ALSO in ci.yml since #853, on push to main and workflow_dispatch,
+#           outside CI Gate; both jobs run `make test-fips`.
+#
+#           STILL RED, on causes this repo cannot close. Retriaged 2026-09-03
 #           (#209), which fixed three of the four causes below plus the
 #           registry envelope. Read the corrections: the previous note here was
 #           wrong about which repository owns the Noise guard, and it
@@ -131,9 +134,13 @@
 
 name: Nightly
 
+# workflow_dispatch only (#852). The `0 3 * * *` schedule was removed: the
+# shared runner is the portfolio's scarcest resource, and a scheduled run of
+# these jobs spent it every night whether or not anyone read the result.
+# Dispatch it by hand — on main for the tree's state, or on a branch before
+# merging work these jobs judge. The workflow keeps its name, so its statuses
+# keep their `Nightly / ...` contexts.
 on:
-  schedule:
-    - cron: '0 3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -148,20 +155,15 @@ env:
   GOFLAGS: "-buildvcs=false"
 
 jobs:
+  # The same job runs in ci.yml on push to main. Its definition — tags,
+  # GOFIPS140, GODEBUG=fips140=only, build then test — is `make test-fips`;
+  # the steps here and there are only checkout, toolchain and cpio, so keep
+  # the two jobs' steps identical and change the FIPS suite in the Makefile.
   fips:
     name: FIPS
     runs-on: ubuntu-latest
     # needs: none — nightly runs standalone; build health is ci.yml's job.
     timeout-minutes: 60
-    env:
-      GOFIPS140: latest
-      # STRICT mode, not `on` (ratified 2026-08-17). `fips140=on` loads the Go
-      # Cryptographic Module but still PERMITS non-approved algorithms, so a
-      # path using MD5 or SHA-1 succeeds and the gate reports green while a
-      # regulated path uses prohibited cryptography. `fips140=only` makes those
-      # operations error or panic, which is what a FedRAMP / PCI DSS / HIPAA
-      # compliance gate has to do.
-      GODEBUG: fips140=only
     steps:
       - uses: actions/checkout@v6
 
@@ -169,28 +171,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      # BOTH halves matter and they do different jobs:
-      #   -tags fips        selects the FIPS implementations at COMPILE time,
-      #                     so MD5/SHA-1 are not linked in at all.
-      #   GODEBUG=fips140=only  enforces at RUNTIME, and is what proves the
-      #                     compile-time gate was complete.
-      # Without the tag this job would verify the NON-FIPS code paths, which is
-      # exactly the trap Codex caught on PR for #24.
-      # `make print-build-tags WITH_FIPS=1` is the same tag list every other
-      # make target compiles with, plus `fips`. Hand-writing `-tags fips` here
-      # compiled the stub halves of every tag-gated package instead.
-      - name: Build all packages (FIPS mode)
-        run: go build -tags "$(make print-build-tags WITH_FIPS=1)" ./...
-
-      # CUSTOMIZE (template v1.4.1): this MUST mirror the repo's own unit-test
-      # invocation — same build tags, same package scope, same exclusions —
-      # with ONLY the FIPS env changed. This repo's Test job is `make test`,
-      # which carries BUILD_TAGS, TEST_SKIP and TEST_EXCLUDE; a bare
-      # `go test ./...` would drag in hardware/root/daemon suites and fail for
-      # reasons that have nothing to do with FIPS.
-      #
-      # WITH_FIPS=1, never BUILD_TAGS="...": the second form does not mirror
-      # `make test`, it replaces its tag list.
       # pkg/diskimage/netboot builds each media set's installer initramfs,
       # which extracts and repacks it with cpio (pkg/iso). The runner image
       # has no cpio; ci.yml installs it for the same reason, and without it
@@ -199,8 +179,11 @@ jobs:
       - name: Install cpio for the netboot media tests
         run: sudo apt-get update && sudo apt-get install -y cpio
 
-      - name: Unit tests (FIPS mode)
-        run: make test WITH_FIPS=1
+      # `make test-fips` mirrors the Test job's `make test` — same tags, same
+      # package scope, same exclusions — with ONLY the FIPS build tag and
+      # environment added (template v1.4.1). The Makefile carries the why.
+      - name: FIPS build and unit tests
+        run: make test-fips
 
   # rpi-image — the Raspberry Pi factory image (docs/factory-image/). It is
   # nightly because it needs what a push job cannot afford: binfmt for the
@@ -221,9 +204,11 @@ jobs:
   #                               the aarch64 platformd on musl against a
   #                               swtpm in an arm64 container (minutes)
   # The full emulated first boot through firstboot sealing and platformd
-  # (`make integration-test-diskimage`) is workflow_dispatch only until the
-  # runner's TCG timing is measured: on the development host it is 30-60
-  # minutes, and a job that times out reports nothing.
+  # (`make integration-test-diskimage`) runs on every run. While this workflow
+  # had a schedule it was dispatch-only: it takes 30-60 minutes on the
+  # development host, the runner's TCG timing is unmeasured, and a job that
+  # times out reports nothing. Since #852 every run is a dispatch, so the step
+  # needs no condition of its own.
   rpi-image:
     name: Raspberry Pi image
     runs-on: ubuntu-latest
@@ -282,8 +267,7 @@ jobs:
       - name: aarch64 userspace suite (platformd + swtpm in an arm64 container)
         run: make integration-test-diskimage-userspace
 
-      - name: Emulated first boot (manual)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Emulated first boot
         run: make integration-test-diskimage
 
       - name: Keep the images
@@ -301,9 +285,12 @@ jobs:
             build/docker/virt-kernel-builder/output/*/config-*
             build/docker/virt-kernel-builder/output/*/SHA256SUMS
 
-  # A `schedule` run publishes no commit status of its own, so before this job
-  # a red nightly turned nothing red anywhere and nobody found out. This puts
-  # the result on the commit that produced it.
+  # A workflow_dispatch run publishes no commit status of its own (nor did the
+  # `schedule` run this workflow had until #852), so without this job a red
+  # run turns nothing red anywhere and nobody finds out. This puts the result
+  # on the commit the run judged: GITHUB_SHA is the head of the ref it was
+  # dispatched on, so a dispatch on a branch marks that branch's head, not
+  # main's.
   #
   # It is deliberately NOT named `CI / ...`. The nightly jobs are not in any
   # merge gate (owner ruling 2026-08-20) and `main`'s branch protection
@@ -325,9 +312,13 @@ jobs:
   #
   #   ci.yml (push + PR, BLOCKING)  "does this change introduce a
   #                                  vulnerability?" — judges a diff.
-  #   here   (nightly, advisory)    "has a vulnerability been published since
+  #   here   (dispatched, advisory) "has a vulnerability been published since
   #                                  anyone last touched main?" — judges the
   #                                  tree against today's database.
+  #
+  # Since #852 there is no schedule, so the second question is answered only
+  # when someone dispatches this workflow; until then, the newest answer is
+  # ci.yml's trivy on the last push to main.
   #
   # Without the second, main's green Trivy badge means "no CVEs as of the last
   # push" while everyone reads it as "no CVEs". Measured: main carried two HIGH
@@ -439,7 +430,7 @@ jobs:
 
           rc=0
           echo "fips=${{ needs.fips.result }} state=${STATE}"
-          publish "${STATE}" "Nightly / FIPS" "nightly FIPS suite (not a merge gate)" || rc=1
+          publish "${STATE}" "Nightly / FIPS" "FIPS suite (not a merge gate)" || rc=1
 
           # A SEPARATE context, never folded into the FIPS one. FIPS is
           # expected-red today (see the header) while trivy is expected-green,

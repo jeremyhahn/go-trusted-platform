@@ -348,8 +348,10 @@ served by the bootstrap container instead of written to a card.
 
 ## 7. Test strategy
 
-Four layers, cheapest first; each one is a `make` target and the nightly
-`rpi-image` job runs the first three.
+Four layers, cheapest first; each one is a `make` target and the
+`rpi-image` job in `nightly.yml` runs the first three. That workflow has no
+schedule since #852: dispatch it by hand (`workflow_dispatch`), and every
+dispatch also runs the emulated first boot.
 
 - **Unit** (`make test-diskimage`, `test-qemu`, `coverage-diskimage`,
   `bench-diskimage`; `make test` covers the rest): every external command

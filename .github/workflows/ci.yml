@@ -8,14 +8,37 @@ name: CI
 # but success. `push` runs on main only: automerge.yml v7's merge trains are
 # PRs from merge-train/* and get their CI from the pull_request trigger.
 #
+# TWO TIERS (#852). The PR tier — lint, build, sdkjs, test, security and the
+# gate — runs on every pull_request. The full tier — race, web and trivy — runs
+# on push to main, on workflow_dispatch, and on a PR labelled `ci:full`; each
+# full-tier job carries that condition as its own `if:`, written out on the job
+# so a reader never has to resolve it elsewhere. A label event starts no run
+# (#853, see the `pull_request` trigger), so `ci:full` on an open PR takes
+# effect on its next push or update-branch.
+# CI Gate tags each check `pr` or `full` and lets a `skipped` result through
+# only for a full-tier job on a run where the full tier was not selected.
+# pkg/arch/citiers_test.go holds the gate, the jobs and the tiers together.
+#
+# The `gonext` job (#195: compile on the NEXT Go toolchain) was removed by #852.
+# It had been parked behind `if: false` since 2026-09-22 because 1.27 is the
+# newest Go release and there is nothing to build against; when 1.28 ships,
+# restore it from git history with a tier tag in CI Gate.
+#
 # The `concurrency` block below cancels a run that is merely SUPERSEDED — see
 # its comment.
 #
-# trivy and fips live in nightly.yml (schedule + workflow_dispatch) and gate
-# nothing here. Repo-specific caveat recorded there: trivy was NOT known-red in
-# this repository — it was green and caught two live HIGH CVEs on 2026-08-19.
-# It moved for portfolio conformance, which means a dependency CVE now surfaces
-# at the next nightly rather than blocking the push that introduces it.
+# FIPS runs on push to main and on workflow_dispatch, NEVER on a pull_request
+# (#853), `ci:full` included: it is the full tier's one main-only job. It is
+# NOT in CI Gate's `needs` — it is still red on the causes listed in
+# nightly.yml's header, so it reports `CI / FIPS (push)` on main without
+# turning main's gate red. `make test-fips` is its one definition, shared with
+# nightly.yml's `fips` job.
+#
+# The Raspberry Pi image, an advisory trivy and that second fips job live in
+# nightly.yml, which has no schedule since #852 and runs only on
+# workflow_dispatch; they gate nothing here. Repo-specific caveat recorded there: trivy was NOT known-red in
+# this repository — it was green and caught two live HIGH CVEs on 2026-08-19 —
+# so the blocking trivy job stays in this file, in the full tier.
 #
 # One workflow, both hosts. Gitea Actions is GitHub-Actions-compatible, so the
 # GitHub-only mechanics (SARIF upload to code scanning, aquasecurity/trivy-action,
@@ -28,6 +51,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # No `labeled` (#853). Gitea 1.27.1 sends every label add AND remove as
+    # `label_updated`, and its matcher maps that to `labeled` whichever label
+    # moved, with no `github.event.label` in the payload. Each `task:*` or
+    # `code-review` change then started a run that the `concurrency` block let
+    # cancel the PR's run in progress, and a run whose jobs an `if:` skips
+    # would post `skipped` over the real run's `CI / *` contexts, CI Gate
+    # included. An action outside `types` matches nothing: no run, no status.
+    # The cost: adding `ci:full` waits for the PR's next push or update-branch.
+    types: [opened, synchronize, reopened]
   # Gitea has no API to re-run a finished run, so a run that failed for the
   # runner's own reasons can only be repeated by inventing a commit unless the
   # workflow can be dispatched by hand (ci-template v1.3).
@@ -61,18 +93,6 @@ permissions:
 
 env:
   GO_VERSION: "1.27.2"
-  # The toolchain the repository must keep COMPILING under, one release ahead of
-  # GO_VERSION — see the `gonext` job. Pinned exactly, like GO_VERSION, so the
-  # lane cannot change what it tests without a commit. It is never allowed to
-  # equal GO_VERSION, or the job tests nothing.
-  #
-  # PARKED 2026-09-22. GO_VERSION moved to 1.27.1 with go-quicbaas
-  # v0.11.0-alpha, and 1.27 is the newest Go release that exists — there is no
-  # "one ahead" to build against until 1.28 ships. The value below is what it
-  # becomes then; it does not resolve today. The `gonext` job is disabled and
-  # withdrawn from ci-gate for the same reason; see its header for the two
-  # coordinated edits that restore it.
-  GO_NEXT_VERSION: "1.28.0"
   # Builds never resolve through a workspace: first-party modules come from
   # Gitea tags (conventions/dependency-resolution.md §2). The runner injects
   # GOPRIVATE and the tokenised git rewrite for github.com/jeremyhahn/* itself —
@@ -122,16 +142,16 @@ jobs:
       - name: InsecureSkipVerify allowlist
         run: make check-insecure-tls
 
-  # Job id is `sdkjs`, deliberately without a hyphen, for the same reason
-  # `gonext` is: ci-gate dereferences it as `needs.sdkjs.result`, and this
-  # file already carries one gate bug that came from assuming Gitea
-  # evaluates a GitHub expression the way GitHub does. Do not "tidy" this
-  # to `sdk-js`.
+  # Job id is `sdkjs`, deliberately without a hyphen: ci-gate dereferences it
+  # as `needs.sdkjs.result`, and this file already carries one gate bug that
+  # came from assuming Gitea evaluates a GitHub expression the way GitHub does
+  # (`join(needs.*.result)`). Property access on a hyphenated id is not worth
+  # re-testing that assumption on. Do not "tidy" this to `sdk-js`.
   sdkjs:
     name: SDK JavaScript
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Fast tier, deliberately without `needs`. Staged fail-fast exists to keep
+    # PR tier, deliberately without `needs`. Staged fail-fast exists to keep
     # the expensive tier from burning runner-minutes behind a broken fast tier;
     # nothing this job does is made cheaper or safer by waiting for `lint` and
     # `build` to pass first, so gating it on them would add latency to every
@@ -221,7 +241,7 @@ jobs:
       # The Raspberry Pi factory image ships aarch64 binaries cross-built
       # with CGO_ENABLED=0 (docs/factory-image/engineering.md). This is the
       # cheap half of that feature's gate: the full image build and the
-      # emulated boot are nightly (nightly.yml `rpi-image`), because they
+      # emulated boot are in nightly.yml `rpi-image` (dispatched), because they
       # need binfmt, a privileged container and TCG emulation time.
       - name: Cross-build the aarch64 binaries (Raspberry Pi image)
         run: make rpi-binaries
@@ -236,94 +256,6 @@ jobs:
       # the build reaches any root-module package (#840).
       - name: Build sdk/go as a module consumer
         run: make sdk-consumer-check
-
-  # Job id is `gonext`, deliberately without a hyphen: ci-gate dereferences it
-  # as `needs.gonext.result`, and this file already carries one gate bug that
-  # came from assuming Gitea evaluates a GitHub expression the same way
-  # (`join(needs.*.result)`). Property access on a hyphenated id is not worth
-  # re-testing that assumption on. Do not "tidy" this to `go-next`.
-  gonext:
-    name: Go Next
-    runs-on: ubuntu-latest
-    # PARKED 2026-09-22 — GO_VERSION reached the newest Go release (1.27.1), so
-    # there is no next toolchain to build against until 1.28 ships. The job did
-    # its work for this cycle: it is what proved the tree compiled on 1.27
-    # while CI still pinned 1.26 (#195). RESTORE, when 1.28 is released, with
-    # BOTH of these — they are coordinated:
-    #   1. delete the `if: false` below;
-    #   2. re-add `gonext` to ci-gate's `needs`, env block and checks.
-    # ci-gate FAILS on a skipped job by design, so doing (1) without (2), or
-    # leaving this disabled while ci-gate still lists it, turns the gate red.
-    if: false
-    # No `needs` (v1.14): like every job it starts at once. It gates ci-gate
-    # (once restored), and DELIBERATELY does not gate test/race/security/trivy:
-    # this job is strictly heavier than `build` (same untagged compiles, PLUS
-    # both tagged modules, plus the initrd link, plus a second toolchain to
-    # download), so making other jobs wait on it would add that latency to
-    # EVERY green push.
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_NEXT_VERSION }}
-
-      # WHY THIS JOB EXISTS (#195). A dependency can gate its own source on the
-      # toolchain version: github.com/cockroachdb/swiss defined fastrand64,
-      # hashFn and getRuntimeHasher under `go1.20 && !go1.27`, so on a 1.27
-      # toolchain those symbols simply were not there and the whole tree failed
-      # to compile. Every job above is pinned to GO_VERSION, so the entire gate
-      # was green while the repository did not build on 1.27 at all — and the
-      # hosted Codex reviewer, which runs 1.27, had been reviewing this
-      # repository without ever building it.
-      #
-      # WHY BUILD-ONLY, AND NOT A SECOND TEST MATRIX. The failure class this
-      # guards is version-gated build constraints in dependencies. That is a
-      # COMPILE error, not a behavioural one: a build detects it completely, and
-      # running the suite a second time adds no detection for it. Against that,
-      # sdlc.md §0b is measured and binding — the shared act_runner is
-      # `capacity: 3` for the WHOLE portfolio, a repo workflow is already about
-      # seven jobs, and two PRs in CI saturate it. Duplicating test+race+security
-      # would triple this lane's cost on the fleet's scarcest resource to detect
-      # nothing extra. One build job is the whole return.
-      #
-      # HONEST LIMIT, so nobody reads more into a green than it carries: this
-      # proves both modules COMPILE on GO_NEXT_VERSION. It does not run the
-      # suite there, does not compile _test.go files there, and says nothing
-      # about runtime behaviour on that toolchain. Test-file compilation and
-      # behaviour are covered on GO_VERSION by the test and race jobs. Moving
-      # GO_VERSION to a new toolchain is still a deliberate change that has to
-      # be validated on its own, not something this job pre-approves.
-      #
-      # `make build-check`, not an ad-hoc `go build ./...`: BUILD_TAGS is
-      # assembled in the Makefile in two stages (a literal `:=` line plus
-      # conditional `+=` appends), so a hand-copied tag list silently drops every
-      # codec and compiles a tree nobody ships. The target single-sources it and
-      # covers BOTH modules in BOTH tag configurations (devops.md §4: CI runs the
-      # targets a developer runs).
-      #
-      # Untagged as well as tagged, because neither is a superset of the other:
-      # files selected by the ABSENCE of a tag (pkg/api/daemon's
-      # iam_service_stub.go is `//go:build !iam`, and !cluster, !fips,
-      # !platform_web and others exist) are compiled ONLY by the untagged build,
-      # which is why the build job above keeps one.
-      - name: Build both modules (tagged and untagged)
-        run: make build-check
-
-      # The binaries too: build-check emits no executables, and linking is where
-      # a cgo or ldflags incompatibility surfaces rather than at type-check.
-      - name: Build platformd, platformctl and gatewayd
-        run: make build-no-web
-
-      # platform-initrd is built separately because it IS built separately: its
-      # own INITRD_BUILD_TAGS (osusergo,netgo,local — nothing like BUILD_TAGS)
-      # and CGO_ENABLED=0, a static binary that runs before networking and links
-      # the sdk/go/xkms re-exports directly (AGENTS.md, "Note: pkg/initrd/ and
-      # cmd/platform-initrd/"). Neither step above compiles that configuration,
-      # so without this a next-toolchain break in the shipped initramfs artifact
-      # would pass a green lane.
-      - name: Build platform-initrd
-        run: make platform-initrd
 
   test:
     name: Test
@@ -394,6 +326,8 @@ jobs:
   race:
     name: Race
     runs-on: ubuntu-latest
+    # Full tier (#852): push to main, workflow_dispatch, or a `ci:full` PR.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     # No `needs` (v1.14): starts with lint and build, not after them.
     timeout-minutes: 60
     steps:
@@ -412,6 +346,9 @@ jobs:
       # corrupts state, tears a read, or does nothing for months. Three races
       # sat in pkg/app indefinitely because `make test` has never passed -race
       # (#37). Off the push path this would find the next one just as late.
+      # It is in the full tier (#852), so it gates every push to main and any
+      # PR labelled `ci:full`, but not an ordinary PR: label one that touches
+      # concurrency, or the race lands on main and turns main's gate red.
       #
       # Honest limit, measured 2026-08-23: race detection is sampling, not
       # proof. The pkg/app races reproduced in 7 of 10 `-count=1` runs, so a
@@ -426,11 +363,15 @@ jobs:
       - name: Unit tests (race detector)
         run: make test-race
 
-  # Job id is `web`, one word, for the same reason `sdkjs` and `gonext` are:
-  # ci-gate dereferences it as `needs.web.result`.
+  # Job id is `web`, one word, for the same reason `sdkjs` is: ci-gate
+  # dereferences it as `needs.web.result`.
   web:
     name: Web Console
     runs-on: ubuntu-latest
+    # Full tier (#852): push to main, workflow_dispatch, or a `ci:full` PR.
+    # Label a PR that touches web/ or sdk/javascript's build `ci:full`; sdkjs
+    # (PR tier) runs the SDK's tests and lint, never its build or the console.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     timeout-minutes: 15
     # No `needs` (v1.14): every job starts at once. The job is ~60s of npm
     # (sdk/javascript `npm ci` 18s + `npm run build` 17s, web `npm ci` 27s,
@@ -556,6 +497,8 @@ jobs:
   trivy:
     name: Trivy
     runs-on: ubuntu-latest
+    # Full tier (#852): push to main, workflow_dispatch, or a `ci:full` PR.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     # No `needs` (v1.14): starts with lint and build, not after them.
     #
     # DELIBERATE DIVERGENCE from ci-template v1.9, which moves trivy to
@@ -567,7 +510,10 @@ jobs:
     # caught two live HIGH CVEs against golang.org/x/mod (CVE-2026-56864 /
     # CVE-2026-56865) that nothing else in the pipeline would have flagged.
     # Moving it would mean a dependency CVE surfaces at the next nightly instead
-    # of blocking the push that introduces it.
+    # of blocking the push that introduces it. Since #852 it is in the full
+    # tier: it blocks every push to main and a `ci:full` PR, so an ordinary PR
+    # that adds a vulnerable dependency merges and then turns main's gate red.
+    # Label a PR that changes go.mod, go.sum or a lockfile `ci:full`.
     #
     # The template-vs-convention conflict is filed upstream; if that resolves in
     # favour of the template, delete this job and this comment together.
@@ -623,6 +569,42 @@ jobs:
         if: github.server_url != 'https://github.com'
         run: trivy fs --scanners vuln,secret --severity CRITICAL,HIGH --exit-code 1 --skip-dirs test --skip-dirs examples --skip-dirs vbmc --skip-dirs web/node_modules .
 
+  # FIPS 140-3 suite (#853): the main-only, ungated part of the full tier.
+  # It runs on push to main and on workflow_dispatch, and NEVER on a
+  # pull_request — not even one labelled `ci:full` — so its `if:` is the
+  # full-tier condition without the label clause.
+  #
+  # It is deliberately NOT in ci-gate's `needs`: it is still red on causes
+  # this repository cannot close (the header of nightly.yml lists them), so
+  # it reports `CI / FIPS (push)` on main without turning main's CI Gate red.
+  # pkg/arch/citiers_test.go fails `make test` if it is ever gated, or if its
+  # `if:` lets a pull_request in. When those causes land, gating it is a
+  # deliberate change: move it to the full tier and add it to ci-gate.
+  #
+  # Its steps are the same as nightly.yml's `fips` job: checkout, toolchain,
+  # cpio, then `make test-fips` — the suite's one definition, which both
+  # workflows run. Change the suite in the Makefile, not here.
+  fips:
+    name: FIPS
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # pkg/diskimage/netboot builds each media set's installer initramfs,
+      # which extracts and repacks it with cpio (pkg/iso). The runner image
+      # has no cpio, so install it rather than exclude the package.
+      - name: Install cpio for the netboot media tests
+        run: sudo apt-get update && sudo apt-get install -y cpio
+
+      - name: FIPS build and unit tests
+        run: make test-fips
+
   ci-gate:
     name: CI Gate
     runs-on: ubuntu-latest
@@ -631,49 +613,69 @@ jobs:
     # listed explicitly. `join(needs.*.result)` is a GitHub extension that
     # evaluates to an empty string on Gitea, so a gate built on it reports
     # success while jobs fail. Adding a job means adding it to `needs` AND to
-    # the env block and the checks below.
+    # the env block and a TIER-TAGGED check below; pkg/arch/citiers_test.go
+    # fails `make test` on a job missing from any of the three, or tagged with
+    # a tier its `if:` does not have. The one exception is `fips`, the
+    # main-only job: it must be in NONE of the three (see its comment).
     #
     # v1.9 moves trivy to nightly; this repo keeps it gating per devops.md §8
     # (trivy fs is BLOCKING on CRITICAL/HIGH). Since #187 nightly.yml ALSO runs
     # trivy, advisory and not gating: this job judges a diff, that one judges
-    # the tree against a database that has moved since the last push. This job
-    # is unchanged and remains the gate.
-    # `gonext` is withdrawn while it is parked (see its header): this gate
-    # fails on a skipped job, so listing a disabled job here would keep it red.
-    needs: [lint, build, sdkjs, web, test, race, security, trivy]
+    # the tree against a database that has moved since the last push.
+    needs: [lint, build, sdkjs, test, security, race, web, trivy]
     steps:
       - name: Verify every job succeeded
         env:
+          # The full-tier condition, character for character the `if:` every
+          # full-tier job carries, so the gate and the jobs cannot disagree
+          # about whether the full tier was selected on this run.
+          FULL_TIER: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
           RESULT_LINT: ${{ needs.lint.result }}
           RESULT_BUILD: ${{ needs.build.result }}
           RESULT_SDK_JS: ${{ needs.sdkjs.result }}
-          RESULT_WEB: ${{ needs.web.result }}
           RESULT_TEST: ${{ needs.test.result }}
-          RESULT_RACE: ${{ needs.race.result }}
           RESULT_SECURITY: ${{ needs.security.result }}
+          RESULT_RACE: ${{ needs.race.result }}
+          RESULT_WEB: ${{ needs.web.result }}
           RESULT_TRIVY: ${{ needs.trivy.result }}
         run: |
-          # v1.9: skipped != failed, but BOTH fail the gate. Under staged
-          # fail-fast a skipped job means an UPSTREAM stage failed, and naming
-          # it prevents the go-qrdb#42 class — a red that looks like a test
-          # failure while the tests never ran at all.
+          # v1.9: skipped != failed, and a skipped job fails the gate: it means
+          # the job did not run, and naming it prevents the go-qrdb#42 class —
+          # a red that looks like a test failure while the tests never ran.
+          #
+          # The ONE exception (#852): a `full` job is meant to be skipped on a
+          # run that did not select the full tier. FULL_TIER must read exactly
+          # `false` for that; anything else — `true`, or a value the runner
+          # failed to render — fails closed. A `pr` job has no `if:`, so its
+          # skipped is always a fault.
           status=0
           check() {
-            name="$1"
-            result="$2"
+            tier="$1"
+            name="$2"
+            result="$3"
+            case "$tier" in
+              pr|full) ;;
+              *) echo "FAIL $name (unknown tier '$tier' - failing closed)"; status=1; return ;;
+            esac
             case "$result" in
               success) echo "OK   $name" ;;
               "")      echo "FAIL $name (result unreadable - failing closed)"; status=1 ;;
-              skipped) echo "SKIP $name (upstream stage failed - see its job)"; status=1 ;;
+              skipped)
+                if [ "$tier" = full ] && [ "$FULL_TIER" = false ]; then
+                  echo "SKIP $name (full tier not selected - passes)"
+                else
+                  echo "FAIL $name (skipped in the $tier tier - see its job)"; status=1
+                fi
+                ;;
               *)       echo "FAIL $name ($result)"; status=1 ;;
             esac
           }
-          check lint "$RESULT_LINT"
-          check build "$RESULT_BUILD"
-          check sdkjs "$RESULT_SDK_JS"
-          check web "$RESULT_WEB"
-          check test "$RESULT_TEST"
-          check race "$RESULT_RACE"
-          check security "$RESULT_SECURITY"
-          check trivy "$RESULT_TRIVY"
+          check pr lint "$RESULT_LINT"
+          check pr build "$RESULT_BUILD"
+          check pr sdkjs "$RESULT_SDK_JS"
+          check pr test "$RESULT_TEST"
+          check pr security "$RESULT_SECURITY"
+          check full race "$RESULT_RACE"
+          check full web "$RESULT_WEB"
+          check full trivy "$RESULT_TRIVY"
           exit $status
