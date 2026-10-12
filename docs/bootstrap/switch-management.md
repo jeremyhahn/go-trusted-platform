@@ -102,11 +102,51 @@ for the switch, the connection is refused and Phase 1 errors out.
 
 ### Provisioning the pin
 
-Operators pre-populate the pin directory with the switch's host key using the xkms SSH tooling before
-running bootstrap (the legacy flat OpenSSH `known_hosts` file is not consumed — the store expects
-per-pin envelopes). The pin is addressed by the switch's `name` (falling back to `host`). This mirrors
-the host-key-pinning workflow of the fabric driver (`docs/sdn/fabric/configuration.md`, the
+Operators pre-populate the pin directory with the switch's host key before running bootstrap (the
+legacy flat OpenSSH `known_hosts` file is not consumed — the store expects per-pin envelopes, so the
+file cannot be hand-written). The `deployer-pin` binary is the supported way to write one, despite its
+name: it writes the same `(service, owner, host)` pin the switch driver reads back, and `--owner` selects
+whose pin it is. The pin is addressed by the switch's `name`, falling back to `host`, so `--owner` must be
+that value — `--host` alone would key the pin by IP, and a switch with a `name` would not find it. This
+mirrors the host-key-pinning workflow of the fabric driver (`docs/sdn/fabric/configuration.md`, the
 `known-hosts-path` field).
+
+**Step 1 — read the switch's fingerprints out of band.** On the switch console (not over an SSH
+session you have not already verified), for NX-OS:
+
+```
+show ssh key
+```
+
+The switch's provisioning record or vendor key sheet serve the same purpose. `ssh-keyscan` does **not**:
+it reads the key back over the connection you are trying to verify, so a machine-in-the-middle answers
+with its own key. Convert whatever the console prints to `SHA256:` form (`ssh-keygen -lf <pubkey>`) and
+collect the fingerprint of *every* host key the switch holds, since the SSH handshake decides which one is
+negotiated.
+
+**Step 2 — pin, asserting those fingerprints.**
+
+```bash
+make build-deployer-pin        # also produced by `make build`
+bin/deployer-pin \
+  --host 192.0.2.10 \
+  --owner core-sw-1 \
+  --dir /etc/platform/switch \
+  --expect-fingerprint SHA256:...ed25519...,SHA256:...ecdsa...
+```
+
+- `--host` is the switch's `host` (the address bootstrap connects to); add `--port` if the switch does
+  not listen on 22.
+- `--owner` is the switch's `name`; omit it only when the switch has no `name`, in which case it
+  defaults to `--host`, which is what `host` falls back to.
+- `--dir` is the store root: the directory that *contains* `known_hosts_path` (here
+  `known_hosts_path: /etc/platform/switch/known_hosts`), not the configured path itself.
+- `--expect-fingerprint` is mandatory — pinning is not trust-on-first-use. A key that matches none of
+  the fingerprints is not written and the command exits non-zero.
+
+The mandatory-fingerprint, idempotence and rotation behaviour is the same as for the deployer; see
+[Provisioning the pin in `deployer.md`](deployer.md#provisioning-the-pin) and
+[`deployer-pin`](../daemon/cli.md#73-deployer-pin).
 
 ## Retired keys
 

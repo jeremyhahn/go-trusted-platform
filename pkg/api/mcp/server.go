@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
@@ -76,7 +77,7 @@ func DefaultConfig() *Config {
 		ServerName:            "Trusted Platform MCP Server",
 		ServerVersion:         "1.0.0",
 		Transport:             "http",
-		HTTPAddr:              "127.0.0.1:9445",
+		HTTPAddr:              tpconfig.DefaultDaemonListeners().MCP.Address(),
 		RequestTimeout:        30 * time.Second,
 		MaxConcurrentRequests: 100,
 	}

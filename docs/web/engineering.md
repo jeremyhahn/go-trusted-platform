@@ -16,8 +16,8 @@
 | File | Build tag | Contents |
 |---|---|---|
 | `embed.go` | `!platform_web` | `var WebFS fs.FS` = nil; `IsEmbedded() bool` = false |
-| `embed_web.go` | `platform_web` | `//go:embed all:dist`; `init()` sets `WebFS = fs.Sub(webDist, "dist")`; `IsEmbedded()` = true |
-| `embed_test.go` | — | |
+| `embed_web.go` | `platform_web` | `//go:embed all:dist`; `init()` sets `WebFS = fs.Sub(webDist, "dist")`; `IsEmbedded()` = true only when `dist` holds an entry other than `.gitkeep` (#323) |
+| `embed_test.go`, `embed_stub_test.go`, `embed_web_test.go` | —, `!platform_web`, `platform_web` | |
 
 `init()` **panics** if `fs.Sub` fails. That is correct: a binary built with the
 tag and a broken `dist/` must not start.
@@ -146,6 +146,10 @@ to run longer than 30s cannot, on this server.
 9. **Embedded serving wins whenever it is available.** `serveStaticFiles`
    checks `embed.IsEmbedded() && embed.WebFS != nil` first, so in a
    `platform_web` binary the configured `home` directory is **never read**.
+   `IsEmbedded()` is false for a `platform_web` build whose `dist` holds only the
+   tracked `.gitkeep` (a `go build -tags platform_web` that skipped
+   `_web-embed-prepare`, #323), so such a binary serves from `home` like a
+   `!platform_web` one rather than claiming a console it does not have.
 10. **The plaintext port carries a redirect, or nothing (#535).** With
     `tls-port > 0` the listener on `port` answers every request with a
     permanent redirect to the same path and query on the TLS port

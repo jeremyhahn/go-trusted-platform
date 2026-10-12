@@ -1545,6 +1545,12 @@ func (app *App) initConfig(env string) error {
 		return err
 	}
 
+	// A required key the file omits is reported here, naming the file,
+	// not later from deep inside factory construction.
+	if err := checkRequiredConfig(viper.ConfigFileUsed(), app.QuicBaaSConfig); err != nil {
+		return err
+	}
+
 	// Manually parse the environment from viper since the custom type
 	// doesn't get decoded properly by mapstructure
 	if envStr := viper.GetString("environment"); envStr != "" {

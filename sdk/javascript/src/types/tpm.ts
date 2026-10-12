@@ -12,15 +12,16 @@ import type { KeyAlgorithm } from './ca.js';
 // =============================================================================
 
 /**
- * TPM version
+ * TPM version, spelled as the server serialises the proto `TPMVersion` enum.
  */
 export type TPMVersion =
-  | 'UNSPECIFIED'
-  | 'TPM_1_2'
-  | 'TPM_2_0';
+  | 'TPM_VERSION_UNSPECIFIED'
+  | 'TPM_VERSION_1_2'
+  | 'TPM_VERSION_2_0';
 
 /**
- * PCR bank (hash algorithm)
+ * PCR bank (hash algorithm), in the short form the SDK accepts on requests.
+ * Request methods translate it to the proto name; see `PCRBankName`.
  */
 export type PCRBank =
   | 'UNSPECIFIED'
@@ -29,6 +30,11 @@ export type PCRBank =
   | 'SHA384'
   | 'SHA512'
   | 'SM3_256';
+
+/**
+ * PCR bank as the server serialises the proto `PCRBank` enum in responses.
+ */
+export type PCRBankName = `PCR_BANK_${PCRBank}`;
 
 // =============================================================================
 // Data Types
@@ -478,17 +484,21 @@ export interface TPMStatus {
 }
 
 /**
- * TPM info response
+ * TPM info response: the proto `TPMInfoResponse` served flat by
+ * `GET /api/v1/tpm/info`. Every field is always present.
+ *
+ * There is no `available` flag. A TPM is available when the call succeeds;
+ * the server answers an unsuccessful response when it has none.
  */
 export interface TPMInfoResponse {
   /** TPM version */
   version: TPMVersion;
-  /** Manufacturer info */
-  manufacturer: TPMManufacturer;
+  /** Manufacturer info; null when the server could not identify it */
+  manufacturer: TPMManufacturer | null;
   /** Capabilities */
   capabilities: TPMCapability[];
   /** Available PCR banks */
-  pcrBanks: PCRBank[];
+  pcrBanks: PCRBankName[];
   /** Max NVRAM size */
   maxNvramSize: number;
   /** Is simulator */
@@ -496,9 +506,9 @@ export interface TPMInfoResponse {
   /** FIPS mode enabled */
   fipsMode: boolean;
   /** Additional properties */
-  properties?: Record<string, string>;
-  /** Defined NV indexes (proto nv_indexes; absent when none) */
-  nvIndexes?: NVIndex[];
+  properties: Record<string, string>;
+  /** Defined NV indexes */
+  nvIndexes: NVIndex[];
 }
 
 /**

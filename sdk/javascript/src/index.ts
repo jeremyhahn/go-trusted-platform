@@ -339,6 +339,7 @@ export type {
 export type {
   TPMVersion,
   PCRBank,
+  PCRBankName,
   TPMManufacturer,
   TPMCapability,
   NVIndex,

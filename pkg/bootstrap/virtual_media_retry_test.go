@@ -246,8 +246,9 @@ func TestApplyGlobalIdentitySeeder(t *testing.T) {
 		}
 	})
 
-	t.Run("spiffe trust domain untouched without internal domain or section", func(t *testing.T) {
-		// No internal domain: the template value stands.
+	t.Run("spiffe trust domain untouched without internal domain", func(t *testing.T) {
+		// No internal domain: the template value stands, and no
+		// section is created for an empty value.
 		m := map[string]interface{}{
 			"quicbaas": map[string]interface{}{"spiffe-trust-domain": "example.internal"},
 		}
@@ -255,11 +256,29 @@ func TestApplyGlobalIdentitySeeder(t *testing.T) {
 		if m["quicbaas"].(map[string]interface{})["spiffe-trust-domain"] != "example.internal" {
 			t.Error("template value must stand when platform.internal_domain is empty")
 		}
-		// No quicbaas section: nothing is invented.
 		m2 := map[string]interface{}{}
-		applyGlobalIdentitySeeder(m2, &PlatformGlobalConfig{InternalDomain: "prod.internal"})
+		applyGlobalIdentitySeeder(m2, &PlatformGlobalConfig{Domain: "prod.io"})
 		if _, exists := m2["quicbaas"]; exists {
-			t.Error("a quicbaas section must not be invented")
+			t.Error("no quicbaas section may be created without an internal domain")
+		}
+	})
+
+	t.Run("spiffe trust domain creates a missing quicbaas section", func(t *testing.T) {
+		// #528: a template with no quicbaas section (or an empty one)
+		// loads as the embedded server, which refuses to start without a
+		// trust domain, so the seeder creates the section, not skips it.
+		for name, m := range map[string]map[string]interface{}{
+			"absent": {},
+			"empty":  {"quicbaas": nil},
+		} {
+			applyGlobalIdentitySeeder(m, &PlatformGlobalConfig{InternalDomain: "prod.internal"})
+			section, ok := m["quicbaas"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s: quicbaas section = %#v, want a created map", name, m["quicbaas"])
+			}
+			if section["spiffe-trust-domain"] != "prod.internal" {
+				t.Errorf("%s: spiffe-trust-domain = %v, want prod.internal", name, section["spiffe-trust-domain"])
+			}
 		}
 	})
 

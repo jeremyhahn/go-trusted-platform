@@ -64,6 +64,46 @@ func TestValidate_SPIFFETrustDomain_Format(t *testing.T) {
 	}
 }
 
+// TestValidateSPIFFETrustDomain_AcceptsWhatTheFactoryAccepts covers the
+// configs config load must let through: an embedded server carrying a
+// valid trust domain, and the remote transports, which run no first boot.
+func TestValidateSPIFFETrustDomain_AcceptsWhatTheFactoryAccepts(t *testing.T) {
+	cases := map[string]*Config{
+		"embedded by default":   {SPIFFETrustDomain: "prod.internal"},
+		"embedded explicitly":   {TransportStr: "embedded", SPIFFETrustDomain: "prod.internal"},
+		"grpc without domain":   {TransportStr: "grpc", Address: "127.0.0.1:9000"},
+		"unix without domain":   {TransportStr: "unix", UnixSocket: "/run/q.sock"},
+		"parsed remote, no str": {Transport: TransportREST, Address: "http://127.0.0.1"},
+	}
+	for name, c := range cases {
+		assert.NoError(t, c.ValidateSPIFFETrustDomain(), name)
+	}
+}
+
+// TestValidateSPIFFETrustDomain_RejectsWhatTheFactoryRejects proves config
+// load fails on the configs NewFactory would refuse: an embedded server
+// with an absent or malformed trust domain, and an absent quicbaas:
+// section (nil Config), which selects the embedded server.
+func TestValidateSPIFFETrustDomain_RejectsWhatTheFactoryRejects(t *testing.T) {
+	cases := map[string]*Config{
+		"absent section":      nil,
+		"section without key": {DataDir: "/var/lib/q"},
+		"embedded, empty key": {TransportStr: "embedded"},
+		"malformed key":       {SPIFFETrustDomain: "spiffe://x.io"},
+	}
+	for name, c := range cases {
+		err := c.ValidateSPIFFETrustDomain()
+		var invalid ErrInvalidConfig
+		require.ErrorAs(t, err, &invalid, name)
+		assert.Equal(t, "SPIFFETrustDomain", invalid.Field, name)
+	}
+
+	err := (&Config{TransportStr: "carrier-pigeon"}).ValidateSPIFFETrustDomain()
+	var transport ErrInvalidTransport
+	require.ErrorAs(t, err, &transport)
+	assert.Equal(t, "carrier-pigeon", transport.Value)
+}
+
 // TestToQuicBaaSConfig_WebAuthnRP proves the programmatically injected
 // relying-party settings reach the embedded server's IAM WebAuthn config —
 // without them quicbaas derives a localhost issuer RP that browsers reject

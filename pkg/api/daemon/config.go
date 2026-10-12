@@ -25,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
@@ -194,7 +195,7 @@ func DefaultMCPConfig() *MCPConfig {
 		ServerName:            "Trusted Platform MCP Server",
 		ServerVersion:         "1.0.0",
 		Transport:             "http",
-		HTTPAddr:              "127.0.0.1:8000",
+		HTTPAddr:              tpconfig.DefaultDaemonListeners().MCP.Address(),
 		RequestTimeout:        30 * time.Second,
 		MaxConcurrentRequests: 100,
 	}

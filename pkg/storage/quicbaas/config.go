@@ -806,6 +806,30 @@ func (c *Config) validateEmbeddedConfig() error {
 	return nil
 }
 
+// ValidateSPIFFETrustDomain checks spiffe-trust-domain the way the
+// embedded server will, without constructing anything, so config load can
+// reject a config the factory would refuse later. A nil Config is an absent
+// quicbaas: section, which selects the embedded server with no trust
+// domain, so it fails too. Remote transports run no first boot and need no
+// trust domain; an unknown transport string is ErrInvalidTransport.
+func (c *Config) ValidateSPIFFETrustDomain() error {
+	if c == nil {
+		return validateSPIFFETrustDomain("")
+	}
+	transport := c.Transport
+	if c.TransportStr != "" {
+		parsed, err := ParseTransport(c.TransportStr)
+		if err != nil {
+			return err
+		}
+		transport = parsed
+	}
+	if transport != TransportEmbedded {
+		return nil
+	}
+	return validateSPIFFETrustDomain(c.SPIFFETrustDomain)
+}
+
 // IsEmbedded returns true if the transport is embedded mode.
 func (c *Config) IsEmbedded() bool {
 	return c.Transport == TransportEmbedded

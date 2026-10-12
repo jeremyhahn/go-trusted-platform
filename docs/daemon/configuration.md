@@ -372,6 +372,27 @@ The daemon validates configuration at startup:
 | Invalid service timeout | `service X timeout must be positive` |
 | Negative max retries | `service X max retries cannot be negative` |
 
+### Required keys at load
+
+`platformd` checks the keys it cannot start without when it loads the config
+file, before it constructs the QuicBaaS factory. A failure is a
+`config.ErrInvalidConfigKey` that names the file and the dotted key:
+
+```
+config file "/etc/trusted-platform/config.yaml": key quicbaas.spiffe-trust-domain: invalid configuration: SPIFFETrustDomain: spiffe-trust-domain is required for the embedded server: ...
+```
+
+| Key | Required when | Why |
+|-----|---------------|-----|
+| `quicbaas.spiffe-trust-domain` | the embedded server is selected: `quicbaas.transport` is `embedded` or unset, **or the `quicbaas:` section is absent** | qrdb first boot seeds IAM (system tenant, roles, admin certificate) under this trust domain. It must be a lowercase name with no scheme, port or path. |
+| `quicbaas.transport` | set | It must be `embedded`, `unix`, `grpc`, `rest` or `quic`. |
+
+The remote transports (`unix`, `grpc`, `rest`, `quic`) run no first boot, so
+they do not need a trust domain. No default applies: a config that leaves the
+key out is rejected, even if a code-level `App` literal carries a placeholder.
+The bootstrap seeder fills the key from `platform.internal_domain` (see
+[bootstrap engineering](../bootstrap/engineering.md)).
+
 ## Example Configurations
 
 ### Development

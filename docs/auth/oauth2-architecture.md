@@ -18,7 +18,7 @@ GET /.well-known/oauth-protected-resource
 
 ```json
 {
-  "resource": "https://platformd.example.com:8000",
+  "resource": "https://platformd.example.com:9445",
   "authorization_servers": ["https://auth.example.com"],
   "scopes_supported": [
     "mcp:tools",
@@ -87,7 +87,7 @@ MCP tools are mapped to platform scopes:
 
 ```yaml
 mcp:
-  address: ":8000"
+  address: ":9445"
   oauth:
     authorization_server: "https://auth.example.com"
     required: true

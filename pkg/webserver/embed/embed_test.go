@@ -27,27 +27,10 @@ func TestIsEmbedded(t *testing.T) {
 	})
 }
 
-func TestWebFS_Stub(t *testing.T) {
-	t.Run("WebFS is nil without platform_web tag", func(t *testing.T) {
-		if !IsEmbedded() {
-			assert.Nil(t, WebFS, "WebFS should be nil without platform_web tag")
-		}
-	})
-
-	t.Run("IsEmbedded returns false without platform_web tag", func(t *testing.T) {
-		embedded := IsEmbedded()
-		if !embedded {
-			assert.False(t, embedded)
-		}
-	})
-}
-
 func TestWebFS_UsagePattern(t *testing.T) {
-	t.Run("typical usage pattern", func(t *testing.T) {
+	t.Run("IsEmbedded true means WebFS is usable", func(t *testing.T) {
 		if IsEmbedded() {
 			assert.NotNil(t, WebFS)
-		} else {
-			assert.Nil(t, WebFS)
 		}
 	})
 }
@@ -59,14 +42,9 @@ func TestWebFS_StubBehavior(t *testing.T) {
 		})
 	})
 
-	t.Run("IsEmbedded matches WebFS state", func(t *testing.T) {
-		embedded := IsEmbedded()
-		fsNil := WebFS == nil
-
-		if embedded {
-			assert.False(t, fsNil)
-		} else {
-			assert.True(t, fsNil)
+	t.Run("IsEmbedded implies WebFS is set", func(t *testing.T) {
+		if IsEmbedded() {
+			assert.NotNil(t, WebFS)
 		}
 	})
 }

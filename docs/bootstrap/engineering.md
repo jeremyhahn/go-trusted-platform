@@ -726,7 +726,7 @@ rather than silently ignored.
 | `zones[]` | list | built-ins | `zone.ZoneConfig`: policy tuning and owner-defined zones |
 | `switch.port_assignments[]` | list | — | `{port, class, description}`; `class` is a `zone.PortClass` the plan can realise (`ErrSwitchPortClass` otherwise) |
 | `platform.domain` | string | **required** | |
-| `platform.internal_domain`, `hostmaster`, `tenant_id`, `environment`, `upstream_dns`, `bootstrap_strategy` | | | Injected into merged device configs |
+| `platform.internal_domain`, `hostmaster`, `tenant_id`, `environment`, `upstream_dns`, `bootstrap_strategy` | | | Injected into merged device configs. `internal_domain` also becomes `quicbaas.spiffe-trust-domain`, and the seeder creates the `quicbaas:` section when the role template has none: platformd rejects at load an embedded-server config without the key ([daemon configuration](../daemon/configuration.md#required-keys-at-load)) |
 | `platform.health_timeout` | duration | `25m` | How long the post-install health probe waits for a freshly installed node to answer. Omit the key to take the default; a Go duration string (`30m`, `1h`) overrides it. The key cannot be set to `0` — yaml.v3 rejects a bare `0` for a duration field, so "unset" is expressed by leaving the key out |
 | `templates` | map role→path | — | Missing role means the node is skipped at profile creation with a warning |
 | `iso_path` | string | — | Required when any installing node uses `virtual-media` |

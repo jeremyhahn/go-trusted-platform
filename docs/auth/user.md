@@ -297,7 +297,7 @@ declined.
 The MCP server advertises OAuth 2.1 protected-resource metadata:
 
 ```bash
-curl -s https://platform.example.com:8000/.well-known/oauth-protected-resource
+curl -s https://platform.example.com:9445/.well-known/oauth-protected-resource
 ```
 
 It returns the resource identifier, the authorization servers, and a list of

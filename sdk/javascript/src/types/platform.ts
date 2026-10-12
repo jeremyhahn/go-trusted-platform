@@ -52,26 +52,6 @@ export interface SystemInfo {
 }
 
 /**
- * TPM information
- */
-export interface TPMInfo {
-  /** TPM available */
-  available: boolean;
-  /** TPM version */
-  version?: string;
-  /** TPM manufacturer */
-  manufacturer?: string;
-  /** TPM model */
-  model?: string;
-  /** Firmware version */
-  firmwareVersion?: string;
-  /** Device path */
-  devicePath?: string;
-  /** Is simulator */
-  isSimulator?: boolean;
-}
-
-/**
  * Service health status
  */
 export interface ServiceHealth {
@@ -255,14 +235,6 @@ export interface GetVersionResponse {
 export interface GetSystemInfoResponse {
   /** System info */
   system: SystemInfo;
-}
-
-/**
- * Get TPM info response
- */
-export interface GetTPMInfoResponse {
-  /** TPM info */
-  tpm: TPMInfo;
 }
 
 /**

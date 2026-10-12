@@ -39,7 +39,15 @@ import type {
   GetIDevIDInfoResponse,
   GetSRKResponse,
   TPMCapability,
+  TPMVersion,
 } from "trusted-platform-sdk";
+
+/** Display form of the server's TPMVersion enum; unspecified has none. */
+const SPEC_VERSION: Record<TPMVersion, string | undefined> = {
+  TPM_VERSION_UNSPECIFIED: undefined,
+  TPM_VERSION_1_2: "1.2",
+  TPM_VERSION_2_0: "2.0",
+};
 
 /**
  * TPM Status and Information types
@@ -148,11 +156,10 @@ export default function TPMStatusPage() {
   };
 
   // The platformd `/api/v1/tpm/info` endpoint emits structured fields
-  // for `version`, `capabilities`, `pcrBanks`, but currently leaves
-  // `manufacturer` null and stuffs a free-form text dump from the
-  // tpm2-tools `tpm2_getcap properties-fixed` output into
-  // `properties.info`. Parse that blob so the dashboard can show
-  // real values until the backend exposes structured fields.
+  // for `version`, `capabilities`, `pcrBanks` and `manufacturer`, plus
+  // the free-form tpm2-tools `properties-fixed` text in `properties.info`.
+  // `manufacturer` is null when the TPM's fixed properties cannot be
+  // read, so parse the text blob as a fallback for the display fields.
   const parsePropertyBlob = (blob: string): Record<string, string> => {
     const out: Record<string, string> = {};
     if (!blob) return out;
@@ -188,11 +195,11 @@ export default function TPMStatusPage() {
         manufacturer: info.manufacturer?.name || props['Manufacturer'] || 'Unknown',
         manufacturerId: info.manufacturer?.id?.toString?.(16) || props['Vendor ID'] || '—',
         vendorString: info.manufacturer?.model || props['Model'] || props['Vendor ID'] || '',
-        specVersion: props['Family'] || info.version?.replace('TPM_', '').replace('_', '.') || '2.0',
+        specVersion: props['Family'] || SPEC_VERSION[info.version] || '2.0',
         specLevel: parseInt(props['Level'] || '0', 10),
         specRevision: parseFloat(props['Revision'] || '0') || 0,
         firmwareVersion: info.manufacturer?.firmwareVersion || props['Firmware'] || '',
-        familyIndicator: props['Family'] || info.version || '2.0',
+        familyIndicator: props['Family'] || SPEC_VERSION[info.version] || '2.0',
         lockoutCounter: parseInt(props['Lockout Counter'] || findCapability(caps, 'lockoutCounter')?.value || '0', 10),
         lockoutRecovery: parseInt(props['Lockout Recovery'] || findCapability(caps, 'lockoutRecovery')?.value || '0', 10),
         maxAuthFail: parseInt(props['Max Auth Failures'] || findCapability(caps, 'maxAuthFail')?.value || '32', 10),

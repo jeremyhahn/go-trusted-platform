@@ -636,11 +636,18 @@ failure — a bad flag, an unknown subcommand — and one place decides it
 
 ### 7.3 `deployer-pin`
 
-Pins a host's SSH host key into a `known_hosts` directory for the deployer.
+Pins a host's SSH host key into a `known_hosts` directory. Despite the name it
+provisions all three pin stores, which differ only in `--owner`:
+
+| Surface | `--owner` | Guide |
+|---------|-----------|-------|
+| deployer | omitted (defaults to `--host`) | [`bootstrap/deployer.md`](../bootstrap/deployer.md#provisioning-the-pin) |
+| physical switch | the switch `name` (omit when it has none) | [`bootstrap/switch-management.md`](../bootstrap/switch-management.md#provisioning-the-pin) |
+| EVPN fabric (Nexus) | the fabric switch `id` | [`sdn/fabric/configuration.md`](../sdn/fabric/configuration.md#provisioning-the-host-key-pin) |
 
 ```
 deployer-pin --host <ip> --dir <known_hosts_dir> \
-  --expect-fingerprint SHA256:<...>[,SHA256:<...>] [--owner <ip>] [--port 22]
+  --expect-fingerprint SHA256:<...>[,SHA256:<...>] [--owner <owner>] [--port 22]
 ```
 
 `--expect-fingerprint` is **mandatory**: there is no trust-on-first-use path.

@@ -12,28 +12,44 @@ All endpoints require mTLS client certificate authentication unless `--skip-iam-
 GET /api/v1/tpm/info
 ```
 
-**Response:** `200 OK`
+**Response:** `200 OK`. The payload is the flat proto `TPMInfoResponse` in the
+standard envelope, with camelCase keys and enums spelled as their proto names.
+Every field is always present: `manufacturer` is `null` when the TPM's fixed
+properties could not be read (the text report in `properties.info` is still
+returned), and empty lists and maps are `[]` and `{}`.
 ```json
 {
-  "info": "TPM 2.0 device",
-  "manufacturer": {
-    "name": "Infineon",
-    "model": "SLB9670",
-    "firmware_version": "7.85"
-  },
-  "is_simulator": false,
-  "fips_mode": true,
-  "max_nvram_size": 2048,
-  "capabilities": [
-    {
-      "name": "SHA256",
-      "value": "supported",
-      "supported": true
-    }
-  ],
-  "timestamp": "2024-01-15T10:30:00Z"
+  "code": 200,
+  "error": "",
+  "success": true,
+  "payload": {
+    "version": "TPM_VERSION_2_0",
+    "manufacturer": {
+      "name": "Infineon",
+      "id": 1229346816,
+      "model": "SLB9670",
+      "firmwareVersion": "7.85"
+    },
+    "capabilities": [
+      { "name": "SHA256", "supported": true, "value": "supported" }
+    ],
+    "pcrBanks": ["PCR_BANK_SHA256"],
+    "maxNvramSize": 2048,
+    "isSimulator": false,
+    "fipsMode": true,
+    "properties": { "info": "..." },
+    "nvIndexes": [
+      { "handle": 29360130, "type": "ordinary", "size": 1024, "authRead": true, "authWrite": false }
+    ]
+  }
 }
 ```
+
+There is no availability flag. A TPM is available exactly when this call
+succeeds; without one the daemon answers `503 Service Unavailable` with
+`success: false`. The JavaScript SDK's `client.tpm.getInfo()` and
+`client.platform.getTPMInfo()` both call this endpoint and return the payload
+typed as `TPMInfoResponse`.
 
 ### Provision TPM
 

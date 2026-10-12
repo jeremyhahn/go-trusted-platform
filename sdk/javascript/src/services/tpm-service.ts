@@ -60,6 +60,9 @@ import type {
   GetRandomResponse,
 } from '../types/tpm.js';
 
+/** Base path of the TPM REST API, under the client's `/api` base URL. */
+export const TPM_BASE_PATH = '/v1/tpm';
+
 /**
  * TPM Service class
  *
@@ -85,7 +88,7 @@ export class TPMService extends BaseService {
    * @param client - The API client to use for requests
    */
   constructor(client: Transport | ApiClient) {
-    super(client, '/v1/tpm');
+    super(client, TPM_BASE_PATH);
   }
 
   // =========================================================================

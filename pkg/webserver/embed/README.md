@@ -7,7 +7,7 @@ This package provides optional embedding of the Next.js web frontend into the `p
 The embed package uses build tags to conditionally include the web frontend:
 
 - **Without** `platform_web` tag: `WebFS` is nil, `IsEmbedded()` returns false
-- **With** `platform_web` tag: `WebFS` contains the embedded filesystem, `IsEmbedded()` returns true
+- **With** `platform_web` tag: `WebFS` contains the embedded filesystem, `IsEmbedded()` returns true only if `dist` holds more than the `.gitkeep` placeholder (false for an unpopulated `dist`)
 
 ## Directory Structure
 

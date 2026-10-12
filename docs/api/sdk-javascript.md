@@ -560,7 +560,9 @@ const bundle = await client.ca.getBundle();
 ### TPM Operations
 
 ```typescript
-// Get TPM info
+// Get TPM info (GET /api/v1/tpm/info; client.platform.getTPMInfo() is the same
+// call). Success means a TPM is available; the payload is the flat
+// TPMInfoResponse, e.g. info.data.version === 'TPM_VERSION_2_0'.
 const info = await client.tpm.getInfo();
 
 // Seal data to PCRs

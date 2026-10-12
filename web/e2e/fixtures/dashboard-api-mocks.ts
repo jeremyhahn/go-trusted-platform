@@ -1,4 +1,5 @@
 import { Page, Route, Request } from '@playwright/test';
+import type { TPMInfoResponse } from 'trusted-platform-sdk';
 
 /**
  * Dashboard API Mock Fixtures for E2E Tests
@@ -271,17 +272,8 @@ export interface BackupListResponse {
 // TPM Types
 // ============================================================================
 
-export interface TPMInfo {
-  manufacturer: string;
-  vendor_id: string;
-  firmware_version: string;
-  spec_version: string;
-  family: string;
-  level: number;
-  revision: number;
-  available: boolean;
-  enabled: boolean;
-}
+/** The `GET /api/v1/tpm/info` payload, exactly as the SDK types it. */
+export type TPMInfo = TPMInfoResponse;
 
 export interface TPMKey {
   handle: string;
@@ -582,15 +574,20 @@ export function createMockBackup(overrides: Partial<Backup> = {}): Backup {
  */
 export function createMockTPMInfo(overrides: Partial<TPMInfo> = {}): TPMInfo {
   return {
-    manufacturer: 'Intel',
-    vendor_id: 'INTC',
-    firmware_version: '7.85.4555.0',
-    spec_version: '2.0',
-    family: 'TPM 2.0',
-    level: 0,
-    revision: 174,
-    available: true,
-    enabled: true,
+    version: 'TPM_VERSION_2_0',
+    manufacturer: {
+      name: 'Intel',
+      id: 0x494e5443,
+      model: 'PTT',
+      firmwareVersion: '7.85.4555.0',
+    },
+    capabilities: [],
+    pcrBanks: ['PCR_BANK_SHA256'],
+    maxNvramSize: 16384,
+    isSimulator: false,
+    fipsMode: false,
+    properties: {},
+    nvIndexes: [],
     ...overrides,
   };
 }

@@ -5,7 +5,7 @@ Model Context Protocol (MCP) API documentation for AI/LLM integration with the T
 ## Connection
 
 ```
-HTTPS: https://127.0.0.1:8000  (TLS 1.3 only; no plaintext listener)
+HTTPS: https://127.0.0.1:9445  (TLS 1.3 only; no plaintext listener)
 stdio: stdin/stdout
 ```
 
@@ -30,7 +30,7 @@ GET /.well-known/oauth-protected-resource
 **Response:**
 ```json
 {
-  "resource": "https://platformd.example.com:8000",
+  "resource": "https://platformd.example.com:9445",
   "authorization_servers": ["https://auth.example.com"],
   "scopes_supported": [
     "mcp:tools", "mcp:resources",
@@ -58,7 +58,7 @@ GET /.well-known/oauth-protected-resource
 Include a Bearer token in the Authorization header:
 
 ```bash
-curl --tlsv1.3 --cacert platform-ca.pem -X POST https://127.0.0.1:8000/mcp \
+curl --tlsv1.3 --cacert platform-ca.pem -X POST https://127.0.0.1:9445/mcp \
   -H "Authorization: Bearer <your-jwt-token>" \
   -H "Content-Type: application/json" \
   -d '{"method": "tools/call", "params": {"name": "vtpm_list"}}'
@@ -94,7 +94,7 @@ See [Authentication Architecture](../auth/README.md) for complete details.
 mcp:
   enabled: true
   transport: http
-  http_addr: "127.0.0.1:8000"
+  http_addr: "127.0.0.1:9445"
 ```
 
 `transport: http` serves HTTPS, TLS 1.3 only, with the daemon certificate.

@@ -4,6 +4,7 @@ import {
   createTenantMemberSession,
 } from './fixtures/auth-setup';
 import { mockTenantApi, ApiError } from './fixtures/api-mock';
+import type { TPMInfoResponse } from 'trusted-platform-sdk';
 
 /**
  * TPM and Attestation E2E Tests
@@ -25,11 +26,6 @@ import { mockTenantApi, ApiError } from './fixtures/api-mock';
 // ============================================================================
 
 /**
- * TPM version from SDK
- */
-export type TPMVersion = 'UNSPECIFIED' | 'TPM_1_2' | 'TPM_2_0';
-
-/**
  * PCR bank (hash algorithm) from SDK
  */
 export type PCRBank = 'UNSPECIFIED' | 'SHA1' | 'SHA256' | 'SHA384' | 'SHA512' | 'SM3_256';
@@ -48,39 +44,6 @@ export type AttestationHashAlgorithm = 'UNSPECIFIED' | 'SHA1' | 'SHA256' | 'SHA3
  * Manifest verification status from SDK
  */
 export type ManifestVerificationStatus = 'UNSPECIFIED' | 'UNKNOWN' | 'PENDING' | 'VERIFIED' | 'FAILED';
-
-/**
- * TPM manufacturer information - matches SDK TPMManufacturer
- */
-export interface TPMManufacturer {
-  name: string;
-  id: number;
-  model: string;
-  firmwareVersion: string;
-}
-
-/**
- * TPM capability - matches SDK TPMCapability
- */
-export interface TPMCapability {
-  name: string;
-  supported: boolean;
-  value?: string;
-}
-
-/**
- * TPM info response - matches SDK TPMInfoResponse
- */
-export interface TPMInfoResponse {
-  version: TPMVersion;
-  manufacturer: TPMManufacturer;
-  capabilities: TPMCapability[];
-  pcrBanks: PCRBank[];
-  maxNvramSize: number;
-  isSimulator: boolean;
-  fipsMode: boolean;
-  properties?: Record<string, string>;
-}
 
 /**
  * Get EK response - matches SDK GetEKResponse
@@ -299,7 +262,7 @@ let manifestIdCounter = 1;
  */
 export function createMockTPMInfo(overrides: Partial<TPMInfoResponse> = {}): TPMInfoResponse {
   return {
-    version: 'TPM_2_0',
+    version: 'TPM_VERSION_2_0',
     manufacturer: {
       id: 0x49465800,
       name: 'Infineon',
@@ -322,10 +285,12 @@ export function createMockTPMInfo(overrides: Partial<TPMInfoResponse> = {}): TPM
       { name: 'lockoutRecovery', supported: true, value: '7200' },
       { name: 'maxAuthFail', supported: true, value: '32' },
     ],
-    pcrBanks: ['SHA256', 'SHA1'],
+    pcrBanks: ['PCR_BANK_SHA256', 'PCR_BANK_SHA1'],
     maxNvramSize: 16384,
     isSimulator: false,
     fipsMode: false,
+    properties: {},
+    nvIndexes: [],
     ...overrides,
   };
 }

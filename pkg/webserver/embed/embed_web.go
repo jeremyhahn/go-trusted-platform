@@ -28,9 +28,34 @@ var webDist embed.FS
 // WebFS provides access to the embedded web frontend filesystem.
 var WebFS fs.FS
 
-// IsEmbedded returns true when web frontend is embedded in the binary.
+// placeholderName is the tracked file that keeps //go:embed all:dist matching
+// when no console has been built into dist.
+const placeholderName = ".gitkeep"
+
+// IsEmbedded returns true when the binary carries a web console, that is when
+// the embedded dist holds anything besides the tracked placeholder. A build
+// with the platform_web tag but an unpopulated dist reports false, so callers
+// fall back to the filesystem path instead of serving nothing.
 func IsEmbedded() bool {
-	return true
+	return hasConsole(WebFS)
+}
+
+// hasConsole reports whether fsys has at least one entry other than the
+// placeholder. An unreadable or nil filesystem has no console.
+func hasConsole(fsys fs.FS) bool {
+	if fsys == nil {
+		return false
+	}
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Name() != placeholderName {
+			return true
+		}
+	}
+	return false
 }
 
 func init() {

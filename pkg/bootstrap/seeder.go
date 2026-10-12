@@ -515,14 +515,17 @@ func applyGlobalIdentitySeeder(m map[string]interface{}, platform *PlatformGloba
 // without this the embedded server's IAM (and every SPIFFE SAN it issues)
 // would carry the placeholder domain. Overwrite policy mirrors setGlobal:
 // unconditional when the platform value is non-empty, and the per-node
-// override merge still runs afterwards and wins.
+// override merge still runs afterwards and wins. A template with no
+// quicbaas: section gets one: platformd loads such a config as the
+// embedded server, which refuses to start without a trust domain.
 func applySPIFFETrustDomain(m map[string]interface{}, platform *PlatformGlobalConfig) {
 	if platform.InternalDomain == "" {
 		return
 	}
 	section, ok := m["quicbaas"].(map[string]interface{})
 	if !ok {
-		return
+		section = map[string]interface{}{}
+		m["quicbaas"] = section
 	}
 	section["spiffe-trust-domain"] = platform.InternalDomain
 }
