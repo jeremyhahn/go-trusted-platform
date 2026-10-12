@@ -14,7 +14,8 @@ The subcommands honor the global flags `--config`, `--context`,
 
 ## Migration from the LUKS-focused command tree
 
-LUKS-specific FIDO2 management has moved under `platformctl luks`:
+LUKS-specific FIDO2 management has moved under `platformctl luks`
+([`docs/luks/cli.md`](../luks/cli.md)):
 
 | Old command | New command |
 |-------------|-------------|

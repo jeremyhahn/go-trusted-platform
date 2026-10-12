@@ -27,7 +27,7 @@ exposure-gaps register, which lives in the handbook, not in this repository:
 **The folder is the requirements contract**, not commentary. Read it before the
 code, and change it in the same PR as the behavior.
 
-### Converted — every feature (32, 2026-08-18)
+### Converted — every feature (34)
 
 | Feature | What it covers |
 |---|---|
@@ -51,6 +51,7 @@ code, and change it in the same PR as the behavior.
 | [installer/](installer/) | Installer, initrd, ISO building, boot-time unlock |
 | [ipxe/](ipxe/) | The PXE/iPXE boot server |
 | [kms/](kms/) | Key management (re-export frontage) |
+| [luks/](luks/) | Runtime LUKS2 key-slot management (`platformctl luks`) |
 | [ntp/](ntp/) | Time synchronisation |
 | [provisioning/](provisioning/) | Zero-touch provisioning, PXE, installer |
 | [proxy/](proxy/) | The trusted reverse proxy engine and proxy authorization |

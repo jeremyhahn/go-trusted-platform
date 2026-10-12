@@ -193,7 +193,7 @@ and 33 feature groups. A build with the `pkcs11` tag adds `pkcs11`
 | `iam` | [`iam/cli.md`](../iam/cli.md) |
 | `install`, `iso` | [`installer/cli.md`](../installer/cli.md) |
 | `kms` | [`kms/cli.md`](../kms/cli.md) |
-| `luks` | [`cli/luks.md`](../cli/luks.md) |
+| `luks` | [`luks/cli.md`](../luks/cli.md) |
 | `ntp` | [`ntp/cli.md`](../ntp/cli.md) |
 | `piv` | [`cli/piv.md`](../cli/piv.md) |
 | `provision` | [`provisioning/cli.md`](../provisioning/cli.md) |
