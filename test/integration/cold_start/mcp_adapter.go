@@ -39,10 +39,11 @@ func NewMCPAdapter() *MCPAdapter { return &MCPAdapter{} }
 // Name returns "MCP".
 func (m *MCPAdapter) Name() string { return "MCP" }
 
-// Setup constructs a plain HTTP client targeting the harness MCP port.
+// Setup constructs an mTLS HTTPS client targeting the harness MCP port; MCP
+// serves TLS 1.3 only (#844).
 func (m *MCPAdapter) Setup(ctx context.Context, h *Harness) error {
 	m.endpoint = GetServiceEndpoints(h.Config()).MCP
-	m.client = helpers.NewPlainHTTPClient(15 * time.Second)
+	m.client = helpers.NewHTTPClient(15 * time.Second)
 	return nil
 }
 

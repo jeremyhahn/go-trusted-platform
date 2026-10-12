@@ -17,9 +17,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -115,52 +115,52 @@ func (h *QUICServiceHandler) SetBMCEnroller(enroller BMCEnroller, profileSvc dev
 // handleBMCCategory handles the BMC category opcode (OpBMCCategory, 0x9F).
 // The first byte of the payload selects the sub-operation; the remaining
 // bytes carry the MessagePack-encoded sub-request.
-func (h *QUICServiceHandler) handleBMCCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleBMCCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if len(req.Payload) == 0 {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
 	}
 
 	subOpcode := req.Payload[0]
 	subPayload := req.Payload[1:]
 
-	subReq := &quic.Request{
+	subReq := &quicwire.Request{
 		Opcode:  subOpcode,
 		Token:   req.Token,
 		Payload: subPayload,
 	}
 
 	switch subOpcode {
-	case quic.BMCSubEnroll:
+	case quicwire.BMCSubEnroll:
 		if h.bmcEnrollQUIC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "bmc-enroll"})
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "bmc-enroll"})
 		}
 		return h.handleBMCEnroll(ctx, subReq)
-	case quic.BMCSubRestore:
+	case quicwire.BMCSubRestore:
 		if h.bmcRestoreQUIC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "bmc-restore"})
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "bmc-restore"})
 		}
 		return h.handleBMCRestore(ctx, subReq)
 	default:
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: subOpcode})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: subOpcode})
 	}
 }
 
 // handleBMCEnroll handles the BMC enrollment ceremony sub-operation
 // (BMCSubEnroll, 0x01). It decodes the request, loads the BMC config from
 // the profile store, and drives the enrollment ceremony via the BMCEnroller.
-func (h *QUICServiceHandler) handleBMCEnroll(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleBMCEnroll(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var enrollReq QUICBMCEnrollRequest
-	if err := quic.DecodePayload(req.Payload, &enrollReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &enrollReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if enrollReq.ProfileID == 0 {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "profile_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "profile_id"})
 	}
 
 	bmcCfg, err := loadBMCConfig(ctx, h.bmcEnrollQUIC.profileSvc, enrollReq.ProfileID, h.bmcEnrollQUIC.enroller)
 	if err != nil {
-		return h.errorResponse(quic.StatusNotFound, ErrQUICOperationFailed{Op: "bmc_enroll_load_config", Cause: err})
+		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "bmc_enroll_load_config", Cause: err})
 	}
 
 	opts := &app.BMCEnrollOptions{
@@ -172,22 +172,22 @@ func (h *QUICServiceHandler) handleBMCEnroll(ctx context.Context, req *quic.Requ
 
 	result, err := h.bmcEnrollQUIC.enroller.EnrollBMC(ctx, enrollReq.ProfileID, bmcCfg, opts)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "bmc_enroll", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "bmc_enroll", Cause: err})
 	}
 
 	resp := quicBMCEnrollResultToResponse(result)
 
-	payload, encErr := quic.EncodePayload(resp)
+	payload, encErr := quicwire.EncodePayload(resp)
 	if encErr != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 	}
 
 	h.logger.Info("bmc enrollment completed via QUIC",
 		"profile_id", enrollReq.ProfileID,
 		"device_id", result.DeviceID)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -293,39 +293,39 @@ func (h *QUICServiceHandler) SetBMCRestorer(restorer BMCRestorer, profileSvc dev
 // sub-operation (BMCSubRestore, 0x02). It decodes the request, loads the BMC
 // config from the profile store, and drives the restore ceremony via the
 // BMCRestorer.
-func (h *QUICServiceHandler) handleBMCRestore(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleBMCRestore(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var restoreReq QUICBMCRestoreRequest
-	if err := quic.DecodePayload(req.Payload, &restoreReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &restoreReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if restoreReq.ProfileID == 0 {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "profile_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "profile_id"})
 	}
 
 	bmcCfg, err := loadBMCConfigForRestorer(ctx, h.bmcRestoreQUIC.profileSvc, restoreReq.ProfileID, h.bmcRestoreQUIC.restorer)
 	if err != nil {
-		return h.errorResponse(quic.StatusNotFound, ErrQUICOperationFailed{Op: "bmc_restore_load_config", Cause: err})
+		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "bmc_restore_load_config", Cause: err})
 	}
 
 	result, err := h.bmcRestoreQUIC.restorer.RestoreBMC(ctx, restoreReq.ProfileID, bmcCfg)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "bmc_restore", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "bmc_restore", Cause: err})
 	}
 
 	resp := quicBMCRestoreResultToResponse(result)
 
-	payload, encErr := quic.EncodePayload(resp)
+	payload, encErr := quicwire.EncodePayload(resp)
 	if encErr != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 	}
 
 	h.logger.Info("bmc restore ceremony completed via QUIC",
 		"profile_id", restoreReq.ProfileID,
 		"device_id", result.DeviceID)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -99,7 +100,7 @@ func NewPXEToolHandler(service pxe.Service) *PXEToolHandler {
 // registerPXETools registers all PXE provisioning MCP tools.
 func (r *ToolRegistry) registerPXETools() {
 	// pxe_list_devices - List all provisioning devices
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_list_devices",
 		Description: "List all devices in the PXE provisioning workflow with optional filtering by state, MAC address, or VLAN",
 		InputSchema: map[string]interface{}{
@@ -132,7 +133,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_get_device - Get a specific device by device ID
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_get_device",
 		Description: "Get detailed information about a specific device by its device ID",
 		InputSchema: map[string]interface{}{
@@ -148,7 +149,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_get_device_by_mac - Get a specific device by MAC address
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_get_device_by_mac",
 		Description: "Get detailed information about a specific device by its MAC address",
 		InputSchema: map[string]interface{}{
@@ -164,7 +165,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_register_device - Register a new device for provisioning
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_register_device",
 		Description: "Register a new device for PXE provisioning. The device will be assigned to the quarantine VLAN initially.",
 		InputSchema: map[string]interface{}{
@@ -184,7 +185,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_update_state - Update device provisioning state
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_update_state",
 		Description: "Update the provisioning state of a device. State transitions must follow the allowed workflow transitions.",
 		InputSchema: map[string]interface{}{
@@ -208,7 +209,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_authorize_device - Authorize device onto its target zone
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_authorize_device",
 		Description: "Authorize a device onto its target network zone. Moves the device from the provisioning zone to the requested zone (e.g. trusted).",
 		InputSchema: map[string]interface{}{
@@ -228,7 +229,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_quarantine_device - Move device to quarantine
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_quarantine_device",
 		Description: "Move a device to quarantine state. This restricts network access and moves the device to the quarantine VLAN.",
 		InputSchema: map[string]interface{}{
@@ -248,7 +249,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_retry_device - Retry failed provisioning
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_retry_device",
 		Description: "Retry provisioning for a device that has failed or been quarantined. Resets the device to discovered state.",
 		InputSchema: map[string]interface{}{
@@ -264,7 +265,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_service_status - Get PXE service status
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_service_status",
 		Description: "Get the current status of the PXE provisioning service including running state, device count, and configuration.",
 		InputSchema: map[string]interface{}{
@@ -274,7 +275,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_start_service - Start the PXE service
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_start_service",
 		Description: "Start the PXE provisioning service. The service must be initialized before it can be started.",
 		InputSchema: map[string]interface{}{
@@ -284,7 +285,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_stop_service - Stop the PXE service
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_stop_service",
 		Description: "Stop the PXE provisioning service. All active provisioning will be paused until the service is restarted.",
 		InputSchema: map[string]interface{}{
@@ -294,7 +295,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_get_device_events - Get device provisioning events
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_get_device_events",
 		Description: "Get the audit trail of provisioning events for a specific device",
 		InputSchema: map[string]interface{}{
@@ -310,7 +311,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_remove_device - Remove a device from provisioning
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_remove_device",
 		Description: "Remove a device from the PXE provisioning service",
 		InputSchema: map[string]interface{}{
@@ -326,7 +327,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_set_device_enrolled - Mark device as enrolled with certificate
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_set_device_enrolled",
 		Description: "Mark a device as enrolled with PKI, recording the certificate serial number",
 		InputSchema: map[string]interface{}{
@@ -346,7 +347,7 @@ func (r *ToolRegistry) registerPXETools() {
 	})
 
 	// pxe_webhook_complete - Handle OS installation completion webhook
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "pxe_webhook_complete",
 		Description: "Handle the OS installation completion webhook callback. Called by the provisioned device when installation is complete.",
 		InputSchema: map[string]interface{}{

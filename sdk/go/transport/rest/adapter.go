@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -65,43 +66,31 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		return nil, platform.ErrEmptyAddress
 	}
 
+	// The daemon's REST server only listens on TLS (#32), so a plaintext
+	// address can never reach it and would expose the bearer token.
+	if strings.HasPrefix(opts.RESTAddr, "http://") {
+		return nil, platform.ErrInsecureTransport{
+			Protocol: platform.ProtocolREST,
+			Target:   opts.RESTAddr,
+			Reason:   "the REST server only offers TLS; use https://",
+		}
+	}
+
 	timeout := opts.GetTimeout()
 
-	// Build base URL - always use HTTPS
 	baseURL := opts.RESTAddr
-	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+	if !strings.HasPrefix(baseURL, "https://") {
 		baseURL = "https://" + baseURL
 	}
 	baseURL = strings.TrimSuffix(baseURL, "/")
 
-	// Configure TLS - TLS is mandatory for REST transport
-	var tlsConfig *tls.Config
-	if opts.TLSConfig != nil {
-		tlsConfig = opts.TLSConfig.Clone()
-		if tlsConfig.MinVersion < tls.VersionTLS13 {
-			tlsConfig.MinVersion = tls.VersionTLS13
-		}
-	} else {
-		tlsConfig = &tls.Config{
-			MinVersion: tls.VersionTLS13,
-		}
-	}
-
-	// Honor caller-supplied SNI / certificate verification hostname.
 	// The Go HTTP transport defaults ServerName from the Host header,
-	// which is the dialed address — overriding here lets a CLI talk to
+	// which is the dialed address — TLSServerName lets a CLI talk to
 	// the daemon by IP while still verifying the cert's CN/SAN.
-	if opts.TLSServerName != "" {
-		tlsConfig.ServerName = opts.TLSServerName
-	}
-
-	// Create HTTP transport with TLS
-	httpTransport := &http.Transport{
-		TLSClientConfig: tlsConfig,
-	}
+	tlsConfig := opts.ClientTLSConfig()
 
 	httpClient := &http.Client{
-		Transport: httpTransport,
+		Transport: &http.Transport{TLSClientConfig: tlsConfig},
 		Timeout:   timeout,
 	}
 
@@ -115,12 +104,13 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		a.SetToken(opts.BearerToken)
 	}
 
-	// Optionally verify connectivity with a health check
-	healthCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(healthCtx, http.MethodGet, baseURL+"/health", nil)
-	if err != nil {
+	// Verify the daemon answers before handing the adapter out, so a dead or
+	// untrusted endpoint fails here and auto-detect moves on.
+	start := time.Now()
+	if err := a.probeHealth(ctx, timeout); err != nil {
+		if transport.IsTimeout(err) {
+			err = platform.ErrTimeout{Operation: "REST health probe", Elapsed: time.Since(start), Err: err}
+		}
 		closeErr := a.Close()
 		return nil, platform.ErrConnectionFailed{
 			Protocol: platform.ProtocolREST,
@@ -129,16 +119,30 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		}
 	}
 
-	resp, err := httpClient.Do(req)
+	return a, nil
+}
+
+// probeHealth issues GET /health and succeeds only on a 2xx answer. The
+// daemon serves /health unauthenticated on every REST listener.
+func (a *Adapter) probeHealth(ctx context.Context, timeout time.Duration) error {
+	healthCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(healthCtx, http.MethodGet, a.baseURL+"/health", nil)
 	if err != nil {
-		// Connection test failed, but we still return the adapter
-		// as REST may not have a /health endpoint
-		// The adapter is still usable for other endpoints
-	} else {
-		resp.Body.Close()
+		return err
 	}
 
-	return a, nil
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return ErrHTTPStatus{StatusCode: resp.StatusCode, Status: resp.Status}
+	}
+	return nil
 }
 
 // Connection returns a gRPC-compatible client connection interface.
@@ -241,7 +245,7 @@ func (a *Adapter) DoRequest(ctx context.Context, method, path string, body inter
 		//
 		//   {"code":200,"error":"","success":true,"payload":<actual>}
 		//
-		// (see pkg/webservice/v1/response.WebServiceResponse). The
+		// (see sdk/go/wire/restwire.WebServiceResponse). The
 		// SDK gRPC clients want the inner `<actual>` decoded directly
 		// into their proto / domain types — so we attempt envelope
 		// unwrap first, then fall back to direct unmarshal for any

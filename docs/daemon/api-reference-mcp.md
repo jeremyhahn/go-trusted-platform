@@ -5,9 +5,13 @@ Model Context Protocol (MCP) API documentation for AI/LLM integration with the T
 ## Connection
 
 ```
-HTTP: http://127.0.0.1:8000
+HTTPS: https://127.0.0.1:8000  (TLS 1.3 only; no plaintext listener)
 stdio: stdin/stdout
 ```
+
+The HTTP transport presents the daemon's TLS certificate under the same mTLS
+policy as REST and gRPC, and the daemon refuses to start it without one. See
+[`api.md`](api.md) §5.
 
 ## Protocol Overview
 
@@ -54,7 +58,7 @@ GET /.well-known/oauth-protected-resource
 Include a Bearer token in the Authorization header:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/mcp \
+curl --tlsv1.3 --cacert platform-ca.pem -X POST https://127.0.0.1:8000/mcp \
   -H "Authorization: Bearer <your-jwt-token>" \
   -H "Content-Type: application/json" \
   -d '{"method": "tools/call", "params": {"name": "vtpm_list"}}'
@@ -92,6 +96,9 @@ mcp:
   transport: http
   http_addr: "127.0.0.1:8000"
 ```
+
+`transport: http` serves HTTPS, TLS 1.3 only, with the daemon certificate.
+There is no setting for a plaintext listener.
 
 ### stdio Transport
 
@@ -641,13 +648,13 @@ Add the MCP server to your AI client configuration:
 }
 ```
 
-Or for HTTP transport:
+Or for the HTTPS transport (the client must trust the platform CA):
 
 ```json
 {
   "mcpServers": {
     "trusted-platform": {
-      "url": "http://127.0.0.1:9445"
+      "url": "https://127.0.0.1:9445"
     }
   }
 }

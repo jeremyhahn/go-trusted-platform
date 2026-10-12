@@ -584,5 +584,5 @@ func (r *ServiceRouter) RegisterRoutes(router *mux.Router) {
 - [REST API Reference](protocols/rest-api.md) - Detailed endpoint reference
 - [Authentication Flows](process-flows/authentication.md) - Authentication details
 - [Protocol Overview](protocols/overview.md) - Multi-protocol support
-- [Go SDK](sdk-go.md) - Go client library
+- [Go SDK](../sdk/user.md) - Go client library
 - [JavaScript SDK](sdk-javascript.md) - JavaScript client library

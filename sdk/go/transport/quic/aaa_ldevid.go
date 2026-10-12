@@ -14,8 +14,8 @@
 package quic
 
 import (
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // init registers the LDevID (IEEE 802.1AR) create RPC on the QUIC transport.
@@ -31,6 +31,6 @@ import (
 // adapter's category-invariant assertion, which then validates that this new
 // category-routed method has its required sub-opcode mapping.
 func init() {
-	grpcMethodToOpcodeMap[platformv1.IDevIDService_CreateLDevID_FullMethodName] = quicapi.OpTPM2Category
-	categorySubOpcodeMap[platformv1.IDevIDService_CreateLDevID_FullMethodName] = quicapi.SubOpTPM2LDevIDCSR
+	grpcMethodToOpcodeMap[platformv1.IDevIDService_CreateLDevID_FullMethodName] = quicwire.OpTPM2Category
+	categorySubOpcodeMap[platformv1.IDevIDService_CreateLDevID_FullMethodName] = quicwire.SubOpTPM2LDevIDCSR
 }

@@ -11,7 +11,7 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-// The framing assertions encode payloads through quicapi.EncodePayload, which
+// The framing assertions encode payloads through quicwire.EncodePayload, which
 // resolves the MsgPack codec from go-codec's factory. That codec is only
 // compiled in under codec_msgpack, so the tests carry the tag — as do the
 // sibling category, provisioning and EAB framing tests they share
@@ -24,8 +24,8 @@ import (
 	"context"
 	"testing"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // TestGRPCMethodToOpcodeMap_Device pins the device method-to-opcode
@@ -36,22 +36,22 @@ func TestGRPCMethodToOpcodeMap_Device(t *testing.T) {
 		method string
 		opcode byte
 	}{
-		{"/platform.v1.DeviceService/CreateDevice", quicapi.OpDeviceRegister},
-		{"/platform.v1.DeviceService/DeleteDevice", quicapi.OpDeviceUnregister},
-		{"/platform.v1.DeviceService/GetDevice", quicapi.OpDeviceGet},
-		{"/platform.v1.DeviceService/FindDeviceBySerial", quicapi.OpDeviceGet},
-		{"/platform.v1.DeviceService/ListDevices", quicapi.OpDeviceList},
-		{"/platform.v1.DeviceService/CountDevices", quicapi.OpDeviceList},
-		{"/platform.v1.DeviceService/UpdateDevice", quicapi.OpDeviceUpdate},
-		{"/platform.v1.DeviceService/ActivateDevice", quicapi.OpDeviceActivate},
-		{"/platform.v1.DeviceService/CreateProfile", quicapi.OpDeviceCreateProfile},
-		{"/platform.v1.DeviceService/GetProfile", quicapi.OpDeviceGetProfile},
-		{"/platform.v1.DeviceService/ListProfiles", quicapi.OpDeviceListProfiles},
-		{"/platform.v1.DeviceService/CountProfiles", quicapi.OpDeviceListProfiles},
-		{"/platform.v1.DeviceService/UpdateProfile", quicapi.OpDeviceSetProfile},
-		{"/platform.v1.DeviceService/DeleteProfile", quicapi.OpDeviceDeleteProfile},
-		{"/platform.v1.DeviceService/AssignProfileToDevice", quicapi.OpProvisioningCategory},
-		{"/platform.v1.DeviceService/UnassignProfileFromDevice", quicapi.OpProvisioningCategory},
+		{"/platform.v1.DeviceService/CreateDevice", quicwire.OpDeviceRegister},
+		{"/platform.v1.DeviceService/DeleteDevice", quicwire.OpDeviceUnregister},
+		{"/platform.v1.DeviceService/GetDevice", quicwire.OpDeviceGet},
+		{"/platform.v1.DeviceService/FindDeviceBySerial", quicwire.OpDeviceGet},
+		{"/platform.v1.DeviceService/ListDevices", quicwire.OpDeviceList},
+		{"/platform.v1.DeviceService/CountDevices", quicwire.OpDeviceList},
+		{"/platform.v1.DeviceService/UpdateDevice", quicwire.OpDeviceUpdate},
+		{"/platform.v1.DeviceService/ActivateDevice", quicwire.OpDeviceActivate},
+		{"/platform.v1.DeviceService/CreateProfile", quicwire.OpDeviceCreateProfile},
+		{"/platform.v1.DeviceService/GetProfile", quicwire.OpDeviceGetProfile},
+		{"/platform.v1.DeviceService/ListProfiles", quicwire.OpDeviceListProfiles},
+		{"/platform.v1.DeviceService/CountProfiles", quicwire.OpDeviceListProfiles},
+		{"/platform.v1.DeviceService/UpdateProfile", quicwire.OpDeviceSetProfile},
+		{"/platform.v1.DeviceService/DeleteProfile", quicwire.OpDeviceDeleteProfile},
+		{"/platform.v1.DeviceService/AssignProfileToDevice", quicwire.OpProvisioningCategory},
+		{"/platform.v1.DeviceService/UnassignProfileFromDevice", quicwire.OpProvisioningCategory},
 	}
 
 	for _, tt := range tests {
@@ -69,9 +69,9 @@ func TestGRPCMethodToOpcodeMap_Device(t *testing.T) {
 		method string
 		sub    byte
 	}{
-		{"/platform.v1.DeviceService/AssignProfileToDevice", quicapi.DeviceProfileSubAssign},
-		{"/platform.v1.DeviceService/UnassignProfileFromDevice", quicapi.DeviceProfileSubUnassign},
-		{"/platform.v1.DeviceService/RecordAttestationCertificate", quicapi.DeviceSubRecordAttestCert},
+		{"/platform.v1.DeviceService/AssignProfileToDevice", quicwire.DeviceProfileSubAssign},
+		{"/platform.v1.DeviceService/UnassignProfileFromDevice", quicwire.DeviceProfileSubUnassign},
+		{"/platform.v1.DeviceService/RecordAttestationCertificate", quicwire.DeviceSubRecordAttestCert},
 	}
 	for _, tt := range subTests {
 		sub, ok := categorySubOpcodeMap[tt.method]
@@ -90,7 +90,7 @@ func TestGRPCMethodToOpcodeMap_Device(t *testing.T) {
 // prefix, that the remaining payload is the codec-encoded pb request, and
 // that the pb response decodes into the caller's reply.
 func TestInvoke_DeviceAssign_CategoryFraming(t *testing.T) {
-	respPayload, err := quicapi.EncodePayload(&platformv1.AssignProfileToDeviceResponse{
+	respPayload, err := quicwire.EncodePayload(&platformv1.AssignProfileToDeviceResponse{
 		Profile: &platformv1.DeviceProfile{
 			Id:       300,
 			EkSerial: "EK-3003",
@@ -121,16 +121,16 @@ func TestInvoke_DeviceAssign_CategoryFraming(t *testing.T) {
 	if sender.rawCalls != 1 {
 		t.Fatalf("expected 1 SendRequest call, got %d", sender.rawCalls)
 	}
-	if sender.rawOpcode != quicapi.OpProvisioningCategory {
+	if sender.rawOpcode != quicwire.OpProvisioningCategory {
 		t.Errorf("opcode = 0x%02X, want OpProvisioningCategory", sender.rawOpcode)
 	}
-	if len(sender.rawPayload) < 2 || sender.rawPayload[0] != quicapi.DeviceProfileSubAssign {
+	if len(sender.rawPayload) < 2 || sender.rawPayload[0] != quicwire.DeviceProfileSubAssign {
 		t.Fatalf("payload[0] = 0x%02X, want DeviceProfileSubAssign", sender.rawPayload[0])
 	}
 
 	// The remainder must be the codec-encoded pb request.
 	var decoded platformv1.AssignProfileToDeviceRequest
-	if err := quicapi.DecodePayload(sender.rawPayload[1:], &decoded); err != nil {
+	if err := quicwire.DecodePayload(sender.rawPayload[1:], &decoded); err != nil {
 		t.Fatalf("decode framed request: %v", err)
 	}
 	if decoded.GetProfileId() != 300 || decoded.GetEkSerial() != "EK-3003" || decoded.GetEkCert() == "" {
@@ -157,14 +157,14 @@ func TestInvoke_DeviceUnassign_CategoryFraming(t *testing.T) {
 		t.Fatalf("Invoke: %v", err)
 	}
 
-	if sender.rawOpcode != quicapi.OpProvisioningCategory {
+	if sender.rawOpcode != quicwire.OpProvisioningCategory {
 		t.Errorf("opcode = 0x%02X, want OpProvisioningCategory", sender.rawOpcode)
 	}
-	if len(sender.rawPayload) < 2 || sender.rawPayload[0] != quicapi.DeviceProfileSubUnassign {
+	if len(sender.rawPayload) < 2 || sender.rawPayload[0] != quicwire.DeviceProfileSubUnassign {
 		t.Fatalf("payload[0] = 0x%02X, want DeviceProfileSubUnassign", sender.rawPayload[0])
 	}
 	var decoded platformv1.UnassignProfileFromDeviceRequest
-	if err := quicapi.DecodePayload(sender.rawPayload[1:], &decoded); err != nil {
+	if err := quicwire.DecodePayload(sender.rawPayload[1:], &decoded); err != nil {
 		t.Fatalf("decode framed request: %v", err)
 	}
 	if decoded.GetProfileId() != 400 {
@@ -189,7 +189,7 @@ func TestInvoke_UpdateProfile_UsesSetProfileOpcode(t *testing.T) {
 	if sender.encCalls != 1 {
 		t.Fatalf("expected 1 Send call, got %d (raw calls: %d)", sender.encCalls, sender.rawCalls)
 	}
-	if sender.encOpcode != quicapi.OpDeviceSetProfile {
+	if sender.encOpcode != quicwire.OpDeviceSetProfile {
 		t.Errorf("opcode = 0x%02X, want OpDeviceSetProfile", sender.encOpcode)
 	}
 }
@@ -197,7 +197,7 @@ func TestInvoke_UpdateProfile_UsesSetProfileOpcode(t *testing.T) {
 // TestInvoke_CountDevices_DerivedFromListReply verifies the CountDevices
 // reply is projected from the ListDevicesResponse pagination totals.
 func TestInvoke_CountDevices_DerivedFromListReply(t *testing.T) {
-	respPayload, err := quicapi.EncodePayload(&platformv1.ListDevicesResponse{
+	respPayload, err := quicwire.EncodePayload(&platformv1.ListDevicesResponse{
 		Pagination: &platformv1.PaginationResponse{TotalItems: 9},
 	})
 	if err != nil {
@@ -219,7 +219,7 @@ func TestInvoke_CountDevices_DerivedFromListReply(t *testing.T) {
 	if sender.rawCalls != 1 {
 		t.Fatalf("expected raw SendRequest path, got Send calls: %d", sender.encCalls)
 	}
-	if sender.rawOpcode != quicapi.OpDeviceList {
+	if sender.rawOpcode != quicwire.OpDeviceList {
 		t.Errorf("opcode = 0x%02X, want OpDeviceList", sender.rawOpcode)
 	}
 	if reply.GetCount() != 9 {
@@ -231,7 +231,7 @@ func TestInvoke_CountDevices_DerivedFromListReply(t *testing.T) {
 // CountProfiles reply is projected from the ListProfilesResponse
 // pagination totals.
 func TestInvoke_CountProfiles_DerivedFromListReply(t *testing.T) {
-	respPayload, err := quicapi.EncodePayload(&platformv1.ListProfilesResponse{
+	respPayload, err := quicwire.EncodePayload(&platformv1.ListProfilesResponse{
 		Pagination: &platformv1.PaginationResponse{TotalItems: 4},
 	})
 	if err != nil {

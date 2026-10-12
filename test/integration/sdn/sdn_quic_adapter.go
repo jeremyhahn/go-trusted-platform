@@ -38,7 +38,7 @@ import (
 
 // =============================================================================
 // QUIC Protocol Constants
-// These MUST match the server-side definitions in pkg/api/quic/protocol.go and
+// These MUST match the server-side definitions in sdk/go/wire/quicwire/protocol.go and
 // pkg/api/quic/gateway_handlers.go.
 // =============================================================================
 
@@ -64,7 +64,7 @@ const (
 	opGatewayGetIPAMPool    byte = 0x0E
 	opGatewayUpdateIPAMPool byte = 0x0F
 
-	// Status codes from pkg/api/quic/protocol.go
+	// Status codes from sdk/go/wire/quicwire/protocol.go
 	quicStatusOK            byte = 0x00
 	quicStatusNotFound      byte = 0x02
 	quicStatusAlreadyExists byte = 0x06

@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // ntpToolNames are the tools the time-synchronization surface registers.
@@ -26,7 +28,7 @@ func TestNTPToolsAreRegisteredWithSchemas(t *testing.T) {
 	registry := NewToolRegistry(&mockServiceProvider{}, nil)
 
 	tools := registry.ListTools()
-	byName := make(map[string]ToolDefinition, len(tools))
+	byName := make(map[string]mcpwire.ToolDefinition, len(tools))
 	for _, tool := range tools {
 		byName[tool.Name] = tool
 	}

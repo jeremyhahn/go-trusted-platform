@@ -16,22 +16,22 @@ package quic
 import (
 	"testing"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // ntpMethods enumerates every NTPService method with its expected sub-opcode.
 var ntpMethods = map[string]byte{
-	platformv1.NTPService_GetStatus_FullMethodName:   quicapi.NTPSubGetStatus,
-	platformv1.NTPService_ListSources_FullMethodName: quicapi.NTPSubListSources,
-	platformv1.NTPService_Step_FullMethodName:        quicapi.NTPSubStep,
+	platformv1.NTPService_GetStatus_FullMethodName:   quicwire.NTPSubGetStatus,
+	platformv1.NTPService_ListSources_FullMethodName: quicwire.NTPSubListSources,
+	platformv1.NTPService_Step_FullMethodName:        quicwire.NTPSubStep,
 }
 
 // TestNTPMethodsRouteToTheCategoryOpcode pins the QUIC wire contract. A
 // missing entry here means the transport silently answers Unimplemented, and
 // a wrong sub-opcode means the daemon dispatches the wrong operation.
 func TestNTPMethodsRouteToTheCategoryOpcode(t *testing.T) {
-	if _, isCategory := categoryOpcodes[quicapi.OpNTPCategory]; !isCategory {
+	if _, isCategory := categoryOpcodes[quicwire.OpNTPCategory]; !isCategory {
 		t.Fatal("OpNTPCategory is not registered as a category opcode")
 	}
 
@@ -41,8 +41,8 @@ func TestNTPMethodsRouteToTheCategoryOpcode(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s has no opcode mapping", method)
 			}
-			if opcode != quicapi.OpNTPCategory {
-				t.Fatalf("opcode = 0x%02x, want 0x%02x", opcode, quicapi.OpNTPCategory)
+			if opcode != quicwire.OpNTPCategory {
+				t.Fatalf("opcode = 0x%02x, want 0x%02x", opcode, quicwire.OpNTPCategory)
 			}
 
 			sub, ok := categorySubOpcodeMap[method]
@@ -66,12 +66,12 @@ func TestNTPMethodsRouteToTheCategoryOpcode(t *testing.T) {
 // TestNTPCategoryPayloadCarriesOnlyTheSubOpcode verifies the exact bytes the
 // adapter puts on the wire for an empty-bodied NTP call.
 func TestNTPCategoryPayloadCarriesOnlyTheSubOpcode(t *testing.T) {
-	payload, err := buildCategoryPayload(quicapi.NTPSubGetStatus, nil)
+	payload, err := buildCategoryPayload(quicwire.NTPSubGetStatus, nil)
 	if err != nil {
 		t.Fatalf("buildCategoryPayload() error = %v", err)
 	}
-	if len(payload) != 1 || payload[0] != quicapi.NTPSubGetStatus {
-		t.Fatalf("payload = %v, want [0x%02x]", payload, quicapi.NTPSubGetStatus)
+	if len(payload) != 1 || payload[0] != quicwire.NTPSubGetStatus {
+		t.Fatalf("payload = %v, want [0x%02x]", payload, quicwire.NTPSubGetStatus)
 	}
 }
 

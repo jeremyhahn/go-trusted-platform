@@ -17,12 +17,29 @@
 | Embedded | `ProtocolEmbedded` | In-process; gRPC method strings dispatched straight to service implementations via an O(1) map (`sdk/go/transport/embedded/`) |
 | Unix | `ProtocolUnix` | **gRPC over a Unix domain socket** (`sdk/go/transport/unix/adapter.go`) |
 | gRPC | `ProtocolGRPC` | gRPC over TCP |
-| REST | `ProtocolREST` | HTTP/HTTPS under `/api/v1` |
+| REST | `ProtocolREST` | HTTPS under `/api/v1` (no plaintext listener) |
 | QUIC | `ProtocolQUIC` | Binary opcode protocol over QUIC, MessagePack payloads |
-| MCP | `ProtocolMCP` | JSON-RPC tools over stdio or HTTP |
+| MCP | `ProtocolMCP` | JSON-RPC tools over stdio or HTTPS (TLS 1.3 only; no plaintext listener) |
 
 **Unix is not a separate service surface** — it is the same gRPC service set over
 a socket. Any gRPC RPC is available on Unix under the same name.
+
+**The SDK never sends a credential in plaintext** (#837). Each adapter either
+honours `WithBearerToken`, `WithTLSConfig` and `WithTLSServerName` or refuses
+them with a typed error; none drops them silently:
+
+| Transport | Credentials |
+|---|---|
+| REST | TLS 1.3 only; an `http://` address is refused with `ErrInsecureTransport`. Token sent as `Authorization: Bearer`. |
+| gRPC | TLS 1.3; token sent as per-RPC metadata. |
+| QUIC | TLS 1.3 (always); token framed into every request. |
+| MCP | The server serves TLS 1.3 only (#844); `https://` is the default when no scheme is given and honours all three options. A bare `http://` address gets no answer from the server, and with any of the three options set the SDK refuses it with `ErrInsecureTransport` before dialing. |
+| Unix | Refuses all three with `ErrUnsupportedOption`; the daemon authenticates by `SO_PEERCRED`. |
+| Embedded | Refuses all three with `ErrUnsupportedOption`; calls never leave the process. |
+
+Connecting also proves the endpoint answers: REST probes `GET /health` and MCP
+runs `initialize`. A failure returns `ErrConnectionFailed`, so auto-detection
+moves on to the next protocol instead of handing back a dead client.
 
 **The embedded transport's reach is bounded by `ServiceRegistry`**
 (`sdk/go/transport/embedded/adapter.go:32`), which has **22 fields**: Daemon, CA,
@@ -95,7 +112,7 @@ changing, validate before applying, roll back if wrong.
 
 ## 4. The QUIC protocol — canonical reference
 
-### Frame constants (`pkg/api/quic/protocol.go`)
+### Frame constants (`sdk/go/wire/quicwire/protocol.go`)
 
 | Constant | Value |
 |---|---|
@@ -153,7 +170,7 @@ the third is a top-level opcode. A client sending `0x01` at top level gets a
 liveness check. Likewise `OpVMMetrics` (`0xCC` under `0x69`) and
 `OpSwitchCategory` (`0xCC` at top level) are unrelated.
 
-`pkg/api/quic/vm_ops_opcodes.go` documents the rule for its own range: values
+`sdk/go/wire/quicwire/vm_ops_opcodes.go` documents the rule for its own range: values
 *"live in the 0x69 sub-opcode namespace and only need to be unique among the
 sub-opcodes routed under that category"*.
 
@@ -165,7 +182,7 @@ handler dispatches on the latter pair. **Both dead names are still in the
 `OpcodeNames` table**, so logs mislabel those two operations. See
 [`docs/attestation/api.md`](../attestation/api.md) §4.
 
-`pkg/api/quic/opcode_uniqueness_test.go` enforces the rule this section
+`sdk/go/wire/quicwire/opcode_uniqueness_test.go` enforces the rule this section
 describes — and the one `protocol.go` states, that new operations *"must
 multiplex as sub-opcodes under an existing category opcode"*. It asserts opcode
 values are unique **within a dispatch namespace**, so the by-design repeats
@@ -221,6 +238,23 @@ message names the missing backend); only the five tools explicitly mapped to
 unless `SkipIAMValidation`, the testing-only opt-out, is set. Before #440 that
 state was a `Warn` and every registered tool was served to any caller.
 
+**MCP over HTTP serves TLS 1.3 only (#844).** The listener presents the
+daemon's TLS identity (`Config.TLSCertificate`, the certificate REST and gRPC
+serve) under the same mTLS policy: with `EnableMTLS` it requires and verifies
+a client certificate against the pool REST and gRPC use
+(`newServerTLSConfig`, `pkg/api/daemon/transport_auth.go`). The version is
+pinned to TLS 1.3 by the MCP server itself (`pkg/api/mcp/server.go`
+`serverTLSConfig`), per-client configs included. There is no plaintext
+listener and no option that brings one back: a plain `http://` request gets
+`400` from the TLS listener and never reaches tool dispatch. A daemon
+configured for MCP over HTTP without a usable certificate refuses to start
+with `ErrTLSConfigFailed` and binds nothing, and an MCP start failure (for
+example a bind error) fails `Daemon.Start` with `MCPServerStartError` and
+rolls back what had started. `platformd serve` provisions the daemon identity
+when MCP over HTTP is the only network transport. The stdio transport binds no
+listener and needs no certificate. Before #844 the listener served plaintext
+HTTP and bearer tokens crossed the network in the clear.
+
 Services **in** the gRPC catalog: `CAService` (12), `DeviceService` (21),
 `DNSService` (13), `GatewayService` (11 of 26), `KeyManagementService` (23),
 `NTPService` (3), `PlatformIAMService` (41), `ProxyService` (14),
@@ -245,7 +279,7 @@ the fleet. Where a capability has two tool names, frequently only the older one
 is mapped ([`docs/dns/api.md`](../dns/api.md) §3,
 [`docs/vtpm/api.md`](../vtpm/api.md) §5).
 
-**MCP discovery is not gated.** Over HTTP, `initialize` and `tools/list` read no
+**MCP discovery is not gated.** Over HTTPS, `initialize` and `tools/list` read no
 token (`pkg/api/mcp/server.go` `handleInitialize`, `handleToolsList`), so an
 anonymous client receives `serverInfo` and every registered tool's schema;
 only `tools/call` runs `AuthorizeTool`. A missing token is reported as a JSON-RPC

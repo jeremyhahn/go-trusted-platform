@@ -15,6 +15,8 @@ package mcp
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -98,7 +100,7 @@ var ErrAttestationDataRequired = &AttestationError{
 // registerAttestationTools registers attestation-related MCP tools.
 func (r *ToolRegistry) registerAttestationTools() {
 	// Manifest operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_create_manifest",
 		Description: "Create a new attestation manifest for a host and its workloads",
 		InputSchema: map[string]interface{}{
@@ -152,7 +154,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_get_manifest",
 		Description: "Get an attestation manifest by ID",
 		InputSchema: map[string]interface{}{
@@ -167,7 +169,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_list_manifests",
 		Description: "List attestation manifests with pagination",
 		InputSchema: map[string]interface{}{
@@ -187,7 +189,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_delete_manifest",
 		Description: "Delete an attestation manifest by ID",
 		InputSchema: map[string]interface{}{
@@ -202,7 +204,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_verify_manifest",
 		Description: "Verify an attestation manifest including signature and Merkle root",
 		InputSchema: map[string]interface{}{
@@ -230,7 +232,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 	})
 
 	// Report operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_create_report",
 		Description: "Generate an attestation report for a host or workload",
 		InputSchema: map[string]interface{}{
@@ -266,7 +268,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_get_report",
 		Description: "Get an attestation report by ID",
 		InputSchema: map[string]interface{}{
@@ -281,7 +283,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_list_reports",
 		Description: "List attestation reports with optional filtering",
 		InputSchema: map[string]interface{}{
@@ -310,7 +312,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 	})
 
 	// Policy operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_create_policy",
 		Description: "Create a new attestation policy with PCR requirements and golden values",
 		InputSchema: map[string]interface{}{
@@ -371,7 +373,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_get_policy",
 		Description: "Get an attestation policy by ID",
 		InputSchema: map[string]interface{}{
@@ -386,7 +388,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_list_policies",
 		Description: "List attestation policies with optional filtering",
 		InputSchema: map[string]interface{}{
@@ -414,7 +416,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_delete_policy",
 		Description: "Delete an attestation policy by ID",
 		InputSchema: map[string]interface{}{
@@ -429,7 +431,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_evaluate_policy",
 		Description: "Evaluate attestation evidence against a policy",
 		InputSchema: map[string]interface{}{
@@ -476,7 +478,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 	})
 
 	// Workload attestation operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_attest_workload",
 		Description: "Perform attestation for a workload (container, VM, or device)",
 		InputSchema: map[string]interface{}{
@@ -518,7 +520,7 @@ func (r *ToolRegistry) registerAttestationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_verify_workload",
 		Description: "Verify previously collected workload attestation data",
 		InputSchema: map[string]interface{}{

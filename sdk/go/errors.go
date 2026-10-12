@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Sentinel errors for common conditions.
@@ -26,9 +27,6 @@ var (
 
 	// ErrEmptyAddress indicates that an empty address was provided.
 	ErrEmptyAddress = errors.New("address cannot be empty")
-
-	// ErrEmptySocketPath indicates that an empty socket path was provided.
-	ErrEmptySocketPath = errors.New("socket path cannot be empty")
 
 	// ErrNotConnected indicates an operation was attempted on a disconnected client.
 	ErrNotConnected = errors.New("client is not connected")
@@ -75,14 +73,15 @@ func (e ErrDaemonUnavailable) Unwrap() error {
 	return e.LastErr
 }
 
-// ErrProtocolNotSupported is returned when a requested protocol is not supported.
+// ErrProtocolNotSupported is returned when a transport name is not one the
+// QuicBaaS side-client can dial, rather than silently auto-detecting.
 type ErrProtocolNotSupported struct {
-	Protocol Protocol
+	Transport string
 }
 
 // Error implements the error interface.
 func (e ErrProtocolNotSupported) Error() string {
-	return fmt.Sprintf("protocol not supported: %s", e.Protocol)
+	return fmt.Sprintf("protocol not supported: %q (want unix, grpc, rest, quic or mcp)", e.Transport)
 }
 
 // ErrProtocolNotImplemented is returned when a protocol is valid but not yet implemented.
@@ -95,15 +94,23 @@ func (e ErrProtocolNotImplemented) Error() string {
 	return fmt.Sprintf("protocol not implemented: %s", e.Protocol)
 }
 
-// ErrTimeout is returned when a connection or operation times out.
+// ErrTimeout is returned, inside ErrConnectionFailed, when a connect-time
+// exchange with the daemon runs out of time: a context deadline or a network
+// timeout.
 type ErrTimeout struct {
 	Operation string
-	Duration  string
+	Elapsed   time.Duration
+	Err       error
 }
 
 // Error implements the error interface.
 func (e ErrTimeout) Error() string {
-	return fmt.Sprintf("operation %s timed out after %s", e.Operation, e.Duration)
+	return fmt.Sprintf("%s timed out after %s: %v", e.Operation, e.Elapsed, e.Err)
+}
+
+// Unwrap returns the underlying error for errors.Is and errors.As support.
+func (e ErrTimeout) Unwrap() error {
+	return e.Err
 }
 
 // ErrInvalidOptions is returned when client options are invalid.
@@ -118,21 +125,6 @@ func (e ErrInvalidOptions) Error() string {
 		return fmt.Sprintf("invalid options: %s: %s", e.Field, e.Reason)
 	}
 	return fmt.Sprintf("invalid options: %s", e.Reason)
-}
-
-// ErrTLSConfigFailed is returned when TLS configuration fails.
-type ErrTLSConfigFailed struct {
-	Err error
-}
-
-// Error implements the error interface.
-func (e ErrTLSConfigFailed) Error() string {
-	return fmt.Sprintf("failed to configure TLS: %v", e.Err)
-}
-
-// Unwrap returns the underlying error for errors.Is and errors.As support.
-func (e ErrTLSConfigFailed) Unwrap() error {
-	return e.Err
 }
 
 // ErrServiceUnavailable is returned when a specific service client is not available.
@@ -161,14 +153,32 @@ func (e ErrCloseFailed) Unwrap() error {
 	return e.Err
 }
 
-// ErrTLSConfigRequired is returned when a TLS configuration is required but not provided.
-type ErrTLSConfigRequired struct {
+// ErrInsecureTransport is returned when a connection would travel over
+// plaintext HTTP and that is not acceptable: the server only offers TLS, or
+// the caller set a bearer token or TLS options that plaintext would leak or
+// silently drop.
+type ErrInsecureTransport struct {
 	Protocol Protocol
+	Target   string
+	Reason   string
 }
 
 // Error implements the error interface.
-func (e ErrTLSConfigRequired) Error() string {
-	return fmt.Sprintf("TLS configuration required for %s transport", e.Protocol)
+func (e ErrInsecureTransport) Error() string {
+	return fmt.Sprintf("refusing plaintext %s connection to %s: %s", e.Protocol, e.Target, e.Reason)
+}
+
+// ErrUnsupportedOption is returned when a transport cannot honour a
+// connection option the caller set, rather than silently ignoring it.
+type ErrUnsupportedOption struct {
+	Protocol Protocol
+	Option   string
+	Reason   string
+}
+
+// Error implements the error interface.
+func (e ErrUnsupportedOption) Error() string {
+	return fmt.Sprintf("%s transport does not support %s: %s", e.Protocol, e.Option, e.Reason)
 }
 
 // ErrQuicBaaSNotConfigured is returned by Client.QuicBaaS() when the

@@ -23,7 +23,7 @@ import (
 )
 
 // This adapter had both defects: it offered ALPN "attestation-quic" while the
-// daemon advertises only quic.ALPNProtocol, and it wrote a JSON
+// daemon advertises only quicwire.ALPNProtocol, and it wrote a JSON
 // {method, path, body} envelope past a server that reads opcode framing. The
 // handshake failed before a stream was opened, so the framing never ran, and
 // every call failed in a way that looked exactly like a refusal.

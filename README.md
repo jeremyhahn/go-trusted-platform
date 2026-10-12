@@ -183,7 +183,7 @@ if err != nil {
 }
 ```
 
-For detailed SDK documentation, see [docs/api/sdk-overview.md](docs/api/sdk-overview.md) and [docs/api/sdk-go.md](docs/api/sdk-go.md).
+For detailed SDK documentation, see [docs/sdk/](docs/sdk/architecture.md).
 
 
 ## Algorithm Safety

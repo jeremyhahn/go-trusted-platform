@@ -9,7 +9,7 @@ Multi-protocol API documentation for the Trusted Platform.
 | REST | HTTPS | 8443 | Web clients, external systems |
 | gRPC | TCP | 9443 | High-performance service-to-service |
 | QUIC | UDP | 9444 | Low-latency, mobile clients |
-| MCP | stdio/HTTP | 9445 | AI/LLM integration |
+| MCP | stdio/HTTPS | 9445 | AI/LLM integration |
 | Unix Socket | Unix | /run/platformd.sock | Local IPC, CLI |
 
 ## Service Parity Matrix
@@ -109,7 +109,7 @@ Connection: `localhost:9444` (TLS 1.3 required)
 Implementation files:
 - `pkg/api/quic/*_handlers.go` - Handler implementations
 - `pkg/api/daemon/quic_*.go` - Daemon QUIC integration
-- `pkg/api/quic/protocol.go` - Protocol definitions
+- `sdk/go/wire/quicwire/protocol.go` - Protocol definitions
 
 QUIC Handlers:
 | File | Service |
@@ -127,7 +127,7 @@ QUIC Handlers:
 
 ### MCP API
 
-Transport: stdio or HTTP (port 9445)
+Transport: stdio or HTTPS (port 9445)
 
 Implementation files:
 - `pkg/api/mcp/*_tools.go` - Tool implementations

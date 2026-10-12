@@ -110,7 +110,7 @@ services:
       NEXT_PUBLIC_API_URL: "https://localhost:8443"
       NEXT_PUBLIC_GRPC_URL: "https://localhost:10443"
       NEXT_PUBLIC_QUIC_URL: "https://localhost:9444"
-      NEXT_PUBLIC_MCP_URL: "http://localhost:9445"
+      NEXT_PUBLIC_MCP_URL: "https://localhost:9445"
 
       # Playwright configuration
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright

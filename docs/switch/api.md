@@ -23,7 +23,7 @@ appears here.
 - REST: base path `/api/v1/switches`
   (`pkg/webservice/v1/rest/switch/router.go`).
 - QUIC: **category opcode `OpSwitchCategory` (`0xCC`)** with five sub-opcodes
-  (`pkg/api/quic/switch_opcodes.go`), dispatched by
+  (`sdk/go/wire/quicwire/switch_opcodes.go`), dispatched by
   `pkg/api/daemon/quic_switch.go::handleSwitchCategory`.
 - MCP: five tools (`pkg/api/mcp/switch_tools.go`).
 - SDK: `sdk/go/services/switch` — **a REST client**, `NewClient(baseURL string,
@@ -114,12 +114,12 @@ payload into the target type. Success payloads:
 
 | Route | Payload |
 |---|---|
-| `GET .../ports` | `[]*switchmgmt.PortStatus` |
-| `GET .../ports/{port}` | `*switchmgmt.PortStatus` |
+| `GET .../ports` | `[]*switchwire.PortStatus` |
+| `GET .../ports/{port}` | `*switchwire.PortStatus` |
 | `POST .../vlan` | `{"switch":…,"port":…,"vlan_id":…,"status":"ok"}` |
 | `POST .../enable` \| `.../disable` | `{"switch":…,"port":…,"action":"enable"\|"disable","status":"ok"}` |
 
-`PortStatus` JSON: `port`, `mode` (`"access"` \| `"trunk"`), `access_vlan`,
+`PortStatus` (`sdk/go/wire/switchwire/port.go`) JSON: `port`, `mode` (`"access"` \| `"trunk"`), `access_vlan`,
 `trunk_vlans` (omitted when empty), `native_vlan` (omitted when none), `enabled`, `link_up`, `description`
 (omitted when empty).
 
@@ -143,9 +143,8 @@ An empty payload is `StatusInvalidRequest` with
 **Do not send `SwitchSub*` values at top level.** They use the `SwitchSub`
 prefix rather than `Op` precisely because they are not top-level opcodes —
 `0x01` at top level is `OpLiveness`. The constants are declared in
-`pkg/api/quic/switch_opcodes.go` and **mirrored** in
-`pkg/api/daemon/quic_switch.go` *"for legacy reasons; both must stay in sync."*
-That duplication is a maintenance hazard worth knowing about.
+`sdk/go/wire/quicwire/switch_opcodes.go`; `pkg/api/daemon/quic_switch.go`
+aliases them as `SubOpSwitch*`, so the two cannot drift.
 
 `uint16` becomes `uint32` on the wire: `SwitchPortStatus.access_vlan`,
 `trunk_vlans` and `native_vlan` (field 8) are `uint32` in proto and converted by

@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // TestInvoke_CategoryPrefix_AllEABMethods verifies every EABService
@@ -34,17 +34,17 @@ func TestInvoke_CategoryPrefix_AllEABMethods(t *testing.T) {
 		args          interface{}
 		expectedSubOp byte
 	}{
-		{"/platform.v1.EABService/CreateCredential", &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "t"}, quicapi.EABSubCreateCredential},
-		{"/platform.v1.EABService/GetCredential", &platformv1.GetEABCredentialRequest{CredentialId: 1}, quicapi.EABSubGetCredential},
-		{"/platform.v1.EABService/GetCredentialByKeyID", &platformv1.GetEABCredentialByKeyIDRequest{KeyId: "k"}, quicapi.EABSubGetCredentialByKeyID},
-		{"/platform.v1.EABService/ListCredentials", &platformv1.ListEABCredentialsRequest{TenantId: "t"}, quicapi.EABSubListCredentials},
-		{"/platform.v1.EABService/RevokeCredential", &platformv1.RevokeEABCredentialRequest{CredentialId: 1}, quicapi.EABSubRevokeCredential},
-		{"/platform.v1.EABService/ValidateCredential", &platformv1.ValidateEABCredentialRequest{KeyId: "k", HmacKey: "h"}, quicapi.EABSubValidateCredential},
-		{"/platform.v1.EABService/DeleteCredential", &platformv1.DeleteEABCredentialRequest{CredentialId: 1}, quicapi.EABSubDeleteCredential},
-		{"/platform.v1.EABService/GetCredentialQRCode", &platformv1.GetEABCredentialQRCodeRequest{CredentialId: 1}, quicapi.EABSubGetCredentialQRCode},
-		{"/platform.v1.EABService/GetEnrollmentURL", &platformv1.GetEABEnrollmentURLRequest{CredentialId: 1}, quicapi.EABSubGetEnrollmentURL},
-		{"/platform.v1.EABService/MarkCredentialUsed", &platformv1.MarkEABCredentialUsedRequest{CredentialId: 1}, quicapi.EABSubMarkCredentialUsed},
-		{"/platform.v1.EABService/CleanupExpiredCredentials", &platformv1.CleanupExpiredEABCredentialsRequest{}, quicapi.EABSubCleanupExpiredCredentials},
+		{"/platform.v1.EABService/CreateCredential", &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "t"}, quicwire.EABSubCreateCredential},
+		{"/platform.v1.EABService/GetCredential", &platformv1.GetEABCredentialRequest{CredentialId: 1}, quicwire.EABSubGetCredential},
+		{"/platform.v1.EABService/GetCredentialByKeyID", &platformv1.GetEABCredentialByKeyIDRequest{KeyId: "k"}, quicwire.EABSubGetCredentialByKeyID},
+		{"/platform.v1.EABService/ListCredentials", &platformv1.ListEABCredentialsRequest{TenantId: "t"}, quicwire.EABSubListCredentials},
+		{"/platform.v1.EABService/RevokeCredential", &platformv1.RevokeEABCredentialRequest{CredentialId: 1}, quicwire.EABSubRevokeCredential},
+		{"/platform.v1.EABService/ValidateCredential", &platformv1.ValidateEABCredentialRequest{KeyId: "k", HmacKey: "h"}, quicwire.EABSubValidateCredential},
+		{"/platform.v1.EABService/DeleteCredential", &platformv1.DeleteEABCredentialRequest{CredentialId: 1}, quicwire.EABSubDeleteCredential},
+		{"/platform.v1.EABService/GetCredentialQRCode", &platformv1.GetEABCredentialQRCodeRequest{CredentialId: 1}, quicwire.EABSubGetCredentialQRCode},
+		{"/platform.v1.EABService/GetEnrollmentURL", &platformv1.GetEABEnrollmentURLRequest{CredentialId: 1}, quicwire.EABSubGetEnrollmentURL},
+		{"/platform.v1.EABService/MarkCredentialUsed", &platformv1.MarkEABCredentialUsedRequest{CredentialId: 1}, quicwire.EABSubMarkCredentialUsed},
+		{"/platform.v1.EABService/CleanupExpiredCredentials", &platformv1.CleanupExpiredEABCredentialsRequest{}, quicwire.EABSubCleanupExpiredCredentials},
 	}
 
 	for _, tt := range tests {
@@ -58,9 +58,9 @@ func TestInvoke_CategoryPrefix_AllEABMethods(t *testing.T) {
 			if sender.rawCalls != 1 {
 				t.Fatalf("expected exactly 1 SendRequest call, got %d", sender.rawCalls)
 			}
-			if sender.rawOpcode != quicapi.OpProvisioningCategory {
+			if sender.rawOpcode != quicwire.OpProvisioningCategory {
 				t.Errorf("opcode = 0x%02X, want 0x%02X (OpProvisioningCategory)",
-					sender.rawOpcode, quicapi.OpProvisioningCategory)
+					sender.rawOpcode, quicwire.OpProvisioningCategory)
 			}
 			if len(sender.rawPayload) == 0 {
 				t.Fatal("payload must contain at least the sub-opcode prefix")
@@ -75,7 +75,7 @@ func TestInvoke_CategoryPrefix_AllEABMethods(t *testing.T) {
 
 // TestInvoke_EABRequestEncodesPBFieldNames pins the request wire
 // contract: payload[1:] keys on the exact pb Go field names the daemon
-// decodes into (quic.DecodePayload into the pb request struct).
+// decodes into (quicwire.DecodePayload into the pb request struct).
 func TestInvoke_EABRequestEncodesPBFieldNames(t *testing.T) {
 	sender := &recordingSender{}
 	conn := newConnWithSender(t, sender)
@@ -94,7 +94,7 @@ func TestInvoke_EABRequestEncodesPBFieldNames(t *testing.T) {
 	// The daemon decodes payload[1:] into the identical pb struct, so a
 	// decode round-trip through the shared codec must reproduce the args.
 	var decoded platformv1.CreateEABCredentialRequest
-	if err := quicapi.DecodePayload(sender.rawPayload[1:], &decoded); err != nil {
+	if err := quicwire.DecodePayload(sender.rawPayload[1:], &decoded); err != nil {
 		t.Fatalf("daemon-side decode failed: %v", err)
 	}
 	if decoded.GetProfileId() != 7 || decoded.GetTenantId() != "tenant-1" ||
@@ -116,7 +116,7 @@ func TestInvoke_EABResponseDecodesDirectly(t *testing.T) {
 			Status:    platformv1.EABCredentialStatus_EAB_CREDENTIAL_STATUS_ACTIVE,
 		},
 	}
-	encoded, err := quicapi.EncodePayload(wire)
+	encoded, err := quicwire.EncodePayload(wire)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestEABSubOpcodeMapComplete(t *testing.T) {
 			continue
 		}
 		count++
-		if opcode != quicapi.OpProvisioningCategory {
+		if opcode != quicwire.OpProvisioningCategory {
 			t.Errorf("%s opcode = 0x%02X, want OpProvisioningCategory", method, opcode)
 		}
 		if _, has := categorySubOpcodeMap[method]; !has {

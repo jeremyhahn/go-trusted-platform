@@ -53,8 +53,8 @@ func restEndpoint() string { return envOrDefault(EnvPlatformRESTEndpoint, "https
 // quicEndpoint returns the platformd QUIC endpoint.
 func quicEndpoint() string { return envOrDefault(EnvPlatformQUICEndpoint, "localhost:9444") }
 
-// mcpEndpoint returns the platformd MCP base URL (always plain HTTP).
-func mcpEndpoint() string { return envOrDefault(EnvPlatformMCPEndpoint, "http://localhost:9445") }
+// mcpEndpoint returns the platformd MCP base URL (TLS 1.3 only, #844).
+func mcpEndpoint() string { return envOrDefault(EnvPlatformMCPEndpoint, "https://localhost:9445") }
 
 // unixSocket returns the platformd Unix socket path.
 func unixSocket() string {

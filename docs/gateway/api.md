@@ -18,6 +18,9 @@ in-process.
 Two gRPC services: `GatewayService` (26 RPCs, `gateway.proto`) and
 `ProxyService` (14 RPCs, `proxy.proto`).
 
+**MCP is served over stdio / HTTPS on port 9445.** The tool definitions are in
+`pkg/api/mcp/gateway_tools.go`, with the LB and perf tools registered alongside.
+
 **QUIC reaches both through the gateway category opcode `0x2F`.** Sub-opcodes
 `0x20`–`0x2D` under that category are routed to the **proxy** handler; the rest
 go to the gateway handler (`pkg/api/daemon/quic_service.go`). IPAM additionally
@@ -128,7 +131,7 @@ A production `platformd` does not wire the load balancer backend yet (see
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| NAT64 status | `GET /api/v1/sdn/gateway/nat64/status` | `GetNAT64Status` | `0x39` (`pkg/api/quic/gateway_nat64_handlers.go`) | `gateway_nat64_status` | ✅ |
+| NAT64 status | `GET /api/v1/sdn/gateway/nat64/status` | `GetNAT64Status` | `0x39` (`sdk/go/wire/quicwire/gateway_nat64.go`) | `gateway_nat64_status` | ✅ |
 
 > **Production status: routed, not yet backed.** The translator runs in
 > `gatewayd`. Today `platformd` does not reach it: it builds the gateway

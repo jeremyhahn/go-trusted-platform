@@ -21,6 +21,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // DNS pagination defaults
@@ -69,38 +70,38 @@ func NewDNSHandler(logger *logging.Logger, dnsService dns.DNSService) *DNSHandle
 }
 
 // HandleRequest processes a DNS request and returns a response
-func (h *DNSHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *DNSHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{
-			Status:  StatusInvalidRequest,
-			Payload: []byte(ErrNilRequest.Error()),
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
+			Payload: []byte(quicwire.ErrNilRequest.Error()),
 		}
 	}
 
 	switch req.Opcode {
-	case OpDNSAddZone:
+	case quicwire.OpDNSAddZone:
 		return h.handleAddZone(ctx, req)
-	case OpDNSGetZone:
+	case quicwire.OpDNSGetZone:
 		return h.handleGetZone(ctx, req)
-	case OpDNSDeleteZone:
+	case quicwire.OpDNSDeleteZone:
 		return h.handleDeleteZone(ctx, req)
-	case OpDNSListZones:
+	case quicwire.OpDNSListZones:
 		return h.handleListZones(ctx, req)
-	case OpDNSAddRecord:
+	case quicwire.OpDNSAddRecord:
 		return h.handleAddRecord(ctx, req)
-	case OpDNSGetRecord:
+	case quicwire.OpDNSGetRecord:
 		return h.handleGetRecord(ctx, req)
-	case OpDNSUpdateRecord:
+	case quicwire.OpDNSUpdateRecord:
 		return h.handleUpdateRecord(ctx, req)
-	case OpDNSDeleteRecord:
+	case quicwire.OpDNSDeleteRecord:
 		return h.handleDeleteRecord(ctx, req)
-	case OpDNSListRecords:
+	case quicwire.OpDNSListRecords:
 		return h.handleListRecords(ctx, req)
-	case OpDNSResolve:
+	case quicwire.OpDNSResolve:
 		return h.handleResolve(ctx, req)
 	default:
-		return &Response{
-			Status:  StatusInvalidRequest,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("unknown dns operation"),
 		}
 	}
@@ -431,18 +432,18 @@ type DNSResolveResponse struct {
 // =============================================================================
 
 // handleAddZone creates a new DNS zone
-func (h *DNSHandler) handleAddZone(ctx context.Context, req *Request) *Response {
+func (h *DNSHandler) handleAddZone(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDNSServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable)
 	}
 
 	var addReq DNSAddZoneRequest
-	if err := DecodePayload(req.Payload, &addReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &addReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
 	}
 
 	if addReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingZoneName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingZoneName)
 	}
 
 	zone := h.buildZoneFromRequest(&addReq)
@@ -457,30 +458,30 @@ func (h *DNSHandler) handleAddZone(ctx context.Context, req *Request) *Response 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDNSEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDNSEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetZone retrieves a DNS zone by name
-func (h *DNSHandler) handleGetZone(ctx context.Context, req *Request) *Response {
+func (h *DNSHandler) handleGetZone(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDNSServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable)
 	}
 
 	var getReq DNSGetZoneRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
 	}
 
 	if getReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingZoneName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingZoneName)
 	}
 
 	zone, err := h.dnsService.Zone(ctx, getReq.Name)
@@ -494,30 +495,30 @@ func (h *DNSHandler) handleGetZone(ctx context.Context, req *Request) *Response 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDNSEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDNSEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeleteZone deletes a DNS zone
-func (h *DNSHandler) handleDeleteZone(ctx context.Context, req *Request) *Response {
+func (h *DNSHandler) handleDeleteZone(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDNSServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable)
 	}
 
 	var deleteReq DNSDeleteZoneRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingZoneName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingZoneName)
 	}
 
 	if err := h.dnsService.DeleteZone(ctx, deleteReq.Name); err != nil {
@@ -531,26 +532,26 @@ func (h *DNSHandler) handleDeleteZone(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDNSEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDNSEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListZones lists all DNS zones
-func (h *DNSHandler) handleListZones(ctx context.Context, req *Request) *Response {
+func (h *DNSHandler) handleListZones(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDNSServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable)
 	}
 
 	var listReq DNSListZonesRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
 	}
 
 	zones, err := h.dnsService.ListZones(ctx)
@@ -597,36 +598,36 @@ func (h *DNSHandler) handleListZones(ctx context.Context, req *Request) *Respons
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDNSEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDNSEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleAddRecord adds a DNS record to a zone
-func (h *DNSHandler) handleAddRecord(ctx context.Context, req *Request) *Response {
+func (h *DNSHandler) handleAddRecord(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDNSServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable)
 	}
 
 	var addReq DNSAddRecordRequest
-	if err := DecodePayload(req.Payload, &addReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &addReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
 	}
 
 	if addReq.ZoneName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingZoneName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingZoneName)
 	}
 	if addReq.Type == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingRecordType)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingRecordType)
 	}
 	if addReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingRecordName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingRecordName)
 	}
 
 	zone, err := h.dnsService.Zone(ctx, addReq.ZoneName)
@@ -636,7 +637,7 @@ func (h *DNSHandler) handleAddRecord(ctx context.Context, req *Request) *Respons
 	}
 
 	if err := h.addRecordToZone(zone, &addReq); err != nil {
-		return h.errorResponse(StatusInvalidArgument, err)
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	if err := h.dnsService.Save(ctx, zone); err != nil {
@@ -649,36 +650,36 @@ func (h *DNSHandler) handleAddRecord(ctx context.Context, req *Request) *Respons
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDNSEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDNSEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetRecord retrieves a DNS record
-func (h *DNSHandler) handleGetRecord(ctx context.Context, req *Request) *Response {
+func (h *DNSHandler) handleGetRecord(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDNSServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable)
 	}
 
 	var getReq DNSGetRecordRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
 	}
 
 	if getReq.ZoneName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingZoneName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingZoneName)
 	}
 	if getReq.RecordName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingRecordName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingRecordName)
 	}
 	if getReq.RecordType == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingRecordType)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingRecordType)
 	}
 
 	record, err := h.dnsService.GetRecord(ctx, getReq.RecordName, getReq.RecordType)
@@ -692,36 +693,36 @@ func (h *DNSHandler) handleGetRecord(ctx context.Context, req *Request) *Respons
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDNSEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDNSEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleUpdateRecord updates a DNS record
-func (h *DNSHandler) handleUpdateRecord(ctx context.Context, req *Request) *Response {
+func (h *DNSHandler) handleUpdateRecord(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDNSServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable)
 	}
 
 	var updateReq DNSUpdateRecordRequest
-	if err := DecodePayload(req.Payload, &updateReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &updateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
 	}
 
 	if updateReq.ZoneName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingZoneName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingZoneName)
 	}
 	if updateReq.Type == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingRecordType)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingRecordType)
 	}
 	if updateReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingRecordName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingRecordName)
 	}
 
 	zone, err := h.dnsService.Zone(ctx, updateReq.ZoneName)
@@ -731,7 +732,7 @@ func (h *DNSHandler) handleUpdateRecord(ctx context.Context, req *Request) *Resp
 	}
 
 	if err := h.updateRecordInZone(zone, &updateReq); err != nil {
-		return h.errorResponse(StatusNotFound, err)
+		return h.errorResponse(quicwire.StatusNotFound, err)
 	}
 
 	if err := h.dnsService.Save(ctx, zone); err != nil {
@@ -744,36 +745,36 @@ func (h *DNSHandler) handleUpdateRecord(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDNSEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDNSEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeleteRecord deletes a DNS record
-func (h *DNSHandler) handleDeleteRecord(ctx context.Context, req *Request) *Response {
+func (h *DNSHandler) handleDeleteRecord(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDNSServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable)
 	}
 
 	var deleteReq DNSDeleteRecordRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.ZoneName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingZoneName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingZoneName)
 	}
 	if deleteReq.RecordName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingRecordName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingRecordName)
 	}
 	if deleteReq.RecordType == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingRecordType)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingRecordType)
 	}
 
 	zone, err := h.dnsService.Zone(ctx, deleteReq.ZoneName)
@@ -783,7 +784,7 @@ func (h *DNSHandler) handleDeleteRecord(ctx context.Context, req *Request) *Resp
 	}
 
 	if err := h.deleteRecordFromZone(zone, deleteReq.RecordName, deleteReq.RecordType); err != nil {
-		return h.errorResponse(StatusNotFound, err)
+		return h.errorResponse(quicwire.StatusNotFound, err)
 	}
 
 	if err := h.dnsService.Save(ctx, zone); err != nil {
@@ -799,30 +800,30 @@ func (h *DNSHandler) handleDeleteRecord(ctx context.Context, req *Request) *Resp
 		Timestamp:  time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDNSEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDNSEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListRecords lists all records in a zone
-func (h *DNSHandler) handleListRecords(ctx context.Context, req *Request) *Response {
+func (h *DNSHandler) handleListRecords(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDNSServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable)
 	}
 
 	var listReq DNSListRecordsRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
 	}
 
 	if listReq.ZoneName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingZoneName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingZoneName)
 	}
 
 	zone, err := h.dnsService.Zone(ctx, listReq.ZoneName)
@@ -839,30 +840,30 @@ func (h *DNSHandler) handleListRecords(ctx context.Context, req *Request) *Respo
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDNSEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDNSEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleResolve resolves a DNS name
-func (h *DNSHandler) handleResolve(ctx context.Context, req *Request) *Response {
+func (h *DNSHandler) handleResolve(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.dnsService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDNSServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDNSServiceNotAvailable)
 	}
 
 	var resolveReq DNSResolveRequest
-	if err := DecodePayload(req.Payload, &resolveReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &resolveReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDNSDecodingFailed{Cause: err})
 	}
 
 	if resolveReq.FQDN == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDNSMissingFQDN)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDNSMissingFQDN)
 	}
 
 	recordType := resolveReq.Type
@@ -884,13 +885,13 @@ func (h *DNSHandler) handleResolve(ctx context.Context, req *Request) *Response 
 		Timestamp:     time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDNSEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDNSEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1562,48 +1563,48 @@ func (h *DNSHandler) recordSetToInfo(rs *entities.RecordSet) *DNSRecordSet {
 }
 
 // errorResponse creates an error response with the given status and error
-func (h *DNSHandler) errorResponse(status byte, err error) *Response {
-	return &Response{
+func (h *DNSHandler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
 }
 
 // dnsErrorResponse maps DNS errors to appropriate status codes
-func (h *DNSHandler) dnsErrorResponse(err error) *Response {
+func (h *DNSHandler) dnsErrorResponse(err error) *quicwire.Response {
 	var status byte
 
 	switch {
 	case errors.Is(err, dns.ErrZoneNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, dns.ErrZoneAlreadyExists):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, dns.ErrDNSSECNotEnabled):
-		status = StatusInvalidRequest
+		status = quicwire.StatusInvalidRequest
 	case errors.Is(err, dns.ErrRegistrationDisabled):
-		status = StatusPermissionDenied
+		status = quicwire.StatusPermissionDenied
 	case errors.Is(err, dns.ErrExternalRegistrationDisabled):
-		status = StatusPermissionDenied
+		status = quicwire.StatusPermissionDenied
 	case errors.Is(err, dns.ErrInternalRegistrationDisabled):
-		status = StatusPermissionDenied
+		status = quicwire.StatusPermissionDenied
 	case errors.Is(err, dns.ErrInvalidIPAddress):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, dns.ErrInvalidPrivateIP):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, dns.ErrInvalidPublicIP):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, dns.ErrInvalidPrivateTLD):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, dns.ErrInvalidPublicTLD):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, dns.ErrParsingDomainName):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, context.Canceled):
-		status = StatusTimeout
+		status = quicwire.StatusTimeout
 	case errors.Is(err, context.DeadlineExceeded):
-		status = StatusTimeout
+		status = quicwire.StatusTimeout
 	default:
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	}
 
 	return h.errorResponse(status, err)

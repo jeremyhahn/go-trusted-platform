@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // getAvailablePort finds and returns an available port
@@ -40,230 +40,9 @@ func getAvailablePort() (int, error) {
 	return listener.LocalAddr().(*net.UDPAddr).Port, nil
 }
 
-func TestNewClientNilConfig(t *testing.T) {
-	_, err := NewClient(nil)
-
-	if err == nil {
-		t.Error("expected error for nil config")
-		return
-	}
-
-	var invalidConfigErr ErrInvalidConfig
-	if !errors.As(err, &invalidConfigErr) {
-		t.Errorf("expected ErrInvalidConfig, got %T: %v", err, err)
-	}
-}
-
-func TestNewClientEmptyServerAddr(t *testing.T) {
-	config := &ClientConfig{
-		ServerAddr: "",
-		Timeout:    10 * time.Second,
-	}
-
-	_, err := NewClient(config)
-
-	if err == nil {
-		t.Error("expected error for empty server address")
-		return
-	}
-
-	var invalidConfigErr ErrInvalidConfig
-	if !errors.As(err, &invalidConfigErr) {
-		t.Errorf("expected ErrInvalidConfig, got %T: %v", err, err)
-		return
-	}
-
-	if invalidConfigErr.Field != "ServerAddr" {
-		t.Errorf("expected error field 'ServerAddr', got '%s'", invalidConfigErr.Field)
-	}
-}
-
-func TestClientConfigValidation(t *testing.T) {
-	tests := []struct {
-		name        string
-		config      *ClientConfig
-		expectError bool
-		errorField  string
-	}{
-		{
-			name: "valid config",
-			config: &ClientConfig{
-				ServerAddr: "localhost:9444",
-				Timeout:    10 * time.Second,
-			},
-			expectError: false,
-		},
-		{
-			name: "empty server addr",
-			config: &ClientConfig{
-				ServerAddr: "",
-				Timeout:    10 * time.Second,
-			},
-			expectError: true,
-			errorField:  "ServerAddr",
-		},
-		{
-			name: "zero timeout defaults",
-			config: &ClientConfig{
-				ServerAddr: "localhost:9444",
-				Timeout:    0,
-			},
-			expectError: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
-
-			if tt.expectError {
-				if err == nil {
-					t.Error("expected error, got nil")
-					return
-				}
-
-				var invalidConfigErr ErrInvalidConfig
-				if !errors.As(err, &invalidConfigErr) {
-					t.Errorf("expected ErrInvalidConfig, got %T", err)
-					return
-				}
-
-				if invalidConfigErr.Field != tt.errorField {
-					t.Errorf("expected error field '%s', got '%s'", tt.errorField, invalidConfigErr.Field)
-				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-			}
-		})
-	}
-}
-
-func TestWithClientLoggerOption(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, io.Discard)
-	opt := WithClientLogger(logger)
-
-	opts := &clientOptions{}
-	opt(opts)
-
-	if opts.logger != logger {
-		t.Error("expected logger to be set")
-	}
-}
-
-func TestWithTokenOption(t *testing.T) {
-	token := "test-token-123"
-	opt := WithToken(token)
-
-	opts := &clientOptions{}
-	opt(opts)
-
-	if opts.token != token {
-		t.Errorf("expected token '%s', got '%s'", token, opts.token)
-	}
-}
-
-func TestClientOptions(t *testing.T) {
-	tests := []struct {
-		name          string
-		options       []ClientOption
-		expectedToken string
-		hasLogger     bool
-	}{
-		{
-			name:          "no options",
-			options:       nil,
-			expectedToken: "",
-			hasLogger:     false,
-		},
-		{
-			name: "with token",
-			options: []ClientOption{
-				WithToken("my-token"),
-			},
-			expectedToken: "my-token",
-			hasLogger:     false,
-		},
-		{
-			name: "with logger",
-			options: []ClientOption{
-				WithClientLogger(logging.NewLogger(slog.LevelDebug, io.Discard)),
-			},
-			expectedToken: "",
-			hasLogger:     true,
-		},
-		{
-			name: "with token and logger",
-			options: []ClientOption{
-				WithToken("bearer-token"),
-				WithClientLogger(logging.NewLogger(slog.LevelDebug, io.Discard)),
-			},
-			expectedToken: "bearer-token",
-			hasLogger:     true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			opts := &clientOptions{}
-			for _, opt := range tt.options {
-				opt(opts)
-			}
-
-			if opts.token != tt.expectedToken {
-				t.Errorf("expected token '%s', got '%s'", tt.expectedToken, opts.token)
-			}
-
-			if tt.hasLogger && opts.logger == nil {
-				t.Error("expected logger to be set")
-			}
-
-			if !tt.hasLogger && opts.logger != nil {
-				t.Error("expected logger to be nil")
-			}
-		})
-	}
-}
-
-func TestDefaultClientConfigValues(t *testing.T) {
-	config := DefaultClientConfig("localhost:9444")
-
-	if config.Timeout != 10*time.Second {
-		t.Errorf("expected Timeout 10s, got %v", config.Timeout)
-	}
-
-	if config.MaxIdleTimeout != 30*time.Second {
-		t.Errorf("expected MaxIdleTimeout 30s, got %v", config.MaxIdleTimeout)
-	}
-
-	if len(config.NextProtos) != 1 {
-		t.Errorf("expected 1 NextProtos, got %d", len(config.NextProtos))
-	}
-
-	if config.NextProtos[0] != "platform-quic" {
-		t.Errorf("expected NextProtos 'platform-quic', got '%s'", config.NextProtos[0])
-	}
-}
-
-func TestClientConfigNilTLSConfig(t *testing.T) {
-	// When TLSConfig is nil, NewClient should create a default one
-	config := &ClientConfig{
-		ServerAddr: "localhost:9444",
-		Timeout:    10 * time.Second,
-		NextProtos: []string{"test-proto"},
-	}
-
-	// Validation should pass
-	err := config.Validate()
-	if err != nil {
-		t.Errorf("unexpected validation error: %v", err)
-	}
-}
-
 func TestClientConfigWithTLSConfig(t *testing.T) {
 	tlsConfig := generateTestTLSConfig()
-	config := &ClientConfig{
+	config := &quicwire.ClientConfig{
 		ServerAddr: "localhost:9444",
 		Timeout:    10 * time.Second,
 		TLSConfig:  tlsConfig,
@@ -275,101 +54,15 @@ func TestClientConfigWithTLSConfig(t *testing.T) {
 	}
 }
 
-func TestClientConfigTimeoutDefaults(t *testing.T) {
-	config := &ClientConfig{
-		ServerAddr: "localhost:9444",
-		Timeout:    0,
-	}
-
-	err := config.Validate()
-	if err != nil {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-
-	if config.Timeout != 10*time.Second {
-		t.Errorf("expected Timeout to default to 10s, got %v", config.Timeout)
-	}
-}
-
-func TestClientConfigNegativeTimeoutDefaults(t *testing.T) {
-	config := &ClientConfig{
-		ServerAddr: "localhost:9444",
-		Timeout:    -5 * time.Second,
-	}
-
-	err := config.Validate()
-	if err != nil {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-
-	if config.Timeout != 10*time.Second {
-		t.Errorf("expected Timeout to default to 10s, got %v", config.Timeout)
-	}
-}
-
-func TestClientOptionChaining(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, io.Discard)
-	token := "chained-token"
-
-	opts := &clientOptions{}
-
-	// Apply options in sequence
-	WithClientLogger(logger)(opts)
-	WithToken(token)(opts)
-
-	if opts.logger != logger {
-		t.Error("expected logger to be set")
-	}
-
-	if opts.token != token {
-		t.Errorf("expected token '%s', got '%s'", token, opts.token)
-	}
-}
-
-func TestClientConfigAddressVariations(t *testing.T) {
-	addresses := []struct {
-		addr  string
-		valid bool
-	}{
-		{"localhost:9444", true},
-		{"127.0.0.1:9444", true},
-		{"192.168.1.1:9444", true},
-		{"example.com:9444", true},
-		{"[::1]:9444", true},
-		{"", false},
-	}
-
-	for _, tt := range addresses {
-		t.Run(tt.addr, func(t *testing.T) {
-			config := &ClientConfig{
-				ServerAddr: tt.addr,
-				Timeout:    10 * time.Second,
-			}
-
-			err := config.Validate()
-
-			if tt.valid {
-				if err != nil {
-					t.Errorf("expected valid address, got error: %v", err)
-				}
-			} else {
-				if err == nil {
-					t.Error("expected error for invalid address")
-				}
-			}
-		})
-	}
-}
-
 // TestNewClientConnectionFailure tests client creation with an unreachable server
 func TestNewClientConnectionFailure(t *testing.T) {
-	config := &ClientConfig{
+	config := &quicwire.ClientConfig{
 		ServerAddr: "127.0.0.1:59999", // Unreachable port
 		Timeout:    500 * time.Millisecond,
 		NextProtos: []string{"trusted-platform"},
 	}
 
-	_, err := NewClient(config)
+	_, err := quicwire.NewClient(config)
 
 	// Should fail to connect
 	if err == nil {
@@ -394,8 +87,8 @@ func TestClientServerIntegration(t *testing.T) {
 	}
 
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: []byte("pong"),
 		},
 	}
@@ -413,13 +106,13 @@ func TestClientServerIntegration(t *testing.T) {
 
 	// Create client with TLS config that trusts the server certificate
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig, WithToken("test-token"))
+	client, err := quicwire.NewClient(clientConfig, quicwire.WithToken("test-token"))
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -442,12 +135,12 @@ func TestClientServerIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	resp, err := client.SendRequest(ctx, OpHealth, nil)
+	resp, err := client.SendRequest(ctx, quicwire.OpHealth, nil)
 	if err != nil {
 		t.Fatalf("SendRequest failed: %v", err)
 	}
 
-	if resp.Status != StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		t.Errorf("expected status OK, got %d", resp.Status)
 	}
 
@@ -487,8 +180,8 @@ func TestClientSendMethod(t *testing.T) {
 
 	// Create a handler that echoes back data
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: nil, // Empty payload
 		},
 	}
@@ -505,13 +198,13 @@ func TestClientSendMethod(t *testing.T) {
 	defer server.Stop()
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig)
+	client, err := quicwire.NewClient(clientConfig)
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -521,7 +214,7 @@ func TestClientSendMethod(t *testing.T) {
 	defer cancel()
 
 	// Test Send with nil request and response data
-	err = client.Send(ctx, OpHealth, nil, nil)
+	err = client.Send(ctx, quicwire.OpHealth, nil, nil)
 	if err != nil {
 		t.Errorf("Send failed: %v", err)
 	}
@@ -544,8 +237,8 @@ func TestClientSendRequestWhenClosed(t *testing.T) {
 	}
 
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: nil,
 		},
 	}
@@ -562,13 +255,13 @@ func TestClientSendRequestWhenClosed(t *testing.T) {
 	defer server.Stop()
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig)
+	client, err := quicwire.NewClient(clientConfig)
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -580,8 +273,8 @@ func TestClientSendRequestWhenClosed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = client.SendRequest(ctx, OpHealth, nil)
-	if !errors.Is(err, ErrClientClosed) {
+	_, err = client.SendRequest(ctx, quicwire.OpHealth, nil)
+	if !errors.Is(err, quicwire.ErrClientClosed) {
 		t.Errorf("expected ErrClientClosed, got %v", err)
 	}
 }
@@ -603,8 +296,8 @@ func TestClientHealth(t *testing.T) {
 	}
 
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: nil,
 		},
 	}
@@ -621,13 +314,13 @@ func TestClientHealth(t *testing.T) {
 	defer server.Stop()
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig)
+	client, err := quicwire.NewClient(clientConfig)
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -659,8 +352,8 @@ func TestNewClientWithTLSConfig(t *testing.T) {
 	}
 
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: nil,
 		},
 	}
@@ -687,13 +380,13 @@ func TestNewClientWithTLSConfig(t *testing.T) {
 		NextProtos: []string{"trusted-platform"},
 	}
 
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig)
+	client, err := quicwire.NewClient(clientConfig)
 	if err != nil {
 		t.Fatalf("failed to create client with TLS config: %v", err)
 	}
@@ -721,8 +414,8 @@ func TestNewClientWithTLSConfigEmptyNextProtos(t *testing.T) {
 	}
 
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: nil,
 		},
 	}
@@ -749,14 +442,14 @@ func TestNewClientWithTLSConfigEmptyNextProtos(t *testing.T) {
 	}
 	clientTLSConfig.NextProtos = nil // Empty
 
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 		NextProtos: []string{"trusted-platform"}, // Should be used
 	}
 
-	client, err := NewClient(clientConfig)
+	client, err := quicwire.NewClient(clientConfig)
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -784,8 +477,8 @@ func TestNewClientWithClientLogger(t *testing.T) {
 	}
 
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: nil,
 		},
 	}
@@ -801,16 +494,16 @@ func TestNewClientWithClientLogger(t *testing.T) {
 	}
 	defer server.Stop()
 
-	logger := logging.NewLogger(slog.LevelDebug, io.Discard)
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig, WithClientLogger(logger))
+	client, err := quicwire.NewClient(clientConfig, quicwire.WithClientLogger(logger))
 	if err != nil {
 		t.Fatalf("failed to create client with logger: %v", err)
 	}
@@ -838,8 +531,8 @@ func TestClientSendWithRequestData(t *testing.T) {
 	}
 
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: nil,
 		},
 	}
@@ -856,13 +549,13 @@ func TestClientSendWithRequestData(t *testing.T) {
 	defer server.Stop()
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig)
+	client, err := quicwire.NewClient(clientConfig)
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -873,7 +566,7 @@ func TestClientSendWithRequestData(t *testing.T) {
 
 	// Test Send with non-nil request data
 	reqData := map[string]string{"test": "value"}
-	err = client.Send(ctx, OpHealth, reqData, nil)
+	err = client.Send(ctx, quicwire.OpHealth, reqData, nil)
 	if err != nil {
 		t.Errorf("Send with request data failed: %v", err)
 	}
@@ -896,10 +589,10 @@ func TestClientSendWithResponseData(t *testing.T) {
 	}
 
 	// Create a handler that returns encoded response data
-	respPayload, _ := EncodePayload(map[string]string{"result": "success"})
+	respPayload, _ := quicwire.EncodePayload(map[string]string{"result": "success"})
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: respPayload,
 		},
 	}
@@ -916,13 +609,13 @@ func TestClientSendWithResponseData(t *testing.T) {
 	defer server.Stop()
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig)
+	client, err := quicwire.NewClient(clientConfig)
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -933,7 +626,7 @@ func TestClientSendWithResponseData(t *testing.T) {
 
 	// Test Send with non-nil response data
 	var respData map[string]string
-	err = client.Send(ctx, OpHealth, nil, &respData)
+	err = client.Send(ctx, quicwire.OpHealth, nil, &respData)
 	if err != nil {
 		t.Errorf("Send with response data failed: %v", err)
 	}
@@ -960,10 +653,10 @@ func TestClientSendWithBothData(t *testing.T) {
 	}
 
 	// Create a handler that returns encoded response data
-	respPayload, _ := EncodePayload(map[string]string{"echo": "data"})
+	respPayload, _ := quicwire.EncodePayload(map[string]string{"echo": "data"})
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: respPayload,
 		},
 	}
@@ -980,13 +673,13 @@ func TestClientSendWithBothData(t *testing.T) {
 	defer server.Stop()
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig)
+	client, err := quicwire.NewClient(clientConfig)
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -998,7 +691,7 @@ func TestClientSendWithBothData(t *testing.T) {
 	// Test Send with both request and response data
 	reqData := map[string]string{"input": "test"}
 	var respData map[string]string
-	err = client.Send(ctx, OpHealth, reqData, &respData)
+	err = client.Send(ctx, quicwire.OpHealth, reqData, &respData)
 	if err != nil {
 		t.Errorf("Send with both data failed: %v", err)
 	}
@@ -1025,8 +718,8 @@ func TestClientSendEncodeError(t *testing.T) {
 	}
 
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: nil,
 		},
 	}
@@ -1043,13 +736,13 @@ func TestClientSendEncodeError(t *testing.T) {
 	defer server.Stop()
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig)
+	client, err := quicwire.NewClient(clientConfig)
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -1060,7 +753,7 @@ func TestClientSendEncodeError(t *testing.T) {
 
 	// Test Send with unencodable data (channel is unencodable)
 	reqData := make(chan int)
-	err = client.Send(ctx, OpHealth, reqData, nil)
+	err = client.Send(ctx, quicwire.OpHealth, reqData, nil)
 	if err == nil {
 		t.Error("expected encode error, got nil")
 	}
@@ -1084,8 +777,8 @@ func TestClientSendDecodeError(t *testing.T) {
 
 	// Create a handler that returns invalid payload for decoding
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: []byte("invalid msgpack data"),
 		},
 	}
@@ -1102,13 +795,13 @@ func TestClientSendDecodeError(t *testing.T) {
 	defer server.Stop()
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig)
+	client, err := quicwire.NewClient(clientConfig)
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -1119,7 +812,7 @@ func TestClientSendDecodeError(t *testing.T) {
 
 	// Test Send with response data that will fail to decode
 	var respData map[string]string
-	err = client.Send(ctx, OpHealth, nil, &respData)
+	err = client.Send(ctx, quicwire.OpHealth, nil, &respData)
 	if err == nil {
 		t.Error("expected decode error, got nil")
 	}
@@ -1143,8 +836,8 @@ func TestClientSendRequestError(t *testing.T) {
 
 	// Create a handler that returns error status
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusInternalError,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusInternalError,
 			Payload: []byte("internal error"),
 		},
 	}
@@ -1161,13 +854,13 @@ func TestClientSendRequestError(t *testing.T) {
 	defer server.Stop()
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
-	clientConfig := &ClientConfig{
+	clientConfig := &quicwire.ClientConfig{
 		ServerAddr: listenAddr,
 		Timeout:    5 * time.Second,
 		TLSConfig:  clientTLSConfig,
 	}
 
-	client, err := NewClient(clientConfig)
+	client, err := quicwire.NewClient(clientConfig)
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -1177,7 +870,7 @@ func TestClientSendRequestError(t *testing.T) {
 	defer cancel()
 
 	// Test Send when server returns error
-	err = client.Send(ctx, OpHealth, nil, nil)
+	err = client.Send(ctx, quicwire.OpHealth, nil, nil)
 	if err == nil {
 		t.Error("expected error from server, got nil")
 	}

@@ -22,44 +22,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-)
-
-// Attestation operation codes (using reserved space in 0x70-0x7F range)
-const (
-	// OpAttestGetManifest retrieves an attestation manifest
-	OpAttestGetManifest byte = 0x76 // Reusing OpAttestGetReport for manifest get
-
-	// OpAttestBuildManifest builds a new attestation manifest
-	OpAttestBuildManifest byte = 0x7C
-
-	// OpAttestVerifyManifest verifies an attestation manifest
-	OpAttestVerifyManifest byte = 0x7D
-
-	// OpAttestHost collects host attestation
-	OpAttestHost byte = 0x7E
-
-	// OpAttestVM performs VM attestation
-	OpAttestVMWorkload byte = 0x7F
-
-	// Using extended attestation codes (0xED-0xEF)
-	// OpAttestContainerWorkload performs container attestation
-	OpAttestContainerWorkload byte = 0xED
-
-	// OpAttestDeviceWorkload performs device attestation
-	OpAttestDeviceWorkload byte = 0xEE
-
-	// OpAttestListReports lists attestation reports
-	OpAttestListReports byte = 0xEF
-
-	// Using additional codes (0xEB-0xEC)
-	// OpAttestGetReportByID retrieves an attestation report by ID
-	OpAttestGetReportByID byte = 0x77
-
-	// OpAttestCreatePolicy creates an attestation policy
-	OpAttestCreatePolicy byte = 0xAA
-
-	// OpAttestListPolicies lists attestation policies
-	OpAttestListPolicies byte = 0xAB
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Attestation pagination defaults
@@ -273,40 +236,40 @@ func NewAttestationHandler(logger *logging.Logger, service AttestationServiceInt
 }
 
 // HandleRequest processes an attestation request and returns a response
-func (h *AttestationHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{
-			Status:  StatusInvalidRequest,
-			Payload: []byte(ErrNilRequest.Error()),
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
+			Payload: []byte(quicwire.ErrNilRequest.Error()),
 		}
 	}
 
 	switch req.Opcode {
-	case OpAttestGetManifest:
+	case quicwire.OpAttestGetManifest:
 		return h.handleGetManifest(ctx, req)
-	case OpAttestBuildManifest:
+	case quicwire.OpAttestBuildManifest:
 		return h.handleBuildManifest(ctx, req)
-	case OpAttestVerifyManifest:
+	case quicwire.OpAttestVerifyManifest:
 		return h.handleVerifyManifest(ctx, req)
-	case OpAttestHost:
+	case quicwire.OpAttestHost:
 		return h.handleCollectHostAttestation(ctx, req)
-	case OpAttestVMWorkload:
+	case quicwire.OpAttestVMWorkload:
 		return h.handleAttestVM(ctx, req)
-	case OpAttestContainerWorkload:
+	case quicwire.OpAttestContainerWorkload:
 		return h.handleAttestContainer(ctx, req)
-	case OpAttestDeviceWorkload:
+	case quicwire.OpAttestDeviceWorkload:
 		return h.handleAttestDevice(ctx, req)
-	case OpAttestListReports:
+	case quicwire.OpAttestListReports:
 		return h.handleListReports(ctx, req)
-	case OpAttestGetReportByID:
+	case quicwire.OpAttestGetReportByID:
 		return h.handleGetReport(ctx, req)
-	case OpAttestCreatePolicy:
+	case quicwire.OpAttestCreatePolicy:
 		return h.handleCreatePolicy(ctx, req)
-	case OpAttestListPolicies:
+	case quicwire.OpAttestListPolicies:
 		return h.handleListPolicies(ctx, req)
 	default:
-		return &Response{
-			Status:  StatusInvalidRequest,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("unknown attestation operation"),
 		}
 	}
@@ -626,14 +589,14 @@ type ListPoliciesResponse struct {
 // =============================================================================
 
 // handleGetManifest retrieves an attestation manifest
-func (h *AttestationHandler) handleGetManifest(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) handleGetManifest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrAttestationServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
 	}
 
 	var getReq GetManifestRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
 	}
 
 	m, err := h.service.GetManifest(ctx, getReq.ID)
@@ -643,7 +606,7 @@ func (h *AttestationHandler) handleGetManifest(ctx context.Context, req *Request
 	}
 
 	if m == nil {
-		return h.errorResponse(StatusNotFound, ErrAttestationManifestNotFound(getReq))
+		return h.errorResponse(quicwire.StatusNotFound, ErrAttestationManifestNotFound(getReq))
 	}
 
 	resp := &GetManifestResponse{
@@ -651,32 +614,32 @@ func (h *AttestationHandler) handleGetManifest(ctx context.Context, req *Request
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleBuildManifest builds a new attestation manifest
-func (h *AttestationHandler) handleBuildManifest(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) handleBuildManifest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrAttestationServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
 	}
 
 	var buildReq BuildManifestRequest
-	if err := DecodePayload(req.Payload, &buildReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &buildReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
 	}
 
 	// Validate and parse request
 	config, err := h.parseBuildManifestRequest(&buildReq)
 	if err != nil {
-		return h.errorResponse(StatusInvalidArgument, err)
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	m, err := h.service.BuildManifest(ctx, config)
@@ -690,36 +653,36 @@ func (h *AttestationHandler) handleBuildManifest(ctx context.Context, req *Reque
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleVerifyManifest verifies an attestation manifest
-func (h *AttestationHandler) handleVerifyManifest(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) handleVerifyManifest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrAttestationServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
 	}
 
 	var verifyReq VerifyManifestRequest
-	if err := DecodePayload(req.Payload, &verifyReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &verifyReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
 	}
 
 	if verifyReq.Manifest == nil {
-		return h.errorResponse(StatusInvalidArgument, ErrAttestationMissingManifest)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrAttestationMissingManifest)
 	}
 
 	// Convert request to manifest
 	m, err := h.dataToManifest(verifyReq.Manifest)
 	if err != nil {
-		return h.errorResponse(StatusInvalidArgument, err)
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	// Parse verify options
@@ -737,31 +700,31 @@ func (h *AttestationHandler) handleVerifyManifest(ctx context.Context, req *Requ
 
 	resp := h.verificationResultToResponse(result)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleCollectHostAttestation collects host attestation
-func (h *AttestationHandler) handleCollectHostAttestation(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) handleCollectHostAttestation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrAttestationServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
 	}
 
 	var collectReq CollectHostAttestationRequest
-	if err := DecodePayload(req.Payload, &collectReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &collectReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
 	}
 
 	opts, err := h.parseCollectOptions(&collectReq)
 	if err != nil {
-		return h.errorResponse(StatusInvalidArgument, err)
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	attestation, err := h.service.CollectHostAttestation(ctx, opts)
@@ -775,36 +738,36 @@ func (h *AttestationHandler) handleCollectHostAttestation(ctx context.Context, r
 		Timestamp:   time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleAttestVM performs VM attestation
-func (h *AttestationHandler) handleAttestVM(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) handleAttestVM(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrAttestationServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
 	}
 
 	var attestReq AttestVMRequest
-	if err := DecodePayload(req.Payload, &attestReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &attestReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
 	}
 
 	if attestReq.VMID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrAttestationMissingVMID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrAttestationMissingVMID)
 	}
 
 	opts, err := h.parseWorkloadAttestOptions(&attestReq.Nonce, attestReq.PCRIndices,
 		attestReq.HashAlgorithm, attestReq.IncludeEventLog, attestReq.PolicyID)
 	if err != nil {
-		return h.errorResponse(StatusInvalidArgument, err)
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	attestation, err := h.service.AttestVM(ctx, attestReq.VMID, opts)
@@ -822,36 +785,36 @@ func (h *AttestationHandler) handleAttestVM(ctx context.Context, req *Request) *
 		Timestamp:          time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleAttestContainer performs container attestation
-func (h *AttestationHandler) handleAttestContainer(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) handleAttestContainer(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrAttestationServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
 	}
 
 	var attestReq AttestContainerRequest
-	if err := DecodePayload(req.Payload, &attestReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &attestReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
 	}
 
 	if attestReq.ContainerID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrAttestationMissingContainerID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrAttestationMissingContainerID)
 	}
 
 	opts, err := h.parseWorkloadAttestOptions(&attestReq.Nonce, attestReq.PCRIndices,
 		attestReq.HashAlgorithm, attestReq.IncludeEventLog, attestReq.PolicyID)
 	if err != nil {
-		return h.errorResponse(StatusInvalidArgument, err)
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	attestation, err := h.service.AttestContainer(ctx, attestReq.ContainerID, opts)
@@ -869,36 +832,36 @@ func (h *AttestationHandler) handleAttestContainer(ctx context.Context, req *Req
 		Timestamp:          time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleAttestDevice performs device attestation
-func (h *AttestationHandler) handleAttestDevice(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) handleAttestDevice(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrAttestationServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
 	}
 
 	var attestReq AttestDeviceRequest
-	if err := DecodePayload(req.Payload, &attestReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &attestReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
 	}
 
 	if attestReq.DeviceID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrAttestationMissingDeviceID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrAttestationMissingDeviceID)
 	}
 
 	opts, err := h.parseWorkloadAttestOptions(&attestReq.Nonce, attestReq.PCRIndices,
 		attestReq.HashAlgorithm, attestReq.IncludeEventLog, attestReq.PolicyID)
 	if err != nil {
-		return h.errorResponse(StatusInvalidArgument, err)
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
 	result, err := h.service.AttestDevice(ctx, attestReq.DeviceID, opts)
@@ -909,26 +872,26 @@ func (h *AttestationHandler) handleAttestDevice(ctx context.Context, req *Reques
 
 	resp := h.deviceResultToResponse(result)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListReports lists attestation reports
-func (h *AttestationHandler) handleListReports(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) handleListReports(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrAttestationServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
 	}
 
 	var listReq ListReportsRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
 	}
 
 	filter := h.parseReportFilter(&listReq)
@@ -951,30 +914,30 @@ func (h *AttestationHandler) handleListReports(ctx context.Context, req *Request
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetReport retrieves an attestation report by ID
-func (h *AttestationHandler) handleGetReport(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) handleGetReport(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrAttestationServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
 	}
 
 	var getReq GetReportRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
 	}
 
 	if getReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrAttestationMissingReportID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrAttestationMissingReportID)
 	}
 
 	report, err := h.service.GetReport(ctx, getReq.ID)
@@ -984,7 +947,7 @@ func (h *AttestationHandler) handleGetReport(ctx context.Context, req *Request) 
 	}
 
 	if report == nil {
-		return h.errorResponse(StatusNotFound, ErrAttestationReportNotFound(getReq))
+		return h.errorResponse(quicwire.StatusNotFound, ErrAttestationReportNotFound(getReq))
 	}
 
 	reportData := h.reportToData(report)
@@ -993,30 +956,30 @@ func (h *AttestationHandler) handleGetReport(ctx context.Context, req *Request) 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleCreatePolicy creates an attestation policy
-func (h *AttestationHandler) handleCreatePolicy(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) handleCreatePolicy(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrAttestationServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
 	}
 
 	var createReq CreatePolicyRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
 	}
 
 	if createReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrAttestationMissingPolicyName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrAttestationMissingPolicyName)
 	}
 
 	policyReq := h.dataToPolicyCreateRequest(&createReq)
@@ -1032,26 +995,26 @@ func (h *AttestationHandler) handleCreatePolicy(ctx context.Context, req *Reques
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListPolicies lists attestation policies
-func (h *AttestationHandler) handleListPolicies(ctx context.Context, req *Request) *Response {
+func (h *AttestationHandler) handleListPolicies(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrAttestationServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
 	}
 
 	var listReq ListPoliciesRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
 	}
 
 	filter := h.parsePolicyFilter(&listReq)
@@ -1074,13 +1037,13 @@ func (h *AttestationHandler) handleListPolicies(ctx context.Context, req *Reques
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1669,46 +1632,46 @@ func (h *AttestationHandler) getDefaultPCRIndices() []int {
 }
 
 // errorResponse creates an error response with the given status and error
-func (h *AttestationHandler) errorResponse(status byte, err error) *Response {
-	return &Response{
+func (h *AttestationHandler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
 }
 
 // attestationErrorResponse maps attestation errors to appropriate status codes
-func (h *AttestationHandler) attestationErrorResponse(err error) *Response {
+func (h *AttestationHandler) attestationErrorResponse(err error) *quicwire.Response {
 	var status byte
 
 	switch {
 	case errors.Is(err, manifest.ErrBuilderNotInitialized{}):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	case errors.Is(err, manifest.ErrVerifierNotInitialized{}):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	case errors.Is(err, manifest.ErrSignerNotInitialized{}):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	case errors.Is(err, manifest.ErrHostNotAttested{}):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, manifest.ErrEmptyManifest{}):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	default:
 		errMsg := err.Error()
 		lowerMsg := strings.ToLower(errMsg)
 		switch {
 		case containsAnyAttest(lowerMsg, "not found", "does not exist", "no such"):
-			status = StatusNotFound
+			status = quicwire.StatusNotFound
 		case containsAnyAttest(lowerMsg, "invalid", "required", "must be", "cannot be"):
-			status = StatusInvalidArgument
+			status = quicwire.StatusInvalidArgument
 		case containsAnyAttest(lowerMsg, "expired"):
-			status = StatusTimeout
+			status = quicwire.StatusTimeout
 		case containsAnyAttest(lowerMsg, "not available", "unavailable", "not initialized"):
-			status = StatusUnavailable
+			status = quicwire.StatusUnavailable
 		case containsAnyAttest(lowerMsg, "permission", "denied", "unauthorized"):
-			status = StatusPermissionDenied
+			status = quicwire.StatusPermissionDenied
 		case containsAnyAttest(lowerMsg, "already exists", "duplicate"):
-			status = StatusAlreadyExists
+			status = quicwire.StatusAlreadyExists
 		default:
-			status = StatusInternalError
+			status = quicwire.StatusInternalError
 		}
 	}
 

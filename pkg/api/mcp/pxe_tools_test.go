@@ -22,6 +22,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -285,7 +286,7 @@ func newPXETestRegistry(pxeSvc pxe.Service) *ToolRegistry {
 	return &ToolRegistry{
 		service: pxeProvider,
 		logger:  newTestLogger(),
-		tools:   make([]ToolDefinition, 0),
+		tools:   make([]mcpwire.ToolDefinition, 0),
 	}
 }
 
@@ -1359,7 +1360,7 @@ func TestFormatEventList(t *testing.T) {
 
 func TestRegisterPXETools(t *testing.T) {
 	registry := &ToolRegistry{
-		tools: make([]ToolDefinition, 0),
+		tools: make([]mcpwire.ToolDefinition, 0),
 	}
 
 	registry.registerPXETools()
@@ -1400,7 +1401,7 @@ func TestRegisterPXETools(t *testing.T) {
 
 func TestPXEToolDefinitions_HaveDescriptions(t *testing.T) {
 	registry := &ToolRegistry{
-		tools: make([]ToolDefinition, 0),
+		tools: make([]mcpwire.ToolDefinition, 0),
 	}
 
 	registry.registerPXETools()
@@ -1417,7 +1418,7 @@ func TestPXEToolDefinitions_HaveDescriptions(t *testing.T) {
 
 func TestPXEToolDefinitions_RequiredFields(t *testing.T) {
 	registry := &ToolRegistry{
-		tools: make([]ToolDefinition, 0),
+		tools: make([]mcpwire.ToolDefinition, 0),
 	}
 
 	registry.registerPXETools()
@@ -1487,7 +1488,7 @@ func TestGetPXEService_WithoutPXEProvider(t *testing.T) {
 	registry := &ToolRegistry{
 		service: mockSvc,
 		logger:  newTestLogger(),
-		tools:   make([]ToolDefinition, 0),
+		tools:   make([]mcpwire.ToolDefinition, 0),
 	}
 
 	svc := registry.getPXEService()

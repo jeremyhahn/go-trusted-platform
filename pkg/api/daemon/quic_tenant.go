@@ -65,29 +65,29 @@ package daemon
 import (
 	"context"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Tenant QUIC opcodes - aliased from quic.protocol for convenience
 const (
-	OpTenantList         = quic.OpTenantList         // 0xDB
-	OpTenantGet          = quic.OpTenantGet          // 0xDC
-	OpTenantGetByName    = quic.OpTenantGetByName    // 0xDD
-	OpTenantCreate       = quic.OpTenantCreate       // 0xDE
-	OpTenantUpdate       = quic.OpTenantUpdate       // 0xDF
-	OpTenantDelete       = quic.OpTenantDelete       // 0xE0
-	OpTenantSuspend      = quic.OpTenantSuspend      // 0xE1
-	OpTenantResume       = quic.OpTenantResume       // 0xE2
-	OpTenantGetQuotas    = quic.OpTenantGetQuotas    // 0xE3
-	OpTenantUpdateQuotas = quic.OpTenantUpdateQuotas // 0xE4
-	OpTenantGetUsage     = quic.OpTenantGetUsage     // 0xE5
-	OpTenantCheckQuota   = quic.OpTenantCheckQuota   // 0xE6
-	OpTenantSync         = quic.OpTenantSync         // 0xE9
-	OpTenantRotateDEK    = quic.OpTenantRotateDEK    // 0xEA
-	OpTenantGetDEKStatus = quic.OpTenantGetDEKStatus // 0xEB
+	OpTenantList         = quicwire.OpTenantList         // 0xDB
+	OpTenantGet          = quicwire.OpTenantGet          // 0xDC
+	OpTenantGetByName    = quicwire.OpTenantGetByName    // 0xDD
+	OpTenantCreate       = quicwire.OpTenantCreate       // 0xDE
+	OpTenantUpdate       = quicwire.OpTenantUpdate       // 0xDF
+	OpTenantDelete       = quicwire.OpTenantDelete       // 0xE0
+	OpTenantSuspend      = quicwire.OpTenantSuspend      // 0xE1
+	OpTenantResume       = quicwire.OpTenantResume       // 0xE2
+	OpTenantGetQuotas    = quicwire.OpTenantGetQuotas    // 0xE3
+	OpTenantUpdateQuotas = quicwire.OpTenantUpdateQuotas // 0xE4
+	OpTenantGetUsage     = quicwire.OpTenantGetUsage     // 0xE5
+	OpTenantCheckQuota   = quicwire.OpTenantCheckQuota   // 0xE6
+	OpTenantSync         = quicwire.OpTenantSync         // 0xE9
+	OpTenantRotateDEK    = quicwire.OpTenantRotateDEK    // 0xEA
+	OpTenantGetDEKStatus = quicwire.OpTenantGetDEKStatus // 0xEB
 )
 
 // =============================================================================
@@ -157,9 +157,9 @@ func (h *QUICServiceHandler) SetTenantManager(mgr TenantManagerInterface) {
 // handleTenantOperation routes tenant opcodes to their pb-delegating handlers.
 // Readiness is gated on the shared *TenantGRPCServer delegate rather than the
 // retained tenant manager interface.
-func (h *QUICServiceHandler) handleTenantOperation(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.tenantGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "tenant"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "tenant"})
 	}
 
 	switch req.Opcode {
@@ -194,16 +194,16 @@ func (h *QUICServiceHandler) handleTenantOperation(ctx context.Context, req *qui
 	case OpTenantGetDEKStatus:
 		return h.handleTenantGetDEKStatus(ctx, req)
 	default:
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
 	}
 }
 
 // handleTenantList lists tenants. The list request payload is optional.
-func (h *QUICServiceHandler) handleTenantList(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.ListTenantsRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -215,10 +215,10 @@ func (h *QUICServiceHandler) handleTenantList(ctx context.Context, req *quic.Req
 }
 
 // handleTenantGet gets a tenant by ID.
-func (h *QUICServiceHandler) handleTenantGet(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.GetTenantRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.GetTenant(ctx, &pbReq)
@@ -229,10 +229,10 @@ func (h *QUICServiceHandler) handleTenantGet(ctx context.Context, req *quic.Requ
 }
 
 // handleTenantGetByName gets a tenant by name.
-func (h *QUICServiceHandler) handleTenantGetByName(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantGetByName(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.GetTenantByNameRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.GetTenantByName(ctx, &pbReq)
@@ -245,10 +245,10 @@ func (h *QUICServiceHandler) handleTenantGetByName(ctx context.Context, req *qui
 // handleTenantCreate creates a tenant. The pb request carries the uint32 VLAN
 // range and the nested ComputeQuota/NetworkQuota/StorageQuota that the former
 // flat decode silently dropped.
-func (h *QUICServiceHandler) handleTenantCreate(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.CreateTenantRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.CreateTenant(ctx, &pbReq)
@@ -259,10 +259,10 @@ func (h *QUICServiceHandler) handleTenantCreate(ctx context.Context, req *quic.R
 }
 
 // handleTenantUpdate updates tenant metadata.
-func (h *QUICServiceHandler) handleTenantUpdate(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantUpdate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.UpdateTenantRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.UpdateTenant(ctx, &pbReq)
@@ -273,10 +273,10 @@ func (h *QUICServiceHandler) handleTenantUpdate(ctx context.Context, req *quic.R
 }
 
 // handleTenantDelete deletes a tenant and all its resources.
-func (h *QUICServiceHandler) handleTenantDelete(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.DeleteTenantRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.DeleteTenant(ctx, &pbReq)
@@ -287,10 +287,10 @@ func (h *QUICServiceHandler) handleTenantDelete(ctx context.Context, req *quic.R
 }
 
 // handleTenantSuspend suspends a tenant (blocks traffic).
-func (h *QUICServiceHandler) handleTenantSuspend(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantSuspend(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.SuspendTenantRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.SuspendTenant(ctx, &pbReq)
@@ -301,10 +301,10 @@ func (h *QUICServiceHandler) handleTenantSuspend(ctx context.Context, req *quic.
 }
 
 // handleTenantResume resumes a suspended tenant.
-func (h *QUICServiceHandler) handleTenantResume(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantResume(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.ResumeTenantRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.ResumeTenant(ctx, &pbReq)
@@ -315,10 +315,10 @@ func (h *QUICServiceHandler) handleTenantResume(ctx context.Context, req *quic.R
 }
 
 // handleTenantGetQuotas returns tenant quotas.
-func (h *QUICServiceHandler) handleTenantGetQuotas(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantGetQuotas(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.GetQuotasRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.GetQuotas(ctx, &pbReq)
@@ -329,10 +329,10 @@ func (h *QUICServiceHandler) handleTenantGetQuotas(ctx context.Context, req *qui
 }
 
 // handleTenantUpdateQuotas updates tenant quotas.
-func (h *QUICServiceHandler) handleTenantUpdateQuotas(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantUpdateQuotas(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.UpdateQuotasRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.UpdateQuotas(ctx, &pbReq)
@@ -343,10 +343,10 @@ func (h *QUICServiceHandler) handleTenantUpdateQuotas(ctx context.Context, req *
 }
 
 // handleTenantGetUsage returns tenant resource usage.
-func (h *QUICServiceHandler) handleTenantGetUsage(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantGetUsage(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.GetUsageRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.GetUsage(ctx, &pbReq)
@@ -359,10 +359,10 @@ func (h *QUICServiceHandler) handleTenantGetUsage(ctx context.Context, req *quic
 // handleTenantCheckQuota checks whether a resource request can be fulfilled.
 // The delegate returns Available=false in-band (not an error) when the quota
 // is exhausted, matching the gRPC transport semantics.
-func (h *QUICServiceHandler) handleTenantCheckQuota(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantCheckQuota(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.CheckQuotaRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.CheckQuota(ctx, &pbReq)
@@ -374,11 +374,11 @@ func (h *QUICServiceHandler) handleTenantCheckQuota(ctx context.Context, req *qu
 
 // handleTenantSync synchronizes tenant manager state with external systems.
 // The sync request payload is optional.
-func (h *QUICServiceHandler) handleTenantSync(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantSync(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.SyncTenantsRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -390,10 +390,10 @@ func (h *QUICServiceHandler) handleTenantSync(ctx context.Context, req *quic.Req
 }
 
 // handleTenantRotateDEK rotates the DEK for a tenant.
-func (h *QUICServiceHandler) handleTenantRotateDEK(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantRotateDEK(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.RotateTenantDEKRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.RotateTenantDEK(ctx, &pbReq)
@@ -404,10 +404,10 @@ func (h *QUICServiceHandler) handleTenantRotateDEK(ctx context.Context, req *qui
 }
 
 // handleTenantGetDEKStatus returns the DEK status for a tenant.
-func (h *QUICServiceHandler) handleTenantGetDEKStatus(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantGetDEKStatus(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var pbReq platformv1.GetTenantDEKStatusRequest
-	if err := quic.DecodePayload(req.Payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.GetTenantDEKStatus(ctx, &pbReq)
@@ -425,37 +425,37 @@ func (h *QUICServiceHandler) handleTenantGetDEKStatus(ctx context.Context, req *
 // (OpTenantBarrierCategory, 0x9E). The first byte of the payload is the
 // sub-opcode that selects the barrier operation; the remaining bytes carry the
 // codec-encoded platform.v1 sub-request.
-func (h *QUICServiceHandler) handleTenantBarrierCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTenantBarrierCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.tenantGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "tenant"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "tenant"})
 	}
 
 	if len(req.Payload) == 0 {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
 	}
 
 	subOpcode := req.Payload[0]
 	subPayload := req.Payload[1:]
 
 	switch subOpcode {
-	case quic.TenantBarrierSubInit:
+	case quicwire.TenantBarrierSubInit:
 		return h.handleTenantBarrierInit(ctx, subPayload)
-	case quic.TenantBarrierSubUnseal:
+	case quicwire.TenantBarrierSubUnseal:
 		return h.handleTenantBarrierUnseal(ctx, subPayload)
-	case quic.TenantBarrierSubSeal:
+	case quicwire.TenantBarrierSubSeal:
 		return h.handleTenantBarrierSeal(ctx, subPayload)
-	case quic.TenantBarrierSubStatus:
+	case quicwire.TenantBarrierSubStatus:
 		return h.handleTenantBarrierStatus(ctx, subPayload)
 	default:
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: subOpcode})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: subOpcode})
 	}
 }
 
 // handleTenantBarrierInit handles the explicit barrier init sub-operation.
-func (h *QUICServiceHandler) handleTenantBarrierInit(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleTenantBarrierInit(ctx context.Context, payload []byte) *quicwire.Response {
 	var pbReq platformv1.InitTenantBarrierRequest
-	if err := quic.DecodePayload(payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.InitTenantBarrier(ctx, &pbReq)
@@ -466,10 +466,10 @@ func (h *QUICServiceHandler) handleTenantBarrierInit(ctx context.Context, payloa
 }
 
 // handleTenantBarrierUnseal handles the barrier unseal sub-operation.
-func (h *QUICServiceHandler) handleTenantBarrierUnseal(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleTenantBarrierUnseal(ctx context.Context, payload []byte) *quicwire.Response {
 	var pbReq platformv1.UnsealTenantBarrierRequest
-	if err := quic.DecodePayload(payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.UnsealTenantBarrier(ctx, &pbReq)
@@ -480,10 +480,10 @@ func (h *QUICServiceHandler) handleTenantBarrierUnseal(ctx context.Context, payl
 }
 
 // handleTenantBarrierSeal handles the barrier seal sub-operation.
-func (h *QUICServiceHandler) handleTenantBarrierSeal(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleTenantBarrierSeal(ctx context.Context, payload []byte) *quicwire.Response {
 	var pbReq platformv1.SealTenantBarrierRequest
-	if err := quic.DecodePayload(payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.SealTenantBarrier(ctx, &pbReq)
@@ -494,10 +494,10 @@ func (h *QUICServiceHandler) handleTenantBarrierSeal(ctx context.Context, payloa
 }
 
 // handleTenantBarrierStatus handles the barrier status sub-operation.
-func (h *QUICServiceHandler) handleTenantBarrierStatus(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleTenantBarrierStatus(ctx context.Context, payload []byte) *quicwire.Response {
 	var pbReq platformv1.GetTenantBarrierStatusRequest
-	if err := quic.DecodePayload(payload, &pbReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &pbReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.tenantGRPC.GetTenantBarrierStatus(ctx, &pbReq)

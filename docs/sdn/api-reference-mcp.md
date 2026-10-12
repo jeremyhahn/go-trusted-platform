@@ -1,6 +1,6 @@
 # SDN MCP API Reference
 
-Transport: MCP (stdio / HTTP, port 9445).
+Transport: MCP (stdio / HTTPS, port 9445).
 
 Tool definitions live in `pkg/api/mcp/tools.go`. OAuth scopes
 (`sdn:read`, `sdn:write`, `sdn:delete`) are mapped per tool in

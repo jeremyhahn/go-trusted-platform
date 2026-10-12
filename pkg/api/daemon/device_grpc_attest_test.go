@@ -23,9 +23,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	quic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 func TestDeviceGRPCService_AttestDevice_Success(t *testing.T) {
@@ -146,24 +146,24 @@ func TestQUICDeviceAttest_IsNoLongerNotImplemented(t *testing.T) {
 	h.SetDeviceVerdictSink(f.sink)
 	h.deviceGRPC.verifier.now = func() time.Time { return f.now }
 
-	payload, err := quic.EncodePayload(&platformv1.AttestDeviceRequest{
+	payload, err := quicwire.EncodePayload(&platformv1.AttestDeviceRequest{
 		DeviceId: itoa(f.device.ID),
 		Evidence: f.evidence(t, []byte("fresh-nonce-000004"), goldenPCRs()),
 	})
 	require.NoError(t, err)
 
-	resp := h.handleDeviceOperation(context.Background(), &quic.Request{
-		Opcode:  quic.OpDeviceAttest,
+	resp := h.handleDeviceOperation(context.Background(), &quicwire.Request{
+		Opcode:  quicwire.OpDeviceAttest,
 		Payload: payload,
 	})
 
 	require.NotNil(t, resp)
-	assert.NotEqual(t, quic.StatusNotImplemented, resp.Status,
+	assert.NotEqual(t, quicwire.StatusNotImplemented, resp.Status,
 		"OpDeviceAttest must not answer StatusNotImplemented on the live dispatcher")
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var decoded platformv1.AttestDeviceResponse
-	require.NoError(t, quic.DecodePayload(resp.Payload, &decoded))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &decoded))
 	assert.True(t, decoded.GetVerified(), "QUIC must reach the same verdict as gRPC over the same verifier")
 	assert.True(t, decoded.GetAkCertificateVerified())
 }

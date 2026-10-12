@@ -431,7 +431,7 @@ func (s *ConfigSyncer) syncOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	routes, pools, version := sdkproxy.ConfigFromProto(resp)
+	routes, pools, version := proxy.ConfigFromProto(resp)
 	if s.synced.Load() && version == s.version.Load() {
 		return nil
 	}

@@ -13,7 +13,11 @@
 
 package mcp
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+)
 
 // =============================================================================
 // NTP (time synchronization) Tool Registration
@@ -32,7 +36,7 @@ func emptyObjectSchema() map[string]interface{} {
 // straight from chronyd's control socket — they are live measurements, never
 // cached guesses.
 func (r *ToolRegistry) registerNTPTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name: "ntp_status",
 		Description: "Report the node's clock synchronization state: synced flag, stratum, leap status, " +
 			"current offset, root dispersion, last sync time, serve/consume mode, reachable source count, " +
@@ -40,14 +44,14 @@ func (r *ToolRegistry) registerNTPTools() {
 		InputSchema: emptyObjectSchema(),
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name: "ntp_sources",
 		Description: "List every configured time source with its selection state, stratum, poll interval, " +
 			"reachability register, last receive time, and measured offset",
 		InputSchema: emptyObjectSchema(),
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name: "ntp_step",
 		Description: "Force an immediate clock correction (operator recovery). Fails when no time source is " +
 			"reachable rather than moving the clock on stale data",

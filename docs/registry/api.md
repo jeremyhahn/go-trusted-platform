@@ -179,7 +179,7 @@ and remains an open question for the owner.
 
 ## 6. Status and error mapping
 
-QUIC status bytes (`pkg/api/quic/protocol.go`) are the platform's canonical
+QUIC status bytes (`sdk/go/wire/quicwire/protocol.go`) are the platform's canonical
 status vocabulary and the other transports map onto the same set:
 
 | Byte | Name | REST | Registry cause |

@@ -339,7 +339,7 @@ func (s *ProxyGRPCService) CreateRoute(
 	if req.GetRoute() == nil {
 		return nil, status.Error(codes.InvalidArgument, ErrMissingRoute{}.Error())
 	}
-	route := ProxyRouteFromProto(req.GetRoute())
+	route := proxy.RouteFromProto(req.GetRoute())
 	if route.ID == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrMissingRouteID{}.Error())
 	}
@@ -348,7 +348,7 @@ func (s *ProxyGRPCService) CreateRoute(
 		return nil, s.mapError("CreateRoute", err)
 	}
 	return &platformv1.CreateProxyRouteResponse{
-		Route:   ProxyRouteToProto(stored),
+		Route:   proxy.RouteToProto(stored),
 		Version: version,
 	}, nil
 }
@@ -368,7 +368,7 @@ func (s *ProxyGRPCService) GetRoute(
 	if err != nil {
 		return nil, s.mapError("GetRoute", err)
 	}
-	return &platformv1.GetProxyRouteResponse{Route: ProxyRouteToProto(route)}, nil
+	return &platformv1.GetProxyRouteResponse{Route: proxy.RouteToProto(route)}, nil
 }
 
 // UpdateRoute replaces an existing proxy route.
@@ -382,7 +382,7 @@ func (s *ProxyGRPCService) UpdateRoute(
 	if req.GetRoute() == nil {
 		return nil, status.Error(codes.InvalidArgument, ErrMissingRoute{}.Error())
 	}
-	route := ProxyRouteFromProto(req.GetRoute())
+	route := proxy.RouteFromProto(req.GetRoute())
 	switch {
 	case route.ID == "" && req.GetId() == "":
 		return nil, status.Error(codes.InvalidArgument, ErrMissingRouteID{}.Error())
@@ -397,7 +397,7 @@ func (s *ProxyGRPCService) UpdateRoute(
 		return nil, s.mapError("UpdateRoute", err)
 	}
 	return &platformv1.UpdateProxyRouteResponse{
-		Route:   ProxyRouteToProto(stored),
+		Route:   proxy.RouteToProto(stored),
 		Version: version,
 	}, nil
 }
@@ -434,7 +434,7 @@ func (s *ProxyGRPCService) ListRoutes(
 	}
 	out := make([]*platformv1.ProxyRoute, 0, len(routes))
 	for _, r := range routes {
-		out = append(out, ProxyRouteToProto(r))
+		out = append(out, proxy.RouteToProto(r))
 	}
 	return &platformv1.ListProxyRoutesResponse{Routes: out, Version: version}, nil
 }
@@ -454,7 +454,7 @@ func (s *ProxyGRPCService) CreatePool(
 	if req.GetPool() == nil {
 		return nil, status.Error(codes.InvalidArgument, ErrMissingPool{}.Error())
 	}
-	pool := ProxyPoolFromProto(req.GetPool())
+	pool := proxy.PoolFromProto(req.GetPool())
 	if pool.ID == "" {
 		return nil, status.Error(codes.InvalidArgument, ErrMissingPoolID{}.Error())
 	}
@@ -463,7 +463,7 @@ func (s *ProxyGRPCService) CreatePool(
 		return nil, s.mapError("CreatePool", err)
 	}
 	return &platformv1.CreateProxyPoolResponse{
-		Pool:    ProxyPoolToProto(stored),
+		Pool:    proxy.PoolToProto(stored),
 		Version: version,
 	}, nil
 }
@@ -483,7 +483,7 @@ func (s *ProxyGRPCService) GetPool(
 	if err != nil {
 		return nil, s.mapError("GetPool", err)
 	}
-	return &platformv1.GetProxyPoolResponse{Pool: ProxyPoolToProto(pool)}, nil
+	return &platformv1.GetProxyPoolResponse{Pool: proxy.PoolToProto(pool)}, nil
 }
 
 // UpdatePool replaces an existing proxy backend pool.
@@ -497,7 +497,7 @@ func (s *ProxyGRPCService) UpdatePool(
 	if req.GetPool() == nil {
 		return nil, status.Error(codes.InvalidArgument, ErrMissingPool{}.Error())
 	}
-	pool := ProxyPoolFromProto(req.GetPool())
+	pool := proxy.PoolFromProto(req.GetPool())
 	switch {
 	case pool.ID == "" && req.GetId() == "":
 		return nil, status.Error(codes.InvalidArgument, ErrMissingPoolID{}.Error())
@@ -512,7 +512,7 @@ func (s *ProxyGRPCService) UpdatePool(
 		return nil, s.mapError("UpdatePool", err)
 	}
 	return &platformv1.UpdateProxyPoolResponse{
-		Pool:    ProxyPoolToProto(stored),
+		Pool:    proxy.PoolToProto(stored),
 		Version: version,
 	}, nil
 }
@@ -549,7 +549,7 @@ func (s *ProxyGRPCService) ListPools(
 	}
 	out := make([]*platformv1.ProxyPool, 0, len(pools))
 	for _, p := range pools {
-		out = append(out, ProxyPoolToProto(p))
+		out = append(out, proxy.PoolToProto(p))
 	}
 	return &platformv1.ListProxyPoolsResponse{Pools: out, Version: version}, nil
 }
@@ -573,11 +573,11 @@ func (s *ProxyGRPCService) GetProxyConfig(
 	}
 	outRoutes := make([]*platformv1.ProxyRoute, 0, len(routes))
 	for _, r := range routes {
-		outRoutes = append(outRoutes, ProxyRouteToProto(r))
+		outRoutes = append(outRoutes, proxy.RouteToProto(r))
 	}
 	outPools := make([]*platformv1.ProxyPool, 0, len(pools))
 	for _, p := range pools {
-		outPools = append(outPools, ProxyPoolToProto(p))
+		outPools = append(outPools, proxy.PoolToProto(p))
 	}
 	return &platformv1.GetProxyConfigResponse{
 		Routes:  outRoutes,
@@ -648,127 +648,4 @@ func (s *ProxyGRPCService) GetZoneMatrix(
 		Zones: matrix.Zones,
 		Pairs: pairs,
 	}, nil
-}
-
-// =============================================================================
-// Conversion helpers (pb <-> pkg/proxy domain types)
-// =============================================================================
-
-// ProxyRouteFromProto converts a protobuf ProxyRoute to a proxy.RouteConfig.
-func ProxyRouteFromProto(pb *platformv1.ProxyRoute) proxy.RouteConfig {
-	if pb == nil {
-		return proxy.RouteConfig{}
-	}
-	return proxy.RouteConfig{
-		ID:             pb.GetId(),
-		Hosts:          pb.GetHosts(),
-		PathPrefix:     pb.GetPathPrefix(),
-		PoolID:         pb.GetPoolId(),
-		Auth:           proxyAuthFromProto(pb.GetAuth()),
-		StripPrefix:    pb.GetStripPrefix(),
-		PreserveHost:   pb.GetPreserveHost(),
-		PassthroughTCP: pb.GetPassthroughTcp(),
-	}
-}
-
-// ProxyRouteToProto converts a proxy.RouteConfig to a protobuf ProxyRoute.
-func ProxyRouteToProto(r proxy.RouteConfig) *platformv1.ProxyRoute {
-	return &platformv1.ProxyRoute{
-		Id:             r.ID,
-		Hosts:          r.Hosts,
-		PathPrefix:     r.PathPrefix,
-		PoolId:         r.PoolID,
-		Auth:           proxyAuthToProto(r.Auth),
-		StripPrefix:    r.StripPrefix,
-		PreserveHost:   r.PreserveHost,
-		PassthroughTcp: r.PassthroughTCP,
-	}
-}
-
-// proxyAuthFromProto converts protobuf auth requirements to the domain type.
-func proxyAuthFromProto(pb *platformv1.ProxyAuthRequirements) proxy.AuthRequirements {
-	if pb == nil {
-		return proxy.AuthRequirements{}
-	}
-	return proxy.AuthRequirements{
-		Mode:               pb.GetMode(),
-		RequireIDevID:      pb.GetRequireIdevid(),
-		AllowedZones:       pb.GetAllowedZones(),
-		BackendZone:        pb.GetBackendZone(),
-		RequireAttestation: pb.GetRequireAttestation(),
-		AttestationMaxAge:  time.Duration(pb.GetAttestationMaxAgeNanos()),
-		RequiredRoles:      pb.GetRequiredRoles(),
-		RequiredScopes:     pb.GetRequiredScopes(),
-		OPAPolicy:          pb.GetOpaPolicy(),
-		TokenZone:          pb.GetTokenZone(),
-	}
-}
-
-// proxyAuthToProto converts domain auth requirements to the protobuf type.
-func proxyAuthToProto(a proxy.AuthRequirements) *platformv1.ProxyAuthRequirements {
-	return &platformv1.ProxyAuthRequirements{
-		Mode:                   a.Mode,
-		RequireIdevid:          a.RequireIDevID,
-		AllowedZones:           a.AllowedZones,
-		BackendZone:            a.BackendZone,
-		RequireAttestation:     a.RequireAttestation,
-		AttestationMaxAgeNanos: int64(a.AttestationMaxAge),
-		RequiredRoles:          a.RequiredRoles,
-		RequiredScopes:         a.RequiredScopes,
-		OpaPolicy:              a.OPAPolicy,
-		TokenZone:              a.TokenZone,
-	}
-}
-
-// ProxyPoolFromProto converts a protobuf ProxyPool to a
-// proxy.BackendPoolConfig.
-func ProxyPoolFromProto(pb *platformv1.ProxyPool) proxy.BackendPoolConfig {
-	if pb == nil {
-		return proxy.BackendPoolConfig{}
-	}
-	backends := make([]proxy.BackendConfig, 0, len(pb.GetBackends()))
-	for _, b := range pb.GetBackends() {
-		backends = append(backends, proxy.BackendConfig{
-			URL:    b.GetUrl(),
-			Weight: int(b.GetWeight()),
-		})
-	}
-	var tls proxy.BackendTLSConfig
-	if pbTLS := pb.GetTls(); pbTLS != nil {
-		tls = proxy.BackendTLSConfig{
-			TrustClass:     pbTLS.GetTrustClass(),
-			MTLSClientCert: pbTLS.GetMtlsClientCert(),
-		}
-	}
-	return proxy.BackendPoolConfig{
-		ID:                  pb.GetId(),
-		Backends:            backends,
-		Balancer:            pb.GetBalancer(),
-		TLS:                 tls,
-		MaxIdleConnsPerHost: int(pb.GetMaxIdleConnsPerHost()),
-		IdleConnTimeout:     time.Duration(pb.GetIdleConnTimeoutNanos()),
-	}
-}
-
-// ProxyPoolToProto converts a proxy.BackendPoolConfig to a protobuf
-// ProxyPool.
-func ProxyPoolToProto(p proxy.BackendPoolConfig) *platformv1.ProxyPool {
-	backends := make([]*platformv1.ProxyBackend, 0, len(p.Backends))
-	for _, b := range p.Backends {
-		backends = append(backends, &platformv1.ProxyBackend{
-			Url:    b.URL,
-			Weight: int32(b.Weight),
-		})
-	}
-	return &platformv1.ProxyPool{
-		Id:       p.ID,
-		Backends: backends,
-		Balancer: p.Balancer,
-		Tls: &platformv1.ProxyBackendTLS{
-			TrustClass:     p.TLS.TrustClass,
-			MtlsClientCert: p.TLS.MTLSClientCert,
-		},
-		MaxIdleConnsPerHost:  int32(p.MaxIdleConnsPerHost),
-		IdleConnTimeoutNanos: int64(p.IdleConnTimeout),
-	}
 }

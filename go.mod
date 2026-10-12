@@ -14,8 +14,9 @@ replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1
 // Cross-repo dependencies resolve as normal Go modules fetched from the dev
 // Gitea server during development (gitconfig insteadOf + GOPRIVATE) and from
 // GitHub for public builds — see software/conventions/dependency-resolution.md
-// in the handbook. The only local-path replace is the intra-repo
-// sdk/go self-reference below (the etcd pattern for the require cycle).
+// in the handbook. The only local-path replace is the intra-repo sdk/go
+// reference below, so the root builds against the SDK in this tree. The
+// dependency is one-way: sdk/go requires nothing from this module (#840).
 
 require (
 	cloud.google.com/go/compute v1.64.0

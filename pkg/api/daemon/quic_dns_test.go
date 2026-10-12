@@ -19,9 +19,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +34,7 @@ import (
 // requires building with -tags codec_msgpack.
 func skipIfNoCodec(t *testing.T) {
 	t.Helper()
-	if _, err := quic.EncodePayload(struct{}{}); err != nil {
+	if _, err := quicwire.EncodePayload(struct{}{}); err != nil {
 		t.Skip("Skipping test - no codec available (build with -tags codec_msgpack)")
 	}
 }
@@ -51,19 +51,19 @@ func createDNSUnitTestHandler(svc DNSService) *QUICServiceHandler {
 
 // createDNSUnitTestRequest encodes payload into a QUIC request with the given
 // opcode. A nil payload yields an empty body.
-func createDNSUnitTestRequest(t *testing.T, opcode byte, payload interface{}) *quic.Request {
+func createDNSUnitTestRequest(t *testing.T, opcode byte, payload interface{}) *quicwire.Request {
 	t.Helper()
 	skipIfNoCodec(t)
 
 	var data []byte
 	if payload != nil {
 		var err error
-		data, err = quic.EncodePayload(payload)
+		data, err = quicwire.EncodePayload(payload)
 		if err != nil {
 			t.Fatalf("failed to encode payload: %v", err)
 		}
 	}
-	return &quic.Request{Opcode: opcode, Payload: data}
+	return &quicwire.Request{Opcode: opcode, Payload: data}
 }
 
 // =============================================================================
@@ -79,27 +79,27 @@ func TestHandleDNSOperation_ServiceNotAvailable(t *testing.T) {
 		name   string
 		opcode byte
 	}{
-		{"AddRecord", quic.OpDNSAddRecord},
-		{"DeleteRecord", quic.OpDNSDeleteRecord},
-		{"UpdateRecord", quic.OpDNSUpdateRecord},
-		{"GetRecord", quic.OpDNSGetRecord},
-		{"ListRecords", quic.OpDNSListRecords},
-		{"AddZone", quic.OpDNSAddZone},
-		{"DeleteZone", quic.OpDNSDeleteZone},
-		{"GetZone", quic.OpDNSGetZone},
-		{"ListZones", quic.OpDNSListZones},
-		{"Resolve", quic.OpDNSResolve},
-		{"GetConfig", quic.OpDNSGetConfig},
-		{"UpdateConfig", quic.OpDNSUpdateConfig},
-		{"GetMetrics", quic.OpDNSGetMetrics},
-		{"FlushCache", quic.OpDNSFlushCache},
+		{"AddRecord", quicwire.OpDNSAddRecord},
+		{"DeleteRecord", quicwire.OpDNSDeleteRecord},
+		{"UpdateRecord", quicwire.OpDNSUpdateRecord},
+		{"GetRecord", quicwire.OpDNSGetRecord},
+		{"ListRecords", quicwire.OpDNSListRecords},
+		{"AddZone", quicwire.OpDNSAddZone},
+		{"DeleteZone", quicwire.OpDNSDeleteZone},
+		{"GetZone", quicwire.OpDNSGetZone},
+		{"ListZones", quicwire.OpDNSListZones},
+		{"Resolve", quicwire.OpDNSResolve},
+		{"GetConfig", quicwire.OpDNSGetConfig},
+		{"UpdateConfig", quicwire.OpDNSUpdateConfig},
+		{"GetMetrics", quicwire.OpDNSGetMetrics},
+		{"FlushCache", quicwire.OpDNSFlushCache},
 	}
 
 	for _, tc := range opcodes {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &quic.Request{Opcode: tc.opcode, Payload: []byte{}}
+			req := &quicwire.Request{Opcode: tc.opcode, Payload: []byte{}}
 			resp := handler.HandleRequest(ctx, req)
-			assert.Equal(t, quic.StatusUnavailable, resp.Status)
+			assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 			assert.Contains(t, string(resp.Payload), "DNS service not available")
 		})
 	}
@@ -246,23 +246,23 @@ func TestDNSUpdateRecord_DaemonNative(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		mock := NewMockDNSService()
 		handler := createDNSUnitTestHandler(mock)
-		req := createDNSUnitTestRequest(t, quic.OpDNSUpdateRecord, &DNSUpdateRecordRequest{
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSUpdateRecord, &DNSUpdateRecordRequest{
 			Zone: "example.com.", Name: "www", RecordType: "A", Value: "1.2.3.4", TTL: 300,
 		})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		var result DNSUpdateRecordResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
 		assert.True(t, result.Success)
 		assert.Equal(t, 1, mock.CallCount("AddRecord"))
 	})
 
 	t.Run("missing zone", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSUpdateRecord, &DNSUpdateRecordRequest{Name: "www", RecordType: "A", Value: "1.2.3.4"})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSUpdateRecord, &DNSUpdateRecordRequest{Name: "www", RecordType: "A", Value: "1.2.3.4"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -271,21 +271,21 @@ func TestDNSGetRecord_DaemonNative(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSGetRecord, &DNSGetRecordRequest{Zone: "example.com.", Name: "www", RecordType: "A"})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetRecord, &DNSGetRecordRequest{Zone: "example.com.", Name: "www", RecordType: "A"})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		var result DNSGetRecordResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
 		require.NotNil(t, result.Record)
 		assert.Equal(t, "A", result.Record.RecordType)
 	})
 
 	t.Run("missing name", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSGetRecord, &DNSGetRecordRequest{Zone: "example.com.", RecordType: "A"})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetRecord, &DNSGetRecordRequest{Zone: "example.com.", RecordType: "A"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("not found", func(t *testing.T) {
@@ -294,9 +294,9 @@ func TestDNSGetRecord_DaemonNative(t *testing.T) {
 			return nil, ErrDNSRecordNotFound{Name: name, RecordType: recordType}
 		}
 		handler := createDNSUnitTestHandler(mock)
-		req := createDNSUnitTestRequest(t, quic.OpDNSGetRecord, &DNSGetRecordRequest{Zone: "example.com.", Name: "missing", RecordType: "A"})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetRecord, &DNSGetRecordRequest{Zone: "example.com.", Name: "missing", RecordType: "A"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -305,21 +305,21 @@ func TestDNSGetZone_DaemonNative(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSGetZone, &DNSGetZoneRequest{Zone: "example.com."})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetZone, &DNSGetZoneRequest{Zone: "example.com."})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		var result DNSGetZoneResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
 		require.NotNil(t, result.Zone)
 		assert.Equal(t, "example.com.", result.Zone.Name)
 	})
 
 	t.Run("missing zone", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
-		req := createDNSUnitTestRequest(t, quic.OpDNSGetZone, &DNSGetZoneRequest{})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetZone, &DNSGetZoneRequest{})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("not found", func(t *testing.T) {
@@ -328,20 +328,20 @@ func TestDNSGetZone_DaemonNative(t *testing.T) {
 			return nil, ErrDNSZoneNotFound{Zone: zoneName}
 		}
 		handler := createDNSUnitTestHandler(mock)
-		req := createDNSUnitTestRequest(t, quic.OpDNSGetZone, &DNSGetZoneRequest{Zone: "missing."})
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetZone, &DNSGetZoneRequest{Zone: "missing."})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
 func TestDNSGetConfig_DaemonNative(t *testing.T) {
 	handler := createDNSUnitTestHandler(NewMockDNSService())
-	req := createDNSUnitTestRequest(t, quic.OpDNSGetConfig, &DNSGetConfigRequest{})
+	req := createDNSUnitTestRequest(t, quicwire.OpDNSGetConfig, &DNSGetConfigRequest{})
 	resp := handler.HandleRequest(context.Background(), req)
-	require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 	var result DNSGetConfigResponse
-	require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
 	require.NotNil(t, result.Config)
 	assert.Equal(t, "internal.example.com.", result.Config.InternalDomain)
 	assert.Equal(t, "example.com.", result.Config.PublicDomain)
@@ -349,26 +349,26 @@ func TestDNSGetConfig_DaemonNative(t *testing.T) {
 
 func TestDNSGetMetrics_DaemonNative(t *testing.T) {
 	handler := createDNSUnitTestHandler(NewMockDNSService())
-	req := createDNSUnitTestRequest(t, quic.OpDNSGetMetrics, &DNSGetMetricsRequest{})
+	req := createDNSUnitTestRequest(t, quicwire.OpDNSGetMetrics, &DNSGetMetricsRequest{})
 	resp := handler.HandleRequest(context.Background(), req)
-	require.Equal(t, quic.StatusOK, resp.Status, string(resp.Payload))
+	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 	var result DNSGetMetricsResponse
-	require.NoError(t, quic.DecodePayload(resp.Payload, &result))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &result))
 	require.NotNil(t, result.Metrics)
 	assert.Equal(t, 2, result.Metrics.ZoneCount)
 }
 
 func TestDNSUpdateConfig_DaemonNativeNotImplemented(t *testing.T) {
 	handler := createDNSUnitTestHandler(NewMockDNSService())
-	req := createDNSUnitTestRequest(t, quic.OpDNSUpdateConfig, &DNSUpdateConfigRequest{})
+	req := createDNSUnitTestRequest(t, quicwire.OpDNSUpdateConfig, &DNSUpdateConfigRequest{})
 	resp := handler.HandleRequest(context.Background(), req)
-	assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 }
 
 func TestDNSFlushCache_DaemonNativeNotImplemented(t *testing.T) {
 	handler := createDNSUnitTestHandler(NewMockDNSService())
-	req := createDNSUnitTestRequest(t, quic.OpDNSFlushCache, &DNSFlushCacheRequest{Zone: "example.com."})
+	req := createDNSUnitTestRequest(t, quicwire.OpDNSFlushCache, &DNSFlushCacheRequest{Zone: "example.com."})
 	resp := handler.HandleRequest(context.Background(), req)
-	assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 }

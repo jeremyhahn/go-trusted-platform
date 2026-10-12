@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // TestInvoke_NAT64Status_DecodesAConvergedTranslator drives GetNAT64Status
@@ -31,8 +31,8 @@ import (
 // the first reconcile failed with an Internal error (#661 review).
 func TestInvoke_NAT64Status_DecodesAConvergedTranslator(t *testing.T) {
 	reconciled := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	encoded, err := quicapi.EncodePayload(&quicapi.GatewayNAT64StatusResponse{
-		Status: &quicapi.NAT64StatusInfo{
+	encoded, err := quicwire.EncodePayload(&quicwire.GatewayNAT64StatusResponse{
+		Status: &quicwire.NAT64StatusInfo{
 			Active:          true,
 			InstancePresent: true,
 			Prefix:          "64:ff9b::/96",
@@ -73,8 +73,8 @@ func TestInvoke_NAT64Status_DecodesAConvergedTranslator(t *testing.T) {
 }
 
 func TestInvoke_NAT64Status_LeavesANeverConvergedServiceUnset(t *testing.T) {
-	encoded, err := quicapi.EncodePayload(&quicapi.GatewayNAT64StatusResponse{
-		Status: &quicapi.NAT64StatusInfo{Active: false, Prefix: "64:ff9b::/96"},
+	encoded, err := quicwire.EncodePayload(&quicwire.GatewayNAT64StatusResponse{
+		Status: &quicwire.NAT64StatusInfo{Active: false, Prefix: "64:ff9b::/96"},
 	})
 	if err != nil {
 		t.Fatalf("EncodePayload setup failed: %v", err)

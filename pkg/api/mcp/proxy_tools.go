@@ -16,6 +16,8 @@ package mcp
 import (
 	"context"
 	"errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -141,7 +143,7 @@ func (r *ToolRegistry) registerProxyTools() {
 		"description": "Backend pool definition (platform.v1.ProxyPool JSON): id, backends [{url, weight}], balancer, tls {trust_class, mtls_client_cert}, max_idle_conns_per_host, idle_conn_timeout_nanos",
 	}
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_route_create",
 		Description: "Create a reverse-proxy route mapping inbound host/path pairs to a backend pool with per-route authentication requirements",
 		InputSchema: map[string]interface{}{
@@ -153,13 +155,13 @@ func (r *ToolRegistry) registerProxyTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_route_get",
 		Description: "Get a reverse-proxy route by ID",
 		InputSchema: idSchema("Route identifier"),
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_route_update",
 		Description: "Replace an existing reverse-proxy route",
 		InputSchema: map[string]interface{}{
@@ -175,19 +177,19 @@ func (r *ToolRegistry) registerProxyTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_route_delete",
 		Description: "Delete a reverse-proxy route by ID",
 		InputSchema: idSchema("Route identifier"),
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_route_list",
 		Description: "List all reverse-proxy routes with the current config version",
 		InputSchema: emptySchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_pool_create",
 		Description: "Create a reverse-proxy backend pool (set of backends sharing one pooled transport)",
 		InputSchema: map[string]interface{}{
@@ -199,13 +201,13 @@ func (r *ToolRegistry) registerProxyTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_pool_get",
 		Description: "Get a reverse-proxy backend pool by ID",
 		InputSchema: idSchema("Pool identifier"),
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_pool_update",
 		Description: "Replace an existing reverse-proxy backend pool",
 		InputSchema: map[string]interface{}{
@@ -221,37 +223,37 @@ func (r *ToolRegistry) registerProxyTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_pool_delete",
 		Description: "Delete a reverse-proxy backend pool by ID (denied while routes reference it)",
 		InputSchema: idSchema("Pool identifier"),
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_pool_list",
 		Description: "List all reverse-proxy backend pools with the current config version",
 		InputSchema: emptySchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_config",
 		Description: "Get the full merged reverse-proxy configuration (routes + pools) with the config version counter",
 		InputSchema: emptySchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_status",
 		Description: "Get the reverse-proxy configuration store status (version, route/pool counts, last update time)",
 		InputSchema: emptySchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_config_reload",
 		Description: "Bump the reverse-proxy config version so syncing gatewayd instances re-fetch the configuration",
 		InputSchema: emptySchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "proxy_zone_matrix",
 		Description: "Get the SDN zone names and compiled allowed (from, to) traffic pairs",
 		InputSchema: emptySchema,

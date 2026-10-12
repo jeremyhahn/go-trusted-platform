@@ -18,8 +18,8 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // decodeGatewayNAT64StatusReply decodes the NAT64 status sub-opcode's wire
@@ -33,8 +33,8 @@ func decodeGatewayNAT64StatusReply(payload []byte, reply interface{}) error {
 	if !ok {
 		return ErrInvalidReplyType{Method: platformv1.GatewayService_GetNAT64Status_FullMethodName}
 	}
-	var wire quicapi.GatewayNAT64StatusResponse
-	if err := quicapi.DecodePayload(payload, &wire); err != nil {
+	var wire quicwire.GatewayNAT64StatusResponse
+	if err := quicwire.DecodePayload(payload, &wire); err != nil {
 		return ErrDecodingFailed{Err: err}
 	}
 	if wire.Status == nil {

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -449,7 +450,7 @@ func TestToolRegistry_EABToolsRegistered(t *testing.T) {
 		"platform_eab_get_enrollment_url",
 	}
 	tools := registry.ListTools()
-	got := make(map[string]ToolDefinition, len(tools))
+	got := make(map[string]mcpwire.ToolDefinition, len(tools))
 	for _, td := range tools {
 		got[td.Name] = td
 	}

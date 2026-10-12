@@ -101,7 +101,7 @@ error would surface as a JSON parse failure instead of a 404.
 | Service registry and its status endpoint | `pkg/webservice/v1/service_registry.go` | this repo |
 | CORS, mTLS, IAM and tenant middleware | `pkg/webservice/v1/middleware/` | this repo |
 | Browser JWT issue / refresh | `pkg/webservice/v1/jwt/` | this repo |
-| Response envelope | `pkg/webservice/v1/response/` | this repo |
+| Response envelope | `sdk/go/wire/restwire/` (type), `pkg/webservice/v1/response/` (writer) | this repo |
 | Embed switch | `pkg/webserver/embed/embed.go`, `embed_web.go` | this repo |
 | Control-panel frontend | `web/src/` | this repo |
 | JavaScript/TypeScript SDK | `sdk/javascript` (`trusted-platform-sdk`) | this repo, separate feature |

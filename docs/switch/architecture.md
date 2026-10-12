@@ -88,7 +88,7 @@ destroyed on every error path.
 | REST handlers and router | `pkg/webservice/v1/rest/switch/` | this repo |
 | gRPC `SwitchService` implementation | `pkg/api/daemon/switch_grpc_service.go` | this repo |
 | QUIC category handler | `pkg/api/daemon/quic_switch.go` | this repo |
-| QUIC sub-opcode constants | `pkg/api/quic/switch_opcodes.go` | this repo |
+| QUIC sub-opcode constants | `sdk/go/wire/quicwire/switch_opcodes.go` | this repo |
 | MCP tools | `pkg/api/mcp/switch_tools.go` | this repo |
 | REST SDK client | `sdk/go/services/switch/client.go` | this repo |
 | CLI | `pkg/cli/commands/switch/` | this repo |

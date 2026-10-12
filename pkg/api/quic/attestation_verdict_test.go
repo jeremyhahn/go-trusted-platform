@@ -25,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict/verdicttest"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // #483: handleAttestVM and handleAttestContainer set `Verified: true` from a
@@ -38,7 +39,7 @@ import (
 func attestVMOverWire(t *testing.T, service *mockAttestationService, handler *AttestationHandler, vmID string, nonce []byte) AttestVMResponse {
 	t.Helper()
 
-	payload, err := EncodePayload(&AttestVMRequest{
+	payload, err := quicwire.EncodePayload(&AttestVMRequest{
 		VMID:          vmID,
 		Nonce:         nonce,
 		PCRIndices:    []int{0},
@@ -46,14 +47,14 @@ func attestVMOverWire(t *testing.T, service *mockAttestationService, handler *At
 	})
 	require.NoError(t, err)
 
-	resp := handler.HandleRequest(context.Background(), &Request{
-		Opcode:  OpAttestVMWorkload,
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{
+		Opcode:  quicwire.OpAttestVMWorkload,
 		Payload: payload,
 	})
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var decoded AttestVMResponse
-	require.NoError(t, DecodePayload(resp.Payload, &decoded))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &decoded))
 	return decoded
 }
 

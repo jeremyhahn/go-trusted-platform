@@ -223,7 +223,8 @@ services it hosts):
 | Virtual-host proxy backend unreachable | 502 | `Proxy error` |
 | Service registry with no response writer | 500 | `registry: response writer not configured` |
 
-Everything under `/api/v1` uses the `pkg/webservice/v1/response` envelope; that
+Everything under `/api/v1` uses the `WebServiceResponse` envelope
+(`sdk/go/wire/restwire`, written by `pkg/webservice/v1/response`); that
 contract belongs to the services, not to this document.
 
 ## 6. Configuration

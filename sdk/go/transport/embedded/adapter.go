@@ -77,6 +77,16 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		return nil, ErrNilRegistry{}
 	}
 
+	// Calls never leave the process, so a token or TLS setting would be
+	// silently dropped. Refuse it instead.
+	if names := opts.CredentialOptions(); len(names) > 0 {
+		return nil, platform.ErrUnsupportedOption{
+			Protocol: platform.ProtocolEmbedded,
+			Option:   names[0],
+			Reason:   "the embedded transport calls services in-process",
+		}
+	}
+
 	registry, ok := opts.EmbeddedServices.(*ServiceRegistry)
 	if !ok || registry == nil {
 		return nil, ErrNilRegistry{}

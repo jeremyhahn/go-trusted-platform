@@ -64,7 +64,8 @@ func GetMCPEndpoint() string {
 		if port == "" {
 			port = "9445"
 		}
-		endpoint = "http://localhost:" + port
+		// MCP serves TLS 1.3 only (#844).
+		endpoint = "https://localhost:" + port
 	}
 	return endpoint
 }

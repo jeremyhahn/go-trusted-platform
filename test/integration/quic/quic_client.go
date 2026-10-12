@@ -24,11 +24,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/qlog"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -185,11 +185,11 @@ func (c *TestClient) SetToken(token string) {
 }
 
 // SendRequest sends a raw QUIC request and returns the response.
-func (c *TestClient) SendRequest(ctx context.Context, opcode byte, payload []byte) (*quic.Response, error) {
+func (c *TestClient) SendRequest(ctx context.Context, opcode byte, payload []byte) (*quicwire.Response, error) {
 	c.mu.RLock()
 	if c.closed || c.conn == nil {
 		c.mu.RUnlock()
-		return nil, ErrConnectionFailed{Address: c.serverAddr, Cause: quic.ErrClientClosed}
+		return nil, ErrConnectionFailed{Address: c.serverAddr, Cause: quicwire.ErrClientClosed}
 	}
 	conn := c.conn
 	token := c.token
@@ -201,17 +201,17 @@ func (c *TestClient) SendRequest(ctx context.Context, opcode byte, payload []byt
 	}
 	defer stream.Close()
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  opcode,
 		Token:   token,
 		Payload: payload,
 	}
 
-	if err := quic.WriteRequest(stream, req); err != nil {
+	if err := quicwire.WriteRequest(stream, req); err != nil {
 		return nil, ErrRequestFailed{Opcode: opcode, Cause: err}
 	}
 
-	resp, err := quic.ReadResponse(stream)
+	resp, err := quicwire.ReadResponse(stream)
 	if err != nil {
 		return nil, ErrRequestFailed{Opcode: opcode, Cause: err}
 	}
@@ -225,7 +225,7 @@ func (c *TestClient) Send(ctx context.Context, opcode byte, reqData, respData in
 	var err error
 
 	if reqData != nil {
-		payload, err = quic.EncodePayload(reqData)
+		payload, err = quicwire.EncodePayload(reqData)
 		if err != nil {
 			return ErrEncodeFailed{Cause: err}
 		}
@@ -236,16 +236,16 @@ func (c *TestClient) Send(ctx context.Context, opcode byte, reqData, respData in
 		return err
 	}
 
-	if resp.Status != quic.StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		return ErrUnexpectedStatus{
-			Expected: quic.StatusOK,
+			Expected: quicwire.StatusOK,
 			Actual:   resp.Status,
 			Message:  string(resp.Payload),
 		}
 	}
 
 	if respData != nil && len(resp.Payload) > 0 {
-		if err := quic.DecodePayload(resp.Payload, respData); err != nil {
+		if err := quicwire.DecodePayload(resp.Payload, respData); err != nil {
 			return ErrDecodeFailed{Cause: err}
 		}
 	}
@@ -254,12 +254,12 @@ func (c *TestClient) Send(ctx context.Context, opcode byte, reqData, respData in
 }
 
 // SendExpectStatus sends a request and expects a specific status code.
-func (c *TestClient) SendExpectStatus(ctx context.Context, opcode byte, reqData interface{}, expectedStatus byte) (*quic.Response, error) {
+func (c *TestClient) SendExpectStatus(ctx context.Context, opcode byte, reqData interface{}, expectedStatus byte) (*quicwire.Response, error) {
 	var payload []byte
 	var err error
 
 	if reqData != nil {
-		payload, err = quic.EncodePayload(reqData)
+		payload, err = quicwire.EncodePayload(reqData)
 		if err != nil {
 			return nil, ErrEncodeFailed{Cause: err}
 		}
@@ -295,18 +295,18 @@ func (c *TestClient) ServerAddr() string {
 
 // Health sends a health check request.
 func (c *TestClient) Health(ctx context.Context) error {
-	_, err := c.SendRequest(ctx, quic.OpHealth, nil)
+	_, err := c.SendRequest(ctx, quicwire.OpHealth, nil)
 	return err
 }
 
 // Liveness sends a liveness probe request.
 func (c *TestClient) Liveness(ctx context.Context) error {
-	_, err := c.SendRequest(ctx, quic.OpLiveness, nil)
+	_, err := c.SendRequest(ctx, quicwire.OpLiveness, nil)
 	return err
 }
 
 // Readiness sends a readiness probe request.
 func (c *TestClient) Readiness(ctx context.Context) error {
-	_, err := c.SendRequest(ctx, quic.OpReadiness, nil)
+	_, err := c.SendRequest(ctx, quicwire.OpReadiness, nil)
 	return err
 }

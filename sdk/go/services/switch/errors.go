@@ -68,6 +68,21 @@ func (e ErrResponseDecodeFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrResponseReadFailed is returned when the body of a non-2xx response
+// cannot be read.
+type ErrResponseReadFailed struct {
+	StatusCode int
+	Cause      error
+}
+
+func (e ErrResponseReadFailed) Error() string {
+	return fmt.Sprintf("switchsdk: HTTP status %d, failed to read response body: %v", e.StatusCode, e.Cause)
+}
+
+func (e ErrResponseReadFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrRequestEncodeFailed is returned when encoding a request body fails.
 type ErrRequestEncodeFailed struct {
 	Cause error

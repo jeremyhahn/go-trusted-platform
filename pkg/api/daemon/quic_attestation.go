@@ -16,8 +16,8 @@ package daemon
 import (
 	"context"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -59,17 +59,17 @@ import (
 // AttestationService quote opcodes decode the platform.v1 pb request and
 // delegate to the shared *AttestationServiceServer; every other opcode is
 // served by the daemon-native manifest AttestationHandler.
-func (h *QUICServiceHandler) handleAttestationOperation(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleAttestationOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	switch req.Opcode {
-	case quic.OpAttestQuote:
+	case quicwire.OpAttestQuote:
 		return h.handleAttestationGetQuote(ctx, req)
-	case quic.OpAttestVerify:
+	case quicwire.OpAttestVerify:
 		return h.handleAttestationVerifyQuote(ctx, req)
-	case quic.OpAttestCollectHost:
+	case quicwire.OpAttestCollectHost:
 		return h.handleAttestationCollectHost(ctx, req)
 	default:
 		if h.attestationHandler == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
 		}
 		return h.attestationHandler.HandleRequest(ctx, req)
 	}
@@ -77,14 +77,14 @@ func (h *QUICServiceHandler) handleAttestationOperation(ctx context.Context, req
 
 // handleAttestationGetQuote decodes GetAttestationQuoteRequest and delegates
 // to the shared *AttestationServiceServer.
-func (h *QUICServiceHandler) handleAttestationGetQuote(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleAttestationGetQuote(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.attestGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
 	}
 
 	var quoteReq platformv1.GetAttestationQuoteRequest
-	if err := quic.DecodePayload(req.Payload, &quoteReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &quoteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.attestGRPC.GetAttestationQuote(ctx, &quoteReq)
@@ -96,14 +96,14 @@ func (h *QUICServiceHandler) handleAttestationGetQuote(ctx context.Context, req 
 
 // handleAttestationVerifyQuote decodes VerifyAttestationQuoteRequest and
 // delegates to the shared *AttestationServiceServer.
-func (h *QUICServiceHandler) handleAttestationVerifyQuote(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleAttestationVerifyQuote(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.attestGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
 	}
 
 	var verifyReq platformv1.VerifyAttestationQuoteRequest
-	if err := quic.DecodePayload(req.Payload, &verifyReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &verifyReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.attestGRPC.VerifyAttestationQuote(ctx, &verifyReq)
@@ -115,14 +115,14 @@ func (h *QUICServiceHandler) handleAttestationVerifyQuote(ctx context.Context, r
 
 // handleAttestationCollectHost decodes CollectHostAttestationRequest and
 // delegates to the shared *AttestationServiceServer.
-func (h *QUICServiceHandler) handleAttestationCollectHost(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleAttestationCollectHost(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.attestGRPC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "attestation"})
 	}
 
 	var collectReq platformv1.CollectHostAttestationRequest
-	if err := quic.DecodePayload(req.Payload, &collectReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &collectReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	resp, err := h.attestGRPC.CollectHostAttestation(ctx, &collectReq)

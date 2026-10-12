@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // TestDeviceHandler_profileErrorResponse_VLANsNotDistinct asserts the QUIC
@@ -39,12 +40,12 @@ func TestDeviceHandler_profileErrorResponse_VLANsNotDistinct(t *testing.T) {
 		{
 			name: "typed error maps to invalid argument",
 			err:  device.ErrProfileVLANsNotDistinct{VLAN: 200},
-			want: StatusInvalidArgument,
+			want: quicwire.StatusInvalidArgument,
 		},
 		{
 			name: "wrapped typed error still maps to invalid argument",
 			err:  &device.WrappedError{Msg: "failed to save profile", Err: device.ErrProfileVLANsNotDistinct{VLAN: 200}},
-			want: StatusInvalidArgument,
+			want: quicwire.StatusInvalidArgument,
 		},
 	}
 

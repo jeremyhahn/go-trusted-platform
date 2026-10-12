@@ -30,62 +30,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
-const (
-	// MCPVersion is the supported MCP protocol version.
-	MCPVersion = "2024-11-05"
-
-	// JSON-RPC 2.0 error codes.
-	ParseError     = -32700
-	InvalidRequest = -32600
-	MethodNotFound = -32601
-	InvalidParams  = -32602
-	InternalError  = -32603
-
-	// Custom error codes for authorization.
-	AuthenticationRequired = -32001
-	InvalidToken           = -32002
-	PermissionDenied       = -32003
-	ServiceUnavailable     = -32004
-)
-
-// JSONRPCRequest represents a JSON-RPC 2.0 request.
-type JSONRPCRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id,omitempty"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
-}
-
-// JSONRPCResponse represents a JSON-RPC 2.0 response.
-type JSONRPCResponse struct {
-	JSONRPC string        `json:"jsonrpc"`
-	ID      interface{}   `json:"id,omitempty"`
-	Result  interface{}   `json:"result,omitempty"`
-	Error   *JSONRPCError `json:"error,omitempty"`
-}
-
-// JSONRPCError represents a JSON-RPC 2.0 error.
-type JSONRPCError struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
-}
-
-// ToolDefinition describes an MCP tool.
-type ToolDefinition struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
-
-// ResourceDefinition describes an MCP resource.
-type ResourceDefinition struct {
-	URI         string `json:"uri"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	MimeType    string `json:"mimeType,omitempty"`
-}
-
 // AuthErrorType categorizes authorization errors.
 type AuthErrorType int
 

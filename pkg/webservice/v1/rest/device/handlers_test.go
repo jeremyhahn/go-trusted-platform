@@ -42,6 +42,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // mockTemplateService implements device.DeviceTemplateService for testing.
@@ -186,7 +187,7 @@ func TestHandleUploadTemplate_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, rr.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
 	assert.True(t, resp.Success)
 

@@ -33,12 +33,13 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // init initializes the codec for Device handler tests
 func init() {
 	// Set the default codec to MsgPack for encoding/decoding payloads
-	_ = SetDefaultCodecType(codec.MsgPack)
+	_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 }
 
 // =============================================================================
@@ -377,14 +378,14 @@ func TestDeviceHandleRequest(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 		resp := handler.HandleRequest(context.Background(), nil)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error for unknown opcode", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
-		resp := handler.HandleRequest(context.Background(), &Request{Opcode: 0xFF})
+		resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: 0xFF})
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -408,20 +409,20 @@ func TestHandleRegisterDevice(t *testing.T) {
 			HashAlgoID: 11,
 		}
 
-		payload, err := EncodePayload(registerReq)
+		payload, err := quicwire.EncodePayload(registerReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceRegister,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceRegister,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var registerResp DeviceRegisterResponse
-		err = DecodePayload(resp.Payload, &registerResp)
+		err = quicwire.DecodePayload(resp.Payload, &registerResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, registerResp.Device)
@@ -437,17 +438,17 @@ func TestHandleRegisterDevice(t *testing.T) {
 			Serial: "TEST-SERIAL-001",
 		}
 
-		payload, err := EncodePayload(registerReq)
+		payload, err := quicwire.EncodePayload(registerReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceRegister,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceRegister,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 		assert.Contains(t, string(resp.Payload), "not available")
 	})
 
@@ -458,30 +459,30 @@ func TestHandleRegisterDevice(t *testing.T) {
 			Model: "test-model",
 		}
 
-		payload, err := EncodePayload(registerReq)
+		payload, err := quicwire.EncodePayload(registerReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceRegister,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceRegister,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceRegister,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceRegister,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when save fails", func(t *testing.T) {
@@ -492,17 +493,17 @@ func TestHandleRegisterDevice(t *testing.T) {
 			Serial: "TEST-SERIAL-001",
 		}
 
-		payload, err := EncodePayload(registerReq)
+		payload, err := quicwire.EncodePayload(registerReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceRegister,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceRegister,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -519,20 +520,20 @@ func TestHandleGetDevice(t *testing.T) {
 
 		getReq := &DeviceGetRequest{ID: device.ID}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var getResp DeviceGetResponse
-		err = DecodePayload(resp.Payload, &getResp)
+		err = quicwire.DecodePayload(resp.Payload, &getResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, getResp.Device)
@@ -545,17 +546,17 @@ func TestHandleGetDevice(t *testing.T) {
 
 		getReq := &DeviceGetRequest{ID: 1}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -563,17 +564,17 @@ func TestHandleGetDevice(t *testing.T) {
 
 		getReq := &DeviceGetRequest{}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for device not found", func(t *testing.T) {
@@ -581,30 +582,30 @@ func TestHandleGetDevice(t *testing.T) {
 
 		getReq := &DeviceGetRequest{ID: 999}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGet,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -622,20 +623,20 @@ func TestHandleListDevices(t *testing.T) {
 
 		listReq := &DeviceListRequest{Page: 1, PageSize: 10}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp DeviceListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Len(t, listResp.Devices, 2)
@@ -647,20 +648,20 @@ func TestHandleListDevices(t *testing.T) {
 
 		listReq := &DeviceListRequest{Page: 1, PageSize: 10}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp DeviceListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Len(t, listResp.Devices, 0)
@@ -672,30 +673,30 @@ func TestHandleListDevices(t *testing.T) {
 
 		listReq := &DeviceListRequest{Page: 1, PageSize: 10}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceList,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("uses default pagination when not specified", func(t *testing.T) {
@@ -704,20 +705,20 @@ func TestHandleListDevices(t *testing.T) {
 
 		listReq := &DeviceListRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp DeviceListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int32(1), listResp.Page)
@@ -730,20 +731,20 @@ func TestHandleListDevices(t *testing.T) {
 
 		listReq := &DeviceListRequest{Page: 1, PageSize: 10000}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp DeviceListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int32(deviceMaxLimit), listResp.PageSize)
@@ -766,20 +767,20 @@ func TestHandleUpdateDevice(t *testing.T) {
 			Model: "updated-model",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceUpdate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceUpdate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var updateResp DeviceUpdateResponse
-		err = DecodePayload(resp.Payload, &updateResp)
+		err = quicwire.DecodePayload(resp.Payload, &updateResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, updateResp.Device)
@@ -791,17 +792,17 @@ func TestHandleUpdateDevice(t *testing.T) {
 
 		updateReq := &DeviceUpdateRequest{ID: 1, Model: "test"}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceUpdate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceUpdate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -809,17 +810,17 @@ func TestHandleUpdateDevice(t *testing.T) {
 
 		updateReq := &DeviceUpdateRequest{Model: "test"}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceUpdate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceUpdate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for device not found", func(t *testing.T) {
@@ -827,30 +828,30 @@ func TestHandleUpdateDevice(t *testing.T) {
 
 		updateReq := &DeviceUpdateRequest{ID: 999, Model: "test"}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceUpdate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceUpdate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceUpdate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceUpdate,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -867,17 +868,17 @@ func TestHandleDeleteDevice(t *testing.T) {
 
 		deleteReq := &DeviceDeleteRequest{ID: device.ID}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceUnregister,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceUnregister,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		// Verify device is deleted
 		_, exists := deviceService.devices[device.ID]
@@ -889,17 +890,17 @@ func TestHandleDeleteDevice(t *testing.T) {
 
 		deleteReq := &DeviceDeleteRequest{ID: 1}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceUnregister,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceUnregister,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -907,17 +908,17 @@ func TestHandleDeleteDevice(t *testing.T) {
 
 		deleteReq := &DeviceDeleteRequest{}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceUnregister,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceUnregister,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for device not found", func(t *testing.T) {
@@ -925,30 +926,30 @@ func TestHandleDeleteDevice(t *testing.T) {
 
 		deleteReq := &DeviceDeleteRequest{ID: 999}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceUnregister,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceUnregister,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceUnregister,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceUnregister,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -966,20 +967,20 @@ func TestDeviceHandleActivateDevice(t *testing.T) {
 
 		activateReq := &DeviceActivateRequest{ID: device.ID}
 
-		payload, err := EncodePayload(activateReq)
+		payload, err := quicwire.EncodePayload(activateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceActivate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceActivate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var activateResp DeviceActivateResponse
-		err = DecodePayload(resp.Payload, &activateResp)
+		err = quicwire.DecodePayload(resp.Payload, &activateResp)
 		require.NoError(t, err)
 
 		assert.True(t, activateResp.Activated)
@@ -996,18 +997,18 @@ func TestDeviceHandleActivateDevice(t *testing.T) {
 
 		activateReq := &DeviceActivateRequest{ID: device.ID}
 
-		payload, err := EncodePayload(activateReq)
+		payload, err := quicwire.EncodePayload(activateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceActivate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceActivate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
 		// Should fail because device is already activated
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
@@ -1015,17 +1016,17 @@ func TestDeviceHandleActivateDevice(t *testing.T) {
 
 		activateReq := &DeviceActivateRequest{ID: 1}
 
-		payload, err := EncodePayload(activateReq)
+		payload, err := quicwire.EncodePayload(activateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceActivate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceActivate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1033,17 +1034,17 @@ func TestDeviceHandleActivateDevice(t *testing.T) {
 
 		activateReq := &DeviceActivateRequest{}
 
-		payload, err := EncodePayload(activateReq)
+		payload, err := quicwire.EncodePayload(activateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceActivate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceActivate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for device not found", func(t *testing.T) {
@@ -1051,30 +1052,30 @@ func TestDeviceHandleActivateDevice(t *testing.T) {
 
 		activateReq := &DeviceActivateRequest{ID: 999}
 
-		payload, err := EncodePayload(activateReq)
+		payload, err := quicwire.EncodePayload(activateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceActivate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceActivate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceActivate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceActivate,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1122,11 +1123,11 @@ func attestHandler(svc platformv1.DeviceServiceServer) *DeviceHandler {
 }
 
 // attestRequest encodes an attestation request payload.
-func attestRequest(t *testing.T, id uint64, evidence []byte) *Request {
+func attestRequest(t *testing.T, id uint64, evidence []byte) *quicwire.Request {
 	t.Helper()
-	payload, err := EncodePayload(&DeviceAttestRequest{ID: id, Evidence: evidence})
+	payload, err := quicwire.EncodePayload(&DeviceAttestRequest{ID: id, Evidence: evidence})
 	require.NoError(t, err)
-	return &Request{Opcode: OpDeviceAttest, Payload: payload}
+	return &quicwire.Request{Opcode: quicwire.OpDeviceAttest, Payload: payload}
 }
 
 func TestDeviceHandleAttestDevice(t *testing.T) {
@@ -1145,10 +1146,10 @@ func TestDeviceHandleAttestDevice(t *testing.T) {
 		handler := attestHandler(svc)
 
 		resp := handler.HandleRequest(ctx, attestRequest(t, 1, []byte(`{"quote":"AAAA"}`)))
-		require.Equal(t, StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var attestResp DeviceAttestResponse
-		require.NoError(t, DecodePayload(resp.Payload, &attestResp))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &attestResp))
 		assert.False(t, attestResp.Verified, "a failed quote must not report verified")
 		assert.False(t, attestResp.SignatureValid)
 		assert.True(t, attestResp.NonceValid)
@@ -1162,7 +1163,7 @@ func TestDeviceHandleAttestDevice(t *testing.T) {
 		handler := attestHandler(svc)
 
 		resp := handler.HandleRequest(ctx, attestRequest(t, 7, evidence))
-		require.Equal(t, StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, "7", svc.gotDeviceID)
 		assert.Equal(t, evidence, svc.gotEvidence,
 			"the handler must not reshape evidence: every transport carries one encoding")
@@ -1186,10 +1187,10 @@ func TestDeviceHandleAttestDevice(t *testing.T) {
 		handler := attestHandler(svc)
 
 		resp := handler.HandleRequest(ctx, attestRequest(t, 9, []byte(`{}`)))
-		require.Equal(t, StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var attestResp DeviceAttestResponse
-		require.NoError(t, DecodePayload(resp.Payload, &attestResp))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &attestResp))
 		assert.True(t, attestResp.Verified)
 		assert.True(t, attestResp.AKCertificateVerified)
 		assert.Equal(t, "tofu", attestResp.PCRBaselineSource)
@@ -1203,7 +1204,7 @@ func TestDeviceHandleAttestDevice(t *testing.T) {
 
 		resp := handler.HandleRequest(ctx, attestRequest(t, 1, []byte(`{}`)))
 
-		assert.Equal(t, StatusUnavailable, resp.Status,
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status,
 			"without a verifier the opcode must refuse, not answer a verdict nothing computed")
 	})
 
@@ -1213,7 +1214,7 @@ func TestDeviceHandleAttestDevice(t *testing.T) {
 
 		resp := handler.HandleRequest(ctx, attestRequest(t, 1, nil))
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Empty(t, svc.gotDeviceID, "an empty request must not reach the verifier")
 	})
 
@@ -1222,18 +1223,18 @@ func TestDeviceHandleAttestDevice(t *testing.T) {
 
 		resp := handler.HandleRequest(ctx, attestRequest(t, 0, []byte(`{}`)))
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("rejects an undecodable payload", func(t *testing.T) {
 		handler := attestHandler(&stubAttestService{resp: &platformv1.AttestDeviceResponse{}})
 
-		resp := handler.HandleRequest(ctx, &Request{
-			Opcode:  OpDeviceAttest,
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpDeviceAttest,
 			Payload: []byte("invalid payload"),
 		})
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("maps verifier errors onto QUIC status by code", func(t *testing.T) {
@@ -1242,10 +1243,10 @@ func TestDeviceHandleAttestDevice(t *testing.T) {
 			err  error
 			want byte
 		}{
-			{"unknown device", status.Error(codes.NotFound, "device not found"), StatusNotFound},
-			{"malformed evidence", status.Error(codes.InvalidArgument, "evidence is required"), StatusInvalidArgument},
-			{"no dependency", status.Error(codes.Unavailable, "device service unavailable"), StatusUnavailable},
-			{"unclassified", errors.New("boom"), StatusInternalError},
+			{"unknown device", status.Error(codes.NotFound, "device not found"), quicwire.StatusNotFound},
+			{"malformed evidence", status.Error(codes.InvalidArgument, "evidence is required"), quicwire.StatusInvalidArgument},
+			{"no dependency", status.Error(codes.Unavailable, "device service unavailable"), quicwire.StatusUnavailable},
+			{"unclassified", errors.New("boom"), quicwire.StatusInternalError},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -1272,20 +1273,20 @@ func TestDeviceHandleGetDeviceState(t *testing.T) {
 
 		stateReq := &DeviceStateRequest{ID: device.ID}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var stateResp DeviceStateResponse
-		err = DecodePayload(resp.Payload, &stateResp)
+		err = quicwire.DecodePayload(resp.Payload, &stateResp)
 		require.NoError(t, err)
 
 		assert.NotEmpty(t, stateResp.State)
@@ -1298,20 +1299,20 @@ func TestDeviceHandleGetDeviceState(t *testing.T) {
 
 		stateReq := &DeviceStateRequest{ID: device.ID}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var stateResp DeviceStateResponse
-		err = DecodePayload(resp.Payload, &stateResp)
+		err = quicwire.DecodePayload(resp.Payload, &stateResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, entities.DeviceStateActivated.String(), stateResp.State)
@@ -1322,17 +1323,17 @@ func TestDeviceHandleGetDeviceState(t *testing.T) {
 
 		stateReq := &DeviceStateRequest{ID: 1}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1340,17 +1341,17 @@ func TestDeviceHandleGetDeviceState(t *testing.T) {
 
 		stateReq := &DeviceStateRequest{}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for device not found", func(t *testing.T) {
@@ -1358,30 +1359,30 @@ func TestDeviceHandleGetDeviceState(t *testing.T) {
 
 		stateReq := &DeviceStateRequest{ID: 999}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGetState,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1401,20 +1402,20 @@ func TestDeviceHandleCreateProfile(t *testing.T) {
 			Role:  "server",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceCreateProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceCreateProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var createResp ProfileCreateResponse
-		err = DecodePayload(resp.Payload, &createResp)
+		err = quicwire.DecodePayload(resp.Payload, &createResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, createResp.Profile)
@@ -1428,17 +1429,17 @@ func TestDeviceHandleCreateProfile(t *testing.T) {
 			Name: "TEST-PROFILE-001",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceCreateProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceCreateProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing name", func(t *testing.T) {
@@ -1448,30 +1449,30 @@ func TestDeviceHandleCreateProfile(t *testing.T) {
 			Model: "test-model",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceCreateProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceCreateProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceCreateProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceCreateProfile,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1488,20 +1489,20 @@ func TestDeviceHandleGetProfile(t *testing.T) {
 
 		getReq := &ProfileGetRequest{ID: profile.ID}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGetProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGetProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var getResp ProfileGetResponse
-		err = DecodePayload(resp.Payload, &getResp)
+		err = quicwire.DecodePayload(resp.Payload, &getResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, getResp.Profile)
@@ -1513,17 +1514,17 @@ func TestDeviceHandleGetProfile(t *testing.T) {
 
 		getReq := &ProfileGetRequest{ID: 1}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGetProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGetProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1531,17 +1532,17 @@ func TestDeviceHandleGetProfile(t *testing.T) {
 
 		getReq := &ProfileGetRequest{}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGetProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGetProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for profile not found", func(t *testing.T) {
@@ -1549,30 +1550,30 @@ func TestDeviceHandleGetProfile(t *testing.T) {
 
 		getReq := &ProfileGetRequest{ID: 999}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceGetProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGetProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceGetProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceGetProfile,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1590,20 +1591,20 @@ func TestDeviceHandleListProfiles(t *testing.T) {
 
 		listReq := &ProfileListRequest{Page: 1, PageSize: 10}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceListProfiles,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceListProfiles,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp ProfileListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Len(t, listResp.Profiles, 2)
@@ -1615,30 +1616,30 @@ func TestDeviceHandleListProfiles(t *testing.T) {
 
 		listReq := &ProfileListRequest{Page: 1, PageSize: 10}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceListProfiles,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceListProfiles,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceListProfiles,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceListProfiles,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1659,20 +1660,20 @@ func TestDeviceHandleUpdateProfile(t *testing.T) {
 			Model: "updated-model",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceSetProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceSetProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var updateResp ProfileUpdateResponse
-		err = DecodePayload(resp.Payload, &updateResp)
+		err = quicwire.DecodePayload(resp.Payload, &updateResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, updateResp.Profile)
@@ -1684,17 +1685,17 @@ func TestDeviceHandleUpdateProfile(t *testing.T) {
 
 		updateReq := &ProfileUpdateRequest{ID: 1, Name: "test"}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceSetProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceSetProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1702,17 +1703,17 @@ func TestDeviceHandleUpdateProfile(t *testing.T) {
 
 		updateReq := &ProfileUpdateRequest{Name: "test"}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceSetProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceSetProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for profile not found", func(t *testing.T) {
@@ -1720,30 +1721,30 @@ func TestDeviceHandleUpdateProfile(t *testing.T) {
 
 		updateReq := &ProfileUpdateRequest{ID: 999, Name: "test"}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceSetProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceSetProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceSetProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceSetProfile,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1760,17 +1761,17 @@ func TestDeviceHandleDeleteProfile(t *testing.T) {
 
 		deleteReq := &ProfileDeleteRequest{ID: profile.ID}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceDeleteProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceDeleteProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		// Verify profile is deleted
 		_, exists := profileService.profiles[profile.ID]
@@ -1782,17 +1783,17 @@ func TestDeviceHandleDeleteProfile(t *testing.T) {
 
 		deleteReq := &ProfileDeleteRequest{ID: 1}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceDeleteProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceDeleteProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1800,17 +1801,17 @@ func TestDeviceHandleDeleteProfile(t *testing.T) {
 
 		deleteReq := &ProfileDeleteRequest{}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceDeleteProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceDeleteProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for profile not found", func(t *testing.T) {
@@ -1818,30 +1819,30 @@ func TestDeviceHandleDeleteProfile(t *testing.T) {
 
 		deleteReq := &ProfileDeleteRequest{ID: 999}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDeviceDeleteProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceDeleteProfile,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _, _ := createTestDeviceHandler()
 
-		req := &Request{
-			Opcode:  OpDeviceDeleteProfile,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceDeleteProfile,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1987,27 +1988,27 @@ func TestDeviceErrorResponseMapping(t *testing.T) {
 
 	t.Run("not found error", func(t *testing.T) {
 		resp := handler.deviceErrorResponse(errors.New("not found"))
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("already exists error", func(t *testing.T) {
 		resp := handler.deviceErrorResponse(errors.New("already exists"))
-		assert.Equal(t, StatusAlreadyExists, resp.Status)
+		assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 	})
 
 	t.Run("duplicate error", func(t *testing.T) {
 		resp := handler.deviceErrorResponse(errors.New("duplicate"))
-		assert.Equal(t, StatusAlreadyExists, resp.Status)
+		assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 	})
 
 	t.Run("invalid error", func(t *testing.T) {
 		resp := handler.deviceErrorResponse(errors.New("invalid"))
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("generic error", func(t *testing.T) {
 		resp := handler.deviceErrorResponse(errors.New("some error"))
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -2025,14 +2026,14 @@ func TestDeviceLifecycleFlow(t *testing.T) {
 		Model:     "test-model",
 		AttestPub: "test-attest-pub", // Required for attestation
 	}
-	payload, err := EncodePayload(registerReq)
+	payload, err := quicwire.EncodePayload(registerReq)
 	require.NoError(t, err, "failed to encode register request")
 
-	resp := handler.HandleRequest(ctx, &Request{Opcode: OpDeviceRegister, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status, "register device failed: %s", string(resp.Payload))
+	resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceRegister, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status, "register device failed: %s", string(resp.Payload))
 
 	var registerResp DeviceRegisterResponse
-	err = DecodePayload(resp.Payload, &registerResp)
+	err = quicwire.DecodePayload(resp.Payload, &registerResp)
 	require.NoError(t, err, "failed to decode register response")
 	require.NotNil(t, registerResp.Device, "register response device is nil")
 
@@ -2040,72 +2041,72 @@ func TestDeviceLifecycleFlow(t *testing.T) {
 
 	// 2. Get device
 	getReq := &DeviceGetRequest{ID: deviceID}
-	payload, err = EncodePayload(getReq)
+	payload, err = quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceGet, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceGet, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	// 3. Update device
 	updateReq := &DeviceUpdateRequest{ID: deviceID, Model: "updated-model"}
-	payload, err = EncodePayload(updateReq)
+	payload, err = quicwire.EncodePayload(updateReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceUpdate, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceUpdate, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	// 4. Activate device
 	activateReq := &DeviceActivateRequest{ID: deviceID}
-	payload, err = EncodePayload(activateReq)
+	payload, err = quicwire.EncodePayload(activateReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceActivate, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceActivate, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	// 5. Attest device. With no verifier wired the opcode refuses rather
 	// than reporting a verdict: device state is decided by the verifier,
 	// never by the transport (#403).
-	payload, err = EncodePayload(&DeviceAttestRequest{ID: deviceID, Evidence: []byte(`{}`)})
+	payload, err = quicwire.EncodePayload(&DeviceAttestRequest{ID: deviceID, Evidence: []byte(`{}`)})
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceAttest, Payload: payload})
-	require.Equal(t, StatusUnavailable, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceAttest, Payload: payload})
+	require.Equal(t, quicwire.StatusUnavailable, resp.Status)
 
 	// 6. Get device state
 	stateReq := &DeviceStateRequest{ID: deviceID}
-	payload, err = EncodePayload(stateReq)
+	payload, err = quicwire.EncodePayload(stateReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceGetState, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceGetState, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var stateResp DeviceStateResponse
-	err = DecodePayload(resp.Payload, &stateResp)
+	err = quicwire.DecodePayload(resp.Payload, &stateResp)
 	require.NoError(t, err)
 	assert.Equal(t, entities.DeviceStateActivated.String(), stateResp.State)
 
 	// 7. List devices
 	listReq := &DeviceListRequest{Page: 1, PageSize: 10}
-	payload, err = EncodePayload(listReq)
+	payload, err = quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceList, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceList, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	// 8. Delete device
 	deleteReq := &DeviceDeleteRequest{ID: deviceID}
-	payload, err = EncodePayload(deleteReq)
+	payload, err = quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceUnregister, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceUnregister, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	// 9. Verify deletion
-	payload, err = EncodePayload(getReq)
+	payload, err = quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceGet, Payload: payload})
-	assert.Equal(t, StatusNotFound, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceGet, Payload: payload})
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 // =============================================================================
@@ -2122,14 +2123,14 @@ func TestProfileLifecycleFlow(t *testing.T) {
 		Model: "test-model",
 		Role:  "server",
 	}
-	payload, err := EncodePayload(createReq)
+	payload, err := quicwire.EncodePayload(createReq)
 	require.NoError(t, err, "failed to encode create request")
 
-	resp := handler.HandleRequest(ctx, &Request{Opcode: OpDeviceCreateProfile, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status, "create profile failed: %s", string(resp.Payload))
+	resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceCreateProfile, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status, "create profile failed: %s", string(resp.Payload))
 
 	var createResp ProfileCreateResponse
-	err = DecodePayload(resp.Payload, &createResp)
+	err = quicwire.DecodePayload(resp.Payload, &createResp)
 	require.NoError(t, err, "failed to decode create response")
 	require.NotNil(t, createResp.Profile, "create response profile is nil")
 
@@ -2137,42 +2138,42 @@ func TestProfileLifecycleFlow(t *testing.T) {
 
 	// 2. Get profile
 	getReq := &ProfileGetRequest{ID: profileID}
-	payload, err = EncodePayload(getReq)
+	payload, err = quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceGetProfile, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceGetProfile, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	// 3. Update profile
 	updateReq := &ProfileUpdateRequest{ID: profileID, Name: "UPDATED-PROFILE", Model: "updated-model"}
-	payload, err = EncodePayload(updateReq)
+	payload, err = quicwire.EncodePayload(updateReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceSetProfile, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceSetProfile, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	// 4. List profiles
 	listReq := &ProfileListRequest{Page: 1, PageSize: 10}
-	payload, err = EncodePayload(listReq)
+	payload, err = quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceListProfiles, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceListProfiles, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	// 5. Delete profile
 	deleteReq := &ProfileDeleteRequest{ID: profileID}
-	payload, err = EncodePayload(deleteReq)
+	payload, err = quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceDeleteProfile, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceDeleteProfile, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	// 6. Verify deletion
-	payload, err = EncodePayload(getReq)
+	payload, err = quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceGetProfile, Payload: payload})
-	assert.Equal(t, StatusNotFound, resp.Status)
+	resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpDeviceGetProfile, Payload: payload})
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 // =============================================================================

@@ -311,7 +311,7 @@ func (m *MCPAdapter) sendRequest(ctx context.Context, method string, params inte
 		return ErrMCPRequestFailed{Err: fmt.Errorf("failed to marshal request: %w", err)}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+m.endpoint+"/mcp", bytes.NewReader(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, helpers.MCPEndpointURL(m.endpoint), bytes.NewReader(reqBody))
 	if err != nil {
 		return ErrMCPRequestFailed{Err: fmt.Errorf("failed to create request: %w", err)}
 	}

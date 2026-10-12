@@ -16,17 +16,17 @@ package daemon
 import (
 	"context"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
-// EAB sub-opcode handlers, multiplexed under quic.OpProvisioningCategory
+// EAB sub-opcode handlers, multiplexed under quicwire.OpProvisioningCategory
 // (0xCF).
 //
 // The single-byte QUIC opcode space is fully allocated, so EAB shares
 // the provisioning category with config delivery: payload[0] selects the
 // sub-operation, with 0x10-0x1A reserved for EAB (see
-// pkg/api/quic/eab_opcodes.go). The dispatch in quic_service.go routes
+// sdk/go/wire/quicwire/eab_opcodes.go). The dispatch in quic_service.go routes
 // EAB sub-opcodes here first and falls through to the config delivery
 // dispatcher for everything else, so quic_configdelivery.go stays
 // untouched.
@@ -75,21 +75,21 @@ func (h *QUICServiceHandler) SetEABService(svc EABQUICService) {
 // =============================================================================
 
 // eabQUICHandler handles an EAB sub-operation.
-type eabQUICHandler func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quic.Response
+type eabQUICHandler func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quicwire.Response
 
 // eabQUICDispatch routes EAB sub-opcodes with O(1) lookup.
 var eabQUICDispatch = map[byte]eabQUICHandler{
-	quic.EABSubCreateCredential:          (*QUICServiceHandler).handleEABCreateCredential,
-	quic.EABSubGetCredential:             (*QUICServiceHandler).handleEABGetCredential,
-	quic.EABSubGetCredentialByKeyID:      (*QUICServiceHandler).handleEABGetCredentialByKeyID,
-	quic.EABSubListCredentials:           (*QUICServiceHandler).handleEABListCredentials,
-	quic.EABSubRevokeCredential:          (*QUICServiceHandler).handleEABRevokeCredential,
-	quic.EABSubValidateCredential:        (*QUICServiceHandler).handleEABValidateCredential,
-	quic.EABSubDeleteCredential:          (*QUICServiceHandler).handleEABDeleteCredential,
-	quic.EABSubGetCredentialQRCode:       (*QUICServiceHandler).handleEABGetCredentialQRCode,
-	quic.EABSubGetEnrollmentURL:          (*QUICServiceHandler).handleEABGetEnrollmentURL,
-	quic.EABSubMarkCredentialUsed:        (*QUICServiceHandler).handleEABMarkCredentialUsed,
-	quic.EABSubCleanupExpiredCredentials: (*QUICServiceHandler).handleEABCleanupExpiredCredentials,
+	quicwire.EABSubCreateCredential:          (*QUICServiceHandler).handleEABCreateCredential,
+	quicwire.EABSubGetCredential:             (*QUICServiceHandler).handleEABGetCredential,
+	quicwire.EABSubGetCredentialByKeyID:      (*QUICServiceHandler).handleEABGetCredentialByKeyID,
+	quicwire.EABSubListCredentials:           (*QUICServiceHandler).handleEABListCredentials,
+	quicwire.EABSubRevokeCredential:          (*QUICServiceHandler).handleEABRevokeCredential,
+	quicwire.EABSubValidateCredential:        (*QUICServiceHandler).handleEABValidateCredential,
+	quicwire.EABSubDeleteCredential:          (*QUICServiceHandler).handleEABDeleteCredential,
+	quicwire.EABSubGetCredentialQRCode:       (*QUICServiceHandler).handleEABGetCredentialQRCode,
+	quicwire.EABSubGetEnrollmentURL:          (*QUICServiceHandler).handleEABGetEnrollmentURL,
+	quicwire.EABSubMarkCredentialUsed:        (*QUICServiceHandler).handleEABMarkCredentialUsed,
+	quicwire.EABSubCleanupExpiredCredentials: (*QUICServiceHandler).handleEABCleanupExpiredCredentials,
 }
 
 // handleEABCategorySub routes an EAB sub-opcode when payload[0] belongs
@@ -97,7 +97,7 @@ var eabQUICDispatch = map[byte]eabQUICHandler{
 // the caller can fall through to the config delivery dispatcher. A nil
 // backing service yields the same typed unavailable error the gRPC
 // requireService guard produces.
-func (h *QUICServiceHandler) handleEABCategorySub(ctx context.Context, req *quic.Request) (*quic.Response, bool) {
+func (h *QUICServiceHandler) handleEABCategorySub(ctx context.Context, req *quicwire.Request) (*quicwire.Response, bool) {
 	if len(req.Payload) == 0 {
 		// Empty payload is handled (and rejected) by the config delivery
 		// dispatcher's subPayload guard.
@@ -108,19 +108,19 @@ func (h *QUICServiceHandler) handleEABCategorySub(ctx context.Context, req *quic
 		return nil, false
 	}
 	if h.eabService == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrEABNotConfigured{}), true
+		return h.errorResponse(quicwire.StatusUnavailable, ErrEABNotConfigured{}), true
 	}
 	return fn(h, ctx, req.Payload[1:]), true
 }
 
 // encodeEABQUICResponse encodes v as a StatusOK QUIC response.
-func (h *QUICServiceHandler) encodeEABQUICResponse(v interface{}) *quic.Response {
-	payload, err := quic.EncodePayload(v)
+func (h *QUICServiceHandler) encodeEABQUICResponse(v interface{}) *quicwire.Response {
+	payload, err := quicwire.EncodePayload(v)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -130,7 +130,7 @@ func (h *QUICServiceHandler) encodeEABQUICResponse(v interface{}) *quic.Response
 // semantics established by the eabErrorMatchers table. It reuses the
 // shared gRPC-code -> QUIC-status map owned by the config delivery
 // handler (both surfaces multiplex under the same category opcode).
-func (h *QUICServiceHandler) eabErrorToQUICResponse(op string, err error) *quic.Response {
+func (h *QUICServiceHandler) eabErrorToQUICResponse(op string, err error) *quicwire.Response {
 	return h.configDeliveryErrorToQUICResponse(op, err)
 }
 
@@ -138,10 +138,10 @@ func (h *QUICServiceHandler) eabErrorToQUICResponse(op string, err error) *quic.
 // Sub-operation Handlers
 // =============================================================================
 
-func (h *QUICServiceHandler) handleEABCreateCredential(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleEABCreateCredential(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.CreateEABCredentialRequest
-	if err := quic.DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	resp, err := h.eabService.CreateCredential(ctx, &req)
 	if err != nil {
@@ -151,10 +151,10 @@ func (h *QUICServiceHandler) handleEABCreateCredential(ctx context.Context, payl
 	return h.encodeEABQUICResponse(resp)
 }
 
-func (h *QUICServiceHandler) handleEABGetCredential(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleEABGetCredential(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.GetEABCredentialRequest
-	if err := quic.DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	resp, err := h.eabService.GetCredential(ctx, &req)
 	if err != nil {
@@ -163,10 +163,10 @@ func (h *QUICServiceHandler) handleEABGetCredential(ctx context.Context, payload
 	return h.encodeEABQUICResponse(resp)
 }
 
-func (h *QUICServiceHandler) handleEABGetCredentialByKeyID(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleEABGetCredentialByKeyID(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.GetEABCredentialByKeyIDRequest
-	if err := quic.DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	resp, err := h.eabService.GetCredentialByKeyID(ctx, &req)
 	if err != nil {
@@ -175,10 +175,10 @@ func (h *QUICServiceHandler) handleEABGetCredentialByKeyID(ctx context.Context, 
 	return h.encodeEABQUICResponse(resp)
 }
 
-func (h *QUICServiceHandler) handleEABListCredentials(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleEABListCredentials(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.ListEABCredentialsRequest
-	if err := quic.DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	resp, err := h.eabService.ListCredentials(ctx, &req)
 	if err != nil {
@@ -187,10 +187,10 @@ func (h *QUICServiceHandler) handleEABListCredentials(ctx context.Context, paylo
 	return h.encodeEABQUICResponse(resp)
 }
 
-func (h *QUICServiceHandler) handleEABRevokeCredential(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleEABRevokeCredential(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.RevokeEABCredentialRequest
-	if err := quic.DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	resp, err := h.eabService.RevokeCredential(ctx, &req)
 	if err != nil {
@@ -200,10 +200,10 @@ func (h *QUICServiceHandler) handleEABRevokeCredential(ctx context.Context, payl
 	return h.encodeEABQUICResponse(resp)
 }
 
-func (h *QUICServiceHandler) handleEABValidateCredential(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleEABValidateCredential(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.ValidateEABCredentialRequest
-	if err := quic.DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	resp, err := h.eabService.ValidateCredential(ctx, &req)
 	if err != nil {
@@ -212,10 +212,10 @@ func (h *QUICServiceHandler) handleEABValidateCredential(ctx context.Context, pa
 	return h.encodeEABQUICResponse(resp)
 }
 
-func (h *QUICServiceHandler) handleEABDeleteCredential(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleEABDeleteCredential(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.DeleteEABCredentialRequest
-	if err := quic.DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	resp, err := h.eabService.DeleteCredential(ctx, &req)
 	if err != nil {
@@ -225,10 +225,10 @@ func (h *QUICServiceHandler) handleEABDeleteCredential(ctx context.Context, payl
 	return h.encodeEABQUICResponse(resp)
 }
 
-func (h *QUICServiceHandler) handleEABGetCredentialQRCode(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleEABGetCredentialQRCode(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.GetEABCredentialQRCodeRequest
-	if err := quic.DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	resp, err := h.eabService.GetCredentialQRCode(ctx, &req)
 	if err != nil {
@@ -237,10 +237,10 @@ func (h *QUICServiceHandler) handleEABGetCredentialQRCode(ctx context.Context, p
 	return h.encodeEABQUICResponse(resp)
 }
 
-func (h *QUICServiceHandler) handleEABGetEnrollmentURL(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleEABGetEnrollmentURL(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.GetEABEnrollmentURLRequest
-	if err := quic.DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	resp, err := h.eabService.GetEnrollmentURL(ctx, &req)
 	if err != nil {
@@ -249,10 +249,10 @@ func (h *QUICServiceHandler) handleEABGetEnrollmentURL(ctx context.Context, payl
 	return h.encodeEABQUICResponse(resp)
 }
 
-func (h *QUICServiceHandler) handleEABMarkCredentialUsed(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleEABMarkCredentialUsed(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.MarkEABCredentialUsedRequest
-	if err := quic.DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	resp, err := h.eabService.MarkCredentialUsed(ctx, &req)
 	if err != nil {
@@ -261,10 +261,10 @@ func (h *QUICServiceHandler) handleEABMarkCredentialUsed(ctx context.Context, pa
 	return h.encodeEABQUICResponse(resp)
 }
 
-func (h *QUICServiceHandler) handleEABCleanupExpiredCredentials(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleEABCleanupExpiredCredentials(ctx context.Context, payload []byte) *quicwire.Response {
 	var req platformv1.CleanupExpiredEABCredentialsRequest
-	if err := quic.DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	resp, err := h.eabService.CleanupExpiredCredentials(ctx, &req)
 	if err != nil {

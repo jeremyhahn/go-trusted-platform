@@ -63,7 +63,7 @@ const (
 )
 
 // QUIC Operation codes for Daemon operations.
-// These MUST match the server-side opcodes defined in pkg/api/quic/protocol.go.
+// These MUST match the server-side opcodes defined in sdk/go/wire/quicwire/protocol.go.
 const (
 	// Health uses the global health opcode (0x00)
 	OpQUICDaemonHealth byte = 0x00

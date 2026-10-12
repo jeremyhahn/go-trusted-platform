@@ -26,7 +26,7 @@ import (
 )
 
 // envelope wraps a payload in the standard platformd REST response envelope
-// (pkg/webservice/v1/response.WebServiceResponse).
+// (sdk/go/wire/restwire.WebServiceResponse).
 func envelope(payload string) string {
 	return `{"code":200,"error":"","success":true,"payload":` + payload + `}`
 }

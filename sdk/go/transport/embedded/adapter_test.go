@@ -2,6 +2,7 @@ package embedded
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"testing"
 
@@ -134,6 +135,35 @@ func TestConnect_WithNilOptions(t *testing.T) {
 	var nilRegistryErr ErrNilRegistry
 	if !errors.As(err, &nilRegistryErr) {
 		t.Errorf("expected ErrNilRegistry, got %T: %v", err, err)
+	}
+}
+
+func TestConnect_RefusesCredentialOptions(t *testing.T) {
+	tests := []struct {
+		name   string
+		option platform.Option
+	}{
+		{"BearerToken", platform.WithBearerToken("secret")},
+		{"TLSConfig", platform.WithTLSConfig(&tls.Config{})},
+		{"TLSServerName", platform.WithTLSServerName("example.com")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter, err := Connect(context.Background(), platform.NewOptions(
+				platform.WithEmbeddedServices(testRegistry()),
+				tt.option,
+			))
+			if adapter != nil {
+				t.Error("Connect() returned an adapter, want nil")
+			}
+			var unsupported platform.ErrUnsupportedOption
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("Connect() error = %v, want ErrUnsupportedOption", err)
+			}
+			if unsupported.Protocol != platform.ProtocolEmbedded || unsupported.Option != tt.name {
+				t.Errorf("ErrUnsupportedOption = %+v, want protocol Embedded and option %s", unsupported, tt.name)
+			}
+		})
 	}
 }
 

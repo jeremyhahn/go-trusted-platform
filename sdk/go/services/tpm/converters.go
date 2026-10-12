@@ -15,10 +15,8 @@ package tpm
 
 import (
 	"strings"
-	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // String-to-domain enum maps
@@ -617,13 +615,4 @@ func DeviceAttributesFromProto(attrs *platformv1.TCGDeviceAttributes) *DeviceAtt
 		PlatformVersion:      attrs.GetPlatformVersion(),
 		PlatformSerial:       attrs.GetPlatformSerial(),
 	}
-}
-
-// timestampToTime converts a protobuf timestamp to a Go time.Time pointer.
-func timestampToTime(ts *timestamppb.Timestamp) *time.Time {
-	if ts == nil {
-		return nil
-	}
-	t := ts.AsTime()
-	return &t
 }

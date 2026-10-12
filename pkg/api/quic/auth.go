@@ -15,6 +15,8 @@ package quic
 
 import (
 	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -150,9 +152,9 @@ func NewAuthMiddleware(opts ...AuthMiddlewareOption) *AuthMiddleware {
 	}
 
 	// Default: skip health check opcodes
-	m.skipOpcodes[OpHealth] = true
-	m.skipOpcodes[OpLiveness] = true
-	m.skipOpcodes[OpReadiness] = true
+	m.skipOpcodes[quicwire.OpHealth] = true
+	m.skipOpcodes[quicwire.OpLiveness] = true
+	m.skipOpcodes[quicwire.OpReadiness] = true
 
 	for _, opt := range opts {
 		opt(m)
@@ -162,7 +164,7 @@ func NewAuthMiddleware(opts ...AuthMiddlewareOption) *AuthMiddleware {
 
 // AuthenticateRequest validates the token in a request.
 // Returns the validated token, or an error response if authentication fails.
-func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) (context.Context, *Response) {
+func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *quicwire.Request) (context.Context, *quicwire.Response) {
 	// Skip authentication for certain opcodes
 	if m.skipOpcodes[req.Opcode] {
 		return ctx, nil
@@ -171,8 +173,8 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 	// If no validator configured, handle based on requireAuth setting
 	if m.tokenValidator == nil {
 		if m.requireAuth {
-			return ctx, &Response{
-				Status:  StatusUnavailable,
+			return ctx, &quicwire.Response{
+				Status:  quicwire.StatusUnavailable,
 				Payload: []byte(ErrAuthValidatorNotConfigured{}.Error()),
 			}
 		}
@@ -181,8 +183,8 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 
 	// Check for token
 	if req.Token == "" {
-		return ctx, &Response{
-			Status:  StatusUnauthorized,
+		return ctx, &quicwire.Response{
+			Status:  quicwire.StatusUnauthorized,
 			Payload: []byte(ErrMissingToken{}.Error()),
 		}
 	}
@@ -200,8 +202,8 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 	if cv, ok := m.tokenValidator.(ClaimsTokenValidator); ok {
 		authCtx, err := cv.AuthorizeToken(ctx, req.Token, "", "", "", "")
 		if err != nil {
-			return ctx, &Response{
-				Status:  StatusUnauthorized,
+			return ctx, &quicwire.Response{
+				Status:  quicwire.StatusUnauthorized,
 				Payload: []byte(ErrTokenValidationFailed{Cause: err}.Error()),
 			}
 		}
@@ -212,14 +214,14 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 	// Validate token (legacy bool-only path)
 	valid, err := m.tokenValidator.ValidateToken(ctx, req.Token)
 	if err != nil {
-		return ctx, &Response{
-			Status:  StatusUnauthorized,
+		return ctx, &quicwire.Response{
+			Status:  quicwire.StatusUnauthorized,
 			Payload: []byte(ErrTokenValidationFailed{Cause: err}.Error()),
 		}
 	}
 	if !valid {
-		return ctx, &Response{
-			Status:  StatusUnauthorized,
+		return ctx, &quicwire.Response{
+			Status:  quicwire.StatusUnauthorized,
 			Payload: []byte("invalid token"),
 		}
 	}
@@ -230,7 +232,7 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) 
 
 // AuthorizeRequest checks if the authenticated user has permission for the operation.
 // This should be called after AuthenticateRequest.
-func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, req *Request, resource, action string) *Response {
+func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, req *quicwire.Request, resource, action string) *quicwire.Response {
 	// Skip authorization for certain opcodes
 	if m.skipOpcodes[req.Opcode] {
 		return nil
@@ -246,8 +248,8 @@ func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, req *Request, res
 			return nil
 		}
 		if err := authCtx.RequireScope(scope); err != nil {
-			return &Response{
-				Status:  StatusPermissionDenied,
+			return &quicwire.Response{
+				Status:  quicwire.StatusPermissionDenied,
 				Payload: []byte(ErrPermissionDenied{Resource: resource, Action: action}.Error()),
 			}
 		}
@@ -262,8 +264,8 @@ func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, req *Request, res
 	// Get token from context
 	token, ok := TokenFromContext(ctx)
 	if !ok {
-		return &Response{
-			Status:  StatusUnauthorized,
+		return &quicwire.Response{
+			Status:  quicwire.StatusUnauthorized,
 			Payload: []byte("no authenticated session"),
 		}
 	}
@@ -271,14 +273,14 @@ func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, req *Request, res
 	// Check permission
 	allowed, err := m.authzChecker.CheckPermission(ctx, token, resource, action)
 	if err != nil {
-		return &Response{
-			Status:  StatusInternalError,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInternalError,
 			Payload: []byte("authorization check failed: " + err.Error()),
 		}
 	}
 	if !allowed {
-		return &Response{
-			Status:  StatusPermissionDenied,
+		return &quicwire.Response{
+			Status:  quicwire.StatusPermissionDenied,
 			Payload: []byte(ErrPermissionDenied{Resource: resource, Action: action}.Error()),
 		}
 	}
@@ -301,82 +303,82 @@ type OpcodePermission struct {
 func DefaultOpcodePermissions() map[byte]*OpcodePermission {
 	return map[byte]*OpcodePermission{
 		// Health - no permission required
-		OpHealth:    nil,
-		OpLiveness:  nil,
-		OpReadiness: nil,
+		quicwire.OpHealth:    nil,
+		quicwire.OpLiveness:  nil,
+		quicwire.OpReadiness: nil,
 
 		// vTPM operations
-		OpVTPMCreate:    {Resource: "vtpm", Action: "write"},
-		OpVTPMDelete:    {Resource: "vtpm", Action: "delete"},
-		OpVTPMStart:     {Resource: "vtpm", Action: "write"},
-		OpVTPMStop:      {Resource: "vtpm", Action: "write"},
-		OpVTPMGetState:  {Resource: "vtpm", Action: "read"},
-		OpVTPMList:      {Resource: "vtpm", Action: "read"},
-		OpVTPMGetEK:     {Resource: "vtpm", Action: "read"},
-		OpVTPMGetAK:     {Resource: "vtpm", Action: "read"},
-		OpVTPMCreateAK:  {Resource: "vtpm", Action: "write"},
-		OpVTPMQuote:     {Resource: "vtpm", Action: "read"},
-		OpVTPMExtendPCR: {Resource: "vtpm", Action: "write"},
-		OpVTPMReadPCR:   {Resource: "vtpm", Action: "read"},
-		OpVTPMSeal:      {Resource: "vtpm", Action: "write"},
-		OpVTPMUnseal:    {Resource: "vtpm", Action: "read"},
+		quicwire.OpVTPMCreate:    {Resource: "vtpm", Action: "write"},
+		quicwire.OpVTPMDelete:    {Resource: "vtpm", Action: "delete"},
+		quicwire.OpVTPMStart:     {Resource: "vtpm", Action: "write"},
+		quicwire.OpVTPMStop:      {Resource: "vtpm", Action: "write"},
+		quicwire.OpVTPMGetState:  {Resource: "vtpm", Action: "read"},
+		quicwire.OpVTPMList:      {Resource: "vtpm", Action: "read"},
+		quicwire.OpVTPMGetEK:     {Resource: "vtpm", Action: "read"},
+		quicwire.OpVTPMGetAK:     {Resource: "vtpm", Action: "read"},
+		quicwire.OpVTPMCreateAK:  {Resource: "vtpm", Action: "write"},
+		quicwire.OpVTPMQuote:     {Resource: "vtpm", Action: "read"},
+		quicwire.OpVTPMExtendPCR: {Resource: "vtpm", Action: "write"},
+		quicwire.OpVTPMReadPCR:   {Resource: "vtpm", Action: "read"},
+		quicwire.OpVTPMSeal:      {Resource: "vtpm", Action: "write"},
+		quicwire.OpVTPMUnseal:    {Resource: "vtpm", Action: "read"},
 
 		// DNS operations
-		OpDNSAddRecord:    {Resource: "dns", Action: "write"},
-		OpDNSDeleteRecord: {Resource: "dns", Action: "delete"},
-		OpDNSUpdateRecord: {Resource: "dns", Action: "write"},
-		OpDNSGetRecord:    {Resource: "dns", Action: "read"},
-		OpDNSListRecords:  {Resource: "dns", Action: "read"},
-		OpDNSAddZone:      {Resource: "dns", Action: "write"},
-		OpDNSDeleteZone:   {Resource: "dns", Action: "delete"},
-		OpDNSGetZone:      {Resource: "dns", Action: "read"},
-		OpDNSListZones:    {Resource: "dns", Action: "read"},
-		OpDNSResolve:      {Resource: "dns", Action: "read"},
+		quicwire.OpDNSAddRecord:    {Resource: "dns", Action: "write"},
+		quicwire.OpDNSDeleteRecord: {Resource: "dns", Action: "delete"},
+		quicwire.OpDNSUpdateRecord: {Resource: "dns", Action: "write"},
+		quicwire.OpDNSGetRecord:    {Resource: "dns", Action: "read"},
+		quicwire.OpDNSListRecords:  {Resource: "dns", Action: "read"},
+		quicwire.OpDNSAddZone:      {Resource: "dns", Action: "write"},
+		quicwire.OpDNSDeleteZone:   {Resource: "dns", Action: "delete"},
+		quicwire.OpDNSGetZone:      {Resource: "dns", Action: "read"},
+		quicwire.OpDNSListZones:    {Resource: "dns", Action: "read"},
+		quicwire.OpDNSResolve:      {Resource: "dns", Action: "read"},
 
 		// Device operations
-		OpDeviceRegister:   {Resource: "device", Action: "write"},
-		OpDeviceUnregister: {Resource: "device", Action: "delete"},
-		OpDeviceGet:        {Resource: "device", Action: "read"},
-		OpDeviceList:       {Resource: "device", Action: "read"},
-		OpDeviceUpdate:     {Resource: "device", Action: "write"},
-		OpDeviceAttest:     {Resource: "device", Action: "read"},
+		quicwire.OpDeviceRegister:   {Resource: "device", Action: "write"},
+		quicwire.OpDeviceUnregister: {Resource: "device", Action: "delete"},
+		quicwire.OpDeviceGet:        {Resource: "device", Action: "read"},
+		quicwire.OpDeviceList:       {Resource: "device", Action: "read"},
+		quicwire.OpDeviceUpdate:     {Resource: "device", Action: "write"},
+		quicwire.OpDeviceAttest:     {Resource: "device", Action: "read"},
 
 		// SDN operations
-		OpSDNGetPortState: {Resource: "sdn", Action: "read"},
-		OpSDNSetPortState: {Resource: "sdn", Action: "write"},
-		OpSDNListPorts:    {Resource: "sdn", Action: "read"},
-		OpSDNApplyPolicy:  {Resource: "sdn", Action: "write"},
-		OpSDNGetPolicy:    {Resource: "sdn", Action: "read"},
-		OpSDNListPolicies: {Resource: "sdn", Action: "read"},
-		OpSDNListBridges:  {Resource: "sdn", Action: "read"},
-		OpSDNCreateBridge: {Resource: "sdn", Action: "write"},
-		OpSDNDeleteBridge: {Resource: "sdn", Action: "delete"},
-		OpSDNCreatePort:   {Resource: "sdn", Action: "write"},
-		OpSDNDeletePort:   {Resource: "sdn", Action: "delete"},
-		OpSDNDeletePolicy: {Resource: "sdn", Action: "delete"},
+		quicwire.OpSDNGetPortState: {Resource: "sdn", Action: "read"},
+		quicwire.OpSDNSetPortState: {Resource: "sdn", Action: "write"},
+		quicwire.OpSDNListPorts:    {Resource: "sdn", Action: "read"},
+		quicwire.OpSDNApplyPolicy:  {Resource: "sdn", Action: "write"},
+		quicwire.OpSDNGetPolicy:    {Resource: "sdn", Action: "read"},
+		quicwire.OpSDNListPolicies: {Resource: "sdn", Action: "read"},
+		quicwire.OpSDNListBridges:  {Resource: "sdn", Action: "read"},
+		quicwire.OpSDNCreateBridge: {Resource: "sdn", Action: "write"},
+		quicwire.OpSDNDeleteBridge: {Resource: "sdn", Action: "delete"},
+		quicwire.OpSDNCreatePort:   {Resource: "sdn", Action: "write"},
+		quicwire.OpSDNDeletePort:   {Resource: "sdn", Action: "delete"},
+		quicwire.OpSDNDeletePolicy: {Resource: "sdn", Action: "delete"},
 
 		// KMS operations
-		OpKMSGenerateKey: {Resource: "kms", Action: "write"},
-		OpKMSImportKey:   {Resource: "kms", Action: "write"},
-		OpKMSGetKey:      {Resource: "kms", Action: "read"},
-		OpKMSListKeys:    {Resource: "kms", Action: "read"},
-		OpKMSDeleteKey:   {Resource: "kms", Action: "delete"},
-		OpKMSRotateKey:   {Resource: "kms", Action: "write"},
-		OpKMSEncrypt:     {Resource: "kms", Action: "write"},
-		OpKMSDecrypt:     {Resource: "kms", Action: "read"},
-		OpKMSSign:        {Resource: "kms", Action: "write"},
-		OpKMSVerify:      {Resource: "kms", Action: "read"},
+		quicwire.OpKMSGenerateKey: {Resource: "kms", Action: "write"},
+		quicwire.OpKMSImportKey:   {Resource: "kms", Action: "write"},
+		quicwire.OpKMSGetKey:      {Resource: "kms", Action: "read"},
+		quicwire.OpKMSListKeys:    {Resource: "kms", Action: "read"},
+		quicwire.OpKMSDeleteKey:   {Resource: "kms", Action: "delete"},
+		quicwire.OpKMSRotateKey:   {Resource: "kms", Action: "write"},
+		quicwire.OpKMSEncrypt:     {Resource: "kms", Action: "write"},
+		quicwire.OpKMSDecrypt:     {Resource: "kms", Action: "read"},
+		quicwire.OpKMSSign:        {Resource: "kms", Action: "write"},
+		quicwire.OpKMSVerify:      {Resource: "kms", Action: "read"},
 
 		// IAM operations
-		OpIAMUserCreate: {Resource: "iam", Action: "write"},
-		OpIAMUserDelete: {Resource: "iam", Action: "delete"},
-		OpIAMUserGet:    {Resource: "iam", Action: "read"},
-		OpIAMUserList:   {Resource: "iam", Action: "read"},
-		OpIAMUserUpdate: {Resource: "iam", Action: "write"},
-		OpIAMRoleCreate: {Resource: "iam", Action: "write"},
-		OpIAMRoleDelete: {Resource: "iam", Action: "delete"},
-		OpIAMRoleGet:    {Resource: "iam", Action: "read"},
-		OpIAMRoleList:   {Resource: "iam", Action: "read"},
+		quicwire.OpIAMUserCreate: {Resource: "iam", Action: "write"},
+		quicwire.OpIAMUserDelete: {Resource: "iam", Action: "delete"},
+		quicwire.OpIAMUserGet:    {Resource: "iam", Action: "read"},
+		quicwire.OpIAMUserList:   {Resource: "iam", Action: "read"},
+		quicwire.OpIAMUserUpdate: {Resource: "iam", Action: "write"},
+		quicwire.OpIAMRoleCreate: {Resource: "iam", Action: "write"},
+		quicwire.OpIAMRoleDelete: {Resource: "iam", Action: "delete"},
+		quicwire.OpIAMRoleGet:    {Resource: "iam", Action: "read"},
+		quicwire.OpIAMRoleList:   {Resource: "iam", Action: "read"},
 
 		// NTP (time synchronization). The category opcode multiplexes
 		// read (status, sources) and write (step) sub-operations in
@@ -386,14 +388,14 @@ func DefaultOpcodePermissions() map[byte]*OpcodePermission {
 		// method catalog (pkg/api/grpc/method_permissions.go) and the
 		// MCP tool catalog, which is where ntp:write is required for
 		// the manual step.
-		OpNTPCategory: {Resource: "ntp", Action: "read"},
+		quicwire.OpNTPCategory: {Resource: "ntp", Action: "read"},
 
 		// CA operations
-		OpCAInfo:   {Resource: "ca", Action: "read"},
-		OpCAIssue:  {Resource: "ca", Action: "write"},
-		OpCARevoke: {Resource: "ca", Action: "write"},
-		OpCARenew:  {Resource: "ca", Action: "write"},
-		OpCAGet:    {Resource: "ca", Action: "read"},
-		OpCAList:   {Resource: "ca", Action: "read"},
+		quicwire.OpCAInfo:   {Resource: "ca", Action: "read"},
+		quicwire.OpCAIssue:  {Resource: "ca", Action: "write"},
+		quicwire.OpCARevoke: {Resource: "ca", Action: "write"},
+		quicwire.OpCARenew:  {Resource: "ca", Action: "write"},
+		quicwire.OpCAGet:    {Resource: "ca", Action: "read"},
+		quicwire.OpCAList:   {Resource: "ca", Action: "read"},
 	}
 }

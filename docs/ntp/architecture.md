@@ -110,7 +110,7 @@ Visible in three places, and #509 is what happens when only the first exists:
 | Bring-up policy (`StartNTP`, gate timeout handling) | `pkg/app/ntp.go` | this repo |
 | `NTPBackend`, proto projection, gRPC→wire error mapping | `pkg/api/daemon/ntp_service.go` | this repo |
 | gRPC `platform.v1.NTPService` | `pkg/api/daemon/ntp_grpc_service.go` | this repo |
-| QUIC category dispatch | `pkg/api/daemon/quic_ntp.go`, `pkg/api/quic/ntp_opcodes.go` | this repo |
+| QUIC category dispatch | `pkg/api/daemon/quic_ntp.go`, `sdk/go/wire/quicwire/ntp_opcodes.go` | this repo |
 | MCP tools | `pkg/api/mcp/ntp_tools.go` | this repo |
 | REST routers (two listeners) | `pkg/webservice/v1/rest/ntp/router.go`, `pkg/api/rest/ntp_handlers.go` | this repo |
 | CLI | `pkg/cli/commands/ntp/` | this repo |

@@ -322,7 +322,7 @@ func (g *GRPCAdapter) ListProtocols(ctx context.Context) (*ListProtocolsResult, 
 			{Name: "REST", Enabled: true, Address: endpoints.PlatformAPI, Port: 8443, Status: "running", TLS: true},
 			{Name: "gRPC", Enabled: true, Address: endpoints.PlatformGRPC, Port: 10443, Status: "running", TLS: false},
 			{Name: "QUIC", Enabled: true, Address: endpoints.PlatformQUIC, Port: 9444, Status: "running", TLS: true},
-			{Name: "MCP", Enabled: true, Address: endpoints.PlatformMCP, Port: 9445, Status: "running", TLS: false},
+			{Name: "MCP", Enabled: true, Address: endpoints.PlatformMCP, Port: 9445, Status: "running", TLS: true},
 			{Name: "Unix Socket", Enabled: true, Address: endpoints.PlatformdSocket, Port: 0, Status: "running", TLS: false},
 		},
 	}

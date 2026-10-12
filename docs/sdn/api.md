@@ -193,7 +193,7 @@ REST base path `/api/v1/switches`
 (`pkg/webservice/v1/rest/switch/handlers.go`); gRPC `SwitchService`.
 
 QUIC reaches the switch service through the **switch category opcode `0xCC`**,
-whose five sub-opcodes are declared in `pkg/api/quic/switch_opcodes.go` and
+whose five sub-opcodes are declared in `sdk/go/wire/quicwire/switch_opcodes.go` and
 dispatched by `pkg/api/daemon/quic_switch.go::handleSwitchCategory`.
 
 | Capability | REST | gRPC / Unix | QUIC (under `0xCC`) | MCP | Embedded |

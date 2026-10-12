@@ -28,8 +28,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	bmcsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 )
@@ -132,7 +132,7 @@ func (q *QUICAdapter) sendBMCSub(ctx context.Context, sub byte, in interface{}, 
 
 	var body []byte
 	if in != nil {
-		encoded, err := quic.EncodePayload(in)
+		encoded, err := quicwire.EncodePayload(in)
 		if err != nil {
 			return fmt.Errorf("quic bmc encode: %w", err)
 		}
@@ -150,19 +150,19 @@ func (q *QUICAdapter) sendBMCSub(ctx context.Context, sub byte, in interface{}, 
 	}
 	defer stream.Close()
 
-	if err := quic.WriteRequest(stream, &quic.Request{Opcode: quic.OpBMCCategory, Payload: payload}); err != nil {
+	if err := quicwire.WriteRequest(stream, &quicwire.Request{Opcode: quicwire.OpBMCCategory, Payload: payload}); err != nil {
 		return fmt.Errorf("quic bmc write request: %w", err)
 	}
 
-	resp, err := quic.ReadResponse(stream)
+	resp, err := quicwire.ReadResponse(stream)
 	if err != nil {
 		return fmt.Errorf("quic bmc read response: %w", err)
 	}
-	if resp.Status != quic.StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		return fmt.Errorf("quic bmc sub 0x%02X failed: status 0x%02X: %s", sub, resp.Status, string(resp.Payload))
 	}
 	if out != nil && len(resp.Payload) > 0 {
-		return quic.DecodePayload(resp.Payload, out)
+		return quicwire.DecodePayload(resp.Payload, out)
 	}
 	return nil
 }
@@ -244,7 +244,7 @@ func (q *QUICAdapter) EnrollBMC(ctx context.Context, profileID uint64, opts *Enr
 	req := quicBMCEnrollRequestFromOpts(profileID, opts)
 
 	var wire quicBMCEnrollResponse
-	if err := q.sendBMCSub(ctx, quic.BMCSubEnroll, req, &wire); err != nil {
+	if err := q.sendBMCSub(ctx, quicwire.BMCSubEnroll, req, &wire); err != nil {
 		return nil, ErrQUICCallFailed{Method: "BMCEnroll", Err: err}
 	}
 	return quicBMCEnrollResponseToDomain(&wire), nil
@@ -262,7 +262,7 @@ func (q *QUICAdapter) RestoreBMC(ctx context.Context, profileID uint64) (*Restor
 	req := &quicBMCRestoreRequest{ProfileID: profileID}
 
 	var wire quicBMCRestoreResponse
-	if err := q.sendBMCSub(ctx, quic.BMCSubRestore, req, &wire); err != nil {
+	if err := q.sendBMCSub(ctx, quicwire.BMCSubRestore, req, &wire); err != nil {
 		return nil, ErrQUICCallFailed{Method: "BMCRestore", Err: err}
 	}
 	return quicBMCRestoreResponseToDomain(&wire), nil

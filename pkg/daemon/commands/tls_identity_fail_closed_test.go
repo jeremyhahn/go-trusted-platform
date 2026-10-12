@@ -71,6 +71,42 @@ func TestApplyDaemonTLSIdentity_NilConfigFailsClosed(t *testing.T) {
 	}
 }
 
+// TestApplyDaemonTLSIdentity_MCPHTTPOnlyRequiresIdentity asserts the MCP
+// HTTP transport counts as TLS-terminating (#844): with every other network
+// transport off it still needs the daemon identity, so a missing CA fails
+// closed instead of being skipped as UDS-only mode.
+func TestApplyDaemonTLSIdentity_MCPHTTPOnlyRequiresIdentity(t *testing.T) {
+	cfg := daemon.DefaultConfig()
+	cfg.EnableREST = false
+	cfg.EnableGRPCTCP = false
+	cfg.EnableQUIC = false
+	cfg.EnableMCP = true
+	cfg.MCPConfig = daemon.DefaultMCPConfig()
+	cfg.MCPConfig.Transport = "http"
+
+	err := applyDaemonTLSIdentity(context.Background(), newTestLogger(), &app.App{}, cfg, false)
+	var typed ErrProvisionMissingCA
+	if !errors.As(err, &typed) {
+		t.Fatalf("expected ErrProvisionMissingCA for MCP-HTTP-only mode, got %T (%v)", err, err)
+	}
+}
+
+// TestApplyDaemonTLSIdentity_MCPStdioOnlySkips asserts stdio MCP binds no
+// network listener and so, like UDS, needs no TLS identity.
+func TestApplyDaemonTLSIdentity_MCPStdioOnlySkips(t *testing.T) {
+	cfg := daemon.DefaultConfig()
+	cfg.EnableREST = false
+	cfg.EnableGRPCTCP = false
+	cfg.EnableQUIC = false
+	cfg.EnableMCP = true
+	cfg.MCPConfig = daemon.DefaultMCPConfig()
+	cfg.MCPConfig.Transport = "stdio"
+
+	if err := applyDaemonTLSIdentity(context.Background(), newTestLogger(), &app.App{}, cfg, false); err != nil {
+		t.Fatalf("stdio MCP must not require a TLS identity, got %v", err)
+	}
+}
+
 // TestApplyDaemonTLSIdentity_UDSOnlySkips asserts the sanctioned carve-out:
 // with no TLS-terminating transport enabled (Unix-domain-socket-only mode)
 // the daemon needs no TLS identity and startup proceeds.

@@ -17,6 +17,8 @@ import (
 	"context"
 
 	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
 
 // =============================================================================
@@ -39,7 +41,7 @@ type switchServiceProviderMCP interface {
 
 // registerSwitchTools registers all physical switch management MCP tools.
 func (r *ToolRegistry) registerSwitchTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "switch_list_ports",
 		Description: "List all physical ports on a named network switch with their status, VLAN assignments, and link state",
 		InputSchema: map[string]interface{}{
@@ -54,7 +56,7 @@ func (r *ToolRegistry) registerSwitchTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "switch_port_status",
 		Description: "Get the full observable state of a single port on a physical network switch",
 		InputSchema: map[string]interface{}{
@@ -73,7 +75,7 @@ func (r *ToolRegistry) registerSwitchTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "switch_set_vlan",
 		Description: "Move an access-mode port to a specified VLAN on a physical network switch",
 		InputSchema: map[string]interface{}{
@@ -96,7 +98,7 @@ func (r *ToolRegistry) registerSwitchTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "switch_enable_port",
 		Description: "Administratively enable a port on a physical network switch",
 		InputSchema: map[string]interface{}{
@@ -115,7 +117,7 @@ func (r *ToolRegistry) registerSwitchTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "switch_disable_port",
 		Description: "Administratively shut down a port on a physical network switch",
 		InputSchema: map[string]interface{}{
@@ -321,7 +323,7 @@ func (r *ToolRegistry) getSwitchService() switchServiceProviderMCP {
 }
 
 // formatPortStatus formats a PortStatus struct for MCP response.
-func formatPortStatus(ps *switchmgmt.PortStatus) map[string]interface{} {
+func formatPortStatus(ps *switchwire.PortStatus) map[string]interface{} {
 	if ps == nil {
 		return nil
 	}
@@ -354,7 +356,7 @@ func formatPortStatus(ps *switchmgmt.PortStatus) map[string]interface{} {
 }
 
 // formatPortList formats a slice of PortStatus for MCP response.
-func formatPortList(ports []*switchmgmt.PortStatus) []map[string]interface{} {
+func formatPortList(ports []*switchwire.PortStatus) []map[string]interface{} {
 	result := make([]map[string]interface{}, 0, len(ports))
 	for _, p := range ports {
 		result = append(result, formatPortStatus(p))

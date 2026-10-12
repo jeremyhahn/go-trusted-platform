@@ -39,7 +39,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -317,7 +317,7 @@ func (m *mockHttpWriter) Success200(w http.ResponseWriter, r *http.Request, payl
 	m.lastStatus = http.StatusOK
 	m.lastPayload = payload
 	w.WriteHeader(http.StatusOK)
-	resp := response.WebServiceResponse{Code: 200, Success: true, Payload: payload}
+	resp := restwire.WebServiceResponse{Code: 200, Success: true, Payload: payload}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -325,7 +325,7 @@ func (m *mockHttpWriter) Success201(w http.ResponseWriter, r *http.Request, payl
 	m.lastStatus = http.StatusCreated
 	m.lastPayload = payload
 	w.WriteHeader(http.StatusCreated)
-	resp := response.WebServiceResponse{Code: 201, Success: true, Payload: payload}
+	resp := restwire.WebServiceResponse{Code: 201, Success: true, Payload: payload}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -346,7 +346,7 @@ func (m *mockHttpWriter) Error400(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusBadRequest
 	m.lastError = err
 	w.WriteHeader(http.StatusBadRequest)
-	resp := response.WebServiceResponse{Code: 400, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 400, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -367,7 +367,7 @@ func (m *mockHttpWriter) Error404(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusNotFound
 	m.lastError = err
 	w.WriteHeader(http.StatusNotFound)
-	resp := response.WebServiceResponse{Code: 404, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 404, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -375,7 +375,7 @@ func (m *mockHttpWriter) Error500(w http.ResponseWriter, r *http.Request, err er
 	m.lastStatus = http.StatusInternalServerError
 	m.lastError = err
 	w.WriteHeader(http.StatusInternalServerError)
-	resp := response.WebServiceResponse{Code: 500, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: 500, Success: false, Error: err.Error()}
 	json.NewEncoder(w).Encode(resp)
 }
 

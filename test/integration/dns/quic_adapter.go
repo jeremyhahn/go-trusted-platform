@@ -69,7 +69,7 @@ const (
 	MaxQUICTokenSize uint16 = 8 * 1024
 )
 
-// QUIC status codes (pkg/api/quic/protocol.go).
+// QUIC status codes (sdk/go/wire/quicwire/protocol.go).
 const (
 	QUICStatusOK              byte = 0x00
 	QUICStatusInvalidRequest  byte = 0x01
@@ -82,7 +82,7 @@ const (
 	QUICStatusNotImplemented  byte = 0x0B
 )
 
-// DNS opcodes — MUST match pkg/api/quic/protocol.go.
+// DNS opcodes — MUST match sdk/go/wire/quicwire/protocol.go.
 const (
 	OpDNSAddRecord    byte = 0x20
 	OpDNSDeleteRecord byte = 0x21

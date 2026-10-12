@@ -23,8 +23,8 @@ docs/switch/
 type Manager interface {
     SetPortVLAN(ctx context.Context, port string, vlanID uint16) error
     GetPortVLAN(ctx context.Context, port string) (uint16, error)
-    GetPortStatus(ctx context.Context, port string) (*PortStatus, error)
-    ListPorts(ctx context.Context) ([]*PortStatus, error)
+    GetPortStatus(ctx context.Context, port string) (*switchwire.PortStatus, error)
+    ListPorts(ctx context.Context) ([]*switchwire.PortStatus, error)
     EnablePort(ctx context.Context, port string) error
     DisablePort(ctx context.Context, port string) error
     Close() error

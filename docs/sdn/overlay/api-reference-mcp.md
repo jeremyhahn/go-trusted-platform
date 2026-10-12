@@ -4,7 +4,7 @@
 
 | Property | Value |
 |----------|-------|
-| Transport | MCP (stdio / HTTP, port 9445) |
+| Transport | MCP (stdio / HTTPS, port 9445) |
 | Tool source | `pkg/api/mcp/overlay_tools.go` |
 
 The overlay MCP tools mirror the overlay CLI/gRPC surface.

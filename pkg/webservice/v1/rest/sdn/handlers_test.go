@@ -31,8 +31,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // mockSDNService implements platformv1.SDNServiceServer for testing
@@ -175,14 +175,14 @@ func (m *mockResponseWriter) WriteJson(w http.ResponseWriter, status int, resp i
 func (m *mockResponseWriter) Success200(w http.ResponseWriter, r *http.Request, payload interface{}) {
 	m.lastStatus = http.StatusOK
 	m.lastPayload = payload
-	resp := response.WebServiceResponse{Code: http.StatusOK, Success: true, Payload: payload}
+	resp := restwire.WebServiceResponse{Code: http.StatusOK, Success: true, Payload: payload}
 	m.Write(w, r, http.StatusOK, resp)
 }
 
 func (m *mockResponseWriter) Success201(w http.ResponseWriter, r *http.Request, payload interface{}) {
 	m.lastStatus = http.StatusCreated
 	m.lastPayload = payload
-	resp := response.WebServiceResponse{Code: http.StatusCreated, Success: true, Payload: payload}
+	resp := restwire.WebServiceResponse{Code: http.StatusCreated, Success: true, Payload: payload}
 	m.Write(w, r, http.StatusCreated, resp)
 }
 
@@ -200,21 +200,21 @@ func (m *mockResponseWriter) Error200(w http.ResponseWriter, r *http.Request, er
 func (m *mockResponseWriter) Error401(w http.ResponseWriter, r *http.Request, err error) {
 	m.lastStatus = http.StatusUnauthorized
 	m.lastError = err
-	resp := response.WebServiceResponse{Code: http.StatusUnauthorized, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: http.StatusUnauthorized, Success: false, Error: err.Error()}
 	m.Write(w, r, http.StatusUnauthorized, resp)
 }
 
 func (m *mockResponseWriter) Error400(w http.ResponseWriter, r *http.Request, err error) {
 	m.lastStatus = http.StatusBadRequest
 	m.lastError = err
-	resp := response.WebServiceResponse{Code: http.StatusBadRequest, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: http.StatusBadRequest, Success: false, Error: err.Error()}
 	m.Write(w, r, http.StatusBadRequest, resp)
 }
 
 func (m *mockResponseWriter) Error404(w http.ResponseWriter, r *http.Request, err error) {
 	m.lastStatus = http.StatusNotFound
 	m.lastError = err
-	resp := response.WebServiceResponse{Code: http.StatusNotFound, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: http.StatusNotFound, Success: false, Error: err.Error()}
 	m.Write(w, r, http.StatusNotFound, resp)
 }
 
@@ -227,7 +227,7 @@ func (m *mockResponseWriter) Error403(w http.ResponseWriter, r *http.Request, er
 func (m *mockResponseWriter) Error500(w http.ResponseWriter, r *http.Request, err error) {
 	m.lastStatus = http.StatusInternalServerError
 	m.lastError = err
-	resp := response.WebServiceResponse{Code: http.StatusInternalServerError, Success: false, Error: err.Error()}
+	resp := restwire.WebServiceResponse{Code: http.StatusInternalServerError, Success: false, Error: err.Error()}
 	m.Write(w, r, http.StatusInternalServerError, resp)
 }
 

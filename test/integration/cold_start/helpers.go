@@ -69,7 +69,7 @@ func GetServiceEndpoints(cfg HarnessConfig) ServiceEndpoints {
 		REST: fmt.Sprintf("https://127.0.0.1:%d", cfg.RESTPort),
 		GRPC: fmt.Sprintf("127.0.0.1:%d", cfg.GRPCPort),
 		QUIC: fmt.Sprintf("127.0.0.1:%d", cfg.QUICPort),
-		MCP:  fmt.Sprintf("http://127.0.0.1:%d", cfg.MCPPort),
+		MCP:  fmt.Sprintf("https://127.0.0.1:%d", cfg.MCPPort),
 		Unix: cfg.SocketPath,
 	}
 }

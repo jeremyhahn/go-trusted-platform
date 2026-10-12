@@ -22,7 +22,7 @@ opcode table, the platform authorization model — is
 | **gRPC** | `platform.v1.BMCService`, **23 RPCs** | `pkg/api/grpc/proto/bmc.proto`; registered in `pkg/api/daemon/daemon.go` |
 | **Unix** | **The same 23 RPCs.** Unix is gRPC over a UDS; `BMCService` is registered on both `grpcServer` and `grpcUDSServer` | same |
 | **REST** | base path `/api/v1/bmc/{profileID}`, **20 route registrations over 17 paths** | `pkg/api/daemon/rest_service.go`; handlers in `pkg/webservice/v1/bmc/` |
-| **QUIC** | `OpBMCCategory` = `0x9F`, sub-opcodes `BMCSubEnroll` `0x01` and `BMCSubRestore` `0x02` — **two operations, nothing else** | `pkg/api/quic/phase35_opcodes.go`; handler `pkg/api/daemon/quic_bmc.go` |
+| **QUIC** | `OpBMCCategory` = `0x9F`, sub-opcodes `BMCSubEnroll` `0x01` and `BMCSubRestore` `0x02` — **two operations, nothing else** | `sdk/go/wire/quicwire/phase35_opcodes.go`; handler `pkg/api/daemon/quic_bmc.go` |
 | **MCP** | **16 tools**, all named `platform_bmc_*` | `pkg/api/mcp/bmc_tools.go` |
 | **Embedded** | **None** | see §2 |
 
@@ -312,7 +312,7 @@ REST under `/api/v1`; gRPC package `platform.v1`; QUIC `ProtocolVersion`
 
 `OpBMCCategory` is `0x9F`. Sub-opcodes `0x01` and `0x02` are the whole
 namespace today; adding a third is a data change in
-`pkg/api/quic/phase35_opcodes.go` plus a case in `handleBMCCategory`.
+`sdk/go/wire/quicwire/phase35_opcodes.go` plus a case in `handleBMCCategory`.
 Remember that sub-opcode values are only unique **within** the `0x9F`
 category — `0x01` at top level is `OpLiveness`. The rule and the full opcode
 table are in [`docs/daemon/api.md`](../daemon/api.md) §4.

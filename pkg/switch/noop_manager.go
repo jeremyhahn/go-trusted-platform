@@ -13,7 +13,11 @@
 
 package switchmgmt
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
+)
 
 type noopManager struct{}
 
@@ -31,11 +35,11 @@ func (n *noopManager) GetPortVLAN(_ context.Context, _ string) (uint16, error) {
 	return 0, nil
 }
 
-func (n *noopManager) GetPortStatus(_ context.Context, _ string) (*PortStatus, error) {
-	return &PortStatus{}, nil
+func (n *noopManager) GetPortStatus(_ context.Context, _ string) (*switchwire.PortStatus, error) {
+	return &switchwire.PortStatus{}, nil
 }
 
-func (n *noopManager) ListPorts(_ context.Context) ([]*PortStatus, error) {
+func (n *noopManager) ListPorts(_ context.Context) ([]*switchwire.PortStatus, error) {
 	return nil, nil
 }
 

@@ -124,7 +124,7 @@ type MCPAdapter struct {
 func NewMCPAdapter() *MCPAdapter {
 	return &MCPAdapter{
 		endpoint: helpers.MCPEndpointURL(GetMCPEndpoint()),
-		client:   helpers.NewPlainHTTPClient(30 * time.Second),
+		client:   helpers.NewHTTPClient(30 * time.Second),
 	}
 }
 

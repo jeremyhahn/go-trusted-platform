@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // IAM pagination defaults
@@ -115,70 +116,70 @@ func NewIAMHandler(logger *logging.Logger, service IAMService) *IAMHandler {
 }
 
 // HandleRequest processes an IAM request and returns a response
-func (h *IAMHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{
-			Status:  StatusInvalidRequest,
-			Payload: []byte(ErrNilRequest.Error()),
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
+			Payload: []byte(quicwire.ErrNilRequest.Error()),
 		}
 	}
 
 	switch req.Opcode {
 	// User operations
-	case OpIAMUserCreate:
+	case quicwire.OpIAMUserCreate:
 		return h.handleUserCreate(ctx, req)
-	case OpIAMUserGet:
+	case quicwire.OpIAMUserGet:
 		return h.handleUserGet(ctx, req)
-	case OpIAMUserList:
+	case quicwire.OpIAMUserList:
 		return h.handleUserList(ctx, req)
-	case OpIAMUserUpdate:
+	case quicwire.OpIAMUserUpdate:
 		return h.handleUserUpdate(ctx, req)
-	case OpIAMUserDelete:
+	case quicwire.OpIAMUserDelete:
 		return h.handleUserDelete(ctx, req)
 
 	// Role operations
-	case OpIAMRoleCreate:
+	case quicwire.OpIAMRoleCreate:
 		return h.handleRoleCreate(ctx, req)
-	case OpIAMRoleGet:
+	case quicwire.OpIAMRoleGet:
 		return h.handleRoleGet(ctx, req)
-	case OpIAMRoleList:
+	case quicwire.OpIAMRoleList:
 		return h.handleRoleList(ctx, req)
-	case OpIAMRoleAssign:
+	case quicwire.OpIAMRoleAssign:
 		return h.handleRoleAssign(ctx, req)
-	case OpIAMRoleRevoke:
+	case quicwire.OpIAMRoleRevoke:
 		return h.handleRoleRevoke(ctx, req)
-	case OpIAMRoleDelete:
+	case quicwire.OpIAMRoleDelete:
 		return h.handleRoleDelete(ctx, req)
 
 	// Group operations
-	case OpIAMGroupCreate:
+	case quicwire.OpIAMGroupCreate:
 		return h.handleGroupCreate(ctx, req)
-	case OpIAMGroupGet:
+	case quicwire.OpIAMGroupGet:
 		return h.handleGroupGet(ctx, req)
-	case OpIAMGroupList:
+	case quicwire.OpIAMGroupList:
 		return h.handleGroupList(ctx, req)
-	case OpIAMGroupDelete:
+	case quicwire.OpIAMGroupDelete:
 		return h.handleGroupDelete(ctx, req)
-	case OpIAMGroupAddMember:
+	case quicwire.OpIAMGroupAddMember:
 		return h.handleGroupAddMember(ctx, req)
-	case OpIAMGroupRemoveMember:
+	case quicwire.OpIAMGroupRemoveMember:
 		return h.handleGroupRemoveMember(ctx, req)
 
 	// Authorization operations
-	case OpIAMCheckPermission:
+	case quicwire.OpIAMCheckPermission:
 		return h.handleCheckPermission(ctx, req)
 
 	// Token operations (passwordless authentication)
-	case OpIAMTokenCreate:
+	case quicwire.OpIAMTokenCreate:
 		return h.handleTokenCreate(ctx, req)
-	case OpIAMTokenVerify:
+	case quicwire.OpIAMTokenVerify:
 		return h.handleTokenVerify(ctx, req)
-	case OpIAMTokenRevoke:
+	case quicwire.OpIAMTokenRevoke:
 		return h.handleTokenRevoke(ctx, req)
 
 	default:
-		return &Response{
-			Status:  StatusInvalidRequest,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("unknown IAM operation"),
 		}
 	}
@@ -460,22 +461,22 @@ type IAMSuccessResponse struct {
 // =============================================================================
 
 // handleUserCreate creates a new IAM user
-func (h *IAMHandler) handleUserCreate(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleUserCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var createReq IAMCreateUserRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if createReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if createReq.Email == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingEmail)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingEmail)
 	}
 
 	user, err := h.service.CreateUser(ctx, createReq.TenantID, &createReq)
@@ -489,34 +490,34 @@ func (h *IAMHandler) handleUserCreate(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleUserGet retrieves an IAM user by ID
-func (h *IAMHandler) handleUserGet(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleUserGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var getReq IAMGetUserRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if getReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if getReq.UserID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingUserID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingUserID)
 	}
 
 	user, err := h.service.GetUser(ctx, getReq.TenantID, getReq.UserID)
@@ -530,30 +531,30 @@ func (h *IAMHandler) handleUserGet(ctx context.Context, req *Request) *Response 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleUserList lists IAM users
-func (h *IAMHandler) handleUserList(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleUserList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var listReq IAMListRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if listReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	// Apply defaults
@@ -572,34 +573,34 @@ func (h *IAMHandler) handleUserList(ctx context.Context, req *Request) *Response
 
 	users.Timestamp = time.Now().Unix()
 
-	payload, err := EncodePayload(users)
+	payload, err := quicwire.EncodePayload(users)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleUserUpdate updates an IAM user
-func (h *IAMHandler) handleUserUpdate(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleUserUpdate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var updateReq IAMUpdateUserRequest
-	if err := DecodePayload(req.Payload, &updateReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &updateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if updateReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if updateReq.UserID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingUserID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingUserID)
 	}
 
 	user, err := h.service.UpdateUser(ctx, updateReq.TenantID, updateReq.UserID, &updateReq)
@@ -613,34 +614,34 @@ func (h *IAMHandler) handleUserUpdate(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleUserDelete deletes an IAM user
-func (h *IAMHandler) handleUserDelete(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleUserDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var deleteReq IAMDeleteUserRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if deleteReq.UserID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingUserID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingUserID)
 	}
 
 	if err := h.service.DeleteUser(ctx, deleteReq.TenantID, deleteReq.UserID); err != nil {
@@ -654,13 +655,13 @@ func (h *IAMHandler) handleUserDelete(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -670,22 +671,22 @@ func (h *IAMHandler) handleUserDelete(ctx context.Context, req *Request) *Respon
 // =============================================================================
 
 // handleRoleCreate creates a new IAM role
-func (h *IAMHandler) handleRoleCreate(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleRoleCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var createReq IAMCreateRoleRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if createReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if createReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingName)
 	}
 
 	role, err := h.service.CreateRole(ctx, createReq.TenantID, &createReq)
@@ -699,34 +700,34 @@ func (h *IAMHandler) handleRoleCreate(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleRoleGet retrieves an IAM role by ID
-func (h *IAMHandler) handleRoleGet(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleRoleGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var getReq IAMGetRoleRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if getReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if getReq.RoleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingRoleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingRoleID)
 	}
 
 	role, err := h.service.GetRole(ctx, getReq.TenantID, getReq.RoleID)
@@ -740,30 +741,30 @@ func (h *IAMHandler) handleRoleGet(ctx context.Context, req *Request) *Response 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleRoleList lists IAM roles
-func (h *IAMHandler) handleRoleList(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleRoleList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var listReq IAMListRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if listReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	// Apply defaults
@@ -782,34 +783,34 @@ func (h *IAMHandler) handleRoleList(ctx context.Context, req *Request) *Response
 
 	roles.Timestamp = time.Now().Unix()
 
-	payload, err := EncodePayload(roles)
+	payload, err := quicwire.EncodePayload(roles)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleRoleDelete deletes an IAM role
-func (h *IAMHandler) handleRoleDelete(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleRoleDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var deleteReq IAMDeleteRoleRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if deleteReq.RoleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingRoleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingRoleID)
 	}
 
 	if err := h.service.DeleteRole(ctx, deleteReq.TenantID, deleteReq.RoleID); err != nil {
@@ -823,38 +824,38 @@ func (h *IAMHandler) handleRoleDelete(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleRoleAssign assigns a role to a user
-func (h *IAMHandler) handleRoleAssign(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleRoleAssign(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var assignReq IAMAssignRoleRequest
-	if err := DecodePayload(req.Payload, &assignReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &assignReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if assignReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if assignReq.UserID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingUserID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingUserID)
 	}
 
 	if assignReq.RoleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingRoleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingRoleID)
 	}
 
 	if err := h.service.AssignRole(ctx, assignReq.TenantID, assignReq.UserID, assignReq.RoleID); err != nil {
@@ -868,38 +869,38 @@ func (h *IAMHandler) handleRoleAssign(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleRoleRevoke revokes a role from a user
-func (h *IAMHandler) handleRoleRevoke(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleRoleRevoke(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var revokeReq IAMRevokeRoleRequest
-	if err := DecodePayload(req.Payload, &revokeReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &revokeReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if revokeReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if revokeReq.UserID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingUserID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingUserID)
 	}
 
 	if revokeReq.RoleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingRoleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingRoleID)
 	}
 
 	if err := h.service.RevokeRole(ctx, revokeReq.TenantID, revokeReq.UserID, revokeReq.RoleID); err != nil {
@@ -913,13 +914,13 @@ func (h *IAMHandler) handleRoleRevoke(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -929,22 +930,22 @@ func (h *IAMHandler) handleRoleRevoke(ctx context.Context, req *Request) *Respon
 // =============================================================================
 
 // handleGroupCreate creates a new IAM group
-func (h *IAMHandler) handleGroupCreate(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleGroupCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var createReq IAMCreateGroupRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if createReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if createReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingName)
 	}
 
 	group, err := h.service.CreateGroup(ctx, createReq.TenantID, &createReq)
@@ -958,34 +959,34 @@ func (h *IAMHandler) handleGroupCreate(ctx context.Context, req *Request) *Respo
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGroupGet retrieves an IAM group by ID
-func (h *IAMHandler) handleGroupGet(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleGroupGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var getReq IAMGetGroupRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if getReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if getReq.GroupID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingGroupID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingGroupID)
 	}
 
 	group, err := h.service.GetGroup(ctx, getReq.TenantID, getReq.GroupID)
@@ -999,30 +1000,30 @@ func (h *IAMHandler) handleGroupGet(ctx context.Context, req *Request) *Response
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGroupList lists IAM groups
-func (h *IAMHandler) handleGroupList(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleGroupList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var listReq IAMListRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if listReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	// Apply defaults
@@ -1041,34 +1042,34 @@ func (h *IAMHandler) handleGroupList(ctx context.Context, req *Request) *Respons
 
 	groups.Timestamp = time.Now().Unix()
 
-	payload, err := EncodePayload(groups)
+	payload, err := quicwire.EncodePayload(groups)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGroupDelete deletes an IAM group
-func (h *IAMHandler) handleGroupDelete(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleGroupDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var deleteReq IAMDeleteGroupRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if deleteReq.GroupID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingGroupID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingGroupID)
 	}
 
 	if err := h.service.DeleteGroup(ctx, deleteReq.TenantID, deleteReq.GroupID); err != nil {
@@ -1082,38 +1083,38 @@ func (h *IAMHandler) handleGroupDelete(ctx context.Context, req *Request) *Respo
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGroupAddMember adds a user to a group
-func (h *IAMHandler) handleGroupAddMember(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleGroupAddMember(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var memberReq IAMGroupMemberRequest
-	if err := DecodePayload(req.Payload, &memberReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &memberReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if memberReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if memberReq.GroupID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingGroupID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingGroupID)
 	}
 
 	if memberReq.UserID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingUserID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingUserID)
 	}
 
 	if err := h.service.AddGroupMember(ctx, memberReq.TenantID, memberReq.GroupID, memberReq.UserID); err != nil {
@@ -1127,38 +1128,38 @@ func (h *IAMHandler) handleGroupAddMember(ctx context.Context, req *Request) *Re
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGroupRemoveMember removes a user from a group
-func (h *IAMHandler) handleGroupRemoveMember(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleGroupRemoveMember(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var memberReq IAMGroupMemberRequest
-	if err := DecodePayload(req.Payload, &memberReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &memberReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if memberReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if memberReq.GroupID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingGroupID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingGroupID)
 	}
 
 	if memberReq.UserID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingUserID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingUserID)
 	}
 
 	if err := h.service.RemoveGroupMember(ctx, memberReq.TenantID, memberReq.GroupID, memberReq.UserID); err != nil {
@@ -1172,13 +1173,13 @@ func (h *IAMHandler) handleGroupRemoveMember(ctx context.Context, req *Request) 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1188,30 +1189,30 @@ func (h *IAMHandler) handleGroupRemoveMember(ctx context.Context, req *Request) 
 // =============================================================================
 
 // handleCheckPermission checks if a subject has permission for an action
-func (h *IAMHandler) handleCheckPermission(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleCheckPermission(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var checkReq IAMCheckPermissionRequest
-	if err := DecodePayload(req.Payload, &checkReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &checkReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if checkReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if checkReq.SubjectID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingSubjectID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingSubjectID)
 	}
 
 	if checkReq.Resource == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingResource)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingResource)
 	}
 
 	if checkReq.Action == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingAction)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingAction)
 	}
 
 	result, err := h.service.CheckPermission(ctx, &checkReq)
@@ -1222,13 +1223,13 @@ func (h *IAMHandler) handleCheckPermission(ctx context.Context, req *Request) *R
 
 	result.Timestamp = time.Now().Unix()
 
-	payload, err := EncodePayload(result)
+	payload, err := quicwire.EncodePayload(result)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1238,22 +1239,22 @@ func (h *IAMHandler) handleCheckPermission(ctx context.Context, req *Request) *R
 // =============================================================================
 
 // handleTokenCreate creates a new access token
-func (h *IAMHandler) handleTokenCreate(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleTokenCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var tokenReq IAMCreateTokenRequest
-	if err := DecodePayload(req.Payload, &tokenReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &tokenReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if tokenReq.TenantID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingTenantID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingTenantID)
 	}
 
 	if tokenReq.UserID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingUserID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingUserID)
 	}
 
 	result, err := h.service.CreateToken(ctx, tokenReq.TenantID, tokenReq.UserID, &tokenReq)
@@ -1264,60 +1265,60 @@ func (h *IAMHandler) handleTokenCreate(ctx context.Context, req *Request) *Respo
 
 	result.Timestamp = time.Now().Unix()
 
-	payload, err := EncodePayload(result)
+	payload, err := quicwire.EncodePayload(result)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleTokenVerify verifies a token
-func (h *IAMHandler) handleTokenVerify(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleTokenVerify(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var verifyReq IAMVerifyTokenRequest
-	if err := DecodePayload(req.Payload, &verifyReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &verifyReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	if verifyReq.Token == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingToken)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingToken)
 	}
 
 	result, err := h.service.VerifyToken(ctx, verifyReq.Token)
 	if err != nil {
 		h.logger.Error(err, "failed to verify token")
-		return h.errorResponse(StatusUnauthorized, ErrIAMTokenVerificationFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusUnauthorized, ErrIAMTokenVerificationFailed{Cause: err})
 	}
 
 	result.Timestamp = time.Now().Unix()
 
-	payload, err := EncodePayload(result)
+	payload, err := quicwire.EncodePayload(result)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleTokenRevoke revokes a token
-func (h *IAMHandler) handleTokenRevoke(ctx context.Context, req *Request) *Response {
+func (h *IAMHandler) handleTokenRevoke(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrIAMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrIAMServiceNotAvailable)
 	}
 
 	var revokeReq IAMRevokeTokenRequest
-	if err := DecodePayload(req.Payload, &revokeReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &revokeReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrIAMDecodingFailed{Cause: err})
 	}
 
 	tokenID := revokeReq.TokenID
@@ -1325,7 +1326,7 @@ func (h *IAMHandler) handleTokenRevoke(ctx context.Context, req *Request) *Respo
 		tokenID = revokeReq.Token
 	}
 	if tokenID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrIAMMissingToken)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrIAMMissingToken)
 	}
 
 	if err := h.service.RevokeToken(ctx, tokenID); err != nil {
@@ -1339,13 +1340,13 @@ func (h *IAMHandler) handleTokenRevoke(ctx context.Context, req *Request) *Respo
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrIAMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrIAMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1355,38 +1356,38 @@ func (h *IAMHandler) handleTokenRevoke(ctx context.Context, req *Request) *Respo
 // =============================================================================
 
 // errorResponse creates an error response with the given status and error
-func (h *IAMHandler) errorResponse(status byte, err error) *Response {
-	return &Response{
+func (h *IAMHandler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
 }
 
 // iamErrorResponse maps IAM errors to appropriate status codes
-func (h *IAMHandler) iamErrorResponse(err error) *Response {
+func (h *IAMHandler) iamErrorResponse(err error) *quicwire.Response {
 	var status byte
 
 	switch {
 	case errors.Is(err, ErrIAMUserNotFound{}):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, ErrIAMRoleNotFound{}):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, ErrIAMGroupNotFound{}):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, ErrIAMUserAlreadyExists{}):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, ErrIAMRoleAlreadyExists{}):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, ErrIAMGroupAlreadyExists{}):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, ErrIAMPermissionDenied{}):
-		status = StatusPermissionDenied
+		status = quicwire.StatusPermissionDenied
 	case errors.Is(err, ErrIAMTokenExpired{}):
-		status = StatusUnauthorized
+		status = quicwire.StatusUnauthorized
 	case errors.Is(err, ErrIAMTokenInvalid{}):
-		status = StatusUnauthorized
+		status = quicwire.StatusUnauthorized
 	default:
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	}
 
 	return h.errorResponse(status, err)

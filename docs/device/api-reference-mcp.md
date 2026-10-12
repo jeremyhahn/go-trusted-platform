@@ -1,6 +1,6 @@
 # Device MCP API Reference
 
-Endpoint: `localhost:9445` (HTTP) or `stdio`
+Endpoint: `localhost:9445` (HTTPS) or `stdio`
 
 ## Overview
 
@@ -493,9 +493,10 @@ platformctl mcp serve --transport stdio
 # Start MCP server
 platformctl mcp serve --transport http --port 9445
 
-# Tool call via HTTP
-curl -X POST http://localhost:9445/mcp \
+# Tool call over HTTPS (TLS 1.3 only; trust the platform CA)
+curl --tlsv1.3 --cacert platform-ca.pem -X POST https://localhost:9445/mcp \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,

@@ -63,7 +63,7 @@ Per [engineering.md](engineering.md) §3: 401 `Unauthenticated` for identity and
 factor failures, 403 `PermissionDenied` for attestation and posture, 503
 `Unavailable`/`ResourceExhausted` for verifier, policy engine, pool or datapath
 unavailability (all refusals), 404/410 for lease lookups. QUIC status bytes map
-onto the platform's canonical vocabulary in `pkg/api/quic/protocol.go`.
+onto the platform's canonical vocabulary in `sdk/go/wire/quicwire/protocol.go`.
 
 ## 4. Pagination and versioning
 

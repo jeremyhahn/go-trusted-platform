@@ -15,6 +15,8 @@ package mcp
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -105,7 +107,7 @@ var ErrVTPMInvalidPCRIndex = &VTPMError{
 // This replaces the basic vTPM tools with full bundle/template API support.
 func (r *ToolRegistry) registerVTPMBundleTools() {
 	// Bundle CRUD operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_create",
 		Description: "Create a new vTPM bundle with EK certificate and optional Secure Boot keys",
 		InputSchema: map[string]interface{}{
@@ -135,7 +137,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_get",
 		Description: "Get detailed information about a vTPM bundle",
 		InputSchema: map[string]interface{}{
@@ -150,7 +152,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_list",
 		Description: "List all vTPM bundles with optional filters",
 		InputSchema: map[string]interface{}{
@@ -178,7 +180,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_delete",
 		Description: "Delete a vTPM bundle and all associated state",
 		InputSchema: map[string]interface{}{
@@ -194,7 +196,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 	})
 
 	// Template operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_create",
 		Description: "Create a reusable vTPM template (identity assigned at clone time)",
 		InputSchema: map[string]interface{}{
@@ -224,7 +226,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_get",
 		Description: "Get detailed information about a vTPM template",
 		InputSchema: map[string]interface{}{
@@ -239,7 +241,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_list",
 		Description: "List all vTPM templates",
 		InputSchema: map[string]interface{}{
@@ -248,7 +250,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_delete",
 		Description: "Delete a vTPM template",
 		InputSchema: map[string]interface{}{
@@ -264,7 +266,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 	})
 
 	// TPM operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_quote",
 		Description: "Generate a TPM quote for attestation from a running vTPM bundle",
 		InputSchema: map[string]interface{}{
@@ -288,7 +290,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_pcr_read",
 		Description: "Read a PCR value from a running vTPM bundle",
 		InputSchema: map[string]interface{}{
@@ -307,7 +309,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_pcr_extend",
 		Description: "Extend a PCR with measurement data on a running vTPM bundle",
 		InputSchema: map[string]interface{}{
@@ -330,7 +332,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_seal",
 		Description: "Seal data to the TPM state, optionally binding to PCR values",
 		InputSchema: map[string]interface{}{
@@ -358,7 +360,7 @@ func (r *ToolRegistry) registerVTPMBundleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_bundle_unseal",
 		Description: "Unseal data from the TPM (requires matching PCR state)",
 		InputSchema: map[string]interface{}{

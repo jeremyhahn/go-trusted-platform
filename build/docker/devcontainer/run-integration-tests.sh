@@ -706,14 +706,14 @@ setup_env_vars() {
     export IAM_QUIC_ENDPOINT="localhost:9444"
     export ATTESTATION_QUIC_ENDPOINT="localhost:9444"
 
-    # MCP endpoint. The daemon adapter uses plain HTTP (see MCP adapter docs in
-    # CLAUDE.md); vtpm/sdn-style adapters may use stdio. Ceremony/PIV/LUKS/FIDO2
-    # adapters consume the HTTP form, so expose both.
-    export PLATFORM_MCP_ENDPOINT="http://localhost:9445"
-    export VTPM_MCP_ENDPOINT="http://localhost:9445"
-    export TENANT_MCP_ENDPOINT="http://localhost:9445"
-    export IAM_MCP_ENDPOINT="http://localhost:9445"
-    export ATTESTATION_MCP_ENDPOINT="http://localhost:9445"
+    # MCP endpoint. The daemon serves MCP over TLS 1.3 only, with the same
+    # certificate and client-CA pool as REST and gRPC (#844); there is no
+    # plaintext listener. Adapters dial https:// with the mTLS trio below.
+    export PLATFORM_MCP_ENDPOINT="https://localhost:9445"
+    export VTPM_MCP_ENDPOINT="https://localhost:9445"
+    export TENANT_MCP_ENDPOINT="https://localhost:9445"
+    export IAM_MCP_ENDPOINT="https://localhost:9445"
+    export ATTESTATION_MCP_ENDPOINT="https://localhost:9445"
     export PLATFORM_MCP_PATH="/tmp/platformd"
 
     # CLI binary path

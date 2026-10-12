@@ -19,6 +19,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -49,7 +51,7 @@ func TestConnect_EmptyAddress(t *testing.T) {
 
 func TestConnect_WithHealthyServer(t *testing.T) {
 	// Create a test server with health endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -61,6 +63,7 @@ func TestConnect_WithHealthyServer(t *testing.T) {
 	ctx := context.Background()
 	opts := platform.NewOptions(
 		platform.WithRESTAddr(server.URL),
+		trustServer(server),
 	)
 
 	adapter, err := Connect(ctx, opts)
@@ -86,75 +89,133 @@ func TestConnect_WithHealthyServer(t *testing.T) {
 	}
 }
 
-func TestConnect_WithoutHealthEndpoint(t *testing.T) {
-	// Create a test server without health endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer server.Close()
+// trustServer returns the option that makes the adapter trust the
+// in-process TLS test server's self-signed certificate.
+func trustServer(server *httptest.Server) platform.Option {
+	return platform.WithTLSConfig(server.Client().Transport.(*http.Transport).TLSClientConfig.Clone())
+}
 
-	ctx := context.Background()
-	opts := platform.NewOptions(
-		platform.WithRESTAddr(server.URL),
-	)
-
-	// Should still succeed even without health endpoint
-	adapter, err := Connect(ctx, opts)
-	if err != nil {
-		t.Fatalf("Connect() returned error: %v", err)
+// assertConnectionFailed fails the test unless err is a REST
+// ErrConnectionFailed for target.
+func assertConnectionFailed(t *testing.T, err error, target string) {
+	t.Helper()
+	var connErr platform.ErrConnectionFailed
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Connect() error = %T: %v, want platform.ErrConnectionFailed", err, err)
 	}
-	defer func() {
-		if err := adapter.Close(); err != nil {
-			t.Logf("cleanup: %v", err)
-		}
-	}()
-
-	if !adapter.IsConnected() {
-		t.Error("adapter should report connected")
+	if connErr.Protocol != platform.ProtocolREST {
+		t.Errorf("Protocol = %v, want %v", connErr.Protocol, platform.ProtocolREST)
+	}
+	if connErr.Target != target {
+		t.Errorf("Target = %q, want %q", connErr.Target, target)
 	}
 }
 
-func TestConnect_AddsHTTPPrefix(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestConnect_HealthProbeNotOK(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	adapter, err := Connect(context.Background(), platform.NewOptions(
+		platform.WithRESTAddr(server.URL),
+		trustServer(server),
+	))
+	if adapter != nil {
+		t.Error("Connect() must not return an adapter when the health probe fails")
+	}
+	assertConnectionFailed(t, err, server.URL)
+
+	var statusErr ErrHTTPStatus
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Connect() error should wrap ErrHTTPStatus, got %v", err)
+	}
+	if statusErr.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("StatusCode = %d, want %d", statusErr.StatusCode, http.StatusServiceUnavailable)
+	}
+}
+
+func TestConnect_HealthProbeUnreachable(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	target := server.URL
+	opt := trustServer(server)
+	server.Close()
+
+	adapter, err := Connect(context.Background(), platform.NewOptions(
+		platform.WithRESTAddr(target),
+		opt,
+	))
+	if adapter != nil {
+		t.Error("Connect() must not return an adapter when the server is unreachable")
+	}
+	assertConnectionFailed(t, err, target)
+}
+
+func TestConnect_UntrustedCertificate(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	// Extract host:port without scheme
-	addrWithoutScheme := server.URL[7:] // Remove "http://"
+	// No trustServer option: the system roots do not hold the test CA.
+	_, err := Connect(context.Background(), platform.NewOptions(
+		platform.WithRESTAddr(server.URL),
+	))
+	assertConnectionFailed(t, err, server.URL)
+}
 
-	ctx := context.Background()
-	opts := platform.NewOptions(
-		platform.WithRESTAddr(addrWithoutScheme),
-	)
-
-	adapter, err := Connect(ctx, opts)
-	if err != nil {
-		t.Fatalf("Connect() returned error: %v", err)
+func TestConnect_RefusesPlaintextHTTP(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []platform.Option
+	}{
+		{name: "without a token"},
+		{name: "with a token", opts: []platform.Option{platform.WithBearerToken("secret")}},
 	}
-	defer func() {
-		if err := adapter.Close(); err != nil {
-			t.Logf("cleanup: %v", err)
-		}
-	}()
 
-	// REST transport always speaks HTTPS. When the supplied address has no
-	// scheme the adapter prepends https:// so callers don't accidentally
-	// downgrade to plaintext. The test server runs HTTP, so the connection
-	// itself fails; we only assert the resolved target URL here.
-	expected := "https://" + addrWithoutScheme
-	if adapter.Target() != expected {
-		t.Errorf("Target() = %q, want %q", adapter.Target(), expected)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			opts := platform.NewOptions(append(tt.opts, platform.WithRESTAddr(server.URL))...)
+			adapter, err := Connect(context.Background(), opts)
+			if adapter != nil {
+				t.Error("Connect() must not return an adapter for an http:// address")
+			}
+
+			var insecureErr platform.ErrInsecureTransport
+			if !errors.As(err, &insecureErr) {
+				t.Fatalf("Connect() error = %T: %v, want platform.ErrInsecureTransport", err, err)
+			}
+			if insecureErr.Protocol != platform.ProtocolREST {
+				t.Errorf("Protocol = %v, want %v", insecureErr.Protocol, platform.ProtocolREST)
+			}
+			if requests.Load() != 0 {
+				t.Errorf("server received %d plaintext requests, want 0", requests.Load())
+			}
+		})
 	}
 }
 
 func TestConnect_AddsHTTPSPrefix(t *testing.T) {
-	ctx := context.Background()
-	opts := platform.NewOptions(
-		platform.WithRESTAddr("localhost:8443"),
-	)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
 
-	adapter, err := Connect(ctx, opts)
+	addrWithoutScheme := strings.TrimPrefix(server.URL, "https://")
+
+	adapter, err := Connect(context.Background(), platform.NewOptions(
+		platform.WithRESTAddr(addrWithoutScheme),
+		trustServer(server),
+	))
 	if err != nil {
 		t.Fatalf("Connect() returned error: %v", err)
 	}
@@ -164,10 +225,72 @@ func TestConnect_AddsHTTPSPrefix(t *testing.T) {
 		}
 	}()
 
-	// Should have added https:// prefix
-	if adapter.Target() != "https://localhost:8443" {
-		t.Errorf("Target() = %q, want %q", adapter.Target(), "https://localhost:8443")
+	if adapter.Target() != server.URL {
+		t.Errorf("Target() = %q, want %q", adapter.Target(), server.URL)
 	}
+}
+
+func TestConnect_SendsBearerTokenOverTLS(t *testing.T) {
+	var authHeader atomic.Value
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			authHeader.Store(r.Header.Get("Authorization"))
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	adapter, err := Connect(context.Background(), platform.NewOptions(
+		platform.WithRESTAddr(server.URL),
+		trustServer(server),
+		platform.WithBearerToken("secret"),
+	))
+	if err != nil {
+		t.Fatalf("Connect() returned error: %v", err)
+	}
+	defer func() {
+		if err := adapter.Close(); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+	}()
+
+	if err := adapter.(*Adapter).DoRequest(context.Background(), http.MethodGet, "/api/test", nil, nil); err != nil {
+		t.Fatalf("DoRequest() returned error: %v", err)
+	}
+	if got := authHeader.Load(); got != "Bearer secret" {
+		t.Errorf("Authorization = %v, want %q", got, "Bearer secret")
+	}
+}
+
+func TestConnect_HonoursTLSServerName(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// The httptest certificate is valid for example.com and 127.0.0.1.
+	t.Run("matching name connects", func(t *testing.T) {
+		adapter, err := Connect(context.Background(), platform.NewOptions(
+			platform.WithRESTAddr(server.URL),
+			trustServer(server),
+			platform.WithTLSServerName("example.com"),
+		))
+		if err != nil {
+			t.Fatalf("Connect() returned error: %v", err)
+		}
+		if err := adapter.Close(); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+	})
+
+	t.Run("mismatched name is rejected", func(t *testing.T) {
+		_, err := Connect(context.Background(), platform.NewOptions(
+			platform.WithRESTAddr(server.URL),
+			trustServer(server),
+			platform.WithTLSServerName("wrong.example"),
+		))
+		assertConnectionFailed(t, err, server.URL)
+	})
 }
 
 func TestAdapter_IsConnected(t *testing.T) {
@@ -192,7 +315,7 @@ func TestAdapter_IsConnected(t *testing.T) {
 }
 
 func TestAdapter_Close(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -200,6 +323,7 @@ func TestAdapter_Close(t *testing.T) {
 	ctx := context.Background()
 	opts := platform.NewOptions(
 		platform.WithRESTAddr(server.URL),
+		trustServer(server),
 	)
 
 	adapter, err := Connect(ctx, opts)
@@ -266,12 +390,13 @@ func TestAdapter_DoRequest_Success(t *testing.T) {
 		}
 	})
 
-	server := httptest.NewServer(mux)
+	server := httptest.NewTLSServer(mux)
 	defer server.Close()
 
 	ctx := context.Background()
 	opts := platform.NewOptions(
 		platform.WithRESTAddr(server.URL),
+		trustServer(server),
 	)
 
 	adapter, err := Connect(ctx, opts)
@@ -315,12 +440,13 @@ func TestAdapter_DoRequest_WithBody(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	server := httptest.NewServer(mux)
+	server := httptest.NewTLSServer(mux)
 	defer server.Close()
 
 	ctx := context.Background()
 	opts := platform.NewOptions(
 		platform.WithRESTAddr(server.URL),
+		trustServer(server),
 	)
 
 	adapter, err := Connect(ctx, opts)
@@ -354,12 +480,13 @@ func TestAdapter_DoRequest_WithToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	server := httptest.NewServer(mux)
+	server := httptest.NewTLSServer(mux)
 	defer server.Close()
 
 	ctx := context.Background()
 	opts := platform.NewOptions(
 		platform.WithRESTAddr(server.URL),
+		trustServer(server),
 	)
 
 	adapter, err := Connect(ctx, opts)
@@ -395,12 +522,13 @@ func TestAdapter_DoRequest_HTTPError(t *testing.T) {
 		w.Write([]byte("resource not found"))
 	})
 
-	server := httptest.NewServer(mux)
+	server := httptest.NewTLSServer(mux)
 	defer server.Close()
 
 	ctx := context.Background()
 	opts := platform.NewOptions(
 		platform.WithRESTAddr(server.URL),
+		trustServer(server),
 	)
 
 	adapter, err := Connect(ctx, opts)
@@ -430,7 +558,7 @@ func TestAdapter_DoRequest_HTTPError(t *testing.T) {
 }
 
 func TestAdapter_DoRequest_ClientClosed(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -438,6 +566,7 @@ func TestAdapter_DoRequest_ClientClosed(t *testing.T) {
 	ctx := context.Background()
 	opts := platform.NewOptions(
 		platform.WithRESTAddr(server.URL),
+		trustServer(server),
 	)
 
 	adapter, err := Connect(ctx, opts)
@@ -471,12 +600,13 @@ func TestRestClientConn_Invoke(t *testing.T) {
 		}
 	})
 
-	server := httptest.NewServer(mux)
+	server := httptest.NewTLSServer(mux)
 	defer server.Close()
 
 	ctx := context.Background()
 	opts := platform.NewOptions(
 		platform.WithRESTAddr(server.URL),
+		trustServer(server),
 	)
 
 	adapter, err := Connect(ctx, opts)
@@ -503,7 +633,7 @@ func TestRestClientConn_Invoke(t *testing.T) {
 }
 
 func TestRestClientConn_Invoke_Closed(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -511,6 +641,7 @@ func TestRestClientConn_Invoke_Closed(t *testing.T) {
 	ctx := context.Background()
 	opts := platform.NewOptions(
 		platform.WithRESTAddr(server.URL),
+		trustServer(server),
 	)
 
 	adapter, err := Connect(ctx, opts)
@@ -742,14 +873,15 @@ func TestErrUnmarshalFailed_Unwrap(t *testing.T) {
 }
 
 func TestConnect_StripsTrailingSlash(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
 	ctx := context.Background()
 	opts := platform.NewOptions(
-		platform.WithRESTAddr(server.URL + "/"),
+		platform.WithRESTAddr(server.URL+"/"),
+		trustServer(server),
 	)
 
 	adapter, err := Connect(ctx, opts)

@@ -113,7 +113,7 @@ func (m *aristaEOSManager) GetPortVLAN(ctx context.Context, port string) (uint16
     return vlan, nil
 }
 
-func (m *aristaEOSManager) GetPortStatus(ctx context.Context, port string) (*PortStatus, error) {
+func (m *aristaEOSManager) GetPortStatus(ctx context.Context, port string) (*switchwire.PortStatus, error) {
     if err := m.ensureConnected(); err != nil {
         return nil, err
     }
@@ -137,7 +137,7 @@ func (m *aristaEOSManager) GetPortStatus(ctx context.Context, port string) (*Por
     return status, nil
 }
 
-func (m *aristaEOSManager) ListPorts(ctx context.Context) ([]*PortStatus, error) {
+func (m *aristaEOSManager) ListPorts(ctx context.Context) ([]*switchwire.PortStatus, error) {
     if err := m.ensureConnected(); err != nil {
         return nil, err
     }
@@ -264,8 +264,8 @@ func parseAristaAccessVLAN(output string) (uint16, error) {
 }
 
 // parseAristaInterfaceStatus parses detailed interface info
-func parseAristaInterfaceStatus(port string, output string) (*PortStatus, error) {
-    status := &PortStatus{Port: port}
+func parseAristaInterfaceStatus(port string, output string) (*switchwire.PortStatus, error) {
+    status := &switchwire.PortStatus{Port: port}
 
     // Parse operational status
     if matches := aristaOperStatusRegexp.FindStringSubmatch(output); matches != nil {
@@ -283,7 +283,7 @@ func parseAristaInterfaceStatus(port string, output string) (*PortStatus, error)
     if matches := aristaAccessVLANRegexp.FindStringSubmatch(output); matches != nil {
         if vlan, err := strconv.ParseUint(matches[1], 10, 16); err == nil {
             status.AccessVLAN = uint16(vlan)
-            status.Mode = PortModeAccess
+            status.Mode = switchwire.PortModeAccess
         }
     }
 
@@ -292,7 +292,7 @@ func parseAristaInterfaceStatus(port string, output string) (*PortStatus, error)
 
 // parseAristaInterfaceStatusTable parses tabular output
 // Similar to parseSwitchportOutput in ssh_manager.go
-func parseAristaInterfaceStatusTable(output string) ([]*PortStatus, error) {
+func parseAristaInterfaceStatusTable(output string) ([]*switchwire.PortStatus, error) {
     // Implement table parsing similar to Cisco
     // Arista format is similar but may have slight differences
     return nil, nil  // Placeholder

@@ -26,17 +26,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 const testAttestCertPEM = "-----BEGIN CERTIFICATE-----\nenrolled-iak\n-----END CERTIFICATE-----\n"
 
 func quicDeviceCall(t *testing.T, handler *DeviceHandler, opcode uint8, in interface{}, out interface{}) {
 	t.Helper()
-	payload, err := EncodePayload(in)
+	payload, err := quicwire.EncodePayload(in)
 	require.NoError(t, err)
-	resp := handler.HandleRequest(context.Background(), &Request{Opcode: opcode, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status, "payload: %s", string(resp.Payload))
-	require.NoError(t, DecodePayload(resp.Payload, out))
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: opcode, Payload: payload})
+	require.Equal(t, quicwire.StatusOK, resp.Status, "payload: %s", string(resp.Payload))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, out))
 }
 
 // TestDeviceHandler_AttestCert_SurvivesUpdateWithoutIt is the QUIC round
@@ -47,7 +48,7 @@ func TestDeviceHandler_AttestCert_SurvivesUpdateWithoutIt(t *testing.T) {
 	handler, _, _ := createTestDeviceHandler()
 
 	var registered DeviceRegisterResponse
-	quicDeviceCall(t, handler, OpDeviceRegister, &DeviceRegisterRequest{
+	quicDeviceCall(t, handler, quicwire.OpDeviceRegister, &DeviceRegisterRequest{
 		Serial: "SN-404", Model: "X10SDV", AttestPub: "pub", AttestCert: testAttestCertPEM,
 	}, &registered)
 	require.NotNil(t, registered.Device)
@@ -55,16 +56,16 @@ func TestDeviceHandler_AttestCert_SurvivesUpdateWithoutIt(t *testing.T) {
 	id := registered.Device.ID
 
 	var got DeviceGetResponse
-	quicDeviceCall(t, handler, OpDeviceGet, &DeviceGetRequest{ID: id}, &got)
+	quicDeviceCall(t, handler, quicwire.OpDeviceGet, &DeviceGetRequest{ID: id}, &got)
 	assert.Equal(t, testAttestCertPEM, got.Device.AttestCert)
 
 	var updated DeviceUpdateResponse
-	quicDeviceCall(t, handler, OpDeviceUpdate, &DeviceUpdateRequest{ID: id, Model: "X10SDV-TP8F"}, &updated)
+	quicDeviceCall(t, handler, quicwire.OpDeviceUpdate, &DeviceUpdateRequest{ID: id, Model: "X10SDV-TP8F"}, &updated)
 	assert.Equal(t, "X10SDV-TP8F", updated.Device.Model)
 	assert.Equal(t, testAttestCertPEM, updated.Device.AttestCert)
 
 	var again DeviceGetResponse
-	quicDeviceCall(t, handler, OpDeviceGet, &DeviceGetRequest{ID: id}, &again)
+	quicDeviceCall(t, handler, quicwire.OpDeviceGet, &DeviceGetRequest{ID: id}, &again)
 	assert.Equal(t, testAttestCertPEM, again.Device.AttestCert, "an update that omits attest_cert must not erase it")
 	assert.Equal(t, "pub", again.Device.AttestPub)
 }
@@ -76,7 +77,7 @@ func TestDeviceHandler_AttestCert_UpdateReplaces(t *testing.T) {
 	service.devices[9] = &entities.Device{ID: 9, Serial: "SN-9", AttestCert: "old"}
 
 	var updated DeviceUpdateResponse
-	quicDeviceCall(t, handler, OpDeviceUpdate, &DeviceUpdateRequest{ID: 9, AttestCert: testAttestCertPEM}, &updated)
+	quicDeviceCall(t, handler, quicwire.OpDeviceUpdate, &DeviceUpdateRequest{ID: 9, AttestCert: testAttestCertPEM}, &updated)
 	assert.Equal(t, testAttestCertPEM, updated.Device.AttestCert)
 	assert.Equal(t, testAttestCertPEM, service.devices[9].AttestCert)
 }

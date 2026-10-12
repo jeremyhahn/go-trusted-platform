@@ -20,6 +20,7 @@ import (
 
 	quic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // The operational VM verbs converge on the platformv1 pb messages exactly like
@@ -33,11 +34,11 @@ import (
 // back into dst.
 func encodePBRoundTrip(t *testing.T, src, dst proto.Message) {
 	t.Helper()
-	payload, err := quic.EncodePayload(src)
+	payload, err := quicwire.EncodePayload(src)
 	if err != nil {
 		t.Fatalf("encode %T: %v", src, err)
 	}
-	if err := quic.DecodePayload(payload, dst); err != nil {
+	if err := quicwire.DecodePayload(payload, dst); err != nil {
 		t.Fatalf("decode into %T: %v", dst, err)
 	}
 	if !proto.Equal(src, dst) {
@@ -111,14 +112,14 @@ func TestVMOpsWireCompat_MigrateVMResponse(t *testing.T) {
 // rather than the container handler or the flat VMHandler.
 func TestVMOpsSubOpcodesAreVMFamily(t *testing.T) {
 	subs := []byte{
-		quic.OpVMMetrics,
-		quic.OpVMAttachDisk,
-		quic.OpVMDetachDisk,
-		quic.OpVMResizeDisk,
-		quic.OpVMMigrate,
+		quicwire.OpVMMetrics,
+		quicwire.OpVMAttachDisk,
+		quicwire.OpVMDetachDisk,
+		quicwire.OpVMResizeDisk,
+		quicwire.OpVMMigrate,
 	}
 	for _, sub := range subs {
-		if !quic.IsVMSubOpcode(sub) {
+		if !quicwire.IsVMSubOpcode(sub) {
 			t.Errorf("sub-opcode 0x%02X: IsVMSubOpcode = false, want true", sub)
 		}
 		if quic.IsContainerSubOpcode(sub) {

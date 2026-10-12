@@ -26,6 +26,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/baremetal"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // powerActionHandler is the function signature for power action dispatch.
@@ -760,7 +761,7 @@ func (h *handler) writeBMCError(w http.ResponseWriter, r *http.Request, profileI
 func (h *handler) writeProvisionError(w http.ResponseWriter, r *http.Request, profileID uint64, err error) {
 	var inProgress baremetal.ErrProvisionInProgress
 	if errors.As(err, &inProgress) {
-		h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   inProgress.Error(),
 			Success: false,

@@ -214,7 +214,8 @@ Errors this server produces itself (as opposed to the services it hosts):
 | Service registry with no response writer | 500 | `registry: response writer not configured` |
 | An unconfigured service's routes | 503 | the registry stub, with a reason |
 
-`/api/v1` responses use the `pkg/webservice/v1/response` envelope
+`/api/v1` responses use the `WebServiceResponse` envelope
+(`sdk/go/wire/restwire`), written by `pkg/webservice/v1/response`
 (`Success200` and friends); that contract belongs to the services.
 
 ## 9. Pagination

@@ -179,7 +179,9 @@ The gRPC server always listens on the Unix socket regardless of TCP settings.
 quic:
   enabled: false
   listen_addr: "127.0.0.1:9444"
-  # Additional QUIC settings from pkg/api/quic/config.go
+  # Transport tuning (stream limits, idle timeout, keep-alive) is not
+  # YAML-configurable: it comes from DefaultServerConfig in
+  # pkg/api/quic/config.go, with listen_addr applied on top.
 ```
 
 ### QUIC Settings Reference
@@ -211,19 +213,24 @@ mcp:
 | `enabled` | bool | `false` | Enable MCP server |
 | `server_name` | string | `Trusted Platform MCP Server` | Server name for clients |
 | `server_version` | string | `1.0.0` | Platform version string |
-| `transport` | string | `http` | Transport type: `stdio` or `http` |
-| `http_addr` | string | `127.0.0.1:9445` | HTTP listen address — set via `daemon.mcp` (see Listen addresses) |
+| `transport` | string | `http` | Transport type: `stdio` or `http` (`http` serves HTTPS, TLS 1.3 only) |
+| `http_addr` | string | `127.0.0.1:9445` | HTTPS listen address — set via `daemon.mcp` (see Listen addresses) |
 | `request_timeout` | duration | `30s` | Default operation timeout |
 | `max_concurrent_requests` | int | `100` | Concurrent request limit |
 
 ### Transport Modes
 
-**HTTP Transport:**
+**HTTP Transport (HTTPS, TLS 1.3 only):**
 ```yaml
 mcp:
   transport: http
   http_addr: "127.0.0.1:9445"
 ```
+
+The listener presents the daemon TLS identity that REST and gRPC present, under
+the same `EnableMTLS` client-certificate policy. It has no TLS setting of its
+own and no plaintext mode; without a usable daemon certificate the daemon
+refuses to start (`ErrTLSConfigFailed`). See [`api.md`](api.md) §5.
 
 **stdio Transport:**
 ```yaml

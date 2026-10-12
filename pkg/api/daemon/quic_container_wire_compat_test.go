@@ -18,8 +18,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	quic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // The tests in this file guard the QUIC wire contract for the container
@@ -38,11 +38,11 @@ import (
 // the pb-delegated QUIC surfaces (container, attestation, DNS zone ops).
 func roundTripPBWire(t *testing.T, src, dst proto.Message) {
 	t.Helper()
-	payload, err := quic.EncodePayload(src)
+	payload, err := quicwire.EncodePayload(src)
 	if err != nil {
 		t.Fatalf("encode %T: %v", src, err)
 	}
-	if err := quic.DecodePayload(payload, dst); err != nil {
+	if err := quicwire.DecodePayload(payload, dst); err != nil {
 		t.Fatalf("decode %T into %T: %v", src, dst, err)
 	}
 	if !proto.Equal(src, dst) {

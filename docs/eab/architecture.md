@@ -65,7 +65,7 @@ URL with the pair in query parameters.
 | Delivery rendering (JSON, QR, URL) | `pkg/eab/delivery.go` | this repo |
 | gRPC/REST/QUIC/MCP service implementation | `pkg/api/daemon/eab_grpc_service.go` | this repo |
 | REST router | `pkg/webservice/v1/rest/eab/` | this repo |
-| QUIC sub-opcode dispatch | `pkg/api/daemon/quic_eab.go`, `pkg/api/quic/eab_opcodes.go` | this repo |
+| QUIC sub-opcode dispatch | `pkg/api/daemon/quic_eab.go`, `sdk/go/wire/quicwire/eab_opcodes.go` | this repo |
 | MCP tools | `pkg/api/mcp/eab_tools.go`, `pkg/api/daemon/mcp_eab.go` | this repo |
 | Go SDK client | `sdk/go/services/eab/client.go` | this repo |
 | **Underlying key-value storage, secondary indexes, pagination** | go-qrdb via `go-quicbaas/sdk/go`, reached through `pkg/storage/quicbaas` | **not this repo** |

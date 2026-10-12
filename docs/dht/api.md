@@ -16,7 +16,7 @@ Verified against the tree on 2026-08-18:
 | `dht` / `DHT` anywhere under `pkg/api/` (gRPC, QUIC, MCP, REST handlers) | **no matches** |
 | `dht` / `DHT` anywhere under `sdk/` | **no matches** |
 | A `DHTService` in any `.proto` | **none** |
-| A DHT opcode in `pkg/api/quic/protocol.go` | **none** |
+| A DHT opcode in `sdk/go/wire/quicwire/protocol.go` | **none** |
 | A DHT tool in `pkg/api/mcp/` | **none** |
 | A `/api/v1/dht` route | **none** |
 | A DHT field on `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`) | **none** — the registry has 22 fields and none is DHT |

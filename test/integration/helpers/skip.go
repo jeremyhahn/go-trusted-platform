@@ -157,8 +157,10 @@ func skipIfQUICUnavailable(t *testing.T, endpoint string) {
 func skipIfMCPUnavailable(t *testing.T, ctx context.Context, endpoint string) {
 	t.Helper()
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/health", nil)
+	// MCP serves TLS 1.3 only (#844); a plain client would fail the
+	// handshake and skip a healthy endpoint.
+	client := NewHTTPClient(5 * time.Second)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, MCPBaseURL(endpoint)+"/health", nil)
 	if err != nil {
 		t.Skipf("Skipping MCP test: failed to create request: %v", err)
 		return

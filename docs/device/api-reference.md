@@ -11,7 +11,7 @@ The Device API provides management operations for device identity and profile ma
 | REST | HTTPS | 8443 | [api-reference-rest.md](api-reference-rest.md) |
 | gRPC | TCP | 9443 | [api-reference-grpc.md](api-reference-grpc.md) |
 | QUIC | UDP | 9444 | [api-reference-quic.md](api-reference-quic.md) |
-| MCP | stdio/HTTP | 9445 | [api-reference-mcp.md](api-reference-mcp.md) |
+| MCP | stdio/HTTPS | 9445 | [api-reference-mcp.md](api-reference-mcp.md) |
 | Unix Socket | Unix | /run/platformd.sock | [api-reference-unix.md](api-reference-unix.md) |
 
 ## Operations

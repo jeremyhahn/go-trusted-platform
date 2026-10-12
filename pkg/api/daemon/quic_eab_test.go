@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -44,26 +44,26 @@ func newEABQUICHandler(t *testing.T, configured bool) (*QUICServiceHandler, *fak
 // eabQUICRequest builds an OpProvisioningCategory request carrying an
 // EAB sub-opcode and optional pb body, encoded exactly as the SDK QUIC
 // transport does (the platformv1 proto struct directly).
-func eabQUICRequest(t *testing.T, sub byte, body interface{}) *quic.Request {
+func eabQUICRequest(t *testing.T, sub byte, body interface{}) *quicwire.Request {
 	t.Helper()
 	payload := []byte{sub}
 	if body != nil {
-		encoded, err := quic.EncodePayload(body)
+		encoded, err := quicwire.EncodePayload(body)
 		if err != nil {
 			t.Fatalf("encode %T: %v", body, err)
 		}
 		payload = append(payload, encoded...)
 	}
-	return &quic.Request{Opcode: quic.OpProvisioningCategory, Payload: payload}
+	return &quicwire.Request{Opcode: quicwire.OpProvisioningCategory, Payload: payload}
 }
 
 // decodeEABOK asserts StatusOK and decodes the response payload.
-func decodeEABOK(t *testing.T, resp *quic.Response, out interface{}) {
+func decodeEABOK(t *testing.T, resp *quicwire.Response, out interface{}) {
 	t.Helper()
-	if resp.Status != quic.StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		t.Fatalf("expected StatusOK, got 0x%02x (payload: %s)", resp.Status, resp.Payload)
 	}
-	if err := quic.DecodePayload(resp.Payload, out); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, out); err != nil {
 		t.Fatalf("decode response into %T: %v", out, err)
 	}
 }
@@ -77,13 +77,13 @@ func decodeEABOK(t *testing.T, resp *quic.Response, out interface{}) {
 // sub-opcode, because both families multiplex under 0xCF.
 func TestEABSubOpcodesDoNotCollideWithProvisioning(t *testing.T) {
 	provisioningSubs := map[byte]string{
-		quic.ProvisioningSubGetNonce:       "GetNonce",
-		quic.ProvisioningSubFetchConfig:    "FetchConfig",
-		quic.ProvisioningSubSignDigest:     "SignDigest",
-		quic.ProvisioningSubPollSession:    "PollSession",
-		quic.ProvisioningSubFulfillSession: "FulfillSession",
-		quic.ProvisioningSubListSessions:   "ListSessions",
-		quic.ProvisioningSubGetSession:     "GetSession",
+		quicwire.ProvisioningSubGetNonce:       "GetNonce",
+		quicwire.ProvisioningSubFetchConfig:    "FetchConfig",
+		quicwire.ProvisioningSubSignDigest:     "SignDigest",
+		quicwire.ProvisioningSubPollSession:    "PollSession",
+		quicwire.ProvisioningSubFulfillSession: "FulfillSession",
+		quicwire.ProvisioningSubListSessions:   "ListSessions",
+		quicwire.ProvisioningSubGetSession:     "GetSession",
 	}
 	for sub := range eabQUICDispatch {
 		if name, clash := provisioningSubs[sub]; clash {
@@ -102,8 +102,8 @@ func TestEABSubOpcodesDoNotCollideWithProvisioning(t *testing.T) {
 func TestEABQUIC_NilServiceUnavailable(t *testing.T) {
 	handler, _, _ := newEABQUICHandler(t, false)
 	resp := handler.HandleRequest(context.Background(),
-		eabQUICRequest(t, quic.EABSubGetCredential, &platformv1.GetEABCredentialRequest{CredentialId: 1}))
-	if resp.Status != quic.StatusUnavailable {
+		eabQUICRequest(t, quicwire.EABSubGetCredential, &platformv1.GetEABCredentialRequest{CredentialId: 1}))
+	if resp.Status != quicwire.StatusUnavailable {
 		t.Errorf("expected StatusUnavailable, got 0x%02x", resp.Status)
 	}
 }
@@ -113,8 +113,8 @@ func TestEABQUIC_NonEABSubFallsThroughToProvisioning(t *testing.T) {
 	// reach the config delivery guard (unavailable), NOT the EAB path.
 	handler, _, _ := newEABQUICHandler(t, true)
 	resp := handler.HandleRequest(context.Background(),
-		eabQUICRequest(t, quic.ProvisioningSubGetNonce, nil))
-	if resp.Status != quic.StatusUnavailable {
+		eabQUICRequest(t, quicwire.ProvisioningSubGetNonce, nil))
+	if resp.Status != quicwire.StatusUnavailable {
 		t.Errorf("expected config delivery unavailable, got 0x%02x", resp.Status)
 	}
 }
@@ -125,18 +125,18 @@ func TestEABQUIC_UnknownSubOpcode(t *testing.T) {
 	// EAB-only handler.
 	handler, _, _ := newEABQUICHandler(t, true)
 	resp := handler.HandleRequest(context.Background(), eabQUICRequest(t, 0x7F, nil))
-	if resp.Status != quic.StatusUnavailable {
+	if resp.Status != quicwire.StatusUnavailable {
 		t.Errorf("expected StatusUnavailable (config delivery guard), got 0x%02x", resp.Status)
 	}
 }
 
 func TestEABQUIC_MalformedPayloadInvalidRequest(t *testing.T) {
 	handler, _, _ := newEABQUICHandler(t, true)
-	resp := handler.HandleRequest(context.Background(), &quic.Request{
-		Opcode:  quic.OpProvisioningCategory,
-		Payload: append([]byte{quic.EABSubGetCredential}, 0xc1, 0xc1, 0xc1),
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{
+		Opcode:  quicwire.OpProvisioningCategory,
+		Payload: append([]byte{quicwire.EABSubGetCredential}, 0xc1, 0xc1, 0xc1),
 	})
-	if resp.Status != quic.StatusInvalidRequest {
+	if resp.Status != quicwire.StatusInvalidRequest {
 		t.Errorf("expected StatusInvalidRequest, got 0x%02x", resp.Status)
 	}
 }
@@ -150,7 +150,7 @@ func TestEABQUIC_CreateGetRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	var createResp platformv1.CreateEABCredentialResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubCreateCredential,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubCreateCredential,
 		&platformv1.CreateEABCredentialRequest{
 			ProfileId:        7,
 			TenantId:         "tenant-1",
@@ -165,7 +165,7 @@ func TestEABQUIC_CreateGetRoundTrip(t *testing.T) {
 	}
 
 	var getResp platformv1.GetEABCredentialResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubGetCredential,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubGetCredential,
 		&platformv1.GetEABCredentialRequest{CredentialId: id})), &getResp)
 	if getResp.GetCredential().GetId() != id {
 		t.Errorf("get id = %d, want %d", getResp.GetCredential().GetId(), id)
@@ -175,7 +175,7 @@ func TestEABQUIC_CreateGetRoundTrip(t *testing.T) {
 	}
 
 	var byKeyResp platformv1.GetEABCredentialResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubGetCredentialByKeyID,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubGetCredentialByKeyID,
 		&platformv1.GetEABCredentialByKeyIDRequest{
 			KeyId: createResp.GetCredential().GetKeyId(),
 		})), &byKeyResp)
@@ -192,7 +192,7 @@ func TestEABQUIC_ListRoundTrip(t *testing.T) {
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 2, TenantID: "t2"})
 
 	var listResp platformv1.ListEABCredentialsResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubListCredentials,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubListCredentials,
 		&platformv1.ListEABCredentialsRequest{
 			TenantId:   "t1",
 			Pagination: &platformv1.PaginationRequest{Page: 1, PageSize: 1},
@@ -214,7 +214,7 @@ func TestEABQUIC_ValidateRoundTrip(t *testing.T) {
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	var validResp platformv1.ValidateEABCredentialResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubValidateCredential,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubValidateCredential,
 		&platformv1.ValidateEABCredentialRequest{
 			KeyId:   cred.KeyID,
 			HmacKey: base64.RawURLEncoding.EncodeToString(cred.HMACKey),
@@ -225,7 +225,7 @@ func TestEABQUIC_ValidateRoundTrip(t *testing.T) {
 
 	// Unknown key: in-band valid=false, still StatusOK.
 	var invalidResp platformv1.ValidateEABCredentialResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubValidateCredential,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubValidateCredential,
 		&platformv1.ValidateEABCredentialRequest{
 			KeyId:   "missing",
 			HmacKey: base64.RawURLEncoding.EncodeToString([]byte{1}),
@@ -236,9 +236,9 @@ func TestEABQUIC_ValidateRoundTrip(t *testing.T) {
 
 	// Malformed base64 maps to StatusInvalidArgument via the shared
 	// gRPC-code translation.
-	resp := handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubValidateCredential,
+	resp := handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubValidateCredential,
 		&platformv1.ValidateEABCredentialRequest{KeyId: "k", HmacKey: "!!!"}))
-	if resp.Status != quic.StatusInvalidArgument {
+	if resp.Status != quicwire.StatusInvalidArgument {
 		t.Errorf("bad base64: expected StatusInvalidArgument, got 0x%02x", resp.Status)
 	}
 }
@@ -249,30 +249,30 @@ func TestEABQUIC_LifecycleRoundTrip(t *testing.T) {
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	var usedResp platformv1.MarkEABCredentialUsedResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubMarkCredentialUsed,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubMarkCredentialUsed,
 		&platformv1.MarkEABCredentialUsedRequest{CredentialId: cred.ID})), &usedResp)
 	if !usedResp.GetStatus().GetSuccess() {
 		t.Error("mark-used: expected success")
 	}
 
 	var revokeResp platformv1.RevokeEABCredentialResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubRevokeCredential,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubRevokeCredential,
 		&platformv1.RevokeEABCredentialRequest{CredentialId: cred.ID, RevokerId: 9})), &revokeResp)
 	if !revokeResp.GetStatus().GetSuccess() {
 		t.Error("revoke: expected success")
 	}
 
 	var deleteResp platformv1.DeleteEABCredentialResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubDeleteCredential,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubDeleteCredential,
 		&platformv1.DeleteEABCredentialRequest{CredentialId: cred.ID})), &deleteResp)
 	if !deleteResp.GetStatus().GetSuccess() {
 		t.Error("delete: expected success")
 	}
 
 	// Second delete: NotFound via the shared error translation.
-	resp := handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubDeleteCredential,
+	resp := handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubDeleteCredential,
 		&platformv1.DeleteEABCredentialRequest{CredentialId: cred.ID}))
-	if resp.Status != quic.StatusNotFound {
+	if resp.Status != quicwire.StatusNotFound {
 		t.Errorf("second delete: expected StatusNotFound, got 0x%02x", resp.Status)
 	}
 }
@@ -283,7 +283,7 @@ func TestEABQUIC_DeliveryRoundTrip(t *testing.T) {
 	cred, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t"})
 
 	var qrResp platformv1.GetEABCredentialQRCodeResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubGetCredentialQRCode,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubGetCredentialQRCode,
 		&platformv1.GetEABCredentialQRCodeRequest{CredentialId: cred.ID, Size: 128})), &qrResp)
 	if string(qrResp.GetQrCode()) != string(del.qrPayload) {
 		t.Error("qr payload mismatch")
@@ -296,7 +296,7 @@ func TestEABQUIC_DeliveryRoundTrip(t *testing.T) {
 	}
 
 	var urlResp platformv1.GetEABEnrollmentURLResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubGetEnrollmentURL,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubGetEnrollmentURL,
 		&platformv1.GetEABEnrollmentURLRequest{CredentialId: cred.ID})), &urlResp)
 	if urlResp.GetUrl() != del.url {
 		t.Errorf("url = %q, want %q", urlResp.GetUrl(), del.url)
@@ -309,7 +309,7 @@ func TestEABQUIC_CleanupRoundTrip(t *testing.T) {
 
 	var cleanupResp platformv1.CleanupExpiredEABCredentialsResponse
 	decodeEABOK(t, handler.HandleRequest(context.Background(),
-		eabQUICRequest(t, quic.EABSubCleanupExpiredCredentials,
+		eabQUICRequest(t, quicwire.EABSubCleanupExpiredCredentials,
 			&platformv1.CleanupExpiredEABCredentialsRequest{})), &cleanupResp)
 	if cleanupResp.GetDeletedCount() != 3 {
 		t.Errorf("deleted_count = %d, want 3", cleanupResp.GetDeletedCount())
@@ -328,7 +328,7 @@ func TestEABQUIC_TimestampRoundTrip(t *testing.T) {
 	})
 
 	var getResp platformv1.GetEABCredentialResponse
-	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quic.EABSubGetCredential,
+	decodeEABOK(t, handler.HandleRequest(ctx, eabQUICRequest(t, quicwire.EABSubGetCredential,
 		&platformv1.GetEABCredentialRequest{CredentialId: cred.ID})), &getResp)
 	if got := getResp.GetCredential().GetCreatedAt().AsTime().Unix(); got != cred.CreatedAt.Unix() {
 		t.Errorf("created_at = %d, want %d", got, cred.CreatedAt.Unix())

@@ -25,6 +25,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	lukssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/luks"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 )
@@ -102,7 +103,7 @@ func (q *QUICAdapter) sendSub(ctx context.Context, sub byte, in interface{}, out
 
 	var body []byte
 	if in != nil {
-		encoded, err := quic.EncodePayload(in)
+		encoded, err := quicwire.EncodePayload(in)
 		if err != nil {
 			return fmt.Errorf("encode payload: %w", err)
 		}
@@ -118,18 +119,18 @@ func (q *QUICAdapter) sendSub(ctx context.Context, sub byte, in interface{}, out
 	}
 	defer stream.Close()
 
-	if err := quic.WriteRequest(stream, &quic.Request{Opcode: quic.OpLUKSCategory, Payload: payload}); err != nil {
+	if err := quicwire.WriteRequest(stream, &quicwire.Request{Opcode: quicwire.OpLUKSCategory, Payload: payload}); err != nil {
 		return fmt.Errorf("write request: %w", err)
 	}
-	resp, err := quic.ReadResponse(stream)
+	resp, err := quicwire.ReadResponse(stream)
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
 	}
-	if resp.Status != quic.StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		return fmt.Errorf("QUIC luks sub 0x%02X failed: status 0x%02X", sub, resp.Status)
 	}
 	if out != nil && len(resp.Payload) > 0 {
-		return quic.DecodePayload(resp.Payload, out)
+		return quicwire.DecodePayload(resp.Payload, out)
 	}
 	return nil
 }
@@ -151,7 +152,7 @@ func (q *QUICAdapter) Status(ctx context.Context, req *lukssdk.StatusRequest) (*
 	}
 	in := &quic.LUKSStatusReq{Device: req.Device}
 	var wire quic.LUKSStatusResp
-	if err := q.sendSub(ctx, quic.LUKSSubStatus, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.LUKSSubStatus, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "LUKSStatus", Err: err}
 	}
 	return &lukssdk.StatusResponse{
@@ -167,7 +168,7 @@ func (q *QUICAdapter) ListSlots(ctx context.Context, req *lukssdk.ListSlotsReque
 	}
 	in := &quic.LUKSListSlotsReq{Device: req.Device}
 	var wire quic.LUKSListSlotsResp
-	if err := q.sendSub(ctx, quic.LUKSSubListSlots, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.LUKSSubListSlots, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "LUKSListSlots", Err: err}
 	}
 	out := &lukssdk.ListSlotsResponse{
@@ -187,7 +188,7 @@ func (q *QUICAdapter) Info(ctx context.Context, req *lukssdk.InfoRequest) (*luks
 	}
 	in := &quic.LUKSInfoReq{Device: req.Device}
 	var wire quic.LUKSInfoResp
-	if err := q.sendSub(ctx, quic.LUKSSubInfo, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.LUKSSubInfo, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "LUKSInfo", Err: err}
 	}
 	out := &lukssdk.InfoResponse{
@@ -211,7 +212,7 @@ func (q *QUICAdapter) EnrollPassphrase(ctx context.Context, req *lukssdk.EnrollP
 		Device: req.Device, ExistingPassphrase: req.ExistingPassphrase, NewPassphrase: req.NewPassphrase,
 	}
 	var wire quic.LUKSEnrollPassphraseResp
-	if err := q.sendSub(ctx, quic.LUKSSubEnrollPassphrase, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.LUKSSubEnrollPassphrase, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "LUKSEnrollPassphrase", Err: err}
 	}
 	return &lukssdk.EnrollPassphraseResponse{Slot: wire.Slot}, nil
@@ -227,7 +228,7 @@ func (q *QUICAdapter) EnrollFIDO2(ctx context.Context, req *lukssdk.EnrollFIDO2R
 		CredentialID: req.CredentialID, RequirePIN: req.RequirePIN, RequireUV: req.RequireUV,
 	}
 	var wire quic.LUKSEnrollFIDO2Resp
-	if err := q.sendSub(ctx, quic.LUKSSubEnrollFIDO2, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.LUKSSubEnrollFIDO2, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "LUKSEnrollFIDO2", Err: err}
 	}
 	return &lukssdk.EnrollFIDO2Response{Slot: wire.Slot, TokenID: wire.TokenID}, nil
@@ -243,7 +244,7 @@ func (q *QUICAdapter) EnrollTPM(ctx context.Context, req *lukssdk.EnrollTPMReque
 		PCRs: req.PCRs, Handle: req.Handle,
 	}
 	var wire quic.LUKSEnrollTPMResp
-	if err := q.sendSub(ctx, quic.LUKSSubEnrollTPM, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.LUKSSubEnrollTPM, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "LUKSEnrollTPM", Err: err}
 	}
 	return &lukssdk.EnrollTPMResponse{Slot: wire.Slot, TokenID: wire.TokenID}, nil
@@ -256,7 +257,7 @@ func (q *QUICAdapter) EnrollRecovery(ctx context.Context, req *lukssdk.EnrollRec
 	}
 	in := &quic.LUKSEnrollRecoveryReq{Device: req.Device, ExistingPassphrase: req.ExistingPassphrase}
 	var wire quic.LUKSEnrollRecoveryResp
-	if err := q.sendSub(ctx, quic.LUKSSubEnrollRecovery, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.LUKSSubEnrollRecovery, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "LUKSEnrollRecovery", Err: err}
 	}
 	return &lukssdk.EnrollRecoveryResponse{Slot: wire.Slot, RecoveryKey: wire.RecoveryKey}, nil
@@ -269,7 +270,7 @@ func (q *QUICAdapter) RemoveKey(ctx context.Context, req *lukssdk.RemoveKeyReque
 	}
 	in := &quic.LUKSRemoveKeyReq{Device: req.Device, Slot: req.Slot}
 	var wire quic.LUKSRemoveKeyResp
-	if err := q.sendSub(ctx, quic.LUKSSubRemoveKey, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.LUKSSubRemoveKey, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "LUKSRemoveKey", Err: err}
 	}
 	return &lukssdk.RemoveKeyResponse{Removed: wire.Removed}, nil
@@ -282,7 +283,7 @@ func (q *QUICAdapter) TestUnlock(ctx context.Context, req *lukssdk.TestUnlockReq
 	}
 	in := &quic.LUKSTestUnlockReq{Device: req.Device, Slot: req.Slot}
 	var wire quic.LUKSTestUnlockResp
-	if err := q.sendSub(ctx, quic.LUKSSubTestUnlock, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.LUKSSubTestUnlock, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "LUKSTestUnlock", Err: err}
 	}
 	return &lukssdk.TestUnlockResponse{Unlocked: wire.Unlocked}, nil
@@ -298,7 +299,7 @@ func (q *QUICAdapter) ChangePassphrase(ctx context.Context, req *lukssdk.ChangeP
 		OldPassphrase: req.OldPassphrase, NewPassphrase: req.NewPassphrase,
 	}
 	var wire quic.LUKSChangePassphraseResp
-	if err := q.sendSub(ctx, quic.LUKSSubChangePassphrase, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.LUKSSubChangePassphrase, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "LUKSChangePassphrase", Err: err}
 	}
 	return &lukssdk.ChangePassphraseResponse{Changed: wire.Changed}, nil

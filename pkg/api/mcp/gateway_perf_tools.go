@@ -13,7 +13,11 @@
 
 package mcp
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+)
 
 // =============================================================================
 // Gateway Perf Error Types
@@ -49,7 +53,7 @@ func perfBridgeProperty() map[string]interface{} {
 // against a live bridge and datapath / conntrack values come from
 // ovs-vswitchd counters.
 func (r *ToolRegistry) registerGatewayPerfTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_perf_flows",
 		Description: "Measure real OpenFlow programming throughput: installs ephemeral flows into a dedicated table, times the install with a monotonic clock, then removes them with a cookie-scoped delete",
 		InputSchema: map[string]interface{}{
@@ -68,7 +72,7 @@ func (r *ToolRegistry) registerGatewayPerfTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_perf_datapath",
 		Description: "Read live datapath counters: flow-cache hits/misses/lost, hardware-offloaded flow count, hw-offload configuration state, and bridge datapath type",
 		InputSchema: map[string]interface{}{
@@ -79,7 +83,7 @@ func (r *ToolRegistry) registerGatewayPerfTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_perf_conntrack",
 		Description: "Summarize the connection tracking table: total entries and per-zone counts, optionally restricted to one conntrack zone",
 		InputSchema: map[string]interface{}{

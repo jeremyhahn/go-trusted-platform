@@ -14,6 +14,7 @@
 package daemon
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"os"
 
@@ -30,6 +31,7 @@ const (
 	transportGRPCTCP = "grpc"
 	transportQUIC    = "quic"
 	transportREST    = "rest"
+	transportMCP     = "mcp"
 )
 
 // grpcAuthSelection is the authentication the gRPC TCP transport resolved to.
@@ -219,4 +221,26 @@ func resolveMTLSClientCAPool(config *Config, transport string) (*x509.CertPool, 
 		return nil, ErrTLSConfigFailed{Reason: transport + ": failed to parse mTLS client CA certificates"}
 	}
 	return pool, nil
+}
+
+// newServerTLSConfig builds the server TLS configuration a TCP transport
+// serves cert with. When mTLS is enabled it requires and verifies a client
+// certificate against the pool resolveMTLSClientCAPool resolves for the
+// transport, failing closed on the same terms (#550). REST, gRPC and MCP
+// share it so every listener presents one identity under one trust policy.
+func newServerTLSConfig(config *Config, transport string, cert tls.Certificate) (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	clientCAPool, err := resolveMTLSClientCAPool(config, transport)
+	if err != nil {
+		return nil, err
+	}
+	if clientCAPool != nil {
+		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		tlsConfig.ClientCAs = clientCAPool
+	}
+	return tlsConfig, nil
 }

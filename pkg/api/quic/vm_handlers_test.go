@@ -26,13 +26,14 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func init() {
 	// Set the default codec to MsgPack for encoding/decoding payloads
-	_ = SetDefaultCodecType(codec.MsgPack)
+	_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 }
 
 // =============================================================================
@@ -486,20 +487,20 @@ func TestVMHandleRequest(t *testing.T) {
 
 		resp := handler.HandleRequest(context.Background(), nil)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "nil")
 	})
 
 	t.Run("returns error for unknown opcode", func(t *testing.T) {
 		handler, _ := createTestVMHandler()
 
-		req := &Request{
+		req := &quicwire.Request{
 			Opcode: 0x00, // Unknown opcode for VM handler
 		}
 
 		resp := handler.HandleRequest(context.Background(), req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "unknown VM operation")
 	})
 }
@@ -529,20 +530,20 @@ func TestVMHandleCreate(t *testing.T) {
 			Labels:      map[string]string{"app": "test"},
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var createResp VMCreateResponse
-		err = DecodePayload(resp.Payload, &createResp)
+		err = quicwire.DecodePayload(resp.Payload, &createResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, createResp.VM)
@@ -558,17 +559,17 @@ func TestVMHandleCreate(t *testing.T) {
 			Name: "test-vm",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 		assert.Contains(t, string(resp.Payload), "not available")
 	})
 
@@ -579,31 +580,31 @@ func TestVMHandleCreate(t *testing.T) {
 			ProfileID: 1,
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "name")
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMCreate,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when create fails", func(t *testing.T) {
@@ -614,17 +615,17 @@ func TestVMHandleCreate(t *testing.T) {
 			Name: "test-vm",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -643,20 +644,20 @@ func TestVMHandleDelete(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var deleteResp VMDeleteResponse
-		err = DecodePayload(resp.Payload, &deleteResp)
+		err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", deleteResp.ID)
@@ -670,17 +671,17 @@ func TestVMHandleDelete(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -688,17 +689,17 @@ func TestVMHandleDelete(t *testing.T) {
 
 		deleteReq := &VMDeleteRequest{}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "ID")
 	})
 
@@ -709,17 +710,17 @@ func TestVMHandleDelete(t *testing.T) {
 			ID: "nonexistent",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -738,20 +739,20 @@ func TestVMHandleStart(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(startReq)
+		payload, err := quicwire.EncodePayload(startReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMStart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMStart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var startResp VMStartResponse
-		err = DecodePayload(resp.Payload, &startResp)
+		err = quicwire.DecodePayload(resp.Payload, &startResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", startResp.ID)
@@ -765,17 +766,17 @@ func TestVMHandleStart(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(startReq)
+		payload, err := quicwire.EncodePayload(startReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMStart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMStart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -783,17 +784,17 @@ func TestVMHandleStart(t *testing.T) {
 
 		startReq := &VMStartRequest{}
 
-		payload, err := EncodePayload(startReq)
+		payload, err := quicwire.EncodePayload(startReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMStart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMStart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for VM not found", func(t *testing.T) {
@@ -803,17 +804,17 @@ func TestVMHandleStart(t *testing.T) {
 			ID: "nonexistent",
 		}
 
-		payload, err := EncodePayload(startReq)
+		payload, err := quicwire.EncodePayload(startReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMStart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMStart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error when already running", func(t *testing.T) {
@@ -825,17 +826,17 @@ func TestVMHandleStart(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(startReq)
+		payload, err := quicwire.EncodePayload(startReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMStart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMStart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -855,20 +856,20 @@ func TestVMHandleStop(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(stopReq)
+		payload, err := quicwire.EncodePayload(stopReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMStop,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMStop,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var stopResp VMStopResponse
-		err = DecodePayload(resp.Payload, &stopResp)
+		err = quicwire.DecodePayload(resp.Payload, &stopResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", stopResp.ID)
@@ -882,17 +883,17 @@ func TestVMHandleStop(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(stopReq)
+		payload, err := quicwire.EncodePayload(stopReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMStop,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMStop,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -900,17 +901,17 @@ func TestVMHandleStop(t *testing.T) {
 
 		stopReq := &VMStopRequest{}
 
-		payload, err := EncodePayload(stopReq)
+		payload, err := quicwire.EncodePayload(stopReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMStop,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMStop,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for VM not found", func(t *testing.T) {
@@ -920,17 +921,17 @@ func TestVMHandleStop(t *testing.T) {
 			ID: "nonexistent",
 		}
 
-		payload, err := EncodePayload(stopReq)
+		payload, err := quicwire.EncodePayload(stopReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMStop,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMStop,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -949,20 +950,20 @@ func TestVMHandleGet(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var getResp VMGetResponse
-		err = DecodePayload(resp.Payload, &getResp)
+		err = quicwire.DecodePayload(resp.Payload, &getResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, getResp.VM)
@@ -981,17 +982,17 @@ func TestVMHandleGet(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -999,17 +1000,17 @@ func TestVMHandleGet(t *testing.T) {
 
 		getReq := &VMGetRequest{}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for VM not found", func(t *testing.T) {
@@ -1019,17 +1020,17 @@ func TestVMHandleGet(t *testing.T) {
 			ID: "nonexistent",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMGet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMGet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1049,20 +1050,20 @@ func TestVMHandleList(t *testing.T) {
 			Limit: 10,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp VMListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int32(2), listResp.Count)
@@ -1079,20 +1080,20 @@ func TestVMHandleList(t *testing.T) {
 			State: "running",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp VMListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int32(1), listResp.Count)
@@ -1103,17 +1104,17 @@ func TestVMHandleList(t *testing.T) {
 
 		listReq := &VMListRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when list fails", func(t *testing.T) {
@@ -1122,17 +1123,17 @@ func TestVMHandleList(t *testing.T) {
 
 		listReq := &VMListRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -1152,20 +1153,20 @@ func TestVMHandleAttachNetwork(t *testing.T) {
 			PortName: "veth-test",
 		}
 
-		payload, err := EncodePayload(attachReq)
+		payload, err := quicwire.EncodePayload(attachReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMAttachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttachNet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var attachResp VMAttachNetworkResponse
-		err = DecodePayload(resp.Payload, &attachResp)
+		err = quicwire.DecodePayload(resp.Payload, &attachResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", attachResp.ID)
@@ -1181,17 +1182,17 @@ func TestVMHandleAttachNetwork(t *testing.T) {
 			PortName: "veth-test",
 		}
 
-		payload, err := EncodePayload(attachReq)
+		payload, err := quicwire.EncodePayload(attachReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMAttachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttachNet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1201,17 +1202,17 @@ func TestVMHandleAttachNetwork(t *testing.T) {
 			PortName: "veth-test",
 		}
 
-		payload, err := EncodePayload(attachReq)
+		payload, err := quicwire.EncodePayload(attachReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMAttachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttachNet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing port name", func(t *testing.T) {
@@ -1221,17 +1222,17 @@ func TestVMHandleAttachNetwork(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(attachReq)
+		payload, err := quicwire.EncodePayload(attachReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMAttachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttachNet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for VM not found", func(t *testing.T) {
@@ -1242,17 +1243,17 @@ func TestVMHandleAttachNetwork(t *testing.T) {
 			PortName: "veth-test",
 		}
 
-		payload, err := EncodePayload(attachReq)
+		payload, err := quicwire.EncodePayload(attachReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMAttachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttachNet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1272,20 +1273,20 @@ func TestVMHandleDetachNetwork(t *testing.T) {
 			PortName: "veth-test-vm",
 		}
 
-		payload, err := EncodePayload(detachReq)
+		payload, err := quicwire.EncodePayload(detachReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMDetachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMDetachNet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var detachResp VMDetachNetworkResponse
-		err = DecodePayload(resp.Payload, &detachResp)
+		err = quicwire.DecodePayload(resp.Payload, &detachResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", detachResp.ID)
@@ -1300,17 +1301,17 @@ func TestVMHandleDetachNetwork(t *testing.T) {
 			PortName: "veth-test",
 		}
 
-		payload, err := EncodePayload(detachReq)
+		payload, err := quicwire.EncodePayload(detachReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMDetachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMDetachNet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1320,17 +1321,17 @@ func TestVMHandleDetachNetwork(t *testing.T) {
 			PortName: "veth-test",
 		}
 
-		payload, err := EncodePayload(detachReq)
+		payload, err := quicwire.EncodePayload(detachReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMDetachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMDetachNet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing port name", func(t *testing.T) {
@@ -1340,17 +1341,17 @@ func TestVMHandleDetachNetwork(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(detachReq)
+		payload, err := quicwire.EncodePayload(detachReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMDetachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMDetachNet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -1370,20 +1371,20 @@ func TestVMHandleGetState(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var stateResp VMGetStateResponse
-		err = DecodePayload(resp.Payload, &stateResp)
+		err = quicwire.DecodePayload(resp.Payload, &stateResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", stateResp.ID)
@@ -1397,17 +1398,17 @@ func TestVMHandleGetState(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1415,17 +1416,17 @@ func TestVMHandleGetState(t *testing.T) {
 
 		stateReq := &VMGetStateRequest{}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -1444,20 +1445,20 @@ func TestVMHandleRestart(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(restartReq)
+		payload, err := quicwire.EncodePayload(restartReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMRestart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMRestart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var restartResp VMRestartResponse
-		err = DecodePayload(resp.Payload, &restartResp)
+		err = quicwire.DecodePayload(resp.Payload, &restartResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", restartResp.ID)
@@ -1472,17 +1473,17 @@ func TestVMHandleRestart(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(restartReq)
+		payload, err := quicwire.EncodePayload(restartReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMRestart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMRestart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1490,17 +1491,17 @@ func TestVMHandleRestart(t *testing.T) {
 
 		restartReq := &VMRestartRequest{}
 
-		payload, err := EncodePayload(restartReq)
+		payload, err := quicwire.EncodePayload(restartReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMRestart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMRestart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -1519,20 +1520,20 @@ func TestVMHandleSuspend(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(suspendReq)
+		payload, err := quicwire.EncodePayload(suspendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSuspend,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSuspend,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var suspendResp VMSuspendResponse
-		err = DecodePayload(resp.Payload, &suspendResp)
+		err = quicwire.DecodePayload(resp.Payload, &suspendResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", suspendResp.ID)
@@ -1547,17 +1548,17 @@ func TestVMHandleSuspend(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(suspendReq)
+		payload, err := quicwire.EncodePayload(suspendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSuspend,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSuspend,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 }
 
@@ -1576,20 +1577,20 @@ func TestVMHandleResume(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(resumeReq)
+		payload, err := quicwire.EncodePayload(resumeReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMResume,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMResume,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var resumeResp VMResumeResponse
-		err = DecodePayload(resp.Payload, &resumeResp)
+		err = quicwire.DecodePayload(resp.Payload, &resumeResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", resumeResp.ID)
@@ -1604,17 +1605,17 @@ func TestVMHandleResume(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(resumeReq)
+		payload, err := quicwire.EncodePayload(resumeReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMResume,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMResume,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 }
 
@@ -1633,20 +1634,20 @@ func TestVMHandleAttest(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMAttest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var attestResp VMAttestResponse
-		err = DecodePayload(resp.Payload, &attestResp)
+		err = quicwire.DecodePayload(resp.Payload, &attestResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", attestResp.VMID)
@@ -1671,20 +1672,20 @@ func TestVMHandleAttest(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMAttest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var attestResp VMAttestResponse
-		err = DecodePayload(resp.Payload, &attestResp)
+		err = quicwire.DecodePayload(resp.Payload, &attestResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "custom-vm", attestResp.VMName)
@@ -1699,17 +1700,17 @@ func TestVMHandleAttest(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMAttest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 }
 
@@ -1728,20 +1729,20 @@ func TestVMHandleGetConsole(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(consoleReq)
+		payload, err := quicwire.EncodePayload(consoleReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMConsole,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMConsole,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var consoleResp VMConsoleResponse
-		err = DecodePayload(resp.Payload, &consoleResp)
+		err = quicwire.DecodePayload(resp.Payload, &consoleResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", consoleResp.VMID)
@@ -1758,17 +1759,17 @@ func TestVMHandleGetConsole(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(consoleReq)
+		payload, err := quicwire.EncodePayload(consoleReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMConsole,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMConsole,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 }
 
@@ -1789,20 +1790,20 @@ func TestVMHandleCreateSnapshot(t *testing.T) {
 			Description: "Test snapshot",
 		}
 
-		payload, err := EncodePayload(snapshotReq)
+		payload, err := quicwire.EncodePayload(snapshotReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshot,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshot,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var snapshotResp VMSnapshotCreateResponse
-		err = DecodePayload(resp.Payload, &snapshotResp)
+		err = quicwire.DecodePayload(resp.Payload, &snapshotResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, snapshotResp.Snapshot)
@@ -1817,17 +1818,17 @@ func TestVMHandleCreateSnapshot(t *testing.T) {
 			Name: "snapshot-1",
 		}
 
-		payload, err := EncodePayload(snapshotReq)
+		payload, err := quicwire.EncodePayload(snapshotReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshot,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshot,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing snapshot name", func(t *testing.T) {
@@ -1838,17 +1839,17 @@ func TestVMHandleCreateSnapshot(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(snapshotReq)
+		payload, err := quicwire.EncodePayload(snapshotReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshot,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshot,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when not extended orchestrator", func(t *testing.T) {
@@ -1860,17 +1861,17 @@ func TestVMHandleCreateSnapshot(t *testing.T) {
 			Name: "snapshot-1",
 		}
 
-		payload, err := EncodePayload(snapshotReq)
+		payload, err := quicwire.EncodePayload(snapshotReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshot,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshot,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 }
 
@@ -1886,20 +1887,20 @@ func TestVMHandleRestoreSnapshot(t *testing.T) {
 			Name: "snapshot-1",
 		}
 
-		payload, err := EncodePayload(restoreReq)
+		payload, err := quicwire.EncodePayload(restoreReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotRestore,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotRestore,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var restoreResp VMSnapshotRestoreResponse
-		err = DecodePayload(resp.Payload, &restoreResp)
+		err = quicwire.DecodePayload(resp.Payload, &restoreResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", restoreResp.ID)
@@ -1914,17 +1915,17 @@ func TestVMHandleRestoreSnapshot(t *testing.T) {
 			Name: "snapshot-1",
 		}
 
-		payload, err := EncodePayload(restoreReq)
+		payload, err := quicwire.EncodePayload(restoreReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotRestore,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotRestore,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing snapshot name", func(t *testing.T) {
@@ -1935,17 +1936,17 @@ func TestVMHandleRestoreSnapshot(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(restoreReq)
+		payload, err := quicwire.EncodePayload(restoreReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotRestore,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotRestore,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -1961,20 +1962,20 @@ func TestVMHandleDeleteSnapshot(t *testing.T) {
 			Name: "snapshot-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var deleteResp VMSnapshotDeleteResponse
-		err = DecodePayload(resp.Payload, &deleteResp)
+		err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", deleteResp.ID)
@@ -1989,17 +1990,17 @@ func TestVMHandleDeleteSnapshot(t *testing.T) {
 			Name: "snapshot-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing snapshot name", func(t *testing.T) {
@@ -2010,17 +2011,17 @@ func TestVMHandleDeleteSnapshot(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2039,20 +2040,20 @@ func TestVMHandleListSnapshots(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp VMSnapshotListResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vm-1", listResp.VMID)
@@ -2065,17 +2066,17 @@ func TestVMHandleListSnapshots(t *testing.T) {
 
 		listReq := &VMSnapshotListRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2125,21 +2126,21 @@ func TestVMErrorResponse(t *testing.T) {
 		err            error
 		expectedStatus byte
 	}{
-		{"instance not found", compute.ErrInstanceNotFound, StatusNotFound},
-		{"instance already exists", compute.ErrInstanceAlreadyExists, StatusAlreadyExists},
-		{"instance already running", compute.ErrInstanceAlreadyRunning, StatusInvalidRequest},
-		{"instance not running", compute.ErrInstanceNotRunning, StatusInvalidRequest},
-		{"invalid instance ID", compute.ErrInvalidInstanceID, StatusInvalidArgument},
-		{"invalid profile", compute.ErrInvalidProfile, StatusInvalidArgument},
-		{"invalid configuration", compute.ErrInvalidConfiguration, StatusInvalidArgument},
-		{"invalid state", compute.ErrInvalidState, StatusInvalidRequest},
-		{"resource exhausted", compute.ErrResourceExhausted, StatusResourceExhausted},
-		{"orchestrator not initialized", compute.ErrOrchestratorNotInitialized, StatusUnavailable},
-		{"timeout", compute.ErrTimeout, StatusTimeout},
-		{"unsupported operation", compute.ErrUnsupportedOperation, StatusNotImplemented},
-		{"network attachment failed", compute.ErrNetworkAttachmentFailed, StatusInternalError},
-		{"network detachment failed", compute.ErrNetworkDetachmentFailed, StatusInternalError},
-		{"generic error", errors.New("unknown error"), StatusInternalError},
+		{"instance not found", compute.ErrInstanceNotFound, quicwire.StatusNotFound},
+		{"instance already exists", compute.ErrInstanceAlreadyExists, quicwire.StatusAlreadyExists},
+		{"instance already running", compute.ErrInstanceAlreadyRunning, quicwire.StatusInvalidRequest},
+		{"instance not running", compute.ErrInstanceNotRunning, quicwire.StatusInvalidRequest},
+		{"invalid instance ID", compute.ErrInvalidInstanceID, quicwire.StatusInvalidArgument},
+		{"invalid profile", compute.ErrInvalidProfile, quicwire.StatusInvalidArgument},
+		{"invalid configuration", compute.ErrInvalidConfiguration, quicwire.StatusInvalidArgument},
+		{"invalid state", compute.ErrInvalidState, quicwire.StatusInvalidRequest},
+		{"resource exhausted", compute.ErrResourceExhausted, quicwire.StatusResourceExhausted},
+		{"orchestrator not initialized", compute.ErrOrchestratorNotInitialized, quicwire.StatusUnavailable},
+		{"timeout", compute.ErrTimeout, quicwire.StatusTimeout},
+		{"unsupported operation", compute.ErrUnsupportedOperation, quicwire.StatusNotImplemented},
+		{"network attachment failed", compute.ErrNetworkAttachmentFailed, quicwire.StatusInternalError},
+		{"network detachment failed", compute.ErrNetworkDetachmentFailed, quicwire.StatusInternalError},
+		{"generic error", errors.New("unknown error"), quicwire.StatusInternalError},
 	}
 
 	for _, tc := range testCases {
@@ -2321,24 +2322,24 @@ func TestVMOpcodeConstants(t *testing.T) {
 		name   string
 		opcode byte
 	}{
-		{"OpVMCreate", OpVMCreate},
-		{"OpVMDelete", OpVMDelete},
-		{"OpVMStart", OpVMStart},
-		{"OpVMStop", OpVMStop},
-		{"OpVMGet", OpVMGet},
-		{"OpVMList", OpVMList},
-		{"OpVMAttachNet", OpVMAttachNet},
-		{"OpVMDetachNet", OpVMDetachNet},
-		{"OpVMGetState", OpVMGetState},
-		{"OpVMRestart", OpVMRestart},
-		{"OpVMSuspend", OpVMSuspend},
-		{"OpVMResume", OpVMResume},
-		{"OpVMAttest", OpVMAttest},
-		{"OpVMConsole", OpVMConsole},
-		{"OpVMSnapshot", OpVMSnapshot},
-		{"OpVMSnapshotRestore", OpVMSnapshotRestore},
-		{"OpVMSnapshotDelete", OpVMSnapshotDelete},
-		{"OpVMSnapshotList", OpVMSnapshotList},
+		{"OpVMCreate", quicwire.OpVMCreate},
+		{"OpVMDelete", quicwire.OpVMDelete},
+		{"OpVMStart", quicwire.OpVMStart},
+		{"OpVMStop", quicwire.OpVMStop},
+		{"OpVMGet", quicwire.OpVMGet},
+		{"OpVMList", quicwire.OpVMList},
+		{"OpVMAttachNet", quicwire.OpVMAttachNet},
+		{"OpVMDetachNet", quicwire.OpVMDetachNet},
+		{"OpVMGetState", quicwire.OpVMGetState},
+		{"OpVMRestart", quicwire.OpVMRestart},
+		{"OpVMSuspend", quicwire.OpVMSuspend},
+		{"OpVMResume", quicwire.OpVMResume},
+		{"OpVMAttest", quicwire.OpVMAttest},
+		{"OpVMConsole", quicwire.OpVMConsole},
+		{"OpVMSnapshot", quicwire.OpVMSnapshot},
+		{"OpVMSnapshotRestore", quicwire.OpVMSnapshotRestore},
+		{"OpVMSnapshotDelete", quicwire.OpVMSnapshotDelete},
+		{"OpVMSnapshotList", quicwire.OpVMSnapshotList},
 	}
 
 	seen := make(map[byte]string)
@@ -2405,30 +2406,30 @@ func TestVMHandleSuspendErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(suspendReq)
+		payload, err := quicwire.EncodePayload(suspendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSuspend,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSuspend,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMSuspend,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSuspend,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -2436,17 +2437,17 @@ func TestVMHandleSuspendErrors(t *testing.T) {
 
 		suspendReq := &VMSuspendRequest{}
 
-		payload, err := EncodePayload(suspendReq)
+		payload, err := quicwire.EncodePayload(suspendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSuspend,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSuspend,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when suspend fails", func(t *testing.T) {
@@ -2458,17 +2459,17 @@ func TestVMHandleSuspendErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(suspendReq)
+		payload, err := quicwire.EncodePayload(suspendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSuspend,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSuspend,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -2482,30 +2483,30 @@ func TestVMHandleResumeErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(resumeReq)
+		payload, err := quicwire.EncodePayload(resumeReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMResume,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMResume,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMResume,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMResume,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -2513,17 +2514,17 @@ func TestVMHandleResumeErrors(t *testing.T) {
 
 		resumeReq := &VMResumeRequest{}
 
-		payload, err := EncodePayload(resumeReq)
+		payload, err := quicwire.EncodePayload(resumeReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMResume,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMResume,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when resume fails", func(t *testing.T) {
@@ -2535,17 +2536,17 @@ func TestVMHandleResumeErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(resumeReq)
+		payload, err := quicwire.EncodePayload(resumeReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMResume,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMResume,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -2559,30 +2560,30 @@ func TestVMHandleAttestErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMAttest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMAttest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttest,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -2590,17 +2591,17 @@ func TestVMHandleAttestErrors(t *testing.T) {
 
 		attestReq := &VMAttestRequest{}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMAttest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when attest fails", func(t *testing.T) {
@@ -2612,17 +2613,17 @@ func TestVMHandleAttestErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMAttest,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMAttest,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -2636,30 +2637,30 @@ func TestVMHandleGetConsoleErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(consoleReq)
+		payload, err := quicwire.EncodePayload(consoleReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMConsole,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMConsole,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMConsole,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMConsole,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -2667,17 +2668,17 @@ func TestVMHandleGetConsoleErrors(t *testing.T) {
 
 		consoleReq := &VMConsoleRequest{}
 
-		payload, err := EncodePayload(consoleReq)
+		payload, err := quicwire.EncodePayload(consoleReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMConsole,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMConsole,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when console fails", func(t *testing.T) {
@@ -2689,17 +2690,17 @@ func TestVMHandleGetConsoleErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(consoleReq)
+		payload, err := quicwire.EncodePayload(consoleReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMConsole,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMConsole,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -2714,30 +2715,30 @@ func TestVMHandleSnapshotErrors(t *testing.T) {
 			Name: "snap-1",
 		}
 
-		payload, err := EncodePayload(snapshotReq)
+		payload, err := quicwire.EncodePayload(snapshotReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshot,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshot,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("create snapshot - invalid payload", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMSnapshot,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshot,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("create snapshot - fails", func(t *testing.T) {
@@ -2750,17 +2751,17 @@ func TestVMHandleSnapshotErrors(t *testing.T) {
 			Name: "snap-1",
 		}
 
-		payload, err := EncodePayload(snapshotReq)
+		payload, err := quicwire.EncodePayload(snapshotReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshot,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshot,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("restore snapshot - orchestrator unavailable", func(t *testing.T) {
@@ -2771,17 +2772,17 @@ func TestVMHandleSnapshotErrors(t *testing.T) {
 			Name: "snap-1",
 		}
 
-		payload, err := EncodePayload(restoreReq)
+		payload, err := quicwire.EncodePayload(restoreReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotRestore,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotRestore,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("restore snapshot - not extended orchestrator", func(t *testing.T) {
@@ -2793,30 +2794,30 @@ func TestVMHandleSnapshotErrors(t *testing.T) {
 			Name: "snap-1",
 		}
 
-		payload, err := EncodePayload(restoreReq)
+		payload, err := quicwire.EncodePayload(restoreReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotRestore,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotRestore,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 
 	t.Run("restore snapshot - invalid payload", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMSnapshotRestore,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotRestore,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("restore snapshot - fails", func(t *testing.T) {
@@ -2829,17 +2830,17 @@ func TestVMHandleSnapshotErrors(t *testing.T) {
 			Name: "snap-1",
 		}
 
-		payload, err := EncodePayload(restoreReq)
+		payload, err := quicwire.EncodePayload(restoreReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotRestore,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotRestore,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("delete snapshot - orchestrator unavailable", func(t *testing.T) {
@@ -2850,17 +2851,17 @@ func TestVMHandleSnapshotErrors(t *testing.T) {
 			Name: "snap-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("delete snapshot - not extended orchestrator", func(t *testing.T) {
@@ -2872,30 +2873,30 @@ func TestVMHandleSnapshotErrors(t *testing.T) {
 			Name: "snap-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 
 	t.Run("delete snapshot - invalid payload", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMSnapshotDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotDelete,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("delete snapshot - fails", func(t *testing.T) {
@@ -2908,17 +2909,17 @@ func TestVMHandleSnapshotErrors(t *testing.T) {
 			Name: "snap-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("list snapshots - orchestrator unavailable", func(t *testing.T) {
@@ -2928,17 +2929,17 @@ func TestVMHandleSnapshotErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("list snapshots - not extended orchestrator", func(t *testing.T) {
@@ -2949,30 +2950,30 @@ func TestVMHandleSnapshotErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 
 	t.Run("list snapshots - invalid payload", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMSnapshotList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotList,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("list snapshots - fails", func(t *testing.T) {
@@ -2984,17 +2985,17 @@ func TestVMHandleSnapshotErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMSnapshotList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMSnapshotList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -3008,30 +3009,30 @@ func TestVMHandleRestartErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(restartReq)
+		payload, err := quicwire.EncodePayload(restartReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMRestart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMRestart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMRestart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMRestart,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when restart fails", func(t *testing.T) {
@@ -3043,17 +3044,17 @@ func TestVMHandleRestartErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(restartReq)
+		payload, err := quicwire.EncodePayload(restartReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMRestart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMRestart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -3063,14 +3064,14 @@ func TestVMHandleGetStateErrors(t *testing.T) {
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMGetState,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when get state fails", func(t *testing.T) {
@@ -3082,17 +3083,17 @@ func TestVMHandleGetStateErrors(t *testing.T) {
 			ID: "vm-1",
 		}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -3102,14 +3103,14 @@ func TestVMHandleDetachNetworkErrors(t *testing.T) {
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestVMHandler()
 
-		req := &Request{
-			Opcode:  OpVMDetachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMDetachNet,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when detach fails", func(t *testing.T) {
@@ -3122,17 +3123,17 @@ func TestVMHandleDetachNetworkErrors(t *testing.T) {
 			PortName: "veth-test",
 		}
 
-		payload, err := EncodePayload(detachReq)
+		payload, err := quicwire.EncodePayload(detachReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMDetachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMDetachNet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("returns error for VM not found", func(t *testing.T) {
@@ -3143,16 +3144,16 @@ func TestVMHandleDetachNetworkErrors(t *testing.T) {
 			PortName: "veth-test",
 		}
 
-		payload, err := EncodePayload(detachReq)
+		payload, err := quicwire.EncodePayload(detachReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVMDetachNet,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVMDetachNet,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }

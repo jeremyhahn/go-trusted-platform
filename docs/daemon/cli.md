@@ -103,6 +103,7 @@ platformctl status                                          # local context, Uni
 platformctl --server cp.example.com:10443 status            # ad-hoc remote, gRPC
 platformctl --server cp.example.com:8443 --transport rest status
 platformctl --server 192.0.2.10:9444 --server-name cp.example.com --transport quic status
+platformctl --server https://cp.example.com:9445 --transport mcp status
 ```
 
 **`embedded` does not work from the CLI.** The embedded transport dispatches to

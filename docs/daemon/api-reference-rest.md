@@ -320,7 +320,7 @@ Returns status of all protocol endpoints.
       "address": "127.0.0.1:9445",
       "port": 9445,
       "status": "running",
-      "tls": false
+      "tls": true
     }
   ],
   "timestamp": "2025-01-05T12:00:00Z"

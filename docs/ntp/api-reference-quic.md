@@ -3,7 +3,7 @@
 | Property | Value |
 |----------|-------|
 | Endpoint | `host:9444` (UDP, QUIC + TLS 1.3) |
-| Category opcode | `0x50` (`OpNTPCategory`, `pkg/api/quic/ntp_opcodes.go`) |
+| Category opcode | `0x50` (`OpNTPCategory`, `sdk/go/wire/quicwire/ntp_opcodes.go`) |
 | Sub-opcodes | `0x01`-`0x03` |
 | Message format | Sub-opcode byte + codec-encoded `platform.v1` pb struct |
 | Handler | `pkg/api/daemon/quic_ntp.go` |

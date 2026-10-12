@@ -29,7 +29,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"sync/atomic"
 
 	bmcsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/bmc"
@@ -91,14 +90,8 @@ func (m *MCPAdapter) initClient(ctx context.Context) error {
 	if endpoint == "" {
 		endpoint = GetServiceEndpoints().PlatformMCP
 	}
-	// The endpoint may arrive with or without a scheme (the env export carries
-	// "http://", the default constant does not). Only prepend a scheme when one
-	// is absent so we never produce "http://http://...".
-	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
-		endpoint = "http://" + endpoint
-	}
-	m.endpoint = endpoint
-	m.httpClient = helpers.NewPlainHTTPClient(DefaultRESTTimeout)
+	m.endpoint = helpers.MCPBaseURL(endpoint)
+	m.httpClient = helpers.NewHTTPClient(DefaultRESTTimeout)
 
 	initParams := map[string]interface{}{
 		"protocolVersion": "2024-11-05",

@@ -26,7 +26,7 @@ Three gRPC services are in scope:
 | `ProvisioningGateway` | 4 | `pkg/api/grpc/proto/provisioning.proto` |
 
 QUIC uses a **provisioning category opcode `0xCF`**
-(`pkg/api/quic/provisioning_opcodes.go`, which notes it follows "the same
+(`sdk/go/wire/quicwire/provisioning_opcodes.go`, which notes it follows "the same
 pattern as OpSwitchCategory (0xCC)"), plus PXE extended opcodes `0xFC`–`0xFF`.
 
 ---

@@ -38,9 +38,11 @@ client, err := platform.NewClient(ctx,
 ### Direct QUIC Connection
 
 ```go
-import quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+// The QUIC wire contract (frames, opcodes, status codes, client) is the
+// SDK package sdk/go/wire/quicwire; the daemon imports the same package.
+import "github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 
-clientConfig := &quicapi.ClientConfig{
+clientConfig := &quicwire.ClientConfig{
     ServerAddr:         "platform.example.com:9444",
     TLSConfig:          tlsConfig,
     Timeout:            10 * time.Second,
@@ -48,7 +50,7 @@ clientConfig := &quicapi.ClientConfig{
     NextProtos:         []string{"platform-quic"},
 }
 
-client, err := quicapi.NewClient(clientConfig)
+client, err := quicwire.NewClient(clientConfig)
 if err != nil {
     log.Fatal(err)
 }
@@ -279,18 +281,19 @@ QUIC uses a binary protocol with opcode-based routing for efficient dispatch. Ea
 ### Error Handling Example
 
 ```go
-import quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+import "github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 
-err := quicClient.Send(ctx, quicapi.OpCAIssue, request, response)
+err := quicClient.Send(ctx, quicwire.OpCAIssue, request, response)
 if err != nil {
     // Check for protocol errors
-    if protoErr, ok := err.(*quicapi.ErrProtocol); ok {
+    var protoErr *quicwire.ErrProtocol
+    if errors.As(err, &protoErr) {
         switch protoErr.Status {
-        case quicapi.StatusInvalidRequest:
+        case quicwire.StatusInvalidRequest:
             log.Printf("Invalid request: %s", protoErr.Message)
-        case quicapi.StatusUnauthorized:
+        case quicwire.StatusUnauthorized:
             log.Printf("Unauthorized: %s", protoErr.Message)
-        case quicapi.StatusTimeout:
+        case quicwire.StatusTimeout:
             log.Printf("Request timed out")
         default:
             log.Printf("Error: %s", protoErr.Message)
@@ -299,12 +302,12 @@ if err != nil {
     }
 
     // Check for connection errors
-    if err == quicapi.ErrClientClosed {
+    if errors.Is(err, quicwire.ErrClientClosed) {
         log.Printf("Connection closed")
         return
     }
 
-    if err == quicapi.ErrStreamFailed {
+    if errors.Is(err, quicwire.ErrStreamFailed) {
         log.Printf("Stream failed, retrying...")
         return
     }
@@ -318,7 +321,7 @@ if err != nil {
 ### Configuration Options
 
 ```go
-clientConfig := &quicapi.ClientConfig{
+clientConfig := &quicwire.ClientConfig{
     // Server address
     ServerAddr: "platform.example.com:9444",
 
@@ -342,7 +345,10 @@ clientConfig := &quicapi.ClientConfig{
 ```go
 // QUIC multiplexes streams over a single connection
 // No explicit pooling needed - one connection handles all requests
-client, _ := quicapi.NewClient(config)
+client, err := quicwire.NewClient(config)
+if err != nil {
+    log.Fatal(err)
+}
 
 // All operations use the same underlying connection
 go func() { client.Send(ctx, opcode1, req1, resp1) }()
@@ -362,7 +368,7 @@ go func() { client.Send(ctx, opcode3, req3, resp3) }()
 // For explicit reconnection after errors:
 if !client.IsConnected() {
     client.Close()
-    client, err = quicapi.NewClient(config)
+    client, err = quicwire.NewClient(config)
     if err != nil {
         log.Fatal(err)
     }
@@ -380,8 +386,8 @@ import (
     "log"
     "time"
 
-    quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
     platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
     _ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/quic"
 )
 

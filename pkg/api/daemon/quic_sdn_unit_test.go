@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -459,16 +459,16 @@ func TestQUICSDN_GetPortState_WithSDNService(t *testing.T) {
 	getReq := &SDNGetPortStateRequest{
 		PortName: "eth0",
 	}
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetPortState,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetPortState,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNGetPortState(th.ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICSDN_ApplyPolicy_Success(t *testing.T) {
@@ -496,21 +496,21 @@ func TestQUICSDN_ApplyPolicy_Success(t *testing.T) {
 		},
 	}
 
-	payload, err := quic.EncodePayload(applyReq)
+	payload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: payload,
 	}
 
 	// handleSDNApplyPolicy checks policyEngine first
 	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	// Verify policy was applied
 	var applyResp SDNApplyPolicyResponse
-	err = quic.DecodePayload(resp.Payload, &applyResp)
+	err = quicwire.DecodePayload(resp.Payload, &applyResp)
 	require.NoError(t, err)
 	assert.Equal(t, "eth0", applyResp.PortID)
 	assert.True(t, applyResp.Success)
@@ -527,16 +527,16 @@ func TestQUICSDN_ApplyPolicy_MissingPortID(t *testing.T) {
 		VLAN:     100,
 	}
 
-	payload, err := quic.EncodePayload(applyReq)
+	payload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestQUICSDN_ApplyPolicy_MissingTenantID(t *testing.T) {
@@ -549,29 +549,29 @@ func TestQUICSDN_ApplyPolicy_MissingTenantID(t *testing.T) {
 		VLAN:     100,
 	}
 
-	payload, err := quic.EncodePayload(applyReq)
+	payload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestQUICSDN_ApplyPolicy_DecodingErrorUnit(t *testing.T) {
 	th := newTestSDNHandlerWithMocks(t)
 	defer th.cleanup()
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: []byte{0xFF, 0xFE}, // Invalid payload
 	}
 
 	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestQUICSDN_ApplyPolicy_NilSDNService(t *testing.T) {
@@ -586,17 +586,17 @@ func TestQUICSDN_ApplyPolicy_NilSDNService(t *testing.T) {
 		VLAN:     100,
 	}
 
-	payload, err := quic.EncodePayload(applyReq)
+	payload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: payload,
 	}
 
 	// Route through handleSDNOperation which checks sdnService nil
 	resp := handler.handleSDNOperation(ctx, req)
-	assert.Equal(t, quic.StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestQUICSDN_DeletePolicy_Success(t *testing.T) {
@@ -609,30 +609,30 @@ func TestQUICSDN_DeletePolicy_Success(t *testing.T) {
 		TenantID: "tenant-001",
 		VLAN:     100,
 	}
-	applyPayload, err := quic.EncodePayload(applyReq)
+	applyPayload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
-	applyResp := th.handler.handleSDNApplyPolicy(th.ctx, &quic.Request{
-		Opcode: quic.OpSDNApplyPolicy, Payload: applyPayload,
+	applyResp := th.handler.handleSDNApplyPolicy(th.ctx, &quicwire.Request{
+		Opcode: quicwire.OpSDNApplyPolicy, Payload: applyPayload,
 	})
-	require.Equal(t, quic.StatusOK, applyResp.Status)
+	require.Equal(t, quicwire.StatusOK, applyResp.Status)
 
 	deleteReq := &SDNDeletePolicyRequest{
 		PortID: "delete-unit-test",
 	}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeletePolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeletePolicy,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNDeletePolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var deleteResp SDNDeletePolicyResponse
-	err = quic.DecodePayload(resp.Payload, &deleteResp)
+	err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 	require.NoError(t, err)
 	assert.Equal(t, "delete-unit-test", deleteResp.PortID)
 	assert.True(t, deleteResp.Success)
@@ -646,16 +646,16 @@ func TestQUICSDN_DeletePolicy_MissingPortID(t *testing.T) {
 		PortID: "",
 	}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeletePolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeletePolicy,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNDeletePolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestQUICSDN_DeletePolicy_NotFound(t *testing.T) {
@@ -666,16 +666,16 @@ func TestQUICSDN_DeletePolicy_NotFound(t *testing.T) {
 		PortID: "nonexistent-policy",
 	}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeletePolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeletePolicy,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNDeletePolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 func TestQUICSDN_GetPolicy_Success(t *testing.T) {
@@ -688,30 +688,30 @@ func TestQUICSDN_GetPolicy_Success(t *testing.T) {
 		TenantID: "tenant-001",
 		VLAN:     100,
 	}
-	applyPayload, err := quic.EncodePayload(applyReq)
+	applyPayload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
-	applyResp := th.handler.handleSDNApplyPolicy(th.ctx, &quic.Request{
-		Opcode: quic.OpSDNApplyPolicy, Payload: applyPayload,
+	applyResp := th.handler.handleSDNApplyPolicy(th.ctx, &quicwire.Request{
+		Opcode: quicwire.OpSDNApplyPolicy, Payload: applyPayload,
 	})
-	require.Equal(t, quic.StatusOK, applyResp.Status)
+	require.Equal(t, quicwire.StatusOK, applyResp.Status)
 
 	getReq := &SDNGetPolicyRequest{
 		PortID: "get-unit-policy",
 	}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetPolicy,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNGetPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp SDNGetPolicyResponse
-	err = quic.DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 	require.NotNil(t, getResp.Policy)
 	assert.Equal(t, "get-unit-policy", getResp.Policy.PortID)
@@ -725,16 +725,16 @@ func TestQUICSDN_GetPolicy_NotFound(t *testing.T) {
 		PortID: "nonexistent",
 	}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetPolicy,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNGetPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusNotFound, resp.Status)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 func TestQUICSDN_GetPolicy_MissingPortID(t *testing.T) {
@@ -745,32 +745,32 @@ func TestQUICSDN_GetPolicy_MissingPortID(t *testing.T) {
 		PortID: "",
 	}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetPolicy,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNGetPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestQUICSDN_ListPolicies_Success(t *testing.T) {
 	th := newTestSDNHandlerWithMocks(t)
 	defer th.cleanup()
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNListPolicies,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNListPolicies,
 		Payload: nil,
 	}
 
 	resp := th.handler.handleSDNListPolicies(th.ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var listResp SDNListPoliciesResponse
-	err := quic.DecodePayload(resp.Payload, &listResp)
+	err := quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 	assert.NotNil(t, listResp.Policies)
 	assert.Equal(t, 0, listResp.Total) // Empty initially
@@ -782,14 +782,14 @@ func TestQUICSDN_ListPolicies_NilSDNService(t *testing.T) {
 
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNListPolicies,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNListPolicies,
 		Payload: nil,
 	}
 
 	// Route through handleSDNOperation which checks sdnService nil
 	resp := handler.handleSDNOperation(ctx, req)
-	assert.Equal(t, quic.StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 // =============================================================================
@@ -800,39 +800,39 @@ func TestQUICSDN_ApplyPolicy_DecodingError(t *testing.T) {
 	th := newTestSDNHandlerWithMocks(t)
 	defer th.cleanup()
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: []byte{0xFF, 0xFF, 0xFF}, // Invalid msgpack
 	}
 
 	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestQUICSDN_DeletePolicy_DecodingError(t *testing.T) {
 	th := newTestSDNHandlerWithMocks(t)
 	defer th.cleanup()
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeletePolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeletePolicy,
 		Payload: []byte{0xFF, 0xFF, 0xFF}, // Invalid msgpack
 	}
 
 	resp := th.handler.handleSDNDeletePolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestQUICSDN_GetPolicy_DecodingError(t *testing.T) {
 	th := newTestSDNHandlerWithMocks(t)
 	defer th.cleanup()
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetPolicy,
 		Payload: []byte{0xFF, 0xFF, 0xFF}, // Invalid msgpack
 	}
 
 	resp := th.handler.handleSDNGetPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestQUICSDN_DeletePolicy_NilSDNService(t *testing.T) {
@@ -845,16 +845,16 @@ func TestQUICSDN_DeletePolicy_NilSDNService(t *testing.T) {
 		PortID: "eth0",
 	}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeletePolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeletePolicy,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNOperation(ctx, req)
-	assert.Equal(t, quic.StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestQUICSDN_GetPolicy_NilSDNService(t *testing.T) {
@@ -867,16 +867,16 @@ func TestQUICSDN_GetPolicy_NilSDNService(t *testing.T) {
 		PortID: "eth0",
 	}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetPolicy,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNOperation(ctx, req)
-	assert.Equal(t, quic.StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 // =============================================================================
@@ -1126,16 +1126,16 @@ func TestQUICSDN_ApplyPolicy_WithNilMatch(t *testing.T) {
 		},
 	}
 
-	payload, err := quic.EncodePayload(applyReq)
+	payload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICSDN_ApplyPolicy_EmptyACLs(t *testing.T) {
@@ -1149,16 +1149,16 @@ func TestQUICSDN_ApplyPolicy_EmptyACLs(t *testing.T) {
 		ACLs:     []*SDNACLRule{}, // Empty ACLs
 	}
 
-	payload, err := quic.EncodePayload(applyReq)
+	payload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICSDN_ApplyPolicy_NilMetadata(t *testing.T) {
@@ -1173,16 +1173,16 @@ func TestQUICSDN_ApplyPolicy_NilMetadata(t *testing.T) {
 		Metadata: nil, // Nil metadata
 	}
 
-	payload, err := quic.EncodePayload(applyReq)
+	payload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: payload,
 	}
 
 	resp := th.handler.handleSDNApplyPolicy(th.ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestQUICSDN_ConvertSDNACLsToPbRules_NilACLs(t *testing.T) {

@@ -22,7 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // recordingSender captures every call made on the QUIC sender so tests
@@ -58,14 +58,14 @@ func (r *recordingSender) Send(ctx context.Context, opcode byte, reqData, respDa
 	return r.sendErr
 }
 
-func (r *recordingSender) SendRequest(ctx context.Context, opcode byte, payload []byte) (*quicapi.Response, error) {
+func (r *recordingSender) SendRequest(ctx context.Context, opcode byte, payload []byte) (*quicwire.Response, error) {
 	r.rawCalls++
 	r.rawOpcode = opcode
 	r.rawPayload = append(r.rawPayload[:0], payload...)
 	if r.sendRequestErr != nil {
 		return nil, r.sendRequestErr
 	}
-	return &quicapi.Response{Status: quicapi.StatusOK, Payload: r.respPayload}, nil
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: r.respPayload}, nil
 }
 
 // fakeRequest is a minimal codec-friendly type used to verify that the
@@ -87,7 +87,7 @@ type fakeReply struct {
 // pointer so Invoke proceeds past the readiness gates.
 func newConnWithSender(t *testing.T, sender *recordingSender) *quicClientConn {
 	t.Helper()
-	a := &Adapter{client: &quicapi.Client{}}
+	a := &Adapter{client: &quicwire.Client{}}
 	a.connected.Store(true)
 	return &quicClientConn{adapter: a, sender: sender}
 }
@@ -103,11 +103,11 @@ func TestInvoke_CategoryPrefix_AllSwitchMethods(t *testing.T) {
 		expectedSubOp    byte
 		expectedCategory byte
 	}{
-		{"/platform.v1.SwitchService/ListPorts", quicapi.SwitchSubListPorts, quicapi.OpSwitchCategory},
-		{"/platform.v1.SwitchService/GetPortStatus", quicapi.SwitchSubGetPortStatus, quicapi.OpSwitchCategory},
-		{"/platform.v1.SwitchService/SetPortVLAN", quicapi.SwitchSubSetPortVLAN, quicapi.OpSwitchCategory},
-		{"/platform.v1.SwitchService/EnablePort", quicapi.SwitchSubEnablePort, quicapi.OpSwitchCategory},
-		{"/platform.v1.SwitchService/DisablePort", quicapi.SwitchSubDisablePort, quicapi.OpSwitchCategory},
+		{"/platform.v1.SwitchService/ListPorts", quicwire.SwitchSubListPorts, quicwire.OpSwitchCategory},
+		{"/platform.v1.SwitchService/GetPortStatus", quicwire.SwitchSubGetPortStatus, quicwire.OpSwitchCategory},
+		{"/platform.v1.SwitchService/SetPortVLAN", quicwire.SwitchSubSetPortVLAN, quicwire.OpSwitchCategory},
+		{"/platform.v1.SwitchService/EnablePort", quicwire.SwitchSubEnablePort, quicwire.OpSwitchCategory},
+		{"/platform.v1.SwitchService/DisablePort", quicwire.SwitchSubDisablePort, quicwire.OpSwitchCategory},
 	}
 
 	for _, tt := range tests {
@@ -142,7 +142,7 @@ func TestInvoke_CategoryPrefix_AllSwitchMethods(t *testing.T) {
 			// pointer or an empty slice. Decoding it back into a
 			// fakeRequest must round-trip cleanly.
 			var roundTrip fakeRequest
-			if err := quicapi.DecodePayload(sender.rawPayload[1:], &roundTrip); err != nil {
+			if err := quicwire.DecodePayload(sender.rawPayload[1:], &roundTrip); err != nil {
 				t.Fatalf("payload[1:] is not valid codec output: %v", err)
 			}
 			if roundTrip.SwitchName != args.SwitchName {
@@ -159,10 +159,10 @@ func TestInvoke_CategoryPrefix_AllTenantBarrierMethods(t *testing.T) {
 		method        string
 		expectedSubOp byte
 	}{
-		{"/platform.v1.TenantService/InitTenantBarrier", quicapi.TenantBarrierSubInit},
-		{"/platform.v1.TenantService/UnsealTenantBarrier", quicapi.TenantBarrierSubUnseal},
-		{"/platform.v1.TenantService/SealTenantBarrier", quicapi.TenantBarrierSubSeal},
-		{"/platform.v1.TenantService/GetTenantBarrierStatus", quicapi.TenantBarrierSubStatus},
+		{"/platform.v1.TenantService/InitTenantBarrier", quicwire.TenantBarrierSubInit},
+		{"/platform.v1.TenantService/UnsealTenantBarrier", quicwire.TenantBarrierSubUnseal},
+		{"/platform.v1.TenantService/SealTenantBarrier", quicwire.TenantBarrierSubSeal},
+		{"/platform.v1.TenantService/GetTenantBarrierStatus", quicwire.TenantBarrierSubStatus},
 	}
 
 	for _, tt := range tests {
@@ -176,9 +176,9 @@ func TestInvoke_CategoryPrefix_AllTenantBarrierMethods(t *testing.T) {
 				t.Fatalf("Invoke() unexpected error: %v", err)
 			}
 
-			if sender.rawOpcode != quicapi.OpTenantBarrierCategory {
+			if sender.rawOpcode != quicwire.OpTenantBarrierCategory {
 				t.Errorf("opcode = 0x%02X, want 0x%02X (OpTenantBarrierCategory)",
-					sender.rawOpcode, quicapi.OpTenantBarrierCategory)
+					sender.rawOpcode, quicwire.OpTenantBarrierCategory)
 			}
 			if sender.rawPayload[0] != tt.expectedSubOp {
 				t.Errorf("payload[0] sub-opcode = 0x%02X, want 0x%02X",
@@ -207,8 +207,8 @@ func TestInvoke_NonCategory_UsesSendPath(t *testing.T) {
 	if sender.encCalls != 1 {
 		t.Fatalf("expected exactly 1 Send call, got %d", sender.encCalls)
 	}
-	if sender.encOpcode != quicapi.OpHealth {
-		t.Errorf("opcode = 0x%02X, want 0x%02X (OpHealth)", sender.encOpcode, quicapi.OpHealth)
+	if sender.encOpcode != quicwire.OpHealth {
+		t.Errorf("opcode = 0x%02X, want 0x%02X (OpHealth)", sender.encOpcode, quicwire.OpHealth)
 	}
 }
 
@@ -228,9 +228,9 @@ func TestInvoke_CategoryNilArgs(t *testing.T) {
 		t.Fatalf("expected 1-byte payload (sub-opcode only) for nil args, got %d bytes",
 			len(sender.rawPayload))
 	}
-	if sender.rawPayload[0] != quicapi.SwitchSubListPorts {
+	if sender.rawPayload[0] != quicwire.SwitchSubListPorts {
 		t.Errorf("sub-opcode = 0x%02X, want 0x%02X",
-			sender.rawPayload[0], quicapi.SwitchSubListPorts)
+			sender.rawPayload[0], quicwire.SwitchSubListPorts)
 	}
 }
 
@@ -239,7 +239,7 @@ func TestInvoke_CategoryNilArgs(t *testing.T) {
 // caller would just see an empty/zero reply even on a successful call.
 func TestInvoke_CategoryDecodesReply(t *testing.T) {
 	expected := &fakeReply{OK: true, Detail: "port enabled"}
-	encoded, err := quicapi.EncodePayload(expected)
+	encoded, err := quicwire.EncodePayload(expected)
 	if err != nil {
 		t.Fatalf("EncodePayload setup failed: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestInvoke_CategoryEmptyResponse(t *testing.T) {
 // the same translation contract as the non-category path.
 func TestInvoke_CategorySendRequestError(t *testing.T) {
 	sender := &recordingSender{
-		sendRequestErr: &quicapi.ErrProtocol{Status: quicapi.StatusUnauthorized, Message: "bad token"},
+		sendRequestErr: &quicwire.ErrProtocol{Status: quicwire.StatusUnauthorized, Message: "bad token"},
 	}
 	conn := newConnWithSender(t, sender)
 
@@ -315,19 +315,19 @@ func TestBuildCategoryPayload_NilArgs(t *testing.T) {
 // payload[1:] back to verify the slice boundary is correct.
 func TestBuildCategoryPayload_RealArgs(t *testing.T) {
 	args := &fakeRequest{SwitchName: "edge-9", PortID: "Eth1/24", VLAN: 4094}
-	out, err := buildCategoryPayload(quicapi.SwitchSubSetPortVLAN, args)
+	out, err := buildCategoryPayload(quicwire.SwitchSubSetPortVLAN, args)
 	if err != nil {
 		t.Fatalf("buildCategoryPayload() unexpected error: %v", err)
 	}
 	if len(out) < 2 {
 		t.Fatalf("payload too small, got %d bytes", len(out))
 	}
-	if out[0] != quicapi.SwitchSubSetPortVLAN {
-		t.Errorf("payload[0] = 0x%02X, want 0x%02X", out[0], quicapi.SwitchSubSetPortVLAN)
+	if out[0] != quicwire.SwitchSubSetPortVLAN {
+		t.Errorf("payload[0] = 0x%02X, want 0x%02X", out[0], quicwire.SwitchSubSetPortVLAN)
 	}
 
 	var got fakeRequest
-	if err := quicapi.DecodePayload(out[1:], &got); err != nil {
+	if err := quicwire.DecodePayload(out[1:], &got); err != nil {
 		t.Fatalf("payload[1:] decode failed: %v", err)
 	}
 	if got != *args {
@@ -341,16 +341,16 @@ func TestBuildCategoryPayload_RealArgs(t *testing.T) {
 // categorySubOpcodeMap entries also need adding.
 func TestIsCategoryOpcode_KnownAndUnknown(t *testing.T) {
 	known := []byte{
-		quicapi.OpOverlayCategory,
-		quicapi.OpGatewayCategory,
-		quicapi.OpIPAMCategory,
-		quicapi.OpTPM2Category,
-		quicapi.OpCeremonyCategory,
-		quicapi.OpPIVCategory,
-		quicapi.OpLUKSCategory,
-		quicapi.OpFIDO2Category,
-		quicapi.OpTenantBarrierCategory,
-		quicapi.OpSwitchCategory,
+		quicwire.OpOverlayCategory,
+		quicwire.OpGatewayCategory,
+		quicwire.OpIPAMCategory,
+		quicwire.OpTPM2Category,
+		quicwire.OpCeremonyCategory,
+		quicwire.OpPIVCategory,
+		quicwire.OpLUKSCategory,
+		quicwire.OpFIDO2Category,
+		quicwire.OpTenantBarrierCategory,
+		quicwire.OpSwitchCategory,
 	}
 	for _, op := range known {
 		if !isCategoryOpcode(op) {
@@ -359,11 +359,11 @@ func TestIsCategoryOpcode_KnownAndUnknown(t *testing.T) {
 	}
 
 	notCategory := []byte{
-		quicapi.OpHealth,
-		quicapi.OpCAInfo,
-		quicapi.OpKMSGenerateKey,
-		quicapi.OpDaemonStatus,
-		quicapi.OpVTPMCreate,
+		quicwire.OpHealth,
+		quicwire.OpCAInfo,
+		quicwire.OpKMSGenerateKey,
+		quicwire.OpDaemonStatus,
+		quicwire.OpVTPMCreate,
 	}
 	for _, op := range notCategory {
 		if isCategoryOpcode(op) {

@@ -21,6 +21,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // TenantError represents a tenant operation error.
@@ -87,7 +88,7 @@ func (r *ToolRegistry) getTenantManager() *tenant.Manager {
 // registerTenantTools registers all tenant management MCP tools.
 func (r *ToolRegistry) registerTenantTools() {
 	// tenant_list - List all tenants with pagination
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_list",
 		Description: "List all tenants with pagination support",
 		InputSchema: map[string]interface{}{
@@ -108,7 +109,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_get - Get tenant by ID
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_get",
 		Description: "Get detailed information about a tenant by its ID",
 		InputSchema: map[string]interface{}{
@@ -124,7 +125,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_get_by_name - Get tenant by name
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_get_by_name",
 		Description: "Get detailed information about a tenant by its name",
 		InputSchema: map[string]interface{}{
@@ -140,7 +141,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_create - Create new tenant
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_create",
 		Description: "Create a new tenant with optional quotas. Provisions the tenant's DEK and per-tenant barrier.",
 		InputSchema: map[string]interface{}{
@@ -208,7 +209,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_update - Update tenant metadata
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_update",
 		Description: "Update tenant metadata including display name, labels, and annotations",
 		InputSchema: map[string]interface{}{
@@ -236,7 +237,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_delete - Delete tenant
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_delete",
 		Description: "Delete a tenant and all its associated resources including its DEK and per-tenant barrier",
 		InputSchema: map[string]interface{}{
@@ -252,7 +253,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_suspend - Suspend tenant
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_suspend",
 		Description: "Suspend a tenant, blocking all network traffic on its bridge",
 		InputSchema: map[string]interface{}{
@@ -268,7 +269,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_resume - Resume tenant
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_resume",
 		Description: "Resume a suspended tenant, restoring network traffic on its bridge",
 		InputSchema: map[string]interface{}{
@@ -284,7 +285,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_get_quotas - Get tenant quotas
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_get_quotas",
 		Description: "Get compute, network, and storage quotas for a tenant",
 		InputSchema: map[string]interface{}{
@@ -300,7 +301,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_update_quotas - Update tenant quotas
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_update_quotas",
 		Description: "Update compute, network, and storage quotas for a tenant",
 		InputSchema: map[string]interface{}{
@@ -356,7 +357,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_get_usage - Get tenant usage stats
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_get_usage",
 		Description: "Get current resource usage statistics for a tenant",
 		InputSchema: map[string]interface{}{
@@ -372,7 +373,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_check_quota - Check quota availability
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_check_quota",
 		Description: "Check if a tenant has sufficient quota for a resource request",
 		InputSchema: map[string]interface{}{
@@ -396,7 +397,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_sync - Synchronize tenant state
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_sync",
 		Description: "Synchronize tenant manager state with external systems (usage tracker, quota reservations)",
 		InputSchema: map[string]interface{}{
@@ -406,7 +407,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_rotate_dek - Rotate the Data Encryption Key for a tenant
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_rotate_dek",
 		Description: "Rotate the Data Encryption Key for a tenant",
 		InputSchema: map[string]interface{}{
@@ -427,7 +428,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// tenant_get_dek_status - Get DEK status including usage and rotation progress
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "tenant_get_dek_status",
 		Description: "Get DEK status including usage and rotation progress",
 		InputSchema: map[string]interface{}{
@@ -443,7 +444,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// platform_tenant_barrier_init - Explicitly initialize a per-tenant barrier
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tenant_barrier_init",
 		Description: "Explicitly initialize the per-tenant cryptographic barrier for a tenant. Useful when automatic initialization during tenant creation was skipped or failed.",
 		InputSchema: map[string]interface{}{
@@ -467,7 +468,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// platform_tenant_barrier_unseal - Unseal a per-tenant barrier
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tenant_barrier_unseal",
 		Description: "Unseal a per-tenant cryptographic barrier using the supplied key material. The key argument is base64-encoded; an empty key falls back to the deterministic init credential.",
 		InputSchema: map[string]interface{}{
@@ -487,7 +488,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// platform_tenant_barrier_seal - Seal a per-tenant barrier
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tenant_barrier_seal",
 		Description: "Seal a per-tenant cryptographic barrier, returning it to the sealed state. Subsequent reads/writes against the tenant namespace will fail until the barrier is unsealed.",
 		InputSchema: map[string]interface{}{
@@ -503,7 +504,7 @@ func (r *ToolRegistry) registerTenantTools() {
 	})
 
 	// platform_tenant_barrier_status - Report per-tenant barrier status
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tenant_barrier_status",
 		Description: "Return the current sealed/initialized state and active strategy metadata of a per-tenant barrier.",
 		InputSchema: map[string]interface{}{

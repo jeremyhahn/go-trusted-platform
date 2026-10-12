@@ -457,7 +457,7 @@ func initVTPMServiceOnConfig(logger *logging.Logger, a *app.App, cfg *daemon.Con
 
 // applyDaemonTLSIdentity provisions the daemon's mTLS material via the
 // quicbaas SDK CertificateService and binds it to the supplied
-// daemon.Config so that gRPC TCP, QUIC and REST listeners present a
+// daemon.Config so that gRPC TCP, QUIC, REST and MCP HTTP listeners present a
 // CA-signed server certificate (and optionally require client mTLS).
 //
 // Both runDaemonOnly and runWithWebservices call this helper so the gRPC
@@ -472,7 +472,8 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 	// transport either gets a provisioned identity or refuses to start.
 	// The one carve-out is Unix-domain-socket-only mode — filesystem-
 	// permission-scoped, not network-exposed — which needs no identity.
-	if cfg != nil && !cfg.EnableGRPCTCP && !cfg.EnableQUIC && !cfg.EnableREST {
+	// MCP over HTTP terminates TLS too (#844); MCP over stdio does not.
+	if cfg != nil && !cfg.EnableGRPCTCP && !cfg.EnableQUIC && !cfg.EnableREST && !cfg.MCPServesHTTP() {
 		logger.Info("Daemon TLS identity skipped: no TLS-terminating transport enabled (UDS-only mode)")
 		return nil
 	}

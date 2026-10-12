@@ -24,6 +24,7 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +32,7 @@ import (
 // init initializes the codec for KMS handler tests
 func init() {
 	// Set the default codec to MsgPack for encoding/decoding payloads
-	_ = SetDefaultCodecType(codec.MsgPack)
+	_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 }
 
 // =============================================================================
@@ -504,20 +505,20 @@ func TestKMSHandleRequest(t *testing.T) {
 
 		resp := handler.HandleRequest(context.Background(), nil)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "nil")
 	})
 
 	t.Run("returns error for unknown opcode", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
+		req := &quicwire.Request{
 			Opcode: 0x00, // Unknown opcode for KMS handler
 		}
 
 		resp := handler.HandleRequest(context.Background(), req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "unknown KMS operation")
 	})
 }
@@ -544,20 +545,20 @@ func TestHandleGenerateKey(t *testing.T) {
 			Tags:        map[string]string{"env": "test"},
 		}
 
-		payload, err := EncodePayload(genReq)
+		payload, err := quicwire.EncodePayload(genReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGenerateKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var genResp KMSGenerateKeyResponse
-		err = DecodePayload(resp.Payload, &genResp)
+		err = quicwire.DecodePayload(resp.Payload, &genResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, genResp.Key)
@@ -576,17 +577,17 @@ func TestHandleGenerateKey(t *testing.T) {
 			KeySpec: &KMSKeySpec{Algorithm: 3},
 		}
 
-		payload, err := EncodePayload(genReq)
+		payload, err := quicwire.EncodePayload(genReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGenerateKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key spec", func(t *testing.T) {
@@ -596,31 +597,31 @@ func TestHandleGenerateKey(t *testing.T) {
 			Name: "test-key",
 		}
 
-		payload, err := EncodePayload(genReq)
+		payload, err := quicwire.EncodePayload(genReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGenerateKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "specification")
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSGenerateKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateKey,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when generate fails", func(t *testing.T) {
@@ -631,17 +632,17 @@ func TestHandleGenerateKey(t *testing.T) {
 			KeySpec: &KMSKeySpec{Algorithm: 999},
 		}
 
-		payload, err := EncodePayload(genReq)
+		payload, err := quicwire.EncodePayload(genReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGenerateKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -661,20 +662,20 @@ func TestHandleImportKey(t *testing.T) {
 			Name:        "imported-key",
 		}
 
-		payload, err := EncodePayload(importReq)
+		payload, err := quicwire.EncodePayload(importReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSImportKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSImportKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var importResp KMSImportKeyResponse
-		err = DecodePayload(resp.Payload, &importResp)
+		err = quicwire.DecodePayload(resp.Payload, &importResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, importResp.Key)
@@ -688,17 +689,17 @@ func TestHandleImportKey(t *testing.T) {
 			KeyMaterial: []byte("key-material"),
 		}
 
-		payload, err := EncodePayload(importReq)
+		payload, err := quicwire.EncodePayload(importReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSImportKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSImportKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key material", func(t *testing.T) {
@@ -708,17 +709,17 @@ func TestHandleImportKey(t *testing.T) {
 			Name: "imported-key",
 		}
 
-		payload, err := EncodePayload(importReq)
+		payload, err := quicwire.EncodePayload(importReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSImportKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSImportKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "material")
 	})
 
@@ -730,17 +731,17 @@ func TestHandleImportKey(t *testing.T) {
 			KeyMaterial: []byte("key-material"),
 		}
 
-		payload, err := EncodePayload(importReq)
+		payload, err := quicwire.EncodePayload(importReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSImportKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSImportKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusAlreadyExists, resp.Status)
+		assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 	})
 }
 
@@ -759,20 +760,20 @@ func TestHandleGetKey(t *testing.T) {
 			Version: 1,
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGetKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var getResp KMSGetKeyResponse
-		err = DecodePayload(resp.Payload, &getResp)
+		err = quicwire.DecodePayload(resp.Payload, &getResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, getResp.Key)
@@ -786,17 +787,17 @@ func TestHandleGetKey(t *testing.T) {
 
 		getReq := &KMSGetKeyRequest{KeyID: "key-123"}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGetKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -804,17 +805,17 @@ func TestHandleGetKey(t *testing.T) {
 
 		getReq := &KMSGetKeyRequest{}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGetKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "key ID")
 	})
 
@@ -824,30 +825,30 @@ func TestHandleGetKey(t *testing.T) {
 
 		getReq := &KMSGetKeyRequest{KeyID: "nonexistent"}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGetKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSGetKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKey,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -865,20 +866,20 @@ func TestHandleListKeys(t *testing.T) {
 			Limit: 10,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSListKeys,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSListKeys,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp KMSListKeysResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Len(t, listResp.Keys, 2)
@@ -894,17 +895,17 @@ func TestHandleListKeys(t *testing.T) {
 
 		listReq := &KMSListKeysRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSListKeys,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSListKeys,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, kmsDefaultLimit, service.lastListKeysReq.Limit)
 	})
 
@@ -915,17 +916,17 @@ func TestHandleListKeys(t *testing.T) {
 			Limit: 5000, // Exceeds max
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSListKeys,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSListKeys,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, kmsMaxLimit, service.lastListKeysReq.Limit)
 	})
 
@@ -934,17 +935,17 @@ func TestHandleListKeys(t *testing.T) {
 
 		listReq := &KMSListKeysRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSListKeys,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSListKeys,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when list fails", func(t *testing.T) {
@@ -953,30 +954,30 @@ func TestHandleListKeys(t *testing.T) {
 
 		listReq := &KMSListKeysRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSListKeys,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSListKeys,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSListKeys,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSListKeys,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -995,20 +996,20 @@ func TestHandleDeleteKey(t *testing.T) {
 			PendingWindowDays: 7,
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSDeleteKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSDeleteKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var deleteResp KMSDeleteKeyResponse
-		err = DecodePayload(resp.Payload, &deleteResp)
+		err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "key-123", deleteResp.KeyID)
@@ -1020,17 +1021,17 @@ func TestHandleDeleteKey(t *testing.T) {
 
 		deleteReq := &KMSDeleteKeyRequest{KeyID: "key-123"}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSDeleteKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSDeleteKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -1038,17 +1039,17 @@ func TestHandleDeleteKey(t *testing.T) {
 
 		deleteReq := &KMSDeleteKeyRequest{}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSDeleteKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSDeleteKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for key not found", func(t *testing.T) {
@@ -1057,30 +1058,30 @@ func TestHandleDeleteKey(t *testing.T) {
 
 		deleteReq := &KMSDeleteKeyRequest{KeyID: "nonexistent"}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSDeleteKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSDeleteKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSDeleteKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSDeleteKey,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1099,20 +1100,20 @@ func TestHandleRotateKey(t *testing.T) {
 			RetainOldVersion: true,
 		}
 
-		payload, err := EncodePayload(rotateReq)
+		payload, err := quicwire.EncodePayload(rotateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSRotateKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSRotateKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var rotateResp KMSRotateKeyResponse
-		err = DecodePayload(resp.Payload, &rotateResp)
+		err = quicwire.DecodePayload(resp.Payload, &rotateResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "key-123", rotateResp.KeyID)
@@ -1125,17 +1126,17 @@ func TestHandleRotateKey(t *testing.T) {
 
 		rotateReq := &KMSRotateKeyRequest{KeyID: "key-123"}
 
-		payload, err := EncodePayload(rotateReq)
+		payload, err := quicwire.EncodePayload(rotateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSRotateKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSRotateKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -1143,30 +1144,30 @@ func TestHandleRotateKey(t *testing.T) {
 
 		rotateReq := &KMSRotateKeyRequest{}
 
-		payload, err := EncodePayload(rotateReq)
+		payload, err := quicwire.EncodePayload(rotateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSRotateKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSRotateKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSRotateKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSRotateKey,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when rotate fails", func(t *testing.T) {
@@ -1175,17 +1176,17 @@ func TestHandleRotateKey(t *testing.T) {
 
 		rotateReq := &KMSRotateKeyRequest{KeyID: "key-123"}
 
-		payload, err := EncodePayload(rotateReq)
+		payload, err := quicwire.EncodePayload(rotateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSRotateKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSRotateKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1204,20 +1205,20 @@ func TestHandleUpdateKeyStatus(t *testing.T) {
 			Status: 2, // Disabled
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSUpdateKeyStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSUpdateKeyStatus,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var updateResp KMSUpdateKeyStatusResponse
-		err = DecodePayload(resp.Payload, &updateResp)
+		err = quicwire.DecodePayload(resp.Payload, &updateResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "key-123", updateResp.KeyID)
@@ -1229,17 +1230,17 @@ func TestHandleUpdateKeyStatus(t *testing.T) {
 
 		updateReq := &KMSUpdateKeyStatusRequest{KeyID: "key-123", Status: 2}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSUpdateKeyStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSUpdateKeyStatus,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -1247,30 +1248,30 @@ func TestHandleUpdateKeyStatus(t *testing.T) {
 
 		updateReq := &KMSUpdateKeyStatusRequest{Status: 2}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSUpdateKeyStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSUpdateKeyStatus,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSUpdateKeyStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSUpdateKeyStatus,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when update fails", func(t *testing.T) {
@@ -1279,17 +1280,17 @@ func TestHandleUpdateKeyStatus(t *testing.T) {
 
 		updateReq := &KMSUpdateKeyStatusRequest{KeyID: "key-123", Status: 2}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSUpdateKeyStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSUpdateKeyStatus,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusPermissionDenied, resp.Status)
+		assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 	})
 }
 
@@ -1309,20 +1310,20 @@ func TestHandleExportKey(t *testing.T) {
 			Version: 1,
 		}
 
-		payload, err := EncodePayload(exportReq)
+		payload, err := quicwire.EncodePayload(exportReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSExportKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSExportKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var exportResp KMSExportKeyResponse
-		err = DecodePayload(resp.Payload, &exportResp)
+		err = quicwire.DecodePayload(resp.Payload, &exportResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "key-123", exportResp.KeyID)
@@ -1334,17 +1335,17 @@ func TestHandleExportKey(t *testing.T) {
 
 		exportReq := &KMSExportKeyRequest{KeyID: "key-123"}
 
-		payload, err := EncodePayload(exportReq)
+		payload, err := quicwire.EncodePayload(exportReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSExportKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSExportKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -1352,17 +1353,17 @@ func TestHandleExportKey(t *testing.T) {
 
 		exportReq := &KMSExportKeyRequest{}
 
-		payload, err := EncodePayload(exportReq)
+		payload, err := quicwire.EncodePayload(exportReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSExportKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSExportKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for non-exportable key", func(t *testing.T) {
@@ -1371,30 +1372,30 @@ func TestHandleExportKey(t *testing.T) {
 
 		exportReq := &KMSExportKeyRequest{KeyID: "key-123"}
 
-		payload, err := EncodePayload(exportReq)
+		payload, err := quicwire.EncodePayload(exportReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSExportKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSExportKey,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusPermissionDenied, resp.Status)
+		assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSExportKey,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSExportKey,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1413,20 +1414,20 @@ func TestHandleGetKeyVersions(t *testing.T) {
 			Limit: 10,
 		}
 
-		payload, err := EncodePayload(versionsReq)
+		payload, err := quicwire.EncodePayload(versionsReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGetKeyVersions,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKeyVersions,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var versionsResp KMSGetKeyVersionsResponse
-		err = DecodePayload(resp.Payload, &versionsResp)
+		err = quicwire.DecodePayload(resp.Payload, &versionsResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "key-123", versionsResp.KeyID)
@@ -1438,17 +1439,17 @@ func TestHandleGetKeyVersions(t *testing.T) {
 
 		versionsReq := &KMSGetKeyVersionsRequest{KeyID: "key-123"}
 
-		payload, err := EncodePayload(versionsReq)
+		payload, err := quicwire.EncodePayload(versionsReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGetKeyVersions,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKeyVersions,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -1456,17 +1457,17 @@ func TestHandleGetKeyVersions(t *testing.T) {
 
 		versionsReq := &KMSGetKeyVersionsRequest{}
 
-		payload, err := EncodePayload(versionsReq)
+		payload, err := quicwire.EncodePayload(versionsReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGetKeyVersions,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKeyVersions,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("applies pagination limits", func(t *testing.T) {
@@ -1477,31 +1478,31 @@ func TestHandleGetKeyVersions(t *testing.T) {
 			Limit: 5000, // Exceeds max
 		}
 
-		payload, err := EncodePayload(versionsReq)
+		payload, err := quicwire.EncodePayload(versionsReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGetKeyVersions,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKeyVersions,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, kmsMaxLimit, service.lastKeyVersionsReq.Limit)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSGetKeyVersions,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKeyVersions,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when get versions fails", func(t *testing.T) {
@@ -1510,17 +1511,17 @@ func TestHandleGetKeyVersions(t *testing.T) {
 
 		versionsReq := &KMSGetKeyVersionsRequest{KeyID: "key-123"}
 
-		payload, err := EncodePayload(versionsReq)
+		payload, err := quicwire.EncodePayload(versionsReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGetKeyVersions,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGetKeyVersions,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1534,16 +1535,16 @@ func TestHandleBackendStatus(t *testing.T) {
 	t.Run("gets backend status successfully", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode: OpKMSBackendStatus,
+		req := &quicwire.Request{
+			Opcode: quicwire.OpKMSBackendStatus,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var statusResp KMSBackendStatusResponse
-		err := DecodePayload(resp.Payload, &statusResp)
+		err := quicwire.DecodePayload(resp.Payload, &statusResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "software", statusResp.BackendType)
@@ -1554,26 +1555,26 @@ func TestHandleBackendStatus(t *testing.T) {
 	t.Run("returns error when service unavailable", func(t *testing.T) {
 		handler := NewKMSHandler(newKMSTestLogger(), nil)
 
-		req := &Request{
-			Opcode: OpKMSBackendStatus,
+		req := &quicwire.Request{
+			Opcode: quicwire.OpKMSBackendStatus,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when backend status fails", func(t *testing.T) {
 		handler, service := createTestKMSHandler()
 		service.backendStatusErr = ErrKMSUnavailable{Reason: "backend offline"}
 
-		req := &Request{
-			Opcode: OpKMSBackendStatus,
+		req := &quicwire.Request{
+			Opcode: quicwire.OpKMSBackendStatus,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }
 
@@ -1593,20 +1594,20 @@ func TestHandleEncrypt(t *testing.T) {
 			Context:   []byte("context"),
 		}
 
-		payload, err := EncodePayload(encryptReq)
+		payload, err := quicwire.EncodePayload(encryptReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSEncrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSEncrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var encryptResp KMSEncryptResponse
-		err = DecodePayload(resp.Payload, &encryptResp)
+		err = quicwire.DecodePayload(resp.Payload, &encryptResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "key-123", encryptResp.KeyID)
@@ -1621,17 +1622,17 @@ func TestHandleEncrypt(t *testing.T) {
 			Plaintext: []byte("data"),
 		}
 
-		payload, err := EncodePayload(encryptReq)
+		payload, err := quicwire.EncodePayload(encryptReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSEncrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSEncrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -1641,17 +1642,17 @@ func TestHandleEncrypt(t *testing.T) {
 			Plaintext: []byte("data"),
 		}
 
-		payload, err := EncodePayload(encryptReq)
+		payload, err := quicwire.EncodePayload(encryptReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSEncrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSEncrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing plaintext", func(t *testing.T) {
@@ -1661,17 +1662,17 @@ func TestHandleEncrypt(t *testing.T) {
 			KeyID: "key-123",
 		}
 
-		payload, err := EncodePayload(encryptReq)
+		payload, err := quicwire.EncodePayload(encryptReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSEncrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSEncrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "plaintext")
 	})
 
@@ -1684,30 +1685,30 @@ func TestHandleEncrypt(t *testing.T) {
 			Plaintext: []byte("data"),
 		}
 
-		payload, err := EncodePayload(encryptReq)
+		payload, err := quicwire.EncodePayload(encryptReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSEncrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSEncrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSEncrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSEncrypt,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1727,20 +1728,20 @@ func TestHandleDecrypt(t *testing.T) {
 			Context:    []byte("context"),
 		}
 
-		payload, err := EncodePayload(decryptReq)
+		payload, err := quicwire.EncodePayload(decryptReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSDecrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSDecrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var decryptResp KMSDecryptResponse
-		err = DecodePayload(resp.Payload, &decryptResp)
+		err = quicwire.DecodePayload(resp.Payload, &decryptResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "key-123", decryptResp.KeyID)
@@ -1755,17 +1756,17 @@ func TestHandleDecrypt(t *testing.T) {
 			Ciphertext: []byte("data"),
 		}
 
-		payload, err := EncodePayload(decryptReq)
+		payload, err := quicwire.EncodePayload(decryptReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSDecrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSDecrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -1775,17 +1776,17 @@ func TestHandleDecrypt(t *testing.T) {
 			Ciphertext: []byte("data"),
 		}
 
-		payload, err := EncodePayload(decryptReq)
+		payload, err := quicwire.EncodePayload(decryptReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSDecrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSDecrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing ciphertext", func(t *testing.T) {
@@ -1795,17 +1796,17 @@ func TestHandleDecrypt(t *testing.T) {
 			KeyID: "key-123",
 		}
 
-		payload, err := EncodePayload(decryptReq)
+		payload, err := quicwire.EncodePayload(decryptReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSDecrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSDecrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "ciphertext")
 	})
 
@@ -1818,30 +1819,30 @@ func TestHandleDecrypt(t *testing.T) {
 			Ciphertext: []byte("invalid"),
 		}
 
-		payload, err := EncodePayload(decryptReq)
+		payload, err := quicwire.EncodePayload(decryptReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSDecrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSDecrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSDecrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSDecrypt,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1861,20 +1862,20 @@ func TestHandleSign(t *testing.T) {
 			HashAlgorithm: 4, // SHA-256
 		}
 
-		payload, err := EncodePayload(signReq)
+		payload, err := quicwire.EncodePayload(signReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSSign,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSSign,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var signResp KMSSignResponse
-		err = DecodePayload(resp.Payload, &signResp)
+		err = quicwire.DecodePayload(resp.Payload, &signResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "key-123", signResp.KeyID)
@@ -1889,17 +1890,17 @@ func TestHandleSign(t *testing.T) {
 			Message: []byte("message"),
 		}
 
-		payload, err := EncodePayload(signReq)
+		payload, err := quicwire.EncodePayload(signReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSSign,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSSign,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -1909,17 +1910,17 @@ func TestHandleSign(t *testing.T) {
 			Message: []byte("message"),
 		}
 
-		payload, err := EncodePayload(signReq)
+		payload, err := quicwire.EncodePayload(signReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSSign,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSSign,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing message", func(t *testing.T) {
@@ -1929,17 +1930,17 @@ func TestHandleSign(t *testing.T) {
 			KeyID: "key-123",
 		}
 
-		payload, err := EncodePayload(signReq)
+		payload, err := quicwire.EncodePayload(signReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSSign,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSSign,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "message")
 	})
 
@@ -1952,30 +1953,30 @@ func TestHandleSign(t *testing.T) {
 			Message: []byte("message"),
 		}
 
-		payload, err := EncodePayload(signReq)
+		payload, err := quicwire.EncodePayload(signReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSSign,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSSign,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSSign,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSSign,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1995,20 +1996,20 @@ func TestHandleVerify(t *testing.T) {
 			Signature: []byte("signature"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerify,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerify,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var verifyResp KMSVerifyResponse
-		err = DecodePayload(resp.Payload, &verifyResp)
+		err = quicwire.DecodePayload(resp.Payload, &verifyResp)
 		require.NoError(t, err)
 
 		assert.True(t, verifyResp.Valid)
@@ -2023,17 +2024,17 @@ func TestHandleVerify(t *testing.T) {
 			Signature: []byte("signature"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerify,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerify,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -2044,17 +2045,17 @@ func TestHandleVerify(t *testing.T) {
 			Signature: []byte("signature"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerify,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerify,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing message", func(t *testing.T) {
@@ -2065,17 +2066,17 @@ func TestHandleVerify(t *testing.T) {
 			Signature: []byte("signature"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerify,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerify,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "message")
 	})
 
@@ -2087,17 +2088,17 @@ func TestHandleVerify(t *testing.T) {
 			Message: []byte("message"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerify,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerify,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "signature")
 	})
 
@@ -2111,30 +2112,30 @@ func TestHandleVerify(t *testing.T) {
 			Signature: []byte("invalid"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerify,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerify,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSVerify,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerify,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -2152,20 +2153,20 @@ func TestHandleGenerateRandom(t *testing.T) {
 			NumBytes: 32,
 		}
 
-		payload, err := EncodePayload(randomReq)
+		payload, err := quicwire.EncodePayload(randomReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGenerateRandom,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateRandom,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var randomResp KMSGenerateRandomResponse
-		err = DecodePayload(resp.Payload, &randomResp)
+		err = quicwire.DecodePayload(resp.Payload, &randomResp)
 		require.NoError(t, err)
 
 		assert.NotEmpty(t, randomResp.RandomBytes)
@@ -2176,17 +2177,17 @@ func TestHandleGenerateRandom(t *testing.T) {
 
 		randomReq := &KMSGenerateRandomRequest{NumBytes: 32}
 
-		payload, err := EncodePayload(randomReq)
+		payload, err := quicwire.EncodePayload(randomReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGenerateRandom,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateRandom,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for zero num_bytes", func(t *testing.T) {
@@ -2194,17 +2195,17 @@ func TestHandleGenerateRandom(t *testing.T) {
 
 		randomReq := &KMSGenerateRandomRequest{NumBytes: 0}
 
-		payload, err := EncodePayload(randomReq)
+		payload, err := quicwire.EncodePayload(randomReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGenerateRandom,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateRandom,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "greater than 0")
 	})
 
@@ -2213,17 +2214,17 @@ func TestHandleGenerateRandom(t *testing.T) {
 
 		randomReq := &KMSGenerateRandomRequest{NumBytes: -10}
 
-		payload, err := EncodePayload(randomReq)
+		payload, err := quicwire.EncodePayload(randomReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGenerateRandom,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateRandom,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for num_bytes exceeding max", func(t *testing.T) {
@@ -2231,31 +2232,31 @@ func TestHandleGenerateRandom(t *testing.T) {
 
 		randomReq := &KMSGenerateRandomRequest{NumBytes: kmsMaxRandomBytes + 1}
 
-		payload, err := EncodePayload(randomReq)
+		payload, err := quicwire.EncodePayload(randomReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGenerateRandom,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateRandom,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "maximum")
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSGenerateRandom,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateRandom,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when generate random fails", func(t *testing.T) {
@@ -2264,17 +2265,17 @@ func TestHandleGenerateRandom(t *testing.T) {
 
 		randomReq := &KMSGenerateRandomRequest{NumBytes: 32}
 
-		payload, err := EncodePayload(randomReq)
+		payload, err := quicwire.EncodePayload(randomReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSGenerateRandom,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSGenerateRandom,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -2293,20 +2294,20 @@ func TestHandleHash(t *testing.T) {
 			Algorithm: 4, // SHA-256
 		}
 
-		payload, err := EncodePayload(hashReq)
+		payload, err := quicwire.EncodePayload(hashReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSHash,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSHash,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var hashResp KMSHashResponse
-		err = DecodePayload(resp.Payload, &hashResp)
+		err = quicwire.DecodePayload(resp.Payload, &hashResp)
 		require.NoError(t, err)
 
 		assert.NotEmpty(t, hashResp.Hash)
@@ -2318,17 +2319,17 @@ func TestHandleHash(t *testing.T) {
 
 		hashReq := &KMSHashRequest{Data: []byte("data")}
 
-		payload, err := EncodePayload(hashReq)
+		payload, err := quicwire.EncodePayload(hashReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSHash,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSHash,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing data", func(t *testing.T) {
@@ -2336,17 +2337,17 @@ func TestHandleHash(t *testing.T) {
 
 		hashReq := &KMSHashRequest{Algorithm: 4}
 
-		payload, err := EncodePayload(hashReq)
+		payload, err := quicwire.EncodePayload(hashReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSHash,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSHash,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "data")
 	})
 
@@ -2359,30 +2360,30 @@ func TestHandleHash(t *testing.T) {
 			Algorithm: 999,
 		}
 
-		payload, err := EncodePayload(hashReq)
+		payload, err := quicwire.EncodePayload(hashReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSHash,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSHash,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSHash,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSHash,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -2402,20 +2403,20 @@ func TestHandleHMAC(t *testing.T) {
 			HashAlgorithm: 4,
 		}
 
-		payload, err := EncodePayload(hmacReq)
+		payload, err := quicwire.EncodePayload(hmacReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSHMAC,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var hmacResp KMSHMACResponse
-		err = DecodePayload(resp.Payload, &hmacResp)
+		err = quicwire.DecodePayload(resp.Payload, &hmacResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "key-123", hmacResp.KeyID)
@@ -2430,17 +2431,17 @@ func TestHandleHMAC(t *testing.T) {
 			Message: []byte("message"),
 		}
 
-		payload, err := EncodePayload(hmacReq)
+		payload, err := quicwire.EncodePayload(hmacReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSHMAC,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -2450,17 +2451,17 @@ func TestHandleHMAC(t *testing.T) {
 			Message: []byte("message"),
 		}
 
-		payload, err := EncodePayload(hmacReq)
+		payload, err := quicwire.EncodePayload(hmacReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSHMAC,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing message", func(t *testing.T) {
@@ -2470,31 +2471,31 @@ func TestHandleHMAC(t *testing.T) {
 			KeyID: "key-123",
 		}
 
-		payload, err := EncodePayload(hmacReq)
+		payload, err := quicwire.EncodePayload(hmacReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSHMAC,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "message")
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSHMAC,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when HMAC fails", func(t *testing.T) {
@@ -2503,17 +2504,17 @@ func TestHandleHMAC(t *testing.T) {
 
 		hmacReq := &KMSHMACRequest{KeyID: "key-123", Message: []byte("test message")}
 
-		payload, err := EncodePayload(hmacReq)
+		payload, err := quicwire.EncodePayload(hmacReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSHMAC,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -2533,20 +2534,20 @@ func TestHandleVerifyHMAC(t *testing.T) {
 			HMAC:    []byte("hmac-value"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerifyHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerifyHMAC,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var verifyResp KMSVerifyHMACResponse
-		err = DecodePayload(resp.Payload, &verifyResp)
+		err = quicwire.DecodePayload(resp.Payload, &verifyResp)
 		require.NoError(t, err)
 
 		assert.True(t, verifyResp.Valid)
@@ -2561,17 +2562,17 @@ func TestHandleVerifyHMAC(t *testing.T) {
 			HMAC:    []byte("hmac"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerifyHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerifyHMAC,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -2582,17 +2583,17 @@ func TestHandleVerifyHMAC(t *testing.T) {
 			HMAC:    []byte("hmac"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerifyHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerifyHMAC,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing message", func(t *testing.T) {
@@ -2603,17 +2604,17 @@ func TestHandleVerifyHMAC(t *testing.T) {
 			HMAC:  []byte("hmac"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerifyHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerifyHMAC,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "message")
 	})
 
@@ -2625,31 +2626,31 @@ func TestHandleVerifyHMAC(t *testing.T) {
 			Message: []byte("message"),
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerifyHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerifyHMAC,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "HMAC")
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestKMSHandler()
 
-		req := &Request{
-			Opcode:  OpKMSVerifyHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerifyHMAC,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when verify HMAC fails", func(t *testing.T) {
@@ -2658,17 +2659,17 @@ func TestHandleVerifyHMAC(t *testing.T) {
 
 		verifyReq := &KMSVerifyHMACRequest{KeyID: "key-123", Message: []byte("test"), HMAC: []byte("hmac")}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSVerifyHMAC,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSVerifyHMAC,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -2814,21 +2815,21 @@ func TestKMSErrorResponse(t *testing.T) {
 		err            error
 		expectedStatus byte
 	}{
-		{"key not found", ErrKMSKeyNotFound{KeyID: "key-1"}, StatusNotFound},
-		{"key already exists", ErrKMSKeyAlreadyExists{KeyID: "key-1"}, StatusAlreadyExists},
-		{"invalid key spec", ErrKMSInvalidKeySpecErr{Reason: "bad"}, StatusInvalidArgument},
-		{"key not exportable", ErrKMSKeyNotExportable{KeyID: "key-1"}, StatusPermissionDenied},
-		{"key disabled", ErrKMSKeyDisabled{KeyID: "key-1"}, StatusPermissionDenied},
-		{"key pending deletion", ErrKMSKeyPendingDeletion{KeyID: "key-1"}, StatusPermissionDenied},
-		{"encryption failed", ErrKMSEncryptFailed{Err: errors.New("err")}, StatusInternalError},
-		{"decryption failed", ErrKMSDecryptFailed{Err: errors.New("err")}, StatusInternalError},
-		{"signing failed", ErrKMSSignFailed{Err: errors.New("err")}, StatusInternalError},
-		{"verification failed", ErrKMSVerifyFailed{Err: errors.New("err")}, StatusInternalError},
-		{"invalid algorithm", ErrKMSInvalidAlgorithm{Algorithm: 999}, StatusInvalidArgument},
-		{"service unavailable", ErrKMSUnavailable{Reason: "down"}, StatusUnavailable},
-		{"operation not implemented", ErrKMSOpFailed{Operation: "op", Reason: "not implemented"}, StatusNotImplemented},
-		{"operation failed", ErrKMSOpFailed{Operation: "op", Reason: "error"}, StatusInternalError},
-		{"generic error", errors.New("unknown error"), StatusInternalError},
+		{"key not found", ErrKMSKeyNotFound{KeyID: "key-1"}, quicwire.StatusNotFound},
+		{"key already exists", ErrKMSKeyAlreadyExists{KeyID: "key-1"}, quicwire.StatusAlreadyExists},
+		{"invalid key spec", ErrKMSInvalidKeySpecErr{Reason: "bad"}, quicwire.StatusInvalidArgument},
+		{"key not exportable", ErrKMSKeyNotExportable{KeyID: "key-1"}, quicwire.StatusPermissionDenied},
+		{"key disabled", ErrKMSKeyDisabled{KeyID: "key-1"}, quicwire.StatusPermissionDenied},
+		{"key pending deletion", ErrKMSKeyPendingDeletion{KeyID: "key-1"}, quicwire.StatusPermissionDenied},
+		{"encryption failed", ErrKMSEncryptFailed{Err: errors.New("err")}, quicwire.StatusInternalError},
+		{"decryption failed", ErrKMSDecryptFailed{Err: errors.New("err")}, quicwire.StatusInternalError},
+		{"signing failed", ErrKMSSignFailed{Err: errors.New("err")}, quicwire.StatusInternalError},
+		{"verification failed", ErrKMSVerifyFailed{Err: errors.New("err")}, quicwire.StatusInternalError},
+		{"invalid algorithm", ErrKMSInvalidAlgorithm{Algorithm: 999}, quicwire.StatusInvalidArgument},
+		{"service unavailable", ErrKMSUnavailable{Reason: "down"}, quicwire.StatusUnavailable},
+		{"operation not implemented", ErrKMSOpFailed{Operation: "op", Reason: "not implemented"}, quicwire.StatusNotImplemented},
+		{"operation failed", ErrKMSOpFailed{Operation: "op", Reason: "error"}, quicwire.StatusInternalError},
+		{"generic error", errors.New("unknown error"), quicwire.StatusInternalError},
 	}
 
 	for _, tc := range testCases {
@@ -2850,25 +2851,25 @@ func TestKMSOpcodeConstants(t *testing.T) {
 		opcode byte
 	}{
 		// Key Management
-		{"OpKMSGenerateKey", OpKMSGenerateKey},
-		{"OpKMSImportKey", OpKMSImportKey},
-		{"OpKMSGetKey", OpKMSGetKey},
-		{"OpKMSListKeys", OpKMSListKeys},
-		{"OpKMSDeleteKey", OpKMSDeleteKey},
-		{"OpKMSRotateKey", OpKMSRotateKey},
-		{"OpKMSUpdateKeyStatus", OpKMSUpdateKeyStatus},
-		{"OpKMSExportKey", OpKMSExportKey},
-		{"OpKMSGetKeyVersions", OpKMSGetKeyVersions},
-		{"OpKMSBackendStatus", OpKMSBackendStatus},
+		{"OpKMSGenerateKey", quicwire.OpKMSGenerateKey},
+		{"OpKMSImportKey", quicwire.OpKMSImportKey},
+		{"OpKMSGetKey", quicwire.OpKMSGetKey},
+		{"OpKMSListKeys", quicwire.OpKMSListKeys},
+		{"OpKMSDeleteKey", quicwire.OpKMSDeleteKey},
+		{"OpKMSRotateKey", quicwire.OpKMSRotateKey},
+		{"OpKMSUpdateKeyStatus", quicwire.OpKMSUpdateKeyStatus},
+		{"OpKMSExportKey", quicwire.OpKMSExportKey},
+		{"OpKMSGetKeyVersions", quicwire.OpKMSGetKeyVersions},
+		{"OpKMSBackendStatus", quicwire.OpKMSBackendStatus},
 		// Crypto Operations
-		{"OpKMSEncrypt", OpKMSEncrypt},
-		{"OpKMSDecrypt", OpKMSDecrypt},
-		{"OpKMSSign", OpKMSSign},
-		{"OpKMSVerify", OpKMSVerify},
-		{"OpKMSGenerateRandom", OpKMSGenerateRandom},
-		{"OpKMSHash", OpKMSHash},
-		{"OpKMSHMAC", OpKMSHMAC},
-		{"OpKMSVerifyHMAC", OpKMSVerifyHMAC},
+		{"OpKMSEncrypt", quicwire.OpKMSEncrypt},
+		{"OpKMSDecrypt", quicwire.OpKMSDecrypt},
+		{"OpKMSSign", quicwire.OpKMSSign},
+		{"OpKMSVerify", quicwire.OpKMSVerify},
+		{"OpKMSGenerateRandom", quicwire.OpKMSGenerateRandom},
+		{"OpKMSHash", quicwire.OpKMSHash},
+		{"OpKMSHMAC", quicwire.OpKMSHMAC},
+		{"OpKMSVerifyHMAC", quicwire.OpKMSVerifyHMAC},
 	}
 
 	seen := make(map[byte]string)
@@ -2927,20 +2928,20 @@ func TestHandleBatchEncrypt(t *testing.T) {
 			},
 		}
 
-		payload, err := EncodePayload(batchReq)
+		payload, err := quicwire.EncodePayload(batchReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSBatchEncrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSBatchEncrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var batchResp KMSBatchEncryptResponse
-		err = DecodePayload(resp.Payload, &batchResp)
+		err = quicwire.DecodePayload(resp.Payload, &batchResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "key-123", batchResp.KeyID)
@@ -2963,17 +2964,17 @@ func TestHandleBatchEncrypt(t *testing.T) {
 			},
 		}
 
-		payload, err := EncodePayload(batchReq)
+		payload, err := quicwire.EncodePayload(batchReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSBatchEncrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSBatchEncrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -2985,17 +2986,17 @@ func TestHandleBatchEncrypt(t *testing.T) {
 			},
 		}
 
-		payload, err := EncodePayload(batchReq)
+		payload, err := quicwire.EncodePayload(batchReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSBatchEncrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSBatchEncrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "key ID")
 	})
 
@@ -3007,17 +3008,17 @@ func TestHandleBatchEncrypt(t *testing.T) {
 			Items: []*KMSBatchEncryptItem{},
 		}
 
-		payload, err := EncodePayload(batchReq)
+		payload, err := quicwire.EncodePayload(batchReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSBatchEncrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSBatchEncrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "batch")
 	})
 
@@ -3032,17 +3033,17 @@ func TestHandleBatchEncrypt(t *testing.T) {
 			},
 		}
 
-		payload, err := EncodePayload(batchReq)
+		payload, err := quicwire.EncodePayload(batchReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSBatchEncrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSBatchEncrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -3064,20 +3065,20 @@ func TestHandleBatchDecrypt(t *testing.T) {
 			},
 		}
 
-		payload, err := EncodePayload(batchReq)
+		payload, err := quicwire.EncodePayload(batchReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSBatchDecrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSBatchDecrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var batchResp KMSBatchDecryptResponse
-		err = DecodePayload(resp.Payload, &batchResp)
+		err = quicwire.DecodePayload(resp.Payload, &batchResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "key-123", batchResp.KeyID)
@@ -3100,17 +3101,17 @@ func TestHandleBatchDecrypt(t *testing.T) {
 			},
 		}
 
-		payload, err := EncodePayload(batchReq)
+		payload, err := quicwire.EncodePayload(batchReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSBatchDecrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSBatchDecrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing key ID", func(t *testing.T) {
@@ -3122,17 +3123,17 @@ func TestHandleBatchDecrypt(t *testing.T) {
 			},
 		}
 
-		payload, err := EncodePayload(batchReq)
+		payload, err := quicwire.EncodePayload(batchReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSBatchDecrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSBatchDecrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "key ID")
 	})
 
@@ -3144,17 +3145,17 @@ func TestHandleBatchDecrypt(t *testing.T) {
 			Items: []*KMSBatchDecryptItem{},
 		}
 
-		payload, err := EncodePayload(batchReq)
+		payload, err := quicwire.EncodePayload(batchReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSBatchDecrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSBatchDecrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "batch")
 	})
 
@@ -3169,17 +3170,17 @@ func TestHandleBatchDecrypt(t *testing.T) {
 			},
 		}
 
-		payload, err := EncodePayload(batchReq)
+		payload, err := quicwire.EncodePayload(batchReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSBatchDecrypt,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSBatchDecrypt,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -3199,20 +3200,20 @@ func TestHandleRewrap(t *testing.T) {
 			Ciphertext:       []byte("encrypted-data"),
 		}
 
-		payload, err := EncodePayload(rewrapReq)
+		payload, err := quicwire.EncodePayload(rewrapReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSRewrap,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSRewrap,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var rewrapResp KMSRewrapResponse
-		err = DecodePayload(resp.Payload, &rewrapResp)
+		err = quicwire.DecodePayload(resp.Payload, &rewrapResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "source-key", rewrapResp.SourceKeyID)
@@ -3233,17 +3234,17 @@ func TestHandleRewrap(t *testing.T) {
 			Ciphertext:       []byte("encrypted"),
 		}
 
-		payload, err := EncodePayload(rewrapReq)
+		payload, err := quicwire.EncodePayload(rewrapReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSRewrap,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSRewrap,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing source key ID", func(t *testing.T) {
@@ -3254,17 +3255,17 @@ func TestHandleRewrap(t *testing.T) {
 			Ciphertext:       []byte("encrypted"),
 		}
 
-		payload, err := EncodePayload(rewrapReq)
+		payload, err := quicwire.EncodePayload(rewrapReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSRewrap,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSRewrap,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "source")
 	})
 
@@ -3276,17 +3277,17 @@ func TestHandleRewrap(t *testing.T) {
 			Ciphertext:  []byte("encrypted"),
 		}
 
-		payload, err := EncodePayload(rewrapReq)
+		payload, err := quicwire.EncodePayload(rewrapReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSRewrap,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSRewrap,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "destination")
 	})
 
@@ -3298,17 +3299,17 @@ func TestHandleRewrap(t *testing.T) {
 			DestinationKeyID: "dest-key",
 		}
 
-		payload, err := EncodePayload(rewrapReq)
+		payload, err := quicwire.EncodePayload(rewrapReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSRewrap,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSRewrap,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "ciphertext")
 	})
 
@@ -3322,17 +3323,17 @@ func TestHandleRewrap(t *testing.T) {
 			Ciphertext:       []byte("encrypted"),
 		}
 
-		payload, err := EncodePayload(rewrapReq)
+		payload, err := quicwire.EncodePayload(rewrapReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpKMSRewrap,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpKMSRewrap,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 func TestKMSServiceInterfaceCompliance(t *testing.T) {

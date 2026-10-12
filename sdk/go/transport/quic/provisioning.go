@@ -31,8 +31,8 @@ package quic
 // msgpack contract — and maps them back onto the pb oneofs.
 
 import (
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Result discriminator values for the flattened FetchConfig and PollSession
@@ -128,7 +128,7 @@ type categoryResponseDecoder func(payload []byte, reply interface{}) error
 
 // categoryResponseDecoders routes category-opcode methods whose responses
 // require custom decoding. Methods absent from this map use the default
-// quicapi.DecodePayload path.
+// quicwire.DecodePayload path.
 var categoryResponseDecoders = map[string]categoryResponseDecoder{
 	platformv1.ConfigDeliveryService_FetchConfig_FullMethodName: decodeProvisioningFetchConfigReply,
 	platformv1.ConfigDeliveryService_PollSession_FullMethodName: decodeProvisioningPollSessionReply,
@@ -145,7 +145,7 @@ func decodeProvisioningFetchConfigReply(payload []byte, reply interface{}) error
 		}
 	}
 	var wire provisioningFetchConfigWire
-	if err := quicapi.DecodePayload(payload, &wire); err != nil {
+	if err := quicwire.DecodePayload(payload, &wire); err != nil {
 		return ErrDecodingFailed{Err: err}
 	}
 	out.Result = wire.toProto().Result
@@ -162,7 +162,7 @@ func decodeProvisioningPollSessionReply(payload []byte, reply interface{}) error
 		}
 	}
 	var wire provisioningPollSessionWire
-	if err := quicapi.DecodePayload(payload, &wire); err != nil {
+	if err := quicwire.DecodePayload(payload, &wire); err != nil {
 		return ErrDecodingFailed{Err: err}
 	}
 	out.Result = wire.toProto().Result

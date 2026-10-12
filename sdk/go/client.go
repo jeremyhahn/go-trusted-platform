@@ -345,30 +345,34 @@ func (c *platformClient) initServiceClients() {
 	}
 }
 
-// quicbaasTransportOptions maps a CLI/context transport string to the
-// corresponding go-quicbaas SDK option. Empty (or unknown) returns nil
-// so the SDK falls back to its built-in auto-detection
-// (HTTP URL -> REST, .sock path -> Unix, otherwise gRPC).
+// quicbaasTransports maps each transport name the QuicBaaS side-client
+// accepts to its go-quicbaas SDK options. gRPC is the SDK default, so it
+// maps to nil and lets auto-detection still pick Unix for a .sock path.
 //
 // Note: WithUnix is the only option that takes the socket path; every
 // other transport reads the path from the NewClient address argument.
-func quicbaasTransportOptions(addr, transport string) []quicbaassdk.Option {
-	switch transport {
-	case "unix":
-		return []quicbaassdk.Option{quicbaassdk.WithUnix(addr)}
-	case "rest":
-		return []quicbaassdk.Option{quicbaassdk.WithREST()}
-	case "quic":
-		return []quicbaassdk.Option{quicbaassdk.WithQUIC()}
-	case "mcp":
-		return []quicbaassdk.Option{quicbaassdk.WithMCP()}
-	case "grpc", "":
-		// gRPC is the SDK default; nil lets auto-detect fire so a
-		// .sock path still picks Unix when transport is unset.
-		return nil
-	default:
-		return nil
+var quicbaasTransports = map[string]func(addr string) []quicbaassdk.Option{
+	"unix": func(addr string) []quicbaassdk.Option { return []quicbaassdk.Option{quicbaassdk.WithUnix(addr)} },
+	"rest": func(string) []quicbaassdk.Option { return []quicbaassdk.Option{quicbaassdk.WithREST()} },
+	"quic": func(string) []quicbaassdk.Option { return []quicbaassdk.Option{quicbaassdk.WithQUIC()} },
+	"mcp":  func(string) []quicbaassdk.Option { return []quicbaassdk.Option{quicbaassdk.WithMCP()} },
+	"grpc": func(string) []quicbaassdk.Option { return nil },
+}
+
+// quicbaasTransportOptions maps a CLI/context transport string to the
+// corresponding go-quicbaas SDK options. An empty name returns nil so the
+// SDK auto-detects (HTTP URL -> REST, .sock path -> Unix, otherwise gRPC);
+// any other unknown name is ErrProtocolNotSupported, so a typo is not
+// silently dialled over a different transport.
+func quicbaasTransportOptions(addr, transport string) ([]quicbaassdk.Option, error) {
+	if transport == "" {
+		return nil, nil
 	}
+	options, ok := quicbaasTransports[transport]
+	if !ok {
+		return nil, ErrProtocolNotSupported{Transport: transport}
+	}
+	return options(addr), nil
 }
 
 // initQuicBaaSClient constructs the QuicBaaS SDK client when the
@@ -378,8 +382,11 @@ func (c *platformClient) initQuicBaaSClient(opts *Options) {
 	if opts == nil || opts.QuicBaaSAddr == "" {
 		return
 	}
-	qOpts := quicbaasTransportOptions(opts.QuicBaaSAddr, opts.QuicBaaSTransport)
-	sdk, err := quicbaassdk.NewClient(opts.QuicBaaSAddr, qOpts...)
+	qOpts, err := quicbaasTransportOptions(opts.QuicBaaSAddr, opts.QuicBaaSTransport)
+	var sdk quicbaassdk.Client
+	if err == nil {
+		sdk, err = quicbaassdk.NewClient(opts.QuicBaaSAddr, qOpts...)
+	}
 	if err != nil {
 		c.quicbaasInitErr = ErrQuicBaaSInitFailed{
 			Addr:      opts.QuicBaaSAddr,

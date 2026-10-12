@@ -21,6 +21,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // SDN pagination defaults
@@ -106,64 +107,64 @@ func NewSDNHandler(logger *logging.Logger, sdnService SDNServiceInterface) *SDNH
 }
 
 // HandleRequest processes an SDN request and returns a response
-func (h *SDNHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{
-			Status:  StatusInvalidRequest,
-			Payload: []byte(ErrNilRequest.Error()),
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
+			Payload: []byte(quicwire.ErrNilRequest.Error()),
 		}
 	}
 
 	switch req.Opcode {
 	// Bridge operations
-	case OpSDNCreateBridge:
+	case quicwire.OpSDNCreateBridge:
 		return h.handleCreateBridge(ctx, req)
-	case OpSDNDeleteBridge:
+	case quicwire.OpSDNDeleteBridge:
 		return h.handleDeleteBridge(ctx, req)
-	case OpSDNGetBridge:
+	case quicwire.OpSDNGetBridge:
 		return h.handleGetBridge(ctx, req)
-	case OpSDNListBridges:
+	case quicwire.OpSDNListBridges:
 		return h.handleListBridges(ctx, req)
 
 	// Port operations
-	case OpSDNCreatePort:
+	case quicwire.OpSDNCreatePort:
 		return h.handleCreatePort(ctx, req)
-	case OpSDNDeletePort:
+	case quicwire.OpSDNDeletePort:
 		return h.handleDeletePort(ctx, req)
-	case OpSDNGetPort:
+	case quicwire.OpSDNGetPort:
 		return h.handleGetPort(ctx, req)
-	case OpSDNListPorts:
+	case quicwire.OpSDNListPorts:
 		return h.handleListPorts(ctx, req)
-	case OpSDNSetVLAN:
+	case quicwire.OpSDNSetVLAN:
 		return h.handleSetVLAN(ctx, req)
-	case OpSDNGetVLAN:
+	case quicwire.OpSDNGetVLAN:
 		return h.handleGetVLAN(ctx, req)
 
 	// Flow operations
-	case OpSDNAddFlow:
+	case quicwire.OpSDNAddFlow:
 		return h.handleAddFlow(ctx, req)
-	case OpSDNDeleteFlow:
+	case quicwire.OpSDNDeleteFlow:
 		return h.handleDeleteFlow(ctx, req)
-	case OpSDNListFlows:
+	case quicwire.OpSDNListFlows:
 		return h.handleListFlows(ctx, req)
 
 	// Policy operations
-	case OpSDNApplyPolicy:
+	case quicwire.OpSDNApplyPolicy:
 		return h.handleApplyPolicy(ctx, req)
-	case OpSDNGetPolicy:
+	case quicwire.OpSDNGetPolicy:
 		return h.handleGetPolicy(ctx, req)
-	case OpSDNListPolicies:
+	case quicwire.OpSDNListPolicies:
 		return h.handleListPolicies(ctx, req)
-	case OpSDNDeletePolicy:
+	case quicwire.OpSDNDeletePolicy:
 		return h.handleDeletePolicy(ctx, req)
 
 	// Metrics
-	case OpSDNGetMetrics:
+	case quicwire.OpSDNGetMetrics:
 		return h.handleGetMetrics(ctx, req)
 
 	default:
-		return &Response{
-			Status:  StatusInvalidRequest,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("unknown SDN operation"),
 		}
 	}
@@ -492,18 +493,18 @@ type SDNGetMetricsResponse struct {
 // =============================================================================
 
 // handleCreateBridge creates a new bridge
-func (h *SDNHandler) handleCreateBridge(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleCreateBridge(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var createReq SDNCreateBridgeRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if createReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingBridgeName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingBridgeName)
 	}
 
 	bridge, err := h.sdnService.CreateBridge(ctx, createReq.Name)
@@ -530,30 +531,30 @@ func (h *SDNHandler) handleCreateBridge(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeleteBridge deletes a bridge
-func (h *SDNHandler) handleDeleteBridge(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleDeleteBridge(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var deleteReq SDNDeleteBridgeRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingBridgeName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingBridgeName)
 	}
 
 	if err := h.sdnService.DeleteBridge(ctx, deleteReq.Name); err != nil {
@@ -567,30 +568,30 @@ func (h *SDNHandler) handleDeleteBridge(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetBridge gets a bridge by name
-func (h *SDNHandler) handleGetBridge(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleGetBridge(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var getReq SDNGetBridgeRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if getReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingBridgeName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingBridgeName)
 	}
 
 	bridge, err := h.sdnService.GetBridge(ctx, getReq.Name)
@@ -604,26 +605,26 @@ func (h *SDNHandler) handleGetBridge(ctx context.Context, req *Request) *Respons
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListBridges lists all bridges
-func (h *SDNHandler) handleListBridges(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleListBridges(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var listReq SDNListBridgesRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	bridges, err := h.sdnService.ListBridges(ctx)
@@ -654,13 +655,13 @@ func (h *SDNHandler) handleListBridges(ctx context.Context, req *Request) *Respo
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -670,22 +671,22 @@ func (h *SDNHandler) handleListBridges(ctx context.Context, req *Request) *Respo
 // =============================================================================
 
 // handleCreatePort creates a new port
-func (h *SDNHandler) handleCreatePort(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleCreatePort(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var createReq SDNCreatePortRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if createReq.BridgeName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingBridgeName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingBridgeName)
 	}
 
 	if createReq.PortName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingPortName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingPortName)
 	}
 
 	port, err := h.sdnService.AddPort(ctx, createReq.BridgeName, createReq.PortName)
@@ -713,34 +714,34 @@ func (h *SDNHandler) handleCreatePort(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeletePort deletes a port
-func (h *SDNHandler) handleDeletePort(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleDeletePort(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var deleteReq SDNDeletePortRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.BridgeName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingBridgeName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingBridgeName)
 	}
 
 	if deleteReq.PortName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingPortName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingPortName)
 	}
 
 	if err := h.sdnService.DeletePort(ctx, deleteReq.BridgeName, deleteReq.PortName); err != nil {
@@ -754,30 +755,30 @@ func (h *SDNHandler) handleDeletePort(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetPort gets a port by name
-func (h *SDNHandler) handleGetPort(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleGetPort(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var getReq SDNGetPortRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if getReq.PortName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingPortName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingPortName)
 	}
 
 	port, err := h.sdnService.GetPort(ctx, getReq.PortName)
@@ -791,30 +792,30 @@ func (h *SDNHandler) handleGetPort(ctx context.Context, req *Request) *Response 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListPorts lists ports on a bridge
-func (h *SDNHandler) handleListPorts(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleListPorts(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var listReq SDNListPortsRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if listReq.BridgeName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingBridgeName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingBridgeName)
 	}
 
 	ports, err := h.sdnService.ListPorts(ctx, listReq.BridgeName)
@@ -845,30 +846,30 @@ func (h *SDNHandler) handleListPorts(ctx context.Context, req *Request) *Respons
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleSetVLAN sets the VLAN on a port
-func (h *SDNHandler) handleSetVLAN(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleSetVLAN(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var setReq SDNSetVLANRequest
-	if err := DecodePayload(req.Payload, &setReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &setReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if setReq.PortName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingPortName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingPortName)
 	}
 
 	if err := h.sdnService.SetPortVLAN(ctx, setReq.PortName, setReq.VLAN); err != nil {
@@ -883,30 +884,30 @@ func (h *SDNHandler) handleSetVLAN(ctx context.Context, req *Request) *Response 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetVLAN gets the VLAN configuration on a port
-func (h *SDNHandler) handleGetVLAN(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleGetVLAN(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var getReq SDNGetVLANRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if getReq.PortName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingPortName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingPortName)
 	}
 
 	port, err := h.sdnService.GetPort(ctx, getReq.PortName)
@@ -922,13 +923,13 @@ func (h *SDNHandler) handleGetVLAN(ctx context.Context, req *Request) *Response 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -938,18 +939,18 @@ func (h *SDNHandler) handleGetVLAN(ctx context.Context, req *Request) *Response 
 // =============================================================================
 
 // handleAddFlow adds a flow to a bridge
-func (h *SDNHandler) handleAddFlow(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleAddFlow(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var addReq SDNAddFlowRequest
-	if err := DecodePayload(req.Payload, &addReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &addReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if addReq.BridgeName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingBridgeName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingBridgeName)
 	}
 
 	flowMod := &ovs.FlowMod{
@@ -979,30 +980,30 @@ func (h *SDNHandler) handleAddFlow(ctx context.Context, req *Request) *Response 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeleteFlow deletes a flow from a bridge
-func (h *SDNHandler) handleDeleteFlow(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleDeleteFlow(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var deleteReq SDNDeleteFlowRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.BridgeName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingBridgeName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingBridgeName)
 	}
 
 	if err := h.sdnService.DeleteFlow(ctx, deleteReq.BridgeName, deleteReq.Match); err != nil {
@@ -1015,30 +1016,30 @@ func (h *SDNHandler) handleDeleteFlow(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListFlows lists flows on a bridge
-func (h *SDNHandler) handleListFlows(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleListFlows(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var listReq SDNListFlowsRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if listReq.BridgeName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingBridgeName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingBridgeName)
 	}
 
 	flows, err := h.sdnService.ListFlows(ctx, listReq.BridgeName)
@@ -1069,13 +1070,13 @@ func (h *SDNHandler) handleListFlows(ctx context.Context, req *Request) *Respons
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1085,18 +1086,18 @@ func (h *SDNHandler) handleListFlows(ctx context.Context, req *Request) *Respons
 // =============================================================================
 
 // handleApplyPolicy creates or updates a network policy
-func (h *SDNHandler) handleApplyPolicy(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleApplyPolicy(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var applyReq SDNApplyPolicyRequest
-	if err := DecodePayload(req.Payload, &applyReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &applyReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if applyReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingPolicyName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingPolicyName)
 	}
 
 	now := time.Now().Unix()
@@ -1134,30 +1135,30 @@ func (h *SDNHandler) handleApplyPolicy(ctx context.Context, req *Request) *Respo
 		Timestamp: now,
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetPolicy gets a policy by ID
-func (h *SDNHandler) handleGetPolicy(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleGetPolicy(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var getReq SDNGetPolicyRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if getReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingPolicyID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingPolicyID)
 	}
 
 	h.policyMu.RLock()
@@ -1165,7 +1166,7 @@ func (h *SDNHandler) handleGetPolicy(ctx context.Context, req *Request) *Respons
 	h.policyMu.RUnlock()
 
 	if !exists {
-		return h.errorResponse(StatusNotFound, ErrSDNPolicyNotFound)
+		return h.errorResponse(quicwire.StatusNotFound, ErrSDNPolicyNotFound)
 	}
 
 	resp := &SDNGetPolicyResponse{
@@ -1173,26 +1174,26 @@ func (h *SDNHandler) handleGetPolicy(ctx context.Context, req *Request) *Respons
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListPolicies lists all policies
-func (h *SDNHandler) handleListPolicies(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleListPolicies(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var listReq SDNListPoliciesRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	// Apply limit
@@ -1221,36 +1222,36 @@ func (h *SDNHandler) handleListPolicies(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeletePolicy deletes a policy
-func (h *SDNHandler) handleDeletePolicy(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleDeletePolicy(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	var deleteReq SDNDeletePolicyRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrSDNDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrSDNMissingPolicyID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrSDNMissingPolicyID)
 	}
 
 	h.policyMu.Lock()
 	if _, exists := h.policies[deleteReq.ID]; !exists {
 		h.policyMu.Unlock()
-		return h.errorResponse(StatusNotFound, ErrSDNPolicyNotFound)
+		return h.errorResponse(quicwire.StatusNotFound, ErrSDNPolicyNotFound)
 	}
 	delete(h.policies, deleteReq.ID)
 	h.policyMu.Unlock()
@@ -1261,13 +1262,13 @@ func (h *SDNHandler) handleDeletePolicy(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1277,9 +1278,9 @@ func (h *SDNHandler) handleDeletePolicy(ctx context.Context, req *Request) *Resp
 // =============================================================================
 
 // handleGetMetrics gets SDN metrics
-func (h *SDNHandler) handleGetMetrics(ctx context.Context, req *Request) *Response {
+func (h *SDNHandler) handleGetMetrics(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.sdnService == nil {
-		return h.errorResponse(StatusUnavailable, ErrSDNServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrSDNServiceNotAvailable)
 	}
 
 	bridges, err := h.sdnService.ListBridges(ctx)
@@ -1317,13 +1318,13 @@ func (h *SDNHandler) handleGetMetrics(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrSDNEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrSDNEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1402,44 +1403,44 @@ func (h *SDNHandler) ovsFlowToInfo(flow *ovs.Flow, bridgeName string) *SDNFlowIn
 }
 
 // errorResponse creates an error response with the given status and error
-func (h *SDNHandler) errorResponse(status byte, err error) *Response {
-	return &Response{
+func (h *SDNHandler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
 }
 
 // sdnErrorResponse maps SDN errors to appropriate status codes
-func (h *SDNHandler) sdnErrorResponse(err error) *Response {
+func (h *SDNHandler) sdnErrorResponse(err error) *quicwire.Response {
 	var status byte
 
 	switch {
 	case errors.Is(err, ovs.ErrBridgeNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, ovs.ErrBridgeExists):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, ovs.ErrPortNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, ovs.ErrPortExists):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, ovs.ErrFlowNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, ovs.ErrInvalidFlow):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, ovs.ErrInvalidBridgeName):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, ovs.ErrInvalidPortName):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, ovs.ErrNotConnected):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	case errors.Is(err, ovs.ErrConnectionFailed):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	case errors.Is(err, ovs.ErrOperationTimeout):
-		status = StatusTimeout
+		status = quicwire.StatusTimeout
 	case errors.Is(err, ovs.ErrTransactionFailed):
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	default:
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	}
 
 	return h.errorResponse(status, err)

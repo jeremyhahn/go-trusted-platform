@@ -23,6 +23,7 @@ import (
 	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
 
 // SwitchGRPCService implements the gRPC SwitchService.
@@ -242,7 +243,7 @@ func (s *SwitchGRPCService) DisablePort(
 }
 
 // portStatusToProto converts a switchmgmt.PortStatus to a protobuf SwitchPortStatus.
-func portStatusToProto(ps *switchmgmt.PortStatus) *platformv1.SwitchPortStatus {
+func portStatusToProto(ps *switchwire.PortStatus) *platformv1.SwitchPortStatus {
 	if ps == nil {
 		return nil
 	}

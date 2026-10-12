@@ -5,7 +5,7 @@ Model Context Protocol (MCP) tools for AI/LLM integration with the DNS service.
 | Property | Value |
 |----------|-------|
 | Transport | stdio or HTTP |
-| Port | 9445 (HTTP mode) |
+| Port | 9445 (HTTPS mode) |
 | Protocol | JSON-RPC 2.0 |
 
 ## Overview

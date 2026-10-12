@@ -16,8 +16,22 @@
 package transport
 
 import (
+	"context"
+	"errors"
+	"net"
+
 	"google.golang.org/grpc"
 )
+
+// IsTimeout reports whether err means time ran out: a context deadline or a
+// network timeout. A cancelled context is not a timeout.
+func IsTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
 
 // Adapter defines the interface for protocol-specific transport implementations.
 // Each protocol (gRPC, Unix, REST, QUIC, MCP) implements this interface to provide

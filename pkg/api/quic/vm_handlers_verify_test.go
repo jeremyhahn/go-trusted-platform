@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,18 +46,18 @@ func TestVMHandleVerifyAttestation(t *testing.T) {
 			},
 		}
 
-		payload, err := EncodePayload(verifyReq)
+		payload, err := quicwire.EncodePayload(verifyReq)
 		require.NoError(t, err)
 
-		resp := handler.HandleRequest(ctx, &Request{
-			Opcode:  OpVMVerifyAttest,
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMVerifyAttest,
 			Payload: payload,
 		})
 
-		require.Equal(t, StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		var verifyResp VMVerifyAttestResponse
-		require.NoError(t, DecodePayload(resp.Payload, &verifyResp))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &verifyResp))
 		assert.Equal(t, "vm-1", verifyResp.VMID)
 		assert.True(t, verifyResp.Verified)
 		assert.True(t, verifyResp.SignatureValid)
@@ -68,30 +69,30 @@ func TestVMHandleVerifyAttestation(t *testing.T) {
 	t.Run("returns error when VM ID missing", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		payload, err := EncodePayload(&VMVerifyAttestRequest{})
+		payload, err := quicwire.EncodePayload(&VMVerifyAttestRequest{})
 		require.NoError(t, err)
 
-		resp := handler.HandleRequest(ctx, &Request{
-			Opcode:  OpVMVerifyAttest,
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMVerifyAttest,
 			Payload: payload,
 		})
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns not implemented for base orchestrator", func(t *testing.T) {
 		handler, orchestrator := createTestVMHandler()
 		createTestVM(orchestrator, "vm-1", "test-vm")
 
-		payload, err := EncodePayload(&VMVerifyAttestRequest{ID: "vm-1"})
+		payload, err := quicwire.EncodePayload(&VMVerifyAttestRequest{ID: "vm-1"})
 		require.NoError(t, err)
 
-		resp := handler.HandleRequest(ctx, &Request{
-			Opcode:  OpVMVerifyAttest,
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMVerifyAttest,
 			Payload: payload,
 		})
 
-		assert.Equal(t, StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 
 	t.Run("maps invalid evidence to invalid argument", func(t *testing.T) {
@@ -102,15 +103,15 @@ func TestVMHandleVerifyAttestation(t *testing.T) {
 			Cause:    &compute.MessageError{Msg: "quote is required"},
 		}
 
-		payload, err := EncodePayload(&VMVerifyAttestRequest{ID: "vm-1"})
+		payload, err := quicwire.EncodePayload(&VMVerifyAttestRequest{ID: "vm-1"})
 		require.NoError(t, err)
 
-		resp := handler.HandleRequest(ctx, &Request{
-			Opcode:  OpVMVerifyAttest,
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMVerifyAttest,
 			Payload: payload,
 		})
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -126,21 +127,21 @@ func TestVMHandleExtendedCategory(t *testing.T) {
 		createTestVM(orchestrator.mockVMOrchestrator, "vm-1", "test-vm")
 
 		listReq := &VMSnapshotListRequest{ID: "vm-1"}
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
 		// Category framing: payload[0] = sub-opcode, rest = inner payload.
-		framed := append([]byte{OpVMSnapshotList}, payload...)
+		framed := append([]byte{quicwire.OpVMSnapshotList}, payload...)
 
-		resp := handler.HandleRequest(ctx, &Request{
-			Opcode:  OpVMExtendedCategory,
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMExtendedCategory,
 			Payload: framed,
 		})
 
-		require.Equal(t, StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		var listResp VMSnapshotListResponse
-		require.NoError(t, DecodePayload(resp.Payload, &listResp))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &listResp))
 		assert.Equal(t, "vm-1", listResp.VMID)
 	})
 
@@ -149,43 +150,43 @@ func TestVMHandleExtendedCategory(t *testing.T) {
 		createTestVM(orchestrator.mockVMOrchestrator, "vm-1", "test-vm")
 
 		attestReq := &VMAttestRequest{ID: "vm-1"}
-		payload, err := EncodePayload(attestReq)
+		payload, err := quicwire.EncodePayload(attestReq)
 		require.NoError(t, err)
 
-		framed := append([]byte{OpVMAttest}, payload...)
+		framed := append([]byte{quicwire.OpVMAttest}, payload...)
 
-		resp := handler.HandleRequest(ctx, &Request{
-			Opcode:  OpVMExtendedCategory,
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMExtendedCategory,
 			Payload: framed,
 		})
 
-		require.Equal(t, StatusOK, resp.Status, string(resp.Payload))
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 		var attestResp VMAttestResponse
-		require.NoError(t, DecodePayload(resp.Payload, &attestResp))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &attestResp))
 		assert.Equal(t, "vm-1", attestResp.VMID)
 	})
 
 	t.Run("rejects empty payload", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		resp := handler.HandleRequest(ctx, &Request{
-			Opcode:  OpVMExtendedCategory,
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMExtendedCategory,
 			Payload: nil,
 		})
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("rejects unknown sub-opcode", func(t *testing.T) {
 		handler, _ := createExtendedTestVMHandler()
 
-		resp := handler.HandleRequest(ctx, &Request{
-			Opcode:  OpVMExtendedCategory,
+		resp := handler.HandleRequest(ctx, &quicwire.Request{
+			Opcode:  quicwire.OpVMExtendedCategory,
 			Payload: []byte{0x01, 0x00},
 		})
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -204,17 +205,17 @@ func TestVMHandleAttest_ForwardsNonceAndPCRs(t *testing.T) {
 		Nonce: []byte("caller-nonce"),
 		PCRs:  []int{0, 7},
 	}
-	payload, err := EncodePayload(attestReq)
+	payload, err := quicwire.EncodePayload(attestReq)
 	require.NoError(t, err)
 
-	resp := handler.HandleRequest(ctx, &Request{
-		Opcode:  OpVMAttest,
+	resp := handler.HandleRequest(ctx, &quicwire.Request{
+		Opcode:  quicwire.OpVMAttest,
 		Payload: payload,
 	})
 
-	require.Equal(t, StatusOK, resp.Status, string(resp.Payload))
+	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
 
 	var attestResp VMAttestResponse
-	require.NoError(t, DecodePayload(resp.Payload, &attestResp))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &attestResp))
 	assert.Equal(t, []byte("caller-nonce"), attestResp.Nonce)
 }

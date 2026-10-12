@@ -25,6 +25,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	fido2sdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/fido2"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 )
@@ -102,7 +103,7 @@ func (q *QUICAdapter) sendSub(ctx context.Context, sub byte, in interface{}, out
 
 	var body []byte
 	if in != nil {
-		encoded, err := quic.EncodePayload(in)
+		encoded, err := quicwire.EncodePayload(in)
 		if err != nil {
 			return fmt.Errorf("encode payload: %w", err)
 		}
@@ -118,18 +119,18 @@ func (q *QUICAdapter) sendSub(ctx context.Context, sub byte, in interface{}, out
 	}
 	defer stream.Close()
 
-	if err := quic.WriteRequest(stream, &quic.Request{Opcode: quic.OpFIDO2Category, Payload: payload}); err != nil {
+	if err := quicwire.WriteRequest(stream, &quicwire.Request{Opcode: quicwire.OpFIDO2Category, Payload: payload}); err != nil {
 		return fmt.Errorf("write request: %w", err)
 	}
-	resp, err := quic.ReadResponse(stream)
+	resp, err := quicwire.ReadResponse(stream)
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
 	}
-	if resp.Status != quic.StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		return fmt.Errorf("QUIC fido2 sub 0x%02X failed: status 0x%02X", sub, resp.Status)
 	}
 	if out != nil && len(resp.Payload) > 0 {
-		return quic.DecodePayload(resp.Payload, out)
+		return quicwire.DecodePayload(resp.Payload, out)
 	}
 	return nil
 }
@@ -150,7 +151,7 @@ func quicToSDKDevice(d quic.FIDO2Device) fido2sdk.Device {
 func (q *QUICAdapter) ListDevices(ctx context.Context, req *fido2sdk.ListDevicesRequest) (*fido2sdk.ListDevicesResponse, error) {
 	_ = req
 	var wire quic.FIDO2ListDevicesResp
-	if err := q.sendSub(ctx, quic.FIDO2SubListDevices, nil, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.FIDO2SubListDevices, nil, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "FIDO2ListDevices", Err: err}
 	}
 	out := &fido2sdk.ListDevicesResponse{Devices: make([]fido2sdk.Device, 0, len(wire.Devices))}
@@ -167,7 +168,7 @@ func (q *QUICAdapter) WaitDevice(ctx context.Context, req *fido2sdk.WaitDeviceRe
 	}
 	in := &quic.FIDO2WaitDeviceReq{TimeoutSeconds: req.TimeoutSeconds}
 	var wire quic.FIDO2WaitDeviceResp
-	if err := q.sendSub(ctx, quic.FIDO2SubWaitDevice, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.FIDO2SubWaitDevice, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "FIDO2WaitDevice", Err: err}
 	}
 	return &fido2sdk.WaitDeviceResponse{Device: quicToSDKDevice(wire.Device)}, nil
@@ -180,7 +181,7 @@ func (q *QUICAdapter) Info(ctx context.Context, req *fido2sdk.InfoRequest) (*fid
 	}
 	in := &quic.FIDO2InfoReq{Device: req.Device}
 	var wire quic.FIDO2InfoResp
-	if err := q.sendSub(ctx, quic.FIDO2SubInfo, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.FIDO2SubInfo, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "FIDO2Info", Err: err}
 	}
 	return &fido2sdk.InfoResponse{
@@ -205,7 +206,7 @@ func (q *QUICAdapter) Register(ctx context.Context, req *fido2sdk.RegisterReques
 		RequirePIN: req.RequirePIN, RequireUV: req.RequireUV, RPID: req.RPID,
 	}
 	var wire quic.FIDO2RegisterResp
-	if err := q.sendSub(ctx, quic.FIDO2SubRegister, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.FIDO2SubRegister, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "FIDO2Register", Err: err}
 	}
 	return &fido2sdk.RegisterResponse{
@@ -220,7 +221,7 @@ func (q *QUICAdapter) Authenticate(ctx context.Context, req *fido2sdk.Authentica
 	}
 	in := &quic.FIDO2AuthenticateReq{CredentialID: req.CredentialID}
 	var wire quic.FIDO2AuthenticateResp
-	if err := q.sendSub(ctx, quic.FIDO2SubAuthenticate, in, &wire); err != nil {
+	if err := q.sendSub(ctx, quicwire.FIDO2SubAuthenticate, in, &wire); err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "FIDO2Authenticate", Err: err}
 	}
 	return &fido2sdk.AuthenticateResponse{Authenticated: wire.Authenticated, Counter: wire.Counter}, nil

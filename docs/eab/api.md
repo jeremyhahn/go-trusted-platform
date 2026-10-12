@@ -23,7 +23,7 @@ For EAB specifically:
 | Unix | `platform.v1.EABService` over the platformd Unix socket — **the same gRPC service set** |
 | gRPC | `platform.v1.EABService`, 11 RPCs (`pkg/api/grpc/proto/eab.proto`) |
 | REST | `/api/v1/eab/credentials` (`pkg/webservice/v1/rest/eab/router.go`) |
-| QUIC | `OpProvisioningCategory` (`0xCF`), sub-opcodes `0x10`–`0x1A` (`pkg/api/quic/eab_opcodes.go`) |
+| QUIC | `OpProvisioningCategory` (`0xCF`), sub-opcodes `0x10`–`0x1A` (`sdk/go/wire/quicwire/eab_opcodes.go`) |
 | MCP | `platform_eab_*`, 11 tools (`pkg/api/mcp/eab_tools.go`) |
 
 **One implementation backs all six.** `EABGRPCService`

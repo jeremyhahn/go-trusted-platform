@@ -21,6 +21,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // createTestTenantEntity creates a test tenant entity.
@@ -451,7 +452,7 @@ func TestTenantToolInputSchemas(t *testing.T) {
 	registry := NewToolRegistry(mockSvc, logger)
 
 	tools := registry.ListTools()
-	tenantTools := make(map[string]ToolDefinition)
+	tenantTools := make(map[string]mcpwire.ToolDefinition)
 	for _, tool := range tools {
 		if len(tool.Name) > 7 && tool.Name[:7] == "tenant_" {
 			tenantTools[tool.Name] = tool
@@ -786,7 +787,7 @@ func TestTenantToolsSchemaTypes(t *testing.T) {
 	registry := NewToolRegistry(mockSvc, logger)
 
 	tools := registry.ListTools()
-	tenantTools := make(map[string]ToolDefinition)
+	tenantTools := make(map[string]mcpwire.ToolDefinition)
 	for _, tool := range tools {
 		if len(tool.Name) > 7 && tool.Name[:7] == "tenant_" {
 			tenantTools[tool.Name] = tool
@@ -995,7 +996,7 @@ func TestTenantDEKToolsDescription(t *testing.T) {
 	registry := NewToolRegistry(mockSvc, logger)
 
 	tools := registry.ListTools()
-	toolsByName := make(map[string]ToolDefinition)
+	toolsByName := make(map[string]mcpwire.ToolDefinition)
 	for _, tool := range tools {
 		toolsByName[tool.Name] = tool
 	}

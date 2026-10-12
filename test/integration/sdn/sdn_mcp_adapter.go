@@ -24,8 +24,9 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -51,20 +52,10 @@ func (m *SDNMCPAdapter) Name() string {
 
 // Setup initializes the MCP client.
 func (m *SDNMCPAdapter) Setup(ctx context.Context) error {
-	endpoints := GetServiceEndpoints()
-	// PlatformMCP may already carry an "http://" prefix (e.g. when
-	// PLATFORM_MCP_ENDPOINT=http://localhost:9445 is set by the test harness).
-	// Prepending another "http://" would produce "http://http://…" and break DNS.
-	rawMCP := endpoints.PlatformMCP
-	if strings.HasPrefix(rawMCP, "http://") || strings.HasPrefix(rawMCP, "https://") {
-		m.baseURL = rawMCP
-	} else {
-		m.baseURL = "http://" + rawMCP
-	}
-
-	m.httpClient = &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	// MCP serves TLS 1.3 only (#844); the shared helper keeps a scheme the
+	// harness already supplied and defaults to https:// (#537).
+	m.baseURL = helpers.MCPBaseURL(GetServiceEndpoints().PlatformMCP)
+	m.httpClient = helpers.NewHTTPClient(30 * time.Second)
 
 	return nil
 }

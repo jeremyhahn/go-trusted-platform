@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Device pagination defaults
@@ -559,48 +560,48 @@ func NewDeviceHandler(
 }
 
 // HandleRequest processes a device request and returns a response
-func (h *DeviceHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{
-			Status:  StatusInvalidRequest,
-			Payload: []byte(ErrNilRequest.Error()),
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
+			Payload: []byte(quicwire.ErrNilRequest.Error()),
 		}
 	}
 
 	switch req.Opcode {
 	// Device operations
-	case OpDeviceRegister:
+	case quicwire.OpDeviceRegister:
 		return h.handleRegister(ctx, req)
-	case OpDeviceGet:
+	case quicwire.OpDeviceGet:
 		return h.handleGet(ctx, req)
-	case OpDeviceList:
+	case quicwire.OpDeviceList:
 		return h.handleList(ctx, req)
-	case OpDeviceUpdate:
+	case quicwire.OpDeviceUpdate:
 		return h.handleUpdate(ctx, req)
-	case OpDeviceUnregister:
+	case quicwire.OpDeviceUnregister:
 		return h.handleDelete(ctx, req)
-	case OpDeviceActivate:
+	case quicwire.OpDeviceActivate:
 		return h.handleActivate(ctx, req)
-	case OpDeviceAttest:
+	case quicwire.OpDeviceAttest:
 		return h.handleAttest(ctx, req)
-	case OpDeviceGetState:
+	case quicwire.OpDeviceGetState:
 		return h.handleGetState(ctx, req)
 
 	// Profile operations
-	case OpDeviceCreateProfile:
+	case quicwire.OpDeviceCreateProfile:
 		return h.handleCreateProfile(ctx, req)
-	case OpDeviceGetProfile:
+	case quicwire.OpDeviceGetProfile:
 		return h.handleGetProfile(ctx, req)
-	case OpDeviceListProfiles:
+	case quicwire.OpDeviceListProfiles:
 		return h.handleListProfiles(ctx, req)
-	case OpDeviceSetProfile:
+	case quicwire.OpDeviceSetProfile:
 		return h.handleUpdateProfile(ctx, req)
-	case OpDeviceDeleteProfile:
+	case quicwire.OpDeviceDeleteProfile:
 		return h.handleDeleteProfile(ctx, req)
 
 	default:
-		return &Response{
-			Status:  StatusInvalidRequest,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("unknown device operation"),
 		}
 	}
@@ -611,18 +612,18 @@ func (h *DeviceHandler) HandleRequest(ctx context.Context, req *Request) *Respon
 // =============================================================================
 
 // handleRegister registers a new device
-func (h *DeviceHandler) handleRegister(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleRegister(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.deviceService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDeviceServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceServiceNotAvailable{})
 	}
 
 	var registerReq DeviceRegisterRequest
-	if err := DecodePayload(req.Payload, &registerReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &registerReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	if registerReq.Serial == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrDeviceMissingSerial{})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDeviceMissingSerial{})
 	}
 
 	// Generate device ID from serial
@@ -654,30 +655,30 @@ func (h *DeviceHandler) handleRegister(ctx context.Context, req *Request) *Respo
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGet retrieves a device by ID
-func (h *DeviceHandler) handleGet(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.deviceService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDeviceServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceServiceNotAvailable{})
 	}
 
 	var getReq DeviceGetRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	if getReq.ID == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrDeviceMissingID{})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDeviceMissingID{})
 	}
 
 	device, err := h.deviceService.Get(ctx, getReq.ID)
@@ -691,26 +692,26 @@ func (h *DeviceHandler) handleGet(ctx context.Context, req *Request) *Response {
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleList lists devices with pagination
-func (h *DeviceHandler) handleList(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.deviceService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDeviceServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceServiceNotAvailable{})
 	}
 
 	var listReq DeviceListRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	// Build page query with defaults
@@ -755,30 +756,30 @@ func (h *DeviceHandler) handleList(ctx context.Context, req *Request) *Response 
 		Timestamp:  time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleUpdate updates an existing device
-func (h *DeviceHandler) handleUpdate(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleUpdate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.deviceService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDeviceServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceServiceNotAvailable{})
 	}
 
 	var updateReq DeviceUpdateRequest
-	if err := DecodePayload(req.Payload, &updateReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &updateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	if updateReq.ID == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrDeviceMissingID{})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDeviceMissingID{})
 	}
 
 	// Get existing device
@@ -825,30 +826,30 @@ func (h *DeviceHandler) handleUpdate(ctx context.Context, req *Request) *Respons
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDelete deletes a device
-func (h *DeviceHandler) handleDelete(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.deviceService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDeviceServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceServiceNotAvailable{})
 	}
 
 	var deleteReq DeviceDeleteRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.ID == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrDeviceMissingID{})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDeviceMissingID{})
 	}
 
 	// Get existing device to delete
@@ -869,30 +870,30 @@ func (h *DeviceHandler) handleDelete(ctx context.Context, req *Request) *Respons
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleActivate activates a device
-func (h *DeviceHandler) handleActivate(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleActivate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.deviceService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDeviceServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceServiceNotAvailable{})
 	}
 
 	var activateReq DeviceActivateRequest
-	if err := DecodePayload(req.Payload, &activateReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &activateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	if activateReq.ID == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrDeviceMissingID{})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDeviceMissingID{})
 	}
 
 	// Get the device
@@ -906,7 +907,7 @@ func (h *DeviceHandler) handleActivate(ctx context.Context, req *Request) *Respo
 	if !device.CanActivate() {
 		h.logger.Info("Device cannot be activated from current state",
 			"id", device.ID, "serial", device.Serial, "state", device.State)
-		return h.errorResponse(StatusInvalidArgument, ErrDeviceActivationFailed{
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDeviceActivationFailed{
 			DeviceID: device.ID,
 			Reason:   "device cannot be activated from state: " + device.State.String(),
 		})
@@ -917,7 +918,7 @@ func (h *DeviceHandler) handleActivate(ctx context.Context, req *Request) *Respo
 	if err := device.Transition(entities.DeviceStateActivated); err != nil {
 		h.logger.Info("Device activation rejected by state machine",
 			"id", device.ID, "serial", device.Serial, "state", device.State, "error", err)
-		return h.errorResponse(StatusInvalidArgument, ErrDeviceActivationFailed{
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDeviceActivationFailed{
 			DeviceID: device.ID,
 			Reason:   err.Error(),
 		})
@@ -948,13 +949,13 @@ func (h *DeviceHandler) handleActivate(ctx context.Context, req *Request) *Respo
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -972,20 +973,20 @@ func (h *DeviceHandler) handleActivate(ctx context.Context, req *Request) *Respo
 // error status: the caller asked whether the device attests, and "no" is a
 // successful answer. Error statuses are reserved for requests that could
 // not be evaluated.
-func (h *DeviceHandler) handleAttest(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleAttest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.attestService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDeviceAttestationUnavailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceAttestationUnavailable{})
 	}
 
 	var attestReq DeviceAttestRequest
-	if err := DecodePayload(req.Payload, &attestReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &attestReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 	if attestReq.ID == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrDeviceMissingID{})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDeviceMissingID{})
 	}
 	if len(attestReq.Evidence) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrMissingAttestationData{Field: "evidence"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrMissingAttestationData{Field: "evidence"})
 	}
 
 	attestResp, err := h.attestService.AttestDevice(ctx, &platformv1.AttestDeviceRequest{
@@ -1003,13 +1004,13 @@ func (h *DeviceHandler) handleAttest(ctx context.Context, req *Request) *Respons
 		"verified", attestResp.GetVerified(),
 	)
 
-	payload, err := EncodePayload(attestResponseFromProto(attestResp))
+	payload, err := quicwire.EncodePayload(attestResponseFromProto(attestResp))
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1044,7 +1045,7 @@ func attestResponseFromProto(resp *platformv1.AttestDeviceResponse) *DeviceAttes
 // attestErrorResponse maps a verifier error onto a QUIC status. The verifier
 // returns an error only when the request could not be evaluated, so these
 // are all caller-correctable except an unconfigured dependency.
-func (h *DeviceHandler) attestErrorResponse(err error) *Response {
+func (h *DeviceHandler) attestErrorResponse(err error) *quicwire.Response {
 	reason := err.Error()
 	if s, ok := status.FromError(err); ok {
 		reason = s.Message()
@@ -1052,29 +1053,29 @@ func (h *DeviceHandler) attestErrorResponse(err error) *Response {
 	rejected := ErrDeviceAttestationRejected{Reason: reason}
 	switch status.Code(err) {
 	case codes.NotFound:
-		return h.errorResponse(StatusNotFound, rejected)
+		return h.errorResponse(quicwire.StatusNotFound, rejected)
 	case codes.InvalidArgument, codes.FailedPrecondition:
-		return h.errorResponse(StatusInvalidArgument, rejected)
+		return h.errorResponse(quicwire.StatusInvalidArgument, rejected)
 	case codes.Unavailable:
-		return h.errorResponse(StatusUnavailable, rejected)
+		return h.errorResponse(quicwire.StatusUnavailable, rejected)
 	default:
-		return h.errorResponse(StatusInternalError, rejected)
+		return h.errorResponse(quicwire.StatusInternalError, rejected)
 	}
 }
 
 // handleGetState retrieves device state
-func (h *DeviceHandler) handleGetState(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleGetState(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.deviceService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDeviceServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrDeviceServiceNotAvailable{})
 	}
 
 	var stateReq DeviceStateRequest
-	if err := DecodePayload(req.Payload, &stateReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &stateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	if stateReq.ID == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrDeviceMissingID{})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrDeviceMissingID{})
 	}
 
 	device, err := h.deviceService.Get(ctx, stateReq.ID)
@@ -1108,13 +1109,13 @@ func (h *DeviceHandler) handleGetState(ctx context.Context, req *Request) *Respo
 		Timestamp:     time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1124,18 +1125,18 @@ func (h *DeviceHandler) handleGetState(ctx context.Context, req *Request) *Respo
 // =============================================================================
 
 // handleCreateProfile creates a new device profile
-func (h *DeviceHandler) handleCreateProfile(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleCreateProfile(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.profileService == nil {
-		return h.errorResponse(StatusUnavailable, ErrProfileServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrProfileServiceNotAvailable{})
 	}
 
 	var createReq ProfileCreateRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	if createReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrProfileMissingName{})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrProfileMissingName{})
 	}
 
 	// Generate profile ID from name
@@ -1179,30 +1180,30 @@ func (h *DeviceHandler) handleCreateProfile(ctx context.Context, req *Request) *
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetProfile retrieves a profile by ID
-func (h *DeviceHandler) handleGetProfile(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleGetProfile(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.profileService == nil {
-		return h.errorResponse(StatusUnavailable, ErrProfileServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrProfileServiceNotAvailable{})
 	}
 
 	var getReq ProfileGetRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	if getReq.ID == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrProfileMissingID{})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrProfileMissingID{})
 	}
 
 	profile, err := h.profileService.Get(ctx, getReq.ID)
@@ -1216,26 +1217,26 @@ func (h *DeviceHandler) handleGetProfile(ctx context.Context, req *Request) *Res
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListProfiles lists profiles with pagination
-func (h *DeviceHandler) handleListProfiles(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleListProfiles(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.profileService == nil {
-		return h.errorResponse(StatusUnavailable, ErrProfileServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrProfileServiceNotAvailable{})
 	}
 
 	var listReq ProfileListRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	// Build page query with defaults
@@ -1280,30 +1281,30 @@ func (h *DeviceHandler) handleListProfiles(ctx context.Context, req *Request) *R
 		Timestamp:  time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleUpdateProfile updates an existing profile
-func (h *DeviceHandler) handleUpdateProfile(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleUpdateProfile(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.profileService == nil {
-		return h.errorResponse(StatusUnavailable, ErrProfileServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrProfileServiceNotAvailable{})
 	}
 
 	var updateReq ProfileUpdateRequest
-	if err := DecodePayload(req.Payload, &updateReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &updateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	if updateReq.ID == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrProfileMissingID{})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrProfileMissingID{})
 	}
 
 	// Get existing profile
@@ -1367,30 +1368,30 @@ func (h *DeviceHandler) handleUpdateProfile(ctx context.Context, req *Request) *
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeleteProfile deletes a profile
-func (h *DeviceHandler) handleDeleteProfile(ctx context.Context, req *Request) *Response {
+func (h *DeviceHandler) handleDeleteProfile(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.profileService == nil {
-		return h.errorResponse(StatusUnavailable, ErrProfileServiceNotAvailable{})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrProfileServiceNotAvailable{})
 	}
 
 	var deleteReq ProfileDeleteRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.ID == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrProfileMissingID{})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrProfileMissingID{})
 	}
 
 	// Get existing profile to delete
@@ -1411,13 +1412,13 @@ func (h *DeviceHandler) handleDeleteProfile(ctx context.Context, req *Request) *
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1533,34 +1534,34 @@ func (h *DeviceHandler) networkEntityToInfo(cfg *entities.NetworkPhaseConfig) *N
 }
 
 // errorResponse creates an error response with the given status and error
-func (h *DeviceHandler) errorResponse(status byte, err error) *Response {
-	return &Response{
+func (h *DeviceHandler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
 }
 
 // deviceErrorResponse maps device errors to appropriate status codes
-func (h *DeviceHandler) deviceErrorResponse(err error) *Response {
+func (h *DeviceHandler) deviceErrorResponse(err error) *quicwire.Response {
 	var status byte
 
 	errStr := err.Error()
 	switch {
 	case containsIgnoreCase(errStr, "not found"):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case containsIgnoreCase(errStr, "already exists") || containsIgnoreCase(errStr, "duplicate"):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case containsIgnoreCase(errStr, "invalid"):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	default:
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	}
 
 	return h.errorResponse(status, err)
 }
 
 // profileErrorResponse maps profile errors to appropriate status codes
-func (h *DeviceHandler) profileErrorResponse(err error) *Response {
+func (h *DeviceHandler) profileErrorResponse(err error) *quicwire.Response {
 	var status byte
 
 	var vlans device.ErrProfileVLANsNotDistinct
@@ -1571,15 +1572,15 @@ func (h *DeviceHandler) profileErrorResponse(err error) *Response {
 	// Matched by type, not by the word "invalid" happening to appear in
 	// the message.
 	case errors.As(err, &vlans):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case containsIgnoreCase(errStr, "not found"):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case containsIgnoreCase(errStr, "already exists") || containsIgnoreCase(errStr, "duplicate"):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case containsIgnoreCase(errStr, "invalid"):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	default:
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	}
 
 	return h.errorResponse(status, err)

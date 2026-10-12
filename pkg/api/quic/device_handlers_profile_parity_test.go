@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 const testTLSServerName = "compute.example.internal"
@@ -38,7 +39,7 @@ func TestDeviceHandler_TLSServerName_SurvivesUpdateWithoutIt(t *testing.T) {
 	handler, _, _ := createTestDeviceHandler()
 
 	var created ProfileCreateResponse
-	quicDeviceCall(t, handler, OpDeviceCreateProfile, &ProfileCreateRequest{
+	quicDeviceCall(t, handler, quicwire.OpDeviceCreateProfile, &ProfileCreateRequest{
 		Name: "compute", Role: "worker", TLSServerName: testTLSServerName,
 	}, &created)
 	require.NotNil(t, created.Profile)
@@ -46,16 +47,16 @@ func TestDeviceHandler_TLSServerName_SurvivesUpdateWithoutIt(t *testing.T) {
 	id := created.Profile.ID
 
 	var got ProfileGetResponse
-	quicDeviceCall(t, handler, OpDeviceGetProfile, &ProfileGetRequest{ID: id}, &got)
+	quicDeviceCall(t, handler, quicwire.OpDeviceGetProfile, &ProfileGetRequest{ID: id}, &got)
 	assert.Equal(t, testTLSServerName, got.Profile.TLSServerName)
 
 	var updated ProfileUpdateResponse
-	quicDeviceCall(t, handler, OpDeviceSetProfile, &ProfileUpdateRequest{ID: id, Model: "X10SDV"}, &updated)
+	quicDeviceCall(t, handler, quicwire.OpDeviceSetProfile, &ProfileUpdateRequest{ID: id, Model: "X10SDV"}, &updated)
 	assert.Equal(t, "X10SDV", updated.Profile.Model)
 	assert.Equal(t, testTLSServerName, updated.Profile.TLSServerName)
 
 	var again ProfileGetResponse
-	quicDeviceCall(t, handler, OpDeviceGetProfile, &ProfileGetRequest{ID: id}, &again)
+	quicDeviceCall(t, handler, quicwire.OpDeviceGetProfile, &ProfileGetRequest{ID: id}, &again)
 	assert.Equal(t, testTLSServerName, again.Profile.TLSServerName, "an update that omits tls_server_name must not erase it")
 }
 
@@ -66,7 +67,7 @@ func TestDeviceHandler_TLSServerName_UpdateReplaces(t *testing.T) {
 	profiles.profiles[9] = &entities.DeviceProfile{ID: 9, Name: "gw", TLSServerName: "old"}
 
 	var updated ProfileUpdateResponse
-	quicDeviceCall(t, handler, OpDeviceSetProfile, &ProfileUpdateRequest{ID: 9, TLSServerName: testTLSServerName}, &updated)
+	quicDeviceCall(t, handler, quicwire.OpDeviceSetProfile, &ProfileUpdateRequest{ID: 9, TLSServerName: testTLSServerName}, &updated)
 	assert.Equal(t, testTLSServerName, updated.Profile.TLSServerName)
 	assert.Equal(t, testTLSServerName, profiles.profiles[9].TLSServerName)
 }
@@ -112,7 +113,7 @@ func TestDeviceHandler_PCRBaseline_ReadOnly(t *testing.T) {
 	supplied := &PCRBaselineInfo{Values: map[string]string{"0": "ee"}, Source: "signed", RecordedAt: 1}
 
 	var created ProfileCreateResponse
-	quicDeviceCall(t, handler, OpDeviceCreateProfile, &createWithBaseline{Name: "workers", Role: "worker", PCRBaseline: supplied}, &created)
+	quicDeviceCall(t, handler, quicwire.OpDeviceCreateProfile, &createWithBaseline{Name: "workers", Role: "worker", PCRBaseline: supplied}, &created)
 	require.NotNil(t, created.Profile)
 	assert.Nil(t, created.Profile.PCRBaseline, "a caller-supplied baseline must not be stored")
 	assert.Nil(t, profiles.profiles[created.Profile.ID].PCRBaseline)
@@ -123,7 +124,7 @@ func TestDeviceHandler_PCRBaseline_ReadOnly(t *testing.T) {
 		Values: map[int][]byte{7: {0xbb}}, Source: entities.BaselineSourceTOFU, RecordedAt: time.Now().UTC(),
 	}
 	var updated ProfileUpdateResponse
-	quicDeviceCall(t, handler, OpDeviceSetProfile, &updateWithBaseline{ID: created.Profile.ID, Model: "X10SDV", PCRBaseline: supplied}, &updated)
+	quicDeviceCall(t, handler, quicwire.OpDeviceSetProfile, &updateWithBaseline{ID: created.Profile.ID, Model: "X10SDV", PCRBaseline: supplied}, &updated)
 	require.NotNil(t, updated.Profile.PCRBaseline)
 	assert.Equal(t, "tofu", updated.Profile.PCRBaseline.Source)
 	assert.Equal(t, "bb", updated.Profile.PCRBaseline.Values["7"])

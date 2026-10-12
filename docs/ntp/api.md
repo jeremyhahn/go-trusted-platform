@@ -62,7 +62,7 @@ whole body:
 ```
 
 The webservice listener wraps it in the standard `WebServiceResponse` envelope
-(`pkg/webservice/v1/response/writer.go`):
+(`sdk/go/wire/restwire/envelope.go`, written by `pkg/webservice/v1/response`):
 
 ```json
 { "code": 200, "error": "", "success": true, "payload": { "status": { "synced": true, ... } } }

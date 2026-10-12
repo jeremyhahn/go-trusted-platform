@@ -24,7 +24,7 @@ parity:
 | **REST** | [api-reference-rest.md](api-reference-rest.md) | `https://host:8443/api/v1/provisioning` |
 | **gRPC** | [api-reference-grpc.md](api-reference-grpc.md) | `host:10443` (TLS) |
 | **QUIC** | [api-reference-quic.md](api-reference-quic.md) | `host:9444` (UDP), opcode `0xCF` |
-| **MCP** | [api-reference-mcp.md](api-reference-mcp.md) | `http://host:9445`, `provision_*` tools |
+| **MCP** | [api-reference-mcp.md](api-reference-mcp.md) | `https://host:9445`, `provision_*` tools |
 | **Unix** | [api-reference-unix.md](api-reference-unix.md) | `/run/platformd.sock` (gRPC over UDS) |
 | **CLI** | [config-delivery.md](config-delivery.md#session-management-cli) | `platformctl provision ...` |
 | **SDK** | `sdk/go/services/provision` | Works over every SDK transport |

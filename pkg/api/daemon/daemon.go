@@ -16,13 +16,14 @@ package daemon
 import (
 	"context"
 	"crypto/tls"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"net"
 	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -51,6 +52,7 @@ import (
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // DaemonOption is a functional option for configuring the Daemon
@@ -112,6 +114,7 @@ func WithRESTServer(s RESTServerInterface) DaemonOption {
 func WithMCPServer(s MCPServerInterface) DaemonOption {
 	return func(d *Daemon) {
 		d.mcpServer = s
+		d.mcpServerReplaced = true
 	}
 }
 
@@ -141,6 +144,10 @@ type Daemon struct {
 	grpcServerReplaced bool
 	restServerReplaced bool
 	quicServerReplaced bool
+	// mcpServerReplaced records that WithMCPServer swapped in an MCP
+	// server. The built-in one is TLS-or-nothing by construction (#844),
+	// so the preflight's MCP certificate check applies only to it.
+	mcpServerReplaced bool
 	// retryUnsafe is set by rollbackPartialStart after it had to stop a
 	// gRPC server that had already served: grpc.Server.Stop is permanent,
 	// so a Start retry on this instance cannot restore that transport and
@@ -345,21 +352,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 					return nil, ErrTLSConfigFailed{Reason: "gRPC: " + err.Error()}
 				}
 			}
-			tlsConfig := &tls.Config{
-				Certificates: []tls.Certificate{cert},
-				MinVersion:   tls.VersionTLS12,
-			}
-
 			// Enable mutual TLS if configured. Fails closed: mTLS with no
 			// resolvable client CA pool is a typed error, never a listener
 			// that merely does not ask for a client certificate (#550).
-			clientCAPool, poolErr := resolveMTLSClientCAPool(config, transportGRPCTCP)
-			if poolErr != nil {
-				return nil, poolErr
+			tlsConfig, tlsErr := newServerTLSConfig(config, transportGRPCTCP, cert)
+			if tlsErr != nil {
+				return nil, tlsErr
 			}
-			if clientCAPool != nil {
-				tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-				tlsConfig.ClientCAs = clientCAPool
+			if tlsConfig.ClientCAs != nil {
 				logger.Info("gRPC TCP server mTLS enabled", "addr", config.GRPCListenAddr)
 			}
 
@@ -1047,9 +1047,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var quicHandler *QUICServiceHandler
 	if config.EnableQUIC {
 		// Initialize QUIC protocol codec before creating server
-		if codecErr := quic.SetDefaultCodecType(codec.MsgPack); codecErr != nil {
+		if codecErr := quicwire.SetDefaultCodecType(codec.MsgPack); codecErr != nil {
 			logger.Warn("Failed to set MsgPack codec for QUIC, falling back to JSON", "error", codecErr)
-			_ = quic.SetDefaultCodecType(codec.JSON)
+			_ = quicwire.SetDefaultCodecType(codec.JSON)
 		}
 		// Get logging.Logger for QUIC handler
 		var quicLogger *logging.Logger
@@ -1688,7 +1688,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		} else {
 			daemon.mcpServer = mcpServer
 			daemon.concreteMcpServer = mcpServer
-			logger.Info("MCP server created", "transport", config.MCPConfig.Transport, "addr", config.MCPConfig.HTTPAddr)
+			mcpCfg := config.effectiveMCPConfig()
+			logger.Info("MCP server created", "transport", mcpCfg.Transport, "addr", mcpCfg.HTTPAddr)
 		}
 	} else if !config.EnableMCP {
 		logger.Info("MCP server not enabled")
@@ -1884,10 +1885,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	serviceProvider.SetPhase35Services(phase35Svcs)
 
 	// Build MCP config from daemon MCPConfig
-	mcpCfg := d.config.MCPConfig
-	if mcpCfg == nil {
-		mcpCfg = DefaultMCPConfig()
-	}
+	mcpCfg := d.config.effectiveMCPConfig()
 
 	mcpConfig := &mcp.Config{
 		ServerName:            mcpCfg.ServerName,
@@ -1896,6 +1894,21 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		HTTPAddr:              mcpCfg.HTTPAddr,
 		RequestTimeout:        mcpCfg.RequestTimeout,
 		MaxConcurrentRequests: mcpCfg.MaxConcurrentRequests,
+	}
+
+	// The HTTP transport serves TLS 1.3 only, with the identity and mTLS
+	// policy REST and gRPC serve (#844). There is no plaintext fallback:
+	// without a usable certificate the server is not created, and
+	// tlsPreflight refuses Start for the same configuration.
+	if mcpCfg.Transport == "http" {
+		if !tlsCertificateUsable(d.config.TLSCertificate) {
+			return nil, ErrTLSConfigFailed{Reason: "MCP: no usable TLS certificate for the HTTP transport on " + mcpCfg.HTTPAddr}
+		}
+		tlsConfig, err := newServerTLSConfig(d.config, transportMCP, *d.config.TLSCertificate)
+		if err != nil {
+			return nil, err
+		}
+		mcpConfig.TLSConfig = tlsConfig
 	}
 
 	// Try to set up MCP auth. Prefer the shared broker platform-token
@@ -2238,6 +2251,15 @@ func (d *Daemon) tlsPreflight() error {
 		}
 	}
 
+	// MCP over HTTP serves TLS 1.3 only with the daemon certificate (#844).
+	// Without one New built no MCP server, and starting anyway would
+	// report success while the configured transport is silently absent.
+	if d.config.MCPServesHTTP() && !d.mcpServerReplaced && !tlsCertificateUsable(d.config.TLSCertificate) {
+		return ErrTLSConfigFailed{
+			Reason: "MCP: TLS material absent (no usable in-memory certificate): refusing to start the HTTP transport on " + d.config.effectiveMCPConfig().HTTPAddr,
+		}
+	}
+
 	return nil
 }
 
@@ -2380,11 +2402,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if d.mcpServer != nil {
 		d.logger.Info("Starting MCP server...")
 		if err := d.mcpServer.Start(); err != nil {
-			d.logger.Warn("MCP server start failed", "error", err)
-			// Log error but continue - MCP operations will fail
-		} else {
-			d.logger.Info("MCP server started successfully")
+			d.logger.Error(err, "component", "mcp_server")
+			d.rollbackPartialStart(ctx)
+			return &MCPServerStartError{Err: err}
 		}
+		d.logger.Info("MCP server started successfully")
 	}
 
 	// Start gRPC TCP server if enabled. Fail closed (#32): without TLS

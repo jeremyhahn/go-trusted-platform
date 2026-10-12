@@ -382,16 +382,19 @@ func TestNewClient_InvalidAddress(t *testing.T) {
 	client, err := NewClient("invalid-address-format")
 	// The behavior depends on SDK implementation. At minimum, we should
 	// get a valid error or a working client object.
-	if err != nil {
+	switch {
+	case err != nil:
 		var errCreation ErrClientCreationFailed
 		if !errors.As(err, &errCreation) {
 			t.Errorf("Expected ErrClientCreationFailed, got %T: %v", err, err)
 		}
-	} else if client == nil {
+	case client == nil:
 		t.Error("NewClient() returned nil client with nil error")
-	} else {
+	default:
 		// Client was created, clean up.
-		client.Close()
+		if err := client.Close(); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
 	}
 }
 

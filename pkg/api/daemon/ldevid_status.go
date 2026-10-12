@@ -16,7 +16,7 @@ package daemon
 import (
 	"net/http"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -63,20 +63,20 @@ func ldevidGRPCToHTTPStatus(err error) int {
 func ldevidGRPCToQUICStatus(err error) byte {
 	switch status.Code(err) {
 	case codes.OK:
-		return quic.StatusOK
+		return quicwire.StatusOK
 	case codes.InvalidArgument, codes.FailedPrecondition:
-		return quic.StatusInvalidArgument
+		return quicwire.StatusInvalidArgument
 	case codes.NotFound:
-		return quic.StatusNotFound
+		return quicwire.StatusNotFound
 	case codes.AlreadyExists:
-		return quic.StatusAlreadyExists
+		return quicwire.StatusAlreadyExists
 	case codes.PermissionDenied:
-		return quic.StatusPermissionDenied
+		return quicwire.StatusPermissionDenied
 	case codes.Unauthenticated:
-		return quic.StatusUnauthorized
+		return quicwire.StatusUnauthorized
 	case codes.Unavailable:
-		return quic.StatusUnavailable
+		return quicwire.StatusUnavailable
 	default:
-		return quic.StatusInternalError
+		return quicwire.StatusInternalError
 	}
 }

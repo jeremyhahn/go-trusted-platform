@@ -27,7 +27,7 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 )
@@ -550,15 +550,15 @@ func decodeCAPayload(data []byte, entity interface{}) error {
 // caOpcodeToString returns a human-readable name for a CA opcode.
 func caOpcodeToString(opcode byte) string {
 	opcodeNames := map[byte]string{
-		quic.OpCAInfo:   "CAInfo",
-		quic.OpCAIssue:  "CAIssue",
-		quic.OpCARevoke: "CARevoke",
-		quic.OpCARenew:  "CARenew",
-		quic.OpCAGet:    "CAGet",
-		quic.OpCAList:   "CAList",
-		quic.OpCAVerify: "CAVerify",
-		quic.OpCACRL:    "CACRL",
-		quic.OpCABundle: "CABundle",
+		quicwire.OpCAInfo:   "CAInfo",
+		quicwire.OpCAIssue:  "CAIssue",
+		quicwire.OpCARevoke: "CARevoke",
+		quicwire.OpCARenew:  "CARenew",
+		quicwire.OpCAGet:    "CAGet",
+		quicwire.OpCAList:   "CAList",
+		quicwire.OpCAVerify: "CAVerify",
+		quicwire.OpCACRL:    "CACRL",
+		quicwire.OpCABundle: "CABundle",
 	}
 	if name, ok := opcodeNames[opcode]; ok {
 		return name
@@ -572,7 +572,7 @@ func caOpcodeToString(opcode byte) string {
 
 // Info retrieves CA information via QUIC.
 func (q *QUICAdapter) Info(ctx context.Context) (*InfoResult, error) {
-	resp, err := q.sendRequest(ctx, quic.OpCAInfo, nil)
+	resp, err := q.sendRequest(ctx, quicwire.OpCAInfo, nil)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CAInfo", Err: err}
 	}
@@ -640,7 +640,7 @@ func (q *QUICAdapter) IssueCertificate(ctx context.Context, opts IssueCertificat
 		}
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCAIssue, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCAIssue, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CAIssue", Err: err}
 	}
@@ -681,7 +681,7 @@ func (q *QUICAdapter) GetCertificate(ctx context.Context, opts GetCertificateOpt
 		IncludePem: opts.IncludePEM,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCAGet, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCAGet, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CAGet", Err: err}
 	}
@@ -709,7 +709,7 @@ func (q *QUICAdapter) ListCertificates(ctx context.Context, opts ListCertificate
 		Limit: opts.Limit,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCAList, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCAList, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CAList", Err: err}
 	}
@@ -744,7 +744,7 @@ func (q *QUICAdapter) VerifyCertificate(ctx context.Context, opts VerifyCertific
 		CheckRevoked:   opts.CheckCRL,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCAVerify, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCAVerify, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CAVerify", Err: err}
 	}
@@ -785,7 +785,7 @@ func (q *QUICAdapter) RevokeCertificate(ctx context.Context, opts RevokeCertific
 		DeleteKeys: opts.DeleteKeys,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCARevoke, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCARevoke, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CARevoke", Err: err}
 	}
@@ -816,7 +816,7 @@ func (q *QUICAdapter) RenewCertificate(ctx context.Context, opts RenewCertificat
 		PreserveAttrs: opts.PreserveSANs,
 	}
 
-	resp, err := q.sendRequest(ctx, quic.OpCARenew, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCARenew, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CARenew", Err: err}
 	}
@@ -843,7 +843,7 @@ func (q *QUICAdapter) RenewCertificate(ctx context.Context, opts RenewCertificat
 
 // GetCRL retrieves the CRL via QUIC.
 func (q *QUICAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLResult, error) {
-	resp, err := q.sendRequest(ctx, quic.OpCACRL, nil)
+	resp, err := q.sendRequest(ctx, quicwire.OpCACRL, nil)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CACRL", Err: err}
 	}
@@ -875,7 +875,7 @@ func (q *QUICAdapter) GetCRL(ctx context.Context, opts GetCRLOptions) (*GetCRLRe
 
 // GenerateCRL generates a new CRL via QUIC.
 func (q *QUICAdapter) GenerateCRL(ctx context.Context) (*GenerateCRLResult, error) {
-	resp, err := q.sendRequest(ctx, quic.OpCACRL, nil)
+	resp, err := q.sendRequest(ctx, quicwire.OpCACRL, nil)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "GenerateCRL", Err: err}
 	}
@@ -908,7 +908,7 @@ func (q *QUICAdapter) ExportCRL(ctx context.Context, output string) (*ExportCRLR
 func (q *QUICAdapter) ExportBundle(ctx context.Context, output string) (*ExportBundleResult, error) {
 	req := &quicCABundleReq{}
 
-	resp, err := q.sendRequest(ctx, quic.OpCABundle, req)
+	resp, err := q.sendRequest(ctx, quicwire.OpCABundle, req)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CABundle", Err: err}
 	}

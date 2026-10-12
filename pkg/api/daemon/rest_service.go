@@ -151,22 +151,15 @@ func (s *RESTServer) Start() error {
 				return ErrRESTServerStartFailed{Reason: "failed to load TLS certificates: " + err.Error()}
 			}
 		}
-		tlsConfig := &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
-		}
-
 		// Enable mutual TLS if configured. Fails closed: mTLS with no
 		// resolvable client CA pool is a typed error, never a listener that
 		// merely does not ask for a client certificate (#550).
-		clientCAPool, poolErr := resolveMTLSClientCAPool(s.config, transportREST)
-		if poolErr != nil {
+		tlsConfig, tlsErr := newServerTLSConfig(s.config, transportREST, cert)
+		if tlsErr != nil {
 			s.running.Store(false)
-			return poolErr
+			return tlsErr
 		}
-		if clientCAPool != nil {
-			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-			tlsConfig.ClientCAs = clientCAPool
+		if tlsConfig.ClientCAs != nil {
 			s.logger.Info("REST server mTLS enabled", "addr", s.config.RESTListenAddr)
 		}
 
@@ -899,7 +892,7 @@ func (s *RESTServer) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Address: getMCPAddress(s.config),
 			Port:    extractPort(getMCPAddress(s.config)),
 			Status:  boolToStatus(s.config.EnableMCP),
-			TLS:     false,
+			TLS:     s.config.MCPServesHTTP(),
 		},
 	}
 

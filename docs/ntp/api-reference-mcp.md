@@ -2,7 +2,7 @@
 
 | Property | Value |
 |----------|-------|
-| Endpoint | `host:9445` (HTTP) or stdio |
+| Endpoint | `host:9445` (HTTPS) or stdio |
 | Tools | `ntp_status`, `ntp_sources`, `ntp_step` |
 | Registration | `pkg/api/mcp/ntp_tools.go` |
 | Provider | `pkg/api/daemon/mcp_ntp.go` |
@@ -62,7 +62,7 @@ in [api-reference-grpc.md](api-reference-grpc.md).
 ```go
 client, err := platform.Connect(ctx, platform.NewOptions(
     platform.WithOnlyProtocol(platform.ProtocolMCP),
-    platform.WithMCPAddr("http://cp.example.com:9445")))
+    platform.WithMCPAddr("https://cp.example.com:9445")))
 
 ntpClient := ntp.NewClientFromGRPC(client.NTP())
 status, err := ntpClient.Status(ctx)

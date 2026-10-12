@@ -29,9 +29,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // wiredLDevIDService builds a fully-wired IDevIDGRPCService (proven IDevID +
@@ -110,16 +110,16 @@ func TestQUIC_LDevIDCreate(t *testing.T) {
 		h := NewQUICServiceHandler(logging.DefaultLogger())
 		h.SetIDevIDService(wiredLDevIDService(t))
 
-		payload, err := quic.EncodePayload(&platformv1.CreateLDevIDRequest{
+		payload, err := quicwire.EncodePayload(&platformv1.CreateLDevIDRequest{
 			Template: &platformv1.CSRTemplate{CommonName: "device-01-ldevid"},
 		})
 		require.NoError(t, err)
 
 		resp := h.handleLDevIDCreate(ctx, payload)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out platformv1.CreateLDevIDResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		assert.True(t, out.GetStatus().GetSuccess())
 		assert.NotEmpty(t, out.GetCertificatePem())
 	})
@@ -127,7 +127,7 @@ func TestQUIC_LDevIDCreate(t *testing.T) {
 	t.Run("nil service is unavailable", func(t *testing.T) {
 		h := NewQUICServiceHandler(logging.DefaultLogger())
 		resp := h.handleLDevIDCreate(ctx, nil)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("no proven IDevID maps to invalid argument", func(t *testing.T) {
@@ -137,10 +137,10 @@ func TestQUIC_LDevIDCreate(t *testing.T) {
 		h := NewQUICServiceHandler(logging.DefaultLogger())
 		h.SetIDevIDService(svc)
 
-		payload, err := quic.EncodePayload(&platformv1.CreateLDevIDRequest{})
+		payload, err := quicwire.EncodePayload(&platformv1.CreateLDevIDRequest{})
 		require.NoError(t, err)
 		resp := h.handleLDevIDCreate(ctx, payload)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 

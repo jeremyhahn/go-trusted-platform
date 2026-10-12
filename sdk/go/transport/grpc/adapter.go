@@ -16,7 +16,6 @@ package grpc
 
 import (
 	"context"
-	"crypto/tls"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
@@ -53,22 +52,7 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 	// Build dial options - TLS is mandatory for gRPC transport
 	var dialOpts []grpc.DialOption
 
-	var tlsConfig *tls.Config
-	if opts.TLSConfig != nil {
-		tlsConfig = opts.TLSConfig.Clone()
-		if tlsConfig.MinVersion < tls.VersionTLS13 {
-			tlsConfig.MinVersion = tls.VersionTLS13
-		}
-	} else {
-		// Use system certificate pool with TLS 1.3 minimum
-		tlsConfig = &tls.Config{
-			MinVersion: tls.VersionTLS13,
-		}
-	}
-	if opts.TLSServerName != "" {
-		tlsConfig.ServerName = opts.TLSServerName
-	}
-	dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+	dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(opts.ClientTLSConfig())))
 
 	dialOpts = append(dialOpts, grpc.WithDefaultCallOptions(
 		grpc.MaxCallRecvMsgSize(maxMsgSize),

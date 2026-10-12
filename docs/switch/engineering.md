@@ -17,7 +17,8 @@ directory is `pkg/switch/`. Importers alias it:
 
 | File | Holds |
 |---|---|
-| `types.go` | `Configurator`, `Manager`, `SSHExecutor`, `Config`, `VLANConfig`, `PortConfig`, `PortStatus`, `PortMode`, `SwitchVendor`, `ConfigureResult` |
+| `types.go` | `Configurator`, `Manager`, `SSHExecutor`, `Config`, `VLANConfig`, `PortConfig`, `SwitchVendor`, `ConfigureResult` |
+| `sdk/go/wire/switchwire/port.go` | `PortStatus`, `PortMode` — the wire type the REST handlers return and the SDK client decodes |
 | `service.go` | `Service`, `NewService`, `Service.Manager`, `Service.Close` |
 | `factory.go` | `ConfiguratorFactory`, `configuratorRegistry`, `NewConfigurator` |
 | `manager_factory.go` | `ManagerFactory`, `managerRegistry`, `NewManager` |
@@ -44,8 +45,8 @@ type Configurator interface {
 type Manager interface {
     SetPortVLAN(ctx context.Context, port string, vlanID uint16) error
     GetPortVLAN(ctx context.Context, port string) (uint16, error)
-    GetPortStatus(ctx context.Context, port string) (*PortStatus, error)
-    ListPorts(ctx context.Context) ([]*PortStatus, error)
+    GetPortStatus(ctx context.Context, port string) (*switchwire.PortStatus, error)
+    ListPorts(ctx context.Context) ([]*switchwire.PortStatus, error)
     EnablePort(ctx context.Context, port string) error
     DisablePort(ctx context.Context, port string) error
     Close() error
@@ -110,7 +111,7 @@ type Config struct {
 }
 ```
 
-`PortStatus` carries `Port`, `Mode` (`PortModeAccess` / `PortModeTrunk`),
+`switchwire.PortStatus` carries `Port`, `Mode` (`PortModeAccess` / `PortModeTrunk`),
 `AccessVLAN uint16`, `TrunkVLANs []uint16`, `NativeVLAN uint16` (from
 `Trunking Native Mode VLAN:`), `Enabled`, `LinkUp`, `Description`. Every
 transport carries `native_vlan` (gRPC/QUIC/Unix `SwitchPortStatus.native_vlan`

@@ -16,6 +16,8 @@ package mcp
 import (
 	"context"
 	"errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -128,7 +130,7 @@ func (r *ToolRegistry) registerEABTools() {
 		"required": []string{"credential_id"},
 	}
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_eab_create_credential",
 		Description: "Create a new External Account Binding credential for ACME device enrollment (RFC 8555 §7.3.4)",
 		InputSchema: map[string]interface{}{
@@ -155,13 +157,13 @@ func (r *ToolRegistry) registerEABTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_eab_get_credential",
 		Description: "Retrieve an EAB credential by its numeric ID",
 		InputSchema: credentialIDSchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_eab_get_credential_by_key_id",
 		Description: "Retrieve an EAB credential by its KeyID (the ACME EAB key identifier)",
 		InputSchema: map[string]interface{}{
@@ -176,7 +178,7 @@ func (r *ToolRegistry) registerEABTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_eab_list_credentials",
 		Description: "List EAB credentials, optionally filtered by tenant, profile, status and active state",
 		InputSchema: map[string]interface{}{
@@ -210,7 +212,7 @@ func (r *ToolRegistry) registerEABTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_eab_revoke_credential",
 		Description: "Revoke an EAB credential so it can no longer be used for enrollment",
 		InputSchema: map[string]interface{}{
@@ -226,7 +228,7 @@ func (r *ToolRegistry) registerEABTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_eab_validate_credential",
 		Description: "Validate an EAB credential by KeyID + HMAC key (constant-time comparison)",
 		InputSchema: map[string]interface{}{
@@ -245,19 +247,19 @@ func (r *ToolRegistry) registerEABTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_eab_delete_credential",
 		Description: "Permanently delete an EAB credential",
 		InputSchema: credentialIDSchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_eab_mark_credential_used",
 		Description: "Mark an EAB credential as used after successful ACME enrollment",
 		InputSchema: credentialIDSchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_eab_cleanup_expired_credentials",
 		Description: "Delete all expired EAB credentials, optionally filtered by tenant",
 		InputSchema: map[string]interface{}{
@@ -271,7 +273,7 @@ func (r *ToolRegistry) registerEABTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_eab_get_credential_qr_code",
 		Description: "Generate a PNG QR code image (base64-encoded) containing the EAB credential payload for device delivery",
 		InputSchema: map[string]interface{}{
@@ -287,7 +289,7 @@ func (r *ToolRegistry) registerEABTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_eab_get_enrollment_url",
 		Description: "Generate an enrollment URL with the EAB credential embedded as query parameters",
 		InputSchema: map[string]interface{}{

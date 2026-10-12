@@ -60,8 +60,9 @@ type Options struct {
 	// MCPAddr is the MCP server address (host:port).
 	MCPAddr string
 
-	// TLSConfig is the TLS configuration for secure connections.
-	// If nil, insecure connections may be attempted.
+	// TLSConfig is the TLS configuration for secure connections. If nil,
+	// the system roots verify the server. Connections never drop below
+	// TLS 1.3 (see ClientTLSConfig).
 	TLSConfig *tls.Config
 
 	// TLSServerName overrides the SNI / certificate verification hostname
@@ -71,13 +72,13 @@ type Options struct {
 	// through a proxy).
 	TLSServerName string
 
-	// BearerToken is an optional bearer/JWT token attached as the
-	// `Authorization: Bearer <token>` header to every outbound RPC.
-	// All transports honor this when set: REST sends an HTTP header,
-	// gRPC injects metadata via PerRPCCredentials, QUIC and MCP attach
-	// the token to their respective headers/JSON-RPC envelopes. Leave
-	// empty for transports that authenticate by other means
-	// (Unix socket SO_PEERCRED, mTLS client cert).
+	// BearerToken is an optional bearer/JWT token attached to every
+	// outbound RPC. REST sends an `Authorization: Bearer` header, gRPC
+	// injects metadata via PerRPCCredentials, QUIC frames it into each
+	// request, and MCP sends the header over https:// only. The token is
+	// never sent over plaintext: MCP refuses an http:// address when it is
+	// set. Unix (SO_PEERCRED) and Embedded (in-process) refuse it, along
+	// with TLSConfig and TLSServerName, with ErrUnsupportedOption.
 	BearerToken string
 
 	// Timeout is the connection timeout.
@@ -177,8 +178,8 @@ func WithTLSConfig(cfg *tls.Config) Option {
 
 // WithTLSServerName overrides the SNI / certificate verification hostname.
 // When set the value is propagated into the TLS configuration of every
-// transport adapter (REST, gRPC, QUIC) so the client honours the name
-// regardless of the dialed address.
+// TLS transport adapter (REST, gRPC, QUIC, and MCP over https://) so the
+// client honours the name regardless of the dialed address.
 func WithTLSServerName(name string) Option {
 	return func(o *Options) {
 		o.TLSServerName = name
@@ -187,8 +188,8 @@ func WithTLSServerName(name string) Option {
 
 // WithBearerToken sets the bearer/JWT token attached to every outbound
 // RPC as `Authorization: Bearer <token>` (or the protocol equivalent).
-// All transports honor this option; transports that authenticate by
-// other means (Unix peer creds, mTLS) ignore it.
+// REST, gRPC and QUIC send it over TLS, and MCP over https:// only.
+// Unix and Embedded refuse it with ErrUnsupportedOption.
 func WithBearerToken(token string) Option {
 	return func(o *Options) {
 		o.BearerToken = token
@@ -321,4 +322,39 @@ func (o *Options) HasEmbeddedServices() bool {
 // HasQuicBaaSAddr returns true if a QuicBaaS address is configured.
 func (o *Options) HasQuicBaaSAddr() bool {
 	return o.QuicBaaSAddr != ""
+}
+
+// ClientTLSConfig returns the TLS configuration every TLS transport dials
+// with: a clone of TLSConfig (or an empty config using the system roots),
+// raised to at least TLS 1.3, with TLSServerName applied when set. The
+// caller's TLSConfig is never modified.
+func (o *Options) ClientTLSConfig() *tls.Config {
+	cfg := &tls.Config{}
+	if o.TLSConfig != nil {
+		cfg = o.TLSConfig.Clone()
+	}
+	if cfg.MinVersion < tls.VersionTLS13 {
+		cfg.MinVersion = tls.VersionTLS13
+	}
+	if o.TLSServerName != "" {
+		cfg.ServerName = o.TLSServerName
+	}
+	return cfg
+}
+
+// CredentialOptions names the credential-bearing options that are set:
+// BearerToken, TLSConfig and TLSServerName, in that order. A transport that
+// cannot honour them uses this to refuse them instead of dropping them.
+func (o *Options) CredentialOptions() []string {
+	var set []string
+	if o.BearerToken != "" {
+		set = append(set, "BearerToken")
+	}
+	if o.TLSConfig != nil {
+		set = append(set, "TLSConfig")
+	}
+	if o.TLSServerName != "" {
+		set = append(set, "TLSServerName")
+	}
+	return set
 }

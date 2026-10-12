@@ -27,7 +27,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // TestRouterRegistration verifies that RegisterRoutes registers the expected
@@ -87,7 +87,7 @@ func TestRouterEndToEnd_UploadTemplate(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, rr.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
 	assert.True(t, resp.Success)
 }

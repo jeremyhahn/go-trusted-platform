@@ -9,7 +9,7 @@ Complete API reference for invitation management in go-trusted-platform. The Inv
 | REST | HTTP/HTTPS | 8443 | Web clients, external systems |
 | gRPC | TCP | 9443 | High-performance service-to-service |
 | QUIC | UDP | 9444 | Low-latency, mobile clients |
-| MCP | stdio/HTTP | 9445 | AI/LLM integration |
+| MCP | stdio/HTTPS | 9445 | AI/LLM integration |
 | Unix | Unix Socket | /run/platformd.sock | Local IPC, CLI |
 
 ## Operations Summary
@@ -451,7 +451,7 @@ Binary protocol on UDP port 9444.
 
 ## MCP API (Model Context Protocol)
 
-AI/LLM integration via stdio or HTTP on port 9445.
+AI/LLM integration via stdio or HTTPS on port 9445.
 
 ### Tools
 

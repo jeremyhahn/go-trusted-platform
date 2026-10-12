@@ -13,7 +13,11 @@
 
 package mcp
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+)
 
 // =============================================================================
 // Gateway Load Balancer Error Types
@@ -100,7 +104,7 @@ func (r *ToolRegistry) registerGatewayLBTools() {
 		"description": "Balancing algorithm: hash or round-robin (both hash-based select-group balancing)",
 	}
 	addProps["backends"] = lbBackendsProperty()
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_lb_vip_add",
 		Description: "Install a load-balanced virtual IP (VIP) distributing connections across backends via the OVS group-select + conntrack datapath",
 		InputSchema: map[string]interface{}{
@@ -110,7 +114,7 @@ func (r *ToolRegistry) registerGatewayLBTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_lb_vip_remove",
 		Description: "Tear down a load-balanced virtual IP",
 		InputSchema: map[string]interface{}{
@@ -120,7 +124,7 @@ func (r *ToolRegistry) registerGatewayLBTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_lb_vip_get",
 		Description: "Get the status of one load-balanced virtual IP including per-backend health",
 		InputSchema: map[string]interface{}{
@@ -130,7 +134,7 @@ func (r *ToolRegistry) registerGatewayLBTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_lb_vip_list",
 		Description: "List every load-balanced virtual IP and its per-backend health",
 		InputSchema: map[string]interface{}{
@@ -141,7 +145,7 @@ func (r *ToolRegistry) registerGatewayLBTools() {
 
 	setProps := lbVIPTargetProperties()
 	setProps["backends"] = lbBackendsProperty()
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_lb_vip_set_backends",
 		Description: "Replace the backend set of a load-balanced virtual IP",
 		InputSchema: map[string]interface{}{
@@ -151,7 +155,7 @@ func (r *ToolRegistry) registerGatewayLBTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_lb_status",
 		Description: "Get the load balancer service health (active state, VIP count, healthy/total backends)",
 		InputSchema: map[string]interface{}{

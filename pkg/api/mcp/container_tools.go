@@ -17,6 +17,7 @@ import (
 	"fmt"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -112,7 +113,7 @@ func (e *ContainerError) Error() string {
 
 // registerContainerTools registers container-related MCP tools.
 func (r *ToolRegistry) registerContainerTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "container_create",
 		Description: "Create a new container from an image specification",
 		InputSchema: map[string]interface{}{
@@ -199,7 +200,7 @@ func (r *ToolRegistry) registerContainerTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "container_start",
 		Description: "Start a stopped container",
 		InputSchema: map[string]interface{}{
@@ -214,7 +215,7 @@ func (r *ToolRegistry) registerContainerTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "container_stop",
 		Description: "Stop a running container",
 		InputSchema: map[string]interface{}{
@@ -234,7 +235,7 @@ func (r *ToolRegistry) registerContainerTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "container_remove",
 		Description: "Remove a container",
 		InputSchema: map[string]interface{}{
@@ -254,7 +255,7 @@ func (r *ToolRegistry) registerContainerTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "container_get",
 		Description: "Get detailed information about a container",
 		InputSchema: map[string]interface{}{
@@ -269,7 +270,7 @@ func (r *ToolRegistry) registerContainerTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "container_list",
 		Description: "List containers with optional filters",
 		InputSchema: map[string]interface{}{
@@ -293,7 +294,7 @@ func (r *ToolRegistry) registerContainerTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "container_logs",
 		Description: "Get logs from a container",
 		InputSchema: map[string]interface{}{
@@ -328,7 +329,7 @@ func (r *ToolRegistry) registerContainerTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "container_attest",
 		Description: "Perform TPM attestation for a container, generating a cryptographic proof of its integrity",
 		InputSchema: map[string]interface{}{

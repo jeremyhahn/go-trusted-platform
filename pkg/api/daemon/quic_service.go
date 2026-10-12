@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -85,7 +86,7 @@ type QUICServiceHandler struct {
 	// delegates to so QUIC has identical 802.1AR semantics as gRPC/Unix.
 	idevidService *IDevIDGRPCService
 	// tpm2Handler serves the physical-TPM category opcode
-	// (quic.OpTPM2Category, 0x99) with sub-opcode dispatch in payload[0].
+	// (quicwire.OpTPM2Category, 0x99) with sub-opcode dispatch in payload[0].
 	tpm2Handler        *quic.TPM2Handler
 	containerHandler   *quic.ContainerHandler
 	attestationHandler *quic.AttestationHandler
@@ -104,7 +105,7 @@ type QUICServiceHandler struct {
 	proxyHandler  *quic.ProxyHandler
 	switchService switchServiceProvider
 	// ntpService serves the time-synchronization category opcode
-	// (quic.OpNTPCategory, 0x50) with sub-opcode dispatch in payload[0].
+	// (quicwire.OpNTPCategory, 0x50) with sub-opcode dispatch in payload[0].
 	// It is the same NTPGRPCService instance the other transports use.
 	ntpService platformv1.NTPServiceServer
 	// Phase 3.5 handlers - wired via Set*Service on the daemon.
@@ -454,8 +455,8 @@ func (h *QUICServiceHandler) SetProxyHandler(handler *quic.ProxyHandler) {
 }
 
 // errorResponse creates an error response with the given status and error
-func (h *QUICServiceHandler) errorResponse(status byte, err error) *quic.Response {
-	return &quic.Response{
+func (h *QUICServiceHandler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
@@ -466,7 +467,7 @@ func (h *QUICServiceHandler) errorResponse(status byte, err error) *quic.Respons
 // A deferred recover guard converts any panicking handler into a StatusInternalError
 // response, ensuring the QUIC stream always receives a valid frame and the server
 // goroutine is never killed by a misbehaving sub-handler.
-func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Request) (resp *quic.Response) {
+func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Request) (resp *quicwire.Response) {
 	defer func() {
 		if r := recover(); r != nil {
 			h.logger.Errorf("QUIC handler panic (opcode 0x%02x): %v\n%s",
@@ -476,12 +477,12 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 					}
 					return 0
 				}(), r, debug.Stack())
-			resp = h.errorResponse(quic.StatusInternalError, ErrQUICHandlerPanic{Cause: r})
+			resp = h.errorResponse(quicwire.StatusInternalError, ErrQUICHandlerPanic{Cause: r})
 		}
 	}()
 
 	if req == nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICNilRequest{})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICNilRequest{})
 	}
 
 	// Authenticate request if auth middleware is configured
@@ -496,48 +497,48 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	// Route based on opcode ranges
 	switch {
 	// Health Operations (0x00-0x02)
-	case req.Opcode >= quic.OpHealth && req.Opcode <= quic.OpReadiness:
+	case req.Opcode >= quicwire.OpHealth && req.Opcode <= quicwire.OpReadiness:
 		return h.handleHealth(ctx, req)
 
 	// vTPM Extended Operations (0x03-0x0F) - Template and Bundle Management
-	case req.Opcode >= quic.OpVTPMCreateTemplate && req.Opcode <= quic.OpVTPMIsRunning:
+	case req.Opcode >= quicwire.OpVTPMCreateTemplate && req.Opcode <= quicwire.OpVTPMIsRunning:
 		return h.handleVTPMOperation(ctx, req)
 
 	// vTPM Operations (0x10-0x1F)
-	case req.Opcode >= quic.OpVTPMCreate && req.Opcode <= quic.OpVTPMGetRandom:
+	case req.Opcode >= quicwire.OpVTPMCreate && req.Opcode <= quicwire.OpVTPMGetRandom:
 		return h.handleVTPM(ctx, req)
 
 	// DNS Operations (0x20-0x2F)
-	case req.Opcode >= quic.OpDNSAddRecord && req.Opcode <= quic.OpDNSFlushCache:
+	case req.Opcode >= quicwire.OpDNSAddRecord && req.Opcode <= quicwire.OpDNSFlushCache:
 		return h.handleDNS(ctx, req)
 
 	// Overlay Category Opcode (0x2E) - multiplexes overlay sub-operations
-	case req.Opcode == quic.OpOverlayCategory:
+	case req.Opcode == quicwire.OpOverlayCategory:
 		return h.handleOverlayCategory(ctx, req)
 
 	// Gateway Category Opcode (0x2F) - multiplexes gateway sub-operations
-	case req.Opcode == quic.OpGatewayCategory:
+	case req.Opcode == quicwire.OpGatewayCategory:
 		return h.handleGatewayCategory(ctx, req)
 
 	// NTP Category Opcode (0x50) - multiplexes time-synchronization
 	// sub-operations (status, sources, step) in payload[0].
-	case req.Opcode == quic.OpNTPCategory:
+	case req.Opcode == quicwire.OpNTPCategory:
 		return h.handleNTPCategory(ctx, req)
 
 	// Device Operations (0x30-0x3F)
-	case req.Opcode >= quic.OpDeviceRegister && req.Opcode <= quic.OpDeviceGetMetrics:
+	case req.Opcode >= quicwire.OpDeviceRegister && req.Opcode <= quicwire.OpDeviceGetMetrics:
 		return h.handleDevice(ctx, req)
 
 	// IPAM Category Opcode (0x3F) - multiplexes IPAM sub-operations
-	case req.Opcode == quic.OpIPAMCategory:
+	case req.Opcode == quicwire.OpIPAMCategory:
 		return h.handleIPAMCategory(ctx, req)
 
 	// SDN Operations (0x40-0x4F) - Full range from GetPortState to GetPort
-	case req.Opcode >= quic.OpSDNGetPortState && req.Opcode <= quic.OpSDNGetPort:
+	case req.Opcode >= quicwire.OpSDNGetPortState && req.Opcode <= quicwire.OpSDNGetPort:
 		return h.handleSDNOperation(ctx, req)
 
 	// IDevID/IAK Device Identity Operations (0x56-0x5F)
-	case req.Opcode >= quic.OpIDevIDGenerate && req.Opcode <= quic.OpIAKCSR:
+	case req.Opcode >= quicwire.OpIDevIDGenerate && req.Opcode <= quicwire.OpIAKCSR:
 		return h.handleIDevIDOperation(ctx, req)
 
 	// Compute/VM Operations (0x60-0x6A). The compute extended category
@@ -546,84 +547,84 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	// whose direct opcodes are shadowed by the PXE ranges) in payload[0];
 	// handleVMServiceOperation routes container sub-opcodes to the
 	// container handler and everything else to the VM handler.
-	case req.Opcode >= quic.OpVMCreate && req.Opcode <= quic.OpVMGetState:
+	case req.Opcode >= quicwire.OpVMCreate && req.Opcode <= quicwire.OpVMGetState:
 		return h.handleVMServiceOperation(ctx, req)
 
 	// IAK Extended Operations (0x6B-0x6E)
-	case req.Opcode >= quic.OpIAKInstallCert && req.Opcode <= quic.OpActivateCredential:
+	case req.Opcode >= quicwire.OpIAKInstallCert && req.Opcode <= quicwire.OpActivateCredential:
 		return h.handleIDevIDOperation(ctx, req)
 
 	// Container Get (0x6F - reused reserved code)
-	case req.Opcode == quic.OpContainerGet:
+	case req.Opcode == quicwire.OpContainerGet:
 		return h.handleContainerOperation(ctx, req)
 
 	// Attestation Operations (0x70-0x77)
-	case req.Opcode >= quic.OpAttestQuote && req.Opcode <= quic.OpAttestGetReportByID:
+	case req.Opcode >= quicwire.OpAttestQuote && req.Opcode <= quicwire.OpAttestGetReportByID:
 		return h.handleAttestationOperation(ctx, req)
 
 	// IDevID Extended Operations (0x78-0x7B) - HasIDevID, HasIAK, IDevIDDeleteCert, IAKDeleteCert
-	case req.Opcode >= quic.OpHasIDevID && req.Opcode <= quic.OpIAKDeleteCert:
+	case req.Opcode >= quicwire.OpHasIDevID && req.Opcode <= quicwire.OpIAKDeleteCert:
 		return h.handleIDevIDOperation(ctx, req)
 
 	// Attestation Manifest/Host/Workload Operations (0x7C-0x7F) -
 	// BuildManifest, VerifyManifest, CollectHostAttestation, AttestVM.
-	case req.Opcode >= quic.OpAttestBuildManifest && req.Opcode <= quic.OpAttestVMWorkload:
+	case req.Opcode >= quicwire.OpAttestBuildManifest && req.Opcode <= quicwire.OpAttestVMWorkload:
 		return h.handleAttestationOperation(ctx, req)
 
 	// Certificate/PKI Operations (0x80-0x88)
-	case req.Opcode >= quic.OpCertIssue && req.Opcode <= quic.OpCertGetOCSP:
+	case req.Opcode >= quicwire.OpCertIssue && req.Opcode <= quicwire.OpCertGetOCSP:
 		return h.handleCertificate(ctx, req)
 
 	// Daemon Management Operations (0x89-0x8F)
-	case req.Opcode >= quic.OpDaemonStatus && req.Opcode <= quic.OpDaemonRestartService:
+	case req.Opcode >= quicwire.OpDaemonStatus && req.Opcode <= quicwire.OpDaemonRestartService:
 		return h.handleDaemonOperation(ctx, req)
 
 	// Daemon ListProtocols (0x98)
-	case req.Opcode == quic.OpDaemonListProtocols:
+	case req.Opcode == quicwire.OpDaemonListProtocols:
 		return h.handleDaemonOperation(ctx, req)
 
 	// Physical TPM2 Category Opcode (0x99) - multiplexes TPM2 device
 	// operations (info, provision, EK/SRK/IAK, quote, PCRs, NV, ...) as
 	// sub-opcodes carried in payload[0].
-	case req.Opcode == quic.OpTPM2Category:
+	case req.Opcode == quicwire.OpTPM2Category:
 		return h.handleTPM2Category(ctx, req)
 
 	// CA Operations (0xA0-0xA8)
-	case req.Opcode >= quic.OpCAInfo && req.Opcode <= quic.OpCABundle:
+	case req.Opcode >= quicwire.OpCAInfo && req.Opcode <= quicwire.OpCABundle:
 		return h.handleCA(ctx, req)
 
 	// IAM User Operations (0xA9-0xAD)
-	case req.Opcode >= quic.OpIAMUserCreate && req.Opcode <= quic.OpIAMUserUpdate:
+	case req.Opcode >= quicwire.OpIAMUserCreate && req.Opcode <= quicwire.OpIAMUserUpdate:
 		return h.handleIAMOperation(ctx, req)
 
 	// Container List (0xAE) and Container Logs (0xAF)
-	case req.Opcode == quic.OpContainerList || req.Opcode == quic.OpContainerLogs:
+	case req.Opcode == quicwire.OpContainerList || req.Opcode == quicwire.OpContainerLogs:
 		return h.handleContainerOperation(ctx, req)
 
 	// SDN Extended Operations (0xB0-0xB4) - CreateBridge to DeletePolicy
-	case req.Opcode >= quic.OpSDNCreateBridge && req.Opcode <= quic.OpSDNDeletePolicy:
+	case req.Opcode >= quicwire.OpSDNCreateBridge && req.Opcode <= quicwire.OpSDNDeletePolicy:
 		return h.handleSDNOperation(ctx, req)
 
 	// IAM Role Operations (0xB5-0xBA)
-	case req.Opcode >= quic.OpIAMRoleCreate && req.Opcode <= quic.OpIAMRoleRevoke:
+	case req.Opcode >= quicwire.OpIAMRoleCreate && req.Opcode <= quicwire.OpIAMRoleRevoke:
 		return h.handleIAMOperation(ctx, req)
 
 	// IAM Group Operations (0xBB-0xBF)
-	case req.Opcode >= quic.OpIAMGroupCreate && req.Opcode <= quic.OpIAMGroupAddMember:
+	case req.Opcode >= quicwire.OpIAMGroupCreate && req.Opcode <= quicwire.OpIAMGroupAddMember:
 		return h.handleIAMOperation(ctx, req)
 
 	// Switch Management Category Opcode (0xCC)
-	case req.Opcode == quic.OpSwitchCategory:
+	case req.Opcode == quicwire.OpSwitchCategory:
 		return h.handleSwitchCategory(ctx, req)
 
 	// KMS Extended Category Opcode (0xCD) - multiplexes revoke, metadata,
 	// policy, and supported-algorithms sub-operations.
-	case req.Opcode == quic.OpKMSExtendedCategory:
+	case req.Opcode == quicwire.OpKMSExtendedCategory:
 		return h.handleKMSExtendedCategory(ctx, req)
 
 	// Secrets Category Opcode (0xCE) - multiplexes secrets store/get/list/
 	// delete and rotation-policy sub-operations.
-	case req.Opcode == quic.OpSecretsCategory:
+	case req.Opcode == quicwire.OpSecretsCategory:
 		return h.handleSecretsCategory(ctx, req)
 
 	// Provisioning Category Opcode (0xCF) - multiplexes config delivery
@@ -633,7 +634,7 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	// quic_device_handlers.go). EAB and device profile sub-opcodes are
 	// routed first; everything else falls through to the config delivery
 	// dispatcher.
-	case req.Opcode == quic.OpProvisioningCategory:
+	case req.Opcode == quicwire.OpProvisioningCategory:
 		if resp, handled := h.handleEABCategorySub(ctx, req); handled {
 			return resp
 		}
@@ -643,34 +644,34 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 		return h.handleProvisioningCategory(ctx, req)
 
 	// Phase 3.5 category opcodes (0x9A-0x9D): ceremony, piv, luks, fido2.
-	case req.Opcode == quic.OpCeremonyCategory:
+	case req.Opcode == quicwire.OpCeremonyCategory:
 		return h.handleCeremonyCategory(ctx, req)
-	case req.Opcode == quic.OpPIVCategory:
+	case req.Opcode == quicwire.OpPIVCategory:
 		return h.handlePIVCategory(ctx, req)
-	case req.Opcode == quic.OpLUKSCategory:
+	case req.Opcode == quicwire.OpLUKSCategory:
 		return h.handleLUKSCategory(ctx, req)
-	case req.Opcode == quic.OpFIDO2Category:
+	case req.Opcode == quicwire.OpFIDO2Category:
 		return h.handleFIDO2Category(ctx, req)
 
 	// Tenant barrier category opcode (0x9E) - multiplexes per-tenant
 	// barrier Init/Unseal/Seal/Status sub-operations.
-	case req.Opcode == quic.OpTenantBarrierCategory:
+	case req.Opcode == quicwire.OpTenantBarrierCategory:
 		return h.handleTenantBarrierCategory(ctx, req)
 
 	// BMC category opcode (0x9F) - multiplexes BMC enrollment sub-operations.
-	case req.Opcode == quic.OpBMCCategory:
+	case req.Opcode == quicwire.OpBMCCategory:
 		return h.handleBMCCategory(ctx, req)
 
 	// KMS Key Management Operations (0xC0-0xCB) - Includes BatchEncrypt and BatchDecrypt
-	case req.Opcode >= quic.OpKMSGenerateKey && req.Opcode <= quic.OpKMSBatchDecrypt:
+	case req.Opcode >= quicwire.OpKMSGenerateKey && req.Opcode <= quicwire.OpKMSBatchDecrypt:
 		return h.handleKMSOperation(ctx, req)
 
 	// KMS Crypto Operations (0xD0-0xDA) - Includes GenerateDataKey and GenerateWrappedDataKey
-	case req.Opcode >= quic.OpKMSEncrypt && req.Opcode <= quic.OpKMSGenerateWrappedDataKey:
+	case req.Opcode >= quicwire.OpKMSEncrypt && req.Opcode <= quicwire.OpKMSGenerateWrappedDataKey:
 		return h.handleKMSOperation(ctx, req)
 
 	// Tenant Operations (0xDB-0xE9)
-	case quic.IsTenantOpcode(req.Opcode):
+	case quicwire.IsTenantOpcode(req.Opcode):
 		return h.handleTenantOperation(ctx, req)
 
 	// PXE Operations (0xEC-0xEF) - ListDevices, GetDevice, RegisterDevice, UpdateState
@@ -678,7 +679,7 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 		return h.handlePXEOperation(ctx, req)
 
 	// IAM Extended Operations (0xF6-0xFB) - GroupRemoveMember through TokenVerify
-	case req.Opcode >= quic.OpIAMGroupRemoveMember && req.Opcode <= quic.OpIAMTokenVerify:
+	case req.Opcode >= quicwire.OpIAMGroupRemoveMember && req.Opcode <= quicwire.OpIAMTokenVerify:
 		return h.handleIAMOperation(ctx, req)
 
 	// PXE Extended Operations (0xFC-0xFF) - Authorize, Quarantine, Retry, RemoveDevice
@@ -686,54 +687,54 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 		return h.handlePXEOperation(ctx, req)
 
 	default:
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
 	}
 }
 
 // handleHealth handles health-related operations
-func (h *QUICServiceHandler) handleHealth(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleHealth(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	switch req.Opcode {
-	case quic.OpHealth:
+	case quicwire.OpHealth:
 		return h.handleHealthCheck(ctx, req)
-	case quic.OpLiveness:
+	case quicwire.OpLiveness:
 		return h.handleLiveness(ctx, req)
-	case quic.OpReadiness:
+	case quicwire.OpReadiness:
 		return h.handleReadiness(ctx, req)
 	default:
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
 	}
 }
 
 // handleDNS handles DNS-related operations
-func (h *QUICServiceHandler) handleDNS(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDNS(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	return h.handleDNSOperation(ctx, req)
 }
 
 // handleVTPM handles vTPM-related operations
-func (h *QUICServiceHandler) handleVTPM(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleVTPM(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	return h.handleVTPMOperation(ctx, req)
 }
 
 // handleDevice handles Device-related operations
-func (h *QUICServiceHandler) handleDevice(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDevice(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.deviceService == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "device"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "device"})
 	}
 	return h.handleDeviceOperation(ctx, req)
 }
 
 // handleCertificate handles Certificate/PKI-related operations
-func (h *QUICServiceHandler) handleCertificate(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleCertificate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.caHandler == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "ca"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "ca"})
 	}
 	return h.caHandler.HandleRequest(ctx, req)
 }
 
 // handleCA handles CA-related operations
-func (h *QUICServiceHandler) handleCA(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleCA(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.caHandler == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "ca"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "ca"})
 	}
 	return h.caHandler.HandleRequest(ctx, req)
 }
@@ -741,11 +742,11 @@ func (h *QUICServiceHandler) handleCA(ctx context.Context, req *quic.Request) *q
 // handleTPM2Category handles the physical TPM2 category opcode (0x99).
 // The first byte of the payload is the sub-opcode that selects the TPM2
 // operation; the remaining payload bytes are the operation request payload.
-func (h *QUICServiceHandler) handleTPM2Category(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleTPM2Category(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	// LDevID (802.1AR) issuance is CA-backed and lives in the shared
 	// IDevIDGRPCService, not the physical-TPM handler. Intercept the LDevID
 	// sub-opcode and delegate so QUIC matches gRPC/Unix/embedded semantics.
-	if h.idevidService != nil && len(req.Payload) > 0 && req.Payload[0] == quic.SubOpTPM2LDevIDCSR {
+	if h.idevidService != nil && len(req.Payload) > 0 && req.Payload[0] == quicwire.SubOpTPM2LDevIDCSR {
 		return h.handleLDevIDCreate(ctx, req.Payload[1:])
 	}
 	return h.tpm2Handler.HandleMessage(ctx, req)
@@ -754,13 +755,13 @@ func (h *QUICServiceHandler) handleTPM2Category(ctx context.Context, req *quic.R
 // handleOverlayCategory handles overlay category opcode (0x2E).
 // The first byte of the payload is the sub-opcode that maps to an overlay operation.
 // The remaining payload bytes are the actual request payload for the sub-operation.
-func (h *QUICServiceHandler) handleOverlayCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleOverlayCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.overlayHandler == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "overlay"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "overlay"})
 	}
 
 	if len(req.Payload) == 0 {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
 	}
 
 	// Extract sub-opcode from the first byte of the payload
@@ -768,7 +769,7 @@ func (h *QUICServiceHandler) handleOverlayCategory(ctx context.Context, req *qui
 	subPayload := req.Payload[1:]
 
 	// Forward to overlay handler with the sub-opcode as the request opcode
-	subReq := &quic.Request{
+	subReq := &quicwire.Request{
 		Opcode:  subOpcode,
 		Token:   req.Token,
 		Payload: subPayload,
@@ -780,15 +781,15 @@ func (h *QUICServiceHandler) handleOverlayCategory(ctx context.Context, req *qui
 // handleGatewayCategory handles gateway category opcode (0x2F).
 // The first byte of the payload is the sub-opcode that maps to a gateway operation.
 // The remaining payload bytes are the actual request payload for the sub-operation.
-func (h *QUICServiceHandler) handleGatewayCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleGatewayCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if len(req.Payload) == 0 {
 		// Preserve the unwired-category contract: a daemon without a
 		// gateway handler reports Unavailable even for malformed
 		// requests (see TestQUICDispatchWireOwnership).
 		if h.gatewayHandler == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "gateway"})
+			return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "gateway"})
 		}
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
 	}
 
 	// Extract sub-opcode from the first byte of the payload
@@ -796,7 +797,7 @@ func (h *QUICServiceHandler) handleGatewayCategory(ctx context.Context, req *qui
 	subPayload := req.Payload[1:]
 
 	// Forward to the sub-handler with the sub-opcode as the request opcode
-	subReq := &quic.Request{
+	subReq := &quicwire.Request{
 		Opcode:  subOpcode,
 		Token:   req.Token,
 		Payload: subPayload,
@@ -807,13 +808,13 @@ func (h *QUICServiceHandler) handleGatewayCategory(ctx context.Context, req *qui
 	// falls through to the gateway handler.
 	if quic.IsProxySubOpcode(subOpcode) {
 		if h.proxyHandler == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "proxy"})
+			return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "proxy"})
 		}
 		return h.proxyHandler.HandleRequest(ctx, subReq)
 	}
 
 	if h.gatewayHandler == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "gateway"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "gateway"})
 	}
 
 	return h.gatewayHandler.HandleRequest(ctx, subReq)
@@ -822,13 +823,13 @@ func (h *QUICServiceHandler) handleGatewayCategory(ctx context.Context, req *qui
 // handleIPAMCategory handles IPAM category opcode (0x3F).
 // The first byte of the payload is the sub-opcode that maps to an IPAM operation
 // within the gateway handler. The remaining payload bytes are the actual request payload.
-func (h *QUICServiceHandler) handleIPAMCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleIPAMCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.gatewayHandler == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "ipam"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "ipam"})
 	}
 
 	if len(req.Payload) == 0 {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
 	}
 
 	// Extract sub-opcode from the first byte of the payload
@@ -837,7 +838,7 @@ func (h *QUICServiceHandler) handleIPAMCategory(ctx context.Context, req *quic.R
 
 	// Forward to gateway handler with the sub-opcode as the request opcode
 	// IPAM operations use the gateway handler's IPAM sub-opcodes
-	subReq := &quic.Request{
+	subReq := &quicwire.Request{
 		Opcode:  subOpcode,
 		Token:   req.Token,
 		Payload: subPayload,
@@ -847,7 +848,7 @@ func (h *QUICServiceHandler) handleIPAMCategory(ctx context.Context, req *quic.R
 }
 
 // handleHealthCheck handles the health check operation
-func (h *QUICServiceHandler) handleHealthCheck(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleHealthCheck(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	resp := &HealthCheckResponse{
 		Healthy:    true,
 		Status:     "healthy",
@@ -871,38 +872,38 @@ func (h *QUICServiceHandler) handleHealthCheck(ctx context.Context, req *quic.Re
 		}
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleLiveness handles the liveness probe operation
-func (h *QUICServiceHandler) handleLiveness(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleLiveness(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	resp := &HealthCheckResponse{
 		Healthy:   true,
 		Status:    "alive",
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleReadiness handles the readiness probe operation
-func (h *QUICServiceHandler) handleReadiness(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleReadiness(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	resp := &HealthCheckResponse{
 		Healthy:    true,
 		Status:     "ready",
@@ -957,13 +958,13 @@ func (h *QUICServiceHandler) handleReadiness(ctx context.Context, req *quic.Requ
 		resp.Components["gateway"] = "ready"
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1066,38 +1067,38 @@ type QUICDaemonListProtocolsResponse struct {
 // =============================================================================
 
 // handleDaemonOperation routes daemon management operations to the appropriate handler
-func (h *QUICServiceHandler) handleDaemonOperation(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDaemonOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.daemonService == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "daemon"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "daemon"})
 	}
 
 	switch req.Opcode {
-	case quic.OpDaemonStatus:
+	case quicwire.OpDaemonStatus:
 		return h.handleDaemonStatus(ctx, req)
-	case quic.OpDaemonVersion:
+	case quicwire.OpDaemonVersion:
 		return h.handleDaemonVersion(ctx, req)
-	case quic.OpDaemonListServices:
+	case quicwire.OpDaemonListServices:
 		return h.handleDaemonListServices(ctx, req)
-	case quic.OpDaemonGetService:
+	case quicwire.OpDaemonGetService:
 		return h.handleDaemonGetService(ctx, req)
-	case quic.OpDaemonStartService:
+	case quicwire.OpDaemonStartService:
 		return h.handleDaemonStartService(ctx, req)
-	case quic.OpDaemonStopService:
+	case quicwire.OpDaemonStopService:
 		return h.handleDaemonStopService(ctx, req)
-	case quic.OpDaemonRestartService:
+	case quicwire.OpDaemonRestartService:
 		return h.handleDaemonRestartService(ctx, req)
-	case quic.OpDaemonListProtocols:
+	case quicwire.OpDaemonListProtocols:
 		return h.handleDaemonListProtocols(ctx, req)
 	default:
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
 	}
 }
 
 // handleDaemonStatus retrieves the daemon status
-func (h *QUICServiceHandler) handleDaemonStatus(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDaemonStatus(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	statusResp, err := h.daemonService.GetStatus(ctx, &platformv1.GetStatusRequest{})
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonStatus", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonStatus", Cause: err})
 	}
 
 	// Normalize system status enum to lowercase
@@ -1135,22 +1136,22 @@ func (h *QUICServiceHandler) handleDaemonStatus(ctx context.Context, req *quic.R
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, encErr := quic.EncodePayload(resp)
+	payload, encErr := quicwire.EncodePayload(resp)
 	if encErr != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDaemonVersion retrieves the daemon version
-func (h *QUICServiceHandler) handleDaemonVersion(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDaemonVersion(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	versionResp, err := h.daemonService.GetVersion(ctx, &platformv1.GetVersionRequest{})
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonVersion", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonVersion", Cause: err})
 	}
 
 	resp := &QUICDaemonVersionResponse{
@@ -1160,22 +1161,22 @@ func (h *QUICServiceHandler) handleDaemonVersion(ctx context.Context, req *quic.
 		GoVersion: versionResp.GoVersion,
 	}
 
-	payload, encErr := quic.EncodePayload(resp)
+	payload, encErr := quicwire.EncodePayload(resp)
 	if encErr != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDaemonListServices lists all managed services
-func (h *QUICServiceHandler) handleDaemonListServices(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDaemonListServices(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	listResp, err := h.daemonService.ListServices(ctx, &platformv1.ListServicesRequest{})
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonListServices", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonListServices", Cause: err})
 	}
 
 	services := make([]QUICDaemonServiceInfo, 0, len(listResp.Services))
@@ -1190,26 +1191,26 @@ func (h *QUICServiceHandler) handleDaemonListServices(ctx context.Context, req *
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, encErr := quic.EncodePayload(resp)
+	payload, encErr := quicwire.EncodePayload(resp)
 	if encErr != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDaemonGetService retrieves a single service's status
-func (h *QUICServiceHandler) handleDaemonGetService(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDaemonGetService(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var svcReq QUICDaemonServiceRequest
-	if err := quic.DecodePayload(req.Payload, &svcReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &svcReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if svcReq.Name == "" {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "name"})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "name"})
 	}
 
 	svcType := serviceTypeFromName(svcReq.Name)
@@ -1217,31 +1218,31 @@ func (h *QUICServiceHandler) handleDaemonGetService(ctx context.Context, req *qu
 		Service: svcType,
 	})
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonGetService", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonGetService", Cause: err})
 	}
 
 	info := convertServiceInfoToQUIC(statusResp.Service)
 
-	payload, encErr := quic.EncodePayload(&info)
+	payload, encErr := quicwire.EncodePayload(&info)
 	if encErr != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDaemonStartService starts a managed service
-func (h *QUICServiceHandler) handleDaemonStartService(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDaemonStartService(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var svcReq QUICDaemonServiceRequest
-	if err := quic.DecodePayload(req.Payload, &svcReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &svcReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if svcReq.Name == "" {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "name"})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "name"})
 	}
 
 	svcType := serviceTypeFromName(svcReq.Name)
@@ -1249,7 +1250,7 @@ func (h *QUICServiceHandler) handleDaemonStartService(ctx context.Context, req *
 		Service: svcType,
 	})
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonStartService", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonStartService", Cause: err})
 	}
 
 	resp := &QUICDaemonServiceActionResponse{
@@ -1259,26 +1260,26 @@ func (h *QUICServiceHandler) handleDaemonStartService(ctx context.Context, req *
 		Message: "service started successfully",
 	}
 
-	payload, encErr := quic.EncodePayload(resp)
+	payload, encErr := quicwire.EncodePayload(resp)
 	if encErr != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDaemonStopService stops a managed service
-func (h *QUICServiceHandler) handleDaemonStopService(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDaemonStopService(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var svcReq QUICDaemonServiceRequest
-	if err := quic.DecodePayload(req.Payload, &svcReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &svcReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if svcReq.Name == "" {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "name"})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "name"})
 	}
 
 	svcType := serviceTypeFromName(svcReq.Name)
@@ -1286,7 +1287,7 @@ func (h *QUICServiceHandler) handleDaemonStopService(ctx context.Context, req *q
 		Service: svcType,
 	})
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonStopService", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonStopService", Cause: err})
 	}
 
 	resp := &QUICDaemonServiceActionResponse{
@@ -1296,26 +1297,26 @@ func (h *QUICServiceHandler) handleDaemonStopService(ctx context.Context, req *q
 		Message: "service stopped successfully",
 	}
 
-	payload, encErr := quic.EncodePayload(resp)
+	payload, encErr := quicwire.EncodePayload(resp)
 	if encErr != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDaemonRestartService restarts a managed service
-func (h *QUICServiceHandler) handleDaemonRestartService(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDaemonRestartService(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var svcReq QUICDaemonServiceRequest
-	if err := quic.DecodePayload(req.Payload, &svcReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &svcReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if svcReq.Name == "" {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "name"})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "name"})
 	}
 
 	svcType := serviceTypeFromName(svcReq.Name)
@@ -1323,7 +1324,7 @@ func (h *QUICServiceHandler) handleDaemonRestartService(ctx context.Context, req
 		Service: svcType,
 	})
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonRestartService", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "DaemonRestartService", Cause: err})
 	}
 
 	resp := &QUICDaemonServiceActionResponse{
@@ -1333,19 +1334,19 @@ func (h *QUICServiceHandler) handleDaemonRestartService(ctx context.Context, req
 		Message: "service restarted successfully",
 	}
 
-	payload, encErr := quic.EncodePayload(resp)
+	payload, encErr := quicwire.EncodePayload(resp)
 	if encErr != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDaemonListProtocols lists all configured protocols
-func (h *QUICServiceHandler) handleDaemonListProtocols(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleDaemonListProtocols(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	config := h.daemonService.config
 
 	var protocols []QUICDaemonProtocolInfo
@@ -1368,7 +1369,7 @@ func (h *QUICServiceHandler) handleDaemonListProtocols(ctx context.Context, req 
 		mcpAddr = config.MCPConfig.HTTPAddr
 	}
 	protocols = append(protocols, buildProtocolInfo(
-		"MCP", config.EnableMCP, mcpAddr, false))
+		"MCP", config.EnableMCP, mcpAddr, config.MCPServesHTTP()))
 
 	// gRPC UDS
 	protocols = append(protocols, QUICDaemonProtocolInfo{
@@ -1385,13 +1386,13 @@ func (h *QUICServiceHandler) handleDaemonListProtocols(ctx context.Context, req 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, encErr := quic.EncodePayload(resp)
+	payload, encErr := quicwire.EncodePayload(resp)
 	if encErr != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: encErr})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1503,33 +1504,33 @@ func protocolStatus(enabled bool) string {
 
 // handleCeremonyCategory handles the Phase 3.5 ceremony category opcode.
 // The first byte of the payload is the sub-opcode.
-func (h *QUICServiceHandler) handleCeremonyCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleCeremonyCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.ceremonyQUIC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "ceremony"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "ceremony"})
 	}
 	return h.ceremonyQUIC.Handle(ctx, req)
 }
 
 // handlePIVCategory handles the Phase 3.5 PIV category opcode.
-func (h *QUICServiceHandler) handlePIVCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handlePIVCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.pivQUIC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "piv"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "piv"})
 	}
 	return h.pivQUIC.Handle(ctx, req)
 }
 
 // handleLUKSCategory handles the Phase 3.5 LUKS category opcode.
-func (h *QUICServiceHandler) handleLUKSCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleLUKSCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.luksQUIC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "luks"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "luks"})
 	}
 	return h.luksQUIC.Handle(ctx, req)
 }
 
 // handleFIDO2Category handles the Phase 3.5 FIDO2 category opcode.
-func (h *QUICServiceHandler) handleFIDO2Category(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleFIDO2Category(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.fido2QUIC == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "fido2"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrServiceNotAvailable{Service: "fido2"})
 	}
 	return h.fido2QUIC.Handle(ctx, req)
 }

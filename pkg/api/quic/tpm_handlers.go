@@ -29,44 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 	attestvm "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-)
-
-// TPM2 sub-opcodes for the category opcode OpTPM2Category.
-// The first byte of the payload selects the TPM2 operation.
-const (
-	SubOpTPM2Info          byte = 0x01
-	SubOpTPM2Provision     byte = 0x02
-	SubOpTPM2Clear         byte = 0x03
-	SubOpTPM2GetEK         byte = 0x04
-	SubOpTPM2CreateEK      byte = 0x05
-	SubOpTPM2DeleteEK      byte = 0x06
-	SubOpTPM2GetEKCert     byte = 0x07
-	SubOpTPM2ImportEKCert  byte = 0x08
-	SubOpTPM2GetSRK        byte = 0x09
-	SubOpTPM2CreateSRK     byte = 0x0A
-	SubOpTPM2DeleteSRK     byte = 0x0B
-	SubOpTPM2GetIAK        byte = 0x0C
-	SubOpTPM2CreateIAK     byte = 0x0D
-	SubOpTPM2DeleteIAK     byte = 0x0E
-	SubOpTPM2Quote         byte = 0x0F
-	SubOpTPM2VerifyQuote   byte = 0x10
-	SubOpTPM2ReadPCRs      byte = 0x11
-	SubOpTPM2ExtendPCR     byte = 0x12
-	SubOpTPM2EventLog      byte = 0x13
-	SubOpTPM2Random        byte = 0x14
-	SubOpTPM2Seal          byte = 0x15
-	SubOpTPM2Unseal        byte = 0x16
-	SubOpTPM2Capabilities  byte = 0x17
-	SubOpTPM2NVRead        byte = 0x18
-	SubOpTPM2NVWrite       byte = 0x19
-	SubOpTPM2NVDelete      byte = 0x1A
-	SubOpTPM2NVList        byte = 0x1B
-	SubOpTPM2IDevIDCSR     byte = 0x1C
-	SubOpTPM2LDevIDCSR     byte = 0x1D
-	SubOpTPM2PlatformAttrs byte = 0x1E
-	SubOpTPM2GetIDevID     byte = 0x1F
-	SubOpTPM2MakeCred      byte = 0x20
-	SubOpTPM2ActivateCred  byte = 0x21
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // TPM2 sentinel errors
@@ -100,7 +63,7 @@ var (
 )
 
 // TPM2HandlerFunc is the function signature for TPM2 sub-opcode handlers.
-type TPM2HandlerFunc func(ctx context.Context, payload []byte) *Response
+type TPM2HandlerFunc func(ctx context.Context, payload []byte) *quicwire.Response
 
 // TPM2Handler handles physical TPM2 operations over QUIC using a category
 // opcode with sub-opcode dispatch. The first byte of the payload is the
@@ -118,39 +81,39 @@ func NewTPM2Handler(logger *logging.Logger) *TPM2Handler {
 		logger: logger,
 	}
 	h.handlers = map[byte]TPM2HandlerFunc{
-		SubOpTPM2Info:          h.handleInfo,
-		SubOpTPM2Provision:     h.handleProvision,
-		SubOpTPM2Clear:         h.handleClear,
-		SubOpTPM2GetEK:         h.handleGetEK,
-		SubOpTPM2CreateEK:      h.handleCreateEK,
-		SubOpTPM2DeleteEK:      h.handleDeleteEK,
-		SubOpTPM2GetEKCert:     h.handleGetEKCertificate,
-		SubOpTPM2ImportEKCert:  h.handleImportEKCertificate,
-		SubOpTPM2GetSRK:        h.handleGetSRK,
-		SubOpTPM2CreateSRK:     h.handleCreateSRK,
-		SubOpTPM2DeleteSRK:     h.handleDeleteSRK,
-		SubOpTPM2GetIAK:        h.handleGetIAK,
-		SubOpTPM2CreateIAK:     h.handleCreateIAK,
-		SubOpTPM2DeleteIAK:     h.handleDeleteIAK,
-		SubOpTPM2Quote:         h.handleQuote,
-		SubOpTPM2VerifyQuote:   h.handleVerifyQuote,
-		SubOpTPM2ReadPCRs:      h.handleReadPCRs,
-		SubOpTPM2ExtendPCR:     h.handleExtendPCR,
-		SubOpTPM2EventLog:      h.handleEventLog,
-		SubOpTPM2Random:        h.handleRandom,
-		SubOpTPM2Seal:          h.handleSeal,
-		SubOpTPM2Unseal:        h.handleUnseal,
-		SubOpTPM2Capabilities:  h.handleCapabilities,
-		SubOpTPM2NVRead:        h.handleNVRead,
-		SubOpTPM2NVWrite:       h.handleNVWrite,
-		SubOpTPM2NVDelete:      h.handleNVDelete,
-		SubOpTPM2NVList:        h.handleNVList,
-		SubOpTPM2IDevIDCSR:     h.handleCreateIDevIDCSR,
-		SubOpTPM2LDevIDCSR:     h.handleCreateLDevIDCSR,
-		SubOpTPM2PlatformAttrs: h.handlePlatformAttributes,
-		SubOpTPM2GetIDevID:     h.handleGetIDevID,
-		SubOpTPM2MakeCred:      h.handleMakeCredential,
-		SubOpTPM2ActivateCred:  h.handleActivateCredential,
+		quicwire.SubOpTPM2Info:          h.handleInfo,
+		quicwire.SubOpTPM2Provision:     h.handleProvision,
+		quicwire.SubOpTPM2Clear:         h.handleClear,
+		quicwire.SubOpTPM2GetEK:         h.handleGetEK,
+		quicwire.SubOpTPM2CreateEK:      h.handleCreateEK,
+		quicwire.SubOpTPM2DeleteEK:      h.handleDeleteEK,
+		quicwire.SubOpTPM2GetEKCert:     h.handleGetEKCertificate,
+		quicwire.SubOpTPM2ImportEKCert:  h.handleImportEKCertificate,
+		quicwire.SubOpTPM2GetSRK:        h.handleGetSRK,
+		quicwire.SubOpTPM2CreateSRK:     h.handleCreateSRK,
+		quicwire.SubOpTPM2DeleteSRK:     h.handleDeleteSRK,
+		quicwire.SubOpTPM2GetIAK:        h.handleGetIAK,
+		quicwire.SubOpTPM2CreateIAK:     h.handleCreateIAK,
+		quicwire.SubOpTPM2DeleteIAK:     h.handleDeleteIAK,
+		quicwire.SubOpTPM2Quote:         h.handleQuote,
+		quicwire.SubOpTPM2VerifyQuote:   h.handleVerifyQuote,
+		quicwire.SubOpTPM2ReadPCRs:      h.handleReadPCRs,
+		quicwire.SubOpTPM2ExtendPCR:     h.handleExtendPCR,
+		quicwire.SubOpTPM2EventLog:      h.handleEventLog,
+		quicwire.SubOpTPM2Random:        h.handleRandom,
+		quicwire.SubOpTPM2Seal:          h.handleSeal,
+		quicwire.SubOpTPM2Unseal:        h.handleUnseal,
+		quicwire.SubOpTPM2Capabilities:  h.handleCapabilities,
+		quicwire.SubOpTPM2NVRead:        h.handleNVRead,
+		quicwire.SubOpTPM2NVWrite:       h.handleNVWrite,
+		quicwire.SubOpTPM2NVDelete:      h.handleNVDelete,
+		quicwire.SubOpTPM2NVList:        h.handleNVList,
+		quicwire.SubOpTPM2IDevIDCSR:     h.handleCreateIDevIDCSR,
+		quicwire.SubOpTPM2LDevIDCSR:     h.handleCreateLDevIDCSR,
+		quicwire.SubOpTPM2PlatformAttrs: h.handlePlatformAttributes,
+		quicwire.SubOpTPM2GetIDevID:     h.handleGetIDevID,
+		quicwire.SubOpTPM2MakeCred:      h.handleMakeCredential,
+		quicwire.SubOpTPM2ActivateCred:  h.handleActivateCredential,
 	}
 	return h
 }
@@ -163,20 +126,20 @@ func (h *TPM2Handler) SetTPM2Service(tpm xkmssdk.TrustedPlatformModule) {
 // HandleMessage dispatches a TPM2 category request to the appropriate
 // sub-opcode handler. The first byte of the payload is consumed as the
 // sub-opcode; remaining bytes are forwarded to the handler.
-func (h *TPM2Handler) HandleMessage(ctx context.Context, req *Request) *Response {
+func (h *TPM2Handler) HandleMessage(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{
-			Status:  StatusInvalidRequest,
-			Payload: []byte(ErrNilRequest.Error()),
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
+			Payload: []byte(quicwire.ErrNilRequest.Error()),
 		}
 	}
 
 	if h.tpm == nil {
-		return h.errorResponse(StatusUnavailable, ErrTPM2ServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrTPM2ServiceNotAvailable)
 	}
 
 	if len(req.Payload) == 0 {
-		return h.errorResponse(StatusInvalidRequest, ErrTPM2MissingSubOpcode)
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2MissingSubOpcode)
 	}
 
 	subOpcode := req.Payload[0]
@@ -184,7 +147,7 @@ func (h *TPM2Handler) HandleMessage(ctx context.Context, req *Request) *Response
 
 	handler, ok := h.handlers[subOpcode]
 	if !ok {
-		return h.errorResponse(StatusNotImplemented,
+		return h.errorResponse(quicwire.StatusNotImplemented,
 			ErrTPM2UnknownSubOpcode{SubOpcode: subOpcode})
 	}
 
@@ -470,7 +433,7 @@ type TPM2IDevIDResponse struct {
 // =============================================================================
 
 // handleInfo returns TPM capabilities and information.
-func (h *TPM2Handler) handleInfo(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleInfo(ctx context.Context, payload []byte) *quicwire.Response {
 	info, err := h.tpm.Info()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -505,11 +468,11 @@ func (h *TPM2Handler) handleInfo(ctx context.Context, payload []byte) *Response 
 }
 
 // handleProvision provisions the TPM with required keys.
-func (h *TPM2Handler) handleProvision(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleProvision(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2ProvisionRequest
 	if len(payload) > 0 {
-		if err := DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 		}
 	}
 
@@ -517,7 +480,7 @@ func (h *TPM2Handler) handleProvision(ctx context.Context, payload []byte) *Resp
 	if req.OwnerPassword != "" {
 		held, err := xkmssdk.NewPasswordFromString(req.OwnerPassword)
 		if err != nil {
-			return h.errorResponse(StatusInternalError, err)
+			return h.errorResponse(quicwire.StatusInternalError, err)
 		}
 		ownerPwd = held
 	}
@@ -534,11 +497,11 @@ func (h *TPM2Handler) handleProvision(ctx context.Context, payload []byte) *Resp
 }
 
 // handleClear clears the TPM (requires owner authorization).
-func (h *TPM2Handler) handleClear(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleClear(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2ClearRequest
 	if len(payload) > 0 {
-		if err := DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 		}
 	}
 
@@ -559,7 +522,7 @@ func (h *TPM2Handler) handleClear(ctx context.Context, payload []byte) *Response
 }
 
 // handleGetEK retrieves the Endorsement Key public key.
-func (h *TPM2Handler) handleGetEK(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleGetEK(ctx context.Context, payload []byte) *quicwire.Response {
 	ekAttrs, err := h.tpm.EKAttributes()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -576,11 +539,11 @@ func (h *TPM2Handler) handleGetEK(ctx context.Context, payload []byte) *Response
 // handleMakeCredential wraps TPM2_MakeCredential. With both EKCert and
 // IAKPub present the verifier path (MakeCredentialWithExternalEK) is used;
 // otherwise the local TPM EK is used with the supplied AKName.
-func (h *TPM2Handler) handleMakeCredential(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleMakeCredential(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2MakeCredentialRequest
 	if len(payload) > 0 {
-		if err := DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 		}
 	}
 
@@ -591,7 +554,7 @@ func (h *TPM2Handler) handleMakeCredential(ctx context.Context, payload []byte) 
 	if len(req.EKCert) > 0 && len(req.IAKPub) > 0 {
 		ekCert, parseErr := x509.ParseCertificate(req.EKCert)
 		if parseErr != nil {
-			return h.errorResponse(StatusInvalidArgument, ErrTPM2DecodingFailed{Cause: parseErr})
+			return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2DecodingFailed{Cause: parseErr})
 		}
 		credentialBlob, encryptedSecret, secret, err = h.tpm.MakeCredentialWithExternalEK(ekCert, req.IAKPub, req.Secret)
 	} else {
@@ -610,17 +573,17 @@ func (h *TPM2Handler) handleMakeCredential(ctx context.Context, payload []byte) 
 }
 
 // handleActivateCredential wraps TPM2_ActivateCredential.
-func (h *TPM2Handler) handleActivateCredential(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleActivateCredential(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2ActivateCredentialRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
 
 	if len(req.CredentialBlob) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrTPM2MissingCredentialBlob)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MissingCredentialBlob)
 	}
 	if len(req.EncryptedSecret) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrTPM2MissingEncryptedSecret)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MissingEncryptedSecret)
 	}
 
 	secret, err := h.tpm.ActivateCredential(req.CredentialBlob, req.EncryptedSecret)
@@ -635,7 +598,7 @@ func (h *TPM2Handler) handleActivateCredential(ctx context.Context, payload []by
 }
 
 // handleCreateEK creates an Endorsement Key.
-func (h *TPM2Handler) handleCreateEK(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleCreateEK(ctx context.Context, payload []byte) *quicwire.Response {
 	ekAttrs, err := h.tpm.EKAttributes()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -653,7 +616,7 @@ func (h *TPM2Handler) handleCreateEK(ctx context.Context, payload []byte) *Respo
 }
 
 // handleDeleteEK deletes (flushes) the Endorsement Key handle.
-func (h *TPM2Handler) handleDeleteEK(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleDeleteEK(ctx context.Context, payload []byte) *quicwire.Response {
 	ekAttrs, err := h.tpm.EKAttributes()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -669,7 +632,7 @@ func (h *TPM2Handler) handleDeleteEK(ctx context.Context, payload []byte) *Respo
 }
 
 // handleGetEKCertificate retrieves the EK certificate.
-func (h *TPM2Handler) handleGetEKCertificate(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleGetEKCertificate(ctx context.Context, payload []byte) *quicwire.Response {
 	cert, err := h.tpm.EKCertificate()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -682,14 +645,14 @@ func (h *TPM2Handler) handleGetEKCertificate(ctx context.Context, payload []byte
 }
 
 // handleImportEKCertificate imports an EK certificate into the TPM.
-func (h *TPM2Handler) handleImportEKCertificate(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleImportEKCertificate(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2ImportEKCertRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
 
 	if len(req.Certificate) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrTPM2MissingCertificate)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MissingCertificate)
 	}
 
 	if err := h.tpm.ProvisionEKCert(nil, req.Certificate); err != nil {
@@ -704,15 +667,15 @@ func (h *TPM2Handler) handleImportEKCertificate(ctx context.Context, payload []b
 }
 
 // handleGetSRK retrieves the Storage Root Key.
-func (h *TPM2Handler) handleGetSRK(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleGetSRK(ctx context.Context, payload []byte) *quicwire.Response {
 	// The payload names which storage root key is wanted. It was
 	// previously discarded, so a request for the PlatformSRK was
 	// answered with the SSRK and a success status (#475). An absent or
 	// empty payload still means the SSRK, as it always did.
 	var req TPM2GetSRKRequest
 	if len(payload) > 0 {
-		if err := DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(StatusInvalidRequest, ErrTPM2OperationFailed{
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2OperationFailed{
 				Operation: "GetSRK",
 				Cause:     err,
 			})
@@ -722,7 +685,7 @@ func (h *TPM2Handler) handleGetSRK(ctx context.Context, payload []byte) *Respons
 	srkAttrs, err := tpmsrk.Resolve(h.tpm, req.Handle)
 	if err != nil {
 		if tpmsrk.IsUnknownHandle(err) {
-			return h.errorResponse(StatusNotFound, ErrTPM2OperationFailed{
+			return h.errorResponse(quicwire.StatusNotFound, ErrTPM2OperationFailed{
 				Operation: "GetSRK",
 				Cause:     err,
 			})
@@ -739,7 +702,7 @@ func (h *TPM2Handler) handleGetSRK(ctx context.Context, payload []byte) *Respons
 }
 
 // handleCreateSRK creates a Storage Root Key.
-func (h *TPM2Handler) handleCreateSRK(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleCreateSRK(ctx context.Context, payload []byte) *quicwire.Response {
 	srkAttrs, err := h.tpm.SSRKAttributes()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -757,7 +720,7 @@ func (h *TPM2Handler) handleCreateSRK(ctx context.Context, payload []byte) *Resp
 }
 
 // handleDeleteSRK deletes (flushes) the Storage Root Key handle.
-func (h *TPM2Handler) handleDeleteSRK(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleDeleteSRK(ctx context.Context, payload []byte) *quicwire.Response {
 	srkAttrs, err := h.tpm.SSRKAttributes()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -773,7 +736,7 @@ func (h *TPM2Handler) handleDeleteSRK(ctx context.Context, payload []byte) *Resp
 }
 
 // handleGetIAK retrieves the Initial Attestation Key.
-func (h *TPM2Handler) handleGetIAK(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleGetIAK(ctx context.Context, payload []byte) *quicwire.Response {
 	iakAttrs, err := h.tpm.IAKAttributes()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -784,7 +747,7 @@ func (h *TPM2Handler) handleGetIAK(ctx context.Context, payload []byte) *Respons
 		return h.tpmErrorResponse(iakErr)
 	}
 	if pubKey == nil {
-		return h.errorResponse(StatusNotFound, ErrTPM2OperationFailed{
+		return h.errorResponse(quicwire.StatusNotFound, ErrTPM2OperationFailed{
 			Operation: "GetIAK",
 			Cause:     errors.New("IAK not found"),
 		})
@@ -799,7 +762,7 @@ func (h *TPM2Handler) handleGetIAK(ctx context.Context, payload []byte) *Respons
 }
 
 // handleCreateIAK creates an Initial Attestation Key.
-func (h *TPM2Handler) handleCreateIAK(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleCreateIAK(ctx context.Context, payload []byte) *quicwire.Response {
 	ekAttrs, err := h.tpm.EKAttributes()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -818,7 +781,7 @@ func (h *TPM2Handler) handleCreateIAK(ctx context.Context, payload []byte) *Resp
 }
 
 // handleDeleteIAK deletes (flushes) the Initial Attestation Key handle.
-func (h *TPM2Handler) handleDeleteIAK(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleDeleteIAK(ctx context.Context, payload []byte) *quicwire.Response {
 	iakAttrs, err := h.tpm.IAKAttributes()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -834,10 +797,10 @@ func (h *TPM2Handler) handleDeleteIAK(ctx context.Context, payload []byte) *Resp
 }
 
 // handleQuote creates a TPM quote over selected PCRs.
-func (h *TPM2Handler) handleQuote(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleQuote(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2QuoteRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
 
 	pcrs := make([]uint, len(req.PCRIndices))
@@ -865,16 +828,16 @@ func (h *TPM2Handler) handleQuote(ctx context.Context, payload []byte) *Response
 // the canonical pkg/attestation/vm helpers: the anti-replay nonce
 // (TPMS_ATTEST extraData) must match, and the signature over the quote
 // must validate against the AK public key.
-func (h *TPM2Handler) handleVerifyQuote(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleVerifyQuote(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2VerifyQuoteRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
 	if len(req.Quote) == 0 {
-		return h.errorResponse(StatusInvalidArgument, errors.New("quote is required"))
+		return h.errorResponse(quicwire.StatusInvalidArgument, errors.New("quote is required"))
 	}
 	if len(req.Signature) == 0 {
-		return h.errorResponse(StatusInvalidArgument, errors.New("signature is required"))
+		return h.errorResponse(quicwire.StatusInvalidArgument, errors.New("signature is required"))
 	}
 
 	akPublic, err := h.resolveVerifyAKPublic(req.AKPublic)
@@ -933,11 +896,11 @@ func (h *TPM2Handler) resolveVerifyAKPublic(akPublic []byte) ([]byte, error) {
 }
 
 // handleReadPCRs reads PCR values from the TPM.
-func (h *TPM2Handler) handleReadPCRs(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleReadPCRs(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2ReadPCRsRequest
 	if len(payload) > 0 {
-		if err := DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 		}
 	}
 
@@ -977,18 +940,18 @@ func (h *TPM2Handler) handleReadPCRs(ctx context.Context, payload []byte) *Respo
 }
 
 // handleExtendPCR extends a PCR with the given data.
-func (h *TPM2Handler) handleExtendPCR(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleExtendPCR(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2ExtendPCRRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
 
 	if req.PCRIndex < 0 || req.PCRIndex > 23 {
-		return h.errorResponse(StatusInvalidArgument, ErrTPM2InvalidPCRIndex)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2InvalidPCRIndex)
 	}
 
 	if len(req.Data) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrTPM2MissingData)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MissingData)
 	}
 
 	hashAlg := req.HashAlg
@@ -1008,7 +971,7 @@ func (h *TPM2Handler) handleExtendPCR(ctx context.Context, payload []byte) *Resp
 }
 
 // handleEventLog retrieves the TPM event log.
-func (h *TPM2Handler) handleEventLog(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleEventLog(ctx context.Context, payload []byte) *quicwire.Response {
 	rawLog, err := h.tpm.EventLog()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -1029,11 +992,11 @@ func (h *TPM2Handler) handleEventLog(ctx context.Context, payload []byte) *Respo
 }
 
 // handleRandom returns random bytes from the TPM.
-func (h *TPM2Handler) handleRandom(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleRandom(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2RandomRequest
 	if len(payload) > 0 {
-		if err := DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 		}
 	}
 
@@ -1042,7 +1005,7 @@ func (h *TPM2Handler) handleRandom(ctx context.Context, payload []byte) *Respons
 		numBytes = 32
 	}
 	if numBytes > 1024 {
-		return h.errorResponse(StatusInvalidArgument, ErrTPM2InvalidNumBytes)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2InvalidNumBytes)
 	}
 
 	random, err := h.tpm.RandomBytes(int(numBytes))
@@ -1057,14 +1020,14 @@ func (h *TPM2Handler) handleRandom(ctx context.Context, payload []byte) *Respons
 }
 
 // handleSeal seals data to the TPM.
-func (h *TPM2Handler) handleSeal(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleSeal(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2SealRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
 
 	if len(req.Data) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrTPM2MissingData)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MissingData)
 	}
 
 	sealed, err := h.tpm.Seal(ctx, req.Data, nil)
@@ -1079,14 +1042,14 @@ func (h *TPM2Handler) handleSeal(ctx context.Context, payload []byte) *Response 
 }
 
 // handleUnseal unseals data from the TPM by common name.
-func (h *TPM2Handler) handleUnseal(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleUnseal(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2UnsealRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
 
 	if req.CN == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrTPM2MissingCN)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MissingCN)
 	}
 
 	sealed := &xkmssdk.SealedData{
@@ -1105,7 +1068,7 @@ func (h *TPM2Handler) handleUnseal(ctx context.Context, payload []byte) *Respons
 }
 
 // handleCapabilities returns TPM supported algorithms, commands, and ECC curves.
-func (h *TPM2Handler) handleCapabilities(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleCapabilities(ctx context.Context, payload []byte) *quicwire.Response {
 	algorithms, algErr := h.tpm.SupportedAlgorithms()
 	if algErr != nil {
 		return h.tpmErrorResponse(algErr)
@@ -1134,17 +1097,17 @@ func (h *TPM2Handler) handleCapabilities(ctx context.Context, payload []byte) *R
 // TPM2_NVRead command sequence (and auth-hierarchy dispatch) as the
 // gRPC TPMService.ReadNVRAM RPC. Device-agnostic: works identically for
 // a hardware TPM and swtpm through the module transport.
-func (h *TPM2Handler) handleNVRead(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleNVRead(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2NVReadRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
 	if req.Index == 0 {
-		return h.errorResponse(StatusInvalidArgument, errors.New("index is required"))
+		return h.errorResponse(quicwire.StatusInvalidArgument, errors.New("index is required"))
 	}
 	tr := h.tpm.Transport()
 	if tr == nil {
-		return h.errorResponse(StatusUnavailable, errors.New("TPM transport not available"))
+		return h.errorResponse(quicwire.StatusUnavailable, errors.New("TPM transport not available"))
 	}
 
 	data, err := tpmnv.Read(tr, req.Index, req.Size, req.Offset, passwordBytes(req.Password))
@@ -1161,20 +1124,20 @@ func (h *TPM2Handler) handleNVRead(ctx context.Context, payload []byte) *Respons
 
 // handleNVWrite writes data to a TPM NVRAM index, delegating to the
 // shared tpmnv package (same TPM2_NVWrite sequence as gRPC WriteNVRAM).
-func (h *TPM2Handler) handleNVWrite(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleNVWrite(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2NVWriteRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
 	if req.Index == 0 {
-		return h.errorResponse(StatusInvalidArgument, errors.New("index is required"))
+		return h.errorResponse(quicwire.StatusInvalidArgument, errors.New("index is required"))
 	}
 	if len(req.Data) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrTPM2MissingData)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrTPM2MissingData)
 	}
 	tr := h.tpm.Transport()
 	if tr == nil {
-		return h.errorResponse(StatusUnavailable, errors.New("TPM transport not available"))
+		return h.errorResponse(quicwire.StatusUnavailable, errors.New("TPM transport not available"))
 	}
 
 	if err := tpmnv.Write(tr, req.Index, req.Data, req.Offset, passwordBytes(req.Password)); err != nil {
@@ -1190,17 +1153,17 @@ func (h *TPM2Handler) handleNVWrite(ctx context.Context, payload []byte) *Respon
 
 // handleNVDelete removes a TPM NVRAM index (TPM2_NVUndefineSpace),
 // delegating to the shared tpmnv package.
-func (h *TPM2Handler) handleNVDelete(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleNVDelete(ctx context.Context, payload []byte) *quicwire.Response {
 	var req TPM2NVDeleteRequest
-	if err := DecodePayload(payload, &req); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
 	}
 	if req.Index == 0 {
-		return h.errorResponse(StatusInvalidArgument, errors.New("index is required"))
+		return h.errorResponse(quicwire.StatusInvalidArgument, errors.New("index is required"))
 	}
 	tr := h.tpm.Transport()
 	if tr == nil {
-		return h.errorResponse(StatusUnavailable, errors.New("TPM transport not available"))
+		return h.errorResponse(quicwire.StatusUnavailable, errors.New("TPM transport not available"))
 	}
 
 	if err := tpmnv.Undefine(tr, req.Index, passwordBytes(req.ParentPassword)); err != nil {
@@ -1218,7 +1181,7 @@ func (h *TPM2Handler) handleNVDelete(ctx context.Context, payload []byte) *Respo
 // module's FixedProperties() view (which walks TPM_CAP_HANDLES at
 // 0x01000000), giving the same NVIndex inventory the gRPC Info RPC
 // surfaces — no separate raw command construction required.
-func (h *TPM2Handler) handleNVList(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleNVList(ctx context.Context, payload []byte) *quicwire.Response {
 	props, err := h.tpm.FixedProperties()
 	if err != nil {
 		return h.tpmErrorResponse(ErrTPM2OperationFailed{Operation: "NVList", Cause: err})
@@ -1254,7 +1217,7 @@ func passwordBytes(s string) []byte {
 }
 
 // handleCreateIDevIDCSR creates an IDevID Certificate Signing Request.
-func (h *TPM2Handler) handleCreateIDevIDCSR(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleCreateIDevIDCSR(ctx context.Context, payload []byte) *quicwire.Response {
 	ekCert, err := h.tpm.EKCertificate()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -1276,9 +1239,9 @@ func (h *TPM2Handler) handleCreateIDevIDCSR(ctx context.Context, payload []byte)
 	}
 
 	// Encode the CSR structure to bytes
-	csrBytes, err := EncodePayload(csr)
+	csrBytes, err := quicwire.EncodePayload(csr)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrTPM2EncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrTPM2EncodingFailed{Cause: err})
 	}
 
 	return h.encodeResponse(&TPM2CSRResponse{
@@ -1288,13 +1251,13 @@ func (h *TPM2Handler) handleCreateIDevIDCSR(ctx context.Context, payload []byte)
 }
 
 // handleCreateLDevIDCSR creates an LDevID Certificate Signing Request.
-func (h *TPM2Handler) handleCreateLDevIDCSR(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleCreateLDevIDCSR(ctx context.Context, payload []byte) *quicwire.Response {
 	// LDevID uses the same CSR flow as IDevID but for local device identity
 	return h.handleCreateIDevIDCSR(ctx, payload)
 }
 
 // handlePlatformAttributes returns platform-level TPM attributes.
-func (h *TPM2Handler) handlePlatformAttributes(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handlePlatformAttributes(ctx context.Context, payload []byte) *quicwire.Response {
 	device := h.tpm.Device()
 
 	isFIPS, fipsErr := h.tpm.IsFIPS140_2()
@@ -1333,7 +1296,7 @@ func (h *TPM2Handler) handlePlatformAttributes(ctx context.Context, payload []by
 }
 
 // handleGetIDevID retrieves the IDevID public key.
-func (h *TPM2Handler) handleGetIDevID(ctx context.Context, payload []byte) *Response {
+func (h *TPM2Handler) handleGetIDevID(ctx context.Context, payload []byte) *quicwire.Response {
 	idevidAttrs, err := h.tpm.IDevIDAttributes()
 	if err != nil {
 		return h.tpmErrorResponse(err)
@@ -1344,7 +1307,7 @@ func (h *TPM2Handler) handleGetIDevID(ctx context.Context, payload []byte) *Resp
 		return h.tpmErrorResponse(idevidErr)
 	}
 	if pubKey == nil {
-		return h.errorResponse(StatusNotFound, ErrTPM2OperationFailed{
+		return h.errorResponse(quicwire.StatusNotFound, ErrTPM2OperationFailed{
 			Operation: "GetIDevID",
 			Cause:     errors.New("IDevID not found"),
 		})
@@ -1363,45 +1326,45 @@ func (h *TPM2Handler) handleGetIDevID(ctx context.Context, payload []byte) *Resp
 // =============================================================================
 
 // encodeResponse encodes a response struct and returns a QUIC Response.
-func (h *TPM2Handler) encodeResponse(resp interface{}) *Response {
-	encoded, err := EncodePayload(resp)
+func (h *TPM2Handler) encodeResponse(resp interface{}) *quicwire.Response {
+	encoded, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrTPM2EncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrTPM2EncodingFailed{Cause: err})
 	}
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: encoded,
 	}
 }
 
 // errorResponse creates an error response with the given status and error.
-func (h *TPM2Handler) errorResponse(status byte, err error) *Response {
-	return &Response{
+func (h *TPM2Handler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
 }
 
 // tpmErrorResponse maps TPM errors to appropriate QUIC status codes.
-func (h *TPM2Handler) tpmErrorResponse(err error) *Response {
+func (h *TPM2Handler) tpmErrorResponse(err error) *quicwire.Response {
 	errMsg := err.Error()
 
 	var status byte
 	switch {
 	case containsAnyTPM(errMsg, "not found", "does not exist", "no such"):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case containsAnyTPM(errMsg, "already exists", "duplicate"):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case containsAnyTPM(errMsg, "invalid", "required", "must be", "cannot be"):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case containsAnyTPM(errMsg, "permission", "denied", "unauthorized", "forbidden", "authorization"):
-		status = StatusPermissionDenied
+		status = quicwire.StatusPermissionDenied
 	case containsAnyTPM(errMsg, "not implemented", "unimplemented", "not supported"):
-		status = StatusNotImplemented
+		status = quicwire.StatusNotImplemented
 	case containsAnyTPM(errMsg, "unavailable", "not available"):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	default:
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	}
 
 	return h.errorResponse(status, err)

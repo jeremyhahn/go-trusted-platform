@@ -455,6 +455,26 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// MCPServesHTTP reports whether the MCP server is enabled on its HTTP
+// transport. That transport binds a network listener and serves TLS 1.3
+// only, so it needs the daemon TLS identity just as REST and gRPC do
+// (#844); stdio does not. A nil MCPConfig means the default, which is HTTP.
+func (c *Config) MCPServesHTTP() bool {
+	if !c.EnableMCP {
+		return false
+	}
+	return c.effectiveMCPConfig().Transport == "http"
+}
+
+// effectiveMCPConfig returns the MCP configuration the daemon runs with:
+// MCPConfig when set, otherwise DefaultMCPConfig.
+func (c *Config) effectiveMCPConfig() *MCPConfig {
+	if c.MCPConfig == nil {
+		return DefaultMCPConfig()
+	}
+	return c.MCPConfig
+}
+
 // validateMCPConfig validates MCP-specific configuration
 func (c *Config) validateMCPConfig() error {
 	if c.MCPConfig == nil {

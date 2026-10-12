@@ -44,19 +44,21 @@ client, err := platform.NewClient(ctx, platform.WithGRPCAddr("platform:10443"))
 if err != nil {
     return err
 }
-proxy := proxysvc.NewClientFromGRPC(client.Proxy())
+proxyClient := proxysvc.NewClientFromGRPC(client.Proxy())
 
-pool, version, err := proxy.CreatePool(ctx, &platformv1.ProxyPool{
+pool, version, err := proxyClient.CreatePool(ctx, &platformv1.ProxyPool{
     Id: "web-pool",
     Backends: []*platformv1.ProxyBackend{{Url: "https://10.0.0.10:8443", Weight: 2}},
 })
 ```
 
-gatewayd sync loop:
+gatewayd sync loop (`pkg/sdn/gateway/proxysvc`). The wire-to-engine
+converters live with the engine types in `pkg/proxy` (`proto.go`), not in
+the SDK, so the SDK module never imports the engine:
 
 ```go
-cfg, err := proxy.Config(ctx) // GetProxyConfig
-routes, pools, version := proxysvc.ConfigFromProto(cfg)
+cfg, err := proxyClient.Config(ctx) // GetProxyConfig
+routes, pools, version := proxy.ConfigFromProto(cfg) // pkg/proxy
 // add gatewayd-local listeners, then proxy.Config{...}.Validate() + engine reload
 ```
 

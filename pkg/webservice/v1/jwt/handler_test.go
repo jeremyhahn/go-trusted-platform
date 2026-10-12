@@ -36,6 +36,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login/logintest"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -140,7 +141,7 @@ func TestHandlerGenerateToken_NoLoginClientFailsClosed(t *testing.T) {
 	// closed: the locked architecture forbids minting an unverified JWT.
 	assert.Equal(t, http.StatusForbidden, w.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	assert.Nil(t, err)
 	assert.False(t, resp.Success)
@@ -181,7 +182,7 @@ func TestHandlerGenerateToken_IgnoresTheRequestBody(t *testing.T) {
 	// Fail closed on the missing driver, not on the body.
 	assert.Equal(t, http.StatusForbidden, w.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	assert.Nil(t, err)
 	assert.False(t, resp.Success)
@@ -226,7 +227,7 @@ func TestHandlerRefreshToken_Success(t *testing.T) {
 	// Check response
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	assert.Nil(t, err)
 	assert.True(t, resp.Success)
@@ -1052,7 +1053,7 @@ func completeLogin(t *testing.T, driver *loginpkg.Driver) string {
 	driver.Finish(w, req, quicbaas.FactorTypeFIDO2)
 	require.Equal(t, http.StatusOK, w.Code, "login must succeed: %s", w.Body.String())
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.True(t, resp.Success)
 
@@ -1249,7 +1250,7 @@ func TestHandlerVerify_UnauthenticatedRequestIsToldSo(t *testing.T) {
 			assert.False(t, reached, "the protected handler must not run")
 			assert.Equal(t, http.StatusUnauthorized, w.Code)
 
-			var resp response.WebServiceResponse
+			var resp restwire.WebServiceResponse
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 			assert.False(t, resp.Success)
 			assert.NotEmpty(t, resp.Error, "the client must be told why")

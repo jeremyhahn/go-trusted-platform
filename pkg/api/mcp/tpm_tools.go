@@ -15,6 +15,8 @@ package mcp
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -138,7 +140,7 @@ var ErrTPMInvalidBase64 = &TPMError{
 // registerTPMTools registers physical TPM MCP tools.
 func (r *ToolRegistry) registerTPMTools() {
 	// TPM Info
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_info",
 		Description: "Get TPM device information including manufacturer, firmware version, and capabilities",
 		InputSchema: map[string]interface{}{
@@ -148,7 +150,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// TPM Provision
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_provision",
 		Description: "Provision the TPM with owner authorization and create required keys (EK, SRK, IAK)",
 		InputSchema: map[string]interface{}{
@@ -163,7 +165,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// TPM Clear
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_clear",
 		Description: "Clear the TPM, removing all keys and resetting owner authorization",
 		InputSchema: map[string]interface{}{
@@ -178,7 +180,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Get EK
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_ek",
 		Description: "Get the Endorsement Key (EK) public key and handle",
 		InputSchema: map[string]interface{}{
@@ -188,7 +190,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Get EK Certificate
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_ek_cert",
 		Description: "Get the Endorsement Key (EK) certificate in DER format (base64-encoded)",
 		InputSchema: map[string]interface{}{
@@ -198,7 +200,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Import EK Certificate
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_ek_import_cert",
 		Description: "Import an EK certificate into the TPM NV storage",
 		InputSchema: map[string]interface{}{
@@ -214,7 +216,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Create EK
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_ek_create",
 		Description: "Create an Endorsement Key (EK) using the platform's configured algorithm",
 		InputSchema: map[string]interface{}{
@@ -224,7 +226,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Delete EK
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_ek_delete",
 		Description: "Flush the Endorsement Key (EK) handle from the TPM",
 		InputSchema: map[string]interface{}{
@@ -234,7 +236,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Get SRK
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_srk",
 		Description: "Get a Storage Root Key (SRK) public key and handle. Omit handle for the storage-hierarchy SSRK, or pass 0x81000002 for the platform-hierarchy PlatformSRK.",
 		InputSchema: map[string]interface{}{
@@ -249,7 +251,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Create SRK
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_srk_create",
 		Description: "Create a Storage Root Key (SRK) using the platform's configured algorithm",
 		InputSchema: map[string]interface{}{
@@ -259,7 +261,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Delete SRK
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_srk_delete",
 		Description: "Flush the Storage Root Key (SRK) handle from the TPM",
 		InputSchema: map[string]interface{}{
@@ -269,7 +271,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Get IAK
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_iak",
 		Description: "Get the Initial Attestation Key (IAK) public key and handle",
 		InputSchema: map[string]interface{}{
@@ -279,7 +281,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Create IAK
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_iak_create",
 		Description: "Create an Initial Attestation Key (IAK) under the Endorsement Key hierarchy",
 		InputSchema: map[string]interface{}{
@@ -289,7 +291,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Delete IAK
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_iak_delete",
 		Description: "Flush the Initial Attestation Key (IAK) handle from the TPM",
 		InputSchema: map[string]interface{}{
@@ -299,7 +301,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Quote
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_quote",
 		Description: "Generate a TPM quote for remote attestation, signed by the attestation key",
 		InputSchema: map[string]interface{}{
@@ -320,7 +322,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Verify Quote
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_verify_quote",
 		Description: "Verify a TPM quote against the attestation key and expected PCR values",
 		InputSchema: map[string]interface{}{
@@ -344,7 +346,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Read PCRs
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_pcrs",
 		Description: "Read Platform Configuration Register (PCR) values from the TPM",
 		InputSchema: map[string]interface{}{
@@ -360,7 +362,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Extend PCR
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_pcr_extend",
 		Description: "Extend a PCR with measurement data (hash is computed by the TPM)",
 		InputSchema: map[string]interface{}{
@@ -380,7 +382,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Event Log
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_eventlog",
 		Description: "Retrieve the TPM event log (TCG PC Client format)",
 		InputSchema: map[string]interface{}{
@@ -390,7 +392,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Capabilities
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_capabilities",
 		Description: "Get TPM fixed properties and capabilities (manufacturer, algorithms, key sizes)",
 		InputSchema: map[string]interface{}{
@@ -400,7 +402,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Random
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_random",
 		Description: "Generate cryptographically secure random bytes from the TPM hardware RNG",
 		InputSchema: map[string]interface{}{
@@ -416,7 +418,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Seal
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_seal",
 		Description: "Seal data to the TPM, optionally binding to PCR state",
 		InputSchema: map[string]interface{}{
@@ -437,7 +439,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Unseal
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_unseal",
 		Description: "Unseal data from the TPM (requires matching PCR state if sealed with PCR policy)",
 		InputSchema: map[string]interface{}{
@@ -453,7 +455,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Certify
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_certify",
 		Description: "Certify a TPM key using the attestation key, proving it resides in the TPM",
 		InputSchema: map[string]interface{}{
@@ -469,7 +471,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// NV List
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_nv_list",
 		Description: "List all defined NVRAM indices in the TPM",
 		InputSchema: map[string]interface{}{
@@ -479,7 +481,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// NV Read
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_nv_read",
 		Description: "Read data from a TPM NVRAM index",
 		InputSchema: map[string]interface{}{
@@ -499,7 +501,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// NV Write
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_nv_write",
 		Description: "Write data to a TPM NVRAM index",
 		InputSchema: map[string]interface{}{
@@ -519,7 +521,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// NV Delete
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_nv_delete",
 		Description: "Undefine (delete) a TPM NVRAM index",
 		InputSchema: map[string]interface{}{
@@ -535,7 +537,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// Platform Attributes
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_platform",
 		Description: "Get platform-level TPM attributes including configuration, simulator status, and key hierarchy",
 		InputSchema: map[string]interface{}{
@@ -544,7 +546,7 @@ func (r *ToolRegistry) registerTPMTools() {
 		},
 	})
 	// MakeCredential
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_make_credential",
 		Description: "Create a TPM2_MakeCredential challenge. Provide ak_name (base64) for the local-EK path, or ek_cert+iak_pub (base64) for the verifier path. secret (base64) is optional.",
 		InputSchema: map[string]interface{}{
@@ -571,7 +573,7 @@ func (r *ToolRegistry) registerTPMTools() {
 	})
 
 	// ActivateCredential
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_tpm_activate_credential",
 		Description: "Activate a TPM2_MakeCredential challenge and recover the wrapped secret",
 		InputSchema: map[string]interface{}{

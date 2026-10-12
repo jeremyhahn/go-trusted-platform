@@ -17,12 +17,13 @@ import (
 	"context"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // handleVMOperation routes VM opcodes to the VM handler.
 // This handles VM operations (0x60-0x6A range and extended codes).
 //
-// The compute extended category opcode (quic.OpVMExtendedCategory, 0x69)
+// The compute extended category opcode (quicwire.OpVMExtendedCategory, 0x69)
 // carries a sub-opcode in payload[0]. Container sub-opcodes (create, start,
 // stop, remove, get, list, logs, attest — whose direct opcodes are shadowed
 // by the PXE ranges at the top-level dispatcher) are handled first; every
@@ -35,8 +36,8 @@ import (
 // *ComputeGRPCService (see handleContainerPB); GetContainerLogs (streaming)
 // and OpContainerAttest have no converged pb path and are forwarded to the
 // flat ContainerHandler.
-func (h *QUICServiceHandler) handleVMServiceOperation(ctx context.Context, req *quic.Request) *quic.Response {
-	if req.Opcode == quic.OpVMExtendedCategory && len(req.Payload) > 0 && quic.IsContainerSubOpcode(req.Payload[0]) {
+func (h *QUICServiceHandler) handleVMServiceOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
+	if req.Opcode == quicwire.OpVMExtendedCategory && len(req.Payload) > 0 && quic.IsContainerSubOpcode(req.Payload[0]) {
 		subOpcode := req.Payload[0]
 		body := req.Payload[1:]
 
@@ -45,9 +46,9 @@ func (h *QUICServiceHandler) handleVMServiceOperation(ctx context.Context, req *
 		}
 
 		if h.containerHandler == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"})
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"})
 		}
-		return h.containerHandler.HandleRequest(ctx, &quic.Request{
+		return h.containerHandler.HandleRequest(ctx, &quicwire.Request{
 			Opcode:  subOpcode,
 			Token:   req.Token,
 			Payload: body,
@@ -57,14 +58,14 @@ func (h *QUICServiceHandler) handleVMServiceOperation(ctx context.Context, req *
 	// Operational VM sub-opcodes (metrics, disk hotplug/unplug/resize, migrate)
 	// converge on the platform.v1 pb wire contract and delegate to the shared
 	// *ComputeGRPCService, mirroring the container sub-opcode path above.
-	if req.Opcode == quic.OpVMExtendedCategory && len(req.Payload) > 0 && quic.IsVMSubOpcode(req.Payload[0]) {
+	if req.Opcode == quicwire.OpVMExtendedCategory && len(req.Payload) > 0 && quicwire.IsVMSubOpcode(req.Payload[0]) {
 		if resp, handled := h.handleVMPB(ctx, req.Payload[0], req.Payload[1:]); handled {
 			return resp
 		}
 	}
 
 	if h.vmHandler == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"})
 	}
 	return h.vmHandler.HandleRequest(ctx, req)
 }

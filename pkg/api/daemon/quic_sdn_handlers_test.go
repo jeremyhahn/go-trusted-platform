@@ -22,10 +22,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -650,19 +650,19 @@ func TestHandleSDNCreateBridge_Success(t *testing.T) {
 
 	createReq := &platformv1.CreateBridgeRequest{Config: &platformv1.BridgeConfig{Name: "br-test"}}
 
-	payload, err := quic.EncodePayload(createReq)
+	payload, err := quicwire.EncodePayload(createReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNCreateBridge,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNCreateBridge,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNCreateBridge(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var createResp platformv1.CreateBridgeResponse
-	err = quic.DecodePayload(resp.Payload, &createResp)
+	err = quicwire.DecodePayload(resp.Payload, &createResp)
 	require.NoError(t, err)
 	assert.Equal(t, "br-test", createResp.GetBridge().GetConfig().GetName())
 	assert.Contains(t, createResp.GetBridge().GetId(), "mock-uuid-")
@@ -677,16 +677,16 @@ func TestHandleSDNCreateBridge_MissingName(t *testing.T) {
 
 	createReq := &platformv1.CreateBridgeRequest{Config: &platformv1.BridgeConfig{Name: ""}}
 
-	payload, err := quic.EncodePayload(createReq)
+	payload, err := quicwire.EncodePayload(createReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNCreateBridge,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNCreateBridge,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNCreateBridge(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNCreateBridge_ClientError(t *testing.T) {
@@ -698,16 +698,16 @@ func TestHandleSDNCreateBridge_ClientError(t *testing.T) {
 
 	createReq := &platformv1.CreateBridgeRequest{Config: &platformv1.BridgeConfig{Name: "br-test"}}
 
-	payload, err := quic.EncodePayload(createReq)
+	payload, err := quicwire.EncodePayload(createReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNCreateBridge,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNCreateBridge,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNCreateBridge(ctx, req)
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 func TestHandleSDNCreateBridge_DecodeError(t *testing.T) {
@@ -717,13 +717,13 @@ func TestHandleSDNCreateBridge_DecodeError(t *testing.T) {
 	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNCreateBridge,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNCreateBridge,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
 	resp := handler.handleSDNCreateBridge(ctx, req)
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 func TestHandleSDNDeleteBridge_Success(t *testing.T) {
@@ -736,19 +736,19 @@ func TestHandleSDNDeleteBridge_Success(t *testing.T) {
 
 	deleteReq := &platformv1.DeleteBridgeRequest{Id: "br-test"}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeleteBridge,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeleteBridge,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNDeleteBridge(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var deleteResp platformv1.DeleteBridgeResponse
-	err = quic.DecodePayload(resp.Payload, &deleteResp)
+	err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 	require.NoError(t, err)
 	assert.True(t, deleteResp.GetStatus().GetSuccess())
 }
@@ -762,16 +762,16 @@ func TestHandleSDNDeleteBridge_MissingName(t *testing.T) {
 
 	deleteReq := &platformv1.DeleteBridgeRequest{Id: ""}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeleteBridge,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeleteBridge,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNDeleteBridge(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNDeleteBridge_ClientError(t *testing.T) {
@@ -783,16 +783,16 @@ func TestHandleSDNDeleteBridge_ClientError(t *testing.T) {
 
 	deleteReq := &platformv1.DeleteBridgeRequest{Id: "br-test"}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeleteBridge,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeleteBridge,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNDeleteBridge(ctx, req)
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 func TestHandleSDNGetBridge_Success(t *testing.T) {
@@ -805,19 +805,19 @@ func TestHandleSDNGetBridge_Success(t *testing.T) {
 
 	getReq := &platformv1.GetBridgeRequest{Id: "br-test"}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetBridge,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetBridge,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetBridge(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp platformv1.GetBridgeResponse
-	err = quic.DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 	require.NotNil(t, getResp.GetBridge())
 	assert.Equal(t, "br-test", getResp.GetBridge().GetConfig().GetName())
@@ -833,16 +833,16 @@ func TestHandleSDNGetBridge_MissingName(t *testing.T) {
 
 	getReq := &platformv1.GetBridgeRequest{Id: ""}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetBridge,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetBridge,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetBridge(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNGetBridge_NotFound(t *testing.T) {
@@ -854,16 +854,16 @@ func TestHandleSDNGetBridge_NotFound(t *testing.T) {
 
 	getReq := &platformv1.GetBridgeRequest{Id: "nonexistent"}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetBridge,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetBridge,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetBridge(ctx, req)
-	assert.Equal(t, quic.StatusNotFound, resp.Status)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 func TestHandleSDNListBridges_Success(t *testing.T) {
@@ -874,16 +874,16 @@ func TestHandleSDNListBridges_Success(t *testing.T) {
 	handler := NewQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNListBridges,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNListBridges,
 		Payload: []byte{},
 	}
 
 	resp := handler.handleSDNListBridges(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var listResp platformv1.ListBridgesResponse
-	err := quic.DecodePayload(resp.Payload, &listResp)
+	err := quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 	assert.Len(t, listResp.GetBridges(), 2)
 }
@@ -895,13 +895,13 @@ func TestHandleSDNListBridges_Error(t *testing.T) {
 	handler := NewQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNListBridges,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNListBridges,
 		Payload: []byte{},
 	}
 
 	resp := handler.handleSDNListBridges(ctx, req)
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // =============================================================================
@@ -918,19 +918,19 @@ func TestHandleSDNCreatePort_Success(t *testing.T) {
 
 	createReq := &platformv1.AddPortRequest{BridgeId: "br0", Config: &platformv1.PortConfig{Name: "eth0"}}
 
-	payload, err := quic.EncodePayload(createReq)
+	payload, err := quicwire.EncodePayload(createReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNCreatePort,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNCreatePort,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNCreatePort(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var createResp platformv1.AddPortResponse
-	err = quic.DecodePayload(resp.Payload, &createResp)
+	err = quicwire.DecodePayload(resp.Payload, &createResp)
 	require.NoError(t, err)
 	assert.Equal(t, "eth0", createResp.GetPort().GetConfig().GetName())
 }
@@ -944,16 +944,16 @@ func TestHandleSDNCreatePort_MissingBridgeName(t *testing.T) {
 
 	createReq := &platformv1.AddPortRequest{BridgeId: "", Config: &platformv1.PortConfig{Name: "eth0"}}
 
-	payload, err := quic.EncodePayload(createReq)
+	payload, err := quicwire.EncodePayload(createReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNCreatePort,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNCreatePort,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNCreatePort(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNCreatePort_MissingPortName(t *testing.T) {
@@ -965,16 +965,16 @@ func TestHandleSDNCreatePort_MissingPortName(t *testing.T) {
 
 	createReq := &platformv1.AddPortRequest{BridgeId: "br0", Config: &platformv1.PortConfig{Name: ""}}
 
-	payload, err := quic.EncodePayload(createReq)
+	payload, err := quicwire.EncodePayload(createReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNCreatePort,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNCreatePort,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNCreatePort(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNCreatePort_Error(t *testing.T) {
@@ -986,16 +986,16 @@ func TestHandleSDNCreatePort_Error(t *testing.T) {
 
 	createReq := &platformv1.AddPortRequest{BridgeId: "br0", Config: &platformv1.PortConfig{Name: "eth0"}}
 
-	payload, err := quic.EncodePayload(createReq)
+	payload, err := quicwire.EncodePayload(createReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNCreatePort,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNCreatePort,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNCreatePort(ctx, req)
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 func TestHandleSDNDeletePort_Success(t *testing.T) {
@@ -1009,19 +1009,19 @@ func TestHandleSDNDeletePort_Success(t *testing.T) {
 
 	deleteReq := &platformv1.DeletePortRequest{BridgeId: "br0", PortId: "eth0"}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeletePort,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeletePort,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNDeletePort(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var deleteResp platformv1.DeletePortResponse
-	err = quic.DecodePayload(resp.Payload, &deleteResp)
+	err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 	require.NoError(t, err)
 	assert.True(t, deleteResp.GetStatus().GetSuccess())
 }
@@ -1046,16 +1046,16 @@ func TestHandleSDNDeletePort_MissingFields(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			deleteReq := &platformv1.DeletePortRequest{BridgeId: tc.bridgeName, PortId: tc.portName}
 
-			payload, err := quic.EncodePayload(deleteReq)
+			payload, err := quicwire.EncodePayload(deleteReq)
 			require.NoError(t, err)
 
-			req := &quic.Request{
-				Opcode:  quic.OpSDNDeletePort,
+			req := &quicwire.Request{
+				Opcode:  quicwire.OpSDNDeletePort,
 				Payload: payload,
 			}
 
 			resp := handler.handleSDNDeletePort(ctx, req)
-			assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+			assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		})
 	}
 }
@@ -1071,19 +1071,19 @@ func TestHandleSDNGetPort_Success(t *testing.T) {
 
 	getReq := &platformv1.GetPortRequest{PortId: "eth0"}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetPort,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetPort,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetPort(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp platformv1.GetPortResponse
-	err = quic.DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 	require.NotNil(t, getResp.GetPort())
 	assert.Equal(t, "eth0", getResp.GetPort().GetConfig().GetName())
@@ -1098,16 +1098,16 @@ func TestHandleSDNGetPort_MissingName(t *testing.T) {
 
 	getReq := &platformv1.GetPortRequest{PortId: ""}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetPort,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetPort,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetPort(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNListPorts_Success(t *testing.T) {
@@ -1122,19 +1122,19 @@ func TestHandleSDNListPorts_Success(t *testing.T) {
 
 	listReq := &platformv1.ListPortsRequest{BridgeId: "br0"}
 
-	payload, err := quic.EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNListPorts,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNListPorts,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNListPorts(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var listResp platformv1.ListPortsResponse
-	err = quic.DecodePayload(resp.Payload, &listResp)
+	err = quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 	assert.Len(t, listResp.GetPorts(), 2)
 }
@@ -1148,16 +1148,16 @@ func TestHandleSDNListPorts_MissingBridge(t *testing.T) {
 
 	listReq := &platformv1.ListPortsRequest{BridgeId: ""}
 
-	payload, err := quic.EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNListPorts,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNListPorts,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNListPorts(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // =============================================================================
@@ -1177,19 +1177,19 @@ func TestHandleSDNGetPortState_Success(t *testing.T) {
 		PortName: "eth0",
 	}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetPortState,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetPortState,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetPortState(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp SDNGetPortStateResponse
-	err = quic.DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 	assert.Equal(t, "eth0", getResp.PortName)
 	// State field contains the state
@@ -1207,16 +1207,16 @@ func TestHandleSDNGetPortState_MissingPortName(t *testing.T) {
 		PortName: "",
 	}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetPortState,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetPortState,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetPortState(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNSetPortState_Success(t *testing.T) {
@@ -1230,19 +1230,19 @@ func TestHandleSDNSetPortState_Success(t *testing.T) {
 
 	setReq := &platformv1.SetPortStateRequest{PortId: "eth0", AdminState: "up"}
 
-	payload, err := quic.EncodePayload(setReq)
+	payload, err := quicwire.EncodePayload(setReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNSetPortState,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNSetPortState,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNSetPortState(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var setResp platformv1.SetPortStateResponse
-	err = quic.DecodePayload(resp.Payload, &setResp)
+	err = quicwire.DecodePayload(resp.Payload, &setResp)
 	require.NoError(t, err)
 	assert.True(t, setResp.GetStatus().GetSuccess())
 }
@@ -1260,17 +1260,17 @@ func TestHandleSDNSetPortState_AnyStateWithoutPolicyEngine(t *testing.T) {
 
 	setReq := &platformv1.SetPortStateRequest{PortId: "eth0", AdminState: "any_state_value"}
 
-	payload, err := quic.EncodePayload(setReq)
+	payload, err := quicwire.EncodePayload(setReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNSetPortState,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNSetPortState,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNSetPortState(ctx, req)
 	// SDNService rejects invalid admin_state values
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 func TestHandleSDNSetPortState_MissingPortName(t *testing.T) {
@@ -1282,16 +1282,16 @@ func TestHandleSDNSetPortState_MissingPortName(t *testing.T) {
 
 	setReq := &platformv1.SetPortStateRequest{PortId: "", AdminState: "up"}
 
-	payload, err := quic.EncodePayload(setReq)
+	payload, err := quicwire.EncodePayload(setReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNSetPortState,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNSetPortState,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNSetPortState(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNSetPortState_MissingState(t *testing.T) {
@@ -1303,16 +1303,16 @@ func TestHandleSDNSetPortState_MissingState(t *testing.T) {
 
 	setReq := &platformv1.SetPortStateRequest{PortId: "eth0", AdminState: ""}
 
-	payload, err := quic.EncodePayload(setReq)
+	payload, err := quicwire.EncodePayload(setReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNSetPortState,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNSetPortState,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNSetPortState(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // =============================================================================
@@ -1333,19 +1333,19 @@ func TestHandleSDNSetVLAN_Success(t *testing.T) {
 		VLAN:     100,
 	}
 
-	payload, err := quic.EncodePayload(setReq)
+	payload, err := quicwire.EncodePayload(setReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNSetVLAN,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNSetVLAN,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNSetVLAN(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var setResp SDNSetVLANResponse
-	err = quic.DecodePayload(resp.Payload, &setResp)
+	err = quicwire.DecodePayload(resp.Payload, &setResp)
 	require.NoError(t, err)
 	assert.Equal(t, "eth0", setResp.PortName)
 	assert.Equal(t, uint16(100), setResp.VLAN)
@@ -1364,16 +1364,16 @@ func TestHandleSDNSetVLAN_MissingPortName(t *testing.T) {
 		VLAN:     100,
 	}
 
-	payload, err := quic.EncodePayload(setReq)
+	payload, err := quicwire.EncodePayload(setReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNSetVLAN,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNSetVLAN,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNSetVLAN(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNGetVLAN_Success(t *testing.T) {
@@ -1395,19 +1395,19 @@ func TestHandleSDNGetVLAN_Success(t *testing.T) {
 		PortName: "eth0",
 	}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetVLAN,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetVLAN,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetVLAN(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp SDNGetVLANResponse
-	err = quic.DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 	assert.Equal(t, "eth0", getResp.PortName)
 	assert.Equal(t, uint16(200), getResp.VLAN)
@@ -1424,16 +1424,16 @@ func TestHandleSDNGetVLAN_MissingPortName(t *testing.T) {
 		PortName: "",
 	}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetVLAN,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetVLAN,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetVLAN(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // =============================================================================
@@ -1450,19 +1450,19 @@ func TestHandleSDNAddFlow_Success(t *testing.T) {
 
 	addReq := &platformv1.AddFlowRequest{Config: &platformv1.FlowConfig{BridgeId: "br0", Priority: 100}}
 
-	payload, err := quic.EncodePayload(addReq)
+	payload, err := quicwire.EncodePayload(addReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNAddFlow,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNAddFlow,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNAddFlow(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var addResp platformv1.AddFlowResponse
-	err = quic.DecodePayload(resp.Payload, &addResp)
+	err = quicwire.DecodePayload(resp.Payload, &addResp)
 	require.NoError(t, err)
 	assert.True(t, addResp.GetStatus().GetSuccess())
 }
@@ -1476,16 +1476,16 @@ func TestHandleSDNAddFlow_MissingBridgeName(t *testing.T) {
 
 	addReq := &platformv1.AddFlowRequest{Config: &platformv1.FlowConfig{BridgeId: ""}}
 
-	payload, err := quic.EncodePayload(addReq)
+	payload, err := quicwire.EncodePayload(addReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNAddFlow,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNAddFlow,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNAddFlow(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNDeleteFlow_Success(t *testing.T) {
@@ -1498,19 +1498,19 @@ func TestHandleSDNDeleteFlow_Success(t *testing.T) {
 
 	deleteReq := &platformv1.DeleteFlowRequest{BridgeId: "br0", FlowId: "flow-0xa9f1000000000001"}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeleteFlow,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeleteFlow,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNDeleteFlow(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var deleteResp platformv1.DeleteFlowResponse
-	err = quic.DecodePayload(resp.Payload, &deleteResp)
+	err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 	require.NoError(t, err)
 	assert.True(t, deleteResp.GetStatus().GetSuccess())
 }
@@ -1524,16 +1524,16 @@ func TestHandleSDNDeleteFlow_MissingBridgeName(t *testing.T) {
 
 	deleteReq := &platformv1.DeleteFlowRequest{BridgeId: "", FlowId: "in_port=1"}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeleteFlow,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeleteFlow,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNDeleteFlow(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNGetFlow_Success(t *testing.T) {
@@ -1554,19 +1554,19 @@ func TestHandleSDNGetFlow_Success(t *testing.T) {
 		Match:      "flow-0xa9f1000000000001",
 	}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetFlow,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetFlow,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetFlow(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp SDNGetFlowResponse
-	err = quic.DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 	assert.Len(t, getResp.Flows, 1)
 }
@@ -1582,16 +1582,16 @@ func TestHandleSDNGetFlow_MissingBridgeName(t *testing.T) {
 		BridgeName: "",
 	}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetFlow,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetFlow,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetFlow(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandleSDNListFlows_Success(t *testing.T) {
@@ -1608,19 +1608,19 @@ func TestHandleSDNListFlows_Success(t *testing.T) {
 
 	listReq := &platformv1.ListFlowsRequest{BridgeId: "br0"}
 
-	payload, err := quic.EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNListFlows,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNListFlows,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNListFlows(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var listResp platformv1.ListFlowsResponse
-	err = quic.DecodePayload(resp.Payload, &listResp)
+	err = quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 	assert.Len(t, listResp.GetFlows(), 2)
 }
@@ -1634,16 +1634,16 @@ func TestHandleSDNListFlows_MissingBridgeName(t *testing.T) {
 
 	listReq := &platformv1.ListFlowsRequest{BridgeId: ""}
 
-	payload, err := quic.EncodePayload(listReq)
+	payload, err := quicwire.EncodePayload(listReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNListFlows,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNListFlows,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNListFlows(ctx, req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // =============================================================================
@@ -1664,19 +1664,19 @@ func TestHandleSDNGetMetrics_Success(t *testing.T) {
 		BridgeName: "",
 	}
 
-	payload, err := quic.EncodePayload(metricsReq)
+	payload, err := quicwire.EncodePayload(metricsReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetMetrics,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetMetrics,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetMetrics(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var metricsResp SDNGetMetricsResponse
-	err = quic.DecodePayload(resp.Payload, &metricsResp)
+	err = quicwire.DecodePayload(resp.Payload, &metricsResp)
 	require.NoError(t, err)
 	require.NotNil(t, metricsResp.Metrics)
 	assert.Equal(t, 2, metricsResp.Metrics.BridgeCount)
@@ -1696,19 +1696,19 @@ func TestHandleSDNGetMetrics_WithBridgeName(t *testing.T) {
 		BridgeName: "br0",
 	}
 
-	payload, err := quic.EncodePayload(metricsReq)
+	payload, err := quicwire.EncodePayload(metricsReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetMetrics,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetMetrics,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetMetrics(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var metricsResp SDNGetMetricsResponse
-	err = quic.DecodePayload(resp.Payload, &metricsResp)
+	err = quicwire.DecodePayload(resp.Payload, &metricsResp)
 	require.NoError(t, err)
 	require.NotNil(t, metricsResp.Metrics)
 }
@@ -1724,16 +1724,16 @@ func TestHandleSDNOperation_NilClient(t *testing.T) {
 
 	createReq := &platformv1.CreateBridgeRequest{Config: &platformv1.BridgeConfig{Name: "br0"}}
 
-	payload, err := quic.EncodePayload(createReq)
+	payload, err := quicwire.EncodePayload(createReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNCreateBridge,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNCreateBridge,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNOperation(ctx, req)
-	assert.Equal(t, quic.StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestHandleSDNOperation_UnknownOpcode_Handler(t *testing.T) {
@@ -1743,13 +1743,13 @@ func TestHandleSDNOperation_UnknownOpcode_Handler(t *testing.T) {
 	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  0xFF, // Unknown opcode
 		Payload: []byte{},
 	}
 
 	resp := handler.handleSDNOperation(ctx, req)
-	assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 }
 
 // =============================================================================
@@ -1779,16 +1779,16 @@ func TestHandleSDNApplyPolicy_Success_Handler(t *testing.T) {
 		},
 	}
 
-	payload, err := quic.EncodePayload(applyReq)
+	payload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNApplyPolicy(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestHandleSDNDeletePolicy_Success_Handler(t *testing.T) {
@@ -1804,28 +1804,28 @@ func TestHandleSDNDeletePolicy_Success_Handler(t *testing.T) {
 		TenantID: "tenant-001",
 		VLAN:     100,
 	}
-	applyPayload, err := quic.EncodePayload(applyReq)
+	applyPayload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
-	applyResp := handler.handleSDNApplyPolicy(ctx, &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	applyResp := handler.handleSDNApplyPolicy(ctx, &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: applyPayload,
 	})
-	require.Equal(t, quic.StatusOK, applyResp.Status)
+	require.Equal(t, quicwire.StatusOK, applyResp.Status)
 
 	deleteReq := &SDNDeletePolicyRequest{
 		PortID: "delete-test-policy",
 	}
 
-	payload, err := quic.EncodePayload(deleteReq)
+	payload, err := quicwire.EncodePayload(deleteReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNDeletePolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNDeletePolicy,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNDeletePolicy(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestHandleSDNGetPolicy_Success_Handler(t *testing.T) {
@@ -1841,28 +1841,28 @@ func TestHandleSDNGetPolicy_Success_Handler(t *testing.T) {
 		TenantID: "tenant-001",
 		VLAN:     100,
 	}
-	applyPayload, err := quic.EncodePayload(applyReq)
+	applyPayload, err := quicwire.EncodePayload(applyReq)
 	require.NoError(t, err)
-	applyResp := handler.handleSDNApplyPolicy(ctx, &quic.Request{
-		Opcode:  quic.OpSDNApplyPolicy,
+	applyResp := handler.handleSDNApplyPolicy(ctx, &quicwire.Request{
+		Opcode:  quicwire.OpSDNApplyPolicy,
 		Payload: applyPayload,
 	})
-	require.Equal(t, quic.StatusOK, applyResp.Status)
+	require.Equal(t, quicwire.StatusOK, applyResp.Status)
 
 	getReq := &SDNGetPolicyRequest{
 		PortID: "get-test-policy",
 	}
 
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNGetPolicy,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNGetPolicy,
 		Payload: payload,
 	}
 
 	resp := handler.handleSDNGetPolicy(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
 func TestHandleSDNListPolicies_Success_Handler(t *testing.T) {
@@ -1872,16 +1872,16 @@ func TestHandleSDNListPolicies_Success_Handler(t *testing.T) {
 	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNListPolicies,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNListPolicies,
 		Payload: []byte{},
 	}
 
 	resp := handler.handleSDNListPolicies(ctx, req)
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var listResp SDNListPoliciesResponse
-	err := quic.DecodePayload(resp.Payload, &listResp)
+	err := quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 	assert.Equal(t, 0, listResp.Total)
 }
@@ -1891,13 +1891,13 @@ func TestHandleSDNListPolicies_NilService(t *testing.T) {
 	handler := NewQUICServiceHandler(logger) // No SDN service
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpSDNListPolicies,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpSDNListPolicies,
 		Payload: []byte{},
 	}
 
 	resp := handler.handleSDNOperation(ctx, req)
-	assert.Equal(t, quic.StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 // =============================================================================

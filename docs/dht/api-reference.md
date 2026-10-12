@@ -11,7 +11,7 @@ The Distributed Hash Table (DHT) service exposes its functionality via multiple 
 | REST | HTTP/HTTPS | 8443 | Web clients, browser extensions, external systems |
 | gRPC | TCP | 9443 | High-performance service-to-service communication |
 | QUIC | UDP | 9444 | Low-latency, mobile clients, P2P transport |
-| MCP | stdio/HTTP | 9445 | AI/LLM integration, agent collaboration |
+| MCP | stdio/HTTPS | 9445 | AI/LLM integration, agent collaboration |
 | Unix | Unix Socket | /run/platformd.sock | Local IPC, CLI tools |
 | Gateway | WebSocket | 8443 | Browser extension real-time updates |
 

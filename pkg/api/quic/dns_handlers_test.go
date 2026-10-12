@@ -25,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,7 +33,7 @@ import (
 // init initializes the codec for DNS handler tests
 func init() {
 	// Set the default codec to MsgPack for encoding/decoding payloads
-	_ = SetDefaultCodecType(codec.MsgPack)
+	_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 }
 
 // =============================================================================
@@ -260,20 +261,20 @@ func TestDNSHandleRequest(t *testing.T) {
 
 		resp := handler.HandleRequest(context.Background(), nil)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "nil")
 	})
 
 	t.Run("returns error for unknown opcode", func(t *testing.T) {
 		handler, _ := createTestDNSHandler()
 
-		req := &Request{
+		req := &quicwire.Request{
 			Opcode: 0x00, // Unknown opcode for DNS handler
 		}
 
 		resp := handler.HandleRequest(context.Background(), req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "unknown dns operation")
 	})
 }
@@ -308,20 +309,20 @@ func TestHandleAddZone(t *testing.T) {
 			},
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var addResp DNSAddZoneResponse
-		err = DecodePayload(resp.Payload, &addResp)
+		err = quicwire.DecodePayload(resp.Payload, &addResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, addResp.Zone)
@@ -337,20 +338,20 @@ func TestHandleAddZone(t *testing.T) {
 			Name: "default-ttl.com",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var addResp DNSAddZoneResponse
-		err = DecodePayload(resp.Payload, &addResp)
+		err = quicwire.DecodePayload(resp.Payload, &addResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, uint32(3600), addResp.Zone.TTL)
@@ -363,17 +364,17 @@ func TestHandleAddZone(t *testing.T) {
 			Name: "example.com",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 		assert.Contains(t, string(resp.Payload), "not available")
 	})
 
@@ -384,31 +385,31 @@ func TestHandleAddZone(t *testing.T) {
 			TTL: 3600,
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "zone name")
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestDNSHandler()
 
-		req := &Request{
-			Opcode:  OpDNSAddZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddZone,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when save fails", func(t *testing.T) {
@@ -419,17 +420,17 @@ func TestHandleAddZone(t *testing.T) {
 			Name: "example.com",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -448,20 +449,20 @@ func TestHandleGetZone(t *testing.T) {
 			Name: "example.com",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSGetZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSGetZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var getResp DNSGetZoneResponse
-		err = DecodePayload(resp.Payload, &getResp)
+		err = quicwire.DecodePayload(resp.Payload, &getResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, getResp.Zone)
@@ -475,17 +476,17 @@ func TestHandleGetZone(t *testing.T) {
 			Name: "example.com",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSGetZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSGetZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing name", func(t *testing.T) {
@@ -493,17 +494,17 @@ func TestHandleGetZone(t *testing.T) {
 
 		getReq := &DNSGetZoneRequest{}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSGetZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSGetZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for zone not found", func(t *testing.T) {
@@ -513,17 +514,17 @@ func TestHandleGetZone(t *testing.T) {
 			Name: "nonexistent.com",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSGetZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSGetZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -542,20 +543,20 @@ func TestHandleDeleteZone(t *testing.T) {
 			Name: "example.com",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var deleteResp DNSDeleteZoneResponse
-		err = DecodePayload(resp.Payload, &deleteResp)
+		err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "example.com", deleteResp.Name)
@@ -569,17 +570,17 @@ func TestHandleDeleteZone(t *testing.T) {
 			Name: "example.com",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing name", func(t *testing.T) {
@@ -587,17 +588,17 @@ func TestHandleDeleteZone(t *testing.T) {
 
 		deleteReq := &DNSDeleteZoneRequest{}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for zone not found", func(t *testing.T) {
@@ -607,17 +608,17 @@ func TestHandleDeleteZone(t *testing.T) {
 			Name: "nonexistent.com",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteZone,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteZone,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -637,20 +638,20 @@ func TestHandleListZones(t *testing.T) {
 			Limit: 10,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSListZones,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSListZones,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp DNSListZonesResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int32(2), listResp.Count)
@@ -662,17 +663,17 @@ func TestHandleListZones(t *testing.T) {
 
 		listReq := &DNSListZonesRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSListZones,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSListZones,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("caps limit at max", func(t *testing.T) {
@@ -682,17 +683,17 @@ func TestHandleListZones(t *testing.T) {
 			Limit: 5000, // exceeds max
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSListZones,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSListZones,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("applies pagination offset", func(t *testing.T) {
@@ -706,20 +707,20 @@ func TestHandleListZones(t *testing.T) {
 			Offset: 1,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSListZones,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSListZones,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp DNSListZonesResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int32(1), listResp.Count)
@@ -730,17 +731,17 @@ func TestHandleListZones(t *testing.T) {
 
 		listReq := &DNSListZonesRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSListZones,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSListZones,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when list fails", func(t *testing.T) {
@@ -749,17 +750,17 @@ func TestHandleListZones(t *testing.T) {
 
 		listReq := &DNSListZonesRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSListZones,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSListZones,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -782,20 +783,20 @@ func TestHandleAddRecord(t *testing.T) {
 			TTL:      3600,
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var addResp DNSAddRecordResponse
-		err = DecodePayload(resp.Payload, &addResp)
+		err = quicwire.DecodePayload(resp.Payload, &addResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, addResp.Zone)
@@ -813,17 +814,17 @@ func TestHandleAddRecord(t *testing.T) {
 			TTL:      3600,
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("adds CNAME record successfully", func(t *testing.T) {
@@ -837,17 +838,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Value:    "www.example.com",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("adds MX record successfully", func(t *testing.T) {
@@ -862,17 +863,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Priority: 10,
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("adds NS record successfully", func(t *testing.T) {
@@ -886,17 +887,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Value:    "ns1.example.com",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("adds TXT record successfully", func(t *testing.T) {
@@ -910,17 +911,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Value:    "v=spf1 include:_spf.example.com ~all",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("adds SRV record successfully", func(t *testing.T) {
@@ -937,17 +938,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Weight:   5,
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("adds CAA record successfully", func(t *testing.T) {
@@ -963,17 +964,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Value:    "letsencrypt.org",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("adds TLSA record successfully", func(t *testing.T) {
@@ -990,17 +991,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Data:         "abc123",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("returns error when dns service unavailable", func(t *testing.T) {
@@ -1013,17 +1014,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Value:    "192.168.1.1",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing zone name", func(t *testing.T) {
@@ -1035,17 +1036,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Value: "192.168.1.1",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing record type", func(t *testing.T) {
@@ -1057,17 +1058,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Value:    "192.168.1.1",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing record name", func(t *testing.T) {
@@ -1079,17 +1080,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Value:    "192.168.1.1",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid record type", func(t *testing.T) {
@@ -1103,17 +1104,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Value:    "192.168.1.1",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for zone not found", func(t *testing.T) {
@@ -1126,17 +1127,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Value:    "192.168.1.1",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error when save fails", func(t *testing.T) {
@@ -1151,17 +1152,17 @@ func TestHandleAddRecord(t *testing.T) {
 			Value:    "192.168.1.1",
 		}
 
-		payload, err := EncodePayload(addReq)
+		payload, err := quicwire.EncodePayload(addReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSAddRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSAddRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -1182,20 +1183,20 @@ func TestHandleGetRecord(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSGetRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSGetRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var getResp DNSGetRecordResponse
-		err = DecodePayload(resp.Payload, &getResp)
+		err = quicwire.DecodePayload(resp.Payload, &getResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, getResp.Record)
@@ -1210,17 +1211,17 @@ func TestHandleGetRecord(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSGetRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSGetRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing zone name", func(t *testing.T) {
@@ -1231,17 +1232,17 @@ func TestHandleGetRecord(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSGetRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSGetRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing record name", func(t *testing.T) {
@@ -1252,17 +1253,17 @@ func TestHandleGetRecord(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSGetRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSGetRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing record type", func(t *testing.T) {
@@ -1273,17 +1274,17 @@ func TestHandleGetRecord(t *testing.T) {
 			RecordName: "www.example.com",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSGetRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSGetRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when record operation fails", func(t *testing.T) {
@@ -1297,17 +1298,17 @@ func TestHandleGetRecord(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSGetRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSGetRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -1331,17 +1332,17 @@ func TestHandleUpdateRecord(t *testing.T) {
 			TTL:      7200,
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSUpdateRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSUpdateRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("returns error when dns service unavailable", func(t *testing.T) {
@@ -1354,17 +1355,17 @@ func TestHandleUpdateRecord(t *testing.T) {
 			Value:    "192.168.1.2",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSUpdateRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSUpdateRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing zone name", func(t *testing.T) {
@@ -1376,17 +1377,17 @@ func TestHandleUpdateRecord(t *testing.T) {
 			Value: "192.168.1.2",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSUpdateRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSUpdateRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for record not found", func(t *testing.T) {
@@ -1400,17 +1401,17 @@ func TestHandleUpdateRecord(t *testing.T) {
 			Value:    "192.168.1.2",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSUpdateRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSUpdateRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1432,20 +1433,20 @@ func TestHandleDeleteRecord(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var deleteResp DNSDeleteRecordResponse
-		err = DecodePayload(resp.Payload, &deleteResp)
+		err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 		require.NoError(t, err)
 
 		assert.True(t, deleteResp.Success)
@@ -1460,17 +1461,17 @@ func TestHandleDeleteRecord(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing zone name", func(t *testing.T) {
@@ -1481,17 +1482,17 @@ func TestHandleDeleteRecord(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for record not found", func(t *testing.T) {
@@ -1504,17 +1505,17 @@ func TestHandleDeleteRecord(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1535,20 +1536,20 @@ func TestHandleListRecords(t *testing.T) {
 			ZoneName: "example.com",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSListRecords,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSListRecords,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp DNSListRecordsResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int32(2), listResp.Count)
@@ -1565,20 +1566,20 @@ func TestHandleListRecords(t *testing.T) {
 			TypeFilter: "A",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSListRecords,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSListRecords,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp DNSListRecordsResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, int32(1), listResp.Count)
@@ -1591,17 +1592,17 @@ func TestHandleListRecords(t *testing.T) {
 			ZoneName: "example.com",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSListRecords,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSListRecords,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing zone name", func(t *testing.T) {
@@ -1609,17 +1610,17 @@ func TestHandleListRecords(t *testing.T) {
 
 		listReq := &DNSListRecordsRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSListRecords,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSListRecords,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for zone not found", func(t *testing.T) {
@@ -1629,17 +1630,17 @@ func TestHandleListRecords(t *testing.T) {
 			ZoneName: "nonexistent.com",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSListRecords,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSListRecords,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1659,20 +1660,20 @@ func TestHandleResolve(t *testing.T) {
 			Type: "A",
 		}
 
-		payload, err := EncodePayload(resolveReq)
+		payload, err := quicwire.EncodePayload(resolveReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSResolve,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSResolve,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var resolveResp DNSResolveResponse
-		err = DecodePayload(resp.Payload, &resolveResp)
+		err = quicwire.DecodePayload(resp.Payload, &resolveResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "www.example.com", resolveResp.FQDN)
@@ -1689,20 +1690,20 @@ func TestHandleResolve(t *testing.T) {
 			FQDN: "www.example.com",
 		}
 
-		payload, err := EncodePayload(resolveReq)
+		payload, err := quicwire.EncodePayload(resolveReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSResolve,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSResolve,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var resolveResp DNSResolveResponse
-		err = DecodePayload(resp.Payload, &resolveResp)
+		err = quicwire.DecodePayload(resp.Payload, &resolveResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "A", resolveResp.Type)
@@ -1716,17 +1717,17 @@ func TestHandleResolve(t *testing.T) {
 			Type: "A",
 		}
 
-		payload, err := EncodePayload(resolveReq)
+		payload, err := quicwire.EncodePayload(resolveReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSResolve,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSResolve,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing FQDN", func(t *testing.T) {
@@ -1736,17 +1737,17 @@ func TestHandleResolve(t *testing.T) {
 			Type: "A",
 		}
 
-		payload, err := EncodePayload(resolveReq)
+		payload, err := quicwire.EncodePayload(resolveReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSResolve,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSResolve,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when resolve fails", func(t *testing.T) {
@@ -1758,17 +1759,17 @@ func TestHandleResolve(t *testing.T) {
 			Type: "A",
 		}
 
-		payload, err := EncodePayload(resolveReq)
+		payload, err := quicwire.EncodePayload(resolveReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSResolve,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSResolve,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1825,21 +1826,21 @@ func TestDNSErrorResponse(t *testing.T) {
 		err            error
 		expectedStatus byte
 	}{
-		{"zone not found", dns.ErrZoneNotFound, StatusNotFound},
-		{"zone already exists", dns.ErrZoneAlreadyExists, StatusAlreadyExists},
-		{"DNSSEC not enabled", dns.ErrDNSSECNotEnabled, StatusInvalidRequest},
-		{"registration disabled", dns.ErrRegistrationDisabled, StatusPermissionDenied},
-		{"external registration disabled", dns.ErrExternalRegistrationDisabled, StatusPermissionDenied},
-		{"internal registration disabled", dns.ErrInternalRegistrationDisabled, StatusPermissionDenied},
-		{"invalid IP address", dns.ErrInvalidIPAddress, StatusInvalidArgument},
-		{"invalid private IP", dns.ErrInvalidPrivateIP, StatusInvalidArgument},
-		{"invalid public IP", dns.ErrInvalidPublicIP, StatusInvalidArgument},
-		{"invalid private TLD", dns.ErrInvalidPrivateTLD, StatusInvalidArgument},
-		{"invalid public TLD", dns.ErrInvalidPublicTLD, StatusInvalidArgument},
-		{"parsing domain name", dns.ErrParsingDomainName, StatusInvalidArgument},
-		{"context canceled", context.Canceled, StatusTimeout},
-		{"context deadline exceeded", context.DeadlineExceeded, StatusTimeout},
-		{"generic error", errors.New("unknown error"), StatusInternalError},
+		{"zone not found", dns.ErrZoneNotFound, quicwire.StatusNotFound},
+		{"zone already exists", dns.ErrZoneAlreadyExists, quicwire.StatusAlreadyExists},
+		{"DNSSEC not enabled", dns.ErrDNSSECNotEnabled, quicwire.StatusInvalidRequest},
+		{"registration disabled", dns.ErrRegistrationDisabled, quicwire.StatusPermissionDenied},
+		{"external registration disabled", dns.ErrExternalRegistrationDisabled, quicwire.StatusPermissionDenied},
+		{"internal registration disabled", dns.ErrInternalRegistrationDisabled, quicwire.StatusPermissionDenied},
+		{"invalid IP address", dns.ErrInvalidIPAddress, quicwire.StatusInvalidArgument},
+		{"invalid private IP", dns.ErrInvalidPrivateIP, quicwire.StatusInvalidArgument},
+		{"invalid public IP", dns.ErrInvalidPublicIP, quicwire.StatusInvalidArgument},
+		{"invalid private TLD", dns.ErrInvalidPrivateTLD, quicwire.StatusInvalidArgument},
+		{"invalid public TLD", dns.ErrInvalidPublicTLD, quicwire.StatusInvalidArgument},
+		{"parsing domain name", dns.ErrParsingDomainName, quicwire.StatusInvalidArgument},
+		{"context canceled", context.Canceled, quicwire.StatusTimeout},
+		{"context deadline exceeded", context.DeadlineExceeded, quicwire.StatusTimeout},
+		{"generic error", errors.New("unknown error"), quicwire.StatusInternalError},
 	}
 
 	for _, tc := range testCases {
@@ -2028,30 +2029,30 @@ func TestHandleUpdateRecordErrors(t *testing.T) {
 			Value:    "192.168.1.2",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSUpdateRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSUpdateRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestDNSHandler()
 
-		req := &Request{
-			Opcode:  OpDNSUpdateRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSUpdateRecord,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error for missing zone name", func(t *testing.T) {
@@ -2063,17 +2064,17 @@ func TestHandleUpdateRecordErrors(t *testing.T) {
 			Value: "192.168.1.2",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSUpdateRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSUpdateRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing record type", func(t *testing.T) {
@@ -2085,17 +2086,17 @@ func TestHandleUpdateRecordErrors(t *testing.T) {
 			Value:    "192.168.1.2",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSUpdateRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSUpdateRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing record name", func(t *testing.T) {
@@ -2107,17 +2108,17 @@ func TestHandleUpdateRecordErrors(t *testing.T) {
 			Value:    "192.168.1.2",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSUpdateRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSUpdateRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for zone not found", func(t *testing.T) {
@@ -2130,17 +2131,17 @@ func TestHandleUpdateRecordErrors(t *testing.T) {
 			Value:    "192.168.1.2",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSUpdateRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSUpdateRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for record not found", func(t *testing.T) {
@@ -2154,17 +2155,17 @@ func TestHandleUpdateRecordErrors(t *testing.T) {
 			Value:    "192.168.1.2",
 		}
 
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSUpdateRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSUpdateRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -2185,30 +2186,30 @@ func TestHandleDeleteRecordErrors(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestDNSHandler()
 
-		req := &Request{
-			Opcode:  OpDNSDeleteRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteRecord,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error for missing zone name", func(t *testing.T) {
@@ -2219,17 +2220,17 @@ func TestHandleDeleteRecordErrors(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing record name", func(t *testing.T) {
@@ -2240,17 +2241,17 @@ func TestHandleDeleteRecordErrors(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing record type", func(t *testing.T) {
@@ -2261,17 +2262,17 @@ func TestHandleDeleteRecordErrors(t *testing.T) {
 			RecordName: "www.example.com",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for zone not found", func(t *testing.T) {
@@ -2283,17 +2284,17 @@ func TestHandleDeleteRecordErrors(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for record not found in zone", func(t *testing.T) {
@@ -2306,17 +2307,17 @@ func TestHandleDeleteRecordErrors(t *testing.T) {
 			RecordType: "A",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpDNSDeleteRecord,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDNSDeleteRecord,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 

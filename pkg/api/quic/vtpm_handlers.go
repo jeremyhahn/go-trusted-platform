@@ -22,6 +22,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // vTPM pagination defaults
@@ -72,78 +73,78 @@ func NewVTPMHandler(logger *logging.Logger, service vtpm.VTPMService) *VTPMHandl
 }
 
 // HandleRequest processes a vTPM request and returns a response
-func (h *VTPMHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{
-			Status:  StatusInvalidRequest,
-			Payload: []byte(ErrNilRequest.Error()),
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
+			Payload: []byte(quicwire.ErrNilRequest.Error()),
 		}
 	}
 
 	switch req.Opcode {
 	// Bundle CRUD operations
-	case OpVTPMCreate:
+	case quicwire.OpVTPMCreate:
 		return h.handleCreateBundle(ctx, req)
-	case OpVTPMGetBundle:
+	case quicwire.OpVTPMGetBundle:
 		return h.handleGetBundle(ctx, req)
-	case OpVTPMDelete:
+	case quicwire.OpVTPMDelete:
 		return h.handleDeleteBundle(ctx, req)
-	case OpVTPMList:
+	case quicwire.OpVTPMList:
 		return h.handleListBundles(ctx, req)
 
 	// Template operations
-	case OpVTPMCreateTemplate:
+	case quicwire.OpVTPMCreateTemplate:
 		return h.handleCreateTemplate(ctx, req)
-	case OpVTPMGetTemplate:
+	case quicwire.OpVTPMGetTemplate:
 		return h.handleGetTemplate(ctx, req)
-	case OpVTPMDeleteTemplate:
+	case quicwire.OpVTPMDeleteTemplate:
 		return h.handleDeleteTemplate(ctx, req)
-	case OpVTPMListTemplates:
+	case quicwire.OpVTPMListTemplates:
 		return h.handleListTemplates(ctx, req)
-	case OpVTPMCloneTemplate:
+	case quicwire.OpVTPMCloneTemplate:
 		return h.handleCloneTemplate(ctx, req)
 
 	// Lifecycle operations
-	case OpVTPMStart:
+	case quicwire.OpVTPMStart:
 		return h.handleStart(ctx, req)
-	case OpVTPMStop:
+	case quicwire.OpVTPMStop:
 		return h.handleStop(ctx, req)
-	case OpVTPMGetState:
+	case quicwire.OpVTPMGetState:
 		return h.handleGetState(ctx, req)
-	case OpVTPMIsRunning:
+	case quicwire.OpVTPMIsRunning:
 		return h.handleIsRunning(ctx, req)
 
 	// TPM operations
-	case OpVTPMQuote:
+	case quicwire.OpVTPMQuote:
 		return h.handleQuote(ctx, req)
-	case OpVTPMReadPCR:
+	case quicwire.OpVTPMReadPCR:
 		return h.handleReadPCR(ctx, req)
-	case OpVTPMExtendPCR:
+	case quicwire.OpVTPMExtendPCR:
 		return h.handleExtendPCR(ctx, req)
-	case OpVTPMSeal:
+	case quicwire.OpVTPMSeal:
 		return h.handleSeal(ctx, req)
-	case OpVTPMUnseal:
+	case quicwire.OpVTPMUnseal:
 		return h.handleUnseal(ctx, req)
 
 	// Export/Import operations
-	case OpVTPMExportBundle:
+	case quicwire.OpVTPMExportBundle:
 		return h.handleExportBundle(ctx, req)
-	case OpVTPMImportBundle:
+	case quicwire.OpVTPMImportBundle:
 		return h.handleImportBundle(ctx, req)
-	case OpVTPMValidateBundle:
+	case quicwire.OpVTPMValidateBundle:
 		return h.handleValidateBundle(ctx, req)
 
 	// Path operations
-	case OpVTPMGetBundlePath:
+	case quicwire.OpVTPMGetBundlePath:
 		return h.handleGetBundlePath(ctx, req)
-	case OpVTPMGetSocketPath:
+	case quicwire.OpVTPMGetSocketPath:
 		return h.handleGetSocketPath(ctx, req)
-	case OpVTPMGetNVRAMPath:
+	case quicwire.OpVTPMGetNVRAMPath:
 		return h.handleGetNVRAMPath(ctx, req)
 
 	default:
-		return &Response{
-			Status:  StatusInvalidRequest,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("unknown vTPM operation"),
 		}
 	}
@@ -447,18 +448,18 @@ type VTPMGetPathResponse struct {
 // =============================================================================
 
 // handleCreateBundle creates a new vTPM bundle
-func (h *VTPMHandler) handleCreateBundle(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleCreateBundle(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var createReq VTPMCreateBundleRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if createReq.Hostname == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingHostname)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingHostname)
 	}
 
 	ekAlg := vtpm.EKAlgorithmRSA
@@ -483,30 +484,30 @@ func (h *VTPMHandler) handleCreateBundle(ctx context.Context, req *Request) *Res
 	resp := h.bundleToResponse(bundle)
 	h.logger.Info("vTPM bundle created", "id", bundle.ID, "hostname", createReq.Hostname)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetBundle retrieves a bundle by ID
-func (h *VTPMHandler) handleGetBundle(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleGetBundle(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var getReq VTPMGetBundleRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if getReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	bundle, err := h.service.GetBundle(ctx, getReq.ID)
@@ -517,30 +518,30 @@ func (h *VTPMHandler) handleGetBundle(ctx context.Context, req *Request) *Respon
 
 	resp := h.bundleToResponse(bundle)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeleteBundle deletes a bundle
-func (h *VTPMHandler) handleDeleteBundle(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleDeleteBundle(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var deleteReq VTPMDeleteBundleRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	if err := h.service.DeleteBundle(ctx, deleteReq.ID); err != nil {
@@ -556,26 +557,26 @@ func (h *VTPMHandler) handleDeleteBundle(ctx context.Context, req *Request) *Res
 
 	h.logger.Info("vTPM bundle deleted", "id", deleteReq.ID)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListBundles lists bundles matching the filter options
-func (h *VTPMHandler) handleListBundles(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleListBundles(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var listReq VTPMListBundlesRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	opts := &vtpm.ListOptions{
@@ -614,13 +615,13 @@ func (h *VTPMHandler) handleListBundles(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -630,18 +631,18 @@ func (h *VTPMHandler) handleListBundles(ctx context.Context, req *Request) *Resp
 // =============================================================================
 
 // handleCreateTemplate creates a new vTPM template
-func (h *VTPMHandler) handleCreateTemplate(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleCreateTemplate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var createReq VTPMCreateTemplateRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if createReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingTemplateID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingTemplateID)
 	}
 
 	ekAlg := vtpm.EKAlgorithmRSA
@@ -665,30 +666,30 @@ func (h *VTPMHandler) handleCreateTemplate(ctx context.Context, req *Request) *R
 	resp := h.templateToResponse(template)
 	h.logger.Info("vTPM template created", "id", template.ID)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetTemplate retrieves a template by ID
-func (h *VTPMHandler) handleGetTemplate(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleGetTemplate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var getReq VTPMGetTemplateRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if getReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingTemplateID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingTemplateID)
 	}
 
 	template, err := h.service.GetTemplate(ctx, getReq.ID)
@@ -699,30 +700,30 @@ func (h *VTPMHandler) handleGetTemplate(ctx context.Context, req *Request) *Resp
 
 	resp := h.templateToResponse(template)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeleteTemplate deletes a template
-func (h *VTPMHandler) handleDeleteTemplate(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleDeleteTemplate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var deleteReq VTPMDeleteTemplateRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingTemplateID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingTemplateID)
 	}
 
 	if err := h.service.DeleteTemplate(ctx, deleteReq.ID); err != nil {
@@ -738,21 +739,21 @@ func (h *VTPMHandler) handleDeleteTemplate(ctx context.Context, req *Request) *R
 
 	h.logger.Info("vTPM template deleted", "id", deleteReq.ID)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListTemplates lists all templates
-func (h *VTPMHandler) handleListTemplates(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleListTemplates(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	templates, err := h.service.ListTemplates(ctx)
@@ -772,34 +773,34 @@ func (h *VTPMHandler) handleListTemplates(ctx context.Context, req *Request) *Re
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleCloneTemplate clones a template to create a new bundle
-func (h *VTPMHandler) handleCloneTemplate(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleCloneTemplate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var cloneReq VTPMCloneTemplateRequest
-	if err := DecodePayload(req.Payload, &cloneReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &cloneReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if cloneReq.TemplateID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingTemplateID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingTemplateID)
 	}
 
 	if cloneReq.Hostname == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingHostname)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingHostname)
 	}
 
 	opts := &vtpm.CloneOptions{
@@ -817,13 +818,13 @@ func (h *VTPMHandler) handleCloneTemplate(ctx context.Context, req *Request) *Re
 	resp := h.bundleToResponse(bundle)
 	h.logger.Info("template cloned", "template", cloneReq.TemplateID, "bundle", bundle.ID)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -833,18 +834,18 @@ func (h *VTPMHandler) handleCloneTemplate(ctx context.Context, req *Request) *Re
 // =============================================================================
 
 // handleStart starts the vTPM for a bundle
-func (h *VTPMHandler) handleStart(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleStart(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var startReq VTPMStartRequest
-	if err := DecodePayload(req.Payload, &startReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &startReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if startReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	if err := h.service.Start(ctx, startReq.BundleID); err != nil {
@@ -863,30 +864,30 @@ func (h *VTPMHandler) handleStart(ctx context.Context, req *Request) *Response {
 
 	h.logger.Info("vTPM started", "bundle_id", startReq.BundleID)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleStop stops the vTPM for a bundle
-func (h *VTPMHandler) handleStop(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleStop(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var stopReq VTPMStopRequest
-	if err := DecodePayload(req.Payload, &stopReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &stopReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if stopReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	if err := h.service.Stop(ctx, stopReq.BundleID); err != nil {
@@ -902,30 +903,30 @@ func (h *VTPMHandler) handleStop(ctx context.Context, req *Request) *Response {
 
 	h.logger.Info("vTPM stopped", "bundle_id", stopReq.BundleID)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetState gets the state of a vTPM bundle
-func (h *VTPMHandler) handleGetState(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleGetState(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var stateReq VTPMGetStateRequest
-	if err := DecodePayload(req.Payload, &stateReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &stateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if stateReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	running := h.service.IsRunning(stateReq.BundleID)
@@ -941,30 +942,30 @@ func (h *VTPMHandler) handleGetState(ctx context.Context, req *Request) *Respons
 		Timestamp:  time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleIsRunning checks if a vTPM is running
-func (h *VTPMHandler) handleIsRunning(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleIsRunning(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var runningReq VTPMIsRunningRequest
-	if err := DecodePayload(req.Payload, &runningReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &runningReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if runningReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	running := h.service.IsRunning(runningReq.BundleID)
@@ -975,13 +976,13 @@ func (h *VTPMHandler) handleIsRunning(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -991,27 +992,27 @@ func (h *VTPMHandler) handleIsRunning(ctx context.Context, req *Request) *Respon
 // =============================================================================
 
 // handleQuote generates a TPM quote
-func (h *VTPMHandler) handleQuote(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleQuote(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var quoteReq VTPMQuoteRequest
-	if err := DecodePayload(req.Payload, &quoteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &quoteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if quoteReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	if len(quoteReq.Nonce) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingNonce)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingNonce)
 	}
 
 	for _, pcr := range quoteReq.PCRs {
 		if pcr < 0 || pcr > 23 {
-			return h.errorResponse(StatusInvalidArgument, ErrVTPMInvalidPCRIndex)
+			return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMInvalidPCRIndex)
 		}
 	}
 
@@ -1032,34 +1033,34 @@ func (h *VTPMHandler) handleQuote(ctx context.Context, req *Request) *Response {
 
 	h.logger.Debug("TPM quote generated", "bundle_id", quoteReq.BundleID, "pcrs", quoteReq.PCRs)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleReadPCR reads a PCR value
-func (h *VTPMHandler) handleReadPCR(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleReadPCR(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var readReq VTPMReadPCRRequest
-	if err := DecodePayload(req.Payload, &readReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &readReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if readReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	if readReq.PCRIndex < 0 || readReq.PCRIndex > 23 {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMInvalidPCRIndex)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMInvalidPCRIndex)
 	}
 
 	value, err := h.service.ReadPCR(ctx, readReq.BundleID, readReq.PCRIndex)
@@ -1075,38 +1076,38 @@ func (h *VTPMHandler) handleReadPCR(ctx context.Context, req *Request) *Response
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleExtendPCR extends a PCR with data
-func (h *VTPMHandler) handleExtendPCR(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleExtendPCR(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var extendReq VTPMExtendPCRRequest
-	if err := DecodePayload(req.Payload, &extendReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &extendReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if extendReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	if extendReq.PCRIndex < 0 || extendReq.PCRIndex > 23 {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMInvalidPCRIndex)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMInvalidPCRIndex)
 	}
 
 	if len(extendReq.Data) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingData)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingData)
 	}
 
 	if err := h.service.ExtendPCR(ctx, extendReq.BundleID, extendReq.PCRIndex, extendReq.Data); err != nil {
@@ -1123,39 +1124,39 @@ func (h *VTPMHandler) handleExtendPCR(ctx context.Context, req *Request) *Respon
 
 	h.logger.Debug("PCR extended", "bundle_id", extendReq.BundleID, "pcr", extendReq.PCRIndex)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleSeal seals data to the TPM
-func (h *VTPMHandler) handleSeal(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleSeal(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var sealReq VTPMSealRequest
-	if err := DecodePayload(req.Payload, &sealReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &sealReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if sealReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	if len(sealReq.Data) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingData)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingData)
 	}
 
 	for _, pcr := range sealReq.PCRs {
 		if pcr < 0 || pcr > 23 {
-			return h.errorResponse(StatusInvalidArgument, ErrVTPMInvalidPCRIndex)
+			return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMInvalidPCRIndex)
 		}
 	}
 
@@ -1178,34 +1179,34 @@ func (h *VTPMHandler) handleSeal(ctx context.Context, req *Request) *Response {
 
 	h.logger.Debug("data sealed", "bundle_id", sealReq.BundleID)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleUnseal unseals data from the TPM
-func (h *VTPMHandler) handleUnseal(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleUnseal(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var unsealReq VTPMUnsealRequest
-	if err := DecodePayload(req.Payload, &unsealReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &unsealReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if unsealReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	if len(unsealReq.SealedData) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingSealedData)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingSealedData)
 	}
 
 	data, err := h.service.Unseal(ctx, unsealReq.BundleID, unsealReq.SealedData, unsealReq.AuthValue)
@@ -1222,13 +1223,13 @@ func (h *VTPMHandler) handleUnseal(ctx context.Context, req *Request) *Response 
 
 	h.logger.Debug("data unsealed", "bundle_id", unsealReq.BundleID)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1238,18 +1239,18 @@ func (h *VTPMHandler) handleUnseal(ctx context.Context, req *Request) *Response 
 // =============================================================================
 
 // handleExportBundle exports a bundle to a tar.gz archive
-func (h *VTPMHandler) handleExportBundle(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleExportBundle(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var exportReq VTPMExportBundleRequest
-	if err := DecodePayload(req.Payload, &exportReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &exportReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if exportReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	var buf bytes.Buffer
@@ -1266,30 +1267,30 @@ func (h *VTPMHandler) handleExportBundle(ctx context.Context, req *Request) *Res
 
 	h.logger.Info("bundle exported", "bundle_id", exportReq.BundleID)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleImportBundle imports a bundle from a tar.gz archive
-func (h *VTPMHandler) handleImportBundle(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleImportBundle(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var importReq VTPMImportBundleRequest
-	if err := DecodePayload(req.Payload, &importReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &importReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if len(importReq.Data) == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingData)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingData)
 	}
 
 	bundle, err := h.service.ImportBundle(ctx, io.NopCloser(bytes.NewReader(importReq.Data)))
@@ -1301,30 +1302,30 @@ func (h *VTPMHandler) handleImportBundle(ctx context.Context, req *Request) *Res
 	resp := h.bundleToResponse(bundle)
 	h.logger.Info("bundle imported", "bundle_id", bundle.ID)
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleValidateBundle validates bundle integrity
-func (h *VTPMHandler) handleValidateBundle(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleValidateBundle(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var validateReq VTPMValidateBundleRequest
-	if err := DecodePayload(req.Payload, &validateReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &validateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if validateReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	err := h.service.ValidateBundle(ctx, validateReq.BundleID)
@@ -1340,13 +1341,13 @@ func (h *VTPMHandler) handleValidateBundle(ctx context.Context, req *Request) *R
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, encodeErr := EncodePayload(resp)
+	payload, encodeErr := quicwire.EncodePayload(resp)
 	if encodeErr != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: encodeErr})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: encodeErr})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1356,18 +1357,18 @@ func (h *VTPMHandler) handleValidateBundle(ctx context.Context, req *Request) *R
 // =============================================================================
 
 // handleGetBundlePath returns the filesystem path to a bundle
-func (h *VTPMHandler) handleGetBundlePath(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleGetBundlePath(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var pathReq VTPMGetPathRequest
-	if err := DecodePayload(req.Payload, &pathReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pathReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if pathReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	path := h.service.GetBundlePath(pathReq.BundleID)
@@ -1378,30 +1379,30 @@ func (h *VTPMHandler) handleGetBundlePath(ctx context.Context, req *Request) *Re
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetSocketPath returns the TPM socket path for a bundle
-func (h *VTPMHandler) handleGetSocketPath(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleGetSocketPath(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var pathReq VTPMGetPathRequest
-	if err := DecodePayload(req.Payload, &pathReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pathReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if pathReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	path := h.service.GetTPMSocketPath(pathReq.BundleID)
@@ -1412,30 +1413,30 @@ func (h *VTPMHandler) handleGetSocketPath(ctx context.Context, req *Request) *Re
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetNVRAMPath returns the OVMF NVRAM path for a bundle
-func (h *VTPMHandler) handleGetNVRAMPath(ctx context.Context, req *Request) *Response {
+func (h *VTPMHandler) handleGetNVRAMPath(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.service == nil {
-		return h.errorResponse(StatusUnavailable, ErrVTPMServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVTPMServiceNotAvailable)
 	}
 
 	var pathReq VTPMGetPathRequest
-	if err := DecodePayload(req.Payload, &pathReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &pathReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVTPMDecodingFailed{Cause: err})
 	}
 
 	if pathReq.BundleID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVTPMMissingBundleID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVTPMMissingBundleID)
 	}
 
 	path := h.service.GetNVRAMPath(pathReq.BundleID)
@@ -1446,13 +1447,13 @@ func (h *VTPMHandler) handleGetNVRAMPath(ctx context.Context, req *Request) *Res
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVTPMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1528,15 +1529,15 @@ func (h *VTPMHandler) templateToResponse(template *vtpm.Template) *VTPMTemplateR
 }
 
 // errorResponse creates an error response with the given status and error
-func (h *VTPMHandler) errorResponse(status byte, err error) *Response {
-	return &Response{
+func (h *VTPMHandler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
 }
 
 // vtpmErrorResponse maps vTPM errors to appropriate status codes
-func (h *VTPMHandler) vtpmErrorResponse(err error) *Response {
+func (h *VTPMHandler) vtpmErrorResponse(err error) *quicwire.Response {
 	var status byte
 
 	var bundleNotFound vtpm.ErrBundleNotFound
@@ -1554,31 +1555,31 @@ func (h *VTPMHandler) vtpmErrorResponse(err error) *Response {
 
 	switch {
 	case errors.As(err, &bundleNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.As(err, &bundleExists):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.As(err, &templateNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.As(err, &templateExists):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.As(err, &invalidConfig):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.As(err, &invalidManifest):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.As(err, &vtpmNotRunning):
-		status = StatusInvalidRequest
+		status = quicwire.StatusInvalidRequest
 	case errors.As(err, &vtpmAlreadyRunning):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.As(err, &invalidNonce):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.As(err, &invalidPCR):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.As(err, &checksumMismatch):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.As(err, &caUnavailable):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	default:
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	}
 
 	return h.errorResponse(status, err)

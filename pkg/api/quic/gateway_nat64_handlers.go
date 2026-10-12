@@ -16,52 +16,20 @@ package quic
 import (
 	"context"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
-
-// NAT64 sub-opcodes. The gateway category runs 0x01-0x2D, the load
-// balancer claims 0x30-0x35 and perf 0x36-0x38, so the NAT64 translator
-// takes the next free slot.
-const (
-	// OpGatewayNAT64Status returns the NAT64 translator's health.
-	OpGatewayNAT64Status byte = 0x39
-)
-
-// NAT64StatusInfo is a point-in-time snapshot of the NAT64 translator.
-// Every field except the identity pair is what the kernel reported, not
-// what the configuration asked for: a started service whose instance has
-// gone reports InstancePresent false.
-type NAT64StatusInfo struct {
-	Active          bool   `codec:"active"`
-	InstancePresent bool   `codec:"instance_present"`
-	Prefix          string `codec:"prefix"`
-	Instance        string `codec:"instance"`
-	Sessions        uint64 `codec:"sessions"`
-	Pool4Used       uint64 `codec:"pool4_used"`
-	ModuleVersion   string `codec:"module_version,omitempty"`
-	FlowCount       int    `codec:"flow_count"`
-	LastReconcile   int64  `codec:"last_reconcile,omitempty"`
-	LastError       string `codec:"last_error,omitempty"`
-}
-
-// GatewayNAT64StatusRequest represents a NAT64 status request.
-type GatewayNAT64StatusRequest struct{}
-
-// GatewayNAT64StatusResponse represents a NAT64 status response.
-type GatewayNAT64StatusResponse struct {
-	Status    *NAT64StatusInfo `codec:"status"`
-	Timestamp int64            `codec:"timestamp"`
-}
 
 // gatewayNAT64Handlers dispatches NAT64 sub-opcodes (map-based for O(1)
 // lookup, matching the load balancer and perf handler convention).
-var gatewayNAT64Handlers = map[byte]func(*GatewayHandler, context.Context, *Request) *Response{
-	OpGatewayNAT64Status: (*GatewayHandler).handleNAT64Status,
+var gatewayNAT64Handlers = map[byte]func(*GatewayHandler, context.Context, *quicwire.Request) *quicwire.Response{
+	quicwire.OpGatewayNAT64Status: (*GatewayHandler).handleNAT64Status,
 }
 
 // handleNAT64Status returns the NAT64 translator's health snapshot.
-func (h *GatewayHandler) handleNAT64Status(ctx context.Context, req *Request) *Response {
+func (h *GatewayHandler) handleNAT64Status(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.gatewayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayServiceNotAvailable)
 	}
 
 	status, err := h.gatewayService.NAT64Status(ctx)
@@ -70,10 +38,10 @@ func (h *GatewayHandler) handleNAT64Status(ctx context.Context, req *Request) *R
 		return h.gatewayErrorResponse(err)
 	}
 
-	resp := &GatewayNAT64StatusResponse{Status: status, Timestamp: time.Now().Unix()}
-	payload, err := EncodePayload(resp)
+	resp := &quicwire.GatewayNAT64StatusResponse{Status: status, Timestamp: time.Now().Unix()}
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}
-	return &Response{Status: StatusOK, Payload: payload}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }

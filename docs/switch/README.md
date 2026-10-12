@@ -82,7 +82,8 @@ Isolate problematic devices by moving them to a quarantine VLAN without physical
 ## Packages
 
 - **`pkg/switch`**: Core manager interface, SSH implementation, vendor factories
-  - `types.go`: Config, Manager, PortStatus types
+  - `types.go`: Config and Manager types; `PortStatus` is the wire type in
+    `sdk/go/wire/switchwire`
   - `service.go`: Service layer with named registry
   - `manager_factory.go`: Vendor dispatch
   - `ssh_manager.go`: SSH CLI implementation

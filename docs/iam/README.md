@@ -27,7 +27,7 @@ Trusted Platform IAM provides complete authentication and authorization capabili
 | REST | HTTPS | 8443 | Web clients, external integrations |
 | gRPC | TCP | 9443 | High-performance service-to-service |
 | QUIC | UDP | 9444 | Low-latency, mobile clients |
-| MCP | stdio/HTTP | 9445 | AI/LLM tool integration |
+| MCP | stdio/HTTPS | 9445 | AI/LLM tool integration |
 | Unix | Socket | /run/platformd.sock | Local IPC, CLI |
 | CLI | - | - | Administrative operations |
 

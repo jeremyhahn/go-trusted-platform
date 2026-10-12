@@ -288,9 +288,13 @@ All payloads use MessagePack encoding via the `codec` package.
 
 ### Encoding Example (Go)
 
+The wire contract — frames, opcodes, status codes, codecs and the client — is
+the SDK package `sdk/go/wire/quicwire`; the daemon's handlers import the same
+package.
+
 ```go
 import (
-    "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+    "github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Encode request
@@ -298,11 +302,16 @@ req := &VTPMCreateRequest{
     Hostname:    "myhost",
     EKAlgorithm: "RSA",
 }
-payload, _ := quic.EncodePayload(req)
+payload, err := quicwire.EncodePayload(req)
+if err != nil {
+    return err
+}
 
 // Decode response
 var resp VTPMCreateResponse
-quic.DecodePayload(responsePayload, &resp)
+if err := quicwire.DecodePayload(responsePayload, &resp); err != nil {
+    return err
+}
 ```
 
 ## Examples
@@ -316,38 +325,31 @@ import (
     "context"
     "log"
 
-    "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+    "github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 func main() {
-    // Create client
-    client, err := quic.NewClient(&quic.ClientConfig{
-        ServerAddr: "localhost:9444",
-    })
+    // Create client (TLS 1.3, ALPN "platform-quic", system roots)
+    client, err := quicwire.NewClient(quicwire.DefaultClientConfig("localhost:9444"))
     if err != nil {
         log.Fatal(err)
     }
     defer client.Close()
 
     // Health check
-    resp, err := client.Send(context.Background(), &quic.Request{
-        Opcode:  quic.OpHealth,
-        Payload: nil,
-    })
-    if err != nil {
+    if err := client.Health(context.Background()); err != nil {
         log.Fatal(err)
     }
-
-    var health HealthCheckResponse
-    quic.DecodePayload(resp.Payload, &health)
-    log.Printf("Health: %v", health.Healthy)
+    log.Print("healthy")
 }
 ```
 
 ### Create vTPM Bundle
 
+`Send` encodes the request, sends it under the opcode and decodes the response
+payload. A non-OK status byte comes back as `*quicwire.ErrProtocol`.
+
 ```go
-// Build request
 req := &VTPMCreateRequest{
     Hostname:          "device-001",
     EKAlgorithm:       "RSA",
@@ -357,18 +359,10 @@ req := &VTPMCreateRequest{
     },
 }
 
-payload, _ := quic.EncodePayload(req)
-
-resp, err := client.Send(ctx, &quic.Request{
-    Opcode:  quic.OpVTPMCreate,
-    Payload: payload,
-})
-if err != nil {
+var result VTPMCreateResponse
+if err := client.Send(ctx, quicwire.OpVTPMCreate, req, &result); err != nil {
     log.Fatal(err)
 }
-
-var result VTPMCreateResponse
-quic.DecodePayload(resp.Payload, &result)
 log.Printf("Created vTPM: %s", result.ID)
 ```
 
@@ -381,53 +375,43 @@ req := &VTPMListRequest{
     Offset: 0,
 }
 
-payload, _ := quic.EncodePayload(req)
-
-resp, err := client.Send(ctx, &quic.Request{
-    Opcode:  quic.OpVTPMList,
-    Payload: payload,
-})
-if err != nil {
+var result VTPMListResponse
+if err := client.Send(ctx, quicwire.OpVTPMList, req, &result); err != nil {
     log.Fatal(err)
 }
-
-var result VTPMListResponse
-quic.DecodePayload(resp.Payload, &result)
 log.Printf("Found %d bundles", result.Total)
 ```
 
 ## Error Handling
 
 ```go
-resp, err := client.Send(ctx, &quic.Request{
-    Opcode:  quic.OpVTPMGetState,
-    Payload: payload,
-})
+var state VTPMGetStateResponse
+err := client.Send(ctx, quicwire.OpVTPMGetState, req, &state)
+
+var protoErr *quicwire.ErrProtocol
+if errors.As(err, &protoErr) {
+    log.Printf("Error (status 0x%02X): %s", protoErr.Status, protoErr.Message)
+    return
+}
 if err != nil {
     log.Fatal(err)
-}
-
-if resp.Status != quic.StatusOK {
-    errorMsg := string(resp.Payload)
-    log.Printf("Error (status %d): %s", resp.Status, errorMsg)
-    return
 }
 ```
 
 ## Connection Management
 
 ```go
-// Create with custom config
-client, err := quic.NewClient(&quic.ClientConfig{
-    ServerAddr:        "localhost:9444",
-    CertFile:          "client.crt",
-    KeyFile:           "client.key",
-    CAFile:            "ca.crt",
-    MaxIdleTimeout:    30 * time.Second,
-})
-
-// The client maintains connection pools automatically
+// Create with a custom config; TLSConfig carries the client certificate
+// and the CA pool for mTLS.
+client, err := quicwire.NewClient(&quicwire.ClientConfig{
+    ServerAddr:     "localhost:9444",
+    TLSConfig:      tlsConfig,
+    Timeout:        10 * time.Second,
+    MaxIdleTimeout: 30 * time.Second,
+}, quicwire.WithToken(token))
 ```
+
+Each request opens a new stream on the one QUIC connection; `Close` ends it.
 
 ## See Also
 

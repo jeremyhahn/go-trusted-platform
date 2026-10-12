@@ -18,30 +18,8 @@ import (
 	"errors"
 	"net"
 	"time"
-)
 
-// Load balancer sub-opcodes carried in payload[0] under OpGatewayCategory
-// (0x2F). Gateway's own sub-opcodes end at 0x14 and the proxy service owns
-// 0x20-0x2D, so the load balancer claims the next clean free sub-range
-// 0x30-0x35.
-const (
-	// OpGatewayLBAddVIP installs a load-balanced virtual IP.
-	OpGatewayLBAddVIP byte = 0x30
-
-	// OpGatewayLBRemoveVIP tears down a virtual IP.
-	OpGatewayLBRemoveVIP byte = 0x31
-
-	// OpGatewayLBGetVIP returns one VIP's status.
-	OpGatewayLBGetVIP byte = 0x32
-
-	// OpGatewayLBListVIPs returns every VIP's status.
-	OpGatewayLBListVIPs byte = 0x33
-
-	// OpGatewayLBSetVIPBackends replaces a VIP's backend set.
-	OpGatewayLBSetVIPBackends byte = 0x34
-
-	// OpGatewayLBStatus returns the load balancer service health.
-	OpGatewayLBStatus byte = 0x35
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Load balancer sentinel errors.
@@ -175,13 +153,13 @@ type GatewayLBStatusResponse struct {
 
 // gatewayLBHandlers dispatches load balancer sub-opcodes (map-based for
 // O(1) lookup, matching the proxy handler convention).
-var gatewayLBHandlers = map[byte]func(*GatewayHandler, context.Context, *Request) *Response{
-	OpGatewayLBAddVIP:         (*GatewayHandler).handleAddVIP,
-	OpGatewayLBRemoveVIP:      (*GatewayHandler).handleRemoveVIP,
-	OpGatewayLBGetVIP:         (*GatewayHandler).handleGetVIP,
-	OpGatewayLBListVIPs:       (*GatewayHandler).handleListVIPs,
-	OpGatewayLBSetVIPBackends: (*GatewayHandler).handleSetVIPBackends,
-	OpGatewayLBStatus:         (*GatewayHandler).handleLBStatus,
+var gatewayLBHandlers = map[byte]func(*GatewayHandler, context.Context, *quicwire.Request) *quicwire.Response{
+	quicwire.OpGatewayLBAddVIP:         (*GatewayHandler).handleAddVIP,
+	quicwire.OpGatewayLBRemoveVIP:      (*GatewayHandler).handleRemoveVIP,
+	quicwire.OpGatewayLBGetVIP:         (*GatewayHandler).handleGetVIP,
+	quicwire.OpGatewayLBListVIPs:       (*GatewayHandler).handleListVIPs,
+	quicwire.OpGatewayLBSetVIPBackends: (*GatewayHandler).handleSetVIPBackends,
+	quicwire.OpGatewayLBStatus:         (*GatewayHandler).handleLBStatus,
 }
 
 // validVIPTarget reports whether a keyed VIP request carries a usable
@@ -194,17 +172,17 @@ func validVIPTarget(protocol, address string, port uint16) bool {
 }
 
 // handleAddVIP installs a load-balanced virtual IP.
-func (h *GatewayHandler) handleAddVIP(ctx context.Context, req *Request) *Response {
+func (h *GatewayHandler) handleAddVIP(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.gatewayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayServiceNotAvailable)
 	}
 
 	var addReq GatewayAddVIPRequest
-	if err := DecodePayload(req.Payload, &addReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &addReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
 	}
 	if addReq.VIP == nil || !validVIPTarget(addReq.VIP.Protocol, addReq.VIP.Address, addReq.VIP.Port) {
-		return h.errorResponse(StatusInvalidArgument, ErrGatewayMissingVIPTarget)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrGatewayMissingVIPTarget)
 	}
 
 	vip, err := h.gatewayService.AddVIP(ctx, addReq.VIP)
@@ -214,25 +192,25 @@ func (h *GatewayHandler) handleAddVIP(ctx context.Context, req *Request) *Respon
 	}
 
 	resp := &GatewayAddVIPResponse{VIP: vip, Timestamp: time.Now().Unix()}
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}
-	return &Response{Status: StatusOK, Payload: payload}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }
 
 // handleRemoveVIP tears down a load-balanced virtual IP.
-func (h *GatewayHandler) handleRemoveVIP(ctx context.Context, req *Request) *Response {
+func (h *GatewayHandler) handleRemoveVIP(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.gatewayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayServiceNotAvailable)
 	}
 
 	var removeReq GatewayRemoveVIPRequest
-	if err := DecodePayload(req.Payload, &removeReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &removeReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
 	}
 	if !validVIPTarget(removeReq.Protocol, removeReq.Address, removeReq.Port) {
-		return h.errorResponse(StatusInvalidArgument, ErrGatewayMissingVIPTarget)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrGatewayMissingVIPTarget)
 	}
 
 	if err := h.gatewayService.RemoveVIP(ctx, removeReq.Protocol, removeReq.Address, removeReq.Port); err != nil {
@@ -241,25 +219,25 @@ func (h *GatewayHandler) handleRemoveVIP(ctx context.Context, req *Request) *Res
 	}
 
 	resp := &GatewayRemoveVIPResponse{Success: true, Timestamp: time.Now().Unix()}
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}
-	return &Response{Status: StatusOK, Payload: payload}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }
 
 // handleGetVIP returns one VIP's status.
-func (h *GatewayHandler) handleGetVIP(ctx context.Context, req *Request) *Response {
+func (h *GatewayHandler) handleGetVIP(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.gatewayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayServiceNotAvailable)
 	}
 
 	var getReq GatewayGetVIPRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
 	}
 	if !validVIPTarget(getReq.Protocol, getReq.Address, getReq.Port) {
-		return h.errorResponse(StatusInvalidArgument, ErrGatewayMissingVIPTarget)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrGatewayMissingVIPTarget)
 	}
 
 	vip, err := h.gatewayService.GetVIP(ctx, getReq.Protocol, getReq.Address, getReq.Port)
@@ -269,17 +247,17 @@ func (h *GatewayHandler) handleGetVIP(ctx context.Context, req *Request) *Respon
 	}
 
 	resp := &GatewayGetVIPResponse{VIP: vip, Timestamp: time.Now().Unix()}
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}
-	return &Response{Status: StatusOK, Payload: payload}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }
 
 // handleListVIPs returns every VIP's status.
-func (h *GatewayHandler) handleListVIPs(ctx context.Context, req *Request) *Response {
+func (h *GatewayHandler) handleListVIPs(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.gatewayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayServiceNotAvailable)
 	}
 
 	vips, err := h.gatewayService.ListVIPs(ctx)
@@ -293,25 +271,25 @@ func (h *GatewayHandler) handleListVIPs(ctx context.Context, req *Request) *Resp
 		Count:     int32(len(vips)),
 		Timestamp: time.Now().Unix(),
 	}
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}
-	return &Response{Status: StatusOK, Payload: payload}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }
 
 // handleSetVIPBackends replaces a VIP's backend set.
-func (h *GatewayHandler) handleSetVIPBackends(ctx context.Context, req *Request) *Response {
+func (h *GatewayHandler) handleSetVIPBackends(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.gatewayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayServiceNotAvailable)
 	}
 
 	var setReq GatewaySetVIPBackendsRequest
-	if err := DecodePayload(req.Payload, &setReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &setReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
 	}
 	if !validVIPTarget(setReq.Protocol, setReq.Address, setReq.Port) {
-		return h.errorResponse(StatusInvalidArgument, ErrGatewayMissingVIPTarget)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrGatewayMissingVIPTarget)
 	}
 
 	vip, err := h.gatewayService.SetVIPBackends(ctx, setReq.Protocol, setReq.Address, setReq.Port, setReq.Backends)
@@ -321,17 +299,17 @@ func (h *GatewayHandler) handleSetVIPBackends(ctx context.Context, req *Request)
 	}
 
 	resp := &GatewaySetVIPBackendsResponse{VIP: vip, Timestamp: time.Now().Unix()}
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}
-	return &Response{Status: StatusOK, Payload: payload}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }
 
 // handleLBStatus returns the load balancer service health snapshot.
-func (h *GatewayHandler) handleLBStatus(ctx context.Context, req *Request) *Response {
+func (h *GatewayHandler) handleLBStatus(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.gatewayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrGatewayServiceNotAvailable)
 	}
 
 	lbStatus, err := h.gatewayService.LBStatus(ctx)
@@ -341,9 +319,9 @@ func (h *GatewayHandler) handleLBStatus(ctx context.Context, req *Request) *Resp
 	}
 
 	resp := &GatewayLBStatusResponse{Status: lbStatus, Timestamp: time.Now().Unix()}
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
 	}
-	return &Response{Status: StatusOK, Payload: payload}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }

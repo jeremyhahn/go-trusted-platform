@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Environment variable names for mTLS client certificate configuration.
@@ -90,7 +90,7 @@ func TLSConfigOrInsecure() *tls.Config {
 // certificates if available, defaulting NextProtos to the ALPN protocol the
 // daemon actually advertises.
 //
-// Called with no arguments it offers quic.ALPNProtocol -- the single protocol
+// Called with no arguments it offers quicwire.ALPNProtocol -- the single protocol
 // pkg/api/quic/config.go advertises -- so an adapter cannot offer a wrong one
 // by writing a string. Four adapters did exactly that (attestation-quic,
 // device-quic, iam-quic, tenant-quic) and failed the handshake with
@@ -104,7 +104,7 @@ func TLSConfigOrInsecure() *tls.Config {
 // unconstructible must not also make the test for the bug unwritable.
 func QUICTLSConfig(overrideALPN ...string) *tls.Config {
 	tlsConfig := TLSConfigOrInsecure()
-	tlsConfig.NextProtos = []string{quic.ALPNProtocol}
+	tlsConfig.NextProtos = []string{quicwire.ALPNProtocol}
 	if len(overrideALPN) > 0 {
 		tlsConfig.NextProtos = overrideALPN
 	}
@@ -120,15 +120,6 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 		Transport: &http.Transport{
 			TLSClientConfig: TLSConfigOrInsecure(),
 		},
-	}
-}
-
-// NewPlainHTTPClient creates an HTTP client without TLS configuration,
-// suitable for connecting to plain HTTP endpoints such as the MCP server.
-func NewPlainHTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: &http.Transport{},
 	}
 }
 
@@ -151,14 +142,19 @@ func GRPCUnixCredentials() grpc.DialOption {
 	return grpc.WithTransportCredentials(insecure.NewCredentials())
 }
 
-// MCPEndpointURL constructs the full MCP endpoint URL. The MCP server always
-// serves plain HTTP (not HTTPS), so this function always uses the http scheme.
-// Even when mTLS is enabled for other protocols, the MCP server operates over
-// plain HTTP on its dedicated port.
-func MCPEndpointURL(endpoint string) string {
-	// If the endpoint already has a scheme, return it with /mcp appended
+// MCPBaseURL returns the MCP server base URL for endpoint. platformd serves
+// MCP over TLS 1.3 only (#844), so an endpoint without a scheme gets https://.
+// An explicit scheme is kept as given, so a negative test can still dial
+// http:// and assert the refusal.
+func MCPBaseURL(endpoint string) string {
 	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		return endpoint + "/mcp"
+		return endpoint
 	}
-	return "http://" + endpoint + "/mcp"
+	return "https://" + endpoint
+}
+
+// MCPEndpointURL returns the full MCP JSON-RPC URL for endpoint; see
+// MCPBaseURL for the scheme rules. Pair it with NewHTTPClient.
+func MCPEndpointURL(endpoint string) string {
+	return MCPBaseURL(endpoint) + "/mcp"
 }

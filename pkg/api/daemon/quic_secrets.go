@@ -18,13 +18,13 @@ import (
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Secrets category (opcode 0xCE) handlers.
 //
 // The secrets surface multiplexes store/get/list/delete and the
-// rotation-policy pair under quic.OpSecretsCategory with the first
+// rotation-policy pair under quicwire.OpSecretsCategory with the first
 // payload byte selecting the sub-operation, mirroring the secrets
 // subset exposed by the gRPC and Unix transports. Dispatch is map-based
 // per project conventions. All handlers delegate to the
@@ -142,23 +142,23 @@ type SecretsGetRotationPolicyResponse struct {
 // =============================================================================
 
 // secretsQUICHandler handles a secrets sub-operation.
-type secretsQUICHandler func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quic.Response
+type secretsQUICHandler func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quicwire.Response
 
 // secretsQUICDispatch routes secrets sub-opcodes with O(1) lookup.
 var secretsQUICDispatch = map[byte]secretsQUICHandler{
-	quic.SecretsSubStore:             (*QUICServiceHandler).handleSecretsStore,
-	quic.SecretsSubGet:               (*QUICServiceHandler).handleSecretsGet,
-	quic.SecretsSubList:              (*QUICServiceHandler).handleSecretsList,
-	quic.SecretsSubDelete:            (*QUICServiceHandler).handleSecretsDelete,
-	quic.SecretsSubSetRotationPolicy: (*QUICServiceHandler).handleSecretsSetRotationPolicy,
-	quic.SecretsSubGetRotationPolicy: (*QUICServiceHandler).handleSecretsGetRotationPolicy,
+	quicwire.SecretsSubStore:             (*QUICServiceHandler).handleSecretsStore,
+	quicwire.SecretsSubGet:               (*QUICServiceHandler).handleSecretsGet,
+	quicwire.SecretsSubList:              (*QUICServiceHandler).handleSecretsList,
+	quicwire.SecretsSubDelete:            (*QUICServiceHandler).handleSecretsDelete,
+	quicwire.SecretsSubSetRotationPolicy: (*QUICServiceHandler).handleSecretsSetRotationPolicy,
+	quicwire.SecretsSubGetRotationPolicy: (*QUICServiceHandler).handleSecretsGetRotationPolicy,
 }
 
 // handleSecretsCategory routes a secrets request to the correct
 // sub-handler based on the first payload byte.
-func (h *QUICServiceHandler) handleSecretsCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleSecretsCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.secretsService == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "secrets"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "secrets"})
 	}
 	sub, payload, errResp := subPayload(req)
 	if errResp != nil {
@@ -166,7 +166,7 @@ func (h *QUICServiceHandler) handleSecretsCategory(ctx context.Context, req *qui
 	}
 	fn, ok := secretsQUICDispatch[sub]
 	if !ok {
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: sub})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: sub})
 	}
 	return fn(h, ctx, payload)
 }
@@ -180,16 +180,16 @@ func (h *QUICServiceHandler) SetSecretsService(svc SecretsServiceInterface) {
 // Sub-operation Handlers
 // =============================================================================
 
-func (h *QUICServiceHandler) handleSecretsStore(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleSecretsStore(ctx context.Context, payload []byte) *quicwire.Response {
 	var storeReq SecretsStoreRequest
-	if err := quic.DecodePayload(payload, &storeReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &storeReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if storeReq.SecretID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "secret_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "secret_id"})
 	}
 	if len(storeReq.Data) == 0 {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "data"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "data"})
 	}
 
 	pbResp, err := h.secretsService.StoreSecret(ctx, &pb.StoreSecretRequest{
@@ -199,7 +199,7 @@ func (h *QUICServiceHandler) handleSecretsStore(ctx context.Context, payload []b
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to store secret", "secret_id", storeReq.SecretID)
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsStore", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsStore", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&SecretsStoreResponse{
@@ -209,13 +209,13 @@ func (h *QUICServiceHandler) handleSecretsStore(ctx context.Context, payload []b
 	})
 }
 
-func (h *QUICServiceHandler) handleSecretsGet(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleSecretsGet(ctx context.Context, payload []byte) *quicwire.Response {
 	var getReq SecretsGetRequest
-	if err := quic.DecodePayload(payload, &getReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if getReq.SecretID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "secret_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "secret_id"})
 	}
 
 	pbResp, err := h.secretsService.GetSecret(ctx, &pb.GetSecretRequest{
@@ -224,7 +224,7 @@ func (h *QUICServiceHandler) handleSecretsGet(ctx context.Context, payload []byt
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to get secret", "secret_id", getReq.SecretID)
-		return h.errorResponse(quic.StatusNotFound, ErrQUICOperationFailed{Op: "SecretsGet", Cause: err})
+		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "SecretsGet", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&SecretsGetResponse{
@@ -236,11 +236,11 @@ func (h *QUICServiceHandler) handleSecretsGet(ctx context.Context, payload []byt
 	})
 }
 
-func (h *QUICServiceHandler) handleSecretsList(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleSecretsList(ctx context.Context, payload []byte) *quicwire.Response {
 	var listReq SecretsListRequest
 	if len(payload) > 0 {
-		if err := quic.DecodePayload(payload, &listReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(payload, &listReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -258,7 +258,7 @@ func (h *QUICServiceHandler) handleSecretsList(ctx context.Context, payload []by
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to list secrets")
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsList", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsList", Cause: err})
 	}
 
 	secretIDs := make([]string, 0, len(pbResp.Secrets))
@@ -272,19 +272,19 @@ func (h *QUICServiceHandler) handleSecretsList(ctx context.Context, payload []by
 	})
 }
 
-func (h *QUICServiceHandler) handleSecretsDelete(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleSecretsDelete(ctx context.Context, payload []byte) *quicwire.Response {
 	var deleteReq SecretsDeleteRequest
-	if err := quic.DecodePayload(payload, &deleteReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if deleteReq.SecretID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "secret_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "secret_id"})
 	}
 
 	pbResp, err := h.secretsService.DeleteSecret(ctx, &pb.DeleteSecretRequest{SecretId: deleteReq.SecretID})
 	if err != nil {
 		h.logger.Error(err, "failed to delete secret", "secret_id", deleteReq.SecretID)
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsDelete", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsDelete", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&SecretsDeleteResponse{
@@ -294,16 +294,16 @@ func (h *QUICServiceHandler) handleSecretsDelete(ctx context.Context, payload []
 	})
 }
 
-func (h *QUICServiceHandler) handleSecretsSetRotationPolicy(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleSecretsSetRotationPolicy(ctx context.Context, payload []byte) *quicwire.Response {
 	var setReq SecretsSetRotationPolicyRequest
-	if err := quic.DecodePayload(payload, &setReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &setReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if setReq.SecretID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "secret_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "secret_id"})
 	}
 	if setReq.Policy == nil {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "policy"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "policy"})
 	}
 
 	pbResp, err := h.secretsService.SetRotationPolicy(ctx, &pb.SetRotationPolicyRequest{
@@ -312,7 +312,7 @@ func (h *QUICServiceHandler) handleSecretsSetRotationPolicy(ctx context.Context,
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to set rotation policy", "secret_id", setReq.SecretID)
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsSetRotationPolicy", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "SecretsSetRotationPolicy", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&SecretsSetRotationPolicyResponse{
@@ -322,19 +322,19 @@ func (h *QUICServiceHandler) handleSecretsSetRotationPolicy(ctx context.Context,
 	})
 }
 
-func (h *QUICServiceHandler) handleSecretsGetRotationPolicy(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleSecretsGetRotationPolicy(ctx context.Context, payload []byte) *quicwire.Response {
 	var getReq SecretsGetRotationPolicyRequest
-	if err := quic.DecodePayload(payload, &getReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if getReq.SecretID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "secret_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "secret_id"})
 	}
 
 	pbResp, err := h.secretsService.GetRotationPolicy(ctx, &pb.GetRotationPolicyRequest{SecretId: getReq.SecretID})
 	if err != nil {
 		h.logger.Error(err, "failed to get rotation policy", "secret_id", getReq.SecretID)
-		return h.errorResponse(quic.StatusNotFound, ErrQUICOperationFailed{Op: "SecretsGetRotationPolicy", Cause: err})
+		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "SecretsGetRotationPolicy", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&SecretsGetRotationPolicyResponse{

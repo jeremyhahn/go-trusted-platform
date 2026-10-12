@@ -119,10 +119,10 @@ type Manager interface {
     GetPortVLAN(ctx context.Context, port string) (uint16, error)
 
     // GetPortStatus returns the full observable state of a port
-    GetPortStatus(ctx context.Context, port string) (*PortStatus, error)
+    GetPortStatus(ctx context.Context, port string) (*switchwire.PortStatus, error)
 
     // ListPorts returns the status of all physical ports on the switch
-    ListPorts(ctx context.Context) ([]*PortStatus, error)
+    ListPorts(ctx context.Context) ([]*switchwire.PortStatus, error)
 
     // EnablePort administratively enables a port
     EnablePort(ctx context.Context, port string) error
@@ -138,6 +138,9 @@ type Manager interface {
 ### Data Types
 
 ```go
+// Package switchwire (sdk/go/wire/switchwire): the daemon and the SDK
+// switch client share this one definition.
+
 // PortStatus represents the observable state of a single switch port
 type PortStatus struct {
     Port        string   // Port identifier (e.g., "Eth1/3")

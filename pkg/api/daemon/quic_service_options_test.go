@@ -20,9 +20,9 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -103,7 +103,7 @@ func TestHandleDevice_NoDeviceService(t *testing.T) {
 	handler := NewQUICServiceHandler(logger) // No device service
 
 	ctx := context.Background()
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  0x30, // Arbitrary opcode for device
 		Payload: []byte{},
 	}
@@ -112,8 +112,8 @@ func TestHandleDevice_NoDeviceService(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusUnavailable {
-		t.Errorf("expected status %d, got %d", quic.StatusUnavailable, resp.Status)
+	if resp.Status != quicwire.StatusUnavailable {
+		t.Errorf("expected status %d, got %d", quicwire.StatusUnavailable, resp.Status)
 	}
 }
 
@@ -125,7 +125,7 @@ func TestHandleDeviceOperation(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("unknown opcode returns not implemented", func(t *testing.T) {
-		req := &quic.Request{
+		req := &quicwire.Request{
 			Opcode:  0xFF, // Unknown opcode
 			Payload: []byte{},
 		}
@@ -133,14 +133,14 @@ func TestHandleDeviceOperation(t *testing.T) {
 		if resp == nil {
 			t.Fatal("expected non-nil response")
 		}
-		if resp.Status != quic.StatusNotImplemented {
-			t.Errorf("expected status %d, got %d", quic.StatusNotImplemented, resp.Status)
+		if resp.Status != quicwire.StatusNotImplemented {
+			t.Errorf("expected status %d, got %d", quicwire.StatusNotImplemented, resp.Status)
 		}
 	})
 
 	t.Run("valid opcode without device service returns error", func(t *testing.T) {
-		req := &quic.Request{
-			Opcode:  quic.OpDeviceRegister,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpDeviceRegister,
 			Payload: []byte{},
 		}
 		// No device service set, so handleDeviceRegister will fail on decode
@@ -149,7 +149,7 @@ func TestHandleDeviceOperation(t *testing.T) {
 			t.Fatal("expected non-nil response")
 		}
 		// Should return an error status (invalid request due to empty payload decode)
-		if resp.Status == quic.StatusOK {
+		if resp.Status == quicwire.StatusOK {
 			t.Error("expected non-OK status for empty payload on register")
 		}
 	})
@@ -192,8 +192,8 @@ func TestHandleHealthCheck_NoRegistry(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	ctx := context.Background()
-	req := &quic.Request{
-		Opcode:  quic.OpHealth,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpHealth,
 		Payload: []byte{},
 	}
 
@@ -201,8 +201,8 @@ func TestHandleHealthCheck_NoRegistry(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status %d, got %d", quic.StatusOK, resp.Status)
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status %d, got %d", quicwire.StatusOK, resp.Status)
 	}
 }
 
@@ -220,8 +220,8 @@ func TestHandleHealthCheck_WithHealthyRegistry(t *testing.T) {
 	handler := NewQUICServiceHandler(logger, WithQUICHealthRegistry(mockRegistry))
 
 	ctx := context.Background()
-	req := &quic.Request{
-		Opcode:  quic.OpHealth,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpHealth,
 		Payload: []byte{},
 	}
 
@@ -229,8 +229,8 @@ func TestHandleHealthCheck_WithHealthyRegistry(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status %d, got %d", quic.StatusOK, resp.Status)
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status %d, got %d", quicwire.StatusOK, resp.Status)
 	}
 }
 
@@ -248,8 +248,8 @@ func TestHandleHealthCheck_WithUnhealthyRegistry(t *testing.T) {
 	handler := NewQUICServiceHandler(logger, WithQUICHealthRegistry(mockRegistry))
 
 	ctx := context.Background()
-	req := &quic.Request{
-		Opcode:  quic.OpHealth,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpHealth,
 		Payload: []byte{},
 	}
 
@@ -257,8 +257,8 @@ func TestHandleHealthCheck_WithUnhealthyRegistry(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status %d, got %d", quic.StatusOK, resp.Status)
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status %d, got %d", quicwire.StatusOK, resp.Status)
 	}
 }
 
@@ -277,8 +277,8 @@ func TestHandleHealthCheck_WithMixedComponents(t *testing.T) {
 	handler := NewQUICServiceHandler(logger, WithQUICHealthRegistry(mockRegistry))
 
 	ctx := context.Background()
-	req := &quic.Request{
-		Opcode:  quic.OpHealth,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpHealth,
 		Payload: []byte{},
 	}
 
@@ -286,8 +286,8 @@ func TestHandleHealthCheck_WithMixedComponents(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status %d, got %d", quic.StatusOK, resp.Status)
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status %d, got %d", quicwire.StatusOK, resp.Status)
 	}
 }
 
@@ -297,8 +297,8 @@ func TestHandleLiveness(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	ctx := context.Background()
-	req := &quic.Request{
-		Opcode:  quic.OpLiveness,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpLiveness,
 		Payload: []byte{},
 	}
 
@@ -306,8 +306,8 @@ func TestHandleLiveness(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status %d, got %d", quic.StatusOK, resp.Status)
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status %d, got %d", quicwire.StatusOK, resp.Status)
 	}
 }
 
@@ -317,8 +317,8 @@ func TestHandleReadiness_NoServices(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	ctx := context.Background()
-	req := &quic.Request{
-		Opcode:  quic.OpReadiness,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpReadiness,
 		Payload: []byte{},
 	}
 
@@ -326,8 +326,8 @@ func TestHandleReadiness_NoServices(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status %d, got %d", quic.StatusOK, resp.Status)
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status %d, got %d", quicwire.StatusOK, resp.Status)
 	}
 }
 
@@ -337,8 +337,8 @@ func TestHandleHealth_ViaHandleRequest(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	ctx := context.Background()
-	req := &quic.Request{
-		Opcode:  quic.OpHealth,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpHealth,
 		Payload: []byte{},
 	}
 
@@ -346,8 +346,8 @@ func TestHandleHealth_ViaHandleRequest(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status %d, got %d", quic.StatusOK, resp.Status)
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status %d, got %d", quicwire.StatusOK, resp.Status)
 	}
 }
 
@@ -357,8 +357,8 @@ func TestHandleLiveness_ViaHandleRequest(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	ctx := context.Background()
-	req := &quic.Request{
-		Opcode:  quic.OpLiveness,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpLiveness,
 		Payload: []byte{},
 	}
 
@@ -366,8 +366,8 @@ func TestHandleLiveness_ViaHandleRequest(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status %d, got %d", quic.StatusOK, resp.Status)
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status %d, got %d", quicwire.StatusOK, resp.Status)
 	}
 }
 
@@ -377,8 +377,8 @@ func TestHandleReadiness_ViaHandleRequest(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	ctx := context.Background()
-	req := &quic.Request{
-		Opcode:  quic.OpReadiness,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpReadiness,
 		Payload: []byte{},
 	}
 
@@ -386,8 +386,8 @@ func TestHandleReadiness_ViaHandleRequest(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusOK {
-		t.Errorf("expected status %d, got %d", quic.StatusOK, resp.Status)
+	if resp.Status != quicwire.StatusOK {
+		t.Errorf("expected status %d, got %d", quicwire.StatusOK, resp.Status)
 	}
 }
 
@@ -397,8 +397,8 @@ func TestHandleCertificate_NilHandler(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	ctx := context.Background()
-	req := &quic.Request{
-		Opcode:  quic.OpCertIssue, // Certificate category opcode
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCertIssue, // Certificate category opcode
 		Payload: []byte{},
 	}
 
@@ -406,8 +406,8 @@ func TestHandleCertificate_NilHandler(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusUnavailable {
-		t.Errorf("expected status %d, got %d", quic.StatusUnavailable, resp.Status)
+	if resp.Status != quicwire.StatusUnavailable {
+		t.Errorf("expected status %d, got %d", quicwire.StatusUnavailable, resp.Status)
 	}
 }
 
@@ -417,8 +417,8 @@ func TestHandleCA_NilCAService(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	ctx := context.Background()
-	req := &quic.Request{
-		Opcode:  quic.OpCAInfo, // CA info opcode
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpCAInfo, // CA info opcode
 		Payload: []byte{},
 	}
 
@@ -426,8 +426,8 @@ func TestHandleCA_NilCAService(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusUnavailable {
-		t.Errorf("expected status %d, got %d", quic.StatusUnavailable, resp.Status)
+	if resp.Status != quicwire.StatusUnavailable {
+		t.Errorf("expected status %d, got %d", quicwire.StatusUnavailable, resp.Status)
 	}
 }
 
@@ -437,7 +437,7 @@ func TestHandleUnknownOpcode(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	ctx := context.Background()
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  0xFE, // Unknown opcode (Container Stop is 0xFE but without service it returns Unavailable)
 		Payload: []byte{},
 	}
@@ -447,7 +447,7 @@ func TestHandleUnknownOpcode(t *testing.T) {
 		t.Fatal("expected non-nil response")
 	}
 	// When no container service is configured, container opcodes return Unavailable
-	if resp.Status != quic.StatusUnavailable && resp.Status != quic.StatusNotImplemented {
+	if resp.Status != quicwire.StatusUnavailable && resp.Status != quicwire.StatusNotImplemented {
 		t.Errorf("expected status Unavailable or NotImplemented, got %d", resp.Status)
 	}
 }
@@ -462,7 +462,7 @@ func TestHandleRequest_NilRequest(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.Status != quic.StatusInvalidRequest {
-		t.Errorf("expected status %d, got %d", quic.StatusInvalidRequest, resp.Status)
+	if resp.Status != quicwire.StatusInvalidRequest {
+		t.Errorf("expected status %d, got %d", quicwire.StatusInvalidRequest, resp.Status)
 	}
 }

@@ -13,7 +13,7 @@ The `platformd` daemon is the core system service for the Trusted Platform, expo
 | **Multi-Protocol** | Simultaneous REST, gRPC, QUIC, MCP, and Unix Socket support |
 | **Service Management** | Lifecycle control for platform subsystems |
 | **Health Monitoring** | Unified health checks across all protocols |
-| **TLS Support** | Optional TLS for REST and gRPC transports |
+| **TLS Support** | TLS for REST and gRPC; MCP over HTTP is TLS 1.3 only |
 | **Graceful Shutdown** | Coordinated shutdown with configurable timeout |
 | **Auto-Start Services** | Configurable automatic service startup |
 
@@ -24,7 +24,7 @@ The `platformd` daemon is the core system service for the Trusted Platform, expo
 | REST | HTTP/HTTPS | 8443 | Web clients, external integrations |
 | gRPC | TCP | 9443 | High-performance service-to-service |
 | QUIC | UDP | 9444 | Low-latency, mobile clients |
-| MCP | HTTP/stdio | 9445 | AI/LLM tool integration |
+| MCP | stdio/HTTPS | 9445 | AI/LLM tool integration |
 | Unix Socket | Unix | /run/platformd.sock | Local IPC, CLI tools |
 
 ## Quick Start
@@ -77,7 +77,7 @@ platformctl service stop dns
         |            |            |            |            |
 +-------v------+ +---v----+ +----v---+ +------v-----+ +----v-----+
 |    REST      | |  gRPC  | |  QUIC  | |    MCP     | |  Unix    |
-| HTTP/HTTPS   | |  TCP   | |  UDP   | | HTTP/stdio | |  Socket  |
+| HTTP/HTTPS   | |  TCP   | |  UDP   | | HTTPS/stdio| |  Socket  |
 | Port 8443    | | Port   | | Port   | | Port 9445  | | /run/    |
 |              | | 9443   | | 9444   | |            | | platformd|
 +--------------+ +--------+ +--------+ +------------+ | .sock    |
@@ -157,7 +157,7 @@ daemon:
     bind-host: 127.0.0.1
     port: 9445
     enabled: false
-    transport: http
+    transport: http   # HTTPS, TLS 1.3 only, daemon certificate; no plaintext mode
     server_name: "Trusted Platform MCP Server"
     request_timeout: 30s
     max_concurrent_requests: 100

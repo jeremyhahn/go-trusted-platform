@@ -29,7 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/kvstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // validateInvitation enforces invitation preconditions before a
@@ -129,7 +129,7 @@ func (h *WebAuthnRestHandler) issueToken(r *http.Request, user *entities.User) (
 
 // writeConflictError writes a 409 Conflict response.
 func (h *WebAuthnRestHandler) writeConflictError(w http.ResponseWriter, r *http.Request, err error) {
-	h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+	h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 		Code:    http.StatusConflict,
 		Error:   err.Error(),
 		Success: false,

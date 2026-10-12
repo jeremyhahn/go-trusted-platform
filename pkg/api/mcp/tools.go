@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // ToolRegistry manages MCP tools and their execution.
@@ -28,7 +29,7 @@ type ToolRegistry struct {
 	authChecker *AuthorizationChecker
 	service     ServiceProvider
 	logger      *logging.Logger
-	tools       []ToolDefinition
+	tools       []mcpwire.ToolDefinition
 }
 
 // NewToolRegistry creates a new tool registry.
@@ -36,7 +37,7 @@ func NewToolRegistry(svc ServiceProvider, log *logging.Logger) *ToolRegistry {
 	r := &ToolRegistry{
 		service: svc,
 		logger:  log,
-		tools:   make([]ToolDefinition, 0, 195),
+		tools:   make([]mcpwire.ToolDefinition, 0, 195),
 	}
 
 	// Register all tools
@@ -161,7 +162,7 @@ func (r *ToolRegistry) registerTools() {
 
 // registerVTPMTools registers vTPM-related tools.
 func (r *ToolRegistry) registerVTPMTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_create",
 		Description: "Create a new virtual TPM instance",
 		InputSchema: map[string]interface{}{
@@ -174,7 +175,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_delete",
 		Description: "Delete a virtual TPM instance",
 		InputSchema: map[string]interface{}{
@@ -186,7 +187,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_list",
 		Description: "List all virtual TPM instances",
 		InputSchema: map[string]interface{}{
@@ -195,7 +196,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_start",
 		Description: "Start a virtual TPM instance",
 		InputSchema: map[string]interface{}{
@@ -207,7 +208,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_stop",
 		Description: "Stop a virtual TPM instance",
 		InputSchema: map[string]interface{}{
@@ -219,7 +220,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_quote",
 		Description: "Generate a TPM quote for attestation",
 		InputSchema: map[string]interface{}{
@@ -233,7 +234,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_seal",
 		Description: "Seal data to TPM PCR state",
 		InputSchema: map[string]interface{}{
@@ -247,7 +248,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_unseal",
 		Description: "Unseal data from TPM",
 		InputSchema: map[string]interface{}{
@@ -260,7 +261,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_extend_pcr",
 		Description: "Extend a PCR with a measurement",
 		InputSchema: map[string]interface{}{
@@ -274,7 +275,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_read_pcr",
 		Description: "Read a PCR value",
 		InputSchema: map[string]interface{}{
@@ -288,7 +289,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 	})
 
 	// Extended vTPM tools - bundle get, validate, export, import
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_get",
 		Description: "Get detailed information about a vTPM bundle",
 		InputSchema: map[string]interface{}{
@@ -300,7 +301,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_validate",
 		Description: "Validate bundle integrity",
 		InputSchema: map[string]interface{}{
@@ -312,7 +313,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_export",
 		Description: "Export a vTPM bundle to a base64-encoded archive",
 		InputSchema: map[string]interface{}{
@@ -324,7 +325,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_import",
 		Description: "Import a vTPM bundle from base64-encoded archive data",
 		InputSchema: map[string]interface{}{
@@ -337,7 +338,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 	})
 
 	// Template operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_create",
 		Description: "Create a reusable vTPM template",
 		InputSchema: map[string]interface{}{
@@ -352,7 +353,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_get",
 		Description: "Get detailed information about a vTPM template",
 		InputSchema: map[string]interface{}{
@@ -364,7 +365,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_delete",
 		Description: "Delete a vTPM template",
 		InputSchema: map[string]interface{}{
@@ -376,7 +377,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_list",
 		Description: "List all vTPM templates",
 		InputSchema: map[string]interface{}{
@@ -385,7 +386,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_template_clone",
 		Description: "Clone a template to create a new bundle with identity",
 		InputSchema: map[string]interface{}{
@@ -400,7 +401,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 	})
 
 	// Path operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_get_bundle_path",
 		Description: "Get the filesystem path to a vTPM bundle",
 		InputSchema: map[string]interface{}{
@@ -412,7 +413,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_get_tpm_socket_path",
 		Description: "Get the TPM socket path for a bundle",
 		InputSchema: map[string]interface{}{
@@ -424,7 +425,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_get_nvram_path",
 		Description: "Get the OVMF NVRAM path for a bundle",
 		InputSchema: map[string]interface{}{
@@ -436,7 +437,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vtpm_is_running",
 		Description: "Check if a vTPM bundle is running",
 		InputSchema: map[string]interface{}{
@@ -452,7 +453,7 @@ func (r *ToolRegistry) registerVTPMTools() {
 
 // registerDNSTools registers DNS-related tools.
 func (r *ToolRegistry) registerDNSTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_add_record",
 		Description: "Add a DNS record",
 		InputSchema: map[string]interface{}{
@@ -467,7 +468,7 @@ func (r *ToolRegistry) registerDNSTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_delete_record",
 		Description: "Delete a DNS record",
 		InputSchema: map[string]interface{}{
@@ -480,7 +481,7 @@ func (r *ToolRegistry) registerDNSTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_get_record",
 		Description: "Get a DNS record",
 		InputSchema: map[string]interface{}{
@@ -493,7 +494,7 @@ func (r *ToolRegistry) registerDNSTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_list_records",
 		Description: "List DNS records in a zone",
 		InputSchema: map[string]interface{}{
@@ -505,7 +506,7 @@ func (r *ToolRegistry) registerDNSTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_resolve",
 		Description: "Resolve a DNS name",
 		InputSchema: map[string]interface{}{
@@ -518,7 +519,7 @@ func (r *ToolRegistry) registerDNSTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_create_zone",
 		Description: "Create a DNS zone",
 		InputSchema: map[string]interface{}{
@@ -530,7 +531,7 @@ func (r *ToolRegistry) registerDNSTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_delete_zone",
 		Description: "Delete a DNS zone",
 		InputSchema: map[string]interface{}{
@@ -542,7 +543,7 @@ func (r *ToolRegistry) registerDNSTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_list_zones",
 		Description: "List all DNS zones",
 		InputSchema: map[string]interface{}{
@@ -554,7 +555,7 @@ func (r *ToolRegistry) registerDNSTools() {
 
 // registerDeviceTools registers Device-related tools.
 func (r *ToolRegistry) registerDeviceTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_register",
 		Description: "Register a new device",
 		InputSchema: map[string]interface{}{
@@ -568,7 +569,7 @@ func (r *ToolRegistry) registerDeviceTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_get",
 		Description: "Get device details",
 		InputSchema: map[string]interface{}{
@@ -580,7 +581,7 @@ func (r *ToolRegistry) registerDeviceTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_list",
 		Description: "List devices",
 		InputSchema: map[string]interface{}{
@@ -592,7 +593,7 @@ func (r *ToolRegistry) registerDeviceTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_delete",
 		Description: "Delete a device",
 		InputSchema: map[string]interface{}{
@@ -604,7 +605,7 @@ func (r *ToolRegistry) registerDeviceTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_update",
 		Description: "Update device properties",
 		InputSchema: map[string]interface{}{
@@ -617,7 +618,7 @@ func (r *ToolRegistry) registerDeviceTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_attest",
 		Description: "Verify device attestation evidence",
 		InputSchema: map[string]interface{}{
@@ -630,7 +631,7 @@ func (r *ToolRegistry) registerDeviceTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_record_attest_cert",
 		Description: "Record (or re-record) a device's attestation certificate on its platform record without re-enrolling it. Fails closed: the certificate must parse, chain to the platform CA, carry tcg-cap-verifiedTPMRestricted (2.23.133.11.1.3) and certify the device's enrolled attestation key, or nothing is written. Set reissue to let the CA issue a fresh certificate over the enrolled key.",
 		InputSchema: map[string]interface{}{
@@ -643,7 +644,7 @@ func (r *ToolRegistry) registerDeviceTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_provision",
 		Description: "Provision a device with a profile",
 		InputSchema: map[string]interface{}{
@@ -659,7 +660,7 @@ func (r *ToolRegistry) registerDeviceTools() {
 
 // registerSDNTools registers SDN-related tools.
 func (r *ToolRegistry) registerSDNTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_get_port_state",
 		Description: "Get the state of an OVS port",
 		InputSchema: map[string]interface{}{
@@ -672,7 +673,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_set_port_state",
 		Description: "Set the state of an OVS port",
 		InputSchema: map[string]interface{}{
@@ -686,7 +687,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_list_bridges",
 		Description: "List all OVS bridges",
 		InputSchema: map[string]interface{}{
@@ -695,7 +696,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_create_bridge",
 		Description: "Create an OVS bridge",
 		InputSchema: map[string]interface{}{
@@ -707,7 +708,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_delete_bridge",
 		Description: "Delete an OVS bridge",
 		InputSchema: map[string]interface{}{
@@ -719,7 +720,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_add_port",
 		Description: "Add a port to an OVS bridge",
 		InputSchema: map[string]interface{}{
@@ -733,7 +734,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_delete_port",
 		Description: "Delete a port from an OVS bridge",
 		InputSchema: map[string]interface{}{
@@ -746,7 +747,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_apply_policy",
 		Description: "Apply a network policy to a bridge",
 		InputSchema: map[string]interface{}{
@@ -759,7 +760,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_get_policy",
 		Description: "Get a network policy",
 		InputSchema: map[string]interface{}{
@@ -771,7 +772,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_list_policies",
 		Description: "List all network policies",
 		InputSchema: map[string]interface{}{
@@ -781,7 +782,7 @@ func (r *ToolRegistry) registerSDNTools() {
 	})
 
 	// Flow management tools
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_add_flow",
 		Description: "Add a flow rule to a bridge",
 		InputSchema: map[string]interface{}{
@@ -796,7 +797,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_delete_flow",
 		Description: "Delete a flow rule from a bridge",
 		InputSchema: map[string]interface{}{
@@ -809,7 +810,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_list_flows",
 		Description: "List all flows on a bridge",
 		InputSchema: map[string]interface{}{
@@ -821,7 +822,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_flush_flows",
 		Description: "Delete all flows on a bridge",
 		InputSchema: map[string]interface{}{
@@ -834,7 +835,7 @@ func (r *ToolRegistry) registerSDNTools() {
 	})
 
 	// VLAN management tools
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_create_vlan",
 		Description: "Create a VLAN on a bridge",
 		InputSchema: map[string]interface{}{
@@ -848,7 +849,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_delete_vlan",
 		Description: "Delete a VLAN from a bridge",
 		InputSchema: map[string]interface{}{
@@ -861,7 +862,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_list_vlans",
 		Description: "List all VLANs on a bridge",
 		InputSchema: map[string]interface{}{
@@ -874,7 +875,7 @@ func (r *ToolRegistry) registerSDNTools() {
 	})
 
 	// Port authentication tools
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_authenticate_port",
 		Description: "Authenticate a port (802.1X style)",
 		InputSchema: map[string]interface{}{
@@ -888,7 +889,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_revoke_port_auth",
 		Description: "Revoke port authentication",
 		InputSchema: map[string]interface{}{
@@ -902,7 +903,7 @@ func (r *ToolRegistry) registerSDNTools() {
 	})
 
 	// Statistics tools
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_get_port_stats",
 		Description: "Get statistics for a port",
 		InputSchema: map[string]interface{}{
@@ -915,7 +916,7 @@ func (r *ToolRegistry) registerSDNTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "sdn_get_flow_stats",
 		Description: "Get flow statistics for a bridge",
 		InputSchema: map[string]interface{}{
@@ -930,7 +931,7 @@ func (r *ToolRegistry) registerSDNTools() {
 
 // registerHealthTools registers health-related tools.
 func (r *ToolRegistry) registerHealthTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_health",
 		Description: "Get platform health status",
 		InputSchema: map[string]interface{}{
@@ -939,7 +940,7 @@ func (r *ToolRegistry) registerHealthTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_liveness",
 		Description: "Check if the platform is alive",
 		InputSchema: map[string]interface{}{
@@ -948,7 +949,7 @@ func (r *ToolRegistry) registerHealthTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_readiness",
 		Description: "Check if the platform is ready to serve requests",
 		InputSchema: map[string]interface{}{
@@ -960,7 +961,7 @@ func (r *ToolRegistry) registerHealthTools() {
 
 // registerCATools registers Certificate Authority related tools.
 func (r *ToolRegistry) registerCATools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "ca_info",
 		Description: "Get Certificate Authority information including initialization status, common name, algorithm, and certificate details",
 		InputSchema: map[string]interface{}{
@@ -969,7 +970,7 @@ func (r *ToolRegistry) registerCATools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "ca_issue",
 		Description: "Issue a new certificate from the Certificate Authority",
 		InputSchema: map[string]interface{}{
@@ -1059,7 +1060,7 @@ func (r *ToolRegistry) registerCATools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "ca_get",
 		Description: "Get a certificate by its serial number",
 		InputSchema: map[string]interface{}{
@@ -1079,7 +1080,7 @@ func (r *ToolRegistry) registerCATools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "ca_list",
 		Description: "List certificates issued by the Certificate Authority",
 		InputSchema: map[string]interface{}{
@@ -1102,7 +1103,7 @@ func (r *ToolRegistry) registerCATools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "ca_revoke",
 		Description: "Revoke a certificate by its serial number",
 		InputSchema: map[string]interface{}{
@@ -1127,7 +1128,7 @@ func (r *ToolRegistry) registerCATools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "ca_renew",
 		Description: "Renew an existing certificate with extended validity",
 		InputSchema: map[string]interface{}{
@@ -1152,7 +1153,7 @@ func (r *ToolRegistry) registerCATools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "ca_verify",
 		Description: "Verify a certificate against the CA certificate chain",
 		InputSchema: map[string]interface{}{
@@ -1175,7 +1176,7 @@ func (r *ToolRegistry) registerCATools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "ca_crl",
 		Description: "Get the Certificate Revocation List (CRL)",
 		InputSchema: map[string]interface{}{
@@ -1184,7 +1185,7 @@ func (r *ToolRegistry) registerCATools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "ca_bundle",
 		Description: "Get the CA certificate bundle (chain of trust)",
 		InputSchema: map[string]interface{}{
@@ -1204,12 +1205,12 @@ func (r *ToolRegistry) registerCATools() {
 }
 
 // addTool adds a tool definition to the registry.
-func (r *ToolRegistry) addTool(tool ToolDefinition) {
+func (r *ToolRegistry) addTool(tool mcpwire.ToolDefinition) {
 	r.tools = append(r.tools, tool)
 }
 
 // ListTools returns all registered tools.
-func (r *ToolRegistry) ListTools() []ToolDefinition {
+func (r *ToolRegistry) ListTools() []mcpwire.ToolDefinition {
 	return r.tools
 }
 
@@ -1813,7 +1814,7 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		if result, handled, err := r.dispatchVMTool(ctx, name, args); handled {
 			return result, err
 		}
-		return nil, &MessageError{Msg: fmt.Sprintf("unknown tool: %s", name)}
+		return nil, &mcpwire.MessageError{Msg: fmt.Sprintf("unknown tool: %s", name)}
 	}
 }
 

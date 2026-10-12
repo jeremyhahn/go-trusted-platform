@@ -16,8 +16,8 @@ package daemon
 import (
 	"context"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -39,13 +39,13 @@ import (
 
 // ntpQUICHandler is one NTP sub-operation handler (map-based dispatch for
 // O(1) routing).
-type ntpQUICHandler func(*QUICServiceHandler, context.Context) *quic.Response
+type ntpQUICHandler func(*QUICServiceHandler, context.Context) *quicwire.Response
 
 // ntpQUICHandlers routes NTP sub-opcodes to their handlers.
 var ntpQUICHandlers = map[byte]ntpQUICHandler{
-	quic.NTPSubGetStatus:   (*QUICServiceHandler).handleNTPGetStatus,
-	quic.NTPSubListSources: (*QUICServiceHandler).handleNTPListSources,
-	quic.NTPSubStep:        (*QUICServiceHandler).handleNTPStep,
+	quicwire.NTPSubGetStatus:   (*QUICServiceHandler).handleNTPGetStatus,
+	quicwire.NTPSubListSources: (*QUICServiceHandler).handleNTPListSources,
+	quicwire.NTPSubStep:        (*QUICServiceHandler).handleNTPStep,
 }
 
 // SetNTPService wires the NTP gRPC service into the QUIC handler. The same
@@ -63,17 +63,17 @@ func WithQUICNTPService(service platformv1.NTPServiceServer) QUICServiceHandlerO
 
 // handleNTPCategory dispatches the NTP category opcode. payload[0] selects
 // the sub-operation.
-func (h *QUICServiceHandler) handleNTPCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleNTPCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.ntpService == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "ntp"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "ntp"})
 	}
 	if len(req.Payload) == 0 {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
 	}
 
 	handler, ok := ntpQUICHandlers[req.Payload[0]]
 	if !ok {
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Payload[0]})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Payload[0]})
 	}
 	return handler(h, ctx)
 }
@@ -82,36 +82,36 @@ func (h *QUICServiceHandler) handleNTPCategory(ctx context.Context, req *quic.Re
 // (map-based for O(1) lookup), so a QUIC caller sees the same failure class
 // as a REST or gRPC caller.
 var ntpQUICStatus = map[codes.Code]byte{
-	codes.Unavailable:       quic.StatusUnavailable,
-	codes.Aborted:           quic.StatusAlreadyExists,
-	codes.InvalidArgument:   quic.StatusInvalidArgument,
-	codes.DeadlineExceeded:  quic.StatusTimeout,
-	codes.NotFound:          quic.StatusNotFound,
-	codes.PermissionDenied:  quic.StatusPermissionDenied,
-	codes.Unimplemented:     quic.StatusNotImplemented,
-	codes.ResourceExhausted: quic.StatusResourceExhausted,
+	codes.Unavailable:       quicwire.StatusUnavailable,
+	codes.Aborted:           quicwire.StatusAlreadyExists,
+	codes.InvalidArgument:   quicwire.StatusInvalidArgument,
+	codes.DeadlineExceeded:  quicwire.StatusTimeout,
+	codes.NotFound:          quicwire.StatusNotFound,
+	codes.PermissionDenied:  quicwire.StatusPermissionDenied,
+	codes.Unimplemented:     quicwire.StatusNotImplemented,
+	codes.ResourceExhausted: quicwire.StatusResourceExhausted,
 }
 
 // ntpErrorResponse converts a service error into a QUIC error response.
-func (h *QUICServiceHandler) ntpErrorResponse(err error) *quic.Response {
+func (h *QUICServiceHandler) ntpErrorResponse(err error) *quicwire.Response {
 	wireStatus, ok := ntpQUICStatus[status.Code(err)]
 	if !ok {
-		wireStatus = quic.StatusInternalError
+		wireStatus = quicwire.StatusInternalError
 	}
 	return h.errorResponse(wireStatus, err)
 }
 
 // encodeNTPResponse encodes a platform.v1 response message.
-func (h *QUICServiceHandler) encodeNTPResponse(msg any) *quic.Response {
-	payload, err := quic.EncodePayload(msg)
+func (h *QUICServiceHandler) encodeNTPResponse(msg any) *quicwire.Response {
+	payload, err := quicwire.EncodePayload(msg)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
-	return &quic.Response{Status: quic.StatusOK, Payload: payload}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }
 
 // handleNTPGetStatus serves the get-status sub-operation.
-func (h *QUICServiceHandler) handleNTPGetStatus(ctx context.Context) *quic.Response {
+func (h *QUICServiceHandler) handleNTPGetStatus(ctx context.Context) *quicwire.Response {
 	resp, err := h.ntpService.GetStatus(ctx, &platformv1.GetNTPStatusRequest{})
 	if err != nil {
 		return h.ntpErrorResponse(err)
@@ -120,7 +120,7 @@ func (h *QUICServiceHandler) handleNTPGetStatus(ctx context.Context) *quic.Respo
 }
 
 // handleNTPListSources serves the list-sources sub-operation.
-func (h *QUICServiceHandler) handleNTPListSources(ctx context.Context) *quic.Response {
+func (h *QUICServiceHandler) handleNTPListSources(ctx context.Context) *quicwire.Response {
 	resp, err := h.ntpService.ListSources(ctx, &platformv1.ListNTPSourcesRequest{})
 	if err != nil {
 		return h.ntpErrorResponse(err)
@@ -131,7 +131,7 @@ func (h *QUICServiceHandler) handleNTPListSources(ctx context.Context) *quic.Res
 // handleNTPStep serves the step sub-operation. It answers StatusAlreadyExists
 // (the wire's conflict status, mirroring REST 409) when no source is
 // reachable.
-func (h *QUICServiceHandler) handleNTPStep(ctx context.Context) *quic.Response {
+func (h *QUICServiceHandler) handleNTPStep(ctx context.Context) *quicwire.Response {
 	resp, err := h.ntpService.Step(ctx, &platformv1.StepNTPClockRequest{})
 	if err != nil {
 		return h.ntpErrorResponse(err)

@@ -276,7 +276,7 @@ client cannot tell it guessed. Record the method beside the path or this
 recurs.
 
 **Correction to carry upstream.** `docs/provisioning/api.md` §1 records the PXE
-QUIC opcodes as `0xFC`–`0xFF`. `pkg/api/quic/protocol.go` also defines
+QUIC opcodes as `0xFC`–`0xFF`. `sdk/go/wire/quicwire/protocol.go` also defines
 `OpPXEListDevices` `0xEC`, `OpPXEGetDevice` `0xED`, `OpPXERegisterDevice` `0xEE`
 and `OpPXEUpdateState` `0xEF` — eight, not four. Raised against
 `docs/provisioning/`, which owns that table.

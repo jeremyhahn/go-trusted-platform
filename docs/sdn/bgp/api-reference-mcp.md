@@ -1,7 +1,7 @@
 # BGP MCP API Reference
 
 BGP operations are exposed as gateway MCP tools
-(`pkg/api/mcp/gateway_tools.go`), served via MCP (stdio / HTTP, port
+(`pkg/api/mcp/gateway_tools.go`), served via MCP (stdio / HTTPS, port
 9445).
 
 ## Tools

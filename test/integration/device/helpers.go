@@ -54,7 +54,7 @@ func GetMCPEndpoint() string {
 	if endpoint := os.Getenv("PLATFORM_MCP_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "http://localhost:9445"
+	return "https://localhost:9445"
 }
 
 // GetSocketPath returns the Unix socket path

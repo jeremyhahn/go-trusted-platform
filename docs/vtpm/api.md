@@ -17,7 +17,7 @@ over a Unix domain socket**, so gRPC and Unix share a column.
 gRPC: `VTPMService`, 23 RPCs (`pkg/api/grpc/proto/vtpm.proto`).
 REST: base path `/api/v1/vtpm` (`pkg/webservice/v1/rest/vtpm/router.go`).
 QUIC: **two top-level ranges** — `0x03`–`0x0F` for templates and bundles,
-`0x10`–`0x1F` for runtime operations (`pkg/api/quic/protocol.go`).
+`0x10`–`0x1F` for runtime operations (`sdk/go/wire/quicwire/protocol.go`).
 
 ---
 

@@ -27,13 +27,14 @@ import (
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func init() {
 	// Set the default codec to MsgPack for encoding/decoding payloads
-	_ = SetDefaultCodecType(codec.MsgPack)
+	_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 }
 
 // =============================================================================
@@ -545,20 +546,20 @@ func TestVTPMHandleRequest(t *testing.T) {
 
 		resp := handler.HandleRequest(context.Background(), nil)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "nil")
 	})
 
 	t.Run("returns error for unknown opcode", func(t *testing.T) {
 		handler, _ := createTestVTPMHandler()
 
-		req := &Request{
+		req := &quicwire.Request{
 			Opcode: 0x00, // Unknown opcode for vTPM handler
 		}
 
 		resp := handler.HandleRequest(context.Background(), req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "unknown vTPM operation")
 	})
 }
@@ -580,20 +581,20 @@ func TestVTPMHandleCreateBundle(t *testing.T) {
 			Labels:            map[string]string{"env": "test"},
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var bundleResp VTPMBundleResponse
-		err = DecodePayload(resp.Payload, &bundleResp)
+		err = quicwire.DecodePayload(resp.Payload, &bundleResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-test-host", bundleResp.ID)
@@ -610,17 +611,17 @@ func TestVTPMHandleCreateBundle(t *testing.T) {
 			EKAlgorithm: "ECC",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
@@ -630,17 +631,17 @@ func TestVTPMHandleCreateBundle(t *testing.T) {
 			Hostname: "test-host",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing hostname", func(t *testing.T) {
@@ -648,31 +649,31 @@ func TestVTPMHandleCreateBundle(t *testing.T) {
 
 		createReq := &VTPMCreateBundleRequest{}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "hostname")
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		handler, _ := createTestVTPMHandler()
 
-		req := &Request{
-			Opcode:  OpVTPMCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCreate,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when create fails", func(t *testing.T) {
@@ -683,17 +684,17 @@ func TestVTPMHandleCreateBundle(t *testing.T) {
 			Hostname: "test-host",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCreate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCreate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -712,20 +713,20 @@ func TestVTPMHandleGetBundle(t *testing.T) {
 			ID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var bundleResp VTPMBundleResponse
-		err = DecodePayload(resp.Payload, &bundleResp)
+		err = quicwire.DecodePayload(resp.Payload, &bundleResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", bundleResp.ID)
@@ -741,17 +742,17 @@ func TestVTPMHandleGetBundle(t *testing.T) {
 			ID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -759,17 +760,17 @@ func TestVTPMHandleGetBundle(t *testing.T) {
 
 		getReq := &VTPMGetBundleRequest{}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for bundle not found", func(t *testing.T) {
@@ -779,17 +780,17 @@ func TestVTPMHandleGetBundle(t *testing.T) {
 			ID: "nonexistent",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -808,20 +809,20 @@ func TestVTPMHandleDeleteBundle(t *testing.T) {
 			ID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var deleteResp VTPMDeleteBundleResponse
-		err = DecodePayload(resp.Payload, &deleteResp)
+		err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", deleteResp.BundleID)
@@ -835,17 +836,17 @@ func TestVTPMHandleDeleteBundle(t *testing.T) {
 			ID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -853,17 +854,17 @@ func TestVTPMHandleDeleteBundle(t *testing.T) {
 
 		deleteReq := &VTPMDeleteBundleRequest{}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for bundle not found", func(t *testing.T) {
@@ -873,17 +874,17 @@ func TestVTPMHandleDeleteBundle(t *testing.T) {
 			ID: "nonexistent",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMDelete,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMDelete,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -903,20 +904,20 @@ func TestVTPMHandleListBundles(t *testing.T) {
 			Limit: 10,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp VTPMListBundlesResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, 2, listResp.Count)
@@ -928,17 +929,17 @@ func TestVTPMHandleListBundles(t *testing.T) {
 
 		listReq := &VTPMListBundlesRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("caps limit at max", func(t *testing.T) {
@@ -948,17 +949,17 @@ func TestVTPMHandleListBundles(t *testing.T) {
 			Limit: 5000, // exceeds max
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("filters by mode", func(t *testing.T) {
@@ -969,17 +970,17 @@ func TestVTPMHandleListBundles(t *testing.T) {
 			Mode: "pre-assigned",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
@@ -987,17 +988,17 @@ func TestVTPMHandleListBundles(t *testing.T) {
 
 		listReq := &VTPMListBundlesRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when list fails", func(t *testing.T) {
@@ -1006,17 +1007,17 @@ func TestVTPMHandleListBundles(t *testing.T) {
 
 		listReq := &VTPMListBundlesRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMList,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMList,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -1037,20 +1038,20 @@ func TestVTPMHandleCreateTemplate(t *testing.T) {
 			SecureBootEnabled: true,
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCreateTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCreateTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var templateResp VTPMTemplateResponse
-		err = DecodePayload(resp.Payload, &templateResp)
+		err = quicwire.DecodePayload(resp.Payload, &templateResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "template-1", templateResp.ID)
@@ -1067,17 +1068,17 @@ func TestVTPMHandleCreateTemplate(t *testing.T) {
 			EKAlgorithm: "ECC",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCreateTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCreateTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
@@ -1087,17 +1088,17 @@ func TestVTPMHandleCreateTemplate(t *testing.T) {
 			ID: "template-1",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCreateTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCreateTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1105,17 +1106,17 @@ func TestVTPMHandleCreateTemplate(t *testing.T) {
 
 		createReq := &VTPMCreateTemplateRequest{}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCreateTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCreateTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when template already exists", func(t *testing.T) {
@@ -1126,17 +1127,17 @@ func TestVTPMHandleCreateTemplate(t *testing.T) {
 			ID: "template-1",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCreateTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCreateTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusAlreadyExists, resp.Status)
+		assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 	})
 }
 
@@ -1155,20 +1156,20 @@ func TestVTPMHandleGetTemplate(t *testing.T) {
 			ID: "template-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var templateResp VTPMTemplateResponse
-		err = DecodePayload(resp.Payload, &templateResp)
+		err = quicwire.DecodePayload(resp.Payload, &templateResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "template-1", templateResp.ID)
@@ -1181,17 +1182,17 @@ func TestVTPMHandleGetTemplate(t *testing.T) {
 			ID: "template-1",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1199,17 +1200,17 @@ func TestVTPMHandleGetTemplate(t *testing.T) {
 
 		getReq := &VTPMGetTemplateRequest{}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for template not found", func(t *testing.T) {
@@ -1219,17 +1220,17 @@ func TestVTPMHandleGetTemplate(t *testing.T) {
 			ID: "nonexistent",
 		}
 
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1248,20 +1249,20 @@ func TestVTPMHandleDeleteTemplate(t *testing.T) {
 			ID: "template-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMDeleteTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMDeleteTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var deleteResp VTPMDeleteTemplateResponse
-		err = DecodePayload(resp.Payload, &deleteResp)
+		err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "template-1", deleteResp.TemplateID)
@@ -1275,17 +1276,17 @@ func TestVTPMHandleDeleteTemplate(t *testing.T) {
 			ID: "template-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMDeleteTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMDeleteTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing ID", func(t *testing.T) {
@@ -1293,17 +1294,17 @@ func TestVTPMHandleDeleteTemplate(t *testing.T) {
 
 		deleteReq := &VTPMDeleteTemplateRequest{}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMDeleteTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMDeleteTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for template not found", func(t *testing.T) {
@@ -1313,17 +1314,17 @@ func TestVTPMHandleDeleteTemplate(t *testing.T) {
 			ID: "nonexistent",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMDeleteTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMDeleteTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1339,16 +1340,16 @@ func TestVTPMHandleListTemplates(t *testing.T) {
 		createTestTemplate(service, "template-1")
 		createTestTemplate(service, "template-2")
 
-		req := &Request{
-			Opcode: OpVTPMListTemplates,
+		req := &quicwire.Request{
+			Opcode: quicwire.OpVTPMListTemplates,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp VTPMListTemplatesResponse
-		err := DecodePayload(resp.Payload, &listResp)
+		err := quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, 2, listResp.Count)
@@ -1358,26 +1359,26 @@ func TestVTPMHandleListTemplates(t *testing.T) {
 	t.Run("returns error when service unavailable", func(t *testing.T) {
 		handler := NewVTPMHandler(newVTPMTestLogger(), nil)
 
-		req := &Request{
-			Opcode: OpVTPMListTemplates,
+		req := &quicwire.Request{
+			Opcode: quicwire.OpVTPMListTemplates,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when list fails", func(t *testing.T) {
 		handler, service := createTestVTPMHandler()
 		service.listError = errors.New("list failed")
 
-		req := &Request{
-			Opcode: OpVTPMListTemplates,
+		req := &quicwire.Request{
+			Opcode: quicwire.OpVTPMListTemplates,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -1398,20 +1399,20 @@ func TestVTPMHandleCloneTemplate(t *testing.T) {
 			Labels:     map[string]string{"cloned": "true"},
 		}
 
-		payload, err := EncodePayload(cloneReq)
+		payload, err := quicwire.EncodePayload(cloneReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCloneTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCloneTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var bundleResp VTPMBundleResponse
-		err = DecodePayload(resp.Payload, &bundleResp)
+		err = quicwire.DecodePayload(resp.Payload, &bundleResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-cloned-host", bundleResp.ID)
@@ -1427,17 +1428,17 @@ func TestVTPMHandleCloneTemplate(t *testing.T) {
 			Hostname:   "cloned-host",
 		}
 
-		payload, err := EncodePayload(cloneReq)
+		payload, err := quicwire.EncodePayload(cloneReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCloneTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCloneTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing template ID", func(t *testing.T) {
@@ -1447,17 +1448,17 @@ func TestVTPMHandleCloneTemplate(t *testing.T) {
 			Hostname: "cloned-host",
 		}
 
-		payload, err := EncodePayload(cloneReq)
+		payload, err := quicwire.EncodePayload(cloneReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCloneTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCloneTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing hostname", func(t *testing.T) {
@@ -1467,17 +1468,17 @@ func TestVTPMHandleCloneTemplate(t *testing.T) {
 			TemplateID: "template-1",
 		}
 
-		payload, err := EncodePayload(cloneReq)
+		payload, err := quicwire.EncodePayload(cloneReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCloneTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCloneTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for template not found", func(t *testing.T) {
@@ -1488,17 +1489,17 @@ func TestVTPMHandleCloneTemplate(t *testing.T) {
 			Hostname:   "cloned-host",
 		}
 
-		payload, err := EncodePayload(cloneReq)
+		payload, err := quicwire.EncodePayload(cloneReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMCloneTemplate,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMCloneTemplate,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1517,20 +1518,20 @@ func TestVTPMHandleStart(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(startReq)
+		payload, err := quicwire.EncodePayload(startReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMStart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMStart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var startResp VTPMStartResponse
-		err = DecodePayload(resp.Payload, &startResp)
+		err = quicwire.DecodePayload(resp.Payload, &startResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", startResp.BundleID)
@@ -1545,17 +1546,17 @@ func TestVTPMHandleStart(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(startReq)
+		payload, err := quicwire.EncodePayload(startReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMStart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMStart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -1563,17 +1564,17 @@ func TestVTPMHandleStart(t *testing.T) {
 
 		startReq := &VTPMStartRequest{}
 
-		payload, err := EncodePayload(startReq)
+		payload, err := quicwire.EncodePayload(startReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMStart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMStart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when already running", func(t *testing.T) {
@@ -1585,17 +1586,17 @@ func TestVTPMHandleStart(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(startReq)
+		payload, err := quicwire.EncodePayload(startReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMStart,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMStart,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusAlreadyExists, resp.Status)
+		assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 	})
 }
 
@@ -1611,20 +1612,20 @@ func TestVTPMHandleStop(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(stopReq)
+		payload, err := quicwire.EncodePayload(stopReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMStop,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMStop,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var stopResp VTPMStopResponse
-		err = DecodePayload(resp.Payload, &stopResp)
+		err = quicwire.DecodePayload(resp.Payload, &stopResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", stopResp.BundleID)
@@ -1638,17 +1639,17 @@ func TestVTPMHandleStop(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(stopReq)
+		payload, err := quicwire.EncodePayload(stopReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMStop,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMStop,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -1656,17 +1657,17 @@ func TestVTPMHandleStop(t *testing.T) {
 
 		stopReq := &VTPMStopRequest{}
 
-		payload, err := EncodePayload(stopReq)
+		payload, err := quicwire.EncodePayload(stopReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMStop,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMStop,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when not running", func(t *testing.T) {
@@ -1677,17 +1678,17 @@ func TestVTPMHandleStop(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(stopReq)
+		payload, err := quicwire.EncodePayload(stopReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMStop,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMStop,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1707,20 +1708,20 @@ func TestVTPMHandleGetState(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var stateResp VTPMGetStateResponse
-		err = DecodePayload(resp.Payload, &stateResp)
+		err = quicwire.DecodePayload(resp.Payload, &stateResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", stateResp.BundleID)
@@ -1736,20 +1737,20 @@ func TestVTPMHandleGetState(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var stateResp VTPMGetStateResponse
-		err = DecodePayload(resp.Payload, &stateResp)
+		err = quicwire.DecodePayload(resp.Payload, &stateResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", stateResp.BundleID)
@@ -1764,17 +1765,17 @@ func TestVTPMHandleGetState(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -1782,17 +1783,17 @@ func TestVTPMHandleGetState(t *testing.T) {
 
 		stateReq := &VTPMGetStateRequest{}
 
-		payload, err := EncodePayload(stateReq)
+		payload, err := quicwire.EncodePayload(stateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetState,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetState,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -1808,20 +1809,20 @@ func TestVTPMHandleIsRunning(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(runningReq)
+		payload, err := quicwire.EncodePayload(runningReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMIsRunning,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMIsRunning,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var runningResp VTPMIsRunningResponse
-		err = DecodePayload(resp.Payload, &runningResp)
+		err = quicwire.DecodePayload(resp.Payload, &runningResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", runningResp.BundleID)
@@ -1835,17 +1836,17 @@ func TestVTPMHandleIsRunning(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(runningReq)
+		payload, err := quicwire.EncodePayload(runningReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMIsRunning,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMIsRunning,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -1853,17 +1854,17 @@ func TestVTPMHandleIsRunning(t *testing.T) {
 
 		runningReq := &VTPMIsRunningRequest{}
 
-		payload, err := EncodePayload(runningReq)
+		payload, err := quicwire.EncodePayload(runningReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMIsRunning,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMIsRunning,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -1885,20 +1886,20 @@ func TestVTPMHandleQuote(t *testing.T) {
 			PCRs:     []int{0, 1, 7},
 		}
 
-		payload, err := EncodePayload(quoteReq)
+		payload, err := quicwire.EncodePayload(quoteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMQuote,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMQuote,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var quoteResp VTPMQuoteResponse
-		err = DecodePayload(resp.Payload, &quoteResp)
+		err = quicwire.DecodePayload(resp.Payload, &quoteResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", quoteResp.BundleID)
@@ -1917,17 +1918,17 @@ func TestVTPMHandleQuote(t *testing.T) {
 			PCRs:     []int{0},
 		}
 
-		payload, err := EncodePayload(quoteReq)
+		payload, err := quicwire.EncodePayload(quoteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMQuote,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMQuote,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -1937,17 +1938,17 @@ func TestVTPMHandleQuote(t *testing.T) {
 			Nonce: []byte("test-nonce"),
 		}
 
-		payload, err := EncodePayload(quoteReq)
+		payload, err := quicwire.EncodePayload(quoteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMQuote,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMQuote,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing nonce", func(t *testing.T) {
@@ -1957,17 +1958,17 @@ func TestVTPMHandleQuote(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(quoteReq)
+		payload, err := quicwire.EncodePayload(quoteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMQuote,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMQuote,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid PCR index", func(t *testing.T) {
@@ -1979,17 +1980,17 @@ func TestVTPMHandleQuote(t *testing.T) {
 			PCRs:     []int{24}, // Invalid
 		}
 
-		payload, err := EncodePayload(quoteReq)
+		payload, err := quicwire.EncodePayload(quoteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMQuote,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMQuote,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when vTPM not running", func(t *testing.T) {
@@ -2002,17 +2003,17 @@ func TestVTPMHandleQuote(t *testing.T) {
 			PCRs:     []int{0},
 		}
 
-		payload, err := EncodePayload(quoteReq)
+		payload, err := quicwire.EncodePayload(quoteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMQuote,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMQuote,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -2033,20 +2034,20 @@ func TestVTPMHandleReadPCR(t *testing.T) {
 			PCRIndex: 7,
 		}
 
-		payload, err := EncodePayload(readReq)
+		payload, err := quicwire.EncodePayload(readReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMReadPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMReadPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var readResp VTPMReadPCRResponse
-		err = DecodePayload(resp.Payload, &readResp)
+		err = quicwire.DecodePayload(resp.Payload, &readResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", readResp.BundleID)
@@ -2062,17 +2063,17 @@ func TestVTPMHandleReadPCR(t *testing.T) {
 			PCRIndex: 0,
 		}
 
-		payload, err := EncodePayload(readReq)
+		payload, err := quicwire.EncodePayload(readReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMReadPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMReadPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -2082,17 +2083,17 @@ func TestVTPMHandleReadPCR(t *testing.T) {
 			PCRIndex: 0,
 		}
 
-		payload, err := EncodePayload(readReq)
+		payload, err := quicwire.EncodePayload(readReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMReadPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMReadPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid PCR index", func(t *testing.T) {
@@ -2103,17 +2104,17 @@ func TestVTPMHandleReadPCR(t *testing.T) {
 			PCRIndex: 24, // Invalid
 		}
 
-		payload, err := EncodePayload(readReq)
+		payload, err := quicwire.EncodePayload(readReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMReadPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMReadPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2131,20 +2132,20 @@ func TestVTPMHandleExtendPCR(t *testing.T) {
 			Data:     []byte("extend-data"),
 		}
 
-		payload, err := EncodePayload(extendReq)
+		payload, err := quicwire.EncodePayload(extendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMExtendPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMExtendPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var extendResp VTPMExtendPCRResponse
-		err = DecodePayload(resp.Payload, &extendResp)
+		err = quicwire.DecodePayload(resp.Payload, &extendResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", extendResp.BundleID)
@@ -2161,17 +2162,17 @@ func TestVTPMHandleExtendPCR(t *testing.T) {
 			Data:     []byte("extend-data"),
 		}
 
-		payload, err := EncodePayload(extendReq)
+		payload, err := quicwire.EncodePayload(extendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMExtendPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMExtendPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -2182,17 +2183,17 @@ func TestVTPMHandleExtendPCR(t *testing.T) {
 			Data:     []byte("extend-data"),
 		}
 
-		payload, err := EncodePayload(extendReq)
+		payload, err := quicwire.EncodePayload(extendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMExtendPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMExtendPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid PCR index", func(t *testing.T) {
@@ -2204,17 +2205,17 @@ func TestVTPMHandleExtendPCR(t *testing.T) {
 			Data:     []byte("extend-data"),
 		}
 
-		payload, err := EncodePayload(extendReq)
+		payload, err := quicwire.EncodePayload(extendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMExtendPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMExtendPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing data", func(t *testing.T) {
@@ -2225,17 +2226,17 @@ func TestVTPMHandleExtendPCR(t *testing.T) {
 			PCRIndex: 14,
 		}
 
-		payload, err := EncodePayload(extendReq)
+		payload, err := quicwire.EncodePayload(extendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMExtendPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMExtendPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2258,20 +2259,20 @@ func TestVTPMHandleSeal(t *testing.T) {
 			AuthValue: "password",
 		}
 
-		payload, err := EncodePayload(sealReq)
+		payload, err := quicwire.EncodePayload(sealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMSeal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMSeal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var sealResp VTPMSealResponse
-		err = DecodePayload(resp.Payload, &sealResp)
+		err = quicwire.DecodePayload(resp.Payload, &sealResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", sealResp.BundleID)
@@ -2286,17 +2287,17 @@ func TestVTPMHandleSeal(t *testing.T) {
 			Data:     []byte("secret-data"),
 		}
 
-		payload, err := EncodePayload(sealReq)
+		payload, err := quicwire.EncodePayload(sealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMSeal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMSeal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -2306,17 +2307,17 @@ func TestVTPMHandleSeal(t *testing.T) {
 			Data: []byte("secret-data"),
 		}
 
-		payload, err := EncodePayload(sealReq)
+		payload, err := quicwire.EncodePayload(sealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMSeal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMSeal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing data", func(t *testing.T) {
@@ -2326,17 +2327,17 @@ func TestVTPMHandleSeal(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(sealReq)
+		payload, err := quicwire.EncodePayload(sealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMSeal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMSeal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid PCR index", func(t *testing.T) {
@@ -2348,17 +2349,17 @@ func TestVTPMHandleSeal(t *testing.T) {
 			PCRs:     []int{25}, // Invalid
 		}
 
-		payload, err := EncodePayload(sealReq)
+		payload, err := quicwire.EncodePayload(sealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMSeal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMSeal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when seal fails", func(t *testing.T) {
@@ -2370,17 +2371,17 @@ func TestVTPMHandleSeal(t *testing.T) {
 			Data:     []byte("secret-data"),
 		}
 
-		payload, err := EncodePayload(sealReq)
+		payload, err := quicwire.EncodePayload(sealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMSeal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMSeal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -2398,20 +2399,20 @@ func TestVTPMHandleUnseal(t *testing.T) {
 			AuthValue:  "password",
 		}
 
-		payload, err := EncodePayload(unsealReq)
+		payload, err := quicwire.EncodePayload(unsealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMUnseal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMUnseal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var unsealResp VTPMUnsealResponse
-		err = DecodePayload(resp.Payload, &unsealResp)
+		err = quicwire.DecodePayload(resp.Payload, &unsealResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", unsealResp.BundleID)
@@ -2426,17 +2427,17 @@ func TestVTPMHandleUnseal(t *testing.T) {
 			SealedData: []byte("sealed-data"),
 		}
 
-		payload, err := EncodePayload(unsealReq)
+		payload, err := quicwire.EncodePayload(unsealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMUnseal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMUnseal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -2446,17 +2447,17 @@ func TestVTPMHandleUnseal(t *testing.T) {
 			SealedData: []byte("sealed-data"),
 		}
 
-		payload, err := EncodePayload(unsealReq)
+		payload, err := quicwire.EncodePayload(unsealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMUnseal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMUnseal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for missing sealed data", func(t *testing.T) {
@@ -2466,17 +2467,17 @@ func TestVTPMHandleUnseal(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(unsealReq)
+		payload, err := quicwire.EncodePayload(unsealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMUnseal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMUnseal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2495,20 +2496,20 @@ func TestVTPMHandleExportBundle(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(exportReq)
+		payload, err := quicwire.EncodePayload(exportReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMExportBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMExportBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var exportResp VTPMExportBundleResponse
-		err = DecodePayload(resp.Payload, &exportResp)
+		err = quicwire.DecodePayload(resp.Payload, &exportResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", exportResp.BundleID)
@@ -2522,17 +2523,17 @@ func TestVTPMHandleExportBundle(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(exportReq)
+		payload, err := quicwire.EncodePayload(exportReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMExportBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMExportBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -2540,17 +2541,17 @@ func TestVTPMHandleExportBundle(t *testing.T) {
 
 		exportReq := &VTPMExportBundleRequest{}
 
-		payload, err := EncodePayload(exportReq)
+		payload, err := quicwire.EncodePayload(exportReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMExportBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMExportBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for bundle not found", func(t *testing.T) {
@@ -2560,17 +2561,17 @@ func TestVTPMHandleExportBundle(t *testing.T) {
 			BundleID: "nonexistent",
 		}
 
-		payload, err := EncodePayload(exportReq)
+		payload, err := quicwire.EncodePayload(exportReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMExportBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMExportBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -2584,20 +2585,20 @@ func TestVTPMHandleImportBundle(t *testing.T) {
 			Data: []byte("mock-bundle-data"),
 		}
 
-		payload, err := EncodePayload(importReq)
+		payload, err := quicwire.EncodePayload(importReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMImportBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMImportBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var bundleResp VTPMBundleResponse
-		err = DecodePayload(resp.Payload, &bundleResp)
+		err = quicwire.DecodePayload(resp.Payload, &bundleResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "imported-bundle", bundleResp.ID)
@@ -2610,17 +2611,17 @@ func TestVTPMHandleImportBundle(t *testing.T) {
 			Data: []byte("mock-bundle-data"),
 		}
 
-		payload, err := EncodePayload(importReq)
+		payload, err := quicwire.EncodePayload(importReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMImportBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMImportBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing data", func(t *testing.T) {
@@ -2628,17 +2629,17 @@ func TestVTPMHandleImportBundle(t *testing.T) {
 
 		importReq := &VTPMImportBundleRequest{}
 
-		payload, err := EncodePayload(importReq)
+		payload, err := quicwire.EncodePayload(importReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMImportBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMImportBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2653,20 +2654,20 @@ func TestVTPMHandleValidateBundle(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(validateReq)
+		payload, err := quicwire.EncodePayload(validateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMValidateBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMValidateBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var validateResp VTPMValidateBundleResponse
-		err = DecodePayload(resp.Payload, &validateResp)
+		err = quicwire.DecodePayload(resp.Payload, &validateResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", validateResp.BundleID)
@@ -2682,20 +2683,20 @@ func TestVTPMHandleValidateBundle(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(validateReq)
+		payload, err := quicwire.EncodePayload(validateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMValidateBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMValidateBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var validateResp VTPMValidateBundleResponse
-		err = DecodePayload(resp.Payload, &validateResp)
+		err = quicwire.DecodePayload(resp.Payload, &validateResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", validateResp.BundleID)
@@ -2709,17 +2710,17 @@ func TestVTPMHandleValidateBundle(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(validateReq)
+		payload, err := quicwire.EncodePayload(validateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMValidateBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMValidateBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -2727,17 +2728,17 @@ func TestVTPMHandleValidateBundle(t *testing.T) {
 
 		validateReq := &VTPMValidateBundleRequest{}
 
-		payload, err := EncodePayload(validateReq)
+		payload, err := quicwire.EncodePayload(validateReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMValidateBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMValidateBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2755,20 +2756,20 @@ func TestVTPMHandleGetBundlePath(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(pathReq)
+		payload, err := quicwire.EncodePayload(pathReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetBundlePath,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetBundlePath,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var pathResp VTPMGetPathResponse
-		err = DecodePayload(resp.Payload, &pathResp)
+		err = quicwire.DecodePayload(resp.Payload, &pathResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", pathResp.BundleID)
@@ -2782,17 +2783,17 @@ func TestVTPMHandleGetBundlePath(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(pathReq)
+		payload, err := quicwire.EncodePayload(pathReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetBundlePath,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetBundlePath,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -2800,17 +2801,17 @@ func TestVTPMHandleGetBundlePath(t *testing.T) {
 
 		pathReq := &VTPMGetPathRequest{}
 
-		payload, err := EncodePayload(pathReq)
+		payload, err := quicwire.EncodePayload(pathReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetBundlePath,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetBundlePath,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2824,20 +2825,20 @@ func TestVTPMHandleGetSocketPath(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(pathReq)
+		payload, err := quicwire.EncodePayload(pathReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetSocketPath,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetSocketPath,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var pathResp VTPMGetPathResponse
-		err = DecodePayload(resp.Payload, &pathResp)
+		err = quicwire.DecodePayload(resp.Payload, &pathResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", pathResp.BundleID)
@@ -2851,17 +2852,17 @@ func TestVTPMHandleGetSocketPath(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(pathReq)
+		payload, err := quicwire.EncodePayload(pathReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetSocketPath,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetSocketPath,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -2869,17 +2870,17 @@ func TestVTPMHandleGetSocketPath(t *testing.T) {
 
 		pathReq := &VTPMGetPathRequest{}
 
-		payload, err := EncodePayload(pathReq)
+		payload, err := quicwire.EncodePayload(pathReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetSocketPath,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetSocketPath,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2893,20 +2894,20 @@ func TestVTPMHandleGetNVRAMPath(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(pathReq)
+		payload, err := quicwire.EncodePayload(pathReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetNVRAMPath,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetNVRAMPath,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var pathResp VTPMGetPathResponse
-		err = DecodePayload(resp.Payload, &pathResp)
+		err = quicwire.DecodePayload(resp.Payload, &pathResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "bundle-1", pathResp.BundleID)
@@ -2920,17 +2921,17 @@ func TestVTPMHandleGetNVRAMPath(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(pathReq)
+		payload, err := quicwire.EncodePayload(pathReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetNVRAMPath,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetNVRAMPath,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing bundle ID", func(t *testing.T) {
@@ -2938,17 +2939,17 @@ func TestVTPMHandleGetNVRAMPath(t *testing.T) {
 
 		pathReq := &VTPMGetPathRequest{}
 
-		payload, err := EncodePayload(pathReq)
+		payload, err := quicwire.EncodePayload(pathReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMGetNVRAMPath,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMGetNVRAMPath,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -2998,19 +2999,19 @@ func TestVTPMErrorResponse(t *testing.T) {
 		err            error
 		expectedStatus byte
 	}{
-		{"bundle not found", vtpm.ErrBundleNotFound{ID: "test"}, StatusNotFound},
-		{"bundle exists", vtpm.ErrBundleAlreadyExists{ID: "test"}, StatusAlreadyExists},
-		{"template not found", vtpm.ErrTemplateNotFound{ID: "test"}, StatusNotFound},
-		{"template exists", vtpm.ErrTemplateAlreadyExists{ID: "test"}, StatusAlreadyExists},
-		{"invalid config", vtpm.ErrInvalidConfig{Field: "test", Reason: "invalid"}, StatusInvalidArgument},
-		{"invalid manifest", vtpm.ErrInvalidManifest{Reason: "invalid"}, StatusInvalidArgument},
-		{"vTPM not running", vtpm.ErrVTPMNotRunning{BundleID: "test"}, StatusInvalidRequest},
-		{"vTPM already running", vtpm.ErrVTPMAlreadyRunning{BundleID: "test"}, StatusAlreadyExists},
-		{"invalid nonce", vtpm.ErrInvalidNonce{Reason: "too short"}, StatusInvalidArgument},
-		{"invalid PCR index", vtpm.ErrInvalidPCRIndex{PCRIndex: 99}, StatusInvalidArgument},
-		{"checksum mismatch", vtpm.ErrChecksumMismatch{File: "test.bin", Expected: "a", Actual: "b"}, StatusInvalidArgument},
-		{"CA unavailable", vtpm.ErrCAUnavailable{}, StatusUnavailable},
-		{"generic error", errors.New("unknown error"), StatusInternalError},
+		{"bundle not found", vtpm.ErrBundleNotFound{ID: "test"}, quicwire.StatusNotFound},
+		{"bundle exists", vtpm.ErrBundleAlreadyExists{ID: "test"}, quicwire.StatusAlreadyExists},
+		{"template not found", vtpm.ErrTemplateNotFound{ID: "test"}, quicwire.StatusNotFound},
+		{"template exists", vtpm.ErrTemplateAlreadyExists{ID: "test"}, quicwire.StatusAlreadyExists},
+		{"invalid config", vtpm.ErrInvalidConfig{Field: "test", Reason: "invalid"}, quicwire.StatusInvalidArgument},
+		{"invalid manifest", vtpm.ErrInvalidManifest{Reason: "invalid"}, quicwire.StatusInvalidArgument},
+		{"vTPM not running", vtpm.ErrVTPMNotRunning{BundleID: "test"}, quicwire.StatusInvalidRequest},
+		{"vTPM already running", vtpm.ErrVTPMAlreadyRunning{BundleID: "test"}, quicwire.StatusAlreadyExists},
+		{"invalid nonce", vtpm.ErrInvalidNonce{Reason: "too short"}, quicwire.StatusInvalidArgument},
+		{"invalid PCR index", vtpm.ErrInvalidPCRIndex{PCRIndex: 99}, quicwire.StatusInvalidArgument},
+		{"checksum mismatch", vtpm.ErrChecksumMismatch{File: "test.bin", Expected: "a", Actual: "b"}, quicwire.StatusInvalidArgument},
+		{"CA unavailable", vtpm.ErrCAUnavailable{}, quicwire.StatusUnavailable},
+		{"generic error", errors.New("unknown error"), quicwire.StatusInternalError},
 	}
 
 	for _, tc := range testCases {
@@ -3110,17 +3111,17 @@ func TestVTPMHandleReadPCRErrors(t *testing.T) {
 			PCRIndex: 24, // Invalid - must be 0-23
 		}
 
-		payload, err := EncodePayload(readReq)
+		payload, err := quicwire.EncodePayload(readReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMReadPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMReadPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for negative PCR index", func(t *testing.T) {
@@ -3131,17 +3132,17 @@ func TestVTPMHandleReadPCRErrors(t *testing.T) {
 			PCRIndex: -1, // Invalid
 		}
 
-		payload, err := EncodePayload(readReq)
+		payload, err := quicwire.EncodePayload(readReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMReadPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMReadPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -3157,17 +3158,17 @@ func TestVTPMHandleExtendPCRErrors(t *testing.T) {
 			Data:     []byte("test-data"),
 		}
 
-		payload, err := EncodePayload(extendReq)
+		payload, err := quicwire.EncodePayload(extendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMExtendPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMExtendPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -3181,17 +3182,17 @@ func TestVTPMHandleUnsealErrors(t *testing.T) {
 			BundleID: "bundle-1",
 		}
 
-		payload, err := EncodePayload(unsealReq)
+		payload, err := quicwire.EncodePayload(unsealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMUnseal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMUnseal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -3205,17 +3206,17 @@ func TestVTPMHandleImportBundleErrors(t *testing.T) {
 			Data: nil, // Empty data
 		}
 
-		payload, err := EncodePayload(importReq)
+		payload, err := quicwire.EncodePayload(importReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMImportBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMImportBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
@@ -3225,17 +3226,17 @@ func TestVTPMHandleImportBundleErrors(t *testing.T) {
 			Data: []byte("test-bundle-data"),
 		}
 
-		payload, err := EncodePayload(importReq)
+		payload, err := quicwire.EncodePayload(importReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMImportBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMImportBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }
 
@@ -3255,17 +3256,17 @@ func TestVTPMHandleReadPCROperationFailure(t *testing.T) {
 			PCRIndex: 0,
 		}
 
-		payload, err := EncodePayload(readReq)
+		payload, err := quicwire.EncodePayload(readReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMReadPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMReadPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -3282,17 +3283,17 @@ func TestVTPMHandleExtendPCROperationFailure(t *testing.T) {
 			Data:     []byte("test-data"),
 		}
 
-		payload, err := EncodePayload(extendReq)
+		payload, err := quicwire.EncodePayload(extendReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMExtendPCR,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMExtendPCR,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -3308,17 +3309,17 @@ func TestVTPMHandleUnsealOperationFailure(t *testing.T) {
 			SealedData: []byte("sealed-data"),
 		}
 
-		payload, err := EncodePayload(unsealReq)
+		payload, err := quicwire.EncodePayload(unsealReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMUnseal,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMUnseal,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -3333,16 +3334,16 @@ func TestVTPMHandleImportBundleOperationFailure(t *testing.T) {
 			Data: []byte("test-bundle-data"),
 		}
 
-		payload, err := EncodePayload(importReq)
+		payload, err := quicwire.EncodePayload(importReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpVTPMImportBundle,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpVTPMImportBundle,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }

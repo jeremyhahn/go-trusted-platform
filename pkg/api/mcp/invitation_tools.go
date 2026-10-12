@@ -16,6 +16,8 @@ package mcp
 import (
 	"context"
 	"errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -119,7 +121,7 @@ func (r *ToolRegistry) invitationProvider() InvitationProvider {
 // Each tool definition mirrors the equivalent gRPC RPC so AI/LLM clients
 // can issue the same calls they would over gRPC.
 func (r *ToolRegistry) registerInvitationTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_invitation_create",
 		Description: "Create a new invitation for a user to join a tenant",
 		InputSchema: map[string]interface{}{
@@ -150,7 +152,7 @@ func (r *ToolRegistry) registerInvitationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_invitation_get",
 		Description: "Retrieve an invitation by its ID",
 		InputSchema: map[string]interface{}{
@@ -165,7 +167,7 @@ func (r *ToolRegistry) registerInvitationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_invitation_get_by_token",
 		Description: "Retrieve an invitation by its secure token",
 		InputSchema: map[string]interface{}{
@@ -180,7 +182,7 @@ func (r *ToolRegistry) registerInvitationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_invitation_list",
 		Description: "List invitations for a tenant, optionally restricted to pending invitations",
 		InputSchema: map[string]interface{}{
@@ -199,7 +201,7 @@ func (r *ToolRegistry) registerInvitationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_invitation_revoke",
 		Description: "Revoke a pending invitation",
 		InputSchema: map[string]interface{}{
@@ -218,7 +220,7 @@ func (r *ToolRegistry) registerInvitationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_invitation_accept",
 		Description: "Accept a pending invitation by token",
 		InputSchema: map[string]interface{}{
@@ -237,7 +239,7 @@ func (r *ToolRegistry) registerInvitationTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_invitation_delete",
 		Description: "Permanently delete an invitation",
 		InputSchema: map[string]interface{}{

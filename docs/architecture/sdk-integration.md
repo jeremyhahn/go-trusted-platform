@@ -364,7 +364,6 @@ type ErrServiceUnavailable struct {
 
 ## Related Documentation
 
-- [SDK Overview](../api/sdk-overview.md) - Complete SDK documentation
+- [Go SDK](../sdk/architecture.md) - Complete SDK documentation
 - [QuicBaaS Integration](quicbaas-integration.md) - QuicBaaS service details
-- [Go SDK](../api/sdk-go.md) - Go SDK reference
 - [JavaScript SDK](../api/sdk-javascript.md) - JavaScript SDK reference

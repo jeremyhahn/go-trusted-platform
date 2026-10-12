@@ -16,6 +16,8 @@ package mcp
 import (
 	"context"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 func TestTenantToolExecution_ServiceUnavailable(t *testing.T) {
@@ -26,7 +28,7 @@ func TestTenantToolExecution_ServiceUnavailable(t *testing.T) {
 	registry := &ToolRegistry{
 		service: svc,
 		logger:  newTestLogger(),
-		tools:   make([]ToolDefinition, 0),
+		tools:   make([]mcpwire.ToolDefinition, 0),
 	}
 	registry.registerTenantTools()
 
@@ -74,7 +76,7 @@ func TestTenantToolExecution_MissingRequiredArgs(t *testing.T) {
 	registry := &ToolRegistry{
 		service: svc,
 		logger:  newTestLogger(),
-		tools:   make([]ToolDefinition, 0),
+		tools:   make([]mcpwire.ToolDefinition, 0),
 	}
 	registry.registerTenantTools()
 

@@ -16,6 +16,8 @@ package mcp
 import (
 	"context"
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -147,7 +149,7 @@ var ErrNetworkZoneNameRequired = &GatewayError{
 // registerGatewayTools registers gateway MCP tools.
 func (r *ToolRegistry) registerGatewayTools() {
 	// Gateway status and mode operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_status",
 		Description: "Get the current status of the gateway including ID, node ID, active modes, tier, reputation, and health status",
 		InputSchema: map[string]interface{}{
@@ -156,7 +158,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name: "gateway_snapshot",
 		Description: "Get one gateway's telemetry snapshot: BGP sessions with their BFD state and prefix counters, " +
 			"tunnels, uplink policy routes, the nftables host filter, NAT, the base OVS pipeline and every " +
@@ -172,7 +174,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_snapshots",
 		Description: "List the telemetry snapshots of every gateway that has reported to this control plane, newest report first",
 		InputSchema: map[string]interface{}{
@@ -181,7 +183,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_mode_set",
 		Description: "Set the active gateway modes. Modes determine gateway capabilities (e.g., router, NAT, firewall)",
 		InputSchema: map[string]interface{}{
@@ -200,7 +202,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 	})
 
 	// BGP operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_bgp_status",
 		Description: "Get the current status of the BGP speaker including local ASN, router ID, peer counts, and announced prefixes",
 		InputSchema: map[string]interface{}{
@@ -209,7 +211,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_bgp_peers",
 		Description: "List all configured BGP peers with their state, ASN, and prefix statistics",
 		InputSchema: map[string]interface{}{
@@ -218,7 +220,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_bgp_announce",
 		Description: "Announce a network prefix via BGP to advertise reachability",
 		InputSchema: map[string]interface{}{
@@ -237,7 +239,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_bgp_withdraw",
 		Description: "Withdraw a previously announced network prefix from BGP",
 		InputSchema: map[string]interface{}{
@@ -252,7 +254,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_bgp_prefixes",
 		Description: "List all network prefixes currently being announced via BGP",
 		InputSchema: map[string]interface{}{
@@ -262,7 +264,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 	})
 
 	// IPAM operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_ipam_pools",
 		Description: "List IPAM (IP Address Management) pools with their CIDR, gateway, and allocation statistics; optionally filter by zone",
 		InputSchema: map[string]interface{}{
@@ -276,7 +278,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_ipam_pool_get",
 		Description: "Get details of a specific IPAM pool by its ID",
 		InputSchema: map[string]interface{}{
@@ -291,7 +293,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_ipam_pool_create",
 		Description: "Create a new IPAM pool with a name, CIDR range, optional gateway, zone, DNS servers, and lease duration",
 		InputSchema: map[string]interface{}{
@@ -339,7 +341,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_ipam_pool_update",
 		Description: "Update mutable fields of an existing IPAM pool. CIDR cannot be changed after creation.",
 		InputSchema: map[string]interface{}{
@@ -387,7 +389,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_ipam_pool_delete",
 		Description: "Delete an IPAM pool by its ID",
 		InputSchema: map[string]interface{}{
@@ -402,7 +404,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_ipam_allocate",
 		Description: "Allocate an IP address from an IPAM pool for a device",
 		InputSchema: map[string]interface{}{
@@ -425,7 +427,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_ipam_release",
 		Description: "Release an allocated IP address back to its pool",
 		InputSchema: map[string]interface{}{
@@ -440,7 +442,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_ipam_allocations",
 		Description: "List all IP allocations with optional filtering by pool ID",
 		InputSchema: map[string]interface{}{
@@ -460,7 +462,7 @@ func (r *ToolRegistry) registerGatewayTools() {
 // reference network: the built-in zones (policy tunable, numbering fixed)
 // and owner-defined zones at offsets 9-99.
 func (r *ToolRegistry) registerGatewayZoneTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_zone_list",
 		Description: "List the underlay network zones with their policy and derived numbering (VLAN, subnets), optionally filtered by lifecycle role",
 		InputSchema: map[string]interface{}{
@@ -474,7 +476,7 @@ func (r *ToolRegistry) registerGatewayZoneTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_zone_create",
 		Description: "Create an owner-defined underlay zone (offset 9-99, gateway and/or hypervisor port class). Returns restart_required: the network plan is derived at daemon startup.",
 		InputSchema: map[string]interface{}{
@@ -545,7 +547,7 @@ func (r *ToolRegistry) registerGatewayZoneTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_zone_update",
 		Description: "Tune a built-in zone's policy or replace an owner-defined zone. Built-in identity (offset, port classes, lifecycle role, oob) cannot change. Returns restart_required.",
 		InputSchema: map[string]interface{}{
@@ -616,7 +618,7 @@ func (r *ToolRegistry) registerGatewayZoneTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "gateway_zone_delete",
 		Description: "Delete an owner-defined zone or omit an optional built-in. fabric, provisioning, quarantine and control-plane cannot be removed.",
 		InputSchema: map[string]interface{}{

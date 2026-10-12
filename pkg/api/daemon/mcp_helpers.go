@@ -207,7 +207,7 @@ func mcpListProtocolsMap(config *Config) map[string]interface{} {
 			"address": mcpAddr,
 			"port":    mcpPort,
 			"status":  "active",
-			"tls":     false,
+			"tls":     config.MCPServesHTTP(),
 		})
 	}
 

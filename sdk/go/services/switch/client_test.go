@@ -23,12 +23,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
 
 func envelope(payload interface{}) []byte {
-	resp := response.WebServiceResponse{
+	resp := restwire.WebServiceResponse{
 		Code:    200,
 		Success: true,
 		Payload: payload,
@@ -62,9 +62,9 @@ func TestNewClient_TrailingSlash(t *testing.T) {
 }
 
 func TestListPorts_Success(t *testing.T) {
-	ports := []*switchmgmt.PortStatus{
-		{Port: "Eth1/1", Mode: switchmgmt.PortModeAccess, AccessVLAN: 100, Enabled: true, LinkUp: true},
-		{Port: "Eth1/2", Mode: switchmgmt.PortModeTrunk, TrunkVLANs: []uint16{100, 200}, Enabled: true},
+	ports := []*switchwire.PortStatus{
+		{Port: "Eth1/1", Mode: switchwire.PortModeAccess, AccessVLAN: 100, Enabled: true, LinkUp: true},
+		{Port: "Eth1/2", Mode: switchwire.PortModeTrunk, TrunkVLANs: []uint16{100, 200}, Enabled: true},
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +82,7 @@ func TestListPorts_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, result, 2)
 	assert.Equal(t, "Eth1/1", result[0].Port)
-	assert.Equal(t, switchmgmt.PortModeAccess, result[0].Mode)
+	assert.Equal(t, switchwire.PortModeAccess, result[0].Mode)
 }
 
 func TestListPorts_ServerError(t *testing.T) {
@@ -100,9 +100,9 @@ func TestListPorts_ServerError(t *testing.T) {
 }
 
 func TestGetPortStatus_Success(t *testing.T) {
-	port := &switchmgmt.PortStatus{
+	port := &switchwire.PortStatus{
 		Port:        "Eth1/3",
-		Mode:        switchmgmt.PortModeAccess,
+		Mode:        switchwire.PortModeAccess,
 		AccessVLAN:  200,
 		Enabled:     true,
 		LinkUp:      true,
@@ -128,9 +128,9 @@ func TestGetPortStatus_Success(t *testing.T) {
 // TestGetPortStatus_TrunkNativeVLAN decodes a hypervisor-class trunk's
 // allowed list and native VLAN over the REST transport.
 func TestGetPortStatus_TrunkNativeVLAN(t *testing.T) {
-	port := &switchmgmt.PortStatus{
+	port := &switchwire.PortStatus{
 		Port:       "Eth1/25",
-		Mode:       switchmgmt.PortModeTrunk,
+		Mode:       switchwire.PortModeTrunk,
 		TrunkVLANs: []uint16{401, 403, 404, 405, 406, 407, 408},
 		NativeVLAN: 405,
 		Enabled:    true,

@@ -1,6 +1,6 @@
 # TPM MCP API Reference
 
-Port: `9445` (HTTP) or stdio
+Port: `9445` (HTTPS) or stdio
 Protocol: Model Context Protocol (MCP) via JSON-RPC 2.0
 
 ## Overview
@@ -659,7 +659,8 @@ The MCP server reads JSON-RPC from stdin and writes responses to stdout.
 platformctl mcp --http --port 9445
 ```
 
-Connect via HTTP POST to `http://localhost:9445/mcp`.
+Connect via HTTP POST to `https://localhost:9445/mcp`. The listener serves TLS
+1.3 only, with the daemon certificate; plain `http://` is not served.
 
 ## Go Client Example
 
@@ -689,10 +690,16 @@ req := mcpRequest{
     },
 }
 
+// The listener serves TLS 1.3 only; trust the platform CA.
+client := &http.Client{Transport: &http.Transport{
+    TLSClientConfig: &tls.Config{RootCAs: platformCAPool, MinVersion: tls.VersionTLS13},
+}}
+
 jsonReq, _ := json.Marshal(req)
-resp, _ := http.Post("http://localhost:9445/mcp",
-    "application/json",
-    bytes.NewBuffer(jsonReq))
+httpReq, _ := http.NewRequest(http.MethodPost, "https://localhost:9445/mcp", bytes.NewReader(jsonReq))
+httpReq.Header.Set("Content-Type", "application/json")
+httpReq.Header.Set("Authorization", "Bearer "+token)
+resp, _ := client.Do(httpReq)
 
 var mcpResp mcpResponse
 json.NewDecoder(resp.Body).Decode(&mcpResp)

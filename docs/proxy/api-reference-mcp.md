@@ -5,7 +5,7 @@ service.
 
 | Property | Value |
 |----------|-------|
-| Port | 9445 (HTTP) or stdio |
+| Port | 9445 (HTTPS) or stdio |
 | Tools | `pkg/api/mcp/proxy_tools.go` |
 | Provider | daemon `MCPServiceProvider` (`pkg/api/daemon/proxy_mcp.go`) |
 

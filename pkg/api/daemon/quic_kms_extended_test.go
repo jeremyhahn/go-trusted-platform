@@ -25,8 +25,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // newKMSExtendedTestHandler builds a QUIC handler with a seeded mock KMS
@@ -51,15 +51,15 @@ func newKMSExtendedTestHandler() (*QUICServiceHandler, *mockKMSService) {
 }
 
 // kmsExtendedRequest builds a category request with sub-opcode and payload.
-func kmsExtendedRequest(t *testing.T, opcode byte, sub byte, body interface{}) *quic.Request {
+func kmsExtendedRequest(t *testing.T, opcode byte, sub byte, body interface{}) *quicwire.Request {
 	t.Helper()
 	var payload []byte
 	if body != nil {
-		encoded, err := quic.EncodePayload(body)
+		encoded, err := quicwire.EncodePayload(body)
 		require.NoError(t, err)
 		payload = encoded
 	}
-	return &quic.Request{
+	return &quicwire.Request{
 		Opcode:  opcode,
 		Payload: append([]byte{sub}, payload...),
 	}
@@ -70,23 +70,23 @@ func TestHandleKMSExtendedCategoryRevokeKey(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Success", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubRevokeKey,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubRevokeKey,
 			&KMSRevokeKeyRequest{KeyID: "key-1", Reason: "compromised"})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out KMSRevokeKeyResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		assert.Equal(t, "key-1", out.KeyID)
 		assert.Equal(t, "KEY_STATUS_DISABLED", out.Status)
 		assert.Equal(t, "RevokeKey", svc.lastOperation)
 	})
 
 	t.Run("MissingKeyID", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubRevokeKey,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubRevokeKey,
 			&KMSRevokeKeyRequest{})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("BackendError", func(t *testing.T) {
@@ -94,10 +94,10 @@ func TestHandleKMSExtendedCategoryRevokeKey(t *testing.T) {
 		svc.errToReturn = errors.New("backend down")
 		defer func() { svc.shouldErr = false }()
 
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubRevokeKey,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubRevokeKey,
 			&KMSRevokeKeyRequest{KeyID: "key-1"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -106,43 +106,43 @@ func TestHandleKMSExtendedCategoryMetadata(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("GetSuccess", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubGetKeyMetadata,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubGetKeyMetadata,
 			&KMSGetKeyMetadataRequest{KeyID: "key-1"})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out KMSGetKeyMetadataResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		require.NotNil(t, out.Metadata)
 		assert.Equal(t, "key-1", out.Metadata.KeyId)
 		assert.Equal(t, "test-key", out.Metadata.Name)
 	})
 
 	t.Run("GetNotFound", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubGetKeyMetadata,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubGetKeyMetadata,
 			&KMSGetKeyMetadataRequest{KeyID: "missing"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("UpdateSuccess", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubUpdateKeyMetadata,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubUpdateKeyMetadata,
 			&KMSUpdateKeyMetadataRequest{KeyID: "key-1", Name: "renamed"})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out KMSUpdateKeyMetadataResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		require.NotNil(t, out.Metadata)
 		assert.Equal(t, "renamed", out.Metadata.Name)
 		assert.Equal(t, "UpdateKeyMetadata", svc.lastOperation)
 	})
 
 	t.Run("UpdateMissingKeyID", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubUpdateKeyMetadata,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubUpdateKeyMetadata,
 			&KMSUpdateKeyMetadataRequest{Name: "renamed"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -151,7 +151,7 @@ func TestHandleKMSExtendedCategoryPolicy(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("SetSuccess", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubSetKeyPolicy,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubSetKeyPolicy,
 			&KMSSetKeyPolicyRequest{
 				KeyID: "key-1",
 				Policy: &KMSKeyPolicyPayload{
@@ -163,10 +163,10 @@ func TestHandleKMSExtendedCategoryPolicy(t *testing.T) {
 				},
 			})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out KMSSetKeyPolicyResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		assert.Equal(t, "key-1", out.KeyID)
 		assert.Equal(t, uint64(1), out.PolicyVersion)
 
@@ -184,13 +184,13 @@ func TestHandleKMSExtendedCategoryPolicy(t *testing.T) {
 			AllowedPrincipals: []string{"role:admin"},
 			ExpiresAt:         time.Now().Add(time.Hour).Unix(),
 		}
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubGetKeyPolicy,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubGetKeyPolicy,
 			&KMSGetKeyPolicyRequest{KeyID: "key-1"})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out KMSGetKeyPolicyResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		require.NotNil(t, out.Policy)
 		assert.Equal(t, "key-1", out.Policy.KeyID)
 		assert.Equal(t, uint64(4), out.Policy.Version)
@@ -198,17 +198,17 @@ func TestHandleKMSExtendedCategoryPolicy(t *testing.T) {
 	})
 
 	t.Run("SetMissingPolicy", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubSetKeyPolicy,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubSetKeyPolicy,
 			&KMSSetKeyPolicyRequest{KeyID: "key-1"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("GetNotFound", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubGetKeyPolicy,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubGetKeyPolicy,
 			&KMSGetKeyPolicyRequest{KeyID: "missing"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -217,12 +217,12 @@ func TestHandleKMSExtendedCategoryAlgorithmsAndDispatch(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("SupportedAlgorithms", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubGetSupportedAlgorithms, nil)
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubGetSupportedAlgorithms, nil)
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out KMSGetSupportedAlgorithmsResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		assert.Contains(t, out.Algorithms, "AES-256-GCM")
 	})
 
@@ -231,29 +231,29 @@ func TestHandleKMSExtendedCategoryAlgorithmsAndDispatch(t *testing.T) {
 		svc.errToReturn = errors.New("backend down")
 		defer func() { svc.shouldErr = false }()
 
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubGetSupportedAlgorithms, nil)
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubGetSupportedAlgorithms, nil)
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("UnknownSubOpcode", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpKMSExtendedCategory, Payload: []byte{0xEE}}
+		req := &quicwire.Request{Opcode: quicwire.OpKMSExtendedCategory, Payload: []byte{0xEE}}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 
 	t.Run("EmptyPayload", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpKMSExtendedCategory}
+		req := &quicwire.Request{Opcode: quicwire.OpKMSExtendedCategory}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("ServiceUnavailable", func(t *testing.T) {
 		bare := NewQUICServiceHandler(logging.DefaultLogger())
-		req := kmsExtendedRequest(t, quic.OpKMSExtendedCategory, quic.KMSSubRevokeKey,
+		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubRevokeKey,
 			&KMSRevokeKeyRequest{KeyID: "key-1"})
 		resp := bare.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }
 
@@ -262,11 +262,11 @@ func TestHandleKMSBackendStatusDelegatesToService(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Success", func(t *testing.T) {
-		resp := handler.HandleRequest(ctx, &quic.Request{Opcode: quic.OpKMSBackendStatus})
-		require.Equal(t, quic.StatusOK, resp.Status)
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpKMSBackendStatus})
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out KMSBackendStatusResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		assert.Equal(t, "quicbaas", out.BackendType)
 		assert.Equal(t, "healthy", out.BackendStatus)
 		assert.Equal(t, "BackendStatus", svc.lastOperation)
@@ -277,7 +277,7 @@ func TestHandleKMSBackendStatusDelegatesToService(t *testing.T) {
 		svc.errToReturn = errors.New("backend down")
 		defer func() { svc.shouldErr = false }()
 
-		resp := handler.HandleRequest(ctx, &quic.Request{Opcode: quic.OpKMSBackendStatus})
-		assert.Equal(t, quic.StatusInternalError, resp.Status)
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpKMSBackendStatus})
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }

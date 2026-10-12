@@ -19,16 +19,19 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"maps"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 func init() {
@@ -37,7 +40,7 @@ func init() {
 
 // Adapter implements the transport.Adapter interface for MCP over HTTP.
 type Adapter struct {
-	client    *mcpapi.Client
+	client    *mcpwire.Client
 	connected atomic.Bool
 	closed    atomic.Bool
 	address   string
@@ -53,18 +56,36 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		return nil, platform.ErrEmptyAddress
 	}
 
-	// Ensure address has proper scheme - always use HTTPS
+	// The daemon serves MCP over TLS 1.3 only (#844), so a bare address
+	// dials https://. An explicit http:// address is passed through for
+	// non-daemon MCP servers, but credentials only ever travel over https://.
 	address := opts.MCPAddr
-	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
+	if strings.HasPrefix(address, "http://") {
+		if names := opts.CredentialOptions(); len(names) > 0 {
+			return nil, platform.ErrInsecureTransport{
+				Protocol: platform.ProtocolMCP,
+				Target:   opts.MCPAddr,
+				Reason:   strings.Join(names, ", ") + " requires https://",
+			}
+		}
+	} else if !strings.HasPrefix(address, "https://") {
 		address = "https://" + address
 	}
 
 	// Build MCP client configuration
-	clientConfig := mcpapi.DefaultClientConfig(address)
+	clientConfig := mcpwire.DefaultClientConfig(address)
 	clientConfig.Timeout = opts.GetTimeout()
+	if strings.HasPrefix(address, "https://") {
+		clientConfig.TLSConfig = opts.ClientTLSConfig()
+	}
+
+	var clientOpts []mcpwire.ClientOption
+	if opts.BearerToken != "" {
+		clientOpts = append(clientOpts, mcpwire.WithMCPToken(opts.BearerToken))
+	}
 
 	// Create MCP client
-	client, err := mcpapi.NewClient(clientConfig)
+	client, err := mcpwire.NewClient(clientConfig, clientOpts...)
 	if err != nil {
 		return nil, platform.ErrConnectionFailed{
 			Protocol: platform.ProtocolMCP,
@@ -73,21 +94,28 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 		}
 	}
 
+	initCtx, cancel := context.WithTimeout(ctx, opts.GetTimeout())
+	defer cancel()
+
+	// A server that does not answer initialize is not usable, so report the
+	// failure and let auto-detection fall back to the next protocol.
+	start := time.Now()
+	if _, initErr := client.Initialize(initCtx); initErr != nil {
+		if transport.IsTimeout(initErr) {
+			initErr = platform.ErrTimeout{Operation: "MCP initialize", Elapsed: time.Since(start), Err: initErr}
+		}
+		return nil, platform.ErrConnectionFailed{
+			Protocol: platform.ProtocolMCP,
+			Target:   opts.MCPAddr,
+			Err:      errors.Join(initErr, client.Close()),
+		}
+	}
+
 	a := &Adapter{
 		client:  client,
 		address: opts.MCPAddr,
 	}
 	a.connected.Store(true)
-
-	// Optionally initialize the MCP connection
-	initCtx, cancel := context.WithTimeout(ctx, opts.GetTimeout())
-	defer cancel()
-
-	// Initialize the MCP connection. Initialization failure is non-fatal
-	// because the MCP server might not require initialization.
-	if _, initErr := client.Initialize(initCtx); initErr != nil {
-		a.connected.Store(false)
-	}
 
 	return a, nil
 }
@@ -133,7 +161,7 @@ func (a *Adapter) Target() string {
 }
 
 // Client returns the underlying MCP client for direct access.
-func (a *Adapter) Client() *mcpapi.Client {
+func (a *Adapter) Client() *mcpwire.Client {
 	return a.client
 }
 
@@ -213,7 +241,8 @@ func (c *mcpClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, me
 // grpcMethodToMCPToolMap provides O(1) lookup for gRPC method to MCP tool mapping.
 // Method paths use the proto package "platform.v1" (with dot) and full RPC names
 // matching the generated gRPC stubs. Tool names mirror those registered server-side
-// by pkg/api/mcp/tools.go so adapter and server stay in lockstep.
+// by pkg/api/mcp/tools.go; pkg/api/mcp checks every entry against its
+// registry through MethodTools, so adapter and server stay in lockstep.
 var grpcMethodToMCPToolMap = map[string]string{
 	// Gateway perf verification — proto: pkg/api/grpc/proto/gateway.proto.
 	// Tool executors live in pkg/api/mcp/gateway_perf_tools.go; results
@@ -303,7 +332,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 
 	// Device — proto: pkg/api/grpc/proto/device.proto
 	"/platform.v1.DeviceService/CreateDevice": "device_register",
-	"/platform.v1.DeviceService/DeleteDevice": "device_unregister",
+	"/platform.v1.DeviceService/DeleteDevice": "device_delete",
 	"/platform.v1.DeviceService/GetDevice":    "device_get",
 	"/platform.v1.DeviceService/ListDevices":  "device_list",
 	"/platform.v1.DeviceService/UpdateDevice": "device_update",
@@ -341,7 +370,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 
 	// Compute / Container — proto: pkg/api/grpc/proto/compute.proto
 	"/platform.v1.ComputeService/CreateContainer":  "container_create",
-	"/platform.v1.ComputeService/DeleteContainer":  "container_delete",
+	"/platform.v1.ComputeService/DeleteContainer":  "container_remove",
 	"/platform.v1.ComputeService/StartContainer":   "container_start",
 	"/platform.v1.ComputeService/StopContainer":    "container_stop",
 	"/platform.v1.ComputeService/ListContainers":   "container_list",
@@ -384,17 +413,25 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.ConfigDeliveryService/GetSession":     "provision_get_session",
 }
 
+// MethodTools returns a copy of the gRPC full-method to MCP tool-name table
+// this transport dispatches through. The daemon checks its tool registry
+// against it, so a mapping to a tool the server does not register fails
+// there rather than at a caller.
+func MethodTools() map[string]string {
+	return maps.Clone(grpcMethodToMCPToolMap)
+}
+
 // mcpErrorCodeToGRPCMap provides O(1) lookup for MCP error codes to gRPC codes.
 var mcpErrorCodeToGRPCMap = map[int]codes.Code{
-	mcpapi.ParseError:             codes.InvalidArgument,
-	mcpapi.InvalidRequest:         codes.InvalidArgument,
-	mcpapi.MethodNotFound:         codes.Unimplemented,
-	mcpapi.InvalidParams:          codes.InvalidArgument,
-	mcpapi.InternalError:          codes.Internal,
-	mcpapi.AuthenticationRequired: codes.Unauthenticated,
-	mcpapi.InvalidToken:           codes.Unauthenticated,
-	mcpapi.PermissionDenied:       codes.PermissionDenied,
-	mcpapi.ServiceUnavailable:     codes.Unavailable,
+	mcpwire.ParseError:             codes.InvalidArgument,
+	mcpwire.InvalidRequest:         codes.InvalidArgument,
+	mcpwire.MethodNotFound:         codes.Unimplemented,
+	mcpwire.InvalidParams:          codes.InvalidArgument,
+	mcpwire.InternalError:          codes.Internal,
+	mcpwire.AuthenticationRequired: codes.Unauthenticated,
+	mcpwire.InvalidToken:           codes.Unauthenticated,
+	mcpwire.PermissionDenied:       codes.PermissionDenied,
+	mcpwire.ServiceUnavailable:     codes.Unavailable,
 }
 
 // translateMCPErrorToGRPC translates MCP errors to gRPC status errors.
@@ -404,7 +441,7 @@ func translateMCPErrorToGRPC(err error) error {
 	}
 
 	// Check for MCP-specific errors
-	if mcpErr, ok := err.(*mcpapi.MCPError); ok {
+	if mcpErr, ok := err.(*mcpwire.MCPError); ok {
 		code, found := mcpErrorCodeToGRPCMap[mcpErr.Code]
 		if !found {
 			code = codes.Unknown

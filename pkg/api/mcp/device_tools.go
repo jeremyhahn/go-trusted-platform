@@ -15,6 +15,8 @@ package mcp
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -81,7 +83,7 @@ var ErrProfileNotFound = &DeviceError{
 // This replaces the basic device tools with comprehensive device and profile management.
 func (r *ToolRegistry) registerDeviceToolsV2() {
 	// Device CRUD operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_create",
 		Description: "Register a new device in the system with its TPM credentials and attestation keys",
 		InputSchema: map[string]interface{}{
@@ -124,7 +126,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_get_by_id",
 		Description: "Get device details by numeric ID",
 		InputSchema: map[string]interface{}{
@@ -139,7 +141,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_get_by_serial",
 		Description: "Get device details by serial number",
 		InputSchema: map[string]interface{}{
@@ -154,7 +156,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_list_all",
 		Description: "List all devices with optional pagination",
 		InputSchema: map[string]interface{}{
@@ -174,7 +176,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_update_by_id",
 		Description: "Update device properties by ID",
 		InputSchema: map[string]interface{}{
@@ -221,7 +223,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_delete_by_id",
 		Description: "Delete a device by ID",
 		InputSchema: map[string]interface{}{
@@ -236,7 +238,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "device_get_status",
 		Description: "Get the current status of a device including attestation state",
 		InputSchema: map[string]interface{}{
@@ -252,7 +254,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 	})
 
 	// Profile CRUD operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "profile_create",
 		Description: "Create a new device profile with network configuration and matching rules",
 		InputSchema: map[string]interface{}{
@@ -347,7 +349,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "profile_get_by_id",
 		Description: "Get profile details by ID",
 		InputSchema: map[string]interface{}{
@@ -362,7 +364,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "profile_list_all",
 		Description: "List all profiles with optional pagination",
 		InputSchema: map[string]interface{}{
@@ -382,7 +384,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "profile_update_by_id",
 		Description: "Update profile properties by ID",
 		InputSchema: map[string]interface{}{
@@ -465,7 +467,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "profile_delete_by_id",
 		Description: "Delete a profile by ID",
 		InputSchema: map[string]interface{}{
@@ -480,7 +482,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "profile_assign_to_device",
 		Description: "Bind a profile to a specific device identity: an already-registered device (device_id; the server derives the EK serial from its stored EK certificate and prestages it), or an explicit TPM EK certificate serial and/or MAC address, optionally prestaging the device's PEM-encoded EK certificate. The EK certificate is source-agnostic: it may come from a swtpm-backed vTPM or a physical hardware TPM. At least one of device_id, ek_serial or mac_address is required; explicit values override what device_id derives.",
 		InputSchema: map[string]interface{}{
@@ -511,7 +513,7 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "profile_unassign_from_device",
 		Description: "Clear a profile's device binding: the EK serial, MAC address, prestaged EK certificate, and assignment state are all reset",
 		InputSchema: map[string]interface{}{

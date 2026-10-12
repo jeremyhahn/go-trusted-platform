@@ -16,19 +16,19 @@ package mcp
 import (
 	"testing"
 
-	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
 
 // TestFormatPortStatus_NativeVLAN carries a trunk's native VLAN to MCP
 // clients, leaves it out when there is none, and maps nil to nil.
 func TestFormatPortStatus_NativeVLAN(t *testing.T) {
-	trunk := formatPortStatus(&switchmgmt.PortStatus{
-		Port: "Eth1/25", Mode: switchmgmt.PortModeTrunk, TrunkVLANs: []uint16{401, 405}, NativeVLAN: 405,
+	trunk := formatPortStatus(&switchwire.PortStatus{
+		Port: "Eth1/25", Mode: switchwire.PortModeTrunk, TrunkVLANs: []uint16{401, 405}, NativeVLAN: 405,
 	})
 	if trunk["native_vlan"] != uint16(405) {
 		t.Fatalf("native_vlan = %v, want 405", trunk["native_vlan"])
 	}
-	access := formatPortStatus(&switchmgmt.PortStatus{Port: "Eth1/41", Mode: switchmgmt.PortModeAccess, AccessVLAN: 402})
+	access := formatPortStatus(&switchwire.PortStatus{Port: "Eth1/41", Mode: switchwire.PortModeAccess, AccessVLAN: 402})
 	if _, ok := access["native_vlan"]; ok {
 		t.Fatal("an access port must not report a native VLAN")
 	}

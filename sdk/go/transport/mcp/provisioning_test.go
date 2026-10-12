@@ -23,9 +23,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // toolCall records the tool invocation the test server received.
@@ -40,7 +40,7 @@ func provisioningTestServer(t *testing.T, results map[string]interface{}, calls 
 	t.Helper()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req mcpapi.JSONRPCRequest
+		var req mcpwire.JSONRPCRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -48,7 +48,7 @@ func provisioningTestServer(t *testing.T, results map[string]interface{}, calls 
 
 		switch req.Method {
 		case "initialize":
-			_ = json.NewEncoder(w).Encode(mcpapi.JSONRPCResponse{
+			_ = json.NewEncoder(w).Encode(mcpwire.JSONRPCResponse{
 				JSONRPC: "2.0", ID: req.ID,
 				Result: map[string]interface{}{
 					"protocolVersion": "2024-11-05",
@@ -61,7 +61,7 @@ func provisioningTestServer(t *testing.T, results map[string]interface{}, calls 
 			name, _ := params["name"].(string)
 			args, _ := params["arguments"].(map[string]interface{})
 			*calls = append(*calls, toolCall{Name: name, Arguments: args})
-			_ = json.NewEncoder(w).Encode(mcpapi.JSONRPCResponse{
+			_ = json.NewEncoder(w).Encode(mcpwire.JSONRPCResponse{
 				JSONRPC: "2.0", ID: req.ID, Result: results[name],
 			})
 		default:

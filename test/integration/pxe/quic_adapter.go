@@ -57,7 +57,7 @@ const (
 	quicStatusOK byte = 0x00
 )
 
-// PXE QUIC opcodes matching server-side definitions in pkg/api/quic/protocol.go
+// PXE QUIC opcodes matching server-side definitions in sdk/go/wire/quicwire/protocol.go
 // and pkg/api/daemon/quic_pxe.go.
 const (
 	// Primary PXE Operations (0xEC-0xEF)

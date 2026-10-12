@@ -20,8 +20,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	quic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // The tests in this file guard the QUIC wire contract for the device
@@ -38,11 +38,11 @@ import (
 // decodes it into dst, failing the test on error.
 func roundTripDeviceWire(t *testing.T, src, dst proto.Message) {
 	t.Helper()
-	payload, err := quic.EncodePayload(src)
+	payload, err := quicwire.EncodePayload(src)
 	if err != nil {
 		t.Fatalf("encode %T: %v", src, err)
 	}
-	if err := quic.DecodePayload(payload, dst); err != nil {
+	if err := quicwire.DecodePayload(payload, dst); err != nil {
 		t.Fatalf("decode %T into %T: %v", src, dst, err)
 	}
 	if !proto.Equal(src, dst) {
@@ -162,24 +162,24 @@ func TestQUICDeviceWireCompatGetDevice(t *testing.T) {
 		&platformv1.GetDeviceResponse{})
 
 	// Union decode: both request shapes land in deviceGetWireRequest.
-	payload, err := quic.EncodePayload(&platformv1.GetDeviceRequest{Id: 42})
+	payload, err := quicwire.EncodePayload(&platformv1.GetDeviceRequest{Id: 42})
 	if err != nil {
 		t.Fatalf("encode GetDeviceRequest: %v", err)
 	}
 	var union deviceGetWireRequest
-	if err := quic.DecodePayload(payload, &union); err != nil {
+	if err := quicwire.DecodePayload(payload, &union); err != nil {
 		t.Fatalf("decode union: %v", err)
 	}
 	if union.Id != 42 || union.Serial != "" {
 		t.Fatalf("union from GetDeviceRequest = %+v, want Id=42", union)
 	}
 
-	payload, err = quic.EncodePayload(&platformv1.FindDeviceBySerialRequest{Serial: "SN-42"})
+	payload, err = quicwire.EncodePayload(&platformv1.FindDeviceBySerialRequest{Serial: "SN-42"})
 	if err != nil {
 		t.Fatalf("encode FindDeviceBySerialRequest: %v", err)
 	}
 	union = deviceGetWireRequest{}
-	if err := quic.DecodePayload(payload, &union); err != nil {
+	if err := quicwire.DecodePayload(payload, &union); err != nil {
 		t.Fatalf("decode union: %v", err)
 	}
 	if union.Serial != "SN-42" || union.Id != 0 {
@@ -188,12 +188,12 @@ func TestQUICDeviceWireCompatGetDevice(t *testing.T) {
 
 	// GetDeviceResponse decodes into FindDeviceBySerialResponse (both
 	// carry the device under the same Device field).
-	payload, err = quic.EncodePayload(&platformv1.GetDeviceResponse{Device: compatTestDevice()})
+	payload, err = quicwire.EncodePayload(&platformv1.GetDeviceResponse{Device: compatTestDevice()})
 	if err != nil {
 		t.Fatalf("encode GetDeviceResponse: %v", err)
 	}
 	var findReply platformv1.FindDeviceBySerialResponse
-	if err := quic.DecodePayload(payload, &findReply); err != nil {
+	if err := quicwire.DecodePayload(payload, &findReply); err != nil {
 		t.Fatalf("decode FindDeviceBySerialResponse: %v", err)
 	}
 	if !proto.Equal(compatTestDevice(), findReply.GetDevice()) {
@@ -220,12 +220,12 @@ func TestQUICDeviceWireCompatListDevices(t *testing.T) {
 
 	// CountDevices shares the wire payload; the SDK derives the count
 	// from the pagination totals (see sdk/go/transport/quic/device.go).
-	payload, err := quic.EncodePayload(listResp)
+	payload, err := quicwire.EncodePayload(listResp)
 	if err != nil {
 		t.Fatalf("encode ListDevicesResponse: %v", err)
 	}
 	var decoded platformv1.ListDevicesResponse
-	if err := quic.DecodePayload(payload, &decoded); err != nil {
+	if err := quicwire.DecodePayload(payload, &decoded); err != nil {
 		t.Fatalf("decode ListDevicesResponse: %v", err)
 	}
 	if decoded.GetPagination().GetTotalItems() != 7 {

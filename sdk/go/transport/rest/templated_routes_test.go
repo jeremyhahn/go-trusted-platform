@@ -25,11 +25,11 @@ import (
 // closed automatically.
 func adapterAgainst(t *testing.T, handler http.HandlerFunc) (*Adapter, *httptest.Server) {
 	t.Helper()
-	server := httptest.NewServer(handler)
+	server := httptest.NewTLSServer(handler)
 	t.Cleanup(server.Close)
 
 	ctx := context.Background()
-	a, err := Connect(ctx, platform.NewOptions(platform.WithRESTAddr(server.URL)))
+	a, err := Connect(ctx, platform.NewOptions(platform.WithRESTAddr(server.URL), trustServer(server)))
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}

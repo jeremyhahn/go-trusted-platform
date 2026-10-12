@@ -16,8 +16,8 @@ package daemon
 import (
 	"context"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // =============================================================================
@@ -35,7 +35,7 @@ import (
 //
 // These verbs collide with other top-level ranges (metrics/disk/migrate reuse
 // the 0xCC-0xD0 bytes that are top-level category opcodes), so remote transports
-// carry them as sub-opcodes in payload[0] under quic.OpVMExtendedCategory
+// carry them as sub-opcodes in payload[0] under quicwire.OpVMExtendedCategory
 // (0x69); see handleVMServiceOperation. The interactive AttachVMConsole /
 // SendVMConsoleInput and the streaming GetVMLogs RPCs are server-streaming and
 // are NOT carried over the unary QUIC transport — they remain gRPC/daemon-native
@@ -47,15 +47,15 @@ import (
 // stripped of the OpVMExtendedCategory sub-opcode prefix). Sub-opcodes that do
 // not converge to pb return (nil, false) so the caller forwards them to the
 // flat VMHandler.
-func (h *QUICServiceHandler) handleVMPB(ctx context.Context, opcode byte, payload []byte) (*quic.Response, bool) {
+func (h *QUICServiceHandler) handleVMPB(ctx context.Context, opcode byte, payload []byte) (*quicwire.Response, bool) {
 	switch opcode {
-	case quic.OpVMMetrics:
+	case quicwire.OpVMMetrics:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
 		}
 		var req platformv1.GetVMMetricsRequest
-		if err := quic.DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.GetVMMetrics(ctx, &req)
 		if err != nil {
@@ -63,13 +63,13 @@ func (h *QUICServiceHandler) handleVMPB(ctx context.Context, opcode byte, payloa
 		}
 		return h.encodeQUICOK(resp), true
 
-	case quic.OpVMAttachDisk:
+	case quicwire.OpVMAttachDisk:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
 		}
 		var req platformv1.AttachDiskRequest
-		if err := quic.DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.AttachDisk(ctx, &req)
 		if err != nil {
@@ -77,13 +77,13 @@ func (h *QUICServiceHandler) handleVMPB(ctx context.Context, opcode byte, payloa
 		}
 		return h.encodeQUICOK(resp), true
 
-	case quic.OpVMDetachDisk:
+	case quicwire.OpVMDetachDisk:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
 		}
 		var req platformv1.DetachDiskRequest
-		if err := quic.DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.DetachDisk(ctx, &req)
 		if err != nil {
@@ -91,13 +91,13 @@ func (h *QUICServiceHandler) handleVMPB(ctx context.Context, opcode byte, payloa
 		}
 		return h.encodeQUICOK(resp), true
 
-	case quic.OpVMResizeDisk:
+	case quicwire.OpVMResizeDisk:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
 		}
 		var req platformv1.ResizeDiskRequest
-		if err := quic.DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.ResizeDisk(ctx, &req)
 		if err != nil {
@@ -105,13 +105,13 @@ func (h *QUICServiceHandler) handleVMPB(ctx context.Context, opcode byte, payloa
 		}
 		return h.encodeQUICOK(resp), true
 
-	case quic.OpVMMigrate:
+	case quicwire.OpVMMigrate:
 		if h.computeGRPC == nil {
-			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
+			return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"}), true
 		}
 		var req platformv1.MigrateVMRequest
-		if err := quic.DecodePayload(payload, &req); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
 		}
 		resp, err := h.computeGRPC.MigrateVM(ctx, &req)
 		if err != nil {

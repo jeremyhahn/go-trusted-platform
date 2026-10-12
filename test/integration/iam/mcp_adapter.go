@@ -131,7 +131,7 @@ func (a *MCPAdapter) doRequest(ctx context.Context, req JSONRPCRequest) (json.Ra
 		}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.endpoint, bytes.NewReader(reqData))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, helpers.MCPEndpointURL(a.endpoint), bytes.NewReader(reqData))
 	if err != nil {
 		return nil, &MCPAdapterError{
 			Operation: req.Method,

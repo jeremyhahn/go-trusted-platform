@@ -135,7 +135,7 @@ platform — see [`docs/attestation/cli.md`](../attestation/cli.md).
 `GetContainerLogs` are gRPC streams with **no unary equivalent**. The QUIC
 layer's own comment records the decision: *"interactive console and log-follow
 remain streaming-only and daemon-native"*
-(`pkg/api/quic/vm_ops_opcodes.go`). These are **not** gaps to close by adding a
+(`sdk/go/wire/quicwire/vm_ops_opcodes.go`). These are **not** gaps to close by adding a
 REST route; a console session over request/response is not a console session.
 
 ---
@@ -147,7 +147,7 @@ REST route; a console session over request/response is not a console session.
 `OpSecretsCategory`, `OpVMResizeDisk` is `0xCF` / `OpProvisioningCategory`, and
 `OpVMMigrate` is `0xD0` / `OpKMSEncrypt`.
 
-This is not a collision. `pkg/api/quic/vm_ops_opcodes.go` states it explicitly:
+This is not a collision. `sdk/go/wire/quicwire/vm_ops_opcodes.go` states it explicitly:
 these values are **sub-opcodes carried in `payload[0]` under
 `OpVMExtendedCategory` (`0x69`)**, never sent at top level, so they only need to
 be unique among sub-opcodes under `0x69`. The daemon dispatcher inspects them

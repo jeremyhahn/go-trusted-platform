@@ -8,10 +8,10 @@ For client applications, use the official SDKs which provide type-safe, multi-pr
 
 | SDK | Installation | Documentation |
 |-----|--------------|---------------|
-| **Go SDK** | `go get github.com/jeremyhahn/go-trusted-platform/sdk/go` | [sdk-go.md](sdk-go.md) |
+| **Go SDK** | `go get github.com/jeremyhahn/go-trusted-platform/sdk/go` | [docs/sdk/](../sdk/user.md) |
 | **JavaScript SDK** | `npm install trusted-platform-sdk` | [sdk-javascript.md](sdk-javascript.md) |
 
-See [SDK Overview](sdk-overview.md) for architecture details.
+See [Go SDK architecture](../sdk/architecture.md) for architecture details.
 
 ## Protocols
 
@@ -235,8 +235,7 @@ rest_api:
 ## Related Documentation
 
 ### SDKs
-- [SDK Overview](sdk-overview.md) - SDK architecture and design patterns
-- [Go SDK Guide](sdk-go.md) - Installation, usage, and examples for Go
+- [Go SDK](../sdk/architecture.md) - SDK architecture, usage and examples for Go
 - [JavaScript SDK Guide](sdk-javascript.md) - Installation, React hooks, and examples
 
 ### Protocol References

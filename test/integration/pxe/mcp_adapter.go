@@ -26,7 +26,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -280,8 +279,8 @@ type MCPAdapter struct {
 }
 
 // NewMCPAdapter creates a new MCP protocol adapter instance.
-// The MCP server serves plain HTTP (not HTTPS), so the adapter uses a plain
-// HTTP client regardless of whether mTLS is configured for other protocols.
+// The MCP server serves TLS 1.3 only (#844), so the adapter uses the mTLS
+// HTTPS client shared with the other transports.
 func NewMCPAdapter() *MCPAdapter {
 	endpoint := os.Getenv(EnvPlatformMCPEndpoint)
 	if endpoint == "" {
@@ -290,7 +289,7 @@ func NewMCPAdapter() *MCPAdapter {
 
 	return &MCPAdapter{
 		endpoint:   endpoint,
-		httpClient: helpers.NewPlainHTTPClient(mcpTimeout),
+		httpClient: helpers.NewHTTPClient(mcpTimeout),
 	}
 }
 
@@ -336,13 +335,6 @@ func (m *MCPAdapter) nextRequestID() int64 {
 	return atomic.AddInt64(&m.requestID, 1)
 }
 
-func mcpBuildEndpointURL(endpoint string) string {
-	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		return endpoint + "/mcp"
-	}
-	return "http://" + endpoint + "/mcp"
-}
-
 func (m *MCPAdapter) sendJSONRPCRequest(ctx context.Context, method string, params interface{}, result interface{}) error {
 	req := mcpJSONRPCRequest{
 		JSONRPC: "2.0",
@@ -356,7 +348,7 @@ func (m *MCPAdapter) sendJSONRPCRequest(ctx context.Context, method string, para
 		return ErrMCPRequestFailed{Err: fmt.Errorf("failed to marshal request: %w", err)}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, mcpBuildEndpointURL(m.endpoint), bytes.NewReader(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, helpers.MCPEndpointURL(m.endpoint), bytes.NewReader(reqBody))
 	if err != nil {
 		return ErrMCPRequestFailed{Err: fmt.Errorf("failed to create request: %w", err)}
 	}

@@ -13,8 +13,8 @@ import (
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -498,61 +498,61 @@ func TestCoverageFinal2QUICHandlerRoutingAllRanges(t *testing.T) {
 		opcode byte
 	}{
 		// vTPM Extended (0x03-0x0F)
-		{"vtpm_extended", quic.OpVTPMCreateTemplate},
+		{"vtpm_extended", quicwire.OpVTPMCreateTemplate},
 		// vTPM (0x10-0x1F)
-		{"vtpm", quic.OpVTPMCreate},
+		{"vtpm", quicwire.OpVTPMCreate},
 		// DNS (0x20-0x2D)
-		{"dns", quic.OpDNSAddRecord},
+		{"dns", quicwire.OpDNSAddRecord},
 		// SDN (0x40-0x4F)
-		{"sdn", quic.OpSDNGetPortState},
+		{"sdn", quicwire.OpSDNGetPortState},
 		// IDevID (0x56-0x5F)
-		{"idevid", quic.OpIDevIDGenerate},
+		{"idevid", quicwire.OpIDevIDGenerate},
 		// VM (0x60-0x6A)
-		{"vm", quic.OpVMCreate},
+		{"vm", quicwire.OpVMCreate},
 		// IAK extended (0x6B-0x6E)
-		{"iak_extended", quic.OpIAKInstallCert},
+		{"iak_extended", quicwire.OpIAKInstallCert},
 		// Container Get (0x6F)
-		{"container_get", quic.OpContainerGet},
+		{"container_get", quicwire.OpContainerGet},
 		// Attestation (0x70-0x77)
-		{"attestation", quic.OpAttestQuote},
+		{"attestation", quicwire.OpAttestQuote},
 		// IDevID Extended (0x78-0x7B)
-		{"idevid_extended", quic.OpHasIDevID},
+		{"idevid_extended", quicwire.OpHasIDevID},
 		// Cert/PKI (0x80-0x88)
-		{"cert", quic.OpCertIssue},
+		{"cert", quicwire.OpCertIssue},
 		// Daemon (0x89-0x8F)
-		{"daemon_status", quic.OpDaemonStatus},
+		{"daemon_status", quicwire.OpDaemonStatus},
 		// CA (0xA0-0xA8)
-		{"ca", quic.OpCAInfo},
+		{"ca", quicwire.OpCAInfo},
 		// IAM User (0xA9-0xAD)
-		{"iam_user", quic.OpIAMUserCreate},
+		{"iam_user", quicwire.OpIAMUserCreate},
 		// Container List (0xAE)
-		{"container_list", quic.OpContainerList},
+		{"container_list", quicwire.OpContainerList},
 		// SDN Extended (0xB0-0xB4)
-		{"sdn_extended", quic.OpSDNCreateBridge},
+		{"sdn_extended", quicwire.OpSDNCreateBridge},
 		// IAM Role (0xB5-0xBA)
-		{"iam_role", quic.OpIAMRoleCreate},
+		{"iam_role", quicwire.OpIAMRoleCreate},
 		// IAM Group (0xBB-0xBF)
-		{"iam_group", quic.OpIAMGroupCreate},
+		{"iam_group", quicwire.OpIAMGroupCreate},
 		// KMS (0xC0-0xCF)
-		{"kms", quic.OpKMSGenerateKey},
+		{"kms", quicwire.OpKMSGenerateKey},
 		// KMS Crypto (0xD0-0xDA)
-		{"kms_crypto", quic.OpKMSEncrypt},
+		{"kms_crypto", quicwire.OpKMSEncrypt},
 		// Tenant (0xDB-0xE9)
-		{"tenant", quic.OpTenantList},
+		{"tenant", quicwire.OpTenantList},
 		// Daemon ListProtocols (0x98)
-		{"daemon_protocols", quic.OpDaemonListProtocols},
+		{"daemon_protocols", quicwire.OpDaemonListProtocols},
 	}
 
 	for _, tc := range opcodeTests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			resp := h.HandleRequest(ctx, &quic.Request{Opcode: tc.opcode, Payload: []byte{}})
+			resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: tc.opcode, Payload: []byte{}})
 			if resp == nil {
 				t.Fatal("response should not be nil")
 			}
 			// All should return either StatusUnavailable or StatusInvalidRequest
 			// since no services are configured
-			if resp.Status == quic.StatusOK {
+			if resp.Status == quicwire.StatusOK {
 				// Only health/liveness/readiness should succeed
 				t.Logf("got StatusOK for opcode 0x%02X - this is expected for health endpoints", tc.opcode)
 			}
@@ -668,13 +668,13 @@ func TestCoverageFinal2QUICHandlerPXERouting(t *testing.T) {
 	ctx := context.Background()
 
 	// PXE primary (0xEC-0xEF)
-	resp := h.HandleRequest(ctx, &quic.Request{Opcode: OpPXEListDevices, Payload: []byte{}})
+	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: OpPXEListDevices, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}
 
 	// PXE extended (0xFC-0xFF)
-	resp = h.HandleRequest(ctx, &quic.Request{Opcode: OpPXEAuthorize, Payload: []byte{}})
+	resp = h.HandleRequest(ctx, &quicwire.Request{Opcode: OpPXEAuthorize, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}
@@ -688,7 +688,7 @@ func TestCoverageFinal2QUICHandlerAttestVMWorkload(t *testing.T) {
 	t.Parallel()
 
 	h := NewQUICServiceHandler(logging.DefaultLogger())
-	resp := h.HandleRequest(context.Background(), &quic.Request{Opcode: quic.OpAttestVMWorkload, Payload: []byte{}})
+	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpAttestVMWorkload, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}
@@ -705,7 +705,7 @@ func TestCoverageFinal2QUICHandlerIAMExtended(t *testing.T) {
 	ctx := context.Background()
 
 	// IAM extended (0xF6-0xFB)
-	resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpIAMGroupRemoveMember, Payload: []byte{}})
+	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIAMGroupRemoveMember, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}
@@ -719,7 +719,7 @@ func TestCoverageFinal2QUICHandlerVMExtended(t *testing.T) {
 	t.Parallel()
 
 	h := NewQUICServiceHandler(logging.DefaultLogger())
-	resp := h.HandleRequest(context.Background(), &quic.Request{Opcode: quic.OpVMRestart, Payload: []byte{}})
+	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpVMRestart, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}
@@ -735,12 +735,12 @@ func TestCoverageFinal2QUICHandlerAttestPolicy(t *testing.T) {
 	h := NewQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
-	resp := h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpAttestCreatePolicy, Payload: []byte{}})
+	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestCreatePolicy, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}
 
-	resp = h.HandleRequest(ctx, &quic.Request{Opcode: quic.OpAttestListPolicies, Payload: []byte{}})
+	resp = h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestListPolicies, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}
@@ -754,7 +754,7 @@ func TestCoverageFinal2QUICHandlerContainerLogs(t *testing.T) {
 	t.Parallel()
 
 	h := NewQUICServiceHandler(logging.DefaultLogger())
-	resp := h.HandleRequest(context.Background(), &quic.Request{Opcode: quic.OpContainerLogs, Payload: []byte{}})
+	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpContainerLogs, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}

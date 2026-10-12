@@ -15,6 +15,8 @@ package mcp
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -97,7 +99,7 @@ var ErrKMSNumBytesRequired = &KMSError{
 
 // registerKMSKeyManagementTools registers KMS key management tools.
 func (r *ToolRegistry) registerKMSKeyManagementTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_generate_key",
 		Description: "Generate a new cryptographic key with specified algorithm and properties",
 		InputSchema: map[string]interface{}{
@@ -151,7 +153,7 @@ func (r *ToolRegistry) registerKMSKeyManagementTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_get_key",
 		Description: "Get key details by ID including metadata and status",
 		InputSchema: map[string]interface{}{
@@ -170,7 +172,7 @@ func (r *ToolRegistry) registerKMSKeyManagementTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_list_keys",
 		Description: "List all keys with optional filtering and pagination",
 		InputSchema: map[string]interface{}{
@@ -197,7 +199,7 @@ func (r *ToolRegistry) registerKMSKeyManagementTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_delete_key",
 		Description: "Delete a key with optional pending deletion window",
 		InputSchema: map[string]interface{}{
@@ -222,7 +224,7 @@ func (r *ToolRegistry) registerKMSKeyManagementTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_rotate_key",
 		Description: "Rotate a key to generate a new version while optionally retaining the old version",
 		InputSchema: map[string]interface{}{
@@ -242,7 +244,7 @@ func (r *ToolRegistry) registerKMSKeyManagementTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_export_public_key",
 		Description: "Export the public key material for asymmetric keys",
 		InputSchema: map[string]interface{}{
@@ -270,7 +272,7 @@ func (r *ToolRegistry) registerKMSKeyManagementTools() {
 
 // registerKMSCryptoTools registers KMS cryptographic operation tools.
 func (r *ToolRegistry) registerKMSCryptoTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_sign",
 		Description: "Sign data using a private key to create a digital signature",
 		InputSchema: map[string]interface{}{
@@ -299,7 +301,7 @@ func (r *ToolRegistry) registerKMSCryptoTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_verify",
 		Description: "Verify a digital signature using a public key",
 		InputSchema: map[string]interface{}{
@@ -331,7 +333,7 @@ func (r *ToolRegistry) registerKMSCryptoTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_encrypt",
 		Description: "Encrypt data using a symmetric or asymmetric key",
 		InputSchema: map[string]interface{}{
@@ -358,7 +360,7 @@ func (r *ToolRegistry) registerKMSCryptoTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_decrypt",
 		Description: "Decrypt data using a symmetric or asymmetric key",
 		InputSchema: map[string]interface{}{
@@ -392,7 +394,7 @@ func (r *ToolRegistry) registerKMSCryptoTools() {
 
 // registerKMSRandomTools registers the random byte generation tool.
 func (r *ToolRegistry) registerKMSRandomTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_random",
 		Description: "Generate cryptographically secure random bytes (maximum 1024)",
 		InputSchema: map[string]interface{}{
@@ -410,7 +412,7 @@ func (r *ToolRegistry) registerKMSRandomTools() {
 
 // registerKMSDataKeyTools registers data key tools (envelope encryption).
 func (r *ToolRegistry) registerKMSDataKeyTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_generate_data_key",
 		Description: "Generate a data encryption key (DEK) for envelope encryption. Returns both plaintext and wrapped versions of the DEK.",
 		InputSchema: map[string]interface{}{
@@ -434,7 +436,7 @@ func (r *ToolRegistry) registerKMSDataKeyTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_generate_wrapped_data_key",
 		Description: "Generate only a wrapped (encrypted) data encryption key. The plaintext DEK is never exposed - useful for pre-generating keys or key escrow.",
 		InputSchema: map[string]interface{}{
@@ -462,7 +464,7 @@ func (r *ToolRegistry) registerKMSDataKeyTools() {
 // registerKMSLifecycleTools registers KMS key lifecycle tools (revoke,
 // metadata, policy, algorithms, backend status).
 func (r *ToolRegistry) registerKMSLifecycleTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_revoke_key",
 		Description: "Revoke a key, marking it as unusable for all cryptographic operations",
 		InputSchema: map[string]interface{}{
@@ -481,7 +483,7 @@ func (r *ToolRegistry) registerKMSLifecycleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_get_key_metadata",
 		Description: "Get key metadata (name, description, tags, timestamps) without exposing key material",
 		InputSchema: map[string]interface{}{
@@ -496,7 +498,7 @@ func (r *ToolRegistry) registerKMSLifecycleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_update_key_metadata",
 		Description: "Update mutable key metadata fields (name, description, tags)",
 		InputSchema: map[string]interface{}{
@@ -528,7 +530,7 @@ func (r *ToolRegistry) registerKMSLifecycleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_get_key_policy",
 		Description: "Get the access control policy for a key",
 		InputSchema: map[string]interface{}{
@@ -543,7 +545,7 @@ func (r *ToolRegistry) registerKMSLifecycleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_set_key_policy",
 		Description: "Set the access control policy for a key",
 		InputSchema: map[string]interface{}{
@@ -589,7 +591,7 @@ func (r *ToolRegistry) registerKMSLifecycleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_supported_algorithms",
 		Description: "List the cryptographic algorithms supported by the KMS backend",
 		InputSchema: map[string]interface{}{
@@ -598,7 +600,7 @@ func (r *ToolRegistry) registerKMSLifecycleTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "kms_backend_status",
 		Description: "Get health and capability information about the KMS backend",
 		InputSchema: map[string]interface{}{
@@ -610,7 +612,7 @@ func (r *ToolRegistry) registerKMSLifecycleTools() {
 
 // registerSecretsTools registers secrets management tools.
 func (r *ToolRegistry) registerSecretsTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "secret_store",
 		Description: "Store a secret with optional metadata. The value is encrypted at rest.",
 		InputSchema: map[string]interface{}{
@@ -633,7 +635,7 @@ func (r *ToolRegistry) registerSecretsTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "secret_get",
 		Description: "Retrieve a secret by ID, optionally at a specific version",
 		InputSchema: map[string]interface{}{
@@ -652,7 +654,7 @@ func (r *ToolRegistry) registerSecretsTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "secret_list",
 		Description: "List secrets (identifiers and metadata only, no secret data)",
 		InputSchema: map[string]interface{}{
@@ -667,7 +669,7 @@ func (r *ToolRegistry) registerSecretsTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "secret_delete",
 		Description: "Delete a secret",
 		InputSchema: map[string]interface{}{
@@ -682,7 +684,7 @@ func (r *ToolRegistry) registerSecretsTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "secret_set_rotation_policy",
 		Description: "Set the automatic rotation policy for a secret, including how many old versions to retain",
 		InputSchema: map[string]interface{}{
@@ -709,7 +711,7 @@ func (r *ToolRegistry) registerSecretsTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "secret_get_rotation_policy",
 		Description: "Get the automatic rotation policy for a secret",
 		InputSchema: map[string]interface{}{

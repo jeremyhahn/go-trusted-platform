@@ -77,7 +77,7 @@ it misses.
 | REST CRUD + mTLS profile/activate handlers | `pkg/webservice/v1/device/`, `pkg/webservice/v1/router/device.go` | this repo |
 | Bootstrap-seeder REST handlers | `pkg/webservice/v1/rest/device/` | this repo |
 | gRPC `DeviceService` | `pkg/api/grpc/proto/device.proto` | this repo |
-| QUIC device opcodes and handlers | `pkg/api/quic/protocol.go`, `pkg/api/daemon/quic_device_handlers.go` | this repo |
+| QUIC device opcodes and handlers | `sdk/go/wire/quicwire/protocol.go`, `pkg/api/daemon/quic_device_handlers.go` | this repo |
 | MCP device and profile tools | `pkg/api/mcp/device_tools.go`, `device_profile_tools.go`, `tools.go` | this repo |
 | SDK client | `sdk/go/services/device/client.go` | this repo |
 | **The storage engine underneath** | `quicbaas.Storage` | **go-quicbaas** — consumed through its SDK |

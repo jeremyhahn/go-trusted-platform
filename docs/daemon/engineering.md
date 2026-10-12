@@ -53,7 +53,7 @@ naming tells you the shape:
 | `*_service.go` | Shared business services the transports delegate to |
 
 The important property: **transports are adapters over shared services**, not
-parallel implementations. `pkg/api/quic/vm_ops_opcodes.go` states it for its own
+parallel implementations. `sdk/go/wire/quicwire/vm_ops_opcodes.go` states it for its own
 area — the QUIC handlers *"decode the platform.v1 pb request and delegate to the
 shared `*ComputeGRPCService`… the same business path the gRPC transport uses."*
 

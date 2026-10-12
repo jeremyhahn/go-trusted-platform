@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
 	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 )
@@ -250,7 +251,7 @@ func (q *QUICAdapter) sendCategoryRequest(ctx context.Context, subOpcode byte, p
 
 	// Write request using category opcode
 	req := &quicTPMRequest{
-		Opcode:  quicapi.OpTPM2Category,
+		Opcode:  quicwire.OpTPM2Category,
 		Payload: payloadBytes,
 	}
 
@@ -417,7 +418,7 @@ func decodeTPMPayload(data []byte, entity interface{}) error {
 
 // Info retrieves TPM information via QUIC.
 func (q *QUICAdapter) Info(ctx context.Context) (*InfoResult, error) {
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2Info, nil)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2Info, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -455,7 +456,7 @@ func (q *QUICAdapter) Provision(ctx context.Context, opts ProvisionOptions) (*Pr
 		OwnerPassword: opts.OwnerPassword,
 	}
 
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2Provision, req)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2Provision, req)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +485,7 @@ func (q *QUICAdapter) Clear(ctx context.Context, opts ClearOptions) (*ClearResul
 		OwnerPassword: opts.OwnerPassword,
 	}
 
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2Clear, req)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2Clear, req)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +507,7 @@ func (q *QUICAdapter) Clear(ctx context.Context, opts ClearOptions) (*ClearResul
 
 // EKCreate creates an EK via QUIC.
 func (q *QUICAdapter) EKCreate(ctx context.Context, opts EKCreateOptions) (*EKCreateResult, error) {
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2CreateEK, nil)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2CreateEK, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -527,7 +528,7 @@ func (q *QUICAdapter) EKCreate(ctx context.Context, opts EKCreateOptions) (*EKCr
 
 // EKInfo retrieves EK information via QUIC.
 func (q *QUICAdapter) EKInfo(ctx context.Context, handle uint32) (*EKInfoResult, error) {
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2GetEK, nil)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2GetEK, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +547,7 @@ func (q *QUICAdapter) EKInfo(ctx context.Context, handle uint32) (*EKInfoResult,
 
 // EKCertificate retrieves the EK certificate via QUIC.
 func (q *QUICAdapter) EKCertificate(ctx context.Context) (*EKCertificateResult, error) {
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2GetEKCert, nil)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2GetEKCert, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -564,7 +565,7 @@ func (q *QUICAdapter) EKCertificate(ctx context.Context) (*EKCertificateResult, 
 
 // EKDelete deletes the EK via QUIC.
 func (q *QUICAdapter) EKDelete(ctx context.Context, handle uint32, password string) (*EKDeleteResult, error) {
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2DeleteEK, nil)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2DeleteEK, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -586,7 +587,7 @@ func (q *QUICAdapter) EKDelete(ctx context.Context, handle uint32, password stri
 
 // SRKCreate creates an SRK via QUIC.
 func (q *QUICAdapter) SRKCreate(ctx context.Context, opts SRKCreateOptions) (*SRKCreateResult, error) {
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2CreateSRK, nil)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2CreateSRK, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -607,7 +608,7 @@ func (q *QUICAdapter) SRKCreate(ctx context.Context, opts SRKCreateOptions) (*SR
 
 // SRKInfo retrieves SRK information via QUIC.
 func (q *QUICAdapter) SRKInfo(ctx context.Context, handle uint32) (*SRKInfoResult, error) {
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2GetSRK, nil)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2GetSRK, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -626,7 +627,7 @@ func (q *QUICAdapter) SRKInfo(ctx context.Context, handle uint32) (*SRKInfoResul
 
 // SRKDelete deletes the SRK via QUIC.
 func (q *QUICAdapter) SRKDelete(ctx context.Context, handle uint32, password string) (*SRKDeleteResult, error) {
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2DeleteSRK, nil)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2DeleteSRK, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +653,7 @@ func (q *QUICAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, 
 		Data: opts.Data,
 	}
 
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2Seal, req)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2Seal, req)
 	if err != nil {
 		return nil, err
 	}
@@ -674,7 +675,7 @@ func (q *QUICAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRe
 		CN: opts.CN,
 	}
 
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2Unseal, req)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2Unseal, req)
 	if err != nil {
 		return nil, err
 	}
@@ -696,7 +697,7 @@ func (q *QUICAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealRe
 
 // EventLog reads the TPM event log via QUIC.
 func (q *QUICAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
-	resp, err := q.sendCategoryRequest(ctx, quicapi.SubOpTPM2EventLog, nil)
+	resp, err := q.sendCategoryRequest(ctx, quicwire.SubOpTPM2EventLog, nil)
 	if err != nil {
 		return nil, err
 	}

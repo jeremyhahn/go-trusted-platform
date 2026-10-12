@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // generateTestTLSConfig creates a self-signed TLS configuration for testing.
@@ -103,7 +104,7 @@ func TestNewServerNilConfig(t *testing.T) {
 	}
 
 	// Verify it's a config validation error
-	var invalidConfigErr ErrInvalidConfig
+	var invalidConfigErr quicwire.ErrInvalidConfig
 	if !errors.As(err, &invalidConfigErr) {
 		t.Errorf("expected ErrInvalidConfig, got %T", err)
 	}
@@ -164,7 +165,7 @@ func TestNewServerInvalidConfig(t *testing.T) {
 				return
 			}
 
-			var invalidConfigErr ErrInvalidConfig
+			var invalidConfigErr quicwire.ErrInvalidConfig
 			if !errors.As(err, &invalidConfigErr) {
 				t.Errorf("expected ErrInvalidConfig, got %T: %v", err, err)
 				return
@@ -198,15 +199,15 @@ func TestNewServerWithOptions(t *testing.T) {
 
 // mockHandler implements Handler for testing
 type mockHandler struct {
-	response *Response
+	response *quicwire.Response
 }
 
-func (h *mockHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *mockHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.response != nil {
 		return h.response
 	}
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: []byte("mock response"),
 	}
 }
@@ -219,8 +220,8 @@ func TestNewServerWithHandler(t *testing.T) {
 	}
 
 	handler := &mockHandler{
-		response: &Response{
-			Status:  StatusOK,
+		response: &quicwire.Response{
+			Status:  quicwire.StatusOK,
 			Payload: []byte("test"),
 		},
 	}

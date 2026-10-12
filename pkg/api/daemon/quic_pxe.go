@@ -18,25 +18,25 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // PXE QUIC opcodes - aliased from quic.protocol for convenience
 // Primary PXE Operations (0xEC-0xEF)
 const (
-	OpPXEListDevices    = quic.OpPXEListDevices    // 0xEC
-	OpPXEGetDevice      = quic.OpPXEGetDevice      // 0xED
-	OpPXERegisterDevice = quic.OpPXERegisterDevice // 0xEE
-	OpPXEUpdateState    = quic.OpPXEUpdateState    // 0xEF
+	OpPXEListDevices    = quicwire.OpPXEListDevices    // 0xEC
+	OpPXEGetDevice      = quicwire.OpPXEGetDevice      // 0xED
+	OpPXERegisterDevice = quicwire.OpPXERegisterDevice // 0xEE
+	OpPXEUpdateState    = quicwire.OpPXEUpdateState    // 0xEF
 )
 
 // Extended PXE Operations (0xFC-0xFF)
 const (
-	OpPXEAuthorize    = quic.OpPXEAuthorize    // 0xFC
-	OpPXEQuarantine   = quic.OpPXEQuarantine   // 0xFD
-	OpPXERetry        = quic.OpPXERetry        // 0xFE
-	OpPXERemoveDevice = quic.OpPXERemoveDevice // 0xFF
+	OpPXEAuthorize    = quicwire.OpPXEAuthorize    // 0xFC
+	OpPXEQuarantine   = quicwire.OpPXEQuarantine   // 0xFD
+	OpPXERetry        = quicwire.OpPXERetry        // 0xFE
+	OpPXERemoveDevice = quicwire.OpPXERemoveDevice // 0xFF
 )
 
 // =============================================================================
@@ -288,9 +288,9 @@ func (h *QUICServiceHandler) SetPXEService(svc pxe.Service) {
 // =============================================================================
 
 // handlePXEOperation routes PXE operations to their handlers
-func (h *QUICServiceHandler) handlePXEOperation(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handlePXEOperation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.pxeService == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "pxe"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "pxe"})
 	}
 
 	switch req.Opcode {
@@ -313,16 +313,16 @@ func (h *QUICServiceHandler) handlePXEOperation(ctx context.Context, req *quic.R
 	case OpPXERemoveDevice:
 		return h.handlePXERemoveDevice(ctx, req)
 	default:
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: req.Opcode})
 	}
 }
 
 // handlePXEListDevices handles the list devices operation
-func (h *QUICServiceHandler) handlePXEListDevices(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handlePXEListDevices(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var listReq PXEListDevicesRequest
 	if len(req.Payload) > 0 {
-		if err := quic.DecodePayload(req.Payload, &listReq); err != nil {
-			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+		if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+			return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
@@ -337,7 +337,7 @@ func (h *QUICServiceHandler) handlePXEListDevices(ctx context.Context, req *quic
 	devices, err := h.pxeService.ListDevices(ctx, filter)
 	if err != nil {
 		h.logger.Error(err, "failed to list PXE devices")
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "PXEListDevices", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "PXEListDevices", Cause: err})
 	}
 
 	pxeDevices := make([]*PXEDevice, 0, len(devices))
@@ -351,32 +351,32 @@ func (h *QUICServiceHandler) handlePXEListDevices(ctx context.Context, req *quic
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handlePXEGetDevice handles the get device by ID operation
-func (h *QUICServiceHandler) handlePXEGetDevice(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handlePXEGetDevice(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var getReq PXEGetDeviceRequest
-	if err := quic.DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if getReq.DeviceID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
 	}
 
 	device, err := h.pxeService.GetDevice(ctx, getReq.DeviceID)
 	if err != nil {
 		h.logger.Error(err, "failed to get PXE device", "device_id", getReq.DeviceID)
-		return h.errorResponse(quic.StatusNotFound, ErrPXEDeviceNotFound{DeviceID: getReq.DeviceID})
+		return h.errorResponse(quicwire.StatusNotFound, ErrPXEDeviceNotFound{DeviceID: getReq.DeviceID})
 	}
 
 	resp := &PXEGetDeviceResponse{
@@ -384,29 +384,29 @@ func (h *QUICServiceHandler) handlePXEGetDevice(ctx context.Context, req *quic.R
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handlePXERegisterDevice handles the register device operation
-func (h *QUICServiceHandler) handlePXERegisterDevice(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handlePXERegisterDevice(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var regReq PXERegisterDeviceRequest
-	if err := quic.DecodePayload(req.Payload, &regReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &regReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if regReq.MACAddress == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "mac_address"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "mac_address"})
 	}
 	if regReq.PortID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "port_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "port_id"})
 	}
 
 	device, err := h.pxeService.RegisterDevice(ctx, regReq.MACAddress, regReq.PortID)
@@ -414,7 +414,7 @@ func (h *QUICServiceHandler) handlePXERegisterDevice(ctx context.Context, req *q
 		h.logger.Error(err, "failed to register PXE device",
 			"mac_address", regReq.MACAddress,
 			"port_id", regReq.PortID)
-		return h.errorResponse(quic.StatusInternalError, ErrPXERegistrationFailed{
+		return h.errorResponse(quicwire.StatusInternalError, ErrPXERegistrationFailed{
 			MACAddress: regReq.MACAddress,
 			Cause:      err,
 		})
@@ -425,9 +425,9 @@ func (h *QUICServiceHandler) handlePXERegisterDevice(ctx context.Context, req *q
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("registered PXE device",
@@ -435,35 +435,35 @@ func (h *QUICServiceHandler) handlePXERegisterDevice(ctx context.Context, req *q
 		"mac_address", regReq.MACAddress,
 		"port_id", regReq.PortID)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handlePXEUpdateState handles the update state operation
-func (h *QUICServiceHandler) handlePXEUpdateState(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handlePXEUpdateState(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var updateReq PXEUpdateStateRequest
-	if err := quic.DecodePayload(req.Payload, &updateReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &updateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if updateReq.DeviceID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
 	}
 	if updateReq.State == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "state"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "state"})
 	}
 
 	newState := pxe.ProvisioningState(updateReq.State)
 	if !newState.IsValid() {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrPXEInvalidState{State: updateReq.State})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrPXEInvalidState{State: updateReq.State})
 	}
 
 	// Get current device to track old state
 	device, err := h.pxeService.GetDevice(ctx, updateReq.DeviceID)
 	if err != nil {
-		return h.errorResponse(quic.StatusNotFound, ErrPXEDeviceNotFound{DeviceID: updateReq.DeviceID})
+		return h.errorResponse(quicwire.StatusNotFound, ErrPXEDeviceNotFound{DeviceID: updateReq.DeviceID})
 	}
 	oldState := device.State
 
@@ -471,7 +471,7 @@ func (h *QUICServiceHandler) handlePXEUpdateState(ctx context.Context, req *quic
 		h.logger.Error(err, "failed to update PXE device state",
 			"device_id", updateReq.DeviceID,
 			"state", updateReq.State)
-		return h.errorResponse(quic.StatusInternalError, ErrPXEStateTransitionFailed{
+		return h.errorResponse(quicwire.StatusInternalError, ErrPXEStateTransitionFailed{
 			DeviceID:  updateReq.DeviceID,
 			FromState: string(oldState),
 			ToState:   updateReq.State,
@@ -487,9 +487,9 @@ func (h *QUICServiceHandler) handlePXEUpdateState(ctx context.Context, req *quic
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("updated PXE device state",
@@ -497,31 +497,31 @@ func (h *QUICServiceHandler) handlePXEUpdateState(ctx context.Context, req *quic
 		"old_state", oldState,
 		"new_state", updateReq.State)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handlePXEAuthorize handles the authorize device operation
-func (h *QUICServiceHandler) handlePXEAuthorize(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handlePXEAuthorize(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var authReq PXEAuthorizeRequest
-	if err := quic.DecodePayload(req.Payload, &authReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &authReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if authReq.DeviceID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
 	}
 	if authReq.TargetVLAN == 0 {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "target_vlan"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "target_vlan"})
 	}
 
 	if err := h.pxeService.AuthorizeDevice(ctx, authReq.DeviceID, authReq.TargetVLAN); err != nil {
 		h.logger.Error(err, "failed to authorize PXE device",
 			"device_id", authReq.DeviceID,
 			"target_vlan", authReq.TargetVLAN)
-		return h.errorResponse(quic.StatusInternalError, ErrPXEAuthorizationFailed{
+		return h.errorResponse(quicwire.StatusInternalError, ErrPXEAuthorizationFailed{
 			DeviceID: authReq.DeviceID,
 			Cause:    err,
 		})
@@ -534,40 +534,40 @@ func (h *QUICServiceHandler) handlePXEAuthorize(ctx context.Context, req *quic.R
 		Timestamp:  time.Now().Unix(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("authorized PXE device",
 		"device_id", authReq.DeviceID,
 		"target_vlan", authReq.TargetVLAN)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handlePXEQuarantine handles the quarantine device operation
-func (h *QUICServiceHandler) handlePXEQuarantine(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handlePXEQuarantine(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var quarReq PXEQuarantineRequest
-	if err := quic.DecodePayload(req.Payload, &quarReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &quarReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if quarReq.DeviceID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
 	}
 	if quarReq.Reason == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "reason"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "reason"})
 	}
 
 	if err := h.pxeService.QuarantineDevice(ctx, quarReq.DeviceID, quarReq.Reason); err != nil {
 		h.logger.Error(err, "failed to quarantine PXE device",
 			"device_id", quarReq.DeviceID,
 			"reason", quarReq.Reason)
-		return h.errorResponse(quic.StatusInternalError, ErrPXEQuarantineFailed{
+		return h.errorResponse(quicwire.StatusInternalError, ErrPXEQuarantineFailed{
 			DeviceID: quarReq.DeviceID,
 			Cause:    err,
 		})
@@ -579,36 +579,36 @@ func (h *QUICServiceHandler) handlePXEQuarantine(ctx context.Context, req *quic.
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Warn("quarantined PXE device",
 		"device_id", quarReq.DeviceID,
 		"reason", quarReq.Reason)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handlePXERetry handles the retry device operation
-func (h *QUICServiceHandler) handlePXERetry(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handlePXERetry(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var retryReq PXERetryRequest
-	if err := quic.DecodePayload(req.Payload, &retryReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &retryReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if retryReq.DeviceID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
 	}
 
 	if err := h.pxeService.RetryDevice(ctx, retryReq.DeviceID); err != nil {
 		h.logger.Error(err, "failed to retry PXE device",
 			"device_id", retryReq.DeviceID)
-		return h.errorResponse(quic.StatusInternalError, ErrPXERetryFailed{
+		return h.errorResponse(quicwire.StatusInternalError, ErrPXERetryFailed{
 			DeviceID: retryReq.DeviceID,
 			Cause:    err,
 		})
@@ -628,36 +628,36 @@ func (h *QUICServiceHandler) handlePXERetry(ctx context.Context, req *quic.Reque
 		Timestamp:  time.Now().Unix(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("initiated PXE device retry",
 		"device_id", retryReq.DeviceID,
 		"retry_count", retryCount)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handlePXERemoveDevice handles the remove device operation
-func (h *QUICServiceHandler) handlePXERemoveDevice(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handlePXERemoveDevice(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	var removeReq PXERemoveDeviceRequest
-	if err := quic.DecodePayload(req.Payload, &removeReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &removeReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
 	if removeReq.DeviceID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "device_id"})
 	}
 
 	if err := h.pxeService.RemoveDevice(ctx, removeReq.DeviceID); err != nil {
 		h.logger.Error(err, "failed to remove PXE device",
 			"device_id", removeReq.DeviceID)
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{
 			Op:    "PXERemoveDevice",
 			Cause: err,
 		})
@@ -669,16 +669,16 @@ func (h *QUICServiceHandler) handlePXERemoveDevice(ctx context.Context, req *qui
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
 
 	h.logger.Info("removed PXE device",
 		"device_id", removeReq.DeviceID)
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }

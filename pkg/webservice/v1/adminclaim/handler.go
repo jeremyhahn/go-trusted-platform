@@ -26,6 +26,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 const (
@@ -226,13 +227,13 @@ func (h *RestHandler) writeClaimError(w http.ResponseWriter, r *http.Request, er
 		// what this server implements, not a fault in handling the
 		// request. A 500 told operators to look for a bug and buried the
 		// typed explanation in a generic failure.
-		h.responseWriter.Write(w, r, http.StatusNotImplemented, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusNotImplemented, restwire.WebServiceResponse{
 			Code:    http.StatusNotImplemented,
 			Error:   err.Error(),
 			Success: false,
 		})
 	case ErrTooManyOutstanding:
-		h.responseWriter.Write(w, r, http.StatusTooManyRequests, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusTooManyRequests, restwire.WebServiceResponse{
 			Code:    http.StatusTooManyRequests,
 			Error:   err.Error(),
 			Success: false,

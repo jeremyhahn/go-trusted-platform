@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -205,7 +207,7 @@ func (r *ToolRegistry) registerProvisionTools() {
 		}
 	}
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_get_nonce",
 		Description: "Issue a single-use nonce for authenticating a config delivery or digest signing request",
 		InputSchema: map[string]interface{}{
@@ -214,7 +216,7 @@ func (r *ToolRegistry) registerProvisionTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_fetch_config",
 		Description: "Authenticate a device (EAB HMAC + nonce, optional EK certificate) and resolve its platform configuration; returns the delivered config or a pending interactive provisioning session",
 		InputSchema: map[string]interface{}{
@@ -233,7 +235,7 @@ func (r *ToolRegistry) registerProvisionTools() {
 		"type":        "string",
 		"description": "Secure Boot key selector (default: db)",
 	}
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_sign_digest",
 		Description: "Sign a UKI or kernel-module digest with the control-plane Secure Boot DB key; the private key never leaves the control plane",
 		InputSchema: map[string]interface{}{
@@ -243,13 +245,13 @@ func (r *ToolRegistry) registerProvisionTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_poll_session",
 		Description: "Poll a pending provisioning session; returns the delivered config once fulfilled or a pending status",
 		InputSchema: sessionIDSchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_fulfill_session",
 		Description: "Link a device profile to a pending provisioning session so the polling device receives its configuration",
 		InputSchema: map[string]interface{}{
@@ -268,7 +270,7 @@ func (r *ToolRegistry) registerProvisionTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_list_sessions",
 		Description: "List all active (non-expired) provisioning sessions awaiting operator fulfillment",
 		InputSchema: map[string]interface{}{
@@ -277,7 +279,7 @@ func (r *ToolRegistry) registerProvisionTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "provision_get_session",
 		Description: "Get a provisioning session by ID",
 		InputSchema: sessionIDSchema,

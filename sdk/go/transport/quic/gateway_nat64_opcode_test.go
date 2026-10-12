@@ -16,7 +16,7 @@ package quic
 import (
 	"testing"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // TestNAT64Status_ResolvesToItsCategoryAndSubOpcode pins both halves of the
@@ -30,15 +30,15 @@ func TestNAT64Status_ResolvesToItsCategoryAndSubOpcode(t *testing.T) {
 	if !ok {
 		t.Fatalf("%s has no QUIC opcode mapping; the adapter cannot dispatch it", method)
 	}
-	if opcode != quicapi.OpGatewayCategory {
-		t.Errorf("NAT64 status opcode = %#x, want the gateway category %#x", opcode, quicapi.OpGatewayCategory)
+	if opcode != quicwire.OpGatewayCategory {
+		t.Errorf("NAT64 status opcode = %#x, want the gateway category %#x", opcode, quicwire.OpGatewayCategory)
 	}
 
 	sub, ok := categorySubOpcodeMap[method]
 	if !ok {
 		t.Fatalf("%s resolves to a category opcode but has no sub-opcode; a zero byte would be sent", method)
 	}
-	if sub != quicapi.OpGatewayNAT64Status {
-		t.Errorf("NAT64 status sub-opcode = %#x, want %#x", sub, quicapi.OpGatewayNAT64Status)
+	if sub != quicwire.OpGatewayNAT64Status {
+		t.Errorf("NAT64 status sub-opcode = %#x, want %#x", sub, quicwire.OpGatewayNAT64Status)
 	}
 }

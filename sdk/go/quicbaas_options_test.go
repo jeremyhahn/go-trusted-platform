@@ -53,15 +53,62 @@ func TestQuicBaaSTransportOptions(t *testing.T) {
 		{"mcp", false},
 		{"grpc", true},
 		{"", true},
-		{"unknown", true},
 	}
 	for _, c := range cases {
 		t.Run(c.transport, func(t *testing.T) {
-			got := quicbaasTransportOptions("addr", c.transport)
+			got, err := quicbaasTransportOptions("addr", c.transport)
+			if err != nil {
+				t.Fatalf("transport=%q: unexpected error %v", c.transport, err)
+			}
 			if (got == nil) != c.wantNil {
 				t.Errorf("transport=%q wantNil=%v gotNil=%v", c.transport, c.wantNil, got == nil)
 			}
 		})
+	}
+}
+
+// TestQuicBaaSTransportOptions_Unsupported pins that a transport name the
+// side-client cannot dial is refused, not silently auto-detected: "embedded"
+// is a platform protocol but not a QuicBaaS one, and names are case-sensitive.
+func TestQuicBaaSTransportOptions_Unsupported(t *testing.T) {
+	for _, transport := range []string{"embedded", "GRPC", "unknown"} {
+		t.Run(transport, func(t *testing.T) {
+			got, err := quicbaasTransportOptions("addr", transport)
+			var unsupported ErrProtocolNotSupported
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("err = %v, want ErrProtocolNotSupported", err)
+			}
+			if unsupported.Transport != transport {
+				t.Errorf("Transport = %q, want %q", unsupported.Transport, transport)
+			}
+			if got != nil {
+				t.Errorf("options = %v, want nil on error", got)
+			}
+		})
+	}
+}
+
+// TestPlatformClient_InitQuicBaaSClient_UnsupportedTransport pins that the
+// refusal reaches QuicBaaS() as ErrQuicBaaSInitFailed wrapping
+// ErrProtocolNotSupported, so platformd verbs keep working.
+func TestPlatformClient_InitQuicBaaSClient_UnsupportedTransport(t *testing.T) {
+	c := &platformClient{}
+	c.initQuicBaaSClient(&Options{QuicBaaSAddr: "/run/quicbaas.sock", QuicBaaSTransport: "embedded"})
+
+	_, err := c.QuicBaaS()
+	var initFailed ErrQuicBaaSInitFailed
+	if !errors.As(err, &initFailed) {
+		t.Fatalf("err = %v, want ErrQuicBaaSInitFailed", err)
+	}
+	if initFailed.Transport != "embedded" {
+		t.Errorf("Transport = %q, want %q", initFailed.Transport, "embedded")
+	}
+	var unsupported ErrProtocolNotSupported
+	if !errors.As(err, &unsupported) {
+		t.Errorf("err = %v, want it to wrap ErrProtocolNotSupported", err)
+	}
+	if c.quicbaas != nil {
+		t.Error("an unsupported transport must not create a client")
 	}
 }
 

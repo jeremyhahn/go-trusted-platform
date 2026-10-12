@@ -363,7 +363,7 @@ and otherwise from the mount point's own ownership.
 | `PLATFORMD_GRPC_ENDPOINT` | `127.0.0.1:10443` | platformd gRPC endpoint |
 | `PLATFORMD_REST_ENDPOINT` | `127.0.0.1:8443` | REST API endpoint |
 | `PLATFORMD_QUIC_ENDPOINT` | `127.0.0.1:9444` | QUIC protocol endpoint |
-| `PLATFORMD_MCP_ENDPOINT` | `127.0.0.1:9445` | MCP protocol endpoint |
+| `PLATFORMD_MCP_ENDPOINT` | `127.0.0.1:9445` | MCP protocol endpoint; a bare host:port dials `https://` (TLS 1.3 only, #844) |
 | `PLATFORMD_UNIX_SOCKET` | `/tmp/platformd.sock` | Unix socket path for local IPC |
 | `PLATFORMCTL_PATH` | `/usr/local/bin/platformctl` | CLI binary path |
 | `PLATFORMD_CONFIG` | `test/integration/config.yaml` | Configuration file path |

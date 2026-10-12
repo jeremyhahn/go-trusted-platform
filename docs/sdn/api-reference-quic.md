@@ -4,7 +4,7 @@ Endpoint: UDP port 9444, mTLS required.
 
 Requests and responses are msgpack-encoded frames; msgpack keys follow
 the Go field names declared in the QUIC handler types. Opcodes are
-defined in `pkg/api/quic/protocol.go`.
+defined in `sdk/go/wire/quicwire/protocol.go`.
 
 ## SDN Opcodes
 
@@ -36,7 +36,7 @@ Related SDN category opcodes: the overlay service uses category opcode
 `0x2E` with its own sub-opcodes (see
 [overlay/api-reference-quic.md](overlay/api-reference-quic.md)); the
 gateway and IPAM surfaces have their own opcode assignments in
-`pkg/api/quic/gateway_handlers.go`. The zone operations are gateway
+`sdk/go/wire/quicwire/gateway_opcodes.go`. The zone operations are gateway
 category (`0x2F`) sub-opcodes `0x10` list, `0x11` create, `0x12` update and
 `0x13` delete; `0x14` (the retired assign operation) is never reused. Their
 codec bodies carry the whole zone schema (`offset`, `port_classes`,

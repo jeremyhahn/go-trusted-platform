@@ -130,7 +130,7 @@ Four gRPC RPCs stream and have **no non-streaming equivalent**:
 
 The QUIC layer's own comment records the consequence: *"interactive console and
 log-follow remain streaming-only and daemon-native"*
-(`pkg/api/quic/vm_ops_opcodes.go`). A console session is not available over
+(`sdk/go/wire/quicwire/vm_ops_opcodes.go`). A console session is not available over
 REST or MCP, and will not be — it is not a gap to close by adding a route.
 
 ## 7. Test strategy

@@ -1343,6 +1343,11 @@ test-sdk-go:
 	@echo "Running Go SDK unit tests..."
 	cd sdk/go && go test -tags "$(BUILD_TAGS)" ./...
 
+.PHONY: sdk-consumer-check
+## sdk-consumer-check: Build sdk/go from a throwaway consumer module, without the root module (#840)
+sdk-consumer-check:
+	@scripts/sdk-consumer-check.sh
+
 .PHONY: test-sdk-js
 ## test-sdk-js: Run JavaScript SDK unit tests (sdk/javascript vitest suite)
 test-sdk-js:

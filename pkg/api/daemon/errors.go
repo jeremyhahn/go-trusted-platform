@@ -286,6 +286,20 @@ func (e ErrRESTServerStartFailed) Error() string {
 	return fmt.Sprintf("REST server failed to start: %s", e.Reason)
 }
 
+// MCPServerStartError is returned when Daemon.Start cannot start the MCP
+// server. Start fails rather than run without the configured transport.
+type MCPServerStartError struct {
+	Err error
+}
+
+func (e *MCPServerStartError) Error() string {
+	return "daemon: MCP server failed to start: " + e.Err.Error()
+}
+
+func (e *MCPServerStartError) Unwrap() error {
+	return e.Err
+}
+
 // ErrRESTServerStopFailed is returned when the REST server fails to stop gracefully
 type ErrRESTServerStopFailed struct {
 	Reason string

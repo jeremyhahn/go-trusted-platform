@@ -25,11 +25,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // stubAttestCertRecorder stands in for device.AttestCertRecorder so the
@@ -176,7 +176,7 @@ func TestQUICDeviceRecordAttestCert_Success(t *testing.T) {
 	stub := &stubAttestCertRecorder{rec: recordedFixture()}
 	handler := newQUICAttestCertHandler(t, stub)
 
-	req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceSubRecordAttestCert,
+	req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceSubRecordAttestCert,
 		&platformv1.RecordAttestationCertificateRequest{DeviceId: "42", Reissue: true})
 	resp := handler.HandleRequest(context.Background(), req)
 
@@ -194,10 +194,10 @@ func TestQUICDeviceRecordAttestCert_RefusalIsInvalidRequest(t *testing.T) {
 			{Source: device.AttestCertSourceCA, Detail: "node-03", Err: vm.ErrAKCertificateNotRestricted{Subject: "CN=x"}},
 		}},
 	})
-	req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceSubRecordAttestCert,
+	req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceSubRecordAttestCert,
 		&platformv1.RecordAttestationCertificateRequest{DeviceId: "42"})
 	resp := handler.HandleRequest(context.Background(), req)
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status, "FailedPrecondition maps to the QUIC invalid-request status")
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status, "FailedPrecondition maps to the QUIC invalid-request status")
 	assert.Contains(t, string(resp.Payload), "tcg-cap-verifiedTPMRestricted")
 }
 
@@ -207,19 +207,19 @@ func TestQUICDeviceRecordAttestCert_UnavailableWithoutRecorder(t *testing.T) {
 		WithQUICDeviceService(newMockDeviceService()),
 		WithQUICDeviceProfileService(newMockProfileService()),
 	)
-	req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceSubRecordAttestCert,
+	req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceSubRecordAttestCert,
 		&platformv1.RecordAttestationCertificateRequest{DeviceId: "42"})
 	resp := handler.HandleRequest(context.Background(), req)
-	assert.Equal(t, quic.StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 func TestQUICDeviceRecordAttestCert_MalformedPayload(t *testing.T) {
 	handler := newQUICAttestCertHandler(t, &stubAttestCertRecorder{rec: recordedFixture()})
-	resp := handler.HandleRequest(context.Background(), &quic.Request{
-		Opcode:  quic.OpProvisioningCategory,
-		Payload: []byte{quic.DeviceSubRecordAttestCert, 0xff, 0xfe, 0xfd},
+	resp := handler.HandleRequest(context.Background(), &quicwire.Request{
+		Opcode:  quicwire.OpProvisioningCategory,
+		Payload: []byte{quicwire.DeviceSubRecordAttestCert, 0xff, 0xfe, 0xfd},
 	})
-	assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 }
 
 // -- MCP ----------------------------------------------------------------

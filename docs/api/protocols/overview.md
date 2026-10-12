@@ -10,7 +10,7 @@ The Trusted Platform daemon exposes all services via five protocols, providing m
 | gRPC | TCP (TLS) | 10443 | Low | Yes | Service-to-service |
 | REST | HTTP/HTTPS | 8443 | Medium | No | Web clients, external |
 | QUIC | UDP (TLS 1.3) | 9444 | Low | Yes | Mobile, low-latency |
-| MCP | stdio/HTTP | 9445 | Medium | Limited | AI/LLM integration |
+| MCP | stdio/HTTPS | 9445 | Medium | Limited | AI/LLM integration |
 
 ## When to Use Each Protocol
 

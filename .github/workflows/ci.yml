@@ -230,6 +230,13 @@ jobs:
         working-directory: sdk/go
         run: go build ./...
 
+      # The step above builds sdk/go inside this checkout. A consumer gets
+      # only the sdk/go tree from the module's tag, so this builds every SDK
+      # package from a throwaway module that sees nothing else, and fails if
+      # the build reaches any root-module package (#840).
+      - name: Build sdk/go as a module consumer
+        run: make sdk-consumer-check
+
   # Job id is `gonext`, deliberately without a hyphen: ci-gate dereferences it
   # as `needs.gonext.result`, and this file already carries one gate bug that
   # came from assuming Gitea evaluates a GitHub expression the same way

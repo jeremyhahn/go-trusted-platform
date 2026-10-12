@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +77,7 @@ type testGatewayService struct {
 	vipResp           *LBVIPInfo
 	vipsResp          []*LBVIPInfo
 	lbStatusResp      *LBStatusInfo
-	nat64StatusResp   *NAT64StatusInfo
+	nat64StatusResp   *quicwire.NAT64StatusInfo
 	addVIPErr         error
 	removeVIPErr      error
 	getVIPErr         error
@@ -447,7 +448,7 @@ func (s *testGatewayService) LBStatus(ctx context.Context) (*LBStatusInfo, error
 	return s.lbStatusResp, nil
 }
 
-func (s *testGatewayService) NAT64Status(ctx context.Context) (*NAT64StatusInfo, error) {
+func (s *testGatewayService) NAT64Status(ctx context.Context) (*quicwire.NAT64StatusInfo, error) {
 	if s.nat64StatusErr != nil {
 		return nil, s.nat64StatusErr
 	}
@@ -511,7 +512,7 @@ func TestGatewayHandleRequest(t *testing.T) {
 
 		resp := handler.HandleRequest(ctx, nil)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "request cannot be nil")
 	})
 
@@ -519,14 +520,14 @@ func TestGatewayHandleRequest(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
+		req := &quicwire.Request{
 			Opcode:  0xFF,
 			Payload: nil,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 		assert.Contains(t, string(resp.Payload), "unknown gateway operation")
 	})
 
@@ -534,14 +535,14 @@ func TestGatewayHandleRequest(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayStatus,
 			Payload: nil,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 }
 
@@ -557,17 +558,17 @@ func TestGatewayHandleStatus(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayStatus,
 			Payload: nil,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var statusResp GatewayStatusResponse
-		err := DecodePayload(resp.Payload, &statusResp)
+		err := quicwire.DecodePayload(resp.Payload, &statusResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, statusResp.Status)
@@ -580,14 +581,14 @@ func TestGatewayHandleStatus(t *testing.T) {
 		t.Parallel()
 		handler := NewGatewayHandler(newGatewayTestLogger(), nil)
 
-		req := &Request{
-			Opcode:  OpGatewayStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayStatus,
 			Payload: nil,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when status fails", func(t *testing.T) {
@@ -595,14 +596,14 @@ func TestGatewayHandleStatus(t *testing.T) {
 		handler, service := createTestGatewayHandler()
 		service.statusErr = errors.New("status unavailable")
 
-		req := &Request{
-			Opcode:  OpGatewayStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayStatus,
 			Payload: nil,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -622,21 +623,21 @@ func TestGatewayHandleSetMode(t *testing.T) {
 			Mode: GatewayModeL2,
 		}
 
-		payload, err := EncodePayload(setReq)
+		payload, err := quicwire.EncodePayload(setReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewaySetMode,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewaySetMode,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, GatewayModeL2, service.lastMode)
 
 		var setResp GatewaySetModeResponse
-		err = DecodePayload(resp.Payload, &setResp)
+		err = quicwire.DecodePayload(resp.Payload, &setResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, GatewayModeL2, setResp.Mode)
@@ -651,17 +652,17 @@ func TestGatewayHandleSetMode(t *testing.T) {
 			Mode: GatewayModeL3,
 		}
 
-		payload, err := EncodePayload(setReq)
+		payload, err := quicwire.EncodePayload(setReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewaySetMode,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewaySetMode,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing mode", func(t *testing.T) {
@@ -670,17 +671,17 @@ func TestGatewayHandleSetMode(t *testing.T) {
 
 		setReq := &GatewaySetModeRequest{}
 
-		payload, err := EncodePayload(setReq)
+		payload, err := quicwire.EncodePayload(setReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewaySetMode,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewaySetMode,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "mode")
 	})
 
@@ -692,31 +693,31 @@ func TestGatewayHandleSetMode(t *testing.T) {
 			Mode: "invalid-mode",
 		}
 
-		payload, err := EncodePayload(setReq)
+		payload, err := quicwire.EncodePayload(setReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewaySetMode,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewaySetMode,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewaySetMode,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewaySetMode,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when set mode fails", func(t *testing.T) {
@@ -728,17 +729,17 @@ func TestGatewayHandleSetMode(t *testing.T) {
 			Mode: GatewayModeNAT,
 		}
 
-		payload, err := EncodePayload(setReq)
+		payload, err := quicwire.EncodePayload(setReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewaySetMode,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewaySetMode,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("sets all valid modes", func(t *testing.T) {
@@ -752,17 +753,17 @@ func TestGatewayHandleSetMode(t *testing.T) {
 				Mode: mode,
 			}
 
-			payload, err := EncodePayload(setReq)
+			payload, err := quicwire.EncodePayload(setReq)
 			require.NoError(t, err)
 
-			req := &Request{
-				Opcode:  OpGatewaySetMode,
+			req := &quicwire.Request{
+				Opcode:  quicwire.OpGatewaySetMode,
 				Payload: payload,
 			}
 
 			resp := handler.HandleRequest(ctx, req)
 
-			assert.Equal(t, StatusOK, resp.Status, "mode %s should be valid", mode)
+			assert.Equal(t, quicwire.StatusOK, resp.Status, "mode %s should be valid", mode)
 			assert.Equal(t, mode, service.lastMode)
 		}
 	})
@@ -780,17 +781,17 @@ func TestGatewayHandleBGPStatus(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayBGPStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayBGPStatus,
 			Payload: nil,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var bgpResp GatewayBGPStatusResponse
-		err := DecodePayload(resp.Payload, &bgpResp)
+		err := quicwire.DecodePayload(resp.Payload, &bgpResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, bgpResp.Status)
@@ -803,14 +804,14 @@ func TestGatewayHandleBGPStatus(t *testing.T) {
 		t.Parallel()
 		handler := NewGatewayHandler(newGatewayTestLogger(), nil)
 
-		req := &Request{
-			Opcode:  OpGatewayBGPStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayBGPStatus,
 			Payload: nil,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when BGP status fails", func(t *testing.T) {
@@ -818,14 +819,14 @@ func TestGatewayHandleBGPStatus(t *testing.T) {
 		handler, service := createTestGatewayHandler()
 		service.bgpStatusErr = ErrGatewayBGPNotEnabled
 
-		req := &Request{
-			Opcode:  OpGatewayBGPStatus,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayBGPStatus,
 			Payload: nil,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }
 
@@ -843,20 +844,20 @@ func TestGatewayHandleBGPPeers(t *testing.T) {
 
 		listReq := &GatewayBGPPeersRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayBGPPeers,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayBGPPeers,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var peersResp GatewayBGPPeersResponse
-		err = DecodePayload(resp.Payload, &peersResp)
+		err = quicwire.DecodePayload(resp.Payload, &peersResp)
 		require.NoError(t, err)
 
 		assert.Len(t, peersResp.Peers, 2)
@@ -869,31 +870,31 @@ func TestGatewayHandleBGPPeers(t *testing.T) {
 
 		listReq := &GatewayBGPPeersRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayBGPPeers,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayBGPPeers,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayBGPPeers,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayBGPPeers,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("respects limit parameter", func(t *testing.T) {
@@ -904,20 +905,20 @@ func TestGatewayHandleBGPPeers(t *testing.T) {
 			Limit: 1,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayBGPPeers,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayBGPPeers,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var peersResp GatewayBGPPeersResponse
-		err = DecodePayload(resp.Payload, &peersResp)
+		err = quicwire.DecodePayload(resp.Payload, &peersResp)
 		require.NoError(t, err)
 
 		assert.Len(t, peersResp.Peers, 1)
@@ -931,17 +932,17 @@ func TestGatewayHandleBGPPeers(t *testing.T) {
 
 		listReq := &GatewayBGPPeersRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayBGPPeers,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayBGPPeers,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -963,22 +964,22 @@ func TestGatewayHandleAnnouncePrefix(t *testing.T) {
 			LocalPref: 100,
 		}
 
-		payload, err := EncodePayload(announceReq)
+		payload, err := quicwire.EncodePayload(announceReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAnnouncePrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAnnouncePrefix,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, "192.168.100.0/24", service.lastPrefix)
 		assert.Equal(t, "10.0.0.1", service.lastPrefixOpts.NextHop)
 
 		var announceResp GatewayAnnouncePrefixResponse
-		err = DecodePayload(resp.Payload, &announceResp)
+		err = quicwire.DecodePayload(resp.Payload, &announceResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "192.168.100.0/24", announceResp.Prefix)
@@ -993,17 +994,17 @@ func TestGatewayHandleAnnouncePrefix(t *testing.T) {
 			Prefix: "192.168.100.0/24",
 		}
 
-		payload, err := EncodePayload(announceReq)
+		payload, err := quicwire.EncodePayload(announceReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAnnouncePrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAnnouncePrefix,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing prefix", func(t *testing.T) {
@@ -1012,17 +1013,17 @@ func TestGatewayHandleAnnouncePrefix(t *testing.T) {
 
 		announceReq := &GatewayAnnouncePrefixRequest{}
 
-		payload, err := EncodePayload(announceReq)
+		payload, err := quicwire.EncodePayload(announceReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAnnouncePrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAnnouncePrefix,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "prefix")
 	})
 
@@ -1034,31 +1035,31 @@ func TestGatewayHandleAnnouncePrefix(t *testing.T) {
 			Prefix: "invalid-prefix",
 		}
 
-		payload, err := EncodePayload(announceReq)
+		payload, err := quicwire.EncodePayload(announceReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAnnouncePrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAnnouncePrefix,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayAnnouncePrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAnnouncePrefix,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when announce fails", func(t *testing.T) {
@@ -1070,17 +1071,17 @@ func TestGatewayHandleAnnouncePrefix(t *testing.T) {
 			Prefix: "192.168.100.0/24",
 		}
 
-		payload, err := EncodePayload(announceReq)
+		payload, err := quicwire.EncodePayload(announceReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAnnouncePrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAnnouncePrefix,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusAlreadyExists, resp.Status)
+		assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 	})
 }
 
@@ -1100,21 +1101,21 @@ func TestGatewayHandleWithdrawPrefix(t *testing.T) {
 			Prefix: "192.168.100.0/24",
 		}
 
-		payload, err := EncodePayload(withdrawReq)
+		payload, err := quicwire.EncodePayload(withdrawReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayWithdrawPrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayWithdrawPrefix,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, "192.168.100.0/24", service.lastPrefix)
 
 		var withdrawResp GatewayWithdrawPrefixResponse
-		err = DecodePayload(resp.Payload, &withdrawResp)
+		err = quicwire.DecodePayload(resp.Payload, &withdrawResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "192.168.100.0/24", withdrawResp.Prefix)
@@ -1129,17 +1130,17 @@ func TestGatewayHandleWithdrawPrefix(t *testing.T) {
 			Prefix: "192.168.100.0/24",
 		}
 
-		payload, err := EncodePayload(withdrawReq)
+		payload, err := quicwire.EncodePayload(withdrawReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayWithdrawPrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayWithdrawPrefix,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing prefix", func(t *testing.T) {
@@ -1148,17 +1149,17 @@ func TestGatewayHandleWithdrawPrefix(t *testing.T) {
 
 		withdrawReq := &GatewayWithdrawPrefixRequest{}
 
-		payload, err := EncodePayload(withdrawReq)
+		payload, err := quicwire.EncodePayload(withdrawReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayWithdrawPrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayWithdrawPrefix,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid prefix format", func(t *testing.T) {
@@ -1169,31 +1170,31 @@ func TestGatewayHandleWithdrawPrefix(t *testing.T) {
 			Prefix: "not-a-cidr",
 		}
 
-		payload, err := EncodePayload(withdrawReq)
+		payload, err := quicwire.EncodePayload(withdrawReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayWithdrawPrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayWithdrawPrefix,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayWithdrawPrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayWithdrawPrefix,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when withdraw fails", func(t *testing.T) {
@@ -1205,17 +1206,17 @@ func TestGatewayHandleWithdrawPrefix(t *testing.T) {
 			Prefix: "192.168.100.0/24",
 		}
 
-		payload, err := EncodePayload(withdrawReq)
+		payload, err := quicwire.EncodePayload(withdrawReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayWithdrawPrefix,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayWithdrawPrefix,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -1233,20 +1234,20 @@ func TestGatewayHandleListPrefixes(t *testing.T) {
 
 		listReq := &GatewayListPrefixesRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListPrefixes,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListPrefixes,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp GatewayListPrefixesResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Len(t, listResp.Prefixes, 2)
@@ -1259,31 +1260,31 @@ func TestGatewayHandleListPrefixes(t *testing.T) {
 
 		listReq := &GatewayListPrefixesRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListPrefixes,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListPrefixes,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayListPrefixes,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListPrefixes,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("respects limit parameter", func(t *testing.T) {
@@ -1294,20 +1295,20 @@ func TestGatewayHandleListPrefixes(t *testing.T) {
 			Limit: 1,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListPrefixes,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListPrefixes,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp GatewayListPrefixesResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Len(t, listResp.Prefixes, 1)
@@ -1320,17 +1321,17 @@ func TestGatewayHandleListPrefixes(t *testing.T) {
 
 		listReq := &GatewayListPrefixesRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListPrefixes,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListPrefixes,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -1348,20 +1349,20 @@ func TestGatewayHandleListIPAMPools(t *testing.T) {
 
 		listReq := &GatewayListIPAMPoolsRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListIPAMPools,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListIPAMPools,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp GatewayListIPAMPoolsResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Len(t, listResp.Pools, 2)
@@ -1374,31 +1375,31 @@ func TestGatewayHandleListIPAMPools(t *testing.T) {
 
 		listReq := &GatewayListIPAMPoolsRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListIPAMPools,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListIPAMPools,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayListIPAMPools,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListIPAMPools,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("respects limit parameter", func(t *testing.T) {
@@ -1409,20 +1410,20 @@ func TestGatewayHandleListIPAMPools(t *testing.T) {
 			Limit: 1,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListIPAMPools,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListIPAMPools,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp GatewayListIPAMPoolsResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Len(t, listResp.Pools, 1)
@@ -1435,17 +1436,17 @@ func TestGatewayHandleListIPAMPools(t *testing.T) {
 
 		listReq := &GatewayListIPAMPoolsRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListIPAMPools,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListIPAMPools,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -1467,23 +1468,23 @@ func TestGatewayHandleCreateIPAMPool(t *testing.T) {
 			Gateway: "10.0.2.1",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayCreateIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayCreateIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, "TestPool", service.lastCreatePoolOpts.Name)
 		assert.Equal(t, "10.0.2.0/24", service.lastCreatePoolOpts.CIDR)
 		assert.Equal(t, "10.0.2.1", service.lastCreatePoolOpts.Gateway)
 
 		var createResp GatewayCreateIPAMPoolResponse
-		err = DecodePayload(resp.Payload, &createResp)
+		err = quicwire.DecodePayload(resp.Payload, &createResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, createResp.Pool)
@@ -1500,17 +1501,17 @@ func TestGatewayHandleCreateIPAMPool(t *testing.T) {
 			CIDR: "10.0.2.0/24",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayCreateIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayCreateIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing name", func(t *testing.T) {
@@ -1521,17 +1522,17 @@ func TestGatewayHandleCreateIPAMPool(t *testing.T) {
 			CIDR: "10.0.2.0/24",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayCreateIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayCreateIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "pool name")
 	})
 
@@ -1543,17 +1544,17 @@ func TestGatewayHandleCreateIPAMPool(t *testing.T) {
 			Name: "TestPool",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayCreateIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayCreateIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "pool CIDR")
 	})
 
@@ -1566,31 +1567,31 @@ func TestGatewayHandleCreateIPAMPool(t *testing.T) {
 			CIDR: "not-a-cidr",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayCreateIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayCreateIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayCreateIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayCreateIPAMPool,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when pool already exists", func(t *testing.T) {
@@ -1603,17 +1604,17 @@ func TestGatewayHandleCreateIPAMPool(t *testing.T) {
 			CIDR: "10.0.2.0/24",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayCreateIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayCreateIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusAlreadyExists, resp.Status)
+		assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 	})
 
 	t.Run("returns error when create fails", func(t *testing.T) {
@@ -1626,17 +1627,17 @@ func TestGatewayHandleCreateIPAMPool(t *testing.T) {
 			CIDR: "10.0.2.0/24",
 		}
 
-		payload, err := EncodePayload(createReq)
+		payload, err := quicwire.EncodePayload(createReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayCreateIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayCreateIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -1656,21 +1657,21 @@ func TestGatewayHandleDeleteIPAMPool(t *testing.T) {
 			PoolID: "pool-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayDeleteIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayDeleteIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, "pool-1", service.lastDeletePoolID)
 
 		var deleteResp GatewayDeleteIPAMPoolResponse
-		err = DecodePayload(resp.Payload, &deleteResp)
+		err = quicwire.DecodePayload(resp.Payload, &deleteResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "pool-1", deleteResp.PoolID)
@@ -1685,17 +1686,17 @@ func TestGatewayHandleDeleteIPAMPool(t *testing.T) {
 			PoolID: "pool-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayDeleteIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayDeleteIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing pool ID", func(t *testing.T) {
@@ -1704,17 +1705,17 @@ func TestGatewayHandleDeleteIPAMPool(t *testing.T) {
 
 		deleteReq := &GatewayDeleteIPAMPoolRequest{}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayDeleteIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayDeleteIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "pool ID")
 	})
 
@@ -1722,14 +1723,14 @@ func TestGatewayHandleDeleteIPAMPool(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayDeleteIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayDeleteIPAMPool,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when pool not found", func(t *testing.T) {
@@ -1741,17 +1742,17 @@ func TestGatewayHandleDeleteIPAMPool(t *testing.T) {
 			PoolID: "nonexistent-pool",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayDeleteIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayDeleteIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error when delete fails", func(t *testing.T) {
@@ -1763,17 +1764,17 @@ func TestGatewayHandleDeleteIPAMPool(t *testing.T) {
 			PoolID: "pool-1",
 		}
 
-		payload, err := EncodePayload(deleteReq)
+		payload, err := quicwire.EncodePayload(deleteReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayDeleteIPAMPool,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayDeleteIPAMPool,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -1790,16 +1791,16 @@ func TestGatewayHandleGetIPAMPool(t *testing.T) {
 		handler, _ := createTestGatewayHandler()
 
 		getReq := &GatewayGetIPAMPoolRequest{PoolID: "pool-1"}
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{Opcode: OpGatewayGetIPAMPool, Payload: payload}
+		req := &quicwire.Request{Opcode: quicwire.OpGatewayGetIPAMPool, Payload: payload}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var getResp GatewayGetIPAMPoolResponse
-		err = DecodePayload(resp.Payload, &getResp)
+		err = quicwire.DecodePayload(resp.Payload, &getResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, getResp.Pool)
@@ -1813,13 +1814,13 @@ func TestGatewayHandleGetIPAMPool(t *testing.T) {
 		handler, _ := createTestGatewayHandler()
 
 		getReq := &GatewayGetIPAMPoolRequest{PoolID: "pool-does-not-exist"}
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{Opcode: OpGatewayGetIPAMPool, Payload: payload}
+		req := &quicwire.Request{Opcode: quicwire.OpGatewayGetIPAMPool, Payload: payload}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("returns error for missing pool ID", func(t *testing.T) {
@@ -1827,13 +1828,13 @@ func TestGatewayHandleGetIPAMPool(t *testing.T) {
 		handler, _ := createTestGatewayHandler()
 
 		getReq := &GatewayGetIPAMPoolRequest{PoolID: ""}
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{Opcode: OpGatewayGetIPAMPool, Payload: payload}
+		req := &quicwire.Request{Opcode: quicwire.OpGatewayGetIPAMPool, Payload: payload}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
@@ -1841,13 +1842,13 @@ func TestGatewayHandleGetIPAMPool(t *testing.T) {
 		handler := NewGatewayHandler(newGatewayTestLogger(), nil)
 
 		getReq := &GatewayGetIPAMPoolRequest{PoolID: "pool-1"}
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{Opcode: OpGatewayGetIPAMPool, Payload: payload}
+		req := &quicwire.Request{Opcode: quicwire.OpGatewayGetIPAMPool, Payload: payload}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when get fails", func(t *testing.T) {
@@ -1856,13 +1857,13 @@ func TestGatewayHandleGetIPAMPool(t *testing.T) {
 		service.listIPAMPoolsErr = errors.New("backend error")
 
 		getReq := &GatewayGetIPAMPoolRequest{PoolID: "pool-1"}
-		payload, err := EncodePayload(getReq)
+		payload, err := quicwire.EncodePayload(getReq)
 		require.NoError(t, err)
 
-		req := &Request{Opcode: OpGatewayGetIPAMPool, Payload: payload}
+		req := &quicwire.Request{Opcode: quicwire.OpGatewayGetIPAMPool, Payload: payload}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -1883,16 +1884,16 @@ func TestGatewayHandleUpdateIPAMPool(t *testing.T) {
 			Name:        "UpdatedName",
 			Description: "updated description",
 		}
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{Opcode: OpGatewayUpdateIPAMPool, Payload: payload}
+		req := &quicwire.Request{Opcode: quicwire.OpGatewayUpdateIPAMPool, Payload: payload}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var updateResp GatewayUpdateIPAMPoolResponse
-		err = DecodePayload(resp.Payload, &updateResp)
+		err = quicwire.DecodePayload(resp.Payload, &updateResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, updateResp.Pool)
@@ -1904,13 +1905,13 @@ func TestGatewayHandleUpdateIPAMPool(t *testing.T) {
 		handler, _ := createTestGatewayHandler()
 
 		updateReq := &GatewayUpdateIPAMPoolRequest{PoolID: "", Name: "NewName"}
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{Opcode: OpGatewayUpdateIPAMPool, Payload: payload}
+		req := &quicwire.Request{Opcode: quicwire.OpGatewayUpdateIPAMPool, Payload: payload}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error when service unavailable", func(t *testing.T) {
@@ -1918,13 +1919,13 @@ func TestGatewayHandleUpdateIPAMPool(t *testing.T) {
 		handler := NewGatewayHandler(newGatewayTestLogger(), nil)
 
 		updateReq := &GatewayUpdateIPAMPoolRequest{PoolID: "pool-1", Name: "NewName"}
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{Opcode: OpGatewayUpdateIPAMPool, Payload: payload}
+		req := &quicwire.Request{Opcode: quicwire.OpGatewayUpdateIPAMPool, Payload: payload}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error when update fails", func(t *testing.T) {
@@ -1933,23 +1934,23 @@ func TestGatewayHandleUpdateIPAMPool(t *testing.T) {
 		service.listIPAMPoolsErr = errors.New("backend error")
 
 		updateReq := &GatewayUpdateIPAMPoolRequest{PoolID: "pool-1", Name: "NewName"}
-		payload, err := EncodePayload(updateReq)
+		payload, err := quicwire.EncodePayload(updateReq)
 		require.NoError(t, err)
 
-		req := &Request{Opcode: OpGatewayUpdateIPAMPool, Payload: payload}
+		req := &quicwire.Request{Opcode: quicwire.OpGatewayUpdateIPAMPool, Payload: payload}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{Opcode: OpGatewayUpdateIPAMPool, Payload: []byte("invalid payload")}
+		req := &quicwire.Request{Opcode: quicwire.OpGatewayUpdateIPAMPool, Payload: []byte("invalid payload")}
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -1971,22 +1972,22 @@ func TestGatewayHandleAllocateIP(t *testing.T) {
 			Owner:    "test-owner",
 		}
 
-		payload, err := EncodePayload(allocReq)
+		payload, err := quicwire.EncodePayload(allocReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAllocateIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAllocateIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, "pool-1", service.lastPoolID)
 		assert.Equal(t, "test-host", service.lastAllocateOpts.Hostname)
 
 		var allocResp GatewayAllocateIPResponse
-		err = DecodePayload(resp.Payload, &allocResp)
+		err = quicwire.DecodePayload(resp.Payload, &allocResp)
 		require.NoError(t, err)
 
 		assert.NotNil(t, allocResp.Allocation)
@@ -2002,17 +2003,17 @@ func TestGatewayHandleAllocateIP(t *testing.T) {
 			IPAddress: "10.0.0.100",
 		}
 
-		payload, err := EncodePayload(allocReq)
+		payload, err := quicwire.EncodePayload(allocReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAllocateIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAllocateIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, "10.0.0.100", service.lastAllocateOpts.IPAddress)
 	})
 
@@ -2024,17 +2025,17 @@ func TestGatewayHandleAllocateIP(t *testing.T) {
 			PoolID: "pool-1",
 		}
 
-		payload, err := EncodePayload(allocReq)
+		payload, err := quicwire.EncodePayload(allocReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAllocateIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAllocateIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("returns error for missing pool ID", func(t *testing.T) {
@@ -2043,17 +2044,17 @@ func TestGatewayHandleAllocateIP(t *testing.T) {
 
 		allocReq := &GatewayAllocateIPRequest{}
 
-		payload, err := EncodePayload(allocReq)
+		payload, err := quicwire.EncodePayload(allocReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAllocateIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAllocateIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "pool ID")
 	})
 
@@ -2066,31 +2067,31 @@ func TestGatewayHandleAllocateIP(t *testing.T) {
 			IPAddress: "invalid-ip",
 		}
 
-		payload, err := EncodePayload(allocReq)
+		payload, err := quicwire.EncodePayload(allocReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAllocateIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAllocateIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayAllocateIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAllocateIP,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when pool exhausted", func(t *testing.T) {
@@ -2102,17 +2103,17 @@ func TestGatewayHandleAllocateIP(t *testing.T) {
 			PoolID: "pool-1",
 		}
 
-		payload, err := EncodePayload(allocReq)
+		payload, err := quicwire.EncodePayload(allocReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAllocateIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAllocateIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusResourceExhausted, resp.Status)
+		assert.Equal(t, quicwire.StatusResourceExhausted, resp.Status)
 	})
 
 	t.Run("returns error when pool not found", func(t *testing.T) {
@@ -2124,17 +2125,17 @@ func TestGatewayHandleAllocateIP(t *testing.T) {
 			PoolID: "nonexistent-pool",
 		}
 
-		payload, err := EncodePayload(allocReq)
+		payload, err := quicwire.EncodePayload(allocReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayAllocateIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayAllocateIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -2155,22 +2156,22 @@ func TestGatewayHandleReleaseIP(t *testing.T) {
 			IPAddress: "10.0.0.50",
 		}
 
-		payload, err := EncodePayload(releaseReq)
+		payload, err := quicwire.EncodePayload(releaseReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayReleaseIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayReleaseIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, "pool-1", service.lastPoolID)
 		assert.Equal(t, "10.0.0.50", service.lastReleaseIP)
 
 		var releaseResp GatewayReleaseIPResponse
-		err = DecodePayload(resp.Payload, &releaseResp)
+		err = quicwire.DecodePayload(resp.Payload, &releaseResp)
 		require.NoError(t, err)
 
 		assert.Equal(t, "pool-1", releaseResp.PoolID)
@@ -2187,17 +2188,17 @@ func TestGatewayHandleReleaseIP(t *testing.T) {
 			IPAddress: "10.0.0.50",
 		}
 
-		payload, err := EncodePayload(releaseReq)
+		payload, err := quicwire.EncodePayload(releaseReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayReleaseIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayReleaseIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("releases by address alone", func(t *testing.T) {
@@ -2210,17 +2211,17 @@ func TestGatewayHandleReleaseIP(t *testing.T) {
 			IPAddress: "10.0.0.50",
 		}
 
-		payload, err := EncodePayload(releaseReq)
+		payload, err := quicwire.EncodePayload(releaseReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayReleaseIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayReleaseIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Empty(t, service.lastPoolID)
 		assert.Equal(t, "10.0.0.50", service.lastReleaseIP)
 	})
@@ -2233,17 +2234,17 @@ func TestGatewayHandleReleaseIP(t *testing.T) {
 			PoolID: "pool-1",
 		}
 
-		payload, err := EncodePayload(releaseReq)
+		payload, err := quicwire.EncodePayload(releaseReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayReleaseIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayReleaseIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "IP address")
 	})
 
@@ -2256,31 +2257,31 @@ func TestGatewayHandleReleaseIP(t *testing.T) {
 			IPAddress: "invalid-ip",
 		}
 
-		payload, err := EncodePayload(releaseReq)
+		payload, err := quicwire.EncodePayload(releaseReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayReleaseIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayReleaseIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("returns error for invalid payload", func(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayReleaseIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayReleaseIP,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("returns error when allocation not found", func(t *testing.T) {
@@ -2293,17 +2294,17 @@ func TestGatewayHandleReleaseIP(t *testing.T) {
 			IPAddress: "10.0.0.99",
 		}
 
-		payload, err := EncodePayload(releaseReq)
+		payload, err := quicwire.EncodePayload(releaseReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayReleaseIP,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayReleaseIP,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -2323,21 +2324,21 @@ func TestGatewayHandleListAllocations(t *testing.T) {
 			PoolID: "pool-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListAllocations,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListAllocations,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Equal(t, "pool-1", service.lastPoolID)
 
 		var listResp GatewayListAllocationsResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Len(t, listResp.Allocations, 2)
@@ -2352,17 +2353,17 @@ func TestGatewayHandleListAllocations(t *testing.T) {
 			PoolID: "pool-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListAllocations,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListAllocations,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("empty pool ID lists all allocations", func(t *testing.T) {
@@ -2372,19 +2373,19 @@ func TestGatewayHandleListAllocations(t *testing.T) {
 
 		listReq := &GatewayListAllocationsRequest{}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListAllocations,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListAllocations,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 		var listResp GatewayListAllocationsResponse
-		require.NoError(t, DecodePayload(resp.Payload, &listResp))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &listResp))
 		assert.NotNil(t, listResp.Allocations)
 	})
 
@@ -2392,14 +2393,14 @@ func TestGatewayHandleListAllocations(t *testing.T) {
 		t.Parallel()
 		handler, _ := createTestGatewayHandler()
 
-		req := &Request{
-			Opcode:  OpGatewayListAllocations,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListAllocations,
 			Payload: []byte("invalid payload"),
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("respects limit parameter", func(t *testing.T) {
@@ -2411,20 +2412,20 @@ func TestGatewayHandleListAllocations(t *testing.T) {
 			Limit:  1,
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListAllocations,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListAllocations,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var listResp GatewayListAllocationsResponse
-		err = DecodePayload(resp.Payload, &listResp)
+		err = quicwire.DecodePayload(resp.Payload, &listResp)
 		require.NoError(t, err)
 
 		assert.Len(t, listResp.Allocations, 1)
@@ -2439,17 +2440,17 @@ func TestGatewayHandleListAllocations(t *testing.T) {
 			PoolID: "pool-1",
 		}
 
-		payload, err := EncodePayload(listReq)
+		payload, err := quicwire.EncodePayload(listReq)
 		require.NoError(t, err)
 
-		req := &Request{
-			Opcode:  OpGatewayListAllocations,
+		req := &quicwire.Request{
+			Opcode:  quicwire.OpGatewayListAllocations,
 			Payload: payload,
 		}
 
 		resp := handler.HandleRequest(ctx, req)
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -2466,7 +2467,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayPrefixNotFound)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("maps pool not found to NotFound status", func(t *testing.T) {
@@ -2475,7 +2476,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayPoolNotFound)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("maps allocation not found to NotFound status", func(t *testing.T) {
@@ -2484,7 +2485,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayAllocationNotFound)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("maps BGP peer not found to NotFound status", func(t *testing.T) {
@@ -2493,7 +2494,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayBGPPeerNotFound)
 
-		assert.Equal(t, StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("maps prefix already exists to AlreadyExists status", func(t *testing.T) {
@@ -2502,7 +2503,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayPrefixAlreadyExists)
 
-		assert.Equal(t, StatusAlreadyExists, resp.Status)
+		assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 	})
 
 	t.Run("maps pool already exists to AlreadyExists status", func(t *testing.T) {
@@ -2511,7 +2512,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayPoolAlreadyExists)
 
-		assert.Equal(t, StatusAlreadyExists, resp.Status)
+		assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status)
 	})
 
 	t.Run("maps pool exhausted to ResourceExhausted status", func(t *testing.T) {
@@ -2520,7 +2521,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayPoolExhausted)
 
-		assert.Equal(t, StatusResourceExhausted, resp.Status)
+		assert.Equal(t, quicwire.StatusResourceExhausted, resp.Status)
 	})
 
 	t.Run("maps invalid mode to InvalidArgument status", func(t *testing.T) {
@@ -2529,7 +2530,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayInvalidMode)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("maps invalid prefix to InvalidArgument status", func(t *testing.T) {
@@ -2538,7 +2539,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayInvalidPrefix)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("maps invalid IP address to InvalidArgument status", func(t *testing.T) {
@@ -2547,7 +2548,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayInvalidIPAddress)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("maps invalid pool CIDR to InvalidArgument status", func(t *testing.T) {
@@ -2556,7 +2557,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayInvalidPoolCIDR)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("maps missing mode to InvalidArgument status", func(t *testing.T) {
@@ -2565,7 +2566,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayMissingMode)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("maps missing prefix to InvalidArgument status", func(t *testing.T) {
@@ -2574,7 +2575,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayMissingPrefix)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("maps missing pool ID to InvalidArgument status", func(t *testing.T) {
@@ -2583,7 +2584,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayMissingPoolID)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("maps missing pool name to InvalidArgument status", func(t *testing.T) {
@@ -2592,7 +2593,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayMissingPoolName)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("maps missing pool CIDR to InvalidArgument status", func(t *testing.T) {
@@ -2601,7 +2602,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayMissingPoolCIDR)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("maps missing IP address to InvalidArgument status", func(t *testing.T) {
@@ -2610,7 +2611,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayMissingIPAddress)
 
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("maps BGP not enabled to Unavailable status", func(t *testing.T) {
@@ -2619,7 +2620,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayBGPNotEnabled)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("maps service not available to Unavailable status", func(t *testing.T) {
@@ -2628,7 +2629,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(ErrGatewayServiceNotAvailable)
 
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("maps unknown error to InternalError status", func(t *testing.T) {
@@ -2637,7 +2638,7 @@ func TestGatewayHandlerErrorResponse(t *testing.T) {
 
 		resp := handler.gatewayErrorResponse(errors.New("unknown error"))
 
-		assert.Equal(t, StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }
 
@@ -2650,8 +2651,8 @@ func TestGatewayHandlerErrorResponse_APreconditionIsNotAFault(t *testing.T) {
 	handler, service := createTestGatewayHandler()
 	service.nat64StatusErr = ErrGatewayPreconditionDetail{Reason: "module jool not found"}
 
-	resp := handler.handleNAT64Status(context.Background(), &Request{})
-	if resp.Status != StatusInvalidRequest {
+	resp := handler.handleNAT64Status(context.Background(), &quicwire.Request{})
+	if resp.Status != quicwire.StatusInvalidRequest {
 		t.Fatalf("status = %#x, want StatusInvalidRequest", resp.Status)
 	}
 	if !bytes.Contains(resp.Payload, []byte("module jool not found")) {
@@ -2674,10 +2675,10 @@ func TestGatewayHandlerErrorResponse_AllocationRefusals(t *testing.T) {
 		err  error
 		want byte
 	}{
-		{ErrGatewayMissingOwner, StatusInvalidArgument},
-		{ErrGatewayMACNotRecorded, StatusInvalidArgument},
-		{ErrGatewayInvalidAllocationType, StatusInvalidArgument},
-		{ErrGatewayIPAlreadyAllocated, StatusAlreadyExists},
+		{ErrGatewayMissingOwner, quicwire.StatusInvalidArgument},
+		{ErrGatewayMACNotRecorded, quicwire.StatusInvalidArgument},
+		{ErrGatewayInvalidAllocationType, quicwire.StatusInvalidArgument},
+		{ErrGatewayIPAlreadyAllocated, quicwire.StatusAlreadyExists},
 	}
 	for _, tt := range tests {
 		t.Run(tt.err.Error(), func(t *testing.T) {

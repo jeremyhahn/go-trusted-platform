@@ -421,7 +421,7 @@ silently fixed.
 
 **Not a correction, but a divergence worth flagging:**
 [`docs/provisioning/api.md`](../provisioning/api.md) §1 records the PXE QUIC
-opcodes as `0xFC`–`0xFF`. `pkg/api/quic/protocol.go` also defines
+opcodes as `0xFC`–`0xFF`. `sdk/go/wire/quicwire/protocol.go` also defines
 `OpPXEListDevices` `0xEC`, `OpPXEGetDevice` `0xED`, `OpPXERegisterDevice`
 `0xEE` and `OpPXEUpdateState` `0xEF`. Eight opcodes, not four. Raised against
 `docs/provisioning/`, which owns that table.

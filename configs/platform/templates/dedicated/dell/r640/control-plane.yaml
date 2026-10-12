@@ -945,7 +945,9 @@ certificate-authority:
 # PLATFORMD_DAEMON_<TRANSPORT>_BIND_HOST (env) or on
 # `platformd serve --<transport>-bind-host` (flag); flags win over env over
 # this file over the defaults. The Unix socket carries local platformctl
-# and is unaffected. Expose a transport only with mutual TLS.
+# and is unaffected. Expose a transport only with mutual TLS. MCP over HTTP
+# serves TLS 1.3 only, with the same daemon certificate as REST and gRPC;
+# there is no plaintext MCP listener (#844).
 
 daemon:
   rest: {bind-host: 127.0.0.1, port: 8443}

@@ -26,9 +26,9 @@ import (
 	quicgo "github.com/quic-go/quic-go"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -135,7 +135,7 @@ func NewQUICAdapter() *QUICAdapter {
 // quicALPN is the ALPN protocol the daemon's QUIC listener negotiates, taken
 // from the server package rather than retyped. The previous adapter offered
 // "device-quic", which no listener has ever advertised.
-const quicALPN = quicapi.ALPNProtocol
+const quicALPN = quicwire.ALPNProtocol
 
 // Name returns the adapter name.
 func (a *QUICAdapter) Name() string { return "QUIC" }
@@ -180,7 +180,7 @@ func (a *QUICAdapter) Teardown(ctx context.Context) error {
 func (a *QUICAdapter) call(ctx context.Context, op string, opcode byte, body, out interface{}) error {
 	var payload []byte
 	if body != nil {
-		encoded, err := quicapi.EncodePayload(body)
+		encoded, err := quicwire.EncodePayload(body)
 		if err != nil {
 			return &QUICAdapterError{Operation: op, Message: "encode: " + err.Error()}
 		}
@@ -196,7 +196,7 @@ func (a *QUICAdapter) call(ctx context.Context, op string, opcode byte, body, ou
 func (a *QUICAdapter) callCategory(ctx context.Context, op string, categoryOpcode, subOpcode byte, body, out interface{}) error {
 	var encoded []byte
 	if body != nil {
-		b, err := quicapi.EncodePayload(body)
+		b, err := quicwire.EncodePayload(body)
 		if err != nil {
 			return &QUICAdapterError{Operation: op, Message: "encode: " + err.Error()}
 		}
@@ -224,23 +224,23 @@ func (a *QUICAdapter) roundTrip(ctx context.Context, op string, opcode byte, pay
 
 	// token_len is zero: the daemon authenticates these connections by the
 	// mTLS client certificate, not a bearer token.
-	if err := quicapi.WriteRequest(stream, &quicapi.Request{Opcode: opcode, Payload: payload}); err != nil {
+	if err := quicwire.WriteRequest(stream, &quicwire.Request{Opcode: opcode, Payload: payload}); err != nil {
 		return &QUICAdapterError{Operation: op, Message: "write request: " + err.Error()}
 	}
 
-	resp, err := quicapi.ReadResponse(stream)
+	resp, err := quicwire.ReadResponse(stream)
 	if err != nil {
 		return &QUICAdapterError{Operation: op, Message: "read response: " + err.Error()}
 	}
 
-	if resp.Status != quicapi.StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		return ErrQUICStatus{Operation: op, Status: resp.Status, Message: string(resp.Payload)}
 	}
 
 	if out == nil || len(resp.Payload) == 0 {
 		return nil
 	}
-	if err := quicapi.DecodePayload(resp.Payload, out); err != nil {
+	if err := quicwire.DecodePayload(resp.Payload, out); err != nil {
 		return &QUICAdapterError{Operation: op, Message: "decode response: " + err.Error()}
 	}
 	return nil
@@ -281,7 +281,7 @@ func (a *QUICAdapter) RegisterDevice(ctx context.Context, opts RegisterDeviceOpt
 		},
 	}
 	var resp pb.CreateDeviceResponse
-	if err := a.call(ctx, "RegisterDevice", quicapi.OpDeviceRegister, req, &resp); err != nil {
+	if err := a.call(ctx, "RegisterDevice", quicwire.OpDeviceRegister, req, &resp); err != nil {
 		return nil, err
 	}
 	return &RegisterDeviceResult{Device: protoToDevice(resp.GetDevice())}, nil
@@ -294,7 +294,7 @@ func (a *QUICAdapter) GetDevice(ctx context.Context, opts GetDeviceOptions) (*Ge
 		return nil, err
 	}
 	var resp pb.GetDeviceResponse
-	if err := a.call(ctx, "GetDevice", quicapi.OpDeviceGet, &deviceGetRequest{Id: id}, &resp); err != nil {
+	if err := a.call(ctx, "GetDevice", quicwire.OpDeviceGet, &deviceGetRequest{Id: id}, &resp); err != nil {
 		return nil, err
 	}
 	return &GetDeviceResult{Device: protoToDevice(resp.GetDevice())}, nil
@@ -318,7 +318,7 @@ func (a *QUICAdapter) UpdateDevice(ctx context.Context, opts UpdateDeviceOptions
 		},
 	}
 	var resp pb.UpdateDeviceResponse
-	if err := a.call(ctx, "UpdateDevice", quicapi.OpDeviceUpdate, req, &resp); err != nil {
+	if err := a.call(ctx, "UpdateDevice", quicwire.OpDeviceUpdate, req, &resp); err != nil {
 		return nil, err
 	}
 	return &UpdateDeviceResult{Device: protoToDevice(resp.GetDevice())}, nil
@@ -331,7 +331,7 @@ func (a *QUICAdapter) DeleteDevice(ctx context.Context, opts DeleteDeviceOptions
 		return nil, err
 	}
 	var resp pb.DeleteDeviceResponse
-	if err := a.call(ctx, "DeleteDevice", quicapi.OpDeviceUnregister, &pb.DeleteDeviceRequest{Id: id}, &resp); err != nil {
+	if err := a.call(ctx, "DeleteDevice", quicwire.OpDeviceUnregister, &pb.DeleteDeviceRequest{Id: id}, &resp); err != nil {
 		return nil, err
 	}
 	return &DeleteDeviceResult{Success: resp.GetStatus().GetSuccess()}, nil
@@ -347,7 +347,7 @@ func (a *QUICAdapter) ListDevices(ctx context.Context, opts ListDevicesOptions) 
 		},
 	}
 	var resp pb.ListDevicesResponse
-	if err := a.call(ctx, "ListDevices", quicapi.OpDeviceList, req, &resp); err != nil {
+	if err := a.call(ctx, "ListDevices", quicwire.OpDeviceList, req, &resp); err != nil {
 		return nil, err
 	}
 	devices := make([]*entities.Device, 0, len(resp.GetDevices()))
@@ -370,7 +370,7 @@ func (a *QUICAdapter) ListDevices(ctx context.Context, opts ListDevicesOptions) 
 // carry the device under the same field.
 func (a *QUICAdapter) FindBySerial(ctx context.Context, opts FindBySerialOptions) (*FindBySerialResult, error) {
 	var resp pb.FindDeviceBySerialResponse
-	if err := a.call(ctx, "FindBySerial", quicapi.OpDeviceGet, &deviceGetRequest{Serial: opts.Serial}, &resp); err != nil {
+	if err := a.call(ctx, "FindBySerial", quicwire.OpDeviceGet, &deviceGetRequest{Serial: opts.Serial}, &resp); err != nil {
 		return nil, err
 	}
 	return &FindBySerialResult{Device: protoToDevice(resp.GetDevice())}, nil
@@ -397,7 +397,7 @@ func (a *QUICAdapter) CreateProfile(ctx context.Context, opts CreateProfileOptio
 		req.Profile.MatchRules = entityMatchRulesToProto(opts.MatchRules)
 	}
 	var resp pb.CreateProfileResponse
-	if err := a.call(ctx, "CreateProfile", quicapi.OpDeviceCreateProfile, req, &resp); err != nil {
+	if err := a.call(ctx, "CreateProfile", quicwire.OpDeviceCreateProfile, req, &resp); err != nil {
 		return nil, err
 	}
 	return &CreateProfileResult{Profile: protoToProfile(resp.GetProfile())}, nil
@@ -410,7 +410,7 @@ func (a *QUICAdapter) GetProfile(ctx context.Context, opts GetProfileOptions) (*
 		return nil, err
 	}
 	var resp pb.GetProfileResponse
-	if err := a.call(ctx, "GetProfile", quicapi.OpDeviceGetProfile, &pb.GetProfileRequest{Id: id}, &resp); err != nil {
+	if err := a.call(ctx, "GetProfile", quicwire.OpDeviceGetProfile, &pb.GetProfileRequest{Id: id}, &resp); err != nil {
 		return nil, err
 	}
 	return &GetProfileResult{Profile: protoToProfile(resp.GetProfile())}, nil
@@ -434,7 +434,7 @@ func (a *QUICAdapter) UpdateProfile(ctx context.Context, opts UpdateProfileOptio
 		req.Profile.MatchRules = entityMatchRulesToProto(opts.MatchRules)
 	}
 	var resp pb.UpdateProfileResponse
-	if err := a.call(ctx, "UpdateProfile", quicapi.OpDeviceSetProfile, req, &resp); err != nil {
+	if err := a.call(ctx, "UpdateProfile", quicwire.OpDeviceSetProfile, req, &resp); err != nil {
 		return nil, err
 	}
 	return &UpdateProfileResult{Profile: protoToProfile(resp.GetProfile())}, nil
@@ -447,7 +447,7 @@ func (a *QUICAdapter) DeleteProfile(ctx context.Context, opts DeleteProfileOptio
 		return nil, err
 	}
 	var resp pb.DeleteProfileResponse
-	if err := a.call(ctx, "DeleteProfile", quicapi.OpDeviceDeleteProfile, &pb.DeleteProfileRequest{Id: id}, &resp); err != nil {
+	if err := a.call(ctx, "DeleteProfile", quicwire.OpDeviceDeleteProfile, &pb.DeleteProfileRequest{Id: id}, &resp); err != nil {
 		return nil, err
 	}
 	return &DeleteProfileResult{Success: resp.GetStatus().GetSuccess()}, nil
@@ -462,7 +462,7 @@ func (a *QUICAdapter) ListProfiles(ctx context.Context, opts ListProfilesOptions
 		},
 	}
 	var resp pb.ListProfilesResponse
-	if err := a.call(ctx, "ListProfiles", quicapi.OpDeviceListProfiles, req, &resp); err != nil {
+	if err := a.call(ctx, "ListProfiles", quicwire.OpDeviceListProfiles, req, &resp); err != nil {
 		return nil, err
 	}
 	profiles := make([]*entities.DeviceProfile, 0, len(resp.GetProfiles()))
@@ -492,7 +492,7 @@ func (a *QUICAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 	}
 	var resp pb.RecordAttestationCertificateResponse
 	if err := a.callCategory(ctx, "RecordAttestCert",
-		quicapi.OpProvisioningCategory, quicapi.DeviceSubRecordAttestCert, req, &resp); err != nil {
+		quicwire.OpProvisioningCategory, quicwire.DeviceSubRecordAttestCert, req, &resp); err != nil {
 		return nil, err
 	}
 	return &RecordAttestCertResult{
@@ -529,7 +529,7 @@ func (a *QUICAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions
 		Evidence: opts.Evidence,
 	}
 	var resp pb.AttestDeviceResponse
-	if err := a.call(ctx, "AttestDevice", quicapi.OpDeviceAttest, req, &resp); err != nil {
+	if err := a.call(ctx, "AttestDevice", quicwire.OpDeviceAttest, req, &resp); err != nil {
 		return nil, err
 	}
 	return attestResultFromProto(opts.DeviceID, &resp), nil
@@ -554,7 +554,7 @@ func (a *QUICAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProf
 	}
 	var resp pb.AssignProfileToDeviceResponse
 	if err := a.callCategory(ctx, "AssignProfileToDevice",
-		quicapi.OpProvisioningCategory, quicapi.DeviceProfileSubAssign, req, &resp); err != nil {
+		quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubAssign, req, &resp); err != nil {
 		return nil, err
 	}
 	return &AssignProfileToDeviceResult{Profile: protoToProfile(resp.GetProfile())}, nil

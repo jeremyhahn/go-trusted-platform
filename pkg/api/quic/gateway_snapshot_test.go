@@ -24,6 +24,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -58,13 +59,13 @@ func TestGatewayHandleSnapshot(t *testing.T) {
 		handler, service := createTestGatewayHandler()
 		service.snapshotResp = snapshotFixture("node-01-gateway")
 
-		payload, err := EncodePayload(&GatewaySnapshotRequest{GatewayID: "node-01-gateway"})
+		payload, err := quicwire.EncodePayload(&GatewaySnapshotRequest{GatewayID: "node-01-gateway"})
 		require.NoError(t, err)
-		resp := handler.HandleRequest(ctx, &Request{Opcode: OpGatewaySnapshot, Payload: payload})
-		require.Equal(t, StatusOK, resp.Status)
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpGatewaySnapshot, Payload: payload})
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var decoded GatewaySnapshotResponse
-		require.NoError(t, DecodePayload(resp.Payload, &decoded))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &decoded))
 		require.NotNil(t, decoded.Snapshot)
 		assert.Equal(t, "node-01-gateway", decoded.Snapshot.GatewayID)
 		assert.Equal(t, "node-01-gateway", service.lastSnapshotID, "the request's gateway id reaches the service")
@@ -86,8 +87,8 @@ func TestGatewayHandleSnapshot(t *testing.T) {
 		handler, service := createTestGatewayHandler()
 		service.snapshotResp = snapshotFixture("local")
 
-		resp := handler.HandleRequest(ctx, &Request{Opcode: OpGatewaySnapshot})
-		require.Equal(t, StatusOK, resp.Status)
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpGatewaySnapshot})
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 		assert.Empty(t, service.lastSnapshotID)
 	})
 
@@ -95,22 +96,22 @@ func TestGatewayHandleSnapshot(t *testing.T) {
 		handler, service := createTestGatewayHandler()
 		service.snapshotErr = errors.New("store unavailable")
 
-		resp := handler.HandleRequest(ctx, &Request{Opcode: OpGatewaySnapshot})
-		assert.NotEqual(t, StatusOK, resp.Status)
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpGatewaySnapshot})
+		assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("an unconfigured gateway service is unavailable", func(t *testing.T) {
 		handler := NewGatewayHandler(newGatewayTestLogger(), nil)
-		resp := handler.HandleRequest(ctx, &Request{Opcode: OpGatewaySnapshot})
-		assert.Equal(t, StatusUnavailable, resp.Status)
-		resp = handler.HandleRequest(ctx, &Request{Opcode: OpGatewayListSnapshots})
-		assert.Equal(t, StatusUnavailable, resp.Status)
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpGatewaySnapshot})
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
+		resp = handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpGatewayListSnapshots})
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("a malformed request payload is refused", func(t *testing.T) {
 		handler, _ := createTestGatewayHandler()
-		resp := handler.HandleRequest(ctx, &Request{Opcode: OpGatewaySnapshot, Payload: []byte{0xFF, 0xFE, 0xFD}})
-		assert.Equal(t, StatusInvalidRequest, resp.Status)
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpGatewaySnapshot, Payload: []byte{0xFF, 0xFE, 0xFD}})
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 }
 
@@ -120,11 +121,11 @@ func TestGatewayHandleListSnapshots(t *testing.T) {
 	handler, service := createTestGatewayHandler()
 	service.snapshotsResp = []*GatewaySnapshotInfo{snapshotFixture("node-01-gateway"), snapshotFixture("node-02-gateway")}
 
-	resp := handler.HandleRequest(ctx, &Request{Opcode: OpGatewayListSnapshots})
-	require.Equal(t, StatusOK, resp.Status)
+	resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpGatewayListSnapshots})
+	require.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var decoded GatewayListSnapshotsResponse
-	require.NoError(t, DecodePayload(resp.Payload, &decoded))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &decoded))
 	assert.Equal(t, int32(2), decoded.Count)
 	require.Len(t, decoded.Snapshots, 2)
 	assert.Equal(t, "node-02-gateway", decoded.Snapshots[1].GatewayID)
@@ -132,23 +133,23 @@ func TestGatewayHandleListSnapshots(t *testing.T) {
 	t.Run("a listing failure is reported", func(t *testing.T) {
 		handler, service := createTestGatewayHandler()
 		service.snapshotsErr = errors.New("store unavailable")
-		resp := handler.HandleRequest(ctx, &Request{Opcode: OpGatewayListSnapshots})
-		assert.NotEqual(t, StatusOK, resp.Status)
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpGatewayListSnapshots})
+		assert.NotEqual(t, quicwire.StatusOK, resp.Status)
 	})
 }
 
 func TestGatewaySnapshotOpcodesAreDistinct(t *testing.T) {
 	seen := map[byte]string{
-		OpGatewayStatus:            "status",
-		OpGatewaySetMode:           "set-mode",
-		OpGatewayBGPStatus:         "bgp-status",
-		OpGatewayListNetworkZones:  "zones-list",
-		OpGatewayDeleteNetworkZone: "zones-delete",
+		quicwire.OpGatewayStatus:            "status",
+		quicwire.OpGatewaySetMode:           "set-mode",
+		quicwire.OpGatewayBGPStatus:         "bgp-status",
+		quicwire.OpGatewayListNetworkZones:  "zones-list",
+		quicwire.OpGatewayDeleteNetworkZone: "zones-delete",
 	}
-	for op, name := range map[byte]string{OpGatewaySnapshot: "snapshot", OpGatewayListSnapshots: "snapshots"} {
+	for op, name := range map[byte]string{quicwire.OpGatewaySnapshot: "snapshot", quicwire.OpGatewayListSnapshots: "snapshots"} {
 		existing, clash := seen[op]
 		assert.False(t, clash, "%s collides with %s", name, existing)
 	}
-	assert.Equal(t, byte(0x15), OpGatewaySnapshot)
-	assert.Equal(t, byte(0x16), OpGatewayListSnapshots)
+	assert.Equal(t, byte(0x15), quicwire.OpGatewaySnapshot)
+	assert.Equal(t, byte(0x16), quicwire.OpGatewayListSnapshots)
 }

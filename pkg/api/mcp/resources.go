@@ -20,13 +20,14 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // ResourceRegistry manages MCP resources and their retrieval.
 type ResourceRegistry struct {
 	service   ServiceProvider
 	logger    *logging.Logger
-	resources []ResourceDefinition
+	resources []mcpwire.ResourceDefinition
 }
 
 // NewResourceRegistry creates a new resource registry.
@@ -34,7 +35,7 @@ func NewResourceRegistry(svc ServiceProvider, log *logging.Logger) *ResourceRegi
 	r := &ResourceRegistry{
 		service:   svc,
 		logger:    log,
-		resources: make([]ResourceDefinition, 0, 20),
+		resources: make([]mcpwire.ResourceDefinition, 0, 20),
 	}
 
 	// Register all resources
@@ -46,14 +47,14 @@ func NewResourceRegistry(svc ServiceProvider, log *logging.Logger) *ResourceRegi
 // registerResources registers all available platform resources.
 func (r *ResourceRegistry) registerResources() {
 	// vTPM resources
-	r.addResource(ResourceDefinition{
+	r.addResource(mcpwire.ResourceDefinition{
 		URI:         "platform://vtpm/list",
 		Name:        "vTPM Instances",
 		Description: "List of all virtual TPM instances",
 		MimeType:    "application/json",
 	})
 
-	r.addResource(ResourceDefinition{
+	r.addResource(mcpwire.ResourceDefinition{
 		URI:         "platform://vtpm/{name}",
 		Name:        "vTPM Instance",
 		Description: "Details of a specific vTPM instance",
@@ -61,14 +62,14 @@ func (r *ResourceRegistry) registerResources() {
 	})
 
 	// DNS resources
-	r.addResource(ResourceDefinition{
+	r.addResource(mcpwire.ResourceDefinition{
 		URI:         "platform://dns/zones",
 		Name:        "DNS Zones",
 		Description: "List of all DNS zones",
 		MimeType:    "application/json",
 	})
 
-	r.addResource(ResourceDefinition{
+	r.addResource(mcpwire.ResourceDefinition{
 		URI:         "platform://dns/zone/{zone}",
 		Name:        "DNS Zone Records",
 		Description: "Records in a specific DNS zone",
@@ -76,14 +77,14 @@ func (r *ResourceRegistry) registerResources() {
 	})
 
 	// Device resources
-	r.addResource(ResourceDefinition{
+	r.addResource(mcpwire.ResourceDefinition{
 		URI:         "platform://device/list",
 		Name:        "Device List",
 		Description: "List of all registered devices",
 		MimeType:    "application/json",
 	})
 
-	r.addResource(ResourceDefinition{
+	r.addResource(mcpwire.ResourceDefinition{
 		URI:         "platform://device/{id}",
 		Name:        "Device Details",
 		Description: "Details of a specific device",
@@ -91,14 +92,14 @@ func (r *ResourceRegistry) registerResources() {
 	})
 
 	// SDN resources
-	r.addResource(ResourceDefinition{
+	r.addResource(mcpwire.ResourceDefinition{
 		URI:         "platform://sdn/bridges",
 		Name:        "OVS Bridges",
 		Description: "List of all OVS bridges",
 		MimeType:    "application/json",
 	})
 
-	r.addResource(ResourceDefinition{
+	r.addResource(mcpwire.ResourceDefinition{
 		URI:         "platform://sdn/policies",
 		Name:        "Network Policies",
 		Description: "List of all network policies",
@@ -106,14 +107,14 @@ func (r *ResourceRegistry) registerResources() {
 	})
 
 	// Platform resources
-	r.addResource(ResourceDefinition{
+	r.addResource(mcpwire.ResourceDefinition{
 		URI:         "platform://health",
 		Name:        "Platform Health",
 		Description: "Platform health status",
 		MimeType:    "application/json",
 	})
 
-	r.addResource(ResourceDefinition{
+	r.addResource(mcpwire.ResourceDefinition{
 		URI:         "platform://status",
 		Name:        "Platform Status",
 		Description: "Comprehensive platform status including all services",
@@ -122,12 +123,12 @@ func (r *ResourceRegistry) registerResources() {
 }
 
 // addResource adds a resource definition to the registry.
-func (r *ResourceRegistry) addResource(resource ResourceDefinition) {
+func (r *ResourceRegistry) addResource(resource mcpwire.ResourceDefinition) {
 	r.resources = append(r.resources, resource)
 }
 
 // ListResources returns all registered resources.
-func (r *ResourceRegistry) ListResources() []ResourceDefinition {
+func (r *ResourceRegistry) ListResources() []mcpwire.ResourceDefinition {
 	return r.resources
 }
 
@@ -137,14 +138,14 @@ func (r *ResourceRegistry) ReadResource(ctx context.Context, uri string) (interf
 
 	// Parse URI and route to appropriate handler
 	if !strings.HasPrefix(uri, "platform://") {
-		return nil, &MessageError{Msg: fmt.Sprintf("invalid resource URI: %s", uri)}
+		return nil, &mcpwire.MessageError{Msg: fmt.Sprintf("invalid resource URI: %s", uri)}
 	}
 
 	path := strings.TrimPrefix(uri, "platform://")
 	parts := strings.Split(path, "/")
 
 	if len(parts) == 0 {
-		return nil, &MessageError{Msg: fmt.Sprintf("invalid resource path: %s", path)}
+		return nil, &mcpwire.MessageError{Msg: fmt.Sprintf("invalid resource path: %s", path)}
 	}
 
 	switch parts[0] {
@@ -161,7 +162,7 @@ func (r *ResourceRegistry) ReadResource(ctx context.Context, uri string) (interf
 	case "status":
 		return r.readStatusResource(ctx)
 	default:
-		return nil, &MessageError{Msg: fmt.Sprintf("unknown resource type: %s", parts[0])}
+		return nil, &mcpwire.MessageError{Msg: fmt.Sprintf("unknown resource type: %s", parts[0])}
 	}
 }
 
@@ -204,7 +205,7 @@ func (r *ResourceRegistry) readDNSResource(ctx context.Context, parts []string) 
 		return r.formatResourceContent(records)
 	}
 
-	return nil, &MessageError{Msg: "invalid DNS resource path"}
+	return nil, &mcpwire.MessageError{Msg: "invalid DNS resource path"}
 }
 
 func (r *ResourceRegistry) readDeviceResource(ctx context.Context, parts []string) (interface{}, error) {
@@ -244,7 +245,7 @@ func (r *ResourceRegistry) readSDNResource(ctx context.Context, parts []string) 
 		return r.formatResourceContent(policies)
 	}
 
-	return nil, &MessageError{Msg: "invalid SDN resource path"}
+	return nil, &mcpwire.MessageError{Msg: "invalid SDN resource path"}
 }
 
 func (r *ResourceRegistry) readHealthResource(ctx context.Context) (interface{}, error) {

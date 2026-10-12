@@ -33,7 +33,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // SetTenantGRPCServer wires the shared *TenantGRPCServer the converged Tenant
@@ -58,25 +58,25 @@ func (h *QUICServiceHandler) SetIAMGRPCService(s *IAMGRPCService) {
 // Unimplemented maps to StatusNotImplemented for OIDC token parity; unknown
 // codes fall back to StatusInternalError.
 var grpcDelegateCodeToQUICStatus = map[codes.Code]byte{
-	codes.OK:                 quic.StatusOK,
-	codes.InvalidArgument:    quic.StatusInvalidArgument,
-	codes.NotFound:           quic.StatusNotFound,
-	codes.AlreadyExists:      quic.StatusAlreadyExists,
-	codes.PermissionDenied:   quic.StatusPermissionDenied,
-	codes.Unauthenticated:    quic.StatusUnauthorized,
-	codes.FailedPrecondition: quic.StatusInvalidRequest,
-	codes.ResourceExhausted:  quic.StatusResourceExhausted,
-	codes.Unavailable:        quic.StatusUnavailable,
-	codes.Unimplemented:      quic.StatusNotImplemented,
-	codes.DeadlineExceeded:   quic.StatusTimeout,
-	codes.Internal:           quic.StatusInternalError,
+	codes.OK:                 quicwire.StatusOK,
+	codes.InvalidArgument:    quicwire.StatusInvalidArgument,
+	codes.NotFound:           quicwire.StatusNotFound,
+	codes.AlreadyExists:      quicwire.StatusAlreadyExists,
+	codes.PermissionDenied:   quicwire.StatusPermissionDenied,
+	codes.Unauthenticated:    quicwire.StatusUnauthorized,
+	codes.FailedPrecondition: quicwire.StatusInvalidRequest,
+	codes.ResourceExhausted:  quicwire.StatusResourceExhausted,
+	codes.Unavailable:        quicwire.StatusUnavailable,
+	codes.Unimplemented:      quicwire.StatusNotImplemented,
+	codes.DeadlineExceeded:   quicwire.StatusTimeout,
+	codes.Internal:           quicwire.StatusInternalError,
 }
 
 // grpcDelegateErrorToQUIC converts a gRPC status error from a shared delegate
 // into a QUIC error response, preserving the status-code semantics of the gRPC
 // transport.
-func (h *QUICServiceHandler) grpcDelegateErrorToQUIC(op string, err error) *quic.Response {
-	quicStatus := quic.StatusInternalError
+func (h *QUICServiceHandler) grpcDelegateErrorToQUIC(op string, err error) *quicwire.Response {
+	quicStatus := quicwire.StatusInternalError
 	if mapped, ok := grpcDelegateCodeToQUICStatus[status.Code(err)]; ok {
 		quicStatus = mapped
 	}
@@ -85,13 +85,13 @@ func (h *QUICServiceHandler) grpcDelegateErrorToQUIC(op string, err error) *quic
 
 // encodeGRPCDelegateResponse encodes v (a platform.v1 protobuf response) as a
 // StatusOK QUIC response.
-func (h *QUICServiceHandler) encodeGRPCDelegateResponse(v interface{}) *quic.Response {
-	payload, err := quic.EncodePayload(v)
+func (h *QUICServiceHandler) encodeGRPCDelegateResponse(v interface{}) *quicwire.Response {
+	payload, err := quicwire.EncodePayload(v)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }

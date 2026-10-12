@@ -21,48 +21,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
-
-// VM operation codes use the existing opcodes from protocol.go (0x60-0x6A range)
-// Additional VM-specific operations
-const (
-	// OpVMRestart restarts a VM
-	OpVMRestart byte = 0xB6
-
-	// OpVMSuspend suspends a running VM
-	OpVMSuspend byte = 0xB7
-
-	// OpVMResume resumes a suspended VM
-	OpVMResume byte = 0xB8
-
-	// OpVMAttest performs TPM attestation for a VM
-	OpVMAttest byte = 0xB9
-
-	// OpVMConsole retrieves console information for a VM
-	OpVMConsole byte = 0xBA
-
-	// OpVMSnapshot creates a snapshot of a VM
-	OpVMSnapshot byte = 0xBB
-
-	// OpVMSnapshotRestore restores a VM from a snapshot
-	OpVMSnapshotRestore byte = 0xBC
-
-	// OpVMSnapshotDelete deletes a snapshot
-	OpVMSnapshotDelete byte = 0xBD
-
-	// OpVMSnapshotList lists snapshots for a VM
-	OpVMSnapshotList byte = 0xBE
-
-	// OpVMVerifyAttest verifies VM attestation evidence
-	OpVMVerifyAttest byte = 0xBF
-)
-
-// NOTE: the extended VM opcodes above (0xB6-0xBF) collide with the IAM
-// role/group opcode ranges at the top level of the daemon dispatcher, so
-// remote transports reach them as sub-opcodes carried in payload[0] under
-// OpVMExtendedCategory (0x69, inside the VM opcode range). The VMHandler
-// accepts both framings: direct opcodes (in-process callers, tests) and the
-// category framing (wire traffic).
 
 // VM-specific sentinel errors
 var (
@@ -174,58 +134,58 @@ func NewVMHandler(logger *logging.Logger, orchestrator VMOrchestrator) *VMHandle
 }
 
 // HandleRequest processes a VM request and returns a response
-func (h *VMHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{
-			Status:  StatusInvalidRequest,
-			Payload: []byte(ErrNilRequest.Error()),
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
+			Payload: []byte(quicwire.ErrNilRequest.Error()),
 		}
 	}
 
 	switch req.Opcode {
-	case OpVMCreate:
+	case quicwire.OpVMCreate:
 		return h.handleCreate(ctx, req)
-	case OpVMDelete:
+	case quicwire.OpVMDelete:
 		return h.handleDelete(ctx, req)
-	case OpVMStart:
+	case quicwire.OpVMStart:
 		return h.handleStart(ctx, req)
-	case OpVMStop:
+	case quicwire.OpVMStop:
 		return h.handleStop(ctx, req)
-	case OpVMGet:
+	case quicwire.OpVMGet:
 		return h.handleGet(ctx, req)
-	case OpVMList:
+	case quicwire.OpVMList:
 		return h.handleList(ctx, req)
-	case OpVMAttachNet:
+	case quicwire.OpVMAttachNet:
 		return h.handleAttachNetwork(ctx, req)
-	case OpVMDetachNet:
+	case quicwire.OpVMDetachNet:
 		return h.handleDetachNetwork(ctx, req)
-	case OpVMGetState:
+	case quicwire.OpVMGetState:
 		return h.handleGetState(ctx, req)
-	case OpVMRestart:
+	case quicwire.OpVMRestart:
 		return h.handleRestart(ctx, req)
-	case OpVMSuspend:
+	case quicwire.OpVMSuspend:
 		return h.handleSuspend(ctx, req)
-	case OpVMResume:
+	case quicwire.OpVMResume:
 		return h.handleResume(ctx, req)
-	case OpVMAttest:
+	case quicwire.OpVMAttest:
 		return h.handleAttest(ctx, req)
-	case OpVMConsole:
+	case quicwire.OpVMConsole:
 		return h.handleGetConsole(ctx, req)
-	case OpVMSnapshot:
+	case quicwire.OpVMSnapshot:
 		return h.handleCreateSnapshot(ctx, req)
-	case OpVMSnapshotRestore:
+	case quicwire.OpVMSnapshotRestore:
 		return h.handleRestoreSnapshot(ctx, req)
-	case OpVMSnapshotDelete:
+	case quicwire.OpVMSnapshotDelete:
 		return h.handleDeleteSnapshot(ctx, req)
-	case OpVMSnapshotList:
+	case quicwire.OpVMSnapshotList:
 		return h.handleListSnapshots(ctx, req)
-	case OpVMVerifyAttest:
+	case quicwire.OpVMVerifyAttest:
 		return h.handleVerifyAttestation(ctx, req)
-	case OpVMExtendedCategory:
+	case quicwire.OpVMExtendedCategory:
 		return h.handleExtendedCategory(ctx, req)
 	default:
-		return &Response{
-			Status:  StatusInvalidRequest,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("unknown VM operation"),
 		}
 	}
@@ -234,23 +194,23 @@ func (h *VMHandler) HandleRequest(ctx context.Context, req *Request) *Response {
 // handleExtendedCategory unwraps the category framing: payload[0] carries
 // the extended VM sub-opcode (one of the 0xB6-0xBF constants) and the rest
 // of the payload is the inner request payload.
-func (h *VMHandler) handleExtendedCategory(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleExtendedCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if len(req.Payload) < 1 {
-		return &Response{
-			Status:  StatusInvalidRequest,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("VM extended category requires a sub-opcode in payload[0]"),
 		}
 	}
 
 	sub := req.Payload[0]
-	if sub < OpVMRestart || sub > OpVMVerifyAttest {
-		return &Response{
-			Status:  StatusInvalidRequest,
+	if sub < quicwire.OpVMRestart || sub > quicwire.OpVMVerifyAttest {
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("unknown VM extended sub-opcode"),
 		}
 	}
 
-	return h.HandleRequest(ctx, &Request{
+	return h.HandleRequest(ctx, &quicwire.Request{
 		Opcode:  sub,
 		Token:   req.Token,
 		Payload: req.Payload[1:],
@@ -581,18 +541,18 @@ type VMSnapshotListResponse struct {
 // =============================================================================
 
 // handleCreate creates a new VM
-func (h *VMHandler) handleCreate(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleCreate(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	var createReq VMCreateRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if createReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingName)
 	}
 
 	// Build device profile from request
@@ -610,30 +570,30 @@ func (h *VMHandler) handleCreate(ctx context.Context, req *Request) *Response {
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDelete deletes a VM
-func (h *VMHandler) handleDelete(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleDelete(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	var deleteReq VMDeleteRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	if err := h.orchestrator.Delete(ctx, deleteReq.ID); err != nil {
@@ -647,30 +607,30 @@ func (h *VMHandler) handleDelete(ctx context.Context, req *Request) *Response {
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleStart starts a stopped VM
-func (h *VMHandler) handleStart(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleStart(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	var startReq VMStartRequest
-	if err := DecodePayload(req.Payload, &startReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &startReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if startReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	if err := h.orchestrator.Start(ctx, startReq.ID); err != nil {
@@ -684,30 +644,30 @@ func (h *VMHandler) handleStart(ctx context.Context, req *Request) *Response {
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleStop stops a running VM
-func (h *VMHandler) handleStop(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleStop(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	var stopReq VMStopRequest
-	if err := DecodePayload(req.Payload, &stopReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &stopReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if stopReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	if err := h.orchestrator.Stop(ctx, stopReq.ID); err != nil {
@@ -721,30 +681,30 @@ func (h *VMHandler) handleStop(ctx context.Context, req *Request) *Response {
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGet retrieves a VM by ID
-func (h *VMHandler) handleGet(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleGet(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	var getReq VMGetRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if getReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	instance, err := h.orchestrator.Get(ctx, getReq.ID)
@@ -758,26 +718,26 @@ func (h *VMHandler) handleGet(ctx context.Context, req *Request) *Response {
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleList lists VMs
-func (h *VMHandler) handleList(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleList(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	var listReq VMListRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	// Build filter from request
@@ -800,34 +760,34 @@ func (h *VMHandler) handleList(ctx context.Context, req *Request) *Response {
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleAttachNetwork attaches a VM to a network port
-func (h *VMHandler) handleAttachNetwork(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleAttachNetwork(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	var attachReq VMAttachNetworkRequest
-	if err := DecodePayload(req.Payload, &attachReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &attachReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if attachReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	if attachReq.PortName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingPortName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingPortName)
 	}
 
 	if err := h.orchestrator.AttachNetwork(ctx, attachReq.ID, attachReq.PortName); err != nil {
@@ -842,34 +802,34 @@ func (h *VMHandler) handleAttachNetwork(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDetachNetwork detaches a VM from a network port
-func (h *VMHandler) handleDetachNetwork(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleDetachNetwork(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	var detachReq VMDetachNetworkRequest
-	if err := DecodePayload(req.Payload, &detachReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &detachReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if detachReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	if detachReq.PortName == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingPortName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingPortName)
 	}
 
 	if err := h.orchestrator.DetachNetwork(ctx, detachReq.ID, detachReq.PortName); err != nil {
@@ -884,30 +844,30 @@ func (h *VMHandler) handleDetachNetwork(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetState gets the state of a VM
-func (h *VMHandler) handleGetState(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleGetState(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	var stateReq VMGetStateRequest
-	if err := DecodePayload(req.Payload, &stateReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &stateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if stateReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	state, err := h.orchestrator.GetState(ctx, stateReq.ID)
@@ -922,35 +882,35 @@ func (h *VMHandler) handleGetState(ctx context.Context, req *Request) *Response 
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleRestart restarts a VM (extended operation)
-func (h *VMHandler) handleRestart(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleRestart(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
 
 	var restartReq VMRestartRequest
-	if err := DecodePayload(req.Payload, &restartReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &restartReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if restartReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	if err := extOrch.Restart(ctx, restartReq.ID); err != nil {
@@ -964,35 +924,35 @@ func (h *VMHandler) handleRestart(ctx context.Context, req *Request) *Response {
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleSuspend suspends a running VM (extended operation)
-func (h *VMHandler) handleSuspend(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleSuspend(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
 
 	var suspendReq VMSuspendRequest
-	if err := DecodePayload(req.Payload, &suspendReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &suspendReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if suspendReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	if err := extOrch.Suspend(ctx, suspendReq.ID); err != nil {
@@ -1006,35 +966,35 @@ func (h *VMHandler) handleSuspend(ctx context.Context, req *Request) *Response {
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleResume resumes a suspended VM (extended operation)
-func (h *VMHandler) handleResume(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleResume(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
 
 	var resumeReq VMResumeRequest
-	if err := DecodePayload(req.Payload, &resumeReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &resumeReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if resumeReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	if err := extOrch.Resume(ctx, resumeReq.ID); err != nil {
@@ -1048,35 +1008,35 @@ func (h *VMHandler) handleResume(ctx context.Context, req *Request) *Response {
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleAttest performs TPM attestation for a VM (extended operation)
-func (h *VMHandler) handleAttest(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleAttest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	attester, ok := h.orchestrator.(compute.VMAttester)
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
 
 	var attestReq VMAttestRequest
-	if err := DecodePayload(req.Payload, &attestReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &attestReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if attestReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	report, err := attester.AttestVM(ctx, attestReq.ID, attestReq.Nonce, attestReq.PCRs)
@@ -1098,35 +1058,35 @@ func (h *VMHandler) handleAttest(ctx context.Context, req *Request) *Response {
 		AKPublic:  report.AKPublicKey,
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleVerifyAttestation verifies VM attestation evidence (extended operation)
-func (h *VMHandler) handleVerifyAttestation(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleVerifyAttestation(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	attester, ok := h.orchestrator.(compute.VMAttester)
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
 
 	var verifyReq VMVerifyAttestRequest
-	if err := DecodePayload(req.Payload, &verifyReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &verifyReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if verifyReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	result, err := attester.VerifyVMAttestation(ctx, verifyReq.ID, &compute.VMAttestationEvidence{
@@ -1151,35 +1111,35 @@ func (h *VMHandler) handleVerifyAttestation(ctx context.Context, req *Request) *
 		Timestamp:      time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetConsole retrieves console information for a VM (extended operation)
-func (h *VMHandler) handleGetConsole(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleGetConsole(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
 
 	var consoleReq VMConsoleRequest
-	if err := DecodePayload(req.Payload, &consoleReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &consoleReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if consoleReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	consoleInfo, err := extOrch.GetConsole(ctx, consoleReq.ID)
@@ -1197,39 +1157,39 @@ func (h *VMHandler) handleGetConsole(ctx context.Context, req *Request) *Respons
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleCreateSnapshot creates a VM snapshot (extended operation)
-func (h *VMHandler) handleCreateSnapshot(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleCreateSnapshot(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	snapshotter, ok := h.orchestrator.(compute.VMSnapshotter)
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
 
 	var snapshotReq VMSnapshotCreateRequest
-	if err := DecodePayload(req.Payload, &snapshotReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &snapshotReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if snapshotReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	if snapshotReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingSnapshotName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingSnapshotName)
 	}
 
 	snapshot, err := snapshotter.CreateSnapshot(ctx, snapshotReq.ID, snapshotReq.Name)
@@ -1243,39 +1203,39 @@ func (h *VMHandler) handleCreateSnapshot(ctx context.Context, req *Request) *Res
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleRestoreSnapshot restores a VM from a snapshot (extended operation)
-func (h *VMHandler) handleRestoreSnapshot(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleRestoreSnapshot(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	snapshotter, ok := h.orchestrator.(compute.VMSnapshotter)
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
 
 	var restoreReq VMSnapshotRestoreRequest
-	if err := DecodePayload(req.Payload, &restoreReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &restoreReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if restoreReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	if restoreReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingSnapshotName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingSnapshotName)
 	}
 
 	if err := snapshotter.RestoreSnapshot(ctx, restoreReq.ID, restoreReq.Name); err != nil {
@@ -1290,39 +1250,39 @@ func (h *VMHandler) handleRestoreSnapshot(ctx context.Context, req *Request) *Re
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeleteSnapshot deletes a VM snapshot (extended operation)
-func (h *VMHandler) handleDeleteSnapshot(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleDeleteSnapshot(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	snapshotter, ok := h.orchestrator.(compute.VMSnapshotter)
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
 
 	var deleteReq VMSnapshotDeleteRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	if deleteReq.Name == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingSnapshotName)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingSnapshotName)
 	}
 
 	if err := snapshotter.DeleteSnapshot(ctx, deleteReq.ID, deleteReq.Name); err != nil {
@@ -1337,35 +1297,35 @@ func (h *VMHandler) handleDeleteSnapshot(ctx context.Context, req *Request) *Res
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListSnapshots lists all snapshots for a VM (extended operation)
-func (h *VMHandler) handleListSnapshots(ctx context.Context, req *Request) *Response {
+func (h *VMHandler) handleListSnapshots(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.orchestrator == nil {
-		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
 	snapshotter, ok := h.orchestrator.(compute.VMSnapshotter)
 	if !ok {
-		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrVMOperationNotSupported)
 	}
 
 	var listReq VMSnapshotListRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
 	}
 
 	if listReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrVMMissingID)
 	}
 
 	snapshots, err := snapshotter.ListSnapshots(ctx, listReq.ID)
@@ -1386,13 +1346,13 @@ func (h *VMHandler) handleListSnapshots(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrVMEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -1511,58 +1471,58 @@ func (h *VMHandler) snapshotToInfo(s *VMSnapshot) *VMSnapshotInfo {
 }
 
 // errorResponse creates an error response with the given status and error
-func (h *VMHandler) errorResponse(status byte, err error) *Response {
-	return &Response{
+func (h *VMHandler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
 }
 
 // vmErrorResponse maps VM errors to appropriate status codes
-func (h *VMHandler) vmErrorResponse(err error) *Response {
+func (h *VMHandler) vmErrorResponse(err error) *quicwire.Response {
 	var status byte
 
 	switch {
 	case errors.Is(err, compute.ErrInstanceNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, compute.ErrInstanceAlreadyExists):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, compute.ErrInstanceAlreadyRunning):
-		status = StatusInvalidRequest
+		status = quicwire.StatusInvalidRequest
 	case errors.Is(err, compute.ErrInstanceNotRunning):
-		status = StatusInvalidRequest
+		status = quicwire.StatusInvalidRequest
 	case errors.Is(err, compute.ErrInvalidInstanceID):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, compute.ErrInvalidProfile):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, compute.ErrInvalidConfiguration):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, compute.ErrInvalidState):
-		status = StatusInvalidRequest
+		status = quicwire.StatusInvalidRequest
 	case errors.Is(err, compute.ErrResourceExhausted):
-		status = StatusResourceExhausted
+		status = quicwire.StatusResourceExhausted
 	case errors.Is(err, compute.ErrOrchestratorNotInitialized):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	case errors.Is(err, compute.ErrTimeout):
-		status = StatusTimeout
+		status = quicwire.StatusTimeout
 	case errors.Is(err, compute.ErrUnsupportedOperation):
-		status = StatusNotImplemented
+		status = quicwire.StatusNotImplemented
 	case errors.Is(err, compute.ErrNetworkAttachmentFailed):
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	case errors.Is(err, compute.ErrNetworkDetachmentFailed):
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	case errors.Is(err, compute.ErrInvalidSnapshotName):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, compute.ErrSnapshotNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, compute.ErrUnsupportedDiskFormat):
-		status = StatusInvalidRequest
+		status = quicwire.StatusInvalidRequest
 	case errors.Is(err, compute.ErrVTPMNotAvailable):
-		status = StatusInvalidRequest
+		status = quicwire.StatusInvalidRequest
 	case errors.Is(err, compute.ErrInvalidAttestationEvidence):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	default:
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	}
 
 	return h.errorResponse(status, err)

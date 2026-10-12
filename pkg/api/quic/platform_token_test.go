@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // claimsValidatorStub is a ClaimsTokenValidator test double for the QUIC path.
@@ -55,7 +56,7 @@ func TestQUICAuthenticateRequest_ClaimsPath_StashesAuthorizedContext(t *testing.
 	stub := &claimsValidatorStub{authCtx: want}
 	mw := NewAuthMiddleware(WithQUICTokenValidator(stub), WithQUICRequireAuth(true))
 
-	req := &Request{Opcode: OpDNSAddRecord, Token: "tok-1"}
+	req := &quicwire.Request{Opcode: quicwire.OpDNSAddRecord, Token: "tok-1"}
 	ctx, resp := mw.AuthenticateRequest(context.Background(), req)
 	if resp != nil {
 		t.Fatalf("authenticate failed: status=%d payload=%s", resp.Status, resp.Payload)
@@ -84,7 +85,7 @@ func TestQUICAuthorizeRequest_ClaimsPath_EnforcesScope(t *testing.T) {
 		&claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{Scopes: []string{"dns:write"}}}),
 		WithQUICRequireAuth(true))
 
-	req := &Request{Opcode: OpDNSAddRecord, Token: "tok"}
+	req := &quicwire.Request{Opcode: quicwire.OpDNSAddRecord, Token: "tok"}
 	ctx, resp := mw.AuthenticateRequest(context.Background(), req)
 	if resp != nil {
 		t.Fatalf("authenticate failed: %s", resp.Payload)
@@ -99,7 +100,7 @@ func TestQUICAuthorizeRequest_ClaimsPath_EnforcesScope(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected permission denied for ungranted scope")
 	}
-	if resp.Status != StatusPermissionDenied {
+	if resp.Status != quicwire.StatusPermissionDenied {
 		t.Errorf("status = %d, want StatusPermissionDenied", resp.Status)
 	}
 }
@@ -108,12 +109,12 @@ func TestQUICAuthenticateRequest_ClaimsPath_InvalidTokenRejected(t *testing.T) {
 	stub := &claimsValidatorStub{err: &platformtoken.ExpiredTokenError{}}
 	mw := NewAuthMiddleware(WithQUICTokenValidator(stub), WithQUICRequireAuth(true))
 
-	req := &Request{Opcode: OpDNSAddRecord, Token: "expired"}
+	req := &quicwire.Request{Opcode: quicwire.OpDNSAddRecord, Token: "expired"}
 	_, resp := mw.AuthenticateRequest(context.Background(), req)
 	if resp == nil {
 		t.Fatal("expected an error response for invalid token")
 	}
-	if resp.Status != StatusUnauthorized {
+	if resp.Status != quicwire.StatusUnauthorized {
 		t.Errorf("status = %d, want StatusUnauthorized", resp.Status)
 	}
 }
@@ -122,9 +123,9 @@ func TestQUICAuthenticateRequest_MissingToken(t *testing.T) {
 	stub := &claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{}}
 	mw := NewAuthMiddleware(WithQUICTokenValidator(stub), WithQUICRequireAuth(true))
 
-	req := &Request{Opcode: OpDNSAddRecord, Token: ""}
+	req := &quicwire.Request{Opcode: quicwire.OpDNSAddRecord, Token: ""}
 	_, resp := mw.AuthenticateRequest(context.Background(), req)
-	if resp == nil || resp.Status != StatusUnauthorized {
+	if resp == nil || resp.Status != quicwire.StatusUnauthorized {
 		t.Fatalf("expected unauthorized for missing token, got %+v", resp)
 	}
 	if stub.calls != 0 {
@@ -162,7 +163,7 @@ func TestQUICAuthorize_LegacyFallback(t *testing.T) {
 		WithQUICRequireAuth(true),
 	)
 
-	req := &Request{Opcode: OpDNSAddRecord, Token: "tok"}
+	req := &quicwire.Request{Opcode: quicwire.OpDNSAddRecord, Token: "tok"}
 	ctx, resp := mw.AuthenticateRequest(context.Background(), req)
 	if resp != nil {
 		t.Fatalf("legacy authenticate failed: %s", resp.Payload)
@@ -192,7 +193,7 @@ func TestScopeForOperation(t *testing.T) {
 
 func TestQUICAuthenticateRequest_SkipOpcode(t *testing.T) {
 	mw := NewAuthMiddleware(WithQUICTokenValidator(&claimsValidatorStub{}), WithQUICRequireAuth(true))
-	req := &Request{Opcode: OpHealth, Token: ""}
+	req := &quicwire.Request{Opcode: quicwire.OpHealth, Token: ""}
 	ctx, resp := mw.AuthenticateRequest(context.Background(), req)
 	if resp != nil {
 		t.Fatalf("health opcode should skip auth, got status=%d", resp.Status)
@@ -205,9 +206,9 @@ func TestQUICAuthenticateRequest_SkipOpcode(t *testing.T) {
 func TestQUICAuthenticateRequest_NoValidator(t *testing.T) {
 	// requireAuth=true with no validator -> Unavailable.
 	mw := NewAuthMiddleware(WithQUICRequireAuth(true))
-	req := &Request{Opcode: OpDNSAddRecord, Token: "tok"}
+	req := &quicwire.Request{Opcode: quicwire.OpDNSAddRecord, Token: "tok"}
 	_, resp := mw.AuthenticateRequest(context.Background(), req)
-	if resp == nil || resp.Status != StatusUnavailable {
+	if resp == nil || resp.Status != quicwire.StatusUnavailable {
 		t.Fatalf("expected Unavailable, got %+v", resp)
 	}
 
@@ -221,7 +222,7 @@ func TestQUICAuthenticateRequest_NoValidator(t *testing.T) {
 func TestQUICAuthorizeRequest_NoChecker_LegacyAllows(t *testing.T) {
 	// Legacy path with no AuthorizationChecker and no AuthorizedContext: allow.
 	mw := NewAuthMiddleware(WithQUICTokenValidator(&legacyValidator{valid: true}), WithQUICRequireAuth(true))
-	req := &Request{Opcode: OpDNSAddRecord, Token: "tok"}
+	req := &quicwire.Request{Opcode: quicwire.OpDNSAddRecord, Token: "tok"}
 	ctx, resp := mw.AuthenticateRequest(context.Background(), req)
 	if resp != nil {
 		t.Fatalf("authenticate failed: %s", resp.Payload)
@@ -234,7 +235,7 @@ func TestQUICAuthorizeRequest_NoChecker_LegacyAllows(t *testing.T) {
 func TestQUICAuthorizeRequest_ClaimsPath_EmptyScopeAllows(t *testing.T) {
 	mw := NewAuthMiddleware(WithQUICTokenValidator(
 		&claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{}}), WithQUICRequireAuth(true))
-	req := &Request{Opcode: OpDNSAddRecord, Token: "tok"}
+	req := &quicwire.Request{Opcode: quicwire.OpDNSAddRecord, Token: "tok"}
 	ctx, _ := mw.AuthenticateRequest(context.Background(), req)
 	// Empty resource/action -> no scope required -> allowed.
 	if resp := mw.AuthorizeRequest(ctx, req, "", ""); resp != nil {

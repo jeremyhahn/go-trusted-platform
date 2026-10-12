@@ -134,5 +134,5 @@ and MCP tool. All transports terminate at the same SDK
 
 REST responses use snake_case JSON. MCP tool names follow the
 `platform_{module}_{verb}` convention. gRPC service names and QUIC opcodes
-are in `pkg/api/grpc/proto/ceremony.proto` and `pkg/api/quic/protocol.go`
+are in `pkg/api/grpc/proto/ceremony.proto` and `sdk/go/wire/quicwire/phase35_opcodes.go`
 respectively.

@@ -16,6 +16,8 @@ package mcp
 import (
 	"context"
 	"errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -75,7 +77,7 @@ func (r *ToolRegistry) clusterProvider() ClusterProvider {
 // tool definition mirrors the equivalent gRPC RPC so AI/LLM clients can
 // issue the same calls they would over gRPC.
 func (r *ToolRegistry) registerClusterTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_cluster_bootstrap",
 		Description: "Initialize a new cluster with this node as the initial leader",
 		InputSchema: map[string]interface{}{
@@ -89,7 +91,7 @@ func (r *ToolRegistry) registerClusterTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_cluster_join",
 		Description: "Join this node to an existing cluster by dialing one or more seed addresses",
 		InputSchema: map[string]interface{}{
@@ -105,7 +107,7 @@ func (r *ToolRegistry) registerClusterTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_cluster_leave",
 		Description: "Gracefully remove this node from the cluster, transferring leadership if necessary",
 		InputSchema: map[string]interface{}{
@@ -114,7 +116,7 @@ func (r *ToolRegistry) registerClusterTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_cluster_status",
 		Description: "Return the current cluster status (state, leader, term, quorum). Set include_nodes=true to also enumerate members.",
 		InputSchema: map[string]interface{}{
@@ -128,7 +130,7 @@ func (r *ToolRegistry) registerClusterTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_cluster_list_nodes",
 		Description: "List all nodes in the cluster with their state, role, and last-seen timestamp",
 		InputSchema: map[string]interface{}{

@@ -23,7 +23,8 @@ serves:
 | `pkg/api/daemon/tpm_grpc_service.go` | `TPMGRPCService` — the gRPC `TPMService` implementation |
 | `pkg/api/daemon/idevid_grpc_service.go`, `idevid_ldevid.go` | `IDevIDService` — device identity |
 | `pkg/api/daemon/quic_service.go` | opcode dispatch; `handleTPM2Category` |
-| `pkg/api/quic/tpm_handlers.go` | `TPM2Handler`, the `SubOpTPM2*` constants, TPM2 sentinel errors |
+| `pkg/api/quic/tpm_handlers.go` | `TPM2Handler`, TPM2 sentinel errors |
+| `sdk/go/wire/quicwire/tpm_opcodes.go` | the `SubOpTPM2*` constants |
 | `pkg/api/tpmnv/nv.go` | `Read`, `Write`, `Define`, `Undefine`, `BuildAttributes` |
 | `pkg/webservice/v1/rest/tpm/` | `TPMRouter`, `Handlers` |
 | `pkg/api/mcp/tpm_tools.go`, `tpm_tools_exec.go` | the 31 `platform_tpm_*` tools |

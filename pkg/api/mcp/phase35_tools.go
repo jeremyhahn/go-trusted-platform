@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // ErrPhase35NotConfigured indicates the Phase 3.5 service tree is not wired
@@ -80,7 +82,7 @@ func (r *ToolRegistry) phase35Provider() Phase35Provider {
 // registerPhase35Tools registers all Phase 3.5 MCP tools.
 func (r *ToolRegistry) registerPhase35Tools() {
 	// Ceremony tools.
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_ceremony_init",
 		Description: "Initialize the platform ceremony (SO/user PIN, Shamir threshold)",
 		InputSchema: map[string]interface{}{
@@ -95,12 +97,12 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_ceremony_status",
 		Description: "Get current ceremony state",
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_ceremony_claim_cert_begin",
 		Description: "Begin a claim-cert challenge for an officer",
 		InputSchema: map[string]interface{}{
@@ -114,7 +116,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required": []string{"username"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_ceremony_claim_cert_complete",
 		Description: "Complete a claim-cert challenge",
 		InputSchema: map[string]interface{}{
@@ -127,7 +129,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required": []string{"username", "nonce", "signature"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_ceremony_claim_share_begin",
 		Description: "Begin a claim-share challenge for an officer",
 		InputSchema: map[string]interface{}{
@@ -136,7 +138,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required":   []string{"username"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_ceremony_claim_share_complete",
 		Description: "Complete a claim-share challenge and return the caller's Shamir share",
 		InputSchema: map[string]interface{}{
@@ -149,7 +151,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required": []string{"username", "nonce", "signature"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_ceremony_sign_csr",
 		Description: "Sign a CSR using the ceremony CA",
 		InputSchema: map[string]interface{}{
@@ -165,12 +167,12 @@ func (r *ToolRegistry) registerPhase35Tools() {
 	})
 
 	// PIV tools.
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_piv_list_devices",
 		Description: "Enumerate PIV devices attached to the host",
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_piv_list_slots",
 		Description: "List the slots on a PIV device",
 		InputSchema: map[string]interface{}{
@@ -179,7 +181,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required":   []string{"device"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_piv_slot_info",
 		Description: "Return detailed info about a PIV slot",
 		InputSchema: map[string]interface{}{
@@ -191,7 +193,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required": []string{"slot"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_piv_generate",
 		Description: "Generate a fresh key in a PIV slot",
 		InputSchema: map[string]interface{}{
@@ -204,7 +206,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required": []string{"slot", "algorithm"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_piv_import",
 		Description: "Import an externally generated key into a PIV slot",
 		InputSchema: map[string]interface{}{
@@ -217,7 +219,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required": []string{"slot", "private_key_pem"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_piv_sign",
 		Description: "Sign a payload with a PIV slot's key",
 		InputSchema: map[string]interface{}{
@@ -230,7 +232,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required": []string{"slot", "payload"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_piv_attest",
 		Description: "Return attestation certificate(s) for a PIV slot",
 		InputSchema: map[string]interface{}{
@@ -239,7 +241,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required":   []string{"slot"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_piv_reset",
 		Description: "Factory-reset a PIV device",
 		InputSchema: map[string]interface{}{
@@ -250,7 +252,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 	})
 
 	// LUKS tools.
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_status",
 		Description: "Return LUKS device status",
 		InputSchema: map[string]interface{}{
@@ -259,7 +261,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required":   []string{"device"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_list_slots",
 		Description: "List LUKS keyslots",
 		InputSchema: map[string]interface{}{
@@ -268,7 +270,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required":   []string{"device"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_info",
 		Description: "Detailed LUKS2 header dump",
 		InputSchema: map[string]interface{}{
@@ -283,7 +285,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 	}
 	passphraseProps := copyMap(luksEnrollCommon)
 	passphraseProps["new_passphrase"] = map[string]interface{}{"type": "string"}
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_enroll_passphrase",
 		Description: "Add a passphrase LUKS keyslot",
 		InputSchema: map[string]interface{}{
@@ -296,7 +298,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 	fido2Props["credential_id"] = map[string]interface{}{"type": "string"}
 	fido2Props["require_pin"] = map[string]interface{}{"type": "boolean"}
 	fido2Props["require_uv"] = map[string]interface{}{"type": "boolean"}
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_enroll_fido2",
 		Description: "Add a FIDO2 LUKS keyslot",
 		InputSchema: map[string]interface{}{
@@ -308,7 +310,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 	tpmProps := copyMap(luksEnrollCommon)
 	tpmProps["pcrs"] = map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer"}}
 	tpmProps["handle"] = map[string]interface{}{"type": "string"}
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_enroll_tpm",
 		Description: "Add a TPM2-sealed LUKS keyslot",
 		InputSchema: map[string]interface{}{
@@ -317,7 +319,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required":   []string{"device", "existing_passphrase"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_enroll_recovery",
 		Description: "Add a recovery-key LUKS keyslot",
 		InputSchema: map[string]interface{}{
@@ -330,12 +332,12 @@ func (r *ToolRegistry) registerPhase35Tools() {
 		"device": map[string]interface{}{"type": "string"},
 		"slot":   map[string]interface{}{"type": "integer"},
 	}
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_remove_key",
 		Description: "Remove a LUKS keyslot",
 		InputSchema: map[string]interface{}{"type": "object", "properties": slotProps, "required": []string{"device", "slot"}},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_test_unlock",
 		Description: "Verify a LUKS keyslot can unlock the device",
 		InputSchema: map[string]interface{}{"type": "object", "properties": slotProps, "required": []string{"device", "slot"}},
@@ -346,7 +348,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 		"old_passphrase": map[string]interface{}{"type": "string"},
 		"new_passphrase": map[string]interface{}{"type": "string"},
 	}
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_luks_change_passphrase",
 		Description: "Change an existing LUKS passphrase slot",
 		InputSchema: map[string]interface{}{
@@ -357,12 +359,12 @@ func (r *ToolRegistry) registerPhase35Tools() {
 	})
 
 	// FIDO2 tools.
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_fido2_list_devices",
 		Description: "Enumerate FIDO2 authenticators",
 		InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_fido2_wait_device",
 		Description: "Block until a FIDO2 authenticator is detected",
 		InputSchema: map[string]interface{}{
@@ -370,7 +372,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"properties": map[string]interface{}{"timeout_seconds": map[string]interface{}{"type": "integer"}},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_fido2_info",
 		Description: "Authenticator capabilities",
 		InputSchema: map[string]interface{}{
@@ -379,7 +381,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required":   []string{"device"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_fido2_register",
 		Description: "Register a WebAuthn credential",
 		InputSchema: map[string]interface{}{
@@ -394,7 +396,7 @@ func (r *ToolRegistry) registerPhase35Tools() {
 			"required": []string{"username"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_fido2_authenticate",
 		Description: "Run a WebAuthn authenticate ceremony against a credential",
 		InputSchema: map[string]interface{}{

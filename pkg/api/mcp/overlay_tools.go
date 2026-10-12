@@ -16,6 +16,8 @@ package mcp
 import (
 	"context"
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -93,7 +95,7 @@ var ErrOverlayInvalidMAC = &OverlayError{
 // registerOverlayTools registers overlay network MCP tools.
 func (r *ToolRegistry) registerOverlayTools() {
 	// Overlay status
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "overlay_status",
 		Description: "Get the current status of the overlay network including node ID, VTEP IP, and counts of VTEPs, VNIs, tunnels, and remote MACs",
 		InputSchema: map[string]interface{}{
@@ -103,7 +105,7 @@ func (r *ToolRegistry) registerOverlayTools() {
 	})
 
 	// VTEP operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "overlay_vtep_list",
 		Description: "List all known VTEP (Virtual Tunnel End Point) endpoints in the overlay network",
 		InputSchema: map[string]interface{}{
@@ -112,7 +114,7 @@ func (r *ToolRegistry) registerOverlayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "overlay_vtep_get",
 		Description: "Get detailed information about a specific VTEP by its node ID",
 		InputSchema: map[string]interface{}{
@@ -128,7 +130,7 @@ func (r *ToolRegistry) registerOverlayTools() {
 	})
 
 	// VNI operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "overlay_vni_list",
 		Description: "List all configured VNIs (Virtual Network Identifiers) in the overlay network",
 		InputSchema: map[string]interface{}{
@@ -137,7 +139,7 @@ func (r *ToolRegistry) registerOverlayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "overlay_vni_create",
 		Description: "Create a new VNI (Virtual Network Identifier) for overlay network segmentation",
 		InputSchema: map[string]interface{}{
@@ -160,7 +162,7 @@ func (r *ToolRegistry) registerOverlayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "overlay_vni_delete",
 		Description: "Delete a VNI from the overlay network",
 		InputSchema: map[string]interface{}{
@@ -176,7 +178,7 @@ func (r *ToolRegistry) registerOverlayTools() {
 	})
 
 	// Tunnel operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "overlay_tunnel_list",
 		Description: "List all VXLAN tunnels in the overlay network with optional VNI filter",
 		InputSchema: map[string]interface{}{
@@ -191,7 +193,7 @@ func (r *ToolRegistry) registerOverlayTools() {
 	})
 
 	// MAC operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "overlay_mac_list",
 		Description: "List learned remote MAC addresses in the overlay network with optional VNI filter",
 		InputSchema: map[string]interface{}{
@@ -205,7 +207,7 @@ func (r *ToolRegistry) registerOverlayTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "overlay_mac_forget",
 		Description: "Remove a learned MAC address from the forwarding table",
 		InputSchema: map[string]interface{}{

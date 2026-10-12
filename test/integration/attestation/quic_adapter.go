@@ -20,7 +20,7 @@ import (
 	"crypto/tls"
 	"fmt"
 
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 )
@@ -126,7 +126,7 @@ func (a *QUICAdapter) doOp(ctx context.Context, op string, opcode byte, body int
 
 	var payload []byte
 	if body != nil {
-		payload, err = quicapi.EncodePayload(body)
+		payload, err = quicwire.EncodePayload(body)
 		if err != nil {
 			return nil, &QUICAdapterError{Operation: op, Message: "encode: " + err.Error()}
 		}
@@ -134,19 +134,19 @@ func (a *QUICAdapter) doOp(ctx context.Context, op string, opcode byte, body int
 
 	// token_len is zero: the daemon authenticates these connections by the
 	// mTLS client certificate, not a bearer token.
-	if err := quicapi.WriteRequest(stream, &quicapi.Request{Opcode: opcode, Payload: payload}); err != nil {
+	if err := quicwire.WriteRequest(stream, &quicwire.Request{Opcode: opcode, Payload: payload}); err != nil {
 		return nil, &QUICAdapterError{Operation: op, Message: "write request: " + err.Error()}
 	}
 
-	resp, err := quicapi.ReadResponse(stream)
+	resp, err := quicwire.ReadResponse(stream)
 	if err != nil {
 		return nil, &QUICAdapterError{Operation: op, Message: "read response: " + err.Error()}
 	}
 
-	if resp.Status != quicapi.StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		msg := string(resp.Payload)
 		if msg == "" {
-			msg = quicapi.StatusToString(resp.Status)
+			msg = quicwire.StatusToString(resp.Status)
 		}
 		return nil, ErrQUICStatus{Operation: op, Status: resp.Status, Message: msg}
 	}
@@ -171,13 +171,13 @@ func (a *QUICAdapter) GetVMIdentity(ctx context.Context, opts GetVMIdentityOptio
 
 // GetVMAttestation generates a full VM attestation
 func (a *QUICAdapter) GetVMAttestation(ctx context.Context, opts GetVMAttestationOptions) (*GetVMAttestationResult, error) {
-	body, err := a.doOp(ctx, "GetVMAttestation", quicapi.OpAttestVMWorkload, opts)
+	body, err := a.doOp(ctx, "GetVMAttestation", quicwire.OpAttestVMWorkload, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	var result GetVMAttestationResult
-	if err := quicapi.DecodePayload(body, &result); err != nil {
+	if err := quicwire.DecodePayload(body, &result); err != nil {
 		return nil, &QUICAdapterError{
 			Operation: "GetVMAttestation",
 			Message:   "failed to parse response: " + err.Error(),
@@ -199,13 +199,13 @@ func (a *QUICAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAtte
 
 // BuildManifest builds a host manifest with attestations
 func (a *QUICAdapter) BuildManifest(ctx context.Context, opts BuildManifestOptions) (*BuildManifestResult, error) {
-	body, err := a.doOp(ctx, "BuildManifest", quicapi.OpAttestBuildManifest, opts)
+	body, err := a.doOp(ctx, "BuildManifest", quicwire.OpAttestBuildManifest, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	var result BuildManifestResult
-	if err := quicapi.DecodePayload(body, &result); err != nil {
+	if err := quicwire.DecodePayload(body, &result); err != nil {
 		return nil, &QUICAdapterError{
 			Operation: "BuildManifest",
 			Message:   "failed to parse response: " + err.Error(),
@@ -223,13 +223,13 @@ func (a *QUICAdapter) SignManifest(ctx context.Context, opts SignManifestOptions
 
 // VerifyManifest verifies a signed manifest
 func (a *QUICAdapter) VerifyManifest(ctx context.Context, opts VerifyManifestOptions) (*VerifyManifestResult, error) {
-	body, err := a.doOp(ctx, "VerifyManifest", quicapi.OpAttestVerifyManifest, opts)
+	body, err := a.doOp(ctx, "VerifyManifest", quicwire.OpAttestVerifyManifest, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	var result VerifyManifestResult
-	if err := quicapi.DecodePayload(body, &result); err != nil {
+	if err := quicwire.DecodePayload(body, &result); err != nil {
 		return nil, &QUICAdapterError{
 			Operation: "VerifyManifest",
 			Message:   "failed to parse response: " + err.Error(),
@@ -241,13 +241,13 @@ func (a *QUICAdapter) VerifyManifest(ctx context.Context, opts VerifyManifestOpt
 
 // GetManifest retrieves a manifest by ID
 func (a *QUICAdapter) GetManifest(ctx context.Context, opts GetManifestOptions) (*GetManifestResult, error) {
-	body, err := a.doOp(ctx, "GetManifest", quicapi.OpAttestGetManifest, opts)
+	body, err := a.doOp(ctx, "GetManifest", quicwire.OpAttestGetManifest, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	var result GetManifestResult
-	if err := quicapi.DecodePayload(body, &result); err != nil {
+	if err := quicwire.DecodePayload(body, &result); err != nil {
 		return nil, &QUICAdapterError{
 			Operation: "GetManifest",
 			Message:   "failed to parse response: " + err.Error(),

@@ -16,6 +16,8 @@ package mcp
 import (
 	"context"
 	"errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -95,7 +97,7 @@ func (r *ToolRegistry) registryProvider() RegistryProvider {
 // Each tool definition mirrors the equivalent gRPC RPC so AI/LLM clients
 // can issue the same calls they would over gRPC.
 func (r *ToolRegistry) registerRegistryTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_registry_list",
 		Description: "List artifacts in the container/artifact registry, optionally filtered by repository and type",
 		InputSchema: map[string]interface{}{
@@ -123,7 +125,7 @@ func (r *ToolRegistry) registerRegistryTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_registry_inspect",
 		Description: "Inspect a registry artifact and return its manifest, signatures, and scan result",
 		InputSchema: map[string]interface{}{
@@ -156,7 +158,7 @@ func (r *ToolRegistry) registerRegistryTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_registry_delete",
 		Description: "Delete an artifact from the registry by tag or digest",
 		InputSchema: map[string]interface{}{
@@ -184,7 +186,7 @@ func (r *ToolRegistry) registerRegistryTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_registry_status",
 		Description: "Return registry health, version, storage stats, and component health",
 		InputSchema: map[string]interface{}{

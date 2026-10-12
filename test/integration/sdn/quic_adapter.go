@@ -64,7 +64,7 @@ const (
 )
 
 // QUIC Operation codes for SDN operations.
-// These MUST match the server-side opcodes defined in pkg/api/quic/protocol.go.
+// These MUST match the server-side opcodes defined in sdk/go/wire/quicwire/protocol.go.
 const (
 	// SDN Read Operations (0x40-0x4F)
 	OpQUICSDNPortGetState byte = 0x40

@@ -22,6 +22,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/reporting"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // ReportsRouter serves the reporting service's cached verdicts and the
@@ -71,7 +72,7 @@ type RefreshResponse struct {
 
 func (r *ReportsRouter) listReports(w http.ResponseWriter, req *http.Request) {
 	if r.reporting == nil || r.reporting.Reports == nil {
-		r.respWriter.Write(w, req, http.StatusServiceUnavailable, response.WebServiceResponse{
+		r.respWriter.Write(w, req, http.StatusServiceUnavailable, restwire.WebServiceResponse{
 			Code: http.StatusServiceUnavailable, Error: ErrReportingNotConfigured{}.Error()})
 		return
 	}
@@ -81,7 +82,7 @@ func (r *ReportsRouter) listReports(w http.ResponseWriter, req *http.Request) {
 
 func (r *ReportsRouter) getReport(w http.ResponseWriter, req *http.Request) {
 	if r.reporting == nil || r.reporting.Reports == nil {
-		r.respWriter.Write(w, req, http.StatusServiceUnavailable, response.WebServiceResponse{
+		r.respWriter.Write(w, req, http.StatusServiceUnavailable, restwire.WebServiceResponse{
 			Code: http.StatusServiceUnavailable, Error: ErrReportingNotConfigured{}.Error()})
 		return
 	}
@@ -98,7 +99,7 @@ func (r *ReportsRouter) getReport(w http.ResponseWriter, req *http.Request) {
 
 func (r *ReportsRouter) refreshReport(w http.ResponseWriter, req *http.Request) {
 	if r.reporting == nil || r.reporting.Refresher == nil {
-		r.respWriter.Write(w, req, http.StatusServiceUnavailable, response.WebServiceResponse{
+		r.respWriter.Write(w, req, http.StatusServiceUnavailable, restwire.WebServiceResponse{
 			Code: http.StatusServiceUnavailable, Error: ErrReportingNotConfigured{}.Error()})
 		return
 	}
@@ -106,14 +107,14 @@ func (r *ReportsRouter) refreshReport(w http.ResponseWriter, req *http.Request) 
 	if err := r.reporting.Refresher.Refresh(id); err != nil {
 		var stopped reporting.ErrCollectorStopped
 		if errorAs(err, &stopped) {
-			r.respWriter.Write(w, req, http.StatusServiceUnavailable, response.WebServiceResponse{
+			r.respWriter.Write(w, req, http.StatusServiceUnavailable, restwire.WebServiceResponse{
 				Code: http.StatusServiceUnavailable, Error: err.Error()})
 			return
 		}
 		r.respWriter.Error400(w, req, err)
 		return
 	}
-	r.respWriter.Write(w, req, http.StatusAccepted, response.WebServiceResponse{
+	r.respWriter.Write(w, req, http.StatusAccepted, restwire.WebServiceResponse{
 		Code: http.StatusAccepted, Success: true,
 		Payload: RefreshResponse{
 			DeviceID: id, Enqueued: true,

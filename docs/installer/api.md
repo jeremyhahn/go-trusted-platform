@@ -14,7 +14,7 @@
 **The installer has no platform API surface.** There is no `/api/v1/install`,
 no `/api/v1/iso`, no `InstallerService` or `ISOService` in
 `pkg/api/grpc/proto/`, no `OpInstall*` or `OpISO*` opcode in
-`pkg/api/quic/protocol.go`, and no `install_*` or `iso_*` MCP tool — all four
+`sdk/go/wire/quicwire/protocol.go`, and no `install_*` or `iso_*` MCP tool — all four
 grepped 2026-08-18.
 
 That is a **decision, not a gap.** Installation runs on install media, before

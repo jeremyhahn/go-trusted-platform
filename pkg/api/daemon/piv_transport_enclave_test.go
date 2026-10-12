@@ -26,6 +26,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Every PIV transport must (a) carry the PIN and key material to the backend
@@ -275,14 +276,14 @@ func TestPIVGRPC_EnclaveLifecycle(t *testing.T) {
 
 // --- QUIC ------------------------------------------------------------------
 
-func pivQUICCall(t *testing.T, svc *PIVService, sub byte, payload any) *quic.Response {
+func pivQUICCall(t *testing.T, svc *PIVService, sub byte, payload any) *quicwire.Response {
 	t.Helper()
-	raw, err := quic.EncodePayload(payload)
+	raw, err := quicwire.EncodePayload(payload)
 	if err != nil {
 		t.Fatalf("EncodePayload: %v", err)
 	}
 	h := &pivQUICHandlers{service: svc}
-	return h.Handle(context.Background(), &quic.Request{
+	return h.Handle(context.Background(), &quicwire.Request{
 		Payload: append([]byte{sub}, raw...),
 	})
 }
@@ -290,27 +291,27 @@ func pivQUICCall(t *testing.T, svc *PIVService, sub byte, payload any) *quic.Res
 func TestPIVQUIC_EnclaveLifecycle(t *testing.T) {
 	t.Run("generate", func(t *testing.T) {
 		p := &pivEnclaveProbe{}
-		pivQUICCall(t, newPIVProbeService(p), quic.PIVSubGenerate,
+		pivQUICCall(t, newPIVProbeService(p), quicwire.PIVSubGenerate,
 			&quic.PIVGenerateReq{Slot: "9a", Algorithm: "RSA2048", PIN: "111111"})
 		assertGenerateWiped(t, p, "111111")
 	})
 	t.Run("import", func(t *testing.T) {
 		p := &pivEnclaveProbe{}
-		pivQUICCall(t, newPIVProbeService(p), quic.PIVSubImport,
+		pivQUICCall(t, newPIVProbeService(p), quicwire.PIVSubImport,
 			&quic.PIVImportReq{Slot: "9a", PrivateKeyPEM: "PEM", PIN: "222222"})
 		assertImportWiped(t, p, "PEM", "222222")
 	})
 	t.Run("sign", func(t *testing.T) {
 		p := &pivEnclaveProbe{}
-		pivQUICCall(t, newPIVProbeService(p), quic.PIVSubSign,
+		pivQUICCall(t, newPIVProbeService(p), quicwire.PIVSubSign,
 			&quic.PIVSignReq{Slot: "9a", Payload: []byte("data"), PIN: "333333"})
 		assertSignWiped(t, p, "333333")
 	})
 	t.Run("generate wipes on the error path", func(t *testing.T) {
 		p := &pivEnclaveProbe{err: errors.New("backend down")}
-		resp := pivQUICCall(t, newPIVProbeService(p), quic.PIVSubGenerate,
+		resp := pivQUICCall(t, newPIVProbeService(p), quicwire.PIVSubGenerate,
 			&quic.PIVGenerateReq{Slot: "9a", PIN: "444444"})
-		if resp.Status == quic.StatusOK {
+		if resp.Status == quicwire.StatusOK {
 			t.Fatal("expected a failure status")
 		}
 		assertGenerateWiped(t, p, "444444")

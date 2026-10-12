@@ -20,20 +20,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-)
-
-// Overlay operation codes (using extended opcode space)
-// These opcodes are defined here to avoid conflicts with existing protocol.go allocations
-const (
-	OpOverlayStatus    byte = 0x01 // Extended overlay opcode category marker
-	OpOverlayListVTEPs byte = 0x02
-	OpOverlayGetVTEP   byte = 0x03
-	OpOverlayListVNIs  byte = 0x04
-	OpOverlayCreateVNI byte = 0x05
-	OpOverlayDeleteVNI byte = 0x06
-	OpOverlayListTunns byte = 0x07
-	OpOverlayListMACs  byte = 0x08
-	OpOverlayForgetMAC byte = 0x09
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Overlay pagination defaults
@@ -206,36 +193,36 @@ func NewOverlayHandler(logger *logging.Logger, overlayService OverlayServiceInte
 
 // HandleRequest processes an overlay request and returns a response.
 // This handler expects extended opcodes with the overlay category marker.
-func (h *OverlayHandler) HandleRequest(ctx context.Context, req *Request) *Response {
+func (h *OverlayHandler) HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if req == nil {
-		return &Response{
-			Status:  StatusInvalidRequest,
-			Payload: []byte(ErrNilRequest.Error()),
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
+			Payload: []byte(quicwire.ErrNilRequest.Error()),
 		}
 	}
 
 	switch req.Opcode {
-	case OpOverlayStatus:
+	case quicwire.OpOverlayStatus:
 		return h.handleStatus(ctx, req)
-	case OpOverlayListVTEPs:
+	case quicwire.OpOverlayListVTEPs:
 		return h.handleListVTEPs(ctx, req)
-	case OpOverlayGetVTEP:
+	case quicwire.OpOverlayGetVTEP:
 		return h.handleGetVTEP(ctx, req)
-	case OpOverlayListVNIs:
+	case quicwire.OpOverlayListVNIs:
 		return h.handleListVNIs(ctx, req)
-	case OpOverlayCreateVNI:
+	case quicwire.OpOverlayCreateVNI:
 		return h.handleCreateVNI(ctx, req)
-	case OpOverlayDeleteVNI:
+	case quicwire.OpOverlayDeleteVNI:
 		return h.handleDeleteVNI(ctx, req)
-	case OpOverlayListTunns:
+	case quicwire.OpOverlayListTunns:
 		return h.handleListTunnels(ctx, req)
-	case OpOverlayListMACs:
+	case quicwire.OpOverlayListMACs:
 		return h.handleListMACs(ctx, req)
-	case OpOverlayForgetMAC:
+	case quicwire.OpOverlayForgetMAC:
 		return h.handleForgetMAC(ctx, req)
 	default:
-		return &Response{
-			Status:  StatusInvalidRequest,
+		return &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte("unknown overlay operation"),
 		}
 	}
@@ -364,9 +351,9 @@ type OverlayForgetMACResponse struct {
 // =============================================================================
 
 // handleStatus returns the overlay network status
-func (h *OverlayHandler) handleStatus(ctx context.Context, req *Request) *Response {
+func (h *OverlayHandler) handleStatus(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.overlayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrOverlayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrOverlayServiceNotAvailable)
 	}
 
 	status, err := h.overlayService.Status(ctx)
@@ -380,26 +367,26 @@ func (h *OverlayHandler) handleStatus(ctx context.Context, req *Request) *Respon
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListVTEPs lists all VTEPs
-func (h *OverlayHandler) handleListVTEPs(ctx context.Context, req *Request) *Response {
+func (h *OverlayHandler) handleListVTEPs(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.overlayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrOverlayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrOverlayServiceNotAvailable)
 	}
 
 	var listReq OverlayListVTEPsRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
 	}
 
 	vteps, err := h.overlayService.ListVTEPs(ctx)
@@ -426,30 +413,30 @@ func (h *OverlayHandler) handleListVTEPs(ctx context.Context, req *Request) *Res
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleGetVTEP gets a VTEP by ID
-func (h *OverlayHandler) handleGetVTEP(ctx context.Context, req *Request) *Response {
+func (h *OverlayHandler) handleGetVTEP(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.overlayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrOverlayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrOverlayServiceNotAvailable)
 	}
 
 	var getReq OverlayGetVTEPRequest
-	if err := DecodePayload(req.Payload, &getReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
 	}
 
 	if getReq.ID == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrOverlayMissingVTEPID)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrOverlayMissingVTEPID)
 	}
 
 	vtep, err := h.overlayService.GetVTEP(ctx, getReq.ID)
@@ -463,26 +450,26 @@ func (h *OverlayHandler) handleGetVTEP(ctx context.Context, req *Request) *Respo
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListVNIs lists all VNIs
-func (h *OverlayHandler) handleListVNIs(ctx context.Context, req *Request) *Response {
+func (h *OverlayHandler) handleListVNIs(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.overlayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrOverlayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrOverlayServiceNotAvailable)
 	}
 
 	var listReq OverlayListVNIsRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
 	}
 
 	vnis, err := h.overlayService.ListVNIs(ctx)
@@ -509,35 +496,35 @@ func (h *OverlayHandler) handleListVNIs(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleCreateVNI creates a new VNI
-func (h *OverlayHandler) handleCreateVNI(ctx context.Context, req *Request) *Response {
+func (h *OverlayHandler) handleCreateVNI(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.overlayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrOverlayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrOverlayServiceNotAvailable)
 	}
 
 	var createReq OverlayCreateVNIRequest
-	if err := DecodePayload(req.Payload, &createReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &createReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
 	}
 
 	if createReq.VNI == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrOverlayMissingVNI)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrOverlayMissingVNI)
 	}
 
 	// Validate VNI range (1 to 16777215 for VXLAN)
 	if createReq.VNI > 16777215 {
-		return h.errorResponse(StatusInvalidArgument, ErrOverlayInvalidVNI)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrOverlayInvalidVNI)
 	}
 
 	opts := &VNICreateOptions{
@@ -562,30 +549,30 @@ func (h *OverlayHandler) handleCreateVNI(ctx context.Context, req *Request) *Res
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleDeleteVNI deletes a VNI
-func (h *OverlayHandler) handleDeleteVNI(ctx context.Context, req *Request) *Response {
+func (h *OverlayHandler) handleDeleteVNI(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.overlayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrOverlayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrOverlayServiceNotAvailable)
 	}
 
 	var deleteReq OverlayDeleteVNIRequest
-	if err := DecodePayload(req.Payload, &deleteReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &deleteReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
 	}
 
 	if deleteReq.VNI == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrOverlayMissingVNI)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrOverlayMissingVNI)
 	}
 
 	if err := h.overlayService.DeleteVNI(ctx, deleteReq.VNI); err != nil {
@@ -599,26 +586,26 @@ func (h *OverlayHandler) handleDeleteVNI(ctx context.Context, req *Request) *Res
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListTunnels lists all tunnels
-func (h *OverlayHandler) handleListTunnels(ctx context.Context, req *Request) *Response {
+func (h *OverlayHandler) handleListTunnels(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.overlayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrOverlayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrOverlayServiceNotAvailable)
 	}
 
 	var listReq OverlayListTunnelsRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
 	}
 
 	tunnels, err := h.overlayService.ListTunnels(ctx)
@@ -645,26 +632,26 @@ func (h *OverlayHandler) handleListTunnels(ctx context.Context, req *Request) *R
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleListMACs lists MAC entries for a VNI
-func (h *OverlayHandler) handleListMACs(ctx context.Context, req *Request) *Response {
+func (h *OverlayHandler) handleListMACs(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.overlayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrOverlayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrOverlayServiceNotAvailable)
 	}
 
 	var listReq OverlayListMACsRequest
-	if err := DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
 	}
 
 	// VNI == 0 means list all MACs (same semantics as gRPC ListRemoteMACs).
@@ -692,39 +679,39 @@ func (h *OverlayHandler) handleListMACs(ctx context.Context, req *Request) *Resp
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
 
 // handleForgetMAC removes a MAC entry from the table
-func (h *OverlayHandler) handleForgetMAC(ctx context.Context, req *Request) *Response {
+func (h *OverlayHandler) handleForgetMAC(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.overlayService == nil {
-		return h.errorResponse(StatusUnavailable, ErrOverlayServiceNotAvailable)
+		return h.errorResponse(quicwire.StatusUnavailable, ErrOverlayServiceNotAvailable)
 	}
 
 	var forgetReq OverlayForgetMACRequest
-	if err := DecodePayload(req.Payload, &forgetReq); err != nil {
-		return h.errorResponse(StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(req.Payload, &forgetReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrOverlayDecodingFailed{Cause: err})
 	}
 
 	if forgetReq.VNI == 0 {
-		return h.errorResponse(StatusInvalidArgument, ErrOverlayMissingVNI)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrOverlayMissingVNI)
 	}
 
 	if forgetReq.MAC == "" {
-		return h.errorResponse(StatusInvalidArgument, ErrOverlayMissingMAC)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrOverlayMissingMAC)
 	}
 
 	// Validate MAC address format
 	if _, err := net.ParseMAC(forgetReq.MAC); err != nil {
-		return h.errorResponse(StatusInvalidArgument, ErrOverlayInvalidMAC)
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrOverlayInvalidMAC)
 	}
 
 	if err := h.overlayService.ForgetMAC(ctx, forgetReq.VNI, forgetReq.MAC); err != nil {
@@ -739,13 +726,13 @@ func (h *OverlayHandler) handleForgetMAC(ctx context.Context, req *Request) *Res
 		Timestamp: time.Now().Unix(),
 	}
 
-	payload, err := EncodePayload(resp)
+	payload, err := quicwire.EncodePayload(resp)
 	if err != nil {
-		return h.errorResponse(StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrOverlayEncodingFailed{Cause: err})
 	}
 
-	return &Response{
-		Status:  StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }
@@ -755,40 +742,40 @@ func (h *OverlayHandler) handleForgetMAC(ctx context.Context, req *Request) *Res
 // =============================================================================
 
 // errorResponse creates an error response with the given status and error
-func (h *OverlayHandler) errorResponse(status byte, err error) *Response {
-	return &Response{
+func (h *OverlayHandler) errorResponse(status byte, err error) *quicwire.Response {
+	return &quicwire.Response{
 		Status:  status,
 		Payload: []byte(err.Error()),
 	}
 }
 
 // overlayErrorResponse maps overlay errors to appropriate status codes
-func (h *OverlayHandler) overlayErrorResponse(err error) *Response {
+func (h *OverlayHandler) overlayErrorResponse(err error) *quicwire.Response {
 	var status byte
 
 	switch {
 	case errors.Is(err, ErrOverlayVTEPNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, ErrOverlayVNINotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, ErrOverlayMACNotFound):
-		status = StatusNotFound
+		status = quicwire.StatusNotFound
 	case errors.Is(err, ErrOverlayVNIAlreadyExists):
-		status = StatusAlreadyExists
+		status = quicwire.StatusAlreadyExists
 	case errors.Is(err, ErrOverlayInvalidVNI):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, ErrOverlayInvalidMAC):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, ErrOverlayMissingVTEPID):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, ErrOverlayMissingVNI):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, ErrOverlayMissingMAC):
-		status = StatusInvalidArgument
+		status = quicwire.StatusInvalidArgument
 	case errors.Is(err, ErrOverlayServiceNotAvailable):
-		status = StatusUnavailable
+		status = quicwire.StatusUnavailable
 	default:
-		status = StatusInternalError
+		status = quicwire.StatusInternalError
 	}
 
 	return h.errorResponse(status, err)

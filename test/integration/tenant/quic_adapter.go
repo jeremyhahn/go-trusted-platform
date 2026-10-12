@@ -32,16 +32,16 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
-	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 )
 
 // =============================================================================
-// QUIC Protocol Constants (must match pkg/api/quic/protocol.go +
-// pkg/api/quic/phase35_opcodes.go)
+// QUIC Protocol Constants (must match sdk/go/wire/quicwire/protocol.go +
+// sdk/go/wire/quicwire/phase35_opcodes.go)
 // =============================================================================
 
 const (
@@ -222,19 +222,19 @@ func (a *QUICAdapter) roundTrip(ctx context.Context, op string, opcode byte, pay
 
 	// token_len is zero: the daemon authenticates these connections by the
 	// mTLS client certificate, not a bearer token.
-	if err := quicapi.WriteRequest(stream, &quicapi.Request{Opcode: opcode, Payload: payload}); err != nil {
+	if err := quicwire.WriteRequest(stream, &quicwire.Request{Opcode: opcode, Payload: payload}); err != nil {
 		return nil, ErrQUICRequestFailed{Operation: op, Message: "write: " + err.Error()}
 	}
 
-	resp, err := quicapi.ReadResponse(stream)
+	resp, err := quicwire.ReadResponse(stream)
 	if err != nil {
 		return nil, ErrQUICRequestFailed{Operation: op, Message: "read: " + err.Error()}
 	}
 
-	if resp.Status != quicapi.StatusOK {
+	if resp.Status != quicwire.StatusOK {
 		msg := string(resp.Payload)
 		if msg == "" {
-			msg = quicapi.StatusToString(resp.Status)
+			msg = quicwire.StatusToString(resp.Status)
 		}
 		return nil, ErrQUICStatus{Operation: op, Status: resp.Status, Message: msg}
 	}

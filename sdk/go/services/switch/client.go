@@ -22,8 +22,8 @@ import (
 	"net/url"
 	"strings"
 
-	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/switchwire"
 )
 
 const basePath = "/api/v1/switches"
@@ -49,10 +49,10 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 }
 
 // ListPorts returns the status of all physical ports on the named switch.
-func (c *Client) ListPorts(ctx context.Context, switchName string) ([]*switchmgmt.PortStatus, error) {
+func (c *Client) ListPorts(ctx context.Context, switchName string) ([]*switchwire.PortStatus, error) {
 	endpoint := c.baseURL + basePath + "/" + url.PathEscape(switchName) + "/ports"
 
-	var ports []*switchmgmt.PortStatus
+	var ports []*switchwire.PortStatus
 	if err := c.doGet(ctx, endpoint, &ports); err != nil {
 		return nil, ErrListPortsFailed{Switch: switchName, Cause: err}
 	}
@@ -60,11 +60,11 @@ func (c *Client) ListPorts(ctx context.Context, switchName string) ([]*switchmgm
 }
 
 // GetPortStatus returns the full observable state of a single port.
-func (c *Client) GetPortStatus(ctx context.Context, switchName, port string) (*switchmgmt.PortStatus, error) {
+func (c *Client) GetPortStatus(ctx context.Context, switchName, port string) (*switchwire.PortStatus, error) {
 	endpoint := c.baseURL + basePath + "/" + url.PathEscape(switchName) +
 		"/ports/" + url.PathEscape(port)
 
-	var status switchmgmt.PortStatus
+	var status switchwire.PortStatus
 	if err := c.doGet(ctx, endpoint, &status); err != nil {
 		return nil, ErrGetPortStatusFailed{Switch: switchName, Port: port, Cause: err}
 	}
@@ -147,23 +147,31 @@ func (c *Client) doPost(ctx context.Context, endpoint string, body interface{}) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return ErrUnexpectedStatus{StatusCode: resp.StatusCode, Body: string(respBody)}
+		return unexpectedStatus(resp)
 	}
 
 	return nil
+}
+
+// unexpectedStatus builds the error for a non-2xx response, carrying the
+// response body as the server's explanation.
+func unexpectedStatus(resp *http.Response) error {
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ErrResponseReadFailed{StatusCode: resp.StatusCode, Cause: err}
+	}
+	return ErrUnexpectedStatus{StatusCode: resp.StatusCode, Body: string(respBody)}
 }
 
 // decodeResponse reads the HTTP response body and extracts the payload from the
 // standard WebServiceResponse envelope.
 func (c *Client) decodeResponse(resp *http.Response, dst interface{}) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return ErrUnexpectedStatus{StatusCode: resp.StatusCode, Body: string(respBody)}
+		return unexpectedStatus(resp)
 	}
 
 	// The REST API wraps all responses in a WebServiceResponse envelope.
-	var envelope response.WebServiceResponse
+	var envelope restwire.WebServiceResponse
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return ErrResponseDecodeFailed{Cause: err}
 	}

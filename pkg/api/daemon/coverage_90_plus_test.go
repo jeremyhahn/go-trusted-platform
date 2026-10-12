@@ -31,10 +31,11 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant/quota"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 func init() {
-	_ = quic.SetDefaultCodecType(codec.MsgPack)
+	_ = quicwire.SetDefaultCodecType(codec.MsgPack)
 }
 
 // =============================================================================
@@ -395,10 +396,10 @@ func TestQUICServiceHandler_ContainerOperation(t *testing.T) {
 
 	t.Run("handleContainerOperation_NoHandler", func(t *testing.T) {
 		handler := NewQUICServiceHandler(logger)
-		req := &quic.Request{Opcode: quic.OpContainerCreate}
+		req := &quicwire.Request{Opcode: quicwire.OpContainerCreate}
 
 		resp := handler.handleContainerOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 }
@@ -409,10 +410,10 @@ func TestQUICServiceHandler_VMServiceOperation(t *testing.T) {
 
 	t.Run("handleVMServiceOperation_NoHandler", func(t *testing.T) {
 		handler := NewQUICServiceHandler(logger)
-		req := &quic.Request{Opcode: quic.OpVMCreate}
+		req := &quicwire.Request{Opcode: quicwire.OpVMCreate}
 
 		resp := handler.handleVMServiceOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 }
@@ -423,10 +424,10 @@ func TestQUICServiceHandler_AttestationOperation(t *testing.T) {
 
 	t.Run("handleAttestationOperation_NoHandler", func(t *testing.T) {
 		handler := NewQUICServiceHandler(logger)
-		req := &quic.Request{Opcode: quic.OpAttestQuote}
+		req := &quicwire.Request{Opcode: quicwire.OpAttestQuote}
 
 		resp := handler.handleAttestationOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 }
@@ -1058,9 +1059,9 @@ func TestQUICServiceHandler_HandleRequest_SDN(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	t.Run("SDN opcode without service", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNCreateBridge}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNCreateBridge}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }
 
@@ -1070,9 +1071,9 @@ func TestQUICServiceHandler_HandleRequest_PXE(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	t.Run("PXE opcode without service", func(t *testing.T) {
-		req := &quic.Request{Opcode: OpPXEListDevices}
+		req := &quicwire.Request{Opcode: OpPXEListDevices}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }
 
@@ -1082,22 +1083,22 @@ func TestQUICServiceHandler_HandleRequest_Health(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	t.Run("Health opcode", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpHealth}
+		req := &quicwire.Request{Opcode: quicwire.OpHealth}
 		resp := handler.HandleRequest(ctx, req)
 		// Health checks return OK even without service
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("Liveness opcode", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpLiveness}
+		req := &quicwire.Request{Opcode: quicwire.OpLiveness}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 
 	t.Run("Readiness opcode", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpReadiness}
+		req := &quicwire.Request{Opcode: quicwire.OpReadiness}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusOK, resp.Status)
+		assert.Equal(t, quicwire.StatusOK, resp.Status)
 	})
 }
 
@@ -1107,9 +1108,9 @@ func TestQUICServiceHandler_HandleRequest_Unknown(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	t.Run("Unknown opcode", func(t *testing.T) {
-		req := &quic.Request{Opcode: 0x55}
+		req := &quicwire.Request{Opcode: 0x55}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 }
 
@@ -1331,51 +1332,51 @@ func TestQUICServiceHandler_SDNOperation_NoService(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	t.Run("CreateBridge", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNCreateBridge}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNCreateBridge}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("DeleteBridge", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNDeleteBridge}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNDeleteBridge}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("AddPort", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNCreateBridge}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNCreateBridge}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("DeletePort", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNDeleteBridge}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNDeleteBridge}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("GetPortState", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNGetPortState}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNGetPortState}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("SetPortState", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNSetPortState}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNSetPortState}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("ListPolicies", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNListPolicies}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNListPolicies}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("GetPortStats", func(t *testing.T) {
-		req := &quic.Request{Opcode: quic.OpSDNGetPortState}
+		req := &quicwire.Request{Opcode: quicwire.OpSDNGetPortState}
 		resp := handler.handleSDNOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 }
@@ -1390,26 +1391,26 @@ func TestQUICServiceHandler_PXEOperation_NoService(t *testing.T) {
 	handler := NewQUICServiceHandler(logger)
 
 	t.Run("ListDevices", func(t *testing.T) {
-		req := &quic.Request{Opcode: OpPXEListDevices}
+		req := &quicwire.Request{Opcode: OpPXEListDevices}
 		resp := handler.handlePXEOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("GetDevice", func(t *testing.T) {
-		req := &quic.Request{Opcode: OpPXEGetDevice}
+		req := &quicwire.Request{Opcode: OpPXEGetDevice}
 		resp := handler.handlePXEOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("RegisterDevice", func(t *testing.T) {
-		req := &quic.Request{Opcode: OpPXERegisterDevice}
+		req := &quicwire.Request{Opcode: OpPXERegisterDevice}
 		resp := handler.handlePXEOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("UpdateState", func(t *testing.T) {
-		req := &quic.Request{Opcode: OpPXEUpdateState}
+		req := &quicwire.Request{Opcode: OpPXEUpdateState}
 		resp := handler.handlePXEOperation(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }

@@ -9,7 +9,7 @@ The vTPM service exposes bundle and template management operations via multiple 
 | [REST](api-reference-rest.md) | HTTPS | 8443 | Web clients, external systems |
 | [gRPC](api-reference-grpc.md) | TCP | 9443 | High-performance service-to-service |
 | [QUIC](api-reference-quic.md) | UDP | 9444 | Low-latency, mobile clients |
-| [MCP](api-reference-mcp.md) | stdio/HTTP | 9445 | AI/LLM integration |
+| [MCP](api-reference-mcp.md) | stdio/HTTPS | 9445 | AI/LLM integration |
 | [Unix Socket](api-reference-unix.md) | Unix | /run/platformd.sock | Local IPC, CLI |
 
 ## Service Interface

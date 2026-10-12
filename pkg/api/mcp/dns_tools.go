@@ -15,6 +15,8 @@ package mcp
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -90,7 +92,7 @@ var (
 // This supplements the basic DNS tools with full CRUD operations matching REST handlers.
 func (r *ToolRegistry) registerDNSExtendedTools() {
 	// Zone operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_zone_create",
 		Description: "Create a new DNS zone with optional SOA and NS records",
 		InputSchema: map[string]interface{}{
@@ -146,7 +148,7 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_zone_get",
 		Description: "Get detailed information about a DNS zone including all records",
 		InputSchema: map[string]interface{}{
@@ -161,7 +163,7 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_zone_list",
 		Description: "List all DNS zones",
 		InputSchema: map[string]interface{}{
@@ -170,7 +172,7 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_zone_update",
 		Description: "Update DNS zone properties",
 		InputSchema: map[string]interface{}{
@@ -193,7 +195,7 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_zone_delete",
 		Description: "Delete a DNS zone and all its records",
 		InputSchema: map[string]interface{}{
@@ -209,7 +211,7 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 	})
 
 	// Record operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_record_create",
 		Description: "Create a DNS record in a zone (A, AAAA, CNAME, MX, NS, TXT, SRV, CAA, TLSA)",
 		InputSchema: map[string]interface{}{
@@ -282,7 +284,7 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_record_get",
 		Description: "Get a specific DNS record by ID and type",
 		InputSchema: map[string]interface{}{
@@ -305,7 +307,7 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_record_list",
 		Description: "List DNS records in a zone with optional type filter",
 		InputSchema: map[string]interface{}{
@@ -324,7 +326,7 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_record_update",
 		Description: "Update a DNS record",
 		InputSchema: map[string]interface{}{
@@ -371,7 +373,7 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_record_delete",
 		Description: "Delete a DNS record from a zone",
 		InputSchema: map[string]interface{}{
@@ -395,7 +397,7 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 	})
 
 	// Lookup operations
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_lookup",
 		Description: "Perform a DNS lookup for a fully qualified domain name",
 		InputSchema: map[string]interface{}{
@@ -415,7 +417,7 @@ func (r *ToolRegistry) registerDNSExtendedTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "dns_reverse_lookup",
 		Description: "Perform a reverse DNS lookup (PTR) for an IP address",
 		InputSchema: map[string]interface{}{

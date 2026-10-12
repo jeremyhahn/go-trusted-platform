@@ -25,8 +25,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // mockSecretsQUICService implements SecretsServiceInterface with in-memory
@@ -124,69 +124,69 @@ func TestHandleSecretsCategoryStoreGetDelete(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("StoreSuccess", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubStore,
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubStore,
 			&SecretsStoreRequest{SecretID: "db/password", Data: []byte("hunter2")})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out SecretsStoreResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		assert.Equal(t, "db/password", out.SecretID)
 		assert.Equal(t, uint64(1), out.Version)
 	})
 
 	t.Run("StoreMissingData", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubStore,
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubStore,
 			&SecretsStoreRequest{SecretID: "db/password"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("GetSuccess", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubGet,
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubGet,
 			&SecretsGetRequest{SecretID: "db/password"})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out SecretsGetResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		assert.Equal(t, []byte("hunter2"), out.Data)
 	})
 
 	t.Run("GetNotFound", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubGet,
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubGet,
 			&SecretsGetRequest{SecretID: "missing"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("ListSuccess", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubList, nil)
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubList, nil)
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out SecretsListResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		assert.Contains(t, out.SecretIDs, "db/password")
 	})
 
 	t.Run("DeleteSuccess", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubDelete,
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubDelete,
 			&SecretsDeleteRequest{SecretID: "db/password"})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out SecretsDeleteResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		assert.True(t, out.Deleted)
 		assert.NotContains(t, svc.secrets, "db/password")
 	})
 
 	t.Run("DeleteMissingSecretID", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubDelete,
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubDelete,
 			&SecretsDeleteRequest{})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -195,7 +195,7 @@ func TestHandleSecretsCategoryRotationPolicy(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("SetSuccess", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubSetRotationPolicy,
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubSetRotationPolicy,
 			&SecretsSetRotationPolicyRequest{
 				SecretID: "db/password",
 				Policy: &SecretsRotationPolicyPayload{
@@ -205,10 +205,10 @@ func TestHandleSecretsCategoryRotationPolicy(t *testing.T) {
 				},
 			})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out SecretsSetRotationPolicyResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		require.NotNil(t, out.Policy)
 		assert.True(t, out.Policy.Enabled)
 		assert.Equal(t, int32(7), out.Policy.RetainVersions)
@@ -220,29 +220,29 @@ func TestHandleSecretsCategoryRotationPolicy(t *testing.T) {
 	})
 
 	t.Run("GetSuccess", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubGetRotationPolicy,
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubGetRotationPolicy,
 			&SecretsGetRotationPolicyRequest{SecretID: "db/password"})
 		resp := handler.HandleRequest(ctx, req)
-		require.Equal(t, quic.StatusOK, resp.Status)
+		require.Equal(t, quicwire.StatusOK, resp.Status)
 
 		var out SecretsGetRotationPolicyResponse
-		require.NoError(t, quic.DecodePayload(resp.Payload, &out))
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &out))
 		require.NotNil(t, out.Policy)
 		assert.Equal(t, int32(7), out.Policy.RetainVersions)
 	})
 
 	t.Run("SetMissingPolicy", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubSetRotationPolicy,
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubSetRotationPolicy,
 			&SecretsSetRotationPolicyRequest{SecretID: "db/password"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("GetNotFound", func(t *testing.T) {
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubGetRotationPolicy,
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubGetRotationPolicy,
 			&SecretsGetRotationPolicyRequest{SecretID: "missing"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -251,20 +251,20 @@ func TestHandleSecretsCategoryDispatch(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("UnknownSubOpcode", func(t *testing.T) {
-		resp := handler.HandleRequest(ctx, &quic.Request{Opcode: quic.OpSecretsCategory, Payload: []byte{0xEE}})
-		assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpSecretsCategory, Payload: []byte{0xEE}})
+		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 
 	t.Run("EmptyPayload", func(t *testing.T) {
-		resp := handler.HandleRequest(ctx, &quic.Request{Opcode: quic.OpSecretsCategory})
-		assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpSecretsCategory})
+		assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status)
 	})
 
 	t.Run("ServiceUnavailable", func(t *testing.T) {
 		bare := NewQUICServiceHandler(logging.DefaultLogger())
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubList, nil)
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubList, nil)
 		resp := bare.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 
 	t.Run("BackendError", func(t *testing.T) {
@@ -272,8 +272,8 @@ func TestHandleSecretsCategoryDispatch(t *testing.T) {
 		svc.errToReturn = errors.New("backend down")
 		defer func() { svc.shouldErr = false }()
 
-		req := kmsExtendedRequest(t, quic.OpSecretsCategory, quic.SecretsSubList, nil)
+		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubList, nil)
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInternalError, resp.Status)
+		assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	})
 }

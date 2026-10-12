@@ -26,7 +26,6 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -210,14 +209,8 @@ func (m *MCPAdapter) Setup(ctx context.Context) error {
 	if endpoint == "" {
 		endpoint = GetServiceEndpoints().PlatformMCP
 	}
-	// The env var may already carry a scheme (run-integration-tests.sh exports
-	// http://localhost:9445); prepending unconditionally yields http://http//...
-	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
-		endpoint = "http://" + endpoint
-	}
-	m.endpoint = endpoint
-
-	m.httpClient = helpers.NewPlainHTTPClient(DefaultMCPTimeoutCA)
+	m.endpoint = helpers.MCPBaseURL(endpoint)
+	m.httpClient = helpers.NewHTTPClient(DefaultMCPTimeoutCA)
 
 	initReq := mcpCAInitializeRequest{
 		ProtocolVersion: mcpCAProtocolVersion,

@@ -9,7 +9,7 @@ Multi-protocol API documentation for the Trusted Platform daemon.
 | REST | HTTPS | 8443 | [api-reference-rest.md](api-reference-rest.md) |
 | gRPC | TCP | 9443 | [api-reference-grpc.md](api-reference-grpc.md) |
 | QUIC | UDP | 9444 | [api-reference-quic.md](api-reference-quic.md) |
-| MCP | stdio/HTTP | 9445 | [api-reference-mcp.md](api-reference-mcp.md) |
+| MCP | stdio/HTTPS | 9445 | [api-reference-mcp.md](api-reference-mcp.md) |
 | Unix Socket | Unix | /run/platformd.sock | [api-reference-unix.md](api-reference-unix.md) |
 
 ## Protocol Selection Guide
@@ -263,7 +263,7 @@ X-RateLimit-Reset: 1704456001
       "address": "127.0.0.1:9445",
       "port": 9445,
       "status": "running",
-      "tls": false
+      "tls": true
     }
   ],
   "timestamp": "2025-01-05T12:00:00Z"

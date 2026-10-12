@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 func TestExecuteDeviceRecordAttestCert(t *testing.T) {
@@ -99,7 +100,7 @@ func TestExecuteDeviceRecordAttestCert(t *testing.T) {
 
 func TestDeviceRecordAttestCertTool_IsRegisteredAsAWrite(t *testing.T) {
 	registry := NewToolRegistry(newMockServiceProvider(), logging.DefaultLogger())
-	var def *ToolDefinition
+	var def *mcpwire.ToolDefinition
 	for _, tool := range registry.ListTools() {
 		if tool.Name == "device_record_attest_cert" {
 			d := tool

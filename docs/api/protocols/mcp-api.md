@@ -11,7 +11,7 @@ MCP supports two transport modes:
 | Transport | Use Case | Port |
 |-----------|----------|------|
 | stdio | Local CLI integration | N/A |
-| HTTP | Remote AI services | 9445 |
+| HTTPS | Remote AI services | 9445 |
 
 Default port: **9445**
 
@@ -38,23 +38,25 @@ client, err := platform.NewClient(ctx,
 ### Direct MCP Client
 
 ```go
-import mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+// The MCP wire contract (JSON-RPC types, error codes, client) is the SDK
+// package sdk/go/wire/mcpwire; the daemon imports the same package.
+import "github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 
-clientConfig := mcpapi.DefaultClientConfig("https://platform.example.com:9445")
+clientConfig := mcpwire.DefaultClientConfig("https://platform.example.com:9445")
 clientConfig.Timeout = 30 * time.Second
 
-client, err := mcpapi.NewClient(clientConfig)
+client, err := mcpwire.NewClient(clientConfig)
 if err != nil {
     log.Fatal(err)
 }
 defer client.Close()
 
 // Initialize connection
-serverInfo, err := client.Initialize(ctx)
+result, err := client.Initialize(ctx)
 if err != nil {
     log.Fatal(err)
 }
-log.Printf("Connected to: %s v%s", serverInfo.Name, serverInfo.Version)
+log.Printf("Connected to: %s v%s", result.ServerInfo.Name, result.ServerInfo.Version)
 ```
 
 ## JSON-RPC 2.0 Format
@@ -435,7 +437,7 @@ Result: Device attestation successful, PCR values match expected policy
 | `-32003` | Permission Denied | Token lacks the tool's `resource:action` scope |
 | `-32004` | Service Unavailable | Service down |
 
-The four authorization codes are `pkg/api/mcp/types.go:43-46`; this table
+The four authorization codes are `sdk/go/wire/mcpwire/jsonrpc.go:31-34`; this table
 previously listed them one lower (`-32000`…`-32003`), which no client ever
 received — the code is the wire (#412).
 
@@ -479,8 +481,8 @@ import (
     "log"
     "time"
 
-    mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
     platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
     _ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
 )
 

@@ -20,7 +20,7 @@ MCP supports two transport mechanisms:
 | Transport | Endpoint | Use Case |
 |-----------|----------|----------|
 | stdio | Standard I/O streams | Local agent processes, CLI integration |
-| HTTP | Port 9445 | Remote agents, web-based AI systems |
+| HTTPS | Port 9445 | Remote agents, web-based AI systems |
 
 ### stdio Transport
 

@@ -3,7 +3,7 @@
 | Property | Value |
 |----------|-------|
 | Protocol | MCP (JSON-RPC 2.0) |
-| Endpoint | `http://host:9445/mcp` |
+| Endpoint | `https://host:9445/mcp` |
 | Tools | 7 `provision_*` tools |
 | Implementation | `pkg/api/mcp/provision_tools.go` |
 
@@ -110,7 +110,7 @@ Returns the session object wrapped under `session`.
 ```go
 client, err := platform.NewClient(ctx,
     platform.WithOnlyProtocol(platform.ProtocolMCP),
-    platform.WithMCPAddr("http://localhost:9445"))
+    platform.WithMCPAddr("https://localhost:9445"))
 prov := provision.NewClientFromGRPC(client.ConfigDelivery())
 ```
 

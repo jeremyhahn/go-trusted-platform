@@ -11,7 +11,7 @@ The go-trusted-platform IAM (Identity and Access Management) system provides com
 | REST | HTTP/HTTPS | 8443 | Web clients, external systems | Full Support |
 | gRPC | TCP | 9443 | High-performance service-to-service | Full Support |
 | QUIC | UDP | 9444 | Low-latency, mobile clients | Full Support |
-| MCP | stdio/HTTP | 9445 | AI/LLM integration | Partial (no update/policy ops) |
+| MCP | stdio/HTTPS | 9445 | AI/LLM integration | Partial (no update/policy ops) |
 | Unix Socket | Unix Socket | /run/platformd.sock | Local IPC, CLI | Full Support |
 
 ## Table of Contents
@@ -1356,12 +1356,16 @@ import (
     "context"
     "log"
 
-    "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+    "github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 func main() {
-    // Connect to QUIC service
-    client, err := quic.NewClient("localhost:9444", tlsConfig)
+    ctx := context.Background()
+
+    // Connect to QUIC service; tlsConfig carries the mTLS client identity
+    config := quicwire.DefaultClientConfig("localhost:9444")
+    config.TLSConfig = tlsConfig
+    client, err := quicwire.NewClient(config)
     if err != nil {
         log.Fatal(err)
     }
@@ -1374,21 +1378,8 @@ func main() {
         Name:     "Alice Smith",
     }
 
-    payload, err := quic.EncodePayload(createReq)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    resp, err := client.Send(&quic.Request{
-        Opcode:  quic.OpIAMUserCreate,
-        Payload: payload,
-    })
-    if err != nil {
-        log.Fatal(err)
-    }
-
     var user IAMUserResponse
-    if err := quic.DecodePayload(resp.Payload, &user); err != nil {
+    if err := client.Send(ctx, quicwire.OpIAMUserCreate, createReq, &user); err != nil {
         log.Fatal(err)
     }
 
@@ -1402,14 +1393,10 @@ func main() {
         Action:    "read",
     }
 
-    payload, _ = quic.EncodePayload(checkReq)
-    resp, _ = client.Send(&quic.Request{
-        Opcode:  quic.OpIAMCheckPermission,
-        Payload: payload,
-    })
-
     var permResult CheckPermissionResponse
-    quic.DecodePayload(resp.Payload, &permResult)
+    if err := client.Send(ctx, quicwire.OpIAMCheckPermission, checkReq, &permResult); err != nil {
+        log.Fatal(err)
+    }
     log.Printf("Permission allowed: %v", permResult.Allowed)
 }
 ```
@@ -1420,7 +1407,7 @@ func main() {
 
 The Model Context Protocol (MCP) API provides AI/LLM integration for IAM operations.
 
-**Transport:** stdio or HTTP (port 9445)
+**Transport:** stdio or HTTPS (port 9445)
 
 **Note:** MCP tools currently support CRUD operations but do not include update operations or policy management. Use REST or gRPC for full functionality.
 

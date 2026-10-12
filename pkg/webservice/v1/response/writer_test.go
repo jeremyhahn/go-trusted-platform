@@ -24,6 +24,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -199,7 +200,7 @@ func TestWriteJson(t *testing.T) {
 
 	t.Run("writes complex nested structure", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		response := WebServiceResponse{
+		response := restwire.WebServiceResponse{
 			Code:    200,
 			Success: true,
 			Error:   "",
@@ -220,7 +221,7 @@ func TestWriteJson(t *testing.T) {
 	t.Run("handles nested marshal error", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		// Even error responses should be marshaled properly
-		errorResponse := WebServiceResponse{
+		errorResponse := restwire.WebServiceResponse{
 			Code:    500,
 			Success: false,
 			Error:   "test error",
@@ -269,7 +270,7 @@ func TestWriteYaml(t *testing.T) {
 
 	t.Run("writes valid YAML structure", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		response := WebServiceResponse{
+		response := restwire.WebServiceResponse{
 			Code:    200,
 			Success: true,
 			Error:   "",
@@ -607,36 +608,6 @@ func TestLogResponse(t *testing.T) {
 
 	// No assertion - just ensuring no panic
 	assert.True(t, true)
-}
-
-func TestWebServiceResponse(t *testing.T) {
-	t.Run("creates valid response structure", func(t *testing.T) {
-		response := WebServiceResponse{
-			Code:    200,
-			Error:   "",
-			Success: true,
-			Payload: map[string]string{"key": "value"},
-		}
-
-		assert.Equal(t, 200, response.Code)
-		assert.True(t, response.Success)
-		assert.Empty(t, response.Error)
-		assert.NotNil(t, response.Payload)
-	})
-
-	t.Run("creates error response structure", func(t *testing.T) {
-		response := WebServiceResponse{
-			Code:    500,
-			Error:   "internal error",
-			Success: false,
-			Payload: nil,
-		}
-
-		assert.Equal(t, 500, response.Code)
-		assert.False(t, response.Success)
-		assert.Equal(t, "internal error", response.Error)
-		assert.Nil(t, response.Payload)
-	})
 }
 
 func TestErrServiceNotFound(t *testing.T) {

@@ -24,9 +24,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -421,18 +421,18 @@ func TestHandlePXEListDevices_Success(t *testing.T) {
 	mockPXE.AddTestDevice(device2)
 
 	// Create request with no filter
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEListDevices,
 		Payload: nil,
 	}
 
 	resp := handler.handlePXEListDevices(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 	assert.NotNil(t, resp.Payload)
 
 	var listResp PXEListDevicesResponse
-	err := quic.DecodePayload(resp.Payload, &listResp)
+	err := quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 	assert.Equal(t, 2, listResp.Total)
 	assert.Len(t, listResp.Devices, 2)
@@ -464,20 +464,20 @@ func TestHandlePXEListDevices_WithFilter(t *testing.T) {
 	filterReq := &PXEListDevicesRequest{
 		State: string(pxe.StateDiscovered),
 	}
-	payload, err := quic.EncodePayload(filterReq)
+	payload, err := quicwire.EncodePayload(filterReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEListDevices,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXEListDevices(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var listResp PXEListDevicesResponse
-	err = quic.DecodePayload(resp.Payload, &listResp)
+	err = quicwire.DecodePayload(resp.Payload, &listResp)
 	require.NoError(t, err)
 	assert.Equal(t, 1, listResp.Total)
 }
@@ -488,14 +488,14 @@ func TestHandlePXEListDevices_ServiceError(t *testing.T) {
 
 	mockPXE.listDevicesErr = errors.New("database error")
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEListDevices,
 		Payload: nil,
 	}
 
 	resp := handler.handlePXEListDevices(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 func TestHandlePXEListDevices_ServiceUnavailable(t *testing.T) {
@@ -503,14 +503,14 @@ func TestHandlePXEListDevices_ServiceUnavailable(t *testing.T) {
 	handler := NewQUICServiceHandler(logger) // No PXE service configured
 	ctx := context.Background()
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEListDevices,
 		Payload: nil,
 	}
 
 	resp := handler.handlePXEOperation(ctx, req)
 
-	assert.Equal(t, quic.StatusUnavailable, resp.Status)
+	assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 }
 
 // =============================================================================
@@ -527,20 +527,20 @@ func TestHandlePXEGetDevice_ByID(t *testing.T) {
 	getReq := &PXEGetDeviceRequest{
 		DeviceID: device.ID,
 	}
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEGetDevice,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXEGetDevice(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var getResp PXEGetDeviceResponse
-	err = quic.DecodePayload(resp.Payload, &getResp)
+	err = quicwire.DecodePayload(resp.Payload, &getResp)
 	require.NoError(t, err)
 	assert.NotNil(t, getResp.Device)
 	assert.Equal(t, device.ID, getResp.Device.ID)
@@ -554,17 +554,17 @@ func TestHandlePXEGetDevice_NotFound(t *testing.T) {
 	getReq := &PXEGetDeviceRequest{
 		DeviceID: "nonexistent-device",
 	}
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEGetDevice,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXEGetDevice(ctx, req)
 
-	assert.Equal(t, quic.StatusNotFound, resp.Status)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 func TestHandlePXEGetDevice_MissingParameters(t *testing.T) {
@@ -572,17 +572,17 @@ func TestHandlePXEGetDevice_MissingParameters(t *testing.T) {
 	ctx := context.Background()
 
 	getReq := &PXEGetDeviceRequest{} // No device_id
-	payload, err := quic.EncodePayload(getReq)
+	payload, err := quicwire.EncodePayload(getReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEGetDevice,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXEGetDevice(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // =============================================================================
@@ -597,20 +597,20 @@ func TestHandlePXERegisterDevice_Success(t *testing.T) {
 		MACAddress: "00:11:22:33:44:55",
 		PortID:     "port-1",
 	}
-	payload, err := quic.EncodePayload(regReq)
+	payload, err := quicwire.EncodePayload(regReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXERegisterDevice,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXERegisterDevice(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var regResp PXERegisterDeviceResponse
-	err = quic.DecodePayload(resp.Payload, &regResp)
+	err = quicwire.DecodePayload(resp.Payload, &regResp)
 	require.NoError(t, err)
 	assert.NotNil(t, regResp.Device)
 	assert.Equal(t, "00:11:22:33:44:55", regResp.Device.MACAddress)
@@ -625,17 +625,17 @@ func TestHandlePXERegisterDevice_MissingMAC(t *testing.T) {
 	regReq := &PXERegisterDeviceRequest{
 		PortID: "port-1",
 	}
-	payload, err := quic.EncodePayload(regReq)
+	payload, err := quicwire.EncodePayload(regReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXERegisterDevice,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXERegisterDevice(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandlePXERegisterDevice_MissingPortID(t *testing.T) {
@@ -645,17 +645,17 @@ func TestHandlePXERegisterDevice_MissingPortID(t *testing.T) {
 	regReq := &PXERegisterDeviceRequest{
 		MACAddress: "00:11:22:33:44:55",
 	}
-	payload, err := quic.EncodePayload(regReq)
+	payload, err := quicwire.EncodePayload(regReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXERegisterDevice,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXERegisterDevice(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandlePXERegisterDevice_ServiceError(t *testing.T) {
@@ -668,17 +668,17 @@ func TestHandlePXERegisterDevice_ServiceError(t *testing.T) {
 		MACAddress: "00:11:22:33:44:55",
 		PortID:     "port-1",
 	}
-	payload, err := quic.EncodePayload(regReq)
+	payload, err := quicwire.EncodePayload(regReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXERegisterDevice,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXERegisterDevice(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // =============================================================================
@@ -697,20 +697,20 @@ func TestHandlePXEUpdateState_Success(t *testing.T) {
 		State:    string(pxe.StateBooting),
 		Reason:   "PXE boot started",
 	}
-	payload, err := quic.EncodePayload(updateReq)
+	payload, err := quicwire.EncodePayload(updateReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEUpdateState,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXEUpdateState(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var updateResp PXEUpdateStateResponse
-	err = quic.DecodePayload(resp.Payload, &updateResp)
+	err = quicwire.DecodePayload(resp.Payload, &updateResp)
 	require.NoError(t, err)
 	assert.Equal(t, device.ID, updateResp.DeviceID)
 	assert.Equal(t, string(pxe.StateDiscovered), updateResp.OldState)
@@ -729,17 +729,17 @@ func TestHandlePXEUpdateState_InvalidState(t *testing.T) {
 		DeviceID: device.ID,
 		State:    "invalid_state",
 	}
-	payload, err := quic.EncodePayload(updateReq)
+	payload, err := quicwire.EncodePayload(updateReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEUpdateState,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXEUpdateState(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 func TestHandlePXEUpdateState_MissingDeviceID(t *testing.T) {
@@ -749,17 +749,17 @@ func TestHandlePXEUpdateState_MissingDeviceID(t *testing.T) {
 	updateReq := &PXEUpdateStateRequest{
 		State: string(pxe.StateBooting),
 	}
-	payload, err := quic.EncodePayload(updateReq)
+	payload, err := quicwire.EncodePayload(updateReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEUpdateState,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXEUpdateState(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // =============================================================================
@@ -778,20 +778,20 @@ func TestHandlePXEAuthorize_Success(t *testing.T) {
 		DeviceID:   device.ID,
 		TargetVLAN: 300,
 	}
-	payload, err := quic.EncodePayload(authReq)
+	payload, err := quicwire.EncodePayload(authReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEAuthorize,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXEAuthorize(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var authResp PXEAuthorizeResponse
-	err = quic.DecodePayload(resp.Payload, &authResp)
+	err = quicwire.DecodePayload(resp.Payload, &authResp)
 	require.NoError(t, err)
 	assert.Equal(t, device.ID, authResp.DeviceID)
 	assert.Equal(t, uint16(300), authResp.TargetVLAN)
@@ -808,17 +808,17 @@ func TestHandlePXEAuthorize_MissingVLAN(t *testing.T) {
 	authReq := &PXEAuthorizeRequest{
 		DeviceID: device.ID,
 	}
-	payload, err := quic.EncodePayload(authReq)
+	payload, err := quicwire.EncodePayload(authReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEAuthorize,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXEAuthorize(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // =============================================================================
@@ -836,20 +836,20 @@ func TestHandlePXEQuarantine_Success(t *testing.T) {
 		DeviceID: device.ID,
 		Reason:   "Security policy violation",
 	}
-	payload, err := quic.EncodePayload(quarReq)
+	payload, err := quicwire.EncodePayload(quarReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEQuarantine,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXEQuarantine(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var quarResp PXEQuarantineResponse
-	err = quic.DecodePayload(resp.Payload, &quarResp)
+	err = quicwire.DecodePayload(resp.Payload, &quarResp)
 	require.NoError(t, err)
 	assert.Equal(t, device.ID, quarResp.DeviceID)
 	assert.True(t, quarResp.Success)
@@ -865,17 +865,17 @@ func TestHandlePXEQuarantine_MissingReason(t *testing.T) {
 	quarReq := &PXEQuarantineRequest{
 		DeviceID: device.ID,
 	}
-	payload, err := quic.EncodePayload(quarReq)
+	payload, err := quicwire.EncodePayload(quarReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXEQuarantine,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXEQuarantine(ctx, req)
 
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // =============================================================================
@@ -893,20 +893,20 @@ func TestHandlePXERetry_Success(t *testing.T) {
 	retryReq := &PXERetryRequest{
 		DeviceID: device.ID,
 	}
-	payload, err := quic.EncodePayload(retryReq)
+	payload, err := quicwire.EncodePayload(retryReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXERetry,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXERetry(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var retryResp PXERetryResponse
-	err = quic.DecodePayload(resp.Payload, &retryResp)
+	err = quicwire.DecodePayload(resp.Payload, &retryResp)
 	require.NoError(t, err)
 	assert.Equal(t, device.ID, retryResp.DeviceID)
 	assert.Equal(t, 1, retryResp.RetryCount)
@@ -924,17 +924,17 @@ func TestHandlePXERetry_ServiceError(t *testing.T) {
 	retryReq := &PXERetryRequest{
 		DeviceID: device.ID,
 	}
-	payload, err := quic.EncodePayload(retryReq)
+	payload, err := quicwire.EncodePayload(retryReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXERetry,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXERetry(ctx, req)
 
-	assert.Equal(t, quic.StatusInternalError, resp.Status)
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // =============================================================================
@@ -951,20 +951,20 @@ func TestHandlePXERemoveDevice_Success(t *testing.T) {
 	removeReq := &PXERemoveDeviceRequest{
 		DeviceID: device.ID,
 	}
-	payload, err := quic.EncodePayload(removeReq)
+	payload, err := quicwire.EncodePayload(removeReq)
 	require.NoError(t, err)
 
-	req := &quic.Request{
+	req := &quicwire.Request{
 		Opcode:  OpPXERemoveDevice,
 		Payload: payload,
 	}
 
 	resp := handler.handlePXERemoveDevice(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var removeResp PXERemoveDeviceResponse
-	err = quic.DecodePayload(resp.Payload, &removeResp)
+	err = quicwire.DecodePayload(resp.Payload, &removeResp)
 	require.NoError(t, err)
 	assert.Equal(t, device.ID, removeResp.DeviceID)
 	assert.True(t, removeResp.Success)
@@ -1149,17 +1149,17 @@ func TestHandleReadiness_WithPXEService(t *testing.T) {
 	handler, _ := createTestPXEHandler()
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpReadiness,
+	req := &quicwire.Request{
+		Opcode:  quicwire.OpReadiness,
 		Payload: nil,
 	}
 
 	resp := handler.HandleRequest(ctx, req)
 
-	assert.Equal(t, quic.StatusOK, resp.Status)
+	assert.Equal(t, quicwire.StatusOK, resp.Status)
 
 	var healthResp HealthCheckResponse
-	err := quic.DecodePayload(resp.Payload, &healthResp)
+	err := quicwire.DecodePayload(resp.Payload, &healthResp)
 	require.NoError(t, err)
 	assert.Equal(t, "ready", healthResp.Components["pxe"])
 }

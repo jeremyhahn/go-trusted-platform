@@ -15,11 +15,13 @@ package mcp
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // registerVMTools registers VM-related MCP tools.
 func (r *ToolRegistry) registerVMTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_create",
 		Description: "Create a new virtual machine with the specified configuration",
 		InputSchema: map[string]interface{}{
@@ -94,7 +96,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_get",
 		Description: "Get detailed information about a virtual machine by ID",
 		InputSchema: map[string]interface{}{
@@ -109,7 +111,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_list",
 		Description: "List virtual machines with optional filters",
 		InputSchema: map[string]interface{}{
@@ -132,7 +134,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_update",
 		Description: "Update virtual machine configuration",
 		InputSchema: map[string]interface{}{
@@ -167,7 +169,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_delete",
 		Description: "Delete a virtual machine",
 		InputSchema: map[string]interface{}{
@@ -182,7 +184,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_start",
 		Description: "Start a stopped virtual machine",
 		InputSchema: map[string]interface{}{
@@ -197,7 +199,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_stop",
 		Description: "Stop a running virtual machine",
 		InputSchema: map[string]interface{}{
@@ -212,7 +214,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_reboot",
 		Description: "Reboot a virtual machine",
 		InputSchema: map[string]interface{}{
@@ -227,7 +229,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_suspend",
 		Description: "Suspend a running virtual machine",
 		InputSchema: map[string]interface{}{
@@ -242,7 +244,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_resume",
 		Description: "Resume a suspended virtual machine",
 		InputSchema: map[string]interface{}{
@@ -257,7 +259,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_create",
 		Description: "Create a snapshot of a virtual machine",
 		InputSchema: map[string]interface{}{
@@ -280,7 +282,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_get",
 		Description: "Get details of a specific VM snapshot",
 		InputSchema: map[string]interface{}{
@@ -299,7 +301,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_list",
 		Description: "List all snapshots for a virtual machine",
 		InputSchema: map[string]interface{}{
@@ -314,7 +316,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_delete",
 		Description: "Delete a VM snapshot",
 		InputSchema: map[string]interface{}{
@@ -333,7 +335,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_snapshot_restore",
 		Description: "Restore a virtual machine from a snapshot",
 		InputSchema: map[string]interface{}{
@@ -352,7 +354,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_attest",
 		Description: "Perform TPM attestation for a virtual machine, generating a cryptographic proof of its integrity",
 		InputSchema: map[string]interface{}{
@@ -381,7 +383,7 @@ func (r *ToolRegistry) registerVMTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "vm_attest_verify",
 		Description: "Verify VM attestation evidence (quote, signature, nonce, expected PCR values) against the VM's live vTPM attestation key",
 		InputSchema: map[string]interface{}{

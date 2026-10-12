@@ -4,7 +4,7 @@
 |----------|-------|
 | Endpoint | `host:9444` (UDP, QUIC + TLS 1.3) |
 | Category opcode | `0xCF` (`OpProvisioningCategory`) — shared with config delivery |
-| Sub-opcode range | `0x10`-`0x1A` (`EABSub*`, `pkg/api/quic/eab_opcodes.go`) |
+| Sub-opcode range | `0x10`-`0x1A` (`EABSub*`, `sdk/go/wire/quicwire/eab_opcodes.go`) |
 | Message format | Sub-opcode byte + codec-encoded `platform.v1` pb struct |
 | Handler | `pkg/api/daemon/quic_eab.go` |
 

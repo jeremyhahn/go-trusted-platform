@@ -26,7 +26,7 @@ gRPC: `AttestationService` in `pkg/api/grpc/proto/attestation.proto` — ten RPC
 REST: `pkg/webservice/v1/rest/attestation/` (`server_router.go`,
 `events_router.go`, and a second legacy router — see §3).
 QUIC: `pkg/api/quic/attestation_handlers.go` plus the base range in
-`protocol.go`, routed by the daemon for opcodes `0x70`–`0x77`
+`sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x70`–`0x77`
 (`pkg/api/daemon/quic_service.go:522`).
 MCP: fifteen `attestation_*` tools.
 

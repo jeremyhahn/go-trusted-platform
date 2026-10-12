@@ -15,6 +15,8 @@ package mcp
 
 import (
 	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // ErrDaemonServiceNameRequired indicates that a service name parameter is required.
@@ -26,7 +28,7 @@ func (e ErrDaemonServiceNameRequired) Error() string {
 
 // registerDaemonTools registers daemon management tools.
 func (r *ToolRegistry) registerDaemonTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_daemon_status",
 		Description: "Get daemon status including system info and uptime",
 		InputSchema: map[string]interface{}{
@@ -35,7 +37,7 @@ func (r *ToolRegistry) registerDaemonTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_daemon_version",
 		Description: "Get daemon version information",
 		InputSchema: map[string]interface{}{
@@ -44,7 +46,7 @@ func (r *ToolRegistry) registerDaemonTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_daemon_list_services",
 		Description: "List all managed services",
 		InputSchema: map[string]interface{}{
@@ -53,7 +55,7 @@ func (r *ToolRegistry) registerDaemonTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_daemon_get_service",
 		Description: "Get status of a specific service",
 		InputSchema: map[string]interface{}{
@@ -65,7 +67,7 @@ func (r *ToolRegistry) registerDaemonTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_daemon_start_service",
 		Description: "Start a managed service",
 		InputSchema: map[string]interface{}{
@@ -77,7 +79,7 @@ func (r *ToolRegistry) registerDaemonTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_daemon_stop_service",
 		Description: "Stop a managed service",
 		InputSchema: map[string]interface{}{
@@ -89,7 +91,7 @@ func (r *ToolRegistry) registerDaemonTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_daemon_restart_service",
 		Description: "Restart a managed service",
 		InputSchema: map[string]interface{}{
@@ -101,7 +103,7 @@ func (r *ToolRegistry) registerDaemonTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_daemon_list_protocols",
 		Description: "List all supported protocol endpoints",
 		InputSchema: map[string]interface{}{
@@ -115,7 +117,7 @@ func (r *ToolRegistry) registerDaemonTools() {
 func (r *ToolRegistry) executeDaemonStatus(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	result, err := r.service.DaemonStatus(ctx)
 	if err != nil {
-		return nil, &WrappedError{Msg: "daemon status", Err: err}
+		return nil, &mcpwire.WrappedError{Msg: "daemon status", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -124,7 +126,7 @@ func (r *ToolRegistry) executeDaemonStatus(ctx context.Context, args map[string]
 func (r *ToolRegistry) executeDaemonVersion(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	result, err := r.service.DaemonVersion(ctx)
 	if err != nil {
-		return nil, &WrappedError{Msg: "daemon version", Err: err}
+		return nil, &mcpwire.WrappedError{Msg: "daemon version", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -133,7 +135,7 @@ func (r *ToolRegistry) executeDaemonVersion(ctx context.Context, args map[string
 func (r *ToolRegistry) executeDaemonListServices(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	result, err := r.service.DaemonListServices(ctx)
 	if err != nil {
-		return nil, &WrappedError{Msg: "daemon list services", Err: err}
+		return nil, &mcpwire.WrappedError{Msg: "daemon list services", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -146,7 +148,7 @@ func (r *ToolRegistry) executeDaemonGetService(ctx context.Context, args map[str
 	}
 	result, err := r.service.DaemonGetService(ctx, name)
 	if err != nil {
-		return nil, &WrappedError{Msg: "daemon get service", Err: err}
+		return nil, &mcpwire.WrappedError{Msg: "daemon get service", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -159,7 +161,7 @@ func (r *ToolRegistry) executeDaemonStartService(ctx context.Context, args map[s
 	}
 	result, err := r.service.DaemonStartService(ctx, name)
 	if err != nil {
-		return nil, &WrappedError{Msg: "daemon start service", Err: err}
+		return nil, &mcpwire.WrappedError{Msg: "daemon start service", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -172,7 +174,7 @@ func (r *ToolRegistry) executeDaemonStopService(ctx context.Context, args map[st
 	}
 	result, err := r.service.DaemonStopService(ctx, name)
 	if err != nil {
-		return nil, &WrappedError{Msg: "daemon stop service", Err: err}
+		return nil, &mcpwire.WrappedError{Msg: "daemon stop service", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -185,7 +187,7 @@ func (r *ToolRegistry) executeDaemonRestartService(ctx context.Context, args map
 	}
 	result, err := r.service.DaemonRestartService(ctx, name)
 	if err != nil {
-		return nil, &WrappedError{Msg: "daemon restart service", Err: err}
+		return nil, &mcpwire.WrappedError{Msg: "daemon restart service", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -194,7 +196,7 @@ func (r *ToolRegistry) executeDaemonRestartService(ctx context.Context, args map
 func (r *ToolRegistry) executeDaemonListProtocols(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	result, err := r.service.DaemonListProtocols(ctx)
 	if err != nil {
-		return nil, &WrappedError{Msg: "daemon list protocols", Err: err}
+		return nil, &mcpwire.WrappedError{Msg: "daemon list protocols", Err: err}
 	}
 	return marshalResult(result)
 }

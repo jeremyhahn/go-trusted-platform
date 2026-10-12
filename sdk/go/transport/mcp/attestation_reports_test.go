@@ -17,8 +17,6 @@ import (
 	"errors"
 	"testing"
 
-	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -36,15 +34,10 @@ func sampleView(id string) map[string]interface{} {
 	}
 }
 
-// TestAttestationReportsMCP_ToolMappingParity checks every mapped tool is one
-// the server registers and has a decoder, so the client cannot call a tool
-// that does not exist or decode a shape it does not understand.
+// TestAttestationReportsMCP_ToolMappingParity checks the SDK side: each
+// report method is mapped and has a reply decoder. That each mapped tool is
+// registered by the server is checked in pkg/api/mcp against MethodTools.
 func TestAttestationReportsMCP_ToolMappingParity(t *testing.T) {
-	registry := mcpapi.NewToolRegistry(nil, logging.DefaultLogger())
-	registered := map[string]bool{}
-	for _, td := range registry.ListTools() {
-		registered[td.Name] = true
-	}
 	methods := []string{
 		platformv1.AttestationService_GetDeviceReport_FullMethodName,
 		platformv1.AttestationService_ListDeviceReports_FullMethodName,
@@ -52,13 +45,9 @@ func TestAttestationReportsMCP_ToolMappingParity(t *testing.T) {
 		platformv1.AttestationService_DescribeCallerPolicy_FullMethodName,
 	}
 	for _, method := range methods {
-		tool, ok := grpcMethodToMCPToolMap[method]
-		if !ok {
+		if _, ok := grpcMethodToMCPToolMap[method]; !ok {
 			t.Errorf("%s is not mapped to an MCP tool", method)
 			continue
-		}
-		if !registered[tool] {
-			t.Errorf("adapter maps %s -> %q but the server does not register that tool", method, tool)
 		}
 		if _, has := mcpReplyDecoders[method]; !has {
 			t.Errorf("%s missing reply decoder", method)

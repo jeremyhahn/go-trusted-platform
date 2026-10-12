@@ -26,6 +26,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 // emailRegex is a simple email validation pattern.
@@ -339,7 +340,7 @@ func (h *handler) Revoke(w http.ResponseWriter, r *http.Request) {
 
 	// Check if invitation can be revoked
 	if invitation.Status == entities.InvitationStatusRevoked {
-		h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   ErrInvitationAlreadyRevoked{ID: invitationID}.Error(),
 			Success: false,
@@ -347,7 +348,7 @@ func (h *handler) Revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if invitation.Status == entities.InvitationStatusAccepted {
-		h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   ErrInvitationAlreadyAccepted{Token: ""}.Error(),
 			Success: false,
@@ -379,13 +380,13 @@ func (h *handler) writeServiceError(w http.ResponseWriter, r *http.Request, oper
 
 	switch e := err.(type) {
 	case ErrDuplicateInvitation:
-		h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   e.Error(),
 			Success: false,
 		})
 	case ErrEmailAlreadyRegistered:
-		h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
 			Code:    http.StatusConflict,
 			Error:   e.Error(),
 			Success: false,

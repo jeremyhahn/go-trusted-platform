@@ -13,7 +13,11 @@
 
 package mcp
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
+)
 
 // AttestationReportProvider is the optional MCP provider for the attestation
 // reporting service (#226): cached device verdicts with their age, the
@@ -66,7 +70,7 @@ func (r *ToolRegistry) attestationReportProvider() AttestationReportProvider {
 }
 
 func (r *ToolRegistry) registerAttestationReportTools() {
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_device_report",
 		Description: "Get a device's most recent verified attestation report from the reporting cache, with its age. Never triggers a quote.",
 		InputSchema: map[string]interface{}{
@@ -77,7 +81,7 @@ func (r *ToolRegistry) registerAttestationReportTools() {
 			"required": []string{"device_id"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_device_reports",
 		Description: "List every cached device attestation report with its age and freshness. Never triggers a quote.",
 		InputSchema: map[string]interface{}{
@@ -85,7 +89,7 @@ func (r *ToolRegistry) registerAttestationReportTools() {
 			"properties": map[string]interface{}{},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_device_refresh",
 		Description: "Ask the reporting collector to refresh a device's attestation out of cycle. Enqueues only; read the report for the verdict.",
 		InputSchema: map[string]interface{}{
@@ -96,7 +100,7 @@ func (r *ToolRegistry) registerAttestationReportTools() {
 			"required": []string{"device_id"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "attestation_caller_policy",
 		Description: "Describe this node's compiled caller-admission policy for the quote-producing attestation endpoints.",
 		InputSchema: map[string]interface{}{

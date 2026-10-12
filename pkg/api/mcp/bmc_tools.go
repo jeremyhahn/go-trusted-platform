@@ -16,6 +16,8 @@ package mcp
 import (
 	"context"
 	"errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
 // =============================================================================
@@ -114,33 +116,33 @@ func (r *ToolRegistry) registerBMCTools() {
 		"required": []string{"profile_id"},
 	}
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_power_on",
 		Description: "Power on the BMC-managed system",
 		InputSchema: profileSchema,
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_power_off",
 		Description: "Power off the BMC-managed system",
 		InputSchema: profileSchema,
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_power_reset",
 		Description: "Hard reset the BMC-managed system",
 		InputSchema: profileSchema,
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_power_cycle",
 		Description: "Power cycle the BMC-managed system",
 		InputSchema: profileSchema,
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_power_status",
 		Description: "Query the current power state of the BMC-managed system",
 		InputSchema: profileSchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_set_boot_device",
 		Description: "Set the next boot device override (pxe, disk, cdrom, virtual_media, none)",
 		InputSchema: map[string]interface{}{
@@ -159,13 +161,13 @@ func (r *ToolRegistry) registerBMCTools() {
 			"required": []string{"profile_id", "device"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_get_boot_device",
 		Description: "Return the current boot device override",
 		InputSchema: profileSchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_mount_iso",
 		Description: "Mount an ISO image via virtual media (HTTP/HTTPS URL)",
 		InputSchema: map[string]interface{}{
@@ -177,41 +179,41 @@ func (r *ToolRegistry) registerBMCTools() {
 			"required": []string{"profile_id", "iso_url"},
 		},
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_unmount_iso",
 		Description: "Eject the currently mounted virtual media",
 		InputSchema: profileSchema,
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_virtual_media_status",
 		Description: "Report whether virtual media is mounted and what is loaded",
 		InputSchema: profileSchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_get_sensors",
 		Description: "Read all BMC sensor values (temperatures, fans, voltages, etc.)",
 		InputSchema: profileSchema,
 	})
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_get_system_info",
 		Description: "Return manufacturer, product, serial, firmware/BIOS versions and power state",
 		InputSchema: profileSchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_get_web_certificate",
 		Description: "Inspect the BMC's HTTPS certificate (subject, issuer, expiry, fingerprint)",
 		InputSchema: profileSchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_list_users",
 		Description: "List populated BMC user slots (slot, username, enabled, privilege, channel)",
 		InputSchema: profileSchema,
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_enroll",
 		Description: "Run the BMC enrollment ceremony: establish trust, capture factory certificate, optionally replace the certificate, register DNS, and publish DANE TLSA records",
 		InputSchema: map[string]interface{}{
@@ -242,7 +244,7 @@ func (r *ToolRegistry) registerBMCTools() {
 		},
 	})
 
-	r.addTool(ToolDefinition{
+	r.addTool(mcpwire.ToolDefinition{
 		Name:        "platform_bmc_cert_restore",
 		Description: "Run the BMC factory-certificate restore ceremony: instruct the BMC to regenerate its default self-signed certificate, delete the stored SPKI pin, unpublish DANE TLSA records, and clear the device enrollment state",
 		InputSchema: profileSchema,

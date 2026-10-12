@@ -26,12 +26,13 @@ import (
 	quicgo "github.com/quic-go/quic-go"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // Handler processes incoming QUIC requests
 type Handler interface {
 	// HandleRequest processes a request and returns a response
-	HandleRequest(ctx context.Context, req *Request) *Response
+	HandleRequest(ctx context.Context, req *quicwire.Request) *quicwire.Response
 }
 
 // ServerStats holds statistics about the QUIC server
@@ -276,16 +277,16 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 
 	// Goroutine-level panic guard: write an error response before the stream
 	// closes so the client never sees a bare EOF from a panicking handler.
-	var panicResp *Response
+	var panicResp *quicwire.Response
 	defer func() {
 		if r := recover(); r != nil {
 			s.totalErrors.Add(1)
 			s.logger.Errorf("QUIC stream handler panic: %v\n%s", r, debug.Stack())
-			panicResp = &Response{
-				Status:  StatusInternalError,
+			panicResp = &quicwire.Response{
+				Status:  quicwire.StatusInternalError,
 				Payload: []byte(fmt.Sprintf("internal server error: %v", r)),
 			}
-			if werr := WriteResponse(stream, panicResp); werr != nil {
+			if werr := quicwire.WriteResponse(stream, panicResp); werr != nil {
 				slog.Debug("QUIC WriteResponse failed after panic recovery",
 					slog.Int64("stream_id", streamID),
 					slog.String("error", werr.Error()),
@@ -305,7 +306,7 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 
 	startTime := time.Now()
 
-	req, err := ReadRequest(stream)
+	req, err := quicwire.ReadRequest(stream)
 	if err != nil {
 		s.totalErrors.Add(1)
 		slog.Debug("QUIC stream read request failed",
@@ -313,11 +314,11 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 			slog.Int64("stream_id", streamID),
 			slog.String("error", err.Error()),
 		)
-		resp := &Response{
-			Status:  StatusInvalidRequest,
+		resp := &quicwire.Response{
+			Status:  quicwire.StatusInvalidRequest,
 			Payload: []byte(err.Error()),
 		}
-		if werr := WriteResponse(stream, resp); werr != nil {
+		if werr := quicwire.WriteResponse(stream, resp); werr != nil {
 			slog.Debug("QUIC WriteResponse failed after read error",
 				slog.String("remote_addr", remoteAddr),
 				slog.Int64("stream_id", streamID),
@@ -332,17 +333,17 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 	slog.Debug("QUIC stream request read",
 		slog.String("remote_addr", remoteAddr),
 		slog.Int64("stream_id", streamID),
-		slog.String("opcode", OpcodeToString(req.Opcode)),
+		slog.String("opcode", quicwire.OpcodeToString(req.Opcode)),
 		slog.String("opcode_hex", fmt.Sprintf("0x%02X", req.Opcode)),
 		slog.Int("payload_len", len(req.Payload)),
 	)
 
-	var resp *Response
+	var resp *quicwire.Response
 	if s.handler != nil {
 		resp = s.handler.HandleRequest(s.ctx, req)
 	} else {
-		resp = &Response{
-			Status:  StatusNotImplemented,
+		resp = &quicwire.Response{
+			Status:  quicwire.StatusNotImplemented,
 			Payload: []byte("no handler configured"),
 		}
 	}
@@ -355,17 +356,17 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 	slog.Debug("QUIC stream response ready",
 		slog.String("remote_addr", remoteAddr),
 		slog.Int64("stream_id", streamID),
-		slog.String("opcode", OpcodeToString(req.Opcode)),
-		slog.String("status", StatusToString(resp.Status)),
+		slog.String("opcode", quicwire.OpcodeToString(req.Opcode)),
+		slog.String("status", quicwire.StatusToString(resp.Status)),
 		slog.Int("payload_len", respPayloadLen),
 	)
 
-	if werr := WriteResponse(stream, resp); werr != nil {
+	if werr := quicwire.WriteResponse(stream, resp); werr != nil {
 		s.totalErrors.Add(1)
 		slog.Error("QUIC stream WriteResponse failed",
 			slog.String("remote_addr", remoteAddr),
 			slog.Int64("stream_id", streamID),
-			slog.String("opcode", OpcodeToString(req.Opcode)),
+			slog.String("opcode", quicwire.OpcodeToString(req.Opcode)),
 			slog.String("error", werr.Error()),
 		)
 		return
@@ -375,8 +376,8 @@ func (s *Server) handleStream(stream *quicgo.Stream, remoteAddr string) {
 	slog.Debug("QUIC stream request completed",
 		slog.String("remote_addr", remoteAddr),
 		slog.Int64("stream_id", streamID),
-		slog.String("opcode", OpcodeToString(req.Opcode)),
-		slog.String("status", StatusToString(resp.Status)),
+		slog.String("opcode", quicwire.OpcodeToString(req.Opcode)),
+		slog.String("status", quicwire.StatusToString(resp.Status)),
 		slog.Int64("elapsed_us", elapsed.Microseconds()),
 	)
 }

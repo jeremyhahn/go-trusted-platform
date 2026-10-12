@@ -8,7 +8,7 @@ QUIC wire protocol for the reverse-proxy configuration service.
 | Category opcode | `0x2F` (gateway category) |
 | Sub-opcode range | `0x20`-`0x2D` |
 | Handler | `pkg/api/quic/proxy_handlers.go` (ProxyHandler) |
-| Opcodes | `pkg/api/quic/proxy_opcodes.go` |
+| Opcodes | `sdk/go/wire/quicwire/proxy_opcodes.go` |
 
 The single-byte top-level opcode space (0x00-0xFF) is fully allocated,
 so the proxy service multiplexes as sub-opcodes under the gateway

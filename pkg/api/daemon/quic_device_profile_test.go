@@ -20,10 +20,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // The tests in this file exercise the daemon-side QUIC device handlers
@@ -45,28 +45,28 @@ func newQUICDeviceProfileHandler(t *testing.T) (*QUICServiceHandler, *mockProfil
 }
 
 // encodeQUICRequest encodes v as a QUIC request payload for opcode.
-func encodeQUICRequest(t *testing.T, opcode byte, v interface{}) *quic.Request {
+func encodeQUICRequest(t *testing.T, opcode byte, v interface{}) *quicwire.Request {
 	t.Helper()
-	payload, err := quic.EncodePayload(v)
+	payload, err := quicwire.EncodePayload(v)
 	require.NoError(t, err)
-	return &quic.Request{Opcode: opcode, Payload: payload}
+	return &quicwire.Request{Opcode: opcode, Payload: payload}
 }
 
 // encodeQUICCategoryRequest encodes v prefixed with a sub-opcode byte,
 // mirroring the SDK category-opcode framing (payload[0] = sub-opcode).
-func encodeQUICCategoryRequest(t *testing.T, opcode, subOpcode byte, v interface{}) *quic.Request {
+func encodeQUICCategoryRequest(t *testing.T, opcode, subOpcode byte, v interface{}) *quicwire.Request {
 	t.Helper()
-	payload, err := quic.EncodePayload(v)
+	payload, err := quicwire.EncodePayload(v)
 	require.NoError(t, err)
 	framed := append([]byte{subOpcode}, payload...)
-	return &quic.Request{Opcode: opcode, Payload: framed}
+	return &quicwire.Request{Opcode: opcode, Payload: framed}
 }
 
 // decodeQUICResponse decodes a StatusOK QUIC response payload into out.
-func decodeQUICResponse(t *testing.T, resp *quic.Response, out interface{}) {
+func decodeQUICResponse(t *testing.T, resp *quicwire.Response, out interface{}) {
 	t.Helper()
-	require.Equal(t, quic.StatusOK, resp.Status, "payload: %s", string(resp.Payload))
-	require.NoError(t, quic.DecodePayload(resp.Payload, out))
+	require.Equal(t, quicwire.StatusOK, resp.Status, "payload: %s", string(resp.Payload))
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, out))
 }
 
 // TestQUICDeviceCreateProfile_EKPrestageFields verifies the QUIC create
@@ -77,7 +77,7 @@ func TestQUICDeviceCreateProfile_EKPrestageFields(t *testing.T) {
 	handler, profileSvc := newQUICDeviceProfileHandler(t)
 	ekCert := newEKCertPEMForTest(t)
 
-	req := encodeQUICRequest(t, quic.OpDeviceCreateProfile, &platformv1.CreateProfileRequest{
+	req := encodeQUICRequest(t, quicwire.OpDeviceCreateProfile, &platformv1.CreateProfileRequest{
 		Profile: &platformv1.DeviceProfile{
 			Name:       "node-02",
 			Model:      "X10SDV",
@@ -111,7 +111,7 @@ func TestQUICDeviceCreateProfile_EKPrestageFields(t *testing.T) {
 func TestQUICDeviceCreateProfile_InvalidEKCert(t *testing.T) {
 	handler, _ := newQUICDeviceProfileHandler(t)
 
-	req := encodeQUICRequest(t, quic.OpDeviceCreateProfile, &platformv1.CreateProfileRequest{
+	req := encodeQUICRequest(t, quicwire.OpDeviceCreateProfile, &platformv1.CreateProfileRequest{
 		Profile: &platformv1.DeviceProfile{
 			Name:   "bad-cert",
 			EkCert: "not a pem certificate",
@@ -119,7 +119,7 @@ func TestQUICDeviceCreateProfile_InvalidEKCert(t *testing.T) {
 	})
 
 	resp := handler.HandleRequest(context.Background(), req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // TestQUICDeviceCreateProfile_InvalidConfig verifies config bytes that are
@@ -127,7 +127,7 @@ func TestQUICDeviceCreateProfile_InvalidEKCert(t *testing.T) {
 func TestQUICDeviceCreateProfile_InvalidConfig(t *testing.T) {
 	handler, _ := newQUICDeviceProfileHandler(t)
 
-	req := encodeQUICRequest(t, quic.OpDeviceCreateProfile, &platformv1.CreateProfileRequest{
+	req := encodeQUICRequest(t, quicwire.OpDeviceCreateProfile, &platformv1.CreateProfileRequest{
 		Profile: &platformv1.DeviceProfile{
 			Name:   "bad-config",
 			Config: []byte("{not-json"),
@@ -135,7 +135,7 @@ func TestQUICDeviceCreateProfile_InvalidConfig(t *testing.T) {
 	})
 
 	resp := handler.HandleRequest(context.Background(), req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }
 
 // TestQUICDeviceSetProfile_FullReplace verifies OpDeviceSetProfile has
@@ -150,7 +150,7 @@ func TestQUICDeviceSetProfile_FullReplace(t *testing.T) {
 		Name: "before",
 	}
 
-	req := encodeQUICRequest(t, quic.OpDeviceSetProfile, &platformv1.UpdateProfileRequest{
+	req := encodeQUICRequest(t, quicwire.OpDeviceSetProfile, &platformv1.UpdateProfileRequest{
 		Profile: &platformv1.DeviceProfile{
 			Id:         42,
 			Name:       "after",
@@ -182,25 +182,25 @@ func TestQUICDeviceSetProfile_Errors(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("MissingProfile", func(t *testing.T) {
-		req := encodeQUICRequest(t, quic.OpDeviceSetProfile, &platformv1.UpdateProfileRequest{})
+		req := encodeQUICRequest(t, quicwire.OpDeviceSetProfile, &platformv1.UpdateProfileRequest{})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("UnknownProfile", func(t *testing.T) {
-		req := encodeQUICRequest(t, quic.OpDeviceSetProfile, &platformv1.UpdateProfileRequest{
+		req := encodeQUICRequest(t, quicwire.OpDeviceSetProfile, &platformv1.UpdateProfileRequest{
 			Profile: &platformv1.DeviceProfile{Id: 9999, Name: "ghost"},
 		})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("InvalidEKCert", func(t *testing.T) {
-		req := encodeQUICRequest(t, quic.OpDeviceSetProfile, &platformv1.UpdateProfileRequest{
+		req := encodeQUICRequest(t, quicwire.OpDeviceSetProfile, &platformv1.UpdateProfileRequest{
 			Profile: &platformv1.DeviceProfile{Id: 7, EkCert: "garbage"},
 		})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 }
 
@@ -220,7 +220,7 @@ func TestQUICDeviceGetProfile_EKPrestageFields(t *testing.T) {
 		Assigned:   true,
 	}
 
-	req := encodeQUICRequest(t, quic.OpDeviceGetProfile, &platformv1.GetProfileRequest{Id: 77})
+	req := encodeQUICRequest(t, quicwire.OpDeviceGetProfile, &platformv1.GetProfileRequest{Id: 77})
 	resp := handler.HandleRequest(context.Background(), req)
 
 	var got platformv1.GetProfileResponse
@@ -236,9 +236,9 @@ func TestQUICDeviceGetProfile_EKPrestageFields(t *testing.T) {
 func TestQUICDeviceGetProfile_NotFound(t *testing.T) {
 	handler, _ := newQUICDeviceProfileHandler(t)
 
-	req := encodeQUICRequest(t, quic.OpDeviceGetProfile, &platformv1.GetProfileRequest{Id: 4040})
+	req := encodeQUICRequest(t, quicwire.OpDeviceGetProfile, &platformv1.GetProfileRequest{Id: 4040})
 	resp := handler.HandleRequest(context.Background(), req)
-	assert.Equal(t, quic.StatusNotFound, resp.Status)
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
 // TestQUICDeviceListProfiles_CountViaPagination verifies the list reply
@@ -249,7 +249,7 @@ func TestQUICDeviceListProfiles_CountViaPagination(t *testing.T) {
 	profileSvc.profiles[1] = &entities.DeviceProfile{ID: 1, Name: "a"}
 	profileSvc.profiles[2] = &entities.DeviceProfile{ID: 2, Name: "b"}
 
-	req := encodeQUICRequest(t, quic.OpDeviceListProfiles, &platformv1.ListProfilesRequest{})
+	req := encodeQUICRequest(t, quicwire.OpDeviceListProfiles, &platformv1.ListProfilesRequest{})
 	resp := handler.HandleRequest(context.Background(), req)
 
 	var list platformv1.ListProfilesResponse
@@ -267,7 +267,7 @@ func TestQUICDeviceProfileAssign_HappyPath(t *testing.T) {
 
 	profileSvc.profiles[300] = &entities.DeviceProfile{ID: 300, Name: "assign-me"}
 
-	req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceProfileSubAssign,
+	req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubAssign,
 		&platformv1.AssignProfileToDeviceRequest{
 			ProfileId:  300,
 			EkSerial:   "EK-3003",
@@ -298,39 +298,39 @@ func TestQUICDeviceProfileAssign_Errors(t *testing.T) {
 	profileSvc.profiles[301] = &entities.DeviceProfile{ID: 301, Name: "p"}
 
 	t.Run("MissingProfileID", func(t *testing.T) {
-		req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceProfileSubAssign,
+		req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubAssign,
 			&platformv1.AssignProfileToDeviceRequest{EkSerial: "EK-1"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("MissingIdentity", func(t *testing.T) {
-		req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceProfileSubAssign,
+		req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubAssign,
 			&platformv1.AssignProfileToDeviceRequest{ProfileId: 301})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("InvalidEKCert", func(t *testing.T) {
-		req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceProfileSubAssign,
+		req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubAssign,
 			&platformv1.AssignProfileToDeviceRequest{ProfileId: 301, EkSerial: "EK-1", EkCert: "junk"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("UnknownProfile", func(t *testing.T) {
-		req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceProfileSubAssign,
+		req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubAssign,
 			&platformv1.AssignProfileToDeviceRequest{ProfileId: 999999, EkSerial: "EK-1"})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 
 	t.Run("ServiceUnavailable", func(t *testing.T) {
 		bare := NewQUICServiceHandler(logging.DefaultLogger())
-		req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceProfileSubAssign,
+		req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubAssign,
 			&platformv1.AssignProfileToDeviceRequest{ProfileId: 301, EkSerial: "EK-1"})
 		resp := bare.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusUnavailable, resp.Status)
+		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
 }
 
@@ -348,7 +348,7 @@ func TestQUICDeviceProfileUnassign(t *testing.T) {
 		Assigned: true,
 	}
 
-	req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceProfileSubUnassign,
+	req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubUnassign,
 		&platformv1.UnassignProfileFromDeviceRequest{ProfileId: 400})
 	resp := handler.HandleRequest(ctx, req)
 
@@ -364,17 +364,17 @@ func TestQUICDeviceProfileUnassign(t *testing.T) {
 	assert.Empty(t, stored.EKCert)
 
 	t.Run("MissingProfileID", func(t *testing.T) {
-		req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceProfileSubUnassign,
+		req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubUnassign,
 			&platformv1.UnassignProfileFromDeviceRequest{})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 	})
 
 	t.Run("UnknownProfile", func(t *testing.T) {
-		req := encodeQUICCategoryRequest(t, quic.OpProvisioningCategory, quic.DeviceProfileSubUnassign,
+		req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubUnassign,
 			&platformv1.UnassignProfileFromDeviceRequest{ProfileId: 888888})
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quic.StatusNotFound, resp.Status)
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 	})
 }
 
@@ -384,7 +384,7 @@ func TestQUICDeviceRegisterGetDelete(t *testing.T) {
 	handler, _ := newQUICDeviceProfileHandler(t)
 	ctx := context.Background()
 
-	createReq := encodeQUICRequest(t, quic.OpDeviceRegister, &platformv1.CreateDeviceRequest{
+	createReq := encodeQUICRequest(t, quicwire.OpDeviceRegister, &platformv1.CreateDeviceRequest{
 		Device: &platformv1.Device{
 			Id:     5001,
 			Serial: "SN-5001",
@@ -397,21 +397,21 @@ func TestQUICDeviceRegisterGetDelete(t *testing.T) {
 	assert.Equal(t, uint64(5001), created.GetDevice().GetId())
 
 	// Get by ID (GetDeviceRequest shape).
-	getReq := encodeQUICRequest(t, quic.OpDeviceGet, &platformv1.GetDeviceRequest{Id: 5001})
+	getReq := encodeQUICRequest(t, quicwire.OpDeviceGet, &platformv1.GetDeviceRequest{Id: 5001})
 	resp = handler.HandleRequest(ctx, getReq)
 	var got platformv1.GetDeviceResponse
 	decodeQUICResponse(t, resp, &got)
 	assert.Equal(t, "SN-5001", got.GetDevice().GetSerial())
 
 	// Get by serial (FindDeviceBySerialRequest shape on the same opcode).
-	findReq := encodeQUICRequest(t, quic.OpDeviceGet, &platformv1.FindDeviceBySerialRequest{Serial: "SN-5001"})
+	findReq := encodeQUICRequest(t, quicwire.OpDeviceGet, &platformv1.FindDeviceBySerialRequest{Serial: "SN-5001"})
 	resp = handler.HandleRequest(ctx, findReq)
 	var found platformv1.FindDeviceBySerialResponse
 	decodeQUICResponse(t, resp, &found)
 	assert.Equal(t, uint64(5001), found.GetDevice().GetId())
 
 	// List carries the count in the pagination totals.
-	listReq := encodeQUICRequest(t, quic.OpDeviceList, &platformv1.ListDevicesRequest{})
+	listReq := encodeQUICRequest(t, quicwire.OpDeviceList, &platformv1.ListDevicesRequest{})
 	resp = handler.HandleRequest(ctx, listReq)
 	var list platformv1.ListDevicesResponse
 	decodeQUICResponse(t, resp, &list)
@@ -419,7 +419,7 @@ func TestQUICDeviceRegisterGetDelete(t *testing.T) {
 	assert.Equal(t, uint64(1), list.GetPagination().GetTotalItems())
 
 	// Delete.
-	deleteReq := encodeQUICRequest(t, quic.OpDeviceUnregister, &platformv1.DeleteDeviceRequest{Id: 5001})
+	deleteReq := encodeQUICRequest(t, quicwire.OpDeviceUnregister, &platformv1.DeleteDeviceRequest{Id: 5001})
 	resp = handler.HandleRequest(ctx, deleteReq)
 	var deleted platformv1.DeleteDeviceResponse
 	decodeQUICResponse(t, resp, &deleted)
@@ -431,7 +431,7 @@ func TestQUICDeviceRegisterGetDelete(t *testing.T) {
 func TestQUICDeviceRegister_MissingDevice(t *testing.T) {
 	handler, _ := newQUICDeviceProfileHandler(t)
 
-	req := encodeQUICRequest(t, quic.OpDeviceRegister, &platformv1.CreateDeviceRequest{})
+	req := encodeQUICRequest(t, quicwire.OpDeviceRegister, &platformv1.CreateDeviceRequest{})
 	resp := handler.HandleRequest(context.Background(), req)
-	assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
 }

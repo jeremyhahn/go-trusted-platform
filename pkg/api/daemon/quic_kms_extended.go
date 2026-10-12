@@ -18,14 +18,14 @@ import (
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // KMS extended category (opcode 0xCD) handlers.
 //
 // The single-byte KMS opcode range is exhausted, so the key-lifecycle
 // verbs (revoke, metadata get/update, policy get/set, supported
-// algorithms) multiplex under quic.OpKMSExtendedCategory with the first
+// algorithms) multiplex under quicwire.OpKMSExtendedCategory with the first
 // payload byte selecting the sub-operation. Dispatch is map-based per
 // project conventions. All handlers delegate to the KMSServiceInterface,
 // which is backed by the same SDK adapters as the gRPC transport.
@@ -122,23 +122,23 @@ type KMSGetSupportedAlgorithmsResponse struct {
 // =============================================================================
 
 // kmsExtendedQUICHandler handles a KMS extended sub-operation.
-type kmsExtendedQUICHandler func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quic.Response
+type kmsExtendedQUICHandler func(h *QUICServiceHandler, ctx context.Context, payload []byte) *quicwire.Response
 
 // kmsExtendedQUICDispatch routes KMS extended sub-opcodes with O(1) lookup.
 var kmsExtendedQUICDispatch = map[byte]kmsExtendedQUICHandler{
-	quic.KMSSubRevokeKey:              (*QUICServiceHandler).handleKMSRevokeKey,
-	quic.KMSSubGetKeyMetadata:         (*QUICServiceHandler).handleKMSGetKeyMetadata,
-	quic.KMSSubUpdateKeyMetadata:      (*QUICServiceHandler).handleKMSUpdateKeyMetadata,
-	quic.KMSSubSetKeyPolicy:           (*QUICServiceHandler).handleKMSSetKeyPolicy,
-	quic.KMSSubGetKeyPolicy:           (*QUICServiceHandler).handleKMSGetKeyPolicy,
-	quic.KMSSubGetSupportedAlgorithms: (*QUICServiceHandler).handleKMSGetSupportedAlgorithms,
+	quicwire.KMSSubRevokeKey:              (*QUICServiceHandler).handleKMSRevokeKey,
+	quicwire.KMSSubGetKeyMetadata:         (*QUICServiceHandler).handleKMSGetKeyMetadata,
+	quicwire.KMSSubUpdateKeyMetadata:      (*QUICServiceHandler).handleKMSUpdateKeyMetadata,
+	quicwire.KMSSubSetKeyPolicy:           (*QUICServiceHandler).handleKMSSetKeyPolicy,
+	quicwire.KMSSubGetKeyPolicy:           (*QUICServiceHandler).handleKMSGetKeyPolicy,
+	quicwire.KMSSubGetSupportedAlgorithms: (*QUICServiceHandler).handleKMSGetSupportedAlgorithms,
 }
 
 // handleKMSExtendedCategory routes a KMS extended request to the correct
 // sub-handler based on the first payload byte.
-func (h *QUICServiceHandler) handleKMSExtendedCategory(ctx context.Context, req *quic.Request) *quic.Response {
+func (h *QUICServiceHandler) handleKMSExtendedCategory(ctx context.Context, req *quicwire.Request) *quicwire.Response {
 	if h.kmsService == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "kms"})
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICServiceUnavailable{Service: "kms"})
 	}
 	sub, payload, errResp := subPayload(req)
 	if errResp != nil {
@@ -146,7 +146,7 @@ func (h *QUICServiceHandler) handleKMSExtendedCategory(ctx context.Context, req 
 	}
 	fn, ok := kmsExtendedQUICDispatch[sub]
 	if !ok {
-		return h.errorResponse(quic.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: sub})
+		return h.errorResponse(quicwire.StatusNotImplemented, ErrQUICUnknownOpcode{Opcode: sub})
 	}
 	return fn(h, ctx, payload)
 }
@@ -155,13 +155,13 @@ func (h *QUICServiceHandler) handleKMSExtendedCategory(ctx context.Context, req 
 // Sub-operation Handlers
 // =============================================================================
 
-func (h *QUICServiceHandler) handleKMSRevokeKey(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleKMSRevokeKey(ctx context.Context, payload []byte) *quicwire.Response {
 	var revokeReq KMSRevokeKeyRequest
-	if err := quic.DecodePayload(payload, &revokeReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &revokeReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if revokeReq.KeyID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "key_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "key_id"})
 	}
 
 	pbResp, err := h.kmsService.RevokeKey(ctx, &pb.RevokeKeyRequest{
@@ -170,7 +170,7 @@ func (h *QUICServiceHandler) handleKMSRevokeKey(ctx context.Context, payload []b
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to revoke key", "key_id", revokeReq.KeyID)
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "KMSRevokeKey", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSRevokeKey", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSRevokeKeyResponse{
@@ -180,19 +180,19 @@ func (h *QUICServiceHandler) handleKMSRevokeKey(ctx context.Context, payload []b
 	})
 }
 
-func (h *QUICServiceHandler) handleKMSGetKeyMetadata(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleKMSGetKeyMetadata(ctx context.Context, payload []byte) *quicwire.Response {
 	var metaReq KMSGetKeyMetadataRequest
-	if err := quic.DecodePayload(payload, &metaReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &metaReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if metaReq.KeyID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "key_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "key_id"})
 	}
 
 	pbResp, err := h.kmsService.GetKeyMetadata(ctx, &pb.GetKeyMetadataRequest{KeyId: metaReq.KeyID})
 	if err != nil {
 		h.logger.Error(err, "failed to get key metadata", "key_id", metaReq.KeyID)
-		return h.errorResponse(quic.StatusNotFound, ErrQUICOperationFailed{Op: "KMSGetKeyMetadata", Cause: err})
+		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "KMSGetKeyMetadata", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSGetKeyMetadataResponse{
@@ -201,13 +201,13 @@ func (h *QUICServiceHandler) handleKMSGetKeyMetadata(ctx context.Context, payloa
 	})
 }
 
-func (h *QUICServiceHandler) handleKMSUpdateKeyMetadata(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleKMSUpdateKeyMetadata(ctx context.Context, payload []byte) *quicwire.Response {
 	var updateReq KMSUpdateKeyMetadataRequest
-	if err := quic.DecodePayload(payload, &updateReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &updateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if updateReq.KeyID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "key_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "key_id"})
 	}
 
 	pbResp, err := h.kmsService.UpdateKeyMetadata(ctx, &pb.UpdateKeyMetadataRequest{
@@ -219,7 +219,7 @@ func (h *QUICServiceHandler) handleKMSUpdateKeyMetadata(ctx context.Context, pay
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to update key metadata", "key_id", updateReq.KeyID)
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "KMSUpdateKeyMetadata", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSUpdateKeyMetadata", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSUpdateKeyMetadataResponse{
@@ -228,16 +228,16 @@ func (h *QUICServiceHandler) handleKMSUpdateKeyMetadata(ctx context.Context, pay
 	})
 }
 
-func (h *QUICServiceHandler) handleKMSSetKeyPolicy(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleKMSSetKeyPolicy(ctx context.Context, payload []byte) *quicwire.Response {
 	var setReq KMSSetKeyPolicyRequest
-	if err := quic.DecodePayload(payload, &setReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &setReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if setReq.KeyID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "key_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "key_id"})
 	}
 	if setReq.Policy == nil {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "policy"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "policy"})
 	}
 
 	pbResp, err := h.kmsService.SetKeyPolicy(ctx, &pb.SetKeyPolicyRequest{
@@ -246,7 +246,7 @@ func (h *QUICServiceHandler) handleKMSSetKeyPolicy(ctx context.Context, payload 
 	})
 	if err != nil {
 		h.logger.Error(err, "failed to set key policy", "key_id", setReq.KeyID)
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "KMSSetKeyPolicy", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSSetKeyPolicy", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSSetKeyPolicyResponse{
@@ -256,19 +256,19 @@ func (h *QUICServiceHandler) handleKMSSetKeyPolicy(ctx context.Context, payload 
 	})
 }
 
-func (h *QUICServiceHandler) handleKMSGetKeyPolicy(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleKMSGetKeyPolicy(ctx context.Context, payload []byte) *quicwire.Response {
 	var getReq KMSGetKeyPolicyRequest
-	if err := quic.DecodePayload(payload, &getReq); err != nil {
-		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	if err := quicwire.DecodePayload(payload, &getReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 	if getReq.KeyID == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "key_id"})
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "key_id"})
 	}
 
 	pbResp, err := h.kmsService.GetKeyPolicy(ctx, &pb.GetKeyPolicyRequest{KeyId: getReq.KeyID})
 	if err != nil {
 		h.logger.Error(err, "failed to get key policy", "key_id", getReq.KeyID)
-		return h.errorResponse(quic.StatusNotFound, ErrQUICOperationFailed{Op: "KMSGetKeyPolicy", Cause: err})
+		return h.errorResponse(quicwire.StatusNotFound, ErrQUICOperationFailed{Op: "KMSGetKeyPolicy", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSGetKeyPolicyResponse{
@@ -277,11 +277,11 @@ func (h *QUICServiceHandler) handleKMSGetKeyPolicy(ctx context.Context, payload 
 	})
 }
 
-func (h *QUICServiceHandler) handleKMSGetSupportedAlgorithms(ctx context.Context, payload []byte) *quic.Response {
+func (h *QUICServiceHandler) handleKMSGetSupportedAlgorithms(ctx context.Context, payload []byte) *quicwire.Response {
 	pbResp, err := h.kmsService.GetSupportedAlgorithms(ctx, &pb.GetSupportedAlgorithmsRequest{})
 	if err != nil {
 		h.logger.Error(err, "failed to get supported algorithms")
-		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "KMSGetSupportedAlgorithms", Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICOperationFailed{Op: "KMSGetSupportedAlgorithms", Cause: err})
 	}
 
 	return h.encodeKMSExtendedResponse(&KMSGetSupportedAlgorithmsResponse{
@@ -291,13 +291,13 @@ func (h *QUICServiceHandler) handleKMSGetSupportedAlgorithms(ctx context.Context
 }
 
 // encodeKMSExtendedResponse encodes v as a StatusOK QUIC response.
-func (h *QUICServiceHandler) encodeKMSExtendedResponse(v interface{}) *quic.Response {
-	payload, err := quic.EncodePayload(v)
+func (h *QUICServiceHandler) encodeKMSExtendedResponse(v interface{}) *quicwire.Response {
+	payload, err := quicwire.EncodePayload(v)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.errorResponse(quicwire.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
 	}
-	return &quic.Response{
-		Status:  quic.StatusOK,
+	return &quicwire.Response{
+		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
 }

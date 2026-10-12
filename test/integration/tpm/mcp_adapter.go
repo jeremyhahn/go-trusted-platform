@@ -207,12 +207,12 @@ type MCPAdapter struct {
 func NewMCPAdapter() *MCPAdapter {
 	endpoint := os.Getenv(EnvPlatformMCPEndpoint)
 	if endpoint == "" {
-		endpoint = "http://" + GetServiceEndpoints().PlatformMCP
+		endpoint = GetServiceEndpoints().PlatformMCP
 	}
 
 	return &MCPAdapter{
-		endpoint:   endpoint,
-		httpClient: helpers.NewPlainHTTPClient(DefaultMCPTimeoutTPM),
+		endpoint:   helpers.MCPBaseURL(endpoint),
+		httpClient: helpers.NewHTTPClient(DefaultMCPTimeoutTPM),
 	}
 }
 

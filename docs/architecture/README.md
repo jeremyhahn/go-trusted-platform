@@ -151,7 +151,7 @@ The platform provides SDKs for Go and JavaScript that wrap both platform service
 
 For detailed documentation:
 - [SDK Integration Architecture](sdk-integration.md) - Platform Service Registry and SDK adapters
-- [SDK Overview](../api/sdk-overview.md) - Complete SDK documentation
+- [Go SDK](../sdk/architecture.md) - Complete SDK documentation
 - [QuicBaaS Integration](quicbaas-integration.md) - QuicBaaS service details
 
 ## Key Design Principles

@@ -40,6 +40,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login/logintest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -485,7 +486,7 @@ func TestBeginRegistration_UserAlreadyRegistered(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.users.On("Get", mock.Anything, userID).Return(&entities.User{ID: userID, Email: username}, nil)
-	h.writer.On("Write", w, req, http.StatusConflict, mock.MatchedBy(func(resp response.WebServiceResponse) bool {
+	h.writer.On("Write", w, req, http.StatusConflict, mock.MatchedBy(func(resp restwire.WebServiceResponse) bool {
 		return resp.Code == http.StatusConflict && resp.Error == ErrUserAlreadyExists.Error() && !resp.Success
 	})).Return()
 	h.handler.BeginRegistration(w, req)

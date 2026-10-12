@@ -21,6 +21,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
 func TestGetProtocols_WithoutConfig(t *testing.T) {
@@ -37,7 +38,7 @@ func TestGetProtocols_WithoutConfig(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
 	}
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestGetProtocols_WithConfig(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
@@ -137,7 +138,7 @@ func TestGetProtocols_WithRESTServerRunningFunc(t *testing.T) {
 		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
-	var resp response.WebServiceResponse
+	var resp restwire.WebServiceResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
