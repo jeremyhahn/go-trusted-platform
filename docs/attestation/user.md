@@ -235,6 +235,24 @@ refreshDeviceReport / describeCallers`, and `classifyDeviceReport()` turns a
 report response into the four states above so no page decides on its own
 what a 404 means.
 
+The **Attestation** page summarises the same reports for the fleet: devices
+reporting, `Verified`, `Failed`, `Not verified`, and how many are stale. It
+counts the verifier's verdicts, never manifests. When the fleet needs action it
+shows an **Attestation needs attention** banner naming each state:
+
+| Banner line | Means | Look at |
+|---|---|---|
+| No device has an attestation verdict | the collector has reported on no device | `attestation.reporting.enabled` on the control plane, and whether its devices are dialable |
+| N devices past the collector TTL | the collector has not re-attested on schedule — the over-threshold signal; the threshold is the collector TTL | the collector's log on the control plane |
+| N devices reached no verdict | a check could not run (no AK certificate, CA or PCR baseline) | the device detail page for which check |
+| N devices failed attestation | a check ran and failed | the device detail page |
+| Attestation reporting is not configured on this node | the reports route answered `503` | `attestation.reporting` on this node |
+
+A verification pipeline that has stopped therefore no longer looks like one
+with nothing to do. The manifests and quotes listed under the summary are
+evidence, labelled `Signed` or `Unsigned`; a signature on a manifest is not a
+verdict, and no manifest is shown as verified, failed or pending.
+
 ## The control plane appears in its own fleet
 
 The control plane registers itself as a device in its own registry on every

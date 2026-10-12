@@ -13,14 +13,16 @@
 
 package aesgcm
 
-// MessageError is a typed error carrying a fully formatted message with no
-// underlying cause. It replaces inline formatted-error constructions that do not wrap
-// another error.
-type MessageError struct {
-	Msg string
+import "fmt"
+
+// ErrCiphertextTooShort is returned by Open for a blob shorter than a nonce
+// plus an authentication tag, which therefore cannot be anything Seal produced.
+type ErrCiphertextTooShort struct {
+	Length int
 }
 
 // Error implements the error interface.
-func (e *MessageError) Error() string {
-	return e.Msg
+func (e ErrCiphertextTooShort) Error() string {
+	return fmt.Sprintf("aesgcm: ciphertext of %d bytes is shorter than nonce and tag (%d bytes)",
+		e.Length, NonceSize+TagSize)
 }

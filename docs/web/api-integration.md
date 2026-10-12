@@ -26,7 +26,7 @@ The frontend communicates with the Trusted Platform REST API at the following en
 │ Browser │                     │ Frontend│                     │ Backend │
 └────┬────┘                     └────┬────┘                     └────┬────┘
      │                               │                               │
-     │  1. Enter username            │                               │
+     │  1. Enter email               │                               │
      │ ───────────────────────────►  │                               │
      │                               │                               │
      │                               │  2. POST /registration/begin  │
@@ -61,13 +61,13 @@ The frontend communicates with the Trusted Platform REST API at the following en
 ```typescript
 const handleRegister = async () => {
   // Step 1: Validate input
-  if (!username) {
-    setErrorMessage("Please enter a username.");
+  if (!email) {
+    setErrorMessage("Please enter your email address.");
     return;
   }
 
   // Step 2: Begin registration
-  const requestBody: { username: string; invitation_token?: string } = { username };
+  const requestBody: { email: string; invitation_token?: string } = { email };
   if (invitationToken) {
     requestBody.invitation_token = invitationToken;
   }
@@ -287,7 +287,7 @@ The token is included in the registration request:
 
 ```typescript
 const requestBody = {
-  username: username,
+  email: email,
   invitation_token: invitationToken,  // Included when accepting invitation
 };
 
@@ -385,7 +385,7 @@ const CONTEXT_ERROR_MESSAGES: Record<ErrorCode, { login: string; register: strin
   },
   USER_EXISTS: {
     login: "Please enter your passkey to log in.",
-    register: "An account with this username already exists. Please log in instead.",
+    register: "An account with this email already exists. Please log in instead.",
   },
   // ... more messages
 };

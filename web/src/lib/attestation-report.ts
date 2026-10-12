@@ -166,3 +166,85 @@ export function baselineAge(report: Pick<DeviceReport, 'pcr_baseline_recorded_at
   if (!Number.isFinite(recorded.getTime())) return undefined;
   return formatDistanceStrict(recorded, now);
 }
+
+/** Where the fleet's report read stands: the reporting service answers 503 when it is not configured. */
+export type FleetReportsState = 'loading' | 'ready' | 'not-configured' | 'error';
+
+/** Classifies the fleet report read so every page names a 503 the same way. */
+export function fleetReportsState(loading: boolean, error: { status?: number } | null | undefined): FleetReportsState {
+  if (loading) return 'loading';
+  if (!error) return 'ready';
+  return error.status === 503 ? 'not-configured' : 'error';
+}
+
+/** The fleet's verifier verdicts, counted the way `verdictBadge` labels them (#643). */
+export interface FleetVerdictSummary {
+  total: number;
+  verified: number;
+  /** A check ran and failed */
+  failed: number;
+  /** No verdict was reached: a check could not run */
+  notVerified: number;
+  /** Past the collector TTL: the collector has not re-attested on schedule */
+  stale: number;
+}
+
+/** Counts the collector's cached reports by verdict and freshness. */
+export function summarizeReports(
+  reports: ReadonlyArray<Pick<DeviceReport, 'verified' | 'cryptographic_failure' | 'fresh'>>
+): FleetVerdictSummary {
+  const summary: FleetVerdictSummary = { total: 0, verified: 0, failed: 0, notVerified: 0, stale: 0 };
+  for (const report of reports) {
+    summary.total++;
+    if (report.verified) {
+      summary.verified++;
+    } else if (report.cryptographic_failure) {
+      summary.failed++;
+    } else {
+      summary.notVerified++;
+    }
+    if (!report.fresh) {
+      summary.stale++;
+    }
+  }
+  return summary;
+}
+
+function devices(count: number): string {
+  return count === 1 ? '1 device' : `${count} devices`;
+}
+
+/**
+ * The fleet attestation states an operator must act on (#643). A pipeline
+ * that has stopped must not look like one with nothing to do: no verdicts at
+ * all, verdicts the collector has let go stale (the over-threshold signal —
+ * the threshold is the collector TTL), and verdicts never reached are each a
+ * problem, alongside failures. An empty list means every device is verified
+ * on fresh evidence.
+ */
+export function fleetAttestationProblems(summary: FleetVerdictSummary, state: FleetReportsState): string[] {
+  if (state === 'not-configured') {
+    return ['Attestation reporting is not configured on this node: no device is being verified.'];
+  }
+  if (state !== 'ready') {
+    return [];
+  }
+  if (summary.total === 0) {
+    return ['No device has an attestation verdict: the collector has not reported on any device.'];
+  }
+  const problems: string[] = [];
+  if (summary.failed > 0) {
+    problems.push(`${devices(summary.failed)} failed attestation: a check ran and failed.`);
+  }
+  if (summary.notVerified > 0) {
+    problems.push(
+      `${devices(summary.notVerified)} reached no verdict: a check could not run (no AK certificate, CA or PCR baseline).`
+    );
+  }
+  if (summary.stale > 0) {
+    problems.push(
+      `${devices(summary.stale)} past the collector TTL: the collector has not re-attested on schedule.`
+    );
+  }
+  return problems;
+}

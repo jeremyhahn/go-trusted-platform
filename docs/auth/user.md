@@ -264,8 +264,10 @@ identifies you and the platform resolves your account from the credential it
 presents. If you hold passkeys for more than one account, your authenticator
 asks which — the platform cannot narrow that down for you, and a username box
 that looked as though it did would be telling you something untrue.
-Registration still asks for a username, because that is when the account is
-named.
+Registration asks for your email address, because that is when the account is
+named. It must be a full address (`name@example.com`): the platform refuses
+anything else before it creates the account, rather than leaving behind a user
+and workspace that cannot sign in.
 
 Successful login yields a session:
 

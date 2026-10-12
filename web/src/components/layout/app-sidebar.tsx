@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useLogout } from "@/hooks/use-logout";
+import { useSignedInIdentity } from "@/hooks/use-signed-in-identity";
 import {
   LayoutDashboard,
   Shield,
@@ -43,7 +44,7 @@ import {
   SidebarCollapsibleContent,
   SidebarRail,
 } from "@/components/ui/sidebar";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -184,13 +185,7 @@ const navigation = [
   },
 ];
 
-interface AppSidebarProps extends React.ComponentPropsWithoutRef<typeof Sidebar> {
-  user?: {
-    name: string;
-    email: string;
-    avatar?: string;
-  };
-}
+type AppSidebarProps = React.ComponentPropsWithoutRef<typeof Sidebar>;
 
 /**
  * Main application sidebar with navigation
@@ -198,20 +193,22 @@ interface AppSidebarProps extends React.ComponentPropsWithoutRef<typeof Sidebar>
  * Features:
  * - Hierarchical navigation with collapsible groups
  * - Active state tracking based on pathname
- * - User profile dropdown in footer
+ * - Account dropdown in the footer showing the signed-in account from the
+ *   session claims
  * - Responsive behavior (sheet on mobile, collapsible on desktop)
  *
  * @example
  * ```tsx
  * <SidebarProvider>
- *   <AppSidebar user={{ name: "John Doe", email: "john@example.com" }} />
+ *   <AppSidebar />
  *   <main>...</main>
  * </SidebarProvider>
  * ```
  */
-export function AppSidebar({ user, ...props }: AppSidebarProps) {
+export function AppSidebar(props: AppSidebarProps) {
   const pathname = usePathname();
   const handleLogout = useLogout();
+  const identity = useSignedInIdentity();
 
   // Check if a navigation item or its children are active
   const isActive = (href: string) => pathname === href;
@@ -297,16 +294,22 @@ export function AppSidebar({ user, ...props }: AppSidebarProps) {
                   aria-label="Account menu"
                 >
                   <Avatar className="h-8 w-8">
-                    <AvatarImage src={user?.avatar} alt={user?.name} />
                     <AvatarFallback className="bg-primary text-primary-foreground">
-                      {user?.name?.charAt(0).toUpperCase() ?? "U"}
+                      {identity?.initial}
                     </AvatarFallback>
                   </Avatar>
-                  <div className="flex flex-col items-start text-left text-sm">
-                    <span className="font-medium">{user?.name ?? "User"}</span>
-                    <span className="text-xs text-neutral-500 dark:text-neutral-400">
-                      {user?.email ?? "user@example.com"}
+                  <div className="flex min-w-0 flex-col items-start text-left text-sm">
+                    <span
+                      className="w-full truncate font-medium"
+                      data-testid="sidebar-account-email"
+                    >
+                      {identity?.email}
                     </span>
+                    {identity?.tenantId && (
+                      <span className="w-full truncate text-xs text-neutral-500 dark:text-neutral-400">
+                        {identity.tenantId}
+                      </span>
+                    )}
                   </div>
                 </SidebarMenuButton>
               </DropdownMenuTrigger>

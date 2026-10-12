@@ -243,7 +243,7 @@ test.describe('Authentication Flow', () => {
     await page.goto('/auth/webauthn?status=not_registered');
 
     await expect(page.locator('h2')).toContainText('Register');
-    await expect(page.getByPlaceholder('Enter your username')).toBeVisible();
+    await expect(page.getByPlaceholder('Enter your email')).toBeVisible();
     await expect(page.getByRole('button', { name: /register/i })).toBeVisible();
   });
 
@@ -269,7 +269,7 @@ test.describe('Authentication Flow', () => {
     await page.click('button:has-text("Register")');
 
     // Should show validation error
-    await expect(page.getByText(/please enter a username/i)).toBeVisible();
+    await expect(page.getByText(/please enter your email address/i)).toBeVisible();
   });
 });
 ```

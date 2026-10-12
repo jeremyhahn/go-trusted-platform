@@ -392,7 +392,11 @@ resolved at `Info` once per client so a run log shows which one won:
   useless for power, boot, virtual media and sensors alike.
   `HardwareIdentity` deliberately bypasses the negative cache
   (`discoverFresh`) because the bootstrap layer retries it, bounded, once per
-  node and not in a loop.
+  node and not in a loop. A successful fresh discovery latches for every
+  gated call, so the bootstrap layer reads the identity *before*
+  `GetSystemInfo`: system info then rides a discovery the identity retry
+  recovered instead of the cached failure (#206,
+  `TestRedfishClient_GetSystemInfo_RidesDiscoveryRecoveredByIdentity`).
 - **`Client.HardwareIdentity`** — returns the `quirks.Identity` the client
   itself resolves from, so a caller lands on that client's registry entry
   and no other. It is deliberately not `SystemInfo`: over IPMI,

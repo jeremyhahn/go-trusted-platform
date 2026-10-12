@@ -395,3 +395,51 @@ func TestRedfishClient_HardwareIdentity_BypassesTheNegativeCache(t *testing.T) {
 		t.Errorf("quirk after recovery = %q, want supermicro/x10sdv", got)
 	}
 }
+
+// TestRedfishClient_GetSystemInfo_RidesDiscoveryRecoveredByIdentity pins the
+// contract bootstrap discovery relies on (#206): GetSystemInfo is served the
+// negative cache, so it cannot recover from a discovery blip on its own, but
+// once HardwareIdentity's fresh discovery succeeds the success latches and
+// GetSystemInfo answers. pkg/bootstrap reads the identity first for exactly
+// this reason.
+func TestRedfishClient_GetSystemInfo_RidesDiscoveryRecoveredByIdentity(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+	state.manufacturer = "Supermicro"
+	state.model = "Super Server"
+
+	var rootHits int32
+	inner := server.Config.Handler
+	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redfish/v1/" || r.URL.Path == "/redfish/v1" {
+			if atomic.AddInt32(&rootHits, 1) == 1 {
+				http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
+		inner.ServeHTTP(w, r)
+	})
+
+	client := newTestRedfishClient(t, server)
+	t.Cleanup(func() { client.Close() })
+
+	if _, err := client.GetSystemInfo(context.Background()); err == nil {
+		t.Fatal("first system info read should surface the transient discovery failure")
+	}
+	// Inside discoveryFailureTTL the failure is cached: GetSystemInfo alone
+	// never recovers, which is why the bootstrap layer must not read it first.
+	if _, err := client.GetSystemInfo(context.Background()); err == nil {
+		t.Fatal("system info re-read inside the TTL succeeded; the negative cache no longer applies and #206's ordering rationale is stale")
+	}
+
+	if _, err := client.HardwareIdentity(context.Background()); err != nil {
+		t.Fatalf("identity read did not recover discovery: %v", err)
+	}
+	info, err := client.GetSystemInfo(context.Background())
+	if err != nil {
+		t.Fatalf("system info after the identity read recovered discovery: %v", err)
+	}
+	if info.Manufacturer != "Supermicro" || info.Product != "Super Server" {
+		t.Errorf("system info = %+v, want the recovered Supermicro / Super Server", info)
+	}
+}

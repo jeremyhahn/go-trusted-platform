@@ -106,11 +106,13 @@ a browser will not run a WebAuthn ceremony from an `http://` page anyway.
 
 ## Signing in
 
-`/` redirects to `/auth/webauthn`. Enter a username and either register a
-passkey or log in with one.
+`/` redirects to `/auth/webauthn`. Log in with a passkey, or register one.
 
-- **Registration** creates the credential and drops you at `/dashboard`.
-- **Login** authenticates an existing passkey.
+- **Registration** asks for your email address, creates the credential and
+  drops you at `/dashboard`. The address must be a full one
+  (`name@example.com`); anything the IAM identity store would reject is
+  refused before an account exists (#643).
+- **Login** asks for nothing: your authenticator picks the passkey.
 - **Invitations** arrive as `/auth/webauthn?invitation=<token>` and put the
   page straight into registration mode. `?tenant_name=` is displayed if present.
 - **If a `jwt` cookie already exists**, the page skips straight to
@@ -120,8 +122,9 @@ Common messages and what they actually mean:
 
 | You see | It means |
 |---|---|
-| "Account not found…" | 404 — no such username |
-| "An account with this username already exists. Please log in instead." | 409 on register |
+| "Account not found…" | 404 — no such account |
+| "An account with this email already exists. Please log in instead." | 409 on register |
+| "Invalid input. Please check your email address and try again." | 400 on register, e.g. an address that is not `name@domain.tld` |
 | "Please enter your passkey to log in." | 409 on login |
 | "Too many attempts. Please wait a moment and try again." | 429 |
 | "Something went wrong on our end." | 5xx |
@@ -132,8 +135,11 @@ Raw errors are never shown; the mapping is deliberate.
 
 ## What is in the console
 
-The authenticated surface is one dashboard with a sidebar. Roughly seventy
-pages across:
+The authenticated surface is one dashboard with a sidebar. The sidebar footer
+and the header's account menu show the signed-in account — its email and
+tenant, read from the session token's claims. The token carries no display
+name, so there is none to show; without a session the slot is empty rather
+than a placeholder. Roughly seventy pages across:
 
 | Area | Covers |
 |---|---|
@@ -143,7 +149,7 @@ pages across:
 | CA | Certificates, requests, CRL, trust bundle |
 | KMS | Keys, encrypt/decrypt |
 | Devices | Device registry with each device's attestation verdict beside its age (fresh / stale / never collected), whether an attestation certificate is enrolled, and a "Refresh attestation" action that enqueues a collection; device detail with the full report (which check failed, cryptographic vs could-not-run, baseline source and age) and the address of the last heartbeat; profiles (with each profile's PCR baseline: source, age, registers, seeding device), templates, IDevID, vTPM |
-| Attestation | Manifests, quotes, event logs, verification. Per-device verdicts live on the Devices pages (above) |
+| Attestation | The fleet's verifier verdicts (devices reporting, verified, failed, not verified, stale) with an **Attestation needs attention** banner when there are none, any are stale past the collector TTL, unverdicted or failed, or reporting is not configured; then manifests and quotes, labelled **Signed** / **Unsigned** — evidence, never a verdict — event logs, verification. Per-device verdicts live on the Devices pages (above) |
 | TPM | Status, PCRs, quote, seal, NV RAM, keys, event log, lockout |
 | Compute | VMs, containers, images, snapshots. On a node without the compute service (e.g. a control plane), the VM/container/snapshot pages show an informational "not available on this node" state; Images stays live (registry-backed) |
 | Networking | SDN, zones, VLANs, DNS, IPAM, overlays, gateway, ports, flows, PXE. PXE and gatewayd run on the gateway role, so on a control plane the PXE and Gateway pages show an informational "not available on this node" state in place of the local-service cards, and the fleet telemetry from `/api/v1/gateway/state` (reporting gateways, their PXE status and boots served) stays the primary content. Selecting a reported gateway opens its **Datapath** detail: per-service active/healthy state with the reason a refused service cannot run, BGP sessions with prefix counters and BFD, tunnels with their transport and uplink pin, uplink policy routes, the nftables host filter's fingerprint, NAT and the base OVS pipeline. A section a gateway does not run is not drawn, so an empty table never stands in for "not running" |

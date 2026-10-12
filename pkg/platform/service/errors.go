@@ -121,6 +121,16 @@ func (e ErrUserAlreadyExists) Error() string {
 	return fmt.Sprintf("user already exists: email=%s", e.Email)
 }
 
+// ErrInvalidEmail is returned when an address is not one the IAM identity
+// store accepts, so it cannot become a platform user.
+type ErrInvalidEmail struct {
+	Email string
+}
+
+func (e ErrInvalidEmail) Error() string {
+	return fmt.Sprintf("invalid email address: %q", e.Email)
+}
+
 // ErrInvalidInvitation is returned when an invitation is invalid.
 type ErrInvalidInvitation struct {
 	Reason string

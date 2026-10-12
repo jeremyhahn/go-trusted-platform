@@ -530,7 +530,8 @@ func (o *Orchestrator) discover(ctx context.Context) ([]DiscoveredNode, error) {
 	o.logger.Info("bootstrap: starting node discovery",
 		slog.Int("node_count", len(o.config.Nodes)))
 	discovered, err := DiscoverNodes(ctx, o.config.Nodes, o.logger, DiscoveryOptions{
-		TLSProvider: o.bmcTLSProvider,
+		TLSProvider:   o.bmcTLSProvider,
+		ClientFactory: o.bmcFactory,
 	})
 	if err != nil {
 		return nil, err

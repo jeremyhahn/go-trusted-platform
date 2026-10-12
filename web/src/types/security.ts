@@ -90,7 +90,11 @@ export interface Attestation {
   deviceId: string;
   deviceName: string;
   tpmManufacturer: string;
-  status: 'verified' | 'failed' | 'pending';
+  /**
+   * Whether the manifest carries a signature. A manifest is evidence, not a
+   * verdict: the verifier's verdict is the device report (#643).
+   */
+  status: 'signed' | 'unsigned';
   attestedAt: string;
 }
 
@@ -98,10 +102,6 @@ export interface AttestationDetail extends Attestation {
   quote: string;
   pcrValues: Record<number, string>;
   eventLog: EventLogEntry[];
-  verificationResult: {
-    valid: boolean;
-    errors?: string[];
-  };
   deviceInfo: {
     tpmVersion: string;
     firmwareVersion: string;
@@ -117,9 +117,3 @@ export interface EventLogEntry {
   timestamp?: string;
 }
 
-export interface AttestationStats {
-  total: number;
-  verified: number;
-  failed: number;
-  pending: number;
-}

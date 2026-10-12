@@ -4,10 +4,15 @@
  * Attestation Dashboard Page
  *
  * Features:
- * - View attestation statistics
- * - List all attestation reports
- * - View attestation details
- * - Request new attestations
+ * - The fleet's verifier verdicts: verified, failed, not verified, stale
+ * - Problems an operator must act on, including a verifier that has stopped
+ * - List host manifests (signed evidence, not verdicts)
+ * - Request new manifests
+ *
+ * The summary counts the collector's cached device reports — the verifier's
+ * own verdicts — never the manifests (#643). Counting manifests called every
+ * manifest without a host section "pending" forever, so a fleet nothing had
+ * verified read as a clean dashboard.
  *
  * Uses the trusted-platform-sdk for API interactions.
  */
@@ -16,30 +21,55 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AttestationTable } from "@/components/features/attestation/attestation-table";
 import { useAttestation, useApi, useMutation, useToast } from "@/hooks";
-import type { Attestation, AttestationStats } from "@/types/security";
+import {
+  fleetAttestationProblems,
+  fleetReportsState,
+  summarizeReports,
+} from "@/lib/attestation-report";
+import type { Attestation } from "@/types/security";
 import type { HostManifest } from "trusted-platform-sdk";
 import {
   Shield,
   ShieldCheck,
   ShieldAlert,
-  Clock,
+  ShieldQuestion,
   AlertCircle,
+  AlertTriangle,
   RefreshCw,
 } from "lucide-react";
+
+function percentOf(count: number, total: number): string {
+  return total > 0 ? `${((count / total) * 100).toFixed(1)}%` : "0%";
+}
 
 export default function AttestationPage() {
   const router = useRouter();
   const { toast } = useToast();
   const attestation = useAttestation();
 
-  // Fetch manifests using SDK
+  // The verifier's cached verdicts, one per collected device
+  const {
+    data: reportsData,
+    isLoading: reportsLoading,
+    error: reportsError,
+    refetch: loadReports,
+  } = useApi(() => attestation.listDeviceReports(), []);
+  const reportsState = fleetReportsState(reportsLoading, reportsError);
+  const summary = React.useMemo(
+    () => summarizeReports(reportsData?.reports ?? []),
+    [reportsData]
+  );
+  const problems = fleetAttestationProblems(summary, reportsState);
+
+  // Host manifests: signed evidence documents, listed below the verdicts
   const {
     data: manifestsData,
     isLoading: loading,
     error,
-    refetch: loadData,
+    refetch: loadManifests,
   } = useApi(
     () => attestation.listManifests(),
     [],
@@ -54,20 +84,14 @@ export default function AttestationPage() {
     }
   );
 
-  // Helper to determine attestation status from manifest
-  const getManifestStatus = (manifest: HostManifest): Attestation["status"] => {
-    // If host attestation exists and has valid signature, it's verified
-    if (manifest.host && manifest.signature) {
-      return "verified";
-    }
-    // If no host attestation, it's pending
-    if (!manifest.host) {
-      return "pending";
-    }
-    return "pending";
+  const loadData = () => {
+    loadManifests();
+    loadReports();
   };
 
-  // Transform SDK manifests to local Attestation type for UI compatibility
+  // Transform SDK manifests to local Attestation type for UI compatibility.
+  // A signature makes a manifest signed evidence; only the verifier issues a
+  // verdict, and that is the device report counted above.
   const attestations: Attestation[] = React.useMemo(() => {
     if (!manifestsData?.manifests) return [];
     return manifestsData.manifests.map((m: HostManifest) => ({
@@ -75,20 +99,10 @@ export default function AttestationPage() {
       deviceId: m.hostId || "",
       deviceName: m.hostId || "Unknown Device",
       tpmManufacturer: m.host?.firmwareVersion || "Unknown",
-      status: getManifestStatus(m),
+      status: m.signature ? ("signed" as const) : ("unsigned" as const),
       attestedAt: m.timestamp || new Date().toISOString(),
     }));
   }, [manifestsData]);
-
-  // Compute stats from attestations
-  const stats: AttestationStats = React.useMemo(() => {
-    return {
-      total: attestations.length,
-      verified: attestations.filter((a) => a.status === "verified").length,
-      failed: attestations.filter((a) => a.status === "failed").length,
-      pending: attestations.filter((a) => a.status === "pending").length,
-    };
-  }, [attestations]);
 
   // Request attestation mutation (builds a new manifest)
   const requestMutation = useMutation(
@@ -140,8 +154,8 @@ export default function AttestationPage() {
             Monitor and verify TPM-based device attestations
           </p>
         </div>
-        <Button variant="outline" onClick={() => loadData()} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+        <Button variant="outline" onClick={() => loadData()} disabled={loading || reportsLoading}>
+          <RefreshCw className={`mr-2 h-4 w-4 ${loading || reportsLoading ? "animate-spin" : ""}`} />
           Refresh
         </Button>
       </div>
@@ -157,17 +171,44 @@ export default function AttestationPage() {
         </div>
       )}
 
-      {/* Statistics Cards */}
+      {/* Problems: verdicts nobody is acting on, or a verifier that has stopped */}
+      {problems.length > 0 && (
+        <Alert variant="destructive" data-testid="attestation-fleet-problems">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Attestation needs attention</AlertTitle>
+          <AlertDescription>
+            <ul className="mt-1 list-disc space-y-1 pl-4">
+              {problems.map((problem) => (
+                <li key={problem}>{problem}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {reportsState === "error" && reportsError && (
+        <div className="flex items-center gap-2 p-4 bg-destructive/10 border border-destructive rounded-lg">
+          <AlertCircle className="h-4 w-4 text-destructive" />
+          <div>
+            <p className="font-medium text-destructive">Device verdicts unavailable</p>
+            <p className="text-sm text-destructive">{reportsError.message}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Verdict Cards: the verifier's cached verdicts, one per device */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Attestations</CardTitle>
+            <CardTitle className="text-sm font-medium">Devices Reporting</CardTitle>
             <Shield className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats.total}</div>
+            <div className="text-2xl font-bold" data-testid="attestation-stat-total">
+              {summary.total}
+            </div>
             <p className="text-xs text-muted-foreground">
-              All attestation reports
+              Devices with a verifier verdict
             </p>
           </CardContent>
         </Card>
@@ -178,14 +219,14 @@ export default function AttestationPage() {
             <ShieldCheck className="h-4 w-4 text-green-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-              {stats.verified}
+            <div
+              className="text-2xl font-bold text-green-600 dark:text-green-400"
+              data-testid="attestation-stat-verified"
+            >
+              {summary.verified}
             </div>
             <p className="text-xs text-muted-foreground">
-              {stats.total > 0
-                ? `${((stats.verified / stats.total) * 100).toFixed(1)}%`
-                : "0%"}{" "}
-              of total
+              {percentOf(summary.verified, summary.total)} of devices
             </p>
           </CardContent>
         </Card>
@@ -196,37 +237,41 @@ export default function AttestationPage() {
             <ShieldAlert className="h-4 w-4 text-destructive" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-destructive">
-              {stats.failed}
+            <div className="text-2xl font-bold text-destructive" data-testid="attestation-stat-failed">
+              {summary.failed}
             </div>
             <p className="text-xs text-muted-foreground">
-              {stats.total > 0
-                ? `${((stats.failed / stats.total) * 100).toFixed(1)}%`
-                : "0%"}{" "}
-              of total
+              A check ran and failed
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Pending</CardTitle>
-            <Clock className="h-4 w-4 text-orange-500" />
+            <CardTitle className="text-sm font-medium">Not Verified</CardTitle>
+            <ShieldQuestion className="h-4 w-4 text-orange-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
-              {stats.pending}
+            <div
+              className="text-2xl font-bold text-orange-600 dark:text-orange-400"
+              data-testid="attestation-stat-not-verified"
+            >
+              {summary.notVerified}
             </div>
-            <p className="text-xs text-muted-foreground">
-              Awaiting verification
+            <p className="text-xs text-muted-foreground" data-testid="attestation-stat-stale">
+              No verdict reached · {summary.stale} stale
             </p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Attestations Table */}
+      {/* Host Manifests Table */}
       <div>
-        <h2 className="text-xl font-semibold mb-4">Recent Attestations</h2>
+        <h2 className="text-xl font-semibold mb-1">Host Manifests</h2>
+        <p className="text-sm text-muted-foreground mb-4">
+          Signed evidence documents. A manifest is not a verdict: each device&apos;s
+          verdict is counted above and shown on the Devices page.
+        </p>
         <AttestationTable
           attestations={attestations}
           onView={handleView}

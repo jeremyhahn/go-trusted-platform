@@ -228,6 +228,15 @@ The four ceremony endpoints speak the browser's native shapes; all
 ceremony state (challenge / session) lives in the quicbaas SDK and the
 platform persists none of it:
 
+- **`registration/begin` takes `{"email", "invitation_token"?}` and
+  validates the address before anything else is derived from it.** The
+  address becomes the user id, the tenant owner label and the mirrored IAM
+  identity, so an address the IAM identity store would reject
+  (`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`) is answered 400
+  (`service.ErrInvalidEmail`) at begin. No ceremony is opened, no
+  registration session is stored and no user or tenant is created (#643).
+  Invitations apply the same rule (`service.ValidateEmail`). The SDK does
+  not export IAM's validator, so the platform holds the one copy.
 - **Begin** (`registration/begin`, `login/begin`) returns the parsed
   WebAuthn options object: `publicKey` at the top level, plus
   `session_id` — the ceremony session the client must echo back.

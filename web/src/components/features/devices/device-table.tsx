@@ -36,13 +36,11 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAttestation, useDevice, useMutation } from '@/hooks';
 import type { DeviceReport } from 'trusted-platform-sdk';
-import { clockBadge, freshnessBadge, verdictBadge } from '@/lib/attestation-report';
+import { clockBadge, freshnessBadge, verdictBadge, type FleetReportsState } from '@/lib/attestation-report';
 import { DEVICE_TOGGLE_UNAVAILABLE } from '@/lib/device-lifecycle';
 import type { Device } from '@/types/device';
 
 /** How the fleet's attestation reports were fetched, for the Attestation column. */
-export type FleetReportsState = 'loading' | 'ready' | 'not-configured' | 'error';
-
 interface DeviceTableProps {
   devices: Device[];
   onDeviceChange?: () => void;

@@ -72,6 +72,12 @@ type DiscoveryOptions struct {
 	// TLSProvider is injected by the orchestrator so every BMC connection
 	// uses the run-scoped trust resolver. When nil, system roots are used.
 	TLSProvider bmc.TLSProvider
+
+	// ClientFactory builds the BMC client discovery reads system info and
+	// the hardware identity through. The orchestrator injects its own
+	// bmcFactory so discovery shares the seam every other BMC call site in
+	// this package uses. When nil, bmc.NewDefaultClientFactory is used.
+	ClientFactory bmc.ClientFactory
 }
 
 // DiscoverNodes iterates all nodes, queries BMCs for MAC addresses on
@@ -86,6 +92,10 @@ func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger,
 	var o DiscoveryOptions
 	if len(opts) > 0 {
 		o = opts[0]
+	}
+	factory := o.ClientFactory
+	if factory == nil {
+		factory = bmc.NewDefaultClientFactory(logger)
 	}
 
 	results := make([]DiscoveredNode, len(nodes))
@@ -123,7 +133,7 @@ func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger,
 		wg.Add(1)
 		go func(idx int, n *NodeConfig) {
 			defer wg.Done()
-			discovered, err := discoverBMCNode(ctx, n, o.TLSProvider, logger)
+			discovered, err := discoverBMCNode(ctx, n, o.TLSProvider, factory, logger)
 			resultCh <- discoveryResult{index: idx, node: discovered, err: err}
 		}(i, node)
 	}
@@ -149,7 +159,7 @@ func DiscoverNodes(ctx context.Context, nodes []NodeConfig, logger *slog.Logger,
 }
 
 // discoverBMCNode performs MAC and system info discovery for a single BMC-managed node.
-func discoverBMCNode(ctx context.Context, node *NodeConfig, tlsProvider bmc.TLSProvider, logger *slog.Logger) (DiscoveredNode, error) {
+func discoverBMCNode(ctx context.Context, node *NodeConfig, tlsProvider bmc.TLSProvider, factory bmc.ClientFactory, logger *slog.Logger) (DiscoveredNode, error) {
 	bmcConfig := buildBMCConfig(node, tlsProvider)
 
 	// Discover protocol if set to auto or empty.
@@ -216,14 +226,24 @@ func discoverBMCNode(ctx context.Context, node *NodeConfig, tlsProvider bmc.TLSP
 		slog.Int("yaml_count", len(node.MACs)),
 		slog.Int("total_count", len(macs)))
 
-	// Attempt to retrieve system info and the quirk-matching hardware
-	// identity (both best effort).
+	// Attempt to retrieve the quirk-matching hardware identity and system
+	// info (both best effort).
+	//
+	// The identity is read FIRST. Its read retries discovery fresh
+	// (bmc.Client.HardwareIdentity bypasses the Redfish negative cache),
+	// whereas GetSystemInfo is served that cache. Read the other way round,
+	// a discovery blip failed GetSystemInfo, the identity retry then
+	// recovered discovery, and the node kept no system info even though the
+	// client had since learned the answer (#206). In this order system info
+	// rides the recovered discovery; when the identity read never recovers,
+	// GetSystemInfo returns the cached failure at once instead of paying
+	// another discovery timeout.
 	var sysInfo *bmc.SystemInfo
 	var hwIdentity *quirks.Identity
-	factory := bmc.NewDefaultClientFactory(logger)
 	client, clientErr := factory.NewClient(bmcConfig)
 	if clientErr == nil {
 		defer client.Close()
+		hwIdentity = readHardwareIdentity(ctx, client, node.Hostname, logger)
 		info, infoErr := client.GetSystemInfo(ctx)
 		if infoErr == nil {
 			sysInfo = info
@@ -232,7 +252,10 @@ func discoverBMCNode(ctx context.Context, node *NodeConfig, tlsProvider bmc.TLSP
 				slog.String("hostname", node.Hostname),
 				slog.String("error", infoErr.Error()))
 		}
-		hwIdentity = readHardwareIdentity(ctx, client, node.Hostname, logger)
+	} else {
+		logger.Debug("bootstrap: BMC client unavailable, system info and hardware identity skipped",
+			slog.String("hostname", node.Hostname),
+			slog.String("error", clientErr.Error()))
 	}
 
 	return DiscoveredNode{

@@ -8,30 +8,29 @@ import { DataTableRowActions } from "@/components/ui/data-table-row-actions";
 import { Badge } from "@/components/ui/badge";
 import type { Attestation } from "@/types/security";
 import type { TypedFilterColumn, TypedRowAction } from "@/components/ui/data-table.types";
-import { Eye, ShieldCheck, RefreshCw } from "lucide-react";
+import { Eye, RefreshCw } from "lucide-react";
 
 interface AttestationTableProps {
   attestations: Attestation[];
   onView?: (attestation: Attestation) => void;
-  onVerify?: (attestation: Attestation) => void;
   onRequestAttestation?: (attestation: Attestation) => void;
   loading?: boolean;
 }
 
 /**
- * Attestation reports table component with filtering and actions
+ * Host manifest table with filtering and actions
  *
  * Features:
  * - Sortable columns
- * - Filter by status
- * - Row actions (view, verify, request new attestation)
- * - Status badges with semantic colors
+ * - Filter by signature
+ * - Row actions (view, request a new manifest)
+ * - Signature badges: a manifest is evidence, never a verdict (#643); the
+ *   verifier's verdict is the device report
  * - Device information display
  */
 export function AttestationTable({
   attestations,
   onView,
-  onVerify,
   onRequestAttestation,
   loading = false,
 }: AttestationTableProps) {
@@ -66,21 +65,13 @@ export function AttestationTable({
       {
         accessorKey: "status",
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} title="Status" />
+          <DataTableColumnHeader column={column} title="Signature" />
         ),
         cell: ({ row }) => {
-          const status = row.getValue("status") as string;
+          const status = row.getValue("status") as Attestation["status"];
           return (
-            <Badge
-              variant={
-                status === "verified"
-                  ? "default"
-                  : status === "failed"
-                  ? "destructive"
-                  : "secondary"
-              }
-            >
-              {status}
+            <Badge variant={status === "signed" ? "outline" : "secondary"}>
+              {status === "signed" ? "Signed" : "Unsigned"}
             </Badge>
           );
         },
@@ -105,7 +96,6 @@ export function AttestationTable({
       {
         id: "actions",
         cell: ({ row }) => {
-          const attestation = row.original;
           const actions: TypedRowAction<Attestation>[] = [];
 
           if (onView) {
@@ -113,14 +103,6 @@ export function AttestationTable({
               label: "View Details",
               onClick: onView,
               icon: Eye,
-            });
-          }
-
-          if (onVerify && attestation.status === "pending") {
-            actions.push({
-              label: "Verify",
-              onClick: onVerify,
-              icon: ShieldCheck,
             });
           }
 
@@ -137,17 +119,16 @@ export function AttestationTable({
         },
       },
     ],
-    [onView, onVerify, onRequestAttestation]
+    [onView, onRequestAttestation]
   );
 
   const filterableColumns: TypedFilterColumn<Attestation>[] = [
     {
       id: "status",
-      title: "Status",
+      title: "Signature",
       options: [
-        { label: "Verified", value: "verified" },
-        { label: "Failed", value: "failed" },
-        { label: "Pending", value: "pending" },
+        { label: "Signed", value: "signed" },
+        { label: "Unsigned", value: "unsigned" },
       ],
     },
   ];

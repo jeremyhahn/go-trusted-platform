@@ -212,6 +212,15 @@ because recomputing it would need the very API a FIPS build refuses, which would
 have forced the test to skip in exactly the build whose compatibility it exists
 to prove.
 
+**Both sites call `pkg/crypto/aesgcm` since #248.** `encryptContent`,
+`decryptContent` and `LocalKMSClient.Encrypt`/`Decrypt` hold no cipher of their
+own: they call `aesgcm.Seal`/`Open`, which produce the same framing, so no stored
+byte changed — `TestLocalKMS_WireFormatUnchanged` now opens its pre-#209 vector
+through `aesgcm.Open`. `registry.NonceSize` and `TagSize` are the package's
+constants. A blob shorter than nonce + tag is refused with
+`aesgcm.ErrCiphertextTooShort` (inside `ErrDecryptionFailed` on the layer path)
+before any decryption is attempted.
+
 **The envelope changed format, and there is deliberately no migration.** The
 nonce field is gone and `encryptedLayerEnvelopeVersion` is `2`; there is no v1
 decoder and no refusal path beyond the version check that already existed.

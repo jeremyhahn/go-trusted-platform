@@ -37,10 +37,20 @@ nonce. There is no nonce parameter to pair wrongly any more. `GenerateKey` is
 unchanged for callers, though it now honours the entropy reader passed to
 `NewAESGCM`, which it had silently ignored.
 
-**"Used elsewhere in the platform" overstates `aesgcm` today**: `Seal` and
-`Open` have no production caller at all, and `pkg/registry` carries its own
-AES-GCM. Whether that package is intended surface or cruft is filed as #248 and
-is the owner's call, not something to settle in passing.
+**`aesgcm` is the platform's one AES-GCM implementation** (#248). `pkg/registry`
+seals layer content and wraps data-encryption keys through `Seal`/`Open`
+rather than building its own cipher, so the nonce handling and the FIPS-only
+construction live in one place. `pkg/app` uses `GenerateKey` for its random
+PINs. Do not construct a GCM cipher anywhere else in the platform; if a caller
+needs something `aesgcm` lacks, add it to the package.
+
+`Open` refuses a blob shorter than a nonce plus a tag with the typed
+`ErrCiphertextTooShort`. The package exports only errors it can actually
+return: the nonce-length, message-size and buffer-overlap sentinels, and the
+panic guard in `Open` with its `MessageError`, were removed in #248 — with no
+nonce parameter and a nil destination, neither of `crypto/cipher`'s panic
+conditions can arise. `aesgcm` is a platform-internal primitive, not consumer
+API, so it is not re-exported under `sdk/go`.
 
 **Never add key-management logic here.** A missing capability is missing in
 go-xkms or in the quicbaas SDK (docs/00 L8).

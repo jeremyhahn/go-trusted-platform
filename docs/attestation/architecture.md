@@ -562,7 +562,7 @@ section is not read as describing a shipped feature.
 | B — node-side attestation endpoint | quote production: #388. Caller admission (identity + strategy, anchors on the listener, audit events): `pkg/attestation/calleradmission`, PR a of #226. The collector that dials it: PR b. The state gate is upstream (go-qrdb#278 / go-xkms#273) |
 | C — `AttestDevice` on all transports | PR #316 (transports) + #373/#374 (the verifier contract below) — the **verifier** half only |
 | D — standalone reporting-server mode | not built; needs a ruling on the reporting server's device-record source (follow-up filed from PR b) |
-| E — console verdict + evidence age | server side built (PR b): reports on REST, gRPC/Unix and MCP with `fresh`, `age_seconds`, `pcr_baseline_source`, `ak_certificate_verified`; console rendering is a follow-up |
+| E — console verdict + evidence age | server side built (PR b): reports on REST, gRPC/Unix and MCP with `fresh`, `age_seconds`, `pcr_baseline_source`, `ak_certificate_verified`. Console built: the Devices pages render each verdict beside its age (#428); the Attestation page summarises the fleet from the same reports and raises stale, unverdicted, failed, none-at-all and not-configured as problems (#643). Manifests and quotes are labelled signed/unsigned, never as verdicts |
 
 `pkg/attestation/reporting` implements the invariant structurally rather than
 by convention:

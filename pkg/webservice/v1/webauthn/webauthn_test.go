@@ -478,6 +478,32 @@ func TestBeginRegistration_MissingEmail(t *testing.T) {
 	h.writer.AssertExpectations(t)
 }
 
+// TestBeginRegistration_InvalidEmail pins #643: an address the IAM identity
+// store would reject is refused at begin, before a user id is derived, the
+// SDK ceremony is opened or a registration session is stored, so finish can
+// never create a user and tenant for it.
+func TestBeginRegistration_InvalidEmail(t *testing.T) {
+	for _, email := range []string{"jhahn", "jhahn@localhost", "@example.com", "j hahn@example.com"} {
+		t.Run(email, func(t *testing.T) {
+			h := newHarness(t)
+			body, _ := json.Marshal(map[string]string{"email": email})
+			req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+			h.writer.On("Error400", w, req, mock.MatchedBy(func(err error) bool {
+				var invalid service.ErrInvalidEmail
+				return errors.As(err, &invalid) && invalid.Email == email
+			})).Return()
+
+			h.handler.BeginRegistration(w, req)
+
+			h.writer.AssertExpectations(t)
+			assert.Empty(t, h.users.Calls, "no user lookup or creation")
+			assert.Empty(t, h.sdk.Calls, "no SDK ceremony opened")
+			assert.Empty(t, h.regs.Calls, "no registration session stored")
+		})
+	}
+}
+
 func TestBeginRegistration_UserAlreadyRegistered(t *testing.T) {
 	h := newHarness(t)
 	username := "dup@example.com"

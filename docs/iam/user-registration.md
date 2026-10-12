@@ -114,7 +114,7 @@ The client initiates registration by providing the user's email address.
 curl -X POST https://platform.example.com/api/v1/webauthn/registration/begin \
   -H "Content-Type: application/json" \
   -d '{
-    "username": "alice@example.com"
+    "email": "alice@example.com"
   }'
 ```
 

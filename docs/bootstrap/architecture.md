@@ -156,7 +156,10 @@ does not have, that is a boundary defect, not a feature.
 
 `DiscoverNodes` walks `bootstrap.yaml`'s `nodes:` concurrently. A node with
 `bmc_address` gets protocol detection (or the declared `redfish`/`ipmi`), MAC
-discovery, and best-effort system info. A node with `macs:` and no BMC is taken
+discovery, and a best-effort hardware identity and system info read through the
+orchestrator's BMC client factory — identity first, so system info benefits
+when the identity retry recovers a failed Redfish discovery (#206). A node with
+`macs:` and no BMC is taken
 as declared. A node with `skip_install: true` is passed through untouched.
 Discovered MACs are the **union** of YAML and BMC values, operator values first.
 

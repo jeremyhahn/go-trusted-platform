@@ -33,7 +33,7 @@ import { DeviceForm } from '@/components/features/devices/device-form';
 import { useToast } from '@/hooks/use-toast';
 import { useAttestation, useDevice, useApi } from '@/hooks';
 import type { DeviceReport } from 'trusted-platform-sdk';
-import type { FleetReportsState } from '@/components/features/devices/device-table';
+import { fleetReportsState } from '@/lib/attestation-report';
 import { deriveDeviceStatus } from '@/lib/device-status';
 import type { Device, DeviceFilters } from '@/types/device';
 // The wire type comes from the SDK. A local copy of it is a second declaration
@@ -162,13 +162,7 @@ export default function DevicesPage() {
     }
     return map;
   }, [reportsData]);
-  const reportsState: FleetReportsState = reportsLoading
-    ? 'loading'
-    : reportsError
-      ? reportsError.status === 503
-        ? 'not-configured'
-        : 'error'
-      : 'ready';
+  const reportsState = fleetReportsState(reportsLoading, reportsError);
 
   const handleSuccess = () => {
     setIsDialogOpen(false);

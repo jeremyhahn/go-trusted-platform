@@ -83,6 +83,13 @@ func (h *WebAuthnRestHandler) BeginRegistration(w http.ResponseWriter, r *http.R
 		h.responseWriter.Error400(w, r, ErrEmailRequired)
 		return
 	}
+	// The address becomes the user id, the tenant owner label and the IAM
+	// identity, so it is checked here, before any of those is derived from
+	// it, against the rule the IAM mirror applies (#643).
+	if err := service.ValidateEmail(req.Email); err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
 	// The canonical registration flag (docs/08 §Registration model):
 	// with self-service registration disabled — the invite-only default —
 	// an uninvited registration is refused before any ceremony starts.

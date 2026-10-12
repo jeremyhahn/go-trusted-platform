@@ -20,6 +20,8 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/aesgcm"
 )
 
 // plantKey writes a caller-chosen key straight into the key store, so a test
@@ -90,7 +92,8 @@ func TestLocalKMS_EncryptDecryptRoundTrip(t *testing.T) {
 
 // TestLocalKMS_WireFormatUnchanged is the point of the #209 change: moving to
 // cipher.NewGCMWithRandomNonce must not alter a single byte of the on-disk
-// layout, so blobs sealed by the pre-#209 code stay readable.
+// layout, so blobs sealed by the pre-#209 code stay readable. It holds the
+// same line for #248, which moved the cipher into pkg/crypto/aesgcm.
 //
 // The vector below was produced by that pre-#209 code — cipher.NewGCM with an
 // explicit 12-byte nonce, the nonce prepended by hand — and is checked in as a
@@ -171,9 +174,9 @@ func TestLocalKMS_DecryptRejectsTampering(t *testing.T) {
 		if err == nil {
 			t.Fatal("a blob shorter than nonce+tag must not open")
 		}
-		var msgErr *MessageError
-		if !errors.As(err, &msgErr) {
-			t.Errorf("want *MessageError for a truncated blob, got %T: %v", err, err)
+		var tooShort aesgcm.ErrCiphertextTooShort
+		if !errors.As(err, &tooShort) {
+			t.Errorf("want aesgcm.ErrCiphertextTooShort for a truncated blob, got %T: %v", err, err)
 		}
 	})
 

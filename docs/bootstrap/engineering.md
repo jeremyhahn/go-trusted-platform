@@ -317,6 +317,22 @@ and [§3](../barrier/engineering.md#3-configuration).
     tie between equally specific answers — two equally complete readings of
     one board can resolve different entries.
 
+8c. **Discovery reads the identity before `SystemInfo`, through the
+    orchestrator's `bmcFactory`.** `Orchestrator.discover` passes its
+    injected factory as `DiscoveryOptions.ClientFactory` (nil falls back to
+    `bmc.NewDefaultClientFactory`), the same seam every other BMC call site
+    in the package uses. The order matters: `HardwareIdentity` re-runs
+    Redfish discovery fresh, while `GetSystemInfo` is served the client's
+    negative cache. Read the other way round, a discovery blip failed
+    `GetSystemInfo`, the identity retry recovered discovery, and the node
+    kept no system info (#206). Read identity-first, system info rides the
+    recovered discovery; when discovery never recovers, `GetSystemInfo`
+    returns the cached failure at once. Both stay best effort — a client the
+    factory cannot build costs the node its system info and identity, not its
+    discovery. Do not reintroduce a locally built factory in
+    `discoverBMCNode`: the recovery path is only testable through the seam
+    (`TestOrchestratorDiscover_SystemInfoRidesRecoveredDiscovery`).
+
 9. **Provisioning is concurrent within a phase and sequential across phases.**
    `provisionControlPlane` and `provisionRemainingNodes` both fan out through
    `provisionNodes`, which returns only after **every** node has finished — an
