@@ -80,4 +80,4 @@ permissions.
 - [README](README.md) — IPAM overview
 - [Architecture](architecture.md) — Allocator design
 - [Configuration](configuration.md) — `sdn.ipam` YAML reference
-- [Gateway API Reference](../gateway/api-reference-grpc.md)
+- [Gateway API Reference](../../gateway/api.md)

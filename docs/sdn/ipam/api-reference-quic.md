@@ -72,4 +72,4 @@ platformctl --transport quic sdn ipam allocations --pool-id pool1
 ## See Also
 
 - [API Reference](api-reference.md) — Overview
-- [Gateway QUIC API Reference](../gateway/api-reference-quic.md)
+- [Gateway QUIC API Reference](../../gateway/api.md)

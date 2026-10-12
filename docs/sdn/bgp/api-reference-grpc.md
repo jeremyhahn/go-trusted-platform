@@ -45,6 +45,6 @@ _, err = client.AnnouncePrefix(ctx, &platformv1.AnnouncePrefixRequest{
 
 ## See Also
 
-- [Gateway gRPC API Reference](../gateway/api-reference-grpc.md)
+- [Gateway gRPC API Reference](../../gateway/api.md)
 - [CLI Usage](cli-usage.md)
 - [Configuration](configuration.md)

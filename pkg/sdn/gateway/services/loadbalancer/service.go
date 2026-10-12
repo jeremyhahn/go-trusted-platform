@@ -22,7 +22,8 @@
 // the VIP's zone (table 29), which reverses both translations, so the
 // client hears from the VIP it addressed. Selection is hash-based (OVS
 // dp_hash) and per-connection sticky through conntrack. See
-// docs/sdn/gateway/loadbalancer.md for the table design.
+// docs/gateway/engineering.md ("The load balancer datapath") for the
+// table design.
 package loadbalancer
 
 import (

@@ -1,6 +1,6 @@
 # Edge Gateway — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl sdn gateway|lb|perf|ipam`, `platformctl proxy`, `gatewayd` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `platformctl sdn gateway` (incl. `lb`, `nat64`, `perf`), `platformctl sdn ipam`, `platformctl proxy`, `gatewayd` · Last verified: 2026-10-11
 > Conflicts with this document are defects. Fix them here first.
 
 ---
@@ -14,10 +14,15 @@ verbs are subgroups of `sdn`:
 
 | Path | Covers |
 |---|---|
-| `platformctl sdn gateway` | Status, deprecated mode, BGP |
-| `platformctl sdn lb` | Load balancer VIPs |
-| `platformctl sdn perf` | Datapath performance |
+| `platformctl sdn gateway` | Status, telemetry snapshot, deprecated mode, BGP |
+| `platformctl sdn gateway lb` | Load balancer VIPs |
+| `platformctl sdn gateway nat64` | NAT64 translator status |
+| `platformctl sdn gateway perf` | Datapath performance |
 | `platformctl sdn ipam` | Pools and allocations |
+
+`lb`, `nat64` and `perf` are registered only under `sdn gateway`
+(`pkg/cli/commands/sdn/gateway.go`). There is no `platformctl sdn lb` and no
+`platformctl sdn perf`.
 | `platformctl proxy` | The trusted reverse proxy — **this one is top-level** |
 
 `gatewayd` itself is the daemon binary (`cmd/gatewayd/main.go`), not an
@@ -134,16 +139,46 @@ platformctl sdn ipam release --ip 10.20.0.17
 
 ---
 
-## 4. `platformctl sdn lb`
+## 4. `platformctl sdn gateway lb`
 
 | Path | Purpose |
 |---|---|
 | `lb status` | Load balancer status |
 | `lb vip add` | Add a VIP |
-| `lb vip get` | Get a VIP |
+| `lb vip get` | Get one VIP with per-backend health |
 | `lb vip list` | List VIPs |
 | `lb vip remove` | Remove a VIP |
 | `lb vip set-backends` | Replace a VIP's backends |
+
+A VIP is identified by protocol, address and port. Every VIP-scoped verb
+(`add`, `get`, `remove`, `set-backends`) takes the same three flags; `list` and
+`status` take none:
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--protocol` | string | `tcp` | `tcp` or `udp` |
+| `--address` | string | | Virtual IPv4 address (required) |
+| `--port` | uint16 | | Virtual L4 port (required) |
+
+**`add`** adds `--algorithm` (`hash` or `round-robin`; defaults to the service
+algorithm when omitted) and `--backend`, a repeatable `address:port[:weight]`
+(required; weight defaults to 1). Both algorithms map to select-group
+`dp_hash` balancing; `least-conn` is refused because the OVS datapath cannot
+implement it.
+
+**`set-backends`** takes `--backend`, repeatable, and **replaces** the whole
+backend set. It is not additive; a `set-backends` with one backend leaves one
+backend.
+
+```bash
+platformctl sdn gateway lb vip add --protocol tcp --address 203.0.113.10 --port 443 \
+    --algorithm round-robin \
+    --backend 10.20.0.11:8443:2 --backend 10.20.0.12:8443:1
+platformctl sdn gateway lb vip set-backends --protocol tcp --address 203.0.113.10 --port 443 \
+    --backend 10.20.0.11:8443 --backend 10.20.0.13:8443
+platformctl sdn gateway lb vip get --address 203.0.113.10 --port 443
+platformctl sdn gateway lb status
+```
 
 ## 4a. `platformctl sdn gateway nat64`
 
@@ -168,53 +203,41 @@ the next reconcile.
 
 Against a production `platformd` today this command fails with "nat64
 translator not configured", even while the `nat64:` section is running. The
-translator lives in `gatewayd`, and the control-plane path to it is #660
+translator lives in `gatewayd`, and the control-plane path to it is planned
 ([api.md §5a](api.md#5a-nat64-translator)).
-
-VIP-scoped verbs share two flags:
-
-| Flag | Type | Default | Meaning |
-|---|---|---|---|
-| `--address` | string | | Virtual IPv4 address (required) |
-| `--protocol` | string | `tcp` | `tcp` or `udp` |
-
-**`add`** adds `--algorithm` (`hash` or `round-robin`; defaults to the service
-algorithm when omitted) and `--backend`, a repeatable
-`address:port[:weight]` (required).
-
-**`set-backends`** takes `--backend`, repeatable, and **replaces** the whole
-backend set. It is not additive; a `set-backends` with one backend leaves one
-backend.
-
-```bash
-platformctl sdn lb vip add --address 203.0.113.10 --protocol tcp \
-    --algorithm round-robin \
-    --backend 10.20.0.11:8443:2 --backend 10.20.0.12:8443:1
-platformctl sdn lb vip set-backends --address 203.0.113.10 \
-    --backend 10.20.0.11:8443 --backend 10.20.0.13:8443
-platformctl sdn lb status
-```
 
 ---
 
-## 5. `platformctl sdn perf`
+## 5. `platformctl sdn gateway perf`
 
-Datapath performance verification.
+Datapath performance verification against a live OVS bridge.
 
 | Verb | Purpose | Flags |
 |---|---|---|
-| `perf flows` | Measure flow-programming throughput | `--batch` (install all flows behind a single batched barrier), `--bridge` (default: the daemon's default bridge) |
+| `perf flows` | Measure flow-programming throughput | `--count` (default 1000, range 1-100000), `--batch` (install all flows behind a single barrier), `--bridge` (default: the daemon's default bridge) |
 | `perf datapath` | Read live datapath counters | `--bridge` |
-| `perf conntrack` | Summarise the connection-tracking table | — |
+| `perf conntrack` | Summarise the connection-tracking table | `--zone` (0-65535; omit for every zone) |
+
+**`perf flows` mutates the bridge** and needs `sdn:write`. It installs `--count`
+ephemeral drop flows into the dedicated perf table 250 under cookie
+`0xF1BE00FF00000000` (`pkg/sdn/gateway/services/perf/service.go`), times the
+install, then removes them with one cookie-scoped delete. Table 250 is above
+every pipeline table, so the measurement flows never match production traffic.
 
 `perf flows --batch` measures a different thing from `perf flows` without it:
-batched installation behind one barrier versus per-flow barriers. Compare like
+batched installation behind one barrier versus one flow at a time. Compare like
 with like.
 
+`perf datapath` reports the flow-cache hit / miss / lost counters, the number
+of datapath flows offloaded to hardware, the `hw-offload` setting and the
+bridge datapath type. `perf conntrack` reports the total conntrack entry count
+and per-zone counts. Both read `ovs-vswitchd` through `ovs-appctl`; without it
+they fail rather than report zeros.
+
 ```bash
-platformctl sdn perf flows --bridge br-tenant-a --batch
-platformctl sdn perf datapath --bridge br-tenant-a
-platformctl sdn perf conntrack
+platformctl sdn gateway perf flows --count 1000 --batch --bridge br-tenant-a
+platformctl sdn gateway perf datapath --bridge br-tenant-a
+platformctl sdn gateway perf conntrack --zone 12
 ```
 
 ---

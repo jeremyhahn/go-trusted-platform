@@ -328,8 +328,9 @@ Examples:
 
 ## Gateway Commands
 
-The gateway commands manage multi-mode gateway nodes (overlay, edge, transit).
-See the [Gateway Operations Guide](gateway/operations.md) for full details.
+The gateway commands manage gateway nodes, which run the service sections
+their configuration enables. See the [gateway CLI reference](../gateway/cli.md)
+for full details.
 
 ### Get Gateway Status
 

@@ -103,7 +103,7 @@ platformctl sdn overlay vni list
 platformctl sdn overlay vni list -o yaml
 
 # Where the overlay mode handler runs, verify its decap flows: one
-# tun_id/tun_src flow per remote VTEP on the VNI (../gateway/overlay-mode.md)
+# tun_id/tun_src flow per remote VTEP on the VNI (docs/gateway/engineering.md §5a)
 ovs-ofctl -O OpenFlow13 dump-flows br-int table=10
 ```
 

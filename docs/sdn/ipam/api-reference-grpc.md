@@ -60,4 +60,4 @@ alloc, err := client.AllocateIP(ctx, &platformv1.AllocateIPRequest{
 ## See Also
 
 - [API Reference](api-reference.md) — Overview
-- [Gateway gRPC API Reference](../gateway/api-reference-grpc.md)
+- [Gateway gRPC API Reference](../../gateway/api.md)

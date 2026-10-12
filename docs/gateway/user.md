@@ -540,27 +540,61 @@ Resolved material is handed to the kernel or to the BGP speaker and then wiped.
 
 ## Load balancing
 
+A VIP is identified by protocol, address and port, so every VIP verb except
+`list` takes `--address` and `--port` (`--protocol` defaults to `tcp`):
+
 ```bash
-platformctl sdn lb vip add --address 203.0.113.10 --protocol tcp \
+platformctl sdn gateway lb vip add --protocol tcp --address 203.0.113.10 --port 443 \
     --algorithm round-robin \
     --backend 10.20.0.11:8443:2 --backend 10.20.0.12:8443:1
 
-platformctl sdn lb vip list
-platformctl sdn lb status
+platformctl sdn gateway lb vip list
+platformctl sdn gateway lb vip get --address 203.0.113.10 --port 443
+platformctl sdn gateway lb status
 ```
 
-Backends are `address:port[:weight]` and `--backend` repeats. `--algorithm` is
-`hash` or `round-robin`; omitting it uses the service default.
+Backends are `address:port[:weight]` and `--backend` repeats; weight defaults
+to 1. `--algorithm` is `hash` or `round-robin`; omitting it uses the service
+default. Both spread connections by hash across the weighted backends — there
+is no `least-conn`, because the OVS datapath cannot implement it.
 
 **`set-backends` replaces the entire set**, it does not add to it:
 
 ```bash
-platformctl sdn lb vip set-backends --address 203.0.113.10 \
+platformctl sdn gateway lb vip set-backends --address 203.0.113.10 --port 443 \
     --backend 10.20.0.11:8443 --backend 10.20.0.13:8443
 ```
 
-The load balancer has **no REST API** — gRPC, Unix, QUIC, MCP and the CLI only.
-A REST-only client cannot see a VIP.
+The same verbs are on every transport, REST included
+(`/api/v1/sdn/gateway/lb/...`, [api.md §5](api.md#5-load-balancer)).
+
+**Backends are health-probed.** Each TCP backend is probed with a TCP connect;
+UDP backends are not probed and are treated as always healthy. A backend leaves
+the rotation after `health-check-fall` consecutive failures (default 3) and
+returns after `health-check-rise` consecutive successes (default 2);
+`vip get` shows each backend's `healthy` flag. The section must set
+`health-check-interval`, a `health-check-timeout` shorter than it, and
+`max-backends` (the per-VIP cap); `gatewayd` refuses the section without them.
+VIPs can also be declared in the section itself and are installed when the
+service starts:
+
+```yaml
+load-balancer:
+  enabled: true
+  algorithm: hash
+  health-check-interval: 5s
+  health-check-timeout: 2s
+  health-check-rise: 2
+  health-check-fall: 3
+  max-backends: 64
+  vips:
+    - address: 203.0.113.10
+      port: 443
+      protocol: tcp
+      backends:
+        - { address: 10.20.0.11, port: 8443, weight: 2 }
+        - { address: 10.20.0.12, port: 8443 }
+```
 
 **Clients on the backends' own network need `hairpin-prefixes`.** A backend
 replies to whatever source address it sees. For a client elsewhere that is
@@ -657,13 +691,17 @@ running the auth chain is the reason this proxy exists.
 ## Measuring the datapath
 
 ```bash
-platformctl sdn perf flows --bridge br-tenant-a --batch
-platformctl sdn perf datapath --bridge br-tenant-a
-platformctl sdn perf conntrack
+platformctl sdn gateway perf flows --count 1000 --batch --bridge br-tenant-a
+platformctl sdn gateway perf datapath --bridge br-tenant-a
+platformctl sdn gateway perf conntrack --zone 12
 ```
 
+`perf flows` writes to the bridge: it installs `--count` throwaway flows into
+table 250, times the install and deletes them again, so it needs `sdn:write`.
+The flows sit above every pipeline table and never match traffic.
+
 `perf flows` with and without `--batch` measure different things — batched
-installation behind one barrier versus per-flow barriers. Do not compare the two
+installation behind one barrier versus one flow at a time. Do not compare the two
 numbers.
 
 If these return "unavailable" rather than zeroes, the perf backend is not wired
@@ -680,9 +718,8 @@ hyphenated; the other section names are single words.
 
 **Startup fails with `is enabled but cannot run`.**
 The section names a service with no implementation (`overlay`, `edge`, `dhcp`,
-`pxe`, `management-vpn`); the message carries the blocker and the tracking
-issue. Disable the section. `overlay` is required by owner design decision
-(2026-09-26) and lands with #709. The gateway will not start a service it cannot
+`pxe`, `management-vpn`); the message carries the blocker. Disable the
+section. `overlay` is a required service and is planned. The gateway will not start a service it cannot
 back.
 
 **Startup fails with `parsing configuration section proxy.listeners`.**
@@ -700,11 +737,6 @@ service at all — a control plane, not a gateway.
 Starting a running service or stopping a stopped one. Both are reported rather
 than silently ignored.
 
-**A peer is rejected with "reputation too low", "age too young" or "uptime too
-low".**
-Peer-admission gates on the edge/P2P path. They only fire where that path is
-enabled.
-
 **Gateway configuration keeps reverting.**
 It is supposed to. The control plane authors desired configuration and the
 gateway fetches it. Change it at the control plane.
@@ -715,6 +747,5 @@ gateway fetches it. Change it at the control plane.
 
 - [cli.md](cli.md) — every verb and flag
 - [api.md](api.md) — every capability on every transport, and the gaps
-  (IPAM pool CRUD and the entire load balancer are missing from REST)
 - [architecture.md](architecture.md) — the service sections, the proxy auth chain, trust boundaries
 - [`docs/sdn/`](../sdn/) — bridges, ports, port authentication, zones, overlay

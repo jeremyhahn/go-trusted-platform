@@ -153,7 +153,7 @@ new code uses service sections.
 | Package | Key files | Role |
 |---|---|---|
 | `pkg/sdn/gateway` | `node.go`, `types.go`, `runtime.go`, `pipeline.go`, `zone_service.go` | Node model, service registry, runtime lifecycle, the base OpenFlow pipeline (`EnsurePipeline` / `RemovePipeline` / `BasePipelineRules` / `ReadPipelineOwner`, #567), zones |
-| `pkg/sdn/gateway/modes` | `edge.go`, `edge_p2p.go`, `edge_pxe.go`, `overlay.go`, `transit.go` | Mode implementations |
+| `pkg/sdn/gateway/modes` | `edge.go`, `edge_p2p.go`, `edge_pxe.go`, `overlay.go`, `transit.go` | Handler libraries named after the deprecated modes. **No production code constructs any of them**; only tests do. See [§5a](#5a-handler-libraries-in-modes) |
 | `pkg/sdn/gateway/services` | `firewall/`, `loadbalancer/`, `perf/`, `hostfw/` | Service implementations; `hostfw` is the nftables host packet filter (`Ruleset`, `Render`, `Service`, `NetlinkApplier`, `ListenerInventory`) |
 | `pkg/sdn/gateway/controlplane` | `reporter.go`, `reconciler.go`, `config.go` | Reports state up, fetches and applies desired config down; `gatewayd serve` starts both loops when the `control-plane:` section is enabled |
 | `pkg/sdn/gateway/state` | | Local gateway state |
@@ -993,6 +993,490 @@ OVS pipeline or in the gateway's own nftables forward chain is an
 architecture decision that is still open; it is recorded here rather than
 changed silently.
 
+### The load balancer datapath (`load-balancer:`)
+
+The load balancer (`pkg/sdn/gateway/services/loadbalancer`) is an OVS-native
+L4 balancer. All balancing happens in the datapath. VIP traffic is spread
+across backends by an OpenFlow **select group**, which picks a bucket by hash,
+and is translated by **conntrack DNAT** committed in the group buckets. The Go
+service compiles VIPs into flows and groups, probes backend health and manages
+lifecycle. No packet traverses userspace.
+
+| Feature | Implementation |
+|---|---|
+| VIP management | `tcp`/`udp` IPv4 VIPs, config-driven at start plus runtime CRUD ([api.md §5](api.md#5-load-balancer)) |
+| Algorithms | `hash` and `round-robin`, both mapped to select-group `dp_hash` selection |
+| Session persistence | Per-connection stickiness via conntrack (committed DNAT state) |
+| Health probes | TCP connect probes with rise/fall hysteresis |
+| Weighted backends | Select-group bucket weights (`weight`, default 1) |
+| Fail-closed | Zero healthy backends → bucketless group → new connections drop |
+| Reply translation | A backend's replies are reverse-translated so the client hears from the VIP |
+| Hairpin | Clients on a `hairpin-prefixes` network are source-NATed to the VIP, so a backend on their segment answers through the gateway |
+| Recovery | Deterministic group IDs plus `GetGroupDesc` reconciliation on start |
+
+**Not supported:** `least-conn` is rejected with `ErrAlgorithmUnsupported`,
+because per-connection bookkeeping cannot be expressed in the OVS group
+datapath. UDP VIPs are **unprobed**: there is no protocol-agnostic UDP
+liveness signal, so their backends are treated as always healthy and a
+warning is logged when a UDP VIP is installed.
+
+Both algorithm names program an `OFPGT_SELECT` group, and OVS picks the bucket
+from the datapath flow hash, weighted by bucket weight. Selection is therefore
+**per connection**, not per packet: `round-robin` is an accepted alias with no
+strict rotation. Once a connection is committed, conntrack pins it to its
+backend for its lifetime, and that stickiness survives group rebuilds.
+
+#### Tables, cookie and priorities
+
+The load balancer shares the conntrack pipeline with the firewall (tables
+20/21) and NAT (table 25). It owns tables 26, 28 and 29; table 27 is the NAT64
+hand-off. Its cookie is `0xF1BE000300000000` under mask `0xFFFFFFFF00000000`
+(firewall `0xF1BE0001…`, NAT `0xF1BE0002…`).
+
+```
+table 10 (gate)      priority 3: goto_table:20            [LB gate]
+                     (firewall gate = prio 2, NAT gate = prio 1; all
+                      three are distinct flows and tear down independently)
+
+table 20 (ct gate)   priority 260 per backend B:P of every VIP (reply divert):
+                       reg1=0/0x1,ip,nw_proto=P,nw_src=B,tp_src=P
+                         -> load:1->reg1[0], ct(table=29,zone=Zhairpin,nat)
+                     priority 250 per VIP (request divert):
+                       ip,nw_proto=P,nw_dst=VIP,tp_dst=PORT
+                         -> ct(table=26,zone=Zvip,nat)
+                     (the table-20 miss belongs to the base pipeline,
+                      not to the load balancer)
+
+table 26 (dispatch)  priority 400: ct_state=+inv+trk           -> drop
+                     priority 300: ct_state=+est+trk           -> goto_table:28
+                     priority 300: ct_state=+rel+trk           -> goto_table:28
+                     priority 200 per VIP:
+                       ct_state=+new+trk,ip,nw_proto=P,nw_dst=VIP,tp_dst=PORT
+                         -> group:G
+                     priority 0 miss:                          -> drop
+
+group G (select)     one bucket per healthy backend, weight = backend weight
+                       ct(commit,zone=Zvip,nat(dst=B:P),table=28)
+
+table 28 (hairpin)   priority 200 per VIP per hairpin prefix H:
+                       ct_state=+new+trk,ct_zone=Zvip,ip,nw_src=H
+                         -> ct(commit,zone=Zhairpin,nat(src=VIP),table=30)
+                       ct_state=+est+trk,ct_zone=Zvip,ip,nw_src=H
+                         -> ct(zone=Zhairpin,nat,table=30)
+                     priority 0 miss:                          -> goto_table:30
+
+table 29 (reply)     priority 200 per backend B:P (back from the hairpin zone):
+                       ct_zone=Zhairpin,ip,nw_proto=P,nw_src=B,tp_src=P
+                         -> ct(table=29,zone=Zvip,nat)
+                     priority 100: ct_state=+est+rpl+trk       -> goto_table:30
+                     priority 0 miss:                          -> resubmit(,20)
+```
+
+The load balancer's table-20 diverts (250, 260) outrank every NAT divert
+(SNAT 90, SNAT select 95, DNAT 200, static 210, hairpin 220 —
+`services/firewall/nat.go`), so a VIP flow is never captured by NAT first.
+Each subsystem tears down only its own flows, by its own cookie-masked delete,
+and draws its own conntrack zones from the shared allocator, so VIP DNAT state
+never leaks into firewall verdicts.
+
+#### Replies are reverse-translated
+
+A VIP connection is DNATed: the client sends to `VIP:PORT` and the backend
+receives from the client. The backend's reply carries the backend's address,
+`B:P -> client`, so the request divert, which matches `nw_dst=VIP`, never sees
+it. Without a reply path the client would hear from `B:P`, an address it never
+connected to, and reset the connection.
+
+The service therefore installs a **reply divert per backend**. It is keyed on
+the backend's source address and port, and runs `ct(nat)` in the hairpin zone
+(table 20), then in the VIP's zone (table 29). Conntrack reverses whatever
+translations the connection was committed with, so the client receives
+`VIP:PORT -> client`. Both lookups recirculate into table 29, and `ct_zone`
+tells them apart: the per-backend flow takes a packet back from the hairpin
+zone; a packet back from the VIP zone falls to the verdicts.
+
+**A backend's own traffic is left alone.** The divert matches by source
+address:port, so it also catches traffic the backend sends from its service
+port that has nothing to do with the VIP, such as a reply to a client that
+connected to the backend directly. Table 29 lets only `+est+rpl` (a reply of a
+committed VIP connection) continue. Everything else is resubmitted to table 20
+with register 1 bit 0 set. The reply divert matches only packets with that bit
+clear, so the packet then meets the firewall and NAT gates exactly as if the
+load balancer were not installed. The NAT service owns register 0.
+
+**One backend endpoint, one VIP.** Because the reply divert is keyed on the
+backend's address:port alone, that endpoint's replies can be steered into one
+VIP zone only. A backend `address:port` that already serves another VIP of the
+same protocol is refused with `ErrBackendInUse`, at configuration validation,
+in `AddVIP` and in `SetBackends`. The same endpoint behind a TCP VIP and a UDP
+VIP is fine: they are different tuples.
+
+#### Hairpin source NAT
+
+A client on the same segment as its backend is the case reply translation
+alone cannot fix. The gateway forwards the DNATed request back out the port it
+arrived on, and the backend sees the client's own address on-link, so it
+answers the client directly and the reply never passes the gateway. The fix is
+to also **source-NAT the connection to the VIP**: the backend then answers the
+VIP, which is the gateway, and the reply is reversed on the way back. Only
+clients inside `hairpin-prefixes` get this treatment; everyone else keeps their
+own address, so a backend still sees the real client for north-south traffic.
+
+OVS permits NAT arguments only on a committing `ct`, and a committed connection
+cannot take a second translation. So the source NAT lives in a **second
+conntrack zone**, `Zhairpin`, which every VIP shares:
+
+- **The first packet** of a hairpin connection is committed there with
+  `nat(src=VIP)` after the bucket has committed the DNAT in `Zvip`.
+- **Later packets** have the same translation applied by
+  `ct(zone=Zhairpin,nat)`. That is why table 26 sends established and related
+  packets through table 28 rather than straight to table 30.
+- **On a reply**, the hairpin zone is consulted first (un-SNAT: the
+  destination returns to the client), then the VIP zone (un-DNAT: the source
+  becomes the VIP).
+
+Entries in `Zhairpin` are keyed by the backend address:port, which belongs to
+one VIP only, so sharing the zone between VIPs cannot collide.
+
+#### Bucket action: commit, DNAT and recirculate in one step
+
+Group buckets carry **actions**, not instructions, so a bucket cannot
+`goto_table`. The standard OVS pattern is a single conntrack action that
+commits, DNATs and recirculates: `ct(commit,zone=Z,nat(dst=B:P),table=28)`,
+with `RecircTable` and `NXCTFCommit` set together on `nx_action_conntrack`.
+The encoding produced by `openflow.NewActionCT(NXCTFCommit, zone, 28,
+NewActionNATDst(addr, port))`:
+
+```
+ffff0030000023200023000100000000002a1c0000000000
+ffff00180000232000240000000200110a0001051f900000
+  = ct(commit,table=28,zone=42,nat(dst=10.0.1.5:8080))
+```
+
+`TestBucketActionEncoding` (`services/loadbalancer/service_test.go`) pins
+this byte sequence. `TestParseCTActionBareNAT` (`pkg/sdn/ovs/group_test.go`)
+pins the bare `nat` argument of the table-20 divert.
+
+#### Conntrack zones and group IDs
+
+- Each VIP gets its own conntrack zone from the shared `ct.ZoneAllocator`
+  (owner `lb`, key `<proto>/<vip>:<port>`, e.g. `tcp/10.100.0.10:443`). The
+  hairpin source NAT has one more zone, shared by every VIP (owner `lb`, key
+  `hairpin`), allocated at `Start` and released at `Stop`.
+- OpenFlow group IDs carry no cookie, so the load balancer owns the dedicated
+  range `0x4C420000–0x4C42FFFF` ("LB"). The ID is derived deterministically
+  from the VIP key (xxhash low 16 bits, linear probing on collision). On
+  `Start` the service lists the bridge groups via `GetGroupDesc`: surviving
+  groups in the range are reused with `OFPGC_MODIFY`, stale ones are deleted,
+  and groups outside the range are never touched.
+
+#### Lifecycle ordering
+
+- **Start** allocates the hairpin zone first (every VIP's reply divert names
+  it), then the groups (flows referencing `group:G` need the group to exist),
+  then scaffolding and VIP flows in one batch, then the table-10 gate last, so
+  packets never enter an incomplete pipeline. Health probing starts after the
+  datapath is programmed. **Start is transactional**: the gateway registers
+  the service only after `Start` succeeds, so a failed `Start` has no `Stop`
+  to clean up after it. Any failure after the hairpin zone is allocated rolls
+  back every load-balancer flow (one cookie-masked delete), the installed
+  VIPs' groups and zones, and the hairpin zone, continuing past a failed step.
+  The configuration is validated as a whole first: `ValidateVIPSet` refuses a
+  duplicate VIP (`ErrVIPExists`) and a backend shared between VIPs
+  (`ErrBackendInUse`).
+- **AddVIP** installs a VIP whole or not at all. A failed group or flow
+  install takes back the group, any flows of the refused batch, and the VIP's
+  zone.
+- **SetBackends** installs the new set's flows (its reply diverts among them)
+  before the group can select a new backend, and deletes the removed
+  backends' flows after it no longer can. A removed backend's established
+  connections stop being translated, as a removed VIP's do.
+- **Stop** cancels probing, strict-deletes the gate first (traffic falls back
+  to the base pipeline), removes all LB flows in one cookie-masked delete,
+  removes the groups and releases the conntrack zones, the hairpin zone
+  included.
+- **Reconcile** re-installs all flows (`OFPFC_ADD` replaces identical
+  match+priority entries) and rebuilds every group from its current healthy
+  set.
+
+The first packet of a new connection takes the slower path through the group
+select and conntrack commit. Established connections are plain conntrack
+lookups (`+est+trk -> goto_table:28 -> goto_table:30`, plus one lookup in the
+hairpin zone for a hairpin client) and are megaflow-cache and offload
+friendly. A backend's reply costs two conntrack lookups, the hairpin zone then
+the VIP zone, each a recirculation.
+
+#### Health probing
+
+`prober.go` runs a ticker loop (interval `health-check-interval`) that dials
+every **TCP** backend concurrently each tick (`net.DialTimeout`, timeout
+`health-check-timeout`) and feeds a per-backend rise/fall state machine:
+
+- A healthy backend becomes **unhealthy** after `health-check-fall`
+  consecutive failures (default 3), and an unhealthy one becomes **healthy**
+  after `health-check-rise` consecutive successes (default 2). Any opposite
+  result resets the counter, so flapping never accumulates.
+- Every transition rebuilds the VIP's select group from the healthy set and
+  is logged.
+- **All backends down fails closed:** the group is modified to zero buckets,
+  so new connections drop in table 26 while established connections continue
+  through conntrack until they expire.
+- Backends start healthy at install; the prober demotes unreachable ones. UDP
+  backends are never probed.
+
+`Service.SetBackendHealth` forces a backend's health; the prober uses it and
+it is available for operational overrides.
+
+#### Configuration and wiring
+
+`gateway.LoadBalancerConfig` (`pkg/sdn/gateway/types.go`) validates the
+section as a whole: `health-check-interval` must be positive,
+`health-check-timeout` positive and shorter than the interval, `max-backends`
+positive, every `hairpin-prefixes` entry an IPv4 prefix
+(`ErrInvalidHairpinPrefix`), and the declared `vips` a valid set. The
+service library itself defaults zero rise/fall/max-backends (2/3/64), but the
+section does not leave `max-backends` to that default. `bridge` optionally
+overrides the runtime bridge. The operator-facing example is in
+[user.md](user.md#load-balancing).
+
+The service needs the daemon-injected `GatewayRuntime` (flow controller, OVS
+client, group client, conntrack zone allocator), assembled by `gatewayd serve`
+from its `sdn:` section. Enabling `load-balancer:` without `sdn:` fails
+assembly with `ErrSDNRequiredForService`; a runtime-less `Start` fails with
+`ErrRuntimeMissing`. `gateway.Gateway` exposes `AddVIP`, `RemoveVIP`, `GetVIP`,
+`ListVIPs`, `SetVIPBackends` and `LBStatus`, plus the `LBHealth()` and
+`LBService()` accessors; with the service not running every one returns
+`ErrServiceNotActive`.
+
+`make integration-test-lb` runs `TestGroupLoadBalancer`
+(`test/integration/sdn/group_lb_test.go`) in the devcontainer against real
+Open vSwitch, kernel conntrack and network namespaces, with no platformd. The
+harness supplies only the table-0 hand-off and a table 30 that forwards a
+DNATed packet to its backend's port (and a hairpinned packet back out its
+ingress port). It deliberately supplies **no reply flow**, so a load balancer
+that failed to reverse-translate replies would fail the test. It asserts a TCP
+exchange through a VIP, that a backend stays reachable directly on its service
+port, a hairpin handshake in which the backend sees the VIP as its peer, and
+distribution, stickiness, prober-driven failover and fail-closed behaviour.
+
+## 5a. Handler libraries in `modes/`
+
+`pkg/sdn/gateway/modes` holds three handlers named after the deprecated
+modes: `OverlayModeHandler`, `EdgeModeHandler` and `TransitModeHandler`.
+**None of them is constructed by production code.** The `overlay` and `edge`
+sections are refused at start ([architecture.md](architecture.md#a-service-section-is-a-running-backend-or-a-refused-start)),
+and the `transit` section is built from the `pkg/sdn/bgp` speaker, not from
+`TransitModeHandler` (`buildTransit`, `handlers.go`). They are library code
+with unit tests. They are documented here so that nobody mistakes them for
+the gateway's model, and so the overlay design survives until the `overlay`
+section is wired (planned).
+
+### The overlay handler (`OverlayModeHandler`)
+
+The overlay handler makes a node a VXLAN Tunnel Endpoint. It forwards between
+one local access port, which carries every local VNI as a VLAN, and remote
+VTEPs. Everything is driven by EVPN routes:
+
+| Route | Becomes |
+|---|---|
+| Type-2 MAC/IP | MAC forwarding to the VTEP; the binding's ARP reply; its IRB host route |
+| Type-3 IMET | ingress replication to the VTEP; decap authorisation of the VTEP on the VNI |
+| Type-5 IP prefix | a prefix route through the VTEP over the L3VNI |
+
+The route formats, RD/RT derivation and MAC Mobility rules are in
+[`docs/sdn/bgp/evpn.md`](../sdn/bgp/evpn.md); the VXLAN port is described in
+[`docs/sdn/overlay/architecture.md`](../sdn/overlay/architecture.md).
+Everything the handler does is OpenFlow on one bridge: there is no packet-in
+path, no controller-side ARP handling and no kernel VXLAN device per peer.
+
+#### One flow-based VXLAN port
+
+`Start` creates one VXLAN port per bridge with `remote_ip=flow` and
+`key=flow`. Flows set the tunnel destination (`set_field:tun_dst`) and VNI
+(`set_field:tun_id`) of each frame they send to it, and match the VNI
+(`tun_id`) and source VTEP (`tun_src`) of each frame received on it. A new
+remote VTEP is a flow change, never a port change.
+
+The underlay must carry 9000-byte inner frames: the VTEP config refuses an
+underlay MTU below `vxlan.MinimumUnderlayMTU`, the 9000-byte
+`vxlan.OverlayMTU` plus 50 bytes of encapsulation.
+
+#### Pipeline
+
+| Table | Name | Function |
+|---|---|---|
+| 0 | Ingress | everything → 10 |
+| 10 | VXLAN decap | access ingress (VLAN → VNI); decap authorisation; every other tunnelled frame dropped |
+| 20–29 | Services | firewall, NAT, load balancer (gatewayd services); miss → 30 |
+| 30 | MAC | anycast MAC from the access port, or router MAC on the L3VNI → 50; anycast MAC from a VTEP → drop; known MAC → its VTEP or 70; miss → 40 |
+| 40 | ARP | ARP replies in the switch; miss → 60 |
+| 50 | L3 | host and prefix routes (symmetric IRB); miss → drop |
+| 60 | Egress | flood: the access port, then every VTEP on the VNI; miss → drop |
+| 70 | Local delivery | out the access port (`IN_PORT` when it came from there) |
+
+The table constants are in `modes/overlay.go`. Every overlay flow carries
+`OverlayCookie` (`0xF1BE000000000005`); `Start` and `Stop` remove them with
+one cookie-scoped delete.
+
+#### Decap authorisation
+
+A tunnelled frame enters the pipeline only through a table-10 flow matching
+`in_port=vxlan, tun_id=<VNI>, tun_src=<VTEP>` (priority 300). Any other frame
+from the VXLAN port hits the drop at priority 200. A VTEP is authorised:
+
+- on an L2VNI, while its Type-3 route places it there;
+- on the L3VNI, while one of its Type-2 IRB bindings or a Type-5 route it
+  carries is installed.
+
+So a VTEP can inject only into the VNIs EVPN says it serves. Before a route is
+installed the handler asks the configured `VTEPAdmitter` whether the VTEP may
+carry the VNI; a refusal leaves the route uninstalled and is returned as
+`ErrVTEPOperationFailed{Operation: "admit"}`. The admitter is required with
+EVPN: a config with `EVPNConfig` and no `Admitter` is refused with
+`ErrAdmitterNil`, so no route is ever installed unvetted.
+
+A Type-2 route may not claim an address this VTEP answers for, because its ARP
+reply and host route would share a flow identity with the gateway's or a local
+host's and take their traffic.
+
+- A route claiming the anycast gateway's MAC or IP is refused whole and never
+  retried. The handler logs a warning, counts it in
+  `OverlayModeStatus.RefusedBindings`, and returns
+  `ErrMACOperationFailed{Operation: "install remote"}` wrapping an
+  `ErrBindingConflict` that names the owner.
+- A route claiming an IP a local host holds on any VNI is held back, not
+  refused. It still bridges its MAC to the advertising VTEP; only its ARP
+  reply and host route wait. It is logged and counted the same way, and
+  `LookupMAC` lists the MAC without the held IP. When the local host goes
+  (`ForgetMAC`, `RemoveVNI` of its VNI, or the MAC moving to a remote VTEP),
+  every held binding no local host still answers for is applied. A failure to
+  apply one is returned as `ErrMACOperationFailed{Operation: "release held"}`,
+  and the binding stays held until the next route for that MAC. A withdrawal
+  drops a held binding like any other.
+
+This keeps a VM that comes back on another VTEP with a new MAC (a rebuilt VM,
+a failover VIP) reachable before its old local entry is forgotten. A route for
+a MAC local on the same VNI is no conflict: that is the MAC moving away, which
+MAC Mobility has already settled.
+
+#### BUM traffic, ARP suppression and symmetric IRB
+
+**BUM traffic** uses ingress replication from Type-3 routes: the VNI's
+table-60 flow outputs the frame to the access port (VLAN-tagged), then once
+per remote VTEP on the VNI. OpenFlow never outputs to a frame's ingress port,
+which gives split horizon: a flooded frame from a VTEP is never sent back into
+the fabric, and a local one never back to the access port.
+
+**ARP requests** from the access port for the anycast gateway — and, with
+`ARPSuppression`, for every known IPv4 binding, local or remote — are answered
+by a table-40 flow that rewrites the request into the reply and sends it back
+out `IN_PORT`. Unanswered ARP floods like other BUM traffic.
+
+**Symmetric IRB:** with `AnycastGatewayIP`/`AnycastGatewayMAC`, every VTEP is
+the same gateway, and frames from the access port to the anycast MAC go to
+table 50. A tunnelled frame to the anycast MAC is dropped: its ingress VTEP
+routes it, so it never needs this one's gateway, and routing it here would let
+any VTEP authorised on an L2VNI reach table 50 without the L3VNI's decap
+authorisation.
+
+- A local host route rewrites the MACs (anycast MAC → host MAC), tags the
+  host's VLAN and delivers locally.
+- With an `L3VNI` and the EVPN router MAC, a remote host route (from a Type-2
+  route naming the same L3VNI and a router MAC) or a Type-5 prefix route sends
+  the frame router MAC to router MAC on the L3VNI to the remote VTEP, which
+  routes the last hop. Frames arriving on the L3VNI for this VTEP's router MAC
+  go to table 50.
+
+Host routes outrank prefix routes; among prefixes the longest wins. When
+several VTEPs advertise one prefix, the lowest VTEP address carries it and a
+withdrawal falls back to the next. Only IPv4 is routed.
+
+#### Control plane
+
+| Handler call | EVPN action |
+|---|---|
+| `AddVNI(vni, vlan)` | segment flows installed, then `JoinVNI(vni, L3VNI)`: the Type-3 route is originated and the routes already received are replayed. A refused join removes the segment again |
+| `RemoveVNI(vni)` | `LeaveVNI(vni)`, then everything on the VNI is removed — and the Type-5 prefixes with the last VNI |
+| `LearnMAC(vni, mac, ip)` | local delivery flows installed, then `AdvertiseMACIP`. A failed advertisement leaves the flows; learning again retries it |
+| `ForgetMAC(vni, mac)` | local flows removed, then `WithdrawMACIP` for each binding. A withdrawal BGP refuses fails the call and is remembered; forgetting the MAC again retries it until BGP takes it, and `RemoveVNI` or `Stop` withdraws it with the VNI. Learning the binding again drops it |
+| imported route change | the registered handler installs or removes the flows above |
+
+A switch can apply part of a flow batch and refuse the rest
+(`openflow.ErrBatchPartialFailure`). When it refuses any of a change, the
+handler sends the mods that put every flow the batch touched back to what it
+had committed, so the switch and the handler's state are as they were and the
+operation or route can be applied again. A refused start flushes the overlay
+flows instead. If the switch refuses the put-back too, the error carries an
+`ErrFlowResyncFailed`: the switch may then hold flows the handler does not
+track. The handler marks its flows drifted, and the next change of any kind
+first flushes the overlay's flows (by cookie) and installs every flow it has
+committed, so stale flows such as a decap authorisation do not survive. A
+switch refusing that rebuild fails the change with an `ErrFlowResyncFailed`,
+and the rebuild is tried again on the change after. The OpenFlow client has no
+reconnect hook, so a reconnect alone does not trigger the rebuild; the next
+change does.
+
+OVS applies a batch one mod at a time, not atomically, and the OpenFlow client
+has no bundle support. So the start and the rebuild send the flows after the
+flush in a fail-closed order, the same on every rebuild: the pipeline's last
+table first, so a goto only ever reaches a table that is already complete and
+the table-0 goto that admits frames comes last; and within a table the highest
+priority first, so the table-10 drop of unauthorised tunnelled frames is in
+place before the table's miss. No tunnelled frame from an unauthorised VTEP
+passes while a batch is landing.
+
+Flows several objects need — every host behind one VTEP needs that VTEP's
+L3VNI decap flow — are reference counted: installed with the first holder and
+deleted with the last. Holders of one flow can disagree on what it does; the
+handler keeps each holder's version, installs the newest, and when the
+installed version's last holder lets go, installs the newest version still
+held rather than deleting the flow.
+
+#### Configuration (`OverlayModeConfig`)
+
+| Field | Meaning |
+|---|---|
+| `VTEPConfig` | local IPv4 VTEP, underlay interface and MTU, VXLAN UDP port |
+| `EVPNConfig` | EVPN manager; nil bridges local hosts only |
+| `BridgeName`, `AccessPort` | the bridge, and the port carrying the VNIs as VLANs |
+| `ARPSuppression` | answer ARP for every known binding |
+| `AnycastGatewayIP`, `AnycastGatewayMAC` | both or neither; turns on routing |
+| `L3VNI` | the IP-VRF of symmetric IRB; needs the anycast gateway and `EVPNConfig.RouterMAC` |
+| `Admitter` | vets remote VTEPs; required with `EVPNConfig` (`ErrAdmitterNil`) |
+
+#### Why gatewayd refuses `overlay` today
+
+gatewayd refuses `ServiceOverlay`: its `overlay:` config section has no VTEP
+or access-port fields to build the handler from, and VTEP admission is not yet
+backed by anything. Wiring it is planned. There is also a pipeline conflict to
+resolve first: the overlay's base flows (the table misses of 0, 10, 20 and 30)
+have the same table, priority and match as gatewayd's own pipeline flows, so
+installing them replaces gatewayd's and the overlay's flush then removes them.
+Running both on one bridge needs the gatewayd pipeline to hand those tables to
+the overlay first.
+
+### The edge and transit handlers
+
+`EdgeModeHandler` (`modes/edge.go`; `modes/edge_p2p.go` under the
+`platform_p2p` build tag; `modes/edge_pxe.go`) and `TransitModeHandler`
+(`modes/transit.go`) are unwired library code. Do not read their features as
+gateway capabilities:
+
+- **Edge.** IPv6 address pool and leases, per-peer rate limiting, and — only
+  under `platform_p2p` — device onboarding and DHT bootstrap over libp2p.
+  Without the tag, `OnboardDevice` and `BootstrapDHT` return
+  `ErrP2PNotEnabled`. With it, onboarding's TPM steps are placeholders:
+  `validateTPMEK` and `verifyTPMQuote` accept any non-empty input and
+  `issueIDevID` returns no certificate. The `DDOSProtection` type only flips a
+  running flag. The `edge` section is refused at start.
+- **Transit.** Prefix announcement over a BGP manager, an RPKI validator,
+  route-flap dampening and per-route signing (`RouteSigningKey`,
+  `SignRoute` / `VerifyRouteSignature`). The `transit` section does not use
+  any of it: `buildTransit` drives the `pkg/sdn/bgp` speaker directly.
+
+The P2P trusted network these handlers anticipate is planned, not
+implemented.
+
 ## 6. Persistence
 
 Proxy routes and pools live in a versioned config store; `ReloadProxyConfig`
@@ -1046,7 +1530,7 @@ the auth chain in the proxy rather than in each backend. `metrics.go` provides
 `MetricsSnapshot` and per-route `RouteMetrics`.
 
 Gateway-side: `GetPerfFlows`, `GetPerfDatapath` and `GetPerfConntrack`, surfaced
-as `platformctl sdn perf flows|datapath|conntrack`. When the perf backend is not
+as `platformctl sdn gateway perf flows|datapath|conntrack`. When the perf backend is not
 wired, these return `StatusUnavailable` rather than zeroes — an important
 distinction when you are trying to work out whether the datapath is idle or the
 instrumentation is off.
@@ -1113,8 +1597,7 @@ instead of leaving a gateway running unscraped.
 
 - [architecture.md](architecture.md) · [api.md](api.md) · [cli.md](cli.md) · [user.md](user.md)
 - [`docs/sdn/`](../sdn/) — bridges, ports, flows, port authentication, overlay
-- Deep dives carried over and not re-verified in this pass:
-  [`docs/sdn/gateway/`](../sdn/gateway/) — `edge-mode.md`, `overlay-mode.md`,
-  `transit-mode.md`, `loadbalancer.md`, `operations.md`, `configuration.md`
+- [`docs/sdn/overlay/architecture.md`](../sdn/overlay/architecture.md) — the VXLAN port and VTEP manager
+- [`docs/sdn/bgp/evpn.md`](../sdn/bgp/evpn.md) — EVPN route formats, RD/RT derivation, MAC Mobility
 - [`docs/proxy/`](../proxy/) — additional reverse-proxy material
 - [`docs/dns/`](../dns/) — the DNS service that carries DNS64 for IPv6-only client zones (#602)

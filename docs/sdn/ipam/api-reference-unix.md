@@ -22,4 +22,4 @@ platformctl --transport unix sdn ipam allocations
 ## See Also
 
 - [IPAM gRPC API Reference](api-reference-grpc.md)
-- [Gateway Unix API Reference](../gateway/api-reference-unix.md)
+- [Gateway Unix API Reference](../../gateway/api.md)

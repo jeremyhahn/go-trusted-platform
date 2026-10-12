@@ -302,4 +302,4 @@ journalctl -u platformd | grep -i bgp
 - [Configuration](configuration.md) - BGP configuration reference
 - [EVPN](evpn.md) - EVPN-specific documentation
 - [Transit](transit.md) - Transit routing documentation
-- [Gateway Operations](../gateway/operations.md) - Gateway operational procedures
+- [Gateway](../../gateway/user.md) - Gateway operational procedures

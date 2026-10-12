@@ -340,7 +340,7 @@ platformctl sdn ipam allocations --pool-id prod-v4
 ## Related Documentation
 
 - [SDN Architecture](../architecture.md) - SDN subsystem overview
-- [Gateway Edge Mode](../gateway/edge-mode.md) - Edge gateway IPAM integration
+- [Gateway](../../gateway/architecture.md) - the edge gateway and its IPAM surface
 - [Overlay Networking](../overlay/README.md) - VXLAN overlay addressing
 - [BGP Transit](../bgp/transit.md) - IP prefix announcement
 

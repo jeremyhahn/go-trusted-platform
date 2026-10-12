@@ -104,15 +104,23 @@ the reduced `/gateway/ipam` surface keeps its protojson payloads.
 
 | Capability | REST | gRPC / Unix | QUIC (under `0x2F`) | MCP | Embedded |
 |---|---|---|---|---|---|
-| LB status | `MISSING — docs/13 G7` | `GetLBStatus` | sub-opcode range (`pkg/api/daemon/gateway_lb_quic.go`) | `gateway_lb_status` | ✅ |
-| Add VIP | `MISSING — docs/13 G7` | `AddVIP` | as above | `gateway_lb_vip_add` | ✅ |
-| Get VIP | `MISSING — docs/13 G7` | `GetVIP` | as above | `gateway_lb_vip_get` | ✅ |
-| List VIPs | `MISSING — docs/13 G7` | `ListVIPs` | as above | `gateway_lb_vip_list` | ✅ |
-| Remove VIP | `MISSING — docs/13 G7` | `RemoveVIP` | as above | `gateway_lb_vip_remove` | ✅ |
-| Set VIP backends | `MISSING — docs/13 G7` | `SetVIPBackends` | as above | `gateway_lb_vip_set_backends` | ✅ |
+| LB status | `GET /api/v1/sdn/gateway/lb/status` | `GetLBStatus` | `OpGatewayLBStatus` (`0x35`) | `gateway_lb_status` | ✅ |
+| Add VIP | `POST /api/v1/sdn/gateway/lb/vips` | `AddVIP` | `OpGatewayLBAddVIP` (`0x30`) | `gateway_lb_vip_add` | ✅ |
+| Get VIP | `GET /api/v1/sdn/gateway/lb/vips/{protocol}/{address}/{port}` | `GetVIP` | `OpGatewayLBGetVIP` (`0x32`) | `gateway_lb_vip_get` | ✅ |
+| List VIPs | `GET /api/v1/sdn/gateway/lb/vips` | `ListVIPs` | `OpGatewayLBListVIPs` (`0x33`) | `gateway_lb_vip_list` | ✅ |
+| Remove VIP | `DELETE /api/v1/sdn/gateway/lb/vips/{protocol}/{address}/{port}` | `RemoveVIP` | `OpGatewayLBRemoveVIP` (`0x31`) | `gateway_lb_vip_remove` | ✅ |
+| Set VIP backends | `PUT /api/v1/sdn/gateway/lb/vips/{protocol}/{address}/{port}/backends` | `SetVIPBackends` | `OpGatewayLBSetVIPBackends` (`0x34`) | `gateway_lb_vip_set_backends` | ✅ |
 
-A production `platformd` does not wire the load balancer backend yet (#660,
-see §5a), so these verbs answer "not configured" on a live platform.
+The REST routes are registered by `GatewayHandlers.registerLBRoutes`
+(`pkg/api/rest/gateway_lb_handlers.go`); QUIC sub-opcodes are in
+`pkg/api/quic/gateway_lb_handlers.go`. A VIP is keyed by protocol, address
+and port on every transport. The add body is
+`{address, port, protocol, algorithm?, backends: [{address, port, weight?}]}`;
+set-backends takes `{backends: [...]}` and replaces the whole set. A VIP read
+returns its `ct_zone`, `group_id` and per-backend `healthy` flag.
+
+A production `platformd` does not wire the load balancer backend yet (see
+§5a), so these verbs answer "not configured" on a live platform.
 
 ---
 
@@ -129,10 +137,10 @@ see §5a), so these verbs answer "not configured" on a live platform.
 > REST, `StatusUnavailable` on QUIC, and "service not available" from MCP.
 > That holds even while the `nat64:` section is running and healthy.
 >
-> Connecting the control plane to gatewayd-resident services is #660. It is
-> blocked on an owner ruling: live IPC over the #557 seam, or the #594
+> Connecting the control plane to gatewayd-resident services is planned and
+> awaits a design decision: live IPC over the supervisor seam, or the
 > telemetry snapshot. The load balancer (§5) and perf (§6) verbs share the
-> same gap. Until #660 lands, read translator health from `gatewayd` itself
+> same gap. Until it lands, read translator health from `gatewayd` itself
 > or from the telemetry snapshot's `nat64` section.
 >
 > What is proven today:
@@ -188,24 +196,27 @@ QUIC has no failed-precondition byte. It carries this case as
 `FailedPrecondition`. The Go SDK reads that byte as `InvalidArgument`. The
 kernel's reason is in the message on every transport.
 
-**The load balancer has no REST surface at all.** Six capabilities on gRPC,
-Unix, QUIC, MCP and embedded; zero on REST. A REST-only client cannot see or
-manage a VIP.
-
 ---
 
 ## 6. Performance and datapath statistics
 
-| Capability | REST | gRPC / Unix | QUIC (under `0x2F`, `0x36`–`0x38`) | MCP | Embedded |
+| Capability | REST | gRPC / Unix | QUIC (under `0x2F`) | MCP | Embedded |
 |---|---|---|---|---|---|
-| Flow statistics | `MISSING — docs/13 G7` | `GetPerfFlows` | ✅ | `gateway_perf_flows` | ✅ |
-| Datapath statistics | `MISSING — docs/13 G7` | `GetPerfDatapath` | ✅ | `gateway_perf_datapath` | ✅ |
-| Conntrack statistics | `MISSING — docs/13 G7` | `GetPerfConntrack` | ✅ | `gateway_perf_conntrack` | ✅ |
+| Flow-programming measurement | `POST /api/v1/sdn/gateway/perf/flows` | `GetPerfFlows` | `OpGatewayPerfFlows` (`0x36`) | `gateway_perf_flows` | ✅ |
+| Datapath statistics | `GET /api/v1/sdn/gateway/perf/datapath` | `GetPerfDatapath` | `OpGatewayPerfDatapath` (`0x37`) | `gateway_perf_datapath` | ✅ |
+| Conntrack statistics | `GET /api/v1/sdn/gateway/perf/conntrack` | `GetPerfConntrack` | `OpGatewayPerfConntrack` (`0x38`) | `gateway_perf_conntrack` | ✅ |
 
-The perf sub-opcodes `0x36`–`0x38` are served by the same shared perf service
-as the other transports; when the perf backend is not wired, they return
+**Flow measurement mutates the bridge.** It installs ephemeral flows into the
+dedicated perf table 250 under cookie `0xF1BE00FF00000000`, times the install,
+and removes them with one cookie-scoped delete
+(`pkg/sdn/gateway/services/perf/service.go`). That is why it is a REST `POST`
+and why its MCP tool needs `sdn:write` while the two read verbs need
+`sdn:read` (`pkg/api/mcp/authz.go`).
+
+The perf sub-opcodes are served by the same shared perf service as the other
+transports; when the perf backend is not wired, they return
 `StatusUnavailable` rather than failing as unknown opcodes. A production
-`platformd` does not wire the perf backend yet (#660, see §5a), so on a live
+`platformd` does not wire the perf backend yet (see §5a), so on a live
 platform that is what every transport answers.
 
 ---

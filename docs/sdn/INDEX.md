@@ -46,12 +46,9 @@ Complete documentation for the Software-Defined Networking (SDN) components in g
 3. Understand EVPN in [bgp/evpn.md](./bgp/evpn.md)
 
 #### Gateway Node Operations
-1. Review [gateway/README.md](./gateway/README.md) for overview
-2. Configure services in [gateway/configuration.md](./gateway/configuration.md)
-3. Check deployment modes:
-   - Overlay mode: [gateway/overlay-mode.md](./gateway/overlay-mode.md)
-   - Edge/P2P mode: [gateway/edge-mode.md](./gateway/edge-mode.md)
-   - Transit/BGP mode: [gateway/transit-mode.md](./gateway/transit-mode.md)
+The gateway is its own feature: start with
+[docs/gateway/architecture.md](../gateway/architecture.md), then
+[user.md](../gateway/user.md) to configure its service sections.
 
 ## Complete Documentation Map
 
@@ -90,24 +87,9 @@ firewall/
 
 ### Gateway Node
 
-```
-gateway/
-├── README.md              # Multi-service gateway overview
-├── configuration.md       # Config-driven service activation
-├── architecture.md        # Service handlers, integration
-├── overlay-mode.md        # VTEP, VXLAN, EVPN configuration
-├── edge-mode.md           # P2P networking, ACME, edge services
-├── transit-mode.md        # BGP route announcement
-├── operations.md          # Runtime management
-└── loadbalancer.md        # Load balancer configuration
-```
-
-**When to use:**
-- Deploying a unified gateway node
-- Configuring overlay networking
-- Setting up edge/P2P services
-- Announcing routes via BGP
-- Managing load balancer
+Documented in the [docs/gateway/](../gateway/) feature folder
+(architecture, engineering, cli, api, user); `gateway/README.md` here is only
+a pointer to it.
 
 ### BGP Routing
 
@@ -249,7 +231,7 @@ sdn:
       # ... firewall config
 ```
 
-See: [gateway/configuration.md](./gateway/configuration.md)
+See: [gateway/user.md — Configuring the daemon](../gateway/user.md#configuring-the-daemon)
 
 ## API References
 
@@ -259,7 +241,7 @@ Each service exposes APIs via multiple protocols:
 |---------|------|------|------|-----|------|
 | Fabric | [ref](./fabric/api-reference.md) | N/A | N/A | N/A | N/A |
 | Firewall | No | No | No | No | No |
-| Gateway | [ref](./gateway/api-reference-rest.md) | [ref](./gateway/api-reference-grpc.md) | [ref](./gateway/api-reference-quic.md) | [ref](./gateway/api-reference-mcp.md) | [ref](./gateway/api-reference-unix.md) |
+| Gateway | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md) | [ref](../gateway/api.md#1-the-six-transports) |
 | BGP | [ref](./bgp/api-reference-rest.md) | [ref](./bgp/api-reference-grpc.md) | [ref](./bgp/api-reference-quic.md) | [ref](./bgp/api-reference-mcp.md) | [ref](./bgp/api-reference-unix.md) |
 | DHCP | No | No | No | No | No |
 | IPAM | [ref](./ipam/api-reference-rest.md) | [ref](./ipam/api-reference-grpc.md) | [ref](./ipam/api-reference-quic.md) | [ref](./ipam/api-reference-mcp.md) | [ref](./ipam/api-reference-unix.md) |
@@ -295,7 +277,7 @@ See: [cli-usage.md](./cli-usage.md) for full command reference
 
 ### System Architecture
 
-See: [ARCHITECTURE.md](./ARCHITECTURE.md)
+See: [architecture.md](./architecture.md)
 
 ```
 Platform Daemon
@@ -326,7 +308,8 @@ Packet → ConnTrack → Zone Resolver → NAT → Rules → Verdict
 | Devices not getting DHCP | [DHCP](./dhcp/architecture.md) | Verify pool config, check zone reachability |
 | Overlay segments isolated | [Overlay](./overlay/architecture.md) | Check VNI mapping, EVPN state |
 
-See: [troubleshooting.md](./troubleshooting.md) (if exists)
+See: [user.md — Troubleshooting](./user.md#troubleshooting), and for the gateway
+[gateway/user.md — Troubleshooting](../gateway/user.md#troubleshooting)
 
 ## Testing
 
@@ -371,7 +354,7 @@ All services support mutual TLS for inter-node communication.
 
 ## Related Documentation
 
-- [Configuration Guide](../configuration.md) — Top-level config structure
+- [Configuration Guide](../daemon/configuration.md#configuration-structure) — Top-level config structure
 - [Security Architecture](../security/architecture.md) — Overall security design
 - [Secrets Framework](../secrets/README.md) — Secret management
 - [Bootstrap Process](../bootstrap/README.md) — Node initialization

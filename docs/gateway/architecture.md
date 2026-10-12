@@ -4,9 +4,6 @@
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
 > [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
->
-> Longer-form material predating this migration lives in
-> [`docs/sdn/gateway/`](../sdn/gateway/) and has not been re-verified.
 
 ## The problem
 
@@ -288,7 +285,7 @@ the refusal table. There is no third kind.
 | `tunnels` | `pkg/sdn/tunnel` manager, every configured tunnel ensured, rolled back on the first failure; `ipsec` and `wireguard` keys resolved through `HostRuntime.SecretResolver` | — |
 | `transit` (or a `bgp` section) | `pkg/sdn/bgp` speaker with secrets resolved through `HostRuntime.SecretResolver`, every configured neighbour added | — |
 | `proxy` | registered by `gatewayd serve` assembly (`proxysvc`), not by the table | — |
-| `overlay` | — | the overlay handler forwards over a flow-based VXLAN port ([overlay mode](../sdn/gateway/overlay-mode.md)), but the gateway overlay config has no VTEP or access-port fields to build it from and VTEP admission is not yet backed (#709). Owner design decision (2026-09-26): the EVPN overlay is required, roadmap #709; lighting a public address block depends on it plus gateway HA (#596, #710) |
+| `overlay` | — | the overlay handler forwards over a flow-based VXLAN port ([engineering.md §5a](engineering.md#5a-handler-libraries-in-modes)), but the gateway overlay config has no VTEP or access-port fields to build it from and VTEP admission is not yet backed. The EVPN overlay is required and planned; lighting a public address block depends on it plus gateway HA (planned) |
 | `edge` | — | the edge constructor needs an IPv6 pool, ACME toggles and a FROST pool the runtime does not inject (#553) |
 | `dhcp` | — | gatewayd has no IPAM allocator (#553) |
 | `pxe` | — | the PXE controller needs a serving interface, address and range the section does not carry; platformd's iPXE server provisions today (#553) |
@@ -441,9 +438,8 @@ re-establish; stateful conntrack sync is #710) and any
 Raft-coordinated VIP takeover. `pkg/sdn/cluster/gateway_partitions.go` still
 declares partition keys for such a design; it is referenced by nothing and is
 kept only until R8 decides whether conntrack/NAT-session replication uses it or
-replaces it. The legacy descriptions under [`docs/sdn/gateway/`](../sdn/gateway/)
-and [`docs/sdn/bgp/README.md`](../sdn/bgp/README.md) that described other HA
-models are marked superseded (#559).
+replaces it. The HA models described in
+[`docs/sdn/bgp/README.md`](../sdn/bgp/README.md) are superseded by this section.
 
 ## Telemetry is one document, derived from the services
 

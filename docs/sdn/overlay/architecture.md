@@ -9,7 +9,7 @@ OpenFlow on one OVS bridge forwards it. Four pieces divide the work:
 |-------|---------|------|
 | EVPN manager | `pkg/sdn/bgp` (`EVPNManager`) | Type-2/3/5 routes: origination, import, MAC Mobility. See [../bgp/evpn.md](../bgp/evpn.md) |
 | VTEP manager | `pkg/sdn/vxlan` (`VTEPManager`) | the one flow-based VXLAN port on the bridge |
-| Overlay mode handler | `pkg/sdn/gateway/modes` (`OverlayModeHandler`) | the data plane: every overlay flow, built from EVPN routes. See [../gateway/overlay-mode.md](../gateway/overlay-mode.md) |
+| Overlay mode handler | `pkg/sdn/gateway/modes` (`OverlayModeHandler`) | the data plane: every overlay flow, built from EVPN routes. See [the overlay handler](../../gateway/engineering.md#the-overlay-handler-overlaymodehandler) |
 | Overlay controller | `pkg/sdn/overlay` (`Controller`) | the API-facing registry of VNIs, VTEPs and remote MACs; joins a VNI's EVI to originate its Type-3 route |
 
 ```
@@ -73,7 +73,7 @@ is refused rather than fragmenting. Platform switch ports run 9216
 
 The OpenFlow pipeline, decap authorisation, BUM ingress replication,
 ARP suppression and symmetric IRB are specified in
-[../gateway/overlay-mode.md](../gateway/overlay-mode.md). In short:
+[the overlay handler](../../gateway/engineering.md#the-overlay-handler-overlaymodehandler). In short:
 
 - a frame from the VXLAN port enters the pipeline only when its
   `tun_src` is a VTEP EVPN places on its `tun_id`; every other tunnelled
@@ -113,7 +113,7 @@ bookkeeping for the API. The data plane is the overlay mode handler's.
 
 ## See Also
 
-- [Overlay mode (data plane)](../gateway/overlay-mode.md)
+- [Overlay handler (data plane)](../../gateway/engineering.md#the-overlay-handler-overlaymodehandler)
 - [BGP EVPN](../bgp/evpn.md)
 - [Configuration](configuration.md)
 - [Operations](operations.md)

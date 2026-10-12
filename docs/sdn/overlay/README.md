@@ -46,7 +46,7 @@ Host A                                              Host B
 
 Each host's flows pick the destination VTEP and VNI per frame; adding a
 host changes flows, not ports. The pipeline is specified in
-[../gateway/overlay-mode.md](../gateway/overlay-mode.md) and the
+[the overlay handler](../../gateway/engineering.md#the-overlay-handler-overlaymodehandler) and the
 components in [architecture.md](architecture.md).
 
 ## VTEP Discovery
@@ -103,7 +103,7 @@ nc -zuv 10.0.0.2 4789
 | Document | Description |
 |----------|-------------|
 | [Architecture](architecture.md) | Components, the VXLAN port, encapsulation and MTU |
-| [Overlay mode](../gateway/overlay-mode.md) | The OpenFlow data plane |
+| [Overlay handler](../../gateway/engineering.md#the-overlay-handler-overlaymodehandler) | The OpenFlow data plane |
 | [Configuration](configuration.md) | Complete configuration reference |
 | [API Reference](api-reference.md) | Multi-protocol API documentation |
 

@@ -34,5 +34,5 @@ there are no peer-management endpoints.
 
 ## See Also
 
-- [Gateway REST API Reference](../gateway/api-reference-rest.md)
+- [Gateway REST API Reference](../../gateway/api.md)
 - [CLI Usage](cli-usage.md)

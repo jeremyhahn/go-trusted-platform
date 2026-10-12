@@ -19,5 +19,5 @@ there are no peer-management tools.
 
 ## See Also
 
-- [Gateway MCP API Reference](../gateway/api-reference-mcp.md)
+- [Gateway MCP API Reference](../../gateway/api.md)
 - [CLI Usage](cli-usage.md)

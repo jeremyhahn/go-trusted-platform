@@ -23,4 +23,4 @@ Input schemas are declared per tool in
 ## See Also
 
 - [API Reference](api-reference.md) — Overview
-- [Gateway MCP API Reference](../gateway/api-reference-mcp.md)
+- [Gateway MCP API Reference](../../gateway/api.md)

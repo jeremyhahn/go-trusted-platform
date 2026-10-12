@@ -4,7 +4,7 @@ Concise procedure for validating OVS hardware flow offload and recording
 datapath performance numbers on the X10 mini cluster. Companion to
 [hw-offload.md](./hw-offload.md) (bring-up detail) and the
 `platformctl sdn gateway perf` command
-([operations.md](../gateway/operations.md#performance-verification)).
+([user.md](../../gateway/user.md#measuring-the-datapath)).
 
 > **Written ahead of hardware availability.** The current lab NICs on the
 > X10 minis are 1/10G Intel parts with no tc-flower offload engine —
@@ -127,5 +127,5 @@ Flows not offloading (`dpctl/dump-flows type=offloaded` empty):
 ## 7. Related
 
 - [hw-offload.md](./hw-offload.md) — requirements, bring-up, verification detail
-- [operations.md §Performance Verification](../gateway/operations.md#performance-verification) — the perf CLI
+- [user.md §Measuring the datapath](../../gateway/user.md#measuring-the-datapath) — the perf CLI
 - [firewall/performance.md](../firewall/performance.md) — ct pipeline characteristics

@@ -22,5 +22,5 @@ platformctl --transport unix sdn gateway bgp withdraw --prefix 2001:db8::/36
 ## See Also
 
 - [BGP gRPC API Reference](api-reference-grpc.md)
-- [Gateway Unix API Reference](../gateway/api-reference-unix.md)
+- [Gateway Unix API Reference](../../gateway/api.md)
 - [CLI Usage](cli-usage.md)

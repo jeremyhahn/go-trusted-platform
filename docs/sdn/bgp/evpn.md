@@ -161,7 +161,7 @@ does `LeaveVNI`, and advertising the binding again drops it. Handlers run withou
 lock the manager's lookups take, but a handler must not call `JoinVNI`,
 `LeaveVNI` or `WithdrawMACIP`.
 The overlay data plane that consumes them is
-[../gateway/overlay-mode.md](../gateway/overlay-mode.md).
+[the overlay handler](../../gateway/engineering.md#the-overlay-handler-overlaymodehandler).
 
 ### Session policy: route-target allowlists
 

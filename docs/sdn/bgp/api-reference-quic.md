@@ -24,5 +24,5 @@ platformctl --transport quic sdn gateway bgp announce --prefix 2001:db8::/36
 
 ## See Also
 
-- [Gateway QUIC API Reference](../gateway/api-reference-quic.md)
+- [Gateway QUIC API Reference](../../gateway/api.md)
 - [CLI Usage](cli-usage.md)

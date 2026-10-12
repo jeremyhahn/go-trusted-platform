@@ -101,4 +101,4 @@ just IPAM — see issue #665.
 ## See Also
 
 - [API Reference](api-reference.md) — Overview
-- [Gateway REST API Reference](../gateway/api-reference-rest.md)
+- [Gateway REST API Reference](../../gateway/api.md)

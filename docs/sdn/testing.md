@@ -445,4 +445,4 @@ go test -bench=. -benchmem ./pkg/sdn/...
 
 For live datapath measurements on a running gateway use
 `platformctl sdn gateway perf` (see
-[gateway/operations.md](./gateway/operations.md#performance-verification)).
+[gateway/user.md — Measuring the datapath](../gateway/user.md#measuring-the-datapath)).
