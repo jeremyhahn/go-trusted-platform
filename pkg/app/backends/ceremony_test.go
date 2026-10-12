@@ -18,9 +18,77 @@ import (
 	"errors"
 	"testing"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
+
+// fakeCeremonyClient answers CeremonyInitialize with a canned response.
+type fakeCeremonyClient struct {
+	quicbaassdk.QRDBCeremonyClient
+	resp *quicbaassdk.QRDBCeremonyInitializeResponse
+	err  error
+}
+
+func (f *fakeCeremonyClient) CeremonyInitialize(_ context.Context, _ *quicbaassdk.QRDBCeremonyInitializeRequest) (*quicbaassdk.QRDBCeremonyInitializeResponse, error) {
+	return f.resp, f.err
+}
+
+// fakeCeremonyMgmt hands out the fake ceremony client.
+type fakeCeremonyMgmt struct {
+	quicbaassdk.BarrierCeremonyService
+	ceremony *fakeCeremonyClient
+}
+
+func (f *fakeCeremonyMgmt) Ceremony() (quicbaassdk.QRDBCeremonyClient, error) {
+	return f.ceremony, nil
+}
+
+// fakeCeremonySDK is an SDK client exposing only the ceremony management service.
+type fakeCeremonySDK struct {
+	quicbaassdk.Client
+	mgmt *fakeCeremonyMgmt
+}
+
+func (f *fakeCeremonySDK) BarrierCeremonyMgmt() quicbaassdk.BarrierCeremonyService {
+	return f.mgmt
+}
+
+func newFakeCeremonyBackend(ceremony *fakeCeremonyClient) *CeremonyBackend {
+	sdk := &fakeCeremonySDK{mgmt: &fakeCeremonyMgmt{ceremony: ceremony}}
+	return NewCeremonyBackend(logging.DefaultLogger(), sdk)
+}
+
+func TestCeremonyBackend_Initialize_ReturnsSPKIPin(t *testing.T) {
+	b := newFakeCeremonyBackend(&fakeCeremonyClient{
+		resp: &quicbaassdk.QRDBCeremonyInitializeResponse{SPKIPin: "sha256/abc", State: "complete"},
+	})
+
+	res, err := b.Initialize(context.Background(), &daemon.CeremonyInitRequest{SOPIN: "so", UserPIN: "user"})
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if res.SPKIPin != "sha256/abc" {
+		t.Fatalf("SPKIPin = %q, want sha256/abc", res.SPKIPin)
+	}
+	if res.State != daemon.CeremonyStateComplete {
+		t.Fatalf("State = %v, want complete", res.State)
+	}
+}
+
+func TestCeremonyBackend_Initialize_PropagatesUpstreamError(t *testing.T) {
+	boom := errors.New("ceremony failed")
+	b := newFakeCeremonyBackend(&fakeCeremonyClient{err: boom})
+
+	res, err := b.Initialize(context.Background(), &daemon.CeremonyInitRequest{})
+	if !errors.Is(err, boom) {
+		t.Fatalf("got %v, want the upstream error", err)
+	}
+	if res != nil {
+		t.Fatalf("expected no result, got %+v", res)
+	}
+}
 
 func TestCeremonyBackend_NilClient_ReturnsTypedError(t *testing.T) {
 	b := NewCeremonyBackend(logging.DefaultLogger(), nil)

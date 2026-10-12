@@ -251,21 +251,21 @@ openssl verify -CAfile ca.pem client.pem
 # Check barrier status
 platformctl barrier status
 
-# Check if TPM unsealing configured
+# Check the seal strategy and Shamir layout
 grep -A5 "barrier:" config.yaml
 ```
 
-**Fixes:**
+**Fixes:** This is expected after every restart. `platformd` never unseals the
+barrier itself, whatever the seal strategy (`tpm2` included); an operator
+unseals it. See
+[Unsealing after a restart](../barrier/user.md#unsealing-after-a-restart).
 
 ```bash
-# Auto-unseal with TPM (if configured)
-sudo platformctl barrier unseal
+# Single-secret barrier
+sudo platformctl barrier unseal --passphrase <passphrase>
 
-# Or unseal with shares
-sudo platformctl barrier unseal \
-    --share share-1.enc \
-    --share share-2.enc \
-    --share share-3.enc
+# Or Shamir barrier
+sudo platformctl barrier unseal-shares --share <s1> --share <s2> --share <s3>
 
 # Verify unsealed
 platformctl barrier status
@@ -288,19 +288,25 @@ echo "Need to retrieve Shamir shares from emergency contacts"
 **Recovery:**
 
 ```bash
-# If TPM strategy enabled, use auto-unseal
-sudo platformctl barrier unseal
+# There is no secret-less unseal, whatever the seal strategy (tpm2
+# included). A Shamir barrier needs a threshold of shares.
 
 # If shares needed, obtain from:
 # - Emergency contacts
 # - Cloud storage (if backed up)
 # - Off-site locations
 
-# Reconstruct with threshold number
-sudo platformctl barrier unseal \
-    --share /path/to/share-1.enc \
-    --share /path/to/share-2.enc \
-    --share /path/to/share-3.enc
+# Submit the threshold number of shares
+sudo platformctl barrier unseal-shares \
+    --share <s1> --share <s2> --share <s3>
+```
+
+Without a threshold of barrier shares, recovery shares made earlier with
+`platformctl barrier recovery generate` are the remaining path; see
+[Recovery keys](../barrier/user.md#recovery-keys).
+
+```bash
+sudo platformctl barrier recovery recover --share <r1> --share <r2> --share <r3>
 ```
 
 ### Barrier Unseal Fails

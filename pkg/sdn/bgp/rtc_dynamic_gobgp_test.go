@@ -143,6 +143,15 @@ func startVTEP(t *testing.T, routerID string) *server.BgpServer {
 
 // connectVTEP has a started VTEP dial the RR from source and waits until the
 // session is established.
+//
+// Originate the routes a session must carry before connecting it. GoBGP
+// publishes the ESTABLISHED peer event from inside its FSM callback, before it
+// marks the peer established for advertising (fsmHandler.loop runs the
+// callback, then fsm.state.Store). A path added in that window fails
+// needToAdvertise and is never sent, because the callback's initial dump has
+// already run. Routes in the RIB before the dial ride that dump. A route added
+// after the session has delivered an UPDATE is safe, because GoBGP reads
+// UPDATEs only once the peer is marked established.
 func connectVTEP(t *testing.T, v *server.BgpServer, source string, rrPort int32) {
 	t.Helper()
 	events := peerEvents(t, v)
@@ -288,9 +297,6 @@ func TestRealGoBGP_RTConstrainFiltersEVPN(t *testing.T) {
 	b := startVTEP(t, "10.0.0.3")
 	c := startVTEP(t, "10.0.0.4")
 
-	connectVTEP(t, a, "127.0.0.2", rrPort)
-	connectVTEP(t, b, "127.0.0.3", rrPort)
-	connectVTEP(t, c, "127.0.0.4", rrPort)
 	bVNIs := receivedVNIs(t, b)
 	cVNIs := receivedVNIs(t, c)
 
@@ -298,6 +304,10 @@ func TestRealGoBGP_RTConstrainFiltersEVPN(t *testing.T) {
 	joinVNI(t, c, "127.0.0.4", 200)
 	originateIMET(t, a, "127.0.0.2", 100)
 	originateIMET(t, a, "127.0.0.2", 200)
+
+	connectVTEP(t, a, "127.0.0.2", rrPort)
+	connectVTEP(t, b, "127.0.0.3", rrPort)
+	connectVTEP(t, c, "127.0.0.4", rrPort)
 
 	awaitVNI(t, cVNIs, 200, 100)
 	awaitVNI(t, bVNIs, 100, 200)
@@ -337,9 +347,9 @@ func TestRealGoBGP_DynamicNeighborsAdmitOnlyTheFabric(t *testing.T) {
 	inside := startVTEP(t, "10.0.0.2")
 	rrVNIs := receivedVNIs(t, rr)
 
-	connectVTEP(t, inside, "127.0.0.2", rrPort)
 	joinVNI(t, inside, "127.0.0.2", 300)
 	originateIMET(t, inside, "127.0.0.2", 300)
+	connectVTEP(t, inside, "127.0.0.2", rrPort)
 	awaitVNI(t, rrVNIs, 300)
 
 	// A dynamic peer carries its address in State only: GoBGP's

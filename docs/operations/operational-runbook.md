@@ -74,34 +74,28 @@ Barrier Status:
 
 ### Unseal the Barrier
 
-#### Automatic Unseal (TPM/Hardware)
+`platformd` never unseals the barrier itself, whatever the seal strategy
+(`tpm2` and `pkcs11` included). It waits at the barrier gate until an operator
+supplies a secret or shares. See
+[Unsealing after a restart](../barrier/user.md#unsealing-after-a-restart).
 
-If barrier uses TPM or PKCS11 strategy:
+#### Single-Secret Unseal
 
 ```bash
-# Auto-unseal (hardware-backed keys)
-sudo platformctl barrier unseal
+sudo platformctl barrier unseal --passphrase <passphrase>
 
 # Verify unsealed
 platformctl barrier status
 ```
 
-#### Manual Unseal (Shamir Shares)
-
-If barrier uses software strategy:
+#### Shamir Unseal
 
 ```bash
-# View available shares
-ls /var/lib/trusted-platform/barrier/shares/
-
 # Unseal with shares (threshold=3, need any 3 of 5)
-sudo platformctl barrier unseal \
-    --share share-1.enc \
-    --share share-2.enc \
-    --share share-3.enc
+sudo platformctl barrier unseal-shares --share <s1> --share <s2> --share <s3>
 
-# Or all shares (easier)
-sudo platformctl barrier unseal --all-shares
+# Or one share per line from a file
+sudo platformctl barrier unseal-shares --shares-file <shares-file>
 ```
 
 ### Initialize Barrier

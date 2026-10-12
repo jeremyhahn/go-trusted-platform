@@ -117,7 +117,9 @@ by failure — that is what the quota-check API is for
 ## Per-tenant barriers
 
 A barrier is a cryptographic seal over the tenant's data. Sealed means the data
-is inaccessible until unsealed.
+is inaccessible until unsealed. What a barrier is, and how a tenant's barrier
+differs from the platform barrier that gates `platformd` start-up, is explained
+in [`docs/barrier/`](../barrier/user.md#tenant-barriers).
 
 ```bash
 platformctl tenant barrier init tenant-a

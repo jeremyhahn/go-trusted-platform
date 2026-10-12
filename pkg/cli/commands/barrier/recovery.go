@@ -68,8 +68,10 @@ func newRecoveryGenerateCommand(getFlags func() *cli.CommonFlags) *cobra.Command
   --total       Required. N — total recovery shares to generate (>= threshold).
   --so-pin      Optional. Security Officer PIN verified against the canonical PINBackend.
 
-The generated shares are returned to stdout and MUST be captured and
-distributed to disaster-recovery custodians.`,
+The shares are not printed. Upstream seals each recovery share to an
+enrolled recovery officer and returns only the counts; officers claim
+their shares through the upstream recovery share-claim flow, which
+platformctl does not expose.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runRecoveryGenerate(getFlags(), f)
@@ -86,13 +88,7 @@ distributed to disaster-recovery custodians.`,
 
 // validateRecoveryGenerateFlags applies the canonical rules.
 func validateRecoveryGenerateFlags(f *recoveryGenerateFlags) error {
-	if f.total < 2 {
-		return ErrInvalidTotal{Total: f.total}
-	}
-	if f.threshold < 2 || f.threshold > f.total {
-		return ErrInvalidThreshold{Threshold: f.threshold, Total: f.total}
-	}
-	return nil
+	return validateShamirSplit(f.threshold, f.total)
 }
 
 // runRecoveryGenerate validates the flag set and delegates to

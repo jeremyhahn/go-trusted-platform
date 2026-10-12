@@ -27,7 +27,6 @@ import (
 
 // sealFlags holds the canonical `barrier seal` flag set.
 type sealFlags struct {
-	soPin     string
 	assumeYes bool
 }
 
@@ -39,19 +38,18 @@ func newSealCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Seal the barrier",
 		Long: `Seal the barrier to protect platform data at rest.
 
-  --so-pin       Optional. SO PIN verified against the canonical PINBackend.
   -y, --assume-yes  Skip the interactive confirmation prompt.
 
 Sealing renders all subsequently issued I/O against the barrier
 encrypted. The barrier must be unsealed before platformd can read or
-write the data plane again.`,
+write the data plane again.
+
+Seal takes no PIN: the upstream seal call carries no request.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runSeal(cmd.InOrStdin(), cmd.OutOrStdout(), getFlags(), f)
 		},
 	}
-	cmd.Flags().StringVar(&f.soPin, "so-pin", "",
-		"Security Officer PIN (verified against the canonical PINBackend when configured)")
 	cmd.Flags().BoolVarP(&f.assumeYes, "assume-yes", "y", false,
 		"Skip the interactive confirmation prompt")
 	return cmd

@@ -179,6 +179,7 @@ func (b *CeremonyBackend) Initialize(ctx context.Context, req *daemon.CeremonyIn
 		CeremonyID:    resp.SPKIPin,
 		State:         mapCeremonyState(resp.State),
 		InitializedAt: time.Now().UTC(),
+		SPKIPin:       resp.SPKIPin,
 	}, nil
 }
 

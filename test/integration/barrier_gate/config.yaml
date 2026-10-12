@@ -1,7 +1,7 @@
 # Barrier-Gate Integration Test Configuration
 #
 # Minimal production-style config for the M6 barrier-gate integration tests.
-# Drives platformd with seal_strategy=software and auto_unseal=false so the
+# Drives platformd with seal_strategy=software so the
 # init-only gate listener (127.0.0.1:9446) stays bound until the test calls
 # POST /init or POST /unseal.
 
@@ -26,7 +26,6 @@ domain: localhost
 
 barrier:
   seal_strategy: software
-  auto_unseal: false
 
 # =============================================================================
 # QUICBAAS CONFIGURATION (Embedded, PebbleDB backend)

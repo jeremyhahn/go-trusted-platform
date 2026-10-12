@@ -181,7 +181,7 @@ and 33 feature groups. A build with the `pkcs11` tag adds `pkcs11`
 | `admin` | [`auth/cli.md`](../auth/cli.md) |
 | `attestation` | [`attestation/cli.md`](../attestation/cli.md) |
 | `authenticode`, `secure-boot` | [`firmware/cli.md`](../firmware/cli.md) |
-| `barrier` | [`cli/barrier.md`](../cli/barrier.md) |
+| `barrier` | [`barrier/cli.md`](../barrier/cli.md) |
 | `bmc` | [`bmc/cli.md`](../bmc/cli.md) |
 | `bootstrap`, `firstboot` | [`bootstrap/cli.md`](../bootstrap/cli.md) |
 | `ceremony` | [`cli/ceremony.md`](../cli/ceremony.md) |
@@ -602,7 +602,7 @@ status says only "startup failed" and the **error message** carries the detail:
 
 ```
 platformd serve: daemon start: listen tcp 0.0.0.0:8443: bind: address already in use
-platformd serve: barrier gate: barrier is sealed and no unseal key was supplied
+platformd serve: barrier gate: init-only listener bind failed: 127.0.0.1:9446: listen tcp 127.0.0.1:9446: bind: address already in use
 platformd serve: CA key store does not implement XKMSSigner
 ```
 

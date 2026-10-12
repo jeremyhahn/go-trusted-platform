@@ -151,8 +151,9 @@ func TestInitOnlyServer_RequiresState(t *testing.T) {
 
 func TestInitOnlyServer_RequiresLogger(t *testing.T) {
 	_, err := NewInitOnlyServer(InitOnlyConfig{State: newFakeStateProvider(rest.PlatformStateUninitialized)})
-	if err == nil {
-		t.Fatal("expected error when Logger is nil")
+	var want ErrInitOnlyMissingLogger
+	if !errors.As(err, &want) {
+		t.Fatalf("expected ErrInitOnlyMissingLogger when Logger is nil, got %v", err)
 	}
 }
 
@@ -345,13 +346,32 @@ func TestInitOnlyConfig_Defaults(t *testing.T) {
 	if srv.cfg.SocketPath == "" {
 		t.Error("SocketPath default must be non-empty")
 	}
-	if srv.cfg.HTTPListenAddr == "" {
-		t.Error("HTTPListenAddr default must be non-empty")
+	if srv.cfg.HTTPListenAddr != DefaultInitOnlyHTTPAddr {
+		t.Errorf("HTTPListenAddr default = %q, want %q", srv.cfg.HTTPListenAddr, DefaultInitOnlyHTTPAddr)
 	}
 	if srv.cfg.SocketMode == 0 {
 		t.Error("SocketMode default must be non-zero")
 	}
 	if srv.cfg.ShutdownTimeout <= 0 {
 		t.Error("ShutdownTimeout default must be positive")
+	}
+}
+
+// TestDefaultInitOnlyHTTPAddr_AvoidsProductionPorts pins the gate's
+// loopback port away from every production transport port (REST 8443,
+// gRPC 10443, QUIC 9444, MCP 9445): the gate and the daemon must never
+// contend for one port.
+func TestDefaultInitOnlyHTTPAddr_AvoidsProductionPorts(t *testing.T) {
+	host, port, err := net.SplitHostPort(DefaultInitOnlyHTTPAddr)
+	if err != nil {
+		t.Fatalf("split %q: %v", DefaultInitOnlyHTTPAddr, err)
+	}
+	if host != "127.0.0.1" {
+		t.Errorf("default host = %q, want loopback 127.0.0.1", host)
+	}
+	for _, production := range []string{"8443", "10443", "9444", "9445"} {
+		if port == production {
+			t.Errorf("default port %s collides with a production transport port", port)
+		}
 	}
 }

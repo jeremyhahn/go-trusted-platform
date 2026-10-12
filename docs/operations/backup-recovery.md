@@ -238,17 +238,13 @@ openssl enc -aes-256-cbc -in share-4.enc -out share-4.enc.enc
 sudo platformctl barrier shares qr
 ```
 
-Recovery from shares:
+Recovery from shares. There is no secret-less unseal: `platformd` never unseals
+the barrier itself, whatever the seal strategy (`tpm2` included). See
+[Unsealing after a restart](../barrier/user.md#unsealing-after-a-restart).
 
 ```bash
-# With hardware available, use auto-unseal
-sudo platformctl barrier unseal
-
-# With hardware lost, reconstruct with any 3 shares
-sudo platformctl barrier unseal \
-    --share share-1.enc \
-    --share share-2.enc \
-    --share share-4.enc
+# Reconstruct with any 3 shares
+sudo platformctl barrier unseal-shares --share <s1> --share <s2> --share <s4>
 ```
 
 ## CA Certificate and Key Backup
@@ -475,15 +471,17 @@ platformctl daemon status
 #### Lost Barrier Shares
 
 ```bash
-# If shares are lost but hardware is available:
-# Use TPM auto-unseal (no shares needed)
-sudo platformctl barrier unseal
-
-# If both lost:
+# There is no secret-less unseal, whatever the seal strategy (tpm2
+# included); working hardware does not replace the shares.
 # 1. Contact emergency contacts for shares
-# 2. Reconstruct from threshold number of shares
-# 3. If insufficient shares, complete infrastructure recovery required
+# 2. Reconstruct from threshold number of shares:
+sudo platformctl barrier unseal-shares --share <s1> --share <s2> --share <s3>
+# 3. Or recover with recovery shares, if they were generated:
+sudo platformctl barrier recovery recover --share <r1> --share <r2> --share <r3>
+# 4. If insufficient shares, complete infrastructure recovery required
 ```
+
+See [Recovery keys](../barrier/user.md#recovery-keys).
 
 ## Backup Validation Checklist
 

@@ -117,53 +117,22 @@ invalid PEM data`.
 
 ## 3. Barrier — the pre-unseal surface
 
-Before the barrier is unsealed, the daemon binds **only** the three routes below.
-No gRPC TCP, no business REST, no QUIC, no MCP.
+Before the barrier is unsealed, `platformd` binds only the barrier gate
+(`/healthz`, `/init`, `/unseal`). The gate routes, their schemas and status
+codes, and the platform barrier capability rows (init, status, unseal, seal,
+rekey, recovery) are in [`docs/barrier/api.md`](../barrier/api.md). The
+operator walk-through of first init and unseal is
+[`docs/barrier/user.md`](../barrier/user.md#first-start-on-a-new-node).
+
+What bootstrap adds on top is the officer ceremony:
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Report platform state / readiness | `GET /healthz` ⁶ | `BarrierService.GetStatus` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `barrier.Manager.IsSealed` / `IsInitialized` / `SyncStatus` |
-| Initialize the barrier (ceremony bootstrap) | `POST /init` ⁶ | `BarrierService.Init` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `Manager.Initialize`, `Manager.InitializeShamir` |
-| Submit a secret or share toward unseal | `POST /unseal` ⁶ | `BarrierService.Unseal` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `Manager.Unseal`, `Manager.UnsealWithShare` |
-| Seal, rekey, ceremony claim-cert / claim-share | see [`docs/cli/barrier.md`](../cli/barrier.md) | `BarrierService.Seal`, `.Rekey`; `CeremonyService` | `OpCeremonyCategory` (`0x9A`) | `MISSING — docs/13 G7` | `Manager.Seal`, `.Rekey`, `.CeremonyInitialize`, `.BeginClaimCert`, `.CompleteClaimCert`, `.BeginClaimShare`, `.CompleteClaimShare` |
+| Ceremony status, claim-cert, claim-share | `MISSING — docs/13 G7` | `CeremonyService` | `OpCeremonyCategory` (`0x9A`) | `MISSING — docs/13 G7` | `Manager.CeremonyInitialize`, `.CeremonyStatus`, `.BeginClaimCert`, `.CompleteClaimCert`, `.BeginClaimShare`, `.CompleteClaimShare` |
 
-⁶ On the **pre-unseal mux**, not under `/api/v1`. These three paths are bound by
-`InitHandlers.Register` on a bare `http.ServeMux`.
-
-**`OpTenantBarrierCategory` (`0x9E`) and the MCP tools
-`platform_tenant_barrier_init` / `platform_tenant_barrier_unseal` are a different
-capability**: they operate on *per-tenant* barriers, not on the platform barrier
-that gates daemon startup. Do not reach for them expecting to unseal the
-platform.
-
-### Request and response schemas
-
-`POST /init` accepts `so_pin`, `user_pin`, `barrier_strategy`, `shares`,
-`threshold`, `hostname`, `sans`, `credential_seal_strategy` — all optional in the
-JSON, with the effective requirements decided by the ceremony backend. It returns
-`ceremony_id`, `state`, `initialized_at`, `spki_pin`, `admin_cert_pem`,
-`admin_key_pem`.
-
-**The `/init` response is the only time the admin key is available.** Capture it,
-along with `spki_pin`, before doing anything else.
-
-`POST /unseal` accepts exactly one of `secret` (software strategy) or `share`
-(Shamir) and returns `state`, `shares_provided`, `required`, `sealed` — so a
-multi-share workflow can iterate until `sealed` is false.
-
-`GET /healthz` returns `state` and `ready`. `state` is one of `uninitialized`,
-`sealed`, `unsealing`, `unsealed`; `ready` is true only for `unsealed`.
-
-### Status mapping
-
-| Status | When |
-|---|---|
-| `200` | Success, and always for `/healthz` |
-| `405` | Wrong method |
-| `409` | `ErrInitNotPermitted` (not `uninitialized`) or `ErrUnsealNotPermitted` (not `sealed`) |
-| `503` | The init or unseal backend is not wired |
-
-Request bodies are capped at 64 KiB by default (`InitHandlersConfig.MaxBodyBytes`).
+**`OpTenantBarrierCategory` (`0x9E`) and the `platform_tenant_barrier_*` MCP
+tools are a different capability**: they operate on per-tenant barriers, not on
+the platform barrier that gates daemon start-up.
 
 ---
 

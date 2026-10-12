@@ -21,8 +21,9 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"time"
+
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 
 	apidaemon "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
@@ -54,13 +55,54 @@ func (ErrBarrierGateRequiresSDK) Error() string {
 	return "barrier gate requires a quicbaas SDK client"
 }
 
-// ErrBarrierUnsealMissingSecret is returned when /unseal is called with no
-// secret and no share.
-type ErrBarrierUnsealMissingSecret struct{}
+// ErrBarrierInitFailed is returned by /init when the bootstrap ceremony
+// succeeded but the barrier could not be initialized.
+type ErrBarrierInitFailed struct {
+	Cause error
+}
 
 // Error returns a human-readable description of the error.
-func (ErrBarrierUnsealMissingSecret) Error() string {
-	return "unseal request requires either secret or share"
+func (e ErrBarrierInitFailed) Error() string {
+	if e.Cause == nil {
+		return "barrier initialization after the ceremony failed"
+	}
+	return "barrier initialization after the ceremony failed: " + e.Cause.Error()
+}
+
+// Unwrap returns the underlying barrier error.
+func (e ErrBarrierInitFailed) Unwrap() error {
+	return e.Cause
+}
+
+// =============================================================================
+// Barrier seam
+// =============================================================================
+
+// gateBarrier is the part of *barrier.Manager the gate services drive.
+type gateBarrier interface {
+	Initialize(ctx context.Context, secret string) error
+	SyncStatus(ctx context.Context) error
+	Unseal(ctx context.Context, secret string) error
+	UnsealWithShare(ctx context.Context, share string) (*quicbaassdk.QRDBBarrierUnsealShareResponse, error)
+	IsInitialized() bool
+	IsSealed() bool
+	IsUnsealing() bool
+}
+
+// Compile-time assertion that the manager satisfies the gate seam.
+var _ gateBarrier = (*barrier.Manager)(nil)
+
+// gateBarrierOf returns the app's barrier manager, or nil when the app has
+// none. A nil *barrier.Manager must not become a non-nil interface value.
+func gateBarrierOf(a *app.App) gateBarrier {
+	if a == nil {
+		return nil
+	}
+	mgr := a.Barrier()
+	if mgr == nil {
+		return nil
+	}
+	return mgr
 }
 
 // =============================================================================
@@ -68,30 +110,30 @@ func (ErrBarrierUnsealMissingSecret) Error() string {
 // =============================================================================
 
 // barrierStateProvider implements rest.PlatformStateProvider by reading the
-// platform's barrier manager. The state machine has three observable values:
+// platform's barrier manager. The state machine has four observable values:
 //   - uninitialized: barrier never initialized
 //   - sealed:        initialized but locked
+//   - unsealing:     sealed, with at least one Shamir share accepted
 //   - unsealed:      operational
 //
 // The provider is safe for concurrent use; the underlying barrier.Manager
-// uses atomics for sealed/initialized booleans.
+// uses atomics for its cached flags.
 type barrierStateProvider struct {
-	app *app.App
+	barrier gateBarrier
 }
 
 // State returns the current platform state.
 func (p *barrierStateProvider) State(_ context.Context) rest.PlatformState {
-	if p == nil || p.app == nil {
+	if p == nil || p.barrier == nil {
 		return rest.PlatformStateUninitialized
 	}
-	mgr := p.app.Barrier()
-	if mgr == nil {
+	if !p.barrier.IsInitialized() {
 		return rest.PlatformStateUninitialized
 	}
-	if !mgr.IsInitialized() {
-		return rest.PlatformStateUninitialized
+	if p.barrier.IsUnsealing() {
+		return rest.PlatformStateUnsealing
 	}
-	if mgr.IsSealed() {
+	if p.barrier.IsSealed() {
 		return rest.PlatformStateSealed
 	}
 	return rest.PlatformStateUnsealed
@@ -103,25 +145,30 @@ func (p *barrierStateProvider) State(_ context.Context) rest.PlatformState {
 
 // barrierInitService implements rest.BarrierInitService by delegating to the
 // QuicBaaS ceremony backend (which terminates at go-qrdb's CeremonyService).
-// On success the backend response is rendered into a rest.BarrierInitResponse;
-// the platform state will transition to sealed (passphrase/shamir) or unsealed
-// (software with auto-unseal) depending on the strategy.
+// On success the backend response is rendered into a rest.BarrierInitResponse
+// and the barrier is initialized; a barrier failure fails the request.
 type barrierInitService struct {
 	logger  *logging.Logger
-	app     *app.App
 	backend apidaemon.CeremonyBackend
+	barrier gateBarrier
 	state   rest.PlatformStateProvider
 }
 
 // Initialize delegates the canonical ceremony bootstrap to the configured
-// backend. The state in the response reflects the barrier state at the
-// moment the ceremony returns.
+// backend, then initializes the barrier. The state in the response reflects
+// the barrier state after both steps.
 func (s *barrierInitService) Initialize(ctx context.Context, req *rest.BarrierInitRequest) (*rest.BarrierInitResponse, error) {
 	if s == nil || s.backend == nil {
 		return nil, &rest.ErrBarrierInitServiceUnavailable{}
 	}
 	if req == nil {
 		req = &rest.BarrierInitRequest{}
+	}
+	// The user PIN is the barrier secret. Refuse an empty one before the
+	// ceremony runs, so a request that cannot initialize the barrier
+	// leaves nothing half done.
+	if s.barrier != nil && req.UserPIN == "" {
+		return nil, rest.ErrMissingRequiredField{Field: "user_pin"}
 	}
 	thresholdSpec := ""
 	if req.Shares > 0 || req.Threshold > 0 {
@@ -146,33 +193,28 @@ func (s *barrierInitService) Initialize(ctx context.Context, req *rest.BarrierIn
 	if out != nil {
 		resp.CeremonyID = out.CeremonyID
 		resp.InitializedAt = out.InitializedAt
+		resp.SPKIPin = out.SPKIPin
 	}
-	if s.state != nil {
-		resp.State = s.state.State(ctx)
-	}
-	if s.app != nil && s.app.Barrier() != nil {
+	if s.barrier != nil {
 		// The qrdb ceremony service does not initialize the data-plane
 		// StorageBarrier as a side effect — it only stores PINs in the
 		// credential service and transitions its own state machine. We
 		// must explicitly drive Manager.Initialize so the BarrierServicer
 		// (which the M6 waitForUnseal loop polls via SDK.Security().
 		// Barrier().BarrierStatus) reports initialized + unsealed and the
-		// gate releases. Failure here is logged but non-fatal: the
-		// operator can retry POST /init or POST /unseal, and the gate
-		// will keep blocking until SyncStatus reflects the unsealed state.
-		if initErr := s.app.Barrier().Initialize(ctx, req.UserPIN); initErr != nil {
-			if s.logger != nil {
-				s.logger.Warn("barrier init after ceremony returned error",
-					"error", initErr.Error())
-			}
+		// gate releases.
+		if err := s.barrier.Initialize(ctx, req.UserPIN); err != nil {
+			return nil, ErrBarrierInitFailed{Cause: err}
 		}
-		// Refresh the barrier manager state from the backend so the next
-		// /healthz call sees the updated initialized/sealed flags without
-		// waiting for the next external sync.
-		_ = s.app.Barrier().SyncStatus(ctx)
-		if s.state != nil {
-			resp.State = s.state.State(ctx)
+		// Refresh the cached flags from the backend. Initialize has already
+		// set them, so a failed refresh leaves a correct state to report.
+		if err := s.barrier.SyncStatus(ctx); err != nil && s.logger != nil {
+			s.logger.Warn("barrier status refresh after init failed; reporting the cached state",
+				"error", err.Error())
 		}
+	}
+	if s.state != nil {
+		resp.State = s.state.State(ctx)
 	}
 	return resp, nil
 }
@@ -186,29 +228,27 @@ func (s *barrierInitService) Initialize(ctx context.Context, req *rest.BarrierIn
 // (Shamir, multi-step) must be provided; the manager tracks quorum progress
 // internally.
 type barrierUnsealService struct {
-	logger  *logging.Logger
-	app     *app.App
-	manager *barrier.Manager
+	barrier gateBarrier
 	state   rest.PlatformStateProvider
 }
 
 // Unseal submits a single secret or share toward the unseal threshold.
 func (s *barrierUnsealService) Unseal(ctx context.Context, req *rest.BarrierUnsealRequest) (*rest.BarrierUnsealResponse, error) {
-	if s == nil || s.manager == nil {
+	if s == nil || s.barrier == nil {
 		return nil, &rest.ErrBarrierUnsealServiceUnavailable{}
 	}
 	if req == nil || (req.Secret == "" && req.Share == "") {
-		return nil, ErrBarrierUnsealMissingSecret{}
+		return nil, rest.ErrMissingRequiredField{Field: "secret or share"}
 	}
 	resp := &rest.BarrierUnsealResponse{}
 	switch {
 	case req.Secret != "":
-		if err := s.manager.Unseal(ctx, req.Secret); err != nil {
+		if err := s.barrier.Unseal(ctx, req.Secret); err != nil {
 			return nil, err
 		}
 		resp.Sealed = false
 	case req.Share != "":
-		shareResp, err := s.manager.UnsealWithShare(ctx, req.Share)
+		shareResp, err := s.barrier.UnsealWithShare(ctx, req.Share)
 		if err != nil {
 			return nil, err
 		}
@@ -228,11 +268,6 @@ func (s *barrierUnsealService) Unseal(ctx context.Context, req *rest.BarrierUnse
 // Init-only mode runner
 // =============================================================================
 
-// defaultBarrierGateHTTPAddr is the loopback bind address for the M6
-// init-only HTTP listener. 9446 is reserved for the gate so it does not
-// collide with the production MCP listener on 9445.
-const defaultBarrierGateHTTPAddr = "127.0.0.1:9446"
-
 // barrierGateConfig captures the dependencies required to run the
 // init-only mode listener and the unseal-wait loop.
 type barrierGateConfig struct {
@@ -246,7 +281,7 @@ type barrierGateConfig struct {
 func defaultBarrierGateConfig() barrierGateConfig {
 	return barrierGateConfig{
 		socketPath: "/run/platformd.sock",
-		httpAddr:   defaultBarrierGateHTTPAddr,
+		httpAddr:   apidaemon.DefaultInitOnlyHTTPAddr,
 		pollEvery:  time.Second,
 	}
 }
@@ -283,18 +318,18 @@ func runInitOnlyMode(ctx context.Context, a *app.App, logger *logging.Logger, ga
 		return ErrBarrierGateRequiresApp{}
 	}
 
-	stateProvider := &barrierStateProvider{app: a}
+	gate := gateBarrierOf(a)
+	stateProvider := &barrierStateProvider{barrier: gate}
 
 	// Wire init service when the SDK client is available. When the SDK
 	// client is missing we still start the listener so /healthz works,
 	// but /init returns 503 ErrBarrierInitServiceUnavailable.
 	var initSvc rest.BarrierInitService
 	if sdk := a.QuicBaaSSDKClient(); sdk != nil {
-		backend := appbackends.NewCeremonyBackend(logger, sdk)
 		initSvc = &barrierInitService{
 			logger:  logger,
-			app:     a,
-			backend: backend,
+			backend: appbackends.NewCeremonyBackend(logger, sdk),
+			barrier: gate,
 			state:   stateProvider,
 		}
 	}
@@ -304,11 +339,9 @@ func runInitOnlyMode(ctx context.Context, a *app.App, logger *logging.Logger, ga
 	// we tolerate its absence so the gate can also surface a useful
 	// /healthz when the platform is misconfigured.
 	var unsealSvc rest.BarrierUnsealService
-	if mgr := a.Barrier(); mgr != nil {
+	if gate != nil {
 		unsealSvc = &barrierUnsealService{
-			logger:  logger,
-			app:     a,
-			manager: mgr,
+			barrier: gate,
 			state:   stateProvider,
 		}
 	}
@@ -447,7 +480,3 @@ func formatInt(n int) string {
 	}
 	return string(buf[pos:])
 }
-
-// _ usage keeps the errors import alive when the file is inspected by
-// goimports without other err wrapping in this version.
-var _ = errors.New

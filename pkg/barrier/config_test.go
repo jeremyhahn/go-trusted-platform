@@ -15,6 +15,7 @@ package barrier
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -25,9 +26,6 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.SealStrategy != SealStrategySoftware {
 		t.Errorf("expected SealStrategy %q, got %q", SealStrategySoftware, cfg.SealStrategy)
-	}
-	if cfg.AutoUnseal {
-		t.Error("expected AutoUnseal to be false by default")
 	}
 	if cfg.ShamirThreshold != 0 {
 		t.Errorf("expected ShamirThreshold 0, got %d", cfg.ShamirThreshold)
@@ -46,7 +44,10 @@ func TestDefaultConfig_Validate(t *testing.T) {
 
 func TestConfig_Validate_ValidStrategies(t *testing.T) {
 	strategies := []string{
+		SealStrategyNone,
+		SealStrategyPassphrase,
 		SealStrategySoftware,
+		SealStrategyShamir,
 		SealStrategyTPM2,
 		SealStrategyPKCS11,
 		"",
@@ -180,6 +181,97 @@ func TestConfig_IsShamir(t *testing.T) {
 			}
 			if got := cfg.IsShamir(); got != tt.want {
 				t.Errorf("IsShamir() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateShamirSplit(t *testing.T) {
+	tests := []struct {
+		name      string
+		threshold int
+		shares    int
+		wantErr   bool
+	}{
+		{"minimum split", MinShamirThreshold, MinShamirThreshold, false},
+		{"three of five", 3, 5, false},
+		{"threshold of one", 1, 5, true},
+		{"zero threshold", 0, 5, true},
+		{"negative threshold", -1, 5, true},
+		{"threshold exceeds shares", 5, 3, true},
+		{"zero shares", 2, 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateShamirSplit(tt.threshold, tt.shares)
+			if tt.wantErr && !errors.Is(err, ErrInvalidThreshold) {
+				t.Fatalf("ValidateShamirSplit(%d, %d) = %v, want ErrInvalidThreshold", tt.threshold, tt.shares, err)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("ValidateShamirSplit(%d, %d) = %v, want nil", tt.threshold, tt.shares, err)
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_ThresholdBelowMinimum(t *testing.T) {
+	cfg := &Config{ShamirThreshold: 1, ShamirShares: 3}
+	err := cfg.Validate()
+	var configErr *ConfigError
+	if !errors.As(err, &configErr) {
+		t.Fatalf("expected ConfigError, got %T: %v", err, err)
+	}
+	if configErr.Field != "ShamirThreshold" {
+		t.Errorf("expected field ShamirThreshold, got %q", configErr.Field)
+	}
+}
+
+func TestConfig_Validate_InvalidStrategyListsEveryStrategy(t *testing.T) {
+	err := (&Config{SealStrategy: "invalid"}).Validate()
+	var configErr *ConfigError
+	if !errors.As(err, &configErr) {
+		t.Fatalf("expected ConfigError, got %T: %v", err, err)
+	}
+	for _, s := range []string{
+		SealStrategyNone,
+		SealStrategyPassphrase,
+		SealStrategySoftware,
+		SealStrategyShamir,
+		SealStrategyTPM2,
+		SealStrategyPKCS11,
+	} {
+		if !strings.Contains(configErr.Message, s) {
+			t.Errorf("message %q does not list strategy %q", configErr.Message, s)
+		}
+	}
+}
+
+func TestConfig_RequiresCeremony(t *testing.T) {
+	tests := []struct {
+		name      string
+		strategy  string
+		threshold int
+		shares    int
+		want      bool
+	}{
+		{"shamir", SealStrategyShamir, 0, 0, true},
+		{"passphrase with a split", SealStrategyPassphrase, 2, 3, true},
+		{"software with a split", SealStrategySoftware, 3, 5, true},
+		{"default strategy with a split", "", 3, 5, true},
+		{"passphrase single key", SealStrategyPassphrase, 0, 0, false},
+		{"software single key", SealStrategySoftware, 0, 0, false},
+		{"tpm2 with a split", SealStrategyTPM2, 3, 5, false},
+		{"none", SealStrategyNone, 0, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				SealStrategy:    tt.strategy,
+				ShamirThreshold: tt.threshold,
+				ShamirShares:    tt.shares,
+			}
+			if got := cfg.RequiresCeremony(); got != tt.want {
+				t.Errorf("RequiresCeremony() = %v, want %v", got, tt.want)
 			}
 		})
 	}

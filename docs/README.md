@@ -27,12 +27,13 @@ exposure-gaps register, which lives in the handbook, not in this repository:
 **The folder is the requirements contract**, not commentary. Read it before the
 code, and change it in the same PR as the behavior.
 
-### Converted — every feature (34)
+### Converted — every feature (38)
 
 | Feature | What it covers |
 |---|---|
 | [attestation/](attestation/) | TPM attestation of hosts, VMs and containers |
 | [auth/](auth/) | Platform authentication — mTLS identity extraction and the per-transport auth seams |
+| [barrier/](barrier/) | The platform barrier — init, Shamir, unseal, seal, rekey, recovery — and the `platformd` start-up gate |
 | [bmc/](bmc/) | Baseboard management — IPMI, Redfish, vendor quirks |
 | [bootstrap/](bootstrap/) | Trust bootstrap, day-zero orchestration, first boot |
 | [ca/](ca/) | Certificate authority and ACME (re-export frontage) |
@@ -43,6 +44,7 @@ code, and change it in the same PR as the behavior.
 | [dht/](dht/) | **PLANNED** — the P2P/DHT network, design only, no implementation |
 | [dns/](dns/) | Authoritative DNS and DNSSEC |
 | [eab/](eab/) | ACME External Account Binding |
+| [factory-image/](factory-image/) | Factory disk images — Raspberry Pi, QEMU virt, U-Boot (`platformctl diskimage`) |
 | [firmware/](firmware/) | UEFI, Secure Boot, UKI, Authenticode, module signing |
 | [gateway/](gateway/) | `gatewayd` edge services and the trusted reverse proxy |
 | [health/](health/) | Liveness, readiness and component health |
@@ -56,6 +58,7 @@ code, and change it in the same PR as the behavior.
 | [provisioning/](provisioning/) | Zero-touch provisioning, PXE, installer |
 | [proxy/](proxy/) | The trusted reverse proxy engine and proxy authorization |
 | [registry/](registry/) | Attestation-gated OCI registry |
+| [sdk/](sdk/) | The Go SDK (`sdk/go`) — the client `platformctl` uses to reach `platformd` |
 | [sdn/](sdn/) | Bridges, ports, flows, port authentication, overlay |
 | [secrets/](secrets/) | Secret-reference resolution |
 | [security/](security/) | Rate limiting, input validation, embedded OPA policy |
@@ -190,7 +193,7 @@ platformctl device activate --port tap0
 | [Health](health/) | Health checks and Prometheus metrics |
 | [Provisioning](provisioning/) | Device enrollment and configuration |
 | [Device](device/) | Device profiles and network phases |
-| [Barrier Storage](cli/barrier.md) | Encrypted secret storage with multi-tier access. There is no `barrier/` component directory; the canonical 9-verb barrier CLI surface is the documentation that exists |
+| [Barrier](barrier/) | The platform barrier lifecycle, the start-up gate and `platformctl barrier` |
 | [Secrets Management](secrets/) | Credential and key lifecycle management |
 | [Registry](registry/) | Container and artifact registry with attestation |
 
@@ -284,6 +287,7 @@ Local mode is the only mode with shipping code, and it is roughly 85% complete �
 | Component | Status | Documentation |
 |-----------|--------|---------------|
 | Attestation | Complete | [attestation/](attestation/) |
+| Barrier | Partial (`BarrierService` is gRPC/Unix only) | [barrier/](barrier/) |
 | CA | Complete | [ca/](ca/) |
 | Cluster | Complete | [cluster/](cluster/) |
 | Compute | Complete | [compute/](compute/) |

@@ -21,6 +21,8 @@ import (
 	"go/token"
 	"testing"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+
 	apidaemon "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
@@ -31,10 +33,103 @@ import (
 // barrierStateProvider
 // =============================================================================
 
-func TestBarrierStateProvider_NilApp(t *testing.T) {
-	p := &barrierStateProvider{app: nil}
+// fakeGateBarrier is an in-memory gateBarrier. Its flags move the way
+// barrier.Manager's cached flags do.
+type fakeGateBarrier struct {
+	initialized bool
+	sealed      bool
+	unsealing   bool
+
+	initSecret   string
+	unsealSecret string
+	syncCalls    int
+
+	initErr   error
+	syncErr   error
+	unsealErr error
+	shareResp *quicbaassdk.QRDBBarrierUnsealShareResponse
+	shareErr  error
+}
+
+func (f *fakeGateBarrier) Initialize(_ context.Context, secret string) error {
+	f.initSecret = secret
+	if f.initErr != nil {
+		return f.initErr
+	}
+	f.initialized = true
+	f.sealed = false
+	return nil
+}
+
+func (f *fakeGateBarrier) SyncStatus(_ context.Context) error {
+	f.syncCalls++
+	return f.syncErr
+}
+
+func (f *fakeGateBarrier) Unseal(_ context.Context, secret string) error {
+	f.unsealSecret = secret
+	if f.unsealErr != nil {
+		return f.unsealErr
+	}
+	f.sealed = false
+	f.unsealing = false
+	return nil
+}
+
+func (f *fakeGateBarrier) UnsealWithShare(_ context.Context, _ string) (*quicbaassdk.QRDBBarrierUnsealShareResponse, error) {
+	if f.shareErr != nil {
+		return nil, f.shareErr
+	}
+	if f.shareResp.Complete {
+		f.sealed = false
+		f.unsealing = false
+	} else {
+		f.unsealing = f.shareResp.Submitted > 0
+	}
+	return f.shareResp, nil
+}
+
+func (f *fakeGateBarrier) IsInitialized() bool { return f.initialized }
+func (f *fakeGateBarrier) IsSealed() bool      { return f.sealed }
+func (f *fakeGateBarrier) IsUnsealing() bool   { return f.sealed && f.unsealing }
+
+func TestBarrierStateProvider_NilBarrier(t *testing.T) {
+	p := &barrierStateProvider{barrier: nil}
 	if got := p.State(context.Background()); got != rest.PlatformStateUninitialized {
-		t.Errorf("nil app: got %q want uninitialized", got)
+		t.Errorf("nil barrier: got %q want uninitialized", got)
+	}
+}
+
+func TestBarrierStateProvider_ReportsEveryState(t *testing.T) {
+	cases := []struct {
+		name    string
+		barrier *fakeGateBarrier
+		want    rest.PlatformState
+	}{
+		{"uninitialized", &fakeGateBarrier{}, rest.PlatformStateUninitialized},
+		{"sealed", &fakeGateBarrier{initialized: true, sealed: true}, rest.PlatformStateSealed},
+		{"unsealing", &fakeGateBarrier{initialized: true, sealed: true, unsealing: true}, rest.PlatformStateUnsealing},
+		{"unsealed", &fakeGateBarrier{initialized: true}, rest.PlatformStateUnsealed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &barrierStateProvider{barrier: tc.barrier}
+			if got := p.State(context.Background()); got != tc.want {
+				t.Errorf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGateBarrierOf_NilManagerIsNilInterface guards the nil-interface trap:
+// an app with no manager must yield a nil gateBarrier, or the gate would
+// wire services around a nil *barrier.Manager.
+func TestGateBarrierOf_NilManagerIsNilInterface(t *testing.T) {
+	if got := gateBarrierOf(nil); got != nil {
+		t.Errorf("nil app: got %T, want nil", got)
+	}
+	if got := gateBarrierOf(&app.App{}); got != nil {
+		t.Errorf("app without a manager: got %T, want nil", got)
 	}
 }
 
@@ -208,6 +303,94 @@ func TestBarrierInitService_NilRequestUsesDefaults(t *testing.T) {
 	}
 }
 
+func TestBarrierInitService_InitializesBarrierAndReportsState(t *testing.T) {
+	backend := &fakeBackend{
+		resp: &apidaemon.CeremonyInitResult{CeremonyID: "c1", SPKIPin: "sha256/pin"},
+	}
+	gate := &fakeGateBarrier{}
+	svc := &barrierInitService{
+		backend: backend,
+		barrier: gate,
+		state:   &barrierStateProvider{barrier: gate},
+	}
+	resp, err := svc.Initialize(context.Background(), &rest.BarrierInitRequest{SOPIN: "so", UserPIN: "user"})
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if gate.initSecret != "user" {
+		t.Errorf("barrier secret: got %q want the user PIN", gate.initSecret)
+	}
+	if gate.syncCalls != 1 {
+		t.Errorf("SyncStatus called %d times, want 1", gate.syncCalls)
+	}
+	if resp.SPKIPin != "sha256/pin" {
+		t.Errorf("SPKIPin: got %q want sha256/pin", resp.SPKIPin)
+	}
+	if resp.State != rest.PlatformStateUnsealed {
+		t.Errorf("State: got %q want unsealed", resp.State)
+	}
+}
+
+func TestBarrierInitService_BarrierFailureFailsTheRequest(t *testing.T) {
+	cause := errors.New("barrier refused")
+	backend := &fakeBackend{resp: &apidaemon.CeremonyInitResult{CeremonyID: "c1"}}
+	gate := &fakeGateBarrier{initErr: cause}
+	svc := &barrierInitService{
+		backend: backend,
+		barrier: gate,
+		state:   &barrierStateProvider{barrier: gate},
+	}
+	resp, err := svc.Initialize(context.Background(), &rest.BarrierInitRequest{UserPIN: "user"})
+	var failed ErrBarrierInitFailed
+	if !errors.As(err, &failed) {
+		t.Fatalf("got %v, want ErrBarrierInitFailed", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("ErrBarrierInitFailed must unwrap to the barrier error, got %v", err)
+	}
+	if resp != nil {
+		t.Errorf("expected no response, got %+v", resp)
+	}
+	if gate.syncCalls != 0 {
+		t.Errorf("SyncStatus must not run after a failed init, ran %d times", gate.syncCalls)
+	}
+}
+
+func TestBarrierInitService_EmptyUserPINRefusedBeforeCeremony(t *testing.T) {
+	backend := &fakeBackend{resp: &apidaemon.CeremonyInitResult{}}
+	gate := &fakeGateBarrier{}
+	svc := &barrierInitService{backend: backend, barrier: gate}
+	_, err := svc.Initialize(context.Background(), &rest.BarrierInitRequest{SOPIN: "so"})
+	var missing rest.ErrMissingRequiredField
+	if !errors.As(err, &missing) || missing.Field != "user_pin" {
+		t.Fatalf("got %v, want ErrMissingRequiredField{user_pin}", err)
+	}
+	if backend.called != 0 {
+		t.Errorf("the ceremony must not run without a user PIN, ran %d times", backend.called)
+	}
+}
+
+func TestBarrierInitService_SyncFailureKeepsCachedState(t *testing.T) {
+	backend := &fakeBackend{resp: &apidaemon.CeremonyInitResult{CeremonyID: "c1"}}
+	gate := &fakeGateBarrier{syncErr: errors.New("status unavailable")}
+	svc := &barrierInitService{
+		logger:  logging.NewLogger(0, nil),
+		backend: backend,
+		barrier: gate,
+		state:   &barrierStateProvider{barrier: gate},
+	}
+	resp, err := svc.Initialize(context.Background(), &rest.BarrierInitRequest{UserPIN: "user"})
+	if err != nil {
+		t.Fatalf("a failed refresh after a good init must not fail /init: %v", err)
+	}
+	if gate.syncCalls != 1 {
+		t.Errorf("SyncStatus called %d times, want 1", gate.syncCalls)
+	}
+	if resp.State != rest.PlatformStateUnsealed {
+		t.Errorf("State: got %q want the cached unsealed state", resp.State)
+	}
+}
+
 // =============================================================================
 // Errors
 // =============================================================================
@@ -224,9 +407,20 @@ func TestErrBarrierGateRequiresSDK(t *testing.T) {
 	}
 }
 
-func TestErrBarrierUnsealMissingSecret(t *testing.T) {
-	if (ErrBarrierUnsealMissingSecret{}).Error() == "" {
-		t.Error("expected non-empty error")
+func TestErrBarrierInitFailed_MessageCarriesCause(t *testing.T) {
+	err := ErrBarrierInitFailed{Cause: errors.New("sealed backend")}
+	if got := err.Error(); got != "barrier initialization after the ceremony failed: sealed backend" {
+		t.Errorf("message: got %q", got)
+	}
+}
+
+func TestErrBarrierInitFailed_NilCause(t *testing.T) {
+	err := ErrBarrierInitFailed{}
+	if got := err.Error(); got != "barrier initialization after the ceremony failed" {
+		t.Errorf("message: got %q", got)
+	}
+	if err.Unwrap() != nil {
+		t.Error("Unwrap of a nil cause must be nil")
 	}
 }
 
@@ -242,6 +436,75 @@ func TestBarrierUnsealService_NilManager(t *testing.T) {
 	}
 	if _, ok := err.(*rest.ErrBarrierUnsealServiceUnavailable); !ok {
 		t.Errorf("expected ErrBarrierUnsealServiceUnavailable, got %T", err)
+	}
+}
+
+func TestBarrierUnsealService_EmptyRequestIsAValidationError(t *testing.T) {
+	gate := &fakeGateBarrier{initialized: true, sealed: true}
+	svc := &barrierUnsealService{barrier: gate}
+	for name, req := range map[string]*rest.BarrierUnsealRequest{
+		"nil":   nil,
+		"empty": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.Unseal(context.Background(), req)
+			var missing rest.ErrMissingRequiredField
+			if !errors.As(err, &missing) {
+				t.Fatalf("got %v, want ErrMissingRequiredField", err)
+			}
+		})
+	}
+}
+
+func TestBarrierUnsealService_SecretUnseals(t *testing.T) {
+	gate := &fakeGateBarrier{initialized: true, sealed: true}
+	svc := &barrierUnsealService{barrier: gate, state: &barrierStateProvider{barrier: gate}}
+	resp, err := svc.Unseal(context.Background(), &rest.BarrierUnsealRequest{Secret: "k", Share: "s"})
+	if err != nil {
+		t.Fatalf("Unseal: %v", err)
+	}
+	if gate.unsealSecret != "k" {
+		t.Errorf("secret must win over share: got %q", gate.unsealSecret)
+	}
+	if resp.Sealed || resp.State != rest.PlatformStateUnsealed {
+		t.Errorf("got sealed=%v state=%q, want unsealed", resp.Sealed, resp.State)
+	}
+}
+
+func TestBarrierUnsealService_SecretErrorBubblesUp(t *testing.T) {
+	cause := errors.New("wrong secret")
+	gate := &fakeGateBarrier{initialized: true, sealed: true, unsealErr: cause}
+	svc := &barrierUnsealService{barrier: gate}
+	if _, err := svc.Unseal(context.Background(), &rest.BarrierUnsealRequest{Secret: "k"}); !errors.Is(err, cause) {
+		t.Errorf("got %v, want the barrier error", err)
+	}
+}
+
+func TestBarrierUnsealService_PartialShareReportsUnsealing(t *testing.T) {
+	gate := &fakeGateBarrier{
+		initialized: true,
+		sealed:      true,
+		shareResp:   &quicbaassdk.QRDBBarrierUnsealShareResponse{Required: 3, Submitted: 1},
+	}
+	svc := &barrierUnsealService{barrier: gate, state: &barrierStateProvider{barrier: gate}}
+	resp, err := svc.Unseal(context.Background(), &rest.BarrierUnsealRequest{Share: "s1"})
+	if err != nil {
+		t.Fatalf("Unseal: %v", err)
+	}
+	if !resp.Sealed || resp.SharesProvided != 1 || resp.Required != 3 {
+		t.Errorf("progress: got %+v", resp)
+	}
+	if resp.State != rest.PlatformStateUnsealing {
+		t.Errorf("State: got %q want unsealing", resp.State)
+	}
+}
+
+func TestBarrierUnsealService_ShareErrorBubblesUp(t *testing.T) {
+	cause := errors.New("bad share")
+	gate := &fakeGateBarrier{initialized: true, sealed: true, shareErr: cause}
+	svc := &barrierUnsealService{barrier: gate}
+	if _, err := svc.Unseal(context.Background(), &rest.BarrierUnsealRequest{Share: "s1"}); !errors.Is(err, cause) {
+		t.Errorf("got %v, want the barrier error", err)
 	}
 }
 
@@ -263,21 +526,16 @@ func TestDefaultBarrierGateConfig(t *testing.T) {
 }
 
 // =============================================================================
-// defaultBarrierGateHTTPAddr / port assignment
+// Gate HTTP address
 // =============================================================================
 
-// TestDefaultBarrierGateHTTPAddr_Is9446 pins the gate's default loopback
-// bind address to 127.0.0.1:9446. The previous value (9445) collided with
-// the production MCP listener; regressing to 9445 would cause the gate
-// to fight MCP for the same port at boot.
-func TestDefaultBarrierGateHTTPAddr_Is9446(t *testing.T) {
-	if defaultBarrierGateHTTPAddr != "127.0.0.1:9446" {
-		t.Errorf("defaultBarrierGateHTTPAddr = %q, want %q (must not collide with MCP on :9445)",
-			defaultBarrierGateHTTPAddr, "127.0.0.1:9446")
-	}
-	if defaultBarrierGateConfig().httpAddr != "127.0.0.1:9446" {
+// TestDefaultBarrierGateConfig_UsesInitOnlyDefault pins the gate to the
+// init-only server's default address, whose port choice is tested in
+// pkg/api/daemon against every production transport port.
+func TestDefaultBarrierGateConfig_UsesInitOnlyDefault(t *testing.T) {
+	if got := defaultBarrierGateConfig().httpAddr; got != apidaemon.DefaultInitOnlyHTTPAddr {
 		t.Errorf("defaultBarrierGateConfig().httpAddr = %q, want %q",
-			defaultBarrierGateConfig().httpAddr, "127.0.0.1:9446")
+			got, apidaemon.DefaultInitOnlyHTTPAddr)
 	}
 }
 
@@ -359,9 +617,9 @@ func TestInvokeBarrierGate_ThreadsSocketPath(t *testing.T) {
 		t.Errorf("gate socketPath = %q, want %q",
 			fake.lastCfg.socketPath, "/var/run/custom-platformd.sock")
 	}
-	if fake.lastCfg.httpAddr != defaultBarrierGateHTTPAddr {
+	if fake.lastCfg.httpAddr != apidaemon.DefaultInitOnlyHTTPAddr {
 		t.Errorf("gate httpAddr = %q, want default %q",
-			fake.lastCfg.httpAddr, defaultBarrierGateHTTPAddr)
+			fake.lastCfg.httpAddr, apidaemon.DefaultInitOnlyHTTPAddr)
 	}
 	if fake.lastCfg.pollEvery <= 0 {
 		t.Errorf("gate pollEvery = %v, want positive default", fake.lastCfg.pollEvery)

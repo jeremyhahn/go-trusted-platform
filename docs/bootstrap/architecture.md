@@ -393,9 +393,10 @@ platform is first drawn here.
 
 7. **Barrier and seal.** Before the barrier is unsealed the daemon exposes only
    `/healthz`, `/init` and `/unseal`. No gRPC, no QUIC, no MCP, no business REST.
-   `/init` is accepted only in the uninitialized state and `/unseal` only in the
-   sealed state; both return conflict otherwise. The Shamir path exists so that
-   no single operator can unseal alone.
+   `/init` is accepted only in the uninitialized state and `/unseal` only while
+   sealed or unsealing; both return conflict otherwise. The Shamir path exists
+   so that no single operator can unseal alone. The gate is specified in
+   [`docs/barrier/architecture.md`](../barrier/architecture.md#the-barrier-gate).
 
 8. **DANE publication is a write to DNS.** Publishing a TLSA record changes what
    every DANE client will accept. The publisher re-signs the zone with DNSSEC on
@@ -416,8 +417,8 @@ platform is first drawn here.
   live in the stack's trust library and are reached through the SDK. Bootstrap
   owns the *platform-side* publication and the ordered-chain configuration.
 - **It does not own the barrier.** `pkg/barrier` is a wrapper over the SDK's
-  barrier and ceremony clients. Barrier operations beyond init and unseal belong
-  to [`docs/cli/barrier.md`](../cli/barrier.md).
+  barrier and ceremony clients. The barrier, its lifecycle and the start-up
+  gate are documented in [`docs/barrier/`](../barrier/).
 - **It does not build ISOs, serve iPXE, or run the installer.** That is
   [`docs/provisioning/`](../provisioning/). Bootstrap tells those components
   which node is which, and reads back what happened.

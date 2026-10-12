@@ -14,11 +14,15 @@
 package barrier
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/spf13/pflag"
 
+	platformbarrier "github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/ceremony"
 )
 
 // ---------------------------------------------------------------------------
@@ -346,6 +350,35 @@ func TestValidateRecoveryGenerateFlags(t *testing.T) {
 	}
 }
 
+// TestShamirFlags_FollowPlatformRule pins every Shamir verb to the one rule in
+// pkg/barrier: the minimum threshold is accepted, one below it is not.
+func TestShamirFlags_FollowPlatformRule(t *testing.T) {
+	minimum := platformbarrier.MinShamirThreshold
+	validators := map[string]func(threshold, total int) error{
+		"init-shamir": func(threshold, total int) error {
+			return validateInitShamirFlags(&initShamirFlags{secret: "pp", threshold: threshold, total: total})
+		},
+		"rekey": func(threshold, total int) error {
+			return validateRekeyFlags(&rekeyFlags{threshold: threshold, total: total})
+		},
+		"recovery generate": func(threshold, total int) error {
+			return validateRecoveryGenerateFlags(&recoveryGenerateFlags{threshold: threshold, total: total})
+		},
+	}
+	for name, validate := range validators {
+		t.Run(name, func(t *testing.T) {
+			if err := validate(minimum, minimum); err != nil {
+				t.Fatalf("threshold %d of %d rejected: %v", minimum, minimum, err)
+			}
+			err := validate(minimum-1, minimum)
+			assertErrorMatches(t, err, ErrInvalidThreshold{})
+			if !strings.Contains(err.Error(), ">= "+strconv.Itoa(minimum)) {
+				t.Errorf("error %q does not state the minimum %d", err, minimum)
+			}
+		})
+	}
+}
+
 func TestValidateRecoveryRecoverFlags(t *testing.T) {
 	if err := validateRecoveryRecoverFlags(&recoveryRecoverFlags{shares: []string{"s1"}}); err != nil {
 		t.Errorf("expected nil error, got: %v", err)
@@ -415,14 +448,53 @@ func TestUnsealSharesCommand_Flags(t *testing.T) {
 
 func TestSealCommand_Flags(t *testing.T) {
 	cmd := newSealCommand(noopFlags)
-	if cmd.Flags().Lookup("so-pin") == nil {
-		t.Error("seal missing --so-pin")
+	// BarrierSeal carries no request, so an SO PIN would be accepted and
+	// silently dropped. The flag must not exist.
+	if cmd.Flags().Lookup("so-pin") != nil {
+		t.Error("seal must not expose --so-pin: BarrierSeal cannot carry it")
 	}
 	if cmd.Flags().Lookup("assume-yes") == nil {
 		t.Error("seal missing --assume-yes")
 	}
 	if cmd.Flags().ShorthandLookup("y") == nil {
 		t.Error("seal missing -y shorthand")
+	}
+}
+
+// TestHelp_SharesAreNotPrinted guards the help of the verbs that create
+// shares: upstream seals every share to an officer and returns only counts,
+// so the help must not promise share material on stdout.
+func TestHelp_SharesAreNotPrinted(t *testing.T) {
+	root := NewCommand(noopFlags)
+	for _, path := range [][]string{{"init-shamir"}, {"rekey"}, {"recovery", "generate"}} {
+		t.Run(strings.Join(path, " "), func(t *testing.T) {
+			sub, _, err := root.Find(path)
+			if err != nil {
+				t.Fatalf("find %v: %v", path, err)
+			}
+			if strings.Contains(sub.Long, "stdout") {
+				t.Errorf("help promises shares on stdout:\n%s", sub.Long)
+			}
+			if !strings.Contains(sub.Long, "not printed") {
+				t.Errorf("help must say the shares are not printed:\n%s", sub.Long)
+			}
+		})
+	}
+}
+
+// TestRekeyHelp_NamesAnExistingClaimVerb guards the rekey help against
+// naming a claim verb platformctl does not have.
+func TestRekeyHelp_NamesAnExistingClaimVerb(t *testing.T) {
+	rekey := newRekeyCommand(noopFlags)
+	if strings.Contains(rekey.Long, "barrier share claim") {
+		t.Errorf("rekey help names the nonexistent 'barrier share claim' verb:\n%s", rekey.Long)
+	}
+	if !strings.Contains(rekey.Long, "platformctl ceremony claim-share") {
+		t.Fatalf("rekey help must name 'platformctl ceremony claim-share':\n%s", rekey.Long)
+	}
+	claim, _, err := ceremony.NewCommand(noopFlags).Find([]string{"claim-share", "begin"})
+	if err != nil || claim.Name() != "begin" {
+		t.Fatalf("ceremony claim-share begin must exist, got %v (%v)", claim, err)
 	}
 }
 

@@ -189,20 +189,20 @@ platformctl daemon debug pprof profile
 
 ### Barrier Unseal
 
-Required when platform starts in sealed state:
+Required when platform starts in sealed state. `platformd` never unseals the
+barrier itself, whatever the seal strategy (`tpm2` included): it waits at the
+barrier gate until an operator supplies a secret or shares. See
+[Unsealing after a restart](../barrier/user.md#unsealing-after-a-restart).
 
 ```bash
 # Check status
 platformctl barrier status
 
-# Unseal with Shamir shares (software strategy)
-sudo platformctl barrier unseal \
-    --share share-1.enc \
-    --share share-2.enc \
-    --share share-3.enc
+# Single-secret barrier
+sudo platformctl barrier unseal --passphrase <passphrase>
 
-# Or auto-unseal with TPM (TPM strategy)
-sudo platformctl barrier unseal
+# Or Shamir barrier: submit shares until the threshold is met
+sudo platformctl barrier unseal-shares --share <s1> --share <s2> --share <s3>
 
 # Verify unsealed
 platformctl barrier status

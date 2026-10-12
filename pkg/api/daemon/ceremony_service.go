@@ -99,6 +99,9 @@ type CeremonyInitResult struct {
 	CeremonyID    string
 	State         CeremonyStateValue
 	InitializedAt time.Time
+	// SPKIPin is the SHA-256 pin of the ceremony CA's public key, as
+	// returned by the upstream ceremony initialize.
+	SPKIPin string
 }
 
 // CeremonyStatusInfo is the service-layer status response.

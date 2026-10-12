@@ -26,12 +26,15 @@
 package rest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-
+	"errors"
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 )
 
 // =============================================================================
@@ -92,11 +95,12 @@ type PlatformStateProvider interface {
 // Request/response types
 // =============================================================================
 
-// BarrierInitRequest is the JSON body accepted by POST /init.
+// BarrierInitRequest is the JSON body accepted by POST /init. The barrier
+// seal strategy is not a request field: it comes from the barrier.seal_strategy
+// configuration.
 type BarrierInitRequest struct {
 	SOPIN                  string   `json:"so_pin,omitempty"`
 	UserPIN                string   `json:"user_pin,omitempty"`
-	BarrierStrategy        string   `json:"barrier_strategy,omitempty"`
 	Shares                 int      `json:"shares,omitempty"`
 	Threshold              int      `json:"threshold,omitempty"`
 	Hostname               string   `json:"hostname,omitempty"`
@@ -110,8 +114,6 @@ type BarrierInitResponse struct {
 	State         PlatformState `json:"state"`
 	InitializedAt time.Time     `json:"initialized_at,omitempty"`
 	SPKIPin       string        `json:"spki_pin,omitempty"`
-	AdminCertPEM  string        `json:"admin_cert_pem,omitempty"`
-	AdminKeyPEM   string        `json:"admin_key_pem,omitempty"`
 }
 
 // BarrierUnsealRequest is the JSON body accepted by POST /unseal.
@@ -268,7 +270,7 @@ func (h *InitHandlers) Init(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.init.Initialize(r.Context(), &body)
 	if err != nil {
-		writeInitJSON(w, http.StatusInternalServerError, errorBody(err.Error()))
+		writeInitJSON(w, serviceErrorStatus(err), errorBody(err.Error()))
 		return
 	}
 	if resp == nil {
@@ -305,7 +307,7 @@ func (h *InitHandlers) Unseal(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.unseal.Unseal(r.Context(), &body)
 	if err != nil {
-		writeInitJSON(w, http.StatusInternalServerError, errorBody(err.Error()))
+		writeInitJSON(w, serviceErrorStatus(err), errorBody(err.Error()))
 		return
 	}
 	if resp == nil {
@@ -347,13 +349,31 @@ func errorBody(msg string) map[string]string {
 	return map[string]string{"error": msg}
 }
 
+// serviceErrorStatus maps an init or unseal service error to an HTTP status.
+// A service reports a caller mistake with ErrMissingRequiredField or
+// ErrInvalidRequestBody, which answer 400. Any other error is classified by
+// barrier.Code, the classification the barrier gRPC service uses, and
+// answers that code's HTTP status; an unmapped code is 500.
+func serviceErrorStatus(err error) int {
+	var missing ErrMissingRequiredField
+	var invalid ErrInvalidRequestBody
+	if errors.As(err, &missing) || errors.As(err, &invalid) {
+		return http.StatusBadRequest
+	}
+	if mapped, ok := grpcCodeToHTTPStatus[barrier.Code(err)]; ok {
+		return mapped
+	}
+	return http.StatusInternalServerError
+}
+
 // decodeInitJSON decodes the request body into out, applying a max-bytes
 // cap to defend against accidental large uploads on the bootstrap path.
+// Unknown fields are refused so a client never mistakes an ignored field
+// for an honoured one. The server closes the request body.
 func decodeInitJSON(r *http.Request, max int64, out interface{}) error {
 	if r.Body == nil {
 		return nil
 	}
-	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(r.Body, max+1))
 	if err != nil {
 		return ErrInvalidRequestBody{Reason: err.Error()}
@@ -364,11 +384,10 @@ func decodeInitJSON(r *http.Request, max int64, out interface{}) error {
 	if len(body) == 0 {
 		return nil
 	}
-	if err := json.Unmarshal(body, out); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
 		return ErrInvalidRequestBody{Reason: err.Error()}
 	}
 	return nil
 }
-
-// ensureErrorsImported keeps the errors import in case future error
-// wrapping is added; gofmt removes unused imports otherwise.

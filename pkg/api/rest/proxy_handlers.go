@@ -220,9 +220,9 @@ func (h *ProxyHandlers) writeError(w http.ResponseWriter, statusCode int, err er
 	}
 }
 
-// proxyGRPCCodeToHTTPStatus maps gRPC codes produced by the shared
-// ProxyGRPCService to HTTP statuses.
-var proxyGRPCCodeToHTTPStatus = map[codes.Code]int{
+// grpcCodeToHTTPStatus maps the gRPC codes of the shared ProxyGRPCService
+// and of barrier.Code to HTTP statuses.
+var grpcCodeToHTTPStatus = map[codes.Code]int{
 	codes.InvalidArgument:    http.StatusBadRequest,
 	codes.NotFound:           http.StatusNotFound,
 	codes.AlreadyExists:      http.StatusConflict,
@@ -237,7 +237,7 @@ var proxyGRPCCodeToHTTPStatus = map[codes.Code]int{
 // service into an HTTP error response.
 func (h *ProxyHandlers) writeServiceError(w http.ResponseWriter, operation string, err error) {
 	httpStatus := http.StatusInternalServerError
-	if mapped, ok := proxyGRPCCodeToHTTPStatus[status.Code(err)]; ok {
+	if mapped, ok := grpcCodeToHTTPStatus[status.Code(err)]; ok {
 		httpStatus = mapped
 	}
 	h.logger.Error("Proxy operation failed", "operation", operation, "error", err)

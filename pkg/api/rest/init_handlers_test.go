@@ -17,11 +17,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -168,12 +174,12 @@ func TestHealthz_NilState(t *testing.T) {
 func TestInit_Success(t *testing.T) {
 	state := newFakeStateProvider(PlatformStateUninitialized)
 	init := &fakeInitService{
-		resp: &BarrierInitResponse{CeremonyID: "ceremony-1"},
+		resp: &BarrierInitResponse{CeremonyID: "ceremony-1", SPKIPin: "sha256/pin"},
 	}
 	ts := newTestServer(state, init, nil)
 	t.Cleanup(ts.Close)
 
-	body := `{"so_pin":"sopin","user_pin":"userpin","barrier_strategy":"software"}`
+	body := `{"so_pin":"sopin","user_pin":"userpin"}`
 	resp, err := http.Post(ts.URL+"/init", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST /init: %v", err)
@@ -194,6 +200,9 @@ func TestInit_Success(t *testing.T) {
 	}
 	if out.CeremonyID != "ceremony-1" {
 		t.Errorf("ceremony id: got %q want ceremony-1", out.CeremonyID)
+	}
+	if out.SPKIPin != "sha256/pin" {
+		t.Errorf("spki pin: got %q want sha256/pin", out.SPKIPin)
 	}
 	if out.State != PlatformStateUninitialized {
 		t.Errorf("response state should reflect provider state, got %q", out.State)
@@ -279,6 +288,56 @@ func TestInit_BadJSONReturns400(t *testing.T) {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
 }
+
+// postStatus posts body to path and returns the response status code.
+func postStatus(t *testing.T, ts *httptest.Server, path, body string) int {
+	t.Helper()
+	resp, err := http.Post(ts.URL+path, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestInit_RejectsUnknownField proves a field the gate does not honour,
+// such as the removed barrier_strategy, is refused rather than ignored.
+func TestInit_RejectsUnknownField(t *testing.T) {
+	init := &fakeInitService{}
+	ts := newTestServer(newFakeStateProvider(PlatformStateUninitialized), init, nil)
+	t.Cleanup(ts.Close)
+
+	status := postStatus(t, ts, "/init", `{"user_pin":"p","barrier_strategy":"software"}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", status)
+	}
+	if init.called.Load() != 0 {
+		t.Error("init must not run for a refused body")
+	}
+}
+
+func TestInit_ValidationErrorReturns400(t *testing.T) {
+	cases := map[string]error{
+		"missing field": ErrMissingRequiredField{Field: "user_pin"},
+		"invalid body":  ErrInvalidRequestBody{Reason: "bad"},
+		"wrapped":       &wrappedErr{cause: ErrMissingRequiredField{Field: "user_pin"}},
+	}
+	for name, svcErr := range cases {
+		t.Run(name, func(t *testing.T) {
+			ts := newTestServer(newFakeStateProvider(PlatformStateUninitialized), &fakeInitService{err: svcErr}, nil)
+			t.Cleanup(ts.Close)
+			if status := postStatus(t, ts, "/init", `{}`); status != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d", status)
+			}
+		})
+	}
+}
+
+// wrappedErr wraps a cause the way a service error chain does.
+type wrappedErr struct{ cause error }
+
+func (e *wrappedErr) Error() string { return "wrapped: " + e.cause.Error() }
+func (e *wrappedErr) Unwrap() error { return e.cause }
 
 // =============================================================================
 // /unseal
@@ -373,6 +432,80 @@ func TestUnseal_ServiceUnavailableWhenNoBackend(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", resp.StatusCode)
+	}
+}
+
+// TestUnseal_EmptyBodyReturns400 is the #823 regression: a body with
+// neither secret nor share is a caller error, not a server fault.
+func TestUnseal_EmptyBodyReturns400(t *testing.T) {
+	unseal := &fakeUnsealService{err: ErrMissingRequiredField{Field: "secret or share"}}
+	ts := newTestServer(newFakeStateProvider(PlatformStateSealed), nil, unseal)
+	t.Cleanup(ts.Close)
+
+	if status := postStatus(t, ts, "/unseal", `{}`); status != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", status)
+	}
+}
+
+func TestUnseal_ServiceErrorReturns500(t *testing.T) {
+	unseal := &fakeUnsealService{err: errors.New("wrong secret")}
+	ts := newTestServer(newFakeStateProvider(PlatformStateSealed), nil, unseal)
+	t.Cleanup(ts.Close)
+
+	if status := postStatus(t, ts, "/unseal", `{"secret":"k"}`); status != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", status)
+	}
+}
+
+// TestGate_BarrierErrorStatus is the #825 regression: a barrier or SDK error
+// from the gate services answers the HTTP status of its barrier.Code, not a
+// blanket 500.
+func TestGate_BarrierErrorStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"wrapped_not_sealed", &barrier.ManagerError{Op: "Unseal", Err: fmt.Errorf("upstream: %w", barrier.ErrNotSealed)}, http.StatusConflict},
+		{"wrapped_already_initialized", fmt.Errorf("init: %w", barrier.ErrAlreadyInitialized), http.StatusConflict},
+		{"wrapped_empty_share", fmt.Errorf("unseal: %w", barrier.ErrEmptyShare), http.StatusBadRequest},
+		{"upstream_permission_denied", &barrier.ManagerError{Op: "Unseal", Err: status.Error(codes.PermissionDenied, "wrong secret")}, http.StatusForbidden},
+		{"upstream_unavailable", &barrier.ManagerError{Op: "Unseal", Err: status.Error(codes.Unavailable, "no leader")}, http.StatusServiceUnavailable},
+		{"unclassified", errors.New("disk on fire"), http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"/unseal", func(t *testing.T) {
+			unseal := &fakeUnsealService{err: tt.err}
+			ts := newTestServer(newFakeStateProvider(PlatformStateSealed), nil, unseal)
+			t.Cleanup(ts.Close)
+
+			if got := postStatus(t, ts, "/unseal", `{"secret":"k"}`); got != tt.want {
+				t.Fatalf("expected %d, got %d", tt.want, got)
+			}
+		})
+		t.Run(tt.name+"/init", func(t *testing.T) {
+			initSvc := &fakeInitService{err: tt.err}
+			ts := newTestServer(newFakeStateProvider(PlatformStateUninitialized), initSvc, nil)
+			t.Cleanup(ts.Close)
+
+			if got := postStatus(t, ts, "/init", `{"user_pin":"k"}`); got != tt.want {
+				t.Fatalf("expected %d, got %d", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestUnseal_RejectsUnknownField(t *testing.T) {
+	unseal := &fakeUnsealService{}
+	ts := newTestServer(newFakeStateProvider(PlatformStateSealed), nil, unseal)
+	t.Cleanup(ts.Close)
+
+	if status := postStatus(t, ts, "/unseal", `{"secret":"k","passphrase":"x"}`); status != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", status)
+	}
+	if unseal.called.Load() != 0 {
+		t.Error("unseal must not run for a refused body")
 	}
 }
 

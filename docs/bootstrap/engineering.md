@@ -232,31 +232,12 @@ hard-coded PCR set; it must come from configuration or the CLI flag.
 
 ### Barrier
 
-```go
-func NewManager(sdk quicbaassdk.Client, config *Config, logger *slog.Logger) (*Manager, error)
-func (m *Manager) SyncStatus(ctx context.Context) error
-func (m *Manager) Initialize(ctx context.Context, secret string) error
-func (m *Manager) InitializeShamir(ctx context.Context, secret string, threshold, shares int) (*quicbaassdk.QRDBBarrierInitializeShamirResponse, error)
-func (m *Manager) Unseal(ctx context.Context, secret string) error
-func (m *Manager) UnsealWithShare(ctx context.Context, share string) (*quicbaassdk.QRDBBarrierUnsealShareResponse, error)
-func (m *Manager) Seal(ctx context.Context) error
-func (m *Manager) Rekey(ctx context.Context, threshold, total int) (*quicbaassdk.QRDBBarrierRekeyResponse, error)
-func (m *Manager) Status(ctx context.Context) (*quicbaassdk.QRDBBarrierStatusResponse, error)
-func (m *Manager) CeremonyInitialize(ctx context.Context, config *CeremonyConfig) (*CeremonyInitResult, error)
-func (m *Manager) CeremonyStatus(ctx context.Context) (*CeremonyStatusInfo, error)
-func (m *Manager) BeginClaimCert(ctx context.Context, username string) (*CeremonyChallenge, error)
-func (m *Manager) CompleteClaimCert(ctx context.Context, username, nonceHex string, signature []byte) (*CeremonyClaimCertResult, error)
-func (m *Manager) BeginClaimShare(ctx context.Context, username string) (*CeremonyChallenge, error)
-func (m *Manager) CompleteClaimShare(ctx context.Context, username, nonceHex string, signature []byte) ([]byte, error)
-func (m *Manager) WaitReady(ctx context.Context) error
-func (m *Manager) IsSealed() bool
-func (m *Manager) IsInitialized() bool
-```
-
-Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
-`SealStrategySoftware` (a backward-compatible alias of passphrase),
-`SealStrategyShamir`, `SealStrategyTPM2`, `SealStrategyPKCS11`;
-`DefaultSealStrategy = SealStrategySoftware`.
+`pkg/barrier.Manager` — its signatures, including the ceremony methods
+bootstrap calls (`CeremonyInitialize`, `CeremonyStatus`, `BeginClaimCert`,
+`CompleteClaimCert`, `BeginClaimShare`, `CompleteClaimShare`), and the
+seal-strategy constants are documented in
+[`docs/barrier/engineering.md` §2](../barrier/engineering.md#2-barriermanager)
+and [§3](../barrier/engineering.md#3-configuration).
 
 ## 3. Invariants
 
@@ -457,8 +438,9 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
     never take a lock.
 
 19. **The pre-unseal REST surface accepts only its own state.** `/init` in
-    `uninitialized`, `/unseal` in `sealed`; anything else is 409. `/healthz` is
-    always callable and reports `ready` only in `unsealed`.
+    `uninitialized`, `/unseal` in `sealed` or `unsealing`; anything else is 409.
+    `/healthz` is always callable and reports `ready` only in `unsealed`. See
+    [`docs/barrier/api.md` §2](../barrier/api.md#2-the-barrier-gate).
 
 20. **The media-read watch is ADVISORY: it enriches the diagnosis and never
     aborts an attempt.** After power-on is verified, the orchestrator polls the
@@ -649,10 +631,7 @@ Generic shapes used where nothing else fits: `MessageError{Msg}` and
 
 ### Barrier
 
-Package sentinels plus `ManagerError{Op, Err}` and `ConfigError{Field, Message}`.
-The pre-unseal REST handlers use `ErrInitNotPermitted{Current}`,
-`ErrUnsealNotPermitted{Current}`, `ErrBarrierInitServiceUnavailable{}`,
-`ErrBarrierUnsealServiceUnavailable{}`.
+See [`docs/barrier/engineering.md` §6](../barrier/engineering.md#6-errors).
 
 ### Paths that fail closed
 
@@ -1050,7 +1029,7 @@ never reconfigured underneath a probe.
 - [`docs/ca/`](../ca/) — CA issuance and the authenticated bundle route
 - [`docs/dns/dane.md`](../dns/dane.md) — TLSA record semantics
 - [`docs/daemon/api.md`](../daemon/api.md) — transports, opcodes, status bytes, authorization
-- [`docs/cli/barrier.md`](../cli/barrier.md) — the barrier verbs beyond init and unseal
+- [`docs/barrier/`](../barrier/) — the barrier lifecycle, the gate and `platformctl barrier`
 - Legacy narrative kept in place: [overview.md](overview.md), [pxe-bootstrap.md](pxe-bootstrap.md), [config-reference.md](config-reference.md), [config-delivery.md](config-delivery.md), [deployer.md](deployer.md), [dane.md](dane.md), [configuration.md](configuration.md), [day-zero.md](day-zero.md), [manual-nodes.md](manual-nodes.md), [switch-management.md](switch-management.md), [api-reference-rest.md](api-reference-rest.md)
 
 ## 12. Corrections to the legacy documents in this folder
@@ -1060,7 +1039,7 @@ which statement to distrust.
 
 | Legacy statement | Code says |
 |---|---|
-| [configuration.md](configuration.md), [overview.md](overview.md): the Noise server listens on `:9446` | `bootstrap.DefaultConfig()` sets `listen-addr: ":9999"`. There is no `9446` anywhere in the Go code. |
+| [configuration.md](configuration.md), [overview.md](overview.md): the Noise server listens on `:9446` | `bootstrap.DefaultConfig()` sets `listen-addr: ":9999"`. In the Go code `9446` is the barrier gate's loopback port (`apidaemon.DefaultInitOnlyHTTPAddr`), not the Noise server's. |
 | [day-zero.md](day-zero.md) (before #708): the provisioning network is configured under a `provisioning_network:` key | `BootstrapConfig` has no such field (day-zero.md now shows `environment:`). The provisioning zone is derived from the top-level `environment:` (offset 5), and `Validate` fails without an environment. |
 | [day-zero.md](day-zero.md): "Add new entries and re-run. Existing nodes are skipped." | Nothing skips an already-installed node automatically. `skip_install: true` is the explicit opt-out; without it the node is reprovisioned. |
 | [pxe-bootstrap.md](pxe-bootstrap.md): phases numbered 0–7 with "Watch" as phase 6 | The phase constants are `discovery`, `switch`, `deploy`, `control-plane`, `seed`, `remaining-nodes`, `bmc-enroll`, `health-gate`, `teardown`. Install-log watching is part of per-node provisioning, not a separate phase. |

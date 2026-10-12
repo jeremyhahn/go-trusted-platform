@@ -125,11 +125,14 @@ the CLI's point of view (§6).
 
 ## 5. `platformctl tenant barrier`
 
-Per-tenant cryptographic barrier lifecycle.
+Per-tenant cryptographic barrier lifecycle. The barrier model is in
+[`docs/barrier/`](../barrier/architecture.md#two-barriers); the platform
+barrier has its own verbs, `platformctl barrier`
+([`docs/barrier/cli.md`](../barrier/cli.md)).
 
 | Verb | Positional | Flags |
 |---|---|---|
-| `init` | `<tenant-name>` | — |
+| `init` | `<tenant-name>` | `--threshold`, `--shares` (Shamir M-of-N; `0` means deterministic init) |
 | `unseal` | `<tenant-name>` | `--key-hex`, `--key-base64` |
 | `seal` | `<tenant-name>` | — |
 | `status` | `<tenant-name>` | — |

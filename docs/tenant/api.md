@@ -81,14 +81,16 @@ network identity becomes a VRF ([architecture.md](architecture.md)).
 
 QUIC reaches these through the **tenant barrier category opcode `0x9E`**, which
 multiplexes the per-tenant barrier sub-operations
-(`pkg/api/daemon/quic_service.go:616`).
+(`pkg/api/daemon/quic_service.go:616`). The barrier model — lifecycle, seal
+strategies, and how a tenant barrier differs from the platform barrier — is in
+[`docs/barrier/`](../barrier/architecture.md#two-barriers).
 
 | Capability | REST | gRPC / Unix | QUIC (under `0x9E`) | MCP | Embedded |
 |---|---|---|---|---|---|
 | Init barrier | `POST /api/v1/tenants/{id}/barrier/init` | `InitTenantBarrier` | ✅ | `platform_tenant_barrier_init` | ✅ |
 | Unseal barrier | `POST /api/v1/tenants/{id}/barrier/unseal` | `UnsealTenantBarrier` | ✅ | `platform_tenant_barrier_unseal` | ✅ |
 | Seal barrier | `POST /api/v1/tenants/{id}/barrier/seal` | `SealTenantBarrier` | ✅ | `platform_tenant_barrier_seal` | ✅ |
-| Barrier status | `GET /api/v1/tenants/{id}/barrier` | `GetTenantBarrierStatus` | ✅ | `platform_tenant_barrier_status` | ✅ |
+| Barrier status | `GET /api/v1/tenants/{id}/barrier` (daemon REST server: `.../barrier/status`) | `GetTenantBarrierStatus` | ✅ | `platform_tenant_barrier_status` | ✅ |
 
 **The MCP naming is inconsistent within this one feature.** Fifteen tools use
 a bare `tenant_*` prefix; the four barrier tools use `platform_tenant_barrier_*`.

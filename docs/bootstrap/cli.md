@@ -586,7 +586,7 @@ the `BMCEnrollments` entries in the output.
 
 | Capability | Reach it with |
 |---|---|
-| Barrier init, unseal, seal, rekey, ceremony | `platformctl barrier` / `platformctl ceremony` — [`docs/cli/barrier.md`](../cli/barrier.md) |
+| Barrier init, unseal, seal, rekey, ceremony | `platformctl barrier` — [`docs/barrier/cli.md`](../barrier/cli.md); `platformctl ceremony` |
 | BMC enrollment outside a bootstrap run | `platformctl bmc` — [`docs/bmc/`](../bmc/) |
 | Building or customising the ISO | `platformctl iso` — [`docs/provisioning/cli.md`](../provisioning/cli.md) |
 | Device templates and profiles outside seeding | `platformctl device` — [`docs/device/`](../device/) |

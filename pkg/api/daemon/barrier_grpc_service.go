@@ -44,7 +44,8 @@ func NewBarrierGRPCService(logger *logging.Logger, mgr *barrier.Manager) *Barrie
 }
 
 // Init initializes the barrier with the specified configuration.
-// If threshold >= 2, Shamir secret sharing is used; otherwise single-key mode.
+// If threshold >= barrier.MinShamirThreshold, Shamir secret sharing is used;
+// otherwise single-key mode.
 func (s *BarrierGRPCService) Init(
 	ctx context.Context,
 	req *platformv1.BarrierInitRequest,
@@ -55,8 +56,8 @@ func (s *BarrierGRPCService) Init(
 
 	now := timestamppb.New(time.Now())
 
-	// Shamir mode: threshold >= 2
-	if req.GetThreshold() >= 2 {
+	// Shamir mode: the threshold reaches the platform minimum.
+	if req.GetThreshold() >= barrier.MinShamirThreshold {
 		resp, err := s.barrier.InitializeShamir(
 			ctx,
 			req.GetSecret(),
@@ -89,7 +90,9 @@ func (s *BarrierGRPCService) Init(
 	}, nil
 }
 
-// GetStatus returns the current status of the barrier.
+// GetStatus returns the current status of the barrier. Every field comes
+// from one SDK status call, never from the manager's cached flags, so the
+// response cannot mix two readings of the barrier.
 func (s *BarrierGRPCService) GetStatus(
 	ctx context.Context,
 	req *platformv1.BarrierStatusRequest,
@@ -104,17 +107,22 @@ func (s *BarrierGRPCService) GetStatus(
 	}
 
 	resp := &platformv1.BarrierStatusResponse{
-		Status:      &platformv1.Status{Success: true},
-		Sealed:      sdkStatus.Sealed,
-		Initialized: s.barrier.IsInitialized(),
+		Status: &platformv1.Status{Success: true},
+		Sealed: sdkStatus.Sealed,
+		// A non-empty InitializedAt is the SDK's signal that the barrier
+		// has been initialized, as in Manager.SyncStatus.
+		Initialized: sdkStatus.InitializedAt != "",
+		Strategy:    strategyToProto(sdkStatus.Strategy, sdkStatus.ShamirThreshold),
+		Threshold:   int32(sdkStatus.ShamirThreshold),
+		SharesTotal: int32(sdkStatus.ShamirTotal),
 	}
 
-	// Map strategy string to protobuf enum
-	resp.Strategy = strategyStringToProto(sdkStatus.Strategy)
-
-	// Parse initialized_at timestamp if present
 	if sdkStatus.InitializedAt != "" {
-		if t, parseErr := time.Parse(time.RFC3339, sdkStatus.InitializedAt); parseErr == nil {
+		t, parseErr := time.Parse(time.RFC3339, sdkStatus.InitializedAt)
+		if parseErr != nil {
+			s.logger.Warn("barrier status: unparseable initialized_at",
+				"initialized_at", sdkStatus.InitializedAt, "error", parseErr)
+		} else {
 			resp.InitializedAt = timestamppb.New(t)
 		}
 	}
@@ -181,7 +189,8 @@ func (s *BarrierGRPCService) Seal(
 	}, nil
 }
 
-// Rekey generates new unseal keys for the barrier.
+// Rekey generates new unseal keys for the barrier. The reported strategy
+// comes from the split the SDK says it made, not from the request.
 func (s *BarrierGRPCService) Rekey(
 	ctx context.Context,
 	req *platformv1.BarrierRekeyRequest,
@@ -197,50 +206,43 @@ func (s *BarrierGRPCService) Rekey(
 
 	return &platformv1.BarrierRekeyResponse{
 		Status:      &platformv1.Status{Success: true, Message: "barrier rekeyed; new shares are sealed to enrolled security officers and claimed via the share-claim flow"},
-		Strategy:    platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR,
+		Strategy:    strategyToProto("", resp.Threshold),
 		Threshold:   int32(resp.Threshold),
 		SharesTotal: int32(resp.TotalShares),
 		ShareCount:  int32(resp.ShareCount),
 	}, nil
 }
 
-// strategyStringToProto maps a barrier strategy string from the SDK to
-// the corresponding protobuf enum value.
-func strategyStringToProto(strategy string) platformv1.BarrierStrategy {
-	strategyMap := map[string]platformv1.BarrierStrategy{
-		"single_key": platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
-		"shamir":     platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR,
+// strategyNameToProto maps the SDK's seal strategy names to the wire enum.
+// Every strategy that unseals with one secret is SINGLE_KEY; "none" and any
+// name not listed are UNSPECIFIED.
+var strategyNameToProto = map[string]platformv1.BarrierStrategy{
+	"shamir":         platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR,
+	"passphrase":     platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
+	"software":       platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
+	"tpm2":           platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
+	"pkcs11":         platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
+	"system-barrier": platformv1.BarrierStrategy_BARRIER_STRATEGY_SINGLE_KEY,
+}
+
+// strategyToProto reports the wire strategy of an SDK status or rekey
+// response. A Shamir threshold means SHAMIR whatever the strategy name, since
+// the SDK sets one only on a Shamir-split barrier.
+func strategyToProto(strategy string, threshold int) platformv1.BarrierStrategy {
+	if threshold > 0 {
+		return platformv1.BarrierStrategy_BARRIER_STRATEGY_SHAMIR
 	}
-	if v, ok := strategyMap[strategy]; ok {
+	if v, ok := strategyNameToProto[strategy]; ok {
 		return v
 	}
 	return platformv1.BarrierStrategy_BARRIER_STRATEGY_UNSPECIFIED
 }
 
-// barrierErrorToGRPC maps barrier package errors to appropriate gRPC status codes.
+// barrierErrorToGRPC turns a barrier error into a gRPC status carrying the
+// code barrier.Code assigns, so every transport classifies it the same way.
 func barrierErrorToGRPC(err error) error {
 	if err == nil {
 		return nil
 	}
-
-	errorCodeMap := map[error]codes.Code{
-		barrier.ErrAlreadyInitialized: codes.AlreadyExists,
-		barrier.ErrNotInitialized:     codes.FailedPrecondition,
-		barrier.ErrSealed:             codes.FailedPrecondition,
-		barrier.ErrNotSealed:          codes.FailedPrecondition,
-		barrier.ErrEmptySecret:        codes.InvalidArgument,
-		barrier.ErrEmptyShare:         codes.InvalidArgument,
-		barrier.ErrInvalidThreshold:   codes.InvalidArgument,
-		barrier.ErrNilContext:         codes.InvalidArgument,
-		barrier.ErrNilSDKClient:       codes.Internal,
-		barrier.ErrNilConfig:          codes.Internal,
-	}
-
-	for sentinel, code := range errorCodeMap {
-		if err == sentinel {
-			return status.Error(code, err.Error())
-		}
-	}
-
-	return status.Errorf(codes.Internal, "barrier: %v", err)
+	return status.Error(barrier.Code(err), err.Error())
 }

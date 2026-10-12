@@ -766,3 +766,4 @@ The tenant middleware reads `uid` as a decimal string
 - [Isolation Mechanisms](isolation.md) - Detailed isolation implementation
 - [API Reference](api-reference.md) - Programmatic tenant management
 - [Cluster Architecture](../cluster/architecture.md) - Multi-node tenancy
+- [Barrier](../barrier/architecture.md#two-barriers) - Per-tenant barrier versus the platform barrier

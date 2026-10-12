@@ -27,6 +27,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	platformbarrier "github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	ceremonysvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ceremony"
 )
@@ -286,11 +287,13 @@ func resolveAndValidateCanonicalInit(cmd *cobra.Command, f *canonicalInitFlags, 
 		return &ErrInvalidBarrierStrategy{Strategy: f.barrierStrategy}
 	}
 	if f.barrierStrategy == "shamir" {
-		if f.shares < 2 {
-			return &MessageError{Msg: "init: --shares >= 2 required when --barrier-strategy=shamir"}
+		if f.shares < platformbarrier.MinShamirThreshold {
+			return &MessageError{Msg: fmt.Sprintf("init: --shares >= %d required when --barrier-strategy=shamir",
+				platformbarrier.MinShamirThreshold)}
 		}
-		if f.threshold < 2 || f.threshold > f.shares {
-			return &MessageError{Msg: "init: --threshold (2 <= threshold <= shares) required when --barrier-strategy=shamir"}
+		if err := platformbarrier.ValidateShamirSplit(f.threshold, f.shares); err != nil {
+			return &MessageError{Msg: fmt.Sprintf("init: --threshold (%d <= threshold <= shares) required when --barrier-strategy=shamir",
+				platformbarrier.MinShamirThreshold)}
 		}
 	} else if f.shares != 0 || f.threshold != 0 {
 		return &MessageError{Msg: "init: --shares / --threshold only valid when --barrier-strategy=shamir"}

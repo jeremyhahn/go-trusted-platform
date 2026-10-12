@@ -64,6 +64,14 @@ func (ErrInitOnlyMissingState) Error() string {
 	return "init-only server requires a StateProvider"
 }
 
+// ErrInitOnlyMissingLogger is returned when InitOnlyConfig.Logger is nil.
+type ErrInitOnlyMissingLogger struct{}
+
+// Error returns a human-readable description of the error.
+func (ErrInitOnlyMissingLogger) Error() string {
+	return "init-only server requires a logger"
+}
+
 // ErrInitOnlyListenerFailed wraps a listener bind failure.
 type ErrInitOnlyListenerFailed struct {
 	Address string
@@ -85,6 +93,12 @@ func (e *ErrInitOnlyListenerFailed) Unwrap() error { return e.Cause }
 // Configuration
 // =============================================================================
 
+// DefaultInitOnlyHTTPAddr is the loopback address of the pre-unseal HTTP
+// listener. Port 9446 is reserved for the barrier gate: it collides with
+// none of the production transports (REST 8443, gRPC 10443, QUIC 9444,
+// MCP 9445).
+const DefaultInitOnlyHTTPAddr = "127.0.0.1:9446"
+
 // InitOnlyConfig configures the minimal pre-unseal listener set.
 type InitOnlyConfig struct {
 	// SocketPath is the Unix domain socket bound for local platformctl.
@@ -95,7 +109,7 @@ type InitOnlyConfig struct {
 	SocketMode os.FileMode
 
 	// HTTPListenAddr is the loopback address bound for the minimal HTTP
-	// surface. Defaults to "127.0.0.1:9445" when empty.
+	// surface. Defaults to DefaultInitOnlyHTTPAddr when empty.
 	HTTPListenAddr string
 
 	// State reports the current platform state. Required.
@@ -149,7 +163,7 @@ func NewInitOnlyServer(cfg InitOnlyConfig) (*InitOnlyServer, error) {
 		return nil, ErrInitOnlyMissingState{}
 	}
 	if cfg.Logger == nil {
-		return nil, errors.New("init-only server requires a logger")
+		return nil, ErrInitOnlyMissingLogger{}
 	}
 	if cfg.SocketPath == "" {
 		cfg.SocketPath = "/run/platformd.sock"
@@ -158,7 +172,7 @@ func NewInitOnlyServer(cfg InitOnlyConfig) (*InitOnlyServer, error) {
 		cfg.SocketMode = 0660
 	}
 	if cfg.HTTPListenAddr == "" {
-		cfg.HTTPListenAddr = "127.0.0.1:9445"
+		cfg.HTTPListenAddr = DefaultInitOnlyHTTPAddr
 	}
 	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = 10 * time.Second
