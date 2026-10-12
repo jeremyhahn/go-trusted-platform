@@ -377,6 +377,40 @@ func TestTPM2Handler_HandleInfo_NilConfig(t *testing.T) {
 	assert.Equal(t, quicwire.StatusOK, resp.Status)
 }
 
+func TestTPM2Handler_HandleInfo_PublishesConfiguredSRKHandles(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	mock.config = &xkmssdk.TPMConfig{
+		PlatformSRK: &xkmssdk.PlatformSRKConfig{SRKHandle: 0x81000005},
+		SSRK:        &xkmssdk.SRKConfig{Handle: 0x81000007},
+	}
+	h.SetTPM2Service(mock)
+
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var infoResp TPM2InfoResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &infoResp))
+	assert.Equal(t, "0x81000005", infoResp.Properties["platform_srk_handle"])
+	assert.Equal(t, "0x81000007", infoResp.Properties["ssrk_handle"])
+	assert.Equal(t, "mock-tpm-info", infoResp.Properties["info"])
+}
+
+func TestTPM2Handler_HandleInfo_PublishesDefaultSRKHandlesWithNilConfig(t *testing.T) {
+	h := NewTPM2Handler(logging.DefaultLogger())
+	mock := newMockTPM()
+	mock.config = nil
+	h.SetTPM2Service(mock)
+
+	resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: []byte{quicwire.SubOpTPM2Info}})
+
+	require.Equal(t, quicwire.StatusOK, resp.Status)
+	var infoResp TPM2InfoResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &infoResp))
+	assert.Equal(t, "0x81000002", infoResp.Properties["platform_srk_handle"])
+	assert.Equal(t, "0x81000001", infoResp.Properties["ssrk_handle"])
+}
+
 func TestTPM2Handler_HandleProvision_Success(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	h.SetTPM2Service(newMockTPM())

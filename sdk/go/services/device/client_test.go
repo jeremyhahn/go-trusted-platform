@@ -35,6 +35,14 @@ type fakeDeviceServiceClient struct {
 	unassignReq  *platformv1.UnassignProfileFromDeviceRequest
 	unassignResp *platformv1.UnassignProfileFromDeviceResponse
 	unassignErr  error
+	recordReq    *platformv1.RecordAttestationCertificateRequest
+	recordResp   *platformv1.RecordAttestationCertificateResponse
+	recordErr    error
+}
+
+func (f *fakeDeviceServiceClient) RecordAttestationCertificate(ctx context.Context, in *platformv1.RecordAttestationCertificateRequest, opts ...grpc.CallOption) (*platformv1.RecordAttestationCertificateResponse, error) {
+	f.recordReq = in
+	return f.recordResp, f.recordErr
 }
 
 func (f *fakeDeviceServiceClient) AssignProfileToDevice(ctx context.Context, in *platformv1.AssignProfileToDeviceRequest, opts ...grpc.CallOption) (*platformv1.AssignProfileToDeviceResponse, error) {
@@ -74,6 +82,44 @@ func TestClient_AssignProfile(t *testing.T) {
 
 // TestClient_AssignProfile_Error verifies transport errors wrap into the
 // typed ErrAssignProfileFailed.
+func TestClient_RecordAttestationCertificate_SendsBothOptions(t *testing.T) {
+	fake := &fakeDeviceServiceClient{recordResp: &platformv1.RecordAttestationCertificateResponse{Cleared: true, Refusal: "not restricted"}}
+	client := NewClientFromGRPC(fake)
+
+	resp, err := client.RecordAttestationCertificate(context.Background(), 42, RecordAttestCertOptions{ClearOnRefusal: true})
+	if err != nil {
+		t.Fatalf("RecordAttestationCertificate: %v", err)
+	}
+	if fake.recordReq.GetDeviceId() != "42" || fake.recordReq.GetReissue() || !fake.recordReq.GetClearOnRefusal() {
+		t.Errorf("request = %+v, want device 42, clear only", fake.recordReq)
+	}
+	if !resp.GetCleared() || resp.GetRefusal() != "not restricted" {
+		t.Errorf("response = %+v, want the clear reported", resp)
+	}
+
+	if _, err := client.RecordAttestationCertificate(context.Background(), 42, RecordAttestCertOptions{}); err != nil {
+		t.Fatalf("RecordAttestationCertificate: %v", err)
+	}
+	if fake.recordReq.GetReissue() || fake.recordReq.GetClearOnRefusal() {
+		t.Errorf("zero options sent %+v, want neither flag", fake.recordReq)
+	}
+}
+
+func TestClient_RecordAttestationCertificate_Error(t *testing.T) {
+	cause := errors.New("refused")
+	fake := &fakeDeviceServiceClient{recordErr: cause}
+	client := NewClientFromGRPC(fake)
+
+	_, err := client.RecordAttestationCertificate(context.Background(), 7, RecordAttestCertOptions{Reissue: true})
+	var typed *ErrRecordAttestCertFailed
+	if !errors.As(err, &typed) {
+		t.Fatalf("err = %v, want ErrRecordAttestCertFailed", err)
+	}
+	if typed.ID != 7 || !errors.Is(err, cause) {
+		t.Errorf("typed = %+v, cause lost", typed)
+	}
+}
+
 func TestClient_AssignProfile_Error(t *testing.T) {
 	cause := errors.New("boom")
 	fake := &fakeDeviceServiceClient{assignErr: cause}

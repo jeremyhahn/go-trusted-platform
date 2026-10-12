@@ -80,6 +80,16 @@ fields. Parse the structured fields. If the underlying `FixedProperties` read
 fails the call still succeeds with the text fallback and empty structured
 fields — check for an empty `Manufacturer` before trusting them.
 
+**`Info` also publishes the configured SRK handles**, so a client probes the real
+handle instead of assuming the default. Every transport carries the same two
+keys, as `0x%08X` strings, built by `tpmsrk.InfoProperties`: `platform_srk_handle`
+(`tpm.platform-srk.srk-handle`, default `0x81000002`) and `ssrk_handle`
+(`tpm.ssrk.handle`, default `0x81000001`). They are in `Properties` on gRPC/Unix,
+REST (`properties`) and QUIC, and top-level keys of the MCP `platform_tpm_info`
+result. A daemon that predates them omits the keys; clients fall back to the
+default. `platformctl tpm status` uses `platform_srk_handle` for its PlatformSRK
+row.
+
 Request/response schemas: `TPMInfoRequest`/`TPMInfoResponse`,
 `TPMProvisionRequest` (`owner_password`, `endorsement_password`, `create_ek`,
 `create_srk`, `create_ak`, plus optional `KeyAttributes` for each) /
@@ -121,6 +131,8 @@ single dispatch in `pkg/api/tpmsrk`:
 | absent, or `0` | SSRK |
 | `0x81000001` | SSRK |
 | `0x81000002` | PlatformSRK |
+| the configured `tpm.platform-srk.srk-handle` | PlatformSRK |
+| the configured `tpm.ssrk.handle` | SSRK |
 | anything else | **not found** — never a fall-through to the SSRK |
 
 Each transport carries the handle in its own idiom: REST as the `?handle=`
@@ -136,12 +148,13 @@ the PlatformSRK returned the SSRK with a success status, and the PlatformSRK
 was unreachable on three of the five transports. Only gRPC, Unix and embedded
 dispatched correctly.
 
-**The handle is dispatched on as a literal but answered from config.** The
-switch matches `0x81000002` exactly, while the response carries the
-deployment's configured `tpm.platform-srk.srk-handle`, which need not equal it.
-So a request for any *other* handle is not found even when that key exists, and
-a caller that compares the returned handle against the one it requested will
-misfire on any deployment that overrides the default.
+**The default handles and the configured handles both resolve.** The dispatch
+matches the defaults `0x81000001` / `0x81000002` and the handles the daemon is
+configured with, which `Info` publishes (above). A request for any other handle is
+not found even when that key exists. The response carries the handle the key
+actually occupies (the configured one), so a caller that compares it against
+the default it requested will misfire on any deployment that overrides it —
+read the handle from `Info` instead.
 
 Key algorithms across all transports: `RSA-2048`, `RSA-3072`, `RSA-4096`,
 `ECDSA-P256`, `ECDSA-P384`, `ECDSA-P521` (`KeyAlgorithm` in

@@ -37,14 +37,15 @@ import (
 type stubAttestCertRecorder struct {
 	gotID      uint64
 	gotReissue bool
+	gotClear   bool
 	calls      int
 	rec        *device.AttestCertRecord
 	err        error
 }
 
-func (s *stubAttestCertRecorder) Record(_ context.Context, id uint64, reissue bool) (*device.AttestCertRecord, error) {
+func (s *stubAttestCertRecorder) Record(_ context.Context, id uint64, opts device.AttestCertRecordOptions) (*device.AttestCertRecord, error) {
 	s.calls++
-	s.gotID, s.gotReissue = id, reissue
+	s.gotID, s.gotReissue, s.gotClear = id, opts.Reissue, opts.ClearOnRefusal
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -69,6 +70,22 @@ func recordedFixture() *device.AttestCertRecord {
 	}
 }
 
+// clearedFixture is the record of a refused certificate cleared from the
+// device: no source and no PEM, the refusal kept as the reason.
+func clearedFixture() *device.AttestCertRecord {
+	return &device.AttestCertRecord{
+		DeviceID:          42,
+		Serial:            "SN0042",
+		Model:             "SuperMicro X10",
+		Changed:           true,
+		Cleared:           true,
+		Subject:           "CN=node-09",
+		CertificateSerial: "777",
+		NotAfter:          recordedAt.Add(24 * time.Hour),
+		Refusal:           "device: no attestation certificate for device 42 passed the preflight",
+	}
+}
+
 func newAttestCertGRPC(recorder AttestCertRecorder) *DeviceGRPCService {
 	return NewDeviceGRPCService(newMockDeviceService(), newMockProfileService(), nil,
 		WithDeviceAttestCertRecorder(recorder))
@@ -85,7 +102,11 @@ func TestDeviceGRPC_RecordAttestationCertificate_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint64(42), stub.gotID)
 	assert.True(t, stub.gotReissue)
+	assert.False(t, stub.gotClear, "clear_on_refusal is never on unless the request sets it")
 	assert.True(t, resp.GetStatus().GetSuccess())
+	assert.Equal(t, "attestation certificate recorded", resp.GetStatus().GetMessage())
+	assert.False(t, resp.GetCleared())
+	assert.Empty(t, resp.GetRefusal())
 	assert.Equal(t, uint64(42), resp.GetDeviceId())
 	assert.Equal(t, "SN0042", resp.GetSerial())
 	assert.Equal(t, "SuperMicro X10", resp.GetModel())
@@ -97,6 +118,26 @@ func TestDeviceGRPC_RecordAttestationCertificate_Success(t *testing.T) {
 	assert.Equal(t, "12345", resp.GetCertificateSerial())
 	assert.Equal(t, recordedAt.Add(24*time.Hour), resp.GetNotAfter().AsTime())
 	assert.Equal(t, recordedFixture().CertificatePEM, resp.GetAttestCert())
+}
+
+func TestDeviceGRPC_RecordAttestationCertificate_Cleared(t *testing.T) {
+	stub := &stubAttestCertRecorder{rec: clearedFixture()}
+	svc := newAttestCertGRPC(stub)
+
+	resp, err := svc.RecordAttestationCertificate(context.Background(), &platformv1.RecordAttestationCertificateRequest{
+		DeviceId:       "42",
+		ClearOnRefusal: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, stub.gotClear)
+	assert.False(t, stub.gotReissue)
+	assert.Equal(t, "refused attestation certificate cleared", resp.GetStatus().GetMessage())
+	assert.True(t, resp.GetCleared())
+	assert.True(t, resp.GetChanged())
+	assert.Equal(t, clearedFixture().Refusal, resp.GetRefusal())
+	assert.Equal(t, "CN=node-09", resp.GetSubject(), "the subject names the certificate that was cleared")
+	assert.Empty(t, resp.GetSource())
+	assert.Empty(t, resp.GetAttestCert(), "nothing is on the record after a clear")
 }
 
 func TestDeviceGRPC_RecordAttestationCertificate_ArgumentErrors(t *testing.T) {
@@ -138,9 +179,17 @@ func TestDeviceGRPC_RecordAttestationCertificate_ErrorMapping(t *testing.T) {
 		"trust anchor unavailable": {err: device.ErrAttestCertTrustAnchorUnavailable{}, code: codes.Unavailable},
 		"reissue failed":           {err: device.ErrAttestCertReissueFailed{DeviceID: 42, Cause: errors.New("signer")}, code: codes.Internal},
 		"write failed":             {err: device.ErrAttestCertWriteFailed{DeviceID: 42, Cause: errors.New("dao")}, code: codes.Internal},
-		"invalid device id":        {err: device.ErrInvalidDeviceID, code: codes.InvalidArgument},
-		"not found":                {err: &device.WrappedError{Msg: "failed to get device", Err: errors.New("not found")}, code: codes.NotFound},
-		"unknown":                  {err: errors.New("boom"), code: codes.Internal},
+		"clear conflict": {
+			err:  device.ErrAttestCertWriteFailed{DeviceID: 42, Cause: device.ErrAttestCertClearConflict{DeviceID: 42}},
+			code: codes.Aborted,
+		},
+		"clear unsupported": {
+			err:  device.ErrAttestCertWriteFailed{DeviceID: 42, Cause: device.ErrAttestCertClearUnsupported{}},
+			code: codes.Internal,
+		},
+		"invalid device id": {err: device.ErrInvalidDeviceID, code: codes.InvalidArgument},
+		"not found":         {err: &device.WrappedError{Msg: "failed to get device", Err: errors.New("not found")}, code: codes.NotFound},
+		"unknown":           {err: errors.New("boom"), code: codes.Internal},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -188,6 +237,21 @@ func TestQUICDeviceRecordAttestCert_Success(t *testing.T) {
 	assert.True(t, stub.gotReissue)
 }
 
+func TestQUICDeviceRecordAttestCert_ClearOnRefusal(t *testing.T) {
+	stub := &stubAttestCertRecorder{rec: clearedFixture()}
+	handler := newQUICAttestCertHandler(t, stub)
+
+	req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceSubRecordAttestCert,
+		&platformv1.RecordAttestationCertificateRequest{DeviceId: "42", ClearOnRefusal: true})
+	resp := handler.HandleRequest(context.Background(), req)
+
+	var out platformv1.RecordAttestationCertificateResponse
+	decodeQUICResponse(t, resp, &out)
+	assert.True(t, stub.gotClear)
+	assert.True(t, out.GetCleared())
+	assert.Equal(t, clearedFixture().Refusal, out.GetRefusal())
+}
+
 func TestQUICDeviceRecordAttestCert_RefusalIsInvalidRequest(t *testing.T) {
 	handler := newQUICAttestCertHandler(t, &stubAttestCertRecorder{
 		err: device.ErrAttestCertRefused{DeviceID: 42, Attempts: []device.AttestCertAttempt{
@@ -199,6 +263,19 @@ func TestQUICDeviceRecordAttestCert_RefusalIsInvalidRequest(t *testing.T) {
 	resp := handler.HandleRequest(context.Background(), req)
 	assert.Equal(t, quicwire.StatusInvalidRequest, resp.Status, "FailedPrecondition maps to the QUIC invalid-request status")
 	assert.Contains(t, string(resp.Payload), "tcg-cap-verifiedTPMRestricted")
+}
+
+// TestQUICDeviceRecordAttestCert_ClearConflictIsAlreadyExists keeps a lost
+// compare-and-clear distinguishable on QUIC: it is the conflict status, not
+// an internal error, so the caller knows to re-read and retry.
+func TestQUICDeviceRecordAttestCert_ClearConflictIsAlreadyExists(t *testing.T) {
+	handler := newQUICAttestCertHandler(t, &stubAttestCertRecorder{
+		err: device.ErrAttestCertWriteFailed{DeviceID: 42, Cause: device.ErrAttestCertClearConflict{DeviceID: 42}},
+	})
+	req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceSubRecordAttestCert,
+		&platformv1.RecordAttestationCertificateRequest{DeviceId: "42", ClearOnRefusal: true})
+	resp := handler.HandleRequest(context.Background(), req)
+	assert.Equal(t, quicwire.StatusAlreadyExists, resp.Status, "Aborted maps to the QUIC conflict status")
 }
 
 func TestQUICDeviceRecordAttestCert_UnavailableWithoutRecorder(t *testing.T) {
@@ -232,20 +309,26 @@ func TestMCPServiceProvider_DeviceRecordAttestCert(t *testing.T) {
 		Logger:             slog.Default(),
 	})
 
-	out, err := p.DeviceRecordAttestCert(context.Background(), "42", true)
+	out, err := p.DeviceRecordAttestCert(context.Background(), "42", true, false)
 	require.NoError(t, err)
 	resp, ok := out.(*platformv1.RecordAttestationCertificateResponse)
 	require.True(t, ok, "the MCP result is the pb response so it marshals with proto field names")
 	assert.Equal(t, uint64(42), resp.GetDeviceId())
 	assert.True(t, stub.gotReissue)
+	assert.False(t, stub.gotClear)
 
-	_, err = p.DeviceRecordAttestCert(context.Background(), "", false)
+	_, err = p.DeviceRecordAttestCert(context.Background(), "42", false, true)
+	require.NoError(t, err)
+	assert.False(t, stub.gotReissue)
+	assert.True(t, stub.gotClear, "clear_on_refusal reaches the recorder through MCP")
+
+	_, err = p.DeviceRecordAttestCert(context.Background(), "", false, false)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 }
 
 func TestMCPServiceProvider_DeviceRecordAttestCert_UnavailableWithoutRecorder(t *testing.T) {
 	p := NewMCPServiceProvider(&MCPServiceProviderConfig{DeviceService: newMockDeviceService(), Logger: slog.Default()})
-	_, err := p.DeviceRecordAttestCert(context.Background(), "42", false)
+	_, err := p.DeviceRecordAttestCert(context.Background(), "42", false, false)
 	assert.Equal(t, codes.Unavailable, status.Code(err))
 }
 
@@ -256,7 +339,7 @@ func TestPlatformServiceProvider_DeviceRecordAttestCert(t *testing.T) {
 		ProfileService:     newMockProfileService(),
 		AttestCertRecorder: stub,
 	})
-	_, err := p.DeviceRecordAttestCert(context.Background(), "42", false)
+	_, err := p.DeviceRecordAttestCert(context.Background(), "42", false, false)
 	assert.Equal(t, codes.FailedPrecondition, status.Code(err), "%v", err)
 	assert.Equal(t, uint64(42), stub.gotID)
 }

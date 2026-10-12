@@ -33,7 +33,7 @@ import (
 // implementation is device.AttestCertRecorder; the interface exists so the
 // transports can be tested against a stand-in.
 type AttestCertRecorder interface {
-	Record(ctx context.Context, deviceID uint64, reissue bool) (*device.AttestCertRecord, error)
+	Record(ctx context.Context, deviceID uint64, opts device.AttestCertRecordOptions) (*device.AttestCertRecord, error)
 }
 
 // WithDeviceAttestCertRecorder supplies the attestation-certificate
@@ -87,24 +87,39 @@ func (s *DeviceGRPCService) RecordAttestationCertificate(
 		return nil, status.Error(codes.InvalidArgument, "invalid device ID")
 	}
 
-	rec, err := s.attestCertRecorder.Record(ctx, deviceID, req.GetReissue())
+	rec, err := s.attestCertRecorder.Record(ctx, deviceID, device.AttestCertRecordOptions{
+		Reissue:        req.GetReissue(),
+		ClearOnRefusal: req.GetClearOnRefusal(),
+	})
 	if err != nil {
 		return nil, attestCertErrorToGRPC(err)
 	}
 
-	s.logger.Info("device attestation certificate recorded",
-		"device_id", rec.DeviceID,
-		"serial", rec.Serial,
-		"source", rec.Source,
-		"changed", rec.Changed,
-		"reissued", rec.Reissued,
-		"subject", rec.Subject,
-	)
+	message := "attestation certificate recorded"
+	if rec.Cleared {
+		message = "refused attestation certificate cleared"
+		s.logger.Warn("device attestation certificate cleared",
+			"device_id", rec.DeviceID,
+			"serial", rec.Serial,
+			"reissued", rec.Reissued,
+			"subject", rec.Subject,
+			"refusal", rec.Refusal,
+		)
+	} else {
+		s.logger.Info("device attestation certificate recorded",
+			"device_id", rec.DeviceID,
+			"serial", rec.Serial,
+			"source", rec.Source,
+			"changed", rec.Changed,
+			"reissued", rec.Reissued,
+			"subject", rec.Subject,
+		)
+	}
 
 	return &platformv1.RecordAttestationCertificateResponse{
 		Status: &platformv1.Status{
 			Success: true,
-			Message: "attestation certificate recorded",
+			Message: message,
 		},
 		DeviceId:          rec.DeviceID,
 		Serial:            rec.Serial,
@@ -117,6 +132,8 @@ func (s *DeviceGRPCService) RecordAttestationCertificate(
 		CertificateSerial: rec.CertificateSerial,
 		NotAfter:          timestamppb.New(rec.NotAfter),
 		AttestCert:        rec.CertificatePEM,
+		Cleared:           rec.Cleared,
+		Refusal:           rec.Refusal,
 	}, nil
 }
 
@@ -133,6 +150,12 @@ func attestCertErrorToGRPC(err error) error {
 		// The refusal is wrapped inside, but the operator has a certificate
 		// to revoke by hand: that is the actionable condition.
 		return status.Error(codes.Internal, err.Error())
+	}
+	var clearConflict device.ErrAttestCertClearConflict
+	if errors.As(err, &clearConflict) {
+		// A concurrent record replaced the refused certificate: re-run
+		// the record against what is stored now.
+		return status.Error(codes.Aborted, err.Error())
 	}
 	var (
 		refused       device.ErrAttestCertRefused
@@ -162,14 +185,15 @@ func attestCertErrorToGRPC(err error) error {
 // codes and the response shape are the ones every other transport uses; the
 // pb response marshals with proto field names, which is what the SDK's MCP
 // transport decodes.
-func recordAttestCertForMCP(ctx context.Context, recorder AttestCertRecorder, deviceID string, reissue bool, logger *slog.Logger) (interface{}, error) {
+func recordAttestCertForMCP(ctx context.Context, recorder AttestCertRecorder, deviceID string, reissue, clearOnRefusal bool, logger *slog.Logger) (interface{}, error) {
 	svc := &DeviceGRPCService{attestCertRecorder: recorder, logger: logger}
 	if svc.logger == nil {
 		svc.logger = slog.Default()
 	}
 	resp, err := svc.RecordAttestationCertificate(ctx, &platformv1.RecordAttestationCertificateRequest{
-		DeviceId: deviceID,
-		Reissue:  reissue,
+		DeviceId:       deviceID,
+		Reissue:        reissue,
+		ClearOnRefusal: clearOnRefusal,
 	})
 	if err != nil {
 		return nil, err

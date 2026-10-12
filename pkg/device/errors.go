@@ -324,6 +324,28 @@ func (e ErrAttestCertWriteFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrAttestCertClearUnsupported indicates the recorder's device service has
+// no compare-and-clear write for the attestation certificate, so a refused
+// certificate cannot be removed. device.Service implements it.
+type ErrAttestCertClearUnsupported struct{}
+
+// Error returns the error message.
+func (e ErrAttestCertClearUnsupported) Error() string {
+	return "device: the device service cannot clear an attestation certificate"
+}
+
+// ErrAttestCertClearConflict indicates the certificate on the device record
+// changed between the refusal and the clear, so nothing was cleared: a
+// concurrent write is never undone by a clear.
+type ErrAttestCertClearConflict struct {
+	DeviceID uint64
+}
+
+// Error returns the error message.
+func (e ErrAttestCertClearConflict) Error() string {
+	return fmt.Sprintf("device: attestation certificate of device %d changed since it was refused; nothing cleared", e.DeviceID)
+}
+
 // ErrAttestCertRefused indicates no candidate certificate passed the
 // fail-closed preflight, so nothing was recorded. Attempts lists every
 // candidate evaluated and why it was refused; Unwrap exposes their errors so

@@ -78,7 +78,7 @@ precedent as the EAB sub-range): `payload[0]` is the sub-opcode and
 |------------|-----------|-----------------|------------------|
 | `0x20` | Assign profile to device | `AssignProfileToDeviceRequest` | `AssignProfileToDeviceResponse` |
 | `0x21` | Unassign profile from device | `UnassignProfileFromDeviceRequest` | `UnassignProfileFromDeviceResponse` |
-| `0x22` | Record the device's attestation certificate without re-enrolling ([api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473)); a refusal is status `0x01` with the reason | `RecordAttestationCertificateRequest` | `RecordAttestationCertificateResponse` |
+| `0x22` | Record the device's attestation certificate without re-enrolling ([api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473)); a refusal is status `0x01` with the reason, and a `clear_on_refusal` clear that lost its compare-and-clear is `0x06` | `RecordAttestationCertificateRequest` | `RecordAttestationCertificateResponse` |
 
 `AssignProfileToDeviceRequest` binds the profile to a device identity
 (`ek_serial` and/or `mac_address`) and may prestage the device's

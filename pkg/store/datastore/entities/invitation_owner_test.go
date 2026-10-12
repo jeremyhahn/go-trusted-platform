@@ -26,7 +26,7 @@ import (
 // existing call site uses this constructor, and none of them should confer
 // tenant ownership (#158).
 func TestNewInvitation_IsNotAnOwnershipGrant(t *testing.T) {
-	inv, err := NewInvitation("tenant-a", "member@example.test", "admin", 1, time.Hour)
+	inv, err := NewInvitation("tenant-a", "member@example.test", "admin", 1, time.Hour, testNow)
 	require.NoError(t, err)
 
 	assert.False(t, inv.InitialAdmin,
@@ -38,7 +38,7 @@ func TestNewInvitation_IsNotAnOwnershipGrant(t *testing.T) {
 // own the tenant; conflating the two would make every admin invitation an
 // ownership grant.
 func TestNewInvitation_AnAdminRoleIsNotOwnership(t *testing.T) {
-	inv, err := NewInvitation("tenant-a", "second-admin@example.test", "admin", 1, time.Hour)
+	inv, err := NewInvitation("tenant-a", "second-admin@example.test", "admin", 1, time.Hour, testNow)
 	require.NoError(t, err)
 
 	assert.Equal(t, "admin", inv.Role)
@@ -47,7 +47,7 @@ func TestNewInvitation_AnAdminRoleIsNotOwnership(t *testing.T) {
 
 // TestNewInitialAdminInvitation_ConfersOwnership is the positive case.
 func TestNewInitialAdminInvitation_ConfersOwnership(t *testing.T) {
-	inv, err := NewInitialAdminInvitation("tenant-a", "owner@example.test", "admin", 1, time.Hour)
+	inv, err := NewInitialAdminInvitation("tenant-a", "owner@example.test", "admin", 1, time.Hour, testNow)
 	require.NoError(t, err)
 
 	assert.True(t, inv.InitialAdmin)
@@ -60,7 +60,7 @@ func TestNewInitialAdminInvitation_ConfersOwnership(t *testing.T) {
 // out and not back in would silently make every owner invitation an ordinary
 // one — failing safe, but failing.
 func TestInvitation_InitialAdminSurvivesARoundTrip(t *testing.T) {
-	inv, err := NewInitialAdminInvitation("tenant-a", "owner@example.test", "admin", 1, time.Hour)
+	inv, err := NewInitialAdminInvitation("tenant-a", "owner@example.test", "admin", 1, time.Hour, testNow)
 	require.NoError(t, err)
 
 	encoded, err := json.Marshal(inv)
@@ -76,7 +76,7 @@ func TestInvitation_InitialAdminSurvivesARoundTrip(t *testing.T) {
 // common case unchanged: the field is `omitempty`, so existing consumers of
 // the invitation JSON see exactly what they saw before.
 func TestInvitation_OrdinaryInvitationsOmitTheMarker(t *testing.T) {
-	inv, err := NewInvitation("tenant-a", "member@example.test", "member", 1, time.Hour)
+	inv, err := NewInvitation("tenant-a", "member@example.test", "member", 1, time.Hour, testNow)
 	require.NoError(t, err)
 
 	encoded, err := json.Marshal(inv)

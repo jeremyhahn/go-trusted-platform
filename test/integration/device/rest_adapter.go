@@ -481,7 +481,10 @@ func (a *RESTAdapter) FindMatchingProfile(ctx context.Context, opts FindMatching
 func (a *RESTAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
 	path := fmt.Sprintf("/api/v1/devices/%s/attest-cert/record", opts.DeviceID)
 
-	body, err := a.doRequest(ctx, http.MethodPost, path, map[string]bool{"reissue": opts.Reissue})
+	body, err := a.doRequest(ctx, http.MethodPost, path, map[string]bool{
+		"reissue":          opts.Reissue,
+		"clear_on_refusal": opts.ClearOnRefusal,
+	})
 	if err != nil {
 		return nil, err
 	}

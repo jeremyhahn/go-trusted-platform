@@ -105,11 +105,10 @@ func (s *TPMGRPCService) Info(
 	}
 
 	resp := &platformv1.TPMInfoResponse{
-		Version: platformv1.TPMVersion_TPM_VERSION_2_0,
-		Properties: map[string]string{
-			"info": info,
-		},
+		Version:    platformv1.TPMVersion_TPM_VERSION_2_0,
+		Properties: tpmsrk.InfoProperties(tpm),
 	}
+	resp.Properties["info"] = info
 
 	if cfg := tpm.Config(); cfg != nil {
 		resp.IsSimulator = cfg.UseSimulator

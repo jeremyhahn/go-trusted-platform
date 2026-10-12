@@ -444,9 +444,10 @@ func (h *TPM2Handler) handleInfo(ctx context.Context, payload []byte) *quicwire.
 	resp := &TPM2InfoResponse{
 		Info:       info,
 		Version:    "2.0",
-		Properties: map[string]string{"info": info},
+		Properties: tpmsrk.InfoProperties(h.tpm),
 		Timestamp:  time.Now().Unix(),
 	}
+	resp.Properties["info"] = info
 
 	if propsErr == nil && props != nil {
 		resp.Manufacturer = props.Manufacturer

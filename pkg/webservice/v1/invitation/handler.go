@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -204,7 +205,7 @@ func (h *handler) GetByToken(w http.ResponseWriter, r *http.Request) {
 		h.responseWriter.Error400(w, r, ErrInvitationAlreadyAccepted{Token: tokenValue})
 		return
 	}
-	if invitation.IsExpired() {
+	if invitation.IsExpired(time.Now()) {
 		h.responseWriter.Error400(w, r, ErrInvitationExpired{Token: tokenValue})
 		return
 	}

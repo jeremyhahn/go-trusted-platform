@@ -84,7 +84,7 @@ OBJECT         HANDLE         CERTIFICATE                                NOTES
 ----------------------------------------------------------------------------------------------------
 EK             present        present (PEM)
 SSRK           present        n/a                                        0x81000001
-PlatformSRK    present        n/a                                        0x81000002; default handle assumed (daemon config not exposed); override with --platform-srk-handle
+PlatformSRK    present        n/a                                        0x81000005; handle from daemon config
 IAK            present        present (cert lacks verifiedTPMRestricted) 0x81010002; issuer ca01.cp.example.com
 IDevID         present        present                                    0x81020000; issuer ca01.cp.example.com
 ```
@@ -107,10 +107,12 @@ How to read a row:
 - **`NOTES`** carries the handle, the certificate issuer CN and
   `verifiedTPMRestricted` when present; the remedy (`tpm iak generate` …) when
   absent.
-- **`PlatformSRK`** is probed at `0x81000002`, platformd's default for
-  `tpm.platform-srk.handle`, because the daemon does not expose the configured
-  value over the API. A node configured with a different handle must be probed
-  with `--platform-srk-handle 0x8100XXXX`; the row says which handle it used.
+- **`PlatformSRK`** is probed at the handle the daemon reports in its `Info`
+  properties (`platform_srk_handle`, from `tpm.platform-srk.handle`); the NOTES
+  say `handle from daemon config`. `--platform-srk-handle 0x8100XXXX` overrides
+  it (`handle from --platform-srk-handle`). Only against a daemon that does not
+  report the property does the CLI fall back to `0x81000002` and say
+  `default handle assumed`.
 
 `-o json` / `-o yaml` keep the pre-#471 keys (`name`, `role`, `handle_present`,
 `cert_present`, `cert_format`, `error`) and add, when known, `handle`,

@@ -72,8 +72,11 @@ type DeviceStateResponse struct {
 // deviceGRPCCodeToQUICStatus maps the gRPC status codes produced by the
 // shared DeviceGRPCService onto QUIC status bytes. FailedPrecondition
 // maps to StatusInvalidRequest since the QUIC status set has no
-// precondition code; unknown codes map to StatusInternalError.
+// precondition code. Aborted (a compare-and-clear that lost a race) maps to
+// StatusAlreadyExists, the QUIC conflict status, as it does for NTP. Unknown
+// codes map to StatusInternalError.
 var deviceGRPCCodeToQUICStatus = map[codes.Code]byte{
+	codes.Aborted:            quicwire.StatusAlreadyExists,
 	codes.InvalidArgument:    quicwire.StatusInvalidArgument,
 	codes.NotFound:           quicwire.StatusNotFound,
 	codes.AlreadyExists:      quicwire.StatusAlreadyExists,

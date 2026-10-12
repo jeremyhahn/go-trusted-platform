@@ -59,6 +59,10 @@ platformctl device list --page 1 --page-size 10
 # Record the device's attestation certificate without re-enrolling it
 # (fail-closed; add --reissue to let the CA issue a fresh one)
 platformctl device attest-cert record 1234567890
+
+# Clear a refused (non-compliant) certificate so the device is denied
+# rather than quarantined until a compliant one is recorded
+platformctl device attest-cert record 1234567890 --clear-on-refusal
 ```
 
 `platformctl` has **no `device attest` verb** — `pkg/cli/commands/device`

@@ -265,6 +265,35 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 	return nil
 }
 
+// ClearAttestCert removes the device's attestation certificate while the
+// record still holds expected. It is the one write that may empty the field:
+// Update keeps a stored certificate when the incoming one is empty (#252).
+// The comparison runs under the device's write lock, so a certificate
+// recorded concurrently is never cleared; that case is
+// ErrAttestCertClearConflict.
+func (s *Service) ClearAttestCert(ctx context.Context, id uint64, expected string) error {
+	if id == 0 {
+		return ErrInvalidDeviceID
+	}
+
+	lock := s.writeLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	existing, err := s.deviceDAO.Get(ctx, id)
+	if err != nil {
+		return &WrappedError{Msg: "failed to get device for attestation certificate clear", Err: err}
+	}
+	if strings.TrimSpace(existing.AttestCert) != strings.TrimSpace(expected) {
+		return ErrAttestCertClearConflict{DeviceID: id}
+	}
+	existing.AttestCert = ""
+	existing.UpdatedAt = time.Now().UTC()
+	if err := s.deviceDAO.Save(ctx, existing); err != nil {
+		return &WrappedError{Msg: "failed to clear device attestation certificate", Err: err}
+	}
+	return nil
+}
+
 func (s *Service) Count(ctx context.Context) (int, error) {
 	count, err := s.deviceDAO.Count(ctx)
 	if err != nil {

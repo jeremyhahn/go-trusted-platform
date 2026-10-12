@@ -542,9 +542,9 @@ func TestSchedulerNotifyChange(t *testing.T) {
 		// What this pins is the coalescing a caller sees: a burst that
 		// arrives faster than the scheduler consumes it becomes one push,
 		// because NotifyChange's change channel holds a single pending item.
-		// It does NOT pin handleChange's pendingDebounce guard — see the
-		// note in the engineering doc; that guard is not observable from
-		// outside the package today.
+		// It does NOT pin handleChange's pendingDebounce guard: a burst this
+		// fast may never reach handleChange more than once.
+		// TestSchedulerDebounceWindow pins the guard.
 		for i := 0; i < 5; i++ {
 			scheduler.NotifyChange()
 		}
@@ -560,6 +560,112 @@ func TestSchedulerNotifyChange(t *testing.T) {
 		}
 		if got := observer.Count(); got != 1 {
 			t.Errorf("a burst of 5 changes must coalesce into 1 push, got %d", got)
+		}
+	})
+}
+
+// TestSchedulerDebounceWindow pins handleChange's pendingDebounce guard and
+// the point at which a window is disarmed (#241). Both run through Start and
+// NotifyChange, the production path, and wait on the run loop's own decision
+// rather than on a wall-clock window.
+func TestSchedulerDebounceWindow(t *testing.T) {
+	newOnChangeScheduler := func(t *testing.T, endpoint string, debounce time.Duration, observer *changeObserver) *Scheduler {
+		t.Helper()
+
+		cfg := &SchedulerConfig{
+			TriggerType:         TriggerOnChange,
+			MaxConcurrentPushes: 1,
+			OnChangeDebounce:    debounce,
+		}
+		client, err := NewClient(DefaultClientConfig())
+		if err != nil {
+			t.Fatalf("failed to create client: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := client.Close(); err != nil {
+				t.Logf("cleanup: %v", err)
+			}
+		})
+
+		targets := []*PushTarget{
+			{ID: "t1", Endpoint: endpoint, Transport: TransportHTTP, Enabled: true},
+		}
+
+		provider := NewSimpleManifestProvider("application/json")
+		provider.SetManifest("m1", []byte(`{"test":"data"}`))
+
+		scheduler, err := NewScheduler(cfg, client, targets,
+			WithManifestProvider(provider),
+			withChangeObserver(observer.handle))
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if err := scheduler.Start(context.Background()); err != nil {
+			t.Fatalf("expected no error on start, got %v", err)
+		}
+		return scheduler
+	}
+
+	t.Run("change inside an armed window is suppressed", func(t *testing.T) {
+		// The window is far longer than the test, so it is still armed when
+		// the second change arrives however slow the host is; nothing pushes.
+		observer := newChangeObserver()
+		scheduler := newOnChangeScheduler(t, "https://example.com", time.Hour, observer)
+		defer func() {
+			if err := scheduler.Stop(); err != nil {
+				t.Logf("cleanup: %v", err)
+			}
+		}()
+
+		scheduler.NotifyChange()
+		if observer.awaitDecision(t) {
+			t.Fatal("the first change must arm a window, not be suppressed")
+		}
+
+		// The run loop is free again as soon as the window is armed, so this
+		// change reaches handleChange rather than being coalesced in changeCh.
+		scheduler.NotifyChange()
+		if !observer.awaitDecision(t) {
+			t.Error("a change inside an armed window must be suppressed, not arm a second window")
+		}
+	})
+
+	t.Run("change during an in-flight push arms a new window", func(t *testing.T) {
+		entered := make(chan struct{}, changeObserverBuffer)
+		release := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			entered <- struct{}{}
+			<-release
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+		defer close(release)
+
+		observer := newChangeObserver()
+		scheduler := newOnChangeScheduler(t, server.URL, time.Millisecond, observer)
+		defer func() {
+			if err := scheduler.Stop(); err != nil {
+				t.Logf("cleanup: %v", err)
+			}
+		}()
+
+		scheduler.NotifyChange()
+		if observer.awaitDecision(t) {
+			t.Fatal("the first change must arm a window, not be suppressed")
+		}
+
+		// The window has elapsed and its push is now held in the server.
+		select {
+		case <-entered:
+		case <-time.After(testDeadline):
+			t.Fatalf("debounce window did not push within %s", testDeadline)
+		}
+
+		// That push may have read the manifest before this change, so the
+		// change must arm a window of its own rather than be dropped.
+		scheduler.NotifyChange()
+		if observer.awaitDecision(t) {
+			t.Error("a change during an in-flight push must arm a new window, not be suppressed")
 		}
 	})
 }

@@ -112,7 +112,10 @@ type TPMInfoResponse struct {
 	FIPSMode     bool             `json:"fips_mode"`
 	MaxNVRAMSize uint32           `json:"max_nvram_size,omitempty"`
 	Capabilities []TPMCapability  `json:"capabilities,omitempty"`
-	Timestamp    time.Time        `json:"timestamp"`
+	// Properties carries the configured SRK handles (platform_srk_handle,
+	// ssrk_handle), the same keys the gRPC, QUIC and MCP Info responses use.
+	Properties map[string]string `json:"properties,omitempty"`
+	Timestamp  time.Time         `json:"timestamp"`
 }
 
 // TPMManufacturer represents TPM manufacturer information.
@@ -477,8 +480,9 @@ func (h *TPMHandlers) handleGetInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := TPMInfoResponse{
-		Info:      info,
-		Timestamp: time.Now().UTC(),
+		Info:       info,
+		Properties: tpmsrk.InfoProperties(tpm),
+		Timestamp:  time.Now().UTC(),
 	}
 
 	// Get fixed properties for additional details

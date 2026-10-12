@@ -451,8 +451,9 @@ func (a *MCPAdapter) FindMatchingProfile(ctx context.Context, opts FindMatchingP
 // device_record_attest_cert tool.
 func (a *MCPAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
 	result, err := a.callTool(ctx, "device_record_attest_cert", map[string]interface{}{
-		"device_id": opts.DeviceID,
-		"reissue":   opts.Reissue,
+		"device_id":        opts.DeviceID,
+		"reissue":          opts.Reissue,
+		"clear_on_refusal": opts.ClearOnRefusal,
 	})
 	if err != nil {
 		return nil, err

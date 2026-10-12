@@ -37,6 +37,7 @@ type stubRecordAttestCertService struct {
 	platformv1.UnimplementedDeviceServiceServer
 	gotDeviceID string
 	gotReissue  bool
+	gotClear    bool
 	calls       int
 	resp        *platformv1.RecordAttestationCertificateResponse
 	err         error
@@ -49,6 +50,7 @@ func (s *stubRecordAttestCertService) RecordAttestationCertificate(
 	s.calls++
 	s.gotDeviceID = req.GetDeviceId()
 	s.gotReissue = req.GetReissue()
+	s.gotClear = req.GetClearOnRefusal()
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -135,6 +137,35 @@ func TestAttestCertHandler_EmptyBodyMeansNoReissue(t *testing.T) {
 	rec := recordPost(t, newRecordHandler(svc), "42", "")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	assert.False(t, svc.gotReissue)
+	assert.False(t, svc.gotClear, "clearing is never on unless the body asks for it")
+}
+
+func TestAttestCertHandler_ClearOnRefusalReportsTheClear(t *testing.T) {
+	svc := &stubRecordAttestCertService{resp: &platformv1.RecordAttestationCertificateResponse{
+		Status:            &platformv1.Status{Success: true, Message: "refused attestation certificate cleared"},
+		DeviceId:          42,
+		Changed:           true,
+		Cleared:           true,
+		Subject:           "CN=node-09",
+		CertificateSerial: "777",
+		Refusal:           "device: attestation certificate refused for device 42; nothing recorded",
+	}}
+	rec := recordPost(t, newRecordHandler(svc), "42", `{"clear_on_refusal": true}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.True(t, svc.gotClear)
+	assert.False(t, svc.gotReissue)
+
+	var envelope struct {
+		Payload RecordAttestCertResponse `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	got := envelope.Payload
+	assert.True(t, got.Cleared)
+	assert.True(t, got.Changed)
+	assert.Equal(t, "CN=node-09", got.Subject)
+	assert.Contains(t, got.Refusal, "nothing recorded")
+	assert.Empty(t, got.AttestCert)
+	assert.Empty(t, got.Source)
 }
 
 func TestAttestCertHandler_MalformedBodyIs400(t *testing.T) {
@@ -149,6 +180,7 @@ func TestAttestCertHandler_StatusMapping(t *testing.T) {
 		codes.FailedPrecondition: http.StatusBadRequest,
 		codes.InvalidArgument:    http.StatusBadRequest,
 		codes.NotFound:           http.StatusNotFound,
+		codes.Aborted:            http.StatusConflict,
 		codes.PermissionDenied:   http.StatusForbidden,
 		codes.Unauthenticated:    http.StatusUnauthorized,
 		codes.Unavailable:        http.StatusInternalServerError,

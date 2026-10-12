@@ -259,13 +259,18 @@ push. Negative cases — no manifest provider, an unchanged manifest — call
 `executePush` directly, because waiting cannot prove that something did not
 happen (issue #207).
 
-**Untested guard:** `handleChange`'s `pendingDebounce` suppression has no test
-that fails when it is removed. A burst of `NotifyChange` calls is already
-coalesced by the single-slot change channel before `handleChange` sees it, so
-the observable push count is unchanged either way, and the suppression is not
-reachable from outside the package. Closing this needs an observability hook on
-the debounce window — a production change, so it is recorded here rather than
-made in a test-only change.
+**On-change debounce window (#241):** the first change arms a window; every
+change the run loop hands to `handleChange` while it is armed is suppressed, so
+the window ends in one push. This is the ordinary path, not a corner: arming
+returns at once, so the run loop sees each later change of the window, and the
+single-slot change channel only coalesces changes that arrive faster than the
+loop drains it. The window is disarmed *before* its push runs, so a change that
+arrives while the push is in flight — and may have missed the manifest it read —
+arms a new window instead of being dropped; the provider's `HasChanged` then
+decides whether that window pushes. The decision is invisible in push counts, so
+the scheduler carries an unexported `withChangeObserver` seam (the `onSweep`
+shape from `pkg/security/ratelimit`: fixed at construction, nil in production)
+and `TestSchedulerDebounceWindow` waits on it to pin both behaviours.
 
 **Known repo-wide gap:** there is no `CommandDefinition` type in this
 repository (grepped 2026-08-18), so the CLI parity requirement in

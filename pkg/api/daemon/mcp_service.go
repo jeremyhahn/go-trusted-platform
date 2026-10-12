@@ -798,8 +798,8 @@ func (p *MCPServiceProvider) DeviceAttest(ctx context.Context, deviceID string, 
 // DeviceRecordAttestCert records a device's attestation certificate over
 // MCP through the shared recorder: the same fail-closed preflight and the
 // same refusal as gRPC, Unix, QUIC and REST.
-func (p *MCPServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue bool) (interface{}, error) {
-	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, p.logger)
+func (p *MCPServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error) {
+	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, clearOnRefusal, p.logger)
 }
 
 // akTrust returns the CA behind the MCP provider's CA service, or nil when
@@ -3894,6 +3894,9 @@ func (p *MCPServiceProvider) TPMInfo(ctx context.Context) (interface{}, error) {
 
 	result := map[string]interface{}{
 		"info": info,
+	}
+	for key, value := range tpmsrk.InfoProperties(p.tpm2Service) {
+		result[key] = value
 	}
 
 	props, err := p.tpm2Service.FixedProperties()

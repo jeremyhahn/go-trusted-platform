@@ -504,8 +504,9 @@ func attestResultFromProto(deviceID string, resp *pb.AttestDeviceResponse) *Atte
 // DeviceService.RecordAttestationCertificate.
 func (a *GRPCAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
 	resp, err := a.client.RecordAttestationCertificate(ctx, &pb.RecordAttestationCertificateRequest{
-		DeviceId: opts.DeviceID,
-		Reissue:  opts.Reissue,
+		DeviceId:       opts.DeviceID,
+		Reissue:        opts.Reissue,
+		ClearOnRefusal: opts.ClearOnRefusal,
 	})
 	if err != nil {
 		return nil, ErrGRPCCallFailed{Method: "RecordAttestationCertificate", Err: err}
@@ -521,6 +522,8 @@ func (a *GRPCAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 		Subject:           resp.GetSubject(),
 		CertificateSerial: resp.GetCertificateSerial(),
 		AttestCert:        resp.GetAttestCert(),
+		Cleared:           resp.GetCleared(),
+		Refusal:           resp.GetRefusal(),
 	}, nil
 }
 

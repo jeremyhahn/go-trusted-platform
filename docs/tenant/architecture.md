@@ -720,6 +720,32 @@ The certificate enrollment mode described in the 2026-09-01 ruling is not
 implemented here: it needs `qrdbsdk.ProvisionTenant` reached through the
 quicbaas SDK, which is absent at the pinned version (go-quicbaas#358 item 3).
 
+### Time is a parameter
+
+`entities.Invitation` never reads the clock (#311). Every constructor and method
+whose result depends on the time takes it as `now`:
+
+| | uses `now` to |
+|---|---|
+| `NewInvitation`, `NewInitialAdminInvitation` | stamp `CreatedAt`/`UpdatedAt`; `ExpiresAt = now + duration` |
+| `IsExpired(now)`, `CanAccept(now)` | decide expiry: expired only when `now` is strictly after `ExpiresAt` |
+| `Accept(now)`, `Revoke(now)`, `Expire(now)`, `GenerateToken(now)` | stamp `UpdatedAt` (and `AcceptedAt`) |
+
+Stored timestamps are normalized to UTC whatever zone `now` carries. A zero
+`now` makes `IsExpired` report **expired**: it can only mean a caller that never
+read the clock, and answering it literally would make every invitation
+redeemable forever.
+
+A clock fixed at construction cannot serve an entity: invitations loaded from
+the datastore are reconstituted from a zero value and never run `NewInvitation`.
+The clock therefore lives in the callers. `InvitationService` holds one,
+fixed at construction, reads it **once per operation**, and passes that instant
+to every entity method the operation calls — so `Accept` decides expiry and
+stamps `AcceptedAt` at the same instant, a revoke or expiry stamps `UpdatedAt`,
+and `CleanupExpired` judges every page against one cutoff. The HTTP handlers and
+`TenantUserService.RegisterInvitedUser` read `time.Now()` at the request
+boundary and pass it in the same way.
+
 ### Access Control by Tenant
 
 All resource access is scoped by the user's TenantID:

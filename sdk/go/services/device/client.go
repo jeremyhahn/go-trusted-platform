@@ -262,18 +262,32 @@ func (c *Client) Activate(ctx context.Context, serial, macAddress string) (*plat
 	return resp, nil
 }
 
+// RecordAttestCertOptions are the choices of RecordAttestationCertificate.
+// Both default to false.
+type RecordAttestCertOptions struct {
+	// Reissue lets the CA issue a fresh certificate over the enrolled
+	// attestation key when no stored one passes.
+	Reissue bool
+	// ClearOnRefusal clears the certificate on the device record when every
+	// candidate is refused, so the device's next collection is an absence
+	// (denied service) instead of a cryptographic failure (quarantine). The
+	// clear is audited as its own event; the response reports Cleared and
+	// the Refusal that caused it. It never clears a compliant certificate.
+	ClearOnRefusal bool
+}
+
 // RecordAttestationCertificate records (or re-records) the device's
 // attestation certificate on its platform record without re-enrolling the
 // device. The control plane fails closed: the certificate must parse, chain
 // to the platform CA, carry tcg-cap-verifiedTPMRestricted and certify the
 // device's enrolled attestation key, or nothing is written and the call
-// fails with FailedPrecondition naming every candidate refused. reissue
-// lets the CA issue a fresh certificate over the enrolled key when no stored
-// one passes.
-func (c *Client) RecordAttestationCertificate(ctx context.Context, id uint64, reissue bool) (*platformv1.RecordAttestationCertificateResponse, error) {
+// fails with FailedPrecondition naming every candidate refused. See
+// RecordAttestCertOptions for the reissue and clear-on-refusal choices.
+func (c *Client) RecordAttestationCertificate(ctx context.Context, id uint64, opts RecordAttestCertOptions) (*platformv1.RecordAttestationCertificateResponse, error) {
 	resp, err := c.grpc.RecordAttestationCertificate(ctx, &platformv1.RecordAttestationCertificateRequest{
-		DeviceId: strconv.FormatUint(id, 10),
-		Reissue:  reissue,
+		DeviceId:       strconv.FormatUint(id, 10),
+		Reissue:        opts.Reissue,
+		ClearOnRefusal: opts.ClearOnRefusal,
 	})
 	if err != nil {
 		return nil, &ErrRecordAttestCertFailed{ID: id, Cause: err}

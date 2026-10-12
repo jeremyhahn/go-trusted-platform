@@ -550,6 +550,48 @@ func TestTPMHandleGetInfo(t *testing.T) {
 	})
 }
 
+func TestTPMHandleGetInfo_SRKHandleProperties(t *testing.T) {
+	cases := map[string]struct {
+		config       *xkmssdk.TPMConfig
+		wantPlatform string
+		wantSSRK     string
+	}{
+		"configured handles": {
+			config: &xkmssdk.TPMConfig{
+				PlatformSRK: &xkmssdk.PlatformSRKConfig{SRKHandle: 0x81000005},
+				SSRK:        &xkmssdk.SRKConfig{Handle: 0x81000007},
+			},
+			wantPlatform: "0x81000005",
+			wantSSRK:     "0x81000007",
+		},
+		"nil config falls back to the defaults": {
+			config:       nil,
+			wantPlatform: "0x81000002",
+			wantSSRK:     "0x81000001",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			tpm := newMockTPMService()
+			tpm.config = tc.config
+			_, router := setupTPMTestHandler(tpm)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/tpm/info", nil)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			resp := w.Result()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+
+			var infoResp TPMInfoResponse
+			decodeTPMResponse(t, resp, &infoResp)
+			assert.Equal(t, tc.wantPlatform, infoResp.Properties["platform_srk_handle"])
+			assert.Equal(t, tc.wantSSRK, infoResp.Properties["ssrk_handle"])
+		})
+	}
+}
+
 // =============================================================================
 // handleProvision Tests
 // =============================================================================

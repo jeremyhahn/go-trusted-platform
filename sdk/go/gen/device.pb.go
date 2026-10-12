@@ -3144,11 +3144,14 @@ func (x *AttestDeviceResponse) GetPcrBaselineCaptured() bool {
 // device's enrolled attestation public key when no stored certificate passes
 // the preflight.
 type RecordAttestationCertificateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	DeviceId      string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	Reissue       bool                   `protobuf:"varint,2,opt,name=reissue,proto3" json:"reissue,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	DeviceId string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	Reissue  bool                   `protobuf:"varint,2,opt,name=reissue,proto3" json:"reissue,omitempty"`
+	// clear_on_refusal removes the certificate the record holds when every
+	// candidate, that certificate included, is refused. Off by default.
+	ClearOnRefusal bool `protobuf:"varint,3,opt,name=clear_on_refusal,json=clearOnRefusal,proto3" json:"clear_on_refusal,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RecordAttestationCertificateRequest) Reset() {
@@ -3195,9 +3198,16 @@ func (x *RecordAttestationCertificateRequest) GetReissue() bool {
 	return false
 }
 
-// RecordAttestationCertificateResponse reports what was recorded. It is only
-// returned on success; a refusal is a FAILED_PRECONDITION error whose message
-// names every candidate and why it was refused.
+func (x *RecordAttestationCertificateRequest) GetClearOnRefusal() bool {
+	if x != nil {
+		return x.ClearOnRefusal
+	}
+	return false
+}
+
+// RecordAttestationCertificateResponse reports what was recorded, or what was
+// cleared. It is only returned on success; a refusal is a FAILED_PRECONDITION
+// error whose message names every candidate and why it was refused.
 type RecordAttestationCertificateResponse struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Status   *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
@@ -3218,8 +3228,14 @@ type RecordAttestationCertificateResponse struct {
 	Subject           string                 `protobuf:"bytes,9,opt,name=subject,proto3" json:"subject,omitempty"`
 	CertificateSerial string                 `protobuf:"bytes,10,opt,name=certificate_serial,json=certificateSerial,proto3" json:"certificate_serial,omitempty"`
 	NotAfter          *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`
-	// attest_cert is the recorded certificate, PEM encoded.
-	AttestCert    string `protobuf:"bytes,12,opt,name=attest_cert,json=attestCert,proto3" json:"attest_cert,omitempty"`
+	// attest_cert is the recorded certificate, PEM encoded; empty when cleared.
+	AttestCert string `protobuf:"bytes,12,opt,name=attest_cert,json=attestCert,proto3" json:"attest_cert,omitempty"`
+	// cleared is true when clear_on_refusal removed a refused certificate.
+	// source and attest_cert are then empty, subject, certificate_serial and
+	// not_after describe the removed certificate when it parsed, and refusal
+	// names every candidate and why it was refused.
+	Cleared       bool   `protobuf:"varint,13,opt,name=cleared,proto3" json:"cleared,omitempty"`
+	Refusal       string `protobuf:"bytes,14,opt,name=refusal,proto3" json:"refusal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3334,6 +3350,20 @@ func (x *RecordAttestationCertificateResponse) GetNotAfter() *timestamppb.Timest
 func (x *RecordAttestationCertificateResponse) GetAttestCert() string {
 	if x != nil {
 		return x.AttestCert
+	}
+	return ""
+}
+
+func (x *RecordAttestationCertificateResponse) GetCleared() bool {
+	if x != nil {
+		return x.Cleared
+	}
+	return false
+}
+
+func (x *RecordAttestationCertificateResponse) GetRefusal() string {
+	if x != nil {
+		return x.Refusal
 	}
 	return ""
 }
@@ -3964,10 +3994,11 @@ const file_device_proto_rawDesc = "" +
 	"\x17ak_certificate_verified\x18\f \x01(\bR\x15akCertificateVerified\x12.\n" +
 	"\x13pcr_baseline_source\x18\r \x01(\tR\x11pcrBaselineSource\x12S\n" +
 	"\x18pcr_baseline_recorded_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\x15pcrBaselineRecordedAt\x122\n" +
-	"\x15pcr_baseline_captured\x18\x0f \x01(\bR\x13pcrBaselineCaptured\"\\\n" +
+	"\x15pcr_baseline_captured\x18\x0f \x01(\bR\x13pcrBaselineCaptured\"\x86\x01\n" +
 	"#RecordAttestationCertificateRequest\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12\x18\n" +
-	"\areissue\x18\x02 \x01(\bR\areissue\"\xb4\x03\n" +
+	"\areissue\x18\x02 \x01(\bR\areissue\x12(\n" +
+	"\x10clear_on_refusal\x18\x03 \x01(\bR\x0eclearOnRefusal\"\xe8\x03\n" +
 	"$RecordAttestationCertificateResponse\x12+\n" +
 	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\x04R\bdeviceId\x12\x16\n" +
@@ -3982,7 +4013,9 @@ const file_device_proto_rawDesc = "" +
 	" \x01(\tR\x11certificateSerial\x127\n" +
 	"\tnot_after\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\bnotAfter\x12\x1f\n" +
 	"\vattest_cert\x18\f \x01(\tR\n" +
-	"attestCert\"}\n" +
+	"attestCert\x12\x18\n" +
+	"\acleared\x18\r \x01(\bR\acleared\x12\x18\n" +
+	"\arefusal\x18\x0e \x01(\tR\arefusal\"}\n" +
 	" CreateProfileFromTemplateRequest\x12\x1f\n" +
 	"\vtemplate_id\x18\x01 \x01(\x04R\n" +
 	"templateId\x128\n" +

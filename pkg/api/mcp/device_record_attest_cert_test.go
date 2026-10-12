@@ -30,7 +30,7 @@ func TestExecuteDeviceRecordAttestCert(t *testing.T) {
 		svc := newMockServiceProvider()
 		var gotID string
 		var gotReissue bool
-		svc.deviceRecordAttestCertFunc = func(_ context.Context, deviceID string, reissue bool) (interface{}, error) {
+		svc.deviceRecordAttestCertFunc = func(_ context.Context, deviceID string, reissue, _ bool) (interface{}, error) {
 			gotID, gotReissue = deviceID, reissue
 			return map[string]interface{}{"device_id": deviceID, "changed": true, "source": "ca"}, nil
 		}
@@ -52,11 +52,36 @@ func TestExecuteDeviceRecordAttestCert(t *testing.T) {
 		}
 	})
 
-	t.Run("reissue defaults to false", func(t *testing.T) {
+	t.Run("passes clear_on_refusal through", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		gotReissue := true
-		svc.deviceRecordAttestCertFunc = func(_ context.Context, _ string, reissue bool) (interface{}, error) {
-			gotReissue = reissue
+		var gotReissue, gotClear bool
+		svc.deviceRecordAttestCertFunc = func(_ context.Context, _ string, reissue, clearOnRefusal bool) (interface{}, error) {
+			gotReissue, gotClear = reissue, clearOnRefusal
+			return map[string]interface{}{"cleared": true}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "device_record_attest_cert", map[string]interface{}{
+			"device_id":        "42",
+			"clear_on_refusal": true,
+		})
+		if err != nil {
+			t.Fatalf("ExecuteTool: %v", err)
+		}
+		if gotReissue || !gotClear {
+			t.Fatalf("provider got (reissue=%t, clear=%t), want (false, true)", gotReissue, gotClear)
+		}
+		out, ok := result.(map[string]interface{})
+		if !ok || out["cleared"] != true {
+			t.Fatalf("unexpected result %#v", result)
+		}
+	})
+
+	t.Run("reissue and clear_on_refusal default to false", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		gotReissue, gotClear := true, true
+		svc.deviceRecordAttestCertFunc = func(_ context.Context, _ string, reissue, clearOnRefusal bool) (interface{}, error) {
+			gotReissue, gotClear = reissue, clearOnRefusal
 			return map[string]interface{}{}, nil
 		}
 		registry := NewToolRegistry(svc, log)
@@ -66,12 +91,15 @@ func TestExecuteDeviceRecordAttestCert(t *testing.T) {
 		if gotReissue {
 			t.Fatal("reissue must default to false: re-issuance asks the CA to sign")
 		}
+		if gotClear {
+			t.Fatal("clear_on_refusal must default to false: clearing removes stored evidence")
+		}
 	})
 
 	t.Run("missing device_id is refused before the provider", func(t *testing.T) {
 		svc := newMockServiceProvider()
 		called := false
-		svc.deviceRecordAttestCertFunc = func(context.Context, string, bool) (interface{}, error) {
+		svc.deviceRecordAttestCertFunc = func(context.Context, string, bool, bool) (interface{}, error) {
 			called = true
 			return nil, nil
 		}
@@ -87,7 +115,7 @@ func TestExecuteDeviceRecordAttestCert(t *testing.T) {
 
 	t.Run("provider refusal is returned as-is", func(t *testing.T) {
 		svc := newMockServiceProvider()
-		svc.deviceRecordAttestCertFunc = func(context.Context, string, bool) (interface{}, error) {
+		svc.deviceRecordAttestCertFunc = func(context.Context, string, bool, bool) (interface{}, error) {
 			return nil, ErrMockServiceError
 		}
 		registry := NewToolRegistry(svc, log)

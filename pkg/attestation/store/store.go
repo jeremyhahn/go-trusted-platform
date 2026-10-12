@@ -81,6 +81,14 @@ const (
 	// Nothing on the device record changed. Reason carries the detail.
 	EventKindDeviceAttestCertRefused EventKind = "device_attest_cert_refused"
 
+	// EventKindDeviceAttestCertCleared records an operator-requested clear:
+	// every candidate was refused, including the certificate the record
+	// held, and the operator asked for that certificate to be removed. The
+	// device moves from cryptographic failure (quarantined) to an absent
+	// certificate (denied service). Reason carries the refusal; metadata
+	// names the removed certificate's subject when it parsed.
+	EventKindDeviceAttestCertCleared EventKind = "device_attest_cert_cleared"
+
 	// EventKindCallerAdmitted records a machine peer admitted to a
 	// quote-producing endpoint by the node's caller-admission policy
 	// (#226). Metadata carries the strategy, the peer identity and the

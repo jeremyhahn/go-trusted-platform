@@ -54,7 +54,11 @@ service DeviceService {
   // CA's certificate store, and -- only when reissue is set -- a
   // certificate the CA issues over the enrolled attestation public key.
   // There is no override for an unrestricted certificate: recording one
-  // would quarantine the device on its next quote.
+  // would quarantine the device on its next quote. clear_on_refusal is the
+  // repair for a record that already holds one: when every candidate --
+  // that certificate included -- is refused, the certificate is removed and
+  // the response reports cleared, moving the device from quarantine to
+  // denied service. Without it a refusal writes nothing.
   rpc RecordAttestationCertificate(RecordAttestationCertificateRequest) returns (RecordAttestationCertificateResponse);
 
   // Device-template CRUD lives on the REST surface only (see
@@ -497,11 +501,14 @@ message AttestDeviceResponse {
 message RecordAttestationCertificateRequest {
   string device_id = 1;
   bool reissue = 2;
+  // clear_on_refusal removes the certificate the record holds when every
+  // candidate, that certificate included, is refused. Off by default.
+  bool clear_on_refusal = 3;
 }
 
-// RecordAttestationCertificateResponse reports what was recorded. It is only
-// returned on success; a refusal is a FAILED_PRECONDITION error whose message
-// names every candidate and why it was refused.
+// RecordAttestationCertificateResponse reports what was recorded, or what was
+// cleared. It is only returned on success; a refusal is a FAILED_PRECONDITION
+// error whose message names every candidate and why it was refused.
 message RecordAttestationCertificateResponse {
   Status status = 1;
   uint64 device_id = 2;
@@ -521,8 +528,14 @@ message RecordAttestationCertificateResponse {
   string subject = 9;
   string certificate_serial = 10;
   google.protobuf.Timestamp not_after = 11;
-  // attest_cert is the recorded certificate, PEM encoded.
+  // attest_cert is the recorded certificate, PEM encoded; empty when cleared.
   string attest_cert = 12;
+  // cleared is true when clear_on_refusal removed a refused certificate.
+  // source and attest_cert are then empty, subject, certificate_serial and
+  // not_after describe the removed certificate when it parsed, and refusal
+  // names every candidate and why it was refused.
+  bool cleared = 13;
+  string refusal = 14;
 }
 
 // Template CRUD messages were removed from this proto to resolve a

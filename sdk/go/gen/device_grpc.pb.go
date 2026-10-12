@@ -89,7 +89,11 @@ type DeviceServiceClient interface {
 	// CA's certificate store, and -- only when reissue is set -- a
 	// certificate the CA issues over the enrolled attestation public key.
 	// There is no override for an unrestricted certificate: recording one
-	// would quarantine the device on its next quote.
+	// would quarantine the device on its next quote. clear_on_refusal is the
+	// repair for a record that already holds one: when every candidate --
+	// that certificate included -- is refused, the certificate is removed and
+	// the response reports cleared, moving the device from quarantine to
+	// denied service. Without it a refusal writes nothing.
 	RecordAttestationCertificate(ctx context.Context, in *RecordAttestationCertificateRequest, opts ...grpc.CallOption) (*RecordAttestationCertificateResponse, error)
 	// Template operations
 	CreateProfileFromTemplate(ctx context.Context, in *CreateProfileFromTemplateRequest, opts ...grpc.CallOption) (*CreateProfileResponse, error)
@@ -383,7 +387,11 @@ type DeviceServiceServer interface {
 	// CA's certificate store, and -- only when reissue is set -- a
 	// certificate the CA issues over the enrolled attestation public key.
 	// There is no override for an unrestricted certificate: recording one
-	// would quarantine the device on its next quote.
+	// would quarantine the device on its next quote. clear_on_refusal is the
+	// repair for a record that already holds one: when every candidate --
+	// that certificate included -- is refused, the certificate is removed and
+	// the response reports cleared, moving the device from quarantine to
+	// denied service. Without it a refusal writes nothing.
 	RecordAttestationCertificate(context.Context, *RecordAttestationCertificateRequest) (*RecordAttestationCertificateResponse, error)
 	// Template operations
 	CreateProfileFromTemplate(context.Context, *CreateProfileFromTemplateRequest) (*CreateProfileResponse, error)

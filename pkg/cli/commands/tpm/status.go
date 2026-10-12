@@ -20,6 +20,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -34,9 +35,9 @@ import (
 
 // defaultPlatformSRKHandle is the Platform KeyStore SRK handle platformd
 // falls back to when `tpm.platform-srk.handle` is not configured. It
-// mirrors the fallback in pkg/firstboot (getPlatformKeystoreSRKHandle);
-// the daemon does not expose the configured value over the API, so the
-// CLI can only assume it or be told with --platform-srk-handle.
+// mirrors the fallback in pkg/firstboot (getPlatformKeystoreSRKHandle).
+// The CLI uses it only when the daemon's Info does not report the
+// configured handle and --platform-srk-handle is not given.
 const defaultPlatformSRKHandle uint32 = 0x81000002
 
 // platformSRKHandleFlag is the name of the status flag that overrides
@@ -77,8 +78,9 @@ provisioning.
 A row reads "absent" only when the daemon positively reports the object
 missing. A failed lookup is reported as "error: <reason>".
 
-The PlatformSRK handle is not exposed by the daemon API; the default
-0x81000002 is assumed unless --platform-srk-handle says otherwise.
+The PlatformSRK handle is the one the daemon reports from its config
+(tpm.platform-srk.handle); --platform-srk-handle overrides it. Against a
+daemon that does not report it, the default 0x81000002 is assumed.
 
 Examples:
   # Table view (default)
@@ -98,17 +100,18 @@ Examples:
 		},
 	}
 	cmd.Flags().Uint32Var(&platformSRKHandle, platformSRKHandleFlag, defaultPlatformSRKHandle,
-		"Platform KeyStore SRK handle to probe (the daemon's configured value is not exposed over the API)")
+		"Platform KeyStore SRK handle to probe (overrides the handle the daemon reports from its config)")
 	return cmd
 }
 
 // statusOptions carries the per-invocation inputs to the status report.
 type statusOptions struct {
-	// PlatformSRKHandle is the persistent handle probed for the
-	// PlatformSRK row.
+	// PlatformSRKHandle is the flag value (the default unless given); it
+	// is probed for the PlatformSRK row only when no daemon-reported
+	// handle takes its place.
 	PlatformSRKHandle uint32
 	// PlatformSRKHandleExplicit is true when the operator supplied the
-	// handle rather than the CLI assuming the default.
+	// handle, which then wins over the daemon-reported one.
 	PlatformSRKHandleExplicit bool
 }
 
@@ -152,9 +155,11 @@ func buildStatusReport(ctx context.Context, clients statusClients, opts statusOp
 		Objects: make([]tpmObjectStatus, 0, 5),
 	}
 
+	var daemonProps map[string]string
 	if info, err := clients.tpm.InfoDomain(ctx); err == nil && info != nil && info.Properties != nil {
 		// Properties is a free-form map keyed on TPM spec property
 		// names; surface the most common ones for operator context.
+		daemonProps = info.Properties
 		report.Manufacturer = info.Properties["manufacturer"]
 		report.Vendor = info.Properties["vendor"]
 		report.FirmwareVersion = info.Properties["firmware_version"]
@@ -162,6 +167,7 @@ func buildStatusReport(ctx context.Context, clients statusClients, opts statusOp
 			report.FirmwareVersion = info.Properties["firmware"]
 		}
 	}
+	platformHandle, platformNote := resolvePlatformSRKHandle(opts, daemonProps)
 
 	report.Objects = append(report.Objects, ekStatus(ctx, clients.tpm))
 	report.Objects = append(report.Objects, srkStatus(ctx, clients.tpm, srkRow{
@@ -172,8 +178,8 @@ func buildStatusReport(ctx context.Context, clients statusClients, opts statusOp
 	report.Objects = append(report.Objects, srkStatus(ctx, clients.tpm, srkRow{
 		name:   "PlatformSRK",
 		role:   "Platform-hierarchy SRK (Platform KeyStore parent)",
-		handle: opts.PlatformSRKHandle,
-		note:   platformSRKHandleNote(opts),
+		handle: platformHandle,
+		note:   platformNote,
 	}))
 	report.Objects = append(report.Objects, deviceKeyStatus(ctx, deviceKeyRow{
 		name:              "IAK",
@@ -253,13 +259,27 @@ func srkStatus(ctx context.Context, client *tpmsvc.Client, row srkRow) tpmObject
 	return obj
 }
 
-// platformSRKHandleNote tells the operator where the probed PlatformSRK
-// handle came from, because the CLI cannot read the daemon's TPM config.
+// resolvePlatformSRKHandle picks the PlatformSRK handle to probe and the
+// note naming its source: the explicit flag first, then the handle the
+// daemon reports in its Info properties, then the default (an older
+// daemon, or one whose property is unusable).
+func resolvePlatformSRKHandle(opts statusOptions, daemonProps map[string]string) (uint32, string) {
+	if opts.PlatformSRKHandleExplicit {
+		return opts.PlatformSRKHandle, platformSRKHandleNote(opts)
+	}
+	if handle, err := strconv.ParseUint(daemonProps[tpmsvc.InfoPropertyPlatformSRKHandle], 0, 32); err == nil && handle != 0 {
+		return uint32(handle), "handle from daemon config"
+	}
+	return opts.PlatformSRKHandle, platformSRKHandleNote(opts)
+}
+
+// platformSRKHandleNote tells the operator where the CLI got the probed
+// PlatformSRK handle when the daemon did not supply it.
 func platformSRKHandleNote(opts statusOptions) string {
 	if opts.PlatformSRKHandleExplicit {
 		return "handle from --" + platformSRKHandleFlag
 	}
-	return "default handle assumed (daemon config not exposed); override with --" + platformSRKHandleFlag
+	return "default handle assumed (daemon did not report one); override with --" + platformSRKHandleFlag
 }
 
 // deviceKeyRow describes one TCG device-identity row (IAK or IDevID) and

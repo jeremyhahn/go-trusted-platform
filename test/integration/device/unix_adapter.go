@@ -494,8 +494,9 @@ func (a *UnixAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions
 // DeviceService.RecordAttestationCertificate.
 func (a *UnixAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
 	resp, err := a.client.RecordAttestationCertificate(ctx, &pb.RecordAttestationCertificateRequest{
-		DeviceId: opts.DeviceID,
-		Reissue:  opts.Reissue,
+		DeviceId:       opts.DeviceID,
+		Reissue:        opts.Reissue,
+		ClearOnRefusal: opts.ClearOnRefusal,
 	})
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "RecordAttestationCertificate", Err: err}
@@ -511,6 +512,8 @@ func (a *UnixAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 		Subject:           resp.GetSubject(),
 		CertificateSerial: resp.GetCertificateSerial(),
 		AttestCert:        resp.GetAttestCert(),
+		Cleared:           resp.GetCleared(),
+		Refusal:           resp.GetRefusal(),
 	}, nil
 }
 

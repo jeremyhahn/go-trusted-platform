@@ -76,3 +76,35 @@ func (o *pushObserver) awaitPushes(t *testing.T, n int32) {
 		}
 	}
 }
+
+// changeObserver records handleChange's debounce decisions, in the order the
+// run loop made them, through the scheduler's withChangeObserver seam.
+type changeObserver struct {
+	decisions chan bool
+}
+
+// changeObserverBuffer is far above the number of changes any test sends, so
+// the observer never blocks the run loop.
+const changeObserverBuffer = 16
+
+func newChangeObserver() *changeObserver {
+	return &changeObserver{decisions: make(chan bool, changeObserverBuffer)}
+}
+
+func (o *changeObserver) handle(suppressed bool) {
+	o.decisions <- suppressed
+}
+
+// awaitDecision returns whether the next change handleChange saw was
+// suppressed by an armed debounce window.
+func (o *changeObserver) awaitDecision(t *testing.T) bool {
+	t.Helper()
+
+	select {
+	case suppressed := <-o.decisions:
+		return suppressed
+	case <-time.After(testDeadline):
+		t.Fatalf("scheduler handled no change within %s", testDeadline)
+		return false
+	}
+}

@@ -705,7 +705,8 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 		// public area, so no certificate can be tied to it: the control
 		// plane's fail-closed preflight must refuse (FAILED_PRECONDITION on
 		// gRPC, 400 on REST) and leave the record untouched -- on every
-		// transport, including with reissue, which must not reach the CA.
+		// transport, including with reissue, which must not reach the CA,
+		// and with clear-on-refusal, which has nothing it may clear (#516).
 		registerResult, err := adapter.RegisterDevice(ctx, RegisterDeviceOptions{
 			TenantID: tenantID,
 			Serial:   GenerateTestSerial(testID + "-attcert"),
@@ -717,14 +718,12 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 		}
 		deviceID := fmt.Sprintf("%d", registerResult.Device.ID)
 
-		for _, reissue := range []bool{false, true} {
-			result, err := adapter.RecordAttestCert(ctx, RecordAttestCertOptions{
-				TenantID: tenantID,
-				DeviceID: deviceID,
-				Reissue:  reissue,
-			})
+		for _, opts := range []RecordAttestCertOptions{{}, {Reissue: true}, {ClearOnRefusal: true}} {
+			opts.TenantID = tenantID
+			opts.DeviceID = deviceID
+			result, err := adapter.RecordAttestCert(ctx, opts)
 			if err == nil {
-				t.Fatalf("RecordAttestCert(reissue=%t) must be refused for a device with no enrolled attestation key, got %+v", reissue, result)
+				t.Fatalf("RecordAttestCert(reissue=%t, clear_on_refusal=%t) must be refused for a device with no enrolled attestation key, got %+v", opts.Reissue, opts.ClearOnRefusal, result)
 			}
 			surface.SkipIfNotImplemented(t, err)
 			if !strings.Contains(strings.ToLower(err.Error()), "attestation") {

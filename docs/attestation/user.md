@@ -308,14 +308,32 @@ platformctl device attest-cert record <device-id>
 platformctl device attest-cert record <device-id> --reissue
 ```
 
+A device that already holds a certificate without `.3` (for example, one
+recorded before the preflight existed) is quarantined by every quote. If no
+compliant certificate can be recorded yet, clear the refused one:
+
+```bash
+# when every candidate is refused, clear the stored certificate instead of
+# keeping it; the next quote is then an absence (denied), not a
+# cryptographic failure (quarantine)
+platformctl device attest-cert record <device-id> --clear-on-refusal
+```
+
+The flag is off by default, never clears a compliant certificate, and clears
+nothing on any other error. Record a compliant certificate later the usual
+way.
+
 Then either wait for the collector's next sweep or enqueue one with
 `platformctl attestation reports refresh <device-id>`, and read the report
 again with `platformctl attestation reports get <device-id>`:
 `ak_certificate_verified` turns true and, with a good quote, the verdict
 passes. The record itself is audited as `device_attest_cert_recorded`
-(or `device_attest_cert_refused`, with the reason) in the attestation event
-log; it is never a verdict, so it never quarantines or clears a device by
-itself. Full semantics and the transport surface:
+(or `device_attest_cert_refused`, with the reason, or
+`device_attest_cert_cleared`, with the refusal that caused the clear) in the
+attestation event log; it is never a verdict, so it never quarantines or
+releases a device by itself. After a clear, the collector's next sweep
+reports the device as having no certificate (denied) instead of a
+cryptographic failure. Full semantics and the transport surface:
 [device/api.md §4.5](../device/api.md#45-recording-the-attestation-certificate-without-re-enrolling-473).
 
 ## Naming the certificate the collector verifies

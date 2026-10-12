@@ -92,6 +92,41 @@ func TestRecordAttestCert_RefusedWritesReasonAndNeverNotifiesObservers(t *testin
 	}
 }
 
+// TestRecordAttestCert_ClearedIsItsOwnEventKind pins that removing a trust
+// anchor is audited distinctly from a record and from a refusal (#516).
+func TestRecordAttestCert_ClearedIsItsOwnEventKind(t *testing.T) {
+	svc, obs := newVerdictService(t)
+
+	err := svc.RecordAttestCert(context.Background(), verdict.AttestCertEvent{
+		DeviceID: 9,
+		HostID:   "node-09",
+		Cleared:  true,
+		Subject:  "CN=node-09",
+		Reason:   "device: certificate does not carry tcg-cap-verifiedTPMRestricted",
+	})
+	if err != nil {
+		t.Fatalf("RecordAttestCert: %v", err)
+	}
+
+	events, err := svc.Store().ListEvents(store.EventFilter{HostID: "node-09"})
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("want 1 event, got %d", len(events))
+	}
+	ev := events[0]
+	if ev.Kind != store.EventKindDeviceAttestCertCleared || ev.Outcome != "cleared" {
+		t.Fatalf("unexpected event: kind=%s outcome=%s", ev.Kind, ev.Outcome)
+	}
+	if ev.Reason == "" || ev.Metadata["subject"] != "CN=node-09" {
+		t.Fatalf("a clear must carry the refusal and the removed subject: %+v", ev)
+	}
+	if len(obs.passed) != 0 || len(obs.failed) != 0 {
+		t.Fatalf("a clear must not reach the quarantine observers: %+v", obs)
+	}
+}
+
 func TestRecordAttestCert_RejectsInvalidEvents(t *testing.T) {
 	svc, _ := newVerdictService(t)
 	for name, ev := range map[string]verdict.AttestCertEvent{

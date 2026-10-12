@@ -149,7 +149,7 @@ text warns that the operation is irreversible; the command does not ask.
 platformctl device delete 4398046511105
 ```
 
-### 2.6 `device attest-cert record <id> [--reissue]`
+### 2.6 `device attest-cert record <id> [--reissue] [--clear-on-refusal]`
 
 Records — or re-records — the device's attestation (IAK/AK) certificate on
 its platform record without re-enrolling the device ([api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473)).
@@ -161,8 +161,8 @@ The control plane fails closed and **the CLI has no override flag**: a
 certificate is recorded only if it parses, chains to the platform CA, carries
 `tcg-cap-verifiedTPMRestricted` (2.23.133.11.1.3) and certifies the device's
 enrolled attestation key. Anything else is refused with a message naming every
-candidate and the reason, and nothing is written — an unrestricted certificate
-would quarantine the device on its next quote.
+candidate and the reason, and by default nothing is written — an unrestricted
+certificate would quarantine the device on its next quote.
 
 `--reissue` lets the platform CA issue a fresh certificate over the device's
 enrolled attestation public key when nothing stored passes. The device is not
@@ -174,16 +174,31 @@ revocation fails, the error names the serial and subject to revoke by hand.
 The CA's profile cannot be probed beforehand, so pass the flag only once the
 CA is known to comply.
 
+`--clear-on-refusal` (off by default) is for a device that already holds a
+non-compliant certificate and is quarantined by every quote. When every
+candidate is refused, it clears the certificate on the record instead of
+leaving it, so the device's next quote is denied rather than quarantined until
+a compliant certificate is recorded. It never clears a compliant certificate
+and never clears on any other error. The clear is audited as
+`device_attest_cert_cleared` with the refusal. If the record changes while the
+call runs, nothing is written and the command fails with a conflict; re-run
+it.
+
 ```bash
 platformctl device attest-cert record 4398046511105
 platformctl device attest-cert record 4398046511105 --reissue -o json
+platformctl device attest-cert record 4398046511105 --clear-on-refusal
 ```
 
 Table output leads with `Attestation certificate recorded` or `… already
 recorded; nothing changed`, then ID, Serial, Model, Source (`already on the
 device record` / `platform CA certificate store (<name>)` / `re-issued by the
 platform CA (<cn>)`), Reissued, Subject, Certificate Serial, Not After. JSON
-output is the response of §4.5 with `id` in place of `device_id`. A refusal
+output is the response of §4.5 with `id` in place of `device_id`. A clear
+leads with a warning, `Refused attestation certificate cleared; …`, then ID,
+Serial, Model, Refusal, and the Subject, Certificate Serial and Not After of
+the removed certificate (`Cleared …`); JSON has `"cleared": true` and
+`"refusal"`, and the command exits zero. Any refusal that is not cleared
 exits non-zero with `attestation certificate not recorded for device <id>:
 <control plane message>`.
 

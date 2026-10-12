@@ -445,8 +445,10 @@ type ServiceProvider interface {
 	// DeviceRecordAttestCert records the device's attestation certificate on
 	// its platform record without re-enrolling it (fail-closed; see
 	// device.AttestCertRecorder). reissue lets the CA issue a fresh
-	// certificate over the enrolled attestation key.
-	DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue bool) (interface{}, error)
+	// certificate over the enrolled attestation key. clearOnRefusal clears
+	// the stored certificate when every candidate is refused, so the
+	// device reads as absent instead of quarantined.
+	DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error)
 	DeviceProvision(ctx context.Context, deviceID string, profile string) error
 
 	// SDN Bridge operations

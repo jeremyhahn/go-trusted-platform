@@ -172,9 +172,13 @@ record without re-enrolling the device. Permission `device:write`. The
 control plane fails closed — the certificate must parse, chain to the
 platform CA, carry `tcg-cap-verifiedTPMRestricted` and certify the device's
 enrolled attestation key — and a refusal names every candidate it evaluated.
+`clear_on_refusal` (default `false`) clears a stored certificate every
+candidate refused instead of returning the refusal, audited as
+`device_attest_cert_cleared`.
 The result carries the `RecordAttestationCertificateResponse` fields with
 proto names (`device_id`, `changed`, `source`, `source_detail`, `reissued`,
-`subject`, `certificate_serial`, `not_after`, `attest_cert`). See
+`subject`, `certificate_serial`, `not_after`, `attest_cert`, `cleared`,
+`refusal`). See
 [api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473).
 
 ```json
@@ -184,7 +188,8 @@ proto names (`device_id`, `changed`, `source`, `source_detail`, `reissued`,
     "type": "object",
     "properties": {
       "device_id": {"type": "string", "description": "Device ID"},
-      "reissue": {"type": "boolean", "description": "Ask the platform CA to issue a fresh attestation certificate over the enrolled attestation public key when no stored certificate passes the preflight"}
+      "reissue": {"type": "boolean", "description": "Ask the platform CA to issue a fresh attestation certificate over the enrolled attestation public key when no stored certificate passes the preflight"},
+      "clear_on_refusal": {"type": "boolean", "description": "Clear the stored attestation certificate when every candidate is refused (default false); an audit event records the clear"}
     },
     "required": ["device_id"]
   }

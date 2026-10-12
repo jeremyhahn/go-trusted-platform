@@ -76,7 +76,7 @@ func redeemInvitation(t *testing.T, invitation *entities.Invitation) *entities.U
 // all — every redemption produced a non-owner regardless of intent.
 func TestRegisterInvitedUser_OwnershipComesFromTheInvitation(t *testing.T) {
 	invitation, err := entities.NewInitialAdminInvitation(
-		"tenant-a", "owner@example.test", "admin", 999, 7*24*time.Hour)
+		"tenant-a", "owner@example.test", "admin", 999, 7*24*time.Hour, time.Now())
 	require.NoError(t, err)
 
 	user := redeemInvitation(t, invitation)
@@ -92,7 +92,7 @@ func TestRegisterInvitedUser_OwnershipComesFromTheInvitation(t *testing.T) {
 // simply made everyone an owner.
 func TestRegisterInvitedUser_OrdinaryInvitationsDoNotConferOwnership(t *testing.T) {
 	invitation, err := entities.NewInvitation(
-		"tenant-a", "member@example.test", "member", 999, 7*24*time.Hour)
+		"tenant-a", "member@example.test", "member", 999, 7*24*time.Hour, time.Now())
 	require.NoError(t, err)
 
 	assert.False(t, redeemInvitation(t, invitation).IsTenantOwner)
@@ -104,7 +104,7 @@ func TestRegisterInvitedUser_OrdinaryInvitationsDoNotConferOwnership(t *testing.
 // inferred from the role, every admin invitation would be an ownership grant.
 func TestRegisterInvitedUser_AnAdminRoleAloneDoesNotConferOwnership(t *testing.T) {
 	invitation, err := entities.NewInvitation(
-		"tenant-a", "second-admin@example.test", "admin", 999, 7*24*time.Hour)
+		"tenant-a", "second-admin@example.test", "admin", 999, 7*24*time.Hour, time.Now())
 	require.NoError(t, err)
 
 	user := redeemInvitation(t, invitation)

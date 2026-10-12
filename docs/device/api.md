@@ -797,7 +797,8 @@ signature and quarantine the device. A certificate that chains but lacks the
 attribute — which is what the fleet's CA issued at enrollment before go-xkms
 stamped `.3` — is refused, because recording it would move the device from
 *absence* (denied) to *cryptographic failure* (quarantined) on its next
-quote. Nothing is written on refusal.
+quote. Nothing is written on refusal unless the caller asks for the clear
+below.
 
 Candidates, in order; the first to pass is recorded:
 
@@ -833,7 +834,24 @@ the go-quicbaas re-export lands, the hookup is an alias swap with no
 platform change. On this fleet today the CA handle does not implement it
 and the CN lookups return not-found.
 
-Request body is optional: `{"reissue": <bool>}`. The response mirrors
+**Clearing a refused certificate (#516).** A device that already holds a
+non-compliant certificate (one enrolled before go-xkms stamped `.3`) is
+quarantined by every quote, and no candidate can replace it while the CA
+cannot issue a compliant one. `{"clear_on_refusal": true}` is the way out:
+when every candidate is refused, the recorder clears the certificate on the
+record, so the next quote is an *absence* (denied, not quarantined) until a
+compliant certificate is recorded. The flag is never on by default, and it
+clears only on that outcome: a compliant certificate is recorded as usual, and
+a device with no stored certificate, no enrolled attestation key, an
+unreachable CA or a failed revocation of a re-issued certificate keeps the
+error unchanged. The clear is a compare-and-clear: if the record changed while
+the call ran, nothing is written and the call fails with `ABORTED` (REST
+`409`, QUIC status `0x06`). The clear itself is audited as its own event,
+`device_attest_cert_cleared`, carrying the refusal that caused it, after the
+`device_attest_cert_refused` event for the attempt.
+
+Request body is optional: `{"reissue": <bool>, "clear_on_refusal": <bool>}`.
+The response mirrors
 `RecordAttestationCertificateResponse` with proto field names:
 
 ```json
@@ -843,12 +861,18 @@ Request body is optional: `{"reissue": <bool>}`. The response mirrors
  "not_after":"9999-12-31T23:59:59Z","attest_cert":"-----BEGIN CERTIFICATE-----…"}
 ```
 
+After a clear the response has `"cleared": true`, `"refusal"` names every
+refused candidate, `source` and `attest_cert` are empty, and `subject`,
+`certificate_serial` and `not_after` describe the certificate that was
+removed.
+
 `source` is `device`, `ca` or `reissued`. A refusal is `FAILED_PRECONDITION`
 on gRPC/Unix/MCP, QUIC status `0x01`, and `400` on REST, with a message that
 names **every** candidate and why it was refused (`ca[node-03]: … does not
 carry tcg-cap-verifiedTPMRestricted`). `UNAVAILABLE` means no CA is
 configured. Every attempt is audited as an attestation store event —
-`device_attest_cert_recorded` or `device_attest_cert_refused` — and never
+`device_attest_cert_recorded`, `device_attest_cert_refused` or
+`device_attest_cert_cleared` — and never
 reaches the quarantine observers: recording is not a verdict; the collector's
 next sweep (§4.4, [attestation/user.md](../attestation/user.md)) produces
 that.
@@ -859,7 +883,7 @@ sub-opcode `0x22` under `OpProvisioningCategory` (0xCF), the device
 sub-range the profile-assignment verbs use; MCP's `device_record_attest_cert`
 (`device:write`) and REST delegate to the same in-process gRPC service; the
 Go SDK exposes `device.Client.RecordAttestationCertificate`; the CLI is
-`platformctl device attest-cert record <id> [--reissue]`.
+`platformctl device attest-cert record <id> [--reissue] [--clear-on-refusal]`.
 
 ## 5. Adjacent routes on the same router
 

@@ -311,10 +311,19 @@ func generateSecureToken() (string, error) {
 
 ### Checking Expiration
 
+`entities.Invitation` never reads the clock: every method whose answer depends
+on the time takes it as `now` (#311). `InvitationService` reads its clock once
+per operation and passes that instant to every entity method it calls. See
+[`docs/tenant/architecture.md`](../tenant/architecture.md#time-is-a-parameter).
+
 ```go
-// IsExpired returns true if the invitation has expired.
-func (inv *Invitation) IsExpired() bool {
-    return time.Now().UTC().After(inv.ExpiresAt)
+// IsExpired reports whether the invitation's expiry is strictly before now.
+// A zero now is reported as expired (fail closed).
+func (inv *Invitation) IsExpired(now time.Time) bool {
+    if now.IsZero() {
+        return true
+    }
+    return now.After(inv.ExpiresAt)
 }
 
 // IsPending returns true if the invitation is still pending.

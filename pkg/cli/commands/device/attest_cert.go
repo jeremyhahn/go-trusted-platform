@@ -41,7 +41,7 @@ one is recorded.`,
 
 // newAttestCertRecordCommand creates the record subcommand.
 func newAttestCertRecordCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
-	var reissue bool
+	var opts device.RecordAttestCertOptions
 	cmd := &cobra.Command{
 		Use:   "record <id>",
 		Short: "Record the device's attestation certificate without re-enrolling it",
@@ -51,9 +51,17 @@ record without re-enrolling the device.
 The control plane fails closed. It records only a certificate that parses,
 chains to the platform CA, carries tcg-cap-verifiedTPMRestricted
 (2.23.133.11.1.3) and certifies the device's enrolled attestation key; any
-other candidate is refused and nothing is written. There is no override: a
-certificate without the attribute would be classified as a cryptographic
-failure on the device's next quote and quarantine it.
+other candidate is refused and, by default, nothing is written. There is no
+override: a certificate without the attribute would be classified as a
+cryptographic failure on the device's next quote and quarantine it.
+
+--clear-on-refusal is the way out for a device that already holds such a
+certificate. When every candidate is refused it clears the certificate on the
+record, so the device's next quote is treated as having no certificate
+(service denied, not quarantined) until a compliant one is recorded. The clear
+is audited as its own event (device_attest_cert_cleared) carrying the refusal.
+It never touches a compliant certificate, and it fails with a conflict if the
+record changed while the call ran.
 
 Candidates are tried in order: the certificate already on the record, the
 platform CA's certificate store, and -- only with --reissue -- a fresh
@@ -72,15 +80,20 @@ Examples:
   # Let the CA issue a fresh certificate over the enrolled attestation key
   platformctl device attest-cert record 123 --reissue
 
+  # Clear a non-compliant certificate so the next quote no longer quarantines
+  platformctl device attest-cert record 123 --clear-on-refusal
+
   # Machine-readable output
   platformctl device attest-cert record 123 -o json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAttestCertRecord(getFlags(), args[0], reissue)
+			return runAttestCertRecord(getFlags(), args[0], opts)
 		},
 	}
-	cmd.Flags().BoolVar(&reissue, "reissue", false,
+	cmd.Flags().BoolVar(&opts.Reissue, "reissue", false,
 		"Ask the platform CA to issue a fresh attestation certificate over the device's enrolled attestation public key when no stored certificate passes the preflight")
+	cmd.Flags().BoolVar(&opts.ClearOnRefusal, "clear-on-refusal", false,
+		"When every candidate is refused, clear the certificate on the device record (audited) so the next quote is an absence instead of a quarantine")
 	return cmd
 }
 
@@ -97,10 +110,12 @@ type attestCertRecordOutput struct {
 	CertificateSerial string     `json:"certificate_serial"`
 	NotAfter          *time.Time `json:"not_after,omitempty"`
 	AttestCert        string     `json:"attest_cert"`
+	Cleared           bool       `json:"cleared"`
+	Refusal           string     `json:"refusal,omitempty"`
 }
 
 // runAttestCertRecord executes the record command using the SDK client.
-func runAttestCertRecord(flags *cli.CommonFlags, idStr string, reissue bool) error {
+func runAttestCertRecord(flags *cli.CommonFlags, idStr string, opts device.RecordAttestCertOptions) error {
 	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil || id == 0 {
 		return ErrInvalidDeviceID{ID: idStr}
@@ -113,7 +128,7 @@ func runAttestCertRecord(flags *cli.CommonFlags, idStr string, reissue bool) err
 	defer base.Close()
 
 	deviceClient := device.NewClientFromGRPC(base.Client().Device())
-	resp, err := deviceClient.RecordAttestationCertificate(base.Context(), id, reissue)
+	resp, err := deviceClient.RecordAttestationCertificate(base.Context(), id, opts)
 	if err != nil {
 		return ErrRecordAttestCertFailed{ID: id, Reason: err.Error()}
 	}
@@ -129,6 +144,8 @@ func runAttestCertRecord(flags *cli.CommonFlags, idStr string, reissue bool) err
 		Subject:           resp.GetSubject(),
 		CertificateSerial: resp.GetCertificateSerial(),
 		AttestCert:        resp.GetAttestCert(),
+		Cleared:           resp.GetCleared(),
+		Refusal:           resp.GetRefusal(),
 	}
 	if ts := resp.GetNotAfter(); ts != nil {
 		t := ts.AsTime()
@@ -144,6 +161,10 @@ func runAttestCertRecord(flags *cli.CommonFlags, idStr string, reissue bool) err
 
 // printAttestCertRecord renders the record result as a table.
 func printAttestCertRecord(printer *cli.Printer, out attestCertRecordOutput) {
+	if out.Cleared {
+		printAttestCertCleared(printer, out)
+		return
+	}
 	if out.Changed {
 		printer.PrintSuccess("Attestation certificate recorded")
 	} else {
@@ -158,6 +179,22 @@ func printAttestCertRecord(printer *cli.Printer, out attestCertRecordOutput) {
 	printer.PrintKeyValue("Certificate Serial", out.CertificateSerial)
 	if out.NotAfter != nil {
 		printer.PrintKeyValue("Not After", out.NotAfter.UTC().Format(time.RFC3339))
+	}
+}
+
+// printAttestCertCleared renders a --clear-on-refusal clear: the device now
+// holds no attestation certificate, and the certificate fields describe the
+// one that was removed.
+func printAttestCertCleared(printer *cli.Printer, out attestCertRecordOutput) {
+	printer.PrintWarning("Refused attestation certificate cleared; the device holds no attestation certificate until one is recorded")
+	printer.PrintKeyValue("ID", strconv.FormatUint(out.ID, 10))
+	printer.PrintKeyValue("Serial", out.Serial)
+	printer.PrintKeyValue("Model", out.Model)
+	printer.PrintKeyValue("Refusal", out.Refusal)
+	printer.PrintKeyValue("Cleared Subject", out.Subject)
+	printer.PrintKeyValue("Cleared Certificate Serial", out.CertificateSerial)
+	if out.NotAfter != nil {
+		printer.PrintKeyValue("Cleared Not After", out.NotAfter.UTC().Format(time.RFC3339))
 	}
 }
 

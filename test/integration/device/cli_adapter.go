@@ -540,6 +540,9 @@ func (a *CLIAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCert
 	if opts.Reissue {
 		args = append(args, "--reissue")
 	}
+	if opts.ClearOnRefusal {
+		args = append(args, "--clear-on-refusal")
+	}
 
 	output, err := a.runCommand(ctx, args...)
 	if err != nil {

@@ -22,6 +22,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testNow is the instant every test in this file passes as now. Invitation
+// takes time as a parameter (#311), so expiry and the timestamps it stamps are
+// asserted exactly, not against a window around the wall clock.
+var testNow = time.Date(2026, time.March, 14, 15, 9, 26, 0, time.UTC)
+
 func TestNewInvitation(t *testing.T) {
 	t.Run("Create new invitation with valid inputs", func(t *testing.T) {
 		tenantID := "tenant-123"
@@ -30,9 +35,7 @@ func TestNewInvitation(t *testing.T) {
 		invitedByID := uint64(12345)
 		expiresDuration := 72 * time.Hour
 
-		before := time.Now().UTC()
-		invitation, err := NewInvitation(tenantID, email, role, invitedByID, expiresDuration)
-		after := time.Now().UTC()
+		invitation, err := NewInvitation(tenantID, email, role, invitedByID, expiresDuration, testNow)
 
 		require.NoError(t, err)
 		require.NotNil(t, invitation)
@@ -43,15 +46,12 @@ func TestNewInvitation(t *testing.T) {
 		assert.Equal(t, role, invitation.Role)
 		assert.Equal(t, InvitationStatusPending, invitation.Status)
 		assert.Equal(t, invitedByID, invitation.InvitedByID)
-		assert.True(t, invitation.ExpiresAt.After(before.Add(expiresDuration-time.Second)))
-		assert.True(t, invitation.ExpiresAt.Before(after.Add(expiresDuration+time.Second)))
-		assert.False(t, invitation.CreatedAt.IsZero())
-		assert.False(t, invitation.UpdatedAt.IsZero())
+		assert.Equal(t, testNow.Add(expiresDuration), invitation.ExpiresAt)
 		assert.Nil(t, invitation.AcceptedAt)
 	})
 
 	t.Run("Create invitation with empty email", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "", "member", 1, time.Hour, testNow)
 
 		require.NoError(t, err)
 		require.NotNil(t, invitation)
@@ -60,7 +60,7 @@ func TestNewInvitation(t *testing.T) {
 	})
 
 	t.Run("Create invitation with empty tenant ID", func(t *testing.T) {
-		invitation, err := NewInvitation("", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("", "user@example.com", "member", 1, time.Hour, testNow)
 
 		require.NoError(t, err)
 		require.NotNil(t, invitation)
@@ -68,7 +68,7 @@ func TestNewInvitation(t *testing.T) {
 	})
 
 	t.Run("Create invitation with empty role", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "", 1, time.Hour, testNow)
 
 		require.NoError(t, err)
 		require.NotNil(t, invitation)
@@ -76,7 +76,7 @@ func TestNewInvitation(t *testing.T) {
 	})
 
 	t.Run("Create invitation with zero invitedByID", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 0, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 0, time.Hour, testNow)
 
 		require.NoError(t, err)
 		require.NotNil(t, invitation)
@@ -84,29 +84,35 @@ func TestNewInvitation(t *testing.T) {
 	})
 
 	t.Run("Create invitation with negative duration (already expired)", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, -24*time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, -24*time.Hour, testNow)
 
 		require.NoError(t, err)
 		require.NotNil(t, invitation)
-		assert.True(t, invitation.IsExpired())
+		assert.True(t, invitation.IsExpired(testNow))
 	})
 
-	t.Run("CreatedAt and UpdatedAt are set to current UTC time", func(t *testing.T) {
-		before := time.Now().UTC()
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
-		after := time.Now().UTC()
+	t.Run("CreatedAt and UpdatedAt are the given instant", func(t *testing.T) {
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 
 		require.NoError(t, err)
 		require.NotNil(t, invitation)
-		assert.True(t, invitation.CreatedAt.Equal(before) || invitation.CreatedAt.After(before))
-		assert.True(t, invitation.CreatedAt.Equal(after) || invitation.CreatedAt.Before(after))
-		assert.True(t, invitation.UpdatedAt.Equal(before) || invitation.UpdatedAt.After(before))
-		assert.True(t, invitation.UpdatedAt.Equal(after) || invitation.UpdatedAt.Before(after))
-		assert.Equal(t, invitation.CreatedAt, invitation.UpdatedAt)
+		assert.Equal(t, testNow, invitation.CreatedAt)
+		assert.Equal(t, testNow, invitation.UpdatedAt)
+	})
+
+	t.Run("Timestamps are stored in UTC whatever the caller's zone", func(t *testing.T) {
+		local := testNow.In(time.FixedZone("UTC-5", -5*60*60))
+
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, local)
+
+		require.NoError(t, err)
+		assert.Equal(t, time.UTC, invitation.CreatedAt.Location())
+		assert.Equal(t, time.UTC, invitation.ExpiresAt.Location())
+		assert.True(t, invitation.CreatedAt.Equal(testNow))
 	})
 
 	t.Run("Token is base64url encoded", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 
 		require.NoError(t, err)
 		require.NotNil(t, invitation)
@@ -121,7 +127,7 @@ func TestNewInvitation_GeneratesUniqueTokens(t *testing.T) {
 		const numInvitations = 100
 
 		for i := 0; i < numInvitations; i++ {
-			invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, 72*time.Hour)
+			invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, 72*time.Hour, testNow)
 			require.NoError(t, err)
 			require.NotNil(t, invitation)
 
@@ -138,7 +144,7 @@ func TestNewInvitation_GeneratesUniqueTokens(t *testing.T) {
 		const numInvitations = 100
 
 		for i := 0; i < numInvitations; i++ {
-			invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, 72*time.Hour)
+			invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, 72*time.Hour, testNow)
 			require.NoError(t, err)
 			require.NotNil(t, invitation)
 
@@ -157,8 +163,8 @@ func TestNewInvitation_GeneratesUniqueTokens(t *testing.T) {
 		invitedByID := uint64(1)
 		expiresDuration := 72 * time.Hour
 
-		inv1, err1 := NewInvitation(tenantID, email, role, invitedByID, expiresDuration)
-		inv2, err2 := NewInvitation(tenantID, email, role, invitedByID, expiresDuration)
+		inv1, err1 := NewInvitation(tenantID, email, role, invitedByID, expiresDuration, testNow)
+		inv2, err2 := NewInvitation(tenantID, email, role, invitedByID, expiresDuration, testNow)
 
 		require.NoError(t, err1)
 		require.NoError(t, err2)
@@ -169,7 +175,7 @@ func TestNewInvitation_GeneratesUniqueTokens(t *testing.T) {
 
 func TestInvitation_EntityID(t *testing.T) {
 	t.Run("EntityID returns the invitation ID", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		entityID := invitation.EntityID()
@@ -178,7 +184,7 @@ func TestInvitation_EntityID(t *testing.T) {
 	})
 
 	t.Run("SetEntityID updates the invitation ID", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		originalID := invitation.ID
@@ -191,7 +197,7 @@ func TestInvitation_EntityID(t *testing.T) {
 	})
 
 	t.Run("SetEntityID to zero", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		invitation.SetEntityID(0)
@@ -200,7 +206,7 @@ func TestInvitation_EntityID(t *testing.T) {
 	})
 
 	t.Run("Invitation implements KeyValueEntity interface", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		var entity KeyValueEntity = invitation
@@ -215,60 +221,71 @@ func TestInvitation_EntityID(t *testing.T) {
 }
 
 func TestInvitation_IsExpired(t *testing.T) {
-	t.Run("Invitation with future expiration is not expired", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, 72*time.Hour)
+	newInvitation := func(t *testing.T) *Invitation {
+		t.Helper()
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
+		return invitation
+	}
 
-		assert.False(t, invitation.IsExpired())
+	t.Run("Not expired before its expiry", func(t *testing.T) {
+		invitation := newInvitation(t)
+
+		assert.False(t, invitation.IsExpired(testNow))
+		assert.False(t, invitation.IsExpired(invitation.ExpiresAt.Add(-time.Nanosecond)))
 	})
 
-	t.Run("Invitation with past expiration is expired", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, -1*time.Hour)
-		require.NoError(t, err)
+	t.Run("Still valid at the exact instant it expires", func(t *testing.T) {
+		invitation := newInvitation(t)
 
-		assert.True(t, invitation.IsExpired())
+		assert.False(t, invitation.IsExpired(invitation.ExpiresAt))
 	})
 
-	t.Run("Invitation expiring in 1 second is not expired yet", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Second)
-		require.NoError(t, err)
+	t.Run("Expired one nanosecond after its expiry", func(t *testing.T) {
+		invitation := newInvitation(t)
 
-		assert.False(t, invitation.IsExpired())
+		assert.True(t, invitation.IsExpired(invitation.ExpiresAt.Add(time.Nanosecond)))
 	})
 
-	t.Run("Invitation that expired 1 second ago is expired", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, -1*time.Second)
-		require.NoError(t, err)
+	t.Run("Answer depends on when you ask, not when it was loaded", func(t *testing.T) {
+		// A zero-value invitation is what the datastore reconstitutes before
+		// decoding into it: it never runs NewInvitation, and must still answer.
+		invitation := &Invitation{ExpiresAt: testNow}
 
-		assert.True(t, invitation.IsExpired())
+		assert.False(t, invitation.IsExpired(testNow.Add(-365*24*time.Hour)))
+		assert.True(t, invitation.IsExpired(testNow.Add(365*24*time.Hour)))
 	})
 
-	t.Run("Invitation with zero time is expired", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
-		require.NoError(t, err)
+	t.Run("Zone of now does not change the answer", func(t *testing.T) {
+		invitation := newInvitation(t)
+		east := time.FixedZone("UTC+9", 9*60*60)
+
+		assert.False(t, invitation.IsExpired(invitation.ExpiresAt.In(east)))
+		assert.True(t, invitation.IsExpired(invitation.ExpiresAt.Add(time.Second).In(east)))
+	})
+
+	t.Run("Invitation with zero expiry is expired", func(t *testing.T) {
+		invitation := newInvitation(t)
 		invitation.ExpiresAt = time.Time{}
 
-		assert.True(t, invitation.IsExpired())
+		assert.True(t, invitation.IsExpired(testNow))
 	})
 
-	t.Run("Invitation expiring far in the future is not expired", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, 365*24*time.Hour)
-		require.NoError(t, err)
+	t.Run("Zero now fails closed", func(t *testing.T) {
+		// A zero now is a caller that never read the clock. Since the zero
+		// time precedes every expiry, answering literally would make every
+		// invitation valid forever; an invitation is a credential, so it is
+		// treated as expired instead.
+		invitation := newInvitation(t)
 
-		assert.False(t, invitation.IsExpired())
-	})
-
-	t.Run("Invitation that expired long ago is expired", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, -365*24*time.Hour)
-		require.NoError(t, err)
-
-		assert.True(t, invitation.IsExpired())
+		assert.True(t, invitation.IsExpired(time.Time{}))
+		assert.False(t, invitation.CanAccept(time.Time{}))
 	})
 }
 
 func TestInvitation_IsPending(t *testing.T) {
 	t.Run("New invitation is pending", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		assert.True(t, invitation.IsPending())
@@ -276,7 +293,7 @@ func TestInvitation_IsPending(t *testing.T) {
 	})
 
 	t.Run("Accepted invitation is not pending", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		invitation.Status = InvitationStatusAccepted
@@ -284,7 +301,7 @@ func TestInvitation_IsPending(t *testing.T) {
 	})
 
 	t.Run("Expired invitation is not pending", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		invitation.Status = InvitationStatusExpired
@@ -292,7 +309,7 @@ func TestInvitation_IsPending(t *testing.T) {
 	})
 
 	t.Run("Revoked invitation is not pending", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		invitation.Status = InvitationStatusRevoked
@@ -300,7 +317,7 @@ func TestInvitation_IsPending(t *testing.T) {
 	})
 
 	t.Run("Invitation with empty status is not pending", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		invitation.Status = ""
@@ -308,7 +325,7 @@ func TestInvitation_IsPending(t *testing.T) {
 	})
 
 	t.Run("Invitation with invalid status is not pending", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		invitation.Status = InvitationStatus("invalid")
@@ -318,253 +335,247 @@ func TestInvitation_IsPending(t *testing.T) {
 
 func TestInvitation_CanAccept(t *testing.T) {
 	t.Run("Pending non-expired invitation can be accepted", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
-		assert.True(t, invitation.CanAccept())
+		assert.True(t, invitation.CanAccept(testNow))
 	})
 
 	t.Run("Pending expired invitation cannot be accepted", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, -time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, -time.Hour, testNow)
 		require.NoError(t, err)
 
-		assert.False(t, invitation.CanAccept())
+		assert.False(t, invitation.CanAccept(testNow))
+	})
+
+	t.Run("The same pending invitation stops being acceptable once now passes its expiry", func(t *testing.T) {
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
+		require.NoError(t, err)
+
+		assert.True(t, invitation.CanAccept(invitation.ExpiresAt))
+		assert.False(t, invitation.CanAccept(invitation.ExpiresAt.Add(time.Nanosecond)))
+		assert.Equal(t, InvitationStatusPending, invitation.Status, "asking does not mutate")
 	})
 
 	t.Run("Accepted invitation cannot be accepted again", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
-		invitation.Accept()
-		assert.False(t, invitation.CanAccept())
+		invitation.Accept(testNow)
+		assert.False(t, invitation.CanAccept(testNow))
 	})
 
 	t.Run("Revoked invitation cannot be accepted", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
-		invitation.Revoke()
-		assert.False(t, invitation.CanAccept())
+		invitation.Revoke(testNow)
+		assert.False(t, invitation.CanAccept(testNow))
 	})
 
 	t.Run("Expired status invitation cannot be accepted", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
-		invitation.Expire()
-		assert.False(t, invitation.CanAccept())
+		invitation.Expire(testNow)
+		assert.False(t, invitation.CanAccept(testNow))
 	})
 
 	t.Run("Non-pending non-expired invitation cannot be accepted", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		invitation.Status = InvitationStatusAccepted
-		assert.False(t, invitation.CanAccept())
+		assert.False(t, invitation.CanAccept(testNow))
 	})
 }
 
 func TestInvitation_Accept(t *testing.T) {
 	t.Run("Accept changes status to accepted", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		assert.Equal(t, InvitationStatusPending, invitation.Status)
 		assert.Nil(t, invitation.AcceptedAt)
 
-		invitation.Accept()
+		invitation.Accept(testNow)
 
 		assert.Equal(t, InvitationStatusAccepted, invitation.Status)
 		assert.NotNil(t, invitation.AcceptedAt)
 	})
 
-	t.Run("Accept sets AcceptedAt to current UTC time", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+	t.Run("Accept stamps AcceptedAt and UpdatedAt with the given instant", func(t *testing.T) {
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
+		acceptedAt := testNow.Add(10 * time.Minute)
 
-		before := time.Now().UTC()
-		invitation.Accept()
-		after := time.Now().UTC()
+		invitation.Accept(acceptedAt)
 
 		require.NotNil(t, invitation.AcceptedAt)
-		assert.True(t, invitation.AcceptedAt.Equal(before) || invitation.AcceptedAt.After(before))
-		assert.True(t, invitation.AcceptedAt.Equal(after) || invitation.AcceptedAt.Before(after))
+		assert.Equal(t, acceptedAt, *invitation.AcceptedAt)
+		assert.Equal(t, acceptedAt, invitation.UpdatedAt)
+		assert.Equal(t, testNow, invitation.CreatedAt)
 	})
 
-	t.Run("Accept updates UpdatedAt", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+	t.Run("Accept stores UTC whatever the caller's zone", func(t *testing.T) {
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
-		originalUpdatedAt := invitation.UpdatedAt
+		invitation.Accept(testNow.In(time.FixedZone("UTC+2", 2*60*60)))
 
-		before := time.Now().UTC()
-		invitation.Accept()
-		after := time.Now().UTC()
-
-		assert.True(t, invitation.UpdatedAt.Equal(originalUpdatedAt) || invitation.UpdatedAt.After(originalUpdatedAt))
-		assert.True(t, invitation.UpdatedAt.Equal(before) || invitation.UpdatedAt.After(before))
-		assert.True(t, invitation.UpdatedAt.Equal(after) || invitation.UpdatedAt.Before(after))
+		require.NotNil(t, invitation.AcceptedAt)
+		assert.Equal(t, testNow, *invitation.AcceptedAt)
+		assert.Equal(t, testNow, invitation.UpdatedAt)
 	})
 
 	t.Run("Accept on already accepted invitation updates AcceptedAt", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
+		later := testNow.Add(time.Millisecond)
 
-		invitation.Accept()
-		firstAcceptedAt := *invitation.AcceptedAt
+		invitation.Accept(testNow)
+		firstAcceptedAt := invitation.AcceptedAt
+		invitation.Accept(later)
 
-		// Ensure some time passes
-		time.Sleep(1 * time.Millisecond)
-
-		invitation.Accept()
-		secondAcceptedAt := *invitation.AcceptedAt
-
-		assert.True(t, secondAcceptedAt.After(firstAcceptedAt) || secondAcceptedAt.Equal(firstAcceptedAt))
+		assert.Equal(t, testNow, *firstAcceptedAt, "the first stamp is not overwritten in place")
+		assert.Equal(t, later, *invitation.AcceptedAt)
 		assert.Equal(t, InvitationStatusAccepted, invitation.Status)
 	})
 
 	t.Run("Accept on expired status invitation changes to accepted", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		invitation.Status = InvitationStatusExpired
-		invitation.Accept()
+		invitation.Accept(testNow)
 
 		assert.Equal(t, InvitationStatusAccepted, invitation.Status)
 		assert.NotNil(t, invitation.AcceptedAt)
 	})
 
 	t.Run("Accept on revoked status invitation changes to accepted", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		invitation.Status = InvitationStatusRevoked
-		invitation.Accept()
+		invitation.Accept(testNow)
 
 		assert.Equal(t, InvitationStatusAccepted, invitation.Status)
 		assert.NotNil(t, invitation.AcceptedAt)
 	})
 
 	t.Run("IsPending returns false after Accept", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		assert.True(t, invitation.IsPending())
-		invitation.Accept()
+		invitation.Accept(testNow)
 		assert.False(t, invitation.IsPending())
 	})
 }
 
 func TestInvitation_Revoke(t *testing.T) {
 	t.Run("Revoke changes status to revoked", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		assert.Equal(t, InvitationStatusPending, invitation.Status)
-		invitation.Revoke()
+		invitation.Revoke(testNow)
 		assert.Equal(t, InvitationStatusRevoked, invitation.Status)
 	})
 
-	t.Run("Revoke updates UpdatedAt", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+	t.Run("Revoke stamps UpdatedAt with the given instant", func(t *testing.T) {
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
+		revokedAt := testNow.Add(5 * time.Minute)
 
-		originalUpdatedAt := invitation.UpdatedAt
+		invitation.Revoke(revokedAt.In(time.FixedZone("UTC-3", -3*60*60)))
 
-		before := time.Now().UTC()
-		invitation.Revoke()
-		after := time.Now().UTC()
-
-		assert.True(t, invitation.UpdatedAt.Equal(originalUpdatedAt) || invitation.UpdatedAt.After(originalUpdatedAt))
-		assert.True(t, invitation.UpdatedAt.Equal(before) || invitation.UpdatedAt.After(before))
-		assert.True(t, invitation.UpdatedAt.Equal(after) || invitation.UpdatedAt.Before(after))
+		assert.Equal(t, revokedAt, invitation.UpdatedAt)
+		assert.Nil(t, invitation.AcceptedAt)
 	})
 
 	t.Run("IsPending returns false after Revoke", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		assert.True(t, invitation.IsPending())
-		invitation.Revoke()
+		invitation.Revoke(testNow)
 		assert.False(t, invitation.IsPending())
 	})
 
 	t.Run("CanAccept returns false after Revoke", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
-		assert.True(t, invitation.CanAccept())
-		invitation.Revoke()
-		assert.False(t, invitation.CanAccept())
+		assert.True(t, invitation.CanAccept(testNow))
+		invitation.Revoke(testNow)
+		assert.False(t, invitation.CanAccept(testNow))
 	})
 
 	t.Run("Revoke on already revoked invitation updates UpdatedAt", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
-		invitation.Revoke()
-		firstUpdatedAt := invitation.UpdatedAt
+		later := testNow.Add(time.Millisecond)
 
-		time.Sleep(1 * time.Millisecond)
-		invitation.Revoke()
+		invitation.Revoke(testNow)
+		invitation.Revoke(later)
 
-		assert.True(t, invitation.UpdatedAt.After(firstUpdatedAt) || invitation.UpdatedAt.Equal(firstUpdatedAt))
+		assert.Equal(t, later, invitation.UpdatedAt)
+		assert.Equal(t, InvitationStatusRevoked, invitation.Status)
 	})
 }
 
 func TestInvitation_Expire(t *testing.T) {
 	t.Run("Expire changes status to expired", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		assert.Equal(t, InvitationStatusPending, invitation.Status)
-		invitation.Expire()
+		invitation.Expire(testNow)
 		assert.Equal(t, InvitationStatusExpired, invitation.Status)
 	})
 
-	t.Run("Expire updates UpdatedAt", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+	t.Run("Expire stamps UpdatedAt with the given instant", func(t *testing.T) {
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
+		expiredAt := invitation.ExpiresAt.Add(time.Second)
 
-		originalUpdatedAt := invitation.UpdatedAt
+		invitation.Expire(expiredAt)
 
-		before := time.Now().UTC()
-		invitation.Expire()
-		after := time.Now().UTC()
-
-		assert.True(t, invitation.UpdatedAt.Equal(originalUpdatedAt) || invitation.UpdatedAt.After(originalUpdatedAt))
-		assert.True(t, invitation.UpdatedAt.Equal(before) || invitation.UpdatedAt.After(before))
-		assert.True(t, invitation.UpdatedAt.Equal(after) || invitation.UpdatedAt.Before(after))
+		assert.Equal(t, expiredAt, invitation.UpdatedAt)
+		assert.Equal(t, testNow, invitation.CreatedAt)
 	})
 
 	t.Run("IsPending returns false after Expire", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		assert.True(t, invitation.IsPending())
-		invitation.Expire()
+		invitation.Expire(testNow)
 		assert.False(t, invitation.IsPending())
 	})
 
 	t.Run("CanAccept returns false after Expire", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
-		assert.True(t, invitation.CanAccept())
-		invitation.Expire()
-		assert.False(t, invitation.CanAccept())
+		assert.True(t, invitation.CanAccept(testNow))
+		invitation.Expire(testNow)
+		assert.False(t, invitation.CanAccept(testNow))
 	})
 }
 
 func TestInvitation_GenerateToken(t *testing.T) {
 	t.Run("GenerateToken creates new token", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		originalToken := invitation.Token
 		originalID := invitation.ID
 
-		err = invitation.GenerateToken()
+		err = invitation.GenerateToken(testNow)
 		require.NoError(t, err)
 
 		assert.NotEqual(t, originalToken, invitation.Token)
@@ -572,31 +583,27 @@ func TestInvitation_GenerateToken(t *testing.T) {
 		assert.Len(t, invitation.Token, 44)
 	})
 
-	t.Run("GenerateToken updates UpdatedAt", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+	t.Run("GenerateToken stamps UpdatedAt with the given instant", func(t *testing.T) {
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
+		require.NoError(t, err)
+		reissuedAt := testNow.Add(time.Hour)
+
+		err = invitation.GenerateToken(reissuedAt)
 		require.NoError(t, err)
 
-		originalUpdatedAt := invitation.UpdatedAt
-
-		before := time.Now().UTC()
-		err = invitation.GenerateToken()
-		require.NoError(t, err)
-		after := time.Now().UTC()
-
-		assert.True(t, invitation.UpdatedAt.Equal(originalUpdatedAt) || invitation.UpdatedAt.After(originalUpdatedAt))
-		assert.True(t, invitation.UpdatedAt.Equal(before) || invitation.UpdatedAt.After(before))
-		assert.True(t, invitation.UpdatedAt.Equal(after) || invitation.UpdatedAt.Before(after))
+		assert.Equal(t, reissuedAt, invitation.UpdatedAt)
+		assert.Equal(t, testNow, invitation.CreatedAt)
 	})
 
 	t.Run("GenerateToken generates unique tokens", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		tokenSet := make(map[string]struct{})
 		tokenSet[invitation.Token] = struct{}{}
 
 		for i := 0; i < 50; i++ {
-			err = invitation.GenerateToken()
+			err = invitation.GenerateToken(testNow)
 			require.NoError(t, err)
 
 			_, exists := tokenSet[invitation.Token]
@@ -606,7 +613,7 @@ func TestInvitation_GenerateToken(t *testing.T) {
 	})
 
 	t.Run("GenerateToken preserves other fields", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		originalTenantID := invitation.TenantID
@@ -617,7 +624,7 @@ func TestInvitation_GenerateToken(t *testing.T) {
 		originalExpiresAt := invitation.ExpiresAt
 		originalCreatedAt := invitation.CreatedAt
 
-		err = invitation.GenerateToken()
+		err = invitation.GenerateToken(testNow)
 		require.NoError(t, err)
 
 		assert.Equal(t, originalTenantID, invitation.TenantID)
@@ -727,14 +734,14 @@ func TestInvitation_CompleteWorkflow(t *testing.T) {
 		invitedByID := uint64(1001)
 		expiresDuration := 72 * time.Hour
 
-		invitation, err := NewInvitation(tenantID, email, role, invitedByID, expiresDuration)
+		invitation, err := NewInvitation(tenantID, email, role, invitedByID, expiresDuration, testNow)
 		require.NoError(t, err)
 		require.NotNil(t, invitation)
 
 		// Verify initial state
 		assert.True(t, invitation.IsPending())
-		assert.False(t, invitation.IsExpired())
-		assert.True(t, invitation.CanAccept())
+		assert.False(t, invitation.IsExpired(testNow))
+		assert.True(t, invitation.CanAccept(testNow))
 		assert.Nil(t, invitation.AcceptedAt)
 
 		// Verify all fields are populated
@@ -749,11 +756,11 @@ func TestInvitation_CompleteWorkflow(t *testing.T) {
 		assert.False(t, invitation.UpdatedAt.IsZero())
 
 		// Accept the invitation
-		invitation.Accept()
+		invitation.Accept(testNow)
 
 		// Verify accepted state
 		assert.False(t, invitation.IsPending())
-		assert.False(t, invitation.CanAccept())
+		assert.False(t, invitation.CanAccept(testNow))
 		assert.Equal(t, InvitationStatusAccepted, invitation.Status)
 		assert.NotNil(t, invitation.AcceptedAt)
 
@@ -764,35 +771,35 @@ func TestInvitation_CompleteWorkflow(t *testing.T) {
 	})
 
 	t.Run("Revocation workflow", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
-		assert.True(t, invitation.CanAccept())
+		assert.True(t, invitation.CanAccept(testNow))
 
-		invitation.Revoke()
+		invitation.Revoke(testNow)
 
 		assert.False(t, invitation.IsPending())
-		assert.False(t, invitation.CanAccept())
+		assert.False(t, invitation.CanAccept(testNow))
 		assert.Equal(t, InvitationStatusRevoked, invitation.Status)
 	})
 
 	t.Run("Token regeneration workflow", func(t *testing.T) {
-		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour)
+		invitation, err := NewInvitation("tenant-123", "user@example.com", "member", 1, time.Hour, testNow)
 		require.NoError(t, err)
 
 		originalToken := invitation.Token
 
-		err = invitation.GenerateToken()
+		err = invitation.GenerateToken(testNow)
 		require.NoError(t, err)
 
 		assert.NotEqual(t, originalToken, invitation.Token)
-		assert.True(t, invitation.CanAccept())
+		assert.True(t, invitation.CanAccept(testNow))
 	})
 }
 
 func TestInvitation_StructFields(t *testing.T) {
 	t.Run("All struct fields can be set and read", func(t *testing.T) {
-		now := time.Now().UTC()
+		now := testNow
 		acceptedAt := now.Add(time.Hour)
 
 		invitation := &Invitation{

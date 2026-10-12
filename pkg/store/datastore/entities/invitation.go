@@ -52,6 +52,13 @@ func (e ErrTokenGeneration) Unwrap() error {
 }
 
 // Invitation represents an invitation to join a tenant.
+//
+// Invitation never reads the clock. Every constructor and method whose result
+// depends on the time takes it as a now parameter, read once by the caller
+// (#311). A clock fixed at construction cannot work here: invitations loaded
+// from the datastore are reconstituted from a zero value and never pass
+// through NewInvitation, so a stored clock would be nil on exactly the objects
+// production handles most.
 type Invitation struct {
 	ID          uint64           `yaml:"id" json:"id"`
 	Token       string           `yaml:"token" json:"token" secret:"true"`
@@ -94,19 +101,23 @@ func generateSecureToken() (string, error) {
 	return base64.URLEncoding.EncodeToString(tokenBytes), nil
 }
 
-// NewInvitation creates a new invitation with a secure token.
-// The expiresDuration parameter specifies how long the invitation remains valid.
+// NewInvitation creates a new invitation with a secure token, created at now
+// and valid for expiresDuration from it.
 // NewInvitation creates an ordinary tenant invitation. The redeemer becomes
 // a member with the given role and does NOT become the tenant owner; use
 // NewInitialAdminInvitation for the invitation that provisions a tenant's
 // first administrator.
-func NewInvitation(tenantID, email, role string, invitedByID uint64, expiresDuration time.Duration) (*Invitation, error) {
+func NewInvitation(
+	tenantID, email, role string,
+	invitedByID uint64,
+	expiresDuration time.Duration,
+	now time.Time) (*Invitation, error) {
 	token, err := generateSecureToken()
 	if err != nil {
 		return nil, err
 	}
 
-	now := time.Now().UTC()
+	now = now.UTC()
 	return &Invitation{
 		ID:          util.NewID([]byte(token)),
 		Token:       token,
@@ -132,9 +143,10 @@ func NewInvitation(tenantID, email, role string, invitedByID uint64, expiresDura
 func NewInitialAdminInvitation(
 	tenantID, email, role string,
 	invitedByID uint64,
-	expiresDuration time.Duration) (*Invitation, error) {
+	expiresDuration time.Duration,
+	now time.Time) (*Invitation, error) {
 
-	inv, err := NewInvitation(tenantID, email, role, invitedByID, expiresDuration)
+	inv, err := NewInvitation(tenantID, email, role, invitedByID, expiresDuration, now)
 	if err != nil {
 		return nil, err
 	}
@@ -152,9 +164,17 @@ func (inv *Invitation) SetEntityID(id uint64) {
 	inv.ID = id
 }
 
-// IsExpired returns true if the invitation has expired.
-func (inv *Invitation) IsExpired() bool {
-	return time.Now().UTC().After(inv.ExpiresAt)
+// IsExpired reports whether the invitation's expiry is strictly before now.
+// An invitation is still valid at the exact instant it expires.
+//
+// A zero now is reported as expired. It can only mean a caller that never
+// read the clock, and since the zero time precedes every expiry, answering it
+// literally would make every invitation redeemable forever.
+func (inv *Invitation) IsExpired(now time.Time) bool {
+	if now.IsZero() {
+		return true
+	}
+	return now.After(inv.ExpiresAt)
 }
 
 // IsPending returns true if the invitation is still pending.
@@ -163,40 +183,40 @@ func (inv *Invitation) IsPending() bool {
 }
 
 // CanAccept returns true if the invitation can be accepted.
-// An invitation can be accepted only if it is pending and not expired.
-func (inv *Invitation) CanAccept() bool {
-	return inv.IsPending() && !inv.IsExpired()
+// An invitation can be accepted only if it is pending and not expired at now.
+func (inv *Invitation) CanAccept(now time.Time) bool {
+	return inv.IsPending() && !inv.IsExpired(now)
 }
 
-// Accept marks the invitation as accepted and sets the AcceptedAt timestamp.
-func (inv *Invitation) Accept() {
-	now := time.Now().UTC()
+// Accept marks the invitation as accepted at now.
+func (inv *Invitation) Accept(now time.Time) {
+	now = now.UTC()
 	inv.Status = InvitationStatusAccepted
 	inv.AcceptedAt = &now
 	inv.UpdatedAt = now
 }
 
-// Revoke marks the invitation as revoked.
-func (inv *Invitation) Revoke() {
+// Revoke marks the invitation as revoked at now.
+func (inv *Invitation) Revoke(now time.Time) {
 	inv.Status = InvitationStatusRevoked
-	inv.UpdatedAt = time.Now().UTC()
+	inv.UpdatedAt = now.UTC()
 }
 
-// Expire marks the invitation as expired.
-func (inv *Invitation) Expire() {
+// Expire marks the invitation as expired at now.
+func (inv *Invitation) Expire(now time.Time) {
 	inv.Status = InvitationStatusExpired
-	inv.UpdatedAt = time.Now().UTC()
+	inv.UpdatedAt = now.UTC()
 }
 
 // GenerateToken generates a new cryptographically secure token for the invitation
-// and updates the ID accordingly.
-func (inv *Invitation) GenerateToken() error {
+// at now and updates the ID accordingly.
+func (inv *Invitation) GenerateToken(now time.Time) error {
 	token, err := generateSecureToken()
 	if err != nil {
 		return err
 	}
 	inv.Token = token
 	inv.ID = util.NewID([]byte(token))
-	inv.UpdatedAt = time.Now().UTC()
+	inv.UpdatedAt = now.UTC()
 	return nil
 }

@@ -139,7 +139,9 @@ message AttestDeviceResponse {
 // the candidate must parse, chain to the platform CA, carry
 // tcg-cap-verifiedTPMRestricted and certify the enrolled attestation key,
 // or nothing is written and the call returns FAILED_PRECONDITION naming
-// every candidate refused. See docs/device/api.md §4.5.
+// every candidate refused -- unless clear_on_refusal is set, which clears
+// the refused certificate instead. A clear that loses its compare-and-clear
+// returns ABORTED. See docs/device/api.md §4.5.
 rpc RecordAttestationCertificate(RecordAttestationCertificateRequest)
     returns (RecordAttestationCertificateResponse);
 
@@ -148,6 +150,11 @@ message RecordAttestationCertificateRequest {
   // reissue lets the CA issue a fresh certificate over the device's
   // enrolled attestation public key when no stored certificate passes.
   bool reissue = 2;
+  // clear_on_refusal clears the certificate on the record when every
+  // candidate is refused, so the next quote is an absence (denied) instead
+  // of a cryptographic failure (quarantined). Audited as
+  // device_attest_cert_cleared. Never clears a compliant certificate.
+  bool clear_on_refusal = 3;
 }
 
 message RecordAttestationCertificateResponse {
@@ -163,6 +170,9 @@ message RecordAttestationCertificateResponse {
   string certificate_serial = 10;
   google.protobuf.Timestamp not_after = 11;
   string attest_cert = 12;          // the recorded certificate, PEM
+  bool cleared = 13;                // the refused certificate was cleared;
+                                    // subject..not_after describe it
+  string refusal = 14;              // why it was refused, on a clear
 }
 ```
 

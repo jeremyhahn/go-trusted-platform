@@ -340,8 +340,12 @@ func (s *TenantUserService) RegisterInvitedUser(
 		}
 	}
 
+	// One reading of the clock decides expiry and stamps the user, so the
+	// two can never disagree about when the redemption happened.
+	now := time.Now().UTC()
+
 	// Verify invitation is not expired
-	if invitation.IsExpired() {
+	if invitation.IsExpired(now) {
 		return nil, ErrInvitationExpired{Token: invitationToken}
 	}
 
@@ -364,7 +368,6 @@ func (s *TenantUserService) RegisterInvitedUser(
 	// what keeps a redeemer from asking to be the owner — the same reasoning
 	// that made #171 read the tenant from the verified session rather than
 	// from a caller-supplied field.
-	now := time.Now().UTC()
 	user.TenantID = invitation.TenantID
 	user.IsTenantOwner = invitation.InitialAdmin
 	user.CreatedAt = now

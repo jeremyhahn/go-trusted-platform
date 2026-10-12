@@ -333,6 +333,8 @@ type RecordAttestCertOptions struct {
 	TenantID string `json:"tenant_id,omitempty"`
 	DeviceID string `json:"device_id"`
 	Reissue  bool   `json:"reissue"`
+	// ClearOnRefusal clears a stored certificate the preflight refuses.
+	ClearOnRefusal bool `json:"clear_on_refusal"`
 }
 
 // RecordAttestCertResult mirrors platform.v1
@@ -348,6 +350,8 @@ type RecordAttestCertResult struct {
 	Subject           string `json:"subject"`
 	CertificateSerial string `json:"certificate_serial"`
 	AttestCert        string `json:"attest_cert"`
+	Cleared           bool   `json:"cleared"`
+	Refusal           string `json:"refusal,omitempty"`
 }
 
 // AttestDeviceResult is the verdict the platform returns. It reports the

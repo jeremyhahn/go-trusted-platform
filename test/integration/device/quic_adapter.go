@@ -471,8 +471,9 @@ func (a *QUICAdapter) ListProfiles(ctx context.Context, opts ListProfilesOptions
 // the shared gRPC service, so QUIC answers exactly what gRPC and Unix do.
 func (a *QUICAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
 	req := &pb.RecordAttestationCertificateRequest{
-		DeviceId: opts.DeviceID,
-		Reissue:  opts.Reissue,
+		DeviceId:       opts.DeviceID,
+		Reissue:        opts.Reissue,
+		ClearOnRefusal: opts.ClearOnRefusal,
 	}
 	var resp pb.RecordAttestationCertificateResponse
 	if err := a.callCategory(ctx, "RecordAttestCert",
@@ -490,6 +491,8 @@ func (a *QUICAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 		Subject:           resp.GetSubject(),
 		CertificateSerial: resp.GetCertificateSerial(),
 		AttestCert:        resp.GetAttestCert(),
+		Cleared:           resp.GetCleared(),
+		Refusal:           resp.GetRefusal(),
 	}, nil
 }
 

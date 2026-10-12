@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
@@ -59,7 +60,7 @@ func (h *WebAuthnRestHandler) validateInvitation(w http.ResponseWriter, r *http.
 		h.writeInvitationStatusError(w, r, invitation.Status)
 		return false
 	}
-	if invitation.IsExpired() {
+	if invitation.IsExpired(time.Now()) {
 		h.responseWriter.Error400(w, r, ErrInvitationExpired)
 		return false
 	}

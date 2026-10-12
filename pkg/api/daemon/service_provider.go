@@ -639,8 +639,8 @@ func (p *PlatformServiceProvider) DeviceAttest(ctx context.Context, deviceID str
 // DeviceRecordAttestCert records a device's attestation certificate through
 // the shared recorder, so MCP answers exactly what gRPC, Unix, QUIC and REST
 // answer: the same fail-closed preflight and the same refusal.
-func (p *PlatformServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue bool) (interface{}, error) {
-	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, p.logger)
+func (p *PlatformServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue, clearOnRefusal bool) (interface{}, error) {
+	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, clearOnRefusal, p.logger)
 }
 
 // DeviceProvision binds a device to a device profile. The profile argument is

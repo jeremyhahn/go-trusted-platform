@@ -112,9 +112,9 @@ func NewEnforcer(store QuotaStore, logger *slog.Logger, opts ...EnforcerOption) 
 // routing them through the enforcer is enough — the exported method stays for
 // callers who do want wall-clock semantics.
 //
-// The same split appears on entities.Invitation and is NOT tractable there,
-// because those objects are reconstituted zero-valued from the datastore and
-// their expiry is read from 29 call sites outside any owning type (#284).
+// entities.Invitation had the same split and could not take this shape, because
+// its objects are reconstituted zero-valued from the datastore; it resolved it
+// the other way, by taking now as a parameter on every method (#311).
 func (e *Enforcer) expired(r *Reservation) bool {
 	return e.clk.Now().After(r.ExpiresAt)
 }

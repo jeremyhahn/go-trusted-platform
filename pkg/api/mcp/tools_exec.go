@@ -328,8 +328,9 @@ func (r *ToolRegistry) executeDeviceRecordAttestCert(ctx context.Context, args m
 		return nil, ErrDeviceIDRequired
 	}
 	reissue := getBool(args, "reissue")
+	clearOnRefusal := getBool(args, "clear_on_refusal")
 
-	result, err := r.service.DeviceRecordAttestCert(ctx, deviceID, reissue)
+	result, err := r.service.DeviceRecordAttestCert(ctx, deviceID, reissue, clearOnRefusal)
 	if err != nil {
 		return nil, err
 	}
