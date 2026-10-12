@@ -31,6 +31,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // The gRPC TCP and QUIC transports used to install their token interceptor with
@@ -172,14 +173,38 @@ func TestSelectQUICAuth_SharedValidator_BuildsRequiredMiddleware(t *testing.T) {
 	assert.Nil(t, validator)
 }
 
-func TestSelectQUICAuth_MTLS_DefersToTLSLayer(t *testing.T) {
+func TestSelectQUICAuth_MTLS_AuthenticatesByCertificate(t *testing.T) {
 	t.Parallel()
 	config := failClosedConfig()
 	config.EnableMTLS = true
 	mw, validator, err := selectQUICAuth(config, nil, logging.DefaultLogger())
 	require.NoError(t, err)
-	assert.Nil(t, mw, "mTLS authenticates at the TLS layer; resolveMTLSClientCAPool enforces that it really does")
+	require.NotNil(t, mw, "the QUIC dispatcher always authorizes; mTLS supplies the identity")
 	assert.Nil(t, validator)
+
+	// The verified peer certificate authenticates a tokenless request...
+	_, resp := mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey})
+	assert.Nil(t, resp)
+	// ...but an unclassified operation is still refused.
+	_, resp = mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: 0x90})
+	require.NotNil(t, resp)
+	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+}
+
+func TestSelectQUICAuth_MTLS_WithSharedValidator_ValidatesPresentedTokens(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.EnableMTLS = true
+	shared := &platformTokenValidator{}
+	mw, _, err := selectQUICAuth(config, shared, logging.DefaultLogger())
+	require.NoError(t, err)
+	require.NotNil(t, mw)
+
+	// A zero platformTokenValidator has no verifier: a presented token cannot
+	// validate, so it must be refused rather than ignored.
+	_, resp := mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey, Token: "presented"})
+	require.NotNil(t, resp)
+	assert.Equal(t, quicwire.StatusUnauthorized, resp.Status)
 }
 
 func TestSelectQUICAuth_SkipIAMValidation_IsTheOnlyOptOut(t *testing.T) {
@@ -188,8 +213,14 @@ func TestSelectQUICAuth_SkipIAMValidation_IsTheOnlyOptOut(t *testing.T) {
 	config.SkipIAMValidation = true
 	mw, validator, err := selectQUICAuth(config, nil, logging.DefaultLogger())
 	require.NoError(t, err)
-	assert.Nil(t, mw)
+	require.NotNil(t, mw)
 	assert.Nil(t, validator)
+
+	_, resp := mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey})
+	assert.Nil(t, resp, "the opt-out skips authentication")
+	_, resp = mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: 0x90})
+	require.NotNil(t, resp, "the opt-out never serves an unclassified operation")
+	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 }
 
 // --- resolveMTLSClientCAPool ---------------------------------------------------

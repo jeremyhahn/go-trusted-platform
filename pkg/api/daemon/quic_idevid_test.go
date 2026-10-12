@@ -252,7 +252,7 @@ func createIDevIDTestCertPEM(cn string) (string, error) {
 
 func TestQUICIDevID_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	testCases := []struct {
@@ -294,7 +294,7 @@ func TestQUICIDevID_ServiceNotAvailable(t *testing.T) {
 func TestQUICIDevIDOperation_Routing(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	// Test that various opcodes are routed correctly
@@ -324,7 +324,7 @@ func TestQUICIDevIDOperation_Routing(t *testing.T) {
 func TestQUICIDevIDGenerate_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	genReq := &IDevIDGenerateRequest{
@@ -354,7 +354,7 @@ func TestQUICIDevIDGenerate_EKAttributesError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		ekAttrsErr: errors.New("TPM not available"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -371,7 +371,7 @@ func TestQUICIDevIDGenerate_CreateIAKError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		createIAKErr: errors.New("failed to create IAK"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -388,7 +388,7 @@ func TestQUICIDevIDGenerate_CreateIDevIDError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		createIDevIDErr: errors.New("failed to create IDevID"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -403,7 +403,7 @@ func TestQUICIDevIDGenerate_CreateIDevIDError(t *testing.T) {
 func TestQUICIDevIDGenerate_InvalidPayload(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -418,7 +418,7 @@ func TestQUICIDevIDGenerate_InvalidPayload(t *testing.T) {
 func TestQUICIDevIDInfo_Exists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -439,7 +439,7 @@ func TestQUICIDevIDInfo_Exists(t *testing.T) {
 func TestQUICIDevIDInfo_NotExists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -459,7 +459,7 @@ func TestQUICIDevIDInfo_NotExists(t *testing.T) {
 func TestQUICIDevIDInfo_WithCertificate(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -481,7 +481,7 @@ func TestQUICIDevIDInfo_WithCertificate(t *testing.T) {
 func TestQUICIDevIDDelete_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -501,7 +501,7 @@ func TestQUICIDevIDDelete_Success(t *testing.T) {
 func TestQUICIDevIDCSR_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	csrReq := &IDevIDCSRRequest{
@@ -528,7 +528,7 @@ func TestQUICIDevIDCSR_Success(t *testing.T) {
 func TestQUICIDevIDCSR_NoIDevID(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: false, hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -543,7 +543,7 @@ func TestQUICIDevIDCSR_NoIDevID(t *testing.T) {
 func TestQUICIDevIDCSR_NoIAK(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIAK: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -562,7 +562,7 @@ func TestQUICIDevIDCSR_CreateCSRError(t *testing.T) {
 		hasIAK:       true,
 		createCSRErr: errors.New("CSR creation failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -577,7 +577,7 @@ func TestQUICIDevIDCSR_CreateCSRError(t *testing.T) {
 func TestQUICIDevIDInstallCert_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	certPEM, err := createIDevIDTestCertPEM("Test IDevID")
@@ -606,7 +606,7 @@ func TestQUICIDevIDInstallCert_Success(t *testing.T) {
 func TestQUICIDevIDInstallCert_MissingPEM(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	installReq := &IDevIDInstallCertRequest{
@@ -627,7 +627,7 @@ func TestQUICIDevIDInstallCert_MissingPEM(t *testing.T) {
 func TestQUICIDevIDInstallCert_InvalidPEM(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	installReq := &IDevIDInstallCertRequest{
@@ -651,7 +651,7 @@ func TestQUICIDevIDInstallCert_WriteError(t *testing.T) {
 		hasIDevID:          true,
 		writeIDevIDCertErr: errors.New("write failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	certPEM, err := createIDevIDTestCertPEM("Test IDevID")
@@ -675,7 +675,7 @@ func TestQUICIDevIDInstallCert_WriteError(t *testing.T) {
 func TestQUICIDevIDGetCert_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	getCertReq := &IDevIDGetCertRequest{
@@ -702,7 +702,7 @@ func TestQUICIDevIDGetCert_Success(t *testing.T) {
 func TestQUICIDevIDGetCert_NoPEM(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	getCertReq := &IDevIDGetCertRequest{
@@ -729,7 +729,7 @@ func TestQUICIDevIDGetCert_NoPEM(t *testing.T) {
 func TestQUICIDevIDGetCert_NotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -744,7 +744,7 @@ func TestQUICIDevIDGetCert_NotFound(t *testing.T) {
 func TestQUICHasIDevID_Exists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -764,7 +764,7 @@ func TestQUICHasIDevID_Exists(t *testing.T) {
 func TestQUICHasIDevID_NotExists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -784,7 +784,7 @@ func TestQUICHasIDevID_NotExists(t *testing.T) {
 func TestQUICHasIAK_Exists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -804,7 +804,7 @@ func TestQUICHasIAK_Exists(t *testing.T) {
 func TestQUICHasIAK_NotExists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -824,7 +824,7 @@ func TestQUICHasIAK_NotExists(t *testing.T) {
 func TestQUICIDevIDDeleteCert_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIDevID: true, hasIDevIDCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -847,7 +847,7 @@ func TestQUICIDevIDDeleteCert_Error(t *testing.T) {
 		hasIDevID:           true,
 		deleteIDevIDCertErr: errors.New("delete failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -862,7 +862,7 @@ func TestQUICIDevIDDeleteCert_Error(t *testing.T) {
 func TestQUICIAKDeleteCert_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true, hasIAKCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -885,7 +885,7 @@ func TestQUICIAKDeleteCert_Error(t *testing.T) {
 		hasIAK:           true,
 		deleteIAKCertErr: errors.New("delete failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -904,7 +904,7 @@ func TestQUICIAKDeleteCert_Error(t *testing.T) {
 func TestQUICIAKGenerate_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	genReq := &IAKGenerateRequest{
@@ -933,7 +933,7 @@ func TestQUICIAKGenerate_EKError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		ekAttrsErr: errors.New("EK not available"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -950,7 +950,7 @@ func TestQUICIAKGenerate_CreateError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		createIAKErr: errors.New("IAK creation failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -965,7 +965,7 @@ func TestQUICIAKGenerate_CreateError(t *testing.T) {
 func TestQUICIAKInfo_Exists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -985,7 +985,7 @@ func TestQUICIAKInfo_Exists(t *testing.T) {
 func TestQUICIAKInfo_NotExists(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -1005,7 +1005,7 @@ func TestQUICIAKInfo_NotExists(t *testing.T) {
 func TestQUICIAKInfo_WithCertificate(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true, hasIAKCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -1027,7 +1027,7 @@ func TestQUICIAKInfo_WithCertificate(t *testing.T) {
 func TestQUICIAKDelete_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -1047,7 +1047,7 @@ func TestQUICIAKDelete_Success(t *testing.T) {
 func TestQUICIAKCSR_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	csrReq := &IAKCSRRequest{
@@ -1074,7 +1074,7 @@ func TestQUICIAKCSR_Success(t *testing.T) {
 func TestQUICIAKCSR_NoIAK(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -1089,7 +1089,7 @@ func TestQUICIAKCSR_NoIAK(t *testing.T) {
 func TestQUICIAKInstallCert_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	certPEM, err := createIDevIDTestCertPEM("Test IAK")
@@ -1118,7 +1118,7 @@ func TestQUICIAKInstallCert_Success(t *testing.T) {
 func TestQUICIAKInstallCert_MissingPEM(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	installReq := &IAKInstallCertRequest{
@@ -1139,7 +1139,7 @@ func TestQUICIAKInstallCert_MissingPEM(t *testing.T) {
 func TestQUICIAKGetCert_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true, hasIAKCert: true}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	getCertReq := &IAKGetCertRequest{
@@ -1166,7 +1166,7 @@ func TestQUICIAKGetCert_Success(t *testing.T) {
 func TestQUICIAKGetCert_NotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{hasIAK: true, hasIAKCert: false}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -1185,7 +1185,7 @@ func TestQUICIAKGetCert_NotFound(t *testing.T) {
 func TestQUICDeviceAttributes_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -1208,7 +1208,7 @@ func TestQUICDeviceAttributes_FixedPropsError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		fixedPropsErr: errors.New("TPM error"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -1229,7 +1229,7 @@ func TestQUICDeviceAttributes_FixedPropsError(t *testing.T) {
 func TestQUICActivateCredential_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	// Use base64 encoded test data
@@ -1257,7 +1257,7 @@ func TestQUICActivateCredential_Success(t *testing.T) {
 func TestQUICActivateCredential_MissingCredentialBlob(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	activateReq := &ActivateCredentialQUICRequest{
@@ -1279,7 +1279,7 @@ func TestQUICActivateCredential_MissingCredentialBlob(t *testing.T) {
 func TestQUICActivateCredential_MissingSecret(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	activateReq := &ActivateCredentialQUICRequest{
@@ -1301,7 +1301,7 @@ func TestQUICActivateCredential_MissingSecret(t *testing.T) {
 func TestQUICActivateCredential_InvalidBase64Credential(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	activateReq := &ActivateCredentialQUICRequest{
@@ -1323,7 +1323,7 @@ func TestQUICActivateCredential_InvalidBase64Credential(t *testing.T) {
 func TestQUICActivateCredential_InvalidBase64Secret(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockTPM := &mockTPM2IDevIDService{}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	activateReq := &ActivateCredentialQUICRequest{
@@ -1347,7 +1347,7 @@ func TestQUICActivateCredential_TPMError(t *testing.T) {
 	mockTPM := &mockTPM2IDevIDService{
 		activateCredentialErr: errors.New("TPM activation failed"),
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
+	handler := newTestQUICServiceHandler(logger, WithQUICTPM2Service(mockTPM))
 	ctx := context.Background()
 
 	activateReq := &ActivateCredentialQUICRequest{
@@ -1372,7 +1372,7 @@ func TestQUICActivateCredential_TPMError(t *testing.T) {
 
 func TestMapTPM2Error(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	testCases := []struct {
 		name           string
@@ -1403,7 +1403,7 @@ func TestMapTPM2Error(t *testing.T) {
 
 func TestMapTPM2Error_NilError(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	resp := handler.mapTPM2Error(nil)
 	assert.Nil(t, resp)

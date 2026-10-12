@@ -185,9 +185,10 @@ port lists.
 ## 7. Authorization — the gap
 
 Platform tokens carry an `scp` claim as `"<resource>:<action>"`. Enforcement is
-per operation: gRPC `RequireScope`, QUIC `AuthorizeRequest`, MCP
-`AuthorizeTool`. Both catalogs are **default-allow** for entries they do not
-list ([`docs/daemon/api.md`](../daemon/api.md) §5).
+per operation: gRPC `RequireScope`, QUIC `AuthMiddleware.GuardRequest`, MCP
+`AuthorizeTool`. gRPC is **default-allow** for a method it does not list; MCP
+(since #300) and QUIC (since #767) **deny** one
+([`docs/daemon/api.md`](../daemon/api.md) §5).
 
 **`SwitchService` is not in the gRPC scope catalog**
 (`pkg/api/grpc/method_permissions.go` — grepped 2026-08-18; the catalog covers
@@ -195,11 +196,17 @@ list ([`docs/daemon/api.md`](../daemon/api.md) §5).
 `KeyManagementService`, `NTPService`, `PlatformIAMService`, `ProxyService`,
 `SDNService`, `VTPMService` and one daemon method).
 
-**No `switch_*` tool is in the MCP permission map** (`pkg/api/mcp/authz.go` —
-grepped 2026-08-18).
+**No `switch_*` tool is in the MCP permission map** (`pkg/api/mcp/authz.go`),
+so since #300 MCP refuses every switch tool as unclassified.
 
-So on gRPC, Unix, QUIC and MCP, **`DisablePort` requires only a validated
-token**, with no `switch:*` or `sdn:*` scope. The equivalent virtual-datapath
+**QUIC requires the `switch` scopes (#767).** Under `OpSwitchCategory`
+(`0xCC`), `SwitchSubListPorts` and `SwitchSubGetPortStatus` need
+`switch:read`; `SwitchSubSetPortVLAN`, `SwitchSubEnablePort` and
+`SwitchSubDisablePort` need `switch:write`
+(`pkg/api/quic/opcode_permissions.go`).
+
+So on gRPC and Unix, **`DisablePort` requires only a validated token**, with
+no `switch:*` or `sdn:*` scope. The equivalent virtual-datapath
 operation, `SDNService.SetPortState`, requires `sdn:write`. Disabling a
 physical uplink is at least as consequential as changing a virtual port's
 state.

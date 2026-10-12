@@ -419,7 +419,7 @@ func newTestSDNHandlerWithMocks(t *testing.T) *testSDNHandlerWithMocks {
 	// Create handler with SDN service using a stub OVS client
 	sdnSvc, err := NewSDNService("", WithOVSClient(&stubOVSClient{}))
 	require.NoError(t, err)
-	handler := NewQUICServiceHandler(logger,
+	handler := newTestQUICServiceHandler(logger,
 		WithQUICSDNService(sdnSvc),
 	)
 
@@ -576,7 +576,7 @@ func TestQUICSDN_ApplyPolicy_DecodingErrorUnit(t *testing.T) {
 
 func TestQUICSDN_ApplyPolicy_NilSDNService(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger) // No SDN service
+	handler := newTestQUICServiceHandler(logger) // No SDN service
 
 	ctx := context.Background()
 
@@ -778,7 +778,7 @@ func TestQUICSDN_ListPolicies_Success(t *testing.T) {
 
 func TestQUICSDN_ListPolicies_NilSDNService(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 
@@ -837,7 +837,7 @@ func TestQUICSDN_GetPolicy_DecodingError(t *testing.T) {
 
 func TestQUICSDN_DeletePolicy_NilSDNService(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 
@@ -859,7 +859,7 @@ func TestQUICSDN_DeletePolicy_NilSDNService(t *testing.T) {
 
 func TestQUICSDN_GetPolicy_NilSDNService(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 

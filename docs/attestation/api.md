@@ -108,7 +108,19 @@ was reused. Nothing depends on the old meaning.
 
 Platform tokens carry an `scp` claim in the qrdb-canonical
 `"<resource>:<action>"` form. Enforcement is per operation: gRPC through
-`RequireScope`, QUIC through `AuthorizeRequest`, MCP through `AuthorizeTool`.
+`RequireScope`, QUIC through `AuthMiddleware.GuardRequest`, MCP through
+`AuthorizeTool`.
+
+**QUIC checks a scope on every attestation opcode (#767).** The catalog
+(`pkg/api/quic/opcode_permissions.go`, [`docs/daemon/api.md`](../daemon/api.md)
+§5) asks `attestation:read` for the reads (verify a quote, get the AK, reports,
+manifest verification) and `attestation:write` for every opcode that collects
+fresh evidence: `OpAttestQuote` (`0x70`) and `OpAttestCollectHost` (`0x72`),
+which make the node's TPM sign the caller's nonce and return the PCR values the
+quote covers, plus challenge/response, manifest build, host attestation and VM
+workload attestation. A quote is the TPM-DoS and measured-state disclosure
+surface §5.1 describes, so an `attestation:read` token is refused it with
+`StatusPermissionDenied`.
 
 **`AttestationService` is not in the gRPC scope catalog.**
 `pkg/api/grpc/method_permissions.go` maps 185 methods across eleven services —

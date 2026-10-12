@@ -1069,11 +1069,15 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		quicAuthValidator = quicLocalValidator
 
 		// Create the QUIC service handler with available services
-		quicHandler = NewQUICServiceHandler(
+		var quicHandlerErr error
+		quicHandler, quicHandlerErr = NewQUICServiceHandler(
 			quicLogger,
 			WithQUICHealthRegistry(healthRegistry),
 			WithQUICAuthMiddleware(quicAuthMiddleware),
 		)
+		if quicHandlerErr != nil {
+			return nil, quicHandlerErr
+		}
 
 		// Set daemon service for QUIC daemon operations
 		quicHandler.SetDaemonService(service)

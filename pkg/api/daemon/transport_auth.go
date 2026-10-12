@@ -133,19 +133,28 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, logger *l
 	}, nil
 }
 
-// selectQUICAuth decides how the QUIC transport authenticates callers. The
-// returned middleware is nil only under mTLS (the TLS layer authenticates, and
-// resolveMTLSClientCAPool guarantees that it really does) or under the
-// SkipIAMValidation opt-out; a configuration with no backend is refused with
-// ErrTransportAuthRequired instead of yielding an unauthenticated server (#550).
+// selectQUICAuth decides how the QUIC transport authenticates callers. It
+// always returns a middleware, because the QUIC dispatcher authorizes every
+// request against the operation catalog (#767). Under mTLS the verified peer
+// certificate authenticates a tokenless request (resolveMTLSClientCAPool
+// guarantees the TLS layer really verifies it) and a presented token is still
+// validated when the shared platform-token validator exists. Under the
+// SkipIAMValidation opt-out authentication is skipped, but unclassified
+// operations are still refused. A configuration with no backend is refused
+// with ErrTransportAuthRequired instead of yielding an unauthenticated server
+// (#550).
 func selectQUICAuth(config *Config, shared *platformTokenValidator, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
 	if config.EnableMTLS {
 		logger.Info("QUIC server: mTLS authentication enabled (TLS layer)")
-		return nil, nil, nil
+		opts := []quic.AuthMiddlewareOption{quic.WithQUICPeerAuthenticated()}
+		if shared != nil {
+			opts = append(opts, quic.WithQUICTokenValidator(shared))
+		}
+		return quic.NewAuthMiddleware(opts...), nil, nil
 	}
 	if config.SkipIAMValidation {
 		logger.Warn("QUIC server: authentication DISABLED by SkipIAMValidation (testing only)")
-		return nil, nil, nil
+		return quic.NewAuthMiddleware(quic.WithQUICRequireAuth(false)), nil, nil
 	}
 	if shared != nil {
 		logger.Info("QUIC server: platform-token validation enabled")

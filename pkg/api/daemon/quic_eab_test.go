@@ -32,7 +32,7 @@ import (
 // over the shared fakes. A nil servicer exercises the unavailable guard.
 func newEABQUICHandler(t *testing.T, configured bool) (*QUICServiceHandler, *fakeEABService, *fakeEABDelivery) {
 	t.Helper()
-	handler := NewQUICServiceHandler(nil)
+	handler := newTestQUICServiceHandler(nil)
 	if !configured {
 		return handler, nil, nil
 	}
@@ -120,13 +120,18 @@ func TestEABQUIC_NonEABSubFallsThroughToProvisioning(t *testing.T) {
 }
 
 func TestEABQUIC_UnknownSubOpcode(t *testing.T) {
-	// 0x7F is in neither dispatch family: it falls through to the config
-	// delivery dispatcher, whose nil-service guard fires first on this
-	// EAB-only handler.
+	// 0x7F is in neither dispatch family, so the authorization guard
+	// refuses it before dispatch.
 	handler, _, _ := newEABQUICHandler(t, true)
 	resp := handler.HandleRequest(context.Background(), eabQUICRequest(t, 0x7F, nil))
+	if resp.Status != quicwire.StatusPermissionDenied {
+		t.Errorf("expected StatusPermissionDenied, got 0x%02x", resp.Status)
+	}
+	// Past the guard it falls through to the config delivery dispatcher,
+	// whose nil-service guard fires first on this EAB-only handler.
+	resp = handler.handleProvisioningCategory(context.Background(), eabQUICRequest(t, 0x7F, nil))
 	if resp.Status != quicwire.StatusUnavailable {
-		t.Errorf("expected StatusUnavailable (config delivery guard), got 0x%02x", resp.Status)
+		t.Errorf("handler: expected StatusUnavailable (config delivery guard), got 0x%02x", resp.Status)
 	}
 }
 

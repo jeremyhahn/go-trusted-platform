@@ -168,7 +168,7 @@ func TestConvertPbPolicyToSDNPolicy(t *testing.T) {
 
 func TestHandleSDNOperation_NilService(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	// All SDN operations should return unavailable when sdnClient is nil
@@ -206,7 +206,7 @@ func TestHandleSDNOperation_NilService(t *testing.T) {
 
 func TestHandleSDNOperation_UnknownOpcode(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	// We need to set a mock SDN client to pass the nil check
 	// but we don't have a mock, so we'll test this a different way
 	ctx := context.Background()
@@ -218,13 +218,13 @@ func TestHandleSDNOperation_UnknownOpcode(t *testing.T) {
 	// Since we can't mock the client easily, let's verify the routing behavior
 	// by ensuring the HandleRequest method routes SDN operations correctly
 	req := &quicwire.Request{
-		Opcode:  0x51, // Not a valid SDN opcode; reserved for NTP growth
+		Opcode:  0x52, // Not a valid SDN opcode; reserved for NTP growth
 		Payload: []byte{},
 	}
 	resp := handler.HandleRequest(ctx, req)
-	// 0x51 is still unallocated (0x50 is the NTP category opcode), so the
-	// dispatcher must answer unknown-opcode.
-	assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
+	// 0x52 is still unallocated (0x50 is the NTP category, 0x51 the IAM
+	// category), so the authorization guard refuses it as unclassified before dispatch.
+	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 }
 
 // =============================================================================
@@ -233,7 +233,7 @@ func TestHandleSDNOperation_UnknownOpcode(t *testing.T) {
 
 func TestHandleSDNApplyPolicy_NilPolicyEngine(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	// Create a minimal mock for sdnClient would be needed
 	// For now, test the policy engine nil check path
 
@@ -253,7 +253,7 @@ func TestHandleSDNApplyPolicy_NilPolicyEngine(t *testing.T) {
 
 func TestHandleSDNDeletePolicy_NilPolicyEngine(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -267,7 +267,7 @@ func TestHandleSDNDeletePolicy_NilPolicyEngine(t *testing.T) {
 
 func TestHandleSDNGetPolicy_NilPolicyEngine(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -281,7 +281,7 @@ func TestHandleSDNGetPolicy_NilPolicyEngine(t *testing.T) {
 
 func TestHandleSDNListPolicies_NilPolicyEngine(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -885,7 +885,7 @@ func TestSDNMetrics_Encoding(t *testing.T) {
 
 func TestHandleSDNOperation_RoutingAllOpcodes(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	// Define all SDN opcodes and expected service unavailable response

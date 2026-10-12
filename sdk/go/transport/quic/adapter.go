@@ -489,11 +489,8 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.PlatformIAMService/AddGroupMember":    quicwire.OpIAMGroupAddMember,
 	"/platform.v1.PlatformIAMService/RemoveGroupMember": quicwire.OpIAMGroupRemoveMember,
 
-	// IAM Tenant Operations (delegated through PlatformIAMService)
-	"/platform.v1.PlatformIAMService/CreateTenant": quicwire.OpTenantCreate,
-	"/platform.v1.PlatformIAMService/DeleteTenant": quicwire.OpTenantDelete,
-	"/platform.v1.PlatformIAMService/GetTenant":    quicwire.OpTenantGet,
-	"/platform.v1.PlatformIAMService/ListTenants":  quicwire.OpTenantList,
+	// IAM tenant records route to OpIAMCategory (aab_iam_tenant.go), never to
+	// the platform tenancy opcodes below (#767).
 
 	// IAM Token / Auth Operations
 	"/platform.v1.PlatformIAMService/CheckPermission": quicwire.OpIAMCheckPermission,

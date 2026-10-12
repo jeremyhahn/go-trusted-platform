@@ -36,7 +36,7 @@ import (
 func newQUICDeviceProfileHandler(t *testing.T) (*QUICServiceHandler, *mockProfileService) {
 	t.Helper()
 	profileSvc := newMockProfileService()
-	handler := NewQUICServiceHandler(
+	handler := newTestQUICServiceHandler(
 		logging.DefaultLogger(),
 		WithQUICDeviceService(newMockDeviceService()),
 		WithQUICDeviceProfileService(profileSvc),
@@ -326,7 +326,7 @@ func TestQUICDeviceProfileAssign_Errors(t *testing.T) {
 	})
 
 	t.Run("ServiceUnavailable", func(t *testing.T) {
-		bare := NewQUICServiceHandler(logging.DefaultLogger())
+		bare := newTestQUICServiceHandler(logging.DefaultLogger())
 		req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceProfileSubAssign,
 			&platformv1.AssignProfileToDeviceRequest{ProfileId: 301, EkSerial: "EK-1"})
 		resp := bare.HandleRequest(ctx, req)

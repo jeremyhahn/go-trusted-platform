@@ -1,6 +1,6 @@
 # Platform Authentication — Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/auth/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/auth/` · Last verified: 2026-10-09
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -100,7 +100,7 @@ is this" so downstream authorization has one input.
 | gRPC mTLS interceptors | `pkg/api/daemon/mtls_interceptor.go` | this repo |
 | gRPC platform-token / OIDC interceptors | `pkg/api/grpc/oidc_interceptor.go` | this repo |
 | Unix `SO_PEERCRED` credentials and interceptors | `pkg/util/peercred/peercred.go` | this repo |
-| QUIC auth middleware and opcode→permission map | `pkg/api/quic/auth.go` | this repo |
+| QUIC auth middleware and operation catalog (opcode / sub-opcode → permission) | `pkg/api/quic/auth.go`, `opcode_permissions.go` | this repo |
 | MCP OAuth 2.1 metadata and tool authorization | `pkg/api/mcp/oauth_metadata.go`, `authz.go` | this repo |
 | REST login / refresh / WebAuthn routers | `pkg/webservice/v1/router/authentication.go`, `webauthn.go` | this repo |
 | IDevID/IAK attestation middleware | `pkg/webservice/v1/middleware/iam/attestation.go` | this repo |
@@ -331,18 +331,27 @@ GID}` land on the context. `RequireRoot` / `RequireUID` / `RequireGID` /
    reflection endpoints are the intended contents. Anything else added there is
    unauthenticated.
 
-7. **Token validation is per transport, and the scope catalogs default to
-   allow.** gRPC covers 185 of 461 RPCs; MCP covers 71 of 449 tools; an entry
-   absent from either catalog is permitted once the token validates
-   ([`docs/daemon/api.md`](../daemon/api.md) §5). Authentication is enforced;
-   *authorization* is only enforced where a catalog entry exists.
+7. **Token validation is per transport, and only the gRPC scope catalog
+   defaults to allow.** gRPC covers 185 of 461 RPCs, and a method absent from
+   its catalog is permitted once the token validates. MCP (since #300) and
+   QUIC (since #767) deny an operation absent from their catalogs
+   ([`docs/daemon/api.md`](../daemon/api.md) §5). On gRPC, authentication is
+   enforced everywhere but *authorization* only where a catalog entry exists.
 
-8. **QUIC `AuthMiddleware` fails closed when `requireAuth` is set and no
-   validator is configured** (`StatusUnavailable`), and **fails open when
-   `requireAuth` is false** — no validator means no check.
-   `AuthorizationChecker.AuthorizeTool` on MCP likewise returns success when
-   both `authService` and `authManager` are nil, which is the test-mode
-   (`SkipIAMValidation`) and standalone path.
+8. **QUIC authorizes every frame before dispatch, and fails closed (#767).**
+   `QUICServiceHandler` cannot be built without an `AuthMiddleware`
+   (`ErrQUICAuthMiddlewareRequired`). `GuardRequest` admits the documented
+   pre-auth list (health, liveness, readiness, IAM authenticate) without a
+   credential. Every other frame is authenticated and then classified by the
+   operation catalog in `pkg/api/quic/opcode_permissions.go`: the opcode, or
+   for a category opcode its sub-opcode. The frame is authorized against the
+   resulting resource/action pair. An unclassified operation is
+   `StatusPermissionDenied`. With `requireAuth` set and no validator the
+   middleware answers `StatusUnavailable`. Under mTLS the verified peer
+   certificate authenticates a tokenless frame. `SkipIAMValidation` disables
+   authentication only, and the catalog still refuses unclassified
+   operations. MCP likewise refuses permissioned tools when no authorization
+   backend exists (#440).
 
 9. **Unix socket credentials are kernel-verified and unforgeable** — the
    strongest authentication in the platform — **and carry no tenant.** A local

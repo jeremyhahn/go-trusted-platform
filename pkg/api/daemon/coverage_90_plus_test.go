@@ -176,7 +176,7 @@ func TestDaemonFunctionalOptions(t *testing.T) {
 
 func TestQUICServiceHandler_Setters(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("SetContainerHandler", func(t *testing.T) {
 		// Test setting to nil
@@ -223,23 +223,23 @@ func TestQUICServiceHandlerOptions(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	t.Run("WithQUICContainerService_Nil", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger, WithQUICContainerService(nil))
+		handler := newTestQUICServiceHandler(logger, WithQUICContainerService(nil))
 		assert.Nil(t, handler.containerHandler)
 	})
 
 	t.Run("WithQUICAttestationService_Nil", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger, WithQUICAttestationService(nil))
+		handler := newTestQUICServiceHandler(logger, WithQUICAttestationService(nil))
 		assert.Nil(t, handler.attestationHandler)
 	})
 
 	t.Run("WithQUICVMService_Nil", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger, WithQUICVMService(nil))
+		handler := newTestQUICServiceHandler(logger, WithQUICVMService(nil))
 		assert.Nil(t, handler.vmHandler)
 	})
 
 	t.Run("WithQUICTenantManager", func(t *testing.T) {
 		mockMgr := &mockTenantManager90{}
-		handler := NewQUICServiceHandler(logger, WithQUICTenantManager(mockMgr))
+		handler := newTestQUICServiceHandler(logger, WithQUICTenantManager(mockMgr))
 		assert.Equal(t, mockMgr, handler.tenantManager)
 	})
 }
@@ -395,7 +395,7 @@ func TestQUICServiceHandler_ContainerOperation(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("handleContainerOperation_NoHandler", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger)
+		handler := newTestQUICServiceHandler(logger)
 		req := &quicwire.Request{Opcode: quicwire.OpContainerCreate}
 
 		resp := handler.handleContainerOperation(ctx, req)
@@ -409,7 +409,7 @@ func TestQUICServiceHandler_VMServiceOperation(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("handleVMServiceOperation_NoHandler", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger)
+		handler := newTestQUICServiceHandler(logger)
 		req := &quicwire.Request{Opcode: quicwire.OpVMCreate}
 
 		resp := handler.handleVMServiceOperation(ctx, req)
@@ -423,7 +423,7 @@ func TestQUICServiceHandler_AttestationOperation(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("handleAttestationOperation_NoHandler", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logger)
+		handler := newTestQUICServiceHandler(logger)
 		req := &quicwire.Request{Opcode: quicwire.OpAttestQuote}
 
 		resp := handler.handleAttestationOperation(ctx, req)
@@ -1056,7 +1056,7 @@ func TestTenantGRPCServer_GetDEKStatus_NoManager(t *testing.T) {
 func TestQUICServiceHandler_HandleRequest_SDN(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("SDN opcode without service", func(t *testing.T) {
 		req := &quicwire.Request{Opcode: quicwire.OpSDNCreateBridge}
@@ -1068,7 +1068,7 @@ func TestQUICServiceHandler_HandleRequest_SDN(t *testing.T) {
 func TestQUICServiceHandler_HandleRequest_PXE(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("PXE opcode without service", func(t *testing.T) {
 		req := &quicwire.Request{Opcode: OpPXEListDevices}
@@ -1080,7 +1080,7 @@ func TestQUICServiceHandler_HandleRequest_PXE(t *testing.T) {
 func TestQUICServiceHandler_HandleRequest_Health(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("Health opcode", func(t *testing.T) {
 		req := &quicwire.Request{Opcode: quicwire.OpHealth}
@@ -1105,18 +1105,20 @@ func TestQUICServiceHandler_HandleRequest_Health(t *testing.T) {
 func TestQUICServiceHandler_HandleRequest_Unknown(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("Unknown opcode", func(t *testing.T) {
+		// An unallocated opcode is unclassified: the authorization guard
+		// refuses it before dispatch.
 		req := &quicwire.Request{Opcode: 0x55}
 		resp := handler.HandleRequest(ctx, req)
-		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
+		assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
 	})
 }
 
 func TestQUICServiceHandler_SetOrchestrators_WithNonNil(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	// These tests verify the setters work without nil checks
 	// The actual initialization requires real orchestrator instances
@@ -1329,7 +1331,7 @@ func TestMCPServiceProvider_VTPMList(t *testing.T) {
 func TestQUICServiceHandler_SDNOperation_NoService(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("CreateBridge", func(t *testing.T) {
 		req := &quicwire.Request{Opcode: quicwire.OpSDNCreateBridge}
@@ -1388,7 +1390,7 @@ func TestQUICServiceHandler_SDNOperation_NoService(t *testing.T) {
 func TestQUICServiceHandler_PXEOperation_NoService(t *testing.T) {
 	logger := logging.DefaultLogger()
 	ctx := context.Background()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	t.Run("ListDevices", func(t *testing.T) {
 		req := &quicwire.Request{Opcode: OpPXEListDevices}

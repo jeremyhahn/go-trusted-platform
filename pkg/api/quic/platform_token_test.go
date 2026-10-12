@@ -92,11 +92,11 @@ func TestQUICAuthorizeRequest_ClaimsPath_EnforcesScope(t *testing.T) {
 	}
 
 	// Granted scope -> allowed.
-	if resp := mw.AuthorizeRequest(ctx, req, "dns", "write"); resp != nil {
+	if resp := mw.AuthorizeRequest(ctx, "dns", "write"); resp != nil {
 		t.Fatalf("authorize denied a granted scope: status=%d", resp.Status)
 	}
 	// Missing scope -> permission denied.
-	resp = mw.AuthorizeRequest(ctx, req, "dns", "delete")
+	resp = mw.AuthorizeRequest(ctx, "dns", "delete")
 	if resp == nil {
 		t.Fatal("expected permission denied for ungranted scope")
 	}
@@ -171,7 +171,7 @@ func TestQUICAuthorize_LegacyFallback(t *testing.T) {
 	if _, ok := AuthorizedContextFromContext(ctx); ok {
 		t.Error("legacy path must not stash AuthorizedContext")
 	}
-	if resp := mw.AuthorizeRequest(ctx, req, "dns", "write"); resp != nil {
+	if resp := mw.AuthorizeRequest(ctx, "dns", "write"); resp != nil {
 		t.Fatalf("legacy authorize denied: status=%d", resp.Status)
 	}
 	if checker.gotResrc != "dns" || checker.gotAction != "write" {
@@ -191,15 +191,44 @@ func TestScopeForOperation(t *testing.T) {
 	}
 }
 
-func TestQUICAuthenticateRequest_SkipOpcode(t *testing.T) {
-	mw := NewAuthMiddleware(WithQUICTokenValidator(&claimsValidatorStub{}), WithQUICRequireAuth(true))
-	req := &quicwire.Request{Opcode: quicwire.OpHealth, Token: ""}
-	ctx, resp := mw.AuthenticateRequest(context.Background(), req)
-	if resp != nil {
-		t.Fatalf("health opcode should skip auth, got status=%d", resp.Status)
+func TestQUICGuardRequest_HealthNeedsNoToken(t *testing.T) {
+	stub := &claimsValidatorStub{}
+	mw := NewAuthMiddleware(WithQUICTokenValidator(stub), WithQUICRequireAuth(true))
+
+	if _, resp := mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpHealth}); resp != nil {
+		t.Fatalf("health opcode must not require a token, got status=%d", resp.Status)
 	}
-	if resp := mw.AuthorizeRequest(ctx, req, "x", "y"); resp != nil {
-		t.Fatalf("health opcode should skip authz, got status=%d", resp.Status)
+	if stub.calls != 0 {
+		t.Fatal("a pre-auth operation must not reach the token validator")
+	}
+}
+
+func TestQUICGuardRequest_ClaimsPath_EnforcesCatalogScope(t *testing.T) {
+	cases := []struct {
+		name   string
+		scopes []string
+		want   bool
+	}{
+		{"exact scope", []string{"proxy:delete"}, true},
+		{"resource wildcard", []string{"proxy:*"}, true},
+		{"other action", []string{"proxy:read"}, false},
+		{"other resource", []string{"sdn:delete"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mw := NewAuthMiddleware(WithQUICTokenValidator(
+				&claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{Scopes: tc.scopes}}))
+			req := &quicwire.Request{Opcode: quicwire.OpGatewayCategory, Token: "tok", Payload: []byte{quicwire.ProxySubRouteDelete}}
+
+			_, resp := mw.GuardRequest(context.Background(), req)
+
+			if tc.want && resp != nil {
+				t.Fatalf("scopes %v refused: status=%d payload=%s", tc.scopes, resp.Status, resp.Payload)
+			}
+			if !tc.want && (resp == nil || resp.Status != quicwire.StatusPermissionDenied) {
+				t.Fatalf("scopes %v: expected PermissionDenied, got %+v", tc.scopes, resp)
+			}
+		})
 	}
 }
 
@@ -227,7 +256,7 @@ func TestQUICAuthorizeRequest_NoChecker_LegacyAllows(t *testing.T) {
 	if resp != nil {
 		t.Fatalf("authenticate failed: %s", resp.Payload)
 	}
-	if resp := mw.AuthorizeRequest(ctx, req, "dns", "write"); resp != nil {
+	if resp := mw.AuthorizeRequest(ctx, "dns", "write"); resp != nil {
 		t.Fatalf("no checker should allow, got status=%d", resp.Status)
 	}
 }
@@ -238,7 +267,7 @@ func TestQUICAuthorizeRequest_ClaimsPath_EmptyScopeAllows(t *testing.T) {
 	req := &quicwire.Request{Opcode: quicwire.OpDNSAddRecord, Token: "tok"}
 	ctx, _ := mw.AuthenticateRequest(context.Background(), req)
 	// Empty resource/action -> no scope required -> allowed.
-	if resp := mw.AuthorizeRequest(ctx, req, "", ""); resp != nil {
+	if resp := mw.AuthorizeRequest(ctx, "", ""); resp != nil {
 		t.Fatalf("empty resource/action should allow, got status=%d", resp.Status)
 	}
 }

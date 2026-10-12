@@ -36,7 +36,7 @@ import (
 func TestHandleKMSImportKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -54,7 +54,7 @@ func TestHandleKMSImportKey_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("import failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	importReq := KMSImportKeyRequest{
@@ -78,7 +78,7 @@ func TestHandleKMSImportKey_ServiceError(t *testing.T) {
 func TestHandleKMSImportKey_WithKeySpec(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	importReq := KMSImportKeyRequest{
@@ -115,7 +115,7 @@ func TestHandleKMSImportKey_WithKeySpec(t *testing.T) {
 func TestHandleKMSExportKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -133,7 +133,7 @@ func TestHandleKMSExportKey_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("export failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	exportReq := KMSExportKeyRequest{
@@ -160,7 +160,7 @@ func TestHandleKMSExportKey_ServiceError(t *testing.T) {
 func TestHandleKMSDeleteKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -178,7 +178,7 @@ func TestHandleKMSDeleteKey_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("delete failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	deleteReq := KMSDeleteKeyRequest{
@@ -203,7 +203,7 @@ func TestHandleKMSDeleteKey_ServiceError(t *testing.T) {
 func TestHandleKMSRotateKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -221,7 +221,7 @@ func TestHandleKMSRotateKey_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("rotate failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	rotateReq := KMSRotateKeyRequest{
@@ -245,7 +245,7 @@ func TestHandleKMSRotateKey_ServiceError(t *testing.T) {
 func TestHandleKMSUpdateKeyStatus_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -263,7 +263,7 @@ func TestHandleKMSUpdateKeyStatus_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("update status failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	updateReq := KMSUpdateKeyStatusRequest{
@@ -288,7 +288,7 @@ func TestHandleKMSUpdateKeyStatus_ServiceError(t *testing.T) {
 func TestHandleKMSGenerateRandom_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -306,7 +306,7 @@ func TestHandleKMSGenerateRandom_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("random generation failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	randomReq := KMSGenerateRandomRequest{
@@ -329,7 +329,7 @@ func TestHandleKMSGenerateRandom_ServiceError(t *testing.T) {
 func TestHandleKMSGenerateRandom_NegativeNumBytes(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	randomReq := KMSGenerateRandomRequest{
@@ -352,7 +352,7 @@ func TestHandleKMSGenerateRandom_NegativeNumBytes(t *testing.T) {
 func TestHandleKMSHash_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -370,7 +370,7 @@ func TestHandleKMSHash_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("hash failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	hashReq := KMSHashRequest{
@@ -394,7 +394,7 @@ func TestHandleKMSHash_ServiceError(t *testing.T) {
 func TestHandleKMSHash_DifferentAlgorithms(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	supported := []platformv1.HashAlgorithm{
@@ -455,7 +455,7 @@ func TestHandleKMSGenerateDataKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -474,7 +474,7 @@ func TestHandleKMSGenerateDataKey_ServiceError(t *testing.T) {
 	mockCrypto := newMockCryptoService()
 	mockCrypto.shouldErr = true
 	mockCrypto.errToReturn = errors.New("data key generation failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	dataKeyReq := KMSGenerateDataKeyQUICRequest{
@@ -499,7 +499,7 @@ func TestHandleKMSGenerateDataKey_InvalidAlgorithm(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	dataKeyReq := KMSGenerateDataKeyQUICRequest{
@@ -524,7 +524,7 @@ func TestHandleKMSGenerateDataKey_DefaultAlgorithm(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	dataKeyReq := KMSGenerateDataKeyQUICRequest{
@@ -550,7 +550,7 @@ func TestHandleKMSGenerateDataKey_AllAlgorithms(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	algorithms := []platformv1.KMSKeyAlgorithm{
@@ -587,7 +587,7 @@ func TestHandleKMSGenerateWrappedDataKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -606,7 +606,7 @@ func TestHandleKMSGenerateWrappedDataKey_ServiceError(t *testing.T) {
 	mockCrypto := newMockCryptoService()
 	mockCrypto.shouldErr = true
 	mockCrypto.errToReturn = errors.New("wrapped data key generation failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
@@ -631,7 +631,7 @@ func TestHandleKMSGenerateWrappedDataKey_InvalidAlgorithm(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
@@ -656,7 +656,7 @@ func TestHandleKMSGenerateWrappedDataKey_DefaultAlgorithm(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	mockCrypto := newMockCryptoService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
 	wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
@@ -685,7 +685,7 @@ func TestHandleKMSGenerateWrappedDataKey_DefaultAlgorithm(t *testing.T) {
 func TestHandleKMSGenerateKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -701,7 +701,7 @@ func TestHandleKMSGenerateKey_DecodingError(t *testing.T) {
 func TestHandleKMSGetKey_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -717,7 +717,7 @@ func TestHandleKMSGetKey_DecodingError(t *testing.T) {
 func TestHandleKMSListKeys_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -735,7 +735,7 @@ func TestHandleKMSListKeys_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("list failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -751,7 +751,7 @@ func TestHandleKMSListKeys_ServiceError(t *testing.T) {
 func TestHandleKMSListKeys_LimitClamping(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	t.Run("limit_exceeds_max", func(t *testing.T) {
@@ -793,7 +793,7 @@ func TestHandleKMSListKeys_LimitClamping(t *testing.T) {
 func TestHandleKMSGetKeyVersions_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -811,7 +811,7 @@ func TestHandleKMSGetKeyVersions_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("list versions failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	versionsReq := KMSGetKeyVersionsRequest{
@@ -835,7 +835,7 @@ func TestHandleKMSGetKeyVersions_ServiceError(t *testing.T) {
 func TestHandleKMSGetKeyVersions_LimitClamping(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	t.Run("limit_exceeds_max", func(t *testing.T) {
@@ -879,7 +879,7 @@ func TestHandleKMSGetKeyVersions_LimitClamping(t *testing.T) {
 func TestHandleKMSEncrypt_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -897,7 +897,7 @@ func TestHandleKMSEncrypt_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("encrypt failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	encryptReq := KMSEncryptRequest{
@@ -921,7 +921,7 @@ func TestHandleKMSEncrypt_ServiceError(t *testing.T) {
 func TestHandleKMSDecrypt_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -939,7 +939,7 @@ func TestHandleKMSDecrypt_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("decrypt failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	decryptReq := KMSDecryptRequest{
@@ -963,7 +963,7 @@ func TestHandleKMSDecrypt_ServiceError(t *testing.T) {
 func TestHandleKMSSign_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -981,7 +981,7 @@ func TestHandleKMSSign_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("sign failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	signReq := KMSSignRequest{
@@ -1005,7 +1005,7 @@ func TestHandleKMSSign_ServiceError(t *testing.T) {
 func TestHandleKMSVerify_DecodingError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -1023,7 +1023,7 @@ func TestHandleKMSVerify_ServiceError(t *testing.T) {
 	mockKMS := newMockKMSService()
 	mockKMS.shouldErr = true
 	mockKMS.errToReturn = errors.New("verify failed")
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	verifyReq := KMSVerifyRequest{
@@ -1048,7 +1048,7 @@ func TestHandleKMSVerify_ServiceError(t *testing.T) {
 func TestHandleKMSOperation_UnknownOpcode(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
 	// Use an opcode in the KMS range but not defined

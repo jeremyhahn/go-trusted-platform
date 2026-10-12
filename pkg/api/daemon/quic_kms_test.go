@@ -544,7 +544,7 @@ func (m *mockCryptoService) GenerateWrappedDataKey(ctx context.Context, req *pb.
 
 func TestHandleKMSOperation_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 
@@ -592,7 +592,7 @@ func TestHandleKMSOperation_ServiceNotAvailable(t *testing.T) {
 func TestHandleKMSGenerateKey(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -738,7 +738,7 @@ func TestHandleKMSGenerateKey(t *testing.T) {
 func TestHandleKMSImportKey(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -827,7 +827,7 @@ func TestHandleKMSImportKey(t *testing.T) {
 func TestHandleKMSGetKey(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -890,7 +890,7 @@ func TestHandleKMSGetKey(t *testing.T) {
 func TestHandleKMSListKeys(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -935,7 +935,7 @@ func TestHandleKMSListKeys(t *testing.T) {
 func TestHandleKMSDeleteKey(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -984,7 +984,7 @@ func TestHandleKMSDeleteKey(t *testing.T) {
 func TestHandleKMSRotateKey(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1033,7 +1033,7 @@ func TestHandleKMSRotateKey(t *testing.T) {
 func TestHandleKMSUpdateKeyStatus(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1117,7 +1117,7 @@ func TestHandleKMSUpdateKeyStatus(t *testing.T) {
 func TestHandleKMSExportKey(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1187,7 +1187,7 @@ func TestHandleKMSExportKey(t *testing.T) {
 func TestHandleKMSGetKeyVersions(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1235,7 +1235,7 @@ func TestHandleKMSGetKeyVersions(t *testing.T) {
 func TestHandleKMSBackendStatus(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1260,7 +1260,7 @@ func TestHandleKMSBackendStatus(t *testing.T) {
 func TestHandleKMSEncrypt(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1326,7 +1326,7 @@ func TestHandleKMSEncrypt(t *testing.T) {
 func TestHandleKMSDecrypt(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1392,7 +1392,7 @@ func TestHandleKMSDecrypt(t *testing.T) {
 func TestHandleKMSSign(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1505,7 +1505,7 @@ func TestHandleKMSSign(t *testing.T) {
 func TestHandleKMSVerify(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1592,7 +1592,7 @@ func TestHandleKMSVerify(t *testing.T) {
 func TestHandleKMSGenerateRandom(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1639,7 +1639,7 @@ func TestHandleKMSGenerateRandom(t *testing.T) {
 func TestHandleKMSHash(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1688,7 +1688,7 @@ func TestHandleKMSHash(t *testing.T) {
 func TestHandleKMSHMAC(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1811,7 +1811,7 @@ func TestHandleKMSHMAC(t *testing.T) {
 func TestHandleKMSVerifyHMAC(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -1911,7 +1911,7 @@ func TestHandleKMSVerifyHMAC(t *testing.T) {
 func TestHandleKMSRewrap(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -2027,7 +2027,7 @@ func TestHandleKMSRewrap(t *testing.T) {
 func TestHandleKMSBatchEncrypt(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -2168,7 +2168,7 @@ func TestHandleKMSBatchEncrypt(t *testing.T) {
 func TestHandleKMSBatchDecrypt(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
@@ -2309,12 +2309,12 @@ func TestHandleKMSGenerateDataKey(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockCrypto := newMockCryptoService()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 
 	ctx := context.Background()
 
 	t.Run("crypto service not available", func(t *testing.T) {
-		handlerNoService := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+		handlerNoService := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 		dataKeyReq := KMSGenerateDataKeyQUICRequest{
 			KeyId: "kek-key",
@@ -2376,12 +2376,12 @@ func TestHandleKMSGenerateWrappedDataKey(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockCrypto := newMockCryptoService()
 	mockKMS := newMockKMSService()
-	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
+	handler := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 
 	ctx := context.Background()
 
 	t.Run("crypto service not available", func(t *testing.T) {
-		handlerNoService := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+		handlerNoService := newTestQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 		wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
 			WrappingKeyId: "kek-key",

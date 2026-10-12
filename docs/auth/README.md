@@ -78,13 +78,12 @@ The QUIC server uses middleware for authentication and authorization:
 - **Location**: `pkg/api/quic/auth.go`
 - **AuthMiddleware**: Handles both token validation and permission checks
 - **Token Source**: Token field in QUIC request protocol
-- **Permission Mapping**: `DefaultOpcodePermissions()` maps opcodes to resource/action pairs
+- **Permission Mapping**: `LookupOperationPermission` (`opcode_permissions.go`) maps every opcode and category sub-opcode to a resource/action pair; unclassified operations are denied
 
 ```go
 m := quic.NewAuthMiddleware(
     quic.WithQUICTokenValidator(myValidator),
     quic.WithQUICAuthorizationChecker(myChecker),
-    quic.WithQUICSkipOpcodes(quic.OpHealth, quic.OpLiveness),
 )
 ```
 

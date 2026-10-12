@@ -38,9 +38,9 @@ import (
 // config delivery service (nil allowed to exercise the unavailable guard).
 func newProvisioningQUICHandler(svc ConfigDeliveryQUICService) *QUICServiceHandler {
 	if svc == nil {
-		return NewQUICServiceHandler(nil)
+		return newTestQUICServiceHandler(nil)
 	}
-	return NewQUICServiceHandler(nil, WithQUICConfigDeliveryService(svc))
+	return newTestQUICServiceHandler(nil, WithQUICConfigDeliveryService(svc))
 }
 
 // provisioningQUICRequest builds an OpProvisioningCategory request with
@@ -413,10 +413,17 @@ func TestProvisioningCategory_EmptyPayload(t *testing.T) {
 
 func TestProvisioningCategory_UnknownSubOpcode(t *testing.T) {
 	handler, _ := newProvisioningBackedHandler(t, &cdMockProfileResolver{}, nil)
+	// The authorization guard refuses an unclassified sub-opcode before
+	// dispatch; the category handler still rejects it on its own.
 	resp := handler.HandleRequest(context.Background(),
 		provisioningQUICRequest(t, 0xEE, nil))
+	if resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("expected StatusPermissionDenied, got 0x%02x", resp.Status)
+	}
+	resp = handler.handleProvisioningCategory(context.Background(),
+		provisioningQUICRequest(t, 0xEE, nil))
 	if resp.Status != quicwire.StatusNotImplemented {
-		t.Fatalf("expected StatusNotImplemented, got 0x%02x", resp.Status)
+		t.Fatalf("handler: expected StatusNotImplemented, got 0x%02x", resp.Status)
 	}
 }
 

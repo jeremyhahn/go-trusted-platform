@@ -441,7 +441,7 @@ func TestQUICComputeExtendedCategory_ContainerSubOpcodes(t *testing.T) {
 		adapter, err := NewOrchestratorAdapter(orchestrator)
 		require.NoError(t, err)
 
-		handler := NewQUICServiceHandler(logging.DefaultLogger())
+		handler := newTestQUICServiceHandler(logging.DefaultLogger())
 		handler.SetContainerOrchestrator(adapter)
 		return handler, orchestrator
 	}
@@ -488,7 +488,7 @@ func TestQUICComputeExtendedCategory_ContainerSubOpcodes(t *testing.T) {
 	})
 
 	t.Run("returns unavailable when container handler missing", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logging.DefaultLogger())
+		handler := newTestQUICServiceHandler(logging.DefaultLogger())
 
 		inner, err := quicwire.EncodePayload(&quic.ContainerAttestRequest{ID: "container-1"})
 		require.NoError(t, err)

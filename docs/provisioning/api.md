@@ -168,12 +168,29 @@ Platform tokens carry an `scp` claim as `"<resource>:<action>"`.
 maps 185 methods across eleven services; none of these four is among them, and a
 method absent from the map carries no required scope.
 
-**No provisioning MCP tool is in the MCP authorization map either** — 71 of 449
-tool names carry a permission, and neither the 22 `pxe_*`/`provision_*` tools
-nor the 16 BMC tools are among them.
+**No provisioning MCP tool is in the MCP authorization map** — none of the 22
+`pxe_*`/`provision_*` tools carries a permission, so since #300 MCP refuses
+them all as unclassified.
 
-So **any validated token can authorize a PXE device, quarantine one, fulfil a
-provisioning session, or ask the platform to sign a Secure Boot digest.**
+**QUIC requires per-operation scopes (#767)**
+(`pkg/api/quic/opcode_permissions.go`):
+
+| Scope | QUIC operations |
+|---|---|
+| `pxe:read` | `OpPXEListDevices`, `OpPXEGetDevice` |
+| `pxe:write` | `OpPXERegisterDevice`, `OpPXEUpdateState`, `OpPXEAuthorize`, `OpPXEQuarantine`, `OpPXERetry` |
+| `pxe:delete` | `OpPXERemoveDevice` |
+| `provisioning:read` | `OpProvisioningCategory` (`0xCF`) subs `GetNonce`, `FetchConfig`, `PollSession`, `ListSessions`, `GetSession` |
+| `provisioning:write` | subs `SignDigest`, `FulfillSession` |
+| `device:write` | subs `DeviceProfileSubAssign`, `DeviceProfileSubUnassign`, `DeviceSubRecordAttestCert` |
+
+The EAB sub-opcodes of the same category carry the `eab` scopes
+([`docs/eab/api.md`](../eab/api.md) §5); BMC enrollment carries `bmc:admin`
+([`docs/bmc/api.md`](../bmc/api.md) §8).
+
+So on gRPC and Unix **any validated token can authorize a PXE device,
+quarantine one, fulfil a provisioning session, or ask the platform to sign a
+Secure Boot digest.**
 `FulfillSession` is the authorisation gate for bringing a new machine onto the
 platform, and `SignDigest` produces a Secure Boot signature. Raised as an owner
 question in the migration report.

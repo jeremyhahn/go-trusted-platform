@@ -137,7 +137,7 @@ func TestVTPMIsRunning_InvalidPayload(t *testing.T) {
 
 func TestVTPMIsRunning_NilService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	checkReq := VTPMIsRunningRequest{BundleID: "test-001"}
@@ -963,7 +963,7 @@ func TestVTPMOperation_UnknownOpcode(t *testing.T) {
 
 func TestVTPMOperation_AllOpcodes_NilService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	opcodes := []byte{

@@ -297,7 +297,8 @@ REST under `/api/v1`; gRPC package `platform.v1`; QUIC `ProtocolVersion`
 
 **Opcode note.** `OpNTPCategory` = `0x50` reclaims the head of the
 never-implemented `OpProv*` range (the provisioning surface actually ships under
-`OpProvisioningCategory`, `0xCF`). `0x51`–`0x55` are reserved for NTP growth.
+`OpProvisioningCategory`, `0xCF`). `0x51` is `OpIAMCategory` (IAM tenant records, #767); `0x52`–`0x55` are
+reserved for NTP growth.
 The same reclamation precedent applies to `OpAttestCollectHost` and
 `OpVMExtendedCategory` — see [`docs/daemon/api.md`](../daemon/api.md) §4 for why
 opcode values repeat across categories.

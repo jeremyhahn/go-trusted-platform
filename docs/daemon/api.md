@@ -1,6 +1,6 @@
 # Platform Daemon — API
 
-> **Status: NORMATIVE** · Scope: daemon routes on every transport; the platform's transport model · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: daemon routes on every transport; the platform's transport model · Last verified: 2026-10-09
 > Conflicts with this document are defects. Fix them here first.
 >
 > **This file carries the canonical QUIC category-opcode table (§4).** Other
@@ -141,8 +141,8 @@ changing, validate before applying, roll back if wrong.
 
 The opcode is a **single byte** with a **two-level extension**: certain values
 are *category* opcodes whose sub-opcode is carried in the payload, and the daemon
-routes them to a dedicated handler (`pkg/api/daemon/quic_service.go`). Sixteen
-distinct values, seventeen names:
+routes them to a dedicated handler (`pkg/api/daemon/quic_service.go`). Seventeen
+distinct values, eighteen names:
 
 | Opcode | Category | Notes |
 |---|---|---|
@@ -151,6 +151,7 @@ distinct values, seventeen names:
 | `0x2F` | `OpProxyCategory` | **An alias of `OpGatewayCategory`**, not a separate value |
 | `0x3F` | `OpIPAMCategory` | IPAM |
 | `0x50` | `OpNTPCategory` | Time synchronisation |
+| `0x51` | `OpIAMCategory` | IAM tenant records; sub-opcodes `IAMSub*` `0x01`–`0x05`. Not the platform tenancy opcodes `0xDB`–`0xEB` |
 | `0x69` | `OpVMExtendedCategory` | VM operational sub-opcodes (`0xCC`–`0xD0`) |
 | `0x99` | `OpTPM2Category` | Physical TPM |
 | `0x9A` | `OpCeremonyCategory` | Phase 3.5 |
@@ -193,6 +194,18 @@ seven known collisions are. Those seven are carried as an explicit ratchet
 against #386, and an entry that stops colliding fails too, so the list can only
 shrink.
 
+### Authorization runs before dispatch
+
+Every frame is authenticated and authorized against the operation catalog
+(`pkg/api/quic/opcode_permissions.go`) before the dispatcher routes it; for a
+category opcode the catalog key is the sub-opcode in `payload[0]`. An
+unallocated opcode or sub-opcode is therefore answered by the guard —
+`StatusPermissionDenied` with an `ErrOperationNotClassified` payload — not by
+the dispatcher's `StatusNotImplemented`, and a category frame with an empty
+payload is `StatusInvalidRequest`. A new opcode or sub-opcode needs a catalog
+entry in the same change, or the contract tests fail. The steps and the
+pre-auth list are in §5.
+
 ### Panics do not drop connections
 
 `pkg/api/quic/server.go` recovers a panicking handler into
@@ -207,15 +220,16 @@ from a panicking handler."* gRPC has the equivalent in
 Platform tokens carry an `scp` claim in the qrdb-canonical
 `"<resource>:<action>"` form, minted by the broker from the subject's resolved
 permissions. Enforcement is per operation: gRPC `RequireScope`, QUIC
-`AuthorizeRequest`, MCP `AuthorizeTool`.
+`AuthMiddleware.GuardRequest`, MCP `AuthorizeTool`.
 
-Two catalogs with **different defaults** — gRPC allows an unlisted entry, MCP
-denies one (since #300):
+Three catalogs with **different defaults** — gRPC allows an unlisted entry, MCP
+(since #300) and QUIC (since #767) deny one:
 
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
 | gRPC (`pkg/api/grpc/method_permissions.go`) | **185 of 461 RPCs**, across 11 of 31 services | *"carries no required scope: the interceptor allows it once the token is validated"* |
 | MCP (`pkg/api/mcp/authz.go`) | **94 of 428 registered tools** (5 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 334 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
+| QUIC (`pkg/api/quic/opcode_permissions.go`) | **every routable opcode and sub-opcode** — pinned by `pkg/api/daemon/quic_authz_contract_test.go` | **denied**: `StatusPermissionDenied`, payload `QUIC operation not classified for authorization: …` (`ErrOperationNotClassified`) |
 
 **gRPC TCP, QUIC and REST fail closed without an authentication backend
 (#550, #312).** With `SkipIAMValidation` off, a daemon configuration under
@@ -228,6 +242,41 @@ pool is refused the same way. The daemon REST server authenticates by mTLS
 only, so `EnableREST` requires `EnableMTLS`. Before #550 the interceptors were
 installed with `WithRequireAuth(tokenValidator != nil)`, so the misconfigured
 state served the whole daemon API anonymously.
+
+**QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
+dispatcher authenticated a token when a middleware was installed and then
+dispatched with no authorization at all: any valid token reached every
+operation, whatever its `scp`. `HandleRequest` now runs
+`AuthMiddleware.GuardRequest` on every request, in this order:
+
+1. **Pre-auth list.** `OpHealth`, `OpLiveness`, `OpReadiness` (probes run
+   before a caller holds a token) and `OpIAMAuthenticate` (the token
+   exchange itself) pass with no credential. Each entry in `preAuthOpcodes`
+   carries its reason; nothing else is exempt.
+2. **Authentication** of the token (`StatusUnauthorized` when missing or
+   invalid).
+3. **Classification** by `LookupOperationPermission`: the opcode, or for a
+   category opcode the sub-opcode in `payload[0]`, resolves to one
+   resource/action pair in a map lookup. A category frame without a
+   sub-opcode is `StatusInvalidRequest`; an unclassified opcode or
+   sub-opcode is `StatusPermissionDenied`.
+4. **Authorization** of the pair: on the platform-token path the scope
+   `"<resource>:<action>"` is enforced by `RequireScope` (wildcards apply);
+   otherwise a configured `AuthorizationChecker` decides. A scope-less
+   credential with no checker (a peer certificate, the legacy bool-only
+   token validator) authorizes every *classified* operation, as on gRPC.
+
+The pairs mirror the gRPC catalog and the MCP map for the same capability;
+`TestQUICAuthzContract_ScopesMatchGRPC` pins one mutating and one reading
+operation per family, and the contract tests fail when an opcode or
+sub-opcode is added without a catalog entry. A `QUICServiceHandler` cannot be
+built without a middleware (`NewQUICServiceHandler` returns
+`ErrQUICAuthMiddlewareRequired`), and a handler built as a bare literal
+answers `StatusUnavailable` to everything. Under mTLS the verified client
+certificate authenticates a tokenless request (`WithQUICPeerAuthenticated`) —
+as on gRPC, where the certificate alone authenticates — while a presented
+token is still validated and scope-checked. `SkipIAMValidation` skips
+authentication only; unclassified operations are refused there too.
 
 **MCP fails closed without an authorization backend (#440).** With neither the
 platform-token validator nor the QuicBaaS auth adapter configured,

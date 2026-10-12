@@ -539,7 +539,7 @@ func TestSetTPM2Service_WithQUICHandlerSet(t *testing.T) {
 
 	// Manually set a QUIC handler to test that path
 	logger := logging.DefaultLogger()
-	d.quicHandler = NewQUICServiceHandler(logger)
+	d.quicHandler = newTestQUICServiceHandler(logger)
 
 	// SetTPM2Service with nil - exercises QUIC handler path
 	d.SetTPM2Service(nil)

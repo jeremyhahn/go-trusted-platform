@@ -143,9 +143,30 @@ scope — the interceptor allows it once the token is validated.
 tool names, 71 carry a required permission; none of the 21 tenant tools do.
 
 So **any validated token can create, suspend, delete and re-quota a tenant, and
-init, seal or unseal a per-tenant barrier**, on gRPC, Unix, MCP and embedded.
+init, seal or unseal a per-tenant barrier**, on gRPC, Unix, MCP and embedded
+(QUIC is gated below).
 Barrier operations in particular are key-custody operations. This is raised as
 an owner question in the migration report and is not decided here.
+
+### QUIC requires the tenant scopes (#767)
+
+The QUIC guard authorizes every frame against
+`pkg/api/quic/opcode_permissions.go` before dispatch
+([`docs/daemon/api.md`](../daemon/api.md) §5). The tenancy opcodes carry the
+`tenant` resource:
+
+| Action | Opcodes |
+|---|---|
+| `tenant:read` | `OpTenantList`, `OpTenantGet`, `OpTenantGetByName`, `OpTenantGetQuotas`, `OpTenantGetUsage`, `OpTenantCheckQuota`, `OpTenantGetDEKStatus`; barrier category `0x9E` sub `TenantBarrierSubStatus` |
+| `tenant:write` | `OpTenantCreate`, `OpTenantUpdate`, `OpTenantSuspend`, `OpTenantResume`, `OpTenantUpdateQuotas`, `OpTenantSync`, `OpTenantRotateDEK`; barrier subs `Init`, `Unseal`, `Seal` |
+| `tenant:delete` | `OpTenantDelete` |
+
+The `iam` scopes do not open these opcodes. IAM tenant *records*
+(`PlatformIAMService` tenant methods) have their own QUIC category,
+`OpIAMCategory` (`0x51`), under the `iam` scopes —
+[`docs/iam/api.md`](../iam/api.md) §8. Before #767 the SDK sent those IAM calls
+on the `OpTenant*` bytes, so the catalog checked `iam:*` for platform tenancy
+operations and an IAM tenant call reached `TenantService`.
 
 ### REST is gated on the `admin` role (#165)
 

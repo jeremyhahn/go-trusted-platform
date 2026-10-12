@@ -44,7 +44,7 @@ func skipIfNoCodec(t *testing.T) {
 // the service implements the full dns.DNSService interface.
 func createDNSUnitTestHandler(svc DNSService) *QUICServiceHandler {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	handler.SetDNSService(svc)
 	return handler
 }
@@ -72,7 +72,7 @@ func createDNSUnitTestRequest(t *testing.T, opcode byte, payload interface{}) *q
 
 func TestHandleDNSOperation_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	opcodes := []struct {
@@ -213,7 +213,7 @@ func TestDNSErrors(t *testing.T) {
 // =============================================================================
 
 func TestQUICServiceHandler_SetDNSService(t *testing.T) {
-	handler := NewQUICServiceHandler(logging.DefaultLogger())
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
 	assert.Nil(t, handler.dnsService)
 
 	handler.SetDNSService(nil)
@@ -226,12 +226,12 @@ func TestQUICServiceHandler_SetDNSService(t *testing.T) {
 
 func TestWithQUICDNSService(t *testing.T) {
 	t.Run("nil service", func(t *testing.T) {
-		handler := NewQUICServiceHandler(logging.DefaultLogger(), WithQUICDNSService(nil))
+		handler := newTestQUICServiceHandler(logging.DefaultLogger(), WithQUICDNSService(nil))
 		assert.Nil(t, handler.dnsService)
 	})
 	t.Run("real service", func(t *testing.T) {
 		mock := NewMockDNSService()
-		handler := NewQUICServiceHandler(logging.DefaultLogger(), WithQUICDNSService(mock))
+		handler := newTestQUICServiceHandler(logging.DefaultLogger(), WithQUICDNSService(mock))
 		assert.NotNil(t, handler.dnsService)
 	})
 }

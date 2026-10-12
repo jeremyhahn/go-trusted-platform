@@ -25,7 +25,7 @@ import (
 
 // newNTPQUICHandler builds a QUIC handler wired to a scripted NTP backend.
 func newNTPQUICHandler(backend NTPBackend) *QUICServiceHandler {
-	handler := NewQUICServiceHandler(logging.DefaultLogger())
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
 	if backend != nil {
 		handler.SetNTPService(NewNTPGRPCService(nil, backend))
 	}
@@ -109,9 +109,15 @@ func TestQUICNTPCategoryRejectsBadRequests(t *testing.T) {
 
 	t.Run("unknown sub-opcode", func(t *testing.T) {
 		handler := newNTPQUICHandler(&fakeNTPBackend{status: syncedNTPStatus()})
+		// The authorization guard refuses an unclassified sub-opcode before
+		// dispatch; the category handler still rejects it on its own.
 		resp := handler.HandleRequest(context.Background(), ntpCategoryRequest(0x7F))
+		if resp.Status != quicwire.StatusPermissionDenied {
+			t.Fatalf("status = 0x%02x, want StatusPermissionDenied", resp.Status)
+		}
+		resp = handler.handleNTPCategory(context.Background(), ntpCategoryRequest(0x7F))
 		if resp.Status != quicwire.StatusNotImplemented {
-			t.Fatalf("status = 0x%02x, want StatusNotImplemented", resp.Status)
+			t.Fatalf("handler status = 0x%02x, want StatusNotImplemented", resp.Status)
 		}
 	})
 }
@@ -146,7 +152,7 @@ func TestQUICNTPPropagatesControlFailures(t *testing.T) {
 
 func TestWithQUICNTPServiceOptionWiresTheBackend(t *testing.T) {
 	service := NewNTPGRPCService(nil, &fakeNTPBackend{status: syncedNTPStatus()})
-	handler := NewQUICServiceHandler(logging.DefaultLogger(), WithQUICNTPService(service))
+	handler := newTestQUICServiceHandler(logging.DefaultLogger(), WithQUICNTPService(service))
 
 	resp := handler.HandleRequest(context.Background(), ntpCategoryRequest(quicwire.NTPSubGetStatus))
 	if resp.Status != quicwire.StatusOK {

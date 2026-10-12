@@ -566,10 +566,8 @@ func TestEncodePayload(t *testing.T) {
 					if result != nil {
 						t.Errorf("expected nil result, got %v", result)
 					}
-				} else {
-					if len(result) == 0 {
-						t.Error("expected non-empty result")
-					}
+				} else if len(result) == 0 {
+					t.Error("expected non-empty result")
 				}
 			}
 		})
@@ -623,10 +621,8 @@ func TestDecodePayload(t *testing.T) {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}
@@ -788,6 +784,9 @@ func TestOpcodeToString(t *testing.T) {
 
 		// NTP (time synchronization) category opcode
 		{OpNTPCategory, "NTPCategory"},
+
+		// IAM tenant-record category opcode
+		{OpIAMCategory, "IAMCategory"},
 
 		// VM Operations
 		{OpVMCreate, "VMCreate"},
@@ -1709,10 +1708,8 @@ func TestEncodePayloadWithCodec(t *testing.T) {
 					if result != nil {
 						t.Errorf("expected nil result, got %v", result)
 					}
-				} else {
-					if len(result) == 0 {
-						t.Error("expected non-empty result")
-					}
+				} else if len(result) == 0 {
+					t.Error("expected non-empty result")
 				}
 			}
 		})
@@ -1762,10 +1759,8 @@ func TestDecodePayloadWithCodec(t *testing.T) {
 				if err == nil {
 					t.Error("expected error, got nil")
 				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}

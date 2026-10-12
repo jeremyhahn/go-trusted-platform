@@ -1197,42 +1197,9 @@ func TestCoverageFinalHealthStatusFromHealthStatus(t *testing.T) {
 // QUIC Handler Construction and Routing
 // =============================================================================
 
-func TestCoverageFinalNewQUICServiceHandler(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil_logger", func(t *testing.T) {
-		t.Parallel()
-		h := NewQUICServiceHandler(nil)
-		if h == nil {
-			t.Fatal("handler should not be nil")
-		}
-	})
-
-	t.Run("with_options", func(t *testing.T) {
-		t.Parallel()
-		logger := logging.DefaultLogger()
-		h := NewQUICServiceHandler(logger,
-			WithQUICDNSService(nil),
-			WithQUICHealthRegistry(nil),
-			WithQUICAuthMiddleware(nil),
-			WithQUICSDNService(nil),
-			WithQUICIAMService(nil),
-			WithQUICKMSService(nil),
-			WithQUICCryptoService(nil),
-			WithQUICTPM2Service(nil),
-			WithQUICDaemonService(nil),
-			WithQUICOverlayHandler(nil),
-			WithQUICGatewayHandler(nil),
-		)
-		if h == nil {
-			t.Fatal("handler should not be nil")
-		}
-	})
-}
-
 func TestCoverageFinalHandleRequestNilRequest(t *testing.T) {
 	t.Parallel()
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	resp := h.HandleRequest(context.Background(), nil)
 	if resp.Status != quicwire.StatusInvalidRequest {
 		t.Errorf("Status = 0x%02X, want 0x%02X", resp.Status, quicwire.StatusInvalidRequest)
@@ -1241,7 +1208,7 @@ func TestCoverageFinalHandleRequestNilRequest(t *testing.T) {
 
 func TestCoverageFinalHandleRequestUnknownOpcode(t *testing.T) {
 	t.Parallel()
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	req := &quicwire.Request{Opcode: 0xFE} // Unlikely to be assigned
 	resp := h.HandleRequest(context.Background(), req)
 	// Might hit a PXE extended range; if so it returns unavailable. Either way, not panic.
@@ -1253,7 +1220,7 @@ func TestCoverageFinalHandleRequestUnknownOpcode(t *testing.T) {
 func TestCoverageFinalQUICHandlerSetters(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 
 	// Test all setters don't panic
 	h.SetCAHandler(nil)
@@ -1278,7 +1245,7 @@ func TestCoverageFinalQUICHandlerSetters(t *testing.T) {
 
 func TestCoverageFinalQUICHandlerErrorResponse(t *testing.T) {
 	t.Parallel()
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	resp := h.errorResponse(quicwire.StatusInternalError, ErrQUICNilRequest{})
 	if resp.Status != quicwire.StatusInternalError {
 		t.Errorf("Status = 0x%02X", resp.Status)
@@ -1295,7 +1262,7 @@ func TestCoverageFinalQUICHandlerErrorResponse(t *testing.T) {
 func TestCoverageFinalQUICHandlerRouting(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
 	// Test that requests to various opcodes return unavailable when services are nil
@@ -1326,7 +1293,7 @@ func TestCoverageFinalQUICHandlerRouting(t *testing.T) {
 func TestCoverageFinalQUICHandlerOverlayCategory(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
 	t.Run("nil_handler", func(t *testing.T) {
@@ -1339,11 +1306,11 @@ func TestCoverageFinalQUICHandlerOverlayCategory(t *testing.T) {
 
 	t.Run("empty_payload", func(t *testing.T) {
 		t.Parallel()
-		// Need a non-nil overlay handler to test empty payload case
-		// Since we can't easily create one without dependencies, test nil handler path
+		// A category request without a sub-opcode cannot be classified, so
+		// the authorization guard rejects it before any dispatch.
 		resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpOverlayCategory})
-		if resp.Status != quicwire.StatusUnavailable {
-			t.Errorf("Status = 0x%02X", resp.Status)
+		if resp.Status != quicwire.StatusInvalidRequest {
+			t.Errorf("Status = 0x%02X, want StatusInvalidRequest", resp.Status)
 		}
 	})
 }
@@ -1351,7 +1318,7 @@ func TestCoverageFinalQUICHandlerOverlayCategory(t *testing.T) {
 func TestCoverageFinalQUICHandlerGatewayCategory(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
 	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpGatewayCategory, Payload: []byte{0x01}})
@@ -1363,10 +1330,10 @@ func TestCoverageFinalQUICHandlerGatewayCategory(t *testing.T) {
 func TestCoverageFinalQUICHandlerIPAMCategory(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
-	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIPAMCategory, Payload: []byte{0x01}})
+	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpIPAMCategory, Payload: []byte{quicwire.OpGatewayListIPAMPools}})
 	if resp.Status != quicwire.StatusUnavailable {
 		t.Errorf("Status = 0x%02X, want StatusUnavailable", resp.Status)
 	}
@@ -1388,7 +1355,7 @@ func expectedHealthHandlerStatus() byte {
 func TestCoverageFinalQUICHandlerHealthCheck(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
 	// Health check without registry
@@ -1402,7 +1369,7 @@ func TestCoverageFinalQUICHandlerHealthCheck(t *testing.T) {
 func TestCoverageFinalQUICHandlerLiveness(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpLiveness})
 	want := expectedHealthHandlerStatus()
 	if resp.Status != want {
@@ -1413,7 +1380,7 @@ func TestCoverageFinalQUICHandlerLiveness(t *testing.T) {
 func TestCoverageFinalQUICHandlerReadiness(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpReadiness})
 	want := expectedHealthHandlerStatus()
 	if resp.Status != want {

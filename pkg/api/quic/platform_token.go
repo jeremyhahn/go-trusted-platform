@@ -60,8 +60,8 @@ func AuthorizedContextFromContext(ctx context.Context) (*platformtoken.Authorize
 
 // scopeForOperation maps a QUIC resource/action permission pair to the platform
 // token scope convention: the qrdb-canonical colon "resource:action" (e.g.
-// "dns:write"). This is the QUIC projection of DefaultOpcodePermissions onto
-// the platform scope catalog, which matches the scp claim the broker mints from
+// "dns:write"). This is the QUIC projection of the operation catalog
+// (opcode_permissions.go) onto the platform scope catalog, which matches the scp claim the broker mints from
 // a subject's qrdb-resolved permissions.
 func scopeForOperation(resource, action string) string {
 	if resource == "" || action == "" {

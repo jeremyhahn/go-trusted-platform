@@ -65,17 +65,17 @@ func TestScopeForMethod_KnownMethods(t *testing.T) {
 		"/platform.v1.CAService/UninstallCACertificates": "ca:delete",
 	}
 	for method, want := range cases {
-		if got := scopeForMethod(method); got != want {
+		if got := ScopeForMethod(method); got != want {
 			t.Errorf("scopeForMethod(%q) = %q, want %q", method, got, want)
 		}
 	}
 }
 
 func TestScopeForMethod_UnknownMethodIsUnscoped(t *testing.T) {
-	if got := scopeForMethod("/platform.v1.PlatformDaemon/HealthCheck"); got != "" {
+	if got := ScopeForMethod("/platform.v1.PlatformDaemon/HealthCheck"); got != "" {
 		t.Errorf("scopeForMethod(health) = %q, want empty", got)
 	}
-	if got := scopeForMethod("/some.unknown.Service/Method"); got != "" {
+	if got := ScopeForMethod("/some.unknown.Service/Method"); got != "" {
 		t.Errorf("scopeForMethod(unknown) = %q, want empty", got)
 	}
 }

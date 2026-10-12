@@ -113,7 +113,7 @@ func (m *mockSecretsQUICService) GetRotationPolicy(ctx context.Context, req *pb.
 
 // newSecretsTestHandler builds a QUIC handler wired with the secrets mock.
 func newSecretsTestHandler() (*QUICServiceHandler, *mockSecretsQUICService) {
-	handler := NewQUICServiceHandler(logging.DefaultLogger())
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
 	svc := newMockSecretsQUICService()
 	handler.SetSecretsService(svc)
 	return handler, svc
@@ -251,7 +251,12 @@ func TestHandleSecretsCategoryDispatch(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("UnknownSubOpcode", func(t *testing.T) {
-		resp := handler.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpSecretsCategory, Payload: []byte{0xEE}})
+		// The authorization guard refuses an unclassified sub-opcode before
+		// dispatch; the category handler still rejects it on its own.
+		req := &quicwire.Request{Opcode: quicwire.OpSecretsCategory, Payload: []byte{0xEE}}
+		resp := handler.HandleRequest(ctx, req)
+		assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+		resp = handler.handleSecretsCategory(ctx, req)
 		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 
@@ -261,7 +266,7 @@ func TestHandleSecretsCategoryDispatch(t *testing.T) {
 	})
 
 	t.Run("ServiceUnavailable", func(t *testing.T) {
-		bare := NewQUICServiceHandler(logging.DefaultLogger())
+		bare := newTestQUICServiceHandler(logging.DefaultLogger())
 		req := kmsExtendedRequest(t, quicwire.OpSecretsCategory, quicwire.SecretsSubList, nil)
 		resp := bare.HandleRequest(ctx, req)
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)

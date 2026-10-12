@@ -289,8 +289,9 @@ Within this repo's half:
 3. **The cluster API is not in the authorization catalog.** `ClusterService` is
    **absent** from the gRPC scope catalog (`pkg/api/grpc/method_permissions.go`),
    and the `platform_cluster_*` tools are **absent** from the MCP permission map
-   (`pkg/api/mcp/authz.go`). Both catalogs are default-allow, so **any validated
-   token could call Bootstrap, Join and Leave** if the service were wired.
+   (`pkg/api/mcp/authz.go`). MCP refuses an unclassified tool (#300), but the
+   gRPC catalog is default-allow, so **any validated token could call
+   Bootstrap, Join and Leave over gRPC** if the service were wired.
    Today it is not, so the exposure is latent rather than live — but wiring the
    coordinator without adding scopes would make cluster lifecycle
    scope-unchecked. Recorded in [api.md](api.md) §6 and in the platform-wide

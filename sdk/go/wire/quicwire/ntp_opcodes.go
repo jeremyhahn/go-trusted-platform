@@ -27,7 +27,7 @@ package quicwire
 // carries the MessagePack-encoded platform.v1 request. The server-side
 // dispatcher lives at pkg/api/daemon/quic_ntp.go::handleNTPCategory.
 //
-// 0x51-0x55 remain reserved for NTP growth.
+// 0x51 is OpIAMCategory (iam_opcodes.go); 0x52-0x55 remain reserved.
 const (
 	// OpNTPCategory multiplexes the time-synchronization sub-operations.
 	OpNTPCategory byte = 0x50

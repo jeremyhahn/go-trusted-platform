@@ -263,7 +263,7 @@ func createQUICTestHandler() (*QUICServiceHandler, *quicMockVTPMService) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	mockSvc := newQuicMockVTPMService()
 
-	handler := NewQUICServiceHandler(logger, WithQUICVTPMService(mockSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICVTPMService(mockSvc))
 	return handler, mockSvc
 }
 
@@ -916,7 +916,7 @@ func TestVTPMValidateBundle_Success(t *testing.T) {
 
 func TestVTPMServiceUnavailable(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	getReq := VTPMGetBundleRequest{ID: "test-001"}

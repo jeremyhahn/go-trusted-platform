@@ -69,7 +69,7 @@ func TestWithQUICDeviceService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 
 	// Test with nil service
-	handler := NewQUICServiceHandler(logger, WithQUICDeviceService(nil))
+	handler := newTestQUICServiceHandler(logger, WithQUICDeviceService(nil))
 	if handler.deviceService != nil {
 		t.Error("expected deviceService to be nil")
 	}
@@ -80,7 +80,7 @@ func TestWithQUICDeviceProfileService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 
 	// Test with nil service
-	handler := NewQUICServiceHandler(logger, WithQUICDeviceProfileService(nil))
+	handler := newTestQUICServiceHandler(logger, WithQUICDeviceProfileService(nil))
 	if handler.profileService != nil {
 		t.Error("expected profileService to be nil")
 	}
@@ -91,7 +91,7 @@ func TestWithQUICSDNService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 
 	// Test with nil client
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(nil))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(nil))
 	if handler.sdnService != nil {
 		t.Error("expected sdnClient to be nil")
 	}
@@ -100,7 +100,7 @@ func TestWithQUICSDNService(t *testing.T) {
 // TestHandleDevice_NoDeviceService tests handleDevice when device service is not set
 func TestHandleDevice_NoDeviceService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger) // No device service
+	handler := newTestQUICServiceHandler(logger) // No device service
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -120,7 +120,7 @@ func TestHandleDevice_NoDeviceService(t *testing.T) {
 // TestHandleDeviceOperation tests handleDeviceOperation routes known opcodes
 func TestHandleDeviceOperation(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 
@@ -159,7 +159,7 @@ func TestHandleDeviceOperation(t *testing.T) {
 func TestNewQUICServiceHandler_MultipleOptions(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 
-	handler := NewQUICServiceHandler(logger,
+	handler := newTestQUICServiceHandler(logger,
 		WithQUICDeviceService(nil),
 		WithQUICDeviceProfileService(nil),
 		WithQUICSDNService(nil),
@@ -173,7 +173,7 @@ func TestNewQUICServiceHandler_MultipleOptions(t *testing.T) {
 // TestNewQUICServiceHandler_NilLogger tests creating handler with nil logger
 func TestNewQUICServiceHandler_NilLogger(t *testing.T) {
 	// Should use default logger when nil is passed
-	handler := NewQUICServiceHandler(nil)
+	handler := newTestQUICServiceHandler(nil)
 	if handler == nil {
 		t.Fatal("expected non-nil handler")
 	}
@@ -189,7 +189,7 @@ func TestNewQUICServiceHandler_NilLogger(t *testing.T) {
 // TestHandleHealthCheck_NoRegistry tests handleHealthCheck when health registry is nil
 func TestHandleHealthCheck_NoRegistry(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -217,7 +217,7 @@ func TestHandleHealthCheck_WithHealthyRegistry(t *testing.T) {
 			},
 		},
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICHealthRegistry(mockRegistry))
+	handler := newTestQUICServiceHandler(logger, WithQUICHealthRegistry(mockRegistry))
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -245,7 +245,7 @@ func TestHandleHealthCheck_WithUnhealthyRegistry(t *testing.T) {
 			},
 		},
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICHealthRegistry(mockRegistry))
+	handler := newTestQUICServiceHandler(logger, WithQUICHealthRegistry(mockRegistry))
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -274,7 +274,7 @@ func TestHandleHealthCheck_WithMixedComponents(t *testing.T) {
 			},
 		},
 	}
-	handler := NewQUICServiceHandler(logger, WithQUICHealthRegistry(mockRegistry))
+	handler := newTestQUICServiceHandler(logger, WithQUICHealthRegistry(mockRegistry))
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -294,7 +294,7 @@ func TestHandleHealthCheck_WithMixedComponents(t *testing.T) {
 // TestHandleLiveness tests handleLiveness returns alive status
 func TestHandleLiveness(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -314,7 +314,7 @@ func TestHandleLiveness(t *testing.T) {
 // TestHandleReadiness_NoServices tests handleReadiness when no services are set
 func TestHandleReadiness_NoServices(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -334,7 +334,7 @@ func TestHandleReadiness_NoServices(t *testing.T) {
 // TestHandleHealth_ViaHandleRequest tests health via HandleRequest router
 func TestHandleHealth_ViaHandleRequest(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -354,7 +354,7 @@ func TestHandleHealth_ViaHandleRequest(t *testing.T) {
 // TestHandleLiveness_ViaHandleRequest tests liveness via HandleRequest router
 func TestHandleLiveness_ViaHandleRequest(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -374,7 +374,7 @@ func TestHandleLiveness_ViaHandleRequest(t *testing.T) {
 // TestHandleReadiness_ViaHandleRequest tests readiness via HandleRequest router
 func TestHandleReadiness_ViaHandleRequest(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -394,7 +394,7 @@ func TestHandleReadiness_ViaHandleRequest(t *testing.T) {
 // TestHandleCertificate_NilHandler tests handleCertificate when caHandler is nil
 func TestHandleCertificate_NilHandler(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -414,7 +414,7 @@ func TestHandleCertificate_NilHandler(t *testing.T) {
 // TestHandleCA_NilCAService tests handleCA when caHandler is nil
 func TestHandleCA_NilCAService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -434,7 +434,7 @@ func TestHandleCA_NilCAService(t *testing.T) {
 // TestHandleUnknownOpcode tests HandleRequest with an unknown opcode
 func TestHandleUnknownOpcode(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 	req := &quicwire.Request{
@@ -455,7 +455,7 @@ func TestHandleUnknownOpcode(t *testing.T) {
 // TestHandleRequest_NilRequest tests HandleRequest with nil request
 func TestHandleRequest_NilRequest(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, nil)
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 	resp := handler.HandleRequest(ctx, nil)

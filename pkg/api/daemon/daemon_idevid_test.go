@@ -898,9 +898,9 @@ func TestSetTPM2ServiceIDevIDTest_LoggingDebugMessages(t *testing.T) {
 
 func TestQUICServiceHandler_SetTPM2Service(t *testing.T) {
 	t.Run("QUICServiceHandler.SetTPM2Service accepts nil", func(t *testing.T) {
-		handler := NewQUICServiceHandler(nil)
+		handler := newTestQUICServiceHandler(nil)
 		if handler == nil {
-			t.Fatal("NewQUICServiceHandler() should not return nil")
+			t.Fatal("newTestQUICServiceHandler() should not return nil")
 		}
 
 		// Should not panic

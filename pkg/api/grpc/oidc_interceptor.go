@@ -224,7 +224,7 @@ func OIDCUnaryInterceptor(opts ...OIDCInterceptorOption) grpc.UnaryServerInterce
 		// scope-free Validate path (preserving the historical passthrough
 		// for unmapped methods) while still enforcing online liveness.
 		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
-			scope := scopeForMethod(info.FullMethod)
+			scope := ScopeForMethod(info.FullMethod)
 			authCtx, aerr := cv.AuthorizeToken(ctx, token, scope, dpopProofFromContext(ctx), info.FullMethod, "")
 			if aerr != nil {
 				return nil, mapClaimsAuthError(info.FullMethod, scope, aerr)
@@ -307,7 +307,7 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 		// it: stash the AuthorizedContext in the wrapped stream context and
 		// enforce the method's required scope against it (mirroring QUIC/MCP).
 		if cv, ok := config.TokenValidator.(ClaimsTokenValidator); ok {
-			scope := scopeForMethod(info.FullMethod)
+			scope := ScopeForMethod(info.FullMethod)
 			authCtx, aerr := cv.AuthorizeToken(ctx, token, scope, dpopProofFromContext(ctx), info.FullMethod, "")
 			if aerr != nil {
 				return mapClaimsAuthError(info.FullMethod, scope, aerr)

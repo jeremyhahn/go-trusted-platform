@@ -394,6 +394,15 @@ func (e ErrQUICUnknownOpcode) Error() string {
 	return fmt.Sprintf("unknown QUIC opcode: 0x%02X", e.Opcode)
 }
 
+// ErrQUICAuthMiddlewareRequired is returned by NewQUICServiceHandler when no
+// auth middleware is configured: the QUIC dispatcher authorizes every request,
+// so a handler without one cannot be built.
+type ErrQUICAuthMiddlewareRequired struct{}
+
+func (e ErrQUICAuthMiddlewareRequired) Error() string {
+	return "QUIC service handler requires an auth middleware (WithQUICAuthMiddleware)"
+}
+
 // ErrQUICServiceUnavailable is returned when a required service is not available
 type ErrQUICServiceUnavailable struct {
 	Service string

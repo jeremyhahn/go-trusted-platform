@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -46,14 +47,16 @@ import (
 //	0x3F      ipam category     0xA0-0xA8 ca
 //	0x40-0x4F sdn               0xA9-0xAD iam users
 //	0x50      ntp category      0xAE-0xAF container
-//	0x51-0x55 reserved (ntp)
+//	0x51      iam category
+//	0x52-0x55 reserved (ntp)
 //	0x56-0x5F tpm2 (idevid)     0xB0-0xB4 sdn extended
 //	0x60-0x6A vm (0x69=ext cat) 0xB5-0xBF iam roles/groups
 //	0x6B-0x6E tpm2 (iak ext)    0xC0-0xCB kms keys
 //	0x6F      container         0xCC-0xCF switch/kms-ext/secrets/prov cats
 //	0x70-0x7F attestation       0xD0-0xDA kms crypto
 //	  (0x78-0x7B tpm2 carve)    0xDB-0xEB tenant
-//	0x80-0x88 ca (certs)        0xEC-0xEF pxe
+//	0x80-0x88 ca (certs)          (0xE7-0xE8 retired, reserved)
+//	                            0xEC-0xEF pxe
 //	0x89-0x8F daemon            0xF0-0xF5 reserved (DEK, unwired)
 //	                            0xF6-0xFB iam extended
 //	                            0xFC-0xFF pxe extended
@@ -83,7 +86,7 @@ const (
 	// top level; the entry documents the byte owner reached on the wire.
 	shadowedByte
 	// reservedByte constants are declared but not wired to any handler;
-	// the dispatcher must answer unknown-opcode for them.
+	// they have no authorization entry, so the guard refuses them.
 	reservedByte
 )
 
@@ -129,6 +132,45 @@ var quicDispatchFamilies = map[string]dispatchFamilySpec{
 	"pxe":            {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: pxe"},
 }
 
+// quicCategoryProbeSubs gives every category opcode a classified sub-opcode.
+// The dispatcher authorizes before it routes, so a category request without a
+// sub-opcode is refused by the guard; the probe carries the request past the
+// guard to the family's nil-service check.
+var quicCategoryProbeSubs = map[byte]byte{
+	quicwire.OpOverlayCategory:       quicwire.OpOverlayStatus,
+	quicwire.OpGatewayCategory:       quicwire.OpGatewayStatus,
+	quicwire.OpIPAMCategory:          quicwire.OpGatewayListIPAMPools,
+	quicwire.OpNTPCategory:           quicwire.NTPSubGetStatus,
+	quicwire.OpIAMCategory:           quicwire.IAMSubTenantList,
+	quicwire.OpVMExtendedCategory:    quicwire.OpVMRestart,
+	quicwire.OpTPM2Category:          quicwire.SubOpTPM2Info,
+	quicwire.OpCeremonyCategory:      quicwire.CeremonySubStatus,
+	quicwire.OpPIVCategory:           quicwire.PIVSubListDevices,
+	quicwire.OpLUKSCategory:          quicwire.LUKSSubStatus,
+	quicwire.OpFIDO2Category:         quicwire.FIDO2SubListDevices,
+	quicwire.OpTenantBarrierCategory: quicwire.TenantBarrierSubStatus,
+	quicwire.OpBMCCategory:           quicwire.BMCSubEnroll,
+	quicwire.OpSwitchCategory:        quicwire.SwitchSubListPorts,
+	quicwire.OpKMSExtendedCategory:   quicwire.KMSSubGetKeyMetadata,
+	quicwire.OpSecretsCategory:       quicwire.SecretsSubGet,
+	quicwire.OpProvisioningCategory:  quicwire.ProvisioningSubGetNonce,
+}
+
+// dispatchProbePayload is the payload a bare dispatch of opcode carries: the
+// family's own payload when it needs one, else the category probe sub-opcode.
+func dispatchProbePayload(opcode byte, family string) []byte {
+	if family == "reserved" {
+		return nil
+	}
+	if payload := quicDispatchFamilies[family].payload; payload != nil {
+		return payload
+	}
+	if sub, ok := quicCategoryProbeSubs[opcode]; ok {
+		return []byte{sub}
+	}
+	return nil
+}
+
 // quicWireOwners is the authoritative byte-range ownership table for the
 // single-byte opcode space. Every byte 0x00-0xFF must be covered by
 // exactly one range.
@@ -145,7 +187,8 @@ var quicWireOwners = []struct {
 	{0x3F, 0x3F, "ipam"},
 	{0x40, 0x4F, "sdn"},
 	{0x50, 0x50, "ntp"},
-	{0x51, 0x55, "reserved"},
+	{0x51, 0x51, "iam"},
+	{0x52, 0x55, "reserved"},
 	{0x56, 0x5F, "tpm2"},
 	{0x60, 0x6A, "vm"},
 	{0x6B, 0x6E, "tpm2"},
@@ -175,7 +218,9 @@ var quicWireOwners = []struct {
 	{0xCE, 0xCE, "secrets"},
 	{0xCF, 0xCF, "configdelivery"},
 	{0xD0, 0xDA, "kms"},
-	{0xDB, 0xEB, "tenant"},
+	{0xDB, 0xE6, "tenant"},
+	{0xE7, 0xE8, "reserved"}, // retired tenant bytes (#708), unclassified
+	{0xE9, 0xEB, "tenant"},
 	{0xEC, 0xEF, "pxe"},
 	{0xF0, 0xF5, "reserved"},
 	{0xF6, 0xFB, "iam"},
@@ -316,6 +361,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpSDNGetVLAN":                {value: quicwire.OpSDNGetVLAN, mode: wireDirect, family: "sdn"},
 	"OpSDNGetPort":                {value: quicwire.OpSDNGetPort, mode: wireDirect, family: "sdn"},
 	"OpNTPCategory":               {value: quicwire.OpNTPCategory, mode: wireDirect, family: "ntp"},
+	"OpIAMCategory":               {value: quicwire.OpIAMCategory, mode: wireDirect, family: "iam"},
 	"OpIDevIDGenerate":            {value: quicwire.OpIDevIDGenerate, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDInfo":                {value: quicwire.OpIDevIDInfo, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDDelete":              {value: quicwire.OpIDevIDDelete, mode: wireDirect, family: "tpm2"},
@@ -518,7 +564,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 // newBareQUICDispatchHandler returns a handler with no services configured
 // so every family responds with its distinctive nil-service error.
 func newBareQUICDispatchHandler() *QUICServiceHandler {
-	return NewQUICServiceHandler(logging.DefaultLogger())
+	return newTestQUICServiceHandler(logging.DefaultLogger())
 }
 
 // assertDispatchFamily drives one request through HandleRequest and
@@ -556,11 +602,13 @@ func assertDispatchFamily(t *testing.T, h *QUICServiceHandler, opcode byte, payl
 		return
 	}
 
+	// A reserved byte has no permission in the authorization catalog, so the
+	// guard refuses it before it reaches the dispatcher.
 	if family == "reserved" {
-		wantBody := fmt.Sprintf("unknown QUIC opcode: 0x%02X", opcode)
-		if resp.Status != quicwire.StatusNotImplemented {
+		wantBody := quic.ErrOperationNotClassified{Opcode: opcode}.Error()
+		if resp.Status != quicwire.StatusPermissionDenied {
 			t.Fatalf("opcode 0x%02X: expected reserved (status 0x%02X), got status 0x%02X payload %q",
-				opcode, quicwire.StatusNotImplemented, resp.Status, resp.Payload)
+				opcode, quicwire.StatusPermissionDenied, resp.Status, resp.Payload)
 		}
 		if string(resp.Payload) != wantBody {
 			t.Fatalf("opcode 0x%02X: expected reserved payload %q, got %q", opcode, wantBody, resp.Payload)
@@ -607,11 +655,7 @@ func TestQUICDispatchWireOwnership(t *testing.T) {
 			opcode := byte(op)
 			family := r.family
 			t.Run(fmt.Sprintf("0x%02X_%s", opcode, family), func(t *testing.T) {
-				var payload []byte
-				if family != "reserved" {
-					payload = quicDispatchFamilies[family].payload
-				}
-				assertDispatchFamily(t, h, opcode, payload, family)
+				assertDispatchFamily(t, h, opcode, dispatchProbePayload(opcode, family), family)
 			})
 		}
 	}
@@ -633,8 +677,7 @@ func TestQUICDispatchOpcodeConstantIntent(t *testing.T) {
 				// payload[0].
 				assertDispatchFamily(t, h, intent.category, []byte{intent.value}, intent.family)
 			case wireDirect, shadowedByte:
-				payload := quicDispatchFamilies[intent.family].payload
-				assertDispatchFamily(t, h, intent.value, payload, intent.family)
+				assertDispatchFamily(t, h, intent.value, dispatchProbePayload(intent.value, intent.family), intent.family)
 			case reservedByte:
 				assertDispatchFamily(t, h, intent.value, nil, "reserved")
 			default:
@@ -681,6 +724,15 @@ func TestQUICDispatchConstantTableComplete(t *testing.T) {
 // const declarations of type byte whose names start with "Op".
 func parseQUICOpcodeConstants(t *testing.T) map[string]byte {
 	t.Helper()
+	return parseQUICByteConstants(t, func(name string) bool {
+		return strings.HasPrefix(name, "Op")
+	})
+}
+
+// parseQUICByteConstants returns every literal byte constant declared in the
+// non-test sources of sdk/go/wire/quicwire whose name satisfies keep.
+func parseQUICByteConstants(t *testing.T, keep func(name string) bool) map[string]byte {
+	t.Helper()
 
 	quicDir := filepath.Join("..", "..", "..", "sdk", "go", "wire", "quicwire")
 	entries, err := os.ReadDir(quicDir)
@@ -715,7 +767,7 @@ func parseQUICOpcodeConstants(t *testing.T) map[string]byte {
 					continue
 				}
 				for i, cname := range vs.Names {
-					if !strings.HasPrefix(cname.Name, "Op") || i >= len(vs.Values) {
+					if !keep(cname.Name) || i >= len(vs.Values) {
 						continue
 					}
 					lit, ok := vs.Values[i].(*ast.BasicLit)

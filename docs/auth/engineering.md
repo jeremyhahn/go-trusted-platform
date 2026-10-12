@@ -551,15 +551,29 @@ func NewAuthMiddleware(opts ...AuthMiddlewareOption) *AuthMiddleware
 
 func WithQUICTokenValidator(v TokenValidator) AuthMiddlewareOption
 func WithQUICAuthorizationChecker(c AuthorizationChecker) AuthMiddlewareOption
-func WithQUICSkipOpcodes(opcodes ...byte) AuthMiddlewareOption
-func WithQUICRequireAuth(require bool) AuthMiddlewareOption
+func WithQUICRequireAuth(require bool) AuthMiddlewareOption // default true
+func WithQUICPeerAuthenticated() AuthMiddlewareOption        // mTLS: the peer certificate authenticates
 
+func (m *AuthMiddleware) GuardRequest(ctx context.Context, req *Request) (context.Context, *Response)
 func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *Request) (context.Context, *Response)
-func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, req *Request, resource, action string) *Response
+func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, resource, action string) *Response
 
+// opcode_permissions.go — the operation catalog
 type OpcodePermission struct { Resource, Action string }
-func DefaultOpcodePermissions() map[byte]*OpcodePermission
+func (p OpcodePermission) Scope() string
+func LookupOperationPermission(opcode byte, payload []byte) (perm OpcodePermission, preAuth bool, err error)
 ```
+
+`GuardRequest` is what the daemon's `QUICServiceHandler.HandleRequest` runs on
+every frame before dispatch (#767). Frames on the pre-auth list pass with no
+credential. Every other frame is first authenticated, then classified by
+`LookupOperationPermission`, then authorized by `AuthorizeRequest`.
+Classification keys on the opcode, or for a category opcode on the sub-opcode
+in `payload[0]`. A category frame with no sub-opcode fails with
+`ErrSubOpcodeMissing` → `StatusInvalidRequest`. An unclassified operation fails
+with `ErrOperationNotClassified` → `StatusPermissionDenied`.
+`NewQUICServiceHandler` refuses to build a handler without a middleware
+(`ErrQUICAuthMiddlewareRequired`).
 
 `AuthenticateRequest` prefers the claims path when the validator implements
 `ClaimsTokenValidator` — `AuthorizeToken(ctx, token, "", "", "", "")` — and
@@ -568,8 +582,11 @@ stashes the resulting `AuthorizedContext`. `AuthorizeRequest` then enforces
 DPoP frame**, so proof / htm / htu are always empty: every QUIC token is a
 bearer token.
 
-`DefaultOpcodePermissions` maps `OpHealth`, `OpLiveness` and `OpReadiness` to
-`nil` (no permission).
+The pre-auth list (`preAuthOpcodes`) is `OpHealth`, `OpLiveness`,
+`OpReadiness` and `OpIAMAuthenticate`, each with its reason; nothing else is
+exempt. Under mTLS (`WithQUICPeerAuthenticated`) a tokenless frame is
+authenticated by the verified peer certificate, and a presented token is
+still validated.
 
 ### MCP (`pkg/api/mcp/`)
 

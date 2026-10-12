@@ -246,24 +246,24 @@ by status code; read the `error` string.
 
 ## 8. Authorization
 
-BMC is **not enforced on either catalog**, and both catalogs are default-allow.
+BMC is **not enforced on gRPC**, which is default-allow. MCP and QUIC deny
+what they do not classify.
 
 | Catalog | BMC coverage | Effect |
 |---|---|---|
 | gRPC (`pkg/api/grpc/method_permissions.go`) | **`BMCService` is absent entirely.** Zero of 23 RPCs carry a required scope | The interceptor allows every BMC RPC once the token validates |
-| MCP (`pkg/api/mcp/authz.go`) | **No `bmc` entries.** Zero of 16 tools carry a permission | `AuthorizeTool` returns no error for unlisted tools |
+| MCP (`pkg/api/mcp/authz.go`) | `platform_bmc_enroll` and `platform_bmc_cert_restore` require `bmc:admin` | Every other BMC tool is unclassified, and `AuthorizeTool` refuses it (#300) |
+| QUIC (`pkg/api/quic/opcode_permissions.go`) | `OpBMCCategory` (`0x9F`) subs `BMCSubEnroll` and `BMCSubRestore` require `bmc:admin` (#767) | QUIC carries no other BMC operation; an unclassified sub-opcode is refused |
 
 Consequences, stated plainly because they are not obvious from the code:
 
-- **Any principal with a valid platform token can power off any node**, set its
-  boot device, mount an installer ISO, replace or restore its BMC certificate,
-  and create a BMC administrator account. No `scp` claim is checked on any of
-  it.
+- **Any principal with a valid platform token can power off any node over gRPC
+  or Unix**, set its boot device, mount an installer ISO, replace or restore
+  its BMC certificate, and create a BMC administrator account. No `scp` claim
+  is checked on any of it there.
 - Because all four power mutators share `POST .../power` with the verb in the
   body, even a path-based gateway policy in front of REST cannot separate
   "status" from "power off" beyond method.
-- The QUIC handlers pass `req.Token` into the sub-request and dispatch; there is
-  no BMC-specific scope check on that path either.
 
 [`docs/daemon/api.md`](../daemon/api.md) §5 records the platform-wide picture:
 185 of 461 gRPC RPCs across 11 of 31 services carry scopes, and 71 of 449 MCP

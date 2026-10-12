@@ -645,7 +645,7 @@ func TestHandleSDNCreateBridge_Success(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	createReq := &platformv1.CreateBridgeRequest{Config: &platformv1.BridgeConfig{Name: "br-test"}}
@@ -672,7 +672,7 @@ func TestHandleSDNCreateBridge_MissingName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	createReq := &platformv1.CreateBridgeRequest{Config: &platformv1.BridgeConfig{Name: ""}}
@@ -693,7 +693,7 @@ func TestHandleSDNCreateBridge_ClientError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	mockSDN.createBridgeErr = errors.New("mock create error")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
 	ctx := context.Background()
 
 	createReq := &platformv1.CreateBridgeRequest{Config: &platformv1.BridgeConfig{Name: "br-test"}}
@@ -714,7 +714,7 @@ func TestHandleSDNCreateBridge_DecodeError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -731,7 +731,7 @@ func TestHandleSDNDeleteBridge_Success(t *testing.T) {
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br-test")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	deleteReq := &platformv1.DeleteBridgeRequest{Id: "br-test"}
@@ -757,7 +757,7 @@ func TestHandleSDNDeleteBridge_MissingName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	deleteReq := &platformv1.DeleteBridgeRequest{Id: ""}
@@ -778,7 +778,7 @@ func TestHandleSDNDeleteBridge_ClientError(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	mockSDN.deleteBridgeErr = errors.New("mock delete error")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
 	ctx := context.Background()
 
 	deleteReq := &platformv1.DeleteBridgeRequest{Id: "br-test"}
@@ -800,7 +800,7 @@ func TestHandleSDNGetBridge_Success(t *testing.T) {
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br-test")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	getReq := &platformv1.GetBridgeRequest{Id: "br-test"}
@@ -828,7 +828,7 @@ func TestHandleSDNGetBridge_MissingName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	getReq := &platformv1.GetBridgeRequest{Id: ""}
@@ -849,7 +849,7 @@ func TestHandleSDNGetBridge_NotFound(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	getReq := &platformv1.GetBridgeRequest{Id: "nonexistent"}
@@ -871,7 +871,7 @@ func TestHandleSDNListBridges_Success(t *testing.T) {
 	mockSDN := NewMockOVSClientInterface()
 	mockSDN.AddBridgeToMock("br0", &ovs.Bridge{UUID: "uuid-0", Name: "br0"})
 	mockSDN.AddBridgeToMock("br1", &ovs.Bridge{UUID: "uuid-1", Name: "br1"})
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -892,7 +892,7 @@ func TestHandleSDNListBridges_Error(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	mockSDN.listBridgesErr = errors.New("mock list error")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -913,7 +913,7 @@ func TestHandleSDNCreatePort_Success(t *testing.T) {
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br0")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	createReq := &platformv1.AddPortRequest{BridgeId: "br0", Config: &platformv1.PortConfig{Name: "eth0"}}
@@ -939,7 +939,7 @@ func TestHandleSDNCreatePort_MissingBridgeName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	createReq := &platformv1.AddPortRequest{BridgeId: "", Config: &platformv1.PortConfig{Name: "eth0"}}
@@ -960,7 +960,7 @@ func TestHandleSDNCreatePort_MissingPortName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	createReq := &platformv1.AddPortRequest{BridgeId: "br0", Config: &platformv1.PortConfig{Name: ""}}
@@ -981,7 +981,7 @@ func TestHandleSDNCreatePort_Error(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	mockSDN.addPortErr = errors.New("mock add port error")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
 	ctx := context.Background()
 
 	createReq := &platformv1.AddPortRequest{BridgeId: "br0", Config: &platformv1.PortConfig{Name: "eth0"}}
@@ -1004,7 +1004,7 @@ func TestHandleSDNDeletePort_Success(t *testing.T) {
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br0")
 	seedPort(t, sdnSvc, "br0", "eth0")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	deleteReq := &platformv1.DeletePortRequest{BridgeId: "br0", PortId: "eth0"}
@@ -1030,7 +1030,7 @@ func TestHandleSDNDeletePort_MissingFields(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	tests := []struct {
@@ -1066,7 +1066,7 @@ func TestHandleSDNGetPort_Success(t *testing.T) {
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br0")
 	seedPort(t, sdnSvc, "br0", "eth0")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	getReq := &platformv1.GetPortRequest{PortId: "eth0"}
@@ -1093,7 +1093,7 @@ func TestHandleSDNGetPort_MissingName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	getReq := &platformv1.GetPortRequest{PortId: ""}
@@ -1117,7 +1117,7 @@ func TestHandleSDNListPorts_Success(t *testing.T) {
 	seedBridge(t, sdnSvc, "br0")
 	seedPort(t, sdnSvc, "br0", "eth0")
 	seedPort(t, sdnSvc, "br0", "eth1")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	listReq := &platformv1.ListPortsRequest{BridgeId: "br0"}
@@ -1143,7 +1143,7 @@ func TestHandleSDNListPorts_MissingBridge(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	listReq := &platformv1.ListPortsRequest{BridgeId: ""}
@@ -1170,7 +1170,7 @@ func TestHandleSDNGetPortState_Success(t *testing.T) {
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br0")
 	seedPort(t, sdnSvc, "br0", "eth0")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	getReq := &SDNGetPortStateRequest{
@@ -1200,7 +1200,7 @@ func TestHandleSDNGetPortState_MissingPortName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	getReq := &SDNGetPortStateRequest{
@@ -1225,7 +1225,7 @@ func TestHandleSDNSetPortState_Success(t *testing.T) {
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br0")
 	seedPort(t, sdnSvc, "br0", "eth0")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	setReq := &platformv1.SetPortStateRequest{PortId: "eth0", AdminState: "up"}
@@ -1255,7 +1255,7 @@ func TestHandleSDNSetPortState_AnyStateWithoutPolicyEngine(t *testing.T) {
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br0")
 	seedPort(t, sdnSvc, "br0", "eth0")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	setReq := &platformv1.SetPortStateRequest{PortId: "eth0", AdminState: "any_state_value"}
@@ -1277,7 +1277,7 @@ func TestHandleSDNSetPortState_MissingPortName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	setReq := &platformv1.SetPortStateRequest{PortId: "", AdminState: "up"}
@@ -1298,7 +1298,7 @@ func TestHandleSDNSetPortState_MissingState(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	setReq := &platformv1.SetPortStateRequest{PortId: "eth0", AdminState: ""}
@@ -1325,7 +1325,7 @@ func TestHandleSDNSetVLAN_Success(t *testing.T) {
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br0")
 	seedPort(t, sdnSvc, "br0", "eth0")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	setReq := &SDNSetVLANRequest{
@@ -1356,7 +1356,7 @@ func TestHandleSDNSetVLAN_MissingPortName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	setReq := &SDNSetVLANRequest{
@@ -1388,7 +1388,7 @@ func TestHandleSDNGetVLAN_Success(t *testing.T) {
 		port.Tag = 200
 	}
 	mockSDN.mu.Unlock()
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	getReq := &SDNGetVLANRequest{
@@ -1417,7 +1417,7 @@ func TestHandleSDNGetVLAN_MissingPortName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	getReq := &SDNGetVLANRequest{
@@ -1445,7 +1445,7 @@ func TestHandleSDNAddFlow_Success(t *testing.T) {
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br0")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	addReq := &platformv1.AddFlowRequest{Config: &platformv1.FlowConfig{BridgeId: "br0", Priority: 100}}
@@ -1471,7 +1471,7 @@ func TestHandleSDNAddFlow_MissingBridgeName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	addReq := &platformv1.AddFlowRequest{Config: &platformv1.FlowConfig{BridgeId: ""}}
@@ -1493,7 +1493,7 @@ func TestHandleSDNDeleteFlow_Success(t *testing.T) {
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
 	seedBridge(t, sdnSvc, "br0")
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	deleteReq := &platformv1.DeleteFlowRequest{BridgeId: "br0", FlowId: "flow-0xa9f1000000000001"}
@@ -1519,7 +1519,7 @@ func TestHandleSDNDeleteFlow_MissingBridgeName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	deleteReq := &platformv1.DeleteFlowRequest{BridgeId: "", FlowId: "in_port=1"}
@@ -1544,7 +1544,7 @@ func TestHandleSDNGetFlow_Success(t *testing.T) {
 	mockSDN.AddFlowsToMock("br0", []*ovs.Flow{
 		{Table: 0, Priority: 100, Match: "in_port=1", Actions: "output:2", Cookie: "0xa9f1000000000001"},
 	})
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	// The field carries the flow ID the API hands out ("flow-<cookie>"),
@@ -1575,7 +1575,7 @@ func TestHandleSDNGetFlow_MissingBridgeName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	getReq := &SDNGetFlowRequest{
@@ -1603,7 +1603,7 @@ func TestHandleSDNListFlows_Success(t *testing.T) {
 		{Table: 0, Priority: 100, Match: "in_port=1", Actions: "output:2"},
 		{Table: 0, Priority: 200, Match: "in_port=2", Actions: "output:1"},
 	})
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	listReq := &platformv1.ListFlowsRequest{BridgeId: "br0"}
@@ -1629,7 +1629,7 @@ func TestHandleSDNListFlows_MissingBridgeName(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	listReq := &platformv1.ListFlowsRequest{BridgeId: ""}
@@ -1657,7 +1657,7 @@ func TestHandleSDNGetMetrics_Success(t *testing.T) {
 	mockSDN.AddBridgeToMock("br1", &ovs.Bridge{UUID: "uuid-1", Name: "br1"})
 	mockSDN.AddPortToMock("eth0", &ovs.Port{UUID: "port-uuid-0", Name: "eth0"})
 	mockSDN.AddFlowsToMock("br0", []*ovs.Flow{{Match: "in_port=1"}})
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
 	ctx := context.Background()
 
 	metricsReq := &SDNGetMetricsRequest{
@@ -1689,7 +1689,7 @@ func TestHandleSDNGetMetrics_WithBridgeName(t *testing.T) {
 	mockSDN.AddFlowsToMock("br0", []*ovs.Flow{
 		{Match: "in_port=1", PacketCount: 100, ByteCount: 5000},
 	})
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(newTestSDNServiceWithMock(t, mockSDN)))
 	ctx := context.Background()
 
 	metricsReq := &SDNGetMetricsRequest{
@@ -1719,7 +1719,7 @@ func TestHandleSDNGetMetrics_WithBridgeName(t *testing.T) {
 
 func TestHandleSDNOperation_NilClient(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger) // No SDN client
+	handler := newTestQUICServiceHandler(logger) // No SDN client
 	ctx := context.Background()
 
 	createReq := &platformv1.CreateBridgeRequest{Config: &platformv1.BridgeConfig{Name: "br0"}}
@@ -1740,7 +1740,7 @@ func TestHandleSDNOperation_UnknownOpcode_Handler(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -1760,7 +1760,7 @@ func TestHandleSDNApplyPolicy_Success_Handler(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	applyReq := &SDNApplyPolicyRequest{
@@ -1795,7 +1795,7 @@ func TestHandleSDNDeletePolicy_Success_Handler(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	// First apply a policy so we can delete it
@@ -1832,7 +1832,7 @@ func TestHandleSDNGetPolicy_Success_Handler(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	// First apply a policy so we can get it
@@ -1869,7 +1869,7 @@ func TestHandleSDNListPolicies_Success_Handler(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockSDN := NewMockOVSClientInterface()
 	sdnSvc := newTestSDNServiceWithMock(t, mockSDN)
-	handler := NewQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
+	handler := newTestQUICServiceHandler(logger, WithQUICSDNService(sdnSvc))
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -1888,7 +1888,7 @@ func TestHandleSDNListPolicies_Success_Handler(t *testing.T) {
 
 func TestHandleSDNListPolicies_NilService(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger) // No SDN service
+	handler := newTestQUICServiceHandler(logger) // No SDN service
 	ctx := context.Background()
 
 	req := &quicwire.Request{

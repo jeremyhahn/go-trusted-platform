@@ -17,38 +17,40 @@ package grpc
 // gRPC Method -> Scope Permission Catalog
 // =============================================================================
 //
-// This is the gRPC projection of the QUIC DefaultOpcodePermissions and MCP
-// toolPermissions catalogs onto the platform token scope vocabulary. Scopes are
-// the qrdb-canonical colon "<resource>:<action>" form (e.g. "dns:write"), which
-// is verbatim what the broker mints into the scp claim from a subject's
-// qrdb-resolved permissions.
+// This is the gRPC projection of the QUIC operation catalog
+// (quic.LookupOperationPermission) and the MCP toolPermissions catalog onto
+// the platform token scope vocabulary. Scopes are the qrdb-canonical colon
+// "<resource>:<action>" form (e.g. "dns:write"), which is verbatim what the
+// broker mints into the scp claim from a subject's qrdb-resolved permissions.
 //
 // The map is keyed by the gRPC FullMethod string ("/platform.v1.Service/Method")
 // so the interceptor can resolve a method's required scope in O(1) and enforce
 // it against the validated AuthorizedContext (RequireScope), matching the QUIC
-// (AuthorizeRequest) and MCP (AuthorizeTool) per-operation enforcement.
+// (AuthMiddleware.GuardRequest) and MCP (AuthorizeTool) per-operation
+// enforcement.
 //
 // A method that is absent from the map carries no required scope: the
-// interceptor allows it once the token is validated. This mirrors MCP's
-// "unknown tool" passthrough and QUIC's nil OpcodePermission, and keeps the
-// catalog focused on the resource services that participate in scope-based
-// authorization (vtpm, dns, device, sdn, kms, iam, ca). Public / health methods
-// never reach this point — they are handled by the interceptor's skip list.
+// interceptor allows it once the token is validated. QUIC and MCP instead
+// deny an operation missing from their catalogs. This keeps the catalog
+// focused on the resource services that participate in scope-based
+// authorization (vtpm, dns, device, sdn, kms, iam, ca). Public / health
+// methods never reach this point — they are handled by the interceptor's skip list.
 
 // grpcMethodPermissions maps a gRPC FullMethod to its required colon
 // "resource:action" scope. It is built once and treated as read-only.
 var grpcMethodPermissions = buildGRPCMethodPermissions()
 
-// scopeForMethod returns the colon "resource:action" scope a gRPC method
+// ScopeForMethod returns the colon "resource:action" scope a gRPC method
 // requires, or the empty string when the method is not in the catalog (no scope
 // required). The lookup is constant time.
-func scopeForMethod(fullMethod string) string {
+func ScopeForMethod(fullMethod string) string {
 	return grpcMethodPermissions[fullMethod]
 }
 
 // buildGRPCMethodPermissions constructs the FullMethod -> scope catalog. The
-// resource/action pairs mirror the QUIC DefaultOpcodePermissions and MCP
-// toolPermissions for the same capabilities.
+// resource/action pairs mirror the QUIC operation catalog and the MCP
+// toolPermissions for the same capabilities; the daemon's QUIC authorization
+// contract test pins the parity.
 func buildGRPCMethodPermissions() map[string]string {
 	const (
 		read   = "read"

@@ -17,7 +17,8 @@ whose provisioning surface actually ships under
 `OpProvisioningCategory` (`0xCF`). This follows the same precedent as
 `OpAttestCollectHost` (repurposed from the never-implemented
 `OpAttestGetEK`) and `OpVMExtendedCategory` (repurposed from
-`OpVMDeactivate`). `0x51`-`0x55` remain reserved for NTP growth.
+`OpVMDeactivate`). `0x51` is `OpIAMCategory` (IAM tenant records, #767); `0x52`-`0x55` remain
+reserved for NTP growth.
 
 The reclaim is pinned by the dispatch guard
 (`pkg/api/daemon/quic_dispatch_guard_test.go`), which asserts byte
@@ -61,15 +62,16 @@ wire statuses:
 | anything else | `StatusInternalError` (`0x04`) |
 
 A missing sub-opcode byte returns `StatusInvalidRequest`; an unknown
-sub-opcode returns `StatusNotImplemented`.
+sub-opcode is refused by the authorization guard with
+`StatusPermissionDenied` before it reaches the handler.
 
 ## Authorization
 
-`DefaultOpcodePermissions` records `ntp:read` for the category opcode —
-the floor scope every NTP caller needs. Because one opcode multiplexes
-both reads and the write, per-operation enforcement (`ntp:write` for
-`Step`) lives in the gRPC method catalog and the MCP tool catalog, which
-is the same arrangement every other category opcode uses.
+The QUIC operation catalog (`pkg/api/quic/opcode_permissions.go`) classifies
+each sub-opcode, exactly as the gRPC method catalog and the MCP tool catalog
+do. `GetStatus` and `ListSources` require `ntp:read`, and `Step` requires
+`ntp:write`. The daemon enforces it on every frame before dispatch
+([`docs/daemon/api.md`](../daemon/api.md) §5).
 
 ## SDK Usage
 

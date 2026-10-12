@@ -231,7 +231,7 @@ func createTestQUICServiceHandler(t *testing.T) (*QUICServiceHandler, *mockCAFor
 	logger := logging.DefaultLogger()
 	mockCA := newMockCAForDaemon()
 
-	handler := NewQUICServiceHandler(logger,
+	handler := newTestQUICServiceHandler(logger,
 		WithQUICCAService(mockCA),
 	)
 
@@ -511,7 +511,7 @@ func TestQUICServiceHandler_CARouting_Bundle(t *testing.T) {
 func TestQUICServiceHandler_CA_ServiceUnavailable(t *testing.T) {
 	logger := logging.DefaultLogger()
 	// Create handler without CA service
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	ctx := context.Background()
 
@@ -786,7 +786,7 @@ func TestCertOpcodeConstants(t *testing.T) {
 
 func TestQUICServiceHandler_SetCAHandler(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	mockCA := newMockCAForDaemon()
 
 	// Initially CA should not be available

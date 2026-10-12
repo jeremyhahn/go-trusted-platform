@@ -181,8 +181,9 @@ func WithQUICHealthRegistry(reg health.Registry) QUICServiceHandlerOption {
 	}
 }
 
-// WithQUICAuthMiddleware sets the authentication middleware for the QUIC handler.
-// When set, all requests (except health checks) will be authenticated via OIDC.
+// WithQUICAuthMiddleware sets the auth middleware that authenticates and
+// authorizes every request before it is dispatched. It is mandatory:
+// NewQUICServiceHandler refuses to build a handler without it.
 func WithQUICAuthMiddleware(m *quic.AuthMiddleware) QUICServiceHandlerOption {
 	return func(h *QUICServiceHandler) {
 		h.authMiddleware = m
@@ -281,8 +282,10 @@ func WithQUICGatewayHandler(handler *quic.GatewayHandler) QUICServiceHandlerOpti
 	}
 }
 
-// NewQUICServiceHandler creates a new QUIC service handler that delegates to daemon services
-func NewQUICServiceHandler(logger *logging.Logger, opts ...QUICServiceHandlerOption) *QUICServiceHandler {
+// NewQUICServiceHandler creates a new QUIC service handler that delegates to
+// daemon services. It returns ErrQUICAuthMiddlewareRequired unless an auth
+// middleware is configured with WithQUICAuthMiddleware.
+func NewQUICServiceHandler(logger *logging.Logger, opts ...QUICServiceHandlerOption) (*QUICServiceHandler, error) {
 	if logger == nil {
 		logger = logging.DefaultLogger()
 	}
@@ -296,7 +299,10 @@ func NewQUICServiceHandler(logger *logging.Logger, opts ...QUICServiceHandlerOpt
 		opt(h)
 	}
 
-	return h
+	if h.authMiddleware == nil {
+		return nil, ErrQUICAuthMiddlewareRequired{}
+	}
+	return h, nil
 }
 
 // SetCAHandler sets the CA handler after construction
@@ -485,14 +491,17 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICNilRequest{})
 	}
 
-	// Authenticate request if auth middleware is configured
-	if h.authMiddleware != nil {
-		authCtx, authResp := h.authMiddleware.AuthenticateRequest(ctx, req)
-		if authResp != nil {
-			return authResp // Authentication failed
-		}
-		ctx = authCtx // Use authenticated context with token
+	// Every request is authenticated and authorized against the operation
+	// catalog before dispatch. A handler not built by NewQUICServiceHandler
+	// has no middleware and serves nothing.
+	if h.authMiddleware == nil {
+		return h.errorResponse(quicwire.StatusUnavailable, ErrQUICAuthMiddlewareRequired{})
 	}
+	guardCtx, guardResp := h.authMiddleware.GuardRequest(ctx, req)
+	if guardResp != nil {
+		return guardResp
+	}
+	ctx = guardCtx
 
 	// Route based on opcode ranges
 	switch {
@@ -524,6 +533,11 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	// sub-operations (status, sources, step) in payload[0].
 	case req.Opcode == quicwire.OpNTPCategory:
 		return h.handleNTPCategory(ctx, req)
+
+	// IAM Category Opcode (0x51) - multiplexes the IAM tenant-record
+	// sub-operations, kept apart from the platform tenancy opcodes.
+	case req.Opcode == quicwire.OpIAMCategory:
+		return h.handleIAMCategory(ctx, req)
 
 	// Device Operations (0x30-0x3F)
 	case req.Opcode >= quicwire.OpDeviceRegister && req.Opcode <= quicwire.OpDeviceGetMetrics:

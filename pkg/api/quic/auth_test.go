@@ -101,11 +101,15 @@ func (m *mockQUICTokenValidator) ValidateToken(ctx context.Context, token string
 }
 
 type mockQUICAuthorizationChecker struct {
-	allowed bool
-	err     error
+	allowed      bool
+	err          error
+	lastResource string
+	lastAction   string
 }
 
 func (m *mockQUICAuthorizationChecker) CheckPermission(ctx context.Context, subject, resource, action string) (bool, error) {
+	m.lastResource = resource
+	m.lastAction = action
 	return m.allowed, m.err
 }
 
@@ -149,8 +153,8 @@ func TestAuthMiddlewareOptions(t *testing.T) {
 	m := NewAuthMiddleware(
 		WithQUICTokenValidator(validator),
 		WithQUICAuthorizationChecker(checker),
-		WithQUICSkipOpcodes(0xF0, 0xF1),
 		WithQUICRequireAuth(false),
+		WithQUICPeerAuthenticated(),
 	)
 
 	if m.tokenValidator != validator {
@@ -161,34 +165,24 @@ func TestAuthMiddlewareOptions(t *testing.T) {
 		t.Error("WithQUICAuthorizationChecker did not set authorization checker")
 	}
 
-	if !m.skipOpcodes[0xF0] || !m.skipOpcodes[0xF1] {
-		t.Error("WithQUICSkipOpcodes did not set skip opcodes")
-	}
-
 	if m.requireAuth {
 		t.Error("WithQUICRequireAuth(false) did not set requireAuth to false")
+	}
+
+	if !m.peerAuthenticated {
+		t.Error("WithQUICPeerAuthenticated did not mark the peer authenticated")
 	}
 }
 
 func TestNewAuthMiddleware_Defaults(t *testing.T) {
 	m := NewAuthMiddleware()
 
-	// Default should require auth
 	if !m.requireAuth {
 		t.Error("default requireAuth should be true")
 	}
 
-	// Default should skip health opcodes
-	if !m.skipOpcodes[quicwire.OpHealth] {
-		t.Error("OpHealth should be skipped by default")
-	}
-
-	if !m.skipOpcodes[quicwire.OpLiveness] {
-		t.Error("OpLiveness should be skipped by default")
-	}
-
-	if !m.skipOpcodes[quicwire.OpReadiness] {
-		t.Error("OpReadiness should be skipped by default")
+	if m.peerAuthenticated {
+		t.Error("the peer must not be treated as authenticated by default")
 	}
 }
 
@@ -196,18 +190,51 @@ func TestNewAuthMiddleware_Defaults(t *testing.T) {
 // AuthenticateRequest Tests
 // =============================================================================
 
-func TestAuthMiddleware_AuthenticateRequest_SkipOpcode(t *testing.T) {
-	m := NewAuthMiddleware()
+func TestAuthMiddleware_AuthenticateRequest_HealthIsNotExempt(t *testing.T) {
+	// Pre-auth exemptions live in the catalog and are applied by
+	// GuardRequest; AuthenticateRequest itself exempts nothing.
+	m := NewAuthMiddleware(WithQUICTokenValidator(&mockQUICTokenValidator{valid: true}))
 
-	req := &quicwire.Request{Opcode: quicwire.OpHealth}
-	ctx, resp := m.AuthenticateRequest(context.Background(), req)
+	_, resp := m.AuthenticateRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpHealth})
+
+	if resp == nil || resp.Status != quicwire.StatusUnauthorized {
+		t.Fatalf("expected Unauthorized for a tokenless request, got %+v", resp)
+	}
+}
+
+func TestAuthMiddleware_AuthenticateRequest_PeerAuthenticatedWithoutToken(t *testing.T) {
+	m := NewAuthMiddleware(WithQUICPeerAuthenticated())
+
+	ctx, resp := m.AuthenticateRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey})
 
 	if resp != nil {
-		t.Errorf("expected nil response for skipped opcode, got %+v", resp)
+		t.Fatalf("expected a certificate-authenticated peer to pass, got %+v", resp)
 	}
+	if _, ok := TokenFromContext(ctx); ok {
+		t.Fatal("no token was presented, none may be placed in the context")
+	}
+}
 
-	if ctx == nil {
-		t.Error("expected non-nil context")
+func TestAuthMiddleware_AuthenticateRequest_PeerAuthenticatedStillValidatesTokens(t *testing.T) {
+	m := NewAuthMiddleware(
+		WithQUICPeerAuthenticated(),
+		WithQUICTokenValidator(&mockQUICTokenValidator{valid: false}),
+	)
+
+	_, resp := m.AuthenticateRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey, Token: "forged"})
+
+	if resp == nil || resp.Status != quicwire.StatusUnauthorized {
+		t.Fatalf("expected a presented invalid token to be refused, got %+v", resp)
+	}
+}
+
+func TestAuthMiddleware_AuthenticateRequest_PeerAuthenticatedWithoutValidator(t *testing.T) {
+	m := NewAuthMiddleware(WithQUICPeerAuthenticated())
+
+	_, resp := m.AuthenticateRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey, Token: "opaque"})
+
+	if resp != nil {
+		t.Fatalf("expected the peer certificate to authenticate the request, got %+v", resp)
 	}
 }
 
@@ -327,23 +354,11 @@ func TestAuthMiddleware_AuthenticateRequest_ValidToken(t *testing.T) {
 // AuthorizeRequest Tests
 // =============================================================================
 
-func TestAuthMiddleware_AuthorizeRequest_SkipOpcode(t *testing.T) {
-	m := NewAuthMiddleware()
-
-	req := &quicwire.Request{Opcode: quicwire.OpHealth}
-	resp := m.AuthorizeRequest(context.Background(), req, "health", "read")
-
-	if resp != nil {
-		t.Errorf("expected nil response for skipped opcode, got %+v", resp)
-	}
-}
-
 func TestAuthMiddleware_AuthorizeRequest_NoChecker(t *testing.T) {
 	m := NewAuthMiddleware()
 
-	req := &quicwire.Request{Opcode: quicwire.OpVTPMCreate, Token: "test-token"}
 	ctx := ContextWithToken(context.Background(), "test-token")
-	resp := m.AuthorizeRequest(ctx, req, "vtpm", "write")
+	resp := m.AuthorizeRequest(ctx, "vtpm", "write")
 
 	if resp != nil {
 		t.Errorf("expected nil response when no checker configured, got %+v", resp)
@@ -356,8 +371,7 @@ func TestAuthMiddleware_AuthorizeRequest_NoTokenInContext(t *testing.T) {
 		WithQUICAuthorizationChecker(checker),
 	)
 
-	req := &quicwire.Request{Opcode: quicwire.OpVTPMCreate}
-	resp := m.AuthorizeRequest(context.Background(), req, "vtpm", "write")
+	resp := m.AuthorizeRequest(context.Background(), "vtpm", "write")
 
 	if resp == nil {
 		t.Fatal("expected error response when no token in context")
@@ -374,9 +388,8 @@ func TestAuthMiddleware_AuthorizeRequest_CheckFails(t *testing.T) {
 		WithQUICAuthorizationChecker(checker),
 	)
 
-	req := &quicwire.Request{Opcode: quicwire.OpVTPMCreate}
 	ctx := ContextWithToken(context.Background(), "test-token")
-	resp := m.AuthorizeRequest(ctx, req, "vtpm", "write")
+	resp := m.AuthorizeRequest(ctx, "vtpm", "write")
 
 	if resp == nil {
 		t.Fatal("expected error response for check failure")
@@ -393,9 +406,8 @@ func TestAuthMiddleware_AuthorizeRequest_NotAllowed(t *testing.T) {
 		WithQUICAuthorizationChecker(checker),
 	)
 
-	req := &quicwire.Request{Opcode: quicwire.OpVTPMCreate}
 	ctx := ContextWithToken(context.Background(), "test-token")
-	resp := m.AuthorizeRequest(ctx, req, "vtpm", "write")
+	resp := m.AuthorizeRequest(ctx, "vtpm", "write")
 
 	if resp == nil {
 		t.Fatal("expected error response when not allowed")
@@ -412,9 +424,8 @@ func TestAuthMiddleware_AuthorizeRequest_Allowed(t *testing.T) {
 		WithQUICAuthorizationChecker(checker),
 	)
 
-	req := &quicwire.Request{Opcode: quicwire.OpVTPMCreate}
 	ctx := ContextWithToken(context.Background(), "test-token")
-	resp := m.AuthorizeRequest(ctx, req, "vtpm", "write")
+	resp := m.AuthorizeRequest(ctx, "vtpm", "write")
 
 	if resp != nil {
 		t.Errorf("expected nil response when allowed, got %+v", resp)
@@ -422,229 +433,92 @@ func TestAuthMiddleware_AuthorizeRequest_Allowed(t *testing.T) {
 }
 
 // =============================================================================
-// OpcodePermission Tests
+// GuardRequest Tests
 // =============================================================================
 
-func TestOpcodePermission_Fields(t *testing.T) {
-	perm := OpcodePermission{Resource: "vtpm", Action: "write"}
+func TestAuthMiddleware_GuardRequest_PreAuthNeedsNoCredentials(t *testing.T) {
+	m := NewAuthMiddleware(WithQUICTokenValidator(&mockQUICTokenValidator{valid: false}))
 
-	if perm.Resource != "vtpm" {
-		t.Errorf("Resource = %q, want %q", perm.Resource, "vtpm")
-	}
-
-	if perm.Action != "write" {
-		t.Errorf("Action = %q, want %q", perm.Action, "write")
-	}
-}
-
-// =============================================================================
-// DefaultOpcodePermissions Tests
-// =============================================================================
-
-func TestDefaultOpcodePermissions(t *testing.T) {
-	perms := DefaultOpcodePermissions()
-
-	// Test that health opcodes have no permission requirement
-	healthOpcodes := []byte{quicwire.OpHealth, quicwire.OpLiveness, quicwire.OpReadiness}
-	for _, op := range healthOpcodes {
-		if perm := perms[op]; perm != nil {
-			t.Errorf("expected nil permission for health opcode 0x%02X, got %+v", op, perm)
+	for _, opcode := range []byte{quicwire.OpHealth, quicwire.OpLiveness, quicwire.OpReadiness, quicwire.OpIAMAuthenticate} {
+		if _, resp := m.GuardRequest(context.Background(), &quicwire.Request{Opcode: opcode}); resp != nil {
+			t.Errorf("pre-auth opcode 0x%02X refused: %+v", opcode, resp)
 		}
 	}
-
-	// Test VTPM operations
-	tests := []struct {
-		opcode   byte
-		resource string
-		action   string
-	}{
-		{quicwire.OpVTPMCreate, "vtpm", "write"},
-		{quicwire.OpVTPMDelete, "vtpm", "delete"},
-		{quicwire.OpVTPMStart, "vtpm", "write"},
-		{quicwire.OpVTPMStop, "vtpm", "write"},
-		{quicwire.OpVTPMGetState, "vtpm", "read"},
-		{quicwire.OpVTPMList, "vtpm", "read"},
-		{quicwire.OpVTPMGetEK, "vtpm", "read"},
-		{quicwire.OpVTPMGetAK, "vtpm", "read"},
-		{quicwire.OpVTPMCreateAK, "vtpm", "write"},
-		{quicwire.OpVTPMQuote, "vtpm", "read"},
-		{quicwire.OpVTPMExtendPCR, "vtpm", "write"},
-		{quicwire.OpVTPMReadPCR, "vtpm", "read"},
-		{quicwire.OpVTPMSeal, "vtpm", "write"},
-		{quicwire.OpVTPMUnseal, "vtpm", "read"},
-		// DNS operations
-		{quicwire.OpDNSAddRecord, "dns", "write"},
-		{quicwire.OpDNSDeleteRecord, "dns", "delete"},
-		{quicwire.OpDNSUpdateRecord, "dns", "write"},
-		{quicwire.OpDNSGetRecord, "dns", "read"},
-		{quicwire.OpDNSListRecords, "dns", "read"},
-		{quicwire.OpDNSAddZone, "dns", "write"},
-		{quicwire.OpDNSDeleteZone, "dns", "delete"},
-		{quicwire.OpDNSGetZone, "dns", "read"},
-		{quicwire.OpDNSListZones, "dns", "read"},
-		{quicwire.OpDNSResolve, "dns", "read"},
-		// Device operations
-		{quicwire.OpDeviceRegister, "device", "write"},
-		{quicwire.OpDeviceUnregister, "device", "delete"},
-		{quicwire.OpDeviceGet, "device", "read"},
-		{quicwire.OpDeviceList, "device", "read"},
-		{quicwire.OpDeviceUpdate, "device", "write"},
-		{quicwire.OpDeviceAttest, "device", "read"},
-		// SDN operations
-		{quicwire.OpSDNGetPortState, "sdn", "read"},
-		{quicwire.OpSDNSetPortState, "sdn", "write"},
-		{quicwire.OpSDNListPorts, "sdn", "read"},
-		{quicwire.OpSDNApplyPolicy, "sdn", "write"},
-		{quicwire.OpSDNGetPolicy, "sdn", "read"},
-		{quicwire.OpSDNListPolicies, "sdn", "read"},
-		{quicwire.OpSDNListBridges, "sdn", "read"},
-		{quicwire.OpSDNCreateBridge, "sdn", "write"},
-		{quicwire.OpSDNDeleteBridge, "sdn", "delete"},
-		{quicwire.OpSDNCreatePort, "sdn", "write"},
-		{quicwire.OpSDNDeletePort, "sdn", "delete"},
-		{quicwire.OpSDNDeletePolicy, "sdn", "delete"},
-		// KMS operations
-		{quicwire.OpKMSGenerateKey, "kms", "write"},
-		{quicwire.OpKMSImportKey, "kms", "write"},
-		{quicwire.OpKMSGetKey, "kms", "read"},
-		{quicwire.OpKMSListKeys, "kms", "read"},
-		{quicwire.OpKMSDeleteKey, "kms", "delete"},
-		{quicwire.OpKMSRotateKey, "kms", "write"},
-		{quicwire.OpKMSEncrypt, "kms", "write"},
-		{quicwire.OpKMSDecrypt, "kms", "read"},
-		{quicwire.OpKMSSign, "kms", "write"},
-		{quicwire.OpKMSVerify, "kms", "read"},
-		// IAM operations
-		{quicwire.OpIAMUserCreate, "iam", "write"},
-		{quicwire.OpIAMUserDelete, "iam", "delete"},
-		{quicwire.OpIAMUserGet, "iam", "read"},
-		{quicwire.OpIAMUserList, "iam", "read"},
-		{quicwire.OpIAMUserUpdate, "iam", "write"},
-		{quicwire.OpIAMRoleCreate, "iam", "write"},
-		{quicwire.OpIAMRoleDelete, "iam", "delete"},
-		{quicwire.OpIAMRoleGet, "iam", "read"},
-		{quicwire.OpIAMRoleList, "iam", "read"},
-		// CA operations
-		{quicwire.OpCAInfo, "ca", "read"},
-		{quicwire.OpCAIssue, "ca", "write"},
-		{quicwire.OpCARevoke, "ca", "write"},
-		{quicwire.OpCARenew, "ca", "write"},
-		{quicwire.OpCAGet, "ca", "read"},
-		{quicwire.OpCAList, "ca", "read"},
-	}
-
-	for _, tt := range tests {
-		t.Run(quicwire.OpcodeToString(tt.opcode), func(t *testing.T) {
-			perm := perms[tt.opcode]
-			if perm == nil {
-				t.Fatalf("expected permission for opcode 0x%02X, got nil", tt.opcode)
-			}
-
-			if perm.Resource != tt.resource {
-				t.Errorf("resource = %q, want %q", perm.Resource, tt.resource)
-			}
-
-			if perm.Action != tt.action {
-				t.Errorf("action = %q, want %q", perm.Action, tt.action)
-			}
-		})
-	}
 }
 
-// =============================================================================
-// Integration Test: AuthenticateRequest + AuthorizeRequest
-// =============================================================================
-
-func TestAuthMiddleware_FullFlow(t *testing.T) {
-	validator := &mockQUICTokenValidator{valid: true}
+func TestAuthMiddleware_GuardRequest_ChecksTheCatalogPermission(t *testing.T) {
 	checker := &mockQUICAuthorizationChecker{allowed: true}
-
 	m := NewAuthMiddleware(
-		WithQUICTokenValidator(validator),
+		WithQUICTokenValidator(&mockQUICTokenValidator{valid: true}),
 		WithQUICAuthorizationChecker(checker),
 	)
 
-	// Create request
-	req := &quicwire.Request{Opcode: quicwire.OpVTPMCreate, Token: "valid-token"}
+	req := &quicwire.Request{Opcode: quicwire.OpGatewayCategory, Token: "valid-token", Payload: []byte{quicwire.ProxySubRouteDelete}}
+	ctx, resp := m.GuardRequest(context.Background(), req)
 
-	// Authenticate
-	ctx, resp := m.AuthenticateRequest(context.Background(), req)
 	if resp != nil {
-		t.Fatalf("authentication failed: %+v", resp)
+		t.Fatalf("expected an allowed request to pass, got %+v", resp)
 	}
-
-	// Get permission for opcode
-	perms := DefaultOpcodePermissions()
-	perm := perms[req.Opcode]
-	if perm == nil {
-		t.Fatal("expected permission for OpVTPMCreate")
+	if checker.lastResource != "proxy" || checker.lastAction != "delete" {
+		t.Fatalf("checked %s:%s, want proxy:delete", checker.lastResource, checker.lastAction)
 	}
-
-	// Authorize
-	resp = m.AuthorizeRequest(ctx, req, perm.Resource, perm.Action)
-	if resp != nil {
-		t.Fatalf("authorization failed: %+v", resp)
+	if token, ok := TokenFromContext(ctx); !ok || token != "valid-token" {
+		t.Fatal("the dispatch context must carry the validated token")
 	}
 }
 
-func TestAuthMiddleware_FullFlow_Unauthorized(t *testing.T) {
-	validator := &mockQUICTokenValidator{valid: true}
-	checker := &mockQUICAuthorizationChecker{allowed: false}
-
+func TestAuthMiddleware_GuardRequest_DeniedPermission(t *testing.T) {
 	m := NewAuthMiddleware(
-		WithQUICTokenValidator(validator),
-		WithQUICAuthorizationChecker(checker),
+		WithQUICTokenValidator(&mockQUICTokenValidator{valid: true}),
+		WithQUICAuthorizationChecker(&mockQUICAuthorizationChecker{allowed: false}),
 	)
 
-	// Create request
-	req := &quicwire.Request{Opcode: quicwire.OpVTPMDelete, Token: "valid-token"}
+	_, resp := m.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpVTPMDelete, Token: "valid-token"})
 
-	// Authenticate
-	ctx, resp := m.AuthenticateRequest(context.Background(), req)
-	if resp != nil {
-		t.Fatalf("authentication failed: %+v", resp)
+	if resp == nil || resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %+v", resp)
 	}
+}
 
-	// Get permission for opcode
-	perms := DefaultOpcodePermissions()
-	perm := perms[req.Opcode]
-	if perm == nil {
-		t.Fatal("expected permission for OpVTPMDelete")
+func TestAuthMiddleware_GuardRequest_UnclassifiedIsDenied(t *testing.T) {
+	// A certificate-authenticated peer is authorized for every classified
+	// operation; an unclassified one is still refused.
+	m := NewAuthMiddleware(WithQUICPeerAuthenticated())
+
+	_, resp := m.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpGatewayCategory, Payload: []byte{0x7F}})
+
+	if resp == nil || resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %+v", resp)
 	}
-
-	// Authorize
-	resp = m.AuthorizeRequest(ctx, req, perm.Resource, perm.Action)
-	if resp == nil {
-		t.Fatal("expected authorization to fail")
+	want := ErrOperationNotClassified{Opcode: quicwire.OpGatewayCategory, Sub: 0x7F, HasSub: true}.Error()
+	if string(resp.Payload) != want {
+		t.Fatalf("payload = %q, want %q", resp.Payload, want)
 	}
+}
 
-	if resp.Status != quicwire.StatusPermissionDenied {
-		t.Errorf("status = %v, want %v", resp.Status, quicwire.StatusPermissionDenied)
+func TestAuthMiddleware_GuardRequest_AuthenticatesBeforeClassifying(t *testing.T) {
+	m := NewAuthMiddleware(WithQUICTokenValidator(&mockQUICTokenValidator{valid: true}))
+
+	_, resp := m.GuardRequest(context.Background(), &quicwire.Request{Opcode: 0x90})
+
+	if resp == nil || resp.Status != quicwire.StatusUnauthorized {
+		t.Fatalf("an anonymous caller must be refused as Unauthorized, got %+v", resp)
+	}
+}
+
+func TestAuthMiddleware_GuardRequest_CategoryWithoutSubOpcode(t *testing.T) {
+	m := NewAuthMiddleware(WithQUICPeerAuthenticated())
+
+	_, resp := m.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpNTPCategory})
+
+	if resp == nil || resp.Status != quicwire.StatusInvalidRequest {
+		t.Fatalf("expected InvalidRequest, got %+v", resp)
 	}
 }
 
 // =============================================================================
 // Edge Cases
 // =============================================================================
-
-func TestAuthMiddleware_CustomSkipOpcodes(t *testing.T) {
-	// Create middleware with custom skip opcode
-	customOpcode := byte(0xFF)
-	m := NewAuthMiddleware(
-		WithQUICSkipOpcodes(customOpcode),
-	)
-
-	req := &quicwire.Request{Opcode: customOpcode}
-	ctx, resp := m.AuthenticateRequest(context.Background(), req)
-
-	if resp != nil {
-		t.Errorf("expected nil response for custom skip opcode, got %+v", resp)
-	}
-
-	if ctx == nil {
-		t.Error("expected non-nil context")
-	}
-}
 
 func TestAuthMiddleware_EmptyToken_IsNotSkipped(t *testing.T) {
 	validator := &mockQUICTokenValidator{valid: true}

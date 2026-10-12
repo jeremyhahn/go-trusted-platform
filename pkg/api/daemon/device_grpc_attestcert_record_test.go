@@ -163,7 +163,7 @@ func TestNewDeviceAttestCertRecorder_NilWithoutCAOrDevices(t *testing.T) {
 
 func newQUICAttestCertHandler(t *testing.T, recorder AttestCertRecorder) *QUICServiceHandler {
 	t.Helper()
-	handler := NewQUICServiceHandler(
+	handler := newTestQUICServiceHandler(
 		logging.DefaultLogger(),
 		WithQUICDeviceService(newMockDeviceService()),
 		WithQUICDeviceProfileService(newMockProfileService()),
@@ -202,7 +202,7 @@ func TestQUICDeviceRecordAttestCert_RefusalIsInvalidRequest(t *testing.T) {
 }
 
 func TestQUICDeviceRecordAttestCert_UnavailableWithoutRecorder(t *testing.T) {
-	handler := NewQUICServiceHandler(
+	handler := newTestQUICServiceHandler(
 		logging.DefaultLogger(),
 		WithQUICDeviceService(newMockDeviceService()),
 		WithQUICDeviceProfileService(newMockProfileService()),

@@ -980,7 +980,7 @@ func TestDaemon_SetDeviceGRPCService_Coverage(t *testing.T) {
 
 func TestQUICServiceHandler_SetMethods(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	// Test all set methods
 	handler.SetCAHandler(nil)

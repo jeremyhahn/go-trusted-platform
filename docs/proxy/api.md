@@ -170,8 +170,8 @@ where that is true.**
   authorization asymmetry that affects the dns and vtpm surfaces
   ([`docs/vtpm/api.md`](../vtpm/api.md) §5).
 
-Both catalogs are default-allow for unlisted entries; that does not bite this
-feature because nothing is unlisted.
+The gRPC catalog is default-allow for unlisted entries (MCP and QUIC deny
+them); that does not bite this feature because nothing is unlisted.
 
 The `scp` column in §3–5 is the required scope per capability.
 

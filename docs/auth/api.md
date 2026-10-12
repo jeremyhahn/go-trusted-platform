@@ -438,21 +438,24 @@ reaches the client as a message, not as a distinguishable code.
 
 ## 7. Authorization
 
-Authentication is enforced on every transport. **Authorization is enforced only
-where a scope-catalog entry exists**, and both catalogs default to allow:
+Authentication is enforced on every transport. Authorization is enforced per
+operation against a scope catalog, and **only gRPC allows an unlisted entry**:
 
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
 | gRPC `pkg/api/grpc/method_permissions.go` | 185 of 461 RPCs, 11 of 31 services | Allowed once the token validates |
-| MCP `pkg/api/mcp/authz.go` | 71 of 449 declared tool names | `AuthorizeTool` returns no error |
+| MCP `pkg/api/mcp/authz.go` | 94 of 428 registered tools | Denied (`AuthErrorToolNotClassified`, #300) |
+| QUIC `pkg/api/quic/opcode_permissions.go` | every routable opcode and sub-opcode | Denied (`StatusPermissionDenied`, #767) |
 
 Detail, service lists and the standing owner question are in
 [`docs/daemon/api.md`](../daemon/api.md) §5. They are not restated here.
 
 Three MCP tools are explicitly public (empty required permission):
 `platform_health`, `platform_liveness`, `platform_readiness`.
-On QUIC, `OpHealth`, `OpLiveness` and `OpReadiness` map to `nil` in
-`DefaultOpcodePermissions`.
+On QUIC, `OpHealth`, `OpLiveness`, `OpReadiness` and `OpIAMAuthenticate`
+are the pre-auth list of the operation catalog
+(`pkg/api/quic/opcode_permissions.go`). Every other QUIC operation is
+classified there or refused (#767).
 
 ---
 

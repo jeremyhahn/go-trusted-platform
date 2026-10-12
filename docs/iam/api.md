@@ -18,7 +18,7 @@ gRPC: `PlatformIAMService`, **41 RPCs** — the largest service in the platform
 (`pkg/api/grpc/proto/iam.proto`).
 REST: `/api/v1/iam`, in **two parallel trees** — see §2.
 QUIC: users `0xA9`–`0xAD`, roles `0xB5`–`0xBA`, groups `0xBB`–`0xBF`, extended
-`0xF6`–`0xFB`.
+`0xF6`–`0xFB`, tenant records under the `OpIAMCategory` (`0x51`) category.
 MCP: 25 `iam_*` tools.
 
 ---
@@ -98,8 +98,8 @@ authorization policies themselves nor OAuth applications.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create tenant (IAM scoping) | `POST /api/v1/iam/tenants` | ✅ | ✅ | `iam_create_tenant` | ✅ |
-| List / get / update / delete tenant | `/api/v1/iam/tenants[/{tenant}]` | ✅ | ✅ | `iam_list_tenants`, `iam_get_tenant`, `iam_delete_tenant` | ✅ |
+| Create tenant (IAM scoping) | `POST /api/v1/iam/tenants` | ✅ | `0x51` sub `0x01` | `iam_create_tenant` | ✅ |
+| List / get / update / delete tenant | `/api/v1/iam/tenants[/{tenant}]` | ✅ | `0x51` subs `0x03` / `0x02` / `0x04` / `0x05` | `iam_list_tenants`, `iam_get_tenant`, `iam_delete_tenant` | ✅ |
 | Authenticate | `MISSING — docs/13 G7` | ✅ | ✅ | `iam_authenticate` | ✅ |
 | Create token | `MISSING — docs/13 G7` | ✅ | JWT/auth `0x90`–`0x97` | `iam_create_token` | ✅ |
 | Verify token | `MISSING — docs/13 G7` | ✅ | as above | `iam_verify_token` | ✅ |
@@ -147,11 +147,21 @@ gated or absent. Details and rationale:
 [authorization.md §Route-level RBAC](authorization.md) and
 [`docs/auth/architecture.md` §6c](../auth/architecture.md).
 
-That gate is REST-only. The gRPC/QUIC/MCP pictures below are unchanged.
+That gate is REST-only; the gRPC, QUIC and MCP pictures follow.
 
 **`PlatformIAMService` is in the gRPC scope catalog** with **41 methods
 mapped** — the largest entry in the catalog, resource `iam`, actions
 `read`/`write`/`delete`.
+
+**QUIC carries the same `iam` pairs (#767).** IAM tenant records travel under
+their own category, `OpIAMCategory` (`0x51`): sub-opcodes `IAMSubTenantCreate`
+`0x01` and `IAMSubTenantUpdate` `0x04` need `iam:write`, `IAMSubTenantGet`
+`0x02` and `IAMSubTenantList` `0x03` need `iam:read`, `IAMSubTenantDelete`
+`0x05` needs `iam:delete`. The daemon delegates them to `IAMGRPCService`
+(`pkg/api/daemon/quic_iam_category.go`). Before #767 the SDK sent these calls
+on the `OpTenant*` bytes, which dispatch to the platform `TenantService`
+([`docs/tenant/`](../tenant/)): an IAM tenant call reached the wrong service,
+and the catalog could not give one byte both meanings' scopes.
 
 **None of the 25 `iam_*` MCP tools is in the MCP authorization map, so every
 one of them is refused.** Of 428 registered tools, 94 carry a permission; no

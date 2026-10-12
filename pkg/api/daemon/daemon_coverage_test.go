@@ -411,7 +411,7 @@ func TestService_ServiceState(t *testing.T) {
 func TestQUICServiceHandler_HandleRequest(t *testing.T) {
 	t.Run("health operations", func(t *testing.T) {
 		logger := logging.DefaultLogger()
-		handler := NewQUICServiceHandler(logger)
+		handler := newTestQUICServiceHandler(logger)
 
 		ctx := context.Background()
 
@@ -439,7 +439,7 @@ func TestQUICServiceHandler_HandleRequest(t *testing.T) {
 
 	t.Run("unknown opcode returns not implemented", func(t *testing.T) {
 		logger := logging.DefaultLogger()
-		handler := NewQUICServiceHandler(logger)
+		handler := newTestQUICServiceHandler(logger)
 
 		ctx := context.Background()
 		resp := handler.HandleRequest(ctx, &quicwire.Request{
@@ -456,7 +456,7 @@ func TestQUICServiceHandler_HandleRequest(t *testing.T) {
 
 func TestQUICKMS_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	testCases := []struct {
@@ -621,7 +621,7 @@ func TestQUICIAM_RequestResponse_Encoding(t *testing.T) {
 
 func TestQUICIAM_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	testCases := []struct {
@@ -664,7 +664,7 @@ func TestQUICIAM_ServiceNotAvailable(t *testing.T) {
 
 func TestQUICSDN_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	testCases := []struct {
@@ -703,7 +703,7 @@ func TestQUICSDN_ServiceNotAvailable(t *testing.T) {
 
 func TestQUICDNS_ServiceNotAvailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 	ctx := context.Background()
 
 	testCases := []struct {

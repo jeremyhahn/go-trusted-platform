@@ -32,7 +32,7 @@ import (
 // newKMSExtendedTestHandler builds a QUIC handler with a seeded mock KMS
 // service for KMS extended category tests.
 func newKMSExtendedTestHandler() (*QUICServiceHandler, *mockKMSService) {
-	handler := NewQUICServiceHandler(logging.DefaultLogger())
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
 	svc := newMockKMSService()
 	svc.keys["key-1"] = &pb.KeyHandle{
 		KeyId:     "key-1",
@@ -237,8 +237,12 @@ func TestHandleKMSExtendedCategoryAlgorithmsAndDispatch(t *testing.T) {
 	})
 
 	t.Run("UnknownSubOpcode", func(t *testing.T) {
+		// The authorization guard refuses an unclassified sub-opcode before
+		// dispatch; the category handler still rejects it on its own.
 		req := &quicwire.Request{Opcode: quicwire.OpKMSExtendedCategory, Payload: []byte{0xEE}}
 		resp := handler.HandleRequest(ctx, req)
+		assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+		resp = handler.handleKMSExtendedCategory(ctx, req)
 		assert.Equal(t, quicwire.StatusNotImplemented, resp.Status)
 	})
 
@@ -249,7 +253,7 @@ func TestHandleKMSExtendedCategoryAlgorithmsAndDispatch(t *testing.T) {
 	})
 
 	t.Run("ServiceUnavailable", func(t *testing.T) {
-		bare := NewQUICServiceHandler(logging.DefaultLogger())
+		bare := newTestQUICServiceHandler(logging.DefaultLogger())
 		req := kmsExtendedRequest(t, quicwire.OpKMSExtendedCategory, quicwire.KMSSubRevokeKey,
 			&KMSRevokeKeyRequest{KeyID: "key-1"})
 		resp := bare.HandleRequest(ctx, req)

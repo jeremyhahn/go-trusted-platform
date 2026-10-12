@@ -856,6 +856,9 @@ var opcodeNames = map[byte]string{
 	// NTP (time synchronization)
 	OpNTPCategory: "NTPCategory",
 
+	// IAM tenant records
+	OpIAMCategory: "IAMCategory",
+
 	// IDevID/IAK Device Identity
 	OpIDevIDGenerate:     "IDevIDGenerate",
 	OpIDevIDInfo:         "IDevIDInfo",

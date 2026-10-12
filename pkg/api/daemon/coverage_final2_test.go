@@ -488,7 +488,7 @@ func TestCoverageFinal2KMSServiceAccessors(t *testing.T) {
 func TestCoverageFinal2QUICHandlerRoutingAllRanges(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
 	// Test routing for each major opcode range with nil services
@@ -615,43 +615,43 @@ func TestCoverageFinal2WithQUICOptions(t *testing.T) {
 	logger := logging.DefaultLogger()
 
 	// WithQUICCAService with nil should not set a handler
-	h := NewQUICServiceHandler(logger, WithQUICCAService(nil))
+	h := newTestQUICServiceHandler(logger, WithQUICCAService(nil))
 	if h.caHandler != nil {
 		t.Error("caHandler should be nil when CA is nil")
 	}
 
 	// WithQUICContainerService with nil should not set handler
-	h = NewQUICServiceHandler(logger, WithQUICContainerService(nil))
+	h = newTestQUICServiceHandler(logger, WithQUICContainerService(nil))
 	if h.containerHandler != nil {
 		t.Error("containerHandler should be nil when orchestrator is nil")
 	}
 
 	// WithQUICAttestationService with nil should not set handler
-	h = NewQUICServiceHandler(logger, WithQUICAttestationService(nil))
+	h = newTestQUICServiceHandler(logger, WithQUICAttestationService(nil))
 	if h.attestationHandler != nil {
 		t.Error("attestationHandler should be nil when svc is nil")
 	}
 
 	// WithQUICVMService with nil should not set handler
-	h = NewQUICServiceHandler(logger, WithQUICVMService(nil))
+	h = newTestQUICServiceHandler(logger, WithQUICVMService(nil))
 	if h.vmHandler != nil {
 		t.Error("vmHandler should be nil when orchestrator is nil")
 	}
 
 	// WithQUICVTPMService sets the vtpm service
-	h = NewQUICServiceHandler(logger, WithQUICVTPMService(nil))
+	h = newTestQUICServiceHandler(logger, WithQUICVTPMService(nil))
 	if h.vtpmService != nil {
 		t.Error("vtpmService should be nil")
 	}
 
 	// WithQUICDeviceService
-	h = NewQUICServiceHandler(logger, WithQUICDeviceService(nil))
+	h = newTestQUICServiceHandler(logger, WithQUICDeviceService(nil))
 	if h.deviceService != nil {
 		t.Error("deviceService should be nil")
 	}
 
 	// WithQUICDeviceProfileService
-	h = NewQUICServiceHandler(logger, WithQUICDeviceProfileService(nil))
+	h = newTestQUICServiceHandler(logger, WithQUICDeviceProfileService(nil))
 	if h.profileService != nil {
 		t.Error("profileService should be nil")
 	}
@@ -664,7 +664,7 @@ func TestCoverageFinal2WithQUICOptions(t *testing.T) {
 func TestCoverageFinal2QUICHandlerPXERouting(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
 	// PXE primary (0xEC-0xEF)
@@ -687,7 +687,7 @@ func TestCoverageFinal2QUICHandlerPXERouting(t *testing.T) {
 func TestCoverageFinal2QUICHandlerAttestVMWorkload(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpAttestVMWorkload, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
@@ -701,7 +701,7 @@ func TestCoverageFinal2QUICHandlerAttestVMWorkload(t *testing.T) {
 func TestCoverageFinal2QUICHandlerIAMExtended(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
 	// IAM extended (0xF6-0xFB)
@@ -718,7 +718,7 @@ func TestCoverageFinal2QUICHandlerIAMExtended(t *testing.T) {
 func TestCoverageFinal2QUICHandlerVMExtended(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpVMRestart, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
@@ -732,7 +732,7 @@ func TestCoverageFinal2QUICHandlerVMExtended(t *testing.T) {
 func TestCoverageFinal2QUICHandlerAttestPolicy(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
 	resp := h.HandleRequest(ctx, &quicwire.Request{Opcode: quicwire.OpAttestCreatePolicy, Payload: []byte{}})
@@ -753,7 +753,7 @@ func TestCoverageFinal2QUICHandlerAttestPolicy(t *testing.T) {
 func TestCoverageFinal2QUICHandlerContainerLogs(t *testing.T) {
 	t.Parallel()
 
-	h := NewQUICServiceHandler(logging.DefaultLogger())
+	h := newTestQUICServiceHandler(logging.DefaultLogger())
 	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpContainerLogs, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")

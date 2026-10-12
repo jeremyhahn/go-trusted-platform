@@ -188,11 +188,21 @@ validated."*
 
 **No `platform_eab_*` tool is in the MCP authorization map.**
 `AuthorizationChecker.initToolPermissions` (`pkg/api/mcp/authz.go`) has no EAB
-entries, and `AuthorizeTool` returns no error for a tool absent from the map.
+entries, and since #300 `AuthorizeTool` refuses a tool absent from the map, so
+every EAB tool is refused on MCP.
 
-Net effect, verified 2026-08-18: **any principal holding a valid platform token
-can create, read, revoke and delete EAB credentials on gRPC, Unix, QUIC and
-MCP.** A create response contains a fresh HMAC key. Whether both catalogs should
+**QUIC requires the `eab` scopes (#767).** The EAB sub-opcodes of
+`OpProvisioningCategory` (`0xCF`) are classified in
+`pkg/api/quic/opcode_permissions.go`:
+
+| Scope | Sub-opcodes |
+|---|---|
+| `eab:read` | `EABSubGetCredential`, `EABSubGetCredentialByKeyID`, `EABSubListCredentials`, `EABSubValidateCredential`, `EABSubGetCredentialQRCode`, `EABSubGetEnrollmentURL` |
+| `eab:write` | `EABSubCreateCredential`, `EABSubRevokeCredential`, `EABSubMarkCredentialUsed` |
+| `eab:delete` | `EABSubDeleteCredential`, `EABSubCleanupExpiredCredentials` |
+
+Net effect: **any principal holding a valid platform token can create, read,
+revoke and delete EAB credentials on gRPC and Unix.** A create response contains a fresh HMAC key. Whether both catalogs should
 default to deny is the platform-wide open question recorded in
 [`docs/daemon/api.md`](../daemon/api.md) §5; this row is one of its sharper
 consequences and is raised for the owner rather than decided here.
@@ -208,7 +218,7 @@ credential is a bearer secret that authorises certificate issuance, so create,
 revoke, delete and the credential listing are all credential-bearing — before
 #165 they answered a caller with no token at all.
 
-This changes the REST position only. The gRPC, Unix, MCP and embedded
+This changes the REST position only. The gRPC, Unix, QUIC, MCP and embedded
 positions described above are unchanged. See
 [`docs/auth/architecture.md`](../auth/architecture.md) §6c.
 

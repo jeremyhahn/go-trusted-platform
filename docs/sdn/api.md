@@ -251,12 +251,15 @@ Platform tokens carry an `scp` claim as `"<resource>:<action>"`. **`SDNService`
 is one of the eleven services in the gRPC scope catalog**
 (`pkg/api/grpc/method_permissions.go`), with 25 of its methods mapped —
 resource `sdn`, actions `read`, `write`, `delete`. QUIC projects the same
-mapping through `DefaultOpcodePermissions`; MCP through `AuthorizeTool`.
+mapping through its operation catalog (`pkg/api/quic/opcode_permissions.go`);
+MCP through `AuthorizeTool`.
 
-`OverlayService` and `SwitchService` are **not** in the catalog, and the
+`OverlayService` and `SwitchService` are **not** in the gRPC catalog, and the
 catalog's doc comment states that a method absent from the map carries no
-required scope. So overlay and switch operations require only a validated
-token, while the equivalent SDN operations require `sdn:write`. That asymmetry
+required scope. So on gRPC, overlay and switch operations require only a
+validated token, while the equivalent SDN operations require `sdn:write`. QUIC
+classifies every operation (#767): overlay sub-opcodes need `sdn:*` and switch
+sub-opcodes `switch:read` / `switch:write`. That asymmetry
 is raised as an owner question in the migration report.
 
 ### REST is gated on the `admin` role (#165)

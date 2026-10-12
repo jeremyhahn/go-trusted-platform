@@ -107,7 +107,7 @@ func TestQUIC_LDevIDCreate(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("happy path delegates and round-trips pb", func(t *testing.T) {
-		h := NewQUICServiceHandler(logging.DefaultLogger())
+		h := newTestQUICServiceHandler(logging.DefaultLogger())
 		h.SetIDevIDService(wiredLDevIDService(t))
 
 		payload, err := quicwire.EncodePayload(&platformv1.CreateLDevIDRequest{
@@ -125,7 +125,7 @@ func TestQUIC_LDevIDCreate(t *testing.T) {
 	})
 
 	t.Run("nil service is unavailable", func(t *testing.T) {
-		h := NewQUICServiceHandler(logging.DefaultLogger())
+		h := newTestQUICServiceHandler(logging.DefaultLogger())
 		resp := h.handleLDevIDCreate(ctx, nil)
 		assert.Equal(t, quicwire.StatusUnavailable, resp.Status)
 	})
@@ -134,7 +134,7 @@ func TestQUIC_LDevIDCreate(t *testing.T) {
 		svc := newLDevIDTestService(t)
 		svc.SetTPM2Service(&ldevidMockTPM{idevidCert: nil, pks: &ldevidMockPKS{}})
 		svc.SetCAService(&ldevidMockCA{})
-		h := NewQUICServiceHandler(logging.DefaultLogger())
+		h := newTestQUICServiceHandler(logging.DefaultLogger())
 		h.SetIDevIDService(svc)
 
 		payload, err := quicwire.EncodePayload(&platformv1.CreateLDevIDRequest{})

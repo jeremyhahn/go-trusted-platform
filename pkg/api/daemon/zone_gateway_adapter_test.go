@@ -68,7 +68,7 @@ func TestQUICGatewayListNetworkZones_Reproduction(t *testing.T) {
 	gatewayHandler := quic.NewGatewayHandler(logger, adapter)
 
 	// Build the QUICServiceHandler with only the gateway handler wired.
-	h := NewQUICServiceHandler(logger,
+	h := newTestQUICServiceHandler(logger,
 		WithQUICGatewayHandler(gatewayHandler),
 	)
 
@@ -123,7 +123,7 @@ func TestQUICGatewayListNetworkZones_FilterByRole(t *testing.T) {
 	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc, nil)
 	logger := logging.DefaultLogger()
 	gatewayHandler := quic.NewGatewayHandler(logger, adapter)
-	h := NewQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
+	h := newTestQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
 
 	t.Run("provisioning role returns exactly one zone", func(t *testing.T) {
 		listReq := struct {
@@ -179,7 +179,7 @@ func TestQUICGatewayListNetworkZones_NilZoneSvc(t *testing.T) {
 	adapter := newFullGatewayQUICAdapter(ipamAlloc, nil, nil)
 	logger := logging.DefaultLogger()
 	gatewayHandler := quic.NewGatewayHandler(logger, adapter)
-	h := NewQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
+	h := newTestQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
 
 	bodyBytes, err := quicwire.EncodePayload(struct {
 		LifecycleRole string `codec:"lifecycle_role,omitempty"`
@@ -341,7 +341,7 @@ func TestQUICHandler_RecoverGuard_PanicInHandler(t *testing.T) {
 
 	logger := logging.DefaultLogger()
 	gatewayHandler := quic.NewGatewayHandler(logger, &panicGatewayService{})
-	h := NewQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
+	h := newTestQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
 
 	bodyBytes, err := quicwire.EncodePayload(struct {
 		LifecycleRole string `codec:"lifecycle_role,omitempty"`

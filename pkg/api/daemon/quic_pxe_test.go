@@ -370,7 +370,7 @@ func createTestPXEHandler() (*QUICServiceHandler, *MockPXEService) {
 	logger := logging.DefaultLogger()
 	mockPXE := NewMockPXEService()
 
-	handler := NewQUICServiceHandler(logger,
+	handler := newTestQUICServiceHandler(logger,
 		WithQUICPXEService(mockPXE),
 	)
 
@@ -500,7 +500,7 @@ func TestHandlePXEListDevices_ServiceError(t *testing.T) {
 
 func TestHandlePXEListDevices_ServiceUnavailable(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger) // No PXE service configured
+	handler := newTestQUICServiceHandler(logger) // No PXE service configured
 	ctx := context.Background()
 
 	req := &quicwire.Request{
@@ -1077,7 +1077,7 @@ func TestWithQUICPXEService(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockPXE := NewMockPXEService()
 
-	handler := NewQUICServiceHandler(logger,
+	handler := newTestQUICServiceHandler(logger,
 		WithQUICPXEService(mockPXE),
 	)
 
@@ -1086,7 +1086,7 @@ func TestWithQUICPXEService(t *testing.T) {
 
 func TestSetPXEService(t *testing.T) {
 	logger := logging.DefaultLogger()
-	handler := NewQUICServiceHandler(logger)
+	handler := newTestQUICServiceHandler(logger)
 
 	assert.Nil(t, handler.pxeService)
 
