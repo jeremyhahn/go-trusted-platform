@@ -87,6 +87,12 @@ message OverlayStatus {
 }
 ```
 
+`OverlayStatus` carries no ND suppression counters. ND suppression runs in
+the gateway overlay mode, and its counters are on that handler's status
+(`OverlayModeStatus.NDSuppression`, see
+[ND suppression](../../gateway/engineering.md#nd-suppression)).
+gatewayd does not build the overlay service yet, so no transport serves them.
+
 ## REST API Quick Reference
 
 Base URL: `https://localhost:8443/api/v1/sdn/overlay`

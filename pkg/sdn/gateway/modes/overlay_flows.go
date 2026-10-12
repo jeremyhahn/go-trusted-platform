@@ -27,6 +27,11 @@ import (
 // (…0002), load balancer (…0003), NAT64 (…0004) and perf (…00FF) cookies.
 const OverlayCookie uint64 = 0xF1BE000000000005
 
+// OverlayNDCookie tags the overlay's ND punt flows, which the ND controller
+// owns apart from every other overlay flow: they expire unless it refreshes
+// them, and it removes them alone when it falls back to the flood.
+const OverlayNDCookie uint64 = 0xF1BE000000000006
+
 // Flow priorities of the overlay pipeline. Within a table a more specific
 // purpose outranks a broader one; priority 0 is each table's miss.
 const (
@@ -46,8 +51,10 @@ const (
 	priorityRemoteGateway uint16 = 250
 	priorityHostMAC       uint16 = 200
 
-	// Table 40.
+	// Table 40: a DAD probe floods before any punt can take it.
+	priorityNDDAD    uint16 = 210
 	priorityARPReply uint16 = 200
+	priorityNDPunt   uint16 = 200
 
 	// Table 50: host routes outrank every prefix route; a prefix route
 	// sits at priorityPrefixBase plus its length, so the longest wins.
@@ -67,9 +74,13 @@ const (
 const (
 	ethTypeIPv4 uint16 = 0x0800
 	ethTypeARP  uint16 = 0x0806
+	ethTypeIPv6 uint16 = 0x86dd
 	ethTypeVLAN uint16 = 0x8100
 	arpRequest  uint16 = 1
 	arpReply    uint16 = 2
+
+	ipProtoICMPv6 uint8 = 58
+	icmpv6NS      uint8 = 135
 )
 
 // overlayPorts are the OpenFlow numbers of the two ports the overlay
@@ -103,6 +114,10 @@ type flowBuilder struct {
 	// arpSwap turns an ARP request into the reply's addressing: the
 	// requester becomes the target.
 	arpSwap []openflow.Action
+
+	// ndPuntAction sends a neighbor solicitation to the controller through
+	// the ND meter.
+	ndPuntAction openflow.Action
 }
 
 // newFlowBuilder builds the ARP rewrite once; a field-width mismatch there
@@ -123,6 +138,11 @@ func newFlowBuilder(cfg *OverlayModeConfig, ports overlayPorts) (*flowBuilder, e
 		l3vni:          cfg.L3VNI,
 		arpSuppression: cfg.ARPSuppression,
 	}
+	punt, err := openflow.NewActionController2(overlayNDMeterID)
+	if err != nil {
+		return nil, err
+	}
+	b.ndPuntAction = punt
 	if cfg.L3VNI != 0 {
 		b.routerMAC = cfg.EVPNConfig.RouterMAC
 	}
@@ -163,7 +183,7 @@ func (b *flowBuilder) flow(table uint8, priority uint16, match *openflow.Match, 
 //	20  (the services' conntrack gate) miss → 30
 //	30  gateway MAC from access, or router MAC on the L3VNI → 50;
 //	    gateway MAC from a VTEP → drop; miss → 40
-//	40  miss → 60
+//	40  a DAD probe from access → 60, outranking every ND punt; miss → 60
 //	50  miss → drop: a routed frame without a route
 //	60  miss → drop: a frame with no segment to flood in
 //	70  back out the access port, or out IN_PORT when it came from there
@@ -180,6 +200,7 @@ func (b *flowBuilder) base() []*openflow.FlowMod {
 		b.flow(TableVXLANDecap, priorityMiss, nil, openflow.NewInstructionGotoTable(TableMACLearning)),
 		b.flow(TableCTGate, priorityMiss, nil, openflow.NewInstructionGotoTable(TableMACLearning)),
 		b.flow(TableMACLearning, priorityMiss, nil, openflow.NewInstructionGotoTable(TableARP)),
+		b.flow(TableARP, priorityNDDAD, b.dadProbe(), openflow.NewInstructionGotoTable(TableEgress)),
 		b.flow(TableARP, priorityMiss, nil, openflow.NewInstructionGotoTable(TableEgress)),
 		b.flow(TableL3Routing, priorityMiss, nil),
 		b.flow(TableEgress, priorityMiss, nil),
@@ -223,17 +244,12 @@ func (b *flowBuilder) segment(vni uint32, s *overlaySegment) []*openflow.FlowMod
 	// Deliver locally first: OpenFlow never outputs to the ingress port,
 	// so a frame from the access port reaches only the VTEPs and a frame
 	// from the VXLAN port only the access port — split horizon.
-	flood := []openflow.Action{
+	flood := append([]openflow.Action{
 		openflow.NewActionPushVLAN(ethTypeVLAN),
 		openflow.NewActionSetField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBVlanVid, encodeVLAN(s.vlan)),
 		openflow.NewActionOutput(b.ports.access, 0),
 		openflow.NewActionPopVLAN(),
-	}
-	for _, vtep := range s.flood {
-		flood = append(flood,
-			openflow.NewActionSetTunDst(vtep),
-			openflow.NewActionOutput(b.ports.vxlan, 0))
-	}
+	}, b.vtepFlood(s)...)
 
 	flows := []*openflow.FlowMod{
 		b.flow(TableVXLANDecap, priorityAccessIngress, ingress,
@@ -250,6 +266,18 @@ func (b *flowBuilder) segment(vni uint32, s *overlaySegment) []*openflow.FlowMod
 		flows = append(flows, b.decapAllow(vni, vtep))
 	}
 	return flows
+}
+
+// vtepFlood is ingress replication: one copy to every VTEP placed on the
+// segment.
+func (b *flowBuilder) vtepFlood(s *overlaySegment) []openflow.Action {
+	flood := make([]openflow.Action, 0, 2*len(s.flood))
+	for _, vtep := range s.flood {
+		flood = append(flood,
+			openflow.NewActionSetTunDst(vtep),
+			openflow.NewActionOutput(b.ports.vxlan, 0))
+	}
+	return flood
 }
 
 // decapAllow admits frames tunnelled from vtep on vni. They join the
@@ -287,6 +315,45 @@ func (b *flowBuilder) arpReply(vni uint32, vlan uint16, ip netip.Addr, mac net.H
 		openflow.NewActionOutput(openflow.OFPPInPort, 0),
 	}
 	return b.flow(TableARP, priorityARPReply, match, openflow.NewInstructionApplyActions(actions...))
+}
+
+// ndPunt sends a neighbor solicitation from the access port for target on
+// vni to the controller, which answers it, instead of flooding it. The meter
+// rides on the controller action. The flow carries a hard timeout, which
+// the controller refreshes: a controller that dies without removing it
+// stops taking the solicitations from the flood for no longer than that.
+// The ND controller owns these flows, not the flow table; host flows do not
+// include them.
+func (b *flowBuilder) ndPunt(vni uint32, target netip.Addr) *openflow.FlowMod {
+	match := b.solicitation()
+	match.AddTunnelID(uint64(vni))
+	targetBytes := target.As16()
+	match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBIPv6NdTarget, targetBytes[:], nil)
+
+	f := b.flow(TableARP, priorityNDPunt, match, openflow.NewInstructionApplyActions(b.ndPuntAction))
+	f.Cookie = OverlayNDCookie
+	f.HardTimeout = overlayNDPuntHardTimeout
+	return f
+}
+
+// dadProbe matches a duplicate address detection probe from the access
+// port: a solicitation from the unspecified address. The owner must defend
+// its address, so a probe is never answered and always floods.
+func (b *flowBuilder) dadProbe() *openflow.Match {
+	match := b.solicitation()
+	unspecified := netip.IPv6Unspecified().As16()
+	match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBIPv6Src, unspecified[:], nil)
+	return match
+}
+
+// solicitation matches a neighbor solicitation from the access port.
+func (b *flowBuilder) solicitation() *openflow.Match {
+	match := openflow.NewMatch()
+	match.AddInPort(b.ports.access)
+	match.AddEthType(ethTypeIPv6)
+	match.AddIPProto(ipProtoICMPv6)
+	match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBICMPv6Type, []byte{icmpv6NS}, nil)
+	return match
 }
 
 // host is the flows of one MAC on vni: bridging to it, the ARP replies for

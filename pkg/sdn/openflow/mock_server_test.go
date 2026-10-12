@@ -59,6 +59,9 @@ type mockOFServer struct {
 	// a dropped wakeup cannot lose a message.
 	arrivals chan struct{}
 
+	// accepted carries a wakeup per connection the server accepts.
+	accepted chan struct{}
+
 	// Response behavior
 	sendHelloReply          bool
 	sendFeaturesReply       bool
@@ -83,6 +86,32 @@ type mockOFServer struct {
 	sendWrongFeaturesType   bool
 	sendShortMultipartReply bool
 	sendUnknownXid          bool
+
+	// Switch config: missSendLen is what SET_CONFIG stored and GET_CONFIG
+	// reports; ignoreSetConfig models a switch that keeps it at zero.
+	missSendLen     uint16
+	ignoreSetConfig bool
+
+	// Meter table: meters holds the installed meters by ID; meterMods
+	// records every meter mod in arrival order; metersUnsupported models a
+	// datapath without meter support.
+	meters            map[uint32]MeterMod
+	meterMods         []MeterMod
+	meterStats        map[uint32]MeterStats
+	metersUnsupported bool
+
+	// receivedPacketOuts records the packet-out message bodies.
+	receivedPacketOuts [][]byte
+
+	// packetOutErrType and packetOutErrCode, when nonzero, make the switch
+	// reject every packet-out asynchronously with an OFPT_ERROR.
+	packetOutErrType uint16
+	packetOutErrCode uint16
+
+	// configFlags is the fragment policy SET_CONFIG stored and GET_CONFIG
+	// reports; setConfigs records every SET_CONFIG flags value received.
+	configFlags uint16
+	setConfigs  []uint16
 }
 
 // newMockOFServer creates a new mock OpenFlow server
@@ -114,8 +143,11 @@ func newMockOFServer(t *testing.T) (*mockOFServer, string) {
 		sendMultipartReply: true,
 		receivedFlowMods:   make([]FlowMod, 0),
 		arrivals:           make(chan struct{}, 1),
+		accepted:           make(chan struct{}, 4),
 		flowStats:          make([]FlowStats, 0),
 		failFlowModIndexes: make(map[int]struct{}),
+		meters:             make(map[uint32]MeterMod),
+		meterStats:         make(map[uint32]MeterStats),
 	}
 
 	// Start accepting connections
@@ -156,6 +188,10 @@ func (s *mockOFServer) acceptConnections() {
 		s.mu.Lock()
 		s.conn = conn
 		s.mu.Unlock()
+		select {
+		case s.accepted <- struct{}{}:
+		default:
+		}
 
 		// Handle connection in a separate goroutine
 		s.wg.Add(1)
@@ -167,12 +203,16 @@ func (s *mockOFServer) acceptConnections() {
 // handleConnection handles OpenFlow messages from a client
 func (s *mockOFServer) handleConnection() {
 	defer s.wg.Done()
+
+	// This handler owns the connection it was started for: after a
+	// reconnect s.conn is the next handler's.
+	s.mu.Lock()
+	conn := s.conn
+	s.mu.Unlock()
 	defer func() {
-		s.mu.Lock()
-		if s.conn != nil {
-			_ = s.conn.Close()
+		if conn != nil {
+			_ = conn.Close()
 		}
-		s.mu.Unlock()
 	}()
 
 	headerBuf := make([]byte, HeaderSize)
@@ -183,10 +223,6 @@ func (s *mockOFServer) handleConnection() {
 			return
 		default:
 		}
-
-		s.mu.Lock()
-		conn := s.conn
-		s.mu.Unlock()
 
 		if conn == nil {
 			return
@@ -291,6 +327,24 @@ func (s *mockOFServer) handleMessage(header *Header, body []byte) {
 
 	case OFPTMultipartRequest:
 		s.handleMultipartRequest(header, body)
+
+	case OFPTSetConfig:
+		s.handleSetConfig(body)
+
+	case OFPTGetConfigRequest:
+		s.handleGetConfigRequest(header)
+
+	case OFPTMeterMod:
+		s.handleMeterMod(header, body)
+
+	case OFPTPacketOut:
+		s.mu.Lock()
+		s.receivedPacketOuts = append(s.receivedPacketOuts, append([]byte(nil), body...))
+		if s.packetOutErrType != 0 {
+			s.sendErrorMessage(header.Xid, s.packetOutErrType, s.packetOutErrCode)
+		}
+		s.mu.Unlock()
+		s.noteArrival()
 
 	case OFPTEchoReply:
 		// The client auto-replies to an echo request. Recording it is what
@@ -577,6 +631,181 @@ func (s *mockOFServer) handleMultipartRequest(header *Header, body []byte) {
 	if reqType == OFPMPGroupDesc {
 		s.sendGroupDescReply(header)
 	}
+
+	if reqType == OFPMPMeter && len(body) >= 12 {
+		s.sendMeterStatsReply(header, binary.BigEndian.Uint32(body[8:12]))
+	}
+}
+
+// handleSetConfig stores miss_send_len unless the switch is set to ignore it.
+func (s *mockOFServer) handleSetConfig(body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(body) < 4 || s.ignoreSetConfig {
+		return
+	}
+	s.configFlags = binary.BigEndian.Uint16(body[0:2])
+	s.setConfigs = append(s.setConfigs, s.configFlags)
+	s.missSendLen = binary.BigEndian.Uint16(body[2:4])
+}
+
+// handleGetConfigRequest reports the stored switch config.
+func (s *mockOFServer) handleGetConfigRequest(header *Header) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	reply := &SwitchConfig{
+		Header:      Header{Version: DefaultVersion, Type: OFPTGetConfigReply, Xid: header.Xid},
+		Flags:       s.configFlags,
+		MissSendLen: s.missSendLen,
+	}
+	data, err := reply.MarshalBinary()
+	if err != nil {
+		s.t.Errorf("failed to marshal get config reply: %v", err)
+		return
+	}
+	_, _ = s.conn.Write(data)
+}
+
+// handleMeterMod applies a meter mod with Open vSwitch's error semantics:
+// ADD of an existing meter is METER_EXISTS, MODIFY or DELETE of a missing
+// one is UNKNOWN_METER, and a datapath without meters refuses ADD and
+// MODIFY with INVALID_METER.
+func (s *mockOFServer) handleMeterMod(header *Header, body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.noteArrival()
+	if len(body) < 8 {
+		s.t.Logf("meter mod body too short")
+		return
+	}
+	mod := MeterMod{
+		Header:  *header,
+		Command: binary.BigEndian.Uint16(body[0:2]),
+		Flags:   binary.BigEndian.Uint16(body[2:4]),
+		MeterID: binary.BigEndian.Uint32(body[4:8]),
+	}
+	for band := body[8:]; len(band) >= 16; band = band[16:] {
+		mod.Bands = append(mod.Bands, NewMeterBandDrop(binary.BigEndian.Uint32(band[4:8]), binary.BigEndian.Uint32(band[8:12])))
+	}
+	s.meterMods = append(s.meterMods, mod)
+
+	_, exists := s.meters[mod.MeterID]
+	switch {
+	case s.metersUnsupported && mod.Command != OFPMCDelete:
+		s.sendErrorMessage(header.Xid, OFPETMeterModFailed, OFPMMFCInvalidMeter)
+	case mod.Command == OFPMCAdd && exists:
+		s.sendErrorMessage(header.Xid, OFPETMeterModFailed, OFPMMFCMeterExists)
+	case mod.Command != OFPMCAdd && !exists:
+		s.sendErrorMessage(header.Xid, OFPETMeterModFailed, OFPMMFCUnknownMeter)
+	case mod.Command == OFPMCDelete:
+		delete(s.meters, mod.MeterID)
+	default:
+		s.meters[mod.MeterID] = mod
+	}
+}
+
+// sendMeterStatsReply answers an OFPMP_METER request with the configured
+// statistics of the requested meter, or an empty reply.
+func (s *mockOFServer) sendMeterStatsReply(header *Header, meterID uint32) {
+	var body []byte
+	if stats, ok := s.meterStats[meterID]; ok {
+		entry := make([]byte, 40+16*len(stats.Bands))
+		binary.BigEndian.PutUint32(entry[0:4], stats.MeterID)
+		binary.BigEndian.PutUint16(entry[4:6], uint16(len(entry)))
+		binary.BigEndian.PutUint32(entry[12:16], stats.FlowCount)
+		binary.BigEndian.PutUint64(entry[16:24], stats.PacketInCount)
+		binary.BigEndian.PutUint64(entry[24:32], stats.ByteInCount)
+		for i, band := range stats.Bands {
+			binary.BigEndian.PutUint64(entry[40+16*i:48+16*i], band.PacketCount)
+			binary.BigEndian.PutUint64(entry[48+16*i:56+16*i], band.ByteCount)
+		}
+		body = entry
+	}
+	data := make([]byte, 16+len(body))
+	data[0] = DefaultVersion
+	data[1] = OFPTMultipartReply
+	binary.BigEndian.PutUint16(data[2:4], uint16(len(data)))
+	binary.BigEndian.PutUint32(data[4:8], header.Xid)
+	binary.BigEndian.PutUint16(data[8:10], OFPMPMeter)
+	copy(data[16:], body)
+	_, _ = s.conn.Write(data)
+}
+
+// sendPacketIn writes an OFPT_PACKET_IN carrying body to the client.
+func (s *mockOFServer) sendPacketIn(body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data := make([]byte, HeaderSize+len(body))
+	data[0] = DefaultVersion
+	data[1] = OFPTPacketIn
+	binary.BigEndian.PutUint16(data[2:4], uint16(len(data)))
+	copy(data[HeaderSize:], body)
+	if _, err := s.conn.Write(data); err != nil {
+		s.t.Logf("failed to send packet-in: %v", err)
+	}
+}
+
+func (s *mockOFServer) getMeterMods() []MeterMod {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]MeterMod(nil), s.meterMods...)
+}
+
+func (s *mockOFServer) getMissSendLen() uint16 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.missSendLen
+}
+
+// failPacketOuts makes the switch reject every packet-out with an error.
+func (s *mockOFServer) failPacketOuts(errType, errCode uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.packetOutErrType = errType
+	s.packetOutErrCode = errCode
+}
+
+// setFragFlags presets the fragment policy a bridge is configured with.
+func (s *mockOFServer) setFragFlags(flags uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.configFlags = flags
+}
+
+// getSetConfigs returns the flags of every SET_CONFIG received.
+func (s *mockOFServer) getSetConfigs() []uint16 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]uint16(nil), s.setConfigs...)
+}
+
+// dropConnection closes the current connection the way a restarting switch
+// does, and accepts the next one, so the client can reconnect.
+func (s *mockOFServer) dropConnection() {
+	s.mu.Lock()
+	conn := s.conn
+	s.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+	s.wg.Add(1)
+	go s.acceptConnections()
+}
+
+// awaitAccept waits until the server has accepted another connection.
+func (s *mockOFServer) awaitAccept(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server accepted no connection")
+	}
+}
+
+func (s *mockOFServer) getReceivedPacketOuts() [][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([][]byte(nil), s.receivedPacketOuts...)
 }
 
 // sendGroupDescReply sends a multipart group description reply

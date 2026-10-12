@@ -80,8 +80,24 @@ ARP suppression and symmetric IRB are specified in
   frame is dropped;
 - a known MAC goes to its VTEP, unknown and broadcast frames are
   replicated to every VTEP on the VNI (from Type-3 routes);
-- ARP for known bindings and the anycast gateway is answered by a flow,
-  with no packet-in;
+- ARP for known IPv4 bindings and the anycast gateway is answered by a
+  flow. An IPv6 NS for a known target is punted through a metered controller
+  action to a packet-in controller. The controller sends a proxy NA on the
+  segment VLAN, and the NS is not flooded (RFC 9161). Unknown targets and
+  DAD probes flood. The punts are the only thing that can withhold an NS from
+  the flood, so they exist only while a live controller can answer:
+  - they carry a 12 s hard timeout that the controller refreshes;
+  - stop removes them;
+  - any meter or queue drop, or refused packet-out, withdraws them for a
+    hold-down of 30 s, doubling on repeated fallbacks up to 8 minutes;
+  - a lost OpenFlow connection is redialled; the whole pipeline is rebuilt
+    from the committed state and the meter reinstalled, since a restarted
+    switch keeps neither, and the punts return after the hold-down. The
+    rebuild first reads the VXLAN and access ports' OpenFlow numbers again,
+    which a restart can change, and regenerates the flows on them; until
+    both resolve, no overlay flow or punt goes on the switch. A meter the
+    switch refuses is retried every poll, and the punts stay off (every NS
+    floods) until it is accepted;
 - routed traffic crosses the L3VNI router MAC to router MAC.
 
 ## Overlay Controller
@@ -110,6 +126,9 @@ bookkeeping for the API. The data plane is the overlay mode handler's.
 | `ErrFlowOperationFailed` | `modes` | the switch refused a flow change; the flows the batch touched are put back, so the switch and handler state are unchanged |
 | `ErrBindingConflict` | `modes` | a Type-2 route claimed the anycast gateway's MAC or IP; refused whole and counted in `RefusedBindings`. A route claiming a local host's IP is not an error: its MAC is bridged and its IP held back until the local host goes |
 | `ErrFlowResyncFailed` | `modes` | the switch refused the put-back too, or the rebuild after one; the next change flushes the overlay flows and reinstalls the committed ones before applying anything |
+| `ErrSwitchNotRestored` | `modes` | an overlay change while the switch has reconnected but the ports' OpenFlow numbers have not been read again; the ND poll retries them, and the change can be made once they resolve |
+| `ErrOverlayPortUnresolved` | `modes` | OVS gave no usable OpenFlow number for the VXLAN or access port, at start or after a reconnect |
+| `ErrOFPortUnassigned` | `vxlan` | OVS reports the VXLAN port with ofport -1, an interface it could not attach |
 
 ## See Also
 

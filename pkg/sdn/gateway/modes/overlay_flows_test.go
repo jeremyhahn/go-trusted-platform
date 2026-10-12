@@ -37,6 +37,7 @@ var ovlBaseTable = []string{
 	"t=30 p=300 in_port=3,eth_dst=02:aa:aa:aa:aa:aa -> goto:50",
 	"t=30 p=300 tun_id=50000,eth_dst=02:00:00:00:00:0a -> goto:50",
 	"t=40 p=0 any -> goto:60",
+	"t=40 p=210 in_port=3,eth_type=0x86dd,ip_proto=58,icmpv6_type=135,ipv6_src=:: -> goto:60",
 	"t=50 p=0 any -> drop",
 	"t=60 p=0 any -> drop",
 	"t=70 p=0 any -> output:3",
@@ -279,7 +280,7 @@ func TestFlowBuilder_Base(t *testing.T) {
 		require.NoError(t, sw.SendFlowMods(context.Background(), b.base()))
 
 		assert.Empty(t, sw.matching("goto:50"), "nothing routes")
-		assert.Len(t, sw.table(), 10)
+		assert.Len(t, sw.table(), 11)
 	})
 }
 
@@ -375,6 +376,8 @@ func TestFlowBuilder_Host(t *testing.T) {
 		require.NoError(t, sw.SendFlowMods(context.Background(), b.host(ovlL2VNI, ovlVLAN, host)))
 
 		assert.Len(t, sw.table(), 1)
+		assert.Empty(t, sw.matching("eth_type=0x800"))
+		assert.Empty(t, sw.matching("t=40 "), "the ND controller owns the punt, not the host")
 	})
 }
 

@@ -285,3 +285,57 @@ func TestVTEPManager_OFPortBeforeStart(t *testing.T) {
 	_, err := newTestManager(t, newFakeOVS()).OFPort()
 	assert.ErrorIs(t, err, ErrManagerNotStarted)
 }
+
+func TestVTEPManager_StartRefusesAPortWithoutANumber(t *testing.T) {
+	client := newFakeOVS()
+	client.nextPort = -1
+	m := newTestManager(t, client)
+
+	assert.ErrorIs(t, m.Start(context.Background()), ErrOFPortUnassigned)
+	assert.False(t, m.IsStarted())
+}
+
+func TestVTEPManager_ResolveOFPortRereadsTheNumber(t *testing.T) {
+	client := newFakeOVS()
+	m := newTestManager(t, client)
+	require.NoError(t, m.Start(context.Background()))
+	client.ofPorts[DefaultPortName] = 17 // a switch that recreated its datapath
+
+	ofPort, err := m.ResolveOFPort(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, uint32(17), ofPort)
+	cached, err := m.OFPort()
+	require.NoError(t, err)
+	assert.Equal(t, uint32(17), cached)
+}
+
+func TestVTEPManager_ResolveOFPortFailures(t *testing.T) {
+	t.Run("before start", func(t *testing.T) {
+		_, err := newTestManager(t, newFakeOVS()).ResolveOFPort(context.Background())
+		assert.ErrorIs(t, err, ErrManagerNotStarted)
+	})
+
+	t.Run("unreadable", func(t *testing.T) {
+		client := newFakeOVS()
+		m := newTestManager(t, client)
+		require.NoError(t, m.Start(context.Background()))
+		boom := errors.New("ovsdb down")
+		client.ofPortErr = boom
+
+		_, err := m.ResolveOFPort(context.Background())
+
+		assert.ErrorIs(t, err, boom)
+	})
+
+	t.Run("without a number", func(t *testing.T) {
+		client := newFakeOVS()
+		m := newTestManager(t, client)
+		require.NoError(t, m.Start(context.Background()))
+		client.ofPorts[DefaultPortName] = -1
+
+		_, err := m.ResolveOFPort(context.Background())
+
+		assert.ErrorIs(t, err, ErrOFPortUnassigned)
+	})
+}

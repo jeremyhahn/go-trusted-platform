@@ -15,6 +15,7 @@
 package modes
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -50,7 +51,7 @@ const (
 	TableLBHairpin     uint8 = 28 // Load balancer hairpin SNAT (load-balancer service)
 	TableLBReply       uint8 = 29 // Load balancer reply reverse NAT (load-balancer service)
 	TableMACLearning   uint8 = 30 // L2 forwarding by (VNI, MAC)
-	TableARP           uint8 = 40 // ARP suppression
+	TableARP           uint8 = 40 // ARP and ND suppression
 	TableL3Routing     uint8 = 50 // Symmetric IRB routing (anycast gateway)
 	TableEgress        uint8 = 60 // BUM ingress replication
 	TableLocalDelivery uint8 = 70 // Out the access port
@@ -130,6 +131,9 @@ type OverlayModeStatus struct {
 	// ARPSuppressionEnabled indicates whether ARP suppression is active.
 	ARPSuppressionEnabled bool
 
+	// NDSuppression contains Neighbor Discovery suppression counters.
+	NDSuppression NDSuppressionStatus
+
 	// AnycastGatewayConfigured indicates whether anycast gateway is configured.
 	AnycastGatewayConfigured bool
 
@@ -140,6 +144,38 @@ type OverlayModeStatus struct {
 	Uptime time.Duration
 }
 
+// NDSuppressionStatus reports ND suppression and counts the neighbor
+// solicitations punted to the controller and what became of them. A
+// punted solicitation is answered instead of flooded, or flooded by the
+// controller; any drop makes the controller fall back to the flood.
+type NDSuppressionStatus struct {
+	// Suppressing is whether solicitations for known targets are punted
+	// now; it is false while stopped and while fallen back to the flood.
+	Suppressing bool
+	// Received is the solicitations the controller took off its queue.
+	Received uint64
+	// Answered is those answered with a proxy advertisement.
+	Answered uint64
+	// Flooded is those the controller sent on to the segment's flood: a
+	// DAD probe, one from the binding's own MAC, or one for an address
+	// the overlay no longer knows or that more than one host now claims.
+	Flooded uint64
+	// Discarded is those neither answered nor flooded: invalid under
+	// RFC 4861, or on a VNI with no segment here.
+	Discarded uint64
+	// SendFailed is the answers and floods the switch refused.
+	SendFailed uint64
+	// QueueDropped is the punts dropped because the controller's queue
+	// was full.
+	QueueDropped uint64
+	// MeterDropped is the punts the switch's meter dropped over its rate,
+	// read from the meter's statistics.
+	MeterDropped uint64
+	// Fallbacks is how many times a drop removed the punts so that every
+	// solicitation floods.
+	Fallbacks uint64
+}
+
 // OverlayOVSClient is the OVSDB client the overlay needs: the flow-based
 // VXLAN port, and the OpenFlow number of the access port.
 type OverlayOVSClient interface {
@@ -148,8 +184,20 @@ type OverlayOVSClient interface {
 
 // OverlayOpenFlowClient is the OpenFlow client the overlay programs.
 type OverlayOpenFlowClient interface {
+	// IsConnected reports whether the management socket is up. It goes down
+	// when the switch closes the socket, for example when OVS restarts.
+	IsConnected() bool
+	// Connect redials the management socket, which resubscribed packet-in
+	// subscribers survive.
+	Connect(ctx context.Context) error
 	// SendFlowMods sends flow mods as one batch, followed by one barrier.
 	SendFlowMods(ctx context.Context, flows []*openflow.FlowMod) error
+	SendPacketOut(ctx context.Context, packet *openflow.PacketOut) error
+	// SetMeter installs a drop meter, or updates the rate of an existing one.
+	SetMeter(ctx context.Context, meterID uint32, rateKbps uint32, burstKbps uint32) error
+	DeleteMeter(ctx context.Context, meterID uint32) error
+	GetMeterStats(ctx context.Context, meterID uint32) (openflow.MeterStats, error)
+	SubscribePacketIn(queueSize int) (*openflow.PacketInSubscription, error)
 }
 
 // VTEPAdmitter decides whether a remote VTEP may carry a VNI. The overlay
@@ -346,8 +394,16 @@ type OverlayModeHandler struct {
 	builder   *flowBuilder
 	flows     *flowTable
 	// drifted is set when the switch refused a put-back and may hold
-	// flows the table does not; the next change rebuilds the switch.
-	drifted  bool
+	// flows the table does not; the next change rebuilds the switch, and so
+	// does the ND watch, which retries a refused rebuild with a backoff:
+	// rebuildBackoff is the last wait and rebuildRetryAt when it ends.
+	drifted        bool
+	rebuildBackoff time.Duration
+	rebuildRetryAt time.Time
+	// remap is set when the switch reconnects: a restarted ovs-vswitchd can
+	// renumber the ports, so the rebuild first reads their numbers again and
+	// regenerates the flows on them, and no change goes on until it has.
+	remap    bool
 	segments map[uint32]*overlaySegment
 	vlans    map[uint16]uint32
 	hosts    map[hostKey]*overlayHost
@@ -356,6 +412,35 @@ type OverlayModeHandler struct {
 	// refusedBindings counts the remote bindings refused or held back for
 	// a conflict.
 	refusedBindings uint64
+
+	// ndOwners indexes the hosts by their IPv6 bindings, for answering
+	// punted solicitations; mu guards it.
+	ndOwners map[ndKey][]hostKey
+	// ndController answers punted solicitations and ndStopPoll ends the
+	// ND watch, which closes ndPollDone; nil while stopped. mu guards
+	// them.
+	ndController *openflow.PacketInController
+	ndStopPoll   context.CancelFunc
+	ndPollDone   chan struct{}
+	// ndSuppressing is set while the punt flows are on the switch; the
+	// watch clears it to fall back to the flood and sets it again at
+	// ndResumeAt. ndRefreshAt is when the punts are next re-added, before
+	// their hard timeout. ndDropsSeen is the lost punts the watch last
+	// saw. ndHoldDown is the last fallback's hold-down, zero before the
+	// first, and ndResumedAt is when suppression last started. mu guards
+	// them.
+	ndSuppressing bool
+	// ndMeterReady is set while meter 709 is known to be on the switch. A
+	// punt through a missing meter reaches no controller, so suppression
+	// resumes only once the meter is back; the poll retries a meter the
+	// reconnected switch refused. mu guards it.
+	ndMeterReady bool
+	ndResumeAt   time.Time
+	ndRefreshAt  time.Time
+	ndDropsSeen  uint64
+	ndHoldDown   time.Duration
+	ndResumedAt  time.Time
+	nd           ndCounters
 }
 
 // NewOverlayModeHandler creates a new overlay mode handler.
@@ -388,6 +473,7 @@ func NewOverlayModeHandler(
 		vlans:       make(map[uint16]uint32),
 		hosts:       make(map[hostKey]*overlayHost),
 		prefixes:    make(map[netip.Prefix]*overlayPrefix),
+		ndOwners:    make(map[ndKey][]hostKey),
 	}
 
 	vtepManager, err := vxlan.NewVTEPManager(*config.VTEPConfig, ovsClient, config.BridgeName, config.Logger)
@@ -426,7 +512,12 @@ func (h *OverlayModeHandler) Start(ctx context.Context) error {
 	builder, err := h.newBuilder(ctx)
 	if err != nil {
 		h.abortStart(ctx, false)
-		return err
+		component := "OpenFlow"
+		var unresolved *ErrOverlayPortUnresolved
+		if errors.As(err, &unresolved) {
+			component = unresolved.Port
+		}
+		return &ErrOverlayStartFailed{Component: component, Cause: err}
 	}
 	if h.evpnManager != nil {
 		if err := h.evpnManager.Start(ctx); err != nil {
@@ -435,6 +526,12 @@ func (h *OverlayModeHandler) Start(ctx context.Context) error {
 		}
 	}
 
+	// The ND meter goes on before the flows that punt through it, so a
+	// datapath without meters fails here with no flow installed.
+	if err := h.startNDController(ctx); err != nil {
+		h.abortStart(ctx, h.evpnManager != nil)
+		return &ErrOverlayStartFailed{Component: "OpenFlow ND", Cause: err}
+	}
 	h.mu.Lock()
 	err = h.installBase(ctx, builder)
 	h.mu.Unlock()
@@ -450,17 +547,17 @@ func (h *OverlayModeHandler) Start(ctx context.Context) error {
 	return nil
 }
 
-// installBase replaces whatever overlay flows the bridge holds with the
-// base pipeline, in fail-closed order, and marks the handler running.
-// Caller holds mu.
+// installBase replaces whatever overlay flows the bridge holds, ND punts a
+// crashed run left included, with the base pipeline, in fail-closed order,
+// and marks the handler running. Caller holds mu.
 func (h *OverlayModeHandler) installBase(ctx context.Context, builder *flowBuilder) error {
 	h.flows.reset()
-	h.drifted = false
+	h.drifted, h.remap = false, false
 	plan, err := h.flows.plan(nil, builder.base())
 	if err != nil {
 		return err
 	}
-	if err := h.ofClient.SendFlowMods(ctx, append([]*openflow.FlowMod{overlayFlush()}, failClosed(plan.mods)...)); err != nil {
+	if err := h.ofClient.SendFlowMods(ctx, append([]*openflow.FlowMod{overlayFlush(), ndFlush()}, failClosed(plan.mods)...)); err != nil {
 		return h.resync(ctx, err, []*openflow.FlowMod{overlayFlush()})
 	}
 	plan.commit()
@@ -470,29 +567,85 @@ func (h *OverlayModeHandler) installBase(ctx context.Context, builder *flowBuild
 	return nil
 }
 
-// newBuilder resolves the OpenFlow numbers of the VXLAN and access ports.
+// newBuilder builds the overlay's flows on the current OpenFlow numbers of
+// the VXLAN and access ports, read from OVS.
 func (h *OverlayModeHandler) newBuilder(ctx context.Context) (*flowBuilder, error) {
-	vxlanPort, err := h.vtepManager.OFPort()
+	vxlanPort, err := h.vtepManager.ResolveOFPort(ctx)
 	if err != nil {
-		return nil, &ErrOverlayStartFailed{Component: "VXLANPort", Cause: err}
+		return nil, &ErrOverlayPortUnresolved{Port: "VXLANPort", Cause: err}
 	}
 	accessPort, err := h.ovsClient.GetOFPort(ctx, h.config.AccessPort)
+	if err == nil && accessPort <= 0 {
+		err = ErrAccessPortUnresolved
+	}
 	if err != nil {
-		return nil, &ErrOverlayStartFailed{Component: "AccessPort", Cause: err}
+		return nil, &ErrOverlayPortUnresolved{Port: "AccessPort", Cause: err}
 	}
-	if accessPort <= 0 {
-		return nil, &ErrOverlayStartFailed{Component: "AccessPort", Cause: ErrAccessPortUnresolved}
-	}
-	builder, err := newFlowBuilder(h.config, overlayPorts{vxlan: vxlanPort, access: uint32(accessPort)})
+	return newFlowBuilder(h.config, overlayPorts{vxlan: vxlanPort, access: uint32(accessPort)})
+}
+
+// remapPorts reads the ports' OpenFlow numbers again, which a restarted
+// ovs-vswitchd can change, and regenerates every committed flow on them in
+// a new table, so the rebuild after it carries the switch's numbers rather
+// than those the flows were built with. Hosts go in the order they were
+// last updated, so where two hold one flow differently the later still
+// wins. The switch is not touched. Caller holds mu.
+func (h *OverlayModeHandler) remapPorts(ctx context.Context) error {
+	builder, err := h.newBuilder(ctx)
 	if err != nil {
-		return nil, &ErrOverlayStartFailed{Component: "OpenFlow", Cause: err}
+		return err
 	}
-	return builder, nil
+	segmentFlows := make(map[uint32][]*openflow.FlowMod, len(h.segments))
+	prefixFlows := make(map[netip.Prefix][]*openflow.FlowMod, len(h.prefixes))
+	hostFlows := make(map[hostKey][]*openflow.FlowMod, len(h.hosts))
+	acquire := builder.base()
+	for _, vni := range slices.Sorted(maps.Keys(h.segments)) {
+		segmentFlows[vni] = builder.segment(vni, h.segments[vni])
+		acquire = append(acquire, segmentFlows[vni]...)
+	}
+	for _, prefix := range slices.SortedFunc(maps.Keys(h.prefixes), netip.Prefix.Compare) {
+		if best := h.prefixes[prefix].best(); best != nil {
+			prefixFlows[prefix] = builder.prefix(prefix, best)
+			acquire = append(acquire, prefixFlows[prefix]...)
+		}
+	}
+	hosts := slices.SortedFunc(maps.Keys(h.hosts), func(a, b hostKey) int {
+		return cmp.Or(h.hosts[a].updatedAt.Compare(h.hosts[b].updatedAt),
+			cmp.Compare(a.vni, b.vni), cmp.Compare(a.mac, b.mac))
+	})
+	for _, key := range hosts {
+		hostFlows[key] = builder.host(key.vni, h.segments[key.vni].vlan, h.hosts[key])
+		acquire = append(acquire, hostFlows[key]...)
+	}
+
+	flows := newFlowTable()
+	plan, err := flows.plan(nil, acquire)
+	if err != nil {
+		return err
+	}
+	plan.commit()
+	for vni, segment := range h.segments {
+		segment.flows = segmentFlows[vni]
+	}
+	for prefix, routes := range h.prefixes {
+		routes.flows = prefixFlows[prefix]
+	}
+	for key, host := range h.hosts {
+		host.flows = hostFlows[key]
+	}
+	h.builder, h.flows, h.remap = builder, flows, false
+	h.logger.Info("overlay flows regenerated on the switch's port numbers",
+		slog.Uint64("vxlan_ofport", uint64(builder.ports.vxlan)),
+		slog.Uint64("access_ofport", uint64(builder.ports.access)))
+	return nil
 }
 
 // abortStart undoes a partial Start. Its own failures are logged: the
 // start error is the one the caller reports.
 func (h *OverlayModeHandler) abortStart(ctx context.Context, evpnStarted bool) {
+	if err := h.stopNDController(ctx); err != nil {
+		h.logger.Error("removing the ND punts after a failed start", slog.Any("error", err))
+	}
 	if evpnStarted {
 		if err := h.evpnManager.Stop(ctx); err != nil {
 			h.logger.Error("stopping EVPN after a failed start", slog.Any("error", err))
@@ -531,6 +684,9 @@ func (h *OverlayModeHandler) Stop(ctx context.Context) error {
 		}
 	}
 	clear(h.unwithdrawn)
+	if err := h.stopNDController(ctx); err != nil {
+		errs = append(errs, err)
+	}
 
 	h.mu.Lock()
 	if err := h.ofClient.SendFlowMods(ctx, []*openflow.FlowMod{overlayFlush()}); err != nil {
@@ -540,6 +696,7 @@ func (h *OverlayModeHandler) Stop(ctx context.Context) error {
 	clear(h.segments)
 	clear(h.vlans)
 	clear(h.hosts)
+	clear(h.ndOwners)
 	clear(h.prefixes)
 	h.mu.Unlock()
 
@@ -674,9 +831,12 @@ func (h *OverlayModeHandler) removeSegment(ctx context.Context, vni uint32) erro
 	if err := h.apply(ctx, release, nil); err != nil {
 		return err
 	}
+	var targets []ndKey
 	for _, key := range hosts {
+		targets = append(targets, h.indexND(key, h.hosts[key], nil)...)
 		delete(h.hosts, key)
 	}
+	h.syncNDPunts(ctx, targets)
 	if last {
 		clear(h.prefixes)
 	}
@@ -822,11 +982,13 @@ func (h *OverlayModeHandler) replaceHost(ctx context.Context, key hostKey, segme
 	if err := h.apply(ctx, release, acquire); err != nil {
 		return err
 	}
+	targets := h.indexND(key, old, next)
 	if next == nil {
 		delete(h.hosts, key)
-		return nil
+	} else {
+		h.hosts[key] = next
 	}
-	h.hosts[key] = next
+	h.syncNDPunts(ctx, targets)
 	return nil
 }
 
@@ -867,6 +1029,7 @@ func (h *OverlayModeHandler) GetStatus() *OverlayModeStatus {
 		RefusedBindings:          h.refusedBindings,
 		L3VNI:                    h.config.L3VNI,
 		ARPSuppressionEnabled:    h.config.ARPSuppression,
+		NDSuppression:            h.ndStatus(),
 		AnycastGatewayConfigured: h.config.AnycastGatewayIP.IsValid(),
 	}
 	vteps := make(map[netip.Addr]struct{})
@@ -895,6 +1058,11 @@ func (h *OverlayModeHandler) GetStatus() *OverlayModeStatus {
 // rest, so when it refuses anything apply puts back every flow the batch
 // touched and leaves the table as it was. Caller holds mu.
 func (h *OverlayModeHandler) apply(ctx context.Context, release, acquire []*openflow.FlowMod) error {
+	// The caller built its flows on the port numbers from before the
+	// reconnect; they go on once the ND watch has regenerated the table.
+	if h.remap {
+		return ErrSwitchNotRestored
+	}
 	if h.drifted {
 		if err := h.rebuild(ctx); err != nil {
 			return err
@@ -928,9 +1096,19 @@ func (h *OverlayModeHandler) resync(ctx context.Context, cause error, restore []
 
 // rebuild flushes the overlay's flows from the switch and installs every
 // flow the table holds, in fail-closed order, for a switch that may hold
-// flows the table does not. It stays due until the switch takes it.
-// Caller holds mu.
+// flows the table does not. It stays due until the switch takes it. Due a
+// remap, it regenerates the table first; while the ports do not resolve,
+// it only flushes, since a flow on a stale port number can deliver to the
+// wrong port. Caller holds mu.
 func (h *OverlayModeHandler) rebuild(ctx context.Context) error {
+	if h.remap {
+		if err := h.remapPorts(ctx); err != nil {
+			if flushErr := h.ofClient.SendFlowMods(ctx, []*openflow.FlowMod{overlayFlush()}); flushErr != nil {
+				return errors.Join(err, &ErrFlowResyncFailed{Cause: flushErr})
+			}
+			return err
+		}
+	}
 	mods := append([]*openflow.FlowMod{overlayFlush()}, h.flows.installed()...)
 	if err := h.ofClient.SendFlowMods(ctx, mods); err != nil {
 		return &ErrFlowResyncFailed{Cause: err}

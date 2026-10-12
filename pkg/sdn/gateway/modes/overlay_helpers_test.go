@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"slices"
@@ -65,19 +66,42 @@ func ovlLogger() *slog.Logger {
 }
 
 // fakeOverlayOVS is an OVSDB holding the VXLAN port and the access port.
+// vxlanOFPort is the OpenFlow number a VXLAN port it creates gets.
 type fakeOverlayOVS struct {
-	mu        sync.Mutex
-	ports     map[string]*ovs.VXLANPort
-	ofPorts   map[string]int32
-	addErr    error
-	deleteErr error
+	mu          sync.Mutex
+	ports       map[string]*ovs.VXLANPort
+	ofPorts     map[string]int32
+	vxlanOFPort int32
+	addErr      error
+	deleteErr   error
 }
 
 func newFakeOverlayOVS() *fakeOverlayOVS {
 	return &fakeOverlayOVS{
-		ports:   make(map[string]*ovs.VXLANPort),
-		ofPorts: map[string]int32{ovlAccessPort: 3},
+		ports:       make(map[string]*ovs.VXLANPort),
+		ofPorts:     map[string]int32{ovlAccessPort: 3},
+		vxlanOFPort: 7,
 	}
+}
+
+// renumber gives the VXLAN and access ports new OpenFlow numbers, as a
+// switch that recreated its datapath can.
+func (f *fakeOverlayOVS) renumber(vxlanPort, accessPort int32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.vxlanOFPort = vxlanPort
+	for port := range f.ports {
+		f.ofPorts[port] = vxlanPort
+	}
+	f.ofPorts[ovlAccessPort] = accessPort
+}
+
+// unnumber leaves the access port without an OpenFlow number, as OVS does
+// while it has not attached the interface yet.
+func (f *fakeOverlayOVS) unnumber() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.ofPorts, ovlAccessPort)
 }
 
 func (f *fakeOverlayOVS) AddVXLANPortWithName(_ context.Context, _, port string, cfg *ovs.VXLANPortConfig) (*ovs.VXLANPort, error) {
@@ -88,7 +112,7 @@ func (f *fakeOverlayOVS) AddVXLANPortWithName(_ context.Context, _, port string,
 	}
 	p := &ovs.VXLANPort{Name: port, IsFlowRemote: cfg.RemoteFlow, IsFlowKey: cfg.Key == 0, DstPort: cfg.DstPort}
 	f.ports[port] = p
-	f.ofPorts[port] = 7
+	f.ofPorts[port] = f.vxlanOFPort
 	return p, nil
 }
 
@@ -131,12 +155,15 @@ func (f *fakeOverlayOVS) hasPort(port string) bool {
 }
 
 // switchFlow is one flow on the fake switch, rendered: its match as
-// name=value fields and its instructions as one line.
+// name=value fields and its instructions as one line, with the cookie and
+// hard timeout it was added with.
 type switchFlow struct {
-	table    uint8
-	priority uint16
-	match    []string
-	actions  string
+	table       uint8
+	priority    uint16
+	match       []string
+	actions     string
+	cookie      uint64
+	hardTimeout uint16
 }
 
 func (f *switchFlow) String() string {
@@ -171,9 +198,18 @@ func (f *switchFlow) matches(pkt map[string]string) bool {
 // removes exactly one; a delete removes by cookie — so tests assert on what
 // the switch holds and on which flow a packet hits.
 type fakeSwitch struct {
-	mu      sync.Mutex
-	flows   map[string]*switchFlow
-	failErr error
+	mu         sync.Mutex
+	flows      map[string]*switchFlow
+	packetIns  []*openflow.PacketInSubscription
+	packetOuts []*openflow.PacketOut
+	// packetOutErr is what SendPacketOut fails with.
+	packetOutErr error
+	meters       map[uint32]struct{}
+	// meterErr is what SetMeter fails with; meterDrops is the packets the
+	// installed meter reports dropped.
+	meterErr   error
+	meterDrops uint64
+	failErr    error
 	// refuseAt, while refusing, is the mod the next batch refuses;
 	// refuseThen is what every send after that batch fails with.
 	refuseAt   int
@@ -184,9 +220,63 @@ type fakeSwitch struct {
 	passes   int
 	passThen error
 	sent     chan struct{}
+	// beforeSend, when set, runs at the start of every SendFlowMods,
+	// before the batch is applied and without mu: what it does reaches
+	// the switch first.
+	beforeSend func(mods []*openflow.FlowMod)
 	// batches is the mods of every batch the switch has applied, in the
 	// order it applied them: OVS applies a batch one mod at a time.
 	batches [][]*openflow.FlowMod
+	// lost models a management socket the switch closed: every send fails
+	// with ErrNotConnected until Connect succeeds. connectErr is what Connect
+	// fails with while the switch is still down; connects counts the calls.
+	lost       bool
+	connectErr error
+	connects   int
+}
+
+// IsConnected reports whether the management socket is up.
+func (s *fakeSwitch) IsConnected() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.lost
+}
+
+// Connect redials the management socket.
+func (s *fakeSwitch) Connect(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connects++
+	if s.connectErr != nil {
+		return s.connectErr
+	}
+	s.lost = false
+	return nil
+}
+
+// lose closes the management socket; the switch stays unreachable until
+// restore.
+func (s *fakeSwitch) lose() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lost, s.connectErr = true, errSwitchDown
+}
+
+// restore brings the switch back; the next Connect succeeds.
+func (s *fakeSwitch) restore() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connectErr = nil
+}
+
+// restart models a switch that restarted: the management socket closed and
+// every flow and meter is gone. The next Connect succeeds.
+func (s *fakeSwitch) restart() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lost = true
+	clear(s.flows)
+	clear(s.meters)
 }
 
 func newFakeSwitch() *fakeSwitch {
@@ -198,7 +288,16 @@ func newFakeSwitch() *fakeSwitch {
 // mods around it are applied all the same.
 func (s *fakeSwitch) SendFlowMods(_ context.Context, mods []*openflow.FlowMod) error {
 	s.mu.Lock()
+	beforeSend := s.beforeSend
+	s.mu.Unlock()
+	if beforeSend != nil {
+		beforeSend(mods)
+	}
+	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.lost {
+		return openflow.ErrNotConnected
+	}
 	if s.passThen != nil {
 		if s.passes == 0 {
 			s.failErr, s.passThen = s.passThen, nil
@@ -233,6 +332,86 @@ func (s *fakeSwitch) SendFlowMods(_ context.Context, mods []*openflow.FlowMod) e
 	return nil
 }
 
+func (s *fakeSwitch) SendPacketOut(_ context.Context, packet *openflow.PacketOut) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lost {
+		return openflow.ErrNotConnected
+	}
+	if s.packetOutErr != nil {
+		return s.packetOutErr
+	}
+	s.packetOuts = append(s.packetOuts, packet)
+	return nil
+}
+
+func (s *fakeSwitch) SetMeter(_ context.Context, meterID uint32, _ uint32, _ uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lost {
+		return openflow.ErrNotConnected
+	}
+	if s.meterErr != nil {
+		return s.meterErr
+	}
+	if s.meters == nil {
+		s.meters = make(map[uint32]struct{})
+	}
+	s.meters[meterID] = struct{}{}
+	return nil
+}
+
+func (s *fakeSwitch) DeleteMeter(_ context.Context, meterID uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.meters, meterID)
+	return nil
+}
+
+func (s *fakeSwitch) GetMeterStats(_ context.Context, meterID uint32) (openflow.MeterStats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lost {
+		return openflow.MeterStats{}, openflow.ErrNotConnected
+	}
+	if _, ok := s.meters[meterID]; !ok {
+		return openflow.MeterStats{}, &openflow.ErrMeterNotFound{MeterID: meterID}
+	}
+	return openflow.MeterStats{
+		MeterID: meterID,
+		Bands:   []openflow.MeterBandStats{{PacketCount: s.meterDrops}},
+	}, nil
+}
+
+func (s *fakeSwitch) SubscribePacketIn(queueSize int) (*openflow.PacketInSubscription, error) {
+	var subscription *openflow.PacketInSubscription
+	subscription, err := openflow.NewPacketInSubscription(queueSize, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for i, sink := range s.packetIns {
+			if sink == subscription {
+				s.packetIns = append(s.packetIns[:i], s.packetIns[i+1:]...)
+				break
+			}
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.packetIns = append(s.packetIns, subscription)
+	s.mu.Unlock()
+	return subscription, nil
+}
+
+func (s *fakeSwitch) emitPacketIn(packet openflow.PacketIn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, subscription := range s.packetIns {
+		subscription.Deliver(packet)
+	}
+}
+
 // refuse makes the next batch of more than index mods refuse the mod at
 // index and apply the rest; every send after it fails with then, and a
 // nil then leaves the switch healthy.
@@ -244,7 +423,13 @@ func (s *fakeSwitch) refuse(index int, then error) {
 
 // newSwitchFlow renders the flow a mod adds or removes.
 func newSwitchFlow(mod *openflow.FlowMod) *switchFlow {
-	flow := &switchFlow{table: mod.TableID, priority: mod.Priority, actions: describeInstructions(mod.Instructions)}
+	flow := &switchFlow{
+		table:       mod.TableID,
+		priority:    mod.Priority,
+		actions:     describeInstructions(mod.Instructions),
+		cookie:      mod.Cookie,
+		hardTimeout: mod.HardTimeout,
+	}
 	for _, field := range mod.Match.Fields {
 		flow.match = append(flow.match, describeField(field.Class, field.Field, field.Value, field.Mask))
 	}
@@ -300,9 +485,32 @@ func (s *fakeSwitch) applyMod(mod *openflow.FlowMod) {
 	case openflow.OFPFCDeleteStrict:
 		delete(s.flows, key)
 	case openflow.OFPFCDelete:
-		// Every flow on the test switch carries the overlay cookie.
-		clear(s.flows)
+		maps.DeleteFunc(s.flows, func(_ string, f *switchFlow) bool {
+			inTable := mod.TableID == openflow.OFPTTAll || mod.TableID == f.table
+			return inTable && f.cookie&mod.CookieMask == mod.Cookie&mod.CookieMask
+		})
 	}
+}
+
+// expire removes the flows with a hard timeout, as the switch does once
+// nothing re-adds them in time.
+func (s *fakeSwitch) expire() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	maps.DeleteFunc(s.flows, func(_ string, f *switchFlow) bool { return f.hardTimeout > 0 })
+}
+
+// hardTimeouts maps the rendered flows that expire to their hard timeout.
+func (s *fakeSwitch) hardTimeouts() map[string]uint16 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	timeouts := make(map[string]uint16)
+	for _, f := range s.flows {
+		if f.hardTimeout > 0 {
+			timeouts[f.String()] = f.hardTimeout
+		}
+	}
+	return timeouts
 }
 
 // batchesSince returns the batches the switch has applied since it had
@@ -436,19 +644,23 @@ type oxmName struct {
 }
 
 var oxmNames = map[oxmName]string{
-	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBInPort}:  "in_port",
-	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthDst}:  "eth_dst",
-	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthSrc}:  "eth_src",
-	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthType}: "eth_type",
-	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBVlanVid}: "vlan",
-	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBIPv4Dst}: "ipv4_dst",
-	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpOp}:   "arp_op",
-	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpSpa}:  "arp_spa",
-	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpTpa}:  "arp_tpa",
-	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpSha}:  "arp_sha",
-	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpTha}:  "arp_tha",
-	{openflow.OFPXMCNxm1, openflow.NXMFieldTunID}:             "tun_id",
-	{openflow.OFPXMCNxm1, openflow.NXMFieldTunIPv4Src}:        "tun_src",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBInPort}:       "in_port",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthDst}:       "eth_dst",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthSrc}:       "eth_src",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthType}:      "eth_type",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBVlanVid}:      "vlan",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBIPv4Dst}:      "ipv4_dst",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBIPProto}:      "ip_proto",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBIPv6Src}:      "ipv6_src",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBICMPv6Type}:   "icmpv6_type",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBIPv6NdTarget}: "nd_target",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpOp}:        "arp_op",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpSpa}:       "arp_spa",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpTpa}:       "arp_tpa",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpSha}:       "arp_sha",
+	{openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBArpTha}:       "arp_tha",
+	{openflow.OFPXMCNxm1, openflow.NXMFieldTunID}:                  "tun_id",
+	{openflow.OFPXMCNxm1, openflow.NXMFieldTunIPv4Src}:             "tun_src",
 }
 
 // describeField renders one match field or set-field as name=value.
@@ -467,12 +679,18 @@ func describeField(class uint16, field uint8, value, mask []byte) string {
 			ones, _ := net.IPMask(mask).Size()
 			v += "/" + strconv.Itoa(ones)
 		}
+	case len(value) == 16:
+		var addr [16]byte
+		copy(addr[:], value)
+		v = netip.AddrFrom16(addr).String()
 	case name == "vlan":
 		v = strconv.Itoa(int(binary.BigEndian.Uint16(value) & 0x0fff))
 	case name == "eth_type":
 		v = "0x" + strconv.FormatUint(uint64(binary.BigEndian.Uint16(value)), 16)
 	case len(value) == 2:
 		v = strconv.Itoa(int(binary.BigEndian.Uint16(value)))
+	case len(value) == 1:
+		v = strconv.Itoa(int(value[0]))
 	case len(value) == 4:
 		v = strconv.FormatUint(uint64(binary.BigEndian.Uint32(value)), 10)
 	case len(value) == 8:
@@ -491,6 +709,8 @@ func describeInstructions(instructions []openflow.Instruction) string {
 		switch i := instruction.(type) {
 		case *openflow.InstructionGotoTable:
 			parts = append(parts, "goto:"+strconv.Itoa(int(i.TableID)))
+		case *openflow.InstructionMeter:
+			parts = append(parts, "meter:"+strconv.FormatUint(uint64(i.MeterID), 10))
 		case *openflow.InstructionApplyActions:
 			actions := make([]string, 0, len(i.Actions))
 			for _, action := range i.Actions {
@@ -518,6 +738,9 @@ func describeAction(action openflow.Action) string {
 		if a.Port == openflow.OFPPInPort {
 			return "output:IN_PORT"
 		}
+		if a.Port == openflow.OFPPController {
+			return "output:CONTROLLER"
+		}
 		return "output:" + strconv.FormatUint(uint64(a.Port), 10)
 	case *openflow.ActionSetField:
 		return "set:" + describeField(a.Field.Class, a.Field.Field, a.Field.Value, nil)
@@ -533,6 +756,8 @@ func describeAction(action openflow.Action) string {
 		return "set:tun_dst=" + a.IPv4.String()
 	case *openflow.ActionRegMove:
 		return "move:" + regNames[a.Src] + "->" + regNames[a.Dst]
+	case *openflow.ActionController2:
+		return "controller:meter=" + strconv.FormatUint(uint64(a.MeterID), 10)
 	}
 	return "unknown"
 }
@@ -716,7 +941,12 @@ func newStoppedOverlay(t *testing.T, edit func(*OverlayModeConfig)) *overlayFixt
 // adjusted by edit, and stops it when the test ends.
 func newOverlayFixture(t *testing.T, edit func(*OverlayModeConfig)) *overlayFixture {
 	t.Helper()
-	f := newStoppedOverlay(t, edit)
+	return newStoppedOverlay(t, edit).start(t)
+}
+
+// start starts the handler, and stops it when the test ends.
+func (f *overlayFixture) start(t *testing.T) *overlayFixture {
+	t.Helper()
 	require.NoError(t, f.handler.Start(context.Background()))
 	t.Cleanup(func() {
 		if f.handler.GetStatus().Running {

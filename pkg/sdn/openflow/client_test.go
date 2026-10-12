@@ -20,6 +20,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestNewClient tests creating a new OpenFlow client
@@ -917,6 +920,18 @@ func TestClient_OFError(t *testing.T) {
 			errorCode: 1,
 			errString: "flow mod failed: table full",
 		},
+		{
+			name:      "meter mod failed - meter exists",
+			errorType: OFPETMeterModFailed,
+			errorCode: OFPMMFCMeterExists,
+			errString: "meter mod failed: meter exists",
+		},
+		{
+			name:      "meter mod failed - unlisted code",
+			errorType: OFPETMeterModFailed,
+			errorCode: 99,
+			errString: "meter mod failed: unknown error",
+		},
 	}
 
 	for _, tt := range tests {
@@ -932,4 +947,339 @@ func TestClient_OFError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClient_ConnectEnablesPacketIn(t *testing.T) {
+	server, _ := connectMock(t)
+
+	assert.Equal(t, OFPCMLNoBuffer, server.getMissSendLen(),
+		"a service connection gets no packet-in until miss_send_len is raised")
+}
+
+func TestClient_ConnectFailsWhenSwitchKeepsPacketInDisabled(t *testing.T) {
+	server, socketPath := newMockOFServer(t)
+	defer server.close()
+	server.ignoreSetConfig = true
+	client, err := NewClient("test-bridge", WithSocketDir(filepath.Dir(socketPath)), WithTimeout(2*time.Second))
+	require.NoError(t, err)
+
+	err = client.Connect(context.Background())
+
+	var disabled *ErrPacketInDisabled
+	require.True(t, errors.As(err, &disabled), "got %v", err)
+	assert.False(t, client.IsConnected())
+}
+
+func TestClient_ConnectPreservesFragmentPolicy(t *testing.T) {
+	const fragDrop uint16 = 1 // OFPC_FRAG_DROP
+	server, socketPath := newMockOFServer(t)
+	defer server.close()
+	server.setFragFlags(fragDrop)
+	client, err := NewClient("test-bridge", WithSocketDir(filepath.Dir(socketPath)), WithTimeout(2*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, client.Connect(context.Background()))
+	defer func() { _ = client.Disconnect() }()
+
+	assert.Equal(t, []uint16{fragDrop}, server.getSetConfigs(),
+		"enabling packet-in must keep the bridge's switch-wide fragment policy")
+	assert.Equal(t, OFPCMLNoBuffer, server.getMissSendLen())
+}
+
+func TestClient_ConnectKeepsNormalFragmentPolicy(t *testing.T) {
+	server, _ := connectMock(t)
+
+	assert.Equal(t, []uint16{OFPCFragNormal}, server.getSetConfigs())
+}
+
+func TestClient_ReaderMarksConnectionLostWhenSwitchCloses(t *testing.T) {
+	server, client := connectMock(t)
+
+	server.dropConnection()
+
+	require.Eventually(t, func() bool { return !client.IsConnected() }, 2*time.Second, 5*time.Millisecond,
+		"a switch that closes the socket must not leave the client reporting connected")
+	err := client.SendPacketOut(context.Background(), NewPacketOut(3, nil, []byte{0xaa}))
+	assert.ErrorIs(t, err, ErrNotConnected)
+}
+
+func TestClient_ConnectRecoversAfterSwitchClosed(t *testing.T) {
+	server, client := connectMock(t)
+	server.dropConnection()
+	require.Eventually(t, func() bool { return !client.IsConnected() }, 2*time.Second, 5*time.Millisecond)
+
+	require.NoError(t, client.Connect(context.Background()))
+
+	_, err := client.Echo(context.Background(), nil)
+	require.NoError(t, err, "the reconnected client must serve requests")
+	assert.Equal(t, OFPCMLNoBuffer, server.getMissSendLen())
+}
+
+func TestClient_ConnectWaitsForTheLostConnectionsReader(t *testing.T) {
+	ctx := context.Background()
+	server, client := connectMock(t)
+	server.awaitAccept(t)
+	server.mu.Lock()
+	server.sendBarrierReply = false
+	server.mu.Unlock()
+	stale := make(chan error, 1)
+	go func() { stale <- client.barrier(ctx) }()
+	require.Eventually(t, func() bool { return server.getReceivedBarriers() == 1 }, 2*time.Second, 5*time.Millisecond)
+
+	// Holding pendingMu stops the old reader inside connectionLost, after it
+	// marks the client disconnected and before it fails its requests.
+	client.pendingMu.Lock()
+	server.dropConnection()
+	require.Eventually(t, func() bool { return !client.IsConnected() }, 2*time.Second, 5*time.Millisecond)
+	reconnected := make(chan error, 1)
+	go func() { reconnected <- client.Connect(ctx) }()
+	server.awaitAccept(t)
+	client.pendingMu.Unlock()
+
+	require.NoError(t, <-reconnected)
+	assert.ErrorIs(t, <-stale, ErrConnectionClosed, "the lost connection's request fails")
+	_, err := client.Echo(ctx, nil)
+	require.NoError(t, err, "the old reader must not close the new connection or fail its requests")
+}
+
+func TestClient_PendingRequestFailsWhenSwitchCloses(t *testing.T) {
+	server, client := connectMock(t)
+	server.mu.Lock()
+	server.sendBarrierReply = false
+	server.mu.Unlock()
+	errCh := make(chan error, 1)
+	go func() { errCh <- client.barrier(context.Background()) }()
+	require.Eventually(t, func() bool { return server.getReceivedBarriers() == 1 }, 2*time.Second, 5*time.Millisecond)
+
+	server.dropConnection()
+
+	select {
+	case err := <-errCh:
+		assert.ErrorIs(t, err, ErrConnectionClosed)
+	case <-time.After(time.Second):
+		t.Fatal("a request waiting on a lost connection must fail promptly, not run out its timeout")
+	}
+}
+
+func TestClient_BarrierOnLostConnectionIsNotConfirmedByTheReconnect(t *testing.T) {
+	ctx := context.Background()
+	server, client := connectMock(t)
+	server.awaitAccept(t)
+	// A write confirmed on this connection is followed by a reconnect before
+	// its barrier goes out.
+	lost := client.session.Load()
+	server.dropConnection()
+	require.Eventually(t, func() bool { return !client.IsConnected() }, 2*time.Second, 5*time.Millisecond)
+	require.NoError(t, client.Connect(ctx))
+	server.awaitAccept(t)
+	barriers := server.getReceivedBarriers()
+
+	err := client.barrierOn(ctx, lost)
+
+	assert.ErrorIs(t, err, ErrConnectionClosed, "the reconnect's barrier reply must not confirm the lost connection's write")
+	assert.Equal(t, barriers, server.getReceivedBarriers(), "no barrier may go to the new connection")
+}
+
+func TestClient_WriteConfirmedWaitsOnTheConnectionItWroteTo(t *testing.T) {
+	ctx := context.Background()
+	server, client := connectMock(t)
+
+	flow := NewFlowMod(0)
+	flow.Header.Xid = client.nextXid()
+	data, err := flow.MarshalBinary()
+	require.NoError(t, err)
+
+	require.NoError(t, client.writeConfirmed(ctx, data, "failed to send"))
+
+	assert.Equal(t, 1, server.getReceivedBarriers())
+}
+
+func TestClient_WriteConfirmedRequiresConnection(t *testing.T) {
+	client, err := NewClient("test-bridge", WithTimeout(time.Second))
+	require.NoError(t, err)
+
+	err = client.writeConfirmed(context.Background(), []byte{0}, "failed to send")
+
+	assert.ErrorIs(t, err, ErrNotConnected)
+}
+
+func TestClient_SendPacketOutReportsSwitchRejection(t *testing.T) {
+	server, client := connectMock(t)
+	server.failPacketOuts(OFPETBadAction, 4) // OFPBAC_BAD_OUT_PORT
+
+	err := client.SendPacketOut(context.Background(), NewPacketOut(3, []Action{NewActionOutput(9, 0)}, []byte{0xaa}))
+
+	var ofErr *OFError
+	require.True(t, errors.As(err, &ofErr), "a rejected packet-out must not report success: %v", err)
+	assert.Equal(t, uint16(OFPETBadAction), ofErr.Type)
+	assert.Equal(t, uint16(4), ofErr.Code)
+}
+
+func TestClient_SubscribePacketInDeliversSwitchPacketIns(t *testing.T) {
+	server, client := connectMock(t)
+	subscription, err := client.SubscribePacketIn(4)
+	require.NoError(t, err)
+	defer subscription.Cancel()
+	match := NewMatch()
+	match.AddInPort(3)
+
+	server.sendPacketIn(packetInBody(t, match, []byte{0xde, 0xad}))
+
+	select {
+	case packet := <-subscription.C():
+		assert.Equal(t, uint64(0xabc), packet.Cookie)
+		assert.Equal(t, []byte{0xde, 0xad}, packet.Data)
+	case <-time.After(5 * time.Second):
+		t.Fatal("packet-in was not delivered")
+	}
+}
+
+func TestClient_SubscribePacketInCountsQueueFullDrops(t *testing.T) {
+	server, client := connectMock(t)
+	subscription, err := client.SubscribePacketIn(1)
+	require.NoError(t, err)
+	defer subscription.Cancel()
+	match := NewMatch()
+	match.AddInPort(3)
+
+	server.sendPacketIn(packetInBody(t, match, []byte{1}))
+	server.sendPacketIn(packetInBody(t, match, []byte{2}))
+
+	require.Eventually(t, func() bool { return subscription.Dropped() == 1 }, 5*time.Second, time.Millisecond)
+	assert.Equal(t, []byte{1}, (<-subscription.C()).Data)
+}
+
+func TestClient_SubscribePacketInRejectsBadQueue(t *testing.T) {
+	_, client := connectMock(t)
+
+	_, err := client.SubscribePacketIn(0)
+
+	var invalid *ErrInvalidPacketInConfig
+	assert.True(t, errors.As(err, &invalid), "got %v", err)
+}
+
+func TestClient_SubscribePacketInCancelUnregisters(t *testing.T) {
+	server, client := connectMock(t)
+	subscription, err := client.SubscribePacketIn(1)
+	require.NoError(t, err)
+	match := NewMatch()
+	match.AddInPort(3)
+
+	subscription.Cancel()
+	server.sendPacketIn(packetInBody(t, match, []byte{1}))
+	// The echo round trip orders after the packet-in on the connection.
+	_, err = client.Echo(context.Background(), nil)
+	require.NoError(t, err)
+
+	_, open := <-subscription.C()
+	assert.False(t, open)
+	assert.Zero(t, subscription.Dropped())
+}
+
+func TestClient_SendPacketOutWritesPacket(t *testing.T) {
+	server, client := connectMock(t)
+
+	err := client.SendPacketOut(context.Background(), NewPacketOut(3, []Action{NewActionOutput(OFPPInPort, 0)}, []byte{0xaa}))
+	require.NoError(t, err)
+	_, err = client.Echo(context.Background(), nil)
+	require.NoError(t, err)
+
+	packetOuts := server.getReceivedPacketOuts()
+	require.Len(t, packetOuts, 1)
+	assert.Equal(t, byte(0xaa), packetOuts[0][len(packetOuts[0])-1])
+}
+
+func TestClient_SendPacketOutHonoursContext(t *testing.T) {
+	server, client := connectMock(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := client.SendPacketOut(ctx, NewPacketOut(3, nil, []byte{0xaa}))
+
+	assert.ErrorIs(t, err, context.Canceled)
+	_, err = client.Echo(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Empty(t, server.getReceivedPacketOuts(), "a cancelled send must write nothing")
+}
+
+func TestClient_SetMeterAddsMeter(t *testing.T) {
+	server, client := connectMock(t)
+
+	require.NoError(t, client.SetMeter(context.Background(), 709, 512, 64))
+
+	mods := server.getMeterMods()
+	require.Len(t, mods, 1)
+	assert.Equal(t, OFPMCAdd, mods[0].Command)
+	assert.Equal(t, uint32(709), mods[0].MeterID)
+	assert.Equal(t, 1, server.getReceivedBarriers(), "the meter mod is confirmed by a barrier")
+}
+
+func TestClient_SetMeterModifiesExistingMeter(t *testing.T) {
+	server, client := connectMock(t)
+	require.NoError(t, client.SetMeter(context.Background(), 709, 100, 10))
+
+	require.NoError(t, client.SetMeter(context.Background(), 709, 512, 64))
+
+	mods := server.getMeterMods()
+	require.Len(t, mods, 3)
+	assert.Equal(t, OFPMCAdd, mods[1].Command, "the restart first tries ADD")
+	assert.Equal(t, OFPMCModify, mods[2].Command, "METER_EXISTS falls back to MODIFY")
+	band, ok := mods[2].Bands[0].(*MeterBandDrop)
+	require.True(t, ok)
+	assert.Equal(t, uint32(512), band.Rate, "the current rate applies")
+}
+
+func TestClient_SetMeterReportsUnsupportedDatapath(t *testing.T) {
+	server, client := connectMock(t)
+	server.mu.Lock()
+	server.metersUnsupported = true
+	server.mu.Unlock()
+
+	err := client.SetMeter(context.Background(), 709, 512, 64)
+
+	var unsupported *ErrMeterUnsupported
+	require.True(t, errors.As(err, &unsupported), "got %v", err)
+	assert.Equal(t, uint32(709), unsupported.MeterID)
+}
+
+func TestClient_DeleteMeterReportsSwitchError(t *testing.T) {
+	_, client := connectMock(t)
+
+	err := client.DeleteMeter(context.Background(), 709)
+
+	var ofErr *OFError
+	require.True(t, errors.As(err, &ofErr), "got %v", err)
+	assert.Equal(t, OFPMMFCUnknownMeter, ofErr.Code)
+}
+
+func TestClient_GetMeterStats(t *testing.T) {
+	server, client := connectMock(t)
+	server.mu.Lock()
+	server.meterStats[709] = MeterStats{MeterID: 709, Bands: []MeterBandStats{{PacketCount: 5, ByteCount: 400}}}
+	server.mu.Unlock()
+
+	stats, err := client.GetMeterStats(context.Background(), 709)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(5), stats.BandPackets())
+}
+
+func TestClient_GetMeterStatsReportsMissingMeter(t *testing.T) {
+	_, client := connectMock(t)
+
+	_, err := client.GetMeterStats(context.Background(), 709)
+
+	var notFound *ErrMeterNotFound
+	assert.True(t, errors.As(err, &notFound), "got %v", err)
+}
+
+// connectMock connects a client to a fresh mock switch, closing both when
+// the test ends.
+func connectMock(t *testing.T) (*mockOFServer, *Client) {
+	t.Helper()
+	server, socketPath := newMockOFServer(t)
+	t.Cleanup(server.close)
+	client, err := NewClient("test-bridge", WithSocketDir(filepath.Dir(socketPath)), WithTimeout(2*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, client.Connect(context.Background()))
+	t.Cleanup(func() { _ = client.Disconnect() })
+	return server, client
 }

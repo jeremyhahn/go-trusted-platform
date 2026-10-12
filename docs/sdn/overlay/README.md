@@ -18,7 +18,7 @@ single flow-based VXLAN port.
 | **EVPN Control Plane** | Type-2 MAC/IP, Type-3 IMET and Type-5 prefix routes ([../bgp/evpn.md](../bgp/evpn.md)) |
 | **Decap Authorisation** | a tunnelled frame is accepted only from a VTEP EVPN places on its VNI |
 | **BUM Handling** | ingress replication to the VTEPs of the VNI, from Type-3 routes |
-| **ARP Suppression** | ARP for known bindings answered by a flow, with no packet-in |
+| **ARP/ND Suppression** | A flow answers ARP for known IPv4 bindings. An IPv6 NS for a known target is punted to a packet-in controller, answered with a proxy NA and not flooded (RFC 9161). Unknown targets and DAD probes flood. Fail mode: the punts expire 12 s after a crash, are removed on stop, and are withdrawn on any meter or queue drop, so the NS floods ([ND fail mode](../../gateway/engineering.md#fail-mode)) |
 | **Symmetric IRB** | anycast gateway on every VTEP; routed traffic crosses the L3VNI |
 | **VNI Numbering** | overlay network n of environment E is VNI E·100000+n ([reference network](../../architecture/reference-network.md)) |
 

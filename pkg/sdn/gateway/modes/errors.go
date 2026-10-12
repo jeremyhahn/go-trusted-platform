@@ -201,6 +201,11 @@ var (
 	// ErrFlowNotTracked is returned when the overlay releases a flow it
 	// never installed.
 	ErrFlowNotTracked = &errFlowNotTracked{}
+
+	// ErrSwitchNotRestored is returned for an overlay change while the
+	// switch has reconnected but the OpenFlow numbers of the overlay's
+	// ports, which a restart can change, have not been read again.
+	ErrSwitchNotRestored = &errSwitchNotRestored{}
 )
 
 // Transit mode sentinel error types.
@@ -454,6 +459,12 @@ func (e *errAdmitterNil) Error() string {
 type errFlowNotTracked struct{}
 
 func (e *errFlowNotTracked) Error() string { return "overlay flow is not installed" }
+
+type errSwitchNotRestored struct{}
+
+func (e *errSwitchNotRestored) Error() string {
+	return "overlay ports not resolved since the switch reconnected"
+}
 
 // Transit mode contextual error types.
 
@@ -777,6 +788,21 @@ func (e *ErrOverlayStartFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrOverlayPortUnresolved reports that the OpenFlow number of one of the
+// overlay's ports, VXLANPort or AccessPort, could not be read.
+type ErrOverlayPortUnresolved struct {
+	Port  string
+	Cause error
+}
+
+func (e *ErrOverlayPortUnresolved) Error() string {
+	return fmt.Sprintf("resolving the overlay %s: %v", e.Port, e.Cause)
+}
+
+func (e *ErrOverlayPortUnresolved) Unwrap() error {
+	return e.Cause
+}
+
 // ErrVNIOperationFailed represents a VNI operation failure.
 type ErrVNIOperationFailed struct {
 	VNI       uint32
@@ -864,4 +890,27 @@ type ErrBindingConflict struct {
 
 func (e *ErrBindingConflict) Error() string {
 	return fmt.Sprintf("remote binding %s %s on VNI %d conflicts with the %s", e.MAC, e.IP, e.VNI, e.Owner)
+}
+
+// ErrInvalidNDMessage reports a neighbor discovery message the overlay
+// will not act on: one RFC 4861 §7.1.1 has a node discard, or one it
+// cannot build an answer for. Reason names the check that failed.
+type ErrInvalidNDMessage struct {
+	Reason string
+}
+
+func (e *ErrInvalidNDMessage) Error() string {
+	return "overlay: invalid neighbor discovery message: " + e.Reason
+}
+
+// ErrUnsupportedNDMessage reports a neighbor discovery message the overlay
+// cannot read although RFC 4861 does not have a node discard it: one behind
+// an IPv6 extension header. The overlay passes it on unread. Reason names
+// what it could not read.
+type ErrUnsupportedNDMessage struct {
+	Reason string
+}
+
+func (e *ErrUnsupportedNDMessage) Error() string {
+	return "overlay: unsupported neighbor discovery message: " + e.Reason
 }

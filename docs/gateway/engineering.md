@@ -1327,7 +1327,7 @@ underlay MTU below `vxlan.MinimumUnderlayMTU`, the 9000-byte
 | 10 | VXLAN decap | access ingress (VLAN → VNI); decap authorisation; every other tunnelled frame dropped |
 | 20–29 | Services | firewall, NAT, load balancer (gatewayd services); miss → 30 |
 | 30 | MAC | anycast MAC from the access port, or router MAC on the L3VNI → 50; anycast MAC from a VTEP → drop; known MAC → its VTEP or 70; miss → 40 |
-| 40 | ARP | ARP replies in the switch; miss → 60 |
+| 40 | ARP / ND | ARP replies in the switch; ND punts to the controller ([ND suppression](#nd-suppression)); miss → 60 |
 | 50 | L3 | host and prefix routes (symmetric IRB); miss → drop |
 | 60 | Egress | flood: the access port, then every VTEP on the VNI; miss → drop |
 | 70 | Local delivery | out the access port (`IN_PORT` when it came from there) |
@@ -1409,6 +1409,147 @@ Host routes outrank prefix routes; among prefixes the longest wins. When
 several VTEPs advertise one prefix, the lowest VTEP address carries it and a
 withdrawal falls back to the next. Only IPv4 is routed.
 
+#### ND suppression
+
+ND suppression follows standard EVPN (RFC 9161). An IPv6 Neighbor
+Solicitation from the access port for a target the overlay knows is answered
+by platformd and **not flooded**. A known target is a local binding, or an
+EVPN Type-2 IPv6 MAC/IP binding. Every other solicitation floods like other
+BUM traffic.
+
+Table 40 holds three kinds of ND flow:
+
+| Priority | Match | Action |
+|----------|-------|--------|
+| 210 | NS from the access port with source `::` (a DAD probe) | `goto:60`. It is never answered and always floods. |
+| 200 | NS from the access port on the VNI for one known target (`ipv6_nd_target`) | Nicira `controller2` with meter 709 (512 kbps, burst 64 kb). There is no `goto`. |
+| 0 | the table miss | NS for unknown targets floods through table 60 |
+
+The punt flows carry their own cookie, `OverlayNDCookie`
+(`0xF1BE000000000006`). The ND controller owns them apart from the overlay's
+flow table: it adds a punt when a target gets exactly one owner on the VNI. It
+strict-deletes the punt when the target is withdrawn, or when a second host
+claims it.
+
+The controller answers a punted NS with a proxy Neighbor Advertisement built
+from the binding. The NA has the solicited and override flags set and carries
+a target link-layer address option. It is unicast to the solicitor's
+link-layer address (the source link-layer option, or else the Ethernet
+source). It is sent back out `IN_PORT` tagged with the segment's VLAN, because
+table 10 popped the tag before the punt.
+
+A punt has left the pipeline, so the controller floods every punted NS it does
+not answer. It sends a packet-out from the access port with `set_tunnel_id`
+and the VNI's ingress replication. This covers:
+
+- a solicitation whose Ethernet source or source link-layer option is the
+  binding's own MAC;
+- a target that is no longer known, or that has since become ambiguous;
+- a solicitation behind an IPv6 extension header. OVS matches `nd_target`
+  past extension headers, so it punts one, but the controller does not read
+  past them. It checks the hop limit and floods the frame unread.
+
+The controller discards a punt it can neither answer nor flood:
+
+- frames that fail the RFC 4861 §7.1.1 checks:
+  - the hop limit is not 255;
+  - the ICMPv6 code is not 0;
+  - the checksum is bad;
+  - the payload length is short or runs past the frame;
+  - an option is zero-length or runs past the payload;
+  - the source is multicast;
+  - the target is multicast;
+  - the Ethernet source or the source link-layer option is multicast;
+  - a source link-layer option comes with source `::`;
+  - a source `::` is not sent to a solicited-node address;
+- a packet-in without a tunnel ID or an `in_port`;
+- a VNI that has no segment any more.
+
+Answers are looked up by (VNI, IPv6 address) in an index kept with the host
+bindings.
+
+##### Fail mode
+
+A punt takes the NS out of the flood, so a punt must exist only while a live
+controller can answer it. Three mechanisms guarantee this:
+
+- **Clean shutdown.** Start installs the meter and starts the packet-in
+  controller before any flow. A switch without meter support fails Start with
+  `ErrMeterUnsupported` and leaves no flows installed. Stop deletes every
+  punt by `OverlayNDCookie` before it stops the controller, then deletes the
+  meter. If the delete fails, Stop reports `ErrFlowOperationFailed`, and the
+  hard timeout below removes the punts.
+- **Crash watchdog: hard timeouts.** Every punt carries a 12 s
+  `hard_timeout`, and the controller re-adds each punt every 4 s, which
+  restarts its timeout. If platformd crashes, or loses its OpenFlow
+  connection, OVS expires the punts within 12 s, and solicitations flood
+  through the table-40 miss. A controller that returns re-adds them on its
+  next refresh. Start also deletes any punts left by an earlier run.
+  - A live platformd that finds its OpenFlow socket closed (OVS restarted)
+    redials it on every poll. A restarted switch has lost every flow and
+    meter, so on the new connection it rebuilds the overlay pipeline from
+    the committed state (flush, then every flow in fail-closed order) and
+    reinstalls meter 709. It then counts a `Fallback` and floods for the
+    hold-down below before the punts return. A rebuild the switch refuses
+    stays due: every poll while connected retries it, at doubling
+    intervals (1 s up to 30 s) while it keeps failing, so a quiet overlay
+    does not wait for its next change. The next overlay change also
+    rebuilds first.
+  - The punts point at meter 709, so they return only once the switch has
+    accepted the meter. A switch that refuses it keeps the overlay fallen
+    back: no punt is installed, every NS floods, and `Suppressing` stays
+    false. Every poll while connected retries the meter, and the hold-down
+    still applies once it is back.
+  - A restarted ovs-vswitchd can give the VXLAN and access ports new
+    OpenFlow numbers. Before the rebuild, platformd reads both numbers from
+    OVS again and regenerates every committed flow on them. Pinning the
+    numbers with `ofport_request` would not be enough: the access port is
+    not the overlay's to create, and OVS ignores a request that conflicts
+    with a port it has already numbered. Until both ports resolve, the
+    overlay's flows stay off the switch, because a flow on a stale number
+    can deliver to the wrong port. No punt is added, and every overlay
+    change fails with `ErrSwitchNotRestored`. The poll retries the
+    resolution with the rebuild's backoff.
+  - An `idle_timeout` would not work: the solicitations that a dead
+    controller cannot answer would keep the flow alive.
+  - OVS fail-mode does not help either: platformd connects to the bridge's
+    management socket, not as a configured controller.
+- **Over the meter: fall back to the flood.** An OVS meter band can only
+  drop. It cannot send the excess traffic elsewhere, so an over-meter punt
+  cannot reach table 60 in the datapath. Instead, the controller polls every
+  second for meter 709's drop count, for drops from its own packet-in queue,
+  and for answers or floods whose packet-out the switch refused, whether it
+  refused at once or asynchronously: every packet-out is followed by a
+  barrier, so a late `OFPT_ERROR` is returned to the caller. Each is a
+  solicitation the punt took off the flood and nothing sent on. On any new
+  one:
+  - it deletes every punt;
+  - it counts a `Fallback`;
+  - it stops suppressing for a hold-down, so every NS floods.
+
+  The hold-down is 30 s. A fallback within 10 minutes of the last resumption
+  doubles it, up to 8 minutes, so a load the punts cannot take does not make
+  them flap. Ten minutes of suppression without a loss starts it over at
+  30 s. Drops during the hold-down extend it. After the hold-down the punts
+  return.
+  Solicitations dropped before the next poll are lost, about one poll
+  interval of them, and the host retransmits after its RetransTimer (1 s by
+  default).
+
+Overlay status reports `NDSuppression`:
+
+| Field | Meaning |
+|-------|---------|
+| `Suppressing` | Punts are installed: the controller is running, meter 709 is on the switch, and it is not in a fallback hold-down |
+| `Received` | Solicitations delivered to the controller |
+| `Answered` | Proxy NAs sent |
+| `Flooded` | Punted solicitations the controller sent to the flood (self, unknown, ambiguous, behind an extension header) |
+| `Discarded` | Punted solicitations that were invalid, or that had no tunnel ID, `in_port` or segment |
+| `SendFailed` | Packet-outs the switch refused |
+| `QueueDropped` | Packet-ins dropped because the controller queue was full |
+| `MeterDropped` | Punts dropped by meter 709, polled from the switch's meter statistics |
+| `Fallbacks` | Times the controller removed the punts after a drop |
+
 #### Control plane
 
 | Handler call | EVPN action |
@@ -1430,9 +1571,9 @@ track. The handler marks its flows drifted, and the next change of any kind
 first flushes the overlay's flows (by cookie) and installs every flow it has
 committed, so stale flows such as a decap authorisation do not survive. A
 switch refusing that rebuild fails the change with an `ErrFlowResyncFailed`,
-and the rebuild is tried again on the change after. The OpenFlow client has no
-reconnect hook, so a reconnect alone does not trigger the rebuild; the next
-change does.
+and the rebuild is tried again on the change after. While ND suppression runs,
+its poll also retries a drifted switch's rebuild on its own (see
+[ND suppression](#nd-suppression)), so the overlay does not wait for a change.
 
 OVS applies a batch one mod at a time, not atomically, and the OpenFlow client
 has no bundle support. So the start and the rebuild send the flows after the

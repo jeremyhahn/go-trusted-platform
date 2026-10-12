@@ -114,6 +114,7 @@ func TestSentinelErrors_OverlayMode(t *testing.T) {
 		{"ErrInvalidVTEPIP", ErrInvalidVTEPIP, "invalid VTEP IP address"},
 		{"ErrAccessPortEmpty", ErrAccessPortEmpty, "access port is empty"},
 		{"ErrAccessPortUnresolved", ErrAccessPortUnresolved, "access port has no OpenFlow port number"},
+		{"ErrSwitchNotRestored", ErrSwitchNotRestored, "overlay ports not resolved since the switch reconnected"},
 		{"ErrVLANInUse", ErrVLANInUse, "VLAN already carries another VNI"},
 		{"ErrAnycastGatewayIncomplete", ErrAnycastGatewayIncomplete, "anycast gateway needs both an IPv4 address and a MAC"},
 		{"ErrAnycastGatewayRequired", ErrAnycastGatewayRequired, "an L3VNI needs the anycast gateway to route into it"},
@@ -420,6 +421,16 @@ func TestContextualErrors_OverlayMode(t *testing.T) {
 			t.Errorf("Error() = %q", got)
 		}
 		if err.Unwrap() != cause {
+			t.Error("Unwrap() should return cause")
+		}
+	})
+
+	t.Run("ErrOverlayPortUnresolved", func(t *testing.T) {
+		err := &ErrOverlayPortUnresolved{Port: "AccessPort", Cause: ErrAccessPortUnresolved}
+		if got := err.Error(); got != "resolving the overlay AccessPort: access port has no OpenFlow port number" {
+			t.Errorf("Error() = %q", got)
+		}
+		if !errors.Is(err, ErrAccessPortUnresolved) {
 			t.Error("Unwrap() should return cause")
 		}
 	})
